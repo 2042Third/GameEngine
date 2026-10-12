@@ -63,6 +63,10 @@ namespace Strata
 	// an Enter gets the matching Exit, also when its entity was deactivated meanwhile (but not once the script was removed or
 	// disabled, or its entity destroyed). The callbacks run while the scene updates, so the entities they destroy stay valid
 	// until the frame ends; the other side of an Exit caused by destruction may already be gone.
+	//
+	// Animation events: the scene's IAnimationEventSource (the animation system) reports the events of animator states after
+	// the animators were evaluated; the scripts of the animator's entity receive OnAnimationEvent with the event's name, if
+	// the entity is active.
 	class ScriptSystem final : public SceneSystem
 	{
 	public:
@@ -232,6 +236,8 @@ namespace Strata
 		void UpdateContactWatch(Instance& instance);
 		// Calls a contact callback on the scripts of an entity, for its contact with "other" (the normal points towards it).
 		void DeliverContact(UUID entityID, UUID otherID, bool begin, ScriptCallback callback, const glm::vec3& point, const glm::vec3& normal);
+		// Calls OnAnimationEvent on the scripts of the animator's entity.
+		void OnAnimationEvent(const AnimationEventInfo& event);
 	private:
 		Scene& m_Scene;
 		Ref<ScriptEngine> m_Engine;
@@ -277,6 +283,7 @@ namespace Strata
 		std::unordered_map<AssetHandle, AssetGroupRequest> m_AssetGroups;
 		std::unordered_set<std::string> m_ReportedProblems;
 		CollisionListenerID m_CollisionListener = c_InvalidCollisionListener; // Registered with the scene's ICollisionEventSource while running
+		AnimationEventListenerID m_AnimationListener = 0; // Registered with the scene's IAnimationEventSource while running (0: none)
 		std::vector<entt::scoped_connection> m_Connections;
 		float m_DeltaTime = 0.0f;
 		bool m_Running = false;

@@ -586,8 +586,19 @@ namespace Strata
 		mutable uint64_t m_LookupVisitCount = 0;
 		mutable uint64_t m_LookupIndexBuildCount = 0;
 
+		// A running system whose per-frame callback the scene calls, with its stage.
+		struct SystemCall
+		{
+			SceneSystem* System = nullptr;
+			FrameStageID Stage = c_InvalidFrameStage;
+		};
+
 		std::vector<Scope<SceneSystem>> m_Systems;
 		std::vector<FrameStageID> m_SystemStages; // Per system: its FrameProfiler stage (SceneSystemDescriptor::ProfileStage)
+		// In update order, the systems whose descriptors ask for OnUpdate, OnFixedUpdate and OnLateUpdate.
+		std::vector<SystemCall> m_UpdateCalls;
+		std::vector<SystemCall> m_FixedUpdateCalls;
+		std::vector<SystemCall> m_LateUpdateCalls;
 		std::unordered_map<entt::id_type, SceneSystem*> m_SystemsByType; // SceneSystemDescriptor::Type -> running system
 		std::unordered_map<entt::id_type, void*> m_Services;              // Interface type -> provider (see RegisterService)
 		std::vector<UUID> m_PendingDestroy;

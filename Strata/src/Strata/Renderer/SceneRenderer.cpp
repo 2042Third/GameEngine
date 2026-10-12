@@ -223,6 +223,8 @@ namespace Strata
 	{
 		ShaderLibrary& shaders = Renderer::GetShaderLibrary();
 		m_MeshVertexShader = shaders.Get("Scene/Mesh.vert");
+		m_SkinnedMeshVertexShader = shaders.Get("Scene/MeshSkinned.vert");
+		m_SkinnedShadowVertexShader = shaders.Get("Scene/ShadowMeshSkinned.vert");
 		m_PrepassPixelShader = shaders.Get(m_Specification.EntityIDs ? "Scene/DepthPrepass.frag" : "Scene/DepthPrepassNoEntityIDs.frag");
 		m_ForwardPixelShader = shaders.Get("Scene/Forward.frag");
 		m_ForwardTransparentPixelShader = shaders.Get("Scene/ForwardTransparent.frag");
@@ -233,7 +235,8 @@ namespace Strata
 		m_ShadowMaskPixelShader = shaders.Get("Scene/ShadowMask.frag");
 		m_FXAAPixelShader = shaders.Get("PostProcess/FXAA.frag");
 		ST_CORE_VERIFY(m_MeshVertexShader && m_PrepassPixelShader && m_ForwardPixelShader && m_ForwardTransparentPixelShader && m_FullscreenVertexShader
-			&& m_TonemapPixelShader && m_SkyboxPixelShader && m_ShadowVertexShader && m_ShadowMaskPixelShader && m_FXAAPixelShader, "SceneRenderer shaders are missing");
+			&& m_TonemapPixelShader && m_SkyboxPixelShader && m_ShadowVertexShader && m_ShadowMaskPixelShader && m_FXAAPixelShader && m_SkinnedMeshVertexShader
+			&& m_SkinnedShadowVertexShader, "SceneRenderer shaders are missing");
 
 		m_Specification.ShadowCascades = std::clamp<uint32_t>(m_Specification.ShadowCascades, 1, RenderData::c_MaxCascades);
 		m_Specification.ShadowMapSize = std::clamp<uint32_t>(m_Specification.ShadowMapSize, 256, 8192);
@@ -260,6 +263,15 @@ namespace Strata
 				.setOffset(offsetof(MeshVertexAttributes, TexCoord)).setElementStride(sizeof(MeshVertexAttributes))
 		};
 		m_InputLayout = m_Device->createInputLayout(attributes, static_cast<uint32_t>(std::size(attributes)), m_MeshVertexShader);
+		// Skinned meshes add their skin stream (MeshSkinVertex): four joint indices and four weights in 1/65535ths.
+		const nvrhi::VertexAttributeDesc skinnedAttributes[] = {
+			attributes[0], attributes[1], attributes[2], attributes[3],
+			nvrhi::VertexAttributeDesc().setName("JOINTS").setFormat(nvrhi::Format::RGBA16_UINT).setBufferIndex(2)
+				.setOffset(offsetof(MeshSkinVertex, Joints)).setElementStride(sizeof(MeshSkinVertex)),
+			nvrhi::VertexAttributeDesc().setName("WEIGHTS").setFormat(nvrhi::Format::RGBA16_UNORM).setBufferIndex(2)
+				.setOffset(offsetof(MeshSkinVertex, Weights)).setElementStride(sizeof(MeshSkinVertex))
+		};
+		m_SkinnedInputLayout = m_Device->createInputLayout(skinnedAttributes, static_cast<uint32_t>(std::size(skinnedAttributes)), m_SkinnedMeshVertexShader);
 
 		nvrhi::BindingLayoutDesc sceneLayout;
 		sceneLayout.visibility = nvrhi::ShaderType::All;
@@ -276,6 +288,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(11),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(14),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(15), // Joint matrices (only the skinned vertex shaders read them)
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -358,7 +371,9 @@ namespace Strata
 			&& EnsureBufferCapacity(m_MaterialBuffer, 256, sizeof(RenderData::MaterialData), "Materials", recreated)
 			&& EnsureBufferCapacity(m_LightBuffer, 64, sizeof(RenderData::LightData), "Lights", recreated)
 			&& EnsureBufferCapacity(m_LightBoundsBuffer, 64, sizeof(RenderData::LightBounds), "LightBounds", recreated)
-			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, 1024, sizeof(uint32_t), "ShadowDrawList", recreated);
+			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, 1024, sizeof(uint32_t), "ShadowDrawList", recreated)
+			// Bound in every scene pass; it grows only once posed skinned meshes are drawn.
+			&& EnsureBufferCapacity(m_JointBuffer, 1, sizeof(RenderData::AffineTransform), "Joints", recreated);
 		ST_CORE_VERIFY(buffersCreated, "SceneRenderer: failed to create the scene buffers");
 
 		m_ClusterBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
@@ -810,6 +825,7 @@ namespace Strata
 				nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_InstanceBuffer),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(14, drawList),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(15, m_JointBuffer),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_MaterialBuffer),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
@@ -1003,7 +1019,7 @@ namespace Strata
 			const MeshLOD& lod = submesh.LODs[batch.LOD];
 
 			nvrhi::GraphicsState state;
-			state.pipeline = GetScenePipeline(PipelineKey { batch.AlphaMask ? Pass::ShadowMasked : Pass::Shadow, batch.DoubleSided, batch.Mirrored });
+			state.pipeline = GetScenePipeline(PipelineKey { batch.AlphaMask ? Pass::ShadowMasked : Pass::Shadow, batch.DoubleSided, batch.Mirrored, batch.Skinned });
 			state.framebuffer = m_ShadowFramebuffers[batch.Cascade];
 			state.viewport.addViewportAndScissorRect(nvrhi::Viewport(mapSize, mapSize));
 			state.bindings = { m_ShadowBindingSet, Renderer::GetBindlessTextures().GetTable(), m_ShadowPushBindingSet };
@@ -1011,6 +1027,8 @@ namespace Strata
 				nvrhi::VertexBufferBinding { mesh->GetPositionBuffer(), 0, 0 },
 				nvrhi::VertexBufferBinding { mesh->GetAttributeBuffer(), 1, 0 }
 			};
+			if (batch.Skinned)
+				state.vertexBuffers.push_back(nvrhi::VertexBufferBinding { mesh->GetSkinBuffer(), 2, 0 });
 			state.indexBuffer = nvrhi::IndexBufferBinding { mesh->GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
 			commandList->setGraphicsState(state);
 			const uint32_t cascade = batch.Cascade;
@@ -1320,8 +1338,11 @@ namespace Strata
 		const bool shadowPass = key.PassType == Pass::Shadow || key.PassType == Pass::ShadowMasked;
 		nvrhi::GraphicsPipelineDesc desc;
 		desc.primType = nvrhi::PrimitiveType::TriangleList;
-		desc.inputLayout = m_InputLayout;
-		desc.VS = shadowPass ? m_ShadowVertexShader : m_MeshVertexShader;
+		desc.inputLayout = key.Skinned ? m_SkinnedInputLayout : m_InputLayout;
+		if (key.Skinned)
+			desc.VS = shadowPass ? m_SkinnedShadowVertexShader : m_SkinnedMeshVertexShader;
+		else
+			desc.VS = shadowPass ? m_ShadowVertexShader : m_MeshVertexShader;
 		switch (key.PassType)
 		{
 			case Pass::Prepass:      desc.PS = m_PrepassPixelShader; break;
@@ -1555,11 +1576,13 @@ namespace Strata
 			const Mesh* mesh = m_FrameMeshes[batch.MeshSlot];
 			const Submesh& submesh = mesh->GetSubmeshes()[batch.SubmeshIndex];
 			const MeshLOD& lod = submesh.LODs[batch.LOD];
-			state.pipeline = GetScenePipeline(PipelineKey { pass, batch.DoubleSided, batch.Mirrored });
+			state.pipeline = GetScenePipeline(PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned });
 			state.vertexBuffers = {
 				nvrhi::VertexBufferBinding { mesh->GetPositionBuffer(), 0, 0 },
 				nvrhi::VertexBufferBinding { mesh->GetAttributeBuffer(), 1, 0 }
 			};
+			if (batch.Skinned)
+				state.vertexBuffers.push_back(nvrhi::VertexBufferBinding { mesh->GetSkinBuffer(), 2, 0 });
 			state.indexBuffer = nvrhi::IndexBufferBinding { mesh->GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
 			commandList->setGraphicsState(state);
 
@@ -1702,10 +1725,11 @@ namespace Strata
 		const auto extractionStart = std::chrono::steady_clock::now();
 		const Frustum frustum(frame.ViewProjection);
 		CullView(renderScene, camera, frustum);
-		FindShadowCasters(renderScene, camera, frame);
+		FindShadowCasters(renderScene, camera, frustum, frame);
 		ResolveAssets(renderScene);
 		GatherDraws(renderScene, camera);
 		GatherShadowDraws(renderScene, camera, frame);
+		ReportVisibleAnimators(scene);
 		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
 		bool degraded = false; // Rendered with a reported limitation: keep the error so it is not logged every frame
 		if (frame.ShadowParams.w > 0.0f && !EnsureShadowMap())
@@ -1721,17 +1745,19 @@ namespace Strata
 		bool instancesRecreated = false;
 		bool materialsRecreated = false;
 		bool drawListsRecreated = false;
+		bool jointsRecreated = false;
 		const bool buffersReady = EnsureBufferCapacity(m_InstanceBuffer, renderScene.GetInstances().size(), sizeof(RenderData::InstanceData), "Instances", instancesRecreated)
+			&& EnsureBufferCapacity(m_JointBuffer, renderScene.GetPalette().size(), sizeof(RenderData::AffineTransform), "Joints", jointsRecreated)
 			&& EnsureBufferCapacity(m_MaterialBuffer, m_MaterialData.size(), sizeof(RenderData::MaterialData), "Materials", materialsRecreated)
 			&& EnsureBufferCapacity(m_DrawListBuffer, m_DrawInstancesBuild.size(), sizeof(uint32_t), "DrawList", drawListsRecreated)
 			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, m_ShadowDrawInstancesBuild.size(), sizeof(uint32_t), "ShadowDrawList", drawListsRecreated)
 			&& EnsureBufferCapacity(m_LightBuffer, m_Lights.size(), sizeof(RenderData::LightData), "Lights", buffersRecreated)
 			&& EnsureBufferCapacity(m_LightBoundsBuffer, m_LightBounds.size(), sizeof(RenderData::LightBounds), "LightBounds", buffersRecreated);
-		buffersRecreated = buffersRecreated || instancesRecreated || materialsRecreated || drawListsRecreated;
+		buffersRecreated = buffersRecreated || instancesRecreated || materialsRecreated || drawListsRecreated || jointsRecreated;
 		if (!buffersReady)
 		{
 			// A replaced buffer holds nothing yet: upload everything to the next one.
-			m_FullUpload = m_FullUpload || instancesRecreated || materialsRecreated || drawListsRecreated;
+			m_FullUpload = m_FullUpload || instancesRecreated || materialsRecreated || drawListsRecreated || jointsRecreated;
 			m_Stats = {};
 			return false;
 		}
@@ -1748,13 +1774,13 @@ namespace Strata
 			commandList->close();
 			m_Device->executeCommandList(commandList); // Keeps the environment processing that was recorded
 			m_Errors.Report("failed to create the scene binding sets");
-			m_FullUpload = m_FullUpload || instancesRecreated || materialsRecreated || drawListsRecreated;
+			m_FullUpload = m_FullUpload || instancesRecreated || materialsRecreated || drawListsRecreated || jointsRecreated;
 			m_Stats = {};
 			return false;
 		}
 
 		commandList->writeBuffer(m_FrameConstantBuffer, &frame, sizeof(frame));
-		UploadSceneData(commandList, renderScene, instancesRecreated, materialsRecreated, drawListsRecreated);
+		UploadSceneData(commandList, renderScene, instancesRecreated, materialsRecreated, drawListsRecreated, jointsRecreated);
 		if (!m_Lights.empty())
 		{
 			commandList->writeBuffer(m_LightBuffer, m_Lights.data(), m_Lights.size() * sizeof(RenderData::LightData));

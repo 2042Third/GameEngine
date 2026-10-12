@@ -14,6 +14,7 @@
 #define ST_MATERIAL_DOUBLE_SIDED 8u
 
 #define ST_INSTANCE_MIRRORED 1u // Negative determinant: winding and tangent handedness are flipped
+#define ST_INSTANCE_SKINNED  2u // Posed: SkinPalette is the first joint matrix of its palette (the skinned pipelines)
 
 #define ST_LIGHT_POINT 0u
 #define ST_LIGHT_SPOT  1u
@@ -63,7 +64,7 @@ struct InstanceData
 	uint MaterialIndex;
 	uint EntityID;     // Entity identifier + 1 (0 = no entity)
 	uint Flags;        // ST_INSTANCE_*
-	uint Padding;
+	uint SkinPalette;  // ST_INSTANCE_SKINNED: the first joint matrix of the instance's palette in u_Joints
 };
 
 // Every instance of the render scene; it persists between frames.
@@ -77,6 +78,58 @@ layout(set = 0, binding = ST_SRV(14), std430) readonly buffer DrawListBuffer
 {
 	uint u_DrawList[];
 };
+
+#ifdef ST_SKINNED
+// The palettes of the posed instances (RenderScene::GetPalette): per joint of a skin the upper three rows of its affine
+// skinning matrix, which takes a bind-pose vertex into the instance's local space.
+struct JointMatrix
+{
+	vec4 Rows[3];
+};
+
+layout(set = 0, binding = ST_SRV(15), std430) readonly buffer JointBuffer
+{
+	JointMatrix u_Joints[];
+};
+
+// The skinning matrix of a vertex: its influences' palette entries blended by weight (linear blend skinning).
+JointMatrix BlendJoints(InstanceData instance, uvec4 joints, vec4 weights)
+{
+	JointMatrix blended;
+	blended.Rows[0] = vec4(0.0);
+	blended.Rows[1] = vec4(0.0);
+	blended.Rows[2] = vec4(0.0);
+	for (int influence = 0; influence < 4; influence++)
+	{
+		JointMatrix joint = u_Joints[instance.SkinPalette + joints[influence]];
+		blended.Rows[0] += joint.Rows[0] * weights[influence];
+		blended.Rows[1] += joint.Rows[1] * weights[influence];
+		blended.Rows[2] += joint.Rows[2] * weights[influence];
+	}
+	return blended;
+}
+
+vec3 SkinPosition(JointMatrix skin, vec3 position)
+{
+	vec4 point = vec4(position, 1.0);
+	return vec3(dot(skin.Rows[0], point), dot(skin.Rows[1], point), dot(skin.Rows[2], point));
+}
+
+vec3 SkinDirection(JointMatrix skin, vec3 direction)
+{
+	return vec3(dot(skin.Rows[0].xyz, direction), dot(skin.Rows[1].xyz, direction), dot(skin.Rows[2].xyz, direction));
+}
+
+// A normal through the skinning matrix: its cofactor matrix, like TransformNormal (callers normalize).
+vec3 SkinNormal(JointMatrix skin, vec3 normal)
+{
+	vec3 column0 = vec3(skin.Rows[0].x, skin.Rows[1].x, skin.Rows[2].x);
+	vec3 column1 = vec3(skin.Rows[0].y, skin.Rows[1].y, skin.Rows[2].y);
+	vec3 column2 = vec3(skin.Rows[0].z, skin.Rows[1].z, skin.Rows[2].z);
+	vec3 transformed = cross(column1, column2) * normal.x + cross(column2, column0) * normal.y + cross(column0, column1) * normal.z;
+	return dot(column0, cross(column1, column2)) < 0.0 ? -transformed : transformed;
+}
+#endif
 
 vec3 TransformPosition(InstanceData instance, vec3 position)
 {

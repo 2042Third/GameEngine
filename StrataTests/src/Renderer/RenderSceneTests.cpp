@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include "Animation/SkinnedMeshTestUtils.h"
+#include "Animation/TestSkinningPoses.h"
 #include "Asset/AssetTestUtils.h"
 #include "Renderer/MeshTestUtils.h"
 #include "Scene/SceneTestUtils.h"
@@ -57,18 +59,23 @@ TEST_SUITE("Renderer.RenderScene")
 	{
 		std::mt19937 random(2024);
 		// Meshes: a built-in one (always loaded), a stored one whose layout (bounds and submeshes) changes with reloads,
-		// one that fails to load, one the asset manager does not know, and none.
+		// one that fails to load, one the asset manager does not know, a skinned one, and none.
 		const Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
 		const AssetHandle reloaded = manager->AddStored(0x5E01, AssetType::Mesh, CreatePartedCube(1.0f, 1)->Serialize());
 		const AssetHandle failing = manager->AddStored(0x5E02, AssetType::Mesh, std::vector<uint8_t> { 1, 2, 3 });
+		const AssetHandle skinned = manager->AddStored(0x5E03, AssetType::Mesh, CreateSkinnedTube({ .Joints = 3, .RingsPerJoint = 2, .Sides = 4 })->Serialize());
+		// Poses for some entities, which skin the mesh renderers whose SkinComponents name them.
+		TestSkinningPoses poses;
 		const Ref<Scene> scene = CreateRef<Scene>("Edits");
+		REQUIRE(scene->RegisterService<ISkinningPoses>(poses));
 		RenderScene& renderScene = RenderScene::Get(*scene);
 		CHECK(&RenderScene::Get(*scene) == &renderScene);
 		CHECK(RenderScene::Find(*scene) == &renderScene);
 
-		const AssetHandle meshes[] = { BuiltinAssets::CubeMesh, reloaded, failing, UUID(0x7777), UUID::Null() };
+		const AssetHandle meshes[] = { BuiltinAssets::CubeMesh, reloaded, failing, UUID(0x7777), skinned, skinned, UUID::Null() };
 		const AssetHandle materials[] = { UUID::Null(), UUID(0xA1), UUID(0xA2), BuiltinAssets::DefaultMaterial };
 		uint32_t reloads = 0;
+		uint32_t mostPosed = 0;
 
 		std::vector<Entity> entities;
 		auto pick = [&](size_t count) { return std::uniform_int_distribution<size_t>(0, count - 1)(random); };
@@ -96,7 +103,7 @@ TEST_SUITE("Renderer.RenderScene")
 			if (entities.empty())
 				entities.push_back(scene->CreateEntity("Entity"));
 			Entity entity = entities[pick(entities.size())];
-			switch (pick(12))
+			switch (pick(15))
 			{
 				case 0:
 				{
@@ -171,7 +178,39 @@ TEST_SUITE("Renderer.RenderScene")
 						manager->RequestLoad(reloaded);
 					if (pick(4) == 0)
 						manager->RequestLoad(failing);
+					if (pick(2) == 0)
+						manager->RequestLoad(skinned);
 					manager->ReloadAsset(reloaded);
+					break;
+				}
+				case 12:
+				case 13:
+				{
+					// Skins naming the entity itself, another entity, or no entity that exists.
+					const UUID animators[] = { entity.GetUUID(), entities[pick(entities.size())].GetUUID(), UUID(0xDEAD) };
+					if (!entity.HasComponent<SkinComponent>())
+					{
+						entity.AddComponent<SkinComponent>().Animator = animators[pick(std::size(animators))];
+					}
+					else if (pick(3) == 0)
+					{
+						entity.RemoveComponent<SkinComponent>();
+					}
+					else
+					{
+						entity.GetComponent<SkinComponent>().Animator = animators[pick(std::size(animators))];
+						entity.MarkModified<SkinComponent>();
+					}
+					break;
+				}
+				case 14:
+				{
+					// Poses come and go, with fewer joints than the skin needs now and then.
+					if (poses.Poses.contains(entity.GetHandle()) && pick(3) == 0)
+						poses.Poses.erase(entity.GetHandle());
+					else
+						poses.Poses[entity.GetHandle()] = BentChain(pick(4) == 0 ? 2u : 3u, static_cast<uint32_t>(pick(3)));
+					poses.Version++;
 					break;
 				}
 			}
@@ -182,15 +221,33 @@ TEST_SUITE("Renderer.RenderScene")
 					manager->Update();
 				renderScene.Sync(manager);
 				CheckProxies(renderScene);
+				mostPosed = std::max(mostPosed, renderScene.GetStats().PosedProxies);
 			}
 		}
 		manager->RequestLoad(reloaded);
 		manager->RequestLoad(failing);
+		manager->RequestLoad(skinned);
 		REQUIRE(manager->WaitForPendingLoads());
 		renderScene.Sync(manager);
 		CheckProxies(renderScene);
 		CheckSceneCaches(*scene);
 		CHECK(reloads > 0);
+		CHECK(mostPosed > 0);
+		// One posed skinned mesh for certain, whatever the edits left.
+		Entity posed = scene->CreateEntity("Posed");
+		posed.AddComponent<MeshRendererComponent>().Mesh = skinned;
+		posed.AddComponent<SkinComponent>().Animator = posed.GetUUID();
+		poses.Poses[posed.GetHandle()] = BentChain(3, 1);
+		poses.Version++;
+		renderScene.Sync(manager);
+		CheckProxies(renderScene);
+		CHECK(renderScene.GetStats().SkinProxies > 0);
+		CHECK(renderScene.GetStats().PosedProxies > 0);
+		// Without poses every skinned mesh shows its bind pose, as in the copy below (which has none).
+		scene->UnregisterService<ISkinningPoses>(poses);
+		renderScene.Sync(manager);
+		CheckProxies(renderScene);
+		CHECK(renderScene.GetStats().PosedProxies == 0);
 		// The stored mesh has the layout it was reloaded with last; the failing one and the one the manager does not know
 		// stay without bounds.
 		const uint32_t reloadedSlot = FindMeshSlot(renderScene, reloaded);

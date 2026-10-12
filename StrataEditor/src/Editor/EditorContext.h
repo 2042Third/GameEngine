@@ -9,6 +9,7 @@
 #include "Editor/SimulatedInput.h"
 #include "Editor/UndoStack.h"
 
+#include <Strata/Animation/AnimationPreview.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/Crypto.h>
 #include <Strata/Core/Timestep.h>
@@ -187,6 +188,10 @@ namespace Strata
 		bool IsSceneModified() const { return m_UndoStack.IsModified(); }
 
 		const Ref<Scene>& GetEditScene() const { return m_EditScene; }
+		// The animation preview of the edited scene (animation.preview): poses its animators show while it does not play,
+		// without changing the scene. Made on first use; another edited scene starts without one. Update advances it.
+		AnimationPreview& GetAnimationPreview();
+		AnimationPreview* FindAnimationPreview() const { return m_AnimationPreview.get(); }
 		// The scene edits apply to: the running copy while playing, otherwise the edited scene.
 		const Ref<Scene>& GetActiveScene() const { return m_RuntimeScene ? m_RuntimeScene : m_EditScene; }
 
@@ -405,6 +410,7 @@ namespace Strata
 		Ref<EditorAssetManager> m_AssetManager;
 
 		Ref<Scene> m_EditScene;
+		Scope<AnimationPreview> m_AnimationPreview; // Of m_EditScene: declared after it, so it goes first
 		Ref<Scene> m_RuntimeScene;
 		AssetHandle m_RuntimeSceneAsset = UUID::Null(); // The scene asset playing after a switch; null while a copy of the edited scene runs
 		// The scene a play-mode switch loads while the running scene goes on.

@@ -53,6 +53,8 @@ namespace Strata
 		bool UpdateRotationEdit(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PropertyInfo& property,
 			const PropertyEditResult& result, std::string* outError);
 		void DrawMaterialSection(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
+		// While the scene plays: what the entity's animator plays (state, time, blending) and its parameters, read-only.
+		void DrawAnimatorState(EditorContext& context, Entity entity);
 		void DrawAddComponentPopup(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
 		// The scripts of the entity: fields edited through the same undoable path as script.setField, scripts added and
 		// removed through script.add/script.remove. Without a loaded module the stored overrides are shown read-only.

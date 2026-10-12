@@ -118,6 +118,14 @@ namespace Strata
 			if (UI::SectionHeader("AssetInspector.MaterialSection", (std::string(Icons::Palette) + "  Material").c_str()))
 				m_MaterialEditor.Draw(context, handle, "AssetInspector.Material");
 		}
+		if (metadata->Type == AssetType::AnimationController)
+			m_AnimationViews.DrawController(context, handle);
+		else
+			m_AnimationViews.Reset();
+		if (metadata->Type == AssetType::Skeleton && UI::SectionHeader("AssetInspector.SkeletonSection", (std::string(Icons::Bone) + "  Joints").c_str()))
+			m_AnimationViews.DrawSkeleton(handle);
+		if (metadata->Type == AssetType::AnimationClip && UI::SectionHeader("AssetInspector.ClipSection", (std::string(Icons::Film) + "  Clip").c_str()))
+			m_AnimationViews.DrawClip(handle);
 		if (assets && importer)
 		{
 			if (metadata->IsSubAsset())

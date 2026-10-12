@@ -10,6 +10,8 @@
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureStreamer.h"
+#include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneServices.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -58,28 +60,38 @@ namespace Strata
 		// Changed instances this close together are uploaded in one range: fewer copies for a little more data.
 		constexpr uint32_t c_UploadRangeGap = 16;
 
-		// The sort key of a draw: pipeline state first (cascade, alpha mask, winding, culling), then mesh, submesh and level
-		// of detail, which together make a batch; the material in the lowest bits only when batches are split by material.
+		// The sort key of a draw: pipeline state first (cascade, alpha mask, winding, culling, skinning), then mesh, submesh
+		// and level of detail, which together make a batch; the material in the lowest bits only when batches are split by
+		// material.
 		constexpr uint32_t c_KeyCascadeShift = 62;
 		constexpr uint32_t c_KeyAlphaMaskShift = 61;
 		constexpr uint32_t c_KeyMirroredShift = 60;
 		constexpr uint32_t c_KeyDoubleSidedShift = 59;
-		constexpr uint32_t c_KeyMeshShift = 39;
-		constexpr uint32_t c_KeySubmeshShift = 23;
-		constexpr uint32_t c_KeyLODShift = 18;
+		constexpr uint32_t c_KeySkinnedShift = 58;
+		constexpr uint32_t c_KeyMeshShift = 38;
+		constexpr uint32_t c_KeySubmeshShift = 22;
+		constexpr uint32_t c_KeyLODShift = 17;
 		constexpr uint32_t c_KeyMeshBits = 20;     // Mesh slots: at most one per entity (Scene::c_MaxEntities)
 		constexpr uint32_t c_KeySubmeshBits = 16;
 		constexpr uint32_t c_KeyLODBits = 5;
-		constexpr uint32_t c_KeyMaterialBits = 18; // Material slots beyond this share keys: their batches merge, which is still correct
+		constexpr uint32_t c_KeyMaterialBits = 17; // Material slots beyond this share keys: their batches merge, which is still correct
 		constexpr uint32_t c_MaxKeySubmeshes = 1u << c_KeySubmeshBits;
 		constexpr uint32_t c_MaxKeyLODs = 1u << c_KeyLODBits;
 
-		uint64_t MakeDrawKey(uint32_t cascade, bool alphaMask, bool mirrored, bool doubleSided, uint32_t meshSlot, uint32_t submesh, uint32_t lod, uint32_t material)
+		uint64_t MakeDrawKey(uint32_t cascade, bool alphaMask, bool mirrored, bool doubleSided, bool skinned, uint32_t meshSlot, uint32_t submesh, uint32_t lod,
+			uint32_t material)
 		{
 			return (static_cast<uint64_t>(cascade) << c_KeyCascadeShift) | (static_cast<uint64_t>(alphaMask) << c_KeyAlphaMaskShift)
 				| (static_cast<uint64_t>(mirrored) << c_KeyMirroredShift) | (static_cast<uint64_t>(doubleSided) << c_KeyDoubleSidedShift)
-				| (static_cast<uint64_t>(meshSlot) << c_KeyMeshShift) | (static_cast<uint64_t>(submesh) << c_KeySubmeshShift)
-				| (static_cast<uint64_t>(lod) << c_KeyLODShift) | static_cast<uint64_t>(material & ((1u << c_KeyMaterialBits) - 1));
+				| (static_cast<uint64_t>(skinned) << c_KeySkinnedShift) | (static_cast<uint64_t>(meshSlot) << c_KeyMeshShift)
+				| (static_cast<uint64_t>(submesh) << c_KeySubmeshShift) | (static_cast<uint64_t>(lod) << c_KeyLODShift)
+				| static_cast<uint64_t>(material & ((1u << c_KeyMaterialBits) - 1));
+		}
+
+		// Whether a proxy's instances are drawn skinned: posed, with a mesh that has its skin stream on the GPU.
+		bool IsDrawnSkinned(const RenderScene& renderScene, uint32_t proxy, const Mesh& mesh)
+		{
+			return (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0 && mesh.GetSkinBuffer() != nullptr;
 		}
 
 		uint32_t PackTextureSlot(uint32_t slot, uint32_t samplerIndex, bool grayscale = false)
@@ -262,17 +274,30 @@ namespace Strata
 		if (m_Chunks.size() < chunks)
 			m_Chunks.resize(chunks);
 		const float highFraction = m_Specification.HighPriorityScreenFraction;
+		const bool skins = renderScene.HasSkinProxies();
+		m_VisibleAnimators.clear();
+		m_VisibleReceivers = AABB();
 		ForEachChunk(chunks, [&](uint32_t chunk)
 		{
 			ExtractionChunk& output = m_Chunks[chunk];
 			output.MeshMarks.clear();
 			output.MaterialMarks.clear();
+			output.Animators.clear();
+			output.Receivers = AABB();
 			const uint32_t end = std::min(visible, (chunk + 1) * c_ExtractionChunkSize);
 			for (uint32_t item = chunk * c_ExtractionChunkSize; item < end; item++)
 			{
 				const uint32_t proxy = m_VisibleProxies[item];
 				m_ProxyStamps[proxy] = m_FrameStamp;
 				const AABB& bounds = renderScene.GetWorldBounds(proxy);
+				// Animators that only animate while seen learn that their meshes are (ReportVisibleAnimators), and that their
+				// shadows fall on what is seen (FindShadowCasters).
+				if (skins)
+				{
+					if (renderScene.GetSkinAnimator(proxy) != entt::null)
+						output.Animators.push_back(renderScene.GetSkinAnimator(proxy));
+					output.Receivers.Expand(bounds);
+				}
 				const float fraction = GetScreenFraction(camera, bounds.GetCenter(), glm::length(bounds.GetExtents()));
 				m_VisibleFractions[item] = fraction;
 				const uint32_t usage = fraction > highFraction ? (c_UseView | c_UseHigh) : c_UseView;
@@ -288,6 +313,8 @@ namespace Strata
 				MarkMesh(slot, usage);
 			for (const auto& [slot, usage] : m_Chunks[chunk].MaterialMarks)
 				MarkMaterial(slot, usage);
+			m_VisibleAnimators.insert(m_VisibleAnimators.end(), m_Chunks[chunk].Animators.begin(), m_Chunks[chunk].Animators.end());
+			m_VisibleReceivers.Expand(m_Chunks[chunk].Receivers);
 		}
 
 		// A mesh whose bounds are unknown (never loaded, none recorded) may be anywhere, in view too, whatever the
@@ -317,7 +344,7 @@ namespace Strata
 		}
 	}
 
-	void SceneRenderer::FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame)
+	void SceneRenderer::FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, RenderData::FrameConstants& frame)
 	{
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Extract");
@@ -341,6 +368,7 @@ namespace Strata
 		// Each cascade's square covers the bounding sphere of a view frustum slice; its depth range is fitted to the casters
 		// (GatherShadowDraws).
 		float sliceNear = nearClip;
+		AABB shadowedView; // The box around the part of the view the cascades cover (the slices' corners)
 		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
 		{
 			// Practical split scheme: a blend of logarithmic and uniform splits.
@@ -365,7 +393,10 @@ namespace Strata
 			}
 			glm::vec3 center(0.0f);
 			for (const glm::vec3& corner : corners)
+			{
 				center += corner;
+				shadowedView.Expand(corner);
+			}
 			center /= 8.0f;
 			float radius = 0.0f;
 			for (const glm::vec3& corner : corners)
@@ -441,13 +472,76 @@ namespace Strata
 		}
 		m_ShadowCasters.resize(kept);
 
+		// Shadows of a skinned mesh move with its animator, also when the mesh itself is out of view; the cascades reach far
+		// beyond the view (spheres around its slices), so a caster out of view reports its animator only when its shadow can
+		// fall on what the view shows: on the visible proxies, within the shadowed part of the view.
+		const bool skins = renderScene.HasSkinProxies();
+		AABB receivers;
+		std::array<glm::vec4, 7> viewPlanes = {};
+		if (skins)
+		{
+			receivers = m_VisibleReceivers;
+			receivers.Min = glm::max(receivers.Min, shadowedView.Min);
+			receivers.Max = glm::min(receivers.Max, shadowedView.Max);
+			for (size_t plane = 0; plane < 6; plane++)
+				viewPlanes[plane] = frustum.GetPlanes()[plane];
+			// The cascades end at the shadow distance: no shadow shows beyond it.
+			const glm::vec3 forward = -glm::normalize(glm::vec3(inverseView[2]));
+			viewPlanes[6] = glm::vec4(-forward, glm::dot(forward, glm::vec3(inverseView[3])) + farClip);
+		}
 		for (const ShadowCaster& caster : m_ShadowCasters)
 		{
+			if (skins && renderScene.GetSkinAnimator(caster.Proxy) != entt::null && m_ProxyStamps[caster.Proxy] != m_FrameStamp
+				&& CanShadowView(renderScene.GetWorldBounds(caster.Proxy), lightDirection, receivers, viewPlanes))
+				m_VisibleAnimators.push_back(renderScene.GetSkinAnimator(caster.Proxy));
 			const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(caster.Proxy);
 			MarkMesh(renderScene.GetMeshSlot(caster.Proxy), c_UseShadow | (overrideSlot == RenderScene::c_InvalidIndex ? c_UseShadow << c_SubmeshMaterialsShift : 0u));
 			if (overrideSlot != RenderScene::c_InvalidIndex)
 				MarkMaterial(overrideSlot, c_UseShadow);
 		}
+	}
+
+	bool SceneRenderer::CanShadowView(const AABB& caster, const glm::vec3& lightDirection, const AABB& receivers, std::span<const glm::vec4> planes) const
+	{
+		if (!caster.IsValid() || !receivers.IsValid() || !(glm::dot(lightDirection, lightDirection) > 0.0f))
+			return false;
+		const glm::vec3 direction = glm::normalize(lightDirection);
+		const glm::vec3 center = caster.GetCenter();
+		const glm::vec3 extents = caster.GetExtents();
+		// A shadow point is a caster point moved t >= 0 along the light, and lies on a receiver: so the caster's center moved t
+		// lies in the receivers' box grown by the caster's extents. That bounds t (the slab test of a ray against a box).
+		float first = 0.0f;
+		float last = std::numeric_limits<float>::max();
+		for (int axis = 0; axis < 3; axis++)
+		{
+			const float low = receivers.Min[axis] - extents[axis];
+			const float high = receivers.Max[axis] + extents[axis];
+			if (std::abs(direction[axis]) < 1.0e-6f)
+			{
+				if (center[axis] < low || center[axis] > high)
+					return false;
+				continue;
+			}
+			float enter = (low - center[axis]) / direction[axis];
+			float exit = (high - center[axis]) / direction[axis];
+			if (enter > exit)
+				std::swap(enter, exit);
+			first = std::max(first, enter);
+			last = std::min(last, exit);
+			if (first > last)
+				return false;
+		}
+		// The caster's box swept over that stretch must reach into the view: no plane may have both ends of the sweep outside.
+		const glm::vec3 from = center + direction * first;
+		const glm::vec3 to = center + direction * last;
+		for (const glm::vec4& plane : planes)
+		{
+			const glm::vec3 normal(plane);
+			const float reach = std::abs(normal.x) * extents.x + std::abs(normal.y) * extents.y + std::abs(normal.z) * extents.z;
+			if (std::max(glm::dot(normal, from), glm::dot(normal, to)) + plane.w + reach < 0.0f)
+				return false;
+		}
+		return true;
 	}
 
 	uint32_t SceneRenderer::ResolveTexture(AssetHandle handle, uint32_t missingSlot, uint32_t loadingSlot, bool residentOnly, std::vector<ResolvedTexture>* resolved)
@@ -601,6 +695,7 @@ namespace Strata
 				batch.LOD = static_cast<uint32_t>((draw.Key >> c_KeyLODShift) & (c_MaxKeyLODs - 1));
 				batch.DoubleSided = ((draw.Key >> c_KeyDoubleSidedShift) & 1) != 0;
 				batch.Mirrored = ((draw.Key >> c_KeyMirroredShift) & 1) != 0;
+				batch.Skinned = ((draw.Key >> c_KeySkinnedShift) & 1) != 0;
 				batch.AlphaMask = ((draw.Key >> c_KeyAlphaMaskShift) & 1) != 0;
 				batch.Cascade = static_cast<uint32_t>(draw.Key >> c_KeyCascadeShift);
 				batch.FirstInstance = static_cast<uint32_t>(outDrawList.size());
@@ -621,14 +716,18 @@ namespace Strata
 		const float viewportHeight = static_cast<float>(m_ViewportSize.y);
 		const bool batchAcrossMaterials = m_Specification.BatchAcrossMaterials;
 		const TextureStreamingPolicy::ViewScale viewScale = TextureStreamingPolicy::GetViewScale(camera, viewportHeight);
+		const bool skins = renderScene.HasSkinProxies(); // Scenes without skinned meshes skip the per-proxy checks
 		ForEachChunk(chunks, [&](uint32_t chunk)
 		{
 			ExtractionChunk& output = m_Chunks[chunk];
 			output.Draws.clear();
 			output.Transparent.clear();
 			output.MaterialScreenUses.clear();
-			output.InstancesPerLOD = {};
-			output.Skipped = 0;
+			// Counted in locals and stored once: a store per instance into the chunk, whose neighbours other threads write,
+			// cost 100,000 instances about 0.1 ms.
+			std::array<uint32_t, SceneRendererStats::c_LODStatCount> instancesPerLOD = {};
+			uint32_t skipped = 0;
+			uint32_t skinnedInstances = 0;
 			const uint32_t end = std::min(visible, (chunk + 1) * c_ExtractionChunkSize);
 			for (uint32_t item = chunk * c_ExtractionChunkSize; item < end; item++)
 			{
@@ -643,6 +742,7 @@ namespace Strata
 				const float fraction = m_VisibleFractions[item];
 				const float viewDepth = -(camera.View * glm::vec4(bounds.GetCenter(), 1.0f)).z;
 				const bool mirrored = (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Mirrored) != 0;
+				const bool skinned = skins && IsDrawnSkinned(renderScene, proxy, *mesh);
 				const uint32_t first = renderScene.GetFirstInstance(proxy);
 				const std::vector<Submesh>& submeshes = mesh->GetSubmeshes();
 				// How fine its textures show (the pixels a world unit spans where it is nearest, and its axes' scales), worked
@@ -660,10 +760,10 @@ namespace Strata
 					const uint32_t lod = SelectLOD(submeshes[submeshIndex], fraction);
 					if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
 					{
-						output.Skipped++;
+						skipped++;
 						continue;
 					}
-					output.InstancesPerLOD[std::min<size_t>(lod, SceneRendererStats::c_LODStatCount - 1)]++;
+					instancesPerLOD[std::min<size_t>(lod, SceneRendererStats::c_LODStatCount - 1)]++;
 					float uvPixels = 0.0f;
 					if ((materialFlags & c_MaterialTextured) != 0)
 					{
@@ -677,14 +777,19 @@ namespace Strata
 					}
 					AppendScreenUse(output.MaterialScreenUses, materialSlot, fraction * viewportHeight, uvPixels);
 					const bool doubleSided = (materialFlags & c_MaterialDoubleSided) != 0;
+					skinnedInstances += skinned ? 1u : 0u;
 					if ((materialFlags & c_MaterialTransparent) != 0)
 					{
-						output.Transparent.push_back(TransparentDraw { viewDepth, renderScene.GetEntityID(proxy), submeshIndex, instance, meshSlot, lod, doubleSided, mirrored });
+						output.Transparent.push_back(TransparentDraw { viewDepth, renderScene.GetEntityID(proxy), submeshIndex, instance, meshSlot, lod, doubleSided, mirrored, skinned });
 						continue;
 					}
-					output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, meshSlot, submeshIndex, lod, batchAcrossMaterials ? 0u : materialSlot), instance, 0 });
+					output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod, batchAcrossMaterials ? 0u : materialSlot),
+						instance, 0 });
 				}
 			}
+			output.InstancesPerLOD = instancesPerLOD;
+			output.Skipped = skipped;
+			output.SkinnedInstances = skinnedInstances;
 		});
 
 		m_Draws.clear();
@@ -703,6 +808,7 @@ namespace Strata
 				m_MaterialUVPixels[use.Slot] = std::max(m_MaterialUVPixels[use.Slot], use.UVPixels);
 			}
 			skipped += output.Skipped;
+			m_Stats.SkinnedInstances += output.SkinnedInstances;
 		}
 		if (skipped > 0)
 			m_Errors.Report(fmt::format("{} submesh instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, c_MaxKeySubmeshes, c_MaxKeyLODs));
@@ -727,6 +833,7 @@ namespace Strata
 			batch.LOD = draw.LOD;
 			batch.DoubleSided = draw.DoubleSided;
 			batch.Mirrored = draw.Mirrored;
+			batch.Skinned = draw.Skinned;
 			batch.FirstInstance = static_cast<uint32_t>(m_DrawInstancesBuild.size());
 			batch.InstanceCount = 1;
 			m_TransparentBatches.push_back(batch);
@@ -768,13 +875,16 @@ namespace Strata
 			m_Chunks.resize(chunks);
 		const std::span<const RenderData::InstanceData> instances = renderScene.GetInstances();
 		const bool batchAcrossMaterials = m_Specification.BatchAcrossMaterials;
+		const bool skins = renderScene.HasSkinProxies(); // Scenes without skinned meshes skip the per-proxy checks
 		ForEachChunk(chunks, [&](uint32_t chunk)
 		{
 			ExtractionChunk& output = m_Chunks[chunk];
 			output.Draws.clear();
-			output.Skipped = 0;
+			// Accumulated in locals and stored once (see GatherDraws).
+			uint32_t skipped = 0;
+			std::array<float, RenderData::c_MaxCascades> casterNearZ = {};
 			for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-				output.CasterNearZ[cascade] = m_Cascades[cascade].SphereNearZ;
+				casterNearZ[cascade] = m_Cascades[cascade].SphereNearZ;
 			const uint32_t end = std::min(casters, (chunk + 1) * c_ExtractionChunkSize);
 			for (uint32_t item = chunk * c_ExtractionChunkSize; item < end; item++)
 			{
@@ -788,12 +898,13 @@ namespace Strata
 				for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
 				{
 					if ((caster.CascadeMask & (1u << cascade)) != 0)
-						output.CasterNearZ[cascade] = std::max(output.CasterNearZ[cascade], caster.LightNearZ);
+						casterNearZ[cascade] = std::max(casterNearZ[cascade], caster.LightNearZ);
 				}
 
 				const AABB& bounds = renderScene.GetWorldBounds(caster.Proxy);
 				const float fraction = GetScreenFraction(camera, bounds.GetCenter(), glm::length(bounds.GetExtents()));
 				const bool mirrored = (renderScene.GetProxyFlags(caster.Proxy) & RenderProxyFlags::Mirrored) != 0;
+				const bool skinned = skins && IsDrawnSkinned(renderScene, caster.Proxy, *mesh);
 				const uint32_t first = renderScene.GetFirstInstance(caster.Proxy);
 				const std::vector<Submesh>& submeshes = mesh->GetSubmeshes();
 				for (uint32_t submeshIndex = 0; submeshIndex < count; submeshIndex++)
@@ -807,7 +918,7 @@ namespace Strata
 					const uint32_t lod = SelectLOD(submeshes[submeshIndex], fraction);
 					if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
 					{
-						output.Skipped++;
+						skipped++;
 						continue;
 					}
 					const bool alphaMask = (materialFlags & c_MaterialAlphaMask) != 0;
@@ -816,12 +927,14 @@ namespace Strata
 					{
 						if ((caster.CascadeMask & (1u << cascade)) != 0)
 						{
-							output.Draws.push_back(SortItem { MakeDrawKey(cascade, alphaMask, mirrored, doubleSided, meshSlot, submeshIndex, lod,
+							output.Draws.push_back(SortItem { MakeDrawKey(cascade, alphaMask, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod,
 								batchAcrossMaterials ? 0u : materialSlot), instance, 0 });
 						}
 					}
 				}
 			}
+			output.Skipped = skipped;
+			output.CasterNearZ = casterNearZ;
 		});
 
 		std::array<float, RenderData::c_MaxCascades> casterNearZ = {};
@@ -899,10 +1012,61 @@ namespace Strata
 		return bytes;
 	}
 
+	void SceneRenderer::ReportVisibleAnimators(Scene& scene)
+	{
+		if (m_VisibleAnimators.empty())
+			return;
+		ISkinningPoses* poses = scene.GetService<ISkinningPoses>();
+		if (!poses)
+			return;
+		// A character's meshes and shadows name its animator several times: report each once, in a fixed order.
+		std::sort(m_VisibleAnimators.begin(), m_VisibleAnimators.end());
+		m_VisibleAnimators.erase(std::unique(m_VisibleAnimators.begin(), m_VisibleAnimators.end()), m_VisibleAnimators.end());
+		for (const entt::entity animator : m_VisibleAnimators)
+			poses->ReportVisible(animator);
+	}
+
 	void SceneRenderer::UploadSceneData(nvrhi::ICommandList* commandList, const RenderScene& renderScene, bool instancesRecreated, bool materialsRecreated,
-		bool drawListsRecreated)
+		bool drawListsRecreated, bool jointsRecreated)
 	{
 		ST_PROFILE_FUNCTION();
+		// Palettes of posed skinned meshes: the joint ranges that changed since this renderer's last upload.
+		const std::span<const RenderData::AffineTransform> palette = renderScene.GetPalette();
+		if (!palette.empty() && (jointsRecreated || m_FullUpload || renderScene.GetPaletteVersion() != m_UploadedPaletteVersion))
+		{
+			m_PaletteChanges.clear();
+			if (jointsRecreated || m_FullUpload || !renderScene.GetPaletteChanges(m_UploadedPaletteVersion, m_PaletteChanges))
+			{
+				commandList->writeBuffer(m_JointBuffer, palette.data(), palette.size_bytes());
+				m_Stats.PaletteBytesUploaded += palette.size_bytes();
+			}
+			else
+			{
+				// Ranges are logged newest first and may repeat: upload each joint once, in merged runs.
+				std::sort(m_PaletteChanges.begin(), m_PaletteChanges.end());
+				uint32_t runStart = 0;
+				uint32_t runEnd = 0;
+				auto flush = [&]()
+				{
+					if (runEnd <= runStart)
+						return;
+					const size_t bytes = (runEnd - runStart) * sizeof(RenderData::AffineTransform);
+					commandList->writeBuffer(m_JointBuffer, palette.data() + runStart, bytes, runStart * sizeof(RenderData::AffineTransform));
+					m_Stats.PaletteBytesUploaded += bytes;
+				};
+				for (const auto& [first, count] : m_PaletteChanges)
+				{
+					if (first > runEnd)
+					{
+						flush();
+						runStart = first;
+					}
+					runEnd = std::max(runEnd, first + count);
+				}
+				flush();
+			}
+		}
+		m_UploadedPaletteVersion = renderScene.GetPaletteVersion();
 		const std::span<const RenderData::InstanceData> instances = renderScene.GetInstances();
 		if (!instances.empty())
 		{

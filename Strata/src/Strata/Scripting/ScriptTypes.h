@@ -25,7 +25,9 @@ namespace Strata
 		OnCollisionEnter,
 		OnCollisionExit,
 		OnTriggerEnter,
-		OnTriggerExit
+		OnTriggerExit,
+		// Events of the entity's animator (see StrataScriptClassDesc and ScriptSystem).
+		OnAnimationEvent
 	};
 
 	const char* ScriptCallbackToString(ScriptCallback callback);

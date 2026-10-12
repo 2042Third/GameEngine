@@ -1,5 +1,6 @@
 #pragma once
 
+#include "UI/AnimationAssetViews.h"
 #include "UI/EditorPanelRegistry.h"
 #include "UI/MaterialEditor.h"
 
@@ -21,6 +22,8 @@ namespace Strata
 	// - a header with the asset's type, name, path and handle (with a copy button), and its actions (open a scene, add a
 	//   prefab or model to the scene, re-import);
 	// - a material's properties, edited live (MaterialEditor: a drag previews and is one undo step);
+	// - a skeleton's joints, an animation clip's channels, and an animation controller's parameters, states and transitions
+	//   as editable tables (AnimationAssetViews: one undo step per edit);
 	// - the import settings of an imported asset (texture, model, audio clip; fonts have none) as a draft: Apply runs
 	//   asset.setImportSettings through the command runner (the import runs in the background and the panel shows it),
 	//   Revert discards the draft;
@@ -38,6 +41,7 @@ namespace Strata
 		void DrawDetails(EditorAssetManager& assets, const AssetMetadata& metadata);
 	private:
 		MaterialEditor m_MaterialEditor;
+		AnimationAssetViews m_AnimationViews;
 
 		// The import settings being edited: as the asset has them (Saved) and as edited (Edited).
 		struct ImportDraft

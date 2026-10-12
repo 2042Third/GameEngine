@@ -93,6 +93,11 @@ namespace Strata
 		// What the Mip column shows for an asset kept partly resident (a texture streaming its mip levels): its finest
 		// resident level and the finest one its views want, "resident / wanted" (0 is the full resolution).
 		static std::string FormatMipLevels(const AssetDetailLevels& levels);
+		// How the Type column names an asset type: its identifier (AssetTypeToString), except for the animation clip and
+		// controller, whose identifiers are about twice as long as the others' and go by "Animation" and "Controller". The
+		// column is as wide as the longest of these names, and it decides how much of the asset's name shows and whether the
+		// overview fits beside the table; the row's tooltip names the type in full.
+		static const char* GetTypeLabel(AssetType type);
 	private:
 		struct Label
 		{

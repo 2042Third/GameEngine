@@ -3,6 +3,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/UndoStack.h"
 
+#include <Strata/Animation/AnimationController.h>
 #include <Strata/Asset/AssetTypes.h>
 #include <Strata/Reflection/Property.h>
 
@@ -22,7 +23,8 @@ namespace Strata
 	class EditorAssetManager;
 	class EditorContext;
 
-	// Edits of engine-native asset documents (".stmat", ".stprefab", ".stscene": JSON the engine writes itself) with undo.
+	// Edits of engine-native asset documents (".stmat", ".stprefab", ".stscene", ".stanimator": JSON the engine writes itself)
+	// with undo.
 	// An edit writes the document's file and publishes the new document as the loaded asset at once
 	// (AssetManagerBase::ReplaceLoadedAsset), so everything that uses the asset shows the change in the same frame; a preview
 	// only publishes it, for live edits while a value is dragged.
@@ -71,6 +73,16 @@ namespace Strata
 		// Whether the loaded material shows what its file holds (false while a preview is not saved). Loads nothing: an
 		// unloaded material is what its file holds.
 		bool IsMaterialSaved(EditorAssetManager& assets, AssetHandle material);
+
+		// An animation controller document (".stanimator") with `data` as its content, validated (AnimationController::Create)
+		// and written in the canonical form (tabs, a final newline). Invalid content fails with the reason.
+		std::optional<std::string> BuildControllerDocument(const AnimationControllerData& data, std::string* outError = nullptr);
+		// Replaces the content of an animation controller of the open project: the file is written, the loaded controller
+		// replaced (animators and previews follow) and one undo step named `name` recorded; consecutive edits with the same
+		// non-empty merge key are one step. Fails, changing nothing, without a project, for assets that are not controllers of
+		// the project (InvalidParameters) and for invalid content (InvalidParameters, with the reason).
+		bool SetControllerData(EditorContext& context, AssetHandle controller, const AnimationControllerData& data, const std::string& name,
+			const std::string& mergeKey = {}, std::string* outError = nullptr, EditorCommandError* outErrorKind = nullptr);
 
 	}
 

@@ -4,9 +4,11 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/Assert.h"
+#include "Strata/Core/JobSystem.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneServices.h"
 
 #include <spdlog/fmt/fmt.h>
 
@@ -66,6 +68,18 @@ namespace Strata
 			return submesh.Material.IsValid() ? submesh.Material : BuiltinAssets::DefaultMaterial;
 		}
 
+		// The inverse of an affine transform (its fourth row 0, 0, 0, 1), as an affine transform.
+		glm::mat4 InverseAffine(const glm::mat4& matrix)
+		{
+			const glm::mat3 inverse = glm::inverse(glm::mat3(matrix));
+			glm::mat4 result(inverse);
+			result[3] = glm::vec4(-(inverse * glm::vec3(matrix[3])), 1.0f);
+			return result;
+		}
+
+		// Palettes of up to this many proxies are computed in one batch of the parallel pose update.
+		constexpr uint32_t c_PoseBatchSize = 16;
+
 	}
 
 	// Holds a scene's render scene in its registry's context. The context is destroyed after the registry's storages, with
@@ -99,6 +113,9 @@ namespace Strata
 		registry.on_construct<MeshRendererComponent>().connect<&RenderScene::OnMeshRendererChanged>(*this);
 		registry.on_update<MeshRendererComponent>().connect<&RenderScene::OnMeshRendererChanged>(*this);
 		registry.on_destroy<MeshRendererComponent>().connect<&RenderScene::OnMeshRendererDestroyed>(*this);
+		registry.on_construct<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
+		registry.on_update<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
+		registry.on_destroy<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
 		// Every mesh renderer the scene already has gets its proxy at the first sync.
 		for (const entt::entity entity : registry.view<MeshRendererComponent>())
 			QueuePending(entity);
@@ -118,6 +135,13 @@ namespace Strata
 		const uint32_t proxy = FindProxy(entity);
 		if (proxy != c_InvalidIndex)
 			DestroyProxy(proxy);
+	}
+
+	void RenderScene::OnSkinChanged(entt::registry& registry, entt::entity entity)
+	{
+		// Only mesh renderers have proxies; a destroyed SkinComponent is gone by the next sync, which reads its absence.
+		if (registry.all_of<MeshRendererComponent>(entity))
+			QueuePending(entity);
 	}
 
 	void RenderScene::QueuePending(entt::entity entity)
@@ -181,6 +205,7 @@ namespace Strata
 		m_SyncCount++;
 		m_SyncUpdates = 0;
 		entt::registry& registry = m_Scene->GetRegistry();
+		UpdateRenderTransforms(m_Scene->GetService<ISkinningPoses>());
 
 		m_PendingScratch.clear();
 		m_PendingScratch.swap(m_Pending);
@@ -198,7 +223,7 @@ namespace Strata
 				if (proxy == c_InvalidIndex)
 					continue;
 				const WorldTransformComponent& world = registry.get<WorldTransformComponent>(entity);
-				UpdateProxyTransform(proxy, world.Matrix, world.ActiveInHierarchy, false);
+				UpdateProxyTransform(proxy, GetDrawnTransform(entity, world), world.ActiveInHierarchy, false);
 			}
 		}
 		else
@@ -207,6 +232,7 @@ namespace Strata
 		}
 		m_TransformsVersion = m_Scene->GetTransformsVersion();
 		UpdateMeshLayouts(assets);
+		UpdateSkinnedPoses();
 		m_Index.Refresh();
 		m_Stats.LastSyncUpdates = m_SyncUpdates;
 		m_Stats.TotalUpdates += m_SyncUpdates;
@@ -230,9 +256,52 @@ namespace Strata
 			if (entity == entt::null)
 				continue;
 			const WorldTransformComponent& world = registry.get<WorldTransformComponent>(entity);
-			UpdateProxyTransform(proxy, world.Matrix, world.ActiveInHierarchy, false);
+			UpdateProxyTransform(proxy, GetDrawnTransform(entity, world), world.ActiveInHierarchy, false);
 		}
 		m_Stats.FullRefreshes++;
+	}
+
+	const glm::mat4& RenderScene::GetDrawnTransform(entt::entity entity, const WorldTransformComponent& world) const
+	{
+		if (!m_RenderTransforms.empty())
+		{
+			if (auto it = m_RenderTransforms.find(entity); it != m_RenderTransforms.end())
+				return it->second;
+		}
+		return world.Matrix;
+	}
+
+	void RenderScene::UpdateRenderTransforms(const ISkinningPoses* poses)
+	{
+		const uint64_t version = poses ? poses->GetRenderTransformsVersion() : 0;
+		if (poses == m_RenderTransformsProvider && version == m_RenderTransformsVersion)
+			return;
+		m_RenderTransformsProvider = poses;
+		m_RenderTransformsVersion = version;
+		std::unordered_map<entt::entity, glm::mat4> previous = std::move(m_RenderTransforms);
+		m_RenderTransforms.clear();
+		if (poses)
+		{
+			for (const RenderTransform& transform : poses->GetRenderTransforms())
+				m_RenderTransforms[transform.Entity] = transform.World;
+		}
+		// Proxies the previous list placed go back to their entities' transforms, those of the new one move.
+		const entt::registry& registry = m_Scene->GetRegistry();
+		auto place = [&](entt::entity entity)
+		{
+			const uint32_t proxy = FindProxy(entity);
+			if (proxy == c_InvalidIndex)
+				return;
+			const WorldTransformComponent& world = registry.get<WorldTransformComponent>(entity);
+			UpdateProxyTransform(proxy, GetDrawnTransform(entity, world), world.ActiveInHierarchy, false);
+		};
+		for (const auto& entry : previous)
+		{
+			if (!m_RenderTransforms.contains(entry.first))
+				place(entry.first);
+		}
+		for (const auto& entry : m_RenderTransforms)
+			place(entry.first);
 	}
 
 	bool RenderScene::UpdateProxyFromEntity(entt::entity entity)
@@ -280,12 +349,24 @@ namespace Strata
 			m_Flags[proxy] = (m_Flags[proxy] & ~RenderProxyFlags::CastShadows) | castShadows;
 			changed = true;
 		}
+		const SkinComponent* skin = registry.try_get<SkinComponent>(entity);
+		const UUID animator = skin ? skin->Animator : UUID::Null();
+		const bool hadSkin = (m_Flags[proxy] & RenderProxyFlags::Skin) != 0;
+		if ((skin != nullptr) != hadSkin || (hadSkin && animator != m_Skins[m_SkinIndices[proxy]].AnimatorID))
+		{
+			m_Flags[proxy] = skin ? (m_Flags[proxy] | RenderProxyFlags::Skin) : (m_Flags[proxy] & ~RenderProxyFlags::Skin);
+			SetSkinAnimator(proxy, animator);
+			changed = true;
+		}
 
 		if (!changed)
-			return UpdateProxyTransform(proxy, world.Matrix, world.ActiveInHierarchy, false);
+			return UpdateProxyTransform(proxy, GetDrawnTransform(entity, world), world.ActiveInHierarchy, false);
 
-		// A new proxy, mesh or material: placement, instance slots and their data all follow.
-		m_Transforms[proxy] = RenderData::AffineTransform::FromMatrix(world.Matrix);
+		// A new proxy, mesh or material: placement, instance slots and their data all follow (and a Skin proxy's pose, which
+		// depends on its mesh).
+		if ((m_Flags[proxy] & RenderProxyFlags::Skin) != 0)
+			m_SkinDirty = true;
+		m_Transforms[proxy] = RenderData::AffineTransform::FromMatrix(GetDrawnTransform(entity, world));
 		m_Flags[proxy] = world.ActiveInHierarchy ? (m_Flags[proxy] | RenderProxyFlags::Active) : (m_Flags[proxy] & ~RenderProxyFlags::Active);
 		UpdateProxyPlacement(proxy);
 		RebuildInstances(proxy);
@@ -326,6 +407,7 @@ namespace Strata
 			m_OverrideSlots.push_back(c_InvalidIndex);
 			m_FirstInstances.push_back(0);
 			m_InstanceCounts.push_back(0);
+			m_SkinIndices.push_back(c_InvalidIndex);
 		}
 		m_Entities[proxy] = entity;
 		m_EntityIDs[proxy] = static_cast<uint32_t>(entity) + 1;
@@ -339,6 +421,7 @@ namespace Strata
 		m_OverrideSlots[proxy] = c_InvalidIndex;
 		m_FirstInstances[proxy] = 0;
 		m_InstanceCounts[proxy] = 0;
+		m_SkinIndices[proxy] = c_InvalidIndex;
 
 		const size_t index = static_cast<size_t>(entt::to_entity(entity));
 		if (index >= m_ProxyByEntityIndex.size())
@@ -364,6 +447,9 @@ namespace Strata
 		if (m_OverrideSlots[proxy] != c_InvalidIndex)
 			ReleaseMaterial(m_OverrideSlots[proxy]);
 		m_OverrideSlots[proxy] = c_InvalidIndex;
+		// Without its Skin flag the proxy loses its skin entry (and its palette, were it posed).
+		m_Flags[proxy] &= ~RenderProxyFlags::Skin;
+		SetSkinAnimator(proxy, UUID::Null());
 
 		m_ProxyByEntityIndex[static_cast<size_t>(entt::to_entity(m_Entities[proxy]))] = c_InvalidIndex;
 		m_Entities[proxy] = entt::null;
@@ -382,6 +468,8 @@ namespace Strata
 
 		m_Transforms[proxy] = transform;
 		m_Flags[proxy] = active ? (m_Flags[proxy] | RenderProxyFlags::Active) : (m_Flags[proxy] & ~RenderProxyFlags::Active);
+		if ((m_Flags[proxy] & RenderProxyFlags::Skin) != 0)
+			m_SkinDirty = true; // Its palette depends on its transform and activity (UpdateSkinnedPoses)
 		UpdateProxyPlacement(proxy);
 		WriteInstances(proxy);
 		MarkUpdated(proxy);
@@ -396,12 +484,14 @@ namespace Strata
 		const uint32_t meshSlot = m_MeshSlots[proxy];
 		const MeshEntry* mesh = meshSlot != c_InvalidIndex ? &m_Meshes[meshSlot] : nullptr;
 
-		uint32_t flags = m_Flags[proxy] & (RenderProxyFlags::Active | RenderProxyFlags::CastShadows);
+		uint32_t flags = m_Flags[proxy] & (RenderProxyFlags::Active | RenderProxyFlags::CastShadows | RenderProxyFlags::Skin | RenderProxyFlags::Skinned);
 		if (determinant < 0.0f)
 			flags |= RenderProxyFlags::Mirrored;
 		if (mesh && (mesh->LayoutKnown || mesh->RecordedBounds))
 			flags |= RenderProxyFlags::MeshBounds;
-		if (mesh && mesh->LayoutKnown)
+		if ((flags & RenderProxyFlags::Skinned) != 0)
+			m_LocalBounds[proxy] = m_Skins[m_SkinIndices[proxy]].PosedBounds; // Posed: where its joints put the vertices
+		else if (mesh && mesh->LayoutKnown)
 			m_LocalBounds[proxy] = mesh->Bounds;
 		else if (mesh && mesh->RecordedBounds)
 			m_LocalBounds[proxy] = *mesh->RecordedBounds;
@@ -570,7 +660,7 @@ namespace Strata
 		materials.reserve(mesh.GetSubmeshes().size());
 		for (const Submesh& submesh : mesh.GetSubmeshes())
 			materials.push_back(GetSubmeshMaterial(submesh));
-		if (entry.LayoutKnown && SameBytes(entry.Bounds, mesh.GetBounds()) && entry.SubmeshMaterials == materials)
+		if (entry.LayoutKnown && SameBytes(entry.Bounds, mesh.GetBounds()) && entry.SubmeshMaterials == materials && entry.Skin == mesh.GetSkinBinding())
 			return 0;
 
 		// New material slots first, so slots both layouts use survive the release of the old ones.
@@ -583,10 +673,18 @@ namespace Strata
 		entry.SubmeshMaterials = std::move(materials);
 		entry.SubmeshMaterialSlots = std::move(materialSlots);
 		entry.Bounds = mesh.GetBounds();
+		entry.Skin = mesh.GetSkinBinding();
+		entry.SkinJointsNeeded = 0;
+		if (entry.Skin)
+		{
+			for (const uint16_t joint : entry.Skin->Joints)
+				entry.SkinJointsNeeded = std::max<uint32_t>(entry.SkinJointsNeeded, joint + 1u);
+		}
 		// The loaded mesh's own bounds replace what was recorded for it.
 		entry.LayoutKnown = true;
 		entry.RecordedBounds.reset();
 		UpdateBoundsMembership(slot);
+		m_SkinDirty = true; // Skin proxies of the mesh are posed (or not) with the new layout
 
 		for (const uint32_t proxy : m_Meshes[slot].Users)
 		{
@@ -706,8 +804,11 @@ namespace Strata
 		entry.SubmeshMaterials.clear();
 		entry.SubmeshMaterialSlots.clear();
 		entry.Bounds = AABB();
+		entry.Skin.reset();
+		entry.SkinJointsNeeded = 0;
 		entry.LayoutKnown = false;
 		entry.LayoutRevision = 0;
+		m_SkinDirty = true;
 	}
 
 	void RenderScene::RebuildInstances(uint32_t proxy)
@@ -743,6 +844,11 @@ namespace Strata
 		data.World = m_Transforms[proxy];
 		data.EntityID = m_EntityIDs[proxy];
 		data.Flags = (m_Flags[proxy] & RenderProxyFlags::Mirrored) != 0 ? RenderData::c_InstanceMirrored : 0u;
+		if ((m_Flags[proxy] & RenderProxyFlags::Skinned) != 0)
+		{
+			data.Flags |= RenderData::c_InstanceSkinned;
+			data.SkinPalette = m_Skins[m_SkinIndices[proxy]].PaletteFirst;
+		}
 		for (uint32_t index = 0; index < count; index++)
 		{
 			data.MaterialIndex = overrideSlot != c_InvalidIndex ? overrideSlot : mesh.SubmeshMaterialSlots[index];
@@ -812,6 +918,247 @@ namespace Strata
 		return true;
 	}
 
+	void RenderScene::SetSkinAnimator(uint32_t proxy, UUID animator)
+	{
+		const bool skin = (m_Flags[proxy] & RenderProxyFlags::Skin) != 0;
+		const uint32_t index = m_SkinIndices[proxy];
+		if (skin)
+		{
+			if (index == c_InvalidIndex)
+			{
+				m_SkinIndices[proxy] = static_cast<uint32_t>(m_Skins.size());
+				m_Skins.emplace_back().Proxy = proxy;
+				m_Stats.SkinProxies++;
+			}
+			SkinEntry& entry = m_Skins[m_SkinIndices[proxy]];
+			entry.AnimatorID = animator;
+			entry.Animator = entt::null;
+			entry.PoseVersion = 0; // Posed again from the new animator
+		}
+		else if (index != c_InvalidIndex)
+		{
+			if ((m_Flags[proxy] & RenderProxyFlags::Skinned) != 0)
+			{
+				ReleasePalette(m_Skins[index]);
+				m_Flags[proxy] &= ~RenderProxyFlags::Skinned;
+				m_Stats.PosedProxies--;
+			}
+			m_Skins[index] = m_Skins.back();
+			m_SkinIndices[m_Skins[index].Proxy] = index;
+			m_Skins.pop_back();
+			m_SkinIndices[proxy] = c_InvalidIndex;
+			m_Stats.SkinProxies--;
+		}
+		m_SkinDirty = true;
+	}
+
+	RenderScene::PoseInputs RenderScene::EvaluatePose(uint32_t proxy, const ISkinningPoses* poses) const
+	{
+		PoseInputs inputs;
+		if ((m_Flags[proxy] & RenderProxyFlags::Skin) == 0 || !m_Skins[m_SkinIndices[proxy]].AnimatorID.IsValid())
+			return inputs;
+		const Entity animator = m_Scene->GetEntityByUUID(m_Skins[m_SkinIndices[proxy]].AnimatorID);
+		if (!animator)
+			return inputs;
+		inputs.Animator = animator.GetHandle();
+
+		const uint32_t meshSlot = m_MeshSlots[proxy];
+		if (!poses || (m_Flags[proxy] & RenderProxyFlags::Active) == 0 || meshSlot == c_InvalidIndex)
+			return inputs;
+		const MeshEntry& mesh = m_Meshes[meshSlot];
+		if (!mesh.LayoutKnown || !mesh.Skin)
+			return inputs;
+		SkeletonPose pose;
+		if (!poses->GetPose(inputs.Animator, pose) || pose.Joints.size() < mesh.SkinJointsNeeded)
+			return inputs;
+		const WorldTransformComponent* animatorWorld = m_Scene->GetRegistry().try_get<WorldTransformComponent>(inputs.Animator);
+		if (!animatorWorld)
+			return inputs;
+
+		// The pose is relative to the animator's entity; the proxy draws in its own space.
+		const glm::mat4 proxyWorld = m_Transforms[proxy].ToMatrix();
+		const float determinant = glm::determinant(glm::mat3(proxyWorld));
+		if (!std::isfinite(determinant) || std::abs(determinant) < c_MinDeterminant || !IsFiniteMatrix(proxyWorld) || !IsFiniteMatrix(animatorWorld->Matrix))
+			return inputs;
+		inputs.AnimatorToProxy = InverseAffine(proxyWorld) * animatorWorld->Matrix;
+		inputs.AnimatorToProxy[0][3] = 0.0f;
+		inputs.AnimatorToProxy[1][3] = 0.0f;
+		inputs.AnimatorToProxy[2][3] = 0.0f;
+		inputs.AnimatorToProxy[3][3] = 1.0f;
+		if (!IsFiniteMatrix(inputs.AnimatorToProxy))
+			return inputs;
+		inputs.Joints = pose.Joints;
+		inputs.Version = pose.Version;
+		inputs.Reach = pose.Reach;
+		inputs.ReachScale = pose.ReachScale;
+		inputs.Posed = true;
+		return inputs;
+	}
+
+	void RenderScene::ComputePalette(const MeshSkinBinding& skin, const PoseInputs& pose, RenderData::AffineTransform* outPalette, AABB& outBounds)
+	{
+		outBounds = AABB();
+		for (size_t joint = 0; joint < skin.Joints.size(); joint++)
+		{
+			// Fourth rows stay 0, 0, 0, 1: every factor is affine.
+			const glm::mat4 matrix = pose.AnimatorToProxy * pose.Joints[skin.Joints[joint]] * skin.InverseBindMatrices[joint];
+			outPalette[joint] = RenderData::AffineTransform::FromMatrix(matrix);
+			outBounds.Expand(skin.JointBounds[joint].Transformed(matrix));
+		}
+		// An animator that does not compute its pose every update: the bounds also take in wherever its clips take the joints
+		// (and the vertices around them), so views of those places find it and it gets posed there.
+		if (pose.Reach.IsValid())
+		{
+			const glm::vec3 margin(skin.MaxJointExtent * pose.ReachScale);
+			outBounds.Expand(AABB(pose.Reach.Min - margin, pose.Reach.Max + margin).Transformed(pose.AnimatorToProxy));
+		}
+	}
+
+	void RenderScene::UpdateSkinnedPoses()
+	{
+		ST_PROFILE_FUNCTION();
+		m_Stats.LastSyncPoses = 0;
+		if (m_Skins.empty())
+			return;
+		// Nothing that palettes depend on changed: not the poses, not a transform, not a mesh layout, not a skin.
+		const ISkinningPoses* poses = m_Scene->GetService<ISkinningPoses>();
+		const uint64_t posesVersion = poses ? poses->GetPosesVersion() : 0;
+		const uint64_t transformsVersion = m_Scene->GetTransformsVersion();
+		const uint64_t hierarchyVersion = m_Scene->GetHierarchyVersion(); // Animator entities created or destroyed
+		if (!m_SkinDirty && poses == m_PosesProvider && posesVersion == m_PosesVersion && transformsVersion == m_SkinTransformsVersion
+			&& hierarchyVersion == m_SkinHierarchyVersion)
+			return;
+		m_SkinDirty = false;
+		m_PosesProvider = poses;
+		m_PosesVersion = posesVersion;
+		m_SkinTransformsVersion = transformsVersion;
+		m_SkinHierarchyVersion = hierarchyVersion;
+
+		m_PoseWork.clear();
+		for (uint32_t index = 0; index < m_Skins.size(); index++)
+		{
+			SkinEntry& skin = m_Skins[index];
+			const uint32_t proxy = skin.Proxy;
+			const PoseInputs inputs = EvaluatePose(proxy, poses);
+			skin.Animator = inputs.Animator; // Resolved for visibility reports also without a pose
+			const bool wasPosed = (m_Flags[proxy] & RenderProxyFlags::Skinned) != 0;
+			if (!inputs.Posed)
+			{
+				if (wasPosed)
+				{
+					// Back to the bind pose.
+					ReleasePalette(skin);
+					m_Flags[proxy] &= ~RenderProxyFlags::Skinned;
+					m_Stats.PosedProxies--;
+					UpdateProxyPlacement(proxy);
+					WriteInstances(proxy);
+					MarkUpdated(proxy);
+				}
+				continue;
+			}
+			const Ref<const MeshSkinBinding>& binding = m_Meshes[m_MeshSlots[proxy]].Skin;
+			const uint32_t joints = static_cast<uint32_t>(binding->Joints.size());
+			if (wasPosed && inputs.Version == skin.PoseVersion && skin.Binding == binding && skin.PaletteCount == joints
+				&& SameBytes(inputs.AnimatorToProxy, skin.AnimatorToProxy))
+				continue;
+			if (skin.PaletteCount != joints)
+			{
+				ReleasePalette(skin);
+				skin.PaletteFirst = AllocatePalette(joints);
+				skin.PaletteCount = joints;
+			}
+			skin.PoseVersion = inputs.Version;
+			skin.AnimatorToProxy = inputs.AnimatorToProxy;
+			skin.Binding = binding;
+			m_PoseWork.push_back(PoseWork { index, inputs });
+		}
+		if (m_PoseWork.empty())
+			return;
+
+		// Each proxy writes its own palette range and bounds: the palettes of a thousand characters take a frame's share of
+		// every core instead of a millisecond of the main thread's.
+		JobSystem::ParallelFor(static_cast<uint32_t>(m_PoseWork.size()), c_PoseBatchSize, [this](uint32_t begin, uint32_t end)
+		{
+			for (uint32_t item = begin; item < end; item++)
+			{
+				const PoseWork& work = m_PoseWork[item];
+				SkinEntry& skin = m_Skins[work.Skin];
+				const MeshSkinBinding& binding = *m_Meshes[m_MeshSlots[skin.Proxy]].Skin;
+				ComputePalette(binding, work.Inputs, m_Palette.data() + skin.PaletteFirst, skin.PosedBounds);
+			}
+		});
+
+		for (const PoseWork& work : m_PoseWork)
+		{
+			const SkinEntry& skin = m_Skins[work.Skin];
+			const uint32_t proxy = skin.Proxy;
+			if ((m_Flags[proxy] & RenderProxyFlags::Skinned) == 0)
+			{
+				m_Flags[proxy] |= RenderProxyFlags::Skinned;
+				m_Stats.PosedProxies++;
+			}
+			UpdateProxyPlacement(proxy);
+			WriteInstances(proxy);
+			RecordPaletteChange(skin.PaletteFirst, skin.PaletteCount);
+			MarkUpdated(proxy);
+		}
+		m_Stats.LastSyncPoses = static_cast<uint32_t>(m_PoseWork.size());
+	}
+
+	void RenderScene::ReleasePalette(SkinEntry& skin)
+	{
+		if (skin.PaletteCount == 0)
+			return;
+		m_FreePaletteRanges[skin.PaletteCount].push_back(skin.PaletteFirst);
+		m_Stats.PaletteJoints -= skin.PaletteCount;
+		skin.PaletteFirst = 0;
+		skin.PaletteCount = 0;
+		skin.Binding.reset();
+	}
+
+	uint32_t RenderScene::AllocatePalette(uint32_t count)
+	{
+		m_Stats.PaletteJoints += count;
+		if (auto it = m_FreePaletteRanges.find(count); it != m_FreePaletteRanges.end() && !it->second.empty())
+		{
+			const uint32_t first = it->second.back();
+			it->second.pop_back();
+			return first;
+		}
+		const uint32_t first = static_cast<uint32_t>(m_Palette.size());
+		m_Palette.resize(m_Palette.size() + count);
+		return first;
+	}
+
+	void RenderScene::RecordPaletteChange(uint32_t first, uint32_t count)
+	{
+		m_PaletteVersion++;
+		const size_t live = m_PaletteChanges.size() - m_PaletteChangesStart;
+		if (live + 1 > c_MaxPaletteChanges)
+		{
+			// Renderers further behind than the oldest change kept upload every palette.
+			m_PaletteChangesStart++;
+			m_PaletteChangesFloor = m_PaletteChanges[m_PaletteChangesStart - 1].Version;
+		}
+		m_PaletteChanges.push_back(PaletteChange { m_PaletteVersion, first, count });
+		if (m_PaletteChangesStart >= c_MaxPaletteChanges)
+		{
+			m_PaletteChanges.erase(m_PaletteChanges.begin(), m_PaletteChanges.begin() + static_cast<ptrdiff_t>(m_PaletteChangesStart));
+			m_PaletteChangesStart = 0;
+		}
+	}
+
+	bool RenderScene::GetPaletteChanges(uint64_t sinceVersion, std::vector<std::pair<uint32_t, uint32_t>>& outRanges) const
+	{
+		if (sinceVersion >= m_PaletteVersion)
+			return true;
+		if (sinceVersion < m_PaletteChangesFloor)
+			return false;
+		for (size_t index = m_PaletteChanges.size(); index > m_PaletteChangesStart && m_PaletteChanges[index - 1].Version > sinceVersion; index--)
+			outRanges.emplace_back(m_PaletteChanges[index - 1].First, m_PaletteChanges[index - 1].Count);
+		return true;
+	}
+
 	bool RenderScene::Validate(std::string* outError) const
 	{
 		auto fail = [outError](std::string message)
@@ -822,9 +1169,20 @@ namespace Strata
 		};
 
 		const entt::registry& registry = m_Scene->GetRegistry();
+		const ISkinningPoses* poses = m_Scene->GetService<ISkinningPoses>();
+		// Entities the poses' provider draws elsewhere than the scene has them (ISkinningPoses::GetRenderTransforms).
+		std::unordered_map<entt::entity, glm::mat4> renderTransforms;
+		if (poses)
+		{
+			for (const RenderTransform& transform : poses->GetRenderTransforms())
+				renderTransforms[transform.Entity] = transform.World;
+		}
 		uint32_t expected = 0;
 		uint32_t indexed = 0;
+		uint32_t skins = 0;
+		uint32_t posed = 0;
 		std::vector<uint32_t> indexedUsers(m_Meshes.size(), 0);
+		std::vector<RenderData::AffineTransform> palette;
 		for (const auto [entity, renderer, world] : registry.view<MeshRendererComponent, WorldTransformComponent>().each())
 		{
 			expected++;
@@ -834,7 +1192,9 @@ namespace Strata
 			if (m_MeshHandles[proxy] != renderer.Mesh || m_MaterialOverrides[proxy] != renderer.Material
 				|| ((m_Flags[proxy] & RenderProxyFlags::CastShadows) != 0) != renderer.CastShadows)
 				return fail(fmt::format("the proxy of entity {} has another mesh, material or shadow setting than its MeshRendererComponent", static_cast<uint32_t>(entity)));
-			if (!SameBytes(m_Transforms[proxy], RenderData::AffineTransform::FromMatrix(world.Matrix))
+			const auto drawnAt = renderTransforms.find(entity);
+			const glm::mat4& drawn = drawnAt != renderTransforms.end() ? drawnAt->second : world.Matrix;
+			if (!SameBytes(m_Transforms[proxy], RenderData::AffineTransform::FromMatrix(drawn))
 				|| ((m_Flags[proxy] & RenderProxyFlags::Active) != 0) != world.ActiveInHierarchy)
 				return fail(fmt::format("the proxy of entity {} has another world transform or activity than the entity", static_cast<uint32_t>(entity)));
 
@@ -845,12 +1205,37 @@ namespace Strata
 			if ((overrideSlot == c_InvalidIndex) != !renderer.Material.IsValid() || (overrideSlot != c_InvalidIndex && m_Materials[overrideSlot].Handle != renderer.Material))
 				return fail(fmt::format("the proxy of entity {} has a wrong material slot", static_cast<uint32_t>(entity)));
 
-			const glm::mat4 matrix = world.Matrix;
+			// A Skin proxy is posed exactly when its pose can be evaluated now, with the palette and bounds that pose gives.
+			const SkinComponent* skin = registry.try_get<SkinComponent>(entity);
+			const uint32_t skinIndex = m_SkinIndices[proxy];
+			if (((m_Flags[proxy] & RenderProxyFlags::Skin) != 0) != (skin != nullptr) || (skinIndex != c_InvalidIndex) != (skin != nullptr)
+				|| (skin && (skinIndex >= m_Skins.size() || m_Skins[skinIndex].Proxy != proxy || m_Skins[skinIndex].AnimatorID != skin->Animator)))
+				return fail(fmt::format("the proxy of entity {} has another skin than its SkinComponent", static_cast<uint32_t>(entity)));
+			skins += skin ? 1u : 0u;
+			const PoseInputs pose = EvaluatePose(proxy, poses);
+			const bool isPosed = (m_Flags[proxy] & RenderProxyFlags::Skinned) != 0;
+			if (pose.Posed != isPosed)
+				return fail(fmt::format("entity {} is {} although its animator {} a pose", static_cast<uint32_t>(entity), isPosed ? "posed" : "not posed", pose.Posed ? "has" : "has no"));
+			AABB posedBounds;
+			if (isPosed)
+			{
+				posed++;
+				const MeshSkinBinding& binding = *m_Meshes[meshSlot].Skin;
+				palette.resize(binding.Joints.size());
+				ComputePalette(binding, pose, palette.data(), posedBounds);
+				const SkinEntry& entry = m_Skins[skinIndex];
+				if (entry.PaletteCount != palette.size() || static_cast<uint64_t>(entry.PaletteFirst) + entry.PaletteCount > m_Palette.size()
+					|| !SameBytes(palette.data(), m_Palette.data() + entry.PaletteFirst, palette.size() * sizeof(RenderData::AffineTransform))
+					|| !SameBytes(posedBounds, entry.PosedBounds))
+					return fail(fmt::format("the palette of entity {} is stale", static_cast<uint32_t>(entity)));
+			}
+
+			const glm::mat4 matrix = drawn;
 			const float determinant = glm::determinant(glm::mat3(matrix));
 			const MeshEntry* mesh = meshSlot != c_InvalidIndex ? &m_Meshes[meshSlot] : nullptr;
 			const bool layoutKnown = mesh && mesh->LayoutKnown;
 			const bool boundsKnown = mesh && (mesh->LayoutKnown || mesh->RecordedBounds);
-			const AABB local = layoutKnown ? mesh->Bounds : (boundsKnown ? *mesh->RecordedBounds : GetPlaceholderBounds());
+			const AABB local = isPosed ? posedBounds : (layoutKnown ? mesh->Bounds : (boundsKnown ? *mesh->RecordedBounds : GetPlaceholderBounds()));
 			const bool drawable = world.ActiveInHierarchy && mesh && std::isfinite(determinant) && std::abs(determinant) >= c_MinDeterminant && IsFiniteMatrix(matrix);
 			const AABB bounds = drawable ? local.Transformed(matrix) : AABB();
 			const bool shouldBeIndexed = drawable && bounds.IsValid() && IsFiniteBox(bounds);
@@ -873,8 +1258,9 @@ namespace Strata
 			{
 				const RenderData::InstanceData& instance = m_Instances[m_FirstInstances[proxy] + index];
 				const uint32_t material = overrideSlot != c_InvalidIndex ? overrideSlot : m_Meshes[meshSlot].SubmeshMaterialSlots[index];
+				const uint32_t flags = (determinant < 0.0f ? RenderData::c_InstanceMirrored : 0u) | (isPosed ? RenderData::c_InstanceSkinned : 0u);
 				if (!SameBytes(instance.World, RenderData::AffineTransform::FromMatrix(matrix)) || instance.MaterialIndex != material
-					|| instance.EntityID != static_cast<uint32_t>(entity) + 1 || instance.Flags != (determinant < 0.0f ? RenderData::c_InstanceMirrored : 0u))
+					|| instance.EntityID != static_cast<uint32_t>(entity) + 1 || instance.Flags != flags || instance.SkinPalette != (isPosed ? m_Skins[skinIndex].PaletteFirst : 0u))
 					return fail(fmt::format("instance {} of entity {} is stale", index, static_cast<uint32_t>(entity)));
 			}
 		}
@@ -882,6 +1268,8 @@ namespace Strata
 			return fail(fmt::format("{} proxies for {} mesh renderers", m_Stats.Proxies, expected));
 		if (indexed != m_Index.GetCount() || indexed != m_Stats.IndexedProxies)
 			return fail(fmt::format("the spatial index holds {} proxies instead of {}", m_Index.GetCount(), indexed));
+		if (skins != m_Skins.size() || skins != m_Stats.SkinProxies || posed != m_Stats.PosedProxies)
+			return fail(fmt::format("{} skin proxies and {} posed ones are counted instead of {} and {}", m_Skins.size(), m_Stats.PosedProxies, skins, posed));
 
 		size_t withoutBounds = 0;
 		for (uint32_t slot = 0; slot < m_Meshes.size(); slot++)

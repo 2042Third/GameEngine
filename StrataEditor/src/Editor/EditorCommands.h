@@ -144,5 +144,6 @@ namespace Strata
 	void RegisterScriptCommands(EditorCommandRegistry& registry);
 	void RegisterInputCommands(EditorCommandRegistry& registry);
 	void RegisterStreamingCommands(EditorCommandRegistry& registry);
+	void RegisterAnimationCommands(EditorCommandRegistry& registry);
 
 }

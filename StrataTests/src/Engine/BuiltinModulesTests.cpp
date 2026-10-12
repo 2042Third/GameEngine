@@ -68,14 +68,15 @@ TEST_SUITE("Engine.Modules")
 		// Every module registered: components (scene), loaders (scene, renderer, audio), importers (pipeline), systems.
 		CHECK(ComponentRegistry::Find("Transform") != nullptr);
 		CHECK(ComponentRegistry::Find("Script") != nullptr);
-		for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Texture, AssetType::Mesh, AssetType::Material, AssetType::Font, AssetType::AudioClip })
+		for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Texture, AssetType::Mesh, AssetType::Material, AssetType::Font, AssetType::AudioClip,
+			AssetType::Skeleton, AssetType::AnimationClip, AssetType::AnimationController })
 		{
 			CAPTURE(AssetTypeToString(type));
 			CHECK(AssetLoaderRegistry::Find(type) != nullptr);
 		}
 		CHECK(AssetImporterRegistry::FindByExtension(".gltf") != nullptr);
 		const std::vector<std::string> systems = GetSystemNames();
-		for (const char* name : { "Scripting", "Physics", "Audio" })
+		for (const char* name : { "Scripting", "Physics", "Audio", "Animation" })
 		{
 			CAPTURE(name);
 			CHECK(std::find(systems.begin(), systems.end(), name) != systems.end());
@@ -170,7 +171,7 @@ TEST_SUITE("Engine.Modules")
 		INFO("Output: ", result.Output);
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
-		CHECK(result.Output.find("loaders: 8, systems: Scripting Physics Audio") != std::string::npos);
+		CHECK(result.Output.find("loaders: 11, systems: Scripting Animation Physics Audio") != std::string::npos);
 		CHECK(result.ExitCode == c_VerifyExitCode);
 		CHECK(result.Output.find("verify failed: The asset importer registry is used before Engine::RegisterBuiltinModules() registered the asset pipeline") != std::string::npos);
 	}

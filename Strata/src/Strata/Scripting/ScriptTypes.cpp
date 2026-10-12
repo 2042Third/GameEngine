@@ -18,6 +18,7 @@ namespace Strata
 			case ScriptCallback::OnCollisionExit:  return "OnCollisionExit";
 			case ScriptCallback::OnTriggerEnter:   return "OnTriggerEnter";
 			case ScriptCallback::OnTriggerExit:    return "OnTriggerExit";
+			case ScriptCallback::OnAnimationEvent: return "OnAnimationEvent";
 		}
 		return "Unknown";
 	}

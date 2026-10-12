@@ -40,6 +40,9 @@ namespace Strata::UI
 			{ "MeshCollider", Icons::Shapes },
 			{ "AudioSource", Icons::Volume2 },
 			{ "AudioListener", Icons::Ear },
+			{ "Skin", Icons::PersonStanding },
+			{ "Animator", Icons::Bone },
+			{ "AttachToJoint", Icons::Link },
 			{ "Script", Icons::FileCode }
 		};
 
@@ -76,6 +79,8 @@ namespace Strata::UI
 			return Icons::Ear;
 		if (registry.all_of<TextComponent>(entity))
 			return Icons::Type;
+		if (registry.all_of<AnimatorComponent>(entity))
+			return Icons::Bone;
 		if (registry.all_of<MeshRendererComponent>(entity))
 			return Icons::Box;
 		if (registry.all_of<PrefabInstanceComponent>(entity))

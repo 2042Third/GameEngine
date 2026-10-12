@@ -38,14 +38,15 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). `Samples.json` lists them; the build copies them next to the executables (`StrataSamples`), where the launcher's Open Sample and `project.openSample` offer them as copies. Open one in place only to change the sample: `StrataEditor --project Samples/<Game>`. |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest, the build's git commit). |
 | `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables) and `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)). |
-| `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands). |
+| `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, render scene, animation, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands). |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
 
 Engine modules (`Strata/src/Strata/`): `Core` (application, logging, jobs, platform services),
 `Events`, `Input`, `Math`, `Reflection`, `Scene` (ECS, components, serialization, prefabs),
 `Asset` (asset database, importers, cooking, streaming, packs), `Renderer`, `Physics`, `Audio`,
-`Scripting`, `Project` (projects, game manifests), `Runtime` (running exported games), `Network` (sockets,
-JSON-RPC, editor automation sessions), `ImGui`, `Engine` (the composition root that registers every module).
+`Animation` (skeletons, clips, animation controllers, animators), `Scripting`, `Project` (projects, game manifests),
+`Runtime` (running exported games), `Network` (sockets, JSON-RPC, editor automation sessions), `ImGui`, `Engine` (the
+composition root that registers every module).
 
 ## Building
 
@@ -163,8 +164,11 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   whose floor contacts are tracked; creating 10,000 bodies in one frame; the memory a world at the largest capacities and
   at the most bodies reserves), `Perf.TextureCook` (a cold import of the stress project, the stored sizes of its largest
   2048x2048 texture, its 4096x4096 texture and all of them, its pack's size, the BC7 encoder's time per block on one
-  thread), `PerfGPU.Renderer` (`SceneRenderer::Render` alone on 100,000 and 300,000 cubes and on 10,000 cubes with unique
-  materials, with the opaque draw calls those take) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000
+  thread), `Perf.Animation` (`Perf/AnimationPerfTests.cpp`: a frame of 1,000 animators of 60 joints, each cross-fading
+  two clips, and a frame of 10,000 `WhenVisible` animators no renderer sees, both with the job system as applications
+  start it), `PerfGPU.Renderer` (`SceneRenderer::Render` alone on 100,000 and 300,000 cubes and on 10,000 cubes with
+  unique materials, with the opaque draw calls those take, and on 1,000 skinned characters of about 5,000 vertices posed
+  anew every frame, in `Perf/AnimationPerfTests.cpp`) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000
   roots; the hierarchy's rows of 100,000 roots, idle and rebuilt; the Hierarchy panel's share of an editor frame with
   100,000 roots, open against closed; what 100,000 selected entities add to a frame; the longest editor frame while a
   4096x4096 texture re-imports uncompressed and then block-compressed again), `PerfGPU.Editor`, which runs the real
@@ -416,10 +420,11 @@ The threading model, frame loop and pipelines these rules protect are described 
   importers are not linked into StrataRuntime. Components can only be registered while the composition root runs (the
   registry freezes at its end): games and tests pass theirs in `ModuleRegistrationOptions::Extra`. Scene systems
   declare their update order (`SceneSystemDescriptor::After`/`Before`) instead of relying on registration order, and
-  are made with `MakeSceneSystemDescriptor<T>` so that `Scene::GetSystem<T>` finds them. Scenes keep the components of
-  modules a build lacks: they load with one warning per component name into `UnknownComponentsComponent` and are saved
-  back unchanged (also through play mode, prefab snapshots, duplication and undo). Details: Docs/Architecture.md,
-  "Composition root and registries" and "Scene runtime lifecycle".
+  are made with `MakeSceneSystemDescriptor<T>` so that `Scene::GetSystem<T>` finds them and frames call only the
+  per-frame callbacks `T` overrides (`SceneSystemDescriptor::CallsUpdate` and the others; declare overrides public).
+  Scenes keep the components of modules a build lacks: they load with one warning per component name into
+  `UnknownComponentsComponent` and are saved back unchanged (also through play mode, prefab snapshots, duplication and
+  undo). Details: Docs/Architecture.md, "Composition root and registries" and "Scene runtime lifecycle".
 - **Scene caches and the transform contract:** per-frame scene cost follows what changed. `Scene` mirrors the hierarchy
   as EnTT handle links (`HierarchyComponent`, `Scene/SceneHierarchy.h`), recomputes cached world transforms
   (`WorldTransformComponent`) only below entities whose transform changed, keeps `ActiveInHierarchy` exact as activity
@@ -470,7 +475,7 @@ The threading model, frame loop and pipelines these rules protect are described 
   `ImportContext::IsCancelled` between pieces of work that take milliseconds (a new importer with long loops must too;
   the texture cooker checks per block) and read project files through `ReadImportSource`/`ReadImportDependency` (under the
   manager's file lock, nothing once cancelled). Docs/Architecture.md, "Cancelling imports".
-- Engine-native assets (`.stscene`, `.stprefab`, `.stmat`) are JSON documents with a
+- Engine-native assets (`.stscene`, `.stprefab`, `.stmat`, `.stanimator`) are JSON documents with a
   `{ "Strata": { "Format": ..., "Version": ... } }` header, stored as-is. Their loaders validate fully;
   JSON entry points are named `FromJson`, byte entry points `Deserialize`.
 - Importers may produce sub-assets (e.g. meshes of a model); their handles are derived from the parent
@@ -565,7 +570,7 @@ Writing scripts is described in `.claude/skills/strata-scripting/SKILL.md`.
 | Where | What |
 | --- | --- |
 | `StrataScriptCore/Include/StrataScript/ScriptABI.h` | The versioned C ABI: host API table, module/class/field descriptors, values. |
-| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `RigidBody` and `Physics` (bodies and queries; `Collision` for the contact callbacks of `Script`), `AudioSource` and `Audio`, `Game` (quit, scene loads and their progress), `SubScene` (additive scenes), `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
+| `StrataScriptCore/Include/StrataScript/*.h` | Header-only C++ SDK (`StrataScript.h` includes all): `Script`, `Entity`, `Scene`, `Assets`, `Input`, `Time`, `Log`, `RigidBody` and `Physics` (bodies and queries; `Collision` for the contact callbacks of `Script`), `AudioSource` and `Audio`, `Animator` (states, parameters, joints; `OnAnimationEvent` of `Script`), `Game` (quit, scene loads and their progress), `SubScene` (additive scenes), `ST_SCRIPT_CLASS`/`ST_SCRIPT_FIELD`. |
 | `StrataScriptCore/Source/ScriptModuleEntry.cpp` | The module entry points, compiled into every module by `strata_add_script_module()`. |
 | `StrataScriptCore/CMake/` | `strata_add_script_module()` and the package game projects use (`StrataScriptCoreConfig.cmake`). |
 | `Strata/src/Strata/Scripting/` | `ScriptEngine` (module, hot reload, faults, watchdog), `ScriptModule` (loading, validation, guarded calls), `ScriptSystem` (instances and lifecycle), `ScriptHostAPI` (the host table), `ScriptValue` (value conversion). |
@@ -583,6 +588,13 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   that got an Enter gets its Exit, also after its entity was deactivated.
 - Audio: `AudioSource` and `Audio` go through the scene's `IAudioPlayback` (the `AudioSystem`); without it (simulate mode)
   the calls fail. The master volume belongs to the engine (the engine service `IAudioOutput`), so it works in any scene.
+- Animation: `Animator` (`Entity::GetAnimator`: play and cross-fade states, play clips, parameters, speed, the current
+  state, joint transforms; host functions `AnimatorPlay` to `AnimatorGetJointTransform`, appended to ABI version 1 after
+  scene streaming's) goes through the scene's `IAnimatorControl` (the `AnimationSystem`); without it (simulate mode)
+  the calls fail. Events of controller states reach the scripts of the animator's entity as `OnAnimationEvent(name)` (a
+  class descriptor callback taking a `StrataScriptString`): `ScriptSystem` listens to the scene's `IAnimationEventSource`
+  while it runs, and calls only scripts of active entities. Commands a script gives before the controller has loaded
+  apply once it has (`GetCurrentState` reports the waiting state).
 - Game flow: `Game::Quit`, `LoadScene` and `ReloadScene` set `Scene::RequestQuit`/`RequestSceneLoad`, which the scene's owner
   honors after the frame (see [Editor](#editor)); while the next scene loads, `Game::GetSceneLoadProgress` reads the
   progress the owner sets (`Scene::GetSceneLoadProgress`, negative without a switch).
@@ -743,6 +755,32 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `PlayOneShot`/`PlayOneShotAt` by clip handle and the engine-wide master volume. Game code goes through the system rather
   than `AudioEngine` directly, so that its sounds pause and stop with the scene. Scripts reach the same API through the SDK's
   `AudioSource` (`Entity::GetAudioSource`) and `Audio` (`StrataScript/Audio.h`).
+
+## Animation
+
+`Strata/src/Strata/Animation/` holds the assets `Skeleton`, `AnimationClip` and `AnimationController` (`.stanimator`),
+`AnimatorInstance` (one animator's playback, no scene) and `AnimationSystem`, the built-in "Animation" scene system
+(Play only, after Scripting and before Physics). How it all works: Docs/Architecture.md, "Animation".
+
+- **Poses are not entities.** An `AnimatorComponent` (skeleton, controller or clip, speed, loop, play on start, root
+  motion, culling mode) owns a pose in the system; meshes follow it through a `SkinComponent` naming the animator, other
+  entities through an `AttachToJointComponent`. Never create entities per joint or write joint transforms into the
+  scene: a character's joints must add no transform changes. The glTF importer follows this (joints with content only).
+- **Through scene services:** the renderer reads poses through `ISkinningPoses` and reports what it drew; scripts and
+  other modules use `IAnimatorControl` and `IAnimationEventSource` (`Scene/SceneServices.h`). Only the Engine and
+  AssetPipeline layers include Animation.
+- **Evaluation is parallel and deterministic:** jobs write only their animator's record (they read the registry and the
+  asset sets, never write them; what needs the main thread, such as new asset sets or requests, is queued for it);
+  everything that changes the scene (root motion, attachments, events) happens on the main thread afterwards, animator by
+  animator. Keep it that way: a test compares runs with different thread counts bit for bit.
+- **Root motion** moves entities only in `AnimationSystem::ApplyRootMotion` (signaled through the transform contract); a
+  character controller takes the delta there.
+- **Culling:** `WhenVisible` animators skip their pose while no renderer reports them (`ISkinningPoses::ReportVisible`:
+  a mesh they skin in view, or its shadow on what the view shows); time, transitions, events and root motion go on. They
+  publish their reach with the pose (`SkeletonPose::Reach`, where their clips take the joints), which bounds their meshes
+  too, so a frozen pose never hides an animator from the view that would pose it. An animator that skins no mesh but
+  places attachments poses every update. Code that needs a pose of a skipped animator (a joint transform) gets its latest
+  pose.
 
 ## Editor
 
@@ -964,7 +1002,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   the asset in the Content Browser; its Mip column shows a streaming texture's resident and wanted level ("4 / 2", coarser
   than wanted in the warning color). Where the table is narrow it drops Pins, CPU MB, Last used and then Mip before the
   asset's name gets less than 14 text heights, and the overview stacks above the table where beside it the table would be
-  too narrow even then.
+  too narrow even then. Its Type column is as wide as the longest type it names (`StreamingPanel::GetTypeLabel`: the
+  animation clip and controller go by "Animation" and "Controller"; the row's tooltip names the type in full), so keep new
+  types' labels about as short, or the laptop layouts change.
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
@@ -1056,6 +1096,17 @@ and `AudioSystem`, the built-in "Audio" scene system.
   loaded asset at once (`AssetManagerBase::ReplaceLoadedAsset`), recording an `AssetDocumentAction` (the document's bytes
   before and after; merged by key for drags); `save: false` only previews the values in the loaded material. Such steps
   do not change the scene (`EditorAction::ChangesScene`), so they never mark it unsaved.
+- **Animation commands** (`Editor/EditorAnimationCommands.cpp`): `animation.createController {path, parameters, states,
+  transitions, defaultState}` and `animation.setController {controller, ...}` (the sections given replace the
+  controller's; one undo step through `AssetEdit::SetControllerData`, an `AssetDocumentAction`), `animation.info {asset
+  | entity}` (a model's skeleton and clips, a skeleton's joints, a clip's channels, a controller's graph; an animator's
+  assets and, while playing, its state and parameters) and `animation.preview {entity, state?, clip?, time?, stop?}`:
+  poses of the edited scene's animators through the `EditorContext`'s `AnimationPreview` (the edited scene's
+  `ISkinningPoses` while it does not play; attachments are drawn at their joints through render transforms), which change
+  no scene data and are dropped with the scene; the command answers once its own request's pose shows. The Asset tab
+  draws skeletons, clips and controllers (`UI/AnimationAssetViews`: controllers as editable tables, one undo step per
+  edit, whose fields never get narrower than their content needs: a narrow tab scrolls the table sideways); the
+  Inspector shows a playing animator's state and parameters.
 - **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person
   would: `input.key {key, action: tap|press|release, frames, wait}`, `input.mouseButton {button, action, frames, wait}`,
   `input.mouseMove {position, wait}` (pixels from the game view's top-left corner), `input.scroll {delta, wait}`,
@@ -1131,6 +1182,18 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (`u_DrawList[gl_InstanceIndex]`); only changed instances, materials and draw list ranges are uploaded, so a still
   frame uploads nothing (`SceneRendererStats::InstanceBytesUploaded`, `ProxyUpdates`). Shaders derive the normal
   matrix from the 3x4 rows (`TransformNormal` in `Include/Scene.glsl`).
+- **Skinned meshes** (Docs/Architecture.md, "Render scene"): a mesh renderer with a `SkinComponent` is posed by the
+  animator it names through the scene service `ISkinningPoses` (`Scene/SceneServices.h`; the renderer never includes the
+  Animation module). `RenderScene::Sync` computes posed proxies' palettes (per skin joint, 3x4) and posed bounds only when
+  a pose, the mesh's skin binding or a placement changed; renderers upload only the changed joints, and posed instances
+  (`c_InstanceSkinned`, `InstanceData::SkinPalette`) draw with the `ST_SKINNED` variants of `Mesh.vert` and
+  `ShadowMesh.vert`, which every pass of a skinned mesh uses (the prepass and the forward pass must agree to the bit).
+  Unskinned meshes keep their pipelines, data and uploads: anything that adds skinning work must cost unskinned scenes
+  nothing (`RenderScene::HasSkinProxies`). Physics' mesh colliders use the bind pose; the entity-ID buffer (picking,
+  outlines) shows the pose. Every skin influence must name a joint of the skin, also one without weight (the shaders read
+  all four palette entries). A poses provider that may not change the scene (the editor's pose preview) draws
+  attachments at their joints through render transforms (`ISkinningPoses::GetRenderTransforms`), never by writing
+  transforms.
 - Point and spot lights are frustum culled on the CPU, ranked by relevance (projected size of their
   range) and capped at `MaxLights`; `Scene/LightClusters.comp` then lists the lights reaching each
   cluster of a 16x9x24 froxel grid (exponential depth slices) and `Forward.frag` loops only over its

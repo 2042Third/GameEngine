@@ -1,6 +1,8 @@
 #include "stpch.h"
 #include "Strata/Asset/GltfImporter.h"
 
+#include "Strata/Animation/AnimationClip.h"
+#include "Strata/Animation/Skeleton.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/TextureImporter.h"
 #include "Strata/Core/FileSystem.h"
@@ -17,6 +19,7 @@
 #include <cgltf.h>
 #include <glm/gtc/type_ptr.hpp>
 
+#include <array>
 #include <cstdlib>
 #include <limits>
 #include <map>
@@ -196,6 +199,12 @@ namespace Strata
 
 		class GltfImport
 		{
+			// An imported mesh: its handle, and whether it was imported with a skin.
+			struct MeshImport
+			{
+				AssetHandle Handle = UUID::Null();
+				bool Skinned = false;
+			};
 		public:
 			GltfImport(const ImportContext& context, ImportResult& result)
 				: m_Context(context), m_Result(result)
@@ -219,12 +228,26 @@ namespace Strata
 					}
 				}
 
+				// The skeleton first: skinned meshes bind to its joints.
+				ImportSkeleton();
+
 				for (cgltf_size index = 0; index < m_Data->meshes_count; index++)
 				{
 					if (m_Context.IsCancelled())
 						return Fail(outError, "cancelled");
-					ImportMesh(index);
+					// One mesh per skin it is drawn with (glTF lets nodes draw a mesh with different skins, or without one).
+					const std::vector<const cgltf_skin*>& skins = m_MeshSkins[index];
+					for (size_t use = 0; use < skins.size(); use++)
+					{
+						const std::string key = use == 0 ? fmt::format("Mesh/{}", index)
+							: fmt::format("Mesh/{}/{}", index, skins[use] ? fmt::format("Skin/{}", cgltf_skin_index(m_Data.get(), skins[use])) : std::string("Rigid"));
+						ImportMesh(index, skins[use], key);
+					}
 				}
+
+				if (m_Context.IsCancelled())
+					return Fail(outError, "cancelled");
+				ImportAnimations();
 
 				if (m_Context.IsCancelled())
 					return Fail(outError, "cancelled");
@@ -278,7 +301,10 @@ namespace Strata
 				// cgltf_validate trusts declared sizes in its own (unchecked) arithmetic and walks every node's parent
 				// chain: check the layout and bound the hierarchy first.
 				std::string structureError;
-				if (!ValidateLayout(structureError) || !ValidateGeometryBudget(structureError) || !ValidateHierarchy(structureError))
+				if (!ValidateLayout(structureError))
+					return Fail(outError, structureError);
+				CollectMeshSkins();
+				if (!ValidateGeometryBudget(structureError) || !ValidateHierarchy(structureError))
 					return Fail(outError, structureError);
 
 				result = cgltf_validate(m_Data.get());
@@ -286,10 +312,6 @@ namespace Strata
 					return Fail(outError, fmt::format("validation failed ({})", ResultToString(result)));
 
 				m_Options = options;
-				if (m_Data->skins_count > 0)
-					m_SkippedFeatures.insert("skins");
-				if (m_Data->animations_count > 0)
-					m_SkippedFeatures.insert("animations");
 				return true;
 			}
 
@@ -372,7 +394,8 @@ namespace Strata
 			}
 
 			// Limits the geometry the import expands: each primitive unpacks its accessors again (shared ones included)
-			// and may unweld its triangles, so the vertices and triangle corners of all primitives are counted.
+			// and may unweld its triangles, so the vertices and triangle corners of all primitives are counted, once per skin a
+			// mesh is drawn with (each is a mesh of its own).
 			bool ValidateGeometryBudget(std::string& outError) const
 			{
 				uint64_t bufferBytes = 0;
@@ -384,6 +407,13 @@ namespace Strata
 				for (cgltf_size meshIndex = 0; meshIndex < m_Data->meshes_count; meshIndex++)
 				{
 					const cgltf_mesh& mesh = m_Data->meshes[meshIndex];
+					// At most one per skin plus one without: bounded by the file's skins, so the product cannot overflow.
+					const uint64_t uses = m_MeshSkins[meshIndex].size();
+					if (uses > budget)
+					{
+						outError = fmt::format("a mesh is drawn with more skins than the file's data supports (limit {})", budget);
+						return false;
+					}
 					for (cgltf_size primitiveIndex = 0; primitiveIndex < mesh.primitives_count; primitiveIndex++)
 					{
 						const cgltf_primitive& primitive = mesh.primitives[primitiveIndex];
@@ -396,12 +426,39 @@ namespace Strata
 						const uint64_t indexCount = primitive.indices ? primitive.indices->count : vertexCount;
 						// Strips and fans become lists: up to three corners per index.
 						const uint64_t corners = primitive.type == cgltf_primitive_type_triangles ? indexCount : indexCount * 3;
-						elements += vertexCount + corners; // Each term is below 2^32: no overflow before the check
+						elements += (vertexCount + corners) * uses; // Each term is below 2^32 times the skins: no overflow before the check
 						if (elements > budget)
 						{
 							outError = fmt::format("the meshes expand to more geometry than the file's data supports (limit {} vertices and corners)", budget);
 							return false;
 						}
+					}
+				}
+
+				// Animation channels unpack their sampler's keys again (samplers may be shared), and skins their joints.
+				for (cgltf_size animationIndex = 0; animationIndex < m_Data->animations_count; animationIndex++)
+				{
+					const cgltf_animation& animation = m_Data->animations[animationIndex];
+					for (cgltf_size channelIndex = 0; channelIndex < animation.channels_count; channelIndex++)
+					{
+						const cgltf_animation_sampler* sampler = animation.channels[channelIndex].sampler;
+						if (!sampler || !sampler->input || !sampler->output)
+							continue;
+						elements += sampler->input->count + sampler->output->count;
+						if (elements > budget)
+						{
+							outError = fmt::format("the animations expand to more keys than the file's data supports (limit {} vertices, corners and keys)", budget);
+							return false;
+						}
+					}
+				}
+				for (cgltf_size skinIndex = 0; skinIndex < m_Data->skins_count; skinIndex++)
+				{
+					elements += m_Data->skins[skinIndex].joints_count;
+					if (elements > budget)
+					{
+						outError = fmt::format("the skins list more joints than the file's data supports (limit {})", budget);
+						return false;
 					}
 				}
 				return true;
@@ -666,6 +723,369 @@ namespace Strata
 			}
 
 			////////////////////////////////////////////////////////////////////////////////
+			// Skeleton and skins
+			////////////////////////////////////////////////////////////////////////////////
+
+			// The nodes the model's hierarchy starts from: the scene's (or, without one, every node without a parent).
+			std::vector<const cgltf_node*> GetRootNodes() const
+			{
+				std::vector<const cgltf_node*> roots;
+				const cgltf_scene* gltfScene = m_Data->scene ? m_Data->scene : (m_Data->scenes_count > 0 ? &m_Data->scenes[0] : nullptr);
+				if (gltfScene)
+				{
+					for (cgltf_size index = 0; index < gltfScene->nodes_count; index++)
+						roots.push_back(gltfScene->nodes[index]);
+				}
+				else
+				{
+					for (cgltf_size index = 0; index < m_Data->nodes_count; index++)
+					{
+						if (!m_Data->nodes[index].parent)
+							roots.push_back(&m_Data->nodes[index]);
+					}
+				}
+				return roots;
+			}
+
+			static bool HasSkinAttributes(const cgltf_mesh& mesh)
+			{
+				for (cgltf_size primitive = 0; primitive < mesh.primitives_count; primitive++)
+				{
+					for (cgltf_size attribute = 0; attribute < mesh.primitives[primitive].attributes_count; attribute++)
+					{
+						if (mesh.primitives[primitive].attributes[attribute].type == cgltf_attribute_type_joints)
+							return true;
+					}
+				}
+				return false;
+			}
+
+			// Per mesh, the skins nodes draw it with, in node order (null: without a skin); one null entry for a mesh no node
+			// draws. Meshes without joint attributes are always drawn without one. One pass over the nodes.
+			void CollectMeshSkins()
+			{
+				m_MeshSkins.assign(m_Data->meshes_count, {});
+				std::vector<int8_t> skinnable(m_Data->meshes_count, -1); // -1: not known yet
+				for (cgltf_size index = 0; index < m_Data->nodes_count; index++)
+				{
+					const cgltf_node& node = m_Data->nodes[index];
+					if (!node.mesh)
+						continue;
+					const cgltf_size meshIndex = cgltf_mesh_index(m_Data.get(), node.mesh);
+					if (skinnable[meshIndex] < 0)
+						skinnable[meshIndex] = HasSkinAttributes(*node.mesh) ? 1 : 0;
+					const cgltf_skin* skin = skinnable[meshIndex] ? node.skin : nullptr;
+					std::vector<const cgltf_skin*>& skins = m_MeshSkins[meshIndex];
+					if (std::find(skins.begin(), skins.end(), skin) == skins.end())
+						skins.push_back(skin);
+				}
+				for (std::vector<const cgltf_skin*>& skins : m_MeshSkins)
+				{
+					if (skins.empty())
+						skins.push_back(nullptr);
+				}
+			}
+
+			JointPose GetNodePose(const cgltf_node& node, cgltf_size nodeIndex)
+			{
+				JointPose pose;
+				if (node.has_matrix)
+				{
+					if (!Math::DecomposeTransform(glm::make_mat4(node.matrix), pose.Translation, pose.Rotation, pose.Scale))
+					{
+						Warn(fmt::format("Node {} has a transform matrix that cannot be decomposed; its joint uses identity", nodeIndex));
+						return JointPose();
+					}
+					return pose;
+				}
+				if (node.has_translation)
+					pose.Translation = glm::make_vec3(node.translation);
+				if (node.has_rotation)
+					pose.Rotation = AnimationMath::Normalize(glm::quat(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]));
+				if (node.has_scale)
+					pose.Scale = glm::make_vec3(node.scale);
+				return pose;
+			}
+
+			// The model's skeleton ("Skeleton"): the joints of every skin and the nodes the animations move, with their ancestors
+			// (whose transforms carry them), parents first in the order of the node hierarchy. Then each skin's joints in it and
+			// its inverse bind matrices.
+			void ImportSkeleton()
+			{
+				std::vector<uint8_t> inSkeleton(m_Data->nodes_count, 0);
+				bool any = false;
+				for (cgltf_size skinIndex = 0; skinIndex < m_Data->skins_count; skinIndex++)
+				{
+					const cgltf_skin& skin = m_Data->skins[skinIndex];
+					for (cgltf_size joint = 0; joint < skin.joints_count; joint++)
+					{
+						inSkeleton[cgltf_node_index(m_Data.get(), skin.joints[joint])] = 1;
+						any = true;
+					}
+				}
+				for (cgltf_size animationIndex = 0; animationIndex < m_Data->animations_count; animationIndex++)
+				{
+					const cgltf_animation& animation = m_Data->animations[animationIndex];
+					for (cgltf_size channel = 0; channel < animation.channels_count; channel++)
+					{
+						const cgltf_animation_channel& source = animation.channels[channel];
+						if (source.target_node && source.target_path != cgltf_animation_path_type_weights && source.target_path != cgltf_animation_path_type_invalid)
+						{
+							inSkeleton[cgltf_node_index(m_Data.get(), source.target_node)] = 1;
+							any = true;
+						}
+					}
+				}
+				if (!any)
+					return;
+				// Ancestors carry their descendants' transforms: they are joints too (ValidateHierarchy bounded the chains).
+				for (cgltf_size index = 0; index < m_Data->nodes_count; index++)
+				{
+					if (!inSkeleton[index])
+						continue;
+					for (const cgltf_node* parent = m_Data->nodes[index].parent; parent; parent = parent->parent)
+					{
+						uint8_t& marked = inSkeleton[cgltf_node_index(m_Data.get(), parent)];
+						if (marked)
+							break;
+						marked = 1;
+					}
+				}
+
+				// Parents first: a walk of the hierarchy from the model's roots, then from the other parentless nodes (skins may
+				// name nodes outside the scene).
+				m_NodeJoints.assign(m_Data->nodes_count, c_NoJoint);
+				std::vector<std::string> names;
+				std::vector<JointIndex> parents;
+				std::vector<JointPose> restPose;
+				std::unordered_set<std::string> usedNames;
+				std::vector<uint8_t> visited(m_Data->nodes_count, 0);
+				std::vector<const cgltf_node*> starts = GetRootNodes();
+				for (cgltf_size index = 0; index < m_Data->nodes_count; index++)
+				{
+					if (!m_Data->nodes[index].parent)
+						starts.push_back(&m_Data->nodes[index]);
+				}
+				std::vector<const cgltf_node*> stack;
+				for (const cgltf_node* start : starts)
+				{
+					stack.push_back(start);
+					while (!stack.empty())
+					{
+						const cgltf_node* node = stack.back();
+						stack.pop_back();
+						const cgltf_size nodeIndex = cgltf_node_index(m_Data.get(), node);
+						if (visited[nodeIndex])
+							continue;
+						visited[nodeIndex] = 1;
+						if (!inSkeleton[nodeIndex])
+							continue; // Below a node outside the skeleton nothing is in it (ancestors of joints are joints)
+						if (names.size() >= Skeleton::c_MaxJoints)
+						{
+							Warn(fmt::format("The model's skeleton has more than {} joints; skins and animations are not imported", Skeleton::c_MaxJoints));
+							m_NodeJoints.clear();
+							return;
+						}
+						// Joint names are unique: clips bind to joints by name.
+						std::string name = GetName(node->name, "Node", nodeIndex);
+						if (!usedNames.insert(name).second)
+						{
+							name = fmt::format("{}_{}", name, nodeIndex);
+							while (!usedNames.insert(name).second)
+								name += "_";
+						}
+						m_NodeJoints[nodeIndex] = static_cast<JointIndex>(names.size());
+						names.push_back(std::move(name));
+						parents.push_back(node->parent ? m_NodeJoints[cgltf_node_index(m_Data.get(), node->parent)] : c_NoJoint);
+						restPose.push_back(GetNodePose(*node, nodeIndex));
+						for (cgltf_size child = node->children_count; child > 0; child--)
+							stack.push_back(node->children[child - 1]);
+					}
+				}
+
+				// Root motion moves the entity by the topmost joint of a skin (a character's hips or root bone).
+				JointIndex rootMotionJoint = c_NoJoint;
+				for (cgltf_size skinIndex = 0; skinIndex < m_Data->skins_count; skinIndex++)
+				{
+					const cgltf_skin& skin = m_Data->skins[skinIndex];
+					for (cgltf_size joint = 0; joint < skin.joints_count; joint++)
+						rootMotionJoint = std::min(rootMotionJoint, m_NodeJoints[cgltf_node_index(m_Data.get(), skin.joints[joint])]);
+				}
+
+				std::string error;
+				m_JointNames = names; // Channels name their joints
+				// Where each joint rests relative to the model's root: entities attached to joints start there.
+				m_JointRestModel.assign(names.size(), glm::mat4(1.0f));
+				for (size_t joint = 0; joint < names.size(); joint++)
+				{
+					const glm::mat4 local = AnimationMath::ToMatrix(restPose[joint]);
+					m_JointRestModel[joint] = parents[joint] == c_NoJoint ? local : AnimationMath::MultiplyAffine(m_JointRestModel[parents[joint]], local);
+				}
+				Ref<Skeleton> skeleton = Skeleton::Create(std::move(names), std::move(parents), std::move(restPose), rootMotionJoint, &error);
+				if (!skeleton)
+				{
+					Warn(fmt::format("The model's skeleton was not imported ({}); skins and animations are not imported", error));
+					m_NodeJoints.clear();
+					m_JointRestModel.clear();
+					return;
+				}
+				ImportedSubAsset subAsset;
+				subAsset.Key = "Skeleton";
+				subAsset.Name = "Skeleton";
+				subAsset.Type = AssetType::Skeleton;
+				subAsset.Data = skeleton->Serialize();
+				m_Result.SubAssets.push_back(std::move(subAsset));
+				m_SkeletonHandle = DeriveSubAssetHandle(m_Context.Handle, "Skeleton");
+				m_SkeletonJointCount = skeleton->GetJointCount();
+
+				for (cgltf_size skinIndex = 0; skinIndex < m_Data->skins_count; skinIndex++)
+					m_Skins[&m_Data->skins[skinIndex]] = ReadSkin(m_Data->skins[skinIndex], skinIndex);
+			}
+
+			// A skin's joints in the skeleton and its inverse bind matrices; empty joints when it cannot be used.
+			MeshSkinBinding ReadSkin(const cgltf_skin& skin, cgltf_size skinIndex)
+			{
+				MeshSkinBinding binding;
+				const std::string name = GetName(skin.name, "Skin", skinIndex);
+				if (skin.joints_count == 0 || skin.joints_count > MeshSkinBinding::c_MaxJoints)
+				{
+					Warn(fmt::format("Skin '{}' has {} joints (1 to {} are supported); its meshes are imported without skinning", name, skin.joints_count, MeshSkinBinding::c_MaxJoints));
+					return binding;
+				}
+				std::vector<glm::mat4> matrices(skin.joints_count, glm::mat4(1.0f));
+				if (skin.inverse_bind_matrices && !ReadFloats(skin.inverse_bind_matrices, cgltf_type_mat4, skin.joints_count, matrices))
+				{
+					Warn(fmt::format("Skin '{}' has unreadable inverse bind matrices; its meshes are imported without skinning", name));
+					return binding;
+				}
+				for (glm::mat4& matrix : matrices)
+				{
+					// Affine transforms only; a fourth row a writer rounded is set to exactly (0, 0, 0, 1).
+					bool finite = true;
+					for (int column = 0; column < 4; column++)
+					{
+						for (int row = 0; row < 4; row++)
+							finite = finite && std::isfinite(matrix[column][row]);
+					}
+					const bool affine = std::abs(matrix[0][3]) < 1e-4f && std::abs(matrix[1][3]) < 1e-4f && std::abs(matrix[2][3]) < 1e-4f && std::abs(matrix[3][3] - 1.0f) < 1e-4f;
+					if (!finite || !affine)
+					{
+						Warn(fmt::format("Skin '{}' has an inverse bind matrix that is not a finite affine transform; its meshes are imported without skinning", name));
+						return binding;
+					}
+					matrix[0][3] = 0.0f;
+					matrix[1][3] = 0.0f;
+					matrix[2][3] = 0.0f;
+					matrix[3][3] = 1.0f;
+				}
+				binding.Joints.reserve(skin.joints_count);
+				for (cgltf_size joint = 0; joint < skin.joints_count; joint++)
+					binding.Joints.push_back(m_NodeJoints[cgltf_node_index(m_Data.get(), skin.joints[joint])]);
+				binding.InverseBindMatrices = std::move(matrices);
+				return binding;
+			}
+
+			// The skin vertices of a primitive: the four strongest of up to eight influences (JOINTS_0/1, WEIGHTS_0/1),
+			// normalized and quantized to sixteen bits that add up to 65535. False when the primitive has no usable skinning.
+			bool ReadSkinVertices(const cgltf_primitive& primitive, size_t vertexCount, uint32_t jointCount, const std::string& primitiveName,
+				std::vector<MeshSkinVertex>& outVertices)
+			{
+				std::array<const cgltf_accessor*, 2> jointAccessors = {};
+				std::array<const cgltf_accessor*, 2> weightAccessors = {};
+				for (cgltf_size attributeIndex = 0; attributeIndex < primitive.attributes_count; attributeIndex++)
+				{
+					const cgltf_attribute& attribute = primitive.attributes[attributeIndex];
+					if (attribute.index < 0 || attribute.index > 1)
+					{
+						if (attribute.type == cgltf_attribute_type_joints || attribute.type == cgltf_attribute_type_weights)
+							m_SkippedFeatures.insert("skin influences beyond eight per vertex");
+						continue;
+					}
+					if (attribute.type == cgltf_attribute_type_joints)
+						jointAccessors[static_cast<size_t>(attribute.index)] = attribute.data;
+					else if (attribute.type == cgltf_attribute_type_weights)
+						weightAccessors[static_cast<size_t>(attribute.index)] = attribute.data;
+				}
+
+				struct Influence
+				{
+					uint32_t Joint = 0;
+					float Weight = 0.0f;
+				};
+				std::vector<std::array<Influence, 8>> influences(vertexCount);
+				uint32_t sets = 0;
+				for (size_t set = 0; set < 2; set++)
+				{
+					const cgltf_accessor* joints = jointAccessors[set];
+					const cgltf_accessor* weights = weightAccessors[set];
+					if (!joints && !weights)
+						continue;
+					std::vector<glm::vec4> weightValues;
+					if (!joints || !weights || joints->type != cgltf_type_vec4 || joints->count != vertexCount
+						|| !ReadFloats(weights, cgltf_type_vec4, vertexCount, weightValues))
+					{
+						Warn(fmt::format("Primitive '{}' has unreadable skin influences (JOINTS_{} / WEIGHTS_{})", primitiveName, set, set));
+						return false;
+					}
+					for (size_t vertex = 0; vertex < vertexCount; vertex++)
+					{
+						cgltf_uint indices[4] = {};
+						if (!cgltf_accessor_read_uint(joints, vertex, indices, 4))
+						{
+							Warn(fmt::format("Primitive '{}' has unreadable joint indices", primitiveName));
+							return false;
+						}
+						for (size_t influence = 0; influence < 4; influence++)
+						{
+							const float weight = weightValues[vertex][static_cast<int>(influence)];
+							// A weight for a joint the skin does not have, or a negative or non-finite one, counts as none.
+							const bool valid = std::isfinite(weight) && weight > 0.0f && indices[influence] < jointCount;
+							influences[vertex][set * 4 + influence] = Influence { valid ? indices[influence] : 0u, valid ? weight : 0.0f };
+						}
+					}
+					sets++;
+				}
+				if (sets == 0)
+					return false;
+				if (sets > 1)
+					m_SkippedFeatures.insert("skin influences beyond the four strongest of a vertex");
+
+				outVertices.resize(vertexCount);
+				bool unweighted = false;
+				for (size_t vertex = 0; vertex < vertexCount; vertex++)
+				{
+					std::array<Influence, 8>& candidates = influences[vertex];
+					std::stable_sort(candidates.begin(), candidates.end(), [](const Influence& a, const Influence& b) { return a.Weight > b.Weight; });
+					const float total = candidates[0].Weight + candidates[1].Weight + candidates[2].Weight + candidates[3].Weight;
+					MeshSkinVertex& skin = outVertices[vertex];
+					if (!(total > 0.0f))
+					{
+						// No influence at all: the vertex follows the skin's first joint.
+						unweighted = true;
+						skin = MeshSkinVertex();
+						continue;
+					}
+					uint32_t sum = 0;
+					for (int influence = 0; influence < 4; influence++)
+					{
+						skin.Joints[influence] = static_cast<uint16_t>(candidates[static_cast<size_t>(influence)].Joint);
+						skin.Weights[influence] = static_cast<uint16_t>(std::lround(candidates[static_cast<size_t>(influence)].Weight / total * 65535.0f));
+						sum += skin.Weights[influence];
+					}
+					// Rounding leaves the sum a few units off: the strongest influence takes the difference.
+					skin.Weights[0] = static_cast<uint16_t>(static_cast<int64_t>(skin.Weights[0]) + 65535 - static_cast<int64_t>(sum));
+					for (int influence = 0; influence < 4; influence++)
+					{
+						if (skin.Weights[influence] == 0)
+							skin.Joints[influence] = 0;
+					}
+				}
+				if (unweighted)
+					Warn(fmt::format("Primitive '{}' has vertices without skin weights; they follow the skin's first joint", primitiveName));
+				return true;
+			}
+
+			////////////////////////////////////////////////////////////////////////////////
 			// Meshes
 			////////////////////////////////////////////////////////////////////////////////
 
@@ -727,13 +1147,23 @@ namespace Strata
 				return cgltf_accessor_unpack_floats(accessor, reinterpret_cast<float*>(outValues.data()), expectedCount * components) == expectedCount * components;
 			}
 
-			void ImportMesh(cgltf_size meshIndex)
+			// Imports a mesh as drawn with `skin` (null: without one) under `key`.
+			void ImportMesh(cgltf_size meshIndex, const cgltf_skin* skin, const std::string& key)
 			{
 				const cgltf_mesh& source = m_Data->meshes[meshIndex];
 				const std::string meshName = GetName(source.name, "Mesh", meshIndex);
+				// A skin that could not be read (or a model whose skeleton could not be) leaves the mesh rigid in its bind pose.
+				const MeshSkinBinding* binding = nullptr;
+				if (skin)
+				{
+					auto found = m_Skins.find(skin);
+					if (found != m_Skins.end() && !found->second.Joints.empty())
+						binding = &found->second;
+				}
 
 				std::vector<glm::vec3> positions;
 				std::vector<MeshVertexAttributes> attributes;
+				std::vector<MeshSkinVertex> skinVertices;
 				std::vector<uint32_t> indices;
 				std::vector<Submesh> submeshes;
 
@@ -763,10 +1193,8 @@ namespace Strata
 								if (attribute.index == 0)
 									texCoordAccessor = attribute.data;
 								break;
-							case cgltf_attribute_type_color:  m_SkippedFeatures.insert("vertex colors"); break;
-							case cgltf_attribute_type_joints:
-							case cgltf_attribute_type_weights: m_SkippedFeatures.insert("skinning"); break;
-							default: break;
+							case cgltf_attribute_type_color: m_SkippedFeatures.insert("vertex colors"); break;
+							default: break; // Joints and weights: ReadSkinVertices, for meshes drawn with a skin
 						}
 					}
 
@@ -801,6 +1229,14 @@ namespace Strata
 					{
 						Warn(fmt::format("Primitive '{}' has invalid indices; skipped", primitiveName));
 						continue;
+					}
+
+					// Every primitive of a skinned mesh is skinned; one without influences follows the skin's first joint.
+					std::vector<MeshSkinVertex> primitiveSkin;
+					if (binding && !ReadSkinVertices(primitive, vertexCount, static_cast<uint32_t>(binding->Joints.size()), primitiveName, primitiveSkin))
+					{
+						Warn(fmt::format("Primitive '{}' of a skinned mesh has no skin influences; it follows the skin's first joint", primitiveName));
+						primitiveSkin.assign(vertexCount, MeshSkinVertex());
 					}
 
 					std::vector<MeshVertexAttributes> primitiveAttributes(vertexCount);
@@ -841,7 +1277,7 @@ namespace Strata
 					if (!hasTangents && hasTexCoords)
 					{
 						// Exact per-corner MikkTSpace tangents (also creates the flat normals when needed).
-						if (!MeshUtils::GenerateSeamTangents(primitivePositions, primitiveAttributes, primitiveIndices, !hasNormals))
+						if (!MeshUtils::GenerateSeamTangents(primitivePositions, primitiveAttributes, primitiveIndices, !hasNormals, binding ? &primitiveSkin : nullptr))
 						{
 							Warn(fmt::format("Primitive '{}': tangent generation failed", primitiveName));
 							continue;
@@ -854,6 +1290,7 @@ namespace Strata
 							// Flat normals without texture coordinates: unwelded triangles with their face normals.
 							std::vector<glm::vec3> flatPositions;
 							std::vector<MeshVertexAttributes> flatAttributes;
+							std::vector<MeshSkinVertex> flatSkin;
 							for (size_t corner = 0; corner < primitiveIndices.size(); corner += 3)
 							{
 								const glm::vec3& a = primitivePositions[primitiveIndices[corner]];
@@ -863,14 +1300,17 @@ namespace Strata
 								const float length = glm::length(faceNormal);
 								MeshVertexAttributes attribute;
 								attribute.Normal = length > 1e-12f ? faceNormal / length : glm::vec3(0.0f, 1.0f, 0.0f);
-								for (const glm::vec3* position : { &a, &b, &c })
+								for (size_t vertex = 0; vertex < 3; vertex++)
 								{
-									flatPositions.push_back(*position);
+									flatPositions.push_back(primitivePositions[primitiveIndices[corner + vertex]]);
 									flatAttributes.push_back(attribute);
+									if (binding)
+										flatSkin.push_back(primitiveSkin[primitiveIndices[corner + vertex]]);
 								}
 							}
 							primitivePositions = std::move(flatPositions);
 							primitiveAttributes = std::move(flatAttributes);
+							primitiveSkin = std::move(flatSkin);
 							for (size_t corner = 0; corner < primitiveIndices.size(); corner++)
 								primitiveIndices[corner] = static_cast<uint32_t>(corner);
 						}
@@ -909,6 +1349,7 @@ namespace Strata
 
 					positions.insert(positions.end(), primitivePositions.begin(), primitivePositions.end());
 					attributes.insert(attributes.end(), primitiveAttributes.begin(), primitiveAttributes.end());
+					skinVertices.insert(skinVertices.end(), primitiveSkin.begin(), primitiveSkin.end());
 					submeshes.push_back(std::move(submesh));
 				}
 
@@ -919,14 +1360,15 @@ namespace Strata
 				}
 
 				std::string error;
-				Ref<Mesh> mesh = Mesh::Create(std::move(positions), std::move(attributes), std::move(indices), std::move(submeshes), &error);
+				Ref<Mesh> mesh = binding
+					? Mesh::CreateSkinned(std::move(positions), std::move(attributes), std::move(indices), std::move(submeshes), std::move(skinVertices), *binding, &error)
+					: Mesh::Create(std::move(positions), std::move(attributes), std::move(indices), std::move(submeshes), &error);
 				if (!mesh)
 				{
 					Warn(fmt::format("Mesh '{}' skipped: {}", meshName, error));
 					return;
 				}
 
-				const std::string key = fmt::format("Mesh/{}", meshIndex);
 				ImportedSubAsset subAsset;
 				subAsset.Key = key;
 				subAsset.Name = meshName;
@@ -941,17 +1383,166 @@ namespace Strata
 				}
 				subAsset.Bounds = mesh->GetBounds();
 				m_Result.SubAssets.push_back(std::move(subAsset));
-				m_MeshHandles[&source] = DeriveSubAssetHandle(m_Context.Handle, key);
+				m_MeshHandles[{ &source, skin }] = MeshImport { DeriveSubAssetHandle(m_Context.Handle, key), binding != nullptr };
+			}
+
+			////////////////////////////////////////////////////////////////////////////////
+			// Animations
+			////////////////////////////////////////////////////////////////////////////////
+
+			// One clip per animation ("Animation/<name>", or "Animation/<index>" for animations without a unique name), of the
+			// channels that move nodes of the skeleton; keys interpolation reproduces are reduced.
+			void ImportAnimations()
+			{
+				if (m_NodeJoints.empty())
+					return; // No skeleton: nothing an animation could move was imported
+				std::map<std::string, uint32_t> nameCounts;
+				for (cgltf_size index = 0; index < m_Data->animations_count; index++)
+				{
+					if (m_Data->animations[index].name && m_Data->animations[index].name[0])
+						nameCounts[m_Data->animations[index].name]++;
+				}
+
+				for (cgltf_size animationIndex = 0; animationIndex < m_Data->animations_count; animationIndex++)
+				{
+					if (m_Context.IsCancelled())
+						return; // Run fails the import
+					const cgltf_animation& animation = m_Data->animations[animationIndex];
+					const std::string name = GetName(animation.name, "Animation", animationIndex);
+					const bool uniqueName = animation.name && animation.name[0] && nameCounts[animation.name] == 1;
+					const std::string key = uniqueName ? fmt::format("Animation/{}", name) : fmt::format("Animation/{}", animationIndex);
+
+					std::vector<AnimationChannelData> channels;
+					std::set<std::pair<JointIndex, int>> animated;
+					for (cgltf_size channelIndex = 0; channelIndex < animation.channels_count; channelIndex++)
+					{
+						// A long baked animation is seconds of unpacking and key reduction: checked per channel, and within the
+						// reduction.
+						if (m_Context.IsCancelled())
+							return; // Run fails the import
+						const cgltf_animation_channel& source = animation.channels[channelIndex];
+						if (source.target_path == cgltf_animation_path_type_weights)
+						{
+							m_SkippedFeatures.insert("morph target animation");
+							continue;
+						}
+						std::optional<AnimationChannelData> channel = ReadChannel(source, name);
+						if (!channel)
+							continue;
+						const JointIndex joint = m_NodeJoints[cgltf_node_index(m_Data.get(), source.target_node)];
+						if (!animated.insert({ joint, static_cast<int>(channel->Path) }).second)
+						{
+							Warn(fmt::format("Animation '{}' animates the {} of '{}' twice; the first channel is kept", name, AnimationPathToString(channel->Path), channel->Target));
+							continue;
+						}
+						if (!AnimationClip::ReduceKeys(*channel, [this]() { return m_Context.IsCancelled(); }))
+							return; // Cancelled: Run fails the import
+						channels.push_back(std::move(*channel));
+					}
+					if (channels.empty())
+					{
+						Warn(fmt::format("Animation '{}' has no channel that moves a node; skipped", name));
+						continue;
+					}
+
+					std::string error;
+					Ref<AnimationClip> clip = AnimationClip::Create(name, std::move(channels), &error);
+					if (!clip)
+					{
+						Warn(fmt::format("Animation '{}' skipped: {}", name, error));
+						continue;
+					}
+					ImportedSubAsset subAsset;
+					subAsset.Key = key;
+					subAsset.Name = name;
+					subAsset.Type = AssetType::AnimationClip;
+					subAsset.Data = clip->Serialize();
+					m_Result.SubAssets.push_back(std::move(subAsset));
+					m_ClipHandles.push_back(DeriveSubAssetHandle(m_Context.Handle, key));
+				}
+			}
+
+			// A channel of a node of the skeleton: its sampler's times and values (cubic splines: three per key).
+			std::optional<AnimationChannelData> ReadChannel(const cgltf_animation_channel& source, const std::string& animationName)
+			{
+				const cgltf_animation_sampler* sampler = source.sampler;
+				if (!source.target_node || !sampler || !sampler->input || !sampler->output
+					|| m_NodeJoints[cgltf_node_index(m_Data.get(), source.target_node)] == c_NoJoint)
+					return std::nullopt;
+				AnimationChannelData channel;
+				const JointIndex joint = m_NodeJoints[cgltf_node_index(m_Data.get(), source.target_node)];
+				channel.Target = m_JointNames[joint];
+				cgltf_type valueType = cgltf_type_vec3;
+				switch (source.target_path)
+				{
+					case cgltf_animation_path_type_translation: channel.Path = AnimationPath::Translation; break;
+					case cgltf_animation_path_type_rotation:    channel.Path = AnimationPath::Rotation; valueType = cgltf_type_vec4; break;
+					case cgltf_animation_path_type_scale:       channel.Path = AnimationPath::Scale; break;
+					default: return std::nullopt;
+				}
+				switch (sampler->interpolation)
+				{
+					case cgltf_interpolation_type_step:         channel.Interpolation = AnimationInterpolation::Step; break;
+					case cgltf_interpolation_type_cubic_spline: channel.Interpolation = AnimationInterpolation::CubicSpline; break;
+					default:                                    channel.Interpolation = AnimationInterpolation::Linear; break;
+				}
+				const size_t keys = sampler->input->count;
+				const size_t valuesPerKey = channel.Interpolation == AnimationInterpolation::CubicSpline ? 3 : 1;
+				const size_t components = valueType == cgltf_type_vec4 ? 4 : 3;
+				if (keys == 0 || sampler->input->type != cgltf_type_scalar || sampler->output->type != valueType || sampler->output->count != keys * valuesPerKey)
+				{
+					Warn(fmt::format("Animation '{}': the {} channel of '{}' has unreadable keys; skipped", animationName, AnimationPathToString(channel.Path), channel.Target));
+					return std::nullopt;
+				}
+				channel.Times.resize(keys);
+				channel.Values.resize(keys * valuesPerKey * components);
+				if (cgltf_accessor_unpack_floats(sampler->input, channel.Times.data(), keys) != keys
+					|| cgltf_accessor_unpack_floats(sampler->output, channel.Values.data(), channel.Values.size()) != channel.Values.size())
+				{
+					Warn(fmt::format("Animation '{}': the {} channel of '{}' has unreadable keys; skipped", animationName, AnimationPathToString(channel.Path), channel.Target));
+					return std::nullopt;
+				}
+				// glTF: key times are not negative and strictly increasing; values are finite.
+				for (size_t key = 0; key < keys; key++)
+				{
+					if (!std::isfinite(channel.Times[key]) || channel.Times[key] < 0.0f || (key > 0 && !(channel.Times[key] > channel.Times[key - 1])))
+					{
+						Warn(fmt::format("Animation '{}': the {} channel of '{}' has key times that are negative or not increasing; skipped", animationName,
+							AnimationPathToString(channel.Path), channel.Target));
+						return std::nullopt;
+					}
+				}
+				if (std::any_of(channel.Values.begin(), channel.Values.end(), [](float value) { return !std::isfinite(value); }))
+				{
+					Warn(fmt::format("Animation '{}': the {} channel of '{}' has non-finite values; skipped", animationName, AnimationPathToString(channel.Path), channel.Target));
+					return std::nullopt;
+				}
+				return channel;
 			}
 
 			////////////////////////////////////////////////////////////////////////////////
 			// Hierarchy
 			////////////////////////////////////////////////////////////////////////////////
 
+			// The mesh a node draws, as imported for the skin it draws it with; null when the mesh was not imported.
+			const MeshImport* FindMeshImport(const cgltf_node& node) const
+			{
+				if (!node.mesh)
+					return nullptr;
+				auto mesh = m_MeshHandles.find({ node.mesh, HasSkinAttributes(*node.mesh) ? node.skin : nullptr });
+				return mesh != m_MeshHandles.end() ? &mesh->second : nullptr;
+			}
+
 			void SetupEntity(Entity entity, const cgltf_node& node)
 			{
+				const MeshImport* mesh = FindMeshImport(node);
 				TransformComponent& transform = entity.GetComponent<TransformComponent>();
-				if (node.has_matrix)
+				if (mesh && mesh->Skinned)
+				{
+					// glTF ignores the transform of a node that draws a skinned mesh: its joints place the vertices, relative to the
+					// model's root (AddHierarchy puts the entity there).
+				}
+				else if (node.has_matrix)
 				{
 					glm::vec3 translation;
 					glm::quat rotation;
@@ -977,12 +1568,8 @@ namespace Strata
 						transform.Scale = glm::make_vec3(node.scale);
 				}
 
-				if (node.mesh)
-				{
-					auto mesh = m_MeshHandles.find(node.mesh);
-					if (mesh != m_MeshHandles.end())
-						entity.AddComponent<MeshRendererComponent>().Mesh = mesh->second;
-				}
+				if (mesh)
+					entity.AddComponent<MeshRendererComponent>().Mesh = mesh->Handle;
 				if (node.has_mesh_gpu_instancing)
 					m_SkippedFeatures.insert("GPU instancing (EXT_mesh_gpu_instancing)");
 
@@ -1058,7 +1645,30 @@ namespace Strata
 				}
 			}
 
-			// Builds the entity hierarchy iteratively (no recursion on deep files); fails above the depth limit.
+			// The joint of the skeleton a node is (c_NoJoint for nodes outside it).
+			JointIndex GetNodeJoint(const cgltf_node& node) const
+			{
+				return m_NodeJoints.empty() ? c_NoJoint : m_NodeJoints[cgltf_node_index(m_Data.get(), &node)];
+			}
+
+			// Whether a joint has something the scene needs as an entity: a rigid mesh, a camera or light that is imported, or a
+			// child outside the skeleton (whose transform is relative to it). Joints without any are only part of the pose.
+			bool HasEntityContent(const cgltf_node& node) const
+			{
+				if (node.mesh || (node.camera && m_Settings.ImportCameras) || (node.light && m_Settings.ImportLights))
+					return true;
+				for (cgltf_size child = 0; child < node.children_count; child++)
+				{
+					if (GetNodeJoint(*node.children[child]) == c_NoJoint)
+						return true;
+				}
+				return false;
+			}
+
+			// Builds the entity hierarchy iteratively (no recursion on deep files); fails above the depth limit. With a skeleton
+			// the model's root is its animator: skinned meshes are placed under it with a Skin naming it, joints with content
+			// become entities under it that follow their joint (AttachToJoint), and other joints are no entities at all (the
+			// animator's pose holds them).
 			bool AddHierarchy(Scene& scene, const std::vector<const cgltf_node*>& roots, Entity parent, std::string& outError)
 			{
 				struct PendingNode
@@ -1089,6 +1699,16 @@ namespace Strata
 
 					const cgltf_node& node = *pending.Node;
 					const cgltf_size nodeIndex = cgltf_node_index(m_Data.get(), &node);
+					const MeshImport* mesh = FindMeshImport(node);
+					const bool skinned = mesh && mesh->Skinned;
+					const JointIndex joint = skinned ? c_NoJoint : GetNodeJoint(node);
+					if (joint != c_NoJoint && !HasEntityContent(node))
+					{
+						// Only a joint: its children are joints too, each placed on its own.
+						for (cgltf_size child = node.children_count; child > 0; child--)
+							stack.push_back(PendingNode { node.children[child - 1], parent, pending.Depth + 1 });
+						continue;
+					}
 					// Entity ids derive from the model handle, so re-imports produce the same ids.
 					Entity entity = scene.CreateEntityWithUUID(DeriveSubAssetHandle(m_Context.Handle, fmt::format("Node/{}", nodeIndex)), GetName(node.name, "Node", nodeIndex));
 					if (!entity)
@@ -1096,8 +1716,29 @@ namespace Strata
 						outError = "the model has more nodes than a scene can hold";
 						return false;
 					}
-					scene.SetParent(entity, pending.Parent, false);
+					// Skinned meshes are placed by their joints and joints by the pose, both relative to the model's root (the
+					// animator), whatever their place in the file's hierarchy.
+					scene.SetParent(entity, skinned || joint != c_NoJoint ? parent : pending.Parent, false);
 					SetupEntity(entity, node);
+					if (skinned)
+						entity.AddComponent<SkinComponent>().Animator = parent.GetUUID();
+					if (joint != c_NoJoint)
+					{
+						// At the joint's rest pose until the animator poses it.
+						AttachToJointComponent& attachment = entity.AddComponent<AttachToJointComponent>();
+						attachment.Animator = parent.GetUUID();
+						attachment.Joint = m_JointNames[joint];
+						TransformComponent& transform = entity.GetComponent<TransformComponent>();
+						glm::vec3 translation;
+						glm::quat rotation;
+						glm::vec3 scale;
+						if (Math::DecomposeTransform(m_JointRestModel[joint], translation, rotation, scale))
+						{
+							transform.Translation = translation;
+							transform.Rotation = rotation;
+							transform.Scale = scale;
+						}
+					}
 
 					for (cgltf_size child = node.children_count; child > 0; child--)
 						stack.push_back(PendingNode { node.children[child - 1], entity, pending.Depth + 1 });
@@ -1112,28 +1753,21 @@ namespace Strata
 				Entity root = scene.CreateEntityWithUUID(DeriveSubAssetHandle(m_Context.Handle, "Node/Root"), modelName);
 				root.GetComponent<TransformComponent>().Scale = glm::vec3(m_Settings.Scale);
 
-				std::vector<const cgltf_node*> roots;
-				const cgltf_scene* gltfScene = m_Data->scene ? m_Data->scene : (m_Data->scenes_count > 0 ? &m_Data->scenes[0] : nullptr);
-				if (gltfScene)
-				{
-					for (cgltf_size index = 0; index < gltfScene->nodes_count; index++)
-						roots.push_back(gltfScene->nodes[index]);
-				}
-				else
-				{
-					// No scene: every root node is part of the model.
-					for (cgltf_size index = 0; index < m_Data->nodes_count; index++)
-					{
-						if (!m_Data->nodes[index].parent)
-							roots.push_back(&m_Data->nodes[index]);
-					}
-				}
+				// Without a scene every root node is part of the model.
+				const std::vector<const cgltf_node*> roots = GetRootNodes();
 				if (m_Data->scenes_count > 1)
 					m_SkippedFeatures.insert(fmt::format("{} additional scenes", m_Data->scenes_count - 1));
 
 				std::string error;
 				if (!AddHierarchy(scene, roots, root, error))
 					return Fail(outError, error);
+				if (m_SkeletonHandle.IsValid())
+				{
+					// The model's animator: its skeleton, playing the first animation (a controller can take over).
+					AnimatorComponent& animator = root.AddComponent<AnimatorComponent>();
+					animator.Skeleton = m_SkeletonHandle;
+					animator.Clip = m_ClipHandles.empty() ? UUID::Null() : m_ClipHandles.front();
+				}
 
 				Ref<Model> model = Model::CreateFromSnapshot(SceneSerializer::SerializeEntities(scene, { root }));
 				if (!model)
@@ -1153,8 +1787,18 @@ namespace Strata
 
 			std::map<std::string, AssetHandle> m_TextureHandles;
 			std::map<const cgltf_material*, AssetHandle> m_MaterialHandles;
-			std::map<const cgltf_mesh*, AssetHandle> m_MeshHandles;
+			std::map<std::pair<const cgltf_mesh*, const cgltf_skin*>, MeshImport> m_MeshHandles; // By mesh and the skin it is drawn with
+			std::vector<std::vector<const cgltf_skin*>> m_MeshSkins; // CollectMeshSkins
 			std::set<std::string> m_SkippedFeatures;
+
+			// The skeleton: each node's joint (c_NoJoint for nodes outside it; empty without a skeleton) and the joints' names.
+			std::vector<JointIndex> m_NodeJoints;
+			std::vector<std::string> m_JointNames;
+			std::vector<glm::mat4> m_JointRestModel; // Per joint, its rest transform relative to the model's root
+			AssetHandle m_SkeletonHandle = UUID::Null();
+			uint32_t m_SkeletonJointCount = 0;
+			std::map<const cgltf_skin*, MeshSkinBinding> m_Skins; // Empty joints: the skin cannot be used
+			std::vector<AssetHandle> m_ClipHandles;
 		};
 
 	}

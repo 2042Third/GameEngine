@@ -66,7 +66,8 @@ namespace
 	}
 
 	// Scenes play without the physics system while this lives, as in a build without the physics module: the systems after
-	// it in the update order are registered again without naming it meanwhile. Everything is registered as it was afterwards.
+	// it in the update order, and those that name it in their order, are registered again without naming it meanwhile.
+	// Everything is registered as it was afterwards.
 	class ScopedWithoutPhysicsSystem
 	{
 	public:
@@ -77,10 +78,23 @@ namespace
 			REQUIRE(physics != all.end());
 			for (const SceneSystemDescriptor& descriptor : all)
 				m_Order.push_back(descriptor.Name);
-			m_Removed.assign(physics, all.end()); // Copied before the registry changes
+			auto namesPhysics = [](const SceneSystemDescriptor& descriptor)
+			{
+				return std::find(descriptor.After.begin(), descriptor.After.end(), "Physics") != descriptor.After.end()
+					|| std::find(descriptor.Before.begin(), descriptor.Before.end(), "Physics") != descriptor.Before.end();
+			};
+			// Copied before the registry changes: Physics, then the others in update order.
+			m_Removed.push_back(*physics);
+			for (auto it = all.begin(); it != all.end(); ++it)
+			{
+				if (it != physics && (it > physics || namesPhysics(*it)))
+					m_Removed.push_back(*it);
+			}
 
-			for (auto it = m_Removed.rbegin(); it != m_Removed.rend(); ++it)
-				CHECK(SceneSystemRegistry::Unregister(it->Name));
+			// The systems naming Physics go first, then Physics itself.
+			for (size_t index = m_Removed.size(); index-- > 1;)
+				CHECK(SceneSystemRegistry::Unregister(m_Removed[index].Name));
+			CHECK(SceneSystemRegistry::Unregister("Physics"));
 			for (size_t index = 1; index < m_Removed.size(); index++)
 			{
 				SceneSystemDescriptor descriptor = m_Removed[index];
@@ -105,7 +119,7 @@ namespace
 		ScopedWithoutPhysicsSystem(const ScopedWithoutPhysicsSystem&) = delete;
 		ScopedWithoutPhysicsSystem& operator=(const ScopedWithoutPhysicsSystem&) = delete;
 	private:
-		std::vector<SceneSystemDescriptor> m_Removed; // "Physics", then the systems after it in the update order
+		std::vector<SceneSystemDescriptor> m_Removed; // "Physics", then the systems after it or naming it, in the update order
 		std::vector<std::string> m_Order;             // Every system's name in the update order
 	};
 

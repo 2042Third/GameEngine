@@ -20,7 +20,8 @@ namespace Strata
 		// - scenes, prefabs and models: every asset property of every registered component of their entities
 		//   (ComponentRegistry; e.g. meshes, materials, environment maps, fonts, audio clips, prefab links) and every script
 		//   field of asset type;
-		// - materials: their texture maps.
+		// - materials: their texture maps;
+		// - animation controllers: the clips of their states.
 		// Other types reference nothing in their stored form: importers that know more (a glTF mesh's materials) record it
 		// themselves (ImportResult::References). Appends each handle once, in the order it first appears, without null
 		// handles. False, with the reason, when the document cannot be read.

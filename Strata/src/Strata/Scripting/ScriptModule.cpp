@@ -701,6 +701,8 @@ namespace Strata
 			case ScriptCallback::OnTriggerEnter:
 			case ScriptCallback::OnTriggerExit:
 				return ScriptCallResult::Rejected; // They take a contact (InvokeContactCallback)
+			case ScriptCallback::OnAnimationEvent:
+				return ScriptCallResult::Rejected; // It takes the event's name (InvokeAnimationEventCallback)
 		}
 		return ScriptCallResult::Rejected;
 	}
@@ -725,9 +727,22 @@ namespace Strata
 			case ScriptCallback::OnLateUpdate:
 			case ScriptCallback::OnDestroy:
 			case ScriptCallback::OnReload:
-				return ScriptCallResult::Rejected; // Not contact callbacks (InvokeCallback)
+			case ScriptCallback::OnAnimationEvent:
+				return ScriptCallResult::Rejected; // Not contact callbacks (InvokeCallback, InvokeAnimationEventCallback)
 		}
 		return function ? Call(site, [&]() { return function(instance, &contact); }) : ScriptCallResult::Unavailable;
+	}
+
+	ScriptCallResult ScriptModule::InvokeAnimationEventCallback(const ScriptCallSite& site, StrataScriptInstance instance, std::string_view name)
+	{
+		const ClassFunctions* functions = GetFunctions(site);
+		if (!functions || !instance)
+			return ScriptCallResult::Rejected;
+		const auto function = functions->OnAnimationEvent;
+		if (!function)
+			return ScriptCallResult::Unavailable;
+		const StrataScriptString text = { name.data(), name.size() };
+		return Call(site, [&]() { return function(instance, text); });
 	}
 
 	bool ScriptModule::ReadModuleDescription(std::string& outName, std::vector<ScriptClassInfo>& outClasses, std::vector<ClassFunctions>& outFunctions,
@@ -795,6 +810,8 @@ namespace Strata
 				functions.OnTriggerEnter = descriptor->OnTriggerEnter;
 			if (ST_SCRIPT_HAS_MEMBER(StrataScriptClassDesc, descriptor, OnTriggerExit))
 				functions.OnTriggerExit = descriptor->OnTriggerExit;
+			if (ST_SCRIPT_HAS_MEMBER(StrataScriptClassDesc, descriptor, OnAnimationEvent))
+				functions.OnAnimationEvent = descriptor->OnAnimationEvent;
 			if (!functions.Create || !functions.Destroy || !functions.GetField || !functions.SetField)
 			{
 				outError = fmt::format("class '{}' lacks its lifetime or field functions", info.Name);
@@ -811,7 +828,8 @@ namespace Strata
 				{ ScriptCallback::OnCollisionEnter, functions.OnCollisionEnter != nullptr },
 				{ ScriptCallback::OnCollisionExit, functions.OnCollisionExit != nullptr },
 				{ ScriptCallback::OnTriggerEnter, functions.OnTriggerEnter != nullptr },
-				{ ScriptCallback::OnTriggerExit, functions.OnTriggerExit != nullptr }
+				{ ScriptCallback::OnTriggerExit, functions.OnTriggerExit != nullptr },
+				{ ScriptCallback::OnAnimationEvent, functions.OnAnimationEvent != nullptr }
 			};
 			for (const auto& [callback, implemented] : callbacks)
 			{

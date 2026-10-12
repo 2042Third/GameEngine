@@ -396,6 +396,33 @@ extern "C"
 		uint32_t (*InstantiateMany)(StrataScriptContext* context, StrataScriptAssetHandle asset, uint32_t count, const float* transforms,
 			StrataScriptEntityID parent, StrataScriptEntityID* outEntities);
 
+		/*
+		 * Animators (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). An animator is an
+		 * entity with an Animator component. The functions fail (false, 0, empty) while the scene plays without animation,
+		 * for entities without an Animator component, for states and parameters its controller does not have (or of another
+		 * type), and for joints its skeleton does not have. Commands given while the controller still loads apply once it is
+		 * loaded. AnimatorPlay jumps to a state, AnimatorCrossFade blends to it over `seconds`; AnimatorPlayClip plays an
+		 * animation clip without the controller's transitions until a state is played again. A trigger stays set until a
+		 * transition consumes it or AnimatorResetTrigger clears it. The speed is the Animator component's (|speed| <= 100).
+		 */
+		bool (*AnimatorPlay)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString state);
+		bool (*AnimatorPlayClip)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptAssetHandle clip);
+		bool (*AnimatorCrossFade)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString state, float seconds);
+		bool (*AnimatorSetFloat)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString parameter, float value);
+		bool (*AnimatorSetBool)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString parameter, bool value);
+		bool (*AnimatorSetTrigger)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString parameter);
+		bool (*AnimatorResetTrigger)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString parameter);
+		bool (*AnimatorSetSpeed)(StrataScriptContext* context, StrataScriptEntityID entity, float speed);
+		/* The name of the state the animator is in (empty while it plays a clip directly or before it plays), copied like
+		 * GetEntityName. */
+		uint64_t (*AnimatorGetCurrentState)(StrataScriptContext* context, StrataScriptEntityID entity, char* buffer, uint64_t capacity);
+		/* The current state's time over its clip's duration, counting loops. */
+		float (*AnimatorGetNormalizedTime)(StrataScriptContext* context, StrataScriptEntityID entity);
+		bool (*AnimatorIsInTransition)(StrataScriptContext* context, StrataScriptEntityID entity);
+		/* A joint's world transform in the animator's current pose (false before the animator has a pose). */
+		bool (*AnimatorGetJointTransform)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString joint,
+			StrataScriptTransform* outTransform);
+
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;
 
@@ -445,6 +472,14 @@ extern "C"
 		uint32_t (*OnCollisionExit)(StrataScriptInstance instance, const StrataScriptCollision* collision);
 		uint32_t (*OnTriggerEnter)(StrataScriptInstance instance, const StrataScriptCollision* collision);
 		uint32_t (*OnTriggerExit)(StrataScriptInstance instance, const StrataScriptCollision* collision);
+
+		/*
+		 * Events of the entity's animator (added after the initial set of ABI version 1: the engine reads it only when
+		 * StructSize covers it): the playhead of the animation controller's current state passed an event, named as in the
+		 * controller. Called after the animators were evaluated, in the order the events happened; the name is valid during
+		 * the call.
+		 */
+		uint32_t (*OnAnimationEvent)(StrataScriptInstance instance, StrataScriptString name);
 
 		/* New callbacks are appended here. */
 	} StrataScriptClassDesc;

@@ -25,6 +25,36 @@ namespace Strata
 	};
 	static_assert(sizeof(MeshVertexAttributes) == 36, "MeshVertexAttributes layout is part of the cooked mesh format");
 
+	// The skinning data of a vertex (stream 2 of skinned meshes): four influences, each a joint of the mesh's skin (an index
+	// into MeshSkinBinding::Joints) and its weight in 1/65535ths. The weights of a vertex add up to 65535; unused influences
+	// have weight 0.
+	struct MeshSkinVertex
+	{
+		uint16_t Joints[4] = { 0, 0, 0, 0 };
+		uint16_t Weights[4] = { 65535, 0, 0, 0 };
+	};
+	static_assert(sizeof(MeshSkinVertex) == 16, "MeshSkinVertex layout is part of the cooked mesh format and the skinned vertex input");
+
+	// How a skinned mesh is bound to its skeleton (one glTF skin): for each joint of the skin, the skeleton joint that moves
+	// it, its inverse bind matrix (from the mesh's space into the joint's space at bind time) and the bind-pose extent of the
+	// vertices it influences (empty for joints that influence none). The skinning palette of a posed instance holds, per skin
+	// joint, the joint's model-space transform times its inverse bind matrix; the vertex shader blends the palette entries
+	// of a vertex's influences. A posed instance's bounds are the union of each joint's extent transformed by its palette
+	// entry: every skinned vertex is a weighted average of points inside those boxes.
+	struct MeshSkinBinding
+	{
+		static constexpr uint32_t c_MaxJoints = 4096;
+
+		std::vector<uint16_t> Joints;               // Skeleton joint of each skin joint
+		std::vector<glm::mat4> InverseBindMatrices; // Affine, per skin joint
+		std::vector<AABB> JointBounds;              // Per skin joint, in the mesh's (bind) space; computed by Mesh::CreateSkinned
+		// The farthest a vertex lies from the origin of a joint that influences it, in that joint's space (its inverse bind
+		// matrix times the vertex): in any pose, the skinned vertices lie within this distance (times the joints' scale) of
+		// their joints' origins. Bounds where joints may go, not where they are (SkeletonPose::Reach), grow by it. Computed by
+		// Mesh::CreateSkinned.
+		float MaxJointExtent = 0.0f;
+	};
+
 	struct MeshLOD
 	{
 		uint32_t IndexOffset = 0; // Into the mesh index buffer
@@ -47,7 +77,9 @@ namespace Strata
 
 	// Indexed triangle mesh asset with one or more submeshes (one per material) and optional LOD levels. Front faces
 	// are counter-clockwise. Positions and indices stay on the CPU after upload (physics colliders read them); the vertex
-	// attributes, which only shading reads, live on the GPU alone once uploaded.
+	// attributes, which only shading reads, live on the GPU alone once uploaded. Skinned meshes (CreateSkinned) also have
+	// a skin stream (a MeshSkinVertex per vertex, also GPU-only once uploaded) and a skin binding; their positions are the
+	// bind pose, which physics' mesh colliders use.
 	class Mesh : public Asset
 	{
 	public:
@@ -56,10 +88,17 @@ namespace Strata
 
 		static Ref<Mesh> Create(std::vector<glm::vec3> positions, std::vector<MeshVertexAttributes> attributes, std::vector<uint32_t> indices,
 			std::vector<Submesh> submeshes, std::string* outError = nullptr);
+		// A skinned mesh: one skin vertex per position, every influence with a weight naming a joint of the binding, the weights
+		// of each vertex adding up to 65535, finite affine inverse bind matrices (one per joint). The joints' bind-pose extents
+		// are computed here (JointBounds given are replaced).
+		static Ref<Mesh> CreateSkinned(std::vector<glm::vec3> positions, std::vector<MeshVertexAttributes> attributes, std::vector<uint32_t> indices,
+			std::vector<Submesh> submeshes, std::vector<MeshSkinVertex> skinVertices, MeshSkinBinding binding, std::string* outError = nullptr);
 
-		// Cooked format: "STMH" header, vertex streams, indices, submesh table. Serialize only meshes that were not
-		// uploaded (importers' and tools' meshes): the upload releases the vertex attributes.
-		static constexpr uint32_t c_CookedVersion = 1;
+		// Cooked format: "STMH" header (version, submesh count, flags), vertex streams, indices, submesh table, and for
+		// skinned meshes (flag bit 0) the skin stream, the skin's joints and their inverse bind matrices. Version 1 (without
+		// flags or skins) still loads. Serialize only meshes that were not uploaded (importers' and tools' meshes): the upload
+		// releases the vertex attributes and the skin stream.
+		static constexpr uint32_t c_CookedVersion = 2;
 		std::vector<uint8_t> Serialize() const;
 		static Ref<Mesh> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
 
@@ -81,23 +120,37 @@ namespace Strata
 		const std::vector<MeshVertexAttributes>& GetAttributes() const { return m_Attributes; }
 		const std::vector<uint32_t>& GetIndices() const { return m_Indices; }
 		const std::vector<Submesh>& GetSubmeshes() const { return m_Submeshes; }
+		// The bind pose's bounds for skinned meshes (a posed instance's bounds follow its joints, see MeshSkinBinding).
 		const AABB& GetBounds() const { return m_Bounds; }
 		uint32_t GetTriangleCount() const;
 
+		bool IsSkinned() const { return m_SkinBinding != nullptr; }
+		// The skin binding of a skinned mesh (null otherwise): immutable and shared, so caches keep it after the mesh goes.
+		const Ref<const MeshSkinBinding>& GetSkinBinding() const { return m_SkinBinding; }
+		// Empty once the mesh is uploaded, like the vertex attributes.
+		const std::vector<MeshSkinVertex>& GetSkinVertices() const { return m_SkinVertices; }
+
 		nvrhi::IBuffer* GetPositionBuffer() const { return m_PositionBuffer; }
 		nvrhi::IBuffer* GetAttributeBuffer() const { return m_AttributeBuffer; }
+		nvrhi::IBuffer* GetSkinBuffer() const { return m_SkinBuffer; } // Null for meshes without a skin
 		nvrhi::IBuffer* GetIndexBuffer() const { return m_IndexBuffer; }
 	private:
 		Mesh() = default;
+		// Validates and assembles a mesh; the skin vertices are empty and the binding null for unskinned meshes.
+		static Ref<Mesh> Build(std::vector<glm::vec3> positions, std::vector<MeshVertexAttributes> attributes, std::vector<uint32_t> indices,
+			std::vector<Submesh> submeshes, std::vector<MeshSkinVertex> skinVertices, Scope<MeshSkinBinding> binding, std::string* outError);
 	private:
 		std::vector<glm::vec3> m_Positions;
 		std::vector<MeshVertexAttributes> m_Attributes;
 		std::vector<uint32_t> m_Indices;
 		std::vector<Submesh> m_Submeshes;
 		AABB m_Bounds;
+		std::vector<MeshSkinVertex> m_SkinVertices;
+		Ref<const MeshSkinBinding> m_SkinBinding;
 
 		nvrhi::BufferHandle m_PositionBuffer;
 		nvrhi::BufferHandle m_AttributeBuffer;
+		nvrhi::BufferHandle m_SkinBuffer;
 		nvrhi::BufferHandle m_IndexBuffer;
 		// Bytes of the geometry uploaded so far, counting positions, attributes and indices one after the other.
 		uint64_t m_UploadOffset = 0;
@@ -115,8 +168,10 @@ namespace Strata
 		bool GenerateTangents(std::span<const glm::vec3> positions, std::span<const uint32_t> indices, std::span<MeshVertexAttributes> attributes);
 		// Exact MikkTSpace tangents: unwelds the triangles, generates per-corner tangents, then welds identical vertices
 		// again (vertices on UV seams and mirror lines end up split). With flatNormals the triangles also get faceted
-		// normals first. Replaces all three streams; returns false (leaving them unchanged) on invalid input.
-		bool GenerateSeamTangents(std::vector<glm::vec3>& positions, std::vector<MeshVertexAttributes>& attributes, std::vector<uint32_t>& indices, bool flatNormals);
+		// normals first. Replaces all three streams, and the skin stream when one is given (one entry per vertex: it is welded
+		// with the others); returns false (leaving them unchanged) on invalid input.
+		bool GenerateSeamTangents(std::vector<glm::vec3>& positions, std::vector<MeshVertexAttributes>& attributes, std::vector<uint32_t>& indices, bool flatNormals,
+			std::vector<MeshSkinVertex>* skinVertices = nullptr);
 		// Reorders triangles for the post-transform vertex cache (indices relative to the given vertex count).
 		void OptimizeIndices(std::vector<uint32_t>& indices, size_t vertexCount);
 		// Simplified index lists for LOD 1..maxLevels (each about half the previous triangle count), stopping early

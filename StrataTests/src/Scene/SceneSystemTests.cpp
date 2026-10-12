@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Animation/AnimationSystem.h"
 #include "Strata/Audio/AudioSystem.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Physics/PhysicsSystem.h"
@@ -36,6 +37,36 @@ namespace
 	{
 	public:
 		using RecordingSystem::RecordingSystem;
+	};
+
+	struct PhaseCounts
+	{
+		uint32_t Updates = 0;
+		uint32_t FixedUpdates = 0;
+		uint32_t LateUpdates = 0;
+	};
+
+	// Counts the per-frame callbacks the scene calls.
+	class PhaseCountingSystem : public SceneSystem
+	{
+	public:
+		explicit PhaseCountingSystem(PhaseCounts& counts)
+			: m_Counts(counts)
+		{
+		}
+
+		void OnUpdate(Timestep) override { m_Counts.Updates++; }
+		void OnFixedUpdate(float) override { m_Counts.FixedUpdates++; }
+		void OnLateUpdate(Timestep) override { m_Counts.LateUpdates++; }
+	private:
+		PhaseCounts& m_Counts;
+	};
+
+	// Takes part in the late update only.
+	class LateOnlySystem : public SceneSystem
+	{
+	public:
+		void OnLateUpdate(Timestep) override {}
 	};
 
 	SceneSystemDescriptor MakeRecording(const std::string& name, std::vector<std::string> after = {}, std::vector<std::string> before = {})
@@ -94,18 +125,25 @@ namespace
 
 TEST_SUITE("Scene.Systems")
 {
-	TEST_CASE("The built-in systems update in the order Scripting, Physics, Audio")
+	TEST_CASE("The built-in systems update in the order Scripting, Animation, Physics, Audio")
 	{
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Physics", "Audio" });
+		// Animation runs after the scripts (which drive animators) and before physics (root motion moves bodies before the
+		// step).
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "Audio" });
 
 		const std::vector<SceneSystemDescriptor>& descriptors = SceneSystemRegistry::GetAll();
-		REQUIRE(descriptors.size() == 3);
+		REQUIRE(descriptors.size() == 4);
 		CHECK(descriptors[0].After.empty());
 		CHECK(descriptors[1].After == std::vector<std::string> { "Scripting" });
-		CHECK(descriptors[2].After == std::vector<std::string> { "Physics" });
+		CHECK(descriptors[1].Before == std::vector<std::string> { "Physics" });
+		CHECK(descriptors[2].After == std::vector<std::string> { "Scripting" });
+		CHECK(descriptors[3].After == std::vector<std::string> { "Physics" });
 		CHECK(descriptors[0].Type == entt::type_id<ScriptSystem>().hash());
-		CHECK(descriptors[1].Type == entt::type_id<PhysicsSystem>().hash());
-		CHECK(descriptors[2].Type == entt::type_id<AudioSystem>().hash());
+		CHECK(descriptors[1].Type == entt::type_id<AnimationSystem>().hash());
+		CHECK(descriptors[2].Type == entt::type_id<PhysicsSystem>().hash());
+		CHECK(descriptors[3].Type == entt::type_id<AudioSystem>().hash());
+		CHECK(descriptors[1].ProfileStage == "Scene.Animation");
+		CHECK_FALSE(descriptors[1].RunsInSimulateMode);
 	}
 
 	TEST_CASE("After and Before are honored, and registration order decides the rest")
@@ -118,7 +156,7 @@ TEST_SUITE("Scene.Systems")
 		REQUIRE(systems.Register(MakeRecording("TestD")));
 
 		// TestB goes before TestA, TestC between TestA and Audio; unconstrained choices follow registration order.
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Physics", "TestB", "TestA", "TestC", "Audio", "TestD" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "TestB", "TestA", "TestC", "Audio", "TestD" });
 
 		{
 			Scene scene;
@@ -131,9 +169,9 @@ TEST_SUITE("Scene.Systems")
 		// A system registered again with the same name replaces the old one and counts as registered last: TestA stays,
 		// held between TestB and TestC; TestB, without its constraint now, follows every other system.
 		REQUIRE(SceneSystemRegistry::Register(MakeRecording("TestA")));
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Physics", "TestB", "TestA", "TestC", "Audio", "TestD" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "TestB", "TestA", "TestC", "Audio", "TestD" });
 		REQUIRE(SceneSystemRegistry::Register(MakeRecording("TestB")));
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Physics", "TestA", "TestC", "Audio", "TestD", "TestB" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "TestA", "TestC", "Audio", "TestD", "TestB" });
 	}
 
 	TEST_CASE("A system moves ahead of earlier registered ones only as far as its constraints require")
@@ -144,9 +182,9 @@ TEST_SUITE("Scene.Systems")
 		// a system registered after it has to run before one of them.
 		REQUIRE(systems.Register(MakeRecording("CameraFollow")));
 		REQUIRE(systems.Register(MakeRecording("Wind", {}, { "Physics" })));
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Wind", "Physics", "Audio", "CameraFollow" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Wind", "Physics", "Audio", "CameraFollow" });
 		REQUIRE(systems.Register(MakeRecording("EarlyInput", {}, { "Scripting" })));
-		CHECK(GetSystemNames() == std::vector<std::string> { "EarlyInput", "Scripting", "Wind", "Physics", "Audio", "CameraFollow" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "EarlyInput", "Scripting", "Animation", "Wind", "Physics", "Audio", "CameraFollow" });
 
 		{
 			Scene scene;
@@ -224,6 +262,62 @@ TEST_SUITE("Scene.Systems")
 		REQUIRE(SceneSystemRegistry::Register(MakeRecording("TestA")));
 		CHECK(SceneSystemRegistry::Unregister("TestA"));
 		CHECK(GetSystemNames() == names);
+	}
+
+	TEST_CASE("A frame calls only the per-frame callbacks a system takes part in")
+	{
+		// MakeSceneSystemDescriptor asks for the callbacks the class overrides, also those it inherits from a base between it
+		// and SceneSystem; a descriptor built by hand asks for all of them.
+		const SceneSystemDescriptor lateOnly = MakeSceneSystemDescriptor<LateOnlySystem>("TestLate", false, [](Scene&) { return CreateScope<LateOnlySystem>(); });
+		CHECK_FALSE(lateOnly.CallsUpdate);
+		CHECK_FALSE(lateOnly.CallsFixedUpdate);
+		CHECK(lateOnly.CallsLateUpdate);
+		const SceneSystemDescriptor derived = MakeSceneSystemDescriptor<OtherRecordingSystem>("TestDerived", false, [](Scene&) { return CreateScope<OtherRecordingSystem>("TestDerived"); });
+		CHECK(derived.CallsUpdate);
+		CHECK_FALSE(derived.CallsFixedUpdate);
+		CHECK_FALSE(derived.CallsLateUpdate);
+		const SceneSystemDescriptor typeless = MakeRecording("TestTypeless");
+		CHECK(typeless.CallsUpdate);
+		CHECK(typeless.CallsFixedUpdate);
+		CHECK(typeless.CallsLateUpdate);
+
+		// The built-ins take part in seven calls of an idle frame: Scripting in all three phases, Animation in OnUpdate,
+		// Physics in OnUpdate and OnFixedUpdate, Audio in OnLateUpdate.
+		const std::vector<SceneSystemDescriptor>& builtins = SceneSystemRegistry::GetAll();
+		REQUIRE(builtins.size() == 4);
+		CHECK((builtins[0].CallsUpdate && builtins[0].CallsFixedUpdate && builtins[0].CallsLateUpdate));
+		CHECK((builtins[1].CallsUpdate && !builtins[1].CallsFixedUpdate && !builtins[1].CallsLateUpdate));
+		CHECK((builtins[2].CallsUpdate && builtins[2].CallsFixedUpdate && !builtins[2].CallsLateUpdate));
+		CHECK((!builtins[3].CallsUpdate && !builtins[3].CallsFixedUpdate && builtins[3].CallsLateUpdate));
+
+		// The scene calls what the descriptors ask for, in frames and in steps of a paused scene.
+		PhaseCounts all;
+		PhaseCounts withoutFixed;
+		ScopedSystems systems;
+		SceneSystemDescriptor allDescriptor;
+		allDescriptor.Name = "TestAllPhases";
+		allDescriptor.Create = [&all](Scene&) -> Scope<SceneSystem> { return CreateScope<PhaseCountingSystem>(all); };
+		REQUIRE(systems.Register(std::move(allDescriptor)));
+		SceneSystemDescriptor withoutFixedDescriptor;
+		withoutFixedDescriptor.Name = "TestWithoutFixed";
+		withoutFixedDescriptor.Create = [&withoutFixed](Scene&) -> Scope<SceneSystem> { return CreateScope<PhaseCountingSystem>(withoutFixed); };
+		withoutFixedDescriptor.CallsFixedUpdate = false;
+		REQUIRE(systems.Register(std::move(withoutFixedDescriptor)));
+		{
+			Scene scene;
+			scene.OnRuntimeStart();
+			scene.OnUpdateRuntime(scene.GetSettings().FixedTimestep);
+			scene.SetPaused(true);
+			scene.Step(1);
+			scene.OnUpdateRuntime(0.016f);
+			scene.OnRuntimeStop();
+		}
+		CHECK(all.Updates == 2);
+		CHECK(all.FixedUpdates == 2);
+		CHECK(all.LateUpdates == 2);
+		CHECK(withoutFixed.Updates == 2);
+		CHECK(withoutFixed.FixedUpdates == 0);
+		CHECK(withoutFixed.LateUpdates == 2);
 	}
 
 	TEST_CASE("GetSystem finds the running systems by their class")

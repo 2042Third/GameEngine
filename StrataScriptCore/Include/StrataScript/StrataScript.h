@@ -5,6 +5,7 @@
 
 #include "StrataScript/ScriptABI.h"
 
+#include "StrataScript/Animator.h"
 #include "StrataScript/Audio.h"
 #include "StrataScript/Entity.h"
 #include "StrataScript/Game.h"

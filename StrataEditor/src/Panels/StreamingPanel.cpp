@@ -228,6 +228,15 @@ namespace Strata
 		return label;
 	}
 
+	const char* StreamingPanel::GetTypeLabel(AssetType type)
+	{
+		if (type == AssetType::AnimationClip)
+			return "Animation";
+		if (type == AssetType::AnimationController)
+			return "Controller";
+		return AssetTypeToString(type);
+	}
+
 	void StreamingPanel::OnUpdate(EditorPanelContext&)
 	{
 		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
@@ -603,11 +612,15 @@ namespace Strata
 					width = std::max(width, ImGui::CalcTextSize(text).x);
 				return width;
 			};
+			// Every asset type's label: the types are numbered from Scene on without gaps, so the first value without a name of
+			// its own ends them (a type added later widens the column without a change here).
 			float typeWidth = ImGui::CalcTextSize("Type").x;
-			for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Mesh, AssetType::Material, AssetType::Texture,
-					 AssetType::AudioClip, AssetType::Font })
+			for (uint32_t value = static_cast<uint32_t>(AssetType::Scene); value <= std::numeric_limits<uint16_t>::max(); value++)
 			{
-				typeWidth = std::max(typeWidth, ImGui::CalcTextSize(AssetTypeToString(type)).x);
+				const AssetType type = static_cast<AssetType>(value);
+				if (AssetTypeFromString(AssetTypeToString(type)) != type)
+					break;
+				typeWidth = std::max(typeWidth, ImGui::CalcTextSize(GetTypeLabel(type)).x);
 			}
 			m_ColumnWidths[c_ColumnType] = typeWidth + sortArrow;
 			m_ColumnWidths[c_ColumnState] = widest({ "State", "Unloaded", "Loading", "Ready", "Failed" }) + sortArrow;
@@ -718,12 +731,13 @@ namespace Strata
 					UI::ItemProbe::Record("Streaming.FirstAsset", revealable);
 				if (ImGui::IsItemHovered())
 				{
-					ImGui::SetTooltip("%s\n%s\n%s", label.Text.c_str(), sample.Handle.ToString().c_str(),
+					// The type in full (the Type column may shorten it), then the handle.
+					ImGui::SetTooltip("%s\n%s \xC2\xB7 %s\n%s", label.Text.c_str(), AssetTypeToString(sample.Type), sample.Handle.ToString().c_str(),
 						revealable ? "Click to show it in the Content Browser" : "A built-in or memory asset: it has no file in the project");
 				}
 				ImGui::PopID();
 				ImGui::TableSetColumnIndex(c_ColumnType);
-				ImGui::TextUnformatted(AssetTypeToString(sample.Type));
+				ImGui::TextUnformatted(GetTypeLabel(sample.Type));
 				ImGui::TableSetColumnIndex(c_ColumnState);
 				ImGui::TextColored(GetAssetStateColor(sample.State), "%s", AssetStateToString(sample.State));
 				ImGui::TableSetColumnIndex(c_ColumnGpu);

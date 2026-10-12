@@ -29,6 +29,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace Strata;
@@ -379,6 +380,62 @@ TEST_SUITE("Editor.UI")
 			// The header's text and sort arrow end within the column.
 			CHECK(entry.ContentMaxXHeadersIdeal <= entry.WorkMaxX + 0.5f);
 		}
+	}
+
+	TEST_CASE("The Streaming table's Type column shows every asset type whole")
+	{
+		ScopedJobSystem jobs(2, 1);
+		ScopedFakeLoader loader;
+		ImGuiHarness harness({ ImVec2(2400.0f, 1350.0f), 1.5f });
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		EditorCommandRunner runner;
+		EditorPanelContext panelContext { context, commands, runner };
+
+		// An asset of every type (each fails to load: the fake data is no type's stored form, so the table lists them all).
+		std::vector<AssetType> types;
+		for (uint32_t value = static_cast<uint32_t>(AssetType::Scene);; value++)
+		{
+			const AssetType type = static_cast<AssetType>(value);
+			if (AssetTypeFromString(AssetTypeToString(type)) != type)
+				break;
+			types.push_back(type);
+		}
+		REQUIRE(types.size() >= 11);
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		uint64_t handle = 0x75001;
+		for (const AssetType type : types)
+			manager->RequestLoad(manager->Add(handle++, MakeUsage(0, 1 << 10), 0, type));
+		REQUIRE(manager->WaitForPendingLoads());
+		manager->Update();
+		const ScopedActiveAssetManager active(manager);
+
+		StreamingPanel panel;
+		const ImVec2 size(1600.0f, 900.0f);
+		DrawPanel(harness, panel, panelContext, size);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		while ((panel.IsBuildingTable() || panel.GetTableRowCount() < types.size()) && std::chrono::steady_clock::now() < deadline)
+			DrawPanel(harness, panel, panelContext, size);
+		DrawPanel(harness, panel, panelContext, size);
+		REQUIRE(panel.GetShownLabels().size() >= types.size());
+		ImGuiTable* table = FindTable(ImGui::FindWindowByName("Panel"), 8);
+		REQUIRE(table);
+		int typeColumn = -1;
+		for (int column = 0; column < table->ColumnsCount; column++)
+		{
+			if (std::string_view(ImGui::TableGetColumnName(table, column)) == "Type")
+				typeColumn = column;
+		}
+		REQUIRE(typeColumn >= 0);
+		// What the cells drew ends within the column: no type's name is cut off.
+		const ImGuiTableColumn& column = table->Columns[typeColumn];
+		CHECK(column.ContentMaxXUnfrozen > column.WorkMinX);
+		CHECK(column.ContentMaxXUnfrozen <= column.WorkMaxX + 0.5f);
+		// Each type has a name of its own there.
+		std::set<std::string> labels;
+		for (const AssetType type : types)
+			labels.insert(StreamingPanel::GetTypeLabel(type));
+		CHECK(labels.size() == types.size());
 	}
 
 	TEST_CASE("The Streaming table keeps asset names readable where it is narrow: the least telling columns go first")

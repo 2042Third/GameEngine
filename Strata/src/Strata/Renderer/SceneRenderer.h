@@ -215,6 +215,8 @@ namespace Strata
 		uint32_t EnvironmentUpdates = 0;
 		bool PreviewLighting = false;     // SceneRenderOptions::PreviewEnvironment lit the scene (it has no light of its own)
 		uint32_t ShadowCasters = 0;       // Instances drawn into shadow cascades (summed over cascades)
+		uint32_t SkinnedInstances = 0;    // Drawn instances of posed skinned meshes (view; also counted in Instances)
+		uint64_t PaletteBytesUploaded = 0; // Joint matrices uploaded this frame (only palettes that changed)
 		uint32_t DebugLines = 0;          // Lines drawn from SceneRenderOptions::DebugShapes
 		uint32_t OutlinedEntities = 0;    // Selected entities of the rendered scene
 		uint32_t TintedEntities = 0;      // Entities of SceneRenderOptions::EntityTints in the rendered scene
@@ -234,6 +236,7 @@ namespace Strata
 		uint32_t LOD = 0;
 		bool DoubleSided = false;
 		bool Mirrored = false;  // Instances with a mirroring transform: front faces wind clockwise
+		bool Skinned = false;   // Posed skinned instances: the skinned pipelines blend their palettes
 		bool AlphaMask = false; // Shadow batches: alpha-tested casters
 		uint32_t Cascade = 0;   // Shadow batches
 		uint32_t FirstInstance = 0; // Into the draw list (SceneRenderer::GetDrawList, GetShadowDrawList)
@@ -348,6 +351,7 @@ namespace Strata
 			Pass PassType = Pass::Opaque;
 			bool DoubleSided = false;
 			bool Mirrored = false; // Instances with a mirroring transform: front faces wind clockwise
+			bool Skinned = false;  // The skinned vertex shaders and the skin vertex stream
 			bool operator==(const PipelineKey&) const = default;
 		};
 
@@ -372,6 +376,7 @@ namespace Strata
 			uint32_t LOD = 0;
 			bool DoubleSided = false;
 			bool Mirrored = false;
+			bool Skinned = false;
 		};
 
 		// A render proxy found by the shadow cascade queries.
@@ -429,6 +434,9 @@ namespace Strata
 			std::array<uint32_t, SceneRendererStats::c_LODStatCount> InstancesPerLOD = {};
 			std::array<float, RenderData::c_MaxCascades> CasterNearZ = {};
 			uint32_t Skipped = 0; // Submeshes beyond what a sort key can address
+			std::vector<entt::entity> Animators; // Animators of the chunk's visible Skin proxies (WhenVisible culling)
+			AABB Receivers; // The world bounds of the chunk's visible proxies (scenes with Skin proxies only)
+			uint32_t SkinnedInstances = 0;
 		};
 
 		struct LightCandidate
@@ -520,8 +528,13 @@ namespace Strata
 		// The proxies in the view frustum and in the prefetch distance, and the assets they need; meshes whose bounds are
 		// unknown are needed as if in view.
 		void CullView(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum);
-		// Computes the cascades and finds the shadow casters of each; leaves ShadowParams.w at 0 without shadows.
-		void FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame);
+		// Computes the cascades and finds the shadow casters of each; leaves ShadowParams.w at 0 without shadows. Reports the
+		// animators of skinned casters out of view whose shadows can fall on what the view shows (CanShadowView).
+		void FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, RenderData::FrameConstants& frame);
+		// Whether a caster's shadow can fall on what the view shows within the shadow distance: the caster's box swept along
+		// the light, as far as the visible receivers' bounds reach (m_VisibleReceivers, clipped to the shadowed part of the
+		// view), is not separated from the view by any of `planes`. Conservative: it never rejects a shadow that shows.
+		bool CanShadowView(const AABB& caster, const glm::vec3& lightDirection, const AABB& receivers, std::span<const glm::vec4> planes) const;
 		// Resolves every mesh and material the frame uses, once each, at the priority its use asks for.
 		void ResolveAssets(RenderScene& renderScene);
 		// The view's draws in batches: opaque ones sorted by pipeline state and mesh, transparent ones back to front.
@@ -538,8 +551,12 @@ namespace Strata
 		uint32_t ResolveTexture(AssetHandle handle, uint32_t missingSlot, uint32_t loadingSlot, bool residentOnly, std::vector<ResolvedTexture>* resolved);
 		// Sorted draws into batches and the draw list (instance indices in batch order).
 		void BuildBatches(std::vector<SortItem>& draws, std::vector<SceneDrawBatch>& outBatches, std::vector<uint32_t>& outDrawList);
-		// Uploads what changed of the instance data (since this renderer's last upload), the material data and the draw lists.
-		void UploadSceneData(nvrhi::ICommandList* commandList, const RenderScene& renderScene, bool instancesRecreated, bool materialsRecreated, bool drawListsRecreated);
+		// Uploads what changed of the instance data and the palettes (since this renderer's last upload), the material data and
+		// the draw lists.
+		void UploadSceneData(nvrhi::ICommandList* commandList, const RenderScene& renderScene, bool instancesRecreated, bool materialsRecreated, bool drawListsRecreated,
+			bool jointsRecreated);
+		// Tells the scene's ISkinningPoses which animators' meshes the frame drew (or would have, unposed).
+		void ReportVisibleAnimators(Scene& scene);
 		// Uploads the range of a draw list that differs from the list the buffer holds (`uploaded`), which then holds the new one.
 		uint64_t UploadDrawList(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, std::vector<uint32_t>& list, std::vector<uint32_t>& uploaded, bool full);
 
@@ -572,6 +589,9 @@ namespace Strata
 		SceneRendererStats m_Stats;
 
 		nvrhi::ShaderHandle m_MeshVertexShader;
+		nvrhi::ShaderHandle m_SkinnedMeshVertexShader;
+		nvrhi::ShaderHandle m_SkinnedShadowVertexShader;
+		nvrhi::InputLayoutHandle m_SkinnedInputLayout; // m_InputLayout and the skin stream (joints, weights)
 		nvrhi::ShaderHandle m_PrepassPixelShader;
 		nvrhi::ShaderHandle m_ForwardPixelShader;
 		nvrhi::ShaderHandle m_ForwardTransparentPixelShader;
@@ -633,6 +653,7 @@ namespace Strata
 		nvrhi::BufferHandle m_InstanceBuffer; // Persistent: RenderScene::GetInstances, uploaded where it changed
 		nvrhi::BufferHandle m_DrawListBuffer; // Instance indices of the view's draws
 		nvrhi::BufferHandle m_MaterialBuffer; // Persistent: by material slot, uploaded where it changed
+		nvrhi::BufferHandle m_JointBuffer;    // Persistent: RenderScene::GetPalette, uploaded where it changed
 		nvrhi::BufferHandle m_LightBuffer;
 
 		nvrhi::TextureHandle m_DepthTexture;
@@ -725,6 +746,10 @@ namespace Strata
 		uint64_t m_ProxyUpdatesSeen = 0;
 		bool m_FullUpload = true;       // The GPU copies hold nothing of that render scene yet
 		uint64_t m_UploadedInstanceVersion = 0;
+		uint64_t m_UploadedPaletteVersion = 0;
+		std::vector<std::pair<uint32_t, uint32_t>> m_PaletteChanges;
+		std::vector<entt::entity> m_VisibleAnimators; // Animators of the frame's visible Skin proxies, reported to ISkinningPoses
+		AABB m_VisibleReceivers; // The world bounds of the frame's visible proxies (scenes with Skin proxies only)
 		uint32_t m_FrameStamp = 0;
 		std::vector<uint32_t> m_ProxyStamps;        // Per proxy: m_FrameStamp when it is in the view this frame
 		std::vector<uint32_t> m_CasterStamps;       // Per proxy: m_FrameStamp when it is a shadow caster candidate

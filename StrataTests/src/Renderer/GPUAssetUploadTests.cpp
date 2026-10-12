@@ -880,6 +880,76 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Skinned meshes upload their skin stream in the same budgeted steps as the other streams")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+
+		// 150,000 vertices skinned to two joints: positions 1.8 MB, attributes 5.4 MB, the skin stream 2.4 MB, indices 0.6 MB;
+		// 10.2 MB through the upload queue in steps of 2 MiB, each spanning streams where they meet.
+		constexpr uint32_t c_Vertices = 150000;
+		std::vector<glm::vec3> positions(c_Vertices);
+		std::vector<MeshVertexAttributes> attributes(c_Vertices);
+		std::vector<MeshSkinVertex> skin(c_Vertices);
+		std::vector<uint32_t> indices(c_Vertices);
+		for (uint32_t vertex = 0; vertex < c_Vertices; vertex++)
+		{
+			positions[vertex] = glm::vec3(static_cast<float>(vertex % 500), static_cast<float>(vertex / 500), 0.5f);
+			attributes[vertex].TexCoord = glm::vec2(0.5f, static_cast<float>(vertex));
+			// The weights add up to 65535, as Mesh::CreateSkinned requires.
+			const uint16_t elbow = static_cast<uint16_t>(vertex % 65535);
+			skin[vertex].Joints[1] = 1;
+			skin[vertex].Weights[0] = static_cast<uint16_t>(65535 - elbow);
+			skin[vertex].Weights[1] = elbow;
+			indices[vertex] = c_Vertices - 1 - vertex;
+		}
+		Submesh submesh;
+		submesh.VertexCount = c_Vertices;
+		submesh.LODs.push_back(MeshLOD { 0, c_Vertices });
+		MeshSkinBinding binding;
+		binding.Joints = { 0, 1 };
+		binding.InverseBindMatrices = { glm::mat4(1.0f), glm::mat4(1.0f) };
+		std::string error;
+		const Ref<Mesh> mesh = Mesh::CreateSkinned(positions, attributes, indices, { submesh }, skin, std::move(binding), &error);
+		REQUIRE_MESSAGE(mesh, error);
+		const uint64_t positionBytes = c_Vertices * sizeof(glm::vec3);
+		const uint64_t attributeBytes = c_Vertices * sizeof(MeshVertexAttributes);
+		const uint64_t skinBytes = c_Vertices * sizeof(MeshSkinVertex);
+		const uint64_t indexBytes = c_Vertices * sizeof(uint32_t);
+		const uint64_t geometryBytes = positionBytes + attributeBytes + skinBytes + indexBytes;
+		CHECK(mesh->GetFinalizedMemoryUsage().GpuBuffers == geometryBytes);
+
+		constexpr uint64_t c_Budget = 2ull << 20;
+		uint64_t uploaded = 0;
+		uint64_t total = 0;
+		uint32_t calls = 0;
+		AssetFinalizeResult result = AssetFinalizeResult::Pending;
+		while (result == AssetFinalizeResult::Pending && calls < 10)
+		{
+			result = FinalizeOnce(gpu, *mesh, c_Budget, uploaded);
+			CHECK(uploaded <= c_Budget);
+			total += uploaded;
+			calls++;
+		}
+		CHECK(result == AssetFinalizeResult::Done);
+		CHECK(calls == 5); // Every call but the last fills its budget
+		CHECK(total == geometryBytes);
+		CHECK(mesh->GetMemoryUsage().GpuBuffers == geometryBytes);
+
+		// Every stream arrived where it belongs; the CPU keeps what physics reads, not the skin stream or the attributes.
+		const std::vector<uint8_t> gpuSkin = ReadBuffer(gpu, mesh->GetSkinBuffer(), skinBytes);
+		CHECK(std::memcmp(gpuSkin.data(), skin.data(), skinBytes) == 0);
+		const std::vector<uint8_t> gpuAttributes = ReadBuffer(gpu, mesh->GetAttributeBuffer(), attributeBytes);
+		CHECK(std::memcmp(gpuAttributes.data(), attributes.data(), attributeBytes) == 0);
+		const std::vector<uint8_t> gpuIndices = ReadBuffer(gpu, mesh->GetIndexBuffer(), indexBytes);
+		CHECK(std::memcmp(gpuIndices.data(), indices.data(), indexBytes) == 0);
+		CHECK(mesh->GetSkinVertices().empty());
+		CHECK(mesh->GetAttributes().empty());
+		CHECK(mesh->GetPositions() == positions);
+		CHECK(mesh->IsSkinned());
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("An uploaded mesh keeps only the positions and indices physics reads on the CPU")
 	{
 		GPUContext gpu;

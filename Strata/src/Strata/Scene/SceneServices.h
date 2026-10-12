@@ -2,6 +2,7 @@
 
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/UUID.h"
+#include "Strata/Math/AABB.h"
 #include "Strata/Scene/Entity.h"
 
 #include <glm/glm.hpp>
@@ -10,6 +11,9 @@
 #include <cstdint>
 #include <functional>
 #include <optional>
+#include <span>
+#include <string>
+#include <string_view>
 #include <vector>
 
 // Scene services: the interfaces through which the systems of a running scene use each other.
@@ -22,8 +26,10 @@
 // include each other's headers (the layers of StrataTests/Architecture/Layers.json).
 //
 // The built-in providers: PhysicsSystem offers ICollisionEventSource, IBodyMotionQuery, IBodyControl and IPhysicsQueries;
-// AudioSystem offers IAudioPlayback. All services are main thread only, like the scene. IAudioOutput, defined here too, is
-// an engine service (Core/EngineServices.h): it belongs to the process, not to a scene.
+// AudioSystem offers IAudioPlayback; the Animation module's system offers ISkinningPoses, IAnimatorControl and
+// IAnimationEventSource (the editor's pose preview provides ISkinningPoses for edited scenes, where no system runs). All
+// services are main thread only, like the scene. IAudioOutput, defined here too, is an engine service
+// (Core/EngineServices.h): it belongs to the process, not to a scene.
 namespace Strata
 {
 
@@ -199,6 +205,113 @@ namespace Strata
 		// unusable clip, invalid parameters (volume >= 0 and pitch > 0, finite) or without audio output.
 		virtual bool PlayOneShot(AssetHandle clip, float volume, float pitch) = 0;
 		virtual bool PlayOneShotAt(AssetHandle clip, const glm::vec3& position, float volume, float pitch) = 0;
+	};
+
+	//////////////////////////////////////////////////////////////////////////
+	// Animation
+	//////////////////////////////////////////////////////////////////////////
+
+	// The pose of an animator's skeleton: per joint its transform relative to the animator's entity (model space).
+	struct SkeletonPose
+	{
+		std::span<const glm::mat4> Joints; // Valid until the provider changes the pose (the next animation update)
+		uint64_t Version = 0;              // Changes whenever the joints or the reach change
+		// For an animator that does not compute its pose every update (WhenVisible): where what it plays takes the joints'
+		// origins (model space, like the joints), and the largest scale of a joint's transform there. Renderers bound its
+		// meshes with it as well as with the pose, so they find it wherever its clips take it, also while it shows an older
+		// pose. Invalid (empty) for poses that are computed every update.
+		AABB Reach;
+		float ReachScale = 0.0f;
+	};
+
+	// An entity drawn at another world transform than the scene has (ISkinningPoses::GetRenderTransforms).
+	struct RenderTransform
+	{
+		entt::entity Entity = entt::null;
+		glm::mat4 World = glm::mat4(1.0f);
+	};
+
+	// The poses animators publish (the Animation module's system in Play mode; the editor's pose preview), which renderers
+	// skin meshes with (SkinComponent): the renderer never includes the Animation module. Renderers read them in
+	// RenderScene::Sync and report which animators' meshes they drew, so animators that only animate while seen
+	// (AnimatorComponent::CullingMode WhenVisible) know.
+	class ISkinningPoses
+	{
+	public:
+		virtual ~ISkinningPoses() = default;
+
+		// The current pose of the animator on `animator` (an entity with an AnimatorComponent); false while it has none (no
+		// skeleton loaded yet, not evaluated yet, inactive).
+		virtual bool GetPose(entt::entity animator, SkeletonPose& outPose) const = 0;
+		// Changes whenever any pose changes: a renderer that saw this version has seen every pose.
+		virtual uint64_t GetPosesVersion() const = 0;
+		// A renderer drew (in its view or its shadows) a mesh this animator poses, or would have, had it been posed.
+		virtual void ReportVisible(entt::entity animator) = 0;
+
+		// Entities renderers draw at other world transforms than the scene's: a provider that may not change the scene (the
+		// editor's pose preview of a scene that does not play) places attachments (AttachToJointComponent), and the meshes
+		// under them, at their joints this way. Valid until the provider changes them; the version changes whenever they do.
+		// None by default: the animation system of a playing scene moves attachments in the scene.
+		virtual std::span<const RenderTransform> GetRenderTransforms() const { return {}; }
+		virtual uint64_t GetRenderTransformsVersion() const { return 0; }
+	};
+
+	// Commands and queries of the animators of a playing scene (the Animation module's system), for code that may not
+	// include the module (the script host). Every function takes the entity with the AnimatorComponent and fails (false,
+	// nothing, 0) for entities without one, unknown states or parameters, and wrong values; the system logs nothing, the
+	// callers report misuse their way.
+	class IAnimatorControl
+	{
+	public:
+		virtual ~IAnimatorControl() = default;
+
+		// Jumps to a state of the animator's controller (or, PlayClip, plays a clip without the controller's transitions until
+		// a state is played again); CrossFade blends to the state over `seconds`.
+		virtual bool Play(Entity animator, std::string_view state) = 0;
+		virtual bool PlayClip(Entity animator, AssetHandle clip) = 0;
+		virtual bool CrossFade(Entity animator, std::string_view state, float seconds) = 0;
+		// Parameters of the controller by name and type; a trigger stays set until a transition consumes it or it is reset.
+		virtual bool SetFloat(Entity animator, std::string_view parameter, float value) = 0;
+		virtual bool SetBool(Entity animator, std::string_view parameter, bool value) = 0;
+		virtual bool SetTrigger(Entity animator, std::string_view parameter) = 0;
+		virtual bool ResetTrigger(Entity animator, std::string_view parameter) = 0;
+		// The animator's speed (AnimatorComponent::Speed, which the call writes).
+		virtual bool SetSpeed(Entity animator, float speed) = 0;
+
+		// The state the animator is in: the target of the latest transition or command, also one waiting for the controller to
+		// load (an empty name while it plays a clip directly, or before it plays); nothing for entities without an animator.
+		virtual std::optional<std::string> GetCurrentState(Entity animator) = 0;
+		// How far the state is: its time over its clip's duration, counting loops.
+		virtual float GetNormalizedTime(Entity animator) = 0;
+		virtual bool IsInTransition(Entity animator) = 0;
+		// A joint's world transform in the animator's current pose (attach things to a hand); nothing without a pose or for a
+		// joint the skeleton does not have.
+		virtual std::optional<glm::mat4> GetJointTransform(Entity animator, std::string_view joint) = 0;
+	};
+
+	// An event of an animation controller's state that the playhead passed (AnimationEvent): dispatched on the main thread
+	// after the animators were evaluated, animator by animator, each animator's in the order they happened.
+	struct AnimationEventInfo
+	{
+		Entity Animator;
+		UUID AnimatorID = UUID::Null();
+		std::string_view Name;  // Valid during the call
+		std::string_view State;
+		float Time = 0.0f;      // The event's time in its clip
+	};
+
+	using AnimationEventCallback = std::function<void(const AnimationEventInfo&)>;
+	using AnimationEventListenerID = uint64_t;
+
+	// The animation events of a playing scene (the Animation module's system). Listeners added while events are dispatched
+	// receive the next update's; a removed one is not called again. Listeners may use the whole scene and the other services.
+	class IAnimationEventSource
+	{
+	public:
+		virtual ~IAnimationEventSource() = default;
+
+		virtual AnimationEventListenerID AddAnimationEventListener(AnimationEventCallback callback) = 0;
+		virtual bool RemoveAnimationEventListener(AnimationEventListenerID id) = 0;
 	};
 
 	// The engine's audio output (AudioEngine), which outlives every scene: an engine service (Core/EngineServices.h) the
