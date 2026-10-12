@@ -127,7 +127,7 @@ namespace Strata
 		return true;
 	}
 
-	void GameRuntime::StartScene(Ref<Scene> scene, AssetHandle handle)
+	void GameRuntime::StartScene(Ref<Scene> scene, AssetHandle handle, std::span<const AssetHandle> loaded)
 	{
 		if (m_Scene && m_Scene->IsRunning())
 			m_Scene->OnRuntimeStop();
@@ -135,8 +135,9 @@ namespace Strata
 		m_SceneHandle = handle;
 		m_Scene->SetTimeDilation(m_TimeDilation);
 		m_Scene->OnRuntimeStart(SceneRuntimeMode::Play);
-		// What the previous scene used and this one does not request in its first frames is released then.
-		m_AssetManager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames);
+		// What the previous scene used, this one's load did not bring in and this one does not request in its first frames is
+		// released then.
+		m_AssetManager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames, loaded);
 		CheckScriptFault();
 	}
 
@@ -149,7 +150,7 @@ namespace Strata
 			request.Update();
 			if (request.GetState() == SceneLoadState::Ready)
 			{
-				StartScene(request.TakeScene(), m_LoadingSceneLoad->Scene);
+				StartScene(request.TakeScene(), m_LoadingSceneLoad->Scene, request.GetAssets());
 				m_ShowingLoadingScene = true;
 				m_LoadingSceneLoad.reset();
 			}
@@ -171,7 +172,7 @@ namespace Strata
 		if (request.GetState() == SceneLoadState::Ready)
 		{
 			const bool first = !m_Started;
-			StartScene(request.TakeScene(), m_SceneLoad->Scene);
+			StartScene(request.TakeScene(), m_SceneLoad->Scene, request.GetAssets());
 			m_Started = true;
 			m_ShowingLoadingScene = false;
 			// Its pins go once the scene that uses the assets requests them itself (from its first frame on).

@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace Strata
@@ -102,8 +103,9 @@ namespace Strata
 
 		// Advances the loading scene's and the next scene's loads; starts what is ready.
 		void UpdateSceneLoads();
-		// Stops the running scene and starts `scene` (of asset `handle`) in its place.
-		void StartScene(Ref<Scene> scene, AssetHandle handle);
+		// Stops the running scene and starts `scene` (of asset `handle`) in its place; what the previous scene used goes a few
+		// frames later, unless the new one requested it by then or its load brought it in (`loaded`).
+		void StartScene(Ref<Scene> scene, AssetHandle handle, std::span<const AssetHandle> loaded);
 		// Records (and logs once) a crash of the script module.
 		void CheckScriptFault();
 		void HandleSceneRequests();

@@ -21,6 +21,7 @@
 #include <string_view>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Strata
@@ -160,10 +161,22 @@ namespace Strata
 		static const AssetLoadFunction* Find(AssetType type);
 	};
 
-	// The load of an asset together with everything it depends on (AssetManagerBase::RequestLoadWithDependencies): a
-	// loading screen's or a prefetch's handle on a group of loads. It pins every member while it lives, so nothing of the
-	// group is evicted, until it is destroyed or cancelled. Movable, not copyable; a request that outlives its manager
-	// reports what it saw last. Thread-safe like the manager (one request is used by one thread at a time).
+	// How far a dependency closure reaches (AssetManagerBase::GetDependencyClosure).
+	enum class AssetClosureScope : uint8_t
+	{
+		// Everything the asset references, transitively: what a game that uses it must ship (pack planning).
+		All = 0,
+		// What using the asset needs loaded: scene assets other than the asset itself are left out, with what only they
+		// reference. A scene that names another (a script field holding the next level, or a sub-scene streamed in later)
+		// does not load it: scenes load as levels of their own (SceneLoader), never along with what names them.
+		Load
+	};
+
+	// The load of an asset together with everything it depends on (AssetManagerBase::RequestLoadWithDependencies), or of
+	// a group of assets the caller chose (RequestLoadGroup): a loading screen's or a prefetch's handle on a group of loads.
+	// It pins every member while it lives, so nothing of the group is evicted, until it is destroyed or cancelled. Movable,
+	// not copyable; a request that outlives its manager reports what it saw last. Thread-safe like the manager (one
+	// request is used by one thread at a time).
 	class AssetGroupRequest
 	{
 	public:
@@ -180,11 +193,12 @@ namespace Strata
 		const std::vector<AssetHandle>& GetAssets() const { return m_Assets; }
 
 		// The share of the members' stored bytes that finished loading (Ready or Failed), in [0, 1]. Never decreases: a
-		// member that finished stays counted (also while a hot reload replaces it). 1 for an invalid request.
+		// member that finished stays counted (also while a hot reload replaces it). A member the manager no longer has
+		// (unregistered: deleted, or its source removed) counts as failed. 1 for an invalid request.
 		float Progress() const;
 		// Every member finished loading (Ready or Failed).
 		bool IsComplete() const;
-		// A member failed to load.
+		// A member failed to load (or is no longer registered).
 		bool HasFailed() const;
 		// Releases the pins and abandons the loads of the members that have not finished (AssetManagerBase::CancelLoad):
 		// queued reads never start. Members someone else pins keep loading, and so do members requested again later.
@@ -315,9 +329,11 @@ namespace Strata
 		// frames, whatever the budgets; assets that hold no memory stay (evicting them would free nothing). Returns how
 		// many assets were evicted.
 		uint32_t TrimUnused(uint32_t unusedFrames);
-		// Runs TrimUnused(unusedFrames) in the Update `delayFrames` updates from now: after a scene switch, so that the new
-		// scene has requested what it uses first (AssetResidency::c_SceneSwitchTrimFrames). Replaces an earlier schedule.
-		void ScheduleTrim(uint32_t delayFrames, uint32_t unusedFrames);
+		// Runs TrimUnused(unusedFrames) in the Update `delayFrames` updates from now, sparing the assets in `keep`: after a
+		// scene switch, so that the new scene has requested what it uses first (AssetResidency::c_SceneSwitchTrimFrames), and
+		// what its load brought in for it stays whether it was drawn yet or not (SceneLoadRequest::GetAssets): the trim takes
+		// what only the previous scene used. Replaces an earlier schedule.
+		void ScheduleTrim(uint32_t delayFrames, uint32_t unusedFrames, std::span<const AssetHandle> keep = {});
 
 		// Assets requested this recently are never evicted for budgets: the frames the GPU may still be working on plus two.
 		uint32_t GetEvictionGraceFrames() const { return m_EvictionGraceFrames; }
@@ -378,9 +394,9 @@ namespace Strata
 		//   prefetched, like those of a requested asset, once something requests it (GetAsset, RequestLoad, Pin);
 		// - the streaming queue bounds them like any load (in-flight bytes and reads).
 		std::vector<AssetHandle> GetDependencies(AssetHandle handle) const;
-		// The asset and everything it depends on, transitively: the asset, then breadth first, each once. Unknown handles are
-		// left out (an empty list for an unknown asset).
-		std::vector<AssetHandle> GetDependencyClosure(AssetHandle handle) const;
+		// The asset and everything it depends on, transitively, as far as `scope` reaches: the asset, then breadth first, each
+		// once. Unknown handles are left out (an empty list for an unknown asset).
+		std::vector<AssetHandle> GetDependencyClosure(AssetHandle handle, AssetClosureScope scope = AssetClosureScope::All) const;
 		// The local bounds of a mesh as recorded when it was imported, known before the mesh loads: valid and finite, or nullopt
 		// (other assets, meshes without a record). A change is a content change (GetContentChanges), so that render scenes
 		// cull meshes that are not loaded with them (RenderScene::ResolveUnloadedBounds).
@@ -390,10 +406,15 @@ namespace Strata
 		// compares what a stored form references with what was recorded normalizes it alike.
 		static std::vector<AssetHandle> NormalizeReferences(AssetHandle handle, std::span<const AssetHandle> references);
 
-		// Loads an asset with everything it depends on (GetDependencyClosure): pins every member at `priority`, which
-		// requests the loads in breadth-first order. An invalid request for unknown assets.
+		// Loads an asset with what using it needs (GetDependencyClosure with AssetClosureScope::Load: other scenes it names
+		// stay unloaded): pins every member at `priority`, which requests the loads in breadth-first order. An invalid
+		// request for unknown assets.
 		AssetGroupRequest RequestLoadWithDependencies(AssetHandle handle, AssetPriority priority = AssetPriority::Normal);
-		// Whether the asset and everything it depends on are Ready.
+		// Loads the assets given, in that order (the first one known is the group's root), each pinned once at `priority`:
+		// for callers that choose part of a closure, such as a scene load that takes what fits in the budgets (SceneLoader).
+		// Unknown handles and repeats are left out; an invalid request when none is known.
+		AssetGroupRequest RequestLoadGroup(std::span<const AssetHandle> assets, AssetPriority priority = AssetPriority::Normal);
+		// Whether the asset and what using it needs (the members of RequestLoadWithDependencies) are Ready.
 		bool IsLoadedWithDependencies(AssetHandle handle) const;
 
 		// Reads `size` bytes of an asset's stored form from `offset` without loading the asset (e.g. one level of a texture's
@@ -416,7 +437,7 @@ namespace Strata
 		// Requests the direct dependencies of an asset whose read completed (see GetDependencies). Any thread.
 		void PrefetchDependencies(AssetHandle handle, AssetPriority priority);
 		// The closure of GetDependencyClosure. Requires m_Mutex.
-		std::vector<AssetHandle> GetDependencyClosureLocked(AssetHandle handle) const;
+		std::vector<AssetHandle> GetDependencyClosureLocked(AssetHandle handle, AssetClosureScope scope) const;
 	protected:
 		// Reads the stored bytes of an asset. Called on I/O threads; must be thread-safe.
 		virtual bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError) = 0;
@@ -520,6 +541,7 @@ namespace Strata
 		{
 			uint64_t Frame = 0;
 			uint32_t UnusedFrames = 0;
+			std::unordered_set<AssetHandle> Keep;
 		};
 
 		friend class AssetPin;
@@ -559,7 +581,8 @@ namespace Strata
 		// Removes the queued load of an entry that stops loading (unload, cancellation, reload); a running one is discarded
 		// by the caller's generation change. Returns whether the entry was loading.
 		bool AbandonLoadLocked(AssetEntry& entry);
-		uint32_t EvictUnusedLocked(uint32_t unusedFrames, std::vector<Ref<Asset>>& released);
+		// Evicts what TrimUnused evicts, except the assets in `keep` (when given).
+		uint32_t EvictUnusedLocked(uint32_t unusedFrames, std::vector<Ref<Asset>>& released, const std::unordered_set<AssetHandle>* keep = nullptr);
 		// Evicts the least recently requested assets holding memory of the pool until `extraBytes` more fit in its budget
 		// (or the rest is protected).
 		void EvictToFitLocked(AssetMemoryPool pool, uint64_t extraBytes, std::vector<Ref<Asset>>& released);

@@ -1167,4 +1167,34 @@ TEST_SUITE("Asset.Groups")
 			CHECK(manager->GetPinCount(member) == (member == pinnedElsewhere ? 1u : 0u));
 		CHECK(group.IsValid());
 	}
+
+	TEST_CASE("A group of chosen assets loads each known one once; a member that is deleted counts as failed")
+	{
+		ScopedJobSystem jobs(2, 1);
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle first = manager->Add(0x1000, MakeUsage(10), 100);
+		const AssetHandle second = manager->Add(0x1001, MakeUsage(10), 300);
+		const AssetHandle deleted = manager->Add(0x1002, MakeUsage(10), 600);
+
+		// Repeats and unknown handles are left out; the first known one is the root.
+		manager->CloseGate();
+		const std::vector<AssetHandle> chosen = { UUID(0x9999), first, second, first, deleted };
+		AssetGroupRequest group = manager->RequestLoadGroup(chosen, AssetPriority::Normal);
+		REQUIRE(group.IsValid());
+		CHECK(group.GetAssets() == std::vector<AssetHandle> { first, second, deleted });
+		CHECK(group.GetRoot() == first);
+		for (AssetHandle member : group.GetAssets())
+			CHECK(manager->GetPinCount(member) == 1);
+		CHECK_FALSE(manager->RequestLoadGroup(std::vector<AssetHandle> { UUID(0x9999) }).IsValid());
+
+		// A member deleted while it loads never arrives: it counts as finished, and failed.
+		manager->Remove(deleted);
+		manager->OpenGate();
+		REQUIRE(WaitUntil([&]() { manager->Update(); return group.IsComplete(); }, std::chrono::milliseconds(10000)));
+		CHECK(group.Progress() == 1.0f);
+		CHECK(group.HasFailed());
+		CHECK(manager->GetAssetState(first) == AssetState::Ready);
+		CHECK(manager->GetAssetState(second) == AssetState::Ready);
+	}
 }

@@ -125,8 +125,9 @@ namespace Strata
 		// False when the scene holds no request for the asset (neither RequestAsset's nor GetAssetLoadProgress's).
 		bool ReleaseAsset(AssetHandle asset);
 		size_t GetRequestedAssetCount() const { return m_AssetPins.size(); }
-		// The share of the stored bytes of the asset and its dependency closure that has loaded, in [0, 1]
-		// (AssetGroupRequest::Progress). The first call for an asset requests the closure, which the scene then keeps loaded
+		// The share of the stored bytes of the asset and what using it needs (AssetManagerBase::RequestLoadWithDependencies:
+		// its dependency closure without other scenes it names) that has loaded, in [0, 1] (AssetGroupRequest::Progress). The
+		// first call for an asset requests the closure, which the scene then keeps loaded
 		// (pinned at Normal priority) until ReleaseAsset or the end of play, as RequestAsset keeps the asset. Negative for an
 		// asset the manager does not know.
 		float GetAssetLoadProgress(AssetManagerBase& manager, AssetHandle asset);

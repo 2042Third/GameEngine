@@ -24,8 +24,9 @@ namespace Strata
 
 		// Replaces the running scene with a scene asset of the project: every entity of the current scene goes away (its
 		// scripts receive OnDestroy) and the new scene starts. Returns false for assets that are not scenes. The scene and
-		// everything it uses load in the background while the current scene goes on (show GetSceneLoadProgress); the switch
-		// happens once all of it is in.
+		// what it uses load in the background while the current scene goes on (show GetSceneLoadProgress); the switch happens
+		// once it is in (with what it uses where that fits in the memory budgets, else the new scene streams it in as it draws
+		// it; other scenes it names stay unloaded).
 		static bool LoadScene(AssetHandle scene)
 		{
 			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(LoadScene);

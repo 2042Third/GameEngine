@@ -27,20 +27,26 @@ namespace Strata
 	{
 		// The priority the scene and what it uses are requested (and pinned) at.
 		AssetPriority Priority = AssetPriority::High;
-		// The share of the stored bytes of the scene and everything it uses (its dependency closure) that must have loaded
-		// before the load is Ready, in [0, 1]: 1 waits for all of it (a game that switches only once its next level can be
-		// drawn complete), 0 only for the scene itself.
+		// The share of the stored bytes of the scene and what it uses (the part of its dependency closure the load takes, see
+		// SceneLoadRequest) that must have loaded before the load is Ready, in [0, 1]: 1 waits for all of it (a game that
+		// switches only once its next level can be drawn complete), 0 only for the scene itself.
 		float RequiredProgress = 1.0f;
 		// Read the scene asset's stored form again even when it is loaded (an editor opens the file as it is now).
 		bool Reload = false;
 	};
 
 	// One asynchronous scene load (SceneLoader::LoadAsync): the scene asset is read into a prepared scene on the loading
-	// worker (SceneAsset) while everything it uses (AssetManagerBase::GetDependencyClosure) loads alongside, pinned at the
-	// load's priority so that nothing of it is evicted (AssetManagerBase::RequestLoadWithDependencies). Advance it once per
-	// frame with Update; once it is Ready, TakeScene hands the scene over. The pins live as long as the request (or until
-	// Cancel): owners drop it once the scene they took has started, so that its assets are what the scene requests from then
-	// on. Main thread only; movable, not copyable.
+	// worker (SceneAsset) while what it uses loads alongside, pinned at the load's priority so that nothing of it is evicted
+	// (AssetManagerBase::RequestLoadGroup). What it uses is its dependency closure without the other scenes it names
+	// (AssetClosureScope::Load: a script field holding the next level does not load that level), as far as the residency
+	// budgets have room: a pool's members load with the scene when all of them fit in the room the pool's budget has beside
+	// what is resident when the load starts (estimated from their stored sizes; members loaded already always count).
+	// Otherwise the scene requests that pool's members itself once it runs, what it draws first, and so it does members
+	// that depend directly on one of them (requesting those would prefetch them): the load cannot know which part the scene
+	// draws, and any other part would take the room from it (GetSkippedAssetCount). So a load never pushes a pool past its
+	// budget. Advance it once per frame with Update; once it is Ready, TakeScene hands the scene over. The pins live as long
+	// as the request (or until Cancel): owners drop it once the scene they took has started, so that its assets are what
+	// the scene requests from then on. Main thread only; movable, not copyable.
 	class SceneLoadRequest
 	{
 	public:
@@ -62,14 +68,20 @@ namespace Strata
 		// (SceneReadProgress) counts for its part of the bytes, so that the progress moves on during the seconds a large
 		// scene takes to read.
 		float GetProgress() const;
-		// The bytes of the closure (the scene asset included) and how many of its assets there are.
+		// The stored bytes the load waits for (the scene asset included) and how many assets that is.
 		uint64_t GetTotalBytes() const { return m_TotalBytes; }
 		size_t GetAssetCount() const { return m_Group.GetAssets().size(); }
+		// Those assets (the scene asset first): what its owner keeps when it trims after the switch (ScheduleTrim).
+		const std::vector<AssetHandle>& GetAssets() const { return m_Group.GetAssets(); }
+		// The assets of the closure the load leaves to the scene, because the budgets had no room for their pools' share of it
+		// when it started (or they depend on such an asset).
+		size_t GetSkippedAssetCount() const { return m_SkippedAssets; }
 
 		// Advances the load: takes the prepared scene once its asset is loaded (the spent asset is unloaded, so a later load
 		// reads the file again) and becomes Ready once the closure's progress reaches the options' requirement. A dependency
-		// that fails to load counts as finished (the scene shows a fallback for it); a scene asset that fails fails the load.
-		// Main thread, once per frame (after the asset manager's Update).
+		// that fails to load, or is unregistered meanwhile, counts as finished (the scene shows a fallback for it); a scene
+		// asset that fails, or is unregistered before it was read, fails the load. Main thread, once per frame (after the
+		// asset manager's Update).
 		void Update();
 		// The prepared scene, once Ready: the first call takes it (the request keeps its pins), later calls return null.
 		Ref<Scene> TakeScene();
@@ -89,6 +101,7 @@ namespace Strata
 		std::string m_Error;
 		AssetGroupRequest m_Group;
 		uint64_t m_TotalBytes = 0;
+		size_t m_SkippedAssets = 0;
 		// The scene asset's part of the closure as the group weighs it (AssetGroupRequest: stored sizes of at least 1).
 		float m_SceneShare = 0.0f;
 		mutable float m_ReportedProgress = 0.0f;

@@ -7,9 +7,13 @@
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Scene/Prefab.h"
+#include "Strata/Scene/SceneLoader.h"
+#include "Strata/Scene/SceneSerializer.h"
 
+#include <algorithm>
 #include <chrono>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -77,6 +81,74 @@ namespace
 		add(c_Prefab, AssetType::Prefab, "Prefabs/Streamed.stprefab", ToBytes(prefab->Serialize()), { UUID(c_Mesh), UUID(c_Material) });
 
 		const std::filesystem::path path = CreateTemporaryDirectory("GPUSceneStreaming") / "Game.stpak";
+		std::string error;
+		REQUIRE_MESSAGE(AssetPackWriter::Write(path, sources, [&data](const AssetMetadata& asset, std::vector<uint8_t>& outData, std::string*)
+		{
+			outData = data.at(static_cast<uint64_t>(asset.Handle));
+			return true;
+		}, {}, nullptr, &error), error);
+		return path;
+	}
+
+	constexpr uint64_t c_LevelScene = 0x9200;
+	constexpr uint64_t c_LevelMesh = 0x9201;
+	constexpr uint64_t c_FirstLevelMaterial = 0x9210;
+	constexpr uint64_t c_FirstLevelTexture = 0x9220;
+	constexpr uint64_t c_LevelObjects = 6;
+
+	// A game pack holding a level of six cubes, each with a material of its own 256x256 texture: the scene depends on the
+	// mesh and the materials, each material on its texture (recorded as exports record them).
+	std::filesystem::path WriteTexturedLevelPack()
+	{
+		TextureMip level0;
+		level0.Width = 256;
+		level0.Height = 256;
+		level0.Data.assign(static_cast<size_t>(level0.Width) * level0.Height * 4, 120);
+		std::vector<TextureMip> mips = { std::move(level0) };
+		REQUIRE(TextureUtils::GenerateMips(mips, TextureFormat::RGBA8SRGB, false));
+		TextureSpecification specification;
+		specification.Format = TextureFormat::RGBA8SRGB;
+		specification.DebugName = "LevelTexture";
+		const Ref<Texture> texture = Texture::Create(specification, std::move(mips));
+		REQUIRE(texture);
+		const std::vector<uint8_t> textureBytes = texture->Serialize();
+
+		std::map<uint64_t, std::vector<uint8_t>> data;
+		std::vector<AssetPackSource> sources;
+		const auto add = [&](uint64_t handle, AssetType type, const std::string& path, std::vector<uint8_t> bytes, std::vector<AssetHandle> dependencies)
+		{
+			AssetPackSource source;
+			source.Metadata.Handle = UUID(handle);
+			source.Metadata.Type = type;
+			source.Metadata.Path = path;
+			source.Metadata.Name = path;
+			source.Metadata.StoredSize = bytes.size();
+			source.Dependencies = std::move(dependencies);
+			sources.push_back(std::move(source));
+			data[handle] = std::move(bytes);
+		};
+
+		Scene level("Level");
+		std::vector<AssetHandle> sceneDependencies = { UUID(c_LevelMesh) };
+		for (uint64_t index = 0; index < c_LevelObjects; index++)
+		{
+			const uint64_t textureHandle = c_FirstLevelTexture + index;
+			const uint64_t materialHandle = c_FirstLevelMaterial + index;
+			MaterialProperties properties;
+			properties.BaseColorMap = UUID(textureHandle);
+			add(textureHandle, AssetType::Texture, fmt::format("Textures/Level{}.png", index), textureBytes, {});
+			add(materialHandle, AssetType::Material, fmt::format("Materials/Level{}.stmat", index), ToBytes(Material::Create(properties)->Serialize()),
+				{ UUID(textureHandle) });
+			sceneDependencies.push_back(UUID(materialHandle));
+
+			MeshRendererComponent& renderer = level.CreateEntity(fmt::format("Cube{}", index)).AddComponent<MeshRendererComponent>();
+			renderer.Mesh = UUID(c_LevelMesh);
+			renderer.Material = UUID(materialHandle);
+		}
+		add(c_LevelMesh, AssetType::Mesh, "Meshes/Cube.mesh", MeshFactory::CreateCube()->Serialize(), {});
+		add(c_LevelScene, AssetType::Scene, "Scenes/Level.stscene", ToBytes(SceneSerializer::Serialize(level)), sceneDependencies);
+
+		const std::filesystem::path path = CreateTemporaryDirectory("GPUSceneStreamingLevel") / "Game.stpak";
 		std::string error;
 		REQUIRE_MESSAGE(AssetPackWriter::Write(path, sources, [&data](const AssetMetadata& asset, std::vector<uint8_t>& outData, std::string*)
 		{
@@ -192,6 +264,70 @@ TEST_SUITE("GPU.Scene.Streaming")
 		// Releasing the request leaves the closure to the residency budgets again.
 		CHECK(scripts.ReleaseAsset(UUID(c_Prefab)));
 		CHECK(stage.Manager->GetPinCount(UUID(c_Texture)) == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A scene load never takes the texture pool past its budget")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		std::string error;
+		const Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(WriteTexturedLevelPack(), &error);
+		REQUIRE_MESSAGE(manager, error);
+		AssetManager::SetActive(manager);
+		const std::optional<AssetMetadata> texture = manager->GetMetadata(UUID(c_FirstLevelTexture));
+		REQUIRE(texture);
+
+		// Loads the level as games do, a frame at a time; returns the most texture memory resident in any frame.
+		const auto load = [&](SceneLoadRequest& request)
+		{
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+			uint64_t mostResident = 0;
+			while (!request.IsFinished())
+			{
+				REQUIRE(std::chrono::steady_clock::now() < deadline);
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				manager->Update();
+				request.Update();
+				gpu.GetDevice().EndFrame();
+				mostResident = std::max(mostResident, manager->GetStats().Resident.GpuTextures);
+			}
+			REQUIRE(request.GetState() == SceneLoadState::Ready);
+			const Ref<Scene> scene = request.TakeScene();
+			REQUIRE(scene);
+			CHECK(scene->GetEntityCount() == c_LevelObjects);
+			return mostResident;
+		};
+
+		// Room for two and a half of the level's six textures (each takes at most its stored size on the GPU): the load
+		// waits for the scene and its mesh, and leaves the textures, and the materials that would prefetch them, to the
+		// scene, which requests what it draws. No frame takes the pool past its budget.
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.GpuTextures = manager->GetStats().Resident.GpuTextures + texture->StoredSize * 5 / 2;
+		manager->SetResidencyBudgets(budgets);
+		{
+			SceneLoadRequest request = SceneLoader::LoadAsync(UUID(c_LevelScene));
+			CHECK(request.GetAssetCount() == 2);
+			CHECK(request.GetSkippedAssetCount() == 2 * c_LevelObjects);
+			CHECK(load(request) <= budgets.GpuTextures);
+			for (uint64_t index = 0; index < c_LevelObjects; index++)
+				CHECK(manager->GetAssetState(UUID(c_FirstLevelTexture + index)) == AssetState::Unloaded);
+		}
+
+		// Room for all six: the load waits for every one of them.
+		budgets.GpuTextures = manager->GetStats().Resident.GpuTextures + texture->StoredSize * c_LevelObjects;
+		manager->SetResidencyBudgets(budgets);
+		{
+			SceneLoadRequest request = SceneLoader::LoadAsync(UUID(c_LevelScene));
+			CHECK(request.GetAssetCount() == 2 + 2 * c_LevelObjects);
+			CHECK(request.GetSkippedAssetCount() == 0);
+			CHECK(load(request) <= budgets.GpuTextures);
+			for (uint64_t index = 0; index < c_LevelObjects; index++)
+				CHECK(manager->GetAssetState(UUID(c_FirstLevelTexture + index)) == AssetState::Ready);
+		}
+		manager->WaitForPendingLoads();
+		AssetManager::SetActive(nullptr);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

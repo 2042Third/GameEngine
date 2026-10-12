@@ -6,6 +6,9 @@
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <span>
+#include <unordered_set>
+#include <utility>
 
 namespace Strata
 {
@@ -171,10 +174,11 @@ namespace Strata
 		return evicted; // The evicted objects are destroyed here, after the lock
 	}
 
-	void AssetManagerBase::ScheduleTrim(uint32_t delayFrames, uint32_t unusedFrames)
+	void AssetManagerBase::ScheduleTrim(uint32_t delayFrames, uint32_t unusedFrames, std::span<const AssetHandle> keep)
 	{
+		std::unordered_set<AssetHandle> kept(keep.begin(), keep.end());
 		std::scoped_lock<std::mutex> lock(m_Mutex);
-		m_ScheduledTrim = ScheduledTrim { m_FrameIndex + delayFrames, unusedFrames };
+		m_ScheduledTrim = ScheduledTrim { m_FrameIndex + delayFrames, unusedFrames, std::move(kept) };
 	}
 
 	std::vector<AssetResidencyInfo> AssetManagerBase::GetResidencyInfo() const
@@ -337,7 +341,7 @@ namespace Strata
 		m_Evictions++;
 	}
 
-	uint32_t AssetManagerBase::EvictUnusedLocked(uint32_t unusedFrames, std::vector<Ref<Asset>>& released)
+	uint32_t AssetManagerBase::EvictUnusedLocked(uint32_t unusedFrames, std::vector<Ref<Asset>>& released, const std::unordered_set<AssetHandle>* keep)
 	{
 		// Every evictable resident asset that holds memory is in the order of each pool it uses.
 		uint32_t evicted = 0;
@@ -350,7 +354,7 @@ namespace Strata
 				m_EvictionChecks++;
 				if (WasRequestedWithinLocked(entry, unusedFrames))
 					break; // Every later entry was requested even more recently
-				if (!CanEvictLocked(entry))
+				if (!CanEvictLocked(entry) || (keep && keep->contains(entry.Metadata.Handle)))
 					continue;
 				EvictLocked(entry, released);
 				evicted++;

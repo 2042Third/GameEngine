@@ -25,6 +25,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -368,12 +369,15 @@ namespace Strata
 		bool SwitchRuntimeScene(AssetHandle scene, std::string* outError);
 		// Advances the play-mode scene switch and swaps the loaded scene in once it is ready (Update).
 		void UpdateRuntimeSceneLoad();
-		// Replaces the running scene with `next`, which continues the way play mode was going (paused, with its steps).
-		void ReplaceRuntimeScene(Ref<Scene> next, AssetHandle asset);
+		// Replaces the running scene with `next`, which continues the way play mode was going (paused, with its steps); what
+		// the previous scene used goes a few frames later, unless `next` requested it by then or its load brought it in
+		// (`loaded`).
+		void ReplaceRuntimeScene(Ref<Scene> next, AssetHandle asset, std::span<const AssetHandle> loaded);
 		// Advances the scene being opened and makes it the edited scene once it is ready (Update).
 		void UpdateSceneLoad();
-		// Makes a scene that was opened the edited one: the editor camera, the trim of what the previous scene used.
-		void FinishOpenScene(Ref<Scene> scene, AssetHandle handle);
+		// Makes a scene that was opened the edited one: the editor camera, the trim of what the previous scene used (sparing
+		// what the load brought in, `loaded`).
+		void FinishOpenScene(Ref<Scene> scene, AssetHandle handle, std::span<const AssetHandle> loaded);
 		void ResetScene(Ref<Scene> scene, AssetHandle handle);
 		// Gives a template's new scene its start scene file and the template's editor view (CreateProject).
 		bool SaveTemplateStartScene(std::string_view templateId, std::string* outError);

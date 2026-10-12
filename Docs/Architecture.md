@@ -558,13 +558,22 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   also run in slices (`ContinueInstantiation` with a limit), each slice's entities complete when it returns, and keep the
   prototype's own IDs (`InstantiationOptions::KeepIDs`; an ID the scene has already fails before anything is created).
 - **Scene loads never stop the frame** (`Scene/SceneLoader.h`). `SceneLoader::LoadAsync(scene, options)` returns a
-  `SceneLoadRequest`: the scene asset and everything it uses (its dependency closure,
-  `AssetManagerBase::RequestLoadWithDependencies`) load in the background, pinned at the load's priority so that none of
-  it is evicted meanwhile; its owner calls `Update` once per frame. States: `LoadingScene` (the document is read and the
+  `SceneLoadRequest`: the scene asset and what it uses load in the background, pinned at the load's priority so that none
+  of it is evicted meanwhile (`AssetManagerBase::RequestLoadGroup`); its owner calls `Update` once per frame. What it uses
+  is its dependency closure without the other scenes it names (`AssetClosureScope::Load`: a script field holding the next
+  level, or a sub-scene streamed in later, would otherwise load whole levels with it), as far as the residency budgets have
+  room: a pool's members load with the scene when all of them fit in the room the pool has beside what is resident when
+  the load starts, their memory estimated from their stored sizes in their type's pool (textures in GPU textures, meshes in
+  GPU buffers and system memory, the rest in system memory; members already loaded always count). A pool they do not all
+  fit is left to the scene, which requests what it draws once it runs, and so are members that depend directly on one of
+  its members (requesting them would prefetch it): the load cannot know which part the scene draws first, and any other
+  part would fill the room it needs, to be evicted again (`GetSkippedAssetCount`). A level larger than a budget never
+  pushes the pool past it. States: `LoadingScene` (the document is read and the
   scene prepared on the loading worker, its world transforms included), `LoadingDependencies` (the prepared scene is
-  taken and the spent asset unloaded; the closure goes on loading), `Ready` (the share of the closure's stored bytes that
-  `SceneLoadOptions::RequiredProgress` asks for is in: all of it by default; a dependency that fails counts as finished,
-  the scene shows a fallback for it), `Failed` (the scene asset could not be loaded) and `Cancelled`. `GetProgress` is the
+  taken and the spent asset unloaded; the rest goes on loading), `Ready` (the share of the stored bytes it waits for that
+  `SceneLoadOptions::RequiredProgress` asks for is in: all of it by default; a dependency that fails, or is deleted
+  meanwhile, counts as finished, the scene shows a fallback for it), `Failed` (the scene asset could not be loaded, or was
+  deleted before it was read) and `Cancelled`. `GetProgress` is the
   group's share of stored bytes (it never decreases); while the document is read, the read's own progress counts for the
   document's share (`Scene/SceneReadProgress.h`: the scene asset's loader, `RegisterSceneModule`, registers a
   `SceneReadProgress::Tracker` per read, and
@@ -1025,9 +1034,11 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   generation and a published content change (caches revalidate; physics keeps the colliders it built and audio keeps
   playing clips), and it loads again on its next request. `TrimUnused(frames)` evicts every evictable asset not
   requested in that many frames, whatever the budgets (assets holding no memory stay: evicting them would free nothing);
-  `ScheduleTrim` runs it a few updates later. `GameRuntime` and the editor (`EditorContext::BeginOpenScene` and its scene
-  switches in play mode, `EditorContext::SwitchRuntimeScene`) schedule `TrimUnused(3)` three frames after a loaded scene
-  replaced the previous one, so what the new scene draws or requests by then stays. `AssetManagerStats::EvictionChecks` counts the assets
+  `ScheduleTrim` runs it a few updates later, sparing the assets it is given. `GameRuntime` and the editor
+  (`EditorContext::BeginOpenScene` and its scene switches in play mode, `EditorContext::SwitchRuntimeScene`) schedule
+  `TrimUnused(3)` three frames after a loaded scene replaced the previous one, sparing what the scene's load brought in
+  (`SceneLoadRequest::GetAssets`), so what goes is what only the previous scene used: the new scene's assets stay whether
+  it drew or requested them by then or not (they were read for it, and budgets evict them when room is needed). `AssetManagerStats::EvictionChecks` counts the assets
   eviction looked at.
 - **Streaming queue** (`AssetStreamingQueue`). A request marks the asset Loading and queues it keyed by priority, then
   score (higher first; e.g. how large on screen it is needed), then request order; repeating it raises a queued request,
@@ -1112,10 +1123,14 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   textures no prefetch is loading when they are finalized (all of them, from managers that know no dependencies:
   version 1 packs), as they always did; a material that arrives only prefetched leaves its textures to whatever draws
   with it (requests make room by evicting, which a prefetch must never cause).
-- **Group loads** (`RequestLoadWithDependencies`, `AssetGroupRequest`). A loading screen pins an asset's dependency closure
-  (`GetDependencyClosure`, breadth first) at a priority: `Progress` (the share of the members' stored bytes that finished,
-  never decreasing), `IsComplete`, `HasFailed` and `Cancel` (releases the pins and abandons the loads that have not
-  finished: queued reads never start). `IsLoadedWithDependencies` tells whether a closure is Ready, and
+- **Group loads** (`RequestLoadWithDependencies`, `RequestLoadGroup`, `AssetGroupRequest`). A loading screen pins what
+  using an asset needs (`GetDependencyClosure` with `AssetClosureScope::Load`, breadth first: the closure without other
+  scenes it names, which load as levels of their own; `AssetClosureScope::All`, everything referenced, is what export
+  plans ship), or a group the caller chose (`RequestLoadGroup`, e.g. the part of a scene's closure that fits in the
+  budgets), at a priority: `Progress` (the share of the members' stored bytes that finished, never decreasing; a member
+  that is unregistered meanwhile counts as failed), `IsComplete`, `HasFailed` and `Cancel` (releases the pins and abandons
+  the loads that have not finished: queued reads never start). `IsLoadedWithDependencies` tells whether such a closure is
+  Ready, and
   `ReadStoredRange` reads part of an asset's stored form without loading it (packs decode only the blocks it covers).
 - **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
@@ -1150,7 +1165,8 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   from the world's overview camera with `--perf-log` and the evicting sweep's texture budget, again confirmed by up to two
   more runs: every log must have a row per frame, and `Budgets.json` judges the slowest frame's `Assets.Finalize` stage.
   Then the game runs with its own budgets (nothing evicted) from the overview camera, which shows about two thirds of the
-  textures (`RuntimePeakPrivateMemory`, the peak private memory its log ends with), and last texture cooking's acceptance
+  textures while the world's load brought in all of them, as they fit its budgets (`RuntimePeakPrivateMemory`, the peak
+  private memory its log ends with), and last texture cooking's acceptance
   criterion itself, "the exported stress game at 1920x1080 over 300 frames, with all textures resident, peaks at 650 MB
   private or less" (`RuntimePeakPrivateMemoryAllResident`, budget 650 MB): 300 frames of the game started in the stress
   project's `TopDown` scene, the world seen from above (`WriteStressTopDownScene`), with its own budgets; every texture

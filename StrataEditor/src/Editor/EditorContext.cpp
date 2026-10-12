@@ -436,7 +436,7 @@ namespace Strata
 		if (request.GetState() == SceneLoadState::Ready)
 		{
 			// The scene is in place before the request (and its pins) goes, so what it uses is requested from now on.
-			FinishOpenScene(request.TakeScene(), handle);
+			FinishOpenScene(request.TakeScene(), handle, request.GetAssets());
 		}
 		else
 		{
@@ -448,11 +448,12 @@ namespace Strata
 		m_SceneLoad.reset();
 	}
 
-	void EditorContext::FinishOpenScene(Ref<Scene> scene, AssetHandle handle)
+	void EditorContext::FinishOpenScene(Ref<Scene> scene, AssetHandle handle, std::span<const AssetHandle> loaded)
 	{
 		ResetScene(std::move(scene), handle);
-		// What the previous scene used and the viewport does not request for this one in its first frames is released then.
-		m_AssetManager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames);
+		// What the previous scene used, this one's load did not bring in and the viewport does not request for this one in its
+		// first frames is released then.
+		m_AssetManager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames, loaded);
 		if (!m_Viewport.RestoreSceneCamera(handle))
 		{
 			// Shown for the first time: frame what it renders. Meshes that are still loading stand in as placeholder boxes,
@@ -655,7 +656,7 @@ namespace Strata
 				m_RuntimeSceneLoad.reset();
 				m_RuntimeScene->SetSceneLoadProgress(std::nullopt);
 			}
-			ReplaceRuntimeScene(Scene::Copy(m_EditScene), UUID::Null());
+			ReplaceRuntimeScene(Scene::Copy(m_EditScene), UUID::Null(), {});
 			return true;
 		}
 		if (!m_AssetManager || m_AssetManager->GetAssetType(target) != AssetType::Scene)
@@ -682,14 +683,14 @@ namespace Strata
 		if (!request.IsFinished())
 			return;
 		if (request.GetState() == SceneLoadState::Ready)
-			ReplaceRuntimeScene(request.TakeScene(), m_RuntimeSceneLoad->Scene);
+			ReplaceRuntimeScene(request.TakeScene(), m_RuntimeSceneLoad->Scene, request.GetAssets());
 		else
 			ST_ERROR("The game cannot switch scenes: {}", request.GetError());
 		m_RuntimeScene->SetSceneLoadProgress(std::nullopt);
 		m_RuntimeSceneLoad.reset();
 	}
 
-	void EditorContext::ReplaceRuntimeScene(Ref<Scene> next, AssetHandle asset)
+	void EditorContext::ReplaceRuntimeScene(Ref<Scene> next, AssetHandle asset, std::span<const AssetHandle> loaded)
 	{
 		// The new scene continues the way play mode was going: paused (with the steps still to run) or running.
 		const SceneRuntimeMode mode = m_RuntimeScene->GetRuntimeMode();
@@ -707,10 +708,10 @@ namespace Strata
 		}
 		PruneSelection(); // The selection named entities of the previous scene
 		UpdateInputSuspension();
-		// Like the exported game (GameRuntime): what the previous scene used and this one does not request in its first frames
-		// is released then, so playtests show the game's memory behavior.
+		// Like the exported game (GameRuntime): what the previous scene used, this one's load did not bring in and this one does
+		// not request in its first frames is released then, so playtests show the game's memory behavior.
 		if (m_AssetManager)
-			m_AssetManager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames);
+			m_AssetManager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames, loaded);
 	}
 
 	void EditorContext::SetGameInputActive(bool active)

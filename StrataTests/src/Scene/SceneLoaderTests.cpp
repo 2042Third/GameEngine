@@ -12,6 +12,7 @@
 #include "Strata/Scene/SceneSerializer.h"
 #include "TestHelpers.h"
 
+#include <algorithm>
 #include <chrono>
 #include <string>
 #include <thread>
@@ -301,5 +302,149 @@ TEST_SUITE("Scene.Loader")
 		for (size_t index = 1; index < progress.size(); index++)
 			CHECK(progress[index] >= progress[index - 1]);
 		CHECK(progress.back() == 1.0f);
+	}
+
+	TEST_CASE("A scene load leaves the other scenes the scene names unloaded")
+	{
+		SceneLoaderFixture fixture;
+		FakeAssetManager& manager = *fixture.Manager;
+		// The next level, which the scene names (a script field holding it), with an asset only it uses.
+		const AssetHandle next = manager.AddStored(0x300, AssetType::Scene, MakeSceneDocument(2, "Next"), "Scenes/Next.stscene");
+		const AssetHandle nextOnly = manager.Add(0x301, MakeUsage(100), 100);
+		manager.SetDependencies(next, { nextOnly, fixture.Dependencies[0] });
+		std::vector<AssetHandle> references = fixture.Dependencies;
+		references.push_back(next);
+		manager.SetDependencies(fixture.SceneHandle, references);
+
+		// Everything the scene references, transitively, is what a game must ship; what using it needs stops at other scenes.
+		CHECK(manager.GetDependencyClosure(fixture.SceneHandle).size() == 13);
+		const std::vector<AssetHandle> used = manager.GetDependencyClosure(fixture.SceneHandle, AssetClosureScope::Load);
+		CHECK(used.size() == 11);
+		CHECK(std::find(used.begin(), used.end(), next) == used.end());
+		CHECK(std::find(used.begin(), used.end(), nextOnly) == used.end());
+		// The other scene's own closure starts with it.
+		CHECK(manager.GetDependencyClosure(next, AssetClosureScope::Load).size() == 3);
+
+		const uint64_t reads = SceneSerializer::GetDeserializeCount();
+		SceneLoadRequest request = SceneLoader::LoadAsync(fixture.SceneHandle);
+		CHECK(request.GetAssetCount() == 11);
+		CHECK(request.GetSkippedAssetCount() == 0);
+		CHECK(request.GetTotalBytes() == manager.GetMetadata(fixture.SceneHandle)->StoredSize + 1000);
+		CHECK(manager.GetPinCount(next) == 0);
+		fixture.Finish(request);
+		CHECK(request.GetState() == SceneLoadState::Ready);
+		CHECK(request.TakeScene());
+		CHECK(manager.GetAssetState(next) == AssetState::Unloaded);
+		CHECK(manager.GetAssetState(nextOnly) == AssetState::Unloaded);
+		CHECK(manager.GetReadCount(next) == 0);
+		CHECK(manager.GetReadCount(nextOnly) == 0);
+		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+	}
+
+	TEST_CASE("A scene load waits for a pool's share of what it uses only when all of it fits in the budget")
+	{
+		SceneLoaderFixture fixture;
+		FakeAssetManager& manager = *fixture.Manager;
+
+		// System memory has room for four and a half of the ten 100-byte assets the scene uses, one of which is loaded
+		// already: the nine others are left to the scene (any four of them could be ones it does not draw first).
+		REQUIRE(manager.LoadAssetSync(fixture.Dependencies[9]));
+		AssetResidencyBudgets budgets = manager.GetResidencyBudgets();
+		const uint64_t cpuBudget = manager.GetStats().Resident.Cpu + 450;
+		budgets.Cpu = cpuBudget;
+		manager.SetResidencyBudgets(budgets);
+		{
+			// The scene and the loaded asset (it holds its memory already).
+			SceneLoadRequest request = SceneLoader::LoadAsync(fixture.SceneHandle);
+			CHECK(request.GetAssetCount() == 2);
+			CHECK(request.GetSkippedAssetCount() == 9);
+			CHECK(request.GetTotalBytes() == manager.GetMetadata(fixture.SceneHandle)->StoredSize + 100);
+			for (size_t index = 0; index < fixture.Dependencies.size(); index++)
+			{
+				CAPTURE(index);
+				CHECK(manager.GetPinCount(fixture.Dependencies[index]) == (index == 9 ? 1u : 0u));
+			}
+			fixture.Finish(request);
+			CHECK(request.GetState() == SceneLoadState::Ready);
+			CHECK(request.GetProgress() == 1.0f);
+			REQUIRE(request.TakeScene());
+			// What was left out was never read; the pool stays within its budget.
+			for (size_t index = 0; index < 9; index++)
+			{
+				CAPTURE(index);
+				CHECK(manager.GetReadCount(fixture.Dependencies[index]) == 0);
+			}
+			CHECK(manager.GetStats().Resident.Cpu <= cpuBudget);
+		}
+
+		// The GPU texture pool has room for one of the scene's two textures: both are left to the scene, and so is an asset
+		// that references one of them (requesting it would prefetch the texture). System memory is unlimited again: what
+		// lives there waits.
+		const AssetHandle firstTexture = manager.Add(0x400, MakeUsage(0, 1000), 1000, AssetType::Texture);
+		const AssetHandle secondTexture = manager.Add(0x401, MakeUsage(0, 1000), 1000, AssetType::Texture);
+		const AssetHandle textured = manager.Add(0x402, MakeUsage(100), 100);
+		manager.SetDependencies(textured, { firstTexture });
+		std::vector<AssetHandle> references = fixture.Dependencies;
+		references.insert(references.end(), { firstTexture, secondTexture, textured });
+		manager.SetDependencies(fixture.SceneHandle, references);
+		budgets.Cpu = AssetResidencyBudgets::c_Unlimited;
+		budgets.GpuTextures = manager.GetStats().Resident.GpuTextures + 1500;
+		manager.SetResidencyBudgets(budgets);
+		SceneLoadRequest request = SceneLoader::LoadAsync(fixture.SceneHandle);
+		CHECK(request.GetAssetCount() == 11);
+		CHECK(request.GetSkippedAssetCount() == 3);
+		CHECK(request.GetTotalBytes() == manager.GetMetadata(fixture.SceneHandle)->StoredSize + 1000);
+		for (const AssetHandle dependency : fixture.Dependencies)
+			CHECK(manager.GetPinCount(dependency) == 1);
+		for (const AssetHandle leftOut : { firstTexture, secondTexture, textured })
+			CHECK(manager.GetPinCount(leftOut) == 0);
+		fixture.Finish(request);
+		CHECK(request.GetState() == SceneLoadState::Ready);
+		REQUIRE(request.TakeScene());
+		for (const AssetHandle leftOut : { firstTexture, secondTexture, textured })
+			CHECK(manager.GetReadCount(leftOut) == 0);
+		CHECK(StateCountsMatch(manager));
+	}
+
+	TEST_CASE("A scene load fails when its scene goes away, and goes on when an asset it uses does")
+	{
+		SceneLoaderFixture fixture;
+		FakeAssetManager& manager = *fixture.Manager;
+
+		// A dependency deleted while it loads counts as finished (failed): the scene shows a fallback for it.
+		manager.CloseGate();
+		SceneLoadRequest request = SceneLoader::LoadAsync(fixture.SceneHandle);
+		manager.AllowReads(1);
+		REQUIRE(WaitUntil([&]()
+		{
+			manager.Update();
+			request.Update();
+			return request.GetState() != SceneLoadState::LoadingScene;
+		}, std::chrono::milliseconds(10000)));
+		REQUIRE(request.GetState() == SceneLoadState::LoadingDependencies);
+		manager.Remove(fixture.Dependencies[3]);
+		manager.OpenGate();
+		fixture.Finish(request);
+		CHECK(request.GetState() == SceneLoadState::Ready);
+		CHECK(request.GetProgress() == 1.0f);
+		CHECK(request.TakeScene());
+
+		// The scene asset deleted while it is read: the load fails, naming it, instead of waiting for ever.
+		manager.CloseGate();
+		SceneLoadRequest removed = SceneLoader::LoadAsync(fixture.SceneHandle);
+		REQUIRE(removed.GetState() == SceneLoadState::LoadingScene);
+		manager.Remove(fixture.SceneHandle);
+		for (int frame = 0; frame < 100 && !removed.IsFinished(); frame++)
+		{
+			manager.Update();
+			removed.Update();
+		}
+		CHECK(removed.GetState() == SceneLoadState::Failed);
+		CHECK(removed.GetError().find(fixture.SceneHandle.ToString()) != std::string::npos);
+		CHECK(removed.GetError().find("no longer an asset") != std::string::npos);
+		CHECK_FALSE(removed.TakeScene());
+		manager.OpenGate();
+		REQUIRE(manager.WaitForPendingLoads());
+		CHECK(StateCountsMatch(manager));
 	}
 }

@@ -191,11 +191,13 @@ second to load is dropped. Clip, volume, pitch, looping and spatial settings are
 
 `Game::Quit(exitCode)` ends the game (an exported game exits with the code, the editor stops play mode).
 `Game::LoadScene(handleOrPath)` replaces the running scene; `Game::ReloadScene()` restarts it (e.g. after a game over).
-The next scene and everything it uses load in the background while the running scene goes on (its scripts keep
-running); once all of it is in, it replaces the running scene between
+The next scene and what it uses load in the background while the running scene goes on (its scripts keep
+running); once it is in (with what it uses where that fits in the memory budgets, else the new scene streams that in as
+it draws it), it replaces the running scene between
 frames: every entity of the old scene goes away (scripts get `OnDestroy`), so pass state to the next scene through fields
 set in that scene, or rebuild it there. Meanwhile `Game::GetSceneLoadProgress()` returns how far the next scene got, in
-[0, 1] (a loading bar on a Text entity), and a negative value while no switch is under way.
+[0, 1] (a loading bar on a Text entity), and a negative value while no switch is under way. A scene named in a field
+(the next level) is not loaded with the scene that names it.
 In the editor `ReloadScene` restarts what play mode runs, including unsaved edits.
 
 ### Streaming: sub-scenes, loading progress, many instances
@@ -233,8 +235,9 @@ void OnUpdate(float) override
   hot reload starts members that are not fields over, while the sub-scene stays loaded: keep its ID in an `int32_t` field
   as well (IDs count up from 1 per scene) and get it back in `OnReload` with
   `m_Room = SubScene(static_cast<uint64_t>(m_RoomID));`.
-- `Assets::GetLoadProgress(asset)` loads an asset's whole closure (a prefab's meshes, materials and textures) and keeps it
-  loaded like `Assets::RequestLoad` until `Assets::Release(asset)`; at 1, instances draw complete in their first frame.
+- `Assets::GetLoadProgress(asset)` loads what using an asset needs (a prefab's meshes, materials and textures; not other
+  scenes it names) and keeps it loaded like `Assets::RequestLoad` until `Assets::Release(asset)`; at 1, instances draw
+  complete in their first frame.
 - `Scene::InstantiateMany(prefabOrModel, transforms, parent)` makes all instances in one call (much cheaper than a loop
   of `Instantiate`), or none when the asset is not loaded yet or a transform has a zero scale.
 

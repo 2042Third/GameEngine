@@ -18,6 +18,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -177,6 +178,25 @@ TEST_SUITE("Editor.SceneLoad")
 
 		// What cannot be opened fails before anything starts.
 		CHECK(project.Commands.Execute(context, "scene.open", { { "scene", UUIDToJson(project.Two) } }).ErrorKind != EditorCommandError::None);
+	}
+
+	TEST_CASE("A scene deleted while it is being opened fails its scene.open, and the edited scene is editable again")
+	{
+		SceneLoadProject project(CreateTemporaryDirectory("EditorSceneOpenDeleted") / "Loads");
+		EditorContext& context = project.Context;
+		const Ref<Scene> edited = context.GetEditScene();
+
+		EditorCommandResult opening = project.Commands.Execute(context, "scene.open", { { "scene", UUIDToJson(project.Two) } });
+		REQUIRE(opening.IsPending());
+		project.Run("asset.delete", { { "asset", UUIDToJson(project.Two) } });
+		opening = CompleteCommand(context, std::move(opening), std::chrono::seconds(30));
+		CHECK_FALSE(opening.Success);
+		CHECK(opening.Error.find(project.Two.ToString()) != std::string::npos);
+		CHECK_FALSE(context.IsSceneLoading());
+		CHECK(context.GetEditScene() == edited);
+		CHECK(context.GetSceneLoadStatus().State == SceneLoadState::Failed);
+		project.Run("entity.create", { { "name", "Added" } });
+		CHECK(edited->FindEntityByName("Added").IsValid());
 	}
 
 	TEST_CASE("The viewport shows a scene load's progress over the scene still shown, and the assets pill counts it")

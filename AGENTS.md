@@ -192,7 +192,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   stress game in `StrataRuntime` (`STRATA_TEST_RUNTIME_PATH`, else next to the test executable) with `--perf-log` and
   `--resolution 1920x1080` (1920x1080 pixels whatever the display's scale; every run checks its swapchain), one run per
   attempt: every log has a row per frame, and the budget judges the slowest frame's `Assets.Finalize` stage; then the game
-  with its own budgets from the world's overview camera (about two thirds of the textures resident), whose last
+  with its own budgets from the world's overview camera (which shows about two thirds of the textures; the world's load
+  brings in all of them, which fit its budgets), whose last
   `PeakPrivateMB` is `RuntimePeakPrivateMemory`; then texture cooking's acceptance criterion itself,
   `RuntimePeakPrivateMemoryAllResident` (budget 650 MB): the game started in the stress project's `TopDown` scene
   (`WriteStressTopDownScene`: the world with its camera looking down on all of it), 300 frames with its own budgets,
@@ -476,7 +477,10 @@ The threading model, frame loop and pipelines these rules protect are described 
   models prefetch their direct dependencies (only into the budgets' headroom beside what is on its way and a window of
   loads in flight, never evicting, not chaining: a finalizer must not request what an asset that arrives only prefetched
   references, `AssetFinalizeContext::Prefetched`, and its dependencies are prefetched once something requests it);
-  loading screens pin a whole closure with `RequestLoadWithDependencies` (`AssetGroupRequest`: progress by bytes, cancel).
+  loading screens pin what using an asset needs with `RequestLoadWithDependencies` (`AssetGroupRequest`: progress by
+  bytes, cancel; its closure stops at other scenes, `AssetClosureScope::Load`: a level that names the next one does not
+  load it), or a group they chose with `RequestLoadGroup` (scene loads take a pool's share of the closure only when all
+  of it fits in the budget's room, and leave it to what the scene draws otherwise, `SceneLoader`).
 - **Textures** cook to GPU block-compressed formats by default ([Docs/Architecture.md](Docs/Architecture.md), "Texture
   cooking"): `TextureImporter::ChooseFormat` picks BC7 (color, sRGB, and linear data of several channels; at
   `"Quality": "Fast"` opaque color is BC1), BC5 (normal maps), BC4 (one-channel data, marked `Grayscale`: sampled as
@@ -499,7 +503,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   while the asset is evicted (the render scene's mesh layouts) checks, on the asset's content changes, whether the
   source's revision is still the one its data came from (`AssetManagerBase::GetSourceRevisions`): evictions keep it,
   `ReloadAsset` (a reimport) changes it and announces that even when nothing is loaded. Never block on a load; scene
-  owners trim what the previous scene used after a switch (`AssetManagerBase::ScheduleTrim`).
+  owners trim what only the previous scene used after a switch (`AssetManagerBase::ScheduleTrim`, sparing what the new
+  scene's load brought in, `SceneLoadRequest::GetAssets`).
 - Adding an asset type: an `Asset` subclass with a cooked/serialized form, a loader registered by the
   registration function of the module that owns the type (e.g. `RegisterRendererModule`; it takes the stored bytes over
   with `AssetLoadData::TakeBytes` when the asset keeps them, instead of copying them), an importer if it comes from
@@ -543,7 +548,8 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
 - Scene streaming (host functions `LoadSceneAdditive`, `UnloadSubScene`, `IsSubSceneLoaded`, `GetSceneLoadProgress`,
   `GetAssetLoadProgress` and `InstantiateMany`, appended to ABI version 1 in that order): `Scene::LoadAdditive` loads a
   scene asset into the playing scene (`Scene::LoadSubScene`) and returns a `SubScene` (`IsLoaded`, `Unload`);
-  `Assets::GetLoadProgress` requests an asset's dependency closure and returns the share of its bytes in
+  `Assets::GetLoadProgress` requests what using an asset needs (its dependency closure without other scenes it names)
+  and returns the share of its bytes in
   (`ScriptSystem::GetAssetLoadProgress`: pinned like `RequestLoad` until `Assets::Release`; at 1 a prefab's instance draws
   complete in its first frame); `Scene::InstantiateMany` makes one instance of a prefab or model per transform in one call
   (`EntityTemplate::InstantiateMany`, 16 floats per transform across the ABI).

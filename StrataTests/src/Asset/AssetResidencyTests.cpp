@@ -601,6 +601,32 @@ TEST_SUITE("Asset.Residency")
 		CHECK(manager->GetAssetState(shared) == AssetState::Ready);
 	}
 
+	TEST_CASE("A scheduled trim spares the assets it is given")
+	{
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>(); // No budget pressure: only the trim evicts
+		const AssetHandle previousScene = manager->Add(0x60010, MakeUsage(1 * c_KB));
+		const AssetHandle loadedForNext = manager->Add(0x60011, MakeUsage(1 * c_KB));
+		const AssetHandle unknown = UUID(0x60019);
+		LoadAll(*manager, { previousScene, loadedForNext });
+		manager->Update();
+
+		// The switch: the next scene's load brought one asset in, which the scene has not drawn yet in its first frames.
+		const std::vector<AssetHandle> loaded = { loadedForNext, unknown };
+		manager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames, loaded);
+		for (uint32_t frame = 0; frame < AssetResidency::c_SceneSwitchTrimFrames + 1; frame++)
+			manager->Update();
+		CHECK(manager->GetAssetState(previousScene) == AssetState::Unloaded);
+		CHECK(manager->GetAssetState(loadedForNext) == AssetState::Ready);
+		CHECK(manager->GetStats().Evictions == 1);
+
+		// Only that trim spares it: the next one, given nothing, takes what was not requested since.
+		manager->ScheduleTrim(0, AssetResidency::c_SceneSwitchTrimFrames);
+		manager->Update();
+		CHECK(manager->GetAssetState(loadedForNext) == AssetState::Unloaded);
+		CHECK(StateCountsMatch(*manager));
+	}
+
 	TEST_CASE("Residency is reported per asset and in the statistics")
 	{
 		ScopedFakeLoader loader;

@@ -50,10 +50,10 @@ namespace Strata
 			return host && asset && host->ReleaseAsset(Detail::GetContext(), asset.ID);
 		}
 
-		// How much of the asset and everything it uses (a prefab's meshes, materials and their textures) has loaded, in
-		// [0, 1]: at 1 an instance draws complete in its first frame. The first call starts loading all of it and keeps it
-		// loaded while the scene plays, like RequestLoad (Release ends that). Negative for unknown assets, and with engines that
-		// predate it.
+		// How much of the asset and everything it uses (a prefab's meshes, materials and their textures; other scenes it names
+		// are not loaded) has loaded, in [0, 1]: at 1 an instance draws complete in its first frame. The first call starts
+		// loading all of it and keeps it loaded while the scene plays, like RequestLoad (Release ends that). Negative for
+		// unknown assets, and with engines that predate it.
 		static float GetLoadProgress(AssetHandle asset)
 		{
 			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(GetAssetLoadProgress);

@@ -1,14 +1,122 @@
 #include "stpch.h"
 #include "Strata/Scene/SceneLoader.h"
 
+#include "Strata/Asset/AssetResidency.h"
+#include "Strata/Asset/AssetStreamingQueue.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneReadProgress.h"
 
 #include <algorithm>
+#include <array>
+#include <optional>
+#include <unordered_set>
+#include <vector>
 
 namespace Strata
 {
+
+	namespace
+	{
+
+		// What an asset of `type` whose stored form takes `storedSize` bytes will hold once loaded, before it ever was: about
+		// its stored size, in the pool its type lives in (cooked textures and meshes are uploaded as they are stored; meshes
+		// keep their geometry for physics too). Everything else is system memory.
+		AssetMemoryUsage EstimateMemoryUsage(AssetType type, uint64_t storedSize)
+		{
+			const uint64_t bytes = storedSize > 0 ? storedSize : AssetStreamingQueue::c_UnknownSizeBytes;
+			AssetMemoryUsage usage;
+			switch (type)
+			{
+				case AssetType::Texture:
+					usage.GpuTextures = bytes;
+					break;
+				case AssetType::Mesh:
+					usage.GpuBuffers = bytes;
+					usage.Cpu = bytes;
+					break;
+				default:
+					usage.Cpu = bytes;
+					break;
+			}
+			return usage;
+		}
+
+		// The members of a load of `scene` (see SceneLoadRequest), in the order of its closure, the scene asset first. A pool
+		// whose part of the closure does not all fit in the room its budget has beside what is resident is left to the
+		// scene, which requests what it draws once it runs: the load cannot know which part that is, and any other part would
+		// take the room from it. So is a member that depends directly on something left out, as requesting it would prefetch
+		// that into the same room (prefetches do not chain, so one level is enough). Members loaded already hold their memory
+		// and always count. The others are counted in outSkipped.
+		std::vector<AssetHandle> SelectLoadMembers(const AssetManagerBase& manager, AssetHandle scene, size_t& outSkipped)
+		{
+			struct Candidate
+			{
+				AssetHandle Handle;
+				AssetMemoryUsage Usage; // Estimated, for members not loaded yet
+				bool Loaded = false;
+			};
+
+			const std::vector<AssetHandle> closure = manager.GetDependencyClosure(scene, AssetClosureScope::Load);
+			std::vector<Candidate> candidates;
+			candidates.reserve(closure.size());
+			std::array<uint64_t, c_AssetMemoryPools.size()> needed = {};
+			for (const AssetHandle member : closure)
+			{
+				Candidate candidate { member, {}, member == scene || manager.GetAssetState(member) == AssetState::Ready };
+				if (!candidate.Loaded)
+				{
+					const std::optional<AssetMetadata> metadata = manager.GetMetadata(member);
+					if (!metadata)
+						continue; // Unregistered since the closure was read
+					candidate.Usage = EstimateMemoryUsage(metadata->Type, metadata->StoredSize);
+					for (size_t pool = 0; pool < c_AssetMemoryPools.size(); pool++)
+						needed[pool] += GetPoolBytes(candidate.Usage, c_AssetMemoryPools[pool]);
+				}
+				candidates.push_back(candidate);
+			}
+
+			const AssetManagerStats stats = manager.GetStats();
+			std::array<bool, c_AssetMemoryPools.size()> fits = {};
+			for (size_t pool = 0; pool < c_AssetMemoryPools.size(); pool++)
+			{
+				const uint64_t budget = stats.Budgets.GetPoolBudget(c_AssetMemoryPools[pool]);
+				const uint64_t resident = GetPoolBytes(stats.Resident, c_AssetMemoryPools[pool]);
+				fits[pool] = budget == AssetResidencyBudgets::c_Unlimited || needed[pool] <= budget - std::min(budget, resident);
+			}
+			std::unordered_set<AssetHandle> leftOut;
+			for (const Candidate& candidate : candidates)
+			{
+				for (size_t pool = 0; pool < c_AssetMemoryPools.size() && !candidate.Loaded; pool++)
+				{
+					if (!fits[pool] && GetPoolBytes(candidate.Usage, c_AssetMemoryPools[pool]) > 0)
+					{
+						leftOut.insert(candidate.Handle);
+						break;
+					}
+				}
+			}
+
+			std::vector<AssetHandle> members;
+			members.reserve(candidates.size());
+			outSkipped = 0;
+			for (const Candidate& candidate : candidates)
+			{
+				bool skip = leftOut.contains(candidate.Handle);
+				if (!skip && !candidate.Loaded && !leftOut.empty())
+				{
+					const std::vector<AssetHandle> dependencies = manager.GetDependencies(candidate.Handle);
+					skip = std::any_of(dependencies.begin(), dependencies.end(), [&leftOut](AssetHandle dependency) { return leftOut.contains(dependency); });
+				}
+				if (skip)
+					outSkipped++;
+				else
+					members.push_back(candidate.Handle);
+			}
+			return members;
+		}
+
+	}
 
 	const char* SceneLoadStateToString(SceneLoadState state)
 	{
@@ -44,8 +152,14 @@ namespace Strata
 		request.m_Manager = manager;
 		if (options.Reload)
 			manager->UnloadAsset(scene);
-		// The scene first (the root of the closure), then what it uses, breadth first; all of it pinned while the request lives.
-		request.m_Group = manager->RequestLoadWithDependencies(scene, options.Priority);
+		// The scene first (the root of the closure), then what it uses, breadth first, as far as the budgets have room; all of
+		// it pinned while the request lives.
+		request.m_Group = manager->RequestLoadGroup(SelectLoadMembers(*manager, scene, request.m_SkippedAssets), options.Priority);
+		if (request.m_SkippedAssets > 0)
+		{
+			ST_CORE_TRACE("Loading scene {}: {} of the assets it uses are left to the scene (the residency budgets have no room for them now)",
+				scene.ToString(), request.m_SkippedAssets);
+		}
 		uint64_t sceneWeight = 0;
 		uint64_t totalWeight = 0;
 		for (const AssetHandle member : request.m_Group.GetAssets())
@@ -115,6 +229,12 @@ namespace Strata
 					Fail(fmt::format("Loading scene {} failed: {}", m_Scene.ToString(), manager->GetAssetError(m_Scene)));
 					return;
 				case AssetState::Unloaded:
+					// Unregistered meanwhile (deleted, or its file removed): nothing will ever be read.
+					if (manager->GetAssetType(m_Scene) != AssetType::Scene)
+					{
+						Fail(fmt::format("Scene {} is no longer an asset: it was deleted or removed while it loaded", m_Scene.ToString()));
+						return;
+					}
 					// Unloaded meanwhile (another load took and released it, or an editor reloads it): read it again.
 					manager->RequestLoad(m_Scene, m_Options.Priority);
 					return;

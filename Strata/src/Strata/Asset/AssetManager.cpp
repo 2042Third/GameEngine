@@ -810,9 +810,9 @@ namespace Strata
 			std::scoped_lock<std::mutex> lock(m_Mutex);
 			if (m_ScheduledTrim && m_FrameIndex >= m_ScheduledTrim->Frame)
 			{
-				const uint32_t unusedFrames = m_ScheduledTrim->UnusedFrames;
+				const ScheduledTrim trim = std::move(*m_ScheduledTrim);
 				m_ScheduledTrim.reset();
-				EvictUnusedLocked(unusedFrames, released);
+				EvictUnusedLocked(trim.UnusedFrames, released, &trim.Keep);
 			}
 		}
 		released.clear(); // Destroyed outside the lock
@@ -1207,7 +1207,7 @@ namespace Strata
 		return it != m_Entries.end() ? it->second.Dependencies : std::vector<AssetHandle>();
 	}
 
-	std::vector<AssetHandle> AssetManagerBase::GetDependencyClosureLocked(AssetHandle handle) const
+	std::vector<AssetHandle> AssetManagerBase::GetDependencyClosureLocked(AssetHandle handle, AssetClosureScope scope) const
 	{
 		std::vector<AssetHandle> closure;
 		if (m_Entries.find(handle) == m_Entries.end())
@@ -1220,17 +1220,22 @@ namespace Strata
 			const AssetEntry& entry = m_Entries.at(closure[index]);
 			for (AssetHandle dependency : entry.Dependencies)
 			{
-				if (m_Entries.find(dependency) != m_Entries.end() && visited.insert(dependency).second)
+				auto dependencyIt = m_Entries.find(dependency);
+				if (dependencyIt == m_Entries.end())
+					continue;
+				if (scope == AssetClosureScope::Load && dependencyIt->second.Metadata.Type == AssetType::Scene)
+					continue;
+				if (visited.insert(dependency).second)
 					closure.push_back(dependency);
 			}
 		}
 		return closure;
 	}
 
-	std::vector<AssetHandle> AssetManagerBase::GetDependencyClosure(AssetHandle handle) const
+	std::vector<AssetHandle> AssetManagerBase::GetDependencyClosure(AssetHandle handle, AssetClosureScope scope) const
 	{
 		std::scoped_lock<std::mutex> lock(m_Mutex);
-		return GetDependencyClosureLocked(handle);
+		return GetDependencyClosureLocked(handle, scope);
 	}
 
 	std::optional<AABB> AssetManagerBase::GetBounds(AssetHandle handle) const
@@ -1243,7 +1248,7 @@ namespace Strata
 	bool AssetManagerBase::IsLoadedWithDependencies(AssetHandle handle) const
 	{
 		std::scoped_lock<std::mutex> lock(m_Mutex);
-		const std::vector<AssetHandle> closure = GetDependencyClosureLocked(handle);
+		const std::vector<AssetHandle> closure = GetDependencyClosureLocked(handle, AssetClosureScope::Load);
 		if (closure.empty())
 			return false;
 		return std::all_of(closure.begin(), closure.end(), [this](AssetHandle member) { return m_Entries.at(member).State == AssetState::Ready; });
@@ -1358,13 +1363,22 @@ namespace Strata
 
 	AssetGroupRequest AssetManagerBase::RequestLoadWithDependencies(AssetHandle handle, AssetPriority priority)
 	{
+		return RequestLoadGroup(GetDependencyClosure(handle, AssetClosureScope::Load), priority);
+	}
+
+	AssetGroupRequest AssetManagerBase::RequestLoadGroup(std::span<const AssetHandle> assets, AssetPriority priority)
+	{
 		AssetGroupRequest group;
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
-			group.m_Assets = GetDependencyClosureLocked(handle);
-			for (AssetHandle member : group.m_Assets)
+			std::unordered_set<AssetHandle> members;
+			for (AssetHandle member : assets)
 			{
-				const uint64_t weight = std::max<uint64_t>(m_Entries.at(member).Metadata.StoredSize, 1);
+				auto it = m_Entries.find(member);
+				if (it == m_Entries.end() || !members.insert(member).second)
+					continue;
+				const uint64_t weight = std::max<uint64_t>(it->second.Metadata.StoredSize, 1);
+				group.m_Assets.push_back(member);
 				group.m_Weights.push_back(weight);
 				group.m_TotalWeight += weight;
 			}
@@ -1454,12 +1468,15 @@ namespace Strata
 			if (m_Finished[index])
 				continue;
 			const AssetState state = manager->GetAssetState(m_Assets[index]);
-			if (state != AssetState::Ready && state != AssetState::Failed)
+			// A member that was unregistered meanwhile (deleted, or its source removed) never loads: it failed. Only an
+			// Unloaded state can mean that (unknown handles read as Unloaded).
+			const bool removed = state == AssetState::Unloaded && !manager->IsHandleValid(m_Assets[index]);
+			if (state != AssetState::Ready && state != AssetState::Failed && !removed)
 				continue;
 			m_Finished[index] = true;
 			m_FinishedWeight += m_Weights[index];
 			m_FinishedCount++;
-			m_Failed = m_Failed || state == AssetState::Failed;
+			m_Failed = m_Failed || state == AssetState::Failed || removed;
 		}
 	}
 
