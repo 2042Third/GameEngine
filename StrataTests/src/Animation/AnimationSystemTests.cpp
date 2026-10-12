@@ -492,6 +492,33 @@ TEST_SUITE("Animation.System")
 		CHECK(scene.System()->GetStats().Culled == 1);
 	}
 
+	TEST_CASE("WhenVisible animators that skin no mesh but place attachments animate every update")
+	{
+		// A rigid-part model: its parts follow joints, no skinned mesh could tell the animator that it is seen.
+		AnimationScene scene;
+		Entity rig = scene.CreateAnimator("Rig", c_WaveHandle);
+		rig.GetComponent<AnimatorComponent>().CullingMode = AnimatorCullingMode::WhenVisible;
+		Entity part = scene.SceneRef->CreateChildEntity(rig, "Part");
+		part.AddComponent<AttachToJointComponent>() = AttachToJointComponent { rig.GetUUID(), "Wrist" };
+		scene.Start();
+		scene.Update(0.25f);
+		const glm::vec3 quarter = part.GetComponent<TransformComponent>().Translation;
+		scene.Update(0.25f);
+		CHECK(scene.System()->GetStats().Evaluated == 1);
+		CHECK(scene.System()->GetStats().Culled == 0);
+		CHECK(glm::length(part.GetComponent<TransformComponent>().Translation - quarter) > 0.1f);
+
+		// Once a skinned mesh names it, the mesh's visibility decides again.
+		Entity body = scene.SceneRef->CreateChildEntity(rig, "Body");
+		body.AddComponent<SkinComponent>().Animator = rig.GetUUID();
+		scene.Update(0.25f);
+		CHECK(scene.System()->GetStats().Culled == 1);
+		body.RemoveComponent<SkinComponent>();
+		scene.Update(0.25f);
+		CHECK(scene.System()->GetStats().Evaluated == 1);
+		CheckSceneCaches(*scene.SceneRef);
+	}
+
 	TEST_CASE("Attachments follow their joint through the transform contract")
 	{
 		AnimationScene scene;

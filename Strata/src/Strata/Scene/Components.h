@@ -331,7 +331,7 @@ namespace Strata
 	{
 		AlwaysAnimate = 0, // Posed every frame
 		// Posed only while a renderer draws (or would draw, wherever its clips take it) a mesh it skins or that mesh's shadow
-		// in view; time, events and root motion go on.
+		// in view; time, events and root motion go on. An animator that skins no mesh but places attachments poses every frame.
 		WhenVisible
 	};
 

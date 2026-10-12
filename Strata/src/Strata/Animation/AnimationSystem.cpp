@@ -83,6 +83,9 @@ namespace Strata
 		m_Connections.emplace_back(registry.on_construct<AnimatorComponent>().connect<&AnimationSystem::OnAnimatorAdded>(*this));
 		m_Connections.emplace_back(registry.on_destroy<AnimatorComponent>().connect<&AnimationSystem::OnAnimatorRemoved>(*this));
 		m_Connections.emplace_back(registry.on_destroy<AttachToJointComponent>().connect<&AnimationSystem::OnAttachmentRemoved>(*this));
+		m_Connections.emplace_back(registry.on_construct<SkinComponent>().connect<&AnimationSystem::OnSkinChanged>(*this));
+		m_Connections.emplace_back(registry.on_update<SkinComponent>().connect<&AnimationSystem::OnSkinChanged>(*this));
+		m_Connections.emplace_back(registry.on_destroy<SkinComponent>().connect<&AnimationSystem::OnSkinRemoved>(*this));
 	}
 
 	AnimationSystem::~AnimationSystem()
@@ -99,6 +102,8 @@ namespace Strata
 		ST_PROFILE_FUNCTION();
 		m_Running = true;
 		entt::registry& registry = m_Scene.GetRegistry();
+		for (const auto [handle, skin] : registry.view<SkinComponent>().each())
+			CountSkinUser(handle, skin.Animator);
 		for (const auto [handle, component] : registry.view<AnimatorComponent>().each())
 			AddRecord(handle);
 		// By entity (the order a scene that was just loaded created them in), whatever order the registry keeps them in;
@@ -127,6 +132,9 @@ namespace Strata
 		m_FreeSets.clear();
 		m_SetIndices.clear();
 		m_Attachments.clear();
+		m_SkinAnimators.clear();
+		m_SkinUsers.clear();
+		m_PendingSkins.clear();
 		m_PendingEvents.clear();
 		m_PosesVersion++;
 	}
@@ -164,6 +172,53 @@ namespace Strata
 		m_Attachments.erase(handle);
 	}
 
+	void AnimationSystem::OnSkinChanged(entt::registry&, entt::entity handle)
+	{
+		// Read at the next update, so a value written right after AddComponent (without a signal) is seen.
+		if (m_Running)
+			m_PendingSkins.push_back(handle);
+	}
+
+	void AnimationSystem::OnSkinRemoved(entt::registry&, entt::entity handle)
+	{
+		if (m_Running)
+			CountSkinUser(handle, UUID::Null());
+	}
+
+	void AnimationSystem::ReadPendingSkins()
+	{
+		const entt::registry& registry = m_Scene.GetRegistry();
+		for (const entt::entity handle : m_PendingSkins)
+		{
+			const SkinComponent* skin = registry.valid(handle) ? registry.try_get<SkinComponent>(handle) : nullptr;
+			CountSkinUser(handle, skin ? skin->Animator : UUID::Null());
+		}
+		m_PendingSkins.clear();
+	}
+
+	void AnimationSystem::CountSkinUser(entt::entity skin, UUID animator)
+	{
+		// The animator it counted for loses it, the one it names now (if any) gains it.
+		if (auto it = m_SkinAnimators.find(skin); it != m_SkinAnimators.end())
+		{
+			if (it->second == animator)
+				return;
+			auto users = m_SkinUsers.find(it->second);
+			if (users != m_SkinUsers.end() && --users->second == 0)
+				m_SkinUsers.erase(users);
+			m_SkinAnimators.erase(it);
+		}
+		if (!animator.IsValid())
+			return;
+		m_SkinAnimators[skin] = animator;
+		m_SkinUsers[animator]++;
+	}
+
+	bool AnimationSystem::HasSkinUsers(UUID animator) const
+	{
+		return m_SkinUsers.contains(animator);
+	}
+
 	void AnimationSystem::AddRecord(entt::entity handle)
 	{
 		if (m_RecordIndices.contains(handle))
@@ -172,6 +227,8 @@ namespace Strata
 		m_RecordIndices[handle] = static_cast<uint32_t>(m_Records.size());
 		AnimatorRecord& record = m_Records.emplace_back();
 		record.Handle = handle;
+		const IDComponent* id = m_Scene.GetRegistry().try_get<IDComponent>(handle);
+		record.ID = id ? id->ID : UUID::Null();
 		// Commands work right away (a script that adds the component and plays a state); the first update starts it.
 		record.Set = AcquireSet(component.Skeleton, component.Controller, component.Clip);
 	}
@@ -514,8 +571,9 @@ namespace Strata
 		stats.Culled = 0;
 		stats.Waiting = 0;
 		stats.Attachments = 0;
-		// Animators removed since the previous update leave first.
+		// Animators removed since the previous update leave first; skins created or changed meanwhile are counted.
 		CompactRecords();
+		ReadPendingSkins();
 		// Without animators there is nothing to resolve, step, place or dispatch (records go with their components, events
 		// with the update that fired them), so scenes that do not animate pay next to nothing per frame.
 		if (m_Records.empty())
@@ -668,10 +726,12 @@ namespace Strata
 		record.Settings.Loop = component.Loop;
 		record.Settings.ApplyRootMotion = component.ApplyRootMotion;
 		// Unseen WhenVisible animators skip their poses, except for a first one (renderers then have something to draw until
-		// they report it).
+		// they report it). One that skins no mesh but places attachments (a model of rigid parts) has no mesh a renderer could
+		// see it by: it poses every update, or its parts would stand still.
 		record.MayCull = component.CullingMode == AnimatorCullingMode::WhenVisible;
 		const bool seen = record.SeenUpdate != 0 && record.SeenUpdate + 1 >= m_UpdateIndex;
-		record.Evaluate = !record.MayCull || seen || record.PoseVersion == 0;
+		const bool rigidParts = record.AttachedUpdate != 0 && record.AttachedUpdate + 1 >= m_UpdateIndex && !HasSkinUsers(record.ID);
+		record.Evaluate = !record.MayCull || seen || rigidParts || record.PoseVersion == 0;
 		record.Evaluated = false;
 		record.ReachChanged = false;
 		record.Events.clear();
@@ -731,8 +791,11 @@ namespace Strata
 			const Entity animator = m_Scene.GetEntityByUUID(attachment.Animator);
 			if (!animator || animator == entity)
 				continue;
-			const AnimatorRecord* record = FindRecord(animator.GetHandle());
-			if (!record || !record->Active || record->PoseVersion == 0 || record->Set == c_NoSet)
+			AnimatorRecord* record = FindRecord(animator.GetHandle());
+			if (!record)
+				continue;
+			record->AttachedUpdate = m_UpdateIndex; // It places parts: posed every update even when WhenVisible (PrepareStep)
+			if (!record->Active || record->PoseVersion == 0 || record->Set == c_NoSet)
 				continue;
 			const Skeleton* skeleton = m_Sets[record->Set].SkeletonAsset.get();
 			if (!skeleton)

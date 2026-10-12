@@ -222,7 +222,8 @@ void OnAnimationEvent(std::string_view name) override // Events of the controlle
   animation system places the entity after each pose.
 - `ApplyRootMotion` on the component moves the entity by the clip's root travel (walk cycles that do not slide);
   `CullingMode` `WhenVisible` skips the pose of characters no camera sees, neither them nor their shadows, wherever their
-  clips take them (time, events and root motion go on; `GetJointTransform` then reads the latest pose).
+  clips take them (time, events and root motion go on; `GetJointTransform` then reads the latest pose). An animator that
+  skins no mesh but moves attached parts poses every frame.
 
 ### Game flow
 

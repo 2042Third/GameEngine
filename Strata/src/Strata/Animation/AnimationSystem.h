@@ -176,6 +176,7 @@ namespace Strata
 		struct AnimatorRecord
 		{
 			entt::entity Handle = entt::null;
+			UUID ID = UUID::Null(); // The entity's (what SkinComponents and AttachToJointComponents name)
 			bool Removed = false; // The component went away (the record leaves at the next CompactRecords)
 			uint32_t Set = c_NoSet;
 			AnimatorInstance Instance;
@@ -183,6 +184,7 @@ namespace Strata
 			std::vector<glm::mat4> Pose; // Model space, per joint of the skeleton
 			uint64_t PoseVersion = 0;    // 0: no pose; changes with the pose and with the reach
 			uint64_t SeenUpdate = 0;     // The update before which a renderer last drew a mesh it skins
+			uint64_t AttachedUpdate = 0; // The update that last placed an attachment of it
 			// Published with the pose while the animator may skip poses (SkeletonPose::Reach): where its clips take the joints.
 			AABB Reach;
 			float ReachScale = 0.0f;
@@ -234,6 +236,14 @@ namespace Strata
 		void OnAnimatorAdded(entt::registry& registry, entt::entity handle);
 		void OnAnimatorRemoved(entt::registry& registry, entt::entity handle);
 		void OnAttachmentRemoved(entt::registry& registry, entt::entity handle);
+		// SkinComponents created or signaled (read at the next update, ReadPendingSkins), and destroyed: the animators they name
+		// (m_SkinUsers).
+		void OnSkinChanged(entt::registry& registry, entt::entity handle);
+		void OnSkinRemoved(entt::registry& registry, entt::entity handle);
+		void ReadPendingSkins();
+		void CountSkinUser(entt::entity skin, UUID animator);
+		// Whether a SkinComponent names the animator: a renderer can then see it by a mesh (WhenVisible).
+		bool HasSkinUsers(UUID animator) const;
 		void AddRecord(entt::entity handle);
 		// Drops the records of removed animators (AnimatorRecord::Removed) in one pass that keeps the others' order.
 		void CompactRecords();
@@ -279,6 +289,11 @@ namespace Strata
 		std::vector<uint32_t> m_SyncQueue; // Records the update's jobs left to the main thread
 		std::vector<uint32_t> m_Work;      // Records stepped after the main thread synchronized them
 		std::unordered_map<entt::entity, AttachmentState> m_Attachments;
+		// The animators SkinComponents name, while the scene runs: per skin entity the animator it counts for, per animator
+		// how many name it.
+		std::unordered_map<entt::entity, UUID> m_SkinAnimators;
+		std::unordered_map<UUID, uint32_t> m_SkinUsers;
+		std::vector<entt::entity> m_PendingSkins;
 		std::vector<Ref<EventListener>> m_Listeners;
 		AnimationEventListenerID m_NextListenerID = 1;
 		std::vector<PendingEvent> m_PendingEvents;

@@ -719,8 +719,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - **Culling:** `WhenVisible` animators skip their pose while no renderer reports them (`ISkinningPoses::ReportVisible`:
   a mesh they skin in view, or its shadow on what the view shows); time, transitions, events and root motion go on. They
   publish their reach with the pose (`SkeletonPose::Reach`, where their clips take the joints), which bounds their meshes
-  too, so a frozen pose never hides an animator from the view that would pose it. Code that needs a pose of a skipped
-  animator (a joint transform) gets its latest pose.
+  too, so a frozen pose never hides an animator from the view that would pose it. An animator that skins no mesh but
+  places attachments poses every update. Code that needs a pose of a skipped animator (a joint transform) gets its latest
+  pose.
 
 ## Editor
 
