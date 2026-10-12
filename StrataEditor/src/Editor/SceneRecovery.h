@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Strata
@@ -201,6 +202,9 @@ namespace Strata
 		const std::vector<RecoveryEntry>& GetEntries() const { return m_Entries; }
 		uint64_t GetEntriesVersion() const { return m_EntriesVersion; }
 		const RecoveryEntry* FindEntry(const std::string& id) const;
+		// Whether this editor wrote the entry as it discarded changes (EndScene) while the project was open: the person heard
+		// of it then (EditorContext::NotifyDiscardedChanges), so the offer as a project opens leaves it out.
+		bool WasDiscardedHere(const std::string& id) const { return m_DiscardedHere.contains(id); }
 
 		// Moves a recovery file to Recovery/Discarded (kept for a while, not offered again).
 		bool Discard(const std::string& id, std::string* outError = nullptr);
@@ -308,6 +312,7 @@ namespace Strata
 		Ref<ScanResult> m_Scan; // The scan in progress
 		std::vector<RecoveryEntry> m_Entries;
 		uint64_t m_EntriesVersion = 0;
+		std::unordered_set<std::string> m_DiscardedHere; // Entries EndScene wrote marked discarded since SetProject
 	};
 
 }

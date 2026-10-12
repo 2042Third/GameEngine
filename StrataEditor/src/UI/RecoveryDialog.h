@@ -26,8 +26,9 @@ namespace Strata
 		// Every frame, inside the ImGui frame.
 		void Draw(EditorPanelContext& context);
 		bool IsOpen() const { return m_Open; }
-		// Whether the open project has recovery data to offer (the File menu item).
-		static bool HasOffer(const EditorContext& context);
+		// Whether the open project has recovery data to offer (the File menu item); with `leftBefore` only data this editor did
+		// not discard itself while the project was open (what a crash or an earlier session left: the offer as it opens).
+		static bool HasOffer(const EditorContext& context, bool leftBefore = false);
 	private:
 		// Runs scene.recover for an entry through the runner; failures show in the dialog.
 		void Run(EditorContext& context, const EditorCommandRegistry& commands, EditorCommandRunner& runner, const std::string& id, const char* action,

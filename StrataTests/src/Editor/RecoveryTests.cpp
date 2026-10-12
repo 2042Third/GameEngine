@@ -953,4 +953,34 @@ TEST_SUITE("Editor.Recovery")
 		CHECK(ListRecoveryFiles(project / ".strata" / SceneRecovery::c_DirectoryName).size() <= 1); // The edited scene's own journal, if any
 		CHECK(editor.Context().GetRecovery().GetEntries().empty());
 	}
+
+	TEST_CASE("Changes discarded as the project opens are offered by their toast, not by the dialog that opens with the project")
+	{
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryEarlyDiscard") / "Game";
+		{
+			RecoveryHarness harness(project);
+		}
+		EditorOptions options;
+		options.ProjectPath = project;
+		Tests::HarnessEditor editor({}, options);
+		// Before the editor's first frame, while the scan of the project's recovery files runs: a command script edits and
+		// replaces the scene, as a script that starts with scene.new {force} does.
+		editor.Run("entity.create", { { "name", "Early" } });
+		REQUIRE(editor.Layer->GetCommands().Execute(editor.Context(), "scene.new", { { "force", true } }, CommandOrigin { CommandSource::CommandScript }).Success);
+		REQUIRE(editor.FramesUntil([&]()
+		{
+			return !editor.Context().GetRecovery().IsScanning() && editor.Context().GetRecovery().GetEntries().size() == 1;
+		}));
+		editor.Frames(3);
+		// The dialog's offer as the project opens is what a crash or an earlier session left; this discard has its toast.
+		CHECK_FALSE(editor.Layer->GetRecoveryDialog().IsOpen());
+		CHECK(UI::ItemProbe::Find("Toast.0.Recover").has_value());
+		CHECK(RecoveryDialog::HasOffer(editor.Context()));
+		CHECK_FALSE(RecoveryDialog::HasOffer(editor.Context(), true));
+
+		// Closed with the project and opened again, the discard is what an earlier session left: offered as the project opens.
+		editor.Run("project.close", { { "force", true } });
+		editor.RunToCompletion("project.open", { { "path", FileSystem::ToUTF8(project) } });
+		REQUIRE(editor.FramesUntil([&]() { return editor.Layer->GetRecoveryDialog().IsOpen(); }));
+	}
 }

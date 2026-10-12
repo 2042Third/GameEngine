@@ -347,6 +347,7 @@ namespace Strata
 		m_RescanDue = false;
 		m_Entries.clear();
 		m_EntriesVersion++;
+		m_DiscardedHere.clear();
 		if (!IsActive())
 		{
 			m_PendingSteps.clear();
@@ -391,6 +392,7 @@ namespace Strata
 			{
 				outcome = DiscardOutcome::Kept;
 				m_RescanDue = true;
+				m_DiscardedHere.insert(m_Journal->Stem);
 			}
 			else if (modified)
 			{

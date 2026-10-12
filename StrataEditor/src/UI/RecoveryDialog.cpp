@@ -2,6 +2,7 @@
 
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorContext.h"
+#include "Editor/SceneRecovery.h"
 #include "UI/EditorFonts.h"
 #include "UI/EditorShell.h"
 #include "UI/Icons.h"
@@ -39,10 +40,14 @@ namespace Strata
 
 	}
 
-	bool RecoveryDialog::HasOffer(const EditorContext& context)
+	bool RecoveryDialog::HasOffer(const EditorContext& context, bool leftBefore)
 	{
-		const std::vector<RecoveryEntry>& entries = context.GetRecovery().GetEntries();
-		return context.HasProject() && std::any_of(entries.begin(), entries.end(), [](const RecoveryEntry& entry) { return entry.Applicable; });
+		const SceneRecovery& recovery = context.GetRecovery();
+		const std::vector<RecoveryEntry>& entries = recovery.GetEntries();
+		return context.HasProject() && std::any_of(entries.begin(), entries.end(), [&recovery, leftBefore](const RecoveryEntry& entry)
+		{
+			return entry.Applicable && (!leftBefore || !recovery.WasDiscardedHere(entry.Id));
+		});
 	}
 
 	void RecoveryDialog::Run(EditorContext& context, const EditorCommandRegistry& commands, EditorCommandRunner& runner, const std::string& id,
@@ -62,12 +67,13 @@ namespace Strata
 	void RecoveryDialog::Draw(EditorPanelContext& context)
 	{
 		const SceneRecovery& recovery = context.Context.GetRecovery();
-		// Once per opened project, when its scan has found changes that still apply.
+		// Once per opened project, when its scan has found changes that still apply and that this editor did not discard itself
+		// (a command script that discards changes in the editor's first frames: its toast offers them already).
 		const Ref<Project>& project = context.Context.GetProject();
 		if (project != m_OfferedFor.lock() && !recovery.IsScanning())
 		{
 			m_OfferedFor = project;
-			if (HasOffer(context.Context))
+			if (HasOffer(context.Context, true))
 				m_OpenRequested = true;
 		}
 		// Opened once a scan running (e.g. after a discard just now) has read the directory: the dialog appears with its entries,

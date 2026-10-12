@@ -2142,7 +2142,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   a file whose owner process still runs (its id with the start time recorded, since ids are reused, also this process's)
   and has not discarded it belongs to that editor and is left out; the others are
   offered (the editor's Recover Unsaved Changes dialog, `UI/RecoveryDialog`, opens by itself once per opened project
-  with changes that still apply; File > Recover Unsaved Changes reopens it) and listed by `scene.recoveryStatus`. An
+  with changes that still apply, leaving out what this editor discarded itself since the project opened, whose toast
+  offers it, `SceneRecovery::WasDiscardedHere`: a command script that discards changes in the editor's first frames does
+  not open it; File > Recover Unsaved Changes reopens it) and listed by `scene.recoveryStatus`. An
   entry applies only while the scene asset exists and its file hashes to the recorded hash. Scenes are found by their
   handles: a scan looks for an entry's scene file where the asset manager has the scene now (`SetSceneLocator`, a snapshot
   of the scenes' paths taken when the scan starts), so changes of a scene that was moved or renamed (`asset.move`, the
