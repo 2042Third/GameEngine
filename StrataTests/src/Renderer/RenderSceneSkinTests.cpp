@@ -202,4 +202,54 @@ TEST_SUITE("Renderer.RenderScene")
 		CheckProxies(renderScene);
 		scene.UnregisterService<ISkinningPoses>(fixture.Poses);
 	}
+
+	TEST_CASE("A posed proxy computes its palette again for another skinned mesh with as many joints, whatever the pose's version")
+	{
+		// Meshes of one skin (outfits, body parts) have the same joints but other vertices and inverse bind matrices: the
+		// palette and the posed bounds come from the mesh as much as from the pose.
+		SkinFixture fixture;
+		Scene& scene = fixture.SceneData;
+		RenderScene& renderScene = fixture.Render;
+		const Ref<Mesh> wide = CreateSkinnedTube({ .Joints = 3, .RingsPerJoint = 2, .Sides = 6, .JointLength = 1.5f, .Radius = 0.5f });
+		const AssetHandle wideHandle = UUID(0x5C1B);
+		auto setLayouts = [&]()
+		{
+			for (uint32_t slot = 0; slot < renderScene.GetMeshSlotCapacity(); slot++)
+			{
+				if (renderScene.GetMeshHandle(slot) == fixture.MeshHandle)
+					renderScene.SetMeshLayout(slot, *fixture.Tube);
+				else if (renderScene.GetMeshHandle(slot) == wideHandle)
+					renderScene.SetMeshLayout(slot, *wide);
+			}
+		};
+		Entity arm = fixture.AddSkinned(glm::vec3(0.0f));
+		// Another entity draws the wide mesh, so its layout is known when the arm switches to it.
+		Entity other = fixture.AddSkinned(glm::vec3(10.0f, 0.0f, 0.0f));
+		other.GetComponent<MeshRendererComponent>().Mesh = wideHandle;
+		fixture.Poses.Poses[arm.GetHandle()] = BentChain(3, 1);
+		fixture.Poses.Poses[other.GetHandle()] = BentChain(3, 1);
+		REQUIRE(scene.RegisterService<ISkinningPoses>(fixture.Poses));
+		renderScene.Sync(nullptr);
+		setLayouts();
+		renderScene.Sync(nullptr);
+		const uint32_t proxy = renderScene.FindProxy(arm.GetHandle());
+		REQUIRE((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0);
+		const AABB narrowBounds = renderScene.GetLocalBounds(proxy);
+		CheckProxies(renderScene);
+
+		// The mesh changes, the pose does not.
+		arm.GetComponent<MeshRendererComponent>().Mesh = wideHandle;
+		arm.MarkModified<MeshRendererComponent>();
+		renderScene.Sync(nullptr);
+		REQUIRE((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0);
+		CheckProxies(renderScene);
+		CHECK(renderScene.GetLocalBounds(proxy).Max.z == doctest::Approx(2.0f * narrowBounds.Max.z));
+
+		// A new layout of the mesh it draws (a reimport) with as many joints: the same.
+		renderScene.SetMeshLayout(renderScene.GetMeshSlot(proxy), *fixture.Tube);
+		renderScene.Sync(nullptr);
+		CheckProxies(renderScene);
+		CHECK(renderScene.GetLocalBounds(proxy).Max.z == doctest::Approx(narrowBounds.Max.z));
+		scene.UnregisterService<ISkinningPoses>(fixture.Poses);
+	}
 }

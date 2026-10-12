@@ -1003,8 +1003,10 @@ namespace Strata
 				}
 				continue;
 			}
-			const uint32_t joints = static_cast<uint32_t>(m_Meshes[m_MeshSlots[proxy]].Skin->Joints.size());
-			if (wasPosed && inputs.Version == skin.PoseVersion && skin.PaletteCount == joints && SameBytes(inputs.AnimatorToProxy, skin.AnimatorToProxy))
+			const Ref<const MeshSkinBinding>& binding = m_Meshes[m_MeshSlots[proxy]].Skin;
+			const uint32_t joints = static_cast<uint32_t>(binding->Joints.size());
+			if (wasPosed && inputs.Version == skin.PoseVersion && skin.Binding == binding && skin.PaletteCount == joints
+				&& SameBytes(inputs.AnimatorToProxy, skin.AnimatorToProxy))
 				continue;
 			if (skin.PaletteCount != joints)
 			{
@@ -1014,6 +1016,7 @@ namespace Strata
 			}
 			skin.PoseVersion = inputs.Version;
 			skin.AnimatorToProxy = inputs.AnimatorToProxy;
+			skin.Binding = binding;
 			m_PoseWork.push_back(PoseWork { index, inputs });
 		}
 		if (m_PoseWork.empty())
@@ -1057,6 +1060,7 @@ namespace Strata
 		m_Stats.PaletteJoints -= skin.PaletteCount;
 		skin.PaletteFirst = 0;
 		skin.PaletteCount = 0;
+		skin.Binding.reset();
 	}
 
 	uint32_t RenderScene::AllocatePalette(uint32_t count)

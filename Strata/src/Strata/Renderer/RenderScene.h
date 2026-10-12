@@ -251,6 +251,9 @@ namespace Strata
 			uint32_t PaletteCount = 0;
 			uint64_t PoseVersion = 0;              // The pose version the palette was computed from (0: compute again)
 			glm::mat4 AnimatorToProxy = glm::mat4(1.0f); // The transform it was computed with
+			// The skin binding it was computed with: another mesh of the same skin (or a reimport) has as many joints but other
+			// inverse bind matrices and extents. Held, so a new binding never takes the address of the one it replaces.
+			Ref<const MeshSkinBinding> Binding;
 			AABB PosedBounds;                      // Local bounds of the pose
 		};
 
