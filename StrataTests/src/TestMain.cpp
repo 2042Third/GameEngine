@@ -765,8 +765,9 @@ static std::optional<int> RunAsFakeCMake(int argc, char** argv)
 		std::fflush(stdout);
 		return 0;
 	}
-	// "fail": configuring succeeds, building reports a compiler error in the project's Scripts/Broken.cpp (relative to the
-	// project, as the Problems panel resolves it) and fails.
+	// "fail": configuring succeeds, building reports a compiler error and a warning in the project's Scripts/Broken.cpp
+	// (relative to the project, as the Problems panel resolves it) and fails. The warning names a token pasted with "##",
+	// which UI labels would cut.
 	if (*mode == "fail")
 	{
 		if (std::string_view(argv[1]) == "-S")
@@ -776,7 +777,8 @@ static std::optional<int> RunAsFakeCMake(int argc, char** argv)
 			return 0;
 		}
 		std::printf("Scripts/Broken.cpp(7,5): error C2065: 'Undeclared': undeclared identifier\n");
-		std::printf("Scripts/Broken.cpp(9,1): warning C4101: 'unused': unreferenced local variable\n");
+		std::printf("Scripts/Broken.cpp(9,1): warning C4668: 'TOKEN##QUIRK' is not defined as a preprocessor macro, replacing with '0' for "
+			"'#if/#elif'\n");
 		std::fflush(stdout);
 		return 1;
 	}

@@ -254,12 +254,11 @@ namespace Strata
 				ImGui::SameLine();
 				if (row.Kind == RowKind::Frame)
 					ImGui::Indent(ImGui::GetFontSize());
-				ImGui::Selectable(row.Text.c_str(), false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick);
-				if (row.Kind == RowKind::Frame)
-					ImGui::Unindent(ImGui::GetFontSize());
+				// An unlabeled row with the text drawn after it: messages may hold "##" (token pasting), which a label would cut.
+				ImGui::Selectable("##Row", false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowDoubleClick);
 				// The first rows only: the probe keeps a fixed set of keys.
 				if (index < c_ProbedRows)
-					UI::ItemProbe::Record(fmt::format("Problems.Row.{}", index), !row.Source.empty(), 0, row.Text);
+					UI::ItemProbe::Record(UI::NumberedProbeKey("Problems.Row.", index), !row.Source.empty(), 0, row.Text);
 				if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 					open = index;
 				if (UI::IsTooltipDue())
@@ -268,6 +267,10 @@ namespace Strata
 					ImGui::SetTooltip("%s\n%s%s", row.Text.c_str(), where.c_str(), row.Source.empty() ? (row.File.empty() ? "No source file"
 						: "The file is not on this machine") : "Double-click to open it in the external editor");
 				}
+				ImGui::SameLine(0.0f, 0.0f);
+				ImGui::TextUnformatted(row.Text.c_str());
+				if (row.Kind == RowKind::Frame)
+					ImGui::Unindent(ImGui::GetFontSize());
 				ImGui::PopID();
 				ImGui::TableSetColumnIndex(1);
 				const float fileWidth = ImGui::GetContentRegionAvail().x;
@@ -280,7 +283,7 @@ namespace Strata
 				}
 				ImGui::TextUnformatted(m_FileTexts[index].c_str());
 				if (index < c_ProbedRows)
-					UI::ItemProbe::Record(fmt::format("Problems.File.{}", index), true, 0, m_FileTexts[index]);
+					UI::ItemProbe::Record(UI::NumberedProbeKey("Problems.File.", index), true, 0, m_FileTexts[index]);
 				ImGui::TableSetColumnIndex(2);
 				if (row.Line > 0)
 					ImGui::Text("%u", row.Line);

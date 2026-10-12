@@ -200,6 +200,9 @@ TEST_SUITE("Editor.UI.Scripts")
 		std::error_code error;
 		CHECK(std::filesystem::equivalent(rows[0].Source, broken, error));
 		CHECK(rows[1].Kind == ProblemsPanel::RowKind::Warning);
+		// The warning shows whole, also after the "##" of the token it names (where a label would end).
+		CHECK(rows[1].Text.find("'TOKEN##QUIRK'") != std::string::npos);
+		CHECK(ImGuiHarness::CountGlyphs(editor.FindPanelWindow(EditorPanels::c_Problems), 'Q') >= 1);
 		CHECK(problems->GetErrorCount() == 1);
 		CHECK(UI::ItemProbe::Find("Problems.Summary")->Text.find("1 error, 1 warning") != std::string::npos);
 
