@@ -43,6 +43,9 @@ namespace Strata
 		uint32_t Advanced = 0;         // Animators whose time advanced in the latest update
 		uint32_t Evaluated = 0;        // Poses computed in the latest update
 		uint32_t Culled = 0;           // WhenVisible animators the latest update advanced without computing their pose
+		// Animators whose reach (published while WhenVisible) the latest update worked out: only those whose played states or
+		// clips, clip assets, culling mode or root motion setting changed.
+		uint32_t ReachUpdates = 0;
 		uint32_t Waiting = 0;          // Active animators that waited for assets (skeleton, controller, clips) in the latest update
 		uint32_t AssetSets = 0;        // Distinct skeleton, controller and clip combinations
 		uint32_t Attachments = 0;      // AttachToJointComponents the latest update moved
@@ -160,6 +163,8 @@ namespace Strata
 			std::vector<AnimationClipBinding> Bindings;
 			std::vector<AnimationReach> Reaches; // With the bindings
 			std::vector<AnimatorClip> StateClips;
+			// Changes whenever StateClips may name other clips or reaches (assets that arrived, went or were bound again).
+			uint32_t ReachVersion = 0;
 			bool ClipsLoading = false;
 			bool Reported = false; // A failed asset was reported (once per set)
 		};
@@ -188,6 +193,10 @@ namespace Strata
 			// Published with the pose while the animator may skip poses (SkeletonPose::Reach): where its clips take the joints.
 			AABB Reach;
 			float ReachScale = 0.0f;
+			// What Reach was worked out from (ReachKnown): StepRecord works it out again only when what plays, the set's clips
+			// or the settings it depends on changed. A sync of the record forgets it (another set, or a played clip bound again).
+			uint32_t ReachPlayRevision = 0; // AnimatorInstance::GetPlayRevision
+			uint32_t ReachSetVersion = 0;   // AssetSet::ReachVersion
 
 			// A clip a script played directly, resolved every update.
 			AssetHandle PlayedClipHandle = UUID::Null();
@@ -204,6 +213,10 @@ namespace Strata
 			bool Evaluate = false;
 			bool Evaluated = false;
 			bool ReachChanged = false;
+			bool ReachComputed = false; // This update worked the reach out (AnimationSystemStats::ReachUpdates)
+			bool ReachKnown = false;    // ReachPlayRevision, ReachSetVersion, ReachMayCull and ReachRootMotion hold
+			bool ReachMayCull = false;
+			bool ReachRootMotion = false;
 			std::vector<AnimatorFiredEvent> Events;
 		};
 

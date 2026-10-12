@@ -969,6 +969,77 @@ TEST_SUITE("Animation.System")
 		CHECK_MESSAGE(renderScene.Validate(&error), error);
 		CheckSceneCaches(*scene.SceneRef);
 	}
+
+	TEST_CASE("WhenVisible animators work out their reach again only when what it follows changes")
+	{
+		// The reach follows the states and clips that play, the clips' assets, the culling mode and the root motion setting:
+		// updates that change none of them publish it as it was without working it out (10,000 unseen animators pay that).
+		AnimationScene scene;
+		Entity walker = scene.CreateAnimator("Walker", c_IdleHandle, c_ControllerHandle);
+		walker.GetComponent<AnimatorComponent>().CullingMode = AnimatorCullingMode::WhenVisible;
+		Entity other = scene.CreateAnimator("Other", c_WaveHandle);
+		other.GetComponent<AnimatorComponent>().CullingMode = AnimatorCullingMode::WhenVisible;
+		scene.Start();
+		IAnimatorControl* control = scene.SceneRef->GetService<IAnimatorControl>();
+		const ISkinningPoses* poses = scene.SceneRef->GetService<ISkinningPoses>();
+		REQUIRE(control);
+		REQUIRE(poses);
+		auto reachOf = [&](Entity animator)
+		{
+			SkeletonPose pose;
+			REQUIRE(poses->GetPose(animator.GetHandle(), pose));
+			return pose.Reach;
+		};
+		auto reachUpdates = [&](float seconds)
+		{
+			scene.Update(seconds);
+			return scene.System()->GetStats().ReachUpdates;
+		};
+
+		CHECK(reachUpdates(0.1f) == 2);
+		CHECK(reachUpdates(0.1f) == 0);
+		CHECK(scene.System()->GetStats().Culled == 2);
+		const AABB idle = reachOf(walker);
+		REQUIRE(idle.IsValid());
+
+		// A cross-fade to the walk (which carries the arm 2 along +Z) changes what plays when it starts and when it ends.
+		REQUIRE(control->SetFloat(walker, "Speed", 1.0f));
+		CHECK(reachUpdates(0.1f) == 1);
+		CHECK(control->IsInTransition(walker));
+		CHECK(reachOf(walker).Max.z > idle.Max.z + 1.0f);
+		CHECK(reachUpdates(0.1f) == 0);
+		CHECK(reachUpdates(0.15f) == 1);
+		CHECK_FALSE(control->IsInTransition(walker));
+		CHECK(reachUpdates(0.1f) == 0);
+
+		// A clip played directly.
+		REQUIRE(control->PlayClip(other, UUID(c_TurnHandle)));
+		CHECK(reachUpdates(0.1f) == 1);
+		CHECK(reachUpdates(0.1f) == 0);
+
+		// Root motion holds the root where the clip started, and back.
+		walker.GetComponent<AnimatorComponent>().ApplyRootMotion = true;
+		CHECK(reachUpdates(0.1f) == 1);
+		CHECK(reachOf(walker).Max.z < 1.0f);
+		walker.GetComponent<AnimatorComponent>().ApplyRootMotion = false;
+		CHECK(reachUpdates(0.1f) == 1);
+		CHECK(reachOf(walker).Max.z > 1.5f);
+
+		// A reloaded clip: only the animator that plays it from its asset set works its reach out again.
+		scene.Manager->SetStoredData(UUID(c_WalkHandle), CreateWaveClip(1.0f, 4.0f, "Walk")->Serialize());
+		scene.Manager->ReloadAsset(UUID(c_WalkHandle));
+		REQUIRE(scene.Manager->WaitForPendingLoads());
+		CHECK(reachUpdates(0.1f) == 1);
+		CHECK(reachOf(walker).Max.z > 3.5f);
+		CHECK(reachUpdates(0.1f) == 0);
+
+		// Animated always: nothing to publish.
+		walker.GetComponent<AnimatorComponent>().CullingMode = AnimatorCullingMode::AlwaysAnimate;
+		CHECK(reachUpdates(0.1f) == 1);
+		CHECK_FALSE(reachOf(walker).IsValid());
+		CHECK(reachUpdates(0.1f) == 0);
+		CheckSceneCaches(*scene.SceneRef);
+	}
 }
 
 TEST_SUITE("Animation.Preview")

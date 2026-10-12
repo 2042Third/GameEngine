@@ -171,6 +171,9 @@ namespace Strata
 		// settings have it). Unknown (an invalid box) while nothing plays or a clip's reach is not known; blends of clips may
 		// leave it by a little.
 		AnimatorReach GetReach(const AnimatorAssets& assets, const AnimatorSettings& settings) const;
+		// Changes whenever what plays changes (the state or clip of an entry, how many entries play): with the same assets
+		// and settings, GetReach's result changes only with it.
+		uint32_t GetPlayRevision() const { return m_PlayRevision; }
 
 		// State queries: the state the animator is in (its name; empty for a clip played without one), how far it is (time
 		// over duration, counting loops) and whether a cross-fade is under way.
@@ -212,6 +215,7 @@ namespace Strata
 	private:
 		std::array<Playing, c_MaxPlaying> m_Entries = {};
 		uint32_t m_Count = 0;
+		uint32_t m_PlayRevision = 0; // GetPlayRevision: changed by Reset, StartState and the end of a cross-fade
 		float m_FadeElapsed = 0.0f;
 		float m_FadeDuration = 0.0f;
 		bool m_Playing = false;

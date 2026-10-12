@@ -274,6 +274,8 @@ namespace Strata
 
 	bool AnimationSystem::SyncRecord(AnimatorRecord& record, const AnimatorComponent& component, bool active)
 	{
+		// What the reach was worked out from may change here: another asset set, or a played clip bound again after this.
+		record.ReachKnown = false;
 		auto clearPose = [this](AnimatorRecord& target)
 		{
 			if (target.PoseVersion != 0)
@@ -446,6 +448,9 @@ namespace Strata
 				set.Reaches.assign(set.ClipHandles.size(), AnimationReach());
 			}
 		}
+		// The clips and reaches StateClips names below follow the skeleton, the controller and the clips: animators work out
+		// their reach again only when one of them changed (StepRecord).
+		bool reachesChanged = skeletonChanged || controllerChanged;
 		set.ClipsLoading = false;
 		set.StateClips.assign(set.ClipHandles.size(), AnimatorClip());
 		for (size_t index = 0; index < set.ClipHandles.size(); index++)
@@ -461,6 +466,7 @@ namespace Strata
 			else if (!clip && !loading && set.Clips[index])
 			{
 				set.Clips[index].reset();
+				reachesChanged = true;
 			}
 			if (!set.Clips[index])
 			{
@@ -477,9 +483,12 @@ namespace Strata
 			{
 				set.Bindings[index] = set.Clips[index]->Bind(*set.SkeletonAsset);
 				set.Reaches[index] = AnimationReach::Compute(*set.Clips[index], set.Bindings[index], *set.SkeletonAsset, set.RootMotion);
+				reachesChanged = true;
 			}
 			set.StateClips[index] = AnimatorClip { set.Clips[index].get(), &set.Bindings[index], &set.Reaches[index] };
 		}
+		if (reachesChanged)
+			set.ReachVersion++;
 
 		if (!failures.empty() && !set.Reported)
 		{
@@ -569,6 +578,7 @@ namespace Strata
 		stats.Advanced = 0;
 		stats.Evaluated = 0;
 		stats.Culled = 0;
+		stats.ReachUpdates = 0;
 		stats.Waiting = 0;
 		stats.Attachments = 0;
 		// Animators removed since the previous update leave first; skins created or changed meanwhile are counted.
@@ -656,6 +666,7 @@ namespace Strata
 				continue;
 			}
 			stats.Advanced++;
+			stats.ReachUpdates += record.ReachComputed ? 1u : 0u;
 			if (record.Evaluated)
 			{
 				record.PoseVersion = m_NextPoseVersion++;
@@ -734,6 +745,7 @@ namespace Strata
 		record.Evaluate = !record.MayCull || seen || rigidParts || record.PoseVersion == 0;
 		record.Evaluated = false;
 		record.ReachChanged = false;
+		record.ReachComputed = false;
 		record.Events.clear();
 	}
 
@@ -745,7 +757,20 @@ namespace Strata
 		if (record.Evaluate)
 			record.Evaluated = record.Instance.Evaluate(assets, record.Settings, scratch, record.Pose);
 		// An animator that may skip its poses publishes where its clips take the joints, so renderers find its meshes there
-		// whatever pose they show (a change publishes the pose again).
+		// whatever pose they show (a change publishes the pose again). That changes only with what plays, the clips and their
+		// reaches (the set's version; a sync forgets the rest, such as a played clip's reach) and the settings it depends on:
+		// worked out again only then, so unseen animators pay a few comparisons per update for it.
+		const uint32_t playRevision = record.Instance.GetPlayRevision();
+		const uint32_t setVersion = record.Set != c_NoSet ? m_Sets[record.Set].ReachVersion : 0;
+		if (record.ReachKnown && record.ReachPlayRevision == playRevision && record.ReachSetVersion == setVersion && record.ReachMayCull == record.MayCull
+			&& record.ReachRootMotion == record.Settings.ApplyRootMotion)
+			return;
+		record.ReachKnown = true;
+		record.ReachPlayRevision = playRevision;
+		record.ReachSetVersion = setVersion;
+		record.ReachMayCull = record.MayCull;
+		record.ReachRootMotion = record.Settings.ApplyRootMotion;
+		record.ReachComputed = true;
 		const AnimatorReach reach = record.MayCull ? record.Instance.GetReach(assets, record.Settings) : AnimatorReach();
 		if (std::memcmp(&reach.Bounds, &record.Reach, sizeof(AABB)) != 0 || reach.Scale != record.ReachScale)
 		{

@@ -1614,10 +1614,14 @@ system, not to entities: a character's joints add no entities and no transform c
   union of the reaches of the clips playing, `AnimationReach`, computed when a clip is bound: the box of every joint's
   origin over the clip, sampled at 15 per second and at most 48 times, with and without root motion; a change of it is a
   new pose version), which renderers bound its meshes with too, so a view of any place its clips take it finds it even
-  while it shows an older pose (blends of clips may leave the reach by a little). Unseen animators thus cost an update of
-  their state and no sampling; a renderer shows a re-entering animator's previous pose for one frame. An animator that
-  skins no mesh (no `SkinComponent` names it) but places attachments, a model of rigid parts, has no mesh a renderer
-  could see it by: it computes its pose every update whatever its culling mode.
+  while it shows an older pose (blends of clips may leave the reach by a little). The reach is worked out again only when
+  what it follows changes: what plays (`AnimatorInstance::GetPlayRevision`: a state started, a cross-fade's end, a clip
+  played directly), the asset set's clips and their reaches (`AssetSet::ReachVersion`), a sync of the animator (which may
+  bind a played clip again), the culling mode or the root motion setting (`AnimationSystemStats::ReachUpdates` counts the
+  animators that did). Unseen animators thus cost an update of their state, a few comparisons and no sampling; a renderer
+  shows a re-entering animator's previous pose for one frame. An animator that skins no mesh (no `SkinComponent` names
+  it) but places attachments, a model of rigid parts, has no mesh a renderer could see it by: it computes its pose every
+  update whatever its culling mode.
 - **Attachments.** Each update the system writes an `AttachToJointComponent`'s local transform so that its world
   transform is the animator's world transform times the joint's pose: under the animator itself that is the pose, which
   does not change when the animator moves; elsewhere it goes through the parent's world transform. A placement equal to

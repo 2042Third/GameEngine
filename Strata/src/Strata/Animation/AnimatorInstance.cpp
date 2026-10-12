@@ -168,6 +168,7 @@ namespace Strata
 		m_PendingState.reset();
 		m_PendingFade = 0.0f;
 		m_Count = 0;
+		m_PlayRevision++;
 		m_FadeElapsed = 0.0f;
 		m_FadeDuration = 0.0f;
 		m_Playing = false;
@@ -243,6 +244,9 @@ namespace Strata
 
 	void AnimatorInstance::StartState(uint32_t state, float fadeSeconds)
 	{
+		// Every change of what plays (and of the clip played directly, which callers set before starting it) comes through
+		// here, Reset or the end of a cross-fade.
+		m_PlayRevision++;
 		Playing entry;
 		entry.State = state;
 		if (fadeSeconds <= 0.0f || m_Count == 0)
@@ -585,7 +589,10 @@ namespace Strata
 		const float progress = m_FadeDuration > 0.0f ? std::clamp(m_FadeElapsed / m_FadeDuration, 0.0f, 1.0f) : 1.0f;
 		if (progress >= 1.0f)
 		{
-			// The fade is over: only the target plays.
+			// The fade is over: only the target plays. (Without a fade this runs every update: what plays changes only when
+			// entries go.)
+			if (m_Count != 1)
+				m_PlayRevision++;
 			m_Entries[0] = m_Entries[m_Count - 1];
 			m_Entries[0].Weight = 1.0f;
 			m_Entries[0].StartWeight = 1.0f;
