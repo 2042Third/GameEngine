@@ -132,11 +132,11 @@ namespace Strata
 		void BeginFrame();
 
 		// The bytes the next step of an upload may take: at most `wantedBytes` and c_MaxStepBytes, within what is left of the
-		// call's upload bytes, upload time and deadline at the speed of the latest steps (`callBytes` and `callMs`: what the
-		// call uploaded and spent so far; a step the pool has no idle staging for is planned with the time creating it takes,
-		// at most half the time left, and the speed of writing fresh staging), rounded down to whole `granuleBytes`. 0 when
-		// not even one granule fits, except for the frame's first step (the frame's first call, nothing uploaded in the frame
-		// yet), which gets one granule whatever: every frame makes progress.
+		// call's upload bytes and of nine tenths of its upload time and deadline (steps vary in speed) at the speed of the
+		// latest steps (`callBytes` and `callMs`: what the call uploaded and spent so far; a step the pool has no idle staging
+		// for is planned with the time creating it takes, at most half the time left, and the speed of writing fresh staging),
+		// rounded down to whole `granuleBytes`. 0 when not even one granule fits, except for the frame's first step (the
+		// frame's first call, nothing uploaded in the frame yet), which gets one granule whatever: every frame makes progress.
 		uint64_t PlanStep(const AssetFinalizeContext& context, uint64_t callBytes, float callMs, uint64_t wantedBytes, uint64_t granuleBytes) const;
 		// Whether a step's staging of `bytes` fits beside the staging in flight within the context's staging room
 		// (AssetFinalizeContext::GetStagingRoom); the frame's first step within the whole of StagingBytes, which the others

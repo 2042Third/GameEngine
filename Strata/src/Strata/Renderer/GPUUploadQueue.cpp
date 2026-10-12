@@ -21,6 +21,10 @@ namespace Strata
 		constexpr float c_InitialBytesPerMs = 4.0e6f;
 		constexpr float c_InitialColdBytesPerMs = 2.0e6f;
 		constexpr float c_InitialStagingCreateMs = 0.5f;
+		// Steps are planned to end within this share of the time left: a step's speed strays from the measured average by about
+		// a tenth (the memory bandwidth the frame's other work takes, page faults), so a step planned to end at the budget's
+		// end overshoots it as often as not (frames that filled their 2 ms took up to 2.18 ms).
+		constexpr double c_PlannedTimeShare = 0.9;
 		// A step that writes at least this much into staging the pool had already spreads its writes over the worker threads,
 		// in pieces of about c_CopyPieceBytes: one thread reads the decoded data and writes write-combined memory far slower
 		// than the memory system takes them (4 MiB took 0.4 to 1.2 ms on one thread of the reference machine, 0.15 to 0.3 ms
@@ -216,7 +220,8 @@ namespace Strata
 		uint64_t limit = std::min(wantedBytes, c_MaxStepBytes);
 		limit = std::min(limit, context.UploadBudget > callBytes ? context.UploadBudget - callBytes : 0);
 
-		// What is left of the call's upload time and of the deadline, at the speed of the latest steps.
+		// What is left of the call's upload time and of the deadline (the share steps are planned to end within), at the speed
+		// of the latest steps.
 		double milliseconds = static_cast<double>(context.UploadMsBudget) - static_cast<double>(callMs);
 		if (context.Deadline != std::chrono::steady_clock::time_point::max())
 		{
@@ -224,6 +229,7 @@ namespace Strata
 			const double untilDeadline = context.Deadline > now ? std::chrono::duration<double, std::milli>(context.Deadline - now).count() : 0.0;
 			milliseconds = std::min(milliseconds, untilDeadline);
 		}
+		milliseconds *= c_PlannedTimeShare;
 		const bool framesFirst = IsFramesFirstStep(context, callBytes);
 		const auto finish = [&](uint64_t bytes)
 		{
