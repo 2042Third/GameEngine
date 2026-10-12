@@ -387,8 +387,11 @@ namespace Strata
 				const std::vector<std::string> typeNames = GetScriptFieldTypeNames();
 				if (arguments.IsValid() && fieldsJson)
 				{
-					for (const auto& [name, type] : fieldsJson->items())
+					// Named references rather than a structured binding, which Apple Clang 15's lambdas cannot capture.
+					for (const auto& item : fieldsJson->items())
 					{
+						const std::string& name = item.key();
+						const nlohmann::json& type = item.value();
 						const bool knownType = type.is_string() && std::any_of(typeNames.begin(), typeNames.end(),
 							[&type](const std::string& known) { return StringUtils::EqualsIgnoreCase(known, type.get<std::string>()); });
 						if (!IsValidScriptIdentifier(name))
