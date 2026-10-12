@@ -56,6 +56,9 @@ namespace Strata
 
 		// Requests the load at Low priority without using the asset (prefetch); a loaded one is stamped as used.
 		void Prefetch(AssetHandle handle);
+		// Counts a handle the frame resolved as pending although it is loaded (a texture whose levels are not all resident
+		// for a renderer that needs them all), once per frame.
+		void CountPending(AssetHandle handle);
 
 		const AssetResolveStats& GetStats() const { return m_Stats; }
 	private:
@@ -63,6 +66,7 @@ namespace Strata
 		static constexpr uint8_t c_LookedUp = 1u << 0;   // FindResident asked whether it is loaded (without a request)
 		static constexpr uint8_t c_Prefetched = 1u << 1; // Prefetch requested it at Low priority
 		static constexpr uint8_t c_Requested = 1u << 2;  // Resolve requested it (GetAsset)
+		static constexpr uint8_t c_CountedPending = 1u << 3; // CountPending counted it
 
 		struct Entry
 		{

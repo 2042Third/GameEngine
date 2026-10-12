@@ -200,6 +200,7 @@ namespace Strata
 
 		bool BeginFrame() override;
 		void EndFrame() override;
+		bool PrepareBackBuffer() override;
 		uint64_t GetFrameIndex() const override { return m_FrameIndex; }
 		uint32_t GetMaxFramesInFlight() const override { return m_Specification.MaxFramesInFlight; }
 
@@ -208,6 +209,10 @@ namespace Strata
 			if (m_NvrhiDevice)
 				m_NvrhiDevice->waitForIdle();
 		}
+
+		bool HasTransferQueue() const override { return m_TransferQueue != VK_NULL_HANDLE; }
+		void RecordQueueTransfer(nvrhi::ICommandList* commandList, const GPUQueueTransfer& transfer, bool acquire) override;
+		void RecordBufferToTextureCopies(nvrhi::ICommandList* commandList, std::span<const GPUBufferTextureCopy> copies) override;
 
 		uint32_t GetErrorCount() const override
 		{
@@ -226,6 +231,8 @@ namespace Strata
 		void DestroySwapchainResources();
 		bool RecreateSwapchainResources();
 		void InitializeAcquiredImage();
+		// Submits the GPU's wait for the acquired image (m_PendingAcquireWait), which is then cleared.
+		VkResult SubmitPendingAcquireWait();
 		void OnDeviceLost(const char* operation);
 		void Shutdown();
 	private:
@@ -276,6 +283,8 @@ namespace Strata
 		uint32_t m_AcquireSemaphoreIndex = 0;
 		uint32_t m_CurrentImageIndex = 0;
 		bool m_ImageAcquired = false;
+		// The acquired image's semaphore while the GPU's wait for it is not submitted yet (PrepareBackBuffer submits it).
+		VkSemaphore m_PendingAcquireWait = VK_NULL_HANDLE;
 
 		std::queue<nvrhi::EventQueryHandle> m_FramesInFlight;
 		std::vector<nvrhi::EventQueryHandle> m_EventQueryPool;
@@ -976,6 +985,9 @@ namespace Strata
 			return;
 
 		const auto& dispatch = VULKAN_HPP_DEFAULT_DISPATCHER;
+		// An acquired image's semaphore whose wait was not submitted is still to be waited for before it may be destroyed.
+		if (m_PendingAcquireWait != VK_NULL_HANDLE && SubmitPendingAcquireWait() != VK_SUCCESS)
+			ST_CORE_ERROR("Waiting for the acquired swapchain image failed while the swapchain is destroyed");
 		if (m_NvrhiDevice)
 			m_NvrhiDevice->waitForIdle();
 
@@ -1029,12 +1041,87 @@ namespace Strata
 		barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
 		barrier.image = image.Image;
 		barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
-		// ALL_COMMANDS on both sides chains this transition after the acquire semaphore wait submitted by BeginFrame.
+		// ALL_COMMANDS on both sides chains this transition after the acquire semaphore wait submitted just before.
 		VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdPipelineBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
 			0, 0, nullptr, 0, nullptr, 1, &barrier);
 		m_BarrierCommandList->close();
 		m_NvrhiDevice->executeCommandList(m_BarrierCommandList);
 		image.Initialized = true;
+	}
+
+	void VulkanGraphicsDevice::RecordQueueTransfer(nvrhi::ICommandList* commandList, const GPUQueueTransfer& transfer, bool acquire)
+	{
+		if (m_TransferQueue == VK_NULL_HANDLE || !commandList || (!transfer.Texture && !transfer.Buffer))
+			return;
+		// NVRHI's barriers waiting in the command list go first: the transfer follows whatever was recorded before it.
+		commandList->commitBarriers();
+		VkCommandBuffer commandBuffer = static_cast<VkCommandBuffer>(commandList->getNativeObject(nvrhi::ObjectTypes::VK_CommandBuffer).pointer);
+		if (commandBuffer == VK_NULL_HANDLE)
+			return;
+
+		// The release makes the transfer queue's copies available (its destination half is ignored); the acquire makes them
+		// visible to every later use on the graphics queue (its source half is ignored). Both name the same families and, for
+		// images, the same layout transition, which happens once, between them.
+		const VkPipelineStageFlags sourceStage = acquire ? VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT;
+		const VkPipelineStageFlags destinationStage = acquire ? VK_PIPELINE_STAGE_ALL_COMMANDS_BIT : VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+		const uint32_t transferFamily = static_cast<uint32_t>(m_TransferFamily);
+		const uint32_t graphicsFamily = static_cast<uint32_t>(m_GraphicsFamily);
+		if (transfer.Texture)
+		{
+			VkImageMemoryBarrier barrier = { VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER };
+			barrier.srcAccessMask = acquire ? 0 : VK_ACCESS_TRANSFER_WRITE_BIT;
+			barrier.dstAccessMask = acquire ? VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT : 0;
+			barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+			barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			barrier.srcQueueFamilyIndex = transferFamily;
+			barrier.dstQueueFamilyIndex = graphicsFamily;
+			barrier.image = static_cast<VkImage>(transfer.Texture->getNativeObject(nvrhi::ObjectTypes::VK_Image).pointer);
+			barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, transfer.FirstMip, transfer.MipCount, 0, 1 };
+			VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdPipelineBarrier(commandBuffer, sourceStage, destinationStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+			return;
+		}
+		VkBufferMemoryBarrier barrier = { VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER };
+		barrier.srcAccessMask = acquire ? 0 : VK_ACCESS_TRANSFER_WRITE_BIT;
+		barrier.dstAccessMask = acquire ? VK_ACCESS_VERTEX_ATTRIBUTE_READ_BIT | VK_ACCESS_INDEX_READ_BIT | VK_ACCESS_SHADER_READ_BIT : 0;
+		barrier.srcQueueFamilyIndex = transferFamily;
+		barrier.dstQueueFamilyIndex = graphicsFamily;
+		barrier.buffer = static_cast<VkBuffer>(transfer.Buffer->getNativeObject(nvrhi::ObjectTypes::VK_Buffer).pointer);
+		barrier.offset = 0;
+		barrier.size = VK_WHOLE_SIZE;
+		VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdPipelineBarrier(commandBuffer, sourceStage, destinationStage, 0, 0, nullptr, 1, &barrier, 0, nullptr);
+	}
+
+	void VulkanGraphicsDevice::RecordBufferToTextureCopies(nvrhi::ICommandList* commandList, std::span<const GPUBufferTextureCopy> copies)
+	{
+		if (!commandList || copies.empty())
+			return;
+		// The destinations' layouts through NVRHI's tracking (which then knows them), committed before the raw copies.
+		for (const GPUBufferTextureCopy& copy : copies)
+		{
+			ST_CORE_ASSERT(copy.Source && copy.Destination && copy.SourceOffset % 16 == 0, "Invalid buffer-to-texture copy");
+			commandList->setTextureState(copy.Destination, nvrhi::TextureSubresourceSet(copy.MipLevel, 1, 0, 1), nvrhi::ResourceStates::CopyDest);
+		}
+		commandList->commitBarriers();
+		VkCommandBuffer commandBuffer = static_cast<VkCommandBuffer>(commandList->getNativeObject(nvrhi::ObjectTypes::VK_CommandBuffer).pointer);
+		if (commandBuffer == VK_NULL_HANDLE)
+			return;
+
+		for (const GPUBufferTextureCopy& copy : copies)
+		{
+			// Rows of whole blocks: the buffer's row length and image height are counted in texels, rounded up to blocks.
+			const nvrhi::FormatInfo& format = nvrhi::getFormatInfo(copy.Destination->getDesc().format);
+			const uint32_t blockSize = std::max<uint32_t>(format.blockSize, 1);
+			VkBufferImageCopy region = {};
+			region.bufferOffset = copy.SourceOffset;
+			region.bufferRowLength = (copy.Width + blockSize - 1) / blockSize * blockSize;
+			region.bufferImageHeight = (copy.Rows + blockSize - 1) / blockSize * blockSize;
+			region.imageSubresource = { VK_IMAGE_ASPECT_COLOR_BIT, copy.MipLevel, 0, 1 };
+			region.imageOffset = { 0, static_cast<int32_t>(copy.FirstRow), 0 };
+			region.imageExtent = { copy.Width, copy.Rows, 1 };
+			const VkBuffer buffer = static_cast<VkBuffer>(copy.Source->getNativeObject(nvrhi::ObjectTypes::VK_Buffer).pointer);
+			const VkImage image = static_cast<VkImage>(copy.Destination->getNativeObject(nvrhi::ObjectTypes::VK_Image).pointer);
+			VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+		}
 	}
 
 	void VulkanGraphicsDevice::OnDeviceLost(const char* operation)
@@ -1113,39 +1200,62 @@ namespace Strata
 
 			m_AcquireSemaphoreIndex = (m_AcquireSemaphoreIndex + 1) % static_cast<uint32_t>(m_AcquireSemaphores.size());
 
-			// Every later submission on the graphics queue waits for the image. NVRHI's own semaphore waits use the
-			// TOP_OF_PIPE stage, which blocks nothing, so the wait is submitted here with ALL_COMMANDS: a semaphore wait
-			// also orders all work submitted after it on the same queue.
-			const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
-			VkSubmitInfo submitInfo = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
-			submitInfo.waitSemaphoreCount = 1;
-			submitInfo.pWaitSemaphores = &acquireSemaphore;
-			submitInfo.pWaitDstStageMask = &waitStage;
-			result = dispatch.vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
-			if (result != VK_SUCCESS)
-			{
-				if (result == VK_ERROR_DEVICE_LOST)
-				{
-					OnDeviceLost("vkQueueSubmit");
-				}
-				else
-				{
-					// The acquired image and its signaled semaphore cannot be used; start over with a new swapchain.
-					ST_CORE_ERROR("vkQueueSubmit failed: {}", nvrhi::vulkan::resultToString(result));
-					DestroySwapchainResources();
-				}
-				return false;
-			}
-
+			// The GPU waits for the image only once the frame's first work on it is about to be submitted (PrepareBackBuffer):
+			// waiting here would make every submission of the frame wait for the display, the asset uploads too.
+			m_PendingAcquireWait = acquireSemaphore;
 			m_ImageAcquired = true;
-			InitializeAcquiredImage();
 			return true;
 		}
 		return false;
 	}
 
+	VkResult VulkanGraphicsDevice::SubmitPendingAcquireWait()
+	{
+		// Every later submission on the graphics queue waits for the image. NVRHI's own semaphore waits use the TOP_OF_PIPE
+		// stage, which blocks nothing, so the wait is submitted here with ALL_COMMANDS: a semaphore wait also orders all work
+		// submitted after it on the same queue (and none submitted before it, such as the frame's uploads).
+		const VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+		VkSubmitInfo submitInfo = { VK_STRUCTURE_TYPE_SUBMIT_INFO };
+		submitInfo.waitSemaphoreCount = 1;
+		submitInfo.pWaitSemaphores = &m_PendingAcquireWait;
+		submitInfo.pWaitDstStageMask = &waitStage;
+		const VkResult result = VULKAN_HPP_DEFAULT_DISPATCHER.vkQueueSubmit(m_GraphicsQueue, 1, &submitInfo, VK_NULL_HANDLE);
+		m_PendingAcquireWait = VK_NULL_HANDLE;
+		return result;
+	}
+
+	bool VulkanGraphicsDevice::PrepareBackBuffer()
+	{
+		if (!m_ImageAcquired)
+			return false;
+		if (m_PendingAcquireWait == VK_NULL_HANDLE)
+			return true; // Submitted earlier in the frame
+
+		const VkResult result = SubmitPendingAcquireWait();
+		if (result != VK_SUCCESS)
+		{
+			if (result == VK_ERROR_DEVICE_LOST)
+			{
+				OnDeviceLost("vkQueueSubmit");
+			}
+			else
+			{
+				// The acquired image and its signaled semaphore cannot be used; start over with a new swapchain.
+				ST_CORE_ERROR("vkQueueSubmit failed: {}", nvrhi::vulkan::resultToString(result));
+				DestroySwapchainResources();
+			}
+			m_ImageAcquired = false;
+			return false;
+		}
+		InitializeAcquiredImage();
+		return true;
+	}
+
 	void VulkanGraphicsDevice::EndFrame()
 	{
+		// Present waits for the image's acquisition too, also in a frame that never used the back buffer.
+		if (m_ImageAcquired)
+			PrepareBackBuffer();
 		if (m_ImageAcquired)
 		{
 			VkSemaphore presentSemaphore = m_PresentSemaphores[m_CurrentImageIndex];

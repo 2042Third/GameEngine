@@ -47,6 +47,7 @@ namespace Strata::Engine
 
 		ComponentRegistry::BeginRegistration();
 		AssetLoaderRegistry::BeginRegistration();
+		AssetManagerExtensionRegistry::BeginRegistration();
 		BuiltinAssets::BeginRegistration();
 		SceneSystemRegistry::BeginRegistration();
 

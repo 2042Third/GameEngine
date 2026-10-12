@@ -2,10 +2,15 @@
 #include "Strata/Renderer/Mesh.h"
 
 #include "Strata/Core/BinaryStream.h"
+#include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Renderer/Renderer.h"
 
 #include <meshoptimizer.h>
 #include <mikktspace.h>
+
+#include <array>
+#include <bit>
+#include <cmath>
 
 namespace Strata
 {
@@ -115,6 +120,10 @@ namespace Strata
 
 			if (!submesh.Bounds.IsValid())
 				submesh.Bounds = MeshUtils::ComputeBounds(std::span<const glm::vec3>(positions).subspan(submesh.BaseVertex, submesh.VertexCount));
+			const MeshLOD& detail = submesh.LODs.front();
+			submesh.UVDensity = MeshUtils::ComputeUVDensity(std::span<const glm::vec3>(positions).subspan(submesh.BaseVertex, submesh.VertexCount),
+				std::span<const MeshVertexAttributes>(attributes).subspan(submesh.BaseVertex, submesh.VertexCount),
+				std::span<const uint32_t>(indices).subspan(detail.IndexOffset, detail.IndexCount));
 		}
 
 		Ref<Mesh> mesh(new Mesh());
@@ -186,9 +195,10 @@ namespace Strata
 
 	AssetFinalizeResult Mesh::FinalizeOnMainThread(const AssetFinalizeContext& context)
 	{
-		nvrhi::ICommandList* commandList = context.CommandList;
-		if (!commandList || m_Uploaded)
+		RendererUploadContext* upload = RendererUploadContext::From(context.Upload);
+		if (!upload || !upload->GetQueue().IsBatchOpen() || m_Uploaded)
 			return AssetFinalizeResult::Done;
+		GPUUploadQueue& queue = upload->GetQueue();
 
 		// Past the deadline only the frame's first finalization works (AssetFinalizeContext::FirstOfFrame), allocating too.
 		if (!context.FirstOfFrame && std::chrono::steady_clock::now() >= context.Deadline)
@@ -210,47 +220,36 @@ namespace Strata
 				return AssetFinalizeResult::Failed;
 			}
 			m_UploadOffset = 0;
+			m_UploadQueue = queue.ChooseQueue(context);
 		}
 
-		// The streams upload one after the other, as one run of bytes cut into steps; the first step of a call is taken whatever
-		// the upload budget says, the first step of the frame's first call whatever the deadline says too. Steps go through
-		// staging buffers of the renderer's pool, within the staging room like texture bands (the frame's first step also when
-		// the staging in flight leaves none: the room leaves a step for it), so a mesh's upload never holds more staging than
-		// the budget allows.
+		// The streams upload one after the other, as one run of bytes cut into steps through the renderer's upload queue,
+		// which sizes them to what is left of the frame's upload bytes and time (powers of two from
+		// GPUUploadQueue::c_MinStepBytes, like the staging buffers they go through; the frame's first step goes whatever). Steps
+		// wait for staging room like texture steps, so a mesh's upload never holds more staging than the budget allows.
 		const std::array<UploadRange, 3> ranges = { {
 			{ m_PositionBuffer, reinterpret_cast<const uint8_t*>(m_Positions.data()), positionBytes },
 			{ m_AttributeBuffer, reinterpret_cast<const uint8_t*>(m_Attributes.data()), attributeBytes },
 			{ m_IndexBuffer, reinterpret_cast<const uint8_t*>(m_Indices.data()), indexBytes }
 		} };
-		nvrhi::IDevice* device = Renderer::GetDevice();
-		StagingPool& stagingPool = Renderer::GetStagingPool();
-		const bool framesFirstCall = !context.UploadedBytes || *context.UploadedBytes == 0;
 		const uint64_t totalBytes = positionBytes + attributeBytes + indexBytes;
-		uint64_t uploaded = 0;
-		bool firstStep = true;
+		uint64_t callBytes = 0;
+		float callMs = 0.0f;
+		std::array<GPUBufferRegion, 3> regions;
 		while (m_UploadOffset < totalBytes)
 		{
-			const uint64_t stepBytes = std::min(c_AssetUploadStepBytes, totalBytes - m_UploadOffset);
-			if (!(firstStep && framesFirstCall) && !stagingPool.HasRoomFor(StagingPool::GetBufferByteSize(stepBytes), context.GetStagingRoom()))
+			const uint64_t remaining = totalBytes - m_UploadOffset;
+			const bool framesFirst = GPUUploadQueue::IsFramesFirstStep(context, callBytes);
+			const uint64_t limit = queue.PlanStep(context, callBytes, callMs, remaining, std::min(remaining, GPUUploadQueue::c_MinStepBytes));
+			if (limit == 0)
 				break;
-			const bool overBudget = !firstStep && uploaded + stepBytes > context.UploadBudget;
-			const bool overTime = !(firstStep && context.FirstOfFrame) && std::chrono::steady_clock::now() >= context.Deadline;
-			if (overBudget || overTime)
+			const uint64_t stepBytes = limit >= remaining ? remaining : std::bit_floor(limit);
+			if (!queue.HasStagingRoom(context, StagingPool::GetBufferByteSize(stepBytes), framesFirst))
 				break;
 
-			nvrhi::BufferHandle staging = stagingPool.AcquireBuffer(stepBytes, context.StagingBytes);
-			auto* destination = staging ? static_cast<uint8_t*>(device->mapBuffer(staging, nvrhi::CpuAccessMode::Write)) : nullptr;
-			if (!destination)
-			{
-				ST_CORE_ERROR("Mesh: no staging memory for its upload");
-				stagingPool.Release(std::move(staging));
-				m_PositionBuffer = nullptr;
-				m_AttributeBuffer = nullptr;
-				m_IndexBuffer = nullptr;
-				return AssetFinalizeResult::Failed;
-			}
-			// A step may span streams: one copy per stream it covers, from consecutive bytes of the staging buffer.
+			// A step may span streams: one copy per stream it covers.
 			const uint64_t stepEnd = m_UploadOffset + stepBytes;
+			size_t regionCount = 0;
 			uint64_t rangeStart = 0;
 			for (const UploadRange& range : ranges)
 			{
@@ -258,34 +257,50 @@ namespace Strata
 				const uint64_t writeBegin = std::max(m_UploadOffset, rangeStart);
 				const uint64_t writeEnd = std::min(stepEnd, rangeEnd);
 				if (writeBegin < writeEnd)
-					std::memcpy(destination + (writeBegin - m_UploadOffset), range.Data + (writeBegin - rangeStart), static_cast<size_t>(writeEnd - writeBegin));
+					regions[regionCount++] = GPUBufferRegion { range.Buffer, writeBegin - rangeStart, range.Data + (writeBegin - rangeStart), writeEnd - writeBegin };
 				rangeStart = rangeEnd;
 			}
-			device->unmapBuffer(staging);
-			rangeStart = 0;
-			for (const UploadRange& range : ranges)
+			const GPUUploadStep step = queue.UploadBuffer(context, std::span<const GPUBufferRegion>(regions.data(), regionCount), m_UploadQueue);
+			if (!step.Recorded)
 			{
-				const uint64_t rangeEnd = rangeStart + range.Size;
-				const uint64_t writeBegin = std::max(m_UploadOffset, rangeStart);
-				const uint64_t writeEnd = std::min(stepEnd, rangeEnd);
-				if (writeBegin < writeEnd)
-					commandList->copyBuffer(range.Buffer, writeBegin - rangeStart, staging, writeBegin - m_UploadOffset, writeEnd - writeBegin);
-				rangeStart = rangeEnd;
+				ST_CORE_ERROR("Mesh: no staging memory for its upload");
+				m_PositionBuffer = nullptr;
+				m_AttributeBuffer = nullptr;
+				m_IndexBuffer = nullptr;
+				return AssetFinalizeResult::Failed;
 			}
-			stagingPool.Release(std::move(staging));
 			m_UploadOffset = stepEnd;
-			uploaded += stepBytes;
-			firstStep = false;
+			callBytes += step.Bytes;
+			callMs += step.Milliseconds;
 		}
-		if (context.UploadedBytes)
-			*context.UploadedBytes += uploaded;
 		if (m_UploadOffset < totalBytes)
 			return AssetFinalizeResult::Pending;
+
+		// Every range was copied on the transfer queue: the graphics queue takes the buffers over once the copies completed.
+		if (m_UploadQueue == GPUUploadQueueKind::Transfer)
+		{
+			const std::array<nvrhi::IBuffer*, 3> buffers = { m_PositionBuffer.Get(), m_AttributeBuffer.Get(), m_IndexBuffer.Get() };
+			if (m_TransferTicket == 0)
+			{
+				for (nvrhi::IBuffer* buffer : buffers)
+					m_TransferTicket = queue.ReleaseToGraphics(GPUQueueTransfer { nullptr, 0, 0, buffer });
+			}
+			if (!queue.IsComplete(m_TransferTicket))
+			{
+				if (context.MayWait)
+					return AssetFinalizeResult::AwaitingGPU;
+				queue.WaitForTicket(m_TransferTicket);
+			}
+			for (nvrhi::IBuffer* buffer : buffers)
+				queue.AcquireOnGraphics(GPUQueueTransfer { nullptr, 0, 0, buffer });
+			m_TransferTicket = 0;
+			m_UploadQueue = GPUUploadQueueKind::Graphics; // Handed over: nothing is left on the transfer queue
+		}
 
 		// Only shading reads the vertex attributes, from the GPU: their CPU copy goes (the terrain of the stress world held
 		// 9.4 MB of them). Physics keeps reading positions and indices (AssetMeshProvider). Freeing a large copy hands its
 		// pages back to the system, which takes a while: when the steps above ran past the deadline, it is the next call's.
-		if (!firstStep && attributeBytes >= c_TimedReleaseBytes && std::chrono::steady_clock::now() >= context.Deadline)
+		if (callBytes > 0 && attributeBytes >= c_TimedReleaseBytes && std::chrono::steady_clock::now() >= context.Deadline)
 			return AssetFinalizeResult::Pending;
 		std::vector<MeshVertexAttributes>().swap(m_Attributes);
 		m_Uploaded = true;
@@ -524,6 +539,41 @@ namespace Strata
 			for (const glm::vec3& position : positions)
 				bounds.Expand(position);
 			return bounds;
+		}
+
+		glm::vec3 ComputeUVDensity(std::span<const glm::vec3> positions, std::span<const MeshVertexAttributes> attributes, std::span<const uint32_t> indices)
+		{
+			// Twice the areas, per axis (both are halves of cross products, so the factor cancels).
+			std::array<double, 3> area = {};
+			std::array<double, 3> uvArea = {};
+			for (size_t index = 0; index + 2 < indices.size(); index += 3)
+			{
+				const uint32_t a = indices[index];
+				const uint32_t b = indices[index + 1];
+				const uint32_t c = indices[index + 2];
+				if (a >= positions.size() || b >= positions.size() || c >= positions.size() || positions.size() != attributes.size())
+					continue;
+				const glm::vec3 normal = glm::cross(positions[b] - positions[a], positions[c] - positions[a]);
+				const glm::vec2 u = attributes[b].TexCoord - attributes[a].TexCoord;
+				const glm::vec2 v = attributes[c].TexCoord - attributes[a].TexCoord;
+				const double triangleUVArea = std::abs(static_cast<double>(u.x) * v.y - static_cast<double>(u.y) * v.x);
+				const double triangleArea = static_cast<double>(glm::length(normal));
+				if (!(triangleArea > 0.0) || !std::isfinite(triangleArea) || !std::isfinite(triangleUVArea))
+					continue;
+				const glm::vec3 facing = glm::abs(normal);
+				const size_t axis = facing.x >= facing.y && facing.x >= facing.z ? 0 : (facing.y >= facing.z ? 1 : 2);
+				area[axis] += triangleArea;
+				uvArea[axis] += triangleUVArea;
+			}
+
+			const double total = area[0] + area[1] + area[2];
+			glm::vec3 density(0.0f);
+			for (size_t axis = 0; axis < 3; axis++)
+			{
+				if (area[axis] > 0.0 && area[axis] >= total * c_MinUVDensityAreaShare)
+					density[static_cast<glm::length_t>(axis)] = static_cast<float>(std::sqrt(uvArea[axis] / area[axis]));
+			}
+			return density;
 		}
 
 	}

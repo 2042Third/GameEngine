@@ -194,7 +194,8 @@ namespace Strata
 		if (const std::filesystem::path cli = Platform::GetExecutableDirectory() / GetExecutableFileName("StrataCLI"); FileSystem::IsRegularFile(cli))
 			m_CLIExecutable = cli;
 		// The selection outline carries the accent, like selected rows; the streaming view colors loading and failed assets as
-		// the Streaming panel does (GetAssetStateColor), and the LOD view tells the levels of detail apart from success to error.
+		// the Streaming panel does (GetAssetStateColor), and the LOD and Mip views tell the levels of detail and the mip levels
+		// textures lack apart from success to error.
 		ViewportSettings& viewportSettings = m_Context.GetViewport().GetSettings();
 		const UI::ThemeColors& themeColors = UI::GetThemeColors();
 		viewportSettings.SelectionColor = ToVec4(themeColors.Accent);
@@ -203,6 +204,8 @@ namespace Strata
 		const ImVec4* lodColors[] = { &themeColors.Success, &themeColors.Info, &themeColors.Warning, &themeColors.Error };
 		for (size_t level = 0; level < viewportSettings.DebugColors.LOD.size(); level++)
 			viewportSettings.DebugColors.LOD[level] = ToVec4(UI::WithAlpha(*lodColors[level], c_DebugTintAlpha));
+		for (size_t level = 0; level < viewportSettings.DebugColors.Mip.size(); level++)
+			viewportSettings.DebugColors.Mip[level] = ToVec4(UI::WithAlpha(*lodColors[level], c_DebugTintAlpha));
 		// Startup counts as activity: the layout settles at the full rate.
 		m_LastInputTime = m_Host->GetTime();
 

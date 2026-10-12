@@ -328,6 +328,12 @@ namespace Strata::Tests::Layering
 			ReadStringArray(layerJson, "Paths", layer.Paths, named, outErrors);
 			ReadStringArray(layerJson, "Exclude", layer.Exclude, named, outErrors);
 			ReadStringArray(layerJson, "MayInclude", layer.MayInclude, named, outErrors);
+			ReadStringArray(layerJson, "MayNotIncludeExternal", layer.MayNotIncludeExternal, named, outErrors);
+			for (const std::string& prefix : layer.MayNotIncludeExternal)
+			{
+				if (prefix.empty())
+					outErrors.push_back(named + " has an empty prefix in 'MayNotIncludeExternal'");
+			}
 			if (layer.Paths.empty())
 				outErrors.push_back(named + " has no 'Paths'");
 			for (const std::string& allowed : layer.MayInclude)
@@ -445,18 +451,29 @@ namespace Strata::Tests::Layering
 					header = *fromRoot;
 					headerLayer = layers.size() == 1 ? layers.front() : nullptr;
 				}
-				if (!headerLayer)
-					continue;
-
-				report.CheckedIncludes++;
 				const Layer& from = *fileLayer->second;
-				const bool allowed = headerLayer == &from
-					|| std::find(from.MayInclude.begin(), from.MayInclude.end(), headerLayer->Name) != from.MayInclude.end();
-				if (allowed)
-					continue;
-
-				Violation violation { path, include.Line, header, from.Name, headerLayer->Name };
-				auto entry = allowlistUse.find(std::pair(path, header));
+				Violation violation;
+				if (!headerLayer)
+				{
+					// Another target's, a standard or a third-party header: forbidden only by the layer's prefixes.
+					const std::string external = fromRoot ? *fromRoot : include.Path;
+					const auto prefix = std::find_if(from.MayNotIncludeExternal.begin(), from.MayNotIncludeExternal.end(),
+						[&external](const std::string& forbidden) { return external.starts_with(forbidden); });
+					if (prefix == from.MayNotIncludeExternal.end())
+						continue;
+					report.CheckedIncludes++;
+					violation = Violation { path, include.Line, external, from.Name, *prefix, true };
+				}
+				else
+				{
+					report.CheckedIncludes++;
+					const bool allowed = headerLayer == &from
+						|| std::find(from.MayInclude.begin(), from.MayInclude.end(), headerLayer->Name) != from.MayInclude.end();
+					if (allowed)
+						continue;
+					violation = Violation { path, include.Line, header, from.Name, headerLayer->Name, false };
+				}
+				auto entry = allowlistUse.find(std::pair(path, violation.Header));
 				if (entry != allowlistUse.end())
 				{
 					entry->second = true;
@@ -479,6 +496,11 @@ namespace Strata::Tests::Layering
 
 	std::string Describe(const Violation& violation)
 	{
+		if (violation.External)
+		{
+			return fmt::format("{}({}): includes {}, but layer {} may not include third-party headers {}*", violation.File, violation.Line, violation.Header,
+				violation.FileLayer, violation.HeaderLayer);
+		}
 		return fmt::format("{}({}): includes {}, but layer {} may not include layer {}", violation.File, violation.Line, violation.Header,
 			violation.FileLayer, violation.HeaderLayer);
 	}

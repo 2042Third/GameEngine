@@ -23,6 +23,7 @@
 #include <ImGuizmo.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <optional>
@@ -352,10 +353,16 @@ namespace Strata
 		const bool active = settings.DebugView != ViewportDebugView::None;
 		bool clicked = active;
 		// Named after what the image shows, like the menu's items.
-		const char* label = settings.DebugView == ViewportDebugView::Streaming ? "Streaming" : (settings.DebugView == ViewportDebugView::LOD ? "LOD" : "Lit");
+		const char* label = "Lit";
+		if (settings.DebugView == ViewportDebugView::Streaming)
+			label = "Streaming";
+		else if (settings.DebugView == ViewportDebugView::LOD)
+			label = "LOD";
+		else if (settings.DebugView == ViewportDebugView::Mip)
+			label = "Mip";
 		if (UI::ToggleChip("Viewport.DebugView", Icons::Layers, label, &clicked,
-			"Debug views: color the scene by streaming state (meshes, materials and textures still loading or failed) or by the level of detail "
-			"meshes are drawn at"))
+			"Debug views: color the scene by streaming state (meshes, materials and textures still loading or failed), by the level of detail "
+			"meshes are drawn at, or by the mip levels textures lack against what the view needs"))
 		{
 			ImGui::OpenPopup("DebugView");
 		}
@@ -364,7 +371,8 @@ namespace Strata
 		const std::pair<ViewportDebugView, const char*> views[] = {
 			{ ViewportDebugView::None, "Lit (no debug view)" },
 			{ ViewportDebugView::Streaming, "Streaming: loading and failed assets" },
-			{ ViewportDebugView::LOD, "LOD: level of detail drawn" }
+			{ ViewportDebugView::LOD, "LOD: level of detail drawn" },
+			{ ViewportDebugView::Mip, "Mip: texture levels resident against needed" }
 		};
 		for (const auto& [view, name] : views)
 		{
@@ -388,13 +396,21 @@ namespace Strata
 			lines.push_back({ toColor(settings.DebugColors.Pending), "Loading", std::to_string(stats.PendingEntities) });
 			lines.push_back({ toColor(settings.DebugColors.Failed), "Failed", std::to_string(stats.FailedEntities) });
 		}
-		else
+		else if (settings.DebugView == ViewportDebugView::LOD)
 		{
 			for (size_t level = 0; level < settings.DebugColors.LOD.size(); level++)
 			{
 				const bool last = level + 1 == settings.DebugColors.LOD.size();
 				lines.push_back({ toColor(settings.DebugColors.LOD[level]), fmt::format("LOD {}{}", level, last ? "+" : ""), std::to_string(stats.EntitiesPerLOD[level]) });
 			}
+		}
+		else
+		{
+			// Entities by the mip levels their worst texture lacks against what the view needs.
+			constexpr std::array<const char*, 4> names = { "Mips as needed", "1 level short", "2 levels short", "3+ short, loading" };
+			static_assert(names.size() == std::tuple_size_v<decltype(ViewportDebugColors::Mip)>);
+			for (size_t shortfall = 0; shortfall < settings.DebugColors.Mip.size(); shortfall++)
+				lines.push_back({ toColor(settings.DebugColors.Mip[shortfall]), names[shortfall], std::to_string(stats.EntitiesPerMipShortfall[shortfall]) });
 		}
 		const std::string note = settings.DebugView == ViewportDebugView::Streaming && stats.PlaceholderBoxes > 0
 			? fmt::format("{} boxes: meshes not there yet", stats.PlaceholderBoxes) : std::string();

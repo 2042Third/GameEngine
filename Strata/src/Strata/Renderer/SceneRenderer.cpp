@@ -12,6 +12,7 @@
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/TextRenderer.h"
 #include "Strata/Renderer/Texture.h"
+#include "Strata/Renderer/TextureStreamer.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 
@@ -22,6 +23,9 @@
 #include <array>
 #include <cmath>
 #include <limits>
+#include <memory>
+#include <mutex>
+#include <unordered_map>
 
 namespace Strata
 {
@@ -578,16 +582,60 @@ namespace Strata
 			nvrhi::TextureDimension::Texture2DArray, RenderData::IBLParameters { c_EnvironmentCubeSize, sourceWidth, 0.0f, 1 }, 6);
 		FilterEnvironment(commandList, maps);
 		commandList->endMarker();
-		m_Environment = std::move(maps);
+		// Every path of a frame that recorded this executes its command list, and other renderers record (and execute) theirs
+		// later on the same queue: a renderer that takes the maps over samples them only after they were computed.
+		m_Environment = CreateRef<const EnvironmentMaps>(std::move(maps));
+		ShareEnvironment(m_Environment);
 		m_Stats.EnvironmentUpdates++;
+	}
+
+	struct SceneRenderer::SharedEnvironments
+	{
+		std::mutex Mutex; // Renderers draw on the main thread; the lock keeps the registry safe for any other
+		// The entries do not keep the maps: they live as long as a renderer lights with them. A live entry's maps hold their
+		// source texture, so its address names nothing else meanwhile.
+		std::unordered_map<const Texture*, std::weak_ptr<const EnvironmentMaps>> Maps;
+	};
+
+	SceneRenderer::SharedEnvironments& SceneRenderer::GetSharedEnvironments()
+	{
+		static SharedEnvironments s_SharedEnvironments;
+		return s_SharedEnvironments;
+	}
+
+	Ref<const SceneRenderer::EnvironmentMaps> SceneRenderer::FindSharedEnvironment(const Texture& source)
+	{
+		SharedEnvironments& shared = GetSharedEnvironments();
+		std::scoped_lock<std::mutex> lock(shared.Mutex);
+		auto it = shared.Maps.find(&source);
+		if (it == shared.Maps.end())
+			return nullptr;
+		Ref<const EnvironmentMaps> maps = it->second.lock();
+		if (!maps || maps->Source.get() != &source)
+		{
+			shared.Maps.erase(it); // No renderer lights with it any more
+			return nullptr;
+		}
+		return maps;
+	}
+
+	void SceneRenderer::ShareEnvironment(const Ref<const EnvironmentMaps>& environment)
+	{
+		ST_CORE_ASSERT(environment && environment->Source && !environment->Procedural, "SceneRenderer: only the maps of environment map textures are shared");
+		SharedEnvironments& shared = GetSharedEnvironments();
+		std::scoped_lock<std::mutex> lock(shared.Mutex);
+		// Entries of maps no renderer holds any more go first, so the registry holds as many entries as maps in use.
+		std::erase_if(shared.Maps, [](const auto& entry) { return entry.second.expired(); });
+		shared.Maps[environment->Source.get()] = environment;
 	}
 
 	void SceneRenderer::GenerateProceduralSky(nvrhi::ICommandList* commandList, const RenderData::ProceduralSkyParameters& parameters)
 	{
 		ST_PROFILE_FUNCTION();
 		// The textures of the current procedural sky are rewritten in place: commands that still read them were recorded
-		// earlier on the same queue, and the state tracking orders the writes after them.
-		EnvironmentMaps maps = m_Environment.Procedural ? m_Environment : CreateEnvironmentMaps();
+		// earlier on the same queue, and the state tracking orders the writes after them. They are this renderer's own
+		// (only maps computed from environment map textures are shared).
+		EnvironmentMaps maps = m_Environment && m_Environment->Procedural ? *m_Environment : CreateEnvironmentMaps();
 		maps.Source = nullptr;
 		maps.Procedural = parameters;
 
@@ -608,7 +656,7 @@ namespace Strata
 		commandList->dispatch(DispatchGroups(parameters.Size.x), DispatchGroups(parameters.Size.x), 6);
 		FilterEnvironment(commandList, maps);
 		commandList->endMarker();
-		m_Environment = std::move(maps);
+		m_Environment = CreateRef<const EnvironmentMaps>(std::move(maps));
 		m_Stats.EnvironmentUpdates++;
 	}
 
@@ -676,7 +724,7 @@ namespace Strata
 		const bool procedural = skyLight && skyLight->Source == SkyLightSource::Procedural;
 		if (!skyLight || (!procedural && !skyLight->EnvironmentMap.IsValid()))
 		{
-			m_Environment = {}; // Release the maps of a removed environment
+			m_Environment = nullptr; // Release the maps of a removed environment
 			return;
 		}
 
@@ -684,7 +732,7 @@ namespace Strata
 		if (procedural)
 		{
 			const RenderData::ProceduralSkyParameters parameters = GetProceduralSkyParameters(*skyLight, frame);
-			if (!m_Environment.Procedural || *m_Environment.Procedural != parameters)
+			if (!m_Environment || !m_Environment->Procedural || *m_Environment->Procedural != parameters)
 				GenerateProceduralSky(commandList, parameters);
 		}
 		else
@@ -692,8 +740,27 @@ namespace Strata
 			Ref<Texture> texture = m_Assets.Resolve<Texture>(skyLight->EnvironmentMap, AssetPriority::High);
 			if (!texture || !texture->GetGPUTexture())
 				return; // Constant ambient until the environment arrives (counted as pending by the resolve cache)
-			if (texture != m_Environment.Source)
-				ProcessEnvironment(commandList, texture);
+			// The environment is computed from the whole map: its streamer makes every level resident first. Once computed, the
+			// cube is all renderers sample, so nothing asks for the map's levels any more and they drop to its tail; a renderer
+			// that starts lighting with the map afterwards takes over the environment another one computed.
+			if (!m_Environment || texture != m_Environment->Source)
+			{
+				if (Ref<const EnvironmentMaps> shared = FindSharedEnvironment(*texture))
+				{
+					m_Environment = std::move(shared);
+				}
+				else if (texture->GetResidentLevel() > 0)
+				{
+					if (TextureStreamer* streamer = TextureStreamer::Find(*AssetManager::GetActive()))
+						streamer->RequestLevel(skyLight->EnvironmentMap, 0);
+					m_Assets.CountPending(skyLight->EnvironmentMap);
+					return;
+				}
+				else
+				{
+					ProcessEnvironment(commandList, texture);
+				}
+			}
 			rotation = glm::radians(skyLight->Rotation);
 		}
 
@@ -706,7 +773,8 @@ namespace Strata
 	bool SceneRenderer::CreateSceneBindingSets()
 	{
 		nvrhi::ITexture* blackCube = Renderer::GetBlackCubeTexture();
-		const bool hasEnvironment = m_Environment.Cube != nullptr;
+		nvrhi::ITexture* environmentCube = GetEnvironmentCube();
+		const bool hasEnvironment = environmentCube != nullptr;
 		nvrhi::ITexture* shadowMap = m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get();
 
 		// The shadow pass reads the same resources except for its own draw list (and never the shadow map).
@@ -719,10 +787,10 @@ namespace Strata
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(14, drawList),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_MaterialBuffer),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
-				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment.Irradiance.Get() : blackCube),
-				nvrhi::BindingSetItem::Texture_SRV(4, hasEnvironment ? m_Environment.Prefiltered.Get() : blackCube),
+				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
+				nvrhi::BindingSetItem::Texture_SRV(4, hasEnvironment ? m_Environment->Prefiltered.Get() : blackCube),
 				nvrhi::BindingSetItem::Texture_SRV(5, m_BRDFLut),
-				nvrhi::BindingSetItem::Texture_SRV(6, hasEnvironment ? m_Environment.Cube.Get() : blackCube),
+				nvrhi::BindingSetItem::Texture_SRV(6, hasEnvironment ? environmentCube : blackCube),
 				nvrhi::BindingSetItem::Texture_SRV(7, boundShadowMap),
 				nvrhi::BindingSetItem::Texture_SRV(11, m_AOTexture),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(12, m_ClusterBuffer),
@@ -745,7 +813,7 @@ namespace Strata
 		};
 		m_ClusterBindingSet = m_Device->createBindingSet(clusterSet, m_ClusterBindingLayout);
 
-		m_BoundEnvironment = m_Environment.Cube;
+		m_BoundEnvironment = environmentCube;
 		m_BoundShadowMap = shadowMap;
 		if (!m_SceneBindingSet || !m_ShadowBindingSet || !m_ClusterBindingSet)
 		{
@@ -1527,11 +1595,35 @@ namespace Strata
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Submit"); // Extraction (Render.Extract) nests in it
 		const bool rendered = RenderFrame(scene, camera, target, options);
+		if (rendered)
+			ReportTextureUse(camera);
 		// The references the frame resolved end with it, so a renderer that stops rendering (a capture renderer between
 		// captures, a hidden view) keeps none of the meshes, materials and textures it drew resident (the environment
 		// cache keeps the sky light's map) and no asset manager alive.
 		ReleaseFrameAssets();
 		return rendered;
+	}
+
+	void SceneRenderer::ReportTextureUse(const SceneCamera& camera)
+	{
+		// A view that jumped since the previous frame: what it needs now goes first.
+		const glm::vec3 forward = -glm::vec3(camera.View[0][2], camera.View[1][2], camera.View[2][2]);
+		const float forwardLength = glm::length(forward);
+		const glm::vec3 direction = forwardLength > 0.0f ? forward / forwardLength : glm::vec3(0.0f, 0.0f, -1.0f);
+		const bool cut = m_HasPreviousCamera && TextureStreamingPolicy::IsCameraCut(m_PreviousCameraPosition, m_PreviousCameraForward, camera.Position, direction);
+		m_HasPreviousCamera = true;
+		m_PreviousCameraPosition = camera.Position;
+		m_PreviousCameraForward = direction;
+
+		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+		TextureStreamer* streamer = manager ? TextureStreamer::Find(*manager) : nullptr;
+		if (!streamer)
+			return;
+		TextureStreamingView view;
+		view.ViewportHeight = static_cast<float>(m_ViewportSize.y);
+		view.Streaming = m_Specification.TextureStreaming;
+		view.CameraCut = cut;
+		streamer->ReportView(view, m_VisibleTextures);
 	}
 
 	bool SceneRenderer::RenderFrame(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options)
@@ -1625,7 +1717,7 @@ namespace Strata
 		commandList->open();
 		commandList->beginMarker(m_Specification.DebugName.c_str());
 		UpdateEnvironment(scene, preview, frame, commandList);
-		if ((buffersRecreated || m_BoundEnvironment != m_Environment.Cube.Get()) && !CreateSceneBindingSets())
+		if ((buffersRecreated || m_BoundEnvironment != GetEnvironmentCube()) && !CreateSceneBindingSets())
 		{
 			commandList->endMarker();
 			commandList->close();

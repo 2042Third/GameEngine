@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Asset/AssetTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "TestHelpers.h"
@@ -14,6 +15,7 @@
 #include <memory>
 
 using namespace Strata;
+using namespace Strata::Tests;
 
 namespace
 {
@@ -48,6 +50,27 @@ namespace
 	{
 		return bytes == AssetResidencyBudgets::c_Unlimited ? nlohmann::json(nullptr) : nlohmann::json(bytes);
 	}
+
+	// Makes an asset manager the active one while it lives, and the previous one again afterwards.
+	class ScopedActiveManager
+	{
+	public:
+		explicit ScopedActiveManager(const Ref<AssetManagerBase>& manager)
+			: m_Previous(AssetManager::GetActive())
+		{
+			AssetManager::SetActive(manager);
+		}
+
+		~ScopedActiveManager()
+		{
+			AssetManager::SetActive(m_Previous);
+		}
+
+		ScopedActiveManager(const ScopedActiveManager&) = delete;
+		ScopedActiveManager& operator=(const ScopedActiveManager&) = delete;
+	private:
+		Ref<AssetManagerBase> m_Previous;
+	};
 
 }
 
@@ -91,6 +114,8 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(totals["streaming"]["inFlightBudgetBytes"] == stats.Budgets.InFlightBytes);
 		CHECK(totals["finalization"]["uploadBudgetBytesPerFrame"] == stats.Budgets.UploadBytesPerFrame);
 		CHECK(totals["finalization"]["stagingBudgetBytes"] == stats.Budgets.StagingBytes);
+		CHECK(totals["finalization"]["uploadBudgetMsPerFrame"].get<double>() == doctest::Approx(stats.Budgets.UploadMsPerFrame));
+		CHECK(totals["finalization"]["uploadMsLastFrame"].get<double>() == doctest::Approx(stats.UploadMsLastFrame));
 		CHECK(totals["finalization"]["windowFrames"] == AssetManagerBase::c_StatsWindowFrames);
 		CHECK(totals["evictions"] == stats.Evictions);
 		CHECK(totals["evictionChecks"] == stats.EvictionChecks);
@@ -98,6 +123,17 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(totals["stagingReleases"] == stats.StagingReleases);
 		CHECK(totals["prefetch"]["started"] == stats.DependencyPrefetches);
 		CHECK(totals["prefetch"]["dropped"] == stats.DependencyPrefetchesDropped);
+		CHECK(totals["mipStreaming"]["partialLoads"] == stats.PartialLoads);
+		CHECK(totals["mipStreaming"]["rangeReads"] == stats.RangeReads);
+		CHECK(totals["mipStreaming"]["rangeReadsCompleted"] == stats.RangeReadsCompleted);
+		CHECK(totals["mipStreaming"]["levelsRaised"] == stats.Detail.LevelsRaised);
+		CHECK(totals["mipStreaming"]["levelsDropped"] == stats.Detail.LevelsDropped);
+		CHECK(totals["mipStreaming"]["levelsDroppedForBudget"] == stats.Detail.LevelsDroppedForBudget);
+		CHECK(totals["mipStreaming"]["bytesStreamed"] == stats.Detail.BytesStreamed);
+		CHECK(totals["mipStreaming"]["bytesStreamedLastFrame"] == stats.Detail.BytesStreamedLastFrame);
+		CHECK(totals["mipStreaming"]["assetsBelowWanted"] == stats.Detail.AssetsBelowWanted);
+		CHECK(totals["mipStreaming"]["levelReads"] == stats.Detail.Reads);
+		CHECK(totals["mipStreaming"]["levelChanges"] == stats.Detail.Changes);
 
 		// The list: by memory (the default) or by last use, limited.
 		const nlohmann::json listed = harness.Run("asset.stats", { { "assets", true } });
@@ -140,6 +176,49 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(status["assets"]["pools"]["cpu"]["residentBytes"] == AssetManager::GetActive()->GetStats().Resident.Cpu);
 	}
 
+	TEST_CASE("asset.stats lists the mip levels of assets kept partly resident")
+	{
+		StreamingHarness harness;
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle streaming = manager->Add(0x75001, MakeUsage(0, 3 << 20));
+		const AssetHandle whole = manager->Add(0x75002, MakeUsage(0, 1 << 20));
+		manager->RequestLoad(streaming);
+		manager->RequestLoad(whole);
+		REQUIRE(manager->WaitForPendingLoads());
+		manager->Update();
+		const Ref<FakeSizedAsset> streamed = std::dynamic_pointer_cast<FakeSizedAsset>(manager->PeekLoadedAsset(streaming));
+		REQUIRE(streamed);
+		// Level 4 of 12 resident (holding 3 MiB), level 2 wanted: two levels short.
+		streamed->SetDetailLevels(AssetDetailLevels { 4, 2, 12, 3 << 20 });
+		const ScopedActiveManager active(manager);
+
+		const nlohmann::json listed = harness.Run("asset.stats", { { "assets", true } });
+		bool foundStreaming = false;
+		bool foundWhole = false;
+		for (const nlohmann::json& asset : listed["assets"])
+		{
+			if (asset["handle"] == UUIDToJson(streaming))
+			{
+				foundStreaming = true;
+				CHECK(asset["residentMip"] == 4);
+				CHECK(asset["wantedMip"] == 2);
+				CHECK(asset["mipCount"] == 12);
+				CHECK(asset["residentBytes"] == 3 << 20);
+			}
+			else if (asset["handle"] == UUIDToJson(whole))
+			{
+				// Assets that do not report levels have no mip fields.
+				foundWhole = true;
+				CHECK_FALSE(asset.contains("residentMip"));
+				CHECK_FALSE(asset.contains("wantedMip"));
+				CHECK_FALSE(asset.contains("residentBytes"));
+			}
+		}
+		CHECK(foundStreaming);
+		CHECK(foundWhole);
+	}
+
 	TEST_CASE("asset.setBudget changes the budgets, rejects values that are not positive, and resets them")
 	{
 		StreamingHarness harness;
@@ -157,7 +236,7 @@ TEST_SUITE("Editor.Streaming")
 		const AssetResidencyBudgets defaults = AssetManagerBase::GetDefaultResidencyBudgets();
 
 		const nlohmann::json set = harness.Run("asset.setBudget", { { "gpuTexturesMB", 64 }, { "gpuBuffersMB", 16 }, { "cpuMB", 0.5 }, { "inFlightMB", 32 },
-			{ "uploadMBPerFrame", 8 }, { "finalizeMsPerFrame", 2.5 }, { "stagingMB", 24 } });
+			{ "uploadMBPerFrame", 8 }, { "finalizeMsPerFrame", 2.5 }, { "uploadMsPerFrame", 1.5 }, { "stagingMB", 24 } });
 		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
 		CHECK(budgets.GpuTextures == 64 * c_MiB);
 		CHECK(budgets.GpuBuffers == 16 * c_MiB);
@@ -165,17 +244,20 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(budgets.InFlightBytes == 32 * c_MiB);
 		CHECK(budgets.UploadBytesPerFrame == 8 * c_MiB);
 		CHECK(budgets.FinalizeMsPerFrame == doctest::Approx(2.5f));
+		CHECK(budgets.UploadMsPerFrame == doctest::Approx(1.5f));
 		CHECK(budgets.StagingBytes == 24 * c_MiB);
 		CHECK(set["budgets"]["gpuTexturesBytes"] == 64 * c_MiB);
 		CHECK(set["budgets"]["cpuBytes"] == c_MiB / 2);
 		CHECK(set["budgets"]["finalizeMsPerFrame"].get<double>() == doctest::Approx(2.5));
+		CHECK(set["budgets"]["uploadMsPerFrame"].get<double>() == doctest::Approx(1.5));
+		CHECK(harness.Run("asset.stats")["finalization"]["uploadBudgetMsPerFrame"].get<double>() == doctest::Approx(1.5));
 		CHECK(set["budgets"]["stagingBytes"] == 24 * c_MiB);
 		CHECK(harness.Run("asset.stats")["pools"]["gpuTextures"]["budgetBytes"] == 64 * c_MiB);
 		CHECK(harness.Run("asset.stats")["finalization"]["stagingBudgetBytes"] == 24 * c_MiB);
 
 		// Values that are not positive numbers change nothing.
 		for (const nlohmann::json& parameters : { nlohmann::json { { "gpuTexturesMB", 0 } }, nlohmann::json { { "cpuMB", -1 } },
-				 nlohmann::json { { "finalizeMsPerFrame", 0.0 } }, nlohmann::json { { "inFlightMB", "lots" } }, nlohmann::json { { "uploadMBPerFrame", 1e300 } },
+				 nlohmann::json { { "finalizeMsPerFrame", 0.0 } }, nlohmann::json { { "uploadMsPerFrame", -1.0 } }, nlohmann::json { { "inFlightMB", "lots" } }, nlohmann::json { { "uploadMBPerFrame", 1e300 } },
 				 nlohmann::json { { "stagingMB", -2 } }, nlohmann::json { { "gpuTexturesMB", 128 }, { "gpuBuffersMB", 0 } } })
 		{
 			CAPTURE(parameters.dump());

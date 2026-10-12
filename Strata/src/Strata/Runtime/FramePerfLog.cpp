@@ -4,6 +4,7 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Platform.h"
+#include "Strata/Renderer/GPUUploadQueue.h"
 
 #include <iterator>
 
@@ -60,7 +61,9 @@ namespace Strata
 		for (FrameStageID stage = 0; stage < log->m_StageCount; stage++)
 			log->m_Columns.push_back(profiler.GetStageName(stage));
 		for (const char* column : { "WorkerBusyPercent", "IOBusyPercent", "LoadingAssets", "QueuedLoads", "InFlightLoads", "InFlightMB", "UploadedMB",
-			"FinalizeMs", "ResidentGpuTexturesMB", "ResidentGpuBuffersMB", "ResidentCpuMB", "Evictions", "PrivateMB", "PeakPrivateMB" })
+			"FinalizeMs", "UploadMs", "ResidentGpuTexturesMB", "ResidentGpuBuffersMB", "ResidentCpuMB", "Evictions", "StreamedMB", "MipLevelsRaised",
+			"MipLevelsDropped", "MipsBelowWanted", "UploadQueueMB", "UploadQueueMs", "UploadQueueSteps", "DeviceMB", "StagingMB", "PrivateMB",
+			"PeakPrivateMB" })
 		{
 			log->m_Columns.push_back(column);
 		}
@@ -84,7 +87,8 @@ namespace Strata
 		Close();
 	}
 
-	bool FramePerfLog::WriteFrame(const FrameSample& frame, const AssetManagerStats* assets)
+	bool FramePerfLog::WriteFrame(const FrameSample& frame, const AssetManagerStats* assets, const GPUUploadQueueStats* uploads,
+		const FramePerfDeviceMemory* device)
 	{
 		if (m_Failed || m_Closed)
 			return false;
@@ -99,14 +103,25 @@ namespace Strata
 		if (assets)
 		{
 			const uint32_t queued = assets->QueuedLoads[0] + assets->QueuedLoads[1] + assets->QueuedLoads[2];
-			fmt::format_to(out, ",{},{},{},{:.3f},{:.3f},{:.4f},{:.3f},{:.3f},{:.3f},{}", assets->LoadingAssets, queued, assets->InFlightLoads,
-				ToMB(assets->InFlightBytes), ToMB(assets->UploadedBytesLastFrame), assets->FinalizeMsLastFrame, ToMB(assets->Resident.GpuTextures),
+			fmt::format_to(out, ",{},{},{},{:.3f},{:.3f},{:.4f},{:.4f},{:.3f},{:.3f},{:.3f},{}", assets->LoadingAssets, queued, assets->InFlightLoads,
+				ToMB(assets->InFlightBytes), ToMB(assets->UploadedBytesLastFrame), assets->FinalizeMsLastFrame, assets->UploadMsLastFrame, ToMB(assets->Resident.GpuTextures),
 				ToMB(assets->Resident.GpuBuffers), ToMB(assets->Resident.Cpu), assets->Evictions);
+			fmt::format_to(out, ",{:.3f},{},{},{}", ToMB(assets->Detail.BytesStreamedLastFrame), assets->Detail.LevelsRaised, assets->Detail.LevelsDropped,
+				assets->Detail.AssetsBelowWanted);
 		}
 		else
 		{
-			m_Line += ",,,,,,,,,,";
+			m_Line += ",,,,,,,,,,,,,,,";
 		}
+		// The frame's steps through the upload queue (it is called before the next frame begins).
+		if (uploads)
+			fmt::format_to(out, ",{:.3f},{:.4f},{}", ToMB(uploads->FrameBytes), uploads->FrameMs, uploads->FrameSteps);
+		else
+			m_Line += ",,,";
+		if (device)
+			fmt::format_to(out, ",{:.3f},{:.3f}", ToMB(device->DeviceBytes), ToMB(device->StagingBytes));
+		else
+			m_Line += ",,";
 		// What the process holds, for memory limits of whole games (a peak includes every frame before).
 		if (const std::optional<ProcessMemoryInfo> memory = Platform::GetProcessMemory())
 			fmt::format_to(out, ",{:.3f},{:.3f}", ToMB(memory->PrivateBytes), ToMB(memory->PeakPrivateBytes));

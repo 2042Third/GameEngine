@@ -1,7 +1,7 @@
 {
-	"Description": "The engine's layers, bottom up. Every file under SourceRoot belongs to exactly one layer (Paths minus Exclude, globs relative to SourceRoot) and may include only files of its own layer and of the layers in MayInclude, which must be listed below it. Architecture.Layering (StrataTests/src/Architecture/LayeringTests.cpp) enforces it; LayeringAllowlist.txt lists the known exceptions, each with the workstream that removes it, and holds exactly MaxAllowlistEntries lines (lower it when you remove one). Widen a MayInclude only for a proven downward dependency, with the reason in the layer's Notes; never to legalize a sideways or upward include. The paths stand in for the planned moves of files between libraries (wave 4, engine-modules).",
+	"Description": "The engine's layers, bottom up. Every file under SourceRoot belongs to exactly one layer (Paths minus Exclude, globs relative to SourceRoot) and may include only files of its own layer and of the layers in MayInclude, which must be listed below it, and none of the third-party headers whose path starts with a prefix of its MayNotIncludeExternal. Architecture.Layering (StrataTests/src/Architecture/LayeringTests.cpp) enforces it; LayeringAllowlist.txt lists the known exceptions, each with the workstream that removes it, and holds exactly MaxAllowlistEntries lines (lower it when you remove one). Widen a MayInclude only for a proven downward dependency, with the reason in the layer's Notes; never to legalize a sideways or upward include. The paths stand in for the planned moves of files between libraries (wave 4, engine-modules).",
 	"SourceRoot": "Strata/src",
-	"MaxAllowlistEntries": 9,
+	"MaxAllowlistEntries": 8,
 	"Layers": [
 		{
 			"Name": "Core",
@@ -24,10 +24,11 @@
 		},
 		{
 			"Name": "Asset",
-			"Notes": "Asset registry, loading, packs and built-in asset handles, without the importers (AssetPipeline).",
+			"Notes": "Asset registry, loading, packs and built-in asset handles, without the importers (AssetPipeline). It knows no graphics API: GPU assets record their uploads into the AssetUploadContext the renderer provides (the IAssetGraphics engine service), so neither NVRHI nor Vulkan headers may be included here.",
 			"Paths": [ "Strata/Asset/**" ],
 			"Exclude": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*", "Strata/Asset/TextureCooker.*", "Strata/Asset/BC7Encoder.*", "Strata/Asset/AssetPackWriter.*", "Strata/Asset/AssetDependencies.*" ],
-			"MayInclude": [ "Core" ]
+			"MayInclude": [ "Core" ],
+			"MayNotIncludeExternal": [ "nvrhi/", "vulkan/", "vk_" ]
 		},
 		{
 			"Name": "Reflection",

@@ -49,9 +49,15 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   unchanged under load on many cores, so a normal canary does not rule load out); `PerfGPU.Editor` writes a 100,000-
   and a 1,000,000-entity scene to a temporary project and opens a maximized StrataEditor on them for about 20 seconds,
   again to confirm a failure; `PerfGPU.Streaming` writes and imports the stress project (17 large textures, 111.8 MB
-  once block-compressed) and runs its two camera sweeps in helper processes: the evicting one, about 15 s, then the one
-  with all textures resident at 1920x1080, each with up to two more to confirm a failure, and the exported game in
-  `StrataRuntime`; `Perf.TextureCook` imports the same project cold and times the BC7 encoder per block; `PerfGPU.Pack`
+  once block-compressed) and runs its camera sweeps in helper processes: the evicting one with whole textures, about
+  15 s, the one with all textures resident at 1920x1080, and mip streaming's fly-through 3 units over the textured
+  ground of the `Flight` scene (1920x1080, 600 frames, about 30 s: with a 96 MB texture budget, again within 8 MB, and
+  its whole-texture baseline; `PerfGPU.Streaming.Mips.*`: peak private memory, the most bytes and upload-step
+  milliseconds of a frame, the longest frame to the baseline's; within 96 MB it must reach level 0 and its last frame
+  match the baseline's by 40 dB PSNR, also over the bottom third; within 8 MB it must drop levels for the budget and
+  stay within it), each with up to two more to confirm a failure, then the exported game in
+  `StrataRuntime` (from the overview camera, then the whole world in view: `RuntimePeakPrivateMemoryAllInView`, every
+  texture at its wanted level at the end); `Perf.TextureCook` imports the same project cold and times the BC7 encoder per block; `PerfGPU.Pack`
   writes the project twice, with its textures block-compressed and uncompressed, in pack versions 2 and 1),
   `StrataEditor.Smoke`
   (the real editor in a window with `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label

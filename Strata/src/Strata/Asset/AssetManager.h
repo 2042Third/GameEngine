@@ -1,11 +1,11 @@
 #pragma once
 
 #include "Strata/Asset/Asset.h"
+#include "Strata/Asset/AssetManagerExtension.h"
 #include "Strata/Asset/AssetResidency.h"
 #include "Strata/Asset/AssetStreamingQueue.h"
+#include "Strata/Asset/AssetUploadContext.h"
 #include "Strata/Math/AABB.h"
-
-#include <nvrhi/nvrhi.h>
 
 #include <array>
 #include <atomic>
@@ -54,18 +54,30 @@ namespace Strata
 		uint64_t UploadedBytesWindowMax = 0;
 		float FinalizeMsLastFrame = 0.0f;
 		float FinalizeMsWindowMax = 0.0f;
+		// Of the finalization time, what the upload steps took (writing staging memory, recording copies; see
+		// AssetResidencyBudgets::UploadMsPerFrame).
+		float UploadMsLastFrame = 0.0f;
+		float UploadMsWindowMax = 0.0f;
 
 		uint64_t Evictions = 0;       // Assets evicted for budgets or trims since the manager was created
 		// Resident assets that eviction (for budgets or trims) looked at since the manager was created: the cost of keeping
 		// the budgets. Eviction for a pool looks only at assets holding memory of that pool.
 		uint64_t EvictionChecks = 0;
 		uint64_t Cancellations = 0;   // Loads abandoned before they finished (CancelLoad, or unloaded while loading)
-		uint64_t StagingReleases = 0; // Times the idle upload command list was recreated to return its staging memory
+		uint64_t StagingReleases = 0; // Times the upload context returned the staging memory that went idle after uploads stopped
 
 		// Loads of dependencies started when the read of an asset that depends on them completed (see GetDependencies), and
 		// those dropped on arrival because what they hold no longer fitted in the budgets.
 		uint64_t DependencyPrefetches = 0;
 		uint64_t DependencyPrefetchesDropped = 0;
+
+		// Loads that read only a prefix of the asset's stored form (see AssetPrefixFunction) since the manager was created,
+		// and reads of byte ranges (RequestRange) queued or in flight now and completed in all.
+		uint64_t PartialLoads = 0;
+		uint32_t RangeReads = 0;
+		uint64_t RangeReadsCompleted = 0;
+		// What its extensions keeping assets partly resident did (the renderer's texture streamer).
+		AssetDetailStats Detail;
 	};
 
 	// The residency of one asset (AssetManagerBase::GetResidencyInfo).
@@ -80,6 +92,7 @@ namespace Strata
 		uint64_t LastRequestedFrame = 0; // The manager's frame of the latest request (GetAsset, RequestLoad, Pin)
 		uint32_t PinCount = 0;
 		bool IsMemoryAsset = false;
+		std::optional<AssetDetailLevels> Detail; // For assets kept partly resident (textures streaming their mip levels)
 	};
 
 	// Versions of an asset's source (AssetManagerBase::GetSourceRevisions), so that data derived from an asset can be kept
@@ -105,6 +118,7 @@ namespace Strata
 		uint64_t LastRequestedFrame = 0;
 		uint32_t PinCount = 0;
 		bool IsMemoryAsset = false;
+		std::optional<AssetDetailLevels> Detail; // For assets kept partly resident (AssetResidencyInfo::Detail)
 	};
 
 	// The stored bytes a loader decodes. Loaders read them as a span (it converts to one, so loaders may take a span);
@@ -113,20 +127,26 @@ namespace Strata
 	class AssetLoadData
 	{
 	public:
-		// Bytes the loader may take over (TakeBytes moves them out of `bytes`).
-		explicit AssetLoadData(std::vector<uint8_t>& bytes)
-			: m_Bytes(bytes), m_Owner(&bytes)
+		// Bytes the loader may take over (TakeBytes moves them out of `bytes`). `storedSize` is the size of the asset's whole
+		// stored form when the bytes are only a prefix of it (a partial load, see AssetPrefixFunction); 0: all of it.
+		explicit AssetLoadData(std::vector<uint8_t>& bytes, uint64_t storedSize = 0)
+			: m_Bytes(bytes), m_Owner(&bytes), m_ReadSize(bytes.size()), m_StoredSize(std::max<uint64_t>(storedSize, bytes.size()))
 		{
 		}
 
 		// Bytes the loader may only read (TakeBytes copies them), e.g. to validate a document.
 		explicit AssetLoadData(std::span<const uint8_t> bytes)
-			: m_Bytes(bytes)
+			: m_Bytes(bytes), m_ReadSize(bytes.size()), m_StoredSize(bytes.size())
 		{
 		}
 
 		std::span<const uint8_t> GetBytes() const { return m_Bytes; }
 		operator std::span<const uint8_t>() const { return m_Bytes; }
+
+		// The size of the asset's whole stored form, and whether the load read only a prefix of it (the bytes, until they are
+		// taken): the loader makes an asset of what the prefix holds, which reads the rest by range later.
+		uint64_t GetStoredSize() const { return m_StoredSize; }
+		bool IsPartial() const { return m_StoredSize > m_ReadSize; }
 
 		// The bytes as a vector of the caller's own: moved out when they were handed over (GetBytes is empty afterwards),
 		// copied otherwise.
@@ -143,7 +163,20 @@ namespace Strata
 	private:
 		std::span<const uint8_t> m_Bytes;
 		std::vector<uint8_t>* m_Owner = nullptr;
+		uint64_t m_ReadSize = 0;
+		uint64_t m_StoredSize = 0;
 	};
+
+	// The first bytes of an asset's stored form a partial load reads to find out how much it needs (AssetPrefixFunction):
+	// the whole header of a cooked texture fits, and the mip tail of most.
+	constexpr uint64_t c_AssetPrefixHeadBytes = 64ull << 10;
+
+	// Given the first bytes of an asset's stored form (`head`: c_AssetPrefixHeadBytes, or all of a smaller asset) and its
+	// whole size, the size of the prefix a first, partial load reads: the part the loader makes a usable asset of (a cooked
+	// texture's header and mip tail), which then reads the rest by range when it is needed (AssetManagerBase::RequestRange,
+	// e.g. the renderer's texture streamer). nullopt (or the whole size) loads all of it: stored forms the function does not
+	// split. Runs on I/O threads; must not touch engine state.
+	using AssetPrefixFunction = std::function<std::optional<uint64_t>(std::span<const uint8_t> head, uint64_t storedSize)>;
 
 	// Converts an asset's stored bytes (cooked or source, depending on the type) into an Asset object. Runs on
 	// worker threads and must not touch engine state.
@@ -158,6 +191,19 @@ namespace Strata
 		static void BeginRegistration();
 		static void Register(AssetType type, AssetLoadFunction loader);
 		static const AssetLoadFunction* Find(AssetType type);
+		// Lets loads of the type read only a prefix of the stored form (see AssetPrefixFunction and
+		// AssetManagerBase::SetPartialLoads); its loader then gets partial data (AssetLoadData::IsPartial).
+		static void RegisterPrefix(AssetType type, AssetPrefixFunction prefix);
+		static const AssetPrefixFunction* FindPrefix(AssetType type);
+	};
+
+	// What polling a range read reports (AssetManagerBase::PollRange).
+	enum class AssetRangeStatus : uint8_t
+	{
+		Pending = 0, // Queued or reading
+		Complete,    // The bytes were handed over (the read is done with)
+		Failed,      // Could not be read, or the asset changed or went away meanwhile (the read is done with)
+		Unknown      // No such read (never requested, or done with already)
 	};
 
 	// The load of an asset together with everything it depends on (AssetManagerBase::RequestLoadWithDependencies): a
@@ -180,7 +226,9 @@ namespace Strata
 		const std::vector<AssetHandle>& GetAssets() const { return m_Assets; }
 
 		// The share of the members' stored bytes that finished loading (Ready or Failed), in [0, 1]. Never decreases: a
-		// member that finished stays counted (also while a hot reload replaces it). 1 for an invalid request.
+		// member that finished stays counted (also while a hot reload replaces it). 1 for an invalid request. A member loaded
+		// partly (a texture whose first load holds its mip tail, see SetPartialLoads) counts whole once it is Ready: its finer
+		// levels stream later, as views need them.
 		float Progress() const;
 		// Every member finished loading (Ready or Failed).
 		bool IsComplete() const;
@@ -294,6 +342,56 @@ namespace Strata
 		bool WaitForPendingLoads(std::chrono::milliseconds timeout = std::chrono::milliseconds(30000));
 		// Loads are queued, in flight or waiting to be finalized.
 		bool HasPendingLoads() const;
+		// Makes the manager's finalizations record their GPU uploads into `context` instead of the running renderer's (the
+		// IAssetGraphics engine service); null goes back to the renderer's. For tools and tests that drive finalization
+		// themselves. Main thread, not while finalizing.
+		void SetUploadContext(Ref<AssetUploadContext> context);
+
+		//////////////////////////////////////////////////////////////////////////
+		// Partial residency
+		//////////////////////////////////////////////////////////////////////////
+
+		// Whether loads of types with a prefix function (AssetLoaderRegistry::RegisterPrefix) read only that prefix: the
+		// asset becomes Ready with what it holds (a texture with its mip tail), and an extension of the manager reads the rest
+		// as it is needed (AssetManagerExtension::RefinesPartialAssets: the renderer's texture streamer, while the manager
+		// uploads through the renderer). On by default; off, every load reads the whole stored form. Takes effect for loads
+		// requested afterwards. Main thread.
+		void SetPartialLoads(bool enabled);
+		// Loads read prefixes now: allowed, and an extension refines what they hold.
+		bool ArePartialLoadsActive() const { return m_PartialLoadsActive.load(std::memory_order_acquire); }
+
+		// Whether the asset has a stored form the manager can read parts of again (RequestRange): registered, neither a memory
+		// asset nor a built-in one.
+		bool HasStoredForm(AssetHandle handle) const;
+		// Re-reads what a loaded asset holds (Asset::GetMemoryUsage) after it changed without being replaced, e.g. a texture
+		// that made more or fewer of its mip levels resident: the pool totals, the per-pool recency orders and what eviction
+		// sees follow. Ignored for assets that are not loaded (or whose loaded object is not `asset`). Main thread.
+		void UpdateMemoryUsage(AssetHandle handle, const Asset& asset);
+
+		// Reads [offset, offset + size) of a loaded asset's stored form in the background, through the streaming queue at
+		// `priority` and `score` (its in-flight bytes and reads limit range reads like loads; the bytes count in flight until
+		// the read is polled complete or cancelled), and returns the read's id (0 when the asset is not loaded or the range
+		// lies outside its stored form). The read fails when the asset is unloaded, evicted or reloaded before it completes.
+		uint64_t RequestRange(AssetHandle handle, uint64_t offset, uint64_t size, AssetPriority priority = AssetPriority::Normal, float score = 0.0f);
+		// Never waits: Pending, or Complete with the bytes moved into outData, or Failed (with the reason); either ends the
+		// read. Main thread.
+		AssetRangeStatus PollRange(uint64_t id, std::vector<uint8_t>& outData, std::string* outError = nullptr);
+		// Moves a queued read up to a higher priority, or a higher score within its priority (never lowers it).
+		void RaiseRange(uint64_t id, AssetPriority priority, float score);
+		// Abandons a read: a queued one never starts, a running one's bytes are dropped.
+		void CancelRange(uint64_t id);
+
+		// The manager's extension of type T (see AssetManagerExtensionRegistry), or null.
+		template<typename T>
+		T* FindExtension() const
+		{
+			for (const Scope<AssetManagerExtension>& extension : m_Extensions)
+			{
+				if (T* found = dynamic_cast<T*>(extension.get()))
+					return found;
+			}
+			return nullptr;
+		}
 
 		//////////////////////////////////////////////////////////////////////////
 		// Residency
@@ -324,6 +422,8 @@ namespace Strata
 		uint64_t GetFrameIndex() const;
 
 		AssetManagerStats GetStats() const;
+		// What the resident assets hold per pool (AssetManagerStats::Resident), without the rest of the statistics.
+		AssetMemoryUsage GetResidentMemory() const;
 		// The assets that are resident, loading, failed or pinned (unloaded, unpinned ones are left out), in no order.
 		std::vector<AssetResidencyInfo> GetResidencyInfo() const;
 		// The same without names, into a vector the caller keeps (its capacity is reused): cheap enough to call several times
@@ -346,8 +446,6 @@ namespace Strata
 		bool GetContentChanges(uint64_t sinceVersion, std::vector<AssetHandle>& outHandles) const;
 		static constexpr size_t c_MaxContentChanges = 4096;
 
-		// Frames without uploads after which the upload command list is recreated (see Update).
-		static constexpr uint32_t c_StagingReleaseFrames = 120;
 		// Frames the window maximums of AssetManagerStats cover.
 		static constexpr uint32_t c_StatsWindowFrames = 120;
 
@@ -522,6 +620,22 @@ namespace Strata
 			uint32_t UnusedFrames = 0;
 		};
 
+		// A read of a byte range of an asset's stored form (RequestRange), from its request until it is polled done or
+		// cancelled.
+		struct RangeRead
+		{
+			AssetHandle Handle = UUID::Null();
+			uint64_t Generation = 0; // The asset's generation when it was requested: a read of another version fails
+			uint64_t Offset = 0;
+			uint64_t Size = 0;
+			bool Dispatched = false; // Counted in flight by the streaming queue (Size bytes) until it is done with
+			bool Running = false;    // Its job runs
+			bool Done = false;       // Its job ended: Data holds the bytes, or Error why there are none
+			bool Cancelled = false;  // Abandoned while queued or running: whoever sees it last forgets it
+			std::vector<uint8_t> Data;
+			std::string Error;
+		};
+
 		friend class AssetPin;
 
 		static void PushCompletion(const Ref<LoadState>& loadState, Completion completion) noexcept;
@@ -534,6 +648,22 @@ namespace Strata
 		// Streaming (AssetManager.cpp)
 		bool DispatchLoad(const AssetStreamingRequest& request);
 		void RunLoad(const AssetMetadata& metadata, const AssetStreamingRequest& request);
+		// Reads what a partial load decodes: the prefix the type's AssetPrefixFunction asks for, or all of the stored form when
+		// it splits nothing. outStoredSize: the whole stored form's size when only a prefix was read, else 0. I/O threads.
+		bool ReadPrefix(const AssetMetadata& metadata, std::vector<uint8_t>& outData, uint64_t& outStoredSize, std::string* outError);
+		// Whether a load of the entry reads only a prefix (ArePartialLoadsActive, a prefix function, a stored form larger than
+		// the head), and the bytes the streaming queue counts for it. Requires m_Mutex.
+		bool IsPartialLoadLocked(const AssetEntry& entry) const;
+		uint64_t GetLoadBytesLocked(const AssetEntry& entry) const;
+		bool DispatchRange(const AssetStreamingRequest& request);
+		void RunRange(const AssetMetadata& metadata, const AssetStreamingRequest& request);
+		// A range read's job ended: the manager may be destroyed from now on (WaitForInFlightLoads).
+		void EndRangeJob();
+		// Whether partial loads are allowed and an extension refines them for the current upload context. Main thread.
+		void UpdatePartialLoads();
+		// Before the manager's own eviction: lets the extensions free memory of the pools over budget (main thread, within the
+		// frame's upload batch).
+		void ReleaseExtensionMemory(const AssetFinalizeContext& context);
 		bool IsLoadCurrent(AssetHandle handle, uint64_t generation) const;
 		void UpdateStreamingLimits();
 
@@ -551,6 +681,9 @@ namespace Strata
 		// Adds the entry to (removes it from) the recency orders of the pools its Usage holds memory of.
 		void LinkRecencyLocked(AssetEntry& entry);
 		void UnlinkRecencyLocked(AssetEntry& entry);
+		// The entry's place in the recency orders (valid while InRecencyOrders and its Usage holds memory of some pool).
+		std::optional<RecencyKey> GetRecencyKeyLocked(const AssetEntry& entry) const;
+		void LinkRecencyLocked(AssetEntry& entry, const RecencyKey& key);
 		// Whether the entry may be evicted, apart from when it was requested (see AssetResidencyBudgets).
 		bool CanEvictLocked(const AssetEntry& entry) const;
 		// Whether the entry was requested in the last `frames` frames (or in the current one).
@@ -570,8 +703,11 @@ namespace Strata
 		// evicted for them is released, so that the device holds the budget at most, not the budget plus the arrivals.
 		RoomResult MakeRoomFor(AssetHandle handle, const AssetMemoryUsage& incoming);
 		void Unpin(AssetHandle handle, uint64_t registration);
-		// Records the frame's finalization statistics and recreates an idle upload command list (main thread).
+		// Records the frame's finalization statistics and lets the upload context return idle staging (main thread).
 		void EndFrameUploads();
+		// Where finalizations record their uploads: the context SetUploadContext gave, else the running renderer's (the
+		// IAssetGraphics engine service), else none. Main thread.
+		AssetUploadContext* GetUploadContext() const;
 
 		// Dependency prefetch (see GetDependencies); every function requires m_Mutex.
 		// Whether `bytes` more fit in every pool with a budget beside what is resident, reserved for arrivals, on its way
@@ -621,18 +757,30 @@ namespace Strata
 		uint64_t m_DependencyPrefetchesDropped = 0;
 		uint64_t m_FrameUploadedBytes = 0; // Since the last Update
 		float m_FrameFinalizeMs = 0.0f;
+		float m_FrameUploadMs = 0.0f;
 		std::array<uint64_t, c_StatsWindowFrames> m_UploadedBytesHistory = {};
 		std::array<float, c_StatsWindowFrames> m_FinalizeMsHistory = {};
+		std::array<float, c_StatsWindowFrames> m_UploadMsHistory = {};
 		size_t m_HistoryCursor = 0;
 		uint64_t m_LastFrameUploadedBytes = 0;
 		float m_LastFrameFinalizeMs = 0.0f;
+		float m_LastFrameUploadMs = 0.0f;
 
-		nvrhi::CommandListHandle m_UploadCommandList;
-		uint32_t m_FramesWithoutUploads = 0; // Main thread only
+		Ref<AssetUploadContext> m_UploadContext; // SetUploadContext's (main thread only)
+
+		// Partial residency
+		bool m_PartialLoadsAllowed = true;                // SetPartialLoads (main thread)
+		std::atomic<bool> m_PartialLoadsActive = false;   // See ArePartialLoadsActive (set on the main thread)
+		std::atomic<uint64_t> m_PartialLoads = 0;         // Loads that read a prefix
+		std::unordered_map<uint64_t, RangeRead> m_RangeReads; // Guarded by m_Mutex
+		uint64_t m_NextRangeId = 1;                       // Guarded by m_Mutex
+		uint64_t m_RangeReadsCompleted = 0;               // Guarded by m_Mutex
 		std::atomic<uint64_t> m_ContentVersion = 0; // See GetContentVersion; changed with m_Mutex held
 		std::atomic<uint64_t> m_MetadataVersion = 0; // See GetMetadataVersion; changed with m_Mutex held
 		std::deque<ContentChange> m_ContentChanges; // The latest changes, oldest first (guarded by m_Mutex)
 		bool m_ProcessingCompletions = false; // Main thread only
+		// Declared last: destroyed first, while what they use of the manager still exists.
+		std::vector<Scope<AssetManagerExtension>> m_Extensions;
 	};
 
 	// Process-wide access to the active asset manager (set by the project).

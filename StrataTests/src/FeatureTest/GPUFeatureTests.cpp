@@ -56,6 +56,21 @@ TEST_SUITE("GPU.FeatureTest")
 		const SceneRendererStats& stats = renderer.GetStats();
 		CHECK(stats.Rendered);
 		CHECK(stats.PendingAssets == 0);
+
+		// The checker texture (64x64) loads its resident tail first and its finest level streams in as the platform needs it
+		// (TextureStreamer); the other textures are no larger than the tail.
+		const Ref<AssetManagerBase> assets = project.GetAssetManager();
+		for (int32_t frame = 0; frame < 120; frame++)
+		{
+			const AssetDetailStats detail = assets->GetStats().Detail;
+			if (detail.LevelsRaised > 0 && detail.Reads == 0 && detail.Changes == 0)
+				break;
+			assets->Update();
+			REQUIRE(renderer.Render(*scene, camera));
+		}
+		CHECK(assets->GetStats().PartialLoads >= 1);
+		CHECK(assets->GetStats().Detail.LevelsRaised >= 1);
+		CHECK(stats.PendingAssets == 0);
 		CHECK(stats.EnvironmentLighting); // The sky light's HDR environment map
 		CHECK(stats.Lights >= 2);         // The sun, plus the point and spot lights in view
 		CHECK(stats.Instances >= 8);

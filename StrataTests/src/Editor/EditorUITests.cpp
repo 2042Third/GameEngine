@@ -808,10 +808,19 @@ TEST_SUITE("Editor.UI")
 		CHECK(ToColor(ImVec4(debugColors.Pending.r, debugColors.Pending.g, debugColors.Pending.b, 1.0f)) == ToColor(colors.Warning));
 		CHECK(ToColor(ImVec4(debugColors.Failed.r, debugColors.Failed.g, debugColors.Failed.b, 1.0f)) == ToColor(colors.Error));
 		CHECK(ToColor(ImVec4(debugColors.LOD[0].r, debugColors.LOD[0].g, debugColors.LOD[0].b, 1.0f)) == ToColor(colors.Success));
+		// The mip view tells the levels textures lack apart with the same meanings: as needed is a success, 3 or more an error.
+		CHECK(ToColor(ImVec4(debugColors.Mip[0].r, debugColors.Mip[0].g, debugColors.Mip[0].b, 1.0f)) == ToColor(colors.Success));
+		CHECK(ToColor(ImVec4(debugColors.Mip[1].r, debugColors.Mip[1].g, debugColors.Mip[1].b, 1.0f)) == ToColor(colors.Info));
+		CHECK(ToColor(ImVec4(debugColors.Mip[2].r, debugColors.Mip[2].g, debugColors.Mip[2].b, 1.0f)) == ToColor(colors.Warning));
+		CHECK(ToColor(ImVec4(debugColors.Mip[3].r, debugColors.Mip[3].g, debugColors.Mip[3].b, 1.0f)) == ToColor(colors.Error));
+		editor.Run("viewport.setSettings", { { "debugView", "mip" } });
+		editor.Frames(1);
+		CHECK(UI::ItemProbe::Find("Viewport.DebugView")->Text == "Mip");
+		CHECK(ImGuiHarness::CountFallbackGlyphs(editor.FindPanelWindow(EditorPanels::c_Viewport)) == 0);
 
 		// Clicking the chip offers the views instead of toggling.
 		REQUIRE(editor.Click("Viewport.DebugView"));
-		CHECK(editor.Context().GetViewport().GetSettings().DebugView == ViewportDebugView::LOD);
+		CHECK(editor.Context().GetViewport().GetSettings().DebugView == ViewportDebugView::Mip);
 	}
 
 	TEST_CASE("Simulate, Pause and Step on the toolbar")

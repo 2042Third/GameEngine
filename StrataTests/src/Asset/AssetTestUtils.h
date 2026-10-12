@@ -36,8 +36,21 @@ namespace Strata::Tests
 
 		AssetType GetType() const override { return c_FakeAssetType; }
 		AssetMemoryUsage GetMemoryUsage() const override { return m_Usage; }
+		// Changes what it holds, as a partly resident asset does when it raises or drops levels (the manager hears of it
+		// through AssetManagerBase::UpdateMemoryUsage).
+		void SetUsage(const AssetMemoryUsage& usage) { m_Usage = usage; }
+		// Levels of detail it reports (Asset::GetDetailLevels), as a texture streaming its mip levels does; none by default.
+		void SetDetailLevels(const std::optional<AssetDetailLevels>& levels) { m_DetailLevels = levels; }
+		bool GetDetailLevels(AssetDetailLevels& outLevels) const override
+		{
+			if (!m_DetailLevels)
+				return false;
+			outLevels = *m_DetailLevels;
+			return true;
+		}
 	private:
 		AssetMemoryUsage m_Usage;
+		std::optional<AssetDetailLevels> m_DetailLevels;
 	};
 
 	// The stored form of a fake asset: its declared usage.
@@ -112,10 +125,16 @@ namespace Strata::Tests
 
 	// An asset manager over in-memory assets: fake ones (Add) or real ones in their stored form (AddStored). Records the
 	// order of reads and can hold reads at a gate: a read waits until the test lets it through (AllowReads), so tests can
-	// keep loads in flight while they queue others.
+	// keep loads in flight while they queue others. Its loads read whole stored forms (AssetManagerBase::SetPartialLoads
+	// false): tests of partial residency turn partial loads on.
 	class FakeAssetManager final : public AssetManagerBase
 	{
 	public:
+		FakeAssetManager()
+		{
+			SetPartialLoads(false);
+		}
+
 		~FakeAssetManager() override
 		{
 			OpenGate();

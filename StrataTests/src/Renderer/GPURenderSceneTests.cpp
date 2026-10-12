@@ -691,6 +691,48 @@ TEST_SUITE("GPU.RenderScene")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The loaded texture maps a frame draws are published with their material's use; materials without them publish none")
+	{
+		// What the texture streamer reads (TextureStreamer::ReportView): the renderer resolved the maps for the frame, so the
+		// streamer looks nothing up, and draws of materials without texture maps work out nothing for streaming.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle texture = assets.AddSolidTexture({ 200, 100, 50, 255 }, TextureFormat::RGBA8SRGB);
+		MaterialProperties textured = UnlitColor({ 1.0f, 1.0f, 1.0f, 1.0f });
+		textured.BaseColorMap = texture;
+		textured.UVTiling = glm::vec2(2.0f, 1.0f);
+		const AssetHandle near = assets.AddMaterial(textured);
+		const AssetHandle plain = assets.AddMaterial(UnlitColor({ 0.0f, 1.0f, 0.0f, 1.0f }));
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddMesh(scene, BuiltinAssets::CubeMesh, near, glm::vec3(-1.0f, 0.0f, 0.0f), "Textured");
+		AddMesh(scene, BuiltinAssets::CubeMesh, plain, glm::vec3(1.5f, 0.0f, 0.0f), "Plain");
+
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 4.0f), glm::vec3(0.0f));
+		REQUIRE(renderer.Render(scene, camera));
+		const std::span<const VisibleMaterialUse> materials = renderer.GetVisibleMaterials();
+		REQUIRE(materials.size() == 2);
+		const VisibleMaterialUse& texturedUse = materials[0].Material == near ? materials[0] : materials[1];
+		const VisibleMaterialUse& plainUse = materials[0].Material == near ? materials[1] : materials[0];
+		REQUIRE(texturedUse.Material == near);
+		REQUIRE(plainUse.Material == plain);
+		CHECK(texturedUse.UVPixels > 0.0f);
+		CHECK(plainUse.UVPixels == 0.0f);
+
+		const std::span<const VisibleTextureUse> textures = renderer.GetVisibleTextures();
+		REQUIRE(textures.size() == 1);
+		CHECK(textures[0].Texture == texture);
+		CHECK(textures[0].Size == 2);
+		CHECK(textures[0].MipCount == 1);
+		CHECK(textures[0].PixelSize == texturedUse.PixelSize);
+		CHECK(textures[0].UVScale == doctest::Approx(2.0f));
+		CHECK(textures[0].UVPixels == texturedUse.UVPixels);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Requests follow visibility: the stress world seen from an empty corner requests nothing beyond the view and the prefetch distance")
 	{
 		GPUContext gpu;

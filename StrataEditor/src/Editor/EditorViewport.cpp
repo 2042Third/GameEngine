@@ -92,7 +92,7 @@ namespace Strata
 		{
 			const std::optional<ViewportDebugView> view = it->is_string() ? ViewportDebugViewFromString(it->get<std::string>()) : std::nullopt;
 			if (!view)
-				return fail("'DebugView' must be \"none\", \"streaming\" or \"lod\"");
+				return fail("'DebugView' must be \"none\", \"streaming\", \"lod\" or \"mip\"");
 			result.DebugView = *view;
 		}
 		for (const auto& [key, value, maximum] : { std::tuple<const char*, float*, float> { "TranslateSnap", &result.TranslateSnap, c_MaxTranslateSnap },

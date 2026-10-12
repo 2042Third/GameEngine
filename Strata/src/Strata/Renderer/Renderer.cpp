@@ -16,6 +16,8 @@ namespace Strata
 			Scope<ShaderLibrary> Shaders;
 			Scope<BindlessTextureTable> BindlessTextures;
 			Scope<StagingPool> Staging;
+			Scope<GPUUploadQueue> UploadQueue;          // Records into the staging pool: destroyed before it
+			Scope<RendererUploadContext> UploadContext; // Records into the upload queue: destroyed before it
 			Scope<DeferredReleaseQueue> DeferredReleases;
 
 			nvrhi::SamplerHandle LinearClamp;
@@ -24,6 +26,7 @@ namespace Strata
 			nvrhi::SamplerHandle AnisotropicWrap;
 
 			nvrhi::CommandListHandle FrameCommandList;
+			bool BackBufferPrepared = false; // PrepareBackBuffer ran in this frame
 
 			nvrhi::TextureHandle WhiteTexture;
 			nvrhi::TextureHandle BlackTexture;
@@ -55,7 +58,7 @@ namespace Strata
 
 	}
 
-	bool Renderer::Init(GraphicsDevice& device)
+	bool Renderer::Init(GraphicsDevice& device, const RendererSpecification& specification)
 	{
 		ST_CORE_VERIFY(!s_Data, "Renderer initialized twice");
 		s_Data = CreateScope<RendererData>();
@@ -98,6 +101,10 @@ namespace Strata
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_BlackSlot, s_Data->BlackTexture);
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_FlatNormalSlot, s_Data->FlatNormalTexture);
 		s_Data->Staging = CreateScope<StagingPool>(nvrhiDevice);
+		s_Data->UploadQueue = CreateScope<GPUUploadQueue>(device, *s_Data->Staging);
+		s_Data->UploadContext = CreateScope<RendererUploadContext>(*s_Data->UploadQueue, *s_Data->Staging);
+		if (specification.TransferQueueUploads && !s_Data->UploadQueue->SetTransferQueue(true))
+			ST_CORE_INFO("Renderer: the device has no dedicated transfer queue; uploads run on the graphics queue");
 		s_Data->DeferredReleases = CreateScope<DeferredReleaseQueue>(nvrhiDevice);
 		// Texture loaders decode block-compressed data on their workers for devices that cannot sample it.
 		Texture::SetBlockCompressionSupported(device.GetInfo().SupportsBCCompression);
@@ -149,11 +156,16 @@ namespace Strata
 		return *s_Data->Staging;
 	}
 
-	void Renderer::ExecuteUploads(nvrhi::ICommandList* commandList)
+	RendererUploadContext& Renderer::GetUploadContext()
 	{
 		ST_CORE_ASSERT(s_Data, "Renderer is not initialized");
-		s_Data->Device->GetDevice()->executeCommandList(commandList);
-		s_Data->Staging->FenceReleased();
+		return *s_Data->UploadContext;
+	}
+
+	GPUUploadQueue& Renderer::GetUploadQueue()
+	{
+		ST_CORE_ASSERT(s_Data, "Renderer is not initialized");
+		return *s_Data->UploadQueue;
 	}
 
 	DeferredReleaseQueue& Renderer::GetDeferredReleases()
@@ -175,14 +187,29 @@ namespace Strata
 
 		s_Data->BindlessTextures->BeginFrame(s_Data->Device->GetFrameIndex());
 		s_Data->Staging->BeginFrame(s_Data->Device->GetFrameIndex());
+		s_Data->UploadQueue->BeginFrame();
 		s_Data->DeferredReleases->Collect();
-		if (nvrhi::ITexture* backBuffer = s_Data->Device->GetBackBuffer())
+		s_Data->BackBufferPrepared = false;
+	}
+
+	nvrhi::ITexture* Renderer::PrepareBackBuffer()
+	{
+		if (!s_Data)
+			return nullptr;
+		if (s_Data->BackBufferPrepared)
+			return s_Data->Device->GetBackBuffer();
+		s_Data->BackBufferPrepared = true;
+		if (!s_Data->Device->PrepareBackBuffer())
+			return nullptr;
+		nvrhi::ITexture* backBuffer = s_Data->Device->GetBackBuffer();
+		if (backBuffer)
 		{
 			s_Data->FrameCommandList->open();
 			s_Data->FrameCommandList->clearTextureFloat(backBuffer, nvrhi::AllSubresources, nvrhi::Color(0.0f, 0.0f, 0.0f, 1.0f));
 			s_Data->FrameCommandList->close();
 			s_Data->Device->GetDevice()->executeCommandList(s_Data->FrameCommandList);
 		}
+		return backBuffer;
 	}
 
 	nvrhi::ISampler* Renderer::GetLinearClampSampler() { return s_Data->LinearClamp; }

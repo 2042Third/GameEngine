@@ -28,9 +28,15 @@ namespace
 	constexpr uint64_t c_MB = 1000 * 1000;
 
 	// Serves stored assets (cooked textures, unless told otherwise) from memory: many handles may share the same bytes.
+	// Loads whole textures: these tests are about the residency of whole assets (partial loads: GPU.TextureStreaming).
 	class TextureManager final : public AssetManagerBase
 	{
 	public:
+		TextureManager()
+		{
+			SetPartialLoads(false);
+		}
+
 		~TextureManager() override
 		{
 			WaitForInFlightLoads();
@@ -352,11 +358,12 @@ TEST_SUITE("GPU.Assets.Residency")
 		for (uint64_t index = 0; index < 4; index++)
 			textures.push_back(manager->Add(0x20000 + index, cooked));
 
-		// 5 MB per frame. A texture of 5.6 MB uploads in two steps (level 0 is one 4 MiB band, the smaller levels the
-		// other), and a frame takes no step beyond its budget except its first: the four textures need five frames.
+		// 5 MB per frame. A texture of 5.6 MB uploads in steps sized to what is left of the frame's budget, and no frame
+		// uploads more than its budget: the four textures need five frames.
 		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
 		budgets.UploadBytesPerFrame = 5 * c_MB;
 		budgets.FinalizeMsPerFrame = 1000.0f; // Only the byte budget limits these frames, however slow the machine
+		budgets.UploadMsPerFrame = 1000.0f;
 		manager->SetResidencyBudgets(budgets);
 		for (AssetHandle texture : textures)
 			manager->RequestLoad(texture);
@@ -369,7 +376,7 @@ TEST_SUITE("GPU.Assets.Residency")
 			frames++;
 			const uint64_t uploaded = manager->GetStats().UploadedBytesLastFrame;
 			CHECK(uploaded > 0);
-			CHECK(uploaded <= budgets.UploadBytesPerFrame + c_AssetUploadStepBytes);
+			CHECK(uploaded <= budgets.UploadBytesPerFrame); // No frame uploads more than its budget
 			uploadedTotal += uploaded;
 			uint32_t ready = 0;
 			for (AssetHandle texture : textures)
@@ -383,22 +390,25 @@ TEST_SUITE("GPU.Assets.Residency")
 		CHECK(frames == 5);
 		CHECK(uploadedTotal == 4 * textureBytes);
 		AssetManagerStats stats = manager->GetStats();
-		CHECK(stats.UploadedBytesWindowMax <= budgets.UploadBytesPerFrame + c_AssetUploadStepBytes);
+		CHECK(stats.UploadedBytesWindowMax <= budgets.UploadBytesPerFrame);
 		CHECK(stats.FinalizeMsWindowMax > 0.0f);
 		CHECK(stats.StagingReleases == 0);
 
-		// 120 frames after the last upload, the upload command list (and the staging memory it pools) goes.
-		for (uint32_t frame = 1; frame < AssetManagerBase::c_StagingReleaseFrames; frame++)
+		// 120 updates after the last upload, the upload context returns the staging that went idle (there are no device frames
+		// here, which would return it as well). The GPU finishes the uploads first: 120 updates take about a millisecond here,
+		// and staging whose copies the GPU had not run by then would be returned by a second release, 120 updates later.
+		gpu.GetDevice().WaitForIdle();
+		for (uint32_t frame = 1; frame < StagingPool::c_IdleReleaseFrames; frame++)
 			manager->Update();
 		CHECK(manager->GetStats().StagingReleases == 0);
 		CHECK(manager->GetStats().UploadedBytesLastFrame == 0);
 		manager->Update();
 		CHECK(manager->GetStats().StagingReleases == 1);
-		for (uint32_t frame = 0; frame < 2 * AssetManagerBase::c_StagingReleaseFrames; frame++)
+		for (uint32_t frame = 0; frame < 2 * StagingPool::c_IdleReleaseFrames; frame++)
 			manager->Update();
 		CHECK(manager->GetStats().StagingReleases == 1); // Released once; nothing to release until the next upload
 
-		// The next upload uses a new command list, and the texture is right.
+		// The next upload creates staging again, and the texture is right.
 		manager->UnloadAsset(textures[0]);
 		Ref<Texture> reloaded = std::static_pointer_cast<Texture>(manager->LoadAssetSync(textures[0]));
 		REQUIRE(reloaded);
@@ -542,7 +552,7 @@ TEST_SUITE("GPU.Assets.Residency")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Uploads go on without device frames, one step per update, while staging is full")
+	TEST_CASE("Uploads go on without device frames, one step per update, while staging in flight fills the room")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -553,21 +563,22 @@ TEST_SUITE("GPU.Assets.Residency")
 		const AssetHandle second = manager->Add(0x48001, cooked);
 
 		// Before each update, staging released and not covered by a query yet (no device frame runs here, and only the
-		// manager's own uploads are fenced when it executes them) fills the staging budget.
+		// manager's own uploads are fenced when it executes them) fills the staging room: the budget leaves one step.
 		StagingPool& pool = Renderer::GetStagingPool();
-		nvrhi::TextureDesc band;
-		band.width = 512;
-		band.height = 512;
-		band.format = nvrhi::Format::RGBA8_UNORM;
 		const auto fillStaging = [&]()
 		{
-			pool.Release(pool.AcquireTexture(band));
+			pool.Release(pool.AcquireBuffer(1ull << 20));
 			AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
-			budgets.StagingBytes = pool.GetPendingBytes();
+			budgets.StagingBytes = pool.GetPendingBytes() + c_AssetUploadStepBytes;
 			manager->SetResidencyBudgets(budgets);
 		};
 
-		// Each update's first step goes: one texture per update, never none.
+		// Each update's first step goes: one texture per update (a 256 x 256 texture is one step: its levels stacked), never
+		// none. Only staging limits these updates, however slow the machine.
+		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.FinalizeMsPerFrame = 1000.0f;
+		budgets.UploadMsPerFrame = 1000.0f;
+		manager->SetResidencyBudgets(budgets);
 		manager->RequestLoad(first);
 		manager->RequestLoad(second);
 		fillStaging();
@@ -596,17 +607,20 @@ TEST_SUITE("GPU.Assets.Residency")
 		for (uint64_t index = 0; index < 8; index++)
 			textures.push_back(manager->Add(0x49000 + index, cooked));
 
-		// Only the staging budget limits these frames: a 1024x1024 texture goes up in two steps (level 0, one 4 MiB band, and
-		// the smaller levels), so the staging of three textures fits in the room of 20 MiB (16 MiB: one step is left for the
-		// next frame's first) and a fourth's first step does not.
+		// Only the staging budget limits these frames: a 1024x1024 texture goes up in two steps (its smaller levels stacked in
+		// a staging buffer of 2 MiB, then level 0 in 4 MiB), so the staging of three textures fits in the room of 22 MiB
+		// (18 MiB: one step is left for the next frame's first) and a fourth's first step does not.
 		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
-		budgets.StagingBytes = 20ull << 20;
+		budgets.StagingBytes = 22ull << 20;
 		budgets.UploadBytesPerFrame = 1ull << 30;
 		budgets.FinalizeMsPerFrame = 1000.0f;
+		budgets.UploadMsPerFrame = 1000.0f;
 		manager->SetResidencyBudgets(budgets);
 		const uint64_t room = budgets.StagingBytes - c_AssetUploadStepBytes;
-		REQUIRE(3 * textureBytes <= room);
-		REQUIRE(3 * textureBytes + c_AssetUploadStepBytes > room);
+		const uint64_t stackStaging = 2ull << 20;
+		const uint64_t textureStaging = stackStaging + (4ull << 20);
+		REQUIRE(3 * textureStaging <= room);
+		REQUIRE(3 * textureStaging + stackStaging > room);
 
 		// Device frames whose uploads the GPU has run by the next frame (a GPU that keeps up). The manager fences its uploads
 		// when it executes them, so the staging they used is free once the GPU has run them, whatever the frame submits
@@ -759,11 +773,13 @@ TEST_SUITE("GPU.Assets.Residency")
 			return bytes;
 		};
 
-		// World streams in and is drawn.
+		// World streams in and is drawn. Its textures load their resident tails (32x32 and below): the cubes are drawn too small
+		// to need finer levels (mip streaming, TextureStreamer).
+		const uint64_t tailBytes = GetTextureBytes(32);
 		for (int warmup = 0; warmup < 60 && (renderer.GetStats().PendingAssets > 0 || residentTextureBytes(0, 4) == 0); warmup++)
 			frame();
 		REQUIRE(renderer.GetStats().PendingAssets == 0);
-		CHECK(residentTextureBytes(0, 4) == 5 * GetTextureBytes(256));
+		CHECK(residentTextureBytes(0, 4) == 5 * tailBytes);
 		CHECK(manager->GetStats().Evictions == 0);
 		// The shared texture's and material's objects: they must survive the switch, not be evicted and loaded again.
 		const std::weak_ptr<Asset> sharedTexture = manager->GetAsset(textures[4]);
@@ -798,7 +814,7 @@ TEST_SUITE("GPU.Assets.Residency")
 		// arrived.
 		CHECK(manager->GetAsset(textures[4]) == sharedTexture.lock());
 		CHECK(manager->GetAsset(materials[4]) == sharedMaterial.lock());
-		CHECK(residentTextureBytes(4, 8) == 5 * GetTextureBytes(256));
+		CHECK(residentTextureBytes(4, 8) == 5 * tailBytes);
 		CHECK(manager->GetStats().Evictions == 9); // Four textures, four materials, and World's scene document
 		CHECK(manager->GetAssetState(world.Handle) == AssetState::Unloaded);
 

@@ -13,6 +13,8 @@
 namespace Strata
 {
 
+	enum class GPUUploadQueueKind : uint8_t;
+
 	// Per-vertex shading data (stream 1). Positions live in their own stream (stream 0) so depth-only passes such as
 	// shadow maps fetch the minimum. Tangent.w holds the bitangent sign (MikkTSpace convention).
 	struct MeshVertexAttributes
@@ -37,6 +39,10 @@ namespace Strata
 		std::vector<MeshLOD> LODs; // LODs[0] is full detail; later levels are progressively simplified
 		AssetHandle Material = UUID::Null(); // Default material (overridable per MeshRenderer)
 		AABB Bounds;
+		// Texture coordinate units per unit of the mesh's own space along its surfaces (of LOD 0), for the surfaces whose
+		// normals point along each axis most (x: those facing +X or -X), 0 for an axis no surface faces: what a texture's
+		// mip level on screen follows (TextureStreamingPolicy::GetUVPixels). Mesh::Create computes it.
+		glm::vec3 UVDensity = glm::vec3(0.0f);
 	};
 
 	// Indexed triangle mesh asset with one or more submeshes (one per material) and optional LOD levels. Front faces
@@ -57,11 +63,12 @@ namespace Strata
 		std::vector<uint8_t> Serialize() const;
 		static Ref<Mesh> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
 
-		// Creates the GPU vertex and index buffers and uploads the geometry into them in steps of at most
-		// c_AssetUploadStepBytes, as far as the context's budget allows (Pending: the next call continues). Steps go through
-		// staging buffers of the renderer's pool (StagingPool) and wait for staging room within the context's StagingBytes
-		// like texture bands, except the frame's first. Once uploaded, the CPU copy of the vertex attributes is released;
-		// positions and indices stay for physics.
+		// Creates the GPU vertex and index buffers and uploads the geometry into them through the renderer's upload queue
+		// (GPUUploadQueue), in steps the queue sizes to what is left of the context's upload bytes, upload time and deadline
+		// (Pending: the next call continues). Steps go through staging buffers of the renderer's pool (StagingPool) and wait for
+		// staging room within the context's StagingBytes like texture steps. On the transfer queue
+		// the buffers are handed over to the graphics queue once the copies completed (AwaitingGPU meanwhile, when the context
+		// allows it). Once uploaded, the CPU copy of the vertex attributes is released; positions and indices stay for physics.
 		AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override;
 		// The CPU geometry and, once uploaded, the GPU buffers (each counted once, in its own pool).
 		AssetMemoryUsage GetMemoryUsage() const override;
@@ -94,6 +101,8 @@ namespace Strata
 		nvrhi::BufferHandle m_IndexBuffer;
 		// Bytes of the geometry uploaded so far, counting positions, attributes and indices one after the other.
 		uint64_t m_UploadOffset = 0;
+		GPUUploadQueueKind m_UploadQueue {}; // The queue the upload's copies run on (the graphics queue until one is chosen)
+		uint64_t m_TransferTicket = 0; // While the transfer queue's copies complete: the ticket of the release (GPUUploadTicket)
 		bool m_Uploaded = false;
 	};
 
@@ -114,6 +123,12 @@ namespace Strata
 		// when simplification can no longer reduce the mesh within the error tolerance.
 		std::vector<std::vector<uint32_t>> GenerateLODs(std::span<const glm::vec3> positions, std::span<const uint32_t> indices, uint32_t maxLevels);
 		AABB ComputeBounds(std::span<const glm::vec3> positions);
+		// Submesh::UVDensity of indexed triangles (indices relative to the given vertices): per axis, the square root of the
+		// texture coordinate area over the area of the triangles whose normals point along it most. An axis whose triangles
+		// make less than c_MinUVDensityAreaShare of the area gets 0 (slivers would decide alone otherwise), as do triangles
+		// without area or with non-finite texture coordinates.
+		constexpr double c_MinUVDensityAreaShare = 0.01;
+		glm::vec3 ComputeUVDensity(std::span<const glm::vec3> positions, std::span<const MeshVertexAttributes> attributes, std::span<const uint32_t> indices);
 	}
 
 }

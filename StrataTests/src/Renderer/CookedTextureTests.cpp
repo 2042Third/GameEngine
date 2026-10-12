@@ -212,6 +212,89 @@ TEST_SUITE("Renderer.CookedTexture")
 		CHECK(texture->GetMipTailByteRange().LevelCount == 8);
 	}
 
+	TEST_CASE("A partial load reads the header and the resident tail, and the levels above it are one range each")
+	{
+		const Ref<Texture> source = CreateChain(TextureFormat::BC7SRGB, 2048, 2048, "Partial");
+		const std::vector<uint8_t> cooked = source->Serialize();
+		const uint64_t storedSize = cooked.size();
+		const CookedTextureLayout& layout = source->GetCookedLayout();
+		REQUIRE(layout.MipCount == 12);
+
+		// The prefix: header and the levels of at most 32x32 texels (levels 6 to 11), found from the first 64 KiB.
+		const std::span<const uint8_t> head = std::span<const uint8_t>(cooked).first(std::min<size_t>(cooked.size(), 64 * 1024));
+		const std::optional<uint64_t> prefix = Texture::GetLoadPrefixSize(head, storedSize);
+		REQUIRE(prefix);
+		const CookedTextureByteRange tail = layout.GetMipTailByteRange(Texture::c_ResidentTailDimension);
+		CHECK(tail.FirstLevel == 6);
+		CHECK(*prefix == tail.Offset + tail.Size);
+		CHECK(*prefix < 2 * 1024);
+		CHECK(GetCookedTexturePrefixSize(head, storedSize, 128) == layout.GetMipTailByteRange(128).Offset + layout.GetMipTailByteRange(128).Size);
+
+		// The prefix parses on its own, checked against the whole stored size; it holds the tail's levels and no others.
+		const std::span<const uint8_t> bytes = std::span<const uint8_t>(cooked).first(static_cast<size_t>(*prefix));
+		const std::optional<CookedTextureView> view = ParseCookedTexturePrefix(bytes, storedSize);
+		REQUIRE(view);
+		CHECK(view->FirstLevelInData == 6);
+		CHECK(view->StoredSize == storedSize);
+		for (uint32_t level = 0; level < 12; level++)
+		{
+			CAPTURE(level);
+			CHECK(view->GetLevelData(level).empty() == (level < 6));
+			if (level >= 6)
+				CHECK(std::equal(view->GetLevelData(level).begin(), view->GetLevelData(level).end(), source->GetMipData(level).begin()));
+		}
+		// A whole cooked texture holds every level.
+		CHECK(ParseCookedTexture(cooked)->FirstLevelInData == 0);
+		// Prefixes too short for a level, stored sizes smaller than the prefix and version 1 data are refused.
+		CHECK_FALSE(ParseCookedTexturePrefix(std::span<const uint8_t>(cooked).first(static_cast<size_t>(layout.HeaderSize)), storedSize));
+		CHECK_FALSE(ParseCookedTexturePrefix(bytes, bytes.size() - 1));
+		CHECK_FALSE(ParseCookedTexturePrefix(bytes, 16));
+		const std::vector<uint8_t> version1 = WriteVersion1(*CreateChain(TextureFormat::RGBA8, 64, 64, "Old"));
+		CHECK_FALSE(GetCookedTexturePrefixSize(version1, version1.size(), 32));
+		CHECK_FALSE(ParseCookedTexturePrefix(version1, version1.size() + 100));
+		// Textures no larger than the tail have no levels to stream: a prefix would be all of them.
+		const std::vector<uint8_t> small = CreateChain(TextureFormat::RGBA8, 32, 32, "Small")->Serialize();
+		CHECK(GetCookedTexturePrefixSize(small, small.size(), 32) == small.size());
+
+		// The levels above the tail are read as one range each run of them: [first, end) is contiguous, the smaller first.
+		for (const auto& [first, end] : { std::pair { 5u, 6u }, std::pair { 0u, 6u }, std::pair { 3u, 5u } })
+		{
+			CAPTURE(first);
+			const CookedTextureByteRange range = layout.GetLevelsByteRange(first, end);
+			CHECK(range.FirstLevel == first);
+			CHECK(range.LevelCount == end - first);
+			CHECK(range.Offset == layout.Levels[end - 1].Offset);
+			CHECK(range.Offset + range.Size == layout.Levels[first].Offset + layout.Levels[first].Size);
+		}
+		CHECK(layout.GetLevelsByteRange(4, 4).Size == 0);
+
+		// A texture made from the prefix: the tail's levels, its full size and layout, nothing to serialize or decode.
+		std::string error;
+		const Ref<Texture> partial = Texture::Deserialize(std::vector<uint8_t>(bytes.begin(), bytes.end()), storedSize, &error);
+		REQUIRE_MESSAGE(partial, error);
+		CHECK(partial->GetWidth() == 2048);
+		CHECK(partial->GetMipCount() == 12);
+		CHECK(partial->GetLoadedLevel() == 6);
+		CHECK(partial->GetResidentLevel() == 6);
+		CHECK(partial->GetTailLevel() == 6);
+		CHECK(partial->GetMipData(5).empty());
+		CHECK(partial->GetMipData(6).size() == source->GetMipData(6).size());
+		CHECK(partial->Serialize().empty());
+		CHECK_FALSE(partial->Decompress());
+		AssetDetailLevels detail;
+		REQUIRE(partial->GetDetailLevels(detail));
+		CHECK(detail.Resident == 6);
+		CHECK(detail.Wanted == 6);
+		CHECK(detail.Count == 12);
+		partial->SetWantedLevel(2);
+		REQUIRE(partial->GetDetailLevels(detail));
+		CHECK(detail.Wanted == 2);
+		// Without a renderer nothing changes levels.
+		CHECK_FALSE(partial->CanChangeLevels());
+		CHECK_FALSE(partial->DropLevels(8));
+		CHECK_FALSE(partial->RaiseLevels(5, std::vector<uint8_t>(static_cast<size_t>(layout.GetLevelsByteRange(5, 6).Size))));
+	}
+
 	TEST_CASE("Version 1 data still loads")
 	{
 		const Ref<Texture> source = CreateChain(TextureFormat::RGBA8SRGB, 8, 4, "Old");
@@ -311,12 +394,16 @@ TEST_SUITE("Renderer.CookedTexture")
 	{
 		// 10,000 corrupted copies of cooked textures: every truncation is rejected; a mutation is rejected or yields a
 		// texture whose every level lies inside the data with its exact size (pixel bytes carry no checksum, so changed
-		// pixels, names or a shorter mip chain can be valid). Nothing reads outside the data either way.
+		// pixels, names or a shorter mip chain can be valid). Nothing reads outside the data either way. The same holds for
+		// the partial loads' path: the prefix found from the data's first bytes (Texture::GetLoadPrefixSize), parsed and
+		// loaded against the stored size of the original (ParseCookedTexturePrefix, Texture::Deserialize).
 		const std::vector<std::vector<uint8_t>> sources = {
 			CreateChain(TextureFormat::BC1SRGB, 64, 64, "Color")->Serialize(),
 			CreateChain(TextureFormat::BC7, 40, 12, "Odd")->Serialize(),
 			CreateChain(TextureFormat::BC4, 16, 16, "Gray", true)->Serialize(),
-			CreateChain(TextureFormat::RGBA8, 8, 8, "Small")->Serialize() };
+			CreateChain(TextureFormat::RGBA8, 8, 8, "Small")->Serialize(),
+			CreateChain(TextureFormat::BC7SRGB, 256, 128, "Streamed")->Serialize() };
+		uint32_t prefixesAccepted = 0;
 		std::mt19937 random(1234);
 		uint32_t accepted = 0;
 		uint32_t rejected = 0;
@@ -338,6 +425,50 @@ TEST_SUITE("Renderer.CookedTexture")
 				{
 					const size_t position = std::uniform_int_distribution<size_t>(0, region - 1)(random);
 					data[position] = static_cast<uint8_t>(data[position] ^ std::uniform_int_distribution<uint32_t>(1, 255)(random));
+				}
+			}
+
+			// The partial load's path first: it reads only the prefix, so truncations after it may load.
+			{
+				CAPTURE(iteration);
+				const std::span<const uint8_t> head = std::span<const uint8_t>(data).first(std::min<size_t>(data.size(), 64 * 1024));
+				const std::optional<uint64_t> prefixSize = Texture::GetLoadPrefixSize(head, source.size());
+				if (data.size() < c_HeaderSize)
+					CHECK_FALSE(prefixSize);
+				if (prefixSize && *prefixSize <= data.size())
+				{
+					const std::span<const uint8_t> prefix = std::span<const uint8_t>(data).first(static_cast<size_t>(*prefixSize));
+					const std::optional<CookedTextureView> partial = ParseCookedTexturePrefix(prefix, source.size());
+					const Ref<Texture> loaded = Texture::Deserialize(std::vector<uint8_t>(prefix.begin(), prefix.end()), source.size());
+					if (partial)
+					{
+						prefixesAccepted++;
+						REQUIRE(partial->Layout.MipCount >= 1);
+						REQUIRE(partial->FirstLevelInData < partial->Layout.MipCount);
+						for (uint32_t level = 0; level < partial->Layout.MipCount; level++)
+						{
+							const CookedTextureLevel& entry = partial->Layout.Levels[level];
+							REQUIRE(entry.Size == GetMipByteSize(partial->Format, entry.Width, entry.Height));
+							if (level < partial->FirstLevelInData)
+							{
+								REQUIRE(partial->GetLevelData(level).empty());
+								continue;
+							}
+							REQUIRE(entry.Offset <= prefix.size());
+							REQUIRE(entry.Size <= prefix.size() - entry.Offset);
+							REQUIRE(partial->GetLevelData(level).size() == entry.Size);
+						}
+						if (loaded)
+						{
+							REQUIRE(loaded->GetLoadedLevel() == partial->FirstLevelInData);
+							for (uint32_t level = 0; level < loaded->GetMipCount(); level++)
+								REQUIRE(loaded->GetMipData(level).size() == (level < loaded->GetLoadedLevel() ? 0 : partial->Layout.Levels[level].Size));
+						}
+					}
+					else
+					{
+						CHECK_FALSE(loaded);
+					}
 				}
 			}
 
@@ -363,9 +494,10 @@ TEST_SUITE("Renderer.CookedTexture")
 			if (IsBlockCompressedFormat(texture->GetSpecification().Format))
 				CHECK(texture->Decompress());
 		}
-		MESSAGE(rejected, " corrupted copies rejected, ", accepted, " accepted with valid levels");
+		MESSAGE(rejected, " corrupted copies rejected, ", accepted, " accepted with valid levels; ", prefixesAccepted, " prefixes accepted");
 		CHECK(rejected > 2500); // Every truncation and many mutations
 		CHECK(accepted > 0);
+		CHECK(prefixesAccepted > 0);
 	}
 
 	TEST_CASE("Writing refuses levels that do not match the description")

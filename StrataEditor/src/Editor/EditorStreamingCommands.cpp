@@ -38,12 +38,13 @@ namespace Strata
 				{ "inFlightBytes", budgets.InFlightBytes },
 				{ "uploadBytesPerFrame", budgets.UploadBytesPerFrame },
 				{ "finalizeMsPerFrame", budgets.FinalizeMsPerFrame },
+				{ "uploadMsPerFrame", budgets.UploadMsPerFrame },
 				{ "stagingBytes", budgets.StagingBytes } };
 		}
 
 		nlohmann::json DescribeResidency(const AssetResidencyInfo& asset)
 		{
-			return {
+			nlohmann::json row = {
 				{ "handle", UUIDToJson(asset.Handle) },
 				{ "path", asset.Path },
 				{ "name", asset.Name },
@@ -54,6 +55,16 @@ namespace Strata
 				{ "lastUsedFrame", asset.LastRequestedFrame },
 				{ "pins", asset.PinCount },
 				{ "memoryAsset", asset.IsMemoryAsset } };
+			// Assets kept partly resident (textures streaming their mip levels): the finest level resident and the finest one
+			// something needs (0 the finest), the levels there are and what the resident ones hold.
+			if (asset.Detail)
+			{
+				row["residentMip"] = asset.Detail->Resident;
+				row["wantedMip"] = asset.Detail->Wanted;
+				row["mipCount"] = asset.Detail->Count;
+				row["residentBytes"] = asset.Detail->ResidentBytes;
+			}
+			return row;
 		}
 
 		// A budget parameter (megabytes or milliseconds); nullopt when absent. Values that are not numbers greater than 0, or
@@ -114,6 +125,9 @@ namespace Strata
 					{ "finalizeMsLastFrame", stats.FinalizeMsLastFrame },
 					{ "finalizeMsWindowMax", stats.FinalizeMsWindowMax },
 					{ "finalizeBudgetMsPerFrame", stats.Budgets.FinalizeMsPerFrame },
+					{ "uploadMsLastFrame", stats.UploadMsLastFrame },
+					{ "uploadMsWindowMax", stats.UploadMsWindowMax },
+					{ "uploadBudgetMsPerFrame", stats.Budgets.UploadMsPerFrame },
 					{ "stagingBudgetBytes", stats.Budgets.StagingBytes },
 					{ "windowFrames", AssetManagerBase::c_StatsWindowFrames } } },
 				{ "evictions", stats.Evictions },
@@ -122,7 +136,19 @@ namespace Strata
 				{ "stagingReleases", stats.StagingReleases },
 				{ "prefetch", {
 					{ "started", stats.DependencyPrefetches },
-					{ "dropped", stats.DependencyPrefetchesDropped } } } };
+					{ "dropped", stats.DependencyPrefetchesDropped } } },
+				{ "mipStreaming", {
+					{ "partialLoads", stats.PartialLoads },
+					{ "rangeReads", stats.RangeReads },
+					{ "rangeReadsCompleted", stats.RangeReadsCompleted },
+					{ "levelsRaised", stats.Detail.LevelsRaised },
+					{ "levelsDropped", stats.Detail.LevelsDropped },
+					{ "levelsDroppedForBudget", stats.Detail.LevelsDroppedForBudget },
+					{ "bytesStreamed", stats.Detail.BytesStreamed },
+					{ "bytesStreamedLastFrame", stats.Detail.BytesStreamedLastFrame },
+					{ "assetsBelowWanted", stats.Detail.AssetsBelowWanted },
+					{ "levelReads", stats.Detail.Reads },
+					{ "levelChanges", stats.Detail.Changes } } } };
 		}
 
 	}
@@ -132,10 +158,14 @@ namespace Strata
 		registry.Register({ "asset.stats",
 			"Asset memory and streaming: resident bytes and budget per pool (cpu, gpuTextures, gpuBuffers; null budget = unlimited), "
 			"load counts, the streaming queue (queued loads per priority, loads and bytes in flight), finalization (GPU bytes uploaded and "
-			"main-thread milliseconds, last frame and maximum of recent frames, with their budgets and the staging budget), evictions (and how "
+			"main-thread milliseconds, and of those the milliseconds of the upload steps, last frame and maximum of recent frames, with their budgets and the staging budget), evictions (and how "
 			"many resident assets eviction looked at), cancellations, staging releases and dependency prefetches (prefetch: loads of what "
-			"assets reference started when their reads completed, and those dropped on arrival for lack of room in the budgets). With "
-			"assets: true it also lists the assets that are resident, loading, failed or pinned, with their memory, state, last use and pins.",
+			"assets reference started when their reads completed, and those dropped on arrival for lack of room in the budgets) and mip "
+			"streaming (mipStreaming: loads of only a texture's header and smallest levels, reads of further levels queued and completed, "
+			"levels raised and dropped (and of those dropped, the levels a budget took: its pressure, or room for detail a view needs more), bytes read for them in all and in the last frame, textures below the level their views need, and "
+			"textures reading or changing levels now). With assets: true it also lists the assets that are resident, loading, failed or "
+			"pinned, with their memory, state, last use and pins; streaming textures add residentMip (the finest mip level resident, 0 "
+			"the full resolution), wantedMip (the finest level their views need), mipCount and residentBytes (what the resident levels hold).",
 			ObjectSchema({
 				{ "assets", BoolSchema("Also list the assets (default false)") },
 				{ "limit", IntegerSchema("At most this many assets in the list (default 100)", 1, c_MaxAssetRows) },
@@ -177,8 +207,8 @@ namespace Strata
 		registry.Register({ "asset.setBudget",
 			"Sets the asset streaming budgets of the open project's asset manager (until the project closes; not undoable; fails without a "
 			"project): resident memory per pool in megabytes (1 MB = 1048576 bytes; assets over budget are evicted, least recently used first), "
-			"the megabytes of loads in flight, the GPU megabytes uploaded per frame, the main-thread milliseconds finalization may take per frame "
-			"and the staging megabytes texture and mesh uploads may hold (sustained uploads reach at most half of the staging per frame, so "
+			"the megabytes of loads in flight, the GPU megabytes uploaded per frame, the main-thread milliseconds finalization may take per frame, "
+			"the milliseconds its upload steps may take (writing staging memory; steps are sized to fit) and the staging megabytes texture and mesh uploads may hold (sustained uploads reach at most half of the staging per frame, so "
 			"raise both for a loading screen). Values must be greater than 0; reset: true starts from the defaults (derived from the "
 			"GPU). Returns the budgets in effect (bytes, null = unlimited).",
 			ObjectSchema({
@@ -190,6 +220,8 @@ namespace Strata
 				{ "uploadMBPerFrame", { { "type", "number" }, { "exclusiveMinimum", 0 }, { "description", "GPU bytes finalization uploads per frame, in MB" } } },
 				{ "finalizeMsPerFrame", { { "type", "number" }, { "exclusiveMinimum", 0 },
 					{ "description", "Main-thread milliseconds finalization may take per frame" } } },
+				{ "uploadMsPerFrame", { { "type", "number" }, { "exclusiveMinimum", 0 },
+					{ "description", "Main-thread milliseconds the upload steps of a frame may take (writing staging memory, recording copies)" } } },
 				{ "stagingMB", { { "type", "number" }, { "exclusiveMinimum", 0 },
 					{ "description", "Staging memory texture and mesh uploads may hold, in flight and idle, in MB" } } },
 				{ "reset", BoolSchema("Start from the default budgets before applying the given values (default false)") } }),
@@ -206,6 +238,7 @@ namespace Strata
 				const std::optional<double> inFlight = ReadPositive(parameters, "inFlightMB", c_MaxMB, arguments);
 				const std::optional<double> upload = ReadPositive(parameters, "uploadMBPerFrame", c_MaxMB, arguments);
 				const std::optional<double> finalizeMs = ReadPositive(parameters, "finalizeMsPerFrame", c_MaxMs, arguments);
+				const std::optional<double> uploadMs = ReadPositive(parameters, "uploadMsPerFrame", c_MaxMs, arguments);
 				const std::optional<double> staging = ReadPositive(parameters, "stagingMB", c_MaxMB, arguments);
 				if (!arguments.IsValid())
 					return arguments.Fail();
@@ -230,6 +263,8 @@ namespace Strata
 					budgets.UploadBytesPerFrame = toBytes(*upload);
 				if (finalizeMs)
 					budgets.FinalizeMsPerFrame = static_cast<float>(*finalizeMs);
+				if (uploadMs)
+					budgets.UploadMsPerFrame = static_cast<float>(*uploadMs);
 				if (staging)
 					budgets.StagingBytes = toBytes(*staging);
 				manager->SetResidencyBudgets(budgets);

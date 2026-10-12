@@ -201,8 +201,8 @@ Release builds on the reference machine, quiet:
 
 Open items and deferrals later waves own:
 
-- The allowlist's 9 exceptions: the application shell's service wiring (7, `engine-modules`), asset finalization on
-  the renderer's command list (`mip-streaming`) and physics reading the renderer's `Mesh` (Mesh v2, later). Ordering
+- The allowlist's 8 exceptions: the application shell's service wiring (7, `engine-modules`) and physics reading the
+  renderer's `Mesh` (Mesh v2, later). Ordering
   constraints that name systems a build may lack need a policy once subsystems become optional (`engine-modules`).
 - Physics: what an overflowing world needed is remembered per scene for the process, not saved with the scene;
   automatic capacities reserve Jolt's buffers generously (70,000 bodies reserve about a million body pairs), and a world
@@ -210,15 +210,8 @@ Open items and deferrals later waves own:
   still written back one by one; a collider built from a mesh that is reimported while evicted keeps the old data until
   the mesh loads again (the source revisions render-scene uses would tell).
 - Textures: `asset.import` still cooks on the main thread (about 1.5 s for a 4096x4096 BC7 color texture; asynchronous
-  import is `content-and-prefabs`'); HDR textures stay RGBA16F until a BC6H encoder exists; a BC7 upload step carries
-  twice BC1's bytes, and the frame's first step goes whatever the deadline says (later finalizations of a frame past
-  its deadline wait for the next frame), so a frame that finalizes a large texture still takes 4.0-5.1 ms in the
-  evicting sweep (budget 5.44 ms; right after heavy work on the machine single frames reached 5.6-8.1 ms, in all three
-  attempts once in the round's 20 perf runs) until smaller upload steps (`mip-streaming`).
-- A world seen all at once still keeps every texture in view resident: no budget evicts what is in view, so the stress
-  world peaks at about 500 MB in the all-resident sweep until mip streaming (`mip-streaming`). Texture and mesh uploads
-  share the budgeted staging pool; smaller upload steps and an upload queue are `mip-streaming`'s. `GetResidencyInfo`
-  and `GetResidencySamples` walk every registered asset (`GetStats` keeps counts instead), which a world of many
+  import is `content-and-prefabs`'); HDR textures stay RGBA16F until a BC6H encoder exists.
+- `GetResidencyInfo` and `GetResidencySamples` walk every registered asset (`GetStats` keeps counts instead), which a world of many
   registered assets will feel (`world-partition`). Two caches keep assets between frames: `SceneRenderer`'s environment
   cache (the sky's map) and `TextRenderer`'s glyph atlases (their fonts). Streaming the stress world from pack version 2
   takes 1.03-1.09 times version 1's time (zstd blocks and their checksums), close to the 1.1 acceptance limit, which

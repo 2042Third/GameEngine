@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
@@ -331,5 +332,56 @@ TEST_SUITE("Renderer.Mesh")
 		std::vector<MeshVertexAttributes> tooFew(2);
 		CHECK_FALSE(MeshUtils::GenerateSeamTangents(positions, tooFew, indices, false));
 		CHECK(indices == std::vector<uint32_t> { 0, 1, 2 });
+		CHECK(MeshUtils::ComputeUVDensity(positions, tooFew, indices) == glm::vec3(0.0f));
+	}
+
+	TEST_CASE("Submeshes know their texture coordinates per unit of their surfaces, per the axis the surfaces face")
+	{
+		// Texture streaming derives the mip level a submesh shows from it (TextureStreamingPolicy::GetUVPixels).
+		const auto densityOf = [](const Ref<Mesh>& mesh)
+		{
+			REQUIRE(mesh);
+			REQUIRE(mesh->GetSubmeshes().size() == 1);
+			return mesh->GetSubmeshes().front().UVDensity;
+		};
+		const auto equals = [](const glm::vec3& a, const glm::vec3& b)
+		{
+			return glm::all(glm::epsilonEqual(a, b, 1e-4f));
+		};
+		// Each face of the cube spans its texture once over one unit; a quad and a plane face one axis; larger ones spread
+		// the texture thinner.
+		CHECK(equals(densityOf(MeshFactory::CreateCube()), glm::vec3(1.0f)));
+		CHECK(equals(densityOf(MeshFactory::CreateCube(4.0f)), glm::vec3(0.25f)));
+		CHECK(equals(densityOf(MeshFactory::CreateQuad()), glm::vec3(0.0f, 0.0f, 1.0f)));
+		CHECK(equals(densityOf(MeshFactory::CreatePlane(1.0f, 4)), glm::vec3(0.0f, 1.0f, 0.0f)));
+		CHECK(equals(densityOf(MeshFactory::CreatePlane(100.0f, 1)), glm::vec3(0.0f, 0.01f, 0.0f)));
+		CHECK(equals(densityOf(CreateTestQuad()), glm::vec3(0.0f, 0.0f, 1.0f)));
+		// A sphere wraps the texture once around (1 / (2 pi r) along its equator, denser toward its poles): every axis is faced.
+		const glm::vec3 sphere = densityOf(MeshFactory::CreateSphere(0.5f));
+		for (glm::length_t axis = 0; axis < 3; axis++)
+		{
+			CHECK(sphere[axis] > 0.2f);
+			CHECK(sphere[axis] < 1.0f);
+		}
+
+		// Texture coordinates that do not change, or that are not finite, have no density; slivers (under a hundredth of the
+		// area) do not decide an axis.
+		std::vector<glm::vec3> positions = { { 0, 0, 0 }, { 1, 0, 0 }, { 1, 1, 0 }, { 0, 0, 0 }, { 0, 0.001f, 0 }, { 0, 0.001f, 0.001f } };
+		std::vector<MeshVertexAttributes> attributes(6);
+		std::vector<uint32_t> indices = { 0, 1, 2, 3, 4, 5 };
+		CHECK(MeshUtils::ComputeUVDensity(positions, attributes, indices) == glm::vec3(0.0f));
+		attributes[1].TexCoord = { 1.0f, 0.0f };
+		attributes[2].TexCoord = { 1.0f, 1.0f };
+		attributes[4].TexCoord = { 0.0f, 1.0f };
+		attributes[5].TexCoord = { 1.0f, 1.0f };
+		CHECK(equals(MeshUtils::ComputeUVDensity(positions, attributes, indices), glm::vec3(0.0f, 0.0f, 1.0f)));
+		attributes[2].TexCoord = { std::numeric_limits<float>::quiet_NaN(), 1.0f };
+		CHECK(MeshUtils::ComputeUVDensity(positions, attributes, std::vector<uint32_t> { 0, 1, 2 }) == glm::vec3(0.0f));
+		// The serialized form keeps nothing of it: loading computes it again.
+		const Ref<Mesh> cube = MeshFactory::CreateCube(2.0f);
+		REQUIRE(cube);
+		const Ref<Mesh> loaded = Mesh::Deserialize(cube->Serialize());
+		REQUIRE(loaded);
+		CHECK(loaded->GetSubmeshes().front().UVDensity == cube->GetSubmeshes().front().UVDensity);
 	}
 }

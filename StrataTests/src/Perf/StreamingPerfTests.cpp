@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -34,7 +35,8 @@ namespace
 
 	// The residency budget the evicting sweep streams within: far less than the stress project's textures. It holds the
 	// same share of the textures as the residency work's 128 MB held of their RGBA8 form (about 29%, 1.4 times the
-	// largest), so the sweep keeps evicting.
+	// largest), so the sweep keeps evicting. The sweep loads whole textures (mip streaming off): it is the gate of the
+	// residency budgets and of eviction; mip streaming has its own sweep (the Mips metrics below).
 	constexpr uint64_t c_TextureBudget = 32 * c_MB;
 
 	// The metrics of one evicting sweep, checked against their budgets (with their reasons below):
@@ -72,12 +74,33 @@ namespace
 	// (nothing evicted: every texture its camera shows stays) from the world scene's overview camera, which shows about two
 	// thirds of the textures. A maximum by nature, one run per attempt.
 	constexpr const char* c_RuntimePeakPrivateMemory = "PerfGPU.Streaming.RuntimePeakPrivateMemory";
-	// The same with every texture of the pack resident: the game started in the top-down scene, whose camera sees the
-	// whole world (the material of every district, so every texture, is drawn and stays), for 300 frames. Texture
-	// cooking's acceptance criterion ("the exported stress game at 1920x1080 over 300 frames, with all textures resident,
-	// peaks at 650 MB private or less"), whose limit is the budget; the sweeps above only stand in for the game. A maximum
-	// by nature, one run per attempt.
-	constexpr const char* c_RuntimePeakPrivateMemoryAllResident = "PerfGPU.Streaming.RuntimePeakPrivateMemoryAllResident";
+	// The same with the whole world in view: the game started in the top-down scene, whose camera sees every district (the
+	// material of every district, so every texture, is drawn), for 300 frames, its textures at the mip levels the screen
+	// needs (mip streaming), checked at the end: every texture at its wanted level, nothing loading or evicted. Texture
+	// cooking's criterion (650 MB, then with every texture resident) stays the budget; mip streaming's 550 MB is its target.
+	// A maximum by nature, one run per attempt.
+	constexpr const char* c_RuntimePeakPrivateMemoryAllInView = "PerfGPU.Streaming.RuntimePeakPrivateMemoryAllInView";
+
+	// Mip streaming's sweep: a flight 3 units above the ground of the flight scene (its terrain textured, tiled
+	// c_StressTerrainTiling times, so the ground under the camera needs the finest level of its texture, and objects near the
+	// camera fine levels of theirs) at 1920x1080 with a texture budget of 96 MB, run by a helper process with mip streaming,
+	// again with mip streaming within a budget its needs exceed (c_MipsPressureBudget, so levels also go for the budget),
+	// and with whole textures (the baseline: SceneRendererSpecification::TextureStreaming false, the manager's partial loads
+	// off), one of each per attempt. The metrics, maxima by nature, of both streaming runs: their peak private memory (the
+	// 550 MB acceptance limit), the most bytes the asset manager uploaded in a frame (24 MB) and the longest its upload steps
+	// took (2 ms), and their longest frame to the baseline's (the CPU time of the manager's update and the rendering; a
+	// ratio, as budgets are not negative: the acceptance limit, "the longest frame at most 2 ms over the baseline's", is a
+	// ratio of 1.8 to 1.4 for the baseline's 2.5 to 4.5 ms, above the budget; the longest frames are among the first, which
+	// load the world). The flight within 96 MB must reach the finest level and show the world like the baseline in its last
+	// frame, near the camera too (checks).
+	constexpr uint64_t c_MipsTextureBudget = 96 * c_MB;
+	constexpr uint64_t c_MipsPressureBudget = 8 * c_MB;
+	constexpr const char* c_MipsPeakPrivateMemory = "PerfGPU.Streaming.Mips.PeakPrivateMemory";
+	constexpr const char* c_MipsMaxUploadBytesPerFrame = "PerfGPU.Streaming.Mips.MaxUploadBytesPerFrame";
+	constexpr const char* c_MipsMaxUploadStageMs = "PerfGPU.Streaming.Mips.MaxUploadStageMs";
+	constexpr const char* c_MipsMaxFrameRatio = "PerfGPU.Streaming.Mips.MaxFrameRatio";
+	// The streaming run's last frame against the baseline's, in dB (peak signal-to-noise ratio over RGB).
+	constexpr double c_MinFinalFramePSNR = 40.0;
 	// The all-resident sweep's texture budget: far more than the 111.8 MB of textures, so nothing is evicted.
 	constexpr uint64_t c_AllResidentTextureBudget = 1000 * c_MB;
 
@@ -105,6 +128,24 @@ namespace
 #else
 		return Platform::GetExecutableDirectory() / "StrataRuntime";
 #endif
+	}
+
+	// The peak signal-to-noise ratio of two RGBA8 images of the same size, over their color channels, in dB (100 when they are
+	// equal).
+	double ComputePSNR(const std::vector<uint8_t>& a, const std::vector<uint8_t>& b)
+	{
+		REQUIRE(a.size() == b.size());
+		REQUIRE(a.size() % 4 == 0);
+		double squaredError = 0.0;
+		for (size_t index = 0; index < a.size(); index++)
+		{
+			if (index % 4 == 3)
+				continue;
+			const double difference = static_cast<double>(a[index]) - static_cast<double>(b[index]);
+			squaredError += difference * difference;
+		}
+		const double meanSquaredError = squaredError / (static_cast<double>(a.size()) * 0.75);
+		return meanSquaredError > 0.0 ? 10.0 * std::log10(255.0 * 255.0 / meanSquaredError) : 100.0;
 	}
 
 	// Runs the sweep in a helper process (see RunStreamingSweepProcess) and returns its result.
@@ -164,6 +205,8 @@ namespace
 		double ResidentTexturesMB = 0.0; // At the end, of 10^6 bytes
 		double LoadingAssets = 0.0;      // At the end
 		double Evictions = 0.0;          // In all
+		double MipsBelowWanted = 0.0;    // At the end: textures below the level their views need
+		double MipLevelsRaised = 0.0;    // In all
 	};
 
 	// Runs the exported game for `frames` frames in a window of c_RuntimeWidth x c_RuntimeHeight pixels (--resolution), with
@@ -197,6 +240,10 @@ namespace
 		const std::optional<size_t> texturesColumn = table->FindColumn("ResidentGpuTexturesMB");
 		const std::optional<size_t> loadingColumn = table->FindColumn("LoadingAssets");
 		const std::optional<size_t> evictionsColumn = table->FindColumn("Evictions");
+		const std::optional<size_t> belowWantedColumn = table->FindColumn("MipsBelowWanted");
+		const std::optional<size_t> raisedColumn = table->FindColumn("MipLevelsRaised");
+		REQUIRE(belowWantedColumn);
+		REQUIRE(raisedColumn);
 		REQUIRE(finalizeColumn);
 		REQUIRE(uploadedColumn);
 		REQUIRE(peakPrivateColumn);
@@ -220,6 +267,8 @@ namespace
 		result.ResidentTexturesMB = table->Rows.back()[*texturesColumn] * 1024.0 * 1024.0 / c_MBDouble;
 		result.LoadingAssets = table->Rows.back()[*loadingColumn];
 		result.Evictions = table->Rows.back()[*evictionsColumn];
+		result.MipsBelowWanted = table->Rows.back()[*belowWantedColumn];
+		result.MipLevelsRaised = table->Rows.back()[*raisedColumn];
 		return result;
 	}
 
@@ -242,6 +291,7 @@ TEST_SUITE("PerfGPU.Streaming")
 			project = WriteStressProject(directory / "Stress", spec, error);
 			REQUIRE_MESSAGE(project, error);
 			REQUIRE_MESSAGE(WriteStressTopDownScene(*project, spec, error), error); // For the exported game with every texture resident
+			REQUIRE_MESSAGE(WriteStressFlightScene(*project, spec, error), error); // For mip streaming's flight
 			const double writeSeconds = ElapsedSeconds(start);
 			REQUIRE_MESSAGE(BuildStressPack(*project, directory / "Stress.stpak", error), error);
 			MESSAGE("Stress project written in ", writeSeconds, " s, imported and packed in ", ElapsedSeconds(start) - writeSeconds, " s");
@@ -250,12 +300,14 @@ TEST_SUITE("PerfGPU.Streaming")
 		CHECK(project->TextureBytes == 111848560);       // 16 x 2048^2 + 1 x 4096^2 BC7 with mips: 111.8 MB
 		CHECK(project->LargestTextureBytes == 22369648); // 22.4 MB
 
-		// The evicting sweep: 600 frames at 1280x720 with a texture budget that holds less than the stops show over time.
+		// The evicting sweep: 600 frames at 1280x720 with a texture budget that holds less than the stops show over time,
+		// with whole textures.
 		StreamingSweepSettings settings;
 		settings.Pack = directory / "Stress.stpak";
 		settings.Scene = project->WorldScene;
 		settings.Spec = spec;
 		settings.TextureBudget = c_TextureBudget;
+		settings.TextureStreaming = false;
 		REQUIRE(settings.Path.GetFrameCount() == 600);
 		// Every stop holds long enough to tell a stop that settled late from one that never did.
 		REQUIRE(settings.Path.HoldFrames > Perf::Budget(c_FramesToSettle));
@@ -295,8 +347,8 @@ TEST_SUITE("PerfGPU.Streaming")
 		});
 
 		// All textures resident: the stress game at 1920x1080 for 300 frames, over twelve stops whose views take in every
-		// district, with a texture budget that holds every texture. Every sweep that runs: each texture arrives and none
-		// leaves, no load fails and the device reports no error.
+		// district, with a texture budget that holds every texture and whole textures (every level of every texture in view).
+		// Every sweep that runs: each texture arrives and none leaves, no load fails and the device reports no error.
 		StreamingSweepSettings allResident = settings;
 		allResident.TextureBudget = c_AllResidentTextureBudget;
 		allResident.Width = 1920;
@@ -322,6 +374,109 @@ TEST_SUITE("PerfGPU.Streaming")
 			REQUIRE(result.PeakPrivateBytes > 0);
 			return Perf::MetricValues { { c_PeakPrivateMemoryAllResident, static_cast<double>(result.PeakPrivateBytes) / c_MBDouble },
 				{ c_MaxFinalizeTimeAllResident, result.MaxFinalizeMs } };
+		});
+
+		// Mip streaming's flight: 3 units above the flight scene's textured ground over six districts, looking 20 degrees down,
+		// at 1920x1080, 600 frames, with a 96 MB budget; the same within a budget its needs exceed; and the baseline, the
+		// same with whole textures within 96 MB.
+		StreamingSweepSettings mips = settings;
+		mips.Scene = project->FlightScene;
+		mips.TextureStreaming = true;
+		mips.TextureBudget = c_MipsTextureBudget;
+		mips.Width = 1920;
+		mips.Height = 1080;
+		mips.Path.Stops = 6;
+		mips.Path.MoveFrames = 60;
+		mips.Path.HoldFrames = 40;
+		mips.Path.Height = 3.0f;
+		mips.Path.PitchDegrees = 20.0f;
+		REQUIRE(mips.Path.GetFrameCount() == 600);
+		mips.FinalFrameFile = directory / "MipsFinalFrame.rgba";
+		StreamingSweepSettings pressure = mips;
+		pressure.TextureBudget = c_MipsPressureBudget;
+		pressure.FinalFrameFile.clear();
+		StreamingSweepSettings baseline = mips;
+		baseline.TextureStreaming = false;
+		baseline.FinalFrameFile = directory / "BaselineFinalFrame.rgba";
+		const std::filesystem::path mipsFile = directory / "MipsSettings.json";
+		const std::filesystem::path pressureFile = directory / "MipsPressureSettings.json";
+		const std::filesystem::path baselineFile = directory / "BaselineSettings.json";
+		REQUIRE(FileSystem::WriteText(mipsFile, JsonUtils::Dump(ToJson(mips))));
+		REQUIRE(FileSystem::WriteText(pressureFile, JsonUtils::Dump(ToJson(pressure))));
+		REQUIRE(FileSystem::WriteText(baselineFile, JsonUtils::Dump(ToJson(baseline))));
+		// The finest level of the ground's texture alone holds this much: the flight must have had it resident.
+		const uint64_t smallTextureBytes = GetStressTextureBytes(spec.SmallTextureSize);
+		uint32_t mipSweeps = 0;
+		Perf::CheckBudgetsConfirmed({ c_MipsPeakPrivateMemory, c_MipsMaxUploadBytesPerFrame, c_MipsMaxUploadStageMs, c_MipsMaxFrameRatio }, [&]
+		{
+			const uint32_t sweep = ++mipSweeps;
+			CAPTURE(sweep);
+			const auto start = std::chrono::steady_clock::now();
+			const StreamingSweepResult streamed = RunSweepProcess(mipsFile, directory / ("MipsResult" + std::to_string(sweep) + ".json"));
+			const StreamingSweepResult pressed = RunSweepProcess(pressureFile, directory / ("MipsPressureResult" + std::to_string(sweep) + ".json"));
+			const StreamingSweepResult whole = RunSweepProcess(baselineFile, directory / ("BaselineResult" + std::to_string(sweep) + ".json"));
+			REQUIRE(streamed.FrameMs.size() == streamed.Frames);
+			REQUIRE(pressed.FrameMs.size() == streamed.FrameMs.size());
+			REQUIRE(whole.FrameMs.size() == streamed.FrameMs.size());
+			// The runs load at different frames, so the longest frames compare, not frames of the same number. The first frame
+			// creates the renderer's pipelines and targets, the same work in every run that takes far longer than any other
+			// frame (and varies by tens of milliseconds): it would hide what streaming adds.
+			REQUIRE(streamed.FrameMs.size() > 1);
+			const double streamedLongest = std::max(*std::max_element(streamed.FrameMs.begin() + 1, streamed.FrameMs.end()),
+				*std::max_element(pressed.FrameMs.begin() + 1, pressed.FrameMs.end()));
+			const double wholeLongest = *std::max_element(whole.FrameMs.begin() + 1, whole.FrameMs.end());
+			REQUIRE(wholeLongest > 0.0);
+			const std::optional<std::vector<uint8_t>> streamedFrame = FileSystem::ReadBytes(mips.FinalFrameFile);
+			const std::optional<std::vector<uint8_t>> wholeFrame = FileSystem::ReadBytes(baseline.FinalFrameFile);
+			REQUIRE(streamedFrame);
+			REQUIRE(wholeFrame);
+			REQUIRE(streamedFrame->size() == static_cast<size_t>(mips.Width) * mips.Height * 4);
+			const double psnr = ComputePSNR(*streamedFrame, *wholeFrame);
+			// The ground just ahead of the camera: the bottom third of the view, which shows the finest levels.
+			const size_t nearOffset = static_cast<size_t>(mips.Width) * (mips.Height - mips.Height / 3) * 4;
+			const double nearPSNR = ComputePSNR(std::vector<uint8_t>(streamedFrame->begin() + static_cast<std::ptrdiff_t>(nearOffset), streamedFrame->end()),
+				std::vector<uint8_t>(wholeFrame->begin() + static_cast<std::ptrdiff_t>(nearOffset), wholeFrame->end()));
+			const auto describeStreaming = [](const StreamingSweepResult& result)
+			{
+				return fmt::format("{}; upload steps at most {} ms; {} levels raised, {} dropped ({} for the budget), {} MB read for them, finest level {}",
+					DescribeSweep(result), result.MaxUploadMs, result.LevelsRaised, result.LevelsDropped, result.LevelsDroppedForBudget,
+					result.BytesStreamed / c_MBDouble, result.FinestStreamedMip);
+			};
+			MESSAGE("Mip streaming, sweep ", sweep, " (", ElapsedSeconds(start), " s): ", describeStreaming(streamed), "; longest frame ", streamedLongest,
+				" ms (of both streaming runs), the baseline's ", wholeLongest, " ms (", streamedLongest - wholeLongest, " ms over it); last frame ", psnr,
+				" dB against the baseline's, its bottom third ", nearPSNR, " dB. Within ", c_MipsPressureBudget / c_MBDouble, " MB: ", describeStreaming(pressed),
+				". Baseline: ", DescribeSweep(whole), "; upload steps at most ", whole.MaxUploadMs, " ms");
+
+			// Every run streams correctly; streaming raises and drops levels, reaches the finest level of the ground's texture
+			// and holds less than whole textures; its last frame shows the world like the baseline's, near the camera too.
+			for (const StreamingSweepResult* run : { &streamed, &pressed })
+			{
+				CHECK(run->NewErrors == 0);
+				CHECK(run->FailedAssets == 0);
+				CHECK(std::find(run->FramesToSettle.begin(), run->FramesToSettle.end(), c_StopNeverSettled) == run->FramesToSettle.end());
+				CHECK(run->LevelsRaised > 0);
+				CHECK(run->LevelsDropped > 0);
+			}
+			CHECK(whole.NewErrors == 0);
+			CHECK(whole.LevelsRaised == 0);
+			CHECK(streamed.FinestStreamedMip == 0);
+			CHECK(streamed.MaxResidentTextureBytes > smallTextureBytes);
+			CHECK(streamed.MaxResidentTextureBytes < whole.MaxResidentTextureBytes);
+			// The budget's pressure took levels, and residency stayed within it.
+			CHECK(pressed.LevelsDroppedForBudget > 0);
+			CHECK(pressed.MaxResidentTextureBytes <= c_MipsPressureBudget);
+			// The baseline's last frame is the fully resident render: its last stop settled.
+			REQUIRE_FALSE(whole.FramesToSettle.empty());
+			CHECK(whole.FramesToSettle.back() != c_StopNeverSettled);
+			CHECK(psnr >= c_MinFinalFramePSNR);
+			CHECK(nearPSNR >= c_MinFinalFramePSNR);
+			REQUIRE(streamed.PeakPrivateBytes > 0);
+			REQUIRE(pressed.PeakPrivateBytes > 0);
+			return Perf::MetricValues {
+				{ c_MipsPeakPrivateMemory, static_cast<double>(std::max(streamed.PeakPrivateBytes, pressed.PeakPrivateBytes)) / c_MBDouble },
+				{ c_MipsMaxUploadBytesPerFrame, static_cast<double>(std::max(streamed.MaxUploadedBytes, pressed.MaxUploadedBytes)) / c_MBDouble },
+				{ c_MipsMaxUploadStageMs, static_cast<double>(std::max(streamed.MaxUploadMs, pressed.MaxUploadMs)) },
+				{ c_MipsMaxFrameRatio, streamedLongest / wholeLongest } };
 		});
 
 		// The exported game, in a window of 1920x1080 pixels, with its perf log: the runtime's own frames, from the world's
@@ -359,17 +514,19 @@ TEST_SUITE("PerfGPU.Streaming")
 			CHECK(result.ResidentTexturesMB > 0.0);
 			return result.PeakPrivateMB;
 		});
-		// Every texture of the pack resident at the end (and none evicted or still loading): the run measured the criterion.
-		Perf::CheckBudgetConfirmed(c_RuntimePeakPrivateMemoryAllResident, [&]
+		// Every texture at the level the screen needs at the end (none below it, none evicted or still loading): the run
+		// measured the criterion.
+		Perf::CheckBudgetConfirmed(c_RuntimePeakPrivateMemoryAllInView, [&]
 		{
 			const uint32_t run = ++runtimeRuns;
 			CAPTURE(run);
 			const RuntimePerfLogResult result = RunExportedGame(topDownManifestPath, directory / ("RuntimePerfLog" + std::to_string(run) + ".csv"),
 				c_RuntimeAllResidentFrames, false);
-			MESSAGE("Exported stress game with every texture resident, run ", run, ": peak private memory ", result.PeakPrivateMB, " MB, ",
-				result.ResidentTexturesMB, " MB of textures resident at the end");
-			// The log has three decimals of 2^20 bytes.
-			CHECK(std::abs(result.ResidentTexturesMB * c_MBDouble - static_cast<double>(project->TextureBytes)) <= 0.001 * 1024.0 * 1024.0);
+			MESSAGE("Exported stress game with the whole world in view, run ", run, ": peak private memory ", result.PeakPrivateMB, " MB, ",
+				result.ResidentTexturesMB, " MB of textures resident at the end (", result.MipLevelsRaised, " mip levels raised)");
+			CHECK(result.ResidentTexturesMB > 0.0);
+			CHECK(result.ResidentTexturesMB * c_MBDouble < static_cast<double>(project->TextureBytes));
+			CHECK(result.MipsBelowWanted == 0.0);
 			CHECK(result.Evictions == 0.0);
 			CHECK(result.LoadingAssets == 0.0);
 			return result.PeakPrivateMB;

@@ -37,6 +37,8 @@ namespace Strata
 		bool EnableAudio = true;
 		std::filesystem::path ImGuiLayoutFile; // Where ImGui persists its layout (empty: not persisted)
 		std::optional<bool> GraphicsValidation; // Defaults to enabled in Debug builds
+		// Asset uploads run on the device's dedicated transfer queue where it has one (RendererSpecification).
+		bool TransferQueueUploads = false;
 
 		JobSystemSpecification Jobs;
 		std::optional<uint64_t> MaxFrames; // Close automatically after this many frames (automation, tests)

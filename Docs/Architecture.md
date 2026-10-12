@@ -173,11 +173,13 @@ and text) into render targets of its viewport size, which it hands to the `Defer
 without a target, or composing overlays or text before copying into the target), so a game without text renders
 straight into the back buffer and never allocates one. Its image-based lighting comes from the sky light's
 environment map or its procedural sky (`IBL/ProceduralSky.comp` writes mip 0 of the environment cube, then the shared
-filtering chain runs), computed again only when the source or the procedural parameters change; editor views can ask
-for preview lighting, leave out screen-space text and tint entities (`SceneRenderOptions::EntityTints`: the first
-overlay, `Overlay/StatusTint.frag`, blends the listed entities' colors over exactly their pixels of the entity-ID buffer,
-found by binary search in a sorted (id, color) buffer like the selection outline's). How a mesh's level of detail is
-chosen is a pure function (`LODSelection::GetScreenFraction`, `SelectLOD`), so tools show the level the renderer draws.
+filtering chain runs), computed again only when the source or the procedural parameters change (an environment map's
+maps are shared by the renderers lighting with that texture, so a second renderer of the scene computes nothing); editor
+views can ask for preview lighting, leave out screen-space text and tint entities (`SceneRenderOptions::EntityTints`: the
+first overlay, `Overlay/StatusTint.frag`, blends the listed entities' colors over exactly their pixels of the entity-ID
+buffer, found by binary search in a sorted (id, color) buffer like the selection outline's). How a mesh's level of
+detail is chosen is a pure function (`LODSelection::GetScreenFraction`, `SelectLOD`), so tools show the level the
+renderer draws.
 Assets: `Mesh`, `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`; texture formats, the cooked
 texture format and the block decoders are `TextureFormat`, `CookedTexture` and `BlockCompression` (see
 [Texture cooking](#texture-cooking)). Also `TextRenderer`/`FontAtlas`, `DebugDraw`/`SceneGizmos`, `TextureReadback`
@@ -281,7 +283,7 @@ layer and of the layers it lists, which are always lower ones:
 | Core | `Core/**` except the application shell, `Math/**`, `stpch.h`, `Platform/Windows`, `Platform/Posix` (not the sockets) | nothing |
 | Input | `Events/**`, `Input/**` | Core |
 | App | `Core/Application.*`, `Layer.*`, `LayerStack.*`, `Window.h`, `EntryPoint.h`, `Platform/GLFW/**`, `Platform/Vulkan/VulkanLoader.*` | Core, Input |
-| Asset | `Asset/**` except the pipeline files | Core |
+| Asset | `Asset/**` except the pipeline files | Core (and no NVRHI or Vulkan header) |
 | Reflection | `Reflection/**` | Core, Asset |
 | Scene | `Scene/**` | Core, Asset, Reflection |
 | Renderer | `Renderer/**`, `Platform/Vulkan/**` | Core, Input, App, Asset, Reflection, Scene |
@@ -299,26 +301,32 @@ Objective-C(++) source and header under `Strata/src` (`STRATA_SOURCE_DIR`; `.h`,
 so the macOS platform code too), parses its `#include`s, quoted and angle-bracketed (`Strata/src` is a public include
 directory, so `<Strata/...>` reaches engine headers too; `LayeringAnalyzer`: comments, literals and `#if 0` blocks
 skipped; resolved like the preprocessor, quoted includes next to the file first, both forms from `Strata/src`; standard
-and third-party headers match no layer and are skipped), maps both ends to their
+and third-party headers match no layer and are checked only against the prefixes a layer may not include, its
+`MayNotIncludeExternal`: the asset layer's `nvrhi/`, `vulkan/` and `vk_`), maps both ends to their
 layers and fails on every file that is in no layer or in several, on every forbidden include that is not in
 `StrataTests/Architecture/LayeringAllowlist.txt`, and on every allowlist line that matches nothing. Each allowlist line
 names the include, the roadmap workstream that removes it and the reason; the list holds exactly `MaxAllowlistEntries`
-lines (9: the application shell wiring services, asset uploads on the renderer and physics reading renderer meshes), so
-it can only shrink. Scripting and Audio, which used to include the physics and audio systems, reach them through scene
-services (see [Scene services](#scene-services)).
+lines (8: the application shell wiring services and physics reading renderer meshes), so it can only shrink. Scripting
+and Audio, which used to include the physics and audio systems, reach them through scene services (see
+[Scene services](#scene-services)); the asset layer, which used to record uploads on the renderer's command list, records
+them into the `AssetUploadContext` the renderer provides through the engine service `IAssetGraphics`
+(`Asset/AssetUploadContext.h`, see [Streaming and residency](#streaming-and-residency)).
 
 ### Composition root and registries
 
 The engine is extended through registries rather than through code that knows its modules: `ComponentRegistry`
-(components), `AssetLoaderRegistry` (stored bytes to asset objects), `AssetImporterRegistry` (source files to stored
-bytes), `BuiltinAssets` (objects of the built-in assets) and `SceneSystemRegistry` (runtime systems of playing scenes).
+(components), `AssetLoaderRegistry` (stored bytes to asset objects, and the prefixes partial loads read),
+`AssetImporterRegistry` (source files to stored bytes), `AssetManagerExtensionRegistry` (work modules do for every asset
+manager: the texture streamer), `BuiltinAssets` (objects of the built-in assets) and `SceneSystemRegistry` (runtime
+systems of playing scenes).
 `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`) fills them, once per process, before anything reads
 them:
 
 ```text
 open the registries (BeginRegistration; not the importers')
 RegisterSceneModule        Scene/SceneRegistration.cpp         components (ComponentRegistration.cpp); Scene, Prefab, Model loaders
-RegisterRendererModule     Renderer/RendererRegistration.cpp   Texture, Mesh, Material, Font loaders; built-in meshes and material
+RegisterRendererModule     Renderer/RendererRegistration.cpp   Texture (with its prefix), Mesh, Material, Font loaders; built-in
+                                                               meshes and material; the texture streamer of every manager
 RegisterScriptingModule    Scripting/ScriptingRegistration.cpp "Scripting" system
 RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     "Physics" system
 RegisterAudioModule        Audio/AudioRegistration.cpp         AudioClip loader, "Audio" system
@@ -344,8 +352,9 @@ ComponentRegistry::Freeze
   that is registered already or under a name that is taken (ignoring case), logs an error and returns a builder that
   converts to false and discards what it is given; nothing aborts. A game registers its components through
   `ModuleRegistrationOptions::Extra`.
-- The loader, importer, built-in asset and scene system registries stay open: tools and tests register more later
-  (a later loader or importer replaces or overrides the built-in one).
+- The loader, importer, built-in asset, manager extension and scene system registries stay open: tools and tests register
+  more later (a later loader or importer replaces or overrides the built-in one; an extension applies to managers made
+  afterwards).
 - **Components of modules a build lacks survive.** A scene, prefab or snapshot can name components this build does
   not register (a game module that is not loaded, a newer engine). `SceneSerializer::DeserializeEntities` keeps them
   verbatim in the runtime-only `UnknownComponentsComponent` (`Scene/UnknownComponents.h`; not registered, so the
@@ -379,8 +388,9 @@ One frame (`Application::Run` and `RunFrame`):
  5  Layer::OnUpdate(timestep)        every layer in stack order: the editor's or the game's work, below
  6  AudioEngine::AdvanceNullDevice   only while mixing without an output device
     AudioEngine::Update              reclaims finished one-shots
- 7  RenderImGui                      ImGuiLayer::Begin, every Layer::OnImGuiRender, ImGuiLayer::End
- 8  back-buffer captures, GraphicsDevice::EndFrame (present)
+ 7  RenderImGui                      ImGuiLayer::Begin, every Layer::OnImGuiRender, Renderer::PrepareBackBuffer (the GPU
+                                     waits for the swapchain image from here on), ImGuiLayer::End
+ 8  Renderer::PrepareBackBuffer (frames without UI), back-buffer captures, GraphicsDevice::EndFrame (present)
     frame counted; MaxFrames (--frames) closes the application; the frame pacer waits (frame rate cap)
 ```
 
@@ -746,8 +756,8 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   subclass); decoding runs on the worker pool and queues a completion. The loader (`AssetLoadFunction`) gets the read
   bytes as an `AssetLoadData`: it reads them as a span, or takes them over (`TakeBytes`) when its asset keeps them
   (textures keep their cooked bytes and read pixels in place, fonts keep their file), so a load never holds two copies.
-  `Update` finalizes completions on the main thread: `Asset::FinalizeOnMainThread` creates GPU resources on one upload
-  command list, in steps, until the frame's upload or time budget is used up (`AssetFinalizeResult::Pending`: the asset
+  `Update` finalizes completions on the main thread: `Asset::FinalizeOnMainThread` creates GPU resources in one batch of
+  the upload context (see the upload seam below), in steps, until the frame's upload or time budget is used up (`AssetFinalizeResult::Pending`: the asset
   continues next frame, first in line). Generations discard results of loads that were superseded by a reload, unload
   or cancellation. `LoadAssetSync` is for tools, tests and scene switches (unbudgeted: it finishes at once);
   `ReplaceLoadedAsset` publishes an object made in memory for a registered asset at once (editors' document edits).
@@ -879,9 +889,13 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   (Docs/Roadmap.md).
 - **Cooked form** (`Renderer/CookedTexture.h`, `STTX` version 2): a 40-byte header (format, size, mip count, flags,
   filter, wrap, name length, data offset), a mip table (width, height, offset, size per level), the debug name, then the
-  levels smallest first, each 16-byte aligned. The mip tail - every level up to 128x128 - is therefore one range right
-  after the header (`CookedTextureLayout::GetMipTailByteRange`, `Texture::GetMipTailByteRange`), which streaming can
-  read on its own. `ParseCookedTexture` validates everything (format, sizes per level in whole blocks, offsets inside the
+  levels smallest first, each 16-byte aligned. The mip tail - every level up to a size, 128x128 by default - is therefore
+  one range right after the header (`CookedTextureLayout::GetMipTailByteRange`, `Texture::GetMipTailByteRange`), and so
+  is every run of the levels above it (`GetLevelsByteRange`). The tail is a texture's first residency: a first load
+  reads the header and the levels up to 32x32 (`Texture::c_ResidentTailDimension`; 1.4 KiB of a 2048x2048 BC7 texture)
+  as a prefix of the stored form (`ParseCookedTexturePrefix`, which checks every level against the whole stored size,
+  and `GetCookedTexturePrefixSize`), and the finer levels are read by range as views need them (see
+  [Streaming and residency](#streaming-and-residency), Mip streaming). `ParseCookedTexture` validates everything (format, sizes per level in whole blocks, offsets inside the
   data and aligned, levels that do not overlap and are stored smallest first, known flags) and returns a
   `CookedTextureView` that refers to the data without copying; `Texture::Deserialize` builds on it and keeps the levels'
   `CookedTextureLayout` (offsets, sizes and their format) after the CPU copy is gone. Version 1 (the
@@ -894,12 +908,11 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   cooked layout of the data it came from (block-compressed, where streaming reads levels again). GPUs decode BC7 exactly
   like the CPU decoder; BC1 to BC5 interpolation may differ by a fraction of a block's endpoint distance (the
   specifications leave it open; the GPU tests measure it).
-- **Uploads** go in bands of whole rows of blocks; block-compressed levels are copied from single-level staging textures
-  a whole number of blocks wide, the tail's levels stacked below each other in one (a staging texture with mips would
-  have levels below 4 texels, whose rows are not whole blocks). Stacked under a level as wide as its first, a tail takes
-  more staging than its blocks (1.5 times for a square chain), so the rest of a chain goes in one step only once its
-  staging fits in a band: a 2048x2048 BC1 chain goes up as level 0 (2 MiB) and then the tail, 3.1 MB of staging for
-  2.8 MB of blocks.
+- **Uploads** go in runs of whole rows of blocks through staging buffers, in which the rows of blocks lie as tightly as
+  in the cooked data (each level at a multiple of 16 bytes), copied into the texture by
+  `GraphicsDevice::RecordBufferToTextureCopies`; a chain's smaller levels go together while they fit a step: a
+  2048x2048 BC1 chain (2.8 MB) goes up in one step, through a staging buffer of 4 MiB (see Streaming and residency,
+  Staging).
 - **Shading**: material texture slots carry a grayscale bit (`RenderData::c_TextureSlotGrayscale`), so `BC4`/`R8` data
   samples as `(r, r, r, 1)` like the gray image it came from; `Forward.frag` reconstructs every normal map's Z from X and
   Y (`sqrt(saturate(1 - dot(xy, xy)))`), so `BC5` and `RGBA8` normal maps shade alike.
@@ -919,8 +932,9 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   the pack entry at runtime.
 - **Budgets** (`AssetResidencyBudgets`). With a graphics device, GPU textures may use 50% and GPU buffers 15% of the
   device's memory budget (`GraphicsDevice::GetMemoryBudget`, VK_EXT_memory_budget); without one they are unlimited. The
-  CPU pool is unlimited; loads in flight may hold 128 MiB; finalization may upload 64 MiB and take 4 ms per frame, and
-  texture and mesh uploads may hold 32 MiB of staging (see Staging). `AssetManagerBase::SetResidencyBudgets` replaces
+  CPU pool is unlimited; loads in flight may hold 128 MiB; finalization may upload 16 MiB and take 4 ms per frame, of
+  which its upload steps (writing staging memory, recording copies) 2 ms, and texture and mesh uploads may hold 32 MiB of
+  staging (see Staging). `AssetManagerBase::SetResidencyBudgets` replaces
   them (`GameRuntimeOptions::AssetBudgets`, StrataRuntime's `--asset-budget-mb`, the editor's `asset.setBudget`).
 - **Requests and pins**. Requests (`GetAsset`, `RequestLoad`, `Pin`) stamp an asset with the manager's frame counter,
   which `Update` advances. Whatever draws or uses assets requests them every frame (`SceneRenderer` requests the meshes,
@@ -965,48 +979,192 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   materials would request their textures, while what the waiting arrival replaces and its loaded data are still held),
   raised the peak private memory of the stress sweep by 20 to 60 MB. An arrival nobody requested lately makes no room;
   it may be evicted itself.
-- **Bounded uploads**. Assets upload in steps of at most `c_AssetUploadStepBytes` (4 MiB, about a millisecond of
-  memcpy): textures in bands of rows of a level (rows of 4x4 blocks for block-compressed formats), or the rest of the
-  mip chain once it fits in one band; meshes in ranges
-  of their buffers. Each finalization call gets what is left of the frame's budget (`AssetFinalizeContext`: upload
-  bytes, a deadline and the staging budget) and takes no step beyond the upload bytes except its first, and none beyond
-  the deadline except the first step of the frame's first call (`AssetFinalizeContext::FirstOfFrame`; a later call past
-  the deadline does not even create its GPU resource), so a frame overshoots `UploadBytesPerFrame` by one step and
-  `FinalizeMsPerFrame` by its first step at most; textures also skip a step
-  that would end after the deadline at the speed of the latest steps. Texture and mesh steps also wait for staging room
-  (see Staging), except the frame's first step: every frame makes progress, also without device frames, while a later
-  call may take no step at all; the others leave a step of the staging budget for it
-  (`AssetFinalizeContext::GetStagingRoom`), so it never takes staging beyond the budget. A texture is published (and
-  gets its bindless slot) once its whole chain is uploaded; its CPU copy goes then. Freeing a large copy takes
-  milliseconds (its pages go back to the system), so it is timed like a step and waits for the next call when it would
-  end after the deadline; it stays on the main thread, because freed on a worker it would still be held while the
-  frame's next arrivals allocate.
-  Uploads report the bytes they copied (`AssetFinalizeContext::UploadedBytes`).
-- **Staging** (`Renderer/StagingPool.h`). Texture bands go through CPU-writable staging textures of the renderer's
-  pool, mesh ranges through its CPU-writable staging buffers (powers of two from 64 KiB, copied from with
-  `copyBuffer`), reused once the GPU has copied from them, so streaming allocates no staging memory once warm. An
-  event query set after the command lists with the copies were executed tells when: the asset managers set it as soon
-  as they executed a frame's uploads (`Renderer::ExecuteUploads`, `StagingPool::FenceReleased`), and
+- **Bounded uploads** (`Renderer/GPUUploadQueue.h`). Every asset upload goes through the renderer's upload queue
+  (`Renderer::GetUploadQueue`), whose batches are the managers' (`RendererUploadContext`): textures smallest level first,
+  several whole levels one after the other in one staging buffer while they fit the step, else runs of rows of a level
+  (rows of 4x4 blocks for block-compressed formats, a power of two of them, filling staging buffers of a power of two of
+  bytes); meshes in ranges of their buffers (powers of two from 64 KiB, like their staging buffers). A step that writes
+  512 KiB or more into staging the pool had already spreads its writes over the worker threads
+  (`JobSystem::ParallelFor`, pieces of 256 KiB): one thread reading the decoded data and writing write-combined memory
+  took 0.4 to 1.2 ms for 4 MiB in the exported stress game, spread 0.15 to 0.3 ms. Staging just created is written by
+  the main thread alone: its first writes fault its pages in, which the system serializes (spread, 4 MiB took up to
+  4.3 ms). Steps are sized by the queue (`GPUUploadQueue::PlanStep`) to what is left of the call's share of the frame:
+  its upload bytes (`AssetFinalizeContext::UploadBudget`), its upload time (`UploadMsBudget`, from
+  `AssetResidencyBudgets::UploadMsPerFrame`, 2 ms) and the time until the finalization deadline, at the speed of the
+  latest steps (measured: `GPUUploadQueueStats::BytesPerMs`), keeping a tenth of the frame's upload time
+  (`AssetFinalizeContext::UploadMsFrameBudget`) and of the time until the deadline in reserve: a step's speed strays
+  from the average by a tenth and more, so steps planned to the budget's end overshot it as often as not (frames that
+  filled their 2 ms took up to 2.18 ms), and so did steps that each kept a share of what was left of the frame's time
+  (which still add up to its end: 1.99 to 2.07 ms). A step for which the pool has no idle staging of its size
+  (`StagingPool::HasIdleBuffer`) creates the buffer first and writes fresh memory: it is planned with the time creation
+  takes (`StagingCreateMs`: a slow creation counts at once and decays over the next ones; at most half the time left, so
+  where creating is slow, as under the validation layers, steps still make progress and staging of their size comes
+  about) and the speed of such steps (`ColdBytesPerMs`). Creating staging took from 0.03 to 1.1 ms in the stress sweeps,
+  so planning without it let a frame's upload steps end up to 0.3 ms over their 2 ms. Steps are in whole granules (a
+  row of blocks, and 64 KiB where a level has that much), at most `c_AssetUploadStepBytes` (4 MiB): no frame uploads
+  more than `UploadBytesPerFrame`, and its steps end within nine tenths of its upload time but for a step that runs
+  slower than planned (a busy machine's memory bandwidth, a slow staging creation). Only the frame's first step (the
+  frame's first call, nothing uploaded in the frame yet) goes whatever the budgets say, one granule at least, so every
+  frame makes progress; a later call past the deadline does not even create its GPU resource. Before, steps were a fixed
+  4 MiB and a frame's first was exempt from the deadline: one BC7 step cost up to 2 ms on its own. Texture and mesh
+  steps also wait for staging room (see Staging): the frame's first step within the staging budget, the later ones
+  within the budget less a step
+  (`AssetFinalizeContext::GetStagingRoom`), the step they leave for the next frame's first, so staging never exceeds the
+  budget (a single step larger than all of it goes once nothing else is in flight). With the GPU keeping up, every
+  frame's first step finds room, also without device frames; a frame whose staging is all still in flight waits for
+  the GPU. A texture is published (and gets its bindless slot) once its whole chain is uploaded;
+  its CPU copy goes then. Freeing a large copy takes milliseconds (its pages go back to the system), so it is timed like a
+  step and waits for the next call when it would end after the deadline; it stays on the main thread, because freed on a
+  worker it would still be held while the frame's next arrivals allocate. Uploads report the bytes they copied
+  (`AssetFinalizeContext::UploadedBytes`) and the time their steps took (`UploadMs`); the managers' statistics have both
+  (`AssetManagerStats::UploadedBytesLastFrame`, `UploadMsLastFrame` and their maxima), the queue counts steps and bytes per
+  frame and per kind (`GPUUploadQueue::GetStats`) and tracks the completion of its batches with event queries (`GetTicket`,
+  `IsComplete`). The copies run on the graphics queue ahead of the frame's rendering, so an asset may be drawn as soon as
+  the batch with its last step was submitted. They no longer wait for the display either: the GPU waits for the acquired
+  back buffer only once the frame's first work on it is about to be submitted (`Renderer::PrepareBackBuffer`, called by
+  the application before the UI and by the runtime before the game renders into the back buffer;
+  `GraphicsDevice::PrepareBackBuffer`), so the frame's uploads and offscreen rendering run while the display still holds
+  the image. Before, the acquire wait was submitted first in the frame with ALL_COMMANDS, and every upload waited for it.
+- **The transfer queue** (`RendererSpecification::TransferQueueUploads`, from
+  `ApplicationSpecification::TransferQueueUploads`, or `GPUUploadQueue::SetTransferQueue`; where the device has a
+  dedicated transfer queue: `GraphicsDevice::HasTransferQueue`). Off by default: with the display wait out of the way it
+  did not load the exported stress game faster on the reference machine and held more memory meanwhile, since each
+  upload is handed over a frame after its last copy (measured with whole textures, before mip streaming: every texture
+  resident from frame 10-11 with it, 10 without; peak private memory 595-622 MB with it, 582-595 MB without). Uploads the managers may wait for (their budgeted updates:
+  `AssetFinalizeContext::MayWait`) then run on that queue, beside the graphics queue's work; an upload keeps the queue it
+  started on (`GPUUploadQueue::ChooseQueue`). NVRHI creates resources for one queue family at a time and records no queue
+  family ownership transfers, so the queue does what it needs: on the transfer queue's command list (not an immediate one:
+  only one of those may be open) it tells NVRHI's tracking each level's state before a copy (undefined before the level's
+  first copy, so the transition into a copy destination is one the transfer queue can make; a copy destination after),
+  and gives the resources' initial states back to the tracking before the list closes, so NVRHI records no transition into
+  shader states there. After an asset's last copy the release half of the ownership transfer is recorded
+  (`ReleaseToGraphics`, `GraphicsDevice::RecordQueueTransfer`: the copy destination layout to the shader read layout, the
+  transfer family to the graphics family); the asset ends its finalization `AwaitingGPU`, and the manager goes on with the
+  arrivals behind it and calls it again in later frames; once the release's batch is complete (`IsComplete`, polled) the
+  acquire half goes into the graphics list of that frame's batch (`AcquireOnGraphics`), before anything samples the
+  resource, and the asset is published. Finalizations that must finish at once (`LoadAssetSync`, `AddMemoryAsset`,
+  `ReplaceLoadedAsset`: `MayWait` false) start on the graphics queue, and one that started on the transfer queue waits for
+  its copies there (`WaitForTicket` submits the open batch first when the ticket is its own). Staging released by the
+  transfer queue's copies is fenced on that queue (`StagingPool::FenceReleased(nvrhi::CommandQueue::Copy)`). Tests run the
+  uploads on both queues (`GPU.UploadQueue`).
+- **Staging** (`Renderer/StagingPool.h`). Texture steps and mesh ranges go through CPU-writable staging buffers of the
+  renderer's pool (powers of two from 64 KiB; mesh ranges are copied from them with `copyBuffer`, texture levels with
+  `GraphicsDevice::RecordBufferToTextureCopies`, since NVRHI copies into textures only from staging textures, whose
+  shape - format, width and height - each upload's would have to match: the pool reused few of them, and the exported
+  stress game created staging in most of its steps, 0.1 to 0.3 ms each and their pages faulted in on first write), reused
+  once the GPU has copied from them, so streaming allocates no staging memory once warm. NVRHI's command lists do not
+  reference what those copies write, nor the staging they read: the upload queue keeps the textures of each batch until
+  it completed, and the pool holds every staging buffer released to it until the GPU has run the copies from it, also
+  what it does not keep for reuse (what is released while more than `StagingPool::c_MaxPendingBytes`, 256 MiB, waits for
+  the GPU, as unbudgeted loads of large textures release, is freed then instead of becoming idle; before, it was dropped
+  at once, and its copies read freed memory). An
+  event query set after the command lists with the copies were executed tells when: the renderer's upload context sets it
+  as soon as it submitted a batch of uploads (`RendererUploadContext::Submit`, `StagingPool::FenceReleased`), and
   `Renderer::BeginFrame` sets one for whatever else was released. The queries are polled, never waited for: at
   `BeginFrame`, before staging is acquired and when a budgeted step finds no room. The GPU runs a frame's uploads ahead
   of its rendering, so the staging of a frame's uploads is reusable in the next frame once the GPU has run them (fenced
   only at the next `BeginFrame`, it waited for the frame's rendering too and was polled a frame later: reused two frames
   after its release, half the budget per frame). Budgeted uploads wait while the staging still in flight leaves no room
-  within the staging budget (`AssetResidencyBudgets::StagingBytes`, 32 MiB) less the step kept for the next frame's
-  first, and staging created for them first releases idle staging of other
-  shapes until the pool as a whole (idle, in flight and new) fits the budget: the graphics driver keeps freed staging
+  within the staging budget (`AssetResidencyBudgets::StagingBytes`, 32 MiB; less the step kept for the next frame's
+  first, for steps after the frame's first), and staging handed out for them (new or idle) first releases other idle
+  staging until the pool as a whole (idle, in flight and handed out) fits the budget, also when unbudgeted uploads left
+  more idle staging than that: the graphics driver keeps freed staging
   memory committed for a while, so a process pays for the most staging it ever held, and idle staging must not come on
   top of the budget (before, idle staging and NVRHI's upload chunks of mesh ranges came on top of 64 MiB in flight: the
   exported stress game held about 86 MiB of host-visible memory more while it loaded, and kept it). Sustained uploads
   reach the budget less a step per frame (28 MiB) when the GPU has run a frame's uploads by the next frame's
   finalization, which it does when frames take longer than the copies (a frame that finalizes for milliseconds); when
   frames follow each other faster, frames that find the previous one's staging still in flight take only their first
-  step, about half the budget per frame on average. `UploadBytesPerFrame` and `FinalizeMsPerFrame` bound them too (a
-  loading screen raises all three). Idle staging is kept up to 16 MiB and all of it is returned after 120 frames
-  without uploads. What else records `writeBuffer` on the upload command list goes through NVRHI's upload manager,
-  which pools the staging memory of each command list without a limit: after `c_StagingReleaseFrames` (120) frames
-  without uploads the manager drops its upload command list (submissions in flight keep it alive until the GPU is done)
-  and creates a new one with the next upload.
+  step, about half the budget per frame on average. `UploadBytesPerFrame`, `UploadMsPerFrame` and `FinalizeMsPerFrame`
+  bound them too (a loading screen raises them all). Idle staging is kept up to 16 MiB and all of it is returned after 120 frames
+  without uploads (device frames, `StagingPool::BeginFrame`, or manager updates, `RendererUploadContext::EndFrame`, which
+  `AssetManagerStats::StagingReleases` counts). Nothing records `writeBuffer` into the upload batches, so NVRHI's upload
+  manager (which pools the staging chunks of each command list without a limit) holds nothing for them.
+- **Mip streaming** (`Renderer/TextureStreamer`, partial residency in `Asset/AssetManager.h` and `Renderer/Texture`).
+  Texture memory follows the screen, not the content:
+  - *Partial loads.* A loader type may register a prefix function (`AssetLoaderRegistry::RegisterPrefix`,
+    `AssetPrefixFunction`): a load then reads the first 64 KiB of the stored form (`c_AssetPrefixHeadBytes`), asks the
+    function how much of it the first residency needs, reads the rest of that prefix if any, and the loader gets partial
+    data (`AssetLoadData::IsPartial`, `GetStoredSize`). Textures register one: a first load holds the header and the
+    resident tail (levels up to 32x32), which upload like any texture and make it Ready; the streaming queue counts such
+    a load at the head's bytes. Managers load partly while an extension refines what they load
+    (`AssetManagerExtension::RefinesPartialAssets`: the texture streamer, while the manager uploads through the
+    renderer) and `SetPartialLoads` allows it (on by default; tests of whole-asset residency and the baseline sweep turn
+    it off). Tools and tests without a renderer load whole textures.
+  - *Range reads* (`AssetManagerBase::RequestRange`, `PollRange`, `RaiseRange`, `CancelRange`). A read of a byte range of
+    a loaded asset's stored form waits in the streaming queue beside loads (`AssetStreamingRequest::RangeId`; priority,
+    score, in-flight bytes and per-I/O-thread reads like a load), runs `ReadAssetRange` on an I/O thread (pack blocks at
+    runtime, the cache file in the editor) and keeps its bytes counted in flight until its owner polls them or cancels it,
+    so data the main thread has not taken bounds what else is read. A read of an asset that is unloaded, evicted or
+    reloaded meanwhile fails. `HasPendingLoads` ignores range reads: their owner polls them.
+  - *Memory changes* (`AssetManagerBase::UpdateMemoryUsage`). An asset whose memory changes without being replaced (a
+    texture raising or dropping levels) is reported, and the manager moves its usage between the pool totals and the
+    per-pool recency orders without changing its place in them (its latest request decides it) or its state, under the
+    lock like every bookkeeping change, so pool totals, per-state counts and eviction order stay exact.
+  - *Manager extensions* (`Asset/AssetManagerExtension.h`). A registry the renderer module fills
+    (`AssetManagerExtensionRegistry`; the composition root opens it) gives every manager its texture streamer. The manager
+    calls it once per `Update` after the frame's arrivals, inside the same upload batch, with what is left of the frame's
+    upload bytes, upload time and deadline (`OnUpdate`), and before evicting for a pool over budget lets it free memory
+    (`ReleaseMemory`); its counters join the statistics (`AssetManagerStats::Detail`).
+  - *Wanted levels.* Each `SceneRenderer` reports what it drew after a frame (`TextureStreamer::ReportView` with
+    `GetVisibleTextures`: per loaded texture map of a material it drew, the texture's size and levels as the frame
+    resolved them, so the report looks nothing up in the manager, with its material's use from `GetVisibleMaterials`: the
+    largest projected size, its texture coordinate tiling and `UVPixels`, the most pixels a unit of the meshes' texture
+    coordinates spans where it is drawn, worked out only for draws of materials with loaded texture maps, so frames of
+    untextured materials pay nothing for streaming). `UVPixels` follows texel density where a
+    surface is nearest the camera, not the size of its bounds: the pixels a world unit spans at the point of a proxy's
+    bounds nearest the camera (`TextureStreamingPolicy::GetWorldPixels`: the view's height over twice the tangent of half
+    its field of view, over that distance, at least the near plane), over the texture coordinates per world unit of its
+    submeshes (`GetUVPixels`: `Submesh::UVDensity`, which `Mesh::Create` computes from LOD 0, the square root of texture
+    coordinate area over surface area for the surfaces facing each axis, divided by the geometric mean of the instance's
+    scales along the two axes they span; the sparsest surfaces decide, since they show each texel largest). A large floor
+    seen from just above it therefore
+    needs the levels its near part shows, and a texture tiled over it the finer ones its tiling asks for; a surface seen at
+    a grazing angle spans as many texels across the view as facing it, which is what the 16x anisotropic samplers sample
+    by. Per texture the streamer takes `floor(log2(size * tiling / UVPixels))` (`ComputeWantedLevel`, clamped to its
+    levels), the finest over every use and view; shadow passes report nothing. Detail rises at once and falls only after
+    120 frames without a need of it (`c_DropDelayFrames`); a texture nobody needs falls to its tail. Views without
+    streaming (`SceneRendererSpecification::TextureStreaming` false) need level 0 and count a texture as pending until it
+    is whole; with streaming a texture whose tail is resident is not pending. `RequestLevel` asks for a level outside
+    views (the asset inspector's preview; the sky light's environment map, until a renderer has computed the
+    environment from its whole chain: only the cube is sampled afterwards, and the map drops back to its tail; renderers
+    share the environment computed from a map while any of them lights with it, so one that starts drawing the scene later,
+    such as the editor's capture renderer, takes it over in its first frame instead of waiting for the map's levels);
+    `TextureStreamer::GetPreview` gets a texture without asking for more than its tail (thumbnails).
+  - *Raising* (`Texture::RaiseLevels`, `ContinueLevelChange`). The streamer reads the missing levels as one range
+    (`CookedTextureLayout::GetLevelsByteRange`) at Low priority, scored by missing levels times coverage (a view that
+    jumped - moved 10 units or turned 45 degrees since its previous frame, `TextureStreamingPolicy::IsCameraCut` - reads
+    at Normal, before older reads); a read still queued rises with its texture's rank (`AssetManagerBase::RaiseRange`), so
+    a cut also serves first what older views had queued and the new one needs. The GPU texture budget's room, less what the
+    reads under way will add, goes to the textures below their level in rank order: one whose level does not fit takes the
+    finest levels of textures needed less (not needed by the latest frame first, then smaller on screen; only as many
+    levels as it misses, at most 8 textures a frame, and never from one needed as much or more, so two textures never take
+    levels from each other in turns; what a view without streaming needs counts as needed most), and what still does not
+    fit gets the finest level the room holds. Then a new GPU texture of the levels from the new finest one is
+    created, the resident levels are copied into it on the GPU, the new ones upload through the upload queue within the
+    frame's budgets (a change may span frames), and the new texture replaces the old with a new bindless slot; the old
+    slot keeps its texture until no frame in flight samples it, and `SceneRenderer::ResolveTexture` resolves the slot every
+    frame, so materials change nothing and nothing that was drawn shows the loading fallback again.
+  - *Dropping.* Levels no longer needed go by a GPU copy into a smaller texture (`Texture::DropLevels`; at most 8 a
+    frame), never past the resident tail. Under GPU texture pressure (`ReleaseMemory`) the least needed textures - those
+    the latest frame did not need, longest unneeded first, then those in view, smallest on screen first - give up their
+    finest levels, only as many as the budget takes and never their tail, before the manager evicts whole assets; what a
+    view without streaming needs keeps every level, and a manager that loads whole textures keeps them whole. A texture
+    dropped for the budget is raised again once the budget holds the level it needs. Levels a budget took count in
+    `AssetDetailStats::LevelsDroppedForBudget` too.
+
+- **The upload seam** (`Asset/AssetUploadContext.h`). The asset layer knows no graphics API: finalizations record their
+  uploads into the `AssetUploadContext` of `AssetFinalizeContext::Upload`. The renderer implements it
+  (`Renderer/RendererUploadContext`, which its textures and meshes downcast to; another implementation, such as a test's,
+  makes them finalize as without a device) and hands it to every manager through the engine service `IAssetGraphics`
+  (registered by `RegisterRendererModule`), which also gives the managers the device's frames in flight (their eviction
+  grace) and memory budget (their default budgets). A manager opens a batch (`Begin`) before the finalizations of an
+  update (and its extensions' work: one batch per update), of `LoadAssetSync`, `ReplaceLoadedAsset` and `AddMemoryAsset`
+  and submits it after them (`Submit`), so what a batch recorded reaches the GPU before anything renders with what it
+  finalized; `EndFrame` follows each update. The upload queue opens a batch's command lists with the first thing it
+  records, so an update that uploads nothing submits nothing.
+  `AssetManagerBase::SetUploadContext` replaces the renderer's context for one manager (tools and tests;
+  `Asset.Finalize` drives the finalize contract with a fake one, without a GPU).
 - **Dependency prefetch** (`AssetManagerBase::GetDependencies`). When the read of a requested asset completes, its
   direct dependencies are queued at its priority with a lower score (`c_DependencyPrefetchScore`, behind direct
   requests), before its read slot frees: a material's textures load alongside the material, a mesh's default materials
@@ -1029,48 +1187,68 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   with it (requests make room by evicting, which a prefetch must never cause).
 - **Group loads** (`RequestLoadWithDependencies`, `AssetGroupRequest`). A loading screen pins an asset's dependency closure
   (`GetDependencyClosure`, breadth first) at a priority: `Progress` (the share of the members' stored bytes that finished,
-  never decreasing), `IsComplete`, `HasFailed` and `Cancel` (releases the pins and abandons the loads that have not
-  finished: queued reads never start). `IsLoadedWithDependencies` tells whether a closure is Ready, and
+  never decreasing; a texture loaded partly counts whole once its mip tail is resident and it is Ready, since its finer
+  levels stream as views need them), `IsComplete`, `HasFailed` and `Cancel` (releases the pins and abandons the loads
+  that have not finished: queued reads never start). `IsLoadedWithDependencies` tells whether a closure is Ready, and
   `ReadStoredRange` reads part of an asset's stored form without loading it (packs decode only the blocks it covers).
 - **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
   of the last 120) with the staging budget, evictions and eviction checks, cancellations, staging releases, dependency
-  prefetches started and dropped, and the `GetAsset` calls made (tests take differences to count what a frame looks
-  up); per asset its state, memory, latest request and pins. `GetStats` costs the same with any number of assets: the
+  prefetches started and dropped, partial loads and range reads, what the extensions keeping assets partly resident did
+  (`Detail`: mip levels raised and dropped, and of those dropped the ones a budget took, bytes read for them, textures
+  below their wanted level, level reads and changes under way), and the `GetAsset` calls made (tests take differences to count what a frame looks up); per asset
+  its state, memory, latest request and pins, and for assets kept partly resident their levels (`Detail`: resident,
+  wanted, count, resident bytes). `GetStats` costs the same with any number of assets: the
   counts of assets per state and of pinned assets change with the entries (`SetStateLocked`, `AddEntryLocked`,
   `RemoveEntryLocked`, `Pin`, `Unpin`; every change of an entry's state goes through them), so the editor reads them
   every frame. `GetResidencySamples` gives the per-asset part without names into a vector the caller reuses, and
   `GetMetadataVersion` changes with every registration and metadata change, so a view of tens of thousands of assets
   reads names only when they change.
-  The editor reports them, apart from the `GetAsset` calls, through `asset.stats`, the `assets` section of
-  `editor.status`, the Streaming panel and the status bar's assets pill.
+  The editor reports them, apart from the `GetAsset` calls, through `asset.stats` (`mipStreaming`; the rows of streaming
+  textures with `residentMip`, `wantedMip`, `mipCount` and `residentBytes`), the `assets` section of `editor.status`, the
+  Streaming panel (its Mip column: resident / wanted level) and the status bar's assets pill.
 - **Measured** by the perf test `PerfGPU.Streaming` (`StrataTests/src/Perf/StreamingPerfTests.cpp`): it writes the
   stress project (`StrataTests/src/Perf/StressProject.h`: 16 textures of 2048² and one of 4096², which cook to 111.8 MB
   of BC7 (447.4 MB of RGBA8 before texture cooking v2), one material per district of a 2000-unit world, 2,000 objects
-  over a 512² terrain grid), imports it and builds its pack, then runs two camera sweeps at 60 frames per second in
+  over a 512² terrain grid), imports it and builds its pack, then runs camera sweeps at 60 frames per second in
   helper processes (peak memory belongs to a whole process):
   - the evicting sweep: 600 frames at 1280x720 with a 32 MB texture budget (the share of the textures the 128 MB budget
-    held of their RGBA8 form). Every sweep must keep the textures within the budget plus the largest one, evict, settle
+    held of their RGBA8 form), with whole textures (`StreamingSweepSettings::TextureStreaming` false: it gates the
+    residency budgets and eviction, which mip streaming would leave little to do). Every sweep must keep the textures within the budget plus the largest one, evict, settle
     every camera stop and fail no load; `StrataTests/Perf/Budgets.json` judges its peak private bytes, largest resident
     texture memory, longest frame finalization and the most frames a stop took to settle. A sweep over a budget is
     confirmed by up to two more sweeps (the graphics driver's commit charge varies by about 150 MB from sweep to sweep,
     and a frame the machine's other work preempted finalizes for longer);
   - the all-resident sweep: 300 frames at 1920x1080 over twelve stops whose views take in every district, with a budget
-    that holds every texture, confirmed like the evicting one. Every sweep must bring every texture in, evict none and
-    fail no load; `Budgets.json` judges its peak private bytes (at most 650 MB, texture cooking's limit) and its longest
-    frame finalization (below the 8 ms the streaming work allows any frame).
+    that holds every texture and whole textures, confirmed like the evicting one. Every sweep must bring every texture
+    in, evict none and fail no load; `Budgets.json` judges its peak private bytes (at most 650 MB, texture cooking's
+    limit) and its longest frame finalization (below the 8 ms the streaming work allows any frame);
+  - mip streaming's sweep: 600 frames at 1920x1080 over six districts of the `Flight` scene (`WriteStressFlightScene`:
+    the world with its terrain textured, the first texture tiled 40 times, so the ground under the camera needs that
+    texture's finest level, as any textured ground does), 3 units above the ground looking 20 degrees down, with a 96 MB
+    texture budget; flown with mip streaming, again with mip streaming within 8 MB (a budget its needs exceed, so levels
+    go for the budget too), and with whole textures within 96 MB (the baseline: the renderer's `TextureStreaming` and the
+    manager's partial loads off), one of each per attempt. All must stream correctly; the streaming runs must raise and
+    drop levels; the one within 96 MB must have the ground's texture at level 0 at some point, hold more than that texture
+    whole and less than the baseline, and match the baseline's last frame by 40 dB PSNR or more, over the whole frame
+    and its bottom third (the ground just ahead of the camera); the one within 8 MB must drop levels for the budget and
+    stay within it. `Budgets.json` judges, of both streaming runs, the peak private memory (at most 550 MB, mip
+    streaming's limit), the most bytes and upload-step milliseconds of a frame (24 MB, 2 ms) and the longest frame to the
+    baseline's (the CPU time of the manager's update and the rendering, without the first frame, which creates the
+    renderer's pipelines in all; a ratio, since budgets are not negative: the acceptance limit, 2 ms over the baseline's,
+    is 1.8 to 1.4 there, for the baseline's longest frames of 2.5 to 4.5 ms).
 
   Then it exports the stress game (`.stgame` manifests next to the pack) and runs `StrataRuntime` in a window of
   1920x1080 pixels (`--resolution`, whatever the display's scale; each run checks its swapchain's size) for 600 frames
   from the world's overview camera with `--perf-log` and the evicting sweep's texture budget, again confirmed by up to two
   more runs: every log must have a row per frame, and `Budgets.json` judges the slowest frame's `Assets.Finalize` stage.
   Then the game runs with its own budgets (nothing evicted) from the overview camera, which shows about two thirds of the
-  textures (`RuntimePeakPrivateMemory`, the peak private memory its log ends with), and last texture cooking's acceptance
-  criterion itself, "the exported stress game at 1920x1080 over 300 frames, with all textures resident, peaks at 650 MB
-  private or less" (`RuntimePeakPrivateMemoryAllResident`, budget 650 MB): 300 frames of the game started in the stress
-  project's `TopDown` scene, the world seen from above (`WriteStressTopDownScene`), with its own budgets; every texture
-  of the pack must be resident at the end, none evicted and none loading. The all-resident sweep only stands in for
-  this. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same project cold (once per
+  textures (`RuntimePeakPrivateMemory`, the peak private memory its log ends with), and last the whole world in view
+  (`RuntimePeakPrivateMemoryAllInView`, budget 650 MB, texture cooking's limit, target 550 MB, mip streaming's): 300
+  frames of the game started in the stress project's `TopDown` scene, the world seen from above
+  (`WriteStressTopDownScene`), with its own budgets; at the end every texture must be at the level its view needs
+  (`MipsBelowWanted` 0), none evicted and none loading. Texture cooking's criterion read "with all textures resident";
+  with mip streaming the world seen at once needs only what its 1920x1080 pixels show. `Perf.TextureCook` (`TextureCookPerfTests.cpp`) imports the same project cold (once per
   attempt) and checks the import time, the stored sizes of its largest 2048x2048 texture, of its 4096x4096 texture and of
   all of them, and the pack size, and measures the BC7 encoder's time per block on one thread.
   `GPU.Assets.Streaming` runs the same sweep on a small stress project under the validation layers.
@@ -1153,7 +1331,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   rendering (a capture renderer between captures, a hidden view), and a closed project's manager goes with it. Two
   caches outside the resolve cache keep assets across frames: `SceneRenderer`'s environment cache holds the sky light's
   environment map (the source of its cube maps) until the environment changes, also while the renderer idles or after
-  its project closed, and `TextRenderer`'s glyph atlases hold their fonts as long as the fonts are loaded.
+  its project closed (the maps computed from a map, and with them the map, are shared by every renderer lighting with it
+  and released with the last one), and `TextRenderer`'s glyph atlases hold their fonts as long as the fonts are loaded.
   Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what `GetOpaqueBatches` reports after the frame holds no
   pointers.
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same
@@ -1166,7 +1345,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   every frame for the materials drawn and uploaded where it changed.
 - **A still frame** updates no proxy and uploads no instance, material or draw list (`SceneRendererStats::ProxyUpdates`,
   `InstanceBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
-  on screen and texture tiling (`GetVisibleMaterials`, for mip streaming) and its counts and times (`VisibleProxies`,
+  on screen and texture tiling (`GetVisibleMaterials`, and their loaded texture maps, `GetVisibleTextures`, for mip
+  streaming) and its counts and times (`VisibleProxies`,
   `ProxyUpdates`, `InstanceUploadRanges`, `ExtractMs`, `SortMs`, `RequestsByVisibility`, `PrefetchRequests`,
   `GetAssetCalls`, `MeshesWithoutBounds`, `OpaqueDrawCalls`, `ShadowDrawCalls`), most of which the viewport's stats
   overlay shows.
@@ -1448,7 +1628,7 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `OnImGuiRender`; `ResolveViewportView` picks the scene's primary camera while playing and the editor camera otherwise,
   and `GetViewportRenderOptions` gives editor views (the editor camera outside play mode) preview lighting and a hidden
   HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). The settings' debug view
-  (`ViewportDebugView`: `none`, `streaming`, `lod`) colors every view of the viewport, the game view too: before each
+  (`ViewportDebugView`: `none`, `streaming`, `lod`, `mip`) colors every view of the viewport, the game view too: before each
   render `StreamingView` (`Editor/StreamingView.h`) takes the render proxies the scene's `RenderScene` finds in the view
   (its spatial index, culled with the bounds the renderer culls with: a mesh's own, else those the asset pipeline
   recorded) and lists tints for the renderer (`SceneRenderOptions::EntityTints`). It observes streaming without changing
@@ -1458,8 +1638,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   still loading are tinted in the pending color, failed ones in the failed color, and entities whose mesh is not there
   (nothing is drawn, so nothing can be tinted) get a placeholder box of the mesh's recorded bounds, or a unit box without
   them (at most `c_MaxPlaceholderBoxes`). The LOD view tints each entity by the most simplified level its submeshes are
-  drawn at (`LODSelection`, with the viewport renderer's threshold). The colors are `ViewportSettings::DebugColors`,
-  which the UI sets from the theme (not saved).
+  drawn at (`LODSelection`, with the viewport renderer's threshold). The mip view tints each entity drawn with textures by
+  the mip levels its worst texture lacks: the finest level resident against the finest one its views want
+  (`Asset::GetDetailLevels`, which the texture streamer sets from what the renderers reported), none (Malachite), 1
+  (Azurite), 2 (Sulfur), 3 or more or a material or texture still loading (Cinnabar); entities without textures stay
+  untinted (`StreamingViewStats::EntitiesPerMipShortfall`). The colors are `ViewportSettings::DebugColors`, which the UI
+  sets from the theme (not saved).
   Picking reads one pixel of the entity-ID buffer asynchronously and completes in `EditorContext::Update`.
   `viewport.capture` renders on the next frame (with its own `debugView` if given), polls a `TextureReadback`, encodes
   the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`).
@@ -1512,8 +1696,13 @@ window size is in screen coordinates, which the display's scale multiplies: 1280
 of the game's assets (the other budgets keep their defaults), and `--perf-log <csv>` writes a row for every frame, also
 headless (`Runtime/FramePerfLog`, a frame profiler listener, so writing costs the measured frame nothing): the frame's
 work time and interval, each stage's milliseconds, the job threads' busy percentages and the asset manager's streaming
-numbers after the frame (loading, queued and in-flight loads, uploaded MB, finalization ms, resident MB per pool,
-evictions) and the process's private memory with its peak so far (`PrivateMB`, `PeakPrivateMB`). A log that cannot be written fails the run (exit code 1).
+numbers after the frame (loading, queued and in-flight loads, uploaded MB, finalization ms and its upload steps' ms,
+resident MB per pool, evictions), the texture streamer's (`StreamedMB`: bytes read for raised mip levels in the frame,
+`MipLevelsRaised` and `MipLevelsDropped` so far, `MipsBelowWanted`: textures below the level their views need, from
+`AssetManagerStats::Detail`), the frame's steps through the upload queue (`UploadQueueMB`, `UploadQueueMs`,
+`UploadQueueSteps`), the graphics device's memory in use and the upload staging of it (`DeviceMB`, `StagingMB`: with
+the resident pools they tell what render targets and the swapchain take) and the process's private memory with its peak
+so far (`PrivateMB`, `PeakPrivateMB`). A log that cannot be written fails the run (exit code 1).
 `GameRuntime::Create` loads the manifest, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
 `PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module

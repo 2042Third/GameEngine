@@ -44,10 +44,15 @@ namespace Strata
 		// Bytes of loads that were dispatched and not finalized yet (read, decoded or waiting for the main thread), counted
 		// by their stored size (see AssetStreamingQueue).
 		uint64_t InFlightBytes = 128ull << 20;
-		// GPU bytes finalization uploads per frame; the first finalization of a frame always runs.
-		uint64_t UploadBytesPerFrame = 64ull << 20;
+		// GPU bytes finalization uploads per frame: no frame uploads more, but for its first step (one granule at least, see
+		// AssetFinalizeContext).
+		uint64_t UploadBytesPerFrame = 16ull << 20;
 		// Main-thread time finalization may take per frame, in milliseconds; the first finalization of a frame always runs.
 		float FinalizeMsPerFrame = 4.0f;
+		// Main-thread time the frame's upload steps may take (writing staging memory and recording copies), in milliseconds:
+		// steps are sized by their measured speed to end within it (AssetFinalizeContext::UploadMsBudget), so that a frame's
+		// upload stage stays short however much is waiting.
+		float UploadMsPerFrame = 2.0f;
 		// Staging memory texture and mesh uploads may hold at once: what the frame writes plus what the GPU may still copy
 		// from, and the idle staging the pool keeps for reuse (StagingPool). Staging is reusable once the GPU has run the
 		// copies that read it, which it does ahead of the frame's rendering: when it has run a frame's uploads by the next
@@ -63,6 +68,20 @@ namespace Strata
 		static AssetResidencyBudgets FromDeviceBudget(uint64_t deviceBudgetBytes);
 
 		uint64_t GetPoolBudget(AssetMemoryPool pool) const;
+	};
+
+	// What manager extensions that keep assets partly resident did (AssetManagerStats::Detail): the renderer's texture
+	// streamer.
+	struct AssetDetailStats
+	{
+		uint64_t LevelsRaised = 0;        // Levels made resident since the manager was created
+		uint64_t LevelsDropped = 0;       // Levels released (no longer needed, or for budgets)
+		uint64_t LevelsDroppedForBudget = 0; // Of those, the levels released for a budget (its pressure, or room for detail needed more)
+		uint64_t BytesStreamed = 0;       // Bytes read for raised levels
+		uint64_t BytesStreamedLastFrame = 0;
+		uint32_t AssetsBelowWanted = 0;   // Assets whose resident levels are coarser than what something needs
+		uint32_t Reads = 0;               // Reads of levels queued or in flight
+		uint32_t Changes = 0;             // Assets changing levels (uploading or swapping)
 	};
 
 	namespace AssetResidency

@@ -86,7 +86,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What is in the scene? | `scene.hierarchy`, `entity.find` (`name`, `tag`, `component`), `entity.get` |
 | What does the person have selected, what does the inspector show? | `selection.get` (`entities`, the last is the primary one; `inspectedAsset` while the inspector shows an asset); `selection.set {entities?, asset?}` changes them |
 | What happened (errors, script output)? | `log.read` (`after` = the previous `latest` to page; `minLevel`) |
-| How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`); `asset.setBudget` changes the open project's budgets (MB) |
+| How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`); `asset.setBudget` changes the open project's budgets (MB of memory, staging and uploads per frame; ms of finalization and of upload steps per frame) |
 | Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %) |
 
 Commands added at run time (for example `script.*`, `viewport.*`, `camera.*` when those features are present)
@@ -100,11 +100,21 @@ editor started with `--no-gpu` (use `--headless`):
 - **Debug views** show what streaming and level-of-detail selection do: `debugView: "streaming"` tints entities whose
   mesh, material or textures are still loading (yellow, Sulfur) or failed (red, Cinnabar) and draws a box where a mesh
   is not loaded yet; `"lod"` tints entities by the level of detail they are drawn at (green 0, blue 1, yellow 2, red 3+);
-  `"none"` is the plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
+  `"mip"` tints entities drawn with textures by the mip levels their worst texture lacks against what the view needs
+  (green: as needed, blue 1 level short, yellow 2, red 3+ or still loading; textures stream their mip levels to what
+  the screen shows, so a picture taken right after the camera moved may be blurry where it is red); `"none"` is the
+  plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
   `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the game view). The result's
   `debugView` counts what it found among the entities in view: `{view, tintedEntities, pendingEntities, failedEntities,
-  placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+]}`, so you need not read colors: e.g. capture with
-  `"streaming"` until `pendingEntities` and `placeholderBoxes` are 0.
+  placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], entitiesPerMipShortfall: [as needed, 1, 2, 3+]}`, so
+  you need not read colors: e.g. capture with `"streaming"` until `pendingEntities` and `placeholderBoxes` are 0, or with
+  `"mip"` until only the first entry of `entitiesPerMipShortfall` counts entities (every texture as sharp as the view
+  needs).
+- **Texture memory** follows the screen: `asset.stats {"assets": true}` lists each streaming texture with `residentMip`
+  (the finest mip level resident, 0 the full resolution), `wantedMip` (the finest its views need), `mipCount` and
+  `residentBytes`, and its `mipStreaming` totals say what the streamer did (`levelsRaised`, `levelsDropped`,
+  `levelsDroppedForBudget`: of those, what a texture budget took, `bytesStreamed`, `assetsBelowWanted`: textures still
+  coarser than needed, 0 once the view is complete).
 - **Editor views are not the game's view.** With the editor camera outside play mode, a scene without any light (no
   directional, point, spot or sky light) is lit by *preview lighting* (a sun and a procedural sky that the game will not
   have: the result says `"previewLighting": true`), and the game's screen-space text (its HUD) is hidden

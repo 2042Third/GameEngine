@@ -123,7 +123,9 @@ namespace Strata
 			return false;
 		}
 
-		if (!Renderer::Init(*m_GraphicsDevice))
+		RendererSpecification rendererSpecification;
+		rendererSpecification.TransferQueueUploads = m_Specification.TransferQueueUploads;
+		if (!Renderer::Init(*m_GraphicsDevice, rendererSpecification))
 		{
 			m_GraphicsDevice.reset();
 			return false;
@@ -281,6 +283,8 @@ namespace Strata
 
 		if (m_GraphicsDevice)
 		{
+			// A frame that drew nothing into the back buffer still presents (and captures) a defined image: black.
+			Renderer::PrepareBackBuffer();
 			ProcessBackBufferCaptures(true);
 			ST_PROFILE_STAGE("Present");
 			m_GraphicsDevice->EndFrame();
@@ -326,6 +330,8 @@ namespace Strata
 		for (Layer* layer : m_LayerStack)
 			layer->OnImGuiRender();
 
+		// The back buffer: the GPU waits for the display only from here on, after the frame's uploads and offscreen rendering.
+		Renderer::PrepareBackBuffer();
 		m_ImGuiLayer->End(m_GraphicsDevice->GetBackBufferFramebuffer());
 	}
 
