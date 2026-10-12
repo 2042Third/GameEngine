@@ -39,6 +39,10 @@ namespace Strata
 		std::vector<MeshLOD> LODs; // LODs[0] is full detail; later levels are progressively simplified
 		AssetHandle Material = UUID::Null(); // Default material (overridable per MeshRenderer)
 		AABB Bounds;
+		// Texture coordinate units per unit of the mesh's own space along its surfaces (of LOD 0), for the surfaces whose
+		// normals point along each axis most (x: those facing +X or -X), 0 for an axis no surface faces: what a texture's
+		// mip level on screen follows (TextureStreamingPolicy::GetUVPixels). Mesh::Create computes it.
+		glm::vec3 UVDensity = glm::vec3(0.0f);
 	};
 
 	// Indexed triangle mesh asset with one or more submeshes (one per material) and optional LOD levels. Front faces
@@ -119,6 +123,12 @@ namespace Strata
 		// when simplification can no longer reduce the mesh within the error tolerance.
 		std::vector<std::vector<uint32_t>> GenerateLODs(std::span<const glm::vec3> positions, std::span<const uint32_t> indices, uint32_t maxLevels);
 		AABB ComputeBounds(std::span<const glm::vec3> positions);
+		// Submesh::UVDensity of indexed triangles (indices relative to the given vertices): per axis, the square root of the
+		// texture coordinate area over the area of the triangles whose normals point along it most. An axis whose triangles
+		// make less than c_MinUVDensityAreaShare of the area gets 0 (slivers would decide alone otherwise), as do triangles
+		// without area or with non-finite texture coordinates.
+		constexpr double c_MinUVDensityAreaShare = 0.01;
+		glm::vec3 ComputeUVDensity(std::span<const glm::vec3> positions, std::span<const MeshVertexAttributes> attributes, std::span<const uint32_t> indices);
 	}
 
 }

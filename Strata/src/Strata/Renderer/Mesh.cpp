@@ -8,7 +8,9 @@
 #include <meshoptimizer.h>
 #include <mikktspace.h>
 
+#include <array>
 #include <bit>
+#include <cmath>
 
 namespace Strata
 {
@@ -118,6 +120,10 @@ namespace Strata
 
 			if (!submesh.Bounds.IsValid())
 				submesh.Bounds = MeshUtils::ComputeBounds(std::span<const glm::vec3>(positions).subspan(submesh.BaseVertex, submesh.VertexCount));
+			const MeshLOD& detail = submesh.LODs.front();
+			submesh.UVDensity = MeshUtils::ComputeUVDensity(std::span<const glm::vec3>(positions).subspan(submesh.BaseVertex, submesh.VertexCount),
+				std::span<const MeshVertexAttributes>(attributes).subspan(submesh.BaseVertex, submesh.VertexCount),
+				std::span<const uint32_t>(indices).subspan(detail.IndexOffset, detail.IndexCount));
 		}
 
 		Ref<Mesh> mesh(new Mesh());
@@ -533,6 +539,41 @@ namespace Strata
 			for (const glm::vec3& position : positions)
 				bounds.Expand(position);
 			return bounds;
+		}
+
+		glm::vec3 ComputeUVDensity(std::span<const glm::vec3> positions, std::span<const MeshVertexAttributes> attributes, std::span<const uint32_t> indices)
+		{
+			// Twice the areas, per axis (both are halves of cross products, so the factor cancels).
+			std::array<double, 3> area = {};
+			std::array<double, 3> uvArea = {};
+			for (size_t index = 0; index + 2 < indices.size(); index += 3)
+			{
+				const uint32_t a = indices[index];
+				const uint32_t b = indices[index + 1];
+				const uint32_t c = indices[index + 2];
+				if (a >= positions.size() || b >= positions.size() || c >= positions.size() || positions.size() != attributes.size())
+					continue;
+				const glm::vec3 normal = glm::cross(positions[b] - positions[a], positions[c] - positions[a]);
+				const glm::vec2 u = attributes[b].TexCoord - attributes[a].TexCoord;
+				const glm::vec2 v = attributes[c].TexCoord - attributes[a].TexCoord;
+				const double triangleUVArea = std::abs(static_cast<double>(u.x) * v.y - static_cast<double>(u.y) * v.x);
+				const double triangleArea = static_cast<double>(glm::length(normal));
+				if (!(triangleArea > 0.0) || !std::isfinite(triangleArea) || !std::isfinite(triangleUVArea))
+					continue;
+				const glm::vec3 facing = glm::abs(normal);
+				const size_t axis = facing.x >= facing.y && facing.x >= facing.z ? 0 : (facing.y >= facing.z ? 1 : 2);
+				area[axis] += triangleArea;
+				uvArea[axis] += triangleUVArea;
+			}
+
+			const double total = area[0] + area[1] + area[2];
+			glm::vec3 density(0.0f);
+			for (size_t axis = 0; axis < 3; axis++)
+			{
+				if (area[axis] > 0.0 && area[axis] >= total * c_MinUVDensityAreaShare)
+					density[static_cast<glm::length_t>(axis)] = static_cast<float>(std::sqrt(uvArea[axis] / area[axis]));
+			}
+			return density;
 		}
 
 	}
