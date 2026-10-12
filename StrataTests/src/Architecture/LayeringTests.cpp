@@ -496,8 +496,10 @@ TEST_SUITE("Architecture.Layering")
 		size_t assetFiles = 0;
 		for (const auto& [path, contents] : sources.Files)
 		{
-			const bool inLayer = std::any_of(asset->Paths.begin(), asset->Paths.end(), [&path](const std::string& glob) { return MatchesGlob(glob, path); })
-				&& std::none_of(asset->Exclude.begin(), asset->Exclude.end(), [&path](const std::string& glob) { return MatchesGlob(glob, path); });
+			// A named reference: Apple Clang 15 cannot capture a structured binding in a lambda.
+			const std::string& file = path;
+			const bool inLayer = std::any_of(asset->Paths.begin(), asset->Paths.end(), [&file](const std::string& glob) { return MatchesGlob(glob, file); })
+				&& std::none_of(asset->Exclude.begin(), asset->Exclude.end(), [&file](const std::string& glob) { return MatchesGlob(glob, file); });
 			if (!inLayer)
 				continue;
 			assetFiles++;
