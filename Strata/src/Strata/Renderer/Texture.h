@@ -145,7 +145,6 @@ namespace Strata
 		// Whether its levels can change: it was made from cooked data (whose levels can be read again) and is resident on the
 		// GPU, and no change is under way.
 		bool CanChangeLevels() const;
-		bool IsChangingLevels() const { return m_LevelChange != nullptr; }
 		// The finest level the change under way makes resident (GetResidentLevel() while none is under way).
 		uint32_t GetChangeLevel() const;
 		// Starts making levels [firstLevel, GetResidentLevel()) resident, from `data`: the cooked bytes of the range

@@ -483,6 +483,7 @@ TEST_SUITE("GPU.Editor.StreamingView")
 		CHECK(totals["levelsRaised"] == stats.Detail.LevelsRaised);
 		CHECK(totals["levelsRaised"].get<uint64_t>() >= 1);
 		CHECK(totals["levelsDropped"] == stats.Detail.LevelsDropped);
+		CHECK(totals["levelsDroppedForBudget"] == stats.Detail.LevelsDroppedForBudget);
 		CHECK(totals["bytesStreamed"] == stats.Detail.BytesStreamed);
 		CHECK(totals["bytesStreamed"].get<uint64_t>() > 0);
 		CHECK(totals["assetsBelowWanted"] == 0);

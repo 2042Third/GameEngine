@@ -143,6 +143,7 @@ namespace Strata
 					{ "rangeReadsCompleted", stats.RangeReadsCompleted },
 					{ "levelsRaised", stats.Detail.LevelsRaised },
 					{ "levelsDropped", stats.Detail.LevelsDropped },
+					{ "levelsDroppedForBudget", stats.Detail.LevelsDroppedForBudget },
 					{ "bytesStreamed", stats.Detail.BytesStreamed },
 					{ "bytesStreamedLastFrame", stats.Detail.BytesStreamedLastFrame },
 					{ "assetsBelowWanted", stats.Detail.AssetsBelowWanted },
@@ -161,7 +162,7 @@ namespace Strata
 			"many resident assets eviction looked at), cancellations, staging releases and dependency prefetches (prefetch: loads of what "
 			"assets reference started when their reads completed, and those dropped on arrival for lack of room in the budgets) and mip "
 			"streaming (mipStreaming: loads of only a texture's header and smallest levels, reads of further levels queued and completed, "
-			"levels raised and dropped, bytes read for them in all and in the last frame, textures below the level their views need, and "
+			"levels raised and dropped (and of those dropped, the levels a budget took: its pressure, or room for detail a view needs more), bytes read for them in all and in the last frame, textures below the level their views need, and "
 			"textures reading or changing levels now). With assets: true it also lists the assets that are resident, loading, failed or "
 			"pinned, with their memory, state, last use and pins; streaming textures add residentMip (the finest mip level resident, 0 "
 			"the full resolution), wantedMip (the finest level their views need), mipCount and residentBytes (what the resident levels hold).",

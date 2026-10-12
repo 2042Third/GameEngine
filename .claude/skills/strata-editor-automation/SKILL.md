@@ -113,7 +113,8 @@ editor started with `--no-gpu` (use `--headless`):
 - **Texture memory** follows the screen: `asset.stats {"assets": true}` lists each streaming texture with `residentMip`
   (the finest mip level resident, 0 the full resolution), `wantedMip` (the finest its views need), `mipCount` and
   `residentBytes`, and its `mipStreaming` totals say what the streamer did (`levelsRaised`, `levelsDropped`,
-  `bytesStreamed`, `assetsBelowWanted`: textures still coarser than needed, 0 once the view is complete).
+  `levelsDroppedForBudget`: of those, what a texture budget took, `bytesStreamed`, `assetsBelowWanted`: textures still
+  coarser than needed, 0 once the view is complete).
 - **Editor views are not the game's view.** With the editor camera outside play mode, a scene without any light (no
   directional, point, spot or sky light) is lit by *preview lighting* (a sun and a procedural sky that the game will not
   have: the result says `"previewLighting": true`), and the game's screen-space text (its HUD) is hidden

@@ -128,6 +128,7 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(totals["mipStreaming"]["rangeReadsCompleted"] == stats.RangeReadsCompleted);
 		CHECK(totals["mipStreaming"]["levelsRaised"] == stats.Detail.LevelsRaised);
 		CHECK(totals["mipStreaming"]["levelsDropped"] == stats.Detail.LevelsDropped);
+		CHECK(totals["mipStreaming"]["levelsDroppedForBudget"] == stats.Detail.LevelsDroppedForBudget);
 		CHECK(totals["mipStreaming"]["bytesStreamed"] == stats.Detail.BytesStreamed);
 		CHECK(totals["mipStreaming"]["bytesStreamedLastFrame"] == stats.Detail.BytesStreamedLastFrame);
 		CHECK(totals["mipStreaming"]["assetsBelowWanted"] == stats.Detail.AssetsBelowWanted);

@@ -1104,28 +1104,46 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     upload bytes, upload time and deadline (`OnUpdate`), and before evicting for a pool over budget lets it free memory
     (`ReleaseMemory`); its counters join the statistics (`AssetManagerStats::Detail`).
   - *Wanted levels.* Each `SceneRenderer` reports what it drew after a frame (`TextureStreamer::ReportView` with
-    `GetVisibleMaterials`: per material the largest projected size and texture coordinate tiling); per texture the
-    streamer takes `floor(log2(size * tiling / pixels)) + bias` (`TextureStreamingPolicy::ComputeWantedLevel`, clamped to
-    its levels), the finest over every use and view; shadow passes report nothing. Detail rises at once and falls only
-    after 120 frames without a need of it (`c_DropDelayFrames`); a texture nobody needs falls to its tail. Views without
+    `GetVisibleMaterials`: per material the largest projected size, its texture coordinate tiling and `UVPixels`, the most
+    pixels a unit of the meshes' texture coordinates spans where it is drawn). `UVPixels` follows texel density where a
+    surface is nearest the camera, not the size of its bounds: the pixels a world unit spans at the point of a proxy's
+    bounds nearest the camera (`TextureStreamingPolicy::GetWorldPixels`: the view's height over twice the tangent of half
+    its field of view, over that distance, at least the near plane), over the texture coordinates per world unit of its
+    submeshes (`GetUVPixels`: `Submesh::UVDensity`, which `Mesh::Create` computes from LOD 0, the square root of texture
+    coordinate area over surface area for the surfaces facing each axis, divided by the geometric mean of the instance's
+    scales along the two axes they span; the sparsest surfaces decide, since they show each texel largest). A large floor
+    seen from just above it therefore
+    needs the levels its near part shows, and a texture tiled over it the finer ones its tiling asks for; a surface seen at
+    a grazing angle spans as many texels across the view as facing it, which is what the 16x anisotropic samplers sample
+    by. Per texture the streamer takes `floor(log2(size * tiling / UVPixels))` (`ComputeWantedLevel`, clamped to its
+    levels), the finest over every use and view; shadow passes report nothing. Detail rises at once and falls only after
+    120 frames without a need of it (`c_DropDelayFrames`); a texture nobody needs falls to its tail. Views without
     streaming (`SceneRendererSpecification::TextureStreaming` false) need level 0 and count a texture as pending until it
     is whole; with streaming a texture whose tail is resident is not pending. `RequestLevel` asks for a level outside
-    views (the asset inspector's preview, the sky light's environment map, which is processed once level 0 is resident);
+    views (the asset inspector's preview; the sky light's environment map, until the renderer has computed the
+    environment from its whole chain: only the cube is sampled afterwards, and the map drops back to its tail);
     `TextureStreamer::GetPreview` gets a texture without asking for more than its tail (thumbnails).
   - *Raising* (`Texture::RaiseLevels`, `ContinueLevelChange`). The streamer reads the missing levels as one range
     (`CookedTextureLayout::GetLevelsByteRange`) at Low priority, scored by missing levels times coverage (a view that
-    jumped - moved 10 units or turned 45 degrees since its previous frame - reads at Normal, before older reads), only
-    when the GPU texture budget can hold the result. Then a new GPU texture of the levels from the new finest one is
+    jumped - moved 10 units or turned 45 degrees since its previous frame, `TextureStreamingPolicy::IsCameraCut` - reads
+    at Normal, before older reads); a read still queued rises with its texture's rank (`AssetManagerBase::RaiseRange`), so
+    a cut also serves first what older views had queued and the new one needs. The GPU texture budget's room, less what the
+    reads under way will add, goes to the textures below their level in rank order: one whose level does not fit takes the
+    finest levels of textures needed less (not needed by the latest frame first, then smaller on screen; only as many
+    levels as it misses, at most 8 textures a frame, and never from one needed as much or more, so two textures never take
+    levels from each other in turns; what a view without streaming needs counts as needed most), and what still does not
+    fit gets the finest level the room holds. Then a new GPU texture of the levels from the new finest one is
     created, the resident levels are copied into it on the GPU, the new ones upload through the upload queue within the
     frame's budgets (a change may span frames), and the new texture replaces the old with a new bindless slot; the old
     slot keeps its texture until no frame in flight samples it, and `SceneRenderer::ResolveTexture` resolves the slot every
     frame, so materials change nothing and nothing that was drawn shows the loading fallback again.
   - *Dropping.* Levels no longer needed go by a GPU copy into a smaller texture (`Texture::DropLevels`; at most 8 a
     frame), never past the resident tail. Under GPU texture pressure (`ReleaseMemory`) the least needed textures - those
-    the latest frame did not need, longest unneeded first, then those in view, smallest on screen first - drop to their
-    tail before the manager evicts whole assets; what a view without streaming needs keeps every level, and a manager
-    that loads whole textures keeps them whole. A texture dropped for the budget is raised again once the budget holds
-    the level it needs.
+    the latest frame did not need, longest unneeded first, then those in view, smallest on screen first - give up their
+    finest levels, only as many as the budget takes and never their tail, before the manager evicts whole assets; what a
+    view without streaming needs keeps every level, and a manager that loads whole textures keeps them whole. A texture
+    dropped for the budget is raised again once the budget holds the level it needs. Levels a budget took count in
+    `AssetDetailStats::LevelsDroppedForBudget` too.
 
 - **The upload seam** (`Asset/AssetUploadContext.h`). The asset layer knows no graphics API: finalizations record their
   uploads into the `AssetUploadContext` of `AssetFinalizeContext::Upload`. The renderer implements it
@@ -1169,8 +1187,8 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
   of the last 120) with the staging budget, evictions and eviction checks, cancellations, staging releases, dependency
   prefetches started and dropped, partial loads and range reads, what the extensions keeping assets partly resident did
-  (`Detail`: mip levels raised and dropped, bytes read for them, textures below their wanted level, level reads and
-  changes under way), and the `GetAsset` calls made (tests take differences to count what a frame looks up); per asset
+  (`Detail`: mip levels raised and dropped, and of those dropped the ones a budget took, bytes read for them, textures
+  below their wanted level, level reads and changes under way), and the `GetAsset` calls made (tests take differences to count what a frame looks up); per asset
   its state, memory, latest request and pins, and for assets kept partly resident their levels (`Detail`: resident,
   wanted, count, resident bytes). `GetStats` costs the same with any number of assets: the
   counts of assets per state and of pinned assets change with the entries (`SetStateLocked`, `AddEntryLocked`,

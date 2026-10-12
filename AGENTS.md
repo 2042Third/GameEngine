@@ -528,8 +528,11 @@ The threading model, frame loop and pipelines these rules protect are described 
   registration function).
 - **Mip streaming** ([Docs/Architecture.md](Docs/Architecture.md), "Streaming and residency", Mip streaming): a texture's
   first load holds its header and the levels up to 32x32 (its resident tail), and each manager's `TextureStreamer` raises
-  and drops its levels to what the views drew it at (`SceneRenderer` reports after every frame; `RequestLevel` for other
-  uses, `TextureStreamer::GetPreview` for thumbnails). A texture's GPU texture and bindless slot change when its levels
+  and drops its levels to what the views drew it at (`SceneRenderer` reports after every frame: texel density where each
+  surface is nearest the camera, from the meshes' `Submesh::UVDensity` and the instances' scales, not the size of their
+  bounds; `RequestLevel` for other uses, `TextureStreamer::GetPreview` for thumbnails). Under a texture budget the most
+  needed textures come first: the less needed give up their finest levels (`LevelsDroppedForBudget`), and what does not
+  fit gets the finest level that does. A texture's GPU texture and bindless slot change when its levels
   do: resolve the slot every frame (`Texture::GetBindlessSlot`), never cache it. Renderers and tests that compare exact
   pixels set `SceneRendererSpecification::TextureStreaming = false` (every level, pending until resident); tests of
   whole-asset residency turn the manager's partial loads off (`AssetManagerBase::SetPartialLoads(false)`).

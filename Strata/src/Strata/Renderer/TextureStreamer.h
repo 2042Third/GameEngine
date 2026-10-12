@@ -129,10 +129,13 @@ namespace Strata
 	// each frame the renderers report the materials they drew (ReportView, SceneRenderer does), from which the streamer
 	// derives the level each texture needs (TextureStreamingPolicy), reads the missing levels' cooked bytes by range through
 	// the manager's streaming queue (AssetManagerBase::RequestRange, ranked by missing levels times coverage, a camera cut's
-	// first) and raises the texture with them within the frame's upload budgets (Texture::RaiseLevels: a new GPU texture,
-	// its resident levels copied on the GPU, the new ones uploaded, the bindless slot swapped). Levels no longer needed for
-	// c_DropDelayFrames frames are dropped, down to the tail, and under GPU texture pressure (ReleaseMemory) the least
-	// needed textures lose their finest levels before the manager evicts whole assets; a texture in view keeps its tail, so
+	// first; queued reads rise with their texture's rank) and raises the texture with them within the frame's upload
+	// budgets (Texture::RaiseLevels: a new GPU texture, its resident levels copied on the GPU, the new ones uploaded, the
+	// bindless slot swapped). The GPU texture budget's room (less what the reads under way will add) goes to the textures
+	// below their level in rank order: one whose level does not fit takes the finest levels of textures needed less
+	// (MakeRoom), else gets the finest level the room holds. Levels no longer needed for c_DropDelayFrames frames are
+	// dropped, down to the tail, and under GPU texture pressure (ReleaseMemory) the least needed textures lose their finest
+	// levels, as many as the budget takes, before the manager evicts whole assets; a texture in view keeps its tail, so
 	// nothing that was drawn shows the loading fallback again. Main thread.
 	class TextureStreamer : public AssetManagerExtension
 	{
@@ -161,11 +164,6 @@ namespace Strata
 		// raises it). Null until it is loaded.
 		static Ref<Texture> GetPreview(AssetManagerBase& manager, AssetHandle texture);
 
-		// Added to every wanted level (positive: coarser, to save memory; negative: sharper).
-		void SetLevelBias(int32_t bias) { m_LevelBias = bias; }
-		int32_t GetLevelBias() const { return m_LevelBias; }
-		const TextureStreamingPolicy& GetPolicy() const { return m_Policy; }
-
 		// AssetManagerExtension
 		bool RefinesPartialAssets(const AssetUploadContext* upload) const override;
 		void OnUpdate(const AssetFinalizeContext& context) override;
@@ -178,9 +176,31 @@ namespace Strata
 			uint64_t Read = 0;            // A range read under way (AssetManagerBase::RequestRange)
 			uint32_t ReadLevel = 0;       // The finest level it reads
 			uint32_t ReadResident = 0;    // The resident level when it was requested: it reads [ReadLevel, ReadResident)
+			TextureStreamingPolicy::Rank ReadRank; // What the read is queued with (raised as the views need it more)
 			bool Changing = false;        // A level change under way (Texture::ContinueLevelChange)
+			bool ChangeForBudget = false; // The change drops levels for a budget (ReleaseMemory, or room for a raise)
 			uint32_t ChangeFrom = 0;      // The resident level when the change started
 			uint64_t RetryFrame = 0;      // No read before this frame (after a failure)
+		};
+
+		// A texture that may lose its finest levels to a budget (ReleaseMemory) or to the raise of a texture needed more
+		// (MakeRoom): anything but what a view of the latest frame needs whole.
+		struct DropCandidate
+		{
+			AssetHandle Handle;
+			bool Needed = false;      // The latest frame needed it
+			float Coverage = 0.0f;    // Its largest coverage in that frame
+			uint64_t LastNeededFrame = 0;
+		};
+		// A texture below its target, ranked for the room in the budget (OnUpdate).
+		struct Raise
+		{
+			AssetHandle Handle;
+			Ref<Texture> Target;
+			uint32_t Level = 0;       // The level it should have
+			uint32_t Resident = 0;
+			float Need = 0.0f;        // Its coverage; infinite for what a view needs whole
+			TextureStreamingPolicy::Rank Rank;
 		};
 
 		// The loaded texture (looked up without requesting it), or null.
@@ -190,15 +210,32 @@ namespace Strata
 		// Continues a texture's change; returns whether it finished (done or failed).
 		bool ContinueChange(AssetHandle handle, Texture& texture, Streamed& streamed, const AssetFinalizeContext& context);
 		// Starts and finishes a drop (a GPU copy), reporting the memory change; returns the GPU texture bytes it freed.
-		uint64_t Drop(AssetHandle handle, Texture& texture, uint32_t level, const AssetFinalizeContext& context);
+		uint64_t Drop(AssetHandle handle, Texture& texture, uint32_t level, bool forBudget, const AssetFinalizeContext& context);
 		// The GPU texture bytes free in the manager's budget.
 		uint64_t GetTextureRoom() const;
+		// The textures that may lose levels, least needed first: those the latest frame did not need (longest unneeded
+		// first), then those it needed, smallest on screen first.
+		std::vector<DropCandidate> GetDropCandidates() const;
+		// Frees about `bytes` of a texture's GPU memory for a budget: a change under way is cancelled (its new texture comes on
+		// top of the resident one) and its read abandoned, then its finest levels go, only as many as `bytes` takes, never its
+		// tail. Returns the GPU texture bytes freed.
+		uint64_t ReleaseLevels(AssetHandle handle, uint64_t bytes, const AssetFinalizeContext& context);
+		// What ReleaseLevels could free of a texture (its levels above the tail, a change under way) with the room its read
+		// holds, without changing anything.
+		uint64_t GetReleasableBytes(AssetHandle handle) const;
+		// What MakeRoom could gain for a texture needed as much as `need`, without changing anything (`drops`: those the frame
+		// made so far).
+		uint64_t GetRoomFromLessNeeded(AssetHandle raising, float need, const std::vector<DropCandidate>& candidates, uint32_t drops) const;
+		// Room for the raise of a texture needed as much as `need` that misses `bytes`: textures needed less give up their
+		// finest levels (and their reads), least needed first, within the frame's drops. A texture never takes from one
+		// needed as much or more, so two textures never take levels from each other in turns. Returns the room gained.
+		uint64_t MakeRoom(AssetHandle raising, uint64_t bytes, float need, std::vector<DropCandidate>& candidates, uint32_t& drops,
+			const AssetFinalizeContext& context);
 	private:
 		AssetManagerBase& m_Manager;
 		TextureStreamingPolicy m_Policy;
 		std::unordered_map<AssetHandle, Streamed> m_Streamed; // Textures with a read or a change under way, or a retry pending
 		uint64_t m_Frame = 0;
-		int32_t m_LevelBias = 0;
 		// What the frame had used of the budgets when the streamer's update began (MakeCallContext).
 		uint64_t m_StartUploadedBytes = 0;
 		float m_StartUploadMs = 0.0f;

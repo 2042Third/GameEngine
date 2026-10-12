@@ -76,6 +76,7 @@ namespace Strata
 	{
 		uint64_t LevelsRaised = 0;        // Levels made resident since the manager was created
 		uint64_t LevelsDropped = 0;       // Levels released (no longer needed, or for budgets)
+		uint64_t LevelsDroppedForBudget = 0; // Of those, the levels released for a budget (its pressure, or room for detail needed more)
 		uint64_t BytesStreamed = 0;       // Bytes read for raised levels
 		uint64_t BytesStreamedLastFrame = 0;
 		uint32_t AssetsBelowWanted = 0;   // Assets whose resident levels are coarser than what something needs

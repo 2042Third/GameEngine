@@ -276,5 +276,16 @@ TEST_SUITE("Renderer.TextureStreamer")
 		const AssetStreamingQueueStats stats = queue.GetStats();
 		CHECK(stats.QueuedRanges == 50);
 		CHECK(stats.InFlightRanges == 1);
+
+		// The new view also needs a texture whose read the previous view queued: the streamer raises that read to the cut's
+		// rank (TextureStreamer::OnUpdate, AssetManagerBase::RaiseRange), so it goes before the other older reads too.
+		const TextureStreamingPolicy::Rank queued = TextureStreamingPolicy::RankRaise(4, 0.9f, false);
+		const TextureStreamingPolicy::Rank raised = TextureStreamingPolicy::RankRaise(2, 0.3f, true);
+		REQUIRE(raised.Outranks(queued));
+		CHECK(queue.RaiseRange(37, raised.Priority, raised.Score));
+		queue.OnReadFinished();
+		queue.OnLoadFinished(1024, true);
+		REQUIRE(order.size() == 3);
+		CHECK(order[2] == 37);
 	}
 }

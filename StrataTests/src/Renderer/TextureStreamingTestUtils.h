@@ -1,9 +1,11 @@
 #pragma once
 
 #include "Strata/Asset/AssetTypes.h"
+#include "Strata/Renderer/Material.h"
 
 #include <cstdint>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 // Helpers of the tests that stream a texture's mip levels on a device (GPU.TextureStreaming, GPU.Editor.StreamingView).
@@ -21,5 +23,27 @@ namespace Strata::Tests
 	std::vector<uint8_t> CookGradientTexture();
 	// An asset pack with the texture and the material, in a new temporary directory.
 	std::filesystem::path WriteGradientStreamingPack();
+
+	// A 2048x2048 RGBA8 checkerboard of squares of c_CheckerSquareTexels texels and its exact mip chain (each level the box
+	// filter of the one before: checkerboards down to squares of a texel, then gray): a coarser level than the screen needs
+	// shows at once, as blurred edges.
+	constexpr uint32_t c_CheckerTextureSize = 2048;
+	constexpr uint32_t c_CheckerSquareTexels = 8;
+	std::vector<uint8_t> CookCheckerTexture();
+	// An equirectangular RGBA16F environment map of width x height texels with its mip chain: a sky gradient.
+	std::vector<uint8_t> CookEnvironmentMap(uint32_t width, uint32_t height);
+	// The stored form of a material document.
+	std::vector<uint8_t> SerializeMaterial(const MaterialProperties& properties);
+
+	// An asset of a pack the tests write (WriteStreamingPack).
+	struct StreamingPackAsset
+	{
+		AssetHandle Handle;
+		AssetType Type = AssetType::None;
+		std::string Path;
+		std::vector<uint8_t> Data;
+	};
+	// An asset pack with the assets, in a new temporary directory.
+	std::filesystem::path WriteStreamingPack(const std::vector<StreamingPackAsset>& assets);
 
 }
