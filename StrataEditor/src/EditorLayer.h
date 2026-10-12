@@ -224,6 +224,8 @@ namespace Strata
 		void StartPlay();
 		// File > Export Game... and the toolbar's Export button: the Export dialog, showing a running export.
 		void ShowExportDialog();
+		// Scripts > External Editor... and editor.showDialog: the program that opens script files, and the editors found.
+		void ShowExternalEditorDialog();
 	private:
 		EditorOptions m_Options;
 		Scope<EditorHost> m_Host;

@@ -1957,11 +1957,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects`, `editor.removeRecentProject` and `editor.perf`,
   log, play, selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
   `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`) and
-  `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel`, the one command about its
-  window. Conventions: AGENTS.md, "Editor". Every command has a kind (`EditorCommandKind`: Edit, the default, Query or
-  Session), which `editor.commands` lists and replays use, and queries whose results follow the editor's session rather
-  than the project's content (the selection, `editor.status`, the journal, what is loaded or running) say so
-  (`EditorCommandResults::Session`): replays never bind the IDs those show.
+  `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel` and `editor.showDialog` (the
+  export, project, recovery, script and about dialogs), the commands about its window. Conventions: AGENTS.md, "Editor".
+  Every command has a kind (`EditorCommandKind`: Edit, the default, Query or Session), which `editor.commands` lists and
+  replays use (`Editor.Journal` lists every built-in command's kind, so a new one is a decision), and queries whose
+  results follow the editor's session rather than the project's content (the selection, `editor.status`, the journal,
+  what is loaded or running) say so (`EditorCommandResults::Session`): replays never bind the IDs those show.
 - **Command line** (`EditorApplication.cpp`). `CreateApplication` answers `--help` and `--version` and refuses arguments
   outside its table (`c_Arguments`; exit code 3 with the usage) before it starts the log, the modules or a window:
   `Application::SetStartupExitCode` is what `main` returns when no application was made. Options that take numbers

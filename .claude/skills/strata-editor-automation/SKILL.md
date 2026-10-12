@@ -375,8 +375,9 @@ person at the editor sees the same in the Performance panel (click the frame pil
 `"Performance"`, `"Console"`, `"Activity"`, ...) brings one to the front for them, also as the first command of a script
 (it fails while no project is open: the editor then shows its launcher instead of panels); `{"panel": "ContentBrowser",
 "scripts": true}` shows the browser's Scripts root, the script files you wrote with their classes. `editor.showDialog {"dialog":
-"export" | "newProject" | "openSample" | "recovery" | "about"}` opens a dialog of the window the same way ("recovery" lets the
-person choose what to recover or discard, instead of you choosing for them).
+"export" | "newProject" | "openSample" | "recovery" | "newScript" | "externalEditor" | "about"}` opens a dialog of the
+window the same way ("recovery" lets the person choose what to recover or discard, instead of you choosing for them;
+"newScript" and "externalEditor" let them name a script class or pick the program that opens scripts).
 
 **Play it (simulated input)**: while the game runs (`play.start`), the `input.*` commands press keys and buttons the way a
 player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyReleased` (also while the viewport has no focus).

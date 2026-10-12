@@ -158,6 +158,32 @@ TEST_SUITE("Editor.UI.Dialogs")
 		CHECK(editor.Layer->GetRecoveryDialog().IsOpen());
 	}
 
+	TEST_CASE("editor.showDialog opens the script dialogs: New Script for a project's scripts, External Editor without one too")
+	{
+		{
+			HarnessEditor editor;
+			editor.Layer->DismissLauncher();
+			editor.Frames(2);
+			// Scripts belong to a project; the program that opens them is the user's.
+			CHECK(editor.Layer->GetCommands().Execute(editor.Context(), "editor.showDialog", { { "dialog", "newScript" } }).ErrorKind
+				== EditorCommandError::Failed);
+			editor.Frames(2);
+			CHECK_FALSE(editor.Layer->GetNewScriptDialog().IsOpen());
+			CHECK(editor.Run("editor.showDialog", { { "dialog", "externalEditor" } })["dialog"] == "externalEditor");
+			editor.Frames(2);
+			CHECK(editor.Layer->GetExternalEditorDialog().IsOpen());
+		}
+		{
+			HarnessEditor editor({}, WithFeatureProject("ShowScriptDialogs"));
+			editor.Frames(2);
+			REQUIRE(editor.Context().HasProject());
+			editor.Run("editor.showDialog", { { "dialog", "newScript" } });
+			editor.Frames(2);
+			CHECK(editor.Layer->GetNewScriptDialog().IsOpen());
+			CHECK_FALSE(editor.Layer->GetExternalEditorDialog().IsOpen());
+		}
+	}
+
 	TEST_CASE("editor.showDialog opens New Project with its template")
 	{
 		HarnessEditor editor;

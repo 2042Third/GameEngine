@@ -154,11 +154,14 @@ namespace Strata
 			"Opens a dialog of the editor's window for the person at it, e.g. to show what you are about to do or for a screenshot: export (the "
 			"Export Game dialog; needs a project), newProject (New Project, with template preselected), openSample (Open Sample: where to copy "
 			"the sample, the first one by default; see project.samples), recovery (Recover Unsaved Changes: the project's recovery data that "
-			"scene.recoveryStatus lists, for the person to recover or discard; needs a project, and closes by itself when nothing applies) or "
-			"about (About Strata). The project dialogs ask about unsaved scene changes first. Changes no scene data and records no undo; fails in "
-			"an editor without a window (--no-gpu or headless). Returns {dialog} and, for openSample, the sample it offers (sample).",
+			"scene.recoveryStatus lists, for the person to recover or discard; needs a project, and closes by itself when nothing applies), "
+			"newScript (New Script: a script class for the project's script directory, as script.create writes; needs a project), "
+			"externalEditor (External Editor: the program that opens script files, as script.setExternalEditor sets) or about (About Strata). "
+			"The project dialogs ask about unsaved scene changes first. Changes no scene data and records no undo; fails in an editor without a "
+			"window (--no-gpu or headless). Returns {dialog} and, for openSample, the sample it offers (sample).",
 			CommandUtils::ObjectSchema({
-				{ "dialog", { { "type", "string" }, { "enum", { "export", "newProject", "openSample", "recovery", "about" } }, { "description", "The dialog to open" } } },
+				{ "dialog", { { "type", "string" }, { "enum", { "export", "newProject", "openSample", "recovery", "newScript", "externalEditor", "about" } },
+					{ "description", "The dialog to open" } } },
 				{ "template", CommandUtils::StringSchema("newProject: the template to preselect (project.templates; default basic3d)") },
 				{ "sample", CommandUtils::StringSchema("openSample: the sample to copy (project.samples; default: the first one)") } }, { "dialog" }),
 			[this](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
@@ -169,10 +172,11 @@ namespace Strata
 				std::string sample = arguments.GetString("sample", "");
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (dialog != "export" && dialog != "newProject" && dialog != "openSample" && dialog != "recovery" && dialog != "about")
+				if (dialog != "export" && dialog != "newProject" && dialog != "openSample" && dialog != "recovery" && dialog != "newScript"
+					&& dialog != "externalEditor" && dialog != "about")
 				{
-					return EditorCommandResult::InvalidParameters(
-						fmt::format("Parameter 'dialog': the editor has no dialog '{}' (export, newProject, openSample, recovery, about)", dialog));
+					return EditorCommandResult::InvalidParameters(fmt::format(
+						"Parameter 'dialog': the editor has no dialog '{}' (export, newProject, openSample, recovery, newScript, externalEditor, about)", dialog));
 				}
 				if (!templateId.empty() && !ProjectTemplates::Find(templateId))
 					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'template': unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
@@ -208,6 +212,16 @@ namespace Strata
 					// Read again, for what another editor left since: the dialog waits for the scan.
 					context.GetRecovery().Scan();
 					ShowRecoveryDialog();
+				}
+				else if (dialog == "newScript")
+				{
+					if (!context.HasProject())
+						return EditorCommandResult::Fail("No project is open: scripts belong to a project (project.open or project.create first)");
+					ShowNewScriptDialog();
+				}
+				else if (dialog == "externalEditor")
+				{
+					ShowExternalEditorDialog();
 				}
 				else
 				{
@@ -1234,10 +1248,7 @@ namespace Strata
 			if (ImGui::MenuItem("Open Scripts Folder", nullptr, false, m_Context.HasProject()))
 				RunEditorCommand(m_Context, m_Commands, "script.open");
 			if (ImGui::MenuItem("External Editor..."))
-			{
-				EditorPanelContext panelContext = MakePanelContext();
-				m_ExternalEditorDialog.Open(panelContext);
-			}
+				ShowExternalEditorDialog();
 			if (ImGui::MenuItem("Show Problems", nullptr, false, m_Context.HasProject()))
 				m_Panels.Focus(EditorPanels::c_Problems);
 			ImGui::Separator();
@@ -1489,6 +1500,12 @@ namespace Strata
 	{
 		EditorPanelContext panelContext = MakePanelContext();
 		m_ExportDialog.Open(panelContext);
+	}
+
+	void EditorLayer::ShowExternalEditorDialog()
+	{
+		EditorPanelContext panelContext = MakePanelContext();
+		m_ExternalEditorDialog.Open(panelContext);
 	}
 
 	void EditorLayer::DrawStatusBar()
