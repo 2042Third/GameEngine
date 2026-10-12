@@ -249,6 +249,12 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		for (const nlohmann::json& file : withBuild["createdBuildFiles"])
 			listed |= FileSystem::FromUTF8(file.get<std::string>()).filename() == "CMakeLists.txt";
 		CHECK(listed);
+
+		// What agents read: a new class must be built before script.add can attach it, and Play is no way around that.
+		const EditorCommand* command = harness.Commands.Find("script.create");
+		REQUIRE(command);
+		CHECK(command->Description.find("script.build before attaching") != std::string::npos);
+		CHECK(command->Description.find("press Play") == std::string::npos);
 	}
 
 	TEST_CASE("External editor commands become a program and its arguments, never a shell command")

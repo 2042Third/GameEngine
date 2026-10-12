@@ -389,8 +389,9 @@ namespace Strata
 			"Writes a new script class into the project's script directory: a .cpp with the class (deriving from Script), its "
 			"ST_SCRIPT_CLASS registration and, with the behaviour template (default), OnCreate, OnUpdate and an example field (Speed) or the "
 			"fields given. The class name must be a C++ identifier that neither the project's scripts nor the SDK declare. Creates the "
-			"script build first when the project has none (script.init). Build it with script.build, or press Play, which builds first. "
-			"Returns the file written (absolute and relative to the project) and the class.",
+			"script build first when the project has none (script.init). Build it with script.build before attaching it (script.add accepts "
+			"classes of the loaded module only); afterwards play.start rebuilds sources that changed. Returns the file written (absolute and "
+			"relative to the project) and the class.",
 			ObjectSchema({
 				{ "class", StringSchema("The class name, a C++ identifier, e.g. PlayerController") },
 				{ "path", StringSchema("Where to write it, relative to the script directory and ending in .cpp (default: <class>.cpp); folders are "
