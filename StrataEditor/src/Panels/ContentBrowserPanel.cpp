@@ -4,6 +4,7 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorNotifications.h"
 #include "Editor/ThumbnailCache.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
@@ -32,6 +33,8 @@
 #include <cfloat>
 #include <cmath>
 #include <cstring>
+#include <string>
+#include <vector>
 
 namespace Strata
 {
@@ -61,6 +64,8 @@ namespace Strata
 		constexpr float c_TreeWidthInFontSizes = 13.0f;
 		// A tile without a thumbnail shows its type's icon this large, as a share of the picture's side.
 		constexpr float c_TileIconScale = 0.45f;
+		// Dropped files no importer reads: the toast names this many of them.
+		constexpr size_t c_SkippedFilesNamed = 3;
 		// Tiles and list rows select when pressed (once per click, so that a drag starts from the selected item; a double click
 		// opens through ImGui::IsMouseDoubleClicked) and when the keyboard's arrows move onto them, so that Enter, F2 and Delete
 		// act on the item the keyboard is at.
@@ -227,7 +232,7 @@ namespace Strata
 		// said so.
 		nlohmann::json files = nlohmann::json::array();
 		nlohmann::json directories = nlohmann::json::array();
-		std::string skipped;
+		std::vector<std::string> skipped;
 		for (const std::filesystem::path& path : paths)
 		{
 			if (FileSystem::IsDirectory(path))
@@ -235,10 +240,27 @@ namespace Strata
 			else if (FileSystem::IsRegularFile(path) && AssetImporterRegistry::FindByExtension(StringUtils::ToLower(FileSystem::ToUTF8(path.extension()))))
 				files.push_back(FileSystem::ToUTF8(path));
 			else
-				skipped += (skipped.empty() ? "" : ", ") + FileSystem::ToUTF8(path.filename());
+				skipped.push_back(FileSystem::ToUTF8(path.filename()));
 		}
 		if (!skipped.empty())
-			ST_WARN("Not imported (no asset type Strata imports): {}", skipped);
+		{
+			std::string names;
+			for (const std::string& name : skipped)
+				names += (names.empty() ? "" : ", ") + name;
+			ST_WARN("Not imported (no asset type Strata imports): {}", names);
+			// The person dropped them and would otherwise see nothing happen to them: a toast says why, naming a few (the log
+			// lists all of them).
+			std::string shown;
+			for (size_t index = 0; index < std::min(skipped.size(), c_SkippedFilesNamed); index++)
+				shown += (shown.empty() ? "" : ", ") + skipped[index];
+			if (skipped.size() > c_SkippedFilesNamed)
+				shown += fmt::format(" and {} more", skipped.size() - c_SkippedFilesNamed);
+			EditorNotification notification;
+			notification.Level = NotificationLevel::Warning;
+			notification.Title = skipped.size() == 1 ? "A file was not imported" : fmt::format("{} files were not imported", skipped.size());
+			notification.Message = fmt::format("{}: no asset type Strata imports", shown);
+			context.GetNotifications().Post(std::move(notification));
+		}
 		if (files.empty() && directories.empty())
 			return;
 		runner.Run(context, commands, "asset.import", { { "files", std::move(files) }, { "directories", std::move(directories) }, { "directory", m_View.GetFolder() } },

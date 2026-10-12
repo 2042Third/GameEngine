@@ -906,11 +906,12 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   files, `.meta` files and the folders the copy made; for a folder, only the assets that failed) unless
   `KeepOnFailure`; the failure is logged once (by `ApplyImportOutcome`, or by `FinishExternalImport` for a copy that
   failed) and the command fails with the items in its error's data. Files dropped on the editor import into the Content
-  Browser's folder (`ContentBrowserPanel::ImportFiles`), leaving out, with a warning, files no importer reads (the command
-  refuses a request that names one). Importers' messages, which third-party decoders may fill with bytes of the file, are
-  made valid UTF-8 (`StringUtils::MakeValidUTF8`) before they reach records, logs and results. Closing the project ends
-  an import: a copy that has not finished removes what it copied. `ImportExternalFile` copies the same way and imports
-  on the calling thread (tools, tests).
+  Browser's folder (`ContentBrowserPanel::ImportFiles`), leaving out files no importer reads (the command refuses a
+  request that names one): the log names them all, and a warning toast counts them and names the first three.
+  Importers' messages, which third-party decoders may fill with bytes of the file, are made valid UTF-8
+  (`StringUtils::MakeValidUTF8`) before they reach records, logs and results. Closing the project ends an import: a copy
+  that has not finished removes what it copied. `ImportExternalFile` copies the same way and imports on the calling
+  thread (tools, tests).
 - **Cancelling imports.** Nothing in the editor waits for a background import. Each is a `BackgroundJob` with a
   cancellation flag, the importer's `ImportContext::Cancel`: importers check it as they go (the texture cooker per block
   of a compressed level and between mip levels, the texture importer around decoding, the glTF importer between a
@@ -1980,7 +1981,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `EditorContext::BuildScripts` and `OnScriptBuildFinished` (failed with Show Problems, cancelled as information),
   `StopOnScriptFault` (with Show Problems, whose panel leads with the crash), the end of a game
   export (`NotifyExportFinished`, once per export: an export that does not start leaves the announced one), imports that
-  failed while nobody waited for them (`NotifyImportFailures`, below), unsaved changes that a scene replacement discarded
+  failed while nobody waited for them (`NotifyImportFailures`, below), files dropped on the editor that no importer reads
+  (`ContentBrowserPanel::ImportFiles`), unsaved changes that a scene replacement discarded
   (`NotifyDiscardedChanges`, from `ResetScene`: who discarded them, from the command that runs now,
   `CommandJournal::GetOutermostRunningId`, which a deferred command is during its polls too; a warning naming the agent or
   the command script, information when the person answered Don't Save; Recover while the project stays open, where they

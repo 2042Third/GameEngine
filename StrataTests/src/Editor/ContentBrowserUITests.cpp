@@ -2,6 +2,7 @@
 
 #include "Asset/AssetTestUtils.h"
 #include "Editor/AssetBrowserView.h"
+#include "Editor/EditorNotifications.h"
 #include "Editor/HarnessEditor.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
@@ -21,6 +22,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <set>
 #include <string>
 #include <string_view>
@@ -535,5 +537,33 @@ TEST_SUITE("Editor.UI.ContentBrowser")
 		for (const LogEntry& entry : Log::GetBuffer().GetEntries(sequence))
 			named = named || (entry.Message.find("Not imported") != std::string::npos && entry.Message.find("Notes.txt") != std::string::npos);
 		CHECK(named);
+		// The person sees why without looking in the Console: a warning toast names the file.
+		const std::deque<EditorNotification>& toasts = editor.Context().GetNotifications().GetActive();
+		REQUIRE(toasts.size() == 1);
+		CHECK(toasts.front().Level == NotificationLevel::Warning);
+		CHECK(toasts.front().Title == "A file was not imported");
+		CHECK(toasts.front().Message == "Notes.txt: no asset type Strata imports");
+		editor.Frames(2);
+		const std::optional<UI::ItemProbe::Item> toast = UI::ItemProbe::Find("Toast.0");
+		REQUIRE(toast.has_value());
+		CHECK(toast->Text.rfind("A file was not imported\nNotes.txt: ", 0) == 0);
+
+		// A drop of only such files imports nothing; the toast counts them all and names a few.
+		editor.Context().GetNotifications().Clear();
+		std::vector<std::filesystem::path> notes;
+		for (int index = 0; index < 5; index++)
+		{
+			notes.push_back(dropped / fmt::format("Note{}.txt", index));
+			REQUIRE(FileSystem::WriteText(notes.back(), "Not an asset"));
+		}
+		const uint64_t changes = editor.Assets().GetChangeVersion();
+		WindowFileDropEvent notesDrop(notes);
+		editor.Harness.DispatchEvent(notesDrop, *editor.Layer);
+		editor.Frames(2);
+		CHECK(editor.Assets().GetExternalImportCount() == 0);
+		CHECK(editor.Assets().GetChangeVersion() == changes);
+		REQUIRE(toasts.size() == 1);
+		CHECK(toasts.front().Title == "5 files were not imported");
+		CHECK(toasts.front().Message == "Note0.txt, Note1.txt, Note2.txt and 2 more: no asset type Strata imports");
 	}
 }
