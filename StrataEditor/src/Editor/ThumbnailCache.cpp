@@ -94,7 +94,18 @@ namespace Strata
 			return value;
 		}
 
-		// Box-filters an RGBA8 image down to fit `size` on a side (images that fit already stay).
+		// The source texels [first, end) an output texel of a side scaled from `source` to `target` texels averages: whole
+		// texels within the side, at least one.
+		std::pair<uint64_t, uint64_t> GetBoxRange(uint32_t index, uint32_t source, uint32_t target)
+		{
+			const uint64_t first = static_cast<uint64_t>(index) * source / target;
+			const uint64_t end = std::max(first + 1, static_cast<uint64_t>(index + 1) * source / target);
+			return { first, std::min<uint64_t>(end, source) };
+		}
+
+		// Box-filters an RGBA8 image down to fit `size` on a side (images that fit already stay). Each output texel averages
+		// the source texels its box covers within the image, so a side shorter than the reduction (a 4096x1 strip) keeps
+		// its texels instead of reading past them.
 		ThumbnailImage FitImage(ThumbnailImage image, uint32_t size)
 		{
 			const uint32_t factor = (std::max(image.Width, image.Height) + size - 1) / size;
@@ -106,18 +117,21 @@ namespace Strata
 			fitted.Pixels.resize(static_cast<size_t>(fitted.Width) * fitted.Height * 4);
 			for (uint32_t y = 0; y < fitted.Height; y++)
 			{
+				const auto [rowFirst, rowEnd] = GetBoxRange(y, image.Height, fitted.Height);
 				for (uint32_t x = 0; x < fitted.Width; x++)
 				{
-					uint32_t sum[4] = {};
-					for (uint32_t sy = 0; sy < factor; sy++)
+					const auto [columnFirst, columnEnd] = GetBoxRange(x, image.Width, fitted.Width);
+					uint64_t sum[4] = {};
+					for (uint64_t sourceY = rowFirst; sourceY < rowEnd; sourceY++)
 					{
-						const uint8_t* row = image.Pixels.data() + (static_cast<size_t>(y * factor + sy) * image.Width + static_cast<size_t>(x) * factor) * 4;
-						for (uint32_t sx = 0; sx < factor * 4; sx++)
-							sum[sx % 4] += row[sx];
+						const uint8_t* row = image.Pixels.data() + static_cast<size_t>((sourceY * image.Width + columnFirst) * 4);
+						for (uint64_t offset = 0; offset < (columnEnd - columnFirst) * 4; offset++)
+							sum[offset % 4] += row[offset];
 					}
+					const uint64_t count = (rowEnd - rowFirst) * (columnEnd - columnFirst);
 					uint8_t* out = fitted.Pixels.data() + (static_cast<size_t>(y) * fitted.Width + x) * 4;
 					for (int channel = 0; channel < 4; channel++)
-						out[channel] = static_cast<uint8_t>(sum[channel] / (factor * factor));
+						out[channel] = static_cast<uint8_t>((sum[channel] + count / 2) / count);
 				}
 			}
 			return fitted;

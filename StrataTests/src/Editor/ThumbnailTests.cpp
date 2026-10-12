@@ -129,6 +129,26 @@ TEST_SUITE("Editor.Thumbnails")
 		CHECK(image.Height == 64);
 		CHECK(PixelAt(image, 127, 63) == glm::ivec4(10, 20, 30, 255));
 
+		// Long, thin levels (a texture imported without mips): boxed within the image, never past its last row or column.
+		struct Strip
+		{
+			uint32_t Width, Height, FittedWidth, FittedHeight;
+		};
+		for (const Strip& strip : { Strip { 256, 1, 128, 1 }, Strip { 1, 4096, 1, 128 }, Strip { 4096, 1, 128, 1 }, Strip { 300, 2, 100, 1 }, Strip { 130, 3, 65, 1 } })
+		{
+			CAPTURE(strip.Width);
+			CAPTURE(strip.Height);
+			image = MakeFromTail(*CreateUniformTexture(TextureFormat::RGBA8, strip.Width, strip.Height, color, false));
+			CHECK(image.Width == strip.FittedWidth);
+			CHECK(image.Height == strip.FittedHeight);
+			CHECK(image.Pixels.size() == static_cast<size_t>(image.Width) * image.Height * 4);
+			for (uint32_t y = 0; y < image.Height; y++)
+			{
+				for (uint32_t x = 0; x < image.Width; x++)
+					REQUIRE(PixelAt(image, x, y) == glm::ivec4(10, 20, 30, 255));
+			}
+		}
+
 		// A view of data that holds none of its levels (the header alone) has nothing to show.
 		const Ref<Texture> chain = CreateUniformTexture(TextureFormat::RGBA8, 256, 256, color);
 		const std::vector<uint8_t> cooked = chain->Serialize();
