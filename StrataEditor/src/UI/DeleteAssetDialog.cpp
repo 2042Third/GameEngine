@@ -19,8 +19,8 @@ namespace Strata
 	namespace
 	{
 
-		// The references the dialog lists before it sums up the rest.
-		constexpr size_t c_ListedReferencers = 8;
+		// The most lines of references the dialog shows at once; more scroll.
+		constexpr size_t c_VisibleReferenceLines = 12;
 
 		std::string GetFileName(const std::string& path)
 		{
@@ -42,6 +42,7 @@ namespace Strata
 		m_AssetCount = 1;
 		const std::vector<AssetHandle> targets = AssetReferences::WithSubAssets(context, { asset });
 		m_Referencers = AssetReferences::Find(context, targets, { targets.begin(), targets.end() });
+		DescribeReferencers();
 		m_OpenRequested = true;
 	}
 
@@ -57,7 +58,30 @@ namespace Strata
 		m_AssetCount = contained.size();
 		const std::vector<AssetHandle> targets = AssetReferences::WithSubAssets(context, contained);
 		m_Referencers = AssetReferences::Find(context, targets, { targets.begin(), targets.end() });
+		DescribeReferencers();
 		m_OpenRequested = true;
+	}
+
+	void DeleteAssetDialog::DescribeReferencers()
+	{
+		m_ReferenceLines.clear();
+		m_ReferenceLines.reserve(m_Referencers.size());
+		for (const AssetReferencer& referencer : m_Referencers)
+		{
+			std::string line = referencer.Path.empty() ? std::string("The open scene (not saved yet)") : referencer.Path;
+			if (!referencer.Name.empty())
+				line += fmt::format(" ({})", referencer.Name);
+			if (referencer.OpenScene && !referencer.Entities.empty())
+			{
+				std::string names;
+				for (size_t entity = 0; entity < std::min<size_t>(referencer.Entities.size(), 3); entity++)
+					names += (names.empty() ? "" : ", ") + referencer.Entities[entity].Name;
+				if (referencer.Entities.size() > 3)
+					names += fmt::format(" and {} more", referencer.Entities.size() - 3);
+				line += fmt::format(" - open: {}", names);
+			}
+			m_ReferenceLines.push_back(std::move(line));
+		}
 	}
 
 	void DeleteAssetDialog::Draw(EditorContext& context, const EditorCommandRegistry& commands)
@@ -97,30 +121,22 @@ namespace Strata
 			ImGui::TextUnformatted(fmt::format("{}  Used by {} {}: deleting leaves {} references missing.", Icons::TriangleAlert, m_Referencers.size(),
 				m_Referencers.size() == 1 ? "asset or scene" : "assets or scenes", m_Referencers.size() == 1 ? "its" : "their").c_str());
 			ImGui::PopStyleColor();
-			const size_t listed = std::min(m_Referencers.size(), c_ListedReferencers);
-			for (size_t index = 0; index < listed; index++)
+			ImGui::PopTextWrapPos();
+			// Every one of them, so that what breaks is known before "Delete Anyway": a list that scrolls beyond a dozen lines.
+			const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
+			const float listHeight = lineHeight * static_cast<float>(std::min(m_ReferenceLines.size(), c_VisibleReferenceLines)) + ImGui::GetStyle().WindowPadding.y * 2.0f;
+			if (ImGui::BeginChild("DeleteAsset.References", ImVec2(wrap, listHeight), ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar))
 			{
-				const AssetReferencer& referencer = m_Referencers[index];
-				std::string line = referencer.Path.empty() ? std::string("The open scene (not saved yet)") : referencer.Path;
-				if (!referencer.Name.empty())
-					line += fmt::format(" ({})", referencer.Name);
-				if (referencer.OpenScene && !referencer.Entities.empty())
+				ImGuiListClipper clipper;
+				clipper.Begin(static_cast<int>(m_ReferenceLines.size()), lineHeight);
+				while (clipper.Step())
 				{
-					std::string names;
-					for (size_t entity = 0; entity < std::min<size_t>(referencer.Entities.size(), 3); entity++)
-						names += (names.empty() ? "" : ", ") + referencer.Entities[entity].Name;
-					if (referencer.Entities.size() > 3)
-						names += fmt::format(" and {} more", referencer.Entities.size() - 3);
-					line += fmt::format(" - open: {}", names);
+					for (int line = clipper.DisplayStart; line < clipper.DisplayEnd; line++)
+						ImGui::BulletText("%s", m_ReferenceLines[static_cast<size_t>(line)].c_str());
 				}
-				ImGui::BulletText("%s", line.c_str());
 			}
-			if (m_Referencers.size() > listed)
-			{
-				ImGui::PushStyleColor(ImGuiCol_Text, colors.TextSecondary);
-				ImGui::TextUnformatted(fmt::format("and {} more (asset.findReferences lists them)", m_Referencers.size() - listed).c_str());
-				ImGui::PopStyleColor();
-			}
+			ImGui::EndChild();
+			ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + wrap);
 		}
 		ImGui::PopTextWrapPos();
 		ImGui::Spacing();
@@ -136,7 +152,8 @@ namespace Strata
 			m_Open = false;
 		}
 		ImGui::SameLine();
-		if (UI::DialogButton("DeleteAsset.Cancel", "Cancel"))
+		// Escape cancels too: ImGui leaves modals open on it.
+		if (UI::DialogButton("DeleteAsset.Cancel", "Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
 		{
 			ImGui::CloseCurrentPopup();
 			m_Open = false;

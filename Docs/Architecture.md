@@ -1440,9 +1440,13 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   with the reason), one that cannot be redone leaves the history with the steps after it.
 - **Content Browser** (`Panels/ContentBrowserPanel`, rows in `Editor/AssetBrowserView`). Two panes in a resizable table: a
   folder tree (the asset directory and its folders as far as they are expanded) and the current folder's items as a grid
-  of tiles (the asset's thumbnail, or the type's icon, on a square, the name cut to the tile; a size slider, and in a pane
-  too short for a whole tile of that size, as the default layout docks it in a laptop-sized window, tiles shrink to the
-  height in view, down to `c_MinFitTileScale`) or a list, both drawn through `ImGuiListClipper` (only what is in view).
+  of tiles (the asset's thumbnail, or the type's icon scaled to the picture, the name cut to the tile; a size slider for
+  the tiles' width, which they keep, so names keep their room, while in a pane too short for a whole tile of that size, as
+  the default layout docks it in a laptop-sized window, the picture above the name gets lower, down to
+  `c_MinFitTileScale`; an expanded model and its sub-assets lie on one band, each sub-asset with its type in a corner) or a
+  list, both drawn through `ImGuiListClipper` (only what is in view). Clicks and the keyboard's arrows select tiles and
+  rows (`ImGuiSelectableFlags_SelectOnNav`), so Enter, F2 and Delete act on the item the keyboard is at; a folder clicked
+  in the tree is the selection too.
   Above them: breadcrumbs (each a drop target), a search (every word in a name, below the current folder), type chips
   (`UI::ToggleChip`), the view mode, New (folder, material) and Import (files, a folder). `AssetBrowserView` (no UI,
   tested alone) holds the rows: folders first, then assets by name, an expanded model's sub-assets (meshes, materials,
@@ -1451,12 +1455,14 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   manager's index (`ListAssets`), and counts its rebuilds: an idle editor rebuilds nothing (the browser used to copy
   every asset's metadata twice a second). Labels are made at rebuild time; tiles cut their names once per tile width. Every
   change runs a command: assets and folders dragged onto folders (tree rows, tiles, breadcrumbs, or the empty space of the
-  current folder) move (`asset.move`, `asset.moveFolder`), New Folder creates one and renames it in place, Rename (F2)
-  moves, Delete asks (`UI/DeleteAssetDialog`). Double-click opens a folder, a scene (`scene.open` after the unsaved-changes
+  current folder) move (`asset.move`, `asset.moveFolder`), New Folder and New Material create one, select it and rename
+  it in place, Rename (F2) moves, Delete asks (`UI/DeleteAssetDialog`: every user listed, in a list that scrolls beyond a
+  dozen lines; Cancel or Escape closes it). Double-click opens a folder, a scene (`scene.open` after the unsaved-changes
   question) or shows any other asset in the Asset tab. A tile shows an hourglass while its asset imports and a mark for
   failed imports and warnings; tooltips say which. Inspecting an asset from elsewhere (`selection.set {asset}`, the
   Streaming panel) reveals it (`RevealAsset`, from `OnUpdate` on a new inspection version): its folder opens, the tree
-  expands and scrolls to it, a sub-asset's model expands, and the grid scrolls to the item. Another root of the tree (the
+  expands and scrolls to it, the search and a type filter that would hide it are cleared, a sub-asset's model expands,
+  and the grid scrolls to the item. Another root of the tree (the
   project's scripts, which live outside the asset directory) would add rows of its own to `DrawFolderTree` with its items
   and menu.
 - **Thumbnails** (`Editor/ThumbnailCache`, owned by `EditorContext` while a project is open and a GPU runs; updated at the

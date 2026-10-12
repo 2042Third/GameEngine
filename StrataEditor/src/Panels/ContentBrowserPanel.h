@@ -28,6 +28,10 @@ namespace Strata
 	// AssetBrowserView, rebuilt only when the asset manager's change version (or the folder, search or filter) changed, so an
 	// idle frame lists nothing.
 	//
+	// Tiles keep the slider's width, so names keep their room; in a short pane their pictures get lower. An expanded model
+	// and its sub-assets share a band, and a sub-asset shows its type in a corner. Clicks and the keyboard's arrows select
+	// (Enter opens, F2 renames, Delete deletes the selection, also a folder selected in the tree).
+	//
 	// Assets are drag sources (the inspector's asset fields, the viewport, the hierarchy), and so are an expanded model's
 	// sub-assets; folders (tree rows, tiles, breadcrumbs) take assets and folders dropped on them (asset.move,
 	// asset.moveFolder) and entities dragged from the Hierarchy (a linked prefab, prefab.create). Every change runs a command;
@@ -76,6 +80,12 @@ namespace Strata
 		std::optional<ItemRect> FindItemRect(AssetHandle asset) const;
 		// Where a folder's tile, list row or tree row was drawn in the last frame, when it was in view.
 		std::optional<ItemRect> FindFolderRect(const std::string& folder) const;
+		// The name a grid tile of the asset showed in the last frame it was drawn, cut to the tile's width (empty when it was not
+		// drawn): for tests.
+		std::string GetShownTileTitle(AssetHandle asset) const;
+		// The selection: an asset (null when a folder or nothing is selected) and a folder (empty when none is).
+		AssetHandle GetSelectedAsset() const { return m_Selected; }
+		const std::string& GetSelectedFolder() const { return m_SelectedFolder; }
 		const AssetBrowserView& GetView() const { return m_View; }
 
 		// The grid's tile edge in font sizes, and its range.
@@ -105,9 +115,9 @@ namespace Strata
 		void DrawGrid(EditorPanelContext& context);
 		void DrawList(EditorPanelContext& context);
 		void DrawEmptyState();
-		// The interactions of an item just drawn (its selectable is the last item): selection, double-click, drag and drop,
-		// context menu, tooltip.
-		void HandleItem(EditorPanelContext& context, size_t index);
+		// The interactions of an item just drawn (its selectable is the last item; `activated`: what it returned): selection,
+		// double-click, drag and drop, context menu, tooltip.
+		void HandleItem(EditorPanelContext& context, size_t index, bool activated);
 		void DrawItemMenu(EditorPanelContext& context, const AssetBrowserItem& item);
 		void DrawFolderMenu(EditorPanelContext& context, const std::string& folder);
 		void DrawBackgroundMenu(EditorPanelContext& context);
@@ -121,6 +131,8 @@ namespace Strata
 		void Select(EditorContext& context, const AssetBrowserItem& item);
 		void BeginRename(const AssetBrowserItem& item);
 		void CreateFolder(EditorPanelContext& context);
+		// A new material in the open folder (material.create), selected and renamed in place.
+		void CreateMaterial(EditorPanelContext& context, EditorAssetManager& assets);
 		void RebuildLabels();
 		// The item's tile title, cut with an ellipsis to the width (cached per width).
 		const std::string& GetTileTitle(size_t index, float width);

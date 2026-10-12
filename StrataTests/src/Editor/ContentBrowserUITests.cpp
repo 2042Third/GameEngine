@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -244,6 +245,23 @@ TEST_SUITE("Editor.UI.ContentBrowser")
 		CHECK(browser.GetCurrentDirectory() == "Models");
 		CHECK(browser.FindItemRect(subAssets.front()).has_value());
 		CHECK(browser.FindItemRect(model).has_value());
+
+		// With only textures shown, revealing a material turns the filter off, so the material shows; a filter that shows it stays.
+		REQUIRE(editor.Click("ContentBrowser.Filter.Texture"));
+		editor.Frames(2);
+		REQUIRE(browser.GetView().GetTypeFilter() == std::set<AssetType> { AssetType::Texture });
+		const AssetHandle material = editor.Assets().FindAssetByPath("Materials/Feature.stmat");
+		editor.Run("selection.set", { { "asset", "Materials/Feature.stmat" } });
+		editor.Frames(3);
+		CHECK(browser.GetCurrentDirectory() == "Materials");
+		CHECK(browser.GetView().GetTypeFilter().empty());
+		CHECK(browser.FindItemRect(material).has_value());
+		REQUIRE(editor.Click("ContentBrowser.Filter.Texture"));
+		editor.Frames(2);
+		editor.Run("selection.set", { { "asset", "Textures/Checker.png" } });
+		editor.Frames(3);
+		CHECK(browser.GetView().GetTypeFilter() == std::set<AssetType> { AssetType::Texture });
+		CHECK(browser.FindItemRect(editor.Assets().FindAssetByPath("Textures/Checker.png")).has_value());
 	}
 
 	TEST_CASE("Double-clicking a folder opens it, and dragging an asset onto a folder moves it in one undo step")
@@ -281,6 +299,13 @@ TEST_SUITE("Editor.UI.ContentBrowser")
 		REQUIRE(dialog);
 		REQUIRE(editor.Click("DeleteAsset.Cancel"));
 		editor.Frames(2);
+		CHECK(editor.Assets().IsHandleValid(material));
+		// Escape cancels as well.
+		editor.ClickAt(editor.ItemCenter(material));
+		editor.PressKey(ImGuiKey_Delete);
+		REQUIRE(UI::ItemProbe::Find("DeleteAsset.Cancel").has_value());
+		editor.PressKey(ImGuiKey_Escape);
+		CHECK_FALSE(UI::ItemProbe::Find("DeleteAsset.Cancel").has_value());
 		CHECK(editor.Assets().IsHandleValid(material));
 
 		editor.ClickAt(editor.ItemCenter(material));
@@ -352,18 +377,21 @@ TEST_SUITE("Editor.UI.ContentBrowser")
 		CHECK(editor.Run("prefab.status", { { "entity", lamp } })["linked"] == false);
 	}
 
-	TEST_CASE("A short browser shrinks its tiles so that a whole tile with its name shows")
+	TEST_CASE("A short browser lowers its tiles' pictures so that a whole tile with its name shows, keeping the names' width")
 	{
 		// The default layout in a window of laptop proportions (1600x900 at any scale) leaves the docked browser too short for
-		// tiles of the slider's size, or even its smallest: they shrink to the height in view.
+		// tiles of the slider's size: their pictures get lower, while the tiles keep the slider's width for their names.
 
-		// The checker's tile and the bottom of the items' pane in view, for a window of this height.
+		// The checker's tile, the name roughness's tile shows and the bottom of the items' pane in view, for a window of this
+		// height.
 		struct Shown
 		{
 			ContentBrowserPanel::ItemRect Tile;
+			std::string Title;
 			float PaneBottom = 0.0f;
 
 			float GetWidth() const { return Tile.Max.x - Tile.Min.x; }
+			float GetHeight() const { return Tile.Max.y - Tile.Min.y; }
 		};
 		auto show = [](float height)
 		{
@@ -379,17 +407,92 @@ TEST_SUITE("Editor.UI.ContentBrowser")
 					pane = window;
 			}
 			REQUIRE(pane);
-			return Shown { *tile, pane->InnerRect.Max.y };
+			return Shown { *tile, editor.Browser().GetShownTileTitle(editor.Assets().FindAssetByPath("Textures/Roughness.png")), pane->InnerRect.Max.y };
 		};
 
-		// Where there is room, the slider's size; where there is not, smaller, but not below c_MinFitTileScale (both in the
-		// panel's font, so their ratio is at least the scales').
+		// Where there is room, the slider's size; where there is not, as wide but lower, and a nine-letter name whole.
 		const Shown desktop = show(1400.0f);
 		CHECK(desktop.Tile.Max.y <= desktop.PaneBottom + 0.5f);
+		CHECK(desktop.Title == "Roughness");
 		const Shown laptop = show(900.0f);
 		CHECK(laptop.Tile.Max.y <= laptop.PaneBottom + 0.5f);
-		CHECK(laptop.GetWidth() < desktop.GetWidth());
-		CHECK(laptop.GetWidth() >= std::floor(desktop.GetWidth() * ContentBrowserPanel::c_MinFitTileScale / ContentBrowserPanel::c_DefaultTileScale));
+		CHECK(laptop.GetWidth() == doctest::Approx(desktop.GetWidth()));
+		CHECK(laptop.GetHeight() < desktop.GetHeight());
+		CHECK(laptop.Title == "Roughness");
+	}
+
+	TEST_CASE("The arrow keys move the selection over the items, and F2 and Delete act on a folder selected in the tree")
+	{
+		BrowserEditor editor("ContentBrowserKeyboard", { ImVec2(1600.0f, 1400.0f), 1.0f });
+		ContentBrowserPanel& browser = editor.Browser();
+		browser.SetCurrentDirectory("Textures");
+		editor.Frames(3);
+		const AssetHandle bumps = editor.Assets().FindAssetByPath("Textures/Bumps_normal.png");
+		const AssetHandle checker = editor.Assets().FindAssetByPath("Textures/Checker.png");
+		REQUIRE(editor.Browser().GetView().FindItem(bumps) == 0);
+		REQUIRE(editor.Browser().GetView().FindItem(checker) == 1);
+		editor.ClickAt(editor.ItemCenter(bumps));
+		CHECK(browser.GetSelectedAsset() == bumps);
+		CHECK(editor.Context().GetInspectedAsset() == bumps);
+		// The keyboard moves the selection: Enter then shows the item the keyboard is at.
+		editor.PressKey(ImGuiKey_RightArrow);
+		CHECK(browser.GetSelectedAsset() == checker);
+		CHECK(editor.Context().GetInspectedAsset() == checker);
+
+		// A folder clicked in the tree is selected: Delete asks about it.
+		editor.ClickAt(editor.FolderCenter("Materials"));
+		CHECK(browser.GetCurrentDirectory() == "Materials");
+		CHECK(browser.GetSelectedFolder() == "Materials");
+		editor.PressKey(ImGuiKey_Delete);
+		CHECK(UI::ItemProbe::Find("DeleteAsset.Cancel").has_value());
+		editor.PressKey(ImGuiKey_Escape);
+		CHECK(editor.Assets().HasFolder("Materials"));
+	}
+
+	TEST_CASE("New > Material makes a material in the open folder, selects it and starts its rename")
+	{
+		BrowserEditor editor("ContentBrowserNewMaterial");
+		ContentBrowserPanel& browser = editor.Browser();
+		browser.SetCurrentDirectory("Materials");
+		editor.Frames(3);
+		REQUIRE(editor.Click("ContentBrowser.New"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("ContentBrowser.New.Material"));
+		editor.Frames(3);
+		const AssetHandle created = editor.Assets().FindAssetByPath("Materials/Material.stmat");
+		REQUIRE(created.IsValid());
+		CHECK(browser.GetSelectedAsset() == created);
+		CHECK(editor.Context().GetInspectedAsset() == created);
+		CHECK(browser.FindItemRect(created).has_value());
+		// The rename field has the keyboard: typing names it.
+		REQUIRE(ImGui::GetIO().WantTextInput);
+		editor.Harness.SetKey(ImGuiMod_Ctrl, true);
+		editor.Harness.SetKey(ImGuiKey_A, true);
+		editor.Frames(1);
+		editor.Harness.SetKey(ImGuiKey_A, false);
+		editor.Harness.SetKey(ImGuiMod_Ctrl, false);
+		editor.Frames(1);
+		editor.Harness.TypeText("Brick.stmat");
+		editor.Frames(1);
+		editor.PressKey(ImGuiKey_Enter);
+		CHECK(editor.Assets().GetMetadata(created)->Path == "Materials/Brick.stmat");
+	}
+
+	TEST_CASE("Breadcrumb links sit on the line of the current folder's name, and New and Import end where the view buttons do")
+	{
+		BrowserEditor editor("ContentBrowserToolbar");
+		editor.Browser().SetCurrentDirectory("Textures");
+		editor.Frames(3);
+		const std::optional<UI::ItemProbe::Item> link = UI::ItemProbe::Find("ContentBrowser.Crumb0");
+		const std::optional<UI::ItemProbe::Item> current = UI::ItemProbe::Find("ContentBrowser.Crumb1");
+		REQUIRE(link);
+		REQUIRE(current);
+		CHECK(link->Max.y == doctest::Approx(current->Max.y));
+		const std::optional<UI::ItemProbe::Item> import = UI::ItemProbe::Find("ContentBrowser.Import");
+		const std::optional<UI::ItemProbe::Item> list = UI::ItemProbe::Find("ContentBrowser.List");
+		REQUIRE(import);
+		REQUIRE(list);
+		CHECK(import->Max.x == doctest::Approx(list->Max.x).epsilon(0.001));
 	}
 
 	TEST_CASE("Files and folders dropped on the editor import into the open folder; files of no asset type are named and left out")

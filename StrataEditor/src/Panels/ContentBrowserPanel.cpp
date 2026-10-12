@@ -29,6 +29,7 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstring>
 
@@ -57,6 +58,12 @@ namespace Strata
 
 		// The tree pane's width when the panel opens, in font sizes.
 		constexpr float c_TreeWidthInFontSizes = 13.0f;
+		// A tile without a thumbnail shows its type's icon this large, as a share of the picture's side.
+		constexpr float c_TileIconScale = 0.45f;
+		// Tiles and list rows select when pressed (once per click, so that a drag starts from the selected item; a double click
+		// opens through ImGui::IsMouseDoubleClicked) and when the keyboard's arrows move onto them, so that Enter, F2 and Delete
+		// act on the item the keyboard is at.
+		constexpr ImGuiSelectableFlags c_ItemSelectableFlags = ImGuiSelectableFlags_SelectOnNav | static_cast<ImGuiSelectableFlags>(ImGuiSelectableFlags_SelectOnClick);
 
 		std::string JoinPath(const std::string& folder, const std::string& name)
 		{
@@ -135,6 +142,10 @@ namespace Strata
 		m_View.ExpandTo(folder);
 		m_View.SetSearch({});
 		m_Search.clear();
+		// A type filter that hides its file is turned off (the chips show the view's filter).
+		const AssetType fileType = metadata->IsSubAsset() ? assets->GetAssetType(metadata->Parent) : metadata->Type;
+		if (!m_View.GetTypeFilter().empty() && !m_View.GetTypeFilter().contains(fileType))
+			m_View.SetTypeFilter({});
 		m_Selected = asset;
 		m_SelectedFolder.clear();
 		m_Revealed = asset;
@@ -156,6 +167,12 @@ namespace Strata
 				return item;
 		}
 		return std::nullopt;
+	}
+
+	std::string ContentBrowserPanel::GetShownTileTitle(AssetHandle asset) const
+	{
+		const std::optional<size_t> index = m_View.FindItem(asset);
+		return index && *index < m_TileTitles.size() ? m_TileTitles[*index] : std::string();
 	}
 
 	std::optional<ContentBrowserPanel::ItemRect> ContentBrowserPanel::FindFolderRect(const std::string& folder) const
@@ -251,6 +268,7 @@ namespace Strata
 	void ContentBrowserPanel::Select(EditorContext& context, const AssetBrowserItem& item)
 	{
 		m_Revealed = UUID::Null();
+		m_ScrollToRevealed = false;
 		if (item.Kind == AssetBrowserItemKind::Folder)
 		{
 			m_Selected = UUID::Null();
@@ -317,6 +335,27 @@ namespace Strata
 		m_SelectedFolder = path;
 		m_Selected = UUID::Null();
 		BeginRename(folder);
+	}
+
+	void ContentBrowserPanel::CreateMaterial(EditorPanelContext& panelContext, EditorAssetManager& assets)
+	{
+		// "Material", "Material 2", ...: made, selected (the Asset tab shows it) and renamed in place, like a new folder.
+		const std::string path = CommandUtils::MakeUniqueAssetPath(assets, m_View.GetFolder(), "Material", ".stmat", "Material");
+		const nlohmann::json created = RunEditorCommand(panelContext.Context, panelContext.Commands, "material.create", { { "path", path } });
+		const std::optional<UUID> handle = created.is_object() ? UUIDFromJson(created.value("asset", nlohmann::json())) : std::nullopt;
+		const std::optional<AssetMetadata> metadata = handle ? assets.GetMetadata(*handle) : std::nullopt;
+		if (!metadata)
+			return;
+		AssetBrowserItem material;
+		material.Kind = AssetBrowserItemKind::Asset;
+		material.Handle = *handle;
+		material.Type = AssetType::Material;
+		material.Name = AssetBrowserView::GetFileName(metadata->Path);
+		material.Path = metadata->Path;
+		Select(panelContext.Context, material);
+		m_Revealed = *handle;
+		m_ScrollToRevealed = true;
+		BeginRename(material);
 	}
 
 	void ContentBrowserPanel::AcceptDrops(EditorPanelContext& panelContext, const std::string& folder)
@@ -437,23 +476,22 @@ namespace Strata
 		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 		DrawBreadcrumbs(panelContext);
 
-		// New and Import at the right end.
-		const float newWidth = ImGui::GetFrameHeight() + ImGui::CalcTextSize("New").x + style.FramePadding.x * 3.0f;
-		const float importWidth = ImGui::GetFrameHeight() + ImGui::CalcTextSize("Import").x + style.FramePadding.x * 3.0f;
-		const float right = newWidth + importWidth + style.ItemSpacing.x;
+		// New and Import at the right end, flush with the view buttons below them.
+		const float right = UI::GetToolbarButtonWidth(Icons::Plus, "New") + UI::GetToolbarButtonWidth(Icons::Import, "Import") + style.ItemSpacing.x;
 		ImGui::SameLine();
 		ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - right));
 		if (UI::ToolbarButton("ContentBrowser.New", Icons::Plus, "New", "Make a folder or a material here"))
 			ImGui::OpenPopup("ContentBrowser.NewMenu");
 		if (ImGui::BeginPopup("ContentBrowser.NewMenu"))
 		{
-			if (ImGui::MenuItem((std::string(Icons::FolderPlus) + "  Folder").c_str()))
+			const bool folder = ImGui::MenuItem((std::string(Icons::FolderPlus) + "  Folder").c_str());
+			UI::ItemProbe::Record("ContentBrowser.New.Folder");
+			const bool material = ImGui::MenuItem((std::string(Icons::Palette) + "  Material").c_str());
+			UI::ItemProbe::Record("ContentBrowser.New.Material");
+			if (folder)
 				CreateFolder(panelContext);
-			if (ImGui::MenuItem((std::string(Icons::Palette) + "  Material").c_str()))
-			{
-				RunEditorCommand(context, panelContext.Commands, "material.create",
-					{ { "path", CommandUtils::MakeUniqueAssetPath(assets, m_View.GetFolder(), "Material", ".stmat", "Material") } });
-			}
+			if (material)
+				CreateMaterial(panelContext, assets);
 			ImGui::EndPopup();
 		}
 		ImGui::SameLine();
@@ -611,7 +649,7 @@ namespace Strata
 				m_FolderRects.emplace_back(row.Path, ItemRect { UUID::Null(), ImGui::GetItemRectMin(), ImGui::GetItemRectMax() });
 				if (ImGui::IsItemToggledOpen())
 					toggle = std::make_pair(row.Path, !row.Expanded);
-				else if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+				else if (ImGui::IsItemClicked(ImGuiMouseButton_Left) || ImGui::IsItemClicked(ImGuiMouseButton_Right))
 					open = row.Path;
 				// Folders below the root drag like the grid's.
 				if (!row.Path.empty() && ImGui::BeginDragDropSource())
@@ -629,11 +667,17 @@ namespace Strata
 				ImGui::PopID();
 			}
 		}
-		// Applied after the rows were drawn: they rebuild the rows.
+		// Applied after the rows were drawn: they rebuild the rows. A clicked folder opens and is the selection, which F2 and
+		// Delete act on (the asset directory itself is neither renamed nor deleted).
 		if (toggle)
 			m_View.SetFolderExpanded(toggle->first, toggle->second);
 		if (open)
+		{
 			m_View.SetFolder(*open);
+			m_Selected = UUID::Null();
+			m_SelectedFolder = *open;
+			m_Revealed = UUID::Null();
+		}
 	}
 
 	void ContentBrowserPanel::DrawItems(EditorPanelContext& panelContext)
@@ -683,28 +727,30 @@ namespace Strata
 		ThumbnailCache* thumbnails = panelContext.Context.GetThumbnails();
 		const float titleHeight = ImGui::GetTextLineHeight();
 		const float titleSpace = titleHeight + style.ItemInnerSpacing.y * 2.0f;
-		// The size the slider picked, unless the browser is too short to show a whole tile with its name (a laptop's docked
-		// panel): then tiles shrink to the height in view, down to c_MinFitTileScale. A tile's item takes the spacing too.
+		// Tiles are as wide as the slider picked, so their names keep their room. A browser too short to show a whole tile
+		// with its name (a laptop's docked panel) lowers the picture above the name to the height in view instead, down to
+		// c_MinFitTileScale. A tile's item takes the spacing too.
 		const float picked = std::round(ImGui::GetFontSize() * std::clamp(m_TileScale, c_MinTileScale, c_MaxTileScale));
 		const float smallest = std::round(ImGui::GetFontSize() * c_MinFitTileScale);
 		const ImGuiWindow* pane = ImGui::GetCurrentWindow();
 		const float paneHeight = pane->InnerRect.Max.y - (ImGui::GetCursorScreenPos().y + pane->Scroll.y);
 		const float inView = std::floor(paneHeight - titleSpace - style.ItemSpacing.y);
-		const float tile = std::max(smallest, std::min(picked, inView));
-		const ImVec2 tileSize(tile, tile + titleSpace);
+		const float pictureHeight = std::max(smallest, std::min(picked, inView));
+		const ImVec2 tileSize(picked, pictureHeight + titleSpace);
 		const float spacing = style.ItemSpacing.x;
-		const int columns = std::max(1, static_cast<int>((ImGui::GetContentRegionAvail().x + spacing) / (tile + spacing)));
+		const int columns = std::max(1, static_cast<int>((ImGui::GetContentRegionAvail().x + spacing) / (tileSize.x + spacing)));
 		const int rowCount = static_cast<int>((items.size() + static_cast<size_t>(columns) - 1) / static_cast<size_t>(columns));
 		const float rowHeight = tileSize.y + style.ItemSpacing.y;
 
+		// Once the revealed item is among the rows (it may arrive with the next rebuild, as a new material does).
 		if (m_ScrollToRevealed)
 		{
 			if (const std::optional<size_t> index = m_View.FindItem(m_Revealed))
 			{
 				const float row = static_cast<float>(*index / static_cast<size_t>(columns));
 				ImGui::SetScrollY(std::max(row * rowHeight - (ImGui::GetWindowHeight() - rowHeight) * 0.5f, 0.0f));
+				m_ScrollToRevealed = false;
 			}
-			m_ScrollToRevealed = false;
 		}
 
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -724,20 +770,29 @@ namespace Strata
 					const AssetBrowserItem& item = items[index];
 					const bool selected = item.Kind == AssetBrowserItemKind::Folder ? item.Path == m_SelectedFolder
 						: item.Handle == m_Selected || item.Handle == m_Revealed;
+					const bool subAsset = item.Kind == AssetBrowserItemKind::SubAsset;
 					ImGui::PushID(static_cast<int>(index));
+					// An expanded model and its sub-assets lie on one band (the sub-assets' reaching back over the spacing to the tile
+					// before them on the row), so the sub-assets read as part of the model whatever their thumbnails show.
+					if (subAsset || (item.HasSubAssets && item.Expanded))
+					{
+						const ImVec2 bandMin = ImGui::GetCursorScreenPos();
+						const float bandLeft = subAsset && column > 0 ? bandMin.x - spacing : bandMin.x;
+						drawList->AddRectFilled(ImVec2(bandLeft, bandMin.y), ImVec2(bandMin.x + tileSize.x, bandMin.y + tileSize.y),
+							UI::ToColorU32(colors.AccentMuted, 0.35f), style.FrameRounding);
+					}
 					UI::PushSelectionColors(selected);
-					ImGui::Selectable("##Tile", selected, ImGuiSelectableFlags_AllowDoubleClick, tileSize);
+					const bool activated = ImGui::Selectable("##Tile", selected, c_ItemSelectableFlags, tileSize);
 					UI::PopSelectionColors();
 					const ImVec2 min = ImGui::GetItemRectMin();
 					const ImVec2 max = ImGui::GetItemRectMax();
 					const bool hovered = ImGui::IsItemHovered();
-					HandleItem(panelContext, index);
+					HandleItem(panelContext, index, activated);
 
-					// The square: sub-assets on a tint, so they read as part of the model before them.
+					// The picture's area above the name.
 					const ImVec2 squareMin(min.x + style.ItemInnerSpacing.x, min.y + style.ItemInnerSpacing.y);
 					const ImVec2 squareMax(max.x - style.ItemInnerSpacing.x, max.y - titleHeight - style.ItemInnerSpacing.y * 2.0f);
-					drawList->AddRectFilled(squareMin, squareMax, UI::ToColorU32(item.Kind == AssetBrowserItemKind::SubAsset ? colors.AccentMuted : colors.Raised,
-						item.Kind == AssetBrowserItemKind::SubAsset ? 0.55f : 1.0f), style.FrameRounding);
+					drawList->AddRectFilled(squareMin, squareMax, UI::ToColorU32(subAsset ? colors.AccentMuted : colors.Raised, subAsset ? 0.55f : 1.0f), style.FrameRounding);
 					// The asset's thumbnail once it is ready (asked for while the tile is on screen), else its type's icon.
 					nvrhi::ITexture* thumbnail = item.Kind != AssetBrowserItemKind::Folder && thumbnails ? thumbnails->Request(item.Handle) : nullptr;
 					if (thumbnail)
@@ -752,13 +807,27 @@ namespace Strata
 					}
 					else
 					{
+						// The type's icon, as large as the area allows (fonts render at any size).
 						const ImVec4 iconColor = !item.ImportError.empty() ? colors.Error : item.Kind == AssetBrowserItemKind::Folder ? colors.Accent : colors.TextSecondary;
+						const float side = std::min(squareMax.x - squareMin.x, squareMax.y - squareMin.y);
 						UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Display);
+						ImFont* font = ImGui::GetFont();
+						const float iconFontSize = std::max(ImGui::GetFontSize(), std::round(side * c_TileIconScale));
 						const char* icon = m_Labels[index].Icon.c_str();
-						const ImVec2 iconSize = ImGui::CalcTextSize(icon);
-						drawList->AddText(ImVec2((squareMin.x + squareMax.x - iconSize.x) * 0.5f, (squareMin.y + squareMax.y - iconSize.y) * 0.5f),
+						const ImVec2 iconSize = font->CalcTextSizeA(iconFontSize, FLT_MAX, 0.0f, icon);
+						drawList->AddText(font, iconFontSize, ImVec2(std::round((squareMin.x + squareMax.x - iconSize.x) * 0.5f), std::round((squareMin.y + squareMax.y - iconSize.y) * 0.5f)),
 							UI::ToColorU32(iconColor, item.Importing ? 0.45f : 1.0f), icon);
 						ImGui::PopFont();
+					}
+					// A sub-asset's type in the picture's corner: a mesh, a material or a texture of the model.
+					if (subAsset)
+					{
+						const char* icon = m_Labels[index].Icon.c_str();
+						const ImVec2 iconSize = ImGui::CalcTextSize(icon);
+						const ImVec2 badgeMin(squareMin.x + style.ItemInnerSpacing.x * 0.5f, squareMin.y + style.ItemInnerSpacing.y * 0.5f);
+						const ImVec2 badgeMax(badgeMin.x + iconSize.x + style.FramePadding.y * 2.0f, badgeMin.y + iconSize.y + style.FramePadding.y * 2.0f);
+						drawList->AddRectFilled(badgeMin, badgeMax, UI::ToColorU32(colors.Overlay), style.FrameRounding);
+						drawList->AddText(ImVec2(badgeMin.x + style.FramePadding.y, badgeMin.y + style.FramePadding.y), UI::ToColorU32(colors.Accent), icon);
 					}
 
 					// Badges: importing, a failed import, warnings; the model's expander.
@@ -785,10 +854,10 @@ namespace Strata
 							m_View.SetAssetExpanded(item.Handle, !item.Expanded);
 					}
 
-					// The title under the square, cut to its width.
-					const std::string& title = GetTileTitle(index, tile - style.ItemInnerSpacing.x * 2.0f);
+					// The title under the picture, cut to the tile's width.
+					const std::string& title = GetTileTitle(index, tileSize.x - style.ItemInnerSpacing.x * 2.0f);
 					const float titleWidth = ImGui::CalcTextSize(title.c_str()).x;
-					drawList->AddText(ImVec2(min.x + (tile - titleWidth) * 0.5f, max.y - titleHeight - style.ItemInnerSpacing.y),
+					drawList->AddText(ImVec2(min.x + (tileSize.x - titleWidth) * 0.5f, max.y - titleHeight - style.ItemInnerSpacing.y),
 						UI::ToColorU32(!item.ImportError.empty() ? colors.Error : colors.Text), title.c_str());
 
 					if (item.Kind == AssetBrowserItemKind::Folder)
@@ -810,8 +879,10 @@ namespace Strata
 		if (m_ScrollToRevealed)
 		{
 			if (const std::optional<size_t> index = m_View.FindItem(m_Revealed))
+			{
 				ImGui::SetScrollY(std::max(static_cast<float>(*index) * rowHeight - (ImGui::GetWindowHeight() - rowHeight) * 0.5f, 0.0f));
-			m_ScrollToRevealed = false;
+				m_ScrollToRevealed = false;
+			}
 		}
 		const float typeColumn = ImGui::GetFontSize() * 8.0f;
 		ImGuiListClipper clipper;
@@ -830,13 +901,13 @@ namespace Strata
 				if (!item.ImportError.empty())
 					ImGui::PushStyleColor(ImGuiCol_Text, colors.Error);
 				UI::PushSelectionColors(selected);
-				ImGui::Selectable(m_Labels[index].ListName.c_str(), selected, ImGuiSelectableFlags_AllowDoubleClick | ImGuiSelectableFlags_AllowOverlap);
+				const bool activated = ImGui::Selectable(m_Labels[index].ListName.c_str(), selected, c_ItemSelectableFlags | ImGuiSelectableFlags_AllowOverlap);
 				UI::PopSelectionColors();
 				if (!item.ImportError.empty())
 					ImGui::PopStyleColor();
 				const ImVec2 min = ImGui::GetItemRectMin();
 				const ImVec2 max = ImGui::GetItemRectMax();
-				HandleItem(panelContext, index);
+				HandleItem(panelContext, index, activated);
 				// The type at the right, and what the import is doing.
 				ImGui::SameLine(std::max(rowRight - typeColumn, ImGui::GetCursorPosX()));
 				const char* state = item.Importing ? "Importing..." : m_Labels[index].TypeName.c_str();
@@ -858,12 +929,14 @@ namespace Strata
 		clipper.End();
 	}
 
-	void ContentBrowserPanel::HandleItem(EditorPanelContext& panelContext, size_t index)
+	void ContentBrowserPanel::HandleItem(EditorPanelContext& panelContext, size_t index, bool activated)
 	{
 		EditorContext& context = panelContext.Context;
 		const AssetBrowserItem& item = m_View.GetItems()[index];
 		const ItemLabels& labels = m_Labels[index];
-		if (ImGui::IsItemClicked(ImGuiMouseButton_Left) || ImGui::IsItemClicked(ImGuiMouseButton_Right))
+		// The item's selectable was pressed, moved onto with the keyboard's arrows, or activated with Space (it selects on
+		// all three, c_ItemSelectableFlags), or right-clicked for its menu.
+		if (activated || ImGui::IsItemClicked(ImGuiMouseButton_Right))
 			Select(context, item);
 		if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 			Open(panelContext, item);
@@ -978,10 +1051,7 @@ namespace Strata
 		if (ImGui::MenuItem((std::string(Icons::Palette) + "  New Material").c_str()))
 		{
 			if (EditorAssetManager* assets = context.GetAssetManager())
-			{
-				RunEditorCommand(context, panelContext.Commands, "material.create",
-					{ { "path", CommandUtils::MakeUniqueAssetPath(*assets, m_View.GetFolder(), "Material", ".stmat", "Material") } });
-			}
+				CreateMaterial(panelContext, *assets);
 		}
 		ImGui::Separator();
 		if (ImGui::MenuItem((std::string(Icons::FileUp) + "  Import Files...").c_str()))
@@ -1011,6 +1081,16 @@ namespace Strata
 				selected = &item;
 				break;
 			}
+		}
+		// A folder selected in the tree is the open one, not among its own items.
+		AssetBrowserItem treeFolder;
+		const EditorAssetManager* assets = panelContext.Context.GetAssetManager();
+		if (!selected && !m_SelectedFolder.empty() && assets && assets->HasFolder(m_SelectedFolder))
+		{
+			treeFolder.Kind = AssetBrowserItemKind::Folder;
+			treeFolder.Name = AssetBrowserView::GetFileName(m_SelectedFolder);
+			treeFolder.Path = m_SelectedFolder;
+			selected = &treeFolder;
 		}
 		if (ImGui::IsKeyPressed(ImGuiKey_Backspace) && !m_View.GetFolder().empty())
 			m_View.SetFolder(AssetBrowserView::GetParentFolder(m_View.GetFolder()));
@@ -1067,6 +1147,10 @@ namespace Strata
 				{
 					if (m_SelectedFolder == m_RenameFolder)
 						m_SelectedFolder = destination;
+					// The open folder follows when it was the renamed one or inside it.
+					const std::string& open = m_View.GetFolder();
+					if (open == m_RenameFolder || open.starts_with(m_RenameFolder + "/"))
+						m_View.SetFolder(destination + open.substr(m_RenameFolder.size()));
 				}
 			}
 			ImGui::CloseCurrentPopup();
