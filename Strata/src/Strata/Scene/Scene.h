@@ -115,8 +115,8 @@ namespace Strata
 		Entity FindEntityByName(std::string_view name) const;
 		std::vector<Entity> FindEntitiesByTag(std::string_view tag) const;
 		// Whether a child of `parent` (a top-level entity for an invalid parent) other than `except` (none when invalid) is
-		// named `name`. Uses the name index, so it costs the number of entities with that name (editors making names unique
-		// among siblings).
+		// named `name`. Looks at the parent's children or at the entities with that name (the name index), whichever are
+		// fewer, so editors making names unique among siblings stay fast with many children or many entities of a name.
 		bool HasChildNamed(Entity parent, std::string_view name, Entity except) const;
 		size_t GetEntityCount() const { return m_EntityMap.size(); }
 

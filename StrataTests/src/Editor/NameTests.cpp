@@ -116,9 +116,52 @@ TEST_SUITE("Editor.Names")
 		REQUIRE(copies.size() == c_Count);
 		CHECK(harness.NameOf(copies[0].get<std::string>()) == "Crate (1)");
 		CHECK(harness.NameOf(copies[c_Count - 1].get<std::string>()) == fmt::format("Crate ({})", c_Count));
-		// Each copy looks at the entities named "Crate" once and at one numbered name: no search from 1 for every copy.
+		// Each copy finds a sibling named "Crate" at once and looks at one numbered name: no search from 1 for every copy.
 		CHECK(scene.GetLookupVisitCount() - visits <= c_Count * 4);
 		CHECK(scene.GetLookupVisitCount() - visits >= c_Count);
+	}
+
+	TEST_CASE("Numbering copies costs checks in proportion to the copies among many entities of the name under other parents")
+	{
+		// A "Node" in every group, as in nested scenes: only a copy's siblings matter, however many entities share its name.
+		NameHarness harness;
+		Scene& scene = *harness.Context.GetEditScene();
+		constexpr size_t c_Groups = 5000;
+		constexpr size_t c_Copies = 200;
+		std::vector<std::string> nodes;
+		for (size_t index = 0; index < c_Groups; index++)
+		{
+			const Entity node = scene.CreateChildEntity(scene.CreateEntity("Group"), "Node");
+			if (index < c_Copies)
+				nodes.push_back(node.GetUUID().ToString());
+		}
+		REQUIRE_FALSE(scene.HasChildNamed(Entity(), "Node", Entity())); // Builds the name index first
+		const uint64_t visits = scene.GetLookupVisitCount();
+		const nlohmann::json copies = harness.Run("entity.duplicate", { { "entities", nodes } })["entities"];
+		REQUIRE(copies.size() == c_Copies);
+		for (size_t index = 0; index < c_Copies; index++)
+		{
+			CAPTURE(index);
+			const Entity copy = scene.GetEntityByUUID(*UUID::FromString(copies[index].get<std::string>()));
+			REQUIRE(copy);
+			CHECK(copy.GetName() == "Node (1)");
+			CHECK(copy.GetParent() == scene.GetEntityByUUID(*UUID::FromString(nodes[index])).GetParent());
+		}
+		// Each copy looks at its two siblings, for its own name and for the first numbered one.
+		CHECK(scene.GetLookupVisitCount() - visits <= c_Copies * 4);
+
+		// Many siblings and few entities of the name: the name index is the shorter way.
+		for (size_t index = 0; index < c_Groups; index++)
+			scene.CreateEntity("Filler");
+		const uint64_t before = scene.GetLookupVisitCount();
+		CHECK(scene.HasChildNamed(Entity(), "Group", Entity()));
+		CHECK_FALSE(scene.HasChildNamed(Entity(), "Node", Entity()));
+		CHECK(scene.GetLookupVisitCount() - before <= 2 * c_Groups);
+		const Entity lone = scene.CreateEntity("Lone");
+		const uint64_t lookups = scene.GetLookupVisitCount();
+		CHECK(scene.HasChildNamed(Entity(), "Lone", Entity()));
+		CHECK_FALSE(scene.HasChildNamed(Entity(), "Lone", lone));
+		CHECK(scene.GetLookupVisitCount() - lookups <= 2);
 	}
 
 	TEST_CASE("Prefab instances among siblings of the same name get a number")
