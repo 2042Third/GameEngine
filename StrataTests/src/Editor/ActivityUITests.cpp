@@ -21,7 +21,6 @@
 #include <future>
 #include <optional>
 #include <string>
-#include <thread>
 #include <vector>
 
 // The Activity panel (the activity journal in the UI) and agent presence: the automation pill, the viewport's agent chip
@@ -303,6 +302,9 @@ TEST_SUITE("Editor.UI.Activity")
 	{
 		const std::filesystem::path sessions = CreateTemporaryDirectory("ActivityPresenceSessions");
 		ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessions));
+		// The time the viewport's clock gives once the test sets it (below): declared before the editor, so that it outlives
+		// the clock also when a check ends the test early.
+		std::optional<std::chrono::steady_clock::time_point> now;
 		HarnessEditor editor({}, WithFeatureProject("ActivityPresence"), {}, true);
 		editor.Frames(2);
 		REQUIRE(editor.Context().HasProject());
@@ -315,6 +317,12 @@ TEST_SUITE("Editor.UI.Activity")
 		REQUIRE_MESSAGE(client.Connect(found[0].Address, found[0].Port, found[0].Token, std::chrono::milliseconds(5000), "Claude Code"), client.GetLastError());
 		REQUIRE(editor.FramesUntil([&editor]() { return editor.GetPillText("Status.Automation") == "Agent connected \xC2\xB7 Claude Code"; }));
 
+		// The viewport goes by a clock of the test's, so that what it shows does not depend on how long frames take: the real
+		// one until the command finished, then times after that.
+		ViewportPanel* viewport = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
+		REQUIRE(viewport);
+		viewport->SetClock([&now]() { return now.value_or(std::chrono::steady_clock::now()); });
+
 		// The agent makes a cube in front of the editor camera.
 		const nlohmann::json camera = editor.Run("camera.get");
 		std::future<RpcResult> call = std::async(std::launch::async, [&client, &camera]()
@@ -324,6 +332,14 @@ TEST_SUITE("Editor.UI.Activity")
 		});
 		REQUIRE(editor.FramesUntil([&call]() { return call.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; }));
 		REQUIRE(call.get().IsSuccess());
+		const AutomationActivity& latest = editor.Context().GetJournal().GetLatestAutomationActivity();
+		REQUIRE(latest.Command == "entity.create");
+		const auto finished = latest.Finished;
+		const auto at = [finished](double seconds)
+		{
+			return finished + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(seconds));
+		};
+		now = at(ViewportPanel::c_AgentFlashSeconds * 0.5);
 		editor.Frames(1);
 		const std::optional<UI::ItemProbe::Item> chip = UI::ItemProbe::Find("Viewport.Agent");
 		REQUIRE(chip.has_value());
@@ -332,19 +348,25 @@ TEST_SUITE("Editor.UI.Activity")
 		REQUIRE(flash.has_value());
 		CHECK(flash->Max.x > flash->Min.x);
 		CHECK(flash->Max.y > flash->Min.y);
-		ViewportPanel* viewport = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
-		REQUIRE(viewport);
 		CHECK(viewport->IsAnimating()); // The fade runs at the full frame rate
+		CHECK(viewport->IsFlashing(at(ViewportPanel::c_AgentFlashSeconds - 0.01)));
 
 		// The outline fades within c_AgentFlashSeconds; the chip stays while the agent is connected. The fade ends by the clock,
 		// also for a viewport that is not drawn meanwhile (hidden behind another tab), which must not keep the editor at its
 		// full frame rate.
-		std::this_thread::sleep_for(std::chrono::duration<double>(ViewportPanel::c_AgentFlashSeconds + 0.1));
+		CHECK_FALSE(viewport->IsFlashing(at(ViewportPanel::c_AgentFlashSeconds + 0.01)));
+		now = at(ViewportPanel::c_AgentFlashSeconds + 0.1);
 		CHECK_FALSE(viewport->IsAnimating());
 		editor.Frames(1);
 		CHECK_FALSE(UI::ItemProbe::Find("Viewport.AgentFlash").has_value());
 		CHECK_FALSE(viewport->IsAnimating());
 		REQUIRE(UI::ItemProbe::Find("Viewport.Agent").has_value());
+		// A minute later, while the agent is still connected, the chip says how long ago that was.
+		now = at(61.0);
+		editor.Frames(1);
+		REQUIRE(UI::ItemProbe::Find("Viewport.Agent").has_value());
+		CHECK(UI::ItemProbe::Find("Viewport.Agent")->Text.find("1 min") != std::string::npos);
+		viewport->SetClock(nullptr);
 
 		// A click on the chip shows the command in the Activity panel.
 		REQUIRE(editor.Click("Viewport.Agent"));

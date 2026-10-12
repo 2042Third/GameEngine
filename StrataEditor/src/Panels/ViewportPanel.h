@@ -10,8 +10,10 @@
 
 #include <chrono>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Strata
@@ -48,6 +50,15 @@ namespace Strata
 		// The chip shows the latest automation command while a client is connected, and this long after it ran.
 		static constexpr double c_AgentChipSeconds = 60.0;
 
+		// The clock the agent chip and the outline go by: std::chrono::steady_clock's unless one is given (tests give their
+		// own, so that what they see does not depend on how long their frames take). AutomationActivity::Finished is a time
+		// of steady_clock.
+		using Clock = std::function<std::chrono::steady_clock::time_point()>;
+		void SetClock(Clock clock) { m_Clock = std::move(clock); }
+		// Whether the outline of what an agent changed shows at `now`: the entities' bounds were taken (the panel was drawn
+		// after the command) and c_AgentFlashSeconds have not passed since it finished.
+		bool IsFlashing(std::chrono::steady_clock::time_point now) const;
+
 		// Ends interactions that hold state (camera drags, gizmo drags, a locked cursor). Uses no ImGui functions, so it
 		// also works after the ImGui context is gone.
 		void Reset(EditorContext& context);
@@ -76,8 +87,7 @@ namespace Strata
 		void DrawAgentChip(EditorPanelContext& context, float right, float top);
 		// The projected bounds of the entities the latest automation command changed, outlined in the accent while they fade.
 		void DrawAgentFlash(EditorContext& context, const ViewportView& view);
-		// Whether the outline of what an agent changed still fades at `now` (it has bounds and c_AgentFlashSeconds have not passed).
-		bool IsFlashing(std::chrono::steady_clock::time_point now) const;
+		std::chrono::steady_clock::time_point Now() const { return m_Clock ? m_Clock() : std::chrono::steady_clock::now(); }
 		// The renderer's statistics over the image: frame time, draws, the render scene's proxies and uploads, asset requests.
 		static void DrawStatsOverlay(ImDrawList* drawList, const ImVec2& position, const ViewportRenderer& renderer, const ViewportView& view, const EditorFrameStats& frame);
 		void AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands);
@@ -103,6 +113,7 @@ namespace Strata
 		uint64_t m_FlashActivity = 0;
 		std::vector<AABB> m_FlashBounds;
 		std::chrono::steady_clock::time_point m_FlashStart;
+		Clock m_Clock;
 	};
 
 }

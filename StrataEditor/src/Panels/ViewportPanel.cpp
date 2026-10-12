@@ -271,7 +271,7 @@ namespace Strata
 
 	bool ViewportPanel::IsAnimating() const
 	{
-		return m_CameraDrag != CameraDrag::None || m_GizmoDrag.has_value() || (!m_FlashBounds.empty() && IsFlashing(std::chrono::steady_clock::now()));
+		return m_CameraDrag != CameraDrag::None || m_GizmoDrag.has_value() || (!m_FlashBounds.empty() && IsFlashing(Now()));
 	}
 
 	bool ViewportPanel::IsFlashing(std::chrono::steady_clock::time_point now) const
@@ -367,7 +367,7 @@ namespace Strata
 		const AutomationActivity& activity = panelContext.Context.GetJournal().GetLatestAutomationActivity();
 		if (activity.Id == 0)
 			return;
-		const double age = std::chrono::duration<double>(std::chrono::steady_clock::now() - activity.Finished).count();
+		const double age = std::chrono::duration<double>(Now() - activity.Finished).count();
 		const bool connected = panelContext.Shell && panelContext.Shell->GetAutomationState().Clients > 0;
 		if (!connected && age >= c_AgentChipSeconds)
 			return;
@@ -398,26 +398,23 @@ namespace Strata
 		const AutomationActivity& activity = context.GetJournal().GetLatestAutomationActivity();
 		if (activity.Id != m_FlashActivity)
 		{
-			// A new command: its entities' bounds now, when it changed something and only just finished.
+			// A new command: its entities' bounds now (at most c_MaxAgentFlashEntities of them). Whether they show depends on
+			// the time alone (IsFlashing): a command that finished c_AgentFlashSeconds ago shows nothing.
 			m_FlashActivity = activity.Id;
 			m_FlashBounds.clear();
 			m_FlashStart = activity.Finished;
-			const double age = std::chrono::duration<double>(std::chrono::steady_clock::now() - activity.Finished).count();
-			if (age < c_AgentFlashSeconds)
+			Scene& scene = *context.GetActiveScene();
+			for (size_t index = 0; index < activity.Entities.size() && m_FlashBounds.size() < c_MaxAgentFlashEntities; index++)
 			{
-				Scene& scene = *context.GetActiveScene();
-				for (size_t index = 0; index < activity.Entities.size() && m_FlashBounds.size() < c_MaxAgentFlashEntities; index++)
+				if (Entity entity = scene.GetEntityByUUID(activity.Entities[index]))
 				{
-					if (Entity entity = scene.GetEntityByUUID(activity.Entities[index]))
-					{
-						const AABB bounds = SceneBounds::GetEntityBounds(scene, entity, false);
-						if (bounds.IsValid())
-							m_FlashBounds.push_back(bounds);
-					}
+					const AABB bounds = SceneBounds::GetEntityBounds(scene, entity, false);
+					if (bounds.IsValid())
+						m_FlashBounds.push_back(bounds);
 				}
 			}
 		}
-		const auto now = std::chrono::steady_clock::now();
+		const auto now = Now();
 		if (!IsFlashing(now))
 			return;
 		const double elapsed = std::chrono::duration<double>(now - m_FlashStart).count();
