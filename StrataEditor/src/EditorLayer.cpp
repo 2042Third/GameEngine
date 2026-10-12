@@ -139,7 +139,7 @@ namespace Strata
 			"the sample, the first one by default; see project.samples), recovery (Recover Unsaved Changes: the project's recovery data that "
 			"scene.recoveryStatus lists, for the person to recover or discard; needs a project, and closes by itself when nothing applies) or "
 			"about (About Strata). The project dialogs ask about unsaved scene changes first. Changes no scene data and records no undo; fails in "
-			"an editor without a window (--no-gpu or headless).",
+			"an editor without a window (--no-gpu or headless). Returns {dialog} and, for openSample, the sample it offers (sample).",
 			CommandUtils::ObjectSchema({
 				{ "dialog", { { "type", "string" }, { "enum", { "export", "newProject", "openSample", "recovery", "about" } }, { "description", "The dialog to open" } } },
 				{ "template", CommandUtils::StringSchema("newProject: the template to preselect (project.templates; default basic3d)") },

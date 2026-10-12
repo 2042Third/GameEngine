@@ -1371,9 +1371,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   (`EditorCommandResults::Session`): replays never bind the IDs those show.
 - **Command line** (`EditorApplication.cpp`). `CreateApplication` answers `--help` and `--version` and refuses arguments
   outside its table (`c_Arguments`; exit code 3 with the usage) before it starts the log, the modules or a window:
-  `Application::SetStartupExitCode` is what `main` returns when no application was made. With `--quit-after-commands` and
-  `--screenshot`, the end of the command script requests the capture of that frame and the capture closes the editor
-  (`EditorLayer::TakeScreenshot`), so the screenshot shows how the script ended, also when it ended before the first frame.
+  `Application::SetStartupExitCode` is what `main` returns when no application was made. Options that take numbers
+  (`--frames`, `--automation-port`, `--idle-timeout`, `--ui-scale`) are checked there too (`CheckValues`): a value they
+  do not take exits 3 as well, so a typo never leaves a scripted run without its frame limit. With
+  `--quit-after-commands` and `--screenshot`, the end of the command script requests the capture of that frame and the
+  capture closes the editor (`EditorLayer::TakeScreenshot`), so the screenshot shows how the script ended, also when it
+  ended before the first frame.
 - **Notifications** (`EditorNotifications.h`, `UI/Notifications.h`). The context keeps what the person should hear about
   (`EditorNotification`: level, title, message, the journal entry, the asset, whether the Console or the recovery dialog
   has more): at most `c_MaxActive` (4), identical ones merged with a count, and those of a `Group` merged into one that

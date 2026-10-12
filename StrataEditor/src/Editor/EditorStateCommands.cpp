@@ -440,8 +440,9 @@ namespace Strata
 
 		registry.Register({ "editor.status",
 			"Overview of the editor: engine version and commit, open project, scene (name, asset, unsaved changes, entity count), play state, "
-			"selection, undo history, and sections such as automation (port, clients, pending requests and commands) and assets (memory and "
-			"budgets per pool, streaming queue, uploads; see asset.stats). Start here to orient yourself.",
+			"selection, undo history, and sections such as automation (port, clients, connectedClients with the names agents gave, pending "
+			"requests and commands), assets (memory and budgets per pool, streaming queue, uploads; see asset.stats) and recovery (the edited "
+			"scene's journal of unsaved changes and how many recovery entries apply; see scene.recoveryStatus). Start here to orient yourself.",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{

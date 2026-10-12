@@ -92,6 +92,43 @@ namespace Strata
 			return std::nullopt;
 		}
 
+		// The --ui-scale factor, parsed as a JSON number (independent of the C locale, unlike strtof); nullopt when it is not a
+		// number within ImGuiLayer's range.
+		std::optional<float> ParseUIScale(const std::string& value)
+		{
+			const nlohmann::json parsed = nlohmann::json::parse(value, nullptr, false);
+			const double scale = parsed.is_number() ? parsed.get<double>() : 0.0;
+			if (!std::isfinite(scale) || scale < ImGuiLayer::c_MinScale || scale > ImGuiLayer::c_MaxScale)
+				return std::nullopt;
+			return static_cast<float>(scale);
+		}
+
+		// What is wrong with the values of the options that take numbers (CheckArguments made sure they have values).
+		std::optional<std::string> CheckValues(const CommandLine& commandLine)
+		{
+			if (commandLine.HasFlag("--frames"))
+			{
+				const std::optional<int64_t> frames = commandLine.GetIntOption("--frames");
+				if (!frames || *frames <= 0)
+					return std::string("--frames expects a positive number of frames");
+			}
+			if (commandLine.HasFlag("--automation-port"))
+			{
+				const std::optional<int64_t> port = commandLine.GetIntOption("--automation-port");
+				if (!port || *port < 0 || *port > UINT16_MAX)
+					return std::string("--automation-port expects a port number from 0 to 65535 (0 picks a free port)");
+			}
+			if (commandLine.HasFlag("--idle-timeout"))
+			{
+				const std::optional<int64_t> seconds = commandLine.GetIntOption("--idle-timeout");
+				if (!seconds || *seconds < 0 || *seconds > c_MaxIdleTimeoutSeconds)
+					return fmt::format("--idle-timeout expects a number of seconds from 0 to {} (0: never)", c_MaxIdleTimeoutSeconds);
+			}
+			if (commandLine.HasFlag("--ui-scale") && !ParseUIScale(commandLine.GetOption("--ui-scale").value_or(std::string())))
+				return fmt::format("--ui-scale expects a factor from {} to {} (1 is 100%)", ImGuiLayer::c_MinScale, ImGuiLayer::c_MaxScale);
+			return std::nullopt;
+		}
+
 	}
 
 	// The editor layer's view of the application.
@@ -196,7 +233,10 @@ namespace Strata
 			Application::SetStartupExitCode(0);
 			return nullptr;
 		}
-		if (const std::optional<std::string> problem = CheckArguments(commandLine))
+		std::optional<std::string> problem = CheckArguments(commandLine);
+		if (!problem)
+			problem = CheckValues(commandLine);
+		if (problem)
 		{
 			std::fprintf(stderr, "%s\n\n%s", problem->c_str(), GetUsage().c_str());
 			Application::SetStartupExitCode(c_UsageExitCode);
@@ -230,43 +270,17 @@ namespace Strata
 		options.RecentProjectsFile = RecentProjects::GetDefaultFile().value_or(std::filesystem::path());
 		options.RecentProjectsReadOnly = !options.CommandScript.empty() || commandLine.GetIntOption("--frames").has_value();
 
-		// Automation (StrataCLI, MCP): on by default, on a free loopback port unless --automation-port picks one.
+		// Automation (StrataCLI, MCP): on by default, on a free loopback port unless --automation-port picks one. The values
+		// of the options were checked before anything started (CheckValues).
 		options.EnableAutomation = !commandLine.HasFlag("--no-automation");
-		if (commandLine.HasFlag("--automation-port"))
-		{
-			const std::optional<int64_t> port = commandLine.GetIntOption("--automation-port");
-			if (!port || *port < 0 || *port > UINT16_MAX)
-			{
-				ST_ERROR("--automation-port expects a port number from 0 to 65535 (0 picks a free port)");
-				return nullptr;
-			}
+		if (const std::optional<int64_t> port = commandLine.GetIntOption("--automation-port"))
 			options.AutomationPort = static_cast<uint16_t>(*port);
-		}
 		// Editors started by tools close themselves once no client has been connected for this long.
-		if (commandLine.HasFlag("--idle-timeout"))
-		{
-			const std::optional<int64_t> seconds = commandLine.GetIntOption("--idle-timeout");
-			if (!seconds || *seconds < 0 || *seconds > c_MaxIdleTimeoutSeconds)
-			{
-				ST_ERROR("--idle-timeout expects a number of seconds from 0 to {} (0: never)", c_MaxIdleTimeoutSeconds);
-				return nullptr;
-			}
+		if (const std::optional<int64_t> seconds = commandLine.GetIntOption("--idle-timeout"))
 			options.IdleTimeout = std::chrono::seconds(*seconds);
-		}
 		// A fixed UI scale instead of the display's (e.g. 1 to check the UI at 100% on a 150% display).
-		if (commandLine.HasFlag("--ui-scale"))
-		{
-			// Parsed as a JSON number: independent of the C locale, unlike strtof.
-			const std::optional<std::string> value = commandLine.GetOption("--ui-scale");
-			const nlohmann::json parsed = value ? nlohmann::json::parse(*value, nullptr, false) : nlohmann::json();
-			const double scale = parsed.is_number() ? parsed.get<double>() : 0.0;
-			if (!std::isfinite(scale) || scale < ImGuiLayer::c_MinScale || scale > ImGuiLayer::c_MaxScale)
-			{
-				ST_ERROR("--ui-scale expects a factor from {} to {} (1 is 100%)", ImGuiLayer::c_MinScale, ImGuiLayer::c_MaxScale);
-				return nullptr;
-			}
-			options.UIScale = static_cast<float>(scale);
-		}
+		if (const std::optional<std::string> scale = commandLine.GetOption("--ui-scale"))
+			options.UIScale = ParseUIScale(*scale);
 
 		ApplicationSpecification specification;
 		specification.Name = "Strata Editor";
@@ -289,7 +303,7 @@ namespace Strata
 		specification.Window.Width = 1600;
 		specification.Window.Height = 900;
 		specification.Window.Maximized = !commandLine.HasFlag("--windowed");
-		if (std::optional<int64_t> frames = commandLine.GetIntOption("--frames"); frames && *frames > 0)
+		if (const std::optional<int64_t> frames = commandLine.GetIntOption("--frames"))
 			specification.MaxFrames = static_cast<uint64_t>(*frames);
 		options.MaxFrames = specification.MaxFrames;
 		options.Headless = specification.Headless;

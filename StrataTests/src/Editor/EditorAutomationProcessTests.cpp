@@ -522,8 +522,11 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 			CHECK(*versionExit == 0);
 			CHECK(version.OutputContains("Strata Editor "));
 
+			// Values that are not what an option takes too: a run that would ignore them might never end.
 			for (const std::vector<std::string>& arguments : { std::vector<std::string> { "--no-gpu", "--bogus" }, std::vector<std::string> { "stray" },
-				std::vector<std::string> { "--no-gpu", "--frames" }, std::vector<std::string> { "--no-gpu=1" } })
+				std::vector<std::string> { "--no-gpu", "--frames" }, std::vector<std::string> { "--no-gpu=1" }, std::vector<std::string> { "--no-gpu", "--frames", "abc" },
+				std::vector<std::string> { "--no-gpu", "--frames=0" }, std::vector<std::string> { "--no-gpu", "--ui-scale", "-1" },
+				std::vector<std::string> { "--no-gpu", "--automation-port", "99999" }, std::vector<std::string> { "--no-gpu", "--idle-timeout", "x" } })
 			{
 				CAPTURE(arguments[arguments.size() - 1]);
 				EditorProcess wrong;

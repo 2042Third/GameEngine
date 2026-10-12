@@ -887,10 +887,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   and `--quit-after-commands` closes the editor once the command script finished (for scripts of unknown length, e.g.
   with `script.build`, whose duration no frame budget can bound). `--help` and `--version` print and exit 0 before
   anything starts (no log file, window or session); an argument the editor does not know, or an option without its value,
-  exits 3 with the usage (the table of arguments is `c_Arguments` in `EditorApplication.cpp`: add new ones there). `--ui-scale <factor>` draws the UI at a fixed scale
-  instead of the display's (e.g. 1 to check it at 100% on a 150% display), `--layout <file>` keeps the panel layout in
-  that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers ImGui's demo window
-  (Help menu) for UI work.
+  exits 3 with the usage, and so does a value an option does not take (`--frames abc`, `--frames 0`: `CheckValues`; the
+  table of arguments is `c_Arguments` in `EditorApplication.cpp`: add new ones there). `--ui-scale <factor>` draws the
+  UI at a fixed scale instead of the display's (e.g. 1 to check it at 100% on a 150% display), `--layout <file>` keeps
+  the panel layout in that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers
+  ImGui's demo window (Help menu) for UI work.
   Without `--frames`, a headless editor runs until `editor.quit` (which, like the other commands that replace the scene,
   refuses to discard unsaved scene changes unless `force` is true) or a signal; headless editors run at most 60 frames
   per second.

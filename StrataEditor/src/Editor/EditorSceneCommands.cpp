@@ -22,7 +22,6 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
-#include <vector>
 #include <utility>
 #include <vector>
 
@@ -441,8 +440,9 @@ namespace Strata
 
 		registry.Register({ "entity.duplicate",
 			"Duplicates entities with their descendants, each copy placed right after its original, in one undo step (while playing it changes the "
-			"running copy only). References between the copied entities point at the copies. Returns the copies' IDs (entities, in the order "
-			"given; id: the first).",
+			"running copy only). References between the copied entities point at the copies. Copies get names unique among their siblings "
+			"('Crate' -> 'Crate (1)'), so read names back from the returned IDs rather than finding copies by name. Returns the copies' IDs "
+			"(entities, in the order given; id: the first).",
 			ObjectSchema({
 				{ "entity", EntitySchema("Entity to duplicate") },
 				{ "entities", EntityArraySchema("Entities to duplicate (instead of entity); those below another listed one are copied with it") } }),
@@ -526,8 +526,8 @@ namespace Strata
 		registry.Register({ "entity.paste",
 			"Creates entities from entity.copy's data, under a parent (default: the top level) at a position among its children (default: last), "
 			"in one undo step (while playing it changes the running copy only). The new entities get fresh IDs; references between them point at "
-			"each other, references to other entities stay. Returns the IDs of the pasted top-level entities and warnings about data this build "
-			"cannot read.",
+			"each other, references to other entities stay. Top-level entities whose names their new siblings have get a number ('Crate' -> "
+			"'Crate (1)'). Returns the IDs of the pasted top-level entities and warnings about data this build cannot read.",
 			ObjectSchema({
 				{ "data", AnyObjectSchema("What entity.copy returned in 'data': {\"Strata\": {\"Format\": \"Entities\", ...}, \"Entities\": [...]}") },
 				{ "parent", OptionalEntitySchema("Parent of the pasted entities; null or omitted for the top level") },
@@ -860,7 +860,9 @@ namespace Strata
 		// Prefabs
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "prefab.instantiate", "Instantiates a prefab or imported model, optionally under a parent and with component values on its root (undoable; while playing it changes the running copy only).",
+		registry.Register({ "prefab.instantiate", "Instantiates a prefab or imported model, optionally under a parent and with component values on its root "
+			"(undoable; while playing it changes the running copy only). An instance whose name a sibling has gets a number ('Crate' -> "
+			"'Crate (1)'). Returns the IDs of the instance's top-level entities (entities).",
 			ObjectSchema({
 				{ "prefab", AssetSchema("Prefab or model") },
 				{ "parent", OptionalEntitySchema("Parent; null or omitted for the top level") },
