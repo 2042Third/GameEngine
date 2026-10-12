@@ -22,15 +22,30 @@ namespace Strata
 			return "windowed";
 		}
 
+		// What a mode is called in a sentence: "The game asked for <phrase>".
+		const char* GetModePhrase(GameWindowMode mode)
+		{
+			switch (mode)
+			{
+				case GameWindowMode::Windowed: return "a window";
+				case GameWindowMode::Fullscreen: return "fullscreen";
+				case GameWindowMode::Borderless: return "a borderless window";
+			}
+			return "a window";
+		}
+
 	}
 
 	bool EditorGameWindow::SetWindowMode(GameWindowMode mode)
 	{
 		if (mode != GameWindowMode::Windowed && mode != GameWindowMode::Fullscreen && mode != GameWindowMode::Borderless)
 			return false;
+		// Asked again (a game applying its options every frame): nothing new to record or say.
+		if (m_Mode == mode)
+			return true;
 		m_Mode = mode;
 		m_Version++;
-		ST_INFO("The game asked for a {} window; play mode keeps the editor's window", GetModeName(mode));
+		ST_INFO("The game asked for {}; play mode keeps the editor's window", GetModePhrase(mode));
 		return true;
 	}
 
@@ -38,6 +53,8 @@ namespace Strata
 	{
 		if (width == 0 || height == 0 || width > c_MaxResolution || height > c_MaxResolution)
 			return false;
+		if (m_Width == width && m_Height == height)
+			return true;
 		m_Width = width;
 		m_Height = height;
 		m_Version++;
@@ -47,6 +64,8 @@ namespace Strata
 
 	bool EditorGameWindow::SetVSync(bool enabled)
 	{
+		if (m_VSync == enabled)
+			return true;
 		m_VSync = enabled;
 		m_Version++;
 		ST_INFO("The game asked for vsync {}; play mode keeps the editor's", enabled ? "on" : "off");
@@ -102,7 +121,7 @@ namespace Strata
 			return {};
 		std::string what;
 		if (m_Mode)
-			what = fmt::format("a {} window", GetModeName(*m_Mode));
+			what = GetModePhrase(*m_Mode);
 		if (m_Width && m_Height)
 			what += fmt::format("{}{} x {} pixels", what.empty() ? "" : " at ", *m_Width, *m_Height);
 		if (m_VSync)

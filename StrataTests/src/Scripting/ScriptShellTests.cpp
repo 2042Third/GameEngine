@@ -5,6 +5,7 @@
 #include "Strata/Core/EngineServices.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/SaveFiles.h"
+#include "Strata/Core/Window.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Input/InputWindow.h"
 #include "Strata/Runtime/GameWindowService.h"
@@ -53,6 +54,61 @@ namespace
 	{
 		return std::any_of(entries.begin(), entries.end(), [&](const LogEntry& entry) { return entry.Message.find(text) != std::string::npos; });
 	}
+
+	size_t CountLogged(const std::vector<LogEntry>& entries, std::string_view text)
+	{
+		return static_cast<size_t>(std::count_if(entries.begin(), entries.end(), [&](const LogEntry& entry) { return entry.Message.find(text) != std::string::npos; }));
+	}
+
+	// A game's window that counts the changes asked of it; its framebuffer takes the resolution it is given.
+	class CountingWindow final : public Window
+	{
+	public:
+		void ProcessEvents() override {}
+		uint32_t GetWidth() const override { return Framebuffer.x; }
+		uint32_t GetHeight() const override { return Framebuffer.y; }
+		void SetCursorMode(CursorMode mode) override { Cursor = mode; }
+		glm::uvec2 GetFramebufferSize() const override { return Framebuffer; }
+		float GetContentScale() const override { return 1.0f; }
+		void SetEventCallback(const EventCallbackFn&) override {}
+		void SetVSync(bool enabled) override
+		{
+			VSync = enabled;
+			VSyncChanges++;
+		}
+		bool IsVSync() const override { return VSync; }
+		void SetTitle(const std::string&) override {}
+		void SetMode(WindowMode mode) override
+		{
+			Mode = mode;
+			ModeChanges++;
+		}
+		WindowMode GetMode() const override { return Mode; }
+		void SetResolution(uint32_t width, uint32_t height) override
+		{
+			Framebuffer = glm::uvec2(width, height);
+			ResolutionChanges++;
+		}
+		bool IsMinimized() const override { return false; }
+		bool IsFocused() const override { return true; }
+		void Maximize() override {}
+		CursorMode GetCursorMode() const override { return Cursor; }
+		void SetCursorShape(CursorShape) override {}
+		std::string GetClipboardText() const override { return {}; }
+		void SetClipboardText(const std::string&) override {}
+		KeyCode GetLayoutKey(KeyCode key) const override { return key; }
+		void* GetPlatformHandle() const override { return nullptr; }
+		void SetIcon(std::span<const WindowIconImage>) override {}
+		void* GetNativeWindow() const override { return nullptr; }
+
+		glm::uvec2 Framebuffer = glm::uvec2(640, 360);
+		WindowMode Mode = WindowMode::Windowed;
+		bool VSync = true;
+		CursorMode Cursor = CursorMode::Normal;
+		int ResolutionChanges = 0;
+		int ModeChanges = 0;
+		int VSyncChanges = 0;
+	};
 
 	// A window as Input sees it (only the cursor mode matters here), Input's window while it lives.
 	struct CursorWindow final : public InputWindow
@@ -248,6 +304,46 @@ TEST_SUITE("Scripting.Game")
 		service.ApplyRequests();
 		CHECK(service.GetState().Width == 1024);
 		CHECK(service.GetState().Mode == GameWindowMode::Fullscreen);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Display options a game applies every frame change its window once and are logged once")
+	{
+		CountingWindow window;
+		GameWindowService service(&window);
+		EngineServices::ScopedProvider<IGameWindow> provider(service);
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		Scene scene;
+		Entity entity = scene.CreateEntity("Options");
+		AddScriptEntry(entity, "WindowRequests").Fields.push_back({ "EveryFrame", PropertyType::Bool, true });
+		const ScopedLogLevel infoLog(LogLevel::Info);
+		LogCapture log;
+		scene.OnRuntimeStart();
+		// The runtime applies the requests after every frame.
+		const auto frames = [&](int count)
+		{
+			for (int frame = 0; frame < count; frame++)
+			{
+				RunFrames(scene, 1);
+				service.ApplyRequests();
+			}
+		};
+		frames(30);
+		CHECK(window.ResolutionChanges == 1);
+		CHECK(window.ModeChanges == 1);
+		CHECK(window.VSyncChanges == 1);
+		CHECK(window.Framebuffer == glm::uvec2(1280, 720));
+		CHECK(window.Mode == WindowMode::Fullscreen);
+		CHECK_FALSE(window.VSync);
+		CHECK(CountLogged(log.GetEntries(), "Game window:") == 1);
+
+		// The player resized the window: the game's resolution, still asked for, applies again, once.
+		window.Framebuffer = glm::uvec2(800, 600);
+		frames(30);
+		CHECK(window.ResolutionChanges == 2);
+		CHECK(window.Framebuffer == glm::uvec2(1280, 720));
+		CHECK(window.ModeChanges == 1);
+		CHECK(CountLogged(log.GetEntries(), "Game window:") == 2);
 		scene.OnRuntimeStop();
 	}
 

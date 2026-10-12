@@ -4,11 +4,13 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "FeatureTest/FeatureTestUtils.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Core/EngineServices.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/SaveFiles.h>
 #include <Strata/Core/Timestep.h>
@@ -255,6 +257,29 @@ TEST_SUITE("Scripting.Game")
 		CHECK_FALSE(window.HasRequests());
 		CHECK(harness.Run("editor.status")["game"]["windowRequests"].is_null());
 		Input::SetViewport({ 0.0f, 0.0f }, { 0.0f, 0.0f });
+	}
+
+	TEST_CASE("A game that asks for the same display options every frame is reported once")
+	{
+		ShellHarness harness;
+		harness.AddScript("Options", "WindowRequests", { { "Mode", 0 }, { "Width", 1280 }, { "Height", 720 }, { "VSync", true }, { "EveryFrame", true } });
+		const ScopedLogLevel infoLog(LogLevel::Info);
+		LogCapture log;
+		harness.Run("play.start");
+		harness.Frame();
+		const EditorGameWindow& window = harness.Context.GetGameWindow();
+		REQUIRE(window.HasRequests());
+		const uint64_t version = window.GetVersion();
+		for (int frame = 0; frame < 30; frame++)
+			harness.Frame();
+		CHECK(window.GetVersion() == version);
+		size_t said = 0;
+		for (const LogEntry& entry : log.GetEntries())
+			said += entry.Message.find("The game asked for") != std::string::npos ? 1 : 0;
+		CHECK(said == 3); // The mode, the resolution and vsync, once each
+		// Each mode reads as words in the sentence for people.
+		CHECK(window.DescribeForPeople() == "The game asked for a window at 1280 x 720 pixels with vsync on; play mode keeps the editor's window.");
+		harness.Run("play.stop");
 	}
 
 	TEST_CASE("Saves of the editor's play mode go to the project's .strata/Saves")

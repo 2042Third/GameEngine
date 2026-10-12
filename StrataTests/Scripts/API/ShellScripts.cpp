@@ -107,11 +107,21 @@ public:
 	bool Accepted = false;
 	glm::vec2 Size = glm::vec2(-1.0f);
 	bool Done = false;
+	// Asks again every frame after the first, like a settings menu that applies what it shows.
+	bool EveryFrame = false;
 
 	void OnUpdate(float) override
 	{
 		if (Done)
+		{
+			if (EveryFrame)
+			{
+				Game::SetWindowMode(static_cast<WindowMode>(Mode));
+				Game::SetResolution(static_cast<uint32_t>(Width), static_cast<uint32_t>(Height));
+				Game::SetVSync(VSync);
+			}
 			return;
+		}
 		Done = true;
 
 		const bool mode = Game::SetWindowMode(static_cast<WindowMode>(Mode));
@@ -148,6 +158,7 @@ ST_SCRIPT_CLASS(WindowRequests)
 	ST_SCRIPT_FIELD(Accepted);
 	ST_SCRIPT_FIELD(Size);
 	ST_SCRIPT_FIELD(Done);
+	ST_SCRIPT_FIELD(EveryFrame);
 }
 
 // Writes, reads, lists and deletes save files on its first update and leaves "Kept" (Text) behind for the engine side to

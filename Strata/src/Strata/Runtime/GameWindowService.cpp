@@ -96,9 +96,12 @@ namespace Strata
 		if (!HasPendingRequests())
 			return;
 
+		// Requests the window already meets change nothing and say nothing: a game may apply its options every frame.
+		bool changed = false;
 		if (!m_Window)
 		{
 			// Headless: nothing to change, but the game sees what it asked for.
+			const GameWindowState before = m_HeadlessState;
 			if (m_PendingMode)
 				m_HeadlessState.Mode = *m_PendingMode;
 			if (m_PendingWidth && m_PendingHeight)
@@ -108,20 +111,47 @@ namespace Strata
 			}
 			if (m_PendingVSync)
 				m_HeadlessState.VSync = *m_PendingVSync;
-			ST_CORE_INFO("Game window (headless, nothing to change): {} {}x{}, vsync {}", GetModeName(m_HeadlessState.Mode), m_HeadlessState.Width,
-				m_HeadlessState.Height, m_HeadlessState.VSync ? "on" : "off");
+			changed = m_HeadlessState.Mode != before.Mode || m_HeadlessState.Width != before.Width || m_HeadlessState.Height != before.Height
+				|| m_HeadlessState.VSync != before.VSync;
+			if (changed)
+			{
+				ST_CORE_INFO("Game window (headless, nothing to change): {} {}x{}, vsync {}", GetModeName(m_HeadlessState.Mode), m_HeadlessState.Width,
+					m_HeadlessState.Height, m_HeadlessState.VSync ? "on" : "off");
+			}
 		}
 		else
 		{
-			// The resolution first: a window going fullscreen switches the display to it.
+			// The resolution first: a window going fullscreen switches the display to it. The resolution asked for last is
+			// applied again only when the window's size changed since (the player resized it): the framebuffer need not be
+			// that size (a borderless window keeps the desktop's, a display may lack the mode, a scaled display rounds), so
+			// comparing the two would apply it every frame. A minimized window has no size to compare.
 			if (m_PendingWidth && m_PendingHeight)
-				m_Window->SetResolution(*m_PendingWidth, *m_PendingHeight);
-			if (m_PendingMode)
+			{
+				const glm::uvec2 requested(*m_PendingWidth, *m_PendingHeight);
+				const bool resized = !m_Window->IsMinimized() && m_Window->GetFramebufferSize() != m_FramebufferAfterApply;
+				if (!m_AppliedResolution || *m_AppliedResolution != requested || resized)
+				{
+					m_Window->SetResolution(requested.x, requested.y);
+					m_AppliedResolution = requested;
+					changed = true;
+				}
+			}
+			if (m_PendingMode && ToWindowMode(*m_PendingMode) != m_Window->GetMode())
+			{
 				m_Window->SetMode(ToWindowMode(*m_PendingMode));
-			if (m_PendingVSync)
+				changed = true;
+			}
+			if (m_PendingVSync && *m_PendingVSync != m_Window->IsVSync())
+			{
 				m_Window->SetVSync(*m_PendingVSync);
-			const GameWindowState state = GetState();
-			ST_CORE_INFO("Game window: {} {}x{}, vsync {}", GetModeName(state.Mode), state.Width, state.Height, state.VSync ? "on" : "off");
+				changed = true;
+			}
+			if (changed)
+			{
+				m_FramebufferAfterApply = m_Window->GetFramebufferSize();
+				const GameWindowState state = GetState();
+				ST_CORE_INFO("Game window: {} {}x{}, vsync {}", GetModeName(state.Mode), state.Width, state.Height, state.VSync ? "on" : "off");
+			}
 		}
 		m_PendingMode.reset();
 		m_PendingWidth.reset();

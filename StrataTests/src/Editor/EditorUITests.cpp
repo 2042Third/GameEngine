@@ -966,7 +966,7 @@ TEST_SUITE("Editor.UI")
 		editor.Frames(3);
 		REQUIRE(editor.Context().IsPlaying());
 		// The requests reach the editor's game window service only (EditorHost offers no way to change the editor's window).
-		CHECK(viewport->GetShownGameWindowNotice() == "The game asked for a fullscreen window at 1920 x 1080 pixels with vsync off; play mode keeps the editor's window.");
+		CHECK(viewport->GetShownGameWindowNotice() == "The game asked for fullscreen at 1920 x 1080 pixels with vsync off; play mode keeps the editor's window.");
 		CHECK(editor.Run("editor.status")["game"]["windowRequests"]["mode"] == "fullscreen");
 
 		REQUIRE(editor.Click("Toolbar.Stop"));

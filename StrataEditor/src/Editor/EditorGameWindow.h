@@ -14,8 +14,9 @@ namespace Strata
 	// The game's window in the editor's play mode (IGameWindow, provided by EditorContext): the game plays in the viewport's
 	// game view, so what it asks of its window (fullscreen, a resolution, vsync) is recorded and reported instead of
 	// applied to the editor's window (editor.status, a notice over the game view). The game's view of its window is the
-	// game view: GetState reports its size, with the mode and vsync the game asked for. Requests are forgotten when play
-	// starts and stops (Clear). Main thread only.
+	// game view: GetState reports its size, with the mode and vsync the game asked for. A request equal to the last one of
+	// its kind changes nothing and is not logged again (games that apply their options every frame). Requests are forgotten
+	// when play starts and stops (Clear). Main thread only.
 	class EditorGameWindow final : public IGameWindow
 	{
 	public:
@@ -31,8 +32,8 @@ namespace Strata
 		// The requests as editor.status reports them ({"mode", "resolution": [w, h], "vsync"}, each only when asked for), or
 		// null without any.
 		nlohmann::json Describe() const;
-		// One sentence for people: "The game asked for fullscreen at 1920 x 1080 with vsync off; play mode keeps the editor's
-		// window." (empty without requests).
+		// One sentence for people: "The game asked for fullscreen at 1920 x 1080 pixels with vsync off; play mode keeps the
+		// editor's window." (empty without requests).
 		std::string DescribeForPeople() const;
 	private:
 		std::optional<GameWindowMode> m_Mode;

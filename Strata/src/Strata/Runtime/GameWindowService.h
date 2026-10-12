@@ -2,6 +2,8 @@
 
 #include "Strata/Core/EngineServices.h"
 
+#include <glm/glm.hpp>
+
 #include <cstdint>
 #include <optional>
 
@@ -25,7 +27,8 @@ namespace Strata
 		bool SetVSync(bool enabled) override;
 		GameWindowState GetState() override;
 
-		// Applies the requests made since the last call (the latest of each kind).
+		// Applies the requests made since the last call (the latest of each kind). What the window already is changes nothing
+		// and is not logged, so a game may apply its options every frame.
 		void ApplyRequests();
 		bool HasPendingRequests() const;
 	private:
@@ -34,6 +37,10 @@ namespace Strata
 		std::optional<uint32_t> m_PendingWidth;
 		std::optional<uint32_t> m_PendingHeight;
 		std::optional<bool> m_PendingVSync;
+		// The resolution applied last, and the framebuffer's size after the last change: the same resolution asked for again
+		// is applied only when the window was resized since.
+		std::optional<glm::uvec2> m_AppliedResolution;
+		glm::uvec2 m_FramebufferAfterApply = glm::uvec2(0);
 		GameWindowState m_HeadlessState; // What a headless game asked for
 	};
 
