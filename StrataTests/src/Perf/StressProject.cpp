@@ -51,6 +51,8 @@ namespace Strata::Tests
 		constexpr uint64_t c_GridModelHandle = 0x5A00000000003000ull;
 		constexpr uint64_t c_WorldSceneHandle = 0x5A00000000004000ull;
 		constexpr uint64_t c_TopDownSceneHandle = 0x5A00000000004001ull;
+		constexpr uint64_t c_FlightSceneHandle = 0x5A00000000004002ull;
+		constexpr uint64_t c_TerrainMaterialHandle = 0x5A00000000002800ull;
 		constexpr uint64_t c_SceneEntityHandleBase = 0x5AE0000000000000ull; // Camera, sun, terrain
 		constexpr uint64_t c_ObjectHandleBase = 0x5AF0000000000010ull;
 
@@ -291,7 +293,9 @@ namespace Strata::Tests
 			TopDown       // High above the center looking straight down, every district in view
 		};
 
-		nlohmann::json CreateWorldScene(const StressProjectSpec& spec, const StressProject& project, const std::string& name, StressCamera cameraPlacement)
+		// The world: camera, sun, the terrain (with `terrainMaterial`, the default material when null) and the objects.
+		nlohmann::json CreateWorldScene(const StressProjectSpec& spec, const StressProject& project, const std::string& name, StressCamera cameraPlacement,
+			AssetHandle terrainMaterial = UUID::Null())
 		{
 			Scene scene(name);
 
@@ -324,6 +328,7 @@ namespace Strata::Tests
 			Entity terrain = scene.CreateEntityWithUUID(UUID(c_SceneEntityHandleBase + 3), "Terrain");
 			MeshRendererComponent& terrainRenderer = terrain.AddComponent<MeshRendererComponent>();
 			terrainRenderer.Mesh = project.GridMesh;
+			terrainRenderer.Material = terrainMaterial;
 			terrainRenderer.CastShadows = false;
 
 			// Objects on an even grid over the world, each with the material of its district.
@@ -558,6 +563,29 @@ namespace Strata::Tests
 		return true;
 	}
 
+	bool WriteStressFlightScene(StressProject& project, const StressProjectSpec& spec, std::string& error)
+	{
+		if (project.Textures.empty())
+		{
+			error = "The stress project has no textures";
+			return false;
+		}
+		const std::filesystem::path assets = project.Directory / "Assets";
+		MaterialProperties properties;
+		properties.Roughness = 0.8f;
+		properties.BaseColorMap = project.Textures.front();
+		properties.UVTiling = glm::vec2(c_StressTerrainTiling);
+		const AssetHandle material = UUID(c_TerrainMaterialHandle);
+		if (!WriteJsonAsset(assets / "Materials" / "Terrain.stmat", Material::Create(properties)->Serialize(), material, error))
+			return false;
+		const AssetHandle handle = UUID(c_FlightSceneHandle);
+		if (!WriteJsonAsset(assets / "Scenes" / "Flight.stscene", CreateWorldScene(spec, project, "Flight", StressCamera::Overview, material), handle, error))
+			return false;
+		project.TerrainMaterial = material;
+		project.FlightScene = handle;
+		return true;
+	}
+
 	Ref<EditorAssetManager> ImportStressProject(const StressProject& project, std::string& error)
 	{
 		EditorAssetManagerSpecification specification;
@@ -571,8 +599,11 @@ namespace Strata::Tests
 		sources.insert(sources.end(), project.Materials.begin(), project.Materials.end());
 		sources.push_back(project.GridModel);
 		sources.push_back(project.WorldScene);
-		if (project.TopDownScene.IsValid())
-			sources.push_back(project.TopDownScene);
+		for (AssetHandle written : { project.TopDownScene, project.FlightScene, project.TerrainMaterial })
+		{
+			if (written.IsValid())
+				sources.push_back(written);
+		}
 		for (AssetHandle source : sources)
 		{
 			const AssetImportInfo import = manager->GetImportInfo(source);
@@ -697,6 +728,7 @@ namespace Strata::Tests
 			result.DeviceBytes.reserve(frames);
 			result.FrameMs.reserve(frames);
 			FramePacer pacer(settings.FrameRate);
+			std::vector<AssetResidencySample> residency;
 			for (uint32_t frame = 0; frame < frames; frame++)
 			{
 				pacer.WaitForNextFrame();
@@ -732,6 +764,13 @@ namespace Strata::Tests
 				result.MaxUploadMs = std::max(result.MaxUploadMs, stats.UploadMsLastFrame);
 				if (sweep.Holding && pending == 0 && sweep.Stop < result.FramesToSettle.size() && result.FramesToSettle[sweep.Stop] == c_StopNeverSettled)
 					result.FramesToSettle[sweep.Stop] = sweep.FramesHolding;
+				// The finest level a streaming texture holds (outside the frame's measured time).
+				manager->GetResidencySamples(residency);
+				for (const AssetResidencySample& sample : residency)
+				{
+					if (sample.Detail)
+						result.FinestStreamedMip = std::min(result.FinestStreamedMip, sample.Detail->Resident);
+				}
 				result.Frames++;
 			}
 			device.WaitForIdle();
@@ -747,6 +786,7 @@ namespace Strata::Tests
 		const AssetManagerStats stats = manager->GetStats();
 		result.LevelsRaised = stats.Detail.LevelsRaised;
 		result.LevelsDropped = stats.Detail.LevelsDropped;
+		result.LevelsDroppedForBudget = stats.Detail.LevelsDroppedForBudget;
 		result.BytesStreamed = stats.Detail.BytesStreamed;
 		result.FailedAssets = stats.FailedAssets;
 		result.LoadsCompleted = stats.TotalLoadsCompleted;
@@ -842,6 +882,8 @@ namespace Strata::Tests
 		json["MaxUploadMs"] = result.MaxUploadMs;
 		json["LevelsRaised"] = result.LevelsRaised;
 		json["LevelsDropped"] = result.LevelsDropped;
+		json["LevelsDroppedForBudget"] = result.LevelsDroppedForBudget;
+		json["FinestStreamedMip"] = result.FinestStreamedMip;
 		json["BytesStreamed"] = result.BytesStreamed;
 		json["FramesToSettle"] = result.FramesToSettle;
 		json["FailedAssets"] = result.FailedAssets;
@@ -878,6 +920,7 @@ namespace Strata::Tests
 			&& ReadUInt(json, "MaxInFlightBytes", result.MaxInFlightBytes, error) && ReadUInt(json, "MaxUploadedBytes", result.MaxUploadedBytes, error)
 			&& ReadFloat(json, "MaxFinalizeMs", result.MaxFinalizeMs, error) && ReadFloat(json, "MaxUploadMs", result.MaxUploadMs, error)
 			&& ReadUInt(json, "LevelsRaised", result.LevelsRaised, error) && ReadUInt(json, "LevelsDropped", result.LevelsDropped, error)
+			&& ReadUInt(json, "LevelsDroppedForBudget", result.LevelsDroppedForBudget, error) && ReadUInt32(json, "FinestStreamedMip", result.FinestStreamedMip, error)
 			&& ReadUInt(json, "BytesStreamed", result.BytesStreamed, error) && ReadNumbers(json, "FramesToSettle", result.FramesToSettle, error)
 			&& ReadUInt32(json, "FailedAssets", result.FailedAssets, error) && ReadUInt(json, "LoadsCompleted", result.LoadsCompleted, error)
 			&& ReadUInt(json, "Evictions", result.Evictions, error) && ReadUInt(json, "StagingReleases", result.StagingReleases, error)

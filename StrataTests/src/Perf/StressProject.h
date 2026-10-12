@@ -46,6 +46,8 @@ namespace Strata::Tests
 		std::filesystem::path Directory;   // Holds Stress.stproj and Assets/
 		AssetHandle WorldScene = UUID::Null();
 		AssetHandle TopDownScene = UUID::Null(); // Only once WriteStressTopDownScene wrote it
+		AssetHandle FlightScene = UUID::Null();  // Only once WriteStressFlightScene wrote it
+		AssetHandle TerrainMaterial = UUID::Null(); // The flight scene's terrain material (WriteStressFlightScene)
 		AssetHandle GridModel = UUID::Null();
 		AssetHandle GridMesh = UUID::Null(); // The model's mesh (sub-asset), drawn as the terrain
 		std::vector<AssetHandle> Textures;   // The small textures, then the large ones
@@ -64,6 +66,14 @@ namespace Strata::Tests
 	// hence every texture, is requested (the world scene's overview camera shows about two thirds of the textures). Sets
 	// project.TopDownScene; false with the reason in error on failure.
 	bool WriteStressTopDownScene(StressProject& project, const StressProjectSpec& spec, std::string& error);
+	// The terrain's texture tiling in the flight scene: c_StressTerrainTiling repeats over the world, 41 texels per world
+	// unit of a 2048x2048 texture, which a camera a few units above the ground shows at full resolution.
+	constexpr float c_StressTerrainTiling = 40.0f;
+	// Adds the scene 'Flight' to a project WriteStressProject wrote, before it is imported: the world scene with its terrain
+	// drawn with a material of its own (Materials/Terrain.stmat: the first texture, tiled c_StressTerrainTiling times), so a
+	// camera flying low sees fine detail under it, as on any textured ground. Sets project.FlightScene and
+	// project.TerrainMaterial; false with the reason in error on failure.
+	bool WriteStressFlightScene(StressProject& project, const StressProjectSpec& spec, std::string& error);
 
 	// Imports the project like the editor does (EditorAssetManager::Scan, in parallel when the job system runs) and returns
 	// its asset manager; null when an asset does not import cleanly (an error, or a warning), with the reason in error.
@@ -129,6 +139,8 @@ namespace Strata::Tests
 
 	// StreamingSweepResult::FramesToSettle of a stop where the camera never drew without pending assets.
 	constexpr uint32_t c_StopNeverSettled = std::numeric_limits<uint32_t>::max();
+	// StreamingSweepResult::FinestStreamedMip of a sweep in which no texture streamed its mip levels.
+	constexpr uint32_t c_NoStreamedMip = std::numeric_limits<uint32_t>::max();
 
 	// What a sweep measured. Frames run like the application's: the device's frame, the asset manager's Update (finalizing
 	// and evicting), then the scene renders from the sweep's camera, requesting what it shows.
@@ -144,10 +156,14 @@ namespace Strata::Tests
 		uint64_t MaxUploadedBytes = 0;        // GPU bytes finalized in one frame, at most
 		float MaxFinalizeMs = 0.0f;           // Finalization time of one frame, at most
 		float MaxUploadMs = 0.0f;             // Of it, the upload steps' time (AssetManagerStats::UploadMsLastFrame), at most
-		// The texture streamer (AssetManagerStats::Detail): mip levels raised and dropped, bytes read for raised levels.
+		// The texture streamer (AssetManagerStats::Detail): mip levels raised and dropped (and of those, dropped for the
+		// budget), bytes read for raised levels, and the finest level a streaming texture held after a frame (c_NoStreamedMip
+		// when no texture streamed).
 		uint64_t LevelsRaised = 0;
 		uint64_t LevelsDropped = 0;
+		uint64_t LevelsDroppedForBudget = 0;
 		uint64_t BytesStreamed = 0;
+		uint32_t FinestStreamedMip = c_NoStreamedMip;
 		// Per stop: frames from the first frame at rest until the first frame that drew without pending assets (0 when that
 		// was the first frame at rest), or c_StopNeverSettled when no frame of the stop's hold did.
 		std::vector<uint32_t> FramesToSettle;

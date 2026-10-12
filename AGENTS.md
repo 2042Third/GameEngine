@@ -191,14 +191,18 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   in private bytes on Windows, so identical sweeps peak up to about 150 MB apart), resident texture memory, the longest
   frame finalization (a regression may show in one frame, which a percentile would hide) and the most frames a stop
   takes to settle. Every all-resident sweep must bring every texture in, evict none and fail no load; its budgets are its
-  peak private memory (650 MB, texture cooking's limit) and its longest frame finalization. Mip streaming's sweep flies low
-  over six districts at 1920x1080 for 600 frames with a 96 MB texture budget, once with mip streaming and once with
-  whole textures (the baseline), one pair per attempt: both must stream correctly, streaming must raise and drop levels
-  and hold less than whole textures, and its last frame must match the baseline's by 40 dB PSNR or more (a check, not a
-  budget); its budgets (`PerfGPU.Streaming.Mips.*`, maxima by nature) are the streaming run's peak private memory (550 MB,
-  mip streaming's limit), the most bytes and upload-step milliseconds of a frame (24 MB, 2 ms) and its longest frame (CPU
-  time of the manager's update and the rendering, the first frame left out) to the baseline's (a `ratio`: budgets are
-  not negative, and the two runs' longest frames are about as long). It then runs the exported
+  peak private memory (650 MB, texture cooking's limit) and its longest frame finalization. Mip streaming's sweep flies 3
+  units above the textured ground of the stress project's `Flight` scene (`WriteStressFlightScene`: its terrain tiled
+  with a texture, whose finest level the ground under the camera needs) over six districts at 1920x1080 for 600 frames,
+  with mip streaming and a 96 MB texture budget, with mip streaming within 8 MB (a budget its needs exceed), and with
+  whole textures within 96 MB (the baseline), one of each per attempt: all must stream correctly, streaming must raise and
+  drop levels; within 96 MB it must reach level 0 of the ground's texture, hold less than whole textures and match the
+  baseline's last frame by 40 dB PSNR or more over the frame and over its bottom third (checks, not budgets); within 8 MB
+  it must drop levels for the budget (`LevelsDroppedForBudget`) and stay within it. Its budgets (`PerfGPU.Streaming.Mips.*`,
+  maxima by nature, of both streaming runs) are the peak private memory (550 MB, mip streaming's limit), the most bytes
+  and upload-step milliseconds of a frame (24 MB, 2 ms) and the longest frame (CPU time of the manager's update and the
+  rendering, the first frame left out) to the baseline's (a `ratio`: budgets are not negative, and the runs' longest
+  frames are about as long). It then runs the exported
   stress game in `StrataRuntime` (`STRATA_TEST_RUNTIME_PATH`, else next to the test executable) with `--perf-log` and
   `--resolution 1920x1080` (1920x1080 pixels whatever the display's scale; every run checks its swapchain), one run per
   attempt: every log has a row per frame, and the budget judges the slowest frame's `Assets.Finalize` stage; then the game

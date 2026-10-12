@@ -1215,15 +1215,20 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     that holds every texture and whole textures, confirmed like the evicting one. Every sweep must bring every texture
     in, evict none and fail no load; `Budgets.json` judges its peak private bytes (at most 650 MB, texture cooking's
     limit) and its longest frame finalization (below the 8 ms the streaming work allows any frame);
-  - mip streaming's sweep: 600 frames at 1920x1080 low over six districts (12 units up, looking 25 degrees down) with a
-    96 MB texture budget, flown with mip streaming and again with whole textures (the baseline: the renderer's
-    `TextureStreaming` and the manager's partial loads off), one pair per attempt. Both must stream correctly, the
-    streaming run must raise and drop levels and hold less than the baseline, and its last frame must match the
-    baseline's by 40 dB PSNR or more (the levels the screen needs show the world as the full chains do).
-    `Budgets.json` judges the streaming run's peak private memory (at most 550 MB, mip streaming's limit), the most bytes
-    and upload-step milliseconds of a frame (24 MB, 2 ms) and its longest frame to the baseline's (the CPU time of the
-    manager's update and the rendering, without the first frame, which creates the renderer's pipelines in both; a
-    ratio, since budgets are not negative: the acceptance limit, 2 ms over the baseline's, is about 1.5 there).
+  - mip streaming's sweep: 600 frames at 1920x1080 over six districts of the `Flight` scene (`WriteStressFlightScene`:
+    the world with its terrain textured, the first texture tiled 40 times, so the ground under the camera needs that
+    texture's finest level, as any textured ground does), 3 units above the ground looking 20 degrees down, with a 96 MB
+    texture budget; flown with mip streaming, again with mip streaming within 8 MB (a budget its needs exceed, so levels
+    go for the budget too), and with whole textures within 96 MB (the baseline: the renderer's `TextureStreaming` and the
+    manager's partial loads off), one of each per attempt. All must stream correctly; the streaming runs must raise and
+    drop levels; the one within 96 MB must have the ground's texture at level 0 at some point, hold more than that texture
+    whole and less than the baseline, and match the baseline's last frame by 40 dB PSNR or more, over the whole frame
+    and its bottom third (the ground just ahead of the camera); the one within 8 MB must drop levels for the budget and
+    stay within it. `Budgets.json` judges, of both streaming runs, the peak private memory (at most 550 MB, mip
+    streaming's limit), the most bytes and upload-step milliseconds of a frame (24 MB, 2 ms) and the longest frame to the
+    baseline's (the CPU time of the manager's update and the rendering, without the first frame, which creates the
+    renderer's pipelines in all; a ratio, since budgets are not negative: the acceptance limit, 2 ms over the baseline's,
+    is 1.8 to 1.4 there, for the baseline's longest frames of 2.5 to 4.5 ms).
 
   Then it exports the stress game (`.stgame` manifests next to the pack) and runs `StrataRuntime` in a window of
   1920x1080 pixels (`--resolution`, whatever the display's scale; each run checks its swapchain's size) for 600 frames

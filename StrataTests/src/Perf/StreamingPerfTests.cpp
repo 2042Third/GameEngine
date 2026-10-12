@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -80,16 +81,20 @@ namespace
 	// A maximum by nature, one run per attempt.
 	constexpr const char* c_RuntimePeakPrivateMemoryAllInView = "PerfGPU.Streaming.RuntimePeakPrivateMemoryAllInView";
 
-	// Mip streaming's sweep: a flight low over the districts at 1920x1080 with a texture budget of 96 MB, whose views need
-	// fine levels of the textures near the camera and coarse ones further on, run by a helper process with mip streaming and
-	// again with whole textures (the baseline: SceneRendererSpecification::TextureStreaming false, the manager's partial
-	// loads off), one pair per attempt. The metrics, maxima by nature: the streaming run's peak private memory (the 550 MB
-	// acceptance limit), the most bytes the asset manager uploaded in a frame (24 MB) and the longest its upload steps took
-	// (2 ms), and its longest frame to the baseline's (the CPU time of the manager's update and the rendering; a ratio,
-	// as budgets are not negative: the acceptance limit, "the longest frame at most 2 ms over the baseline's", is a ratio
-	// of about 1.8 for the baseline's 2.4 ms, above the budget; both runs' longest frame is one of their first, which
-	// load the world). Its last frame must show the world like the baseline's (a check).
+	// Mip streaming's sweep: a flight 3 units above the ground of the flight scene (its terrain textured, tiled
+	// c_StressTerrainTiling times, so the ground under the camera needs the finest level of its texture, and objects near the
+	// camera fine levels of theirs) at 1920x1080 with a texture budget of 96 MB, run by a helper process with mip streaming,
+	// again with mip streaming within a budget its needs exceed (c_MipsPressureBudget, so levels also go for the budget),
+	// and with whole textures (the baseline: SceneRendererSpecification::TextureStreaming false, the manager's partial loads
+	// off), one of each per attempt. The metrics, maxima by nature, of both streaming runs: their peak private memory (the
+	// 550 MB acceptance limit), the most bytes the asset manager uploaded in a frame (24 MB) and the longest its upload steps
+	// took (2 ms), and their longest frame to the baseline's (the CPU time of the manager's update and the rendering; a
+	// ratio, as budgets are not negative: the acceptance limit, "the longest frame at most 2 ms over the baseline's", is a
+	// ratio of 1.8 to 1.4 for the baseline's 2.5 to 4.5 ms, above the budget; the longest frames are among the first, which
+	// load the world). The flight within 96 MB must reach the finest level and show the world like the baseline in its last
+	// frame, near the camera too (checks).
 	constexpr uint64_t c_MipsTextureBudget = 96 * c_MB;
+	constexpr uint64_t c_MipsPressureBudget = 8 * c_MB;
 	constexpr const char* c_MipsPeakPrivateMemory = "PerfGPU.Streaming.Mips.PeakPrivateMemory";
 	constexpr const char* c_MipsMaxUploadBytesPerFrame = "PerfGPU.Streaming.Mips.MaxUploadBytesPerFrame";
 	constexpr const char* c_MipsMaxUploadStageMs = "PerfGPU.Streaming.Mips.MaxUploadStageMs";
@@ -286,6 +291,7 @@ TEST_SUITE("PerfGPU.Streaming")
 			project = WriteStressProject(directory / "Stress", spec, error);
 			REQUIRE_MESSAGE(project, error);
 			REQUIRE_MESSAGE(WriteStressTopDownScene(*project, spec, error), error); // For the exported game with every texture resident
+			REQUIRE_MESSAGE(WriteStressFlightScene(*project, spec, error), error); // For mip streaming's flight
 			const double writeSeconds = ElapsedSeconds(start);
 			REQUIRE_MESSAGE(BuildStressPack(*project, directory / "Stress.stpak", error), error);
 			MESSAGE("Stress project written in ", writeSeconds, " s, imported and packed in ", ElapsedSeconds(start) - writeSeconds, " s");
@@ -370,9 +376,11 @@ TEST_SUITE("PerfGPU.Streaming")
 				{ c_MaxFinalizeTimeAllResident, result.MaxFinalizeMs } };
 		});
 
-		// Mip streaming's flight: low over six districts (12 units up, looking 25 degrees down) at 1920x1080, 600 frames,
-		// with a 96 MB budget; the baseline flies the same with whole textures.
+		// Mip streaming's flight: 3 units above the flight scene's textured ground over six districts, looking 20 degrees down,
+		// at 1920x1080, 600 frames, with a 96 MB budget; the same within a budget its needs exceed; and the baseline, the
+		// same with whole textures within 96 MB.
 		StreamingSweepSettings mips = settings;
+		mips.Scene = project->FlightScene;
 		mips.TextureStreaming = true;
 		mips.TextureBudget = c_MipsTextureBudget;
 		mips.Width = 1920;
@@ -380,17 +388,24 @@ TEST_SUITE("PerfGPU.Streaming")
 		mips.Path.Stops = 6;
 		mips.Path.MoveFrames = 60;
 		mips.Path.HoldFrames = 40;
-		mips.Path.Height = 12.0f;
-		mips.Path.PitchDegrees = 25.0f;
+		mips.Path.Height = 3.0f;
+		mips.Path.PitchDegrees = 20.0f;
 		REQUIRE(mips.Path.GetFrameCount() == 600);
 		mips.FinalFrameFile = directory / "MipsFinalFrame.rgba";
+		StreamingSweepSettings pressure = mips;
+		pressure.TextureBudget = c_MipsPressureBudget;
+		pressure.FinalFrameFile.clear();
 		StreamingSweepSettings baseline = mips;
 		baseline.TextureStreaming = false;
 		baseline.FinalFrameFile = directory / "BaselineFinalFrame.rgba";
 		const std::filesystem::path mipsFile = directory / "MipsSettings.json";
+		const std::filesystem::path pressureFile = directory / "MipsPressureSettings.json";
 		const std::filesystem::path baselineFile = directory / "BaselineSettings.json";
 		REQUIRE(FileSystem::WriteText(mipsFile, JsonUtils::Dump(ToJson(mips))));
+		REQUIRE(FileSystem::WriteText(pressureFile, JsonUtils::Dump(ToJson(pressure))));
 		REQUIRE(FileSystem::WriteText(baselineFile, JsonUtils::Dump(ToJson(baseline))));
+		// The finest level of the ground's texture alone holds this much: the flight must have had it resident.
+		const uint64_t smallTextureBytes = GetStressTextureBytes(spec.SmallTextureSize);
 		uint32_t mipSweeps = 0;
 		Perf::CheckBudgetsConfirmed({ c_MipsPeakPrivateMemory, c_MipsMaxUploadBytesPerFrame, c_MipsMaxUploadStageMs, c_MipsMaxFrameRatio }, [&]
 		{
@@ -398,14 +413,17 @@ TEST_SUITE("PerfGPU.Streaming")
 			CAPTURE(sweep);
 			const auto start = std::chrono::steady_clock::now();
 			const StreamingSweepResult streamed = RunSweepProcess(mipsFile, directory / ("MipsResult" + std::to_string(sweep) + ".json"));
+			const StreamingSweepResult pressed = RunSweepProcess(pressureFile, directory / ("MipsPressureResult" + std::to_string(sweep) + ".json"));
 			const StreamingSweepResult whole = RunSweepProcess(baselineFile, directory / ("BaselineResult" + std::to_string(sweep) + ".json"));
 			REQUIRE(streamed.FrameMs.size() == streamed.Frames);
+			REQUIRE(pressed.FrameMs.size() == streamed.FrameMs.size());
 			REQUIRE(whole.FrameMs.size() == streamed.FrameMs.size());
 			// The runs load at different frames, so the longest frames compare, not frames of the same number. The first frame
-			// creates the renderer's pipelines and targets, the same work in both runs that takes far longer than any other
+			// creates the renderer's pipelines and targets, the same work in every run that takes far longer than any other
 			// frame (and varies by tens of milliseconds): it would hide what streaming adds.
 			REQUIRE(streamed.FrameMs.size() > 1);
-			const double streamedLongest = *std::max_element(streamed.FrameMs.begin() + 1, streamed.FrameMs.end());
+			const double streamedLongest = std::max(*std::max_element(streamed.FrameMs.begin() + 1, streamed.FrameMs.end()),
+				*std::max_element(pressed.FrameMs.begin() + 1, pressed.FrameMs.end()));
 			const double wholeLongest = *std::max_element(whole.FrameMs.begin() + 1, whole.FrameMs.end());
 			REQUIRE(wholeLongest > 0.0);
 			const std::optional<std::vector<uint8_t>> streamedFrame = FileSystem::ReadBytes(mips.FinalFrameFile);
@@ -414,31 +432,50 @@ TEST_SUITE("PerfGPU.Streaming")
 			REQUIRE(wholeFrame);
 			REQUIRE(streamedFrame->size() == static_cast<size_t>(mips.Width) * mips.Height * 4);
 			const double psnr = ComputePSNR(*streamedFrame, *wholeFrame);
-			MESSAGE("Mip streaming, sweep ", sweep, " (", ElapsedSeconds(start), " s): ", DescribeSweep(streamed), "; upload steps at most ", streamed.MaxUploadMs,
-				" ms; ", streamed.LevelsRaised, " levels raised, ", streamed.LevelsDropped, " dropped, ", streamed.BytesStreamed / c_MBDouble,
-				" MB read for them; longest frame ", streamedLongest, " ms, the baseline's ", wholeLongest, " ms (", streamedLongest - wholeLongest,
-				" ms over it); last frame ", psnr, " dB against the baseline's. Baseline: ",
-				DescribeSweep(whole), "; upload steps at most ", whole.MaxUploadMs, " ms");
+			// The ground just ahead of the camera: the bottom third of the view, which shows the finest levels.
+			const size_t nearOffset = static_cast<size_t>(mips.Width) * (mips.Height - mips.Height / 3) * 4;
+			const double nearPSNR = ComputePSNR(std::vector<uint8_t>(streamedFrame->begin() + static_cast<std::ptrdiff_t>(nearOffset), streamedFrame->end()),
+				std::vector<uint8_t>(wholeFrame->begin() + static_cast<std::ptrdiff_t>(nearOffset), wholeFrame->end()));
+			const auto describeStreaming = [](const StreamingSweepResult& result)
+			{
+				return fmt::format("{}; upload steps at most {} ms; {} levels raised, {} dropped ({} for the budget), {} MB read for them, finest level {}",
+					DescribeSweep(result), result.MaxUploadMs, result.LevelsRaised, result.LevelsDropped, result.LevelsDroppedForBudget,
+					result.BytesStreamed / c_MBDouble, result.FinestStreamedMip);
+			};
+			MESSAGE("Mip streaming, sweep ", sweep, " (", ElapsedSeconds(start), " s): ", describeStreaming(streamed), "; longest frame ", streamedLongest,
+				" ms (of both streaming runs), the baseline's ", wholeLongest, " ms (", streamedLongest - wholeLongest, " ms over it); last frame ", psnr,
+				" dB against the baseline's, its bottom third ", nearPSNR, " dB. Within ", c_MipsPressureBudget / c_MBDouble, " MB: ", describeStreaming(pressed),
+				". Baseline: ", DescribeSweep(whole), "; upload steps at most ", whole.MaxUploadMs, " ms");
 
-			// Both stream correctly; streaming raises and drops levels, and holds far less than whole textures; its last frame
-			// shows the world like the baseline's.
-			CHECK(streamed.NewErrors == 0);
+			// Every run streams correctly; streaming raises and drops levels, reaches the finest level of the ground's texture
+			// and holds less than whole textures; its last frame shows the world like the baseline's, near the camera too.
+			for (const StreamingSweepResult* run : { &streamed, &pressed })
+			{
+				CHECK(run->NewErrors == 0);
+				CHECK(run->FailedAssets == 0);
+				CHECK(std::find(run->FramesToSettle.begin(), run->FramesToSettle.end(), c_StopNeverSettled) == run->FramesToSettle.end());
+				CHECK(run->LevelsRaised > 0);
+				CHECK(run->LevelsDropped > 0);
+			}
 			CHECK(whole.NewErrors == 0);
-			CHECK(streamed.FailedAssets == 0);
-			CHECK(std::find(streamed.FramesToSettle.begin(), streamed.FramesToSettle.end(), c_StopNeverSettled) == streamed.FramesToSettle.end());
-			CHECK(streamed.LevelsRaised > 0);
-			CHECK(streamed.LevelsDropped > 0);
 			CHECK(whole.LevelsRaised == 0);
+			CHECK(streamed.FinestStreamedMip == 0);
+			CHECK(streamed.MaxResidentTextureBytes > smallTextureBytes);
+			CHECK(streamed.MaxResidentTextureBytes < whole.MaxResidentTextureBytes);
+			// The budget's pressure took levels, and residency stayed within it.
+			CHECK(pressed.LevelsDroppedForBudget > 0);
+			CHECK(pressed.MaxResidentTextureBytes <= c_MipsPressureBudget);
 			// The baseline's last frame is the fully resident render: its last stop settled.
 			REQUIRE_FALSE(whole.FramesToSettle.empty());
 			CHECK(whole.FramesToSettle.back() != c_StopNeverSettled);
-			CHECK(streamed.MaxResidentTextureBytes < whole.MaxResidentTextureBytes);
 			CHECK(psnr >= c_MinFinalFramePSNR);
+			CHECK(nearPSNR >= c_MinFinalFramePSNR);
 			REQUIRE(streamed.PeakPrivateBytes > 0);
+			REQUIRE(pressed.PeakPrivateBytes > 0);
 			return Perf::MetricValues {
-				{ c_MipsPeakPrivateMemory, static_cast<double>(streamed.PeakPrivateBytes) / c_MBDouble },
-				{ c_MipsMaxUploadBytesPerFrame, static_cast<double>(streamed.MaxUploadedBytes) / c_MBDouble },
-				{ c_MipsMaxUploadStageMs, static_cast<double>(streamed.MaxUploadMs) },
+				{ c_MipsPeakPrivateMemory, static_cast<double>(std::max(streamed.PeakPrivateBytes, pressed.PeakPrivateBytes)) / c_MBDouble },
+				{ c_MipsMaxUploadBytesPerFrame, static_cast<double>(std::max(streamed.MaxUploadedBytes, pressed.MaxUploadedBytes)) / c_MBDouble },
+				{ c_MipsMaxUploadStageMs, static_cast<double>(std::max(streamed.MaxUploadMs, pressed.MaxUploadMs)) },
 				{ c_MipsMaxFrameRatio, streamedLongest / wholeLongest } };
 		});
 

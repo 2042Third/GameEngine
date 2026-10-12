@@ -626,16 +626,16 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 
 	if (mode == "write-stress-project")
 	{
-		// <directory>: writes the streaming stress project (Perf/StressProject.h: 447 MB of textures, the World and TopDown
-		// scenes) into a new directory, to look at it in the editor (StrataEditor --project <directory>), e.g. with the
-		// Streaming panel.
+		// <directory>: writes the streaming stress project (Perf/StressProject.h: 111.8 MB of block-compressed textures, the
+		// World, TopDown and Flight scenes) into a new directory, to look at it in the editor (StrataEditor --project
+		// <directory>), e.g. with the Streaming panel.
 		if (argc != 3)
 			return 2;
 		std::string error;
 		const std::filesystem::path directory = Strata::FileSystem::FromUTF8(argv[2]);
 		const Strata::Tests::StressProjectSpec spec;
 		std::optional<Strata::Tests::StressProject> project = Strata::Tests::WriteStressProject(directory, spec, error);
-		if (!project || !Strata::Tests::WriteStressTopDownScene(*project, spec, error))
+		if (!project || !Strata::Tests::WriteStressTopDownScene(*project, spec, error) || !Strata::Tests::WriteStressFlightScene(*project, spec, error))
 		{
 			std::fprintf(stderr, "Cannot write the stress project: %s\n", error.c_str());
 			return 1;
@@ -646,8 +646,9 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	if (mode == "write-stress-game")
 	{
 		// <directory>: writes the streaming stress project into <directory>/Stress, imports it and builds its pack with the
-		// manifests PerfGPU.Streaming runs (Stress.stgame from the world's overview camera, StressTopDown.stgame from above),
-		// to run the exported stress game by hand: StrataRuntime --game <directory>/StressTopDown.stgame --perf-log <csv>.
+		// manifests PerfGPU.Streaming runs (Stress.stgame from the world's overview camera, StressTopDown.stgame from above;
+		// StressFlight.stgame starts the flight scene, whose terrain is textured), to run the exported stress game by hand:
+		// StrataRuntime --game <directory>/StressTopDown.stgame --perf-log <csv>.
 		if (argc != 3)
 			return 2;
 		Strata::LogSpecification logSpecification;
@@ -658,10 +659,11 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		const std::filesystem::path directory = Strata::FileSystem::FromUTF8(argv[2]);
 		const Strata::Tests::StressProjectSpec spec;
 		std::optional<Strata::Tests::StressProject> project = Strata::Tests::WriteStressProject(directory / "Stress", spec, error);
-		bool written = project && Strata::Tests::WriteStressTopDownScene(*project, spec, error)
+		bool written = project && Strata::Tests::WriteStressTopDownScene(*project, spec, error) && Strata::Tests::WriteStressFlightScene(*project, spec, error)
 			&& Strata::Tests::BuildStressPack(*project, directory / "Stress.stpak", error);
 		for (const auto& [scene, file] : { std::pair { project ? project->WorldScene : Strata::UUID::Null(), "Stress.stgame" },
-			std::pair { project ? project->TopDownScene : Strata::UUID::Null(), "StressTopDown.stgame" } })
+			std::pair { project ? project->TopDownScene : Strata::UUID::Null(), "StressTopDown.stgame" },
+			std::pair { project ? project->FlightScene : Strata::UUID::Null(), "StressFlight.stgame" } })
 		{
 			if (!written)
 				break;
