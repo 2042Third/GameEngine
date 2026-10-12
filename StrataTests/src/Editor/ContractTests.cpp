@@ -122,6 +122,17 @@ TEST_SUITE("Editor.UI.Dialogs")
 		editor.Run("editor.showDialog", { { "dialog", "about" } });
 		editor.Frames(2);
 		CHECK(editor.Layer->GetAboutDialog().IsOpen());
+
+		// The window's commands change what the person sees, not the project: replays leave them out (Editor.Journal checks
+		// the registry's own commands).
+		for (const char* name : { "editor.showDialog", "editor.showPanel" })
+		{
+			CAPTURE(name);
+			const EditorCommand* command = editor.Layer->GetCommands().Find(name);
+			REQUIRE(command);
+			CHECK(command->Kind == EditorCommandKind::Session);
+			CHECK(command->Results == EditorCommandResults::Content);
+		}
 	}
 
 	TEST_CASE("editor.showDialog opens the project dialogs and the export dialog of an open project")

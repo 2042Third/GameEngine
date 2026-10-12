@@ -20,8 +20,10 @@
 #include <algorithm>
 #include <chrono>
 #include <future>
+#include <iterator>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -94,10 +96,100 @@ namespace
 		const CommandJournalEntry& Latest() { return Journal().GetEntries().back(); }
 	};
 
+	// The kind of every built-in command (EditorCommandKind): what replays repeat (Edit), leave out as reads (Query) or as
+	// the editor's session (Session). A command left unmarked counts as an edit, so these lists make each new command's kind
+	// a decision. The two commands of the editor's window (EditorLayer) are checked in Editor.UI.Dialogs.
+	constexpr std::string_view c_EditCommands[] = {
+		"animation.createController", "animation.setController",
+		"asset.createFolder", "asset.delete", "asset.deleteFolder", "asset.import", "asset.move", "asset.moveFolder", "asset.reimport",
+		"asset.setImportSettings",
+		"component.add", "component.remove", "component.set",
+		"edit.redo", "edit.undo",
+		"entity.create", "entity.delete", "entity.dropToGround", "entity.duplicate", "entity.paste", "entity.rename", "entity.setActive",
+		"entity.setParent",
+		"material.create", "material.set",
+		"prefab.apply", "prefab.create", "prefab.instantiate", "prefab.revert", "prefab.unpack",
+		"project.setExportSettings", "project.setStartScene",
+		"scene.loadAdditive", "scene.new", "scene.open", "scene.save", "scene.saveAs", "scene.setSettings", "scene.unloadAdditive",
+		"script.add", "script.build", "script.create", "script.init", "script.load", "script.reload", "script.remove", "script.setField",
+	};
+	constexpr std::string_view c_QueryCommands[] = {
+		"animation.info",
+		"asset.findReferences", "asset.info", "asset.list", "asset.stats",
+		"camera.get",
+		"component.get", "component.list",
+		"edit.history",
+		"editor.activity", "editor.commands", "editor.perf", "editor.recentProjects", "editor.status", "editor.wait",
+		"entity.copy", "entity.find", "entity.get",
+		"input.state",
+		"log.read",
+		"material.get",
+		"play.state",
+		"prefab.status",
+		"project.exportStatus", "project.info", "project.samples", "project.templates",
+		"scene.hierarchy", "scene.info", "scene.loadStatus", "scene.recoveryStatus",
+		"script.get", "script.list", "script.status",
+		"selection.get",
+		"viewport.capture", "viewport.getSettings",
+	};
+	constexpr std::string_view c_SessionCommands[] = {
+		"animation.preview",
+		"asset.setBudget",
+		"camera.focus", "camera.set",
+		"editor.activity.export", "editor.quit", "editor.removeRecentProject",
+		"input.gamepadAxis", "input.gamepadButton", "input.key", "input.mouseButton", "input.mouseMove", "input.releaseAll", "input.scroll",
+		"play.pause", "play.simulate", "play.start", "play.step", "play.stop",
+		"prefab.select",
+		"project.cancelExport", "project.close", "project.create", "project.export", "project.open", "project.openSample",
+		"scene.recover",
+		"script.open", "script.setExternalEditor",
+		"selection.set",
+		"viewport.setSettings",
+	};
+	// Queries whose results show what the editor's session holds (EditorCommandResults::Session): replays never bind IDs
+	// from them.
+	constexpr std::string_view c_SessionResultCommands[] = {
+		"asset.stats", "camera.get", "edit.history", "editor.activity", "editor.perf", "editor.recentProjects", "editor.status", "input.state",
+		"log.read", "play.state", "project.exportStatus", "scene.loadStatus", "scene.recoveryStatus", "script.status", "selection.get",
+		"viewport.getSettings",
+	};
+
+	template<size_t N>
+	bool Contains(const std::string_view (&names)[N], std::string_view name)
+	{
+		return std::find(std::begin(names), std::end(names), name) != std::end(names);
+	}
+
 }
 
 TEST_SUITE("Editor.Journal")
 {
+	TEST_CASE("Every built-in command declares the kind its effect calls for, and which results follow the session")
+	{
+		EditorCommandRegistry registry;
+		size_t listed = 0;
+		for (const EditorCommand* command : registry.GetAll())
+		{
+			CAPTURE(command->Name);
+			const bool edit = Contains(c_EditCommands, command->Name);
+			const bool query = Contains(c_QueryCommands, command->Name);
+			const bool session = Contains(c_SessionCommands, command->Name);
+			// A new command goes into the list of its kind (and its kind into its registration).
+			REQUIRE(static_cast<int>(edit) + static_cast<int>(query) + static_cast<int>(session) == 1);
+			listed++;
+			if (edit)
+				CHECK(command->Kind == EditorCommandKind::Edit);
+			else if (query)
+				CHECK(command->Kind == EditorCommandKind::Query);
+			else
+				CHECK(command->Kind == EditorCommandKind::Session);
+			const bool sessionResults = Contains(c_SessionResultCommands, command->Name);
+			CHECK(command->Results == (sessionResults ? EditorCommandResults::Session : EditorCommandResults::Content));
+		}
+		// No list names a command the registry lacks.
+		CHECK(listed == std::size(c_EditCommands) + std::size(c_QueryCommands) + std::size(c_SessionCommands));
+	}
+
 	TEST_CASE("Commands of every source are recorded once, with their source and the client's name")
 	{
 		JournalHarness harness;
