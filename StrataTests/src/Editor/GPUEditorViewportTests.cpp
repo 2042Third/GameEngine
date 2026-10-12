@@ -11,6 +11,7 @@
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
@@ -27,6 +28,7 @@
 #include <memory>
 #include <optional>
 #include <thread>
+#include <vector>
 
 using namespace Strata;
 
@@ -135,6 +137,9 @@ namespace
 		EditorContext Context { EditorContextSpecification { false } };
 		EditorCommandRegistry Commands;
 		EditorCommandRunner Runner;
+		// When set, RunFrames runs device frames around the editor's frames, as the application does: the GPU's work of each
+		// frame is retired before frames in flight run out (a capture that renders on many frames needs it).
+		Tests::GPUContext* DeviceFrames = nullptr;
 
 		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{
@@ -155,8 +160,15 @@ namespace
 			int frames = 0;
 			for (; !*completed && frames < 20000; frames++)
 			{
+				if (DeviceFrames)
+				{
+					REQUIRE(DeviceFrames->GetDevice().BeginFrame());
+					Renderer::BeginFrame();
+				}
 				Context.Update(Timestep(1.0f / 60.0f));
 				Runner.Update(Context);
+				if (DeviceFrames)
+					DeviceFrames->GetDevice().EndFrame();
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
 			REQUIRE(*completed);
@@ -859,6 +871,67 @@ TEST_SUITE("GPU.Editor.Viewport")
 		// The project closes after a capture: its asset manager goes with it, whatever the capture renderer drew last.
 		harness.Run("project.close");
 		CHECK(closed.expired());
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture counts a texture at its tail as loaded and reports the levels a texture budget keeps from it")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		// The capture under a budget renders on 120 frames.
+		harness.DeviceFrames = &gpu;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("CaptureMipBudget") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" }, { "template", "basic3d" } });
+		harness.Run("project.close");
+		// A 1024x1024 texture of fine stripes, imported as the project opens: a view close to it wants its finer levels.
+		constexpr uint32_t size = 1024;
+		std::vector<uint8_t> pixels(size * size * 4, 255);
+		for (uint32_t y = 0; y < size; y++)
+		{
+			for (uint32_t x = 0; x < size; x++)
+			{
+				const uint8_t value = (x / 4) % 2 == 0 ? 40 : 220;
+				for (uint32_t channel = 0; channel < 3; channel++)
+					pixels[(static_cast<size_t>(y) * size + x) * 4 + channel] = value;
+			}
+		}
+		REQUIRE(FileSystem::WriteBytes(directory / "Assets" / "Textures" / "Stripes.png", Tests::EncodePNG(size, size, pixels)));
+		const EditorCommandResult opened = harness.RunFrames("project.open", { { "path", FileSystem::ToUTF8(directory) } });
+		REQUIRE_MESSAGE(opened.Success, opened.Error);
+		const AssetHandle stripes = harness.Context.GetAssetManager()->FindAssetByPath("Textures/Stripes.png");
+		REQUIRE(stripes.IsValid());
+		const nlohmann::json material = harness.Run("material.create", { { "path", "Materials/Stripes.stmat" },
+			{ "properties", { { "BaseColorMap", UUIDToJson(stripes) }, { "Unlit", true } } } });
+		harness.Run("entity.create", { { "name", "Floor" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::PlaneMesh) },
+			{ "Material", material["asset"] } } }, { "Transform", { { "Translation", { 0, 0.05, 0 } }, { "Scale", { 4, 1, 4 } } } } } } });
+		harness.Run("camera.set", { { "position", { 0, 2, 2 } }, { "target", { 0, 0, 0 } } });
+		const nlohmann::json parameters = { { "width", 320 }, { "height", 180 }, { "overlays", false }, { "debugView", "mip" } };
+		const auto lacking = [](const nlohmann::json& result)
+		{
+			const nlohmann::json& perShortfall = result["debugView"]["entitiesPerMipShortfall"];
+			return perShortfall[1].get<int>() + perShortfall[2].get<int>() + perShortfall[3].get<int>();
+		};
+
+		// Within 10 KB of textures the stripes keep at most their 64x64 level. The texture's tail is resident, so it is no
+		// pending asset; it lacks the levels the view wants, so the capture waits its bounded frames for them and reports it.
+		harness.Run("asset.setBudget", { { "gpuTexturesMB", 0.01 } });
+		nlohmann::json budgeted;
+		harness.Capture(parameters, &budgeted);
+		CHECK(budgeted["pendingAssets"] == 0);
+		CHECK(budgeted["texturesBelowWanted"] == 1);
+		CHECK(budgeted["waitedFrames"] == 120);
+		CHECK(lacking(budgeted) == 1);
+
+		// With the budget back, the capture waits until the levels arrive and lacks none.
+		harness.Run("asset.setBudget", { { "reset", true } });
+		nlohmann::json whole;
+		harness.Capture(parameters, &whole);
+		CHECK(whole["pendingAssets"] == 0);
+		CHECK(whole["texturesBelowWanted"] == 0);
+		CHECK(whole["waitedFrames"].get<int>() < 120);
+		CHECK(lacking(whole) == 0);
+		CHECK(whole["debugView"]["entitiesPerMipShortfall"][0].get<int>() >= 1);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
