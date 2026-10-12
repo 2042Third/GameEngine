@@ -10,6 +10,7 @@
 #include <iterator>
 #include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace Strata
@@ -190,83 +191,141 @@ namespace Strata
 		return classes;
 	}
 
+	namespace
+	{
+
+		// The walk of ListScriptSources and StampScriptSources: code files are read for their classes only when `readClasses`.
+		ScriptSourceListing CollectScriptSources(const std::filesystem::path& directory, const ScriptSourceListing* previous, size_t maxFiles,
+			size_t maxEntries, bool readClasses)
+		{
+			ScriptSourceListing listing;
+			if (!FileSystem::IsDirectory(directory))
+				return listing;
+
+			// The classes of the previous listing, lent to files whose size and write time are unchanged.
+			std::unordered_map<std::string_view, const ScriptSourceFile*> known;
+			if (previous)
+			{
+				for (const ScriptSourceFile& file : previous->Files)
+					known.emplace(file.Path, &file);
+			}
+
+			size_t entries = 0;
+			std::error_code error;
+			std::filesystem::recursive_directory_iterator it(directory, std::filesystem::directory_options::skip_permission_denied, error);
+			for (; !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
+			{
+				if (++entries > maxEntries)
+				{
+					listing.Truncated = true;
+					break;
+				}
+				const std::filesystem::path& path = it->path();
+				const std::string name = FileSystem::ToUTF8(path.filename());
+				std::error_code typeError;
+				if (it->is_directory(typeError))
+				{
+					// An IDE's folder, version control, or a build tree: none of it is the scripts' source.
+					if ((!name.empty() && name.front() == '.') || FileSystem::IsRegularFile(path / "CMakeCache.txt"))
+						it.disable_recursion_pending();
+					continue;
+				}
+				if (!IsScriptSourceFileName(name) || !it->is_regular_file(typeError))
+					continue;
+				if (listing.Files.size() >= maxFiles)
+				{
+					listing.Truncated = true;
+					break;
+				}
+
+				ScriptSourceFile file;
+				file.Path = FileSystem::ToUTF8(path.lexically_relative(directory));
+				file.Size = FileSystem::GetFileSize(path).value_or(0);
+				file.LastWriteTime = FileSystem::GetLastWriteTime(path).value_or(0);
+				if (readClasses && IsScriptCodeFileName(name))
+				{
+					const auto found = known.find(file.Path);
+					if (found != known.end() && found->second->Size == file.Size && found->second->LastWriteTime == file.LastWriteTime)
+					{
+						file.Classes = found->second->Classes;
+					}
+					else if (file.Size <= c_MaxClassScanBytes)
+					{
+						if (const std::optional<std::string> text = FileSystem::ReadText(path))
+							file.Classes = FindScriptClassRegistrations(*text);
+					}
+				}
+				listing.Files.push_back(std::move(file));
+			}
+
+			// By path ignoring case (each lowered once), and by the exact path where only case differs.
+			std::vector<std::pair<std::string, size_t>> order;
+			order.reserve(listing.Files.size());
+			for (size_t index = 0; index < listing.Files.size(); index++)
+				order.emplace_back(StringUtils::ToLower(listing.Files[index].Path), index);
+			std::sort(order.begin(), order.end(), [&listing](const std::pair<std::string, size_t>& a, const std::pair<std::string, size_t>& b)
+			{
+				return a.first != b.first ? a.first < b.first : listing.Files[a.second].Path < listing.Files[b.second].Path;
+			});
+			std::vector<ScriptSourceFile> sorted;
+			sorted.reserve(order.size());
+			for (const std::pair<std::string, size_t>& entry : order)
+				sorted.push_back(std::move(listing.Files[entry.second]));
+			listing.Files = std::move(sorted);
+			return listing;
+		}
+
+	}
+
 	ScriptSourceListing ListScriptSources(const std::filesystem::path& directory, const ScriptSourceListing* previous, size_t maxFiles, size_t maxEntries)
 	{
-		ScriptSourceListing listing;
-		if (!FileSystem::IsDirectory(directory))
-			return listing;
+		return CollectScriptSources(directory, previous, maxFiles, maxEntries, true);
+	}
 
-		// The classes of the previous listing, lent to files whose size and write time are unchanged.
-		std::unordered_map<std::string_view, const ScriptSourceFile*> known;
-		if (previous)
+	ScriptSourceListing StampScriptSources(const std::filesystem::path& directory)
+	{
+		return CollectScriptSources(directory, nullptr, c_MaxListedScriptSources, c_MaxScannedScriptEntries, false);
+	}
+
+	std::optional<ScriptSourceChange> FindScriptSourceChange(const ScriptSourceListing& before, const ScriptSourceListing& after)
+	{
+		std::unordered_map<std::string_view, const ScriptSourceFile*> earlier;
+		earlier.reserve(before.Files.size());
+		for (const ScriptSourceFile& file : before.Files)
+			earlier.emplace(file.Path, &file);
+		size_t kept = 0;
+		for (const ScriptSourceFile& file : after.Files)
 		{
-			for (const ScriptSourceFile& file : previous->Files)
-				known.emplace(file.Path, &file);
+			const auto found = earlier.find(file.Path);
+			if (found == earlier.end())
+				return ScriptSourceChange { file.Path, ScriptSourceChangeKind::Added };
+			if (found->second->Size != file.Size || found->second->LastWriteTime != file.LastWriteTime)
+				return ScriptSourceChange { file.Path, ScriptSourceChangeKind::Changed };
+			kept++;
 		}
-
-		size_t entries = 0;
-		std::error_code error;
-		std::filesystem::recursive_directory_iterator it(directory, std::filesystem::directory_options::skip_permission_denied, error);
-		for (; !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
+		if (kept == before.Files.size())
+			return std::nullopt;
+		std::unordered_set<std::string_view> later;
+		later.reserve(after.Files.size());
+		for (const ScriptSourceFile& file : after.Files)
+			later.insert(file.Path);
+		for (const ScriptSourceFile& file : before.Files)
 		{
-			if (++entries > maxEntries)
-			{
-				listing.Truncated = true;
-				break;
-			}
-			const std::filesystem::path& path = it->path();
-			const std::string name = FileSystem::ToUTF8(path.filename());
-			std::error_code typeError;
-			if (it->is_directory(typeError))
-			{
-				// An IDE's folder, version control, or a build tree: none of it is the scripts' source.
-				if ((!name.empty() && name.front() == '.') || FileSystem::IsRegularFile(path / "CMakeCache.txt"))
-					it.disable_recursion_pending();
-				continue;
-			}
-			if (!IsScriptSourceFileName(name) || !it->is_regular_file(typeError))
-				continue;
-			if (listing.Files.size() >= maxFiles)
-			{
-				listing.Truncated = true;
-				break;
-			}
-
-			ScriptSourceFile file;
-			file.Path = FileSystem::ToUTF8(path.lexically_relative(directory));
-			file.Size = FileSystem::GetFileSize(path).value_or(0);
-			file.LastWriteTime = FileSystem::GetLastWriteTime(path).value_or(0);
-			if (IsScriptCodeFileName(name))
-			{
-				const auto found = known.find(file.Path);
-				if (found != known.end() && found->second->Size == file.Size && found->second->LastWriteTime == file.LastWriteTime)
-				{
-					file.Classes = found->second->Classes;
-				}
-				else if (file.Size <= c_MaxClassScanBytes)
-				{
-					if (const std::optional<std::string> text = FileSystem::ReadText(path))
-						file.Classes = FindScriptClassRegistrations(*text);
-				}
-			}
-			listing.Files.push_back(std::move(file));
+			if (!later.contains(file.Path))
+				return ScriptSourceChange { file.Path, ScriptSourceChangeKind::Removed };
 		}
+		return std::nullopt;
+	}
 
-		// By path ignoring case (each lowered once), and by the exact path where only case differs.
-		std::vector<std::pair<std::string, size_t>> order;
-		order.reserve(listing.Files.size());
-		for (size_t index = 0; index < listing.Files.size(); index++)
-			order.emplace_back(StringUtils::ToLower(listing.Files[index].Path), index);
-		std::sort(order.begin(), order.end(), [&listing](const std::pair<std::string, size_t>& a, const std::pair<std::string, size_t>& b)
+	const char* ScriptSourceChangeKindToString(ScriptSourceChangeKind kind)
+	{
+		switch (kind)
 		{
-			return a.first != b.first ? a.first < b.first : listing.Files[a.second].Path < listing.Files[b.second].Path;
-		});
-		std::vector<ScriptSourceFile> sorted;
-		sorted.reserve(order.size());
-		for (const std::pair<std::string, size_t>& entry : order)
-			sorted.push_back(std::move(listing.Files[entry.second]));
-		listing.Files = std::move(sorted);
-		return listing;
+			case ScriptSourceChangeKind::Changed: return "changed";
+			case ScriptSourceChangeKind::Added:   return "was added";
+			case ScriptSourceChangeKind::Removed: return "was removed";
+		}
+		return "changed";
 	}
 
 	struct ScriptSourceList::Job

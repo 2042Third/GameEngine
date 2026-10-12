@@ -1559,10 +1559,16 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   (`ScriptSourceList`, whose job compares the new listing with the one before and shares it immutable, so the main
   thread neither copies nor compares files) when it is first drawn and every second while it is drawn, never while it is
   not, and rebuilds its rows only when the files or the search changed. Play builds
-  first: `play.start` asks `EditorContext::GetPlayBuildReason` (the project's module older than a source of the script
-  directory, or not loaded while a scene or prefab uses scripts: `DoScenesUseScripts`, the edited scene's Script
-  components and a scan of the project's scene and prefab files on an I/O thread when the project opens), starts the
-  build (`StartPlayBuild`) and defers until it finished; a failure fails the command and raises
+  first: `play.start` asks `EditorContext::GetPlayBuildReason` and, when there is a reason, starts the build
+  (`StartPlayBuild`) and defers until it finished. The reasons: the project's module not loaded while a scene or prefab
+  uses scripts (`DoScenesUseScripts`, the edited scene's Script components and a scan of the project's scene and prefab
+  files on an I/O thread when the project opens), or the sources changed since the module was built. Every build stamps
+  the sources it compiles when it starts (`StampScriptSources`: path, size and write time of the files `ListScriptSources`
+  finds, without reading them), and a successful one keeps that stamp with the module file it left (its write time and
+  size); while the module is still that file, the sources are compared with the stamp (`FindScriptSourceChange`: a file
+  changed, added or removed), so a build that left the module as it was (an up-to-date build, a header nothing includes,
+  a CMake comment) settles the reason, and deleted or renamed files count. A module someone else wrote (an IDE's build, an
+  earlier session) has no stamp: a source newer than it is the reason then. A failed build fails the command and raises
   `GetProblemsPanelRequests`, which `EditorLayer` turns into showing the Problems panel (`Panels/ProblemsPanel`: the
   last build's diagnostics and the crash with its stack, without the SDK's internal `Strata::Detail` frames, rebuilt only
   when the build or the crash changed; the project's

@@ -8,6 +8,7 @@
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/ScriptBuild.h"
+#include "Editor/ScriptSources.h"
 #include "Editor/SimulatedInput.h"
 #include "Editor/UndoStack.h"
 
@@ -267,8 +268,11 @@ namespace Strata
 		bool DoScenesUseScripts() const;
 		// Why play mode has to build the scripts first, or nothing when it does not: the project's module is not loaded
 		// although scenes use scripts (never built, or built by another engine), or its sources (code and CMake files in the
-		// script directory) are newer than its module file. Never for a module loaded from elsewhere (script.load) or a
-		// project without a script build. Reads file times.
+		// script directory, StampScriptSources) changed since it was built. While the module is the one the editor's last
+		// successful build left, that compares the sources with what that build compiled, file by file (a build that changed
+		// nothing in the module, a file the module does not compile, a deleted or renamed file); for a module built
+		// elsewhere (an IDE, an earlier session) it asks whether a source is newer than the module file. Never for a module
+		// loaded from elsewhere (script.load) or a project without a script build. Reads the script directory.
 		std::optional<std::string> GetPlayBuildReason() const;
 		// Starts the build play mode waits for (BuildScripts); GetPlayBuildID names it until ClearPlayBuild.
 		bool StartPlayBuild(std::string* outError = nullptr);
@@ -431,6 +435,17 @@ namespace Strata
 		ScriptBuildLoad m_LastScriptBuildLoad;
 		std::optional<ScriptFault> m_LastScriptFault;
 		uint64_t m_PlayBuildID = 0;
+		// The sources the running build compiles (taken when it started), and those the last successful build compiled with
+		// the module file it left (another write time or size: someone else built it since). See GetPlayBuildReason.
+		struct BuiltScriptSources
+		{
+			ScriptSourceListing Sources;
+			int64_t ModuleTime = 0;
+			uint64_t ModuleSize = 0;
+		};
+		std::optional<ScriptSourceListing> m_BuildingScriptSources;
+		uint64_t m_BuildingScriptSourcesID = 0;
+		std::optional<BuiltScriptSources> m_BuiltScriptSources;
 		uint64_t m_ProblemsPanelRequests = 0;
 		bool m_ScriptFaultLocationPending = false; // m_LastScriptFault waits for its symbolization
 		ExternalEditorLauncher m_ExternalEditor;

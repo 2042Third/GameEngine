@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -55,6 +56,29 @@ namespace Strata
 	// directory lists nothing. The limits are c_MaxListedScriptSources and c_MaxScannedScriptEntries unless given.
 	ScriptSourceListing ListScriptSources(const std::filesystem::path& directory, const ScriptSourceListing* previous = nullptr,
 		size_t maxFiles = c_MaxListedScriptSources, size_t maxEntries = c_MaxScannedScriptEntries);
+	// The same files with their sizes and write times, read from the directory alone (Classes stay empty): what a script
+	// build compiles, to compare with what an earlier build compiled (FindScriptSourceChange).
+	ScriptSourceListing StampScriptSources(const std::filesystem::path& directory);
+
+	enum class ScriptSourceChangeKind : uint8_t
+	{
+		Changed = 0, // Another size or write time
+		Added,
+		Removed
+	};
+
+	// "changed", "was added", "was removed".
+	const char* ScriptSourceChangeKindToString(ScriptSourceChangeKind kind);
+
+	struct ScriptSourceChange
+	{
+		std::string Path; // Relative to the script directory (ScriptSourceFile::Path)
+		ScriptSourceChangeKind Kind = ScriptSourceChangeKind::Changed;
+	};
+
+	// The first difference between two listings of a script directory (a file whose size or write time changed, then one
+	// that was added, then one that was removed), or nothing when they hold the same files.
+	std::optional<ScriptSourceChange> FindScriptSourceChange(const ScriptSourceListing& before, const ScriptSourceListing& after);
 
 	// Lists a script directory on an I/O thread (ListScriptSources) for the main thread, which polls Update once per frame
 	// while it shows the files: nothing runs between refreshes, and a refresh asked for while a listing runs starts when it

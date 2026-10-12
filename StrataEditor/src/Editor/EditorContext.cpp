@@ -100,41 +100,6 @@ namespace Strata
 			return false;
 		}
 
-		// The newest code or CMake file of a script directory (hidden folders, such as an IDE's, are skipped).
-		struct ScriptSourceTime
-		{
-			std::filesystem::path Path;
-			int64_t Time = 0;
-		};
-
-		std::optional<ScriptSourceTime> FindNewestScriptSource(const std::filesystem::path& directory)
-		{
-			constexpr std::string_view c_Extensions[] = { ".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hh", ".hxx", ".inl", ".ipp", ".cmake" };
-			std::optional<ScriptSourceTime> newest;
-			std::error_code error;
-			std::filesystem::recursive_directory_iterator it(directory, std::filesystem::directory_options::skip_permission_denied, error);
-			for (; !error && it != std::filesystem::recursive_directory_iterator(); it.increment(error))
-			{
-				const std::filesystem::path& path = it->path();
-				const std::string name = FileSystem::ToUTF8(path.filename());
-				std::error_code typeError;
-				if (it->is_directory(typeError))
-				{
-					if (!name.empty() && name.front() == '.')
-						it.disable_recursion_pending();
-					continue;
-				}
-				const std::string extension = FileSystem::ToUTF8(path.extension());
-				const bool source = name == "CMakeLists.txt" || std::find(std::begin(c_Extensions), std::end(c_Extensions), extension) != std::end(c_Extensions);
-				if (!source || !it->is_regular_file(typeError))
-					continue;
-				const std::optional<int64_t> time = FileSystem::GetLastWriteTime(path);
-				if (time && (!newest || *time > newest->Time))
-					newest = ScriptSourceTime { path, *time };
-			}
-			return newest;
-		}
-
 	}
 
 	EditorContext::EditorContext(const EditorContextSpecification& specification)
@@ -914,13 +879,33 @@ namespace Strata
 			// A module loaded from elsewhere (script.load) is the one to run.
 			if (m_ScriptEngine->GetModulePath() != projectModule)
 				return std::nullopt;
-			const std::optional<int64_t> built = FileSystem::GetLastWriteTime(module);
-			const std::optional<ScriptSourceTime> newest = FindNewestScriptSource(m_Project->GetScriptSourceDirectory());
-			if (built && newest && newest->Time > *built)
+			const std::filesystem::path scripts = m_Project->GetScriptSourceDirectory();
+			const auto describe = [&](const std::string& file, const char* what)
 			{
-				return fmt::format("'{}' changed after the scripts were built",
-					FileSystem::ToUTF8(newest->Path.lexically_relative(m_Project->GetProjectDirectory())));
+				const std::filesystem::path relative = (scripts / FileSystem::FromUTF8(file)).lexically_relative(m_Project->GetProjectDirectory());
+				return fmt::format("'{}' {} after the scripts were built", FileSystem::ToUTF8(relative), what);
+			};
+			const ScriptSourceListing sources = StampScriptSources(scripts);
+			const std::optional<int64_t> moduleTime = FileSystem::GetLastWriteTime(module);
+			const std::optional<uint64_t> moduleSize = FileSystem::GetFileSize(module);
+			// The module the editor's last build left: what changed since that build compiled them. A build that left the
+			// module as it was (nothing it compiles changed) settles it like one that wrote a new module.
+			if (m_BuiltScriptSources && moduleTime == m_BuiltScriptSources->ModuleTime && moduleSize == m_BuiltScriptSources->ModuleSize)
+			{
+				if (const std::optional<ScriptSourceChange> change = FindScriptSourceChange(m_BuiltScriptSources->Sources, sources))
+					return describe(change->Path, ScriptSourceChangeKindToString(change->Kind));
+				return std::nullopt;
 			}
+			// A module built elsewhere (an IDE, an earlier session): what it was built from is unknown, so a source newer than
+			// it is the sign.
+			const ScriptSourceFile* newest = nullptr;
+			for (const ScriptSourceFile& file : sources.Files)
+			{
+				if (!newest || file.LastWriteTime > newest->LastWriteTime)
+					newest = &file;
+			}
+			if (moduleTime && newest && newest->LastWriteTime > *moduleTime)
+				return describe(newest->Path, "changed");
 			return std::nullopt;
 		}
 		if (!DoScenesUseScripts())
@@ -992,6 +977,8 @@ namespace Strata
 	{
 		m_ScriptBuilder.Cancel();
 		m_PlayBuildID = 0;
+		m_BuildingScriptSources.reset();
+		m_BuiltScriptSources.reset();
 		if (m_ScriptUsageScan)
 			m_ScriptUsageScan->Cancelled = true;
 		m_ScriptUsageScan.reset();
@@ -1108,6 +1095,10 @@ namespace Strata
 		// A refused request (e.g. while a build runs) leaves the file watcher alone: a running build has paused it.
 		if (!m_ScriptBuilder.Start(*m_Project, m_Specification.ScriptBuild, outError))
 			return false;
+		// What this build compiles, for GetPlayBuildReason once it succeeded: the sources as they are now, before the
+		// compiler reads them (a file saved later counts as changed after the build).
+		m_BuildingScriptSources = StampScriptSources(m_Project->GetScriptSourceDirectory());
+		m_BuildingScriptSourcesID = m_ScriptBuilder.GetCurrentID();
 		// The build reloads the module itself once it finished; the file watcher would reload it a second time when the
 		// linker writes it.
 		m_ScriptEngine->SetHotReloadEnabled(false);
@@ -1128,6 +1119,15 @@ namespace Strata
 		// the next build can replace the file. It only reports changes from now on, so it does not reload this build again.
 		if (m_ScriptEngine)
 			m_ScriptEngine->SetHotReloadEnabled(m_Specification.HotReloadScripts);
+		std::optional<ScriptSourceListing> compiled = std::move(m_BuildingScriptSources);
+		m_BuildingScriptSources.reset();
+		if (result.Success && compiled && m_BuildingScriptSourcesID == result.ID)
+		{
+			const std::optional<int64_t> moduleTime = FileSystem::GetLastWriteTime(result.Module);
+			const std::optional<uint64_t> moduleSize = FileSystem::GetFileSize(result.Module);
+			if (moduleTime && moduleSize)
+				m_BuiltScriptSources = BuiltScriptSources { std::move(*compiled), *moduleTime, *moduleSize };
+		}
 		if (result.Success && m_ScriptEngine)
 		{
 			std::error_code error;

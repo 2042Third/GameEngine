@@ -378,6 +378,16 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		CHECK(harness.Context.GetPlayBuildID() == 0);
 		harness.Run("play.stop");
 
+		// The build compiled what changed: although it left the module as it was (as an up-to-date build does), the next play
+		// plays at once.
+		CHECK_FALSE(harness.Context.GetPlayBuildReason());
+		CHECK(harness.Run("script.status")["playBuildsFirst"].is_null());
+		const nlohmann::json again = harness.Run("play.start");
+		CHECK_FALSE(again.contains("built"));
+		CHECK(harness.Context.IsPlaying());
+		CHECK(harness.Context.GetScriptBuilder().GetLastResult().ID == buildsBefore + 1);
+		harness.Run("play.stop");
+
 		// build: false plays at once.
 		harness.Run("play.start", { { "build", false } });
 		CHECK(harness.Context.IsPlaying());
@@ -388,6 +398,68 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		CHECK_FALSE(harness.Context.GetPlayBuildReason());
 		harness.Run("play.start");
 		CHECK(harness.Context.IsPlaying());
+	}
+
+	TEST_CASE("Play builds again for sources added, changed or removed since its build, whatever the module compiles")
+	{
+		ScopedEnvironmentVariable fakeCMake("STRATA_TEST_FAKE_CMAKE", "succeed");
+		WorkflowHarness harness(MakeFakeBuildSpecification());
+		const std::filesystem::path scripts = harness.GetProject().GetScriptSourceDirectory();
+		const std::filesystem::path module = harness.GetProject().GetScriptModulePath();
+		REQUIRE(FileSystem::CreateDirectories(module.parent_path()));
+		REQUIRE(FileSystem::Copy(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), module));
+		harness.Run("script.reload");
+		// The stand-in for CMake builds nothing: the module stays as it was, older than every source.
+		const auto build = [&harness]()
+		{
+			const EditorCommandResult built = harness.Complete("script.build", { { "wait", true } });
+			REQUIRE_MESSAGE(built.Success, built.Error);
+			CHECK(built.Value["moduleChanged"] == false);
+		};
+		const auto reason = [&harness]() { return harness.Context.GetPlayBuildReason().value_or(std::string()); };
+		REQUIRE_FALSE(reason().empty());
+		build();
+		CHECK(reason().empty());
+
+		// Files the module does not compile count too: a header no code includes yet, C code, CMake files.
+		REQUIRE(FileSystem::WriteText(scripts / "Unused.hpp", "#pragma once\n"));
+		CHECK(reason() == "'Scripts/Unused.hpp' was added after the scripts were built");
+		build();
+		CHECK(reason().empty());
+		REQUIRE(FileSystem::WriteText(scripts / "Helpers.c", "int Helper(void) { return 1; }\n"));
+		REQUIRE(FileSystem::WriteText(scripts / "Player.CPP", "// The extension's case does not matter\n"));
+		CHECK(reason().find("was added after the scripts were built") != std::string::npos);
+		build();
+		CHECK(reason().empty());
+
+		// A changed file, a file that was removed.
+		REQUIRE(FileSystem::WriteText(scripts / "Spinner.cpp", *FileSystem::ReadText(scripts / "Spinner.cpp") + "// Changed\n"));
+		CHECK(reason() == "'Scripts/Spinner.cpp' changed after the scripts were built");
+		build();
+		CHECK(reason().empty());
+		REQUIRE(FileSystem::Remove(scripts / "Player.CPP"));
+		CHECK(reason() == "'Scripts/Player.CPP' was removed after the scripts were built");
+		build();
+		CHECK(reason().empty());
+
+		// An IDE's build tree inside the scripts (its CMake files, its compiler checks) and hidden folders are not sources.
+		const std::filesystem::path ide = scripts / "out" / "build";
+		REQUIRE(FileSystem::CreateDirectories(ide / "CMakeFiles"));
+		REQUIRE(FileSystem::WriteText(ide / "CMakeCache.txt", "# CMake's cache\n"));
+		REQUIRE(FileSystem::WriteText(ide / "CMakeFiles" / "CMakeCXXCompilerId.cpp", "int main() { return 0; }\n"));
+		REQUIRE(FileSystem::WriteText(ide / "CMakeFiles" / "Targets.cmake", "# Generated\n"));
+		REQUIRE(FileSystem::CreateDirectories(scripts / ".vscode"));
+		REQUIRE(FileSystem::WriteText(scripts / ".vscode" / "Tasks.cmake", "# The IDE's\n"));
+		CHECK(reason().empty());
+
+		// A module rebuilt elsewhere (an IDE's build, hot reloaded) was built from what is there: only sources newer than it
+		// count then.
+		std::error_code error;
+		std::filesystem::last_write_time(module, std::filesystem::file_time_type::clock::now() + std::chrono::hours(1), error);
+		REQUIRE_FALSE(error);
+		CHECK(reason().empty());
+		REQUIRE(FileSystem::Remove(scripts / "Unused.hpp"));
+		CHECK(reason().empty()); // Its removal leaves nothing newer than the module
 	}
 
 	TEST_CASE("A play whose build fails fails with the build's errors and asks for the Problems panel")

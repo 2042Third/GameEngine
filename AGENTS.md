@@ -652,10 +652,12 @@ Building and loading scripts:
   outside the editor, and calls `Update()` once per frame before the scene. A successful `script.build` loads the module,
   or reloads it when it changed (hot reload while playing; the file watcher is paused during editor builds so the module
   reloads once). **Play builds first:** `play.start` (and the toolbar's Play, through the runner) builds the scripts when
-  the project's module is older than a source of the script directory, or not loaded while scenes use scripts
-  (`GetPlayBuildReason`; never for a module loaded with `script.load`), waits for a build that runs, and plays once the
-  build succeeded; a failed build fails `play.start` with its first diagnostics and asks the UI for the Problems panel
-  (`RequestProblemsPanel`); `play.start {build: false}` plays what is loaded. A crash while playing stops play mode and
+  the sources of the script directory changed since the module was built (compared with what the editor's last successful
+  build compiled while the module is still the file it left, so builds that leave the module unchanged settle it and
+  removed files count; for a module built elsewhere, a source newer than it), or the module is not loaded while scenes use
+  scripts (`GetPlayBuildReason`; never for a module loaded with `script.load`), waits for a build that runs, and plays
+  once the build succeeded; a failed build fails `play.start` with its first diagnostics and asks the UI for the Problems
+  panel (`RequestProblemsPanel`); `play.start {build: false}` plays what is loaded. A crash while playing stops play mode and
   logs the class, callback and entity, and where it happened once symbolization (a job) finished (see Scripting,
   "Contained"); `play.start` then fails until the module is rebuilt (a successful build loads a crashed module again even
   when it did not change) or reloaded. `script.load {path}` runs another module file (tests use in-tree modules this
