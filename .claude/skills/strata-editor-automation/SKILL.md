@@ -131,7 +131,8 @@ editor started with `--no-gpu` (use `--headless`):
   `script.setField`, `script.reload` (see
   `.claude/skills/strata-scripting/SKILL.md`, "The workflow in a game project"). Builds need CMake and the engine's
   compiler on the machine; they work with `--no-gpu`. `script.open {"file", "line"}` shows a source line to the person
-  in their code editor (`script.setExternalEditor` sets which).
+  in their code editor (`script.setExternalEditor` sets which: its program must be a path or a name in PATH, and the
+  answer's `program` says which file it starts).
 
 ## 4. Conventions
 

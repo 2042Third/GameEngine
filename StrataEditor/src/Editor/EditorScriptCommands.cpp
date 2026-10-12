@@ -511,8 +511,10 @@ namespace Strata
 			"Sets the person's code editor, which script.open, the Problems panel and crash reports use: a command template such as "
 			"\"code -g {file}:{line}:{column}\" or \"\\\"C:/Program Files/.../devenv.exe\\\" /Edit {file}\" (whitespace separates arguments, double "
 			"quotes group them; {file}, {line}, {column} and {directory} are filled in; without {file} the file goes last). The program runs "
-			"directly, never through a shell, so name an executable, not a .cmd or .bat. An empty command goes back to the default application. "
-			"Saved in the user's editor settings (not the project); STRATA_EXTERNAL_EDITOR overrides it. Returns the command in use.",
+			"directly, never through a shell: a path, or a name found in PATH (VS Code's code launcher starts Code.exe), not a .cmd or .bat; a "
+			"program that is not there is refused. An empty command goes back to the default application. Saved in the user's editor "
+			"settings (not the project); STRATA_EXTERNAL_EDITOR overrides it. Returns the command in use and the program the person's command "
+			"starts (program).",
 			ObjectSchema({ { "command", StringSchema("The command template, or empty for none") } }, { "command" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -520,17 +522,21 @@ namespace Strata
 				const std::string command = arguments.GetString("command");
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				// The program must be there (a path, or a name in PATH): a command that cannot start would fail every later open.
+				std::optional<std::filesystem::path> program;
 				if (!command.empty())
 				{
-					if (std::optional<std::string> problem = ExternalEditor::ValidateCommand(command))
-						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'command': {}", *problem));
+					std::string problem;
+					program = ExternalEditor::ResolveProgram(command, &problem);
+					if (!program)
+						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'command': {}", problem));
 				}
 				std::string error;
 				if (!context.GetExternalEditor().SetUserCommand(command, &error))
 					return EditorCommandResult::Fail(error);
 				const ExternalEditorLauncher& editor = context.GetExternalEditor();
 				return EditorCommandResult::Ok({ { "command", editor.GetCommand() }, { "source", ExternalEditorSourceToString(editor.GetSource()) },
-					{ "userCommand", editor.GetUserCommand() } });
+					{ "userCommand", editor.GetUserCommand() }, { "program", program ? nlohmann::json(FileSystem::ToUTF8(*program)) : nlohmann::json(nullptr) } });
 			} });
 
 		registry.Register({ "script.add",

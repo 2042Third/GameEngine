@@ -563,6 +563,41 @@ namespace Strata
 		return true;
 	}
 
+	std::optional<std::filesystem::path> Platform::FindProgram(std::string_view program, std::vector<std::filesystem::path>* outSearched)
+	{
+		if (outSearched)
+			outSearched->clear();
+		if (program.empty())
+			return std::nullopt;
+		const auto isProgram = [](const std::filesystem::path& candidate)
+		{
+			std::error_code error;
+			return std::filesystem::is_regular_file(candidate, error) && access(candidate.c_str(), X_OK) == 0;
+		};
+		// A path: started as it is.
+		if (program.find('/') != std::string_view::npos)
+		{
+			const std::filesystem::path path = FileSystem::FromUTF8(program);
+			return isProgram(path) ? std::optional<std::filesystem::path>(path) : std::nullopt;
+		}
+		// A bare name: the directories of PATH in order (an empty entry would be the current directory, never searched).
+		const std::string path = GetEnvVar("PATH").value_or(std::string());
+		for (size_t start = 0; start <= path.size();)
+		{
+			const size_t end = std::min(path.find(':', start), path.size());
+			const std::filesystem::path directory = FileSystem::FromUTF8(std::string_view(path).substr(start, end - start));
+			start = end + 1;
+			if (directory.empty() || !directory.is_absolute())
+				continue;
+			if (outSearched)
+				outSearched->push_back(directory);
+			const std::filesystem::path candidate = directory / FileSystem::FromUTF8(program);
+			if (isProgram(candidate))
+				return candidate;
+		}
+		return std::nullopt;
+	}
+
 	std::optional<ProcessMemoryInfo> Platform::GetProcessMemory()
 	{
 		ProcessMemoryInfo memory;

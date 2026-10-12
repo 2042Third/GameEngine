@@ -115,6 +115,40 @@ namespace
 			FileSystem::ToUTF8(output));
 	}
 
+	// What separates the folders of PATH.
+#if defined(ST_PLATFORM_WINDOWS)
+	constexpr const char* c_PathListSeparator = ";";
+#else
+	constexpr const char* c_PathListSeparator = ":";
+#endif
+
+	// The file name of a program called `name` ("name.exe" on Windows).
+	std::string ProgramFileName(const std::string& name)
+	{
+#if defined(ST_PLATFORM_WINDOWS)
+		return name + ".exe";
+#else
+		return name;
+#endif
+	}
+
+	// Writes a file that stands for a program: finding a program only needs it to be there (and, on POSIX, executable).
+	std::filesystem::path WriteProgramFile(const std::filesystem::path& file)
+	{
+		REQUIRE(FileSystem::CreateDirectories(file.parent_path()));
+		REQUIRE(FileSystem::WriteText(file, "Not really a program\n"));
+		std::error_code error;
+		std::filesystem::permissions(file, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add, error);
+		REQUIRE_FALSE(error);
+		return file;
+	}
+
+	bool IsSameFile(const std::filesystem::path& a, const std::filesystem::path& b)
+	{
+		std::error_code error;
+		return std::filesystem::equivalent(a, b, error);
+	}
+
 	std::string Preferred(const std::filesystem::path& path)
 	{
 		std::filesystem::path native = path;
@@ -244,10 +278,70 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		CHECK_FALSE(ExternalEditor::ValidateCommand("code -g {file}:{line}"));
 	}
 
+	TEST_CASE("The external editor's program is found as the system finds programs: a path, or a name in PATH")
+	{
+		const std::filesystem::path tools = CreateTemporaryDirectory("EditorPrograms");
+		const std::filesystem::path editor = WriteProgramFile(tools / "Bin" / ProgramFileName("myeditor"));
+		ScopedEnvironmentVariable path("PATH", FileSystem::ToUTF8(tools / "Empty") + c_PathListSeparator + FileSystem::ToUTF8(tools / "Bin"));
+		std::string error;
+		std::optional<std::filesystem::path> program = ExternalEditor::ResolveProgram("myeditor --goto {file}:{line}", &error);
+		REQUIRE_MESSAGE(program, error);
+		CHECK(IsSameFile(*program, editor));
+		program = ExternalEditor::ResolveProgram(fmt::format("\"{}\" {{file}}", FileSystem::ToUTF8(editor)), &error);
+		REQUIRE_MESSAGE(program, error);
+		CHECK(IsSameFile(*program, editor));
+
+		// What is not there is refused, saying where it was looked for.
+		CHECK_FALSE(ExternalEditor::ResolveProgram("noeditor {file}", &error));
+		CHECK(error.find("'noeditor' in the 2 folders of PATH") != std::string::npos);
+		CHECK_FALSE(ExternalEditor::ResolveProgram(fmt::format("\"{}\" {{file}}", FileSystem::ToUTF8(tools / "Missing" / "editor")), &error));
+		CHECK(error.find("there is no program") != std::string::npos);
+		CHECK_FALSE(ExternalEditor::ResolveProgram("myeditor {unknown}", &error)); // And what cannot be a command at all
+
+#if defined(ST_PLATFORM_WINDOWS)
+		// VS Code puts a batch file in PATH (bin/code.cmd, beside a shell script named code) that starts the editor beside its
+		// folder, which takes the same arguments: that program is the one to start. Other batch files cannot be.
+		const std::filesystem::path vscode = tools / "Microsoft VS Code";
+		WriteProgramFile(vscode / "bin" / "code.cmd");
+		WriteProgramFile(vscode / "bin" / "code");
+		WriteProgramFile(tools / "Scripts" / "edit.cmd");
+		ScopedEnvironmentVariable launchers("PATH", FileSystem::ToUTF8(vscode / "bin") + c_PathListSeparator + FileSystem::ToUTF8(tools / "Scripts"));
+		CHECK_FALSE(ExternalEditor::ResolveProgram("code -g {file}", &error)); // Its editor is missing
+		CHECK(error.find("batch file") != std::string::npos);
+		const std::filesystem::path code = WriteProgramFile(vscode / "Code.exe");
+		program = ExternalEditor::ResolveProgram("code -g {file}:{line}:{column}", &error);
+		REQUIRE_MESSAGE(program, error);
+		CHECK(IsSameFile(*program, code));
+		CHECK_FALSE(ExternalEditor::ResolveProgram("edit {file}", &error));
+		CHECK(error.find("batch file") != std::string::npos);
+#endif
+	}
+
+	TEST_CASE("script.setExternalEditor refuses a program that is not there and reports the one it starts")
+	{
+		ScopedEnvironmentVariable noOverride("STRATA_EXTERNAL_EDITOR", "");
+		WorkflowHarness harness;
+		const std::filesystem::path editor = WriteProgramFile(CreateTemporaryDirectory("EditorPrograms") / ProgramFileName("myeditor"));
+		ScopedEnvironmentVariable path("PATH", FileSystem::ToUTF8(editor.parent_path()));
+		const EditorCommandResult refused = harness.Fail("script.setExternalEditor", { { "command", "noeditor -g {file}:{line}" } });
+		CHECK(refused.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(refused.Error.find("there is no program 'noeditor'") != std::string::npos);
+		CHECK(harness.Context.GetExternalEditor().GetUserCommand().empty());
+		const nlohmann::json set = harness.Run("script.setExternalEditor", { { "command", "myeditor -g {file}:{line}" } });
+		CHECK(set["userCommand"] == "myeditor -g {file}:{line}");
+		REQUIRE(set["program"].is_string());
+		CHECK(IsSameFile(FileSystem::FromUTF8(set["program"].get<std::string>()), editor));
+		CHECK(harness.Run("script.setExternalEditor", { { "command", "" } })["program"].is_null());
+	}
+
 	TEST_CASE("The external editor setting is the user's, kept in their settings file; the environment overrides it")
 	{
 		ScopedEnvironmentVariable noOverride("STRATA_EXTERNAL_EDITOR", "");
 		const std::filesystem::path settings = CreateTemporaryDirectory("EditorSettings") / "Strata" / "EditorSettings.json";
+		// The editor the setting names is a program in PATH.
+		const std::filesystem::path tools = CreateTemporaryDirectory("EditorPrograms");
+		WriteProgramFile(tools / ProgramFileName("code"));
+		ScopedEnvironmentVariable path("PATH", FileSystem::ToUTF8(tools));
 		{
 			ExternalEditorLauncher launcher(settings);
 			CHECK(launcher.GetSource() == ExternalEditorSource::None);
@@ -313,8 +407,9 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		CHECK(WaitForLines(output).size() == 3);
 
 		CHECK(harness.Fail("script.setExternalEditor", { { "command", "edit.bat {file}" } }).ErrorKind == EditorCommandError::InvalidParameters);
-		const nlohmann::json set = harness.Run("script.setExternalEditor", { { "command", "code -g {file}:{line}" } });
-		CHECK(set["userCommand"] == "code -g {file}:{line}");
+		const std::string userCommand = fmt::format("\"{}\" -g {{file}}:{{line}}", FileSystem::ToUTF8(GetTestExecutablePath()));
+		const nlohmann::json set = harness.Run("script.setExternalEditor", { { "command", userCommand } });
+		CHECK(set["userCommand"] == userCommand);
 		CHECK(set["source"] == "environment"); // STRATA_EXTERNAL_EDITOR still wins
 	}
 

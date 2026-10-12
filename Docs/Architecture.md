@@ -1576,10 +1576,14 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   row names the function that crashed besides the callback when they differ, the stack rows the callers, without the
   SDK's internal `Strata::Detail` frames), rebuilt only when the build or the crash changed; its summary leads with the
   crash. The project's files show relative to it, other paths cut at their start where the column is narrow, so file
-  names stay readable, the cut texts computed again only when the column's width changes. Sources
-  open in the person's code editor (`Editor/ExternalEditor`: `ExternalEditorLauncher` starts the command template's
-  program directly, without a shell, from the user's settings or `STRATA_EXTERNAL_EDITOR`, else the default
-  application); the Problems panel's double click, the Console's click on a message naming a source line
+  names stay readable, the cut texts computed again only when the column's width changes. Sources open in the person's
+  code editor (`Editor/ExternalEditor`: `ExternalEditorLauncher` starts the command template's program directly, without a
+  shell, from the user's settings or `STRATA_EXTERNAL_EDITOR`, else the default application). The program is found as
+  the system finds programs (`Platform::FindProgram`: a path, or a name in the folders of PATH, on Windows with the
+  extensions of PATHEXT), and VS Code's launcher in PATH (`bin/code.cmd`, a batch file) stands for `Code.exe` beside it;
+  `script.setExternalEditor` refuses a program it cannot find, and the External Editor dialog shows the program a command
+  starts and offers the editors found on the machine (`ExternalEditor::FindChoices`: VS Code, the Visual Studio of the
+  engine's toolchain, CLion). The Problems panel's double click, the Console's click on a message naming a source line
   (`FindSourceReference`) and `script.open` go through `EditorContext::OpenScriptSource`, which opens only code, CMake
   and text files of the project or the engine. People's guide: [Manual/Scripting.md](Manual/Scripting.md).
 

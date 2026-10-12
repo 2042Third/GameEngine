@@ -9,6 +9,7 @@
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
 #include "UI/ScriptBrowser.h"
+#include "UI/ScriptDialogs.h"
 #include "UI/Theme.h"
 
 #include <Strata/Core/FileSystem.h>
@@ -398,6 +399,64 @@ TEST_SUITE("Editor.UI.Scripts")
 		REQUIRE(lines.size() == 2);
 		std::error_code error;
 		CHECK(std::filesystem::equivalent(FileSystem::FromUTF8(lines[0]), file, error));
+	}
+
+	TEST_CASE("The External Editor dialog offers the editors found here and says which program a command starts")
+	{
+		ScopedEnvironmentVariable noOverride("STRATA_EXTERNAL_EDITOR", "");
+		// VS Code's command-line program in PATH (a file named like it is enough to be found).
+		const std::filesystem::path tools = CreateTemporaryDirectory("DialogEditors");
+#if defined(ST_PLATFORM_WINDOWS)
+		const std::filesystem::path code = tools / "code.exe";
+#else
+		const std::filesystem::path code = tools / "code";
+#endif
+		REQUIRE(FileSystem::WriteText(code, "Not really a program\n"));
+		std::error_code error;
+		std::filesystem::permissions(code, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add, error);
+		REQUIRE_FALSE(error);
+		ScopedEnvironmentVariable path("PATH", FileSystem::ToUTF8(tools));
+		HarnessEditor editor;
+		editor.Frames(1);
+		CreateProject(editor, "Editors");
+		ExternalEditorDialog& dialog = editor.Layer->GetExternalEditorDialog();
+		EditorPanelContext context { editor.Context(), editor.Layer->GetCommands(), editor.Layer->GetCommandRunner(), {}, editor.Layer.get() };
+		dialog.Open(context);
+		editor.Frames(2);
+		REQUIRE(dialog.IsOpen());
+
+		// VS Code is offered (other editors found on this machine may be too); a click puts its command in the field, and the
+		// dialog names the program it starts.
+		const std::vector<ExternalEditorChoice>& choices = dialog.GetChoices();
+		const auto vscode = std::find_if(choices.begin(), choices.end(), [](const ExternalEditorChoice& choice) { return choice.Name == "VS Code"; });
+		REQUIRE(vscode != choices.end());
+		CHECK(vscode->Command == "code -g {file}:{line}:{column}");
+		CHECK(UI::ItemProbe::Find("ExternalEditor.Program")->Text == "Files open in the system's default application.");
+		REQUIRE(editor.Click(std::string(UI::NumberedProbeKey("ExternalEditor.Choice.", static_cast<size_t>(vscode - choices.begin())))));
+		editor.Frames(2);
+		const std::optional<UI::ItemProbe::Item> program = UI::ItemProbe::Find("ExternalEditor.Program");
+		REQUIRE(program);
+		CHECK(program->Enabled);
+		CHECK(program->Text.starts_with("Starts "));
+		CHECK(std::filesystem::equivalent(FileSystem::FromUTF8(program->Text.substr(7)), code, error));
+
+		// A program that is not there says so before Save, and Save keeps the dialog open with the reason.
+		REQUIRE(editor.ReplaceText("ExternalEditor.Command", "noeditor -g {file}"));
+		editor.Frames(2);
+		CHECK_FALSE(UI::ItemProbe::Find("ExternalEditor.Program")->Enabled);
+		CHECK(UI::ItemProbe::Find("ExternalEditor.Program")->Text.starts_with("Cannot start: there is no program 'noeditor'"));
+		REQUIRE(editor.Click("ExternalEditor.Save"));
+		editor.Frames(2);
+		CHECK(dialog.IsOpen());
+		CHECK(editor.Context().GetExternalEditor().GetUserCommand().empty());
+
+		// VS Code's command saves.
+		REQUIRE(editor.Click(std::string(UI::NumberedProbeKey("ExternalEditor.Choice.", static_cast<size_t>(vscode - choices.begin())))));
+		editor.Frames(1);
+		REQUIRE(editor.Click("ExternalEditor.Save"));
+		editor.Frames(2);
+		CHECK_FALSE(dialog.IsOpen());
+		CHECK(editor.Context().GetExternalEditor().GetUserCommand() == "code -g {file}:{line}:{column}");
 	}
 
 	TEST_CASE("The script browser lists the script sources with their classes, only while it shows, and opens them in the external editor")

@@ -24,6 +24,8 @@ namespace Strata
 
 		// The dialogs' content width, in text heights.
 		constexpr float c_WidthInFontSizes = 30.0f;
+		// The External Editor dialog's column of editor names before their commands, in text heights.
+		constexpr float c_ChoiceNameWidthInFontSizes = 7.0f;
 
 		void Caption(const std::string& text, const ImVec4& color, float width)
 		{
@@ -155,6 +157,14 @@ namespace Strata
 	{
 		m_Command = context.Context.GetExternalEditor().GetUserCommand();
 		m_Error.clear();
+		m_CheckedCommand.reset();
+		// The editors on this machine are looked for once per opening (the file system is read).
+		const ScriptBuildSettings& toolchain = context.Context.GetScriptBuildSettings();
+		const std::filesystem::path toolchainFiles[] = { toolchain.CXXCompiler, toolchain.MakeProgram };
+		m_Choices = ExternalEditor::FindChoices(toolchainFiles);
+		m_ChoicesFound = !m_Choices.empty();
+		if (!m_ChoicesFound)
+			m_Choices = ExternalEditor::GetExampleChoices();
 		m_OpenRequested = true;
 	}
 
@@ -178,8 +188,28 @@ namespace Strata
 		ImGui::Spacing();
 		UI::TextField("ExternalEditor.Command", "Command", m_Command, "code -g {file}:{line}:{column}", width);
 		const bool submitted = ImGui::IsItemDeactivatedAfterEdit() && IsEnterPressed();
-		Caption("For example:\n  code -g {file}:{line}:{column}\n  \"C:/Program Files/Microsoft Visual Studio/18/Community/Common7/IDE/devenv.exe\" /Edit {file}\n"
-			"  clion --line {line} {file}\nBatch files (.cmd, .bat) do not run: name the program (VS Code: Code.exe).", colors.TextSecondary, width);
+		// The program the command starts, looked for again only when the command changed (the file system is read then).
+		if (!m_CheckedCommand || *m_CheckedCommand != m_Command)
+		{
+			m_CheckedCommand = m_Command;
+			m_Program.clear();
+			m_ProgramProblem.clear();
+			if (!m_Command.empty())
+			{
+				if (const std::optional<std::filesystem::path> program = ExternalEditor::ResolveProgram(m_Command, &m_ProgramProblem))
+					m_Program = FileSystem::ToUTF8(*program);
+			}
+		}
+		const std::string programText = m_Command.empty() ? std::string("Files open in the system's default application.")
+			: (m_Program.empty() ? "Cannot start: " + m_ProgramProblem : "Starts " + m_Program);
+		Caption(programText, m_Command.empty() || !m_Program.empty() ? colors.TextSecondary : colors.Warning, width);
+		UI::ItemProbe::Record("ExternalEditor.Program", !m_Program.empty(), 0, programText);
+
+		// The editors found here, or examples: one command per line, as it is typed; a click puts it in the field.
+		ImGui::Spacing();
+		Caption(m_ChoicesFound ? "Found on this machine (click to use):" : "For example (click to use):", colors.TextSecondary, width);
+		DrawChoices(width);
+		Caption("Batch files (.cmd, .bat) do not run, as nothing runs through a shell: name the program they start.", colors.TextSecondary, width);
 		if (launcher.GetSource() == ExternalEditorSource::Environment)
 			Caption(fmt::format("STRATA_EXTERNAL_EDITOR is set and wins over this setting: {}", launcher.GetCommand()), colors.Warning, width);
 		if (!m_Error.empty())
@@ -201,6 +231,40 @@ namespace Strata
 		if (!open)
 			ImGui::CloseCurrentPopup();
 		UI::EndModal();
+	}
+
+	void ExternalEditorDialog::DrawChoices(float width)
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const float nameWidth = ImGui::GetFontSize() * c_ChoiceNameWidthInFontSizes;
+		for (size_t index = 0; index < m_Choices.size(); index++)
+		{
+			const ExternalEditorChoice& choice = m_Choices[index];
+			ImGui::PushID(static_cast<int>(index));
+			const ImVec2 start = ImGui::GetCursorScreenPos();
+			const bool selected = m_Command == choice.Command;
+			UI::PushSelectionColors(selected);
+			// A choice fills the field: the dialog stays open (a selectable closes the popup it is in by default).
+			const bool picked = ImGui::Selectable("##Choice", selected, ImGuiSelectableFlags_NoAutoClosePopups, ImVec2(width, 0.0f));
+			UI::PopSelectionColors();
+			const bool hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip);
+			UI::ItemProbe::Record(UI::NumberedProbeKey("ExternalEditor.Choice.", index), true, 0, choice.Command);
+			// The editor's name, then its command in the monospaced font on one line, shortened at its start where it is too long
+			// (a program's folder; the arguments stay), whole in the tooltip.
+			ImDrawList* drawList = ImGui::GetWindowDrawList();
+			UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Caption);
+			drawList->AddText(start, ImGui::GetColorU32(colors.TextSecondary), choice.Name.c_str());
+			ImGui::PopFont();
+			UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
+			const std::string shown = UI::ElideStart(choice.Command, std::max(width - nameWidth, 0.0f));
+			drawList->AddText(ImVec2(start.x + nameWidth, start.y), ImGui::GetColorU32(colors.Text), shown.c_str());
+			ImGui::PopFont();
+			if (hovered)
+				ImGui::SetTooltip("%s", choice.Command.c_str());
+			if (picked)
+				m_Command = choice.Command;
+			ImGui::PopID();
+		}
 	}
 
 }

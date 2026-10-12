@@ -1,9 +1,11 @@
 #pragma once
 
+#include "Editor/ExternalEditor.h"
 #include "UI/EditorPanelRegistry.h"
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace Strata
 {
@@ -33,8 +35,9 @@ namespace Strata
 		std::string m_Outcome;
 	};
 
-	// Scripts > External Editor...: the command that opens script sources (script.setExternalEditor), with examples, and
-	// whether STRATA_EXTERNAL_EDITOR overrides it. Drawn by EditorLayer.
+	// Scripts > External Editor...: the command that opens script sources (script.setExternalEditor), the program it starts
+	// (or why it cannot start), the code editors found on this machine (ExternalEditor::FindChoices; examples without any),
+	// each a click away, and whether STRATA_EXTERNAL_EDITOR overrides it. Drawn by EditorLayer.
 	class ExternalEditorDialog
 	{
 	public:
@@ -43,11 +46,20 @@ namespace Strata
 		void Open(EditorPanelContext& context);
 		void Draw(EditorPanelContext& context);
 		bool IsOpen() const { return m_Open; }
+		const std::vector<ExternalEditorChoice>& GetChoices() const { return m_Choices; }
+	private:
+		void DrawChoices(float width);
 	private:
 		bool m_OpenRequested = false;
 		bool m_Open = false;
 		std::string m_Command;
 		std::string m_Error;
+		// The command the program was looked for, and the program (or why there is none).
+		std::optional<std::string> m_CheckedCommand;
+		std::string m_Program;
+		std::string m_ProgramProblem;
+		std::vector<ExternalEditorChoice> m_Choices;
+		bool m_ChoicesFound = false; // Found on this machine, rather than examples
 	};
 
 }

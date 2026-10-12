@@ -858,7 +858,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   editor at a line: code, CMake and text files of the project or the engine only; without file the script directory),
   `script.setExternalEditor {command}` (`Editor/ExternalEditor`:
   a template such as `code -g {file}:{line}:{column}`, split into a program and arguments and started without a shell;
-  batch files are refused; the user's setting in `<user data>/Strata/EditorSettings.json`, written private and read
+  the program is a path or a name found in PATH, `Platform::FindProgram`, and one that is not there is refused; batch
+  files are refused, except VS Code's launcher in PATH, which starts `Code.exe` beside it; the user's setting in
+  `<user data>/Strata/EditorSettings.json`, written private and read
   only when trusted, `EditorContextSpecification::EditorSettingsFile`; `STRATA_EXTERNAL_EDITOR` overrides it; projects
   cannot name one, as a shared project must not choose what runs; without one, the default application), `script.add
   {entity, class, fields}`, `script.remove {entity, class}`, `script.setField {entity, class, field, value}` (null
@@ -867,8 +869,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   and setting fields need a loaded module, which validates class and field names and types; removing works without
   one. Script edits are undoable (`ScriptEdit`, shared with the inspector's Script drawer) and reach the live
   instances while playing. The UI builds with Scripts > Build Scripts (Ctrl+B) or the toolbar, and has Scripts > New
-  Script... (`UI/ScriptDialogs`, also `EditorShell::ShowNewScriptDialog` for panels), Open Scripts Folder, External
-  Editor... and Show Problems. `UI/ScriptBrowser` is the view of the script sources a panel draws (the Content
+  Script... (`UI/ScriptDialogs`, also `EditorShell::ShowNewScriptDialog` for panels; it starts a build, as the Inspector
+  offers the loaded module's classes), Open Scripts Folder, External Editor... (the program a command starts, and the
+  editors found on the machine, `ExternalEditor::FindChoices`) and Show Problems. `UI/ScriptBrowser` is the view of the
+  script sources a panel draws (the Content
   Browser's Scripts root once Content Browser v2 hosts it): the files with their classes, listed on an I/O thread when it
   is drawn and every second while it is, never while it is not (`ScriptSourceList`, whose version changes only with the
   files); its search takes every word in a path or a class name, a double click opens a file in the external editor, and

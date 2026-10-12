@@ -391,6 +391,71 @@ namespace Strata
 		return reinterpret_cast<INT_PTR>(result) > 32;
 	}
 
+	std::optional<std::filesystem::path> Platform::FindProgram(std::string_view program, std::vector<std::filesystem::path>* outSearched)
+	{
+		if (outSearched)
+			outSearched->clear();
+		if (program.empty())
+			return std::nullopt;
+		const std::filesystem::path name = FileSystem::FromUTF8(program);
+		const auto isFile = [](const std::filesystem::path& candidate)
+		{
+			std::error_code error;
+			return std::filesystem::is_regular_file(candidate, error);
+		};
+		// A path: started as it is, or with ".exe" when it names no extension (CreateProcess adds that).
+		if (program.find_first_of("\\/:") != std::string_view::npos)
+		{
+			if (isFile(name))
+				return name;
+			if (!name.has_extension())
+			{
+				std::filesystem::path withExe = name;
+				withExe += L".exe";
+				if (isFile(withExe))
+					return withExe;
+			}
+			return std::nullopt;
+		}
+
+		// A bare name: the directories of PATH in order, each with the name as it is when it has an extension, then with every
+		// extension of PATHEXT (what a command prompt runs).
+		std::vector<std::wstring> extensions;
+		const std::wstring pathExt = WindowsUtils::Utf8ToWide(GetEnvVar("PATHEXT").value_or(".COM;.EXE;.BAT;.CMD"));
+		for (size_t start = 0; start <= pathExt.size();)
+		{
+			const size_t end = std::min(pathExt.find(L';', start), pathExt.size());
+			if (end > start)
+				extensions.push_back(pathExt.substr(start, end - start));
+			start = end + 1;
+		}
+		const std::wstring path = WindowsUtils::Utf8ToWide(GetEnvVar("PATH").value_or(std::string()));
+		for (size_t start = 0; start <= path.size();)
+		{
+			const size_t end = std::min(path.find(L';', start), path.size());
+			std::wstring directory = path.substr(start, end - start);
+			start = end + 1;
+			// Entries may be quoted; an empty one would be the current directory, which is never searched.
+			if (directory.size() >= 2 && directory.front() == L'"' && directory.back() == L'"')
+				directory = directory.substr(1, directory.size() - 2);
+			if (directory.empty() || !std::filesystem::path(directory).is_absolute())
+				continue;
+			if (outSearched)
+				outSearched->emplace_back(directory);
+			const std::filesystem::path base = std::filesystem::path(directory) / name;
+			if (name.has_extension() && isFile(base))
+				return base;
+			for (const std::wstring& extension : extensions)
+			{
+				std::filesystem::path candidate = base;
+				candidate += extension;
+				if (isFile(candidate))
+					return candidate;
+			}
+		}
+		return std::nullopt;
+	}
+
 	std::optional<ProcessMemoryInfo> Platform::GetProcessMemory()
 	{
 		// The kernel32 export: the psapi.dll entry point needs an import library and only forwards to it.

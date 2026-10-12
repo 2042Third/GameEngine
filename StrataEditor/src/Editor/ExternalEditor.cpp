@@ -25,6 +25,9 @@ namespace Strata
 		constexpr size_t c_MaxCommandLength = 4096;
 		// Editor processes kept to be reaped; older ones are let go (letting go never ends them).
 		constexpr size_t c_MaxTrackedProcesses = 16;
+		// The commands of editors whose launcher goes into PATH.
+		constexpr const char* c_VSCodeCommand = "code -g {file}:{line}:{column}";
+		constexpr const char* c_CLionCommand = "clion --line {line} {file}";
 
 		bool Fail(std::string* outError, std::string message)
 		{
@@ -113,6 +116,36 @@ namespace Strata
 			return FileSystem::ToUTF8(native.make_preferred());
 		}
 
+		// The file a command's program name starts (Platform::FindProgram). What PATH offers for a code editor may be a batch
+		// file that launches it, which only runs through a shell: VS Code's bin/code.cmd stands for the editor beside its bin
+		// folder, which takes the same arguments. Other batch files are refused.
+		std::optional<std::filesystem::path> FindEditorProgram(const std::string& program, std::string* outError)
+		{
+			std::vector<std::filesystem::path> searched;
+			const std::optional<std::filesystem::path> found = Platform::FindProgram(program, &searched);
+			if (!found)
+			{
+				const bool isPath = program.find_first_of("\\/:") != std::string::npos;
+				Fail(outError, isPath ? fmt::format("there is no program '{}'", program)
+					: fmt::format("there is no program '{}' in the {} folders of PATH; name it by its path", program, searched.size()));
+				return std::nullopt;
+			}
+			const std::string extension = StringUtils::ToLower(FileSystem::ToUTF8(found->extension()));
+			if (extension != ".cmd" && extension != ".bat")
+				return found;
+			const std::string stem = StringUtils::ToLower(FileSystem::ToUTF8(found->stem()));
+			const std::string folder = StringUtils::ToLower(FileSystem::ToUTF8(found->parent_path().filename()));
+			if (folder == "bin" && (stem == "code" || stem == "code-insiders"))
+			{
+				const std::filesystem::path editor = found->parent_path().parent_path() / (stem == "code" ? "Code.exe" : "Code - Insiders.exe");
+				if (FileSystem::IsRegularFile(editor))
+					return editor;
+			}
+			Fail(outError, fmt::format("'{}' is the batch file '{}', which only runs through a shell; name the program it starts", program,
+				FileSystem::ToUTF8(*found)));
+			return std::nullopt;
+		}
+
 	}
 
 	const char* ExternalEditorSourceToString(ExternalEditorSource source)
@@ -189,6 +222,49 @@ namespace Strata
 			return std::nullopt;
 		}
 
+		std::optional<std::filesystem::path> ResolveProgram(std::string_view commandTemplate, std::string* outError)
+		{
+			const std::optional<std::vector<std::string>> arguments = ExpandCommand(commandTemplate, "Example.cpp", 1, 1, "Scripts", outError);
+			if (!arguments)
+				return std::nullopt;
+			return FindEditorProgram(arguments->front(), outError);
+		}
+
+		std::vector<ExternalEditorChoice> FindChoices(std::span<const std::filesystem::path> toolchainFiles)
+		{
+			std::vector<ExternalEditorChoice> choices;
+			const auto offer = [&choices](std::string name, std::string command)
+			{
+				if (ResolveProgram(command))
+					choices.push_back({ std::move(name), std::move(command) });
+			};
+			offer("VS Code", c_VSCodeCommand);
+			// Visual Studio: the installation the compiler (<installation>/VC/Tools/...) or MSBuild (<installation>/MSBuild/...)
+			// lies in holds the IDE at Common7/IDE/devenv.exe.
+			bool visualStudio = false;
+			for (const std::filesystem::path& file : toolchainFiles)
+			{
+				for (std::filesystem::path folder = file.parent_path(); !visualStudio && folder.has_relative_path(); folder = folder.parent_path())
+				{
+					const std::filesystem::path devenv = folder / "Common7" / "IDE" / "devenv.exe";
+					if (!FileSystem::IsRegularFile(devenv))
+						continue;
+					offer("Visual Studio", fmt::format("\"{}\" /Edit {{file}}", FileSystem::ToUTF8(devenv)));
+					visualStudio = true;
+				}
+			}
+			offer("CLion", c_CLionCommand);
+			return choices;
+		}
+
+		std::vector<ExternalEditorChoice> GetExampleChoices()
+		{
+			return {
+				{ "VS Code", c_VSCodeCommand },
+				{ "Visual Studio", "\"<Visual Studio folder>/Common7/IDE/devenv.exe\" /Edit {file}" },
+				{ "CLion", c_CLionCommand } };
+		}
+
 	}
 
 	ExternalEditorLauncher::ExternalEditorLauncher(std::filesystem::path settingsFile)
@@ -236,8 +312,9 @@ namespace Strata
 	{
 		if (!command.empty())
 		{
-			if (std::optional<std::string> problem = ExternalEditor::ValidateCommand(command))
-				return Fail(outError, fmt::format("The external editor command cannot be used: {}", *problem));
+			std::string problem;
+			if (!ExternalEditor::ResolveProgram(command, &problem))
+				return Fail(outError, fmt::format("The external editor command cannot be used: {}", problem));
 		}
 		if (!m_SettingsFile.empty())
 		{
@@ -271,10 +348,12 @@ namespace Strata
 		if (!command.empty())
 		{
 			std::optional<std::vector<std::string>> arguments = ExternalEditor::ExpandCommand(command, file, line, column, directory, &failure);
-			if (arguments)
+			// The program as the system would find it (a name in PATH, VS Code's launcher), started directly.
+			const std::optional<std::filesystem::path> program = arguments ? FindEditorProgram(arguments->front(), &failure) : std::nullopt;
+			if (arguments && program)
 			{
 				ProcessSpecification specification;
-				specification.Executable = FileSystem::FromUTF8(arguments->front());
+				specification.Executable = *program;
 				specification.Arguments.assign(arguments->begin() + 1, arguments->end());
 				specification.Output = ProcessOutputMode::Discard;
 				// The editor lives on after this one ends, and console signals sent to the editor are not its concern.
