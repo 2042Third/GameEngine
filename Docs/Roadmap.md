@@ -205,8 +205,7 @@ gameplay-and-scripting came from the product audit after wave 2, which found who
 workstream covered); the integration merged the conflicting files as unions of both sides, did the wiring the
 workstreams left to whichever of them merged second and closed the review findings their rechecks had left open. Numbers
 are Release builds on the reference machine, measured by the workstreams while up to six of them shared it, mostly as
-interleaved A/Bs against wave 2's build; the quiet campaign that decides the budgets comes last (Perf campaign:
-pending):
+interleaved A/Bs against wave 2's build; the quiet campaign that decided the budgets comes last (Perf campaign):
 
 - `mip-streaming`: the asset layer knows no graphics API (uploads go into an `AssetUploadContext` the renderer provides;
   the allowlist from 9 to 8 exceptions); every upload goes through one budgeted queue (`GPUUploadQueue` on the staging
@@ -280,7 +279,44 @@ pending):
   (the visual pass at 150%, 100% and in a 1600x900 window). The script ABI keeps version 1 with its host functions in
   merge order (wave 2's 79, then 6, 12 and 22). Full Debug ctest under the validation layer (47 tests) and Release ctest
   without the perf label (47) pass.
-- Perf campaign: pending.
+- Perf campaign (2026-10-12, the merged tree at 410468a, Release, nothing else running, the memory at its rated 3600
+  MT/s, at which `Budgets.json`'s reference values were measured): `PerfStability.py --runs 5 --wait-quiet 20`, then
+  five runs more with the budgets it set: 6 of 10 runs passed, 110 metrics each, with the canary `Perf.Harness.Sort200k`
+  at 0.98-0.99 of its reference and the machine 29-32% busy (the perf tests alone) in every run; `StrataTests.Perf`
+  passed all ten runs, `StrataTests.PerfGPU` six. Three failures were `PerfGPU.Editor.ImportSettings4kMaxFrame10kCubes`
+  (over its 4.819 ms in all three attempts, with frames of 6-27 ms; it needed a confirmation in 7 of the 10 runs): its
+  long frames wait in the graphics driver's `vkBeginCommandBuffer` (NVRHI's `CommandList::open`, which resets a recycled
+  command buffer: 2-21 ms, timed with temporary timers) while the BC7 compression keeps every background thread busy,
+  and main's build (a007c1b) exceeds the same budget on this machine too (first attempts of 2.4-8.0 ms, run alone in
+  fresh processes, one run passing only in its third attempt), so the budget stays and the cause is open. The fourth was
+  `PerfGPU.Editor.ThumbnailsMaxFrame` under the budget the first five runs set (1.149 ms): in 2 of 18 runs (the ten and
+  eight of the case alone) every attempt's longest frame took 1.2-2.0 ms instead of 0.5-1.0, and the attempts after the
+  first made the thumbnails in 43-45 frames instead of 59-60.
+- Medians of the ten runs (wave 2's final campaign in parentheses): the exported stress game with the whole world in
+  view 452 MB (449-457; 595 MB with every texture resident), now budgeted at mip streaming's 550 MB limit, from the
+  overview camera 452 MB (562), the all-resident sweep 483 MB (503), the evicting sweep 400 MB (404), mip streaming's
+  sweep 430 MB; the longest finalization of the evicting sweep 2.89 ms (3.81) and of the exported game 3.21 ms (4.14),
+  now in its first frame, which finalizes within the frame's budgets what the start scene's load read while the window
+  opened (in mip-streaming's own build the slowest was one of frames 8-11, at 1.80-1.97 ms); idle editor frames 0.206 ms
+  editing 100,000 nested entities (0.176), 0.200 editing 1,000,000 (0.165), 0.194 and 0.198 playing them (0.239, 0.242);
+  `SceneRenderer::Render` of 100,000 cubes 0.69 ms (0.68), of 300,000 2.43, of 10,000 unique materials 1.37, of 1,000
+  skinned characters 0.64, and an editor frame of 100,000 cubes 0.87 ms (0.92); 1,000 animators 0.37 ms and 10,000
+  culled ones 0.14; a step of 1,000 character controllers 0.81 ms; opening 100,000 entities a longest frame of 1.91 ms,
+  1,000,000 13.7 ms and 543 MB of working set, the 100,000 again over them 0.68 ms, the frame that starts playing the
+  million 48.1 ms (42-53, so the 50 ms target stays); the stress pack's world in 1.046 times version 1's time (1.045);
+  `Perf.Physics.Create10kBodies` 7.97 ms, without the broad phase's abort. The 27 entries the workstreams set on the
+  shared machine and the 5 they lowered took the first five runs' medians as Measured, with budgets at most 1.5 times
+  them (`RuntimePeakPrivateMemoryAllInView` went to its 550 MB limit and lost its target), and `PlayFrameNested100k` was
+  lowered to 0.1952/0.2928 ms.
+- Against main's build, in three interleaved pairs of the whole perf label run directly (first attempts): slower are
+  `EntityCreate100kRoots` 1.21x (0.0042 to 0.0051 ms: the activity journal's 1.5 us a command), the Streaming panel's
+  95th percentile frame 1.11x and its refresh frames 1.07x (the Mip column), `IdlePlayFrame1M` 1.07x (a fourth scene
+  system), `TrivialUpdate300k` 1.03x and `TrivialUpdate100k` 1.01x (the 4-6% measured by a workstream did not reproduce)
+  and `MoveLeaf100k` 1.02x (not 9%); faster are the streaming finalizations (0.61-0.73x), the exported game's peak
+  memory (0.80x), `SelectionFrame100kSelected` (0.87x) and `Render10kMaterials` (0.90x). The editor's idle frames came
+  out 1.18-1.23x when editing and 0.88-0.92x when playing in the perf test's runs; `editor.perf` profiles of interleaved
+  runs on a 100,000-entity scene put the difference in the UI stage, 0.11 against 0.09-0.10 ms a frame (the wave's
+  pills, chips and panels).
 
 Open items and deferrals later waves own:
 
@@ -389,14 +425,18 @@ Open items and deferrals later waves own:
   3600 to 3200 MT/s; it runs at the rated 3600 MT/s again, at which `Budgets.json`'s reference values were measured, and
   compilers kept crashing now and then (files that compiled on the retry). Until a memory and CPU stress test passes,
   one-off crashes on this machine are suspect.
-- Perf to watch in wave 3's campaign: trivial-script frames measured 4-6% slower than wave 2's in interleaved A/Bs
-  (`TrivialUpdate100k`, `TrivialUpdate300k`; no code on the dispatch path changed, and swapping the engine and the
-  module split the difference, which points at code layout), `Perf.Scene.MoveLeaf100k` about 9% slower (the larger
-  `Scene` class), `Perf.Editor.EntityCreate100kRoots` at about 84% of its budget (the journal adds 0.8 us a command),
-  `RecoverySnapshotMaxEntities` sensitive to load, `ContentBrowser10kThumbnailsP95` bimodal (0.036 or 0.067 ms, the
-  second fitting a main thread on an efficiency core), and the budgets the workstreams set from runs on a shared
-  machine. Platform code only CI compiles: the POSIX `Platform::FindProgram` and symbolizer (function names only on
-  Linux and macOS).
+- Perf to watch after wave 3's campaign: `ImportSettings4kMaxFrame10kCubes`' stalls in the graphics driver (main's build
+  exceeds its budget on this machine too) and `ThumbnailsMaxFrame`'s second mode (see the campaign above);
+  `RuntimeMaxFinalizeStage` at up to 98% of its 3.723 ms budget since the exported game's first frame finalizes what the
+  start scene's load read (the budget came from mip streaming's own build, where one of frames 8-11 was the slowest);
+  `EntityCreate100kRoots` at 85-90% of its budget and the Streaming panel's refresh frames at up to 93%; the maxima
+  whose budgets the campaign tightened and that need a confirmation now and then (`SceneOpenOver1MMaxFrame` 2.4-3.3 ms
+  in 2 of 10 first attempts against 1.143, `SceneSwitch100kMaxFrame` 0.31-0.37 ms in 2 against 0.2002,
+  `Mips.MaxFrameRatio` 1.28 in 1 against 1.19); `ContentBrowser10kThumbnailsP95` once at 0.053 ms in 10 runs
+  (0.036-0.042 otherwise) against 0.057; and `PerfGPU.Editor.ImportSettings4kMaxFrame`, whose first attempt measures
+  6.9-7.6 ms when run alone in a fresh process (main's build 2.9-3.6 ms; 2.1 ms in the perf label's runs, where the
+  cases before it warmed the process). Platform code only CI compiles: the POSIX `Platform::FindProgram` and symbolizer
+  (function names only on Linux and macOS).
 
 ## Waves
 
