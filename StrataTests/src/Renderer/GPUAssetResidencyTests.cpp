@@ -395,7 +395,9 @@ TEST_SUITE("GPU.Assets.Residency")
 		CHECK(stats.StagingReleases == 0);
 
 		// 120 updates after the last upload, the upload context returns the staging that went idle (there are no device frames
-		// here, which would return it as well).
+		// here, which would return it as well). The GPU finishes the uploads first: 120 updates take about a millisecond here,
+		// and staging whose copies the GPU had not run by then would be returned by a second release, 120 updates later.
+		gpu.GetDevice().WaitForIdle();
 		for (uint32_t frame = 1; frame < StagingPool::c_IdleReleaseFrames; frame++)
 			manager->Update();
 		CHECK(manager->GetStats().StagingReleases == 0);
