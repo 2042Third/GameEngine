@@ -226,7 +226,9 @@ namespace Strata
 		const std::vector<AssetHandle>& GetAssets() const { return m_Assets; }
 
 		// The share of the members' stored bytes that finished loading (Ready or Failed), in [0, 1]. Never decreases: a
-		// member that finished stays counted (also while a hot reload replaces it). 1 for an invalid request.
+		// member that finished stays counted (also while a hot reload replaces it). 1 for an invalid request. A member loaded
+		// partly (a texture whose first load holds its mip tail, see SetPartialLoads) counts whole once it is Ready: its finer
+		// levels stream later, as views need them.
 		float Progress() const;
 		// Every member finished loading (Ready or Failed).
 		bool IsComplete() const;

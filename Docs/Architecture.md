@@ -1157,8 +1157,9 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   with it (requests make room by evicting, which a prefetch must never cause).
 - **Group loads** (`RequestLoadWithDependencies`, `AssetGroupRequest`). A loading screen pins an asset's dependency closure
   (`GetDependencyClosure`, breadth first) at a priority: `Progress` (the share of the members' stored bytes that finished,
-  never decreasing), `IsComplete`, `HasFailed` and `Cancel` (releases the pins and abandons the loads that have not
-  finished: queued reads never start). `IsLoadedWithDependencies` tells whether a closure is Ready, and
+  never decreasing; a texture loaded partly counts whole once its mip tail is resident and it is Ready, since its finer
+  levels stream as views need them), `IsComplete`, `HasFailed` and `Cancel` (releases the pins and abandons the loads
+  that have not finished: queued reads never start). `IsLoadedWithDependencies` tells whether a closure is Ready, and
   `ReadStoredRange` reads part of an asset's stored form without loading it (packs decode only the blocks it covers).
 - **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum

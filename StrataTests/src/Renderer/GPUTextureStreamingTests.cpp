@@ -151,9 +151,14 @@ TEST_SUITE("GPU.TextureStreaming")
 			};
 
 			// Drawn at 56 pixels: the first load holds the resident tail (32x32 and below, level 6), and the streamer raises
-			// it to level 5, not further. From its arrival on the quad never shows the loading fallback.
+			// it to level 5, not further. From its arrival on the quad never shows the loading fallback. A loading screen's
+			// group load counts the texture as loaded as soon as its tail is resident (its finer levels stream as views need
+			// them).
+			std::optional<AssetGroupRequest> group = manager->RequestLoadWithDependencies(c_TextureHandle);
+			REQUIRE(group->IsValid());
 			ReadbackImage image;
 			std::optional<uint32_t> arrivedLevel;
+			bool groupCompleteOnArrival = false;
 			bool fallbackAfterArrival = false;
 			for (int attempt = 0; attempt < 100; attempt++)
 			{
@@ -162,14 +167,21 @@ TEST_SUITE("GPU.TextureStreaming")
 				if (!texture || texture->GetBindlessSlot() == BindlessTextureTable::c_InvalidSlot)
 					continue;
 				if (!arrivedLevel)
+				{
 					arrivedLevel = texture->GetResidentLevel();
+					groupCompleteOnArrival = group->IsComplete() && group->Progress() == 1.0f && !group->HasFailed();
+					group.reset(); // Its pin goes: the rest of the test streams the texture as views alone ask for it
+				}
 				else
+				{
 					fallbackAfterArrival = fallbackAfterArrival || !ShowsTexture(image);
+				}
 				if (texture->GetResidentLevel() == 5 && streamingDone() && attempt > 10)
 					break;
 			}
 			REQUIRE(arrivedLevel);
 			CHECK(*arrivedLevel == 6);
+			CHECK(groupCompleteOnArrival);
 			CHECK(PeekTexture(*manager)->GetTailLevel() == 6);
 			CHECK(PeekTexture(*manager)->GetResidentLevel() == 5);
 			CHECK_FALSE(fallbackAfterArrival);
