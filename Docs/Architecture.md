@@ -1365,7 +1365,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`) and
   `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel`, the one command about its
   window. Conventions: AGENTS.md, "Editor". Every command has a kind (`EditorCommandKind`: Edit, the default, Query or
-  Session), which `editor.commands` lists and replays use.
+  Session), which `editor.commands` lists and replays use, and queries whose results follow the editor's session rather
+  than the project's content (the selection, `editor.status`, the journal, what is loaded or running) say so
+  (`EditorCommandResults::Session`): replays never bind the IDs those show.
 - **Command line** (`EditorApplication.cpp`). `CreateApplication` answers `--help` and `--version` and refuses arguments
   outside its table (`c_Arguments`; exit code 3 with the usage) before it starts the log, the modules or a window:
   `Application::SetStartupExitCode` is what `main` returns when no application was made. With `--quit-after-commands` and
@@ -1416,22 +1418,29 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 - **Replays** (`CommandJournal::BuildReplayScript`, `editor.activity.export {path, since, overwrite}`). A session after a
   journal entry becomes a command script that repeats it on a copy of the project as it was then (a regression script made
   by doing the work once): the successful top-level commands of kind Edit that did not change a running copy, in order
-  (an undo or redo repeats as one). Entities and assets the session created get new IDs in every run, so IDs are followed
+  (an undo or redo repeats as one). Those run while playing count when they outlast play mode (materials, assets,
+  `scene.save`); the commands that changed the running copy say so (`EditorCommandResult::RunningCopy`, set with their
+  warning) and are left out (`skippedWhilePlaying`). Entities and assets the session created get new IDs in every run, so IDs are followed
   through the session: an ID a result of an edit or a query gave first is bound where that result gave it (`"bind":
   {"e12.id": "/id"}`) and replaced by a reference where later parameters use it (`{"$ref": "e12.id"}`), and a query whose
   result gave such an ID joins the script (a lookup, e.g. `entity.find` of a template entity). IDs used before any result
-  gave them, results of session commands and of commands while playing (the running copy has the edited scene's IDs) and
-  built-in asset handles stay literal: they name what every copy has. The export fails rather than write a script that
+  gave them, results of session commands, of queries while playing and of edits of the running copy (it has the edited
+  scene's IDs), results that follow the session (`EditorCommandResults::Session`: `selection.get` and `editor.status` show
+  what the person selected, which a replay does not repeat; the journal collects no IDs of them) and built-in asset handles
+  stay literal: they name what every copy has. The export fails rather than write a script that
   would not repeat the session: when the journal no longer holds every entry after `since` (its ring dropped the first
   ones; also for `since` 0, the session's start), or when the parameters of a command it needs were shortened.
   Continuous UI edits (inspector fields, gizmo drags, the material editor) record their undo steps directly, not through
   commands, so no script holds them: the journal counts the edits no command made (`NoteEditsOutsideCommands`, before
   every top-level handler and poll: the undo steps recorded since, one however many merges made it, as `UndoStack::
   GetStepCount` counts them, and merges alone into an earlier step as one) and the export reports them
-  (`editsOutsideCommands`, with a warning). Undo and redo from the UI run `edit.undo` and `edit.redo`. `StrataEditor.Replay` (`StrataTests/Editor/ReplaySession.cmake`) runs a session, exports it,
-  runs the export on a copy made before the session and compares the scene and assets with IDs numbered by appearance
-  (`StrataTests --strata-test-helper=compare-documents`, `src/Editor/SceneComparison.h`); `Editor.Replay` does the same
-  with 50 commands of an automation client in-process.
+  (`editsOutsideCommands`, with a warning), and so are the undo steps of commands it does not repeat (`scene.recover`,
+  a Session command whose recovery file the copy does not have: `unrepeatableEdits`). Undo and redo from the UI run
+  `edit.undo` and `edit.redo`. `StrataEditor.Replay` (`StrataTests/Editor/ReplaySession.cmake`) runs a session, exports it,
+  runs the export on a copy made before the session and compares the scene and assets with references to assets by their
+  paths (read from the projects' `.meta` files) and the other IDs numbered by appearance across the documents
+  (`StrataTests --strata-test-helper=compare-documents`, `Tests::ProjectNormalizer` in `src/Editor/SceneComparison.h`);
+  `Editor.Replay` does the same with 50 commands of an automation client in-process.
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`

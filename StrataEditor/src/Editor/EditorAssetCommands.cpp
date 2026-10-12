@@ -387,7 +387,7 @@ namespace Strata
 					{ "progress", exporter->GetProgress() },
 					{ "stage", exporter->GetStage() },
 					{ "directory", FileSystem::ToUTF8(exporter->GetOptions().Directory) } });
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "project.cancelExport", "Cancels the running export (project.export, which then fails as cancelled); files it wrote already stay. "
 			"Fails when no export runs.",

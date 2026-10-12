@@ -161,12 +161,13 @@ namespace Strata
 		// Ends a script edit: while playing the change applied to the running copy, which play.stop discards.
 		EditorCommandResult FinishScriptEdit(EditorContext& context, nlohmann::json value)
 		{
-			if (context.IsPlaying())
-			{
-				value["warning"] = fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
-					SceneStateToString(context.GetSceneState()));
-			}
-			return EditorCommandResult::Ok(std::move(value));
+			if (!context.IsPlaying())
+				return EditorCommandResult::Ok(std::move(value));
+			value["warning"] = fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
+				SceneStateToString(context.GetSceneState()));
+			EditorCommandResult result = EditorCommandResult::Ok(std::move(value));
+			result.RunningCopy = true;
+			return result;
 		}
 
 		nlohmann::json DescribeEntry(const ScriptEntry& entry)
@@ -189,7 +190,7 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeScripts(context));
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "script.get",
 			"The field values of the scripts attached to an entity. While the game plays they are the live instances' values (game state kept "

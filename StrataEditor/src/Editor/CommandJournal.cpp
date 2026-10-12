@@ -419,7 +419,8 @@ namespace Strata
 		return "Unknown";
 	}
 
-	uint64_t CommandJournal::Begin(const CommandOrigin& origin, std::string_view command, EditorCommandKind kind, const nlohmann::json& parameters, bool playing)
+	uint64_t CommandJournal::Begin(const CommandOrigin& origin, std::string_view command, EditorCommandKind kind, EditorCommandResults results,
+		const nlohmann::json& parameters, bool playing)
 	{
 		if (!m_Enabled)
 			return 0;
@@ -440,6 +441,7 @@ namespace Strata
 		}
 		entry.Command = command;
 		entry.Kind = kind;
+		entry.Results = results;
 		entry.Playing = playing;
 		entry.EditsOutsideCommandsBefore = m_EditsOutsideCommands;
 		const size_t parameterBytes = EstimateBytes(parameters, c_MaxParameterBytes);
@@ -551,9 +553,14 @@ namespace Strata
 				if (const auto warning = result.Value.find("warning"); warning != result.Value.end() && warning->is_string())
 					entry->Warning = ShortenString(warning->get<std::string>(), c_MaxErrorBytes);
 			}
-			size_t budget = c_IdScanNodes;
-			IdScanPath path;
-			CollectIds(result.Value, path, entry->ResultIds, budget);
+			entry->RunningCopy = result.RunningCopy;
+			// IDs of results that follow the session are never bound by replays: not collected.
+			if (entry->Results == EditorCommandResults::Content)
+			{
+				size_t budget = c_IdScanNodes;
+				IdScanPath path;
+				CollectIds(result.Value, path, entry->ResultIds, budget);
+			}
 			added += entry->ResultSummary.size() + entry->Warning.size();
 			for (const auto& [idPointer, value] : entry->ResultIds)
 				added += idPointer.size() + sizeof(value) + c_JsonNodeBytes;
@@ -631,6 +638,8 @@ namespace Strata
 			description["parametersTruncated"] = true;
 		if (entry.Playing)
 			description["playing"] = true;
+		if (entry.RunningCopy)
+			description["runningCopy"] = true;
 		if (entry.Status == CommandStatus::Failed)
 			description["error"] = { { "kind", EditorCommandErrorToString(entry.ErrorKind) }, { "message", entry.Error } };
 		if (entry.Status == CommandStatus::Succeeded)
@@ -692,9 +701,15 @@ namespace Strata
 		for (size_t index = 0; index < entries.size(); index++)
 		{
 			const CommandJournalEntry& entry = *entries[index];
-			const bool edit = entry.Kind == EditorCommandKind::Edit && !entry.Playing;
-			if (entry.Kind == EditorCommandKind::Edit && entry.Playing)
+			// Edits of a playing scene's running copy went with play.stop; those that outlast play mode (assets, documents,
+			// scene.save) are repeated like any other.
+			const bool edit = entry.Kind == EditorCommandKind::Edit && !entry.RunningCopy;
+			if (entry.Kind == EditorCommandKind::Edit && entry.RunningCopy)
 				script.SkippedWhilePlaying++;
+			// Other commands that recorded an undo step changed the scene in a way the script cannot repeat (scene.recover
+			// applies a recovery file the copy does not have).
+			if (entry.Kind != EditorCommandKind::Edit && entry.UndoSerial != 0)
+				script.UnrepeatableEdits++;
 			if (edit && entry.ParametersTruncated)
 			{
 				return fail(fmt::format("The parameters of #{} ({}) were too large to keep in the journal, so it cannot be repeated: export from since {} "
@@ -703,9 +718,9 @@ namespace Strata
 			parameters[index] = ReplaceProducedIds(entry.Parameters, produced, literal, references[index], entryIds);
 			needed[index] = edit;
 			// Results of edits and queries give IDs a replay takes from its own run. Those of session commands (the projects and
-			// scenes they open), of commands that ran while playing (the running copy's entities have the edited scene's IDs, and
-			// what play created is gone after play.stop) and the handles of built-in assets name what every run has: they stay
-			// as they are.
+			// scenes they open), of edits of the running copy and queries while playing (the running copy's entities have the
+			// edited scene's IDs, and what play created is gone after play.stop) and the handles of built-in assets name what
+			// every run has: they stay as they are. Queries whose results follow the session (the selection) collect no IDs.
 			const bool producing = edit || (entry.Kind == EditorCommandKind::Query && !entry.Playing);
 			for (const auto& [pointer, id] : entry.ResultIds)
 			{

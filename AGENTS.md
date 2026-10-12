@@ -769,7 +769,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   has a one-line description, a JSON Schema of its parameters (`CommandUtils::ObjectSchema` etc.) and a kind
   (`EditorCommandKind`: Edit, the default, for commands that change the scene, its assets or the project; Query for those
   that change nothing; Session for the editor's own state: open project, play mode, view, selection, input). Mark every
-  new command that is not an edit, or replays (editor.activity.export) will repeat it;
+  new command that is not an edit, or replays (editor.activity.export) will repeat it, and every query whose results
+  follow the editor's session rather than the project's content (the selection, the journal, what is loaded or running:
+  `EditorCommandResults::Session`), or replays will bind IDs a copy of the project does not give;
   automation exposes them as tools, so descriptions must tell an agent what the command does. Use
   `CommandArguments` to read parameters (no exceptions), reject invalid input without side effects
   (roll back the transaction) and record exactly one undo step per successful mutating command.
@@ -867,7 +869,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   reference to a name no earlier step binds fails the script before it starts; a step whose references have no value
   (their step failed) fails without running. If a command or an expectation fails, or the script has not finished by the
   last of `--frames N` frames or by `editor.quit`, the process exit code becomes 1. `editor.activity.export {path, since}`
-  writes what a session did after a journal entry as such a script (`CommandJournal::BuildReplayScript`: the edits, with
+  writes what a session did after a journal entry as such a script (`CommandJournal::BuildReplayScript`: the edits, also
+  those made while playing that outlast play mode (assets, `scene.save`) but not edits of the running copy
+  (`EditorCommandResult::RunningCopy`), with
   the IDs results gave bound and referenced, and the queries those IDs came from), to repeat it on a copy of the project as
   it was then, e.g. as a regression script; continuous UI edits (inspector, gizmos, material editor) record undo steps
   without a command, so the export counts them (`editsOutsideCommands`) instead (the UI's undo and redo run their
@@ -894,7 +898,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   windowed editor without a project opens into the launcher (`Editor/LauncherCommands.json`) and that failing and
   unfinished scripts fail the process. `StrataEditor.Replay` (`Editor/ReplaySession.cmake`) runs a session with bindings
   on a new project, exports it with `editor.activity.export`, runs the export on a copy made before the session and
-  compares the scenes and assets (`StrataTests --strata-test-helper=compare-documents`: IDs numbered by appearance).
+  compares the scenes and assets (`StrataTests --strata-test-helper=compare-documents`: assets by their paths, other IDs
+  numbered by appearance).
 - The hierarchy panel draws the rows of `Editor/HierarchyView` (the visible entities as a flat list; a filter with
   `c:`/`t:` terms shows matches with their ancestors), which are rebuilt only when the hierarchy, the expansion or the
   filter changed: never walk the scene per frame in UI code, and draw long lists through `ImGuiListClipper` (only the
@@ -942,7 +947,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   the asset in the Content Browser. Where the table is narrow it drops Pins, CPU MB and then Last used before the asset's
   name gets less than 14 text heights, and the overview stacks above the table where beside it the table would be too
   narrow even then.
-- Mutating commands report a `warning` in their result while the scene is playing: such changes apply
+- Mutating commands report a `warning` in their result while the scene is playing (and set
+  `EditorCommandResult::RunningCopy`, which replays read): such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors, and so are values out of
   a property's range (`PropertyInfo::IsInRange`, checked by `CommandUtils::ApplyComponents` for `component.set`,
   `component.add`, `entity.create` and `prefab.instantiate`, and by `material.set`/`material.create`; scene settings name

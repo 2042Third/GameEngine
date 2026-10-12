@@ -305,9 +305,14 @@ entry) before you start, work, then `editor.activity.export {"path": "Session.js
 edits (and the person's, if they edited meanwhile) as a command script that rebuilds the result on a copy of the project
 as it was when you noted the entry: `StrataEditor --no-gpu --no-automation --quit-after-commands --project <copy>
 --commands Session.json`. Created entities and assets get new IDs in every run, so the script binds them where a result
-gave them (`"bind": {"e12.id": "/id"}`) and refers to them later (`{"$ref": "e12.id"}`); queries you took IDs from are
-part of it, play mode and what changed while playing are not. Changes the person made in the inspector, with gizmos or in
-the material editor have no command, so no script holds them: `editsOutsideCommands` (and a `warning`) counts them. Write your own scripts the same way: `"bind": {"crate":
+gave them (`"bind": {"e12.id": "/id"}`) and refers to them later (`{"$ref": "e12.id"}`); queries of the scene and assets
+you took IDs from (`entity.find`, `scene.hierarchy`, `entity.get`) are part of it. IDs you took from the selection or
+`editor.status` stay as they are (the script does not repeat the person's selection): they work for what the project
+already had. Play mode itself and edits of the running copy are not part of it (`skippedWhilePlaying`), but what you
+changed while playing that outlasts play mode is (materials and other assets, `scene.save`). Changes the person made in
+the inspector, with gizmos or in the material editor have no command, so no script holds them: `editsOutsideCommands`
+(and a `warning`) counts them, and `unrepeatableEdits` counts what `scene.recover` applied (its recovery file is not in
+a copy). Write your own scripts the same way: `"bind": {"crate":
 "/id"}` on a step, `{"$ref": "crate"}` (or `{"$ref": "copy", "pointer": "/entities/0"}`) in any later parameter; a name
 no earlier step binds fails the script before it starts.
 

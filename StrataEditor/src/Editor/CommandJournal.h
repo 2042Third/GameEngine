@@ -32,6 +32,15 @@ namespace Strata
 
 	const char* EditorCommandKindToString(EditorCommandKind kind);
 
+	// What the IDs a command's results show depend on, for replays (CommandJournal::BuildReplayScript binds IDs that results
+	// gave for later steps).
+	enum class EditorCommandResults : uint8_t
+	{
+		Content = 0, // The project's content (entities, assets, scenes): a replay of the session gets them from its own run
+		Session      // The editor's session (the selection, the journal, what is loaded, running or shown), which a replay does
+		             // not repeat: the IDs they show are never bound
+	};
+
 	// Who ran a command (the activity journal, CommandJournal).
 	enum class CommandSource : uint8_t
 	{
@@ -70,7 +79,9 @@ namespace Strata
 		std::string Client;
 		std::string Command;
 		EditorCommandKind Kind = EditorCommandKind::Edit;
-		bool Playing = false; // It ran while the scene played: its scene changes went to the running copy
+		EditorCommandResults Results = EditorCommandResults::Content;
+		bool Playing = false;     // It ran while the scene played
+		bool RunningCopy = false; // It changed the running copy of the playing scene (EditorCommandResult::RunningCopy)
 		// The parameters as given, unless they were larger than CommandJournal::c_MaxParameterBytes: then shortened (long
 		// strings and arrays cut) and ParametersTruncated, so the entry cannot be run again exactly.
 		nlohmann::json Parameters;
@@ -83,7 +94,7 @@ namespace Strata
 		// its containers described by their size.
 		std::string ResultSummary;
 		// Every ID (16 hexadecimal digits) the result holds, by JSON pointer (at most c_MaxResultIds): what a replay binds
-		// to refer to entities and assets the command made.
+		// to refer to entities and assets the command made. Empty for commands whose results follow the session.
 		std::vector<std::pair<std::string, UUID>> ResultIds;
 		double DurationMs = 0.0; // From the start to the end, frames in between for a deferred command
 		uint32_t Frames = 0;     // Frames a deferred command was polled
@@ -119,6 +130,9 @@ namespace Strata
 		size_t Bindings = 0;            // Values bound for later steps
 		size_t SkippedWhilePlaying = 0; // Edits of the running copy, which play.stop discarded
 		uint64_t EditsOutsideCommands = 0; // Edits no command made (CommandJournal::GetEditsOutsideCommands): not in it
+		// Undo steps that commands a script does not repeat recorded (scene.recover: what it applied came from a recovery file
+		// the copy does not have): not in it either
+		size_t UnrepeatableEdits = 0;
 		uint64_t Since = 0;
 		uint64_t Latest = 0;            // The last entry looked at
 	};
@@ -143,7 +157,8 @@ namespace Strata
 
 		// Starts an entry and returns its id (0 while the journal is disabled). A command begun while another one runs is
 		// that one's child, from source Internal, whatever origin it was given.
-		uint64_t Begin(const CommandOrigin& origin, std::string_view command, EditorCommandKind kind, const nlohmann::json& parameters, bool playing);
+		uint64_t Begin(const CommandOrigin& origin, std::string_view command, EditorCommandKind kind, EditorCommandResults results,
+			const nlohmann::json& parameters, bool playing);
 		// Notes the undo step a command recorded: when `undo` recorded or merged a step since `recordCountBefore`
 		// (UndoStack::GetRecordCount), its latest step is the command's.
 		void NoteUndo(uint64_t id, const UndoStack& undo, uint64_t recordCountBefore);
@@ -185,13 +200,16 @@ namespace Strata
 		// An entry as editor.activity reports it.
 		static nlohmann::json Describe(const CommandJournalEntry& entry);
 
-		// A command script that repeats the successful edits (EditorCommandKind::Edit, top level, not of a running copy)
-		// after entry `since`, for a project as it was then: IDs that results of the session gave (entities and assets the
-		// session created, which get new IDs every run) are bound where they appeared ("bind") and referenced where they
-		// are used ({"$ref"}), including results of queries that later edits took IDs from, which join the script; IDs the
-		// session used before any result gave them stay as they are (what the project already had). Fails when the journal
-		// no longer holds entries after `since`, or when the parameters of a command it needs were too large to keep. Edits
-		// outside commands cannot be in it: the script counts them (EditsOutsideCommands).
+		// A command script that repeats the successful edits (EditorCommandKind::Edit, top level; made while playing only when
+		// they outlast play mode, i.e. did not change the running copy) after entry `since`, for a project as it was then: IDs
+		// that results of the session gave (entities and assets the session created, which get new IDs every run) are bound
+		// where they appeared ("bind") and referenced where they are used ({"$ref"}), including results of queries of the
+		// project's content that later edits took IDs from, which join the script; IDs the session used before any such result
+		// gave them stay as they are (what the project already had), as do those of results that follow the session (the
+		// selection, editor.status: EditorCommandResults::Session). Fails when the journal no longer holds entries after
+		// `since`, or when the parameters of a command it needs were too large to keep. Edits outside commands and the undo
+		// steps of commands it does not repeat cannot be in it: the script counts them (EditsOutsideCommands,
+		// UnrepeatableEdits).
 		std::optional<ReplayScript> BuildReplayScript(uint64_t since, std::string* outError = nullptr) const;
 	private:
 		CommandJournalEntry* FindMutable(uint64_t id);

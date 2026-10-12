@@ -19,16 +19,20 @@
 #include <Strata/Project/Project.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Scene/Components.h>
+#include <Strata/Scene/Entity.h>
 #include <Strata/Scene/SceneSerializer.h>
 
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <filesystem>
 #include <functional>
 #include <future>
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 
 // Command scripts that bind results of earlier steps, and sessions replayed from the activity journal
 // (editor.activity.export).
@@ -207,6 +211,57 @@ namespace
 		return json;
 	}
 
+	std::unordered_map<std::string, std::string> ReadAssetNames(const std::filesystem::path& project)
+	{
+		std::optional<std::unordered_map<std::string, std::string>> assets = Tests::ReadAssetNames(project / "Assets");
+		REQUIRE(assets.has_value());
+		return std::move(*assets);
+	}
+
+	// Compares the documents of two projects (Tests::ProjectNormalizer): references to their assets by the assets' paths, the
+	// other IDs numbered across the documents in the order they are compared.
+	struct ProjectComparison
+	{
+		std::filesystem::path FirstProject;
+		std::filesystem::path SecondProject;
+		Tests::ProjectNormalizer First { ReadAssetNames(FirstProject) };
+		Tests::ProjectNormalizer Second { ReadAssetNames(SecondProject) };
+
+		void Check(const nlohmann::json& first, const nlohmann::json& second)
+		{
+			const nlohmann::json a = First.Normalize(first);
+			const nlohmann::json b = Second.Normalize(second);
+			INFO(Tests::DescribeFirstDifference(a, b));
+			CHECK(a == b);
+		}
+
+		// The same document of both projects, by its path relative to their asset directories.
+		void CheckFile(const std::string& document)
+		{
+			CAPTURE(document);
+			Check(ReadJsonFile(FirstProject / "Assets" / document), ReadJsonFile(SecondProject / "Assets" / document));
+		}
+	};
+
+	// A basic3d project, and a copy of it as a session finds it (without the editor's local data).
+	void CreateProjectAndCopy(ReplayEditor& editor, const std::filesystem::path& original, const std::filesystem::path& copy)
+	{
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(original) }, { "name", "Game" }, { "template", "basic3d" } });
+		std::string error;
+		REQUIRE_MESSAGE(FileSystem::CopyDirectory(original, copy, &error), error);
+		REQUIRE(FileSystem::Remove(copy / ".strata"));
+	}
+
+	// Runs an exported session on the copy; returns the editor that ran it.
+	void Replay(ReplayEditor& replay, const std::filesystem::path& copy, const std::filesystem::path& session)
+	{
+		replay.Run("project.open", { { "path", FileSystem::ToUTF8(copy) } });
+		std::string error;
+		Scope<EditorCommandScript> script = EditorCommandScript::Load(session, &error);
+		REQUIRE_MESSAGE(script, error);
+		CHECK_FALSE(replay.RunScript(*script));
+	}
+
 }
 
 TEST_SUITE("Editor.CommandScriptBindings")
@@ -307,12 +362,7 @@ TEST_SUITE("Editor.Replay")
 		nlohmann::json built;
 		{
 			ReplayEditor editor;
-			editor.Run("project.create", { { "directory", FileSystem::ToUTF8(original) }, { "name", "Game" }, { "template", "basic3d" } });
-			// The copy is the project as the session found it, without the editor's local data.
-			std::string error;
-			REQUIRE_MESSAGE(FileSystem::CopyDirectory(original, copy, &error), error);
-			REQUIRE(FileSystem::Remove(copy / ".strata"));
-
+			CreateProjectAndCopy(editor, original, copy);
 			const uint64_t since = editor.Context.GetJournal().GetLatestId();
 			AgentClient agent(editor);
 			BuildScene(agent);
@@ -321,7 +371,7 @@ TEST_SUITE("Editor.Replay")
 			CHECK(exported["lookups"] == 1); // The template's sun, found by name
 			CHECK(exported["bindings"].get<size_t>() > 10);
 			CHECK(exported["skippedWhilePlaying"] == 0);
-			built = Tests::NormalizeIds(editor.SceneDocument());
+			built = editor.SceneDocument();
 			for (const CommandJournalEntry& entry : editor.Context.GetJournal().GetEntries())
 			{
 				if (entry.Id > since && entry.Parent == 0)
@@ -338,26 +388,160 @@ TEST_SUITE("Editor.Replay")
 		CHECK(steps[0]["command"] == "material.create");
 
 		ReplayEditor replay;
-		replay.Run("project.open", { { "path", FileSystem::ToUTF8(copy) } });
-		std::string error;
-		Scope<EditorCommandScript> script = EditorCommandScript::Load(session, &error);
-		REQUIRE_MESSAGE(script, error);
-		CHECK_FALSE(replay.RunScript(*script));
-		const nlohmann::json replayed = Tests::NormalizeIds(replay.SceneDocument());
-		INFO(Tests::DescribeFirstDifference(built, replayed));
-		CHECK(replayed == built);
+		Replay(replay, copy, session);
+		// The same scene, referring to the same assets by path (Floor and Pillar to Green, the crates to Metal...), and the
+		// assets the session made exist again with the same content, their own IDs aside.
+		ProjectComparison comparison { original, copy };
+		comparison.Check(built, replay.SceneDocument());
 		CHECK_FALSE(replay.Context.IsSceneModified()); // The session saved at its end, and so did the replay
-		CHECK(Tests::NormalizeIds(ReadJsonFile(copy / "Assets/Scenes/Main.stscene")) == Tests::NormalizeIds(ReadJsonFile(original / "Assets/Scenes/Main.stscene")));
+		for (const char* document : { "Scenes/Main.stscene", "Materials/Red.stmat", "Materials/Metal.stmat", "Materials/Green.stmat", "Prefabs/Crate.stprefab" })
+			comparison.CheckFile(document);
+	}
 
-		// The assets the session made exist again with the same content, their own IDs aside.
-		for (const char* asset : { "Materials/Red.stmat", "Materials/Metal.stmat", "Materials/Green.stmat", "Prefabs/Crate.stprefab" })
+	TEST_CASE("Comparisons name assets by path, so a reference to another asset of the same kind differs")
+	{
+		// Two projects whose scenes use their two materials alike (two references to one of them), but not the same one: a
+		// comparison that numbered IDs alone would find them equal.
+		const std::string red = UUID().ToString();
+		const std::string green = UUID().ToString();
+		const std::string otherRed = UUID().ToString();
+		const std::string otherGreen = UUID().ToString();
+		const auto scene = [](const std::string& material)
 		{
-			CAPTURE(asset);
-			const nlohmann::json first = Tests::NormalizeIds(ReadJsonFile(original / "Assets" / asset));
-			const nlohmann::json second = Tests::NormalizeIds(ReadJsonFile(copy / "Assets" / asset));
-			INFO(Tests::DescribeFirstDifference(first, second));
-			CHECK(first == second);
+			return nlohmann::json { { "Entities", { { { "Material", material } }, { { "Material", material } } } } };
+		};
+		Tests::ProjectNormalizer first({ { Tests::ToUpperId(red), "asset:Materials/Red.stmat" }, { Tests::ToUpperId(green), "asset:Materials/Green.stmat" } });
+		Tests::ProjectNormalizer second({ { Tests::ToUpperId(otherRed), "asset:Materials/Red.stmat" }, { Tests::ToUpperId(otherGreen), "asset:Materials/Green.stmat" } });
+		CHECK(first.Normalize(scene(green)) != second.Normalize(scene(otherRed)));
+		CHECK(first.Normalize(scene(green)) == second.Normalize(scene(otherGreen)));
+
+		// Other IDs are numbered across the documents of a project: an entity the second document refers to is the first's.
+		const std::string entity = UUID().ToString();
+		const std::string otherEntity = UUID().ToString();
+		Tests::ProjectNormalizer a;
+		Tests::ProjectNormalizer b;
+		CHECK(a.Normalize(nlohmann::json { { "ID", entity } }) == b.Normalize(nlohmann::json { { "ID", otherEntity } }));
+		CHECK(a.Normalize(nlohmann::json { { "Source", entity } }) == b.Normalize(nlohmann::json { { "Source", otherEntity } }));
+		CHECK(a.Normalize(nlohmann::json { { "Source", entity } }) != b.Normalize(nlohmann::json { { "Source", UUID().ToString() } }));
+
+		// The names come from the projects' .meta files.
+		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("ReplayAssetNames") / "Assets";
+		REQUIRE(FileSystem::CreateDirectories(assets / "Materials"));
+		REQUIRE(FileSystem::WriteText(assets / "Materials/Red.stmat.meta", nlohmann::json { { "Handle", red } }.dump()));
+		const std::optional<std::unordered_map<std::string, std::string>> names = Tests::ReadAssetNames(assets);
+		REQUIRE(names.has_value());
+		CHECK(names->at(Tests::ToUpperId(red)) == "asset:Materials/Red.stmat");
+		REQUIRE(FileSystem::WriteText(assets / "Materials/Broken.stmat.meta", "{"));
+		CHECK_FALSE(Tests::ReadAssetNames(assets).has_value());
+	}
+
+	TEST_CASE("IDs taken from the selection or editor.status are the project's, and the replay edits the same entity")
+	{
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("ReplaySelection");
+		const std::filesystem::path original = root / "Original";
+		const std::filesystem::path copy = root / "Copy";
+		const std::filesystem::path session = root / "Session.json";
+		nlohmann::json built;
+		{
+			ReplayEditor editor;
+			CreateProjectAndCopy(editor, original, copy);
+			// The person selected the ground; the agent asks what is selected and edits that.
+			const std::string ground = editor.Context.GetEditScene()->FindEntityByName("Ground").GetUUID().ToString();
+			editor.Run("selection.set", { { "entities", { ground } } });
+			const uint64_t since = editor.Context.GetJournal().GetLatestId();
+			AgentClient agent(editor);
+			const std::string primary = agent.Call("editor.status")["selection"]["primary"].get<std::string>();
+			REQUIRE(primary == ground);
+			agent.Call("component.set", { { "entity", primary }, { "component", "Transform" }, { "values", { { "Translation", { 0, 3, 0 } } } } });
+			const std::string selected = agent.Call("selection.get")["entities"][0].get<std::string>();
+			agent.Call("entity.rename", { { "entity", selected }, { "name", "Raised Ground" } });
+			agent.Call("scene.save");
+			const nlohmann::json exported = agent.Call("editor.activity.export", { { "path", FileSystem::ToUTF8(session) }, { "since", since } });
+			CHECK(exported["edits"] == 3);
+			CHECK(exported["lookups"] == 0);
+			CHECK(exported["bindings"] == 0);
+			built = editor.SceneDocument();
 		}
+		const nlohmann::json steps = ReadJsonFile(session);
+		REQUIRE(steps.size() == 3);
+		CHECK(steps[0]["parameters"]["entity"].is_string()); // The ground's own ID, which the copy has too
+
+		// The copy has no selection: the script must not depend on one.
+		ReplayEditor replay;
+		Replay(replay, copy, session);
+		const Entity raised = replay.Context.GetEditScene()->FindEntityByName("Raised Ground");
+		REQUIRE(raised);
+		CHECK(raised.GetComponent<TransformComponent>().Translation == glm::vec3(0.0f, 3.0f, 0.0f));
+		ProjectComparison comparison { original, copy };
+		comparison.Check(built, replay.SceneDocument());
+	}
+
+	TEST_CASE("Changes made while playing that outlast play mode are replayed, edits of the running copy are not")
+	{
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("ReplayWhilePlaying");
+		const std::filesystem::path original = root / "Original";
+		const std::filesystem::path copy = root / "Copy";
+		const std::filesystem::path session = root / "Session.json";
+		nlohmann::json built;
+		{
+			ReplayEditor editor;
+			CreateProjectAndCopy(editor, original, copy);
+			const uint64_t since = editor.Context.GetJournal().GetLatestId();
+			editor.Run("entity.create", { { "name", "Edited" } });
+			editor.Run("play.start");
+			// Saved materials and the saved scene outlast play mode; the entity made in the running copy does not.
+			CHECK_FALSE(editor.Run("material.set", { { "material", "Materials/Ground.stmat" }, { "properties", { { "Roughness", 0.123 } } }, { "save", true } })
+				.contains("warning"));
+			editor.Run("material.create", { { "path", "Materials/MadeWhilePlaying.stmat" }, { "properties", { { "Metallic", 1 } } } });
+			CHECK(editor.Run("entity.create", { { "name", "Played" } }).contains("warning"));
+			editor.Run("scene.save");
+			editor.Run("play.stop");
+			CHECK_FALSE(editor.Context.IsSceneModified());
+			const nlohmann::json exported = editor.Run("editor.activity.export", { { "path", FileSystem::ToUTF8(session) }, { "since", since } });
+			CHECK(exported["skippedWhilePlaying"] == 1);
+			CHECK(exported["edits"] == 4);
+			built = editor.SceneDocument();
+		}
+		const nlohmann::json steps = ReadJsonFile(session);
+		REQUIRE(steps.size() == 4);
+		CHECK(steps[1]["command"] == "material.set");
+		CHECK(steps[2]["command"] == "material.create");
+		CHECK(steps[3]["command"] == "scene.save");
+
+		ReplayEditor replay;
+		Replay(replay, copy, session);
+		CHECK_FALSE(replay.Context.IsSceneModified());
+		CHECK_FALSE(replay.Context.GetEditScene()->FindEntityByName("Played"));
+		ProjectComparison comparison { original, copy };
+		comparison.Check(built, replay.SceneDocument());
+		for (const char* document : { "Scenes/Main.stscene", "Materials/Ground.stmat", "Materials/MadeWhilePlaying.stmat" })
+			comparison.CheckFile(document);
+	}
+
+	TEST_CASE("An export after a recovery says that the script cannot repeat what the recovery applied")
+	{
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("ReplayRecovered") / "Game";
+		ReplayEditor editor;
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(project) }, { "name", "Game" }, { "template", "basic3d" } });
+		editor.Run("entity.create", { { "name", "Recovered" } });
+		editor.Run("project.close", { { "force", true } }); // Kept as recovery data
+		editor.Run("project.open", { { "path", FileSystem::ToUTF8(project) } });
+
+		const uint64_t since = editor.Context.GetJournal().GetLatestId();
+		editor.Run("scene.recover", { { "scene", "Scenes/Main.stscene" }, { "action", "apply" } });
+		const std::string recovered = editor.Context.GetEditScene()->FindEntityByName("Recovered").GetUUID().ToString();
+		editor.Run("entity.rename", { { "entity", recovered }, { "name", "Renamed" } });
+		const nlohmann::json exported = editor.Run("editor.activity.export", { { "path", "Session.json" }, { "since", since } });
+		CHECK(exported["edits"] == 1);
+		REQUIRE(exported.contains("unrepeatableEdits"));
+		CHECK(exported["unrepeatableEdits"] == 1);
+		REQUIRE(exported.contains("warning"));
+		CHECK(exported["warning"].get<std::string>().find("scene.recover") != std::string::npos);
+
+		// Without the recovery in it, the export says nothing of the kind.
+		const nlohmann::json later = editor.Run("editor.activity.export", { { "path", "Later.json" }, { "since", editor.Context.GetJournal().GetLatestId() } });
+		CHECK(later["unrepeatableEdits"] == 0);
+		CHECK_FALSE(later.contains("warning"));
 	}
 
 	TEST_CASE("IDs a result holds at different pointers get different bindings")

@@ -54,6 +54,9 @@ namespace Strata
 		// The command's entry in the activity journal (CommandJournal), set by EditorCommandRegistry::Execute (0 otherwise):
 		// PollCommandResult completes it when a pending result becomes final, notifications point at it.
 		uint64_t JournalId = 0;
+		// A mutating command changed the running copy of a playing scene (its result's warning says so), which play.stop
+		// discards: replays of the session leave it out (CommandJournal::BuildReplayScript).
+		bool RunningCopy = false;
 
 		bool IsPending() const { return static_cast<bool>(Pending); }
 
@@ -79,6 +82,9 @@ namespace Strata
 		// Commands that do not change the project say so: an unmarked command counts as an edit, so a replay never misses
 		// one.
 		EditorCommandKind Kind = EditorCommandKind::Edit;
+		// Queries whose results follow the editor's session (the selection, the journal, what is loaded) say so: replays
+		// never bind the IDs those show.
+		EditorCommandResults Results = EditorCommandResults::Content;
 	};
 
 	class EditorCommandRegistry

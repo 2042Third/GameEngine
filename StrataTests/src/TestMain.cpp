@@ -38,6 +38,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #if defined(ST_PLATFORM_LINUX)
@@ -681,32 +682,45 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 
 	if (mode == "compare-documents")
 	{
-		// <first> <second>...: succeeds if each pair of JSON documents (scenes, prefabs, materials) holds the same content once
-		// IDs are numbered by first appearance (Editor/SceneComparison.h): what a replay of a session on a copy of the project
-		// made against what the session made. Prints the first difference otherwise.
-		if (argc < 4 || (argc - 2) % 2 != 0)
+		// <first asset directory> <second asset directory> <document>...: succeeds if each document (a scene, prefab or
+		// material, by its path relative to the asset directories) holds the same content in both projects once references to
+		// their assets are named by path and the other IDs are numbered by first appearance across the documents
+		// (Tests::ProjectNormalizer): what a replay of a session on a copy of the project made against what the session made.
+		// Prints the first difference otherwise.
+		if (argc < 5)
 			return 2;
-		for (int index = 2; index + 1 < argc; index += 2)
+		const std::filesystem::path assetDirectories[2] = { Strata::FileSystem::FromUTF8(argv[2]), Strata::FileSystem::FromUTF8(argv[3]) };
+		std::optional<Strata::Tests::ProjectNormalizer> normalizers[2];
+		for (int side = 0; side < 2; side++)
+		{
+			std::optional<std::unordered_map<std::string, std::string>> assets = Strata::Tests::ReadAssetNames(assetDirectories[side]);
+			if (!assets)
+			{
+				std::fprintf(stderr, "The .meta files below '%s' cannot be read\n", argv[2 + side]);
+				return 1;
+			}
+			normalizers[side].emplace(std::move(*assets));
+		}
+		for (int index = 4; index < argc; index++)
 		{
 			nlohmann::json documents[2];
 			for (int side = 0; side < 2; side++)
 			{
-				const std::optional<std::string> text = Strata::FileSystem::ReadText(Strata::FileSystem::FromUTF8(argv[index + side]));
-				documents[side] = text ? nlohmann::json::parse(*text, nullptr, false) : nlohmann::json(nlohmann::json::value_t::discarded);
-				if (documents[side].is_discarded())
+				const std::optional<std::string> text = Strata::FileSystem::ReadText(assetDirectories[side] / Strata::FileSystem::FromUTF8(argv[index]));
+				const nlohmann::json document = text ? nlohmann::json::parse(*text, nullptr, false) : nlohmann::json(nlohmann::json::value_t::discarded);
+				if (document.is_discarded())
 				{
-					std::fprintf(stderr, "'%s' is not a readable JSON document\n", argv[index + side]);
+					std::fprintf(stderr, "'%s' of '%s' is not a readable JSON document\n", argv[index], argv[2 + side]);
 					return 1;
 				}
+				documents[side] = normalizers[side]->Normalize(document);
 			}
-			const nlohmann::json first = Strata::Tests::NormalizeIds(documents[0]);
-			const nlohmann::json second = Strata::Tests::NormalizeIds(documents[1]);
-			if (first != second)
+			if (documents[0] != documents[1])
 			{
-				std::fprintf(stderr, "'%s' and '%s' differ at %s\n", argv[index], argv[index + 1], Strata::Tests::DescribeFirstDifference(first, second).c_str());
+				std::fprintf(stderr, "'%s' differs at %s\n", argv[index], Strata::Tests::DescribeFirstDifference(documents[0], documents[1]).c_str());
 				return 1;
 			}
-			std::printf("'%s' and '%s' match\n", argv[index], argv[index + 1]);
+			std::printf("'%s' matches\n", argv[index]);
 		}
 		return 0;
 	}

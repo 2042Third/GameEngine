@@ -117,13 +117,14 @@ namespace Strata
 		EditorCommandResult Finish(EditorContext& context, SceneEditTransaction& transaction, nlohmann::json value = nullptr)
 		{
 			context.CommitEdit(transaction);
-			if (context.IsPlaying())
-			{
-				if (!value.is_object())
-					value = nlohmann::json::object();
-				value["warning"] = GetRunningCopyWarning(context);
-			}
-			return EditorCommandResult::Ok(std::move(value));
+			if (!context.IsPlaying())
+				return EditorCommandResult::Ok(std::move(value));
+			if (!value.is_object())
+				value = nlohmann::json::object();
+			value["warning"] = GetRunningCopyWarning(context);
+			EditorCommandResult result = EditorCommandResult::Ok(std::move(value));
+			result.RunningCopy = true;
+			return result;
 		}
 
 		EditorCommandResult RollBack(SceneEditTransaction& transaction, std::string error, EditorCommandError kind)
@@ -384,7 +385,9 @@ namespace Strata
 						warning += "; physics capacities apply to worlds created later, not to the running one, so set them in edit mode";
 					result["warning"] = std::move(warning);
 				}
-				return EditorCommandResult::Ok(std::move(result));
+				EditorCommandResult outcome = EditorCommandResult::Ok(std::move(result));
+				outcome.RunningCopy = context.IsPlaying();
+				return outcome;
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////

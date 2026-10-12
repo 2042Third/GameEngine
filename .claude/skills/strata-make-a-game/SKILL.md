@@ -149,7 +149,8 @@ while checking an exact score), then turn them back to let time play its part (f
 Steps that create something can name what they made for later steps: `"bind": {"ball": "/id"}` on the step, then
 `{"$ref": "ball"}` wherever a later step's parameters need the ID. To turn how you built the scene into a script, export
 your session: `editor.activity.export {"path": "Build.json", "since": <journal.latest of editor.activity before you began>}`
-writes it with those bindings, ready to run on a fresh copy of the project as it was then.
+writes it with those bindings, ready to run on a fresh copy of the project as it was then (take IDs for it from
+`entity.find` or creating results rather than from the selection, which the script does not repeat).
 `StrataTests/Editor/TetrisCommands.json.in` and `TetrisSample.cmake` are the full example (CTest `StrataEditor.Tetris`).
 
 ## 8. Export and check the game

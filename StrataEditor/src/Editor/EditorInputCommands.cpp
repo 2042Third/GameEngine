@@ -347,7 +347,7 @@ namespace Strata
 				state["paused"] = Input::IsSuspended();
 				state["queued"] = Input::HasQueuedSimulatedInput();
 				return EditorCommandResult::Ok(std::move(state));
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 	}
 
 }

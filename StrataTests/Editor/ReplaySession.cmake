@@ -4,8 +4,8 @@
 #      instance, a copy, an undone and redone deletion, a template entity found by name, an edit while playing, a save),
 #      each step using results of earlier ones through "bind" and {"$ref"}, and exports what it did as a command script;
 #   3. the editor runs that script on the copy;
-#   4. the copy's scene, material and prefab must match the original's, their IDs aside (StrataTests
-#      --strata-test-helper=compare-documents).
+#   4. the copy's scene, material and prefab must match the original's, references to assets by the assets' paths and the
+#      other IDs aside (StrataTests --strata-test-helper=compare-documents).
 # Every step must succeed.
 #
 # cmake -DEDITOR=<StrataEditor> -DTESTS=<StrataTests> -DCOMMANDS=<ReplaySessionCommands.json.in> -DWORK_DIR=<directory>
@@ -67,11 +67,8 @@ message("The exported script:\n${script}")
 run_editor("replay the session" --project "${copy}" --commands "${session}")
 
 # 4. Both projects hold the same scene and assets.
-set(documents)
-foreach(document "Scenes/Main.stscene" "Materials/Crate.stmat" "Prefabs/Crate.stprefab")
-	list(APPEND documents "${original}/Assets/${document}" "${copy}/Assets/${document}")
-endforeach()
-execute_process(COMMAND "${TESTS}" --strata-test-helper=compare-documents ${documents}
+execute_process(COMMAND "${TESTS}" --strata-test-helper=compare-documents "${original}/Assets" "${copy}/Assets"
+		"Scenes/Main.stscene" "Materials/Crate.stmat" "Prefabs/Crate.stprefab"
 	OUTPUT_VARIABLE output ERROR_VARIABLE output RESULT_VARIABLE result)
 message("${output}")
 if(NOT result EQUAL 0)

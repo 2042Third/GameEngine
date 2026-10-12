@@ -385,7 +385,7 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeCamera(context.GetViewport().GetCamera()));
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "camera.set",
 			"Moves or configures the editor camera (a view change: no undo step, the scene is unchanged). position + target looks from one point at the other; "
@@ -481,7 +481,7 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeViewportSettings(context.GetViewport().GetSettings()));
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "viewport.setSettings",
 			"Changes view settings of the viewport (a view change: no undo step, the scene is unchanged) and returns all of them like viewport.getSettings. "

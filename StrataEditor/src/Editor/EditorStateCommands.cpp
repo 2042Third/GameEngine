@@ -16,6 +16,7 @@
 #include <filesystem>
 #include <limits>
 #include <optional>
+#include <string>
 #include <vector>
 
 namespace Strata
@@ -103,7 +104,7 @@ namespace Strata
 				const AssetHandle inspected = context.GetInspectedAsset();
 				return EditorCommandResult::Ok({ { "entities", std::move(ids) },
 					{ "inspectedAsset", inspected.IsValid() ? UUIDToJson(inspected) : nlohmann::json(nullptr) } });
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "selection.set",
 			"Replaces the selection of entities (an empty array clears it; selecting entities shows them in the inspector) and/or shows an asset in "
@@ -175,7 +176,7 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeHistory(context));
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Activity
@@ -184,8 +185,8 @@ namespace Strata
 		registry.Register({ "editor.activity",
 			"What people, agents and scripts did in this editor: the activity journal of every command run (the latest 2,000, within 8 MB), oldest "
 			"first after since. Each entry: {id, parent (the command that ran it), time (milliseconds since 1970-01-01 UTC), source (UI, "
-			"Automation, CommandScript or Internal), client (an automation client's name), command, mutating, playing (ran on the running copy), "
-			"parameters (parametersTruncated when too large to keep), status (Pending, Succeeded, Failed), result (a summary) or error {kind, "
+			"Automation, CommandScript or Internal), client (an automation client's name), command, mutating, playing (ran while the scene played), "
+			"runningCopy (changed the playing scene's running copy, which play.stop discarded), parameters (parametersTruncated when too large to keep), status (Pending, Succeeded, Failed), result (a summary) or error {kind, "
 			"message}, warning, durationMs, frames (of a command that took several), entities (that its undo step touched, at most 256) and "
 			"entityCount, undoStep}. Page with since = the returned latest while more is true; editor.activity.export turns entries into a "
 			"command script.",
@@ -237,17 +238,20 @@ namespace Strata
 				}
 				return EditorCommandResult::Ok({ { "entries", std::move(entries) }, { "latest", latest }, { "more", more },
 					{ "journal", { { "entries", journal.GetEntries().size() }, { "bytes", journal.GetBytes() }, { "latest", journal.GetLatestId() } } } });
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "editor.activity.export",
 			"Writes the successful edits after an entry of the activity journal (editor.activity; since 0: from the session's start) as a command script for "
 			"StrataEditor --commands, to repeat a session on a copy of the project as it was at that point, e.g. as a regression script: "
-			"commands of kind Edit (editor.commands), not edits of a running copy (play.stop discarded them). Entities and assets the session "
+			"commands of kind Edit (editor.commands), also those run while playing that outlast play mode (materials, assets, scene.save), but "
+			"not edits of a playing scene's running copy (play.stop discarded them: skippedWhilePlaying). Entities and assets the session "
 			"created get new IDs every run, so the script binds them where a result gave them (\"bind\": {\"e12.id\": \"/id\"}) and refers to them "
-			"where they are used ({\"$ref\": \"e12.id\"}); queries whose results later edits took IDs from are part of the script too. Returns "
-			"{path, steps, edits, lookups, bindings, skippedWhilePlaying, editsOutsideCommands, warning?, since, latest}: changes made outside "
-			"commands (inspector fields, gizmo drags, the material editor record their undo steps directly) cannot be in the script, and a "
-			"warning says so when there were any. Fails when the journal no longer holds every entry after since (it keeps at most 2,000 "
+			"where they are used ({\"$ref\": \"e12.id\"}); queries of the project's content whose results later edits took IDs from are part of "
+			"the script too (IDs from results that follow the editor's session, such as selection.get and editor.status, stay as they are). "
+			"Returns {path, steps, edits, lookups, bindings, skippedWhilePlaying, editsOutsideCommands, unrepeatableEdits, warning?, since, "
+			"latest}: changes made outside commands (inspector fields, gizmo drags, the material editor record their undo steps directly) and "
+			"the undo steps of commands a script does not repeat (scene.recover) cannot be in the script, and a warning says so when there "
+			"were any. Fails when the journal no longer holds every entry after since (it keeps at most 2,000 "
 			"commands and 8 MB of them: export from a later entry then), or when the parameters of a command the script needs were too large to keep.",
 			ObjectSchema({
 				{ "path", StringSchema("The .json file to write: relative to the project directory (needs an open project) or absolute; folders are created, "
@@ -286,13 +290,19 @@ namespace Strata
 					{ "bindings", script->Bindings },
 					{ "skippedWhilePlaying", script->SkippedWhilePlaying },
 					{ "editsOutsideCommands", script->EditsOutsideCommands },
+					{ "unrepeatableEdits", script->UnrepeatableEdits },
 					{ "since", script->Since },
 					{ "latest", script->Latest } };
+				std::string missing;
 				if (script->EditsOutsideCommands > 0)
+					missing = fmt::format("{} edit(s) were made outside commands (inspector, gizmos, material editor)", script->EditsOutsideCommands);
+				if (script->UnrepeatableEdits > 0)
 				{
-					value["warning"] = fmt::format("{} edit(s) since #{} were made outside commands (inspector, gizmos, material editor): the script "
-						"does not repeat them", script->EditsOutsideCommands, script->Since);
+					missing += fmt::format("{}{} edit(s) came from commands a script does not repeat (scene.recover)", missing.empty() ? "" : " and ",
+						script->UnrepeatableEdits);
 				}
+				if (!missing.empty())
+					value["warning"] = fmt::format("Since #{}, {}: the script does not repeat them", script->Since, missing);
 				return EditorCommandResult::Ok(std::move(value));
 			}, EditorCommandKind::Session });
 
@@ -326,7 +336,7 @@ namespace Strata
 					result["entries"] = std::move(entries);
 					return EditorCommandResult::Ok(std::move(result));
 				});
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "scene.recover",
 			"Applies or discards recovery data (scene.recoveryStatus). apply: opens the scene the changes were made to (a scene never saved: a "
@@ -460,7 +470,7 @@ namespace Strata
 				for (const auto& [section, provider] : context.GetStatusProviders())
 					status.emplace(section, provider());
 				return EditorCommandResult::Ok(std::move(status));
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "editor.recentProjects",
 			"The projects opened most recently, most recent first (at most 12, projects that no longer exist left out): name, path of the project "
@@ -479,7 +489,7 @@ namespace Strata
 						{ "engineVersion", project.EngineVersion } });
 				}
 				return EditorCommandResult::Ok({ { "projects", std::move(projects) } });
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "editor.removeRecentProject",
 			"Takes a project off the recent projects (editor.recentProjects); its files stay where they are.",
@@ -568,7 +578,7 @@ namespace Strata
 					return arguments.Fail();
 				const FrameProfileSummary summary = FrameProfiler::Get().Summarize(static_cast<uint32_t>(frames));
 				return EditorCommandResult::Ok(DescribeFrameProfile(summary, JobSystem::GetStats()));
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Play mode
@@ -634,7 +644,7 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribePlayState(context));
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Log
@@ -691,7 +701,7 @@ namespace Strata
 						{ "time", entry.Timestamp } });
 				}
 				return EditorCommandResult::Ok({ { "messages", std::move(messages) }, { "latest", latest }, { "more", more } });
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 	}
 
 }
