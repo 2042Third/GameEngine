@@ -106,8 +106,10 @@ namespace Strata
 		static constexpr uint32_t c_UnfocusedIdleFrameRate = 10;
 		static constexpr double c_InputActivitySeconds = 0.5;
 		static constexpr double c_AutomationActivitySeconds = 1.0;
-		// Version of the default layout: a saved layout of another version is replaced by the default one.
-		static constexpr int c_LayoutVersion = 3;
+		// Version of the default layout: a saved layout of another version is replaced by the default one. Bump it when the
+		// default layout gains a docked panel that is open by default (4: the Problems panel, and Activity beside it), which
+		// an older layout would show floating over the viewport.
+		static constexpr int c_LayoutVersion = 4;
 
 		EditorLayer(const EditorOptions& options, Scope<EditorHost> host);
 		~EditorLayer() override = default;

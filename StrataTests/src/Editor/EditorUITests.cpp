@@ -34,6 +34,7 @@
 #include <ImGuizmo.h>
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <functional>
@@ -84,6 +85,41 @@ namespace
 	{
 		REQUIRE(window);
 		return width ? window->Size.x / display.x : window->Size.y / display.y;
+	}
+
+	// imgui.ini text as an editor without the given panels saved it: no windows and no open states of them, and the layout
+	// version it wrote.
+	std::string WithoutPanels(const std::string& settings, const std::vector<std::string>& panels, int layoutVersion)
+	{
+		std::string result;
+		std::string section;
+		bool skipping = false;
+		size_t start = 0;
+		while (start < settings.size())
+		{
+			const size_t end = settings.find('\n', start);
+			const std::string line = settings.substr(start, end == std::string::npos ? std::string::npos : end - start);
+			start = end == std::string::npos ? settings.size() : end + 1;
+			if (line.starts_with("["))
+			{
+				section = line;
+				skipping = std::any_of(panels.begin(), panels.end(), [&line](const std::string& panel) { return line == "[Window][" + panel + "]"; });
+			}
+			if (skipping)
+				continue;
+			if (section == "[StrataPanels][Open]"
+				&& std::any_of(panels.begin(), panels.end(), [&line](const std::string& panel) { return line.starts_with(panel + "="); }))
+			{
+				continue;
+			}
+			if (section == "[StrataPanels][Layout]" && line.starts_with("Version="))
+			{
+				result += "Version=" + std::to_string(layoutVersion) + "\n";
+				continue;
+			}
+			result += line + "\n";
+		}
+		return result;
 	}
 
 	// A panel for registry tests.
@@ -298,9 +334,13 @@ TEST_SUITE("Editor.UI")
 		CHECK(contentBrowser->DockNode == console->DockNode);
 		CHECK(contentBrowser->Pos.y >= viewportWindow->Pos.y + viewportWindow->Size.y - 1.0f);
 		CHECK(contentBrowser->Size.x == doctest::Approx(viewportWindow->Size.x).epsilon(0.01));
-		// The Content Browser is the bottom area's visible tab on first run.
+		// The Content Browser is the bottom area's visible tab on first run; the Problems panel waits behind it.
 		CHECK_FALSE(contentBrowser->Hidden);
 		CHECK(console->Hidden);
+		ImGuiWindow* problems = editor.FindPanelWindow(EditorPanels::c_Problems);
+		REQUIRE(problems);
+		CHECK(problems->DockNode == console->DockNode);
+		CHECK(problems->Hidden);
 
 		// The Asset tab shares the Inspector's place, behind it until an asset is inspected.
 		ImGuiWindow* inspector = editor.FindPanelWindow(EditorPanels::c_Inspector);
@@ -324,6 +364,53 @@ TEST_SUITE("Editor.UI")
 			CHECK_FALSE(window->Hidden);
 		}
 		CHECK(viewport->GetImageArea().Size.x * viewport->GetImageArea().Size.y == doctest::Approx(image.x * image.y));
+	}
+
+	TEST_CASE("A layout saved before the Problems and Activity panels gives way to the default layout, which docks them with the Console")
+	{
+		// A laptop-sized window at 100%, where a floating panel would cover the viewport.
+		const ImVec2 display(1600.0f, 900.0f);
+		std::string settings;
+		{
+			HarnessEditor editor({ display, 1.0f }, WithFeatureProject("LayoutBeforeProblems"));
+			editor.Frames(3);
+			size_t size = 0;
+			settings = ImGui::SaveIniSettingsToMemory(&size);
+		}
+		REQUIRE(settings.find("[Window][Problems]") != std::string::npos);
+		// Wave 2's editors had neither panel and wrote layout version 3.
+		const std::string older = WithoutPanels(settings, { EditorPanels::c_Problems, EditorPanels::c_Activity }, 3);
+		REQUIRE(older.find("[Window][Problems]") == std::string::npos);
+		REQUIRE(older.find("Problems=") == std::string::npos);
+		REQUIRE(older.find("[StrataPanels][Layout]\nVersion=3\n") != std::string::npos);
+
+		HarnessEditor editor({ display, 1.0f }, WithFeatureProject("LayoutBeforeProblemsReopened"), older);
+		editor.Frames(3);
+		EditorPanelRegistry& panels = editor.Layer->GetPanels();
+		ImGuiWindow* console = editor.FindPanelWindow(EditorPanels::c_Console);
+		ImGuiWindow* contentBrowser = editor.FindPanelWindow(EditorPanels::c_ContentBrowser);
+		ImGuiWindow* problems = editor.FindPanelWindow(EditorPanels::c_Problems);
+		REQUIRE(console);
+		REQUIRE(contentBrowser);
+		REQUIRE(problems);
+		// Problems is open from the start, a tab of the bottom area behind the Content Browser, not a window over the viewport.
+		CHECK(panels.IsOpen(EditorPanels::c_Problems));
+		REQUIRE(console->DockNode);
+		CHECK(problems->DockNode == console->DockNode);
+		CHECK(problems->Hidden);
+		CHECK_FALSE(contentBrowser->Hidden);
+		// Activity is closed until asked for, and then joins them.
+		CHECK_FALSE(panels.IsOpen(EditorPanels::c_Activity));
+		panels.Focus(EditorPanels::c_Activity);
+		editor.Frames(2);
+		ImGuiWindow* activity = editor.FindPanelWindow(EditorPanels::c_Activity);
+		REQUIRE(activity);
+		CHECK(activity->DockNode == console->DockNode);
+		CHECK_FALSE(activity->Hidden);
+		// The editor saves the current version, so the default layout is built once.
+		size_t size = 0;
+		const std::string saved = ImGui::SaveIniSettingsToMemory(&size);
+		CHECK(saved.find("[StrataPanels][Layout]\nVersion=" + std::to_string(EditorLayer::c_LayoutVersion)) != std::string::npos);
 	}
 
 	TEST_CASE("Panels close and reopen, and imgui.ini remembers which are open")

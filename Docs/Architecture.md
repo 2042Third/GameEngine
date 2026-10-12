@@ -1866,7 +1866,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `EditorPanelRegistry` (`UI/EditorPanelRegistry.h`), which begins each open panel's window (`###<id>` names, so docking
   and settings survive title changes), asks the panel for window options, calls `OnImGuiRender` while it is visible
   and `OnHidden` otherwise, and saves which panels are open with the layout version in imgui.ini (`StrataPanels`); a
-  saved layout of another version is replaced by the default one (`EditorLayer::c_LayoutVersion`). Over either, the
+  saved layout of another version is replaced by the default one (`EditorLayer::c_LayoutVersion`, raised when the default
+  layout gains a panel that is open by default, which an older layout would show floating over the viewport: version 4
+  docks the Problems panel with the Console). Over either, the
   layer draws the dialogs it owns: New Project and Open Sample (`UI/ProjectDialogs`: template cards from
   `project.templates`, name and location fields, then `project.create` or `project.openSample`; the location they last
   used is kept in imgui.ini, `StrataLauncher`, first `<home>/StrataProjects`), About Strata (`UI/AboutDialog`: build,
@@ -1894,11 +1896,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   for the GPU, the display and the pacer, which panels get in `EditorPanelContext::Frame`. **Instruments**: the
   Streaming panel (`Panels/StreamingPanel`) and the Performance panel (`Panels/PerformancePanel`) are closed until the
   status bar's assets and frame pills (or the View menu) open them, docked beside the Console (`DockNewToolPanels` for
-  layouts saved before them), and so is the **Activity panel** (`Panels/ActivityPanel`): the activity journal as a
-  clipped table (source icon, command, compact parameters, result or error, milliseconds) filtered by text, source and
-  "changes only" (kind Edit), its rows rebuilt only when `CommandJournal::GetVersion` or the filters change and the
-  parameter previews made once per entry, with the selected entry's JSON (`CommandJournal::Describe`) and its actions:
-  Copy as script (a one-step command script), Re-run (through the runner, from the UI) and Undo to here (`edit.undo`
+  layouts saved before them: it places panels closed by default the first time they open), and so is the **Activity
+  panel** (`Panels/ActivityPanel`): the activity journal as a clipped table (source icon, command, compact parameters,
+  result or error, milliseconds) filtered by text, source and "changes only" (kind Edit), its rows rebuilt only when
+  `CommandJournal::GetVersion` or the filters change and the parameter previews made once per entry, with the selected
+  entry's JSON (`CommandJournal::Describe`) and its actions: Copy as script (a one-step command script), Re-run (through
+  the runner, from the UI) and Undo to here (`edit.undo`
   until the entry's step is the latest applied, so the journal shows the undos). The commands these run are journaled, and
   a full ring drops its oldest entry for each, possibly the one shown: they run after the details are drawn, with what
   they need copied from the entry (`ActivityPanel::RunAction`). A `force` the person gave was their
