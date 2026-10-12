@@ -21,8 +21,9 @@ namespace Strata
 
 	struct FileChange
 	{
-		std::filesystem::path Path; // Absolute path of the changed file
+		std::filesystem::path Path; // Absolute path of the changed file (or directory)
 		FileChangeType Type = FileChangeType::Modified;
+		bool Directory = false;     // A directory added or removed (FileWatcherSettings::ReportDirectories)
 	};
 
 	struct FileWatcherSettings
@@ -35,11 +36,14 @@ namespace Strata
 		bool Recursive = true;
 		// Directory names skipped during scans (matched against each path component).
 		std::vector<std::string> IgnoredDirectories = { ".git", ".strata" };
+		// Also report directories that are added or removed (FileChange::Directory), e.g. an empty folder made in a file
+		// manager. A directory whose entries change is not reported as modified.
+		bool ReportDirectories = false;
 	};
 
 	// Watches a directory tree for file additions, modifications and removals on a background thread.
 	// Changes are queued and collected on the caller's thread with PollChanges(); no callbacks run on the
-	// background thread. Only regular files are reported.
+	// background thread. Only regular files are reported, and directories that come and go when the settings ask for them.
 	class FileWatcher
 	{
 	public:

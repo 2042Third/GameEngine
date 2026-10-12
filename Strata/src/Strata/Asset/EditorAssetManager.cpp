@@ -1210,7 +1210,10 @@ namespace Strata
 		for (const AssetHandle handle : backgroundImports)
 			QueueImport(handle);
 
-		if (m_Specification.WatchFiles && !m_Watcher.IsRunning() && !m_Watcher.Start(m_Specification.AssetDirectory))
+		// Folders too: one made or removed outside the editor shows in (or leaves) the folder index without a file in it.
+		FileWatcherSettings watchSettings;
+		watchSettings.ReportDirectories = true;
+		if (m_Specification.WatchFiles && !m_Watcher.IsRunning() && !m_Watcher.Start(m_Specification.AssetDirectory, watchSettings))
 			ST_CORE_WARN("Asset hot reload is unavailable: cannot watch '{}'", FileSystem::ToUTF8(m_Specification.AssetDirectory));
 
 		SaveAssetIndex();
@@ -2010,6 +2013,11 @@ namespace Strata
 			const std::filesystem::path path = change.Path.lexically_normal();
 			if (!copying.empty() && copying.contains(ToRelative(path)))
 				continue;
+			if (change.Directory)
+			{
+				ProcessFolderChange(path, change.Type);
+				continue;
+			}
 			if (GetExtension(path) == c_MetaExtension)
 			{
 				std::filesystem::path sourcePath = path;
@@ -3333,14 +3341,50 @@ namespace Strata
 		return listings;
 	}
 
-	void EditorAssetManager::RescanFolders()
+	void EditorAssetManager::ProcessFolderChange(const std::filesystem::path& path, FileChangeType type)
 	{
-		std::scoped_lock<std::mutex> lock(m_SourceMutex);
-		m_Folders.clear();
-		IndexFoldersBelowLocked(m_Specification.AssetDirectory);
-		for (const auto& [folder, handles] : m_SourcesByFolder)
-			AddFolderLocked(folder);
-		MarkChanged();
+		const std::string relative = ToRelative(path);
+		if (relative.empty() || relative == "." || IsHiddenRelativePath(FileSystem::FromUTF8(relative)))
+			return;
+		if (type == FileChangeType::Removed)
+		{
+			// Gone (not moved back meanwhile): its folders leave the index, and so do its assets whose files went with it
+			// (a folder deleted in a file manager may be reported without its files). The editor's own moves and deletes
+			// updated the index already, so they find nothing here.
+			if (FileSystem::Exists(path))
+				return;
+			for (AssetHandle handle : GetAssetsBelowFolder(relative))
+			{
+				const std::optional<AssetMetadata> metadata = GetMetadata(handle);
+				if (metadata && !FileSystem::Exists(ToAbsolute(metadata->Path)))
+				{
+					UnregisterSource(handle, false);
+					ST_CORE_INFO("Asset '{}' removed", metadata->Path);
+				}
+			}
+			bool removed = false;
+			{
+				std::scoped_lock<std::mutex> lock(m_SourceMutex);
+				removed = std::erase_if(m_Folders, [&relative](const std::string& folder) { return IsInFolder(folder, relative); }) > 0;
+			}
+			if (removed)
+				MarkChanged();
+			return;
+		}
+		if (!FileSystem::IsDirectory(path))
+			return;
+		bool added = false;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			if (!m_Folders.contains(relative))
+			{
+				AddFolderLocked(relative);
+				IndexFoldersBelowLocked(path);
+				added = true;
+			}
+		}
+		if (added)
+			MarkChanged();
 	}
 
 	bool EditorAssetManager::CreateFolder(const std::string& relativePath, std::string* outError)

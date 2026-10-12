@@ -749,8 +749,10 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   and `GetBounds` answer the same in the editor and in the game, before anything loads.
 - **Folders, the trash and who uses an asset** (`EditorAssetManager`). The manager keeps three indexes on the main
   thread, so that views and checks never walk the disk or parse documents: the folders of the asset directory (found by
-  `Scan`, kept by the manager's own operations and by files added in them; `RescanFolders` walks again for folders made
-  outside the editor), the source assets per folder (`GetFolders`, `GetAssetsInFolder`, `GetAssetsBelowFolder`), and the
+  `Scan`, kept by the manager's own operations and by files added in them; the file watcher also reports folders that come
+  and go, `FileWatcherSettings::ReportDirectories`, so an empty folder made or removed in a file manager shows or leaves at
+  once, and so do the assets whose files a removed folder took along: `ProcessFolderChange`), the source assets per folder
+  (`GetFolders`, `GetAssetsInFolder`, `GetAssetsBelowFolder`), and the
   inverse of the recorded references (`GetReferencers`: every `SetAssetReferences` goes through `RecordReferences`, every
   unregistration through `ForgetReferences`). `GetChangeVersion` changes with every registration, move, removal, applied
   import, import start or end and folder change, so a view rebuilds only then. File operations keep handles:

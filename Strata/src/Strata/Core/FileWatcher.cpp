@@ -29,6 +29,7 @@ namespace Strata
 		{
 			uint64_t Size = 0;
 			int64_t WriteTime = 0;
+			bool Directory = false; // Directories keep no size or time: only their coming and going counts
 
 			bool operator==(const FileState& other) const = default;
 		};
@@ -76,10 +77,16 @@ namespace Strata
 			auto addEntry = [&](const std::filesystem::directory_entry& entry)
 			{
 				std::error_code entryError;
+				const std::filesystem::path relative = entry.path().lexically_relative(root);
+				if (settings.ReportDirectories && entry.is_directory(entryError))
+				{
+					if (!IsIgnored(relative, settings.IgnoredDirectories))
+						snapshot.emplace(entry.path(), FileState { 0, 0, true });
+					return;
+				}
 				if (!entry.is_regular_file(entryError))
 					return;
 
-				const std::filesystem::path relative = entry.path().lexically_relative(root);
 				if (IsIgnored(relative.parent_path(), settings.IgnoredDirectories))
 					return;
 
@@ -107,7 +114,6 @@ namespace Strata
 								break;
 							}
 						}
-						continue;
 					}
 					addEntry(entry);
 				}
@@ -202,7 +208,7 @@ namespace Strata
 		{
 			if (now - it->second.LastChange >= Settings.Debounce)
 			{
-				stable.push_back(FileChange { it->first, it->second.Type });
+				stable.push_back(FileChange { it->first, it->second.Type, it->second.LastState.Directory });
 				it = Pending.erase(it);
 			}
 			else

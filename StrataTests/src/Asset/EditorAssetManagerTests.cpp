@@ -407,17 +407,50 @@ TEST_SUITE("Asset.Editor")
 		CHECK(manager->GetReferencers(brick).empty());
 		CHECK(manager->GetAssetsInFolder("Materials").empty());
 
-		// Folders made and removed through the manager, and ones found by a new walk.
+		// Folders made and removed through the manager.
 		REQUIRE_MESSAGE(manager->CreateFolder("Levels/One", &error), error);
 		CHECK(manager->HasFolder("Levels"));
 		CHECK(manager->HasFolder("Levels/One"));
 		CHECK_FALSE(manager->RemoveEmptyFolder("Levels", &error)); // Holds a folder
 		REQUIRE_MESSAGE(manager->RemoveEmptyFolder("Levels/One", &error), error);
 		CHECK_FALSE(manager->HasFolder("Levels/One"));
+	}
+
+	TEST_CASE("Folders made and removed outside the editor come and go in the folder index, empty ones too")
+	{
+		ScopedJobSystem jobs;
+		TestProject project("EditorExternalFolders");
+		project.Write("Old/Brick.png", Tests::CreateSolidPNG(2, 2, 1, 1, 1));
+		Ref<EditorAssetManager> manager = project.Open(true);
+		const AssetHandle brick = manager->FindAssetByPath("Old/Brick.png");
+		REQUIRE(brick.IsValid());
+		const uint64_t version = manager->GetChangeVersion();
+
+		// An empty folder (with an empty one in it) made in a file manager.
 		REQUIRE(FileSystem::CreateDirectories(project.Assets / "Outside" / "Made"));
-		CHECK_FALSE(manager->HasFolder("Outside/Made"));
-		manager->RescanFolders();
-		CHECK(manager->HasFolder("Outside/Made"));
+		CHECK(Tests::WaitUntil([&]()
+		{
+			manager->Update();
+			return manager->HasFolder("Outside/Made");
+		}, std::chrono::milliseconds(15000)));
+		CHECK(manager->HasFolder("Outside"));
+		CHECK(manager->GetChangeVersion() != version);
+		// Hidden folders stay out.
+		REQUIRE(FileSystem::CreateDirectories(project.Assets / ".hidden"));
+
+		// Removed with what is in it: the folders and the asset in it leave.
+		std::error_code error;
+		std::filesystem::remove_all(project.Assets / "Outside", error);
+		REQUIRE_FALSE(error);
+		std::filesystem::remove_all(project.Assets / "Old", error);
+		REQUIRE_FALSE(error);
+		CHECK(Tests::WaitUntil([&]()
+		{
+			manager->Update();
+			return !manager->HasFolder("Outside") && !manager->HasFolder("Outside/Made") && !manager->HasFolder("Old") && !manager->IsHandleValid(brick);
+		}, std::chrono::milliseconds(15000)));
+		CHECK_FALSE(manager->HasFolder(".hidden"));
+		CHECK(manager->GetAssetsBelowFolder("").empty());
 	}
 
 	TEST_CASE("Assets and folders go to the trash and come back with their handles")

@@ -995,11 +995,6 @@ namespace Strata
 			if (const std::optional<std::filesystem::path> folder = FileDialogs::PickFolder())
 				ImportFiles(context, panelContext.Commands, panelContext.Runner, { *folder });
 		}
-		if (ImGui::MenuItem((std::string(Icons::RefreshCw) + "  Rescan Folders").c_str()))
-		{
-			if (EditorAssetManager* assets = context.GetAssetManager())
-				assets->RescanFolders();
-		}
 	}
 
 	void ContentBrowserPanel::HandleShortcuts(EditorPanelContext& panelContext)

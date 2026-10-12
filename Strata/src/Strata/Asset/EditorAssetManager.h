@@ -301,8 +301,8 @@ namespace Strata
 		// an import starts or ends, and a folder is created, moved or removed, so that views of the asset directory rebuild
 		// only then. Thread-safe.
 		uint64_t GetChangeVersion() const { return m_ChangeVersion.load(std::memory_order_acquire); }
-		// Every folder of the asset directory that is not hidden, sorted ('/' separators, the root left out). Folders created
-		// outside the editor appear when a file is added in them, or after RescanFolders.
+		// Every folder of the asset directory that is not hidden, sorted ('/' separators, the root left out). Folders made or
+		// removed outside the editor come and go with the file watcher's reports (WatchFiles), empty ones too.
 		std::vector<std::string> GetFolders() const;
 		// Whether the folder exists in the index ("" is the asset directory).
 		bool HasFolder(std::string_view relativePath) const;
@@ -313,8 +313,6 @@ namespace Strata
 		// The source assets directly in a folder (or, with `recursive`, also below it) with what a view shows of them, in one
 		// look at the index, sorted by path: what the Content Browser lists when GetChangeVersion changed.
 		std::vector<AssetListing> ListAssets(std::string_view relativePath, bool recursive) const;
-		// Walks the asset directory's folders again (folders created or removed outside the editor). Blocking.
-		void RescanFolders();
 
 		// The assets whose recorded dependencies (GetDependencies) name this asset: the scenes, prefabs, models and materials
 		// that use it, and the meshes of models that use a material. Answered from an index kept with the recorded references
@@ -469,6 +467,8 @@ namespace Strata
 		// document. Fails for assets that are no source of the project.
 		bool QueueBackgroundImport(AssetHandle handle, bool force, std::string* outError);
 		void ProcessFileChanges();
+		// A folder the file watcher saw come or go: the folder index follows (and assets whose files went with a folder leave).
+		void ProcessFolderChange(const std::filesystem::path& path, FileChangeType type);
 		void ProcessCompletedImports();
 		// Handle -> path of every source asset, persisted in the cache so duplicated .meta files resolve the same way
 		// on every scan (the original keeps its handle).
