@@ -102,8 +102,22 @@ namespace Strata
 		float PixelSize = 0.0f;  // Largest projected size (bounding sphere diameter, in pixels of viewport height) drawn with it
 		float MaxUVScale = 1.0f; // Its largest texture coordinate tiling (MaterialProperties::UVTiling)
 		// The most pixels one unit of the meshes' texture coordinates spans where it is drawn, at the surfaces' points nearest
-		// the camera (TextureStreamingPolicy::GetWorldPixels, GetUVPixels): what its textures' mip levels follow.
+		// the camera (TextureStreamingPolicy::GetWorldPixels, GetUVPixels): what its textures' mip levels follow. 0 for a
+		// material without a loaded texture map, for which nothing streams and nothing is computed.
 		float UVPixels = 0.0f;
+	};
+
+	// A loaded texture map of a material the last frame drew, as the frame resolved it, with that material's use
+	// (VisibleMaterialUse): what the texture streamer needs of it (TextureStreamer::ReportView), so streaming looks nothing
+	// up per material or texture.
+	struct VisibleTextureUse
+	{
+		AssetHandle Texture = UUID::Null();
+		uint32_t Size = 0;      // Its larger side at level 0, in texels
+		uint32_t MipCount = 0;
+		float PixelSize = 0.0f; // VisibleMaterialUse::PixelSize of its material
+		float UVScale = 1.0f;   // VisibleMaterialUse::MaxUVScale
+		float UVPixels = 0.0f;  // VisibleMaterialUse::UVPixels
 	};
 
 	// An entity tinted over the finished image (SceneRenderOptions::EntityTints).
@@ -308,6 +322,8 @@ namespace Strata
 
 		// The materials the last frame drew, with the largest size on screen of what they cover (for mip streaming).
 		std::span<const VisibleMaterialUse> GetVisibleMaterials() const { return m_VisibleMaterials; }
+		// Their loaded texture maps, one entry per material and map (what the renderer reports to the texture streamer).
+		std::span<const VisibleTextureUse> GetVisibleTextures() const { return m_VisibleTextures; }
 		// What the last frame drew: its batches and draw lists, which hold the index of every drawn instance
 		// (RenderScene::GetInstances) in batch order: opaque batches, then transparent ones back to front; shadow batches
 		// cascade by cascade.
@@ -384,6 +400,20 @@ namespace Strata
 			uint32_t Slot = 0;
 			float PixelSize = 0.0f;
 			float UVPixels = 0.0f;
+		};
+
+		// A loaded texture map of a material the frame draws, as ResolveAssets resolved it (for VisibleTextureUse), and a
+		// material slot's range of them.
+		struct ResolvedTexture
+		{
+			AssetHandle Handle;
+			uint32_t Size = 0;
+			uint32_t MipCount = 0;
+		};
+		struct ResolvedTextureRange
+		{
+			uint32_t First = 0;
+			uint32_t Count = 0;
 		};
 
 		// What one chunk of the parallel extraction produced; chunks are merged in order, so the result does not depend on
@@ -498,9 +528,10 @@ namespace Strata
 		void MarkMaterial(uint32_t slot, uint32_t usage);
 		// Sizes the per-material-slot state for `count` slots.
 		void EnsureMaterialSlots(uint32_t count);
-		// The GPU data of a material, its textures resolved (only those already loaded with residentOnly).
-		RenderData::MaterialData BuildMaterialData(const Material& material, bool residentOnly);
-		uint32_t ResolveTexture(AssetHandle handle, uint32_t missingSlot, uint32_t loadingSlot, bool residentOnly);
+		// The GPU data of a material, its textures resolved (only those already loaded with residentOnly). The loaded ones
+		// are appended to `resolved` when it is given (the materials the frame draws, for streaming their levels).
+		RenderData::MaterialData BuildMaterialData(const Material& material, bool residentOnly, std::vector<ResolvedTexture>* resolved = nullptr);
+		uint32_t ResolveTexture(AssetHandle handle, uint32_t missingSlot, uint32_t loadingSlot, bool residentOnly, std::vector<ResolvedTexture>* resolved);
 		// Sorted draws into batches and the draw list (instance indices in batch order).
 		void BuildBatches(std::vector<SortItem>& draws, std::vector<SceneDrawBatch>& outBatches, std::vector<uint32_t>& outDrawList);
 		// Uploads what changed of the instance data (since this renderer's last upload), the material data and the draw lists.
@@ -708,7 +739,10 @@ namespace Strata
 		std::vector<float> m_MaterialPixelSizes;    // Per material slot: the frame's VisibleMaterialUse::PixelSize
 		std::vector<float> m_MaterialUVPixels;      // Per material slot: the frame's VisibleMaterialUse::UVPixels
 		std::vector<float> m_MaterialUVScales;
+		std::vector<ResolvedTexture> m_ResolvedTextures;          // The loaded texture maps of the materials the frame draws
+		std::vector<ResolvedTextureRange> m_MaterialTextures;     // Per material slot: its range of m_ResolvedTextures this frame
 		std::vector<VisibleMaterialUse> m_VisibleMaterials;
+		std::vector<VisibleTextureUse> m_VisibleTextures;
 		std::optional<RenderData::MaterialData> m_DefaultMaterialData; // The default material, resolved once per frame
 		uint32_t m_DefaultMaterialFlags = 0;
 		std::vector<ExtractionChunk> m_Chunks;

@@ -1623,7 +1623,7 @@ namespace Strata
 		view.ViewportHeight = static_cast<float>(m_ViewportSize.y);
 		view.Streaming = m_Specification.TextureStreaming;
 		view.CameraCut = cut;
-		streamer->ReportView(view, m_VisibleMaterials);
+		streamer->ReportView(view, m_VisibleTextures);
 	}
 
 	bool SceneRenderer::RenderFrame(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options)

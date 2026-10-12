@@ -45,6 +45,9 @@ namespace Strata
 		constexpr uint32_t c_MaterialDoubleSided = 1u << 1;
 		constexpr uint32_t c_MaterialAlphaMask = 1u << 2;
 		constexpr uint32_t c_MaterialTransparent = 1u << 3;
+		// It has loaded texture maps, which stream at the level the screen needs: only its draws work out how finely their
+		// texture coordinates show (VisibleMaterialUse::UVPixels).
+		constexpr uint32_t c_MaterialTextured = 1u << 4;
 
 		// Shadow casters further than this toward the light than a cascade's bounding sphere are flattened onto the cascade's
 		// near plane (ShadowMesh.vert) instead of extending its depth range.
@@ -165,6 +168,7 @@ namespace Strata
 			m_MaterialPixelSizes.clear();
 			m_MaterialUVPixels.clear();
 			m_MaterialUVScales.clear();
+			m_MaterialTextures.clear();
 			m_ProxyStamps.clear();
 			m_CasterStamps.clear();
 			m_DrawInstances.clear();
@@ -201,6 +205,8 @@ namespace Strata
 			m_FrameStamp = 1;
 		}
 		m_VisibleMaterials.clear();
+		m_VisibleTextures.clear();
+		m_ResolvedTextures.clear();
 		m_DefaultMaterialData.reset();
 		m_DefaultMaterialFlags = 0;
 	}
@@ -223,6 +229,7 @@ namespace Strata
 		m_MaterialPixelSizes.resize(count, 0.0f);
 		m_MaterialUVPixels.resize(count, 0.0f);
 		m_MaterialUVScales.resize(count, 1.0f);
+		m_MaterialTextures.resize(count);
 	}
 
 	void SceneRenderer::MarkMesh(uint32_t slot, uint32_t usage)
@@ -443,12 +450,14 @@ namespace Strata
 		}
 	}
 
-	uint32_t SceneRenderer::ResolveTexture(AssetHandle handle, uint32_t missingSlot, uint32_t loadingSlot, bool residentOnly)
+	uint32_t SceneRenderer::ResolveTexture(AssetHandle handle, uint32_t missingSlot, uint32_t loadingSlot, bool residentOnly, std::vector<ResolvedTexture>* resolved)
 	{
 		if (!handle.IsValid())
 			return PackTextureSlot(missingSlot, 0);
 
 		const Ref<Texture> texture = residentOnly ? m_Assets.FindResident<Texture>(handle) : m_Assets.Resolve<Texture>(handle, AssetPriority::Normal);
+		if (texture && resolved)
+			resolved->push_back(ResolvedTexture { handle, std::max(texture->GetWidth(), texture->GetHeight()), texture->GetMipCount() });
 		if (!texture || texture->GetBindlessSlot() == BindlessTextureTable::c_InvalidSlot)
 			return PackTextureSlot(loadingSlot, 0);
 		// Without streaming the renderer needs every level: it draws what is resident and waits for the rest.
@@ -457,7 +466,7 @@ namespace Strata
 		return PackTextureSlot(texture->GetBindlessSlot(), GetSamplerIndex(texture->GetSpecification()), texture->GetSpecification().Grayscale);
 	}
 
-	RenderData::MaterialData SceneRenderer::BuildMaterialData(const Material& material, bool residentOnly)
+	RenderData::MaterialData SceneRenderer::BuildMaterialData(const Material& material, bool residentOnly, std::vector<ResolvedTexture>* resolved)
 	{
 		const MaterialProperties& properties = material.GetProperties();
 		RenderData::MaterialData data = {};
@@ -476,11 +485,11 @@ namespace Strata
 
 		// Missing maps use neutral textures; maps still loading use neutral ones too, except emission (black until the map
 		// arrives, so surfaces do not flash at full emissive strength).
-		data.BaseColorMap = ResolveTexture(properties.BaseColorMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot, residentOnly);
-		data.MetallicRoughnessMap = ResolveTexture(properties.MetallicRoughnessMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot, residentOnly);
-		data.NormalMap = ResolveTexture(properties.NormalMap, BindlessTextureTable::c_FlatNormalSlot, BindlessTextureTable::c_FlatNormalSlot, residentOnly);
-		data.OcclusionMap = ResolveTexture(properties.OcclusionMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot, residentOnly);
-		data.EmissiveMap = ResolveTexture(properties.EmissiveMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_BlackSlot, residentOnly);
+		data.BaseColorMap = ResolveTexture(properties.BaseColorMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot, residentOnly, resolved);
+		data.MetallicRoughnessMap = ResolveTexture(properties.MetallicRoughnessMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot, residentOnly, resolved);
+		data.NormalMap = ResolveTexture(properties.NormalMap, BindlessTextureTable::c_FlatNormalSlot, BindlessTextureTable::c_FlatNormalSlot, residentOnly, resolved);
+		data.OcclusionMap = ResolveTexture(properties.OcclusionMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot, residentOnly, resolved);
+		data.EmissiveMap = ResolveTexture(properties.EmissiveMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_BlackSlot, residentOnly, resolved);
 		return data;
 	}
 
@@ -523,6 +532,7 @@ namespace Strata
 			const uint32_t usage = m_MaterialUsage[slot];
 			const AssetHandle handle = renderScene.GetMaterialHandle(slot);
 			const bool drawn = (usage & (c_UseView | c_UseHigh)) != 0;
+			m_MaterialTextures[slot] = {};
 			Ref<Material> material;
 			if (drawn)
 			{
@@ -541,8 +551,12 @@ namespace Strata
 			uint32_t flags = 0;
 			if (material)
 			{
-				data = BuildMaterialData(*material, !drawn);
-				flags = GetMaterialFlags(material->GetProperties());
+				// The textures of what the frame draws stream at the level its draws need (VisibleTextureUse).
+				const uint32_t firstTexture = static_cast<uint32_t>(m_ResolvedTextures.size());
+				data = BuildMaterialData(*material, !drawn, drawn ? &m_ResolvedTextures : nullptr);
+				const uint32_t textures = static_cast<uint32_t>(m_ResolvedTextures.size()) - firstTexture;
+				m_MaterialTextures[slot] = ResolvedTextureRange { firstTexture, textures };
+				flags = GetMaterialFlags(material->GetProperties()) | (textures > 0 ? c_MaterialTextured : 0u);
 				m_MaterialUVScales[slot] = std::max(std::abs(material->GetProperties().UVTiling.x), std::abs(material->GetProperties().UVTiling.y));
 			}
 			else
@@ -631,9 +645,11 @@ namespace Strata
 				const bool mirrored = (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Mirrored) != 0;
 				const uint32_t first = renderScene.GetFirstInstance(proxy);
 				const std::vector<Submesh>& submeshes = mesh->GetSubmeshes();
-				// How fine its textures show: the pixels a world unit spans where it is nearest, and its axes' scales.
-				const float worldPixels = TextureStreamingPolicy::GetWorldPixels(viewScale, bounds);
-				const glm::vec3 axisScale = GetAxisScale(instances[first].World);
+				// How fine its textures show (the pixels a world unit spans where it is nearest, and its axes' scales), worked
+				// out at its first submesh with a textured material: materials without textures stream nothing.
+				bool scaled = false;
+				float worldPixels = 0.0f;
+				glm::vec3 axisScale(1.0f);
 				for (uint32_t submeshIndex = 0; submeshIndex < count; submeshIndex++)
 				{
 					const uint32_t instance = first + submeshIndex;
@@ -648,8 +664,18 @@ namespace Strata
 						continue;
 					}
 					output.InstancesPerLOD[std::min<size_t>(lod, SceneRendererStats::c_LODStatCount - 1)]++;
-					AppendScreenUse(output.MaterialScreenUses, materialSlot, fraction * viewportHeight,
-						TextureStreamingPolicy::GetUVPixels(worldPixels, submeshes[submeshIndex].UVDensity, axisScale));
+					float uvPixels = 0.0f;
+					if ((materialFlags & c_MaterialTextured) != 0)
+					{
+						if (!scaled)
+						{
+							worldPixels = TextureStreamingPolicy::GetWorldPixels(viewScale, bounds);
+							axisScale = GetAxisScale(instances[first].World);
+							scaled = true;
+						}
+						uvPixels = TextureStreamingPolicy::GetUVPixels(worldPixels, submeshes[submeshIndex].UVDensity, axisScale);
+					}
+					AppendScreenUse(output.MaterialScreenUses, materialSlot, fraction * viewportHeight, uvPixels);
 					const bool doubleSided = (materialFlags & c_MaterialDoubleSided) != 0;
 					if ((materialFlags & c_MaterialTransparent) != 0)
 					{
@@ -712,8 +738,16 @@ namespace Strata
 
 		for (const uint32_t slot : m_UsedMaterialSlots)
 		{
-			if (m_MaterialPixelSizes[slot] > 0.0f)
-				m_VisibleMaterials.push_back(VisibleMaterialUse { renderScene.GetMaterialHandle(slot), m_MaterialPixelSizes[slot], m_MaterialUVScales[slot], m_MaterialUVPixels[slot] });
+			if (m_MaterialPixelSizes[slot] <= 0.0f)
+				continue;
+			const VisibleMaterialUse use { renderScene.GetMaterialHandle(slot), m_MaterialPixelSizes[slot], m_MaterialUVScales[slot], m_MaterialUVPixels[slot] };
+			m_VisibleMaterials.push_back(use);
+			const ResolvedTextureRange range = m_MaterialTextures[slot];
+			for (uint32_t index = range.First; index < range.First + range.Count; index++)
+			{
+				const ResolvedTexture& texture = m_ResolvedTextures[index];
+				m_VisibleTextures.push_back(VisibleTextureUse { texture.Handle, texture.Size, texture.MipCount, use.PixelSize, use.MaxUVScale, use.UVPixels });
+			}
 		}
 	}
 

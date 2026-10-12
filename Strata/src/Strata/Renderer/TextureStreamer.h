@@ -21,12 +21,12 @@ namespace Strata
 	class AssetManagerBase;
 	class Texture;
 	struct SceneCamera;
-	struct VisibleMaterialUse;
+	struct VisibleTextureUse;
 
 	// How a view wants the textures it drew (TextureStreamer::ReportView).
 	struct TextureStreamingView
 	{
-		float ViewportHeight = 0.0f; // Pixels: VisibleMaterialUse::PixelSize is measured in them
+		float ViewportHeight = 0.0f; // Pixels: VisibleTextureUse::PixelSize is measured in them
 		bool Streaming = true;       // False: every texture it drew at full resolution (SceneRendererSpecification::TextureStreaming)
 		bool CameraCut = false;      // The view jumped since its previous frame: its reads go before older ones
 	};
@@ -126,7 +126,8 @@ namespace Strata
 
 	// Keeps every texture of an asset manager at the mip level the screen needs (one per manager: an AssetManagerExtension
 	// the renderer module registers). The manager loads textures partly (their header and mip tail, AssetPrefixFunction);
-	// each frame the renderers report the materials they drew (ReportView, SceneRenderer does), from which the streamer
+	// each frame the renderers report the textures they drew, with how finely each material showed them (ReportView,
+	// SceneRenderer does: VisibleTextureUse, resolved by the frame, so reports look nothing up), from which the streamer
 	// derives the level each texture needs (TextureStreamingPolicy), reads the missing levels' cooked bytes by range through
 	// the manager's streaming queue (AssetManagerBase::RequestRange, ranked by missing levels times coverage, a camera cut's
 	// first; queued reads rise with their texture's rank) and raises the texture with them within the frame's upload
@@ -155,7 +156,7 @@ namespace Strata
 		static TextureStreamer* Find(AssetManagerBase& manager);
 
 		// What a view drew in its frame, for the levels its textures need (SceneRenderer reports after each frame it renders).
-		void ReportView(const TextureStreamingView& view, std::span<const VisibleMaterialUse> materials);
+		void ReportView(const TextureStreamingView& view, std::span<const VisibleTextureUse> textures);
 		// Asks for a texture at `level` in this frame, like a view would (a preview at full resolution: 0; a sky light's
 		// environment map). Ignored for textures that are not loaded.
 		void RequestLevel(AssetHandle texture, uint32_t level, float coverage = 1.0f);

@@ -2,7 +2,6 @@
 #include "Strata/Renderer/TextureStreamer.h"
 
 #include "Strata/Asset/AssetManager.h"
-#include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/RendererUploadContext.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Renderer/Texture.h"
@@ -192,26 +191,15 @@ namespace Strata
 		return dynamic_cast<const RendererUploadContext*>(upload) != nullptr;
 	}
 
-	void TextureStreamer::ReportView(const TextureStreamingView& view, std::span<const VisibleMaterialUse> materials)
+	void TextureStreamer::ReportView(const TextureStreamingView& view, std::span<const VisibleTextureUse> textures)
 	{
+		// The renderer resolved the textures for the frame: nothing is looked up in the manager (a frame draws up to tens of
+		// thousands of materials, most of them often without textures, which the renderer leaves out).
 		const float viewportHeight = std::max(view.ViewportHeight, 1.0f);
-		for (const VisibleMaterialUse& use : materials)
+		for (const VisibleTextureUse& use : textures)
 		{
-			const Ref<Asset> asset = m_Manager.PeekLoadedAsset(use.Material);
-			if (!asset || asset->GetType() != AssetType::Material)
-				continue;
-			const MaterialProperties& properties = std::static_pointer_cast<Material>(asset)->GetProperties();
-			for (AssetHandle handle : { properties.BaseColorMap, properties.MetallicRoughnessMap, properties.NormalMap, properties.OcclusionMap, properties.EmissiveMap })
-			{
-				if (!handle.IsValid())
-					continue;
-				const Ref<Texture> texture = PeekTexture(handle);
-				if (!texture)
-					continue; // Its load is the renderer's request
-				const uint32_t size = std::max(texture->GetWidth(), texture->GetHeight());
-				const uint32_t level = view.Streaming ? TextureStreamingPolicy::ComputeWantedLevel(size, texture->GetMipCount(), use.MaxUVScale, use.UVPixels) : 0;
-				m_Policy.AddNeed(handle, level, use.PixelSize / viewportHeight, view.CameraCut, !view.Streaming);
-			}
+			const uint32_t level = view.Streaming ? TextureStreamingPolicy::ComputeWantedLevel(use.Size, use.MipCount, use.UVScale, use.UVPixels) : 0;
+			m_Policy.AddNeed(use.Texture, level, use.PixelSize / viewportHeight, view.CameraCut, !view.Streaming);
 		}
 	}
 

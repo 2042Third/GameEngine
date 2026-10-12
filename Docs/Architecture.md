@@ -1107,8 +1107,11 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     upload bytes, upload time and deadline (`OnUpdate`), and before evicting for a pool over budget lets it free memory
     (`ReleaseMemory`); its counters join the statistics (`AssetManagerStats::Detail`).
   - *Wanted levels.* Each `SceneRenderer` reports what it drew after a frame (`TextureStreamer::ReportView` with
-    `GetVisibleMaterials`: per material the largest projected size, its texture coordinate tiling and `UVPixels`, the most
-    pixels a unit of the meshes' texture coordinates spans where it is drawn). `UVPixels` follows texel density where a
+    `GetVisibleTextures`: per loaded texture map of a material it drew, the texture's size and levels as the frame
+    resolved them, so the report looks nothing up in the manager, with its material's use from `GetVisibleMaterials`: the
+    largest projected size, its texture coordinate tiling and `UVPixels`, the most pixels a unit of the meshes' texture
+    coordinates spans where it is drawn, worked out only for draws of materials with loaded texture maps, so frames of
+    untextured materials pay nothing for streaming). `UVPixels` follows texel density where a
     surface is nearest the camera, not the size of its bounds: the pixels a world unit spans at the point of a proxy's
     bounds nearest the camera (`TextureStreamingPolicy::GetWorldPixels`: the view's height over twice the tangent of half
     its field of view, over that distance, at least the near plane), over the texture coordinates per world unit of its
@@ -1342,7 +1345,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   every frame for the materials drawn and uploaded where it changed.
 - **A still frame** updates no proxy and uploads no instance, material or draw list (`SceneRendererStats::ProxyUpdates`,
   `InstanceBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
-  on screen and texture tiling (`GetVisibleMaterials`, for mip streaming) and its counts and times (`VisibleProxies`,
+  on screen and texture tiling (`GetVisibleMaterials`, and their loaded texture maps, `GetVisibleTextures`, for mip
+  streaming) and its counts and times (`VisibleProxies`,
   `ProxyUpdates`, `InstanceUploadRanges`, `ExtractMs`, `SortMs`, `RequestsByVisibility`, `PrefetchRequests`,
   `GetAssetCalls`, `MeshesWithoutBounds`, `OpaqueDrawCalls`, `ShadowDrawCalls`), most of which the viewport's stats
   overlay shows.
