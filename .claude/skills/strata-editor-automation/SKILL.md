@@ -164,7 +164,8 @@ editor started with `--no-gpu` (use `--headless`):
   there and listed at once (the newest 8 discards stay on offer, older ones move to `Recovery/Discarded`; what a crash
   left always stays). When a project opens with changes an editor left behind, `scene.recoveryStatus` lists them;
   `scene.recover {"scene": "<id>", "action": "apply"}` reopens the scene with them as one undo step (the scene stays unsaved: save
-  it), `"discard"` drops them. Ask the person before recovering or discarding their changes, or show them the choice:
+  it), `"discard"` drops them. Entries follow their scene by its handle, so moving or renaming a scene (`asset.move`)
+  keeps its changes recoverable (`scenePath` is where the scene is now). Ask the person before recovering or discarding their changes, or show them the choice:
   `editor.showDialog {"dialog": "recovery"}`.
 - **Play mode**: `play.start` runs a copy of the scene. Changes made while playing apply to that copy, carry a
   `warning` in the result, and are discarded by `play.stop`. Undo and redo are not available while playing;

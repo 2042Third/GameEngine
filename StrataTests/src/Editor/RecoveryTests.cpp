@@ -5,6 +5,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/EditorNotifications.h"
 #include "Editor/HarnessEditor.h"
+#include "Editor/PropertyEdit.h"
 #include "Editor/SceneRecovery.h"
 #include "Perf/SceneGenerators.h"
 #include "TestHelpers.h"
@@ -14,6 +15,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Platform.h>
+#include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
@@ -449,6 +451,127 @@ TEST_SUITE("Editor.Recovery")
 		CHECK(entries[0]["complete"] == true);
 		harness.Run("scene.recover", { { "scene", entries[0]["id"] }, { "action", "apply" } });
 		CHECK(harness.Snapshot() == edited);
+	}
+
+	TEST_CASE("The frames of a drag merged into one step wait for the next write as that one step")
+	{
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryDrag") / "Game";
+		nlohmann::json edited;
+		{
+			RecoveryHarness harness(project);
+			harness.Run("entity.create", { { "name", "Crate" } });
+			harness.FlushJournal();
+			REQUIRE(harness.Context.GetRecovery().GetStatus().PendingSteps == 0);
+
+			// An inspector drag: one undo step, merged a frame at a time.
+			const Entity crate = harness.Context.GetEditScene()->FindEntityByName("Crate");
+			const ComponentInfo& transform = *ComponentRegistry::Find("Transform");
+			const PropertyInfo& translation = *transform.FindProperty("Translation");
+			const UndoStack& undo = harness.Context.GetUndoStack();
+			const size_t steps = undo.GetCount();
+			const auto drag = [&](int from, int to)
+			{
+				for (int frame = from; frame <= to; frame++)
+				{
+					std::string error;
+					REQUIRE_MESSAGE(SetPropertyWithUndo(harness.Context, crate, transform, translation, PropertyValue(glm::vec3(0.0f, 0.0f, static_cast<float>(frame))),
+						&error), error);
+				}
+			};
+			drag(1, 30);
+			REQUIRE(undo.GetCount() == steps + 1);
+			CHECK(harness.Context.GetRecovery().GetStatus().PendingSteps == 1);
+			CHECK(harness.Run("scene.recoveryStatus")["journal"]["pendingSteps"] == 1);
+
+			// Written halfway, the drag goes on in the same step: again one step waits for the next write.
+			harness.FlushJournal();
+			drag(31, 60);
+			REQUIRE(undo.GetCount() == steps + 1);
+			CHECK(harness.Context.GetRecovery().GetStatus().PendingSteps == 1);
+			edited = harness.Snapshot();
+			harness.Run("project.close", { { "force", true } });
+		}
+
+		// What the journal kept is where the drag ended.
+		RecoveryHarness harness(project, false);
+		harness.Run("scene.recover", { { "scene", "Scenes/Main.stscene" }, { "action", "apply" } });
+		CHECK(harness.Snapshot() == edited);
+		const Entity crate = harness.Context.GetEditScene()->FindEntityByName("Crate");
+		REQUIRE(crate);
+		CHECK(crate.GetComponent<TransformComponent>().Translation == glm::vec3(0.0f, 0.0f, 60.0f));
+	}
+
+	TEST_CASE("Unsaved changes of a scene that moved are recovered from its new place")
+	{
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryMoved") / "Game";
+
+		// A forced discard after the edited scene moved: offered at once, and it applies.
+		nlohmann::json edited;
+		{
+			RecoveryHarness harness(project);
+			harness.Run("entity.create", { { "name", "Before Move" } });
+			harness.Run("asset.move", { { "asset", "Scenes/Main.stscene" }, { "path", "Scenes/Renamed.stscene" } });
+			harness.Run("entity.create", { { "name", "After Move" } });
+			edited = harness.Snapshot();
+			harness.Run("scene.new", { { "force", true } });
+			const nlohmann::json entries = harness.Run("scene.recoveryStatus")["entries"];
+			REQUIRE(entries.size() == 1);
+			CHECK(entries[0]["applicable"] == true);
+			CHECK(entries[0]["scenePath"] == "Scenes/Renamed.stscene");
+			harness.Run("scene.recover", { { "scene", "Scenes/Renamed.stscene" }, { "action", "apply" } });
+			CHECK(harness.Snapshot() == edited);
+			harness.Run("scene.save");
+		}
+
+		// The journal of an edited scene follows it when it moves.
+		std::filesystem::path journal;
+		nlohmann::json header;
+		std::string body;
+		{
+			RecoveryHarness harness(project, false);
+			harness.Run("scene.open", { { "scene", "Scenes/Renamed.stscene" } });
+			harness.Run("entity.create", { { "name", "Crashed" } });
+			harness.FlushJournal();
+			const std::vector<std::filesystem::path> files = ListRecoveryFiles(harness.GetRecoveryDirectory());
+			REQUIRE(files.size() == 1);
+			journal = files[0];
+			CHECK(ReadRecoveryHeader(journal)["ScenePath"] == "Scenes/Renamed.stscene");
+			harness.Run("asset.move", { { "asset", "Scenes/Renamed.stscene" }, { "path", "Levels/Final.stscene" } });
+			harness.Context.Update(Timestep(1.0f / 60.0f));
+			harness.FlushJournal();
+			header = ReadRecoveryHeader(journal);
+			CHECK(header["ScenePath"] == "Levels/Final.stscene");
+			const std::optional<std::string> text = FileSystem::ReadText(journal);
+			REQUIRE(text.has_value());
+			body = text->substr(text->find('\n') + 1);
+			// Back to the saved scene: this editor leaves nothing behind.
+			harness.Run("edit.undo");
+			harness.FlushJournal();
+			REQUIRE(ListRecoveryFiles(harness.GetRecoveryDirectory()).empty());
+		}
+
+		// What an editor left behind (as a crash would: its process is gone) still naming the scene's place before a move, as
+		// one written just before the move would: the next editor offers it at the scene's new place.
+		header["ScenePath"] = "Scenes/Renamed.stscene";
+		header["Owner"]["ProcessStartTime"] = header["Owner"]["ProcessStartTime"].get<uint64_t>() + 1;
+		REQUIRE(FileSystem::WriteText(journal, JsonUtils::Dump(header) + "\n" + body));
+		RecoveryHarness harness(project, false);
+		const nlohmann::json entries = harness.Run("scene.recoveryStatus")["entries"];
+		REQUIRE(entries.size() == 1);
+		CHECK(entries[0]["applicable"] == true);
+		CHECK(entries[0]["scenePath"] == "Levels/Final.stscene");
+
+		// A move while the entry is on offer: it is read again, at the scene's new place.
+		harness.Run("asset.move", { { "asset", "Levels/Final.stscene" }, { "path", "Levels/Last.stscene" } });
+		CHECK(harness.UpdateUntil([](const std::vector<RecoveryEntry>& offered)
+		{
+			return offered.size() == 1 && offered[0].Applicable && offered[0].ScenePath == "Levels/Last.stscene";
+		}));
+		harness.Run("scene.recover", { { "scene", entries[0]["id"] }, { "action", "apply" } });
+		CHECK(harness.Context.GetEditScene()->FindEntityByName("Crashed"));
+		CHECK(harness.Context.GetEditScene()->FindEntityByName("After Move"));
+		harness.Run("edit.undo");
+		CHECK_FALSE(harness.Context.GetEditScene()->FindEntityByName("Crashed"));
 	}
 
 	TEST_CASE("The editor offers recovery data when the project opens, and Recover applies it")

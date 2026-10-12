@@ -59,9 +59,10 @@ namespace Strata
 	public:
 		virtual ~UndoStackObserver() = default;
 
-		// `action` was recorded, absorbed a merged action (then it describes the merged step) or was redone (undone false),
-		// or it was undone (undone true): the scene now holds what it describes for that direction.
-		virtual void OnApplied(const EditorAction& action, bool undone) = 0;
+		// `action` was recorded, absorbed a merged action (merged: it describes the merged step, and replaces what the
+		// notification of it before said, e.g. every frame of a drag) or was redone (undone false), or it was undone (undone
+		// true): the scene now holds what it describes for that direction.
+		virtual void OnApplied(const EditorAction& action, bool undone, bool merged) = 0;
 	};
 
 	// Linear undo history with redo, a capacity limit and save-point tracking (for "modified" indicators).
@@ -133,7 +134,7 @@ namespace Strata
 		};
 
 		void Push(Scope<EditorAction> action);
-		void NotifyApplied(const EditorAction& action, bool undone);
+		void NotifyApplied(const EditorAction& action, bool undone, bool merged = false);
 	private:
 		std::deque<Entry> m_Entries;
 		size_t m_Position = 0;   // Number of applied actions (index of the next redo)

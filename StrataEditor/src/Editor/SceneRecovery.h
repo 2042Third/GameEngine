@@ -30,7 +30,9 @@ namespace Strata
 		std::string Id;                   // The file's name without its extension: what scene.recover takes
 		AssetHandle Scene = UUID::Null(); // Null for a scene that was never saved
 		std::string SceneName;
-		std::string ScenePath;            // Relative to the asset directory (empty for a scene never saved)
+		// Relative to the asset directory (empty for a scene never saved): where the scene is now, found by its handle (it may
+		// have moved since the changes were written)
+		std::string ScenePath;
 		int64_t Time = 0;                 // When it was written: milliseconds since 1970-01-01 UTC
 		// Written when the editor discarded the changes on purpose (force, Don't Save), rather than left behind by an editor
 		// that ended without closing the scene (a crash).
@@ -70,6 +72,7 @@ namespace Strata
 		uint64_t Writes = 0;   // Writes asked for since the scene opened
 		int64_t LastWrite = 0; // When the last write finished: milliseconds since 1970-01-01 UTC (0: none yet)
 		bool Pending = false;  // Changes not written yet
+		size_t PendingSteps = 0; // Undo steps applied since the last write, waiting for the next (merges count once)
 		bool Busy = false;     // A file operation is running or waiting
 		std::string Skipped;   // Why the edited scene's changes are not journaled (e.g. a large scene that was never saved)
 	};
@@ -139,6 +142,10 @@ namespace Strata
 		// Problems the editor knows of a recovery entry beyond its scene file (e.g. the scene asset is gone): empty when it
 		// applies. Runs on the main thread when a scan finishes.
 		using EntryValidator = std::function<std::string(const RecoveryEntry& entry)>;
+		// The project's scenes by handle, with their paths relative to the asset directory: where a scan looks for the scene
+		// file of an entry, which names the scene's path as it was when the entry was written. Runs on the main thread.
+		using ScenePaths = std::unordered_map<AssetHandle, std::string>;
+		using SceneLocator = std::function<ScenePaths()>;
 
 		SceneRecovery();
 		// Finishes the file operations asked for: the editor is closing, and its last journal must reach the disk.
@@ -153,6 +160,7 @@ namespace Strata
 		bool IsActive() const { return !m_Directory.empty(); }
 		const std::filesystem::path& GetDirectory() const { return m_Directory; }
 		void SetEntryValidator(EntryValidator validator) { m_Validator = std::move(validator); }
+		void SetSceneLocator(SceneLocator locator) { m_SceneLocator = std::move(locator); }
 
 		// The edited scene goes away: with unsaved changes they are written now, marked discarded, and the entries are read
 		// again after that write (Update starts the scan). Returns what became of the changes; outReason says why changes
@@ -164,9 +172,13 @@ namespace Strata
 		// The edited scene was saved (as this asset, with this document): its changes are on disk, so the journal's file goes
 		// and the next changes apply to the saved document.
 		void OnSaved(AssetHandle handle, const std::filesystem::path& sceneFile, const std::string& scenePath, std::string document);
+		// The edited scene's asset is at this place now (it may have moved: asset.move, a rename in the Content Browser): the
+		// journal names it from its next write on, which comes as for an edit. Nothing happens when the place is the same.
+		void OnSceneMoved(const std::filesystem::path& sceneFile, const std::string& scenePath);
 
-		// UndoStackObserver: the edited scene's undo stack applied a step.
-		void OnApplied(const EditorAction& action, bool undone) override;
+		// UndoStackObserver: the edited scene's undo stack applied a step. A step that merged another (a frame of a drag)
+		// replaces the states its notification before left waiting for the next write, so a long drag holds one step's.
+		void OnApplied(const EditorAction& action, bool undone, bool merged) override;
 
 		// Once per frame: writes the journal when it is due, starts the next file operation, takes the results of scans and
 		// starts the scan a discard asked for.
@@ -181,6 +193,8 @@ namespace Strata
 		// Starts listing the project's recovery files (after the file operations asked for before). The entries are there
 		// once IsScanning is false.
 		void Scan();
+		// Lists them again as soon as no scan runs (Update starts it), e.g. because a scene of an entry moved.
+		void RequestScan() { m_RescanDue = true; }
 		bool IsScanning() const { return m_Scan != nullptr; }
 		// The recovery files of the last scan, newest first (applicable or not). The version changes with every scan and
 		// discard.
@@ -222,6 +236,8 @@ namespace Strata
 		{
 			Ref<const std::vector<EntityState>> States;
 			Ref<const std::vector<EntityState>> Prior;
+			// The action it came from, only to recognize the step's later merges (OnApplied); never dereferenced.
+			const EditorAction* Action = nullptr;
 		};
 
 		// One step of the journal on disk: entity states by entity, in the order they were first touched. A step of the edits
@@ -254,6 +270,7 @@ namespace Strata
 		{
 			std::filesystem::path Directory;
 			std::filesystem::path AssetDirectory;
+			ScenePaths Scenes; // The scenes when the scan began (SceneLocator)
 			std::vector<RecoveryEntry> Entries;
 			std::atomic<bool> Done = false;
 		};
@@ -267,6 +284,7 @@ namespace Strata
 		std::filesystem::path m_Directory;      // <project>/.strata/Recovery (empty: no project)
 		std::filesystem::path m_AssetDirectory;
 		EntryValidator m_Validator;
+		SceneLocator m_SceneLocator;
 		uint32_t m_ProcessId = 0;
 		uint64_t m_ProcessStartTime = 0;
 
@@ -275,7 +293,8 @@ namespace Strata
 		bool m_Changed = false;                  // Since the last write
 		bool m_NeedsSnapshot = false;            // The next write captures every entity (a step of kind Other)
 		bool m_Unjournaled = false;              // The scene's changes cannot be journaled until it is saved (m_Skipped says why)
-		bool m_RescanDue = false;                // A discard was written: the entries are read again (Update)
+		bool m_RescanDue = false;                // A discard was written, or a scene moved: the entries are read again (Update)
+		std::string m_ScenePath;                 // Where the journal's scene is, as it was last told (OnSceneMoved)
 		std::string m_Skipped;                   // Why the current changes are not journaled
 		std::chrono::steady_clock::time_point m_LastChange;
 		std::chrono::steady_clock::time_point m_LastWrite;

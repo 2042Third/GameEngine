@@ -23,6 +23,7 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -373,6 +374,9 @@ namespace Strata
 		TemplateAssets GetTemplateAssets(std::string_view templateId);
 		// Frames the scene again once the meshes that were loading when it was first framed have loaded (OpenScene).
 		void UpdatePendingFrame();
+		// Scenes moved (asset.move, renames): the recovery journal follows the edited scene to its new place, and recovery
+		// entries of a scene that moved are read again. Looks only when the asset manager's metadata changed.
+		void FollowSceneMoves();
 		void OpenScriptEngine(bool created);
 		void CloseScriptEngine();
 		// Fingerprints the loaded module's file after a load. `expected` is its digest from before the load (if known):
@@ -401,6 +405,7 @@ namespace Strata
 		Ref<Scene> m_RuntimeScene;
 		AssetHandle m_RuntimeSceneAsset = UUID::Null(); // The scene asset playing after a switch; null while a copy of the edited scene runs
 		AssetHandle m_SceneHandle = UUID::Null();
+		uint64_t m_SceneMetadataVersion = UINT64_MAX; // The asset manager's metadata version FollowSceneMoves looked at last
 		SceneState m_SceneState = SceneState::Edit;
 		float m_MasterVolumeBeforePlay = 1.0f;
 		bool m_GameInputActive = false;

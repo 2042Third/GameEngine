@@ -1476,8 +1476,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   vector and answers `IsSelected` from a set. Recorded states are shared and never change (a merge replaces the "after"
   vector), actions say what their effect is made of (`EditorAction::GetSceneChange`: entity states, settings, nothing of
   the scene, or something only a snapshot captures) and hand out their states (`GetEntityStates`), and the stack reports
-  every step it records, merges, undoes or redoes to its `UndoStackObserver`, so journals follow the scene without copying
-  it. Every action has a serial number that a merge keeps (`UndoStack::FindSerial`, `GoTo`).
+  every step it records, merges (`merged`: the step's states replace what its notification before said), undoes or redoes
+  to its `UndoStackObserver`, so journals follow the scene without copying it. Every action has a serial number that a merge keeps (`UndoStack::FindSerial`, `GoTo`).
 - **Autosave and recovery** (`SceneRecovery.h`). `EditorContext` keeps a journal of the edited scene's unsaved changes in
   `<project>/.strata/Recovery/<scene>-<session>.strecovery`: a header line (scene handle and path, the SHA-256 of the
   saved scene file the changes apply to, hashed on an I/O job when the scene opens, a megabyte at a time so that a scene of
@@ -1487,7 +1487,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `SceneEdit::ApplyEntities`, as redo would, they turn the saved file into the edited scene; a step that creates, removes
   or moves no entity folds into the step before it (positions recorded there stay true), so the file grows with the
   structural edits only, and drags and value edits keep one step. The journal follows the undo stack as its observer,
-  which costs a reference per step on the main thread; a write hands the references to an I/O job that folds and
+  which costs a reference per step on the main thread (a drag merges a frame at a time into its step, and each merge
+  replaces the step's states waiting for the write, so a drag of many entities holds one frame's, not every frame's); a write hands the references to an I/O job that folds and
   serializes them, so its cost follows the edits, not the scene's size. It is written `c_QuietSeconds` (2 s) after edits
   stop and at least every `c_MaxIntervalSeconds` (10 s) while they go on: the most work a crash can take is about ten
   seconds. Saving removes the file and so does undoing back to the save point. A scene that was never saved has no file
@@ -1513,7 +1514,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   and has not discarded it belongs to that editor and is left out; the others are
   offered (the editor's Recover Unsaved Changes dialog, `UI/RecoveryDialog`, opens by itself once per opened project
   with changes that still apply; File > Recover Unsaved Changes reopens it) and listed by `scene.recoveryStatus`. An
-  entry applies only while its scene file hashes to the recorded hash and the scene asset is still at its path.
+  entry applies only while the scene asset exists and its file hashes to the recorded hash. Scenes are found by their
+  handles: a scan looks for an entry's scene file where the asset manager has the scene now (`SetSceneLocator`, a snapshot
+  of the scenes' paths taken when the scan starts), so changes of a scene that was moved or renamed (`asset.move`, the
+  Content Browser) stay recoverable; the journal of the edited scene follows a move at the next frame (or before a
+  discard) and names the new path from its next write (`EditorContext::FollowSceneMoves`, which looks only when the
+  asset manager's metadata version changed), and entries of a scene that moved, also while a scan ran, are read again.
   `scene.recover {action: "apply"}` reads the file on an I/O job, opens the scene (a scene never saved: a new one of its
   name) and applies the steps as one undo step back to the saved state (`SceneRecoveryAction`, also the settings); the
   scene stays modified, its own journal is written at once and the applied file removed after that write. `"discard"`

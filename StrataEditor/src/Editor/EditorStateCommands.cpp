@@ -315,7 +315,8 @@ namespace Strata
 			"the scene (a crash), or that were discarded on purpose (force, Don't Save) and kept anyway. Returns entries, newest first, each {id, "
 			"scene (null for a scene never saved), sceneName, scenePath, time (milliseconds since 1970-01-01 UTC), discarded, entityCount, complete "
 			"(a snapshot of every entity), applicable, problem (why it cannot be applied, e.g. the scene was saved since)}, and the journal of the "
-			"edited scene {active, file, writes, lastWrite, pending (changes not written yet: they are written about 2 s after edits stop), busy, "
+			"edited scene {active, file, writes, lastWrite, pending (changes not written yet: they are written about 2 s after edits stop), "
+			"pendingSteps (undo steps waiting for that write), busy, "
 			"skipped (why its changes are not journaled)}. Reads the directory again, after the journal writes already asked for. Apply or "
 			"discard an entry with scene.recover. Fails without a project.",
 			ObjectSchema({}),

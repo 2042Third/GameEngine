@@ -28,10 +28,10 @@ namespace Strata
 			Push(std::move(action));
 	}
 
-	void UndoStack::NotifyApplied(const EditorAction& action, bool undone)
+	void UndoStack::NotifyApplied(const EditorAction& action, bool undone, bool merged)
 	{
 		if (m_Observer)
-			m_Observer->OnApplied(action, undone);
+			m_Observer->OnApplied(action, undone, merged);
 	}
 
 	void UndoStack::Push(Scope<EditorAction> action)
@@ -52,7 +52,7 @@ namespace Strata
 			// Absorbed into the latest step (never across the save point, so saving ends a drag's step). A step that now
 			// changes nothing is dropped, and the next edit starts a step of its own. Either way the scene holds what the
 			// latest step describes now (a dropped one: what it started from).
-			NotifyApplied(*m_Entries.back().Action, false);
+			NotifyApplied(*m_Entries.back().Action, false, true);
 			m_LastRecordedSerial = m_Entries.back().Serial;
 			if (m_Entries.back().Action->IsNoOp())
 			{

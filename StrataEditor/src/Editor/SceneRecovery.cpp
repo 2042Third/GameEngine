@@ -419,6 +419,7 @@ namespace Strata
 		m_Journal->Scene = handle;
 		m_Journal->ScenePath = handle.IsValid() ? scenePath : std::string();
 		m_Journal->SceneFile = handle.IsValid() ? sceneFile : std::filesystem::path();
+		m_ScenePath = m_Journal->ScenePath;
 		m_PendingSteps.clear();
 		m_Changed = false;
 		m_NeedsSnapshot = false;
@@ -471,6 +472,7 @@ namespace Strata
 		m_Journal->Scene = handle;
 		m_Journal->ScenePath = scenePath;
 		m_Journal->SceneFile = sceneFile;
+		m_ScenePath = scenePath;
 		m_PendingSteps.clear();
 		m_Changed = false;
 		m_NeedsSnapshot = false;
@@ -483,7 +485,24 @@ namespace Strata
 		});
 	}
 
-	void SceneRecovery::OnApplied(const EditorAction& action, bool undone)
+	void SceneRecovery::OnSceneMoved(const std::filesystem::path& sceneFile, const std::string& scenePath)
+	{
+		if (!m_Journal || !m_Journal->Scene.IsValid() || scenePath.empty() || scenePath == m_ScenePath)
+			return;
+		m_ScenePath = scenePath;
+		// The journal's fields belong to the file operations once they run: changed by one, in order with the writes.
+		Enqueue([journal = m_Journal, sceneFile, scenePath]()
+		{
+			journal->ScenePath = scenePath;
+			journal->SceneFile = sceneFile;
+		});
+		// Written again soon, so that a journal left behind names the scene's new place (scans find a moved scene by its
+		// handle anyway).
+		m_Changed = true;
+		m_LastChange = std::chrono::steady_clock::now();
+	}
+
+	void SceneRecovery::OnApplied(const EditorAction& action, bool undone, bool merged)
 	{
 		if (!IsActive() || !m_Journal)
 			return;
@@ -497,9 +516,20 @@ namespace Strata
 				{
 					Ref<const std::vector<EntityState>> states = action.GetEntityStates(undone);
 					if (!states)
+					{
 						m_NeedsSnapshot = true;
+					}
+					else if (merged && !m_PendingSteps.empty() && m_PendingSteps.back().Action == &action)
+					{
+						// A drag merges a frame at a time into its step: the step's latest states replace those of the frame
+						// before, which would otherwise wait for the write with every other frame's.
+						m_PendingSteps.back().States = std::move(states);
+						m_PendingSteps.back().Prior = action.GetEntityStates(!undone);
+					}
 					else
-						m_PendingSteps.push_back({ std::move(states), action.GetEntityStates(!undone) });
+					{
+						m_PendingSteps.push_back({ std::move(states), action.GetEntityStates(!undone), &action });
+					}
 				}
 				break;
 			case SceneChangeKind::Settings:
@@ -720,6 +750,8 @@ namespace Strata
 		Ref<ScanResult> scan = CreateRef<ScanResult>();
 		scan->Directory = m_Directory;
 		scan->AssetDirectory = m_AssetDirectory;
+		if (m_SceneLocator)
+			scan->Scenes = m_SceneLocator();
 		m_Scan = scan;
 		// Queued after every write asked for so far, discards included.
 		m_RescanDue = false;
@@ -754,6 +786,9 @@ namespace Strata
 				}
 				if (entry.Scene.IsValid())
 				{
+					// The scene by its handle: it may have moved since the changes were written (its file is the same).
+					if (const auto scene = scan->Scenes.find(entry.Scene); scene != scan->Scenes.end())
+						entry.ScenePath = scene->second;
 					if (entry.ScenePath.empty())
 						entry.Problem = "It does not name the scene file it applies to";
 					else
@@ -771,6 +806,9 @@ namespace Strata
 	void SceneRecovery::FinishScan()
 	{
 		m_Entries = std::move(m_Scan->Entries);
+		// A scene that moved while the scan ran may have been looked for at its old place: read again.
+		if (m_SceneLocator && m_SceneLocator() != m_Scan->Scenes)
+			m_RescanDue = true;
 		m_Scan.reset();
 		if (m_Validator)
 		{
@@ -900,6 +938,7 @@ namespace Strata
 		status.Writes = m_Writes;
 		status.LastWrite = m_LastWriteTime->load(std::memory_order_acquire);
 		status.Pending = m_Changed;
+		status.PendingSteps = m_PendingSteps.size();
 		status.Busy = IsBusy();
 		if (!m_Skipped.empty())
 		{
@@ -919,6 +958,7 @@ namespace Strata
 			{ "writes", status.Writes },
 			{ "lastWrite", status.LastWrite },
 			{ "pending", status.Pending },
+			{ "pendingSteps", status.PendingSteps },
 			{ "busy", status.Busy } };
 		if (!status.Skipped.empty())
 			journal["skipped"] = status.Skipped;

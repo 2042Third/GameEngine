@@ -72,7 +72,7 @@ namespace Strata
 	{
 		ActivateBuiltinAssets();
 		// The recovery journal follows every step the undo stack applies; recovery files apply only to scenes the project
-		// still has, at the path they were made for.
+		// still has, which scans find by their handles wherever they moved.
 		m_UndoStack.SetObserver(&m_Recovery);
 		m_Recovery.BeginScene(*m_EditScene, UUID::Null(), {}, {});
 		m_Recovery.SetEntryValidator([this](const RecoveryEntry& entry) -> std::string
@@ -81,10 +81,17 @@ namespace Strata
 				return {};
 			if (!m_AssetManager || m_AssetManager->GetAssetType(entry.Scene) != AssetType::Scene)
 				return fmt::format("The scene {} ('{}') is no longer in the project", entry.Scene.ToString(), entry.ScenePath);
-			const std::string path = GetSceneFile(entry.Scene).second;
-			if (path != entry.ScenePath)
-				return fmt::format("The scene '{}' moved to '{}' after these changes were made", entry.ScenePath, path);
 			return {};
+		});
+		m_Recovery.SetSceneLocator([this]()
+		{
+			SceneRecovery::ScenePaths scenes;
+			if (m_AssetManager)
+			{
+				for (const AssetMetadata& metadata : m_AssetManager->GetAllMetadata(AssetType::Scene))
+					scenes.emplace(metadata.Handle, metadata.Path);
+			}
+			return scenes;
 		});
 		SetStatusProvider("recovery", [this]() { return m_Recovery.DescribeStatus(); });
 		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details).
@@ -260,6 +267,7 @@ namespace Strata
 			if (AssetManager::GetActive() == m_AssetManager)
 				AssetManager::SetActive(nullptr);
 			m_AssetManager.reset();
+			m_SceneMetadataVersion = UINT64_MAX;
 		}
 		if (m_Project)
 		{
@@ -278,6 +286,8 @@ namespace Strata
 	void EditorContext::ResetScene(Ref<Scene> scene, AssetHandle handle, DiscardNotice notice)
 	{
 		Stop();
+		// Discarded changes name where the scene is now, also when it moved in this frame.
+		FollowSceneMoves();
 		// Unsaved changes of the scene that goes are written as recovery data first, so nothing is lost whatever replaced
 		// it (a forced command, the unsaved-changes dialog's Don't Save, closing the editor).
 		std::string lostReason;
@@ -1174,8 +1184,33 @@ namespace Strata
 		PruneSelection();
 		m_Viewport.UpdatePicking(*this);
 		UpdatePendingFrame();
+		FollowSceneMoves();
 		// The recovery journal hands what changed to an I/O job when it is due.
 		m_Recovery.Update(*m_EditScene, IsSceneModified());
+	}
+
+	void EditorContext::FollowSceneMoves()
+	{
+		if (!m_AssetManager)
+			return;
+		const uint64_t version = m_AssetManager->GetMetadataVersion();
+		if (version == m_SceneMetadataVersion)
+			return;
+		m_SceneMetadataVersion = version;
+		const auto [sceneFile, scenePath] = GetSceneFile(m_SceneHandle);
+		m_Recovery.OnSceneMoved(sceneFile, scenePath);
+		// A scan in progress compares the scenes' places when it finishes (SceneRecovery::FinishScan).
+		for (const RecoveryEntry& entry : m_Recovery.GetEntries())
+		{
+			if (!entry.Scene.IsValid())
+				continue;
+			const std::string path = GetSceneFile(entry.Scene).second;
+			if (!path.empty() && path != entry.ScenePath)
+			{
+				m_Recovery.RequestScan();
+				break;
+			}
+		}
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

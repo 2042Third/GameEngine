@@ -573,6 +573,8 @@ TEST_SUITE("EndToEnd.Recovery")
 			// An agent edits the saved scene.
 			crate = Call("entity.create", { { "name", "Crate" }, { "components", { { "Transform", { { "Translation", { 1, 2, 3 } } } } } } })["id"].get<std::string>();
 			Call("component.set", { { "entity", crate }, { "component", "Transform" }, { "values", { { "Translation", { 4, 5, 6 } } } } });
+			// The scene moves meanwhile (its file stays the same): the changes still belong to it.
+			Call("asset.move", { { "asset", "Scenes/Main.stscene" }, { "path", "Levels/Moved.stscene" } });
 			Call("entity.rename", { { "entity", crate }, { "name", "Big Crate" } });
 			REQUIRE(Call("editor.status")["scene"]["modified"] == true);
 
@@ -596,6 +598,7 @@ TEST_SUITE("EndToEnd.Recovery")
 		REQUIRE(status["entries"].size() == 1);
 		const nlohmann::json entry = status["entries"][0];
 		CHECK(entry["sceneName"] == "Main");
+		CHECK(entry["scenePath"] == "Levels/Moved.stscene");
 		CHECK(entry["discarded"] == false); // Left behind by a crash
 		CHECK(entry["applicable"] == true);
 		CHECK(Call("editor.status")["recovery"]["applicable"] == 1);
