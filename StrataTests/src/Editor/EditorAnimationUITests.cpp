@@ -4,6 +4,7 @@
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
 #include "FeatureTest/FeatureTestUtils.h"
+#include "Panels/ContentBrowserPanel.h"
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
 
@@ -11,12 +12,18 @@
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Scene/Components.h>
+#include <Strata/Scene/Entity.h>
+#include <Strata/Scene/Scene.h>
+
+#include <spdlog/fmt/fmt.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -52,6 +59,33 @@ namespace
 		const ImGuiWindow* window = editor.FindPanelWindow(EditorPanels::c_AssetInspector);
 		return window && !window->Hidden && (!window->DockIsActive || window->DockTabIsVisible)
 			&& UI::ItemProbe::Find("AssetInspector.Controller.AddParameter").has_value();
+	}
+
+	// Reveals an asset in the Content Browser (a sub-asset inside its expanded model) and drags its tile onto an item of
+	// another panel, as a person would.
+	void DragFromBrowser(HarnessEditor& editor, ContentBrowserPanel& browser, AssetHandle asset, std::string_view target)
+	{
+		REQUIRE(browser.RevealAsset(editor.Context(), asset));
+		editor.Frames(3);
+		const std::optional<ContentBrowserPanel::ItemRect> tile = browser.FindItemRect(asset);
+		REQUIRE_MESSAGE(tile.has_value(), "The tile of ", asset.ToString(), " was not drawn");
+		const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(target);
+		REQUIRE_MESSAGE(item.has_value(), "No item ", target);
+		const ImVec2 from((tile->Min.x + tile->Max.x) * 0.5f, (tile->Min.y + tile->Max.y) * 0.5f);
+		const ImVec2 to = item->GetCenter();
+		editor.Harness.MoveMouse(from);
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, true);
+		editor.Frames(1);
+		for (int step = 1; step <= 4; step++)
+		{
+			const float t = static_cast<float>(step) / 4.0f;
+			editor.Harness.MoveMouse(ImVec2(from.x + (to.x - from.x) * t, from.y + (to.y - from.y) * t));
+			editor.Frames(1);
+		}
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+		editor.Frames(2);
 	}
 
 	// Turns the mouse wheel's horizontal axis to the right over an item of a table, once per frame.
@@ -228,5 +262,46 @@ TEST_SUITE("Editor.UI.Inspector")
 		editor.Run("play.stop");
 		editor.Frames(2);
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Animator.State").has_value());
+	}
+
+	TEST_CASE("Skeletons, clips and controllers drag from the Content Browser onto an animator's fields, one undo step each")
+	{
+		// Tall enough that the docked browser shows a whole row of tiles.
+		HarnessEditor editor({ ImVec2(1600.0f, 1400.0f), 1.0f }, WithFeatureProject("EditorAnimationDrops"));
+		editor.Run("scene.open", { { "scene", "Scenes/Feature.stscene" } });
+		REQUIRE(editor.FramesUntil([&]() { return !editor.Context().IsSceneLoading(); }));
+		const std::string rig = editor.Run("entity.create", { { "name", "Dropped Rig" } })["id"].get<std::string>();
+		editor.Run("component.add", { { "entity", rig }, { "component", "Animator" } });
+		editor.Run("selection.set", { { "entities", { rig } } });
+		editor.Layer->GetPanels().Focus(EditorPanels::c_ContentBrowser);
+		editor.Layer->GetPanels().Focus(EditorPanels::c_Inspector);
+		editor.Frames(3);
+		ContentBrowserPanel* browser = editor.Layer->GetPanels().Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser);
+		REQUIRE(browser);
+		const Entity entity = editor.Context().GetEditScene()->GetEntityByUUID(UUID::FromString(rig).value());
+		REQUIRE(entity);
+
+		// Each dragged onto its field: one step.
+		const auto drop = [&](AssetHandle asset, const char* field)
+		{
+			CAPTURE(field);
+			const size_t steps = editor.Context().GetUndoStack().GetHistory().size();
+			DragFromBrowser(editor, *browser, asset, fmt::format("Inspector.Animator.{}", field));
+			CHECK(editor.Context().GetUndoStack().GetHistory().size() == steps + 1);
+		};
+
+		const AnimatorComponent& animator = entity.GetComponent<AnimatorComponent>();
+		drop(c_ArmSkeleton, "Skeleton");
+		CHECK(animator.Skeleton == c_ArmSkeleton);
+		drop(c_SwingClip, "Clip");
+		CHECK(animator.Clip == c_SwingClip);
+		drop(c_ArmController, "Controller");
+		CHECK(animator.Controller == c_ArmController);
+
+		// A field takes its own type only: a clip dropped on the skeleton changes nothing.
+		const size_t steps = editor.Context().GetUndoStack().GetHistory().size();
+		DragFromBrowser(editor, *browser, c_SwingClip, "Inspector.Animator.Skeleton");
+		CHECK(animator.Skeleton == c_ArmSkeleton);
+		CHECK(editor.Context().GetUndoStack().GetHistory().size() == steps);
 	}
 }

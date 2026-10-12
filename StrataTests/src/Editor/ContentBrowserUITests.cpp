@@ -335,6 +335,20 @@ TEST_SUITE("Editor.UI.ContentBrowser")
 		editor.Frames(2);
 		CHECK(browser.FindItemRect(sky).has_value());
 
+		// Animation controllers have a chip of their own; models (whose skeletons and clips are sub-assets) do not pass it.
+		const AssetHandle controller = editor.Assets().FindAssetByPath("Animations/Arm.stanimator");
+		const AssetHandle arm = editor.Assets().FindAssetByPath("Models/Arm.gltf");
+		REQUIRE(editor.Click("ContentBrowser.Filter.AnimationController"));
+		browser.SetCurrentDirectory("Animations");
+		editor.Frames(3);
+		CHECK(browser.FindItemRect(controller).has_value());
+		browser.SetCurrentDirectory("Models");
+		editor.Frames(3);
+		CHECK_FALSE(browser.FindItemRect(arm).has_value());
+		REQUIRE(editor.Click("ContentBrowser.Filter.AnimationController"));
+		editor.Frames(2);
+		CHECK(browser.FindItemRect(arm).has_value());
+
 		// The model's expander shows its meshes and materials after it.
 		const AssetHandle model = editor.Assets().FindAssetByPath("Models/Platform.gltf");
 		browser.SetCurrentDirectory("Models");

@@ -142,7 +142,10 @@ namespace Strata
 		void DrawRenamePopup(EditorPanelContext& context);
 		void HandleShortcuts(EditorPanelContext& context);
 		void Open(EditorPanelContext& context, const AssetBrowserItem& item);
-		void Select(EditorContext& context, const AssetBrowserItem& item);
+		// Selects an item and shows an asset in the Asset tab; with `onRelease` (a press of the left button) only once the button
+		// is released without a drag, so that a drag onto another panel (the Inspector's fields, the Asset tab's material)
+		// leaves that panel in front.
+		void Select(EditorContext& context, const AssetBrowserItem& item, bool onRelease = false);
 		void BeginRename(const AssetBrowserItem& item);
 		void CreateFolder(EditorPanelContext& context);
 		// A new material in the open folder (material.create), selected and renamed in place.
@@ -172,6 +175,7 @@ namespace Strata
 		bool m_ScrollTreeToFolder = false;
 		uint64_t m_SeenInspectionVersion = 0;
 		AssetHandle m_InspectedFromHere = UUID::Null(); // Inspected by a click in the browser: no reveal needed
+		AssetHandle m_InspectOnRelease = UUID::Null();  // Pressed: inspected once the button is up, unless it was dragged
 
 		std::vector<ItemRect> m_ItemRects;   // Drawn in the last frame
 		std::vector<std::pair<std::string, ItemRect>> m_FolderRects;

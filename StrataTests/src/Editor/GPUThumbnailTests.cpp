@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -259,6 +260,53 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CAPTURE(darkest);
 		CAPTURE(brightest);
 		CHECK(brightest - darkest > 100);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A skinned model and its skinned mesh show in their bind pose")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path project = Tests::CopyFeatureProject(Tests::CreateTemporaryDirectory("GPUThumbnailSkin") / "Project").parent_path();
+		ThumbnailHarness harness(gpu, project);
+		EditorAssetManager& assets = *harness.Context.GetAssetManager();
+		// The feature project's arm: a tube 2 units tall along +Y, skinned to three joints, with clips that bend it.
+		const AssetHandle model = harness.Find("Models/Arm.gltf");
+		AssetHandle mesh = UUID::Null();
+		for (AssetHandle subAsset : assets.GetImportInfo(model).SubAssets)
+		{
+			if (!mesh.IsValid() && assets.GetAssetType(subAsset) == AssetType::Mesh)
+				mesh = subAsset;
+		}
+		REQUIRE(mesh.IsValid());
+
+		harness.RequestUntilIdle({ model, mesh });
+		for (AssetHandle rendered : { model, mesh })
+		{
+			CAPTURE(rendered.ToString());
+			REQUIRE(harness.Thumbnails().GetState(rendered) == ThumbnailState::Ready);
+			ReadbackImage image;
+			REQUIRE(Renderer::ReadTexture(harness.Thumbnails().Request(rendered), image));
+			// Upright and unbent, as no animator poses it: the tube covers the middle column from a quarter to three quarters
+			// of the height, while the sky shows a quarter of the width to its side on the same rows (where a bent arm would
+			// reach).
+			const auto differs = [](const glm::u8vec4& a, const glm::u8vec4& b)
+			{
+				int difference = 0;
+				for (int channel = 0; channel < 3; channel++)
+					difference += std::abs(static_cast<int>(a[channel]) - static_cast<int>(b[channel]));
+				return difference > 24;
+			};
+			for (uint32_t row : { image.Height / 4, image.Height / 2, image.Height * 3 / 4 })
+			{
+				CAPTURE(row);
+				const glm::u8vec4 sky = Tests::GetPixelRGBA8(image, 1, row);
+				CHECK(differs(Tests::GetPixelRGBA8(image, image.Width / 2, row), sky));
+				CHECK_FALSE(differs(Tests::GetPixelRGBA8(image, image.Width / 4, row), sky));
+				CHECK_FALSE(differs(Tests::GetPixelRGBA8(image, image.Width * 3 / 4, row), sky));
+			}
+		}
+		CHECK(harness.Thumbnails().GetStats().Failed == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

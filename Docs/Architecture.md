@@ -2192,11 +2192,15 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `c_MinFitTileScale`; an expanded model and its sub-assets lie on one band, each sub-asset with its type in a corner) or a
   list, both drawn through `ImGuiListClipper` (only what is in view). Clicks and the keyboard's arrows select tiles and
   rows (`ImGuiSelectableFlags_SelectOnNav`), so Enter, F2 and Delete act on the item the keyboard is at; a folder clicked
-  in the tree is the selection too.
+  in the tree is the selection too. The Asset tab shows a clicked asset once the button is up, and never one whose press
+  began a drag, so a drag onto another panel (the Inspector's fields, the Asset tab's material) leaves that panel in front.
   Above them: breadcrumbs (each a drop target), a search (every word in a name, below the current folder), type chips
-  (`UI::ToggleChip`), the view mode, New (folder, material) and Import (files, a folder). `AssetBrowserView` (no UI,
-  tested alone) holds the rows: folders first, then assets by name, an expanded model's sub-assets (meshes, materials,
-  textures) right after it as drag sources of their own. It rebuilds only when
+  (`UI::ToggleChip`: scenes, prefabs, models, materials, textures, audio, fonts and animation controllers), the view mode,
+  New (folder, material) and Import (files, a folder). `AssetBrowserView` (no UI, tested alone) holds the rows: folders
+  first, then assets by name, an expanded model's sub-assets (meshes, materials, textures, a skinned model's skeleton and
+  clips) right after it as drag sources of their own, which the Inspector's asset fields take when the type fits (an
+  Animator's Skeleton, Clip and Controller). Skeletons, clips and controllers show their type's icon; models and meshes
+  render, skinned ones in their bind pose (no animator poses a thumbnail's scene). The view rebuilds only when
   `EditorAssetManager::GetChangeVersion` (or the folder, search, filter or an expansion) changed, from one look at the
   manager's index (`ListAssets`), and counts its rebuilds: an idle editor rebuilds nothing (the browser used to copy
   every asset's metadata twice a second). Labels are made at rebuild time; tiles cut their names once per tile width. Every

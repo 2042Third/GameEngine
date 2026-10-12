@@ -54,6 +54,7 @@ namespace Strata
 			{ "ContentBrowser.Filter.Texture", "Textures", AssetType::Texture },
 			{ "ContentBrowser.Filter.AudioClip", "Audio", AssetType::AudioClip },
 			{ "ContentBrowser.Filter.Font", "Fonts", AssetType::Font },
+			{ "ContentBrowser.Filter.AnimationController", "Controllers", AssetType::AnimationController },
 		};
 
 		// The tree pane's width when the panel opens, in font sizes.
@@ -250,10 +251,11 @@ namespace Strata
 			}, CommandOrigin { CommandSource::UI });
 	}
 
-	void ContentBrowserPanel::Select(EditorContext& context, const AssetBrowserItem& item)
+	void ContentBrowserPanel::Select(EditorContext& context, const AssetBrowserItem& item, bool onRelease)
 	{
 		m_Revealed = UUID::Null();
 		m_ScrollToRevealed = false;
+		m_InspectOnRelease = UUID::Null();
 		if (item.Kind == AssetBrowserItemKind::Folder)
 		{
 			m_Selected = UUID::Null();
@@ -262,6 +264,11 @@ namespace Strata
 		}
 		m_Selected = item.Handle;
 		m_SelectedFolder.clear();
+		if (onRelease)
+		{
+			m_InspectOnRelease = item.Handle;
+			return;
+		}
 		// The Asset tab shows it; this browser keeps the keyboard focus.
 		m_InspectedFromHere = item.Handle;
 		context.SetInspectedAsset(item.Handle);
@@ -270,6 +277,8 @@ namespace Strata
 	void ContentBrowserPanel::Open(EditorPanelContext& panelContext, const AssetBrowserItem& item)
 	{
 		EditorContext& context = panelContext.Context;
+		// The double click's second press: what it opens is all it does.
+		m_InspectOnRelease = UUID::Null();
 		if (item.Kind == AssetBrowserItemKind::Folder)
 		{
 			m_View.SetFolder(item.Path);
@@ -426,11 +435,27 @@ namespace Strata
 			m_ViewProjectGeneration = context.GetProjectGeneration();
 			m_Selected = UUID::Null();
 			m_SelectedFolder.clear();
+			m_InspectOnRelease = UUID::Null();
 			// A project opens on its assets.
 			m_ShowingScripts = false;
 		}
 		if (m_View.Update(assets))
 			RebuildLabels();
+
+		// An item pressed in an earlier frame shows in the Asset tab once the button is up, unless the press began a drag.
+		if (m_InspectOnRelease.IsValid())
+		{
+			if (ImGui::IsDragDropActive())
+			{
+				m_InspectOnRelease = UUID::Null();
+			}
+			else if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+			{
+				m_InspectedFromHere = m_InspectOnRelease;
+				context.SetInspectedAsset(m_InspectOnRelease);
+				m_InspectOnRelease = UUID::Null();
+			}
+		}
 
 		DrawToolbar(panelContext, *assets);
 
@@ -983,9 +1008,10 @@ namespace Strata
 		const AssetBrowserItem& item = m_View.GetItems()[index];
 		const ItemLabels& labels = m_Labels[index];
 		// The item's selectable was pressed, moved onto with the keyboard's arrows, or activated with Space (it selects on
-		// all three, c_ItemSelectableFlags), or right-clicked for its menu.
+		// all three, c_ItemSelectableFlags), or right-clicked for its menu. A press of the left button may start a drag: the
+		// asset shows in the Asset tab once it is released without one (Select).
 		if (activated || ImGui::IsItemClicked(ImGuiMouseButton_Right))
-			Select(context, item);
+			Select(context, item, activated && ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left));
 		if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
 			Open(panelContext, item);
 
