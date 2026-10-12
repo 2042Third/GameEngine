@@ -48,7 +48,8 @@ namespace Strata
 		// a folder that is deleted, or a model's own sub-assets). The edited scene is reported from memory: with the entities
 		// that use the targets, and also when its file does not show them yet. Sub-assets that reference come with their file.
 		std::vector<AssetReferencer> Find(EditorContext& context, const std::vector<AssetHandle>& targets, const std::unordered_set<AssetHandle>& ignored);
-		// A target with its sub-assets (a model's meshes, materials and textures), which go with it.
+		// The targets with the sub-assets of those that are files (a model's meshes, materials and textures), which go with them;
+		// a target that is a sub-asset stands alone.
 		std::vector<AssetHandle> WithSubAssets(const EditorContext& context, const std::vector<AssetHandle>& targets);
 
 		// The entities of a scene that use any of the assets: every asset property of every registered component and every

@@ -3,6 +3,7 @@
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "FeatureTest/FeatureTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetManager.h>
@@ -317,6 +318,43 @@ TEST_SUITE("Editor.AssetOperations")
 		// The entity's material works again.
 		CHECK(harness.Assets().GetReferencers(moss).empty()); // The scene was never saved: only the scene in memory uses it
 		CHECK(harness.Run("asset.findReferences", { { "asset", UUIDToJson(moss) } })["referencedBy"][0]["openScene"] == true);
+	}
+
+	TEST_CASE("asset.findReferences of a sub-asset lists the users of that sub-asset only")
+	{
+		AssetHarness harness("AssetOpsSubAssetReferences");
+		const std::filesystem::path project = Tests::CopyFeatureProject(Tests::CreateTemporaryDirectory("AssetOpsSubAssetReferencesFeature") / "Project");
+		harness.Run("project.open", { { "path", FileSystem::ToUTF8(project.parent_path()) } });
+		EditorAssetManager& assets = harness.Assets();
+		const AssetHandle model = assets.FindAssetByPath("Models/Platform.gltf");
+		REQUIRE(model.IsValid());
+		std::vector<AssetHandle> meshes;
+		for (AssetHandle subAsset : assets.GetImportInfo(model).SubAssets)
+		{
+			if (assets.GetAssetType(subAsset) == AssetType::Mesh)
+				meshes.push_back(subAsset);
+		}
+		REQUIRE(meshes.size() >= 2);
+
+		// A scene that uses the second mesh only.
+		harness.Run("scene.new");
+		harness.Run("entity.create", { { "name", "OnlySecond" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(meshes[1]) } } } } } });
+		harness.Run("scene.saveAs", { { "path", "Scenes/SecondOnly.stscene" } });
+		const std::string scenePath = "Scenes/SecondOnly.stscene";
+		auto lists = [&](AssetHandle asset)
+		{
+			const nlohmann::json found = harness.Run("asset.findReferences", { { "asset", UUIDToJson(asset) } });
+			for (const nlohmann::json& referencer : found["referencedBy"])
+			{
+				if (referencer["path"] == scenePath)
+					return true;
+			}
+			return false;
+		};
+		CHECK(lists(meshes[1]));
+		CHECK_FALSE(lists(meshes[0]));
+		// The model as a whole is used by the scene through its mesh.
+		CHECK(lists(model));
 	}
 
 	TEST_CASE("An imported texture comes back from the trash with its import, without importing it again")

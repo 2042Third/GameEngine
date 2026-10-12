@@ -92,6 +92,11 @@ namespace Strata
 			{
 				for (AssetHandle target : targets)
 				{
+					// Only a file brings its sub-assets: a sub-asset's import info is its file's, whose other sub-assets (a model's
+					// other meshes) are not the sub-asset's.
+					const std::optional<AssetMetadata> metadata = assets->GetMetadata(target);
+					if (!metadata || metadata->IsSubAsset())
+						continue;
 					const AssetImportInfo info = assets->GetImportInfo(target);
 					all.insert(all.end(), info.SubAssets.begin(), info.SubAssets.end());
 				}
