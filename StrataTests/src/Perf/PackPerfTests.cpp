@@ -50,6 +50,9 @@ namespace
 		std::string error;
 		Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(pack, &error);
 		REQUIRE_MESSAGE(manager, error);
+		// Whole textures: the versions compare on reading and decoding all of the world's bytes. With partial loads the
+		// textures would be Ready with their mip tails, a few KiB each; mip streaming's reads are measured by PerfGPU.Streaming.
+		manager->SetPartialLoads(false);
 		const auto start = std::chrono::steady_clock::now();
 		std::vector<AssetPin> pins;
 		for (AssetHandle asset : assets)

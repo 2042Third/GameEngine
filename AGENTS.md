@@ -173,10 +173,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   drawn (and, with 10,000 cubes drawn too, whose draws are extracted in parallel, while it is compressed), and the
   editor frames of `PerfGPU.Renderer` (cube grids of 100,000, also in the streaming view and with all of them selected,
   and of 300,000, a narrow view of 50,000, 10,000 point lights, 10,000 unique materials); `PerfGPU.Pack` compares pack
-  versions 2 and 1 of the stress project (the size with its textures uncompressed, opening, streaming the world as it
-  ships; the acceptance limits, 0.8 of version 1's size and 110% of its time, are the budgets of `ratio` metrics, so
-  they are checked like any budget). Time calls that take nanoseconds in batches (the clock's resolution is about 0.1
-  microseconds).
+  versions 2 and 1 of the stress project (the size with its textures uncompressed, opening, streaming all of the world's
+  bytes as it ships, whole textures without mip streaming; the acceptance limits, 0.8 of version 1's size and 110% of
+  its time, are the budgets of `ratio` metrics, so they are checked like any budget). Time calls that take nanoseconds
+  in batches (the clock's resolution is about 0.1 microseconds).
   A process's peak memory includes everything it did before, so a test that measures peak memory
   runs the measured work in a helper process (`--strata-test-helper=<mode>`, see `TestMain.cpp`): `PerfGPU.Streaming`
   runs its camera sweeps over the stress project (`src/Perf/StressProject.h`, also usable by other suites;
