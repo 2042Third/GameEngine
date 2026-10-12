@@ -48,6 +48,22 @@ namespace
 		return 0;
 	}
 
+	// The table the window (or a child window of it) drew last with this many columns.
+	ImGuiTable* FindTable(ImGuiWindow* window, int columns)
+	{
+		ImGuiContext& context = *GImGui;
+		for (int index = 0; index < context.Tables.GetMapSize(); index++)
+		{
+			ImGuiTable* table = context.Tables.TryGetMapData(index);
+			if (table && table->ColumnsCount == columns && table->OuterWindow
+				&& (table->OuterWindow == window || ImGui::IsWindowChildOf(table->OuterWindow, window, false, false)))
+			{
+				return table;
+			}
+		}
+		return nullptr;
+	}
+
 }
 
 TEST_SUITE("Editor.UI.Activity")
@@ -284,6 +300,35 @@ TEST_SUITE("Editor.UI.Activity")
 		CHECK(activity->DockNode != nullptr);
 		CHECK(activity->DockNode == console->DockNode);
 		CHECK_FALSE(activity->Hidden);
+	}
+
+	TEST_CASE("The Activity panel shows the names of undo steps whole in the default layout")
+	{
+		// A maximized window on a 4K display at 150% and at 100%, and a 1600x900 window at 150%: a fixed Result column cut
+		// "Rename 'Wall' to 'East Wall'" in all of them.
+		const ImGuiHarness::Specification windows[] = { { ImVec2(3840.0f, 2054.0f), 1.5f }, { ImVec2(3840.0f, 2054.0f), 1.0f },
+			{ ImVec2(2400.0f, 1350.0f), 1.5f } };
+		for (const ImGuiHarness::Specification& window : windows)
+		{
+			CAPTURE(window.DisplaySize.x);
+			CAPTURE(window.ContentScale);
+			HarnessEditor editor(window, WithFeatureProject("ActivityResultWidth"));
+			editor.Frames(2);
+			REQUIRE(editor.Context().HasProject());
+			editor.Run("entity.create", { { "name", "Wall" } });
+			const UUID wall = editor.Context().GetEditScene()->FindEntityByName("Wall").GetUUID();
+			editor.Run("entity.rename", { { "entity", wall.ToString() }, { "name", "East Wall" } });
+			editor.Run("editor.showPanel", { { "panel", "Activity" } });
+			editor.Frames(3);
+			const uint64_t rename = FindLatest(editor.Context().GetJournal(), "entity.rename");
+			const std::optional<UI::ItemProbe::Item> result = UI::ItemProbe::Find(fmt::format("Activity.Result.{}", rename));
+			REQUIRE(result);
+			CHECK(result->Text == "Rename 'Wall' to 'East Wall'");
+			ImGuiTable* table = FindTable(editor.FindPanelWindow(EditorPanels::c_Activity), 5);
+			REQUIRE(table);
+			// The text ends within its column (an item's rectangle is the whole text, whatever the column clips).
+			CHECK(result->Max.x <= table->Columns[3].ClipRect.Max.x);
+		}
 	}
 
 	TEST_CASE("A panel asked for while a dialog waits for the person opens behind it, and comes forward after")

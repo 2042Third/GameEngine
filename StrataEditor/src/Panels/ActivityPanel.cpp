@@ -35,8 +35,11 @@ namespace Strata
 		// Widths in font sizes.
 		constexpr float c_SourceColumnInFontSizes = 1.6f;
 		constexpr float c_CommandColumnInFontSizes = 11.0f;
-		constexpr float c_ResultColumnInFontSizes = 10.0f;
 		constexpr float c_DurationColumnInFontSizes = 4.5f;
+		// Parameters and results share the rest of the width: results (the names of undo steps, such as "Rename 'Wall' to
+		// 'East Wall'") get two fifths, so they show whole where a fixed width cut them; parameters show cut anyway.
+		constexpr float c_ParametersColumnWeight = 3.0f;
+		constexpr float c_ResultColumnWeight = 2.0f;
 		constexpr float c_SourceFilterInFontSizes = 9.0f;
 		constexpr float c_SearchInFontSizes = 14.0f;
 		// The details pane beside the list takes this share of the width, but not less than this many font sizes; narrower
@@ -205,8 +208,8 @@ namespace Strata
 		ImGui::TableSetupScrollFreeze(0, 1);
 		ImGui::TableSetupColumn("##Source", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, fontSize * c_SourceColumnInFontSizes);
 		ImGui::TableSetupColumn("Command", ImGuiTableColumnFlags_WidthFixed, fontSize * c_CommandColumnInFontSizes);
-		ImGui::TableSetupColumn("Parameters", ImGuiTableColumnFlags_WidthStretch);
-		ImGui::TableSetupColumn("Result", ImGuiTableColumnFlags_WidthFixed, fontSize * c_ResultColumnInFontSizes);
+		ImGui::TableSetupColumn("Parameters", ImGuiTableColumnFlags_WidthStretch, c_ParametersColumnWeight);
+		ImGui::TableSetupColumn("Result", ImGuiTableColumnFlags_WidthStretch, c_ResultColumnWeight);
 		ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthFixed, fontSize * c_DurationColumnInFontSizes);
 		ImGui::TableHeadersRow();
 
