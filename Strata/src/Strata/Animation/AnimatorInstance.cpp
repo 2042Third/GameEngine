@@ -383,7 +383,7 @@ namespace Strata
 		}
 	}
 
-	void AnimatorInstance::AdvanceEntry(Playing& entry, float seconds, const AnimatorAssets& assets, const AnimatorSettings& settings, bool fireEvents,
+	int64_t AnimatorInstance::AdvanceEntry(Playing& entry, float seconds, const AnimatorAssets& assets, const AnimatorSettings& settings, bool fireEvents,
 		std::vector<AnimatorFiredEvent>& outEvents) const
 	{
 		const AnimatorClip clip = GetClip(assets, entry.State);
@@ -392,8 +392,9 @@ namespace Strata
 		{
 			// Nothing to play (no clip, or a single pose): it is done at once.
 			entry.Time = 0.0f;
+			entry.Loops = 0;
 			entry.Normalized = 1.0;
-			return;
+			return 0;
 		}
 		const bool loop = IsStateLooping(assets, settings, entry.State);
 		const float start = entry.Time;
@@ -438,13 +439,12 @@ namespace Strata
 			fire(start, end, fresh);
 			entry.Time = end;
 			entry.Normalized = end / duration;
-			return;
+			return 0;
 		}
 
-		entry.Normalized += static_cast<double>(seconds) / duration;
-		if (entry.Normalized < 0.0)
-			entry.Normalized = 0.0; // Normalized time counts loops forward; playing backwards keeps it at the start
-		// The passes through the clip this update makes, the earliest skipped beyond c_MaxEventLoops loops.
+		// The passes through the clip this update makes, the earliest skipped beyond c_MaxEventLoops loops. Every crossing of
+		// the loop boundary is counted where the playhead makes it.
+		int64_t crossings = 0;
 		float remaining = seconds;
 		float position = start;
 		bool includeFrom = fresh;
@@ -453,7 +453,19 @@ namespace Strata
 		{
 			const float skipped = std::abs(remaining) - maxSpan;
 			const float skippedInClip = std::fmod(skipped, duration);
-			position = remaining > 0.0f ? std::fmod(position + skippedInClip, duration) : std::fmod(position - skippedInClip + duration, duration);
+			// The whole loops in what is skipped (what fmod leaves out is a whole number of durations, up to rounding), then the
+			// part of a loop.
+			const int64_t wholeLoops = static_cast<int64_t>(std::round((skipped - skippedInClip) / duration));
+			if (remaining > 0.0f)
+			{
+				crossings += wholeLoops + (position + skippedInClip >= duration ? 1 : 0);
+				position = std::fmod(position + skippedInClip, duration);
+			}
+			else
+			{
+				crossings -= wholeLoops + (position - skippedInClip < 0.0f ? 1 : 0);
+				position = std::fmod(position - skippedInClip + duration, duration);
+			}
 			remaining = remaining > 0.0f ? maxSpan : -maxSpan;
 			includeFrom = false;
 		}
@@ -470,6 +482,7 @@ namespace Strata
 					// Back to the start: an event at time 0 fires again.
 					position = 0.0f;
 					includeFrom = true;
+					crossings++;
 					if (remaining <= 0.0f)
 						break;
 					continue;
@@ -485,8 +498,10 @@ namespace Strata
 				{
 					position = duration;
 					includeFrom = true;
+					// Ending exactly at the start is no crossing (the playhead stays there); going on past it is.
 					if (remaining >= 0.0f)
 						break;
+					crossings--;
 					continue;
 				}
 			}
@@ -494,6 +509,10 @@ namespace Strata
 		}
 		// Ending exactly on a loop boundary leaves the playhead at the start.
 		entry.Time = position >= duration ? 0.0f : position;
+		entry.Loops += crossings;
+		// Normalized time counts loops forward; playing backwards before the first loop keeps it at the start.
+		entry.Normalized = std::max(0.0, static_cast<double>(entry.Loops) + static_cast<double>(entry.Time) / static_cast<double>(duration));
+		return crossings;
 	}
 
 	void AnimatorInstance::UpdateWeights()
@@ -568,44 +587,43 @@ namespace Strata
 			Playing& entry = m_Entries[index];
 			const float seconds = scaled * GetStateSpeed(assets, entry.State);
 			const float before = entry.Time;
-			const double normalizedBefore = entry.Normalized;
-			AdvanceEntry(entry, seconds, assets, settings, index == current, outEvents);
+			const int64_t crossings = AdvanceEntry(entry, seconds, assets, settings, index == current, outEvents);
 			if (!rootMotion)
 				continue;
 			const AnimatorClip clip = GetClip(assets, entry.State);
 			if (!clip.Clip || !clip.Binding || !(clip.Clip->GetDuration() > 0.0f))
 				continue;
-			// The root's travel through each pass of the clip this update made (whole loops included).
+			// The root's travel through each pass of the clip this update made, split where the playhead crossed the loop
+			// boundary (whole loops included).
 			const Skeleton& skeleton = *assets.SkeletonAsset;
 			const RootMotionSetup& setup = *assets.RootMotion;
 			const float duration = clip.Clip->GetDuration();
 			const glm::quat clipStart = SampleRoot(clip, skeleton, setup, 0.0f).Rotation;
 			const RootSample from = SampleRoot(clip, skeleton, setup, before);
 			const RootSample to = SampleRoot(clip, skeleton, setup, entry.Time);
-			const bool loop = IsStateLooping(assets, settings, entry.State);
-			const double wraps = loop ? std::floor(entry.Normalized) - std::floor(normalizedBefore) : 0.0;
-			if (loop && seconds < 0.0f && entry.Time > before)
-			{
-				// Backwards across the start: down to the start, then on from the end (one wrap; normalized time does not
-				// count loops backwards).
-				const RootSample first = SampleRoot(clip, skeleton, setup, 0.0f);
-				const RootSample last = SampleRoot(clip, skeleton, setup, duration);
-				travel[index].Append(from, first, clipStart);
-				travel[index].Append(last, to, clipStart);
-			}
-			else if (wraps <= 0.0 || seconds < 0.0f)
+			if (crossings == 0)
 			{
 				travel[index].Append(from, to, clipStart);
+				continue;
 			}
-			else
+			const RootSample first = SampleRoot(clip, skeleton, setup, 0.0f);
+			const RootSample last = SampleRoot(clip, skeleton, setup, duration);
+			const uint32_t whole = static_cast<uint32_t>(std::min<int64_t>((crossings > 0 ? crossings : -crossings) - 1, c_MaxRootMotionLoops));
+			if (crossings > 0)
 			{
-				const RootSample first = SampleRoot(clip, skeleton, setup, 0.0f);
-				const RootSample last = SampleRoot(clip, skeleton, setup, duration);
+				// On to the end, whole loops, then from the start.
 				travel[index].Append(from, last, clipStart);
-				const uint32_t whole = static_cast<uint32_t>(std::min(wraps - 1.0, static_cast<double>(c_MaxRootMotionLoops)));
 				for (uint32_t loopIndex = 0; loopIndex < whole; loopIndex++)
 					travel[index].Append(first, last, clipStart);
 				travel[index].Append(first, to, clipStart);
+			}
+			else
+			{
+				// Backwards: down to the start, whole loops back, then on from the end.
+				travel[index].Append(from, first, clipStart);
+				for (uint32_t loopIndex = 0; loopIndex < whole; loopIndex++)
+					travel[index].Append(last, first, clipStart);
+				travel[index].Append(last, to, clipStart);
 			}
 		}
 

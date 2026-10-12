@@ -1261,15 +1261,16 @@ system, not to entities: a character's joints add no entities and no transform c
   transition or command. After every update the transitions from any state, then those of the current state, are tested
   in order; the first whose conditions all hold and whose exit time the update reached fires: the triggers it tests are
   reset and a cross-fade to its target starts. An exit time is the state's normalized time (time over the clip's
-  duration, counting loops): a looping state with an exit time below 1 offers the transition once per loop, at that
-  point; otherwise once the normalized time reaches it. Any-state transitions skip their own target unless
-  `CanTransitionToSelf`. A cross-fade blends up to four entries: the target's weight grows linearly over the duration
-  while the others keep the proportions they had, so the weights add up to 1 (a fifth entry drops the faintest). Poses
-  blend translations and scales linearly and rotations by a normalized weighted sum on one hemisphere. Events of the
-  current state (not of states fading out) fire each time the playhead passes them, in order, also across a loop
-  boundary (at most four loops per update). Commands and parameters set while the controller loads wait for it; a
-  reloaded controller keeps the values of parameters with the same name and type. A state without a clip, or whose clip
-  did not load, shows the rest pose.
+  duration, counting loops: the loop boundaries the playhead crossed, counted where its time wraps, `Playing::Loops`, so
+  the normalized time, exit times and root motion follow the playhead itself): a looping state with an exit time below 1
+  offers the transition once per loop, at that point; otherwise once the normalized time reaches it. Any-state
+  transitions skip their own target unless `CanTransitionToSelf`. A cross-fade blends up to four entries: the target's
+  weight grows linearly over the duration while the others keep the proportions they had, so the weights add up to 1 (a
+  fifth entry drops the faintest). Poses blend translations and scales linearly and rotations by a normalized weighted
+  sum on one hemisphere. Events of the current state (not of states fading out) fire each time the playhead passes them,
+  in order, also across a loop boundary (at most four loops per update). Commands and parameters set while the
+  controller loads wait for it; a reloaded controller keeps the values of parameters with the same name and type. A
+  state without a clip, or whose clip did not load, shows the rest pose.
 - **The system** (`AnimationSystem`, "Animation", Play only, After Scripting and Before Physics, stage
   `Scene.Animation`). Every active entity with an `AnimatorComponent` has an animator, started with `PlayOnStart` when
   the scene starts or the entity becomes active (deactivating resets it); animators with the same skeleton, controller
@@ -1284,7 +1285,8 @@ system, not to entities: a character's joints add no entities and no transform c
   attachments and dispatches the events to the listeners of `IAnimationEventSource`. Without animators an update ends
   right after resetting its stats, so scenes that do not animate pay only for the system's calls.
 - **Root motion.** With `ApplyRootMotion` the root motion joint's horizontal travel and turn about +Y during the update
-  are taken out of the pose and move the entity: measured per pass through the clip (loops included), weighted by the
+  are taken out of the pose and move the entity: measured per pass through the clip, split where the playhead crossed the
+  loop boundary (`AdvanceEntry` counts the crossings, forward and backward, whole loops included), weighted by the
   blend, in the frame the root faced when the clip started; the pose holds the root's subtree where (and facing how)
   each clip started. `AnimationSystem::ApplyRootMotion` is the one place that moves the entity: the move, in the
   entity's space, goes through its world transform (scale included) and its parent's inverse into the local translation,

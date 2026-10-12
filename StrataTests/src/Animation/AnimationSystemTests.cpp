@@ -603,6 +603,53 @@ TEST_SUITE("Animation.RootMotion")
 		const glm::vec3 rootForward = glm::mat3(scene.GetJoint(turner, 0)) * glm::vec3(0.0f, 0.0f, 1.0f);
 		CHECK(rootForward.z == doctest::Approx(1.0f).epsilon(1e-4));
 	}
+
+	TEST_CASE("Root motion moves and turns the entity by the same amount every update, also across loop boundaries")
+	{
+		// Frames of a sixtieth of a second over clips of a second: the playhead's float steps reach a loop boundary a little
+		// before or after the loop count does, which must not move the entity by a loop (forward, then back) for a frame.
+		AnimationScene scene;
+		Entity walker = scene.CreateAnimator("Walker", c_WalkHandle);
+		walker.GetComponent<AnimatorComponent>().ApplyRootMotion = true;
+		Entity turner = scene.CreateAnimator("Turner", c_TurnHandle);
+		turner.GetComponent<AnimatorComponent>().ApplyRootMotion = true;
+		scene.Start();
+		IAnimatorControl* control = scene.SceneRef->GetService<IAnimatorControl>();
+		REQUIRE(control);
+
+		const float step = 1.0f / 60.0f;
+		auto heading = [](const glm::quat& rotation)
+		{
+			const glm::vec3 forward = rotation * glm::vec3(0.0f, 0.0f, 1.0f);
+			return glm::degrees(std::atan2(forward.x, forward.z));
+		};
+		float previousZ = walker.GetComponent<TransformComponent>().Translation.z;
+		float previousHeading = heading(turner.GetComponent<TransformComponent>().Rotation);
+		double previousNormalized = 0.0;
+		for (int update = 1; update <= 250; update++)
+		{
+			scene.Update(step);
+			CAPTURE(update);
+			// The walk travels 2 per one-second loop, the turn 90 degrees.
+			const float z = walker.GetComponent<TransformComponent>().Translation.z;
+			CHECK(std::abs((z - previousZ) - 2.0f * step) <= 1e-4f);
+			previousZ = z;
+			const float currentHeading = heading(turner.GetComponent<TransformComponent>().Rotation);
+			float turned = currentHeading - previousHeading;
+			if (turned < -180.0f)
+				turned += 360.0f;
+			else if (turned > 180.0f)
+				turned -= 360.0f;
+			CHECK(std::abs(turned - 90.0f * step) <= 1e-2f);
+			previousHeading = currentHeading;
+			// The normalized time counts the loops the playhead made, a step at a time.
+			const double normalized = scene.System()->FindInstance(walker)->GetNormalizedTime();
+			CHECK(std::abs((normalized - previousNormalized) - static_cast<double>(step)) <= 1e-5);
+			previousNormalized = normalized;
+			CHECK(control->GetNormalizedTime(walker) == doctest::Approx(static_cast<float>(update) * step).epsilon(1e-4));
+		}
+		CheckSceneCaches(*scene.SceneRef);
+	}
 }
 
 TEST_SUITE("Animation.StateMachine")

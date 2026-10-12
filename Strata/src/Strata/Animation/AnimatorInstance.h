@@ -99,7 +99,10 @@ namespace Strata
 		{
 			uint32_t State = c_ClipState;
 			float Time = 0.0f;      // Seconds into the clip, within [0, duration]
-			double Normalized = 0.0; // Time over duration, counting loops (non-looping states stop at 1)
+			// Looping states: the loop boundaries the playhead crossed, forward minus backward. Counted where Time wraps, so
+			// the normalized time, exit times and root motion follow the playhead itself.
+			int64_t Loops = 0;
+			double Normalized = 0.0; // Loops plus Time over duration, at least 0 (non-looping states: Time over duration)
 			float StartWeight = 1.0f; // The share it had when the latest cross-fade started (entries fading out)
 			float Weight = 1.0f;
 		};
@@ -170,8 +173,9 @@ namespace Strata
 		void StartState(uint32_t state, float fadeSeconds);
 		bool ConditionsHold(const AnimationTransition& transition) const;
 		void ConsumeTriggers(const AnimationTransition& transition);
-		// Advances one entry; appends the events of the state the animator is in.
-		void AdvanceEntry(Playing& entry, float seconds, const AnimatorAssets& assets, const AnimatorSettings& settings, bool fireEvents,
+		// Advances one entry; appends the events of the state the animator is in. Returns the loop boundaries the playhead
+		// crossed (forward positive, backward negative; 0 for states that do not loop).
+		int64_t AdvanceEntry(Playing& entry, float seconds, const AnimatorAssets& assets, const AnimatorSettings& settings, bool fireEvents,
 			std::vector<AnimatorFiredEvent>& outEvents) const;
 		void UpdateWeights();
 	private:
