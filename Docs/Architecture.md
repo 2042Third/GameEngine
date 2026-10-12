@@ -252,15 +252,17 @@ velocity goes on (a ceiling stops a rise). Jolt's `ExtendedUpdate` then slides i
 matrix) and never its own entity's bodies. The moves run in parallel batches on the job system (bounded scratch memory
 per batch), each reading only the world before the step and writing only its own controller: Jolt would push dynamic
 bodies from many threads in any order, so the set disables that and pushes afterwards, on the main thread in entity order
-(Jolt's formula, limited to `PushStrength` newtons, and the character's 70 kg pressing down a dynamic body it stands on),
-moves the presence bodies and writes each entity's translation (`Scene::MarkTransformsChanged`; its rotation and scale
-stay). So the results do not depend on the number of threads (`Physics.Character`), and 1,000 walking controllers take
-about 0.8 ms per step (`Perf.Physics.Characters1000Step`). An entity moved from outside (a script writing its transform,
-the editor) teleports its controller at the next step. The controllers' contacts (`GetActiveContacts`, one per touched
-body) join the step's contact reports, so `CollisionEvent`s and the scripts' `OnCollisionEnter/Exit` report them like any
-body's; triggers and bodies landing on a controller reach it through its presence body (`OnTriggerEnter/Exit`). The ground
-state (on ground, on steep ground, not supported, in air), ground normal, velocity and entity are `CharacterState`
-(`ICharacterControl::GetCharacterState`).
+(`PushBodies`: an inelastic push, the body's effective mass at the contact times the speed the character closes in on it
+along the normal, never downwards and at most `PushStrength` newtons over the step; and the character's weight, 70 kg
+under its gravity, pressing on a dynamic body it stands on: all of it while it stands, the part across the surface while
+it slides down steep ground), moves the presence bodies and writes each entity's translation
+(`Scene::MarkTransformsChanged`; its rotation and scale stay). So the results do not depend on the number of threads
+(`Physics.Character`), and 1,000 walking controllers take about 0.8 ms per step (`Perf.Physics.Characters1000Step`). An
+entity moved from outside (a script writing its transform, the editor) teleports its controller at the next step. The
+controllers' contacts (`GetActiveContacts`, one per touched body) join the step's contact reports, so `CollisionEvent`s
+and the scripts' `OnCollisionEnter/Exit` report them like any body's; triggers and bodies landing on a controller reach
+it through its presence body (`OnTriggerEnter/Exit`). The ground state (on ground, on steep ground, not supported, in
+air), ground normal, velocity and entity are `CharacterState` (`ICharacterControl::GetCharacterState`).
 
 **Audio** (`Audio/`). `AudioEngine` wraps the miniaudio mixer, output device, listener and one-shots (main-thread
 API; mixing runs on miniaudio's audio thread, or is pulled with `AdvanceNullDevice`/`ReadFrames` without a device).

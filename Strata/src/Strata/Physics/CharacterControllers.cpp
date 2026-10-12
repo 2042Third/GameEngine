@@ -31,8 +31,7 @@ namespace Strata
 	namespace
 	{
 
-		// What a character weighs when it stands on a dynamic body (kilograms): its weight presses the body down, like
-		// Jolt's characters.
+		// What a character weighs (kilograms, an adult person): its weight presses on a dynamic body it stands on (PushBodies).
 		constexpr float c_CharacterMass = 70.0f;
 		// The presence body's radius is this fraction of the character's, so that it stays clear of what the character touches
 		// on its sides (the character keeps its padding away from geometry) and meets only what moves into the character; its
@@ -50,10 +49,6 @@ namespace Strata
 		// An entity whose world position differs from where its controller put it by more than this (relative to the
 		// position's magnitude, at least this many meters) was moved from outside: the controller teleports there.
 		constexpr float c_ExternalMoveTolerance = 1.0e-4f;
-		// Pushing bodies follows Jolt's CharacterVirtual: the body takes on this share of the character's velocity along the
-		// contact normal, and resolves this share of a penetration per step.
-		constexpr float c_PushDamping = 0.9f;
-		constexpr float c_PushPenetrationResolution = 0.4f;
 		// Scratch memory for the collision queries of one batch of controllers (falls back to the heap beyond), and the
 		// smallest batch; batches are bounded so that the scratch memory stays bounded however many controllers move.
 		constexpr uint32_t c_ScratchBytesPerBatch = 128 * 1024;
@@ -160,7 +155,6 @@ namespace Strata
 			JPH::RVec3 Position = JPH::RVec3::sZero();
 			JPH::Vec3 Normal = JPH::Vec3::sZero();   // Towards the character
 			JPH::Vec3 Velocity = JPH::Vec3::sZero(); // Of the body at the contact point
-			float Distance = 0.0f;                   // Negative: penetration
 		};
 
 		struct ControllerRecord
@@ -216,7 +210,7 @@ namespace Strata
 				const auto existing = std::find_if(record->Pushes.begin(), record->Pushes.end(), [&](const PushContact& push) { return push.Body == contact.mBodyB; });
 				if (existing != record->Pushes.end())
 					return; // One push per body and step, from its first contact
-				record->Pushes.push_back({ contact.mBodyB, contact.mPosition, contact.mContactNormal, contact.mLinearVelocity, contact.mDistance });
+				record->Pushes.push_back({ contact.mBodyB, contact.mPosition, contact.mContactNormal, contact.mLinearVelocity });
 			}
 		};
 
@@ -569,57 +563,74 @@ namespace Strata
 			record.JumpRequested = false;
 		}
 
-		// Pushes the dynamic bodies a controller ran into during its move, the way Jolt's characters do, limited to its push
-		// strength; and presses down a dynamic body it stands on with its weight.
+		// Pushes the dynamic bodies a controller ran into during its move, and presses on a dynamic body it stands on.
+		//
+		// A push is an inelastic contact (no bounce): the body gets the impulse that makes its point of contact move away from
+		// the character as fast as the character closes in on it along the contact normal, so the character keeps its pace
+		// instead of pressing into the body. That impulse is the closing speed times the body's mass as felt at that point
+		// along the normal, its effective mass 1 / (1/m + (r x n) . I^-1 (r x n)), so a box pushed off its center turns as
+		// well as slides; it is limited to the character's push strength (a force) over the step. It never points down: what
+		// a character presses down on carries its weight instead. Overlaps get no push of their own: the character's move
+		// steps out of them.
+		//
+		// On a dynamic body, the character's weight (c_CharacterMass under the scene's gravity, scaled like the character's)
+		// presses on it at the ground contact: all of it while the character stands (what holds the character in place on a
+		// slope holds the body too), and only the part across the surface while it slides down ground too steep to stand on.
 		void PushBodies(CharacterControllerSetData& data, ControllerRecord& record, float timestep, const glm::vec3& gravity)
 		{
 			JPH::BodyInterface& bodies = data.System->GetBodyInterface();
-			const JPH::Vec3 up = JPH::Vec3::sAxisY();
+			const float maxImpulse = record.PushStrength * timestep;
 			for (const PushContact& push : record.Pushes)
 			{
-				JPH::Vec3 impulse = JPH::Vec3::sZero();
+				glm::vec3 impulse(0.0f);
 				{
 					JPH::BodyLockRead lock(data.System->GetBodyLockInterface(), push.Body);
 					if (!lock.SucceededAndIsInBroadPhase() || !lock.GetBody().IsDynamic())
 						continue;
 					const JPH::Body& body = lock.GetBody();
-					const float projected = (record.StepVelocity - push.Velocity).Dot(push.Normal);
-					const float deltaVelocity = -projected * c_PushDamping - std::min(push.Distance, 0.0f) * c_PushPenetrationResolution / timestep;
-					if (!(deltaVelocity > 0.0f))
+					// The normal points from the body to the character: the character closes in while the body's point moves
+					// towards it faster than the character moves away.
+					const float closingSpeed = (push.Velocity - record.StepVelocity).Dot(push.Normal);
+					if (!(closingSpeed > 0.0f))
 						continue;
-					const JPH::Vec3 jacobian = JPH::Vec3(push.Position - body.GetCenterOfMassPosition()).Cross(push.Normal);
-					const float inverseEffectiveMass = body.GetInverseInertia().Multiply3x3(jacobian).Dot(jacobian) + body.GetMotionProperties()->GetInverseMass();
-					if (!(inverseEffectiveMass > 0.0f))
+					const JPH::Vec3 arm = JPH::Vec3(push.Position - body.GetCenterOfMassPosition());
+					const JPH::Vec3 turn = arm.Cross(push.Normal);
+					const float inverseMassAtContact = body.GetMotionProperties()->GetInverseMass() + turn.Dot(body.GetInverseInertia().Multiply3x3(turn));
+					if (!(inverseMassAtContact > 0.0f))
 						continue;
-					const float magnitude = std::min(deltaVelocity / inverseEffectiveMass, record.PushStrength * timestep);
-					impulse = -magnitude * push.Normal;
-					// Never down: gravity does that.
-					const float downward = impulse.Dot(up);
-					if (downward < 0.0f)
-						impulse -= downward * up;
+					const float magnitude = std::min(closingSpeed / inverseMassAtContact, maxImpulse);
+					impulse = -magnitude * ToGlm(push.Normal);
+					impulse.y = std::max(impulse.y, 0.0f);
 				}
 				// The lock is released first: AddImpulse locks the body itself.
-				if (!impulse.IsNearZero())
-					bodies.AddImpulse(push.Body, impulse, push.Position);
+				if (impulse != glm::vec3(0.0f))
+					bodies.AddImpulse(push.Body, ToJolt(impulse), push.Position);
 			}
 
 			const JPH::CharacterVirtual& character = *record.Character;
 			const JPH::BodyID ground = character.GetGroundBodyID();
-			const float weight = glm::length(gravity * record.GravityScale);
-			if (ground.IsInvalid() || !character.IsSupported() || !(weight > 0.0f))
+			const JPH::CharacterBase::EGroundState state = character.GetGroundState();
+			const bool standing = state == JPH::CharacterBase::EGroundState::OnGround;
+			const bool sliding = state == JPH::CharacterBase::EGroundState::OnSteepGround;
+			const glm::vec3 weight = c_CharacterMass * record.GravityScale * gravity;
+			if (ground.IsInvalid() || (!standing && !sliding) || !(glm::dot(weight, weight) > 0.0f))
 				return;
-			JPH::Vec3 pressure = JPH::Vec3::sZero();
+			glm::vec3 force = weight;
+			if (sliding)
+			{
+				// The ground's normal points out of it: the weight presses into it as far as it points against the normal.
+				const glm::vec3 normal = ToGlm(character.GetGroundNormal());
+				const float into = -glm::dot(weight, normal);
+				if (!(into > 0.0f))
+					return;
+				force = -into * normal;
+			}
 			{
 				JPH::BodyLockRead lock(data.System->GetBodyLockInterface(), ground);
 				if (!lock.SucceededAndIsInBroadPhase() || !lock.GetBody().IsDynamic())
 					return;
-				const JPH::Vec3 scaledGravity = ToJolt(gravity * record.GravityScale);
-				const float normalDotGravity = character.GetGroundNormal().Dot(scaledGravity);
-				if (normalDotGravity >= 0.0f)
-					return;
-				pressure = -(c_CharacterMass * normalDotGravity / weight * timestep) * scaledGravity;
 			}
-			bodies.AddImpulse(ground, pressure, character.GetGroundPosition());
+			bodies.AddImpulse(ground, ToJolt(force * timestep), character.GetGroundPosition());
 		}
 
 		// Writes a controller's new position to its entity's translation (its rotation and scale stay).

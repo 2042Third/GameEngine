@@ -214,6 +214,69 @@ TEST_SUITE("Physics.Character")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("A character presses on a dynamic body it stands on with its weight, and across the surface where it slides")
+	{
+		// Heavy rafts that gravity does not move and that cannot turn: only the characters' weight moves them.
+		constexpr float c_CharacterMass = 70.0f; // What characters weigh
+		constexpr float c_RaftMass = 700.0f;
+		constexpr float c_SteepDegrees = 60.0f;
+		Scene scene;
+		const auto createRaft = [&scene](const std::string& name, const glm::vec3& position, float degrees)
+		{
+			Entity raft = CreateDynamicBox(scene, name, position, glm::vec3(5.0f, 0.25f, 3.0f));
+			raft.GetTransform().Rotation = glm::angleAxis(glm::radians(degrees), glm::vec3(0.0f, 0.0f, 1.0f));
+			RigidBodyComponent& body = raft.GetComponent<RigidBodyComponent>();
+			body.Mass = c_RaftMass;
+			body.GravityScale = 0.0f;
+			body.LinearDamping = 0.0f;
+			body.LockRotationX = true;
+			body.LockRotationY = true;
+			body.LockRotationZ = true;
+			return raft;
+		};
+		Entity flat = createRaft("Flat", glm::vec3(0.0f, -0.25f, 0.0f), 0.0f);
+		Entity steep = createRaft("Steep", glm::vec3(0.0f, 0.0f, 20.0f), c_SteepDegrees);
+		Entity rider = CreateCharacter(scene, "Rider", glm::vec3(0.0f, 0.0f, 0.0f));
+		// Above the steep raft's top face, its sphere clear of the face (the face's normal tilts the gap).
+		const float angle = glm::radians(c_SteepDegrees);
+		const glm::vec3 normal(-std::sin(angle), std::cos(angle), 0.0f);
+		const glm::vec3 face = glm::vec3(0.0f, 0.0f, 20.0f) + normal * 0.25f;
+		Entity slider = CreateCharacter(scene, "Slider", face + glm::vec3(0.0f, (0.3f + 0.05f) / std::cos(angle) - 0.3f, 0.0f));
+		// The slider's contact pushes nothing: what moves its raft is its weight alone.
+		slider.GetComponent<CharacterControllerComponent>().PushStrength = 0.0f;
+		slider.GetComponent<CharacterControllerComponent>().MaxSlopeDegrees = 45.0f;
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		const float gravity = 9.81f;
+		REQUIRE(scene.GetSettings().Gravity == glm::vec3(0.0f, -gravity, 0.0f));
+
+		// Standing, all of its weight presses down: the raft gains 70 kg * g / 700 kg of downward speed per second.
+		StepScene(scene, 10);
+		REQUIRE(GetState(scene, rider).Ground == CharacterGroundState::OnGround);
+		const glm::vec3 flatBefore = physics.GetLinearVelocity(flat);
+		constexpr uint32_t c_Steps = 30;
+		const float seconds = static_cast<float>(c_Steps) * scene.GetSettings().FixedTimestep;
+		StepScene(scene, c_Steps);
+		CHECK(GetState(scene, rider).Ground == CharacterGroundState::OnGround);
+		const glm::vec3 flatGained = physics.GetLinearVelocity(flat) - flatBefore;
+		CHECK(flatGained.y == doctest::Approx(-c_CharacterMass * gravity / c_RaftMass * seconds).epsilon(0.05));
+		CHECK(std::abs(flatGained.x) < 1.0e-4f);
+
+		// Sliding down ground too steep to stand on, only the part of its weight across the surface presses, into it: the
+		// raft moves along the surface's normal, sideways as well as down.
+		const CharacterState sliding = GetState(scene, slider);
+		REQUIRE(sliding.Ground == CharacterGroundState::OnSteepGround);
+		CHECK(std::abs(sliding.GroundNormal.y - std::cos(angle)) < 0.05f);
+		const glm::vec3 steepBefore = physics.GetLinearVelocity(steep);
+		StepScene(scene, 10);
+		REQUIRE(GetState(scene, slider).Ground == CharacterGroundState::OnSteepGround);
+		const glm::vec3 steepGained = physics.GetLinearVelocity(steep) - steepBefore;
+		const float expected = c_CharacterMass * gravity * std::cos(angle) / c_RaftMass * 10.0f * scene.GetSettings().FixedTimestep;
+		CHECK(glm::length(steepGained) == doctest::Approx(expected).epsilon(0.1));
+		CHECK(glm::dot(glm::normalize(steepGained), -normal) > 0.99f);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Characters collide only with layers their layer collides with")
 	{
 		Scene scene;
