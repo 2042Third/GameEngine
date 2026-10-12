@@ -199,6 +199,87 @@ Release builds on the reference machine, quiet:
   finalization 4.14 ms and the evicting sweep's 3.81 ms (3.73-4.22), the stress pack's world 1.045 times version 1's
   time.
 
+**Wave 3 landed (2026-10-12).** Six workstreams merged into one integration branch on 2026-10-12, in the order
+mip-streaming, scene-streaming, animation, content-and-prefabs, gameplay-and-scripting, agent-activity (animation and
+gameplay-and-scripting came from the product audit after wave 2, which found whole systems a 3D engine needs that no
+workstream covered); the integration merged the conflicting files as unions of both sides, did the wiring the
+workstreams left to whichever of them merged second and closed the review findings their rechecks had left open. Numbers
+are Release builds on the reference machine, measured by the workstreams while up to six of them shared it, mostly as
+interleaved A/Bs against wave 2's build; the quiet campaign that decides the budgets comes last (Perf campaign:
+pending):
+
+- `mip-streaming`: the asset layer knows no graphics API (uploads go into an `AssetUploadContext` the renderer provides;
+  the allowlist from 9 to 8 exceptions); every upload goes through one budgeted queue (`GPUUploadQueue` on the staging
+  pool: 16 MiB and 2 ms of upload steps per frame, steps planned to the measured speed with a tenth of the time in
+  reserve, so a frame's steps take 1.78-1.82 ms of the 2 ms instead of 1.99-2.07; an optional transfer queue, off by
+  default since it loaded no faster), and the swapchain's acquire wait moved to `PrepareBackBuffer`, so uploads no
+  longer queue behind the display; textures load as their mip tail (the levels up to 32x32: 1.4 KiB of a 2048x2048 BC7
+  texture), and each manager's `TextureStreamer` raises and drops their levels to the texel density the views draw them
+  at, the most needed first under a texture budget (a Mip column in the Streaming panel, a Mip debug view, `asset.stats`
+  and `--perf-log` columns). The exported stress game with the whole world in view at 1920x1080 peaks at 454-470 MB of
+  private memory (median 466; 595-606 MB with every texture whole; 536-542 against 671 MB at 2880x1620), and its world
+  is complete after 5.5 frames (3-9; 10, 7-18, before); the mip sweep over the textured ground of the stress project's
+  `Flight` scene peaks at about 437 MB within a 96 MB texture budget, its last frame 67 dB PSNR from the whole-texture
+  baseline's.
+- `scene-streaming`: scene and prefab documents are read once, on the loading worker, and prefabs compile into
+  prototypes: a 1,000-entity prefab instantiates in 0.25 ms (about 17 ms before), 1,000 instances of a 10-entity prefab
+  in one `InstantiateMany` in 3.1 ms; scenes load in the background (`SceneLoader`, in the editor and in games, with
+  progress): the editor's longest frame while `scene.open` loads 100,000 entities is 2.0-2.6 ms (one frame of 821-887 ms
+  before) and 18-21 ms for 1,000,000, opening 100,000 over the million takes a 0.9 ms frame (70 ms before: the replaced
+  scene is destroyed off the frame), and the million open takes 542-544 MB of working set (2.45 GB before); play starts
+  by copying the scene storage by storage on the job threads (a million entities in 43-51 ms, the frame that starts
+  playing them 45-53 ms, about 700 ms before); a project whose start scene holds a million entities shows its first
+  frame after 1.0 s instead of 6.8 s; additive sub-scenes come in slices (5,000 entities per frame by default) and
+  unload in one step, from scripts (six host functions) and commands; exported games can play a loading scene while the
+  start scene loads (manifest version 4), and switch to a 100,000-entity scene with a longest frame of 0.06-0.14 ms.
+- `animation`: skeletons, animation clips and controllers (`.stanimator`) as assets, glTF skins and animations imported,
+  GPU skinning with posed bounds in every pass (poses are never entities, and unskinned scenes pay nothing), and the
+  "Animation" scene system: states, cross-fades, events, root motion, joint attachments and culling of what no view
+  shows, evaluated on the job threads with the same results on any number of them; twelve host functions and
+  `OnAnimationEvent`; `animation.*` commands, controller tables in the Asset tab, pose previews in edit mode and the
+  live state in the Inspector. 1,000 animators of 60 joints, each cross-fading two clips, take 0.39-0.41 ms a frame
+  (acceptance limit 2 ms), 10,000 animators no view shows 0.13-0.15 ms (limit 0.5), and `SceneRenderer::Render` of 1,000
+  skinned characters of 5,152 vertices, posed anew every frame, 0.75 ms.
+- `content-and-prefabs`: asset deletes refuse while anything uses the asset (unsaved scenes included) or move it to the
+  project's trash as one undo step that keeps its handle, with undoable moves and folders and `asset.findReferences`
+  (0.11 ms among 10,000 assets); `asset.import` never imports in a frame (the editor's longest frame while a 4096x4096
+  texture comes in: 3.3-4.1 ms, 2,380 ms before), brings a glTF's buffers and images along, imports folders and
+  meshopt-compressed models and rolls failed items back; Content Browser v2 (folder tree, grid and list, filters, drag
+  and drop, reveal; a frame of 10,001 assets costs 0.03-0.07 ms at the 95th percentile, 0.036-0.041 ms with thumbnails);
+  thumbnails (textures from their mip tail by byte range, never loaded whole; materials, meshes, models and prefabs
+  rendered offscreen one at a time; cached as PNG files; the longest frame while a stress project's are made 2.7-4.1 ms)
+  and previews in the Asset tab (an audio clip's waveform and a preview voice); linked prefab instances (status, apply,
+  revert, unpack, changes reaching unmodified instances, also of scenes that were closed); new content resting on the
+  surface under the view's pivot or the cursor, drop to ground; project pictures and a search on the launcher.
+- `gameplay-and-scripting`: the `basic3d` ground has a collider; character controllers on Jolt's `CharacterVirtual`
+  (steps, slopes, moving ground, pushing bodies, the same results on any number of threads: 1,000 walking controllers
+  take 0.79-0.86 ms a step); named collision layers with a matrix in the scene's settings, the Inspector and scripts;
+  gamepads, cursor modes, the game's window mode, resolution and vsync, and atomic save files for scripts (22 host
+  functions, 119 in all); scripts made, listed, opened in the person's code editor and built from the editor (New
+  Script, External Editor, `CMakePresets.json` for IDEs, a per-user build directory for projects too deep for MSBuild),
+  Play building stale scripts first, a Problems panel for build errors and crashes, crashes located by file and line
+  (inlined calls too) and a people's guide, `Docs/Manual/Scripting.md`; physics worlds keep an anchor body in each broad
+  phase tree, which ends Jolt's "Out of nodes" abort of worlds that add and remove bodies between steps.
+- `agent-activity`: no silent data loss (the seven commands that replace the edited scene refuse its unsaved changes
+  without `force`, the UI asks first, and what is discarded stays recoverable); autosave and recovery (the unsaved
+  changes journaled 2 s after edits stop, at least every 10 s: a frame asking for the write of an edit of 10,000 of
+  100,000 entities costs 0.04 ms); an activity journal of every command (about 1.5 us each), the Activity panel and
+  replays of a session as a command script with bindings (a 51-command agent session rebuilds the same scene and assets
+  on a copy); agents present in the status bar and the viewport; toasts; captures from a camera of their own that wait
+  for what they show; out-of-range values refused; copies named uniquely and undo steps named after what they changed;
+  `--help`, `--version` and exit code 3 for unknown arguments.
+- Integration: the skin stream uploads through the upload queue; root motion walks character controllers; animators and
+  controllers play in sub-scenes and in `InstantiateMany` instances; scene loads estimate a texture by its mip tail; a
+  headless editor's captures keep their sky (`TextureStreamer::Hold`) and wait for the mip levels they show, and so do
+  thumbnails; prefab instances catch up in the frame `scene.open` swaps the scene in; the Content Browser's Scripts
+  root, skinned models' thumbnails in their bind pose, animation assets as drag sources and their filter chip; toasts
+  for imports that failed unobserved, for assets agents moved to the trash and for script builds and crashes (Show
+  Problems); a test pins the journal kind of all 117 commands; the default layout (version 4) docks the Problems and
+  Activity panels; status pills fit a 1600x900 window; the Export dialog picks the loading scene, the Asset tab counts a
+  model's skeletons and clips. The script ABI keeps version 1 with its host functions in merge order (wave 2's 79, then
+  6, 12 and 22). Full Debug ctest under the validation layer (47 tests) and Release ctest without the perf label pass.
+- Perf campaign: pending.
+
 Open items and deferrals later waves own:
 
 - The allowlist's 8 exceptions: the application shell's service wiring (7, `engine-modules`) and physics reading the
@@ -213,14 +294,32 @@ Open items and deferrals later waves own:
 - `GetResidencyInfo` and `GetResidencySamples` walk every registered asset (`GetStats` keeps counts instead), which a world of many
   registered assets will feel (`world-partition`). Two caches keep assets between frames: `SceneRenderer`'s environment
   cache (the sky's map) and `TextRenderer`'s glyph atlases (their fonts). Streaming the stress world from pack version 2
-  takes 1.03-1.09 times version 1's time (zstd blocks and their checksums), close to the 1.1 acceptance limit, which
-  needs a confirmation in about one run in five (range reads of `mip-streaming`).
-- Imports (`content-and-prefabs`, dependency-aware asynchronous import): a few long steps of an import cannot be
-  interrupted (stb_image decoding a large PNG, the resize to `MaxSize`, one mip level's filtering, meshoptimizer
-  simplifying one primitive); they never hold a frame, but delay when a cancelled import frees its thread. Moving or
-  deleting a file that another asset's import reads as a dependency does not cancel that import (the file watcher's
-  change event replaces it). A project whose large scenes have no reference records yet spends seconds of its scan in
-  the reference search (4 s for `PerfGPU.Editor`'s 1,000,000-entity scene).
+  takes 1.03-1.09 times version 1's time (zstd blocks and their checksums; `PerfGPU.Pack` reads whole textures, without
+  mip streaming), close to the 1.1 acceptance limit, which needs a confirmation in about one run in five.
+- Imports: a few long steps of an import cannot be interrupted (stb_image decoding a large PNG, the resize to `MaxSize`,
+  one mip level's filtering, meshoptimizer simplifying one primitive); they never hold a frame, but delay when a
+  cancelled import frees its thread. Moving or deleting a file that another asset's import reads as a dependency does
+  not cancel that import (the file watcher's change event replaces it). A project whose large scenes have no reference
+  records yet spends seconds of its scan in the reference search (4 s for `PerfGPU.Editor`'s 1,000,000-entity scene).
+  While an import is applied, one frame still writes the asset's `.meta` file and the asset index on the main thread
+  (about 2 ms).
+- Scene loads (wave 3): a load's progress weighs a partly loaded texture by its whole stored size, so the bar jumps when
+  a large texture's tail arrives; `AssetManagerBase::EstimateFirstLoadBytes` counts a partial load as up to 64 KiB, more
+  than a small tail, so a very tight texture budget can leave textures to the view that would have fitted; a sub-scene
+  holds its prepared scene and its compiled prototype together until the prototype is made; a `SubScene` a script keeps
+  in a member is reset by hot reload (only fields survive, so scripts keep its ID in a field).
+- Prefabs: applying, reverting and propagating compare and rebuild instances through their JSON form
+  (`PrefabInstances`), not the compiled prototypes scene loads use; per-property overrides and a prefab edit mode are
+  later work.
+- Animation and characters: root motion through a character controller is walked at the frame's first fixed step, and on
+  a tilted entity its vertical part becomes the controller's velocity (gravity and the ground then decide the height);
+  culling and drawing skinned proxies on the GPU belongs to `gpu-driven-rendering`.
+- Mip streaming: its limit "the longest frame at most 2 ms over the whole-texture baseline's" is gated as a ratio
+  (`Mips.MaxFrameRatio`, budgets cannot be negative) and was measured on a shared machine only; the transfer queue stays
+  off by default (it loaded the stress game no faster and held more memory).
+- Editor: in a 1600x900 window the default layout's bottom dock shows one row of Content Browser tiles and a few rows of
+  the Activity panel; the audio preview was checked on the null device only, not by ear; script builds under the
+  system's temporary directory or 8.3 short paths show MSBuild's warnings MSB8029 and MSB8012 in the Problems panel.
 - Where the exported stress game's memory goes with every texture resident (MiB of private bytes at 1920x1080 pixels,
   from temporary stage logging): the process, its job threads and window 10; the NVIDIA driver's Vulkan device 59 and
   its first swapchain 93 (whatever its size: the driver presents through a layered DXGI swapchain, with a D3D12 device
@@ -283,7 +382,19 @@ Open items and deferrals later waves own:
   `PerfGPU.Editor`'s million-entity scene: wave 1's Release editor opening it (an access violation), the test runner
   writing it (an access violation) and the merged editor opening it (no progress for 10 minutes, the test's timeout).
   The 55 runs of the same steps that followed (40 driving the editor directly, 15 through the test, some under a full
-  Debug test run) all passed, and Windows logged no hardware error.
+  Debug test run) all passed, and Windows logged no hardware error. On 2026-10-12, while wave 3 was integrated, the
+  machine stopped twice with a MEMORY_MANAGEMENT bug check (0x1A), the second time with the memory slowed from its rated
+  3600 to 3200 MT/s; it runs at the rated 3600 MT/s again, at which `Budgets.json`'s reference values were measured, and
+  compilers kept crashing now and then (files that compiled on the retry). Until a memory and CPU stress test passes,
+  one-off crashes on this machine are suspect.
+- Perf to watch in wave 3's campaign: trivial-script frames measured 4-6% slower than wave 2's in interleaved A/Bs
+  (`TrivialUpdate100k`, `TrivialUpdate300k`; no code on the dispatch path changed, and swapping the engine and the
+  module split the difference, which points at code layout), `Perf.Scene.MoveLeaf100k` about 9% slower (the larger
+  `Scene` class), `Perf.Editor.EntityCreate100kRoots` at about 84% of its budget (the journal adds 0.8 us a command),
+  `RecoverySnapshotMaxEntities` sensitive to load, `ContentBrowser10kThumbnailsP95` bimodal (0.036 or 0.067 ms, the
+  second fitting a main thread on an efficiency core), and the budgets the workstreams set from runs on a shared
+  machine. Platform code only CI compiles: the POSIX `Platform::FindProgram` and symbolizer (function names only on
+  Linux and macOS).
 
 ## Waves
 
@@ -349,13 +460,19 @@ the workstreams it depends on have merged.
   freezes a frame. Scenes are built on workers, their dependency closure is prefetched within budget, and sub-scenes
   merge additively in time-sliced batches and unload in one step; world cells later use the same mechanism. Prefabs
   spawn without parsing JSON. Depends on `asset-residency`, `pack-v2`, `scene-core`, `physics-at-scale`.
-- **`agent-activity`: Agent-native editor: activity journal and replay, agent presence, notifications, problems panel,
-  script-build path fix.** Make the AI-drivable editor visible and trustworthy: an activity journal of what people and
-  agents did that replays as a regression script, the presence of connected agents, notifications, a problems panel, and
-  script builds whose paths no longer break them. Depends on `editor-shell`, `editor-authoring`.
+- **`animation`: Skeletal animation: skins, clips, animator states and cross-fades, GPU skinning, root motion,
+  scripting.** Characters that move: glTF skins and animations import as skeletons, clips and skinned meshes,
+  controllers blend states, the GPU skins with posed bounds, poses never become entities, and scripts and the editor
+  drive and preview them. Depends on `render-scene`, `texture-cook-v2`, `module-foundation`.
 - **`content-and-prefabs`: Content Browser v2, safe asset operations, dependency-aware async import, prefab basics,
   project thumbnails.** Make managing and reusing content professional. Depends on `editor-authoring`, `pack-v2`,
   `texture-cook-v2`.
+- **`gameplay-and-scripting`: Character controllers, collision layers, gamepads, the game's window and save files, and
+  scripts made, built, located and debugged from the editor.** The first physics experience and the scripting workflow
+  people expect. Depends on `physics-at-scale`, `editor-authoring`.
+- **`agent-activity`: Agent-native editor: no silent discards, autosave and recovery, activity journal and replay,
+  agent presence, notifications, captures for agents, command contracts.** Make the AI-drivable editor visible and
+  trustworthy. Depends on `editor-shell`, `editor-authoring`.
 
 ### Wave 4
 
@@ -364,8 +481,8 @@ the workstreams it depends on have merged.
   subsystems start through an EngineModule lifecycle instead of hard-coded Application code. Per-scene contexts replace
   the process-wide 'active' asset manager and script engine. Physics, Audio, Scripting and Network can be compiled out,
   and StrataRuntime structurally excludes tooling and ImGui (today Dear ImGui ships in StrataRuntime.exe although the
-  runtime disables it). Depends on `module-foundation`, `physics-at-scale`, `mip-streaming`, `scene-streaming`,
-  `content-and-prefabs`.
+  runtime disables it); the Animation module joins the split, and the character controller needs physics-off stubs.
+  Depends on `module-foundation`, `physics-at-scale`, `mip-streaming`, `scene-streaming`, `content-and-prefabs`.
 - **`world-partition`: Layered world partition: data layers, grid cells and streaming sources.** Deliver the signature
   feature. A world is authored as one scene organized into named data layers. Strata cooks each layer into grid cells
   that stream additively around streaming sources, so a world can be much larger than memory or than one ECS registry
@@ -373,8 +490,8 @@ the workstreams it depends on have merged.
   `physics-at-scale`, `pack-v2`, `streaming-observatory`.
 - **`gpu-driven-rendering`: GPU-driven culling and indirect drawing.** Scale rendering to millions of instances.
   Proxies are frustum-culled, LOD-selected and occlusion-tested on the GPU, then drawn with indirect draws from shared
-  geometry buffers, so the CPU cost of drawing stays constant in instance count. Depends on `render-scene`,
-  `mip-streaming`.
+  geometry buffers, so the CPU cost of drawing stays constant in instance count, skinned proxies included (their palette
+  ranges and posed bounds, `RenderScene`). Depends on `render-scene`, `mip-streaming`, `animation`.
 
 ### Later (wave 5 and beyond)
 
@@ -390,3 +507,12 @@ the workstreams it depends on have merged.
 - BC6H.
 - ImGui multi-viewports.
 - An editor preferences panel (UI scale, idle FPS, external editor).
+- Particles and visual effects.
+- Physics joints, ragdolls and vehicles.
+- An audio mixer with buses and effects.
+- Level-design tools beyond placement: orthographic views, surface and vertex snapping, hiding and locking in the editor
+  only.
+- OBJ and FBX import.
+- Morph targets.
+- A prefab edit mode.
+- A timestep display and other editor polish.
