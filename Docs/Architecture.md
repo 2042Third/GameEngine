@@ -652,10 +652,11 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   is its dependency closure without the other scenes it names (`AssetClosureScope::Load`: a script field holding the next
   level, or a sub-scene streamed in later, would otherwise load whole levels with it), as far as the residency budgets have
   room: a pool's members load with the scene when all of them fit in the room the pool has beside what is resident when
-  the load starts, their memory estimated from their stored sizes in their type's pool (textures in GPU textures, meshes in
-  GPU buffers and system memory, the rest in system memory; members already loaded always count; a texture is estimated
-  whole, although with mip streaming its load brings in its mip tail, which is when it counts as loaded, see Group
-  loads, and its finer levels follow the views). A pool they do not all
+  the load starts, their memory estimated by what their first loads read (`AssetManagerBase::EstimateFirstLoadBytes`) in
+  their type's pool (textures in GPU textures, meshes in GPU buffers and system memory, the rest in system memory; members
+  already loaded always count; while loads read prefixes a texture is estimated by its header and mip tail, which is
+  what its load brings in and when it counts as loaded, see Group loads, and its finer levels follow the views within
+  the texture budget, `TextureStreamer`). A pool they do not all
   fit is left to the scene, which requests what it draws once it runs, and so are members that depend directly on one of
   its members (requesting them would prefetch it): the load cannot know which part the scene draws first, and any other
   part would fill the room it needs, to be evicted again (`GetSkippedAssetCount`). A level larger than a budget never

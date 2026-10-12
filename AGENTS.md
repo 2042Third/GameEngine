@@ -526,7 +526,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   loading screens pin what using an asset needs with `RequestLoadWithDependencies` (`AssetGroupRequest`: progress by
   bytes, cancel; its closure stops at other scenes, `AssetClosureScope::Load`: a level that names the next one does not
   load it), or a group they chose with `RequestLoadGroup` (scene loads take a pool's share of the closure only when all
-  of it fits in the budget's room, and leave it to what the scene draws otherwise, `SceneLoader`).
+  of it fits in the budget's room, estimated by what first loads read, a texture's mip tail while loads read prefixes
+  (`AssetManagerBase::EstimateFirstLoadBytes`), and leave it to what the scene draws otherwise, `SceneLoader`).
 - **Textures** cook to GPU block-compressed formats by default ([Docs/Architecture.md](Docs/Architecture.md), "Texture
   cooking"): `TextureImporter::ChooseFormat` picks BC7 (color, sRGB, and linear data of several channels; at
   `"Quality": "Fast"` opaque color is BC1), BC5 (normal maps), BC4 (one-channel data, marked `Grayscale`: sampled as

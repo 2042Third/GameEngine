@@ -40,7 +40,9 @@ namespace Strata
 	// (AssetManagerBase::RequestLoadGroup). What it uses is its dependency closure without the other scenes it names
 	// (AssetClosureScope::Load: a script field holding the next level does not load that level), as far as the residency
 	// budgets have room: a pool's members load with the scene when all of them fit in the room the pool's budget has beside
-	// what is resident when the load starts (estimated from their stored sizes; members loaded already always count).
+	// what is resident when the load starts (estimated by what their first loads read, AssetManagerBase::EstimateFirstLoadBytes:
+	// a texture loaded partly brings in its mip tail, and is loaded then, AssetGroupRequest; members loaded already always
+	// count).
 	// Otherwise the scene requests that pool's members itself once it runs, what it draws first, and so it does members
 	// that depend directly on one of them (requesting those would prefetch them): the load cannot know which part the scene
 	// draws, and any other part would take the room from it (GetSkippedAssetCount). So a load never pushes a pool past its

@@ -271,8 +271,9 @@ TEST_SUITE("GPU.Scene.Streaming")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
+		const std::filesystem::path pack = WriteTexturedLevelPack();
 		std::string error;
-		const Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(WriteTexturedLevelPack(), &error);
+		Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(pack, &error);
 		REQUIRE_MESSAGE(manager, error);
 		AssetManager::SetActive(manager);
 		const std::optional<AssetMetadata> texture = manager->GetMetadata(UUID(c_FirstLevelTexture));
@@ -300,10 +301,41 @@ TEST_SUITE("GPU.Scene.Streaming")
 			return mostResident;
 		};
 
-		// Room for two and a half of the level's six textures (each takes at most its stored size on the GPU): the load
-		// waits for the scene and its mesh, and leaves the textures, and the materials that would prefetch them, to the
-		// scene, which requests what it draws. No frame takes the pool past its budget.
+		// With mip streaming a texture's load brings in its mip tail, which is when it counts as loaded (its finer levels
+		// follow what views draw it at): room for two and a half of the level's six whole textures holds all six tails, so
+		// the load waits for every one of them, and they are loaded at their tails.
+		REQUIRE(manager->ArePartialLoadsActive());
 		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
+		budgets.GpuTextures = manager->GetStats().Resident.GpuTextures + texture->StoredSize * 5 / 2;
+		manager->SetResidencyBudgets(budgets);
+		{
+			SceneLoadRequest request = SceneLoader::LoadAsync(UUID(c_LevelScene));
+			CHECK(request.GetAssetCount() == 2 + 2 * c_LevelObjects);
+			CHECK(request.GetSkippedAssetCount() == 0);
+			CHECK(load(request) <= budgets.GpuTextures);
+			CHECK(request.GetProgress() == 1.0f);
+			for (uint64_t index = 0; index < c_LevelObjects; index++)
+			{
+				CAPTURE(index);
+				REQUIRE(manager->GetAssetState(UUID(c_FirstLevelTexture + index)) == AssetState::Ready);
+				const Ref<Asset> loaded = manager->PeekLoadedAsset(UUID(c_FirstLevelTexture + index));
+				REQUIRE((loaded && loaded->GetType() == AssetType::Texture));
+				const Texture& level = static_cast<const Texture&>(*loaded);
+				CHECK(level.GetResidentLevel() > 0);
+				CHECK(level.GetResidentLevel() == level.GetTailLevel());
+			}
+		}
+		manager->WaitForPendingLoads();
+
+		// Whole textures (partial loads off), in a fresh manager. Room for two and a half of them (each takes at most its
+		// stored size on the GPU): the load waits for the scene and its mesh, and leaves the textures, and the materials that
+		// would prefetch them, to the scene, which requests what it draws. No frame takes the pool past its budget.
+		AssetManager::SetActive(nullptr);
+		manager = RuntimeAssetManager::Create(pack, &error);
+		REQUIRE_MESSAGE(manager, error);
+		AssetManager::SetActive(manager);
+		manager->SetPartialLoads(false);
+		budgets = manager->GetResidencyBudgets();
 		budgets.GpuTextures = manager->GetStats().Resident.GpuTextures + texture->StoredSize * 5 / 2;
 		manager->SetResidencyBudgets(budgets);
 		{
@@ -324,7 +356,13 @@ TEST_SUITE("GPU.Scene.Streaming")
 			CHECK(request.GetSkippedAssetCount() == 0);
 			CHECK(load(request) <= budgets.GpuTextures);
 			for (uint64_t index = 0; index < c_LevelObjects; index++)
-				CHECK(manager->GetAssetState(UUID(c_FirstLevelTexture + index)) == AssetState::Ready);
+			{
+				CAPTURE(index);
+				REQUIRE(manager->GetAssetState(UUID(c_FirstLevelTexture + index)) == AssetState::Ready);
+				const Ref<Asset> loaded = manager->PeekLoadedAsset(UUID(c_FirstLevelTexture + index));
+				REQUIRE((loaded && loaded->GetType() == AssetType::Texture));
+				CHECK(static_cast<const Texture&>(*loaded).GetResidentLevel() == 0);
+			}
 		}
 		manager->WaitForPendingLoads();
 		AssetManager::SetActive(nullptr);

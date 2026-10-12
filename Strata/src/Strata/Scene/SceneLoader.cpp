@@ -19,12 +19,14 @@ namespace Strata
 	namespace
 	{
 
-		// What an asset of `type` whose stored form takes `storedSize` bytes will hold once loaded, before it ever was: about
-		// its stored size, in the pool its type lives in (cooked textures and meshes are uploaded as they are stored; meshes
-		// keep their geometry for physics too). Everything else is system memory.
-		AssetMemoryUsage EstimateMemoryUsage(AssetType type, uint64_t storedSize)
+		// What an asset of `type` whose first load reads `loadBytes` bytes (AssetManagerBase::EstimateFirstLoadBytes: its stored
+		// size, or a texture's header and mip tail while loads read prefixes) will hold once loaded, before it ever was: about
+		// that many bytes, in the pool its type lives in (cooked textures and meshes are uploaded as they are stored; meshes
+		// keep their geometry for physics too). Everything else is system memory. The finer levels of a texture loaded partly
+		// follow what views draw it at later, within the texture budget (TextureStreamer): they are not the load's.
+		AssetMemoryUsage EstimateMemoryUsage(AssetType type, uint64_t loadBytes)
 		{
-			const uint64_t bytes = storedSize > 0 ? storedSize : AssetStreamingQueue::c_UnknownSizeBytes;
+			const uint64_t bytes = loadBytes > 0 ? loadBytes : AssetStreamingQueue::c_UnknownSizeBytes;
 			AssetMemoryUsage usage;
 			switch (type)
 			{
@@ -69,7 +71,7 @@ namespace Strata
 					const std::optional<AssetMetadata> metadata = manager.GetMetadata(member);
 					if (!metadata)
 						continue; // Unregistered since the closure was read
-					candidate.Usage = EstimateMemoryUsage(metadata->Type, metadata->StoredSize);
+					candidate.Usage = EstimateMemoryUsage(metadata->Type, manager.EstimateFirstLoadBytes(*metadata));
 					for (size_t pool = 0; pool < c_AssetMemoryPools.size(); pool++)
 						needed[pool] += GetPoolBytes(candidate.Usage, c_AssetMemoryPools[pool]);
 				}

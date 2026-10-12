@@ -249,13 +249,23 @@ namespace Strata
 
 	bool AssetManagerBase::IsPartialLoadLocked(const AssetEntry& entry) const
 	{
-		return ArePartialLoadsActive() && entry.Metadata.StoredSize > 0 && AssetLoaderRegistry::FindPrefix(entry.Metadata.Type);
+		return ReadsPrefix(entry.Metadata);
 	}
 
 	uint64_t AssetManagerBase::GetLoadBytesLocked(const AssetEntry& entry) const
 	{
+		return EstimateFirstLoadBytes(entry.Metadata);
+	}
+
+	bool AssetManagerBase::ReadsPrefix(const AssetMetadata& metadata) const
+	{
+		return ArePartialLoadsActive() && metadata.StoredSize > 0 && AssetLoaderRegistry::FindPrefix(metadata.Type);
+	}
+
+	uint64_t AssetManagerBase::EstimateFirstLoadBytes(const AssetMetadata& metadata) const
+	{
 		// A partial load reads the head (and what its prefix needs beyond it: a cooked texture's tail is about as large).
-		return IsPartialLoadLocked(entry) ? std::min(entry.Metadata.StoredSize, c_AssetPrefixHeadBytes) : entry.Metadata.StoredSize;
+		return ReadsPrefix(metadata) ? std::min(metadata.StoredSize, c_AssetPrefixHeadBytes) : metadata.StoredSize;
 	}
 
 	void AssetManagerBase::WaitForInFlightLoads()

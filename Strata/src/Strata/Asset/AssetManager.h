@@ -373,6 +373,11 @@ namespace Strata
 		void SetPartialLoads(bool enabled);
 		// Loads read prefixes now: allowed, and an extension refines what they hold.
 		bool ArePartialLoadsActive() const { return m_PartialLoadsActive.load(std::memory_order_acquire); }
+		// The bytes a load of an asset with this metadata starting now reads, about what its loaded form holds at first: its
+		// stored size, or, while loads read prefixes and its type has a prefix function, the head a partial load reads
+		// (c_AssetPrefixHeadBytes at most, which holds a cooked texture's header and the mip tail of most). The streaming
+		// queue counts it in flight; a scene load estimates its members' memory with it (SceneLoader). Any thread.
+		uint64_t EstimateFirstLoadBytes(const AssetMetadata& metadata) const;
 
 		// Whether the asset has a stored form the manager can read parts of again (RequestRange): registered, neither a memory
 		// asset nor a built-in one.
@@ -677,6 +682,8 @@ namespace Strata
 		// the head), and the bytes the streaming queue counts for it. Requires m_Mutex.
 		bool IsPartialLoadLocked(const AssetEntry& entry) const;
 		uint64_t GetLoadBytesLocked(const AssetEntry& entry) const;
+		// Whether a load of an asset with this metadata starting now reads only a prefix (IsPartialLoadLocked's rule).
+		bool ReadsPrefix(const AssetMetadata& metadata) const;
 		bool DispatchRange(const AssetStreamingRequest& request);
 		void RunRange(const AssetMetadata& metadata, const AssetStreamingRequest& request);
 		// A range read's job ended: the manager may be destroyed from now on (WaitForInFlightLoads).
