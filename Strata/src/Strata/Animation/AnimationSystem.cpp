@@ -788,6 +788,24 @@ namespace Strata
 		// travels as far as its feet do), the parent's inverse into the space of the local translation.
 		const glm::mat4 world = m_Scene.GetWorldTransform(animator);
 		glm::vec3 move = glm::vec3(world * glm::vec4(delta.Translation, 0.0f));
+		TransformComponent& transform = animator.GetTransform();
+		const glm::quat rotation = glm::normalize(transform.Rotation * glm::angleAxis(delta.Yaw, glm::vec3(0.0f, 1.0f, 0.0f)));
+		if (!std::isfinite(rotation.x) || !std::isfinite(rotation.y) || !std::isfinite(rotation.z) || !std::isfinite(rotation.w))
+			return;
+
+		// A character controller walks the move at its next fixed step, colliding as it walks (it stops at walls, climbs steps,
+		// keeps to the ground), instead of being placed there: only the turn is written to the entity. The controller writes
+		// its position back and keeps the entity's rotation.
+		if (ICharacterControl* characters = m_Scene.GetService<ICharacterControl>(); characters && characters->AddCharacterMotion(animator, move))
+		{
+			if (delta.Yaw != 0.0f)
+			{
+				transform.Rotation = rotation;
+				animator.MarkModified<TransformComponent>();
+			}
+			return;
+		}
+
 		if (const Entity parent = animator.GetParent())
 		{
 			const glm::mat4 parentWorld = m_Scene.GetWorldTransform(parent);
@@ -795,10 +813,8 @@ namespace Strata
 				return;
 			move = glm::vec3(glm::inverse(parentWorld) * glm::vec4(move, 0.0f));
 		}
-		TransformComponent& transform = animator.GetTransform();
 		const glm::vec3 translation = transform.Translation + move;
-		const glm::quat rotation = glm::normalize(transform.Rotation * glm::angleAxis(delta.Yaw, glm::vec3(0.0f, 1.0f, 0.0f)));
-		if (!std::isfinite(translation.x) || !std::isfinite(translation.y) || !std::isfinite(translation.z) || !std::isfinite(rotation.w))
+		if (!std::isfinite(translation.x) || !std::isfinite(translation.y) || !std::isfinite(translation.z))
 			return;
 		transform.Translation = translation;
 		transform.Rotation = rotation;

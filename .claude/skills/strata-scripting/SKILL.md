@@ -252,7 +252,8 @@ void OnAnimationEvent(std::string_view name) override // Events of the controlle
 - Parameters and states are named as in the controller; commands given while it loads apply once it has loaded.
 - Prefer an `AttachToJoint` component (Animator entity and joint name) over copying joint transforms every frame: the
   animation system places the entity after each pose.
-- `ApplyRootMotion` on the component moves the entity by the clip's root travel (walk cycles that do not slide);
+- `ApplyRootMotion` on the component moves the entity by the clip's root travel (walk cycles that do not slide); on an
+  entity with a `CharacterController` the controller walks that travel, so walls stop it and it keeps to the ground;
   `CullingMode` `WhenVisible` skips the pose of characters no camera sees, neither them nor their shadows, wherever their
   clips take them (time, events and root motion go on; `GetJointTransform` then reads the latest pose). An animator that
   skins no mesh but moves attached parts poses every frame.

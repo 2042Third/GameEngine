@@ -842,8 +842,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   asset sets, never write them; what needs the main thread, such as new asset sets or requests, is queued for it);
   everything that changes the scene (root motion, attachments, events) happens on the main thread afterwards, animator by
   animator. Keep it that way: a test compares runs with different thread counts bit for bit.
-- **Root motion** moves entities only in `AnimationSystem::ApplyRootMotion` (signaled through the transform contract); a
-  character controller takes the delta there.
+- **Root motion** moves entities only in `AnimationSystem::ApplyRootMotion` (signaled through the transform contract); on
+  an entity with a character controller the controller walks the move instead (`ICharacterControl::AddCharacterMotion`,
+  colliding as it walks) and only the turn is written.
 - **Culling:** `WhenVisible` animators skip their pose while no renderer reports them (`ISkinningPoses::ReportVisible`:
   a mesh they skin in view, or its shadow on what the view shows); time, transitions, events and root motion go on. They
   publish their reach with the pose (`SkeletonPose::Reach`, where their clips take the joints), which bounds their meshes

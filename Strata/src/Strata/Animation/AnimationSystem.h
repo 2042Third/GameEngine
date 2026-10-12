@@ -125,8 +125,9 @@ namespace Strata
 
 		// Moves an animator's entity by the root motion of an update (AnimatorComponent::ApplyRootMotion): the move, given in
 		// the entity's own space, through its world transform (rotation and scale) into its parent's space, and the turn about
-		// its own +Y axis, signaled through the transform contract. This is the one place root motion moves entities: a
-		// character controller takes the delta here instead of the transform write.
+		// its own +Y axis, signaled through the transform contract. This is the one place root motion moves entities. An entity
+		// with a character controller (ICharacterControl::AddCharacterMotion accepts it: an enabled, active controller) walks
+		// the move in world space at its next fixed step instead, colliding as it walks, and only the turn is written.
 		void ApplyRootMotion(Entity animator, const RootMotionDelta& delta);
 
 		//////////////////////////////////////////////////////////////////////////

@@ -2531,6 +2531,52 @@
 			},
 			{
 				"Components": {
+					"Animator": {
+						"ApplyRootMotion": true,
+						"Clip": "B24808E5B27B99CD",
+						"Controller": "0000000000000000",
+						"CullingMode": "AlwaysAnimate",
+						"Loop": false,
+						"PlayOnStart": true,
+						"Skeleton": "03B1B955BE45291A",
+						"Speed": 0.5
+					},
+					"CharacterController": {
+						"Enabled": true,
+						"GravityScale": 1,
+						"Height": 1.6,
+						"Layer": 0,
+						"MaxSlopeDegrees": 45,
+						"PushStrength": 200,
+						"Radius": 0.3,
+						"StepHeight": 0.35
+					},
+					"Name": {
+						"Name": "Root Walker"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							3,
+							0,
+							-7
+						]
+					}
+				},
+				"ID": "F7E0000000000066"
+			},
+			{
+				"Components": {
 					"Inactive": {},
 					"Name": {
 						"Name": "Journal"

@@ -254,12 +254,12 @@ queries, plus a kinematic presence body (90% of its radius, its top at the capsu
 which dynamic bodies land on it, triggers detect it and queries hit it. Each fixed step, after the bodies are synchronized
 and before Jolt's step, `CharacterControllerSet::Step` moves every controller: its velocity is the walk velocity its
 script set (`ICharacterControl::MoveCharacter`, kept until the next call; the vertical part only without gravity), a
-pending jump, accumulated root motion (`AddCharacterMotion`, the animation stream's hook) and gravity times its
-`GravityScale`; standing on walkable ground it takes on the ground's velocity (moving platforms), in the air its vertical
-velocity goes on (a ceiling stops a rise). Jolt's `ExtendedUpdate` then slides it along walls, walks it up steps up to
-`StepHeight` and keeps it on the ground walking down, against the layers its layer collides with (the world's live
-matrix) and never its own entity's bodies. The moves run in parallel batches on the job system (bounded scratch memory
-per batch), each reading only the world before the step and writing only its own controller: Jolt would push dynamic
+pending jump, accumulated root motion (`AddCharacterMotion`: the animation system's, see Animation, Root motion) and
+gravity times its `GravityScale`; standing on walkable ground it takes on the ground's velocity (moving platforms), in
+the air its vertical velocity goes on (a ceiling stops a rise). Jolt's `ExtendedUpdate` then slides it along walls, walks
+it up steps up to `StepHeight` and keeps it on the ground walking down, against the layers its layer collides with (the
+world's live matrix) and never its own entity's bodies. The moves run in parallel batches on the job system (bounded
+scratch memory per batch), each reading only the world before the step and writing only its own controller: Jolt would push dynamic
 bodies from many threads in any order, so the set disables that and pushes afterwards, on the main thread in entity order
 (`PushBodies`: an inelastic push, the body's effective mass at the contact times the speed the character closes in on it
 along the normal, never downwards and at most `PushStrength` newtons over the step; and the character's weight, 70 kg
@@ -1705,8 +1705,12 @@ system, not to entities: a character's joints add no entities and no transform c
   blend, in the frame the root faced when the clip started; the pose holds the root's subtree where (and facing how)
   each clip started. `AnimationSystem::ApplyRootMotion` is the one place that moves the entity: the move, in the
   entity's space, goes through its world transform (scale included) and its parent's inverse into the local translation,
-  the turn multiplies its rotation, and the write is signaled (`MarkModified<TransformComponent>`). A character
-  controller takes the delta there instead.
+  the turn multiplies its rotation, and the write is signaled (`MarkModified<TransformComponent>`). On an entity with a
+  character controller (`ICharacterControl::AddCharacterMotion` accepts it: enabled, active, no rigid body) the move goes
+  to the controller in world space instead and is walked at its next fixed step, colliding like walking (walls stop it,
+  steps and slopes are climbed as far as the controller climbs them, gravity keeps it on the ground), and only the turn
+  is written to the entity (the controller writes its position back and keeps its rotation). The animation system
+  updates before physics, so a frame's root motion is walked in that frame's first fixed step.
 - **Culling.** A `WhenVisible` animator computes its pose only when a renderer drew (or would have drawn) a mesh it skins
   in its view, or that mesh's shadow on what its view shows, since the previous update (`ISkinningPoses::ReportVisible`,
   which `SceneRenderer` calls for the animators of the Skin proxies it culled in and of the casters out of view whose

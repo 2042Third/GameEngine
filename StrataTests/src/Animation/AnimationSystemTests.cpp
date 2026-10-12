@@ -22,6 +22,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -115,6 +116,20 @@ namespace
 			}
 		}
 		return true;
+	}
+
+	// A static box collider (physics' world) at `position`.
+	Entity CreateStaticBox(Scene& scene, const std::string& name, const glm::vec3& position, const glm::vec3& halfExtents)
+	{
+		Entity entity = scene.CreateEntity(name);
+		entity.GetTransform().Translation = position;
+		entity.AddComponent<BoxColliderComponent>().HalfExtents = halfExtents;
+		return entity;
+	}
+
+	glm::vec3 GetWorldPosition(const Scene& scene, Entity entity)
+	{
+		return glm::vec3(scene.GetWorldTransform(entity)[3]);
 	}
 
 	size_t CountWarnings(uint64_t after, std::string_view text)
@@ -757,6 +772,70 @@ TEST_SUITE("Animation.RootMotion")
 			CHECK(control->GetNormalizedTime(walker) == doctest::Approx(static_cast<float>(update) * step).epsilon(1e-4));
 		}
 		CheckSceneCaches(*scene.SceneRef);
+	}
+
+	TEST_CASE("Root motion walks a character controller, which collides, and turns its entity")
+	{
+		AnimationScene scene;
+		Scene& world = *scene.SceneRef;
+		CreateStaticBox(world, "Ground", glm::vec3(0.0f, -0.5f, 0.0f), glm::vec3(50.0f, 0.5f, 50.0f)); // Its top at y = 0
+		// A wall across the walk (the clip travels 2 along +Z per second): its near face at z = 2.25.
+		CreateStaticBox(world, "Wall", glm::vec3(0.0f, 1.0f, 2.5f), glm::vec3(10.0f, 1.0f, 0.25f));
+		const auto addController = [](Entity entity, const glm::vec3& position, bool enabled)
+		{
+			entity.GetTransform().Translation = position;
+			CharacterControllerComponent& controller = entity.AddComponent<CharacterControllerComponent>();
+			controller.Height = 1.8f;
+			controller.Radius = 0.3f;
+			controller.Enabled = enabled;
+		};
+		Entity walker = scene.CreateAnimator("Walker", c_WalkHandle);
+		walker.GetComponent<AnimatorComponent>().ApplyRootMotion = true;
+		addController(walker, glm::vec3(0.0f), true);
+		// Its controller disabled, the entity is moved by its transform: through the wall.
+		Entity ghost = scene.CreateAnimator("Ghost", c_WalkHandle);
+		ghost.GetComponent<AnimatorComponent>().ApplyRootMotion = true;
+		addController(ghost, glm::vec3(-5.0f, 0.0f, 0.0f), false);
+		// Beyond the wall's end: a quarter turn per second, and no travel.
+		Entity turner = scene.CreateAnimator("Turner", c_TurnHandle);
+		turner.GetComponent<AnimatorComponent>().ApplyRootMotion = true;
+		addController(turner, glm::vec3(15.0f, 0.0f, 0.0f), true);
+		scene.Start();
+		ICharacterControl* characters = world.GetService<ICharacterControl>();
+		REQUIRE(characters);
+		REQUIRE(characters->HasCharacterController(walker));
+		CHECK_FALSE(characters->HasCharacterController(ghost));
+
+		// Half a second (one fixed step per update): the controller walks the clip's travel at its pace, on the ground.
+		const float step = world.GetSettings().FixedTimestep;
+		for (int update = 0; update < 30; update++)
+			scene.Update(step);
+		const glm::vec3 walked = GetWorldPosition(world, walker);
+		CHECK(walked.z == doctest::Approx(1.0f).epsilon(0.02));
+		CHECK(std::abs(walked.x) < 1e-3f);
+		CHECK(std::abs(walked.y) < 0.02f);
+		const std::optional<CharacterState> walking = characters->GetCharacterState(walker);
+		REQUIRE(walking.has_value());
+		CHECK(walking->Ground == CharacterGroundState::OnGround);
+		CHECK(walking->Velocity.z == doctest::Approx(2.0f).epsilon(0.05));
+
+		// A second more: the clip would take it to z = 3, the wall stops it at its face less its radius.
+		for (int update = 0; update < 60; update++)
+			scene.Update(step);
+		const glm::vec3 stopped = GetWorldPosition(world, walker);
+		CHECK(stopped.z > 1.8f);
+		CHECK(stopped.z < 2.25f - 0.3f + 0.01f);
+		CHECK(std::abs(stopped.y) < 0.02f);
+		CHECK(std::abs(GetWorldPosition(world, ghost).z - 3.0f) < 1e-3f);
+
+		// The turner turned 135 degrees in place: the controller keeps the rotation written to its entity.
+		const glm::vec3 forward = turner.GetComponent<TransformComponent>().Rotation * glm::vec3(0.0f, 0.0f, 1.0f);
+		CHECK(glm::degrees(std::atan2(forward.x, forward.z)) == doctest::Approx(135.0f).epsilon(1e-3));
+		const glm::vec3 turned = GetWorldPosition(world, turner);
+		CHECK(std::abs(turned.x - 15.0f) < 1e-3f);
+		CHECK(std::abs(turned.z) < 1e-3f);
+		CHECK(std::abs(turned.y) < 0.02f);
+		CheckSceneCaches(world);
 	}
 }
 

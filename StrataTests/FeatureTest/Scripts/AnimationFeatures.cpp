@@ -1,7 +1,8 @@
 // The animation API of scripts (Animator, Script::OnAnimationEvent) on "Arm Rig": an Animator with the arm's skeleton and
 // the Arm controller (states Wave with the event WaveTop, Swing with SwingEnd, Rest; parameters Speed, Raised and the
 // trigger Swing), not playing on start. "Arm Tip" follows the rig's wrist (AttachToJoint); "Swing Rig" plays the Swing clip
-// with root motion, which moves it 0.5 along +X.
+// with root motion, which moves it 0.5 along +X. "Root Walker" plays it too and has a character controller: the controller
+// walks the root motion (colliding as it walks) instead of the animation placing the entity, so its velocity shows it.
 //
 // The scenario advances by what the animator reports, not by frame numbers: exported games load the animation assets
 // asynchronously, so the controller may arrive a few frames after Play (which waits for it).
@@ -27,6 +28,7 @@ public:
 	int32_t WaveTops = 0;
 	int32_t SwingEnds = 0;
 	bool JournaledEvent = false;
+	bool RootWalkerWalked = false;
 
 	void OnCreate() override
 	{
@@ -41,6 +43,12 @@ public:
 		// The animation system updates after the scripts: what a frame commands shows in the next frame.
 		Animator animator = GetEntity().GetAnimator();
 		Frames++;
+		// A controller placed from outside reports no velocity of its own; one that walks the root motion does.
+		if (!RootWalkerWalked)
+		{
+			const Entity rootWalker = Scene::FindEntityByName("Root Walker");
+			RootWalkerWalked = rootWalker && rootWalker.GetCharacterController().GetVelocity().x > 0.05f;
+		}
 		switch (Stage)
 		{
 			case 0:
@@ -105,6 +113,12 @@ public:
 				// The swing rig's root motion moved it by the clip's travel.
 				const Entity swingRig = Scene::FindEntityByName("Swing Rig");
 				Expect(swingRig && Near(swingRig.GetTransform().GetWorldPosition(), glm::vec3(-2.5f, 0.0f, 4.0f), 1e-3f), "root motion moved the swing rig");
+				// The root walker's character controller walked the same travel on the ground.
+				const Entity rootWalker = Scene::FindEntityByName("Root Walker");
+				Expect(RootWalkerWalked, "root motion walks a character controller");
+				Expect(rootWalker && Near(rootWalker.GetTransform().GetWorldPosition(), glm::vec3(3.5f, 0.0f, -7.0f), 0.02f),
+					"the controller walked the clip's root travel");
+				Expect(rootWalker && rootWalker.GetCharacterController().IsGrounded(), "the root walker stays on the ground");
 				Completed = true;
 				break;
 			}
@@ -138,4 +152,5 @@ ST_SCRIPT_CLASS(AnimationFeatures)
 	ST_SCRIPT_FIELD(WaveTops);
 	ST_SCRIPT_FIELD(SwingEnds);
 	ST_SCRIPT_FIELD(JournaledEvent);
+	ST_SCRIPT_FIELD(RootWalkerWalked);
 }
