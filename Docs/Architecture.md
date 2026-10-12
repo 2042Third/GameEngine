@@ -386,8 +386,9 @@ One frame (`Application::Run` and `RunFrame`):
  5  Layer::OnUpdate(timestep)        every layer in stack order: the editor's or the game's work, below
  6  AudioEngine::AdvanceNullDevice   only while mixing without an output device
     AudioEngine::Update              reclaims finished one-shots
- 7  RenderImGui                      ImGuiLayer::Begin, every Layer::OnImGuiRender, ImGuiLayer::End
- 8  back-buffer captures, GraphicsDevice::EndFrame (present)
+ 7  RenderImGui                      ImGuiLayer::Begin, every Layer::OnImGuiRender, Renderer::PrepareBackBuffer (the GPU
+                                     waits for the swapchain image from here on), ImGuiLayer::End
+ 8  Renderer::PrepareBackBuffer (frames without UI), back-buffer captures, GraphicsDevice::EndFrame (present)
     frame counted; MaxFrames (--frames) closes the application; the frame pacer waits (frame rate cap)
 ```
 
@@ -1025,9 +1026,9 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
 - **The transfer queue** (`RendererSpecification::TransferQueueUploads`, from
   `ApplicationSpecification::TransferQueueUploads`, or `GPUUploadQueue::SetTransferQueue`; where the device has a
   dedicated transfer queue: `GraphicsDevice::HasTransferQueue`). Off by default: with the display wait out of the way it
-  did not load the exported stress game faster on the reference machine (every texture resident from frame 10-11 with
-  it, 10 without) and held more memory meanwhile (peak private memory 595-622 MB, 582-595 MB without), since each
-  upload is handed over a frame after its last copy. Uploads the managers may wait for (their budgeted updates:
+  did not load the exported stress game faster on the reference machine and held more memory meanwhile, since each
+  upload is handed over a frame after its last copy (measured with whole textures, before mip streaming: every texture
+  resident from frame 10-11 with it, 10 without; peak private memory 595-622 MB with it, 582-595 MB without). Uploads the managers may wait for (their budgeted updates:
   `AssetFinalizeContext::MayWait`) then run on that queue, beside the graphics queue's work; an upload keeps the queue it
   started on (`GPUUploadQueue::ChooseQueue`). NVRHI creates resources for one queue family at a time and records no queue
   family ownership transfers, so the queue does what it needs: on the transfer queue's command list (not an immediate one:
