@@ -161,8 +161,11 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   whose floor contacts are tracked; creating 10,000 bodies in one frame; the memory a world at the largest capacities and
   at the most bodies reserves), `Perf.TextureCook` (a cold import of the stress project, the stored sizes of its largest
   2048x2048 texture, its 4096x4096 texture and all of them, its pack's size, the BC7 encoder's time per block on one
-  thread), `PerfGPU.Renderer` (`SceneRenderer::Render` alone on 100,000 and 300,000 cubes and on 10,000 cubes with unique
-  materials, with the opaque draw calls those take) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000
+  thread), `Perf.Animation` (`Perf/AnimationPerfTests.cpp`: a frame of 1,000 animators of 60 joints, each cross-fading
+  two clips, and a frame of 10,000 `WhenVisible` animators no renderer sees, both with the job system as applications
+  start it), `PerfGPU.Renderer` (`SceneRenderer::Render` alone on 100,000 and 300,000 cubes and on 10,000 cubes with
+  unique materials, with the opaque draw calls those take, and on 1,000 skinned characters of about 5,000 vertices posed
+  anew every frame, in `Perf/AnimationPerfTests.cpp`) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000
   roots; the hierarchy's rows of 100,000 roots, idle and rebuilt; the Hierarchy panel's share of an editor frame with
   100,000 roots, open against closed; what 100,000 selected entities add to a frame; the longest editor frame while a
   4096x4096 texture re-imports uncompressed and then block-compressed again), `PerfGPU.Editor`, which runs the real
