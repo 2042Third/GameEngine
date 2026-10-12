@@ -51,6 +51,7 @@ namespace Strata
 		uint64_t Failed = 0;          // Could not be made: their assets show the type's icon
 		uint64_t Uploads = 0;         // GPU textures made
 		uint64_t StoredBytesRead = 0; // Of textures' stored forms (headers and mip tails: never a whole chain)
+		uint64_t MipWaitFrames = 0;   // Frames rendered images waited for finer mip levels of the textures they drew
 		size_t Entries = 0;
 		size_t GPUTextures = 0;
 		size_t Pending = 0;
@@ -66,6 +67,9 @@ namespace Strata
 		// A rendered thumbnail whose assets still load (or fail to) after this many frames is given up: the asset shows its
 		// type's icon until it changes.
 		uint32_t MaxSceneFrames = 600;
+		// Textures arrive as their mip tail and stream in the levels a view drew them at (TextureStreamer): a rendered image
+		// waits at most this many frames for those levels, then shows what is resident (a texture budget may keep them coarser).
+		uint32_t MaxMipWaitFrames = 120;
 		// After a source of a thumbnail changed (a reimport, a saved edit), it is made again once it stayed unchanged this many
 		// frames; the old one shows meanwhile.
 		uint32_t SettleFrames = 20;
@@ -177,6 +181,7 @@ namespace Strata
 			bool Built = false;
 			uint32_t Frames = 0;
 			uint32_t QuietFrames = 0;
+			uint32_t MipWaitFrames = 0; // Frames it waited for its textures' levels (ThumbnailCacheSpecification::MaxMipWaitFrames)
 			Scope<TextureReadback> Readback;
 		};
 
@@ -190,6 +195,9 @@ namespace Strata
 		void StartDiskJob(AssetHandle handle, uint64_t key);
 		void UpdateSceneJob();
 		bool BuildScene(SceneJob& job, std::string* outError);
+		// Whether a texture the renderer drew in its last frame is coarser than the level the views want of it (its finer
+		// levels are still streaming in).
+		bool HasTexturesBelowWanted() const;
 		void FinishScene(bool success, Ref<ThumbnailImage> image);
 		void Finish(AssetHandle handle, uint64_t key, Ref<ThumbnailImage> image, bool fromDisk);
 		void Fail(AssetHandle handle, uint64_t key);

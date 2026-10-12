@@ -20,6 +20,7 @@
 #include <Strata/Renderer/ImageReader.h>
 #include <Strata/Renderer/Renderer.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -211,6 +212,53 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 			for (AssetHandle handle : all)
 				CHECK(harness.Thumbnails().Request(handle) != nullptr);
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A rendered thumbnail waits for the mip levels its textures stream in, not only for their tails")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path project = Tests::CopyFeatureProject(Tests::CreateTemporaryDirectory("GPUThumbnailMips") / "Project").parent_path();
+		// Black and white stripes 16 texels wide: each texel of the 32x32 mip tail covers one black and one white stripe and is
+		// gray, while the levels a 128-pixel sphere needs keep them apart.
+		constexpr uint32_t size = 1024;
+		std::vector<uint8_t> pixels(size * size * 4, 255);
+		for (uint32_t y = 0; y < size; y++)
+		{
+			for (uint32_t x = 0; x < size; x++)
+			{
+				const uint8_t value = (x / 16) % 2 == 0 ? 0 : 255;
+				for (uint32_t channel = 0; channel < 3; channel++)
+					pixels[(static_cast<size_t>(y) * size + x) * 4 + channel] = value;
+			}
+		}
+		REQUIRE(FileSystem::WriteBytes(project / "Assets" / "Textures" / "Stripes.png", Tests::EncodePNG(size, size, pixels)));
+		ThumbnailHarness harness(gpu, project);
+		const AssetHandle stripes = harness.Find("Textures/Stripes.png");
+		const nlohmann::json created = harness.Run("material.create", { { "path", "Materials/Stripes.stmat" },
+			{ "properties", { { "BaseColorMap", UUIDToJson(stripes) }, { "Unlit", true } } } });
+		const std::optional<UUID> material = UUIDFromJson(created["asset"]);
+		REQUIRE(material);
+
+		harness.RequestUntilIdle({ *material });
+		REQUIRE(harness.Thumbnails().GetState(*material) == ThumbnailState::Ready);
+		// The texture loaded as its tail; the image waited for the finer levels the view drew it at.
+		CHECK(harness.Thumbnails().GetStats().MipWaitFrames > 0);
+		ReadbackImage image;
+		REQUIRE(Renderer::ReadTexture(harness.Thumbnails().Request(*material), image));
+		// Across the middle of the sphere the stripes show: black and white, not the tail's gray.
+		int darkest = 255;
+		int brightest = 0;
+		for (uint32_t x = image.Width * 3 / 8; x < image.Width * 5 / 8; x++)
+		{
+			const glm::u8vec4 pixel = Tests::GetPixelRGBA8(image, x, image.Height / 2);
+			darkest = std::min(darkest, static_cast<int>(pixel.r));
+			brightest = std::max(brightest, static_cast<int>(pixel.r));
+		}
+		CAPTURE(darkest);
+		CAPTURE(brightest);
+		CHECK(brightest - darkest > 100);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

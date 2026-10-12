@@ -1966,7 +1966,10 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the preview lighting by one offscreen `SceneRenderer` (128x128, no entity IDs, one shadow cascade), one asset at a time:
   their dependency closure loads at Low priority (`RequestLoadWithDependencies`, pinned until the render is read back),
   the camera frames what renders (`SceneBounds`, `EditorCamera::FitBounds`; a material's sphere fills the view), the
-  scene renders until nothing is pending for two frames, and a `TextureReadback` takes the image without stalling.
+  scene renders until nothing is pending for two frames and every texture it drew has the mip level the views want
+  (textures load as their mip tail and stream in the levels the render drew them at, see Mip streaming; at most
+  `ThumbnailCacheSpecification::MaxMipWaitFrames` frames, after which a texture budget's coarser level shows), and a
+  `TextureReadback` takes the image without stalling.
   Images become RGBA8 textures of display colors (a few uploads per frame) that ImGui draws as they are. Every image is
   kept as a PNG in `<project>/.strata/Thumbnails/<handle>.png` (encoded and written on an I/O job) with its key in
   `Index.json`: a hash of the content stamps of the asset and everything it depends on

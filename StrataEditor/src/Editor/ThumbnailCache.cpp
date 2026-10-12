@@ -872,6 +872,14 @@ namespace Strata
 			job.QuietFrames = 0;
 			return;
 		}
+		// A texture counts as loaded with its mip tail; the levels this image needs stream in over the next frames.
+		if (job.MipWaitFrames < m_Specification.MaxMipWaitFrames && HasTexturesBelowWanted())
+		{
+			job.MipWaitFrames++;
+			m_Stats.MipWaitFrames++;
+			job.QuietFrames = 0;
+			return;
+		}
 		if (++job.QuietFrames < c_QuietFrames)
 			return;
 		std::string error;
@@ -881,6 +889,20 @@ namespace Strata
 			ST_WARN("No thumbnail for {}: {}", job.Handle.ToString(), error);
 			FinishScene(false, nullptr);
 		}
+	}
+
+	bool ThumbnailCache::HasTexturesBelowWanted() const
+	{
+		for (const VisibleTextureUse& use : m_Renderer->GetVisibleTextures())
+		{
+			// Looked up without requesting: the frame that drew it requested it.
+			const Ref<Asset> texture = m_Assets->PeekLoadedAsset(use.Texture);
+			AssetDetailLevels levels;
+			// Level 0 is the finest: a resident level above the wanted one is coarser than the views need.
+			if (texture && texture->GetDetailLevels(levels) && levels.Resident > levels.Wanted)
+				return true;
+		}
+		return false;
 	}
 
 	bool ThumbnailCache::BuildScene(SceneJob& job, std::string* outError)
