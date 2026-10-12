@@ -212,7 +212,7 @@ TEST_SUITE("Editor.Commands")
 
 		// At a position; again with fresh IDs.
 		const nlohmann::json second = harness.Run("entity.paste", { { "data", copied["data"] }, { "index", 0 } });
-		CHECK(harness.Names().front() == "Root");
+		CHECK(harness.Names().front() == "Root (1)"); // Among the top-level entities, beside the original
 		CHECK(second["entities"][0] != pasted["entities"][0]);
 		harness.CheckCaches();
 
@@ -231,7 +231,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Snapshot() == unchanged);
 
 		// Into another scene: what the clipboard is for.
-		harness.Run("scene.new");
+		harness.Run("scene.new", { { "force", true } });
 		const nlohmann::json other = harness.Run("entity.paste", { { "data", copied["data"] } });
 		CHECK(harness.GetScene().GetEntityCount() == 2);
 		CHECK(GetField(harness.Get(other["entities"][0].get<std::string>()), "Outer") == *UUIDFromJson(nlohmann::json(outside))); // Missing in this scene
@@ -252,8 +252,8 @@ TEST_SUITE("Editor.Commands")
 
 		const nlohmann::json duplicated = harness.Run("entity.duplicate", { { "entities", { c, a, y, x } } });
 		CHECK(harness.Position() == position + 1);
-		CHECK(harness.Names() == std::vector<std::string> { "A", "A", "B", "C", "C", "P" });
-		CHECK(harness.Names(parent) == std::vector<std::string> { "X", "X", "Y", "Y" });
+		CHECK(harness.Names() == std::vector<std::string> { "A", "A (1)", "B", "C", "C (1)", "P" });
+		CHECK(harness.Names(parent) == std::vector<std::string> { "X", "X (1)", "Y", "Y (1)" });
 		REQUIRE(duplicated["entities"].size() == 4);
 		CHECK(duplicated["id"] == duplicated["entities"][0]);
 		// In the order given: the copies of C, A, Y, X.
@@ -264,7 +264,7 @@ TEST_SUITE("Editor.Commands")
 		harness.Run("edit.undo");
 		CHECK(harness.Snapshot() == original);
 		harness.Run("edit.redo");
-		CHECK(harness.Names() == std::vector<std::string> { "A", "A", "B", "C", "C", "P" });
+		CHECK(harness.Names() == std::vector<std::string> { "A", "A (1)", "B", "C", "C (1)", "P" });
 
 		// A parent listed with its children is copied whole, once; references inside it point at the copies.
 		const nlohmann::json whole = harness.Run("entity.duplicate", { { "entities", { x, parent } } });
@@ -273,7 +273,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK(copy.GetChildren().size() == 4);
 		CHECK(GetField(copy, "Inner") == copy.GetChildren()[2].GetUUID());
 		CHECK(GetField(copy, "Outer") == harness.Get(a).GetUUID());
-		CHECK(harness.Names().back() == "P");
+		CHECK(harness.Names().back() == "P (1)");
 
 		// The single form keeps its result.
 		const nlohmann::json single = harness.Run("entity.duplicate", { { "entity", b } });
@@ -304,8 +304,8 @@ TEST_SUITE("Editor.Commands")
 		REQUIRE(copyA);
 		REQUIRE(copyY);
 		// Each copy right after its original, in its original's sibling list.
-		CHECK(harness.Names() == std::vector<std::string> { "Outside", "A", "A", "P" });
-		CHECK(harness.Names(parent) == std::vector<std::string> { "X", "Y", "Y" });
+		CHECK(harness.Names() == std::vector<std::string> { "Outside", "A", "A (1)", "P" });
+		CHECK(harness.Names(parent) == std::vector<std::string> { "X", "Y", "Y (1)" });
 		CHECK_FALSE(copyA.GetParent());
 		CHECK(copyY.GetParent() == harness.Get(parent));
 		// The copy of Y keeps its place in the world (its local transform, under the same parent).
@@ -324,7 +324,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Snapshot() == original);
 		harness.Run("edit.redo");
 		CHECK(GetField(harness.Get(duplicated["entities"][0].get<std::string>()), "Inner") == copyYId);
-		CHECK(harness.Names(parent) == std::vector<std::string> { "X", "Y", "Y" });
+		CHECK(harness.Names(parent) == std::vector<std::string> { "X", "Y", "Y (1)" });
 		harness.CheckCaches();
 	}
 
@@ -373,7 +373,7 @@ TEST_SUITE("Editor.Commands")
 
 		harness.Run("entity.setActive", { { "entities", entities }, { "active", false } });
 		CHECK(harness.Position() == position + 1);
-		CHECK(harness.Context.GetUndoStack().GetUndoName() == "Deactivate Entities");
+		CHECK(harness.Context.GetUndoStack().GetUndoName() == "Deactivate 3 entities");
 		for (const std::string& id : entities)
 			CHECK_FALSE(harness.Get(id).IsActive());
 

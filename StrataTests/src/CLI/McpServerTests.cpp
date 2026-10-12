@@ -608,4 +608,18 @@ TEST_SUITE("CLI.Mcp")
 	}
 }
 
+TEST_SUITE("CLI.McpPresence")
+{
+	TEST_CASE("The MCP client's name reaches the editor in the handshake")
+	{
+		Tests::PumpedRpcServer editor;
+		REQUIRE(Tests::StartFakeEditor(editor));
+		McpTestClient client(MakeSpecification(Tests::CreateTemporaryDirectory("McpPresence"), editor.GetPort()));
+		client.Initialize(); // clientInfo.name: StrataTests
+		client.ListToolNames();
+		REQUIRE(Tests::WaitUntil([&]() { return editor.GetServer().GetClients().size() == 1; }));
+		CHECK(editor.GetServer().GetClients()[0].Name == "StrataTests");
+	}
+}
+
 #endif

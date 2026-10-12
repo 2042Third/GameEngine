@@ -25,6 +25,17 @@ namespace Strata
 		return "Unknown";
 	}
 
+	const char* EditorCommandKindToString(EditorCommandKind kind)
+	{
+		switch (kind)
+		{
+			case EditorCommandKind::Edit:    return "Edit";
+			case EditorCommandKind::Query:   return "Query";
+			case EditorCommandKind::Session: return "Session";
+		}
+		return "Unknown";
+	}
+
 	EditorCommandRegistry::EditorCommandRegistry()
 	{
 		RegisterSceneCommands(*this);
@@ -36,14 +47,20 @@ namespace Strata
 		RegisterStreamingCommands(*this);
 		RegisterAnimationCommands(*this);
 
-		Register({ "editor.commands", "Every editor command with its description and JSON Schema of its parameters.", CommandUtils::ObjectSchema({}),
+		Register({ "editor.commands",
+			"Every editor command with its description, the JSON Schema of its parameters and its kind: \"Edit\" (changes the scene, its assets or "
+			"the project), \"Query\" (changes nothing) or \"Session\" (changes the editor's session: open project, play mode, view, selection).",
+			CommandUtils::ObjectSchema({}),
 			[this](EditorContext&, const nlohmann::json&)
 			{
 				nlohmann::json commands = nlohmann::json::array();
 				for (const EditorCommand* command : GetAll())
-					commands.push_back({ { "name", command->Name }, { "description", command->Description }, { "parameters", command->Parameters } });
+				{
+					commands.push_back({ { "name", command->Name }, { "description", command->Description }, { "parameters", command->Parameters },
+						{ "kind", EditorCommandKindToString(command->Kind) } });
+				}
 				return EditorCommandResult::Ok({ { "commands", std::move(commands) } });
-			} });
+			}, EditorCommandKind::Query });
 	}
 
 	void EditorCommandRegistry::Register(EditorCommand command)
@@ -69,9 +86,33 @@ namespace Strata
 		return commands;
 	}
 
-	EditorCommandResult EditorCommandRegistry::Execute(EditorContext& context, std::string_view name, const nlohmann::json& parameters) const
+	EditorCommandResult EditorCommandRegistry::Execute(EditorContext& context, std::string_view name, const nlohmann::json& parameters,
+		const CommandOrigin& origin) const
 	{
 		const EditorCommand* command = Find(name);
+		CommandJournal& journal = context.GetJournal();
+		const UndoStack& undo = context.GetUndoStack();
+		journal.NoteEditsOutsideCommands(undo);
+		const uint64_t entry = journal.Begin(origin, name, command ? command->Kind : EditorCommandKind::Query,
+			command ? command->Results : EditorCommandResults::Content, parameters, context.IsPlaying());
+		const uint64_t records = undo.GetRecordCount();
+		EditorCommandResult result = Run(context, command, name, parameters);
+		// A step the handler recorded (or extended) is the command's.
+		journal.NoteUndo(entry, undo, records);
+		result.JournalId = entry;
+		if (result.IsPending())
+		{
+			journal.Suspend(entry);
+		}
+		else
+		{
+			journal.Complete(entry, result);
+		}
+		return result;
+	}
+
+	EditorCommandResult EditorCommandRegistry::Run(EditorContext& context, const EditorCommand* command, std::string_view name, const nlohmann::json& parameters) const
+	{
 		if (!command)
 			return EditorCommandResult::Fail(fmt::format("Unknown command '{}' (editor.commands lists them)", name), EditorCommandError::UnknownCommand);
 		if (!parameters.is_object() && !parameters.is_null())

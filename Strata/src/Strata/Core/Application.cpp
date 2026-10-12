@@ -20,6 +20,24 @@ namespace Strata
 
 	Application* Application::s_Instance = nullptr;
 
+	namespace
+	{
+
+		// Set before any application exists, read once CreateApplication returned none (main thread only).
+		int s_StartupExitCode = 1;
+
+	}
+
+	void Application::SetStartupExitCode(int exitCode)
+	{
+		s_StartupExitCode = exitCode;
+	}
+
+	int Application::GetStartupExitCode()
+	{
+		return s_StartupExitCode;
+	}
+
 	Application::Application(const ApplicationSpecification& specification)
 		: m_Specification(specification), m_FramePacer(specification.MaxFrameRate)
 	{

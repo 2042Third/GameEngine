@@ -295,7 +295,7 @@ TEST_SUITE("Editor.Validation")
 
 		// A failed instantiation leaves nothing behind.
 		CHECK_FALSE(harness.Error("prefab.instantiate", { { "prefab", "Builtin/Cube" } }).empty()); // Not a prefab
-		harness.Run("scene.new");
+		harness.Run("scene.new", { { "force", true } });
 		CHECK_FALSE(harness.Run("edit.history")["history"].size() > 0);
 		CHECK(harness.Run("scene.info")["entityCount"] == 0);
 		CHECK(copy != child);

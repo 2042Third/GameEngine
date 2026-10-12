@@ -172,10 +172,12 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   start it), `PerfGPU.Renderer` (`SceneRenderer::Render` alone on 100,000 and 300,000 cubes and on 10,000 cubes with
   unique materials, with the opaque draw calls those take, and on 1,000 skinned characters of about 5,000 vertices posed
   anew every frame, in `Perf/AnimationPerfTests.cpp`) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000
+  roots, and what the activity journal adds to a command among 100,000
   roots; the hierarchy's rows of 100,000 roots, idle and rebuilt; the Hierarchy panel's share of an editor frame with
   100,000 roots, open against closed; what 100,000 selected entities add to a frame; the longest editor frame while a
   4096x4096 texture re-imports uncompressed and then block-compressed again; `asset.findReferences` among 10,000
-  assets), `PerfGPU.Editor`, which runs the real
+  assets; the frames while the recovery journal of edits of a 100,000-entity scene is written, and the capture of a
+  recovery snapshot), `PerfGPU.Editor`, which runs the real
   `StrataEditor` maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its
   `editor.wait` steps report, and maxima by nature: the longest frame while `scene.open` loads the 100,000 and the
   1,000,000 entities and while it opens the 100,000 again over the million (`frameTimes.maxMs` of its result), the frame
@@ -895,6 +897,17 @@ and `AudioSystem`, the built-in "Audio" scene system.
     stats and `editor.status` (`editor.frameRate.frameMilliseconds`, with the measured rate) show is what frames cost
     (`Application::GetLastFrameWorkTime`: CPU time without the waits for the GPU, the display and the frame rate cap;
     `EditorPanelContext::Frame` for panels), so an idle editor does not read as a slow one.
+  - Toasts tell the person what happened without their looking for it: `EditorContext::GetNotifications()`
+    (`Editor/EditorNotifications`, core) holds at most four, merged when they repeat and expiring by level (errors last
+    longest, hovering keeps one); `UI/Notifications` draws them at the bottom right above the status bar, never taking the
+    keyboard focus and doing nothing while there are none. They come from commands the person runs (`RunEditorCommand`
+    and the runner for `CommandSource::UI`: failures, and warnings such as edits of the running game,
+    `NotifyCommandOutcome`), script builds (start and end) and crashes, finished exports, imports that failed while nobody
+    waited for them (one toast counting them: `EditorAssetManager::TakeImportFailures`, `EditorNotification::Group`),
+    unsaved changes a scene replacement discarded (who did it: an agent by its name, a command script, or the person's own
+    Don't Save; `EditorContext::NotifyDiscardedChanges`) and recovery data left on offer; their actions are Show in
+    Activity (the command's journal entry), Show Asset, Show in Console and Recover. Post one for news the person would otherwise miss; commands of tools and scripts get their errors
+    as answers and post none.
   - Status pills say what is wrong and lead to it: errors (unread since the Console was last focused, not counting the
     frame its window appears in), a failed automation start (`--no-automation` is shown as off), scripts that scenes use
     but are not built (click to build), failed or crashed (click to see the Problems panel), assets that failed to load or
@@ -905,10 +918,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
     jobs`, jobs running or queued averaged over 60 frames) opens the Performance panel. Panels collect what the status bar
     shows about them in `OnUpdate`, which runs while they are closed. Widgets drawn every frame write tooltips that take
     work (formatted statistics) only while they show (`UI::IsTooltipDue`). `editor.showPanel {panel}` (registered by
-    `EditorLayer`, the only command of the window itself) opens a docked panel and brings it to the front, so agents can
-    show the person what they look at; it fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
+    `EditorLayer`, like `editor.showDialog {dialog: "export" | "newProject" | "openSample" | "recovery" | "about"}`, the commands of the
+    window itself) opens a docked panel and brings it to the front, so agents can show the person what they look at; it
+    fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
     stays open through a layout reset and the saved open states read at the first frame, and is asked for again until its
-    tab shows. Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
+    tab shows; while a modal dialog waits for the person it opens behind it (focusing it would close the dialog). Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
     icons), and check panels with `ImGuiHarness::CountFallbackGlyphs`.
 - **Every change to the scene or project goes through a command** (`EditorCommandRegistry::Execute`) or,
   for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,
@@ -937,7 +951,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
   unmodified instances when it opens (`PrefabSync::CatchUp`), and modified ones are outdated (`prefab.status`;
   `prefab.apply` refuses them unless `force`). Several actions that form one step go into an `EditorActionGroup`.
 - Commands are named `<group>.<action>`, take a JSON object and return a JSON value or an error. Each
-  has a one-line description and a JSON Schema of its parameters (`CommandUtils::ObjectSchema` etc.);
+  has a one-line description, a JSON Schema of its parameters (`CommandUtils::ObjectSchema` etc.) and a kind
+  (`EditorCommandKind`: Edit, the default, for commands that change the scene, its assets or the project; Query for those
+  that change nothing; Session for the editor's own state: open project, play mode, view, selection, input). Mark every
+  new command that is not an edit, or replays (editor.activity.export) will repeat it, and every query whose results
+  follow the editor's session rather than the project's content (the selection, the journal, what is loaded or running:
+  `EditorCommandResults::Session`), or replays will bind IDs a copy of the project does not give;
   automation exposes them as tools, so descriptions must tell an agent what the command does. Use
   `CommandArguments` to read parameters (no exceptions), reject invalid input without side effects
   (roll back the transaction) and record exactly one undo step per successful mutating command.
@@ -945,6 +964,31 @@ and `AudioSystem`, the built-in "Audio" scene system.
   mistyped parameter, a reference to nothing) is `InvalidParameters` (`CommandArguments::Fail`,
   `EditorCommandResult::InvalidParameters`); a valid request that cannot be carried out in the current
   state is `Failed` (`EditorCommandResult::Fail`). Automation reports them with different error codes.
+- **No silent data loss:** every command that replaces the edited scene (`scene.open`, `scene.new`, `project.open`,
+  `project.create`, `project.close`, `project.openSample`, `editor.quit`) starts with the shared guard
+  `CommandUtils::CheckUnsavedChanges`: while the edited scene has unsaved changes (also while a copy of it plays) it fails
+  (`Failed`, naming the scene and how to proceed) and changes nothing, unless `force: true`; results report
+  `discardedChanges`. A new command that replaces the scene uses the same guard. The UI keeps asking (the unsaved-changes
+  dialog, `EditorShell::RequestDiscardChanges`) and passes `force` once the person has answered, for the changes they were
+  asked about only: the question's Don't Save asks again when the scene changed while it waited, a dialog that runs the
+  command later asks again when the scene changed since (`UndoStack::GetVersion`), a modal dialog asks over itself
+  (`EditorShell::DrawDiscardQuestion` between its `BeginModal` and `EndModal`), and a recorded `force` is never repeated
+  for the person (the Activity panel's Re-run asks).
+- **Autosave and recovery** (`Editor/SceneRecovery`, Docs/Architecture.md "Autosave and recovery"): the edited scene's
+  unsaved changes are journaled in `<project>/.strata/Recovery` by following the undo stack (`UndoStackObserver`): the
+  entity states of the steps since the last save, written on an I/O job 2 s after edits stop (at least every 10 s), removed
+  by a save. Replacing a modified scene in any way (`EditorContext::ResetScene`) writes them first, marked discarded, offers
+  them at once (the directory is scanned again) and tells the person who discarded them; scans keep the newest
+  `SceneRecovery::c_MaxOfferedDiscards` discards on offer and move older ones to `Recovery/Discarded` (never what a crash
+  left). Opening a project offers what a crashed or discarding editor left (the Recover Unsaved Changes dialog,
+  `scene.recoveryStatus`, `scene.recover {scene, action: "apply" | "discard", force}`: one undo step back to the saved
+  scene). Entries find their scene by its handle, so a moved or renamed scene keeps its changes recoverable, and the
+  journal follows the edited scene when it moves (`EditorContext::FollowSceneMoves`); the merges of a drag replace the
+  states its step left waiting for the next write (`UndoStackObserver::OnApplied`'s `merged`). An undo action that
+  changes the scene describes its effect as entity states (`GetSceneChange`,
+  `GetEntityStates`, shared and immutable; an `EditorActionGroup` passes on those of its one member that changes the
+  scene); one that cannot (kind Other) makes the journal snapshot the whole scene, which
+  it does only up to `SceneRecovery::c_MaxSnapshotEntities`. Never write recovery files from anywhere else.
 - Undo works on entity snapshots: a `SceneEditTransaction` captures the entities an edit touches
   (`Track`, `TrackSubtree` before changing or deleting them, `TrackCreated` after creating them) and
   `EditorContext::CommitEdit` records the difference. Edits while playing are not recorded. Continuous edits merge
@@ -956,7 +1000,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `entity.duplicate {entities}`, `entity.copy {entities}` and `entity.paste {data, parent, index}` (fresh IDs, references
   among the pasted entities remapped, no prefab links added), `entity.setActive {entities}`, `component.add {entities}`
   (where the component is missing), `component.remove {entities}` (every listed entity must have the component, or
-  nothing is removed) and `component.set {entities}`. The inspector edits a
+  nothing is removed) and `component.set {entities}`. Copies, pastes and prefab instances get names unique among their
+  siblings ("Crate (1)", `SceneEdit::MakeNameUnique`, through `Scene::HasChildNamed`: the siblings or the name index,
+  whichever are fewer), and the steps of commands
+  say what they changed ("Create 'Wall'", "Delete 3 entities", "Set Mesh of 'Ground'": `SceneEdit::QuoteName`,
+  `DescribeEntities`), which `edit.history` and the Activity panel show. The inspector edits a
   multi-selection through `PropertyEdit` (`GetSharedProperty`, multi-entity `SetPropertyWithUndo`, `RotationAnglesEdit`
   for rotations edited as Euler angles, `GetDefaultComponentValues` for Reset).
 - `project.export` writes a playable game outside the project in the background (`GameExport`; the command answers when
@@ -1048,21 +1096,36 @@ and `AudioSystem`, the built-in "Audio" scene system.
   default, at most 600) for the frame, every stage (`stages/<name>`, self times, `inFrameTime` false for Present), the
   stages added up (`stageSum`, at most the frame), the rest of each frame (`untimed`) and the job threads (busy percent,
   running and queued jobs).
-- `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters", "expect"}` at startup
+- `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters", "expect", "bind"}` at startup
   (`EditorCommandScript`); a pending command holds the script until it completes. `expect` (optional) maps JSON
   pointers into the command's result to conditions, e.g. `{"/values/Translation/1": {"min": 1.6, "max": 1.7}}` or
-  `{"/state": {"equals": "Play"}}`; a result that does not meet them fails the step. If a command or an expectation
-  fails, or the script has not finished by the last of `--frames N` frames or by `editor.quit`, the process exit code
-  becomes 1.
+  `{"/state": {"equals": "Play"}}`; a result that does not meet them fails the step. `bind` (optional) names values of the
+  result by JSON pointer (`{"crate": "/id"}`), which later parameters use as `{"$ref": "crate"}` (optionally with a
+  `"pointer"` into the bound value): scripts then work with the fresh IDs every run gives created entities and assets. A
+  reference to a name no earlier step binds fails the script before it starts; a step whose references have no value
+  (their step failed) fails without running. If a command or an expectation fails, or the script has not finished by the
+  last of `--frames N` frames or by `editor.quit`, the process exit code becomes 1. `editor.activity.export {path, since}`
+  writes what a session did after a journal entry as such a script (`CommandJournal::BuildReplayScript`: the edits, also
+  those made while playing that outlast play mode (assets, `scene.save`) but not edits of the running copy
+  (`EditorCommandResult::RunningCopy`), with
+  the IDs results gave bound and referenced, and the queries those IDs came from), to repeat it on a copy of the project as
+  it was then, e.g. as a regression script; continuous UI edits (inspector, gizmos, material editor) record undo steps
+  without a command, so the export counts them (`editsOutsideCommands`) instead (the UI's undo and redo run their
+  commands).
   `--frames N` stops after N frames (without saving the panel layout), `--screenshot out.png` captures
-  the last frame (viewport included), `--no-gpu` runs headless without a graphics device (export, asset processing),
+  the last frame (viewport included; with `--quit-after-commands`, the frame the script ended on; a screenshot that
+  cannot be saved fails the run), `--no-gpu` runs headless without a graphics device (export, asset processing),
   and `--quit-after-commands` closes the editor once the command script finished (for scripts of unknown length, e.g.
-  with `script.build`, whose duration no frame budget can bound). `--ui-scale <factor>` draws the UI at a fixed scale
-  instead of the display's (e.g. 1 to check it at 100% on a 150% display), `--layout <file>` keeps the panel layout in
-  that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers ImGui's demo window
-  (Help menu) for UI work.
-  Without `--frames`, a headless editor runs until `editor.quit` (which refuses to discard unsaved
-  scene changes unless `force` is true) or a signal; headless editors run at most 60 frames per second.
+  with `script.build`, whose duration no frame budget can bound). `--help` and `--version` print and exit 0 before
+  anything starts (no log file, window or session); an argument the editor does not know, or an option without its value,
+  exits 3 with the usage, and so does a value an option does not take (`--frames abc`, `--frames 0`: `CheckValues`; the
+  table of arguments is `c_Arguments` in `EditorApplication.cpp`: add new ones there). `--ui-scale <factor>` draws the
+  UI at a fixed scale instead of the display's (e.g. 1 to check it at 100% on a 150% display), `--layout <file>` keeps
+  the panel layout in that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers
+  ImGui's demo window (Help menu) for UI work.
+  Without `--frames`, a headless editor runs until `editor.quit` (which, like the other commands that replace the scene,
+  refuses to discard unsaved scene changes unless `force` is true) or a signal; headless editors run at most 60 frames
+  per second.
   The editor serves automation by default (`EditorAutomation`, see [Automation](#automation-editor-rpc--mcp));
   `--no-automation` turns it off and `--automation-port <port>` picks the port (default 0: a free one).
   A headless editor without `--frames` whose automation cannot start exits with code 1. CTest runs of
@@ -1070,7 +1133,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   CTest runs `StrataTests/Editor/SmokeCommands.json.in` (configured into the build tree; it creates a project in the
   build tree, builds a scene and captures the viewport into `build/<preset>/StrataTests/SmokeCaptures/`), checks that a
   windowed editor without a project opens into the launcher (`Editor/LauncherCommands.json`) and that failing and
-  unfinished scripts fail the process.
+  unfinished scripts fail the process. `StrataEditor.Replay` (`Editor/ReplaySession.cmake`) runs a session with bindings
+  on a new project, exports it with `editor.activity.export`, runs the export on a copy made before the session and
+  compares the scenes and assets (`StrataTests --strata-test-helper=compare-documents`: assets by their paths, other IDs
+  numbered by appearance).
 - The hierarchy panel draws the rows of `Editor/HierarchyView` (the visible entities as a flat list; a filter with
   `c:`/`t:` terms shows matches with their ancestors), which are rebuilt only when the hierarchy, the expansion or the
   filter changed: never walk the scene per frame in UI code, and draw long lists through `ImGuiListClipper` (only the
@@ -1102,7 +1168,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   nothing selected, in sections that start closed with a summary on their headers
   (`UI::SectionHeader`'s summary: live widgets cost frame time while they are drawn); the
   Asset tab edits materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings
-  (Apply runs `asset.setImportSettings` through the runner) and previews textures as their content looks, with the
+  (Apply runs `asset.setImportSettings` through the runner; why the last import failed, and its warnings, show above
+  them) and previews textures as their content looks, with the
   stored format and GPU size: draw textures in UI code through `UI::TextureImage`, which shows sRGB, grayscale and
   two-channel normal map layouts as materials read them (`ImGuiTextureDisplay`). Property widgets come from
   `UI/PropertyWidgets.h` (`DrawPropertyWidget` with `PropertyWidgetOptions` for mixed values, axis resets and probe keys).
@@ -1137,8 +1204,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   too narrow even then. Its Type column is as wide as the longest type it names (`StreamingPanel::GetTypeLabel`: the
   animation clip and controller go by "Animation" and "Controller"; the row's tooltip names the type in full), so keep new
   types' labels about as short, or the laptop layouts change.
-- Mutating commands report a `warning` in their result while the scene is playing: such changes apply
-  to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
+- Mutating commands report a `warning` in their result while the scene is playing (and set
+  `EditorCommandResult::RunningCopy`, which replays read): such changes apply
+  to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors, and so are values out of
+  a property's range (`PropertyInfo::IsInRange`, checked by `CommandUtils::ApplyComponents` for `component.set`,
+  `component.add`, `entity.create` and `prefab.instantiate`, and by `material.set`/`material.create`; scene settings name
+  their ranges too): `InvalidParameters` naming the range, nothing changed. The inspector's widgets keep clamping as they
+  drag (`PropertyInfo::SetValue`).
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
   (`EditorCamera`: a target that is also the orbit pivot, distance, yaw/pitch in degrees, FOV, clip planes, fly speed),
   the `ViewportSettings` (grid, selection outline, light/camera/collider shapes and whether colliders show for every
@@ -1219,16 +1291,22 @@ and `AudioSystem`, the built-in "Audio" scene system.
   while no ImGui item is hovered, so the image is a plain `Dummy` while the mouse is over the gizmo.
 - **View commands** change no scene data and record no undo: `camera.get`, `camera.set {position, target, yaw, pitch,
   distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
-  (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?,
-  debugView?: "none" | "streaming" | "lod" | "mip", path?, overwrite?}` renders on the next frame (again on the following frames,
-  up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still being rasterized, so text is never half
-  drawn), reads the image back without stalling, encodes it on a job thread and returns `{"Image": {"MimeType":
-  "image/png", "Data": <base64>}, "width", "height", "camera", "overlays", "pendingAssets", "pendingTextGlyphs",
-  "previewLighting", "screenSpaceTexts", "hiddenScreenSpaceTexts", "debugView": {"view", "tintedEntities",
-  "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD", "entitiesPerMipShortfall"}, "notice"?,
-  "path"?}` (the mip view counts entities with textures by the mip levels their worst texture lacks: none, 1, 2, 3 or
-  more or still loading); it defaults to the
-  viewport's size, camera, overlays and debug view and fails without a GPU. `viewport.getSettings` and
+  (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?,
+  fov?, overlays?, debugView?: "none" | "streaming" | "lod" | "mip", waitForAssets?, path?, overwrite?}` renders on the
+  next frame (again on the following frames, up to `c_MaxCaptureTextFrames`, while glyphs of the scene's text are still
+  being rasterized, so text is never half drawn, and with `waitForAssets` (default true) up to `c_MaxCaptureAssetFrames`
+  while assets of the view are loading, so the first capture after opening or playing a scene shows its materials, and up
+  to `c_MaxCaptureMipFrames` while textures it draws are coarser than its view wants them, as a texture counts as loaded
+  with its mip tail), reads
+  the image back without stalling, encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data":
+  <base64>}, "width", "height", "camera", "view": {"position", "forward", "fov"}, "waitedFrames", "overlays",
+  "pendingAssets", "texturesBelowWanted", "pendingTextGlyphs", "previewLighting", "screenSpaceTexts", "hiddenScreenSpaceTexts", "debugView":
+  {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD",
+  "entitiesPerMipShortfall"}, "notice"?, "path"?}` (the mip view counts entities with textures by the mip levels their
+  worst texture lacks: none, 1, 2, 3 or more or still loading); it defaults to the viewport's size, camera, overlays and
+  debug view and fails without a GPU. `position`, `target` and `fov` render through a camera of the capture's own (a copy
+  of the editor camera with those changes; `camera.get` is unchanged, the result's camera is `"custom"`), so agents look
+  around without moving the person's view. `viewport.getSettings` and
   `viewport.setSettings {grid, selectionOutline, sceneGizmos, allColliders, stats, previewLighting, gameUI, gizmo, space,
   snap, translateSnap, rotateSnap, scaleSnap, debugView}` read and change the view settings (validated as a whole: an
   invalid value changes nothing; the debug view is saved with them); `allColliders` draws the collider shapes of every
@@ -1436,6 +1514,15 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   update) through the `EditorCommandRunner`: deferred commands answer when they complete; a client that
   disconnects meanwhile only loses the answer. Requests are logged at trace level (`Automation: #<n> <method>
   <params> -> <outcome> (<time>)`).
+- **Activity journal** (`Editor/CommandJournal`, shown by the Activity panel, `Panels/ActivityPanel`: filters, the selected
+  entry's JSON, Copy as script, Re-run, Undo to here): every command `EditorCommandRegistry::Execute` runs is recorded once
+  with its origin (`CommandOrigin`), parameters, outcome, duration and undo step; a deferred one when its result becomes
+  final. Pass `CommandOrigin { CommandSource::UI }` when UI code runs a command (`RunEditorCommand` and the panels do);
+  automation passes the client's name, command scripts their source, and code that passes nothing counts as the editor
+  itself (Internal). `editor.activity` reads it and `editor.activity.export` turns it into a command script (see the
+  command scripts above). Clients name themselves in `rpc.handshake` (`clientName`, optional, at
+  most 64 characters, sanitized, never trusted): `RpcClient::Connect`'s `clientName`, "StrataCLI", and the MCP client's
+  `clientInfo.name` through `StrataCLI mcp`; `editor.status` lists them (`automation.connectedClients`).
 - **Errors** map from `EditorCommandError`: unknown command -32601 (`MethodNotFound`), `InvalidParameters`
   -32602 (`data`: `{"command", "parameters": <schema>}`), `Failed` -32005 (`OperationFailed`), `Cancelled`
   -32006, `Internal` -32603. Transport errors are -32001 to -32004 (`JsonRpc::ErrorCode`).
@@ -1446,8 +1533,11 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   (`RpcServer::Stop(gracePeriod)`) so the last answers, such as `editor.quit`'s, still arrive. A headless editor
   without `--frames` runs until `editor.quit` or a signal (a killed editor leaves a stale session file, which
   clients prune), or, with `--idle-timeout <seconds>`, until no client has been connected and no request
-  pending for that long (unsaved changes are then discarded, with a warning). The status bar shows the port
-  and the connected clients; `editor.status` has an `automation` section.
+  pending for that long (unsaved changes are then discarded, with a warning). The status bar's automation pill shows
+  the port, or who is connected ("Agent connected · <name>", from `clientName`); `editor.status` has an `automation`
+  section. The viewport names the latest automation command in a chip at its top right ("Agent: entity.create · 3 s
+  ago"; a click shows it in the Activity panel) and outlines the entities it changed for 600 ms in the accent
+  (`CommandJournal::GetLatestAutomationActivity`, `ViewportPanel::DrawAgentFlash`).
 - **Security model:** any local process, and any web page in a local browser, can reach the port; only
   holders of the session token are trusted. The server binds loopback addresses only and refuses to start
   without a token (`EditorSession::GenerateSessionToken`, from the OS secure random generator). Every

@@ -37,6 +37,8 @@ namespace Strata
 
 			const std::string& GetName() const override { return m_Group->GetName(); }
 			bool ChangesScene() const override { return m_Group->ChangesScene(); }
+			SceneChangeKind GetSceneChange() const override { return m_Group->GetSceneChange(); }
+			Ref<const std::vector<EntityState>> GetEntityStates(bool undone) const override { return m_Group->GetEntityStates(undone); }
 
 			bool Execute(std::string* outError) override
 			{
@@ -90,15 +92,18 @@ namespace Strata
 		}
 
 		// The answer of a command that changed the active scene: while it runs, the change belongs to the running copy, which
-		// play.stop discards, and the answer says so.
+		// play.stop discards, and the answer says so (and replays of the session leave it out: RunningCopy).
 		EditorCommandResult FinishSceneChange(const EditorContext& context, nlohmann::json result)
 		{
-			if (context.IsPlaying())
+			const bool playing = context.IsPlaying();
+			if (playing)
 			{
 				result["warning"] = fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
 					SceneStateToString(context.GetSceneState()));
 			}
-			return EditorCommandResult::Ok(std::move(result));
+			EditorCommandResult outcome = EditorCommandResult::Ok(std::move(result));
+			outcome.RunningCopy = playing;
+			return outcome;
 		}
 
 	}
@@ -139,7 +144,7 @@ namespace Strata
 					{ "changed", ToJson(difference.Changed) },
 					{ "added", ToJson(difference.Added) },
 					{ "removed", ToJson(difference.Removed) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "prefab.apply",
 			"Writes a prefab instance (the instance the entity belongs to: its root's subtree, also entities added to it) back into its prefab, keeping "
@@ -351,7 +356,7 @@ namespace Strata
 					context.Select(root.GetUUID());
 				}
 				return EditorCommandResult::Ok({ { "root", UUIDToJson(root.GetUUID()) }, { "prefab", UUIDToJson(prefab) } });
-			} });
+			}, EditorCommandKind::Session });
 	}
 
 }

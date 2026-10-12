@@ -203,6 +203,10 @@ namespace Strata
 		// changed since, see CompareHierarchyOrder).
 		Entity FindEntityByName(std::string_view name) const;
 		std::vector<Entity> FindEntitiesByTag(std::string_view tag) const;
+		// Whether a child of `parent` (a top-level entity for an invalid parent) other than `except` (none when invalid) is
+		// named `name`. Looks at the parent's children or at the entities with that name (the name index), whichever are
+		// fewer, so editors making names unique among siblings stay fast with many children or many entities of a name.
+		bool HasChildNamed(Entity parent, std::string_view name, Entity except) const;
 		size_t GetEntityCount() const { return m_EntityMap.size(); }
 		// Live entities of the registry: the scene's, and any created directly through GetRegistry(). At most c_MaxEntities.
 		size_t GetRegistryEntityCount() const;
@@ -315,7 +319,7 @@ namespace Strata
 
 		// Diagnostics (cumulative since the scene was created): world transforms recomputed by UpdateWorldTransforms (and the
 		// number of its calls that recomputed some of them on the job system), full hierarchy order computations, entities
-		// examined by FindEntityByName, FindEntitiesByTag and GetPrimaryCameraEntity (excluding index builds), and name or tag
+		// examined by FindEntityByName, FindEntitiesByTag, HasChildNamed and GetPrimaryCameraEntity (excluding index builds), and name or tag
 		// index builds.
 		uint64_t GetTransformUpdateCount() const { return m_TransformUpdateCount; }
 		uint64_t GetParallelTransformUpdateCount() const { return m_ParallelTransformUpdateCount; }

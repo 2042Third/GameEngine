@@ -221,7 +221,7 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeProject(context));
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "project.templates",
 			"The templates project.create and scene.new accept: id, name and what a project made from it contains. \"basic3d\" starts lit (camera, sun, "
@@ -239,26 +239,33 @@ namespace Strata
 						{ "startScene", ProjectTemplates::HasStartScene(projectTemplate.Id) ? nlohmann::json(ProjectTemplates::c_StartScenePath) : nlohmann::json(nullptr) } });
 				}
 				return EditorCommandResult::Ok({ { "templates", std::move(templates) }, { "default", ProjectTemplates::c_Empty } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "project.create",
 			"Creates a project in a directory and opens it. With template \"basic3d\" it starts with a saved, lit start scene (Scenes/Main.stscene: Main "
-			"Camera, Sun, Sky, Ground, Post Process); the default \"empty\" has no scene (see project.templates).",
+			"Camera, Sun, Sky, Ground, Post Process); the default \"empty\" has no scene (see project.templates). Fails while the edited scene has "
+			"unsaved changes unless force is true (save first), before anything is created. Returns projectFile, template, startScene and "
+			"discardedChanges (whether unsaved changes were discarded).",
 			ObjectSchema({
 				{ "directory", StringSchema("Absolute directory for the project") },
 				{ "name", StringSchema("Project name") },
 				{ "template", { { "type", "string" }, { "enum", { ProjectTemplates::c_Empty, ProjectTemplates::c_Basic3D } },
-					{ "description", "What the project starts with (default \"empty\"; see project.templates)" } } } }, { "directory", "name" }),
+					{ "description", "What the project starts with (default \"empty\"; see project.templates)" } } },
+				{ "force", ForceSchema() } }, { "directory", "name" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string directory = arguments.GetString("directory");
 				const std::string name = arguments.GetString("name");
 				const std::string templateId = arguments.GetString("template", std::string(ProjectTemplates::c_Empty));
+				const bool force = arguments.GetBool("force", false);
 				if (arguments.IsValid() && !ProjectTemplates::Find(templateId))
 					arguments.SetError(fmt::format("Unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("creating the project '{}'", name)))
+					return std::move(*refused);
+				const bool discarded = context.IsSceneModified();
 				std::string error;
 				if (!context.CreateProject(FileSystem::FromUTF8(directory), name, templateId, &error))
 					return EditorCommandResult::Fail(error);
@@ -266,36 +273,54 @@ namespace Strata
 				return EditorCommandResult::Ok({
 					{ "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) },
 					{ "template", templateId },
-					{ "startScene", startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr) } });
-			} });
+					{ "startScene", startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr) },
+					{ "discardedChanges", discarded } });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "project.open",
-			"Opens a project file or the project in a directory (unsaved scene changes are discarded). The project opens at once; its start "
-			"scene loads in the background like scene.open's (the frames go on, scene.loadStatus reports it) and the command answers once it is "
-			"the edited scene: {projectFile, startScene (null when the project has none), startSceneOpened, startSceneError (why it was not "
-			"opened; the project stays open with an empty scene), seconds (the start scene's load)}.",
-			ObjectSchema({ { "path", StringSchema("Project file (.stproj) or project directory") } }, { "path" }),
+			"Opens a project file or the project in a directory. Fails while the edited scene has unsaved changes unless force is true (save first). "
+			"The project opens at once; its start scene loads in the background like scene.open's (the frames go on, scene.loadStatus reports it) "
+			"and the command answers once it is the edited scene: {projectFile, discardedChanges (whether unsaved changes were discarded), "
+			"startScene (null when the project has none), startSceneOpened, startSceneError (why it was not opened; the project stays open with an "
+			"empty scene), seconds (the start scene's load)}.",
+			ObjectSchema({ { "path", StringSchema("Project file (.stproj) or project directory") }, { "force", ForceSchema() } }, { "path" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string path = arguments.GetString("path");
+				const bool force = arguments.GetBool("force", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the project '{}'", path)))
+					return std::move(*refused);
+				// A project that cannot be loaded changes nothing (OpenProject reads it before closing the open one).
+				const bool modified = context.IsSceneModified();
 				std::string error;
 				if (!context.BeginOpenProject(FileSystem::FromUTF8(path), &error))
 					return EditorCommandResult::Fail(error);
-				return FinishProjectOpen(context, { { "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) } });
-			} });
+				return FinishProjectOpen(context, { { "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) },
+					{ "discardedChanges", modified } });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "project.close",
-			"Closes the open project (unsaved scene changes are discarded); the editor shows its launcher. Without a project it does nothing.",
-			ObjectSchema({}),
-			[](EditorContext& context, const nlohmann::json&)
+			"Closes the open project; the editor shows its launcher. Without a project it does nothing. Fails while the edited scene has unsaved "
+			"changes unless force is true (save first). Returns closed and discardedChanges (whether unsaved changes were discarded).",
+			ObjectSchema({ { "force", ForceSchema() } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
 			{
+				CommandArguments arguments(parameters);
+				const bool force = arguments.GetBool("force", false);
+				if (!arguments.IsValid())
+					return arguments.Fail();
 				const bool hadProject = context.HasProject();
+				if (!hadProject)
+					return EditorCommandResult::Ok({ { "closed", false }, { "discardedChanges", false } });
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "closing the project"))
+					return std::move(*refused);
+				const bool discarded = context.IsSceneModified();
 				context.CloseProject();
-				return EditorCommandResult::Ok({ { "closed", hadProject } });
-			} });
+				return EditorCommandResult::Ok({ { "closed", true }, { "discardedChanges", discarded } });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "project.samples",
 			"The sample projects that come with the editor (finished games to learn from, e.g. Tetris): id, name, description. Open one with "
@@ -311,20 +336,23 @@ namespace Strata
 				for (const ProjectSample& sample : *samples)
 					list.push_back({ { "id", sample.Id }, { "name", sample.Name }, { "description", sample.Description } });
 				return EditorCommandResult::Ok({ { "samples", std::move(list) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "project.openSample",
-			"Copies a sample project (project.samples) into a new directory and opens the copy, like project.open (unsaved scene changes are "
-			"discarded; it answers once the start scene is open, with project.open's fields and sample); the sample itself stays unchanged. The "
-			"copy leaves out local editor data (.strata): build its scripts with script.build before playing.",
+			"Copies a sample project (project.samples) into a new directory and opens the copy, like project.open; the sample itself stays unchanged. "
+			"The copy leaves out local editor data (.strata): build its scripts with script.build before playing. Fails while the edited scene has "
+			"unsaved changes unless force is true (save first), before anything is copied. It answers once the start scene is open, with "
+			"project.open's fields (projectFile, discardedChanges: whether unsaved changes were discarded, the start scene's) and sample.",
 			ObjectSchema({
 				{ "sample", StringSchema("The sample's id from project.samples, e.g. \"Tetris\"") },
-				{ "directory", StringSchema("Absolute directory for the copy: created, or an existing empty directory") } }, { "sample", "directory" }),
+				{ "directory", StringSchema("Absolute directory for the copy: created, or an existing empty directory") },
+				{ "force", ForceSchema() } }, { "sample", "directory" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string id = arguments.GetString("sample");
 				const std::string directory = arguments.GetString("directory");
+				const bool force = arguments.GetBool("force", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				std::string error;
@@ -339,13 +367,17 @@ namespace Strata
 						known += (known.empty() ? "" : ", ") + candidate.Id;
 					return EditorCommandResult::InvalidParameters(fmt::format("There is no sample '{}' (samples: {})", id, known.empty() ? "none" : known));
 				}
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the sample '{}'", sample->Id)))
+					return std::move(*refused);
+				const bool discarded = context.IsSceneModified();
 				const std::filesystem::path projectFile = ProjectSamples::Copy(*sample, FileSystem::FromUTF8(directory), &error);
 				if (projectFile.empty())
 					return EditorCommandResult::Fail(error);
 				if (!context.BeginOpenProject(projectFile, &error))
 					return EditorCommandResult::Fail(fmt::format("The sample was copied to '{}' but could not be opened: {}", directory, error));
-				return FinishProjectOpen(context, { { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) } });
-			} });
+				return FinishProjectOpen(context, { { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) },
+					{ "discardedChanges", discarded } });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "project.setStartScene", "Sets the scene a built game starts with and saves the project file.",
 			ObjectSchema({ { "scene", AssetSchema("Start scene") } }, { "scene" }),
@@ -444,7 +476,7 @@ namespace Strata
 						value["frameTimes"] = DescribeFrameTimes(std::move(frameTimes));
 					return EditorCommandResult::Ok(std::move(value));
 				});
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "project.exportStatus", "The running export (project.export) or the last one: {running, state (WaitingForImports, Packing, Copying, "
 			"Succeeded, Failed, Cancelled), progress (0 to 1), stage (what it does, or how it ended), directory}; {running: false, state: null} before the "
@@ -461,7 +493,7 @@ namespace Strata
 					{ "progress", exporter->GetProgress() },
 					{ "stage", exporter->GetStage() },
 					{ "directory", FileSystem::ToUTF8(exporter->GetOptions().Directory) } });
-			} });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "project.cancelExport", "Cancels the running export (project.export, which then fails as cancelled); files it wrote already stay. "
 			"Fails when no export runs.",
@@ -473,7 +505,7 @@ namespace Strata
 					return EditorCommandResult::Fail("No export is running");
 				exporter->Cancel();
 				return EditorCommandResult::Ok({ { "cancelling", true } });
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "project.setExportSettings", "Sets how the project exports and saves the project file; settings left out keep their "
 			"values. alwaysInclude: assets (\"Prefabs/Enemy.stprefab\") and folders (\"Prefabs\") relative to the asset directory that an export "
@@ -573,7 +605,7 @@ namespace Strata
 					assets.push_back(DescribeAsset(metadata));
 				}
 				return EditorCommandResult::Ok({ { "assets", std::move(assets) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "asset.info",
 			"An asset's metadata, load state, import errors and warnings, sub-assets, import settings with the description of every setting "
@@ -615,7 +647,7 @@ namespace Strata
 					result["importing"] = assets->IsImportPending(handle);
 				}
 				return EditorCommandResult::Ok(std::move(result));
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "asset.import",
 			"Copies external files and folders into the project and imports them in the background: the editor keeps running, and the command answers "
@@ -756,7 +788,7 @@ namespace Strata
 				const std::optional<AssetMetadata> metadata = assets->GetMetadata(handle);
 				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "path", metadata ? metadata->Path : std::string() },
 					{ "referencedBy", AssetReferences::ToJson(referencers) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "asset.delete",
 			"Deletes an asset: moves its file, .meta and cached import to the project's trash (.strata/Trash) and removes it from the project, in one undo "
@@ -964,7 +996,7 @@ namespace Strata
 				nlohmann::json values = material->Serialize()["Material"];
 				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", std::move(values) }, { "properties", std::move(properties) },
 					{ "saved", !assets || AssetEdit::IsMaterialSaved(*assets, handle) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "material.create", "Creates a material asset (.stmat) from the default material with the given property values.",
 			ObjectSchema({

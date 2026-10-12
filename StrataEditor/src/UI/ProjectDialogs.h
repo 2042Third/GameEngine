@@ -2,6 +2,7 @@
 
 #include "UI/EditorPanelRegistry.h"
 
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -18,7 +19,9 @@ namespace Strata
 	// - Open Sample: where the copy of a sample (project.samples) goes, then project.openSample.
 	// Both suggest the location of the last project they made, remembered in imgui.ini (section "StrataLauncher"), first
 	// <home>/StrataProjects, whose short paths keep script builds clear of path length limits. Creating a project replaces
-	// the edited scene: open the dialogs through EditorShell::RequestDiscardChanges. Main thread only.
+	// the edited scene: open the dialogs through EditorShell::RequestDiscardChanges. The answer covers the unsaved changes the
+	// scene had then; when it changed while the dialog was open (an agent edited it), the dialog asks again before it replaces
+	// the scene. Main thread only.
 	class ProjectDialogs
 	{
 	public:
@@ -78,6 +81,11 @@ namespace Strata
 		// The directory the dialog would create from its fields, or why it cannot (outProblem). Checks the file system only
 		// when a field changed.
 		std::filesystem::path GetTarget(const std::string& folderName, std::string& outProblem);
+		// Notes that the person has answered the question about the edited scene's unsaved changes as they are now.
+		void NoteAnswer(EditorContext& context);
+		// Whether the dialog may replace the edited scene now: without unsaved changes, or with only those the person chose to
+		// discard (none made since). Otherwise asks again; the answer submits the dialog once more.
+		bool MayReplaceScene(EditorPanelContext& context);
 
 		static void* SettingsReadOpen(ImGuiContext* context, ImGuiSettingsHandler* handler, const char* name);
 		static void SettingsReadLine(ImGuiContext* context, ImGuiSettingsHandler* handler, void* entry, const char* line);
@@ -97,6 +105,11 @@ namespace Strata
 		std::string m_SampleId;
 		std::string m_SampleName;
 		std::string m_SampleDescription;
+
+		// The undo stack's version (UndoStack::GetVersion) the person's answer about unsaved changes was given for, and
+		// whether a question the dialog asked has been answered since (the dialog then submits).
+		uint64_t m_AnsweredVersion = 0;
+		bool m_Answered = false;
 
 		// The last target check: the fields it was made for and its result.
 		std::string m_CheckedName;

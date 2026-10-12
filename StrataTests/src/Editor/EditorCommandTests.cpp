@@ -141,7 +141,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK(status["selection"]["primary"] == entity);
 		CHECK(status["undo"]["position"] == 1);
 		CHECK(status["undo"]["count"] == 1);
-		CHECK(status["undo"]["undo"] == "Create Entity");
+		CHECK(status["undo"]["undo"] == "Create 'Player'");
 		CHECK(status["automation"]["port"] == 1234);
 
 		harness.Run("play.start");
@@ -153,7 +153,7 @@ TEST_SUITE("Editor.Commands")
 		CHECK_FALSE(harness.Run("editor.status").contains("automation"));
 
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorStatusProject");
-		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "StatusGame" } });
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "StatusGame" }, { "force", true } });
 		const nlohmann::json project = harness.Run("editor.status")["project"];
 		CHECK(project == harness.Run("project.info"));
 		CHECK(project["name"] == "StatusGame");
@@ -558,7 +558,7 @@ TEST_SUITE("Editor.Commands")
 		const nlohmann::json saved = harness.SceneSnapshot();
 		harness.Run("entity.delete", { { "entities", { cube } } });
 		CHECK(harness.Run("scene.info")["modified"] == true);
-		harness.Run("scene.open", { { "scene", "Scenes/Main.stscene" } });
+		CHECK(harness.Run("scene.open", { { "scene", "Scenes/Main.stscene" }, { "force", true } })["discardedChanges"] == true);
 		CHECK(harness.SceneSnapshot() == saved);
 		CHECK(harness.Run("scene.info")["scene"] == scene);
 		CHECK(UUIDToJson(harness.Context.GetEditScene()->GetSourceAsset()) == scene);
@@ -590,7 +590,7 @@ TEST_SUITE("Editor.Commands")
 			CHECK(harness.Run("component.get", { { "entity", cube }, { "component", "MeshRenderer" } })["values"]["Mesh"] == UUIDToJson(BuiltinAssets::CubeMesh));
 
 			// A project's asset manager replaces it while the project is open.
-			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
+			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" }, { "force", true } });
 			CHECK(AssetManager::GetActive().get() == harness.Context.GetAssetManager());
 			harness.Context.CloseProject();
 			REQUIRE(AssetManager::HasActive());

@@ -312,7 +312,7 @@ TEST_SUITE("Editor.UI")
 		CHECK(assetInspector->Hidden);
 		// The instruments are closed until asked for (their status pills open them), and then join the bottom area.
 		EditorPanelRegistry& panels = editor.Layer->GetPanels();
-		for (const char* instrument : { EditorPanels::c_Streaming, EditorPanels::c_Performance })
+		for (const char* instrument : { EditorPanels::c_Streaming, EditorPanels::c_Performance, EditorPanels::c_Activity })
 		{
 			CAPTURE(instrument);
 			CHECK_FALSE(panels.IsOpen(instrument));

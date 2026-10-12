@@ -8,6 +8,7 @@
 #include <Strata/Scene/SceneSerializer.h>
 #include <Strata/Scene/UnknownComponents.h>
 
+#include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -100,6 +101,66 @@ namespace Strata
 			for (UUID id : ids)
 				states.push_back(CaptureEntity(scene, id));
 			return states;
+		}
+
+		std::string QuoteName(std::string_view name)
+		{
+			if (name.size() <= c_MaxNameInStep)
+				return fmt::format("'{}'", name);
+			// Cut between UTF-8 sequences.
+			size_t end = c_MaxNameInStep;
+			while (end > 0 && (static_cast<unsigned char>(name[end]) & 0xC0) == 0x80)
+				end--;
+			return fmt::format("'{}...'", name.substr(0, end));
+		}
+
+		std::string DescribeEntities(std::span<const Entity> entities)
+		{
+			if (entities.size() == 1)
+				return QuoteName(entities.front().GetName());
+			return fmt::format("{} entities", entities.size());
+		}
+
+		std::string GetBaseName(std::string_view name)
+		{
+			// " (<digits>)" at the end, after something.
+			if (name.size() < 5 || name.back() != ')')
+				return std::string(name);
+			const size_t open = name.rfind(" (");
+			if (open == std::string_view::npos || open == 0 || open + 3 > name.size() - 1)
+				return std::string(name);
+			const std::string_view digits = name.substr(open + 2, name.size() - open - 3);
+			if (digits.empty() || !std::all_of(digits.begin(), digits.end(), [](char character) { return character >= '0' && character <= '9'; }))
+				return std::string(name);
+			return std::string(name.substr(0, open));
+		}
+
+		bool MakeNameUnique(Scene& scene, Entity entity, NameNumbers* numbers)
+		{
+			NameComponent& component = entity.GetComponent<NameComponent>();
+			const Entity parent = entity.GetParent();
+			if (!scene.HasChildNamed(parent, component.Name, entity))
+				return false;
+			const std::string base = GetBaseName(component.Name);
+			// Numbers below the one this command gave last under the parent were taken then, and still are.
+			const std::string key = fmt::format("{}/{}", parent ? parent.GetUUID().ToString() : std::string(), base);
+			uint64_t number = 1;
+			if (numbers)
+			{
+				if (const auto next = numbers->find(key); next != numbers->end())
+					number = next->second;
+			}
+			for (;; number++)
+			{
+				std::string candidate = fmt::format("{} ({})", base, number);
+				if (scene.HasChildNamed(parent, candidate, entity))
+					continue;
+				component.Name = std::move(candidate);
+				entity.MarkModified<NameComponent>();
+				if (numbers)
+					(*numbers)[key] = number + 1;
+				return true;
+			}
 		}
 
 		std::vector<UUID> CollectSubtree(const Scene& scene, UUID id)
@@ -201,33 +262,57 @@ namespace Strata
 	}
 
 	SceneEditAction::SceneEditAction(Scene& scene, std::string name, std::vector<EntityState> before, std::vector<EntityState> after, std::string mergeKey)
-		: m_Scene(&scene), m_Name(std::move(name)), m_Before(std::move(before)), m_After(std::move(after)), m_MergeKey(std::move(mergeKey))
+		: m_Scene(&scene), m_Name(std::move(name)), m_Before(CreateRef<const std::vector<EntityState>>(std::move(before))),
+		m_After(CreateRef<const std::vector<EntityState>>(std::move(after))), m_MergeKey(std::move(mergeKey))
 	{
 	}
 
 	bool SceneEditAction::Execute(std::string*)
 	{
-		SceneEdit::ApplyEntities(*m_Scene, m_After);
+		SceneEdit::ApplyEntities(*m_Scene, *m_After);
 		return true;
 	}
 
 	bool SceneEditAction::Undo(std::string*)
 	{
-		SceneEdit::ApplyEntities(*m_Scene, m_Before);
+		SceneEdit::ApplyEntities(*m_Scene, *m_Before);
 		return true;
 	}
 
 	bool SceneEditAction::MergeWith(const EditorAction& next)
 	{
 		const auto* edit = dynamic_cast<const SceneEditAction*>(&next);
-		if (!edit || m_MergeKey.empty() || edit->m_MergeKey != m_MergeKey || edit->m_Scene != m_Scene || edit->m_After.size() != m_After.size())
+		if (!edit || m_MergeKey.empty() || edit->m_MergeKey != m_MergeKey || edit->m_Scene != m_Scene || edit->m_After->size() != m_After->size())
 			return false;
-		for (size_t index = 0; index < m_After.size(); index++)
+		for (size_t index = 0; index < m_After->size(); index++)
 		{
-			if (edit->m_After[index].ID != m_After[index].ID)
+			if ((*edit->m_After)[index].ID != (*m_After)[index].ID)
 				return false;
 		}
 		m_After = edit->m_After;
+		return true;
+	}
+
+	SceneSettingsAction::SceneSettingsAction(Scene& scene, const SceneSettings& before, const SceneSettings& after)
+		: m_Scene(scene), m_Before(before), m_After(after)
+	{
+	}
+
+	const std::string& SceneSettingsAction::GetName() const
+	{
+		static const std::string s_Name = "Change Scene Settings";
+		return s_Name;
+	}
+
+	bool SceneSettingsAction::Execute(std::string*)
+	{
+		m_Scene.GetSettings() = m_After;
+		return true;
+	}
+
+	bool SceneSettingsAction::Undo(std::string*)
+	{
+		m_Scene.GetSettings() = m_Before;
 		return true;
 	}
 

@@ -1,15 +1,19 @@
 #include "Panels/ViewportPanel.h"
 
+#include "Editor/CommandJournal.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/EditorPlacement.h"
 #include "Editor/EditorViewport.h"
+#include "Editor/SceneBounds.h"
 #include "Editor/ViewportRenderer.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/EditorShell.h"
 #include "UI/Icons.h"
+#include "UI/ItemProbe.h"
 #include "UI/PropertyWidgets.h"
+#include "UI/TextFormat.h"
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
@@ -26,8 +30,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -44,6 +50,9 @@ namespace Strata
 		constexpr float c_PlayStripInFontSizes = 1.0f / 7.0f;
 		// The scene load card's width, in text heights.
 		constexpr float c_SceneLoadCardInFontSizes = 22.0f;
+		// The agent flash's outline, in text heights (2 pixels at the base text size), and how many entities it outlines.
+		constexpr float c_AgentFlashThicknessInFontSizes = 1.0f / 7.0f;
+		constexpr size_t c_MaxAgentFlashEntities = 64;
 
 		ImTextureID ToTextureID(nvrhi::ITexture* texture)
 		{
@@ -224,6 +233,8 @@ namespace Strata
 			drawList->AddRectFilled(imageMin, ImVec2(imageMax.x, imageMin.y + strip), ImGui::GetColorU32(GetPlayStateColor(context)));
 		}
 
+		if (view)
+			DrawAgentFlash(context, *view);
 		if (view && !m_GameView)
 			UpdateGizmo(context, *view);
 
@@ -243,6 +254,8 @@ namespace Strata
 			ImGui::SameLine();
 			DrawDebugViewChip(viewport.GetSettings());
 		}
+		if (!m_GameView || !m_GameInputEnabled)
+			DrawAgentChip(panelContext, imageMax.x - style.ItemSpacing.x, chipsMin.y);
 		if (rendered && viewport.GetSettings().DebugView != ViewportDebugView::None)
 			DrawDebugViewLegend(context);
 		// Text boxes go below the chip row, also while it is hidden, so they stay in place when it comes and goes.
@@ -269,13 +282,21 @@ namespace Strata
 
 	bool ViewportPanel::IsAnimating() const
 	{
-		return m_CameraDrag != CameraDrag::None || m_GizmoDrag.has_value();
+		return m_CameraDrag != CameraDrag::None || m_GizmoDrag.has_value() || (!m_FlashBounds.empty() && IsFlashing(Now()));
+	}
+
+	bool ViewportPanel::IsFlashing(std::chrono::steady_clock::time_point now) const
+	{
+		// From the clock, not from the last draw: a viewport that stops being drawn mid-flash must not keep the editor at its
+		// full frame rate.
+		return !m_FlashBounds.empty() && std::chrono::duration<double>(now - m_FlashStart).count() < c_AgentFlashSeconds;
 	}
 
 	void ViewportPanel::Reset(EditorContext& context)
 	{
 		m_Focused = false;
 		m_Hovered = false;
+		m_FlashBounds.clear();
 		EndCameraDrag();
 		EndGizmoDrag(context);
 		UpdateGameInput(context, false);
@@ -350,6 +371,104 @@ namespace Strata
 			"Show the game's screen-space text (its HUD) in the editor view; the game and the scene camera always show it");
 		ImGui::SameLine();
 		DrawDebugViewChip(settings);
+	}
+
+	void ViewportPanel::DrawAgentChip(EditorPanelContext& panelContext, float right, float top)
+	{
+		const AutomationActivity& activity = panelContext.Context.GetJournal().GetLatestAutomationActivity();
+		if (activity.Id == 0)
+			return;
+		const double age = std::chrono::duration<double>(Now() - activity.Finished).count();
+		const bool connected = panelContext.Shell && panelContext.Shell->GetAutomationState().Clients > 0;
+		if (!connected && age >= c_AgentChipSeconds)
+			return;
+
+		// The text changes once a second at most: it is made again only then.
+		const int64_t seconds = static_cast<int64_t>(age);
+		if (activity.Id != m_AgentChipActivity || seconds != m_AgentChipSeconds)
+		{
+			m_AgentChipActivity = activity.Id;
+			m_AgentChipSeconds = seconds;
+			m_AgentChipText = fmt::format("Agent: {} \xC2\xB7 {}", activity.Command, UI::DescribeSecondsAgo(age));
+		}
+		const float width = UI::ChipWidth(Icons::Bot, m_AgentChipText.c_str());
+		ImGui::SetCursorScreenPos(ImVec2(right - width, top));
+		const bool clicked = UI::Chip("Viewport.Agent", Icons::Bot, m_AgentChipText.c_str(), nullptr);
+		if (UI::IsTooltipDue())
+		{
+			const std::string client = activity.Client.empty() ? std::string("An automation client") : activity.Client;
+			ImGui::SetTooltip("%s", fmt::format("{} ran {} {}{}.\nClick to show it in the Activity panel.", client, activity.Command, UI::DescribeSecondsAgo(age),
+				activity.Succeeded ? "" : " (it failed)").c_str());
+		}
+		if (clicked && panelContext.Shell)
+			panelContext.Shell->ShowActivity(activity.Id);
+	}
+
+	void ViewportPanel::DrawAgentFlash(EditorContext& context, const ViewportView& view)
+	{
+		const AutomationActivity& activity = context.GetJournal().GetLatestAutomationActivity();
+		if (activity.Id != m_FlashActivity)
+		{
+			// A new command: its entities' bounds now (at most c_MaxAgentFlashEntities of them). Whether they show depends on
+			// the time alone (IsFlashing): a command that finished c_AgentFlashSeconds ago shows nothing.
+			m_FlashActivity = activity.Id;
+			m_FlashBounds.clear();
+			m_FlashStart = activity.Finished;
+			Scene& scene = *context.GetActiveScene();
+			for (size_t index = 0; index < activity.Entities.size() && m_FlashBounds.size() < c_MaxAgentFlashEntities; index++)
+			{
+				if (Entity entity = scene.GetEntityByUUID(activity.Entities[index]))
+				{
+					const AABB bounds = SceneBounds::GetEntityBounds(scene, entity, false);
+					if (bounds.IsValid())
+						m_FlashBounds.push_back(bounds);
+				}
+			}
+		}
+		const auto now = Now();
+		if (!IsFlashing(now))
+			return;
+		const double elapsed = std::chrono::duration<double>(now - m_FlashStart).count();
+
+		const ImVec2 imageMin(m_Image.Min.x, m_Image.Min.y);
+		const ImVec2 imageMax(m_Image.Min.x + m_Image.Size.x, m_Image.Min.y + m_Image.Size.y);
+		const glm::mat4 viewProjection = view.Camera.Projection * view.Camera.View;
+		const float alpha = static_cast<float>(1.0 - elapsed / c_AgentFlashSeconds);
+		const ImU32 color = UI::ToColorU32(UI::GetThemeColors().Accent, alpha);
+		const float thickness = std::max(1.0f, std::floor(ImGui::GetFontSize() * c_AgentFlashThicknessInFontSizes));
+		ImDrawList* drawList = ImGui::GetWindowDrawList();
+		drawList->PushClipRect(imageMin, imageMax, true);
+		bool recorded = false;
+		for (const AABB& bounds : m_FlashBounds)
+		{
+			// The screen rectangle of the box's corners; boxes reaching behind the camera are left out.
+			glm::vec2 low(std::numeric_limits<float>::max());
+			glm::vec2 high(std::numeric_limits<float>::lowest());
+			bool visible = true;
+			for (int corner = 0; corner < 8 && visible; corner++)
+			{
+				const glm::vec3 point((corner & 1) ? bounds.Max.x : bounds.Min.x, (corner & 2) ? bounds.Max.y : bounds.Min.y, (corner & 4) ? bounds.Max.z : bounds.Min.z);
+				const glm::vec4 clip = viewProjection * glm::vec4(point, 1.0f);
+				if (clip.w <= 0.0f)
+				{
+					visible = false;
+					break;
+				}
+				const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+				const glm::vec2 screen(m_Image.Min.x + (ndc.x * 0.5f + 0.5f) * m_Image.Size.x, m_Image.Min.y + (0.5f - ndc.y * 0.5f) * m_Image.Size.y);
+				low = glm::min(low, screen);
+				high = glm::max(high, screen);
+			}
+			if (!visible)
+				continue;
+			drawList->AddRect(ImVec2(low.x, low.y), ImVec2(high.x, high.y), color, thickness, thickness);
+			if (!recorded)
+			{
+				UI::ItemProbe::RecordRect("Viewport.AgentFlash", ImVec2(low.x, low.y), ImVec2(high.x, high.y), true, color);
+				recorded = true;
+			}
+		}
+		drawList->PopClipRect();
 	}
 
 	void ViewportPanel::DrawStatsChip(ViewportSettings& settings)

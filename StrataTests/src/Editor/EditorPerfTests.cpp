@@ -386,6 +386,135 @@ TEST_SUITE("Perf.Editor")
 			}).MedianMs;
 		});
 	}
+
+	TEST_CASE("Recording a command in the activity journal costs a few microseconds")
+	{
+		EditorWithRoots editor(c_Roots);
+		CommandJournal& journal = editor.Context.GetJournal();
+		const nlohmann::json parameters = { { "entity", UUIDToJson(editor.Roots[c_Roots / 2].GetUUID()) } };
+		// 100,000 entity.get calls in batches of 10,000, alternately with the journal recording and without: the metric is the
+		// median batch's time per call with it minus the median without it, in microseconds.
+		constexpr int c_Batches = 10;
+		constexpr int c_CallsPerBatch = 10'000;
+		auto timeBatch = [&](bool recording)
+		{
+			journal.SetEnabled(recording);
+			const auto start = std::chrono::steady_clock::now();
+			for (int call = 0; call < c_CallsPerBatch; call++)
+				editor.Commands.Execute(editor.Context, "entity.get", parameters);
+			return MillisecondsSince(start) * 1000.0 / c_CallsPerBatch;
+		};
+		Perf::CheckBudgetConfirmed("Perf.Editor.JournalPerCommand", [&]
+		{
+			std::vector<double> on;
+			std::vector<double> off;
+			timeBatch(true); // Warm-up: the ring fills to its limits once
+			for (int batch = 0; batch < c_Batches / 2; batch++)
+			{
+				on.push_back(timeBatch(true));
+				off.push_back(timeBatch(false));
+			}
+			journal.SetEnabled(true);
+			const double withJournal = Perf::Summarize(on).MedianMs;
+			const double without = Perf::Summarize(off).MedianMs;
+			MESSAGE("entity.get: ", withJournal, " us per call with the journal, ", without, " us without");
+			return std::max(withJournal - without, 0.0);
+		});
+		CHECK(journal.GetEntries().size() == CommandJournal::c_MaxEntries);
+	}
+
+	TEST_CASE("The recovery journal of a 100,000-entity scene is written without holding up frames")
+	{
+		// The I/O threads the journal's writes run on, as in the editor.
+		Perf::ScopedApplicationJobSystem jobs;
+		const std::filesystem::path directory = CreateTemporaryDirectory("PerfRecovery") / "Game";
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		REQUIRE(commands.Execute(context, "project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } }).Success);
+		const std::vector<Entity> roots = Perf::CreateFlatRoots(*context.GetEditScene(), c_Roots);
+		REQUIRE(commands.Execute(context, "scene.saveAs", { { "path", "Scenes/Big.stscene" } }).Success);
+		SceneRecovery& recovery = context.GetRecovery();
+		recovery.Wait(); // The saved document's hash
+		Scene& scene = *context.GetEditScene();
+		auto timeFrame = [&context]()
+		{
+			const auto start = std::chrono::steady_clock::now();
+			context.Update(Timestep(1.0f / 60.0f));
+			return MillisecondsSince(start);
+		};
+
+		// Edits of 10,000 of the roots (one undo step each, component.set of their positions), each followed by the frames while its journal is written: the
+		// first asks for the write as Update does once edits stop, the others go on until the I/O job has written the file.
+		// Each write's longest frame above the median idle frame is the hitch a person would see; the metric is their median
+		// over the writes of an attempt, so one frame the machine's other work held up does not decide it.
+		constexpr int c_Writes = 7;
+		size_t round = 0;
+		auto writeJournal = [&](const nlohmann::json& edited, double idleMs)
+		{
+			// A position no earlier round set: every round changes every entity it lists.
+			round++;
+			const nlohmann::json values = { { "Translation", { static_cast<double>(round), 0.0, 0.0 } } };
+			REQUIRE(commands.Execute(context, "component.set", { { "entities", edited }, { "component", "Transform" }, { "values", values } }).Success);
+			// The frame after the edit updates what it changed (world transforms): the edit's cost, not the journal's.
+			context.Update(Timestep(1.0f / 60.0f));
+			const auto writeStart = std::chrono::steady_clock::now();
+			double longest = 0.0;
+			{
+				const auto start = std::chrono::steady_clock::now();
+				context.Update(Timestep(1.0f / 60.0f));
+				REQUIRE(recovery.Flush(scene, context.IsSceneModified()));
+				longest = MillisecondsSince(start);
+			}
+			uint32_t frames = 1;
+			while (recovery.IsBusy())
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				longest = std::max(longest, timeFrame());
+				frames++;
+			}
+			MESSAGE("Journal of ", edited.size(), " entities written in ", MillisecondsSince(writeStart), " ms over ", frames, " frames; the longest ", longest,
+				" ms, the idle median ", idleMs, " ms");
+			return std::max(longest - idleMs, 0.0);
+		};
+		Perf::CheckBudgetConfirmed("Perf.Editor.RecoveryWriteMaxFrame100k", [&]
+		{
+			std::vector<double> idle;
+			for (int frame = 0; frame < 60; frame++)
+				idle.push_back(timeFrame());
+			const double idleMs = Perf::Summarize(idle).MedianMs;
+			std::vector<double> hitches;
+			for (int write = 0; write < c_Writes; write++)
+			{
+				nlohmann::json edited = nlohmann::json::array();
+				for (size_t index = round % 10; index < roots.size(); index += 10)
+					edited.push_back(UUIDToJson(roots[index].GetUUID()));
+				hitches.push_back(writeJournal(edited, idleMs));
+			}
+			return Perf::Summarize(hitches).MedianMs;
+		});
+		CHECK(recovery.GetStatus().LastWrite > 0);
+		// For the record (Docs/Architecture.md, "Autosave and recovery"): the I/O job's time for a journal of every entity.
+		nlohmann::json all = nlohmann::json::array();
+		for (const Entity root : roots)
+			all.push_back(UUIDToJson(root.GetUUID()));
+		writeJournal(all, 0.0);
+
+		// Snapshots (what a scene that was never saved starts with, a step only a snapshot captures) are taken on the main
+		// thread, of at most SceneRecovery::c_MaxSnapshotEntities entities: the median time of capturing that many bounds the
+		// frame it costs.
+		const std::vector<Entity> snapshot(roots.begin(), roots.begin() + SceneRecovery::c_MaxSnapshotEntities);
+		std::vector<UUID> ids;
+		for (const Entity entity : snapshot)
+			ids.push_back(entity.GetUUID());
+		Perf::CheckBudgetConfirmed("Perf.Editor.RecoverySnapshotMaxEntities", [&]
+		{
+			return Perf::Measure("Perf.Editor.RecoverySnapshotMaxEntities", 3, 15, [&]
+			{
+				const std::vector<EntityState> states = SceneEdit::CaptureEntities(scene, ids);
+				CHECK(states.size() == ids.size());
+			}).MedianMs;
+		});
+	}
 }
 
 TEST_SUITE("PerfGPU.Editor")

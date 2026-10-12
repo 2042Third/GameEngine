@@ -5,6 +5,7 @@
 #include "Editor/PrefabSync.h"
 #include "Editor/ProjectTemplates.h"
 #include "Editor/SceneBounds.h"
+#include "Editor/SceneEdit.h"
 #include "Editor/SceneRaycast.h"
 
 #include <Strata/Asset/AssetManager.h>
@@ -28,6 +29,7 @@
 #include <memory>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -45,38 +47,6 @@ namespace Strata
 
 		// entity.dropToGround leaves entities closer than this to the surface below them where they are.
 		constexpr float c_DropTolerance = 1.0e-4f;
-
-		// Scene settings are not entity data: their undo step stores the settings before and after.
-		class SceneSettingsAction final : public EditorAction
-		{
-		public:
-			SceneSettingsAction(Scene& scene, const SceneSettings& before, const SceneSettings& after)
-				: m_Scene(scene), m_Before(before), m_After(after)
-			{
-			}
-
-			const std::string& GetName() const override
-			{
-				static const std::string s_Name = "Change Scene Settings";
-				return s_Name;
-			}
-
-			bool Execute(std::string*) override
-			{
-				m_Scene.GetSettings() = m_After;
-				return true;
-			}
-
-			bool Undo(std::string*) override
-			{
-				m_Scene.GetSettings() = m_Before;
-				return true;
-			}
-		private:
-			Scene& m_Scene;
-			SceneSettings m_Before;
-			SceneSettings m_After;
-		};
 
 		// Named layers by index, and the pairs of layers that do not collide by their names ("Layer <index>" without one).
 		nlohmann::json DescribeLayers(const PhysicsLayerSettings& layers)
@@ -242,6 +212,22 @@ namespace Strata
 			return info;
 		}
 
+		// The undo step of component.set: the properties it sets by their display names, of the entities ("Set Material of
+		// 'Ground'", "Set Intensity and Color of 3 entities"), or the component for more than two ("Edit Point Light of 'Lamp'").
+		std::string DescribeSetValues(const ComponentInfo& info, const nlohmann::json& values, std::span<const Entity> entities)
+		{
+			std::vector<std::string> names;
+			for (const auto& [key, value] : values.items())
+			{
+				const PropertyInfo* property = info.FindProperty(key);
+				names.push_back(property ? property->DisplayName : key);
+			}
+			const std::string target = SceneEdit::DescribeEntities(entities);
+			if (names.empty() || names.size() > 2)
+				return fmt::format("Edit {} of {}", info.DisplayName, target);
+			return fmt::format("Set {} of {}", names.size() == 1 ? names[0] : fmt::format("{} and {}", names[0], names[1]), target);
+		}
+
 		// What mutating commands report while the scene is running.
 		std::string GetRunningCopyWarning(const EditorContext& context)
 		{
@@ -260,18 +246,20 @@ namespace Strata
 				return EditorCommandResult::Fail(std::move(error));
 			}
 			context.CommitEdit(transaction);
-			if (context.IsPlaying())
-			{
-				if (!value.is_object())
-					value = nlohmann::json::object();
-				value["warning"] = GetRunningCopyWarning(context);
-			}
-			return EditorCommandResult::Ok(std::move(value));
+			if (!context.IsPlaying())
+				return EditorCommandResult::Ok(std::move(value));
+			if (!value.is_object())
+				value = nlohmann::json::object();
+			value["warning"] = GetRunningCopyWarning(context);
+			EditorCommandResult result = EditorCommandResult::Ok(std::move(value));
+			result.RunningCopy = true;
+			return result;
 		}
 
 		// The load of scene.open: starts opening the scene and answers once it replaced the edited scene, with the frames that
-		// ran meanwhile (the frame that swapped it in included).
-		EditorCommandResult OpenSceneAndWait(EditorContext& context, AssetHandle handle)
+		// ran meanwhile (the frame that swapped it in included). `discardsChanges`: the edited scene has unsaved changes the open
+		// discards (the caller's guard let it), reported as discardedChanges.
+		EditorCommandResult OpenSceneAndWait(EditorContext& context, AssetHandle handle, bool discardsChanges)
 		{
 			std::string error;
 			if (!context.BeginOpenScene(handle, &error))
@@ -279,7 +267,7 @@ namespace Strata
 			const uint64_t id = context.GetSceneLoadStatus().ID;
 			// Frames are measured from the one that started the load, which the editor records at the start of the next frame.
 			const uint64_t firstMeasured = context.GetRecordedFrameCount() + 1;
-			return EditorCommandResult::Defer([id, firstMeasured, frames = uint64_t(0), lastRecorded = uint64_t(0), frameTimes = std::vector<double>(),
+			return EditorCommandResult::Defer([id, firstMeasured, discardsChanges, frames = uint64_t(0), lastRecorded = uint64_t(0), frameTimes = std::vector<double>(),
 				finishedAt = std::optional<uint64_t>()](EditorContext& context) mutable -> std::optional<EditorCommandResult>
 			{
 				frames++;
@@ -309,6 +297,7 @@ namespace Strata
 					{ "scene", UUIDToJson(status.Scene) },
 					{ "name", scene->GetName() },
 					{ "entities", scene->GetEntityCount() },
+					{ "discardedChanges", discardsChanges },
 					{ "seconds", status.Seconds },
 					{ "frames", frames } };
 				if (!frameTimes.empty())
@@ -388,7 +377,10 @@ namespace Strata
 				value["seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
 				value["frames"] = frames;
 				value["warning"] = GetRunningCopyWarning(context);
-				return EditorCommandResult::Ok(std::move(value));
+				// Sub-scenes belong to the running copy, which play.stop discards: replays leave the load out.
+				EditorCommandResult result = EditorCommandResult::Ok(std::move(value));
+				result.RunningCopy = true;
+				return result;
 			});
 		}
 
@@ -478,7 +470,7 @@ namespace Strata
 					{ "paused", context.IsPaused() },
 					{ "entityCount", scene->GetEntityCount() },
 					{ "settings", DescribeSettings(scene->GetSettings()) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "scene.hierarchy", "Every entity of the active scene in hierarchy order, with parent, depth and component names.", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
@@ -516,44 +508,54 @@ namespace Strata
 						stack.emplace_back(*it, depth + 1);
 				}
 				return EditorCommandResult::Ok({ { "entities", std::move(entities) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "scene.new",
-			"Replaces the edited scene with a new, unsaved one (unsaved changes are discarded): empty by default, or with a template's content, e.g. "
-			"\"basic3d\" (a lit start: camera, sun, procedural sky, ground, post-processing; the editor camera then looks through the scene's camera; "
-			"the ground's material Materials/Ground.stmat is added to a project that lacks it). Save it with scene.saveAs.",
+			"Replaces the edited scene with a new, unsaved one: empty by default, or with a template's content, e.g. \"basic3d\" (a lit start: camera, "
+			"sun, procedural sky, ground, post-processing; the editor camera then looks through the scene's camera; the ground's material "
+			"Materials/Ground.stmat is added to a project that lacks it). Fails while the edited scene has unsaved changes unless force is true (save "
+			"first). Save the new scene with scene.saveAs. Returns discardedChanges (whether unsaved changes were discarded).",
 			ObjectSchema({
 				{ "name", StringSchema("Scene name") },
 				{ "template", { { "type", "string" }, { "enum", { ProjectTemplates::c_Empty, ProjectTemplates::c_Basic3D } },
-					{ "description", "What the scene starts with (default \"empty\"; see project.templates)" } } } }),
+					{ "description", "What the scene starts with (default \"empty\"; see project.templates)" } } },
+				{ "force", ForceSchema() } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string name = arguments.GetString("name", "Untitled");
 				const std::string templateId = arguments.GetString("template", std::string(ProjectTemplates::c_Empty));
+				const bool force = arguments.GetBool("force", false);
 				if (arguments.IsValid() && !ProjectTemplates::Find(templateId))
 					arguments.SetError(fmt::format("Unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, "starting a new scene"))
+					return std::move(*refused);
+				const bool discarded = context.IsSceneModified();
 				if (!context.NewScene(name, templateId))
 					return EditorCommandResult::Fail(fmt::format("The template '{}' could not be applied", templateId));
-				return EditorCommandResult::Ok();
+				return EditorCommandResult::Ok({ { "discardedChanges", discarded } });
 			} });
 
 		registry.Register({ "scene.open",
-			"Opens a scene asset for editing (unsaved changes are discarded). The scene is read and loaded with everything it uses in the "
-			"background while the editor goes on showing the edited scene, which stays read-only meanwhile (edits and play.start fail); the "
-			"command answers once the opened scene replaced it: {scene, name, entities, seconds, frames, frameTimes (the CPU time of the frames "
-			"that ran meanwhile: count, medianMs, meanMs, p95Ms, maxMs)}. Opening another scene, scene.new or closing the project cancels it. "
+			"Opens a scene asset for editing. Fails while the edited scene has unsaved changes unless force is true (save first). The scene is "
+			"read and loaded with everything it uses in the background while the editor goes on showing the edited scene, which stays read-only "
+			"meanwhile (edits and play.start fail); the command answers once the opened scene replaced it: {scene, name, entities, "
+			"discardedChanges (whether unsaved changes were discarded), seconds, frames, frameTimes (the CPU time of the frames that ran "
+			"meanwhile: count, medianMs, meanMs, p95Ms, maxMs)}. Opening another scene, scene.new or closing the project cancels it. "
 			"scene.loadStatus (and editor.status's sceneLoad) report its progress.",
-			ObjectSchema({ { "scene", AssetSchema("Scene to open") } }, { "scene" }),
+			ObjectSchema({ { "scene", AssetSchema("Scene to open") }, { "force", ForceSchema() } }, { "scene" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const AssetHandle handle = ResolveAsset(context, arguments, "scene", AssetType::Scene);
+				const bool force = arguments.GetBool("force", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				return OpenSceneAndWait(context, handle);
+				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the scene {}", parameters["scene"].dump())))
+					return std::move(*refused);
+				return OpenSceneAndWait(context, handle, context.IsSceneModified());
 			} });
 
 		registry.Register({ "scene.loadStatus",
@@ -580,7 +582,7 @@ namespace Strata
 						return std::nullopt;
 					return EditorCommandResult::Ok(DescribeSceneLoads(context));
 				});
-			} });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "scene.loadAdditive",
 			"Loads a scene asset into the running game next to what it holds (a sub-scene, as scripts' Scene::LoadAdditive does; play mode "
@@ -620,7 +622,10 @@ namespace Strata
 				if (!scene.GetSubSceneStatus(static_cast<SubSceneID>(id)))
 					return EditorCommandResult::InvalidParameters(fmt::format("The running scene has no sub-scene {} (see scene.loadStatus)", id));
 				scene.UnloadSubScene(static_cast<SubSceneID>(id));
-				return EditorCommandResult::Ok({ { "subScene", id }, { "entities", scene.GetEntityCount() }, { "warning", GetRunningCopyWarning(context) } });
+				EditorCommandResult result = EditorCommandResult::Ok({ { "subScene", id }, { "entities", scene.GetEntityCount() },
+					{ "warning", GetRunningCopyWarning(context) } });
+				result.RunningCopy = true;
+				return result;
 			} });
 
 		registry.Register({ "scene.save", "Saves the edited scene to its asset. New scenes need scene.saveAs first.", ObjectSchema({}),
@@ -751,7 +756,9 @@ namespace Strata
 						warning += "; physics capacities apply to worlds created later, not to the running one, so set them in edit mode";
 					result["warning"] = std::move(warning);
 				}
-				return EditorCommandResult::Ok(std::move(result));
+				EditorCommandResult outcome = EditorCommandResult::Ok(std::move(result));
+				outcome.RunningCopy = context.IsPlaying();
+				return outcome;
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////
@@ -773,7 +780,7 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
-				SceneEditTransaction transaction(scene, "Create Entity", {});
+				SceneEditTransaction transaction(scene, fmt::format("Create {}", SceneEdit::QuoteName(name)), {});
 				Entity entity = parent ? scene.CreateChildEntity(parent, name) : scene.CreateEntity(name);
 				if (!entity)
 					return RollBack(transaction, fmt::format("The scene is full: it holds at most {} entities", Scene::c_MaxEntities), EditorCommandError::Failed);
@@ -794,7 +801,7 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
-				SceneEditTransaction transaction(scene, entities.size() == 1 ? "Delete Entity" : "Delete Entities", {});
+				SceneEditTransaction transaction(scene, fmt::format("Delete {}", SceneEdit::DescribeEntities(entities)), {});
 				for (Entity entity : entities)
 					transaction.TrackSubtree(entity.GetUUID());
 				// One batch: each sibling list is compacted once (entities nested in another listed one go with it).
@@ -805,8 +812,9 @@ namespace Strata
 
 		registry.Register({ "entity.duplicate",
 			"Duplicates entities with their descendants, each copy placed right after its original, in one undo step (while playing it changes the "
-			"running copy only). References between the copied entities point at the copies. Returns the copies' IDs (entities, in the order "
-			"given; id: the first).",
+			"running copy only). References between the copied entities point at the copies. Copies get names unique among their siblings "
+			"('Crate' -> 'Crate (1)'), so read names back from the returned IDs rather than finding copies by name. Returns the copies' IDs "
+			"(entities, in the order given; id: the first).",
 			ObjectSchema({
 				{ "entity", EntitySchema("Entity to duplicate") },
 				{ "entities", EntityArraySchema("Entities to duplicate (instead of entity); those below another listed one are copied with it") } }),
@@ -829,7 +837,7 @@ namespace Strata
 				// level (the copies at the end of the roots, which leaves every original's position as it was) and then placed in
 				// one batch under their originals' parents, keeping the local transforms they had there. Both batches stay linear
 				// when many entities of a long list are duplicated.
-				SceneEditTransaction transaction(scene, originals.size() == 1 ? "Duplicate Entity" : "Duplicate Entities", {});
+				SceneEditTransaction transaction(scene, fmt::format("Duplicate {}", SceneEdit::DescribeEntities(originals)), {});
 				EntityInstantiationOptions options;
 				options.GenerateNewUUIDs = true;
 				options.ReportUnknownComponents = false; // Entities of this scene: their unknown components are no news
@@ -863,6 +871,10 @@ namespace Strata
 				}
 				if (!scene.PlaceEntities(placements))
 					return RollBack(transaction, "Placing the copies failed", EditorCommandError::Failed);
+				// "Crate" -> "Crate (1)": a copy is told apart from its original among their siblings.
+				SceneEdit::NameNumbers numbers;
+				for (const Entity copy : copies)
+					SceneEdit::MakeNameUnique(scene, copy, &numbers);
 				return Finish(context, transaction, { { "id", UUIDToJson(copies.front().GetUUID()) }, { "entities", ToJson(copies) } });
 			} });
 
@@ -881,13 +893,13 @@ namespace Strata
 				const size_t count = data["Entities"].size();
 				data["Strata"] = { { "Format", c_EntityDataFormat }, { "Version", c_EntityDataFormatVersion } };
 				return EditorCommandResult::Ok({ { "data", std::move(data) }, { "roots", ToJson(roots) }, { "count", count } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "entity.paste",
 			"Creates entities from entity.copy's data, under a parent (default: the top level) at a position among its children (default: last), "
 			"in one undo step (while playing it changes the running copy only). The new entities get fresh IDs; references between them point at "
-			"each other, references to other entities stay. Returns the IDs of the pasted top-level entities and warnings about data this build "
-			"cannot read.",
+			"each other, references to other entities stay. Top-level entities whose names their new siblings have get a number ('Crate' -> "
+			"'Crate (1)'). Returns the IDs of the pasted top-level entities and warnings about data this build cannot read.",
 			ObjectSchema({
 				{ "data", AnyObjectSchema("What entity.copy returned in 'data': {\"Strata\": {\"Format\": \"Entities\", ...}, \"Entities\": [...]}") },
 				{ "parent", OptionalEntitySchema("Parent of the pasted entities; null or omitted for the top level") },
@@ -934,6 +946,10 @@ namespace Strata
 					if (!scene.PlaceEntities(placements))
 						return RollBack(transaction, "Placing the pasted entities failed", EditorCommandError::Failed);
 				}
+				SceneEdit::NameNumbers numbers;
+				for (const Entity root : roots)
+					SceneEdit::MakeNameUnique(scene, root, &numbers);
+				transaction.SetName(fmt::format("Paste {}", SceneEdit::DescribeEntities(roots)));
 				return Finish(context, transaction, { { "entities", ToJson(roots) }, { "warnings", warnings } });
 			} });
 
@@ -946,7 +962,7 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				return EditorCommandResult::Ok(DescribeEntity(entity));
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "entity.find", "IDs of the entities matching all given filters: exact name, tag, component type.",
 			ObjectSchema({ { "name", StringSchema("Exact entity name") }, { "tag", StringSchema("Tag") }, { "component", StringSchema("Component type, e.g. \"PointLight\"") } }),
@@ -972,7 +988,7 @@ namespace Strata
 					ids.push_back(UUIDToJson(entity.GetUUID()));
 				}
 				return EditorCommandResult::Ok({ { "entities", std::move(ids) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "entity.setParent",
 			"Moves entities under another one, or to the top level, and/or reorders them among their siblings, in one undo step (while playing it "
@@ -1001,7 +1017,8 @@ namespace Strata
 						return EditorCommandResult::InvalidParameters("The new parent is one of the moved entities or one of their descendants");
 				}
 
-				SceneEditTransaction transaction(scene, entities.size() == 1 ? "Reparent Entity" : "Reparent Entities", GetIds(entities));
+				SceneEditTransaction transaction(scene, parent ? fmt::format("Move {} under {}", SceneEdit::DescribeEntities(entities), SceneEdit::QuoteName(parent.GetName()))
+					: fmt::format("Move {} to the top level", SceneEdit::DescribeEntities(entities)), GetIds(entities));
 				const UUID parentId = parent ? parent.GetUUID() : UUID::Null();
 				std::vector<Scene::EntityPlacement> placements;
 				std::vector<std::pair<Entity, glm::mat4>> reparented; // With the world transform to keep
@@ -1038,7 +1055,7 @@ namespace Strata
 				const std::string name = arguments.GetString("name");
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				SceneEditTransaction transaction(scene, "Rename Entity", { entity.GetUUID() });
+				SceneEditTransaction transaction(scene, fmt::format("Rename {} to {}", SceneEdit::QuoteName(entity.GetName()), SceneEdit::QuoteName(name)), { entity.GetUUID() });
 				entity.GetComponent<NameComponent>().Name = name;
 				entity.MarkModified<NameComponent>();
 				return Finish(context, transaction);
@@ -1062,9 +1079,7 @@ namespace Strata
 				const bool active = arguments.GetBool("active", true);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				const std::string name = entities.size() == 1 ? (active ? "Activate Entity" : "Deactivate Entity")
-					: (active ? "Activate Entities" : "Deactivate Entities");
-				SceneEditTransaction transaction(scene, name, GetIds(entities));
+				SceneEditTransaction transaction(scene, fmt::format("{} {}", active ? "Activate" : "Deactivate", SceneEdit::DescribeEntities(entities)), GetIds(entities));
 				for (Entity entity : entities)
 					entity.SetActive(active);
 				return Finish(context, transaction);
@@ -1153,7 +1168,7 @@ namespace Strata
 						{ "properties", std::move(properties) } });
 				}
 				return EditorCommandResult::Ok({ { "components", std::move(components) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "component.add",
 			"Adds a component to an entity (or to every one of the entities) where it is missing and sets the given property values, in one undo "
@@ -1174,7 +1189,7 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
-				SceneEditTransaction transaction(scene, fmt::format("Add {}", info->DisplayName), GetIds(entities));
+				SceneEditTransaction transaction(scene, fmt::format("Add {} to {}", info->DisplayName, SceneEdit::DescribeEntities(entities)), GetIds(entities));
 				std::string error;
 				for (Entity entity : entities)
 				{
@@ -1206,7 +1221,7 @@ namespace Strata
 						return EditorCommandResult::Fail(fmt::format("'{}' has no {} component", entity.GetName(), info->Name));
 				}
 
-				SceneEditTransaction transaction(scene, fmt::format("Remove {}", info->DisplayName), GetIds(entities));
+				SceneEditTransaction transaction(scene, fmt::format("Remove {} from {}", info->DisplayName, SceneEdit::DescribeEntities(entities)), GetIds(entities));
 				std::string error;
 				for (Entity entity : entities)
 				{
@@ -1230,7 +1245,7 @@ namespace Strata
 				if (!component)
 					return EditorCommandResult::Fail(fmt::format("The entity has no {} component", info->Name));
 				return EditorCommandResult::Ok({ { "values", ComponentAccess::Serialize(*info, component) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "component.set",
 			"Sets property values of a component that the entity (or every one of the entities) has, in one undo step (while playing it changes "
@@ -1256,7 +1271,7 @@ namespace Strata
 						return EditorCommandResult::Fail(fmt::format("'{}' has no {} component (use component.add)", entity.GetName(), info->Name));
 				}
 
-				SceneEditTransaction transaction(scene, fmt::format("Edit {}", info->DisplayName), GetIds(entities));
+				SceneEditTransaction transaction(scene, DescribeSetValues(*info, values, entities), GetIds(entities));
 				std::string error;
 				for (const Entity entity : entities)
 				{
@@ -1273,8 +1288,8 @@ namespace Strata
 		////////////////////////////////////////////////////////////////////////////////
 
 		registry.Register({ "prefab.instantiate", "Instantiates a prefab or imported model, optionally under a parent and with component values on its root (undoable; "
-			"while playing it changes the running copy only). Returns {id (the first root), entities (every root)}; the instance stays linked to the prefab "
-			"(prefab.status, prefab.apply, prefab.revert).",
+			"while playing it changes the running copy only). An instance whose name a sibling has gets a number ('Crate' -> 'Crate (1)'). Returns "
+			"{id (the first root), entities (every root)}; the instance stays linked to the prefab (prefab.status, prefab.apply, prefab.revert).",
 			ObjectSchema({
 				{ "prefab", AssetSchema("Prefab or model") },
 				{ "parent", OptionalEntitySchema("Parent; null or omitted for the top level") },
@@ -1321,6 +1336,12 @@ namespace Strata
 				std::string error;
 				if (components && !roots.empty() && !ApplyComponents(roots.front(), *components, &error))
 					return RollBack(transaction, error, EditorCommandError::InvalidParameters);
+				// A second instance among the same siblings: "Crate (1)". The root's name is the instance's own, so the number does not
+				// make it differ from its prefab.
+				SceneEdit::NameNumbers numbers;
+				for (const Entity root : roots)
+					SceneEdit::MakeNameUnique(scene, root, &numbers);
+				transaction.SetName(fmt::format("Instantiate {}", SceneEdit::DescribeEntities(roots)));
 				nlohmann::json result = { { "entities", std::move(ids) } };
 				result["id"] = roots.empty() ? nlohmann::json(nullptr) : UUIDToJson(roots.front().GetUUID());
 				return Finish(context, transaction, std::move(result));

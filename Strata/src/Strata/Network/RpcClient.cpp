@@ -37,7 +37,7 @@ namespace Strata
 		Close();
 	}
 
-	bool RpcClient::Connect(std::string_view host, uint16_t port, std::string_view token, std::chrono::milliseconds timeout)
+	bool RpcClient::Connect(std::string_view host, uint16_t port, std::string_view token, std::chrono::milliseconds timeout, std::string_view clientName)
 	{
 		std::scoped_lock<std::mutex> lock(m_Mutex);
 		m_Socket.Close();
@@ -60,10 +60,10 @@ namespace Strata
 		}
 		socket->SetNoDelay(true);
 		m_Socket = std::move(*socket);
-		return AuthenticateLocked(token, timeout);
+		return AuthenticateLocked(token, timeout, clientName);
 	}
 
-	bool RpcClient::AuthenticateLocked(std::string_view token, std::chrono::milliseconds timeout)
+	bool RpcClient::AuthenticateLocked(std::string_view token, std::chrono::milliseconds timeout, std::string_view clientName)
 	{
 		const auto deadline = std::chrono::steady_clock::now() + ClampSocketTimeout(timeout);
 		auto remaining = [deadline]()
@@ -78,7 +78,10 @@ namespace Strata
 			return false;
 		}
 
-		const RpcResult handshake = CallLocked(c_RpcHandshakeMethod, nlohmann::json { { "clientNonce", clientNonce } }, remaining());
+		nlohmann::json handshakeParams = { { "clientNonce", clientNonce } };
+		if (!clientName.empty())
+			handshakeParams["clientName"] = SanitizeRpcClientName(clientName);
+		const RpcResult handshake = CallLocked(c_RpcHandshakeMethod, handshakeParams, remaining());
 		if (handshake.IsError())
 		{
 			FailLocked(handshake.GetError().Code, fmt::format("Authentication failed: {}", handshake.GetError().Message), true);

@@ -168,6 +168,16 @@ namespace Strata
 		return m_Server.GetClientCount();
 	}
 
+	std::vector<RpcClientInfo> EditorAutomation::GetClients() const
+	{
+		return m_Server.GetClients();
+	}
+
+	uint64_t EditorAutomation::GetClientsVersion() const
+	{
+		return m_Server.GetClientsVersion();
+	}
+
 	size_t EditorAutomation::GetPendingRequestCount() const
 	{
 		return m_State->PendingRequests;
@@ -187,11 +197,15 @@ namespace Strata
 
 	nlohmann::json EditorAutomation::DescribeStatus() const
 	{
+		nlohmann::json clients = nlohmann::json::array();
+		for (const RpcClientInfo& client : GetClients())
+			clients.push_back({ { "id", client.Id }, { "name", client.Name }, { "connectedAt", client.ConnectedAt } });
 		return {
 			{ "running", IsRunning() },
 			{ "address", m_Specification.BindAddress },
 			{ "port", GetPort() },
 			{ "clients", GetClientCount() },
+			{ "connectedClients", std::move(clients) },
 			{ "methods", m_Methods.size() },
 			{ "completedRequests", m_State->CompletedRequests },
 			{ "pendingRequests", m_State->PendingRequests },
@@ -306,7 +320,7 @@ namespace Strata
 			RpcResult rpcResult = ToRpcResult(result, method->Name, method->Parameters);
 			LogCompletion(*trace, method->Name, rpcResult, state->Frame);
 			responder->Respond(std::move(rpcResult));
-		});
+		}, CommandOrigin { CommandSource::Automation, responder->GetClient().Name });
 		if (pending)
 		{
 			trace->Pending = true;

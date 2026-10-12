@@ -8,7 +8,10 @@
 
 #include <nlohmann/json.hpp>
 
+#include <span>
 #include <string>
+#include <string_view>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -35,6 +38,20 @@ namespace Strata
 		std::vector<EntityState> CaptureEntities(const Scene& scene, const std::vector<UUID>& ids);
 		// The entity followed by all its descendants, in hierarchy order.
 		std::vector<UUID> CollectSubtree(const Scene& scene, UUID id);
+		// How undo steps name what they changed: one entity by its name in quotes ("'Wall'", cut to c_MaxNameInStep
+		// characters), several by their number ("3 entities").
+		constexpr size_t c_MaxNameInStep = 40;
+		std::string QuoteName(std::string_view name);
+		std::string DescribeEntities(std::span<const Entity> entities);
+		// The name without a copy number: "Crate (2)" -> "Crate" (names that only look like one stay whole: "(1)", "A (x)").
+		std::string GetBaseName(std::string_view name);
+		// Makes the entity's name unique among its siblings (the other children of its parent, or the other top-level
+		// entities): when one of them has its name, it becomes "<base> (n)" with the smallest n from 1 that none has
+		// ("Crate" -> "Crate (1)", a copy of "Crate (1)" -> "Crate (2)"). Renames through the name's update signal; returns
+		// whether it renamed. Commands naming many entities pass the same `numbers` for all of them: the next number to try
+		// per parent and name, so that a thousand copies of one name cost a thousand checks, not half a million.
+		using NameNumbers = std::unordered_map<std::string, uint64_t>;
+		bool MakeNameUnique(Scene& scene, Entity entity, NameNumbers* numbers = nullptr);
 
 		// Makes the scene match the states: removes entities that must not exist, recreates missing ones (with their
 		// UUIDs), replaces the components that differ and restores parents and sibling order. States must be
@@ -43,7 +60,8 @@ namespace Strata
 
 	}
 
-	// Undo step for any change to a set of entities, stored as their states before and after the change.
+	// Undo step for any change to a set of entities, stored as their states before and after the change. The states are
+	// shared and never change once recorded (a merge replaces the "after" states), so journals keep them without copies.
 	class SceneEditAction final : public EditorAction
 	{
 	public:
@@ -54,16 +72,34 @@ namespace Strata
 		bool Execute(std::string* outError) override;
 		bool Undo(std::string* outError) override;
 		bool MergeWith(const EditorAction& next) override;
-		bool IsNoOp() const override { return m_Before == m_After; }
+		bool IsNoOp() const override { return *m_Before == *m_After; }
+		SceneChangeKind GetSceneChange() const override { return SceneChangeKind::Entities; }
+		Ref<const std::vector<EntityState>> GetEntityStates(bool undone) const override { return undone ? m_Before : m_After; }
 
-		const std::vector<EntityState>& GetBefore() const { return m_Before; }
-		const std::vector<EntityState>& GetAfter() const { return m_After; }
+		const std::vector<EntityState>& GetBefore() const { return *m_Before; }
+		const std::vector<EntityState>& GetAfter() const { return *m_After; }
 	private:
 		Scene* m_Scene;
 		std::string m_Name;
-		std::vector<EntityState> m_Before;
-		std::vector<EntityState> m_After;
+		Ref<const std::vector<EntityState>> m_Before;
+		Ref<const std::vector<EntityState>> m_After;
 		std::string m_MergeKey;
+	};
+
+	// Undo step of a change to the scene's settings (gravity, fixed step, physics capacities: scene.setSettings).
+	class SceneSettingsAction final : public EditorAction
+	{
+	public:
+		SceneSettingsAction(Scene& scene, const SceneSettings& before, const SceneSettings& after);
+
+		const std::string& GetName() const override;
+		bool Execute(std::string* outError) override;
+		bool Undo(std::string* outError) override;
+		SceneChangeKind GetSceneChange() const override { return SceneChangeKind::Settings; }
+	private:
+		Scene& m_Scene;
+		SceneSettings m_Before;
+		SceneSettings m_After;
 	};
 
 	// Records an edit that is made directly on the scene: construct it with the entities the edit will touch, make
@@ -81,6 +117,8 @@ namespace Strata
 		// Adds an entity (and its descendants) the edit created; call after creating it.
 		void TrackCreated(UUID id);
 
+		// Names the step after all, once what it made is known (e.g. the names of pasted entities).
+		void SetName(std::string name) { m_Name = std::move(name); }
 		// Records the edit on the stack. Returns false when nothing changed.
 		bool Commit(UndoStack& undoStack);
 		// The edit as an action, for a step that holds more (EditorActionGroup); null when nothing changed. Ends the

@@ -242,7 +242,8 @@ namespace Strata
 		if (UI::ToolbarButton("Problems.Build", Icons::Hammer, "Build Scripts", "Build the project's scripts (Ctrl+B)", UI::ButtonStyle { .Enabled =
 			context.Context.HasProject() && !building }))
 		{
-			context.Runner.Run(context.Context, context.Commands, "script.build", { { "wait", true } }, [](const EditorCommandResult&) {});
+			context.Runner.Run(context.Context, context.Commands, "script.build", { { "wait", true } }, [](const EditorCommandResult&) {},
+				CommandOrigin { CommandSource::UI });
 		}
 		ImGui::SameLine();
 		ImGui::AlignTextToFramePadding();

@@ -2,6 +2,8 @@
 #include "Strata/Reflection/Property.h"
 
 #include <cctype>
+#include <cmath>
+#include <string>
 
 namespace Strata
 {
@@ -129,6 +131,62 @@ namespace Strata
 				return &enumValue;
 		}
 		return nullptr;
+	}
+
+	bool PropertyInfo::IsInRange(const PropertyValue& value, std::string* outError) const
+	{
+		if (!HasRange())
+			return true;
+		// Whole numbers without a decimal point or an exponent ("1000000", not "1e+06"), others as short as they are exact.
+		const auto describe = [](float number)
+		{
+			return std::floor(number) == number && std::abs(number) < 1.0e15f ? fmt::format("{:.0f}", number) : fmt::format("{}", number);
+		};
+		auto outside = [&](const std::string& number)
+		{
+			if (outError)
+				*outError = fmt::format("must be between {} and {}, not {}", describe(Min), describe(Max), number);
+			return false;
+		};
+		const auto check = [this](double number) { return number >= static_cast<double>(Min) && number <= static_cast<double>(Max); };
+		switch (Type)
+		{
+			case PropertyType::Int:
+			{
+				const int32_t number = std::get<int32_t>(value);
+				return check(number) || outside(std::to_string(number));
+			}
+			case PropertyType::UInt:
+			{
+				const uint32_t number = std::get<uint32_t>(value);
+				return check(number) || outside(std::to_string(number));
+			}
+			case PropertyType::Float:
+			{
+				const float number = std::get<float>(value);
+				return check(number) || outside(describe(number));
+			}
+			case PropertyType::Vec2:
+			case PropertyType::Vec3:
+			case PropertyType::Vec4:
+			case PropertyType::Color3:
+			case PropertyType::Color4:
+			{
+				bool inside = true;
+				std::visit([&](const auto& vector)
+				{
+					using VectorType = std::decay_t<decltype(vector)>;
+					if constexpr (std::is_same_v<VectorType, glm::vec2> || std::is_same_v<VectorType, glm::vec3> || std::is_same_v<VectorType, glm::vec4>)
+					{
+						for (glm::length_t index = 0; index < VectorType::length() && inside; index++)
+							inside = check(vector[index]) || outside(describe(vector[index]));
+					}
+				}, value);
+				return inside;
+			}
+			default:
+				return true;
+		}
 	}
 
 	bool PropertyInfo::SetValue(void* object, const PropertyValue& value, std::string* outError) const

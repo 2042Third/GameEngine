@@ -54,6 +54,10 @@ StrataCLI call viewport.capture --save-image shot.png    # image results are wri
   `editor.status`, do not start another editor); `5` `--save-image` could not write the image.
 - `--timeout <ms>` (default 30000) bounds the wait for one call. Commands that take frames (`editor.wait`,
   captures, builds) answer only when they finish.
+- The person at the editor sees you: the status bar reads "Agent connected · <your MCP client's name>" (StrataCLI calls
+  name themselves "StrataCLI"), the viewport names your latest command ("Agent: entity.create · 3 s ago") and outlines
+  what it changed for a moment, and the Activity panel (`editor.showPanel {"panel": "Activity"}`) lists every command
+  you, the person and scripts ran, with Re-run and Undo to here.
 
 ### MCP
 
@@ -75,6 +79,8 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | --- | --- |
 | What is open, is it playing, unsaved changes? | `editor.status` |
 | Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress` and whether it is the project's `startScene`, `lastOpen` with how it ended, `play` for a switch a running game asked for, `subScenes` of the running game; `{"wait": true}` answers once nothing is opening); also `editor.status`'s `sceneLoad` |
+| What did the person, other agents or I just do? | `editor.activity {since, limit, source, command}` (every command run: source UI / Automation with the client's name / CommandScript / Internal, parameters, result or error, undo step, entities touched); page with `since` = the returned `latest` |
+| Are there unsaved changes a crashed (or discarding) editor left? | `scene.recoveryStatus` (entries with `id`, `sceneName`, `applicable`; the edited scene's `journal`), then `scene.recover {scene: <id or scene>, action: "apply" \| "discard"}` |
 | Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`; editors run with `--commands` or `--frames` list what they opened without saving it); `editor.removeRecentProject {path}` takes one off |
 | What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
 | Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; `play.start` builds its scripts first) |
@@ -96,10 +102,15 @@ Commands added at run time (for example `script.*`, `viewport.*`, `camera.*` whe
 appear in `editor.commands` and as tools automatically. The viewport commands need rendering: they fail in an
 editor started with `--no-gpu` (use `--headless`):
 
-- `viewport.capture {width?, height?, camera?: "editor" | "scene", overlays?, debugView?, path?}` returns
-  `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, overlays, pendingAssets, pendingTextGlyphs,
-  previewLighting, screenSpaceTexts, hiddenScreenSpaceTexts, debugView, notice?, path?}`. Text is complete in the
-  picture (the capture waits a few frames for new glyphs).
+- `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?, fov?, overlays?, debugView?,
+  waitForAssets?, path?}` returns `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, view, waitedFrames,
+  overlays, pendingAssets, texturesBelowWanted, pendingTextGlyphs, previewLighting, screenSpaceTexts, hiddenScreenSpaceTexts,
+  debugView, notice?, path?}`. Text is complete in the picture, and so are the view's meshes, materials and textures: the
+  capture renders again for up to about five seconds of frames while they load, and up to about two more while textures
+  still lack the finer mip levels the view wants (`waitForAssets: false` takes it at once; `pendingAssets` says what was
+  still loading, `texturesBelowWanted` what was still blurrier than wanted, e.g. under a texture budget). `position` +
+  `target` (and `fov`) look from your own camera: the
+  person's view (`camera.get`) does not move, and the result's `camera` is `"custom"`.
 - **Debug views** show what streaming and level-of-detail selection do: `debugView: "streaming"` tints entities whose
   mesh, material or textures are still loading (yellow, Sulfur) or failed (red, Cinnabar) and draws a box where a mesh
   is not loaded yet; `"lod"` tints entities by the level of detail they are drawn at (green 0, blue 1, yellow 2, red 3+);
@@ -170,8 +181,26 @@ editor started with `--no-gpu` (use `--headless`):
 - **Component values** use the scene file format: `{"Transform": {"Translation": [0, 1, 0], "Rotation": [0, 90, 0],
   "Scale": [1, 1, 1]}}`. Rotations accept Euler degrees `[pitch, yaw, roll]` or a quaternion `[x, y, z, w]` (read
   back as a quaternion). Property names are case-insensitive. `component.get` shows the accepted format of every value.
-- **Undo**: every successful mutating command is one undo step (`edit.undo`, `edit.redo`, `edit.history`). Material
+  Values outside a property's range (`component.list`, `material.get` describe the ranges) are refused with `-32602`
+  naming the range (`Text.FontSize must be between 1 and 1024, not 0.5`); nothing is clamped or changed.
+- **Undo**: every successful mutating command is one undo step (`edit.undo`, `edit.redo`, `edit.history`, whose steps say
+  what they changed: "Create 'Wall'", "Set Intensity of 3 entities"). Copies, pastes and prefab instances are named
+  uniquely among their siblings ("Crate (1)"): read the names back from the results' IDs rather than assuming them. Material
   edits are steps of the same history, but they save their file themselves, so they never mark the scene unsaved.
+- **Unsaved changes are never discarded silently**: `scene.open`, `scene.new`, `project.open`, `project.create`,
+  `project.close`, `project.openSample` and `editor.quit` fail (`-32005`, naming the scene) while the edited scene has
+  unsaved changes (`editor.status` `scene.modified`), also while a copy of it plays. Save first (`scene.save`, or
+  `scene.saveAs` for a scene never saved), or pass `"force": true` when discarding them is what you want; their results
+  report `discardedChanges`. A person may be editing beside you: never force away work you did not make. The person sees
+  a toast naming your client ("Claude Code discarded unsaved changes") with a Recover button.
+- **Recovery**: the editor journals the edited scene's unsaved changes in `.strata/Recovery` (written about 2 s after
+  edits stop; `editor.status` `recovery.journal` has `lastWrite` and `pending`), and even forced discards are kept
+  there and listed at once (the newest 8 discards stay on offer, older ones move to `Recovery/Discarded`; what a crash
+  left always stays). When a project opens with changes an editor left behind, `scene.recoveryStatus` lists them;
+  `scene.recover {"scene": "<id>", "action": "apply"}` reopens the scene with them as one undo step (the scene stays unsaved: save
+  it), `"discard"` drops them. Entries follow their scene by its handle, so moving or renaming a scene (`asset.move`)
+  keeps its changes recoverable (`scenePath` is where the scene is now). Ask the person before recovering or discarding their changes, or show them the choice:
+  `editor.showDialog {"dialog": "recovery"}`.
 - **Play mode**: `play.start` runs a copy of the scene, after building the scripts when their sources changed or they
   are not built while scenes use them (it answers once the game plays, with `built`; a failed build fails it with the
   errors; `{"build": false}` plays what is loaded; while a scene is being opened it fails at once, so wait for
@@ -343,8 +372,10 @@ time), with `stageSum` (at most the frame), `untimed` (the rest of each frame) a
 `ioBusyPercent`, `backgroundBusyPercent` (imports, exports), `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage. The
 person at the editor sees the same in the Performance panel (click the frame pill) and the streaming numbers of
 `asset.stats` in the Streaming panel (click the assets pill); `editor.showPanel {"panel": "Streaming"}` (or
-`"Performance"`, `"Console"`, ...) brings one to the front for them, also as the first command of a script (it fails
-while no project is open: the editor then shows its launcher instead of panels).
+`"Performance"`, `"Console"`, `"Activity"`, ...) brings one to the front for them, also as the first command of a script
+(it fails while no project is open: the editor then shows its launcher instead of panels). `editor.showDialog {"dialog":
+"export" | "newProject" | "openSample" | "recovery" | "about"}` opens a dialog of the window the same way ("recovery" lets the
+person choose what to recover or discard, instead of you choosing for them).
 
 **Play it (simulated input)**: while the game runs (`play.start`), the `input.*` commands press keys and buttons the way a
 player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyReleased` (also while the viewport has no focus).
@@ -382,8 +413,9 @@ and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
 
 **Look at it** (needs rendering, not `--no-gpu`): `camera.focus` or `camera.set`, then
 `StrataCLI call viewport.capture '{"camera": "scene"}' --save-image shot.png` and open `shot.png`; with MCP the
-capture arrives as an image. `pendingAssets` above zero means assets were still loading: wait a few frames and
-capture again. Editor-camera captures can be lit by preview lighting and leave out the HUD (see section 3): judge the
+capture arrives as an image. To look from elsewhere without moving the person's camera, pass `position` and `target`
+(`{"position": [6, 4, 6], "target": [0, 0, 0]}`). The capture waits for what it shows to load; `pendingAssets` above
+zero means something was still loading after that: wait and capture again. Editor-camera captures can be lit by preview lighting and leave out the HUD (see section 3): judge the
 game's look and its HUD from `"camera": "scene"` captures.
 
 **Export**: `project.export {"directory": "<absolute dir outside the project>"}` writes `<Game>.stpak`,
@@ -399,8 +431,24 @@ loads (null: none; the game shows black until its start scene is in); exports ke
 Check the result headless: `<dir>/<Game> --headless --frames 120` (exit code 0). Games load scenes in the background
 too: the first frames run before the start scene is in, so give short checks enough `--frames`.
 
-**Finish**: save (`scene.save`), then `editor.quit`. It refuses while the scene has unsaved changes;
-`{"force": true}` discards them. The editor answers, closes and removes its session file.
+**Repeat a session** (a regression script without writing one): note `journal.latest` of `editor.activity {"limit": 1}` (the newest
+entry) before you start, work, then `editor.activity.export {"path": "Session.json", "since": <that latest>}`. It writes your successful
+edits (and the person's, if they edited meanwhile) as a command script that rebuilds the result on a copy of the project
+as it was when you noted the entry: `StrataEditor --no-gpu --no-automation --quit-after-commands --project <copy>
+--commands Session.json`. Created entities and assets get new IDs in every run, so the script binds them where a result
+gave them (`"bind": {"e12.id": "/id"}`) and refers to them later (`{"$ref": "e12.id"}`); queries of the scene and assets
+you took IDs from (`entity.find`, `scene.hierarchy`, `entity.get`) are part of it. IDs you took from the selection or
+`editor.status` stay as they are (the script does not repeat the person's selection): they work for what the project
+already had. Play mode itself and edits of the running copy are not part of it (`skippedWhilePlaying`), but what you
+changed while playing that outlasts play mode is (materials and other assets, `scene.save`). Changes the person made in
+the inspector, with gizmos or in the material editor have no command, so no script holds them: `editsOutsideCommands`
+(and a `warning`) counts them, and `unrepeatableEdits` counts what `scene.recover` applied (its recovery file is not in
+a copy). Write your own scripts the same way: `"bind": {"crate":
+"/id"}` on a step, `{"$ref": "crate"}` (or `{"$ref": "copy", "pointer": "/entities/0"}`) in any later parameter; a name
+no earlier step binds fails the script before it starts.
+
+**Finish**: save (`scene.save`), then `editor.quit`. Like every command that would replace the scene, it refuses while
+the scene has unsaved changes; `{"force": true}` discards them. The editor answers, closes and removes its session file.
 
 ## 6. Troubleshooting
 
@@ -411,7 +459,7 @@ too: the first frames run before the start scene is in, so give short checks eno
 | `-32602 Unknown parameter 'x'` | Misspelled or unsupported parameter; read `data.parameters` or `editor.commands`. |
 | A call times out (exit 4) | The command takes many frames (or the editor is busy): raise `--timeout`. The command still finishes in the editor; do not launch another one. |
 | Changes vanished after `play.stop` | They were made while playing; make them in edit mode. |
-| `editor.quit` fails with unsaved changes | `scene.save` / `scene.saveAs` first, or `{"force": true}`. |
+| `scene.open`, `scene.new`, `project.*` or `editor.quit` fail with unsaved changes | `scene.save` / `scene.saveAs` first, or `{"force": true}` to discard them. |
 | Headless editor exits at once with code 1 | Its automation could not start (session directory not private, port in use); read its output or `<user data>/Logs/StrataEditor.log`. |
 | The editor went away on its own | It was started with `--idle-timeout` (MCP: 10 minutes) and no client stayed connected; start it again. |
 | `viewport.*` / `camera.*` fail or are missing | The editor runs with `--no-gpu` (restart it with `--headless`), or this build has no viewport commands (check `editor.commands`). |

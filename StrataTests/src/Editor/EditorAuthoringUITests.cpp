@@ -284,7 +284,7 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		CHECK_FALSE(editor.Hierarchy().IsRenaming());
 		CHECK(editor.Get(id).GetName() == "Renamed");
 		CHECK(editor.UndoPosition() == position + 1);
-		CHECK(editor.Context().GetUndoStack().GetUndoName() == "Rename Entity");
+		CHECK(editor.Context().GetUndoStack().GetUndoName() == "Rename 'Original' to 'Renamed'");
 
 		// Escape keeps the name.
 		CHECK(editor.Context().IsSelected(id));
@@ -360,7 +360,7 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		const size_t position = editor.UndoPosition();
 		editor.Press(ImGuiKey_V, ImGuiMod_Ctrl);
 		CHECK(editor.UndoPosition() == position + 1);
-		CHECK(editor.RootNames() == std::vector<std::string> { "Parent", "Parent", "After" });
+		CHECK(editor.RootNames() == std::vector<std::string> { "Parent", "Parent (1)", "After" });
 		// The copy is selected, with a new ID and its child.
 		const Entity copy = editor.Context().GetPrimarySelection();
 		REQUIRE(copy);

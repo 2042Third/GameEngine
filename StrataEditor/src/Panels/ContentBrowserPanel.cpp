@@ -262,7 +262,7 @@ namespace Strata
 				// (the project closed, the target folder is gone) here.
 				if (!result.Success && !(result.ErrorData.is_object() && result.ErrorData.contains("items")))
 					ST_ERROR("Import failed: {}", result.Error);
-			});
+			}, CommandOrigin { CommandSource::UI });
 	}
 
 	void ContentBrowserPanel::Select(EditorContext& context, const AssetBrowserItem& item)
@@ -1012,7 +1012,7 @@ namespace Strata
 			{
 				if (!result.Success)
 					ST_ERROR("Reimport: {}", result.Error);
-			});
+			}, CommandOrigin { CommandSource::UI });
 		}
 		ImGui::Separator();
 		if (ImGui::MenuItem("Delete...", "Delete"))

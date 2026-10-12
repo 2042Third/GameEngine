@@ -2,6 +2,9 @@
 
 #include "Editor/CommandUtils.h"
 #include "Editor/GameExport.h"
+#include "Editor/ProjectSamples.h"
+#include "Editor/ProjectTemplates.h"
+#include "Panels/ActivityPanel.h"
 #include "Panels/AssetInspectorPanel.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/ContentBrowserPanel.h"
@@ -17,6 +20,7 @@
 #include "UI/FileDialogs.h"
 #include "UI/Icons.h"
 #include "UI/ItemProbe.h"
+#include "UI/Notifications.h"
 #include "UI/TextFormat.h"
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
@@ -111,9 +115,9 @@ namespace Strata
 		m_Commands.Register({ "editor.showPanel",
 			"Opens a panel of the editor's window and brings it to the front, e.g. to show the person at the editor what you are looking at: "
 			"Streaming (asset memory per pool against its budget, loads, uploads, the assets), Performance (where the frames go, stage by "
-			"stage), Problems (the last script build's errors and warnings, the scripts' crash with where it happened), Console, "
-			"ContentBrowser, Hierarchy, Inspector, AssetInspector (the Asset tab: the inspected asset, its settings and "
-			"preview) or Viewport. Changes no scene data and records no undo; fails in an editor "
+			"stage), Problems (the last script build's errors and warnings, the scripts' crash with where it happened), Activity (every "
+			"command the person, agents and scripts ran: editor.activity), Console, ContentBrowser, Hierarchy, Inspector, AssetInspector (the "
+			"Asset tab: the inspected asset, its settings and preview) or Viewport. Changes no scene data and records no undo; fails in an editor "
 			"without a window (--no-gpu or headless) and while the launcher shows (no project is open).",
 			CommandUtils::ObjectSchema({ { "panel", { { "type", "string" }, { "enum", panels }, { "description", "The panel to show" } } } }, { "panel" }),
 			[this](EditorContext&, const nlohmann::json& parameters) -> EditorCommandResult
@@ -131,7 +135,76 @@ namespace Strata
 					return EditorCommandResult::Fail("No project is open: the editor shows its launcher instead of the panels. Open or create a project first.");
 				m_Panels.Focus(panel);
 				return EditorCommandResult::Ok({ { "panel", panel } });
-			} });
+			}, EditorCommandKind::Session });
+
+		m_Commands.Register({ "editor.showDialog",
+			"Opens a dialog of the editor's window for the person at it, e.g. to show what you are about to do or for a screenshot: export (the "
+			"Export Game dialog; needs a project), newProject (New Project, with template preselected), openSample (Open Sample: where to copy "
+			"the sample, the first one by default; see project.samples), recovery (Recover Unsaved Changes: the project's recovery data that "
+			"scene.recoveryStatus lists, for the person to recover or discard; needs a project, and closes by itself when nothing applies) or "
+			"about (About Strata). The project dialogs ask about unsaved scene changes first. Changes no scene data and records no undo; fails in "
+			"an editor without a window (--no-gpu or headless). Returns {dialog} and, for openSample, the sample it offers (sample).",
+			CommandUtils::ObjectSchema({
+				{ "dialog", { { "type", "string" }, { "enum", { "export", "newProject", "openSample", "recovery", "about" } }, { "description", "The dialog to open" } } },
+				{ "template", CommandUtils::StringSchema("newProject: the template to preselect (project.templates; default basic3d)") },
+				{ "sample", CommandUtils::StringSchema("openSample: the sample to copy (project.samples; default: the first one)") } }, { "dialog" }),
+			[this](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
+			{
+				CommandArguments arguments(parameters);
+				const std::string dialog = arguments.GetString("dialog");
+				const std::string templateId = arguments.GetString("template", "");
+				std::string sample = arguments.GetString("sample", "");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (dialog != "export" && dialog != "newProject" && dialog != "openSample" && dialog != "recovery" && dialog != "about")
+				{
+					return EditorCommandResult::InvalidParameters(
+						fmt::format("Parameter 'dialog': the editor has no dialog '{}' (export, newProject, openSample, recovery, about)", dialog));
+				}
+				if (!templateId.empty() && !ProjectTemplates::Find(templateId))
+					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'template': unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
+				if (m_Options.Headless)
+					return EditorCommandResult::Fail("This editor runs without a window: it has no dialogs to show");
+
+				if (dialog == "export")
+				{
+					if (!context.HasProject())
+						return EditorCommandResult::Fail("No project is open: there is nothing to export (project.open or project.create first)");
+					ShowExportDialog();
+				}
+				else if (dialog == "newProject")
+				{
+					ShowNewProjectDialog(templateId);
+				}
+				else if (dialog == "openSample")
+				{
+					std::string error;
+					const std::optional<std::vector<ProjectSample>> samples = ProjectSamples::List(context.GetSamplesDirectory(), &error);
+					if (!samples || samples->empty())
+						return EditorCommandResult::Fail(samples ? std::string("No samples were installed next to the editor") : error);
+					if (sample.empty())
+						sample = samples->front().Id;
+					else if (std::none_of(samples->begin(), samples->end(), [&sample](const ProjectSample& offered) { return offered.Id == sample; }))
+						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'sample': no sample '{}' (see project.samples)", sample));
+					ShowOpenSampleDialog(sample);
+				}
+				else if (dialog == "recovery")
+				{
+					if (!context.HasProject())
+						return EditorCommandResult::Fail("No project is open: recovery data belongs to a project (project.open first)");
+					// Read again, for what another editor left since: the dialog waits for the scan.
+					context.GetRecovery().Scan();
+					ShowRecoveryDialog();
+				}
+				else
+				{
+					ShowAboutDialog();
+				}
+				nlohmann::json result = { { "dialog", dialog } };
+				if (dialog == "openSample")
+					result["sample"] = sample;
+				return EditorCommandResult::Ok(std::move(result));
+			}, EditorCommandKind::Session });
 	}
 
 	void EditorLayer::RegisterBuiltinPanels()
@@ -163,6 +236,7 @@ namespace Strata
 		add(EditorPanels::c_Streaming, "Streaming", Icons::HardDrive, []() { return CreateScope<StreamingPanel>(); }, EditorPanelPlacement::Docked, false);
 		add(EditorPanels::c_Performance, "Performance", Icons::ChartColumnStacked, []() { return CreateScope<PerformancePanel>(); }, EditorPanelPlacement::Docked,
 			false);
+		add(EditorPanels::c_Activity, "Activity", Icons::History, []() { return CreateScope<ActivityPanel>(); }, EditorPanelPlacement::Docked, false);
 
 		if (ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
 		{
@@ -170,7 +244,7 @@ namespace Strata
 			{
 				RequestDiscardChanges([this, scene]()
 				{
-					RunEditorCommandDeferred(m_CommandRunner, m_Context, m_Commands, "scene.open", { { "scene", UUIDToJson(scene) } });
+					RunEditorCommandDeferred(m_CommandRunner, m_Context, m_Commands, "scene.open", { { "scene", UUIDToJson(scene) }, { "force", true } });
 				});
 			});
 		}
@@ -313,8 +387,36 @@ namespace Strata
 			ST_INFO("Command script finished ({} commands)", m_CommandScript->GetStepCount());
 		}
 		m_CommandScript.reset();
-		if (m_Options.QuitAfterCommands)
+		if (!m_Options.QuitAfterCommands)
+			return;
+		// The screenshot shows the end of the script: this frame, drawn and on screen before the editor closes (also when
+		// the script finished before the first frame).
+		if (!m_Options.ScreenshotPath.empty())
+			TakeScreenshot(true);
+		else
 			m_Host->Close();
+	}
+
+	void EditorLayer::TakeScreenshot(bool closeAfter)
+	{
+		if (m_ScreenshotRequested)
+			return;
+		m_ScreenshotRequested = true;
+		m_Host->RequestScreenshot([this, path = m_Options.ScreenshotPath, closeAfter](const ReadbackImage& image)
+		{
+			std::string error;
+			if (ImageWriter::SavePNG(image, path, true, &error))
+			{
+				ST_INFO("Saved screenshot to {}", FileSystem::ToUTF8(path));
+			}
+			else
+			{
+				ST_ERROR("Screenshot failed: {}", error);
+				m_Host->SetExitCode(1);
+			}
+			if (closeAfter)
+				m_Host->Close();
+		});
 	}
 
 	void EditorLayer::OnDetach()
@@ -395,8 +497,10 @@ namespace Strata
 		// Started for a tool that has gone away (--idle-timeout): nobody is left to quit it.
 		if (m_Automation.HasIdledOut() && m_Host->IsRunning())
 		{
-			ST_WARN("No automation client for {} s (--idle-timeout): closing the editor{}", m_Options.IdleTimeout.count(),
-				m_Context.IsSceneModified() ? " and discarding unsaved scene changes" : "");
+			const char* discarding = !m_Context.IsSceneModified() ? ""
+				: m_Context.GetRecovery().IsActive() ? " and discarding unsaved scene changes (kept as recovery data of the project)"
+				: " and discarding unsaved scene changes";
+			ST_WARN("No automation client for {} s (--idle-timeout): closing the editor{}", m_Options.IdleTimeout.count(), discarding);
 			m_Host->Close();
 		}
 		const bool lastFrame = m_Options.MaxFrames && m_Host->GetFrameCount() + 1 == *m_Options.MaxFrames;
@@ -407,16 +511,7 @@ namespace Strata
 			m_Host->SetExitCode(1);
 		}
 		if (lastFrame && !m_Options.ScreenshotPath.empty())
-		{
-			m_Host->RequestScreenshot([path = m_Options.ScreenshotPath](const ReadbackImage& image)
-			{
-				std::string error;
-				if (ImageWriter::SavePNG(image, path, true, &error))
-					ST_INFO("Saved screenshot to {}", FileSystem::ToUTF8(path));
-				else
-					ST_ERROR("Screenshot failed: {}", error);
-			});
-		}
+			TakeScreenshot(false);
 	}
 
 	void EditorLayer::UpdateWindowTitle()
@@ -476,7 +571,24 @@ namespace Strata
 		m_ExportDialog.Draw(panelContext);
 		m_NewScriptDialog.Draw(panelContext);
 		m_ExternalEditorDialog.Draw(panelContext);
+		m_RecoveryDialog.Draw(panelContext);
+		// Closed with changes still on offer ("Later"): a toast says where they are.
+		const bool recoveryOpen = m_RecoveryDialog.IsOpen();
+		if (m_RecoveryDialogWasOpen && !recoveryOpen && RecoveryDialog::HasOffer(m_Context))
+		{
+			EditorNotification notification;
+			notification.Title = "Unsaved changes can still be recovered";
+			notification.Message = "File > Recover Unsaved Changes, until they are recovered or discarded";
+			notification.ShowRecovery = true;
+			m_Context.GetNotifications().Post(std::move(notification));
+		}
+		m_RecoveryDialogWasOpen = recoveryOpen;
 		DrawUnsavedChangesModal();
+		// Toasts last, over everything, above the status bar.
+		const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+		const float statusBar = IsLauncherShown() ? 0.0f : m_StatusBarHeight;
+		UI::DrawNotifications(m_Context.GetNotifications(), *this, EditorPanels::c_Console, mainViewport->WorkPos,
+			ImVec2(mainViewport->WorkPos.x + mainViewport->WorkSize.x, mainViewport->WorkPos.y + mainViewport->WorkSize.y - statusBar));
 		if (m_ShowImGuiDemo)
 			ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
 		UpdateFrameRate();
@@ -622,10 +734,12 @@ namespace Strata
 		// Keys the running game receives (e.g. Delete, or Ctrl+D with Ctrl to crouch) must not edit the scene.
 		if (!m_Context.AcceptsEditShortcuts())
 			return;
-		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, global))
-			m_Context.Undo();
-		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Y, global) || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z, global))
-			m_Context.Redo();
+		// Undo and redo go through their commands, so the activity journal shows them and replays repeat them.
+		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Z, global) && m_Context.GetUndoStack().CanUndo() && !m_Context.IsPlaying())
+			RunEditorCommand(m_Context, m_Commands, "edit.undo");
+		if ((ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_Y, global) || ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z, global))
+			&& m_Context.GetUndoStack().CanRedo() && !m_Context.IsPlaying())
+			RunEditorCommand(m_Context, m_Commands, "edit.redo");
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_S, global))
 			SaveScene();
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S, global))
@@ -640,6 +754,8 @@ namespace Strata
 		if (m_Context.IsSceneModified())
 		{
 			m_PendingDiscardAction = std::move(action);
+			m_DiscardQuestionVersion = m_Context.GetUndoStack().GetVersion();
+			m_SceneChangedSinceQuestion = false;
 			m_OpenUnsavedChangesModal = true;
 			return;
 		}
@@ -707,7 +823,8 @@ namespace Strata
 	void EditorLayer::OpenProjectFileNow(const std::filesystem::path& projectFile)
 	{
 		// Through the runner: the project opens at once, its start scene over the next frames (the viewport shows the load).
-		const std::string error = StartEditorCommand(m_CommandRunner, m_Context, m_Commands, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+		const std::string error = StartEditorCommand(m_CommandRunner, m_Context, m_Commands, "project.open",
+			{ { "path", FileSystem::ToUTF8(projectFile) }, { "force", true } });
 		if (!error.empty())
 			ReportError(fmt::format("Could not open {}: {}", UI::DisplayPath(projectFile), error));
 	}
@@ -803,7 +920,34 @@ namespace Strata
 				ST_INFO("Play: {}", result.Error);
 			else if (!result.Success)
 				ST_ERROR("Play: {}", result.Error);
-		});
+		}, CommandOrigin { CommandSource::UI });
+	}
+
+	void EditorLayer::ShowPanel(std::string_view panel)
+	{
+		m_Panels.Focus(panel);
+	}
+
+	void EditorLayer::ShowRecoveryDialog()
+	{
+		m_RecoveryDialog.Open();
+	}
+
+	void EditorLayer::ShowActivity(uint64_t entry)
+	{
+		if (ActivityPanel* activity = m_Panels.Get<ActivityPanel>(EditorPanels::c_Activity))
+			activity->Select(entry);
+		m_Panels.Focus(EditorPanels::c_Activity);
+	}
+
+	void EditorLayer::ShowAsset(AssetHandle asset)
+	{
+		// Inspecting it brings the Asset tab forward (OnImGuiRender follows the inspection); the Content Browser shows where it
+		// lies without taking the front from it.
+		if (!m_Context.SetInspectedAsset(asset))
+			return;
+		if (ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
+			contentBrowser->RevealAsset(m_Context, asset);
 	}
 
 	void EditorLayer::BuildScripts()
@@ -815,7 +959,7 @@ namespace Strata
 		{
 			if (!result.Success && m_Context.GetScriptBuilder().GetLastResult().ID == previousBuild)
 				ST_ERROR("Build Scripts: {}", result.Error);
-		});
+		}, CommandOrigin { CommandSource::UI });
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -843,6 +987,7 @@ namespace Strata
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_ContentBrowser).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Streaming).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Performance).c_str(), bottom);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Activity).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Viewport).c_str(), center);
 		ImGui::DockBuilderFinish(dockspaceId);
 		// On first run the Content Browser is the bottom area's visible tab, and the Inspector the right one's (the Asset tab
@@ -878,6 +1023,7 @@ namespace Strata
 		const ImGuiStyle& style = ImGui::GetStyle();
 		// The status bar uses the caption size.
 		const float statusBarHeight = UI::GetTextSize(UI::TextSize::Caption) * style.FontScaleMain * style.FontScaleDpi + style.FramePadding.y * 2.0f;
+		m_StatusBarHeight = statusBarHeight;
 		ImGui::SetNextWindowPos(viewport->WorkPos);
 		ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x, viewport->WorkSize.y - statusBarHeight));
 		ImGui::SetNextWindowViewport(viewport->ID);
@@ -967,18 +1113,23 @@ namespace Strata
 			if (!launcher)
 			{
 				if (ImGui::MenuItem("Close Project", nullptr, false, m_Context.HasProject()))
-					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "project.close"); });
+					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "project.close", { { "force", true } }); });
 				// Back from Continue without a project (with a project open, Close Project leads there).
 				if (ImGui::MenuItem("Show Launcher", nullptr, false, !m_Context.HasProject()))
 					m_LauncherDismissed = false;
 				UI::ItemProbe::Record("Menu.File.ShowLauncher", !m_Context.HasProject());
 				ImGui::Separator();
 				if (ImGui::MenuItem("New Scene", nullptr, false, !m_Context.IsPlaying()))
-					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "scene.new"); });
+					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "scene.new", { { "force", true } }); });
+				UI::ItemProbe::Record("Menu.File.NewScene", !m_Context.IsPlaying());
 				if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, !m_Context.IsPlaying()))
 					SaveScene();
 				if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S", false, m_Context.HasProject() && !m_Context.IsPlaying()))
 					SaveSceneAs();
+				const bool recoverable = RecoveryDialog::HasOffer(m_Context);
+				if (ImGui::MenuItem("Recover Unsaved Changes...", nullptr, false, recoverable))
+					m_RecoveryDialog.Open();
+				UI::ItemProbe::Record("Menu.File.Recover", recoverable);
 				if (ImGui::MenuItem("Set as Start Scene", nullptr, false, m_Context.HasProject() && m_Context.GetSceneHandle().IsValid()))
 					RunEditorCommand(m_Context, m_Commands, "project.setStartScene", { { "scene", UUIDToJson(m_Context.GetSceneHandle()) } });
 				ImGui::Separator();
@@ -1012,9 +1163,9 @@ namespace Strata
 			const std::string undo = m_Context.GetUndoStack().GetUndoName();
 			const std::string redo = m_Context.GetUndoStack().GetRedoName();
 			if (ImGui::MenuItem(undo.empty() ? "Undo" : ("Undo " + undo).c_str(), "Ctrl+Z", false, !undo.empty() && !m_Context.IsPlaying()))
-				m_Context.Undo();
+				RunEditorCommand(m_Context, m_Commands, "edit.undo");
 			if (ImGui::MenuItem(redo.empty() ? "Redo" : ("Redo " + redo).c_str(), "Ctrl+Y", false, !redo.empty() && !m_Context.IsPlaying()))
-				m_Context.Redo();
+				RunEditorCommand(m_Context, m_Commands, "edit.redo");
 			// The selection's actions: also shortcuts of the Hierarchy and the Viewport while they have the keyboard focus.
 			ImGui::Separator();
 			const bool selected = m_Context.GetPrimarySelection().IsValid();
@@ -1131,7 +1282,7 @@ namespace Strata
 		if (!m_SampleMenuRead)
 		{
 			m_SampleMenuRead = true;
-			const EditorCommandResult result = m_Commands.Execute(m_Context, "project.samples", nlohmann::json::object());
+			const EditorCommandResult result = m_Commands.Execute(m_Context, "project.samples", nlohmann::json::object(), CommandOrigin { CommandSource::UI });
 			if (result.Success && result.Value.contains("samples"))
 			{
 				for (const nlohmann::json& sample : result.Value["samples"])
@@ -1482,7 +1633,7 @@ namespace Strata
 		const ImGuiWindow* console = ImGui::FindWindowByName(m_Panels.GetWindowName(EditorPanels::c_Console).c_str());
 		if (!console || console->DockId == 0)
 			return;
-		for (const char* id : { EditorPanels::c_Problems, EditorPanels::c_Streaming, EditorPanels::c_Performance })
+		for (const char* id : { EditorPanels::c_Problems, EditorPanels::c_Streaming, EditorPanels::c_Performance, EditorPanels::c_Activity })
 		{
 			// Only windows the layout knows nothing about: a panel the user moved elsewhere stays there.
 			const std::string name = m_Panels.GetWindowName(id);
@@ -1496,11 +1647,35 @@ namespace Strata
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		if (m_Automation.IsRunning())
 		{
-			const uint32_t clients = m_Automation.GetClientCount();
-			const std::string text = fmt::format("port {}{}{} {}", m_Automation.GetPort(), c_Separator, clients, clients == 1 ? "client" : "clients");
-			const std::string tooltip = fmt::format("Tools and AI agents control this editor through StrataCLI (or its MCP server, StrataCLI mcp), which "
-				"finds it through its session file.\n{} pending requests, {} answered", m_Automation.GetPendingRequestCount(), m_Automation.GetCompletedRequestCount());
-			UI::Pill("Status.Automation", Icons::Bot, text, clients > 0 ? colors.Info : colors.TextSecondary, tooltip.c_str());
+			// Who is connected, by the names clients gave (informational: never trusted).
+			if (m_AutomationPillVersion != m_Automation.GetClientsVersion() || m_AutomationPillPort != m_Automation.GetPort())
+			{
+				m_AutomationPillVersion = m_Automation.GetClientsVersion();
+				m_AutomationPillPort = m_Automation.GetPort();
+				m_AutomationClients = m_Automation.GetClients();
+				const auto named = std::find_if(m_AutomationClients.begin(), m_AutomationClients.end(), [](const RpcClientInfo& client) { return !client.Name.empty(); });
+				const std::string name = named != m_AutomationClients.end() ? fmt::format("{}{}", c_Separator, named->Name) : std::string();
+				if (m_AutomationClients.empty())
+					m_AutomationPillText = fmt::format("port {}{}no agent", m_AutomationPillPort, c_Separator);
+				else if (m_AutomationClients.size() == 1)
+					m_AutomationPillText = "Agent connected" + name;
+				else
+					m_AutomationPillText = fmt::format("{} agents connected{}", m_AutomationClients.size(), name);
+			}
+			UI::Pill("Status.Automation", Icons::Bot, m_AutomationPillText, m_AutomationClients.empty() ? colors.TextSecondary : colors.Info);
+			if (UI::IsTooltipDue())
+			{
+				std::string tooltip = fmt::format("Tools and AI agents control this editor through StrataCLI (or its MCP server, StrataCLI mcp), which "
+					"finds it through its session file (port {}).", m_AutomationPillPort);
+				const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+				for (const RpcClientInfo& client : m_AutomationClients)
+				{
+					tooltip += fmt::format("\n{} (connected {})", client.Name.empty() ? std::string("A client without a name") : client.Name,
+						UI::DescribeTimeAgo(client.ConnectedAt / 1000, now));
+				}
+				tooltip += fmt::format("\n{} pending requests, {} answered", m_Automation.GetPendingRequestCount(), m_Automation.GetCompletedRequestCount());
+				ImGui::SetTooltip("%s", tooltip.c_str());
+			}
 			return false;
 		}
 		if (!m_Options.EnableAutomation)
@@ -1589,8 +1764,18 @@ namespace Strata
 		return m_HasScriptBuild;
 	}
 
+	void EditorLayer::DrawDiscardQuestion()
+	{
+		DrawUnsavedChangesModal();
+	}
+
 	void EditorLayer::DrawUnsavedChangesModal()
 	{
+		// A dialog that asked draws the question over itself before the window's own call comes (popups belong to the level
+		// they are opened at: opened over the whole window, the question would close that dialog).
+		if (m_UnsavedChangesModalFrame == ImGui::GetFrameCount())
+			return;
+		m_UnsavedChangesModalFrame = ImGui::GetFrameCount();
 		if (m_OpenUnsavedChangesModal)
 		{
 			UI::OpenModal(c_UnsavedChangesModal);
@@ -1599,6 +1784,12 @@ namespace Strata
 		if (!UI::BeginModal(c_UnsavedChangesModal, "Unsaved Changes"))
 			return;
 		ImGui::Text("Save changes to '%s'?", m_Context.GetEditScene()->GetName().c_str());
+		if (m_SceneChangedSinceQuestion)
+		{
+			ImGui::TextColored(UI::GetThemeColors().Warning, "The scene changed while you were asked (an agent or a script edited it).");
+			UI::ItemProbe::Record("UnsavedChanges.Changed");
+			ImGui::TextUnformatted("Don't Save discards those changes too.");
+		}
 		ImGui::Spacing();
 		if (UI::DialogButton("UnsavedChanges.Save", "Save", true))
 		{
@@ -1610,10 +1801,21 @@ namespace Strata
 		ImGui::SameLine();
 		if (UI::DialogButton("UnsavedChanges.DontSave", "Don't Save"))
 		{
-			ImGui::CloseCurrentPopup();
-			if (m_PendingDiscardAction)
-				m_PendingDiscardAction();
-			m_PendingDiscardAction = nullptr;
+			// The answer is for the changes the person was asked about: changes made since (an agent's, a script's) are asked
+			// about again rather than discarded unseen. Without unsaved changes left, nothing is discarded either way.
+			const uint64_t version = m_Context.GetUndoStack().GetVersion();
+			if (m_Context.IsSceneModified() && version != m_DiscardQuestionVersion)
+			{
+				m_DiscardQuestionVersion = version;
+				m_SceneChangedSinceQuestion = true;
+			}
+			else
+			{
+				ImGui::CloseCurrentPopup();
+				if (m_PendingDiscardAction)
+					m_PendingDiscardAction();
+				m_PendingDiscardAction = nullptr;
+			}
 		}
 		ImGui::SameLine();
 		if (UI::DialogButton("UnsavedChanges.Cancel", "Cancel"))

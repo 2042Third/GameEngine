@@ -120,7 +120,7 @@ namespace Strata
 		if (UI::DialogButton("NewScript.Create", "Create", true, canCreate) || (submitted && canCreate))
 		{
 			const EditorCommandResult result = context.Commands.Execute(context.Context, "script.create",
-				{ { "class", m_ClassName }, { "template", m_Empty ? "empty" : "behaviour" }, { "open", true } });
+				{ { "class", m_ClassName }, { "template", m_Empty ? "empty" : "behaviour" }, { "open", true } }, CommandOrigin { CommandSource::UI });
 			if (result.Success)
 			{
 				// The file exists either way; say why it did not open rather than leave the person waiting for their editor.
@@ -128,7 +128,7 @@ namespace Strata
 					ST_WARN("New Script: '{}' was written, but it did not open: {}", result.Value["relativePath"].get<std::string>(), result.Value["openError"].get<std::string>());
 				// The class can be attached once a module holds it: the build starts now (the status bar shows it), and the
 				// Inspector offers the class when it finished.
-				const EditorCommandResult build = context.Commands.Execute(context.Context, "script.build", { { "wait", false } });
+				const EditorCommandResult build = context.Commands.Execute(context.Context, "script.build", { { "wait", false } }, CommandOrigin { CommandSource::UI });
 				if (!build.Success)
 					ST_WARN("New Script: the scripts did not start building ({}); build them before attaching the class (Scripts > Build Scripts)", build.Error);
 				m_Outcome.clear();
@@ -219,7 +219,8 @@ namespace Strata
 		PlaceButtons(width, { "Save", "Cancel" });
 		if (UI::DialogButton("ExternalEditor.Save", "Save", true) || submitted)
 		{
-			const EditorCommandResult result = context.Commands.Execute(context.Context, "script.setExternalEditor", { { "command", m_Command } });
+			const EditorCommandResult result = context.Commands.Execute(context.Context, "script.setExternalEditor", { { "command", m_Command } },
+				CommandOrigin { CommandSource::UI });
 			if (result.Success)
 				open = false;
 			else

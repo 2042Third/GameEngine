@@ -287,7 +287,7 @@ namespace Strata
 				if (*action == ButtonAction::Tap)
 					result["frames"] = frames;
 				return RunButtonAction(context, SimulatedControlType::Key, *key, *action, frames, wait, std::move(result), "key");
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "input.mouseButton",
 			"Presses a mouse button for the running game (play mode), like input.key: scripts see it through Input::IsMouseButtonDown/Pressed/"
@@ -318,7 +318,7 @@ namespace Strata
 				if (*action == ButtonAction::Tap)
 					result["frames"] = frames;
 				return RunButtonAction(context, SimulatedControlType::MouseButton, *button, *action, frames, wait, std::move(result), "mouse button");
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "input.mouseMove",
 			"Moves the simulated mouse pointer of the running game (play mode) to a position in the game view, in pixels from its top-left "
@@ -336,7 +336,7 @@ namespace Strata
 					return NoGameError();
 				Input::SimulateMouseMove(*position);
 				return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, { { "position", { position->x, position->y } } }, "pointer move");
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "input.scroll",
 			"Turns the simulated scroll wheel of the running game (play mode) for one game frame: scripts read it with Input::GetScrollDelta "
@@ -353,7 +353,7 @@ namespace Strata
 					return NoGameError();
 				Input::SimulateScroll(*delta);
 				return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, { { "delta", { delta->x, delta->y } } }, "scroll");
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "input.gamepadButton",
 			"Presses a gamepad button for the running game (play mode), like input.key: scripts see it through Input::IsGamepadButtonDown/"
@@ -389,7 +389,7 @@ namespace Strata
 					result["frames"] = frames;
 				const uint16_t code = SimulatedInput::MakeGamepadCode(gamepad, static_cast<uint32_t>(*button));
 				return RunButtonAction(context, SimulatedControlType::GamepadButton, code, *action, frames, wait, std::move(result), "gamepad button");
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "input.gamepadAxis",
 			"Moves a gamepad stick or trigger of the running game (play mode): scripts read the value through Input::GetGamepadAxis and "
@@ -466,7 +466,7 @@ namespace Strata
 					answer["held"] = DescribeSimulatedInput(pollContext);
 					return EditorCommandResult::Ok(std::move(answer));
 				});
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "input.releaseAll",
 			"Ends every hold of simulated input in the running game (play mode): held keys, mouse buttons and gamepad buttons go up and held "
@@ -490,7 +490,7 @@ namespace Strata
 					{ "gamepadAxes", DescribeGamepadAxes(input) } };
 				input.ReleaseAll();
 				return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, { { "released", std::move(released) } }, "releases");
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "input.state",
 			"Simulated input in the running game: the keys, mouse buttons and gamepad buttons the input.* commands hold, the gamepad axes they "
@@ -512,7 +512,7 @@ namespace Strata
 				}
 				state["gamepads"] = std::move(gamepads);
 				return EditorCommandResult::Ok(std::move(state));
-			} });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 	}
 
 }

@@ -123,6 +123,15 @@ TEST_SUITE("Editor.UI.Text")
 		CHECK(UI::DescribeTimeAgo(0, std::numeric_limits<int64_t>::max()) == "1970-01-01");
 		CHECK(UI::DescribeTimeAgo(UI::c_LatestTime - 90, std::numeric_limits<int64_t>::max()) == "a minute ago");
 
+		// Short ages, for what just happened (the viewport's agent chip, the Activity panel).
+		CHECK(UI::DescribeSecondsAgo(0.4) == "now");
+		CHECK(UI::DescribeSecondsAgo(-3.0) == "now");
+		CHECK(UI::DescribeSecondsAgo(std::numeric_limits<double>::quiet_NaN()) == "now");
+		CHECK(UI::DescribeSecondsAgo(3.7) == "3 s ago");
+		CHECK(UI::DescribeSecondsAgo(125.0) == "2 min ago");
+		CHECK(UI::DescribeSecondsAgo(7300.0) == "2 h ago");
+		CHECK(UI::DescribeSecondsAgo(std::numeric_limits<double>::infinity()) == "277777777 h ago");
+
 		CHECK(UI::GetInitials("Space Game") == "SG");
 		CHECK(UI::GetInitials("FeatureTest") == "FT");
 		CHECK(UI::GetInitials("tetris") == "T");

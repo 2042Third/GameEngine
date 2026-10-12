@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Editor/CommandJournal.h"
+#include "Editor/EditorNotifications.h"
 #include "Editor/EditorGameWindow.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/ExternalEditor.h"
@@ -9,6 +11,7 @@
 #include "Editor/ProjectThumbnail.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
+#include "Editor/SceneRecovery.h"
 #include "Editor/ScriptBuild.h"
 #include "Editor/ScriptSources.h"
 #include "Editor/SimulatedInput.h"
@@ -30,6 +33,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -304,6 +308,40 @@ namespace Strata
 		bool Redo(std::string* outError = nullptr);
 
 		//////////////////////////////////////////////////////////////////////////
+		// Activity
+		//////////////////////////////////////////////////////////////////////////
+
+		// The activity journal: every command run in this editor (EditorCommandRegistry::Execute records them), by the
+		// person, agents, scripts or the editor itself (editor.activity, the Activity panel).
+		CommandJournal& GetJournal() { return *m_Journal; }
+		const CommandJournal& GetJournal() const { return *m_Journal; }
+		// Shared with pending commands, which complete their entries even when they are cancelled after the context went.
+		const Ref<CommandJournal>& GetJournalRef() const { return m_Journal; }
+
+		//////////////////////////////////////////////////////////////////////////
+		// Recovery
+		//////////////////////////////////////////////////////////////////////////
+
+		// Autosave and crash recovery (SceneRecovery): the journal of the edited scene's unsaved changes, written in the
+		// background into the project's ".strata/Recovery", and the recovery files found there when the project opened (a
+		// crash, or changes discarded on purpose). Every replacement of the edited scene with unsaved changes writes them
+		// there first, so nothing is lost even then.
+		SceneRecovery& GetRecovery() { return m_Recovery; }
+		const SceneRecovery& GetRecovery() const { return m_Recovery; }
+		// What the person should hear about (the UI's toasts): failed or warning UI commands, script builds and crashes,
+		// finished exports, recovery data on offer.
+		EditorNotifications& GetNotifications() { return m_Notifications; }
+		const EditorNotifications& GetNotifications() const { return m_Notifications; }
+		// The file of a scene asset of the project (absolute) and its path relative to the asset directory; empty for the
+		// null handle or without a project.
+		std::pair<std::filesystem::path, std::string> GetSceneFile(AssetHandle scene) const;
+		// Applies recovery data (SceneRecovery::Read): opens its scene (a scene never saved: a new scene of its name) unless
+		// it is the edited scene without unsaved changes, then turns it into what the recovered edits left as one undo step
+		// back to the saved state. The scene stays modified (unsaved). Fails while playing, and while the edited scene has
+		// unsaved changes that opening another would discard, unless `force`. outApplied: the entities it touched.
+		bool ApplyRecovery(const RecoveryData& data, bool force, size_t* outApplied = nullptr, std::string* outError = nullptr);
+
+		//////////////////////////////////////////////////////////////////////////
 		// Scripts
 		//////////////////////////////////////////////////////////////////////////
 
@@ -442,13 +480,28 @@ namespace Strata
 		// Makes a scene that was opened the edited one: the editor camera, the trim of what the previous scene used (sparing
 		// what the load brought in, `loaded`).
 		void FinishOpenScene(Ref<Scene> scene, AssetHandle handle, std::span<const AssetHandle> loaded);
-		void ResetScene(Ref<Scene> scene, AssetHandle handle);
+		// Where the unsaved changes a scene replacement discards end up, for the notification that tells the person.
+		enum class DiscardNotice : uint8_t
+		{
+			Recoverable = 0, // The project stays open: the changes are offered at once (Recover...)
+			ProjectCloses,   // The project closes: they are offered when it opens again
+			None             // The editor itself goes away: nobody to tell
+		};
+		// Replaces the edited scene. Unsaved changes of the scene that goes are written as recovery data first, and the
+		// person hears that they were discarded and by whom (NotifyDiscardedChanges).
+		void ResetScene(Ref<Scene> scene, AssetHandle handle, DiscardNotice notice = DiscardNotice::Recoverable);
+		// Posts that the unsaved changes of `sceneName` were discarded, naming who did it (the command running now: the
+		// person, an agent, a command script) and where they are kept.
+		void NotifyDiscardedChanges(const std::string& sceneName, DiscardOutcome outcome, const std::string& reason, DiscardNotice notice);
 		// Gives a template's new scene its start scene file and the template's editor view (CreateProject).
 		bool SaveTemplateStartScene(std::string_view templateId, std::string* outError);
 		// The assets a template's scene uses in this project (NewScene).
 		TemplateAssets GetTemplateAssets(std::string_view templateId);
 		// Frames the scene again once the meshes that were loading when it was first framed have loaded (OpenScene).
 		void UpdatePendingFrame();
+		// Scenes moved (asset.move, renames): the recovery journal follows the edited scene to its new place, and recovery
+		// entries of a scene that moved are read again. Looks only when the asset manager's metadata changed.
+		void FollowSceneMoves();
 		void OpenScriptEngine(bool created);
 		// The open project's thumbnail cache (with a GPU), kept in its intermediate directory.
 		void OpenThumbnails();
@@ -465,6 +518,11 @@ namespace Strata
 		void StartScriptUsageScan();
 		// Takes the finished scan's answer: a project whose scenes use scripts that are not built is told so once.
 		void UpdateScriptUsageScan();
+		// Posts how the game export ended (EditorNotifications).
+		void NotifyExportFinished(const GameExport& exporter);
+		// Posts the imports that failed while nobody waited for them (EditorAssetManager::TakeImportFailures): one toast for
+		// all of them, showing the latest.
+		void NotifyImportFailures();
 		// Stops play mode (and reports the fault) when the script module crashed. Returns true if it did.
 		bool StopOnScriptFault();
 		// Saves the viewport state and closes the project; with activateBuiltinAssets the built-in asset manager becomes active.
@@ -498,6 +556,7 @@ namespace Strata
 		EditorSceneLoadStatus m_SceneLoadStatus;
 		uint64_t m_NextSceneLoadID = 1;
 		AssetHandle m_SceneHandle = UUID::Null();
+		uint64_t m_SceneMetadataVersion = UINT64_MAX; // The asset manager's metadata version FollowSceneMoves looked at last
 		SceneState m_SceneState = SceneState::Edit;
 		float m_MasterVolumeBeforePlay = 1.0f;
 		bool m_GameInputActive = false;
@@ -524,6 +583,9 @@ namespace Strata
 		std::unordered_set<UUID> m_SelectionSet; // The same entities, for IsSelected
 		AssetHandle m_InspectedAsset = UUID::Null();
 		uint64_t m_InspectionVersion = 0;
+		Ref<CommandJournal> m_Journal = CreateRef<CommandJournal>();
+		// Declared before the undo stack it observes, so the stack never outlives it.
+		SceneRecovery m_Recovery;
 		UndoStack m_UndoStack;
 		PrefabSync m_PrefabSync;
 		Scope<ThumbnailCache> m_Thumbnails;
@@ -532,6 +594,8 @@ namespace Strata
 		Ref<ScriptEngine> m_ScriptEngine;
 		ScriptBuilder m_ScriptBuilder;
 		Ref<GameExport> m_GameExport;
+		bool m_GameExportNotified = false; // Its outcome was posted (EditorNotifications, NotifyExportFinished)
+		EditorNotifications m_Notifications;
 		ScriptBuildLoad m_LastScriptBuildLoad;
 		std::optional<ScriptFault> m_LastScriptFault;
 		uint64_t m_PlayBuildID = 0;

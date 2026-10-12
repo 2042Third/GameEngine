@@ -661,6 +661,38 @@ namespace Strata
 		return first;
 	}
 
+	bool Scene::HasChildNamed(Entity parent, std::string_view name, Entity except) const
+	{
+		if (!m_NameIndex.Built)
+			BuildLookupIndex(m_NameIndex, true);
+
+		const auto bucket = m_NameIndex.Buckets.find(HashLookupValue(name));
+		if (bucket == m_NameIndex.Buckets.end())
+			return false;
+		const entt::entity parentHandle = parent ? parent.GetHandle() : entt::entity(entt::null);
+		const entt::entity skipped = except ? except.GetHandle() : entt::entity(entt::null);
+		// Whichever is shorter: the parent's children, or every entity of that name. A name many parents' children share (a
+		// "Node" in every group) would otherwise cost a check all of them, though only the siblings matter.
+		const size_t siblings = parentHandle == entt::null ? m_RootEntities.size() : GetHierarchy(parentHandle).ChildCount;
+		if (siblings < bucket->second.size())
+		{
+			for (entt::entity child = GetFirstChild(parentHandle); child != entt::null; child = GetHierarchy(child).NextSibling)
+			{
+				m_LookupVisitCount++;
+				if (child != skipped && m_Registry.get<NameComponent>(child).Name == name)
+					return true;
+			}
+			return false;
+		}
+		for (const entt::entity handle : bucket->second)
+		{
+			m_LookupVisitCount++;
+			if (handle != skipped && GetHierarchy(handle).Parent == parentHandle && m_Registry.get<NameComponent>(handle).Name == name)
+				return true;
+		}
+		return false;
+	}
+
 	std::vector<Entity> Scene::FindEntitiesByTag(std::string_view tag) const
 	{
 		if (!m_TagIndex.Built)

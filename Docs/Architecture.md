@@ -1866,6 +1866,16 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   used is kept in imgui.ini, `StrataLauncher`, first `<home>/StrataProjects`), About Strata (`UI/AboutDialog`: build,
   GPU, startup time, and `ThirdPartyNotices.md` compiled in and shown through `UI/Markdown`) and the unsaved-changes
   question. Panels reach them through `EditorPanelContext::Shell` (`UI/EditorShell.h`, implemented by `EditorLayer`).
+  The question is the UI's half of a rule the commands enforce themselves: every command that replaces the edited scene
+  (`scene.open`, `scene.new`, `project.open`, `project.create`, `project.close`, `project.openSample`, `editor.quit`)
+  fails while it has unsaved changes unless `force: true` (`CommandUtils::CheckUnsavedChanges`) and reports
+  `discardedChanges`, so neither an agent nor a script can throw away a person's work by accident; the UI asks first and
+  then passes `force`. An answer covers the changes the scene had then: the question's Don't Save keeps the question open,
+  saying why, when the scene changed while it waited (an agent or a script edited it; `UndoStack::GetVersion` against the
+  version it was asked for), and New Project and Open Sample, which open after the question, ask again at Create when
+  the scene changed meanwhile (against the version they opened with). Dialogs that ask while they stay open (the
+  recovery dialog's Recover, those two) draw the question over themselves (`EditorShell::DrawDiscardQuestion` inside
+  their modal): a modal opened over the whole window would close them, since ImGui keeps one popup per level.
   A `.stproj` file dropped on the window opens its project. The look comes from
   `UI/Theme` (the Bedrock palette and its meanings; `ApplyTheme` is the `ImGuiLayer` style callback), `UI/EditorFonts`
   (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's icons merged into the Inter
@@ -1878,7 +1888,17 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   for the GPU, the display and the pacer, which panels get in `EditorPanelContext::Frame`. **Instruments**: the
   Streaming panel (`Panels/StreamingPanel`) and the Performance panel (`Panels/PerformancePanel`) are closed until the
   status bar's assets and frame pills (or the View menu) open them, docked beside the Console (`DockNewToolPanels` for
-  layouts saved before them). Panels collect what the status bar shows in `OnUpdate`, also while closed: the Streaming
+  layouts saved before them), and so is the **Activity panel** (`Panels/ActivityPanel`): the activity journal as a
+  clipped table (source icon, command, compact parameters, result or error, milliseconds) filtered by text, source and
+  "changes only" (kind Edit), its rows rebuilt only when `CommandJournal::GetVersion` or the filters change and the
+  parameter previews made once per entry, with the selected entry's JSON (`CommandJournal::Describe`) and its actions:
+  Copy as script (a one-step command script), Re-run (through the runner, from the UI) and Undo to here (`edit.undo`
+  until the entry's step is the latest applied, so the journal shows the undos). The commands these run are journaled, and
+  a full ring drops its oldest entry for each, possibly the one shown: they run after the details are drawn, with what
+  they need copied from the entry (`ActivityPanel::RunAction`). A `force` the person gave was their
+  answer to the unsaved-changes question then: Copy as script leaves it out of their commands, and Re-run of a command
+  that takes `force` asks again (`EditorShell::RequestDiscardChanges`). `EditorShell::ShowActivity(entry)`
+  selects and reveals an entry (the viewport's agent chip, the toasts). Panels collect what the status bar shows in `OnUpdate`, also while closed: the Streaming
   panel takes the active asset manager's `GetStats` once per frame after the frame's commands ran (so its totals equal
   what `asset.stats` returned in that frame) and keeps 120 frames of uploaded bytes, the Performance panel samples the
   job system for the frame pill's job count. The assets pill shows the pool closest to its budget
@@ -1932,7 +1952,87 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   log, play, selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
   `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`) and
   `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel`, the one command about its
-  window. Conventions: AGENTS.md, "Editor".
+  window. Conventions: AGENTS.md, "Editor". Every command has a kind (`EditorCommandKind`: Edit, the default, Query or
+  Session), which `editor.commands` lists and replays use, and queries whose results follow the editor's session rather
+  than the project's content (the selection, `editor.status`, the journal, what is loaded or running) say so
+  (`EditorCommandResults::Session`): replays never bind the IDs those show.
+- **Command line** (`EditorApplication.cpp`). `CreateApplication` answers `--help` and `--version` and refuses arguments
+  outside its table (`c_Arguments`; exit code 3 with the usage) before it starts the log, the modules or a window:
+  `Application::SetStartupExitCode` is what `main` returns when no application was made. Options that take numbers
+  (`--frames`, `--automation-port`, `--idle-timeout`, `--ui-scale`) are checked there too (`CheckValues`): a value they
+  do not take exits 3 as well, so a typo never leaves a scripted run without its frame limit. With
+  `--quit-after-commands` and `--screenshot`, the end of the command script requests the capture of that frame and the
+  capture closes the editor (`EditorLayer::TakeScreenshot`), so the screenshot shows how the script ended, also when it
+  ended before the first frame.
+- **Notifications** (`EditorNotifications.h`, `UI/Notifications.h`). The context keeps what the person should hear about
+  (`EditorNotification`: level, title, message, the journal entry, the asset, whether the Console or the recovery dialog
+  has more): at most `c_MaxActive` (4), identical ones merged with a count, and those of a `Group` merged into one that
+  shows the latest (a post may stand for several: `Count`), each expiring after its level's lifetime (`Expire`,
+  `KeepAlive` while hovered). Feeds: `NotifyCommandOutcome` for commands of the UI (`RunEditorCommand`, the runner when
+  the origin is `CommandSource::UI`: failures and warnings, with `EditorCommandResult::JournalId`, which `Execute` now sets
+  for every result), `EditorContext::BuildScripts` and `OnScriptBuildFinished`, `StopOnScriptFault`, the end of a game
+  export (`NotifyExportFinished`, once per export: an export that does not start leaves the announced one), imports that
+  failed while nobody waited for them (`NotifyImportFailures`, below), unsaved changes that a scene replacement discarded
+  (`NotifyDiscardedChanges`, from `ResetScene`: who discarded them, from the command that runs now,
+  `CommandJournal::GetOutermostRunningId`, which a deferred command is during its polls too; a warning naming the agent or
+  the command script, information when the person answered Don't Save; Recover while the project stays open, where they
+  are kept when it closes, and nothing when the person discarded what could not be kept) and `EditorLayer` when the
+  recovery dialog closes with changes still on offer. `UI::DrawNotifications` draws them as toasts in one window at the
+  bottom right of the work area, above the status bar, kept in front without being focused (`BringWindowToDisplayFront`,
+  `NoFocusOnAppearing`); it returns at once while there are none. A title too long for its line wraps before the close
+  button, and its count then leads the message. Their actions go through the `EditorShell`: Show in Activity, Show Asset
+  (`ShowAsset`: the Asset tab inspects it and the Content Browser reveals it), Show in Console and Recover.
+- **Import failures** (`EditorAssetManager::TakeImportFailures`). An import that fails while a caller waits for its
+  outcome (`ReimportAsset`, `SetImportSettingsInBackground`, `ReimportAssetInBackground`, and `ImportExternal` for the
+  assets whose failures its items report: a file's own, every asset of a folder: the source's `ImportAwaited`) is that
+  caller's to report, e.g. `asset.reimport` and `asset.import` fail with it. The others, the scan's imports as a project opens and
+  those of files changed on disk, are reported to nobody but the log: the manager keeps the latest `c_MaxImportFailures`
+  (64) of them and how many failed, and `EditorContext::Update` takes them after the manager's update and posts one
+  toast for all of them (group `AssetImport`: "Import failed", the latest path and error, the count, Show Asset and Show
+  in Console). Checking for them costs a comparison per frame. Show Asset leads to the Asset tab, which says why the last
+  import failed (and its warnings) under the asset's actions, above the settings that may fix it
+  (`AssetInspectorPanel::DrawImportOutcome`).
+- **Activity journal** (`CommandJournal.h`). `EditorCommandRegistry::Execute` records every command it runs in the
+  context's journal: its origin (`CommandOrigin`: UI from `RunEditorCommand` and the panels, Automation with the client's
+  name from `EditorAutomation`, CommandScript from `EditorCommandScript`, Internal for code and for commands that commands
+  run, which are recorded as children of theirs), the parameters (whole up to 256 KB, a shortened copy beyond, flagged),
+  whether the scene was playing, then the outcome: a summary of the result (scalars, containers by their size; kept as
+  compact JSON text written straight from the result, since a JSON tree costs allocations per member) with every ID it
+  holds by JSON pointer (written only for the IDs found), or the error and its kind, the duration, and the undo step it recorded with the
+  entities it touched (the undo stack's record counter and `GetLastRecordedSerial` attribute steps to the command whose
+  handler or poll recorded them). A deferred command's entry stays pending until `PollCommandResult` sees its final
+  result, or the runner cancels it, so each command is recorded once with its real end. The ring keeps at most 2,000
+  entries and 8 MB; recording costs about 1.5 us per command (`Perf.Editor.JournalPerCommand`, entity.get with the
+  journal against without; about 0.8 us of an `entity.create`, spread over the parameters' copy, the undo step's note
+  and the result's summary). The entry being recorded and the step just recorded are found at the ends of their rings
+  first: the command's own work has pushed the rest out of the caches. `editor.activity {since, limit, source, command}`
+  reads it.
+- **Replays** (`CommandJournal::BuildReplayScript`, `editor.activity.export {path, since, overwrite}`). A session after a
+  journal entry becomes a command script that repeats it on a copy of the project as it was then (a regression script made
+  by doing the work once): the successful top-level commands of kind Edit that did not change a running copy, in order
+  (an undo or redo repeats as one). Those run while playing count when they outlast play mode (materials, assets,
+  `scene.save`); the commands that changed the running copy say so (`EditorCommandResult::RunningCopy`, set with their
+  warning) and are left out (`skippedWhilePlaying`). Entities and assets the session created get new IDs in every run, so IDs are followed
+  through the session: an ID a result of an edit or a query gave first is bound where that result gave it (`"bind":
+  {"e12.id": "/id"}`) and replaced by a reference where later parameters use it (`{"$ref": "e12.id"}`), and a query whose
+  result gave such an ID joins the script (a lookup, e.g. `entity.find` of a template entity). IDs used before any result
+  gave them, results of session commands, of queries while playing and of edits of the running copy (it has the edited
+  scene's IDs), results that follow the session (`EditorCommandResults::Session`: `selection.get` and `editor.status` show
+  what the person selected, which a replay does not repeat; the journal collects no IDs of them) and built-in asset handles
+  stay literal: they name what every copy has. The export fails rather than write a script that
+  would not repeat the session: when the journal no longer holds every entry after `since` (its ring dropped the first
+  ones; also for `since` 0, the session's start), or when the parameters of a command it needs were shortened.
+  Continuous UI edits (inspector fields, gizmo drags, the material editor) record their undo steps directly, not through
+  commands, so no script holds them: the journal counts the edits no command made (`NoteEditsOutsideCommands`, before
+  every top-level handler and poll: the undo steps recorded since, one however many merges made it, as `UndoStack::
+  GetStepCount` counts them, and merges alone into an earlier step as one) and the export reports them
+  (`editsOutsideCommands`, with a warning), and so are the undo steps of commands it does not repeat (`scene.recover`,
+  a Session command whose recovery file the copy does not have: `unrepeatableEdits`). Undo and redo from the UI run
+  `edit.undo` and `edit.redo`. `StrataEditor.Replay` (`StrataTests/Editor/ReplaySession.cmake`) runs a session, exports it,
+  runs the export on a copy made before the session and compares the scene and assets with references to assets by their
+  paths (read from the projects' `.meta` files) and the other IDs numbered by appearance across the documents
+  (`StrataTests --strata-test-helper=compare-documents`, `Tests::ProjectNormalizer` in `src/Editor/SceneComparison.h`);
+  `Editor.Replay` does the same with 50 commands of an automation client in-process.
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
@@ -1941,6 +2041,14 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `Panels/ContentBrowserPanel.cpp`), and so do opening projects and samples from the launcher, the File menu, a dropped
   project file and the Open Sample dialog (`StartEditorCommand`, which hands a failure known at once back to the dialog or
   the launcher that shows it).
+- **Command scripts** (`EditorCommandScript`, also `EditorCommandRunner.h`): `--commands` files are arrays of steps
+  `{command, parameters, expect, bind}` run one at a time through the runner. `bind` names values of a step's result by
+  JSON pointer (`{"crate": "/id"}`, `""` for the whole result) and later parameters use them as `{"$ref": "crate"}`, or
+  `{"$ref": "crate", "pointer": "/entities/0"}` for a part of the bound value, anywhere in their objects and arrays.
+  Loading checks every reference against the names earlier steps bind, so a misspelt or out-of-order name fails the
+  script before anything runs. A step that fails, or whose result holds nothing at a bound pointer, leaves those names
+  without a value: steps referring to them fail as invalid parameters without running (the script goes on and the run's
+  exit code becomes 1), never with a value of an earlier run of the step.
 - **Opening scenes** (`EditorContext::BeginOpenScene`, `scene.open`). The scene's file is read again (the asset is
   unloaded first) through `SceneLoader` while the editor goes on drawing the edited scene, which is read-only meanwhile:
   `CommitEdit` rolls an edit back, mutating scene commands fail (their `Finish`), and so do `scene.setSettings`, undo and
@@ -1970,11 +2078,74 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   batch), `entity.duplicate {entities}` (one deserialization of all of them, so references between copies in different
   sibling lists are remapped too, then one placement batch), `entity.paste`, `entity.setActive {entities}`,
   `component.add {entities}`, `component.remove {entities}` (all or nothing) and `component.set {entities}`;
+  Steps of commands name what they changed ("Create 'Wall'", "Delete 3 entities", "Set Color and Intensity of 'Lamp'",
+  "Move 'Lamp' under 'Crate'"; one entity by its quoted name, more by their number), and copies, pastes and prefab
+  instances get unique names among their siblings (`SceneEdit::MakeNameUnique`: "Crate (1)", the smallest free number
+  after the name without its own; `Scene::HasChildNamed` looks at the parent's children or at the entities with that
+  name in the name index, whichever are fewer, so neither long sibling lists nor a name many parents' children share
+  make a copy cost more than the shorter of the two).
   `PropertyEdit`'s multi-entity `SetPropertyWithUndo` is the inspector's
   form (it writes only the vector components an edit changed). Continuous
   edits merge by key; the stack keeps 512 steps and a save point for the modified flag, which only steps that change the
   scene move (`EditorAction::ChangesScene`). Edits while playing are not recorded. The selection keeps its order in a
-  vector and answers `IsSelected` from a set.
+  vector and answers `IsSelected` from a set. Recorded states are shared and never change (a merge replaces the "after"
+  vector), actions say what their effect is made of (`EditorAction::GetSceneChange`: entity states, settings, nothing of
+  the scene, or something only a snapshot captures; a group of actions, `EditorActionGroup`, what its one member that
+  changes the scene says, and Other when several do) and hand out their states (`GetEntityStates`), and the stack reports
+  every step it records, merges (`merged`: the step's states replace what its notification before said), undoes or redoes
+  to its `UndoStackObserver`, so journals follow the scene without copying it. Every action has a serial number that a merge keeps (`UndoStack::FindSerial`, `GoTo`).
+- **Autosave and recovery** (`SceneRecovery.h`). `EditorContext` keeps a journal of the edited scene's unsaved changes in
+  `<project>/.strata/Recovery/<scene>-<session>.strecovery`: a header line (scene handle and path, the SHA-256 of the
+  saved scene file the changes apply to, hashed on an I/O job when the scene opens, a megabyte at a time so that a scene of
+  a million entities (170 MB) costs no memory of its size, or from the document when it is saved,
+  the owning process, whether the changes were discarded on purpose) and a body with the scene's settings and the steps:
+  the entity states the undo steps since the last save left, in order. Applied one after the other with
+  `SceneEdit::ApplyEntities`, as redo would, they turn the saved file into the edited scene; a step that creates, removes
+  or moves no entity folds into the step before it (positions recorded there stay true), so the file grows with the
+  structural edits only, and drags and value edits keep one step. The journal follows the undo stack as its observer,
+  which costs a reference per step on the main thread (a drag merges a frame at a time into its step, and each merge
+  replaces the step's states waiting for the write, so a drag of many entities holds one frame's, not every frame's); a write hands the references to an I/O job that folds and
+  serializes them, so its cost follows the edits, not the scene's size. It is written `c_QuietSeconds` (2 s) after edits
+  stop and at least every `c_MaxIntervalSeconds` (10 s) while they go on: the most work a crash can take is about ten
+  seconds. Saving removes the file and so does undoing back to the save point. A scene that was never saved has no file
+  to apply changes to: its journal is complete, its first step every entity the scene started with (a template's
+  handful, captured on the main thread when it opens) and the edits after it; a step of kind Other turns a journal into
+  a complete snapshot at the next write. Snapshots are taken only of scenes with at most `c_MaxSnapshotEntities` (256)
+  entities; otherwise the journal is skipped until the scene is saved and `editor.status` (the `recovery` section's
+  `journal.skipped`) says why. Whenever the edited scene is
+  replaced with unsaved changes (`EditorContext::ResetScene`: a forced command, Don't Save, closing the editor) the
+  journal is written at once and marked discarded, so nothing is lost even then (`EndScene` says whether it was kept:
+  `DiscardOutcome`), the directory is scanned again after that write, so the changes are offered at once (File > Recover
+  Unsaved Changes, `scene.recoveryStatus`), and the person is told who discarded them (Notifications, above). An agent that
+  discards scene after scene must not bury the person in offers: a scan offers the newest `c_MaxOfferedDiscards` (8)
+  changes discarded on purpose, those that still apply first, and moves the others to `Recovery/Discarded`; what a crash
+  left is never moved. The dialog lists more than four entries in a scrolling list of a fixed height (an auto-sized one
+  would measure itself only after the dialog was centered for its first size); asked for while a scan runs, it opens once
+  the scan has finished, so it appears centered at its full size; and `UI::BeginModal` moves an open dialog that grew past
+  the window back inside it (it never re-centers one, which would move a dialog under the person's pointer as an error
+  line comes and goes). File operations (writes, removals,
+  scans, reads) run one at a time on I/O jobs in the order they were asked for, so a removal after a save is never
+  overtaken by an earlier write; the editor waits for them only when it closes. Opening a project scans the directory:
+  a file whose owner process still runs (its id with the start time recorded, since ids are reused, also this process's)
+  and has not discarded it belongs to that editor and is left out; the others are
+  offered (the editor's Recover Unsaved Changes dialog, `UI/RecoveryDialog`, opens by itself once per opened project
+  with changes that still apply; File > Recover Unsaved Changes reopens it) and listed by `scene.recoveryStatus`. An
+  entry applies only while the scene asset exists and its file hashes to the recorded hash. Scenes are found by their
+  handles: a scan looks for an entry's scene file where the asset manager has the scene now (`SetSceneLocator`, a snapshot
+  of the scenes' paths taken when the scan starts), so changes of a scene that was moved or renamed (`asset.move`, the
+  Content Browser) stay recoverable; the journal of the edited scene follows a move at the next frame (or before a
+  discard) and names the new path from its next write (`EditorContext::FollowSceneMoves`, which looks only when the
+  asset manager's metadata version changed), and entries of a scene that moved, also while a scan ran, are read again.
+  `scene.recover {action: "apply"}` reads the file on an I/O job, opens the scene (a scene never saved: a new one of its
+  name) and applies the steps as one undo step back to the saved state (`SceneRecoveryAction`, also the settings); the
+  scene stays modified, its own journal is written at once and the applied file removed after that write. `"discard"`
+  moves the file to `Recovery/Discarded` (the newest 20 are kept); the dialog's Discard All does that for every entry.
+  Measurements on the reference machine (Release, `Perf.Editor.RecoveryWriteMaxFrame100k`, `RecoverySnapshotMaxEntities`): on a saved scene of 100,000 entities, a
+  frame that asks for the write of an edit of 10,000 of them costs 0.04 ms above an idle frame (handing over references
+  and the settings), the I/O job writes those 10,000 states in 15 to 30 ms and a journal of all 100,000 in about 180 ms
+  while frames stay at 0.05 ms, so writing every 10 s keeps an I/O thread at most 2% busy even for edits of the whole
+  scene; capturing a snapshot costs about 2.3 us per entity on the main thread (0.6 ms for 256), which is why snapshots
+  stop there.
 - **Hierarchy model** (`HierarchyView.h`). The hierarchy panel's rows without UI: the visible entities of the active
   scene as a flat depth-first list (`HierarchyRow`: handle, ID, depth, has-children, expanded, match), walked along the
   scene's sibling links into expanded entities only, or, with a filter (`HierarchyFilter`: name words, `c:` component,
@@ -2179,7 +2350,21 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   each frame `EditorAutomation::Update` registers new or changed commands as methods and runs queued requests through
   the runner, so a deferred command answers when it completes. Clients find the editor through session files
   (`Network/EditorSession.h`). StrataCLI (`StrataCLI/src/CLI/`) connects with `RpcClient` (`EditorConnection`),
-  starts editors (`EditorLauncher`) and serves MCP (`McpServer`, one tool per command).
+  starts editors (`EditorLauncher`) and serves MCP (`McpServer`, one tool per command). Clients may name themselves in
+  `rpc.handshake` (`clientName`: at most 64 characters, control and text-direction characters removed by
+  `SanitizeRpcClientName`, informational only and never used for trust): `RpcServer::GetClients` lists them, responders
+  carry them (`RpcResponder::GetClient`) into the activity journal, and `editor.status` lists them under
+  `automation.connectedClients`. StrataCLI names itself "StrataCLI"; its MCP server forwards the MCP client's
+  `clientInfo.name` from `initialize` (reconnecting to the same editor when the name changes). **Presence**: the person
+  sees who works with them. The automation pill reads "Agent connected · <name>" (several: "N agents connected"), its
+  text made again only when `RpcServer::GetClientsVersion` changes and its tooltip (each client and when it connected)
+  only while it shows. The journal keeps the latest finished automation command (`GetLatestAutomationActivity`: command,
+  client, outcome, the entities its undo step touched); the viewport draws it as a chip at the image's top right ("Agent:
+  entity.create · 3 s ago", while a client is connected or for `c_AgentChipSeconds` after; a click shows it in the
+  Activity panel) and, for `c_AgentFlashSeconds` (600 ms), outlines the projected bounds of those entities (at most 64)
+  in the accent, fading out (`ViewportPanel::DrawAgentFlash`, an `ImDrawList` rectangle per entity, bounds taken once when
+  the command finished). While nothing of this shows the panel does no work for it, and only the fade keeps the editor at
+  its full frame rate (`IsAnimating`, from the clock, so a viewport hidden mid-fade does not keep it there).
 - **Viewport** (`EditorViewport.h`, `ViewportRenderer.h`). `EditorViewport` holds the editor camera (and the cameras of
   the project's other scenes), the settings and two `ViewportRenderer`s (panel and captures). The panel renders during
   `OnImGuiRender`; `ResolveViewportView` picks the scene's primary camera while playing and the editor camera otherwise,
@@ -2202,8 +2387,13 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   untinted (`StreamingViewStats::EntitiesPerMipShortfall`). The colors are `ViewportSettings::DebugColors`, which the UI
   sets from the theme (not saved).
   Picking reads one pixel of the entity-ID buffer asynchronously and completes in `EditorContext::Update`.
-  `viewport.capture` renders on the next frame (with its own `debugView` if given), polls a `TextureReadback`, encodes
-  the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`). The scene gizmos draw the range
+  `viewport.capture` renders on the next frame (with its own `debugView` if given, and through a camera of its own, a
+  copy of the editor camera with the given `position`, `target` and `fov`, which leaves the person's camera alone),
+  renders again on the following frames while text glyphs or (`waitForAssets`, the default) assets of its view are
+  pending, or textures it draws are coarser than the level its view wants (`TextureStreamingPolicy::ComputeWantedLevel` of
+  the renderer's `GetVisibleTextures`, known from its first render on: a texture counts as loaded with its mip tail), up
+  to a bound of frames each, polls a `TextureReadback`, encodes the PNG on a worker and saves on an I/O
+  thread (`EditorViewportCommands.cpp`). The scene gizmos draw the range
   spheres and cones of the selection's lights only (`SceneGizmoSettings::AllLightRanges` off, the selection's subtrees as
   `LightRangeEntities`); other lights show as their icons, so a scene full of point lights stays readable.
 - **Project pictures** (`Editor/ProjectThumbnail.h`). After each scene save (`EditorContext::OnSceneSaved`, from

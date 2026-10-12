@@ -280,7 +280,7 @@ namespace Strata
 							handle.ToString(), AssetTypeToString(type)));
 				}
 				return EditorCommandResult::Fail(fmt::format("Loading {} failed: {}", handle.ToString(), manager ? manager->GetAssetError(handle) : "no asset manager"));
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "animation.preview",
 			"Shows an animator of the edited scene posed while the scene does not play (the viewport and viewport.capture show it, skinned meshes "
@@ -358,7 +358,7 @@ namespace Strata
 					}
 					return std::nullopt;
 				});
-			} });
+			}, EditorCommandKind::Session });
 	}
 
 }

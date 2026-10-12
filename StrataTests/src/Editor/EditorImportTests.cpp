@@ -4,6 +4,7 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorNotifications.h"
 #include "Editor/HarnessEditor.h"
 #include "TestHelpers.h"
 
@@ -17,9 +18,11 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Font.h>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -909,6 +912,10 @@ TEST_SUITE("Editor.Import")
 		CHECK_FALSE(FileSystem::Exists(harness.Assets / "Textures")); // The folder it made goes too
 		CHECK(harness.Run("asset.list", { { "includeBuiltin", false } })["assets"].empty());
 		CHECK(CountLogEntries(sequence, "Broken.png") == 1);
+		// Its caller reports the failure: no toast tells of an import nobody waited for.
+		CHECK_FALSE(harness.Context.GetAssetManager()->HasImportFailures());
+		const std::deque<EditorNotification>& toasts = harness.Context.GetNotifications().GetActive();
+		CHECK(std::none_of(toasts.begin(), toasts.end(), [](const EditorNotification& toast) { return toast.Group == "AssetImport"; }));
 
 		// Kept on request, with its error.
 		EditorCommandResult kept = harness.Finish(harness.Start("asset.import", { { "file", FileSystem::ToUTF8(broken) }, { "keepOnFailure", true } }));

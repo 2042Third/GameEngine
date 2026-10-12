@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/SceneEdit.h"
 #include "Editor/UndoStack.h"
 
 #include <string>
@@ -96,6 +97,25 @@ namespace
 		bool ChangesScene() const override { return false; }
 	private:
 		int& m_Value;
+	};
+
+	// An edit that describes its effect on the scene as entity states, as scene edits do (SceneEditAction).
+	class StatesAction final : public EditorAction
+	{
+	public:
+		const std::string& GetName() const override
+		{
+			static const std::string s_Name = "States";
+			return s_Name;
+		}
+
+		bool Execute(std::string*) override { return true; }
+		bool Undo(std::string*) override { return true; }
+		SceneChangeKind GetSceneChange() const override { return SceneChangeKind::Entities; }
+		Ref<const std::vector<EntityState>> GetEntityStates(bool undone) const override { return undone ? m_Before : m_After; }
+	private:
+		Ref<const std::vector<EntityState>> m_Before = CreateRef<std::vector<EntityState>>(1);
+		Ref<const std::vector<EntityState>> m_After = CreateRef<std::vector<EntityState>>(2);
 	};
 
 }
@@ -314,7 +334,7 @@ TEST_SUITE("Editor.Undo")
 		AddAction* secondAction = second.get();
 		stack.Execute(std::move(second));
 		stack.MarkSaved();
-		const uint64_t changes = stack.GetChangeCount();
+		const uint64_t changes = stack.GetVersion();
 
 		secondAction->SetUndoFails(true);
 		std::string error;
@@ -324,7 +344,7 @@ TEST_SUITE("Editor.Undo")
 		CHECK(stack.GetPosition() == 2);
 		CHECK_FALSE(stack.CanRedo());
 		CHECK_FALSE(stack.IsModified());
-		CHECK(stack.GetChangeCount() == changes);
+		CHECK(stack.GetVersion() == changes);
 
 		secondAction->SetUndoFails(false);
 		CHECK(stack.Undo());
@@ -386,9 +406,9 @@ TEST_SUITE("Editor.Undo")
 		group->Add(nullptr); // Left out
 		group->Add(CreateScope<AddAction>(value, 2));
 		CHECK(group->ChangesScene()); // One of its actions does
-		const uint64_t changes = stack.GetChangeCount();
+		const uint64_t changes = stack.GetVersion();
 		CHECK(stack.Execute(std::move(group)));
-		CHECK(stack.GetChangeCount() > changes);
+		CHECK(stack.GetVersion() > changes);
 		CHECK(value == 2);
 		CHECK(outside == 1);
 		CHECK(stack.GetHistory() == std::vector<std::string> { "Both" });
@@ -412,5 +432,34 @@ TEST_SUITE("Editor.Undo")
 		EditorActionGroup files("Files");
 		files.Add(CreateScope<OutsideAction>(outside));
 		CHECK_FALSE(files.ChangesScene());
+	}
+
+	TEST_CASE("A group describes its change of the scene by its one member that changes the scene")
+	{
+		int outside = 0;
+		int value = 0;
+		// Files and one scene edit (prefab.apply, a linking prefab.create): the edit's entity states are the group's, so the
+		// recovery journal follows the step without a snapshot of the scene.
+		EditorActionGroup filesAndStates("Files and states");
+		filesAndStates.Add(CreateScope<OutsideAction>(outside));
+		Scope<StatesAction> states = CreateScope<StatesAction>();
+		const StatesAction& member = *states;
+		filesAndStates.Add(std::move(states));
+		CHECK(filesAndStates.GetSceneChange() == SceneChangeKind::Entities);
+		CHECK(filesAndStates.GetEntityStates(false) == member.GetEntityStates(false));
+		CHECK(filesAndStates.GetEntityStates(true) == member.GetEntityStates(true));
+
+		// Two members that change the scene: only a snapshot captures what they did together.
+		EditorActionGroup two("Two");
+		two.Add(CreateScope<StatesAction>());
+		two.Add(CreateScope<AddAction>(value, 1));
+		CHECK(two.GetSceneChange() == SceneChangeKind::Other);
+		CHECK(two.GetEntityStates(false) == nullptr);
+
+		// Files only: the scene does not change.
+		EditorActionGroup files("Files");
+		files.Add(CreateScope<OutsideAction>(outside));
+		CHECK(files.GetSceneChange() == SceneChangeKind::None);
+		CHECK(files.GetEntityStates(false) == nullptr);
 	}
 }

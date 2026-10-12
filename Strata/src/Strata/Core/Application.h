@@ -64,6 +64,11 @@ namespace Strata
 		void SetExitCode(int exitCode) { m_ExitCode = exitCode; }
 		int GetExitCode() const { return m_ExitCode; }
 
+		// The exit code of a process whose CreateApplication made no application: 1 (it could not start) unless set, e.g. 0
+		// after printing what --help asked for, or 3 for a command line it does not understand.
+		static void SetStartupExitCode(int exitCode);
+		static int GetStartupExitCode();
+
 		void OnEvent(Event& event);
 
 		void PushLayer(Layer* layer);

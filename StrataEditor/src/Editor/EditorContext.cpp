@@ -23,6 +23,8 @@
 #include <Strata/Scene/SceneSerializer.h>
 
 #include <algorithm>
+#include <limits>
+#include <string_view>
 #include <utility>
 
 namespace Strata
@@ -126,6 +128,29 @@ namespace Strata
 				{ "cursor", cursor == CursorMode::Locked ? "locked" : (cursor == CursorMode::Hidden ? "hidden" : "normal") },
 				{ "saveDirectory", saves ? nlohmann::json(FileSystem::ToUTF8(*saves)) : nlohmann::json(nullptr) } };
 		});
+		// The recovery journal follows every step the undo stack applies; recovery files apply only to scenes the project
+		// still has, which scans find by their handles wherever they moved.
+		m_UndoStack.SetObserver(&m_Recovery);
+		m_Recovery.BeginScene(*m_EditScene, UUID::Null(), {}, {});
+		m_Recovery.SetEntryValidator([this](const RecoveryEntry& entry) -> std::string
+		{
+			if (!entry.Scene.IsValid())
+				return {};
+			if (!m_AssetManager || m_AssetManager->GetAssetType(entry.Scene) != AssetType::Scene)
+				return fmt::format("The scene {} ('{}') is no longer in the project", entry.Scene.ToString(), entry.ScenePath);
+			return {};
+		});
+		m_Recovery.SetSceneLocator([this]()
+		{
+			SceneRecovery::ScenePaths scenes;
+			if (m_AssetManager)
+			{
+				for (const AssetMetadata& metadata : m_AssetManager->GetAllMetadata(AssetType::Scene))
+					scenes.emplace(metadata.Handle, metadata.Path);
+			}
+			return scenes;
+		});
+		SetStatusProvider("recovery", [this]() { return m_Recovery.DescribeStatus(); });
 		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details).
 		SetStatusProvider("assets", [this]()
 		{
@@ -255,6 +280,9 @@ namespace Strata
 		m_AssetManager->PurgeTrash(c_TrashKeepTime);
 		OpenThumbnails();
 		ST_INFO("Opened project '{}' ({})", m_Project->GetConfig().Name, FileSystem::ToUTF8(m_Project->GetProjectDirectory()));
+		// Unsaved changes an editor left behind (a crash) or discarded are offered once the scan has read them.
+		m_Recovery.SetProject(m_Project->GetIntermediateDirectory() / SceneRecovery::c_DirectoryName, m_Project->GetAssetDirectory());
+		m_Recovery.Scan();
 		OpenScriptEngine(created);
 		StartScriptUsageScan();
 
@@ -318,7 +346,11 @@ namespace Strata
 			if (!m_Viewport.Save(GetViewportStateFile(), &error))
 				ST_WARN("The viewport state was not saved: {}", error);
 		}
-		ResetScene(CreateRef<Scene>(), UUID::Null());
+		// Unsaved changes of the scene that goes reach the project's recovery directory before it closes. Without the built-in
+		// assets to fall back to, the editor itself goes away, and nobody is left to tell.
+		ResetScene(CreateRef<Scene>(), UUID::Null(), activateBuiltinAssets ? DiscardNotice::ProjectCloses : DiscardNotice::None);
+		if (hadProject)
+			m_Recovery.SetProject({}, {});
 		InspectEntities(); // The project's assets go with it
 		// After the scene went: the next project starts from the default view, with none of this project's scene cameras.
 		if (hadProject)
@@ -334,6 +366,7 @@ namespace Strata
 			if (AssetManager::GetActive() == m_AssetManager)
 				AssetManager::SetActive(nullptr);
 			m_AssetManager.reset();
+			m_SceneMetadataVersion = UINT64_MAX;
 		}
 		if (m_Project)
 		{
@@ -349,9 +382,17 @@ namespace Strata
 	// Scene
 	////////////////////////////////////////////////////////////////////////////////
 
-	void EditorContext::ResetScene(Ref<Scene> scene, AssetHandle handle)
+	void EditorContext::ResetScene(Ref<Scene> scene, AssetHandle handle, DiscardNotice notice)
 	{
 		Stop();
+		// Discarded changes name where the scene is now, also when it moved in this frame.
+		FollowSceneMoves();
+		// Unsaved changes of the scene that goes are written as recovery data first, so nothing is lost whatever replaced
+		// it (a forced command, the unsaved-changes dialog's Don't Save, closing the editor).
+		std::string lostReason;
+		const DiscardOutcome discarded = m_Recovery.EndScene(*m_EditScene, IsSceneModified(), &lostReason);
+		if (discarded != DiscardOutcome::Unmodified && notice != DiscardNotice::None)
+			NotifyDiscardedChanges(m_EditScene->GetName(), discarded, lostReason, notice);
 		// The scene that goes keeps its view for when it opens again.
 		m_Viewport.StoreSceneCamera(m_SceneHandle);
 		m_PendingFrame.reset();
@@ -362,6 +403,18 @@ namespace Strata
 		m_UndoStack.Clear();
 		// The scene that goes is destroyed off the frame (a million entities take tens of milliseconds).
 		Scene::ReleaseInBackground(std::move(previous));
+		const auto [sceneFile, scenePath] = GetSceneFile(handle);
+		m_Recovery.BeginScene(*m_EditScene, handle, sceneFile, scenePath);
+	}
+
+	std::pair<std::filesystem::path, std::string> EditorContext::GetSceneFile(AssetHandle scene) const
+	{
+		if (!m_AssetManager || !scene.IsValid())
+			return {};
+		const std::optional<AssetMetadata> metadata = m_AssetManager->GetMetadata(scene);
+		if (!metadata || metadata->IsBuiltin() || metadata->IsSubAsset())
+			return {};
+		return { m_AssetManager->GetAssetDirectory() / FileSystem::FromUTF8(metadata->Path), metadata->Path };
 	}
 
 	bool EditorContext::NewScene(const std::string& name, std::string_view templateId)
@@ -583,12 +636,15 @@ namespace Strata
 		const nlohmann::json json = SceneSerializer::Serialize(*m_EditScene);
 		std::vector<AssetHandle> references;
 		const bool scanned = AssetDependencies::ScanDocument(AssetType::Scene, json, references);
-		const std::string document = JsonUtils::Dump(json, 1, '\t') + "\n";
+		std::string document = JsonUtils::Dump(json, 1, '\t') + "\n";
 		const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(document.data()), document.size());
 		if (!m_AssetManager->SaveNativeAsset(m_SceneHandle, bytes, false, outError, scanned ? &references : nullptr))
 			return false;
 		m_UndoStack.MarkSaved();
 		OnSceneSaved();
+		// The changes are on disk now: the recovery journal starts again from this document.
+		const auto [sceneFile, scenePath] = GetSceneFile(m_SceneHandle);
+		m_Recovery.OnSaved(m_SceneHandle, sceneFile, scenePath, std::move(document));
 		return true;
 	}
 
@@ -606,7 +662,7 @@ namespace Strata
 		const nlohmann::json json = SceneSerializer::Serialize(*m_EditScene);
 		std::vector<AssetHandle> references;
 		const bool scanned = AssetDependencies::ScanDocument(AssetType::Scene, json, references);
-		const std::string document = JsonUtils::Dump(json, 1, '\t') + "\n";
+		std::string document = JsonUtils::Dump(json, 1, '\t') + "\n";
 		const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(document.data()), document.size());
 		const AssetHandle handle = m_AssetManager->CreateNativeAsset(relativePath, bytes, outError, scanned ? &references : nullptr);
 		if (!handle.IsValid())
@@ -618,6 +674,8 @@ namespace Strata
 		m_EditScene->SetSourceAsset(handle);
 		m_UndoStack.MarkSaved();
 		OnSceneSaved();
+		const auto [sceneFile, scenePath] = GetSceneFile(handle);
+		m_Recovery.OnSaved(handle, sceneFile, scenePath, std::move(document));
 		return true;
 	}
 
@@ -1007,6 +1065,138 @@ namespace Strata
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
+	// Recovery
+	////////////////////////////////////////////////////////////////////////////////
+
+	bool EditorContext::ApplyRecovery(const RecoveryData& data, bool force, size_t* outApplied, std::string* outError)
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		const RecoveryEntry& entry = data.Entry;
+		if (!m_AssetManager)
+			return fail("No project is open");
+		if (IsPlaying())
+			return fail("Stop play mode first (play.stop): recovering replaces the edited scene");
+		const bool modified = IsSceneModified();
+		const bool replaces = !entry.Scene.IsValid() || m_SceneHandle != entry.Scene || modified;
+		if (replaces && modified && !force)
+		{
+			return fail(fmt::format("The scene '{}' has unsaved changes, which recovering '{}' would discard: save them first or pass force: true",
+				m_EditScene->GetName(), entry.SceneName));
+		}
+		if (entry.Scene.IsValid())
+		{
+			// The saved scene the changes apply to, as its file holds it.
+			if (replaces && !OpenScene(entry.Scene, outError))
+				return false;
+		}
+		else
+		{
+			// A scene that was never saved: its complete journal fills a new, empty scene of its name.
+			ResetScene(CreateRef<Scene>(entry.SceneName), UUID::Null());
+		}
+
+		Scene& scene = *m_EditScene;
+		// Every entity the steps touch; for a snapshot also every entity it lacks, which goes.
+		std::vector<UUID> ids;
+		std::unordered_set<UUID> listed;
+		for (const std::vector<EntityState>& step : data.Steps)
+		{
+			for (const EntityState& state : step)
+			{
+				if (listed.insert(state.ID).second)
+					ids.push_back(state.ID);
+			}
+		}
+		std::vector<EntityState> removals;
+		if (entry.Complete)
+		{
+			for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
+			{
+				if (listed.insert(entity.GetUUID()).second)
+				{
+					ids.push_back(entity.GetUUID());
+					EntityState removal;
+					removal.ID = entity.GetUUID();
+					removals.push_back(std::move(removal));
+				}
+			}
+		}
+
+		std::vector<EntityState> before = SceneEdit::CaptureEntities(scene, ids);
+		const SceneSettings settingsBefore = scene.GetSettings();
+		// Step by step, as redo would apply them: each step's positions are those of the scene after the step before.
+		for (const std::vector<EntityState>& step : data.Steps)
+		{
+			if (removals.empty())
+			{
+				SceneEdit::ApplyEntities(scene, step);
+				continue;
+			}
+			std::vector<EntityState> states = step;
+			states.insert(states.end(), removals.begin(), removals.end());
+			SceneEdit::ApplyEntities(scene, states);
+		}
+		SceneSettings settingsAfter = settingsBefore;
+		if (!data.Settings.is_null() && !SceneRecovery::DeserializeSettings(data.Settings, settingsAfter))
+			ST_WARN("Recovering '{}': its scene settings could not be read; the scene keeps its own", entry.SceneName);
+		scene.GetSettings() = settingsAfter;
+		std::vector<EntityState> after = SceneEdit::CaptureEntities(scene, ids);
+		m_UndoStack.BreakMerge();
+		m_UndoStack.Record(CreateScope<SceneRecoveryAction>(scene, std::move(before), std::move(after), settingsBefore, settingsAfter));
+		PruneSelection();
+		// The journal of the edited scene holds these changes from now on: once it is written, the file that held them goes.
+		m_Recovery.Replace(scene, IsSceneModified(), entry.Id);
+		if (outApplied)
+			*outApplied = ids.size();
+		ST_INFO("Recovered the unsaved changes of '{}' ({} entities); undo returns to the saved scene", entry.SceneName, ids.size());
+		return true;
+	}
+
+	void EditorContext::NotifyDiscardedChanges(const std::string& sceneName, DiscardOutcome outcome, const std::string& reason, DiscardNotice notice)
+	{
+		// Who discarded them: the command that runs now, from its top (a command another one runs acts for that one). Without
+		// one, or from the interface, the person answered the unsaved-changes question themselves.
+		const CommandJournalEntry* command = m_Journal->Find(m_Journal->GetOutermostRunningId());
+		const bool byPerson = !command || command->Source == CommandSource::UI || command->Source == CommandSource::Internal;
+		// The person knows what they chose; when nothing could be kept there is nothing to offer them either.
+		if (byPerson && outcome == DiscardOutcome::Lost)
+			return;
+
+		EditorNotification notification;
+		notification.Level = byPerson ? NotificationLevel::Info : NotificationLevel::Warning;
+		if (byPerson)
+			notification.Title = "Unsaved changes discarded";
+		else if (command->Source == CommandSource::Automation)
+			notification.Title = fmt::format("{} discarded unsaved changes", command->Client.empty() ? std::string("An agent") : command->Client);
+		else
+			notification.Title = "A command script discarded unsaved changes";
+		const std::string what = byPerson ? fmt::format("The changes to '{}'", sceneName) : fmt::format("{} replaced the scene '{}'. Its changes", command->Command, sceneName);
+		if (outcome == DiscardOutcome::Lost)
+		{
+			notification.Message = fmt::format("{} are gone: {}.", what, reason);
+		}
+		else if (notice == DiscardNotice::ProjectCloses && m_Project)
+		{
+			notification.Message = fmt::format("{} are kept as recovery data of the project '{}', which offers them when it opens again.", what,
+				m_Project->GetConfig().Name);
+		}
+		else
+		{
+			notification.Message = fmt::format("{} are kept as recovery data.", what);
+			notification.ShowRecovery = true;
+		}
+		if (command)
+			notification.JournalEntry = command->Id;
+		m_Notifications.Post(std::move(notification));
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
 	// Scripts
 	////////////////////////////////////////////////////////////////////////////////
 
@@ -1332,6 +1522,12 @@ namespace Strata
 		// The build reloads the module itself once it finished; the file watcher would reload it a second time when the
 		// linker writes it.
 		m_ScriptEngine->SetHotReloadEnabled(false);
+		EditorNotification notification;
+		notification.Level = NotificationLevel::Info;
+		notification.Title = "Building scripts";
+		notification.Message = fmt::format("{} (output in the Console)", m_Project->GetScriptModuleName());
+		notification.ShowConsole = true;
+		m_Notifications.Post(std::move(notification));
 		return true;
 	}
 
@@ -1376,6 +1572,30 @@ namespace Strata
 				m_LastScriptBuildLoad.Reloaded = replacing && m_LastScriptBuildLoad.Loaded;
 			}
 		}
+
+		EditorNotification notification;
+		notification.ShowConsole = true;
+		if (!result.Success)
+		{
+			notification.Level = NotificationLevel::Error;
+			notification.Title = "Script build failed";
+			notification.Message = result.Diagnostics.empty() ? result.Error
+				: fmt::format("{}{}{}: {}", FileSystem::ToUTF8(FileSystem::FromUTF8(result.Diagnostics.front().File).filename()), result.Diagnostics.front().Line > 0 ? ":" : "",
+					result.Diagnostics.front().Line > 0 ? std::to_string(result.Diagnostics.front().Line) : std::string(), result.Diagnostics.front().Message);
+		}
+		else if (!m_LastScriptBuildLoad.Error.empty())
+		{
+			notification.Level = NotificationLevel::Error;
+			notification.Title = "Scripts built, but not loaded";
+			notification.Message = m_LastScriptBuildLoad.Error;
+		}
+		else
+		{
+			notification.Level = NotificationLevel::Success;
+			notification.Title = m_LastScriptBuildLoad.Reloaded ? "Scripts built and reloaded" : "Scripts built";
+			notification.Message = fmt::format("{:.1f} s", result.Seconds);
+		}
+		m_Notifications.Post(std::move(notification));
 	}
 
 	bool EditorContext::StopOnScriptFault()
@@ -1393,6 +1613,12 @@ namespace Strata
 			fault->Description);
 		// Symbolization runs on a job: its location is reported when it arrives (UpdateScriptFaultLocation).
 		m_ScriptFaultLocationPending = !fault->Symbolized;
+		EditorNotification notification;
+		notification.Level = NotificationLevel::Error;
+		notification.Title = "Script crash: play mode stopped";
+		notification.Message = fmt::format("{}: {}", where, fault->Description);
+		notification.ShowConsole = true;
+		m_Notifications.Post(std::move(notification));
 		m_LastScriptFault = std::move(fault);
 		Stop();
 		return true;
@@ -1446,11 +1672,22 @@ namespace Strata
 		UpdateScriptFaultLocation();
 
 		if (m_AssetManager)
+		{
 			m_AssetManager->Update();
+			if (m_AssetManager->HasImportFailures())
+				NotifyImportFailures();
+		}
 		// A scene being opened replaces the edited one between frames, before anything draws or updates it.
 		UpdateSceneLoad();
 		if (m_GameExport)
+		{
 			m_GameExport->Update();
+			if (m_GameExport->IsFinished() && !m_GameExportNotified)
+			{
+				m_GameExportNotified = true;
+				NotifyExportFinished(*m_GameExport);
+			}
+		}
 		// An inspected asset that was deleted (also outside the editor) is no longer shown.
 		if (m_InspectedAsset.IsValid() && !AssetManager::IsHandleValid(m_InspectedAsset))
 			InspectEntities();
@@ -1483,11 +1720,96 @@ namespace Strata
 		if (m_Thumbnails)
 			m_Thumbnails->Update();
 		m_ProjectThumbnail.Update(*this);
+		FollowSceneMoves();
+		// The recovery journal hands what changed to an I/O job when it is due.
+		m_Recovery.Update(*m_EditScene, IsSceneModified());
+	}
+
+	void EditorContext::FollowSceneMoves()
+	{
+		if (!m_AssetManager)
+			return;
+		const uint64_t version = m_AssetManager->GetMetadataVersion();
+		if (version == m_SceneMetadataVersion)
+			return;
+		m_SceneMetadataVersion = version;
+		const auto [sceneFile, scenePath] = GetSceneFile(m_SceneHandle);
+		m_Recovery.OnSceneMoved(sceneFile, scenePath);
+		// A scan in progress compares the scenes' places when it finishes (SceneRecovery::FinishScan).
+		for (const RecoveryEntry& entry : m_Recovery.GetEntries())
+		{
+			if (!entry.Scene.IsValid())
+				continue;
+			const std::string path = GetSceneFile(entry.Scene).second;
+			if (!path.empty() && path != entry.ScenePath)
+			{
+				m_Recovery.RequestScan();
+				break;
+			}
+		}
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
 	// Export
 	////////////////////////////////////////////////////////////////////////////////
+
+	void EditorContext::NotifyExportFinished(const GameExport& exporter)
+	{
+		EditorNotification notification;
+		switch (exporter.GetState())
+		{
+			case GameExportState::Succeeded:
+			{
+				notification.Level = NotificationLevel::Success;
+				notification.Title = "Game exported";
+				const double seconds = exporter.GetResult().Seconds;
+				notification.Message = fmt::format("{} ({} assets, {})", FileSystem::ToUTF8(exporter.GetOptions().Directory), exporter.GetResult().AssetCount,
+					seconds < 1.0 ? fmt::format("{:.0f} ms", seconds * 1000.0) : fmt::format("{:.1f} s", seconds));
+				break;
+			}
+			case GameExportState::Failed:
+				notification.Level = NotificationLevel::Error;
+				notification.Title = "Export failed";
+				notification.Message = exporter.GetError();
+				notification.ShowConsole = true;
+				break;
+			case GameExportState::Cancelled:
+				notification.Level = NotificationLevel::Info;
+				notification.Title = "Export cancelled";
+				notification.Message = FileSystem::ToUTF8(exporter.GetOptions().Directory);
+				break;
+			case GameExportState::WaitingForImports:
+			case GameExportState::Packing:
+			case GameExportState::Copying:
+				return;
+		}
+		m_Notifications.Post(std::move(notification));
+	}
+
+	void EditorContext::NotifyImportFailures()
+	{
+		uint64_t count = 0;
+		const std::vector<AssetImportFailure> failures = m_AssetManager->TakeImportFailures(&count);
+		if (failures.empty())
+			return;
+		// One toast however many fail (a project whose files are broken fails many imports as it opens): it counts them and
+		// shows the latest; the Console lists them all.
+		const AssetImportFailure& latest = failures.back();
+		// Importers name the file in their errors ("Brick.png: unsupported image"), and the toast names its path already.
+		std::string_view error = latest.Error;
+		const std::string fileName = FileSystem::ToUTF8(FileSystem::FromUTF8(latest.Path).filename()) + ": ";
+		if (error.starts_with(fileName))
+			error.remove_prefix(fileName.size());
+		EditorNotification notification;
+		notification.Level = NotificationLevel::Error;
+		notification.Title = "Import failed";
+		notification.Message = fmt::format("{}: {}", latest.Path, error);
+		notification.Asset = latest.Asset;
+		notification.ShowConsole = true;
+		notification.Group = "AssetImport";
+		notification.Count = static_cast<uint32_t>(std::min<uint64_t>(count, std::numeric_limits<uint32_t>::max()));
+		m_Notifications.Post(std::move(notification));
+	}
 
 	bool EditorContext::StartGameExport(const GameExportOptions& options, std::string* outError)
 	{
@@ -1499,9 +1821,11 @@ namespace Strata
 			return false;
 		}
 		Ref<GameExport> exporter = GameExport::Start(*this, options, outError);
+		// An export that does not start leaves the previous one, which was announced already.
 		if (!exporter)
 			return false;
 		m_GameExport = std::move(exporter);
+		m_GameExportNotified = false;
 		return true;
 	}
 

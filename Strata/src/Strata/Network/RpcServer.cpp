@@ -106,7 +106,8 @@ namespace Strata
 			handshake.ParamsSchema = nlohmann::json {
 				{ "type", "object" },
 				{ "properties", {
-					{ "clientNonce", { { "type", "string" }, { "description", "Fresh random value: 32 lower-case hexadecimal characters" } } } } },
+					{ "clientNonce", { { "type", "string" }, { "description", "Fresh random value: 32 lower-case hexadecimal characters" } } },
+					{ "clientName", { { "type", "string" }, { "description", "Optional name of the client for people to see (at most 64 characters); it proves nothing" } } } } },
 				{ "required", nlohmann::json::array({ "clientNonce" }) }
 			};
 
@@ -200,6 +201,7 @@ namespace Strata
 			std::string Method;
 			nlohmann::json Params;
 			size_t Size = 0; // Size of the request line, for the queue's byte budget
+			std::string ClientName;
 		};
 
 		struct RegisteredMethod
@@ -231,8 +233,8 @@ namespace Strata
 		return result;
 	}
 
-	RpcResponder::RpcResponder(std::string method, DeliveryFunction deliver)
-		: m_Method(std::move(method)), m_Deliver(std::move(deliver))
+	RpcResponder::RpcResponder(std::string method, DeliveryFunction deliver, RpcClientInfo client)
+		: m_Method(std::move(method)), m_Deliver(std::move(deliver)), m_Client(std::move(client))
 	{
 	}
 
@@ -275,6 +277,50 @@ namespace Strata
 	{
 		if (!TryRespond(std::move(result)))
 			ST_CORE_WARN("RpcResponder: {} already responded; ignoring the second response", QuoteMethod(m_Method));
+	}
+
+	std::string SanitizeRpcClientName(std::string_view name)
+	{
+		std::string sanitized;
+		size_t characters = 0;
+		size_t index = 0;
+		while (index < name.size() && characters < c_MaxRpcClientNameLength)
+		{
+			// Decode one UTF-8 sequence; a malformed one becomes U+FFFD.
+			const unsigned char lead = static_cast<unsigned char>(name[index]);
+			const size_t length = lead < 0x80 ? 1 : (lead >> 5) == 0x6 ? 2 : (lead >> 4) == 0xE ? 3 : (lead >> 3) == 0x1E ? 4 : 0;
+			uint32_t codePoint = length == 1 ? lead : length == 2 ? (lead & 0x1Fu) : length == 3 ? (lead & 0x0Fu) : (lead & 0x07u);
+			bool valid = length > 0 && index + length <= name.size();
+			for (size_t offset = 1; valid && offset < length; offset++)
+			{
+				const unsigned char next = static_cast<unsigned char>(name[index + offset]);
+				valid = (next & 0xC0) == 0x80;
+				codePoint = (codePoint << 6) | (next & 0x3Fu);
+			}
+			const uint32_t minimum = length == 2 ? 0x80u : length == 3 ? 0x800u : length == 4 ? 0x10000u : 0u;
+			valid = valid && codePoint >= minimum && codePoint <= 0x10FFFFu && (codePoint < 0xD800u || codePoint > 0xDFFFu);
+			if (!valid)
+			{
+				sanitized += "\xEF\xBF\xBD";
+				characters++;
+				index += 1;
+				continue;
+			}
+			// Control characters, and the format characters that reorder or hide text where people read the name.
+			const bool control = codePoint < 0x20 || (codePoint >= 0x7F && codePoint <= 0x9F) || codePoint == 0x200B || codePoint == 0x2028
+				|| codePoint == 0x2029 || (codePoint >= 0x202A && codePoint <= 0x202E) || (codePoint >= 0x2066 && codePoint <= 0x2069) || codePoint == 0xFEFF;
+			if (!control)
+			{
+				sanitized.append(name.substr(index, length));
+				characters++;
+			}
+			index += length;
+		}
+		// Spaces around the name carry nothing.
+		const size_t first = sanitized.find_first_not_of(' ');
+		if (first == std::string::npos)
+			return {};
+		return sanitized.substr(first, sanitized.find_last_not_of(' ') - first + 1);
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -333,6 +379,7 @@ namespace Strata
 			bool Draining = false;
 			std::chrono::steady_clock::time_point DrainDeadline;
 			std::unordered_set<uint64_t> OpenConnections;
+			std::vector<RpcClientInfo> Clients; // The authenticated connections that are not closing
 			std::vector<OutgoingResponse> Outgoing;
 			// Wakes the network thread. Notify() is only called under Mutex while Running, so Stop() can close
 			// the notifier safely once it has cleared Running.
@@ -376,6 +423,9 @@ namespace Strata
 			// Set by the first handshake step; the second step must prove the token against both.
 			std::string ClientNonce;
 			std::string ServerNonce;
+			// From the handshake (sanitized), and when the connection authenticated.
+			std::string ClientName;
+			int64_t ConnectedAt = 0;
 			// Whether the connection has been through a poll since it was accepted, i.e. had a chance to send. Until
 			// then it is never evicted to make room for newer connections.
 			bool Polled = false;
@@ -415,6 +465,7 @@ namespace Strata
 		std::atomic<uint16_t> Port = 0;
 		std::string LastError; // Why Start failed (owning thread)
 		std::atomic<uint32_t> ClientCount = 0;
+		std::atomic<uint64_t> ClientsVersion = 0; // Changes whenever the list GetClients returns changes
 
 		mutable std::mutex MethodsMutex;
 		std::condition_variable MethodsCondition;
@@ -581,6 +632,9 @@ namespace Strata
 		{
 			std::scoped_lock<std::mutex> lock(Shared->Mutex);
 			Shared->OpenConnections.clear();
+			if (!Shared->Clients.empty())
+				ClientsVersion++;
+			Shared->Clients.clear();
 			Shared->Outgoing.clear();
 		}
 		ClientCount = 0;
@@ -963,7 +1017,7 @@ namespace Strata
 				reply(RpcResult::Failure(JsonRpc::ErrorCode::ServerBusy, "Too many pending requests; the server is not keeping up"));
 				return;
 			}
-			Queue.push_back(QueuedRequest { connection.Id, validation.Id, validation.IsNotification, method, std::move(params), line.size() });
+			Queue.push_back(QueuedRequest { connection.Id, validation.Id, validation.IsNotification, method, std::move(params), line.size(), connection.ClientName });
 			QueuedBytes += line.size();
 		}
 		// Notifications count as well: they produce no response, but their handling still costs the main thread.
@@ -1026,6 +1080,17 @@ namespace Strata
 				reject(validation.Id, JsonRpc::ErrorCode::InvalidParams, "Expected params {\"clientNonce\": 32 lower-case hexadecimal characters}", true);
 				return;
 			}
+			// The client's name is optional (clients from before it existed send none) and only shown, never trusted.
+			if (params.is_object() && params.contains("clientName"))
+			{
+				const std::string* clientName = FindString(params, "clientName");
+				if (!clientName)
+				{
+					reject(validation.Id, JsonRpc::ErrorCode::InvalidParams, "\"clientName\" must be a string", true);
+					return;
+				}
+				connection.ClientName = SanitizeRpcClientName(*clientName);
+			}
 			std::string serverNonce = RpcAuthentication::GenerateNonce();
 			if (serverNonce.empty())
 			{
@@ -1081,11 +1146,12 @@ namespace Strata
 		}
 
 		connection.Authenticated = true;
+		connection.ConnectedAt = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		connection.ClientNonce.clear();
 		connection.ServerNonce.clear();
 		connection.Reader.SetMaxMessageSize(Specification.MaxMessageSize);
 		UpdateClientCount();
-		ST_CORE_TRACE("RpcServer: client {} authenticated", connection.Id);
+		ST_CORE_TRACE("RpcServer: client {} authenticated{}", connection.Id, connection.ClientName.empty() ? std::string() : fmt::format(" as '{}'", connection.ClientName));
 		Send(connection, JsonRpc::MakeResult(validation.Id, nlohmann::json { { "authenticated", true } }));
 	}
 
@@ -1266,6 +1332,31 @@ namespace Strata
 	void RpcServer::Impl::UpdateClientCount()
 	{
 		ClientCount = static_cast<uint32_t>(CountConnections(true));
+		// The list for GetClients changes only when a client comes or goes: compared in place, built only then.
+		const auto listed = [](const Scope<Connection>& connection) { return connection->Authenticated && !connection->Closing && !connection->Closed; };
+		std::scoped_lock<std::mutex> lock(Shared->Mutex);
+		size_t index = 0;
+		bool same = true;
+		for (const Scope<Connection>& connection : Connections)
+		{
+			if (!listed(connection))
+				continue;
+			if (index >= Shared->Clients.size() || Shared->Clients[index].Id != connection->Id)
+			{
+				same = false;
+				break;
+			}
+			index++;
+		}
+		if (same && index == Shared->Clients.size())
+			return;
+		Shared->Clients.clear();
+		for (const Scope<Connection>& connection : Connections)
+		{
+			if (listed(connection))
+				Shared->Clients.push_back({ connection->Id, connection->ClientName, connection->ConnectedAt });
+		}
+		ClientsVersion++;
 	}
 
 	bool RpcServer::Impl::CanProcessRequests(const Connection& connection)
@@ -1432,6 +1523,19 @@ namespace Strata
 		return m_Impl->ClientCount.load();
 	}
 
+	uint64_t RpcServer::GetClientsVersion() const
+	{
+		return m_Impl->ClientsVersion.load();
+	}
+
+	std::vector<RpcClientInfo> RpcServer::GetClients() const
+	{
+		if (!m_Impl->Shared)
+			return {};
+		std::scoped_lock<std::mutex> lock(m_Impl->Shared->Mutex);
+		return m_Impl->Shared->Clients;
+	}
+
 	bool RpcServer::RegisterMethod(RpcMethodInfo info, RpcHandler handler)
 	{
 		if (!IsValidMethod(info, handler))
@@ -1539,7 +1643,7 @@ namespace Strata
 				if (Ref<RpcServerShared> shared = weakShared.lock())
 					shared->Deliver(connectionId, id, isNotification ? RpcResult::Success(nullptr) : std::move(result), isNotification);
 			};
-			Ref<RpcResponder> responder = CreateRef<RpcResponder>(request.Method, std::move(deliver));
+			Ref<RpcResponder> responder = CreateRef<RpcResponder>(request.Method, std::move(deliver), RpcClientInfo { request.ConnectionId, request.ClientName, 0 });
 
 			if (!handler)
 			{

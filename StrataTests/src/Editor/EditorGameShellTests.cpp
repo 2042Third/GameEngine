@@ -299,8 +299,8 @@ TEST_SUITE("Scripting.Game")
 		CHECK(SaveFiles::List(saves) == std::vector<std::string> { "Kept" });
 		CHECK(FileSystem::ReadText(saves / "Kept.save") == std::optional<std::string>("level=3;score=1200"));
 
-		// Without a project there is nowhere to save.
-		harness.Run("project.close");
+		// Without a project there is nowhere to save. (The scene's unsaved script is of no interest here: discarded.)
+		harness.Run("project.close", { { "force", true } });
 		CHECK_FALSE(harness.Context.GetGameSaveDirectory());
 		CHECK(harness.Run("editor.status")["game"]["saveDirectory"].is_null());
 	}

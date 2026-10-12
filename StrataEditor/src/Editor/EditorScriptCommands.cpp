@@ -201,12 +201,13 @@ namespace Strata
 		// Ends a script edit: while playing the change applied to the running copy, which play.stop discards.
 		EditorCommandResult FinishScriptEdit(EditorContext& context, nlohmann::json value)
 		{
-			if (context.IsPlaying())
-			{
-				value["warning"] = fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
-					SceneStateToString(context.GetSceneState()));
-			}
-			return EditorCommandResult::Ok(std::move(value));
+			if (!context.IsPlaying())
+				return EditorCommandResult::Ok(std::move(value));
+			value["warning"] = fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
+				SceneStateToString(context.GetSceneState()));
+			EditorCommandResult result = EditorCommandResult::Ok(std::move(value));
+			result.RunningCopy = true;
+			return result;
 		}
 
 		nlohmann::json DescribeEntry(const ScriptEntry& entry)
@@ -229,7 +230,7 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeScripts(context));
-			} });
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "script.list",
 			"Lists the project's script sources, the files the script build compiles: the code and CMake files of its script directory "
@@ -254,7 +255,7 @@ namespace Strata
 				}
 				return EditorCommandResult::Ok({ { "sourceDirectory", FileSystem::ToUTF8(directory) }, { "files", std::move(files) },
 					{ "truncated", listing.Truncated } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "script.get",
 			"The field values of the scripts attached to an entity. While the game plays they are the live instances' values (game state kept "
@@ -285,7 +286,7 @@ namespace Strata
 					}
 				}
 				return EditorCommandResult::Ok({ { "entity", UUIDToJson(entity.GetUUID()) }, { "scripts", std::move(scripts) } });
-			} });
+			}, EditorCommandKind::Query });
 
 		registry.Register({ "script.build",
 			"Builds the project's scripts (the CMakeLists.txt in its Scripts directory) with the engine's compiler and configuration, then loads "
@@ -506,7 +507,7 @@ namespace Strata
 				if (!context.OpenScriptSource(FileSystem::FromUTF8(file), static_cast<uint32_t>(line), static_cast<uint32_t>(column), &how, &error))
 					return EditorCommandResult::Fail(error);
 				return EditorCommandResult::Ok({ { "file", file }, { "line", line }, { "column", column }, { "openedWith", how } });
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "script.setExternalEditor",
 			"Sets the person's code editor, which script.open, the Problems panel and crash reports use: a command template such as "
@@ -538,7 +539,7 @@ namespace Strata
 				const ExternalEditorLauncher& editor = context.GetExternalEditor();
 				return EditorCommandResult::Ok({ { "command", editor.GetCommand() }, { "source", ExternalEditorSourceToString(editor.GetSource()) },
 					{ "userCommand", editor.GetUserCommand() }, { "program", program ? nlohmann::json(FileSystem::ToUTF8(*program)) : nlohmann::json(nullptr) } });
-			} });
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "script.add",
 			"Attaches a script class of the loaded module to an entity, optionally overriding fields (undoable; while playing it changes the "

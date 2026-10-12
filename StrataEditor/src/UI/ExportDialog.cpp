@@ -359,7 +359,7 @@ namespace Strata
 			const size_t excluded = excludedAssets && excludedAssets->is_array() ? excludedAssets->size() : 0;
 			m_Outcome = DescribeExport(JsonUtils::GetUInt(value, "assetCount", 0), JsonUtils::GetUInt(value, "packBytes", 0),
 				JsonUtils::GetFloat(value, "seconds", 0.0f), m_ExportedDirectory, excluded);
-		});
+		}, CommandOrigin { CommandSource::UI });
 	}
 
 }

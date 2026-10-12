@@ -25,7 +25,8 @@ namespace Strata
 	nlohmann::json RunEditorCommand(EditorContext& context, const EditorCommandRegistry& commands, std::string_view name,
 		const nlohmann::json& parameters = nlohmann::json::object());
 	// Runs a command from the UI through the runner, for commands that may take frames (scene.open), and logs a failure when
-	// it ends (not a cancellation, e.g. by a later scene.open).
+	// it ends (not a cancellation, e.g. by a later scene.open). Both run it as the person's (CommandSource::UI): the
+	// activity journal records it so, and toasts show its failure or warning.
 	void RunEditorCommandDeferred(EditorCommandRunner& runner, EditorContext& context, const EditorCommandRegistry& commands, std::string_view name,
 		const nlohmann::json& parameters = nlohmann::json::object());
 	// Like RunEditorCommandDeferred, for UI that shows the failures it can (a dialog, the launcher): returns the error of a

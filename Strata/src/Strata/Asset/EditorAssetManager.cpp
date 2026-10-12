@@ -17,6 +17,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <filesystem>
+#include <iterator>
 #include <mutex>
 #include <shared_mutex>
 #include <system_error>
@@ -1584,6 +1585,7 @@ namespace Strata
 		// Loads of the asset and its sub-assets that waited for a first import (IsAwaitingImport) go on once it is applied:
 		// with its data, or failing with its error.
 		std::vector<AssetHandle> awaited = { outcome.Handle };
+		bool reported = false; // A caller waits for this outcome and reports its failure
 		{
 			std::scoped_lock<std::mutex> lock(m_SourceMutex);
 			auto it = m_Sources.find(outcome.Handle);
@@ -1591,6 +1593,7 @@ namespace Strata
 				return; // Deleted while importing
 
 			SourceAsset& source = it->second;
+			reported = std::exchange(source.ImportAwaited, false);
 			awaited.insert(awaited.end(), source.Import.SubAssets.begin(), source.Import.SubAssets.end());
 			source.Import.Imported = true;
 			source.Import.Error = outcome.Error;
@@ -1616,6 +1619,13 @@ namespace Strata
 		if (!outcome.Success)
 		{
 			ST_CORE_ERROR("Import of '{}' failed: {}", path, outcome.Error);
+			if (!reported)
+			{
+				m_ImportFailures.push_back({ outcome.Handle, path, outcome.Error });
+				if (m_ImportFailures.size() > c_MaxImportFailures)
+					m_ImportFailures.pop_front();
+				m_ImportFailureCount++;
+			}
 			ResumeLoadsAwaitingImport(awaited);
 			return;
 		}
@@ -2382,6 +2392,9 @@ namespace Strata
 				return false;
 			}
 			direct = it->second.Importer->StoresSourceDirectly();
+			// The caller waits for this import (IsImportPending) and reports how it went.
+			if (!direct)
+				it->second.ImportAwaited = true;
 		}
 		if (direct)
 			ReloadDirectSource(handle);
@@ -2402,6 +2415,16 @@ namespace Strata
 	{
 		std::scoped_lock<std::mutex> lock(m_SourceMutex);
 		return m_SourcesImporting;
+	}
+
+	std::vector<AssetImportFailure> EditorAssetManager::TakeImportFailures(uint64_t* outCount)
+	{
+		if (outCount)
+			*outCount = m_ImportFailureCount;
+		std::vector<AssetImportFailure> failures(std::make_move_iterator(m_ImportFailures.begin()), std::make_move_iterator(m_ImportFailures.end()));
+		m_ImportFailures.clear();
+		m_ImportFailureCount = 0;
+		return failures;
 	}
 
 	bool EditorAssetManager::IsImportPending(AssetHandle handle) const
@@ -2434,6 +2457,8 @@ namespace Strata
 				// on, and nothing waits for them.
 				StopImport(it->second);
 				request = MakeImportRequest(it->second);
+				// The caller gets the outcome (outError).
+				it->second.ImportAwaited = true;
 			}
 		}
 
@@ -2653,6 +2678,18 @@ namespace Strata
 						const AssetHandle handle = RegisterAddedFile(ToAbsolute(file), true);
 						if (handle.IsValid() && std::find(item.Assets.begin(), item.Assets.end(), handle) == item.Assets.end())
 							item.Assets.push_back(handle);
+					}
+					// The import's caller reports the failures FinishExternalImport finds (a file's own asset, every asset of a
+					// folder): they are no imports nobody waited for (TakeImportFailures). A file the imported one reads that
+					// fails alone is.
+					{
+						std::scoped_lock<std::mutex> sourceLock(m_SourceMutex);
+						for (size_t asset = 0; asset < item.Assets.size() && (item.Folder || asset == 0); asset++)
+						{
+							auto source = m_Sources.find(item.Assets[asset]);
+							if (source != m_Sources.end() && !source->second.Importer->StoresSourceDirectly())
+								source->second.ImportAwaited = true;
+						}
 					}
 					if (!item.Folder && item.Assets.empty())
 						item.Error = fmt::format("'{}' could not be registered as an asset", item.Path);

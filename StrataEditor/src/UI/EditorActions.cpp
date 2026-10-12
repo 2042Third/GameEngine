@@ -3,6 +3,7 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorNotifications.h"
 #include "Editor/HierarchyView.h"
 #include "Editor/PropertyEdit.h"
 #include "UI/Icons.h"
@@ -29,7 +30,8 @@ namespace Strata
 
 	nlohmann::json RunEditorCommand(EditorContext& context, const EditorCommandRegistry& commands, std::string_view name, const nlohmann::json& parameters)
 	{
-		EditorCommandResult result = commands.Execute(context, name, parameters);
+		EditorCommandResult result = commands.Execute(context, name, parameters, CommandOrigin { CommandSource::UI });
+		NotifyCommandOutcome(context.GetNotifications(), name, result);
 		if (result.IsPending())
 		{
 			// UI actions run commands that finish at once; commands that take frames go through EditorCommandRunner.
@@ -54,7 +56,7 @@ namespace Strata
 		{
 			if (!result.Success && result.ErrorKind != EditorCommandError::Cancelled)
 				ST_ERROR("{}: {}", name, result.Error);
-		});
+		}, CommandOrigin { CommandSource::UI });
 	}
 
 	std::string StartEditorCommand(EditorCommandRunner& runner, EditorContext& context, const EditorCommandRegistry& commands, std::string_view name,
@@ -75,7 +77,7 @@ namespace Strata
 				ST_ERROR("{}: {}", name, result.Error);
 			else
 				outcome->Error = result.Error;
-		});
+		}, CommandOrigin { CommandSource::UI });
 		return outcome->Error;
 	}
 

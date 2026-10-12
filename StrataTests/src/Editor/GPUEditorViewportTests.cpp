@@ -5,6 +5,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/EditorViewport.h"
+#include "FeatureTest/FeatureTestUtils.h"
 #include "Renderer/GPUTestUtils.h"
 #include "TestHelpers.h"
 
@@ -144,7 +145,8 @@ namespace
 			return result.Value;
 		}
 
-		// Runs a command through the runner, one update per frame, until it completes.
+		// Runs a command through the runner, one editor frame at a time (the context's update, then the runner's, as in the
+		// editor), until it completes.
 		EditorCommandResult RunFrames(std::string_view name, const nlohmann::json& parameters, int* outFrames = nullptr)
 		{
 			// Shared with the completion, which may outlive this call if the command never finishes.
@@ -153,6 +155,7 @@ namespace
 			int frames = 0;
 			for (; !*completed && frames < 20000; frames++)
 			{
+				Context.Update(Timestep(1.0f / 60.0f));
 				Runner.Update(Context);
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			}
@@ -455,6 +458,104 @@ TEST_SUITE("GPU.Editor.Viewport")
 			REQUIRE(panel->Render(context, panelSize, *view, viewport.GetSettings(), view->EditorOverlays));
 			CHECK(panel->GetStats().Instances == 0);
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture through a camera of its own leaves the editor camera where it was")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		const nlohmann::json before = harness.Run("camera.get");
+		const nlohmann::json size = { { "width", 64 }, { "height", 64 } };
+		const DecodedImage editorView = harness.Capture(size);
+
+		nlohmann::json own = size;
+		own["position"] = { 3.0, 2.0, 3.0 };
+		own["target"] = { 0.0, 0.0, 0.0 };
+		own["fov"] = 40.0;
+		const auto closeTo = [](const nlohmann::json& value, const glm::vec3& expected)
+		{
+			return std::abs(value[0].get<float>() - expected.x) < 1.0e-3f && std::abs(value[1].get<float>() - expected.y) < 1.0e-3f
+				&& std::abs(value[2].get<float>() - expected.z) < 1.0e-3f;
+		};
+		const auto vec3 = [](const nlohmann::json& value) { return glm::vec3(value[0].get<float>(), value[1].get<float>(), value[2].get<float>()); };
+		nlohmann::json result;
+		const DecodedImage custom = harness.Capture(own, &result);
+		CHECK(result["camera"] == "custom");
+		CHECK(closeTo(result["view"]["position"], glm::vec3(3.0f, 2.0f, 3.0f)));
+		CHECK(closeTo(result["view"]["forward"], glm::normalize(glm::vec3(-3.0f, -2.0f, -3.0f))));
+		CHECK(result["view"]["fov"].get<double>() == doctest::Approx(40.0));
+		CHECK(harness.Run("camera.get") == before);
+		CHECK(harness.CountDifferences(custom, editorView) > 100); // Another view of the cube
+
+		// The same view through the editor camera itself gives the same picture.
+		const nlohmann::json moved = harness.Run("camera.set", { { "position", { 3.0, 2.0, 3.0 } }, { "target", { 0.0, 0.0, 0.0 } }, { "fov", 40.0 } });
+		CHECK(harness.CountDifferences(harness.Capture(size), custom) == 0);
+
+		// Position alone moves the view, keeping the camera's direction and field of view.
+		own = size;
+		own["position"] = { 4.0, 2.0, 4.0 };
+		harness.Capture(own, &result);
+		CHECK(closeTo(result["view"]["position"], glm::vec3(4.0f, 2.0f, 4.0f)));
+		CHECK(closeTo(result["view"]["forward"], vec3(moved["forward"])));
+		CHECK(result["view"]["fov"].get<double>() == doctest::Approx(40.0));
+		CHECK(harness.Run("camera.get") == moved);
+		own["camera"] = "scene";
+
+		// Refused: a camera of its own with the scene's camera, and a view from the point it looks at.
+		CHECK(harness.Commands.Execute(harness.Context, "viewport.capture", own).ErrorKind == EditorCommandError::InvalidParameters);
+		nlohmann::json invalid = size;
+		invalid["position"] = { 1.0, 1.0, 1.0 };
+		invalid["target"] = { 1.0, 1.0, 1.0 };
+		CHECK(harness.Commands.Execute(harness.Context, "viewport.capture", invalid).ErrorKind == EditorCommandError::InvalidParameters);
+		invalid = size;
+		invalid["fov"] = 0.0;
+		CHECK(harness.Commands.Execute(harness.Context, "viewport.capture", invalid).ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The first capture after play.start shows the scene's materials")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		const std::filesystem::path project = Tests::CopyFeatureProject(Tests::CreateTemporaryDirectory("CaptureAfterPlay") / "Project");
+		// The project's start scene opens in the background: the command answers once it is in.
+		const EditorCommandResult opened = harness.RunFrames("project.open", { { "path", FileSystem::ToUTF8(project) } });
+		REQUIRE_MESSAGE(opened.Success, opened.Error);
+		// The scene's scripts are not what is captured: it plays without building them first.
+		harness.Run("play.start", { { "build", false } });
+		// Paused, so that the scene stays as it was while the frames go on (physics would move the ball and the boxes).
+		harness.Run("play.pause", { { "paused", true } });
+
+		// The scene's load brought its textures in at their mip tails, and nothing has drawn them yet: the capture renders
+		// again until its view is complete, with the levels it wants of them.
+		const nlohmann::json size = { { "width", 320 }, { "height", 180 }, { "camera", "scene" } };
+		nlohmann::json first;
+		const DecodedImage image = harness.Capture(size, &first);
+		CHECK(first["pendingAssets"] == 0);
+		CHECK(first["texturesBelowWanted"] == 0);
+		CHECK(first["waitedFrames"].get<int>() > 0);
+
+		// It shows what the scene shows once everything has long arrived.
+		for (int frame = 0; frame < 60; frame++)
+			harness.Context.Update(Timestep(1.0f / 60.0f));
+		nlohmann::json later;
+		const DecodedImage settled = harness.Capture(size, &later);
+		CHECK(later["pendingAssets"] == 0);
+		CHECK(harness.CountDifferences(image, settled) == 0);
+
+		// Without waiting, a capture takes what the frame has.
+		harness.Run("play.stop");
+		harness.Run("play.start", { { "build", false } });
+		nlohmann::json immediate = size;
+		immediate["waitForAssets"] = false;
+		nlohmann::json at;
+		harness.Capture(immediate, &at);
+		CHECK(at["waitedFrames"] == 0);
+		harness.Run("play.stop");
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

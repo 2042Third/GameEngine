@@ -70,7 +70,7 @@ namespace Strata
 		Scene& scene = *context.GetEditScene();
 		const auto* links = std::as_const(scene.GetRegistry()).storage<PrefabInstanceComponent>();
 		const size_t linkCount = links ? links->size() : 0;
-		const uint64_t changes = context.GetUndoStack().GetChangeCount();
+		const uint64_t changes = context.GetUndoStack().GetVersion();
 		// Links that come or go are found at once; edits that may have replaced links once they pause.
 		if (linkCount == m_WatchedLinks && (changes == m_WatchedChanges || AreEditsContinuing(changes)))
 			return;
@@ -90,7 +90,7 @@ namespace Strata
 	{
 		// The frames of the history's changes, for AreEditsContinuing (the first count seen is no change).
 		m_Frame++;
-		const uint64_t changes = context.GetUndoStack().GetChangeCount();
+		const uint64_t changes = context.GetUndoStack().GetVersion();
 		if (changes != m_SeenChanges)
 		{
 			if (m_SeenChanges != UINT64_MAX)
@@ -274,7 +274,7 @@ namespace Strata
 			return false;
 		// Edits and baselines both change what an instance is compared with. A new baseline renews the mark at once; edits do
 		// once they pause (a mark worked out before a run of edits stays during it).
-		const uint64_t changes = context.GetUndoStack().GetChangeCount();
+		const uint64_t changes = context.GetUndoStack().GetVersion();
 		auto [it, added] = m_Marks.try_emplace(root.GetUUID());
 		ModifiedMark& mark = it->second;
 		if (!added && mark.BaselineVersion == m_BaselineVersion && (mark.Changes == changes || AreEditsContinuing(changes)))

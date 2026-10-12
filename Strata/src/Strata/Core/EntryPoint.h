@@ -11,7 +11,7 @@ int main(int argc, char** argv)
 
 	Strata::Application* application = Strata::CreateApplication(commandLine);
 	if (!application)
-		return 1;
+		return Strata::Application::GetStartupExitCode();
 
 	application->Run();
 	const int exitCode = application->GetExitCode();

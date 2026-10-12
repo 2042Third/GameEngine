@@ -31,7 +31,8 @@ namespace Strata
 	//   Revert discards the draft;
 	// - a texture's image; the thumbnail of a material, mesh, model or prefab, large; a model's summary (meshes, triangles,
 	//   materials, levels of detail, sub-assets); an audio clip's duration and waveform, with Play and Stop on a preview voice;
-	// - the asset's state and stored size.
+	// - the asset's state and stored size;
+	// - why its last import failed, and its warnings, under the actions.
 	class AssetInspectorPanel : public EditorPanel
 	{
 	public:
@@ -40,6 +41,9 @@ namespace Strata
 	private:
 		void DrawHeader(const AssetMetadata& metadata);
 		void DrawActions(EditorPanelContext& context, const AssetMetadata& metadata, const AssetImporter* importer);
+		// Why the asset's last import failed, and its warnings, under the actions: what a person fixing it (sent here by an
+		// import failure's toast) reads first, next to the settings they may change.
+		void DrawImportOutcome(EditorAssetManager& assets, const AssetMetadata& metadata);
 		void DrawImportSettings(EditorPanelContext& context, EditorAssetManager& assets, const AssetMetadata& metadata, const AssetImporter& importer);
 		void DrawTexturePreview(AssetHandle handle);
 		void DrawThumbnail(EditorContext& context, AssetHandle handle);

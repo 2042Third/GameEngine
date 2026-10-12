@@ -94,6 +94,10 @@ namespace Strata
 		// Validates the value (type, enum membership), clamps numeric ranges and assigns it.
 		// Returns false (leaving the object unchanged) if the value is not valid for this property.
 		bool SetValue(void* object, const PropertyValue& value, std::string* outError = nullptr) const;
+		// Whether a numeric value (every component of a vector or color) lies within the property's range; always true without
+		// a range and for other types. Editors clamp what they drag (SetValue); commands refuse what lies outside instead, with
+		// the message this writes ("must be between 1 and 512, not 0.5").
+		bool IsInRange(const PropertyValue& value, std::string* outError = nullptr) const;
 
 		const EnumValue* FindEnumValue(std::string_view name) const; // Case-insensitive
 		const EnumValue* FindEnumValue(int32_t value) const;

@@ -265,7 +265,7 @@ namespace Strata
 		if (!m_StartersRead)
 		{
 			m_StartersRead = true;
-			const EditorCommandResult templates = context.Commands.Execute(context.Context, "project.templates", nlohmann::json::object());
+			const EditorCommandResult templates = context.Commands.Execute(context.Context, "project.templates", nlohmann::json::object(), CommandOrigin { CommandSource::UI });
 			if (templates.Success && templates.Value.contains("templates"))
 			{
 				for (const nlohmann::json& entry : templates.Value["templates"])
@@ -273,7 +273,7 @@ namespace Strata
 				// The lit template first, as in the New Project dialog.
 				std::stable_partition(m_Templates.begin(), m_Templates.end(), [](const Starter& starter) { return starter.Id == ProjectTemplates::c_Basic3D; });
 			}
-			const EditorCommandResult samples = context.Commands.Execute(context.Context, "project.samples", nlohmann::json::object());
+			const EditorCommandResult samples = context.Commands.Execute(context.Context, "project.samples", nlohmann::json::object(), CommandOrigin { CommandSource::UI });
 			if (samples.Success && samples.Value.contains("samples"))
 			{
 				for (const nlohmann::json& entry : samples.Value["samples"])
@@ -807,23 +807,26 @@ namespace Strata
 		EditorContext* editor = &context.Context;
 		const EditorCommandRegistry* commands = &context.Commands;
 		EditorCommandRunner* runner = &context.Runner;
-		auto open = [this, editor, commands, runner, projectFile]()
+		// With a shell, the person has answered the question about unsaved changes by the time the project opens; without one,
+		// unsaved changes make the command fail.
+		auto open = [this, editor, commands, runner, projectFile](bool force)
 		{
 			// The project opens at once; its start scene loads over the next frames, through the runner.
-			const std::string error = StartEditorCommand(*runner, *editor, *commands, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+			const std::string error = StartEditorCommand(*runner, *editor, *commands, "project.open",
+				{ { "path", FileSystem::ToUTF8(projectFile) }, { "force", force } });
 			if (!error.empty())
 				ShowError(fmt::format("Could not open {}: {}", UI::DisplayPath(projectFile), error));
 		};
 		if (context.Shell)
-			context.Shell->RequestDiscardChanges(std::move(open));
+			context.Shell->RequestDiscardChanges([open]() { open(true); });
 		else
-			open();
+			open(false);
 		m_RefreshedAt = 0.0;
 	}
 
 	void WelcomePanel::RemoveRecentProject(EditorPanelContext& context, const std::filesystem::path& projectFile)
 	{
-		const EditorCommandResult result = context.Commands.Execute(context.Context, "editor.removeRecentProject", { { "path", FileSystem::ToUTF8(projectFile) } });
+		const EditorCommandResult result = context.Commands.Execute(context.Context, "editor.removeRecentProject", { { "path", FileSystem::ToUTF8(projectFile) } }, CommandOrigin { CommandSource::UI });
 		if (!result.Success)
 			ShowError(result.Error);
 		UpdateRecentProjects(context.Context.GetRecentProjects());

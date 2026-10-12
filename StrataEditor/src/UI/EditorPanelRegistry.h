@@ -125,7 +125,8 @@ namespace Strata
 		void ResetOpenStates();
 		// Opens the panel if needed and brings its window to the front (selecting its tab) on the next frame, again in the
 		// following frames while its docked tab does not show yet (a layout built in that frame). Until then neither a layout
-		// reset nor the saved open states read at the first frame close it.
+		// reset nor the saved open states read at the first frame close it. While a modal dialog is open the panel opens behind
+		// it and comes to the front once the dialog closes (focusing a window would close the dialog).
 		void Focus(std::string_view id);
 		// Opens the panel if needed and shows its tab in its dock node when it is drawn next, without taking the keyboard
 		// focus from the window that has it (the Asset tab when the Content Browser inspects an asset).

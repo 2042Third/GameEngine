@@ -123,8 +123,7 @@ namespace Strata::UI
 			const float height = ImGui::GetFrameHeight();
 			const bool hasLabel = label && *label;
 			const ImVec2 iconSize = ImGui::CalcTextSize(icon);
-			const ImVec2 labelSize = hasLabel ? ImGui::CalcTextSize(label) : ImVec2(0.0f, 0.0f);
-			const float width = style.FramePadding.x * 2.0f + iconSize.x + (hasLabel ? style.ItemInnerSpacing.x + labelSize.x : 0.0f);
+			const float width = ChipWidth(icon, label);
 
 			// Chips lie over what their window shows: a click on one leaves the focus where it was, so that a chip over the
 			// game view does not hand the game the input.
@@ -203,6 +202,13 @@ namespace Strata::UI
 			return ImGui::GetFrameHeight();
 		const ImGuiStyle& style = ImGui::GetStyle();
 		return style.FramePadding.x * 2.0f + ImGui::CalcTextSize(icon).x + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label).x;
+	}
+
+	float ChipWidth(const char* icon, const char* label)
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const bool hasLabel = label && *label;
+		return style.FramePadding.x * 2.0f + ImGui::CalcTextSize(icon).x + (hasLabel ? style.ItemInnerSpacing.x + ImGui::CalcTextSize(label).x : 0.0f);
 	}
 
 	bool Chip(const char* id, const char* icon, const char* label, const char* tooltip)
@@ -471,7 +477,22 @@ namespace Strata::UI
 	bool BeginModal(const char* name, std::string_view title, bool* open)
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
-		ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+		const ImGuiViewport* viewport = ImGui::GetMainViewport();
+		// Centered for the size it appears with; contents that grow later (more entries, an error) would push it past the
+		// viewport's edge, so an open dialog that sticks out is moved back in.
+		const ImGuiWindow* window = ImGui::IsPopupOpen(name) ? ImGui::FindWindowByName(name) : nullptr;
+		if (window && window->WasActive)
+		{
+			const ImVec2 limit(std::max(viewport->WorkPos.x, viewport->WorkPos.x + viewport->WorkSize.x - window->Size.x),
+				std::max(viewport->WorkPos.y, viewport->WorkPos.y + viewport->WorkSize.y - window->Size.y));
+			const ImVec2 inside(std::clamp(window->Pos.x, viewport->WorkPos.x, limit.x), std::clamp(window->Pos.y, viewport->WorkPos.y, limit.y));
+			if (inside.x != window->Pos.x || inside.y != window->Pos.y)
+				ImGui::SetNextWindowPos(inside);
+		}
+		else
+		{
+			ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+		}
 		ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(style.WindowPadding.x * 2.0f, style.WindowPadding.y * 2.0f));
 		const bool visible = ImGui::BeginPopupModal(name, nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar);
 		ImGui::PopStyleVar();

@@ -179,6 +179,28 @@ namespace Strata
 				{ "maxMs", frameTimes.back() } };
 		}
 
+		nlohmann::json ForceSchema()
+		{
+			return BoolSchema("Go on although the edited scene has unsaved changes, discarding them (default false: the command fails instead). "
+				"Discarded changes are kept as recovery data of the project (scene.recoveryStatus), and the person at the editor is told who "
+				"discarded them");
+		}
+
+		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action)
+		{
+			if (force || !context.IsSceneModified())
+				return std::nullopt;
+			const std::string& scene = context.GetEditScene()->GetName();
+			if (!context.HasProject())
+			{
+				return EditorCommandResult::Fail(fmt::format("The scene '{}' has unsaved changes, which {} would discard; without a project they cannot be "
+					"saved: pass force: true to discard them", scene, action));
+			}
+			const char* save = context.GetSceneHandle().IsValid() ? "scene.save" : "scene.saveAs, as the scene was never saved";
+			return EditorCommandResult::Fail(fmt::format("The scene '{}' has unsaved changes, which {} would discard: save them first ({}) or pass "
+				"force: true to discard them (they are kept as recovery data, scene.recoveryStatus)", scene, action, save));
+		}
+
 		std::optional<std::filesystem::path> ResolveOutputPath(const EditorContext& context, std::string_view path, std::string_view extension, bool overwrite,
 			std::string* outError)
 		{
@@ -298,6 +320,14 @@ namespace Strata
 						if (!layer)
 							return fail(fmt::format("{}.{}: the scene has no layer named {} (scene.info lists them)", name, property->Name, value.dump()));
 						converted = *layer;
+					}
+					// Commands refuse values out of a property's range, where the inspector clamps as it drags: an agent learns its
+					// value was not taken instead of finding another one set.
+					if (property->HasRange())
+					{
+						std::string rangeError;
+						if (const std::optional<PropertyValue> parsed = PropertyValueFromJson(*property, converted); parsed && !property->IsInRange(*parsed, &rangeError))
+							return fail(fmt::format("{}.{} {}", name, property->Name, rangeError));
 					}
 					resolved[property->Name] = std::move(converted);
 				}

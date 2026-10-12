@@ -11,6 +11,7 @@
 #include "UI/ExportDialog.h"
 #include "UI/ScriptDialogs.h"
 #include "UI/ProjectDialogs.h"
+#include "UI/RecoveryDialog.h"
 
 #include <Strata.h>
 
@@ -80,6 +81,7 @@ namespace Strata
 		constexpr const char* c_Streaming = "Streaming";     // StreamingPanel, opened from the status bar's assets pill
 		constexpr const char* c_Performance = "Performance"; // PerformancePanel, opened from the status bar's frame pill
 		constexpr const char* c_Problems = "Problems";       // ProblemsPanel: script build diagnostics and crashes
+		constexpr const char* c_Activity = "Activity";       // ActivityPanel, opened from the viewport's agent chip or the View menu
 		constexpr const char* c_Welcome = "Welcome"; // The launcher (WelcomePanel)
 	}
 
@@ -141,9 +143,11 @@ namespace Strata
 		const ExportDialog& GetExportDialog() const { return m_ExportDialog; }
 		NewScriptDialog& GetNewScriptDialog() { return m_NewScriptDialog; }
 		ExternalEditorDialog& GetExternalEditorDialog() { return m_ExternalEditorDialog; }
+		const RecoveryDialog& GetRecoveryDialog() const { return m_RecoveryDialog; }
 
 		// EditorShell
 		void RequestDiscardChanges(std::function<void()> action) override;
+		void DrawDiscardQuestion() override;
 		void ShowNewProjectDialog(const std::string& templateId) override;
 		void ShowOpenSampleDialog(const std::string& sampleId) override;
 		void ShowOpenProjectDialog() override;
@@ -151,6 +155,10 @@ namespace Strata
 		void ShowNewScriptDialog() override;
 		void DismissLauncher() override;
 		void RenameEntity(UUID entity) override;
+		void ShowPanel(std::string_view panel) override;
+		void ShowActivity(uint64_t entry) override;
+		void ShowRecoveryDialog() override;
+		void ShowAsset(AssetHandle asset) override;
 		EditorEnvironment GetEnvironment() const override;
 		EditorAutomationState GetAutomationState() const override;
 	private:
@@ -181,11 +189,16 @@ namespace Strata
 		bool DrawScriptsPill();
 		// Tool panels (Streaming, Performance) opened in a layout saved before they existed join the Console's dock node.
 		void DockNewToolPanels();
+		// The question about unsaved changes (RequestDiscardChanges), at the popup level it is called at: over the whole window,
+		// or over the dialog that calls DrawDiscardQuestion. Drawn once per frame, by whichever call comes first.
 		void DrawUnsavedChangesModal();
 		void HandleShortcuts();
 		void UpdateWindowTitle();
 		// Advances the startup command script; once it finished, reports the result (a failed script fails the process).
 		void UpdateCommandScript();
+		// --screenshot: the frame being drawn, saved once it is on screen; with closeAfter the editor closes then (the last frame
+		// before --quit-after-commands quits). Once per run.
+		void TakeScreenshot(bool closeAfter);
 		// Notes input that arrived this frame (ImGui's input events, held keys and buttons).
 		void TrackInput();
 		// Chooses the frame rate for the next frames (idle throttling) and records frame times.
@@ -231,9 +244,19 @@ namespace Strata
 		ExternalEditorDialog m_ExternalEditorDialog;
 		// The context's requests for the Problems panel this layer has shown (EditorContext::GetProblemsPanelRequests).
 		uint64_t m_ShownProblemsRequests = 0;
+		// Like the Export dialog, its completions refer to it.
+		RecoveryDialog m_RecoveryDialog;
+		bool m_ScreenshotRequested = false;
+		bool m_RecoveryDialogWasOpen = false; // Closed with an offer left: a toast says where to find it
+		float m_StatusBarHeight = 0.0f;       // Of the last frame, which the toasts stay above
 
 		std::function<void()> m_PendingDiscardAction;
+		// The undo stack's version (UndoStack::GetVersion) the question was asked for: Don't Save discards those changes
+		// only, so the question stays when the scene changed meanwhile (an agent or a script edited it).
+		uint64_t m_DiscardQuestionVersion = 0;
+		bool m_SceneChangedSinceQuestion = false;
 		bool m_OpenUnsavedChangesModal = false;
+		int m_UnsavedChangesModalFrame = -1; // ImGui's frame the question was drawn in last
 		bool m_ShowImGuiDemo = false;
 		bool m_ResetLayout = false;
 		bool m_LayoutChecked = false;
@@ -242,6 +265,11 @@ namespace Strata
 		uint64_t m_ShownInspectionVersion = 0;
 		std::string m_WindowTitle;
 		std::string m_AutomationError; // Why automation did not start (when it was asked for)
+		// The automation pill's text, made again only when the connected clients change (EditorAutomation::GetClientsVersion).
+		std::string m_AutomationPillText;
+		std::vector<RpcClientInfo> m_AutomationClients;
+		uint64_t m_AutomationPillVersion = UINT64_MAX;
+		uint16_t m_AutomationPillPort = 0;
 		bool m_HasScriptBuild = false;
 		std::optional<double> m_ScriptBuildCheckTime;
 		bool m_LauncherDismissed = false; // Continue without a project (until a project opens)

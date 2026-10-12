@@ -144,6 +144,8 @@ builds changed sources first. Patterns that worked:
 
 Build it with `entity.create` (with `components`), `component.set`, `script.add`; then `scene.save` (the template's
 start scene), or for a scene of your own `scene.saveAs {"path": "Scenes/Main.stscene"}` and `project.setStartScene`.
+Save before switching to another scene or project: `scene.open`, `scene.new` and the `project.*` commands refuse while
+the scene has unsaved changes (pass `"force": true` only to throw away edits you made yourself).
 
 - Things that appear many times (blocks, enemies, pickups): build one, `prefab.create` it and `prefab.instantiate` the
   rest. Instances stay linked, so a change to one instance followed by `prefab.apply {"entity"}` updates the prefab and
@@ -179,7 +181,9 @@ viewport.capture {"camera": "scene", "width": 1280, "height": 720}   # CLI: --sa
 play.stop
 ```
 
-- Look at every capture you take. `pendingAssets` above 0: wait (`editor.wait`) and capture again.
+- Look at every capture you take. A capture waits (up to about five seconds) for the meshes, materials and textures it
+  shows; `pendingAssets` above 0 means some were still loading: wait (`editor.wait`) and capture again. To look from
+  elsewhere without moving the person's view, pass `position` and `target` (`camera.get` stays as it was).
 - Editor-camera captures in edit mode leave the HUD out (`hiddenScreenSpaceTexts`); the scene's camera and play mode show
   it.
 - Gravity and other timers keep running between your calls (a call takes about 0.1 s): plan sequences and send them in
@@ -207,6 +211,12 @@ StrataEditor --no-gpu --no-automation --quit-after-commands --project <dir> --co
 
 Entity IDs are stable once the scene is saved. Make timing-dependent outcomes deterministic with fields (no gravity
 while checking an exact score), then turn them back to let time play its part (fast gravity to reach game over).
+
+Steps that create something can name what they made for later steps: `"bind": {"ball": "/id"}` on the step, then
+`{"$ref": "ball"}` wherever a later step's parameters need the ID. To turn how you built the scene into a script, export
+your session: `editor.activity.export {"path": "Build.json", "since": <journal.latest of editor.activity before you began>}`
+writes it with those bindings, ready to run on a fresh copy of the project as it was then (take IDs for it from
+`entity.find` or creating results rather than from the selection, which the script does not repeat).
 `StrataTests/Editor/TetrisCommands.json.in` and `TetrisSample.cmake` are the full example (CTest `StrataEditor.Tetris`).
 
 ## 8. Export and check the game

@@ -5,7 +5,9 @@
 	{ "command": "entity.create", "parameters": { "name": "Floor", "components": { "MeshRenderer": { "Mesh": "0000000000000003" }, "Transform": { "Scale": [10, 1, 10] } } } },
 	{ "command": "entity.create", "parameters": { "name": "Sun", "components": { "DirectionalLight": { "Intensity": 3 } } } },
 	{ "command": "entity.create", "parameters": { "name": "Lamp", "components": { "PointLight": { "Intensity": 5, "Range": 8 } } } },
-	{ "command": "entity.create", "parameters": { "name": "Crate", "components": { "MeshRenderer": { "Mesh": "Builtin/Cube" }, "Transform": { "Translation": [0, 0.5, 0] } } } },
+	{ "command": "entity.create", "parameters": { "name": "Crate", "components": { "MeshRenderer": { "Mesh": "Builtin/Cube" }, "Transform": { "Translation": [0, 0.5, 0] } } },
+		"bind": { "crate": "/id" } },
+	{ "command": "component.set", "parameters": { "entity": { "$ref": "crate" }, "component": "Transform", "values": { "Rotation": [0, 30, 0] } } },
 	{ "command": "entity.create", "parameters": { "name": "Camera", "components": { "Camera": {}, "Transform": { "Translation": [0, 2, 6] } } } },
 	{ "command": "camera.focus" },
 	{ "command": "camera.set", "parameters": { "yaw": 30, "pitch": -25 } },
@@ -22,6 +24,7 @@
 	{ "command": "play.pause", "parameters": { "paused": true } },
 	{ "command": "play.step", "parameters": { "frames": 2 } },
 	{ "command": "play.stop" },
+	{ "command": "entity.get", "parameters": { "entity": { "$ref": "crate" } }, "expect": { "/name": { "equals": "Crate" } } },
 	{ "command": "scene.hierarchy" },
 	{ "command": "log.read", "parameters": { "minLevel": "Warn" } }
 ]

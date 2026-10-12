@@ -213,6 +213,47 @@ TEST_SUITE("Editor.Launcher")
 		CHECK(editor.Context().GetEditScene()->FindEntityByName("Unsaved"));
 	}
 
+	TEST_CASE("New Project asks again about changes made while it was open, over the dialog")
+	{
+		const std::filesystem::path location = CreateTemporaryDirectory("LauncherChangedMeanwhile");
+		HarnessEditor editor;
+		editor.Layer->DismissLauncher();
+		editor.Frames(2);
+		editor.Run("entity.create", { { "name", "Unsaved" } });
+		editor.Layer->ShowNewProjectDialog({});
+		editor.Frames(2);
+		REQUIRE(editor.Click("UnsavedChanges.DontSave"));
+		editor.Frames(3);
+		REQUIRE(editor.Layer->GetProjectDialogs().IsOpen());
+		REQUIRE(editor.ReplaceText("NewProject.Name", "Meanwhile Game"));
+		REQUIRE(editor.ReplaceText("ProjectDialogs.Location", FileSystem::ToUTF8(location)));
+		editor.Frames(1);
+
+		// An agent edits the scene while the dialog is open: nobody was asked about that change.
+		editor.Run("entity.create", { { "name", "Meanwhile" } });
+		REQUIRE(editor.Click("NewProject.Create"));
+		editor.Frames(2);
+		CHECK_FALSE(editor.Context().HasProject());
+		CHECK(editor.Context().GetEditScene()->FindEntityByName("Meanwhile"));
+		// The question shows over the dialog, which stays open; Cancel keeps both.
+		REQUIRE(IsDrawn("UnsavedChanges.Cancel"));
+		CHECK(editor.Layer->GetProjectDialogs().IsOpen());
+		REQUIRE(editor.Click("UnsavedChanges.Cancel"));
+		editor.Frames(2);
+		CHECK_FALSE(editor.Context().HasProject());
+		CHECK(editor.Layer->GetProjectDialogs().IsOpen());
+		CHECK(editor.Context().GetEditScene()->FindEntityByName("Meanwhile"));
+
+		// Create asks again, and Don't Save creates the project at once.
+		REQUIRE(editor.Click("NewProject.Create"));
+		editor.Frames(2);
+		REQUIRE(editor.Click("UnsavedChanges.DontSave"));
+		editor.Frames(2);
+		REQUIRE(editor.Context().HasProject());
+		CHECK(editor.Context().GetProject()->GetProjectFile() == location / "Meanwhile Game" / "Meanwhile Game.stproj");
+		CHECK_FALSE(editor.Layer->GetProjectDialogs().IsOpen());
+	}
+
 	TEST_CASE("Open Sample copies the sample into the chosen location and opens the copy")
 	{
 		const std::filesystem::path location = CreateTemporaryDirectory("LauncherSample");

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Editor/CommandJournal.h"
+
 #include <Strata/Core/UUID.h>
 #include <Strata/Scene/Entity.h>
 
@@ -52,6 +54,12 @@ namespace Strata
 		// Details of a failure a client can act on without parsing the message (e.g. asset.delete's referencedBy); null
 		// otherwise. Automation sends it as the error's data.
 		nlohmann::json ErrorData;
+		// The command's entry in the activity journal (CommandJournal), set by EditorCommandRegistry::Execute (0 otherwise):
+		// PollCommandResult completes it when a pending result becomes final, notifications point at it.
+		uint64_t JournalId = 0;
+		// A mutating command changed the running copy of a playing scene (its result's warning says so), which play.stop
+		// discards: replays of the session leave it out (CommandJournal::BuildReplayScript).
+		bool RunningCopy = false;
 
 		bool IsPending() const { return static_cast<bool>(Pending); }
 
@@ -79,6 +87,12 @@ namespace Strata
 		std::string Description;   // One or two sentences for tool listings
 		nlohmann::json Parameters; // JSON Schema of the parameter object
 		EditorCommandHandler Handler;
+		// Commands that do not change the project say so: an unmarked command counts as an edit, so a replay never misses
+		// one.
+		EditorCommandKind Kind = EditorCommandKind::Edit;
+		// Queries whose results follow the editor's session (the selection, the journal, what is loaded) say so: replays
+		// never bind the IDs those show.
+		EditorCommandResults Results = EditorCommandResults::Content;
 	};
 
 	class EditorCommandRegistry
@@ -100,9 +114,14 @@ namespace Strata
 
 		// Runs a command. Unknown commands, parameters that are not an object and failures inside the handler
 		// (including exceptions from third-party code) become error results. The result may be pending (see
-		// EditorCommandResult::Pending); EditorCommandRunner handles that.
-		EditorCommandResult Execute(EditorContext& context, std::string_view name, const nlohmann::json& parameters = nlohmann::json::object()) const;
+		// EditorCommandResult::Pending); EditorCommandRunner handles that. Every call is recorded in the context's activity
+		// journal (CommandJournal) with its origin, once: when the command finishes, or for a pending one when its result
+		// becomes final (PollCommandResult). Code that runs a command for the person passes CommandSource::UI; commands that
+		// run commands are recorded as their children.
+		EditorCommandResult Execute(EditorContext& context, std::string_view name, const nlohmann::json& parameters = nlohmann::json::object(),
+			const CommandOrigin& origin = {}) const;
 	private:
+		EditorCommandResult Run(EditorContext& context, const EditorCommand* command, std::string_view name, const nlohmann::json& parameters) const;
 		std::map<std::string, EditorCommand, std::less<>> m_Commands;
 		uint64_t m_Revision = 0;
 	};

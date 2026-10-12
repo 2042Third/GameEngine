@@ -50,6 +50,8 @@ namespace Strata::UI
 	// is on but has nothing to do now (inEffect false, e.g. preview lighting in a scene with lights of its own) is drawn
 	// muted, only outlined in the accent. The probe records the icon's color.
 	bool ToggleChip(const char* id, const char* icon, const char* label, bool* value, const char* tooltip, bool inEffect = true);
+	// The width a chip with this icon and label takes, e.g. to align one to the right.
+	float ChipWidth(const char* icon, const char* label);
 
 	// A status pill: an icon and text in a color on a tint of that color, sized to its text in the current font. Returns
 	// true when clicked (pills that lead somewhere, e.g. the errors pill opening the Console).
@@ -96,8 +98,9 @@ namespace Strata::UI
 	float GetCardHeight(float width, bool hasIcon, std::string_view title, std::string_view description);
 
 	// Modal dialogs: OpenModal(name) once (e.g. from a menu item), then every frame BeginModal(name, ...) and, while it
-	// returns true, the contents and EndModal(). The dialog is centered on the main viewport, sized to its contents, and
-	// shows the title as a heading. With `open`, a close button sets it to false.
+	// returns true, the contents and EndModal(). The dialog is centered on the main viewport when it appears, sized to its
+	// contents (moved back inside the viewport when they grow past it), and shows the title as a heading. With `open`, a
+	// close button sets it to false.
 	void OpenModal(const char* name);
 	bool BeginModal(const char* name, std::string_view title, bool* open = nullptr);
 	void EndModal();

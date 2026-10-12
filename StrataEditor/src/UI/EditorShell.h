@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Strata/Asset/AssetTypes.h>
 #include <Strata/Core/UUID.h>
 #include <Strata/Renderer/GraphicsDevice.h>
 
@@ -8,6 +9,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace Strata
 {
@@ -44,8 +46,14 @@ namespace Strata
 		virtual ~EditorShell() = default;
 
 		// Runs an action that replaces the edited scene (opening or creating a project or scene) once unsaved changes are
-		// saved or discarded: at once when there are none, later (or never, when cancelled) after asking.
+		// saved or discarded: at once when there are none, later (or never, when cancelled) after asking. The person has
+		// decided by the time the action runs, so its command passes force: true (the commands refuse to discard unsaved
+		// changes otherwise, see CommandUtils::CheckUnsavedChanges).
 		virtual void RequestDiscardChanges(std::function<void()> action) = 0;
+		// A modal dialog that asks (RequestDiscardChanges) while it stays open calls this between its UI::BeginModal and
+		// UI::EndModal every frame: the question then shows over it. Asked from anywhere else, the question opens over the
+		// whole window, which closes a modal dialog that is open.
+		virtual void DrawDiscardQuestion() = 0;
 		// The New Project dialog: template, name and location, then project.create. An empty template id chooses the
 		// default one (basic3d).
 		virtual void ShowNewProjectDialog(const std::string& templateId) = 0;
@@ -61,6 +69,14 @@ namespace Strata
 		// Renames an entity in place in the Hierarchy (F2 in the viewport): the Hierarchy comes to the front with the entity's
 		// row revealed and its name in a text field.
 		virtual void RenameEntity(UUID entity) = 0;
+		// Opens a docked panel by its id (EditorPanels) and brings it to the front.
+		virtual void ShowPanel(std::string_view panel) = 0;
+		// The Activity panel with an entry of the activity journal selected (0: none).
+		virtual void ShowActivity(uint64_t entry) = 0;
+		// The Recover Unsaved Changes dialog (RecoveryDialog).
+		virtual void ShowRecoveryDialog() = 0;
+		// An asset in the Asset tab, which comes forward, and in the Content Browser (e.g. a toast's Show Asset).
+		virtual void ShowAsset(AssetHandle asset) = 0;
 
 		virtual EditorEnvironment GetEnvironment() const = 0;
 		virtual EditorAutomationState GetAutomationState() const = 0;
