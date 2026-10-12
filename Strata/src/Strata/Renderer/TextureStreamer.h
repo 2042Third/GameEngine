@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <span>
 #include <unordered_map>
@@ -124,6 +125,12 @@ namespace Strata
 		std::unordered_map<AssetHandle, Target> m_Targets;
 	};
 
+	// A texture a TextureStreamer keeps whole for as long as its owner keeps the hold (TextureStreamer::Hold).
+	struct TextureHold
+	{
+		AssetHandle Texture;
+	};
+
 	// Keeps every texture of an asset manager at the mip level the screen needs (one per manager: an AssetManagerExtension
 	// the renderer module registers). The manager loads textures partly (their header and mip tail, AssetPrefixFunction);
 	// each frame the renderers report the textures they drew, with how finely each material showed them (ReportView,
@@ -157,9 +164,16 @@ namespace Strata
 
 		// What a view drew in its frame, for the levels its textures need (SceneRenderer reports after each frame it renders).
 		void ReportView(const TextureStreamingView& view, std::span<const VisibleTextureUse> textures);
-		// Asks for a texture at `level` in this frame, like a view would (a preview at full resolution: 0; a sky light's
-		// environment map). Ignored for textures that are not loaded.
+		// Asks for a texture at `level` in this frame, like a view would (a preview at full resolution: 0). Ignored for
+		// textures that are not loaded; Hold keeps one whole across frames.
 		void RequestLevel(AssetHandle texture, uint32_t level, float coverage = 1.0f);
+		// Keeps the hold's texture whole (every level, also under memory pressure, as a view without streaming needs it) in
+		// every frame while the hold lives, whether or not anything draws it; a texture that is not loaded yet is raised once
+		// it is (whoever holds it requests its load). Holding a hold again does nothing; it ends when its owner releases the
+		// last reference. A renderer holds a sky light's environment map until it has computed the environment from it
+		// (SceneRenderer), so one that draws only now and then (a capture renderer in a headless editor) finds the map whole
+		// instead of raising it for its frame and losing it again before its next.
+		void Hold(const Ref<TextureHold>& hold);
 		// The texture with what a first load holds (its mip tail, the whole texture for small ones), for thumbnails and
 		// previews: requests the load like GetAsset and never asks for finer levels (what views or RequestLevel need still
 		// raises it). Null until it is loaded.
@@ -236,6 +250,7 @@ namespace Strata
 		AssetManagerBase& m_Manager;
 		TextureStreamingPolicy m_Policy;
 		std::unordered_map<AssetHandle, Streamed> m_Streamed; // Textures with a read or a change under way, or a retry pending
+		std::vector<std::weak_ptr<TextureHold>> m_Holds;      // Owned by their holders (Hold): gone once they release them
 		uint64_t m_Frame = 0;
 		// What the frame had used of the budgets when the streamer's update began (MakeCallContext).
 		uint64_t m_StartUploadedBytes = 0;

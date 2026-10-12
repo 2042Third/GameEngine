@@ -33,6 +33,7 @@ namespace Strata
 	class TextRenderer;
 	class Texture;
 	struct Submesh;
+	struct TextureHold;
 
 	// The view a scene is rendered from.
 	struct SceneCamera
@@ -464,6 +465,9 @@ namespace Strata
 		// Finds the scene's sky light (or the preview sky); (re)computes the environment maps when its environment texture
 		// or its procedural sky's parameters changed.
 		void UpdateEnvironment(Scene& scene, bool preview, RenderData::FrameConstants& frame, nvrhi::ICommandList* commandList);
+		// Keeps the sky light's environment map whole in the active asset manager's texture streamer until this renderer has
+		// computed (or taken over) its environment, also through frames it does not draw (TextureStreamer::Hold).
+		void HoldEnvironmentMap(AssetHandle map);
 		// Reports what the frame drew to the active asset manager's texture streamer, for the levels its textures need.
 		void ReportTextureUse(const SceneCamera& camera);
 		// New environment textures (radiance cube with mips, irradiance, prefiltered).
@@ -579,6 +583,7 @@ namespace Strata
 
 		// Image-based lighting
 		Ref<const EnvironmentMaps> m_Environment; // Null without an environment; a map's is shared (FindSharedEnvironment)
+		Ref<TextureHold> m_EnvironmentHold; // While the environment map's environment is still to be computed (HoldEnvironmentMap)
 		nvrhi::ITexture* m_BoundEnvironment = nullptr; // Environment cube referenced by m_SceneBindingSet
 		nvrhi::BindingLayoutHandle m_IBLBindingLayout;
 		nvrhi::ComputePipelineHandle m_EquirectToCubePipeline;

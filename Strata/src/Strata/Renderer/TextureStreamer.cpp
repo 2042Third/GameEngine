@@ -209,6 +209,18 @@ namespace Strata
 			m_Policy.AddNeed(texture, level, coverage, false);
 	}
 
+	void TextureStreamer::Hold(const Ref<TextureHold>& hold)
+	{
+		if (!hold)
+			return;
+		for (const std::weak_ptr<TextureHold>& held : m_Holds)
+		{
+			if (held.lock() == hold)
+				return;
+		}
+		m_Holds.push_back(hold);
+	}
+
 	AssetFinalizeContext TextureStreamer::MakeCallContext(const AssetFinalizeContext& context) const
 	{
 		AssetFinalizeContext call = context;
@@ -416,6 +428,14 @@ namespace Strata
 	void TextureStreamer::OnUpdate(const AssetFinalizeContext& context)
 	{
 		ST_PROFILE_FUNCTION();
+		// Held textures are needed whole in every frame their holds live, as if a view without streaming drew them.
+		std::erase_if(m_Holds, [](const std::weak_ptr<TextureHold>& held) { return held.expired(); });
+		for (const std::weak_ptr<TextureHold>& held : m_Holds)
+		{
+			const Ref<TextureHold> hold = held.lock();
+			if (hold && PeekTexture(hold->Texture))
+				m_Policy.AddNeed(hold->Texture, 0, 1.0f, false, true);
+		}
 		m_Frame++;
 		m_Policy.Update(m_Frame);
 		m_StartUploadedBytes = context.UploadedBytes ? *context.UploadedBytes : 0;

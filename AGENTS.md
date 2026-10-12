@@ -535,7 +535,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   and drops its levels to what the views drew it at (`SceneRenderer` reports after every frame the loaded texture maps it
   resolved, `GetVisibleTextures`, so reports look nothing up: texel density where each surface is nearest the camera,
   from the meshes' `Submesh::UVDensity` and the instances' scales, not the size of their bounds, worked out only for
-  draws of textured materials; `RequestLevel` for other uses, `TextureStreamer::GetPreview` for thumbnails). Under a
+  draws of textured materials; `RequestLevel` for other uses in a frame, `TextureStreamer::Hold` to keep a texture whole
+  across frames nothing draws it in, `TextureStreamer::GetPreview` for thumbnails). Under a
   texture budget the most needed textures come first: the less needed give up their finest levels
   (`LevelsDroppedForBudget`), and what does not fit gets the finest level that does. A texture's GPU texture and
   bindless slot change when its levels do: resolve the slot every frame (`Texture::GetBindlessSlot`), never cache it.
@@ -1072,7 +1073,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   becomes evictable, also for a renderer that stops rendering. Two caches keep assets across frames: `SceneRenderer`'s
   environment cache holds the sky light's environment map until the environment changes (the maps computed from a map
   are shared by every renderer lighting with it, so a renderer that starts later, such as a capture renderer, takes them
-  over after the map dropped to its mip tail), and `TextRenderer`'s glyph
+  over after the map dropped to its mip tail; until one has computed them it holds the map whole in the streamer,
+  `TextureStreamer::Hold`, also through frames it does not draw), and `TextRenderer`'s glyph
   atlases hold their fonts (an atlas lives as long as its font is loaded). Mesh layouts (bounds, submeshes) follow the
   asset manager's content changes in `RenderScene::Sync`, whoever renders the scene; an evicted mesh keeps its layout
   until a reimport changes its source revision (`AssetManagerBase::GetSourceRevisions`). Until a mesh's layout is known,

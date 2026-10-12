@@ -1126,10 +1126,14 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     120 frames without a need of it (`c_DropDelayFrames`); a texture nobody needs falls to its tail. Views without
     streaming (`SceneRendererSpecification::TextureStreaming` false) need level 0 and count a texture as pending until it
     is whole; with streaming a texture whose tail is resident is not pending. `RequestLevel` asks for a level outside
-    views (the asset inspector's preview; the sky light's environment map, until a renderer has computed the
-    environment from its whole chain: only the cube is sampled afterwards, and the map drops back to its tail; renderers
-    share the environment computed from a map while any of them lights with it, so one that starts drawing the scene later,
-    such as the editor's capture renderer, takes it over in its first frame instead of waiting for the map's levels);
+    views in the frame it is called (the asset inspector's preview). `TextureStreamer::Hold` keeps a texture whole in every
+    frame for as long as its owner keeps the `TextureHold`, whether or not anything draws it: a renderer holds the sky
+    light's environment map until it has computed the environment from its whole chain (only the cube is sampled
+    afterwards, and the map drops back to its tail), so a renderer that draws only now and then - the capture renderer of a
+    headless editor, whose captures lie seconds apart, longer than the drop delay - finds the map whole at its next frame
+    instead of raising it for one frame and losing it again before the next. Renderers share the environment computed
+    from a map while any of them lights with it, so one that starts drawing the scene later, such as the editor's capture
+    renderer beside the viewport's, takes it over in its first frame instead of waiting for the map's levels.
     `TextureStreamer::GetPreview` gets a texture without asking for more than its tail (thumbnails).
   - *Raising* (`Texture::RaiseLevels`, `ContinueLevelChange`). The streamer reads the missing levels as one range
     (`CookedTextureLayout::GetLevelsByteRange`) at Low priority, scored by missing levels times coverage (a view that
@@ -1332,7 +1336,9 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   caches outside the resolve cache keep assets across frames: `SceneRenderer`'s environment cache holds the sky light's
   environment map (the source of its cube maps) until the environment changes, also while the renderer idles or after
   its project closed (the maps computed from a map, and with them the map, are shared by every renderer lighting with it
-  and released with the last one), and `TextRenderer`'s glyph atlases hold their fonts as long as the fonts are loaded.
+  and released with the last one; until a renderer has computed them it holds the map whole in the texture streamer,
+  `TextureStreamer::Hold`, also through frames it does not draw), and `TextRenderer`'s glyph atlases hold their fonts as
+  long as the fonts are loaded.
   Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what `GetOpaqueBatches` reports after the frame holds no
   pointers.
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same

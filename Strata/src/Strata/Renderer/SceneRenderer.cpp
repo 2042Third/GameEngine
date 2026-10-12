@@ -725,12 +725,14 @@ namespace Strata
 		if (!skyLight || (!procedural && !skyLight->EnvironmentMap.IsValid()))
 		{
 			m_Environment = nullptr; // Release the maps of a removed environment
+			m_EnvironmentHold = nullptr;
 			return;
 		}
 
 		float rotation = 0.0f; // The procedural sky is computed in world space: its sun follows the light
 		if (procedural)
 		{
+			m_EnvironmentHold = nullptr;
 			const RenderData::ProceduralSkyParameters parameters = GetProceduralSkyParameters(*skyLight, frame);
 			if (!m_Environment || !m_Environment->Procedural || *m_Environment->Procedural != parameters)
 				GenerateProceduralSky(commandList, parameters);
@@ -739,10 +741,15 @@ namespace Strata
 		{
 			Ref<Texture> texture = m_Assets.Resolve<Texture>(skyLight->EnvironmentMap, AssetPriority::High);
 			if (!texture || !texture->GetGPUTexture())
-				return; // Constant ambient until the environment arrives (counted as pending by the resolve cache)
-			// The environment is computed from the whole map: its streamer makes every level resident first. Once computed, the
-			// cube is all renderers sample, so nothing asks for the map's levels any more and they drop to its tail; a renderer
-			// that starts lighting with the map afterwards takes over the environment another one computed.
+			{
+				// Constant ambient until the environment arrives (counted as pending by the resolve cache); the map is raised
+				// whole as soon as it is loaded.
+				HoldEnvironmentMap(skyLight->EnvironmentMap);
+				return;
+			}
+			// The environment is computed from the whole map: this renderer holds it whole in its streamer until then. Once
+			// computed, the cube is all renderers sample, so nothing asks for the map's levels any more and they drop to its
+			// tail; a renderer that starts lighting with the map afterwards takes over the environment another one computed.
 			if (!m_Environment || texture != m_Environment->Source)
 			{
 				if (Ref<const EnvironmentMaps> shared = FindSharedEnvironment(*texture))
@@ -751,8 +758,7 @@ namespace Strata
 				}
 				else if (texture->GetResidentLevel() > 0)
 				{
-					if (TextureStreamer* streamer = TextureStreamer::Find(*AssetManager::GetActive()))
-						streamer->RequestLevel(skyLight->EnvironmentMap, 0);
+					HoldEnvironmentMap(skyLight->EnvironmentMap);
 					m_Assets.CountPending(skyLight->EnvironmentMap);
 					return;
 				}
@@ -761,6 +767,7 @@ namespace Strata
 					ProcessEnvironment(commandList, texture);
 				}
 			}
+			m_EnvironmentHold = nullptr;
 			rotation = glm::radians(skyLight->Rotation);
 		}
 
@@ -768,6 +775,24 @@ namespace Strata
 		const float backgroundMips = static_cast<float>(MipCountFor(c_EnvironmentCubeSize) - 1);
 		frame.SkyParams = glm::vec4(std::clamp(skyLight->BackgroundBlur, 0.0f, 1.0f) * backgroundMips, skyLight->ShowBackground ? 1.0f : 0.0f, 0.0f, 0.0f);
 		m_Stats.EnvironmentLighting = true;
+	}
+
+	void SceneRenderer::HoldEnvironmentMap(AssetHandle map)
+	{
+		// A need reported only in the frames this renderer draws would not do: one that draws now and then (the capture
+		// renderer of a headless editor, whose viewport panel never draws) would find the map at its tail every time, its
+		// levels raised for its frame and dropped again before its next. The hold lasts until the environment is computed.
+		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+		TextureStreamer* streamer = manager ? TextureStreamer::Find(*manager) : nullptr;
+		if (!streamer)
+		{
+			m_EnvironmentHold = nullptr;
+			return;
+		}
+		if (!m_EnvironmentHold || m_EnvironmentHold->Texture != map)
+			m_EnvironmentHold = CreateRef<TextureHold>(TextureHold { map });
+		// Again in every frame it waits: a hold placed in another manager's streamer (a project opened since) lapsed with it.
+		streamer->Hold(m_EnvironmentHold);
 	}
 
 	bool SceneRenderer::CreateSceneBindingSets()
