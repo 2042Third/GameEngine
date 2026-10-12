@@ -193,10 +193,25 @@ namespace Strata
 		if (!context.ReadRunningScriptModule(scriptModule, &scriptError))
 			return fail(scriptError);
 
+		// The scene the game plays while its start scene loads (optional); a pruned pack keeps it with what it uses.
+		const AssetHandle loadingScene = project.GetConfig().Export.LoadingScene;
+		std::optional<AssetMetadata> loadingSceneMetadata;
+		if (loadingScene.IsValid())
+		{
+			loadingSceneMetadata = assets->GetMetadata(loadingScene);
+			if (!loadingSceneMetadata || loadingSceneMetadata->Type != AssetType::Scene)
+			{
+				return fail(fmt::format("The project's loading scene {} is not a scene asset of the project; set another or none with "
+					"project.setExportSettings", loadingScene.ToString()));
+			}
+		}
+
 		AssetPackBuildOptions packOptions;
 		packOptions.StartScene = startScene;
 		packOptions.Prune = options.Prune;
 		packOptions.AlwaysInclude = project.GetConfig().Export.AlwaysInclude;
+		if (loadingSceneMetadata)
+			packOptions.AlwaysInclude.push_back(loadingSceneMetadata->Path);
 		if (options.Prune)
 		{
 			// What AlwaysInclude names is checked now, without planning: the plan that is packed is made once, when imports
@@ -220,6 +235,7 @@ namespace Strata
 		exporter->m_Manifest.Name = project.GetConfig().Name;
 		exporter->m_Manifest.AssetPack = exporter->m_FileName + ".stpak";
 		exporter->m_Manifest.StartScene = startScene;
+		exporter->m_Manifest.LoadingScene = loadingScene;
 		if (!scriptModule.Path.empty())
 			exporter->m_Manifest.ScriptModule = FileSystem::ToUTF8(scriptModule.Path.filename());
 		exporter->m_Manifest.WindowWidth = options.WindowWidth;

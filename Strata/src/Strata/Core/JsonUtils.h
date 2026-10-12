@@ -4,12 +4,22 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstddef>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
 
 namespace Strata
 {
+
+	// How a long parse reports how far it got (JsonUtils::Parse): Callback receives the bytes parsed so far, on the parsing
+	// thread, each time about another Interval bytes were parsed and once at the end.
+	struct JsonParseProgress
+	{
+		std::function<void(size_t parsedBytes)> Callback;
+		size_t Interval = size_t(1) << 20;
+	};
 
 	// Exception-free helpers for reading untrusted JSON (files, automation requests). nlohmann::json throws on
 	// type mismatches (e.g. value() of a key holding the wrong type) and on invalid UTF-8 when dumping; engine code
@@ -18,6 +28,8 @@ namespace Strata
 	{
 	public:
 		static std::optional<nlohmann::json> Parse(std::string_view text, std::string* outError = nullptr);
+		// The same, reporting its progress (documents that take seconds to parse, such as large scenes).
+		static std::optional<nlohmann::json> Parse(std::string_view text, const JsonParseProgress& progress, std::string* outError = nullptr);
 		// Serializes with invalid UTF-8 replaced by U+FFFD. indent < 0 produces compact single-line output.
 		static std::string Dump(const nlohmann::json& json, int indent = -1, char indentCharacter = ' ');
 

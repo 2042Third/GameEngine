@@ -14,9 +14,12 @@
 #include <Strata/Scene/SceneSerializer.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <iterator>
+#include <memory>
 #include <limits>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -68,6 +71,7 @@ namespace Strata
 				{ "gravity", { settings.Gravity.x, settings.Gravity.y, settings.Gravity.z } },
 				{ "fixedTimestep", settings.FixedTimestep },
 				{ "maxFixedStepsPerFrame", settings.MaxFixedStepsPerFrame },
+				{ "maxEntitiesInstantiatedPerFrame", settings.MaxEntitiesInstantiatedPerFrame },
 				{ "physicsCapacity", {
 					{ "maxBodies", settings.PhysicsCapacity.MaxBodies },
 					{ "maxBodyPairs", settings.PhysicsCapacity.MaxBodyPairs },
@@ -127,9 +131,15 @@ namespace Strata
 		}
 
 		// Ends a mutating command: records the undo step (edit mode) and reports the result. While playing, edits change
-		// the running copy only; the result says so, because play.stop discards them.
+		// the running copy only; the result says so, because play.stop discards them. While a scene is being opened the
+		// edited scene is read-only (EditorContext::CheckSceneEditable): the edit is undone and the command fails.
 		EditorCommandResult Finish(EditorContext& context, SceneEditTransaction& transaction, nlohmann::json value = nullptr)
 		{
+			if (std::string error; !context.CheckSceneEditable(&error))
+			{
+				transaction.Rollback();
+				return EditorCommandResult::Fail(std::move(error));
+			}
 			context.CommitEdit(transaction);
 			if (context.IsPlaying())
 			{
@@ -138,6 +148,129 @@ namespace Strata
 				value["warning"] = GetRunningCopyWarning(context);
 			}
 			return EditorCommandResult::Ok(std::move(value));
+		}
+
+		// The load of scene.open: starts opening the scene and answers once it replaced the edited scene, with the frames that
+		// ran meanwhile (the frame that swapped it in included).
+		EditorCommandResult OpenSceneAndWait(EditorContext& context, AssetHandle handle)
+		{
+			std::string error;
+			if (!context.BeginOpenScene(handle, &error))
+				return EditorCommandResult::Fail(error);
+			const uint64_t id = context.GetSceneLoadStatus().ID;
+			// Frames are measured from the one that started the load, which the editor records at the start of the next frame.
+			const uint64_t firstMeasured = context.GetRecordedFrameCount() + 1;
+			return EditorCommandResult::Defer([id, firstMeasured, frames = uint64_t(0), lastRecorded = uint64_t(0), frameTimes = std::vector<double>(),
+				finishedAt = std::optional<uint64_t>()](EditorContext& context) mutable -> std::optional<EditorCommandResult>
+			{
+				frames++;
+				const uint64_t recorded = context.GetRecordedFrameCount();
+				if (recorded >= firstMeasured && recorded != lastRecorded)
+				{
+					frameTimes.push_back(context.GetLastFrameTime());
+					lastRecorded = recorded;
+				}
+				const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+				if (status.ID != id)
+					return EditorCommandResult::Fail("Opening the scene was cancelled: another scene is being opened", EditorCommandError::Cancelled);
+				if (!status.IsFinished())
+					return std::nullopt;
+				if (status.State == SceneLoadState::Cancelled)
+					return EditorCommandResult::Fail(status.Error, EditorCommandError::Cancelled);
+				if (status.State == SceneLoadState::Failed)
+					return EditorCommandResult::Fail(status.Error);
+				// The frame that swapped the scene in is recorded at the start of the next one: one more poll reports it.
+				if (!finishedAt)
+				{
+					finishedAt = recorded;
+					return std::nullopt;
+				}
+				const Ref<Scene>& scene = context.GetEditScene();
+				nlohmann::json value = {
+					{ "scene", UUIDToJson(status.Scene) },
+					{ "name", scene->GetName() },
+					{ "entities", scene->GetEntityCount() },
+					{ "seconds", status.Seconds },
+					{ "frames", frames } };
+				if (!frameTimes.empty())
+					value["frameTimes"] = DescribeFrameTimes(std::move(frameTimes));
+				return EditorCommandResult::Ok(std::move(value));
+			});
+		}
+
+		nlohmann::json DescribeSubScene(const SubSceneStatus& status)
+		{
+			return {
+				{ "subScene", status.ID },
+				{ "scene", status.Scene.IsValid() ? UUIDToJson(status.Scene) : nlohmann::json(nullptr) },
+				{ "state", SubSceneStateToString(status.State) },
+				{ "progress", status.Progress },
+				{ "createdEntities", status.CreatedEntities },
+				{ "skippedEntities", status.SkippedEntities },
+				{ "totalEntities", status.TotalEntities },
+				{ "slices", status.Slices },
+				{ "error", status.Error.empty() ? nlohmann::json(nullptr) : nlohmann::json(status.Error) } };
+		}
+
+		// What scene.loadStatus reports: the scene being opened or the last one, the running game's switch and its sub-scenes.
+		nlohmann::json DescribeSceneLoads(const EditorContext& context)
+		{
+			const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+			nlohmann::json open = nullptr;
+			nlohmann::json lastOpen = nullptr;
+			if (context.IsSceneLoading())
+			{
+				open = { { "scene", UUIDToJson(status.Scene) }, { "startScene", status.StartScene }, { "state", SceneLoadStateToString(status.State) },
+					{ "progress", status.Progress } };
+			}
+			else if (status.ID != 0)
+			{
+				lastOpen = { { "scene", UUIDToJson(status.Scene) }, { "startScene", status.StartScene }, { "state", SceneLoadStateToString(status.State) },
+					{ "error", status.Error.empty() ? nlohmann::json(nullptr) : nlohmann::json(status.Error) }, { "seconds", status.Seconds } };
+			}
+			nlohmann::json play = nullptr;
+			if (context.IsRuntimeSceneLoading())
+				play = { { "scene", UUIDToJson(context.GetRuntimeSceneLoadTarget()) }, { "progress", context.GetRuntimeSceneLoadProgress() } };
+			nlohmann::json subScenes = nlohmann::json::array();
+			for (const SubSceneStatus& subScene : context.GetActiveScene()->GetSubScenes())
+				subScenes.push_back(DescribeSubScene(subScene));
+			return { { "open", std::move(open) }, { "lastOpen", std::move(lastOpen) }, { "play", std::move(play) }, { "subScenes", std::move(subScenes) } };
+		}
+
+		// The load of scene.loadAdditive: starts loading the scene asset into the running scene and answers once every entity
+		// of it exists (or it failed), with its roots.
+		EditorCommandResult LoadSubSceneAndWait(EditorContext& context, AssetHandle handle)
+		{
+			const Ref<Scene>& running = context.GetActiveScene();
+			std::string error;
+			const SubSceneID id = running->LoadSubScene(handle, {}, &error);
+			if (id == 0)
+				return EditorCommandResult::Fail(error);
+			const auto started = std::chrono::steady_clock::now();
+			return EditorCommandResult::Defer([id, scene = std::weak_ptr<Scene>(running), started, frames = uint64_t(0)](EditorContext& context) mutable
+				-> std::optional<EditorCommandResult>
+			{
+				frames++;
+				const Ref<Scene> target = scene.lock();
+				if (!target || target != context.GetActiveScene())
+					return EditorCommandResult::Fail("Play mode stopped or switched scenes before the sub-scene loaded", EditorCommandError::Cancelled);
+				const SubSceneStatus* status = target->GetSubSceneStatus(id);
+				if (!status)
+					return EditorCommandResult::Fail(fmt::format("Sub-scene {} was unloaded before it loaded", id), EditorCommandError::Cancelled);
+				if (status->State == SubSceneState::Failed)
+					return EditorCommandResult::Fail(fmt::format("Sub-scene {} failed: {}", id, status->Error));
+				if (status->State != SubSceneState::Loaded)
+					return std::nullopt;
+				nlohmann::json value = DescribeSubScene(*status);
+				nlohmann::json roots = nlohmann::json::array();
+				for (const Entity root : target->GetSubSceneRoots(id))
+					roots.push_back(UUIDToJson(root.GetUUID()));
+				value["roots"] = std::move(roots);
+				value["seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+				value["frames"] = frames;
+				value["warning"] = GetRunningCopyWarning(context);
+				return EditorCommandResult::Ok(std::move(value));
+			});
 		}
 
 		EditorCommandResult RollBack(SceneEditTransaction& transaction, std::string error, EditorCommandError kind)
@@ -288,7 +421,12 @@ namespace Strata
 				return EditorCommandResult::Ok();
 			} });
 
-		registry.Register({ "scene.open", "Opens a scene asset for editing (unsaved changes are discarded).",
+		registry.Register({ "scene.open",
+			"Opens a scene asset for editing (unsaved changes are discarded). The scene is read and loaded with everything it uses in the "
+			"background while the editor goes on showing the edited scene, which stays read-only meanwhile (edits and play.start fail); the "
+			"command answers once the opened scene replaced it: {scene, name, entities, seconds, frames, frameTimes (the CPU time of the frames "
+			"that ran meanwhile: count, medianMs, meanMs, p95Ms, maxMs)}. Opening another scene, scene.new or closing the project cancels it. "
+			"scene.loadStatus (and editor.status's sceneLoad) report its progress.",
 			ObjectSchema({ { "scene", AssetSchema("Scene to open") } }, { "scene" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -296,10 +434,74 @@ namespace Strata
 				const AssetHandle handle = ResolveAsset(context, arguments, "scene", AssetType::Scene);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				std::string error;
-				if (!context.OpenScene(handle, &error))
-					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok();
+				return OpenSceneAndWait(context, handle);
+			} });
+
+		registry.Register({ "scene.loadStatus",
+			"The scene loads under way: open (the scene scene.open, or project.open for the project's start scene, is opening: {scene, startScene, "
+			"state: LoadingScene | LoadingDependencies, progress 0 to 1}, null when none), lastOpen (the latest of those that finished: {scene, "
+			"startScene, state: Ready | Failed | Cancelled, error, seconds}, null before the first), play (the scene a running game asked for "
+			"while it loads, {scene, progress}, null when none) and subScenes (the running scene's sub-scenes, scene.loadAdditive: {subScene, "
+			"scene, state: Loading | Instantiating | Loaded | Failed, progress, createdEntities, skippedEntities (not created because an "
+			"ancestor was deleted while the sub-scene loaded), totalEntities, slices, error}). With wait, it "
+			"answers once no scene is being opened, e.g. after starting an editor with a window, which opens its project's start scene in the "
+			"background (scene edits and play.start fail until then).",
+			ObjectSchema({ { "wait", BoolSchema("Answer once no scene is being opened (default false: at once)") } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const bool wait = arguments.GetBool("wait", false);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!wait || !context.IsSceneLoading())
+					return EditorCommandResult::Ok(DescribeSceneLoads(context));
+				return EditorCommandResult::Defer([](EditorContext& context) -> std::optional<EditorCommandResult>
+				{
+					if (context.IsSceneLoading())
+						return std::nullopt;
+					return EditorCommandResult::Ok(DescribeSceneLoads(context));
+				});
+			} });
+
+		registry.Register({ "scene.loadAdditive",
+			"Loads a scene asset into the running game next to what it holds (a sub-scene, as scripts' Scene::LoadAdditive does; play mode "
+			"only, and like every edit while playing it is discarded by play.stop). The scene and everything it uses load in the background, "
+			"then its entities are created over the following frames (at most the scene's maxEntitiesInstantiatedPerFrame per frame), keeping "
+			"their IDs: a sub-scene whose IDs the running scene has already (the same scene twice) fails. Answers once every entity exists: "
+			"{subScene (its number, for scene.unloadAdditive), scene, state, progress, createdEntities, skippedEntities, totalEntities, slices, roots (the "
+			"top-level entities), seconds, frames, warning}. scene.loadStatus reports sub-scenes while they load.",
+			ObjectSchema({ { "scene", AssetSchema("Scene asset to load into the running scene") } }, { "scene" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const AssetHandle handle = ResolveAsset(context, arguments, "scene", AssetType::Scene);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!context.IsPlaying())
+					return EditorCommandResult::Fail("Sub-scenes load into a running game: start play mode first (play.start)");
+				return LoadSubSceneAndWait(context, handle);
+			} });
+
+		registry.Register({ "scene.unloadAdditive",
+			"Removes a sub-scene from the running game (play mode only): stops its load, releasing what it held loaded, or destroys its entities "
+			"with their descendants (their scripts get OnDestroy). Returns {subScene, entities (the running scene's count afterwards), warning}.",
+			ObjectSchema({ { "subScene", IntegerSchema("The sub-scene's number (scene.loadAdditive, scene.loadStatus)", 1, std::numeric_limits<int64_t>::max()) } },
+				{ "subScene" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				if (!arguments.Has("subScene"))
+					arguments.SetError("Missing parameter 'subScene'");
+				const int64_t id = arguments.GetInt("subScene", 0, 1, std::numeric_limits<int64_t>::max());
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!context.IsPlaying())
+					return EditorCommandResult::Fail("Sub-scenes exist in a running game only: start play mode first (play.start)");
+				Scene& scene = *context.GetActiveScene();
+				if (!scene.GetSubSceneStatus(static_cast<SubSceneID>(id)))
+					return EditorCommandResult::InvalidParameters(fmt::format("The running scene has no sub-scene {} (see scene.loadStatus)", id));
+				scene.UnloadSubScene(static_cast<SubSceneID>(id));
+				return EditorCommandResult::Ok({ { "subScene", id }, { "entities", scene.GetEntityCount() }, { "warning", GetRunningCopyWarning(context) } });
 			} });
 
 		registry.Register({ "scene.save", "Saves the edited scene to its asset. New scenes need scene.saveAs first.", ObjectSchema({}),
@@ -335,13 +537,17 @@ namespace Strata
 		capacitySchema["description"] = "Physics world capacities (only the given ones change), reserved in memory when play starts; raise them for "
 			"scenes that create many bodies while they play";
 		registry.Register({ "scene.setSettings",
-			"Changes physics settings of the edited scene: gravity, the fixed step and the physics world's capacities (undoable, one step). "
-			"Capacities take effect when a physics world is created, at the next play start, so set them in edit mode: while playing, changes go "
-			"to the running copy only and play.stop discards them (the result then has a warning). Returns the settings.",
+			"Changes settings of the edited scene: gravity, the fixed step, the physics world's capacities and how many entities additive loads "
+			"(sub-scenes) create per frame (undoable, one step). Capacities take effect when a physics world is created, at the next play start, "
+			"so set them in edit mode: while playing, changes go to the running copy only and play.stop discards them (the result then has a "
+			"warning). Returns the settings.",
 			ObjectSchema({
 				{ "gravity", Vec3Schema("Gravity in m/s^2") },
 				{ "fixedTimestep", NumberSchema("Fixed simulation step in seconds (1/1000 to 1/10)") },
 				{ "maxFixedStepsPerFrame", IntegerSchema("Upper bound of fixed steps per frame", 1, 64) },
+				{ "maxEntitiesInstantiatedPerFrame", IntegerSchema("Entities sub-scenes loading into the scene (scene.loadAdditive, scripts' "
+					"Scene::LoadAdditive) may create per frame, all together (default 5000); each frame also stops creating after about 2 ms", 1,
+					SceneSettings::c_MaxEntitiesInstantiatedLimit) },
 				{ "physicsCapacity", std::move(capacitySchema) } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -369,11 +575,16 @@ namespace Strata
 				}
 				CommandArguments arguments(parameters);
 				after.MaxFixedStepsPerFrame = static_cast<uint32_t>(arguments.GetInt("maxFixedStepsPerFrame", before.MaxFixedStepsPerFrame, 1, 64));
+				after.MaxEntitiesInstantiatedPerFrame = static_cast<uint32_t>(arguments.GetInt("maxEntitiesInstantiatedPerFrame", before.MaxEntitiesInstantiatedPerFrame,
+					1, SceneSettings::c_MaxEntitiesInstantiatedLimit));
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				if (std::string error; !context.CheckSceneEditable(&error))
+					return EditorCommandResult::Fail(std::move(error));
 
 				const bool changed = after.Gravity != before.Gravity || after.FixedTimestep != before.FixedTimestep
-					|| after.MaxFixedStepsPerFrame != before.MaxFixedStepsPerFrame || after.PhysicsCapacity != before.PhysicsCapacity;
+					|| after.MaxFixedStepsPerFrame != before.MaxFixedStepsPerFrame || after.PhysicsCapacity != before.PhysicsCapacity
+					|| after.MaxEntitiesInstantiatedPerFrame != before.MaxEntitiesInstantiatedPerFrame;
 				scene.GetSettings() = after;
 				if (changed && !context.IsPlaying())
 					context.GetUndoStack().Record(CreateScope<SceneSettingsAction>(scene, before, after));

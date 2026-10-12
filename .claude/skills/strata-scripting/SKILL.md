@@ -191,17 +191,64 @@ second to load is dropped. Clip, volume, pitch, looping and spatial settings are
 
 `Game::Quit(exitCode)` ends the game (an exported game exits with the code, the editor stops play mode).
 `Game::LoadScene(handleOrPath)` replaces the running scene; `Game::ReloadScene()` restarts it (e.g. after a game over).
-Both happen after the current frame; every entity of the old scene goes away (scripts get `OnDestroy`), so pass state to
-the next scene through fields set in that scene, or rebuild it there. The switch loads the scene synchronously: request the
-next level early (`Assets::RequestLoad(Assets::Find("Levels/Two.stscene"))` while the current one runs) to avoid a hitch.
+The next scene and what it uses load in the background while the running scene goes on (its scripts keep
+running); once it is in (with what it uses where that fits in the memory budgets, else the new scene streams that in as
+it draws it), it replaces the running scene between
+frames: every entity of the old scene goes away (scripts get `OnDestroy`), so pass state to the next scene through fields
+set in that scene, or rebuild it there. Meanwhile `Game::GetSceneLoadProgress()` returns how far the next scene got, in
+[0, 1] (a loading bar on a Text entity), and a negative value while no switch is under way. Asking again for the scene
+that is loading changes nothing, so `if (lives <= 0) Game::LoadScene(GameOver);` in `OnUpdate` is fine; asking for
+another scene replaces the load. A scene named in a field (the next level) is not loaded with the scene that names it.
 In the editor `ReloadScene` restarts what play mode runs, including unsaved edits.
+
+### Streaming: sub-scenes, loading progress, many instances
+
+```cpp
+SubScene m_Room;                                         // A member: re-create it after a hot reload if needed
+
+void OnCreate() override
+{
+	m_Room = Scene::LoadAdditive("Levels/Room2.stscene");  // Loads next to what the scene holds; null if not a scene
+	Assets::GetLoadProgress(Tree);                         // Starts loading the prefab and all it uses
+}
+
+void OnUpdate(float) override
+{
+	if (m_Room.IsLoaded() && PlayerLeft())
+		m_Room.Unload();                                   // Its entities go at the end of the frame (OnDestroy runs)
+	if (!m_Planted && Assets::GetLoadProgress(Tree) >= 1.0f)
+	{
+		std::vector<glm::mat4> transforms;                 // Translation, rotation and scale per instance
+		for (int i = 0; i < 100; i++)
+			transforms.push_back(glm::translate(glm::mat4(1.0f), glm::vec3(i * 3.0f, 0.0f, 0.0f)));
+		const std::vector<Entity> trees = Scene::InstantiateMany(Tree, transforms); // Roots, in order
+		m_Planted = !trees.empty();
+	}
+}
+```
+
+- A sub-scene's entities appear over the frames after its scene asset and everything it uses loaded, at most the scene's
+  `MaxEntitiesInstantiatedPerFrame` per frame (5000 by default, scene settings), and behave like any other: their scripts
+  get `OnCreate`, physics, audio and rendering pick them up. Destroying one of them while the rest still appear is fine:
+  its children that did not exist yet are not created (they would have gone with it). They keep the IDs they have in
+  their file, so loading the same
+  sub-scene twice fails (an error is logged): unload it first. Keep the `SubScene` (or its `GetID()`) to unload it. A
+  hot reload starts members that are not fields over, while the sub-scene stays loaded: keep its ID in an `int32_t` field
+  as well (IDs count up from 1 per scene) and get it back in `OnReload` with
+  `m_Room = SubScene(static_cast<uint64_t>(m_RoomID));`.
+- `Assets::GetLoadProgress(asset)` loads what using an asset needs (a prefab's meshes, materials and textures; not other
+  scenes it names) and keeps it loaded like `Assets::RequestLoad` until `Assets::Release(asset)`; at 1, instances draw
+  complete in their first frame.
+- `Scene::InstantiateMany(prefabOrModel, transforms, parent)` makes all instances in one call (much cheaper than a loop
+  of `Instantiate`), or none when the asset is not loaded yet or a transform has a zero scale.
 
 ### Text, spawning and other building blocks
 
 - On-screen text (score, lives, messages): an entity with a `Text` component in screen space; change it with
   `entity.SetProperty("Text", "Text", std::string("Score: ") + std::to_string(score))`.
-- Spawning: `Scene::Instantiate(prefab, position)` (request the prefab early), `Scene::CreateEntity` plus
-  `AddComponent`/`SetProperty` for simple shapes; `entity.Destroy()` removes it at the end of the frame.
+- Spawning: `Scene::Instantiate(prefab, position)` (request the prefab early), `Scene::InstantiateMany` for many at once,
+  `Scene::CreateEntity` plus `AddComponent`/`SetProperty` for simple shapes; `entity.Destroy()` removes it at the end of
+  the frame.
 - `Random` (StrataScript/Gameplay.h): seedable and deterministic on every platform - `Random random(seed);
   random.Range(1, 6); random.Range(-1.0f, 1.0f); random.NextFloat(); random.Chance(0.25f); random.Seed(seed)`.
 - `Timer`: `Timer spawn(2.0f, true);` then `for (int32_t i = spawn.Update(deltaTime); i > 0; i--) SpawnEnemy();`

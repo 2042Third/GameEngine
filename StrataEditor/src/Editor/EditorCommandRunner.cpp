@@ -17,8 +17,9 @@ namespace Strata
 	namespace
 	{
 
-		// Results can be large (entity listings, images): the log keeps the start.
-		constexpr size_t c_MaxLoggedResultSize = 2000;
+		// Results can be large (entity listings, images): the log keeps the start. Summaries (editor.status, editor.perf) fit
+		// whole, so that tools reading a command script's log can parse them.
+		constexpr size_t c_MaxLoggedResultSize = 16 * 1024;
 
 		std::string DescribeResultValue(const nlohmann::json& value)
 		{

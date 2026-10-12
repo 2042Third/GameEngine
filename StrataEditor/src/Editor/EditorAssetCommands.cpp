@@ -14,6 +14,9 @@
 #include <Strata/Scene/Prefab.h>
 
 #include <algorithm>
+#include <memory>
+#include <optional>
+#include <string>
 
 namespace Strata
 {
@@ -108,6 +111,46 @@ namespace Strata
 			});
 		}
 
+		// Adds what became of the start scene to a result: startSceneOpened, and startSceneError when it was not opened.
+		nlohmann::json DescribeStartScene(nlohmann::json value, bool opened, const std::string& error)
+		{
+			value["startSceneOpened"] = opened;
+			if (!opened && !error.empty())
+				value["startSceneError"] = error;
+			return value;
+		}
+
+		// Answers a command that opened a project (EditorContext::BeginOpenProject) once its start scene is open (it loads in
+		// the background, so the frames go on), or at once for a project without one. The project stays open whatever becomes
+		// of its start scene: the result says {startScene, startSceneOpened, startSceneError?, seconds} besides `value`.
+		EditorCommandResult FinishProjectOpen(EditorContext& context, nlohmann::json value)
+		{
+			const AssetHandle startScene = context.GetProject()->GetConfig().StartScene;
+			value["startScene"] = startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr);
+			const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+			if (!startScene.IsValid())
+				return EditorCommandResult::Ok(DescribeStartScene(std::move(value), false, std::string()));
+			// The start scene could not even start loading (BeginOpenProject recorded why as a failed load).
+			if (!context.IsSceneLoading())
+				return EditorCommandResult::Ok(DescribeStartScene(std::move(value), false, status.Error));
+
+			const uint64_t id = status.ID;
+			const std::weak_ptr<Project> project = context.GetProject();
+			return EditorCommandResult::Defer([id, project, value = std::move(value)](EditorContext& context) mutable -> std::optional<EditorCommandResult>
+			{
+				if (project.lock() != context.GetProject())
+					return EditorCommandResult::Fail("Another project was opened (or the project was closed) before its start scene was open",
+						EditorCommandError::Cancelled);
+				const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+				if (status.ID != id)
+					return EditorCommandResult::Ok(DescribeStartScene(std::move(value), false, "Another scene was opened instead (scene.open)"));
+				if (!status.IsFinished())
+					return std::nullopt;
+				value["seconds"] = status.Seconds;
+				return EditorCommandResult::Ok(DescribeStartScene(std::move(value), status.State == SceneLoadState::Ready, status.Error));
+			});
+		}
+
 	}
 
 	void RegisterAssetCommands(EditorCommandRegistry& registry)
@@ -168,7 +211,11 @@ namespace Strata
 					{ "startScene", startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr) } });
 			} });
 
-		registry.Register({ "project.open", "Opens a project file or the project in a directory (unsaved scene changes are discarded).",
+		registry.Register({ "project.open",
+			"Opens a project file or the project in a directory (unsaved scene changes are discarded). The project opens at once; its start "
+			"scene loads in the background like scene.open's (the frames go on, scene.loadStatus reports it) and the command answers once it is "
+			"the edited scene: {projectFile, startScene (null when the project has none), startSceneOpened, startSceneError (why it was not "
+			"opened; the project stays open with an empty scene), seconds (the start scene's load)}.",
 			ObjectSchema({ { "path", StringSchema("Project file (.stproj) or project directory") } }, { "path" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -177,9 +224,9 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				std::string error;
-				if (!context.OpenProject(FileSystem::FromUTF8(path), &error))
+				if (!context.BeginOpenProject(FileSystem::FromUTF8(path), &error))
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok();
+				return FinishProjectOpen(context, { { "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) } });
 			} });
 
 		registry.Register({ "project.close",
@@ -210,8 +257,8 @@ namespace Strata
 
 		registry.Register({ "project.openSample",
 			"Copies a sample project (project.samples) into a new directory and opens the copy, like project.open (unsaved scene changes are "
-			"discarded); the sample itself stays unchanged. The copy leaves out local editor data (.strata): build its scripts with script.build "
-			"before playing.",
+			"discarded; it answers once the start scene is open, with project.open's fields and sample); the sample itself stays unchanged. The "
+			"copy leaves out local editor data (.strata): build its scripts with script.build before playing.",
 			ObjectSchema({
 				{ "sample", StringSchema("The sample's id from project.samples, e.g. \"Tetris\"") },
 				{ "directory", StringSchema("Absolute directory for the copy: created, or an existing empty directory") } }, { "sample", "directory" }),
@@ -237,9 +284,9 @@ namespace Strata
 				const std::filesystem::path projectFile = ProjectSamples::Copy(*sample, FileSystem::FromUTF8(directory), &error);
 				if (projectFile.empty())
 					return EditorCommandResult::Fail(error);
-				if (!context.OpenProject(projectFile, &error))
+				if (!context.BeginOpenProject(projectFile, &error))
 					return EditorCommandResult::Fail(fmt::format("The sample was copied to '{}' but could not be opened: {}", directory, error));
-				return EditorCommandResult::Ok({ { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) } });
+				return FinishProjectOpen(context, { { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) } });
 			} });
 
 		registry.Register({ "project.setStartScene", "Sets the scene a built game starts with and saves the project file.",
@@ -370,11 +417,16 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "cancelling", true } });
 			} });
 
-		registry.Register({ "project.setExportSettings", "Sets how the project exports and saves the project file. alwaysInclude: assets (\"Prefabs/Enemy.stprefab\") "
-			"and folders (\"Prefabs\") relative to the asset directory that an export with prune keeps, with what they use, although no scene uses them "
-			"(assets scripts load by path); each must name an asset or a folder of assets.",
-			ObjectSchema({ { "alwaysInclude", { { "type", "array" }, { "items", { { "type", "string" } } },
-				{ "description", "Asset paths and folders relative to the asset directory ('/' separators); empty to keep nothing extra" } } } }, { "alwaysInclude" }),
+		registry.Register({ "project.setExportSettings", "Sets how the project exports and saves the project file; settings left out keep their "
+			"values. alwaysInclude: assets (\"Prefabs/Enemy.stprefab\") and folders (\"Prefabs\") relative to the asset directory that an export "
+			"with prune keeps, with what they use, although no scene uses them (assets scripts load by path); each must name an asset or a folder "
+			"of assets. loadingScene: a scene the exported game plays while its start scene loads (null: none, the game shows a cleared frame "
+			"meanwhile). Returns both settings.",
+			ObjectSchema({
+				{ "alwaysInclude", { { "type", "array" }, { "items", { { "type", "string" } } },
+					{ "description", "Asset paths and folders relative to the asset directory ('/' separators); empty to keep nothing extra" } } },
+				{ "loadingScene", { { "type", { "string", "null" } },
+					{ "description", "Scene (handle or path) the game plays while its start scene loads; null for none" } } } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				std::string error;
@@ -382,28 +434,48 @@ namespace Strata
 				if (!assets)
 					return EditorCommandResult::Fail(error);
 				const nlohmann::json* list = JsonUtils::Find(parameters, "alwaysInclude");
-				if (!list || !list->is_array())
-					return EditorCommandResult::InvalidParameters("'alwaysInclude' must be an array of asset paths");
-				std::vector<std::string> alwaysInclude;
-				for (const nlohmann::json& entry : *list)
-				{
-					if (!entry.is_string())
-						return EditorCommandResult::InvalidParameters("'alwaysInclude' must be an array of asset paths");
-					alwaysInclude.push_back(entry.get<std::string>());
-				}
-				// Every entry must name something, as a pruned pack's plan requires.
-				if (!assets->CheckAlwaysInclude(alwaysInclude, &error))
-					return EditorCommandResult::InvalidParameters(error);
-
+				const nlohmann::json* loading = JsonUtils::Find(parameters, "loadingScene");
+				if (!list && !loading)
+					return EditorCommandResult::InvalidParameters("Missing parameter 'alwaysInclude' (or 'loadingScene')");
 				Project& project = *context.GetProject();
-				const std::vector<std::string> previous = project.GetConfig().Export.AlwaysInclude;
-				project.GetConfig().Export.AlwaysInclude = std::move(alwaysInclude);
+				const ProjectExportSettings previous = project.GetConfig().Export;
+				ProjectExportSettings settings = previous;
+				if (list)
+				{
+					if (!list->is_array())
+						return EditorCommandResult::InvalidParameters("'alwaysInclude' must be an array of asset paths");
+					settings.AlwaysInclude.clear();
+					for (const nlohmann::json& entry : *list)
+					{
+						if (!entry.is_string())
+							return EditorCommandResult::InvalidParameters("'alwaysInclude' must be an array of asset paths");
+						settings.AlwaysInclude.push_back(entry.get<std::string>());
+					}
+					// Every entry must name something, as a pruned pack's plan requires.
+					if (!assets->CheckAlwaysInclude(settings.AlwaysInclude, &error))
+						return EditorCommandResult::InvalidParameters(error);
+				}
+				if (loading)
+				{
+					settings.LoadingScene = UUID::Null();
+					if (!loading->is_null())
+					{
+						CommandArguments arguments(parameters);
+						settings.LoadingScene = ResolveAsset(context, arguments, "loadingScene", AssetType::Scene);
+						if (!arguments.IsValid())
+							return arguments.Fail();
+					}
+				}
+
+				project.GetConfig().Export = std::move(settings);
 				if (!project.Save(&error))
 				{
-					project.GetConfig().Export.AlwaysInclude = previous;
+					project.GetConfig().Export = previous;
 					return EditorCommandResult::Fail(error);
 				}
-				return EditorCommandResult::Ok({ { "alwaysInclude", project.GetConfig().Export.AlwaysInclude } });
+				const ProjectExportSettings& saved = project.GetConfig().Export;
+				return EditorCommandResult::Ok({ { "alwaysInclude", saved.AlwaysInclude },
+					{ "loadingScene", saved.LoadingScene.IsValid() ? UUIDToJson(saved.LoadingScene) : nlohmann::json(nullptr) } });
 			} });
 
 		////////////////////////////////////////////////////////////////////////////////

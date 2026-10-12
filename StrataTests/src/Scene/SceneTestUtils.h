@@ -2,13 +2,19 @@
 
 #include <doctest/doctest.h>
 
+#include "Strata/Core/JobSystem.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 
 #include <glm/gtc/quaternion.hpp>
 
+#include <atomic>
+#include <chrono>
+#include <memory>
 #include <random>
 #include <string>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace Strata::Tests
@@ -23,6 +29,82 @@ namespace Strata::Tests
 		error.clear();
 		CHECK_MESSAGE(scene.ValidateWorldTransforms(&error), error);
 	}
+
+	// Watches where a scene is destroyed: a variable in its registry's context, destroyed with the registry, records the
+	// thread that destroyed it. The watch does not keep the scene alive.
+	class SceneDestructionWatch
+	{
+	public:
+		enum class Place : int
+		{
+			NotYet = 0,
+			WatchingThread,   // The thread that made the watch (the main thread of a test)
+			BackgroundThread, // A background thread of the job system (JobPriority::Background)
+			OtherThread
+		};
+
+		explicit SceneDestructionWatch(Scene& scene)
+			: m_State(std::make_shared<State>())
+		{
+			m_State->Watcher = std::this_thread::get_id();
+			scene.GetRegistry().ctx().emplace<Witness>(m_State);
+		}
+
+		Place GetPlace() const { return static_cast<Place>(m_State->Where.load()); }
+		// Waits until the scene was destroyed (up to `timeout`); returns where.
+		Place WaitForDestruction(std::chrono::milliseconds timeout = std::chrono::milliseconds(10000)) const
+		{
+			const auto deadline = std::chrono::steady_clock::now() + timeout;
+			while (GetPlace() == Place::NotYet && std::chrono::steady_clock::now() < deadline)
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			return GetPlace();
+		}
+	private:
+		struct State
+		{
+			std::atomic<int> Where = static_cast<int>(Place::NotYet);
+			std::thread::id Watcher;
+		};
+
+		// Movable only: a witness the context moves leaves nothing behind that could report.
+		struct Witness
+		{
+			std::shared_ptr<State> Shared;
+
+			explicit Witness(std::shared_ptr<State> shared)
+				: Shared(std::move(shared))
+			{
+			}
+
+			Witness(Witness&& other) noexcept
+				: Shared(std::move(other.Shared))
+			{
+			}
+
+			Witness& operator=(Witness&& other) noexcept
+			{
+				Shared = std::move(other.Shared);
+				return *this;
+			}
+
+			Witness(const Witness&) = delete;
+			Witness& operator=(const Witness&) = delete;
+
+			~Witness()
+			{
+				if (!Shared)
+					return;
+				Place place = Place::OtherThread;
+				if (std::this_thread::get_id() == Shared->Watcher)
+					place = Place::WatchingThread;
+				else if (JobSystem::IsBackgroundThread())
+					place = Place::BackgroundThread;
+				Shared->Where = static_cast<int>(place);
+			}
+		};
+
+		std::shared_ptr<State> m_State;
+	};
 
 	// A transform with a recognizable, non-trivial pose (rotation and non-uniform scale), chosen by `random`.
 	inline void RandomizeTransform(Entity entity, std::mt19937& random)

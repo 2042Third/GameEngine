@@ -42,6 +42,8 @@ namespace Strata
 		void OnImGuiRender(EditorPanelContext& context) override;
 		void OnHidden(EditorPanelContext& context) override;
 	private:
+		// The selected entities' components, or the scene's settings with nothing selected.
+		void DrawSelection(EditorContext& context, const EditorCommandRegistry& commands);
 		void DrawHeader(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
 		void DrawComponent(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
 		void DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
@@ -74,6 +76,13 @@ namespace Strata
 			std::string Text;
 		};
 		std::optional<PhysicsSummary> m_PhysicsSummary;
+		// The streaming section's summary, likewise.
+		struct StreamingSummary
+		{
+			uint32_t MaxEntitiesInstantiatedPerFrame = 0;
+			std::string Text;
+		};
+		std::optional<StreamingSummary> m_StreamingSummary;
 		std::unordered_map<const ComponentInfo*, std::vector<std::optional<PropertyValue>>> m_Defaults;
 		MaterialEditor m_MaterialEditor;
 		// The rotation of several entities being edited, until the widget reports the edit finished.

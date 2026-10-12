@@ -39,9 +39,10 @@ namespace
 		{
 		}
 
+		// Runs a command to its end, as the editor's command runner does (scene.open, for one, answers frames later).
 		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{
-			EditorCommandResult result = Commands.Execute(Context, name, parameters);
+			EditorCommandResult result = Tests::CompleteCommand(Context, Commands.Execute(Context, name, parameters));
 			INFO(name, ": ", result.Error);
 			REQUIRE(result.Success);
 			return result.Value;
@@ -49,7 +50,7 @@ namespace
 
 		std::string Error(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{
-			EditorCommandResult result = Commands.Execute(Context, name, parameters);
+			EditorCommandResult result = Tests::CompleteCommand(Context, Commands.Execute(Context, name, parameters));
 			CHECK_FALSE(result.Success);
 			return result.Error;
 		}
@@ -638,6 +639,11 @@ TEST_SUITE("Editor.Commands")
 		std::string error;
 		Scope<GameRuntime> runtime = GameRuntime::Create(manifest, &error);
 		REQUIRE_MESSAGE(runtime, error);
+		// The start scene loads in the background; nothing plays until it is in.
+		CHECK_FALSE(runtime->HasStarted());
+		CHECK(runtime->IsLoadingScene());
+		REQUIRE(runtime->WaitForStart());
+		CHECK_FALSE(runtime->IsLoadingScene());
 		CHECK(runtime->GetManifest().Name == "My Game!");
 		CHECK(runtime->GetManifest().WindowWidth == 640);
 		CHECK(UUIDToJson(runtime->GetSceneHandle()) == scene);
@@ -660,6 +666,7 @@ TEST_SUITE("Editor.Commands")
 		wallClock.TimeDilation = true;
 		runtime = GameRuntime::Create(manifest, &error, wallClock);
 		REQUIRE_MESSAGE(runtime, error);
+		REQUIRE(runtime->WaitForStart());
 		CHECK(runtime->GetScene()->IsTimeDilated());
 		runtime.reset();
 

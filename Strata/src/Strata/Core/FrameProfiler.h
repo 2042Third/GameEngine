@@ -30,10 +30,11 @@ namespace Strata
 		bool InWorkTime = true;
 	};
 
-	inline constexpr std::array<BuiltinFrameStage, 11> c_BuiltinFrameStages = { {
+	inline constexpr std::array<BuiltinFrameStage, 12> c_BuiltinFrameStages = { {
 		{ "Input", true },            // Input::BeginFrame and the window's events (Application::RunFrame)
 		{ "Assets.Update", true },    // AssetManagerBase::Update (and the editor's file changes and imports) without finalization
 		{ "Assets.Finalize", true },  // Finalizing loaded assets on the main thread: GPU uploads (AssetManagerBase)
+		{ "Scene.Load", true },       // Scene loads' main-thread work: swapping a loaded scene in, creating sub-scenes' entities
 		{ "Scene.Scripts", true },    // The "Scripting" scene system's callbacks (SceneSystemDescriptor::ProfileStage)
 		{ "Scene.Physics", true },    // The "Physics" scene system: stepping and contact callbacks
 		{ "Scene.Audio", true },      // The "Audio" scene system

@@ -79,6 +79,32 @@ TEST_SUITE("Scripting.Lifecycle")
 		CHECK(scene.GetSystem<ScriptSystem>() == nullptr);
 	}
 
+	TEST_CASE("A few scripts among many entities start in hierarchy order without walking the hierarchy")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		Scene scene;
+		CreateLogEntity(scene);
+		// Created out of hierarchy order on purpose, among a thousand entities without scripts: Parent > Child, then Root2.
+		Entity root2 = scene.CreateEntity("Root2");
+		for (int index = 0; index < 1000; index++)
+			scene.CreateEntity("Filler " + std::to_string(index));
+		Entity parent = scene.CreateEntity("Parent");
+		Entity child = scene.CreateEntity("Child");
+		scene.SetParent(child, parent);
+		REQUIRE(scene.SetSiblingIndex(parent, 1));
+		AddScriptEntry(root2, "Lifecycle");
+		AddScriptEntry(child, "Lifecycle");
+		AddScriptEntry(parent, "Lifecycle");
+		AddScriptEntry(parent, "LifecycleSecond");
+
+		const uint64_t orderBuilds = scene.GetHierarchyOrderBuildCount();
+		scene.OnRuntimeStart();
+		CHECK(scene.GetHierarchyOrderBuildCount() == orderBuilds);
+		CHECK(GetScriptSystem(scene).GetInstanceCount() == 4);
+		CHECK(GetLog(scene) == Events({ "Parent.Lifecycle.Create", "Parent.LifecycleSecond.Create", "Child.Lifecycle.Create", "Root2.Lifecycle.Create" }));
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Private and protected callback overrides run")
 	{
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));

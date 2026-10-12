@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Asset/AssetTestUtils.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -11,15 +12,18 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Runtime/GameRuntime.h>
 #include <Strata/Scene/Entity.h>
+#include <Strata/Scene/SceneSerializer.h>
 
 #include <nlohmann/json.hpp>
 #include <spdlog/spdlog.h>
 
 #include <algorithm>
+#include <chrono>
 #include <filesystem>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -97,6 +101,15 @@ namespace
 		return std::any_of(entries.begin(), entries.end(), [&](const LogEntry& entry) { return entry.Message.find(text) != std::string::npos; });
 	}
 
+	// Calls `update` (one frame) until `done` holds, at most `maxFrames` times; REQUIREs that it came true.
+	template<typename Update, typename Done>
+	void UpdateUntil(Update&& update, Done&& done, int maxFrames = 600)
+	{
+		for (int frame = 0; frame < maxFrames && !done(); frame++)
+			update();
+		REQUIRE(done());
+	}
+
 }
 
 TEST_SUITE("Editor.GameFlow")
@@ -116,22 +129,35 @@ TEST_SUITE("Editor.GameFlow")
 		CHECK(context.GetActiveScene() == context.GetEditScene());
 		CHECK(Logged(log.GetEntries(), "The game quit with exit code 5"));
 
-		// A scene load replaces the running scene; quitting wins over a load requested in the same frame.
+		// A scene load replaces the running scene once it is loaded (the running scene goes on meanwhile, and reads the load's
+		// progress); quitting wins over a load requested in the same frame.
 		project.Run("play.start");
-		context.GetActiveScene()->RequestSceneLoad(project.LevelTwo);
-		project.Update();
+		const Ref<Scene> first = context.GetActiveScene();
+		first->RequestSceneLoad(project.LevelTwo);
+		project.Update(); // The frame that asks for it starts the load
+		CHECK(project.Run("scene.loadStatus")["play"]["scene"] == UUIDToJson(project.LevelTwo));
+		UpdateUntil([&] { project.Update(); }, [&]
+		{
+			if (context.GetActiveScene() == first)
+			{
+				CHECK(first->IsRunning());
+				CHECK(first->GetSceneLoadProgress().has_value());
+			}
+			return context.GetActiveScene() != first;
+		});
 		REQUIRE(context.IsPlaying());
 		Ref<Scene> running = context.GetActiveScene();
 		CHECK(running->IsRunning());
+		CHECK_FALSE(first->IsRunning());
 		CHECK(running->FindEntityByName("Boss").IsValid());
 		CHECK_FALSE(running->FindEntityByName("Hero").IsValid());
+		CHECK_FALSE(running->GetSceneLoadProgress().has_value());
 
 		// The null handle restarts the scene that runs (Two now), from its asset.
 		running->DestroyEntity(running->FindEntityByName("Boss"));
 		REQUIRE_FALSE(running->FindEntityByName("Boss").IsValid());
 		running->RequestSceneLoad(UUID::Null());
-		project.Update();
-		REQUIRE(context.GetActiveScene() != running);
+		UpdateUntil([&] { project.Update(); }, [&] { return context.GetActiveScene() != running; });
 		running = context.GetActiveScene();
 		CHECK(running->IsRunning());
 		CHECK(running->FindEntityByName("Boss").IsValid());
@@ -168,16 +194,21 @@ TEST_SUITE("Editor.GameFlow")
 		project.Run("play.start");
 		project.Run("play.pause", { { "paused", true } });
 		project.Run("play.step", { { "frames", 3 } });
-		context.GetActiveScene()->RequestSceneLoad(project.LevelTwo);
-		project.Update(); // Runs one step, then the switch
+		const Ref<Scene> previous = context.GetActiveScene();
+		previous->RequestSceneLoad(project.LevelTwo);
+		// The previous scene runs steps while the next one loads; the steps left go to the next one.
+		UpdateUntil([&] { project.Update(); }, [&] { return context.GetActiveScene() != previous; });
 
 		const Ref<Scene> switched = context.GetActiveScene();
 		REQUIRE(switched->FindEntityByName("Boss").IsValid());
 		CHECK(context.IsPaused());
-		CHECK(switched->GetStepFrames() == 2);
+		CHECK(previous->GetFrameIndex() + switched->GetFrameIndex() + switched->GetStepFrames() == 3);
+		CHECK(previous->GetFrameIndex() >= 1); // The step of the frame that asked for the switch
 		for (int32_t frame = 0; frame < 3; frame++)
 			project.Update();
-		CHECK(switched->GetFrameIndex() == 2); // The two remaining steps, then nothing: still paused
+		// The steps were all run, then nothing: still paused.
+		CHECK(switched->GetStepFrames() == 0);
+		CHECK(previous->GetFrameIndex() + switched->GetFrameIndex() == 3);
 		CHECK(context.IsPaused());
 		project.Run("play.stop");
 	}
@@ -193,17 +224,27 @@ TEST_SUITE("Editor.GameFlow")
 		ScopedInfoLogging infoLogging;
 		LogCapture log;
 		const Timestep frame(1.0f / 60.0f);
+		// Nothing plays until the start scene is in.
+		UpdateUntil([&] { game->Update(frame); }, [&] { return game->HasStarted(); });
+		CHECK(game->GetSceneHandle() == project.LevelOne);
 
-		game->GetScene()->RequestSceneLoad(project.LevelTwo);
-		game->Update(frame);
-		CHECK(game->GetSceneHandle() == project.LevelTwo);
+		// The running scene goes on until the next one is in.
+		const Ref<Scene> start = game->GetScene();
+		start->RequestSceneLoad(project.LevelTwo);
+		UpdateUntil([&] { game->Update(frame); }, [&]
+		{
+			if (game->GetScene() == start)
+				CHECK(start->IsRunning());
+			return game->GetSceneHandle() == project.LevelTwo;
+		});
 		CHECK(game->GetScene()->IsRunning());
+		CHECK_FALSE(start->IsRunning());
 		CHECK(game->GetScene()->FindEntityByName("Boss").IsValid());
 
 		// The null handle restarts the current scene.
 		const Ref<Scene> previous = game->GetScene();
 		previous->RequestSceneLoad(UUID::Null());
-		game->Update(frame);
+		UpdateUntil([&] { game->Update(frame); }, [&] { return game->GetScene() != previous; });
 		CHECK(game->GetScene() != previous);
 		CHECK_FALSE(previous->IsRunning());
 		CHECK(game->GetSceneHandle() == project.LevelTwo);
@@ -228,5 +269,88 @@ TEST_SUITE("Editor.GameFlow")
 		game->Update(frame);
 		CHECK(current->GetFrameIndex() == frameIndex);
 		CHECK(Logged(log.GetEntries(), "quit with exit code 7"));
+	}
+
+	TEST_CASE("Each scene load reads the scene's document once, in the editor and in exported games")
+	{
+		const std::filesystem::path directory = CreateTemporaryDirectory("SceneLoadReads");
+		GameFlowProject project(directory / "Flow");
+		EditorContext& context = project.Context;
+
+		// Opening a scene for editing.
+		uint64_t reads = SceneSerializer::GetDeserializeCount();
+		Tests::RunCommandToCompletion(context, project.Commands, "scene.open", { { "scene", UUIDToJson(project.LevelTwo) } });
+		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		REQUIRE(context.GetEditScene()->FindEntityByName("Boss").IsValid());
+		// Opening it again reads the file again (once), not a copy kept from before.
+		reads = SceneSerializer::GetDeserializeCount();
+		Tests::RunCommandToCompletion(context, project.Commands, "scene.open", { { "scene", UUIDToJson(project.LevelOne) } });
+		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+
+		// A switch the game asks for in play mode.
+		project.Run("play.start");
+		reads = SceneSerializer::GetDeserializeCount();
+		context.GetActiveScene()->RequestSceneLoad(project.LevelTwo);
+		UpdateUntil([&] { project.Update(); }, [&] { return context.GetActiveScene()->FindEntityByName("Boss").IsValid(); });
+		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		project.Run("play.stop");
+
+		// The exported game's start scene, and a switch.
+		project.Run("project.setStartScene", { { "scene", UUIDToJson(project.LevelOne) } });
+		const nlohmann::json exported = Tests::RunCommandToCompletion(context, project.Commands, "project.export",
+			{ { "directory", FileSystem::ToUTF8(directory / "Build") }, { "includeRuntime", false } });
+		reads = SceneSerializer::GetDeserializeCount();
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(FileSystem::FromUTF8(exported["manifest"].get<std::string>()), &error);
+		REQUIRE_MESSAGE(game, error);
+		const Timestep frame(1.0f / 60.0f);
+		UpdateUntil([&] { game->Update(frame); }, [&] { return game->GetScene() && game->GetSceneHandle() == project.LevelOne; });
+		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		reads = SceneSerializer::GetDeserializeCount();
+		game->GetScene()->RequestSceneLoad(project.LevelTwo);
+		UpdateUntil([&] { game->Update(frame); }, [&] { return game->GetSceneHandle() == project.LevelTwo; });
+		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		CHECK(game->GetScene()->FindEntityByName("Boss").IsValid());
+	}
+
+	TEST_CASE("A scene the game asks for in every update loads once and replaces the running scene")
+	{
+		// Loads on threads of their own, as in the editor: the running scene goes on while the level is read.
+		ScopedJobSystem jobs(2, 2);
+		const std::filesystem::path directory = CreateTemporaryDirectory("RepeatedSceneSwitch");
+		GameFlowProject project(directory / "Flow");
+		EditorContext& context = project.Context;
+		// A level large enough to take many frames to read.
+		project.Run("scene.new");
+		Scene& crowd = *context.GetEditScene();
+		for (int index = 0; index < 30'000; index++)
+			crowd.CreateEntity("Extra");
+		const UUID bigLevel = GameFlowProject::ToUUID(project.Run("scene.saveAs", { { "path", "Levels/Big.stscene" } })["scene"]);
+		Tests::RunCommandToCompletion(context, project.Commands, "scene.open", { { "scene", UUIDToJson(project.LevelOne) } });
+
+		// As a script does that calls Game::LoadScene in every update while its condition holds: the load goes on (the
+		// progress the running scene reads grows, and never falls back), and the level's document is read once.
+		project.Run("play.start");
+		const Ref<Scene> first = context.GetActiveScene();
+		const uint64_t reads = SceneSerializer::GetDeserializeCount();
+		float progress = 0.0f;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (context.GetActiveScene() == first)
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			first->RequestSceneLoad(bigLevel);
+			project.Update();
+			if (const std::optional<float> reported = first->GetSceneLoadProgress(); reported && context.GetActiveScene() == first)
+			{
+				CHECK(*reported >= progress);
+				progress = *reported;
+			}
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		CHECK(progress > 0.0f);
+		CHECK(context.GetActiveScene()->GetEntityCount() == 30'000);
+		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		CHECK(project.Run("scene.loadStatus")["play"].is_null());
+		project.Run("play.stop");
 	}
 }

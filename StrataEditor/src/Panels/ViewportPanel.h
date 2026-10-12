@@ -58,6 +58,9 @@ namespace Strata
 		void UpdateCamera(EditorContext& context, bool hovered);
 		void UpdateGizmo(EditorContext& context, const ViewportView& view);
 		void DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom, const EditorFrameStats& frame);
+		// While a scene is being opened (EditorContext::IsSceneLoading): a card in the middle of the image naming the scene, with
+		// the load's progress. The edited scene stays visible (and read-only) behind it.
+		void DrawSceneLoadOverlay(EditorContext& context);
 		// The renderer's statistics over the image: frame time, draws, the render scene's proxies and uploads, asset requests.
 		static void DrawStatsOverlay(ImDrawList* drawList, const ImVec2& position, const ViewportRenderer& renderer, const ViewportView& view, const EditorFrameStats& frame);
 		void AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands);

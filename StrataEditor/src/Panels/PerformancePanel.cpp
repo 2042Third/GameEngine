@@ -83,10 +83,11 @@ namespace Strata
 	const ImVec4& PerformancePanel::GetStageColor(FrameStageID stage)
 	{
 		// The built-in stages in the order of c_BuiltinFrameStages: neighbors in the stack differ, the scene's systems get the
-		// calm hues, and the stages that are usually large (rendering, the UI) stand apart from each other.
+		// calm hues, and the stages that are usually large (rendering, the UI) stand apart from each other. Scene.Load shares
+		// Present's color, the one stage the stack never shows (it comes after the frame), so no two stages in the stack do.
 		const UI::ThemePalette& palette = UI::GetThemePalette();
-		const ImVec4* builtin[] = { &palette.Dust, &palette.Umber, &palette.Ochre, &palette.Malachite, &palette.Azurite, &palette.Sandstone, &palette.Rust,
-			&palette.Sulfur, &palette.Cinnabar, &palette.Ash, &palette.Limestone };
+		const ImVec4* builtin[] = { &palette.Dust, &palette.Umber, &palette.Ochre, &palette.Limestone, &palette.Malachite, &palette.Azurite,
+			&palette.Sandstone, &palette.Rust, &palette.Sulfur, &palette.Cinnabar, &palette.Ash, &palette.Limestone };
 		static_assert(std::size(builtin) == c_BuiltinFrameStages.size(), "Every built-in stage needs a color");
 		if (stage < std::size(builtin))
 			return *builtin[stage];

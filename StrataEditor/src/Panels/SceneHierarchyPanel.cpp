@@ -209,11 +209,15 @@ namespace Strata
 				paused ? "Paused: changes are discarded when play stops" : "Playing: changes are discarded when play stops", GetPlayStateColor(context));
 			ImGui::Spacing();
 		}
+		// While a scene is being opened, the scene shown cannot change: its rows show, disabled.
+		const bool readOnly = DrawSceneLoadBanner("Hierarchy.SceneLoadBanner", context);
+		ImGui::BeginDisabled(readOnly);
 		DrawHeader(context, commands);
 
 		// While the panel (or its list) has the keyboard focus.
-		EditorActions::HandleSelectionShortcuts(context, commands, false);
-		if (context.AcceptsEditShortcuts() && !ImGui::GetTopMostPopupModal() && ImGui::Shortcut(ImGuiKey_F2, ImGuiInputFlags_RouteFocused))
+		if (!readOnly)
+			EditorActions::HandleSelectionShortcuts(context, commands, false);
+		if (!readOnly && context.AcceptsEditShortcuts() && !ImGui::GetTopMostPopupModal() && ImGui::Shortcut(ImGuiKey_F2, ImGuiInputFlags_RouteFocused))
 		{
 			if (const Entity primary = context.GetPrimarySelection())
 				BeginRename(primary.GetUUID());
@@ -223,6 +227,7 @@ namespace Strata
 			DrawEmptyScene(context, commands);
 		else
 			DrawRows(context, commands, scene);
+		ImGui::EndDisabled();
 
 		// Applied after drawing, so the rows are never changed while they are drawn.
 		std::vector<std::function<void()>> deferred = std::move(m_Deferred);
@@ -297,14 +302,18 @@ namespace Strata
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max((ImGui::GetContentRegionAvail().x - iconWidth) * 0.5f, 0.0f));
 		ImGui::TextColored(colors.TextDisabled, "%s", Icons::Layers);
 		ImGui::PopFont();
-		const char* title = "The scene is empty";
+		// An empty scene shown while another one opens (a project's start scene) is about to be replaced: nothing is added to it.
+		const bool opening = context.IsSceneLoading() && !context.IsPlaying();
+		const char* title = opening ? "Opening the scene" : "The scene is empty";
 		UI::PushFont(UI::EditorFont::SemiBold, UI::TextSize::Body);
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max((ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(title).x) * 0.5f, 0.0f));
 		ImGui::TextUnformatted(title);
 		ImGui::PopFont();
-		const char* hint = "Add something to start with:";
+		const char* hint = opening ? "Its entities appear once it is open" : "Add something to start with:";
 		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max((ImGui::GetContentRegionAvail().x - ImGui::CalcTextSize(hint).x) * 0.5f, 0.0f));
 		ImGui::TextColored(colors.TextSecondary, "%s", hint);
+		if (opening)
+			return;
 		ImGui::Spacing();
 
 		// Cube, Light and Camera, centered as a group.

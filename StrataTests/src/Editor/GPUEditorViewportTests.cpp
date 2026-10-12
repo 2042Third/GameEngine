@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -672,7 +673,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		const std::filesystem::path tetris = Tests::CopySampleProject("Tetris", &error);
 		REQUIRE_MESSAGE(!tetris.empty(), error);
 		ViewportGPUHarness harness;
-		harness.Run("project.open", { { "path", FileSystem::ToUTF8(tetris) } });
+		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.open", { { "path", FileSystem::ToUTF8(tetris) } });
 
 		nlohmann::json result;
 		harness.Capture({ { "width", 320 }, { "height", 180 }, { "camera", "editor" } }, &result);

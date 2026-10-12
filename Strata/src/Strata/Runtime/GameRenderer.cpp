@@ -14,6 +14,8 @@ namespace Strata
 		// Background of the missing-camera message (sRGB), shown unchanged thanks to neutral post-processing.
 		const glm::vec4 c_MessageBackground = { 0.16f, 0.05f, 0.05f, 1.0f };
 		const glm::vec4 c_MessageColor = { 1.0f, 0.85f, 0.6f, 1.0f };
+		// The frame of a game that has no scene to show yet (its start scene loads without a loading scene).
+		const glm::vec4 c_EmptyBackground = { 0.0f, 0.0f, 0.0f, 1.0f };
 
 	}
 
@@ -81,6 +83,21 @@ namespace Strata
 		SceneCamera camera;
 		camera.Projection = Math::PerspectiveReverseZ(camera.VerticalFOV, aspectRatio, camera.Near, camera.Far);
 		camera.ClearColor = c_MessageBackground;
+		return m_Renderer->Render(*m_MessageScene, camera, target);
+	}
+
+	bool GameRenderer::RenderEmpty(nvrhi::IFramebuffer* target, const glm::uvec2& size)
+	{
+		ST_PROFILE_FUNCTION();
+		m_Renderer->SetViewportSize(size.x, size.y);
+		m_ShowingMessage = false;
+		m_LastScene.reset();
+		if (!target || size.x == 0 || size.y == 0)
+			return false;
+		m_MessageText.GetComponent<TextComponent>().Text.clear();
+		SceneCamera camera;
+		camera.Projection = Math::PerspectiveReverseZ(camera.VerticalFOV, static_cast<float>(size.x) / static_cast<float>(size.y), camera.Near, camera.Far);
+		camera.ClearColor = c_EmptyBackground;
 		return m_Renderer->Render(*m_MessageScene, camera, target);
 	}
 

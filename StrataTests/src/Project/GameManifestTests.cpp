@@ -147,6 +147,42 @@ TEST_SUITE("Project.GameManifest")
 		}
 	}
 
+	TEST_CASE("Game manifests name an optional loading scene, and version 3 manifests load without")
+	{
+		GameManifest manifest;
+		manifest.AssetPack = "Game.stpak";
+		manifest.StartScene = UUID(0x42);
+		std::string error;
+		// None: written as null, read as none.
+		nlohmann::json json = manifest.ToJson();
+		CHECK(json["Strata"]["Version"] == 4);
+		CHECK(json["Game"]["LoadingScene"].is_null());
+		std::optional<GameManifest> loaded = GameManifest::FromJson(json, &error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK_FALSE(loaded->LoadingScene.IsValid());
+
+		manifest.LoadingScene = UUID(0x43);
+		loaded = GameManifest::FromJson(manifest.ToJson(), &error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK(loaded->LoadingScene == UUID(0x43));
+
+		nlohmann::json version3 = manifest.ToJson();
+		version3["Strata"]["Version"] = 3;
+		version3["Game"].erase("LoadingScene");
+		loaded = GameManifest::FromJson(version3, &error);
+		REQUIRE_MESSAGE(loaded, error);
+		CHECK_FALSE(loaded->LoadingScene.IsValid());
+
+		for (const nlohmann::json& value : { nlohmann::json("not a handle"), nlohmann::json(3.5), nlohmann::json("0000000000000000") })
+		{
+			INFO("loading scene: ", value.dump());
+			json = manifest.ToJson();
+			json["Game"]["LoadingScene"] = value;
+			CHECK_FALSE(GameManifest::FromJson(json, &error).has_value());
+			CHECK(error.find("LoadingScene") != std::string::npos);
+		}
+	}
+
 	TEST_CASE("Games mount the patch packs their manifest lists over their pack")
 	{
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("GameManifestPatches");

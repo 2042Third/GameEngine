@@ -2,13 +2,25 @@
 #include "Strata/Scene/Prefab.h"
 
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Reflection/ComponentRegistry.h"
+#include "Strata/Scene/Components.h"
 #include "Strata/Scene/SceneSerializer.h"
+
+#include <algorithm>
+#include <string_view>
+#include <unordered_map>
 
 namespace Strata
 {
 
 	namespace
 	{
+
+		// The shares of reading a scene document (SceneAsset::Deserialize) its steps take, as measured on a scene of a million
+		// entities (5.7 s in all, Release): parsing the JSON, then creating the entities; the rest goes to freeing the
+		// document (0.8 s of the 1 s left) and computing the world transforms.
+		constexpr float c_SceneReadParseShare = 0.41f;
+		constexpr float c_SceneReadEntityShare = 0.42f;
 
 		// Validates a {"Strata": {"Format": format, "Version": n}, key: {...}} document and returns the payload.
 		const nlohmann::json* ReadDocument(const nlohmann::json& json, std::string_view format, std::string_view key, uint32_t maxVersion, std::string* outError)
@@ -43,103 +55,205 @@ namespace Strata
 			return JsonUtils::Parse(std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), outError);
 		}
 
-		// Heap memory of a string beyond the string object (short strings live inside it).
-		uint64_t GetStringHeapBytes(const std::string& text)
+		// A value of an instance's property as its prototype entity would have it: a reference to an entity of the instance
+		// names the prototype entity it was made from.
+		PropertyValue ToPrototypeValue(PropertyType type, PropertyValue value, const std::unordered_map<UUID, UUID>& instanceToPrototype)
 		{
-			return text.capacity() > sizeof(std::string) - 1 ? text.capacity() + 1 : 0;
+			if (const UUID* entity = std::get_if<UUID>(&value); entity && type == PropertyType::Entity)
+			{
+				if (auto mapped = instanceToPrototype.find(*entity); mapped != instanceToPrototype.end())
+					return PropertyValue(mapped->second);
+			}
+			return value;
 		}
 
-		// About what a parsed document occupies: every value, plus the containers' storage (std::map nodes for objects,
-		// vector storage for arrays) and string storage. Walks with an explicit stack: documents can nest deeper than the
-		// thread's stack would allow recursion to.
-		uint64_t EstimateJsonBytes(const nlohmann::json& document)
+		// Whether two script components hold the same scripts with the same field overrides (entity fields of the instance
+		// mapped to the prototype's entities).
+		bool ScriptsMatch(const ScriptComponent& instance, const ScriptComponent& prototype, const std::unordered_map<UUID, UUID>& instanceToPrototype)
 		{
-			// A red-black tree node: three links and a color, before the key and the value.
-			constexpr uint64_t c_MapNodeOverhead = 4 * sizeof(void*);
-
-			uint64_t bytes = sizeof(nlohmann::json);
-			std::vector<const nlohmann::json*> pending = { &document };
-			while (!pending.empty())
+			if (instance.Scripts.size() != prototype.Scripts.size())
+				return false;
+			for (size_t script = 0; script < instance.Scripts.size(); script++)
 			{
-				const nlohmann::json& value = *pending.back();
-				pending.pop_back();
-				switch (value.type())
+				const ScriptEntry& a = instance.Scripts[script];
+				const ScriptEntry& b = prototype.Scripts[script];
+				if (a.ClassName != b.ClassName || a.Fields.size() != b.Fields.size())
+					return false;
+				for (size_t field = 0; field < a.Fields.size(); field++)
 				{
-					case nlohmann::json::value_t::object:
-						bytes += sizeof(nlohmann::json::object_t);
-						for (const auto& [key, member] : value.get_ref<const nlohmann::json::object_t&>())
-						{
-							bytes += c_MapNodeOverhead + sizeof(std::string) + GetStringHeapBytes(key) + sizeof(nlohmann::json);
-							pending.push_back(&member);
-						}
-						break;
-					case nlohmann::json::value_t::array:
-					{
-						const nlohmann::json::array_t& array = value.get_ref<const nlohmann::json::array_t&>();
-						bytes += sizeof(nlohmann::json::array_t) + array.capacity() * sizeof(nlohmann::json);
-						for (const nlohmann::json& element : array)
-							pending.push_back(&element);
-						break;
-					}
-					case nlohmann::json::value_t::string:
-						bytes += sizeof(std::string) + GetStringHeapBytes(value.get_ref<const std::string&>());
-						break;
-					case nlohmann::json::value_t::binary:
-						bytes += sizeof(nlohmann::json::binary_t) + value.get_binary().capacity();
-						break;
-					default:
-						break; // Numbers, booleans and null live inside the value
+					const ScriptFieldValue& x = a.Fields[field];
+					const ScriptFieldValue& y = b.Fields[field];
+					if (x.Name != y.Name || x.Type != y.Type || ToPrototypeValue(x.Type, x.Value, instanceToPrototype) != y.Value)
+						return false;
 				}
 			}
-			return bytes;
-		}
-
-		// Instantiates the snapshot into a scratch scene, so broken entity data fails at load time rather than when
-		// the prefab or model is first used.
-		bool ValidateSnapshot(const nlohmann::json& snapshot, std::string_view format, std::string* outError)
-		{
-			Scene validation;
-			std::string error;
-			SceneSerializer::DeserializeEntities(validation, snapshot, EntityInstantiationOptions(), &error);
-			if (error.empty())
-				return true;
-			if (outError)
-				*outError = fmt::format("Invalid {} entities: {}", format, error);
-			return false;
+			return true;
 		}
 
 	}
 
 	std::vector<Entity> EntityTemplate::Instantiate(Scene& scene, Entity parent, std::string* outError) const
 	{
-		EntityInstantiationOptions options;
-		options.GenerateNewUUIDs = true;
+		LogWarnings();
+		InstantiationOptions options;
 		options.Parent = parent;
 		options.SourcePrefab = Handle;
 		std::string error;
-		std::vector<std::string> warnings;
-		std::vector<Entity> roots = SceneSerializer::DeserializeEntities(scene, m_Snapshot, options, &error, &warnings);
+		std::vector<Entity> roots;
+		if (m_Prototype)
+			roots = scene.Instantiate(m_Prototype, options, &error);
+		else
+			error = "The template has no entities";
 		if (!error.empty())
 		{
 			ST_CORE_ERROR("Failed to instantiate {}: {}", AssetTypeToString(GetType()), error);
 			if (outError)
 				*outError = error;
 		}
-		for (const std::string& warning : warnings)
-			ST_CORE_WARN("Instantiating {}: {}", AssetTypeToString(GetType()), warning);
 		return roots;
 	}
 
-	size_t EntityTemplate::GetEntityCount() const
+	std::vector<Entity> EntityTemplate::InstantiateMany(Scene& scene, std::span<const glm::mat4> transforms, Entity parent, std::string* outError) const
 	{
-		const nlohmann::json* entities = JsonUtils::Find(m_Snapshot, "Entities");
-		return entities && entities->is_array() ? entities->size() : 0;
+		ST_PROFILE_FUNCTION();
+		auto fail = [&](std::string message)
+		{
+			ST_CORE_ERROR("Failed to instantiate {}: {}", AssetTypeToString(GetType()), message);
+			if (outError)
+				*outError = std::move(message);
+			return std::vector<Entity>();
+		};
+
+		LogWarnings();
+		if (!m_Prototype || m_Prototype->GetTopLevelIndices().empty())
+			return fail("The template has no entities");
+		if (parent && parent.GetScene() != &scene)
+			return fail("The parent entity belongs to a different scene");
+		// Everything that can fail is checked before the first instance exists.
+		const size_t total = m_Prototype->GetEntityCount() * transforms.size();
+		const size_t existing = std::min(scene.GetRegistryEntityCount(), Scene::c_MaxEntities);
+		if (transforms.size() > Scene::c_MaxEntities || total > Scene::c_MaxEntities - existing)
+		{
+			return fail(fmt::format("Cannot add {} instances of {} entities to a scene with {}: a scene holds at most {} entities", transforms.size(),
+				m_Prototype->GetEntityCount(), existing, Scene::c_MaxEntities));
+		}
+		const size_t firstRoot = m_Prototype->GetTopLevelIndices().front();
+		const TransformComponent* prototypeTransform = m_Prototype->FindComponent<TransformComponent>(firstRoot);
+		std::vector<TransformComponent> rootTransforms(transforms.size(), prototypeTransform ? *prototypeTransform : TransformComponent());
+		for (size_t index = 0; index < transforms.size(); index++)
+		{
+			if (!rootTransforms[index].SetTransform(transforms[index]))
+				return fail(fmt::format("Transform {} cannot be represented as a translation, rotation and scale", index));
+		}
+
+		InstantiationOptions options;
+		options.Parent = parent;
+		options.SourcePrefab = Handle;
+		std::vector<Entity> instances;
+		instances.reserve(transforms.size());
+		// One instantiation object for all instances, so that its tables are allocated once.
+		PrototypeInstantiation instantiation;
+		for (size_t index = 0; index < transforms.size(); index++)
+		{
+			std::string error;
+			if (!scene.BeginInstantiation(m_Prototype, options, instantiation, &error)
+				|| scene.ContinueInstantiation(instantiation, m_Prototype->GetEntityCount(), &error, &rootTransforms[index]) == 0)
+			{
+				// Checked above; reaching this is a programmer error, and what was created stays (each instance is complete).
+				return fail(fmt::format("Instance {} could not be created: {}", index, error));
+			}
+			instances.push_back(instantiation.GetRoots().front());
+		}
+		return instances;
 	}
 
-	void EntityTemplate::SetSnapshot(nlohmann::json snapshot)
+	nlohmann::json EntityTemplate::GetSnapshot() const
 	{
-		m_Snapshot = std::move(snapshot);
-		m_SnapshotBytes = EstimateJsonBytes(m_Snapshot);
+		return m_Prototype ? m_Prototype->Serialize() : nlohmann::json { { "Entities", nlohmann::json::array() } };
+	}
+
+	std::vector<PrefabInstanceEntity> EntityTemplate::CompareInstance(const Scene& scene, Entity root) const
+	{
+		std::vector<PrefabInstanceEntity> entities;
+		if (!m_Prototype || !root || root.GetScene() != &scene)
+			return entities;
+
+		// The instance's entities made from this template, parents first, and what each prototype ID became.
+		std::unordered_map<UUID, UUID> instanceToPrototype;
+		std::vector<Entity> stack = { root };
+		while (!stack.empty())
+		{
+			const Entity entity = stack.back();
+			stack.pop_back();
+			if (const PrefabInstanceComponent* link = entity.TryGetComponent<PrefabInstanceComponent>(); link && link->Prefab == Handle)
+			{
+				PrefabInstanceEntity& instance = entities.emplace_back();
+				instance.Instance = entity;
+				instance.PrototypeIndex = m_Prototype->FindEntity(link->PrefabEntityID);
+				instanceToPrototype.emplace(entity.GetUUID(), link->PrefabEntityID);
+			}
+			const std::vector<Entity> children = entity.GetChildren();
+			stack.insert(stack.end(), children.rbegin(), children.rend());
+		}
+
+		const entt::registry& instanceRegistry = scene.GetRegistry();
+		const entt::id_type scriptType = entt::type_id<ScriptComponent>().hash();
+		const entt::id_type linkType = entt::type_id<PrefabInstanceComponent>().hash();
+		for (PrefabInstanceEntity& instance : entities)
+		{
+			if (instance.PrototypeIndex == EntityPrototype::c_NotFound)
+				continue;
+			const entt::entity instanceHandle = instance.Instance.GetHandle();
+			for (const ComponentInfo* info : ComponentRegistry::GetAll())
+			{
+				if (HasFlag(info->Flags, ComponentFlags::NoSerialize) || info->TypeId == linkType)
+					continue;
+				const bool inInstance = info->Has(instanceRegistry, instanceHandle);
+				const void* b = m_Prototype->FindComponent(instance.PrototypeIndex, *info);
+				const bool inPrototype = b != nullptr;
+				if (!inInstance && !inPrototype)
+					continue;
+				bool differs = inInstance != inPrototype;
+				if (!differs && info->Size > 0)
+				{
+					const void* a = instanceRegistry.storage(info->TypeId)->value(instanceHandle);
+					for (const PropertyInfo& property : info->Properties)
+					{
+						if (!property.IsTransient() && ToPrototypeValue(property.Type, property.GetValue(a), instanceToPrototype) != property.GetValue(b))
+						{
+							differs = true;
+							break;
+						}
+					}
+					if (!differs && info->TypeId == scriptType)
+						differs = !ScriptsMatch(*static_cast<const ScriptComponent*>(a), *static_cast<const ScriptComponent*>(b), instanceToPrototype);
+				}
+				if (differs)
+					instance.Differences.push_back(info);
+			}
+		}
+		return entities;
+	}
+
+	bool EntityTemplate::Compile(const nlohmann::json& snapshot, std::string* outError)
+	{
+		std::string error;
+		m_Warnings.clear();
+		m_Prototype = EntityPrototype::FromSnapshot(snapshot, &error, &m_Warnings);
+		if (m_Prototype)
+			return true;
+		if (outError)
+			*outError = fmt::format("Invalid {} entities: {}", GetType() == AssetType::Model ? "model" : "prefab", error);
+		return false;
+	}
+
+	void EntityTemplate::LogWarnings() const
+	{
+		if (m_WarningsLogged)
+			return;
+		m_WarningsLogged = true;
+		for (const std::string& warning : m_Warnings)
+			ST_CORE_WARN("Instantiating {}: {}", AssetTypeToString(GetType()), warning);
 	}
 
 	Ref<Prefab> Prefab::CreateFromEntities(const Scene& scene, const std::vector<Entity>& roots)
@@ -147,24 +261,21 @@ namespace Strata
 		return CreateFromSnapshot(SceneSerializer::SerializeEntities(scene, roots));
 	}
 
-	Ref<Prefab> Prefab::CreateFromSnapshot(nlohmann::json snapshot)
+	Ref<Prefab> Prefab::CreateFromSnapshot(const nlohmann::json& snapshot, std::string* outError)
 	{
 		Ref<Prefab> prefab = CreateRef<Prefab>();
-		prefab->SetSnapshot(std::move(snapshot));
-		return prefab;
+		return prefab->Compile(snapshot, outError) ? prefab : nullptr;
 	}
 
 	nlohmann::json Prefab::Serialize() const
 	{
-		return nlohmann::json { { "Strata", { { "Format", "Prefab" }, { "Version", c_FormatVersion } } }, { "Prefab", m_Snapshot } };
+		return nlohmann::json { { "Strata", { { "Format", "Prefab" }, { "Version", c_FormatVersion } } }, { "Prefab", GetSnapshot() } };
 	}
 
 	Ref<Prefab> Prefab::FromJson(const nlohmann::json& json, std::string* outError)
 	{
 		const nlohmann::json* payload = ReadDocument(json, "Prefab", "Prefab", c_FormatVersion, outError);
-		if (!payload || !ValidateSnapshot(*payload, "prefab", outError))
-			return nullptr;
-		return CreateFromSnapshot(*payload);
+		return payload ? CreateFromSnapshot(*payload, outError) : nullptr;
 	}
 
 	Ref<Prefab> Prefab::Deserialize(std::span<const uint8_t> data, std::string* outError)
@@ -173,16 +284,15 @@ namespace Strata
 		return json ? FromJson(*json, outError) : nullptr;
 	}
 
-	Ref<Model> Model::CreateFromSnapshot(nlohmann::json snapshot)
+	Ref<Model> Model::CreateFromSnapshot(const nlohmann::json& snapshot, std::string* outError)
 	{
 		Ref<Model> model = CreateRef<Model>();
-		model->SetSnapshot(std::move(snapshot));
-		return model;
+		return model->Compile(snapshot, outError) ? model : nullptr;
 	}
 
 	nlohmann::json Model::Serialize() const
 	{
-		return nlohmann::json { { "Strata", { { "Format", "Model" }, { "Version", c_FormatVersion } } }, { "Model", m_Snapshot } };
+		return nlohmann::json { { "Strata", { { "Format", "Model" }, { "Version", c_FormatVersion } } }, { "Model", GetSnapshot() } };
 	}
 
 	Ref<Model> Model::Deserialize(std::span<const uint8_t> data, std::string* outError)
@@ -191,36 +301,77 @@ namespace Strata
 		if (!json)
 			return nullptr;
 		const nlohmann::json* payload = ReadDocument(*json, "Model", "Model", c_FormatVersion, outError);
-		if (!payload || !ValidateSnapshot(*payload, "model", outError))
-			return nullptr;
-		return CreateFromSnapshot(*payload);
+		return payload ? CreateFromSnapshot(*payload, outError) : nullptr;
 	}
 
-	Ref<SceneAsset> SceneAsset::Deserialize(std::span<const uint8_t> data, std::string* outError)
+	Ref<SceneAsset> SceneAsset::Deserialize(std::span<const uint8_t> data, std::string* outError, const std::function<void(float share)>& progress)
 	{
-		std::optional<nlohmann::json> json = ParseBytes(data, outError);
-		if (!json)
-			return nullptr;
-
-		// Validate eagerly so a broken scene fails at load time, not when instantiated.
-		Scene validation;
-		if (!SceneSerializer::Deserialize(validation, *json, outError))
-			return nullptr;
-
 		Ref<SceneAsset> asset = CreateRef<SceneAsset>();
-		asset->m_Document = std::move(*json);
-		asset->m_DocumentBytes = EstimateJsonBytes(asset->m_Document);
+		{
+			// The document lives only while it is read: the asset keeps the scene it describes, which validates it too (a
+			// broken scene fails here, at load time).
+			JsonParseProgress parseProgress;
+			EntityReadProgress entityProgress;
+			if (progress)
+			{
+				parseProgress.Callback = [&progress, size = std::max<size_t>(data.size(), 1)](size_t parsedBytes)
+				{
+					progress(c_SceneReadParseShare * static_cast<float>(static_cast<double>(parsedBytes) / static_cast<double>(size)));
+				};
+				entityProgress = [&progress](float share)
+				{
+					progress(c_SceneReadParseShare + c_SceneReadEntityShare * share);
+				};
+			}
+			std::optional<nlohmann::json> json = JsonUtils::Parse(std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), parseProgress, outError);
+			if (!json)
+				return nullptr;
+			Ref<Scene> scene = CreateRef<Scene>();
+			if (!SceneSerializer::Deserialize(*scene, *json, outError, &asset->m_Warnings, entityProgress))
+				return nullptr;
+			asset->m_Prepared = std::move(scene);
+		}
+		// The world transforms too are computed here rather than in the frame that starts the scene.
+		asset->m_Prepared->UpdateWorldTransforms();
+		asset->m_PreparedBytes = asset->m_Prepared->EstimateMemoryUsage();
+		if (progress)
+			progress(1.0f);
 		return asset;
+	}
+
+	void SceneAsset::LogWarnings(const Scene& scene) const
+	{
+		if (m_WarningsLogged)
+			return;
+		m_WarningsLogged = true;
+		for (const std::string& warning : m_Warnings)
+			ST_CORE_WARN("Scene '{}': {}", scene.GetName(), warning);
+	}
+
+	Ref<Scene> SceneAsset::TakePreparedScene(std::string* outError)
+	{
+		if (!m_Prepared)
+		{
+			if (outError)
+				*outError = fmt::format("The scene of asset {} was taken already; load the asset again", Handle.ToString());
+			return nullptr;
+		}
+		LogWarnings(*m_Prepared);
+		Ref<Scene> scene = std::move(m_Prepared);
+		scene->SetSourceAsset(Handle);
+		return scene;
 	}
 
 	Ref<Scene> SceneAsset::CreateScene(std::string* outError) const
 	{
-		Ref<Scene> scene = CreateRef<Scene>();
-		std::vector<std::string> warnings;
-		if (!SceneSerializer::Deserialize(*scene, m_Document, outError, &warnings))
+		if (!m_Prepared)
+		{
+			if (outError)
+				*outError = fmt::format("The scene of asset {} was taken already; load the asset again", Handle.ToString());
 			return nullptr;
-		for (const std::string& warning : warnings)
-			ST_CORE_WARN("Scene '{}': {}", scene->GetName(), warning);
+		}
+		LogWarnings(*m_Prepared);
+		Ref<Scene> scene = Scene::Copy(m_Prepared);
 		scene->SetSourceAsset(Handle);
 		return scene;
 	}

@@ -3,6 +3,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/ProjectTemplates.h"
+#include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/FileDialogs.h"
 #include "UI/Icons.h"
@@ -354,15 +355,17 @@ namespace Strata
 		submit |= UI::DialogButton("OpenSample.Open", "Copy and Open", true, problem.empty());
 		if (submit && problem.empty() && open)
 		{
-			std::string error;
-			if (RunNow(context, "project.openSample", { { "sample", m_SampleId }, { "directory", FileSystem::ToUTF8(target) } }, nullptr, error))
+			// The copy opens at once (a failure answers at once and stays in the dialog); its start scene loads over the next frames.
+			std::string error = StartEditorCommand(context.Runner, context.Context, context.Commands, "project.openSample",
+				{ { "sample", m_SampleId }, { "directory", FileSystem::ToUTF8(target) } });
+			if (error.empty())
 			{
 				SetLocation(target.parent_path());
 				open = false;
 			}
 			else
 			{
-				m_Error = error;
+				m_Error = std::move(error);
 			}
 		}
 		if (!open)

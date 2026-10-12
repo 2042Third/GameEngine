@@ -142,7 +142,8 @@ DirectionalLight, PointLight, SpotLight, SkyLight, PostProcess, Text, RigidBody,
 CapsuleCollider, MeshCollider, AudioSource, AudioListener, Script). `ComponentAccess` reads and writes them with
 validation and change signals, `SceneSerializer` writes versioned JSON (keeping components it cannot read, see
 [Composition root and registries](#composition-root-and-registries)), and `Prefab.h` defines the scene-shaped assets
-(`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`). `SceneServices.h` defines the interfaces through which the systems
+(`EntityTemplate`, `Prefab`, `Model`, `SceneAsset`), whose entities are copied into scenes from compiled prototypes
+(`EntityPrototype`, see [Scene runtime lifecycle](#scene-runtime-lifecycle)). `SceneServices.h` defines the interfaces through which the systems
 of a playing scene use each other (see [Scene services](#scene-services)). See [Scene caches](#scene-caches) for how
 per-frame cost follows what changed.
 
@@ -359,7 +360,7 @@ ComponentRegistry::Freeze
   not register (a game module that is not loaded, a newer engine). `SceneSerializer::DeserializeEntities` keeps them
   verbatim in the runtime-only `UnknownComponentsComponent` (`Scene/UnknownComponents.h`; not registered, so the
   editor, reflection and the feature test never see it) and warns once per component name per load
-  (`SceneAsset::CreateScene` logs its warnings); the writer puts them back next to the registered components, so a save
+  (a scene asset logs its warnings once, when its scene is taken, `SceneAsset::TakePreparedScene`); the writer puts them back next to the registered components, so a save
   writes them unchanged. `Scene::Copy` (play mode), prefab snapshots (`SerializeEntities`), `Scene::DuplicateEntity`
   and the editor's undo snapshots (`EntityState`, `Editor/SceneEdit.cpp`) carry them; restoring undo snapshots does not
   warn again (`EntityInstantiationOptions::ReportUnknownComponents`).
@@ -450,6 +451,7 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Input` | `Input::BeginFrame` and the window's events (`Application::RunFrame`) |
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
+| `Scene.Load` | scene loads' main-thread work: swapping a loaded scene in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
 | `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
@@ -519,18 +521,120 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
 - Gameplay asks the scene's owner to quit or to switch scenes (`Scene::RequestQuit`, `RequestSceneLoad`); owners honor
   the requests after the update. The owners are the editor's play mode (`EditorContext::StartRuntime` plays a
   `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`.
+- **`Scene::Copy`** makes an independent scene with the same entities, components and caches. Its entities keep the
+  source's EnTT identifiers (made with the source's handles, the free indices after them as the source would reuse
+  them), so every storage is copied whole: the copyable registered components, the hierarchy links, the cached world
+  transforms and the unknown components, each type's storage by itself and the types on the job threads at once
+  (`ComponentInfo::AssureStorage` creates every storage first, then `CopyStorage` touches only its own type's), largest
+  first, the entities themselves (`registry.create(hint)`) as one more such copy; the UUID map (an `entt::dense_map`, two
+  arrays) and the root list are copied as they are, and the dirty list and the transform pass carry over, so the copy
+  needs no recomputation. The copy's signals are connected only afterwards: copying emits none, as a deserialized scene's
+  construction emits none before its systems start. Copying is mostly the system handing out fresh memory (page faults),
+  which the threads share: a 1,000,000-entity scene copies in about 43 ms (`Perf.Scene.Copy1M`; about 0.7 s entity by
+  entity before), and the editor's frame that starts playing it takes about 47 ms (`PerfGPU.Editor.PlayStart1MMaxFrame`).
+  Systems starting must not walk the hierarchy either: `ScriptSystem` sorts the scripted entities into hierarchy order
+  when they are few (`c_SortedScriptStartRatio`) instead of walking a million entities for them.
 - **Time dilation** (`Scene::SetTimeDilation`): owners driven by the wall clock (the editor's play mode outside scripted
   runs, `EditorContextSpecification::TimeDilation`; exported games outside `--frames` runs,
   `GameRuntimeOptions::TimeDilation`) let a simulation that cannot keep up with real time slow down: an update stops its
   catch-up fixed steps once they took longer, in wall time, than the time they simulated, and drops the steps still due
   (`GetDroppedFixedStepCount`, also `PhysicsStats::DroppedSteps`). Otherwise a frame that runs eight expensive steps
   makes the next one owe even more. Tests and tools keep the default, every due step up to `MaxFixedStepsPerFrame`.
-- `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame` and the physics world's capacities
+- `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame`, `MaxEntitiesInstantiatedPerFrame` (see
+  additive scenes below) and the physics world's capacities
   (`PhysicsCapacity`: bodies, body pairs and contact constraints; 0, the default, sizes one automatically; each up to a
   limit that bounds the memory a world reserves). All of it is saved with the scene and changed with `scene.setSettings`
   (one undo step); capacities apply when a world is created, at play start.
-- A scene knows the scene asset it was loaded from or saved as (`Scene::GetSourceAsset`, set by
-  `SceneAsset::CreateScene` and by the editor's save-as) and keeps an ID across its copies (`GetLineageID`: the source
+- **Scene assets are read once.** The scene loader (`SceneAsset::Deserialize`, on the loading worker) reads the
+  document into a scene, which validates it, and keeps that *prepared scene* instead of the parsed JSON, which is dropped
+  at once. `SceneAsset::TakePreparedScene` hands it over without a copy (the first call; the asset is spent afterwards,
+  reports no memory and is unloaded by whoever took it, so the next load reads the file again) and logs the warnings
+  the read collected once; `CreateScene` makes copies (`Scene::Copy`) for tools and tests while the asset still holds
+  it. `SceneSerializer::GetDeserializeCount` counts the documents read, so tests check that a load reads its scene
+  once.
+- **Compiled prefabs.** A prefab or model (`EntityTemplate`) compiles its snapshot once, when it is created or loaded (on
+  the loading worker), into an `EntityPrototype` (`Scene/EntityPrototype.h`): the entities in hierarchy order, with
+  each entity's ID and parent index, its registered components (real objects of their types, kept in one compact array
+  per type, `ComponentValueArray`: an EnTT storage allocates a page of 1,024 elements at a time, which made a small
+  prefab's private registry cost about 400 KiB) and the entity references among them (entity properties and script
+  fields). The JSON is not kept (`GetSnapshot` and `Serialize`
+  write it from the prototype). Instantiating copies the prototype (`Scene::BeginInstantiation`,
+  `ContinueInstantiation`, `Instantiate`; `Scene/SceneInstantiation.cpp`): the scene's capacity is checked first, the
+  components are copied with `ComponentInfo::EmplaceCopy` (on_construct), the entities are linked parents first, references
+  among the copies are remapped to their fresh IDs, every entity is linked to the asset (`PrefabInstanceComponent`) and
+  every component then emits on_update, the signals that deserializing the snapshot emitted. A 1,000-entity prefab
+  instantiates in about 0.3 ms (it took about 17 ms when every instance read the JSON). `EntityTemplate::InstantiateMany`
+  makes many instances in one call, each placed by a transform; `CompareInstance` lists an instance's entities with their
+  prototype entities and the components that differ (what applying and reverting instances work from). Instantiation can
+  also run in slices (`ContinueInstantiation` with a limit), each slice's entities complete when it returns, and keep the
+  prototype's own IDs (`InstantiationOptions::KeepIDs`; an ID the scene has already fails before anything is created).
+- **Scene loads never stop the frame** (`Scene/SceneLoader.h`). `SceneLoader::LoadAsync(scene, options)` returns a
+  `SceneLoadRequest`: the scene asset and what it uses load in the background, pinned at the load's priority so that none
+  of it is evicted meanwhile (`AssetManagerBase::RequestLoadGroup`); its owner calls `Update` once per frame. What it uses
+  is its dependency closure without the other scenes it names (`AssetClosureScope::Load`: a script field holding the next
+  level, or a sub-scene streamed in later, would otherwise load whole levels with it), as far as the residency budgets have
+  room: a pool's members load with the scene when all of them fit in the room the pool has beside what is resident when
+  the load starts, their memory estimated from their stored sizes in their type's pool (textures in GPU textures, meshes in
+  GPU buffers and system memory, the rest in system memory; members already loaded always count; a texture is estimated
+  whole, although with mip streaming its load brings in its mip tail, which is when it counts as loaded, see Group
+  loads, and its finer levels follow the views). A pool they do not all
+  fit is left to the scene, which requests what it draws once it runs, and so are members that depend directly on one of
+  its members (requesting them would prefetch it): the load cannot know which part the scene draws first, and any other
+  part would fill the room it needs, to be evicted again (`GetSkippedAssetCount`). A level larger than a budget never
+  pushes the pool past it. States: `LoadingScene` (the document is read and the
+  scene prepared on the loading worker, its world transforms included), `LoadingDependencies` (the prepared scene is
+  taken and the spent asset unloaded; the rest goes on loading), `Ready` (the share of the stored bytes it waits for that
+  `SceneLoadOptions::RequiredProgress` asks for is in: all of it by default; a dependency that fails, or is deleted
+  meanwhile, counts as finished, the scene shows a fallback for it), `Failed` (the scene asset could not be loaded, or was
+  deleted before it was read) and `Cancelled`. `GetProgress` is the
+  group's share of stored bytes (it never decreases); while the document is read, the read's own progress counts for the
+  document's share (`Scene/SceneReadProgress.h`: the scene asset's loader, `RegisterSceneModule`, registers a
+  `SceneReadProgress::Tracker` per read, and
+  `SceneAsset::Deserialize` reports the parse by bytes, `JsonUtils::Parse` with a `JsonParseProgress` at no cost to the
+  parse, then each pass over the entities, `EntityReadProgress`; a million entities read in about 5.7 s, Release), so a
+  bar never stands still for seconds. `TakeScene` hands the scene over once, `Cancel` releases every pin
+  and abandons what only the request started (a request destroyed unfinished cancels itself). The owner drops the request
+  once the scene it took has started, so that its assets are what the scene requests from then on. The owners: the
+  editor's `scene.open` (`EditorContext::BeginOpenScene`), play-mode switches (`EditorContext::SwitchRuntimeScene`) and
+  `GameRuntime` (start scene, loading scene, switches). While a switch loads, the running scene goes on and its scripts
+  read the progress (`Scene::GetSceneLoadProgress`, set by the owner every frame); asking again for the scene that is
+  loading keeps its load (scripts ask in every update while their condition holds), a request for another scene replaces
+  it (the new request starts first, so what both use keeps loading), and the loading scene starting itself over loads
+  again beside the start scene's load. The new scene replaces the running one between updates, then its systems start and
+  the trim of what only the previous scene used is scheduled. The scene it replaces is let go with
+  `Scene::ReleaseInBackground`: stopped on the main thread (systems, scripts' `OnDestroy`, bodies, voices; its sub-scene
+  loads and their pins dropped), then destroyed by a background job, since destroying a million entities takes tens of
+  milliseconds (also the edited scene `scene.open` replaces, the copy `play.stop` ends and a scene a cancelled or failed
+  load had read). The registry signals nothing while it is destroyed and its render scene is plain data, so nothing the
+  main thread uses goes with it. The swap, the per-frame advance of the loads and sub-scene slices are the frame
+  profiler's `Scene.Load` stage.
+- **Additive scenes** (sub-scenes, `Scene/SceneSubScenes.cpp`, `Scene/SubScene.h`): `Scene::LoadSubScene(asset, options)`
+  loads a scene asset into a running scene next to what it holds (a level's streamed part, a room; world partition loads
+  its cells this way), and `BeginAdditiveLoad(preparedScene)` adds a scene made otherwise. The asset and its closure load
+  through `SceneLoader` (pinned at `SubSceneOptions::Priority` until every entity exists), the prepared scene is compiled
+  into an `EntityPrototype` on the job system (which also drops the prepared scene, so the main thread never pays for
+  destroying it), and its entities are created by `Scene::UpdateSubScenes`, which `OnUpdateRuntime` and `OnUpdateEditor`
+  call first: in slices of at most `SceneSettings::MaxEntitiesInstantiatedPerFrame` entities per update for all sub-scenes
+  together (default 5,000; saved with the scene, `scene.setSettings`, the Inspector's Streaming section), cut in chunks of
+  512 and stopped once `Scene::c_MaxInstantiationMillisecondsPerFrame` (2 ms) went by. Each slice's entities are complete
+  when it returns (`ContinueInstantiation`), so systems treat them like any other: their component signals give scripts
+  `OnCreate` at the next sync point, physics its bodies in its batches, audio its voices and the render scene its proxies.
+  An entity whose parent an earlier slice created and gameplay or the editor destroyed since is not created, nor are its
+  descendants (they would have gone with it; `SubSceneStatus::SkippedEntities`).
+  The entities keep their IDs, so a sub-scene with an ID the scene has already fails with that ID in its error: checked for
+  all of them before the first entity exists, and again per slice for IDs the scene gained meanwhile, where the failure
+  destroys what the sub-scene created. Its top-level entities carry a runtime-only `SubSceneComponent` (not registered:
+  never saved, copied or shown) naming it, and `UnloadSubScene(id)` cancels the load (releasing every pin) and destroys
+  them with `DestroyEntities` (systems hear `OnEntityDestroying`; deferred while the scene updates). `GetSubSceneStatus`
+  reports the state (`Loading`, `Instantiating`, `Loaded`, `Failed` with the error), the progress (half the closure's
+  bytes, half the entities), the entities created and the slices; failed sub-scenes stay until unloaded. A sub-scene's own
+  settings (gravity...) are not applied. Scripts load sub-scenes with `Scene::LoadAdditive` (the SDK's `SubScene`), read
+  an asset closure's progress with `Assets::GetLoadProgress` (`ScriptSystem::GetAssetLoadProgress`, an
+  `AssetGroupRequest` the scene pins until `Assets::Release`) and make many prefab instances with
+  `Scene::InstantiateMany`; the editor's commands are `scene.loadAdditive` (play mode; deferred until the sub-scene's entities
+  exist), `scene.unloadAdditive` and `scene.loadStatus` (`subScenes`).
+- A scene knows the scene asset it was loaded from or saved as (`Scene::GetSourceAsset`, set when a scene asset's
+  scene is taken or copied and by the editor's save-as) and keeps an ID across its copies (`GetLineageID`: the source
   asset, else an ID of its own), by which systems recognize it from one play session to the next.
 
 ### Scene services
@@ -759,7 +863,8 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   `Update` finalizes completions on the main thread: `Asset::FinalizeOnMainThread` creates GPU resources in one batch of
   the upload context (see the upload seam below), in steps, until the frame's upload or time budget is used up (`AssetFinalizeResult::Pending`: the asset
   continues next frame, first in line). Generations discard results of loads that were superseded by a reload, unload
-  or cancellation. `LoadAssetSync` is for tools, tests and scene switches (unbudgeted: it finishes at once);
+  or cancellation. `LoadAssetSync` is for tools and tests (unbudgeted: it finishes at once; scenes load through
+  `SceneLoader`, which never waits);
   `ReplaceLoadedAsset` publishes an object made in memory for a registered asset at once (editors' document edits).
   Budgets,
   eviction, uploads and the queue are described in [Streaming and residency](#streaming-and-residency).
@@ -926,7 +1031,8 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   `GpuTextures` and `GpuBuffers`): textures their CPU mips until uploaded, then their GPU mip chain; meshes their CPU
   geometry and their GPU buffers, each counted once (once uploaded, the CPU keeps only the positions and indices physics
   reads; the vertex attributes live on the GPU alone); materials their parameters; fonts
-  and audio clips their data; prefabs, models and scenes an estimate of their parsed JSON. The manager reads it when an
+  and audio clips their data; prefabs and models their compiled prototype (`EntityPrototype::GetMemoryUsage`); scenes the scene they prepared
+  (`Scene::EstimateMemoryUsage`, nothing once it was taken). The manager reads it when an
   asset is published and keeps per-pool totals (`AssetManagerStats::Resident`; `LoadedMemory` is their sum).
   `AssetMetadata::StoredSize` is the size of what a load reads: the cache file or engine-native source in the editor,
   the pack entry at runtime.
@@ -954,9 +1060,11 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   generation and a published content change (caches revalidate; physics keeps the colliders it built and audio keeps
   playing clips), and it loads again on its next request. `TrimUnused(frames)` evicts every evictable asset not
   requested in that many frames, whatever the budgets (assets holding no memory stay: evicting them would free nothing);
-  `ScheduleTrim` runs it a few updates later. `GameRuntime::LoadScene`, `EditorContext::OpenScene` and the editor's
-  scene switches in play mode (`EditorContext::SwitchRuntimeScene`) schedule `TrimUnused(3)` three frames after a scene
-  switch, so what the new scene draws or requests by then stays. `AssetManagerStats::EvictionChecks` counts the assets
+  `ScheduleTrim` runs it a few updates later, sparing the assets it is given. `GameRuntime` and the editor
+  (`EditorContext::BeginOpenScene` and its scene switches in play mode, `EditorContext::SwitchRuntimeScene`) schedule
+  `TrimUnused(3)` three frames after a loaded scene replaced the previous one, sparing what the scene's load brought in
+  (`SceneLoadRequest::GetAssets`), so what goes is what only the previous scene used: the new scene's assets stay whether
+  it drew or requested them by then or not (they were read for it, and budgets evict them when room is needed). `AssetManagerStats::EvictionChecks` counts the assets
   eviction looked at.
 - **Streaming queue** (`AssetStreamingQueue`). A request marks the asset Loading and queues it keyed by priority, then
   score (higher first; e.g. how large on screen it is needed), then request order; repeating it raises a queued request,
@@ -1189,11 +1297,15 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   textures no prefetch is loading when they are finalized (all of them, from managers that know no dependencies:
   version 1 packs), as they always did; a material that arrives only prefetched leaves its textures to whatever draws
   with it (requests make room by evicting, which a prefetch must never cause).
-- **Group loads** (`RequestLoadWithDependencies`, `AssetGroupRequest`). A loading screen pins an asset's dependency closure
-  (`GetDependencyClosure`, breadth first) at a priority: `Progress` (the share of the members' stored bytes that finished,
-  never decreasing; a texture loaded partly counts whole once its mip tail is resident and it is Ready, since its finer
-  levels stream as views need them), `IsComplete`, `HasFailed` and `Cancel` (releases the pins and abandons the loads
-  that have not finished: queued reads never start). `IsLoadedWithDependencies` tells whether a closure is Ready, and
+- **Group loads** (`RequestLoadWithDependencies`, `RequestLoadGroup`, `AssetGroupRequest`). A loading screen pins what
+  using an asset needs (`GetDependencyClosure` with `AssetClosureScope::Load`, breadth first: the closure without other
+  scenes it names, which load as levels of their own; `AssetClosureScope::All`, everything referenced, is what export
+  plans ship), or a group the caller chose (`RequestLoadGroup`, e.g. the part of a scene's closure that fits in the
+  budgets), at a priority: `Progress` (the share of the members' stored bytes that finished, never decreasing; a member
+  that is unregistered meanwhile counts as failed; a texture loaded partly counts whole once its mip tail is resident and
+  it is Ready, since its finer levels stream as views need them), `IsComplete`, `HasFailed` and `Cancel` (releases the
+  pins and abandons the loads that have not finished: queued reads never start). `IsLoadedWithDependencies` tells whether
+  such a closure is Ready, and
   `ReadStoredRange` reads part of an asset's stored form without loading it (packs decode only the blocks it covers).
 - **Statistics** (`GetStats`, `GetResidencyInfo`): resident bytes and budget per pool, queued loads per priority, loads
   and bytes in flight with their high-water mark, uploaded bytes and finalization milliseconds (last frame and maximum
@@ -1247,7 +1359,8 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   from the world's overview camera with `--perf-log` and the evicting sweep's texture budget, again confirmed by up to two
   more runs: every log must have a row per frame, and `Budgets.json` judges the slowest frame's `Assets.Finalize` stage.
   Then the game runs with its own budgets (nothing evicted) from the overview camera, which shows about two thirds of the
-  textures (`RuntimePeakPrivateMemory`, the peak private memory its log ends with), and last the whole world in view
+  textures while the world's load brought in all of them at their mip tails, as they fit its budgets
+  (`RuntimePeakPrivateMemory`, the peak private memory its log ends with), and last the whole world in view
   (`RuntimePeakPrivateMemoryAllInView`, budget 650 MB, texture cooking's limit, target 550 MB, mip streaming's): 300
   frames of the game started in the stress project's `TopDown` scene, the world seen from above
   (`WriteStressTopDownScene`), with its own budgets; at the end every texture must be at the level its view needs
@@ -1507,8 +1620,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   real `EditorLayer` this way, with a `FakeEditorHost` (`StrataTests/src/Editor/HarnessEditor.h`).
 - **EditorContext** (`StrataEditor/src/Editor/EditorContext.h`) is the state with no UI. Opening a project creates and
   activates its `EditorAssetManager` (scan included), opens a `ScriptEngine` (hot reload on by default,
-  `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state, opens
-  the start scene and puts the project at the front of the recent projects (`RecentProjects`, a JSON file in the user
+  `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state, starts
+  opening the start scene in the background (`BeginOpenProject`; `OpenProject` waits for it) and puts the project at the
+  front of the recent projects (`RecentProjects`, a JSON file in the user
   data directory that the user's editors share; changes a read-only list cannot save are kept in memory and applied over
   every read, and the launcher reads it and checks its projects on an I/O thread). Creating a project applies a template
   (`ProjectTemplates`: `empty`, or `basic3d` with a saved, lit start scene whose ground has a material of the project,
@@ -1535,8 +1649,31 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
-  (`UI/EditorActions.cpp`), which rejects pending results; Build Scripts, Apply of import settings and Reimport use the
-  runner (`EditorLayer.cpp`, `Panels/AssetInspectorPanel.cpp`).
+  (`UI/EditorActions.cpp`), which rejects pending results; Build Scripts, Apply of import settings, Reimport and opening a
+  scene use the runner (`RunEditorCommandDeferred`; `EditorLayer.cpp`, `Panels/AssetInspectorPanel.cpp`,
+  `Panels/ContentBrowserPanel.cpp`), and so do opening projects and samples from the launcher, the File menu, a dropped
+  project file and the Open Sample dialog (`StartEditorCommand`, which hands a failure known at once back to the dialog or
+  the launcher that shows it).
+- **Opening scenes** (`EditorContext::BeginOpenScene`, `scene.open`). The scene's file is read again (the asset is
+  unloaded first) through `SceneLoader` while the editor goes on drawing the edited scene, which is read-only meanwhile:
+  `CommitEdit` rolls an edit back, mutating scene commands fail (their `Finish`), and so do `scene.setSettings`, undo and
+  redo, script edits, property edits and gizmo drags (`EditorContext::CheckSceneEditable`, checked before anything
+  changes); play mode is refused, the Hierarchy and the Inspector draw their contents disabled under a banner naming the
+  scene that opens (`DrawSceneLoadBanner`, `UI/EditorActions.h`) and the viewport hides the gizmo. `Update` makes
+  the loaded scene the edited one between frames (`FinishOpenScene`: the editor camera, the trim) once it and everything
+  it uses are in; another `BeginOpenScene`, `NewScene` or closing the project cancels the load. `scene.open` answers
+  deferred, one frame after the swap so that its `frameTimes` include the frame that swapped the scene in;
+  `GetSceneLoadStatus` (and `editor.status`'s `sceneLoad`, `scene.loadStatus`) report its progress, the viewport draws a
+  card with it over the image (`ViewportPanel::DrawSceneLoadOverlay`: the step, reading the scene or loading what it uses,
+  and the share done) and the assets pill counts it. `OpenScene` and `WaitForSceneLoad` wait for the load (tools and
+  tests).
+  A project's start scene opens the same way (`BeginOpenProject`, the status's `StartScene`): the project is open at once
+  with an empty, read-only scene that the start scene replaces; `project.open` and `project.openSample` answer once it is in
+  (or say why not: `startSceneError`, also logged as a warning, since the project stays open), and a window started with
+  `--project` draws its first frames meanwhile (`EditorOptions::OpenStartSceneInBackground`, set by the application for
+  windowed sessions that are not scripted; scripted runs, headless editors and tests wait in `OpenProject`, so their first
+  command finds the scene). With a 1,000,000-entity start scene the window's first frame comes after 1.0 s instead of 6.8 s
+  (Release; the scene follows about 7 s later, while frames go on).
 - **Undo** (`SceneEdit.h`, `UndoStack.h`). A `SceneEditTransaction` snapshots the entities an edit touches as
   `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
   `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs
@@ -1685,12 +1822,14 @@ It writes:
 | --- | --- |
 | `<Game>.stpak` | `EditorAssetManager::WriteAssetPack` of the plan: every project asset, or with `prune` what the scenes and `Export.AlwaysInclude` use, ordered by first use |
 | script module (and its PDB) | `EditorContext::ReadRunningScriptModule`: the loaded module, checked by digest |
-| `<Game>.stgame` | `GameManifest` (version 3): name, pack, start scene, module, window settings |
+| `<Game>.stgame` | `GameManifest` (version 4): name, pack, start scene, loading scene (`Export.LoadingScene`, optional), module, window settings |
 | `<Game>[.exe]`, `ThirdPartyNotices.md` | `StrataRuntime` from the editor's directory, renamed (`includeRuntime`) |
 
 The module's PDB is copied when it exists, except in Dist builds or with `includeScriptSymbols: false`
 (`GameExportOptions::IncludeScriptSymbols`). Pruning is off by default: scripts may load assets by path, which no scene
-shows, so a game that does lists them in `Export.AlwaysInclude` (`project.setExportSettings`).
+shows, so a game that does lists them in `Export.AlwaysInclude` (`project.setExportSettings`). The project's loading scene
+(`Export.LoadingScene`, `project.setExportSettings {loadingScene}`) is written into the manifest and kept in pruned packs
+with what it uses.
 
 `StrataRuntime` (`StrataRuntime/src/RuntimeApplication.cpp`) runs `--game <file>`, or the manifest found next to the
 executable (`GameManifest::FindForExecutable`). It logs to `<user data>/<Game>/Logs/Game.log`. `--headless` disables
@@ -1712,10 +1851,16 @@ so far (`PrivateMB`, `PeakPrivateMB`). A log that cannot be written fails the ru
 `GameRuntime::Create` loads the manifest, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
 `PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module
-into its own `ScriptEngine` without hot reload and makes it active, and starts the start scene in Play mode.
-Each frame it finalizes loads, updates the scene and honors requests: a quit ends the process with the game's exit
-code, a scene load replaces the scene synchronously from the pack and schedules the release of what only the previous
-scene used ([Streaming and residency](#streaming-and-residency)). Exit codes: 1 when the game cannot start, 2 when
+into its own `ScriptEngine` without hot reload and makes it active, and starts loading the start scene (`SceneLoader`) and
+the manifest's loading scene (version 4, `LoadingScene`; version 3 manifests load without one), so it returns at once.
+The loading scene plays while the start scene loads (without one, renderers draw a black frame,
+`GameRenderer::RenderEmpty`); the start scene replaces it once it and everything it uses are in. A start scene that cannot
+be loaded is `GetStartError` (StrataRuntime exits with code 1); `WaitForStart` waits for it without running frames (tools
+and tests). Each frame it finalizes loads, advances the scene loads (swapping in a scene that is ready), updates the scene
+and honors requests: a quit ends the process with the game's exit code, a scene load (`LoadScene`) loads the next scene
+while the running one goes on, then swaps it in, starts its systems and schedules the release of what only the previous
+scene used ([Streaming and residency](#streaming-and-residency)). `--screenshot` fails a run whose last frame is still
+black for want of a scene. Exit codes: 1 when the game cannot start, 2 when
 the scripts crashed in a headless run (a windowed game keeps running without scripts), otherwise the code the game
 quit with. Exported games are the end-to-end check of the whole pipeline: the CTest export chain
 (`StrataEditor.Export`, `StrataRuntime.Smoke`, ...) is listed in the `strata-build-test` skill, the feature test

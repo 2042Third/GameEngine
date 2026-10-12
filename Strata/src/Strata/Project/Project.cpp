@@ -221,6 +221,13 @@ namespace Strata
 					projectConfig.Export.AlwaysInclude.push_back(entry.get<std::string>());
 				}
 			}
+			if (const nlohmann::json* loadingScene = JsonUtils::Find(*exportSettings, "LoadingScene"); loadingScene && !loadingScene->is_null())
+			{
+				const std::optional<UUID> handle = UUIDFromJson(*loadingScene);
+				if (!handle)
+					return fail("\"Export.LoadingScene\" must be a scene handle or null");
+				projectConfig.Export.LoadingScene = *handle;
+			}
 		}
 		return project;
 	}
@@ -284,8 +291,13 @@ namespace Strata
 		config["StartScene"] = UUIDToJson(m_Config.StartScene);
 		// The module name is stored even when derived, so that renaming the project keeps the module's name.
 		config["Scripts"] = { { "SourceDirectory", m_Config.Scripts.SourceDirectory }, { "ModuleName", GetScriptModuleName() } };
-		if (!m_Config.Export.AlwaysInclude.empty())
-			config["Export"] = { { "AlwaysInclude", m_Config.Export.AlwaysInclude } };
+		if (!m_Config.Export.AlwaysInclude.empty() || m_Config.Export.LoadingScene.IsValid())
+		{
+			nlohmann::json exportSettings = { { "AlwaysInclude", m_Config.Export.AlwaysInclude } };
+			if (m_Config.Export.LoadingScene.IsValid())
+				exportSettings["LoadingScene"] = UUIDToJson(m_Config.Export.LoadingScene);
+			config["Export"] = std::move(exportSettings);
+		}
 		document["Project"] = std::move(config);
 
 		if (!FileSystem::WriteText(m_ProjectFile, JsonUtils::Dump(document, 1, '\t') + "\n"))

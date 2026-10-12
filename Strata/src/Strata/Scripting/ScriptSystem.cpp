@@ -9,6 +9,7 @@
 #include "Strata/Scripting/ScriptHostAPI.h"
 #include "Strata/Scripting/ScriptModule.h"
 
+#include <algorithm>
 #include <cmath>
 #include <iterator>
 
@@ -25,6 +26,9 @@ namespace Strata
 		// the instance itself has arrived). A callback of a trivial script takes about 20 ns, memory about 100 ns.
 		constexpr size_t c_InstancePrefetchDistance = 12;
 		constexpr size_t c_ScriptObjectPrefetchDistance = 4;
+		// Play starts sort the scripted entities into hierarchy order when at most one entity in this many has scripts: sorting
+		// n entities costs about n log n comparisons of a few node reads each, walking the hierarchy a few reads per entity.
+		constexpr size_t c_SortedScriptStartRatio = 64;
 		// Distinct API problems reported per playing scene before further ones are dropped.
 		constexpr size_t c_MaxReportedProblems = 1024;
 
@@ -91,12 +95,30 @@ namespace Strata
 		if (ICollisionEventSource* contacts = m_Scene.GetService<ICollisionEventSource>())
 			m_CollisionListener = contacts->AddCollisionListener([this](const CollisionEvent& event) { OnCollision(event); }, CollisionListenerScope::WatchedEntities);
 
-		const std::vector<Entity> entities = m_Scene.GetEntitiesInHierarchyOrder();
-		for (const Entity entity : entities)
+		// The scripted entities in hierarchy order, so that creation is deterministic: sorted when they are few among many
+		// entities (a play start must not walk a million-entity hierarchy for a few scripts), else taken from the hierarchy.
+		std::vector<Entity> scripted;
+		const auto& scripts = m_Scene.GetRegistry().storage<ScriptComponent>();
+		if (scripts.size() <= m_Scene.GetEntityCount() / c_SortedScriptStartRatio)
 		{
-			if (entity.HasComponent<ScriptComponent>())
-				MarkDirty(entity.GetUUID());
+			scripted.reserve(scripts.size());
+			for (const entt::entity handle : static_cast<const entt::sparse_set&>(scripts))
+			{
+				if (m_Scene.GetRegistry().all_of<HierarchyComponent>(handle))
+					scripted.emplace_back(handle, &m_Scene);
+			}
+			std::sort(scripted.begin(), scripted.end(), [this](Entity a, Entity b) { return m_Scene.CompareHierarchyOrder(a, b) < 0; });
 		}
+		else
+		{
+			for (const Entity entity : m_Scene.GetEntitiesInHierarchyOrder())
+			{
+				if (entity.HasComponent<ScriptComponent>())
+					scripted.push_back(entity);
+			}
+		}
+		for (const Entity entity : scripted)
+			MarkDirty(entity.GetUUID());
 
 		if (!m_DirtyEntities.empty() && !(m_Engine && m_Engine->IsModuleLoaded()))
 			ST_CORE_WARN("Scene '{}' has Script components but no script module is loaded; its scripts do not run", m_Scene.GetName());
@@ -126,6 +148,7 @@ namespace Strata
 		DestroyAllInstances(true);
 		// After OnDestroy, which may still request or release assets: what the scripts kept loaded may go now.
 		m_AssetPins.clear();
+		m_AssetGroups.clear();
 		m_Connections.clear();
 		ClearUpdateOrder();
 		m_PendingStart.clear();
@@ -1402,7 +1425,22 @@ namespace Strata
 
 	bool ScriptSystem::ReleaseAsset(AssetHandle asset)
 	{
-		return m_AssetPins.erase(asset) > 0;
+		const bool pinned = m_AssetPins.erase(asset) > 0;
+		const bool grouped = m_AssetGroups.erase(asset) > 0;
+		return pinned || grouped;
+	}
+
+	float ScriptSystem::GetAssetLoadProgress(AssetManagerBase& manager, AssetHandle asset)
+	{
+		auto it = m_AssetGroups.find(asset);
+		if (it == m_AssetGroups.end())
+		{
+			AssetGroupRequest group = manager.RequestLoadWithDependencies(asset, AssetPriority::Normal);
+			if (!group.IsValid())
+				return -1.0f;
+			it = m_AssetGroups.emplace(asset, std::move(group)).first;
+		}
+		return it->second.Progress();
 	}
 
 	void ScriptSystem::ReportProblem(std::string_view function, const std::string& message)

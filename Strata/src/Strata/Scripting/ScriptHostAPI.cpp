@@ -17,13 +17,17 @@
 #include "Strata/Scripting/ScriptSystem.h"
 #include "Strata/Scripting/ScriptValue.h"
 
+#include <glm/gtc/type_ptr.hpp>
+
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <exception>
 #include <iterator>
 #include <optional>
 #include <thread>
+#include <vector>
 
 namespace Strata
 {
@@ -1606,6 +1610,159 @@ namespace Strata
 		}
 
 		////////////////////////////////////////////////////////////////////////////////
+		// Scene streaming
+		////////////////////////////////////////////////////////////////////////////////
+
+		uint64_t HostLoadSceneAdditive(StrataScriptContext* context, StrataScriptAssetHandle scene)
+		{
+			return HostCall("LoadSceneAdditive", uint64_t(0), [&]() -> uint64_t
+			{
+				ScriptSystem* system = ResolveContext(context, "LoadSceneAdditive");
+				AssetManagerBase* manager = system ? RequireAssetManager(*system, "LoadSceneAdditive") : nullptr;
+				if (!manager)
+					return 0;
+				const AssetHandle handle(scene);
+				if (manager->GetAssetType(handle) != AssetType::Scene)
+				{
+					system->ReportProblem("LoadSceneAdditive", scene == 0 ? std::string("the asset is null")
+						: fmt::format("asset {} is not a scene", handle.ToString()));
+					return 0;
+				}
+				std::string error;
+				const SubSceneID id = system->GetScene().LoadSubScene(handle, {}, &error);
+				if (id == 0)
+					system->ReportProblem("LoadSceneAdditive", fmt::format("scene {} cannot be loaded: {}", handle.ToString(), error));
+				return id;
+			});
+		}
+
+		bool HostUnloadSubScene(StrataScriptContext* context, uint64_t subScene)
+		{
+			return HostCall("UnloadSubScene", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "UnloadSubScene");
+				// Unloading what is gone (e.g. twice) is no misuse: just false.
+				return system && system->GetScene().UnloadSubScene(subScene);
+			});
+		}
+
+		bool HostIsSubSceneLoaded(StrataScriptContext* context, uint64_t subScene)
+		{
+			return HostCall("IsSubSceneLoaded", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "IsSubSceneLoaded");
+				return system && system->GetScene().IsSubSceneLoaded(subScene);
+			});
+		}
+
+		float HostGetSceneLoadProgress(StrataScriptContext* context)
+		{
+			return HostCall("GetSceneLoadProgress", -1.0f, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "GetSceneLoadProgress");
+				const std::optional<float> progress = system ? system->GetScene().GetSceneLoadProgress() : std::nullopt;
+				return progress.value_or(-1.0f);
+			});
+		}
+
+		float HostGetAssetLoadProgress(StrataScriptContext* context, StrataScriptAssetHandle asset)
+		{
+			return HostCall("GetAssetLoadProgress", -1.0f, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "GetAssetLoadProgress");
+				AssetManagerBase* manager = system ? RequireAssetManager(*system, "GetAssetLoadProgress") : nullptr;
+				if (!manager)
+					return -1.0f;
+				const float progress = system->GetAssetLoadProgress(*manager, AssetHandle(asset));
+				if (progress < 0.0f)
+					system->ReportProblem("GetAssetLoadProgress", asset == 0 ? std::string("the asset is null")
+						: fmt::format("asset {} does not exist", AssetHandle(asset).ToString()));
+				return progress;
+			});
+		}
+
+		uint32_t HostInstantiateMany(StrataScriptContext* context, StrataScriptAssetHandle asset, uint32_t count, const float* transforms,
+			StrataScriptEntityID parent, StrataScriptEntityID* outEntities)
+		{
+			return HostCall("InstantiateMany", uint32_t(0), [&]() -> uint32_t
+			{
+				ScriptSystem* system = ResolveContext(context, "InstantiateMany");
+				AssetManagerBase* manager = system ? RequireAssetManager(*system, "InstantiateMany") : nullptr;
+				if (!manager || count == 0)
+					return 0;
+				if (!transforms || !outEntities)
+				{
+					system->ReportProblem("InstantiateMany", "the transforms or the entity array are null");
+					return 0;
+				}
+				if (count > Scene::c_MaxEntities)
+				{
+					system->ReportProblem("InstantiateMany", fmt::format("{} instances are more than a scene holds", count));
+					return 0;
+				}
+
+				const AssetHandle handle(asset);
+				const AssetType type = manager->GetAssetType(handle);
+				if (type != AssetType::Prefab && type != AssetType::Model)
+				{
+					system->ReportProblem("InstantiateMany", asset == 0 ? std::string("the asset is null")
+						: fmt::format("asset {} is not a prefab or model", handle.ToString()));
+					return 0;
+				}
+				Entity parentEntity;
+				if (parent != 0 && !(parentEntity = RequireEntity(*system, parent, "InstantiateMany")))
+					return 0;
+
+				// Module memory is read once, into engine memory, before anything is created.
+				std::vector<glm::mat4> matrices(count);
+				for (uint32_t index = 0; index < count; index++)
+				{
+					const float* values = transforms + static_cast<size_t>(index) * 16;
+					for (uint32_t element = 0; element < 16; element++)
+					{
+						if (!std::isfinite(values[element]))
+						{
+							system->ReportProblem("InstantiateMany", fmt::format("transform {} is not finite", index));
+							return 0;
+						}
+					}
+					matrices[index] = glm::make_mat4(values);
+				}
+
+				// Never waits for loading, as Instantiate.
+				const Ref<Asset> loaded = manager->GetAsset(handle, AssetPriority::High);
+				if (!loaded)
+				{
+					if (manager->GetAssetState(handle) == AssetState::Failed)
+						system->ReportProblem("InstantiateMany", fmt::format("asset {} failed to load: {}", handle.ToString(), manager->GetAssetError(handle)));
+					else
+						system->ReportProblem("InstantiateMany", fmt::format("asset {} is not loaded yet (its load was started); request assets early "
+							"(Assets::RequestLoad, Assets::GetLoadProgress) and instantiate them once they are loaded", handle.ToString()));
+					return 0;
+				}
+				if (loaded->GetType() != AssetType::Prefab && loaded->GetType() != AssetType::Model)
+				{
+					system->ReportProblem("InstantiateMany", fmt::format("asset {} is not a prefab or model", handle.ToString()));
+					return 0;
+				}
+
+				std::string error;
+				const std::vector<Entity> roots = std::static_pointer_cast<EntityTemplate>(loaded)->InstantiateMany(system->GetScene(), matrices, parentEntity, &error);
+				if (roots.size() != count)
+				{
+					system->ReportProblem("InstantiateMany", error.empty() ? fmt::format("asset {} contains no entities", handle.ToString())
+						: fmt::format("asset {} could not be instantiated: {}", handle.ToString(), error));
+					return 0;
+				}
+				for (uint32_t index = 0; index < count; index++)
+					outEntities[index] = static_cast<uint64_t>(roots[index].GetUUID());
+				// Scripts of the new entities exist when this returns, as for Instantiate.
+				system->CreatePendingInstances();
+				return count;
+			});
+		}
+
+		////////////////////////////////////////////////////////////////////////////////
 		// The table
 		////////////////////////////////////////////////////////////////////////////////
 
@@ -1692,7 +1849,13 @@ namespace Strata
 	X(AudioGetMasterVolume) \
 	X(QuitGame) \
 	X(LoadScene) \
-	X(ReleaseAsset)
+	X(ReleaseAsset) \
+	X(LoadSceneAdditive) \
+	X(UnloadSubScene) \
+	X(IsSubSceneLoaded) \
+	X(GetSceneLoadProgress) \
+	X(GetAssetLoadProgress) \
+	X(InstantiateMany)
 
 		struct HostFunctionEntry
 		{

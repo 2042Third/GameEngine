@@ -198,6 +198,8 @@ namespace Strata
 			specification.MaxFrames = static_cast<uint64_t>(*frames);
 		options.MaxFrames = specification.MaxFrames;
 		options.Headless = specification.Headless;
+		// A person's window shows the start scene loading; scripted runs and headless editors (driven by tools) start with it open.
+		options.OpenStartSceneInBackground = !options.Headless && !options.MaxFrames && options.CommandScript.empty();
 
 		return new EditorApplication(specification, options);
 	}

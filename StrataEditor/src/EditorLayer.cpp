@@ -27,6 +27,7 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 
 namespace Strata
@@ -163,7 +164,10 @@ namespace Strata
 		{
 			contentBrowser->SetOpenSceneHandler([this](AssetHandle scene)
 			{
-				RequestDiscardChanges([this, scene]() { RunEditorCommand(m_Context, m_Commands, "scene.open", { { "scene", UUIDToJson(scene) } }); });
+				RequestDiscardChanges([this, scene]()
+				{
+					RunEditorCommandDeferred(m_CommandRunner, m_Context, m_Commands, "scene.open", { { "scene", UUIDToJson(scene) } });
+				});
 			});
 		}
 		if (StreamingPanel* streaming = m_Panels.Get<StreamingPanel>(EditorPanels::c_Streaming))
@@ -211,8 +215,12 @@ namespace Strata
 
 		if (!m_Options.ProjectPath.empty())
 		{
+			// A window shows the start scene's load (the viewport's load card) while frames go on; otherwise the editor starts
+			// with the scene open.
 			std::string error;
-			if (!m_Context.OpenProject(m_Options.ProjectPath, &error))
+			const bool opened = m_Options.OpenStartSceneInBackground ? m_Context.BeginOpenProject(m_Options.ProjectPath, &error)
+				: m_Context.OpenProject(m_Options.ProjectPath, &error);
+			if (!opened)
 				ReportError(fmt::format("Could not open the project '{}': {}", FileSystem::ToUTF8(m_Options.ProjectPath), error));
 		}
 
@@ -486,12 +494,7 @@ namespace Strata
 			});
 			if (project != paths.end())
 			{
-				RequestDiscardChanges([this, file = *project]()
-				{
-					const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(file) } });
-					if (!result.Success)
-						ReportError(fmt::format("Could not open {}: {}", FileSystem::ToUTF8(file), result.Error));
-				});
+				RequestDiscardChanges([this, file = *project]() { OpenProjectFileNow(file); });
 				return true;
 			}
 			if (!m_Context.HasProject())
@@ -681,12 +684,15 @@ namespace Strata
 
 	void EditorLayer::OpenProjectFile(const std::filesystem::path& projectFile)
 	{
-		RequestDiscardChanges([this, projectFile]()
-		{
-			const EditorCommandResult result = m_Commands.Execute(m_Context, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
-			if (!result.Success)
-				ReportError(fmt::format("Could not open {}: {}", UI::DisplayPath(projectFile), result.Error));
-		});
+		RequestDiscardChanges([this, projectFile]() { OpenProjectFileNow(projectFile); });
+	}
+
+	void EditorLayer::OpenProjectFileNow(const std::filesystem::path& projectFile)
+	{
+		// Through the runner: the project opens at once, its start scene over the next frames (the viewport shows the load).
+		const std::string error = StartEditorCommand(m_CommandRunner, m_Context, m_Commands, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+		if (!error.empty())
+			ReportError(fmt::format("Could not open {}: {}", UI::DisplayPath(projectFile), error));
 	}
 
 	void EditorLayer::ShowAboutDialog()
@@ -1169,19 +1175,23 @@ namespace Strata
 		const SceneState state = m_Context.GetSceneState();
 		const bool playing = m_Context.IsPlaying();
 		const bool paused = m_Context.IsPaused();
+		// A scene being opened replaces the edited one: play mode waits for it.
+		const bool sceneLoading = m_Context.IsSceneLoading();
 
 		// Play is the primary action while editing; while a mode runs, its button shows it in the mode's color.
 		UI::ButtonStyle play;
-		play.Enabled = !playing;
+		play.Enabled = !playing && !sceneLoading;
 		play.Primary = !playing;
 		play.Active = state == SceneState::Play;
 		play.ActiveColor = colors.PlayState.Play;
-		if (UI::ToolbarButton("Toolbar.Play", Icons::Play, nullptr, playing ? "Playing" : "Play: run the scene with scripts, physics and audio (Ctrl+P)", play))
+		const char* playTooltip = playing ? "Playing" : (sceneLoading ? "A scene is being opened: play once it is open"
+			: "Play: run the scene with scripts, physics and audio (Ctrl+P)");
+		if (UI::ToolbarButton("Toolbar.Play", Icons::Play, nullptr, playTooltip, play))
 			RunEditorCommand(m_Context, m_Commands, "play.start");
 		ImGui::SameLine();
 
 		UI::ButtonStyle simulate;
-		simulate.Enabled = !playing;
+		simulate.Enabled = !playing && !sceneLoading;
 		simulate.Active = state == SceneState::Simulate;
 		simulate.ActiveColor = colors.PlayState.Simulate;
 		if (UI::ToolbarButton("Toolbar.Simulate", Icons::Atom, nullptr, "Simulate: run the scene's physics only", simulate))
@@ -1360,6 +1370,10 @@ namespace Strata
 		const uint32_t importing = m_Context.GetAssetManager()->GetPendingImportCount();
 		if (importing > 0)
 			text = fmt::format("{} importing{}{}", importing, c_Separator, text);
+		// A scene being opened (scene.open, a project's start scene) loads with everything it uses: the largest load while it
+		// lasts. Its progress counts its document as it is read, then what it uses in bytes.
+		if (m_Context.IsSceneLoading())
+			text = fmt::format("Opening scene {:.0f}%{}{}", std::floor(m_Context.GetSceneLoadStatus().Progress * 100.0f), c_Separator, text);
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		// Failures matter most; then how full the budgets are (a comfortable budget is no news).
 		const ImVec4& color = stats.FailedAssets > 0 ? colors.Error
@@ -1375,6 +1389,12 @@ namespace Strata
 			{
 				tooltip += fmt::format(" {} {} importing in the background: {} once imported.", importing, importing == 1 ? "asset is" : "assets are",
 					importing == 1 ? "it loads" : "they load");
+			}
+			if (m_Context.IsSceneLoading())
+			{
+				const EditorSceneLoadStatus& load = m_Context.GetSceneLoadStatus();
+				tooltip += fmt::format(" A scene is being opened ({:.0f}% of it and what it uses is in; {}); it replaces the edited scene once all of it is.",
+					std::floor(load.Progress * 100.0f), load.State == SceneLoadState::LoadingScene ? "its document is being read" : "what it uses is loading");
 			}
 			if (!shownPool)
 			{

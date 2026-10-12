@@ -114,12 +114,12 @@ namespace Strata
 		return std::nullopt;
 	}
 
-	void ContentBrowserPanel::OpenScene(EditorContext& context, const EditorCommandRegistry& commands, AssetHandle scene)
+	void ContentBrowserPanel::OpenScene(EditorPanelContext& panelContext, AssetHandle scene)
 	{
 		if (m_OpenScene)
 			m_OpenScene(scene);
 		else
-			RunEditorCommand(context, commands, "scene.open", { { "scene", UUIDToJson(scene) } });
+			RunEditorCommandDeferred(panelContext.Runner, panelContext.Context, panelContext.Commands, "scene.open", { { "scene", UUIDToJson(scene) } });
 	}
 
 	void ContentBrowserPanel::Refresh(EditorContext& context)
@@ -354,7 +354,7 @@ namespace Strata
 				m_RefreshRequested = true;
 			}
 			if (openScene.IsValid())
-				OpenScene(context, commands, openScene);
+				OpenScene(panelContext, openScene);
 		}
 		ImGui::EndChild();
 	}

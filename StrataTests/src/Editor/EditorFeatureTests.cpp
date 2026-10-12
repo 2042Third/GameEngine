@@ -70,12 +70,12 @@ TEST_SUITE("Editor.FeatureTest")
 
 		// The editor runs the feature scripts, built in-tree, as the project's script module.
 		FeatureEditor editor;
-		editor.Run("project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+		Tests::RunCommandToCompletion(editor.Context, editor.Commands, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
 		CHECK(editor.Run("project.info")["startScene"] == "F7A0000000000001");
 		editor.Run("script.load", { { "path", FileSystem::ToUTF8(GetFeatureScriptModule()) } });
 		const Ref<ScriptEngine> engine = editor.Context.GetScriptEngine();
 		REQUIRE(engine);
-		editor.Run("scene.open", { { "scene", "Scenes/Feature.stscene" } });
+		Tests::RunCommandToCompletion(editor.Context, editor.Commands, "scene.open", { { "scene", "Scenes/Feature.stscene" } });
 		const std::string ball = editor.FindEntity("Ball");
 		CHECK(editor.GetHeight(ball) == doctest::Approx(4.0f));
 
@@ -112,6 +112,7 @@ TEST_SUITE("Editor.FeatureTest")
 		std::string error;
 		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
 		REQUIRE_MESSAGE(game, error);
+		REQUIRE(game->WaitForStart());
 		const Ref<ScriptEngine> gameEngine = game->GetScriptEngine();
 		REQUIRE(gameEngine);
 		CHECK(gameEngine != engine);

@@ -1,10 +1,15 @@
-// The gameplay helpers (Random, Timer, KeyRepeat) and the game flow (Game) on "Game Features". The in-process runners set
+// The gameplay helpers (Random, Timer, KeyRepeat), scene streaming (a sub-scene loaded and unloaded, a model instantiated
+// many times once everything it uses is in) and the game flow (Game) on "Game Features". The in-process runners set
 // QuitFrame to the frame they play after the scenario (PlayFeatureQuitFrame): in it, the script asks for scene loads and
 // then to quit with QuitCode (set by the scene), and the runners check that whoever runs the scene (the headless scene
 // itself, the editor, the game runtime) honors the quit. The real executables' runs never set it, so their games keep
 // running for as many frames as they play.
 
 #include "FeatureScript.h"
+
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <vector>
 
 using namespace Strata;
 using namespace FeatureTest;
@@ -21,6 +26,11 @@ public:
 	int32_t CountdownFrame = -1; // The frame the one-shot timer elapsed in
 	int32_t Ticks = 0;           // Times the repeating timer elapsed during the first c_TickFrames frames
 	int32_t KeyRepeats = 0;      // Frames KeyRepeat fired in
+	// Streaming: 0 while the sub-scene and the model load, 1 once both were used and the sub-scene unloaded, 2 once its
+	// entities are gone.
+	int32_t StreamPhase = 0;
+	Entity SubSceneFloor;      // The sub-scene's top-level entity
+	int32_t InstancesMade = 0; // Model instances InstantiateMany made
 
 	void OnCreate() override
 	{
@@ -29,6 +39,7 @@ public:
 		CheckRandom();
 		m_Countdown.Start(0.5f);
 		m_Ticker.Start(0.1f, true);
+		StartStreaming();
 	}
 
 	void OnUpdate(float deltaTime) override
@@ -51,9 +62,11 @@ public:
 		// The runners hold Space for two frames (see InputFeatures): the press, and the repeat after the short delay.
 		if (m_KeyRepeat.Update(deltaTime))
 			KeyRepeats++;
+		UpdateStreaming();
 
 		if (frame == c_CheckFrame)
 		{
+			Expect(StreamPhase == 2, "the sub-scene loads and unloads, and the model instances are made, in time");
 			// Game time: frames of 1/60 s, one of them at half speed (see TimeFeatures).
 			Expect(CountdownFrame >= 29 && CountdownFrame <= 31, "a Timer of 0.5 s elapses after 30 frames");
 			Expect(Ticks >= 9 && Ticks <= 10, "a repeating Timer of 0.1 s elapses about ten times a second");
@@ -71,6 +84,53 @@ public:
 		}
 	}
 private:
+	// A sub-scene and a model's whole closure start loading; no scene switch is under way.
+	void StartStreaming()
+	{
+		m_Model = Assets::Find("Models/Platform.gltf");
+		const float progress = Assets::GetLoadProgress(m_Model);
+		Expect(progress >= 0.0f && progress <= 1.0f, "Assets::GetLoadProgress loads what a model uses");
+		m_SubScene = Scene::LoadAdditive("Scenes/FeatureSub.stscene");
+		Expect(m_SubScene.IsValid() && m_SubScene.GetID() != 0, "Scene::LoadAdditive");
+		Expect(Game::GetSceneLoadProgress() < 0.0f, "Game::GetSceneLoadProgress without a scene switch");
+		Journal(*this, "GameFeatures", "LoadAdditive");
+	}
+
+	void UpdateStreaming()
+	{
+		if (StreamPhase == 0)
+		{
+			if (!m_SubScene.IsLoaded() || Assets::GetLoadProgress(m_Model) < 1.0f)
+				return;
+			SubSceneFloor = Scene::FindEntityByName("Sub Floor");
+			Expect(SubSceneFloor.IsValid() && Scene::FindEntitiesByTag("Streamed").size() == 2, "a loaded sub-scene's entities are in the scene");
+			Journal(*this, "GameFeatures", "SubSceneLoaded");
+
+			// Three model instances in one call, under this entity, far from the scenario; destroyed at once.
+			std::vector<glm::mat4> transforms;
+			for (int index = 0; index < 3; index++)
+				transforms.push_back(glm::translate(glm::mat4(1.0f), glm::vec3(-40.0f - 4.0f * static_cast<float>(index), 0.0f, 40.0f)));
+			const std::vector<Entity> instances = Scene::InstantiateMany(m_Model, transforms, GetEntity());
+			InstancesMade = static_cast<int32_t>(instances.size());
+			Expect(instances.size() == 3 && instances[2].GetParent() == GetEntity() && instances[2].GetName() == "Platform", "Scene::InstantiateMany");
+			if (instances.size() == 3)
+				Expect(Near(instances[1].GetTransform().GetTranslation(), glm::vec3(-44.0f, 0.0f, 40.0f)), "each instance gets its transform");
+			for (Entity instance : instances)
+				instance.Destroy();
+
+			Expect(m_SubScene.Unload(), "SubScene::Unload");
+			Expect(!m_SubScene.IsLoaded(), "an unloaded sub-scene is not loaded");
+			StreamPhase = 1;
+		}
+		else if (StreamPhase == 1)
+		{
+			Expect(!SubSceneFloor.IsValid() && Scene::FindEntitiesByTag("Streamed").empty(), "an unloaded sub-scene's entities are gone");
+			Expect(!m_SubScene.Unload(), "a sub-scene unloads once");
+			Journal(*this, "GameFeatures", "SubSceneUnloaded");
+			StreamPhase = 2;
+		}
+	}
+
 	void CheckRandom()
 	{
 		Random random(static_cast<uint64_t>(QuitCode));
@@ -90,6 +150,8 @@ private:
 	Timer m_Countdown;
 	Timer m_Ticker;
 	KeyRepeat m_KeyRepeat { Key::Space, 0.01f, 1.0f };
+	AssetHandle m_Model;
+	SubScene m_SubScene;
 };
 
 ST_SCRIPT_CLASS(GameFeatures)
@@ -102,4 +164,7 @@ ST_SCRIPT_CLASS(GameFeatures)
 	ST_SCRIPT_FIELD(CountdownFrame);
 	ST_SCRIPT_FIELD(Ticks);
 	ST_SCRIPT_FIELD(KeyRepeats);
+	ST_SCRIPT_FIELD(StreamPhase);
+	ST_SCRIPT_FIELD(SubSceneFloor);
+	ST_SCRIPT_FIELD(InstancesMade);
 }

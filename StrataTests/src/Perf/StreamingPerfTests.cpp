@@ -71,8 +71,9 @@ namespace
 	// maximum by nature too (below the same limit of 8 ms).
 	constexpr const char* c_RuntimeMaxFinalizeStage = "PerfGPU.Streaming.RuntimeMaxFinalizeStage";
 	// The exported game's peak private memory (the PeakPrivateMB its perf log ends with), run with the game's own budgets
-	// (nothing evicted: every texture its camera shows stays) from the world scene's overview camera, which shows about two
-	// thirds of the textures. A maximum by nature, one run per attempt.
+	// (nothing evicted) from the world scene's overview camera, which shows about two thirds of the textures: the scene's
+	// load brings in every texture the world uses at its mip tail before it starts (all of them fit the budgets) and they
+	// stay, raised to the levels the view needs. A maximum by nature, one run per attempt.
 	constexpr const char* c_RuntimePeakPrivateMemory = "PerfGPU.Streaming.RuntimePeakPrivateMemory";
 	// The same with the whole world in view: the game started in the top-down scene, whose camera sees every district (the
 	// material of every district, so every texture, is drawn), for 300 frames, its textures at the mip levels the screen

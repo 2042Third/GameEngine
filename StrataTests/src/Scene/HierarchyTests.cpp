@@ -1,11 +1,13 @@
 #include <doctest/doctest.h>
 
+#include "Asset/AssetTestUtils.h"
 #include "Scene/SceneTestUtils.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scene/UnknownComponents.h"
 #include "TestHelpers.h"
 
 #include <algorithm>
@@ -371,6 +373,81 @@ TEST_SUITE("Scene.Hierarchy")
 		CheckSceneCaches(*staleCopy);
 		source->UpdateWorldTransforms();
 		CHECK(staleCopy->GetEntityByUUID(entities[3].GetUUID()).GetComponent<WorldTransformComponent>().Matrix == entities[3].GetComponent<WorldTransformComponent>().Matrix);
+	}
+
+	TEST_CASE("Scene copies keep the source's entity identifiers, copy every storage whole and stay independent")
+	{
+		// On the job system, as play mode copies: the storages are copied in parallel.
+		ScopedJobSystem jobs(4, 1);
+		std::mt19937 random(23);
+		Ref<Scene> source = CreateRef<Scene>("Source");
+		std::vector<Entity> entities = CreateRandomHierarchy(*source, 3000, random);
+		// Holes in the identifiers (destroyed entities, each created after entities 0 to 4, which are never below them) and an
+		// entity made directly in the registry, which is not the scene's.
+		source->DestroyEntities(std::vector<Entity> { entities[5], entities[700], entities[2999] });
+		const entt::entity foreign = source->GetRegistry().create();
+		entities[1].AddComponent<TagComponent>().Tag = "Tagged";
+		entities[2].SetActive(false);
+		ScriptEntry entry;
+		entry.ClassName = "Follower";
+		entry.Fields.push_back({ "Target", PropertyType::Entity, PropertyValue(entities[4].GetUUID()) });
+		entities[3].AddComponent<ScriptComponent>().Scripts.push_back(entry);
+		entities[0].AddComponent<UnknownComponentsComponent>(UnknownComponentsComponent { { { "Vehicle", { { "Wheels", 4 } } } } });
+		source->UpdateWorldTransforms();
+		RandomizeTransform(entities[1], random); // Stale in the source: stale in the copy
+
+		const Ref<Scene> copy = Scene::Copy(source);
+		CheckSceneCaches(*copy);
+		CHECK(copy->GetEntityCount() == source->GetEntityCount());
+		CHECK_FALSE(copy->GetRegistry().valid(foreign));
+		CHECK(SceneSerializer::Serialize(*copy) == SceneSerializer::Serialize(*source));
+		for (const Entity entity : source->GetEntitiesInHierarchyOrder())
+		{
+			const Entity copied = copy->GetEntityByUUID(entity.GetUUID());
+			REQUIRE(copied);
+			CHECK(copied.GetHandle() == entity.GetHandle());
+			CHECK(copy->GetSiblingIndex(copied) == source->GetSiblingIndex(entity));
+		}
+		const Entity copiedVehicle = copy->GetEntityByUUID(entities[0].GetUUID());
+		CHECK(copiedVehicle.GetComponent<UnknownComponentsComponent>().Components["Vehicle"]["Wheels"] == 4);
+		CHECK_FALSE(copy->IsActiveInHierarchy(copy->GetEntityByUUID(entities[2].GetUUID())));
+		CHECK(copy->FindEntitiesByTag("Tagged") == std::vector<Entity> { copy->GetEntityByUUID(entities[1].GetUUID()) });
+
+		// The copy's signals work: an edit there marks its transform, and nothing of it reaches the source.
+		copy->UpdateWorldTransforms();
+		CHECK(copy->GetTransformUpdateCount() >= 1);
+		Entity copiedMoved = copy->GetEntityByUUID(entities[3].GetUUID());
+		copiedMoved.GetTransform().Translation.x += 10.0f;
+		copiedMoved.MarkModified<TransformComponent>();
+		copiedMoved.GetComponent<NameComponent>().Name = "Renamed";
+		copiedMoved.MarkModified<NameComponent>();
+		CHECK(copy->FindEntityByName("Renamed") == copiedMoved);
+		copy->UpdateWorldTransforms();
+		CheckSceneCaches(*copy);
+		CHECK_FALSE(source->FindEntityByName("Renamed"));
+		source->UpdateWorldTransforms();
+		CHECK(entities[3].GetComponent<WorldTransformComponent>().Matrix != copiedMoved.GetComponent<WorldTransformComponent>().Matrix);
+
+		// New entities of the copy take free identifiers, the holes first, and never collide with copied ones.
+		std::vector<Entity> created;
+		for (int index = 0; index < 10; index++)
+		{
+			Entity entity = copy->CreateChildEntity(copiedMoved, "New");
+			REQUIRE(entity);
+			created.push_back(entity);
+		}
+		CHECK(copy->GetEntityCount() == source->GetEntityCount() + 10);
+		CHECK(static_cast<size_t>(entt::to_entity(created.front().GetHandle())) == static_cast<size_t>(entt::to_entity(entities[5].GetHandle())));
+		copy->DestroyEntity(copy->GetEntityByUUID(entities[4].GetUUID()));
+		copy->UpdateWorldTransforms();
+		CheckSceneCaches(*copy);
+		CHECK(source->GetEntityByUUID(entities[4].GetUUID()));
+		CheckSceneCaches(*source);
+
+		// An empty scene copies too.
+		const Ref<Scene> empty = Scene::Copy(CreateRef<Scene>("Empty"));
+		CHECK(empty->GetEntityCount() == 0);
+		CHECK(empty->CreateEntity("First"));
 	}
 
 	TEST_CASE("Deserialized entities are linked, placed and activated under their parent")

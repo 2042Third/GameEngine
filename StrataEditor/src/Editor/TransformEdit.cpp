@@ -177,6 +177,9 @@ namespace Strata
 			return false;
 		};
 
+		// While a scene is being opened the edited scene is read-only (CommitEdit would undo the move).
+		if (std::string error; !context.CheckSceneEditable(&error))
+			return fail(std::move(error));
 		const Ref<Scene>& scene = context.GetActiveScene();
 		if (m_Scene.lock() != scene)
 			return fail("The scene changed during the drag");

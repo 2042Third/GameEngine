@@ -228,13 +228,12 @@ namespace Strata::Tests
 		const Ref<SceneAsset> asset = AssetManager::LoadAssetSync<SceneAsset>(handle);
 		REQUIRE_MESSAGE(asset, m_AssetManager->GetAssetError(handle));
 
-		// Deserialized here rather than through SceneAsset::CreateScene, which does not report warnings.
-		Ref<Scene> scene = CreateRef<Scene>();
-		std::string error;
-		std::vector<std::string> warnings;
-		REQUIRE_MESSAGE(SceneSerializer::Deserialize(*scene, asset->GetDocument(), &error, &warnings), error);
-		for (const std::string& warning : warnings)
+		// What the loader could not read as written fails the test (the scene asset only logs it).
+		for (const std::string& warning : asset->GetWarnings())
 			FAIL_CHECK("Loading the feature scene warned: ", warning);
+		std::string error;
+		Ref<Scene> scene = asset->CreateScene(&error);
+		REQUIRE_MESSAGE(scene, error);
 		return scene;
 	}
 

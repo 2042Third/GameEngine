@@ -5,6 +5,7 @@
 #include <nlohmann/json.hpp>
 
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -12,6 +13,7 @@ namespace Strata
 {
 
 	class EditorCommandRegistry;
+	class EditorCommandRunner;
 	class EditorContext;
 	struct ComponentInfo;
 
@@ -20,6 +22,19 @@ namespace Strata
 	// EditorCommandRunner.
 	nlohmann::json RunEditorCommand(EditorContext& context, const EditorCommandRegistry& commands, std::string_view name,
 		const nlohmann::json& parameters = nlohmann::json::object());
+	// Runs a command from the UI through the runner, for commands that may take frames (scene.open), and logs a failure when
+	// it ends (not a cancellation, e.g. by a later scene.open).
+	void RunEditorCommandDeferred(EditorCommandRunner& runner, EditorContext& context, const EditorCommandRegistry& commands, std::string_view name,
+		const nlohmann::json& parameters = nlohmann::json::object());
+	// Like RunEditorCommandDeferred, for UI that shows the failures it can (a dialog, the launcher): returns the error of a
+	// command that failed at once (project.open of a file that is no project) without logging it; empty when the command
+	// succeeded or is still pending. A later failure (not a cancellation) is logged.
+	std::string StartEditorCommand(EditorCommandRunner& runner, EditorContext& context, const EditorCommandRegistry& commands, std::string_view name,
+		const nlohmann::json& parameters = nlohmann::json::object());
+	// While a scene is being opened outside play mode (EditorContext::IsSceneLoading: scene.open, a project's start scene) the
+	// edited scene is read-only: draws a banner naming the scene that opens and returns true, so that the panel draws its
+	// contents disabled. Draws nothing and returns false otherwise.
+	bool DrawSceneLoadBanner(const char* id, const EditorContext& context);
 
 	// What the Edit menu and the focus-scoped shortcuts of the Hierarchy and the Viewport do with the selected entities:
 	// delete, duplicate, cut, copy, paste and select all. Each runs commands, so it is one undo step and the same operation

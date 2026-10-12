@@ -3,6 +3,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/ProjectTemplates.h"
+#include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/EditorShell.h"
 #include "UI/Icons.h"
@@ -711,11 +712,13 @@ namespace Strata
 		// The action may run in a later frame (after the question about unsaved changes): it keeps what outlives the frame.
 		EditorContext* editor = &context.Context;
 		const EditorCommandRegistry* commands = &context.Commands;
-		auto open = [this, editor, commands, projectFile]()
+		EditorCommandRunner* runner = &context.Runner;
+		auto open = [this, editor, commands, runner, projectFile]()
 		{
-			const EditorCommandResult result = commands->Execute(*editor, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
-			if (!result.Success)
-				ShowError(fmt::format("Could not open {}: {}", UI::DisplayPath(projectFile), result.Error));
+			// The project opens at once; its start scene loads over the next frames, through the runner.
+			const std::string error = StartEditorCommand(*runner, *editor, *commands, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+			if (!error.empty())
+				ShowError(fmt::format("Could not open {}: {}", UI::DisplayPath(projectFile), error));
 		};
 		if (context.Shell)
 			context.Shell->RequestDiscardChanges(std::move(open));

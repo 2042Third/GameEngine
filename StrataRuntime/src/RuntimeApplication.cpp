@@ -78,6 +78,15 @@ namespace Strata
 			if (!m_Runtime)
 				return;
 			m_Runtime->Update(timestep);
+			// A start scene that cannot be loaded leaves nothing to play.
+			if (const std::optional<std::string>& startError = m_Runtime->GetStartError())
+			{
+				ST_CRITICAL("Cannot start the game '{}': {}", FileSystem::ToUTF8(m_Options.ManifestPath), *startError);
+				Application::Get().SetExitCode(1);
+				Application::Get().Close();
+				m_Runtime.reset();
+				return;
+			}
 			// A headless run (a server, CI) has nobody to show a broken game to: a script crash ends it with exit code 2. A
 			// windowed game keeps running without its scripts; the crash is in the log.
 			if (m_Runtime->GetScriptFault() && Application::Get().GetSpecification().Headless)
@@ -101,8 +110,14 @@ namespace Strata
 				// for only from here on (after the frame's asset uploads, which the update above submitted).
 				GraphicsDevice& device = Renderer::GetGraphicsDevice();
 				Renderer::PrepareBackBuffer();
+				// Until the first scene (or the loading scene) plays, the frame is cleared.
 				if (nvrhi::IFramebuffer* backBuffer = device.GetBackBufferFramebuffer())
-					m_Renderer->Render(m_Runtime->GetScene(), backBuffer, device.GetBackBufferSize());
+				{
+					if (m_Runtime->GetScene())
+						m_Renderer->Render(m_Runtime->GetScene(), backBuffer, device.GetBackBufferSize());
+					else
+						m_Renderer->RenderEmpty(backBuffer, device.GetBackBufferSize());
+				}
 			}
 			RequestScreenshot();
 		}
@@ -160,9 +175,11 @@ namespace Strata
 			const bool lastFrame = m_Options.MaxFrames && application.GetFrameCount() + 1 == *m_Options.MaxFrames;
 			if (!lastFrame || m_Options.ScreenshotPath.empty())
 				return;
-			// This frame is already rendered: a game that shows the missing-camera message cannot be what a screenshot is for.
+			// This frame is already rendered: a game that shows the missing-camera message, or a cleared frame because nothing
+			// plays yet, cannot be what a screenshot is for (the loading scene can).
 			const bool showingMessage = m_Renderer && m_Renderer->IsShowingMessage();
-			application.RequestBackBufferCapture([path = m_Options.ScreenshotPath, showingMessage](const ReadbackImage& image)
+			const bool loading = !m_Runtime->GetScene();
+			application.RequestBackBufferCapture([path = m_Options.ScreenshotPath, showingMessage, loading](const ReadbackImage& image)
 			{
 				// A requested screenshot that cannot be made, or shows no game, fails the run, so scripted runs (CI) notice.
 				std::string error;
@@ -176,6 +193,11 @@ namespace Strata
 				if (showingMessage)
 				{
 					ST_ERROR("The screenshot shows the missing-camera message instead of the game");
+					Application::Get().SetExitCode(1);
+				}
+				if (loading)
+				{
+					ST_ERROR("The screenshot shows a cleared frame: the game's start scene is still loading (more --frames give it time)");
 					Application::Get().SetExitCode(1);
 				}
 			});

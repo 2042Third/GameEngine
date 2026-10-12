@@ -34,6 +34,7 @@ namespace Strata
 				{ "AssetPack", AssetPack },
 				{ "PatchPacks", PatchPacks },
 				{ "StartScene", UUIDToJson(StartScene) },
+				{ "LoadingScene", LoadingScene.IsValid() ? UUIDToJson(LoadingScene) : nlohmann::json(nullptr) },
 				{ "ScriptModule", ScriptModule },
 				{ "Window", { { "Width", WindowWidth }, { "Height", WindowHeight }, { "Fullscreen", Fullscreen }, { "VSync", VSync } } } } } };
 	}
@@ -81,6 +82,14 @@ namespace Strata
 		if (!scene || !scene->IsValid())
 			return fail("\"StartScene\" must be a scene handle");
 		manifest.StartScene = *scene;
+		// Optional (version 4): null or absent means none.
+		if (const nlohmann::json* loadingScene = JsonUtils::Find(*game, "LoadingScene"); loadingScene && !loadingScene->is_null())
+		{
+			const std::optional<UUID> handle = UUIDFromJson(*loadingScene);
+			if (!handle || !handle->IsValid())
+				return fail("\"LoadingScene\" must be a scene handle or null");
+			manifest.LoadingScene = *handle;
+		}
 
 		if (const nlohmann::json* window = JsonUtils::Find(*game, "Window"); window && window->is_object())
 		{

@@ -204,7 +204,10 @@ namespace Strata
 			const char* tooltip = style.Enabled ? "Open this scene for editing" : "The scene is open (or the editor is playing)";
 			if (UI::ToolbarButton("AssetInspector.OpenScene", Icons::FolderOpen, "Open", tooltip, style))
 			{
-				auto open = [&context, &commands, asset]() { RunEditorCommand(context, commands, "scene.open", { { "scene", asset } }); };
+				auto open = [&runner = panelContext.Runner, &context, &commands, asset]()
+				{
+					RunEditorCommandDeferred(runner, context, commands, "scene.open", { { "scene", asset } });
+				};
 				if (panelContext.Shell)
 					panelContext.Shell->RequestDiscardChanges(open);
 				else

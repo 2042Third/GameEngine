@@ -100,7 +100,8 @@ TEST_SUITE("Asset.Residency")
 		CHECK(mesh->GetMemoryUsage().Cpu < geometry + 1024);
 		CHECK(mesh->GetMemoryUsage().GetGpu() == 0);
 
-		// Documents count what the parsed JSON occupies, which grows with what they hold.
+		// Prefabs and models count the entities they compiled their snapshots into, which grow with what they hold: at least
+		// the components every entity of the prototype keeps (ID and relationship are made anew by every instantiation).
 		const auto makeSnapshot = [](int entities)
 		{
 			Scene scene;
@@ -109,14 +110,17 @@ TEST_SUITE("Asset.Residency")
 				roots.push_back(scene.CreateEntity("Entity " + std::to_string(index)));
 			return SceneSerializer::SerializeEntities(scene, roots);
 		};
+		const uint64_t perEntity = sizeof(UUID) + sizeof(NameComponent) + sizeof(TransformComponent);
 		const Ref<Prefab> smallPrefab = Prefab::CreateFromSnapshot(makeSnapshot(1));
 		const Ref<Prefab> largePrefab = Prefab::CreateFromSnapshot(makeSnapshot(100));
-		CHECK(smallPrefab->GetMemoryUsage().Cpu > 0);
-		CHECK(largePrefab->GetMemoryUsage().Cpu > 50 * smallPrefab->GetMemoryUsage().Cpu);
-		CHECK(largePrefab->GetMemoryUsage().Cpu > JsonUtils::Dump(largePrefab->GetSnapshot()).size()); // Parsed JSON takes more than its text
+		REQUIRE(smallPrefab);
+		REQUIRE(largePrefab);
+		CHECK(smallPrefab->GetMemoryUsage().Cpu > perEntity);
+		CHECK(largePrefab->GetMemoryUsage().Cpu > smallPrefab->GetMemoryUsage().Cpu + 99 * perEntity);
 		CHECK(largePrefab->GetMemoryUsage().GetGpu() == 0);
 		const Ref<Model> model = Model::CreateFromSnapshot(makeSnapshot(10));
-		CHECK(model->GetMemoryUsage().Cpu > smallPrefab->GetMemoryUsage().Cpu);
+		REQUIRE(model);
+		CHECK(model->GetMemoryUsage().Cpu > smallPrefab->GetMemoryUsage().Cpu + 9 * perEntity);
 
 		Scene scene("Document");
 		for (int index = 0; index < 20; index++)
@@ -596,6 +600,32 @@ TEST_SUITE("Asset.Residency")
 		for (uint32_t frame = 0; frame < 10; frame++)
 			manager->Update();
 		CHECK(manager->GetAssetState(shared) == AssetState::Ready);
+	}
+
+	TEST_CASE("A scheduled trim spares the assets it is given")
+	{
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>(); // No budget pressure: only the trim evicts
+		const AssetHandle previousScene = manager->Add(0x60010, MakeUsage(1 * c_KB));
+		const AssetHandle loadedForNext = manager->Add(0x60011, MakeUsage(1 * c_KB));
+		const AssetHandle unknown = UUID(0x60019);
+		LoadAll(*manager, { previousScene, loadedForNext });
+		manager->Update();
+
+		// The switch: the next scene's load brought one asset in, which the scene has not drawn yet in its first frames.
+		const std::vector<AssetHandle> loaded = { loadedForNext, unknown };
+		manager->ScheduleTrim(AssetResidency::c_SceneSwitchTrimFrames, AssetResidency::c_SceneSwitchTrimFrames, loaded);
+		for (uint32_t frame = 0; frame < AssetResidency::c_SceneSwitchTrimFrames + 1; frame++)
+			manager->Update();
+		CHECK(manager->GetAssetState(previousScene) == AssetState::Unloaded);
+		CHECK(manager->GetAssetState(loadedForNext) == AssetState::Ready);
+		CHECK(manager->GetStats().Evictions == 1);
+
+		// Only that trim spares it: the next one, given nothing, takes what was not requested since.
+		manager->ScheduleTrim(0, AssetResidency::c_SceneSwitchTrimFrames);
+		manager->Update();
+		CHECK(manager->GetAssetState(loadedForNext) == AssetState::Unloaded);
+		CHECK(StateCountsMatch(*manager));
 	}
 
 	TEST_CASE("Residency is reported per asset and in the statistics")

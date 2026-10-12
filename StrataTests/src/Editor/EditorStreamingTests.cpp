@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "TestHelpers.h"
@@ -290,10 +291,13 @@ TEST_SUITE("Editor.Streaming")
 		const AssetHandle first = *UUIDFromJson(harness.Run("material.create", { { "path", "Materials/First.stmat" } })["asset"]);
 		const AssetHandle shared = *UUIDFromJson(harness.Run("material.create", { { "path", "Materials/Shared.stmat" } })["asset"]);
 		const AssetHandle second = *UUIDFromJson(harness.Run("material.create", { { "path", "Materials/Second.stmat" } })["asset"]);
+		const AssetHandle unseen = *UUIDFromJson(harness.Run("material.create", { { "path", "Materials/Unseen.stmat" } })["asset"]);
 		harness.Run("scene.saveAs", { { "path", "Scenes/First.stscene" } });
 		harness.Run("scene.new");
+		// The second scene uses a material nothing requests in its first frames (out of view): its load brings it in.
+		harness.Run("entity.create", { { "name", "Behind" }, { "components", { { "MeshRenderer", { { "Material", UUIDToJson(unseen) } } } } } });
 		harness.Run("scene.saveAs", { { "path", "Scenes/Second.stscene" } });
-		harness.Run("scene.open", { { "scene", "Scenes/First.stscene" } });
+		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "scene.open", { { "scene", "Scenes/First.stscene" } });
 
 		// What draws the scene requests its assets every frame (here: the test, as no viewport renders).
 		const auto frame = [&harness](std::initializer_list<AssetHandle> used)
@@ -311,7 +315,7 @@ TEST_SUITE("Editor.Streaming")
 		REQUIRE_FALSE(sharedObject.expired());
 		const uint64_t evictionsBefore = AssetManager::GetActive()->GetStats().Evictions;
 
-		harness.Run("scene.open", { { "scene", "Scenes/Second.stscene" } });
+		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "scene.open", { { "scene", "Scenes/Second.stscene" } });
 		for (uint32_t switched = 0; switched < AssetResidency::c_SceneSwitchTrimFrames + 1; switched++)
 		{
 			frame({ shared, second });
@@ -323,6 +327,8 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(AssetManager::GetAssetState(second) == AssetState::Ready);
 		CHECK(AssetManager::GetActive()->GetAsset(shared) == sharedObject.lock());
 		CHECK(harness.Run("asset.stats")["evictions"].get<uint64_t>() > evictionsBefore);
+		// What the scene's load brought in stays, drawn yet or not: the trim takes what only the previous scene used.
+		CHECK(AssetManager::GetAssetState(unseen) == AssetState::Ready);
 	}
 
 	TEST_CASE("A scene switch while playing releases the assets only the previous scene used, like the exported game")
@@ -333,6 +339,9 @@ TEST_SUITE("Editor.Streaming")
 		const AssetHandle first = *UUIDFromJson(harness.Run("material.create", { { "path", "Materials/First.stmat" } })["asset"]);
 		const AssetHandle shared = *UUIDFromJson(harness.Run("material.create", { { "path", "Materials/Shared.stmat" } })["asset"]);
 		const AssetHandle second = *UUIDFromJson(harness.Run("material.create", { { "path", "Materials/Second.stmat" } })["asset"]);
+		const AssetHandle unseen = *UUIDFromJson(harness.Run("material.create", { { "path", "Materials/Unseen.stmat" } })["asset"]);
+		// The second scene uses a material nothing requests in its first frames (out of view): its load brings it in.
+		harness.Run("entity.create", { { "name", "Behind" }, { "components", { { "MeshRenderer", { { "Material", UUIDToJson(unseen) } } } } } });
 		const AssetHandle secondScene = *UUIDFromJson(harness.Run("scene.saveAs", { { "path", "Scenes/Second.stscene" } })["scene"]);
 		harness.Run("scene.new");
 		harness.Run("scene.saveAs", { { "path", "Scenes/First.stscene" } });
@@ -351,10 +360,12 @@ TEST_SUITE("Editor.Streaming")
 		const std::weak_ptr<Asset> sharedObject = AssetManager::GetActive()->GetAsset(shared);
 		REQUIRE_FALSE(sharedObject.expired());
 
-		// The game asks for the other scene (scripts: Game::LoadScene); the editor switches after the frame's update.
+		// The game asks for the other scene (scripts: Game::LoadScene); the editor loads it while the game goes on, and switches
+		// between frames once it is in.
 		const Ref<Scene> previous = harness.Context.GetActiveScene();
 		previous->RequestSceneLoad(secondScene);
-		frame({ first, shared });
+		for (int loading = 0; loading < 120 && harness.Context.GetActiveScene() == previous; loading++)
+			frame({ first, shared });
 		REQUIRE(harness.Context.IsPlaying());
 		REQUIRE(harness.Context.GetActiveScene() != previous);
 		for (uint32_t switched = 0; switched < AssetResidency::c_SceneSwitchTrimFrames + 1; switched++)
@@ -366,6 +377,8 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(AssetManager::GetAssetState(first) == AssetState::Unloaded);
 		CHECK(AssetManager::GetAssetState(second) == AssetState::Ready);
 		CHECK(AssetManager::GetActive()->GetAsset(shared) == sharedObject.lock());
+		// What the scene's load brought in stays, drawn yet or not: the trim takes what only the previous scene used.
+		CHECK(AssetManager::GetAssetState(unseen) == AssetState::Ready);
 		harness.Run("play.stop");
 	}
 }

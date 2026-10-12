@@ -55,6 +55,10 @@ namespace Strata
 		// Open projects with their imports in the background (EditorContextSpecification::ImportInBackground), except in
 		// scripted runs (--frames, --commands). UI tests turn it off: they expect every asset imported once a project is open.
 		bool ImportInBackground = true;
+		// Open ProjectPath's start scene in the background (EditorContext::BeginOpenProject: the window shows its load in the
+		// viewport) instead of before the first frame. The editor application turns it on for windowed sessions that are not
+		// scripted (--frames, --commands): those, headless editors and tests expect the project's scene once the editor started.
+		bool OpenStartSceneInBackground = false;
 		// The toolchain script builds use instead of the engine's (EditorContextSpecification::ScriptBuild); UI tests build
 		// with a stand-in for CMake.
 		std::optional<ScriptBuildSettings> ScriptBuild;
@@ -189,6 +193,8 @@ namespace Strata
 		bool SaveSceneAs();
 		// Opens a project file (project.open) once unsaved changes are dealt with; failures go to ReportError.
 		void OpenProjectFile(const std::filesystem::path& projectFile);
+		// Runs project.open through the command runner at once (the start scene loads over the next frames).
+		void OpenProjectFileNow(const std::filesystem::path& projectFile);
 		// Logs an error of a UI action, and shows it on the launcher while that is what the user sees.
 		void ReportError(const std::string& message);
 		// Builds the project's scripts through the command runner (script.build); the build reports to the log.

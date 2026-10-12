@@ -7,11 +7,13 @@
 #include "Strata/Core/UUID.h"
 #include "Strata/Scene/SceneHierarchy.h"
 #include "Strata/Scene/SceneSystem.h"
+#include "Strata/Scene/SubScene.h"
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <optional>
@@ -26,6 +28,11 @@ namespace Strata
 {
 
 	class Entity;
+	class EntityPrototype;
+	class PrototypeInstantiation;
+	struct InstantiationOptions;
+	struct SubSceneLoad;
+	struct TransformComponent;
 
 	// Capacities of a scene's physics world, fixed when its simulation is created. 0 sizes a capacity automatically from the
 	// bodies the scene has when it starts playing (see PhysicsWorld): set them for scenes that create many bodies while they
@@ -54,6 +61,10 @@ namespace Strata
 		float FixedTimestep = 1.0f / 60.0f;
 		uint32_t MaxFixedStepsPerFrame = 8; // Prevents a spiral of death after long frames
 		PhysicsCapacitySettings PhysicsCapacity;
+		// Entities additive loads (sub-scenes) may create per update of the scene, all of them together; each update also
+		// stops creating once Scene::c_MaxInstantiationMillisecondsPerFrame went by. From 1 to c_MaxEntitiesInstantiatedLimit.
+		uint32_t MaxEntitiesInstantiatedPerFrame = 5000;
+		static constexpr uint32_t c_MaxEntitiesInstantiatedLimit = 1u << 20;
 	};
 
 	// A world of entities. Owns the EnTT registry, the hierarchy, and (while playing) the runtime systems.
@@ -76,8 +87,17 @@ namespace Strata
 		Scene(const Scene&) = delete;
 		Scene& operator=(const Scene&) = delete;
 
-		// Deep copy preserving entity UUIDs; used to enter play mode without touching the edited scene.
+		// Deep copy preserving entity UUIDs; used to enter play mode without touching the edited scene. The copy's entities have
+		// the source's EnTT identifiers too, so the hierarchy, the UUID map and the cached world transforms are copied as they
+		// are, and every component storage is copied whole (ComponentInfo::CopyStorage), the storages in parallel on the job
+		// system. Copies keep the source asset and the lineage (GetSourceAsset, GetLineageID).
 		static Ref<Scene> Copy(const Ref<Scene>& source);
+		// Lets go of a scene that is no longer used (one a scene switch or an opened scene replaced) without spending the
+		// frame on destroying it, which takes tens of milliseconds for a million entities: what must end on the main thread
+		// ends here (a running scene stops: its systems, scripts, bodies and voices; sub-scene loads and their asset requests
+		// are dropped), and the rest, its entities and caches, which nothing else reaches, is destroyed by a background job
+		// (JobPriority::Background) unless something else still holds the scene. Main thread.
+		static void ReleaseInBackground(Ref<Scene> scene);
 
 		//////////////////////////////////////////////////////////////////////////
 		// Entities
@@ -107,6 +127,73 @@ namespace Strata
 		// References between entities inside the copied hierarchy are remapped to the copies.
 		Entity DuplicateEntity(Entity entity);
 
+		//////////////////////////////////////////////////////////////////////////
+		// Instantiation of compiled prototypes (Scene/SceneInstantiation.cpp)
+		//////////////////////////////////////////////////////////////////////////
+
+		// Starts copying a prototype (EntityPrototype: prefabs, models, additive scene loads) into the scene: checks what can
+		// be checked before anything exists (the parent; with InstantiationOptions::KeepIDs every prototype ID against the
+		// scene's) and gives every entity its ID. Fails, creating nothing, with an error. ContinueInstantiation then creates
+		// the entities; `outInstantiation` must outlive the calls (and its prototype, which it shares).
+		bool BeginInstantiation(const Ref<EntityPrototype>& prototype, const InstantiationOptions& options, PrototypeInstantiation& outInstantiation,
+			std::string* outError = nullptr);
+		// Creates the next entities of the instantiation, at most `maxEntities`, in the prototype's hierarchy order, as
+		// SceneSerializer::DeserializeEntities would: their components are copied from the prototype (on_construct), the
+		// entities are linked under their parents (created before, in this call or an earlier one) or under the options'
+		// parent, references among the prototype's entities point at the copies, prefab links are added, and then every
+		// component of every created entity emits on_update, so systems see each entity complete. With `rootTransform`, the
+		// prototype's first top-level entity gets that local transform instead of its own. An entity whose parent, created
+		// by an earlier call, was destroyed since is not created, nor are its descendants (they would have gone with it;
+		// PrototypeInstantiation::GetSkippedCount). Returns how many of the prototype's entities it handled (created or
+		// skipped): 0, creating nothing, with an error when the scene cannot hold them (c_MaxEntities), an ID it keeps
+		// collides or the options' parent went away (and 0 without an error once every entity was handled).
+		size_t ContinueInstantiation(PrototypeInstantiation& instantiation, size_t maxEntities, std::string* outError = nullptr,
+			const TransformComponent* rootTransform = nullptr);
+		// Both in one call: the created top-level entities in order, or none, creating nothing, with the error.
+		std::vector<Entity> Instantiate(const Ref<EntityPrototype>& prototype, const InstantiationOptions& options, std::string* outError = nullptr);
+
+		//////////////////////////////////////////////////////////////////////////
+		// Additive scenes (Scene/SceneSubScenes.cpp)
+		//////////////////////////////////////////////////////////////////////////
+
+		// How long the updates of a scene may spend creating the entities of sub-scenes at most (besides
+		// SceneSettings::MaxEntitiesInstantiatedPerFrame): they create them in chunks and stop once this much time went by.
+		static constexpr double c_MaxInstantiationMillisecondsPerFrame = 2.0;
+
+		// Loads the scene asset `scene` into this scene, next to what it holds (a sub-scene: a level's streamed part, a room):
+		// the asset and everything it uses load in the background (SceneLoader, pinned at the options' priority), its
+		// prepared scene is compiled on the job system (EntityPrototype), and its entities are then created over the following
+		// updates (UpdateSubScenes), at most SceneSettings::MaxEntitiesInstantiatedPerFrame per update and for about
+		// c_MaxInstantiationMillisecondsPerFrame. They keep the IDs they have in the asset, so a sub-scene whose IDs the scene
+		// has already (the same sub-scene twice) fails, adding nothing; its settings (gravity...) are not applied. Each of its
+		// top-level entities gets a SubSceneComponent. Created entities are like any other: systems hear their components'
+		// signals (scripts get OnCreate, physics adds bodies, audio starts voices, renderers add proxies). Returns the
+		// sub-scene's ID, or 0 with an error when no load can start (no active asset manager, not a scene asset).
+		SubSceneID LoadSubScene(AssetHandle scene, const SubSceneOptions& options = {}, std::string* outError = nullptr);
+		// Adds the entities of a prepared scene the same way, without loading anything (the scene is compiled on the job
+		// system: nothing may use or change it afterwards; its systems must not run). 0 with an error for a null scene.
+		SubSceneID BeginAdditiveLoad(Ref<Scene> prepared, std::string* outError = nullptr);
+		// Removes a sub-scene: cancels its load (releasing every pin it holds) and destroys the entities it created with their
+		// descendants (DestroyEntities: running systems hear OnEntityDestroying first; deferred while the scene updates).
+		// Its ID is unknown afterwards. False for an unknown ID. While UpdateSubScenes runs (scripts' OnDestroy when a failed
+		// sub-scene's entities go), the unload happens once it returns.
+		bool UnloadSubScene(SubSceneID id);
+		// Whether every entity of the sub-scene exists.
+		bool IsSubSceneLoaded(SubSceneID id) const;
+		// The sub-scene's state, or null for an unknown ID (never loaded, or unloaded). Failed sub-scenes stay until they are
+		// unloaded, so that their error can be read.
+		const SubSceneStatus* GetSubSceneStatus(SubSceneID id) const;
+		// Every sub-scene that was not unloaded, in the order of their loads.
+		std::vector<SubSceneStatus> GetSubScenes() const;
+		// The top-level entities the sub-scene created that still exist (with its SubSceneComponent), in order.
+		std::vector<Entity> GetSubSceneRoots(SubSceneID id) const;
+		// Whether a sub-scene still loads or creates entities.
+		bool HasPendingSubScenes() const;
+		// Advances the sub-scenes: their loads (after the asset manager's update), compilations and a slice of entity creation
+		// within the budgets above. OnUpdateRuntime and OnUpdateEditor call it first (also while the scene is paused or not
+		// running); owners of scenes they do not update call it once per frame themselves.
+		void UpdateSubScenes();
+
 		Entity GetEntityByUUID(UUID uuid) const; // Invalid Entity when not found
 		// The first entity in hierarchy order with this name, and every entity with this tag in hierarchy order. Both use an
 		// index built on the first lookup and kept current through the components' signals afterwards, so a lookup costs the
@@ -115,6 +202,12 @@ namespace Strata
 		Entity FindEntityByName(std::string_view name) const;
 		std::vector<Entity> FindEntitiesByTag(std::string_view tag) const;
 		size_t GetEntityCount() const { return m_EntityMap.size(); }
+		// Live entities of the registry: the scene's, and any created directly through GetRegistry(). At most c_MaxEntities.
+		size_t GetRegistryEntityCount() const;
+		// About the system memory the scene's entities occupy: every component storage (its elements, packed entities and
+		// sparse pages), the UUID map, and the heap memory of names and child lists. Costs a pass over those two components;
+		// for asset accounting (a prepared scene, a prefab's prototype), not for every frame.
+		uint64_t EstimateMemoryUsage() const;
 
 		// Root entities in hierarchy order.
 		const std::vector<UUID>& GetRootEntities() const { return m_RootEntities; }
@@ -319,6 +412,10 @@ namespace Strata
 		std::optional<UUID> GetSceneLoadRequest() const { return m_SceneLoadRequest; }
 		// The pending scene load, which the call clears (so that an owner that cannot honor it does not retry every frame).
 		std::optional<UUID> TakeSceneLoadRequest();
+		// How far the owner got loading the scene this one asked for (owners load it while this scene goes on, and update the
+		// progress every frame): in [0, 1], or nullopt while no such load is under way. Gameplay shows it (a loading bar).
+		void SetSceneLoadProgress(std::optional<float> progress) { m_SceneLoadProgress = progress; }
+		std::optional<float> GetSceneLoadProgress() const { return m_SceneLoadProgress; }
 
 		// The first active entity in hierarchy order whose CameraComponent is Primary, or an invalid Entity. Examines only the
 		// entities with a CameraComponent (and reads the current component values, so it is never stale).
@@ -370,8 +467,6 @@ namespace Strata
 			entt::entity Entity = entt::null;
 		};
 
-		// Live entities of the registry: the scene's, and any created directly through GetRegistry().
-		size_t GetRegistryEntityCount() const;
 		// Service registry: `provider` points to the interface (already cast to it), keyed by the interface's type hash.
 		bool RegisterServiceProvider(entt::id_type type, std::string_view typeName, void* provider);
 		void UnregisterServiceProvider(entt::id_type type, const void* provider);
@@ -387,6 +482,15 @@ namespace Strata
 		// first, then each sibling list they leave is compacted once.
 		void DestroyRoots(std::vector<entt::entity> roots);
 		void FlushPendingDestroys();
+		// Sub-scenes (Scene/SceneSubScenes.cpp): advances one load, creating at most `budget` entities (which it lowers) while
+		// time is left before `deadline`; fails one, destroying what it created, with the reason logged.
+		void AdvanceSubScene(SubSceneLoad& load, size_t& budget, std::chrono::steady_clock::time_point deadline);
+		void StartSubSceneInstantiation(SubSceneLoad& load);
+		void FailSubScene(SubSceneLoad& load, std::string error);
+		void DestroySubSceneEntities(SubSceneLoad& load);
+		SubSceneLoad* FindSubScene(SubSceneID id) const;
+		// Whether the entity an instantiation created for its prototype entity `index` still exists.
+		bool IsInstantiatedEntityAlive(const PrototypeInstantiation& instantiation, size_t index) const;
 		// Every entity in hierarchy order (walks the links).
 		void CollectHierarchyOrder(std::vector<entt::entity>& outEntities) const;
 
@@ -429,6 +533,11 @@ namespace Strata
 		void RemoveLookupValue(LookupIndex& index, entt::entity handle) const;
 
 		// Signal handlers
+		// A scene whose signal handlers are not connected yet (Copy fills it first, then connects them).
+		Scene(std::string name, bool connectSignals);
+		// Connects the handlers of the components whose signals keep the scene's caches (dirty transforms, activity, lookups).
+		void ConnectSignals();
+
 		void OnTransformChanged(entt::registry& registry, entt::entity handle);
 		void OnInactiveAdded(entt::registry& registry, entt::entity handle);
 		void OnInactiveRemoved(entt::registry& registry, entt::entity handle);
@@ -441,7 +550,8 @@ namespace Strata
 		AssetHandle m_SourceAsset = UUID::Null();
 		UUID m_LocalLineageID;                     // Random; see GetLineageID
 		entt::registry m_Registry;
-		std::unordered_map<UUID, entt::entity> m_EntityMap;
+		// UUID -> entity. A dense map: lookups probe one packed array, and copying it (Copy) copies two arrays.
+		entt::dense_map<UUID, entt::entity, std::hash<UUID>> m_EntityMap;
 		std::vector<UUID> m_RootEntities;
 		uint64_t m_HierarchyVersion = 0;
 		std::deque<EntityChange> m_HierarchyMoves; // The latest moves, oldest first
@@ -495,6 +605,12 @@ namespace Strata
 		uint64_t m_FrameIndex = 0;
 		std::optional<int32_t> m_QuitRequest;
 		std::optional<UUID> m_SceneLoadRequest;
+		std::optional<float> m_SceneLoadProgress;
+		// Sub-scenes in the order of their loads (Scene/SceneSubScenes.cpp).
+		std::vector<Scope<SubSceneLoad>> m_SubScenes;
+		SubSceneID m_NextSubSceneID = 1;
+		bool m_AdvancingSubScenes = false;               // UpdateSubScenes runs: unloads wait for its end
+		std::vector<SubSceneID> m_DeferredSubSceneUnloads; // Unloads requested meanwhile
 
 		// Declared last: disconnected before anything the handlers use is destroyed.
 		std::vector<entt::scoped_connection> m_Connections;
