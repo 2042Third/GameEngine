@@ -1176,10 +1176,11 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   `ShadowMeshSkinned.vert`: `ST_SKINNED`), which blend the palette entries of a vertex's four influences (the mesh's skin
   stream, vertex buffer 2) before the instance's world transform, in the prepass (entity IDs and normals), the forward
   passes and the shadow cascades. Without a pose (no animator, nothing playing) a Skin proxy shows its bind pose through
-  the ordinary pipelines. Renderers report the animators of the Skin proxies in their view and their shadow casters
-  (`ISkinningPoses::ReportVisible`), which animators that animate only while seen read. Unskinned scenes do none of this
-  (`HasSkinProxies`). For GPU-driven rendering: a posed instance needs its palette range (`SkinPalette` and the mesh's joint
-  count) and its posed world bounds, both current after `Sync`.
+  the ordinary pipelines. Every influence names a joint of the skin, also those without weight (the shaders read all four
+  palette entries; `Mesh::CreateSkinned` refuses others). Renderers report the animators of the Skin proxies in their
+  view and their shadow casters (`ISkinningPoses::ReportVisible`), which animators that animate only while seen read.
+  Unskinned scenes do none of this (`HasSkinProxies`). For GPU-driven rendering: a posed instance needs its palette range
+  (`SkinPalette` and the mesh's joint count) and its posed world bounds, both current after `Sync`.
 - **Slots and instances**. Meshes and materials get dense slots shared by their users. Every submesh of a proxy whose
   mesh layout is known has an `InstanceData` (64 bytes: the 3x4 world matrix, the material slot, the entity ID, flags) in
   one array that persists between frames. Changes are logged by version (`GetInstanceChanges`, the latest 65,536), so

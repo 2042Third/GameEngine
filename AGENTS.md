@@ -1097,7 +1097,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `InstanceData::SkinPalette`) draw with the `ST_SKINNED` variants of `Mesh.vert` and `ShadowMesh.vert`, which every pass
   of a skinned mesh uses (the prepass and the forward pass must agree to the bit). Unskinned meshes keep their pipelines,
   data and uploads: anything that adds skinning work must cost unskinned scenes nothing (`RenderScene::HasSkinProxies`).
-  Physics' mesh colliders use the bind pose; the entity-ID buffer (picking, outlines) shows the pose.
+  Physics' mesh colliders use the bind pose; the entity-ID buffer (picking, outlines) shows the pose. Every skin influence
+  must name a joint of the skin, also one without weight (the shaders read all four palette entries).
 - Point and spot lights are frustum culled on the CPU, ranked by relevance (projected size of their
   range) and capped at `MaxLights`; `Scene/LightClusters.comp` then lists the lights reaching each
   cluster of a 16x9x24 froxel grid (exponential depth slices) and `Forward.frag` loops only over its

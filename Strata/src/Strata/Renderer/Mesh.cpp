@@ -169,10 +169,12 @@ namespace Strata
 				uint32_t weightSum = 0;
 				for (int influence = 0; influence < 4; influence++)
 				{
-					if (skin.Weights[influence] == 0)
-						continue;
+					// The skinned vertex shaders read the palette entry of every influence, also of those without weight: each
+					// must name a joint of the skin.
 					if (skin.Joints[influence] >= jointCount)
 						return fail(fmt::format("Vertex {} is influenced by joint {} of a skin with {} joints", vertex, skin.Joints[influence], jointCount));
+					if (skin.Weights[influence] == 0)
+						continue;
 					weightSum += skin.Weights[influence];
 					binding->JointBounds[skin.Joints[influence]].Expand(positions[vertex]);
 				}

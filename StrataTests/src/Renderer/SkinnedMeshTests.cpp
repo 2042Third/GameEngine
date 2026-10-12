@@ -4,6 +4,7 @@
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
 
+#include <cstddef>
 #include <cstring>
 #include <limits>
 
@@ -96,13 +97,29 @@ TEST_SUITE("Renderer.Mesh")
 					for (int influence = 0; influence < 4; influence++)
 					{
 						sum += vertex.Weights[influence];
-						if (vertex.Weights[influence] != 0)
-							CHECK(vertex.Joints[influence] < binding.Joints.size());
+						CHECK(vertex.Joints[influence] < binding.Joints.size());
 					}
 					CHECK(sum == 65535);
 				}
 			}
 		}
+
+		// A zero-weight influence naming a joint the skin does not have: the shaders would read past the palette.
+		const Ref<Mesh> tube = Tests::CreateSkinnedTube({ .Joints = 2, .RingsPerJoint = 1, .Sides = 3 });
+		const size_t joints = tube->GetSkinBinding()->Joints.size();
+		const size_t vertices = tube->GetSkinVertices().size();
+		// The skin stream is followed by the joint list and the inverse bind matrices (each array after its 64-bit count).
+		const size_t skinStart = cooked.size() - (sizeof(uint64_t) + joints * sizeof(glm::mat4)) - (sizeof(uint64_t) + joints * sizeof(uint16_t))
+			- vertices * sizeof(MeshSkinVertex);
+		MeshSkinVertex first;
+		std::memcpy(&first, cooked.data() + skinStart, sizeof(first));
+		REQUIRE(first.Weights[3] == 0);
+		std::vector<uint8_t> outside = cooked;
+		const uint16_t unknownJoint = 0xFFFF;
+		std::memcpy(outside.data() + skinStart + offsetof(MeshSkinVertex, Joints) + 3 * sizeof(uint16_t), &unknownJoint, sizeof(unknownJoint));
+		std::string error;
+		CHECK_FALSE(Mesh::Deserialize(outside, &error));
+		CHECK(error.find("joint 65535") != std::string::npos);
 	}
 
 	TEST_CASE("Skinned mesh creation validates the skin")
@@ -141,10 +158,13 @@ TEST_SUITE("Renderer.Mesh")
 		std::vector<MeshSkinVertex> unbalanced = skin;
 		unbalanced[0].Weights[0] = 1000;
 		CHECK_FALSE(attempt(unbalanced, binding));
-		// A zero weight may name any joint.
+		// Shaders read every influence's palette entry, also those of zero weight: a joint outside the skin is refused whatever
+		// its weight.
 		std::vector<MeshSkinVertex> unused = skin;
 		unused[0].Joints[3] = 999;
 		unused[0].Weights[3] = 0;
+		CHECK_FALSE(attempt(unused, binding));
+		unused[0].Joints[3] = 1;
 		CHECK(attempt(unused, binding));
 
 		// The same geometry without a skin is a mesh of its own.
