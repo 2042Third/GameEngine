@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Editor/EditorPlacement.h"
+
 #include <Strata/Core/UUID.h>
 
 #include <nlohmann/json.hpp>
@@ -49,6 +51,11 @@ namespace Strata
 		void SelectAll(EditorContext& context);
 		// entity.dropToGround of the selected entities (those below another selected one move with it).
 		void DropSelectionToGround(EditorContext& context, const EditorCommandRegistry& commands);
+		// prefab.instantiate of a prefab or model, its first root selected: under a parent where the prefab puts it, or at the
+		// top level resting on a surface of the scene (EditorPlacement::RestOn with its bounds, GetTemplateBounds): the one
+		// given, else the one under the view's pivot. Returns the root's id, nothing when it failed.
+		std::optional<UUID> InstantiatePrefab(EditorContext& context, const EditorCommandRegistry& commands, UUID prefab, UUID parent = UUID::Null(),
+			const EditorPlacement::Surface* surface = nullptr);
 
 		// Puts a component's values (component.get's form) into the clipboard: those component.set can set (read-only and
 		// transient ones are left out).

@@ -981,9 +981,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   About Strata (`UI/AboutDialog`) shows the build, GPU, driver, Vulkan version, startup time and the compiled-in
   `ThirdPartyNotices.md`.
 - **Placing content** (`Editor/SceneRaycast`, `Editor/EditorPlacement`): new top-level entities from the create menus
-  appear where the view looks, resting on the surface there (`EditorPlacement::FindViewSurface`, `RestOn` with the mesh's
-  bounds), with the translation sent through `entity.create`; prefabs and models dropped into the viewport go to the
-  surface under the cursor, a dropped material goes to the mesh under it (`component.set`), and
+  appear under the view's pivot, resting on the surface there (`EditorPlacement::FindPivotSurface`, `RestOn` with the
+  mesh's bounds), with the translation sent through `entity.create`; prefabs and models rest by the bounds of what they
+  draw (`GetTemplateBounds`) on the surface under the cursor when dropped into the viewport, under the pivot from Add to
+  Scene and drops on the Hierarchy's empty space (`EditorActions::InstantiatePrefab`), a dropped material goes to the
+  mesh under the cursor (`component.set`), and
   `entity.dropToGround {entities}` (End) moves entities down onto what is below them, one undo step. Rays hit the mesh
   renderers through the render scene's spatial index and the loaded meshes' triangles: code that needs what is under a
   point uses `SceneRaycast::Cast`, never a loop over the scene's entities.

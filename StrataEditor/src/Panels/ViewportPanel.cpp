@@ -677,15 +677,16 @@ namespace Strata
 			const EditorCamera& camera = context.GetViewport().GetCamera();
 			if (type == AssetType::Prefab || type == AssetType::Model)
 			{
-				// Where the cursor points: on the surface it hits, else under the camera's target (the game view shows another
-				// camera: the editor camera's target there).
-				const glm::vec3 point = m_GameView ? camera.GetTarget() : EditorPlacement::FindSurfaceAt(scene, camera, ndc, aspect).Point;
-				const nlohmann::json created = RunEditorCommand(context, commands, "prefab.instantiate", { { "prefab", UUIDToJson(asset) },
-					{ "components", { { "Transform", { { "Translation", { point.x, point.y, point.z } } } } } } });
-				if (created.is_object())
+				// Resting on the surface under the cursor, else on the one under the view's pivot (the game view shows another
+				// camera: the editor camera's pivot there).
+				if (m_GameView)
 				{
-					if (const std::optional<UUID> root = UUIDFromJson(created.value("id", nlohmann::json())))
-						context.Select(*root);
+					EditorActions::InstantiatePrefab(context, commands, asset);
+				}
+				else
+				{
+					const EditorPlacement::Surface surface = EditorPlacement::FindSurfaceAt(scene, camera, ndc, aspect);
+					EditorActions::InstantiatePrefab(context, commands, asset, UUID::Null(), &surface);
 				}
 			}
 			else if (type == AssetType::Material)

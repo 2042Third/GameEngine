@@ -915,8 +915,9 @@ namespace Strata
 		const nlohmann::json asset = UUIDToJson(item.Handle);
 		if (item.Type == AssetType::Scene && ImGui::MenuItem("Open"))
 			Open(panelContext, item);
+		// Resting on what lies under the view's pivot, like the Create menu's entities.
 		if ((item.Type == AssetType::Prefab || item.Type == AssetType::Model) && ImGui::MenuItem("Add to Scene"))
-			RunEditorCommand(context, commands, "prefab.instantiate", { { "prefab", asset } });
+			EditorActions::InstantiatePrefab(context, commands, item.Handle);
 		if (ImGui::MenuItem("Show in Asset Tab"))
 		{
 			m_InspectedFromHere = item.Handle;

@@ -1631,13 +1631,17 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   spatial index, asked for a thin prism of planes around the segment), nearest first, and each is hit on its loaded mesh's
   triangles (positions and indices stay on the CPU; submesh bounds skip what the ray misses) or, while the mesh is not
   loaded, on its bounds; the entities being placed (and their children) are left out. `EditorPlacement` turns that into
-  where content goes: `FindViewSurface` (the ray through the view's center, else straight down under the camera's
-  target, else the target), `FindSurfaceAt` and `CastAt` (a cursor's ray), and `RestOn` (the translation that makes a
-  box at the entity's origin touch the surface with its side facing it). The Hierarchy's create menus (the Entity menu
-  too) put new top-level entities there, resting on the surface by their mesh's bounds (`GetMeshBounds`: the loaded
-  mesh's, else the recorded ones), and send the translation with `entity.create`; the viewport instantiates dropped prefabs
-  and models at the cursor's surface (`prefab.instantiate` with the translation) and gives a dropped material to the mesh
-  under the cursor (`component.set`, one undo step). `entity.dropToGround` (End, and Edit > Drop to Ground) moves each
+  where content goes: `FindPivotSurface` (what lies under the view's pivot, the camera's target: a ray straight down from
+  just above it, so a roof over the pivot is no surface under it; else the ray through the view's center, else the target),
+  `FindSurfaceAt` and `CastAt` (a cursor's ray, else the pivot's surface), and `RestOn` (the translation that makes a box at
+  the entity's origin touch the surface with its side facing it). The Hierarchy's create menus (the Entity menu too) put
+  new top-level entities under the pivot, resting on the surface by their mesh's bounds (`GetMeshBounds`: the loaded
+  mesh's, else the recorded ones), and send the translation with `entity.create`. Prefabs and models rest by the bounds of
+  what they draw around their root's origin (`GetTemplateBounds`: instantiated into a scene of their own, the mesh bounds
+  of the root's subtree with their transforms): dropped into the viewport on the cursor's surface, from the Content
+  Browser's, the Asset tab's Add to Scene or a drop on the Hierarchy's empty space under the pivot
+  (`EditorActions::InstantiatePrefab`, `prefab.instantiate` with the translation). A material dropped into the viewport
+  goes to the mesh under the cursor (`component.set`, one undo step). `entity.dropToGround` (End, and Edit > Drop to Ground) moves each
   entity straight down by the nearest hit of rays from the bottom of its bounds (with its children; the center and four
   inset corners), in one undo step.
 - **Script builds** (`ScriptBuild.h`). `ScriptBuilder` runs CMake configure and build as child processes (one build at

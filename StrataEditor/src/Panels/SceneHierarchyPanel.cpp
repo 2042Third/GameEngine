@@ -76,7 +76,7 @@ namespace Strata
 		// bounds touching the surface).
 		glm::vec3 PlacePreset(EditorContext& context, const EntityPreset& preset)
 		{
-			const EditorPlacement::Surface surface = EditorPlacement::FindViewSurface(*context.GetActiveScene(), context.GetViewport().GetCamera());
+			const EditorPlacement::Surface surface = EditorPlacement::FindPivotSurface(*context.GetActiveScene(), context.GetViewport().GetCamera());
 			AABB bounds;
 			const nlohmann::json* renderer = JsonUtils::Find(preset.Components, "MeshRenderer");
 			const nlohmann::json* mesh = renderer ? JsonUtils::Find(*renderer, "Mesh") : nullptr;
@@ -819,14 +819,9 @@ namespace Strata
 			const AssetType type = AssetManager::GetAssetType(asset);
 			if (type == AssetType::Prefab || type == AssetType::Model)
 			{
-				const nlohmann::json parameters = { { "prefab", UUIDToJson(asset) }, { "parent", UUIDToJson(row.ID) } };
-				m_View.SetExpanded(row.ID, true);
-				m_Deferred.push_back([&context, &commands, parameters]()
-				{
-					const nlohmann::json created = RunEditorCommand(context, commands, "prefab.instantiate", parameters);
-					if (created.is_object() && !created["entities"].empty())
-						context.Select(*UUIDFromJson(created["entities"][0]));
-				});
+				const UUID parent = row.ID;
+				m_View.SetExpanded(parent, true);
+				m_Deferred.push_back([&context, &commands, asset, parent]() { EditorActions::InstantiatePrefab(context, commands, asset, parent); });
 			}
 			else
 			{
@@ -860,13 +855,8 @@ namespace Strata
 			const AssetType type = AssetManager::GetAssetType(asset);
 			if (type == AssetType::Prefab || type == AssetType::Model)
 			{
-				const nlohmann::json parameters = { { "prefab", UUIDToJson(asset) } };
-				m_Deferred.push_back([&context, &commands, parameters]()
-				{
-					const nlohmann::json created = RunEditorCommand(context, commands, "prefab.instantiate", parameters);
-					if (created.is_object() && !created["entities"].empty())
-						context.Select(*UUIDFromJson(created["entities"][0]));
-				});
+				// At the top level, resting on what lies under the view's pivot.
+				m_Deferred.push_back([&context, &commands, asset]() { EditorActions::InstantiatePrefab(context, commands, asset); });
 			}
 			else
 			{

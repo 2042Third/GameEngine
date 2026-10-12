@@ -244,16 +244,8 @@ namespace Strata
 		if (metadata.Type == AssetType::Prefab || metadata.Type == AssetType::Model)
 		{
 			next();
-			if (UI::ToolbarButton("AssetInspector.AddToScene", Icons::Plus, "Add to Scene", "Instantiate it at the top level of the scene"))
-			{
-				const nlohmann::json created = RunEditorCommand(context, commands, "prefab.instantiate", { { "prefab", asset } });
-				const nlohmann::json* entities = created.is_object() ? JsonUtils::Find(created, "entities") : nullptr;
-				if (entities && entities->is_array() && !entities->empty())
-				{
-					if (const std::optional<UUID> root = UUIDFromJson(entities->front()))
-						context.Select(*root);
-				}
-			}
+			if (UI::ToolbarButton("AssetInspector.AddToScene", Icons::Plus, "Add to Scene", "Instantiate it at the top level of the scene, where the view looks"))
+				EditorActions::InstantiatePrefab(context, commands, metadata.Handle);
 		}
 		if (importer && !metadata.IsSubAsset())
 		{

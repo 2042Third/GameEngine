@@ -231,8 +231,10 @@ the prefab. While playing, revert and unpack change the running copy (their answ
 refused. The root's transform and name always stay the instance's own. Imported models are instantiated the same way
 but cannot be applied to (unpack them, or make a prefab of the instance).
 
-**Placing**: `entity.create` puts an entity where its `Transform` says (the origin without one); the editor's own menus
-put new entities on the surface the view looks at and send that translation. To rest entities on what is below them,
+**Placing**: `entity.create` and `prefab.instantiate` put an entity where its `Transform` says (the origin, or the
+prefab's own place, without one); the editor's own menus put new entities on the surface under the view's pivot (the
+camera's target) and send that translation, and prefabs dragged into the viewport rest on the surface under the cursor.
+To rest entities on what is below them,
 `entity.dropToGround {"entities": [...]}` moves each straight down until its bounds touch a surface (one undo step;
 `unchanged` lists those with nothing below).
 
