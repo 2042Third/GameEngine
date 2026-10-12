@@ -589,7 +589,8 @@ When you add or change script API:
 
 1. Use it in the feature script whose topic fits (`EntityFeatures`, `ComponentFeatures`, `TransformFeatures`,
    `FieldFeatures`, `LifecycleFeatures`, `TimeFeatures`, `InputFeatures`, `SpawnFeatures`, `ScriptFeatures`,
-   `PhysicsFeatures`, `PhysicsApiFeatures`, `CollisionFeatures`, `AudioFeatures`, `GameFeatures`, `LogFeatures`), or
+   `PhysicsFeatures`, `PhysicsApiFeatures`, `CollisionFeatures`, `CharacterFeatures`, `AudioFeatures`,
+   `AnimationFeatures`, `GameFeatures`, `LogFeatures`), or
    add a class deriving from `FeatureTest::FeatureScript` on a new entity of the scene. Verify the effect with
    `Expect(condition, "what is checked")` and set `Completed = true` when the scenario ended; journal `OnCreate` with
    `Journal(*this, "<Class>", "OnCreate")`. Keep state that spans frames in fields: the runner hot reloads the module

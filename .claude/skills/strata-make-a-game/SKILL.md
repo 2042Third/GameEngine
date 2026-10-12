@@ -60,7 +60,9 @@ Design the code for verification before writing it:
 - Sounds: write a small 16-bit PCM WAV with a script of your own (outside the project), then
   `asset.import {"file": "<absolute>", "directory": "Sounds"}` (it answers once the import is done, and fails, removing
   the copy, when the file cannot be imported). Models, textures and fonts import the same way; a `.gltf` brings the
-  `.bin` and images it names.
+  `.bin` and images it names, and `"directories": [...]` imports whole folders with their tree. Delete assets with
+  `asset.delete` (refused while something uses them: `asset.findReferences` lists the users; deleted files go to the
+  project's trash and `edit.undo` brings them back).
 - Built-in meshes: `Builtin/Cube`, `Sphere`, `Plane`, `Quad`, `Cylinder`, `Capsule`, `Cone`, `Torus` (also reachable
   from scripts: `Assets::Find("Builtin/Cube")`).
 - Animated characters: import a skinned `.glb`/`.gltf` (`asset.import`), then `animation.info {"asset": "<model>"}` for
@@ -154,6 +156,11 @@ the scene has unsaved changes (pass `"force": true` only to throw away edits you
   shows which instances differ, and which are `outdated` (modified while the prefab changed elsewhere: `prefab.revert`
   them before changing them again, as `prefab.apply` refuses them without `force`).
 
+- Collision layers keep groups apart (bullets that pass through their shooter, debris the player walks through): name
+  them and set which pairs collide with `scene.setSettings {"layerNames": {"1": "Player", "2": "Debris"},
+  "layerCollisions": [{"layers": ["Player", "Debris"], "collide": false}]}`, then put bodies and controllers on them by
+  name (`component.set {"entity", "component": "RigidBody", "values": {"Layer": "Debris"}}`). Scripts change pairs while
+  the game plays (`Physics::SetLayersCollide`) and mask queries by layer (`1u << Physics::GetLayerIndex("Player")`).
 - Camera: `{"Camera": {"Primary": true, "PerspectiveFOV": 45}}`; cameras and lights look along their -Z, so a camera at
   `+Z` looking at the origin needs no rotation. Rotations are Euler degrees `[pitch, yaw, roll]`.
 - Light: a `DirectionalLight` (Intensity ~3, pitch -35) plus a `SkyLight`: `"Source": "Procedural"` for a sky (its sun
@@ -233,7 +240,10 @@ The exported game has no `--help`: unknown arguments are ignored and the game st
 The export runs in the background and answers when it finished (give the CLI call a long `--timeout` for big projects).
 A pruned export leaves out assets no scene references (its result lists them in `excludedAssets`): when the scripts load
 assets by path (`Assets::Find`, prefabs spawned by path), name them first with `project.setExportSettings
-{"alwaysInclude": [...]}`, then run the pruned game headless to make sure it still finds everything.
+{"alwaysInclude": [...]}`, then run the pruned game headless to make sure it still finds everything. Games load their
+start scene in the background (a black frame meanwhile): a large one can show a scene of its own while it loads,
+`project.setExportSettings {"loadingScene": "Scenes/Loading.stscene"}` (a small scene with a camera and a `Text`; its
+scripts read the start scene's progress with `Game::GetSceneLoadProgress()` for a loading bar).
 
 ## Pitfalls
 

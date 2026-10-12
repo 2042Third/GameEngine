@@ -16,9 +16,10 @@ means `Strata/src/Strata/Scene/Scene.h`.
 6. [Asset pipeline](#asset-pipeline)
 7. [Streaming and residency](#streaming-and-residency)
 8. [Render scene](#render-scene)
-9. [Scripting](#scripting)
-10. [Editor](#editor)
-11. [Export and the runtime](#export-and-the-runtime)
+9. [Animation](#animation)
+10. [Scripting](#scripting)
+11. [Editor](#editor)
+12. [Export and the runtime](#export-and-the-runtime)
 
 ## Targets and dependencies
 
@@ -294,9 +295,10 @@ callbacks), `ScriptHostAPI` (the host function table), `ScriptValue` (ABI value 
 (class, field and fault descriptions) and `ScriptWatchdog`. See [Scripting](#scripting).
 
 **Project** (`Project/`). `Project` is a game project: the `.stproj` file (with the export settings,
-`Export.AlwaysInclude`), the asset directory, the script sources and the intermediate directory `.strata/` (`Cache/`,
-`Scripts/Build/`, `Scripts/Bin/`), plus the process-wide active project. `GameManifest` is the `.stgame` file of an exported game
-(name, asset pack and patch packs, start scene, script module, window settings).
+`Export.AlwaysInclude` and `Export.LoadingScene`), the asset directory, the script sources and the intermediate
+directory `.strata/` (`Cache/`, `Scripts/Build/`, `Scripts/Bin/`), plus the process-wide active project. `GameManifest`
+is the `.stgame` file of an exported game (name, asset pack and patch packs, start scene, loading scene, script module,
+window settings).
 
 **Runtime** (`Runtime/`). `GameRuntime` runs an exported game without depending on windowing or rendering: it opens
 the pack, loads the script module, starts scenes and honors their requests. `GameRenderer` draws the running scene
@@ -1657,7 +1659,7 @@ system, not to entities: a character's joints add no entities and no transform c
   (`AnimationClipBinding`; targets the skeleton lacks are skipped). An `AnimationController` (`.stanimator`) holds
   parameters (float, bool, trigger), states (a clip or none, a speed, looping, events) and transitions. Their loaders
   validate everything (truncated and garbage bytes are rejected).
-- **Import.** `GltfImporter` (version 6) makes one skeleton per model (sub-asset "Skeleton": the joints of every skin,
+- **Import.** `GltfImporter` (version 7) makes one skeleton per model (sub-asset "Skeleton": the joints of every skin,
   the animated nodes and their ancestors, parents first; the root motion joint is the topmost joint of a skin), a clip
   per animation ("Animation/<name>", or its index; keyframes reduced) and skinned meshes (see Asset pipeline,
   `MeshSkinBinding`). The model's root entity is its animator (`AnimatorComponent` with the skeleton and the first
@@ -1835,8 +1837,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
  StrataEditorUI    EditorLayer            owns everything below: menu bar, main toolbar, status pills, default
                                           layout, shortcuts, idle throttling, file dialogs (nfd)
                    EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Asset, Console, Problems,
-                                          Content Browser, Streaming, Performance): windows, View menu, open
-                                          state in imgui.ini
+                                          Content Browser, Streaming, Performance, Activity): windows, View
+                                          menu, open state in imgui.ini
                    EditorActions          selection actions (delete, duplicate, cut, copy, paste, select all)
                                           for the Edit menu and the focus-scoped shortcuts
                    UI kit                 Theme (palette, ApplyTheme), EditorFonts, Icons, Widgets, ItemProbe
@@ -1872,8 +1874,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   layer draws the dialogs it owns: New Project and Open Sample (`UI/ProjectDialogs`: template cards from
   `project.templates`, name and location fields, then `project.create` or `project.openSample`; the location they last
   used is kept in imgui.ini, `StrataLauncher`, first `<home>/StrataProjects`), About Strata (`UI/AboutDialog`: build,
-  GPU, startup time, and `ThirdPartyNotices.md` compiled in and shown through `UI/Markdown`) and the unsaved-changes
-  question. Panels reach them through `EditorPanelContext::Shell` (`UI/EditorShell.h`, implemented by `EditorLayer`).
+  GPU, startup time, and `ThirdPartyNotices.md` compiled in and shown through `UI/Markdown`), Export Game
+  (`UI/ExportDialog`, see [Export and the runtime](#export-and-the-runtime)), Recover Unsaved Changes
+  (`UI/RecoveryDialog`), New Script and External Editor (`UI/ScriptDialogs`) and the unsaved-changes question. Panels
+  reach them through `EditorPanelContext::Shell` (`UI/EditorShell.h`, implemented by `EditorLayer`), and agents through
+  `editor.showDialog`.
   The question is the UI's half of a rule the commands enforce themselves: every command that replaces the edited scene
   (`scene.open`, `scene.new`, `project.open`, `project.create`, `project.close`, `project.openSample`, `editor.quit`)
   fails while it has unsaved changes unless `force: true` (`CommandUtils::CheckUnsavedChanges`) and reports
@@ -2055,7 +2060,7 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   runs the export on a copy made before the session and compares the scene and assets with references to assets by their
   paths (read from the projects' `.meta` files) and the other IDs numbered by appearance across the documents
   (`StrataTests --strata-test-helper=compare-documents`, `Tests::ProjectNormalizer` in `src/Editor/SceneComparison.h`);
-  `Editor.Replay` does the same with 50 commands of an automation client in-process.
+  `Editor.Replay` does the same with 51 commands of an automation client in-process.
 - **Runner** (`EditorCommandRunner.h`). `Run` executes a command; a deferred one is polled once per frame from the next
   frame on, in issue order, and reports through its completion callback. Automation and command scripts always use the
   runner. UI actions that finish at once call the registry through `RunEditorCommand`
@@ -2357,7 +2362,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     reads "Auto", `PropertyWidgetOptions::ZeroLabel`), applied by one `scene.setSettings` when a drag ends, the
     collision layers (the named ones edited in place, "Name a Layer" for the next one without a name, and a matrix of
     check boxes, one per pair of the layers shown: layer 0, the named ones and those with a pair that does not collide;
-    every edit is one `scene.setSettings`) and the first active sky light (the renderer's), in sections that start
+    every edit is one `scene.setSettings`), how many entities sub-scenes create per frame (Streaming,
+    `MaxEntitiesInstantiatedPerFrame`) and the first active sky light (the renderer's), in sections that start
     closed: their headers sum them up ("Gravity 9.81 m/s² · 60 steps/s", "2 named · 1 pair passes through", the sky's
     source; the summaries are formatted again only when their values change), and their rows,
     live widgets that cost frame time while they are drawn, show once a section is opened (it stays open while the

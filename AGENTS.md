@@ -38,7 +38,7 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). `Samples.json` lists them; the build copies them next to the executables (`StrataSamples`), where the launcher's Open Sample and `project.openSample` offer them as copies. Open one in place only to change the sample: `StrataEditor --project Samples/<Game>`. |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest, the build's git commit). |
 | `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables) and `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)). |
-| `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, render scene, animation, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands). |
+| `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, render scene, animation, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands), `Manual/` (guides for people making games in the editor: `Scripting.md`). |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
 
 Engine modules (`Strata/src/Strata/`): `Core` (application, logging, jobs, platform services),
@@ -98,9 +98,12 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   needs its own component registers it in a child process (`--strata-test-helper=custom-component`,
   `Engine/ModuleRegistrationHelpers.cpp`). The editor's UI is tested headless with `ImGuiHarness` (suites `Editor.UI`,
   `Editor.UI.Hierarchy`, `Editor.UI.Inspector`, `Editor.UI.AssetInspector`, `Editor.UI.ContentBrowser`,
-  `Editor.UI.Placement`, `Editor.Theme`,
-  `Editor.UI.Source`; see
-  Editor, "Editor UI rules").
+  `Editor.UI.Placement`, `Editor.UI.Scripts`, `Editor.UI.Activity`, `Editor.UI.Notifications`, `Editor.UI.Dialogs`,
+  `Editor.UI.Names`, `Editor.UI.Text`, `Editor.Theme`, `Editor.UI.Source`; see Editor, "Editor UI rules"). Commands that
+  defer (`scene.open`, `project.open` and `project.openSample` of a project with a start scene, `asset.import`, a
+  `play.start` that builds) are run to completion with `Tests::RunCommandToCompletion` (`Editor/CommandTestUtils.h`),
+  and a UI test that brings a tab forward (the Asset tab, the Inspector) waits until it shows before it clicks in it:
+  ImGui draws a tab hidden in its first frame, where clicks are lost.
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the
   CTest label `gpu`. They share one device per process through `Tests::GPUContext` (never create
   devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
@@ -877,8 +880,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
     `EditorLayer::RegisterBuiltinPanels`): the registry begins their windows (icon and title, `###<id>`), toggles them in
     the View menu and keeps their open state in imgui.ini (`StrataPanels`); panels never call `ImGui::Begin`. The launcher
     (`Panels/WelcomePanel`) is the one panel with `EditorPanelPlacement::Launcher`: drawn instead of the dock space while
-    no project is open. Panels ask the editor window for its dialogs (New Project, Open Sample, About Strata) and for the
-    unsaved-changes question through `EditorPanelContext::Shell` (`UI/EditorShell.h`).
+    no project is open. Panels ask the editor window for its dialogs (New Project, Open Sample, Open Project, About
+    Strata, New Script, Recover Unsaved Changes), its panels and inspection (`ShowPanel`, `ShowActivity`,
+    `ShowAsset`) and the unsaved-changes question through `EditorPanelContext::Shell` (`UI/EditorShell.h`).
   - Text uses the editor's fonts (`UI/EditorFonts.h`, embedded from `StrataEditor/Resources/Fonts`): Inter for the UI
     with the Lucide icons merged in, Inter SemiBold for headers, JetBrains Mono for logs, IDs and numbers, at the type
     scale's sizes (`UI::PushFont(EditorFont, TextSize)`: 12, 14, 17, 24). Icons are text (`UI/Icons.h`, generated from the

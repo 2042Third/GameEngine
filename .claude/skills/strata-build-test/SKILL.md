@@ -57,16 +57,29 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   match the baseline's by 40 dB PSNR, also over the bottom third; within 8 MB it must drop levels for the budget and
   stay within it), each with up to two more to confirm a failure, then the exported game in
   `StrataRuntime` (from the overview camera, then the whole world in view: `RuntimePeakPrivateMemoryAllInView`, every
-  texture at its wanted level at the end); `Perf.TextureCook` imports the same project cold and times the BC7 encoder per block; `PerfGPU.Pack`
-  writes the project twice, with its textures block-compressed and uncompressed, in pack versions 2 and 1),
+  texture at its wanted level at the end); `Perf.TextureCook` imports the same project cold and times the BC7 encoder
+  per block; `PerfGPU.Pack` writes the project twice, with its textures block-compressed and uncompressed, in pack
+  versions 2 and 1; `Perf.Scene` also copies a million entities for play (`Copy1M`) and instantiates prefabs
+  (`InstantiatePrefab10`, `InstantiatePrefab1k`, `InstantiateMany1000x10`); `Perf.Runtime` switches a headless
+  `GameRuntime` to a 100,000-entity scene and away again (the longest frame); `Perf.Animation` evaluates 1,000
+  cross-fading animators of 60 joints and steps 10,000 `WhenVisible` ones nobody sees; `Perf.Physics.Characters1000Step`
+  steps 1,000 character controllers; `PerfGPU.Renderer.Skinned1000` renders 1,000 skinned characters posed every frame;
+  `Perf.Editor` adds `FindReferences10k`, `JournalPerCommand` and the recovery journal's write and snapshot;
+  `Perf.EditorPanels` and `PerfGPU.Editor` time the Content Browser with 10,001 assets (icons; thumbnails); and
+  `PerfGPU.Editor` the longest frames of `scene.open` of the 100,000- and 1,000,000-entity scenes (and of the 100,000
+  over the million), of starting play of the million, of `asset.import` of a 4096x4096 texture and of making a stress
+  project's thumbnails, and the editor's working set with the million open),
   `StrataEditor.Smoke`
   (the real editor in a window with `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label
   `gpu`; it creates a project in `build/<preset>/StrataTests/SmokeProject` (emptied first by `StrataEditor.SmokeClean`),
   so the editor rather than the launcher shows, captures the viewport to `SmokeViewport.png`/`SmokeSceneCamera.png` in
   `build/<preset>/StrataTests/SmokeCaptures/`, checked by `StrataEditor.SmokeCaptureCheck`, and quits once its script is
-  done), `StrataEditor.LauncherSmoke` (a windowed editor without a project opens into the launcher,
-  `Editor/LauncherCommands.json`), `StrataEditor.Icon` and `StrataRuntime.Icon` (Windows: the editor and the exported
-  game's executable carry the strata mark, checked with `StrataTests --strata-test-helper=check-icon <exe> <.ico>`),
+  done), `StrataEditor.QuitScreenshot` → `.QuitScreenshotCheck` (`--screenshot` with `--quit-after-commands` saves
+  the frame the script ended on), `StrataEditor.LauncherSmoke` (a windowed editor without a project opens into the
+  launcher, `Editor/LauncherCommands.json`), `StrataEditor.Replay` (`Editor/ReplaySession.cmake`: a session exported
+  with `editor.activity.export` and run on a copy of the project makes the same scene and assets), `StrataEditor.Icon`
+  and `StrataRuntime.Icon` (Windows: the editor and the exported game's executable carry the strata mark, checked with
+  `StrataTests --strata-test-helper=check-icon <exe> <.ico>`),
   the editor script checks (`StrataEditor.FailingScript`, `WaitingScript`,
   `UnfinishedScript`, `QuitScript`, `QuitBeforeScriptEnds`, `CaptureWithoutGPU`), the export chain `StrataExport.Clean`
   → `StrataEditor.Export` (`--no-gpu`; it exports the smoke game twice, the second time starting in a scene without a
@@ -74,7 +87,8 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   game, headless; `StrataRuntime.HeadlessPacing` checks that headless runs keep 60 frames per second,
   `StrataRuntime.AssetBudget` and `.InvalidAssetBudget` the `--asset-budget-mb` option, `StrataRuntime.Resolution` →
   `.ResolutionCheck` (label `gpu`: a window of exactly 400x250 pixels whatever the display's scale, checked with
-  `check-image --size`) and `.InvalidResolution` the `--resolution` option, `StrataRuntime.PerfLog` →
+  `check-image --size`) and `.InvalidResolution` the `--resolution` option, `.InvalidSaveDirectory` the
+  `--save-directory` option, `StrataRuntime.PerfLog` →
   `.PerfLogCheck` and `.InvalidPerfLog` the `--perf-log` CSV, read back by
   `StrataTests --strata-test-helper=check-perf-log <csv> <rows> [--nonzero <column>...]`) →
   `StrataRuntime.Render` (windowed, saves
@@ -94,6 +108,10 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   full and pruned and runs both games headless, `StrataTests/Editor/TetrisSample.cmake`); `-LE package` skips them on
   machines without a toolchain.
 - Scripted editor runs in CTest pass `--no-automation`, so they never publish sessions for real clients.
+- Editor tests: commands that defer (`scene.open`, `project.open` of a project with a start scene, `asset.import`, a
+  `play.start` that builds) need `Tests::RunCommandToCompletion` (`StrataTests/src/Editor/CommandTestUtils.h`); UI
+  tests that bring a tab forward wait until it shows before clicking in it (ImGui draws it hidden in its first frame);
+  every new editor command gets its kind in `Editor.Journal`'s lists (`CommandJournalTests.cpp`).
 - Tests that expect a process to fail with exit code 1 and a message use `StrataTests/ExpectFailure.cmake`.
 - To look at rendering changes, read those PNGs, or run `StrataEditor --windowed --frames N --commands <script>
   --screenshot out.png` with a script that builds a scene and uses `camera.set`/`camera.focus`.
