@@ -346,7 +346,7 @@ namespace Strata
 			bool IsCancelled() const { return Strata::IsCancelled(m_Cancel); }
 
 			// A file and the files its importer reads beside it.
-			ExternalImportItem CopyFile(const std::filesystem::path& file, const std::filesystem::path& targetDirectory)
+			ExternalImportItem CopyExternalFile(const std::filesystem::path& file, const std::filesystem::path& targetDirectory)
 			{
 				ExternalImportItem item;
 				item.Source = file;
@@ -425,7 +425,7 @@ namespace Strata
 			}
 
 			// A folder with its asset files, their .meta files and the files models in it read inside it.
-			ExternalImportItem CopyFolder(const std::filesystem::path& directory, const std::filesystem::path& targetDirectory)
+			ExternalImportItem CopyExternalFolder(const std::filesystem::path& directory, const std::filesystem::path& targetDirectory)
 			{
 				ExternalImportItem item;
 				item.Source = directory;
@@ -2460,7 +2460,7 @@ namespace Strata
 
 		std::vector<std::string> createdFolders;
 		ExternalCopy copy(m_Specification.AssetDirectory, nullptr, createdFolders);
-		const ExternalImportItem item = copy.CopyFile(sourceFile, directory);
+		const ExternalImportItem item = copy.CopyExternalFile(sourceFile, directory);
 		if (!item.Error.empty())
 		{
 			RollBackExternalFiles(item.Files, {});
@@ -2544,9 +2544,9 @@ namespace Strata
 			};
 			ExternalCopy copier(assetDirectory, &task->Cancel, createdFolders, claim);
 			for (const std::filesystem::path& file : request.Files)
-				items.push_back(copier.CopyFile(file, directory));
+				items.push_back(copier.CopyExternalFile(file, directory));
 			for (const std::filesystem::path& folder : request.Directories)
-				items.push_back(copier.CopyFolder(folder, directory));
+				items.push_back(copier.CopyExternalFolder(folder, directory));
 			if (copier.IsCancelled())
 			{
 				// Nobody registers what was copied: it goes again, so the next scan finds no half import.
