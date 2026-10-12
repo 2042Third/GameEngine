@@ -25,6 +25,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace Strata;
@@ -836,6 +837,139 @@ TEST_SUITE("Animation.RootMotion")
 		CHECK(std::abs(turned.z) < 1e-3f);
 		CHECK(std::abs(turned.y) < 0.02f);
 		CheckSceneCaches(world);
+	}
+}
+
+TEST_SUITE("Animation.Streaming")
+{
+	TEST_CASE("Every instance of an animated prefab that InstantiateMany makes has an animator of its own")
+	{
+		ScopedJobSystem jobs(2, 1);
+		AnimationScene scene;
+		// The prefab: a character playing the locomotion controller, its skinned body and a sword at its wrist, both naming
+		// the character's animator.
+		Scene authoring("Authoring");
+		Entity character = authoring.CreateEntity("Character");
+		AnimatorComponent& animator = character.AddComponent<AnimatorComponent>();
+		animator.Skeleton = UUID(c_SkeletonHandle);
+		animator.Controller = UUID(c_ControllerHandle);
+		authoring.CreateChildEntity(character, "Body").AddComponent<SkinComponent>().Animator = character.GetUUID();
+		authoring.CreateChildEntity(character, "Sword").AddComponent<AttachToJointComponent>() = AttachToJointComponent { character.GetUUID(), "Wrist" };
+		const Ref<Prefab> prefab = Prefab::CreateFromEntities(authoring, { character });
+		REQUIRE(prefab);
+
+		// Three instances in one call, into the running scene.
+		scene.Start();
+		const std::vector<glm::mat4> transforms = { glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.0f, 0.0f)),
+			glm::translate(glm::mat4(1.0f), glm::vec3(3.0f, 0.0f, 0.0f)), glm::translate(glm::mat4(1.0f), glm::vec3(6.0f, 0.0f, 0.0f)) };
+		std::string error;
+		const std::vector<Entity> roots = prefab->InstantiateMany(*scene.SceneRef, transforms, {}, &error);
+		REQUIRE_MESSAGE(roots.size() == 3, error);
+		const auto child = [](Entity root, std::string_view name)
+		{
+			for (Entity entity : root.GetChildren())
+			{
+				if (entity.GetName() == name)
+					return entity;
+			}
+			return Entity();
+		};
+		// The copies name their own instance's animator, not the prefab's or another instance's.
+		for (Entity root : roots)
+		{
+			CAPTURE(root.GetName());
+			CHECK(root.GetUUID() != character.GetUUID());
+			REQUIRE(child(root, "Body"));
+			REQUIRE(child(root, "Sword"));
+			CHECK(child(root, "Body").GetComponent<SkinComponent>().Animator == root.GetUUID());
+			CHECK(child(root, "Sword").GetComponent<AttachToJointComponent>().Animator == root.GetUUID());
+		}
+
+		scene.Update(1.0f / 60.0f);
+		AnimationSystem& system = *scene.System();
+		CHECK(system.GetStats().Animators == 3);
+		CHECK(system.GetStats().ActiveAnimators == 3);
+		const AnimatorInstance* first = system.FindInstance(roots[0]);
+		const AnimatorInstance* second = system.FindInstance(roots[1]);
+		const AnimatorInstance* third = system.FindInstance(roots[2]);
+		REQUIRE(first);
+		REQUIRE(second);
+		REQUIRE(third);
+		CHECK(first != second);
+		CHECK(second != third);
+
+		// Commanding one instance changes its state only.
+		IAnimatorControl* control = scene.SceneRef->GetService<IAnimatorControl>();
+		REQUIRE(control);
+		REQUIRE(control->SetFloat(roots[1], "Speed", 1.0f));
+		for (int update = 0; update < 30; update++)
+			scene.Update(1.0f / 60.0f);
+		CHECK(control->GetCurrentState(roots[0]) == "Idle");
+		CHECK(control->GetCurrentState(roots[1]) == "Walk");
+		CHECK(control->GetCurrentState(roots[2]) == "Idle");
+		const float idleElbow = ElbowDegrees(scene.GetJoint(roots[0], 1));
+		CHECK(ElbowDegrees(scene.GetJoint(roots[2], 1)) == doctest::Approx(idleElbow).epsilon(1e-4));
+		CHECK(std::abs(ElbowDegrees(scene.GetJoint(roots[1], 1)) - idleElbow) > 5.0f);
+
+		// Each sword is at its own character's wrist.
+		for (Entity root : roots)
+		{
+			CAPTURE(root.GetName());
+			const std::optional<glm::mat4> wrist = control->GetJointTransform(root, "Wrist");
+			REQUIRE(wrist.has_value());
+			const glm::vec3 sword = GetWorldPosition(*scene.SceneRef, child(root, "Sword"));
+			CHECK(glm::length(sword - glm::vec3((*wrist)[3])) < 1e-4f);
+			CHECK(std::abs(sword.x - GetWorldPosition(*scene.SceneRef, root).x) < 2.0f);
+		}
+		CheckSceneCaches(*scene.SceneRef);
+	}
+
+	TEST_CASE("Animators of an additive sub-scene play while it is loaded and leave with it")
+	{
+		ScopedJobSystem jobs(2, 1);
+		AnimationScene scene;
+		scene.Start();
+		// A room whose walker plays the Walk clip with root motion (2 along +Z per second), a sword at its wrist.
+		Ref<Scene> room = CreateRef<Scene>("Room");
+		Entity walker = room->CreateEntity("Walker");
+		AnimatorComponent& animator = walker.AddComponent<AnimatorComponent>();
+		animator.Skeleton = UUID(c_SkeletonHandle);
+		animator.Clip = UUID(c_WalkHandle);
+		animator.ApplyRootMotion = true;
+		walker.GetTransform().Translation = glm::vec3(5.0f, 0.0f, 0.0f);
+		room->CreateChildEntity(walker, "Sword").AddComponent<AttachToJointComponent>() = AttachToJointComponent { walker.GetUUID(), "Wrist" };
+		room->UpdateWorldTransforms();
+		const UUID walkerID = walker.GetUUID();
+
+		const SubSceneID id = scene.SceneRef->BeginAdditiveLoad(room);
+		REQUIRE(id != 0);
+		for (int update = 0; update < 600 && !scene.SceneRef->IsSubSceneLoaded(id); update++)
+			scene.Update(1.0f / 60.0f);
+		REQUIRE(scene.SceneRef->IsSubSceneLoaded(id));
+		const Entity loaded = scene.SceneRef->GetEntityByUUID(walkerID);
+		REQUIRE(loaded);
+		const float startZ = GetWorldPosition(*scene.SceneRef, loaded).z;
+
+		// Half a second: it walked a meter and its sword follows its wrist.
+		for (int update = 0; update < 30; update++)
+			scene.Update(1.0f / 60.0f);
+		CHECK(scene.System()->GetStats().Animators == 1);
+		REQUIRE(scene.System()->FindInstance(loaded));
+		CHECK(GetWorldPosition(*scene.SceneRef, loaded).z - startZ == doctest::Approx(1.0f).epsilon(1e-3));
+		IAnimatorControl* control = scene.SceneRef->GetService<IAnimatorControl>();
+		REQUIRE(control);
+		const std::optional<glm::mat4> wrist = control->GetJointTransform(loaded, "Wrist");
+		REQUIRE(wrist.has_value());
+		const Entity sword = loaded.GetChildren().front();
+		CHECK(glm::length(GetWorldPosition(*scene.SceneRef, sword) - glm::vec3((*wrist)[3])) < 1e-4f);
+
+		// Unloaded, its animator goes with it.
+		REQUIRE(scene.SceneRef->UnloadSubScene(id));
+		scene.Update(1.0f / 60.0f);
+		CHECK_FALSE(scene.SceneRef->GetEntityByUUID(walkerID));
+		CHECK(scene.System()->GetStats().Animators == 0);
+		CHECK(scene.System()->GetStats().ActiveAnimators == 0);
+		CheckSceneCaches(*scene.SceneRef);
 	}
 }
 

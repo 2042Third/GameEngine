@@ -11,6 +11,7 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/Scene/SceneSerializer.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -154,6 +155,47 @@ TEST_SUITE("Editor.PhysicsLayers")
 		const size_t unchanged = harness.Context.GetUndoStack().GetPosition();
 		harness.Run("scene.setSettings", { { "layerNames", { { "3", "Enemy" } } } });
 		CHECK(harness.Context.GetUndoStack().GetPosition() == unchanged);
+	}
+
+	TEST_CASE("scene.setSettings sets sub-scene creation and collision layers together, saved with the scene")
+	{
+		// SceneSettings gained a field from each of two workstreams (scene streaming's MaxEntitiesInstantiatedPerFrame, the
+		// physics layers): one request sets both in one step, an invalid value of either changes neither, and both are saved.
+		LayerCommands harness;
+		Scene& scene = *harness.Context.GetActiveScene();
+		const uint32_t defaultEntities = scene.GetSettings().MaxEntitiesInstantiatedPerFrame;
+		const size_t position = harness.Context.GetUndoStack().GetPosition();
+		const nlohmann::json result = harness.Run("scene.setSettings", {
+			{ "maxEntitiesInstantiatedPerFrame", 1500 },
+			{ "layerNames", { { "1", "Player" } } },
+			{ "layerCollisions", nlohmann::json::array({ { { "layers", { "Player", "Player" } }, { "collide", false } } }) } });
+		CHECK(harness.Context.GetUndoStack().GetPosition() == position + 1);
+		CHECK(result["settings"]["maxEntitiesInstantiatedPerFrame"] == 1500);
+		CHECK(result["settings"]["physicsLayers"]["names"]["1"] == "Player");
+		CHECK(scene.GetSettings().MaxEntitiesInstantiatedPerFrame == 1500u);
+		CHECK_FALSE(harness.Layers().DoCollide(1, 1));
+
+		std::string error;
+		Scene reloaded;
+		REQUIRE_MESSAGE(SceneSerializer::Deserialize(reloaded, SceneSerializer::Serialize(scene), &error), error);
+		CHECK(reloaded.GetSettings().MaxEntitiesInstantiatedPerFrame == 1500u);
+		CHECK(reloaded.GetSettings().PhysicsLayers == harness.Layers());
+
+		const auto refuse = [&](const nlohmann::json& parameters)
+		{
+			harness.Refuse(parameters);
+			CHECK(scene.GetSettings().MaxEntitiesInstantiatedPerFrame == 1500u);
+		};
+		refuse({ { "maxEntitiesInstantiatedPerFrame", 0 }, { "layerNames", { { "2", "Debris" } } } });
+		refuse({ { "maxEntitiesInstantiatedPerFrame", 2000 }, { "layerNames", { { "2", 7 } } } });
+		refuse({ { "maxEntitiesInstantiatedPerFrame", 2000 }, { "layerCollisions", { { { "layers", { "Nobody", 0 } }, { "collide", false } } } } });
+
+		harness.Run("edit.undo");
+		CHECK(scene.GetSettings().MaxEntitiesInstantiatedPerFrame == defaultEntities);
+		CHECK(harness.Layers() == PhysicsLayerSettings());
+		harness.Run("edit.redo");
+		CHECK(scene.GetSettings().MaxEntitiesInstantiatedPerFrame == 1500u);
+		CHECK(harness.Layers().Names[1] == "Player");
 	}
 
 	TEST_CASE("Bodies and character controllers take their layer by name")

@@ -516,4 +516,52 @@ TEST_SUITE("Physics.Character")
 		}
 		CHECK(different == 0);
 	}
+
+	TEST_CASE("Character controllers of an additive sub-scene stand, walk and leave with it")
+	{
+		ScopedJobSystem jobs(2);
+		Scene scene("Level");
+		Entity ground = CreateGround(scene);
+		scene.OnRuntimeStart();
+		StepScene(scene, 1);
+		const PhysicsStats before = GetPhysics(scene).GetStats();
+		CHECK(before.CharacterControllerCount == 0);
+
+		// A room with two characters standing on the level's ground.
+		Ref<Scene> room = CreateRef<Scene>("Room");
+		const UUID walkerID = CreateCharacter(*room, "Walker", glm::vec3(0.0f, 0.0f, 5.0f)).GetUUID();
+		const UUID standerID = CreateCharacter(*room, "Stander", glm::vec3(0.0f, 0.0f, 9.0f)).GetUUID();
+		room->UpdateWorldTransforms();
+		const SubSceneID id = scene.BeginAdditiveLoad(room);
+		REQUIRE(id != 0);
+		for (int update = 0; update < 600 && !scene.IsSubSceneLoaded(id); update++)
+			StepScene(scene, 1);
+		REQUIRE(scene.IsSubSceneLoaded(id));
+		StepScene(scene, 30);
+
+		const Entity walker = scene.GetEntityByUUID(walkerID);
+		const Entity stander = scene.GetEntityByUUID(standerID);
+		ICharacterControl& characters = GetCharacters(scene);
+		REQUIRE(characters.HasCharacterController(walker));
+		REQUIRE(characters.HasCharacterController(stander));
+		CHECK(GetPhysics(scene).GetStats().CharacterControllerCount == 2);
+		const CharacterState standing = GetState(scene, walker);
+		CHECK(standing.Ground == CharacterGroundState::OnGround);
+		CHECK(standing.GroundEntity == ground);
+
+		// One second at 2 m/s along +X; the other stays where it stands.
+		const glm::vec3 walked = Walk(scene, walker, 2.0f, 60);
+		CHECK(walked.x == doctest::Approx(2.0f).epsilon(0.05));
+		CHECK(std::abs(walked.y) < 0.02f);
+		CHECK(Math::IsNearlyEqual(GetWorldPosition(scene, stander), glm::vec3(0.0f, 0.0f, 9.0f), 0.02f));
+
+		// Unloaded, the controllers and their presence bodies go with their entities.
+		REQUIRE(scene.UnloadSubScene(id));
+		StepScene(scene, 1);
+		CHECK_FALSE(scene.GetEntityByUUID(walkerID));
+		CHECK(GetPhysics(scene).GetStats().CharacterControllerCount == 0);
+		CHECK(GetPhysics(scene).GetStats().BodyCount == before.BodyCount);
+		CheckSceneCaches(scene);
+		scene.OnRuntimeStop();
+	}
 }
