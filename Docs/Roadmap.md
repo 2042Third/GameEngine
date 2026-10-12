@@ -276,8 +276,10 @@ pending):
   for imports that failed unobserved, for assets agents moved to the trash and for script builds and crashes (Show
   Problems); a test pins the journal kind of all 117 commands; the default layout (version 4) docks the Problems and
   Activity panels; status pills fit a 1600x900 window; the Export dialog picks the loading scene, the Asset tab counts a
-  model's skeletons and clips. The script ABI keeps version 1 with its host functions in merge order (wave 2's 79, then
-  6, 12 and 22). Full Debug ctest under the validation layer (47 tests) and Release ctest without the perf label pass.
+  model's skeletons and clips, and the Activity panel's undo step names and the controller tables' headers show whole
+  (the visual pass at 150%, 100% and in a 1600x900 window). The script ABI keeps version 1 with its host functions in
+  merge order (wave 2's 79, then 6, 12 and 22). Full Debug ctest under the validation layer (47 tests) and Release ctest
+  without the perf label (47) pass.
 - Perf campaign: pending.
 
 Open items and deferrals later waves own:
