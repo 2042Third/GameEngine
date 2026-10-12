@@ -2018,9 +2018,11 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   instance root records what it last took (`PrefabInstances::MarkSynced`, whenever an instance is made, created, applied,
   reverted or updated): `PrefabInstanceComponent::PrefabVersion`, a hash of its part of the prefab then
   (`GetPartVersion`: the part without the root's transform and name, its entities in id order), and `SyncedHash`, a hash of
-  its own values then in the same form (`GetContentHash`). The first time the sync looks at a prefab after a scene opens
-  (`PrefabSync::CatchUp`), instances whose recorded version is not the prefab's and whose values still have the recorded
-  hash take the prefab's values, in one undo step; modified ones keep theirs and are *outdated* (`IsOutdated`):
+  its own values then in the same form (`GetContentHash`). When an opened scene replaces the edited one
+  (`PrefabSync::OnSceneOpened`, in the frame of the swap, before `scene.open` answers and before anything else runs on the
+  scene: it reads the template of every prefab the scene uses, one file each), instances whose recorded version is not the
+  prefab's and whose values still have the recorded hash take the prefab's values (`PrefabSync::CatchUp`), in one undo
+  step per prefab; modified ones keep theirs and are *outdated* (`IsOutdated`):
   `prefab.status` says so, and `prefab.apply` refuses them unless `force`, since it would write their older values over
   the prefab's later changes. Instances without a record (scenes from before, game code's) are never caught up. It also
   caches per instance root whether it is modified and outdated, renewed when the undo history or a baseline changes, for

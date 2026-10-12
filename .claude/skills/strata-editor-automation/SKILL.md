@@ -247,8 +247,9 @@ false` leaves them alone), then
 (returns `id`, the instance's root). Instances stay linked: change one instance (any of its entities) and
 `prefab.apply {"entity": "<id>"}` writes it into the prefab, and every instance that still had the prefab's values takes
 the new ones (one undo step for the file and the scene). Instances in other scenes follow when their scene opens next
-(also after the prefab changed on disk): those still as they were take the new values (an undo step,
-"Update Instances of ..."; save the scene), modified ones keep theirs and are `outdated`; `prefab.apply` refuses an
+(also after the prefab changed on disk; done by the time `scene.open` answers): those still as they were take the new
+values (an undo step per prefab, "Update Instances of ..."; save the scene), modified ones keep theirs and are
+`outdated`; `prefab.apply` refuses an
 outdated instance (it would write its older values over the newer ones) unless `"force": true`: `prefab.revert` it
 and make its change again instead. `prefab.status {"entity"}` says whether an instance differs
 (`modified`, `outdated`, `changed`, `added`, `removed`), `prefab.revert {"entity"}` gives it the prefab's values again (IDs kept),

@@ -38,7 +38,8 @@ namespace Strata
 	// looks at the prefab: instances whose recorded version of their part (PrefabInstances::MarkSynced) differs from the
 	// prefab's and whose values still have the recorded hash take its values, in one undo step; modified ones are outdated
 	// (IsOutdated). It also answers whether an instance is modified or outdated for the Hierarchy's marks, cached until the
-	// edits or the prefab change.
+	// edits or the prefab change. A scene the editor opens is caught up with at once (OnSceneOpened), before scene.open
+	// answers, so that nothing that runs after the open sees instances that missed their prefab's changes.
 	//
 	// Comparing an instance serializes its entities, and finding the prefabs walks every link: work for an edit, not for every
 	// frame of a run of edits (a gizmo drag records a step each frame). An edit after a pause is looked at at once; while
@@ -53,6 +54,10 @@ namespace Strata
 		// revisions of the prefabs the scene's instances use (a few lookups; the set is found again only when links change or
 		// edits pause) and updates instances of the ones that changed.
 		void Update(EditorContext& context);
+		// Once an opened scene replaced the edited one (EditorContext, in the frame it does): reads the template of every
+		// prefab its instances use, one file each, and catches their instances up (CatchUp), so that commands in the frame of
+		// the open (command scripts, pipelined requests) already see their values.
+		void OnSceneOpened(EditorContext& context);
 		// The snapshot instances of the prefab are compared with: its template when the sync last looked (read on first use).
 		const nlohmann::json* GetBaseline(EditorContext& context, AssetHandle prefab);
 		// After the editor wrote a prefab (prefab.apply): instances were updated with it, so it is the baseline now.

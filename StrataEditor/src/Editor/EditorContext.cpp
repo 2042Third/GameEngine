@@ -463,7 +463,8 @@ namespace Strata
 
 		m_SceneLoadStatus.Seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_SceneLoadStatus.Started).count();
 		const AssetHandle handle = request.GetSceneAsset();
-		if (request.GetState() == SceneLoadState::Ready)
+		const bool opened = request.GetState() == SceneLoadState::Ready;
+		if (opened)
 		{
 			// The scene is in place before the request (and its pins) goes, so what it uses is requested from now on.
 			FinishOpenScene(request.TakeScene(), handle, request.GetAssets());
@@ -476,6 +477,10 @@ namespace Strata
 				ST_WARN("Could not open the start scene: {}", m_SceneLoadStatus.Error);
 		}
 		m_SceneLoad.reset();
+		// Once the scene is editable: instances of prefabs that changed while it was closed take their values (an undo step)
+		// before anything else, scene.open's answer included, sees the scene.
+		if (opened)
+			m_PrefabSync.OnSceneOpened(*this);
 	}
 
 	void EditorContext::FinishOpenScene(Ref<Scene> scene, AssetHandle handle, std::span<const AssetHandle> loaded)

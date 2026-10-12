@@ -510,6 +510,47 @@ TEST_SUITE("Editor.Prefab")
 		CHECK(harness.Status(old)["modified"] == true);
 	}
 
+	TEST_CASE("Every prefab an opened scene uses catches its instances up as the scene replaces the edited one, before anything runs")
+	{
+		PrefabHarness harness("PrefabCatchUpAtOpen");
+		// Three prefabs whose sources are in one scene, and an instance of each in another.
+		std::vector<std::string> sources;
+		std::vector<std::string> prefabs;
+		for (int index = 0; index < 3; index++)
+		{
+			const std::string name = "Lamp" + std::to_string(index);
+			sources.push_back(harness.Create(name, nullptr, 2.0f));
+			prefabs.push_back(harness.Run("prefab.create", { { "entities", { sources.back() } }, { "path", "Prefabs/" + name + ".stprefab" } })["asset"]
+				.get<std::string>());
+		}
+		harness.Run("scene.saveAs", { { "path", "Scenes/Sources.stscene" } });
+		harness.Run("scene.new");
+		std::vector<std::string> instances;
+		for (const std::string& prefab : prefabs)
+			instances.push_back(harness.Run("prefab.instantiate", { { "prefab", prefab } })["id"].get<std::string>());
+		const std::optional<UUID> scene = UUIDFromJson(harness.Run("scene.saveAs", { { "path", "Scenes/A.stscene" } })["scene"]);
+		REQUIRE(scene);
+
+		// All three change while A is closed.
+		harness.Run("scene.open", { { "scene", "Scenes/Sources.stscene" } });
+		for (const std::string& source : sources)
+		{
+			harness.SetIntensity(source, 6.0f);
+			harness.Run("prefab.apply", { { "entity", source } });
+		}
+		harness.Run("scene.save");
+
+		// Opened without an editor frame (EditorContext::OpenScene, as tools open scenes): when it returns, every instance has
+		// its prefab's values, one undo step per prefab, and later frames add nothing.
+		std::string error;
+		REQUIRE_MESSAGE(harness.Context.OpenScene(*scene, &error), error);
+		for (const std::string& instance : instances)
+			CHECK(harness.Intensity(instance) == 6.0);
+		CHECK(harness.History().size() == 3);
+		harness.Frames(3);
+		CHECK(harness.History().size() == 3);
+	}
+
 	TEST_CASE("While a scene is being opened, prefab commands that change the edited scene are refused before anything changes")
 	{
 		PrefabHarness harness("PrefabWhileOpening");

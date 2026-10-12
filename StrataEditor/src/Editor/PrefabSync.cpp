@@ -163,6 +163,31 @@ namespace Strata
 		}
 	}
 
+	void PrefabSync::OnSceneOpened(EditorContext& context)
+	{
+		Reset();
+		EditorAssetManager* assets = context.GetAssetManager();
+		const Ref<Scene>& scene = context.GetEditScene();
+		m_Scene = scene;
+		m_Assets = assets;
+		if (!assets || !scene)
+			return;
+		Watch(context);
+		// Every prefab at once rather than one per frame (Update): bounded by the prefabs the scene uses, in the frame that
+		// swaps the scene in anyway.
+		for (const AssetHandle prefab : m_Watched)
+		{
+			const uint64_t revision = assets->GetSourceRevisions(prefab).Current;
+			if (revision == 0)
+				continue; // No asset of the project (deleted, a built-in)
+			std::optional<nlohmann::json> snapshot = PrefabSyncUtils::ReadTemplate(*assets, prefab);
+			Baseline& baseline = m_Baselines.insert_or_assign(prefab, Baseline { snapshot ? std::move(*snapshot) : nlohmann::json(), revision }).first->second;
+			baseline.CaughtUp = true;
+			if (!baseline.Snapshot.is_null())
+				CatchUp(context, prefab, baseline.Snapshot);
+		}
+	}
+
 	void PrefabSync::Propagate(EditorContext& context, AssetHandle prefab, const nlohmann::json& previous, const nlohmann::json& snapshot)
 	{
 		Scene& scene = *context.GetEditScene();
