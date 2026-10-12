@@ -182,13 +182,15 @@ namespace Strata
 		// A load nobody waits for anymore stops: its pins go, and what it started and nothing else needs is abandoned.
 		if (!IsFinished())
 			Cancel();
+		// A scene read but never taken goes like a replaced one, off the frame.
+		Scene::ReleaseInBackground(std::move(m_Prepared));
 	}
 
 	void SceneLoadRequest::Fail(std::string error)
 	{
 		m_State = SceneLoadState::Failed;
 		m_Error = std::move(error);
-		m_Prepared.reset();
+		Scene::ReleaseInBackground(std::move(m_Prepared));
 	}
 
 	float SceneLoadRequest::GetProgress() const
@@ -287,7 +289,7 @@ namespace Strata
 	{
 		m_Group.Cancel();
 		m_Group = AssetGroupRequest();
-		m_Prepared.reset();
+		Scene::ReleaseInBackground(std::move(m_Prepared));
 		if (!IsFinished())
 			m_State = SceneLoadState::Cancelled;
 	}

@@ -3,8 +3,10 @@
 
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/Profiling.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace Strata
 {
@@ -129,8 +131,8 @@ namespace Strata
 
 	void GameRuntime::StartScene(Ref<Scene> scene, AssetHandle handle, std::span<const AssetHandle> loaded)
 	{
-		if (m_Scene && m_Scene->IsRunning())
-			m_Scene->OnRuntimeStop();
+		// The scene that goes stops here and is destroyed off the frame (a million entities take tens of milliseconds).
+		Scene::ReleaseInBackground(std::move(m_Scene));
 		m_Scene = std::move(scene);
 		m_SceneHandle = handle;
 		m_Scene->SetTimeDilation(m_TimeDilation);
@@ -143,6 +145,10 @@ namespace Strata
 
 	void GameRuntime::UpdateSceneLoads()
 	{
+		if (!m_LoadingSceneLoad && !m_SceneLoad)
+			return;
+		ST_PROFILE_STAGE("Scene.Load");
+
 		// The loading scene plays until the game's first scene is in (a failed one is only reported: the frame stays clear).
 		if (m_LoadingSceneLoad)
 		{

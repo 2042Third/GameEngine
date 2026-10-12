@@ -86,8 +86,9 @@ namespace Strata
 		// The prepared scene, once Ready: the first call takes it (the request keeps its pins), later calls return null.
 		Ref<Scene> TakeScene();
 		// Abandons the load: releases every pin and abandons the loads the request started that have not finished
-		// (AssetGroupRequest::Cancel), and drops a scene prepared already. Nothing changes for a finished request but its
-		// pins, which go.
+		// (AssetGroupRequest::Cancel), and drops a scene prepared already (destroyed off the frame, Scene::ReleaseInBackground,
+		// as when the request fails or goes before its scene was taken). Nothing changes for a finished request but its pins,
+		// which go.
 		void Cancel();
 	private:
 		friend class SceneLoader;

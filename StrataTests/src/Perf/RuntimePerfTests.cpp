@@ -16,13 +16,14 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <string>
 #include <thread>
 #include <vector>
 
 // A headless game switching scenes (CTest StrataTests.Perf: Release and Dist): the next scene loads while the running one
-// goes on, so no frame of the switch may stall the game.
+// goes on, and the scene a switch replaces is destroyed off the frame, so no frame of a switch may stall the game.
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -35,6 +36,8 @@ namespace
 	constexpr uint64_t c_FirstMaterial = 0x5100;
 	constexpr uint32_t c_Materials = 8;
 	constexpr auto c_FramePeriod = std::chrono::microseconds(16'667);
+	// Frames measured after each switch: the new scene's first frames.
+	constexpr uint32_t c_FramesAfterSwitch = 10;
 
 	std::vector<uint8_t> ToBytes(const nlohmann::json& json)
 	{
@@ -100,6 +103,41 @@ namespace
 		return directory / "Switch.stgame";
 	}
 
+	// Asks the running scene for `target` and runs frames at 60 per second, as headless games do, until c_FramesAfterSwitch
+	// frames after the switch; appends the time of every frame. The test holds no reference to the running scene, so the
+	// scene the switch replaces goes within these frames. Returns the frames the load took.
+	uint32_t MeasureSwitch(GameRuntime& game, AssetHandle target, std::vector<double>& frameTimes, const std::function<void()>& onSwitched)
+	{
+		const Timestep frame(1.0f / 60.0f);
+		game.GetScene()->RequestSceneLoad(target);
+		uint32_t loadingFrames = 0;
+		uint32_t framesAfterSwitch = 0;
+		auto next = std::chrono::steady_clock::now();
+		const auto deadline = next + std::chrono::minutes(2);
+		while (framesAfterSwitch < c_FramesAfterSwitch)
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			const uint64_t runningFrames = game.GetScene()->GetFrameIndex();
+			const auto begin = std::chrono::steady_clock::now();
+			game.Update(frame);
+			frameTimes.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count());
+			if (game.GetSceneHandle() == target)
+			{
+				if (framesAfterSwitch++ == 0)
+					onSwitched();
+			}
+			else
+			{
+				// The running scene goes on every frame of the load.
+				CHECK(game.GetScene()->GetFrameIndex() == runningFrames + 1);
+				loadingFrames++;
+			}
+			next += c_FramePeriod;
+			std::this_thread::sleep_until(next);
+		}
+		return loadingFrames;
+	}
+
 }
 
 TEST_SUITE("Perf.Runtime")
@@ -109,55 +147,36 @@ TEST_SUITE("Perf.Runtime")
 		Perf::ScopedApplicationJobSystem jobs;
 		const std::filesystem::path manifest = WriteSwitchGame(CreateTemporaryDirectory("PerfRuntimeSwitch"));
 
-		// A maximum by nature: the longest frame from the request to ten frames after the switch, the hitch a switch must not
-		// cause. The game runs at 60 frames per second, as headless games do.
+		// A maximum by nature: the longest frame from the request to ten frames after the switch to the scene of 100,000
+		// entities, and likewise switching away from it again (which replaces it), the hitches a switch must not cause.
 		Perf::CheckBudgetConfirmed("Perf.Runtime.SceneSwitch100kMaxFrame", [&]
 		{
 			std::string error;
 			Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
 			REQUIRE_MESSAGE(game, error);
 			REQUIRE(game->WaitForStart());
-			const Ref<Scene> start = game->GetScene();
 			const Timestep frame(1.0f / 60.0f);
 			for (int warmup = 0; warmup < 10; warmup++)
 				game->Update(frame);
 
-			start->RequestSceneLoad(UUID(c_BigScene));
 			std::vector<double> frameTimes;
-			uint32_t loadingFrames = 0;
-			uint32_t framesAfterSwitch = 0;
-			auto next = std::chrono::steady_clock::now();
-			const auto deadline = next + std::chrono::minutes(2);
-			while (framesAfterSwitch < 10)
+			const uint32_t loadingFrames = MeasureSwitch(*game, UUID(c_BigScene), frameTimes, [&]()
 			{
-				REQUIRE(std::chrono::steady_clock::now() < deadline);
-				const uint64_t startFrames = start->GetFrameIndex();
-				const auto begin = std::chrono::steady_clock::now();
-				game->Update(frame);
-				frameTimes.push_back(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin).count());
-				if (game->GetSceneHandle() == UUID(c_BigScene))
-				{
-					if (framesAfterSwitch++ == 0)
-					{
-						// It starts only once everything it uses is in.
-						for (uint32_t index = 0; index < c_Materials; index++)
-							CHECK(game->GetAssetManager()->GetAssetState(UUID(c_FirstMaterial + index)) == AssetState::Ready);
-						CHECK(game->GetScene()->GetEntityCount() == 100'002);
-						CHECK(game->GetScene()->IsRunning());
-					}
-				}
-				else
-				{
-					// The running scene goes on every frame of the load.
-					CHECK(start->GetFrameIndex() == startFrames + 1);
-					loadingFrames++;
-				}
-				next += c_FramePeriod;
-				std::this_thread::sleep_until(next);
-			}
+				// It starts only once everything it uses is in.
+				for (uint32_t index = 0; index < c_Materials; index++)
+					CHECK(game->GetAssetManager()->GetAssetState(UUID(c_FirstMaterial + index)) == AssetState::Ready);
+				CHECK(game->GetScene()->GetEntityCount() == 100'002);
+				CHECK(game->GetScene()->IsRunning());
+			});
 			CHECK(loadingFrames > 1);
+			const double into = *std::max_element(frameTimes.begin(), frameTimes.end());
+			const uint32_t leavingFrames = MeasureSwitch(*game, UUID(c_StartScene), frameTimes, [&]()
+			{
+				CHECK(game->GetScene()->GetEntityCount() == 1'002);
+			});
 			const double longest = *std::max_element(frameTimes.begin(), frameTimes.end());
-			MESSAGE("Switching to 100,000 entities: ", loadingFrames, " frames of loading, the longest frame ", longest, " ms");
+			MESSAGE("Switching to 100,000 entities: ", loadingFrames, " frames of loading, the longest frame ", into, " ms; away from them: ",
+				leavingFrames, " frames, the longest of all ", longest, " ms");
 			return longest;
 		});
 	}

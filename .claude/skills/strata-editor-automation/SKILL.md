@@ -233,7 +233,8 @@ a paused scene by fixed steps. `play.simulate` runs physics only.
 with a window, not `--no-gpu`, to include rendering). A command script can gate it:
 `{"command": "editor.wait", "parameters": {"frames": 120}, "expect": {"/frameTimes/medianMs": {"max": 5}}}`.
 `editor.perf {"frames": 120}` then says where the time went, per stage of the main thread (self times in ms:
-`Input`, `Assets.Update`, `Assets.Finalize` (GPU uploads of arriving assets), `Scene.Scripts`, `Scene.Physics`,
+`Input`, `Assets.Update`, `Assets.Finalize` (GPU uploads of arriving assets), `Scene.Load` (swapping in a scene that
+finished loading, creating sub-scenes' entities), `Scene.Scripts`, `Scene.Physics`,
 `Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Editor.UI`, and `Present` outside the frame
 time), with `stageSum` (at most the frame), `untimed` (the rest of each frame) and `jobs` (`workerBusyPercent`,
 `ioBusyPercent`, `backgroundBusyPercent` (imports, exports), `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage. The

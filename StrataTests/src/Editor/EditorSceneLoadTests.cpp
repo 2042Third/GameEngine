@@ -1,10 +1,12 @@
 #include <doctest/doctest.h>
 
+#include "Asset/AssetTestUtils.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/PropertyEdit.h"
+#include "Scene/SceneTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
@@ -20,9 +22,11 @@
 
 #include <chrono>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -197,6 +201,40 @@ TEST_SUITE("Editor.SceneLoad")
 		CHECK(context.GetSceneLoadStatus().State == SceneLoadState::Failed);
 		project.Run("entity.create", { { "name", "Added" } });
 		CHECK(edited->FindEntityByName("Added").IsValid());
+	}
+
+	TEST_CASE("Scenes the editor replaces or stops playing are destroyed off the main thread")
+	{
+		ScopedJobSystem jobs(2, 1);
+		SceneLoadProject project(CreateTemporaryDirectory("EditorSceneRelease") / "Loads");
+		EditorContext& context = project.Context;
+
+		// The edited scene another one replaces.
+		const SceneDestructionWatch edited(*context.GetEditScene());
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Two) } });
+		CHECK(edited.WaitForDestruction() == SceneDestructionWatch::Place::BackgroundThread);
+
+		// The running copy play.stop drops.
+		project.Run("play.start");
+		const SceneDestructionWatch played(*context.GetActiveScene());
+		project.Run("play.stop");
+		CHECK(played.WaitForDestruction() == SceneDestructionWatch::Place::BackgroundThread);
+
+		// The running scene a switch the game asks for replaces.
+		project.Run("play.start");
+		const SceneDestructionWatch switched(*context.GetActiveScene());
+		const std::weak_ptr<Scene> before = context.GetActiveScene();
+		context.GetActiveScene()->RequestSceneLoad(project.One);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (context.GetActiveScene() == before.lock())
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			context.Update(Timestep(1.0f / 60.0f));
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		CHECK(context.GetActiveScene()->FindEntityByName("Hero").IsValid());
+		CHECK(switched.WaitForDestruction() == SceneDestructionWatch::Place::BackgroundThread);
+		project.Run("play.stop");
 	}
 
 	TEST_CASE("The viewport shows a scene load's progress over the scene still shown, and the assets pill counts it")

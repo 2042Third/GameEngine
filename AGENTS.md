@@ -153,7 +153,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   affect performance. Scale tests build their scenes with `Perf/SceneGenerators.h` (flat roots, a nested tree with ten
   children per entity, entities running the API test module's trivial script, grids of cubes and of point lights)
   under `Perf::ScopedApplicationJobSystem` (the job system as applications start it): `Perf.Scene` (transform updates and
-  idle frames up to a million entities), `Perf.Scripting` (100,000 and 300,000 trivial scripts, frames that spawn and
+  idle frames up to a million entities; copying a million-entity scene for play; instantiating a 10- and a 1,000-entity
+  prefab, and 1,000 instances of a 10-entity prefab in one `InstantiateMany` call), `Perf.Runtime` (a headless
+  `GameRuntime` switching to a scene of 100,000 entities and away from it again: the longest frame, a maximum by nature),
+  `Perf.Scripting` (100,000 and 300,000 trivial scripts, frames that spawn and
   destroy entities, scripts destroying 10,000 of 100,000 sibling roots in one frame), `Perf.Physics` (box stacks of
   `CreateBoxStacks`: the first frames of 30,000 boxes with time dilation, 70,000 boxes that all get a body, the busy
   frames of 70,000 and 10,000 boxes with Strata's part of a step below Jolt's (a `ratio` metric), and of 30,000 boxes
@@ -166,7 +169,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   100,000 roots, open against closed; what 100,000 selected entities add to a frame; the longest editor frame while a
   4096x4096 texture re-imports uncompressed and then block-compressed again), `PerfGPU.Editor`, which runs the real
   `StrataEditor` maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its
-  `editor.wait` steps report (when the editor fails, the test describes the scene files on disk with
+  `editor.wait` steps report, and maxima by nature: the longest frame while `scene.open` loads the 100,000 and the
+  1,000,000 entities and while it opens the 100,000 again over the million (`frameTimes.maxMs` of its result), the frame
+  that starts playing the million (`editor.perf`'s frame maximum) and the editor's working set once they are open
+  (`editor.status`' `memory.workingSetMB`) (when the editor fails, the test describes the scene files on disk with
   `Tests::DescribeJsonFile`, which tells a damaged file from a failed read or parse), exports the stress project (the
   median and the longest frame meanwhile, and
   the export's time) and times the editor's frames on the shared device while that texture re-imports, uploads and is
@@ -811,7 +817,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   steps; `play.stop` still returns to the edited scene); `GameRuntime` ends the game (`GetQuitRequest`; StrataRuntime exits
   with the code) or loads the scene from the pack the same way. A null handle restarts the running scene. Scene loads never
   stop a frame: never load scenes with `LoadAssetSync` in the editor or games; go through `SceneLoader` (Docs/Architecture.md,
-  "Scene runtime lifecycle").
+  "Scene runtime lifecycle"), and let go of a scene a switch replaces with `Scene::ReleaseInBackground` (stopped on the
+  main thread, destroyed by a background job).
 - **Opening scenes** (`scene.open`, `EditorContext::BeginOpenScene`) loads in the background and answers once the scene
   replaced the edited one; meanwhile the edited scene is read-only (`CommitEdit` rolls edits back; mutating scene commands,
   undo, settings, script and property edits fail through `EditorContext::CheckSceneEditable`, which code editing the scene

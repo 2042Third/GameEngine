@@ -441,6 +441,7 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Input` | `Input::BeginFrame` and the window's events (`Application::RunFrame`) |
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
+| `Scene.Load` | scene loads' main-thread work: swapping a loaded scene in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
 | `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
@@ -585,7 +586,13 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   editor's `scene.open` (`EditorContext::BeginOpenScene`), play-mode switches (`EditorContext::SwitchRuntimeScene`) and
   `GameRuntime` (start scene, loading scene, switches). While a switch loads, the running scene goes on and its scripts
   read the progress (`Scene::GetSceneLoadProgress`, set by the owner every frame); the new scene replaces it between
-  updates, then its systems start and the trim of what only the previous scene used is scheduled.
+  updates, then its systems start and the trim of what only the previous scene used is scheduled. The scene it replaces
+  is let go with `Scene::ReleaseInBackground`: stopped on the main thread (systems, scripts' `OnDestroy`, bodies, voices;
+  its sub-scene loads and their pins dropped), then destroyed by a background job, since destroying a million entities
+  takes tens of milliseconds (also the edited scene `scene.open` replaces, the copy `play.stop` ends and a scene a
+  cancelled or failed load had read). The registry signals nothing while it is destroyed and its render scene is plain
+  data, so nothing the main thread uses goes with it. The swap, the per-frame advance of the loads and sub-scene slices
+  are the frame profiler's `Scene.Load` stage.
 - **Additive scenes** (sub-scenes, `Scene/SceneSubScenes.cpp`, `Scene/SubScene.h`): `Scene::LoadSubScene(asset, options)`
   loads a scene asset into a running scene next to what it holds (a level's streamed part, a room; world partition loads
   its cells this way), and `BeginAdditiveLoad(preparedScene)` adds a scene made otherwise. The asset and its closure load

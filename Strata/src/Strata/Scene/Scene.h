@@ -92,6 +92,12 @@ namespace Strata
 		// are, and every component storage is copied whole (ComponentInfo::CopyStorage), the storages in parallel on the job
 		// system. Copies keep the source asset and the lineage (GetSourceAsset, GetLineageID).
 		static Ref<Scene> Copy(const Ref<Scene>& source);
+		// Lets go of a scene that is no longer used (one a scene switch or an opened scene replaced) without spending the
+		// frame on destroying it, which takes tens of milliseconds for a million entities: what must end on the main thread
+		// ends here (a running scene stops: its systems, scripts, bodies and voices; sub-scene loads and their asset requests
+		// are dropped), and the rest, its entities and caches, which nothing else reaches, is destroyed by a background job
+		// (JobPriority::Background) unless something else still holds the scene. Main thread.
+		static void ReleaseInBackground(Ref<Scene> scene);
 
 		//////////////////////////////////////////////////////////////////////////
 		// Entities

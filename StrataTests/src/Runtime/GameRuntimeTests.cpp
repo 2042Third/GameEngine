@@ -1,8 +1,10 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
+#include "Scene/SceneTestUtils.h"
 #include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Runtime/GameRuntime.h"
@@ -196,5 +198,41 @@ TEST_SUITE("Runtime.Game")
 		CHECK(game->GetLoadingSceneAsset() == UUID(0x1012));
 		UpdateUntil(*game, [&]() { return !game->IsLoadingScene(); });
 		CHECK(game->GetSceneHandle() == UUID(0x1012));
+	}
+
+	TEST_CASE("A switch is timed in the frame's Scene.Load stage, and the scene it replaces is destroyed on a background thread")
+	{
+		ScopedJobSystem jobs(2, 2);
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimeSwitchRelease");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeScene("Start", 10'000) }, { 0x1012, MakeScene("Next", 1) } }, UUID(0x1010));
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		REQUIRE(game->WaitForStart());
+		const SceneDestructionWatch start(*game->GetScene());
+		game->GetScene()->RequestSceneLoad(UUID(0x1012));
+
+		// Frames as the application runs them, between the profiler's frame markers.
+		FrameProfiler& profiler = FrameProfiler::Get();
+		profiler.Reset();
+		const FrameStageID load = profiler.FindStage("Scene.Load");
+		REQUIRE(load != c_InvalidFrameStage);
+		float loadMs = 0.0f;
+		UpdateUntil(*game, [&]()
+		{
+			if (profiler.IsInFrame())
+			{
+				profiler.EndFrame(0.0);
+				loadMs += profiler.GetFrame(0).StageMs[load];
+			}
+			if (game->GetSceneHandle() == UUID(0x1012))
+				return true;
+			profiler.BeginFrame();
+			return false;
+		});
+		profiler.Reset();
+		CHECK(game->GetScene()->IsRunning());
+		CHECK(loadMs > 0.0f);
+		CHECK(start.WaitForDestruction() == SceneDestructionWatch::Place::BackgroundThread);
 	}
 }

@@ -2,6 +2,7 @@
 #include "Strata/Scene/Scene.h"
 
 #include "Strata/Core/JobSystem.h"
+#include "Strata/Core/Profiling.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/EntityPrototype.h"
 #include "Strata/Scene/SceneLoader.h"
@@ -161,6 +162,7 @@ namespace Strata
 		if (!HasPendingSubScenes())
 			return;
 		ST_PROFILE_FUNCTION();
+		ST_PROFILE_STAGE("Scene.Load");
 
 		const auto deadline = std::chrono::steady_clock::now()
 			+ std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double, std::milli>(c_MaxInstantiationMillisecondsPerFrame));

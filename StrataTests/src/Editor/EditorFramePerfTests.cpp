@@ -130,26 +130,27 @@ TEST_SUITE("PerfGPU.Editor")
 		// Once the editor's first frames are drawn (they create its renderers), each scene is opened (scene.open reports the
 		// frames that ran while it loaded), edited for 120 frames, then played for 120 frames. After the million entities are
 		// in, editor.status reports the editor's memory; the frame that starts playing them (copying the scene) is the longest
-		// of the latest few frames editor.perf summarizes.
+		// of the latest few frames editor.perf summarizes. Last, the smaller scene is opened again over the million entities,
+		// which it replaces.
 		constexpr int c_PlayStartFrames = 8;
 		const nlohmann::json script = nlohmann::json::array({ Wait(),
 			OpenScene("Scenes/Nested100k.stscene"), Wait(), Command("play.start"), Wait(), Command("play.stop"),
 			OpenScene("Scenes/Nested1M.stscene"), Wait(), Command("editor.status"), Command("play.start"), Wait(c_PlayStartFrames / 2),
-			Command("editor.perf", { { "frames", c_PlayStartFrames } }), Wait(), Command("play.stop") });
+			Command("editor.perf", { { "frames", c_PlayStartFrames } }), Wait(), Command("play.stop"), OpenScene("Scenes/Nested100k.stscene") });
 		const std::filesystem::path scriptFile = directory / "Commands.json";
 		REQUIRE(FileSystem::WriteText(scriptFile, script.dump(1, '\t') + "\n"));
 
 		// One editor run measures every metric; a metric over its budget is confirmed by another run. The frames of editing and
 		// playing are medians of a wait's frames (which ignore the frames the machine's other work slowed down). Opening a
-		// scene and starting to play are maxima by nature: the longest frame while the scene loads (the frame that swaps it in
-		// included) and the frame that starts playing, the hitches these loads must not cause. The working set is the
-		// editor's memory once the million entities are open, a level that stays.
+		// scene and starting to play are maxima by nature: the longest frame while the scene loads (the frame that swaps it in,
+		// and lets go of the scene it replaces, included) and the frame that starts playing, the hitches these loads must not
+		// cause. The working set is the editor's memory once the million entities are open, a level that stays.
 		const std::vector<std::string> frameMetrics = {
 			"PerfGPU.Editor.EditFrameNested100k", "PerfGPU.Editor.PlayFrameNested100k",
 			"PerfGPU.Editor.EditFrameNested1M", "PerfGPU.Editor.PlayFrameNested1M" };
 		std::vector<std::string> metrics = frameMetrics;
 		metrics.insert(metrics.end(), { "PerfGPU.Editor.SceneOpen100kMaxFrame", "PerfGPU.Editor.SceneOpen1MMaxFrame", "PerfGPU.Editor.SceneOpen1MWorkingSet",
-			"PerfGPU.Editor.PlayStart1MMaxFrame" });
+			"PerfGPU.Editor.PlayStart1MMaxFrame", "PerfGPU.Editor.SceneOpenOver1MMaxFrame" });
 		Perf::CheckBudgetsConfirmed(metrics, [&]
 		{
 			// Maximized (the default): the frames draw the editor at the size people use it. --frames keeps the run from
@@ -195,13 +196,15 @@ TEST_SUITE("PerfGPU.Editor")
 
 			// scene.open answers once the scene is in, with the frames that ran meanwhile.
 			const std::vector<nlohmann::json> opens = FindCommandResults(run.Output, "scene.open");
-			REQUIRE(opens.size() == 2);
+			REQUIRE(opens.size() == 3);
 			CHECK(GetNumber(opens[0], "/entities") == 100'000 + 2);
 			CHECK(GetNumber(opens[1], "/entities") == 1'000'000 + 2);
+			CHECK(GetNumber(opens[2], "/entities") == 100'000 + 2);
 			MESSAGE("Opening 100,000 entities: ", GetNumber(opens[0], "/seconds"), " s over ", GetNumber(opens[0], "/frames"), " frames; 1,000,000: ",
 				GetNumber(opens[1], "/seconds"), " s over ", GetNumber(opens[1], "/frames"), " frames");
 			values["PerfGPU.Editor.SceneOpen100kMaxFrame"] = GetNumber(opens[0], "/frameTimes/maxMs");
 			values["PerfGPU.Editor.SceneOpen1MMaxFrame"] = GetNumber(opens[1], "/frameTimes/maxMs");
+			values["PerfGPU.Editor.SceneOpenOver1MMaxFrame"] = GetNumber(opens[2], "/frameTimes/maxMs");
 			const std::vector<nlohmann::json> statuses = FindCommandResults(run.Output, "editor.status");
 			REQUIRE(statuses.size() == 1);
 			values["PerfGPU.Editor.SceneOpen1MWorkingSet"] = GetNumber(statuses[0], "/memory/workingSetMB");

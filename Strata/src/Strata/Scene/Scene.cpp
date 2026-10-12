@@ -100,6 +100,21 @@ namespace Strata
 		m_Connections.clear();
 	}
 
+	void Scene::ReleaseInBackground(Ref<Scene> scene)
+	{
+		if (!scene)
+			return;
+		ST_CORE_ASSERT(!scene->m_IsUpdating, "Scene '{}' is released while it updates", scene->m_Name);
+		scene->OnRuntimeStop();
+		// Sub-scene loads hold asset requests (main thread only); a compilation still running finishes into its own result.
+		scene->m_SubScenes.clear();
+		scene->m_DeferredSubSceneUnloads.clear();
+		// What is left are storages and caches nothing else reaches: component values hold no engine objects, and the registry
+		// signals nothing while it is destroyed (its render scene, in the registry's context, is plain data). Whoever lets go
+		// last destroys it: the job, unless someone else still holds the scene.
+		JobSystem::Submit([scene = std::move(scene)]() mutable { scene.reset(); }, JobPriority::Background);
+	}
+
 	void Scene::ConnectSignals()
 	{
 		m_Connections.emplace_back(m_Registry.on_construct<TransformComponent>().connect<&Scene::OnTransformChanged>(*this));

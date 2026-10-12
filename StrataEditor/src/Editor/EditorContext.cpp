@@ -11,12 +11,14 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Core/Profiling.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/SceneLoader.h>
 #include <Strata/Scene/SceneSerializer.h>
 
 #include <algorithm>
+#include <utility>
 
 namespace Strata
 {
@@ -281,10 +283,12 @@ namespace Strata
 		// The scene that goes keeps its view for when it opens again.
 		m_Viewport.StoreSceneCamera(m_SceneHandle);
 		m_PendingFrame.reset();
-		m_EditScene = std::move(scene);
+		Ref<Scene> previous = std::exchange(m_EditScene, std::move(scene));
 		m_SceneHandle = handle;
 		ClearSelection();
 		m_UndoStack.Clear();
+		// The scene that goes is destroyed off the frame (a million entities take tens of milliseconds).
+		Scene::ReleaseInBackground(std::move(previous));
 	}
 
 	bool EditorContext::NewScene(const std::string& name, std::string_view templateId)
@@ -424,6 +428,7 @@ namespace Strata
 	{
 		if (!m_SceneLoad)
 			return;
+		ST_PROFILE_STAGE("Scene.Load");
 		SceneLoadRequest& request = m_SceneLoad->Request;
 		request.Update();
 		m_SceneLoadStatus.State = request.GetState();
@@ -609,8 +614,8 @@ namespace Strata
 			m_RuntimeSceneLoad->Request.Cancel();
 			m_RuntimeSceneLoad.reset();
 		}
-		m_RuntimeScene->OnRuntimeStop();
-		m_RuntimeScene.reset();
+		// Stopped here and destroyed off the frame, like a replaced scene (ReplaceRuntimeScene).
+		Scene::ReleaseInBackground(std::move(m_RuntimeScene));
 		m_RuntimeSceneAsset = UUID::Null();
 		m_SceneState = SceneState::Edit;
 		// A game's volume setting belongs to the game session, not to the editor.
@@ -656,6 +661,7 @@ namespace Strata
 				m_RuntimeSceneLoad.reset();
 				m_RuntimeScene->SetSceneLoadProgress(std::nullopt);
 			}
+			ST_PROFILE_STAGE("Scene.Load");
 			ReplaceRuntimeScene(Scene::Copy(m_EditScene), UUID::Null(), {});
 			return true;
 		}
@@ -677,6 +683,7 @@ namespace Strata
 	{
 		if (!m_RuntimeSceneLoad || !m_RuntimeScene)
 			return;
+		ST_PROFILE_STAGE("Scene.Load");
 		SceneLoadRequest& request = m_RuntimeSceneLoad->Request;
 		request.Update();
 		m_RuntimeScene->SetSceneLoadProgress(request.GetProgress());
@@ -696,7 +703,8 @@ namespace Strata
 		const SceneRuntimeMode mode = m_RuntimeScene->GetRuntimeMode();
 		const bool paused = m_RuntimeScene->IsPaused();
 		const uint32_t steps = m_RuntimeScene->GetStepFrames();
-		m_RuntimeScene->OnRuntimeStop();
+		// The scene that goes stops here and is destroyed off the frame (a million entities take tens of milliseconds).
+		Scene::ReleaseInBackground(std::move(m_RuntimeScene));
 		m_RuntimeScene = std::move(next);
 		m_RuntimeSceneAsset = asset;
 		m_RuntimeScene->SetTimeDilation(m_Specification.TimeDilation);

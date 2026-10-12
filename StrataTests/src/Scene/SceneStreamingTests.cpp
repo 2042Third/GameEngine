@@ -7,6 +7,7 @@
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Audio/AudioSystem.h"
+#include "Strata/Core/FrameProfiler.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Scene/Components.h"
@@ -18,6 +19,7 @@
 
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -422,6 +424,63 @@ TEST_SUITE("Scene.Streaming")
 		CHECK(scene.GetEntityCount() == 1);
 		CHECK(scene.GetRootEntities() == std::vector<UUID> { resident.GetUUID() });
 		CheckSceneCaches(scene);
+	}
+
+	TEST_CASE("Sub-scene slices are timed in the frame's Scene.Load stage")
+	{
+		ScopedJobSystem jobs(2, 1);
+		Scene scene("Running");
+		const SubSceneID id = scene.BeginAdditiveLoad(MakeNestedScene(20'000));
+		FrameProfiler& profiler = FrameProfiler::Get();
+		profiler.Reset();
+		const FrameStageID load = profiler.FindStage("Scene.Load");
+		REQUIRE(load != c_InvalidFrameStage);
+		float loadMs = 0.0f;
+		UpdateUntilSettled(scene, id, [&]()
+		{
+			// Each update is a frame, between the profiler's frame markers.
+			if (profiler.IsInFrame())
+			{
+				profiler.EndFrame(0.0);
+				loadMs += profiler.GetFrame(0).StageMs[load];
+			}
+			profiler.BeginFrame();
+		});
+		profiler.EndFrame(0.0);
+		loadMs += profiler.GetFrame(0).StageMs[load];
+		profiler.Reset();
+		CHECK(scene.IsSubSceneLoaded(id));
+		CHECK(loadMs > 0.0f);
+	}
+
+	TEST_CASE("A scene released in the background stops at once and is destroyed on a background thread")
+	{
+		SceneLoaderFixture fixture;
+		FakeAssetManager& manager = *fixture.Manager;
+		const uint32_t running = Scene::GetRunningSceneCount();
+		Ref<Scene> scene = CreateRef<Scene>("Replaced");
+		Perf::CreateNestedHierarchy(*scene, 10'000);
+		scene->OnRuntimeStart();
+		// A sub-scene is still loading (its reads wait at the gate): its asset requests are the scene's.
+		manager.CloseGate();
+		const SubSceneID loading = scene->LoadSubScene(fixture.SceneHandle);
+		REQUIRE(loading != 0);
+		CHECK(manager.GetPinCount(fixture.SceneHandle) == 1);
+		CHECK(Scene::GetRunningSceneCount() == running + 1);
+
+		const SceneDestructionWatch watch(*scene);
+		const std::weak_ptr<Scene> weak = scene;
+		Scene::ReleaseInBackground(std::move(scene));
+		// What belongs to the main thread ended in the call: the scene stopped, and the sub-scene's requests went.
+		CHECK(Scene::GetRunningSceneCount() == running);
+		CHECK(manager.GetPinCount(fixture.SceneHandle) == 0);
+		CHECK(manager.GetStats().PinnedAssets == 0);
+		// The entities went on a background thread.
+		CHECK(watch.WaitForDestruction() == SceneDestructionWatch::Place::BackgroundThread);
+		CHECK(weak.expired());
+		manager.OpenGate();
+		REQUIRE(manager.WaitForPendingLoads());
+		CHECK(StateCountsMatch(manager));
 	}
 
 	TEST_CASE("Cancelling a sub-scene mid-load leaves the scene unchanged and releases every pin")
