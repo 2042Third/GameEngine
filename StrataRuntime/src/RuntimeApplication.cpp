@@ -27,6 +27,7 @@ namespace Strata
 		std::optional<uint64_t> MaxFrames;
 		std::optional<uint64_t> TextureBudget; // --asset-budget-mb: the GPU texture budget of the game's assets, in bytes
 		std::filesystem::path PerfLogPath;     // --perf-log: a CSV row per frame (FramePerfLog)
+		std::filesystem::path SaveDirectory;   // --save-directory: where the game keeps its save files (empty: the player's data)
 	};
 
 	// Runs the game of a manifest and, with a window, renders it every frame. Startup failures end the process with exit
@@ -45,6 +46,7 @@ namespace Strata
 			GameRuntimeOptions runtimeOptions;
 			// A game runs on the wall clock; runs of a fixed number of frames (--frames: checks, screenshots) keep every step.
 			runtimeOptions.TimeDilation = !m_Options.MaxFrames;
+			runtimeOptions.SaveFilesDirectory = m_Options.SaveDirectory;
 			if (m_Options.TextureBudget)
 			{
 				runtimeOptions.AssetBudgets = AssetManagerBase::GetDefaultResidencyBudgets();
@@ -287,6 +289,18 @@ namespace Strata
 				return nullptr;
 			}
 			options.PerfLogPath = FileSystem::FromUTF8(*perfLog);
+		}
+		if (commandLine.HasFlag("--save-directory") || commandLine.GetOption("--save-directory"))
+		{
+			// Saves somewhere else than the player's data directory: tests and tools that must not touch it.
+			const std::optional<std::string> saves = commandLine.GetOption("--save-directory");
+			if (!saves || saves->empty())
+			{
+				ST_CRITICAL("--save-directory needs the folder to keep the game's save files in");
+				return nullptr;
+			}
+			options.SaveDirectory = FileSystem::FromUTF8(*saves);
+			ST_INFO("Keeping the game's save files in {}", FileSystem::ToUTF8(options.SaveDirectory));
 		}
 		return new RuntimeApplication(specification, std::move(options));
 	}

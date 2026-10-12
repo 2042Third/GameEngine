@@ -1,6 +1,6 @@
 ---
 name: strata-scripting
-description: How to write, build, attach, debug and ship Strata game scripts (C++ script classes in a game project's script module, built against the StrataScriptCore SDK) through the editor's script.* commands - the lifecycle, the whole gameplay API (entities, components, transforms, input, time, physics bodies, raycasts and contacts, audio, quitting and loading scenes, random numbers, timers, key repeat) and how to test it. Use when creating gameplay logic or whole games for a project, adding script classes or fields, spawning prefabs from scripts, iterating with hot reload, diagnosing script build errors or crashes, or exporting a scripted game.
+description: How to write, build, attach, debug and ship Strata game scripts (C++ script classes in a game project's script module, built against the StrataScriptCore SDK) through the editor's script.* commands - the lifecycle, the whole gameplay API (entities, components, transforms, input with keyboard, mouse, gamepads and the cursor, time, physics bodies, raycasts, contacts and collision layers, character controllers, audio, quitting and loading scenes, the game window, save files, random numbers, timers, key repeat) and how to test it. Use when creating gameplay logic or whole games for a project, adding script classes or fields, spawning prefabs from scripts, iterating with hot reload, diagnosing script build errors or crashes, or exporting a scripted game.
 ---
 
 # Writing Strata game scripts

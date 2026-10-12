@@ -1609,10 +1609,11 @@ shows, so a game that does lists them in `Export.AlwaysInclude` (`project.setExp
 `StrataRuntime` (`StrataRuntime/src/RuntimeApplication.cpp`) runs `--game <file>`, or the manifest found next to the
 executable (`GameManifest::FindForExecutable`). It logs to `<user data>/<Game>/Logs/Game.log` and keeps the game's save
 files in `<user data>/<Game>/Saves` (`<Game>` is the manifest's name made a safe directory name,
-`SaveFiles::MakeGameDirectoryName`). What the game asks of its window (`Game::SetWindowMode`, `SetResolution`, `SetVSync`)
-applies after the frame (`GameWindowService`; the swapchain follows at the next frame); what the window already is changes
-nothing and is not logged (a resolution asked for again applies again only when the window was resized since), so a game
-may apply its options every frame; a headless run accepts the requests and reports them back. `--headless` disables
+`SaveFiles::MakeGameDirectoryName`; `--save-directory <dir>` puts them elsewhere, as the CTests do). What the game asks
+of its window (`Game::SetWindowMode`, `SetResolution`, `SetVSync`) applies after the frame (`GameWindowService`; the
+swapchain follows at the next frame); what the window already is changes nothing and is not logged (a resolution asked for
+again applies again only when the window was resized since), so a game may apply its options every frame; a headless run
+accepts the requests and reports them back. `--headless` disables
 the window and the renderer and paces at 60 frames per second; `--windowed` overrides a fullscreen manifest,
 `--resolution <width>x<height>` opens a window of exactly that many pixels whatever the display's scale (the manifest's
 window size is in screen coordinates, which the display's scale multiplies: 1280x720 is 1920x1080 pixels at 150%;
