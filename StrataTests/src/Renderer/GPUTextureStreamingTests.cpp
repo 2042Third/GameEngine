@@ -50,8 +50,8 @@ namespace
 		return scene;
 	}
 
-	// The camera looking at the quad from `distance` on its axis: the quad's bounding sphere (radius 0.707) is
-	// 0.707 * 256 / (distance * tan(30 degrees)) pixels tall.
+	// The camera looking at the quad from `distance` on its axis: the quad (one texture across a unit) is
+	// 256 / (2 * distance * tan(30 degrees)) pixels tall.
 	SceneCamera CameraAt(float distance)
 	{
 		return LookAt(glm::vec3(0.0f, 0.0f, distance), glm::vec3(0.0f));
@@ -99,8 +99,9 @@ TEST_SUITE("GPU.TextureStreaming")
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		const std::filesystem::path pack = WriteGradientStreamingPack();
-		const float c_SmallDistance = 5.6f; // 56 pixels: level 5 (64x64) is what a 2048x2048 texture needs there
-		const float c_FillDistance = 0.15f; // Beyond the view's 256 pixels: 2.2 times the texture's 2048 texels
+		// The quad spans 40 pixels: level 5 (64x64) is what a 2048x2048 texture needs there (51 texels a pixel).
+		const float c_SmallDistance = 5.6f;
+		const float c_FillDistance = 0.15f; // Beyond the view's 256 pixels: 1478 pixels for the texture's 2048 texels
 
 		for (const bool transfer : GetQueueModes(gpu))
 		{
@@ -150,7 +151,7 @@ TEST_SUITE("GPU.TextureStreaming")
 				return stats.Detail.Reads == 0 && stats.Detail.Changes == 0;
 			};
 
-			// Drawn at 56 pixels: the first load holds the resident tail (32x32 and below, level 6), and the streamer raises
+			// Drawn at 40 pixels: the first load holds the resident tail (32x32 and below, level 6), and the streamer raises
 			// it to level 5, not further. From its arrival on the quad never shows the loading fallback. A loading screen's
 			// group load counts the texture as loaded as soon as its tail is resident (its finer levels stream as views need
 			// them).

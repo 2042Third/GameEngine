@@ -1550,15 +1550,11 @@ namespace Strata
 
 	void SceneRenderer::ReportTextureUse(const SceneCamera& camera)
 	{
-		// A view that moved this far or turned this much since the previous frame jumped: what it needs now goes first.
-		constexpr float c_CameraCutDistance = 10.0f;
-		constexpr float c_CameraCutCosine = 0.7071f; // 45 degrees
-
+		// A view that jumped since the previous frame: what it needs now goes first.
 		const glm::vec3 forward = -glm::vec3(camera.View[0][2], camera.View[1][2], camera.View[2][2]);
 		const float forwardLength = glm::length(forward);
 		const glm::vec3 direction = forwardLength > 0.0f ? forward / forwardLength : glm::vec3(0.0f, 0.0f, -1.0f);
-		const bool cut = m_HasPreviousCamera && (glm::distance(camera.Position, m_PreviousCameraPosition) > c_CameraCutDistance
-			|| glm::dot(direction, m_PreviousCameraForward) < c_CameraCutCosine);
+		const bool cut = m_HasPreviousCamera && TextureStreamingPolicy::IsCameraCut(m_PreviousCameraPosition, m_PreviousCameraForward, camera.Position, direction);
 		m_HasPreviousCamera = true;
 		m_PreviousCameraPosition = camera.Position;
 		m_PreviousCameraForward = direction;

@@ -101,6 +101,9 @@ namespace Strata
 		AssetHandle Material = UUID::Null();
 		float PixelSize = 0.0f;  // Largest projected size (bounding sphere diameter, in pixels of viewport height) drawn with it
 		float MaxUVScale = 1.0f; // Its largest texture coordinate tiling (MaterialProperties::UVTiling)
+		// The most pixels one unit of the meshes' texture coordinates spans where it is drawn, at the surfaces' points nearest
+		// the camera (TextureStreamingPolicy::GetWorldPixels, GetUVPixels): what its textures' mip levels follow.
+		float UVPixels = 0.0f;
 	};
 
 	// An entity tinted over the finished image (SceneRenderOptions::EntityTints).
@@ -373,6 +376,15 @@ namespace Strata
 			float Radius = 0.0f;
 		};
 
+		// How large a material slot's draws are on screen (VisibleMaterialUse): the largest projected size, and the most
+		// pixels a unit of texture coordinates spans.
+		struct MaterialScreenUse
+		{
+			uint32_t Slot = 0;
+			float PixelSize = 0.0f;
+			float UVPixels = 0.0f;
+		};
+
 		// What one chunk of the parallel extraction produced; chunks are merged in order, so the result does not depend on
 		// how they were spread over threads.
 		struct ExtractionChunk
@@ -381,7 +393,7 @@ namespace Strata
 			std::vector<TransparentDraw> Transparent;
 			std::vector<std::pair<uint32_t, uint32_t>> MeshMarks;      // (mesh slot, usage bits), runs merged
 			std::vector<std::pair<uint32_t, uint32_t>> MaterialMarks;  // (material slot, usage bits), runs merged
-			std::vector<std::pair<uint32_t, float>> MaterialPixelSizes; // (material slot, largest pixel size), runs merged
+			std::vector<MaterialScreenUse> MaterialScreenUses;         // Runs of a material slot merged
 			std::array<uint32_t, SceneRendererStats::c_LODStatCount> InstancesPerLOD = {};
 			std::array<float, RenderData::c_MaxCascades> CasterNearZ = {};
 			uint32_t Skipped = 0; // Submeshes beyond what a sort key can address
@@ -682,7 +694,8 @@ namespace Strata
 		std::vector<RenderData::MaterialData> m_MaterialData; // What the material buffer holds, by slot
 		std::vector<uint8_t> m_MaterialUploaded;    // Per material slot: the buffer holds its m_MaterialData
 		std::vector<uint32_t> m_DirtyMaterialSlots;
-		std::vector<float> m_MaterialPixelSizes;
+		std::vector<float> m_MaterialPixelSizes;    // Per material slot: the frame's VisibleMaterialUse::PixelSize
+		std::vector<float> m_MaterialUVPixels;      // Per material slot: the frame's VisibleMaterialUse::UVPixels
 		std::vector<float> m_MaterialUVScales;
 		std::vector<VisibleMaterialUse> m_VisibleMaterials;
 		std::optional<RenderData::MaterialData> m_DefaultMaterialData; // The default material, resolved once per frame

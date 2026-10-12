@@ -1,8 +1,13 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Asset/AssetStreamingQueue.h"
+#include "Strata/Math/AABB.h"
+#include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Renderer/TextureStreamer.h"
 
+#include <glm/glm.hpp>
+
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <vector>
@@ -36,13 +41,75 @@ TEST_SUITE("Renderer.TextureStreamer")
 		CHECK(TextureStreamingPolicy::ComputeWantedLevel(2048, 12, 1.0f, std::numeric_limits<float>::quiet_NaN()) == 11);
 		CHECK(TextureStreamingPolicy::ComputeWantedLevel(2048, 4, 1.0f, 2.0f) == 3);
 		CHECK(TextureStreamingPolicy::ComputeWantedLevel(2048, 12, 0.0f, 64.0f) == 0);
-		// The bias moves every result, within the levels.
-		CHECK(TextureStreamingPolicy::ComputeWantedLevel(2048, 12, 1.0f, 64.0f, 1) == 6);
-		CHECK(TextureStreamingPolicy::ComputeWantedLevel(2048, 12, 1.0f, 64.0f, -2) == 3);
-		CHECK(TextureStreamingPolicy::ComputeWantedLevel(2048, 12, 1.0f, 2048.0f, -1) == 0);
-		CHECK(TextureStreamingPolicy::ComputeWantedLevel(2048, 12, 1.0f, 1.0f, 3) == 11);
+		// Coordinates that do not change over a surface (GetUVPixels: the largest float) sample level 0.
+		CHECK(TextureStreamingPolicy::ComputeWantedLevel(2048, 12, 1.0f, std::numeric_limits<float>::max()) == 0);
 		// Non-square textures use their larger side.
 		CHECK(TextureStreamingPolicy::ComputeWantedLevel(4096, 13, 1.0f, 256.0f) == 4);
+	}
+
+	TEST_CASE("A world unit spans the most pixels at the bounds' point nearest the camera")
+	{
+		SceneCamera camera;
+		camera.Position = glm::vec3(0.0f, 1.5f, 40.0f);
+		camera.VerticalFOV = glm::radians(60.0f);
+		camera.Near = 0.1f;
+		const TextureStreamingPolicy::ViewScale view = TextureStreamingPolicy::GetViewScale(camera, 1080.0f);
+		CHECK(view.UnitPixels == doctest::Approx(1080.0f / (2.0f * std::tan(glm::radians(30.0f)))));
+
+		// A floor of 100 x 100 units 1.5 units below the camera (its center 40 units away): at its nearest point.
+		const AABB ground(glm::vec3(-50.0f, 0.0f, -50.0f), glm::vec3(50.0f, 0.0f, 50.0f));
+		CHECK(TextureStreamingPolicy::GetWorldPixels(view, ground) == doctest::Approx(view.UnitPixels / 1.5f));
+		// Beyond its end, along the axis; inside the bounds, at the near plane.
+		camera.Position = glm::vec3(0.0f, 0.0f, 150.0f);
+		CHECK(TextureStreamingPolicy::GetWorldPixels(TextureStreamingPolicy::GetViewScale(camera, 1080.0f), ground) == doctest::Approx(view.UnitPixels / 100.0f));
+		camera.Position = glm::vec3(0.0f);
+		CHECK(TextureStreamingPolicy::GetWorldPixels(TextureStreamingPolicy::GetViewScale(camera, 1080.0f), ground) == doctest::Approx(view.UnitPixels / 0.1f));
+		// An orthographic camera shows VerticalFOV units over the view's height, wherever things are.
+		camera.Orthographic = true;
+		camera.VerticalFOV = 10.0f;
+		const TextureStreamingPolicy::ViewScale orthographic = TextureStreamingPolicy::GetViewScale(camera, 1080.0f);
+		CHECK(TextureStreamingPolicy::GetWorldPixels(orthographic, ground) == doctest::Approx(108.0f));
+
+		// The floor is the unit plane (one texture across it, facing +Y) scaled 100 times and tiled 20 times by its material,
+		// with a 2048x2048 texture: under the camera 2048 * 20 texels cover 100 units, which 62352 pixels span there, so it
+		// needs level 0. Its bounding sphere seen from 40 units (the projected size of the old estimate, 4500 pixels) would
+		// have asked for level 3.
+		const float uvPixels = TextureStreamingPolicy::GetUVPixels(view.UnitPixels / 1.5f, glm::vec3(0.0f, 1.0f, 0.0f), glm::vec3(100.0f, 1.0f, 100.0f));
+		CHECK(uvPixels == doctest::Approx(100.0f * view.UnitPixels / 1.5f));
+		CHECK(TextureStreamingPolicy::ComputeWantedLevel(2048, 12, 20.0f, uvPixels) == 0);
+		CHECK(TextureStreamingPolicy::ComputeWantedLevel(2048, 12, 20.0f, 4500.0f) == 3);
+	}
+
+	TEST_CASE("Texture coordinates per world unit follow the scales along the surfaces, the sparsest surfaces deciding")
+	{
+		// A unit cube's faces each span the texture once. Flattened into a slab of 100 x 1 x 100 units, its top and bottom
+		// spread the texture over 100 units each way, its sides over 100 units one way and 1 the other: the top and bottom
+		// show each texel largest, so they decide.
+		const glm::vec3 cube(1.0f);
+		const glm::vec3 slab(100.0f, 1.0f, 100.0f);
+		CHECK(TextureStreamingPolicy::GetUVPixels(50.0f, cube, glm::vec3(1.0f)) == doctest::Approx(50.0f));
+		CHECK(TextureStreamingPolicy::GetUVPixels(50.0f, cube, glm::vec3(2.0f)) == doctest::Approx(100.0f));
+		CHECK(TextureStreamingPolicy::GetUVPixels(50.0f, cube, slab) == doctest::Approx(5000.0f));
+		CHECK(TextureStreamingPolicy::GetUVPixels(50.0f, glm::vec3(0.0f, 1.0f, 0.0f), slab) == doctest::Approx(5000.0f));
+		CHECK(TextureStreamingPolicy::GetUVPixels(50.0f, glm::vec3(1.0f, 0.0f, 1.0f), slab) == doctest::Approx(500.0f)); // The sides alone
+		// No density (coordinates that do not change): level 0, like the GPU samples it. A scale of 0 stays finite.
+		CHECK(TextureStreamingPolicy::GetUVPixels(50.0f, glm::vec3(0.0f), glm::vec3(1.0f)) == std::numeric_limits<float>::max());
+		const float flattened = TextureStreamingPolicy::GetUVPixels(50.0f, cube, glm::vec3(1.0f, 0.0f, 1.0f));
+		CHECK(std::isfinite(flattened));
+		CHECK(flattened >= 0.0f);
+	}
+
+	TEST_CASE("A view that moved far or turned much since its previous frame jumped")
+	{
+		const glm::vec3 forward(0.0f, 0.0f, -1.0f);
+		const glm::vec3 start(0.0f);
+		CHECK_FALSE(TextureStreamingPolicy::IsCameraCut(start, forward, start, forward));
+		CHECK_FALSE(TextureStreamingPolicy::IsCameraCut(start, forward, glm::vec3(3.0f, 0.0f, -5.0f), forward));
+		const glm::vec3 turned30 = glm::normalize(glm::vec3(std::sin(glm::radians(30.0f)), 0.0f, -std::cos(glm::radians(30.0f))));
+		CHECK_FALSE(TextureStreamingPolicy::IsCameraCut(start, forward, start, turned30));
+		CHECK(TextureStreamingPolicy::IsCameraCut(start, forward, glm::vec3(0.0f, 0.0f, -TextureStreamingPolicy::c_CameraCutDistance - 0.5f), forward));
+		const glm::vec3 turned50 = glm::normalize(glm::vec3(std::sin(glm::radians(50.0f)), 0.0f, -std::cos(glm::radians(50.0f))));
+		CHECK(TextureStreamingPolicy::IsCameraCut(start, forward, start, turned50));
 	}
 
 	TEST_CASE("Needs of several uses and views combine into the finest level and the largest coverage")
@@ -149,6 +216,13 @@ TEST_SUITE("Renderer.TextureStreamer")
 		CHECK(both.Score > nearer.Score);
 		CHECK(both.Score > deeper.Score);
 		CHECK(both.Score == doctest::Approx(4.0f * 0.5f));
+		CHECK(both.Outranks(nearer));
+		CHECK_FALSE(nearer.Outranks(both));
+		CHECK_FALSE(both.Outranks(both));
+		// A camera cut's reads outrank every other, whatever their scores.
+		const TextureStreamingPolicy::Rank cut = TextureStreamingPolicy::RankRaise(1, 0.01f, true);
+		CHECK(cut.Outranks(both));
+		CHECK_FALSE(both.Outranks(cut));
 		// Coverage counts up to the whole view.
 		CHECK(TextureStreamingPolicy::RankRaise(2, 5.0f, false).Score == doctest::Approx(2.0f));
 		CHECK(TextureStreamingPolicy::RankRaise(2, std::numeric_limits<float>::infinity(), false).Score == 0.0f);

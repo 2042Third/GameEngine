@@ -4,11 +4,13 @@
 #include "Strata/Asset/AssetManagerExtension.h"
 #include "Strata/Asset/AssetResidency.h"
 #include "Strata/Core/Base.h"
+#include "Strata/Math/AABB.h"
+
+#include <glm/glm.hpp>
 
 #include <cstdint>
 #include <limits>
 #include <mutex>
-#include <optional>
 #include <span>
 #include <unordered_map>
 #include <vector>
@@ -18,6 +20,7 @@ namespace Strata
 
 	class AssetManagerBase;
 	class Texture;
+	struct SceneCamera;
 	struct VisibleMaterialUse;
 
 	// How a view wants the textures it drew (TextureStreamer::ReportView).
@@ -40,10 +43,32 @@ namespace Strata
 		// A texture nobody needed for this many frames is forgotten (its tail stays).
 		static constexpr uint32_t c_ForgetFrames = 2 * c_DropDelayFrames;
 
-		// The level a texture with `mipCount` levels of `size` texels (its larger side) needs where it is drawn `pixels` tall
-		// with its coordinates tiled `uvScale` times: floor(log2(size * uvScale / pixels)) + bias, clamped to the levels it
-		// has. A texture drawn as many pixels as it has texels, or more, needs level 0.
-		static uint32_t ComputeWantedLevel(uint32_t size, uint32_t mipCount, float uvScale, float pixels, int32_t bias = 0);
+		// The level a texture with `mipCount` levels of `size` texels (its larger side) needs where one unit of its
+		// coordinates spans `pixels` on screen with the coordinates tiled `uvScale` times (MaterialProperties::UVTiling):
+		// floor(log2(size * uvScale / pixels)), clamped to the levels it has. A texture drawn as many pixels as it has
+		// texels, or more, needs level 0; one drawn no larger than a pixel the coarsest.
+		static uint32_t ComputeWantedLevel(uint32_t size, uint32_t mipCount, float uvScale, float pixels);
+
+		// What a view's projection makes of distances: the pixels one world unit spans at distance 1 (perspective: the view's
+		// height over twice the tangent of half its vertical field of view) or anywhere (orthographic: over its height).
+		struct ViewScale
+		{
+			glm::vec3 Position = glm::vec3(0.0f);
+			float UnitPixels = 0.0f;
+			float Near = 0.0f;
+			bool Orthographic = false;
+		};
+		static ViewScale GetViewScale(const SceneCamera& camera, float viewportHeight);
+		// The pixels one world unit spans at the point of `bounds` nearest to the camera (at least the near plane away), on a
+		// surface facing it: the finest detail anything inside the bounds shows. A surface seen at a grazing angle spans as
+		// much across the view direction, which is what anisotropic filtering samples by.
+		static float GetWorldPixels(const ViewScale& view, const AABB& bounds);
+		// The pixels one unit of a submesh's texture coordinates spans where a world unit spans `worldPixels`, for the
+		// submesh's Submesh::UVDensity drawn with `axisScale` (the lengths of its world transform's axes: a surface facing X
+		// stretches with the scales along Y and Z): of the surfaces facing each axis, those with the fewest texture
+		// coordinates per world unit, which show each texel largest. Coordinates that do not change over the surfaces sample
+		// level 0 (no derivatives): the largest float.
+		static float GetUVPixels(float worldPixels, const glm::vec3& uvDensity, const glm::vec3& axisScale);
 
 		// The rank of a read that raises a texture `missingLevels` levels where it covers `coverage` of a view's height: Low
 		// priority (after the loads of whole assets) scored by missing levels times coverage, or Normal for a view that just
@@ -52,8 +77,20 @@ namespace Strata
 		{
 			AssetPriority Priority = AssetPriority::Low;
 			float Score = 0.0f;
+
+			// Served before `other` (a higher priority, or a higher score within the same priority).
+			bool Outranks(const Rank& other) const
+			{
+				return Priority != other.Priority ? static_cast<uint8_t>(Priority) < static_cast<uint8_t>(other.Priority) : Score > other.Score;
+			}
 		};
 		static Rank RankRaise(uint32_t missingLevels, float coverage, bool cameraCut);
+
+		// A view jumped between two frames (TextureStreamingView::CameraCut): it moved more than c_CameraCutDistance world
+		// units or turned more than 45 degrees (`previousForward` and `forward` are unit vectors).
+		static constexpr float c_CameraCutDistance = 10.0f;
+		static constexpr float c_CameraCutCosine = 0.7071f;
+		static bool IsCameraCut(const glm::vec3& previousPosition, const glm::vec3& previousForward, const glm::vec3& position, const glm::vec3& forward);
 
 		// Records what a use of a texture in a view needs this frame: of several uses and views, the finest level, the largest
 		// coverage, whether any view jumped, and whether any needs it whole (a view without streaming, which waits for every

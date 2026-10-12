@@ -13,23 +13,71 @@
 namespace Strata
 {
 
+	namespace
+	{
+
+		// Products of two axis scales below this (squared world units per unit of the mesh) count as this: a surface scaled
+		// to nothing shows nothing, and its density must stay finite.
+		constexpr float c_MinScaleProduct = 1e-12f;
+
+	}
+
 	////////////////////////////////////////////////////////////////////////////////
 	// TextureStreamingPolicy
 	////////////////////////////////////////////////////////////////////////////////
 
-	uint32_t TextureStreamingPolicy::ComputeWantedLevel(uint32_t size, uint32_t mipCount, float uvScale, float pixels, int32_t bias)
+	uint32_t TextureStreamingPolicy::ComputeWantedLevel(uint32_t size, uint32_t mipCount, float uvScale, float pixels)
 	{
 		if (mipCount == 0)
 			return 0;
-		const int32_t coarsest = static_cast<int32_t>(mipCount) - 1;
+		const uint32_t coarsest = mipCount - 1;
 		const float texels = static_cast<float>(size) * std::max(std::isfinite(uvScale) ? uvScale : 1.0f, 0.0f);
 		// Drawn no larger than a pixel (or not at all): the coarsest level is all it shows.
 		if (!(pixels > 1.0f) || !std::isfinite(pixels))
-			return static_cast<uint32_t>(std::clamp(coarsest + bias, 0, coarsest));
+			return coarsest;
 		if (!(texels > pixels))
-			return static_cast<uint32_t>(std::clamp(bias, 0, coarsest));
-		const int32_t level = static_cast<int32_t>(std::floor(std::log2(texels / pixels)));
-		return static_cast<uint32_t>(std::clamp(level + bias, 0, coarsest));
+			return 0;
+		const float level = std::floor(std::log2(texels / pixels));
+		return static_cast<uint32_t>(std::min(level, static_cast<float>(coarsest)));
+	}
+
+	TextureStreamingPolicy::ViewScale TextureStreamingPolicy::GetViewScale(const SceneCamera& camera, float viewportHeight)
+	{
+		ViewScale view;
+		view.Position = camera.Position;
+		view.Orthographic = camera.Orthographic;
+		view.Near = std::max(camera.Near, 1e-4f);
+		// Like LODSelection::GetScreenFraction: an orthographic camera's VerticalFOV is the height it shows.
+		if (camera.Orthographic)
+			view.UnitPixels = viewportHeight / std::max(camera.VerticalFOV, 1e-4f);
+		else
+			view.UnitPixels = viewportHeight / (2.0f * std::tan(std::max(camera.VerticalFOV, 1e-3f) * 0.5f));
+		return view;
+	}
+
+	float TextureStreamingPolicy::GetWorldPixels(const ViewScale& view, const AABB& bounds)
+	{
+		if (view.Orthographic)
+			return view.UnitPixels;
+		const glm::vec3 outside = glm::max(glm::abs(view.Position - bounds.GetCenter()) - bounds.GetExtents(), glm::vec3(0.0f));
+		return view.UnitPixels / std::max(glm::length(outside), view.Near);
+	}
+
+	float TextureStreamingPolicy::GetUVPixels(float worldPixels, const glm::vec3& uvDensity, const glm::vec3& axisScale)
+	{
+		// Texture coordinate units per world unit of the surfaces facing each axis: theirs per unit of the mesh, over the
+		// geometric mean of the scales along the two axes they span. The sparsest surfaces decide: they spread each texel over
+		// the most pixels, so they need the finest level.
+		const glm::vec3 spanned(axisScale.y * axisScale.z, axisScale.x * axisScale.z, axisScale.x * axisScale.y);
+		float density = std::numeric_limits<float>::infinity();
+		for (glm::length_t axis = 0; axis < 3; axis++)
+		{
+			if (uvDensity[axis] > 0.0f)
+				density = std::min(density, uvDensity[axis] / std::sqrt(std::max(std::abs(spanned[axis]), c_MinScaleProduct)));
+		}
+		if (!(density > 0.0f) || !std::isfinite(density))
+			return std::numeric_limits<float>::max();
+		return worldPixels / density;
 	}
 
 	TextureStreamingPolicy::Rank TextureStreamingPolicy::RankRaise(uint32_t missingLevels, float coverage, bool cameraCut)
@@ -38,6 +86,11 @@ namespace Strata
 		rank.Priority = cameraCut ? AssetPriority::Normal : AssetPriority::Low;
 		rank.Score = static_cast<float>(missingLevels) * std::clamp(std::isfinite(coverage) ? coverage : 0.0f, 0.0f, 1.0f);
 		return rank;
+	}
+
+	bool TextureStreamingPolicy::IsCameraCut(const glm::vec3& previousPosition, const glm::vec3& previousForward, const glm::vec3& position, const glm::vec3& forward)
+	{
+		return glm::distance(position, previousPosition) > c_CameraCutDistance || glm::dot(forward, previousForward) < c_CameraCutCosine;
 	}
 
 	void TextureStreamingPolicy::AddNeed(AssetHandle texture, uint32_t level, float coverage, bool cameraCut, bool whole)
@@ -156,8 +209,7 @@ namespace Strata
 				if (!texture)
 					continue; // Its load is the renderer's request
 				const uint32_t size = std::max(texture->GetWidth(), texture->GetHeight());
-				const uint32_t level = view.Streaming ? TextureStreamingPolicy::ComputeWantedLevel(size, texture->GetMipCount(), use.MaxUVScale, use.PixelSize, m_LevelBias)
-					: 0;
+				const uint32_t level = view.Streaming ? TextureStreamingPolicy::ComputeWantedLevel(size, texture->GetMipCount(), use.MaxUVScale, use.UVPixels) : 0;
 				m_Policy.AddNeed(handle, level, use.PixelSize / viewportHeight, view.CameraCut, !view.Streaming);
 			}
 		}

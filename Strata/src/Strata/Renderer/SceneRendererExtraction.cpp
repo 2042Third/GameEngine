@@ -9,6 +9,7 @@
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/Texture.h"
+#include "Strata/Renderer/TextureStreamer.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -103,12 +104,27 @@ namespace Strata
 				marks.emplace_back(slot, usage);
 		}
 
-		void AppendPixelSize(std::vector<std::pair<uint32_t, float>>& sizes, uint32_t slot, float size)
+		template<typename ScreenUse>
+		void AppendScreenUse(std::vector<ScreenUse>& uses, uint32_t slot, float pixelSize, float uvPixels)
 		{
-			if (!sizes.empty() && sizes.back().first == slot)
-				sizes.back().second = std::max(sizes.back().second, size);
+			if (!uses.empty() && uses.back().Slot == slot)
+			{
+				uses.back().PixelSize = std::max(uses.back().PixelSize, pixelSize);
+				uses.back().UVPixels = std::max(uses.back().UVPixels, uvPixels);
+			}
 			else
-				sizes.emplace_back(slot, size);
+			{
+				uses.push_back(ScreenUse { slot, pixelSize, uvPixels });
+			}
+		}
+
+		// The lengths of a world transform's axes (the columns of its 3x3 part, which the rows hold one component each of).
+		glm::vec3 GetAxisScale(const RenderData::AffineTransform& world)
+		{
+			const glm::vec3 x(world.Rows[0]);
+			const glm::vec3 y(world.Rows[1]);
+			const glm::vec3 z(world.Rows[2]);
+			return glm::sqrt(x * x + y * y + z * z);
 		}
 
 		// Runs function(chunk) for every chunk in [0, count) on the job system's workers and the calling thread.
@@ -147,6 +163,7 @@ namespace Strata
 			m_MaterialData.clear();
 			m_MaterialUploaded.clear();
 			m_MaterialPixelSizes.clear();
+			m_MaterialUVPixels.clear();
 			m_MaterialUVScales.clear();
 			m_ProxyStamps.clear();
 			m_CasterStamps.clear();
@@ -164,6 +181,7 @@ namespace Strata
 				m_MaterialUsage[slot] = 0;
 				m_MaterialFlags[slot] = 0;
 				m_MaterialPixelSizes[slot] = 0.0f;
+				m_MaterialUVPixels[slot] = 0.0f;
 			}
 		}
 		m_UsedMeshSlots.clear();
@@ -203,6 +221,7 @@ namespace Strata
 		m_MaterialData.resize(count, RenderData::MaterialData {});
 		m_MaterialUploaded.resize(count, 0);
 		m_MaterialPixelSizes.resize(count, 0.0f);
+		m_MaterialUVPixels.resize(count, 0.0f);
 		m_MaterialUVScales.resize(count, 1.0f);
 	}
 
@@ -587,12 +606,13 @@ namespace Strata
 		const std::span<const RenderData::InstanceData> instances = renderScene.GetInstances();
 		const float viewportHeight = static_cast<float>(m_ViewportSize.y);
 		const bool batchAcrossMaterials = m_Specification.BatchAcrossMaterials;
+		const TextureStreamingPolicy::ViewScale viewScale = TextureStreamingPolicy::GetViewScale(camera, viewportHeight);
 		ForEachChunk(chunks, [&](uint32_t chunk)
 		{
 			ExtractionChunk& output = m_Chunks[chunk];
 			output.Draws.clear();
 			output.Transparent.clear();
-			output.MaterialPixelSizes.clear();
+			output.MaterialScreenUses.clear();
 			output.InstancesPerLOD = {};
 			output.Skipped = 0;
 			const uint32_t end = std::min(visible, (chunk + 1) * c_ExtractionChunkSize);
@@ -611,6 +631,9 @@ namespace Strata
 				const bool mirrored = (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Mirrored) != 0;
 				const uint32_t first = renderScene.GetFirstInstance(proxy);
 				const std::vector<Submesh>& submeshes = mesh->GetSubmeshes();
+				// How fine its textures show: the pixels a world unit spans where it is nearest, and its axes' scales.
+				const float worldPixels = TextureStreamingPolicy::GetWorldPixels(viewScale, bounds);
+				const glm::vec3 axisScale = GetAxisScale(instances[first].World);
 				for (uint32_t submeshIndex = 0; submeshIndex < count; submeshIndex++)
 				{
 					const uint32_t instance = first + submeshIndex;
@@ -625,7 +648,8 @@ namespace Strata
 						continue;
 					}
 					output.InstancesPerLOD[std::min<size_t>(lod, SceneRendererStats::c_LODStatCount - 1)]++;
-					AppendPixelSize(output.MaterialPixelSizes, materialSlot, fraction * viewportHeight);
+					AppendScreenUse(output.MaterialScreenUses, materialSlot, fraction * viewportHeight,
+						TextureStreamingPolicy::GetUVPixels(worldPixels, submeshes[submeshIndex].UVDensity, axisScale));
 					const bool doubleSided = (materialFlags & c_MaterialDoubleSided) != 0;
 					if ((materialFlags & c_MaterialTransparent) != 0)
 					{
@@ -647,8 +671,11 @@ namespace Strata
 			m_Transparent.insert(m_Transparent.end(), output.Transparent.begin(), output.Transparent.end());
 			for (size_t lod = 0; lod < output.InstancesPerLOD.size(); lod++)
 				m_Stats.InstancesPerLOD[lod] += output.InstancesPerLOD[lod];
-			for (const auto& [slot, size] : output.MaterialPixelSizes)
-				m_MaterialPixelSizes[slot] = std::max(m_MaterialPixelSizes[slot], size);
+			for (const MaterialScreenUse& use : output.MaterialScreenUses)
+			{
+				m_MaterialPixelSizes[use.Slot] = std::max(m_MaterialPixelSizes[use.Slot], use.PixelSize);
+				m_MaterialUVPixels[use.Slot] = std::max(m_MaterialUVPixels[use.Slot], use.UVPixels);
+			}
 			skipped += output.Skipped;
 		}
 		if (skipped > 0)
@@ -686,7 +713,7 @@ namespace Strata
 		for (const uint32_t slot : m_UsedMaterialSlots)
 		{
 			if (m_MaterialPixelSizes[slot] > 0.0f)
-				m_VisibleMaterials.push_back(VisibleMaterialUse { renderScene.GetMaterialHandle(slot), m_MaterialPixelSizes[slot], m_MaterialUVScales[slot] });
+				m_VisibleMaterials.push_back(VisibleMaterialUse { renderScene.GetMaterialHandle(slot), m_MaterialPixelSizes[slot], m_MaterialUVScales[slot], m_MaterialUVPixels[slot] });
 		}
 	}
 
