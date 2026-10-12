@@ -101,7 +101,7 @@ namespace Strata
 		notification.JournalEntry = result.JournalId;
 		if (!result.Success)
 		{
-			if (result.ErrorKind == EditorCommandError::Cancelled)
+			if (result.ErrorKind == EditorCommandError::Cancelled || result.Announced)
 				return;
 			notification.Level = NotificationLevel::Error;
 			notification.Title = fmt::format("{} failed", command);

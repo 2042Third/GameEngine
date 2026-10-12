@@ -26,6 +26,7 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -155,6 +156,27 @@ namespace
 		return ImVec2((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f);
 	}
 
+	// The titles of the toasts that show, top to bottom (their probes, UI/Notifications).
+	std::vector<std::string> GetToastTitles()
+	{
+		std::vector<std::string> titles;
+		for (size_t index = 0;; index++)
+		{
+			const std::optional<UI::ItemProbe::Item> title = UI::ItemProbe::Find(fmt::format("Toast.{}.Title", index));
+			if (!title)
+				return titles;
+			titles.push_back(title->Text);
+		}
+	}
+
+	// The probe key of the toast with this title ("Toast.<n>"), empty when none shows.
+	std::string FindToast(const std::string& title)
+	{
+		const std::vector<std::string> titles = GetToastTitles();
+		const auto found = std::find(titles.begin(), titles.end(), title);
+		return found == titles.end() ? std::string() : fmt::format("Toast.{}", found - titles.begin());
+	}
+
 }
 
 TEST_SUITE("Editor.UI.Scripts")
@@ -274,6 +296,11 @@ TEST_SUITE("Editor.UI.Scripts")
 		ProblemsPanel* problems = editor.Layer->GetPanels().Get<ProblemsPanel>(EditorPanels::c_Problems);
 		REQUIRE(problems);
 		CHECK(problems->GetSummary() == fmt::format("Build {} cancelled.", builder.GetLastResult().ID));
+		// Its toast says it was cancelled, in no error's color, and play.start's cancellation posts none of its own.
+		const std::vector<std::string> titles = GetToastTitles();
+		CHECK(std::count(titles.begin(), titles.end(), "Script build cancelled") == 1);
+		CHECK(std::count(titles.begin(), titles.end(), "Script build failed") == 0);
+		CHECK(std::count(titles.begin(), titles.end(), "play.start failed") == 0);
 		for (const LogEntry& entry : log.GetEntries())
 			CHECK_MESSAGE(entry.Level < LogLevel::Error, entry.Message);
 	}
@@ -354,6 +381,61 @@ TEST_SUITE("Editor.UI.Scripts")
 			CHECK(frameText->Min.x - frameIcon->Max.x == doctest::Approx(crashGap));
 		}
 #endif
+	}
+
+	TEST_CASE("A failed script build and a script crash each show one toast, whose Show Problems opens the Problems panel")
+	{
+		ScopedEnvironmentVariable fakeCMake("STRATA_TEST_FAKE_CMAKE", "fail");
+		HarnessEditor editor({}, WithFakeScriptBuild());
+		editor.Frames(1);
+		CreateProject(editor, "ToastProblems");
+		REQUIRE(FileSystem::WriteText(editor.Context().GetProject()->GetScriptSourceDirectory() / "Broken.cpp", "// The stand-in for CMake reports errors here\n"));
+		editor.Context().GetNotifications().Clear();
+		editor.Layer->GetPanels().SetOpen(EditorPanels::c_Problems, false);
+		editor.Frames(2);
+
+		// The person's Build Scripts fails: the build's toast says so once (the command's failure is the same news), with its
+		// first error and the way to all of them.
+		const ScriptBuilder& builder = editor.Context().GetScriptBuilder();
+		REQUIRE(editor.Click("Toolbar.BuildScripts"));
+		REQUIRE(editor.FramesUntil([&builder]() { return !builder.IsRunning() && builder.GetLastResult().ID != 0; }));
+		editor.Frames(2);
+		std::vector<std::string> titles = GetToastTitles();
+		CHECK(std::count(titles.begin(), titles.end(), "Script build failed") == 1);
+		CHECK(std::count(titles.begin(), titles.end(), "script.build failed") == 0);
+		std::string toast = FindToast("Script build failed");
+		REQUIRE_FALSE(toast.empty());
+		CHECK(UI::ItemProbe::Find(toast)->Text.find("Broken.cpp:7: ") != std::string::npos);
+		REQUIRE(UI::ItemProbe::Find(toast + ".Console").has_value());
+		CHECK_FALSE(editor.Layer->GetPanels().IsOpen(EditorPanels::c_Problems));
+		REQUIRE(editor.Click(toast + ".Problems"));
+		editor.Frames(2);
+		CHECK(editor.Layer->GetPanels().IsOpen(EditorPanels::c_Problems));
+		ProblemsPanel* problems = editor.Layer->GetPanels().Get<ProblemsPanel>(EditorPanels::c_Problems);
+		REQUIRE(problems);
+		CHECK(problems->GetErrorCount() == 1);
+		CHECK(FindToast("Script build failed").empty());
+
+		// A script crash stops play mode: its toast leads to the panel too, which leads with the crash.
+		editor.Layer->GetPanels().SetOpen(EditorPanels::c_Problems, false);
+		editor.Run("script.load", { { "path", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS)) } });
+		const nlohmann::json created = editor.Run("entity.create", { { "name", "Faulty" } });
+		editor.Run("script.add", { { "entity", created["id"] }, { "class", "Faulty" }, { "fields", { { "Fault", "NullDereference" }, { "FaultIn", "OnUpdate" } } } });
+		editor.Context().GetNotifications().Clear();
+		editor.Run("play.start", { { "build", false } });
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.Context().GetLastScriptFault().has_value() && !editor.Context().IsPlaying(); }));
+		editor.Frames(2);
+		titles = GetToastTitles();
+		CHECK(std::count(titles.begin(), titles.end(), "Script crash: play mode stopped") == 1);
+		toast = FindToast("Script crash: play mode stopped");
+		REQUIRE_FALSE(toast.empty());
+		CHECK(UI::ItemProbe::Find(toast)->Text.find("Faulty::OnUpdate on entity 'Faulty'") != std::string::npos);
+		REQUIRE(editor.Click(toast + ".Problems"));
+		editor.Frames(3);
+		CHECK(editor.Layer->GetPanels().IsOpen(EditorPanels::c_Problems));
+		REQUIRE_FALSE(problems->GetRows().empty());
+		CHECK(problems->GetRows()[0].Kind == ProblemsPanel::RowKind::Crash);
+		CHECK(FindToast("Script crash: play mode stopped").empty());
 	}
 
 	TEST_CASE("New Script writes a script class, opens it and builds the scripts, so that the class can be attached")

@@ -60,6 +60,9 @@ namespace Strata
 		// A mutating command changed the running copy of a playing scene (its result's warning says so), which play.stop
 		// discards: replays of the session leave it out (CommandJournal::BuildReplayScript).
 		bool RunningCopy = false;
+		// The failure is news the editor gave the person already, in a notification of its own (a script build's: "Script
+		// build failed" with Show Problems): NotifyCommandOutcome posts no second toast for the command that waited for it.
+		bool Announced = false;
 
 		bool IsPending() const { return static_cast<bool>(Pending); }
 

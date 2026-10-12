@@ -96,15 +96,20 @@ namespace Strata
 				return EditorCommandResult::Fail(fmt::format("The result of script build {} is no longer available (see script.status)", state.WaitingFor));
 			if (result.Cancelled)
 				return EditorCommandResult::Fail("The script build play.start waited for was cancelled, so the game does not play", EditorCommandError::Cancelled);
+			// The build's own notification told the person how it ended (EditorContext::OnScriptBuildFinished): no second toast.
 			if (!result.Success)
 			{
 				context.RequestProblemsPanel();
-				return EditorCommandResult::Fail(fmt::format("The scripts must be built before playing, and the build failed: {}", result.Error));
+				EditorCommandResult failed = EditorCommandResult::Fail(fmt::format("The scripts must be built before playing, and the build failed: {}", result.Error));
+				failed.Announced = true;
+				return failed;
 			}
 			if (load.BuildID == result.ID && !load.Loaded)
 			{
 				context.RequestProblemsPanel();
-				return EditorCommandResult::Fail(fmt::format("The scripts were built, but their module could not be loaded: {}", load.Error));
+				EditorCommandResult failed = EditorCommandResult::Fail(fmt::format("The scripts were built, but their module could not be loaded: {}", load.Error));
+				failed.Announced = true;
+				return failed;
 			}
 
 			// A build someone else started may have left the scripts in need of another (sources changed meanwhile): play.start

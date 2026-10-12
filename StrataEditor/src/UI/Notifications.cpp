@@ -66,7 +66,8 @@ namespace Strata::UI
 
 	}
 
-	void DrawNotifications(EditorNotifications& notifications, EditorShell& shell, const char* consolePanel, const ImVec2& areaMin, const ImVec2& areaMax)
+	void DrawNotifications(EditorNotifications& notifications, EditorShell& shell, const char* consolePanel, const char* problemsPanel, const ImVec2& areaMin,
+		const ImVec2& areaMax)
 	{
 		if (notifications.IsEmpty())
 			return;
@@ -150,12 +151,15 @@ namespace Strata::UI
 			};
 			bool showActivity = false;
 			bool showAsset = false;
+			bool showProblems = false;
 			bool showConsole = false;
 			bool recover = false;
 			if (notification.JournalEntry != 0)
 				showActivity = action(key + ".Activity", "Show in Activity");
 			if (notification.Asset.IsValid())
 				showAsset = action(key + ".Asset", "Show Asset");
+			if (notification.ShowProblems)
+				showProblems = action(key + ".Problems", "Show Problems");
 			if (notification.ShowConsole)
 				showConsole = action(key + ".Console", "Show in Console");
 			if (notification.ShowRecovery)
@@ -184,11 +188,13 @@ namespace Strata::UI
 				shell.ShowActivity(notification.JournalEntry);
 			if (showAsset)
 				shell.ShowAsset(notification.Asset);
+			if (showProblems)
+				shell.ShowPanel(problemsPanel);
 			if (showConsole)
 				shell.ShowPanel(consolePanel);
 			if (recover)
 				shell.ShowRecoveryDialog();
-			if (close || showActivity || showAsset || showConsole || recover)
+			if (close || showActivity || showAsset || showProblems || showConsole || recover)
 				notifications.Dismiss(notification.Id);
 		}
 		ImGui::End();

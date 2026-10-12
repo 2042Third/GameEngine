@@ -33,6 +33,7 @@ namespace Strata
 		std::string Message; // The details: an error, what was written
 		uint64_t JournalEntry = 0; // Show in Activity: the activity journal's entry, when there is one
 		bool ShowConsole = false;  // Show in Console: the log holds more (build output, a crash's details)
+		bool ShowProblems = false; // Show Problems: the Problems panel lists it (a script build's errors, a script crash's place)
 		bool ShowRecovery = false; // Recover...: the recovery dialog
 		AssetHandle Asset = UUID::Null(); // Show Asset: the asset it is about, in the Asset tab
 		// Notifications of one group (when not empty) merge into one that shows the latest of them, e.g. one toast for the
@@ -77,7 +78,8 @@ namespace Strata
 	};
 
 	// Posts what a command the person ran ended with, when it failed or warned (an edit of the running game, which play.stop
-	// discards): an error or a warning with the command's journal entry. Successes and cancellations post nothing.
+	// discards): an error or a warning with the command's journal entry. Successes, cancellations and failures a notification of
+	// their own announced (EditorCommandResult::Announced) post nothing.
 	void NotifyCommandOutcome(EditorNotifications& notifications, std::string_view command, const EditorCommandResult& result);
 
 }

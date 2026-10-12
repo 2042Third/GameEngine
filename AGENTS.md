@@ -908,7 +908,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
     waited for them (one toast counting them: `EditorAssetManager::TakeImportFailures`, `EditorNotification::Group`),
     unsaved changes a scene replacement discarded (who did it: an agent by its name, a command script, or the person's own
     Don't Save; `EditorContext::NotifyDiscardedChanges`) and recovery data left on offer; their actions are Show in
-    Activity (the command's journal entry), Show Asset, Show in Console and Recover. Post one for news the person would otherwise miss; commands of tools and scripts get their errors
+    Activity (the command's journal entry), Show Asset, Show Problems (failed script builds and script crashes), Show in
+    Console and Recover. A command whose failure a notification of its own announced (a build it waited for) sets
+    `EditorCommandResult::Announced`, so the person gets one toast per failure. Post one for news the person would otherwise miss; commands of tools and scripts get their errors
     as answers and post none.
   - Status pills say what is wrong and lead to it: errors (unread since the Console was last focused, not counting the
     frame its window appears in), a failed automation start (`--no-automation` is shown as off), scripts that scenes use

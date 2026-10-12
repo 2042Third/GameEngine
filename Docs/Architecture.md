@@ -1970,12 +1970,15 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   capture closes the editor (`EditorLayer::TakeScreenshot`), so the screenshot shows how the script ended, also when it
   ended before the first frame.
 - **Notifications** (`EditorNotifications.h`, `UI/Notifications.h`). The context keeps what the person should hear about
-  (`EditorNotification`: level, title, message, the journal entry, the asset, whether the Console or the recovery dialog
-  has more): at most `c_MaxActive` (4), identical ones merged with a count, and those of a `Group` merged into one that
+  (`EditorNotification`: level, title, message, the journal entry, the asset, whether the Console, the Problems panel or
+  the recovery dialog has more): at most `c_MaxActive` (4), identical ones merged with a count, and those of a `Group` merged into one that
   shows the latest (a post may stand for several: `Count`), each expiring after its level's lifetime (`Expire`,
   `KeepAlive` while hovered). Feeds: `NotifyCommandOutcome` for commands of the UI (`RunEditorCommand`, the runner when
   the origin is `CommandSource::UI`: failures and warnings, with `EditorCommandResult::JournalId`, which `Execute` now sets
-  for every result), `EditorContext::BuildScripts` and `OnScriptBuildFinished`, `StopOnScriptFault`, the end of a game
+  for every result; not for a failure a notification of its own announced, `EditorCommandResult::Announced`, which
+  `script.build` and `play.start` set when the build they waited for failed: one toast per failure),
+  `EditorContext::BuildScripts` and `OnScriptBuildFinished` (failed with Show Problems, cancelled as information),
+  `StopOnScriptFault` (with Show Problems, whose panel leads with the crash), the end of a game
   export (`NotifyExportFinished`, once per export: an export that does not start leaves the announced one), imports that
   failed while nobody waited for them (`NotifyImportFailures`, below), unsaved changes that a scene replacement discarded
   (`NotifyDiscardedChanges`, from `ResetScene`: who discarded them, from the command that runs now,
@@ -1986,7 +1989,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   bottom right of the work area, above the status bar, kept in front without being focused (`BringWindowToDisplayFront`,
   `NoFocusOnAppearing`); it returns at once while there are none. A title too long for its line wraps before the close
   button, and its count then leads the message. Their actions go through the `EditorShell`: Show in Activity, Show Asset
-  (`ShowAsset`: the Asset tab inspects it and the Content Browser reveals it), Show in Console and Recover.
+  (`ShowAsset`: the Asset tab inspects it and the Content Browser reveals it), Show Problems (the Problems panel: a
+  failed build's diagnostics, a crash's place and stack), Show in Console and Recover.
 - **Import failures** (`EditorAssetManager::TakeImportFailures`). An import that fails while a caller waits for its
   outcome (`ReimportAsset`, `SetImportSettingsInBackground`, `ReimportAssetInBackground`, and `ImportExternal` for the
   assets whose failures its items report: a file's own, every asset of a folder: the source's `ImportAwaited`) is that

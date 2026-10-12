@@ -1577,10 +1577,18 @@ namespace Strata
 
 		EditorNotification notification;
 		notification.ShowConsole = true;
-		if (!result.Success)
+		if (result.Cancelled)
+		{
+			// Someone stopped it (the person, a command, a project closing): no failure, nothing to fix.
+			notification.Level = NotificationLevel::Info;
+			notification.Title = "Script build cancelled";
+		}
+		else if (!result.Success)
 		{
 			notification.Level = NotificationLevel::Error;
 			notification.Title = "Script build failed";
+			// The Problems panel lists the diagnostics with their places, which a double click opens.
+			notification.ShowProblems = true;
 			notification.Message = result.Diagnostics.empty() ? result.Error
 				: fmt::format("{}{}{}: {}", FileSystem::ToUTF8(FileSystem::FromUTF8(result.Diagnostics.front().File).filename()), result.Diagnostics.front().Line > 0 ? ":" : "",
 					result.Diagnostics.front().Line > 0 ? std::to_string(result.Diagnostics.front().Line) : std::string(), result.Diagnostics.front().Message);
@@ -1620,6 +1628,8 @@ namespace Strata
 		notification.Title = "Script crash: play mode stopped";
 		notification.Message = fmt::format("{}: {}", where, fault->Description);
 		notification.ShowConsole = true;
+		// The Problems panel leads with the crash: where it happened and the stack, once symbolized.
+		notification.ShowProblems = true;
 		m_Notifications.Post(std::move(notification));
 		m_LastScriptFault = std::move(fault);
 		Stop();

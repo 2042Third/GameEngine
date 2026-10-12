@@ -600,7 +600,7 @@ namespace Strata
 		// Toasts last, over everything, above the status bar.
 		const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
 		const float statusBar = IsLauncherShown() ? 0.0f : m_StatusBarHeight;
-		UI::DrawNotifications(m_Context.GetNotifications(), *this, EditorPanels::c_Console, mainViewport->WorkPos,
+		UI::DrawNotifications(m_Context.GetNotifications(), *this, EditorPanels::c_Console, EditorPanels::c_Problems, mainViewport->WorkPos,
 			ImVec2(mainViewport->WorkPos.x + mainViewport->WorkSize.x, mainViewport->WorkPos.y + mainViewport->WorkSize.y - statusBar));
 		if (m_ShowImGuiDemo)
 			ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
