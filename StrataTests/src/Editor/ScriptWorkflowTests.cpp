@@ -496,6 +496,46 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		CHECK(harness.Context.IsPlaying());
 	}
 
+	TEST_CASE("Play refuses a scene being opened before it builds anything")
+	{
+		ScopedEnvironmentVariable fakeCMake("STRATA_TEST_FAKE_CMAKE", "succeed");
+		WorkflowHarness harness(MakeFakeBuildSpecification());
+		// Scripts that need a build: a module of the project's own, older than the sources.
+		const std::filesystem::path module = harness.GetProject().GetScriptModulePath();
+		REQUIRE(FileSystem::CreateDirectories(module.parent_path()));
+		REQUIRE(FileSystem::Copy(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), module));
+		harness.Run("script.reload");
+		REQUIRE(harness.Context.GetPlayBuildReason());
+
+		// A saved scene, opened again in the background from a new one.
+		const nlohmann::json saved = harness.Run("scene.saveAs", { { "path", "Scenes/Level.stscene" } });
+		harness.Run("scene.new");
+		EditorCommandResult opening = harness.Commands.Execute(harness.Context, "scene.open", { { "scene", saved["scene"] } });
+		REQUIRE_MESSAGE(opening.Success, opening.Error);
+		REQUIRE(opening.IsPending());
+		REQUIRE(harness.Context.IsSceneLoading());
+
+		// Play says why at once: no build starts for a play that would be refused after it.
+		const uint64_t buildsBefore = harness.Context.GetScriptBuilder().GetLastResult().ID;
+		const EditorCommandResult play = harness.Commands.Execute(harness.Context, "play.start");
+		REQUIRE_FALSE(play.IsPending());
+		CHECK_FALSE(play.Success);
+		CHECK(play.Error.find("being opened") != std::string::npos);
+		CHECK_FALSE(harness.Context.GetScriptBuilder().IsRunning());
+		CHECK(harness.Context.GetPlayBuildID() == 0);
+		CHECK_FALSE(harness.Context.IsPlaying());
+
+		// Once the scene is open, Play builds first as before.
+		opening = CompleteCommand(harness.Context, std::move(opening));
+		REQUIRE_MESSAGE(opening.Success, opening.Error);
+		CHECK(harness.Context.GetScriptBuilder().GetLastResult().ID == buildsBefore);
+		const EditorCommandResult played = harness.Complete("play.start");
+		REQUIRE_MESSAGE(played.Success, played.Error);
+		CHECK(played.Value.contains("built"));
+		CHECK(harness.Context.IsPlaying());
+		CHECK(harness.Context.GetScriptBuilder().GetLastResult().ID == buildsBefore + 1);
+	}
+
 	TEST_CASE("Play builds again for sources added, changed or removed since its build, whatever the module compiles")
 	{
 		ScopedEnvironmentVariable fakeCMake("STRATA_TEST_FAKE_CMAKE", "succeed");

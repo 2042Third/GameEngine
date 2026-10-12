@@ -174,7 +174,8 @@ editor started with `--no-gpu` (use `--headless`):
   edits are steps of the same history, but they save their file themselves, so they never mark the scene unsaved.
 - **Play mode**: `play.start` runs a copy of the scene, after building the scripts when their sources changed or they
   are not built while scenes use them (it answers once the game plays, with `built`; a failed build fails it with the
-  errors; `{"build": false}` plays what is loaded). Changes made while playing apply to that copy, carry a
+  errors; `{"build": false}` plays what is loaded; while a scene is being opened it fails at once, so wait for
+  `scene.open` first). Changes made while playing apply to that copy, carry a
   `warning` in the result, and are discarded by `play.stop`. Undo and redo are not available while playing;
   `scene.save` saves the edited scene, never the running copy.
 - **Errors** (JSON-RPC codes): `-32602` invalid parameters (the error's `data.parameters` is the command's schema:

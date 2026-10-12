@@ -740,7 +740,8 @@ Building and loading scripts:
   scripts (`GetPlayBuildReason`; never for a module loaded with `script.load`), waits for a build that runs, and plays
   once the build succeeded; a failed build fails `play.start` with its first diagnostics and asks the UI for the Problems
   panel (`RequestProblemsPanel`), a cancelled one fails it as `Cancelled`; `play.start {build: false}` plays what is
-  loaded. A crash while playing stops play mode and
+  loaded. While a scene is being opened `play.start` fails at once, before it builds anything. A crash while playing
+  stops play mode and
   logs the class, callback and entity, and where it happened once symbolization (a job) finished (see Scripting,
   "Contained"); `play.start` then fails until the module is rebuilt (a successful build loads a crashed module again even
   when it did not change) or reloaded. `script.load {path}` runs another module file (tests use in-tree modules this

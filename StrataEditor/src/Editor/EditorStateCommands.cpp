@@ -448,8 +448,8 @@ namespace Strata
 			"Runs a copy of the scene with scripts, physics and audio. Changes made while playing are discarded by play.stop. When the project's "
 			"scripts need building first (their sources changed since the module was built, or scenes use scripts that are not built or "
 			"loaded), it builds them, then plays the new code: the answer comes once the build finished (a failed build fails play.start with "
-			"its first errors; script.status lists every diagnostic). A build already running is waited for. Returns the play state and, when it "
-			"built, built: {build, seconds, reason}.",
+			"its first errors; script.status lists every diagnostic). A build already running is waited for. While a scene is being opened "
+			"(scene.open) it fails at once, building nothing. Returns the play state and, when it built, built: {build, seconds, reason}.",
 			ObjectSchema({ { "build", BoolSchema("Build the scripts first when they need it (default true); false plays what is loaded") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -457,8 +457,10 @@ namespace Strata
 				const bool build = arguments.GetBool("build", true);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				// A running scene refuses (Play says so) before anything is built.
-				if (build && !context.IsPlaying() && (context.GetScriptBuilder().IsRunning() || context.GetPlayBuildReason()))
+				// A running scene, and a scene being opened, refuse (Play says why) before anything is built: a build would take
+				// its time only for the play to be refused after it.
+				if (build && !context.IsPlaying() && !context.IsSceneLoading()
+					&& (context.GetScriptBuilder().IsRunning() || context.GetPlayBuildReason()))
 					return StartPlayAfterBuild(context);
 				std::string error;
 				if (!context.Play(&error))
