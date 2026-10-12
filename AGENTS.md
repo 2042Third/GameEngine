@@ -1068,7 +1068,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   each asset is looked up once per frame (`AssetResolveCache`), and the cache's references end with the frame (no mesh,
   material or texture it resolved, and not the asset manager, is held once `Render` returns), so what leaves the view
   becomes evictable, also for a renderer that stops rendering. Two caches keep assets across frames: `SceneRenderer`'s
-  environment cache holds the sky light's environment map until the environment changes, and `TextRenderer`'s glyph
+  environment cache holds the sky light's environment map until the environment changes (the maps computed from a map
+  are shared by every renderer lighting with it, so a renderer that starts later, such as a capture renderer, takes them
+  over after the map dropped to its mip tail), and `TextRenderer`'s glyph
   atlases hold their fonts (an atlas lives as long as its font is loaded). Mesh layouts (bounds, submeshes) follow the
   asset manager's content changes in `RenderScene::Sync`, whoever renders the scene; an evicted mesh keeps its layout
   until a reimport changes its source revision (`AssetManagerBase::GetSourceRevisions`). Until a mesh's layout is known,

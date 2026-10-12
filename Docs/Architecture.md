@@ -173,11 +173,13 @@ and text) into render targets of its viewport size, which it hands to the `Defer
 without a target, or composing overlays or text before copying into the target), so a game without text renders
 straight into the back buffer and never allocates one. Its image-based lighting comes from the sky light's
 environment map or its procedural sky (`IBL/ProceduralSky.comp` writes mip 0 of the environment cube, then the shared
-filtering chain runs), computed again only when the source or the procedural parameters change; editor views can ask
-for preview lighting, leave out screen-space text and tint entities (`SceneRenderOptions::EntityTints`: the first
-overlay, `Overlay/StatusTint.frag`, blends the listed entities' colors over exactly their pixels of the entity-ID buffer,
-found by binary search in a sorted (id, color) buffer like the selection outline's). How a mesh's level of detail is
-chosen is a pure function (`LODSelection::GetScreenFraction`, `SelectLOD`), so tools show the level the renderer draws.
+filtering chain runs), computed again only when the source or the procedural parameters change (an environment map's
+maps are shared by the renderers lighting with that texture, so a second renderer of the scene computes nothing); editor
+views can ask for preview lighting, leave out screen-space text and tint entities (`SceneRenderOptions::EntityTints`: the
+first overlay, `Overlay/StatusTint.frag`, blends the listed entities' colors over exactly their pixels of the entity-ID
+buffer, found by binary search in a sorted (id, color) buffer like the selection outline's). How a mesh's level of
+detail is chosen is a pure function (`LODSelection::GetScreenFraction`, `SelectLOD`), so tools show the level the
+renderer draws.
 Assets: `Mesh`, `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`; texture formats, the cooked
 texture format and the block decoders are `TextureFormat`, `CookedTexture` and `BlockCompression` (see
 [Texture cooking](#texture-cooking)). Also `TextRenderer`/`FontAtlas`, `DebugDraw`/`SceneGizmos`, `TextureReadback`
@@ -1121,8 +1123,10 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     120 frames without a need of it (`c_DropDelayFrames`); a texture nobody needs falls to its tail. Views without
     streaming (`SceneRendererSpecification::TextureStreaming` false) need level 0 and count a texture as pending until it
     is whole; with streaming a texture whose tail is resident is not pending. `RequestLevel` asks for a level outside
-    views (the asset inspector's preview; the sky light's environment map, until the renderer has computed the
-    environment from its whole chain: only the cube is sampled afterwards, and the map drops back to its tail);
+    views (the asset inspector's preview; the sky light's environment map, until a renderer has computed the
+    environment from its whole chain: only the cube is sampled afterwards, and the map drops back to its tail; renderers
+    share the environment computed from a map while any of them lights with it, so one that starts drawing the scene later,
+    such as the editor's capture renderer, takes it over in its first frame instead of waiting for the map's levels);
     `TextureStreamer::GetPreview` gets a texture without asking for more than its tail (thumbnails).
   - *Raising* (`Texture::RaiseLevels`, `ContinueLevelChange`). The streamer reads the missing levels as one range
     (`CookedTextureLayout::GetLevelsByteRange`) at Low priority, scored by missing levels times coverage (a view that
@@ -1324,7 +1328,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   rendering (a capture renderer between captures, a hidden view), and a closed project's manager goes with it. Two
   caches outside the resolve cache keep assets across frames: `SceneRenderer`'s environment cache holds the sky light's
   environment map (the source of its cube maps) until the environment changes, also while the renderer idles or after
-  its project closed, and `TextRenderer`'s glyph atlases hold their fonts as long as the fonts are loaded.
+  its project closed (the maps computed from a map, and with them the map, are shared by every renderer lighting with it
+  and released with the last one), and `TextRenderer`'s glyph atlases hold their fonts as long as the fonts are loaded.
   Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what `GetOpaqueBatches` reports after the frame holds no
   pointers.
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same

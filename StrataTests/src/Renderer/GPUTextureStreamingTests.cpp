@@ -688,6 +688,105 @@ TEST_SUITE("GPU.TextureStreaming")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A renderer that starts drawing a sky another renderer lights takes over its environment while the map keeps its tail")
+	{
+		// The environment computed from a map is shared by the renderers that light with it: a renderer created after the map
+		// dropped to its tail (the editor's capture renderer, a second view) draws the sky and its lighting in its first
+		// frame, without reading the map's levels again or computing the environment anew. Once no renderer lights with it,
+		// the environment is released, and the next renderer computes it from the whole map again.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr AssetHandle c_SkyHandle = AssetHandle(0xA3001);
+		constexpr uint32_t c_SkyViewSize = 64;
+		const std::filesystem::path pack = WriteStreamingPack({ StreamingPackAsset { c_SkyHandle, AssetType::Texture, "Textures/Sky.hdr", CookEnvironmentMap(512, 256) } });
+		for (const bool transfer : GetQueueModes(gpu))
+		{
+			CAPTURE(transfer);
+			SettleDevice(gpu);
+			const ScopedTransferQueue queueMode(transfer);
+			std::string error;
+			Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(pack, &error);
+			REQUIRE_MESSAGE(manager, error);
+			Scope<Scene> scene = CreateScope<Scene>("Sky");
+			AddNeutralPostProcess(*scene);
+			scene->CreateEntity("Sky").AddComponent<SkyLightComponent>().EnvironmentMap = c_SkyHandle;
+			// Lit by the environment alone: the ball shows its irradiance, the background the sky.
+			AddMesh(*scene, BuiltinAssets::SphereMesh, BuiltinAssets::DefaultMaterial, glm::vec3(0.0f), "Ball");
+			const SceneCamera camera = CameraAt(3.0f);
+
+			Scope<SceneRenderer> first = CreateScope<SceneRenderer>();
+			first->SetViewportSize(c_SkyViewSize, c_SkyViewSize);
+			uint32_t updates = 0;
+			for (uint32_t frame = 0; frame < 200 && updates == 0; frame++)
+			{
+				RunFrame(gpu, manager, { { first.get(), scene.get() } }, camera);
+				updates += first->GetStats().EnvironmentUpdates;
+			}
+			REQUIRE(updates == 1);
+			// Nothing samples the map any more: its levels drop to its tail.
+			for (uint32_t step = 0; step < 2 * TextureStreamingPolicy::c_DropDelayFrames + 20; step++)
+				RunFrame(gpu, manager, { { first.get(), scene.get() } }, camera);
+			const Ref<Texture> map = PeekTexture(*manager, c_SkyHandle);
+			REQUIRE(map);
+			REQUIRE(map->GetResidentLevel() == map->GetTailLevel());
+			REQUIRE(map->GetTailLevel() > 0);
+			const AssetManagerStats before = manager->GetStats();
+
+			// A new renderer's first frame matches the first renderer's, in the same device frame.
+			Scope<SceneRenderer> second = CreateScope<SceneRenderer>();
+			second->SetViewportSize(c_SkyViewSize, c_SkyViewSize);
+			AssetManager::SetActive(manager);
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Strata::Renderer::BeginFrame();
+			manager->Update();
+			const ReadbackImage reference = RenderToImage(*first, *scene, camera);
+			const ReadbackImage image = RenderToImage(*second, *scene, camera);
+			gpu.GetDevice().EndFrame();
+			CHECK(second->GetStats().PendingAssets == 0);
+			CHECK(second->GetStats().EnvironmentLighting);
+			CHECK(second->GetStats().EnvironmentUpdates == 0); // Taken over, not computed again
+			CHECK(second->GetEnvironmentCube() == first->GetEnvironmentCube());
+			CHECK(MaxDifference(image, reference) <= 2);
+			// The sky's blue in a corner, and the ball lit in the middle.
+			CHECK(GetPixelRGBA8(image, 1, 1).b > 100);
+			const glm::u8vec4 ball = GetPixelRGBA8(image, c_SkyViewSize / 2, c_SkyViewSize / 2);
+			CHECK(ball.r + ball.g + ball.b > 60);
+
+			// Both keep drawing it without a read: the map stays at its tail.
+			for (uint32_t step = 0; step < 10; step++)
+			{
+				RunFrame(gpu, manager, { { first.get(), scene.get() }, { second.get(), scene.get() } }, camera);
+				CHECK(second->GetStats().PendingAssets == 0);
+				CHECK(second->GetStats().EnvironmentLighting);
+			}
+			const AssetManagerStats after = manager->GetStats();
+			CHECK(after.Detail.LevelsRaised == before.Detail.LevelsRaised);
+			CHECK(after.RangeReads == before.RangeReads);
+			CHECK(map->GetResidentLevel() == map->GetTailLevel());
+
+			// No renderer lights with it any more: the next one computes it from the whole map again.
+			first.reset();
+			second.reset();
+			Scope<SceneRenderer> third = CreateScope<SceneRenderer>();
+			third->SetViewportSize(c_SkyViewSize, c_SkyViewSize);
+			updates = 0;
+			for (uint32_t frame = 0; frame < 200 && updates == 0; frame++)
+			{
+				RunFrame(gpu, manager, { { third.get(), scene.get() } }, camera);
+				updates += third->GetStats().EnvironmentUpdates;
+			}
+			CHECK(updates == 1);
+			CHECK(manager->GetStats().Detail.LevelsRaised > after.Detail.LevelsRaised);
+
+			third.reset();
+			AssetManager::SetActive(nullptr);
+			scene.reset();
+			manager.reset();
+			SettleDevice(gpu);
+			CHECK(gpu.GetNewErrorCount() == 0);
+		}
+	}
+
 	TEST_CASE("A preview holds what a first load holds and never asks for finer levels")
 	{
 		// TextureStreamer::GetPreview, for thumbnails: the texture loads partly and stays at its tail while no view needs it.

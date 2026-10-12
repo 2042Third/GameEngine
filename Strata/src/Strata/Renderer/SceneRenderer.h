@@ -195,7 +195,8 @@ namespace Strata
 		uint32_t MeshesWithoutBounds = 0;
 		bool EnvironmentLighting = false; // A sky light's environment (map or procedural sky) lights the scene
 		// Environment cubes computed this frame (with their irradiance and prefiltered maps): 1 when the environment map
-		// or the procedural sky's parameters (colors, sun size and intensity, the sun's direction and color) changed.
+		// or the procedural sky's parameters (colors, sun size and intensity, the sun's direction and color) changed. An
+		// environment map's environment that another renderer computed is taken over, not computed (0).
 		uint32_t EnvironmentUpdates = 0;
 		bool PreviewLighting = false;     // SceneRenderOptions::PreviewEnvironment lit the scene (it has no light of its own)
 		uint32_t ShadowCasters = 0;       // Instances drawn into shadow cascades (summed over cascades)
@@ -278,9 +279,9 @@ namespace Strata
 		nvrhi::ITexture* GetEntityIDTexture() const { return m_EntityIDTexture; } // Null without one (SceneRendererSpecification::EntityIDs)
 		nvrhi::ITexture* GetAmbientOcclusionTexture() const { return m_AOTexture; } // 1 = unoccluded
 		// Image-based lighting data of the current environment (null without one); the BRDF lookup table always exists.
-		nvrhi::ITexture* GetEnvironmentCube() const { return m_Environment.Cube; }
-		nvrhi::ITexture* GetIrradianceMap() const { return m_Environment.Irradiance; }
-		nvrhi::ITexture* GetPrefilteredMap() const { return m_Environment.Prefiltered; }
+		nvrhi::ITexture* GetEnvironmentCube() const { return m_Environment ? m_Environment->Cube.Get() : nullptr; }
+		nvrhi::ITexture* GetIrradianceMap() const { return m_Environment ? m_Environment->Irradiance.Get() : nullptr; }
+		nvrhi::ITexture* GetPrefilteredMap() const { return m_Environment ? m_Environment->Prefiltered.Get() : nullptr; }
 		nvrhi::ITexture* GetBRDFLut() const { return m_BRDFLut; }
 
 		nvrhi::ITexture* GetBloomTexture() const { return m_BloomTexture; } // Level 0 of the bloom chain (half resolution)
@@ -415,6 +416,9 @@ namespace Strata
 			nvrhi::TextureHandle Irradiance;  // Diffuse irradiance
 			nvrhi::TextureHandle Prefiltered; // Specular radiance, one mip per roughness level
 		};
+		// The environments computed from environment map textures, by texture, while a renderer lights with them
+		// (FindSharedEnvironment); defined with the functions that use it.
+		struct SharedEnvironments;
 
 		void CreateResources();
 		void CreateIBLResources();
@@ -435,8 +439,15 @@ namespace Strata
 		// New environment textures (radiance cube with mips, irradiance, prefiltered).
 		EnvironmentMaps CreateEnvironmentMaps();
 		// The environment maps of an equirectangular texture (new textures, so maps of the previous source are never
-		// overwritten while it may still be in use).
+		// overwritten while it may still be in use), shared with the renderers that start lighting with the same texture.
 		void ProcessEnvironment(nvrhi::ICommandList* commandList, const Ref<Texture>& source);
+		// The environment another renderer computed from `source` and still lights with, or null. Shared, so a renderer
+		// that starts drawing a scene lit by a map (a capture renderer, a second view) neither waits for the map's levels,
+		// which drop to its tail once the environment is computed, nor computes it again. Maps written in place (procedural
+		// skies) are never shared.
+		static Ref<const EnvironmentMaps> FindSharedEnvironment(const Texture& source);
+		static void ShareEnvironment(const Ref<const EnvironmentMaps>& environment);
+		static SharedEnvironments& GetSharedEnvironments();
 		// The environment maps of a procedural sky, computed into the current procedural sky's textures when there are
 		// some (parameter changes, such as a moving sun, then allocate nothing).
 		void GenerateProceduralSky(nvrhi::ICommandList* commandList, const RenderData::ProceduralSkyParameters& parameters);
@@ -536,7 +547,7 @@ namespace Strata
 		nvrhi::GraphicsPipelineHandle m_SkyboxPipeline;
 
 		// Image-based lighting
-		EnvironmentMaps m_Environment;
+		Ref<const EnvironmentMaps> m_Environment; // Null without an environment; a map's is shared (FindSharedEnvironment)
 		nvrhi::ITexture* m_BoundEnvironment = nullptr; // Environment cube referenced by m_SceneBindingSet
 		nvrhi::BindingLayoutHandle m_IBLBindingLayout;
 		nvrhi::ComputePipelineHandle m_EquirectToCubePipeline;
