@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <span>
+#include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -400,5 +402,64 @@ TEST_SUITE("GPU.Animation")
 		CHECK(mask[static_cast<size_t>(center.y) * size + center.x] == 1);
 		CHECK(gpu.GetNewErrorCount() == 0);
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A textured skinned mesh reports the texture maps it draws to the streamer as the mesh unskinned does")
+	{
+		// Mip streaming raises a texture's levels by what renderers report after each frame (GetVisibleTextures): a skinned
+		// mesh reports the maps it draws with, by its posed bounds and its submesh's texel density, like any other mesh.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Ref<Mesh> tube = CreateSkinnedTube({ .Joints = 3, .RingsPerJoint = 4, .Sides = 12, .JointLength = 1.0f, .Radius = 0.25f, .BlendWeights = false });
+		// The bind pose: joint j at j * JointLength, every palette entry the identity, so the reference is the tube itself.
+		std::vector<glm::mat4> pose(3);
+		std::vector<glm::mat4> palette(3);
+		for (uint32_t joint = 0; joint < 3; joint++)
+		{
+			pose[joint] = Translation(glm::vec3(0.0f, static_cast<float>(joint), 0.0f));
+			palette[joint] = pose[joint] * tube->GetSkinBinding()->InverseBindMatrices[joint];
+		}
+		Ref<Mesh> reference = SkinOnCPU(tube->GetPositions(), tube->GetAttributes(), tube->GetSkinVertices(), *tube, palette);
+		const AssetHandle texture = assets.AddSolidTexture({ 200, 100, 50, 255 }, TextureFormat::RGBA8SRGB);
+		MaterialProperties textured = UnlitColor({ 1.0f, 1.0f, 1.0f, 1.0f });
+		textured.BaseColorMap = texture;
+		const AssetHandle material = assets.AddMaterial(textured);
+		const AssetHandle skinnedMesh = assets.Add(tube, "Tube");
+		const AssetHandle referenceMesh = assets.Add(reference, "Reference");
+
+		constexpr uint32_t size = 128;
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.5f, 5.0f), glm::vec3(0.0f, 1.5f, 0.0f));
+		const auto report = [&](AssetHandle mesh, bool skinned)
+		{
+			Scene scene;
+			AddNeutralPostProcess(scene);
+			Entity arm = AddMesh(scene, mesh, material, glm::vec3(0.0f), "Arm");
+			TestPoses poses;
+			if (skinned)
+			{
+				arm.AddComponent<SkinComponent>().Animator = arm.GetUUID();
+				poses.Poses[arm.GetHandle()] = pose;
+				REQUIRE(scene.RegisterService<ISkinningPoses>(poses));
+			}
+			SceneRenderer renderer;
+			renderer.SetViewportSize(size, size);
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().SkinnedInstances == (skinned ? 1u : 0u));
+			const std::span<const VisibleTextureUse> textures = renderer.GetVisibleTextures();
+			REQUIRE(textures.size() == 1);
+			const VisibleTextureUse use = textures[0];
+			if (skinned)
+				scene.UnregisterService<ISkinningPoses>(poses);
+			return use;
+		};
+		const VisibleTextureUse skinnedUse = report(skinnedMesh, true);
+		const VisibleTextureUse referenceUse = report(referenceMesh, false);
+		CHECK(skinnedUse.Texture == texture);
+		CHECK(referenceUse.Texture == texture);
+		CHECK(skinnedUse.UVPixels > 0.0f);
+		CHECK(skinnedUse.UVPixels == doctest::Approx(referenceUse.UVPixels).epsilon(0.1));
+		CHECK(skinnedUse.PixelSize == doctest::Approx(referenceUse.PixelSize).epsilon(0.1));
+		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

@@ -924,6 +924,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		uint64_t total = 0;
 		uint32_t calls = 0;
 		AssetFinalizeResult result = AssetFinalizeResult::Pending;
+		const GPUUploadQueueStats queueBefore = Renderer::GetUploadQueue().GetStats();
 		while (result == AssetFinalizeResult::Pending && calls < 10)
 		{
 			result = FinalizeOnce(gpu, *mesh, c_Budget, uploaded);
@@ -935,6 +936,13 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(calls == 5); // Every call but the last fills its budget
 		CHECK(total == geometryBytes);
 		CHECK(mesh->GetMemoryUsage().GpuBuffers == geometryBytes);
+		// Every byte of the four streams, the skin stream's included, was copied by the upload queue's buffer steps (through
+		// its staging, in steps PlanStep sized), at least one step per call; nothing went around it.
+		const GPUUploadQueueStats& queueAfter = Renderer::GetUploadQueue().GetStats();
+		CHECK(queueAfter.BufferBytes - queueBefore.BufferBytes == geometryBytes);
+		CHECK(queueAfter.BufferSteps - queueBefore.BufferSteps >= calls);
+		CHECK(queueAfter.BufferSteps - queueBefore.BufferSteps <= geometryBytes / GPUUploadQueue::c_MinStepBytes + calls);
+		CHECK(queueAfter.TextureBytes == queueBefore.TextureBytes);
 
 		// Every stream arrived where it belongs; the CPU keeps what physics reads, not the skin stream or the attributes.
 		const std::vector<uint8_t> gpuSkin = ReadBuffer(gpu, mesh->GetSkinBuffer(), skinBytes);
