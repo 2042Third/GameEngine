@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandJournal.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorAutomation.h"
@@ -33,6 +34,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 // Command scripts that bind results of earlier steps, and sessions replayed from the activity journal
 // (editor.activity.export).
@@ -516,6 +518,122 @@ TEST_SUITE("Editor.Replay")
 		comparison.Check(built, replay.SceneDocument());
 		for (const char* document : { "Scenes/Main.stscene", "Materials/Ground.stmat", "Materials/MadeWhilePlaying.stmat" })
 			comparison.CheckFile(document);
+	}
+
+	TEST_CASE("A session that loads sub-scenes into the running game replays its edits without the loads")
+	{
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("ReplaySubScenes");
+		const std::filesystem::path original = root / "Original";
+		const std::filesystem::path copy = root / "Copy";
+		const std::filesystem::path session = root / "Session.json";
+		nlohmann::json built;
+		{
+			ReplayEditor editor;
+			CreateProjectAndCopy(editor, original, copy);
+			const uint64_t since = editor.Context.GetJournal().GetLatestId();
+			// A scene of its own (IDs the start scene does not have), made and saved in the session, then the start scene again.
+			editor.Run("scene.new", { { "name", "Props" } });
+			editor.Run("entity.create", { { "name", "Prop" }, { "components", { { "MeshRenderer", { { "Mesh", "Builtin/Cube" } } } } } });
+			editor.Run("scene.saveAs", { { "path", "Scenes/Props.stscene" } });
+			editor.Run("scene.open", { { "scene", "Scenes/Main.stscene" } });
+			editor.Run("entity.create", { { "name", "Edited" } });
+
+			// The running game loads it as a sub-scene (deferred: it answers once its entities exist), and unloads it.
+			editor.Run("play.start");
+			const nlohmann::json loaded = editor.Run("scene.loadAdditive", { { "scene", "Scenes/Props.stscene" } });
+			CHECK(loaded["createdEntities"] == 1);
+			CHECK(loaded.contains("warning"));
+			CHECK(editor.Context.GetActiveScene()->FindEntityByName("Prop"));
+			CHECK(editor.Run("entity.create", { { "name", "Played" } }).contains("warning"));
+			editor.Run("scene.unloadAdditive", { { "subScene", loaded["subScene"] } });
+			CHECK_FALSE(editor.Context.GetActiveScene()->FindEntityByName("Prop"));
+			editor.Run("play.stop");
+			editor.Run("entity.create", { { "name", "After" } });
+			editor.Run("scene.save");
+
+			// The journal completed the deferred load as an edit of the running copy: the export leaves it out with the rest of
+			// what play mode discarded.
+			const CommandJournalEntry* load = nullptr;
+			for (const CommandJournalEntry& entry : editor.Context.GetJournal().GetEntries())
+			{
+				if (entry.Command == "scene.loadAdditive")
+					load = &entry;
+			}
+			REQUIRE(load);
+			CHECK(load->Status == CommandStatus::Succeeded);
+			CHECK(load->RunningCopy);
+			const nlohmann::json exported = editor.Run("editor.activity.export", { { "path", FileSystem::ToUTF8(session) }, { "since", since } });
+			CHECK(exported["skippedWhilePlaying"] == 3);
+			CHECK(exported["edits"] == 7);
+			built = editor.SceneDocument();
+		}
+		const nlohmann::json steps = ReadJsonFile(session);
+		std::vector<std::string> commands;
+		for (const nlohmann::json& step : steps)
+			commands.push_back(step["command"].get<std::string>());
+		CHECK(commands == std::vector<std::string> { "scene.new", "entity.create", "scene.saveAs", "scene.open", "entity.create", "entity.create", "scene.save" });
+
+		ReplayEditor replay;
+		Replay(replay, copy, session);
+		CHECK_FALSE(replay.Context.IsSceneModified());
+		CHECK_FALSE(replay.Context.GetEditScene()->FindEntityByName("Played"));
+		ProjectComparison comparison { original, copy };
+		comparison.Check(built, replay.SceneDocument());
+		for (const char* document : { "Scenes/Main.stscene", "Scenes/Props.stscene" })
+			comparison.CheckFile(document);
+	}
+
+	TEST_CASE("A session that moves, deletes and restores assets replays into the same files, its undo steps journaled")
+	{
+		const std::filesystem::path root = Tests::CreateTemporaryDirectory("ReplayAssetFiles");
+		const std::filesystem::path original = root / "Original";
+		const std::filesystem::path copy = root / "Copy";
+		const std::filesystem::path session = root / "Session.json";
+		{
+			ReplayEditor editor;
+			CreateProjectAndCopy(editor, original, copy);
+			const uint64_t since = editor.Context.GetJournal().GetLatestId();
+			editor.Run("material.create", { { "path", "Materials/Brick.stmat" }, { "properties", { { "Roughness", 0.9 } } } });
+			editor.Run("material.create", { { "path", "Materials/Glass.stmat" }, { "properties", { { "Metallic", 0.5 } } } });
+			editor.Run("asset.createFolder", { { "path", "Art/Walls" } });
+			editor.Run("asset.move", { { "asset", "Materials/Brick.stmat" }, { "path", "Art/Walls/Brick.stmat" } });
+			editor.Run("asset.moveFolder", { { "path", "Art/Walls" }, { "to", "Art/Masonry" } });
+			editor.Run("asset.delete", { { "asset", "Materials/Glass.stmat" } });
+			editor.Run("edit.undo");
+			editor.Run("asset.deleteFolder", { { "path", "Art" } });
+			editor.Run("edit.undo");
+			editor.Run("asset.delete", { { "asset", "Materials/Glass.stmat" } });
+
+			// Each file operation is an entry with its undo step, as edit.history names it.
+			std::vector<std::string> steps;
+			for (const CommandJournalEntry& entry : editor.Context.GetJournal().GetEntries())
+			{
+				if (entry.Id > since && entry.Command.starts_with("asset."))
+					steps.push_back(entry.UndoStep);
+			}
+			CHECK(steps == std::vector<std::string> { "Create Folder Art/Walls", "Move Materials/Brick.stmat", "Move Folder Art/Walls",
+				"Delete Materials/Glass.stmat", "Delete Folder Art", "Delete Materials/Glass.stmat" });
+			const nlohmann::json exported = editor.Run("editor.activity.export", { { "path", FileSystem::ToUTF8(session) }, { "since", since } });
+			CHECK(exported["edits"] == 10);
+		}
+		ReplayEditor replay;
+		Replay(replay, copy, session);
+		// The copy's files are the original's: moved, restored and deleted alike, the moved ones with their handles.
+		for (const char* file : { "Art/Masonry/Brick.stmat", "Art/Masonry/Brick.stmat.meta" })
+		{
+			CAPTURE(file);
+			CHECK(FileSystem::IsRegularFile(original / "Assets" / file));
+			CHECK(FileSystem::IsRegularFile(copy / "Assets" / file));
+		}
+		for (const char* file : { "Materials/Brick.stmat", "Materials/Glass.stmat", "Art/Walls" })
+		{
+			CAPTURE(file);
+			CHECK_FALSE(FileSystem::Exists(original / "Assets" / file));
+			CHECK_FALSE(FileSystem::Exists(copy / "Assets" / file));
+		}
+		ProjectComparison comparison { original, copy };
+		comparison.CheckFile("Art/Masonry/Brick.stmat");
+		CHECK(replay.Context.GetAssetManager()->FindAssetByPath("Art/Masonry/Brick.stmat").IsValid());
 	}
 
 	TEST_CASE("An export after a recovery says that the script cannot repeat what the recovery applied")
