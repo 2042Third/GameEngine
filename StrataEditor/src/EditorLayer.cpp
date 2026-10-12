@@ -731,6 +731,8 @@ namespace Strata
 		if (m_Context.IsSceneModified())
 		{
 			m_PendingDiscardAction = std::move(action);
+			m_DiscardQuestionVersion = m_Context.GetUndoStack().GetVersion();
+			m_SceneChangedSinceQuestion = false;
 			m_OpenUnsavedChangesModal = true;
 			return;
 		}
@@ -1675,6 +1677,12 @@ namespace Strata
 		if (!UI::BeginModal(c_UnsavedChangesModal, "Unsaved Changes"))
 			return;
 		ImGui::Text("Save changes to '%s'?", m_Context.GetEditScene()->GetName().c_str());
+		if (m_SceneChangedSinceQuestion)
+		{
+			ImGui::TextColored(UI::GetThemeColors().Warning, "The scene changed while you were asked (an agent or a script edited it).");
+			UI::ItemProbe::Record("UnsavedChanges.Changed");
+			ImGui::TextUnformatted("Don't Save discards those changes too.");
+		}
 		ImGui::Spacing();
 		if (UI::DialogButton("UnsavedChanges.Save", "Save", true))
 		{
@@ -1686,10 +1694,21 @@ namespace Strata
 		ImGui::SameLine();
 		if (UI::DialogButton("UnsavedChanges.DontSave", "Don't Save"))
 		{
-			ImGui::CloseCurrentPopup();
-			if (m_PendingDiscardAction)
-				m_PendingDiscardAction();
-			m_PendingDiscardAction = nullptr;
+			// The answer is for the changes the person was asked about: changes made since (an agent's, a script's) are asked
+			// about again rather than discarded unseen. Without unsaved changes left, nothing is discarded either way.
+			const uint64_t version = m_Context.GetUndoStack().GetVersion();
+			if (m_Context.IsSceneModified() && version != m_DiscardQuestionVersion)
+			{
+				m_DiscardQuestionVersion = version;
+				m_SceneChangedSinceQuestion = true;
+			}
+			else
+			{
+				ImGui::CloseCurrentPopup();
+				if (m_PendingDiscardAction)
+					m_PendingDiscardAction();
+				m_PendingDiscardAction = nullptr;
+			}
 		}
 		ImGui::SameLine();
 		if (UI::DialogButton("UnsavedChanges.Cancel", "Cancel"))

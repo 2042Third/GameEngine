@@ -253,4 +253,38 @@ TEST_SUITE("Editor.DataSafety")
 		CHECK_FALSE(editor.Context().GetEditScene()->FindEntityByName("Unsaved"));
 		CHECK_FALSE(editor.Context().IsSceneModified());
 	}
+
+	TEST_CASE("Don't Save asks again when an agent changed the scene while the question was open")
+	{
+		Tests::HarnessEditor editor({}, Tests::WithFeatureProject("DataSafetyAgentEdit"));
+		editor.Frames(2);
+		REQUIRE(editor.Context().HasProject());
+		editor.Run("entity.create", { { "name", "Unsaved" } });
+		const std::string sceneName = editor.Context().GetEditScene()->GetName();
+
+		// The person picks File > New Scene; while the question waits, an agent adds an entity.
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("Menu.File.NewScene"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("UnsavedChanges.DontSave").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("UnsavedChanges.Changed").has_value());
+		editor.Run("entity.create", { { "name", "FromAgent" } });
+
+		// Don't Save answered for the person's changes only: the question stays and says why.
+		REQUIRE(editor.Click("UnsavedChanges.DontSave"));
+		editor.Frames(2);
+		CHECK(editor.Context().GetEditScene()->GetName() == sceneName);
+		CHECK(editor.Context().GetEditScene()->FindEntityByName("FromAgent"));
+		CHECK(editor.Context().GetEditScene()->FindEntityByName("Unsaved"));
+		REQUIRE(UI::ItemProbe::Find("UnsavedChanges.DontSave").has_value());
+		CHECK(UI::ItemProbe::Find("UnsavedChanges.Changed").has_value());
+
+		// Asked again, with nothing changed since, Don't Save discards both.
+		REQUIRE(editor.Click("UnsavedChanges.DontSave"));
+		editor.Frames(2);
+		CHECK(editor.Context().GetEditScene()->GetName() == "Untitled");
+		CHECK_FALSE(editor.Context().GetEditScene()->FindEntityByName("FromAgent"));
+		CHECK_FALSE(UI::ItemProbe::Find("UnsavedChanges.DontSave").has_value());
+	}
 }

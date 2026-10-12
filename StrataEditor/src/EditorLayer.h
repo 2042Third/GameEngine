@@ -231,6 +231,10 @@ namespace Strata
 		float m_StatusBarHeight = 0.0f;       // Of the last frame, which the toasts stay above
 
 		std::function<void()> m_PendingDiscardAction;
+		// The undo stack's version (UndoStack::GetVersion) the question was asked for: Don't Save discards those changes
+		// only, so the question stays when the scene changed meanwhile (an agent or a script edited it).
+		uint64_t m_DiscardQuestionVersion = 0;
+		bool m_SceneChangedSinceQuestion = false;
 		bool m_OpenUnsavedChangesModal = false;
 		int m_UnsavedChangesModalFrame = -1; // ImGui's frame the question was drawn in last
 		bool m_ShowImGuiDemo = false;

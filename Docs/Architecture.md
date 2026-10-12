@@ -1287,11 +1287,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   (`scene.open`, `scene.new`, `project.open`, `project.create`, `project.close`, `project.openSample`, `editor.quit`)
   fails while it has unsaved changes unless `force: true` (`CommandUtils::CheckUnsavedChanges`) and reports
   `discardedChanges`, so neither an agent nor a script can throw away a person's work by accident; the UI asks first and
-  then passes `force`. An answer covers the changes the scene had then: New Project and Open Sample, which open after the
-  question, ask again at Create when the scene changed meanwhile (an agent edited it; `UndoStack::GetVersion` against the
-  version they opened with). Dialogs that ask while they stay open (the recovery dialog's Recover, those two) draw the
-  question over themselves (`EditorShell::DrawDiscardQuestion` inside their modal): a modal opened over the whole window
-  would close them, since ImGui keeps one popup per level.
+  then passes `force`. An answer covers the changes the scene had then: the question's Don't Save keeps the question open,
+  saying why, when the scene changed while it waited (an agent or a script edited it; `UndoStack::GetVersion` against the
+  version it was asked for), and New Project and Open Sample, which open after the question, ask again at Create when
+  the scene changed meanwhile (against the version they opened with). Dialogs that ask while they stay open (the
+  recovery dialog's Recover, those two) draw the question over themselves (`EditorShell::DrawDiscardQuestion` inside
+  their modal): a modal opened over the whole window would close them, since ImGui keeps one popup per level.
   A `.stproj` file dropped on the window opens its project. The look comes from
   `UI/Theme` (the Bedrock palette and its meanings; `ApplyTheme` is the `ImGuiLayer` style callback), `UI/EditorFonts`
   (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's icons merged into the Inter
