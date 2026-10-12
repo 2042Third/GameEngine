@@ -68,7 +68,8 @@ a Script component.
 The status bar's pill turns to "Build failed"; click it, or open **View > Problems**: the Problems panel lists every
 error and warning with its file (relative to the project) and line. **Double-click** one to open the file at that line
 in your code editor; hover it to see the whole message and path. A play whose build failed shows the Problems panel by
-itself. The Console has the whole build output; messages that name a file and line open it when clicked.
+itself, and every failed build says so in a toast at the bottom right, whose **Show Problems** opens the panel. The
+Console has the whole build output; messages that name a file and line open it when clicked.
 
 ## Your code editor
 
@@ -113,8 +114,8 @@ way.
 ## When a script crashes
 
 A crash in a script (a null pointer, a division by zero, an exception that escapes) stops play mode and disables the
-scripts until they are rebuilt or reloaded; the editor keeps running. The Console and the Problems panel say where it
-happened:
+scripts until they are rebuilt or reloaded; the editor keeps running. A toast tells you at once (**Show Problems** leads
+to the crash), and the Console and the Problems panel say where it happened:
 
 ```text
 Script crash in DoorOpener::OnUpdate on entity 'Door' (...): Access violation writing address 0x0000000000000000 ...
