@@ -198,7 +198,7 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   budget); its budgets (`PerfGPU.Streaming.Mips.*`, maxima by nature) are the streaming run's peak private memory (550 MB,
   mip streaming's limit), the most bytes and upload-step milliseconds of a frame (24 MB, 2 ms) and its longest frame (CPU
   time of the manager's update and the rendering, the first frame left out) to the baseline's (a `ratio`: budgets are
-  not negative, and streaming's longest frame is the shorter one). It then runs the exported
+  not negative, and the two runs' longest frames are about as long). It then runs the exported
   stress game in `StrataRuntime` (`STRATA_TEST_RUNTIME_PATH`, else next to the test executable) with `--perf-log` and
   `--resolution 1920x1080` (1920x1080 pixels whatever the display's scale; every run checks its swapchain), one run per
   attempt: every log has a row per frame, and the budget judges the slowest frame's `Assets.Finalize` stage; then the game

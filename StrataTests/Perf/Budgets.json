@@ -102,6 +102,6 @@
 	"PerfGPU.Streaming.RuntimePeakPrivateMemoryAllInView": { "Measured": 466.8, "Budget": 650.0, "Unit": "MB", "Target": 550.0 },
 	"PerfGPU.Streaming.Mips.PeakPrivateMemory": { "Measured": 371.3, "Budget": 550.0, "Unit": "MB" },
 	"PerfGPU.Streaming.Mips.MaxUploadBytesPerFrame": { "Measured": 16.71, "Budget": 24.0, "Unit": "MB" },
-	"PerfGPU.Streaming.Mips.MaxUploadStageMs": { "Measured": 1.879, "Budget": 2.0, "Unit": "ms" },
-	"PerfGPU.Streaming.Mips.MaxFrameRatio": { "Measured": 0.586, "Budget": 0.879, "Unit": "ratio" }
+	"PerfGPU.Streaming.Mips.MaxUploadStageMs": { "Measured": 1.789, "Budget": 2.0, "Unit": "ms" },
+	"PerfGPU.Streaming.Mips.MaxFrameRatio": { "Measured": 0.94, "Budget": 1.41, "Unit": "ratio" }
 }

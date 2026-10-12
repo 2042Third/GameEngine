@@ -87,8 +87,8 @@ namespace
 	// acceptance limit), the most bytes the asset manager uploaded in a frame (24 MB) and the longest its upload steps took
 	// (2 ms), and its longest frame to the baseline's (the CPU time of the manager's update and the rendering; a ratio,
 	// as budgets are not negative: the acceptance limit, "the longest frame at most 2 ms over the baseline's", is a ratio
-	// of about 1.5 for the baseline's 4 ms, above the budget). Its last frame must show the world like the baseline's (a
-	// check).
+	// of about 1.8 for the baseline's 2.4 ms, above the budget; both runs' longest frame is one of their first, which
+	// load the world). Its last frame must show the world like the baseline's (a check).
 	constexpr uint64_t c_MipsTextureBudget = 96 * c_MB;
 	constexpr const char* c_MipsPeakPrivateMemory = "PerfGPU.Streaming.Mips.PeakPrivateMemory";
 	constexpr const char* c_MipsMaxUploadBytesPerFrame = "PerfGPU.Streaming.Mips.MaxUploadBytesPerFrame";
