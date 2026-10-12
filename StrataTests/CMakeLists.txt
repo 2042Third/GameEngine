@@ -335,6 +335,12 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEXPECTED_OUTPUT=--perf-log needs the path of the CSV file to write"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidPerfLog PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
+	add_test(NAME StrataRuntime.InvalidSaveDirectory
+		COMMAND "${CMAKE_COMMAND}"
+			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--headless;--frames;5;--save-directory"
+			"-DEXPECTED_OUTPUT=--save-directory needs the folder to keep the game's save files in"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+	set_tests_properties(StrataRuntime.InvalidSaveDirectory PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 
 	# The exported game in a window renders a few frames from its camera and saves the last one, which must show the scene:
 	# not black, not one color, and the blue box covering at least 1% of it.
@@ -402,10 +408,13 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 	set_tests_properties(StrataEditor.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestProject FIXTURES_SETUP StrataFeatureTestGame LABELS "feature")
 
 	# The game runs longer than the in-process feature scenario (200 frames), where nothing may end it: its scripts quit only
-	# when a test runner asks them to.
+	# when a test runner asks them to. Its save files go into the build tree (--save-directory), never into the user's data,
+	# where the runs of other build trees would meet them.
 	add_test(NAME StrataRuntime.FeatureTest
-		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_FEATURE_RUN_DIR}/Build/FeatureTest${CMAKE_EXECUTABLE_SUFFIX}" "-DARGUMENTS=--headless|--frames|240"
-			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=${STRATA_FEATURE_RUN_DIR}/Build/FeatureTest${CMAKE_EXECUTABLE_SUFFIX}"
+			"-DARGUMENTS=--headless|--frames|240|--save-directory|${STRATA_FEATURE_RUN_DIR}/Saves"
+			"-DEXPECT=${STRATA_FEATURE_SCRIPTS_RAN}|Keeping the game's save files in ${STRATA_FEATURE_RUN_DIR}/Saves"
+			"-DEXPECT_PATHS=${STRATA_FEATURE_RUN_DIR}/Saves" -P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
 	set_tests_properties(StrataRuntime.FeatureTest PROPERTIES FIXTURES_REQUIRED StrataFeatureTestGame LABELS "feature")
 endif()
 

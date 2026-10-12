@@ -69,6 +69,9 @@ namespace Strata
 			}
 		}
 		ScriptEngine::SetActive(runtime->m_ScriptEngine);
+		// The game's save files, from its first script call on (OnCreate may load a save).
+		runtime->m_Saves = options.SaveFilesDirectory.empty() ? SaveDirectory::ForGame(runtime->m_Manifest.Name) : CreateScope<SaveDirectory>(options.SaveFilesDirectory);
+		runtime->m_SavesProvider = CreateScope<EngineServices::ScopedProvider<IGameSaves>>(*runtime->m_Saves);
 
 		// The loading scene first, so that it plays while the start scene loads (both load in the background).
 		const AssetHandle loadingScene = runtime->m_Manifest.LoadingScene;
@@ -244,11 +247,25 @@ namespace Strata
 
 	void GameRuntime::CheckScriptFault()
 	{
-		if (m_ScriptFault || !m_ScriptEngine)
+		if (!m_ScriptEngine)
 			return;
-		m_ScriptFault = m_ScriptEngine->GetFault();
-		if (m_ScriptFault)
-			ST_CORE_ERROR("The scripts of '{}' crashed and stay disabled for the rest of the session: {}", m_Manifest.Name, m_ScriptFault->Description);
+		if (!m_ScriptFault)
+		{
+			m_ScriptFault = m_ScriptEngine->GetFault();
+			if (m_ScriptFault)
+				ST_CORE_ERROR("The scripts of '{}' crashed and stay disabled for the rest of the session: {}", m_Manifest.Name, m_ScriptFault->Description);
+		}
+		// The crash's location comes from symbolization on a job, a moment later (the module ships with its PDB outside Dist).
+		if (m_ScriptFault && !m_ScriptFault->Symbolized)
+		{
+			std::optional<ScriptFault> current = m_ScriptEngine->GetFault();
+			if (current && current->Symbolized)
+			{
+				m_ScriptFault = std::move(current);
+				if (m_ScriptFault->Location)
+					ST_CORE_ERROR("The script crash happened at {}", DescribeScriptCodeLocation(*m_ScriptFault->Location));
+			}
+		}
 	}
 
 	void GameRuntime::HandleSceneRequests()

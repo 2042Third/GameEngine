@@ -12,6 +12,7 @@
 #include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 struct ImGuiWindow;
 
@@ -141,12 +142,17 @@ namespace Strata::Tests
 		// Glyphs the last frame drew in the window and its child windows (tables, child regions) with their font's fallback
 		// glyph (U+FFFD or '?'): characters the font lacks, such as an icon drawn in a font without the icons.
 		static uint32_t CountFallbackGlyphs(ImGuiWindow* window);
+		// How often the last frame drew a character in the window and its child windows: text that shows whole draws each
+		// of its characters (a label cut at "##" does not).
+		static uint32_t CountGlyphs(ImGuiWindow* window, ImWchar character);
 		// The harness's clipboard: ImGui's copy and paste use it instead of the system's, so tests leave the user's alone.
 		const std::string& GetClipboard() const { return m_Clipboard; }
 
 		static constexpr float c_DeltaTime = 1.0f / 60.0f;
 	private:
 		void HonorTextureRequests();
+		// The quads drawn with one of the glyphs whose top-left atlas corners are given (a quad starts with that corner).
+		static uint32_t CountGlyphQuads(ImGuiWindow* window, const std::vector<ImVec2>& glyphCorners);
 	private:
 		ImGuiContext* m_Context = nullptr;
 		ImGuiLayer m_ImGuiLayer;

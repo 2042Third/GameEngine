@@ -106,6 +106,14 @@ namespace
 		CHECK(ground.GetComponent<MeshRendererComponent>().Mesh == BuiltinAssets::PlaneMesh);
 		CHECK(ground.GetComponent<MeshRendererComponent>().Material == groundMaterial);
 		CHECK(Math::IsNearlyEqual(ground.GetComponent<TransformComponent>().Scale, glm::vec3(20.0f, 1.0f, 20.0f), 1e-6f));
+		// A static box collider (no rigid body) under the plane, scaled with it: 20 x 20 with its top at y = 0.
+		REQUIRE(ground.HasComponent<BoxColliderComponent>());
+		CHECK_FALSE(ground.HasComponent<RigidBodyComponent>());
+		const BoxColliderComponent& collider = ground.GetComponent<BoxColliderComponent>();
+		CHECK(collider.HalfExtents.x * 20.0f == doctest::Approx(10.0f));
+		CHECK(collider.HalfExtents.z * 20.0f == doctest::Approx(10.0f));
+		CHECK(collider.Offset.y + collider.HalfExtents.y == doctest::Approx(0.0f));
+		CHECK(collider.HalfExtents.y > 0.0f);
 
 		Entity postProcess = scene.FindEntityByName("Post Process");
 		REQUIRE(postProcess);
@@ -113,6 +121,23 @@ namespace
 		CHECK(postProcess.GetComponent<PostProcessComponent>().Tonemapper == TonemapOperator::ACES);
 		CHECK(postProcess.GetComponent<PostProcessComponent>().AutoExposure);
 		CHECK(postProcess.GetComponent<PostProcessComponent>().Exposure == doctest::Approx(1.0f));
+	}
+
+	// Drops a dynamic unit box from 2 m above the middle of the scene's ground, in a playing copy of the scene, and returns the
+	// height of its center after 120 fixed steps (two seconds).
+	float DropUnitBox(const Ref<Scene>& editScene)
+	{
+		Ref<Scene> scene = Scene::Copy(editScene);
+		Entity box = scene->CreateEntity("Crate");
+		box.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 2.0f, 0.0f);
+		box.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Dynamic;
+		box.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(0.5f);
+		scene->OnRuntimeStart(SceneRuntimeMode::Play);
+		for (int step = 0; step < 120; step++)
+			scene->OnUpdateRuntime(scene->GetSettings().FixedTimestep);
+		const float height = scene->GetWorldTransform(box)[3].y;
+		scene->OnRuntimeStop();
+		return height;
 	}
 
 }
@@ -246,6 +271,20 @@ TEST_SUITE("Editor.Templates")
 		harness.Context.CloseProject();
 		harness.Run("scene.new", { { "template", "basic3d" } });
 		CheckBasic3DScene(*harness.Context.GetEditScene(), BuiltinAssets::DefaultMaterial);
+	}
+
+	TEST_CASE("A dynamic box dropped on the basic3d ground rests on it")
+	{
+		// The first thing people try with physics: a crate on the ground of a new project. It lands and stays at y = 0.5
+		// (its half height) instead of falling through the plane forever.
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("Basic3DPhysics") / "Crates";
+		TemplateHarness harness;
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Crates" }, { "template", "basic3d" } });
+		CHECK(std::abs(DropUnitBox(harness.Context.GetEditScene()) - 0.5f) <= 0.02f);
+
+		// A scene made by scene.new from the template has the same ground.
+		harness.Run("scene.new", { { "name", "Level" }, { "template", "basic3d" } });
+		CHECK(std::abs(DropUnitBox(harness.Context.GetEditScene()) - 0.5f) <= 0.02f);
 	}
 
 	TEST_CASE("Unknown templates are rejected before anything is created")

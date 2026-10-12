@@ -35,13 +35,14 @@ namespace Strata
 	// and static bodies only follow signaled changes, see PhysicsWorld).
 	//
 	// Other systems reach it through the scene services it registers while it exists (Scene/SceneServices.h):
-	// ICollisionEventSource, IBodyMotionQuery, IBodyControl and IPhysicsQueries. Collision events are collected during each
+	// ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries and ICharacterControl. Collision events are collected during each
 	// step and dispatched afterwards on the main thread to the registered listeners (see ICollisionEventSource, which also
 	// says which contacts are tracked). Listeners may use the whole scene and physics API, including destroying entities;
 	// End events caused by changes made outside a step are dispatched after the next update.
 	//
 	// Main thread only. Functions return false / zero / empty results while there is no simulation.
-	class PhysicsSystem : public SceneSystem, public ICollisionEventSource, public IBodyMotionQuery, public IBodyControl, public IPhysicsQueries
+	class PhysicsSystem : public SceneSystem, public ICollisionEventSource, public IBodyMotionQuery, public IBodyControl, public IPhysicsQueries,
+		public ICharacterControl
 	{
 	public:
 		explicit PhysicsSystem(Scene& scene);
@@ -88,7 +89,10 @@ namespace Strata
 		// Sets the scene's gravity (SceneSettings::Gravity) and applies it immediately. Non-finite values are rejected.
 		bool SetGravity(const glm::vec3& gravity);
 		glm::vec3 GetGravity() const;
-		// This scene's layer matrix (initialized from the default settings); applies to the running simulation too.
+		// Whether two layers collide: both the scene's layer matrix (SceneSettings::PhysicsLayers) and the default settings'
+		// (GetDefaultSettings, all layers collide unless a program changes them) must allow it. SetLayersCollide changes the
+		// scene's matrix, so the change is what the scene shows (and saves), and applies it to the running simulation at once;
+		// changes of the scene's matrix made elsewhere (scene.setSettings, undo) apply at the next fixed step.
 		void SetLayersCollide(uint32_t layerA, uint32_t layerB, bool collide);
 		bool DoLayersCollide(uint32_t layerA, uint32_t layerB) const;
 		PhysicsStats GetStats() const;
@@ -126,6 +130,17 @@ namespace Strata
 		std::vector<Entity> OverlapSphere(const glm::vec3& center, float radius, uint32_t layerMask = c_AllPhysicsLayers, bool includeTriggers = false) override;
 		std::vector<Entity> OverlapBox(const glm::vec3& center, const glm::vec3& halfExtents, const glm::quat& rotation, uint32_t layerMask = c_AllPhysicsLayers,
 			bool includeTriggers = false) override;
+
+		//////////////////////////////////////////////////////////////////////////
+		// Character controllers (ICharacterControl; see PhysicsWorld)
+		//////////////////////////////////////////////////////////////////////////
+
+		bool HasCharacterController(Entity entity) override;
+		bool MoveCharacter(Entity entity, const glm::vec3& velocity) override;
+		bool JumpCharacter(Entity entity, float speed) override;
+		bool TeleportCharacter(Entity entity, const glm::vec3& position) override;
+		bool AddCharacterMotion(Entity entity, const glm::vec3& displacement) override;
+		std::optional<CharacterState> GetCharacterState(Entity entity) override;
 	private:
 		struct CollisionListener
 		{
@@ -141,6 +156,10 @@ namespace Strata
 		// Creates the world once physics components exist, then applies the changes recorded since the last call.
 		void ApplyPendingChanges();
 		void SyncGravity();
+		// The matrix the world uses: the scene's and the default settings' masks together.
+		std::array<uint32_t, c_PhysicsLayerCount> GetEffectiveLayerMasks() const;
+		// Applies the scene's layer matrix to the world when it changed (scene.setSettings, a script, the inspector).
+		void SyncLayers();
 		void DispatchCollisionEvents();
 		// Tells the world which contacts to track: all of them while a listener of every entity is registered.
 		void UpdateContactTracking();
@@ -156,6 +175,7 @@ namespace Strata
 		CollisionListenerID m_NextListenerID = 1;
 		std::unordered_map<UUID, uint32_t> m_CollisionWatches; // Watched entities and their watch counts (see WatchCollisions)
 		glm::vec3 m_AppliedGravity = glm::vec3(0.0f); // Scene gravity last applied to the world
+		std::array<uint32_t, c_PhysicsLayerCount> m_AppliedLayerMasks = {}; // Layer matrix last applied to the world
 	};
 
 }

@@ -77,8 +77,9 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress` and whether it is the project's `startScene`, `lastOpen` with how it ended, `play` for a switch a running game asked for, `subScenes` of the running game; `{"wait": true}` answers once nothing is opening); also `editor.status`'s `sceneLoad` |
 | Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`; editors run with `--commands` or `--frames` list what they opened without saving it); `editor.removeRecentProject {path}` takes one off |
 | What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
-| Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; build its scripts with `script.build` before playing) |
+| Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; `play.start` builds its scripts first) |
 | Does the person at the editor see the launcher or the editor? | `editor.status` (`editor.launcher`; also `editor.gpu` and `editor.startupSeconds`) |
+| Did the game ask for fullscreen or a resolution, lock the cursor, where do its saves go? | `editor.status` (`game`: `windowRequests`, recorded but not applied in play mode; `cursor`; `saveDirectory`, the project's `.strata/Saves`) |
 | Which commands and parameters exist? | `editor.commands` (or `list --json`) |
 | Which components and properties (types, ranges, enum values)? | `component.list` |
 | Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` |
@@ -152,9 +153,13 @@ editor started with `--no-gpu` (use `--headless`):
   many are still importing (`assets.importing`), `asset.info` per asset (`importing`); wait for 0 (e.g. `editor.wait`
   between checks) before relying on sub-assets or exporting, which waits for them itself. Editors run with `--commands`
   or `--frames` import before the project opens.
-- Game logic: write C++ scripts into the project's `Scripts/` folder and use `script.build`, `script.status`,
-  `script.add`, `script.setField`, `script.reload` (see `.claude/skills/strata-scripting/SKILL.md`, "The workflow in a
-  game project"). Builds need CMake and the engine's compiler on the machine; they work with `--no-gpu`.
+- Game logic: write C++ scripts into the project's `Scripts/` folder (`script.create {"class", "fields"}` starts one) and
+  use `script.build`, `script.status`, `script.list` (the source files with the classes each registers), `script.add`,
+  `script.setField`, `script.reload` (see
+  `.claude/skills/strata-scripting/SKILL.md`, "The workflow in a game project"). Builds need CMake and the engine's
+  compiler on the machine; they work with `--no-gpu`. `script.open {"file", "line"}` shows a source line to the person
+  in their code editor (`script.setExternalEditor` sets which: its program must be a path or a name in PATH, and the
+  answer's `program` says which file it starts).
 
 ## 4. Conventions
 
@@ -167,7 +172,9 @@ editor started with `--no-gpu` (use `--headless`):
   back as a quaternion). Property names are case-insensitive. `component.get` shows the accepted format of every value.
 - **Undo**: every successful mutating command is one undo step (`edit.undo`, `edit.redo`, `edit.history`). Material
   edits are steps of the same history, but they save their file themselves, so they never mark the scene unsaved.
-- **Play mode**: `play.start` runs a copy of the scene. Changes made while playing apply to that copy, carry a
+- **Play mode**: `play.start` runs a copy of the scene, after building the scripts when their sources changed or they
+  are not built while scenes use them (it answers once the game plays, with `built`; a failed build fails it with the
+  errors; `{"build": false}` plays what is loaded). Changes made while playing apply to that copy, carry a
   `warning` in the result, and are discarded by `play.stop`. Undo and redo are not available while playing;
   `scene.save` saves the edited scene, never the running copy.
 - **Errors** (JSON-RPC codes): `-32602` invalid parameters (the error's `data.parameters` is the command's schema:
@@ -180,8 +187,9 @@ editor started with `--no-gpu` (use `--headless`):
 **New game from scratch**: start from the `basic3d` template. It saves a lit start scene `Scenes/Main.stscene` (set as
 the start scene) with "Main Camera" (primary, with an audio listener, at (0, 2, 6) looking at the origin), "Sun" (a
 directional light with shadows), "Sky" (a procedural sky light), "Ground" (a 20 x 20 plane with the dark stone material
-`Materials/Ground.stmat`, which the template adds to the project) and "Post Process"; the result names it in
-`startScene`. Without `template` the project is `empty` (no scene; build and save one yourself).
+`Materials/Ground.stmat`, which the template adds to the project, and a static `BoxCollider` whose top is the plane at y = 0,
+so dynamic bodies and character controllers stand on it) and "Post Process"; the result names it in `startScene`. Without
+`template` the project is `empty` (no scene; build and save one yourself).
 
 ```text
 project.create      {"directory": "<absolute dir>", "name": "Tetris", "template": "basic3d"}
@@ -271,6 +279,10 @@ undo step (as the inspector does for a multi-selection); `entity.rename`, `entit
 timestep, and `physicsCapacity {maxBodies, maxBodyPairs, maxContactConstraints}` for scenes that spawn many bodies while
 they play; 0 sizes a capacity from the bodies the scene starts with; set capacities in edit mode: they apply when play
 starts; `maxEntitiesInstantiatedPerFrame` bounds how many entities sub-scenes create per frame, 5000 by default).
+Collision layers: `scene.setSettings {"layerNames": {"1": "Player", "2": "Debris"}, "layerCollisions":
+[{"layers": ["Player", "Debris"], "collide": false}]}` names layers and keeps pairs apart (`resetLayerCollisions: true`
+lets everything collide again first; `scene.info` lists `physicsLayers`), and `RigidBody.Layer` and
+`CharacterController.Layer` take a layer's name as well as its index (`component.set {"values": {"Layer": "Debris"}}`).
 
 **Materials**: `material.set {"material": "Materials/Red.stmat", "properties": {"Roughness": 0.3}}` saves the material
 file and is one undo step (`edit.undo` restores the file and what entities show); entities using it show the change in
@@ -344,11 +356,16 @@ input.key         {"key": "Right", "action": "release"}
 input.mouseMove   {"position": [640, 360]}                # pixels from the game view's top-left corner
 input.mouseButton {"button": "Left"}                      # Left, Right, Middle, Button3..7; same actions as keys
 input.scroll      {"delta": [0, 1]}
+input.gamepadButton {"button": "A"}                       # gamepad 0 unless "gamepad": 0..3; same actions as keys
+input.gamepadAxis {"axis": "LeftY", "value": 1}           # stick up, held until replaced, "value": null or play.stop
+input.gamepadAxis {"axis": "RightTrigger", "value": 1, "frames": 30} # half a second, then back to rest
 input.state       {}                                      # what simulated input holds; input.releaseAll lets go of it
 ```
 
 Keys are named like the SDK's `Key::` constants (`Left`, `Up`, `Space`, `Enter`, `Escape`, `A`, `D1`, `F5`, `LeftShift`;
-case does not matter). Each command answers once the game has seen its input (`"seen": true`), so issue them one after another
+case does not matter), gamepad buttons and axes like `GamepadButton::`/`GamepadAxis::` (`A`, `B`, `X`, `Y`, `LeftBumper`,
+`Start`, `DPadUp`; `LeftX`, `LeftY` (+1 is up), `RightX`, `RightY`, `LeftTrigger`, `RightTrigger`); a gamepad the
+commands used is connected for the game until play stops. Each command answers once the game has seen its input (`"seen": true`), so issue them one after another
 and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
 
 - Input only reaches play mode (not edit or simulate); `play.stop` drops held keys.

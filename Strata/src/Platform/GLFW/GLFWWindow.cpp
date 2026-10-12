@@ -85,7 +85,7 @@ namespace Strata
 				width = mode->width;
 				height = mode->height;
 			}
-			m_Data.Fullscreen = true;
+			m_Mode = WindowMode::Borderless;
 		}
 
 		m_Window = glfwCreateWindow(width, height, m_Data.Title.c_str(), monitor, nullptr);
@@ -313,7 +313,15 @@ namespace Strata
 				bool buttons[c_GamepadButtonCount];
 				for (uint32_t index = 0; index < c_GamepadButtonCount; index++)
 					buttons[index] = state.buttons[index] == GLFW_PRESS;
-				Input::ProcessGamepad(gamepad, true, state.axes, buttons);
+				// Input's conventions (GamepadCodes.h): sticks +Y up (GLFW reports +Y down), triggers 0 to 1 (GLFW: -1 to 1).
+				float axes[c_GamepadAxisCount];
+				axes[static_cast<size_t>(GamepadAxis::LeftX)] = state.axes[GLFW_GAMEPAD_AXIS_LEFT_X];
+				axes[static_cast<size_t>(GamepadAxis::LeftY)] = -state.axes[GLFW_GAMEPAD_AXIS_LEFT_Y];
+				axes[static_cast<size_t>(GamepadAxis::RightX)] = state.axes[GLFW_GAMEPAD_AXIS_RIGHT_X];
+				axes[static_cast<size_t>(GamepadAxis::RightY)] = -state.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y];
+				axes[static_cast<size_t>(GamepadAxis::LeftTrigger)] = (state.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] + 1.0f) * 0.5f;
+				axes[static_cast<size_t>(GamepadAxis::RightTrigger)] = (state.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] + 1.0f) * 0.5f;
+				Input::ProcessGamepad(gamepad, true, axes, buttons);
 			}
 			else
 			{
@@ -344,27 +352,84 @@ namespace Strata
 		glfwSetWindowTitle(m_Window, title.c_str());
 	}
 
-	void GLFWWindow::SetFullscreen(bool fullscreen)
+	void GLFWWindow::SetMode(WindowMode mode)
 	{
-		if (fullscreen == m_Data.Fullscreen)
+		if (mode == m_Mode)
 			return;
 
-		if (fullscreen)
+		// The window covers the display it is on (the primary one while it is windowed).
+		GLFWmonitor* monitor = glfwGetWindowMonitor(m_Window);
+		if (!monitor)
+			monitor = glfwGetPrimaryMonitor();
+		const GLFWvidmode* desktop = monitor ? glfwGetVideoMode(monitor) : nullptr;
+		if (mode != WindowMode::Windowed && !desktop)
+		{
+			ST_CORE_WARN("Window: there is no display to cover; the window stays as it is");
+			return;
+		}
+
+		if (m_Mode == WindowMode::Windowed)
 		{
 			glfwGetWindowPos(m_Window, &m_WindowedX, &m_WindowedY);
 			glfwGetWindowSize(m_Window, &m_WindowedWidth, &m_WindowedHeight);
-
-			GLFWmonitor* monitor = glfwGetPrimaryMonitor();
-			const GLFWvidmode* mode = glfwGetVideoMode(monitor);
-			if (!mode)
-				return;
-			glfwSetWindowMonitor(m_Window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
 		}
-		else
+		switch (mode)
 		{
-			glfwSetWindowMonitor(m_Window, nullptr, m_WindowedX, m_WindowedY, m_WindowedWidth, m_WindowedHeight, 0);
+			case WindowMode::Windowed:
+				glfwSetWindowMonitor(m_Window, nullptr, m_WindowedX, m_WindowedY, m_WindowedWidth, m_WindowedHeight, 0);
+				m_Mode = mode;
+				if (m_Resolution.x > 0 && m_Resolution.y > 0)
+					SetFramebufferSize(static_cast<int>(m_Resolution.x), static_cast<int>(m_Resolution.y));
+				return;
+			case WindowMode::Fullscreen:
+			{
+				// The display switches to the resolution asked for, or stays at the desktop's.
+				const int width = m_Resolution.x > 0 ? static_cast<int>(m_Resolution.x) : desktop->width;
+				const int height = m_Resolution.y > 0 ? static_cast<int>(m_Resolution.y) : desktop->height;
+				glfwSetWindowMonitor(m_Window, monitor, 0, 0, width, height, GLFW_DONT_CARE);
+				break;
+			}
+			case WindowMode::Borderless:
+				// A full screen window at the desktop's video mode does not switch the display's mode.
+				glfwSetWindowMonitor(m_Window, monitor, 0, 0, desktop->width, desktop->height, desktop->refreshRate);
+				break;
 		}
-		m_Data.Fullscreen = fullscreen;
+		m_Mode = mode;
+	}
+
+	void GLFWWindow::SetResolution(uint32_t width, uint32_t height)
+	{
+		if (width == 0 || height == 0)
+			return;
+		m_Resolution = glm::uvec2(width, height);
+		if (m_Mode == WindowMode::Windowed)
+		{
+			SetFramebufferSize(static_cast<int>(width), static_cast<int>(height));
+		}
+		else if (m_Mode == WindowMode::Fullscreen)
+		{
+			if (GLFWmonitor* monitor = glfwGetWindowMonitor(m_Window))
+				glfwSetWindowMonitor(m_Window, monitor, 0, 0, static_cast<int>(width), static_cast<int>(height), GLFW_DONT_CARE);
+		}
+	}
+
+	void GLFWWindow::SetFramebufferSize(int width, int height)
+	{
+		// Where screen coordinates are not pixels (a scaled display), the window's size in screen coordinates differs from
+		// its framebuffer's: scale by the ratio of the two.
+		int windowWidth = 0;
+		int windowHeight = 0;
+		int framebufferWidth = 0;
+		int framebufferHeight = 0;
+		glfwGetWindowSize(m_Window, &windowWidth, &windowHeight);
+		glfwGetFramebufferSize(m_Window, &framebufferWidth, &framebufferHeight);
+		const auto scaled = [](int size, int windowSize, int framebufferSize)
+		{
+			if (windowSize <= 0 || framebufferSize <= 0)
+				return size;
+			return std::max(1, static_cast<int>(std::lround(static_cast<double>(size) * windowSize / framebufferSize)));
+		};
+		glfwSetWindowSize(m_Window, scaled(width, windowWidth, framebufferWidth), scaled(height, windowHeight, framebufferHeight));
 	}
 
 	bool GLFWWindow::IsMinimized() const

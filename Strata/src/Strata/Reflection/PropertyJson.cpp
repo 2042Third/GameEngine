@@ -329,6 +329,8 @@ namespace Strata
 		}
 		if (property.IsReadOnly())
 			description["ReadOnly"] = true;
+		if (HasFlag(property.Flags, PropertyFlags::PhysicsLayer))
+			description["PhysicsLayer"] = true;
 		return description;
 	}
 

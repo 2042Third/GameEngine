@@ -3,8 +3,10 @@
 #include "Editor/ScriptBuildConfig.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Hash.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Core/Platform.h>
 #include <Strata/Core/Process.h>
 #include <Strata/Project/Project.h>
 
@@ -12,6 +14,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <iterator>
 #include <optional>
 #include <utility>
 
@@ -36,10 +39,20 @@ namespace Strata
 		constexpr size_t c_MaxOutputLineSize = 64 * 1024;
 		constexpr std::string_view c_CMakeError = "CMake Error";
 		constexpr std::string_view c_CMakeWarning = "CMake Warning";
+		constexpr const char* c_PresetsFile = "CMakePresets.json";
+		constexpr const char* c_PresetName = "strata";
+		// The vendor key that marks presets the editor wrote (and may rewrite).
+		constexpr const char* c_PresetsVendor = "strata.dev/editor";
 
 		bool IsVisualStudio(const ScriptBuildSettings& settings)
 		{
 			return settings.Generator.find("Visual Studio") != std::string::npos;
+		}
+
+		// CMake writes compile_commands.json for the Makefile and Ninja generators only.
+		bool ExportsCompileCommands(const ScriptBuildSettings& settings)
+		{
+			return settings.Generator.find("Makefiles") != std::string::npos || settings.Generator.find("Ninja") != std::string::npos;
 		}
 
 		// The longest paths below a build directory at which MSBuild writes tracking logs (c_MSBuildMaxTrackedPathLength),
@@ -403,6 +416,9 @@ namespace Strata
 		if (!settings.Configuration.empty())
 			arguments.push_back((settings.IsMultiConfig() ? "-DCMAKE_CONFIGURATION_TYPES=" : "-DCMAKE_BUILD_TYPE=") + settings.Configuration);
 		arguments.push_back("-DSTRATA_ENGINE_DIR=" + FileSystem::ToUTF8(settings.EngineDirectory));
+		// Tools that read compile_commands.json (clangd, IDEs opened on the build tree) see the scripts' include paths.
+		if (ExportsCompileCommands(settings))
+			arguments.push_back("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON");
 
 		// Script modules are MODULE libraries, which always go to the library output directory. Multi-config generators
 		// append the configuration to the plain variable, so the per-configuration one is set as well.
@@ -441,10 +457,147 @@ namespace Strata
 		const size_t excess = longest - c_MSBuildMaxTrackedPathLength;
 		const std::string shorterName = depths.Target > depths.Configure
 			? fmt::format(", or give its script module a shorter name than '{}'", targetName) : std::string();
+		const std::optional<std::filesystem::path> home = Platform::FindHomeDirectory();
+		const std::string shorterPlace = home ? fmt::format("such as one in '{}'", FileSystem::ToUTF8((*home / "StrataProjects").make_preferred()))
+			: std::string("such as one near the root of a drive");
 		return fmt::format("The project's path is too long to build its scripts with {}: the build would write files at paths of {} characters below "
 			"'{}', and MSBuild's file tracker cannot create files at paths longer than {} characters, even where Windows allows long paths. Move "
-			"the project to a folder whose path is at least {} {} shorter, such as one in <home>/StrataProjects{}", settings.Generator, longest,
-			FileSystem::ToUTF8(buildDirectory), c_MSBuildMaxTrackedPathLength, excess, excess == 1 ? "character" : "characters", shorterName);
+			"the project to a folder whose path is at least {} {} shorter, {}{}", settings.Generator, longest, FileSystem::ToUTF8(buildDirectory),
+			c_MSBuildMaxTrackedPathLength, excess, excess == 1 ? "character" : "characters", shorterPlace, shorterName);
+	}
+
+	std::filesystem::path GetScriptBuildsRoot()
+	{
+		if (const std::optional<std::string> overridden = Platform::GetEnvVar("STRATA_SCRIPT_BUILDS_DIR"); overridden && !overridden->empty())
+			return FileSystem::FromUTF8(*overridden);
+		return Platform::GetUserDataDirectory("Strata") / "Builds";
+	}
+
+	std::filesystem::path GetPerUserScriptBuildDirectory(const Project& project)
+	{
+		// Named by the project's place, so that each project keeps its own tree across sessions.
+		std::error_code error;
+		const std::filesystem::path absolute = std::filesystem::absolute(project.GetProjectDirectory(), error);
+		const std::string directory = FileSystem::ToUTF8((error ? project.GetProjectDirectory() : absolute).lexically_normal());
+		return GetScriptBuildsRoot() / fmt::format("{:016x}", Hash::FNV1a(directory));
+	}
+
+	std::optional<ScriptBuildLocation> ResolveScriptBuildLocation(const Project& project, const ScriptBuildSettings& settings, std::string* outError)
+	{
+		const std::string module = project.GetScriptModuleName();
+		ScriptBuildLocation location;
+		location.BuildDirectory = project.GetScriptBuildDirectory();
+		location.IDEBuildDirectory = project.GetIntermediateDirectory() / "Scripts" / "IDE";
+		const std::optional<std::string> projectProblem = CheckScriptBuildPathLength(settings, location.BuildDirectory, module);
+		if (!projectProblem)
+			return location;
+
+		// The per-user directory is short: the project's path no longer matters there.
+		const std::filesystem::path perUser = GetPerUserScriptBuildDirectory(project);
+		if (CheckScriptBuildPathLength(settings, perUser / "Build", module))
+		{
+			if (outError)
+				*outError = *projectProblem;
+			return std::nullopt;
+		}
+		location.BuildDirectory = perUser / "Build";
+		location.IDEBuildDirectory = perUser / "IDE";
+		location.MovedReason = fmt::format("The project's path is too long for MSBuild's file tracker to build its scripts in '{}' (it cannot create "
+			"files at paths over {} characters), so they build in the per-user directory '{}'", FileSystem::ToUTF8(project.GetScriptBuildDirectory()),
+			c_MSBuildMaxTrackedPathLength, FileSystem::ToUTF8(location.BuildDirectory));
+		return location;
+	}
+
+	std::string MakeScriptCMakePresets(const Project& project, const ScriptBuildSettings& settings)
+	{
+		const std::optional<ScriptBuildLocation> location = ResolveScriptBuildLocation(project, settings);
+		if (!location)
+			return {};
+
+		// The cache variables of the editor's own configure step, for the IDE's build tree: the same toolchain, engine and
+		// module output, so that what the IDE builds is what the editor loads (and hot reloads).
+		nlohmann::json cacheVariables = nlohmann::json::object();
+		const std::vector<std::string> arguments = MakeScriptConfigureArguments(settings, project.GetScriptSourceDirectory(), location->IDEBuildDirectory,
+			project.GetScriptBinaryDirectory());
+		for (const std::string& argument : arguments)
+		{
+			if (argument.rfind("-D", 0) != 0)
+				continue;
+			const size_t equals = argument.find('=');
+			if (equals != std::string::npos)
+				cacheVariables[argument.substr(2, equals - 2)] = argument.substr(equals + 1);
+		}
+		cacheVariables["CMAKE_EXPORT_COMPILE_COMMANDS"] = "ON";
+
+		nlohmann::json configure = {
+			{ "name", c_PresetName },
+			{ "displayName", fmt::format("Strata ({}, {})", settings.Generator, settings.Configuration) },
+			{ "description", "The Strata engine's toolchain and configuration, as the editor builds the scripts (written by the editor)" },
+			{ "generator", settings.Generator },
+			{ "binaryDir", FileSystem::ToUTF8(location->IDEBuildDirectory) },
+			{ "cacheVariables", std::move(cacheVariables) } };
+		if (!settings.Platform.empty())
+			configure["architecture"] = { { "value", settings.Platform }, { "strategy", "set" } };
+		if (!settings.Toolset.empty())
+			configure["toolset"] = { { "value", settings.Toolset }, { "strategy", "set" } };
+		if (FileSystem::IsRegularFile(settings.CMake))
+			configure["cmakeExecutable"] = FileSystem::ToUTF8(settings.CMake);
+
+		nlohmann::json build = { { "name", c_PresetName }, { "configurePreset", c_PresetName } };
+		if (!settings.Configuration.empty())
+			build["configuration"] = settings.Configuration;
+
+		const nlohmann::json presets = {
+			{ "version", 3 },
+			{ "cmakeMinimumRequired", { { "major", 3 }, { "minor", 25 }, { "patch", 0 } } },
+			{ "configurePresets", nlohmann::json::array({ std::move(configure) }) },
+			{ "buildPresets", nlohmann::json::array({ std::move(build) }) },
+			{ "vendor", { { c_PresetsVendor, { { "note", "Written by the Strata editor for this machine's engine and toolchain; it rewrites the file "
+				"when they change. Remove this vendor entry to keep your own." } } } } } };
+		return JsonUtils::Dump(presets, 2, ' ') + "\n";
+	}
+
+	bool UpdateScriptCMakePresets(const Project& project, const ScriptBuildSettings& settings, bool* outWritten, std::string* outError)
+	{
+		if (outWritten)
+			*outWritten = false;
+		const std::filesystem::path directory = project.GetScriptSourceDirectory();
+		const std::filesystem::path path = directory / c_PresetsFile;
+		const std::string content = MakeScriptCMakePresets(project, settings);
+		if (content.empty())
+			return true; // The project cannot build its scripts here: nothing for an IDE either
+
+		if (const std::optional<std::string> existing = FileSystem::ReadText(path))
+		{
+			if (*existing == content)
+				return true;
+			// Presets of the project's own (or edited to be) are left alone.
+			const std::optional<nlohmann::json> json = JsonUtils::Parse(*existing);
+			const bool ours = json && json->is_object() && json->contains("vendor") && (*json)["vendor"].is_object() && (*json)["vendor"].contains(c_PresetsVendor);
+			if (!ours)
+				return true;
+		}
+		else if (FileSystem::Exists(path))
+		{
+			return true;
+		}
+
+		if (!FileSystem::CreateDirectories(directory) || !FileSystem::WriteText(path, content))
+		{
+			if (outError)
+				*outError = fmt::format("Cannot write '{}'", FileSystem::ToUTF8(path));
+			return false;
+		}
+		const std::filesystem::path gitIgnore = directory / ".gitignore";
+		if (!FileSystem::Exists(gitIgnore) && !FileSystem::WriteText(gitIgnore, "# This machine's engine and toolchain (the Strata editor writes it)\n/CMakePresets.json\n"))
+		{
+			if (outError)
+				*outError = fmt::format("Cannot write '{}'", FileSystem::ToUTF8(gitIgnore));
+			return false;
+		}
+		if (outWritten)
+			*outWritten = true;
+		return true;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -576,6 +729,47 @@ namespace Strata
 		return description;
 	}
 
+	std::optional<ScriptDiagnostic> FindSourceReference(std::string_view message)
+	{
+		constexpr std::string_view c_CodeExtensions[] = { ".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hh", ".hxx", ".inl", ".ipp", ".cmake", ".txt" };
+		const auto isCode = [&c_CodeExtensions](const std::string& file)
+		{
+			const size_t dot = file.rfind('.');
+			if (dot == std::string::npos)
+				return false;
+			std::string extension = file.substr(dot);
+			for (char& character : extension)
+				character = static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+			return std::find(std::begin(c_CodeExtensions), std::end(c_CodeExtensions), extension) != std::end(c_CodeExtensions);
+		};
+
+		constexpr std::string_view c_BuildPrefix = "[Scripts] ";
+		if (message.rfind(c_BuildPrefix, 0) == 0)
+			message.remove_prefix(c_BuildPrefix.size());
+		if (std::optional<ScriptDiagnostic> diagnostic = ParseDiagnosticLine(message); diagnostic && diagnostic->Line > 0 && isCode(diagnostic->File))
+			return diagnostic;
+
+		// "... at <file>(<line>) ...": the location of a crash report.
+		for (size_t at = message.find(" at "); at != std::string_view::npos; at = message.find(" at ", at + 1))
+		{
+			const size_t start = at + 4;
+			const size_t open = message.find('(', start);
+			const size_t close = open == std::string_view::npos ? std::string_view::npos : message.find(')', open);
+			if (close == std::string_view::npos)
+				continue;
+			const std::string_view line = message.substr(open + 1, close - open - 1);
+			const std::string file(Trim(message.substr(start, open - start)));
+			if (!IsDigits(line) || !isCode(file))
+				continue;
+			ScriptDiagnostic reference;
+			reference.File = file;
+			reference.Line = ToNumber(std::string(line));
+			reference.Severity = "error";
+			return reference;
+		}
+		return std::nullopt;
+	}
+
 	std::string GetLogTail(std::string_view log, size_t lineCount)
 	{
 		const std::vector<std::string_view> lines = SplitLines(log);
@@ -696,11 +890,25 @@ namespace Strata
 		if (!FileSystem::IsRegularFile(sourceDirectory / "CMakeLists.txt"))
 			return fail(fmt::format("The project has no script build: '{}' is missing (script.init creates it)", FileSystem::ToUTF8(sourceDirectory / "CMakeLists.txt")));
 		// Refused before anything is written: the build would fail later with errors that do not name the cause.
-		if (std::optional<std::string> pathError = CheckScriptBuildPathLength(settings, project.GetScriptBuildDirectory(), project.GetScriptModuleName()))
-			return fail(std::move(*pathError));
+		std::string locationError;
+		const std::optional<ScriptBuildLocation> location = ResolveScriptBuildLocation(project, settings, &locationError);
+		if (!location)
+			return fail(std::move(locationError));
+		if (!location->MovedReason.empty())
+		{
+			// The per-user tree holds object files that end up in code the engine loads: only the user may change it.
+			std::string privateError;
+			if (!Platform::EnsurePrivateDirectory(location->BuildDirectory.parent_path(), &privateError))
+				return fail(fmt::format("Cannot create the per-user script build directory '{}': {}", FileSystem::ToUTF8(location->BuildDirectory.parent_path()),
+					privateError));
+		}
+		// IDEs follow the engine's toolchain too; a presets file the project wrote itself is kept.
+		std::string presetsError;
+		if (!UpdateScriptCMakePresets(project, settings, nullptr, &presetsError))
+			ST_WARN("[Scripts] {}", presetsError);
 
 		m_Settings = settings;
-		m_BuildDirectory = project.GetScriptBuildDirectory();
+		m_BuildDirectory = location->BuildDirectory;
 		m_Module = project.GetScriptModulePath();
 		m_ModuleExistedBefore = FileSystem::IsRegularFile(m_Module);
 		m_ModuleTimeBefore = FileSystem::GetLastWriteTime(m_Module).value_or(0);
@@ -728,6 +936,11 @@ namespace Strata
 			: MakeScriptConfigureArguments(settings, sourceDirectory, m_BuildDirectory, binaryDirectory);
 		m_Phase = configured ? ScriptBuildPhase::Building : ScriptBuildPhase::Configuring;
 		ST_INFO("Building the scripts of '{}' (build {}, {} {})", project.GetConfig().Name, id, settings.Generator, settings.Configuration);
+		if (!location->MovedReason.empty())
+		{
+			m_Log += location->MovedReason + "\n";
+			ST_INFO("[Scripts] {}", location->MovedReason);
+		}
 		if (!configured && !FileSystem::WriteText(m_BuildDirectory / c_StampFile, ""))
 		{
 			Finish(false, fmt::format("Cannot write to the script build directory '{}'", FileSystem::ToUTF8(m_BuildDirectory)));
@@ -871,22 +1084,30 @@ namespace Strata
 			CollectOutput(true);
 			m_Process.reset();
 		}
-		Finish(false, "The script build was cancelled");
+		Finish(false, "The script build was cancelled", true);
 	}
 
-	void ScriptBuilder::Finish(bool success, std::string error)
+	void ScriptBuilder::Finish(bool success, std::string error, bool cancelled)
 	{
 		ScriptBuildResult result;
 		result.ID = m_NextID - 1;
 		result.Success = success;
+		result.Cancelled = cancelled;
 		result.Diagnostics = ParseScriptBuildDiagnostics(m_Log);
 		result.LogTail = GetLogTail(m_Log, c_LogTailLines);
 		result.Configured = m_Configured;
+		result.BuildDirectory = m_BuildDirectory;
 		result.Seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_StartTime).count();
 		result.Module = m_Module;
 		result.ModuleChanged = success && (!m_ModuleExistedBefore || FileSystem::GetLastWriteTime(m_Module).value_or(0) != m_ModuleTimeBefore);
 
-		if (!success)
+		if (cancelled)
+		{
+			// Someone ended it: nothing failed, and the output so far says nothing about the scripts.
+			result.Error = std::move(error);
+			ST_INFO("Script build {} was cancelled", result.ID);
+		}
+		else if (!success)
 		{
 			// The first errors make the message actionable on its own; the full list is in Diagnostics.
 			result.Error = DescribeScriptBuildFailure(error, result.Diagnostics, m_Log);

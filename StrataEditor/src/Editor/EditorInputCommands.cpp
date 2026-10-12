@@ -127,16 +127,43 @@ namespace Strata
 			return EditorCommandResult::Fail("Simulated input goes to a running game: start it with play.start first");
 		}
 
-		nlohmann::json DescribeButtons(const SimulatedInput& input, SimulatedButtonType type)
+		nlohmann::json DescribeButtons(const SimulatedInput& input, SimulatedControlType type)
 		{
 			nlohmann::json names = nlohmann::json::array();
 			for (uint16_t code : input.GetHeld(type))
 			{
-				const char* name = type == SimulatedButtonType::Key ? InputNames::GetKeyName(code) : InputNames::GetMouseButtonName(code);
+				const char* name = type == SimulatedControlType::Key ? InputNames::GetKeyName(code) : InputNames::GetMouseButtonName(code);
 				// Commands only hold named buttons; a code without a name is reported by number.
 				names.push_back(name ? nlohmann::json(name) : nlohmann::json(code));
 			}
 			return names;
+		}
+
+		// [{"gamepad": 0, "button": "A"}, ...]
+		nlohmann::json DescribeGamepadButtons(const SimulatedInput& input)
+		{
+			nlohmann::json buttons = nlohmann::json::array();
+			for (uint16_t code : input.GetHeld(SimulatedControlType::GamepadButton))
+			{
+				const char* name = InputNames::GetGamepadButtonName(static_cast<GamepadButton>(SimulatedInput::GetGamepadControl(code)));
+				buttons.push_back({ { "gamepad", SimulatedInput::GetGamepad(code) },
+					{ "button", name ? nlohmann::json(name) : nlohmann::json(SimulatedInput::GetGamepadControl(code)) } });
+			}
+			return buttons;
+		}
+
+		// [{"gamepad": 0, "axis": "LeftX", "value": 0.5}, ...]
+		nlohmann::json DescribeGamepadAxes(const SimulatedInput& input)
+		{
+			nlohmann::json axes = nlohmann::json::array();
+			for (uint16_t code : input.GetHeld(SimulatedControlType::GamepadAxis))
+			{
+				const char* name = InputNames::GetGamepadAxisName(static_cast<GamepadAxis>(SimulatedInput::GetGamepadControl(code)));
+				axes.push_back({ { "gamepad", SimulatedInput::GetGamepad(code) },
+					{ "axis", name ? nlohmann::json(name) : nlohmann::json(SimulatedInput::GetGamepadControl(code)) },
+					{ "value", input.GetAxisValue(code) } });
+			}
+			return axes;
 		}
 
 		// What the commands hold, and where the simulated pointer is.
@@ -145,9 +172,23 @@ namespace Strata
 			const SimulatedInput& input = context.GetSimulatedInput();
 			const std::optional<glm::vec2> position = Input::GetSimulatedMousePosition();
 			return {
-				{ "keys", DescribeButtons(input, SimulatedButtonType::Key) },
-				{ "mouseButtons", DescribeButtons(input, SimulatedButtonType::MouseButton) },
+				{ "keys", DescribeButtons(input, SimulatedControlType::Key) },
+				{ "mouseButtons", DescribeButtons(input, SimulatedControlType::MouseButton) },
+				{ "gamepadButtons", DescribeGamepadButtons(input) },
+				{ "gamepadAxes", DescribeGamepadAxes(input) },
 				{ "mousePosition", position ? nlohmann::json { position->x, position->y } : nlohmann::json(nullptr) } };
+		}
+
+		// Reads the gamepad's index (0 to c_MaxGamepads - 1, default 0).
+		uint32_t ReadGamepad(CommandArguments& arguments)
+		{
+			return static_cast<uint32_t>(arguments.GetInt("gamepad", 0, 0, c_MaxGamepads - 1));
+		}
+
+		nlohmann::json GamepadSchema()
+		{
+			return IntegerSchema(fmt::format("The gamepad, 0 to {} (default 0): scripts read it as gamepad index; a gamepad simulated input used counts "
+				"as connected until play stops", c_MaxGamepads - 1), 0, c_MaxGamepads - 1);
 		}
 
 		EditorCommandResult AnswerNow(const EditorContext& context, nlohmann::json result)
@@ -175,8 +216,8 @@ namespace Strata
 			});
 		}
 
-		// Shared by input.key and input.mouseButton.
-		EditorCommandResult RunButtonAction(EditorContext& context, SimulatedButtonType type, uint16_t code, ButtonAction action, int64_t frames,
+		// Shared by input.key, input.mouseButton and input.gamepadButton.
+		EditorCommandResult RunButtonAction(EditorContext& context, SimulatedControlType type, uint16_t code, ButtonAction action, int64_t frames,
 			bool wait, nlohmann::json result, std::string what)
 		{
 			SimulatedInput& input = context.GetSimulatedInput();
@@ -245,7 +286,7 @@ namespace Strata
 				nlohmann::json result = { { "key", InputNames::GetKeyName(*key) }, { "action", ActionToString(*action) } };
 				if (*action == ButtonAction::Tap)
 					result["frames"] = frames;
-				return RunButtonAction(context, SimulatedButtonType::Key, *key, *action, frames, wait, std::move(result), "key");
+				return RunButtonAction(context, SimulatedControlType::Key, *key, *action, frames, wait, std::move(result), "key");
 			} });
 
 		registry.Register({ "input.mouseButton",
@@ -276,7 +317,7 @@ namespace Strata
 				nlohmann::json result = { { "button", InputNames::GetMouseButtonName(*button) }, { "action", ActionToString(*action) } };
 				if (*action == ButtonAction::Tap)
 					result["frames"] = frames;
-				return RunButtonAction(context, SimulatedButtonType::MouseButton, *button, *action, frames, wait, std::move(result), "mouse button");
+				return RunButtonAction(context, SimulatedControlType::MouseButton, *button, *action, frames, wait, std::move(result), "mouse button");
 			} });
 
 		registry.Register({ "input.mouseMove",
@@ -314,8 +355,122 @@ namespace Strata
 				return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, { { "delta", { delta->x, delta->y } } }, "scroll");
 			} });
 
+		registry.Register({ "input.gamepadButton",
+			"Presses a gamepad button for the running game (play mode), like input.key: scripts see it through Input::IsGamepadButtonDown/"
+			"Pressed/Released, and the gamepad counts as connected (Input::IsGamepadConnected) from then until play stops, with or without a "
+			"device. tap (default) holds it for 'frames' game frames, press until a release; answers once the game has seen it, or at once "
+			"with wait false (the default while paused). Returns the gamepad, the button, seen, and what is still held.",
+			ObjectSchema({
+				{ "gamepad", GamepadSchema() },
+				{ "button", StringSchema(fmt::format("The button, named like the SDK's GamepadButton:: constants (case does not matter): {}",
+					JoinNames(InputNames::GetGamepadButtonNames()))) },
+				{ "action", ActionSchema("button") },
+				{ "frames", IntegerSchema("Game frames a tap holds the button (default 1)", 1, c_MaxHoldFrames) },
+				{ "wait", WaitSchema() } }, { "button" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const uint32_t gamepad = ReadGamepad(arguments);
+				const std::string name = arguments.GetString("button");
+				int64_t frames = 1;
+				const std::optional<ButtonAction> action = ReadButtonAction(arguments, frames);
+				const bool wait = ReadWait(arguments);
+				const std::optional<GamepadButton> button = InputNames::FindGamepadButton(name);
+				if (arguments.IsValid() && !button)
+					arguments.SetError(fmt::format("Unknown gamepad button '{}': use {}", name, JoinNames(InputNames::GetGamepadButtonNames())));
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!IsGameRunning(context))
+					return NoGameError();
+
+				nlohmann::json result = { { "gamepad", gamepad }, { "button", InputNames::GetGamepadButtonName(*button) },
+					{ "action", ActionToString(*action) } };
+				if (*action == ButtonAction::Tap)
+					result["frames"] = frames;
+				const uint16_t code = SimulatedInput::MakeGamepadCode(gamepad, static_cast<uint32_t>(*button));
+				return RunButtonAction(context, SimulatedControlType::GamepadButton, code, *action, frames, wait, std::move(result), "gamepad button");
+			} });
+
+		registry.Register({ "input.gamepadAxis",
+			"Moves a gamepad stick or trigger of the running game (play mode): scripts read the value through Input::GetGamepadAxis and "
+			"GetGamepadStick (sticks -1 to 1 with +x right and +y up, triggers 0 released to 1 pressed; values are clamped to that range), "
+			"and the gamepad counts as connected until play stops. The value holds for 'frames' game frames and then returns to the device's, "
+			"or without 'frames' until another input.gamepadAxis of the axis, a value of null (back to the device's at once), "
+			"input.releaseAll or play.stop. A new value of the axis replaces the one before. Answers once the game has seen it (with frames: "
+			"its return), or at once with wait false (the default while paused).",
+			ObjectSchema({
+				{ "gamepad", GamepadSchema() },
+				{ "axis", StringSchema(fmt::format("The axis, named like the SDK's GamepadAxis:: constants (case does not matter): {}",
+					JoinNames(InputNames::GetGamepadAxisNames()))) },
+				{ "value", { { "type", { "number", "null" } }, { "description", "The axis' value (sticks -1 to 1, triggers 0 to 1), or null to give the axis "
+					"back to the device" } } },
+				{ "frames", IntegerSchema("Game frames the value holds before the axis returns to the device's value (default: until replaced or "
+					"released)", 1, c_MaxHoldFrames) },
+				{ "wait", WaitSchema() } }, { "axis", "value" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const uint32_t gamepad = ReadGamepad(arguments);
+				const std::string name = arguments.GetString("axis");
+				const int64_t frames = arguments.GetInt("frames", 0, 1, c_MaxHoldFrames);
+				const bool wait = ReadWait(arguments);
+				// Null is a value here (give the axis back), which CommandArguments treats as absent: read it directly.
+				const auto value = parameters.find("value");
+				std::optional<float> axisValue;
+				if (arguments.IsValid())
+				{
+					if (value == parameters.end())
+						arguments.SetError("Missing parameter 'value'");
+					else if (value->is_number() && std::isfinite(value->get<double>()) && std::abs(value->get<double>()) <= c_MaxInputCoordinate)
+						axisValue = static_cast<float>(value->get<double>());
+					else if (!value->is_null())
+						arguments.SetError("Parameter 'value' must be a finite number or null");
+				}
+				const std::optional<GamepadAxis> axis = InputNames::FindGamepadAxis(name);
+				if (arguments.IsValid() && !axis)
+					arguments.SetError(fmt::format("Unknown gamepad axis '{}': use {}", name, JoinNames(InputNames::GetGamepadAxisNames())));
+				if (arguments.IsValid() && !axisValue && arguments.Has("frames"))
+					arguments.SetError("Parameter 'frames' needs a value: null gives the axis back to the device at once");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!IsGameRunning(context))
+					return NoGameError();
+
+				SimulatedInput& input = context.GetSimulatedInput();
+				const uint16_t code = SimulatedInput::MakeGamepadCode(gamepad, static_cast<uint32_t>(*axis));
+				nlohmann::json result = { { "gamepad", gamepad }, { "axis", InputNames::GetGamepadAxisName(*axis) } };
+				if (!axisValue)
+				{
+					result["value"] = nullptr;
+					result["released"] = input.Release(SimulatedControlType::GamepadAxis, code);
+					return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, std::move(result), "gamepad axis");
+				}
+
+				Ref<const SimulatedHold> hold = input.HoldAxis(gamepad, *axis, *axisValue, static_cast<uint32_t>(frames));
+				result["value"] = hold->Value;
+				if (frames == 0)
+					return AnswerWhenSeen(context, wait, hold->FirstFrame, std::move(result), "gamepad axis");
+				result["frames"] = frames;
+				if (!wait)
+					return AnswerNow(context, std::move(result));
+				return EditorCommandResult::Defer([hold, result = std::move(result)](EditorContext& pollContext) -> std::optional<EditorCommandResult>
+				{
+					if (!IsGameRunning(pollContext))
+						return EditorCommandResult::Fail("Play mode stopped before the gamepad axis returned");
+					if (!hold->Ended || Input::GetFrameIndex() < hold->EndFrame)
+						return std::nullopt;
+					nlohmann::json answer = result;
+					answer["seen"] = true;
+					// Ended early by another value of the axis, a null value, input.releaseAll or a restart of play mode.
+					answer["interrupted"] = hold->Interrupted;
+					answer["held"] = DescribeSimulatedInput(pollContext);
+					return EditorCommandResult::Ok(std::move(answer));
+				});
+			} });
+
 		registry.Register({ "input.releaseAll",
-			"Ends every hold of simulated input in the running game (play mode): held keys and mouse buttons go up in the game's next frame, "
+			"Ends every hold of simulated input in the running game (play mode): held keys, mouse buttons and gamepad buttons go up and held "
+			"gamepad axes return to the device's values in the game's next frame, "
 			"unfinished taps end there (their commands answer with interrupted true), and presses still waiting for a game frame are dropped. "
 			"Answers once the game has seen it, or at once with wait false (the default while paused), with what was released.",
 			ObjectSchema({ { "wait", WaitSchema() } }),
@@ -329,14 +484,17 @@ namespace Strata
 					return NoGameError();
 				SimulatedInput& input = context.GetSimulatedInput();
 				nlohmann::json released = {
-					{ "keys", DescribeButtons(input, SimulatedButtonType::Key) },
-					{ "mouseButtons", DescribeButtons(input, SimulatedButtonType::MouseButton) } };
+					{ "keys", DescribeButtons(input, SimulatedControlType::Key) },
+					{ "mouseButtons", DescribeButtons(input, SimulatedControlType::MouseButton) },
+					{ "gamepadButtons", DescribeGamepadButtons(input) },
+					{ "gamepadAxes", DescribeGamepadAxes(input) } };
 				input.ReleaseAll();
 				return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, { { "released", std::move(released) } }, "releases");
 			} });
 
 		registry.Register({ "input.state",
-			"Simulated input in the running game: the keys and mouse buttons the input.* commands hold, the pointer position the game sees "
+			"Simulated input in the running game: the keys, mouse buttons and gamepad buttons the input.* commands hold, the gamepad axes they "
+			"hold with their values, the gamepads simulated input connected (gamepads), the pointer position the game sees "
 			"(null until input.mouseMove), whether the game is paused so input waits for its next frame (paused), and whether input is "
 			"waiting for that frame (queued). Device input (a person at the keyboard) is not included.",
 			ObjectSchema({}),
@@ -346,6 +504,13 @@ namespace Strata
 				state["playing"] = IsGameRunning(context);
 				state["paused"] = Input::IsSuspended();
 				state["queued"] = Input::HasQueuedSimulatedInput();
+				nlohmann::json gamepads = nlohmann::json::array();
+				for (uint32_t gamepad = 0; gamepad < c_MaxGamepads; gamepad++)
+				{
+					if (Input::IsSimulatedGamepadConnected(gamepad))
+						gamepads.push_back(gamepad);
+				}
+				state["gamepads"] = std::move(gamepads);
 				return EditorCommandResult::Ok(std::move(state));
 			} });
 	}

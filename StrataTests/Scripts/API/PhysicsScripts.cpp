@@ -343,6 +343,52 @@ ST_SCRIPT_CLASS(OlderEnginePhysics)
 	ST_SCRIPT_FIELD(Done);
 }
 
+// The layer matrix from a script, in a scene whose layer 2 (the crate's) is named "Crates" and layer 3 "Zones": looks
+// layers up by name, lets the crates pass through the ground (layer 0) and sends the crate down through it.
+class PhysicsLayersAPI : public CheckingScript
+{
+public:
+	bool Done = false;
+
+	void OnCreate() override
+	{
+		Expect(Physics::GetLayerIndex("Crates") == 2 && Physics::GetLayerIndex("zones") == 3, "GetLayerIndex finds named layers, ignoring case");
+		Expect(Physics::GetLayerIndex("Layer 7") == 7, "layers without a name are found as \"Layer <index>\"");
+		Expect(Physics::GetLayerIndex("Layer 2") == -1 && Physics::GetLayerIndex("Nothing") == -1 && Physics::GetLayerIndex("") == -1,
+			"names the scene does not give find nothing");
+		Expect(Physics::GetLayersCollide(0, 2) && Physics::GetLayersCollide(2, 2), "every pair collides at first");
+		Expect(!Physics::SetLayersCollide(32, 0, false) && !Physics::GetLayersCollide(0, 32), "layers outside 0 to 31 are refused");
+		Expect(Physics::SetLayersCollide(static_cast<uint32_t>(Physics::GetLayerIndex("Crates")), 0, false), "SetLayersCollide");
+		Expect(!Physics::GetLayersCollide(0, 2) && !Physics::GetLayersCollide(2, 0) && Physics::GetLayersCollide(2, 3), "the change goes both ways, for that pair");
+
+		// An engine without the layer functions: nothing changes.
+		StrataScriptHostAPI older = *Detail::GetHost();
+		older.StructSize = static_cast<uint32_t>(offsetof(StrataScriptHostAPI, PhysicsSetLayersCollide));
+		{
+			const ScopedHost scope(&older);
+			Expect(!Physics::SetLayersCollide(2, 0, true) && !Physics::GetLayersCollide(3, 3) && Physics::GetLayerIndex("Crates") == -1,
+				"an engine without the layer functions");
+		}
+		Expect(!Physics::GetLayersCollide(0, 2), "the older engine's calls changed nothing");
+	}
+
+	void OnFixedUpdate(float) override
+	{
+		if (Done)
+			return;
+		Done = true;
+		const PhysicsScene scene;
+		Expect(scene.Crate.GetRigidBody().SetLinearVelocity({ 0.0f, -10.0f, 0.0f }), "send the crate down");
+	}
+};
+
+ST_SCRIPT_CLASS(PhysicsLayersAPI)
+{
+	ST_SCRIPT_FIELD(Checks);
+	ST_SCRIPT_FIELD(Failure);
+	ST_SCRIPT_FIELD(Done);
+}
+
 // Uses physics from OnCreate (the scene starts every system before the scripts): the scene's bodies, a body the script
 // creates, and a script on that new entity, whose own OnCreate pushes its body.
 class PhysicsAtStart : public CheckingScript

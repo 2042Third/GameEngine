@@ -109,7 +109,7 @@ target_link_libraries(Strata
 		zstd_compress) # Only the asset pack writer (tooling) references compression; games link none of it
 
 if(WIN32)
-	target_link_libraries(Strata PRIVATE shell32 ole32 ws2_32 bcrypt)
+	target_link_libraries(Strata PRIVATE shell32 ole32 ws2_32 bcrypt dbghelp)
 elseif(APPLE)
 	target_link_libraries(Strata PRIVATE "-framework CoreFoundation")
 else()

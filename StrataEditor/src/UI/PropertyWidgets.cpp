@@ -193,7 +193,8 @@ namespace Strata
 			return open;
 		}
 
-		// An entry of a choice's list (the probe records it under `probeKey` unless that is empty). Returns true when picked.
+		// An entry of a choice's list (the probe records it with its label under `probeKey` unless that is empty). Returns true
+		// when picked.
 		bool Choice(const std::string& label, bool selected, int id, const std::string& probeKey)
 		{
 			ImGui::PushID(id);
@@ -202,7 +203,7 @@ namespace Strata
 			UI::PopSelectionColors();
 			ImGui::PopID();
 			if (!probeKey.empty())
-				UI::ItemProbe::Record(probeKey);
+				UI::ItemProbe::Record(probeKey, true, 0, label);
 			return picked;
 		}
 
@@ -233,6 +234,42 @@ namespace Strata
 						value = choice;
 					}
 				}
+				ImGui::EndCombo();
+			}
+			return result;
+		}
+
+		// A collision layer (PropertyFlags::PhysicsLayer), chosen by the names the scene gives its layers: the default layer
+		// 0, the named ones and the value itself when it has no name ("Layer <index>"), then where more are named. The probe
+		// records each layer's entry under "<key>.<index>" and the hint under "<key>.Hint".
+		PropertyEditResult DrawPhysicsLayer(uint32_t& value, const Scene& scene, const PropertyWidgetOptions& options)
+		{
+			PropertyEditResult result;
+			const PhysicsLayerSettings& layers = scene.GetSettings().PhysicsLayers;
+			const std::string preview = options.Mixed ? std::string(c_MixedText) : layers.GetDisplayName(value);
+			if (BeginChoice(preview, options.ProbeKey))
+			{
+				for (uint32_t layer = 0; layer < c_PhysicsLayerCount; layer++)
+				{
+					if (layer != 0 && layers.Names[layer].empty() && (layer != value || options.Mixed))
+						continue;
+					const std::string probe = options.ProbeKey.empty() ? std::string() : ProbeKey(options.ProbeKey, std::to_string(layer));
+					if (Choice(layers.GetDisplayName(layer), layer == value && !options.Mixed, static_cast<int>(layer), probe))
+					{
+						result.Changed = layer != value || options.Mixed;
+						value = layer;
+					}
+				}
+				// Unnamed layers would only be numbers to pick from: a layer is offered once the scene names it.
+				ImGui::Separator();
+				ImGui::TextDisabled("Name more layers in the scene's settings");
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
+				{
+					ImGui::SetTooltip("Select nothing: the Inspector shows the scene's settings, whose Collision Layers section names layers "
+						"(Name a Layer) and says which of them collide");
+				}
+				if (!options.ProbeKey.empty())
+					UI::ItemProbe::Record(ProbeKey(options.ProbeKey, "Hint"), false, 0, "Name more layers in the scene's settings");
 				ImGui::EndCombo();
 			}
 			return result;
@@ -886,6 +923,11 @@ namespace Strata
 				if (HasFlag(property.Flags, PropertyFlags::PowerOfTwoLimit))
 				{
 					result = DrawPowerOfTwoLimit(property, number, options);
+					break;
+				}
+				if (HasFlag(property.Flags, PropertyFlags::PhysicsLayer))
+				{
+					result = DrawPhysicsLayer(number, scene, options);
 					break;
 				}
 				const uint32_t min = property.HasRange() ? static_cast<uint32_t>(std::max(property.Min, 0.0f)) : 0u;

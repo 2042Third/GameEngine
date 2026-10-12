@@ -349,7 +349,8 @@ TEST_SUITE("Editor.Scripts")
 		harness.Run("script.reload"); // Loads the project's built module
 		const std::string id = harness.CreateEntity("Crasher");
 		harness.Run("script.add", { { "entity", id }, { "class", "Faulty" }, { "fields", { { "Fault", "NullDereference" }, { "FaultIn", "OnUpdate" } } } });
-		harness.Run("play.start");
+		// The module was put there by hand (older than the sources): play what is loaded, without building first.
+		harness.Run("play.start", { { "build", false } });
 		harness.Frames(2);
 		REQUIRE_FALSE(harness.Context.IsPlaying());
 		REQUIRE(harness.Context.GetScriptEngine()->IsFaulted());
@@ -370,7 +371,7 @@ TEST_SUITE("Editor.Scripts")
 		CHECK_FALSE(result.ModuleChanged);
 		CHECK(harness.Context.GetLastScriptBuildLoad().Loaded);
 		CHECK_FALSE(harness.Context.GetScriptEngine()->IsFaulted());
-		harness.Run("play.start");
+		harness.Run("play.start", { { "build", false } }); // The stand-in for CMake leaves the module older than the sources
 		harness.Frames(2);
 		CHECK(harness.Context.IsPlaying());
 	}

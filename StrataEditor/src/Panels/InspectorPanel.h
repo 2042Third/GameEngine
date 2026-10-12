@@ -60,6 +60,8 @@ namespace Strata
 		// removed through script.add/script.remove. Without a loaded module the stored overrides are shown read-only.
 		void DrawScripts(EditorContext& context, const EditorCommandRegistry& commands, Entity entity);
 		void DrawSceneSettings(EditorContext& context, const EditorCommandRegistry& commands);
+		// The scene's collision layers: their names and the matrix of which collide (scene.setSettings, one step per edit).
+		void DrawCollisionLayers(EditorContext& context, const EditorCommandRegistry& commands);
 		void DrawSky(EditorContext& context, const EditorCommandRegistry& commands);
 		// The values new components of the type have (what axis labels reset to), computed once per type.
 		const std::vector<std::optional<PropertyValue>>& GetDefaults(const ComponentInfo& info);
@@ -85,6 +87,18 @@ namespace Strata
 			std::string Text;
 		};
 		std::optional<StreamingSummary> m_StreamingSummary;
+		// The collision layers section's summary and the layers its matrix shows (layer 0, the named ones and those with a pair
+		// that does not collide), computed again only when the layers change.
+		struct LayersSummary
+		{
+			PhysicsLayerSettings Layers;
+			std::string Text;
+			std::vector<uint32_t> Shown;
+		};
+		std::optional<LayersSummary> m_LayersSummary;
+		// The layer name being typed: the text, for the layer whose field it was started in.
+		uint32_t m_LayerNameLayer = c_PhysicsLayerCount;
+		std::string m_LayerNameText;
 		std::unordered_map<const ComponentInfo*, std::vector<std::optional<PropertyValue>>> m_Defaults;
 		MaterialEditor m_MaterialEditor;
 		// The rotation of several entities being edited, until the widget reports the edit finished.

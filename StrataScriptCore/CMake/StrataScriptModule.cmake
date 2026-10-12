@@ -77,6 +77,10 @@ function(strata_add_script_module target)
 
 	if(MSVC)
 		target_compile_options(${target} PRIVATE /utf-8 /permissive- /Zc:__cplusplus /Zc:preprocessor)
+		# A program database in every configuration, so that the editor names the file and line of a crash (it reads the
+		# PDB with DbgHelp). /DEBUG would turn off the linker's optimizations, which are turned back on.
+		set_target_properties(${target} PROPERTIES MSVC_DEBUG_INFORMATION_FORMAT "ProgramDatabase")
+		target_link_options(${target} PRIVATE "/DEBUG" "$<$<NOT:$<CONFIG:Debug>>:/OPT:REF;/OPT:ICF>")
 	else()
 		if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
 			# GCC otherwise emits STB_GNU_UNIQUE symbols for inline statics, which makes dlclose() a no-op and would

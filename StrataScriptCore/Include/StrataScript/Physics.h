@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <limits>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace Strata
@@ -252,6 +253,29 @@ namespace Strata
 			{
 				return host->OverlapBox(Detail::GetContext(), abiCenter, abiHalfExtents, abiRotation, layerMask, includeTriggers, buffer, capacity);
 			}));
+		}
+
+		// Collision layers: RigidBody and CharacterController layers (0 to 31) collide only when the scene's layer matrix
+		// lets them. SetLayersCollide changes the playing scene's matrix (both ways; physics applies it before its next step
+		// and wakes resting bodies) and returns false for layers outside 0 to 31. GetLayerIndex finds a layer by the name the
+		// scene gives it (ignoring case; "Layer 5" for a layer without a name): its index, or -1. A mask of a layer for the
+		// queries above: 1u << layer.
+		static bool SetLayersCollide(uint32_t layerA, uint32_t layerB, bool collide)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(PhysicsSetLayersCollide);
+			return host && host->PhysicsSetLayersCollide(Detail::GetContext(), layerA, layerB, collide);
+		}
+
+		static bool GetLayersCollide(uint32_t layerA, uint32_t layerB)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(PhysicsGetLayersCollide);
+			return host && host->PhysicsGetLayersCollide(Detail::GetContext(), layerA, layerB);
+		}
+
+		static int32_t GetLayerIndex(std::string_view name)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(PhysicsGetLayerIndex);
+			return host ? host->PhysicsGetLayerIndex(Detail::GetContext(), Detail::ToABIString(name)) : -1;
 		}
 	private:
 		static RaycastHit ToHit(const StrataScriptRaycastHit& hit)

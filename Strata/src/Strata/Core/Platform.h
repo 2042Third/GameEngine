@@ -178,6 +178,12 @@ namespace Strata
 		// Opens a file, folder or URL with the system's default handler.
 		static bool OpenWithDefaultApplication(const std::string& pathOrUrl);
 
+		// The file a program name stands for, as people type it in a command: a path with a directory as it is (on Windows
+		// with ".exe" added when it has no extension, as starting it would), a bare name searched in the directories of PATH in
+		// their order (on Windows with each extension of PATHEXT unless it has one; on POSIX only executable files), never in
+		// the current directory. Nothing when no such file exists; outSearched gets the directories that were searched.
+		static std::optional<std::filesystem::path> FindProgram(std::string_view program, std::vector<std::filesystem::path>* outSearched = nullptr);
+
 		// Current and peak memory of this process (see ProcessMemoryInfo); nullopt if the system does not report it. (Not
 		// named GetProcessMemoryInfo: <psapi.h> defines that name as a macro.)
 		static std::optional<ProcessMemoryInfo> GetProcessMemory();

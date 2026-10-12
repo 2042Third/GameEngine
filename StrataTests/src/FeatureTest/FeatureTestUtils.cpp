@@ -68,11 +68,19 @@ namespace Strata::Tests
 				Input::ProcessMouseButton(Mouse::ButtonLeft, true);
 				Input::ProcessMouseMove({ 120.0f, 50.0f });
 				Input::ProcessScroll({ 0.0f, 2.0f });
+				// Gamepad 0 connects with A down, the left stick at full tilt and the right trigger half pressed.
+				const float axes[c_GamepadAxisCount] = { 0.6f, 0.8f, 0.0f, 0.0f, 0.0f, 0.5f };
+				bool buttons[c_GamepadButtonCount] = {};
+				buttons[static_cast<size_t>(GamepadButton::A)] = true;
+				Input::ProcessGamepad(0, true, axes, buttons);
 			}
 			else if (frame == pressFrame + 2)
 			{
 				Input::ProcessKey(Key::Space, false);
 				Input::ProcessMouseButton(Mouse::ButtonLeft, false);
+				const float axes[c_GamepadAxisCount] = {};
+				const bool buttons[c_GamepadButtonCount] = {};
+				Input::ProcessGamepad(0, true, axes, buttons);
 			}
 		}
 
@@ -332,6 +340,14 @@ namespace Strata::Tests
 		CHECK(physicsStats.MaxContactConstraints == capacity.MaxContactConstraints);
 		CHECK(physicsStats.BodyOverflowCount == 0);
 		CHECK(physicsStats.ContactOverflowSteps == 0);
+
+		// The scene's collision layers (names and a matrix that is not the default, so they prove that they serialize) reached
+		// the running scene; the feature scripts read them (PhysicsApiFeatures).
+		const PhysicsLayerSettings& layers = scene.GetSettings().PhysicsLayers;
+		CHECK(layers.Names[3] == "Triggers");
+		CHECK_FALSE(layers.IsDefaultMatrix());
+		CHECK_FALSE(physics->DoLayersCollide(7, 7));
+		CHECK(physics->DoLayersCollide(8, 9)); // A script turned the pair off and on again
 
 		// The fragile probe destroyed itself when it landed (inside its OnCollisionEnter).
 		CHECK_FALSE(scene.FindEntityByName("Fragile Probe").IsValid());

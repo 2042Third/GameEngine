@@ -7,6 +7,7 @@
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/InspectorPanel.h"
 #include "Panels/PerformancePanel.h"
+#include "Panels/ProblemsPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
 #include "Panels/StreamingPanel.h"
 #include "Panels/ViewportPanel.h"
@@ -57,6 +58,7 @@ namespace Strata
 			EditorContextSpecification specification;
 			specification.RecentProjectsFile = options.RecentProjectsFile;
 			specification.RecentProjectsReadOnly = options.RecentProjectsReadOnly;
+			specification.EditorSettingsFile = options.EditorSettingsFile;
 			specification.WatchAssetFiles = options.WatchFiles;
 			specification.HotReloadScripts = options.WatchFiles;
 			// Play mode runs on the wall clock, except in scripted runs (--frames, --commands), which count frames; and projects
@@ -109,7 +111,8 @@ namespace Strata
 		m_Commands.Register({ "editor.showPanel",
 			"Opens a panel of the editor's window and brings it to the front, e.g. to show the person at the editor what you are looking at: "
 			"Streaming (asset memory per pool against its budget, loads, uploads, the assets), Performance (where the frames go, stage by "
-			"stage), Console, ContentBrowser, Hierarchy, Inspector, AssetInspector (the Asset tab: the inspected asset, its settings and "
+			"stage), Problems (the last script build's errors and warnings, the scripts' crash with where it happened), Console, "
+			"ContentBrowser, Hierarchy, Inspector, AssetInspector (the Asset tab: the inspected asset, its settings and "
 			"preview) or Viewport. Changes no scene data and records no undo; fails in an editor "
 			"without a window (--no-gpu or headless) and while the launcher shows (no project is open).",
 			CommandUtils::ObjectSchema({ { "panel", { { "type", "string" }, { "enum", panels }, { "description", "The panel to show" } } } }, { "panel" }),
@@ -153,6 +156,7 @@ namespace Strata
 		add(EditorPanels::c_Inspector, "Inspector", Icons::SlidersHorizontal, []() { return CreateScope<InspectorPanel>(); });
 		add(EditorPanels::c_AssetInspector, "Asset", Icons::FileBox, []() { return CreateScope<AssetInspectorPanel>(); });
 		add(EditorPanels::c_Console, "Console", Icons::Terminal, []() { return CreateScope<ConsolePanel>(); });
+		add(EditorPanels::c_Problems, "Problems", Icons::CircleAlert, []() { return CreateScope<ProblemsPanel>(); });
 		add(EditorPanels::c_ContentBrowser, "Content Browser", Icons::FolderOpen, []() { return CreateScope<ContentBrowserPanel>(); });
 		add(EditorPanels::c_Welcome, "Welcome", Icons::House, []() { return CreateScope<WelcomePanel>(); }, EditorPanelPlacement::Launcher);
 		// Instruments, closed until the status bar's pills (or the View menu) open them.
@@ -459,11 +463,19 @@ namespace Strata
 				m_ShownInspectionVersion = m_Context.GetInspectionVersion();
 				m_Panels.ShowTab(m_Context.GetInspectionTarget() == InspectionTarget::Asset ? EditorPanels::c_AssetInspector : EditorPanels::c_Inspector);
 			}
+			// A play whose script build failed shows its errors.
+			if (m_Context.GetProblemsPanelRequests() != m_ShownProblemsRequests)
+			{
+				m_ShownProblemsRequests = m_Context.GetProblemsPanelRequests();
+				m_Panels.Focus(EditorPanels::c_Problems);
+			}
 			m_Panels.OnImGuiRender(panelContext);
 		}
 		m_ProjectDialogs.Draw(panelContext);
 		m_AboutDialog.Draw(GetEnvironment());
 		m_ExportDialog.Draw(panelContext);
+		m_NewScriptDialog.Draw(panelContext);
+		m_ExternalEditorDialog.Draw(panelContext);
 		DrawUnsavedChangesModal();
 		if (m_ShowImGuiDemo)
 			ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
@@ -601,7 +613,12 @@ namespace Strata
 		const ImGuiInputFlags global = ImGuiInputFlags_RouteGlobal;
 		// Play mode toggles always: it is also the way out of a game that has the input.
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, global))
-			RunEditorCommand(m_Context, m_Commands, m_Context.IsPlaying() ? "play.stop" : "play.start");
+		{
+			if (m_Context.IsPlaying())
+				RunEditorCommand(m_Context, m_Commands, "play.stop");
+			else
+				StartPlay();
+		}
 		// Keys the running game receives (e.g. Delete, or Ctrl+D with Ctrl to crouch) must not edit the scene.
 		if (!m_Context.AcceptsEditShortcuts())
 			return;
@@ -700,6 +717,12 @@ namespace Strata
 		m_AboutDialog.Open();
 	}
 
+	void EditorLayer::ShowNewScriptDialog()
+	{
+		if (m_Context.HasProject())
+			m_NewScriptDialog.Open();
+	}
+
 	void EditorLayer::DismissLauncher()
 	{
 		m_LauncherDismissed = true;
@@ -768,6 +791,21 @@ namespace Strata
 		hierarchy->BeginRename(entity);
 	}
 
+	void EditorLayer::StartPlay()
+	{
+		// One play at a time: while the scripts build to play, Play waits with them.
+		if (m_Context.GetPlayBuildID() != 0 || m_Context.IsPlaying())
+			return;
+		m_CommandRunner.Run(m_Context, m_Commands, "play.start", nlohmann::json::object(), [](const EditorCommandResult& result)
+		{
+			// A build the person cancelled (the "Building to play" pill) is no error.
+			if (result.ErrorKind == EditorCommandError::Cancelled)
+				ST_INFO("Play: {}", result.Error);
+			else if (!result.Success)
+				ST_ERROR("Play: {}", result.Error);
+		});
+	}
+
 	void EditorLayer::BuildScripts()
 	{
 		// The builder logs the outcome of builds that ran; requests refused at once (no project, a build already running)
@@ -801,6 +839,7 @@ namespace Strata
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Inspector).c_str(), right);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_AssetInspector).c_str(), right);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Console).c_str(), bottom);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Problems).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_ContentBrowser).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Streaming).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Performance).c_str(), bottom);
@@ -1026,6 +1065,18 @@ namespace Strata
 			if (ImGui::MenuItem("Create Script Build", nullptr, false, m_Context.HasProject()))
 				RunEditorCommand(m_Context, m_Commands, "script.init", { { "example", true } });
 			ImGui::Separator();
+			if (ImGui::MenuItem("New Script...", nullptr, false, m_Context.HasProject()))
+				ShowNewScriptDialog();
+			if (ImGui::MenuItem("Open Scripts Folder", nullptr, false, m_Context.HasProject()))
+				RunEditorCommand(m_Context, m_Commands, "script.open");
+			if (ImGui::MenuItem("External Editor..."))
+			{
+				EditorPanelContext panelContext = MakePanelContext();
+				m_ExternalEditorDialog.Open(panelContext);
+			}
+			if (ImGui::MenuItem("Show Problems", nullptr, false, m_Context.HasProject()))
+				m_Panels.Focus(EditorPanels::c_Problems);
+			ImGui::Separator();
 			if (engine && engine->IsModuleLoaded())
 				ImGui::TextDisabled("%s: %zu classes, loaded %llu times", engine->GetModuleName().c_str(), engine->GetClasses().size(),
 					static_cast<unsigned long long>(engine->GetLoadCount()));
@@ -1182,14 +1233,19 @@ namespace Strata
 
 		// Play is the primary action while editing; while a mode runs, its button shows it in the mode's color.
 		UI::ButtonStyle play;
-		play.Enabled = !playing && !sceneLoading;
+		play.Enabled = !playing && !sceneLoading && m_Context.GetPlayBuildID() == 0;
 		play.Primary = !playing;
 		play.Active = state == SceneState::Play;
 		play.ActiveColor = colors.PlayState.Play;
-		const char* playTooltip = playing ? "Playing" : (sceneLoading ? "A scene is being opened: play once it is open"
-			: "Play: run the scene with scripts, physics and audio (Ctrl+P)");
+		const char* playTooltip = "Play: run the scene with scripts, physics and audio (Ctrl+P); scripts that changed are built first";
+		if (playing)
+			playTooltip = "Playing";
+		else if (sceneLoading)
+			playTooltip = "A scene is being opened: play once it is open";
+		else if (m_Context.GetPlayBuildID() != 0)
+			playTooltip = "Building the scripts to play (the status bar's pill cancels)";
 		if (UI::ToolbarButton("Toolbar.Play", Icons::Play, nullptr, playTooltip, play))
-			RunEditorCommand(m_Context, m_Commands, "play.start");
+			StartPlay();
 		ImGui::SameLine();
 
 		UI::ButtonStyle simulate;
@@ -1226,7 +1282,7 @@ namespace Strata
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const ScriptBuilder& builder = m_Context.GetScriptBuilder();
 		const bool building = builder.IsRunning();
-		const bool failed = !building && builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success;
+		const bool failed = !building && builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success && !builder.GetLastResult().Cancelled;
 
 		const std::string label = building ? fmt::format("Building {:.0f} s", builder.GetElapsedSeconds()) : std::string("Build Scripts");
 		const char* icon = building ? Icons::LoaderCircle : (failed ? Icons::CircleAlert : Icons::Hammer);
@@ -1426,7 +1482,7 @@ namespace Strata
 		const ImGuiWindow* console = ImGui::FindWindowByName(m_Panels.GetWindowName(EditorPanels::c_Console).c_str());
 		if (!console || console->DockId == 0)
 			return;
-		for (const char* id : { EditorPanels::c_Streaming, EditorPanels::c_Performance })
+		for (const char* id : { EditorPanels::c_Problems, EditorPanels::c_Streaming, EditorPanels::c_Performance })
 		{
 			// Only windows the layout knows nothing about: a panel the user moved elsewhere stays there.
 			const std::string name = m_Panels.GetWindowName(id);
@@ -1465,14 +1521,32 @@ namespace Strata
 		const Ref<ScriptEngine>& engine = m_Context.GetScriptEngine();
 		if (builder.IsRunning())
 		{
-			UI::Pill("Status.Scripts", Icons::LoaderCircle, fmt::format("Building {:.0f} s", builder.GetElapsedSeconds()), colors.Info,
-				"The project's scripts are being built (the output goes to the Console)");
+			// Clicking cancels: a build Play waits for, too (Play then does not start).
+			const bool forPlay = m_Context.GetPlayBuildID() == builder.GetCurrentID();
+			if (UI::Pill("Status.Scripts", Icons::LoaderCircle, fmt::format("{} {:.0f} s", forPlay ? "Building to play" : "Building", builder.GetElapsedSeconds()),
+				colors.Info, forPlay ? "The scripts changed: they build before the game plays (the output goes to the Console). Click to cancel."
+				: "The project's scripts are being built (the output goes to the Console). Click to cancel."))
+			{
+				m_Context.CancelScriptBuild();
+			}
 			return false;
 		}
 		if (engine && engine->IsFaulted())
-			return UI::Pill("Status.Scripts", Icons::CircleAlert, "Scripts crashed", colors.Error, "The scripts crashed: rebuild or reload them (see the Console)");
-		if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success)
-			return UI::Pill("Status.Scripts", Icons::CircleAlert, "Build failed", colors.Error, "The last script build failed (see the Console)");
+		{
+			if (UI::Pill("Status.Scripts", Icons::CircleAlert, "Scripts crashed", colors.Error,
+				"The scripts crashed: rebuild or reload them. Click to see where (the Problems panel)."))
+			{
+				m_Panels.Focus(EditorPanels::c_Problems);
+			}
+			return false;
+		}
+		// A build someone cancelled failed at nothing: the pill goes back to what the module is.
+		if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success && !builder.GetLastResult().Cancelled)
+		{
+			if (UI::Pill("Status.Scripts", Icons::CircleAlert, "Build failed", colors.Error, "The last script build failed. Click to see its errors (the Problems panel)."))
+				m_Panels.Focus(EditorPanels::c_Problems);
+			return false;
+		}
 		if (engine && engine->IsModuleLoaded())
 		{
 			const size_t classes = engine->GetClasses().size();
@@ -1480,9 +1554,10 @@ namespace Strata
 			UI::Pill("Status.Scripts", Icons::FileCode, text, colors.TextSecondary, "The loaded script module");
 			return false;
 		}
-		// The project has scripts but no module runs them: never built here (e.g. a fresh copy of a sample), or built by
-		// another engine version and refused.
-		if (HasScriptBuild())
+		// The project has scripts that its scenes use but no module runs them: never built here (e.g. a fresh copy of a sample),
+		// or built by another engine version and refused. Scripts no scene uses yet (a new project's example) are no reason to
+		// ask for a build.
+		if (HasScriptBuild() && m_Context.DoScenesUseScripts())
 		{
 			if (UI::Pill("Status.Scripts", Icons::Hammer, "Scripts not built", colors.Warning,
 				"The project has scripts, but no script module is loaded: they are not built yet, or their module could not be loaded "
@@ -1492,8 +1567,14 @@ namespace Strata
 			}
 			return false;
 		}
+		if (HasScriptBuild())
+		{
+			UI::Pill("Status.Scripts", Icons::FileCode, "Scripts unused", colors.TextSecondary,
+				"The project has scripts, but no scene uses one yet: add a Script component to an entity (Play builds them first)");
+			return false;
+		}
 		UI::Pill("Status.Scripts", Icons::FileCode, "No scripts", colors.TextSecondary,
-			m_Context.HasProject() ? "The project has no scripts (Scripts > Create Script Build adds them)" : "No project is open");
+			m_Context.HasProject() ? "The project has no scripts (Scripts > New Script... adds one)" : "No project is open");
 		return false;
 	}
 

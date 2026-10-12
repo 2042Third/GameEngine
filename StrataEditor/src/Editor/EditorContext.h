@@ -1,6 +1,8 @@
 #pragma once
 
+#include "Editor/EditorGameWindow.h"
 #include "Editor/EditorViewport.h"
+#include "Editor/ExternalEditor.h"
 #include "Editor/GameExport.h"
 #include "Editor/PrefabSync.h"
 #include "Editor/ProjectTemplates.h"
@@ -8,6 +10,7 @@
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/ScriptBuild.h"
+#include "Editor/ScriptSources.h"
 #include "Editor/SimulatedInput.h"
 #include "Editor/ThumbnailCache.h"
 #include "Editor/UndoStack.h"
@@ -15,6 +18,7 @@
 #include <Strata/Animation/AnimationPreview.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/Crypto.h>
+#include <Strata/Core/EngineServices.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Scene/Scene.h>
@@ -24,6 +28,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <functional>
@@ -66,6 +71,9 @@ namespace Strata
 		// RecentProjects::GetDefaultFile). Empty: in memory only, as tests need. Read-only: read but never written.
 		std::filesystem::path RecentProjectsFile;
 		bool RecentProjectsReadOnly = false;
+		// Where the user's editor settings are kept, such as the external code editor (ExternalEditorLauncher; the editor
+		// application passes ExternalEditor::GetDefaultSettingsFile). Empty: in memory only, as tests need.
+		std::filesystem::path EditorSettingsFile;
 		// Where project.samples and project.openSample find the samples (ProjectSamples); empty: next to the executable
 		// (ProjectSamples::GetDefaultDirectory).
 		std::filesystem::path SamplesDirectory;
@@ -234,6 +242,13 @@ namespace Strata
 		const SimulatedInput& GetSimulatedInput() const { return m_SimulatedInput; }
 		// Whether keyboard shortcuts that edit the scene or the project (undo, delete, duplicate, save) may act now.
 		bool AcceptsEditShortcuts() const { return !m_GameInputActive; }
+		// The game's shell while it plays here: its window requests are recorded, not applied (EditorGameWindow, the engine
+		// service IGameWindow while the context lives), its save files go to <project>/.strata/Saves (IGameSaves; none without
+		// a project). Starting and stopping play forget the window requests and give the cursor back (the game's cursor mode
+		// returns to Normal).
+		EditorGameWindow& GetGameWindow() { return m_GameWindow; }
+		const EditorGameWindow& GetGameWindow() const { return m_GameWindow; }
+		std::optional<std::filesystem::path> GetGameSaveDirectory() const;
 
 		//////////////////////////////////////////////////////////////////////////
 		// Selection (entities of the active scene)
@@ -305,8 +320,39 @@ namespace Strata
 		// Whether the open project has a script build, a CMakeLists.txt in its script directory, that BuildScripts can run
 		// (false without a project). Looks at the file system.
 		bool HasScriptBuild() const;
+		// The toolchain script builds use (EditorContextSpecification::ScriptBuild).
+		const ScriptBuildSettings& GetScriptBuildSettings() const { return m_Specification.ScriptBuild; }
 		const ScriptBuilder& GetScriptBuilder() const { return m_ScriptBuilder; }
+		// Ends a running script build (it finishes as failed, "cancelled"); a play waiting for it then fails.
+		void CancelScriptBuild();
 		const ScriptBuildLoad& GetLastScriptBuildLoad() const { return m_LastScriptBuildLoad; }
+		// Whether a scene or prefab of the project attaches a script: the edited scene, or one of the project's saved scenes
+		// and prefabs (their files are scanned on an I/O thread when the project opens; until the scan finished, only the
+		// edited scene counts). Projects whose scenes use no script are not asked to build theirs.
+		bool DoScenesUseScripts() const;
+		// Why play mode has to build the scripts first, or nothing when it does not: the project's module is not loaded
+		// although scenes use scripts (never built, or built by another engine), or its sources (code and CMake files in the
+		// script directory, StampScriptSources) changed since it was built. While the module is the one the editor's last
+		// successful build left, that compares the sources with what that build compiled, file by file (a build that changed
+		// nothing in the module, a file the module does not compile, a deleted or renamed file); for a module built
+		// elsewhere (an IDE, an earlier session) it asks whether a source is newer than the module file. Never for a module
+		// loaded from elsewhere (script.load) or a project without a script build. Reads the script directory.
+		std::optional<std::string> GetPlayBuildReason() const;
+		// Starts the build play mode waits for (BuildScripts); GetPlayBuildID names it until ClearPlayBuild.
+		bool StartPlayBuild(std::string* outError = nullptr);
+		uint64_t GetPlayBuildID() const { return m_PlayBuildID; }
+		void ClearPlayBuild() { m_PlayBuildID = 0; }
+		// The person's code editor (script.open, script.setExternalEditor).
+		ExternalEditorLauncher& GetExternalEditor() { return m_ExternalEditor; }
+		const ExternalEditorLauncher& GetExternalEditor() const { return m_ExternalEditor; }
+		// Opens a source file at a line and column (0: unknown) in the external editor: a path relative to the project
+		// directory, or absolute inside the project or the engine (whose SDK headers diagnostics name). Only code, CMake and
+		// text files; an empty path opens the project's script directory. Fails (with the reason) for anything else or a
+		// file that does not exist. On success outHow says what opened it.
+		bool OpenScriptSource(const std::filesystem::path& file, uint32_t line, uint32_t column, std::string* outHow = nullptr, std::string* outError = nullptr);
+		// Asks the UI to show the Problems panel (a play's build failed): the version changes with every request.
+		void RequestProblemsPanel() { m_ProblemsPanelRequests++; }
+		uint64_t GetProblemsPanelRequests() const { return m_ProblemsPanelRequests; }
 		// The script crash that stopped play mode last; cleared when a module loads.
 		const std::optional<ScriptFault>& GetLastScriptFault() const { return m_LastScriptFault; }
 		// Reads the loaded module's file and checks that it is still the file that was loaded, so that exports ship the
@@ -379,6 +425,8 @@ namespace Strata
 		void UpdateInputSuspension();
 		// Drops the simulated device's state and the commands' holds (play mode starts or stops).
 		void ResetSimulatedInput();
+		// Forgets the game's window requests and frees the cursor it may have locked (play mode starts or stops).
+		void ResetGameShell();
 		// Starts replacing the running scene with a scene asset (loaded while the running scene goes on, swapped in by
 		// UpdateRuntimeSceneLoad), or restarts the running scene at once for the null handle when a copy of the edited scene
 		// runs.
@@ -411,6 +459,12 @@ namespace Strata
 		// a file that changed while it was being loaded leaves the running version unknown.
 		void RecordScriptModuleFile(const std::optional<Sha256Digest>& expected);
 		void OnScriptBuildFinished();
+		// Takes the location of the last script crash once its symbolization finished, and reports it.
+		void UpdateScriptFaultLocation();
+		// Scans the project's saved scenes and prefabs for scripts on an I/O thread (see DoScenesUseScripts).
+		void StartScriptUsageScan();
+		// Takes the finished scan's answer: a project whose scenes use scripts that are not built is told so once.
+		void UpdateScriptUsageScan();
 		// Stops play mode (and reports the fault) when the script module crashed. Returns true if it did.
 		bool StopOnScriptFault();
 		// Saves the viewport state and closes the project; with activateBuiltinAssets the built-in asset manager becomes active.
@@ -448,6 +502,23 @@ namespace Strata
 		float m_MasterVolumeBeforePlay = 1.0f;
 		bool m_GameInputActive = false;
 		SimulatedInput m_SimulatedInput;
+		// The game's shell (see GetGameWindow): the services and, declared after them so that they end first, their providers.
+		class ProjectGameSaves final : public IGameSaves
+		{
+		public:
+			explicit ProjectGameSaves(const EditorContext& context)
+				: m_Context(context)
+			{
+			}
+
+			std::optional<std::filesystem::path> GetSaveDirectory() override { return m_Context.GetGameSaveDirectory(); }
+		private:
+			const EditorContext& m_Context;
+		};
+		EditorGameWindow m_GameWindow;
+		ProjectGameSaves m_GameSaves { *this };
+		Scope<EngineServices::ScopedProvider<IGameWindow>> m_GameWindowProvider;
+		Scope<EngineServices::ScopedProvider<IGameSaves>> m_GameSavesProvider;
 
 		std::vector<UUID> m_Selection;
 		std::unordered_set<UUID> m_SelectionSet; // The same entities, for IsSelected
@@ -463,6 +534,32 @@ namespace Strata
 		Ref<GameExport> m_GameExport;
 		ScriptBuildLoad m_LastScriptBuildLoad;
 		std::optional<ScriptFault> m_LastScriptFault;
+		uint64_t m_PlayBuildID = 0;
+		// The sources the running build compiles (taken when it started), and those the last successful build compiled with
+		// the module file it left (another write time or size: someone else built it since). See GetPlayBuildReason.
+		struct BuiltScriptSources
+		{
+			ScriptSourceListing Sources;
+			int64_t ModuleTime = 0;
+			uint64_t ModuleSize = 0;
+		};
+		std::optional<ScriptSourceListing> m_BuildingScriptSources;
+		uint64_t m_BuildingScriptSourcesID = 0;
+		std::optional<BuiltScriptSources> m_BuiltScriptSources;
+		uint64_t m_ProblemsPanelRequests = 0;
+		bool m_ScriptFaultLocationPending = false; // m_LastScriptFault waits for its symbolization
+		ExternalEditorLauncher m_ExternalEditor;
+		// The scan of the project's scene and prefab files for scripts (see DoScenesUseScripts), shared with its I/O job.
+		struct ScriptUsageScan
+		{
+			std::atomic<bool> Cancelled = false;
+			std::atomic<bool> Done = false;
+			bool UsesScripts = false; // Written by the job before Done
+			std::string File;         // The first file found to attach scripts
+		};
+		Ref<ScriptUsageScan> m_ScriptUsageScan;
+		bool m_SavedScenesUseScripts = false; // The finished scan's answer
+		bool m_ScriptUsageReported = false;
 		// The loaded module's file as it was loaded (see ReadRunningScriptModule), and the load it belongs to.
 		std::optional<Sha256Digest> m_ScriptModuleDigest;
 		uint64_t m_ScriptModuleLoadCount = 0;

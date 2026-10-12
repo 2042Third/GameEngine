@@ -5,6 +5,7 @@
 #include "Strata/Reflection/Property.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -55,6 +56,24 @@ namespace Strata
 		uint32_t FindFieldIndex(std::string_view name) const;
 	};
 
+	// A place in native code, as far as the module's debug information tells (ScriptSymbolizer): the function and, where
+	// the module has a PDB (Windows), the source file and line.
+	struct ScriptCodeLocation
+	{
+		uint64_t Address = 0;      // In this process
+		std::string Module;        // The file name of the module holding it (empty when no module does)
+		uint64_t ModuleOffset = 0; // From the module's base
+		std::string Function;      // Empty when unknown
+		std::string File;          // Empty when unknown (no debug information; POSIX reads none)
+		uint32_t Line = 0;
+		// A call the compiler inlined at Address (optimized builds, Windows): the frames that follow it with the same address
+		// are the functions it was inlined into, the last of them the function the code belongs to.
+		bool Inlined = false;
+	};
+
+	// "C:/Game/Scripts/Player.cpp(42) in Player::OnUpdate", or "GameScripts.dll+0x1A2B in ..." without a file.
+	std::string DescribeScriptCodeLocation(const ScriptCodeLocation& location);
+
 	// Describes a crash inside script code. After a fault the module is not called again until it is reloaded.
 	struct ScriptFault
 	{
@@ -64,6 +83,12 @@ namespace Strata
 		UUID Entity = UUID::Null();
 		std::string EntityName;
 		std::string Description; // E.g. "Access violation writing address 0x0000000000000000 at 0x..."
+		// Where in the module's code it happened (the first frame of the stack inside the module), and the stack from the
+		// fault outwards (frames of the module and the engine). Filled in by symbolization after the fault (ScriptEngine
+		// polls it, see ScriptEngine::Update); Symbolized tells that it is done.
+		std::optional<ScriptCodeLocation> Location;
+		std::vector<ScriptCodeLocation> Stack;
+		bool Symbolized = false;
 	};
 
 }

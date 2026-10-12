@@ -3,6 +3,8 @@
 
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/EngineServices.h"
+#include "Strata/Core/FileSystem.h"
+#include "Strata/Core/SaveFiles.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Reflection/ComponentRegistry.h"
@@ -1081,6 +1083,77 @@ namespace Strata
 			QueryVector2(context, outDelta, "GetScrollDelta", []() { return Input::GetScrollDelta(); });
 		}
 
+		bool HostIsGamepadConnected(StrataScriptContext* context, uint32_t gamepad)
+		{
+			return HostCall("IsGamepadConnected", false, [&]()
+			{
+				return ResolveContext(context, "IsGamepadConnected") && gamepad < c_MaxGamepads && Input::IsGamepadConnected(gamepad);
+			});
+		}
+
+		template<typename Query>
+		bool QueryGamepadButton(StrataScriptContext* context, uint32_t gamepad, uint32_t button, const char* function, Query&& query)
+		{
+			return HostCall(function, false, [&]()
+			{
+				return ResolveContext(context, function) && gamepad < c_MaxGamepads && button < c_GamepadButtonCount && query(gamepad, static_cast<GamepadButton>(button));
+			});
+		}
+
+		bool HostIsGamepadButtonDown(StrataScriptContext* context, uint32_t gamepad, uint32_t button)
+		{
+			return QueryGamepadButton(context, gamepad, button, "IsGamepadButtonDown", [](uint32_t pad, GamepadButton code) { return Input::IsGamepadButtonDown(pad, code); });
+		}
+
+		bool HostIsGamepadButtonPressed(StrataScriptContext* context, uint32_t gamepad, uint32_t button)
+		{
+			return QueryGamepadButton(context, gamepad, button, "IsGamepadButtonPressed",
+				[](uint32_t pad, GamepadButton code) { return Input::IsGamepadButtonPressed(pad, code); });
+		}
+
+		bool HostIsGamepadButtonReleased(StrataScriptContext* context, uint32_t gamepad, uint32_t button)
+		{
+			return QueryGamepadButton(context, gamepad, button, "IsGamepadButtonReleased",
+				[](uint32_t pad, GamepadButton code) { return Input::IsGamepadButtonReleased(pad, code); });
+		}
+
+		float HostGetGamepadAxis(StrataScriptContext* context, uint32_t gamepad, uint32_t axis)
+		{
+			return HostCall("GetGamepadAxis", 0.0f, [&]()
+			{
+				if (!ResolveContext(context, "GetGamepadAxis") || gamepad >= c_MaxGamepads || axis >= c_GamepadAxisCount)
+					return 0.0f;
+				return Input::GetGamepadAxis(gamepad, static_cast<GamepadAxis>(axis));
+			});
+		}
+
+		static_assert(StrataScriptCursorMode_Normal == static_cast<uint32_t>(CursorMode::Normal) && StrataScriptCursorMode_Hidden == static_cast<uint32_t>(CursorMode::Hidden)
+			&& StrataScriptCursorMode_Locked == static_cast<uint32_t>(CursorMode::Locked), "The cursor modes are the ABI's");
+
+		void HostSetCursorMode(StrataScriptContext* context, uint32_t mode)
+		{
+			HostCallVoid("SetCursorMode", [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "SetCursorMode");
+				if (!system)
+					return;
+				if (mode > StrataScriptCursorMode_Locked)
+				{
+					system->ReportProblem("SetCursorMode", fmt::format("{} is no cursor mode (0 normal, 1 hidden, 2 locked)", mode));
+					return;
+				}
+				Input::SetGameCursorMode(static_cast<CursorMode>(mode));
+			});
+		}
+
+		uint32_t HostGetCursorMode(StrataScriptContext* context)
+		{
+			return HostCall("GetCursorMode", uint32_t(StrataScriptCursorMode_Normal), [&]() -> uint32_t
+			{
+				return ResolveContext(context, "GetCursorMode") ? static_cast<uint32_t>(Input::GetGameCursorMode()) : uint32_t(StrataScriptCursorMode_Normal);
+			});
+		}
+
 		////////////////////////////////////////////////////////////////////////////////
 		// Physics
 		////////////////////////////////////////////////////////////////////////////////
@@ -1381,6 +1454,113 @@ namespace Strata
 				return physics ? CopyEntityIDs(physics->OverlapBox(*position, *size, *orientation, layerMask, includeTriggers), outEntities, capacity) : 0;
 			});
 		}
+
+		////////////////////////////////////////////////////////////////////////////////
+		// Character controllers (with the physics functions: they move together when physics is left out of a build)
+		////////////////////////////////////////////////////////////////////////////////
+
+		// The scene's character controllers (ICharacterControl) and the entity a character function acts on, reporting why
+		// there is none: the entity does not exist, the scene plays without physics, or the entity is no controller.
+		Entity RequireCharacter(ScriptSystem& system, StrataScriptEntityID id, const char* function, ICharacterControl*& outCharacters)
+		{
+			const Entity entity = RequireEntity(system, id, function);
+			if (!entity)
+				return {};
+			outCharacters = system.GetScene().GetService<ICharacterControl>();
+			if (!outCharacters)
+			{
+				system.ReportProblem(function, "the scene plays without physics");
+				return {};
+			}
+			if (!outCharacters->HasCharacterController(entity))
+			{
+				system.ReportProblem(function, fmt::format("'{}' is no character controller (character controllers are active entities with an enabled "
+					"CharacterController component and no RigidBody)", entity.GetName()));
+				return {};
+			}
+			return entity;
+		}
+
+		bool HostCharacterMove(StrataScriptContext* context, StrataScriptEntityID entity, const float velocity[3])
+		{
+			return HostCall("CharacterMove", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "CharacterMove");
+				ICharacterControl* characters = nullptr;
+				const Entity character = system ? RequireCharacter(*system, entity, "CharacterMove", characters) : Entity();
+				const std::optional<glm::vec3> value = character ? ReadVector3(*system, velocity, "velocity", "CharacterMove") : std::nullopt;
+				return value && characters->MoveCharacter(character, *value);
+			});
+		}
+
+		bool HostCharacterJump(StrataScriptContext* context, StrataScriptEntityID entity, float speed)
+		{
+			return HostCall("CharacterJump", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "CharacterJump");
+				ICharacterControl* characters = nullptr;
+				const Entity character = system ? RequireCharacter(*system, entity, "CharacterJump", characters) : Entity();
+				if (!character)
+					return false;
+				if (!std::isfinite(speed))
+				{
+					system->ReportProblem("CharacterJump", "the speed must be finite");
+					return false;
+				}
+				return characters->JumpCharacter(character, speed);
+			});
+		}
+
+		bool HostCharacterTeleport(StrataScriptContext* context, StrataScriptEntityID entity, const float position[3])
+		{
+			return HostCall("CharacterTeleport", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "CharacterTeleport");
+				ICharacterControl* characters = nullptr;
+				const Entity character = system ? RequireCharacter(*system, entity, "CharacterTeleport", characters) : Entity();
+				const std::optional<glm::vec3> value = character ? ReadVector3(*system, position, "position", "CharacterTeleport") : std::nullopt;
+				if (!value)
+					return false;
+				if (!characters->TeleportCharacter(character, *value))
+				{
+					system->ReportProblem("CharacterTeleport", fmt::format("'{}' cannot be placed there (its parent is scaled to zero)", character.GetName()));
+					return false;
+				}
+				return true;
+			});
+		}
+
+		bool HostCharacterGetState(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptCharacterState* outState)
+		{
+			return HostCall("CharacterGetState", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "CharacterGetState");
+				if (!system)
+					return false;
+				if (!outState)
+				{
+					system->ReportProblem("CharacterGetState", "the output pointer is null");
+					return false;
+				}
+				ICharacterControl* characters = nullptr;
+				const Entity character = RequireCharacter(*system, entity, "CharacterGetState", characters);
+				const std::optional<CharacterState> state = character ? characters->GetCharacterState(character) : std::nullopt;
+				if (!state)
+					return false;
+				*outState = {};
+				outState->GroundState = static_cast<uint32_t>(state->Ground);
+				outState->GroundEntity = state->GroundEntity ? static_cast<uint64_t>(state->GroundEntity.GetUUID()) : 0;
+				WriteVector3(state->GroundNormal, outState->GroundNormal);
+				WriteVector3(state->GroundVelocity, outState->GroundVelocity);
+				WriteVector3(state->Velocity, outState->Velocity);
+				return true;
+			});
+		}
+
+		static_assert(static_cast<uint32_t>(CharacterGroundState::OnGround) == StrataScriptGroundState_OnGround
+			&& static_cast<uint32_t>(CharacterGroundState::OnSteepGround) == StrataScriptGroundState_OnSteepGround
+			&& static_cast<uint32_t>(CharacterGroundState::NotSupported) == StrataScriptGroundState_NotSupported
+			&& static_cast<uint32_t>(CharacterGroundState::InAir) == StrataScriptGroundState_InAir, "The ground states are the ABI's");
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Audio
@@ -1936,6 +2116,258 @@ namespace Strata
 		}
 
 		////////////////////////////////////////////////////////////////////////////////
+		// The game's window and save files (engine services of the program running the game)
+		////////////////////////////////////////////////////////////////////////////////
+
+		IGameWindow* RequireGameWindow(ScriptSystem& system, const char* function)
+		{
+			IGameWindow* window = EngineServices::Get<IGameWindow>();
+			if (!window)
+				system.ReportProblem(function, "the program running the game has no window to change");
+			return window;
+		}
+
+		static_assert(StrataScriptWindowMode_Windowed == static_cast<uint32_t>(GameWindowMode::Windowed)
+			&& StrataScriptWindowMode_Fullscreen == static_cast<uint32_t>(GameWindowMode::Fullscreen)
+			&& StrataScriptWindowMode_Borderless == static_cast<uint32_t>(GameWindowMode::Borderless), "The window modes are the ABI's");
+
+		bool HostSetWindowMode(StrataScriptContext* context, uint32_t mode)
+		{
+			return HostCall("SetWindowMode", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "SetWindowMode");
+				IGameWindow* window = system ? RequireGameWindow(*system, "SetWindowMode") : nullptr;
+				if (!window)
+					return false;
+				if (mode > StrataScriptWindowMode_Borderless)
+				{
+					system->ReportProblem("SetWindowMode", fmt::format("{} is no window mode (0 windowed, 1 fullscreen, 2 borderless)", mode));
+					return false;
+				}
+				return window->SetWindowMode(static_cast<GameWindowMode>(mode));
+			});
+		}
+
+		bool HostSetResolution(StrataScriptContext* context, uint32_t width, uint32_t height)
+		{
+			return HostCall("SetResolution", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "SetResolution");
+				IGameWindow* window = system ? RequireGameWindow(*system, "SetResolution") : nullptr;
+				if (!window)
+					return false;
+				if (width == 0 || height == 0 || width > IGameWindow::c_MaxResolution || height > IGameWindow::c_MaxResolution)
+				{
+					system->ReportProblem("SetResolution", fmt::format("{}x{} is no resolution (1 to {} pixels per side)", width, height, IGameWindow::c_MaxResolution));
+					return false;
+				}
+				return window->SetResolution(width, height);
+			});
+		}
+
+		bool HostSetVSync(StrataScriptContext* context, bool enabled)
+		{
+			return HostCall("SetVSync", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "SetVSync");
+				IGameWindow* window = system ? RequireGameWindow(*system, "SetVSync") : nullptr;
+				return window && window->SetVSync(enabled);
+			});
+		}
+
+		bool HostGetWindowSize(StrataScriptContext* context, uint32_t outSize[2])
+		{
+			return HostCall("GetWindowSize", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "GetWindowSize");
+				if (!system)
+					return false;
+				if (!outSize)
+				{
+					system->ReportProblem("GetWindowSize", "the output pointer is null");
+					return false;
+				}
+				IGameWindow* window = RequireGameWindow(*system, "GetWindowSize");
+				if (!window)
+					return false;
+				const GameWindowState state = window->GetState();
+				outSize[0] = state.Width;
+				outSize[1] = state.Height;
+				return true;
+			});
+		}
+
+		// The game's save directory, reporting when the program running the game keeps no save files.
+		std::optional<std::filesystem::path> RequireSaveDirectory(ScriptSystem& system, const char* function)
+		{
+			IGameSaves* saves = EngineServices::Get<IGameSaves>();
+			std::optional<std::filesystem::path> directory = saves ? saves->GetSaveDirectory() : std::nullopt;
+			if (!directory)
+				system.ReportProblem(function, "the program running the game has no save directory (the editor keeps saves in its open project)");
+			return directory;
+		}
+
+		bool HostWriteSaveFile(StrataScriptContext* context, StrataScriptString name, const void* data, uint64_t size)
+		{
+			return HostCall("WriteSaveFile", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "WriteSaveFile");
+				if (!system)
+					return false;
+				if (!data && size > 0)
+				{
+					system->ReportProblem("WriteSaveFile", "the data pointer is null");
+					return false;
+				}
+				const std::optional<std::filesystem::path> directory = RequireSaveDirectory(*system, "WriteSaveFile");
+				if (!directory)
+					return false;
+				if (size > SaveFiles::c_MaxFileSize)
+				{
+					system->ReportProblem("WriteSaveFile", fmt::format("{} bytes are more than a save file may hold ({} bytes)", size, SaveFiles::c_MaxFileSize));
+					return false;
+				}
+				std::string error;
+				const std::span<const uint8_t> bytes(static_cast<const uint8_t*>(data), static_cast<size_t>(size));
+				if (!SaveFiles::Write(*directory, ScriptStringView(name), bytes, &error))
+				{
+					system->ReportProblem("WriteSaveFile", error);
+					return false;
+				}
+				return true;
+			});
+		}
+
+		bool HostReadSaveFile(StrataScriptContext* context, StrataScriptString name, void* buffer, uint64_t capacity, uint64_t* outSize)
+		{
+			return HostCall("ReadSaveFile", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "ReadSaveFile");
+				if (!system)
+					return false;
+				if (!outSize)
+				{
+					system->ReportProblem("ReadSaveFile", "the size pointer is null");
+					return false;
+				}
+				const std::optional<std::filesystem::path> directory = RequireSaveDirectory(*system, "ReadSaveFile");
+				if (!directory)
+					return false;
+				const std::string_view saveName = ScriptStringView(name);
+				if (std::optional<std::string> problem = SaveFiles::ValidateName(saveName))
+				{
+					system->ReportProblem("ReadSaveFile", *problem);
+					return false;
+				}
+				// A save that does not exist (yet) is an answer, not a mistake.
+				if (!SaveFiles::Exists(*directory, saveName))
+					return false;
+				std::string error;
+				const std::optional<std::vector<uint8_t>> bytes = SaveFiles::Read(*directory, saveName, &error);
+				if (!bytes)
+				{
+					system->ReportProblem("ReadSaveFile", error);
+					return false;
+				}
+				*outSize = bytes->size();
+				if (buffer && capacity > 0)
+					std::memcpy(buffer, bytes->data(), static_cast<size_t>(std::min<uint64_t>(capacity, bytes->size())));
+				return true;
+			});
+		}
+
+		bool HostDeleteSaveFile(StrataScriptContext* context, StrataScriptString name)
+		{
+			return HostCall("DeleteSaveFile", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "DeleteSaveFile");
+				const std::optional<std::filesystem::path> directory = system ? RequireSaveDirectory(*system, "DeleteSaveFile") : std::nullopt;
+				if (!directory)
+					return false;
+				const std::string_view saveName = ScriptStringView(name);
+				if (std::optional<std::string> problem = SaveFiles::ValidateName(saveName))
+				{
+					system->ReportProblem("DeleteSaveFile", *problem);
+					return false;
+				}
+				// Deleting what is not there leaves nothing to do; other failures are reported.
+				if (!SaveFiles::Exists(*directory, saveName))
+					return false;
+				std::string error;
+				if (!SaveFiles::Delete(*directory, saveName, &error))
+				{
+					system->ReportProblem("DeleteSaveFile", error);
+					return false;
+				}
+				return true;
+			});
+		}
+
+		uint64_t HostListSaveFiles(StrataScriptContext* context, char* buffer, uint64_t capacity)
+		{
+			return HostCall("ListSaveFiles", uint64_t(0), [&]() -> uint64_t
+			{
+				ScriptSystem* system = ResolveContext(context, "ListSaveFiles");
+				const std::optional<std::filesystem::path> directory = system ? RequireSaveDirectory(*system, "ListSaveFiles") : std::nullopt;
+				if (!directory)
+					return 0;
+				std::string text;
+				for (const std::string& saveName : SaveFiles::List(*directory))
+				{
+					text += saveName;
+					text += '\n';
+				}
+				return CopyText(text, buffer, capacity);
+			});
+		}
+
+		////////////////////////////////////////////////////////////////////////////////
+		// Collision layers
+		////////////////////////////////////////////////////////////////////////////////
+
+		// The layer matrix lives in the scene's settings; the physics system applies changes before its next step (also when
+		// the scene plays without physics yet: a world created later starts with the matrix).
+		bool HostPhysicsSetLayersCollide(StrataScriptContext* context, uint32_t layerA, uint32_t layerB, bool collide)
+		{
+			return HostCall("PhysicsSetLayersCollide", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "PhysicsSetLayersCollide");
+				if (!system)
+					return false;
+				if (layerA >= c_PhysicsLayerCount || layerB >= c_PhysicsLayerCount)
+				{
+					system->ReportProblem("PhysicsSetLayersCollide",
+						fmt::format("layers {} and {}: layers range from 0 to {}", layerA, layerB, c_PhysicsLayerCount - 1));
+					return false;
+				}
+				system->GetScene().GetSettings().PhysicsLayers.SetCollide(layerA, layerB, collide);
+				return true;
+			});
+		}
+
+		bool HostPhysicsGetLayersCollide(StrataScriptContext* context, uint32_t layerA, uint32_t layerB)
+		{
+			return HostCall("PhysicsGetLayersCollide", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "PhysicsGetLayersCollide");
+				return system && system->GetScene().GetSettings().PhysicsLayers.DoCollide(layerA, layerB);
+			});
+		}
+
+		int32_t HostPhysicsGetLayerIndex(StrataScriptContext* context, StrataScriptString name)
+		{
+			return HostCall("PhysicsGetLayerIndex", int32_t(-1), [&]() -> int32_t
+			{
+				ScriptSystem* system = ResolveContext(context, "PhysicsGetLayerIndex");
+				if (!system)
+					return -1;
+				// An unknown name is an answer (-1), not misuse: games look layers up that a scene may not have.
+				const std::optional<uint32_t> layer = system->GetScene().GetSettings().PhysicsLayers.FindLayer(ScriptStringView(name));
+				return layer ? static_cast<int32_t>(*layer) : -1;
+			});
+		}
+
+		////////////////////////////////////////////////////////////////////////////////
 		// The table
 		////////////////////////////////////////////////////////////////////////////////
 
@@ -2040,7 +2472,29 @@ namespace Strata
 	X(AnimatorGetCurrentState) \
 	X(AnimatorGetNormalizedTime) \
 	X(AnimatorIsInTransition) \
-	X(AnimatorGetJointTransform)
+	X(AnimatorGetJointTransform) \
+	X(CharacterMove) \
+	X(CharacterJump) \
+	X(CharacterTeleport) \
+	X(CharacterGetState) \
+	X(IsGamepadConnected) \
+	X(IsGamepadButtonDown) \
+	X(IsGamepadButtonPressed) \
+	X(IsGamepadButtonReleased) \
+	X(GetGamepadAxis) \
+	X(SetCursorMode) \
+	X(GetCursorMode) \
+	X(SetWindowMode) \
+	X(SetResolution) \
+	X(SetVSync) \
+	X(GetWindowSize) \
+	X(WriteSaveFile) \
+	X(ReadSaveFile) \
+	X(DeleteSaveFile) \
+	X(ListSaveFiles) \
+	X(PhysicsSetLayersCollide) \
+	X(PhysicsGetLayersCollide) \
+	X(PhysicsGetLayerIndex)
 
 		struct HostFunctionEntry
 		{

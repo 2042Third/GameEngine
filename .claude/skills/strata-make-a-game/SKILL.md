@@ -36,7 +36,8 @@ StrataCLI list                       # the commands this build has; check that i
 unused). With the `basic3d` template (`project.templates` lists them) it also saves a lit start scene,
 `Scenes/Main.stscene`, already set as the start scene: "Main Camera" (primary, audio listener), "Sun" (directional light,
 shadows), "Sky" (procedural sky light), "Ground" (a 20 x 20 plane with the dark `Materials/Ground.stmat`, which you can
-restyle with `material.set`) and "Post Process". Keep what fits your game and change or delete the rest
+restyle with `material.set`, and a static box collider with its top at y = 0: dynamic bodies and character controllers rest
+on it) and "Post Process". Keep what fits your game and change or delete the rest
 (`entity.find {"name": "Ground"}` gives the IDs). Without a template the project has no scene.
 
 Design the code for verification before writing it:
@@ -73,8 +74,9 @@ Design the code for verification before writing it:
 
 ## 4. Scripts
 
-Write the sources, then `script.build` (configures CMake the first time; answers with compiler diagnostics on failure)
-and `script.status` (classes, fields, defaults). Patterns that worked:
+Write the sources (`script.create {"class": "Player"}` starts a class), then `script.build` (configures CMake the first
+time; answers with compiler diagnostics on failure) and `script.status` (classes, fields, defaults); `play.start` also
+builds changed sources first. Patterns that worked:
 
 - Many visuals: create the entities once in `OnCreate` (`Scene::CreateEntity(name, GetEntity())`,
   `AddComponent("MeshRenderer")`, `SetProperty("MeshRenderer", "Mesh", mesh)`, `GetTransform().SetTranslation(...)`), then
@@ -85,6 +87,54 @@ and `script.status` (classes, fields, defaults). Patterns that worked:
 - Input: `Input::IsKeyPressed` for one-shot actions, `KeyRepeat` for held movement (construct it from fields in
   `OnCreate`), and update both keys of a pair every frame (`a.Update(dt) || b.Update(dt)` would skip `b`).
 - Sounds: `Assets::RequestLoad` in `OnCreate`, `Audio::PlayOneShot(clip)` later.
+- A walking player (first person, mouse look, keyboard and gamepad): an entity "Player" with a `CharacterController`
+  (no `RigidBody`) and this script, and the primary camera as its child at eye height (`Translation [0, 1.6, 0]`); set the
+  script's `Camera` field to the camera's ID. The controller moves the entity; the script turns the entity (yaw) and the
+  camera (pitch):
+
+  ```cpp
+  class PlayerController : public Script
+  {
+  public:
+  	float Speed = 4.0f;
+  	float JumpSpeed = 5.0f;
+  	float MouseSensitivity = 0.1f;  // Degrees per pixel
+  	float StickTurnSpeed = 120.0f;  // Degrees per second at full tilt
+  	Entity Camera;                  // A child of the player at eye height
+  	float Yaw = 0.0f;
+  	float Pitch = 0.0f;
+
+  	void OnCreate() override { Input::SetCursorMode(CursorMode::Locked); }
+
+  	void OnUpdate(float deltaTime) override
+  	{
+  		const glm::vec2 look = Input::GetGamepadStick(GamepadStick::Right);
+  		Yaw -= Input::GetMouseDelta().x * MouseSensitivity + look.x * StickTurnSpeed * deltaTime;
+  		Pitch = glm::clamp(Pitch - Input::GetMouseDelta().y * MouseSensitivity + look.y * StickTurnSpeed * deltaTime, -85.0f, 85.0f);
+  		GetTransform().SetEulerAngles(glm::vec3(0.0f, glm::radians(Yaw), 0.0f));
+  		if (Camera)
+  			Camera.GetTransform().SetEulerAngles(glm::vec3(glm::radians(Pitch), 0.0f, 0.0f));
+
+  		glm::vec2 move = Input::GetGamepadStick(GamepadStick::Left);    // +y forward
+  		move.x += (Input::IsKeyDown(Key::D) ? 1.0f : 0.0f) - (Input::IsKeyDown(Key::A) ? 1.0f : 0.0f);
+  		move.y += (Input::IsKeyDown(Key::W) ? 1.0f : 0.0f) - (Input::IsKeyDown(Key::S) ? 1.0f : 0.0f);
+  		if (glm::length(move) > 1.0f)
+  			move = glm::normalize(move);
+  		const glm::vec3 forward = GetTransform().GetForward(), right = GetTransform().GetRight();
+  		CharacterController controller = GetEntity().GetCharacterController();
+  		controller.Move((glm::normalize(glm::vec3(forward.x, 0.0f, forward.z)) * move.y + right * move.x) * Speed);
+  		if (controller.IsGrounded() && (Input::IsKeyPressed(Key::Space) || Input::IsGamepadButtonPressed(GamepadButton::A)))
+  			controller.Jump(JumpSpeed);
+  		if (Input::IsKeyPressed(Key::Escape))
+  			Input::SetCursorMode(CursorMode::Normal); // A menu would go here
+  	}
+  };
+  ```
+
+  Register the fields with `ST_SCRIPT_FIELD`. Test it with `input.key {"key": "W", "frames": 60}` (or `input.gamepadAxis
+  {"axis": "LeftY", "value": 1, "frames": 60}`) and read the player's `Translation` with `component.get`: it walks on the
+  template's ground and stops at walls. In the editor the cursor stays locked only while the game view has the focus
+  (Shift+F1 frees it); `input.mouseMove` moves the simulated pointer, so mouse look works from commands too.
 - Hot reload replaces the instance: non-field members are gone in `OnReload`; find your entities again (e.g. children of
   the script's entity by name) instead of creating more.
 - Script builds use the compiler's default warnings; compile your sources with `-Wall -Wextra` once (GCC or Clang with

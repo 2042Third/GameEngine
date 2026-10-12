@@ -2,6 +2,7 @@
 
 #include <imgui.h>
 
+#include <cstddef>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -37,6 +38,20 @@ namespace Strata::UI
 		// The item recorded under the key in the latest frame of the current context; nothing when it was not drawn then.
 		static std::optional<Item> Find(std::string_view key);
 		static void Clear();
+	};
+
+	// The key of a numbered widget, a prefix and a number ("Problems.Row.3"), made in place: rows drawn every frame record
+	// themselves without allocating. Prefixes longer than c_MaxPrefix characters are cut.
+	class NumberedProbeKey
+	{
+	public:
+		static constexpr size_t c_MaxPrefix = 40;
+
+		NumberedProbeKey(std::string_view prefix, size_t number);
+		operator std::string_view() const { return std::string_view(m_Text, m_Size); }
+	private:
+		char m_Text[c_MaxPrefix + 24]; // The prefix and up to 20 digits
+		size_t m_Size = 0;
 	};
 
 }

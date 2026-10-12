@@ -37,6 +37,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace Strata
@@ -47,6 +48,8 @@ namespace Strata
 
 		constexpr float c_AddComponentWidthInFontSizes = 14.0f;
 		constexpr float c_AddComponentListHeightInFontSizes = 20.0f;
+		// The widest a row label of the collision layer matrix gets, in text heights (longer names are elided).
+		constexpr float c_LayerLabelMaxWidthInFontSizes = 10.0f;
 
 		const ImVec4& GetPlayStateColor(const EditorContext& context)
 		{
@@ -193,7 +196,8 @@ namespace Strata
 
 		const char* GetStreamingHeader()
 		{
-			static const std::string s_Header = std::string(Icons::Layers) + "  Streaming";
+			// Not the Layers icon of the Collision Layers section above it.
+			static const std::string s_Header = std::string(Icons::Download) + "  Streaming";
 			return s_Header.c_str();
 		}
 
@@ -201,6 +205,44 @@ namespace Strata
 		std::string DescribeStreaming(const SceneSettings& settings)
 		{
 			return fmt::format("{} entities per frame", settings.MaxEntitiesInstantiatedPerFrame);
+		}
+
+		const char* GetLayersHeader()
+		{
+			static const std::string s_Header = std::string(Icons::Layers) + "  Collision Layers";
+			return s_Header.c_str();
+		}
+
+		// The collision layers section's summary ("2 named · 1 pair passes through") and the layers its matrix shows.
+		std::string DescribeLayers(const PhysicsLayerSettings& layers, std::vector<uint32_t>& outShown)
+		{
+			outShown.clear();
+			size_t named = 0;
+			size_t apart = 0;
+			for (uint32_t layer = 0; layer < c_PhysicsLayerCount; layer++)
+			{
+				named += layers.Names[layer].empty() ? 0 : 1;
+				for (uint32_t other = layer; other < c_PhysicsLayerCount; other++)
+					apart += layers.DoCollide(layer, other) ? 0 : 1;
+				if (layer == 0 || !layers.Names[layer].empty() || !layers.CollidesWithAll(layer))
+					outShown.push_back(layer);
+			}
+			const std::string names = named == 0 ? std::string("No names") : fmt::format("{} named", named);
+			if (apart == 0)
+				return names + " \xC2\xB7 all collide";
+			return fmt::format("{} \xC2\xB7 {} {} through", names, apart, apart == 1 ? "pair passes" : "pairs pass");
+		}
+
+		// A name for a newly named layer that no layer has: "New Layer", else "New Layer 2" and so on.
+		std::string MakeNewLayerName(const PhysicsLayerSettings& layers, uint32_t layer)
+		{
+			for (uint32_t number = 1; number <= c_PhysicsLayerCount + 1; number++)
+			{
+				std::string name = number == 1 ? std::string("New Layer") : fmt::format("New Layer {}", number);
+				if (!layers.ValidateName(layer, name))
+					return name;
+			}
+			return {};
 		}
 
 		const char* GetSkyHeader()
@@ -931,6 +973,8 @@ namespace Strata
 				UI::EndPropertyTable();
 			}
 		}
+		// Physics settings too, but edited by commands of their own (the draft below never carries layers).
+		DrawCollisionLayers(context, commands);
 		if (UI::SectionHeader("Inspector.Streaming", GetStreamingHeader(), ImGuiTreeNodeFlags_None, m_StreamingSummary->Text))
 		{
 			if (UI::BeginPropertyTable("StreamingSettings"))
@@ -959,6 +1003,164 @@ namespace Strata
 					{ "maxContactConstraints", capacity.MaxContactConstraints } } } });
 		}
 		DrawSky(context, commands);
+	}
+
+	void InspectorPanel::DrawCollisionLayers(EditorContext& context, const EditorCommandRegistry& commands)
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const ImGuiStyle& style = ImGui::GetStyle();
+		Scene& scene = *context.GetActiveScene();
+		const PhysicsLayerSettings& layers = scene.GetSettings().PhysicsLayers;
+		if (!m_LayersSummary || m_LayersSummary->Layers != layers)
+		{
+			std::vector<uint32_t> shown;
+			std::string text = DescribeLayers(layers, shown);
+			m_LayersSummary = LayersSummary { layers, std::move(text), std::move(shown) };
+		}
+		if (!UI::SectionHeader("Inspector.Layers", GetLayersHeader(), ImGuiTreeNodeFlags_None, m_LayersSummary->Text))
+			return;
+		// Copies: a command run below replaces the settings (and the summary with them).
+		const PhysicsLayerSettings current = layers;
+		const std::vector<uint32_t> shown = m_LayersSummary->Shown;
+
+		// The names, edited in place: a name applies when its field is left or Enter is pressed, an empty one clears it.
+		if (UI::BeginPropertyTable("LayerNames"))
+		{
+			for (uint32_t layer = 0; layer < c_PhysicsLayerCount; layer++)
+			{
+				if (current.Names[layer].empty())
+					continue;
+				const std::string key = fmt::format("Inspector.Layers.Name.{}", layer);
+				UI::PropertyLabel(fmt::format("Layer {}", layer), "Bodies and character controllers choose their layer by this name", key);
+				ImGui::PushID(static_cast<int>(layer));
+				std::string local;
+				std::string* text = &local;
+				if (m_LayerNameLayer == layer)
+					text = &m_LayerNameText;
+				else
+					local = current.Names[layer];
+				ImGui::SetNextItemWidth(std::max(ImGui::GetContentRegionAvail().x - ImGui::GetFrameHeight() - style.ItemSpacing.x, ImGui::GetFrameHeight()));
+				const bool entered = ImGui::InputTextWithHint("##Name", "Name", text, ImGuiInputTextFlags_EnterReturnsTrue);
+				UI::ItemProbe::Record(key, true, 0, *text);
+				if (ImGui::IsItemActivated())
+				{
+					m_LayerNameLayer = layer;
+					m_LayerNameText = *text;
+				}
+				const std::string typed = *text;
+				const bool commit = (entered || ImGui::IsItemDeactivatedAfterEdit()) && typed != current.Names[layer];
+				if (!ImGui::IsItemActive() && m_LayerNameLayer == layer)
+					m_LayerNameLayer = c_PhysicsLayerCount;
+				ImGui::SameLine();
+				const std::string clearKey = fmt::format("Inspector.Layers.Clear.{}", layer);
+				const bool clear = UI::IconButton(clearKey.c_str(), Icons::X, "Remove the name (what is on the layer stays on it)");
+				ImGui::PopID();
+				if (commit)
+					RunEditorCommand(context, commands, "scene.setSettings", { { "layerNames", { { std::to_string(layer), typed } } } });
+				else if (clear)
+					RunEditorCommand(context, commands, "scene.setSettings", { { "layerNames", { { std::to_string(layer), "" } } } });
+			}
+			UI::EndPropertyTable();
+		}
+		// Naming a layer starts with the first one without a name after the default layer (0, where everything starts).
+		std::optional<uint32_t> unnamed;
+		for (uint32_t offset = 0; offset < c_PhysicsLayerCount && !unnamed; offset++)
+		{
+			const uint32_t layer = (offset + 1) % c_PhysicsLayerCount;
+			if (current.Names[layer].empty())
+				unnamed = layer;
+		}
+		UI::ButtonStyle addStyle;
+		addStyle.Enabled = unnamed.has_value();
+		if (UI::ToolbarButton("Inspector.Layers.Add", Icons::LayersPlus, "Name a Layer", "Give the next layer without a name one, to choose it by", addStyle) && unnamed)
+		{
+			RunEditorCommand(context, commands, "scene.setSettings",
+				{ { "layerNames", { { std::to_string(*unnamed), MakeNewLayerName(current, *unnamed) } } } });
+		}
+
+		// The matrix: one row per shown layer with a box for each shown layer up to it (the pairs once each); a cleared box
+		// lets the pair pass through each other. Compact, so the layers a game names fit an Inspector of a laptop's width:
+		// boxes of the text's height in tight cells, and row labels as wide as the longest (at most a few words, the rest
+		// elided, whole in their tooltips).
+		ImGui::Spacing();
+		UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Caption);
+		ImGui::TextColored(colors.TextSecondary, "Which layers collide");
+		ImGui::PopFont();
+		std::vector<std::string> labels;
+		labels.reserve(shown.size());
+		float labelWidth = 0.0f;
+		for (const uint32_t layer : shown)
+		{
+			labels.push_back(fmt::format("{} \xC2\xB7 {}", layer, current.GetDisplayName(layer)));
+			labelWidth = std::max(labelWidth, ImGui::CalcTextSize(labels.back().c_str()).x);
+		}
+		labelWidth = std::min(labelWidth, ImGui::GetFontSize() * c_LayerLabelMaxWidthInFontSizes);
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(style.FramePadding.x, 0.0f));
+		ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(style.CellPadding.x * 0.5f, style.CellPadding.y * 0.5f));
+		const float cellWidth = ImGui::GetFrameHeight();
+		const float rowHeight = ImGui::GetFrameHeight() + style.CellPadding.y * 2.0f;
+		const float contentWidth = labelWidth + style.CellPadding.x * 2.0f + (cellWidth + style.CellPadding.x * 2.0f) * static_cast<float>(shown.size());
+		const bool scroll = contentWidth > ImGui::GetContentRegionAvail().x;
+		const float height = rowHeight * static_cast<float>(shown.size() + 1) + (scroll ? style.ScrollbarSize : 0.0f) + style.CellPadding.y;
+		const ImGuiTableFlags flags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX | (scroll ? ImGuiTableFlags_ScrollX : ImGuiTableFlags_None);
+		if (!ImGui::BeginTable("LayerMatrix", static_cast<int>(shown.size()) + 1, flags, ImVec2(scroll ? 0.0f : contentWidth, scroll ? height : 0.0f)))
+		{
+			ImGui::PopStyleVar(2);
+			return;
+		}
+		ImGui::TableSetupColumn("Layer", ImGuiTableColumnFlags_WidthFixed, labelWidth);
+		for (size_t column = 0; column < shown.size(); column++)
+			ImGui::TableSetupColumn(nullptr, ImGuiTableColumnFlags_WidthFixed, cellWidth);
+		ImGui::TableNextRow();
+		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
+		for (size_t column = 0; column < shown.size(); column++)
+		{
+			ImGui::TableSetColumnIndex(static_cast<int>(column) + 1);
+			const std::string index = std::to_string(shown[column]);
+			ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (cellWidth - ImGui::CalcTextSize(index.c_str()).x) * 0.5f);
+			ImGui::TextColored(colors.TextSecondary, "%s", index.c_str());
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+				ImGui::SetTooltip("%s", current.GetDisplayName(shown[column]).c_str());
+		}
+		ImGui::PopFont();
+		std::optional<std::pair<std::pair<uint32_t, uint32_t>, bool>> toggled;
+		for (size_t row = 0; row < shown.size(); row++)
+		{
+			const uint32_t layer = shown[row];
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::AlignTextToFramePadding();
+			const std::string shownLabel = UI::ElideEnd(labels[row], labelWidth);
+			ImGui::TextUnformatted(shownLabel.c_str());
+			UI::ItemProbe::Record(fmt::format("Inspector.Layers.Label.{}", layer), true, 0, shownLabel);
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+				ImGui::SetTooltip("%s", labels[row].c_str());
+			for (size_t column = 0; column <= row; column++)
+			{
+				const uint32_t other = shown[column];
+				ImGui::TableSetColumnIndex(static_cast<int>(column) + 1);
+				ImGui::PushID(static_cast<int>(layer * c_PhysicsLayerCount + other));
+				bool collide = current.DoCollide(layer, other);
+				if (ImGui::Checkbox("##Collide", &collide))
+					toggled = std::make_pair(std::make_pair(other, layer), collide);
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+				{
+					const std::string pair = layer == other ? fmt::format("Bodies on {}", current.GetDisplayName(layer))
+						: fmt::format("{} and {}", current.GetDisplayName(other), current.GetDisplayName(layer));
+					ImGui::SetTooltip("%s %s", pair.c_str(), collide ? "collide" : "pass through each other");
+				}
+				UI::ItemProbe::Record(fmt::format("Inspector.Layers.Cell.{}.{}", other, layer), true, 0, collide ? "on" : "off");
+				ImGui::PopID();
+			}
+		}
+		ImGui::EndTable();
+		ImGui::PopStyleVar(2);
+		if (toggled)
+		{
+			const auto& [pair, collide] = *toggled;
+			RunEditorCommand(context, commands, "scene.setSettings",
+				{ { "layerCollisions", nlohmann::json::array({ { { "layers", { pair.first, pair.second } }, { "collide", collide } } }) } });
+		}
 	}
 
 	void InspectorPanel::DrawSky(EditorContext& context, const EditorCommandRegistry& commands)

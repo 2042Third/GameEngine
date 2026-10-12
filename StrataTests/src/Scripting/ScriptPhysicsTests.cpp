@@ -182,6 +182,29 @@ TEST_SUITE("Scripting.Physics")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Scripts look collision layers up by name and change the playing scene's layer matrix")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		Scene scene;
+		PhysicsLayerSettings& layers = scene.GetSettings().PhysicsLayers;
+		layers.Names[2] = "Crates";
+		layers.Names[3] = "Zones";
+		const Entity tester = CreatePhysicsScene(scene, "PhysicsLayersAPI");
+		scene.OnRuntimeStart();
+		RunFrames(scene, 60);
+
+		const ScriptSystem& system = GetScriptSystem(scene);
+		CHECK(GetField<bool>(system, tester, "PhysicsLayersAPI", "Done"));
+		CheckScriptChecks(system, tester, "PhysicsLayersAPI", 10);
+		CHECK_FALSE(engine->IsFaulted());
+		// The scene's settings hold the change (what the inspector shows of a playing scene), and the crate fell through the
+		// ground instead of landing on it.
+		CHECK_FALSE(scene.GetSettings().PhysicsLayers.DoCollide(0, 2));
+		CHECK(scene.GetSettings().PhysicsLayers.DoCollide(2, 3));
+		CHECK(glm::vec3(scene.GetWorldTransform(scene.FindEntityByName("Crate"))[3]).y < -2.0f);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Scripts use physics from OnCreate, also on bodies they spawn while the scene starts")
 	{
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));

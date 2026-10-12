@@ -7,6 +7,7 @@
 
 #include "StrataScript/Animator.h"
 #include "StrataScript/Audio.h"
+#include "StrataScript/CharacterController.h"
 #include "StrataScript/Entity.h"
 #include "StrataScript/Game.h"
 #include "StrataScript/Gameplay.h"

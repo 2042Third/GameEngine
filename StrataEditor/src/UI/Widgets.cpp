@@ -794,6 +794,47 @@ namespace Strata::UI
 		return std::string(ellipsis) + std::string(text.substr(high));
 	}
 
+	std::string ElideEnd(std::string_view text, float maxWidth)
+	{
+		if (ImGui::CalcTextSize(text.data(), text.data() + text.size()).x <= maxWidth)
+			return std::string(text);
+		constexpr std::string_view ellipsis = "\xE2\x80\xA6";
+		const float ellipsisWidth = ImGui::CalcTextSize(ellipsis.data(), ellipsis.data() + ellipsis.size()).x;
+		// The longest start of the text that fits before the ellipsis, cut at a character boundary. The width only grows as
+		// the end moves right, so the end is searched for by bisection.
+		auto isContinuation = [text](size_t position)
+		{
+			return position < text.size() && (static_cast<unsigned char>(text[position]) & 0xC0) == 0x80;
+		};
+		auto fits = [&](size_t end)
+		{
+			return ImGui::CalcTextSize(text.data(), text.data() + end).x + ellipsisWidth <= maxWidth;
+		};
+		size_t low = 0;            // Fits (the ellipsis alone)
+		size_t high = text.size(); // Does not fit
+		while (high - low > 1)
+		{
+			// A character boundary between the two: the first from the middle on, else the last before it.
+			const size_t half = low + (high - low) / 2;
+			size_t middle = half;
+			while (middle < high && isContinuation(middle))
+				middle++;
+			if (middle >= high)
+			{
+				middle = half;
+				while (middle > low && isContinuation(middle))
+					middle--;
+				if (middle <= low)
+					break;
+			}
+			if (fits(middle))
+				low = middle;
+			else
+				high = middle;
+		}
+		return std::string(text.substr(0, low)) + std::string(ellipsis);
+	}
+
 	float DialogButtonWidth(const char* label)
 	{
 		return std::max(ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f, ImGui::GetFontSize() * c_DialogButtonWidthInFontSizes);

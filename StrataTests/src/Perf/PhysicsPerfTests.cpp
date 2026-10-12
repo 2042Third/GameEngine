@@ -254,6 +254,60 @@ TEST_SUITE("Perf.Physics")
 		});
 	}
 
+	TEST_CASE("1,000 character controllers walking over steps")
+	{
+		// A crowd: 1,000 controllers in a grid walk along +X over a ground crossed by 0.3 m steps every 4 m (each walks up and
+		// down steps, its stairs and floor queries run every step), with nobody listening to contacts. The median scene update
+		// of one fixed step (60 Hz) against Perf.Physics.Characters1000Step (the workstream's acceptance limit is 2 ms).
+		Perf::ScopedApplicationJobSystem jobs;
+		Perf::CheckBudgetConfirmed("Perf.Physics.Characters1000Step", [&]
+		{
+			constexpr uint32_t c_Columns = 40;
+			constexpr uint32_t c_Characters = 1'000;
+			Scene scene;
+			Entity floor = scene.CreateEntity("Floor");
+			floor.GetTransform().Translation = glm::vec3(60.0f, -0.5f, 30.0f);
+			floor.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(100.0f, 0.5f, 100.0f);
+			for (uint32_t step = 0; step < 30; step++)
+				CreateStaticBox(scene, "Step " + std::to_string(step), glm::vec3(4.0f * static_cast<float>(step) + 3.0f, 0.15f, 30.0f), glm::vec3(1.0f, 0.15f, 100.0f));
+			std::vector<Entity> characters;
+			characters.reserve(c_Characters);
+			for (uint32_t index = 0; index < c_Characters; index++)
+			{
+				Entity character = scene.CreateEntity("Character");
+				character.GetTransform().Translation = glm::vec3(1.0f * static_cast<float>(index / c_Columns), 0.0f, 1.5f * static_cast<float>(index % c_Columns));
+				character.AddComponent<CharacterControllerComponent>();
+				characters.push_back(character);
+			}
+			scene.OnRuntimeStart();
+			ICharacterControl* control = scene.GetService<ICharacterControl>();
+			REQUIRE(control != nullptr);
+			for (Entity character : characters)
+				REQUIRE(control->MoveCharacter(character, glm::vec3(2.0f, 0.0f, 0.0f)));
+
+			constexpr uint32_t c_Warmup = 10;
+			constexpr uint32_t c_Steps = 60;
+			std::vector<double> samples;
+			for (uint32_t step = 0; step < c_Warmup + c_Steps; step++)
+			{
+				const Clock::time_point start = Clock::now();
+				scene.OnUpdateRuntime(scene.GetSettings().FixedTimestep);
+				const double elapsed = MillisecondsSince(start);
+				if (step >= c_Warmup)
+					samples.push_back(elapsed);
+			}
+			const PhysicsStats stats = GetPhysics(scene).GetStats();
+			CHECK(stats.CharacterControllerCount == c_Characters);
+			// They walked on: past the first step at x = 2..4 for the first rows.
+			CHECK(GetWorldPosition(scene, characters.front()).x > 1.5f);
+			const Perf::Measurement step = Perf::Summarize(samples);
+			MESSAGE("1,000 characters: median step ", step.MedianMs, " ms (p95 ", step.P95Ms, " ms); controllers ", stats.CharacterTime, " ms, Jolt ",
+				stats.JoltStepTime, " ms");
+			scene.OnRuntimeStop();
+			return step.MedianMs;
+		});
+	}
+
 	TEST_CASE("Creating 10,000 bodies in one frame")
 	{
 		Perf::ScopedApplicationJobSystem jobs;

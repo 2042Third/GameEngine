@@ -38,6 +38,7 @@ namespace Strata::UI
 			{ "SphereCollider", Icons::Globe },
 			{ "CapsuleCollider", Icons::Pill },
 			{ "MeshCollider", Icons::Shapes },
+			{ "CharacterController", Icons::PersonStanding },
 			{ "AudioSource", Icons::Volume2 },
 			{ "AudioListener", Icons::Ear },
 			{ "Skin", Icons::PersonStanding },
@@ -73,6 +74,9 @@ namespace Strata::UI
 			return Icons::CloudSun;
 		if (registry.all_of<PostProcessComponent>(entity))
 			return Icons::Aperture;
+		// A character with a mesh, a voice or a script is a character.
+		if (registry.all_of<CharacterControllerComponent>(entity))
+			return Icons::PersonStanding;
 		if (registry.all_of<AudioSourceComponent>(entity))
 			return Icons::Volume2;
 		if (registry.all_of<AudioListenerComponent>(entity))

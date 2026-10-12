@@ -55,10 +55,11 @@ namespace Strata
 	};
 
 	// Adds the editor gizmo shapes of a scene's active components to a debug draw list: directional lights (an arrow along
-	// the light), point lights (their range), spot lights (their outer cone), cameras (their view frustum) and physics
-	// colliders. Collider shapes follow the entity's scale like rigid bodies do: box extents per axis, sphere radius by the
-	// largest axis, capsule radius by the larger of X and Z and its height by Y; mesh colliders show the mesh bounds. Light
-	// shapes use the light's color. Reads the cached world transforms: call Scene::UpdateWorldTransforms first after
+	// the light), point lights (their range), spot lights (their outer cone), cameras (their view frustum), physics colliders
+	// and character controllers. Collider shapes follow the entity's scale like rigid bodies do: box extents per axis, sphere
+	// radius by the largest axis, capsule radius by the larger of X and Z and its height by Y; mesh colliders show the mesh
+	// bounds; a character controller's capsule stands upright on the entity's origin, unscaled. Light shapes use the light's
+	// color. Reads the cached world transforms: call Scene::UpdateWorldTransforms first after
 	// editing the scene.
 	void DrawSceneGizmos(DebugDraw& debugDraw, const Scene& scene, const SceneGizmoSettings& settings = {});
 

@@ -106,8 +106,10 @@ process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime
 `Process` (child processes), `DynamicLibrary`, `CrashGuard`, `UUID`, `Hash` (FNV-1a, and CRC-32C with the processor's CRC
 instructions where it has them), `Crypto` (SHA-256, peer authentication), `Base64`,
 `CommandLine`, `Timer`/`FramePacer`, `JsonUtils` (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the
-audio thread), `EngineServices` (process-wide interfaces a module offers the modules that may not include it, such as the
-audio output's master volume, `IAudioOutput`), `FrameProfiler` (the always-on timer of the main thread's frame stages,
+audio thread), `EngineServices` (process-wide interfaces a module or the program running a game offers the modules that
+may not include it, such as the audio output's master volume, `IAudioOutput`, the game's window, `IGameWindow`, and its
+save directory, `IGameSaves`), `SaveFiles` (a game's save files: names checked before any path is formed, atomic writes;
+`SaveDirectory`), `FrameProfiler` (the always-on timer of the main thread's frame stages,
 see [Frame profiler](#frame-profiler)) and `Profiling` (`ST_PROFILE_STAGE`; Tracy with `STRATA_ENABLE_TRACY`).
 
 **Events** (`Events/`). Window, key and mouse events (`ApplicationEvent.h`, `KeyEvent.h`, `MouseEvent.h`, including
@@ -117,11 +119,19 @@ down until one marks it handled (`EventDispatcher`). An unhandled `WindowCloseEv
 can veto closing (the editor asks about unsaved changes).
 
 **Input** (`Input/`). `Input` is a static polling API: down state, per-frame pressed/released transitions, mouse
-position relative to the input viewport, deltas, scrolling and gamepads. `GLFWWindow` feeds it (`Input::Process*`);
+position relative to the input viewport, deltas, scrolling and gamepads (up to four, the GLFW gamepad mapping:
+`GamepadCodes.h`; sticks -1 to 1 with +Y up, triggers 0 released to 1 pressed, which `GLFWWindow` converts GLFW's values
+to; out-of-range and non-finite values are clamped or read at rest). `GLFWWindow` feeds it (`Input::Process*`);
 Input reaches the window only through `InputWindow` (size, cursor mode), which `Window` implements, so the input layer
-stays below the application shell. It also has a virtual device for tools (`SimulateKey` and friends) merged with the
-real devices, `SetEnabled` (device input off, e.g. while the editor's game view has no focus) and `SetSuspended`
-(input frames follow the game's updates). `InputNames` maps key and button names for the `input.*` commands.
+stays below the application shell. It also has a virtual device for tools (`SimulateKey`, `SimulateGamepadButton`,
+`SimulateGamepadAxis` and friends) merged with the real devices (a gamepad simulated input used counts as connected; an
+axis it holds wins over the device's until released), `SetEnabled` (device input off, e.g. while the editor's game view
+has no focus; sticks and triggers then read at rest) and `SetSuspended` (input frames follow the game's updates). The
+cursor mode a game asks for (`SetGameCursorMode`, scripts' `Input::SetCursorMode`) applies to the window only while input
+is enabled: disabling input gives the cursor back, enabling it applies the game's mode again, so a locked cursor in the
+editor stays in the focused game view (the editor's UI ignores the mouse meanwhile, and the game view says that Shift+F1
+frees it and Ctrl+P stops the game) and Shift+F1 frees it. `InputNames` maps key, button and gamepad control names for
+the `input.*` commands.
 
 **Math** (`Math/`). Engine conventions in `Math.h`: right-handed, +Y up, -Z forward, reversed-Z projections, Euler
 angles in degrees. `AABB`, `Frustum`, `Ray`, and `Random` (thread-local generators).
@@ -139,7 +149,8 @@ and while it runs its scene systems (see [Scene runtime lifecycle](#scene-runtim
 non-owning handle. Components are plain structs in `Components.h`, registered with stable names in
 `ComponentRegistration.cpp` (ID, Name, Transform, Relationship, Tag, Inactive, PrefabInstance, Camera, MeshRenderer,
 DirectionalLight, PointLight, SpotLight, SkyLight, PostProcess, Text, RigidBody, BoxCollider, SphereCollider,
-CapsuleCollider, MeshCollider, AudioSource, AudioListener, Skin, Animator, AttachToJoint, Script). `ComponentAccess`
+CapsuleCollider, MeshCollider, CharacterController, AudioSource, AudioListener, Skin, Animator, AttachToJoint, Script).
+`ComponentAccess`
 reads and writes them with validation and change signals, `SceneSerializer` writes versioned JSON (keeping components
 it cannot read, see
 [Composition root and registries](#composition-root-and-registries)), and `Prefab.h` defines the scene-shaped assets
@@ -195,7 +206,12 @@ texture formats, the cooked texture format and the block decoders are `TextureFo
 Jolt world from RigidBody and collider components and steps it; `PhysicsRuntime` reference-counts Jolt's global
 state; `PhysicsJobSystem` runs Jolt's jobs on the engine's worker pool; `PhysicsMeshShapes` cooks mesh collider shapes
 on jobs and caches them process-wide; `AssetMeshProvider` supplies mesh data from the active asset manager.
-`PhysicsTypes.h` has the settings, layers and statistics. A world's capacities are fixed when it is created: those the
+`PhysicsTypes.h` has the settings and statistics. Collision layers are the scene's (`SceneSettings::PhysicsLayers`,
+`Scene/PhysicsLayerSettings.h`: names for up to 32 layers and a symmetric matrix of which collide, everything by
+default); `PhysicsSystem` gives its world that matrix, restricted by the default settings' (`GetDefaultSettings`), when
+it creates the world and before every step after it changed (`scene.setSettings`, undo, the inspector, scripts'
+`Physics::SetLayersCollide`, `PhysicsSystem::SetLayersCollide`; `PhysicsWorld::SetLayerCollisionMasks` wakes the bodies,
+and character controllers read the world's live matrix). A world's capacities are fixed when it is created: those the
 scene does not set (`SceneSettings::PhysicsCapacity`) are sized from the bodies the scene starts with
 (`PhysicsWorld::ResolveCapacities`: at least 65,536 bodies, the next power of two of twice the bodies; four body pairs per
 body slot; at least 10,240 contacts, two per body; scratch memory for them), bodies that find the world full wait for a
@@ -206,7 +222,8 @@ scene of the same name), so the scene's next world is sized for it. Jolt reserve
 and does not survive a failed allocation, so the capacities a scene may ask for are limited (`PhysicsCapacitySettings`:
 about 80 bytes per body, 90 per body pair and 830 per contact constraint, about 940 MiB at the limits). Other systems
 use physics through the scene services `PhysicsSystem` offers (`ICollisionEventSource`, `IBodyMotionQuery`,
-`IBodyControl`, `IPhysicsQueries`, with `CollisionEvent` and `RaycastHit`, in `Scene/SceneServices.h`); collision events
+`IBodyControl`, `IPhysicsQueries`, `ICharacterControl`, with `CollisionEvent`, `RaycastHit` and `CharacterState`, in
+`Scene/SceneServices.h`); collision events
 collected during a step are dispatched
 afterwards on the main thread to the listeners. Contacts are tracked only for pairs someone wants (every pair while a
 listener of all entities is registered, otherwise pairs with a watched entity, such as one whose script has contact
@@ -215,7 +232,12 @@ the step, and each touching pair knows its position in the pair lists of both it
 in constant time (`PhysicsStats::PairIndexOperations` counts the list writes). Bodies created while changes are applied
 (play start, a prefab spawn, a streamed cell) join the simulation in one batch per activation mode
 (`AddBodiesPrepare`/`AddBodiesFinalize`), and destroyed bodies leave it in one batch, when `ApplyPendingChanges` ends;
-each Jolt body index leads to its entity and record in constant time (`BodySlot`). Around each step the work on awake
+each Jolt body index leads to its entity and record in constant time (`BodySlot`). Jolt rebuilds a broad phase tree, and
+frees the nodes of the bodies removed from it, only while the tree holds bodies, and aborts the process when its fixed
+node pool runs out: so every world keeps one static anchor body in each of its two trees (static and moving bodies), on a
+layer outside the 32 that collides with nothing and that no query accepts, beside its body capacity
+(`c_BroadPhaseAnchorCount`). Bodies spawned and removed again before every step then cost nodes only until the next step
+(`Physics.Capacity` runs such spawns in a helper process). Around each step the work on awake
 bodies runs on the job system: the synchronization skips, in parallel chunks, the bodies whose entity is where the last
 step put it (`Scene::FindCurrentWorldTransform` reads only current cached matrices), and the write-back writes the poses of
 bodies without a dynamic ancestor in parallel chunks, each touching only its own record and `TransformComponent` through
@@ -224,6 +246,32 @@ at once (`Scene::MarkTransformsChanged`, no `on_update`); bodies below other wri
 parents first, and the rare cases (scale edits, failed writes, descendants to update) are handled on the main thread in body
 order, so the results do not depend on the number of threads. Body order comes from a bitmap over the body indices of
 which only the words that got bits are sorted, read and cleared, so a step costs what moved, not the world's capacity.
+
+**Character controllers** (`Physics/CharacterControllers`, `CharacterControllerComponent`). An entity with an active,
+enabled controller and no rigid body (an entity with both is the rigid body, with a warning) is a Jolt `CharacterVirtual`:
+an upright capsule standing on the entity's origin (its rotation and scale do not change it) that moves by collision
+queries, plus a kinematic presence body (90% of its radius, its top at the capsule's, carrying the entity's UUID) through
+which dynamic bodies land on it, triggers detect it and queries hit it. Each fixed step, after the bodies are synchronized
+and before Jolt's step, `CharacterControllerSet::Step` moves every controller: its velocity is the walk velocity its
+script set (`ICharacterControl::MoveCharacter`, kept until the next call; the vertical part only without gravity), a
+pending jump, accumulated root motion (`AddCharacterMotion`, the animation stream's hook) and gravity times its
+`GravityScale`; standing on walkable ground it takes on the ground's velocity (moving platforms), in the air its vertical
+velocity goes on (a ceiling stops a rise). Jolt's `ExtendedUpdate` then slides it along walls, walks it up steps up to
+`StepHeight` and keeps it on the ground walking down, against the layers its layer collides with (the world's live
+matrix) and never its own entity's bodies. The moves run in parallel batches on the job system (bounded scratch memory
+per batch), each reading only the world before the step and writing only its own controller: Jolt would push dynamic
+bodies from many threads in any order, so the set disables that and pushes afterwards, on the main thread in entity order
+(`PushBodies`: an inelastic push, the body's effective mass at the contact times the speed the character closes in on it
+along the normal, never downwards and at most `PushStrength` newtons over the step; and the character's weight, 70 kg
+under its gravity, pressing on a dynamic body it stands on: all of it while it stands, the part across the surface while
+it slides down steep ground), moves the presence bodies and writes each entity's translation
+(`Scene::MarkTransformsChanged`; its rotation and scale stay). So the results do not depend on the number of threads
+(`Physics.Character`), and 1,000 walking controllers take about 0.8 ms per step (`Perf.Physics.Characters1000Step`). An
+entity moved from outside (a script writing its transform, the editor) teleports its controller at the next step. The
+controllers' contacts (`GetActiveContacts`, one per touched body) join the step's contact reports, so `CollisionEvent`s
+and the scripts' `OnCollisionEnter/Exit` report them like any body's; triggers and bodies landing on a controller reach
+it through its presence body (`OnTriggerEnter/Exit`). The ground state (on ground, on steep ground, not supported, in
+air), ground normal, velocity and entity are `CharacterState` (`ICharacterControl::GetCharacterState`).
 
 **Audio** (`Audio/`). `AudioEngine` wraps the miniaudio mixer, output device, listener and one-shots (main-thread
 API; mixing runs on miniaudio's audio thread, or is pulled with `AdvanceNullDevice`/`ReadFrames` without a device).
@@ -544,7 +592,10 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   recomputation (`Scene::ValidateWorldTransforms`, `ValidateHierarchy`; see [Scene caches](#scene-caches)).
 - Gameplay asks the scene's owner to quit or to switch scenes (`Scene::RequestQuit`, `RequestSceneLoad`); owners honor
   the requests after the update. The owners are the editor's play mode (`EditorContext::StartRuntime` plays a
-  `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`.
+  `Scene::Copy` of the edited scene; `Stop` discards it) and `GameRuntime`. The game's shell (its window and save files,
+  engine services, see [Scene services](#scene-services)) belongs to the program running it: play mode records window
+  requests without touching the editor's window and keeps saves in the project (`<project>/.strata/Saves`); starting and
+  stopping play forget the requests and set the game's cursor mode back to Normal (`EditorContext::ResetGameShell`).
 - **`Scene::Copy`** makes an independent scene with the same entities, components and caches. Its entities keep the
   source's EnTT identifiers (made with the source's handles, the free indices after them as the source would reuse
   them), so every storage is copied whole: the copyable registered components, the hierarchy links, the cached world
@@ -565,10 +616,13 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   (`GetDroppedFixedStepCount`, also `PhysicsStats::DroppedSteps`). Otherwise a frame that runs eight expensive steps
   makes the next one owe even more. Tests and tools keep the default, every due step up to `MaxFixedStepsPerFrame`.
 - `SceneSettings` holds gravity, the fixed timestep (1/60 s), `MaxFixedStepsPerFrame`, `MaxEntitiesInstantiatedPerFrame` (see
-  additive scenes below) and the physics world's capacities
+  additive scenes below), the physics world's capacities
   (`PhysicsCapacity`: bodies, body pairs and contact constraints; 0, the default, sizes one automatically; each up to a
-  limit that bounds the memory a world reserves). All of it is saved with the scene and changed with `scene.setSettings`
-  (one undo step); capacities apply when a world is created, at play start.
+  limit that bounds the memory a world reserves) and the collision layers (`PhysicsLayers`: names, unique ignoring case,
+  and the pairs that do not collide; saved as `"PhysicsLayers": {"Names": {"<index>": name}, "NoCollisions": [[a, b]]}`,
+  which scenes from before load as all colliding, without a format change). All of it is saved with the scene and
+  changed with `scene.setSettings` (one undo step); capacities apply when a world is created, at play start, the layer
+  matrix at the next step.
 - **Scene assets are read once.** The scene loader (`SceneAsset::Deserialize`, on the loading worker) reads the
   document into a scene, which validates it, and keeps that *prepared scene* instead of the parsed JSON, which is dropped
   at once. `SceneAsset::TakePreparedScene` hands it over without a copy (the first call; the asset is spent afterwards,
@@ -676,6 +730,7 @@ which means the module is not in the build or its system does not run in this mo
 | `IBodyMotionQuery`: bodies, velocities, the velocity of a point moving with a body | `PhysicsSystem` | script host (`RigidBody`), `AudioSystem` (Doppler) |
 | `IBodyControl`: velocities, forces, impulses, gravity scale, wake-up, teleport | `PhysicsSystem` | script host (`RigidBody`) |
 | `IPhysicsQueries`: raycasts and overlaps | `PhysicsSystem` | script host (`Physics`) |
+| `ICharacterControl`: character controllers' walk velocity, jumps, teleports, root motion and state | `PhysicsSystem` | script host (`CharacterController`), animation's root motion |
 | `IAudioPlayback`: sources and one-shots | `AudioSystem` (an adapter object) | script host (`AudioSource`, `Audio`) |
 | `ISkinningPoses`: each animator's pose (model-space joint matrices with a version), and which animators renderers drew | `AnimationSystem`; the editor's pose preview for edited scenes | `RenderScene` (palettes of skinned meshes), `SceneRenderer` (reports the animators of what it drew) |
 | `IAnimatorControl`: play, cross-fade, parameters, speed, state queries, joint transforms | `AnimationSystem` | script host (`Animator`), tools and tests |
@@ -683,7 +738,13 @@ which means the module is not in the build or its system does not run in this mo
 
 What outlives scenes is an engine service (`Core/EngineServices.h`): a module registers it in its registration function
 while the composition root runs, e.g. the Audio module's `IAudioOutput` (the master volume, which scripts change in any
-scene, also one that plays without audio).
+scene, also one that plays without audio). What belongs to the program running a game is provided for as long as it runs
+the game (`EngineServices::ScopedProvider`, which restores the provider it replaced; scopes end in reverse order):
+
+| Service | Provider | Consumers |
+| --- | --- | --- |
+| `IGameWindow`: window mode, resolution, vsync, the size the game renders at | StrataRuntime's `GameWindowService` (applied after the frame, `ApplyRequests`; headless: accepted and reported back), the editor's `EditorGameWindow` (recorded and reported, never applied: `editor.status` and a notice over the game view) | script host (`Game::SetWindowMode` and friends) |
+| `IGameSaves`: the save directory | `GameRuntime` (`<user data>/<game>/Saves`, `GameRuntimeOptions::SaveFilesDirectory`), `EditorContext` (`<project>/.strata/Saves`) | script host (`Game::WriteSaveFile` and friends, through `SaveFiles`) |
 
 ### Scene caches
 
@@ -1737,6 +1798,21 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   whole module: it is never called again, its instances are abandoned, and `ScriptEngine::IsFaulted`/`GetFault` report
   it. The editor stops play mode and refuses `play.start` until the module is rebuilt or reloaded; `GameRuntime`
   disables the scripts for the session.
+- **Where a crash happened** (`Core/Symbolizer.h`). The crash guard keeps the faulting instruction and, on Windows x64,
+  the return addresses of its callers, unwound from the exception's context with the functions' unwind data
+  (`CrashInfo::Stack`). `ScriptModule::RecordFault` names every frame's module while the module is still loaded
+  (`Symbolizer::Describe`) and resolves the module's own frames on an I/O job (`Symbolizer::Resolve`): on Windows DbgHelp
+  reads the module's PDB (calls serialized, a session of its own, the module read from its file as built at the base and
+  size it was loaded with, so hot-reload copies resolve too, `Platform/Windows/WindowsSymbolizer.cpp`), including the
+  calls the compiler inlined at each address (`Symbolizer::Frame::Inlined`, from DbgHelp's inline trace), which come
+  before their frame in `Stack` (`ScriptCodeLocation::Inlined`), so an optimized build names the line that ran rather
+  than the call of the function it was inlined into; on Linux the
+  function comes from the ELF symbol table of the module's file and on macOS from dladdr, never a file or line
+  (`Platform/Posix/PosixSymbolizer.cpp`). `ScriptFault::Location` is the first of the module's frames with a source that
+  is neither C runtime nor the SDK's entry code (the abort handler), `Stack` all frames; `ScriptModule::GetFault` merges
+  the job's result once it is done (`Symbolized`). The editor reports the location when it arrives
+  (`EditorContext::UpdateScriptFaultLocation`), as `GameRuntime` does. Script modules write a PDB in every configuration
+  (`strata_add_script_module`).
 - **Hot reload** (`ScriptEngine::Update`). With hot reload enabled the engine watches the module's directory (300 ms
   debounce, so the linker has finished) and reloads between frames, never while script code is on the stack; failed
   reloads of a file that is still busy are retried. Running systems snapshot fields (`BeginModuleReload`), the new
@@ -1752,16 +1828,16 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
  --------------------------------------------------------------------------------------------------------------
  StrataEditorUI    EditorLayer            owns everything below: menu bar, main toolbar, status pills, default
                                           layout, shortcuts, idle throttling, file dialogs (nfd)
-                   EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Asset, Console, Content
-                                          Browser, Streaming, Performance): windows, View menu, open state in
-                                          imgui.ini
+                   EditorPanelRegistry    the panels (Viewport, Hierarchy, Inspector, Asset, Console, Problems,
+                                          Content Browser, Streaming, Performance): windows, View menu, open
+                                          state in imgui.ini
                    EditorActions          selection actions (delete, duplicate, cut, copy, paste, select all)
                                           for the Edit menu and the focus-scoped shortcuts
                    UI kit                 Theme (palette, ApplyTheme), EditorFonts, Icons, Widgets, ItemProbe
  --------------------------------------------------------------------------------------------------------------
  StrataEditorCore  EditorContext          project, EditorAssetManager, edited and running scene, play mode,
                                           selection, UndoStack, ScriptEngine + ScriptBuilder, EditorViewport,
-                                          SimulatedInput
+                                          SimulatedInput, the game's shell (EditorGameWindow, save directory)
                    EditorCommandRegistry  every operation as a named command with a JSON Schema
                    EditorCommandRunner    deferred commands; EditorCommandScript runs --commands files
                    EditorAutomation       RpcServer exposing the commands; session files
@@ -1835,8 +1911,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   data directory that the user's editors share; changes a read-only list cannot save are kept in memory and applied over
   every read, and the launcher reads it and checks its projects on an I/O thread). Creating a project applies a template
   (`ProjectTemplates`: `empty`, or `basic3d` with a saved, lit start scene whose ground has a material of the project,
-  `Materials/Ground.stmat`). Samples (`ProjectSamples`) are finished projects listed by `Samples.json` in a
-  samples directory next to the executable, which the `StrataSamples` build target fills from the repository's `Samples/`
+  `Materials/Ground.stmat`, and a static box collider whose top is the ground plane). Samples (`ProjectSamples`) are
+  finished projects listed by `Samples.json` in a samples directory next to the executable, which the `StrataSamples` build target fills from the repository's `Samples/`
   (`CMake/StrataCopySamples.cmake`, without local `.strata` data); `project.openSample` copies one, again without its
   `.strata`, into a new directory and opens the copy, so the shipped sample never changes. Opening a scene restores the editor camera it was last shown with (stored per
   scene handle in the viewport state) or frames what it renders (`EditorViewport::FrameScene`, `SceneBounds`).
@@ -2074,9 +2150,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     component's menu copies and pastes its settable values through the clipboard as JSON
     (`EditorActions::CopyComponentValues`) and runs `component.set`/`component.remove {entities}`. With nothing selected
     it shows the scene's settings (gravity, the fixed step, and the physics world's capacities: 0, automatic sizing,
-    reads "Auto", `PropertyWidgetOptions::ZeroLabel`), applied by one `scene.setSettings` when a drag ends, and the first
-    active sky light (the renderer's), in sections that start closed: their headers sum them up ("Gravity 9.81 m/s² ·
-    60 steps/s", the sky's source; the physics summary is formatted again only when its values change), and their rows,
+    reads "Auto", `PropertyWidgetOptions::ZeroLabel`), applied by one `scene.setSettings` when a drag ends, the
+    collision layers (the named ones edited in place, "Name a Layer" for the next one without a name, and a matrix of
+    check boxes, one per pair of the layers shown: layer 0, the named ones and those with a pair that does not collide;
+    every edit is one `scene.setSettings`) and the first active sky light (the renderer's), in sections that start
+    closed: their headers sum them up ("Gravity 9.81 m/s² · 60 steps/s", "2 named · 1 pair passes through", the sky's
+    source; the summaries are formatted again only when their values change), and their rows,
     live widgets that cost frame time while they are drawn, show once a section is opened (it stays open while the
     editor runs).
   - The **Asset** inspector is tabbed with the Inspector: `EditorLayer` brings the tab of the inspection target forward
@@ -2156,7 +2235,46 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   into diagnostics. When a build finishes, `EditorContext` loads or hot reloads the module. With a Visual Studio
   generator it first checks the build tree's depth (`CheckScriptBuildPathLength`): MSBuild's file tracker cannot create
   logs at paths over 259 characters, even where Windows allows long paths, and the build would fail without naming the
-  cause, so a project in too deep a folder is refused with a message that says how much shorter its path must be.
+  cause, so a project in too deep a folder builds in a per-user directory instead (`ResolveScriptBuildLocation`:
+  `<user data>/Strata/Builds/<hash>`, said in the build's log), and only one too deep even for that is refused, naming a
+  shorter folder. Every build brings `Scripts/CMakePresets.json` up to date for IDEs (`UpdateScriptCMakePresets`: the
+  same toolchain and `STRATA_ENGINE_DIR`, an IDE build tree of its own, the module's output where the editor loads it).
+- **The scripting workflow**. `script.create` writes a class from a template (`Editor/ScriptProject.cpp`). The script
+  sources are listed by `Editor/ScriptSources` (`ListScriptSources`: the script directory's code and CMake files without
+  hidden folders and build trees, each code file read for its `ST_SCRIPT_CLASS` registrations outside comments, string
+  and raw string literals and preprocessor lines, unchanged files lending what an earlier listing found; at most 4,096
+  files and 65,536 directory entries) for `script.list` and for `UI/ScriptBrowser`, the view of the script sources a
+  panel draws (the Content Browser's Scripts root once Content Browser v2 hosts it): it lists on an I/O thread
+  (`ScriptSourceList`, whose job compares the new listing with the one before and shares it immutable, so the main
+  thread neither copies nor compares files) when it is first drawn and every second while it is drawn, never while it is
+  not, and rebuilds its rows only when the files or the search changed. New Script (`UI/ScriptDialogs`) runs
+  `script.create` and starts a build at once, since the Inspector offers the classes of the loaded module only. Play builds
+  first: `play.start` asks `EditorContext::GetPlayBuildReason` and, when there is a reason, starts the build
+  (`StartPlayBuild`) and defers until it finished. The reasons: the project's module not loaded while a scene or prefab
+  uses scripts (`DoScenesUseScripts`, the edited scene's Script components and a scan of the project's scene and prefab
+  files on an I/O thread when the project opens), or the sources changed since the module was built. Every build stamps
+  the sources it compiles when it starts (`StampScriptSources`: path, size and write time of the files `ListScriptSources`
+  finds, without reading them), and a successful one keeps that stamp with the module file it left (its write time and
+  size); while the module is still that file, the sources are compared with the stamp (`FindScriptSourceChange`: a file
+  changed, added or removed), so a build that left the module as it was (an up-to-date build, a header nothing includes,
+  a CMake comment) settles the reason, and deleted or renamed files count. A module someone else wrote (an IDE's build, an
+  earlier session) has no stamp: a source newer than it is the reason then. A failed build fails the command and raises
+  `GetProblemsPanelRequests`, which `EditorLayer` turns into showing the Problems panel; a cancelled one
+  (`ScriptBuildResult::Cancelled`, the "Building to play" pill) fails `play.start` as `Cancelled` and asks for nothing.
+  The Problems panel (`Panels/ProblemsPanel`) lists the last build's diagnostics and the crash with its stack (the crash
+  row names the function that crashed besides the callback when they differ, the stack rows the callers, without the
+  SDK's internal `Strata::Detail` frames), rebuilt only when the build or the crash changed; its summary leads with the
+  crash. The project's files show relative to it, other paths cut at their start where the column is narrow, so file
+  names stay readable, the cut texts computed again only when the column's width changes. Sources open in the person's
+  code editor (`Editor/ExternalEditor`: `ExternalEditorLauncher` starts the command template's program directly, without a
+  shell, from the user's settings or `STRATA_EXTERNAL_EDITOR`, else the default application). The program is found as
+  the system finds programs (`Platform::FindProgram`: a path, or a name in the folders of PATH, on Windows with the
+  extensions of PATHEXT), and VS Code's launcher in PATH (`bin/code.cmd`, a batch file) stands for `Code.exe` beside it;
+  `script.setExternalEditor` refuses a program it cannot find, and the External Editor dialog shows the program a command
+  starts and offers the editors found on the machine (`ExternalEditor::FindChoices`: VS Code, the Visual Studio of the
+  engine's toolchain, CLion). The Problems panel's double click, the Console's click on a message naming a source line
+  (`FindSourceReference`) and `script.open` go through `EditorContext::OpenScriptSource`, which opens only code, CMake
+  and text files of the project or the engine. People's guide: [Manual/Scripting.md](Manual/Scripting.md).
 
 ## Export and the runtime
 
@@ -2193,7 +2311,13 @@ shows, so a game that does lists them in `Export.AlwaysInclude` (`project.setExp
 with what it uses.
 
 `StrataRuntime` (`StrataRuntime/src/RuntimeApplication.cpp`) runs `--game <file>`, or the manifest found next to the
-executable (`GameManifest::FindForExecutable`). It logs to `<user data>/<Game>/Logs/Game.log`. `--headless` disables
+executable (`GameManifest::FindForExecutable`). It logs to `<user data>/<Game>/Logs/Game.log` and keeps the game's save
+files in `<user data>/<Game>/Saves` (`<Game>` is the manifest's name made a safe directory name,
+`SaveFiles::MakeGameDirectoryName`; `--save-directory <dir>` puts them elsewhere, as the CTests do). What the game asks
+of its window (`Game::SetWindowMode`, `SetResolution`, `SetVSync`) applies after the frame (`GameWindowService`; the
+swapchain follows at the next frame); what the window already is changes nothing and is not logged (a resolution asked for
+again applies again only when the window was resized since), so a game may apply its options every frame; a headless run
+accepts the requests and reports them back. `--headless` disables
 the window and the renderer and paces at 60 frames per second; `--windowed` overrides a fullscreen manifest,
 `--resolution <width>x<height>` opens a window of exactly that many pixels whatever the display's scale (the manifest's
 window size is in screen coordinates, which the display's scale multiplies: 1280x720 is 1920x1080 pixels at 150%;

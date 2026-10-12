@@ -167,11 +167,59 @@ namespace Strata
 		};
 	}
 
-	// Keyboard and mouse state of the current frame. "Down" is the current state; "Pressed"/"Released" report a
+	// Gamepad buttons and axes: the GLFW gamepad mapping, an Xbox-style layout (on other pads, the button in the same place).
+	// The values are part of the script ABI and match the engine's.
+	enum class GamepadButton : uint32_t
+	{
+		A = 0,
+		B = 1,
+		X = 2,
+		Y = 3,
+		LeftBumper = 4,
+		RightBumper = 5,
+		Back = 6,
+		Start = 7,
+		Guide = 8,
+		LeftThumb = 9,
+		RightThumb = 10,
+		DPadUp = 11,
+		DPadRight = 12,
+		DPadDown = 13,
+		DPadLeft = 14
+	};
+
+	// Sticks range from -1 to 1 with +X to the right and +Y up; triggers from 0 (released) to 1 (fully pressed).
+	enum class GamepadAxis : uint32_t
+	{
+		LeftX = 0,
+		LeftY = 1,
+		RightX = 2,
+		RightY = 3,
+		LeftTrigger = 4,
+		RightTrigger = 5
+	};
+
+	enum class GamepadStick : uint32_t
+	{
+		Left = 0,
+		Right = 1
+	};
+
+	enum class CursorMode : uint32_t
+	{
+		Normal = StrataScriptCursorMode_Normal,
+		Hidden = StrataScriptCursorMode_Hidden, // Hidden over the game's window
+		Locked = StrataScriptCursorMode_Locked  // Hidden and kept in the window; GetMouseDelta keeps reporting movement (mouse look)
+	};
+
+	// Keyboard, mouse and gamepad state of the current frame. "Down" is the current state; "Pressed"/"Released" report a
 	// transition during this frame. While the game view has no input focus every query reports nothing.
 	class Input
 	{
 	public:
+		// Stick and trigger values below this are noise of a stick at rest (GetGamepadAxis, GetGamepadStick).
+		static constexpr float c_DefaultDeadZone = 0.15f;
+
 		static bool IsKeyDown(KeyCode key)
 		{
 			const StrataScriptHostAPI* host = Detail::GetHost();
@@ -233,6 +281,75 @@ namespace Strata
 			if (const StrataScriptHostAPI* host = Detail::GetHost())
 				host->GetScrollDelta(Detail::GetContext(), delta);
 			return glm::vec2(delta[0], delta[1]);
+		}
+
+		// Gamepads are numbered 0 to 3, in the order they were connected.
+		static bool IsGamepadConnected(uint32_t gamepad = 0)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(IsGamepadConnected);
+			return host && host->IsGamepadConnected(Detail::GetContext(), gamepad);
+		}
+
+		static bool IsGamepadButtonDown(GamepadButton button, uint32_t gamepad = 0)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(IsGamepadButtonDown);
+			return host && host->IsGamepadButtonDown(Detail::GetContext(), gamepad, static_cast<uint32_t>(button));
+		}
+
+		static bool IsGamepadButtonPressed(GamepadButton button, uint32_t gamepad = 0)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(IsGamepadButtonPressed);
+			return host && host->IsGamepadButtonPressed(Detail::GetContext(), gamepad, static_cast<uint32_t>(button));
+		}
+
+		static bool IsGamepadButtonReleased(GamepadButton button, uint32_t gamepad = 0)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(IsGamepadButtonReleased);
+			return host && host->IsGamepadButtonReleased(Detail::GetContext(), gamepad, static_cast<uint32_t>(button));
+		}
+
+		// An axis with a dead zone: values within it read 0, the rest is rescaled so that the axis still reaches 1 (a dead zone
+		// of 0 reads the device's value).
+		static float GetGamepadAxis(GamepadAxis axis, uint32_t gamepad = 0, float deadZone = c_DefaultDeadZone)
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(GetGamepadAxis);
+			const float value = host ? host->GetGamepadAxis(Detail::GetContext(), gamepad, static_cast<uint32_t>(axis)) : 0.0f;
+			const float magnitude = value < 0.0f ? -value : value;
+			if (!(deadZone > 0.0f))
+				return value;
+			if (magnitude <= deadZone || deadZone >= 1.0f)
+				return 0.0f;
+			const float scaled = (magnitude - deadZone) / (1.0f - deadZone);
+			return value < 0.0f ? -scaled : scaled;
+		}
+
+		// A stick as a vector (+X right, +Y up) with a round dead zone: small tilts in any direction read zero, diagonals keep
+		// their direction, and the length reaches 1 at full tilt (it never exceeds 1). What character movement wants.
+		static glm::vec2 GetGamepadStick(GamepadStick stick, uint32_t gamepad = 0, float deadZone = c_DefaultDeadZone)
+		{
+			const bool left = stick == GamepadStick::Left;
+			const glm::vec2 value(GetGamepadAxis(left ? GamepadAxis::LeftX : GamepadAxis::RightX, gamepad, 0.0f),
+				GetGamepadAxis(left ? GamepadAxis::LeftY : GamepadAxis::RightY, gamepad, 0.0f));
+			const float length = glm::length(value);
+			if (!(length > deadZone) || deadZone >= 1.0f)
+				return glm::vec2(0.0f);
+			const float scaled = glm::min((length - glm::max(deadZone, 0.0f)) / (1.0f - glm::max(deadZone, 0.0f)), 1.0f);
+			return value / length * scaled;
+		}
+
+		// Hides the cursor or locks it to the game (first-person cameras read GetMouseDelta). It applies while the game has the
+		// input: in the editor while the game view has the focus (Shift+F1 frees it, clicking the game view takes it again,
+		// stopping play restores Normal).
+		static void SetCursorMode(CursorMode mode)
+		{
+			if (const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(SetCursorMode))
+				host->SetCursorMode(Detail::GetContext(), static_cast<uint32_t>(mode));
+		}
+
+		static CursorMode GetCursorMode()
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(GetCursorMode);
+			return host ? static_cast<CursorMode>(host->GetCursorMode(Detail::GetContext())) : CursorMode::Normal;
 		}
 	};
 

@@ -17,6 +17,7 @@ namespace Strata
 
 	class Animator;
 	class AudioSource;
+	class CharacterController;
 	class Component;
 	class RigidBody;
 	class TransformComponent;
@@ -72,6 +73,8 @@ namespace Strata
 		TransformComponent GetTransform() const;
 		// The entity's physics body (see Physics.h).
 		RigidBody GetRigidBody() const;
+		// The entity's character controller (see CharacterController.h).
+		CharacterController GetCharacterController() const;
 		// Playback of the entity's AudioSource component (see Audio.h).
 		AudioSource GetAudioSource() const;
 		// Control of the entity's Animator component (see Animator.h).

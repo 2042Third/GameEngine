@@ -49,11 +49,13 @@ namespace Strata
 		m_Scene.RegisterService<IBodyMotionQuery>(*this);
 		m_Scene.RegisterService<IBodyControl>(*this);
 		m_Scene.RegisterService<IPhysicsQueries>(*this);
+		m_Scene.RegisterService<ICharacterControl>(*this);
 	}
 
 	PhysicsSystem::~PhysicsSystem()
 	{
 		OnRuntimeStop();
+		m_Scene.UnregisterService<ICharacterControl>(*this);
 		m_Scene.UnregisterService<IPhysicsQueries>(*this);
 		m_Scene.UnregisterService<IBodyControl>(*this);
 		m_Scene.UnregisterService<IBodyMotionQuery>(*this);
@@ -91,6 +93,7 @@ namespace Strata
 		m_CreationConnections.emplace_back(registry.on_construct<SphereColliderComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
 		m_CreationConnections.emplace_back(registry.on_construct<CapsuleColliderComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
 		m_CreationConnections.emplace_back(registry.on_construct<MeshColliderComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
+		m_CreationConnections.emplace_back(registry.on_construct<CharacterControllerComponent>().connect<&PhysicsSystem::OnPhysicsComponentAdded>(*this));
 	}
 
 	PhysicsCapacityDemand PhysicsSystem::GetRememberedCapacityDemand(UUID sceneLineage)
@@ -140,6 +143,7 @@ namespace Strata
 			return;
 
 		SyncGravity();
+		SyncLayers();
 		m_World->Simulate(timestep);
 		DispatchCollisionEvents();
 	}
@@ -222,14 +226,37 @@ namespace Strata
 
 	void PhysicsSystem::SetLayersCollide(uint32_t layerA, uint32_t layerB, bool collide)
 	{
+		if (layerA >= c_PhysicsLayerCount || layerB >= c_PhysicsLayerCount)
+		{
+			ST_CORE_WARN("Physics: cannot change the collision of layers {} and {}: layers range from 0 to {}", layerA, layerB, c_PhysicsLayerCount - 1);
+			return;
+		}
+		m_Scene.GetSettings().PhysicsLayers.SetCollide(layerA, layerB, collide);
 		if (m_World)
-			m_World->SetLayersCollide(layerA, layerB, collide); // Validates and warns
-		m_Settings.SetLayersCollide(layerA, layerB, collide);
+			SyncLayers();
 	}
 
 	bool PhysicsSystem::DoLayersCollide(uint32_t layerA, uint32_t layerB) const
 	{
-		return m_Settings.DoLayersCollide(layerA, layerB);
+		return m_Settings.DoLayersCollide(layerA, layerB) && m_Scene.GetSettings().PhysicsLayers.DoCollide(layerA, layerB);
+	}
+
+	std::array<uint32_t, c_PhysicsLayerCount> PhysicsSystem::GetEffectiveLayerMasks() const
+	{
+		std::array<uint32_t, c_PhysicsLayerCount> masks;
+		const PhysicsLayerSettings& layers = m_Scene.GetSettings().PhysicsLayers;
+		for (uint32_t layer = 0; layer < c_PhysicsLayerCount; layer++)
+			masks[layer] = m_Settings.LayerCollisionMasks[layer] & layers.CollisionMasks[layer];
+		return masks;
+	}
+
+	void PhysicsSystem::SyncLayers()
+	{
+		const std::array<uint32_t, c_PhysicsLayerCount> masks = GetEffectiveLayerMasks();
+		if (masks == m_AppliedLayerMasks)
+			return;
+		m_AppliedLayerMasks = masks;
+		m_World->SetLayerCollisionMasks(masks);
 	}
 
 	PhysicsStats PhysicsSystem::GetStats() const
@@ -376,11 +403,47 @@ namespace Strata
 		return m_World->OverlapBox(center, halfExtents, rotation, layerMask, includeTriggers);
 	}
 
+	bool PhysicsSystem::HasCharacterController(Entity entity)
+	{
+		ApplyPendingChanges();
+		return m_World && m_World->HasCharacterController(entity);
+	}
+
+	bool PhysicsSystem::MoveCharacter(Entity entity, const glm::vec3& velocity)
+	{
+		ApplyPendingChanges();
+		return m_World && m_World->MoveCharacter(entity, velocity);
+	}
+
+	bool PhysicsSystem::JumpCharacter(Entity entity, float speed)
+	{
+		ApplyPendingChanges();
+		return m_World && m_World->JumpCharacter(entity, speed);
+	}
+
+	bool PhysicsSystem::TeleportCharacter(Entity entity, const glm::vec3& position)
+	{
+		ApplyPendingChanges();
+		return m_World && m_World->TeleportCharacter(entity, position);
+	}
+
+	bool PhysicsSystem::AddCharacterMotion(Entity entity, const glm::vec3& displacement)
+	{
+		ApplyPendingChanges();
+		return m_World && m_World->AddCharacterMotion(entity, displacement);
+	}
+
+	std::optional<CharacterState> PhysicsSystem::GetCharacterState(Entity entity)
+	{
+		ApplyPendingChanges();
+		return m_World ? m_World->GetCharacterState(entity) : std::nullopt;
+	}
+
 	bool PhysicsSystem::SceneHasPhysicsComponents() const
 	{
 		const entt::registry& registry = m_Scene.GetRegistry();
 		return HasAny<RigidBodyComponent>(registry) || HasAny<BoxColliderComponent>(registry) || HasAny<SphereColliderComponent>(registry)
-			|| HasAny<CapsuleColliderComponent>(registry) || HasAny<MeshColliderComponent>(registry);
+			|| HasAny<CapsuleColliderComponent>(registry) || HasAny<MeshColliderComponent>(registry) || HasAny<CharacterControllerComponent>(registry);
 	}
 
 	void PhysicsSystem::OnPhysicsComponentAdded(entt::registry&, entt::entity)
@@ -403,8 +466,11 @@ namespace Strata
 			settings.MaxBodyPairs = capacity.MaxBodyPairs;
 		if (capacity.MaxContactConstraints != 0)
 			settings.MaxContactConstraints = capacity.MaxContactConstraints;
+		// The scene's layer matrix, as the scene's settings say when the world starts.
+		settings.LayerCollisionMasks = GetEffectiveLayerMasks();
 		m_World = CreateScope<PhysicsWorld>(m_Scene, settings, GetRememberedCapacityDemand(m_Scene.GetLineageID()));
 		m_AppliedGravity = m_Scene.GetSettings().Gravity;
+		m_AppliedLayerMasks = settings.LayerCollisionMasks;
 		// Contacts are tracked for the listeners and watches registered so far.
 		UpdateContactTracking();
 		for (const auto& [entity, count] : m_CollisionWatches)

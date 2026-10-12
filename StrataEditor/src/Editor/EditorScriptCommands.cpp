@@ -3,12 +3,19 @@
 #include "Editor/EditorContext.h"
 #include "Editor/ScriptEdit.h"
 #include "Editor/ScriptProject.h"
+#include "Editor/ScriptSources.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Log.h>
+#include <Strata/Core/StringUtils.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scripting/ScriptSystem.h>
+
+#include <algorithm>
+#include <limits>
+#include <vector>
 
 namespace Strata
 {
@@ -18,17 +25,43 @@ namespace Strata
 	namespace
 	{
 
+		std::string JoinNames(const std::vector<std::string>& names)
+		{
+			std::string joined;
+			for (const std::string& name : names)
+				joined += (joined.empty() ? "" : ", ") + name;
+			return joined;
+		}
+
+		nlohmann::json DescribeCodeLocation(const ScriptCodeLocation& location)
+		{
+			return {
+				{ "file", location.File },
+				{ "line", location.Line },
+				{ "function", location.Function },
+				{ "module", location.Module },
+				{ "moduleOffset", fmt::format("0x{:X}", location.ModuleOffset) },
+				{ "inlined", location.Inlined },
+				{ "text", DescribeScriptCodeLocation(location) } };
+		}
+
 		nlohmann::json DescribeFault(const std::optional<ScriptFault>& fault)
 		{
 			if (!fault)
 				return nullptr;
+			nlohmann::json stack = nlohmann::json::array();
+			for (const ScriptCodeLocation& frame : fault->Stack)
+				stack.push_back(DescribeCodeLocation(frame));
 			return {
 				{ "module", fault->ModuleName },
 				{ "class", fault->ClassName },
 				{ "method", fault->Method },
 				{ "entity", fault->Entity.IsValid() ? UUIDToJson(fault->Entity) : nlohmann::json(nullptr) },
 				{ "entityName", fault->EntityName },
-				{ "description", fault->Description } };
+				{ "description", fault->Description },
+				{ "location", fault->Location ? DescribeCodeLocation(*fault->Location) : nlohmann::json(nullptr) },
+				{ "stack", std::move(stack) },
+				{ "symbolized", fault->Symbolized } };
 		}
 
 		nlohmann::json DescribeDiagnostic(const ScriptDiagnostic& diagnostic)
@@ -56,9 +89,11 @@ namespace Strata
 			return {
 				{ "build", result.ID },
 				{ "success", result.Success },
+				{ "cancelled", result.Cancelled },
 				{ "error", result.Error },
 				{ "seconds", result.Seconds },
 				{ "configured", result.Configured },
+				{ "buildDirectory", FileSystem::ToUTF8(result.BuildDirectory) },
 				{ "module", FileSystem::ToUTF8(result.Module) },
 				{ "moduleChanged", result.ModuleChanged },
 				{ "loaded", loadKnown && load.Loaded },
@@ -104,7 +139,12 @@ namespace Strata
 				status["sourceDirectory"] = FileSystem::ToUTF8(project->GetScriptSourceDirectory());
 				status["projectModule"] = FileSystem::ToUTF8(project->GetScriptModulePath());
 				status["projectModuleBuilt"] = FileSystem::IsRegularFile(project->GetScriptModulePath());
+				status["scenesUseScripts"] = context.DoScenesUseScripts();
+				const std::optional<std::string> playBuild = context.GetPlayBuildReason();
+				status["playBuildsFirst"] = playBuild ? nlohmann::json(*playBuild) : nlohmann::json(nullptr);
 			}
+			const ExternalEditorLauncher& editor = context.GetExternalEditor();
+			status["externalEditor"] = { { "command", editor.GetCommand() }, { "source", ExternalEditorSourceToString(editor.GetSource()) } };
 			return status;
 		}
 
@@ -191,6 +231,31 @@ namespace Strata
 				return EditorCommandResult::Ok(DescribeScripts(context));
 			} });
 
+		registry.Register({ "script.list",
+			"Lists the project's script sources, the files the script build compiles: the code and CMake files of its script directory "
+			"(folders starting with '.' and build trees left out), sorted by path, each with the script classes it registers "
+			"(ST_SCRIPT_CLASS) and its size. Use it to find the file that holds a class before changing it (script.open opens one in the "
+			"person's code editor). Returns sourceDirectory, files [{path (relative to the script directory), projectPath (relative to the "
+			"project), classes, bytes}] and truncated (more files than listed).",
+			ObjectSchema({}),
+			[](EditorContext& context, const nlohmann::json&)
+			{
+				if (!context.HasProject())
+					return EditorCommandResult::Fail("No project is open (project.open or project.create)");
+				const Project& project = *context.GetProject();
+				const std::filesystem::path directory = project.GetScriptSourceDirectory();
+				const ScriptSourceListing listing = ListScriptSources(directory);
+				nlohmann::json files = nlohmann::json::array();
+				for (const ScriptSourceFile& file : listing.Files)
+				{
+					files.push_back({ { "path", file.Path },
+						{ "projectPath", FileSystem::ToUTF8((directory / FileSystem::FromUTF8(file.Path)).lexically_relative(project.GetProjectDirectory())) },
+						{ "classes", file.Classes }, { "bytes", file.Size } });
+				}
+				return EditorCommandResult::Ok({ { "sourceDirectory", FileSystem::ToUTF8(directory) }, { "files", std::move(files) },
+					{ "truncated", listing.Truncated } });
+			} });
+
 		registry.Register({ "script.get",
 			"The field values of the scripts attached to an entity. While the game plays they are the live instances' values (game state kept "
 			"in fields, e.g. a score, as it is now; live: true); otherwise the values the scene stores (overrides, else the class defaults). "
@@ -250,7 +315,7 @@ namespace Strata
 					if (result.ID != id)
 						return EditorCommandResult::Fail(fmt::format("The result of script build {} is no longer available (see script.status)", id));
 					if (!result.Success)
-						return EditorCommandResult::Fail(result.Error);
+						return EditorCommandResult::Fail(result.Error, result.Cancelled ? EditorCommandError::Cancelled : EditorCommandError::Failed);
 					const ScriptBuildLoad& load = context.GetLastScriptBuildLoad();
 					if (load.BuildID == id && !load.Loaded)
 						return EditorCommandResult::Fail(fmt::format("The scripts were built, but the module could not be loaded: {}", load.Error));
@@ -298,8 +363,9 @@ namespace Strata
 			} });
 
 		registry.Register({ "script.init",
-			"Creates the project's script build if it is missing: the CMakeLists.txt in its Scripts directory (new projects have it already) and, "
-			"with example, an example script (Spinner.cpp). Existing files are kept.",
+			"Creates the project's script build if it is missing: the CMakeLists.txt in its Scripts directory (new projects have it already), "
+			"the CMakePresets.json IDEs read (the engine's toolchain and STRATA_ENGINE_DIR, for IntelliSense; rewritten when Strata wrote it and "
+			"the toolchain changed) and, with example, an example script (Spinner.cpp). Other existing files are kept. Returns the files written.",
 			ObjectSchema({ { "example", BoolSchema("Also write the example script (default false)") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -311,12 +377,166 @@ namespace Strata
 					return EditorCommandResult::Fail("No project is open (project.open or project.create)");
 				std::vector<std::filesystem::path> created;
 				std::string error;
-				if (!CreateScriptProjectFiles(*context.GetProject(), example, &created, &error))
+				if (!CreateScriptProjectFiles(*context.GetProject(), example, &created, &error, &context.GetScriptBuildSettings()))
 					return EditorCommandResult::Fail(error);
 				nlohmann::json files = nlohmann::json::array();
 				for (const std::filesystem::path& file : created)
 					files.push_back(FileSystem::ToUTF8(file));
 				return EditorCommandResult::Ok({ { "sourceDirectory", FileSystem::ToUTF8(context.GetProject()->GetScriptSourceDirectory()) }, { "created", std::move(files) } });
+			} });
+
+		registry.Register({ "script.create",
+			"Writes a new script class into the project's script directory: a .cpp with the class (deriving from Script), its "
+			"ST_SCRIPT_CLASS registration and, with the behaviour template (default), OnCreate, OnUpdate and an example field (Speed) or the "
+			"fields given. The class name must be a C++ identifier that neither the project's scripts nor the SDK declare. Creates the "
+			"script build first when the project has none (script.init). Build it with script.build, or press Play, which builds first. "
+			"Returns the file written (absolute and relative to the project) and the class.",
+			ObjectSchema({
+				{ "class", StringSchema("The class name, a C++ identifier, e.g. PlayerController") },
+				{ "path", StringSchema("Where to write it, relative to the script directory and ending in .cpp (default: <class>.cpp); folders are "
+					"created") },
+				{ "template", { { "type", "string" }, { "enum", { "behaviour", "empty" } }, { "description", "behaviour (default): OnCreate, OnUpdate and "
+					"fields; empty: only the class and its registration" } } },
+				{ "fields", AnyObjectSchema(fmt::format("Fields to declare, by name, with their type: {} (case does not matter), e.g. "
+					"{{\"Speed\": \"float\", \"Target\": \"entity\"}}", JoinNames(GetScriptFieldTypeNames()))) },
+				{ "open", BoolSchema("Also open the new file in the external editor (default false)") } }, { "class" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const std::string className = arguments.GetString("class");
+				const std::string pathText = arguments.GetString("path", "");
+				const std::string templateName = arguments.GetString("template", "behaviour");
+				const nlohmann::json* fieldsJson = arguments.FindObject("fields");
+				const bool open = arguments.GetBool("open", false);
+				if (arguments.IsValid() && templateName != "behaviour" && templateName != "empty")
+					arguments.SetError(fmt::format("Parameter 'template' must be behaviour or empty, not '{}'", templateName));
+				std::vector<ScriptFieldDeclaration> fields;
+				const std::vector<std::string> typeNames = GetScriptFieldTypeNames();
+				if (arguments.IsValid() && fieldsJson)
+				{
+					// Named references rather than a structured binding, which Apple Clang 15's lambdas cannot capture.
+					for (const auto& item : fieldsJson->items())
+					{
+						const std::string& name = item.key();
+						const nlohmann::json& type = item.value();
+						const bool knownType = type.is_string() && std::any_of(typeNames.begin(), typeNames.end(),
+							[&type](const std::string& known) { return StringUtils::EqualsIgnoreCase(known, type.get<std::string>()); });
+						if (!IsValidScriptIdentifier(name))
+							arguments.SetError(fmt::format("Field '{}' is not a C++ identifier", name));
+						else if (!knownType)
+							arguments.SetError(fmt::format("Field '{}' needs a type: {}", name, JoinNames(typeNames)));
+						else if (std::any_of(fields.begin(), fields.end(), [&name](const ScriptFieldDeclaration& field) { return StringUtils::EqualsIgnoreCase(field.Name, name); }))
+							arguments.SetError(fmt::format("Field '{}' is declared twice", name));
+						else if (name == className)
+							arguments.SetError(fmt::format("Field '{}' has the class's name", name));
+						if (!arguments.IsValid())
+							break;
+						fields.push_back({ name, type.get<std::string>() });
+					}
+				}
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!context.HasProject())
+					return EditorCommandResult::Fail("No project is open (project.open or project.create)");
+				const Project& project = *context.GetProject();
+
+				// The file: inside the script directory, a new .cpp.
+				const std::filesystem::path scripts = project.GetScriptSourceDirectory();
+				const std::filesystem::path relative = FileSystem::FromUTF8(pathText.empty() ? className + ".cpp" : pathText).lexically_normal();
+				if (relative.is_absolute() || relative.has_root_name() || relative.empty() || *relative.begin() == ".." || relative.extension() != ".cpp")
+				{
+					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'path' must be a relative path inside the script directory ending in "
+						".cpp, not '{}'", pathText));
+				}
+				if (std::optional<std::string> problem = ValidateNewScriptClass(project, context.GetScriptBuildSettings().EngineDirectory, className))
+					return EditorCommandResult::InvalidParameters(*problem);
+				const std::filesystem::path file = scripts / relative;
+				if (FileSystem::Exists(file))
+					return EditorCommandResult::Fail(fmt::format("'{}' exists already; choose another path", FileSystem::ToUTF8(file)));
+
+				// A project without a script build gets one, so that the new class builds.
+				std::vector<std::filesystem::path> created;
+				std::string error;
+				if (!CreateScriptProjectFiles(project, false, &created, &error, &context.GetScriptBuildSettings()))
+					return EditorCommandResult::Fail(error);
+				const ScriptTemplate scriptTemplate = templateName == "empty" ? ScriptTemplate::Empty : ScriptTemplate::Behaviour;
+				if (!FileSystem::CreateDirectories(file.parent_path()) || !FileSystem::WriteText(file, MakeScriptSource(className, scriptTemplate, fields)))
+					return EditorCommandResult::Fail(fmt::format("Cannot write '{}'", FileSystem::ToUTF8(file)));
+				ST_INFO("Created the script class {} in '{}'", className, FileSystem::ToUTF8(file));
+
+				nlohmann::json result = { { "class", className }, { "file", FileSystem::ToUTF8(file) },
+					{ "relativePath", FileSystem::ToUTF8(file.lexically_relative(project.GetProjectDirectory())) }, { "template", templateName } };
+				nlohmann::json written = nlohmann::json::array();
+				for (const std::filesystem::path& path : created)
+					written.push_back(FileSystem::ToUTF8(path));
+				result["createdBuildFiles"] = std::move(written);
+				if (open)
+				{
+					std::string how;
+					if (!context.OpenScriptSource(file, 1, 1, &how, &error))
+						result["openError"] = error;
+					else
+						result["openedWith"] = how;
+				}
+				return EditorCommandResult::Ok(std::move(result));
+			} });
+
+		registry.Register({ "script.open",
+			"Opens a script source in the person's code editor at a line (e.g. a compiler diagnostic or a crash location from script.status): "
+			"the external editor command (script.setExternalEditor, or STRATA_EXTERNAL_EDITOR), else the system's default application for the "
+			"file. Without file, the project's script directory opens. Only code, CMake and text files of the project or the engine. Returns "
+			"what opened it.",
+			ObjectSchema({
+				{ "file", StringSchema("The file: relative to the project directory, or absolute (as diagnostics name them)") },
+				{ "line", IntegerSchema("The line (default: the first)", 1, std::numeric_limits<int32_t>::max()) },
+				{ "column", IntegerSchema("The column (default: the first)", 1, std::numeric_limits<int32_t>::max()) } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const std::string file = arguments.GetString("file", "");
+				const int64_t line = arguments.GetInt("line", 1, 1, std::numeric_limits<int32_t>::max());
+				const int64_t column = arguments.GetInt("column", 1, 1, std::numeric_limits<int32_t>::max());
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!context.HasProject())
+					return EditorCommandResult::Fail("No project is open (project.open or project.create)");
+				std::string how;
+				std::string error;
+				if (!context.OpenScriptSource(FileSystem::FromUTF8(file), static_cast<uint32_t>(line), static_cast<uint32_t>(column), &how, &error))
+					return EditorCommandResult::Fail(error);
+				return EditorCommandResult::Ok({ { "file", file }, { "line", line }, { "column", column }, { "openedWith", how } });
+			} });
+
+		registry.Register({ "script.setExternalEditor",
+			"Sets the person's code editor, which script.open, the Problems panel and crash reports use: a command template such as "
+			"\"code -g {file}:{line}:{column}\" or \"\\\"C:/Program Files/.../devenv.exe\\\" /Edit {file}\" (whitespace separates arguments, double "
+			"quotes group them; {file}, {line}, {column} and {directory} are filled in; without {file} the file goes last). The program runs "
+			"directly, never through a shell: a path, or a name found in PATH (VS Code's code launcher starts Code.exe), not a .cmd or .bat; a "
+			"program that is not there is refused. An empty command goes back to the default application. Saved in the user's editor "
+			"settings (not the project); STRATA_EXTERNAL_EDITOR overrides it. Returns the command in use and the program the person's command "
+			"starts (program).",
+			ObjectSchema({ { "command", StringSchema("The command template, or empty for none") } }, { "command" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const std::string command = arguments.GetString("command");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				// The program must be there (a path, or a name in PATH): a command that cannot start would fail every later open.
+				std::optional<std::filesystem::path> program;
+				if (!command.empty())
+				{
+					std::string problem;
+					program = ExternalEditor::ResolveProgram(command, &problem);
+					if (!program)
+						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'command': {}", problem));
+				}
+				std::string error;
+				if (!context.GetExternalEditor().SetUserCommand(command, &error))
+					return EditorCommandResult::Fail(error);
+				const ExternalEditorLauncher& editor = context.GetExternalEditor();
+				return EditorCommandResult::Ok({ { "command", editor.GetCommand() }, { "source", ExternalEditorSourceToString(editor.GetSource()) },
+					{ "userCommand", editor.GetUserCommand() }, { "program", program ? nlohmann::json(FileSystem::ToUTF8(*program)) : nlohmann::json(nullptr) } });
 			} });
 
 		registry.Register({ "script.add",

@@ -1,6 +1,7 @@
 # Plays the Tetris sample (Samples/Tetris) through the real editor the way an agent does, then runs the exported game:
 #   1. the sample is copied into an empty directory (its .strata cache is never copied);
-#   2. the editor builds its scripts, plays the scene and makes moves with simulated input (input.key) from the sample's
+#   2. the editor plays the scene, which builds its scripts first (the copy has never been built: no script.build is
+#      needed), stops, then plays it again and makes moves with simulated input (input.key) from the sample's
 #      fixed piece sequence: three hard drops that complete the bottom row, with a rotation there and back and a soft drop
 #      on the way. The command script's "expect" conditions check the HUD texts the scripts write (line cleared, exact
 #      score, level up), then let gravity end the game, restart it, undo the test's field edits and export the game, also

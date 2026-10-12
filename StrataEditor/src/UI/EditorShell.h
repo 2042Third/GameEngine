@@ -54,6 +54,8 @@ namespace Strata
 		// Picks a project file with the system's file dialog and opens it.
 		virtual void ShowOpenProjectDialog() = 0;
 		virtual void ShowAboutDialog() = 0;
+		// Scripts > New Script...: a class name and a template, then script.create (nothing without a project).
+		virtual void ShowNewScriptDialog() = 0;
 		// Leaves the launcher for the editor without opening a project (an untitled scene with the built-in assets).
 		virtual void DismissLauncher() = 0;
 		// Renames an entity in place in the Hierarchy (F2 in the viewport): the Hierarchy comes to the front with the entity's

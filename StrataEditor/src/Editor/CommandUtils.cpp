@@ -290,6 +290,15 @@ namespace Strata
 						if (!reference || !entity.GetScene()->GetEntityByUUID(*reference))
 							return fail(fmt::format("{}.{}: no entity {} in the scene", name, property->Name, value.dump()));
 					}
+					else if (HasFlag(property->Flags, PropertyFlags::PhysicsLayer) && value.is_string())
+					{
+						// Collision layers can be given by the names the scene's settings give them.
+						const PhysicsLayerSettings& layers = entity.GetScene()->GetSettings().PhysicsLayers;
+						const std::optional<uint32_t> layer = layers.FindLayer(value.get<std::string>());
+						if (!layer)
+							return fail(fmt::format("{}.{}: the scene has no layer named {} (scene.info lists them)", name, property->Name, value.dump()));
+						converted = *layer;
+					}
 					resolved[property->Name] = std::move(converted);
 				}
 

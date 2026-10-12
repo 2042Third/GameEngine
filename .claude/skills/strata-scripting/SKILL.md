@@ -1,6 +1,6 @@
 ---
 name: strata-scripting
-description: How to write, build, attach, debug and ship Strata game scripts (C++ script classes in a game project's script module, built against the StrataScriptCore SDK) through the editor's script.* commands - the lifecycle, the whole gameplay API (entities, components, transforms, input, time, physics bodies, raycasts and contacts, audio, quitting and loading scenes, random numbers, timers, key repeat) and how to test it. Use when creating gameplay logic or whole games for a project, adding script classes or fields, spawning prefabs from scripts, iterating with hot reload, diagnosing script build errors or crashes, or exporting a scripted game.
+description: How to write, build, attach, debug and ship Strata game scripts (C++ script classes in a game project's script module, built against the StrataScriptCore SDK) through the editor's script.* commands - the lifecycle, the whole gameplay API (entities, components, transforms, input with keyboard, mouse, gamepads and the cursor, time, physics bodies, raycasts, contacts and collision layers, character controllers, audio, quitting and loading scenes, the game window, save files, random numbers, timers, key repeat) and how to test it. Use when creating gameplay logic or whole games for a project, adding script classes or fields, spawning prefabs from scripts, iterating with hot reload, diagnosing script build errors or crashes, or exporting a scripted game.
 ---
 
 # Writing Strata game scripts
@@ -115,13 +115,15 @@ ST_SCRIPT_CLASS(Turret)
   `GetMousePosition` (viewport pixels), `GetMouseDelta`, `GetScrollDelta`. In the editor, scripts receive device input only
   while the viewport is the focused game view (playing through the scene's primary camera); positions are relative to
   the image. Tools play the game with the `input.*` editor commands (simulated input, see the editor automation skill),
-  which reach the scripts whether or not the viewport has the focus.
+  which reach the scripts whether or not the viewport has the focus. Gamepads and the cursor: see
+  [Gamepads and the cursor](#gamepads-and-the-cursor).
 - `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`.
 - `Log::Info/Warn/Error/Trace(args...)` - arguments are concatenated (`Log::Info("Health ", health)`).
 - `RigidBody` (`GetEntity().GetRigidBody()`), `Physics` (raycasts, overlaps), `Collision` (contact callbacks),
+  `CharacterController` (`GetEntity().GetCharacterController()`: walk, jump, ground state),
   `AudioSource` (`GetEntity().GetAudioSource()`), `Audio` (one-shots, master volume), `Animator`
-  (`GetEntity().GetAnimator()`: states, parameters, joints), `Game` (quit, load scenes), `Random`, `Timer`, `KeyRepeat`:
-  see [Gameplay API](#gameplay-api).
+  (`GetEntity().GetAnimator()`: states, parameters, joints), `Game` (quit, load scenes, the window, save files),
+  `Random`, `Timer`, `KeyRepeat`: see [Gameplay API](#gameplay-api).
 
 Every call on a missing entity, unknown component or wrong value type fails harmlessly (`false`, empty `optional`,
 null entity) and the engine logs a warning naming the calling script.
@@ -152,13 +154,43 @@ std::vector<Entity> nearby = Physics::OverlapSphere(center, 3.0f);
   `AddImpulse`, `AddImpulseAtPosition`, `AddTorque`, `AddAngularImpulse`, `Teleport(position [, rotation])`.
 - `Physics`: `Raycast` (closest hit), `RaycastAll` (sorted by distance), `OverlapSphere`, `OverlapBox`; triggers are
   skipped unless `includeTriggers` is set, `ignore` skips one entity (usually the caster).
+- Collision layers: every body and character controller is on one layer (0-31, `Layer`), and two of them collide only
+  when the scene's layer matrix lets their layers (everything collides by default). Name layers and set the matrix in
+  the editor (Inspector with nothing selected, Collision Layers; or `scene.setSettings {layerNames, layerCollisions}`),
+  then use names in code: `Physics::GetLayerIndex("Debris")` (-1 for a name the scene lacks), `1u << layer` as a query
+  mask, `Physics::SetLayersCollide(a, b, false)` to let two layers pass through each other while the scene plays (e.g.
+  a ghost power-up), `Physics::GetLayersCollide(a, b)`.
 - Moving a body by writing its transform works too (kinematic platforms, editor-like placement) but takes effect at the
   next fixed step; `Teleport` is immediate. Results always name the entity that owns the body (the RigidBody entity,
   also for colliders on its children).
 
+### Character controllers
+
+A player or NPC that walks rather than tumbles: an entity with a `CharacterController` component (an upright capsule
+whose bottom is the entity's origin: `Height`, `Radius`, `StepHeight`, `MaxSlopeDegrees`, `Layer`, `GravityScale`,
+`PushStrength`, `Enabled`) and no `RigidBody`. Physics moves it every fixed step: it falls, slides along walls, walks up
+steps and walkable slopes, follows the ground down and pushes dynamic bodies, and writes the entity's position (never its
+rotation: turn the entity yourself).
+
+```cpp
+CharacterController controller = GetEntity().GetCharacterController();
+controller.Move(direction * Speed);   // Walk velocity (m/s, world space), kept until the next Move; Move(glm::vec3(0)) stops
+if (controller.IsGrounded() && Input::IsKeyPressed(Key::Space))
+	controller.Jump(5.0f);            // Upward speed at the next fixed step (also in the air: check IsGrounded)
+controller.Teleport(spawnPoint);      // Feet at that point, at once (respawns)
+controller.GetGroundState();          // GroundState::OnGround, OnSteepGround (sliding), NotSupported, InAir
+controller.GetGroundNormal(); controller.GetGroundEntity(); controller.GetGroundVelocity(); // What it stands on
+controller.GetVelocity();             // How it actually moved in the last step (zero against a wall)
+```
+
+Move from `OnUpdate` (input) or `OnFixedUpdate`; the vertical part of the walk velocity counts only with `GravityScale` 0
+(flying, swimming). What it walks on and into reaches its script as `OnCollisionEnter/Exit` (the ground too: the normal
+points down to it), triggers it walks through as `OnTriggerEnter/Exit`; raycasts and overlaps find it, and dynamic
+bodies land on it. An entity with both a `RigidBody` and a `CharacterController` is the rigid body (with a warning).
+
 ### Contacts
 
-Override the contact callbacks on the script of an entity that owns a body:
+Override the contact callbacks on the script of an entity that owns a body (or a character controller):
 
 ```cpp
 void OnCollisionEnter(const Collision& collision) override  // Solid contacts begin
@@ -279,6 +311,46 @@ void OnUpdate(float) override
   complete in their first frame.
 - `Scene::InstantiateMany(prefabOrModel, transforms, parent)` makes all instances in one call (much cheaper than a loop
   of `Instantiate`), or none when the asset is not loaded yet or a transform has a zero scale.
+
+### Gamepads and the cursor
+
+```cpp
+if (Input::IsGamepadConnected())                                    // Gamepad 0 unless you pass another (0 to 3)
+{
+	const glm::vec2 stick = Input::GetGamepadStick(GamepadStick::Left); // +x right, +y up; round dead zone, length <= 1
+	controller.Move((right * stick.x + forward * stick.y) * Speed);
+	if (Input::IsGamepadButtonPressed(GamepadButton::A))             // Xbox layout: A bottom, B right, X left, Y top
+		controller.Jump(5.0f);
+	const float throttle = Input::GetGamepadAxis(GamepadAxis::RightTrigger); // 0 released to 1 pressed, dead zone 0.15
+}
+Input::SetCursorMode(CursorMode::Locked);  // Mouse look: hidden and kept in the window; read Input::GetMouseDelta()
+Input::SetCursorMode(CursorMode::Normal);  // Menus (Hidden hides it over the game without locking)
+```
+
+`GetGamepadAxis(axis, gamepad, deadZone)` takes a dead zone (pass 0 for the raw value). The cursor mode applies while the
+game has the input: in the editor while the game view is focused (Shift+F1 frees the cursor, clicking the game view
+takes it again, stopping play gives it back). Tools press buttons and move sticks with `input.gamepadButton` and
+`input.gamepadAxis`.
+
+### The window and save files
+
+```cpp
+Game::SetWindowMode(WindowMode::Fullscreen);   // Windowed, Fullscreen (exclusive), Borderless
+Game::SetResolution(1920, 1080);               // Pixels; false outside 1 to 16384
+Game::SetVSync(false);
+glm::uvec2 size = Game::GetWindowSize();       // What the game renders at now
+
+Game::WriteSaveFile("Slot 1", "level=3;score=1200");     // Text or std::span<const uint8_t>; replaces the file whole
+std::optional<std::string> slot = Game::ReadSaveText("Slot 1"); // Nothing when there is no such save (yet)
+std::vector<std::string> slots = Game::ListSaveFiles();  // Sorted names
+Game::DeleteSaveFile("Slot 1");
+```
+
+Window requests apply after the frame in an exported game; the editor's play mode only records them (`editor.status`
+section `game`, a notice over the game view), its own window stays. Saves go to `<user data>/<Game>/Saves` in an exported
+game and to `<project>/.strata/Saves` in the editor. Names are 1 to 64 ASCII letters, digits, spaces, `-`, `_` and `.`
+(not first or last), without `..` (no paths); the calls read and write the disk before they return, so save at quiet
+moments (checkpoints, menus) and keep saves small.
 
 ### Text, spawning and other building blocks
 
@@ -411,8 +483,13 @@ every step below is a command, and source files are written with your own file t
    `Scripts/Spinner.cpp`; with `"template": "basic3d"` it also saves a lit start scene (camera, sun, sky, ground). Older projects get the same with `script.init {"example": true}`. `script.status` shows the
    script directory (`sourceDirectory`), the module file the build produces (`projectModule`, and `projectModuleBuilt`)
    and, once a module is loaded, its name (`moduleName`, empty before) and file (`module`).
-2. **Write scripts.** Put `.cpp`/`.h` files anywhere under `Scripts/` (one `ST_SCRIPT_CLASS` per class, see above). New
-   files are picked up by the next build.
+2. **Write scripts.** `script.create {"class": "Player", "fields": {"Speed": "float", "Target": "entity"}}` writes
+   `Scripts/Player.cpp` with the class, `OnCreate`/`OnUpdate` and the fields (`"template": "empty"` for the bare class;
+   `"path": "Gameplay/Player.cpp"` for another place; it refuses names the project or the SDK declare); or put
+   `.cpp`/`.h` files anywhere under `Scripts/` yourself (one `ST_SCRIPT_CLASS` per class, see above). New files are
+   picked up by the next build. `script.list` names every source file with the classes it registers (find the file of
+   a class before changing it). `script.open {"file": "Scripts/Player.cpp", "line": 12}` shows a file to the person at
+   the editor in their code editor.
 3. **Build.** `script.build` (waits by default) configures CMake on the first run (a few seconds) and builds with the
    engine's compiler and configuration into `.strata/Scripts/Bin`, then loads the module. On failure the command fails
    with the first errors (`File(Line,Column): error C2065: ...`, undefined references or symbols of the linker, CMake
@@ -420,10 +497,13 @@ every step below is a command, and source files are written with your own file t
    `script.status` -> `build.last` lists every diagnostic (`file`, `line`, `column`, `severity`, `code`, `message`)
    and the end of the build log (`log`). Fix and build again. One build runs at a time (a second request fails while
    one runs; `script.build {"wait": false}` returns at once and `script.status` -> `build.running` tells when it is
-   done). The build output also streams into the editor log (`log.read`). On Windows (Visual Studio generator) a build
-   fails at once with "The project's path is too long" when the project's folder path has more than 133 characters
-   (fewer with module names over about 40 characters), which MSBuild cannot build in: create or copy the project into
-   a shorter folder such as `<home>/StrataProjects`.
+   done). The build output also streams into the editor log (`log.read`). On Windows (Visual Studio generator) a project
+   whose folder path is too long for MSBuild (more than about 133 characters) builds in a per-user folder instead
+   (`script.status` -> `build.last.buildDirectory`); only when even that is too deep does the build fail with "The
+   project's path is too long". **Play builds first:** `play.start` builds the scripts when their sources changed since
+   the last build (or the module is not loaded while scenes use scripts) and answers once the game plays (with
+   `built: {build, seconds, reason}`), or fails with the build's errors; `script.status` -> `playBuildsFirst` says
+   whether it will. `play.start {"build": false}` plays what is loaded.
 4. **Inspect.** `script.status` -> `classes` lists every class with its fields (`name`, `type`, `default`) and
    implemented callbacks. `script.get {"entity": "<id>"}` shows the field values of an entity's scripts: what the scene
    stores, or while playing what the live instances hold now.
@@ -442,7 +522,10 @@ every step below is a command, and source files are written with your own file t
    in place, every instance keeps its field values (same name and type) and gets `OnReload` instead of `OnCreate`.
    A build that fails keeps the running module. `script.reload` reloads the module file without building.
 8. **Crashes.** A crash (null pointer, division by zero, stack overflow) stops play mode; the log and `script.status` ->
-   `fault`/`lastFault` name the module, class, callback, entity and the crash. `play.start` fails until the module is
+   `fault`/`lastFault` name the module, class, callback, entity and the crash, and, once `symbolized` is true (a moment
+   later), `location` (`file` and `line` on Windows from the module's PDB, the `function` elsewhere) and the `stack`
+   (innermost first; frames with `inlined: true` are calls the compiler inlined at the same address as the frames after
+   them, so `location` is the line that ran even in an optimized build). `play.start` fails until the module is
    rebuilt (`script.build`; after a crash a successful build loads the module again even when nothing had to be
    compiled, e.g. when you fixed a field value with `script.setField`) or reloaded (`script.reload`). An exception
    thrown by a script only disables that instance (the message is logged).
@@ -454,8 +537,12 @@ every step below is a command, and source files are written with your own file t
    `script.reload`), and when scenes use scripts but no module is loaded. A pruned export (`"prune": true`) ships only
    the assets scenes reference: assets scripts load by path need `project.setExportSettings {"alwaysInclude": [...]}`.
 
-The UI does the same with Scripts > Build Scripts (Ctrl+B), the toolbar's Build Scripts button and the inspector's
-Script section (add a class from the module, edit fields with their default shown and a reset button).
+The UI does the same with Scripts > New Script... (which starts a build, so that the new class can be attached once it
+finished), Scripts > Build Scripts (Ctrl+B), the toolbar's Play (which builds first when the sources changed since the last
+build) and Build Scripts buttons, the Problems panel (build errors and crashes; a double click opens the line in the
+external editor, Scripts > External Editor..., which lists the editors found on the machine) and the inspector's Script
+section (add a class from the module, edit fields with their default shown and a reset button). People's guide:
+`Docs/Manual/Scripting.md`.
 
 ## Building outside the editor
 

@@ -4,6 +4,7 @@
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Scene/Components.h"
+#include "Strata/Scene/PhysicsLayerSettings.h"
 
 #include <charconv>
 #include <string>
@@ -57,6 +58,14 @@ namespace Strata
 			const char* end = text.data() + text.size();
 			const std::from_chars_result result = std::from_chars(text.data(), end, hash, 16);
 			return result.ec == std::errc() && result.ptr == end ? hash : 0;
+		}
+
+		// A collision layer: an index the inspector offers by the scene's layer names.
+		PropertyOptions PhysicsLayer(std::string tooltip)
+		{
+			PropertyOptions options = WithTooltip(Range(0.0f, static_cast<float>(c_PhysicsLayerCount - 1)), std::move(tooltip));
+			options.Flags = PropertyFlags::PhysicsLayer;
+			return options;
 		}
 
 		void SerializeScriptComponent(const ScriptComponent& component, nlohmann::json& out)
@@ -334,7 +343,7 @@ namespace Strata
 			.Property("LockRotationX", &RigidBodyComponent::LockRotationX)
 			.Property("LockRotationY", &RigidBodyComponent::LockRotationY)
 			.Property("LockRotationZ", &RigidBodyComponent::LockRotationZ)
-			.Property("Layer", &RigidBodyComponent::Layer, Range(0.0f, 31.0f));
+			.Property("Layer", &RigidBodyComponent::Layer, PhysicsLayer("Collision layer: it collides with the layers the scene's layer matrix lets it"));
 
 		ComponentRegistry::Register<BoxColliderComponent>("BoxCollider")
 			.DisplayName("Box Collider")
@@ -360,6 +369,24 @@ namespace Strata
 			.Category("Physics")
 			.AssetProperty("Mesh", &MeshColliderComponent::Mesh, AssetType::Mesh, { .Tooltip = "Uses the Mesh Renderer's mesh when unset" })
 			.Property("Convex", &MeshColliderComponent::Convex, WithTooltip({}, "Non-convex meshes are only supported on static bodies"));
+
+		ComponentRegistry::Register<CharacterControllerComponent>("CharacterController")
+			.DisplayName("Character Controller")
+			.Category("Physics")
+			.Description("An upright capsule that scripts walk, jump and teleport: it slides along walls, walks up steps and walkable slopes and "
+				"pushes dynamic bodies; its bottom is the entity's origin")
+			.Property("Height", &CharacterControllerComponent::Height,
+				WithTooltip(Range(0.01f, 1000.0f, 0.01f), "Total height of the capsule in world units; its bottom is the entity's origin"))
+			.Property("Radius", &CharacterControllerComponent::Radius, WithTooltip(Range(0.005f, 500.0f, 0.01f), "World units"))
+			.Property("StepHeight", &CharacterControllerComponent::StepHeight,
+				WithTooltip(Range(0.0f, 100.0f, 0.01f), "Highest step it walks up, and how far it follows the ground down (world units)"))
+			.Property("MaxSlopeDegrees", &CharacterControllerComponent::MaxSlopeDegrees,
+				WithTooltip(Range(0.0f, 89.0f, 0.5f), "Steepest slope it walks up, in degrees from the horizontal"))
+			.Property("Layer", &CharacterControllerComponent::Layer, PhysicsLayer("Collision layer: it collides with the layers the scene's layer matrix lets it"))
+			.Property("GravityScale", &CharacterControllerComponent::GravityScale, WithTooltip(Range(-100.0f, 100.0f, 0.05f), "Times the scene's gravity"))
+			.Property("PushStrength", &CharacterControllerComponent::PushStrength,
+				WithTooltip(Range(0.0f, c_Unbounded, 1.0f), "Largest force with which it pushes dynamic bodies, in newtons"))
+			.Property("Enabled", &CharacterControllerComponent::Enabled, WithTooltip({}, "A disabled controller neither moves nor collides"));
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Audio

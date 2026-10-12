@@ -40,6 +40,15 @@ namespace Strata
 		Hidden      // No cursor is shown over the window (it still moves and clicks)
 	};
 
+	// How a window shows: in a frame, or covering a display, with the display switched to the window's resolution
+	// (Fullscreen) or at the desktop's (Borderless).
+	enum class WindowMode : uint8_t
+	{
+		Windowed = 0,
+		Fullscreen,
+		Borderless
+	};
+
 	struct WindowSpecification
 	{
 		std::string Title = "Strata";
@@ -76,8 +85,14 @@ namespace Strata
 		virtual void SetVSync(bool enabled) = 0;
 		virtual bool IsVSync() const = 0;
 		virtual void SetTitle(const std::string& title) = 0;
-		virtual void SetFullscreen(bool fullscreen) = 0;
-		virtual bool IsFullscreen() const = 0;
+		// A window created with WindowSpecification::Fullscreen starts Borderless (at the desktop's resolution). Going back to
+		// Windowed restores the window's last windowed place and size.
+		virtual void SetMode(WindowMode mode) = 0;
+		virtual WindowMode GetMode() const = 0;
+		// The size of the framebuffer in pixels: the window's in Windowed mode (whatever the display's scale), the display
+		// mode's in Fullscreen. Borderless windows keep the desktop's resolution and take this one when they become Fullscreen
+		// or Windowed. Zero sizes are ignored.
+		virtual void SetResolution(uint32_t width, uint32_t height) = 0;
 		virtual bool IsMinimized() const = 0;
 		virtual bool IsFocused() const = 0;
 		virtual void Maximize() = 0;

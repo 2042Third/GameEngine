@@ -5,6 +5,7 @@
 #include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Core/UUID.h"
+#include "Strata/Scene/PhysicsLayerSettings.h"
 #include "Strata/Scene/SceneHierarchy.h"
 #include "Strata/Scene/SceneSystem.h"
 #include "Strata/Scene/SubScene.h"
@@ -65,6 +66,7 @@ namespace Strata
 		// stops creating once Scene::c_MaxInstantiationMillisecondsPerFrame went by. From 1 to c_MaxEntitiesInstantiatedLimit.
 		uint32_t MaxEntitiesInstantiatedPerFrame = 5000;
 		static constexpr uint32_t c_MaxEntitiesInstantiatedLimit = 1u << 20;
+		PhysicsLayerSettings PhysicsLayers; // Layer names and which layers collide
 	};
 
 	// A world of entities. Owns the EnTT registry, the hierarchy, and (while playing) the runtime systems.

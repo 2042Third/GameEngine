@@ -3,7 +3,10 @@
 
 #include "Strata/Core/FileLock.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/JobSystem.h"
 #include "Strata/Core/Platform.h"
+#include "Strata/Core/StringUtils.h"
+#include "Strata/Core/Symbolizer.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
@@ -11,6 +14,7 @@
 #include "Strata/Scripting/ScriptWatchdog.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <unordered_set>
 
@@ -551,6 +555,70 @@ namespace Strata
 		return nullptr;
 	}
 
+	struct ScriptModule::FaultSymbols
+	{
+		std::atomic<bool> Done = false;
+		std::vector<ScriptCodeLocation> Stack; // Written by the job before Done
+	};
+
+	namespace
+	{
+
+		// The loader names a module as it was loaded, so the paths usually match as they are. (Comparing file identities can
+		// fail for a mapped library, whose file the system may not open for attributes.)
+		bool IsSameFile(const std::filesystem::path& a, const std::filesystem::path& b)
+		{
+			if (a.empty() || b.empty())
+				return false;
+			if (a.lexically_normal() == b.lexically_normal())
+				return true;
+			std::error_code error;
+			const bool same = std::filesystem::equivalent(a, b, error);
+			return !error && same;
+		}
+
+		// Code of the C runtime or of the SDK's entry points (the abort handler that reports abort() as a fault): frames a
+		// person cannot act on, skipped when choosing where a fault happened.
+		bool IsRuntimeFrame(const ScriptCodeLocation& frame)
+		{
+			const std::string file = StringUtils::ToLower(frame.File);
+			return file.find("/crts/") != std::string::npos || file.find("\\crts\\") != std::string::npos || file.find("\\crt\\src\\") != std::string::npos
+				|| file.ends_with("scriptmoduleentry.cpp");
+		}
+
+		// The frame a fault is reported at: the first of the module's frames that has a source file and is not runtime code,
+		// else the first of the module's frames.
+		std::optional<ScriptCodeLocation> ChooseFaultLocation(const std::vector<ScriptCodeLocation>& stack, const std::string& module)
+		{
+			const ScriptCodeLocation* first = nullptr;
+			for (const ScriptCodeLocation& frame : stack)
+			{
+				if (frame.Module != module)
+					continue;
+				if (!first)
+					first = &frame;
+				if (!frame.File.empty() && !IsRuntimeFrame(frame))
+					return frame;
+			}
+			return first ? std::optional<ScriptCodeLocation>(*first) : std::nullopt;
+		}
+
+	}
+
+	std::optional<ScriptFault> ScriptModule::GetFault() const
+	{
+		if (!m_Fault)
+			return std::nullopt;
+		ScriptFault fault = *m_Fault;
+		if (m_FaultSymbols && m_FaultSymbols->Done.load(std::memory_order_acquire))
+		{
+			fault.Stack = m_FaultSymbols->Stack;
+			fault.Location = ChooseFaultLocation(fault.Stack, FileSystem::ToUTF8(m_LoadedPath.filename()));
+			fault.Symbolized = true;
+		}
+		return fault;
+	}
+
 	void ScriptModule::RecordFault(const ScriptCallSite& site, const CrashInfo& crash)
 	{
 		ScriptFault fault;
@@ -574,8 +642,81 @@ namespace Strata
 			ST_CORE_ERROR("Script module '{}' crashed in {}: {}. The module is disabled until it is reloaded.", m_Name, location, fault.Description);
 		}
 
-		if (!m_Fault)
-			m_Fault = std::move(fault);
+		if (m_Fault)
+			return;
+
+		// Where it happened, as far as the loader tells now (the module is still loaded): the module and the offset of every
+		// frame. The module's own frames are then symbolized from its debug information on a job (DbgHelp reads its PDB).
+		const std::string moduleFile = FileSystem::ToUTF8(m_LoadedPath.filename());
+		std::vector<Symbolizer::Frame> moduleFrames;
+		std::vector<size_t> moduleFrameIndices;
+		for (size_t index = 0; index < crash.Stack.size(); index++)
+		{
+			const Symbolizer::Frame described = Symbolizer::Describe(crash.Stack[index]);
+			ScriptCodeLocation location;
+			location.Address = crash.Stack[index];
+			location.Module = FileSystem::ToUTF8(described.ModulePath.filename());
+			location.ModuleOffset = described.ModuleBase != 0 && location.Address >= described.ModuleBase ? location.Address - described.ModuleBase : 0;
+			location.Function = described.Function;
+			if (IsSameFile(described.ModulePath, m_LoadedPath))
+			{
+				location.Module = moduleFile;
+				// Return addresses point after their call: the call itself is the instruction before.
+				Symbolizer::Frame frame = described;
+				frame.Address = index == 0 ? location.Address : location.Address - 1;
+				// The module as built (a hot-reload copy may be gone by the time the job reads it), with its PDB beside it.
+				frame.ModulePath = m_SourcePath;
+				moduleFrames.push_back(std::move(frame));
+				moduleFrameIndices.push_back(index);
+			}
+			fault.Stack.push_back(std::move(location));
+		}
+		fault.Location = ChooseFaultLocation(fault.Stack, moduleFile);
+
+		Ref<FaultSymbols> symbols = CreateRef<FaultSymbols>();
+		symbols->Stack = fault.Stack;
+		m_FaultSymbols = symbols;
+		m_Fault = std::move(fault);
+		if (moduleFrames.empty())
+		{
+			symbols->Done.store(true, std::memory_order_release);
+			return;
+		}
+		std::vector<std::filesystem::path> searchDirectories = { m_SourcePath.parent_path() };
+		JobSystem::SubmitIO([symbols, frames = std::move(moduleFrames), indices = std::move(moduleFrameIndices), directories = std::move(searchDirectories)]() mutable
+		{
+			Symbolizer::Resolve(frames, directories);
+			// Each frame of the module comes after the calls the compiler inlined at its address, innermost first, so the
+			// stack starts with the line that ran (in an optimized build too) rather than the call of the function holding it.
+			// GetFault reads the stack only once Done is set.
+			std::vector<ScriptCodeLocation> stack;
+			stack.reserve(symbols->Stack.size());
+			size_t nextFrame = 0;
+			for (size_t index = 0; index < symbols->Stack.size(); index++)
+			{
+				ScriptCodeLocation location = symbols->Stack[index];
+				if (nextFrame < indices.size() && indices[nextFrame] == index)
+				{
+					const Symbolizer::Frame& frame = frames[nextFrame++];
+					for (const Symbolizer::InlinedCall& call : frame.Inlined)
+					{
+						ScriptCodeLocation inlined = location;
+						inlined.Function = call.Function;
+						inlined.File = call.File;
+						inlined.Line = call.Line;
+						inlined.Inlined = true;
+						stack.push_back(std::move(inlined));
+					}
+					if (!frame.Function.empty())
+						location.Function = frame.Function;
+					location.File = frame.File;
+					location.Line = frame.Line;
+				}
+				stack.push_back(std::move(location));
+			}
+			symbols->Stack = std::move(stack);
+			symbols->Done.store(true, std::memory_order_release);
+		});
 	}
 
 	const ScriptModule::ClassFunctions* ScriptModule::GetFunctions(const ScriptCallSite& site) const

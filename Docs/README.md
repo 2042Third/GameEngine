@@ -9,6 +9,14 @@ design and links to the code that implements it.
 - [Roadmap.md](Roadmap.md): what Strata is meant to be (its pillars), the waves of workstreams that get it there, and
   the status: what each landed wave delivered and the open items later waves own.
 
+## Manual
+
+Guides for people making games in the editor:
+
+- [Manual/Scripting.md](Manual/Scripting.md): creating, building, debugging and hot-reloading scripts, the Problems
+  panel, crash reports with file and line, opening scripts in an IDE (CMake presets for IntelliSense) and attaching a
+  debugger.
+
 ## Elsewhere in the repository
 
 - [AGENTS.md](../AGENTS.md): the development guide and the source of truth for rules: building, testing and the
@@ -38,7 +46,7 @@ Task playbooks for people and AI agents, in `.claude/skills/<name>/SKILL.md`:
 
 - [Samples/Tetris](../Samples/Tetris/): a complete game an AI agent made through editor commands only (`Tetris.stproj`,
   `Assets/` with `.meta` files, C++ scripts in `Scripts/`). Open a copy of it from the launcher (Open Sample, or
-  `project.openSample`), build its scripts (Ctrl+B) and press Play; `StrataEditor --project Samples/Tetris` opens the
+  `project.openSample`) and press Play, which builds its scripts first; `StrataEditor --project Samples/Tetris` opens the
   sample itself, to change it. `Samples/Samples.json` lists the samples. The CTest `StrataEditor.Tetris`
   (`StrataTests/Editor/TetrisSample.cmake`) plays a copy with simulated input, checks its HUD, exports it and runs the
   exported game headless.

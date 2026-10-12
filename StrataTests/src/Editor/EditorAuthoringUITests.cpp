@@ -586,6 +586,15 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		Entity light = group;
 		light.AddComponent<PointLightComponent>();
 		CHECK(icon(group) == Icons::Lightbulb);
+		// A character is one with its mesh and its script, and its controller has an icon of its own.
+		Entity player = scene.CreateEntity("Player");
+		player.AddComponent<MeshRendererComponent>();
+		player.AddComponent<ScriptComponent>();
+		player.AddComponent<CharacterControllerComponent>();
+		CHECK(icon(player) == Icons::PersonStanding);
+		const ComponentInfo* controller = ComponentRegistry::Find("CharacterController");
+		REQUIRE(controller);
+		CHECK(std::string(UI::GetComponentIcon(*controller)) == Icons::PersonStanding);
 	}
 
 	TEST_CASE("The create button and a row's context menu create entities")

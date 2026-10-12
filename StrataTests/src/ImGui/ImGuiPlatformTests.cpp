@@ -33,8 +33,9 @@ namespace
 		void SetVSync(bool) override {}
 		bool IsVSync() const override { return true; }
 		void SetTitle(const std::string&) override {}
-		void SetFullscreen(bool) override {}
-		bool IsFullscreen() const override { return false; }
+		void SetMode(WindowMode) override {}
+		WindowMode GetMode() const override { return WindowMode::Windowed; }
+		void SetResolution(uint32_t, uint32_t) override {}
 		bool IsMinimized() const override { return false; }
 		bool IsFocused() const override { return true; }
 		void Maximize() override {}

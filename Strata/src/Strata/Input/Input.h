@@ -36,13 +36,23 @@ namespace Strata
 		static glm::vec2 GetMouseDelta();
 		static glm::vec2 GetScrollDelta();
 
+		// A gamepad is connected while the device is (whether or not input is enabled) or while simulated input uses it.
 		static bool IsGamepadConnected(uint32_t gamepad);
 		static bool IsGamepadButtonDown(uint32_t gamepad, GamepadButton button);
 		static bool IsGamepadButtonPressed(uint32_t gamepad, GamepadButton button);
+		static bool IsGamepadButtonReleased(uint32_t gamepad, GamepadButton button);
+		// The axis as the device (or simulated input) reports it, without a dead zone; ranges in GamepadCodes.h.
 		static float GetGamepadAxis(uint32_t gamepad, GamepadAxis axis);
 
+		// The cursor of the window Input reads, set directly (the editor's fly camera hides and confines it while flying).
 		static void SetCursorMode(CursorMode mode);
 		static CursorMode GetCursorMode();
+		// The cursor mode the game asks for (scripts' Input::SetCursorMode). It applies to the window while input is enabled
+		// (always in a game; in the editor while the focused game view has the input), and the window's cursor is Normal while
+		// input is disabled, so a game that locked the cursor gives it back when it loses the input and takes it again when
+		// it gets the input back. Reset makes it Normal again.
+		static void SetGameCursorMode(CursorMode mode);
+		static CursorMode GetGameCursorMode();
 
 		static glm::vec2 GetViewportSize();
 
@@ -91,8 +101,14 @@ namespace Strata
 		// From then on GetMousePosition reports it, and GetMouseDelta includes the moves after the first.
 		static void SimulateMouseMove(const glm::vec2& viewportPosition);
 		static void SimulateScroll(const glm::vec2& offset);
-		// Lets go of every simulated key and mouse button in the next input frame, also of presses still queued (queued button
-		// events are dropped; pointer moves and scrolling stay queued).
+		// A virtual gamepad (the editor's input.gamepadButton and input.gamepadAxis): its button events merge with the device's
+		// like keys, and an axis it holds replaces the device's value until ReleaseSimulatedGamepadAxis. A gamepad simulated
+		// input used counts as connected until ClearSimulated. Axis values are clamped to the axis' range.
+		static void SimulateGamepadButton(uint32_t gamepad, GamepadButton button, bool down);
+		static void SimulateGamepadAxis(uint32_t gamepad, GamepadAxis axis, float value);
+		static void ReleaseSimulatedGamepadAxis(uint32_t gamepad, GamepadAxis axis);
+		// Lets go of every simulated key, mouse button, gamepad button and gamepad axis in the next input frame, also of presses
+		// and axes still queued (queued button and axis events are dropped; pointer moves and scrolling stay queued).
 		static void ReleaseAllSimulated();
 		// Drops the simulated state and the queued events at once, without reporting releases (the game session ended).
 		static void ClearSimulated();
@@ -103,6 +119,9 @@ namespace Strata
 		static bool IsSimulatedKeyDown(KeyCode key);
 		static bool IsSimulatedMouseButtonDown(MouseCode button);
 		static std::optional<glm::vec2> GetSimulatedMousePosition();
+		static bool IsSimulatedGamepadConnected(uint32_t gamepad);
+		static bool IsSimulatedGamepadButtonDown(uint32_t gamepad, GamepadButton button);
+		static std::optional<float> GetSimulatedGamepadAxis(uint32_t gamepad, GamepadAxis axis);
 	};
 
 }

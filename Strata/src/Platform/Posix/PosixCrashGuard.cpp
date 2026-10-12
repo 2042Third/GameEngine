@@ -11,6 +11,7 @@
 #include <mutex>
 #include <pthread.h>
 #include <string_view>
+#include <type_traits>
 #include <unistd.h>
 
 #if defined(__GLIBCXX__)
@@ -19,6 +20,8 @@
 
 #if defined(ST_PLATFORM_MACOS)
 	#include <sys/ucontext.h>
+#else
+	#include <ucontext.h>
 #endif
 
 namespace Strata
@@ -45,6 +48,7 @@ namespace Strata
 			GuardFrame* Previous = nullptr;
 			volatile sig_atomic_t Signal = 0;
 			void* volatile FaultAddress = nullptr;
+			volatile uint64_t InstructionAddress = 0; // The faulting instruction (0 when the platform does not tell)
 #if defined(ST_PLATFORM_MACOS)
 			// End of this thread's recovery stack (see ResumeAfterReturn), copied here so the handler reads no thread-local
 			// state beyond the current frame.
@@ -194,6 +198,44 @@ namespace Strata
 		}
 #endif
 
+		template<typename T>
+		uint64_t ToAddress(T value)
+		{
+			if constexpr (std::is_pointer_v<T>)
+				return static_cast<uint64_t>(reinterpret_cast<uintptr_t>(value));
+			else
+				return static_cast<uint64_t>(value);
+		}
+
+		// The interrupted thread's instruction pointer (async-signal-safe: reads only).
+		uint64_t GetInstructionAddress([[maybe_unused]] const void* context)
+		{
+			const ucontext_t* interrupted = static_cast<const ucontext_t*>(context);
+			if (!interrupted)
+				return 0;
+#if defined(ST_PLATFORM_MACOS)
+			if (!interrupted->uc_mcontext)
+				return 0;
+	#if defined(__aarch64__)
+		#if defined(__darwin_arm_thread_state64_get_pc)
+			return ToAddress(__darwin_arm_thread_state64_get_pc(interrupted->uc_mcontext->__ss));
+		#else
+			return ToAddress(interrupted->uc_mcontext->__ss.__pc);
+		#endif
+	#elif defined(__x86_64__)
+			return ToAddress(interrupted->uc_mcontext->__ss.__rip);
+	#else
+			return 0;
+	#endif
+#elif defined(__linux__) && defined(__x86_64__)
+			return ToAddress(interrupted->uc_mcontext.gregs[REG_RIP]);
+#elif defined(__linux__) && defined(__aarch64__)
+			return ToAddress(interrupted->uc_mcontext.pc);
+#else
+			return 0;
+#endif
+		}
+
 		void SignalHandler(int signal, siginfo_t* info, void* context)
 		{
 			GuardFrame* frame = t_CurrentFrame;
@@ -206,6 +248,7 @@ namespace Strata
 				}
 				frame->Signal = signal;
 				frame->FaultAddress = info ? info->si_addr : nullptr;
+				frame->InstructionAddress = GetInstructionAddress(context);
 				t_CurrentFrame = frame->Previous;
 #if defined(ST_PLATFORM_MACOS)
 				if (ResumeAfterReturn(context, frame))
@@ -348,7 +391,12 @@ namespace Strata
 		{
 			outInfo->Description = DescribeSignal(frame.Signal, frame.FaultAddress);
 			outInfo->Code = static_cast<uint64_t>(frame.Signal);
-			outInfo->Address = reinterpret_cast<uint64_t>(frame.FaultAddress);
+			// The instruction, as on Windows (the accessed address is in the description); without it, the accessed address.
+			const uint64_t instruction = frame.InstructionAddress;
+			outInfo->Address = instruction != 0 ? instruction : reinterpret_cast<uint64_t>(frame.FaultAddress);
+			outInfo->Stack.clear();
+			if (instruction != 0)
+				outInfo->Stack.push_back(instruction);
 		}
 		return false;
 	}

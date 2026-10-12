@@ -7,6 +7,8 @@
 #include <glm/glm.hpp>
 
 #include <optional>
+#include <string>
+#include <string_view>
 
 namespace Strata
 {
@@ -39,6 +41,13 @@ namespace Strata
 		void Reset(EditorContext& context);
 		// Where the image was drawn last (screen coordinates), e.g. for layout tests.
 		const ViewportImageArea& GetImageArea() const { return m_Image; }
+		// The notice of the game's window requests the last frame showed over the game view (empty when it showed none).
+		std::string_view GetShownGameWindowNotice() const { return m_GameWindowNoticeShown ? std::string_view(m_GameWindowNotice) : std::string_view(); }
+		// What the game view says while the game locked the cursor (how to free it and stop the game): shown for
+		// c_MouseHintSeconds after the game took the mouse. Empty when the last frame showed none.
+		std::string_view GetShownMouseHint() const { return m_MouseHintShown ? std::string_view(c_MouseHint) : std::string_view(); }
+		static constexpr const char* c_MouseHint = "Shift+F1 frees the mouse \xC2\xB7 Ctrl+P stops the game";
+		static constexpr double c_MouseHintSeconds = 5.0;
 	private:
 		enum class CameraDrag : uint8_t
 		{
@@ -63,6 +72,8 @@ namespace Strata
 		void DrawSceneLoadOverlay(EditorContext& context);
 		// The renderer's statistics over the image: frame time, draws, the render scene's proxies and uploads, asset requests.
 		static void DrawStatsOverlay(ImDrawList* drawList, const ImVec2& position, const ViewportRenderer& renderer, const ViewportView& view, const EditorFrameStats& frame);
+		// What the game asked of its window (EditorGameWindow), at the bottom of the game view: play mode does not apply it.
+		void DrawGameWindowNotice(EditorContext& context, const ViewportView& view, ImDrawList* drawList);
 		void AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands);
 		void EndCameraDrag();
 		void EndGizmoDrag(EditorContext& context);
@@ -77,7 +88,13 @@ namespace Strata
 		CameraDrag m_CameraDrag = CameraDrag::None;
 		bool m_CursorLocked = false; // By fly mode
 		bool m_GameInputEnabled = false;
+		bool m_GameOwnsMouse = false; // The game locked the cursor while the game view has the input: ImGui ignores the mouse
+		double m_MouseHintUntil = 0.0; // ImGui's time until which the way out shows (c_MouseHint)
+		bool m_MouseHintShown = false;
 		std::optional<TransformDrag> m_GizmoDrag;
+		std::string m_GameWindowNotice; // Rebuilt only when the game's window requests change
+		uint64_t m_GameWindowNoticeVersion = 0;
+		bool m_GameWindowNoticeShown = false;
 	};
 
 }

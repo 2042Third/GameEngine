@@ -72,6 +72,90 @@ namespace Strata
 			return { { "avgMs", stats.Average }, { "p50Ms", stats.P50 }, { "p95Ms", stats.P95 }, { "maxMs", stats.Max } };
 		}
 
+		// Where play.start is while the scripts build first.
+		struct PlayBuildState
+		{
+			uint64_t WaitingFor = 0;   // The build that has to finish before anything else happens (0: none)
+			uint64_t OwnBuild = 0;     // The build play.start started itself (it starts at most one)
+			std::string Reason;        // Why it built
+		};
+
+		// Plays once the build play.start waited for finished: a failed build (or a module that cannot load) fails play.start
+		// with its first diagnostics and asks the UI for the Problems panel; a cancelled one only ends play.start (Cancelled).
+		std::optional<EditorCommandResult> FinishPlayBuild(EditorContext& context, PlayBuildState& state)
+		{
+			const ScriptBuildResult& result = context.GetScriptBuilder().GetLastResult();
+			const ScriptBuildLoad& load = context.GetLastScriptBuildLoad();
+			if (context.GetPlayBuildID() == state.OwnBuild)
+				context.ClearPlayBuild();
+			if (result.ID != state.WaitingFor)
+				return EditorCommandResult::Fail(fmt::format("The result of script build {} is no longer available (see script.status)", state.WaitingFor));
+			if (result.Cancelled)
+				return EditorCommandResult::Fail("The script build play.start waited for was cancelled, so the game does not play", EditorCommandError::Cancelled);
+			if (!result.Success)
+			{
+				context.RequestProblemsPanel();
+				return EditorCommandResult::Fail(fmt::format("The scripts must be built before playing, and the build failed: {}", result.Error));
+			}
+			if (load.BuildID == result.ID && !load.Loaded)
+			{
+				context.RequestProblemsPanel();
+				return EditorCommandResult::Fail(fmt::format("The scripts were built, but their module could not be loaded: {}", load.Error));
+			}
+
+			// A build someone else started may have left the scripts in need of another (sources changed meanwhile): play.start
+			// builds once itself.
+			if (state.OwnBuild == 0)
+			{
+				if (std::optional<std::string> reason = context.GetPlayBuildReason())
+				{
+					std::string error;
+					if (!context.StartPlayBuild(&error))
+						return EditorCommandResult::Fail(error);
+					state.Reason = std::move(*reason);
+					state.OwnBuild = state.WaitingFor = context.GetPlayBuildID();
+					ST_INFO("Building the scripts before playing: {}", state.Reason);
+					return std::nullopt;
+				}
+			}
+
+			std::string error;
+			if (!context.Play(&error))
+				return EditorCommandResult::Fail(error);
+			nlohmann::json value = DescribePlayState(context);
+			if (state.OwnBuild != 0)
+				value["built"] = { { "build", state.OwnBuild }, { "seconds", result.Seconds }, { "reason", state.Reason } };
+			return EditorCommandResult::Ok(std::move(value));
+		}
+
+		// play.start when the scripts need a build (or one runs): builds them (or waits for the running build), then plays.
+		EditorCommandResult StartPlayAfterBuild(EditorContext& context)
+		{
+			Ref<PlayBuildState> state = CreateRef<PlayBuildState>();
+			const ScriptBuilder& builder = context.GetScriptBuilder();
+			if (builder.IsRunning())
+			{
+				state->WaitingFor = builder.GetCurrentID();
+			}
+			else
+			{
+				state->Reason = context.GetPlayBuildReason().value_or(std::string());
+				std::string error;
+				if (!context.StartPlayBuild(&error))
+					return EditorCommandResult::Fail(fmt::format("The scripts must be built before playing ({}), and the build could not start: {}",
+						state->Reason, error));
+				state->OwnBuild = state->WaitingFor = context.GetPlayBuildID();
+				ST_INFO("Building the scripts before playing: {}", state->Reason);
+			}
+			return EditorCommandResult::Defer([state](EditorContext& pollContext) -> std::optional<EditorCommandResult>
+			{
+				const ScriptBuilder& pollBuilder = pollContext.GetScriptBuilder();
+				if (pollBuilder.IsRunning() && pollBuilder.GetCurrentID() == state->WaitingFor)
+					return std::nullopt;
+				return FinishPlayBuild(pollContext, *state);
+			});
+		}
+
 	}
 
 	namespace CommandUtils
@@ -360,10 +444,22 @@ namespace Strata
 		// Play mode
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "play.start", "Runs a copy of the scene with scripts, physics and audio. Changes made while playing are discarded by play.stop.",
-			ObjectSchema({}),
-			[](EditorContext& context, const nlohmann::json&)
+		registry.Register({ "play.start",
+			"Runs a copy of the scene with scripts, physics and audio. Changes made while playing are discarded by play.stop. When the project's "
+			"scripts need building first (their sources changed since the module was built, or scenes use scripts that are not built or "
+			"loaded), it builds them, then plays the new code: the answer comes once the build finished (a failed build fails play.start with "
+			"its first errors; script.status lists every diagnostic). A build already running is waited for. Returns the play state and, when it "
+			"built, built: {build, seconds, reason}.",
+			ObjectSchema({ { "build", BoolSchema("Build the scripts first when they need it (default true); false plays what is loaded") } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
 			{
+				CommandArguments arguments(parameters);
+				const bool build = arguments.GetBool("build", true);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				// A running scene refuses (Play says so) before anything is built.
+				if (build && !context.IsPlaying() && (context.GetScriptBuilder().IsRunning() || context.GetPlayBuildReason()))
+					return StartPlayAfterBuild(context);
 				std::string error;
 				if (!context.Play(&error))
 					return EditorCommandResult::Fail(error);

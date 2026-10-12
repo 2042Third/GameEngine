@@ -2,12 +2,14 @@
 #include <Strata/Core/EntryPoint.h>
 #include <Strata/Project/GameManifest.h>
 #include <Strata/Core/FrameProfiler.h>
+#include <Strata/Core/SaveFiles.h>
 #include <Strata/Renderer/GPUUploadQueue.h>
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/StagingPool.h>
 #include <Strata/Runtime/FramePerfLog.h>
 #include <Strata/Runtime/GameRenderer.h>
 #include <Strata/Runtime/GameRuntime.h>
+#include <Strata/Runtime/GameWindowService.h>
 
 namespace Strata
 {
@@ -27,6 +29,7 @@ namespace Strata
 		std::optional<uint64_t> MaxFrames;
 		std::optional<uint64_t> TextureBudget; // --asset-budget-mb: the GPU texture budget of the game's assets, in bytes
 		std::filesystem::path PerfLogPath;     // --perf-log: a CSV row per frame (FramePerfLog)
+		std::filesystem::path SaveDirectory;   // --save-directory: where the game keeps its save files (empty: the player's data)
 	};
 
 	// Runs the game of a manifest and, with a window, renders it every frame. Startup failures end the process with exit
@@ -45,11 +48,16 @@ namespace Strata
 			GameRuntimeOptions runtimeOptions;
 			// A game runs on the wall clock; runs of a fixed number of frames (--frames: checks, screenshots) keep every step.
 			runtimeOptions.TimeDilation = !m_Options.MaxFrames;
+			runtimeOptions.SaveFilesDirectory = m_Options.SaveDirectory;
 			if (m_Options.TextureBudget)
 			{
 				runtimeOptions.AssetBudgets = AssetManagerBase::GetDefaultResidencyBudgets();
 				runtimeOptions.AssetBudgets->GpuTextures = *m_Options.TextureBudget;
 			}
+			// The game's display options (scripts' Game::SetWindowMode, SetResolution, SetVSync) change this window, or nothing
+			// in a headless run; from the game's first script call on.
+			m_WindowService = CreateScope<GameWindowService>(Application::Get().GetWindow());
+			m_WindowProvider = CreateScope<EngineServices::ScopedProvider<IGameWindow>>(*m_WindowService);
 			std::string error;
 			m_Runtime = GameRuntime::Create(m_Options.ManifestPath, &error, runtimeOptions);
 			if (!m_Runtime)
@@ -71,6 +79,8 @@ namespace Strata
 			StopPerfLog();
 			m_Renderer.reset();
 			m_Runtime.reset();
+			m_WindowProvider.reset();
+			m_WindowService.reset();
 		}
 
 		void OnUpdate(Timestep timestep) override
@@ -104,6 +114,8 @@ namespace Strata
 				Application::Get().Close();
 				return;
 			}
+			// Window changes the game asked for during its update; the swapchain follows at the next frame.
+			m_WindowService->ApplyRequests();
 			if (m_Renderer)
 			{
 				// Frames of minimized windows are skipped by the application; this frame has a back buffer, which the GPU waits
@@ -204,6 +216,8 @@ namespace Strata
 		}
 	private:
 		RuntimeOptions m_Options;
+		Scope<GameWindowService> m_WindowService;
+		Scope<EngineServices::ScopedProvider<IGameWindow>> m_WindowProvider; // After the service: ends first
 		Scope<GameRuntime> m_Runtime;
 		Scope<GameRenderer> m_Renderer;
 		Scope<FramePerfLog> m_PerfLog;
@@ -231,13 +245,13 @@ namespace Strata
 		else
 			options.ManifestPath = GameManifest::FindForExecutable(Platform::GetExecutablePath());
 
-		// The manifest names the game, which also names its log and data directory.
+		// The manifest names the game, which also names its data directory (logs, saves: SaveFiles::MakeGameDirectoryName).
 		std::string error;
 		std::optional<GameManifest> manifest = options.ManifestPath.empty() ? std::nullopt : GameManifest::Load(options.ManifestPath, &error);
 		const std::string name = manifest ? manifest->Name : std::string("Strata Game");
 
 		LogSpecification logSpecification;
-		logSpecification.LogFile = Platform::GetUserDataDirectory(name) / "Logs" / "Game.log";
+		logSpecification.LogFile = Platform::GetUserDataDirectory(SaveFiles::MakeGameDirectoryName(name)) / "Logs" / "Game.log";
 		Log::Init(logSpecification);
 		ST_INFO("{} (Strata {}, {})", name, c_EngineVersion, Platform::GetName());
 		if (!manifest)
@@ -308,6 +322,18 @@ namespace Strata
 				return nullptr;
 			}
 			options.PerfLogPath = FileSystem::FromUTF8(*perfLog);
+		}
+		if (commandLine.HasFlag("--save-directory") || commandLine.GetOption("--save-directory"))
+		{
+			// Saves somewhere else than the player's data directory: tests and tools that must not touch it.
+			const std::optional<std::string> saves = commandLine.GetOption("--save-directory");
+			if (!saves || saves->empty())
+			{
+				ST_CRITICAL("--save-directory needs the folder to keep the game's save files in");
+				return nullptr;
+			}
+			options.SaveDirectory = FileSystem::FromUTF8(*saves);
+			ST_INFO("Keeping the game's save files in {}", FileSystem::ToUTF8(options.SaveDirectory));
 		}
 		return new RuntimeApplication(specification, std::move(options));
 	}

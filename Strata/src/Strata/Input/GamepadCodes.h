@@ -25,6 +25,8 @@ namespace Strata
 		DPadLeft = 14
 	};
 
+	// Sticks range from -1 to 1 with +X to the right and +Y up (the window backend flips GLFW's +Y down); triggers range
+	// from 0 (released) to 1 (fully pressed).
 	enum class GamepadAxis : uint8_t
 	{
 		LeftX = 0,
@@ -38,5 +40,11 @@ namespace Strata
 	constexpr uint32_t c_MaxGamepads = 4;
 	constexpr uint32_t c_GamepadButtonCount = 15;
 	constexpr uint32_t c_GamepadAxisCount = 6;
+
+	// The smallest value an axis takes: -1 for the sticks, 0 for the triggers.
+	constexpr float GetGamepadAxisMinimum(GamepadAxis axis)
+	{
+		return axis == GamepadAxis::LeftTrigger || axis == GamepadAxis::RightTrigger ? 0.0f : -1.0f;
+	}
 
 }

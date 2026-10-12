@@ -1155,6 +1155,86 @@
 			},
 			{
 				"Components": {
+					"CharacterController": {
+						"Enabled": true,
+						"GravityScale": 1.5,
+						"Height": 1.6,
+						"Layer": 2,
+						"MaxSlopeDegrees": 50,
+						"PushStrength": 150,
+						"Radius": 0.35,
+						"StepHeight": 0.4
+					},
+					"Name": {
+						"Name": "Walker"
+					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "CharacterFeatures",
+								"Fields": {}
+							}
+						]
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							-6,
+							0,
+							-7
+						]
+					}
+				},
+				"ID": "F7E000000000002B"
+			},
+			{
+				"Components": {
+					"CharacterController": {
+						"Enabled": false,
+						"GravityScale": 1,
+						"Height": 1.8,
+						"Layer": 0,
+						"MaxSlopeDegrees": 45,
+						"PushStrength": 200,
+						"Radius": 0.3,
+						"StepHeight": 0.35
+					},
+					"Name": {
+						"Name": "Idle Walker"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							-2,
+							0,
+							-7
+						]
+					}
+				},
+				"ID": "F7E000000000002C"
+			},
+			{
+				"Components": {
 					"AudioSource": {
 						"Clip": "F7A0000000000007",
 						"Loop": true,
@@ -2511,6 +2591,23 @@
 				"MaxBodies": 1024,
 				"MaxBodyPairs": 4096,
 				"MaxContactConstraints": 2048
+			},
+			"PhysicsLayers": {
+				"Names": {
+					"2": "Characters",
+					"3": "Triggers",
+					"7": "Debris"
+				},
+				"NoCollisions": [
+					[
+						6,
+						7
+					],
+					[
+						7,
+						7
+					]
+				]
 			}
 		}
 	},

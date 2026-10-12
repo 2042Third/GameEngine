@@ -2,6 +2,9 @@
 
 #include <imgui_internal.h>
 
+#include <algorithm>
+#include <charconv>
+#include <cstring>
 #include <unordered_map>
 
 namespace Strata::UI
@@ -51,6 +54,15 @@ namespace Strata::UI
 	void ItemProbe::Clear()
 	{
 		s_Items.clear();
+	}
+
+	NumberedProbeKey::NumberedProbeKey(std::string_view prefix, size_t number)
+	{
+		m_Size = std::min(prefix.size(), c_MaxPrefix);
+		std::memcpy(m_Text, prefix.data(), m_Size);
+		// The buffer has room for every size_t after the prefix.
+		const std::to_chars_result result = std::to_chars(m_Text + m_Size, m_Text + sizeof(m_Text), number);
+		m_Size = static_cast<size_t>(result.ptr - m_Text);
 	}
 
 }
