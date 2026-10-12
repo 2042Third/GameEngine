@@ -224,6 +224,13 @@ namespace Strata
 		float ReachScale = 0.0f;
 	};
 
+	// An entity drawn at another world transform than the scene has (ISkinningPoses::GetRenderTransforms).
+	struct RenderTransform
+	{
+		entt::entity Entity = entt::null;
+		glm::mat4 World = glm::mat4(1.0f);
+	};
+
 	// The poses animators publish (the Animation module's system in Play mode; the editor's pose preview), which renderers
 	// skin meshes with (SkinComponent): the renderer never includes the Animation module. Renderers read them in
 	// RenderScene::Sync and report which animators' meshes they drew, so animators that only animate while seen
@@ -240,6 +247,13 @@ namespace Strata
 		virtual uint64_t GetPosesVersion() const = 0;
 		// A renderer drew (in its view or its shadows) a mesh this animator poses, or would have, had it been posed.
 		virtual void ReportVisible(entt::entity animator) = 0;
+
+		// Entities renderers draw at other world transforms than the scene's: a provider that may not change the scene (the
+		// editor's pose preview of a scene that does not play) places attachments (AttachToJointComponent), and the meshes
+		// under them, at their joints this way. Valid until the provider changes them; the version changes whenever they do.
+		// None by default: the animation system of a playing scene moves attachments in the scene.
+		virtual std::span<const RenderTransform> GetRenderTransforms() const { return {}; }
+		virtual uint64_t GetRenderTransformsVersion() const { return 0; }
 	};
 
 	// Commands and queries of the animators of a playing scene (the Animation module's system), for code that may not

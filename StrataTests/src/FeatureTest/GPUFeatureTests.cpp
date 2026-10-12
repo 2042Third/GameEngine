@@ -112,8 +112,11 @@ TEST_SUITE("GPU.FeatureTest")
 		const Ref<Scene> scene = project.LoadStartScene();
 		const Entity rig = scene->FindEntityByName("Arm Rig");
 		const Entity arm = scene->FindEntityByName("Arm");
+		// A cube on the "Arm Tip", which is attached to the wrist (AttachToJoint).
+		const Entity tipMarker = scene->FindEntityByName("Tip Marker");
 		REQUIRE(rig.IsValid());
 		REQUIRE(arm.IsValid());
+		REQUIRE(tipMarker.IsValid());
 
 		// The arm from the front: it stands 1 unit tall on the rig, its elbow halfway up.
 		constexpr uint32_t c_Size = 128;
@@ -131,11 +134,15 @@ TEST_SUITE("GPU.FeatureTest")
 		};
 		const glm::uvec2 upright = ProjectToPixel(camera, origin + glm::vec3(0.0f, 0.85f, 0.08f), c_Size, c_Size);
 		const glm::uvec2 bent = ProjectToPixel(camera, origin + glm::vec3(-0.35f, 0.5f, 0.08f), c_Size, c_Size);
+		// The tip marker's side beyond the wrist: above the upright arm, left of the bent one.
+		const glm::uvec2 uprightTip = ProjectToPixel(camera, origin + glm::vec3(0.0f, 1.05f, 0.1f), c_Size, c_Size);
+		const glm::uvec2 bentTip = ProjectToPixel(camera, origin + glm::vec3(-0.545f, 0.5f, 0.1f), c_Size, c_Size);
 
 		// Not playing, nothing poses the arm: the bind pose, the forearm upright.
 		render();
 		CHECK(renderer.GetEntityAt(*scene, upright.x, upright.y) == arm);
 		CHECK(renderer.GetEntityAt(*scene, bent.x, bent.y) != arm);
+		CHECK(renderer.GetEntityAt(*scene, uprightTip.x, uprightTip.y) == tipMarker);
 		CHECK(renderer.GetStats().SkinnedInstances == 0);
 
 		// Half a second into Wave the elbow is bent 90 degrees: the forearm points along -X.
@@ -151,6 +158,17 @@ TEST_SUITE("GPU.FeatureTest")
 		CHECK(renderer.GetEntityAt(*scene, bent.x, bent.y) == arm);
 		CHECK(renderer.GetEntityAt(*scene, upright.x, upright.y) != arm);
 		CHECK(renderer.GetStats().SkinnedInstances >= 1);
+		// The attachment follows the wrist in the preview too (where it is drawn; the scene keeps its transform).
+		CHECK(renderer.GetEntityAt(*scene, bentTip.x, bentTip.y) == tipMarker);
+		CHECK(renderer.GetEntityAt(*scene, uprightTip.x, uprightTip.y) != tipMarker);
+		const Entity armTip = scene->FindEntityByName("Arm Tip");
+		REQUIRE(armTip.IsValid());
+		CHECK(armTip.GetComponent<TransformComponent>().Translation == glm::vec3(0.0f, 1.0f, 0.0f));
+
+		// Without the preview it is back at its own transform.
+		REQUIRE(preview.Clear(rig));
+		render();
+		CHECK(renderer.GetEntityAt(*scene, uprightTip.x, uprightTip.y) == tipMarker);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

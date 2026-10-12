@@ -205,6 +205,7 @@ namespace Strata
 		m_SyncCount++;
 		m_SyncUpdates = 0;
 		entt::registry& registry = m_Scene->GetRegistry();
+		UpdateRenderTransforms(m_Scene->GetService<ISkinningPoses>());
 
 		m_PendingScratch.clear();
 		m_PendingScratch.swap(m_Pending);
@@ -222,7 +223,7 @@ namespace Strata
 				if (proxy == c_InvalidIndex)
 					continue;
 				const WorldTransformComponent& world = registry.get<WorldTransformComponent>(entity);
-				UpdateProxyTransform(proxy, world.Matrix, world.ActiveInHierarchy, false);
+				UpdateProxyTransform(proxy, GetDrawnTransform(entity, world), world.ActiveInHierarchy, false);
 			}
 		}
 		else
@@ -255,9 +256,52 @@ namespace Strata
 			if (entity == entt::null)
 				continue;
 			const WorldTransformComponent& world = registry.get<WorldTransformComponent>(entity);
-			UpdateProxyTransform(proxy, world.Matrix, world.ActiveInHierarchy, false);
+			UpdateProxyTransform(proxy, GetDrawnTransform(entity, world), world.ActiveInHierarchy, false);
 		}
 		m_Stats.FullRefreshes++;
+	}
+
+	const glm::mat4& RenderScene::GetDrawnTransform(entt::entity entity, const WorldTransformComponent& world) const
+	{
+		if (!m_RenderTransforms.empty())
+		{
+			if (auto it = m_RenderTransforms.find(entity); it != m_RenderTransforms.end())
+				return it->second;
+		}
+		return world.Matrix;
+	}
+
+	void RenderScene::UpdateRenderTransforms(const ISkinningPoses* poses)
+	{
+		const uint64_t version = poses ? poses->GetRenderTransformsVersion() : 0;
+		if (poses == m_RenderTransformsProvider && version == m_RenderTransformsVersion)
+			return;
+		m_RenderTransformsProvider = poses;
+		m_RenderTransformsVersion = version;
+		std::unordered_map<entt::entity, glm::mat4> previous = std::move(m_RenderTransforms);
+		m_RenderTransforms.clear();
+		if (poses)
+		{
+			for (const RenderTransform& transform : poses->GetRenderTransforms())
+				m_RenderTransforms[transform.Entity] = transform.World;
+		}
+		// Proxies the previous list placed go back to their entities' transforms, those of the new one move.
+		const entt::registry& registry = m_Scene->GetRegistry();
+		auto place = [&](entt::entity entity)
+		{
+			const uint32_t proxy = FindProxy(entity);
+			if (proxy == c_InvalidIndex)
+				return;
+			const WorldTransformComponent& world = registry.get<WorldTransformComponent>(entity);
+			UpdateProxyTransform(proxy, GetDrawnTransform(entity, world), world.ActiveInHierarchy, false);
+		};
+		for (const auto& entry : previous)
+		{
+			if (!m_RenderTransforms.contains(entry.first))
+				place(entry.first);
+		}
+		for (const auto& entry : m_RenderTransforms)
+			place(entry.first);
 	}
 
 	bool RenderScene::UpdateProxyFromEntity(entt::entity entity)
@@ -316,13 +360,13 @@ namespace Strata
 		}
 
 		if (!changed)
-			return UpdateProxyTransform(proxy, world.Matrix, world.ActiveInHierarchy, false);
+			return UpdateProxyTransform(proxy, GetDrawnTransform(entity, world), world.ActiveInHierarchy, false);
 
 		// A new proxy, mesh or material: placement, instance slots and their data all follow (and a Skin proxy's pose, which
 		// depends on its mesh).
 		if ((m_Flags[proxy] & RenderProxyFlags::Skin) != 0)
 			m_SkinDirty = true;
-		m_Transforms[proxy] = RenderData::AffineTransform::FromMatrix(world.Matrix);
+		m_Transforms[proxy] = RenderData::AffineTransform::FromMatrix(GetDrawnTransform(entity, world));
 		m_Flags[proxy] = world.ActiveInHierarchy ? (m_Flags[proxy] | RenderProxyFlags::Active) : (m_Flags[proxy] & ~RenderProxyFlags::Active);
 		UpdateProxyPlacement(proxy);
 		RebuildInstances(proxy);
@@ -1126,6 +1170,13 @@ namespace Strata
 
 		const entt::registry& registry = m_Scene->GetRegistry();
 		const ISkinningPoses* poses = m_Scene->GetService<ISkinningPoses>();
+		// Entities the poses' provider draws elsewhere than the scene has them (ISkinningPoses::GetRenderTransforms).
+		std::unordered_map<entt::entity, glm::mat4> renderTransforms;
+		if (poses)
+		{
+			for (const RenderTransform& transform : poses->GetRenderTransforms())
+				renderTransforms[transform.Entity] = transform.World;
+		}
 		uint32_t expected = 0;
 		uint32_t indexed = 0;
 		uint32_t skins = 0;
@@ -1141,7 +1192,9 @@ namespace Strata
 			if (m_MeshHandles[proxy] != renderer.Mesh || m_MaterialOverrides[proxy] != renderer.Material
 				|| ((m_Flags[proxy] & RenderProxyFlags::CastShadows) != 0) != renderer.CastShadows)
 				return fail(fmt::format("the proxy of entity {} has another mesh, material or shadow setting than its MeshRendererComponent", static_cast<uint32_t>(entity)));
-			if (!SameBytes(m_Transforms[proxy], RenderData::AffineTransform::FromMatrix(world.Matrix))
+			const auto drawnAt = renderTransforms.find(entity);
+			const glm::mat4& drawn = drawnAt != renderTransforms.end() ? drawnAt->second : world.Matrix;
+			if (!SameBytes(m_Transforms[proxy], RenderData::AffineTransform::FromMatrix(drawn))
 				|| ((m_Flags[proxy] & RenderProxyFlags::Active) != 0) != world.ActiveInHierarchy)
 				return fail(fmt::format("the proxy of entity {} has another world transform or activity than the entity", static_cast<uint32_t>(entity)));
 
@@ -1177,7 +1230,7 @@ namespace Strata
 					return fail(fmt::format("the palette of entity {} is stale", static_cast<uint32_t>(entity)));
 			}
 
-			const glm::mat4 matrix = world.Matrix;
+			const glm::mat4 matrix = drawn;
 			const float determinant = glm::determinant(glm::mat3(matrix));
 			const MeshEntry* mesh = meshSlot != c_InvalidIndex ? &m_Meshes[meshSlot] : nullptr;
 			const bool layoutKnown = mesh && mesh->LayoutKnown;

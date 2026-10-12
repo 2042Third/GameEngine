@@ -283,9 +283,10 @@ namespace Strata
 			} });
 
 		registry.Register({ "animation.preview",
-			"Shows an animator of the edited scene posed while the scene does not play (the viewport and viewport.capture show it), without changing "
-			"the scene: a state of its controller, a clip, or what it plays on start, at a time in seconds. Answers once this request's pose is shown (its "
-			"assets loaded). stop: true ends the entity's preview (or every preview without an entity).",
+			"Shows an animator of the edited scene posed while the scene does not play (the viewport and viewport.capture show it, skinned meshes "
+			"and the parts attached to joints alike), without changing the scene: a state of its controller, a clip, or what it plays on start, at a "
+			"time in seconds. Answers once this request's pose is shown (its assets loaded). stop: true ends the entity's preview (or every preview "
+			"without an entity).",
 			ObjectSchema({ { "entity", EntitySchema("An entity with an Animator component") },
 				{ "state", StringSchema("A state of the animator's controller (default: what it plays on start)") },
 				{ "clip", AssetSchema("An animation clip to show instead of a state") },

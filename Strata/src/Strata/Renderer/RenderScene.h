@@ -25,6 +25,7 @@ namespace Strata
 	class Mesh;
 	class Scene;
 	struct MeshSkinBinding;
+	struct WorldTransformComponent;
 
 	// Flags of a render proxy (RenderScene::GetProxyFlags).
 	namespace RenderProxyFlags
@@ -297,6 +298,11 @@ namespace Strata
 		void DestroyProxy(uint32_t proxy);
 		// Reads the world transform and activity; returns whether they differed from the proxy's.
 		bool UpdateProxyTransform(uint32_t proxy, const glm::mat4& world, bool active, bool force);
+		// Where the entity is drawn: its world transform, or the one the poses' provider draws it at instead
+		// (ISkinningPoses::GetRenderTransforms, read by UpdateRenderTransforms).
+		const glm::mat4& GetDrawnTransform(entt::entity entity, const WorldTransformComponent& world) const;
+		// Takes the provider's render transforms when they changed and places the proxies they add, move or give back.
+		void UpdateRenderTransforms(const ISkinningPoses* poses);
 		// Bounds, index membership and flags from the proxy's transform, mesh layout and activity.
 		void UpdateProxyPlacement(uint32_t proxy);
 		// Counts the proxy as updated by the current sync (once).
@@ -400,6 +406,11 @@ namespace Strata
 			PoseInputs Inputs;
 		};
 		std::vector<PoseWork> m_PoseWork;
+		// Entities the poses' provider draws elsewhere than the scene has them (the editor's pose preview: attachments at
+		// their joints), as of its render transforms' version.
+		std::unordered_map<entt::entity, glm::mat4> m_RenderTransforms;
+		const ISkinningPoses* m_RenderTransformsProvider = nullptr;
+		uint64_t m_RenderTransformsVersion = 0;
 		// What the palettes were last computed against (UpdateSkinnedPoses skips the pass while all of it is unchanged).
 		bool m_SkinDirty = false;
 		const ISkinningPoses* m_PosesProvider = nullptr;

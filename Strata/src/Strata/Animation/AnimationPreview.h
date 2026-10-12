@@ -10,6 +10,8 @@
 #include <glm/glm.hpp>
 
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -19,11 +21,13 @@ namespace Strata
 
 	class Asset;
 	class Scene;
+	struct AttachToJointComponent;
 
 	// Poses of animators in a scene that does not play (the editor's edited scene), for viewports and captures: the scene
-	// service ISkinningPoses of that scene while the preview exists, so its skinned meshes show the poses asked for. A pose
+	// service ISkinningPoses of that scene while the preview exists, so its skinned meshes show the poses asked for, and its
+	// attachments (AttachToJointComponent) and the meshes under them are drawn at their joints (GetRenderTransforms). A pose
 	// is a state of the animator's controller, a clip, or what the animator plays on start, at a time; nothing in the scene
-	// changes (no transforms move, no root motion, no events, no attachments). Main thread only.
+	// changes (no transforms move, no root motion, no events). Main thread only.
 	class AnimationPreview final : public ISkinningPoses
 	{
 	public:
@@ -60,13 +64,18 @@ namespace Strata
 		size_t GetCount() const { return m_Entries.size(); }
 
 		// Requests the assets of every preview and computes the poses whose assets arrived, again when the request, the
-		// component's assets or an asset object (a reload) changed. Once per frame, before rendering.
+		// component's assets or an asset object (a reload) changed, then where the attachments are drawn. Once per frame,
+		// before rendering.
 		void Update();
 		Status GetStatus(Entity animator, std::string* outError = nullptr) const;
 
 		bool GetPose(entt::entity animator, SkeletonPose& outPose) const override;
 		uint64_t GetPosesVersion() const override { return m_PosesVersion; }
 		void ReportVisible(entt::entity) override {}
+		// The mesh renderers of the posed animators' attachments, and of what is under them, at the attachments' joints: each
+		// moved by the change from where the scene has its attachment to the animator's world transform times the joint's pose.
+		std::span<const RenderTransform> GetRenderTransforms() const override { return m_RenderTransforms; }
+		uint64_t GetRenderTransformsVersion() const override { return m_RenderTransformsVersion; }
 	private:
 		struct Entry
 		{
@@ -87,6 +96,10 @@ namespace Strata
 
 		void UpdateEntry(entt::entity handle, Entry& entry);
 		void Fail(Entry& entry, std::string error);
+		// Where an attachment is drawn: its animator's world transform times its joint's pose, while the animator is posed.
+		std::optional<glm::mat4> GetAttachmentWorld(Entity entity, const AttachToJointComponent& attachment) const;
+		// Computes the render transforms again (GetRenderTransforms); a new list gets a new version.
+		void UpdateRenderTransforms();
 	private:
 		Scene& m_Scene;
 		bool m_Registered = false;
@@ -94,6 +107,8 @@ namespace Strata
 		uint64_t m_PosesVersion = 1;
 		uint64_t m_NextVersion = 1;
 		std::vector<JointPose> m_Scratch;
+		std::vector<RenderTransform> m_RenderTransforms;
+		uint64_t m_RenderTransformsVersion = 1;
 	};
 
 }

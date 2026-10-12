@@ -14,6 +14,7 @@
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/RenderScene.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneServices.h>
 
@@ -195,6 +196,26 @@ TEST_SUITE("Editor.Animation")
 		const glm::vec3 wrist = glm::vec3(pose.Joints[3][3]);
 		CHECK(wrist.x == doctest::Approx(-0.5f).epsilon(1e-3));
 		CHECK(wrist.y == doctest::Approx(0.5f).epsilon(1e-3));
+		// An attachment is drawn at its joint, and what is under it with it (the render scene's proxies); the scene keeps
+		// their transforms.
+		const Entity armTip = scene->FindEntityByName("Arm Tip");
+		const Entity tipMarker = scene->FindEntityByName("Tip Marker");
+		REQUIRE(armTip);
+		REQUIRE(tipMarker);
+		RenderScene& renderScene = RenderScene::Get(*scene);
+		renderScene.Sync(nullptr);
+		const uint32_t markerProxy = renderScene.FindProxy(tipMarker.GetHandle());
+		REQUIRE(markerProxy != RenderScene::c_InvalidIndex);
+		const glm::mat4 drawnAtWrist = scene->GetWorldTransform(rig) * pose.Joints[3] * glm::inverse(scene->GetWorldTransform(armTip)) * scene->GetWorldTransform(tipMarker);
+		const glm::mat4 drawn = renderScene.GetWorldTransform(markerProxy);
+		for (int column = 0; column < 4; column++)
+		{
+			for (int row = 0; row < 3; row++)
+				CHECK(drawn[column][row] == doctest::Approx(drawnAtWrist[column][row]).epsilon(1e-4));
+		}
+		CHECK(armTip.GetComponent<TransformComponent>().Translation == glm::vec3(0.0f, 1.0f, 0.0f));
+		std::string validation;
+		CHECK_MESSAGE(renderScene.Validate(&validation), validation);
 		CHECK_FALSE(harness.Context.IsSceneModified());
 		CHECK(harness.Context.GetUndoStack().GetHistory().empty());
 
@@ -213,6 +234,9 @@ TEST_SUITE("Editor.Animation")
 		CHECK(poses->GetPose(rig.GetHandle(), pose));
 		harness.Run("animation.preview", { { "stop", true } });
 		CHECK_FALSE(poses->GetPose(rig.GetHandle(), pose));
+		renderScene.Sync(nullptr);
+		CHECK(glm::vec3(renderScene.GetWorldTransform(markerProxy)[3]) == glm::vec3(scene->GetWorldTransform(tipMarker)[3]));
+		CHECK_MESSAGE(renderScene.Validate(&validation), validation);
 
 		// Another scene starts without previews.
 		harness.Run("scene.new");

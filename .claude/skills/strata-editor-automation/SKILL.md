@@ -234,7 +234,8 @@ component.set {"entity": "<root id>", "component": "Animator",
 animation.setController {"controller": "Animations/Hero.stanimator", "states": [...]}
                         (replaces the sections given; one undo step)
 animation.preview {"entity": "<root id>", "state": "Run", "time": 0.25}
-                  (edit mode: the viewport and captures show the pose; answers once this pose shows)
+                  (edit mode: the viewport and captures show the pose, attached parts included;
+                   answers once this pose shows)
 animation.preview {"stop": true}
 ```
 

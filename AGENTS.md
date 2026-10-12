@@ -1017,11 +1017,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   | entity}` (a model's skeleton and clips, a skeleton's joints, a clip's channels, a controller's graph; an animator's
   assets and, while playing, its state and parameters) and `animation.preview {entity, state?, clip?, time?, stop?}`:
   poses of the edited scene's animators through the `EditorContext`'s `AnimationPreview` (the edited scene's
-  `ISkinningPoses` while it does not play), which change no scene data and are dropped with the scene; the command
-  answers once its own request's pose shows. The Asset tab draws skeletons, clips and controllers
-  (`UI/AnimationAssetViews`: controllers as editable tables, one undo step per edit, whose fields never get narrower
-  than their content needs: a narrow tab scrolls the table sideways); the Inspector shows a playing animator's state and
-  parameters.
+  `ISkinningPoses` while it does not play; attachments are drawn at their joints through render transforms), which change
+  no scene data and are dropped with the scene; the command answers once its own request's pose shows. The Asset tab
+  draws skeletons, clips and controllers (`UI/AnimationAssetViews`: controllers as editable tables, one undo step per
+  edit, whose fields never get narrower than their content needs: a narrow tab scrolls the table sideways); the
+  Inspector shows a playing animator's state and parameters.
 - **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person
   would: `input.key {key, action: tap|press|release, frames, wait}`, `input.mouseButton {button, action, frames, wait}`,
   `input.mouseMove {position, wait}` (pixels from the game view's top-left corner), `input.scroll {delta, wait}`,
@@ -1102,8 +1102,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `ShadowMesh.vert`, which every pass of a skinned mesh uses (the prepass and the forward pass must agree to the bit).
   Unskinned meshes keep their pipelines, data and uploads: anything that adds skinning work must cost unskinned scenes
   nothing (`RenderScene::HasSkinProxies`). Physics' mesh colliders use the bind pose; the entity-ID buffer (picking,
-  outlines) shows the pose. Every skin influence must name a joint of the skin, also one without weight (the shaders
-  read all four palette entries).
+  outlines) shows the pose. Every skin influence must name a joint of the skin, also one without weight (the shaders read
+  all four palette entries). A poses provider that may not change the scene (the editor's pose preview) draws
+  attachments at their joints through render transforms (`ISkinningPoses::GetRenderTransforms`), never by writing
+  transforms.
 - Point and spot lights are frustum culled on the CPU, ranked by relevance (projected size of their
   range) and capped at `MaxLights`; `Scene/LightClusters.comp` then lists the lights reaching each
   cluster of a 16x9x24 froxel grid (exponential depth slices) and `Forward.frag` loops only over its
