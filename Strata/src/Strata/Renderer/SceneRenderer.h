@@ -386,6 +386,7 @@ namespace Strata
 			std::array<float, RenderData::c_MaxCascades> CasterNearZ = {};
 			uint32_t Skipped = 0; // Submeshes beyond what a sort key can address
 			std::vector<entt::entity> Animators; // Animators of the chunk's visible Skin proxies (WhenVisible culling)
+			AABB Receivers; // The world bounds of the chunk's visible proxies (scenes with Skin proxies only)
 			uint32_t SkinnedInstances = 0;
 		};
 
@@ -463,8 +464,13 @@ namespace Strata
 		// The proxies in the view frustum and in the prefetch distance, and the assets they need; meshes whose bounds are
 		// unknown are needed as if in view.
 		void CullView(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum);
-		// Computes the cascades and finds the shadow casters of each; leaves ShadowParams.w at 0 without shadows.
-		void FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame);
+		// Computes the cascades and finds the shadow casters of each; leaves ShadowParams.w at 0 without shadows. Reports the
+		// animators of skinned casters out of view whose shadows can fall on what the view shows (CanShadowView).
+		void FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, RenderData::FrameConstants& frame);
+		// Whether a caster's shadow can fall on what the view shows within the shadow distance: the caster's box swept along
+		// the light, as far as the visible receivers' bounds reach (m_VisibleReceivers, clipped to the shadowed part of the
+		// view), is not separated from the view by any of `planes`. Conservative: it never rejects a shadow that shows.
+		bool CanShadowView(const AABB& caster, const glm::vec3& lightDirection, const AABB& receivers, std::span<const glm::vec4> planes) const;
 		// Resolves every mesh and material the frame uses, once each, at the priority its use asks for.
 		void ResolveAssets(RenderScene& renderScene);
 		// The view's draws in batches: opaque ones sorted by pipeline state and mesh, transparent ones back to front.
@@ -673,6 +679,7 @@ namespace Strata
 		uint64_t m_UploadedPaletteVersion = 0;
 		std::vector<std::pair<uint32_t, uint32_t>> m_PaletteChanges;
 		std::vector<entt::entity> m_VisibleAnimators; // Animators of the frame's visible Skin proxies, reported to ISkinningPoses
+		AABB m_VisibleReceivers; // The world bounds of the frame's visible proxies (scenes with Skin proxies only)
 		uint32_t m_FrameStamp = 0;
 		std::vector<uint32_t> m_ProxyStamps;        // Per proxy: m_FrameStamp when it is in the view this frame
 		std::vector<uint32_t> m_CasterStamps;       // Per proxy: m_FrameStamp when it is a shadow caster candidate

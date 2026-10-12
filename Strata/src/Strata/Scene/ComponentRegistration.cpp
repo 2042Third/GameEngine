@@ -378,7 +378,7 @@ namespace Strata
 			.Property("PlayOnStart", &AnimatorComponent::PlayOnStart, WithTooltip({}, "Starts playing when the scene starts"))
 			.Property("ApplyRootMotion", &AnimatorComponent::ApplyRootMotion, WithTooltip({}, "Moves the entity by the root joint's horizontal motion and turn"))
 			.EnumProperty("CullingMode", &AnimatorComponent::CullingMode, { { "AlwaysAnimate", 0, "Always Animate" }, { "WhenVisible", 1, "When Visible" } },
-				{ .Tooltip = "When Visible poses the skeleton only while a renderer draws a mesh it skins" });
+				{ .Tooltip = "When Visible poses the skeleton only while a renderer draws a mesh it skins or its shadow" });
 
 		ComponentRegistry::Register<AttachToJointComponent>("AttachToJoint")
 			.DisplayName("Attach To Joint")

@@ -1178,10 +1178,13 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   world transform, in the prepass (entity IDs and normals), the forward passes and the shadow cascades. Without a pose
   (no animator, nothing playing) a Skin proxy shows its bind pose through the ordinary pipelines. Every influence names
   a joint of the skin, also those without weight (the shaders read all four palette entries; `Mesh::CreateSkinned`
-  refuses others). Renderers report the animators of the Skin proxies in their view and their shadow casters
-  (`ISkinningPoses::ReportVisible`), which animators that animate only while seen read. Unskinned scenes do none of this
-  (`HasSkinProxies`). For GPU-driven rendering: a posed instance needs its palette range (`SkinPalette` and the mesh's
-  joint count) and its posed world bounds, both current after `Sync`.
+  refuses others). Renderers report the animators of the Skin proxies in their view (`ISkinningPoses::ReportVisible`),
+  which animators that animate only while seen read, and of the shadow casters out of view whose shadows can fall on
+  what the view shows (`SceneRenderer::CanShadowView`: the caster's box swept along the light as far as the visible
+  proxies' bounds reach, clipped to the part of the view within the shadow distance, must not be separated from that
+  part of the view by one of its planes; the cascades themselves reach far behind and beside the view). Unskinned scenes
+  do none of this (`HasSkinProxies`). For GPU-driven rendering: a posed instance needs its palette range (`SkinPalette`
+  and the mesh's joint count) and its posed world bounds, both current after `Sync`.
 - **Slots and instances**. Meshes and materials get dense slots shared by their users. Every submesh of a proxy whose
   mesh layout is known has an `InstanceData` (64 bytes: the 3x4 world matrix, the material slot, the entity ID, flags) in
   one array that persists between frames. Changes are logged by version (`GetInstanceChanges`, the latest 65,536), so
@@ -1295,11 +1298,12 @@ system, not to entities: a character's joints add no entities and no transform c
   entity's space, goes through its world transform (scale included) and its parent's inverse into the local translation,
   the turn multiplies its rotation, and the write is signaled (`MarkModified<TransformComponent>`). A character
   controller takes the delta there instead.
-- **Culling.** A `WhenVisible` animator computes its pose only when a renderer drew (or would have drawn, in its view or
-  its shadow cascades) a mesh it skins since the previous update (`ISkinningPoses::ReportVisible`, which `SceneRenderer`
-  calls for the animators of the Skin proxies it culled in), or when it has no pose yet; its time, state machine, events
-  and root motion go on, so gameplay does not depend on the camera. Unseen animators thus cost an update of their state
-  and no sampling; a renderer shows a re-entering animator's previous pose for one frame.
+- **Culling.** A `WhenVisible` animator computes its pose only when a renderer drew (or would have drawn) a mesh it
+  skins in its view, or that mesh's shadow on what its view shows, since the previous update
+  (`ISkinningPoses::ReportVisible`, which `SceneRenderer` calls for the animators of the Skin proxies it culled in and
+  of the casters out of view whose shadows can reach the view), or when it has no pose yet; its time, state machine,
+  events and root motion go on, so gameplay does not depend on the camera. Unseen animators thus cost an update of their
+  state and no sampling; a renderer shows a re-entering animator's previous pose for one frame.
 - **Attachments.** Each update the system writes an `AttachToJointComponent`'s local transform so that its world
   transform is the animator's world transform times the joint's pose: under the animator itself that is the pose, which
   does not change when the animator moves; elsewhere it goes through the parent's world transform. A placement equal to

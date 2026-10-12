@@ -1608,7 +1608,7 @@ namespace Strata
 		const auto extractionStart = std::chrono::steady_clock::now();
 		const Frustum frustum(frame.ViewProjection);
 		CullView(renderScene, camera, frustum);
-		FindShadowCasters(renderScene, camera, frame);
+		FindShadowCasters(renderScene, camera, frustum, frame);
 		ResolveAssets(renderScene);
 		GatherDraws(renderScene, camera);
 		GatherShadowDraws(renderScene, camera, frame);

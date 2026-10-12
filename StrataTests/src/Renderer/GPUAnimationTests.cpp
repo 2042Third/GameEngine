@@ -3,6 +3,9 @@
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Renderer/RenderScene.h"
 
+#include <algorithm>
+#include <cmath>
+
 using namespace Strata;
 using namespace Strata::Tests;
 
@@ -288,5 +291,70 @@ TEST_SUITE("GPU.Animation")
 		CHECK(RenderScene::Get(skinnedScene).GetStats().SkinProxies == 10);
 		CHECK(gpu.GetNewErrorCount() == 0);
 		skinnedScene.UnregisterService<ISkinningPoses>(poses);
+	}
+
+	TEST_CASE("Shadow casters out of view report their animators only when their shadows can fall into the view")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		MaterialProperties surface;
+		surface.BaseColor = glm::vec4(0.8f, 0.8f, 0.8f, 1.0f);
+		const AssetHandle material = assets.AddMaterial(surface);
+		const AssetHandle tube = assets.Add(CreateSkinnedTube({ .Joints = 3, .RingsPerJoint = 2, .Sides = 8, .JointLength = 1.0f, .Radius = 0.25f }), "Tube");
+
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		Entity floor = AddMesh(scene, BuiltinAssets::PlaneMesh, material, glm::vec3(0.0f), "Floor");
+		floor.GetComponent<TransformComponent>().Scale = glm::vec3(200.0f);
+		// A low sun shining toward -Z: the shadow of a character 3 units tall reaches 5.2 along -Z.
+		const glm::vec3 lightDirection = glm::normalize(glm::vec3(0.0f, -std::sin(glm::radians(30.0f)), -std::cos(glm::radians(30.0f))));
+		Entity sun = AddSun(scene, lightDirection, 3.0f);
+		sun.GetComponent<DirectionalLightComponent>().ShadowSoftness = 0.0f;
+		TestPoses poses;
+		auto addCharacter = [&](const glm::vec3& position, const char* name)
+		{
+			Entity character = AddMesh(scene, tube, material, position, name);
+			character.AddComponent<SkinComponent>().Animator = character.GetComponent<IDComponent>().ID;
+			poses.Poses[character.GetHandle()] = BentChain(3, 3);
+			return character;
+		};
+		// Just behind the camera: out of view itself, its shadow falls on the floor in front of the camera.
+		Entity shadowing = addCharacter(glm::vec3(0.0f, 0.0f, 1.5f), "Shadowing");
+		// 30 units behind the camera, and far beside the view: neither they nor their shadows can be seen, although the
+		// cascades (spheres around slices of the view, up to the shadow distance) take them in.
+		Entity behind = addCharacter(glm::vec3(0.0f, 0.0f, 30.0f), "Behind");
+		Entity beside = addCharacter(glm::vec3(40.0f, 0.0f, -20.0f), "Beside");
+		REQUIRE(scene.RegisterService<ISkinningPoses>(poses));
+
+		constexpr uint32_t size = 64;
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 1.6f, 0.0f), glm::vec3(0.0f, 0.0f, -3.0f));
+		SceneRenderer renderer;
+		renderer.SetViewportSize(size, size);
+		const ReadbackImage image = RenderToImage(renderer, scene, camera);
+		CHECK(renderer.GetStats().VisibleProxies == 1); // The floor
+		const uint32_t castInstances = renderer.GetStats().ShadowCasters;
+		auto reported = [&](Entity entity)
+		{
+			return std::find(poses.Reported.begin(), poses.Reported.end(), entity.GetHandle()) != poses.Reported.end();
+		};
+		CHECK(reported(shadowing));
+		CHECK_FALSE(reported(behind));
+		CHECK_FALSE(reported(beside));
+		// The shadow the report is for: on the floor in front of the camera.
+		const glm::uvec2 shaded = ProjectToPixel(camera, glm::vec3(0.0f, 0.0f, -3.0f), size);
+		const glm::uvec2 lit = ProjectToPixel(camera, glm::vec3(1.0f, 0.0f, -3.0f), size);
+		CHECK(Red(image, shaded) < Red(image, lit) / 2);
+		// The characters behind and beside are shadow casters of the cascades (each one gone, fewer instances are drawn into
+		// them): only the test of where their shadows can fall keeps their animators unreported.
+		for (Entity unseen : { behind, beside })
+		{
+			unseen.SetActive(false);
+			REQUIRE(renderer.Render(scene, camera));
+			CHECK(renderer.GetStats().ShadowCasters < castInstances);
+			unseen.SetActive(true);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+		scene.UnregisterService<ISkinningPoses>(poses);
 	}
 }
