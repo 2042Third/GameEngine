@@ -37,8 +37,8 @@ namespace Strata
 		enum class Status : uint8_t
 		{
 			None = 0, // No request for the entity
-			Waiting,  // Its assets are still loading
-			Posed,
+			Waiting,  // The latest request's pose is not computed yet (its assets are loading); an earlier pose may show meanwhile
+			Posed,    // The pose of the latest request is the one shown
 			Failed    // An asset did not load, or the request names what the animator does not have (GetStatus says why)
 		};
 

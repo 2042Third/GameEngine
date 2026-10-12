@@ -1309,8 +1309,9 @@ system, not to entities: a character's joints add no entities and no transform c
 - **Previews** (`AnimationPreview`): a scene that does not play has no animation system, so its skinned meshes show
   their bind pose. A preview offers `ISkinningPoses` for such a scene and poses the animators asked for (a state, a clip
   or what they play on start, at a time; `AnimatorSettings::Transitions` off, so the state machine holds it) once their
-  assets arrive, again when the request, the component's assets or an asset object (a reload) change; nothing in the
-  scene changes. The editor keeps one for its edited scene (`EditorContext::GetAnimationPreview`, `animation.preview`).
+  assets arrive, again when the request, the component's assets or an asset object (a reload) change; a request is
+  `Posed` only once its own pose is computed (an earlier pose shows meanwhile). Nothing in the scene changes. The editor
+  keeps one for its edited scene (`EditorContext::GetAnimationPreview`, `animation.preview`).
 - **Editor.** `animation.createController`, `animation.setController`, `animation.info` and `animation.preview` give
   agents the whole workflow without hand-written JSON (AGENTS.md, "Editor"); the Asset tab edits controllers as tables
   (`UI/AnimationAssetViews`; each field has a least width in font sizes, which is also its share of a wider table, and

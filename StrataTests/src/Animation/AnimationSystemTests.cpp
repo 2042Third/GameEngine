@@ -4,6 +4,7 @@
 #include "Animation/SkinnedMeshTestUtils.h"
 #include "Asset/AssetTestUtils.h"
 #include "Scene/SceneTestUtils.h"
+#include "Strata/Animation/AnimationPreview.h"
 #include "Strata/Animation/AnimationSystem.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/Log.h"
@@ -869,5 +870,61 @@ TEST_SUITE("Animation.System")
 		CHECK(renderScene.GetSkinAnimator(spawned) == third[0].GetHandle());
 		CHECK_MESSAGE(renderScene.Validate(&error), error);
 		CheckSceneCaches(*scene.SceneRef);
+	}
+}
+
+TEST_SUITE("Animation.Preview")
+{
+	TEST_CASE("A preview request is posed once its own pose is computed, the earlier pose showing meanwhile")
+	{
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		AssetManager::SetActive(manager);
+		AddAnimationTestAssets(*manager, false);
+		REQUIRE(manager->LoadAssetSync(UUID(c_SkeletonHandle)));
+		REQUIRE(manager->LoadAssetSync(UUID(c_WaveHandle)));
+		{
+			Scene scene("Preview");
+			Entity rig = scene.CreateEntity("Rig");
+			AnimatorComponent& animator = rig.AddComponent<AnimatorComponent>();
+			animator.Skeleton = UUID(c_SkeletonHandle);
+			animator.Clip = UUID(c_WaveHandle);
+			AnimationPreview preview(scene);
+			REQUIRE(preview.IsRegistered());
+
+			AnimationPreview::Request request;
+			request.Time = 0.5f;
+			REQUIRE(preview.Set(rig, request));
+			CHECK(preview.GetStatus(rig) == AnimationPreview::Status::Waiting);
+			preview.Update();
+			REQUIRE(preview.GetStatus(rig) == AnimationPreview::Status::Posed);
+			SkeletonPose pose;
+			REQUIRE(preview.GetPose(rig.GetHandle(), pose));
+			const uint64_t waveVersion = pose.Version;
+			CHECK(ElbowDegrees(pose.Joints[1]) == doctest::Approx(90.0f).epsilon(1e-3));
+
+			// A clip that is not loaded yet: the wave's pose still shows, but the new request is not posed.
+			request.Clip = UUID(c_WalkHandle);
+			request.Time = 0.25f;
+			REQUIRE(preview.Set(rig, request));
+			CHECK(preview.GetStatus(rig) == AnimationPreview::Status::Waiting);
+			preview.Update();
+			CHECK(preview.GetStatus(rig) == AnimationPreview::Status::Waiting);
+			REQUIRE(preview.GetPose(rig.GetHandle(), pose));
+			CHECK(pose.Version == waveVersion);
+
+			REQUIRE(manager->WaitForPendingLoads());
+			preview.Update();
+			CHECK(preview.GetStatus(rig) == AnimationPreview::Status::Posed);
+			REQUIRE(preview.GetPose(rig.GetHandle(), pose));
+			CHECK(pose.Version != waveVersion);
+			CHECK(ElbowDegrees(pose.Joints[1]) == doctest::Approx(45.0f).epsilon(1e-3));
+
+			// The same request again is a new request too: posed again by the next update.
+			REQUIRE(preview.Set(rig, request));
+			CHECK(preview.GetStatus(rig) == AnimationPreview::Status::Waiting);
+			preview.Update();
+			CHECK(preview.GetStatus(rig) == AnimationPreview::Status::Posed);
+		}
+		AssetManager::SetActive(nullptr);
 	}
 }

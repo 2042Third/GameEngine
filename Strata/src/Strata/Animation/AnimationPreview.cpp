@@ -61,8 +61,8 @@ namespace Strata
 		Entry& entry = m_Entries[animator.GetHandle()];
 		entry.Asked = request;
 		entry.Dirty = true;
-		if (entry.State != Status::Posed)
-			entry.State = Status::Waiting;
+		// Posed only once this request's pose is computed; an earlier pose keeps showing meanwhile (Version and Pose stay).
+		entry.State = Status::Waiting;
 		entry.Error.clear();
 		return true;
 	}
@@ -151,7 +151,8 @@ namespace Strata
 			loading = true;
 		if (loading)
 		{
-			entry.State = entry.Version != 0 ? entry.State : Status::Waiting;
+			// The pose computed before (if any) shows until the assets arrive; it is not the one asked for yet.
+			entry.State = Status::Waiting;
 			return;
 		}
 		const Ref<Skeleton> skeleton = std::static_pointer_cast<Skeleton>(skeletonAsset);
@@ -194,7 +195,7 @@ namespace Strata
 			switch (RequestAsset(*manager, clipHandle, AssetType::AnimationClip, clipAsset))
 			{
 				case Arrival::Ready: break;
-				case Arrival::Loading: entry.State = entry.Version != 0 ? entry.State : Status::Waiting; return;
+				case Arrival::Loading: entry.State = Status::Waiting; return;
 				case Arrival::Failed:
 					// A clip asked for by name must exist; a state's clip that did not load shows the rest pose, as in play.
 					if (entry.Asked.State.empty() && entry.Asked.Clip.IsValid())
