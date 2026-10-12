@@ -3,6 +3,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
+#include "EditorLayer.h"
 #include "UI/ItemProbe.h"
 
 #include <Strata/Physics/PhysicsSystem.h>
@@ -12,6 +13,7 @@
 #include <Strata/Scene/Scene.h>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <nlohmann/json.hpp>
 
 #include <optional>
@@ -300,11 +302,50 @@ TEST_SUITE("Editor.PhysicsLayers")
 		REQUIRE(editor.Click("Inspector.RigidBody.Layer"));
 		editor.Frames(1);
 		CHECK(editor.ProbeText("Inspector.RigidBody.Layer.4") == "Enemies");
+		// Only the default layer and the named ones are offered, then where more are named.
+		CHECK(editor.ProbeText("Inspector.RigidBody.Layer.0") == "Layer 0");
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.RigidBody.Layer.7").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.RigidBody.Layer.31").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.RigidBody.Layer.Hint").has_value());
 		REQUIRE(editor.Click("Inspector.RigidBody.Layer.4"));
 		editor.Frames(1);
 		const Entity goblin = editor.Context().GetActiveScene()->GetEntityByUUID(id);
 		CHECK(goblin.GetComponent<RigidBodyComponent>().Layer == 4u);
 		CHECK(editor.UndoPosition() == position + 1);
 		CHECK(editor.ProbeText("Inspector.RigidBody.Layer") == "Enemies");
+
+		// A body on a layer without a name (a script put it there) still finds its layer among the choices.
+		editor.Run("component.set", { { "entity", id.ToString() }, { "component", "RigidBody" }, { "values", { { "Layer", 7 } } } });
+		editor.Frames(1);
+		CHECK(editor.ProbeText("Inspector.RigidBody.Layer") == "Layer 7");
+		REQUIRE(editor.Click("Inspector.RigidBody.Layer"));
+		editor.Frames(1);
+		CHECK(editor.ProbeText("Inspector.RigidBody.Layer.7") == "Layer 7");
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.RigidBody.Layer.8").has_value());
+	}
+
+	TEST_CASE("The layer matrix fits long names into a compact grid, elided where too long")
+	{
+		LayersEditor editor;
+		editor.Run("scene.setSettings", { { "layerNames", { { "1", "Player" }, { "2", "Enemies" }, { "3", "Pickups" }, { "4", "Interactable Triggers" },
+			{ "5", "EnemyProjectilesAndHazards" }, { "6", "Water" } } } });
+		editor.Frames(2);
+		REQUIRE(editor.Click("Inspector.Layers"));
+		editor.Frames(2);
+		// Short names show whole; long ones end in an ellipsis, as wide as the longest label may be (ten text heights).
+		CHECK(editor.ProbeText("Inspector.Layers.Label.1") == "1 \xC2\xB7 Player");
+		const std::string longName = editor.ProbeText("Inspector.Layers.Label.5");
+		CHECK(longName.starts_with("5 \xC2\xB7 EnemyProjectil"));
+		CHECK(longName.ends_with("\xE2\x80\xA6"));
+		const std::optional<UI::ItemProbe::Item> label = UI::ItemProbe::Find("Inspector.Layers.Label.5");
+		REQUIRE(label);
+		CHECK(label->Max.x - label->Min.x <= ImGui::GetFontSize() * 10.0f + 1.0f);
+		// Seven layers in a grid of boxes of the text's height: the last box sits within the Inspector, no scrolling needed.
+		const std::optional<UI::ItemProbe::Item> last = UI::ItemProbe::Find("Inspector.Layers.Cell.6.6");
+		REQUIRE(last);
+		CHECK(last->Max.y - last->Min.y <= ImGui::GetFontSize() + 1.0f);
+		ImGuiWindow* inspector = editor.FindPanelWindow(EditorPanels::c_Inspector);
+		REQUIRE(inspector);
+		CHECK(last->Max.x <= inspector->InnerRect.Max.x);
 	}
 }

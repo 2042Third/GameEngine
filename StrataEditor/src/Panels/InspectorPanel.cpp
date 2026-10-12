@@ -47,6 +47,8 @@ namespace Strata
 
 		constexpr float c_AddComponentWidthInFontSizes = 14.0f;
 		constexpr float c_AddComponentListHeightInFontSizes = 20.0f;
+		// The widest a row label of the collision layer matrix gets, in text heights (longer names are elided).
+		constexpr float c_LayerLabelMaxWidthInFontSizes = 10.0f;
 
 		const ImVec4& GetPlayStateColor(const EditorContext& context)
 		{
@@ -984,20 +986,35 @@ namespace Strata
 		}
 
 		// The matrix: one row per shown layer with a box for each shown layer up to it (the pairs once each); a cleared box
-		// lets the pair pass through each other.
+		// lets the pair pass through each other. Compact, so the layers a game names fit an Inspector of a laptop's width:
+		// boxes of the text's height in tight cells, and row labels as wide as the longest (at most a few words, the rest
+		// elided, whole in their tooltips).
 		ImGui::Spacing();
 		UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Caption);
 		ImGui::TextColored(colors.TextSecondary, "Which layers collide");
 		ImGui::PopFont();
-		const float labelWidth = ImGui::GetFontSize() * 8.0f;
+		std::vector<std::string> labels;
+		labels.reserve(shown.size());
+		float labelWidth = 0.0f;
+		for (const uint32_t layer : shown)
+		{
+			labels.push_back(fmt::format("{} \xC2\xB7 {}", layer, current.GetDisplayName(layer)));
+			labelWidth = std::max(labelWidth, ImGui::CalcTextSize(labels.back().c_str()).x);
+		}
+		labelWidth = std::min(labelWidth, ImGui::GetFontSize() * c_LayerLabelMaxWidthInFontSizes);
+		ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(style.FramePadding.x, 0.0f));
+		ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(style.CellPadding.x * 0.5f, style.CellPadding.y * 0.5f));
 		const float cellWidth = ImGui::GetFrameHeight();
 		const float rowHeight = ImGui::GetFrameHeight() + style.CellPadding.y * 2.0f;
-		const float contentWidth = labelWidth + (cellWidth + style.CellPadding.x * 2.0f) * static_cast<float>(shown.size() + 1);
+		const float contentWidth = labelWidth + style.CellPadding.x * 2.0f + (cellWidth + style.CellPadding.x * 2.0f) * static_cast<float>(shown.size());
 		const bool scroll = contentWidth > ImGui::GetContentRegionAvail().x;
 		const float height = rowHeight * static_cast<float>(shown.size() + 1) + (scroll ? style.ScrollbarSize : 0.0f) + style.CellPadding.y;
 		const ImGuiTableFlags flags = ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_NoHostExtendX | (scroll ? ImGuiTableFlags_ScrollX : ImGuiTableFlags_None);
 		if (!ImGui::BeginTable("LayerMatrix", static_cast<int>(shown.size()) + 1, flags, ImVec2(scroll ? 0.0f : contentWidth, scroll ? height : 0.0f)))
+		{
+			ImGui::PopStyleVar(2);
 			return;
+		}
 		ImGui::TableSetupColumn("Layer", ImGuiTableColumnFlags_WidthFixed, labelWidth);
 		for (size_t column = 0; column < shown.size(); column++)
 			ImGui::TableSetupColumn(nullptr, ImGuiTableColumnFlags_WidthFixed, cellWidth);
@@ -1020,10 +1037,11 @@ namespace Strata
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(0);
 			ImGui::AlignTextToFramePadding();
-			const std::string label = fmt::format("{} \xC2\xB7 {}", layer, current.GetDisplayName(layer));
-			ImGui::TextUnformatted(label.c_str());
+			const std::string shownLabel = UI::ElideEnd(labels[row], labelWidth);
+			ImGui::TextUnformatted(shownLabel.c_str());
+			UI::ItemProbe::Record(fmt::format("Inspector.Layers.Label.{}", layer), true, 0, shownLabel);
 			if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-				ImGui::SetTooltip("%s", label.c_str());
+				ImGui::SetTooltip("%s", labels[row].c_str());
 			for (size_t column = 0; column <= row; column++)
 			{
 				const uint32_t other = shown[column];
@@ -1043,6 +1061,7 @@ namespace Strata
 			}
 		}
 		ImGui::EndTable();
+		ImGui::PopStyleVar(2);
 		if (toggled)
 		{
 			const auto& [pair, collide] = *toggled;

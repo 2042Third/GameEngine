@@ -145,6 +145,9 @@ namespace Strata::UI
 
 	// `text` shortened at its start with an ellipsis ("...rojects/Game/Game.stproj") to fit `maxWidth` in the current font.
 	std::string ElideStart(std::string_view text, float maxWidth);
+	// `text` shortened at its end with an ellipsis ("EnemyProjectil...") to fit `maxWidth` in the current font: names, whose
+	// start says most.
+	std::string ElideEnd(std::string_view text, float maxWidth);
 
 	// A progress bar in the strata motif: the done share fills a recessed track with the mark's four bands (Sandstone,
 	// Ochre, Rust and Umber, top to bottom), with the label centered over it. `fraction` is clamped to [0, 1]; a negative

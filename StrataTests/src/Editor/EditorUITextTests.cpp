@@ -201,4 +201,30 @@ TEST_SUITE("Editor.UI.Text")
 			CHECK((cut.size() - 3) % 2 == 0);
 		});
 	}
+
+	TEST_CASE("Long names are shortened at their end")
+	{
+		ImGuiHarness harness;
+		harness.Frame([]()
+		{
+			const std::string name = "5 \xC2\xB7 EnemyProjectilesAndHazards";
+			const float full = ImGui::CalcTextSize(name.c_str()).x;
+			CHECK(UI::ElideEnd(name, full + 1.0f) == name);
+			const float limit = full * 0.5f;
+			const std::string shortened = UI::ElideEnd(name, limit);
+			CHECK(shortened.ends_with("\xE2\x80\xA6"));
+			CHECK(ImGui::CalcTextSize(shortened.c_str()).x <= limit);
+			// The start is kept, and as much of it as fits.
+			const std::string kept = shortened.substr(0, shortened.size() - 3);
+			CHECK(name.starts_with(kept));
+			CHECK(ImGui::CalcTextSize((name.substr(0, kept.size() + 1) + "\xE2\x80\xA6").c_str()).x > limit);
+			// Multibyte characters are never cut, also where only one fits before a wide one.
+			const std::string accents = "\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9\xC3\xA9";
+			const std::string cut = UI::ElideEnd(accents, ImGui::CalcTextSize(accents.c_str()).x * 0.5f);
+			CHECK((cut.size() - 3) % 2 == 0);
+			CHECK(UI::ElideEnd("a\xF0\x9F\x98\x80\xF0\x9F\x98\x80", ImGui::CalcTextSize("a\xE2\x80\xA6").x) == "a\xE2\x80\xA6");
+			// Nothing fits: the ellipsis alone.
+			CHECK(UI::ElideEnd(name, 0.0f) == "\xE2\x80\xA6");
+		});
+	}
 }

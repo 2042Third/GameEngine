@@ -921,8 +921,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   at once (shared components only; values that differ show as mixed; one undo step per edit), offers per component
   Reset, Copy Values and Paste Values (the values component.set can set; not for components without such properties)
   and Remove (not for components the engine adds), and shows the scene's settings (gravity, the fixed step, the physics
-  world's capacities and the collision layers: names and matrix) and sky with nothing selected, in sections that start
-  closed with a summary on their headers
+  world's capacities and the collision layers: names and a compact matrix, long names elided; bodies and controllers
+  choose their layer among layer 0 and the named ones) and sky with nothing selected, in sections that start closed
+  with a summary on their headers
   (`UI::SectionHeader`'s summary: live widgets cost frame time while they are drawn); the
   Asset tab edits materials (`UI/MaterialEditor`: a drag previews, its release is one undo step) and import settings
   (Apply runs `asset.setImportSettings` through the runner) and previews textures as their content looks, with the

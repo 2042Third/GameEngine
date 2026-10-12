@@ -239,8 +239,9 @@ namespace Strata
 			return result;
 		}
 
-		// A collision layer (PropertyFlags::PhysicsLayer), chosen by the names the scene gives its layers ("Layer <index>"
-		// for layers without one). The probe records each layer's entry under "<key>.<index>".
+		// A collision layer (PropertyFlags::PhysicsLayer), chosen by the names the scene gives its layers: the default layer
+		// 0, the named ones and the value itself when it has no name ("Layer <index>"), then where more are named. The probe
+		// records each layer's entry under "<key>.<index>" and the hint under "<key>.Hint".
 		PropertyEditResult DrawPhysicsLayer(uint32_t& value, const Scene& scene, const PropertyWidgetOptions& options)
 		{
 			PropertyEditResult result;
@@ -250,6 +251,8 @@ namespace Strata
 			{
 				for (uint32_t layer = 0; layer < c_PhysicsLayerCount; layer++)
 				{
+					if (layer != 0 && layers.Names[layer].empty() && (layer != value || options.Mixed))
+						continue;
 					const std::string probe = options.ProbeKey.empty() ? std::string() : ProbeKey(options.ProbeKey, std::to_string(layer));
 					if (Choice(layers.GetDisplayName(layer), layer == value && !options.Mixed, static_cast<int>(layer), probe))
 					{
@@ -257,6 +260,16 @@ namespace Strata
 						value = layer;
 					}
 				}
+				// Unnamed layers would only be numbers to pick from: a layer is offered once the scene names it.
+				ImGui::Separator();
+				ImGui::TextDisabled("Name more layers in the scene's settings");
+				if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_AllowWhenDisabled))
+				{
+					ImGui::SetTooltip("Select nothing: the Inspector shows the scene's settings, whose Collision Layers section names layers "
+						"(Name a Layer) and says which of them collide");
+				}
+				if (!options.ProbeKey.empty())
+					UI::ItemProbe::Record(ProbeKey(options.ProbeKey, "Hint"), false, 0, "Name more layers in the scene's settings");
 				ImGui::EndCombo();
 			}
 			return result;
