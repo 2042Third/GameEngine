@@ -1309,7 +1309,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   "changes only" (kind Edit), its rows rebuilt only when `CommandJournal::GetVersion` or the filters change and the
   parameter previews made once per entry, with the selected entry's JSON (`CommandJournal::Describe`) and its actions:
   Copy as script (a one-step command script), Re-run (through the runner, from the UI) and Undo to here (`edit.undo`
-  until the entry's step is the latest applied, so the journal shows the undos). A `force` the person gave was their
+  until the entry's step is the latest applied, so the journal shows the undos). The commands these run are journaled, and
+  a full ring drops its oldest entry for each, possibly the one shown: they run after the details are drawn, with what
+  they need copied from the entry (`ActivityPanel::RunAction`). A `force` the person gave was their
   answer to the unsaved-changes question then: Copy as script leaves it out of their commands, and Re-run of a command
   that takes `force` asks again (`EditorShell::RequestDiscardChanges`). `EditorShell::ShowActivity(entry)`
   selects and reveals an entry (the viewport's agent chip, the toasts). Panels collect what the status bar shows in `OnUpdate`, also while closed: the Streaming

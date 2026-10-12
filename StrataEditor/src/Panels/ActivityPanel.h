@@ -2,6 +2,9 @@
 
 #include "UI/EditorPanelRegistry.h"
 
+#include <nlohmann/json.hpp>
+
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -35,10 +38,28 @@ namespace Strata
 		// answer to the question about unsaved changes then (CommandUtils::CheckUnsavedChanges), not part of the command.
 		static std::optional<std::string> MakeCommandScript(const CommandJournalEntry& entry);
 	private:
+		// What a button of the details pane asked for, with what it needs copied from the entry.
+		struct PendingAction
+		{
+			enum class Type : uint8_t
+			{
+				Rerun = 0,
+				UndoToHere
+			};
+
+			Type Kind = Type::Rerun;
+			std::string Command;       // Rerun: the command and its parameters
+			nlohmann::json Parameters;
+			size_t UndoTarget = 0;     // UndoToHere: the undo position to go back to
+		};
+
 		void DrawFilters();
 		void RebuildRows(const CommandJournal& journal);
 		void DrawList(const CommandJournal& journal);
+		// Draws the entry's details and buttons; what a button asks for runs at the end, once the entry is not used any more
+		// (the commands it runs may drop it from a full journal).
 		void DrawDetails(EditorPanelContext& context, const CommandJournalEntry& entry);
+		void RunAction(EditorPanelContext& context, PendingAction action);
 		// The undo position "Undo to here" goes back to (the entry's step is the latest applied), when it can.
 		static std::optional<size_t> GetUndoTarget(EditorContext& context, const CommandJournalEntry& entry);
 		const std::string& GetParameterPreview(const CommandJournalEntry& entry);

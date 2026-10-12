@@ -302,39 +302,17 @@ namespace Strata
 					   : "The journal shortened this command's parameters: it cannot be written as a script", copyStyle))
 			ImGui::SetClipboardText(script->c_str());
 
+		// Re-run and Undo to here run commands, which the journal records: a full ring drops its oldest entry for each, and that
+		// may be this one. So they run once the entry is no longer used (RunAction), with what they need copied.
+		std::optional<PendingAction> action;
+
 		// Re-run, as the person: through the runner, so that commands taking frames work too.
 		ImGui::SameLine();
 		UI::ButtonStyle rerunStyle;
 		rerunStyle.Enabled = !entry.ParametersTruncated && entry.Status != CommandStatus::Pending;
 		if (UI::ToolbarButton("Activity.Rerun", Icons::RotateCcw, "Re-run",
 				rerunStyle.Enabled ? "Run this command again with the same parameters" : "Only finished commands whose parameters the journal kept whole", rerunStyle))
-		{
-			// A command that replaces the edited scene asks about its unsaved changes now, as the menus do: the force it was
-			// recorded with answered for other changes. The answer may come in a later frame, so the run keeps what outlives
-			// this one.
-			const EditorCommand* command = panelContext.Commands.Find(entry.Command);
-			const bool replacesScene = command && ReplacesScene(*command);
-			nlohmann::json parameters = entry.Parameters;
-			if (replacesScene && parameters.is_object())
-				parameters.erase("force");
-			auto rerun = [editor = &context, commands = &panelContext.Commands, runner = &panelContext.Runner, name = entry.Command, parameters](bool force)
-			{
-				nlohmann::json given = parameters;
-				if (force)
-					given["force"] = true;
-				runner->Run(*editor, *commands, name, given, [name](const EditorCommandResult& result)
-				{
-					if (!result.Success)
-						ST_ERROR("{}: {}", name, result.Error);
-					else if (result.Value.is_object() && result.Value.contains("warning") && result.Value["warning"].is_string())
-						ST_WARN("{}: {}", name, result.Value["warning"].get<std::string>());
-				}, CommandOrigin { CommandSource::UI });
-			};
-			if (replacesScene && panelContext.Shell)
-				panelContext.Shell->RequestDiscardChanges([rerun]() { rerun(true); });
-			else
-				rerun(false);
-		}
+			action = PendingAction { PendingAction::Type::Rerun, entry.Command, entry.Parameters, 0 };
 
 		// Undo to here: every step after this entry's own, through edit.undo, so the journal shows the undos too.
 		ImGui::SameLine();
@@ -344,14 +322,8 @@ namespace Strata
 		const std::string undoTooltip = target ? fmt::format("Undo the {} steps after this one, back to '{}'", context.GetUndoStack().GetPosition() - *target, entry.UndoStep)
 			: (entry.UndoSerial == 0 ? std::string("This command recorded no undo step")
 				: std::string("Its step is the latest, undone, gone from the history, or the scene is playing"));
-		if (UI::ToolbarButton("Activity.UndoToHere", Icons::Undo2, "Undo to here", undoTooltip.c_str(), undoStyle))
-		{
-			while (target && context.GetUndoStack().GetPosition() > *target)
-			{
-				if (RunEditorCommand(context, panelContext.Commands, "edit.undo").is_null())
-					break;
-			}
-		}
+		if (UI::ToolbarButton("Activity.UndoToHere", Icons::Undo2, "Undo to here", undoTooltip.c_str(), undoStyle) && target)
+			action = PendingAction { PendingAction::Type::UndoToHere, {}, {}, *target };
 
 		// The entry as editor.activity reports it, selectable for copying.
 		if (m_DetailsId != entry.Id || m_DetailsVersion != context.GetJournal().GetVersion())
@@ -364,6 +336,49 @@ namespace Strata
 		ImGui::InputTextMultiline("##Details", &m_Details, ImVec2(-FLT_MIN, -FLT_MIN), ImGuiInputTextFlags_ReadOnly);
 		ImGui::PopFont();
 		UI::ItemProbe::Record("Activity.Details", true, 0, m_Details);
+
+		// `entry` is not used from here on.
+		if (action)
+			RunAction(panelContext, std::move(*action));
+	}
+
+	void ActivityPanel::RunAction(EditorPanelContext& panelContext, PendingAction action)
+	{
+		EditorContext& context = panelContext.Context;
+		if (action.Kind == PendingAction::Type::UndoToHere)
+		{
+			while (context.GetUndoStack().GetPosition() > action.UndoTarget)
+			{
+				if (RunEditorCommand(context, panelContext.Commands, "edit.undo").is_null())
+					break;
+			}
+			return;
+		}
+
+		// A command that replaces the edited scene asks about its unsaved changes now, as the menus do: the force it was recorded
+		// with answered for other changes. The answer may come in a later frame, so the run keeps what outlives this one.
+		const EditorCommand* command = panelContext.Commands.Find(action.Command);
+		const bool replacesScene = command && ReplacesScene(*command);
+		if (replacesScene && action.Parameters.is_object())
+			action.Parameters.erase("force");
+		auto rerun = [editor = &context, commands = &panelContext.Commands, runner = &panelContext.Runner, name = action.Command,
+			parameters = action.Parameters](bool force)
+		{
+			nlohmann::json given = parameters;
+			if (force)
+				given["force"] = true;
+			runner->Run(*editor, *commands, name, given, [name](const EditorCommandResult& result)
+			{
+				if (!result.Success)
+					ST_ERROR("{}: {}", name, result.Error);
+				else if (result.Value.is_object() && result.Value.contains("warning") && result.Value["warning"].is_string())
+					ST_WARN("{}: {}", name, result.Value["warning"].get<std::string>());
+			}, CommandOrigin { CommandSource::UI });
+		};
+		if (replacesScene && panelContext.Shell)
+			panelContext.Shell->RequestDiscardChanges([rerun]() { rerun(true); });
+		else
+			rerun(false);
 	}
 
 	void ActivityPanel::OnImGuiRender(EditorPanelContext& panelContext)

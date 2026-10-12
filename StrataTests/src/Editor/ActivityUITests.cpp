@@ -207,6 +207,62 @@ TEST_SUITE("Editor.UI.Activity")
 		CHECK(kept->Text == "done");
 	}
 
+	TEST_CASE("Re-run and Undo to here work on the oldest entry of a full journal, which their own commands push out")
+	{
+		HarnessEditor editor({}, WithFeatureProject("ActivityFullJournal"));
+		editor.Frames(2);
+		REQUIRE(editor.Context().HasProject());
+		editor.Run("editor.showPanel", { { "panel", "Activity" } });
+		editor.Frames(2);
+		ActivityPanel* panel = editor.Layer->GetPanels().Get<ActivityPanel>(EditorPanels::c_Activity);
+		REQUIRE(panel);
+		const CommandJournal& journal = editor.Context().GetJournal();
+		const UndoStack& undo = editor.Context().GetUndoStack();
+
+		// Three edits, then lookups until the first edit is the oldest entry of a full ring: every command the buttons run then
+		// drops the oldest entry, the one the details pane shows.
+		const uint64_t oldest = editor.Layer->GetCommands().Execute(editor.Context(), "entity.create", { { "name", "Oldest" } }).JournalId;
+		editor.Run("entity.create", { { "name", "Second" } });
+		editor.Run("entity.create", { { "name", "Third" } });
+		REQUIRE(journal.Find(oldest));
+		const size_t oldestPosition = undo.GetPosition() - 2;
+		while (journal.GetEntries().front().Id < oldest)
+			editor.Layer->GetCommands().Execute(editor.Context(), "entity.find", { { "name", "Oldest" } });
+		REQUIRE(journal.GetEntries().size() == CommandJournal::c_MaxEntries);
+		panel->Select(oldest);
+		editor.Frames(2);
+		REQUIRE(journal.GetEntries().front().Id == oldest);
+		REQUIRE(panel->GetSelected() == oldest);
+
+		// Undo to here: its first edit.undo pushes the entry out while its details are drawn.
+		REQUIRE(UI::ItemProbe::Find("Activity.UndoToHere")->Enabled);
+		REQUIRE(editor.Click("Activity.UndoToHere"));
+		editor.Frames(2);
+		CHECK(undo.GetPosition() == oldestPosition);
+		CHECK(editor.Context().GetEditScene()->FindEntityByName("Oldest"));
+		CHECK_FALSE(editor.Context().GetEditScene()->FindEntityByName("Second"));
+		CHECK_FALSE(editor.Context().GetEditScene()->FindEntityByName("Third"));
+		CHECK_FALSE(journal.Find(oldest));
+		CHECK(panel->GetSelected() == 0); // Gone from the journal, so no longer selected
+
+		// Re-run of the oldest entry now (the third edit; the undos pushed out the first two), which its own run pushes out.
+		const uint64_t third = journal.GetEntries().front().Id;
+		REQUIRE(journal.GetEntries().front().Command == "entity.create");
+		REQUIRE(journal.GetEntries().front().Parameters == nlohmann::json { { "name", "Third" } });
+		panel->Select(third);
+		editor.Frames(2);
+		REQUIRE(journal.GetEntries().front().Id == third);
+		REQUIRE(editor.Click("Activity.Rerun"));
+		editor.Frames(2);
+		CHECK_FALSE(journal.Find(third));
+		const CommandJournalEntry& rerun = journal.GetEntries().back();
+		CHECK(rerun.Command == "entity.create");
+		CHECK(rerun.Source == CommandSource::UI);
+		CHECK(rerun.Parameters == nlohmann::json { { "name", "Third" } });
+		CHECK(rerun.Status == CommandStatus::Succeeded);
+		CHECK(editor.Context().GetEditScene()->FindEntityByName("Third"));
+	}
+
 	TEST_CASE("The Activity panel asked for before the first frame joins the bottom area")
 	{
 		// As a command script's first command (editor.showPanel) does it: before the layout and the Console exist.
