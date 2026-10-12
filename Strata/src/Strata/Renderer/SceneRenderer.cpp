@@ -693,17 +693,19 @@ namespace Strata
 			Ref<Texture> texture = m_Assets.Resolve<Texture>(skyLight->EnvironmentMap, AssetPriority::High);
 			if (!texture || !texture->GetGPUTexture())
 				return; // Constant ambient until the environment arrives (counted as pending by the resolve cache)
-			// The environment is computed from the whole map: its streamer makes every level resident first.
-			if (texture->GetResidentLevel() > 0)
-			{
-				if (TextureStreamer* streamer = TextureStreamer::Find(*AssetManager::GetActive()))
-					streamer->RequestLevel(skyLight->EnvironmentMap, 0);
-				m_Assets.CountPending(skyLight->EnvironmentMap);
-				if (!m_Environment.Source || m_Environment.Source != texture)
-					return;
-			}
+			// The environment is computed from the whole map: its streamer makes every level resident first. Once computed, the
+			// cube is all the renderer samples, so nothing asks for the map's levels any more and they drop to its tail.
 			if (texture != m_Environment.Source)
+			{
+				if (texture->GetResidentLevel() > 0)
+				{
+					if (TextureStreamer* streamer = TextureStreamer::Find(*AssetManager::GetActive()))
+						streamer->RequestLevel(skyLight->EnvironmentMap, 0);
+					m_Assets.CountPending(skyLight->EnvironmentMap);
+					return;
+				}
 				ProcessEnvironment(commandList, texture);
+			}
 			rotation = glm::radians(skyLight->Rotation);
 		}
 
