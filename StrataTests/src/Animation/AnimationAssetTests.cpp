@@ -428,4 +428,32 @@ TEST_SUITE("Animation.Sampling")
 		AnimationClip::ReduceKeys(steps);
 		CHECK(steps.Times == std::vector<float> { 0.0f, 2.0f, 3.0f });
 	}
+
+	TEST_CASE("Keyframe reduction of a long channel stops when it is cancelled, leaving the channel as it was")
+	{
+		// A baked minute at 120 keys per second, all on one line: every key tests a window of earlier ones.
+		std::vector<float> times;
+		std::vector<float> values;
+		for (int key = 0; key < 7200; key++)
+		{
+			times.push_back(static_cast<float>(key) / 120.0f);
+			values.insert(values.end(), { static_cast<float>(key) * 0.01f, 0.0f, 0.0f });
+		}
+		const AnimationChannelData channel = Tests::MakeChannel("Shoulder", AnimationPath::Translation, AnimationInterpolation::Linear, times, values);
+
+		// Asked while it works, it stops at the first answer that it is cancelled.
+		AnimationChannelData cancelled = channel;
+		uint32_t asked = 0;
+		CHECK_FALSE(AnimationClip::ReduceKeys(cancelled, [&]() { return ++asked == 3; }));
+		CHECK(asked == 3);
+		CHECK(cancelled.Times == channel.Times);
+		CHECK(cancelled.Values == channel.Values);
+
+		// Never cancelled, it asks every c_ReductionCancelInterval keys and reduces the line to its ends.
+		AnimationChannelData reduced = channel;
+		asked = 0;
+		CHECK(AnimationClip::ReduceKeys(reduced, [&]() { asked++; return false; }));
+		CHECK(asked == (channel.Times.size() - 2) / AnimationClip::c_ReductionCancelInterval);
+		CHECK(reduced.Times.size() < 100);
+	}
 }

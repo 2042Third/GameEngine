@@ -228,12 +228,12 @@ namespace Strata
 		return clip;
 	}
 
-	void AnimationClip::ReduceKeys(AnimationChannelData& channel)
+	bool AnimationClip::ReduceKeys(AnimationChannelData& channel, const std::function<bool()>& isCancelled)
 	{
 		const size_t keys = channel.Times.size();
 		const uint32_t components = GetComponentCount(channel.Path);
 		if (keys <= 2 || channel.Interpolation == AnimationInterpolation::CubicSpline || channel.Values.size() != keys * components)
-			return;
+			return true;
 
 		const bool rotation = channel.Path == AnimationPath::Rotation;
 		auto value = [&](size_t key) { return channel.Values.data() + key * components; };
@@ -259,6 +259,9 @@ namespace Strata
 		size_t lastKept = 0;
 		for (size_t key = 1; key + 1 < keys; key++)
 		{
+			// Each key tests up to c_ReductionWindow earlier ones: a stretch of keys is milliseconds of work.
+			if (isCancelled && key % c_ReductionCancelInterval == 0 && isCancelled())
+				return false;
 			bool removable = key - lastKept <= c_ReductionWindow;
 			if (removable && channel.Interpolation == AnimationInterpolation::Step)
 			{
@@ -308,6 +311,7 @@ namespace Strata
 		}
 		channel.Times.resize(written);
 		channel.Values.resize(written * components);
+		return true;
 	}
 
 	std::vector<uint8_t> AnimationClip::Serialize() const

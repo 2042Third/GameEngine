@@ -1416,6 +1416,10 @@ namespace Strata
 					std::set<std::pair<JointIndex, int>> animated;
 					for (cgltf_size channelIndex = 0; channelIndex < animation.channels_count; channelIndex++)
 					{
+						// A long baked animation is seconds of unpacking and key reduction: checked per channel, and within the
+						// reduction.
+						if (m_Context.IsCancelled())
+							return; // Run fails the import
 						const cgltf_animation_channel& source = animation.channels[channelIndex];
 						if (source.target_path == cgltf_animation_path_type_weights)
 						{
@@ -1431,7 +1435,8 @@ namespace Strata
 							Warn(fmt::format("Animation '{}' animates the {} of '{}' twice; the first channel is kept", name, AnimationPathToString(channel->Path), channel->Target));
 							continue;
 						}
-						AnimationClip::ReduceKeys(*channel);
+						if (!AnimationClip::ReduceKeys(*channel, [this]() { return m_Context.IsCancelled(); }))
+							return; // Cancelled: Run fails the import
 						channels.push_back(std::move(*channel));
 					}
 					if (channels.empty())

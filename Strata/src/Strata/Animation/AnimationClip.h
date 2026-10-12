@@ -4,6 +4,7 @@
 #include "Strata/Asset/Asset.h"
 
 #include <array>
+#include <functional>
 #include <span>
 #include <string>
 #include <vector>
@@ -89,8 +90,11 @@ namespace Strata
 
 		// Removes keys that interpolating their neighbours reproduces (Step: repeated values; Linear: values on the line or
 		// arc between the neighbours kept), within a tolerance far below what shows: the importer's keyframe reduction of
-		// baked animations. The first and last keys always stay. Cubic splines are left as they are.
-		static void ReduceKeys(AnimationChannelData& channel);
+		// baked animations. The first and last keys always stay. Cubic splines are left as they are. A long channel takes a
+		// while: `isCancelled` (optional) is asked every c_ReductionCancelInterval keys, and returning true stops the
+		// reduction, which then returns false and leaves the channel as it was.
+		static bool ReduceKeys(AnimationChannelData& channel, const std::function<bool()>& isCancelled = {});
+		static constexpr size_t c_ReductionCancelInterval = 256;
 
 		std::vector<uint8_t> Serialize() const;
 		static Ref<AnimationClip> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);

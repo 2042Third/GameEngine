@@ -715,7 +715,8 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
 - **Cancelling imports.** Nothing in the editor waits for a background import. Each is a `BackgroundJob` with a
   cancellation flag, the importer's `ImportContext::Cancel`: importers check it as they go (the texture cooker per block
   of a compressed level and between mip levels, the texture importer around decoding, the glTF importer between a
-  model's images, primitives and levels of detail) and stop, and a cancelled import reads no more project files
+  model's images, primitives, levels of detail and animation channels, and every 256 keys of a channel's keyframe
+  reduction, `AnimationClip::ReduceKeys`) and stop, and a cancelled import reads no more project files
   (`ImportContext::ReadFile` returns nothing). An import is cancelled when its result would be out of date or is no longer
   wanted: `QueueImport` replaces a queued or running import of the same asset (new settings, a changed file, a
   re-import) at once instead of running after it, `MoveAsset` cancels the asset's import before the file moves and queues
