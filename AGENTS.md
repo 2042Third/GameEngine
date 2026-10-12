@@ -96,7 +96,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   with the asset pipeline (`Engine::RegisterBuiltinModules`) before the suites and the helper modes run; a test that
   needs its own component registers it in a child process (`--strata-test-helper=custom-component`,
   `Engine/ModuleRegistrationHelpers.cpp`). The editor's UI is tested headless with `ImGuiHarness` (suites `Editor.UI`,
-  `Editor.UI.Hierarchy`, `Editor.UI.Inspector`, `Editor.UI.AssetInspector`, `Editor.UI.ContentBrowser`, `Editor.Theme`,
+  `Editor.UI.Hierarchy`, `Editor.UI.Inspector`, `Editor.UI.AssetInspector`, `Editor.UI.ContentBrowser`,
+  `Editor.UI.Placement`, `Editor.Theme`,
   `Editor.UI.Source`; see
   Editor, "Editor UI rules").
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the
@@ -172,7 +173,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `Tests::DescribeJsonFile`, which tells a damaged file from a failed read or parse), exports the stress project (the
   median and the longest frame meanwhile, and
   the export's time) and times the editor's frames on the shared device while that texture re-imports, uploads and is
-  drawn (and, with 10,000 cubes drawn too, whose draws are extracted in parallel, while it is compressed) and while the
+  drawn (and, with 10,000 cubes drawn too, whose draws are extracted in parallel, while it is compressed), while
+  `asset.import` brings in a 4096x4096 texture from outside the project (the copy on an I/O job, the import in the
+  background, the upload; the longest frame) and while the
   thumbnails of a stress project's textures, materials, model and mesh are made, and the editor frames of `PerfGPU.Renderer` (cube grids of 100,000, also in the streaming view and with all of them selected,
   and of 300,000, a narrow view of 50,000, 10,000 point lights, 10,000 unique materials); `PerfGPU.Pack` compares pack
   versions 2 and 1 of the stress project (the size with its textures uncompressed, opening, streaming the world as it

@@ -726,7 +726,8 @@ namespace Strata
 					{ "referencedBy", AssetReferences::ToJson(referencers) } });
 			} });
 
-		registry.Register({ "asset.createFolder", "Creates a folder (and its parents) in the asset directory, in one undo step. Fails when it exists.",
+		registry.Register({ "asset.createFolder", "Creates a folder (and its parents) in the asset directory, in one undo step. Fails when it exists. "
+			"Returns {path} (normalized, '/' separators).",
 			ObjectSchema({ { "path", StringSchema("Folder relative to the asset directory, e.g. \"Materials/Metals\"") } }, { "path" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -747,7 +748,8 @@ namespace Strata
 
 		registry.Register({ "asset.moveFolder",
 			"Moves or renames a folder of the asset directory with everything in it (files that are no assets too, such as a model's buffers); every "
-			"asset in it keeps its handle, so references stay valid. One undo step. Fails when the destination exists.",
+			"asset in it keeps its handle, so references stay valid. One undo step. Fails when the destination exists. Returns {path (the new one), "
+			"assets (how many assets moved)}.",
 			ObjectSchema({ { "path", StringSchema("Folder to move, relative to the asset directory") },
 				{ "to", StringSchema("Its new path relative to the asset directory, e.g. \"Art/Materials\"") } }, { "path", "to" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
