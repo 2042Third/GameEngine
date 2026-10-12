@@ -229,8 +229,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   attempt: every log has a row per frame, and the budget judges the slowest frame's `Assets.Finalize` stage; then the game
   with its own budgets from the world's overview camera (which shows about two thirds of the textures; the world's load
   brings in all of them, at their mip tails, which fit its budgets), whose last `PeakPrivateMB` is
-  `RuntimePeakPrivateMemory`; then the whole world in view, `RuntimePeakPrivateMemoryAllInView` (budget 650 MB, target
-  550 MB, mip streaming's limit): the game started in the stress project's `TopDown` scene
+  `RuntimePeakPrivateMemory`; then the whole world in view, `RuntimePeakPrivateMemoryAllInView` (budget 550 MB, mip
+  streaming's limit): the game started in the stress project's `TopDown` scene
   (`WriteStressTopDownScene`: the world with its camera looking down on all of it), 300 frames with its own budgets,
   every texture at the level its view needs at the end (`MipsBelowWanted` 0), none evicted or loading.
   `Perf.FrameProfiler` measures the frame profiler's cost per frame and `Perf.EditorPanels` (in `src/Editor/`) the

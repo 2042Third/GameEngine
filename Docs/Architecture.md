@@ -1490,11 +1490,13 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   Then it exports the stress game (`.stgame` manifests next to the pack) and runs `StrataRuntime` in a window of
   1920x1080 pixels (`--resolution`, whatever the display's scale; each run checks its swapchain's size) for 600 frames
   from the world's overview camera with `--perf-log` and the evicting sweep's texture budget, again confirmed by up to two
-  more runs: every log must have a row per frame, and `Budgets.json` judges the slowest frame's `Assets.Finalize` stage.
+  more runs: every log must have a row per frame, and `Budgets.json` judges the slowest frame's `Assets.Finalize` stage
+  (the first frame, which finalizes, within the frame's finalization budget, what the start scene's load read while the
+  window opened).
   Then the game runs with its own budgets (nothing evicted) from the overview camera, which shows about two thirds of the
   textures while the world's load brought in all of them at their mip tails, as they fit its budgets
   (`RuntimePeakPrivateMemory`, the peak private memory its log ends with), and last the whole world in view
-  (`RuntimePeakPrivateMemoryAllInView`, budget 650 MB, texture cooking's limit, target 550 MB, mip streaming's): 300
+  (`RuntimePeakPrivateMemoryAllInView`, budget 550 MB, mip streaming's limit): 300
   frames of the game started in the stress project's `TopDown` scene, the world seen from above
   (`WriteStressTopDownScene`), with its own budgets; at the end every texture must be at the level its view needs
   (`MipsBelowWanted` 0), none evicted and none loading. Texture cooking's criterion read "with all textures resident";
