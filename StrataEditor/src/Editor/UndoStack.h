@@ -12,7 +12,9 @@ namespace Strata
 {
 
 	// An undoable edit. Execute applies it (the first time and on redo), Undo reverts it. Actions own all state
-	// they need: they must work after any number of other actions were undone and redone around them.
+	// they need: they must work after any number of other actions were undone and redone around them. Either fails,
+	// changing nothing and saying why in outError, when the world changed in a way the action cannot be applied or reverted
+	// in (another file is where a deleted asset would come back).
 	class EditorAction
 	{
 	public:
@@ -20,7 +22,7 @@ namespace Strata
 
 		virtual const std::string& GetName() const = 0;
 		virtual bool Execute(std::string* outError) = 0;
-		virtual void Undo() = 0;
+		virtual bool Undo(std::string* outError) = 0;
 
 		// Continuous edits (dragging a value) become one undo step: when the stack's latest action accepts the next
 		// one, it absorbs its effect (the next action has already been applied) and the next action is dropped.
@@ -34,7 +36,7 @@ namespace Strata
 	};
 
 	// Several actions as one undo step (e.g. prefab.apply: the prefab's file and the instances it updates): Execute runs them in
-	// order (undoing those that ran when one fails), Undo in reverse order.
+	// order, Undo in reverse order; either happens as a whole or not at all (when one fails, those that ran are reverted).
 	class EditorActionGroup final : public EditorAction
 	{
 	public:
@@ -45,7 +47,7 @@ namespace Strata
 
 		const std::string& GetName() const override { return m_Name; }
 		bool Execute(std::string* outError) override;
-		void Undo() override;
+		bool Undo(std::string* outError) override;
 		bool ChangesScene() const override;
 	private:
 		std::string m_Name;
@@ -65,8 +67,12 @@ namespace Strata
 		// Records an action whose effect has already been applied (e.g. a scene edit made in place).
 		void Record(Scope<EditorAction> action);
 
-		bool Undo();
-		bool Redo();
+		// Reverts the latest applied action. When it cannot be reverted, it stays applied (the history keeps its position, so
+		// the step can be tried again once what blocks it is gone) and the reason goes to outError and the log.
+		bool Undo(std::string* outError = nullptr);
+		// Applies the next undone action again. When it cannot be applied, it and the actions after it are dropped (the world
+		// they were recorded in is gone) and the reason goes to outError and the log.
+		bool Redo(std::string* outError = nullptr);
 		bool CanUndo() const { return m_Position > 0; }
 		bool CanRedo() const { return m_Position < m_Actions.size(); }
 		// Names of the actions undo and redo would apply (empty when unavailable).

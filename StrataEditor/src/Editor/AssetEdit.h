@@ -85,7 +85,7 @@ namespace Strata
 
 		const std::string& GetName() const override { return m_Name; }
 		bool Execute(std::string* outError) override;
-		void Undo() override;
+		bool Undo(std::string* outError) override;
 		// Consecutive edits with the same non-empty key of the same asset: the step keeps its state before and takes the
 		// next one's state after.
 		bool MergeWith(const EditorAction& next) override;

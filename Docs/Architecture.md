@@ -1429,6 +1429,13 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   users fails with them in the error's data (`EditorCommandResult::ErrorData`, which automation sends as the JSON-RPC
   error's `data`) unless forced. The Content Browser asks the same through `UI/DeleteAssetDialog` and runs the commands;
   panels never write files themselves (`Editor.UI.Source` scans `Panels/` for file-system writes).
+  Files can change outside the history (a new asset at a deleted one's path, a scene saved into a restored folder), so the
+  steps check before they act: undoing a delete fails while something else is at the path, redoing one fails unless the
+  path still holds exactly the assets it deleted and the command would delete them now (not the open scene; nothing uses
+  them, unless the delete was forced), and undoing `prefab.create`'s file trashes only the asset it made.
+  `EditorAction::Undo` reports failure like `Execute`: a step that cannot be undone stays applied as a whole
+  (`UndoStack::Undo` keeps its position, an `EditorActionGroup` applies again what it had undone, and `edit.undo` fails
+  with the reason), one that cannot be redone leaves the history with the steps after it.
 - **Content Browser** (`Panels/ContentBrowserPanel`, rows in `Editor/AssetBrowserView`). Two panes in a resizable table: a
   folder tree (the asset directory and its folders as far as they are expanded) and the current folder's items as a grid
   of tiles (the asset's thumbnail, or the type's icon, on a square, the name cut to the tile; a size slider, and in a pane

@@ -33,7 +33,17 @@ namespace
 			return true;
 		}
 
-		void Undo() override { m_Value -= m_Delta; }
+		bool Undo(std::string* outError) override
+		{
+			if (m_UndoFails)
+			{
+				if (outError)
+					*outError = "Blocked";
+				return false;
+			}
+			m_Value -= m_Delta;
+			return true;
+		}
 
 		bool MergeWith(const EditorAction& next) override
 		{
@@ -47,11 +57,13 @@ namespace
 		bool IsNoOp() const override { return m_Delta == 0; }
 
 		void SetFails(bool fails) { m_Fails = fails; }
+		void SetUndoFails(bool fails) { m_UndoFails = fails; }
 	private:
 		int& m_Value;
 		int m_Delta;
 		bool m_Mergeable;
 		bool m_Fails;
+		bool m_UndoFails = false;
 		std::string m_Name;
 	};
 
@@ -76,7 +88,11 @@ namespace
 			return true;
 		}
 
-		void Undo() override { m_Value--; }
+		bool Undo(std::string*) override
+		{
+			m_Value--;
+			return true;
+		}
 		bool ChangesScene() const override { return false; }
 	private:
 		int& m_Value;
@@ -287,6 +303,66 @@ TEST_SUITE("Editor.Undo")
 		CHECK_FALSE(stack.CanRedo());
 		CHECK(stack.GetHistory() == std::vector<std::string> { "Add 1" });
 		CHECK(stack.IsModified()); // The saved state (all three applied) is unreachable now
+	}
+
+	TEST_CASE("An undo that fails keeps the step applied, says why, and works once nothing blocks it")
+	{
+		int value = 0;
+		UndoStack stack;
+		stack.Execute(CreateScope<AddAction>(value, 1));
+		Scope<AddAction> second = CreateScope<AddAction>(value, 2);
+		AddAction* secondAction = second.get();
+		stack.Execute(std::move(second));
+		stack.MarkSaved();
+		const uint64_t changes = stack.GetChangeCount();
+
+		secondAction->SetUndoFails(true);
+		std::string error;
+		CHECK_FALSE(stack.Undo(&error));
+		CHECK(error == "Undo of 'Add 2' failed: Blocked");
+		CHECK(value == 3);
+		CHECK(stack.GetPosition() == 2);
+		CHECK_FALSE(stack.CanRedo());
+		CHECK_FALSE(stack.IsModified());
+		CHECK(stack.GetChangeCount() == changes);
+
+		secondAction->SetUndoFails(false);
+		CHECK(stack.Undo());
+		CHECK(value == 1);
+		CHECK(stack.Redo());
+		CHECK(value == 3);
+
+		// With nothing to undo or redo, the reason says so.
+		UndoStack empty;
+		CHECK_FALSE(empty.Undo(&error));
+		CHECK(error == "Nothing to undo");
+		CHECK_FALSE(empty.Redo(&error));
+		CHECK(error == "Nothing to redo");
+	}
+
+	TEST_CASE("A group whose member cannot be undone stays applied as a whole")
+	{
+		int value = 0;
+		UndoStack stack;
+		Scope<EditorActionGroup> group = CreateScope<EditorActionGroup>("Three");
+		Scope<AddAction> first = CreateScope<AddAction>(value, 1);
+		AddAction* firstAction = first.get();
+		group->Add(std::move(first));
+		group->Add(CreateScope<AddAction>(value, 2));
+		group->Add(CreateScope<AddAction>(value, 4));
+		REQUIRE(stack.Execute(std::move(group)));
+		REQUIRE(value == 7);
+
+		// The members after the first are undone before the first refuses: they are applied again.
+		firstAction->SetUndoFails(true);
+		std::string error;
+		CHECK_FALSE(stack.Undo(&error));
+		CHECK(error == "Undo of 'Three' failed: Blocked");
+		CHECK(value == 7);
+		CHECK(stack.GetPosition() == 1);
+		firstAction->SetUndoFails(false);
+		CHECK(stack.Undo());
+		CHECK(value == 0);
 	}
 
 	TEST_CASE("Clearing resets history and modification state")

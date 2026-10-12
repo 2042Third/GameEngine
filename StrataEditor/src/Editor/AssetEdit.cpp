@@ -275,11 +275,9 @@ namespace Strata
 		return Apply(m_After, outError);
 	}
 
-	void AssetDocumentAction::Undo()
+	bool AssetDocumentAction::Undo(std::string* outError)
 	{
-		std::string error;
-		if (!Apply(m_Before, &error))
-			ST_ERROR("Undo of '{}' failed: {}", m_Name, error);
+		return Apply(m_Before, outError);
 	}
 
 	bool AssetDocumentAction::MergeWith(const EditorAction& next)

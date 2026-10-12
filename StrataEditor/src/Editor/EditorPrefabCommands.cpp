@@ -46,10 +46,12 @@ namespace Strata
 				return true;
 			}
 
-			void Undo() override
+			bool Undo(std::string* outError) override
 			{
-				m_Group->Undo();
+				if (!m_Group->Undo(outError))
+					return false;
 				m_Context.GetPrefabSync().SetBaseline(m_Context, m_Prefab, m_Before);
+				return true;
 			}
 		private:
 			EditorContext& m_Context;

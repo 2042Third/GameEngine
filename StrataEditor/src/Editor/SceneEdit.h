@@ -52,7 +52,7 @@ namespace Strata
 
 		const std::string& GetName() const override { return m_Name; }
 		bool Execute(std::string* outError) override;
-		void Undo() override;
+		bool Undo(std::string* outError) override;
 		bool MergeWith(const EditorAction& next) override;
 		bool IsNoOp() const override { return m_Before == m_After; }
 

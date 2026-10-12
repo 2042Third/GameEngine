@@ -148,23 +148,25 @@ namespace Strata
 		// Undo
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "edit.undo", "Undoes the latest edit of the scene (not available while playing).", ObjectSchema({}),
+		registry.Register({ "edit.undo", "Undoes the latest edit of the scene or of the project's files (not available while playing). Fails, "
+			"changing nothing, when there is nothing to undo or the step cannot be undone now (e.g. another file is where a deleted asset would "
+			"come back), saying why; the step stays in the history. Returns the history like edit.history.", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
-				if (context.IsPlaying())
-					return EditorCommandResult::Fail("Undo is not available while the scene is running");
-				if (!context.Undo())
-					return EditorCommandResult::Fail("Nothing to undo");
+				std::string error;
+				if (!context.Undo(&error))
+					return EditorCommandResult::Fail(error);
 				return EditorCommandResult::Ok(DescribeHistory(context));
 			} });
 
-		registry.Register({ "edit.redo", "Redoes the latest undone edit (not available while playing).", ObjectSchema({}),
+		registry.Register({ "edit.redo", "Redoes the latest undone edit (not available while playing). Fails when there is nothing to redo or the "
+			"step no longer fits the project (e.g. a deleted asset's path now holds another one), saying why; such a step and the ones after it "
+			"leave the history. Returns the history like edit.history.", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
-				if (context.IsPlaying())
-					return EditorCommandResult::Fail("Redo is not available while the scene is running");
-				if (!context.Redo())
-					return EditorCommandResult::Fail("Nothing to redo");
+				std::string error;
+				if (!context.Redo(&error))
+					return EditorCommandResult::Fail(error);
 				return EditorCommandResult::Ok(DescribeHistory(context));
 			} });
 

@@ -205,7 +205,9 @@ step: `edit.undo` brings the asset back with the same handle, so its references 
 stays valid) and `asset.deleteFolder {"path", "force"?}` (refused while assets outside it or the open scene use its
 assets); `asset.move {"asset", "path"}` renames or moves one asset (a name that differs only in case renames it in
 place; its own path changes nothing). Each is one undo step (`edit.undo`, `edit.history`); the open scene cannot be
-deleted.
+deleted. Undo and redo check the files first: `edit.undo` of a delete fails (the step stays, nothing changes) while
+another file is at the deleted path, and `edit.redo` of one fails (dropping the step) when the path holds other assets
+now or the delete would be refused now; the error says why.
 
 **Hierarchy and prefabs**: `entity.create {"parent": "<id>"}`;
 `entity.setParent {"entities": ["<id>", ...], "parent": "<id>" | null, "index": 0}` moves entities (in the order given;

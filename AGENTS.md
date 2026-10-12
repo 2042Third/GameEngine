@@ -769,7 +769,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   unless `force`; deleting moves the files with their `.meta` and cached imports to `<project>/.strata/Trash`
   (`EditorAssetManager::MoveToTrash`, kept 30 days) and is one undo step that restores the handle.
   `asset.findReferences`, `asset.move`, `asset.createFolder` and `asset.moveFolder` (handles kept) complete the set; each
-  mutating one is one undo step that never marks the scene unsaved.
+  mutating one is one undo step that never marks the scene unsaved. Steps check the files before they act, since files
+  change outside the history: an undo that cannot be done now fails and keeps the step applied (`EditorAction::Undo`
+  returns false with the reason, which `edit.undo` reports), a redo that no longer fits (the path holds other assets, or
+  the delete would be refused now) fails and leaves the history with the steps after it.
 - **Prefab instances stay linked** (`Scene/PrefabInstances`, `Editor/PrefabSync`, `Editor/EditorPrefabCommands.cpp`):
   `prefab.instantiate` and `prefab.create` (unless `link: false`) link entities to their prefab (`PrefabInstanceComponent`);
   `prefab.status`, `prefab.apply` (the instance into the prefab, unmodified instances follow; one step for the file and the

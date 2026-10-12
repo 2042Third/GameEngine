@@ -211,9 +211,10 @@ namespace Strata
 		return true;
 	}
 
-	void SceneEditAction::Undo()
+	bool SceneEditAction::Undo(std::string*)
 	{
 		SceneEdit::ApplyEntities(*m_Scene, m_Before);
+		return true;
 	}
 
 	bool SceneEditAction::MergeWith(const EditorAction& next)

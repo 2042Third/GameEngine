@@ -722,20 +722,28 @@ namespace Strata
 		return transaction.Commit(m_UndoStack);
 	}
 
-	bool EditorContext::Undo()
+	bool EditorContext::Undo(std::string* outError)
 	{
 		if (IsPlaying())
+		{
+			if (outError)
+				*outError = "Undo is not available while the scene is running";
 			return false;
-		const bool undone = m_UndoStack.Undo();
+		}
+		const bool undone = m_UndoStack.Undo(outError);
 		PruneSelection();
 		return undone;
 	}
 
-	bool EditorContext::Redo()
+	bool EditorContext::Redo(std::string* outError)
 	{
 		if (IsPlaying())
+		{
+			if (outError)
+				*outError = "Redo is not available while the scene is running";
 			return false;
-		const bool redone = m_UndoStack.Redo();
+		}
+		const bool redone = m_UndoStack.Redo(outError);
 		PruneSelection();
 		return redone;
 	}

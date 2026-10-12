@@ -230,8 +230,10 @@ namespace Strata
 		// Records an edit of the active scene. Edits of the running copy during play are not recorded: they are
 		// discarded with it. Returns true when an undo step was recorded.
 		bool CommitEdit(SceneEditTransaction& transaction);
-		bool Undo();
-		bool Redo();
+		// Undo and redo of the history (UndoStack::Undo, Redo): false while playing, with nothing to do, or when the step
+		// fails (the reason in outError).
+		bool Undo(std::string* outError = nullptr);
+		bool Redo(std::string* outError = nullptr);
 
 		//////////////////////////////////////////////////////////////////////////
 		// Scripts

@@ -60,9 +60,10 @@ namespace Strata
 				return true;
 			}
 
-			void Undo() override
+			bool Undo(std::string*) override
 			{
 				m_Scene.GetSettings() = m_Before;
+				return true;
 			}
 		private:
 			Scene& m_Scene;

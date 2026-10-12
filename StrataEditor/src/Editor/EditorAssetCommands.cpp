@@ -721,7 +721,7 @@ namespace Strata
 				TrashedAssets trashed;
 				if (!assets->MoveToTrash(path, trashed, &error))
 					return EditorCommandResult::Fail(error);
-				context.GetUndoStack().Record(CreateScope<AssetTrashAction>(*assets, fmt::format("Delete {}", path), trashed));
+				context.GetUndoStack().Record(CreateScope<AssetTrashAction>(context, *assets, fmt::format("Delete {}", path), trashed, force));
 				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "path", path }, { "trash", FileSystem::ToUTF8(trashed.Entry) },
 					{ "referencedBy", AssetReferences::ToJson(referencers) } });
 			} });
@@ -806,7 +806,7 @@ namespace Strata
 				TrashedAssets trashed;
 				if (!assets->MoveToTrash(path, trashed, &error))
 					return EditorCommandResult::Fail(error);
-				context.GetUndoStack().Record(CreateScope<AssetTrashAction>(*assets, fmt::format("Delete Folder {}", path), trashed));
+				context.GetUndoStack().Record(CreateScope<AssetTrashAction>(context, *assets, fmt::format("Delete Folder {}", path), trashed, force));
 				return EditorCommandResult::Ok({ { "path", path }, { "assets", trashed.Handles.size() }, { "trash", FileSystem::ToUTF8(trashed.Entry) },
 					{ "referencedBy", AssetReferences::ToJson(referencers) } });
 			} });
@@ -984,7 +984,7 @@ namespace Strata
 
 				// One step: the file (undo moves it to the trash) and the link.
 				Scope<EditorActionGroup> step = CreateScope<EditorActionGroup>(fmt::format("Create Prefab {}", created));
-				step->Add(CreateScope<AssetCreateAction>(*assets, fmt::format("Create Prefab {}", created), created));
+				step->Add(CreateScope<AssetCreateAction>(*assets, fmt::format("Create Prefab {}", created), handle, created));
 				if (link)
 				{
 					SceneEditTransaction transaction(scene, "Link Prefab", {});

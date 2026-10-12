@@ -13,9 +13,12 @@
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Scene/Components.h>
+#include <Strata/Scene/Scene.h>
 
 #include <algorithm>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -318,6 +321,91 @@ TEST_SUITE("Editor.AssetOperations")
 		// The entity's material works again.
 		CHECK(harness.Assets().GetReferencers(moss).empty()); // The scene was never saved: only the scene in memory uses it
 		CHECK(harness.Run("asset.findReferences", { { "asset", UUIDToJson(moss) } })["referencedBy"][0]["openScene"] == true);
+	}
+
+	TEST_CASE("Undoing a delete fails while another asset is at its path, and the step stays")
+	{
+		AssetHarness harness("AssetOpsUndoBlocked");
+		const AssetHandle first = ToHandle(harness.Run("material.create", { { "path", "Materials/Red.stmat" } })["asset"]);
+		harness.Run("asset.delete", { { "asset", UUIDToJson(first) } });
+		// A new asset at the path (material.create records no step of its own).
+		const AssetHandle second = ToHandle(harness.Run("material.create", { { "path", "Materials/Red.stmat" } })["asset"]);
+		const nlohmann::json before = harness.Run("edit.history");
+		REQUIRE(before["undo"] == "Delete Materials/Red.stmat");
+
+		const EditorCommandResult undo = harness.Fail("edit.undo", nlohmann::json::object());
+		CHECK(undo.ErrorKind == EditorCommandError::Failed);
+		CHECK(undo.Error.find("Something else is at 'Materials/Red.stmat'") != std::string::npos);
+		CHECK(harness.Run("edit.history") == before);
+		CHECK(harness.Assets().GetMetadata(second)->Path == "Materials/Red.stmat");
+		CHECK_FALSE(harness.Assets().IsHandleValid(first));
+		CHECK(harness.TrashEntries().size() == 1);
+		// Nothing was undone, so there is nothing to redo, and the new material stays.
+		CHECK(harness.Fail("edit.redo", nlohmann::json::object()).Error == "Nothing to redo");
+		CHECK(harness.Assets().GetMetadata(second)->Path == "Materials/Red.stmat");
+		CHECK(FileSystem::IsRegularFile(harness.AssetPath("Materials/Red.stmat")));
+	}
+
+	TEST_CASE("Undoing prefab.create leaves another asset at the prefab's path alone, and the step stays whole")
+	{
+		AssetHarness harness("AssetOpsCreateUndoBlocked");
+		const UUID crate = *UUIDFromJson(harness.Run("entity.create", { { "name", "Crate" } })["id"]);
+		const AssetHandle other = ToHandle(harness.Run("prefab.create", { { "entities", { UUIDToJson(crate) } }, { "path", "Prefabs/Crate.stprefab" },
+			{ "link", false } })["asset"]);
+		const UUID lamp = *UUIDFromJson(harness.Run("entity.create", { { "name", "Lamp" } })["id"]);
+		const AssetHandle prefab = ToHandle(harness.Run("prefab.create", { { "entities", { UUIDToJson(lamp) } }, { "path", "Prefabs/Lamp.stprefab" } })["asset"]);
+		const nlohmann::json before = harness.Run("edit.history");
+		REQUIRE(before["undo"] == "Create Prefab Prefabs/Lamp.stprefab");
+
+		// Replaced outside the history (a file manager, version control): the lamp's file goes and the crate's comes to its path.
+		TrashedAssets trashed;
+		std::string error;
+		REQUIRE_MESSAGE(harness.Assets().MoveToTrash("Prefabs/Lamp.stprefab", trashed, &error), error);
+		REQUIRE_MESSAGE(harness.Assets().MoveAsset(other, "Prefabs/Lamp.stprefab", &error), error);
+		REQUIRE_FALSE(harness.Assets().IsHandleValid(prefab));
+
+		// The undo would trash the crate's prefab: it fails, the step stays, and the entity keeps its link (the group's scene
+		// part, undone first, is applied again).
+		const EditorCommandResult undo = harness.Fail("edit.undo", nlohmann::json::object());
+		CHECK(undo.Error.find("no longer the asset this step created") != std::string::npos);
+		CHECK(harness.Run("edit.history") == before);
+		CHECK(harness.Assets().FindAssetByPath("Prefabs/Lamp.stprefab") == other);
+		CHECK(harness.TrashEntries().size() == 1);
+		CHECK(harness.Context.GetEditScene()->GetEntityByUUID(lamp).HasComponent<PrefabInstanceComponent>());
+	}
+
+	TEST_CASE("Redoing a delete fails when the path holds other assets now, or the open scene")
+	{
+		AssetHarness harness("AssetOpsRedoChanged");
+		const AssetHandle a = ToHandle(harness.Run("material.create", { { "path", "Props/A.stmat" } })["asset"]);
+		harness.Run("asset.deleteFolder", { { "path", "Props" } });
+		harness.Run("edit.undo");
+		REQUIRE(harness.Assets().GetMetadata(a)->Path == "Props/A.stmat");
+
+		// A material made in the restored folder: the step would trash it too.
+		const AssetHandle b = ToHandle(harness.Run("material.create", { { "path", "Props/B.stmat" } })["asset"]);
+		const EditorCommandResult redo = harness.Fail("edit.redo", nlohmann::json::object());
+		CHECK(redo.Error.find("no longer holds what this step deleted") != std::string::npos);
+		CHECK(harness.Assets().GetMetadata(a)->Path == "Props/A.stmat");
+		CHECK(harness.Assets().GetMetadata(b)->Path == "Props/B.stmat");
+		CHECK(harness.TrashEntries().empty());
+		CHECK(harness.Run("edit.history")["redo"] == ""); // The step is gone from the history
+
+		// The open scene saved into a restored folder: never trashed by a redo, like asset.deleteFolder refuses it.
+		harness.Run("asset.deleteFolder", { { "path", "Props" } });
+		harness.Run("edit.undo");
+		harness.Run("scene.saveAs", { { "path", "Props/Level.stscene" } });
+		CHECK_FALSE(harness.Fail("edit.redo", nlohmann::json::object()).Error.empty());
+		CHECK(FileSystem::IsRegularFile(harness.AssetPath("Props/Level.stscene")));
+		harness.Run("scene.save");
+		CHECK(harness.Assets().GetMetadata(a)->Path == "Props/A.stmat");
+
+		// A single asset: redone only while its path still holds it.
+		const AssetHandle red = ToHandle(harness.Run("material.create", { { "path", "Materials/Red.stmat" } })["asset"]);
+		harness.Run("asset.delete", { { "asset", UUIDToJson(red) } });
+		harness.Run("edit.undo");
+		harness.Run("edit.redo");
+		CHECK_FALSE(harness.Assets().IsHandleValid(red));
 	}
 
 	TEST_CASE("asset.findReferences of a sub-asset lists the users of that sub-asset only")
