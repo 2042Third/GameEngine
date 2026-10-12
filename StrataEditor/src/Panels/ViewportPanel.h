@@ -43,6 +43,11 @@ namespace Strata
 		const ViewportImageArea& GetImageArea() const { return m_Image; }
 		// The notice of the game's window requests the last frame showed over the game view (empty when it showed none).
 		std::string_view GetShownGameWindowNotice() const { return m_GameWindowNoticeShown ? std::string_view(m_GameWindowNotice) : std::string_view(); }
+		// What the game view says while the game locked the cursor (how to free it and stop the game): shown for
+		// c_MouseHintSeconds after the game took the mouse. Empty when the last frame showed none.
+		std::string_view GetShownMouseHint() const { return m_MouseHintShown ? std::string_view(c_MouseHint) : std::string_view(); }
+		static constexpr const char* c_MouseHint = "Shift+F1 frees the mouse \xC2\xB7 Ctrl+P stops the game";
+		static constexpr double c_MouseHintSeconds = 5.0;
 	private:
 		enum class CameraDrag : uint8_t
 		{
@@ -81,6 +86,8 @@ namespace Strata
 		bool m_CursorLocked = false; // By fly mode
 		bool m_GameInputEnabled = false;
 		bool m_GameOwnsMouse = false; // The game locked the cursor while the game view has the input: ImGui ignores the mouse
+		double m_MouseHintUntil = 0.0; // ImGui's time until which the way out shows (c_MouseHint)
+		bool m_MouseHintShown = false;
 		std::optional<TransformDrag> m_GizmoDrag;
 		std::string m_GameWindowNotice; // Rebuilt only when the game's window requests change
 		uint64_t m_GameWindowNoticeVersion = 0;

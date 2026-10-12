@@ -129,7 +129,8 @@ axis it holds wins over the device's until released), `SetEnabled` (device input
 has no focus; sticks and triggers then read at rest) and `SetSuspended` (input frames follow the game's updates). The
 cursor mode a game asks for (`SetGameCursorMode`, scripts' `Input::SetCursorMode`) applies to the window only while input
 is enabled: disabling input gives the cursor back, enabling it applies the game's mode again, so a locked cursor in the
-editor stays in the focused game view and Shift+F1 frees it. `InputNames` maps key, button and gamepad control names for
+editor stays in the focused game view (the editor's UI ignores the mouse meanwhile, and the game view says that Shift+F1
+frees it and Ctrl+P stops the game) and Shift+F1 frees it. `InputNames` maps key, button and gamepad control names for
 the `input.*` commands.
 
 **Math** (`Math/`). Engine conventions in `Math.h`: right-handed, +Y up, -Z forward, reversed-Z projections, Euler

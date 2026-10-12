@@ -21,6 +21,7 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Events/ApplicationEvent.h>
+#include <Strata/Input/Input.h>
 #include <Strata/Network/EditorSession.h>
 #include <Strata/Network/RpcClient.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -882,6 +883,70 @@ TEST_SUITE("Editor.UI")
 		CHECK_FALSE(editor.Context().IsGameInputActive());
 		CHECK(UI::ItemProbe::Find("Viewport.Stats").has_value());
 		editor.Run("play.stop");
+	}
+
+	TEST_CASE("A cursor the game locks stays in the game view, which says how to free it; Shift+F1 and stopping free it")
+	{
+		ScopedAudioEngine audio;
+		REQUIRE(audio.Initialized);
+		HarnessEditor editor({}, WithFeatureProject("EditorUICursorLock"));
+		editor.Run("script.load", { { "path", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_API)) } });
+		const nlohmann::json created = editor.Run("entity.create", { { "name", "Mouse Look" } });
+		editor.Run("script.add", { { "entity", created["id"] }, { "class", "CursorProbe" } });
+		editor.Frames(2);
+		const ViewportPanel* viewport = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
+		REQUIRE(viewport);
+		const ImGuiIO& io = ImGui::GetIO();
+
+		// Playing, the game asked for a locked cursor; until the game view has the input the editor keeps the mouse.
+		REQUIRE(editor.Click("Toolbar.Play"));
+		editor.Frames(1);
+		REQUIRE(editor.Context().IsPlaying());
+		CHECK(Input::GetGameCursorMode() == CursorMode::Locked);
+		CHECK(Input::GetCursorMode() == CursorMode::Normal);
+		CHECK((io.ConfigFlags & ImGuiConfigFlags_NoMouse) == 0);
+		CHECK(viewport->GetShownMouseHint().empty());
+
+		// Clicking the game gives it the input: the cursor locks, the editor's UI ignores the mouse, and the view says how to
+		// get it back.
+		const ViewportImageArea& image = viewport->GetImageArea();
+		const ImVec2 center(image.Min.x + image.Size.x * 0.5f, image.Min.y + image.Size.y * 0.5f);
+		editor.ClickAt(center);
+		editor.Frames(1);
+		REQUIRE(editor.Context().IsGameInputActive());
+		CHECK(Input::GetCursorMode() == CursorMode::Locked);
+		CHECK((io.ConfigFlags & ImGuiConfigFlags_NoMouse) != 0);
+		CHECK(viewport->GetShownMouseHint() == ViewportPanel::c_MouseHint);
+
+		// Shift+F1 leaves the game view: the cursor and the mouse are the editor's again, and the hint goes.
+		editor.Harness.SetKey(ImGuiMod_Shift, true);
+		editor.Harness.SetKey(ImGuiKey_F1, true);
+		editor.Frames(1);
+		editor.Harness.SetKey(ImGuiKey_F1, false);
+		editor.Harness.SetKey(ImGuiMod_Shift, false);
+		editor.Frames(2);
+		CHECK_FALSE(editor.Context().IsGameInputActive());
+		CHECK(Input::GetCursorMode() == CursorMode::Normal);
+		CHECK((io.ConfigFlags & ImGuiConfigFlags_NoMouse) == 0);
+		CHECK(viewport->GetShownMouseHint().empty());
+
+		// Clicking back locks it again, with the hint, which goes after a few seconds while the cursor stays locked.
+		editor.ClickAt(center);
+		editor.Frames(1);
+		CHECK(Input::GetCursorMode() == CursorMode::Locked);
+		CHECK((io.ConfigFlags & ImGuiConfigFlags_NoMouse) != 0);
+		CHECK_FALSE(viewport->GetShownMouseHint().empty());
+		editor.Frames(static_cast<int>(ViewportPanel::c_MouseHintSeconds) + 1, 1.0f);
+		CHECK(viewport->GetShownMouseHint().empty());
+		CHECK((io.ConfigFlags & ImGuiConfigFlags_NoMouse) != 0);
+
+		// Stopping (Ctrl+P, here the command) gives everything back.
+		editor.Run("play.stop");
+		editor.Frames(2);
+		CHECK(Input::GetGameCursorMode() == CursorMode::Normal);
+		CHECK(Input::GetCursorMode() == CursorMode::Normal);
+		CHECK((io.ConfigFlags & ImGuiConfigFlags_NoMouse) == 0);
+		CHECK(viewport->GetShownMouseHint().empty());
 	}
 
 	TEST_CASE("The game view says what the game asked of its window, which play mode does not apply")

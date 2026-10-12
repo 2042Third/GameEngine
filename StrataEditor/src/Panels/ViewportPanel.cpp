@@ -242,6 +242,7 @@ namespace Strata
 			DrawDebugViewLegend(context);
 		// Text boxes go below the chip row, also while it is hidden, so they stay in place when it comes and goes.
 		m_GameWindowNoticeShown = false;
+		m_MouseHintShown = false;
 		if (view)
 			DrawOverlays(context, *view, chipsMin.y + ImGui::GetFrameHeight(), panelContext.Frame);
 	}
@@ -251,6 +252,7 @@ namespace Strata
 		// Hidden behind another tab, collapsed or closed: nothing is rendered and held interactions end.
 		Reset(context.Context);
 		m_GameWindowNoticeShown = false;
+		m_MouseHintShown = false;
 	}
 
 	void ViewportPanel::OnDetach(EditorPanelContext& context)
@@ -552,6 +554,9 @@ namespace Strata
 				io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
 			else
 				io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
+			// Without a pointer nothing on screen leads out: the game view says how, for a while after each time it took it.
+			if (gameOwnsMouse)
+				m_MouseHintUntil = ImGui::GetTime() + c_MouseHintSeconds;
 		}
 		if (enabled)
 		{
@@ -639,6 +644,13 @@ namespace Strata
 		{
 			const float width = ImGui::CalcTextSize(view.Notice.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
 			DrawTextBox(drawList, ImVec2(std::max(imageMin.x + (m_Image.Size.x - width) * 0.5f, imageMin.x), top), { view.Notice }, colors.Warning);
+		}
+		// The game locked the cursor: the way out, at the top of the game view.
+		m_MouseHintShown = m_GameOwnsMouse && ImGui::GetTime() < m_MouseHintUntil;
+		if (m_MouseHintShown)
+		{
+			const float width = ImGui::CalcTextSize(c_MouseHint).x + ImGui::GetStyle().FramePadding.x * 2.0f;
+			DrawTextBox(drawList, ImVec2(std::max(imageMin.x + (m_Image.Size.x - width) * 0.5f, imageMin.x), top), { c_MouseHint }, colors.Text);
 		}
 		DrawGameWindowNotice(context, view, drawList);
 
