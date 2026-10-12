@@ -638,11 +638,11 @@ TEST_SUITE("Editor.UI")
 		CHECK(editor.Host->FrameRateChanges == 0);
 	}
 
-	TEST_CASE("The status bar's pills fit side by side in a laptop-sized window: compact at 150% while all show, full again with room")
+	TEST_CASE("The status bar's pills fit side by side in a narrow window: compact at 150% while all show, full again with room")
 	{
 		const std::filesystem::path sessions = CreateTemporaryDirectory("StatusPillsSessions");
 		ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessions));
-		// 1600 x 900 pixels at 150%: about 1067 points of status bar, the narrowest window the editor is laid out for.
+		// 1600 x 900 pixels at 150%: about 1067 points of status bar, two thirds of the editor's 1600x900 window at that scale.
 		const ImVec2 display(1600.0f, 900.0f);
 		HarnessEditor editor({ display, 1.5f }, WithFeatureProject("StatusPills"), {}, true);
 		editor.Frames(2);
@@ -675,22 +675,27 @@ TEST_SUITE("Editor.UI")
 		editor.Run("play.stop");
 	}
 
-	TEST_CASE("At 100% the status bar's pills keep their full texts in a laptop-sized window while all show")
+	TEST_CASE("In the editor's 1600x900 window the status bar's pills keep their full texts at 150% and at 100% while all show")
 	{
-		const std::filesystem::path sessions = CreateTemporaryDirectory("StatusPillsFullSessions");
-		ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessions));
-		const ImVec2 display(1600.0f, 900.0f);
-		HarnessEditor editor({ display, 1.0f }, WithFeatureProject("StatusPillsFull"), {}, true);
-		editor.Frames(2);
-		RpcClient first;
-		RpcClient second;
-		ShowEveryStatusPill(editor, sessions, first, second);
+		// The window --windowed opens (a laptop's): 1600 x 900 points, 2400 x 1350 pixels at 150%.
+		const ImGuiHarness::Specification windows[] = { { ImVec2(2400.0f, 1350.0f), 1.5f }, { ImVec2(1600.0f, 900.0f), 1.0f } };
+		for (const ImGuiHarness::Specification& window : windows)
+		{
+			CAPTURE(window.ContentScale);
+			const std::filesystem::path sessions = CreateTemporaryDirectory("StatusPillsFullSessions");
+			ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessions));
+			HarnessEditor editor(window, WithFeatureProject("StatusPillsFull"), {}, true);
+			editor.Frames(2);
+			RpcClient first;
+			RpcClient second;
+			ShowEveryStatusPill(editor, sessions, first, second);
 
-		CHECK(CheckPillsSideBySide(c_EveryStatusPill) <= display.x);
-		CHECK(editor.GetPillText("Status.Automation") == "2 agents connected \xC2\xB7 Claude Code");
-		CHECK(editor.GetPillText("Status.InputHolds") == "Holds W, LeftShift, Mouse Left");
-		CHECK(editor.GetPillText("Status.Scripts").starts_with(editor.Context().GetScriptEngine()->GetModuleName()));
-		editor.Run("play.stop");
+			CHECK(CheckPillsSideBySide(c_EveryStatusPill) <= window.DisplaySize.x);
+			CHECK(editor.GetPillText("Status.Automation") == "2 agents connected \xC2\xB7 Claude Code");
+			CHECK(editor.GetPillText("Status.InputHolds") == "Holds W, LeftShift, Mouse Left");
+			CHECK(editor.GetPillText("Status.Scripts").starts_with(editor.Context().GetScriptEngine()->GetModuleName()));
+			editor.Run("play.stop");
+		}
 	}
 
 	TEST_CASE("The status bar counts unread errors and opens the Console")

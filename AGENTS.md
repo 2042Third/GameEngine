@@ -922,7 +922,7 @@ and `AudioSystem`, the built-in "Audio" scene system.
     `K importing` while imports run (`editor.status` has the count as `assets.importing`), in Sulfur from
     85% of it and Cinnabar beyond it or on failures; click to open the Streaming panel). The frame pill (`ms · FPS · J
     jobs`, jobs running or queued averaged over 60 frames) opens the Performance panel. Where the pills' full texts do
-    not fit side by side (a laptop-sized window at 150% with every stream's pill) they all show compact ones, until the
+    not fit side by side (a window about 1,000 points wide with every stream's pill) they all show compact ones, until the
     full ones fit with a margin again (`EditorLayer::StatusPillText`: who is connected without the port, the class count
     without the module, how many controls are held, no memory or jobs; the tooltips keep the details): a new pill passes
     its texts through it. Panels collect what the status bar shows about them in `OnUpdate`, which runs while they are

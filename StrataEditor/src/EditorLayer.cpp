@@ -1523,9 +1523,9 @@ namespace Strata
 		const ImVec4& stateColor = paused ? colors.PlayState.Paused
 			: (state == SceneState::Play ? colors.PlayState.Play : (state == SceneState::Simulate ? colors.PlayState.Simulate : colors.PlayState.Edit));
 
-		// Every stream of work has a pill, and in a laptop-sized window at 150% their full texts do not all fit side by side:
-		// then the pills show compact texts (the details go to their tooltips). Decided from the width the full texts took in
-		// the previous frame; they grow back once the full texts fit with a margin.
+		// Every stream of work has a pill, and in a narrow window (about 1,000 points: 1600 pixels at 150%) their full texts do
+		// not all fit side by side: then the pills show compact texts (the details go to their tooltips). Decided from the width
+		// the full texts took in the previous frame; they grow back once the full texts fit with a margin.
 		const float available = ImGui::GetContentRegionAvail().x;
 		if (m_StatusBarFullWidth > available)
 			m_StatusBarCompact = true;

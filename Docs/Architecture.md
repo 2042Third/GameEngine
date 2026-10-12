@@ -1911,32 +1911,32 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   assets, automation, scripts, input holds, errors) choose between their full texts and compact ones
   (`EditorLayer::StatusPillText`) by the width the full texts took side by side in the previous frame, compact while
   that overflows the bar and full again once it fits with a margin of two font sizes, so a frame time's digits cannot
-  make them flicker; `Editor.UI` checks that every pill shows within a 1600x900 window at 150% (compact) and at 100%
-  (full). Panels collect what the status bar shows in `OnUpdate`, also while closed: the Streaming panel takes the
-  active asset manager's `GetStats` once per frame after the frame's commands ran (so its totals equal
-  what `asset.stats` returned in that frame) and keeps 120 frames of uploaded bytes, the Performance panel samples the
-  job system for the frame pill's job count. The assets pill shows the pool closest to its budget
-  (`GetMostPressuredPool`), whose pressure also colors it. The Streaming panel draws a budget bar per pool (Ochre,
-  Sulfur from 85% of the budget, Cinnabar beyond it), the loads in flight against their limit (in a neutral color: it
-  throttles reads, it is no memory budget), the queue per priority, an upload sparkline against the per-frame budget
-  (saying so when nothing was uploaded), evictions and cancellations, and beside them (in a wide dock) a sortable,
-  filtered, clipped table of the listed assets: failed ones first, loading ones in Sulfur and failed ones in Cinnabar as
-  in the viewport's streaming view (`GetAssetStateColor`), sub-assets named by their file and key, types by short labels
-  (`GetTypeLabel`; the row's tooltip names the type in full). At most four times a second, and when the sort or the
-  filter changes, the main thread copies `GetResidencySamples` (and `GetAllMetadata` when `GetMetadataVersion` changed)
-  and a job (`StreamingPanel::BuildTable`) names, sorts and filters the rows, which the table shows once the job
-  finished; so no frame sorts or names tens of thousands of rows. A click on a row reveals the asset in the Content
-  Browser (`ContentBrowserPanel::RevealAsset`). The Performance panel stacks the frame profiler's
+  make them flicker; `Editor.UI` checks that every pill shows within 1600x900 pixels at 150% (compact) and, with full
+  texts, in the editor's 1600x900 window (`--windowed`) at 150% and at 100%. Panels collect what the status bar shows in
+  `OnUpdate`, also while closed: the Streaming panel takes the active asset manager's `GetStats` once per frame after
+  the frame's commands ran (so its totals equal what `asset.stats` returned in that frame) and keeps 120 frames of
+  uploaded bytes, the Performance panel samples the job system for the frame pill's job count. The assets pill shows the
+  pool closest to its budget (`GetMostPressuredPool`), whose pressure also colors it. The Streaming panel draws a budget
+  bar per pool (Ochre, Sulfur from 85% of the budget, Cinnabar beyond it), the loads in flight against their limit (in a
+  neutral color: it throttles reads, it is no memory budget), the queue per priority, an upload sparkline against the
+  per-frame budget (saying so when nothing was uploaded), evictions and cancellations, and beside them (in a wide dock)
+  a sortable, filtered, clipped table of the listed assets: failed ones first, loading ones in Sulfur and failed ones in
+  Cinnabar as in the viewport's streaming view (`GetAssetStateColor`), sub-assets named by their file and key, types by
+  short labels (`GetTypeLabel`; the row's tooltip names the type in full). At most four times a second, and when the
+  sort or the filter changes, the main thread copies `GetResidencySamples` (and `GetAllMetadata` when
+  `GetMetadataVersion` changed) and a job (`StreamingPanel::BuildTable`) names, sorts and filters the rows, which the
+  table shows once the job finished; so no frame sorts or names tens of thousands of rows. A click on a row reveals the
+  asset in the Content Browser (`ContentBrowserPanel::RevealAsset`). The Performance panel stacks the frame profiler's
   stage self times of the last 600 frames (newest at the right, untimed work on top, reference lines at 16.7 and 33.3
-  ms), scaled to the 95th percentile frame (taller frames are cut at the top), marks spikes (frames over twice the median
-  and a 60 FPS frame), explains the frame under the mouse, lists per-stage statistics under the frame's totals (frozen
-  under the header) and copies `editor.perf`'s JSON (Copy as JSON); its statistics are computed four times a second. The
-  timeline takes at most 40% of the panel's height, or sits beside the table in a short, wide dock, so the table keeps
-  rows in view. Color swatches are drawn as rectangles: the monospaced font has no icons. **UI tests**
+  ms), scaled to the 95th percentile frame (taller frames are cut at the top), marks spikes (frames over twice the
+  median and a 60 FPS frame), explains the frame under the mouse, lists per-stage statistics under the frame's totals
+  (frozen under the header) and copies `editor.perf`'s JSON (Copy as JSON); its statistics are computed four times a
+  second. The timeline takes at most 40% of the panel's height, or sits beside the table in a short, wide dock, so the
+  table keeps rows in view. Color swatches are drawn as rectangles: the monospaced font has no icons. **UI tests**
   (`StrataTests/src/Editor/ImGuiHarness.h`) create an ImGui context with the editor's fonts and theme (styled by an
   unattached `ImGuiLayer`), honor ImGui's texture requests without a renderer, inject input (clicks, keys, typed text),
-  keep their own clipboard, and find kit widgets through the probe; the `Editor.UI` and `Editor.Launcher` suites draw the
-  real `EditorLayer` this way, with a `FakeEditorHost` (`StrataTests/src/Editor/HarnessEditor.h`).
+  keep their own clipboard, and find kit widgets through the probe; the `Editor.UI` and `Editor.Launcher` suites draw
+  the real `EditorLayer` this way, with a `FakeEditorHost` (`StrataTests/src/Editor/HarnessEditor.h`).
 - **EditorContext** (`StrataEditor/src/Editor/EditorContext.h`) is the state with no UI. Opening a project creates and
   activates its `EditorAssetManager` (scan included), opens a `ScriptEngine` (hot reload on by default,
   `EditorContextSpecification::HotReloadScripts`) and loads the built module, restores the viewport state, starts
