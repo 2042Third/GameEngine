@@ -1,6 +1,7 @@
 #include "Editor/ScriptProject.h"
 
 #include "Editor/ScriptBuild.h"
+#include "Editor/ScriptSources.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
@@ -38,7 +39,6 @@ namespace Strata
 		constexpr size_t c_MaxIdentifierLength = 128;
 		// Code files read when looking for declared names, up to this size each (generated or vendored code is larger).
 		constexpr uint64_t c_MaxScannedFileSize = 4ull * 1024 * 1024;
-		constexpr std::string_view c_CodeExtensions[] = { ".cpp", ".cc", ".cxx", ".c", ".h", ".hpp", ".hh", ".hxx", ".inl", ".ipp" };
 
 		constexpr std::string_view c_Keywords[] = {
 			"alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor", "bool", "break", "case", "catch", "char", "char8_t", "char16_t",
@@ -207,8 +207,7 @@ ST_SCRIPT_CLASS(Spinner)
 			std::error_code typeError;
 			if (!it->is_regular_file(typeError))
 				continue;
-			const std::string extension = FileSystem::ToUTF8(it->path().extension());
-			if (std::find(std::begin(c_CodeExtensions), std::end(c_CodeExtensions), extension) == std::end(c_CodeExtensions))
+			if (!IsScriptCodeFileName(FileSystem::ToUTF8(it->path().filename())))
 				continue;
 			const std::optional<uint64_t> size = FileSystem::GetFileSize(it->path());
 			if (!size || *size > c_MaxScannedFileSize)

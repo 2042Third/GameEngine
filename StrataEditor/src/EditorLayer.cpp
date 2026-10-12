@@ -708,6 +708,12 @@ namespace Strata
 		m_AboutDialog.Open();
 	}
 
+	void EditorLayer::ShowNewScriptDialog()
+	{
+		if (m_Context.HasProject())
+			m_NewScriptDialog.Open();
+	}
+
 	void EditorLayer::DismissLauncher()
 	{
 		m_LauncherDismissed = true;
@@ -1046,7 +1052,7 @@ namespace Strata
 				RunEditorCommand(m_Context, m_Commands, "script.init", { { "example", true } });
 			ImGui::Separator();
 			if (ImGui::MenuItem("New Script...", nullptr, false, m_Context.HasProject()))
-				m_NewScriptDialog.Open();
+				ShowNewScriptDialog();
 			if (ImGui::MenuItem("Open Scripts Folder", nullptr, false, m_Context.HasProject()))
 				RunEditorCommand(m_Context, m_Commands, "script.open");
 			if (ImGui::MenuItem("External Editor..."))

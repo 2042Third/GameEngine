@@ -844,8 +844,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   directory, whether scenes use scripts, why Play would build first, the external editor), `script.build {wait}`
   (deferred; fails with the first compiler errors), `script.reload`, `script.load {path}`, `script.init {example}`,
   `script.create {class, path?, template?: behaviour | empty, fields?, open?}` (a new class in the script directory),
-  `script.open {file?, line?, column?}` (the external editor at a line: code, CMake and text files of the project or
-  the engine only; without file the script directory), `script.setExternalEditor {command}` (`Editor/ExternalEditor`:
+  `script.list` (the script directory's code and CMake files with the classes each registers: `Editor/ScriptSources`,
+  `ListScriptSources`, without hidden folders and build trees), `script.open {file?, line?, column?}` (the external
+  editor at a line: code, CMake and text files of the project or the engine only; without file the script directory),
+  `script.setExternalEditor {command}` (`Editor/ExternalEditor`:
   a template such as `code -g {file}:{line}:{column}`, split into a program and arguments and started without a shell;
   batch files are refused; the user's setting in `<user data>/Strata/EditorSettings.json`, written private and read
   only when trusted, `EditorContextSpecification::EditorSettingsFile`; `STRATA_EXTERNAL_EDITOR` overrides it; projects
@@ -856,11 +858,17 @@ and `AudioSystem`, the built-in "Audio" scene system.
   and setting fields need a loaded module, which validates class and field names and types; removing works without
   one. Script edits are undoable (`ScriptEdit`, shared with the inspector's Script drawer) and reach the live
   instances while playing. The UI builds with Scripts > Build Scripts (Ctrl+B) or the toolbar, and has Scripts > New
-  Script... (`UI/ScriptDialogs`), Open Scripts Folder, External Editor... and Show Problems. The **Problems panel**
+  Script... (`UI/ScriptDialogs`, also `EditorShell::ShowNewScriptDialog` for panels), Open Scripts Folder, External
+  Editor... and Show Problems. `UI/ScriptBrowser` is the view of the script sources a panel draws (the Content
+  Browser's Scripts root once Content Browser v2 hosts it): the files with their classes, listed on an I/O thread when it
+  is drawn and every second while it is, never while it is not (`ScriptSourceList`, whose version changes only with the
+  files); its search takes every word in a path or a class name, a double click opens a file in the external editor, and
+  `DrawActions` offers New Script... and Open in IDE (`CalcActionsWidth` to place them). The **Problems panel**
   (`Panels/ProblemsPanel`, docked with the Console) lists the last build's diagnostics and the crash with its stack
-  frames (without the SDK's internal `Strata::Detail` thunks, which `script.status` keeps); a double click opens one (`EditorContext::OpenScriptSource`); the status bar's "Build failed" and "Scripts
-  crashed" pills open it, the "Building to play" pill cancels the build (`EditorContext::CancelScriptBuild`), and a
-  project whose scenes use no script shows "Scripts unused" instead of asking for a build. The Console opens the
+  frames (without the SDK's internal `Strata::Detail` thunks, which `script.status` keeps); a double click opens one
+  (`EditorContext::OpenScriptSource`); the status bar's "Build failed" and "Scripts crashed" pills open it, the
+  "Building to play" pill cancels the build (`EditorContext::CancelScriptBuild`), and a project whose scenes use no
+  script shows "Scripts unused" instead of asking for a build. The Console opens the
   source of messages that name one (`FindSourceReference`). People's guide: Docs/Manual/Scripting.md.
 - Commands never block a frame. One that has to wait (frames, a build, an import, a GPU readback) returns
   `EditorCommandResult::Defer(poll)`; `EditorCommandRunner` polls it once per frame, starting with the

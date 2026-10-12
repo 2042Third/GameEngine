@@ -1547,7 +1547,15 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `<user data>/Strata/Builds/<hash>`, said in the build's log), and only one too deep even for that is refused, naming a
   shorter folder. Every build brings `Scripts/CMakePresets.json` up to date for IDEs (`UpdateScriptCMakePresets`: the
   same toolchain and `STRATA_ENGINE_DIR`, an IDE build tree of its own, the module's output where the editor loads it).
-- **The scripting workflow**. `script.create` writes a class from a template (`Editor/ScriptProject.cpp`). Play builds
+- **The scripting workflow**. `script.create` writes a class from a template (`Editor/ScriptProject.cpp`). The script
+  sources are listed by `Editor/ScriptSources` (`ListScriptSources`: the script directory's code and CMake files without
+  hidden folders and build trees, each code file read for its `ST_SCRIPT_CLASS` registrations outside comments, string
+  and raw string literals and preprocessor lines, unchanged files lending what an earlier listing found; at most 4,096
+  files and 65,536 directory entries) for `script.list` and for `UI/ScriptBrowser`, the view of the script sources a
+  panel draws (the Content Browser's Scripts root once Content Browser v2 hosts it): it lists on an I/O thread
+  (`ScriptSourceList`, whose job compares the new listing with the one before and shares it immutable, so the main
+  thread neither copies nor compares files) when it is first drawn and every second while it is drawn, never while it is
+  not, and rebuilds its rows only when the files or the search changed. Play builds
   first: `play.start` asks `EditorContext::GetPlayBuildReason` (the project's module older than a source of the script
   directory, or not loaded while a scene or prefab uses scripts: `DoScenesUseScripts`, the edited scene's Script
   components and a scan of the project's scene and prefab files on an I/O thread when the project opens), starts the

@@ -144,6 +144,7 @@ namespace Strata
 		void ShowOpenSampleDialog(const std::string& sampleId) override;
 		void ShowOpenProjectDialog() override;
 		void ShowAboutDialog() override;
+		void ShowNewScriptDialog() override;
 		void DismissLauncher() override;
 		void RenameEntity(UUID entity) override;
 		EditorEnvironment GetEnvironment() const override;

@@ -3,6 +3,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/ScriptEdit.h"
 #include "Editor/ScriptProject.h"
+#include "Editor/ScriptSources.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Log.h>
@@ -227,6 +228,31 @@ namespace Strata
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeScripts(context));
+			} });
+
+		registry.Register({ "script.list",
+			"Lists the project's script sources, the files the script build compiles: the code and CMake files of its script directory "
+			"(folders starting with '.' and build trees left out), sorted by path, each with the script classes it registers "
+			"(ST_SCRIPT_CLASS) and its size. Use it to find the file that holds a class before changing it (script.open opens one in the "
+			"person's code editor). Returns sourceDirectory, files [{path (relative to the script directory), projectPath (relative to the "
+			"project), classes, bytes}] and truncated (more files than listed).",
+			ObjectSchema({}),
+			[](EditorContext& context, const nlohmann::json&)
+			{
+				if (!context.HasProject())
+					return EditorCommandResult::Fail("No project is open (project.open or project.create)");
+				const Project& project = *context.GetProject();
+				const std::filesystem::path directory = project.GetScriptSourceDirectory();
+				const ScriptSourceListing listing = ListScriptSources(directory);
+				nlohmann::json files = nlohmann::json::array();
+				for (const ScriptSourceFile& file : listing.Files)
+				{
+					files.push_back({ { "path", file.Path },
+						{ "projectPath", FileSystem::ToUTF8((directory / FileSystem::FromUTF8(file.Path)).lexically_relative(project.GetProjectDirectory())) },
+						{ "classes", file.Classes }, { "bytes", file.Size } });
+				}
+				return EditorCommandResult::Ok({ { "sourceDirectory", FileSystem::ToUTF8(directory) }, { "files", std::move(files) },
+					{ "truncated", listing.Truncated } });
 			} });
 
 		registry.Register({ "script.get",

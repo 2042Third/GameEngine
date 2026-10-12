@@ -156,7 +156,32 @@ namespace Strata::Tests
 			if (glyph.Visible)
 				fallbacks.emplace_back(glyph.U0, glyph.V0);
 		}
+		return CountGlyphQuads(window, fallbacks);
+	}
 
+	uint32_t ImGuiHarness::CountGlyphs(ImGuiWindow* window, ImWchar character)
+	{
+		if (!window)
+			return 0;
+		const ImFontAtlas* atlas = ImGui::GetIO().Fonts;
+		if (!atlas->Builder)
+			return 0;
+		// The character's glyph in every size each font was baked at.
+		std::vector<ImVec2> glyphs;
+		const ImStableVector<ImFontBaked, 32>& baked = atlas->Builder->BakedPool;
+		for (int index = 0; index < baked.Size; index++)
+		{
+			for (const ImFontGlyph& glyph : baked[index].Glyphs)
+			{
+				if (glyph.Codepoint == character && glyph.Visible)
+					glyphs.emplace_back(glyph.U0, glyph.V0);
+			}
+		}
+		return CountGlyphQuads(window, glyphs);
+	}
+
+	uint32_t ImGuiHarness::CountGlyphQuads(ImGuiWindow* window, const std::vector<ImVec2>& glyphCorners)
+	{
 		uint32_t count = 0;
 		for (ImGuiWindow* candidate : GImGui->Windows)
 		{
@@ -164,9 +189,9 @@ namespace Strata::Tests
 				continue;
 			for (const ImDrawVert& vertex : candidate->DrawList->VtxBuffer)
 			{
-				for (const ImVec2& fallback : fallbacks)
+				for (const ImVec2& corner : glyphCorners)
 				{
-					if (vertex.uv.x == fallback.x && vertex.uv.y == fallback.y)
+					if (vertex.uv.x == corner.x && vertex.uv.y == corner.y)
 						count++;
 				}
 			}

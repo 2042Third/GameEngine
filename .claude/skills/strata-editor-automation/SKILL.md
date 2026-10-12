@@ -127,7 +127,8 @@ editor started with `--no-gpu` (use `--headless`):
   between checks) before relying on sub-assets or exporting, which waits for them itself. Editors run with `--commands`
   or `--frames` import before the project opens.
 - Game logic: write C++ scripts into the project's `Scripts/` folder (`script.create {"class", "fields"}` starts one) and
-  use `script.build`, `script.status`, `script.add`, `script.setField`, `script.reload` (see
+  use `script.build`, `script.status`, `script.list` (the source files with the classes each registers), `script.add`,
+  `script.setField`, `script.reload` (see
   `.claude/skills/strata-scripting/SKILL.md`, "The workflow in a game project"). Builds need CMake and the engine's
   compiler on the machine; they work with `--no-gpu`. `script.open {"file", "line"}` shows a source line to the person
   in their code editor (`script.setExternalEditor` sets which).
