@@ -503,7 +503,7 @@ namespace Strata
 				return true;
 			}
 			if (ContentBrowserPanel* contentBrowser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
-				contentBrowser->ImportFiles(m_Context, m_Commands, drop.GetPaths());
+				contentBrowser->ImportFiles(m_Context, m_Commands, m_CommandRunner, drop.GetPaths());
 			return true;
 		});
 	}
@@ -992,6 +992,8 @@ namespace Strata
 				RenameEntity(m_Context.GetPrimarySelection().GetUUID());
 			if (ImGui::MenuItem("Delete", "Del", false, selected && editable))
 				EditorActions::DeleteSelection(m_Context, m_Commands);
+			if (ImGui::MenuItem("Drop to Ground", "End", false, selected && editable))
+				EditorActions::DropSelectionToGround(m_Context, m_Commands);
 			ImGui::Separator();
 			if (ImGui::MenuItem("Select All", "Ctrl+A"))
 				EditorActions::SelectAll(m_Context);

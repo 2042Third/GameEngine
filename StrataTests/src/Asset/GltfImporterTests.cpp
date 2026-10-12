@@ -16,6 +16,7 @@
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <meshoptimizer.h>
 
 #include <algorithm>
 #include <atomic>
@@ -151,6 +152,27 @@ namespace
 		return std::vector<uint8_t>(text.begin(), text.end());
 	}
 
+	// A .glb of a JSON document and its binary chunk.
+	std::vector<uint8_t> MakeGlb(const nlohmann::json& document, const std::vector<uint8_t>& binary)
+	{
+		std::string json = JsonUtils::Dump(document);
+		while (json.size() % 4 != 0)
+			json.push_back(' ');
+
+		std::vector<uint8_t> glb;
+		auto writeU32 = [&glb](uint32_t value) { Append(glb, std::vector<uint32_t> { value }); };
+		writeU32(0x46546C67); // "glTF"
+		writeU32(2);
+		writeU32(static_cast<uint32_t>(12 + 8 + json.size() + 8 + binary.size()));
+		writeU32(static_cast<uint32_t>(json.size()));
+		writeU32(0x4E4F534A); // "JSON"
+		glb.insert(glb.end(), json.begin(), json.end());
+		writeU32(static_cast<uint32_t>(binary.size()));
+		writeU32(0x004E4942); // "BIN"
+		glb.insert(glb.end(), binary.begin(), binary.end());
+		return glb;
+	}
+
 	std::vector<uint8_t> CreateGlb(const ModelOptions& options)
 	{
 		std::vector<uint8_t> binary = CreateGeometryBuffer();
@@ -169,22 +191,165 @@ namespace
 		nlohmann::json document = CreateDocument(options, binary.size(), {}, imageView);
 		if (imageView)
 			document["bufferViews"].push_back(extraView);
-		std::string json = JsonUtils::Dump(document);
-		while (json.size() % 4 != 0)
-			json.push_back(' ');
+		return MakeGlb(document, binary);
+	}
 
-		std::vector<uint8_t> glb;
-		auto writeU32 = [&glb](uint32_t value) { Append(glb, std::vector<uint32_t> { value }); };
-		writeU32(0x46546C67); // "glTF"
-		writeU32(2);
-		writeU32(static_cast<uint32_t>(12 + 8 + json.size() + 8 + binary.size()));
-		writeU32(static_cast<uint32_t>(json.size()));
-		writeU32(0x4E4F534A); // "JSON"
-		glb.insert(glb.end(), json.begin(), json.end());
-		writeU32(static_cast<uint32_t>(binary.size()));
-		writeU32(0x004E4942); // "BIN"
-		glb.insert(glb.end(), binary.begin(), binary.end());
-		return glb;
+	// The binary chunk and buffer views of EXT_meshopt_compression data: the compressed bytes in buffer 0, the views over
+	// buffer 1 (the fallback, which has no data).
+	struct MeshoptViews
+	{
+		std::vector<uint8_t> Binary;
+		nlohmann::json Views = nlohmann::json::array();
+		size_t UncompressedSize = 0;
+
+		void Add(const std::vector<uint8_t>& encoded, size_t uncompressedSize, size_t stride, size_t count, const char* mode, const char* filter, bool vertices)
+		{
+			nlohmann::json compression = { { "buffer", 0 }, { "byteOffset", Binary.size() }, { "byteLength", encoded.size() }, { "byteStride", stride },
+				{ "mode", mode }, { "count", count } };
+			if (filter)
+				compression["filter"] = filter;
+			nlohmann::json view = { { "buffer", 1 }, { "byteOffset", UncompressedSize }, { "byteLength", uncompressedSize }, { "target", vertices ? 34962 : 34963 },
+				{ "extensions", { { "EXT_meshopt_compression", std::move(compression) } } } };
+			if (vertices)
+				view["byteStride"] = stride;
+			Views.push_back(std::move(view));
+			Binary.insert(Binary.end(), encoded.begin(), encoded.end());
+			while (Binary.size() % 4 != 0)
+				Binary.push_back(0);
+			UncompressedSize += (uncompressedSize + 3) / 4 * 4;
+		}
+	};
+
+	// Vertex data (`count` elements of `stride` bytes) as meshopt_encodeVertexBuffer stores it.
+	std::vector<uint8_t> EncodeMeshoptVertices(const void* data, size_t count, size_t stride)
+	{
+		std::vector<uint8_t> encoded(meshopt_encodeVertexBufferBound(count, stride));
+		encoded.resize(meshopt_encodeVertexBuffer(encoded.data(), encoded.size(), data, count, stride));
+		return encoded;
+	}
+
+	// The quad of CreateGlb compressed the way gltfpack stores models: positions and texture coordinates through the
+	// EXPONENTIAL filter, normals as octahedral 8- or 16-bit normalized integers (OCTAHEDRAL filter, KHR_mesh_quantization),
+	// the indices in INDICES mode. With `forbiddenFilter`, the normals' view declares the OCTAHEDRAL filter for 12-byte
+	// elements, which the extension does not allow.
+	std::vector<uint8_t> CreateFilteredMeshoptGlb(uint32_t normalStride, bool forbiddenFilter = false)
+	{
+		const std::vector<float> positions { 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0 };
+		const std::vector<float> normals { 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0 }; // x, y, z, w per vertex
+		const std::vector<float> texCoords { 0, 1, 1, 1, 1, 0, 0, 0 };
+		const std::vector<uint32_t> indices { 0, 1, 2, 0, 2, 3 };
+		MeshoptViews views;
+
+		std::vector<uint32_t> filteredPositions(positions.size());
+		meshopt_encodeFilterExp(filteredPositions.data(), 4, 12, 16, positions.data(), meshopt_EncodeExpSeparate);
+		views.Add(EncodeMeshoptVertices(filteredPositions.data(), 4, 12), 48, 12, 4, "ATTRIBUTES", "EXPONENTIAL", true);
+
+		if (forbiddenFilter)
+		{
+			const std::vector<float> plain { 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1 };
+			views.Add(EncodeMeshoptVertices(plain.data(), 4, 12), 48, 12, 4, "ATTRIBUTES", "OCTAHEDRAL", true);
+		}
+		else
+		{
+			std::vector<uint8_t> filteredNormals(normalStride * 4);
+			meshopt_encodeFilterOct(filteredNormals.data(), 4, normalStride, normalStride == 4 ? 8 : 16, normals.data());
+			views.Add(EncodeMeshoptVertices(filteredNormals.data(), 4, normalStride), normalStride * 4, normalStride, 4, "ATTRIBUTES", "OCTAHEDRAL", true);
+		}
+
+		std::vector<uint32_t> filteredTexCoords(texCoords.size());
+		meshopt_encodeFilterExp(filteredTexCoords.data(), 4, 8, 16, texCoords.data(), meshopt_EncodeExpSeparate);
+		views.Add(EncodeMeshoptVertices(filteredTexCoords.data(), 4, 8), 32, 8, 4, "ATTRIBUTES", "EXPONENTIAL", true);
+
+		std::vector<uint8_t> encodedIndices(meshopt_encodeIndexSequenceBound(indices.size(), 4));
+		encodedIndices.resize(meshopt_encodeIndexSequence(encodedIndices.data(), encodedIndices.size(), indices.data(), indices.size()));
+		views.Add(encodedIndices, 24, 4, 6, "INDICES", nullptr, false);
+
+		const nlohmann::json normalAccessor = forbiddenFilter ? nlohmann::json { { "bufferView", 1 }, { "componentType", 5126 }, { "count", 4 }, { "type", "VEC3" } }
+			: nlohmann::json { { "bufferView", 1 }, { "componentType", normalStride == 4 ? 5120 : 5122 }, { "normalized", true }, { "count", 4 }, { "type", "VEC3" } };
+		const nlohmann::json document = {
+			{ "asset", { { "version", "2.0" } } },
+			{ "extensionsUsed", { "EXT_meshopt_compression", "KHR_mesh_quantization" } },
+			{ "extensionsRequired", { "EXT_meshopt_compression", "KHR_mesh_quantization" } },
+			{ "scenes", nlohmann::json::array({ { { "nodes", { 0 } } } }) },
+			{ "nodes", nlohmann::json::array({ { { "name", "Body" }, { "mesh", 0 } } }) },
+			{ "meshes", nlohmann::json::array({ { { "name", "Quad" }, { "primitives", nlohmann::json::array({ {
+				{ "attributes", { { "POSITION", 0 }, { "NORMAL", 1 }, { "TEXCOORD_0", 2 } } }, { "indices", 3 } } }) } } }) },
+			{ "buffers", nlohmann::json::array({ { { "byteLength", views.Binary.size() } },
+				{ { "byteLength", views.UncompressedSize }, { "extensions", { { "EXT_meshopt_compression", { { "fallback", true } } } } } } }) },
+			{ "bufferViews", views.Views },
+			{ "accessors", nlohmann::json::array({
+				{ { "bufferView", 0 }, { "componentType", 5126 }, { "count", 4 }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 1, 1, 0 } } },
+				normalAccessor,
+				{ { "bufferView", 2 }, { "componentType", 5126 }, { "count", 4 }, { "type", "VEC2" } },
+				{ { "bufferView", 3 }, { "componentType", 5125 }, { "count", 6 }, { "type", "SCALAR" } } }) }
+		};
+		return MakeGlb(document, views.Binary);
+	}
+
+	// A .glb of one node with the test quad (positions, normals, texture coordinates and list indices, as CreateGlb's first
+	// mesh) whose buffer views are compressed with EXT_meshopt_compression by meshoptimizer's encoders into the binary chunk;
+	// the views' own buffer is the extension's fallback, without data. `corrupt` damages the compressed positions' header,
+	// and an `indexStride` other than 2 or 4 makes the index view one the extension does not allow.
+	std::vector<uint8_t> CreateMeshoptGlb(bool corrupt, uint32_t indexStride = 2)
+	{
+		const std::vector<float> positions { 0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0 };
+		const std::vector<float> normals { 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1 };
+		const std::vector<float> texCoords { 0, 1, 1, 1, 1, 0, 0, 0 };
+		const std::vector<uint32_t> indices { 0, 1, 2, 0, 2, 3 };
+
+		std::vector<uint8_t> binary;
+		nlohmann::json views = nlohmann::json::array();
+		size_t uncompressedOffset = 0;
+		auto addView = [&](const std::vector<uint8_t>& encoded, size_t uncompressedSize, size_t stride, size_t count, const char* mode, bool vertices)
+		{
+			nlohmann::json view = { { "buffer", 1 }, { "byteOffset", uncompressedOffset }, { "byteLength", uncompressedSize },
+				{ "target", vertices ? 34962 : 34963 },
+				{ "extensions", { { "EXT_meshopt_compression", { { "buffer", 0 }, { "byteOffset", binary.size() }, { "byteLength", encoded.size() },
+					{ "byteStride", stride }, { "mode", mode }, { "count", count } } } } } };
+			if (vertices)
+				view["byteStride"] = stride;
+			views.push_back(std::move(view));
+			binary.insert(binary.end(), encoded.begin(), encoded.end());
+			while (binary.size() % 4 != 0)
+				binary.push_back(0);
+			uncompressedOffset += (uncompressedSize + 3) / 4 * 4;
+		};
+		auto encodeVertices = [](const std::vector<float>& values, size_t stride)
+		{
+			const size_t count = values.size() * sizeof(float) / stride;
+			std::vector<uint8_t> encoded(meshopt_encodeVertexBufferBound(count, stride));
+			encoded.resize(meshopt_encodeVertexBuffer(encoded.data(), encoded.size(), values.data(), count, stride));
+			return encoded;
+		};
+
+		std::vector<uint8_t> encodedPositions = encodeVertices(positions, 12);
+		if (corrupt)
+			encodedPositions[0] = 0; // No codec version: the decoder refuses it
+		addView(encodedPositions, 48, 12, 4, "ATTRIBUTES", true);
+		addView(encodeVertices(normals, 12), 48, 12, 4, "ATTRIBUTES", true);
+		addView(encodeVertices(texCoords, 8), 32, 8, 4, "ATTRIBUTES", true);
+		std::vector<uint8_t> encodedIndices(meshopt_encodeIndexBufferBound(indices.size(), 4));
+		encodedIndices.resize(meshopt_encodeIndexBuffer(encodedIndices.data(), encodedIndices.size(), indices.data(), indices.size()));
+		addView(encodedIndices, 12, indexStride, 12 / indexStride, "TRIANGLES", false);
+
+		const nlohmann::json document = {
+			{ "asset", { { "version", "2.0" } } },
+			{ "extensionsUsed", { "EXT_meshopt_compression" } },
+			{ "extensionsRequired", { "EXT_meshopt_compression" } },
+			{ "scenes", nlohmann::json::array({ { { "nodes", { 0 } } } }) },
+			{ "nodes", nlohmann::json::array({ { { "name", "Body" }, { "mesh", 0 } } }) },
+			{ "meshes", nlohmann::json::array({ { { "name", "Quad" }, { "primitives", nlohmann::json::array({ {
+				{ "attributes", { { "POSITION", 0 }, { "NORMAL", 1 }, { "TEXCOORD_0", 2 } } }, { "indices", 3 } } }) } } }) },
+			{ "buffers", nlohmann::json::array({ { { "byteLength", binary.size() } },
+				{ { "byteLength", uncompressedOffset }, { "extensions", { { "EXT_meshopt_compression", { { "fallback", true } } } } } } }) },
+			{ "bufferViews", views },
+			{ "accessors", nlohmann::json::array({
+				{ { "bufferView", 0 }, { "componentType", 5126 }, { "count", 4 }, { "type", "VEC3" }, { "min", { 0, 0, 0 } }, { "max", { 1, 1, 0 } } },
+				{ { "bufferView", 1 }, { "componentType", 5126 }, { "count", 4 }, { "type", "VEC3" } },
+				{ { "bufferView", 2 }, { "componentType", 5126 }, { "count", 4 }, { "type", "VEC2" } },
+				{ { "bufferView", 3 }, { "componentType", 5123 }, { "count", 6 }, { "type", "SCALAR" } } }) }
+		};
+		return MakeGlb(document, binary);
 	}
 
 	struct ImportOutput
@@ -931,6 +1096,97 @@ TEST_SUITE("Asset.Gltf")
 		REQUIRE_MESSAGE(compressedOnly.Success, compressedOnly.Error);
 		CHECK(HasWarningContaining(compressedOnly.Result, "Draco"));
 		CHECK(compressedOnly.Find("Mesh/1")); // The other mesh is unaffected
+	}
+
+	TEST_CASE("Models compressed with EXT_meshopt_compression import like uncompressed ones")
+	{
+		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfMeshopt");
+		const ImportOutput plain = RunImport(assets, "Plain.glb", CreateGlb({}));
+		REQUIRE_MESSAGE(plain.Success, plain.Error);
+		const ImportOutput compressed = RunImport(assets, "Compressed.glb", CreateMeshoptGlb(false));
+		REQUIRE_MESSAGE(compressed.Success, compressed.Error);
+		CHECK_FALSE(HasWarningContaining(compressed.Result, "EXT_meshopt_compression"));
+
+		// The same geometry as the uncompressed model.
+		const ImportedSubAsset* plainMesh = plain.Find("Mesh/0");
+		const ImportedSubAsset* compressedMesh = compressed.Find("Mesh/0");
+		REQUIRE(plainMesh);
+		REQUIRE(compressedMesh);
+		std::string error;
+		const Ref<Mesh> expected = Mesh::Deserialize(plainMesh->Data, &error);
+		const Ref<Mesh> decoded = Mesh::Deserialize(compressedMesh->Data, &error);
+		REQUIRE_MESSAGE(expected, error);
+		REQUIRE_MESSAGE(decoded, error);
+		CHECK(decoded->GetPositions() == expected->GetPositions());
+		CHECK(decoded->GetIndices() == expected->GetIndices());
+		CHECK(GltfImporter().GetVersion() >= 5);
+
+		// Corrupt compressed data and views the extension does not allow fail with an error, never a crash.
+		std::vector<uint8_t> corrupt = CreateMeshoptGlb(true);
+		const ImportOutput broken = RunImport(assets, "Corrupt.glb", corrupt);
+		CHECK_FALSE(broken.Success);
+		CHECK(broken.Error.find("could not be decoded") != std::string::npos);
+		const ImportOutput badStride = RunImport(assets, "BadStride.glb", CreateMeshoptGlb(false, 6));
+		CHECK_FALSE(badStride.Success);
+		CHECK(badStride.Error.find("does not allow") != std::string::npos);
+	}
+
+	TEST_CASE("EXT_meshopt_compression's filters and index sequences decode: octahedral normals, exponential positions and UVs")
+	{
+		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfMeshoptFilters");
+		const ImportOutput plain = RunImport(assets, "Plain.glb", CreateGlb({}));
+		REQUIRE_MESSAGE(plain.Success, plain.Error);
+		std::string error;
+		const Ref<Mesh> expected = Mesh::Deserialize(plain.Find("Mesh/0")->Data, &error);
+		REQUIRE_MESSAGE(expected, error);
+
+		// Normals as 8-bit and as 16-bit octahedral vectors (KHR_mesh_quantization's normalized integers).
+		for (const uint32_t normalStride : { 4u, 8u })
+		{
+			CAPTURE(normalStride);
+			const ImportOutput compressed = RunImport(assets, fmt::format("Filtered{}.glb", normalStride), CreateFilteredMeshoptGlb(normalStride));
+			REQUIRE_MESSAGE(compressed.Success, compressed.Error);
+			CHECK_FALSE(HasWarningContaining(compressed.Result, "EXT_meshopt_compression"));
+			const ImportedSubAsset* mesh = compressed.Find("Mesh/0");
+			REQUIRE(mesh);
+			const Ref<Mesh> decoded = Mesh::Deserialize(mesh->Data, &error);
+			REQUIRE_MESSAGE(decoded, error);
+			// The indices exactly (INDICES mode), positions and UVs within the 16-bit mantissa, normals within the quantization.
+			CHECK(decoded->GetIndices() == expected->GetIndices());
+			REQUIRE(decoded->GetPositions().size() == expected->GetPositions().size());
+			REQUIRE(decoded->GetAttributes().size() == expected->GetAttributes().size());
+			for (size_t vertex = 0; vertex < expected->GetPositions().size(); vertex++)
+			{
+				CAPTURE(vertex);
+				CHECK(glm::length(decoded->GetPositions()[vertex] - expected->GetPositions()[vertex]) < 1e-4f);
+				CHECK(glm::length(decoded->GetAttributes()[vertex].Normal - expected->GetAttributes()[vertex].Normal) < 0.02f);
+				CHECK(glm::length(decoded->GetAttributes()[vertex].TexCoord - expected->GetAttributes()[vertex].TexCoord) < 1e-4f);
+			}
+		}
+
+		// A filter on elements of a size it does not allow fails with an error.
+		const ImportOutput forbidden = RunImport(assets, "ForbiddenFilter.glb", CreateFilteredMeshoptGlb(4, true));
+		CHECK_FALSE(forbidden.Success);
+		CHECK(forbidden.Error.find("does not allow") != std::string::npos);
+	}
+
+	TEST_CASE("Models name the files they read besides themselves")
+	{
+		GltfImporter importer;
+		std::vector<std::string> files;
+		std::string error;
+		REQUIRE(importer.FindExternalFiles(CreateGltf({ .ImageUri = "../Textures/My%20Albedo.png", .BufferUri = "Quad.bin" }), files, &error));
+		CHECK(files == std::vector<std::string> { "Quad.bin", "../Textures/My Albedo.png" });
+		files.clear();
+		REQUIRE(importer.FindExternalFiles(CreateGlb({ .ImageUri = "embedded" }), files, &error));
+		CHECK(files.empty());
+		REQUIRE(importer.FindExternalFiles(CreateGltf({ .ImageUri = "embedded" }), files, &error));
+		CHECK(files.empty());
+		CHECK_FALSE(importer.FindExternalFiles(CreateGltf({ .BufferUri = "https://example.com/Quad.bin" }), files, &error));
+		CHECK(error.find("URL") != std::string::npos);
+		CHECK_FALSE(importer.FindExternalFiles(CreateGltf({ .BufferUri = "C:/Quad.bin" }), files, &error));
+		CHECK_FALSE(importer.FindExternalFiles(CreateGltf({ .BufferUri = "/tmp/Quad.bin" }), files, &error));
+		CHECK_FALSE(importer.FindExternalFiles(std::vector<uint8_t> { 'n', 'o' }, files, &error));
 	}
 
 	TEST_CASE("A cancelled import stops at its next check and fails")

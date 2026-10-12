@@ -102,6 +102,15 @@ namespace Strata
 		// True when the stored form is the source file itself (JSON assets): nothing is cached.
 		virtual bool StoresSourceDirectly() const { return false; }
 
+		// Whether files of this type can name other files their import reads (FindExternalFiles), so that copying one reads it.
+		virtual bool ReadsExternalFiles() const { return false; }
+		// The other files an import of this file reads (a glTF model's buffers and images), as the file names them: relative
+		// paths with '/' separators, from the file's folder ("Quad.bin", "../Textures/Wood.png"), each once. Copying a file
+		// into a project (EditorAssetManager::ImportExternal) brings them along, keeping their layout. `data` is the file's
+		// contents. Fails, with the reason, for a file that names others in ways no copy can keep (an absolute path, a URL).
+		// The default: none.
+		virtual bool FindExternalFiles(std::span<const uint8_t> data, std::vector<std::string>& outRelativePaths, std::string* outError) const;
+
 		virtual bool Import(const ImportContext& context, ImportResult& result, std::string* outError) const = 0;
 	};
 

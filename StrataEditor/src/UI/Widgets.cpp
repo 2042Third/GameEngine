@@ -61,8 +61,7 @@ namespace Strata::UI
 			const float height = ImGui::GetFrameHeight();
 			const bool hasLabel = label && *label;
 			const ImVec2 iconSize = ImGui::CalcTextSize(icon);
-			const ImVec2 labelSize = hasLabel ? ImGui::CalcTextSize(label) : ImVec2(0.0f, 0.0f);
-			const float width = hasLabel ? imguiStyle.FramePadding.x * 2.0f + iconSize.x + imguiStyle.ItemInnerSpacing.x + labelSize.x : height;
+			const float width = GetToolbarButtonWidth(icon, label);
 
 			ImGui::BeginDisabled(!style.Enabled);
 			const bool pressed = ImGui::InvisibleButton(id, ImVec2(width, height));
@@ -196,6 +195,14 @@ namespace Strata::UI
 	bool ToolbarButton(const char* id, const char* icon, const char* label, const char* tooltip, const ButtonStyle& style)
 	{
 		return DrawButton(id, icon, label, tooltip, style);
+	}
+
+	float GetToolbarButtonWidth(const char* icon, const char* label)
+	{
+		if (!label || !*label)
+			return ImGui::GetFrameHeight();
+		const ImGuiStyle& style = ImGui::GetStyle();
+		return style.FramePadding.x * 2.0f + ImGui::CalcTextSize(icon).x + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label).x;
 	}
 
 	bool Chip(const char* id, const char* icon, const char* label, const char* tooltip)
@@ -558,16 +565,20 @@ namespace Strata::UI
 		const ThemeColors& colors = GetThemeColors();
 		const ImVec2 labelSize = ImGui::CalcTextSize(label.data(), label.data() + label.size());
 		const float iconWidth = icon ? style.ItemInnerSpacing.x + ImGui::CalcTextSize(icon).x : 0.0f;
-		const bool pressed = ImGui::InvisibleButton(id, ImVec2(labelSize.x + iconWidth, ImGui::GetTextLineHeight()));
+		// The text sits where the line's other text does: lowered by the line's text offset (ImGui::AlignTextToFramePadding,
+		// or a frame before it on the line), like ImGui::Text.
+		const float textOffset = ImGui::GetCurrentWindow()->DC.CurrLineTextBaseOffset;
+		const bool pressed = ImGui::InvisibleButton(id, ImVec2(labelSize.x + iconWidth, ImGui::GetTextLineHeight() + textOffset));
 		const bool hovered = ImGui::IsItemHovered();
 		const ImVec2 min = ImGui::GetItemRectMin();
 		const ImVec2 max = ImGui::GetItemRectMax();
 
 		const ImVec4& color = hovered ? colors.Text : colors.TextSecondary;
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
-		AddText(drawList, min, color, label);
+		const ImVec2 textMin(min.x, min.y + textOffset);
+		AddText(drawList, textMin, color, label);
 		if (icon)
-			AddText(drawList, ImVec2(min.x + labelSize.x + style.ItemInnerSpacing.x, min.y), color, icon);
+			AddText(drawList, ImVec2(textMin.x + labelSize.x + style.ItemInnerSpacing.x, textMin.y), color, icon);
 		if (hovered)
 		{
 			const float underline = std::floor(max.y) - 0.5f;
@@ -659,19 +670,31 @@ namespace Strata::UI
 		const ImVec2 padding = style.WindowPadding;
 		drawList->PushClipRect(min, max, true);
 
-		// The badge: a square as tall as the card's content.
+		// The badge: a square as tall as the card's content; or the picture, as tall, at its aspect (at most a third of the
+		// card's width).
 		const float badgeSize = std::max(size.y - padding.y * 2.0f, 1.0f);
 		const ImVec2 badgeMin(min.x + padding.x, min.y + (size.y - badgeSize) * 0.5f);
-		const ImVec2 badgeMax(badgeMin.x + badgeSize, badgeMin.y + badgeSize);
-		drawList->AddRectFilled(badgeMin, badgeMax, ToDrawColor(WithAlpha(content.BadgeColor, 0.16f)), rounding);
-		drawList->AddRect(badgeMin, badgeMax, ToDrawColor(WithAlpha(content.BadgeColor, 0.4f)), rounding);
-		ImFont* semiBold = EditorFonts::Get(EditorFont::SemiBold);
-		PushFont(EditorFont::SemiBold, TextSize::Title);
-		const ImVec2 badgeTextSize = ImGui::CalcTextSize(content.Badge.data(), content.Badge.data() + content.Badge.size());
-		ImGui::PopFont();
-		drawList->AddText(semiBold, GetTextSize(TextSize::Title) * fontScale,
-			ImVec2(badgeMin.x + (badgeSize - badgeTextSize.x) * 0.5f, badgeMin.y + (badgeSize - badgeTextSize.y) * 0.5f), ToDrawColor(content.BadgeColor),
-			content.Badge.data(), content.Badge.data() + content.Badge.size());
+		ImVec2 badgeMax(badgeMin.x + badgeSize, badgeMin.y + badgeSize);
+		if (content.Image)
+		{
+			const float imageWidth = std::round(std::min(badgeSize * std::max(content.ImageAspect, 0.1f), size.x / 3.0f));
+			badgeMax = ImVec2(badgeMin.x + imageWidth, badgeMin.y + badgeSize);
+			// Display colors, drawn as they are (ImGuiTextureDisplay::Direct).
+			drawList->AddImage(content.Image, badgeMin, badgeMax);
+			drawList->AddRect(badgeMin, badgeMax, ToDrawColor(border));
+		}
+		else
+		{
+			drawList->AddRectFilled(badgeMin, badgeMax, ToDrawColor(WithAlpha(content.BadgeColor, 0.16f)), rounding);
+			drawList->AddRect(badgeMin, badgeMax, ToDrawColor(WithAlpha(content.BadgeColor, 0.4f)), rounding);
+			ImFont* semiBold = EditorFonts::Get(EditorFont::SemiBold);
+			PushFont(EditorFont::SemiBold, TextSize::Title);
+			const ImVec2 badgeTextSize = ImGui::CalcTextSize(content.Badge.data(), content.Badge.data() + content.Badge.size());
+			ImGui::PopFont();
+			drawList->AddText(semiBold, GetTextSize(TextSize::Title) * fontScale,
+				ImVec2(badgeMin.x + (badgeSize - badgeTextSize.x) * 0.5f, badgeMin.y + (badgeSize - badgeTextSize.y) * 0.5f), ToDrawColor(content.BadgeColor),
+				content.Badge.data(), content.Badge.data() + content.Badge.size());
+		}
 
 		// Title, subtitle and detail, centered vertically next to it.
 		const float textX = badgeMax.x + padding.x;

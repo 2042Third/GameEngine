@@ -30,6 +30,7 @@ namespace Strata
 
 	void UndoStack::Push(Scope<EditorAction> action)
 	{
+		m_ChangeCount++;
 		// Recording after undoing discards the undone actions; a save point among them becomes unreachable.
 		if (m_Position < m_Actions.size())
 		{
@@ -69,25 +70,48 @@ namespace Strata
 		}
 	}
 
-	bool UndoStack::Undo()
+	bool UndoStack::Undo(std::string* outError)
 	{
 		if (!CanUndo())
+		{
+			if (outError)
+				*outError = "Nothing to undo";
 			return false;
+		}
+		std::string error;
+		if (!m_Actions[m_Position - 1]->Undo(&error))
+		{
+			// The step stays applied: nothing changed, and undoing it again works once what blocks it is gone.
+			const std::string message = fmt::format("Undo of '{}' failed: {}", m_Actions[m_Position - 1]->GetName(), error);
+			ST_ERROR("{}", message);
+			if (outError)
+				*outError = message;
+			m_MergeBroken = true;
+			return false;
+		}
 		m_Position--;
-		m_Actions[m_Position]->Undo();
+		m_ChangeCount++;
 		m_MergeBroken = true;
 		return true;
 	}
 
-	bool UndoStack::Redo()
+	bool UndoStack::Redo(std::string* outError)
 	{
 		if (!CanRedo())
+		{
+			if (outError)
+				*outError = "Nothing to redo";
 			return false;
+		}
 		std::string error;
+		m_ChangeCount++;
 		if (!m_Actions[m_Position]->Execute(&error))
 		{
 			// The world changed in a way the action cannot be reapplied to: drop it and everything after it.
-			ST_ERROR("Redo of '{}' failed: {}", m_Actions[m_Position]->GetName(), error);
+			const std::string message = fmt::format("Redo of '{}' failed: {}", m_Actions[m_Position]->GetName(), error);
+			ST_ERROR("{}", message);
+			if (outError)
+				*outError = message;
 			m_Actions.erase(m_Actions.begin() + static_cast<std::ptrdiff_t>(m_Position), m_Actions.end());
 			if (m_SavedPosition != c_NoSavePoint && m_SavedPosition > m_Position)
 				m_SavedPosition = c_NoSavePoint;
@@ -140,10 +164,75 @@ namespace Strata
 
 	void UndoStack::Clear()
 	{
+		m_ChangeCount++;
 		m_Actions.clear();
 		m_Position = 0;
 		m_SavedPosition = 0;
 		m_MergeBroken = true;
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// EditorActionGroup
+	////////////////////////////////////////////////////////////////////////////////
+
+	EditorActionGroup::EditorActionGroup(std::string name)
+		: m_Name(std::move(name))
+	{
+	}
+
+	void EditorActionGroup::Add(Scope<EditorAction> action)
+	{
+		if (action)
+			m_Actions.push_back(std::move(action));
+	}
+
+	bool EditorActionGroup::Execute(std::string* outError)
+	{
+		for (size_t index = 0; index < m_Actions.size(); index++)
+		{
+			if (!m_Actions[index]->Execute(outError))
+			{
+				// The group happens as a whole or not at all. The actions that ran revert in the world they just made, so they
+				// can; should one not, the log says so.
+				for (size_t undone = index; undone > 0; undone--)
+				{
+					std::string error;
+					if (!m_Actions[undone - 1]->Undo(&error))
+						ST_ERROR("Reverting '{}' of '{}' failed: {}", m_Actions[undone - 1]->GetName(), m_Name, error);
+				}
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool EditorActionGroup::Undo(std::string* outError)
+	{
+		for (size_t index = m_Actions.size(); index > 0; index--)
+		{
+			if (!m_Actions[index - 1]->Undo(outError))
+			{
+				// As a whole or not at all: the actions undone already are applied again.
+				for (size_t redone = index; redone < m_Actions.size(); redone++)
+				{
+					std::string error;
+					if (!m_Actions[redone]->Execute(&error))
+						ST_ERROR("Applying '{}' of '{}' again failed: {}", m_Actions[redone]->GetName(), m_Name, error);
+				}
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool EditorActionGroup::ChangesScene() const
+	{
+		for (const Scope<EditorAction>& action : m_Actions)
+		{
+			if (action->ChangesScene())
+				return true;
+		}
+		return false;
 	}
 
 }

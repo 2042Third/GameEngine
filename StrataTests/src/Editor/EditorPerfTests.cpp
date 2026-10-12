@@ -5,6 +5,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/HierarchyView.h"
+#include "Editor/ThumbnailCache.h"
 #include "EditorLayer.h"
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
@@ -14,9 +15,12 @@
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/GraphicsDevice.h>
+#include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Renderer/Texture.h>
@@ -342,6 +346,46 @@ TEST_SUITE("Perf.Editor")
 		});
 		CHECK(AssetManager::GetAsset<Texture>(texture)->GetWidth() == 4096u);
 	}
+
+	TEST_CASE("Finding what uses an asset among 10,000 assets")
+	{
+		// 10,000 materials, every hundredth using one texture, and the open scene using it too: asset.findReferences answers
+		// from the asset manager's index of who references whom (and the open scene from memory), never by reading documents.
+		constexpr uint32_t c_Materials = 10'000;
+		constexpr uint32_t c_Users = 100;
+		Perf::ScopedApplicationJobSystem jobs;
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		const std::filesystem::path project = CreateTemporaryDirectory("PerfFindReferences") / "Game";
+		const EditorCommandResult created = commands.Execute(context, "project.create", { { "directory", FileSystem::ToUTF8(project) }, { "name", "Game" } });
+		REQUIRE_MESSAGE(created.Success, created.Error);
+		REQUIRE(FileSystem::WriteBytes(project / "Assets" / "Textures" / "Shared.png", CreateSolidPNG(4, 4, 200, 100, 50)));
+		std::string error;
+		REQUIRE_MESSAGE(context.OpenProject(project, &error), error);
+		const AssetHandle texture = context.GetAssetManager()->FindAssetByPath("Textures/Shared.png");
+		REQUIRE(texture.IsValid());
+		const std::string plain = JsonUtils::Dump(Material::Create()->Serialize(), 1, '\t');
+		MaterialProperties properties;
+		properties.BaseColorMap = texture;
+		const std::string textured = JsonUtils::Dump(Material::Create(properties)->Serialize(), 1, '\t');
+		for (uint32_t index = 0; index < c_Materials; index++)
+			REQUIRE(FileSystem::WriteText(project / "Assets" / "Materials" / fmt::format("Perf{}.stmat", index), index % (c_Materials / c_Users) == 0 ? textured : plain));
+		REQUIRE_MESSAGE(context.OpenProject(project, &error), error);
+		const nlohmann::json parameters = { { "asset", UUIDToJson(texture) } };
+		const EditorCommandResult first = commands.Execute(context, "asset.findReferences", parameters);
+		REQUIRE_MESSAGE(first.Success, first.Error);
+		CHECK(first.Value["referencedBy"].size() == c_Users);
+
+		// The median call: one lookup of the index and a walk of the open scene's entities.
+		Perf::CheckBudgetConfirmed("Perf.Editor.FindReferences10k", [&]
+		{
+			return Perf::Measure("Perf.Editor.FindReferences10k", 5, 50, [&]
+			{
+				const EditorCommandResult result = commands.Execute(context, "asset.findReferences", parameters);
+				REQUIRE(result.Success);
+			}).MedianMs;
+		});
+	}
 }
 
 TEST_SUITE("PerfGPU.Editor")
@@ -465,6 +509,160 @@ TEST_SUITE("PerfGPU.Editor")
 		});
 		device.WaitForIdle();
 		CHECK(AssetManager::GetAsset<Texture>(texture)->GetWidth() == 4096u);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Importing a 4096x4096 texture never holds a frame")
+	{
+		// asset.import as the editor runs it: the copy on an I/O job, the import (decoding, mips, BC7 on the background
+		// threads) beside the frames, then the new texture's upload in steps once a frame requests it. Frames as in the test
+		// above, on the shared device.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		GraphicsDevice& device = gpu.GetDevice();
+		Perf::ScopedApplicationJobSystem jobs;
+		std::string error;
+		const std::optional<StressProject> project = WriteLargeTextureProject("PerfGPUImportTexture", error);
+		REQUIRE_MESSAGE(project, error);
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		EditorCommandRunner runner;
+		REQUIRE_MESSAGE(context.OpenProject(project->Directory, &error), error);
+		// The stress texture's source, as a file from outside the project.
+		const std::filesystem::path source = context.GetAssetManager()->GetAbsolutePath(project->Textures.front());
+		const std::filesystem::path external = project->Directory.parent_path() / "Downloads" / "Large.png";
+		REQUIRE(FileSystem::CreateDirectories(external.parent_path()));
+		REQUIRE(FileSystem::Copy(source, external));
+
+		uint32_t imports = 0;
+		const auto frame = [&](AssetHandle requested)
+		{
+			REQUIRE(device.BeginFrame());
+			const auto start = std::chrono::steady_clock::now();
+			Renderer::BeginFrame();
+			if (requested.IsValid())
+				AssetManager::GetAsset<Texture>(requested);
+			context.Update(Timestep(1.0f / 60.0f));
+			runner.Update(context);
+			const double milliseconds = MillisecondsSince(start);
+			device.EndFrame();
+			// Frames at the editor's pace rather than as fast as the loop spins (millions of empty frames would measure the
+			// machine's rarest hiccup rather than the import).
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			return milliseconds;
+		};
+		// The longest frame (a maximum by nature: one held frame is the hitch the user sees) from the command until the
+		// imported texture is uploaded; the acceptance limit is 33 ms (two frames at 60 Hz).
+		Perf::CheckBudgetConfirmed("PerfGPU.Editor.ImportTexture4kMaxFrame", [&]
+		{
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			const auto start = std::chrono::steady_clock::now();
+			runner.Run(context, commands, "asset.import", { { "file", FileSystem::ToUTF8(external) }, { "directory", fmt::format("Imported{}", imports++) } },
+				[completed](const EditorCommandResult& result) { *completed = result; });
+			double maxFrame = MillisecondsSince(start);
+			uint32_t frames = 0;
+			AssetHandle imported = UUID::Null();
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(3);
+			while ((!*completed || AssetManager::GetAssetState(imported) != AssetState::Ready) && std::chrono::steady_clock::now() < deadline)
+			{
+				maxFrame = std::max(maxFrame, frame(imported));
+				frames++;
+				if (*completed && !imported.IsValid())
+				{
+					INFO((*completed)->Error);
+					REQUIRE((*completed)->Success);
+					imported = *UUIDFromJson((*completed)->Value["asset"]);
+				}
+			}
+			REQUIRE(AssetManager::GetAssetState(imported) == AssetState::Ready);
+			CHECK(frames > 1); // The import outlasted a frame: it ran beside them
+			CHECK(AssetManager::GetAsset<Texture>(imported)->GetWidth() == 4096u);
+			MESSAGE("asset.import of a 4096x4096 texture: ", frames, " frames, the longest ", maxFrame, " ms");
+			return maxFrame;
+		});
+		device.WaitForIdle();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Rendering the thumbnails of a project never holds a frame")
+	{
+		// The Content Browser showing every asset of a stress project for the first time: the thumbnails of its textures
+		// (mip tails decoded on I/O jobs), materials, model and mesh (rendered one at a time, read back without stalling),
+		// encoded and written as PNG files on I/O jobs. Frames as in the tests above, on the shared device.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		GraphicsDevice& device = gpu.GetDevice();
+		Perf::ScopedApplicationJobSystem jobs;
+		StressProjectSpec spec;
+		spec.Textures2k = 8;
+		spec.Textures4k = 1;
+		spec.Materials = 9;
+		spec.Entities = 100;
+		spec.GridResolution = 128;
+		std::string error;
+		const std::optional<StressProject> project = WriteStressProject(CreateTemporaryDirectory("PerfGPUThumbnails") / "Project", spec, error);
+		REQUIRE_MESSAGE(project, error);
+		EditorContext context { EditorContextSpecification { false } };
+		REQUIRE_MESSAGE(context.OpenProject(project->Directory, &error), error);
+		ThumbnailCache* thumbnails = context.GetThumbnails();
+		REQUIRE(thumbnails);
+		std::vector<AssetHandle> assets = project->Textures;
+		assets.insert(assets.end(), project->Materials.begin(), project->Materials.end());
+		assets.push_back(project->GridModel);
+		assets.push_back(project->GridMesh);
+
+		const auto frame = [&]()
+		{
+			REQUIRE(device.BeginFrame());
+			const auto start = std::chrono::steady_clock::now();
+			Renderer::BeginFrame();
+			for (AssetHandle asset : assets)
+				thumbnails->Request(asset);
+			context.Update(Timestep(1.0f / 60.0f));
+			const double milliseconds = MillisecondsSince(start);
+			device.EndFrame();
+			// Frames at the editor's pace rather than as fast as the loop spins.
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			return milliseconds;
+		};
+		const auto renderAll = [&]()
+		{
+			double maxFrame = 0.0;
+			uint32_t frames = 0;
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(3);
+			do
+			{
+				maxFrame = std::max(maxFrame, frame());
+				frames++;
+			}
+			while (thumbnails->IsBusy() && std::chrono::steady_clock::now() < deadline);
+			REQUIRE_FALSE(thumbnails->IsBusy());
+			for (AssetHandle asset : assets)
+				CHECK(thumbnails->GetState(asset) == ThumbnailState::Ready);
+			CHECK(thumbnails->GetStats().Failed == 0);
+			MESSAGE(assets.size(), " thumbnails: ", frames, " frames, the longest ", maxFrame, " ms");
+			return maxFrame;
+		};
+		// The thumbnail renderer's first frame creates its targets and pipelines, once per session: done before the
+		// measurement, as every thumbnail render after it measures the steady state.
+		const std::vector<AssetHandle> everything = assets;
+		assets = { project->Materials.front() };
+		renderAll();
+		assets = everything;
+
+		// The longest frame (a maximum by nature: one held frame is the hitch the user sees) until every thumbnail is ready;
+		// each attempt starts without them.
+		uint64_t rendered = 0;
+		Perf::CheckBudgetConfirmed("PerfGPU.Editor.ThumbnailsMaxFrame", [&]
+		{
+			thumbnails->Clear();
+			const uint64_t before = thumbnails->GetStats().ScenesRendered;
+			const double maxFrame = renderAll();
+			rendered = thumbnails->GetStats().ScenesRendered - before;
+			return maxFrame;
+		});
+		CHECK(rendered == spec.Materials + 2);
+		device.WaitForIdle();
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

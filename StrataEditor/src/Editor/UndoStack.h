@@ -3,6 +3,7 @@
 #include <Strata/Core/Base.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <string>
 #include <vector>
@@ -11,7 +12,9 @@ namespace Strata
 {
 
 	// An undoable edit. Execute applies it (the first time and on redo), Undo reverts it. Actions own all state
-	// they need: they must work after any number of other actions were undone and redone around them.
+	// they need: they must work after any number of other actions were undone and redone around them. Either fails,
+	// changing nothing and saying why in outError, when the world changed in a way the action cannot be applied or reverted
+	// in (another file is where a deleted asset would come back).
 	class EditorAction
 	{
 	public:
@@ -19,7 +22,7 @@ namespace Strata
 
 		virtual const std::string& GetName() const = 0;
 		virtual bool Execute(std::string* outError) = 0;
-		virtual void Undo() = 0;
+		virtual bool Undo(std::string* outError) = 0;
 
 		// Continuous edits (dragging a value) become one undo step: when the stack's latest action accepts the next
 		// one, it absorbs its effect (the next action has already been applied) and the next action is dropped.
@@ -30,6 +33,25 @@ namespace Strata
 		// Whether the action changes the edited scene, which saving the scene saves. Edits of asset documents (a material)
 		// write their files themselves: they share the history but never make the scene unsaved (UndoStack::IsModified).
 		virtual bool ChangesScene() const { return true; }
+	};
+
+	// Several actions as one undo step (e.g. prefab.apply: the prefab's file and the instances it updates): Execute runs them in
+	// order, Undo in reverse order; either happens as a whole or not at all (when one fails, those that ran are reverted).
+	class EditorActionGroup final : public EditorAction
+	{
+	public:
+		explicit EditorActionGroup(std::string name);
+
+		// Null actions are left out.
+		void Add(Scope<EditorAction> action);
+
+		const std::string& GetName() const override { return m_Name; }
+		bool Execute(std::string* outError) override;
+		bool Undo(std::string* outError) override;
+		bool ChangesScene() const override;
+	private:
+		std::string m_Name;
+		std::vector<Scope<EditorAction>> m_Actions;
 	};
 
 	// Linear undo history with redo, a capacity limit and save-point tracking (for "modified" indicators).
@@ -45,8 +67,12 @@ namespace Strata
 		// Records an action whose effect has already been applied (e.g. a scene edit made in place).
 		void Record(Scope<EditorAction> action);
 
-		bool Undo();
-		bool Redo();
+		// Reverts the latest applied action. When it cannot be reverted, it stays applied (the history keeps its position, so
+		// the step can be tried again once what blocks it is gone) and the reason goes to outError and the log.
+		bool Undo(std::string* outError = nullptr);
+		// Applies the next undone action again. When it cannot be applied, it and the actions after it are dropped (the world
+		// they were recorded in is gone) and the reason goes to outError and the log.
+		bool Redo(std::string* outError = nullptr);
 		bool CanUndo() const { return m_Position > 0; }
 		bool CanRedo() const { return m_Position < m_Actions.size(); }
 		// Names of the actions undo and redo would apply (empty when unavailable).
@@ -58,6 +84,9 @@ namespace Strata
 
 		// The next recorded action starts a new undo step even if it could merge (e.g. the mouse was released).
 		void BreakMerge() { m_MergeBroken = true; }
+		// Changes with every recorded, merged, undone or redone action and every Clear, so caches of what the edits made (a
+		// prefab instance's "modified" mark) can tell when to look again.
+		uint64_t GetChangeCount() const { return m_ChangeCount; }
 
 		// Save point: IsModified reports whether the applied actions differ from those at the last MarkSaved by an action
 		// that changes the scene (EditorAction::ChangesScene). Costs the number of actions between the two positions.
@@ -75,6 +104,7 @@ namespace Strata
 		// Position of the save point; c_NoSavePoint when it was trimmed or discarded with the redo history.
 		size_t m_SavedPosition = 0;
 		static constexpr size_t c_NoSavePoint = static_cast<size_t>(-1);
+		uint64_t m_ChangeCount = 0;
 	};
 
 }

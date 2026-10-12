@@ -4,6 +4,7 @@
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Project/Project.h>
@@ -300,6 +301,38 @@ namespace Strata
 				info->MarkModified(registry, entity.GetHandle());
 			}
 			return true;
+		}
+
+		std::string MakeUniqueAssetPath(const EditorAssetManager& assets, std::string_view folder, std::string_view name, std::string_view extension,
+			std::string_view fallback)
+		{
+			// What file names cannot hold becomes '_'; spaces around the name and dots at its end go.
+			std::string fileName;
+			for (char character : name)
+			{
+				const auto value = static_cast<unsigned char>(character);
+				fileName.push_back(value < 0x20 || value == 0x7F || std::string_view("<>:\"/\\|?*").find(character) != std::string_view::npos ? '_' : character);
+			}
+			while (!fileName.empty() && fileName.front() == ' ')
+				fileName.erase(fileName.begin());
+			while (!fileName.empty() && (fileName.back() == ' ' || fileName.back() == '.'))
+				fileName.pop_back();
+			// Long names are cut at a character boundary, leaving room for the extension and a number.
+			constexpr size_t c_MaxNameBytes = 96;
+			if (fileName.size() > c_MaxNameBytes)
+			{
+				size_t size = c_MaxNameBytes;
+				while (size > 0 && (static_cast<unsigned char>(fileName[size]) & 0xC0) == 0x80)
+					size--;
+				fileName.resize(size);
+				while (!fileName.empty() && (fileName.back() == ' ' || fileName.back() == '.'))
+					fileName.pop_back();
+			}
+			if (!Project::IsValidName(fileName))
+				fileName = std::string(fallback);
+			const std::string prefix = folder.empty() ? std::string() : std::string(folder) + "/";
+			const std::filesystem::path unique = FileSystem::GetUniquePath(assets.GetAssetDirectory() / FileSystem::FromUTF8(prefix + fileName + std::string(extension)));
+			return prefix + FileSystem::ToUTF8(unique.filename());
 		}
 
 	}

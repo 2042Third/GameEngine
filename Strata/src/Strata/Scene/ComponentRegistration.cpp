@@ -5,6 +5,9 @@
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Scene/Components.h"
 
+#include <charconv>
+#include <string>
+
 namespace Strata
 {
 
@@ -40,6 +43,20 @@ namespace Strata
 		{
 			options.Tooltip = std::move(tooltip);
 			return options;
+		}
+
+		// A 64-bit hash as 16 hex digits, and back; 0 (not known) is the empty string, and so is text that is no hash.
+		std::string FormatHash(uint64_t hash)
+		{
+			return hash != 0 ? fmt::format("{:016X}", hash) : std::string();
+		}
+
+		uint64_t ParseHash(const std::string& text)
+		{
+			uint64_t hash = 0;
+			const char* end = text.data() + text.size();
+			const std::from_chars_result result = std::from_chars(text.data(), end, hash, 16);
+			return result.ec == std::errc() && result.ptr == end ? hash : 0;
 		}
 
 		void SerializeScriptComponent(const ScriptComponent& component, nlohmann::json& out)
@@ -178,7 +195,16 @@ namespace Strata
 				{
 					component.PrefabEntityID = UUID::FromString(std::get<std::string>(value)).value_or(UUID::Null());
 				},
-				{ .DisplayName = "Prefab Entity ID", .Flags = PropertyFlags::ReadOnly });
+				{ .DisplayName = "Prefab Entity ID", .Flags = PropertyFlags::ReadOnly })
+			// Hashes, as 16 hex digits (empty when not known), never edited by hand.
+			.CustomProperty("PrefabVersion", PropertyType::String,
+				[](const PrefabInstanceComponent& component) -> PropertyValue { return FormatHash(component.PrefabVersion); },
+				[](PrefabInstanceComponent& component, const PropertyValue& value) { component.PrefabVersion = ParseHash(std::get<std::string>(value)); },
+				{ .DisplayName = "Prefab Version", .Flags = PropertyFlags::ReadOnly })
+			.CustomProperty("SyncedHash", PropertyType::String,
+				[](const PrefabInstanceComponent& component) -> PropertyValue { return FormatHash(component.SyncedHash); },
+				[](PrefabInstanceComponent& component, const PropertyValue& value) { component.SyncedHash = ParseHash(std::get<std::string>(value)); },
+				{ .DisplayName = "Synced Hash", .Flags = PropertyFlags::ReadOnly });
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Rendering

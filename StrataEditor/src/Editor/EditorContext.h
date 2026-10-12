@@ -2,11 +2,14 @@
 
 #include "Editor/EditorViewport.h"
 #include "Editor/GameExport.h"
+#include "Editor/PrefabSync.h"
 #include "Editor/ProjectTemplates.h"
+#include "Editor/ProjectThumbnail.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/ScriptBuild.h"
 #include "Editor/SimulatedInput.h"
+#include "Editor/ThumbnailCache.h"
 #include "Editor/UndoStack.h"
 
 #include <Strata/Animation/AnimationPreview.h>
@@ -270,12 +273,20 @@ namespace Strata
 		//////////////////////////////////////////////////////////////////////////
 
 		UndoStack& GetUndoStack() { return m_UndoStack; }
+		// The prefab instances of the edited scene and their prefabs (updates after prefab changes, modified marks).
+		PrefabSync& GetPrefabSync() { return m_PrefabSync; }
+		// Thumbnails of the open project's assets (Content Browser, Asset tab); null without a project or a GPU.
+		ThumbnailCache* GetThumbnails() const { return m_Thumbnails.get(); }
+		// The project's picture for the launcher, made after each scene save.
+		const ProjectThumbnail& GetProjectThumbnail() const { return m_ProjectThumbnail; }
 		// Records an edit of the active scene. Edits of the running copy during play are not recorded: they are
 		// discarded with it. Returns true when an undo step was recorded. While a scene is being opened (IsSceneLoading) the
 		// edited scene is read-only: the edit is rolled back and nothing is recorded.
 		bool CommitEdit(SceneEditTransaction& transaction);
-		bool Undo();
-		bool Redo();
+		// Undo and redo of the history (UndoStack::Undo, Redo): false while playing, with nothing to do, or when the step
+		// fails (the reason in outError).
+		bool Undo(std::string* outError = nullptr);
+		bool Redo(std::string* outError = nullptr);
 
 		//////////////////////////////////////////////////////////////////////////
 		// Scripts
@@ -391,6 +402,10 @@ namespace Strata
 		// Frames the scene again once the meshes that were loading when it was first framed have loaded (OpenScene).
 		void UpdatePendingFrame();
 		void OpenScriptEngine(bool created);
+		// The open project's thumbnail cache (with a GPU), kept in its intermediate directory.
+		void OpenThumbnails();
+		// After the edited scene was saved: the project's picture for the launcher is made again.
+		void OnSceneSaved();
 		void CloseScriptEngine();
 		// Fingerprints the loaded module's file after a load. `expected` is its digest from before the load (if known):
 		// a file that changed while it was being loaded leaves the running version unknown.
@@ -439,6 +454,9 @@ namespace Strata
 		AssetHandle m_InspectedAsset = UUID::Null();
 		uint64_t m_InspectionVersion = 0;
 		UndoStack m_UndoStack;
+		PrefabSync m_PrefabSync;
+		Scope<ThumbnailCache> m_Thumbnails;
+		ProjectThumbnail m_ProjectThumbnail;
 
 		Ref<ScriptEngine> m_ScriptEngine;
 		ScriptBuilder m_ScriptBuilder;

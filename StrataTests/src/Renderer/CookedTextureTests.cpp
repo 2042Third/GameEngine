@@ -295,6 +295,94 @@ TEST_SUITE("Renderer.CookedTexture")
 		CHECK_FALSE(partial->RaiseLevels(5, std::vector<uint8_t>(static_cast<size_t>(layout.GetLevelsByteRange(5, 6).Size))));
 	}
 
+	TEST_CASE("The header and mip tail parse without the larger levels")
+	{
+		const Ref<Texture> texture = CreateChain(TextureFormat::BC7SRGB, 1024, 512, "Prefix");
+		const std::vector<uint8_t> cooked = texture->Serialize();
+		const CookedTextureByteRange tail = texture->GetMipTailByteRange(128);
+		REQUIRE(tail.LevelCount > 0);
+		const std::span<const uint8_t> prefix(cooked.data(), static_cast<size_t>(tail.Offset + tail.Size));
+
+		std::string error;
+		const std::optional<CookedTextureView> view = ParseCookedTexturePrefix(prefix, cooked.size(), &error);
+		REQUIRE_MESSAGE(view, error);
+		CHECK(view->Width == 1024);
+		CHECK(view->Format == TextureFormat::BC7SRGB);
+		CHECK(view->Data.size() == prefix.size());
+		// The levels in the prefix have their bytes; the larger ones none.
+		for (uint32_t level = 0; level < view->Layout.MipCount; level++)
+		{
+			CAPTURE(level);
+			if (level >= tail.FirstLevel)
+				CHECK(std::ranges::equal(view->GetLevelData(level), texture->GetMips()[level].Data));
+			else
+				CHECK(view->GetLevelData(level).empty());
+		}
+		// The whole data parses the same way.
+		REQUIRE(ParseCookedTexturePrefix(cooked, cooked.size()));
+		CHECK(ParseCookedTexturePrefix(cooked, cooked.size())->GetLevelData(0).size() == texture->GetMips()[0].Data.size());
+
+		// Offsets are checked against the whole size: a prefix claimed to be the whole texture, or a shorter total, fails.
+		CHECK_FALSE(ParseCookedTexturePrefix(prefix, prefix.size()));
+		CHECK_FALSE(ParseCookedTexturePrefix(prefix, cooked.size() - 1));
+		// A prefix longer than the total, one that ends inside the header, and the header alone (it holds no level).
+		CHECK_FALSE(ParseCookedTexturePrefix(cooked, cooked.size() - 16));
+		CHECK_FALSE(ParseCookedTexturePrefix(std::span<const uint8_t>(cooked.data(), 20), cooked.size()));
+		CHECK_FALSE(ParseCookedTexturePrefix(std::span<const uint8_t>(cooked.data(), static_cast<size_t>(texture->GetCookedLayout().HeaderSize)), cooked.size(), &error));
+		CHECK(error.find("no level") != std::string::npos);
+		// Version 1 data stores its small levels last: no prefix of it, not even all of it, is read in parts.
+		const Ref<Texture> old = CreateChain(TextureFormat::RGBA8, 16, 16, "Old");
+		const std::vector<uint8_t> version1 = WriteVersion1(*old);
+		CHECK_FALSE(ParseCookedTexturePrefix(std::span<const uint8_t>(version1.data(), version1.size() / 2), version1.size(), &error));
+		CHECK(error.find("in parts") != std::string::npos);
+		CHECK_FALSE(ParseCookedTexturePrefix(version1, version1.size()));
+		CHECK(ParseCookedTexture(version1));
+	}
+
+	TEST_CASE("The header tells how many first bytes hold the levels of up to a size")
+	{
+		const Ref<Texture> texture = CreateChain(TextureFormat::BC7SRGB, 1024, 512, "Head");
+		const std::vector<uint8_t> cooked = texture->Serialize();
+		const CookedTextureLayout& layout = texture->GetCookedLayout();
+		// The first bytes that hold the header and mip table are enough.
+		const std::span<const uint8_t> head(cooked.data(), static_cast<size_t>(layout.HeaderSize));
+		for (uint32_t dimension : { 4u, 32u, 128u, 512u, 1024u })
+		{
+			CAPTURE(dimension);
+			const CookedTextureByteRange tail = layout.GetMipTailByteRange(dimension);
+			REQUIRE(tail.LevelCount > 0);
+			CHECK(GetCookedTexturePrefixSize(head, cooked.size(), dimension) == tail.Offset + tail.Size);
+			// Those bytes parse, with the levels of up to that size.
+			const std::optional<CookedTextureView> view = ParseCookedTexturePrefix(std::span<const uint8_t>(cooked.data(), static_cast<size_t>(tail.Offset + tail.Size)), cooked.size());
+			REQUIRE(view);
+			CHECK_FALSE(view->GetLevelData(tail.FirstLevel).empty());
+			if (tail.FirstLevel > 0)
+				CHECK(view->GetLevelData(tail.FirstLevel - 1).empty());
+		}
+		// All of it for the largest dimension.
+		CHECK(GetCookedTexturePrefixSize(head, cooked.size(), 16384) == cooked.size());
+
+		// A texture without a level that small has none; nor have version 1 data, broken data and a stored size below the head.
+		TextureMip level;
+		level.Width = 512;
+		level.Height = 256;
+		level.Data.resize(static_cast<size_t>(GetMipByteSize(TextureFormat::RGBA8, 512, 256)));
+		std::vector<TextureMip> levels;
+		levels.push_back(std::move(level));
+		TextureSpecification specification;
+		specification.Format = TextureFormat::RGBA8;
+		std::string error;
+		const Ref<Texture> singleLevel = Texture::Create(specification, std::move(levels), &error);
+		REQUIRE_MESSAGE(singleLevel, error);
+		const std::vector<uint8_t> single = singleLevel->Serialize();
+		CHECK_FALSE(GetCookedTexturePrefixSize(single, single.size(), 128));
+		CHECK(GetCookedTexturePrefixSize(single, single.size(), 512) == single.size());
+		const std::vector<uint8_t> version1 = WriteVersion1(*CreateChain(TextureFormat::RGBA8, 16, 16, "Old"));
+		CHECK_FALSE(GetCookedTexturePrefixSize(version1, version1.size(), 128));
+		CHECK_FALSE(GetCookedTexturePrefixSize(std::span<const uint8_t>(cooked.data(), 20), cooked.size(), 128));
+		CHECK_FALSE(GetCookedTexturePrefixSize(head, head.size() - 1, 128));
+	}
+
 	TEST_CASE("Version 1 data still loads")
 	{
 		const Ref<Texture> source = CreateChain(TextureFormat::RGBA8SRGB, 8, 4, "Old");

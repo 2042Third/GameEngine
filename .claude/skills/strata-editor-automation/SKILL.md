@@ -82,6 +82,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Which commands and parameters exist? | `editor.commands` (or `list --json`) |
 | Which components and properties (types, ranges, enum values)? | `component.list` |
 | Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` |
+| What uses an asset (before deleting it)? | `asset.findReferences` (`asset.delete` refuses while anything does) |
 | What does a material hold, which properties exist? | `material.get` (values, and each property's type, range, options) |
 | What state do the scripts hold (a score, a timer)? | `script.get` (live field values while playing) |
 | What is in the scene? | `scene.hierarchy`, `entity.find` (`name`, `tag`, `component`), `entity.get` |
@@ -196,8 +197,15 @@ sun with `component.set` (find their IDs with `entity.find {"name": "Main Camera
 `SunIntensity`; its sun follows the scene's directional light.
 
 **Assets**: `asset.import {"file": "<absolute path>", "directory": "Models"}` copies a file into the project and
-imports it: models `.gltf`/`.glb`, textures `.png`/`.jpg`/`.tga`/`.bmp`/`.psd`/`.gif`/`.hdr`, audio
-`.wav`/`.mp3`/`.flac`/`.ogg`, fonts `.ttf`/`.otf`. `asset.info` reports import errors and warnings, the import
+imports it: models `.gltf`/`.glb` (also meshopt-compressed), textures `.png`/`.jpg`/`.tga`/`.bmp`/`.psd`/`.gif`/`.hdr`,
+audio `.wav`/`.mp3`/`.flac`/`.ogg`, fonts `.ttf`/`.otf`. It runs in the background (copy on an I/O thread, import like
+re-imports) and answers when the imports are done; take several with `"files": [...]` and whole folders (their tree,
+`.meta` files and model files kept) with `"directories": [...]` rather than many calls (calls that overlap copy one after
+the other). A `.gltf` that names separate `.bin` and image files
+brings them along into a folder named after the model (`Models/Quad/Quad.gltf`, `Models/Quad/Quad.bin`, ...; files up
+to two folders above it, such as `../Textures`, keep their layout), so it imports textured. A failed import **fails the
+command** (the message names the file; the error's data has `items` with each `error`) and its copied files are removed
+again, unless `"keepOnFailure": true`; the result lists `items` with their `assets`. `asset.info` reports import errors and warnings, the import
 settings and what each accepts (`importSettingsProperties`: textures `Usage`, `Compression`, `Quality`, `MaxSize`,
 `Filter`, `Wrap`, `GenerateMips`, `FlipVertically`; models `Scale`, `GenerateLODs`, `LODCount`, `MaxTextureSize`,
 `TextureCompression`, `TextureQuality`, `OptimizeMeshes`, `Import*`; audio `LoadMode`; fonts and the engine's own files
@@ -212,14 +220,49 @@ faster (opaque color as BC1, half the bytes, a little less exact; normal maps an
 quality); `"Compression": "Uncompressed"` keeps exact texels, e.g. for pixel art or textures a test compares texel for
 texel. Models expose sub-assets (meshes, materials) and are instantiated whole with `prefab.instantiate`.
 
+**Moving and deleting assets** never loses work: `asset.findReferences {"asset"}` lists what uses an asset
+(`referencedBy`: scenes, prefabs, models and materials by `path`, and the open scene from memory with `openScene: true`
+and the `entities` that use it, also when that scene is not saved). `asset.delete {"asset"}` **fails while anything uses
+the asset**, naming the users in the message and in the error's data (`referencedBy`); change those references first,
+or pass `"force": true` to delete anyway (the references become missing: meshes fall back to the default material).
+Deleting moves the file, its `.meta` and its cached import to `<project>/.strata/Trash` (kept 30 days) and is one undo
+step: `edit.undo` brings the asset back with the same handle, so its references work again. Folders:
+`asset.createFolder {"path"}`, `asset.moveFolder {"path", "to"}` (everything in it moves, every handle and reference
+stays valid) and `asset.deleteFolder {"path", "force"?}` (refused while assets outside it or the open scene use its
+assets); `asset.move {"asset", "path"}` renames or moves one asset (a name that differs only in case renames it in
+place; its own path changes nothing). Each is one undo step (`edit.undo`, `edit.history`); the open scene cannot be
+deleted. Undo and redo check the files first: `edit.undo` of a delete fails (the step stays, nothing changes) while
+another file is at the deleted path, and `edit.redo` of one fails (dropping the step) when the path holds other assets
+now or the delete would be refused now; the error says why.
+
 **Hierarchy and prefabs**: `entity.create {"parent": "<id>"}`;
 `entity.setParent {"entities": ["<id>", ...], "parent": "<id>" | null, "index": 0}` moves entities (in the order given;
 `index` is the final position of the first one, also to reorder top-level entities or siblings; without it entities that
 change parent go last) in one undo step; `entity.duplicate {"entities": [...]}` puts each copy right after its original;
 `entity.copy {"entities": [...]}` returns `data` that `entity.paste {"data", "parent"?, "index"?}` turns into new
 entities (fresh IDs, references among them remapped, also in another scene);
-`prefab.create {"entities": ["<id>"], "path": "Prefabs/Block.stprefab"}`, then
-`prefab.instantiate {"prefab": "Prefabs/Block.stprefab", "components": {"Transform": {"Translation": [2, 0, 0]}}}`.
+`prefab.create {"entities": ["<id>"], "path": "Prefabs/Block.stprefab"}` (the entities become an instance of it; `"link":
+false` leaves them alone), then
+`prefab.instantiate {"prefab": "Prefabs/Block.stprefab", "components": {"Transform": {"Translation": [2, 0, 0]}}}`
+(returns `id`, the instance's root). Instances stay linked: change one instance (any of its entities) and
+`prefab.apply {"entity": "<id>"}` writes it into the prefab, and every instance that still had the prefab's values takes
+the new ones (one undo step for the file and the scene). Instances in other scenes follow when their scene opens next
+(also after the prefab changed on disk): those still as they were take the new values (an undo step,
+"Update Instances of ..."; save the scene), modified ones keep theirs and are `outdated`; `prefab.apply` refuses an
+outdated instance (it would write its older values over the newer ones) unless `"force": true`: `prefab.revert` it
+and make its change again instead. `prefab.status {"entity"}` says whether an instance differs
+(`modified`, `outdated`, `changed`, `added`, `removed`), `prefab.revert {"entity"}` gives it the prefab's values again (IDs kept),
+`prefab.unpack {"entity"}` makes its entities plain ones, `prefab.select {"entity", "asset"?}` selects the root or shows
+the prefab. While playing, revert and unpack change the running copy (their answers carry a `warning`) and apply is
+refused; while a scene is being opened, apply, revert, unpack and a linking `prefab.create` are refused like every edit. The root's transform and name always stay the instance's own. Imported models are instantiated the same way
+but cannot be applied to (unpack them, or make a prefab of the instance).
+
+**Placing**: `entity.create` and `prefab.instantiate` put an entity where its `Transform` says (the origin, or the
+prefab's own place, without one); the editor's own menus put new entities on the surface under the view's pivot (the
+camera's target) and send that translation, and prefabs dragged into the viewport rest on the surface under the cursor.
+To rest entities on what is below them,
+`entity.dropToGround {"entities": [...]}` moves each straight down until its bounds touch a surface (one undo step;
+`unchanged` lists those with nothing below).
 
 **Edit**: `component.add` (adds if missing, then sets values), `component.set` (component must exist),
 `component.remove`, `entity.setActive`: each takes `"entities": [...]` instead of `"entity"` to change all of them in one

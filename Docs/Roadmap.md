@@ -209,8 +209,7 @@ Open items and deferrals later waves own:
   at the largest capacities still reserves about 940 MiB at play start; dynamic bodies below other dynamic bodies are
   still written back one by one; a collider built from a mesh that is reimported while evicted keeps the old data until
   the mesh loads again (the source revisions render-scene uses would tell).
-- Textures: `asset.import` still cooks on the main thread (about 1.5 s for a 4096x4096 BC7 color texture; asynchronous
-  import is `content-and-prefabs`'); HDR textures stay RGBA16F until a BC6H encoder exists.
+- Textures: HDR textures stay RGBA16F until a BC6H encoder exists.
 - `GetResidencyInfo` and `GetResidencySamples` walk every registered asset (`GetStats` keeps counts instead), which a world of many
   registered assets will feel (`world-partition`). Two caches keep assets between frames: `SceneRenderer`'s environment
   cache (the sky's map) and `TextRenderer`'s glyph atlases (their fonts). Streaming the stress world from pack version 2
@@ -248,8 +247,7 @@ Open items and deferrals later waves own:
   one entity among 100,000 sibling roots renumbers the sibling list (about 0.5 ms).
 - The editor starts in 0.7-1.0 s (Release, to its first frame on screen), not the 0.4 s the pillar names. An idle
   editor answers input and automation requests on its next throttled frame (up to 33 ms, 100 ms unfocused) until it
-  waits on events instead (later editor work). Project thumbnails and search in the recent projects move to
-  `content-and-prefabs`.
+  waits on events instead (later editor work).
 - Perf budgets hold for the reference machine only, so CI's hosted runners skip the `perf` label; a self-hosted runner
   on the reference machine would make them an automatic gate. On its hybrid processor where the scheduler places a
   process's main thread lasts for the process's life and shows in what it measures: pinned, an idle editor frame took

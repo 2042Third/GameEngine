@@ -140,6 +140,13 @@ TEST_SUITE("Core.FileSystem")
 		REQUIRE(FileSystem::WriteText(directory / "a" / "one.txt", "1"));
 		REQUIRE(FileSystem::Copy(directory / "a" / "one.txt", directory / "b" / "two.txt"));
 		CHECK(FileSystem::ReadText(directory / "b" / "two.txt").value() == "1");
+		// Without overwrite an existing file is no copy: the call fails and the file stays as it was.
+		REQUIRE(FileSystem::WriteText(directory / "a" / "other.txt", "2"));
+		CHECK_FALSE(FileSystem::Copy(directory / "a" / "other.txt", directory / "b" / "two.txt", false));
+		CHECK(FileSystem::ReadText(directory / "b" / "two.txt").value() == "1");
+		CHECK(FileSystem::Copy(directory / "a" / "other.txt", directory / "b" / "two.txt"));
+		CHECK(FileSystem::ReadText(directory / "b" / "two.txt").value() == "2");
+		CHECK_FALSE(FileSystem::Copy(directory / "a" / "missing.txt", directory / "b" / "missing.txt"));
 
 		REQUIRE(FileSystem::Rename(directory / "b" / "two.txt", directory / "c" / "three.txt"));
 		CHECK_FALSE(FileSystem::Exists(directory / "b" / "two.txt"));

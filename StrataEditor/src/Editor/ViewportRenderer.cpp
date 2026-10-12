@@ -93,8 +93,8 @@ namespace Strata
 		if (overlays)
 		{
 			options.ShowGrid = settings.ShowGrid;
-			const bool selectionColliders = settings.ShowSceneGizmos && !settings.AllColliders;
-			if (settings.ShowSelectionOutline || selectionColliders)
+			// The selection's subtrees: outlined, and the entities whose colliders and light ranges are drawn.
+			if (settings.ShowSelectionOutline || settings.ShowSceneGizmos)
 				UpdateSelectionSubtrees(context, scene);
 			if (settings.ShowSelectionOutline)
 				options.SelectedEntities = m_Outlined;
@@ -106,6 +106,9 @@ namespace Strata
 				gizmos.CameraAspectRatio = static_cast<float>(size.x) / static_cast<float>(size.y);
 				gizmos.AllColliders = settings.AllColliders;
 				gizmos.ColliderEntities = m_Outlined;
+				// Light ranges only for the selection: the spheres of many lights would cover the scene.
+				gizmos.AllLightRanges = false;
+				gizmos.LightRangeEntities = m_Outlined;
 				// Shapes out of view or far away are left out; small ones become icons.
 				const glm::mat4 inverseView = glm::inverse(view.Camera.View);
 				SceneGizmoView gizmoView;

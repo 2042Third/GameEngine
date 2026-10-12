@@ -1,7 +1,10 @@
 #include "Panels/SceneHierarchyPanel.h"
 
+#include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorPlacement.h"
+#include "Editor/PrefabSync.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/EntityIcons.h"
@@ -13,10 +16,13 @@
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
+#include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
+#include <Strata/Scene/PrefabInstances.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneHierarchy.h>
 
@@ -52,6 +58,10 @@ namespace Strata
 				{ Icons::Box, "Cube", "Cube", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } },
 				{ Icons::Globe, "Sphere", "Sphere", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::SphereMesh) } } } } },
 				{ Icons::Square, "Plane", "Plane", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::PlaneMesh) } } } } },
+				{ Icons::Cylinder, "Cylinder", "Cylinder", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CylinderMesh) } } } } },
+				{ Icons::Pill, "Capsule", "Capsule", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CapsuleMesh) } } } } },
+				{ Icons::Cone, "Cone", "Cone", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::ConeMesh) } } } } },
+				{ Icons::Torus, "Torus", "Torus", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::TorusMesh) } } } } },
 				{ Icons::Video, "Camera", "Camera", { { "Camera", nlohmann::json::object() } } },
 				{ Icons::Sun, "Directional Light", "Directional Light", { { "DirectionalLight", nlohmann::json::object() } } },
 				{ Icons::Lightbulb, "Point Light", "Point Light", { { "PointLight", nlohmann::json::object() } } },
@@ -62,12 +72,33 @@ namespace Strata
 				{ Icons::Volume2, "Audio Source", "Audio Source", { { "AudioSource", nlohmann::json::object() } } } };
 		}
 
-		// Creates an entity of a preset (entity.create) and selects it.
+		// Where a new top-level entity of a preset goes: at the view's pivot, resting on the surface under it (its mesh's
+		// bounds touching the surface).
+		glm::vec3 PlacePreset(EditorContext& context, const EntityPreset& preset)
+		{
+			const EditorPlacement::Surface surface = EditorPlacement::FindPivotSurface(*context.GetActiveScene(), context.GetViewport().GetCamera());
+			AABB bounds;
+			const nlohmann::json* renderer = JsonUtils::Find(preset.Components, "MeshRenderer");
+			const nlohmann::json* mesh = renderer ? JsonUtils::Find(*renderer, "Mesh") : nullptr;
+			if (const std::optional<UUID> handle = mesh ? UUIDFromJson(*mesh) : std::nullopt)
+				bounds = EditorPlacement::GetMeshBounds(*handle);
+			return EditorPlacement::RestOn(surface, bounds);
+		}
+
+		// Creates an entity of a preset (entity.create) and selects it: under the parent at its origin, or at the top level
+		// where the view looks (PlacePreset).
 		void CreatePreset(EditorContext& context, const EditorCommandRegistry& commands, const EntityPreset& preset, UUID parent)
 		{
 			nlohmann::json parameters = { { "name", preset.Name }, { "components", preset.Components } };
 			if (parent.IsValid())
+			{
 				parameters["parent"] = UUIDToJson(parent);
+			}
+			else
+			{
+				const glm::vec3 translation = PlacePreset(context, preset);
+				parameters["components"]["Transform"] = { { "Translation", { translation.x, translation.y, translation.z } } };
+			}
 			const nlohmann::json created = RunEditorCommand(context, commands, "entity.create", parameters);
 			if (created.is_object())
 			{
@@ -182,6 +213,16 @@ namespace Strata
 				return row.Rect;
 		}
 		return std::nullopt;
+	}
+
+	SceneHierarchyPanel::PrefabBadge SceneHierarchyPanel::FindPrefabBadge(UUID entity) const
+	{
+		for (const VisibleRow& row : m_VisibleRows)
+		{
+			if (row.Entity == entity)
+				return row.Badge;
+		}
+		return PrefabBadge::None;
 	}
 
 	void SceneHierarchyPanel::OnHidden(EditorPanelContext&)
@@ -514,10 +555,32 @@ namespace Strata
 		float right = max.x - button;
 		if (IsPrefabRoot(registry, row.Handle))
 		{
-			// The badge leads to the prefab (or model) the entity was made from: the Asset tab shows it.
+			// The badge leads to the prefab (or model) the entity was made from: the Asset tab shows it. An instance whose
+			// values differ from its prefab's is marked (PrefabSync caches that until the edits or the prefab change).
 			const AssetHandle prefab = registry.get<PrefabInstanceComponent>(row.Handle).Prefab;
-			const std::string tooltip = fmt::format("An instance of {}: click to show it in the Asset tab", GetAssetName(prefab));
-			if (RowButton("##Prefab", Icons::Package, colors.Info, ImVec2(right - button, min.y), button, tooltip.c_str()))
+			const Entity instance(row.Handle, &scene);
+			const bool modified = !context.IsPlaying() && context.GetPrefabSync().IsModified(context, instance);
+			const bool outdated = modified && context.GetPrefabSync().IsOutdated(context, instance);
+			const ImVec4& badgeColor = modified ? colors.Warning : colors.Info;
+			// The tooltip's text is made only while it shows.
+			const bool tooltipDue = ImGui::IsMouseHoveringRect(ImVec2(right - button, min.y), ImVec2(right, min.y + button));
+			std::string tooltip;
+			if (tooltipDue && outdated)
+			{
+				tooltip = fmt::format("An instance of {}, modified, and made from an older version of it: it missed the prefab's later changes (Revert takes "
+					"them; Apply writes its values over them). Click to show the prefab.", GetAssetName(prefab));
+			}
+			else if (tooltipDue && modified)
+			{
+				tooltip = fmt::format("An instance of {}, modified: its values differ from the prefab's (Apply or Revert in its menu). Click to show the prefab.",
+					GetAssetName(prefab));
+			}
+			else if (tooltipDue)
+			{
+				tooltip = fmt::format("An instance of {}: click to show it in the Asset tab", GetAssetName(prefab));
+			}
+			m_VisibleRows.back().Badge = outdated ? PrefabBadge::Outdated : modified ? PrefabBadge::Modified : PrefabBadge::Linked;
+			if (RowButton("##Prefab", Icons::Package, badgeColor, ImVec2(right - button, min.y), button, tooltipDue ? tooltip.c_str() : nullptr))
 			{
 				m_Deferred.push_back([&context, prefab]()
 				{
@@ -633,6 +696,8 @@ namespace Strata
 		if (ImGui::MenuItem("Paste", "Ctrl+V", false, EditorActions::CanPaste()))
 			schedule([&context, &commands]() { EditorActions::Paste(context, commands); });
 		ImGui::Separator();
+		DrawPrefabMenuItems(context, commands, scene, row);
+		ImGui::Separator();
 		const bool hasParent = scene.GetRegistry().get<HierarchyComponent>(row.Handle).Parent != entt::null;
 		if (ImGui::MenuItem("Unparent", nullptr, false, hasParent))
 		{
@@ -650,6 +715,64 @@ namespace Strata
 		if (ImGui::MenuItem("Delete", "Del"))
 			schedule([&context, &commands]() { EditorActions::DeleteSelection(context, commands); });
 		ImGui::EndPopup();
+	}
+
+	void SceneHierarchyPanel::DrawPrefabMenuItems(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, const HierarchyRow& row)
+	{
+		auto schedule = [this](std::function<void()> action) { m_Deferred.push_back(std::move(action)); };
+		// The menu's items, recorded for UI tests as "Hierarchy.Prefab.<Item>".
+		auto item = [](const char* label, const char* probe, bool enabled = true)
+		{
+			const bool chosen = ImGui::MenuItem(label, nullptr, false, enabled);
+			UI::ItemProbe::Record(probe, enabled);
+			return chosen;
+		};
+		const bool playing = context.IsPlaying();
+		const EditorAssetManager* assets = context.GetAssetManager();
+		if (item("Create Prefab", "Hierarchy.Prefab.Create", assets && !playing))
+		{
+			// The selected entities (those below another selected one go with it), or the row's, as a prefab in Prefabs/ that
+			// they become an instance of.
+			const std::vector<UUID> roots = context.IsSelected(row.ID) ? HierarchyView::GetTopmostInHierarchyOrder(scene, context.GetSelection())
+				: std::vector<UUID> { row.ID };
+			const std::string& name = scene.GetRegistry().get<NameComponent>(row.Handle).Name;
+			const std::string path = CommandUtils::MakeUniqueAssetPath(*assets, "Prefabs", name, ".stprefab", "Prefab");
+			schedule([&context, &commands, roots, path]()
+			{
+				const nlohmann::json created = RunEditorCommand(context, commands, "prefab.create", { { "entities", ToJson(roots) }, { "path", path } });
+				if (!created.is_object())
+					return;
+				if (const std::optional<UUID> prefab = UUIDFromJson(created.value("asset", nlohmann::json())))
+					context.SetInspectedAsset(*prefab);
+			});
+		}
+
+		const Entity root = PrefabInstances::FindInstanceRoot(Entity(row.Handle, &scene));
+		if (!root)
+			return;
+		const nlohmann::json instance = { { "entity", UUIDToJson(row.ID) } };
+		const bool isPrefab = AssetManager::GetAssetType(PrefabInstances::GetPrefab(root)) == AssetType::Prefab;
+		// An outdated instance missed later changes of its prefab: its Apply says that it writes over them.
+		const bool outdated = !playing && context.GetPrefabSync().IsOutdated(context, root);
+		if (item(outdated ? "Apply to Prefab (Over Its Newer Changes)" : "Apply to Prefab", "Hierarchy.Prefab.Apply", isPrefab && !playing))
+		{
+			nlohmann::json parameters = instance;
+			if (outdated)
+				parameters["force"] = true;
+			schedule([&context, &commands, parameters]() { RunEditorCommand(context, commands, "prefab.apply", parameters); });
+		}
+		if (item("Revert to Prefab", "Hierarchy.Prefab.Revert"))
+			schedule([&context, &commands, instance]() { RunEditorCommand(context, commands, "prefab.revert", instance); });
+		if (item("Unpack Prefab", "Hierarchy.Prefab.Unpack"))
+			schedule([&context, &commands, instance]() { RunEditorCommand(context, commands, "prefab.unpack", instance); });
+		if (item("Select Prefab Root", "Hierarchy.Prefab.SelectRoot", root.GetUUID() != row.ID))
+			schedule([&context, &commands, instance]() { RunEditorCommand(context, commands, "prefab.select", instance); });
+		if (item("Show Prefab Asset", "Hierarchy.Prefab.ShowAsset"))
+		{
+			nlohmann::json parameters = instance;
+			parameters["asset"] = true;
+			schedule([&context, &commands, parameters]() { RunEditorCommand(context, commands, "prefab.select", parameters); });
+		}
 	}
 
 	void SceneHierarchyPanel::AcceptRowDrops(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, size_t index, const ImVec2& min, const ImVec2& max)
@@ -705,14 +828,9 @@ namespace Strata
 			const AssetType type = AssetManager::GetAssetType(asset);
 			if (type == AssetType::Prefab || type == AssetType::Model)
 			{
-				const nlohmann::json parameters = { { "prefab", UUIDToJson(asset) }, { "parent", UUIDToJson(row.ID) } };
-				m_View.SetExpanded(row.ID, true);
-				m_Deferred.push_back([&context, &commands, parameters]()
-				{
-					const nlohmann::json created = RunEditorCommand(context, commands, "prefab.instantiate", parameters);
-					if (created.is_object() && !created["entities"].empty())
-						context.Select(*UUIDFromJson(created["entities"][0]));
-				});
+				const UUID parent = row.ID;
+				m_View.SetExpanded(parent, true);
+				m_Deferred.push_back([&context, &commands, asset, parent]() { EditorActions::InstantiatePrefab(context, commands, asset, parent); });
 			}
 			else
 			{
@@ -746,13 +864,8 @@ namespace Strata
 			const AssetType type = AssetManager::GetAssetType(asset);
 			if (type == AssetType::Prefab || type == AssetType::Model)
 			{
-				const nlohmann::json parameters = { { "prefab", UUIDToJson(asset) } };
-				m_Deferred.push_back([&context, &commands, parameters]()
-				{
-					const nlohmann::json created = RunEditorCommand(context, commands, "prefab.instantiate", parameters);
-					if (created.is_object() && !created["entities"].empty())
-						context.Select(*UUIDFromJson(created["entities"][0]));
-				});
+				// At the top level, resting on what lies under the view's pivot.
+				m_Deferred.push_back([&context, &commands, asset]() { EditorActions::InstantiatePrefab(context, commands, asset); });
 			}
 			else
 			{

@@ -91,6 +91,41 @@ namespace Strata
 			return TakeResult(result, path, "Open");
 		}
 
+		std::vector<std::filesystem::path> OpenFiles(const std::vector<FileDialogFilter>& filters, const std::filesystem::path& defaultDirectory)
+		{
+			std::vector<std::filesystem::path> files;
+			if (!s_Initialized)
+				return files;
+			const FilterList list(filters);
+			const std::string directory = ToDefaultDirectory(defaultDirectory);
+			const nfdpathset_t* paths = nullptr;
+			const nfdresult_t result = NFD_OpenDialogMultipleU8(&paths, list.Items.empty() ? nullptr : list.Items.data(),
+				static_cast<nfdfiltersize_t>(list.Items.size()), directory.empty() ? nullptr : directory.c_str());
+			if (result != NFD_OKAY)
+			{
+				if (result == NFD_ERROR)
+					ST_ERROR("Open dialog failed: {}", NFD_GetError());
+				return files;
+			}
+			nfdpathsetsize_t count = 0;
+			if (NFD_PathSet_GetCount(paths, &count) != NFD_OKAY)
+			{
+				ST_ERROR("Open dialog failed: {}", NFD_GetError());
+				NFD_PathSet_Free(paths);
+				return files;
+			}
+			for (nfdpathsetsize_t index = 0; index < count; index++)
+			{
+				nfdu8char_t* path = nullptr;
+				if (NFD_PathSet_GetPathU8(paths, index, &path) != NFD_OKAY)
+					continue;
+				files.push_back(FileSystem::FromUTF8(path));
+				NFD_PathSet_FreePathU8(path);
+			}
+			NFD_PathSet_Free(paths);
+			return files;
+		}
+
 		std::optional<std::filesystem::path> SaveFile(const std::vector<FileDialogFilter>& filters, const std::string& defaultName, const std::filesystem::path& defaultDirectory)
 		{
 			if (!s_Initialized)

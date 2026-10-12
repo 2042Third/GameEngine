@@ -219,7 +219,8 @@ namespace Strata
 			case EditorCommandError::Failed:
 				break;
 		}
-		return RpcResult::Failure(JsonRpc::ErrorCode::OperationFailed, result.Error);
+		// Details the command gives with its failure (e.g. asset.delete's referencedBy).
+		return RpcResult::Failure(JsonRpc::ErrorCode::OperationFailed, result.Error, result.ErrorData);
 	}
 
 	void EditorAutomation::SyncMethods()

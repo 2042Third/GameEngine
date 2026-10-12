@@ -84,6 +84,69 @@ TEST_SUITE("Core.FileWatcher")
 		CHECK(changes.count("cache.bin") == 0);
 	}
 
+	TEST_CASE("Directories that come and go are reported when the settings ask for them, never as modified")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("FileWatcherDirectories");
+		REQUIRE(FileSystem::CreateDirectories(directory / "Old"));
+		FileWatcherSettings settings = FastSettings();
+		settings.ReportDirectories = true;
+		FileWatcher watcher;
+		REQUIRE(watcher.Start(directory, settings));
+		FileWatcher filesOnly;
+		REQUIRE(filesOnly.Start(directory, FastSettings()));
+
+		// The latest change per name, with whether it was a directory.
+		std::map<std::string, FileChange> changes;
+		auto collect = [&](size_t expected)
+		{
+			return Tests::WaitUntil([&]()
+			{
+				for (FileChange& change : watcher.PollChanges())
+					changes[FileSystem::ToUTF8(change.Path.filename())] = std::move(change);
+				return changes.size() >= expected;
+			});
+		};
+
+		// Empty folders made in a file manager, one inside the other; an ignored one is left out.
+		REQUIRE(FileSystem::CreateDirectories(directory / "Made" / "Inner"));
+		REQUIRE(FileSystem::CreateDirectories(directory / ".strata" / "Cache"));
+		REQUIRE(collect(2));
+		REQUIRE(changes.count("Made") == 1);
+		CHECK(changes["Made"].Type == FileChangeType::Added);
+		CHECK(changes["Made"].Directory);
+		REQUIRE(changes.count("Inner") == 1);
+		CHECK(changes["Inner"].Directory);
+
+		// A file added in one: the file, not the folder.
+		changes.clear();
+		REQUIRE(FileSystem::WriteText(directory / "Made" / "file.txt", "x"));
+		REQUIRE(collect(1));
+		REQUIRE(changes.count("file.txt") == 1);
+		CHECK_FALSE(changes["file.txt"].Directory);
+
+		// A folder removed.
+		changes.clear();
+		REQUIRE(FileSystem::Remove(directory / "Old"));
+		REQUIRE(collect(1));
+		REQUIRE(changes.count("Old") == 1);
+		CHECK(changes["Old"].Type == FileChangeType::Removed);
+		CHECK(changes["Old"].Directory);
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+		for (FileChange& change : watcher.PollChanges())
+			changes[FileSystem::ToUTF8(change.Path.filename())] = std::move(change);
+		CHECK(changes.count("Made") == 0); // Not modified by the file in it
+		CHECK(changes.count(".strata") == 0);
+		CHECK(changes.count("Cache") == 0);
+
+		// Without the setting only the file was seen.
+		for (const FileChange& change : filesOnly.PollChanges())
+		{
+			CHECK(FileSystem::ToUTF8(change.Path.filename()) == "file.txt");
+			CHECK_FALSE(change.Directory);
+		}
+	}
+
 	TEST_CASE("A file created and deleted before being observed produces no event")
 	{
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("FileWatcherTransient");

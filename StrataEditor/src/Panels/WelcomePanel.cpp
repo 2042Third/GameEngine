@@ -1,8 +1,10 @@
 #include "Panels/WelcomePanel.h"
 
+#include "Editor/DisplayImage.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/ProjectTemplates.h"
+#include "Editor/ProjectThumbnail.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/EditorShell.h"
@@ -16,14 +18,20 @@
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
+#include <Strata/Core/StringUtils.h>
 #include <Strata/Core/Version.h>
+#include <Strata/Renderer/ImageReader.h>
+#include <Strata/Renderer/Renderer.h>
 
 #include <imgui.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <iterator>
+#include <optional>
+#include <string_view>
 
 namespace Strata
 {
@@ -40,6 +48,7 @@ namespace Strata
 		// The content's grid: columns at least this wide.
 		constexpr float c_ColumnMinWidthInFontSizes = 18.0f;
 		constexpr float c_RecentCardHeightInFontSizes = 4.6f;
+		constexpr float c_SearchWidthInFontSizes = 14.0f;
 		constexpr float c_EmptyStateWidthInFontSizes = 40.0f;
 		constexpr float c_ContentMaxWidthInFontSizes = 96.0f;
 		constexpr float c_HeroHeightInFontSizes = 9.0f;
@@ -100,10 +109,76 @@ namespace Strata
 		return options;
 	}
 
+	struct WelcomePanel::CardImageLoad
+	{
+		std::atomic<bool> Done = false;
+		std::optional<ReadbackImage> Image;
+	};
+
+	bool WelcomePanel::MatchesSearch(const RecentProject& project, std::string_view search)
+	{
+		const std::string name = StringUtils::ToLower(project.Name);
+		const std::string path = StringUtils::ToLower(FileSystem::ToUTF8(project.Path));
+		const std::string words = StringUtils::ToLower(search);
+		size_t start = 0;
+		while (start < words.size())
+		{
+			const size_t end = std::min(words.find(' ', start), words.size());
+			const std::string_view word = std::string_view(words).substr(start, end - start);
+			if (!word.empty() && name.find(word) == std::string::npos && path.find(word) == std::string::npos)
+				return false;
+			start = end + 1;
+		}
+		return true;
+	}
+
+	nvrhi::ITexture* WelcomePanel::GetCardImage(const std::filesystem::path& projectFile)
+	{
+		if (!Renderer::IsInitialized())
+			return nullptr;
+		CardImage& image = m_CardImages[FileSystem::ToUTF8(projectFile)];
+		if (image.Texture)
+			return image.Texture;
+		if (!image.Load)
+		{
+			image.Load = CreateRef<CardImageLoad>();
+			JobSystem::SubmitIO([load = image.Load, file = ProjectThumbnail::GetFile(projectFile.parent_path())]()
+			{
+				if (FileSystem::IsRegularFile(file))
+				{
+					if (const std::optional<std::vector<uint8_t>> png = FileSystem::ReadBytes(file))
+						load->Image = ImageReader::DecodeRGBA8(*png);
+				}
+				load->Done.store(true, std::memory_order_release);
+			}, JobPriority::Low);
+			return nullptr;
+		}
+		if (!image.Load->Done.load(std::memory_order_acquire) || !image.Load->Image)
+			return nullptr;
+		if (!m_UploadCommands)
+			m_UploadCommands = Renderer::GetDevice()->createCommandList();
+		m_UploadCommands->open();
+		image.Texture = DisplayImage::Upload(m_UploadCommands, image.Load->Image->Width, image.Load->Image->Height, image.Load->Image->Pixels, "ProjectThumbnail");
+		m_UploadCommands->close();
+		Renderer::GetDevice()->executeCommandList(m_UploadCommands);
+		image.Load->Image.reset(); // Uploaded, or not to be tried again
+		return image.Texture;
+	}
+
 	void WelcomePanel::OnHidden(EditorPanelContext& context)
 	{
 		m_Visible = false;
 		m_Error.clear();
+		// The pictures are read again when the launcher shows: the project that was open has a new one after a save.
+		std::vector<nvrhi::ResourceHandle> textures;
+		for (auto& [file, image] : m_CardImages)
+		{
+			if (image.Texture)
+				textures.push_back(image.Texture);
+		}
+		m_CardImages.clear();
+		if (!textures.empty())
+			Renderer::ReleaseDeferred(std::move(textures));
 		// A read under way still lands: the list is current when the launcher shows again.
 		PollRefresh(context);
 	}
@@ -361,6 +436,10 @@ namespace Strata
 				ImGui::Text("%zu", m_RecentProjects.size());
 				ImGui::PopStyleColor();
 				ImGui::PopFont();
+				// The search at the right end of the heading's line.
+				const float searchWidth = std::round(fontSize * c_SearchWidthInFontSizes);
+				ImGui::SameLine(std::max(ImGui::GetCursorStartPos().x + width - searchWidth, ImGui::GetCursorPosX()));
+				UI::SearchField("Welcome.Search", m_Search, "Search projects", searchWidth, "Projects whose name or path contains every word");
 			}
 			ImGui::Spacing();
 			// One grid for every section, so their cards line up; wide blocks (the note without recent projects, the agent
@@ -468,10 +547,13 @@ namespace Strata
 		// Actions run after the loop: they change the list it walks.
 		std::filesystem::path open;
 		std::filesystem::path remove;
+		size_t shown = 0;
 		for (size_t index = 0; index < m_RecentProjects.size(); index++)
 		{
 			const RecentProject& project = m_RecentProjects[index];
-			if (index % static_cast<size_t>(grid.Columns) != 0)
+			if (!m_Search.empty() && !MatchesSearch(project, m_Search))
+				continue;
+			if (shown++ % static_cast<size_t>(grid.Columns) != 0)
 				ImGui::SameLine();
 			const std::string id = fmt::format("Welcome.Recent.{}", index);
 			const std::string initials = UI::GetInitials(project.Name);
@@ -485,6 +567,11 @@ namespace Strata
 			content.Title = project.Name;
 			content.Subtitle = path;
 			content.Detail = detail;
+			if (nvrhi::ITexture* picture = GetCardImage(project.Path))
+			{
+				content.Image = static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(picture));
+				content.ImageAspect = static_cast<float>(picture->getDesc().width) / static_cast<float>(std::max(picture->getDesc().height, 1u));
+			}
 			if (UI::EntryCard(id.c_str(), content, cardSize))
 				open = project.Path;
 			if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip | ImGuiHoveredFlags_DelayNormal))
@@ -502,6 +589,13 @@ namespace Strata
 					remove = project.Path;
 				ImGui::EndPopup();
 			}
+		}
+		if (shown == 0)
+		{
+			ImGui::PushStyleColor(ImGuiCol_Text, UI::GetThemeColors().TextSecondary);
+			ImGui::TextUnformatted("No recent project matches the search");
+			ImGui::PopStyleColor();
+			UI::ItemProbe::Record("Welcome.NoMatch");
 		}
 		if (!remove.empty())
 			RemoveRecentProject(context, remove);

@@ -19,6 +19,7 @@
 #include <filesystem>
 #include <mutex>
 #include <shared_mutex>
+#include <system_error>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -290,7 +291,294 @@ namespace Strata
 			return cancel && cancel->load(std::memory_order_relaxed);
 		}
 
+		// "Models/Crate/Crate.gltf" -> "Models/Crate"; "" for files at the root.
+		std::string GetParentFolder(std::string_view path)
+		{
+			const size_t slash = path.rfind('/');
+			return slash == std::string_view::npos ? std::string() : std::string(path.substr(0, slash));
+		}
+
+		// Whether a relative path is the folder or lies below it ("" holds everything).
+		bool IsInFolder(std::string_view path, std::string_view folder)
+		{
+			if (folder.empty())
+				return true;
+			return path == folder || (path.size() > folder.size() && path.compare(0, folder.size(), folder) == 0 && path[folder.size()] == '/');
+		}
+
+		// A path below `from` moved to below `to`.
+		std::string ReplaceFolder(const std::string& path, const std::string& from, const std::string& to)
+		{
+			return to + path.substr(from.size());
+		}
+
+		// The name of a new trash folder: the UTC time, sortable and readable ("20261011-120305").
+		std::string MakeTrashTimestamp()
+		{
+			const auto now = std::chrono::system_clock::now();
+			const auto days = std::chrono::floor<std::chrono::days>(now);
+			const std::chrono::year_month_day date(days);
+			const std::chrono::hh_mm_ss time(std::chrono::floor<std::chrono::seconds>(now - days));
+			return fmt::format("{:04}{:02}{:02}-{:02}{:02}{:02}", static_cast<int>(date.year()), static_cast<unsigned>(date.month()),
+				static_cast<unsigned>(date.day()), time.hours().count(), time.minutes().count(), time.seconds().count());
+		}
+
+		constexpr const char* c_TrashAssetsFolder = "Assets";
+		constexpr const char* c_TrashCacheFolder = "Cache";
+		constexpr const char* c_TrashManifest = "Trashed.json";
+
+		// How many folders above a file the files it reads (a model's "../Textures") may lie when it is copied into a project.
+		constexpr int c_MaxExternalFileClimb = 2;
+
+		// Copies files from outside the project into the asset directory (EditorAssetManager::ImportExternal, on an I/O job,
+		// and ImportExternalFile): records every file it writes in the item and every folder it creates, so that a failure or
+		// a cancellation can take them back. Uses no manager state. `claim` (optional) hears every file's relative path before
+		// the file is created, so that the manager's file watcher leaves files that are still being written alone.
+		class ExternalCopy
+		{
+		public:
+			ExternalCopy(const std::filesystem::path& assetDirectory, const std::atomic<bool>* cancel, std::vector<std::string>& createdFolders,
+				std::function<void(const std::string& relativePath)> claim = {})
+				: m_AssetDirectory(assetDirectory), m_Cancel(cancel), m_CreatedFolders(createdFolders), m_Claim(std::move(claim))
+			{
+			}
+
+			bool IsCancelled() const { return Strata::IsCancelled(m_Cancel); }
+
+			// A file and the files its importer reads beside it.
+			ExternalImportItem CopyExternalFile(const std::filesystem::path& file, const std::filesystem::path& targetDirectory)
+			{
+				ExternalImportItem item;
+				item.Source = file;
+				const AssetImporter* importer = AssetImporterRegistry::FindByExtension(GetExtension(file));
+				if (!FileSystem::IsRegularFile(file))
+				{
+					item.Error = fmt::format("'{}' is not a file", FileSystem::ToUTF8(file));
+					return item;
+				}
+				if (!importer)
+				{
+					item.Error = fmt::format("No importer handles '{}' files", FileSystem::ToUTF8(file.extension()));
+					return item;
+				}
+
+				// The files it reads, and the folder their layout is kept below (the nearest one holding all of them).
+				std::vector<std::filesystem::path> companions;
+				std::filesystem::path root = file.parent_path();
+				if (importer->ReadsExternalFiles())
+				{
+					const std::optional<std::vector<uint8_t>> data = FileSystem::ReadBytes(file);
+					std::vector<std::string> names;
+					std::string error;
+					if (!data)
+						error = fmt::format("Could not read '{}'", FileSystem::ToUTF8(file));
+					else if (!importer->FindExternalFiles(*data, names, &error))
+						error = fmt::format("{}: {}", FileSystem::ToUTF8(file.filename()), error);
+					if (!error.empty())
+					{
+						item.Error = std::move(error);
+						return item;
+					}
+					for (const std::string& name : names)
+					{
+						const std::filesystem::path companion = (file.parent_path() / FileSystem::FromUTF8(name)).lexically_normal();
+						int climbed = 0;
+						while (FileSystem::GetRelativePath(companion, root).empty() && climbed <= c_MaxExternalFileClimb)
+						{
+							root = root.parent_path();
+							climbed++;
+						}
+						if (climbed > c_MaxExternalFileClimb)
+						{
+							item.Error = fmt::format("{}: '{}' lies more than {} folders above it; copy them together into one folder first",
+								FileSystem::ToUTF8(file.filename()), name, c_MaxExternalFileClimb);
+							return item;
+						}
+						// Missing files are left to the import, which says what it lacks.
+						if (FileSystem::IsRegularFile(companion))
+							companions.push_back(companion);
+					}
+				}
+
+				std::filesystem::path destination;
+				if (companions.empty())
+				{
+					destination = FileSystem::GetUniquePath(targetDirectory / file.filename());
+				}
+				else
+				{
+					// A new folder named after it, with everything below the root at the same relative place.
+					const std::filesystem::path folder = FileSystem::GetUniquePath(targetDirectory / file.stem());
+					destination = folder / FileSystem::GetRelativePath(file, root);
+					for (const std::filesystem::path& companion : companions)
+					{
+						if (!Copy(companion, folder / FileSystem::GetRelativePath(companion, root), item))
+							return item;
+					}
+				}
+				if (!Copy(file, destination, item))
+					return item;
+				// The file itself first: ImportExternal registers it before the files it reads.
+				std::rotate(item.Files.begin(), item.Files.end() - 1, item.Files.end());
+				item.Path = Relative(destination);
+				return item;
+			}
+
+			// A folder with its asset files, their .meta files and the files models in it read inside it.
+			ExternalImportItem CopyExternalFolder(const std::filesystem::path& directory, const std::filesystem::path& targetDirectory)
+			{
+				ExternalImportItem item;
+				item.Source = directory;
+				item.Folder = true;
+				if (!FileSystem::IsDirectory(directory))
+				{
+					item.Error = fmt::format("'{}' is not a folder", FileSystem::ToUTF8(directory));
+					return item;
+				}
+				const std::filesystem::path source = FileSystem::RemoveTrailingSeparators(directory);
+				const std::filesystem::path folder = FileSystem::GetUniquePath(targetDirectory / source.filename());
+
+				std::vector<std::filesystem::path> files;
+				std::error_code error;
+				std::filesystem::recursive_directory_iterator iterator(source, std::filesystem::directory_options::skip_permission_denied, error);
+				const std::filesystem::recursive_directory_iterator end;
+				while (!error && iterator != end)
+				{
+					const std::filesystem::directory_entry& entry = *iterator;
+					std::error_code typeError;
+					if (IsHiddenName(entry.path().filename()) || entry.is_symlink(typeError))
+					{
+						if (entry.is_directory(typeError))
+							iterator.disable_recursion_pending();
+					}
+					else if (entry.is_regular_file(typeError) && AssetImporterRegistry::FindByExtension(GetExtension(entry.path())))
+					{
+						files.push_back(entry.path());
+					}
+					iterator.increment(error);
+				}
+				if (error)
+				{
+					item.Error = fmt::format("Could not read the folder '{}': {}", FileSystem::ToUTF8(source), error.message());
+					return item;
+				}
+				std::sort(files.begin(), files.end());
+
+				std::unordered_set<std::string> copied;
+				auto copyBelow = [&](const std::filesystem::path& file)
+				{
+					const std::filesystem::path relative = FileSystem::GetRelativePath(file, source);
+					if (relative.empty() || !copied.insert(FileSystem::ToUTF8(relative)).second)
+						return true;
+					return Copy(file, folder / relative, item);
+				};
+				for (const std::filesystem::path& file : files)
+				{
+					if (IsCancelled())
+						return item;
+					if (!copyBelow(file) || (FileSystem::IsRegularFile(GetMetaPath(file)) && !copyBelow(GetMetaPath(file))))
+						return item;
+					const AssetImporter* importer = AssetImporterRegistry::FindByExtension(GetExtension(file));
+					if (!importer->ReadsExternalFiles())
+						continue;
+					// What a model reads inside the folder comes along; what lies outside it does not (its import says so).
+					const std::optional<std::vector<uint8_t>> data = FileSystem::ReadBytes(file);
+					std::vector<std::string> names;
+					if (!data || !importer->FindExternalFiles(*data, names, nullptr))
+						continue;
+					for (const std::string& name : names)
+					{
+						const std::filesystem::path companion = (file.parent_path() / FileSystem::FromUTF8(name)).lexically_normal();
+						if (FileSystem::IsRegularFile(companion) && !FileSystem::GetRelativePath(companion, source).empty() && !copyBelow(companion))
+							return item;
+					}
+				}
+				item.Path = Relative(folder);
+				if (!FileSystem::IsDirectory(folder) && !MakeFolder(folder))
+					item.Error = fmt::format("Could not create the folder '{}'", item.Path);
+				return item;
+			}
+		private:
+			std::string Relative(const std::filesystem::path& absolute) const
+			{
+				return FileSystem::ToUTF8(FileSystem::GetRelativePath(absolute, m_AssetDirectory));
+			}
+
+			// Creates a folder and the parents it lacks, recording those it made (parents first).
+			bool MakeFolder(const std::filesystem::path& absolute)
+			{
+				std::vector<std::filesystem::path> missing;
+				for (std::filesystem::path path = absolute.lexically_normal(); !FileSystem::Exists(path) && path != m_AssetDirectory && path.has_relative_path();
+					path = path.parent_path())
+					missing.push_back(path);
+				for (auto it = missing.rbegin(); it != missing.rend(); ++it)
+				{
+					if (!FileSystem::CreateDirectories(*it))
+						return false;
+					m_CreatedFolders.push_back(Relative(*it));
+				}
+				return true;
+			}
+
+			bool Copy(const std::filesystem::path& from, const std::filesystem::path& to, ExternalImportItem& item)
+			{
+				if (IsCancelled())
+				{
+					item.Error = "The import was cancelled";
+					return false;
+				}
+				if (!MakeFolder(to.parent_path()))
+				{
+					item.Error = fmt::format("Could not copy '{}' into the project", FileSystem::ToUTF8(from));
+					return false;
+				}
+				const std::string relative = Relative(to);
+				if (m_Claim)
+					m_Claim(relative);
+				// Never over a file that was created since its name was picked; what a copy that failed otherwise left is no
+				// file of the project.
+				std::error_code error;
+				if (!std::filesystem::copy_file(from, to, std::filesystem::copy_options::none, error) || error)
+				{
+					if (error != std::errc::file_exists)
+					{
+						std::error_code removeError;
+						std::filesystem::remove(to, removeError);
+					}
+					// System messages come in the system's code page.
+					item.Error = fmt::format("Could not copy '{}' into the project: {}", FileSystem::ToUTF8(from),
+						error ? StringUtils::MakeValidUTF8(error.message()) : std::string("the copy failed"));
+					return false;
+				}
+				item.Files.push_back(relative);
+				return true;
+			}
+		private:
+			std::filesystem::path m_AssetDirectory;
+			const std::atomic<bool>* m_Cancel;
+			std::vector<std::string>& m_CreatedFolders;
+			std::function<void(const std::string& relativePath)> m_Claim;
+		};
+
 	}
+
+	bool ExternalImport::HasFailures() const
+	{
+		return std::any_of(m_Items.begin(), m_Items.end(), [](const ExternalImportItem& item) { return !item.Error.empty(); });
+	}
+
+	struct ExternalImport::CopyTask
+	{
+		std::atomic<bool> Cancel = false;
+		std::mutex Mutex;
+		bool Done = false; // Guarded by Mutex, like what follows
+		std::vector<ExternalImportItem> Items;
+		std::vector<std::string> CreatedFolders;
+		// Every file the copy writes (relative to the asset directory), named before it is created: the file watcher leaves
+		// them alone until the import registers them, so it never imports a file that is still being written (a large copy
+		// can look settled to it).
+		std::unordered_set<std::string> Claimed;
+	};
 
 	// What the manager's background jobs use. A job keeps it alive (a Ref in its closure) and touches nothing else, so the
 	// manager closes, and may be destroyed, while a cancelled job still runs to its next cancellation check. Everything here
@@ -447,6 +735,8 @@ namespace Strata
 		std::error_code error;
 		m_Specification.AssetDirectory = std::filesystem::absolute(m_Specification.AssetDirectory, error).lexically_normal();
 		m_Specification.CacheDirectory = std::filesystem::absolute(m_Specification.CacheDirectory, error).lexically_normal();
+		if (!m_Specification.TrashDirectory.empty())
+			m_Specification.TrashDirectory = std::filesystem::absolute(m_Specification.TrashDirectory, error).lexically_normal();
 		FileSystem::CreateDirectories(m_Specification.AssetDirectory);
 		FileSystem::CreateDirectories(m_Specification.CacheDirectory);
 		m_Work = CreateRef<BackgroundWork>(m_Specification);
@@ -467,6 +757,16 @@ namespace Strata
 			return;
 		m_Closed = true;
 		m_Watcher.Stop();
+
+		// Imports of external files end here: a copy still running takes back what it copied, and imports of what was copied
+		// run again when the project next opens (the files are its assets now).
+		for (const Ref<ExternalImport>& import : m_ExternalImports)
+		{
+			import->m_Task->Cancel.store(true);
+			import->m_Error = "The project was closed before the import finished";
+			import->m_State = ExternalImportState::Finished;
+		}
+		m_ExternalImports.clear();
 
 		uint32_t running = 0;
 		uint32_t queued = 0;
@@ -591,10 +891,13 @@ namespace Strata
 				if (!FileSystem::Exists(ToAbsolute(moved.Path)))
 				{
 					m_SourcesByPath.erase(moved.Path);
+					RemoveFromFolderIndex(handle, moved.Path);
 					moved.Path = relativePath;
 					moved.PathGeneration++;
 					m_SourcesByPath[relativePath] = handle;
+					AddToFolderIndex(handle, relativePath);
 					m_AssetIndexDirty = true;
+					MarkChanged();
 					const std::vector<AssetHandle> subAssets = moved.Import.SubAssets;
 					lock.unlock();
 
@@ -649,7 +952,9 @@ namespace Strata
 		std::scoped_lock<std::mutex> lock(m_SourceMutex);
 		m_SourcesByPath[relativePath] = handle;
 		m_Sources.emplace(handle, std::move(source));
+		AddToFolderIndex(handle, relativePath);
 		m_AssetIndexDirty = true;
+		MarkChanged();
 		return handle;
 	}
 
@@ -666,12 +971,18 @@ namespace Strata
 			// A removed source is not imported: its import is cancelled before its cached data goes, so it stores nothing.
 			StopImport(it->second);
 			m_SourcesByPath.erase(it->second.Path);
+			RemoveFromFolderIndex(handle, it->second.Path);
 			m_Sources.erase(it);
 			m_AssetIndexDirty = true;
 		}
+		MarkChanged();
 
 		for (AssetHandle subAsset : subAssets)
+		{
+			ForgetReferences(subAsset);
 			UnregisterAsset(subAsset);
+		}
+		ForgetReferences(handle);
 		UnregisterAsset(handle);
 
 		if (deleteCache)
@@ -720,6 +1031,7 @@ namespace Strata
 		const auto startTime = std::chrono::steady_clock::now();
 
 		std::vector<std::filesystem::path> files;
+		std::vector<std::string> folders;
 		std::error_code error;
 		std::filesystem::recursive_directory_iterator iterator(m_Specification.AssetDirectory, std::filesystem::directory_options::skip_permission_denied, error);
 		const std::filesystem::recursive_directory_iterator end;
@@ -731,6 +1043,10 @@ namespace Strata
 				if (entry.is_directory(error))
 					iterator.disable_recursion_pending();
 			}
+			else if (entry.is_directory(error))
+			{
+				folders.push_back(ToRelative(entry.path()));
+			}
 			else if (entry.is_regular_file(error) && GetExtension(entry.path()) != c_MetaExtension)
 			{
 				files.push_back(entry.path());
@@ -739,6 +1055,12 @@ namespace Strata
 		}
 		if (error)
 			ST_CORE_ERROR("Asset scan of '{}' incomplete: {}", FileSystem::ToUTF8(m_Specification.AssetDirectory), error.message());
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			for (const std::string& folder : folders)
+				AddFolderLocked(folder);
+		}
+		MarkChanged();
 
 		std::sort(files.begin(), files.end());
 
@@ -888,7 +1210,10 @@ namespace Strata
 		for (const AssetHandle handle : backgroundImports)
 			QueueImport(handle);
 
-		if (m_Specification.WatchFiles && !m_Watcher.IsRunning() && !m_Watcher.Start(m_Specification.AssetDirectory))
+		// Folders too: one made or removed outside the editor shows in (or leaves) the folder index without a file in it.
+		FileWatcherSettings watchSettings;
+		watchSettings.ReportDirectories = true;
+		if (m_Specification.WatchFiles && !m_Watcher.IsRunning() && !m_Watcher.Start(m_Specification.AssetDirectory, watchSettings))
 			ST_CORE_WARN("Asset hot reload is unavailable: cannot watch '{}'", FileSystem::ToUTF8(m_Specification.AssetDirectory));
 
 		SaveAssetIndex();
@@ -1148,7 +1473,11 @@ namespace Strata
 			outcome.References = std::move(result.References);
 			outcome.Bounds = result.Bounds;
 		}
+		// Messages of third-party decoders can quote bytes of the file: logs, records and results get valid UTF-8.
 		outcome.Warnings = std::move(result.Warnings);
+		for (std::string& warning : outcome.Warnings)
+			warning = StringUtils::MakeValidUTF8(warning);
+		error = StringUtils::MakeValidUTF8(error);
 
 		// Dependencies count for failed imports too: creating or fixing a missing file must retry the import.
 		nlohmann::json dependencies = nlohmann::json::array();
@@ -1281,6 +1610,7 @@ namespace Strata
 			}
 		}
 
+		MarkChanged();
 		for (const std::string& warning : outcome.Warnings)
 			ST_CORE_WARN("Import '{}': {}", path, warning);
 		if (!outcome.Success)
@@ -1292,7 +1622,7 @@ namespace Strata
 		awaited.insert(awaited.end(), subAssetHandles.begin(), subAssetHandles.end());
 
 		SetStoredSize(outcome.Handle, FileSystem::GetFileSize(GetCachePath(outcome.Handle)).value_or(0));
-		SetAssetReferences(outcome.Handle, outcome.References, outcome.Bounds);
+		RecordReferences(outcome.Handle, outcome.References, outcome.Bounds);
 		for (size_t index = 0; index < outcome.SubAssets.size(); index++)
 		{
 			const ImportedSubAsset& subAsset = outcome.SubAssets[index];
@@ -1305,7 +1635,7 @@ namespace Strata
 			metadata.Name = subAsset.Name.empty() ? subAsset.Key : subAsset.Name;
 			metadata.StoredSize = FileSystem::GetFileSize(GetCachePath(metadata.Handle)).value_or(0);
 			RegisterAsset(metadata);
-			SetAssetReferences(metadata.Handle, subAsset.References, subAsset.Bounds);
+			RecordReferences(metadata.Handle, subAsset.References, subAsset.Bounds);
 		}
 
 		// Sub-assets the new import no longer produces disappear.
@@ -1313,6 +1643,7 @@ namespace Strata
 		{
 			if (std::find(subAssetHandles.begin(), subAssetHandles.end(), previous) != subAssetHandles.end())
 				continue;
+			ForgetReferences(previous);
 			UnregisterAsset(previous);
 			std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
 			FileSystem::Remove(GetCachePath(previous));
@@ -1352,6 +1683,7 @@ namespace Strata
 			request.Replaced = replacing || replaced != nullptr;
 			m_Work->Add(job);
 		}
+		MarkChanged();
 		SubmitImport(job, request);
 	}
 
@@ -1417,6 +1749,7 @@ namespace Strata
 			return nullptr;
 		m_SourcesImporting--;
 		m_Work->Cancel(job);
+		MarkChanged();
 		return job;
 	}
 
@@ -1575,7 +1908,7 @@ namespace Strata
 	void EditorAssetManager::ApplyNativeReferences(const NativeReferences& references)
 	{
 		if (references.Scanned)
-			SetAssetReferences(references.Handle, references.References, std::nullopt);
+			RecordReferences(references.Handle, references.References, std::nullopt);
 	}
 
 	void EditorAssetManager::RefreshNativeReferences(AssetHandle handle, std::span<const uint8_t> data, const std::vector<AssetHandle>* references)
@@ -1646,6 +1979,8 @@ namespace Strata
 		ST_PROFILE_STAGE("Assets.Update");
 		ProcessFileChanges();
 		ProcessCompletedImports();
+		if (!m_ExternalImports.empty())
+			UpdateExternalImports();
 		SaveAssetIndex();
 		AssetManagerBase::Update();
 	}
@@ -1658,11 +1993,31 @@ namespace Strata
 		// Removals last: a move arrives as a removal plus an addition, and the addition must find the asset at its old
 		// place to keep its handle and cached data; a file replaced by a "safe save" exists again by then.
 		std::vector<FileChange> changes = m_Watcher.PollChanges();
+		if (changes.empty())
+			return;
 		std::stable_partition(changes.begin(), changes.end(), [](const FileChange& change) { return change.Type != FileChangeType::Removed; });
+
+		// Files that imports of external files are still copying belong to those imports, which register them once they are
+		// complete (UpdateExternalImports, later in this update): a file that is still being written is never imported.
+		std::unordered_set<std::string> copying;
+		for (const Ref<ExternalImport>& import : m_ExternalImports)
+		{
+			if (import->m_State != ExternalImportState::Copying)
+				continue;
+			std::scoped_lock<std::mutex> lock(import->m_Task->Mutex);
+			copying.insert(import->m_Task->Claimed.begin(), import->m_Task->Claimed.end());
+		}
 
 		for (const FileChange& change : changes)
 		{
 			const std::filesystem::path path = change.Path.lexically_normal();
+			if (!copying.empty() && copying.contains(ToRelative(path)))
+				continue;
+			if (change.Directory)
+			{
+				ProcessFolderChange(path, change.Type);
+				continue;
+			}
 			if (GetExtension(path) == c_MetaExtension)
 			{
 				std::filesystem::path sourcePath = path;
@@ -1904,6 +2259,21 @@ namespace Strata
 		return it != m_Sources.end() ? it->second.Import : AssetImportInfo();
 	}
 
+	uint64_t EditorAssetManager::GetContentStamp(AssetHandle handle) const
+	{
+		if (std::optional<AssetMetadata> metadata = GetMetadata(handle); metadata && metadata->IsSubAsset())
+			handle = metadata->Parent;
+		std::scoped_lock<std::mutex> lock(m_SourceMutex);
+		auto it = m_Sources.find(handle);
+		if (it == m_Sources.end())
+			return 0;
+		const SourceAsset& source = it->second;
+		const std::string state = fmt::format("{}|{}|{}|{}|{}|{}", source.SourceSize, source.SourceTime, source.Importer ? source.Importer->GetVersion() : 0u,
+			source.Import.Imported, source.Import.Error.empty(), JsonUtils::Dump(source.Settings));
+		const uint64_t stamp = Hash::FNV1a(state);
+		return stamp != 0 ? stamp : 1;
+	}
+
 	nlohmann::json EditorAssetManager::GetImportSettings(AssetHandle handle) const
 	{
 		std::scoped_lock<std::mutex> lock(m_SourceMutex);
@@ -2090,29 +2460,317 @@ namespace Strata
 			return UUID::Null();
 		};
 
-		if (!FileSystem::IsRegularFile(sourceFile))
-			return fail(fmt::format("'{}' is not a file", FileSystem::ToUTF8(sourceFile)));
-		if (!AssetImporterRegistry::FindByExtension(GetExtension(sourceFile)))
-			return fail(fmt::format("No importer handles '{}' files", FileSystem::ToUTF8(sourceFile.extension())));
-
 		std::filesystem::path directory = ToAbsolute(targetDirectory);
 		if (!directory.has_filename())
 			directory = directory.parent_path(); // Trailing separator ("UI/") or the asset root ("")
 		if (directory != m_Specification.AssetDirectory && ToRelative(directory).empty())
 			return fail(fmt::format("'{}' is outside the asset directory", targetDirectory));
 
-		const std::filesystem::path destination = FileSystem::GetUniquePath(directory / sourceFile.filename());
-		if (!FileSystem::CreateDirectories(directory) || !FileSystem::Copy(sourceFile, destination, false))
-			return fail(fmt::format("Could not copy '{}' into the project", FileSystem::ToUTF8(sourceFile)));
+		std::vector<std::string> createdFolders;
+		ExternalCopy copy(m_Specification.AssetDirectory, nullptr, createdFolders);
+		const ExternalImportItem item = copy.CopyExternalFile(sourceFile, directory);
+		if (!item.Error.empty())
+		{
+			RollBackExternalFiles(item.Files, {});
+			return fail(item.Error);
+		}
 
-		const AssetHandle handle = RegisterSourceFile(destination);
+		// The file first, then the files it reads that are assets themselves (its import reads them as they are, so they are
+		// imported for their own use only).
+		AssetHandle handle = UUID::Null();
+		for (const std::string& file : item.Files)
+		{
+			const AssetHandle registered = RegisterSourceFile(ToAbsolute(file));
+			if (!registered.IsValid())
+				continue;
+			if (!handle.IsValid())
+				handle = registered;
+			// A failed import is logged by ApplyImportOutcome and kept in the asset's import state.
+			ReimportAsset(registered);
+		}
 		if (!handle.IsValid())
 			return fail("Registering the copied file failed");
-
-		std::string error;
-		if (!ReimportAsset(handle, &error))
-			ST_CORE_ERROR("Import of '{}' failed: {}", ToRelative(destination), error);
 		return handle;
+	}
+
+	Ref<ExternalImport> EditorAssetManager::ImportExternal(const ExternalImportRequest& request, std::string* outError)
+	{
+		auto fail = [outError](std::string message) -> Ref<ExternalImport>
+		{
+			if (outError)
+				*outError = std::move(message);
+			return nullptr;
+		};
+
+		if (m_Closed)
+			return fail("The project's assets are closed: nothing is imported any more");
+		const std::string target = NormalizeIncludePath(request.TargetDirectory);
+		const std::filesystem::path directory = target.empty() ? m_Specification.AssetDirectory : ToAbsolute(target);
+		const std::string relative = ToRelative(directory);
+		if (!target.empty() && (relative.empty() || relative == "."))
+			return fail(fmt::format("'{}' is outside the asset directory", request.TargetDirectory));
+		if (!target.empty() && IsHiddenRelativePath(FileSystem::FromUTF8(relative)))
+			return fail(fmt::format("'{}' is hidden (a name starts with '.'), so it could hold no assets", relative));
+		if (FileSystem::Exists(directory) && !FileSystem::IsDirectory(directory))
+			return fail(fmt::format("'{}' is a file, not a folder", relative));
+		if (request.Files.empty() && request.Directories.empty())
+			return fail("Nothing to import");
+
+		Ref<ExternalImport> import = CreateRef<ExternalImport>();
+		import->m_Request = request;
+		import->m_TargetDirectory = directory;
+		import->m_Task = CreateRef<ExternalImport::CopyTask>();
+		// One copy at a time (StartNextExternalCopy): a copy picks free names for what it writes, and two copies beside each
+		// other could pick the same one. A copy that cannot start at once fails the call; one that waits for another starts
+		// with a later update.
+		const bool waits = std::any_of(m_ExternalImports.begin(), m_ExternalImports.end(), [](const Ref<ExternalImport>& other)
+		{
+			return other->m_State == ExternalImportState::Copying;
+		});
+		if (!waits)
+		{
+			std::string error;
+			if (!StartExternalCopy(*import, &error))
+				return fail(std::move(error));
+		}
+		m_ExternalImports.push_back(import);
+		MarkChanged();
+		return import;
+	}
+
+	bool EditorAssetManager::StartExternalCopy(ExternalImport& import, std::string* outError)
+	{
+		// The job uses only what it shares with the import: the manager may close while it copies.
+		auto copy = [task = import.m_Task, request = import.m_Request, assetDirectory = m_Specification.AssetDirectory, directory = import.m_TargetDirectory]()
+		{
+			std::vector<ExternalImportItem> items;
+			std::vector<std::string> createdFolders;
+			auto claim = [&task](const std::string& relativePath)
+			{
+				std::scoped_lock<std::mutex> lock(task->Mutex);
+				task->Claimed.insert(relativePath);
+			};
+			ExternalCopy copier(assetDirectory, &task->Cancel, createdFolders, claim);
+			for (const std::filesystem::path& file : request.Files)
+				items.push_back(copier.CopyExternalFile(file, directory));
+			for (const std::filesystem::path& folder : request.Directories)
+				items.push_back(copier.CopyExternalFolder(folder, directory));
+			if (copier.IsCancelled())
+			{
+				// Nobody registers what was copied: it goes again, so the next scan finds no half import.
+				for (const ExternalImportItem& item : items)
+				{
+					for (const std::string& file : item.Files)
+						FileSystem::Remove(assetDirectory / FileSystem::FromUTF8(file));
+				}
+				for (auto it = createdFolders.rbegin(); it != createdFolders.rend(); ++it)
+				{
+					std::error_code error;
+					std::filesystem::remove(assetDirectory / FileSystem::FromUTF8(*it), error); // Only while empty
+				}
+			}
+			std::scoped_lock<std::mutex> lock(task->Mutex);
+			task->Items = std::move(items);
+			task->CreatedFolders = std::move(createdFolders);
+			task->Done = true;
+		};
+		try
+		{
+			JobSystem::SubmitIO(std::move(copy), JobPriority::Normal);
+		}
+		catch (const std::exception& exception)
+		{
+			if (outError)
+				*outError = fmt::format("Could not start copying: {}", exception.what());
+			return false;
+		}
+		import.m_CopyStarted = true;
+		return true;
+	}
+
+	void EditorAssetManager::StartNextExternalCopy()
+	{
+		for (const Ref<ExternalImport>& import : m_ExternalImports)
+		{
+			if (import->m_State != ExternalImportState::Copying)
+				continue;
+			if (import->m_CopyStarted)
+				return; // Copying: the others wait for it
+			std::string error;
+			if (StartExternalCopy(*import, &error))
+				return;
+			// It ends with the error (UpdateExternalImports drops it), and the next one tries.
+			import->m_Error = std::move(error);
+			import->m_State = ExternalImportState::Finished;
+			MarkChanged();
+		}
+	}
+
+	void EditorAssetManager::UpdateExternalImports()
+	{
+		StartNextExternalCopy();
+		bool copied = false;
+		for (size_t index = 0; index < m_ExternalImports.size();)
+		{
+			ExternalImport& import = *m_ExternalImports[index];
+			if (import.m_State == ExternalImportState::Finished)
+			{
+				m_ExternalImports.erase(m_ExternalImports.begin() + static_cast<std::ptrdiff_t>(index));
+				continue;
+			}
+			if (import.m_State == ExternalImportState::Copying)
+			{
+				if (!import.m_CopyStarted)
+				{
+					index++;
+					continue;
+				}
+				std::scoped_lock<std::mutex> lock(import.m_Task->Mutex);
+				if (!import.m_Task->Done)
+				{
+					index++;
+					continue;
+				}
+				copied = true;
+				import.m_Items = std::move(import.m_Task->Items);
+				import.m_CreatedFolders = std::move(import.m_Task->CreatedFolders);
+				import.m_State = ExternalImportState::Importing;
+
+				// What was copied becomes assets (with their .meta files and handles), imported in the background.
+				{
+					std::scoped_lock<std::mutex> sourceLock(m_SourceMutex);
+					for (const std::string& folder : import.m_CreatedFolders)
+						AddFolderLocked(folder);
+				}
+				for (ExternalImportItem& item : import.m_Items)
+				{
+					if (!item.Error.empty())
+						continue;
+					for (const std::string& file : item.Files)
+					{
+						if (GetExtension(FileSystem::FromUTF8(file)) == c_MetaExtension)
+							continue;
+						const AssetHandle handle = RegisterAddedFile(ToAbsolute(file), true);
+						if (handle.IsValid() && std::find(item.Assets.begin(), item.Assets.end(), handle) == item.Assets.end())
+							item.Assets.push_back(handle);
+					}
+					if (!item.Folder && item.Assets.empty())
+						item.Error = fmt::format("'{}' could not be registered as an asset", item.Path);
+				}
+				MarkChanged();
+			}
+
+			// Done once every asset it brought is imported (or failed).
+			const bool importing = std::any_of(import.m_Items.begin(), import.m_Items.end(), [this](const ExternalImportItem& item)
+			{
+				return std::any_of(item.Assets.begin(), item.Assets.end(), [this](AssetHandle handle) { return IsImportPending(handle); });
+			});
+			if (importing)
+			{
+				index++;
+				continue;
+			}
+			FinishExternalImport(import);
+			m_ExternalImports.erase(m_ExternalImports.begin() + static_cast<std::ptrdiff_t>(index));
+			MarkChanged();
+		}
+		// The next copy starts as soon as one is done, rather than a frame later.
+		if (copied)
+			StartNextExternalCopy();
+	}
+
+	void EditorAssetManager::FinishExternalImport(ExternalImport& import)
+	{
+		for (ExternalImportItem& item : import.m_Items)
+		{
+			// A copy that failed takes back what it copied. Logged here, once, as failed imports are when they are applied.
+			if (!item.Error.empty())
+			{
+				ST_CORE_ERROR("Import of '{}' failed: {}", FileSystem::ToUTF8(item.Source), item.Error);
+				if (!item.Files.empty())
+				{
+					RollBackExternalFiles(item.Files, item.Assets);
+					item.Assets.clear();
+					item.RolledBack = true;
+				}
+				continue;
+			}
+
+			// The assets whose import failed: for a file its own (the files it reads may fail alone: a model then lacks a texture
+			// and says so in its warnings), for a folder each.
+			std::vector<AssetHandle> failed;
+			std::string firstError;
+			for (size_t index = 0; index < item.Assets.size(); index++)
+			{
+				const AssetImportInfo info = GetImportInfo(item.Assets[index]);
+				const bool removed = !IsHandleValid(item.Assets[index]);
+				if (info.Error.empty() && !removed)
+					continue;
+				if (!item.Folder && index > 0)
+					continue;
+				failed.push_back(item.Assets[index]);
+				if (firstError.empty())
+					firstError = removed ? std::string("the asset was removed while it imported") : info.Error;
+			}
+			if (failed.empty())
+				continue;
+			item.Error = item.Folder ? fmt::format("{} of {} assets failed to import; the first: {}", failed.size(), item.Assets.size(), firstError) : firstError;
+			if (import.m_Request.KeepOnFailure)
+				continue;
+
+			if (item.Folder)
+			{
+				// Only the assets that failed go (with their .meta files): the rest of the folder imported.
+				std::vector<std::string> files;
+				for (AssetHandle handle : failed)
+				{
+					if (const std::optional<AssetMetadata> metadata = GetMetadata(handle))
+					{
+						files.push_back(metadata->Path);
+						files.push_back(metadata->Path + std::string(c_MetaExtension));
+					}
+				}
+				RollBackExternalFiles(files, failed);
+				std::erase_if(item.Assets, [&failed](AssetHandle handle) { return std::find(failed.begin(), failed.end(), handle) != failed.end(); });
+			}
+			else
+			{
+				RollBackExternalFiles(item.Files, item.Assets);
+				item.Assets.clear();
+			}
+			item.RolledBack = true;
+		}
+
+		// Folders the copy made that nothing stayed in.
+		for (auto it = import.m_CreatedFolders.rbegin(); it != import.m_CreatedFolders.rend(); ++it)
+		{
+			const std::filesystem::path folder = ToAbsolute(*it);
+			std::error_code error;
+			if (FileSystem::IsDirectory(folder) && std::filesystem::directory_iterator(folder, error) == std::filesystem::directory_iterator() && !error
+				&& std::filesystem::remove(folder, error))
+			{
+				std::scoped_lock<std::mutex> lock(m_SourceMutex);
+				m_Folders.erase(*it);
+			}
+		}
+		import.m_State = ExternalImportState::Finished;
+	}
+
+	void EditorAssetManager::RollBackExternalFiles(const std::vector<std::string>& files, const std::vector<AssetHandle>& assets)
+	{
+		for (AssetHandle handle : assets)
+		{
+			std::string error;
+			if (IsHandleValid(handle) && !DeleteAsset(handle, &error))
+				ST_CORE_WARN("Could not remove an asset whose import failed: {}", error);
+		}
+		std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
+		for (const std::string& file : files)
+		{
+			const std::filesystem::path path = ToAbsolute(file);
+			if (FileSystem::Exists(path) && !FileSystem::Remove(path))
+				ST_CORE_WARN("Could not remove '{}' after its import failed", file);
+		}
 	}
 
 	AssetHandle EditorAssetManager::CreateNativeAsset(const std::string& relativePath, std::span<const uint8_t> data, std::string* outError,
@@ -2223,20 +2881,23 @@ namespace Strata
 			return fail(fmt::format("'{}' is outside the asset directory", newRelativePath));
 		if (IsHiddenRelativePath(FileSystem::FromUTF8(destinationRelative)))
 			return fail(fmt::format("'{}' is in a hidden directory", destinationRelative));
-		if (FileSystem::Exists(destination))
-			return fail(fmt::format("'{}' already exists", destinationRelative));
 
 		std::unique_lock<std::mutex> lock(m_SourceMutex);
 		auto it = m_Sources.find(handle);
 		if (it == m_Sources.end())
 			return fail("Not a source asset of the project");
+		if (destinationRelative == it->second.Path)
+			return true; // Where it is already
+		const std::filesystem::path source = ToAbsolute(it->second.Path);
+		// A name that differs only in case names the asset's own file where the file system ignores case: renamed in place.
+		if (FileSystem::Exists(destination) && !FileSystem::IsSameFile(source, destination))
+			return fail(fmt::format("'{}' already exists", destinationRelative));
 		if (AssetImporterRegistry::FindByExtension(GetExtension(destination)) != it->second.Importer)
 			return fail("Moving cannot change the file type");
 
 		// An import of the asset reads the file at its old place: it is cancelled before the file moves, so it stores nothing
 		// it read there, and imports again once the move is done (at the old place if the move fails). Other imports go on.
 		const Ref<BackgroundJob> stopped = StopImport(it->second);
-		const std::filesystem::path source = ToAbsolute(it->second.Path);
 		std::string failure;
 		{
 			std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
@@ -2254,10 +2915,13 @@ namespace Strata
 		if (failure.empty())
 		{
 			m_SourcesByPath.erase(it->second.Path);
+			RemoveFromFolderIndex(handle, it->second.Path);
 			it->second.Path = destinationRelative;
 			it->second.PathGeneration++;
 			m_SourcesByPath[destinationRelative] = handle;
+			AddToFolderIndex(handle, destinationRelative);
 			m_AssetIndexDirty = true;
+			MarkChanged();
 			if (!FileSystem::Exists(GetMetaPath(destination)))
 				WriteMetaFile(it->second);
 		}
@@ -2480,6 +3144,686 @@ namespace Strata
 		}
 		UnregisterSource(handle, true);
 		return true;
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// References
+	////////////////////////////////////////////////////////////////////////////////
+
+	void EditorAssetManager::RecordReferences(AssetHandle handle, std::span<const AssetHandle> references, std::optional<AABB> bounds)
+	{
+		SetAssetReferences(handle, references, bounds);
+		std::vector<AssetHandle> normalized = NormalizeReferences(handle, references);
+		std::scoped_lock<std::mutex> lock(m_ReferenceMutex);
+		if (auto previous = m_RecordedReferences.find(handle); previous != m_RecordedReferences.end())
+		{
+			for (AssetHandle reference : previous->second)
+			{
+				auto referencers = m_Referencers.find(reference);
+				if (referencers == m_Referencers.end())
+					continue;
+				referencers->second.erase(handle);
+				if (referencers->second.empty())
+					m_Referencers.erase(referencers);
+			}
+			m_RecordedReferences.erase(previous);
+		}
+		for (AssetHandle reference : normalized)
+			m_Referencers[reference].insert(handle);
+		if (!normalized.empty())
+			m_RecordedReferences.emplace(handle, std::move(normalized));
+	}
+
+	void EditorAssetManager::ForgetReferences(AssetHandle handle)
+	{
+		std::scoped_lock<std::mutex> lock(m_ReferenceMutex);
+		auto previous = m_RecordedReferences.find(handle);
+		if (previous == m_RecordedReferences.end())
+			return;
+		for (AssetHandle reference : previous->second)
+		{
+			auto referencers = m_Referencers.find(reference);
+			if (referencers == m_Referencers.end())
+				continue;
+			referencers->second.erase(handle);
+			if (referencers->second.empty())
+				m_Referencers.erase(referencers);
+		}
+		m_RecordedReferences.erase(previous);
+	}
+
+	std::vector<AssetHandle> EditorAssetManager::GetReferencers(AssetHandle handle) const
+	{
+		std::vector<AssetHandle> referencers;
+		{
+			std::scoped_lock<std::mutex> lock(m_ReferenceMutex);
+			auto it = m_Referencers.find(handle);
+			if (it != m_Referencers.end())
+				referencers.assign(it->second.begin(), it->second.end());
+		}
+		std::sort(referencers.begin(), referencers.end());
+		return referencers;
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Folders
+	////////////////////////////////////////////////////////////////////////////////
+
+	void EditorAssetManager::AddFolderLocked(const std::string& relativePath)
+	{
+		// Parents are indexed with their children, so the walk up stops at the first folder known already.
+		std::string folder = relativePath;
+		while (!folder.empty() && folder != "." && m_Folders.insert(folder).second)
+			folder = GetParentFolder(folder);
+	}
+
+	void EditorAssetManager::AddToFolderIndex(AssetHandle handle, const std::string& path)
+	{
+		const std::string folder = GetParentFolder(path);
+		m_SourcesByFolder[folder].insert(handle);
+		AddFolderLocked(folder);
+	}
+
+	void EditorAssetManager::RemoveFromFolderIndex(AssetHandle handle, const std::string& path)
+	{
+		auto it = m_SourcesByFolder.find(GetParentFolder(path));
+		if (it == m_SourcesByFolder.end())
+			return;
+		it->second.erase(handle);
+		if (it->second.empty())
+			m_SourcesByFolder.erase(it);
+	}
+
+	void EditorAssetManager::IndexFoldersBelowLocked(const std::filesystem::path& directory)
+	{
+		std::error_code error;
+		std::filesystem::recursive_directory_iterator iterator(directory, std::filesystem::directory_options::skip_permission_denied, error);
+		const std::filesystem::recursive_directory_iterator end;
+		while (!error && iterator != end)
+		{
+			const std::filesystem::directory_entry& entry = *iterator;
+			if (entry.is_directory(error))
+			{
+				if (IsHiddenName(entry.path().filename()))
+					iterator.disable_recursion_pending();
+				else
+					AddFolderLocked(ToRelative(entry.path()));
+			}
+			iterator.increment(error);
+		}
+	}
+
+	std::vector<std::string> EditorAssetManager::GetFolders() const
+	{
+		std::scoped_lock<std::mutex> lock(m_SourceMutex);
+		return std::vector<std::string>(m_Folders.begin(), m_Folders.end());
+	}
+
+	bool EditorAssetManager::HasFolder(std::string_view relativePath) const
+	{
+		if (relativePath.empty())
+			return true;
+		std::scoped_lock<std::mutex> lock(m_SourceMutex);
+		return m_Folders.contains(std::string(relativePath));
+	}
+
+	std::vector<AssetHandle> EditorAssetManager::GetAssetsInFolder(std::string_view relativePath) const
+	{
+		std::vector<std::pair<std::string, AssetHandle>> assets;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			auto it = m_SourcesByFolder.find(std::string(relativePath));
+			if (it == m_SourcesByFolder.end())
+				return {};
+			assets.reserve(it->second.size());
+			for (AssetHandle handle : it->second)
+				assets.emplace_back(m_Sources.at(handle).Path, handle);
+		}
+		std::sort(assets.begin(), assets.end());
+		std::vector<AssetHandle> handles;
+		handles.reserve(assets.size());
+		for (const auto& [path, handle] : assets)
+			handles.push_back(handle);
+		return handles;
+	}
+
+	std::vector<AssetHandle> EditorAssetManager::GetAssetsBelowFolder(std::string_view relativePath) const
+	{
+		std::vector<std::pair<std::string, AssetHandle>> assets;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			for (const auto& [folder, handles] : m_SourcesByFolder)
+			{
+				if (!IsInFolder(folder, relativePath))
+					continue;
+				for (AssetHandle handle : handles)
+					assets.emplace_back(m_Sources.at(handle).Path, handle);
+			}
+		}
+		std::sort(assets.begin(), assets.end());
+		std::vector<AssetHandle> handles;
+		handles.reserve(assets.size());
+		for (const auto& [path, handle] : assets)
+			handles.push_back(handle);
+		return handles;
+	}
+
+	std::vector<AssetListing> EditorAssetManager::ListAssets(std::string_view relativePath, bool recursive) const
+	{
+		std::vector<AssetListing> listings;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			auto add = [&](const std::unordered_set<AssetHandle>& handles)
+			{
+				for (AssetHandle handle : handles)
+				{
+					const SourceAsset& source = m_Sources.at(handle);
+					listings.push_back({ handle, source.Type, source.Path, source.Import.Error, source.Import.Warnings.size(), source.Import.SubAssets,
+						source.ImportJob != nullptr });
+				}
+			};
+			if (!recursive)
+			{
+				auto it = m_SourcesByFolder.find(std::string(relativePath));
+				if (it != m_SourcesByFolder.end())
+					add(it->second);
+			}
+			else
+			{
+				for (const auto& [folder, handles] : m_SourcesByFolder)
+				{
+					if (IsInFolder(folder, relativePath))
+						add(handles);
+				}
+			}
+		}
+		std::sort(listings.begin(), listings.end(), [](const AssetListing& a, const AssetListing& b) { return a.Path < b.Path; });
+		return listings;
+	}
+
+	void EditorAssetManager::ProcessFolderChange(const std::filesystem::path& path, FileChangeType type)
+	{
+		const std::string relative = ToRelative(path);
+		if (relative.empty() || relative == "." || IsHiddenRelativePath(FileSystem::FromUTF8(relative)))
+			return;
+		if (type == FileChangeType::Removed)
+		{
+			// Gone (not moved back meanwhile): its folders leave the index, and so do its assets whose files went with it
+			// (a folder deleted in a file manager may be reported without its files). The editor's own moves and deletes
+			// updated the index already, so they find nothing here.
+			if (FileSystem::Exists(path))
+				return;
+			for (AssetHandle handle : GetAssetsBelowFolder(relative))
+			{
+				const std::optional<AssetMetadata> metadata = GetMetadata(handle);
+				if (metadata && !FileSystem::Exists(ToAbsolute(metadata->Path)))
+				{
+					UnregisterSource(handle, false);
+					ST_CORE_INFO("Asset '{}' removed", metadata->Path);
+				}
+			}
+			bool removed = false;
+			{
+				std::scoped_lock<std::mutex> lock(m_SourceMutex);
+				removed = std::erase_if(m_Folders, [&relative](const std::string& folder) { return IsInFolder(folder, relative); }) > 0;
+			}
+			if (removed)
+				MarkChanged();
+			return;
+		}
+		if (!FileSystem::IsDirectory(path))
+			return;
+		bool added = false;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			if (!m_Folders.contains(relative))
+			{
+				AddFolderLocked(relative);
+				IndexFoldersBelowLocked(path);
+				added = true;
+			}
+		}
+		if (added)
+			MarkChanged();
+	}
+
+	bool EditorAssetManager::CreateFolder(const std::string& relativePath, std::string* outError)
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		const std::filesystem::path absolute = ToAbsolute(NormalizeIncludePath(relativePath));
+		const std::string relative = ToRelative(absolute);
+		if (relative.empty() || relative == ".")
+			return fail(fmt::format("'{}' is no folder inside the asset directory", relativePath));
+		if (IsHiddenRelativePath(FileSystem::FromUTF8(relative)))
+			return fail(fmt::format("'{}' is hidden (a name starts with '.'), so it could hold no assets", relative));
+		if (FileSystem::Exists(absolute))
+			return fail(fmt::format("'{}' exists already", relative));
+		if (!FileSystem::CreateDirectories(absolute))
+			return fail(fmt::format("Could not create the folder '{}' (is the name valid?)", relative));
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			AddFolderLocked(relative);
+		}
+		MarkChanged();
+		return true;
+	}
+
+	bool EditorAssetManager::RemoveEmptyFolder(const std::string& relativePath, std::string* outError)
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		const std::filesystem::path absolute = ToAbsolute(NormalizeIncludePath(relativePath));
+		const std::string relative = ToRelative(absolute);
+		if (relative.empty() || relative == "." || !FileSystem::IsDirectory(absolute))
+			return fail(fmt::format("'{}' is no folder of the asset directory", relativePath));
+		std::error_code error;
+		if (std::filesystem::directory_iterator(absolute, error) != std::filesystem::directory_iterator() || error)
+			return fail(fmt::format("'{}' is not empty", relative));
+		if (!std::filesystem::remove(absolute, error) || error)
+			return fail(fmt::format("Could not remove the folder '{}'", relative));
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			m_Folders.erase(relative);
+		}
+		MarkChanged();
+		return true;
+	}
+
+	bool EditorAssetManager::MoveFolder(const std::string& from, const std::string& to, std::string* outError)
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		const std::filesystem::path source = ToAbsolute(NormalizeIncludePath(from));
+		const std::filesystem::path destination = ToAbsolute(NormalizeIncludePath(to));
+		const std::string sourceRelative = ToRelative(source);
+		const std::string destinationRelative = ToRelative(destination);
+		if (sourceRelative.empty() || sourceRelative == "." || !FileSystem::IsDirectory(source))
+			return fail(fmt::format("'{}' is no folder of the asset directory", from));
+		if (destinationRelative.empty() || destinationRelative == ".")
+			return fail(fmt::format("'{}' is outside the asset directory", to));
+		if (IsHiddenRelativePath(FileSystem::FromUTF8(destinationRelative)))
+			return fail(fmt::format("'{}' is hidden (a name starts with '.'), so it could hold no assets", destinationRelative));
+		if (destinationRelative == sourceRelative)
+			return true; // Where it is already
+		if (IsInFolder(destinationRelative, sourceRelative))
+			return fail(fmt::format("'{}' cannot move into itself ('{}')", sourceRelative, destinationRelative));
+		// A name that differs only in case names the folder itself where the file system ignores case: renamed in place.
+		if (FileSystem::Exists(destination) && !FileSystem::IsSameFile(source, destination))
+			return fail(fmt::format("'{}' exists already", destinationRelative));
+
+		struct MovedSource
+		{
+			AssetHandle Handle;
+			std::string To;
+			std::vector<AssetHandle> SubAssets;
+			Ref<BackgroundJob> Stopped; // Its import, cancelled before the move: it runs again at the new place
+			bool ReadsOtherFiles = false; // Its import read files beside it, which it now finds at other paths
+		};
+		std::vector<MovedSource> moved;
+		std::vector<AssetHandle> dependents; // Imports of assets outside the folder that read files in it
+		std::string failure;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			for (auto& [handle, asset] : m_Sources)
+			{
+				if (IsInFolder(asset.Path, sourceRelative))
+					moved.push_back({ handle, ReplaceFolder(asset.Path, sourceRelative, destinationRelative), asset.Import.SubAssets, StopImport(asset), !asset.Dependencies.empty() });
+			}
+			const std::string sourceKey = GetDependencyKey(sourceRelative);
+			for (const auto& [key, handles] : m_DependentsByPath)
+			{
+				if (IsInFolder(key, sourceKey))
+					dependents.insert(dependents.end(), handles.begin(), handles.end());
+			}
+
+			{
+				// Readers of the files (loads, imports) hold the shared lock: the folder moves while nobody reads in it.
+				std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
+				if (!FileSystem::CreateDirectories(destination.parent_path()) || !FileSystem::Rename(source, destination))
+					failure = fmt::format("Could not move '{}' to '{}'", sourceRelative, destinationRelative);
+			}
+			if (failure.empty())
+			{
+				for (const MovedSource& entry : moved)
+				{
+					SourceAsset& asset = m_Sources.at(entry.Handle);
+					m_SourcesByPath.erase(asset.Path);
+					RemoveFromFolderIndex(entry.Handle, asset.Path);
+					asset.Path = entry.To;
+					asset.PathGeneration++;
+					m_SourcesByPath[entry.To] = entry.Handle;
+					AddToFolderIndex(entry.Handle, entry.To);
+				}
+				std::vector<std::string> folders;
+				for (auto it = m_Folders.begin(); it != m_Folders.end();)
+				{
+					if (IsInFolder(*it, sourceRelative))
+					{
+						folders.push_back(*it);
+						it = m_Folders.erase(it);
+					}
+					else
+					{
+						++it;
+					}
+				}
+				for (const std::string& folder : folders)
+					AddFolderLocked(ReplaceFolder(folder, sourceRelative, destinationRelative));
+				AddFolderLocked(destinationRelative);
+				m_AssetIndexDirty = true;
+			}
+		}
+		MarkChanged();
+
+		// Cancelled imports run again: at the new place, or at the old one when nothing moved.
+		for (const MovedSource& entry : moved)
+		{
+			if (entry.Stopped)
+				QueueImport(entry.Handle, entry.Stopped->Force, true);
+		}
+		if (!failure.empty())
+			return fail(std::move(failure));
+
+		for (const MovedSource& entry : moved)
+		{
+			if (std::optional<AssetMetadata> metadata = GetMetadata(entry.Handle))
+			{
+				metadata->Path = entry.To;
+				UpdateAssetMetadata(*metadata);
+			}
+			for (AssetHandle subAsset : entry.SubAssets)
+			{
+				if (std::optional<AssetMetadata> metadata = GetMetadata(subAsset))
+				{
+					metadata->Path = entry.To;
+					UpdateAssetMetadata(*metadata);
+				}
+			}
+			// A model's record names the files it read by their old paths: imported again, it records the new ones (and its
+			// cached result stays loaded meanwhile).
+			if (entry.ReadsOtherFiles && !entry.Stopped)
+				QueueImport(entry.Handle);
+		}
+		for (AssetHandle dependent : dependents)
+			QueueImport(dependent);
+		return true;
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Trash
+	////////////////////////////////////////////////////////////////////////////////
+
+	AssetHandle EditorAssetManager::RegisterAddedFile(const std::filesystem::path& absolutePath, bool queueImport)
+	{
+		const AssetHandle handle = RegisterSourceFile(absolutePath);
+		if (!handle.IsValid())
+			return handle;
+
+		ImportRequest request;
+		bool direct = false;
+		bool imported = false;
+		AssetType type = AssetType::None;
+		std::string path;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			auto it = m_Sources.find(handle);
+			if (it == m_Sources.end())
+				return UUID::Null();
+			direct = it->second.Importer->StoresSourceDirectly();
+			imported = it->second.Import.Imported || it->second.ImportJob != nullptr;
+			type = it->second.Type;
+			path = it->second.Path;
+			if (!direct)
+				request = MakeImportRequest(it->second);
+		}
+		if (direct)
+		{
+			// What it references: from its record, which came back with it, or found again (small documents).
+			ApplyNativeReferences(m_Work->FindNativeReferences(handle, type, path));
+			return handle;
+		}
+		if (imported)
+			return handle;
+		// An import cached with the file (it came back with it) is current: taken at once, nothing is imported anew.
+		ImportOutcome outcome;
+		if (m_Work->LoadCurrentImport(request, outcome))
+			ApplyImportOutcome(std::move(outcome), false);
+		else if (queueImport)
+			QueueImport(handle);
+		return handle;
+	}
+
+	bool EditorAssetManager::MoveToTrash(const std::string& relativePath, TrashedAssets& outTrashed, std::string* outError)
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		if (m_Specification.TrashDirectory.empty())
+			return fail("The project has no trash folder");
+		const std::filesystem::path absolute = ToAbsolute(NormalizeIncludePath(relativePath));
+		const std::string relative = ToRelative(absolute);
+		if (relative.empty() || relative == ".")
+			return fail(fmt::format("'{}' is no asset or folder inside the asset directory", relativePath));
+		const bool folder = FileSystem::IsDirectory(absolute);
+		std::vector<AssetHandle> handles;
+		if (folder)
+		{
+			handles = GetAssetsBelowFolder(relative);
+		}
+		else
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			auto it = m_SourcesByPath.find(relative);
+			if (it == m_SourcesByPath.end())
+				return fail(fmt::format("'{}' is no asset of the project", relative));
+			handles.push_back(it->second);
+		}
+
+		// A new folder of the trash, named after the time (made unique within a second).
+		const std::string timestamp = MakeTrashTimestamp();
+		std::filesystem::path entry = m_Specification.TrashDirectory / FileSystem::FromUTF8(timestamp);
+		for (uint32_t attempt = 1; FileSystem::Exists(entry); attempt++)
+			entry = m_Specification.TrashDirectory / FileSystem::FromUTF8(fmt::format("{}-{}", timestamp, attempt));
+		const std::filesystem::path stored = entry / c_TrashAssetsFolder / FileSystem::FromUTF8(relative);
+		const std::filesystem::path cache = entry / c_TrashCacheFolder;
+		if (!FileSystem::CreateDirectories(stored.parent_path()) || !FileSystem::CreateDirectories(cache))
+			return fail(fmt::format("Could not create the trash folder '{}'", FileSystem::ToUTF8(entry)));
+
+		// The cached imports go with the assets, so that a restore needs no import. Imports that run are cancelled first: they
+		// would publish into the cache after the move.
+		std::vector<std::pair<AssetHandle, Ref<BackgroundJob>>> stopped;
+		std::vector<std::filesystem::path> cacheFiles;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			for (AssetHandle handle : handles)
+			{
+				auto it = m_Sources.find(handle);
+				if (it == m_Sources.end())
+					continue;
+				if (Ref<BackgroundJob> job = StopImport(it->second))
+					stopped.emplace_back(handle, job);
+				cacheFiles.push_back(GetCachePath(handle));
+				cacheFiles.push_back(GetImportRecordPath(handle));
+				for (AssetHandle subAsset : it->second.Import.SubAssets)
+					cacheFiles.push_back(GetCachePath(subAsset));
+			}
+		}
+
+		std::string failure;
+		{
+			std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
+			if (!FileSystem::Rename(absolute, stored))
+			{
+				failure = fmt::format("Could not move '{}' to the trash (is a file in it open in another program?)", relative);
+			}
+			else if (!folder && FileSystem::Exists(GetMetaPath(absolute)) && !FileSystem::Rename(GetMetaPath(absolute), GetMetaPath(stored)))
+			{
+				FileSystem::Rename(stored, absolute);
+				failure = fmt::format("Could not move the .meta file of '{}' to the trash", relative);
+			}
+			else
+			{
+				// Derived data: a cached import that stays behind is imported again on a restore.
+				for (const std::filesystem::path& file : cacheFiles)
+				{
+					if (FileSystem::Exists(file) && !FileSystem::Rename(file, cache / file.filename()))
+						FileSystem::Remove(file);
+				}
+			}
+		}
+		if (!failure.empty())
+		{
+			FileSystem::Remove(entry);
+			// Nothing moved: the imports that were cancelled run again.
+			for (const auto& [handle, job] : stopped)
+				QueueImport(handle, job->Force, true);
+			return fail(std::move(failure));
+		}
+
+		for (AssetHandle handle : handles)
+			UnregisterSource(handle, false);
+		if (folder)
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			std::erase_if(m_Folders, [&relative](const std::string& path) { return IsInFolder(path, relative); });
+		}
+		MarkChanged();
+
+		nlohmann::json handleList = nlohmann::json::array();
+		for (AssetHandle handle : handles)
+			handleList.push_back(UUIDToJson(handle));
+		const nlohmann::json manifest = { { "Format", "Trashed" }, { "Version", 1 }, { "Path", relative }, { "Folder", folder }, { "Handles", std::move(handleList) },
+			{ "Time", timestamp } };
+		if (!FileSystem::WriteText(entry / c_TrashManifest, JsonUtils::Dump(manifest, 1, '\t')))
+			ST_CORE_WARN("Could not describe the trash folder '{}'", FileSystem::ToUTF8(entry));
+		ST_CORE_INFO("Moved '{}' to the trash ({})", relative, FileSystem::ToUTF8(entry));
+
+		outTrashed = TrashedAssets { relative, folder, entry, std::move(handles) };
+		return true;
+	}
+
+	bool EditorAssetManager::RestoreFromTrash(const TrashedAssets& trashed, std::string* outError)
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		const std::filesystem::path destination = ToAbsolute(trashed.Path);
+		const std::filesystem::path stored = trashed.Entry / c_TrashAssetsFolder / FileSystem::FromUTF8(trashed.Path);
+		if (!FileSystem::Exists(stored))
+			return fail(fmt::format("The trash no longer holds '{}' ({} is gone)", trashed.Path, FileSystem::ToUTF8(trashed.Entry)));
+		if (FileSystem::Exists(destination))
+			return fail(fmt::format("Something else is at '{}' now; move or delete it first", trashed.Path));
+
+		{
+			std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
+			if (!FileSystem::CreateDirectories(destination.parent_path()) || !FileSystem::Rename(stored, destination))
+				return fail(fmt::format("Could not move '{}' back from the trash", trashed.Path));
+			if (!trashed.Folder && FileSystem::Exists(GetMetaPath(stored)) && !FileSystem::Rename(GetMetaPath(stored), GetMetaPath(destination)))
+			{
+				FileSystem::Rename(destination, stored);
+				return fail(fmt::format("Could not move the .meta file of '{}' back from the trash", trashed.Path));
+			}
+			// The cached imports come back with them, unless an import wrote new ones meanwhile.
+			std::error_code error;
+			for (std::filesystem::directory_iterator it(trashed.Entry / c_TrashCacheFolder, error), end; !error && it != end; it.increment(error))
+			{
+				const std::filesystem::path target = m_Specification.CacheDirectory / it->path().filename();
+				if (!FileSystem::Exists(target))
+					FileSystem::Rename(it->path(), target);
+			}
+		}
+
+		if (trashed.Folder)
+		{
+			std::vector<std::filesystem::path> files;
+			std::error_code error;
+			std::filesystem::recursive_directory_iterator iterator(destination, std::filesystem::directory_options::skip_permission_denied, error);
+			const std::filesystem::recursive_directory_iterator end;
+			while (!error && iterator != end)
+			{
+				const std::filesystem::directory_entry& entry = *iterator;
+				if (IsHiddenName(entry.path().filename()))
+				{
+					if (entry.is_directory(error))
+						iterator.disable_recursion_pending();
+				}
+				else if (entry.is_regular_file(error) && GetExtension(entry.path()) != c_MetaExtension)
+				{
+					files.push_back(entry.path());
+				}
+				iterator.increment(error);
+			}
+			std::sort(files.begin(), files.end());
+			{
+				std::scoped_lock<std::mutex> lock(m_SourceMutex);
+				AddFolderLocked(trashed.Path);
+				IndexFoldersBelowLocked(destination);
+			}
+			for (const std::filesystem::path& file : files)
+				RegisterAddedFile(file, true);
+		}
+		else
+		{
+			RegisterAddedFile(destination, true);
+		}
+		FileSystem::Remove(trashed.Entry);
+		MarkChanged();
+		ST_CORE_INFO("Restored '{}' from the trash", trashed.Path);
+		return true;
+	}
+
+	void EditorAssetManager::PurgeTrash(std::chrono::hours maxAge)
+	{
+		if (m_Specification.TrashDirectory.empty() || !FileSystem::IsDirectory(m_Specification.TrashDirectory))
+			return;
+		auto purge = [directory = m_Specification.TrashDirectory, maxAge]()
+		{
+			using Clock = std::filesystem::file_time_type::clock;
+			const int64_t now = Clock::now().time_since_epoch().count();
+			const int64_t limit = std::chrono::duration_cast<Clock::duration>(maxAge).count();
+			std::error_code error;
+			for (std::filesystem::directory_iterator it(directory, error), end; !error && it != end; it.increment(error))
+			{
+				std::error_code typeError;
+				if (!it->is_directory(typeError))
+					continue;
+				const std::optional<int64_t> time = FileSystem::GetLastWriteTime(it->path() / c_TrashManifest);
+				if (time && now - *time > limit && FileSystem::Remove(it->path()))
+					ST_CORE_INFO("Removed '{}' from the trash: it is older than {} days", FileSystem::ToUTF8(it->path().filename()), maxAge.count() / 24);
+			}
+		};
+		try
+		{
+			JobSystem::SubmitIO(std::move(purge), JobPriority::Low);
+		}
+		catch (const std::exception& exception)
+		{
+			ST_CORE_WARN("Could not queue the cleanup of the trash: {}", exception.what());
+		}
 	}
 
 }

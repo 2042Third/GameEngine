@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Audio/AudioTestUtils.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
@@ -18,6 +19,7 @@
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Audio/AudioEngine.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/ImGui/ImGuiRenderer.h>
@@ -25,6 +27,7 @@
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/Texture.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
@@ -608,6 +611,86 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		editor.Frames(2);
 		CHECK(editor.Context().IsSelected(parent));
 		CHECK(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
+	}
+
+	TEST_CASE("A row's menu makes a prefab of the entity; an instance's menu applies and reverts it, and its badge marks it modified")
+	{
+		AuthoringEditor editor;
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory("HierarchyPrefabMenu") / "Game") }, { "name", "Game" } });
+		const UUID lamp = editor.Create("Lamp", { { "components", { { "PointLight", { { "Intensity", 2.0 } } } } } });
+		editor.Frames(2);
+		auto openMenu = [&editor](UUID id)
+		{
+			editor.Pause();
+			editor.Harness.MoveMouse(AuthoringEditor::Center(editor.Row(id)));
+			editor.Frames(1);
+			editor.Harness.SetMouseButton(ImGuiMouseButton_Right, true);
+			editor.Frames(1);
+			editor.Harness.SetMouseButton(ImGuiMouseButton_Right, false);
+			editor.Frames(2);
+		};
+		auto intensity = [&editor](UUID id) { return editor.Get(id).GetComponent<PointLightComponent>().Intensity; };
+		auto setIntensity = [&editor](UUID id, double value)
+		{
+			editor.Run("component.set", { { "entity", UUIDToJson(id) }, { "component", "PointLight" }, { "values", { { "Intensity", value } } } });
+		};
+		auto settle = [&editor]() { editor.Frames(static_cast<int>(PrefabSync::c_SettleFrames) + 2); };
+		using Badge = SceneHierarchyPanel::PrefabBadge;
+
+		// Create Prefab: a prefab in Prefabs/ named after it, which it is an instance of, in one undo step.
+		openMenu(lamp);
+		CHECK_FALSE(UI::ItemProbe::Find("Hierarchy.Prefab.Apply").has_value()); // No instance yet
+		CHECK(editor.Hierarchy().FindPrefabBadge(lamp) == Badge::None);
+		const size_t before = editor.UndoPosition();
+		REQUIRE(editor.Click("Hierarchy.Prefab.Create"));
+		editor.Frames(2);
+		const AssetHandle prefab = editor.Context().GetAssetManager()->FindAssetByPath("Prefabs/Lamp.stprefab");
+		REQUIRE(prefab.IsValid());
+		CHECK(editor.Run("prefab.status", { { "entity", UUIDToJson(lamp) } })["prefab"] == UUIDToJson(prefab));
+		CHECK(editor.UndoPosition() == before + 1);
+		CHECK(editor.Hierarchy().FindPrefabBadge(lamp) == Badge::Linked);
+
+		// Another instance with an edit of its own; an edit of the lamp marks its badge once the edits pause.
+		const UUID other = *UUIDFromJson(editor.Run("prefab.instantiate", { { "prefab", UUIDToJson(prefab) } })["id"]);
+		setIntensity(other, 3.0);
+		setIntensity(lamp, 9.0);
+		settle();
+		CHECK(editor.Hierarchy().FindPrefabBadge(lamp) == Badge::Modified);
+
+		// Apply to Prefab writes it into the prefab: no longer modified. The other instance keeps its edit and missed the new
+		// version: outdated.
+		openMenu(lamp);
+		REQUIRE(editor.Click("Hierarchy.Prefab.Apply"));
+		editor.Frames(2);
+		CHECK(editor.Run("edit.history")["undo"] == "Apply Prefab Lamp");
+		CHECK(editor.Run("prefab.status", { { "entity", UUIDToJson(lamp) } })["modified"] == false);
+		settle();
+		CHECK(editor.Hierarchy().FindPrefabBadge(lamp) == Badge::Linked);
+		CHECK(editor.Hierarchy().FindPrefabBadge(other) == Badge::Outdated);
+		CHECK(intensity(other) == 3.0f);
+
+		// The outdated instance's Apply says that it writes over the newer version, and does (prefab.apply's force).
+		openMenu(other);
+		REQUIRE(editor.Click("Hierarchy.Prefab.Apply"));
+		editor.Frames(2);
+		CHECK(editor.Run("prefab.status", { { "entity", UUIDToJson(other) } })["outdated"] == false);
+		CHECK(intensity(lamp) == 3.0f); // Unmodified: it follows
+		settle();
+		CHECK(editor.Hierarchy().FindPrefabBadge(other) == Badge::Linked);
+
+		// Revert to Prefab takes the prefab's values back.
+		setIntensity(lamp, 5.0);
+		openMenu(lamp);
+		REQUIRE(editor.Click("Hierarchy.Prefab.Revert"));
+		editor.Frames(2);
+		CHECK(intensity(lamp) == 3.0f);
+
+		// Unpack ends the link: no badge.
+		openMenu(lamp);
+		REQUIRE(editor.Click("Hierarchy.Prefab.Unpack"));
+		editor.Frames(2);
+		CHECK(editor.Run("prefab.status", { { "entity", UUIDToJson(lamp) } })["linked"] == false);
+		CHECK(editor.Hierarchy().FindPrefabBadge(lamp) == Badge::None);
 	}
 
 	TEST_CASE("A banner tops the Hierarchy and the Inspector while playing")
@@ -1586,6 +1669,7 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		std::string handMaterial;
 		std::string handScene;
 		UUID handCube = UUID::Null();
+		glm::vec3 handTranslation(0.0f);
 		AssetHandle handMaterialHandle = UUID::Null();
 		AssetHandle texture = UUID::Null();
 		{
@@ -1600,6 +1684,8 @@ TEST_SUITE("Editor.UI.AssetInspector")
 			const Entity cube = editor.Context().GetPrimarySelection();
 			REQUIRE(cube);
 			handCube = cube.GetUUID();
+			// Placed where the view looks (the menu sends the translation with entity.create, as the commands below do).
+			handTranslation = cube.GetComponent<TransformComponent>().Translation;
 			editor.Frames(2);
 			REQUIRE(editor.Click("Inspector.MeshRenderer.NewMaterial"));
 			handMaterialHandle = cube.GetComponent<MeshRendererComponent>().Material;
@@ -1660,7 +1746,8 @@ TEST_SUITE("Editor.UI.AssetInspector")
 			REQUIRE(result.Success);
 			return result.Value;
 		};
-		const nlohmann::json cube = run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } })["id"];
+		const nlohmann::json cube = run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } },
+			{ "Transform", { { "Translation", { handTranslation.x, handTranslation.y, handTranslation.z } } } } } } })["id"];
 		const nlohmann::json material = run("material.create", { { "path", "Materials/Cube.stmat" } })["asset"];
 		run("component.set", { { "entity", cube }, { "component", "MeshRenderer" }, { "values", { { "Material", material } } } });
 		const glm::vec4 white = MaterialProperties().BaseColor;
@@ -1685,5 +1772,88 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		CHECK(normalize(handScene, UUIDToJson(handCube).get<std::string>(), UUIDToJson(handMaterialHandle).get<std::string>())
 			== normalize(*commandScene, cube.get<std::string>(), material.get<std::string>()));
 		context.CloseProject();
+	}
+
+	TEST_CASE("A model's Asset tab sums up its meshes, triangles, levels of detail, materials and textures")
+	{
+		AuthoringEditor editor({ ImVec2(1600.0f, 1200.0f), 1.0f }, WithFeatureProject("EditorAuthoringModelSummary"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle model = assets->FindAssetByPath("Models/Platform.gltf");
+		REQUIRE(model.IsValid());
+		uint32_t meshes = 0;
+		uint32_t materials = 0;
+		uint32_t textures = 0;
+		for (AssetHandle subAsset : assets->GetImportInfo(model).SubAssets)
+		{
+			const AssetType type = assets->GetAssetType(subAsset);
+			meshes += type == AssetType::Mesh ? 1 : 0;
+			materials += type == AssetType::Material ? 1 : 0;
+			textures += type == AssetType::Texture ? 1 : 0;
+		}
+		REQUIRE(meshes > 0);
+		editor.Run("selection.set", { { "asset", UUIDToJson(model) } });
+		// Triangles once the meshes loaded.
+		CHECK(editor.FramesUntil([]()
+		{
+			const std::optional<UI::ItemProbe::Item> triangles = UI::ItemProbe::Find("AssetInspector.Model.Triangles");
+			return triangles && triangles->Text.find("loading") == std::string::npos;
+		}));
+		CHECK(UI::ItemProbe::Find("AssetInspector.Model.Meshes")->Text == std::to_string(meshes));
+		CHECK(UI::ItemProbe::Find("AssetInspector.Model.Materials")->Text == std::to_string(materials));
+		CHECK(UI::ItemProbe::Find("AssetInspector.Model.Textures")->Text == std::to_string(textures));
+		CHECK(std::stoi(UI::ItemProbe::Find("AssetInspector.Model.Triangles")->Text) > 0);
+		CHECK(std::stoi(UI::ItemProbe::Find("AssetInspector.Model.Levels")->Text) >= 1);
+		// Without a GPU the preview says why it is missing.
+		REQUIRE(UI::ItemProbe::Find("AssetInspector.Thumbnail"));
+		if (!Renderer::IsInitialized())
+			CHECK_FALSE(UI::ItemProbe::Find("AssetInspector.Thumbnail")->Enabled);
+	}
+
+	TEST_CASE("An audio clip's Asset tab shows its length and waveform, and Play needs audio output")
+	{
+		AuthoringEditor editor({ ImVec2(1600.0f, 1200.0f), 1.0f }, WithFeatureProject("EditorAuthoringAudioPreview"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle clip = assets->FindAssetByPath("Audio/Blip.wav");
+		REQUIRE(clip.IsValid());
+		editor.Run("selection.set", { { "asset", UUIDToJson(clip) } });
+		CHECK(editor.FramesUntil([]() { return UI::ItemProbe::Find("AssetInspector.Audio.Waveform").has_value(); }));
+		const std::optional<UI::ItemProbe::Item> time = UI::ItemProbe::Find("AssetInspector.Audio.Time");
+		REQUIRE(time);
+		CHECK(time->Text.find("0:0") == 0);
+		CHECK(time->Text.find("Hz") != std::string::npos);
+		const std::optional<UI::ItemProbe::Item> play = UI::ItemProbe::Find("AssetInspector.Audio.Play");
+		REQUIRE(play);
+		CHECK(play->Enabled == AudioEngine::IsInitialized());
+	}
+
+	TEST_CASE("Play in an audio clip's Asset tab sounds in the mix, and Stop silences it")
+	{
+		// Audio output without a device: the test pulls the mix (an editor's application advances it every frame).
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		AuthoringEditor editor({ ImVec2(1600.0f, 1200.0f), 1.0f }, WithFeatureProject("EditorAuthoringAudioPlay"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle clip = assets->FindAssetByPath("Audio/Blip.wav");
+		REQUIRE(clip.IsValid());
+		editor.Run("selection.set", { { "asset", UUIDToJson(clip) } });
+		REQUIRE(editor.FramesUntil([]()
+		{
+			const std::optional<UI::ItemProbe::Item> button = UI::ItemProbe::Find("AssetInspector.Audio.Play");
+			return button && button->Enabled;
+		}));
+		CHECK(ComputeRms(Render(2400)) == 0.0f);
+
+		REQUIRE(editor.Click("AssetInspector.Audio.Play"));
+		CHECK(editor.FramesUntil([]() { return UI::ItemProbe::Find("AssetInspector.Audio.Stop").has_value(); }));
+		// The middle of the 0.1 s blip (an 880 Hz tone at 0.4) is loud.
+		Render(1200);
+		CHECK(ComputeRms(Render(1200)) > 0.2f);
+
+		REQUIRE(editor.Click("AssetInspector.Audio.Stop"));
+		CHECK(editor.FramesUntil([]() { return UI::ItemProbe::Find("AssetInspector.Audio.Play").has_value(); }));
+		CHECK(ComputeRms(Render(2400)) == 0.0f);
 	}
 }

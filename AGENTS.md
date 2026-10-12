@@ -97,7 +97,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   with the asset pipeline (`Engine::RegisterBuiltinModules`) before the suites and the helper modes run; a test that
   needs its own component registers it in a child process (`--strata-test-helper=custom-component`,
   `Engine/ModuleRegistrationHelpers.cpp`). The editor's UI is tested headless with `ImGuiHarness` (suites `Editor.UI`,
-  `Editor.UI.Hierarchy`, `Editor.UI.Inspector`, `Editor.UI.AssetInspector`, `Editor.Theme`, `Editor.UI.Source`; see
+  `Editor.UI.Hierarchy`, `Editor.UI.Inspector`, `Editor.UI.AssetInspector`, `Editor.UI.ContentBrowser`,
+  `Editor.UI.Placement`, `Editor.Theme`,
+  `Editor.UI.Source`; see
   Editor, "Editor UI rules").
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the
   CTest label `gpu`. They share one device per process through `Tests::GPUContext` (never create
@@ -171,7 +173,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   anew every frame, in `Perf/AnimationPerfTests.cpp`) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000
   roots; the hierarchy's rows of 100,000 roots, idle and rebuilt; the Hierarchy panel's share of an editor frame with
   100,000 roots, open against closed; what 100,000 selected entities add to a frame; the longest editor frame while a
-  4096x4096 texture re-imports uncompressed and then block-compressed again), `PerfGPU.Editor`, which runs the real
+  4096x4096 texture re-imports uncompressed and then block-compressed again; `asset.findReferences` among 10,000
+  assets), `PerfGPU.Editor`, which runs the real
   `StrataEditor` maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its
   `editor.wait` steps report, and maxima by nature: the longest frame while `scene.open` loads the 100,000 and the
   1,000,000 entities and while it opens the 100,000 again over the million (`frameTimes.maxMs` of its result), the frame
@@ -180,8 +183,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `Tests::DescribeJsonFile`, which tells a damaged file from a failed read or parse), exports the stress project (the
   median and the longest frame meanwhile, and
   the export's time) and times the editor's frames on the shared device while that texture re-imports, uploads and is
-  drawn (and, with 10,000 cubes drawn too, whose draws are extracted in parallel, while it is compressed), and the
-  editor frames of `PerfGPU.Renderer` (cube grids of 100,000, also in the streaming view and with all of them selected,
+  drawn (and, with 10,000 cubes drawn too, whose draws are extracted in parallel, while it is compressed), while
+  `asset.import` brings in a 4096x4096 texture from outside the project (the copy on an I/O job, the import in the
+  background, the upload; the longest frame) and while the
+  thumbnails of a stress project's textures, materials, model and mesh are made, and the editor frames of `PerfGPU.Renderer` (cube grids of 100,000, also in the streaming view and with all of them selected,
   and of 300,000, a narrow view of 50,000, 10,000 point lights, 10,000 unique materials); `PerfGPU.Pack` compares pack
   versions 2 and 1 of the stress project (the size with its textures uncompressed, opening, streaming all of the world's
   bytes as it ships, whole textures without mip streaming; the acceptance limits, 0.8 of version 1's size and 110% of
@@ -223,8 +228,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   (`WriteStressTopDownScene`: the world with its camera looking down on all of it), 300 frames with its own budgets,
   every texture at the level its view needs at the end (`MipsBelowWanted` 0), none evicted or loading.
   `Perf.FrameProfiler` measures the frame profiler's cost per frame and `Perf.EditorPanels` (in `src/Editor/`) the
-  Streaming panel with 10,000 assets (with the job threads, which build its table) and the Performance panel with a full
-  ring of frames, each drawn in the UI harness: the 95th percentile frame, and for the Streaming panel the frames that
+  Streaming panel with 10,000 assets (with the job threads, which build its table), the Content Browser with 10,001 assets
+  in a folder (and, in `PerfGPU.Editor`, with the thumbnails of the tiles in view shown) and the Performance panel with a
+  full ring of frames, each drawn in the UI harness: the 95th percentile frame, and for the Streaming panel the frames that
   refresh its table, so a periodic hitch cannot hide in an average. Script dispatch prefetches instances ahead because
   the hardware prefetchers follow heap blocks only when they recognize the pattern by the reading instruction's address:
   a perf difference between builds of identical sources points at such a layout effect; compare the builds' profiles
@@ -449,7 +455,10 @@ The threading model, frame loop and pipelines these rules protect are described 
 
 - A project's assets are the files under its asset directory (`Assets/`). Each file has a sidecar
   `<file>.meta` (JSON: handle + import settings) that is committed with it; moving or renaming must go
-  through `EditorAssetManager::MoveAsset` (or move the `.meta` along) so the handle survives.
+  through `EditorAssetManager::MoveAsset` or `MoveFolder` (or move the `.meta` along) so the handle survives, and the
+  editor deletes through `MoveToTrash`/`RestoreFromTrash`. Code that lists folders or asks what uses an asset reads the
+  manager's indexes (`GetFolders`, `GetAssetsInFolder`, `GetReferencers`), rebuilt views only when `GetChangeVersion`
+  changed; never walk the disk or parse documents per frame.
 - Importers (`Asset/AssetImporter.h`, built-ins in `Asset/AssetImporters.cpp`) turn source files into
   the stored form, cached per handle in `<project>/.strata/Cache` (derived data, never committed). A
   cached import is redone when the source content, the import settings, the importer's `GetVersion()`
@@ -474,7 +483,11 @@ The threading model, frame loop and pipelines these rules protect are described 
   what it shares with the manager (`BackgroundWork`), so nothing waits for it to stop. Importers check
   `ImportContext::IsCancelled` between pieces of work that take milliseconds (a new importer with long loops must too;
   the texture cooker checks per block) and read project files through `ReadImportSource`/`ReadImportDependency` (under the
-  manager's file lock, nothing once cancelled). Docs/Architecture.md, "Cancelling imports".
+  manager's file lock, nothing once cancelled). Docs/Architecture.md, "Cancelling imports". `asset.import` never imports
+  in a frame either (`EditorAssetManager::ImportExternal`: copies on an I/O job, imports in the background, rolls back
+  failed items, logs a failure once); an importer whose files name others (a glTF's buffers and images) lists them in
+  `FindExternalFiles` (with `ReadsExternalFiles`), so the copy brings them along, and messages that can quote file bytes
+  are made valid UTF-8 (`StringUtils::MakeValidUTF8`).
 - Engine-native assets (`.stscene`, `.stprefab`, `.stmat`, `.stanimator`) are JSON documents with a
   `{ "Strata": { "Format": ..., "Version": ... } }` header, stored as-is. Their loaders validate fully;
   JSON entry points are named `FromJson`, byte entry points `Deserialize`.
@@ -844,7 +857,30 @@ and `AudioSystem`, the built-in "Audio" scene system.
     icons), and check panels with `ImGuiHarness::CountFallbackGlyphs`.
 - **Every change to the scene or project goes through a command** (`EditorCommandRegistry::Execute`) or,
   for continuous UI edits, through `SceneEditTransaction` / `SetPropertyWithUndo`. That keeps the UI,
-  automation (AI agents) and tests identical, and makes every edit undoable.
+  automation (AI agents) and tests identical, and makes every edit undoable. Panels never write, move or remove files
+  themselves (`Editor.UI.Source` scans `Panels/`): the project's files change through `asset.*` commands.
+- **Asset files are never lost** (`Editor/AssetFileAction`, `Editor/AssetReferences`): `asset.delete` and
+  `asset.deleteFolder` fail while scenes, prefabs, models, materials or the open scene (from memory, unsaved uses
+  included) use what they delete, listing them in the error's data (`referencedBy`, `EditorCommandResult::ErrorData`),
+  unless `force`; deleting moves the files with their `.meta` and cached imports to `<project>/.strata/Trash`
+  (`EditorAssetManager::MoveToTrash`, kept 30 days) and is one undo step that restores the handle.
+  `asset.findReferences`, `asset.move`, `asset.createFolder` and `asset.moveFolder` (handles kept) complete the set; each
+  mutating one is one undo step that never marks the scene unsaved. Steps check the files before they act, since files
+  change outside the history: an undo that cannot be done now fails and keeps the step applied (`EditorAction::Undo`
+  returns false with the reason, which `edit.undo` reports), a redo that no longer fits (the path holds other assets, or
+  the delete would be refused now) fails and leaves the history with the steps after it.
+- **Prefab instances stay linked** (`Scene/PrefabInstances`, `Editor/PrefabSync`, `Editor/EditorPrefabCommands.cpp`):
+  `prefab.instantiate` and `prefab.create` (unless `link: false`) link entities to their prefab (`PrefabInstanceComponent`);
+  `prefab.status`, `prefab.apply` (the instance into the prefab, unmodified instances follow; one step for the file and the
+  scene; not for models, not while playing), `prefab.revert` (UUIDs kept), `prefab.unpack` and `prefab.select` work on
+  the instance an entity belongs to. An instance root's transform and name are the instance's own and never count as a
+  change. When a prefab's file changes, `PrefabSync` gives unmodified instances of the edited scene its new values (one
+  undo step); code that writes a prefab for the editor sets its baseline (`PrefabSync::SetBaseline`) so the change is not
+  propagated twice. Instance roots record the version of their part they last took and a hash of their values then
+  (`PrefabInstanceComponent::PrefabVersion`, `SyncedHash`): code that gives an instance its prefab's values calls
+  `PrefabInstances::MarkSynced` (`Replace` does), so a prefab changed while a scene was closed updates the scene's
+  unmodified instances when it opens (`PrefabSync::CatchUp`), and modified ones are outdated (`prefab.status`;
+  `prefab.apply` refuses them unless `force`). Several actions that form one step go into an `EditorActionGroup`.
 - Commands are named `<group>.<action>`, take a JSON object and return a JSON value or an error. Each
   has a one-line description and a JSON Schema of its parameters (`CommandUtils::ObjectSchema` etc.);
   automation exposes them as tools, so descriptions must tell an agent what the command does. Use
@@ -961,6 +997,17 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (rows identify themselves by their entity's handle, never by row index, which changes as rows appear; while filtering,
   Ctrl+A, ranges and boxes take the matches only); drops map to `entity.setParent {entities, parent, index}` through
   `HierarchyView::GetDropTarget`; F2 or a double click renames in place.
+- The Content Browser (`Panels/ContentBrowserPanel`) draws `Editor/AssetBrowserView`'s rows (folder tree, grid or list,
+  clipped), rebuilt only when `EditorAssetManager::GetChangeVersion` changed: never list the asset directory per frame.
+  Its drops, renames, folders and deletes run `asset.*` commands; inspecting an asset elsewhere reveals it there.
+- **Thumbnails** (`Editor/ThumbnailCache`, `EditorContext::GetThumbnails`, null without a GPU): ask for an asset's
+  thumbnail every frame it is on screen (`Request`) and draw the type's icon until it is ready. Textures come from their
+  mip tail by byte range (never a load), materials, meshes, models and prefabs are rendered one at a time offscreen and
+  read back without stalling; PNG files in `<project>/.strata/Thumbnails`, keyed by the content stamps of the asset and
+  its dependencies (`EditorAssetManager::GetContentStamp`), carry them across sessions. Bump `ThumbnailCache::c_Version`
+  when thumbnails would look different. The Asset tab shows a preview rendered at the pixels it covers
+  (`RequestPreview`; the thumbnail stands in until it is ready), a model's summary and an audio clip's waveform with Play and Stop on a
+  preview voice that belongs to no scene (`Editor/AudioPreview`).
 - The inspectors show the selected entities or one asset (`EditorContext::SetInspectedAsset`, `selection.set {asset}`;
   the entities stay selected). Selecting an entity, deleting the asset or closing the project returns to the entities;
   `GetInspectionVersion` changes with every switch and every asset inspected (again), and the editor brings the
@@ -976,7 +1023,7 @@ and `AudioSystem`, the built-in "Audio" scene system.
   two-channel normal map layouts as materials read them (`ImGuiTextureDisplay`). Property widgets come from
   `UI/PropertyWidgets.h` (`DrawPropertyWidget` with `PropertyWidgetOptions` for mixed values, axis resets and probe keys).
 - **Shortcuts:** `EditorLayer` handles the global ones (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+Shift+S, Ctrl+P, Ctrl+B).
-  Shortcuts that act on the selection (Delete, Ctrl+D, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, F2) are
+  Shortcuts that act on the selection (Delete, Ctrl+D, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, F2, End) are
   `ImGuiInputFlags_RouteFocused` shortcuts of the Hierarchy and the Viewport (`UI/EditorActions.h`,
   `HandleSelectionShortcuts`): a key pressed in another panel never edits the scene. The Edit menu runs the same actions.
 - `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
@@ -1044,14 +1091,24 @@ and `AudioSystem`, the built-in "Audio" scene system.
   File and Help menu bar), until a project opens or the user picks Continue without a project; closing the project
   shows it again. It offers New Project (`UI/ProjectDialogs`: template cards, name, location; the location used last is
   remembered in imgui.ini, first `<home>/StrataProjects`, which keeps script build paths short), Open Project, Open
-  Sample, the recent projects as cards (context menu: show in folder, copy path, remove from list), template and sample
-  cards, "Connect an AI agent" (the exact `claude mcp add strata -- "<bin>/StrataCLI" mcp` line with a copy button, and
+  Sample, the recent projects as cards with each project's picture (`Editor/ProjectThumbnail`: written after every scene
+  save to `<project>/.strata/Thumbnail.png`, 480x270, from the scene's camera) and a search over their names and paths
+  (context menu: show in folder, copy path, remove from list), template and sample cards, "Connect an AI agent" (the exact `claude mcp add strata -- "<bin>/StrataCLI" mcp` line with a copy button, and
   the automation state, also why it failed to start) and a footer with version, commit, GPU and startup time. Its
   sections share one grid in a content column centered in the main area, so they end at one right edge. Its actions
   report failures on it; dropping a `.stproj` on the window opens that project. File > Open Recent lists the recent
   projects in the editor too, and File > Show Launcher returns to the launcher from Continue without a project. Help >
   About Strata (`UI/AboutDialog`) shows the build, GPU, driver, Vulkan version, startup time and the compiled-in
   `ThirdPartyNotices.md`.
+- **Placing content** (`Editor/SceneRaycast`, `Editor/EditorPlacement`): new top-level entities from the create menus
+  appear under the view's pivot, resting on the surface there (`EditorPlacement::FindPivotSurface`, `RestOn` with the
+  mesh's bounds), with the translation sent through `entity.create`; prefabs and models rest by the bounds of what they
+  draw (`GetTemplateBounds`) on the surface under the cursor when dropped into the viewport, under the pivot from Add to
+  Scene and drops on the Hierarchy's empty space (`EditorActions::InstantiatePrefab`), a dropped material goes to the
+  mesh under the cursor (`component.set`), and
+  `entity.dropToGround {entities}` (End) moves entities down onto what is below them, one undo step. Rays hit the mesh
+  renderers through the render scene's spatial index and the loaded meshes' triangles: code that needs what is under a
+  point uses `SceneRaycast::Cast`, never a loop over the scene's entities.
 - **Viewport panel** (`Panels/ViewportPanel`): renders into a texture of the panel's pixel size and takes input only
   while hovered or focused: Alt + left drag orbits, middle drag pans, the wheel dollies, right drag flies (WASD, Q/E
   down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo (as do the main
@@ -1231,7 +1288,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `DrawSceneGizmos` the view (`SceneGizmoSettings::View`): it then leaves out shapes outside it or beyond `MaxDistance`
   and draws lights and cameras whose shapes would be smaller than `MinShapePixels` on screen as icons of `IconPixels`,
   so thousands of lights cost what is near and in view; colliders can be limited to a list (the editor: the selection,
-  unless `ViewportSettings::AllColliders`). Entity tints (`EntityTints`, `Overlay/StatusTint.frag`) come first: listed
+  unless `ViewportSettings::AllColliders`), and so can the range spheres and cones of lights (`AllLightRanges`,
+  `LightRangeEntities`; the editor shows the selection's only, the others as icons). Entity tints (`EntityTints`, `Overlay/StatusTint.frag`) come first: listed
   entities' pixels in the entity-ID buffer are blended with their color and no other pixel changes (debug views such as
   the editor's streaming, LOD and mip views). Code that needs the level of detail the renderer draws uses `LODSelection`
   (`Renderer/LODSelection.h`), the functions `SceneRenderer` calls.

@@ -52,7 +52,7 @@ namespace Strata
 
 		const std::string& GetName() const override { return m_Name; }
 		bool Execute(std::string* outError) override;
-		void Undo() override;
+		bool Undo(std::string* outError) override;
 		bool MergeWith(const EditorAction& next) override;
 		bool IsNoOp() const override { return m_Before == m_After; }
 
@@ -83,6 +83,9 @@ namespace Strata
 
 		// Records the edit on the stack. Returns false when nothing changed.
 		bool Commit(UndoStack& undoStack);
+		// The edit as an action, for a step that holds more (EditorActionGroup); null when nothing changed. Ends the
+		// transaction like Commit.
+		Scope<EditorAction> TakeAction();
 		// Restores the tracked entities to their state before the edit (a failed edit) and ends the transaction.
 		void Rollback();
 	private:

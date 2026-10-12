@@ -112,6 +112,18 @@ namespace Strata::Tests
 			return true;
 		}
 
+		// Runs a command through the editor's runner, with frames until it completed (deferred commands: imports, captures), and
+		// requires it to succeed.
+		nlohmann::json RunToCompletion(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
+		{
+			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
+			Layer->GetCommandRunner().Run(Context(), Layer->GetCommands(), name, parameters, [completed](const EditorCommandResult& result) { *completed = result; });
+			REQUIRE(FramesUntil([&]() { return completed->has_value(); }));
+			INFO(std::string(name), ": ", (*completed)->Error);
+			REQUIRE((*completed)->Success);
+			return (*completed)->Value;
+		}
+
 		// Runs frames (with a little sleep, for work on other threads) until the condition holds or ten seconds passed.
 		bool FramesUntil(const std::function<bool()>& condition)
 		{

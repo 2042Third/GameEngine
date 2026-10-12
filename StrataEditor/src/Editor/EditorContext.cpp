@@ -13,6 +13,7 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Profiling.h>
 #include <Strata/Input/Input.h>
+#include <Strata/Renderer/Renderer.h>
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/SceneLoader.h>
 #include <Strata/Scene/SceneSerializer.h>
@@ -38,6 +39,10 @@ namespace Strata
 	{
 
 		constexpr const char* c_ViewportStateFile = "EditorViewport.json";
+		// Deleted assets (asset.delete) wait in "<project>/.strata/Trash" this long, then go when the project is opened.
+		constexpr const char* c_TrashDirectory = "Trash";
+		constexpr const char* c_ThumbnailDirectory = "Thumbnails";
+		constexpr std::chrono::hours c_TrashKeepTime { 30 * 24 };
 		// A scene's first view is framed again when its meshes load within this time (EditorContext::OpenScene).
 		constexpr std::chrono::seconds c_PendingFrameTimeout { 30 };
 
@@ -193,10 +198,13 @@ namespace Strata
 		EditorAssetManagerSpecification specification;
 		specification.AssetDirectory = m_Project->GetAssetDirectory();
 		specification.CacheDirectory = m_Project->GetCacheDirectory();
+		specification.TrashDirectory = m_Project->GetIntermediateDirectory() / c_TrashDirectory;
 		specification.WatchFiles = m_Specification.WatchAssetFiles;
 		m_AssetManager = CreateRef<EditorAssetManager>(specification);
 		AssetManager::SetActive(m_AssetManager);
 		m_AssetManager->Scan(m_Specification.ImportInBackground ? ScanImports::InBackground : ScanImports::Wait);
+		m_AssetManager->PurgeTrash(c_TrashKeepTime);
+		OpenThumbnails();
 		ST_INFO("Opened project '{}' ({})", m_Project->GetConfig().Name, FileSystem::ToUTF8(m_Project->GetProjectDirectory()));
 		OpenScriptEngine(created);
 
@@ -221,6 +229,17 @@ namespace Strata
 		}
 		m_RecentProjects.Add(m_Project->GetConfig().Name, m_Project->GetProjectFile());
 		return true;
+	}
+
+	void EditorContext::OpenThumbnails()
+	{
+		m_Thumbnails.reset();
+		// Without a GPU nothing could show them.
+		if (!Renderer::IsInitialized() || !m_AssetManager || !m_Project)
+			return;
+		ThumbnailCacheSpecification specification;
+		specification.Directory = m_Project->GetIntermediateDirectory() / c_ThumbnailDirectory;
+		m_Thumbnails = CreateScope<ThumbnailCache>(m_AssetManager, specification);
 	}
 
 	void EditorContext::CloseProject()
@@ -255,6 +274,9 @@ namespace Strata
 		if (hadProject)
 			m_Viewport.ResetState();
 		CloseScriptEngine();
+		// Before the asset manager: its reads use the manager.
+		m_Thumbnails.reset();
+		m_ProjectThumbnail.Cancel();
 		if (m_AssetManager)
 		{
 			// Cancels the project's imports without waiting for them (also while something else still holds the manager).
@@ -511,6 +533,7 @@ namespace Strata
 		if (!m_AssetManager->SaveNativeAsset(m_SceneHandle, bytes, false, outError, scanned ? &references : nullptr))
 			return false;
 		m_UndoStack.MarkSaved();
+		OnSceneSaved();
 		return true;
 	}
 
@@ -539,7 +562,13 @@ namespace Strata
 		m_SceneHandle = handle;
 		m_EditScene->SetSourceAsset(handle);
 		m_UndoStack.MarkSaved();
+		OnSceneSaved();
 		return true;
+	}
+
+	void EditorContext::OnSceneSaved()
+	{
+		m_ProjectThumbnail.Request();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -876,21 +905,33 @@ namespace Strata
 		return transaction.Commit(m_UndoStack);
 	}
 
-	bool EditorContext::Undo()
+	bool EditorContext::Undo(std::string* outError)
 	{
-		// While a scene is being opened the edited scene, and its history, are read-only.
-		if (IsPlaying() || !CheckSceneEditable())
+		if (IsPlaying())
+		{
+			if (outError)
+				*outError = "Undo is not available while the scene is running";
 			return false;
-		const bool undone = m_UndoStack.Undo();
+		}
+		// While a scene is being opened the edited scene, and its history, are read-only.
+		if (!CheckSceneEditable(outError))
+			return false;
+		const bool undone = m_UndoStack.Undo(outError);
 		PruneSelection();
 		return undone;
 	}
 
-	bool EditorContext::Redo()
+	bool EditorContext::Redo(std::string* outError)
 	{
-		if (IsPlaying() || !CheckSceneEditable())
+		if (IsPlaying())
+		{
+			if (outError)
+				*outError = "Redo is not available while the scene is running";
 			return false;
-		const bool redone = m_UndoStack.Redo();
+		}
+		if (!CheckSceneEditable(outError))
+			return false;
+		const bool redone = m_UndoStack.Redo(outError);
 		PruneSelection();
 		return redone;
 	}
@@ -1132,6 +1173,10 @@ namespace Strata
 		}
 		else
 		{
+			// Instances of prefabs that changed take their new values; not while a scene is being opened, whose edits would be
+			// rolled back (the opened scene is caught up with once it is in).
+			if (!IsSceneLoading())
+				m_PrefabSync.Update(*this);
 			m_EditScene->OnUpdateEditor(timestep);
 		}
 		// Before the viewports render: previews whose assets arrived get their poses.
@@ -1144,6 +1189,9 @@ namespace Strata
 		PruneSelection();
 		m_Viewport.UpdatePicking(*this);
 		UpdatePendingFrame();
+		if (m_Thumbnails)
+			m_Thumbnails->Update();
+		m_ProjectThumbnail.Update(*this);
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

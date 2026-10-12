@@ -57,7 +57,9 @@ Design the code for verification before writing it:
   alpha below 1 for see-through), `AlphaCutoff`, `DoubleSided`, `Unlit`, texture maps by asset (`BaseColorMap`, ...),
   `UVTiling`, `UVOffset`. `material.get {"material": "Builtin/DefaultMaterial"}` describes them all.
 - Sounds: write a small 16-bit PCM WAV with a script of your own (outside the project), then
-  `asset.import {"file": "<absolute>", "directory": "Sounds"}`. Models, textures and fonts import the same way.
+  `asset.import {"file": "<absolute>", "directory": "Sounds"}` (it answers once the import is done, and fails, removing
+  the copy, when the file cannot be imported). Models, textures and fonts import the same way; a `.gltf` brings the
+  `.bin` and images it names.
 - Built-in meshes: `Builtin/Cube`, `Sphere`, `Plane`, `Quad`, `Cylinder`, `Capsule`, `Cone`, `Torus` (also reachable
   from scripts: `Assets::Find("Builtin/Cube")`).
 - Animated characters: import a skinned `.glb`/`.gltf` (`asset.import`), then `animation.info {"asset": "<model>"}` for
@@ -92,6 +94,12 @@ and `script.status` (classes, fields, defaults). Patterns that worked:
 
 Build it with `entity.create` (with `components`), `component.set`, `script.add`; then `scene.save` (the template's
 start scene), or for a scene of your own `scene.saveAs {"path": "Scenes/Main.stscene"}` and `project.setStartScene`.
+
+- Things that appear many times (blocks, enemies, pickups): build one, `prefab.create` it and `prefab.instantiate` the
+  rest. Instances stay linked, so a change to one instance followed by `prefab.apply {"entity"}` updates the prefab and
+  every unmodified instance at once (those of other scenes when the scene opens next: save it then); `prefab.status`
+  shows which instances differ, and which are `outdated` (modified while the prefab changed elsewhere: `prefab.revert`
+  them before changing them again, as `prefab.apply` refuses them without `force`).
 
 - Camera: `{"Camera": {"Primary": true, "PerspectiveFOV": 45}}`; cameras and lights look along their -Z, so a camera at
   `+Z` looking at the origin needs no rotation. Rotations are Euler degrees `[pitch, yaw, roll]`.

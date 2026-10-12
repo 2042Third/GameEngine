@@ -447,6 +447,17 @@ namespace
 		return findings;
 	}
 
+	// Panels change the project only through commands, which validate, record undo steps and are what agents use: they never
+	// write, move or remove files themselves.
+	std::vector<std::string> FindFileSystemWrites(const SourceFile& file)
+	{
+		static const std::regex write(R"(\b(FileSystem::(Write\w*|Remove|CreateDirector\w*|Rename|Copy\w*)|std::filesystem::(remove\w*|create_director\w*|rename|copy\w*))\s*\()");
+		std::vector<std::string> findings;
+		for (std::sregex_iterator it(file.Code.begin(), file.Code.end(), write), end; it != end; ++it)
+			findings.push_back(Describe(file, static_cast<size_t>(it->position()), it->str()));
+		return findings;
+	}
+
 	size_t CountColorFindings(const std::string& code)
 	{
 		return FindColorLiterals(MakeSourceFile("Test.cpp", code)).size();
@@ -567,6 +578,27 @@ TEST_SUITE("Editor.UI.Source")
 		CHECK(CountSizeFindings("ImGui::SetNextItemWidth(static_cast<float>(count) * ImGui::GetFontSize() * 18.0f);") == 0);
 		CHECK(CountSizeFindings("if (ImGui::Button(\"Save 200 files\"))") == 0);
 		CHECK(CountSizeFindings("UI::ToolbarButton(\"Toolbar.Play\", Icons::Play, nullptr, \"Play\");") == 0);
+	}
+
+	TEST_CASE("Panels change files only through commands")
+	{
+		std::vector<std::string> findings;
+		for (const SourceFile& file : LoadSources({ "Panels" }, {}))
+		{
+			for (std::string& finding : FindFileSystemWrites(file))
+				findings.push_back(std::move(finding));
+		}
+		for (const std::string& finding : findings)
+			FAIL_CHECK("A panel that writes, moves or removes files itself (run an asset.* command instead): " << finding);
+		CHECK(findings.empty());
+
+		// The rule finds writes however they are spelled, and leaves reads and look-ups alone.
+		const SourceFile writes = MakeSourceFile("Panels/Old.cpp", "FileSystem::CreateDirectories(directory);\nFileSystem::Remove(path);\n"
+			"FileSystem::WriteText(path, text);\nFileSystem::Rename(a, b);\nFileSystem::CopyDirectory(a, b);\nstd::filesystem::remove_all(path);\n");
+		CHECK(FindFileSystemWrites(writes).size() == 6);
+		const SourceFile reads = MakeSourceFile("Panels/Ok.cpp", "FileSystem::ReadText(path);\nFileSystem::Exists(path);\nFileSystem::GetUniquePath(path);\n"
+			"// FileSystem::Remove(path) in a comment\n");
+		CHECK(FindFileSystemWrites(reads).empty());
 	}
 
 	TEST_CASE("The panel rule finds windows panels begin themselves")

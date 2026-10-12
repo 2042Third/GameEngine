@@ -211,9 +211,10 @@ namespace Strata
 		return true;
 	}
 
-	void SceneEditAction::Undo()
+	bool SceneEditAction::Undo(std::string*)
 	{
 		SceneEdit::ApplyEntities(*m_Scene, m_Before);
+		return true;
 	}
 
 	bool SceneEditAction::MergeWith(const EditorAction& next)
@@ -288,14 +289,23 @@ namespace Strata
 
 	bool SceneEditTransaction::Commit(UndoStack& undoStack)
 	{
+		Scope<EditorAction> action = TakeAction();
+		if (!action)
+			return false;
+		undoStack.Record(std::move(action));
+		return true;
+	}
+
+	Scope<EditorAction> SceneEditTransaction::TakeAction()
+	{
 		std::vector<EntityState> after = SceneEdit::CaptureEntities(m_Scene, m_Entities);
 		if (after == m_Before)
-			return false;
-		undoStack.Record(CreateScope<SceneEditAction>(m_Scene, m_Name, std::move(m_Before), std::move(after), m_MergeKey));
+			return nullptr;
+		Scope<EditorAction> action = CreateScope<SceneEditAction>(m_Scene, m_Name, std::move(m_Before), std::move(after), m_MergeKey);
 		m_Before.clear();
 		m_Entities.clear();
 		m_Tracked.clear();
-		return true;
+		return action;
 	}
 
 }

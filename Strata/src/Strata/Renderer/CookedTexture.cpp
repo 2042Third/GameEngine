@@ -282,6 +282,7 @@ namespace Strata
 		if (level >= Layout.MipCount)
 			return {};
 		const CookedTextureLevel& entry = Layout.Levels[level];
+		// A view of the start of the data (ParseCookedTexturePrefix) lacks the levels beyond it.
 		if (entry.Offset > Data.size() || entry.Size > Data.size() - entry.Offset)
 			return {};
 		return Data.subspan(static_cast<size_t>(entry.Offset), static_cast<size_t>(entry.Size));
@@ -308,6 +309,7 @@ namespace Strata
 		const uint32_t version = reader.Read<uint32_t>();
 		if (!reader.IsValid() || magic != c_CookedTextureMagic)
 			return Fail(outError, "Not a cooked Strata texture");
+		// Version 1 stores its levels largest first: none of its prefixes holds a level.
 		if (version != 2)
 			return Fail(outError, fmt::format("Cooked texture version {} cannot be read in parts", version));
 		if (storedSize < data.size())

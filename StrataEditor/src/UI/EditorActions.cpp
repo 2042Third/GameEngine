@@ -252,6 +252,34 @@ namespace Strata
 			return settable;
 		}
 
+		void DropSelectionToGround(EditorContext& context, const EditorCommandRegistry& commands)
+		{
+			if (context.GetSelection().empty())
+				return;
+			RunEditorCommand(context, commands, "entity.dropToGround", { { "entities", GetTopmostSelection(context) } });
+		}
+
+		std::optional<UUID> InstantiatePrefab(EditorContext& context, const EditorCommandRegistry& commands, UUID prefab, UUID parent,
+			const EditorPlacement::Surface* surface)
+		{
+			nlohmann::json parameters = { { "prefab", UUIDToJson(prefab) } };
+			if (parent.IsValid())
+			{
+				parameters["parent"] = UUIDToJson(parent);
+			}
+			else if (const Ref<Scene>& scene = context.GetActiveScene())
+			{
+				const EditorPlacement::Surface placed = surface ? *surface : EditorPlacement::FindPivotSurface(*scene, context.GetViewport().GetCamera());
+				const glm::vec3 translation = EditorPlacement::RestOn(placed, EditorPlacement::GetTemplateBounds(prefab));
+				parameters["components"] = { { "Transform", { { "Translation", { translation.x, translation.y, translation.z } } } } };
+			}
+			const nlohmann::json created = RunEditorCommand(context, commands, "prefab.instantiate", parameters);
+			const std::optional<UUID> root = created.is_object() ? UUIDFromJson(created.value("id", nlohmann::json())) : std::nullopt;
+			if (root)
+				context.Select(*root);
+			return root;
+		}
+
 		void HandleSelectionShortcuts(EditorContext& context, const EditorCommandRegistry& commands, bool selectAll)
 		{
 			if (ImGui::GetTopMostPopupModal() || !context.AcceptsEditShortcuts())
@@ -268,6 +296,8 @@ namespace Strata
 				CutSelection(context, commands);
 			if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_V, c_Focused))
 				Paste(context, commands);
+			if (ImGui::Shortcut(ImGuiKey_End, c_Focused))
+				DropSelectionToGround(context, commands);
 			if (selectAll && ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_A, c_Focused))
 				SelectAll(context);
 		}

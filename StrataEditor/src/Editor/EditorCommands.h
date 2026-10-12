@@ -49,15 +49,23 @@ namespace Strata
 		// blocking the frame. Success, Value and Error are meaningless while it is set. Run commands that may defer through
 		// EditorCommandRunner, which polls them.
 		EditorCommandPoll Pending;
+		// Details of a failure a client can act on without parsing the message (e.g. asset.delete's referencedBy); null
+		// otherwise. Automation sends it as the error's data.
+		nlohmann::json ErrorData;
 
 		bool IsPending() const { return static_cast<bool>(Pending); }
 
-		static EditorCommandResult Ok(nlohmann::json value = nullptr) { return { true, std::move(value), {}, EditorCommandError::None, {} }; }
-		static EditorCommandResult Fail(std::string error, EditorCommandError kind = EditorCommandError::Failed) { return { false, nullptr, std::move(error), kind, {} }; }
+		static EditorCommandResult Ok(nlohmann::json value = nullptr) { return { true, std::move(value), {}, EditorCommandError::None, {}, nullptr }; }
+		static EditorCommandResult Fail(std::string error, EditorCommandError kind = EditorCommandError::Failed) { return { false, nullptr, std::move(error), kind, {}, nullptr }; }
+		// A failure with details for the client (an object).
+		static EditorCommandResult Fail(std::string error, nlohmann::json data, EditorCommandError kind = EditorCommandError::Failed)
+		{
+			return { false, nullptr, std::move(error), kind, {}, std::move(data) };
+		}
 		// A request the command cannot accept: report the parameter and what is wrong with it.
 		static EditorCommandResult InvalidParameters(std::string error) { return Fail(std::move(error), EditorCommandError::InvalidParameters); }
 		// The poll function must own everything it uses: copy the parameters, never capture them by reference.
-		static EditorCommandResult Defer(EditorCommandPoll poll) { return { true, nullptr, {}, EditorCommandError::None, std::move(poll) }; }
+		static EditorCommandResult Defer(EditorCommandPoll poll) { return { true, nullptr, {}, EditorCommandError::None, std::move(poll), nullptr }; }
 	};
 
 	using EditorCommandHandler = std::function<EditorCommandResult(EditorContext& context, const nlohmann::json& parameters)>;
@@ -138,6 +146,7 @@ namespace Strata
 
 	// Built-in command groups (EditorCommands*.cpp).
 	void RegisterSceneCommands(EditorCommandRegistry& registry);
+	void RegisterPrefabWorkflowCommands(EditorCommandRegistry& registry); // prefab.apply, revert, unpack, select, status (EditorPrefabCommands.cpp)
 	void RegisterAssetCommands(EditorCommandRegistry& registry);
 	void RegisterEditorStateCommands(EditorCommandRegistry& registry);
 	void RegisterViewportCommands(EditorCommandRegistry& registry);

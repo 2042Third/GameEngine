@@ -24,13 +24,19 @@ namespace Strata
 	// "ImportCameras": true, "ImportLights": true, "MaxTextureSize": 0, "TextureCompression": "Auto",
 	// "TextureQuality": "High" } (the last two as TextureImportSettings' Compression and Quality).
 	// Morph targets, their animation and vertex colors are not imported (a warning names what was skipped).
-	// Files referenced by the model must lie inside the asset directory; changing them re-imports the model.
+	// Files referenced by the model must lie inside the asset directory; changing them re-imports the model. Buffer views
+	// compressed with EXT_meshopt_compression are decoded with meshoptimizer's decoders and filters.
 	class GltfImporter final : public AssetImporter
 	{
 	public:
 		AssetType GetType() const override { return AssetType::Model; }
 		std::vector<std::string> GetExtensions() const override { return { ".gltf", ".glb" }; }
-		uint32_t GetVersion() const override { return 6; }
+		// 6: skins, animations and skinned meshes; 7: buffer views compressed with EXT_meshopt_compression too.
+		uint32_t GetVersion() const override { return 7; }
+		bool ReadsExternalFiles() const override { return true; }
+		// The URIs of the model's buffers and images that name files (data URIs and buffers in a .glb are no files); fails for
+		// URLs and absolute paths.
+		bool FindExternalFiles(std::span<const uint8_t> data, std::vector<std::string>& outRelativePaths, std::string* outError) const override;
 		nlohmann::json GetDefaultSettings(const std::filesystem::path& sourcePath) const override;
 		std::vector<PropertyInfo> GetSettingsProperties() const override;
 		// LODCount needs GenerateLODs, the texture settings ImportMaterials, TextureQuality compressed textures.

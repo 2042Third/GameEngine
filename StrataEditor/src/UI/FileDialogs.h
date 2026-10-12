@@ -22,6 +22,8 @@ namespace Strata
 		void Shutdown();
 
 		std::optional<std::filesystem::path> OpenFile(const std::vector<FileDialogFilter>& filters, const std::filesystem::path& defaultDirectory = {});
+		// Picks one or more files (empty when cancelled).
+		std::vector<std::filesystem::path> OpenFiles(const std::vector<FileDialogFilter>& filters, const std::filesystem::path& defaultDirectory = {});
 		std::optional<std::filesystem::path> SaveFile(const std::vector<FileDialogFilter>& filters, const std::string& defaultName = {},
 			const std::filesystem::path& defaultDirectory = {});
 		std::optional<std::filesystem::path> PickFolder(const std::filesystem::path& defaultDirectory = {});

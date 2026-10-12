@@ -103,6 +103,13 @@ namespace Strata
 		return std::filesystem::exists(path, error);
 	}
 
+	bool FileSystem::IsSameFile(const std::filesystem::path& first, const std::filesystem::path& second)
+	{
+		std::error_code error;
+		const bool same = std::filesystem::equivalent(first, second, error);
+		return same && !error;
+	}
+
 	bool FileSystem::IsDirectory(const std::filesystem::path& path)
 	{
 		std::error_code error;
@@ -144,9 +151,10 @@ namespace Strata
 		if (to.has_parent_path())
 			std::filesystem::create_directories(to.parent_path(), error);
 
-		const auto options = overwrite ? std::filesystem::copy_options::overwrite_existing : std::filesystem::copy_options::skip_existing;
-		std::filesystem::copy_file(from, to, options, error);
-		return !error;
+		// Without overwrite an existing file fails the copy (copy_options::none), rather than being kept as if it were the copy.
+		const auto options = overwrite ? std::filesystem::copy_options::overwrite_existing : std::filesystem::copy_options::none;
+		const bool copied = std::filesystem::copy_file(from, to, options, error);
+		return copied && !error;
 	}
 
 	namespace

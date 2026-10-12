@@ -40,6 +40,8 @@ namespace Strata::UI
 	// A toolbar button: an icon, optionally followed by a label, frame-height tall (square without a label), in the given
 	// style. Returns true when clicked.
 	bool ToolbarButton(const char* id, const char* icon, const char* label, const char* tooltip, const ButtonStyle& style = {});
+	// The width ToolbarButton takes for the icon and label in the current font, to right-align buttons before drawing them.
+	float GetToolbarButtonWidth(const char* icon, const char* label);
 
 	// A rounded chip with an icon and a label on a translucent surface (for overlays such as the viewport's) that opens
 	// something: a popup or a menu. Clicking a chip does not focus its window. Returns true when clicked.
@@ -110,7 +112,8 @@ namespace Strata::UI
 	bool ActionButton(const char* id, const char* icon, std::string_view label, const char* tooltip, const ButtonStyle& style = {}, float width = 0.0f);
 
 	// Text that acts as a link (secondary text, underlined while hovered), with an optional icon after it, e.g. "About" in
-	// a footer. Returns true when clicked.
+	// a footer. Its text lines up with the line's other text (also after ImGui::AlignTextToFramePadding). Returns true when
+	// clicked.
 	bool LinkButton(const char* id, std::string_view label, const char* icon = nullptr, const char* tooltip = nullptr);
 
 	// A labeled single-line text field: the label above in the caption size, the field below at the given width (negative:
@@ -135,6 +138,9 @@ namespace Strata::UI
 		std::string_view Title;
 		std::string_view Subtitle;
 		std::string_view Detail;
+		// A picture of display colors in place of the badge (0: the badge), as wide as ImageAspect times its height.
+		ImTextureID Image = 0;
+		float ImageAspect = 16.0f / 9.0f;
 	};
 	bool EntryCard(const char* id, const EntryCardContent& content, const ImVec2& size);
 

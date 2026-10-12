@@ -6,13 +6,16 @@
 #include "Strata/Core/FileWatcher.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -31,7 +34,92 @@ namespace Strata
 	{
 		std::filesystem::path AssetDirectory; // Project asset root (absolute)
 		std::filesystem::path CacheDirectory; // Imported data; derived, safe to delete (absolute)
+		// Where MoveToTrash puts deleted assets (the editor's "<project>/.strata/Trash"; local data, never committed). Empty:
+		// MoveToTrash fails, and only DeleteAsset deletes (tools).
+		std::filesystem::path TrashDirectory;
 		bool WatchFiles = true;               // Re-import and hot reload files changed on disk
+	};
+
+	// What EditorAssetManager::MoveToTrash moved, so that RestoreFromTrash puts it back: one asset (its file, its .meta and
+	// its cached import) or a folder with everything in it (and the cached imports of its assets).
+	struct TrashedAssets
+	{
+		std::string Path;                 // Where it was, relative to the asset directory ('/' separators)
+		bool Folder = false;
+		std::filesystem::path Entry;      // The trash folder that holds it ("<trash>/<UTC time>[-n]")
+		std::vector<AssetHandle> Handles; // The source assets it held, by path
+	};
+
+	// A file or folder from outside the project that EditorAssetManager::ImportExternal copied in, and what became of it.
+	struct ExternalImportItem
+	{
+		std::filesystem::path Source; // The file or folder outside the project
+		std::string Path;             // Where it went, relative to the asset directory (the folder, for folder imports)
+		bool Folder = false;
+		// The source assets it brought: a file's own asset first, then the files it reads that are assets themselves (a model's
+		// images); a folder's every asset.
+		std::vector<AssetHandle> Assets;
+		std::vector<std::string> Files; // Every file copied (with .meta files), relative to the asset directory
+		std::string Error;              // Empty while it is fine
+		bool RolledBack = false;        // Its failed files were removed again (no KeepOnFailure)
+	};
+
+	// A source asset as views of the asset directory list it (EditorAssetManager::ListAssets).
+	struct AssetListing
+	{
+		AssetHandle Handle = UUID::Null();
+		AssetType Type = AssetType::None;
+		std::string Path;                  // Relative to the asset directory, '/' separators
+		std::string Error;                 // Of its last import (empty when it succeeded or has not run)
+		size_t WarningCount = 0;
+		std::vector<AssetHandle> SubAssets;
+		bool Importing = false;            // Its import is queued, running, or finished and not applied yet
+	};
+
+	// Where an import of external files is (EditorAssetManager::ImportExternal).
+	enum class ExternalImportState : uint8_t
+	{
+		Copying = 0, // On an I/O job
+		Importing,   // On the background threads, like re-imports
+		Finished
+	};
+
+	struct ExternalImportRequest
+	{
+		std::vector<std::filesystem::path> Files;       // Absolute paths of files to copy and import
+		std::vector<std::filesystem::path> Directories; // Absolute paths of folders to copy, keeping their tree, and import
+		std::string TargetDirectory;                    // Relative to the asset directory ('/' separators, empty: the root)
+		// Files of imports that failed stay in the project (asset.import keepOnFailure), with their errors; otherwise they are
+		// removed with their .meta files.
+		bool KeepOnFailure = false;
+	};
+
+	// An import of external files that EditorAssetManager::Update advances (main thread).
+	class ExternalImport
+	{
+	public:
+		ExternalImportState GetState() const { return m_State; }
+		bool IsFinished() const { return m_State == ExternalImportState::Finished; }
+		// Every item in the order requested (complete once copied).
+		const std::vector<ExternalImportItem>& GetItems() const { return m_Items; }
+		// Whether an item failed (its Error is set).
+		bool HasFailures() const;
+		// Why the import ended before its items were done (the project closed); empty otherwise.
+		const std::string& GetError() const { return m_Error; }
+	private:
+		friend class EditorAssetManager;
+
+		// What the copy job shares with the import (EditorAssetManager.cpp): the job never touches the manager.
+		struct CopyTask;
+
+		ExternalImportRequest m_Request;
+		std::filesystem::path m_TargetDirectory; // Absolute
+		std::string m_Error;
+		ExternalImportState m_State = ExternalImportState::Copying;
+		bool m_CopyStarted = false; // Its copy job was submitted (copies run one at a time)
+		std::vector<ExternalImportItem> m_Items;
+		std::vector<std::string> m_CreatedFolders; // Folders the copy created, relative, parents first
+		Ref<CopyTask> m_Task;
 	};
 
 	// What an asset pack built from the project holds, and in which order (EditorAssetManager::PlanAssetPack).
@@ -115,6 +203,11 @@ namespace Strata
 		AssetHandle FindAssetByAbsolutePath(const std::filesystem::path& path) const;
 		// Import state of a source asset (sub-assets report their parent's).
 		AssetImportInfo GetImportInfo(AssetHandle handle) const;
+		// A fingerprint of an asset's stored form that lasts across sessions (unlike AssetSourceRevisions): its source file's
+		// size and time, its import settings, its importer's version and whether its last import succeeded (sub-assets: their
+		// file's). It changes whenever a re-import can change what is stored, so caches of derived data on disk (the editor's
+		// thumbnails) know when theirs is stale. 0 for unknown and built-in assets. Thread-safe.
+		uint64_t GetContentStamp(AssetHandle handle) const;
 		nlohmann::json GetImportSettings(AssetHandle handle) const;
 		// The importer of a source asset (sub-assets: their parent's); null for unknown and built-in assets. Thread-safe.
 		const AssetImporter* GetImporter(AssetHandle handle) const;
@@ -138,9 +231,23 @@ namespace Strata
 		// background, re-imports). Thread-safe.
 		uint32_t GetPendingImportCount() const;
 
-		// Copies an external file into the asset directory (relative target directory) and imports it. If the name is
-		// taken, " (n)" is appended. Returns the new handle, or null.
+		// Copies an external file into the asset directory (relative target directory) and imports it on the calling thread:
+		// tools and tests (asset.import uses ImportExternal). It is copied like ImportExternal copies files, with the files it
+		// reads; a failed import keeps them (the asset reports its error). Returns the new handle, or null.
 		AssetHandle ImportExternalFile(const std::filesystem::path& sourceFile, const std::string& targetDirectory, std::string* outError = nullptr);
+		// Copies external files and folders into the asset directory without blocking a frame: the copy runs on an I/O job,
+		// the imports on the background threads like re-imports, and Update advances them. A file goes into the target
+		// directory (" (n)" appended when its name is taken). Files its importer reads besides it (AssetImporter::FindExternalFiles:
+		// a glTF model's buffers and images) come along, keeping their layout below their nearest common folder, in a new
+		// folder named after it; they may lie at most two folders above it. A folder goes there with its tree: its asset files,
+		// their .meta files when they have them (handles that are taken get new ones) and the files models in it read inside
+		// it. An item whose import fails is removed again (its files and .meta files; for a folder, the assets that failed)
+		// unless KeepOnFailure; its error stays in the item. Copies run one at a time, in the order of the calls, and the file
+		// watcher leaves the files of a copy alone until the import registers them complete. Fails at once (null) for a target
+		// outside the asset directory and once closed. Closing ends it: a copy that has not finished removes what it copied.
+		Ref<ExternalImport> ImportExternal(const ExternalImportRequest& request, std::string* outError = nullptr);
+		// Imports of external files that have not finished (ImportExternal).
+		uint32_t GetExternalImportCount() const { return static_cast<uint32_t>(m_ExternalImports.size()); }
 		// Writes a new engine-native asset (".stmat", ".stprefab", ".stscene") at a relative path that must not exist.
 		// `references`: what the document references, when the caller has it (AssetDependencies::ScanDocument of the JSON it
 		// serialized), so that saving a large document does not parse it once more; null: the data is scanned.
@@ -152,11 +259,65 @@ namespace Strata
 			const std::vector<AssetHandle>* references = nullptr);
 		// Moves or renames an asset (and its .meta) within the asset directory; the handle does not change. Never waits for
 		// an import: an import of the asset that is queued or running is cancelled before the file moves and runs again at
-		// the new place; other imports go on (the file watcher re-imports those that read the file as a dependency).
+		// the new place; other imports go on (the file watcher re-imports those that read the file as a dependency). Its own
+		// path does nothing; a name that differs only in case renames it where the file system ignores case. Fails when
+		// another file is at the destination.
 		bool MoveAsset(AssetHandle handle, const std::string& newRelativePath, std::string* outError = nullptr);
 		// Deletes the source file, its .meta and cached data, and unregisters the asset and its sub-assets. Never waits for
-		// an import: the asset's own import is cancelled before the files go and stores nothing; other imports go on.
+		// an import: the asset's own import is cancelled before the files go and stores nothing; other imports go on. Tools;
+		// the editor moves assets to the trash instead (MoveToTrash), which can be undone.
 		bool DeleteAsset(AssetHandle handle, std::string* outError = nullptr);
+
+		// Moves an asset's file (with its .meta and its cached import), or a folder with everything in it, from the asset
+		// directory into a new folder of the trash directory, and unregisters the assets it held, so that RestoreFromTrash can
+		// bring them back with the same handles. Imports of those assets are cancelled first (never waited for). Fails,
+		// moving nothing, without a trash directory, for paths outside the asset directory, the asset directory itself and
+		// what is neither an asset file nor a folder.
+		bool MoveToTrash(const std::string& relativePath, TrashedAssets& outTrashed, std::string* outError = nullptr);
+		// Puts what MoveToTrash moved back where it was and registers its assets with their handles (imports cached with them
+		// are current again, so nothing is imported anew), then removes the trash folder. Fails, restoring nothing, when
+		// something else is at that place now or the trash folder is gone.
+		bool RestoreFromTrash(const TrashedAssets& trashed, std::string* outError = nullptr);
+		// Removes trash folders older than `maxAge` (on an I/O job; the editor calls it when a project opens).
+		void PurgeTrash(std::chrono::hours maxAge);
+
+		// Creates a folder (and its parents) in the asset directory. Fails for paths outside it, in hidden folders, and when
+		// something exists there already.
+		bool CreateFolder(const std::string& relativePath, std::string* outError = nullptr);
+		// Removes an empty folder of the asset directory (the undo of CreateFolder). Fails when it holds anything.
+		bool RemoveEmptyFolder(const std::string& relativePath, std::string* outError = nullptr);
+		// Moves or renames a folder with everything in it (also files that are no assets, such as a model's buffers), keeping
+		// every handle: the assets in it are registered at their new paths like MoveAsset does, imports of them that run are
+		// cancelled and run again there, and models in it whose files moved with them are imported again. Its own path does
+		// nothing, and a name that differs only in case renames it where the file system ignores case. Fails, moving nothing,
+		// when something else is at the destination or it lies inside the folder or outside the asset directory.
+		bool MoveFolder(const std::string& from, const std::string& to, std::string* outError = nullptr);
+
+		//////////////////////////////////////////////////////////////////////////
+		// Browsing (the Content Browser): folders, the assets in each, and what references an asset
+		//////////////////////////////////////////////////////////////////////////
+
+		// Changes whenever a source asset is added, removed, moved or imported (its error, warnings or sub-assets may differ),
+		// an import starts or ends, and a folder is created, moved or removed, so that views of the asset directory rebuild
+		// only then. Thread-safe.
+		uint64_t GetChangeVersion() const { return m_ChangeVersion.load(std::memory_order_acquire); }
+		// Every folder of the asset directory that is not hidden, sorted ('/' separators, the root left out). Folders made or
+		// removed outside the editor come and go with the file watcher's reports (WatchFiles), empty ones too.
+		std::vector<std::string> GetFolders() const;
+		// Whether the folder exists in the index ("" is the asset directory).
+		bool HasFolder(std::string_view relativePath) const;
+		// The source assets directly in a folder ("" for the root), sorted by path.
+		std::vector<AssetHandle> GetAssetsInFolder(std::string_view relativePath) const;
+		// The source assets in a folder and every folder below it, sorted by path.
+		std::vector<AssetHandle> GetAssetsBelowFolder(std::string_view relativePath) const;
+		// The source assets directly in a folder (or, with `recursive`, also below it) with what a view shows of them, in one
+		// look at the index, sorted by path: what the Content Browser lists when GetChangeVersion changed.
+		std::vector<AssetListing> ListAssets(std::string_view relativePath, bool recursive) const;
+
+		// The assets whose recorded dependencies (GetDependencies) name this asset: the scenes, prefabs, models and materials
+		// that use it, and the meshes of models that use a material. Answered from an index kept with the recorded references
+		// on the main thread (no document is read). Sorted by handle.
+		std::vector<AssetHandle> GetReferencers(AssetHandle handle) const;
 
 		// Whether background imports (hot reload), or searches of what changed engine-native assets reference, are queued,
 		// running, or finished and not applied yet (Update applies them).
@@ -306,6 +467,8 @@ namespace Strata
 		// document. Fails for assets that are no source of the project.
 		bool QueueBackgroundImport(AssetHandle handle, bool force, std::string* outError);
 		void ProcessFileChanges();
+		// A folder the file watcher saw come or go: the folder index follows (and assets whose files went with a folder leave).
+		void ProcessFolderChange(const std::filesystem::path& path, FileChangeType type);
 		void ProcessCompletedImports();
 		// Handle -> path of every source asset, persisted in the cache so duplicated .meta files resolve the same way
 		// on every scan (the original keeps its handle).
@@ -327,6 +490,33 @@ namespace Strata
 		// the shared file lock, again at its new place when it moved meanwhile. False when the asset is unknown, its import
 		// failed or `read` fails (outError says which).
 		bool ReadStoredFile(const AssetMetadata& metadata, const std::function<bool(const std::filesystem::path& path)>& read, std::string* outError);
+
+		// SetAssetReferences, keeping the index of referencers (GetReferencers) current. Main thread.
+		void RecordReferences(AssetHandle handle, std::span<const AssetHandle> references, std::optional<AABB> bounds);
+		// Drops what an asset that is unregistered references from the index of referencers.
+		void ForgetReferences(AssetHandle handle);
+		// The folder index: a source asset's place (path) is added or removed. Requires m_SourceMutex.
+		void AddToFolderIndex(AssetHandle handle, const std::string& path);
+		void RemoveFromFolderIndex(AssetHandle handle, const std::string& path);
+		// Adds a folder and its parents to the index. Requires m_SourceMutex.
+		void AddFolderLocked(const std::string& relativePath);
+		// Walks the folders below an absolute directory into the index. Requires m_SourceMutex.
+		void IndexFoldersBelowLocked(const std::filesystem::path& directory);
+		void MarkChanged() { m_ChangeVersion.fetch_add(1, std::memory_order_acq_rel); }
+		// Registers a file that the editor put into the asset directory (a restore, a copy) and takes its import from the cache
+		// when it is current there, else queues it. Returns its handle (null when it is no asset).
+		AssetHandle RegisterAddedFile(const std::filesystem::path& absolutePath, bool queueImport);
+		// Submits the copy job of an import of external files. False (outError says why) when the job cannot be queued.
+		bool StartExternalCopy(ExternalImport& import, std::string* outError);
+		// Starts the copy of the first import that waits for one, unless a copy runs; an import whose copy cannot start ends
+		// with the error.
+		void StartNextExternalCopy();
+		// Advances the imports of external files (ImportExternal): starts waiting copies, registers what a finished copy
+		// brought, and ends imports whose assets are imported.
+		void UpdateExternalImports();
+		void FinishExternalImport(ExternalImport& import);
+		// Removes what an item copied (it was never the user's project: permanently), unregistering its assets.
+		void RollBackExternalFiles(const std::vector<std::string>& files, const std::vector<AssetHandle>& assets);
 	private:
 		EditorAssetManagerSpecification m_Specification;
 		FileWatcher m_Watcher;
@@ -344,6 +534,18 @@ namespace Strata
 		bool m_Closed = false; // Close was called: no background work starts (main thread)
 
 		mutable std::atomic<uint64_t> m_PackPlans = 0; // PlanAssetPack calls (GetPackPlanCount)
+
+		// Folder index (GetFolders, GetAssetsInFolder); guarded by m_SourceMutex.
+		std::set<std::string> m_Folders; // Every indexed folder, relative, without the root
+		std::unordered_map<std::string, std::unordered_set<AssetHandle>> m_SourcesByFolder; // Folder ("" root) -> sources directly in it
+		std::atomic<uint64_t> m_ChangeVersion = 1;
+
+		// What every asset references as recorded, and the inverse (GetReferencers); guarded by m_ReferenceMutex.
+		mutable std::mutex m_ReferenceMutex;
+		std::unordered_map<AssetHandle, std::vector<AssetHandle>> m_RecordedReferences;
+		std::unordered_map<AssetHandle, std::unordered_set<AssetHandle>> m_Referencers;
+
+		std::vector<Ref<ExternalImport>> m_ExternalImports; // Not finished (main thread)
 	};
 
 }

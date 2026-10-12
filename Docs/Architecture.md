@@ -825,7 +825,30 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   the import, `ReimportAssetInBackground` queues one even when the cached import is current (`ImportRequest::Force`;
   assets stored as-is reload at once and their references are searched again), and `IsImportPending` tells a deferred
   command (`asset.setImportSettings`, `asset.reimport`) when `Update` applied it; `SetImportSettings` and
-  `ReimportAsset` import on the calling thread (tools, tests, `asset.import`).
+  `ReimportAsset` import on the calling thread (tools, tests).
+- **Importing external files** (`EditorAssetManager::ImportExternal`, `asset.import`). Nothing of it runs in a frame: an
+  I/O job copies the files (`ExternalCopy`, which uses no manager state) and `Update` registers what it copied
+  (`RegisterAddedFile`, with the copied `.meta` files' handles where they are free) and queues their imports as
+  background jobs like re-imports; the import is `Finished` once every asset it brought is imported, and the command,
+  deferred, answers then. Copies run one at a time in the order of the calls (`StartNextExternalCopy`), so two never pick
+  the same free name, and a copy never writes over a file (`std::filesystem::copy_options::none`; what a failed copy left
+  is removed). The file watcher leaves the files of a copy alone until `Update` registers them complete: the copy names
+  each file before it creates it (`CopyTask::Claimed`), because a large file still being written can look settled to the
+  watcher (its directory entry changes only when the copy closes it) and would be imported half written. A file goes into
+  the target folder (" (n)" added when its name is taken); the files its importer reads besides it
+  (`AssetImporter::FindExternalFiles`: a glTF model's buffer and image URIs, parsed by cgltf without loading) come with
+  it, keeping their layout below their nearest common folder (at most two folders above the file), in a new folder named
+  after it, so `ReadImportDependency` finds them inside the asset directory. URLs and absolute paths are refused. A
+  folder goes there with its tree: its asset files, their `.meta` files and the files its models read inside it (hidden
+  folders, links and other files stay out). An item whose import fails is removed again (`RollBackExternalFiles`: its
+  files, `.meta` files and the folders the copy made; for a folder, only the assets that failed) unless
+  `KeepOnFailure`; the failure is logged once (by `ApplyImportOutcome`, or by `FinishExternalImport` for a copy that
+  failed) and the command fails with the items in its error's data. Files dropped on the editor import into the Content
+  Browser's folder (`ContentBrowserPanel::ImportFiles`), leaving out, with a warning, files no importer reads (the command
+  refuses a request that names one). Importers' messages, which third-party decoders may fill with bytes of the file, are
+  made valid UTF-8 (`StringUtils::MakeValidUTF8`) before they reach records, logs and results. Closing the project ends
+  an import: a copy that has not finished removes what it copied. `ImportExternalFile` copies the same way and imports
+  on the calling thread (tools, tests).
 - **Cancelling imports.** Nothing in the editor waits for a background import. Each is a `BackgroundJob` with a
   cancellation flag, the importer's `ImportContext::Cancel`: importers check it as they go (the texture cooker per block
   of a compressed level and between mip levels, the texture importer around decoding, the glTF importer between a
@@ -866,6 +889,24 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   The manager hands them to `AssetManagerBase::SetAssetReferences`, which keeps each valid handle once and leaves out the
   asset itself (`NormalizeReferences`); packs carry them as their dependency table and entry bounds, so `GetDependencies`
   and `GetBounds` answer the same in the editor and in the game, before anything loads.
+- **Folders, the trash and who uses an asset** (`EditorAssetManager`). The manager keeps three indexes on the main
+  thread, so that views and checks never walk the disk or parse documents: the folders of the asset directory (found by
+  `Scan`, kept by the manager's own operations and by files added in them; the file watcher also reports folders that come
+  and go, `FileWatcherSettings::ReportDirectories`, so an empty folder made or removed in a file manager shows or leaves at
+  once, and so do the assets whose files a removed folder took along: `ProcessFolderChange`), the source assets per folder
+  (`GetFolders`, `GetAssetsInFolder`, `GetAssetsBelowFolder`), and the
+  inverse of the recorded references (`GetReferencers`: every `SetAssetReferences` goes through `RecordReferences`, every
+  unregistration through `ForgetReferences`). `GetChangeVersion` changes with every registration, move, removal, applied
+  import, import start or end and folder change, so a view rebuilds only then. File operations keep handles:
+  `MoveFolder` renames a folder in one step (files that are no assets, such as a model's buffers, move with it) and
+  registers its assets at their new paths like `MoveAsset`; models in it that read other files import again, as do models
+  outside it that read files in it. `MoveToTrash` moves an asset's file with its `.meta` and its cached import (or a folder
+  with everything in it and the cached imports of its assets) into a new folder of the trash directory
+  (`EditorAssetManagerSpecification::TrashDirectory`, the editor's `<project>/.strata/Trash/<UTC time>`, described by a
+  `Trashed.json`) after cancelling their imports, then unregisters them; `RestoreFromTrash` moves them back and registers
+  them with their handles, taking their imports from the cache that came back (`RegisterAddedFile`: nothing is imported
+  anew). `PurgeTrash` removes trash folders older than 30 days when the editor opens the project. `DeleteAsset` (permanent)
+  remains for tools.
 - **Import settings** are a JSON object per asset (the importer's `GetDefaultSettings`, merged with the `.meta`'s
   `ImportSettings`). `AssetImporter::GetSettingsProperties` describes them as reflected properties of that object (built
   with `ImportSettingsBuilder`: getters read a setting or its default, setters write its canonical JSON), so the asset
@@ -879,7 +920,7 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   | --- | --- | --- | --- |
   | Scene, Prefab, Material, AnimationController | `.stscene .stprefab .stmat .stanimator` | `NativeAssetImporter` | the JSON source |
   | Texture | `.png .jpg .jpeg .tga .bmp .psd .gif .hdr` | `TextureImporter` | cooked `STTX` texture (see [Texture cooking](#texture-cooking)) |
-  | Model | `.gltf .glb` | `GltfImporter` | entity template; Mesh (skinned ones with their skin), Material, Texture, Skeleton and AnimationClip sub-assets |
+  | Model | `.gltf .glb` (also `EXT_meshopt_compression`, decoded with meshoptimizer) | `GltfImporter` | entity template; Mesh (skinned ones with their skin), Material, Texture, Skeleton and AnimationClip sub-assets |
   | AudioClip | `.wav .mp3 .flac .ogg` | `AudioClipImporter` | `STAU` header + the encoded file |
   | Font | `.ttf .otf` | `FontImporter` | the source, validated on import |
 
@@ -1016,10 +1057,8 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   background jobs when the editor opens a project, or in parallel while its caller waits (tools, tests, scripted runs);
   re-imports after file changes run as background jobs and are applied between frames, and so do `asset.reimport` and
   `asset.setImportSettings` (see
-  [Importing](#asset-pipeline): their commands answer once the import is applied); the editor's `asset.import` still
-  imports inside the command, the main thread taking part in the encoding (about a fifth of the stress project's cold
-  import, 1.5 s, for a 4096x4096 color texture in Release), until `content-and-prefabs` makes it asynchronous
-  (Docs/Roadmap.md).
+  [Importing](#asset-pipeline): their commands answer once the import is applied), as does `asset.import`, which copies
+  on an I/O job and imports in the background (`ImportExternal`), so no frame cooks.
 - **Cooked form** (`Renderer/CookedTexture.h`, `STTX` version 2): a 40-byte header (format, size, mip count, flags,
   filter, wrap, name length, data offset), a mip table (width, height, offset, size per level), the debug name, then the
   levels smallest first, each 16-byte aligned. The mip tail - every level up to a size, 128x128 by default - is therefore
@@ -1027,8 +1066,9 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   is every run of the levels above it (`GetLevelsByteRange`). The tail is a texture's first residency: a first load
   reads the header and the levels up to 32x32 (`Texture::c_ResidentTailDimension`; 1.4 KiB of a 2048x2048 BC7 texture)
   as a prefix of the stored form (`ParseCookedTexturePrefix`, which checks every level against the whole stored size,
-  and `GetCookedTexturePrefixSize`), and the finer levels are read by range as views need them (see
-  [Streaming and residency](#streaming-and-residency), Mip streaming). `ParseCookedTexture` validates everything (format, sizes per level in whole blocks, offsets inside the
+  and `GetCookedTexturePrefixSize`, which finds from the header how many first bytes hold the levels up to a size), and
+  the finer levels are read by range as views need them (see [Streaming and residency](#streaming-and-residency), Mip
+  streaming). The editor's thumbnails read the same prefix by byte range, without loading the texture. `ParseCookedTexture` validates everything (format, sizes per level in whole blocks, offsets inside the
   data and aligned, levels that do not overlap and are stored smallest first, known flags) and returns a
   `CookedTextureView` that refers to the data without copying; `Texture::Deserialize` builds on it and keeps the levels'
   `CookedTextureLayout` (offsets, sizes and their format) after the CPU copy is gone. Version 1 (the
@@ -1735,7 +1775,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the launcher panel
   (`Panels/WelcomePanel`, registered with `EditorPanelPlacement::Launcher` and drawn by `EditorPanelRegistry::DrawLauncher`
   instead of the docked panels): a hero band with the strata, New Project, Open Project and Open Sample, the recent
-  projects as cards, template and sample cards, "Connect an AI agent" (the `claude mcp add` line for `StrataCLI mcp`
+  projects as cards (each with its project's picture, `<project>/.strata/Thumbnail.png`, read and decoded on an I/O
+  thread while the launcher shows and read again when it shows next, and filtered by a search over names and paths:
+  `WelcomePanel::MatchesSearch`, every word), template and sample cards, "Connect an AI agent" (the `claude mcp add` line for `StrataCLI mcp`
   next to the editor, and the automation server's state) and a footer with the version, commit, GPU and the startup time
   (process creation to the first frame on screen, `Platform::GetProcessUptime`). Otherwise it draws the
   dock space host (menu bar, the main toolbar under it, the dock space) and the status bar, then the panels through
@@ -1805,7 +1847,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the one shown already), so the panels bring the matching inspector to the front.
 - **Commands** (`EditorCommands.h`). Handlers take a JSON object and return an `EditorCommandResult`: a value, an error
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
-  `EditorSceneCommands.cpp` (scene, entity, component, prefab), `EditorAssetCommands.cpp` (asset, material, prefab,
+  `EditorSceneCommands.cpp` (scene, entity, component, `prefab.instantiate`), `EditorPrefabCommands.cpp` (`prefab.status`,
+  `prefab.apply`, `prefab.revert`, `prefab.unpack`, `prefab.select`), `EditorAssetCommands.cpp` (asset, including
+  `asset.findReferences`, `asset.createFolder`, `asset.moveFolder` and `asset.deleteFolder`, material, prefab,
   project, including `project.templates`, `project.samples`, `project.openSample`, `project.close`, `project.export`,
   `project.exportStatus`, `project.cancelExport` and `project.setExportSettings`),
   `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects`, `editor.removeRecentProject` and `editor.perf`,
@@ -1866,6 +1910,79 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `GetDropTarget` maps a drop at a fraction of a row's height (top quarter before, bottom quarter after, the middle
   inside) to `entity.setParent`'s parent and final index, and `GetTopmostInHierarchyOrder` orders a selection for
   moving, copying and duplicating.
+- **Asset files** (`AssetFileAction.h`, `AssetReferences.h`). `asset.delete`, `asset.deleteFolder`, `asset.move`,
+  `asset.moveFolder` and `asset.createFolder` record `AssetFileAction`s (trash, move, folder): undo steps that share the
+  history with scene edits, never change the scene (so they never mark it unsaved) and refer to the asset manager weakly.
+  Deleting moves to the trash (`EditorAssetManager::MoveToTrash`), so undo restores the files, the `.meta`, the handle and
+  the cached import, and references work again. Before deleting, `AssetReferences::Find` asks the index of referencers
+  (`GetReferencers`) and walks the edited scene's components in memory (`FindInScene`: every asset property of every
+  registered component and every script field of asset type), so unsaved uses count and name their entities; a delete with
+  users fails with them in the error's data (`EditorCommandResult::ErrorData`, which automation sends as the JSON-RPC
+  error's `data`) unless forced. The Content Browser asks the same through `UI/DeleteAssetDialog` and runs the commands;
+  panels never write files themselves (`Editor.UI.Source` scans `Panels/` for file-system writes).
+  Files can change outside the history (a new asset at a deleted one's path, a scene saved into a restored folder), so the
+  steps check before they act: undoing a delete fails while something else is at the path, redoing one fails unless the
+  path still holds exactly the assets it deleted and the command would delete them now (not the open scene; nothing uses
+  them, unless the delete was forced), and undoing `prefab.create`'s file trashes only the asset it made.
+  `EditorAction::Undo` reports failure like `Execute`: a step that cannot be undone stays applied as a whole
+  (`UndoStack::Undo` keeps its position, an `EditorActionGroup` applies again what it had undone, and `edit.undo` fails
+  with the reason), one that cannot be redone leaves the history with the steps after it.
+- **Content Browser** (`Panels/ContentBrowserPanel`, rows in `Editor/AssetBrowserView`). Two panes in a resizable table: a
+  folder tree (the asset directory and its folders as far as they are expanded) and the current folder's items as a grid
+  of tiles (the asset's thumbnail, or the type's icon scaled to the picture, the name cut to the tile; a size slider for
+  the tiles' width, which they keep, so names keep their room, while in a pane too short for a whole tile of that size, as
+  the default layout docks it in a laptop-sized window, the picture above the name gets lower, down to
+  `c_MinFitTileScale`; an expanded model and its sub-assets lie on one band, each sub-asset with its type in a corner) or a
+  list, both drawn through `ImGuiListClipper` (only what is in view). Clicks and the keyboard's arrows select tiles and
+  rows (`ImGuiSelectableFlags_SelectOnNav`), so Enter, F2 and Delete act on the item the keyboard is at; a folder clicked
+  in the tree is the selection too.
+  Above them: breadcrumbs (each a drop target), a search (every word in a name, below the current folder), type chips
+  (`UI::ToggleChip`), the view mode, New (folder, material) and Import (files, a folder). `AssetBrowserView` (no UI,
+  tested alone) holds the rows: folders first, then assets by name, an expanded model's sub-assets (meshes, materials,
+  textures) right after it as drag sources of their own. It rebuilds only when
+  `EditorAssetManager::GetChangeVersion` (or the folder, search, filter or an expansion) changed, from one look at the
+  manager's index (`ListAssets`), and counts its rebuilds: an idle editor rebuilds nothing (the browser used to copy
+  every asset's metadata twice a second). Labels are made at rebuild time; tiles cut their names once per tile width. Every
+  change runs a command: assets and folders dragged onto folders (tree rows, tiles, breadcrumbs, or the empty space of the
+  current folder) move (`asset.move`, `asset.moveFolder`), New Folder and New Material create one, select it and rename
+  it in place, Rename (F2) moves, Delete asks (`UI/DeleteAssetDialog`: every user listed, in a list that scrolls beyond a
+  dozen lines; Cancel or Escape closes it). Double-click opens a folder, a scene (`scene.open` after the unsaved-changes
+  question) or shows any other asset in the Asset tab. A tile shows an hourglass while its asset imports and a mark for
+  failed imports and warnings; tooltips say which. Inspecting an asset from elsewhere (`selection.set {asset}`, the
+  Streaming panel) reveals it (`RevealAsset`, from `OnUpdate` on a new inspection version): its folder opens, the tree
+  expands and scrolls to it, the search and a type filter that would hide it are cleared, a sub-asset's model expands,
+  and the grid scrolls to the item. Another root of the tree (the
+  project's scripts, which live outside the asset directory) would add rows of its own to `DrawFolderTree` with its items
+  and menu.
+- **Thumbnails** (`Editor/ThumbnailCache`, owned by `EditorContext` while a project is open and a GPU runs; updated at the
+  end of `EditorContext::Update`). The Content Browser's tiles and the Asset tab ask for an asset's thumbnail every frame
+  it is on screen (`Request`: its texture once ready, else null and the tile draws the type's icon). Textures: an I/O job
+  reads the cooked texture's header and then everything up to the end of the largest level of at most 128 texels a side
+  (the levels are stored smallest first, so that is the mip tail; a texture without such a level has its smallest level
+  read, up to 64 MiB) by byte range (`ReadStoredRange`; `GetCookedTexturePrefixSize` tells from the header how far to
+  read and `ParseCookedTexturePrefix` validates what was read against the whole size) and decodes it
+  (`MakeTextureThumbnail`: block-compressed levels through `BlockCompression`, one channel as gray, normal maps with their
+  Z, HDR tone mapped), so a thumbnail never loads a texture. Materials (on a sphere), meshes, models and prefabs (instantiated) are rendered in a scene of their own under
+  the preview lighting by one offscreen `SceneRenderer` (128x128, no entity IDs, one shadow cascade), one asset at a time:
+  their dependency closure loads at Low priority (`RequestLoadWithDependencies`, pinned until the render is read back),
+  the camera frames what renders (`SceneBounds`, `EditorCamera::FitBounds`; a material's sphere fills the view), the
+  scene renders until nothing is pending for two frames, and a `TextureReadback` takes the image without stalling.
+  Images become RGBA8 textures of display colors (a few uploads per frame) that ImGui draws as they are. Every image is
+  kept as a PNG in `<project>/.strata/Thumbnails/<handle>.png` (encoded and written on an I/O job) with its key in
+  `Index.json`: a hash of the content stamps of the asset and everything it depends on
+  (`EditorAssetManager::GetContentStamp`: the source file's size and time, the settings, the importer's version, the
+  last import's success), which lasts across sessions, so an unchanged project reads its thumbnails back
+  (`ImageReader::DecodeRGBA8`) instead of making them. Content changes of a thumbnail's sources (a reimport, a saved edit,
+  also every load, which leaves the key as it was) make the cache compute its key again; a changed key makes it again once
+  the sources stayed unchanged for a few frames, the old one showing meanwhile. Work waits while one of its sources is
+  still importing; a failed import or render leaves the type's icon (`ThumbnailState::Unavailable`). Thumbnails nobody
+  asked for in ten seconds are forgotten beyond 512 textures, and files of assets the project no longer has are removed.
+  The Asset tab's large preview of a material, mesh, model or prefab (`RequestPreview`) is rendered the same way at the
+  pixels it covers (rounded up to 32, 128 to 512 a side; the renderer's targets follow the image's size), before the
+  thumbnails that wait, for one asset at a time and in memory only; the thumbnail shows until it is ready, and a change of
+  its sources renders it again. Reads use the asset manager, so the cache waits for them when it goes (before the
+  manager). `PerfGPU.Editor` measures the longest frame while the thumbnails of a stress project render
+  (`ThumbnailsMaxFrame`).
 - **Asset documents** (`AssetEdit.h`). Materials (and any engine-native document) are edited through `AssetEdit`:
   `ApplyDocument` validates the new document with the type's loader, writes the file (`EditorAssetManager::SaveNativeAsset`)
   and publishes the loaded object at once (`AssetManagerBase::ReplaceLoadedAsset`, which finalizes it, discards a load in
@@ -1875,6 +1992,42 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   included) and after; undo and redo apply them again, and steps with the same merge key
   (`Material/<handle>/<property>`) merge until `UndoStack::BreakMerge`, so a drag that saves every frame is one step.
   The action refers to the project's asset manager weakly and does not change the scene, so it never marks it unsaved.
+- **Prefab instances** (`Scene/PrefabInstances.h`, `Editor/PrefabSync.h`, `EditorPrefabCommands.cpp`). Instantiating a
+  prefab or model links every entity it makes (`PrefabInstanceComponent`: the prefab and the entity's id in it); an
+  *instance root* is a linked entity whose parent is not linked to the same prefab, and the instance is its subtree (a
+  prefab with several top-level entities gives one root per part). The root's transform and name are the instance's own:
+  `PrefabInstances::Compare` leaves them out, `Replace` keeps them (with the root's parent and place), and `MakeTemplate`
+  writes the prefab's own in their place. `Compare` turns the instance into the prefab's form (`MakeTemplate`: links
+  removed, entity references remapped to the prefab's ids) and compares it entity by entity with the part of the prefab's
+  snapshot below the root's id, giving the changed, added and removed entities (`prefab.status`). `prefab.create` links
+  the entities it captured (`Link`, their UUIDs as the prefab's ids; the stored prefab holds no links) in one step with the
+  new file (`EditorActionGroup` of an `AssetCreateAction`, whose undo moves the file to the trash, and the scene's
+  change). `prefab.apply` writes `MakeTemplate`'s part into the prefab (`ReplaceTemplate`, in the part's place), links
+  what was added to the instance, and updates the other instances that equalled the prefab before, one step for the file
+  and the scene (`AssetDocumentAction` and the scene's action in a group); models are imported and refuse it.
+  `prefab.revert` rebuilds the instance from the prefab (`Replace`: entities keep their UUIDs by prefab id, entities the
+  prefab lacks go, missing ones are made; nothing changes when the prefab's part is missing or broken), `prefab.unpack`
+  removes the links. A snapshot's part is found through the entities' parent links (`ExtractTemplate`, `ReplaceTemplate`),
+  so documents written by hand that list a child before its parent work too. `PrefabSync`, updated by `EditorContext`
+  once per frame in edit mode (not while a scene is being opened: the edited scene is read-only then, and its edits would
+  be rolled back), keeps a baseline snapshot per prefab the edited scene uses and watches their source
+  revisions: when a prefab's file changes (on disk, a reimport), instances that equalled the baseline take the new values
+  in one undo step ("Update Instances of ..."), modified ones keep theirs. The editor's own writes set the baseline first
+  (`SetBaseline`, also when `prefab.apply` is undone or redone), so they are never propagated twice. A prefab can also
+  change while a scene that uses it is closed (applied from another scene, changed on disk or by version control), so an
+  instance root records what it last took (`PrefabInstances::MarkSynced`, whenever an instance is made, created, applied,
+  reverted or updated): `PrefabInstanceComponent::PrefabVersion`, a hash of its part of the prefab then
+  (`GetPartVersion`: the part without the root's transform and name, its entities in id order), and `SyncedHash`, a hash of
+  its own values then in the same form (`GetContentHash`). The first time the sync looks at a prefab after a scene opens
+  (`PrefabSync::CatchUp`), instances whose recorded version is not the prefab's and whose values still have the recorded
+  hash take the prefab's values, in one undo step; modified ones keep theirs and are *outdated* (`IsOutdated`):
+  `prefab.status` says so, and `prefab.apply` refuses them unless `force`, since it would write their older values over
+  the prefab's later changes. Instances without a record (scenes from before, game code's) are never caught up. It also
+  caches per instance root whether it is modified and outdated, renewed when the undo history or a baseline changes, for
+  the Hierarchy's mark. Comparing serializes the instance and finding the prefabs
+  walks every link, so a run of edits that records a step every frame (a gizmo drag) does neither per frame: an edit
+  after a pause is looked at at once, and during a run (edits less than `PrefabSync::c_SettleFrames` frames apart) the
+  marks and the watched prefabs stay until it pauses; links that come or go are found at once.
 - **Authoring panels** (`Panels/SceneHierarchyPanel`, `InspectorPanel`, `AssetInspectorPanel`, `UI/PropertyWidgets`,
   `UI/MaterialEditor`, `UI/EditorActions`). They draw state and run commands, and their cost follows what is on screen:
   - The **Hierarchy** draws `HierarchyView`'s rows through `ImGuiListClipper` inside one `ImGui::BeginMultiSelect` scope
@@ -1884,8 +2037,14 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     while filtering, Ctrl+A, ranges and boxes skip the ancestors shown for context).
     A primary selection that changed elsewhere is revealed (`HierarchyView::Reveal`, then the list scrolls to its row).
     Rows are tree nodes with the entity's icon (`UI/EntityIcons`), its name, a prefab badge on an instance's root (a
-    click inspects the prefab) and an eye (`entity.setActive`); a drag carries the topmost dragged entities
+    click inspects the prefab; in the warning color while the instance differs from its prefab, `PrefabSync::IsModified`,
+    and its tooltip, made only while it shows, says when the instance is outdated too)
+    and an eye (`entity.setActive`); a drag carries the topmost dragged entities
     (`DragDrop::c_Entities`) and a drop asks `HierarchyView::GetDropTarget` for `entity.setParent`'s parent and index.
+    Dropped on a Content Browser folder they become a prefab there (`prefab.create`). A row's menu creates a prefab from
+    the selection (in `Prefabs/`) and, on entities of an instance, applies (an outdated instance's item says that it
+    writes over the prefab's newer changes, and forces), reverts, unpacks, selects the instance's root or shows its prefab
+    (the `prefab.*` commands).
     The rename field is drawn after the selection's scope and activated by id: a keyboard move out of that scope would
     make ImGui clear the selection. With 100,000 roots the panel costs about 0.012 ms per frame (it drew every root
     before: 12.9 ms; `Perf.Editor`).
@@ -1923,11 +2082,15 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     uncompressed, data or HDR) is shown disabled, its label's tooltip saying why. A texture's preview shows its content as
     materials read it (`UI::TextureImage`: sRGB colors encoded again for the display, grayscale BC4/R8 as gray,
     two-channel normal maps with their Z), and its caption names the stored format Compression and Quality chose and what
-    the texture takes on the GPU.
+    the texture takes on the GPU. Materials, meshes, models and prefabs show their thumbnail large; a model adds a summary
+    of its sub-assets (meshes, their triangles and levels of detail once loaded, materials, textures). An audio clip shows
+    its length, rate and channels, a waveform (`Editor/AudioPreview`: per column the lowest and highest sample, computed on
+    a job; streamed clips are decoded whole for it, up to ten minutes) and Play and Stop on a preview voice: an
+    `AudioSource` of the `AudioEngine` that belongs to no scene, stopped when another asset is inspected or the tab hides.
   - **Shortcuts**: `EditorLayer` keeps the global ones (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+P, Ctrl+B); Delete, Ctrl+D, Ctrl+C,
-    Ctrl+X, Ctrl+V, Ctrl+A and F2 are `ImGuiInputFlags_RouteFocused` shortcuts of the Hierarchy and the Viewport
-    (`EditorActions::HandleSelectionShortcuts`), so they act only where the keyboard focus is; the clipboard holds
-    `entity.copy`'s data.
+    Ctrl+X, Ctrl+V, Ctrl+A, F2 and End (drop to the ground) are `ImGuiInputFlags_RouteFocused` shortcuts of the
+    Hierarchy and the Viewport (`EditorActions::HandleSelectionShortcuts`), so they act only where the keyboard focus
+    is; the clipboard holds `entity.copy`'s data.
 - **Automation** (`EditorAutomation.h`, `Network/RpcServer.h`). The server's network thread does the socket work;
   each frame `EditorAutomation::Update` registers new or changed commands as methods and runs queued requests through
   the runner, so a deferred command answers when it completes. Clients find the editor through session files
@@ -1956,7 +2119,33 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   sets from the theme (not saved).
   Picking reads one pixel of the entity-ID buffer asynchronously and completes in `EditorContext::Update`.
   `viewport.capture` renders on the next frame (with its own `debugView` if given), polls a `TextureReadback`, encodes
-  the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`).
+  the PNG on a worker and saves on an I/O thread (`EditorViewportCommands.cpp`). The scene gizmos draw the range
+  spheres and cones of the selection's lights only (`SceneGizmoSettings::AllLightRanges` off, the selection's subtrees as
+  `LightRangeEntities`); other lights show as their icons, so a scene full of point lights stays readable.
+- **Project pictures** (`Editor/ProjectThumbnail.h`). After each scene save (`EditorContext::OnSceneSaved`, from
+  `SaveScene` and `SaveSceneAs`) the next frames render the saved scene from its primary camera (the editor camera without
+  one) at 480x270 with the viewport's capture renderer, without overlays, until nothing is loading (at most 120 frames),
+  read it back without stalling and encode and write it as `<project>/.strata/Thumbnail.png` on an I/O job; a save while
+  one is being made makes another after it. The launcher's cards show it (`DisplayImage::Upload` makes the texture, as
+  the thumbnail cache does). Nothing happens without a GPU or while playing.
+- **Placement** (`Editor/SceneRaycast.h`, `Editor/EditorPlacement.h`). `SceneRaycast::Cast` finds what a ray meets among
+  the mesh renderers of a scene: the scene's `RenderScene` (synced first) answers which boxes lie along the ray (its
+  spatial index, asked for a thin prism of planes around the segment), nearest first, and each is hit on its loaded mesh's
+  triangles (positions and indices stay on the CPU; submesh bounds skip what the ray misses) or, while the mesh is not
+  loaded, on its bounds; the entities being placed (and their children) are left out. `EditorPlacement` turns that into
+  where content goes: `FindPivotSurface` (what lies under the view's pivot, the camera's target: a ray straight down from
+  just above it, so a roof over the pivot is no surface under it; else the ray through the view's center, else the target),
+  `FindSurfaceAt` and `CastAt` (a cursor's ray, else the pivot's surface), and `RestOn` (the translation that makes a box at
+  the entity's origin touch the surface with its side facing it). The Hierarchy's create menus (the Entity menu too) put
+  new top-level entities under the pivot, resting on the surface by their mesh's bounds (`GetMeshBounds`: the loaded
+  mesh's, else the recorded ones), and send the translation with `entity.create`. Prefabs and models rest by the bounds of
+  what they draw around their root's origin (`GetTemplateBounds`: instantiated into a scene of their own, the mesh bounds
+  of the root's subtree with their transforms): dropped into the viewport on the cursor's surface, from the Content
+  Browser's, the Asset tab's Add to Scene or a drop on the Hierarchy's empty space under the pivot
+  (`EditorActions::InstantiatePrefab`, `prefab.instantiate` with the translation). A material dropped into the viewport
+  goes to the mesh under the cursor (`component.set`, one undo step). `entity.dropToGround` (End, and Edit > Drop to Ground) moves each
+  entity straight down by the nearest hit of rays from the bottom of its bounds (with its children; the center and four
+  inset corners), in one undo step.
 - **Script builds** (`ScriptBuild.h`). `ScriptBuilder` runs CMake configure and build as child processes (one build at
   a time, ended as a process tree when cancelled), polled once per frame; its output streams to the log and is parsed
   into diagnostics. When a build finishes, `EditorContext` loads or hot reloads the module. With a Visual Studio

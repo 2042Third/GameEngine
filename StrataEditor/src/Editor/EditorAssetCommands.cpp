@@ -1,4 +1,6 @@
 #include "Editor/AssetEdit.h"
+#include "Editor/AssetFileAction.h"
+#include "Editor/AssetReferences.h"
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -6,12 +8,15 @@
 #include "Editor/ProjectSamples.h"
 #include "Editor/ProjectTemplates.h"
 
+#include <Strata/Asset/AssetImporter.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Core/StringUtils.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Scene/Prefab.h>
+#include <Strata/Scene/PrefabInstances.h>
 
 #include <algorithm>
 #include <memory>
@@ -49,6 +54,17 @@ namespace Strata
 			return { reinterpret_cast<const uint8_t*>(text.data()), text.size() };
 		}
 
+		// A folder parameter as the asset directory's paths are written: '/' separators, no "./" before or '/' after.
+		std::string NormalizeFolderPath(std::string path)
+		{
+			std::replace(path.begin(), path.end(), '\\', '/');
+			while (path.rfind("./", 0) == 0)
+				path.erase(0, 2);
+			while (!path.empty() && path.back() == '/')
+				path.pop_back();
+			return path;
+		}
+
 		// A source asset of the project (a file in its asset directory): sub-assets and built-in assets have no import of
 		// their own.
 		bool CheckSourceAsset(const EditorAssetManager& assets, AssetHandle handle, std::string* outError)
@@ -79,6 +95,48 @@ namespace Strata
 				{ "imported", info.Imported },
 				{ "importError", info.Error },
 				{ "importWarnings", info.Warnings } };
+		}
+
+		// asset.import's answer once its imports finished: the items, and a failure (with them in its data) when one failed.
+		EditorCommandResult DescribeExternalImport(const EditorAssetManager& assets, const ExternalImport& import)
+		{
+			nlohmann::json items = nlohmann::json::array();
+			std::vector<std::string> errors;
+			for (const ExternalImportItem& item : import.GetItems())
+			{
+				nlohmann::json described = { { "source", FileSystem::ToUTF8(item.Source) }, { "path", item.Path }, { "folder", item.Folder } };
+				nlohmann::json list = nlohmann::json::array();
+				for (AssetHandle handle : item.Assets)
+				{
+					if (const std::optional<AssetMetadata> metadata = assets.GetMetadata(handle))
+						list.push_back({ { "asset", UUIDToJson(handle) }, { "path", metadata->Path }, { "type", AssetTypeToString(metadata->Type) } });
+				}
+				described["assets"] = std::move(list);
+				if (!item.Error.empty())
+				{
+					described["error"] = item.Error;
+					described["rolledBack"] = item.RolledBack;
+					errors.push_back(item.Error);
+				}
+				items.push_back(std::move(described));
+			}
+			const std::vector<ExternalImportItem>& all = import.GetItems();
+			if (!errors.empty())
+			{
+				const std::string message = all.size() == 1 ? fmt::format("Import failed: {}", errors.front())
+					: fmt::format("{} of {} imports failed; the first: {}", errors.size(), all.size(), errors.front());
+				return EditorCommandResult::Fail(message, { { "items", std::move(items) } });
+			}
+			// The first file's own asset, as asset.import answered for one file.
+			nlohmann::json result = nlohmann::json::object();
+			if (!all.empty() && !all.front().Assets.empty())
+			{
+				if (const std::optional<AssetMetadata> metadata = assets.GetMetadata(all.front().Assets.front()))
+					result = DescribeAsset(*metadata);
+			}
+			result["importError"] = "";
+			result["items"] = std::move(items);
+			return EditorCommandResult::Ok(std::move(result));
 		}
 
 		// Answers a re-import once the background import of `handle` is applied (the editor's frames call
@@ -559,9 +617,21 @@ namespace Strata
 				return EditorCommandResult::Ok(std::move(result));
 			} });
 
-		registry.Register({ "asset.import", "Copies an external file into the project and imports it. Returns the new asset.",
-			ObjectSchema({ { "file", StringSchema("Absolute path of the file to import") }, { "directory", StringSchema("Target directory relative to the asset directory (default: the root)") } },
-				{ "file" }),
+		registry.Register({ "asset.import",
+			"Copies external files and folders into the project and imports them in the background: the editor keeps running, and the command answers "
+			"when every import is done. A file goes into `directory` (\" (n)\" added when its name is taken) with the files it reads (a glTF model's "
+			"buffers and images, in a new folder named after it, keeping their layout); a folder goes there with its tree (asset files, their .meta files, "
+			"what its models read). Returns {asset, path, name, type (of the first file's asset), items: [{source, path, folder, assets: [{asset, path, "
+			"type}], error?, rolledBack?}]}. Fails (Failed) when an import failed, with the items in the error's data; the failed files are removed "
+			"again unless keepOnFailure. wait: false answers at once ({importing: true}); asset.info tells when an asset is imported.",
+			ObjectSchema({
+				{ "file", StringSchema("Absolute path of a file to import") },
+				{ "files", { { "type", "array" }, { "items", { { "type", "string" } } }, { "description", "Absolute paths of files to import" } } },
+				{ "directories", { { "type", "array" }, { "items", { { "type", "string" } } },
+					{ "description", "Absolute paths of folders to import with their trees" } } },
+				{ "directory", StringSchema("Target folder relative to the asset directory (default: the root)") },
+				{ "keepOnFailure", BoolSchema("Keep the files of failed imports in the project, with their errors (default false: they are removed)") },
+				{ "wait", BoolSchema("Answer when the imports are done (default true)") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				std::string error;
@@ -569,20 +639,80 @@ namespace Strata
 				if (!assets)
 					return EditorCommandResult::Fail(error);
 				CommandArguments arguments(parameters);
-				const std::string file = arguments.GetString("file");
-				const std::string directory = arguments.GetString("directory", "");
+				ExternalImportRequest request;
+				if (arguments.Has("file"))
+					request.Files.push_back(FileSystem::FromUTF8(arguments.GetString("file")));
+				auto readPaths = [&](const char* name, std::vector<std::filesystem::path>& outPaths)
+				{
+					const nlohmann::json* list = JsonUtils::Find(parameters, name);
+					if (!list)
+						return;
+					if (!list->is_array())
+					{
+						arguments.SetError(fmt::format("Parameter '{}' must be an array of absolute paths", name));
+						return;
+					}
+					for (const nlohmann::json& entry : *list)
+					{
+						if (!entry.is_string())
+						{
+							arguments.SetError(fmt::format("Parameter '{}' must be an array of absolute paths", name));
+							return;
+						}
+						outPaths.push_back(FileSystem::FromUTF8(entry.get<std::string>()));
+					}
+				};
+				readPaths("files", request.Files);
+				readPaths("directories", request.Directories);
+				request.TargetDirectory = arguments.GetString("directory", "");
+				request.KeepOnFailure = arguments.GetBool("keepOnFailure", false);
+				const bool wait = arguments.GetBool("wait", true);
+				if (arguments.IsValid() && request.Files.empty() && request.Directories.empty())
+					arguments.SetError("Pass the files to import ('file' or 'files') or folders ('directories')");
+				// What names nothing importable is refused at once, before anything is copied.
+				for (const std::filesystem::path& file : request.Files)
+				{
+					if (!arguments.IsValid())
+						break;
+					if (!FileSystem::IsRegularFile(file))
+						arguments.SetError(fmt::format("'{}' is not a file", FileSystem::ToUTF8(file)));
+					else if (!AssetImporterRegistry::FindByExtension(StringUtils::ToLower(FileSystem::ToUTF8(file.extension()))))
+						arguments.SetError(fmt::format("No importer handles '{}' files ('{}')", FileSystem::ToUTF8(file.extension()), FileSystem::ToUTF8(file)));
+				}
+				for (const std::filesystem::path& directory : request.Directories)
+				{
+					if (arguments.IsValid() && !FileSystem::IsDirectory(directory))
+						arguments.SetError(fmt::format("'{}' is not a folder", FileSystem::ToUTF8(directory)));
+				}
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				const AssetHandle handle = assets->ImportExternalFile(FileSystem::FromUTF8(file), directory, &error);
-				if (!handle.IsValid())
+				const Ref<ExternalImport> import = assets->ImportExternal(request, &error);
+				if (!import)
 					return EditorCommandResult::Fail(error);
-				nlohmann::json result = DescribeAsset(*assets->GetMetadata(handle));
-				result["importError"] = assets->GetImportInfo(handle).Error;
-				return EditorCommandResult::Ok(std::move(result));
+				if (!wait)
+					return EditorCommandResult::Ok({ { "importing", true } });
+
+				const std::weak_ptr<AssetManagerBase> started = assets->weak_from_this();
+				return EditorCommandResult::Defer([import, started](EditorContext& context) -> std::optional<EditorCommandResult>
+				{
+					const Ref<AssetManagerBase> manager = started.lock();
+					EditorAssetManager* current = context.GetAssetManager();
+					if (!manager || manager.get() != current)
+						return EditorCommandResult::Fail("The project was closed before the import finished");
+					if (!import->IsFinished())
+						return std::nullopt;
+					if (!import->GetError().empty())
+						return EditorCommandResult::Fail(import->GetError());
+					return DescribeExternalImport(*current, *import);
+				});
 			} });
 
-		registry.Register({ "asset.move", "Moves or renames an asset (with its .meta); its handle and all references stay valid.",
-			ObjectSchema({ { "asset", AssetSchema("Asset to move") }, { "path", StringSchema("New path relative to the asset directory") } }, { "asset", "path" }),
+		registry.Register({ "asset.move",
+			"Moves or renames an asset (with its .meta and cached import) within the asset directory; its handle and every reference to it stay "
+			"valid. One undo step (edit.undo moves it back); a name that differs only in case renames it in place, and its own path changes "
+			"nothing. Fails when another file is at the path. Returns {asset, path (the new one)}.",
+			ObjectSchema({ { "asset", AssetSchema("Asset to move") }, { "path", StringSchema("New path relative to the asset directory, with the file's extension") } },
+				{ "asset", "path" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				std::string error;
@@ -592,15 +722,25 @@ namespace Strata
 				CommandArguments arguments(parameters);
 				const AssetHandle handle = ResolveAsset(context, arguments, "asset", AssetType::None);
 				const std::string path = arguments.GetString("path");
+				if (arguments.IsValid() && !CheckSourceAsset(*assets, handle, &error))
+					arguments.SetError(fmt::format("Parameter 'asset': {}", error));
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				const std::string from = assets->GetMetadata(handle)->Path;
 				if (!assets->MoveAsset(handle, path, &error))
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok();
+				const std::string to = assets->GetMetadata(handle)->Path;
+				// Its own path moves nothing: no step.
+				if (to != from)
+					context.GetUndoStack().Record(CreateScope<AssetMoveAction>(*assets, fmt::format("Move {}", from), handle, from, to));
+				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "path", to } });
 			} });
 
-		registry.Register({ "asset.delete", "Deletes an asset's file, .meta and cached data. References to it become missing.",
-			ObjectSchema({ { "asset", AssetSchema("Asset to delete") } }, { "asset" }),
+		registry.Register({ "asset.findReferences",
+			"What uses an asset: the scenes, prefabs, models and materials whose recorded references name it (or one of its sub-assets), and the open "
+			"scene as it is in memory, with the entities that use it. Returns {asset, path, referencedBy: [{asset, path, type, name?, openScene?, "
+			"entities?: [{id, name, component, property}]}]}.",
+			ObjectSchema({ { "asset", AssetSchema("Asset") } }, { "asset" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				std::string error;
@@ -611,11 +751,138 @@ namespace Strata
 				const AssetHandle handle = ResolveAsset(context, arguments, "asset", AssetType::None);
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				const std::vector<AssetHandle> targets = AssetReferences::WithSubAssets(context, { handle });
+				const std::vector<AssetReferencer> referencers = AssetReferences::Find(context, targets, { targets.begin(), targets.end() });
+				const std::optional<AssetMetadata> metadata = assets->GetMetadata(handle);
+				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "path", metadata ? metadata->Path : std::string() },
+					{ "referencedBy", AssetReferences::ToJson(referencers) } });
+			} });
+
+		registry.Register({ "asset.delete",
+			"Deletes an asset: moves its file, .meta and cached import to the project's trash (.strata/Trash) and removes it from the project, in one undo "
+			"step (edit.undo restores it with the same handle, so references to it work again). Fails while scenes, prefabs, models, materials or the open "
+			"scene use it, listing them in the error's data (referencedBy, as asset.findReferences returns it); force: true deletes it anyway, leaving "
+			"those references missing. The open scene itself cannot be deleted. Returns {asset, path, trash, referencedBy}.",
+			ObjectSchema({ { "asset", AssetSchema("Asset to delete") },
+				{ "force", BoolSchema("Delete although other assets or the open scene use it (default false)") } }, { "asset" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				std::string error;
+				EditorAssetManager* assets = RequireAssets(context, &error);
+				if (!assets)
+					return EditorCommandResult::Fail(error);
+				CommandArguments arguments(parameters);
+				const AssetHandle handle = ResolveAsset(context, arguments, "asset", AssetType::None);
+				const bool force = arguments.GetBool("force", false);
+				if (arguments.IsValid() && !CheckSourceAsset(*assets, handle, &error))
+					arguments.SetError(fmt::format("Parameter 'asset': {}", error));
+				if (!arguments.IsValid())
+					return arguments.Fail();
 				if (handle == context.GetSceneHandle())
 					return EditorCommandResult::Fail("The open scene cannot be deleted; open another scene first");
-				if (!assets->DeleteAsset(handle, &error))
+
+				const std::string path = assets->GetMetadata(handle)->Path;
+				const std::vector<AssetHandle> targets = AssetReferences::WithSubAssets(context, { handle });
+				const std::vector<AssetReferencer> referencers = AssetReferences::Find(context, targets, { targets.begin(), targets.end() });
+				if (!referencers.empty() && !force)
+				{
+					return EditorCommandResult::Fail(fmt::format("'{}' is used by {}; delete it with force: true to leave those references missing, or "
+						"change them first (asset.findReferences lists them)", path, AssetReferences::Describe(referencers)),
+						{ { "referencedBy", AssetReferences::ToJson(referencers) } });
+				}
+				TrashedAssets trashed;
+				if (!assets->MoveToTrash(path, trashed, &error))
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok();
+				context.GetUndoStack().Record(CreateScope<AssetTrashAction>(context, *assets, fmt::format("Delete {}", path), trashed, force));
+				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "path", path }, { "trash", FileSystem::ToUTF8(trashed.Entry) },
+					{ "referencedBy", AssetReferences::ToJson(referencers) } });
+			} });
+
+		registry.Register({ "asset.createFolder", "Creates a folder (and its parents) in the asset directory, in one undo step. Fails when it exists. "
+			"Returns {path} (normalized, '/' separators).",
+			ObjectSchema({ { "path", StringSchema("Folder relative to the asset directory, e.g. \"Materials/Metals\"") } }, { "path" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				std::string error;
+				EditorAssetManager* assets = RequireAssets(context, &error);
+				if (!assets)
+					return EditorCommandResult::Fail(error);
+				CommandArguments arguments(parameters);
+				const std::string path = arguments.GetString("path");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				if (!assets->CreateFolder(path, &error))
+					return EditorCommandResult::Fail(error);
+				const std::string created = NormalizeFolderPath(path);
+				context.GetUndoStack().Record(CreateScope<AssetFolderCreateAction>(*assets, created));
+				return EditorCommandResult::Ok({ { "path", created } });
+			} });
+
+		registry.Register({ "asset.moveFolder",
+			"Moves or renames a folder of the asset directory with everything in it (files that are no assets too, such as a model's buffers); every "
+			"asset in it keeps its handle, so references stay valid. One undo step. Fails when the destination exists. Returns {path (the new one), "
+			"assets (how many assets moved)}.",
+			ObjectSchema({ { "path", StringSchema("Folder to move, relative to the asset directory") },
+				{ "to", StringSchema("Its new path relative to the asset directory, e.g. \"Art/Materials\"") } }, { "path", "to" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				std::string error;
+				EditorAssetManager* assets = RequireAssets(context, &error);
+				if (!assets)
+					return EditorCommandResult::Fail(error);
+				CommandArguments arguments(parameters);
+				const std::string from = NormalizeFolderPath(arguments.GetString("path"));
+				const std::string to = NormalizeFolderPath(arguments.GetString("to"));
+				if (arguments.IsValid() && !assets->HasFolder(from))
+					arguments.SetError(fmt::format("Parameter 'path': '{}' is no folder of the asset directory", from));
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				const size_t count = assets->GetAssetsBelowFolder(from).size();
+				if (!assets->MoveFolder(from, to, &error))
+					return EditorCommandResult::Fail(error);
+				if (to != from)
+					context.GetUndoStack().Record(CreateScope<AssetMoveAction>(*assets, fmt::format("Move Folder {}", from), UUID::Null(), from, to));
+				return EditorCommandResult::Ok({ { "path", to }, { "assets", count } });
+			} });
+
+		registry.Register({ "asset.deleteFolder",
+			"Deletes a folder with everything in it: moves it to the project's trash (.strata/Trash) and removes its assets from the project, in one undo "
+			"step (edit.undo restores it, every asset with its handle). Fails while assets outside the folder or the open scene use an asset in it, "
+			"listing them in the error's data (referencedBy); force: true deletes it anyway. Fails when it holds the open scene. Returns {path, assets, "
+			"trash, referencedBy}.",
+			ObjectSchema({ { "path", StringSchema("Folder relative to the asset directory") },
+				{ "force", BoolSchema("Delete although assets outside it or the open scene use its assets (default false)") } }, { "path" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				std::string error;
+				EditorAssetManager* assets = RequireAssets(context, &error);
+				if (!assets)
+					return EditorCommandResult::Fail(error);
+				CommandArguments arguments(parameters);
+				const std::string path = NormalizeFolderPath(arguments.GetString("path"));
+				const bool force = arguments.GetBool("force", false);
+				if (arguments.IsValid() && (path.empty() || !assets->HasFolder(path)))
+					arguments.SetError(fmt::format("Parameter 'path': '{}' is no folder of the asset directory", path));
+				if (!arguments.IsValid())
+					return arguments.Fail();
+
+				const std::vector<AssetHandle> contained = assets->GetAssetsBelowFolder(path);
+				if (std::find(contained.begin(), contained.end(), context.GetSceneHandle()) != contained.end())
+					return EditorCommandResult::Fail(fmt::format("'{}' holds the open scene, which cannot be deleted; open another scene first", path));
+				const std::vector<AssetHandle> targets = AssetReferences::WithSubAssets(context, contained);
+				const std::vector<AssetReferencer> referencers = AssetReferences::Find(context, targets, { targets.begin(), targets.end() });
+				if (!referencers.empty() && !force)
+				{
+					return EditorCommandResult::Fail(fmt::format("Assets in '{}' are used by {}; delete it with force: true to leave those references "
+						"missing, or change them first", path, AssetReferences::Describe(referencers)),
+						{ { "referencedBy", AssetReferences::ToJson(referencers) } });
+				}
+				TrashedAssets trashed;
+				if (!assets->MoveToTrash(path, trashed, &error))
+					return EditorCommandResult::Fail(error);
+				context.GetUndoStack().Record(CreateScope<AssetTrashAction>(context, *assets, fmt::format("Delete Folder {}", path), trashed, force));
+				return EditorCommandResult::Ok({ { "path", path }, { "assets", trashed.Handles.size() }, { "trash", FileSystem::ToUTF8(trashed.Entry) },
+					{ "referencedBy", AssetReferences::ToJson(referencers) } });
 			} });
 
 		registry.Register({ "asset.reimport",
@@ -758,28 +1025,58 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", material->Serialize()["Material"] }, { "saved", save } });
 			} });
 
-		registry.Register({ "prefab.create", "Saves entities and their descendants as a new prefab asset (.stprefab).",
-			ObjectSchema({ { "entities", EntityArraySchema("Root entities of the prefab") }, { "path", StringSchema("Path relative to the asset directory") } },
-				{ "entities", "path" }),
+		registry.Register({ "prefab.create",
+			"Saves entities and their descendants as a new prefab asset (.stprefab). With link (the default) they become an instance of it, linked as "
+			"prefab.instantiate's instances are (prefab.apply, prefab.revert, prefab.status); one undo step for the file and the link (edit.undo moves "
+			"the file to the trash and unlinks them). Links of another prefab they had are replaced. Returns {asset, path, linked}.",
+			ObjectSchema({ { "entities", EntityArraySchema("Root entities of the prefab") }, { "path", StringSchema("Path relative to the asset directory") },
+				{ "link", BoolSchema("Make the entities an instance of the new prefab (default true; not while playing; refused while a scene is being "
+					"opened)") } }, { "entities", "path" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				std::string error;
 				EditorAssetManager* assets = RequireAssets(context, &error);
 				if (!assets)
 					return EditorCommandResult::Fail(error);
+				Scene& scene = *context.GetActiveScene();
 				CommandArguments arguments(parameters);
-				const std::vector<Entity> entities = arguments.GetEntities(*context.GetActiveScene(), "entities");
+				const std::vector<Entity> entities = arguments.GetEntities(scene, "entities");
 				const std::string path = arguments.GetString("path");
+				const bool link = arguments.GetBool("link", true) && !context.IsPlaying();
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				Ref<Prefab> prefab = Prefab::CreateFromEntities(*context.GetActiveScene(), entities);
+				// Linking changes the scene, recorded outside CommitEdit: refused while a scene is being opened (without the link
+				// the entities are only read).
+				if (link && !context.CheckSceneEditable(&error))
+					return EditorCommandResult::Fail(fmt::format("{} (prefab.create with link: false only writes the prefab)", error));
+				Ref<Prefab> prefab = Prefab::CreateFromEntities(scene, entities);
 				if (!prefab)
 					return EditorCommandResult::Fail("Capturing the entities failed");
-				const std::string document = JsonUtils::Dump(prefab->Serialize(), 1, '\t') + "\n";
-				const AssetHandle handle = assets->CreateNativeAsset(path, AsBytes(document), &error);
+				// A prefab stores no links: they belong to the instances in scenes.
+				nlohmann::json document = prefab->Serialize();
+				PrefabInstances::StripLinks(document["Prefab"]);
+				const std::string text = JsonUtils::Dump(document, 1, '\t') + "\n";
+				const AssetHandle handle = assets->CreateNativeAsset(path, AsBytes(text), &error);
 				if (!handle.IsValid())
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) } });
+				const std::string created = assets->GetMetadata(handle)->Path;
+
+				// One step: the file (undo moves it to the trash) and the link.
+				Scope<EditorActionGroup> step = CreateScope<EditorActionGroup>(fmt::format("Create Prefab {}", created));
+				step->Add(CreateScope<AssetCreateAction>(*assets, fmt::format("Create Prefab {}", created), handle, created));
+				if (link)
+				{
+					SceneEditTransaction transaction(scene, "Link Prefab", {});
+					for (const Entity entity : entities)
+						transaction.TrackSubtree(entity.GetUUID());
+					PrefabInstances::Link(scene, entities, handle);
+					for (const Entity entity : entities)
+						PrefabInstances::MarkSynced(scene, entity, document["Prefab"]);
+					step->Add(transaction.TakeAction());
+				}
+				if (!context.IsPlaying())
+					context.GetUndoStack().Record(std::move(step));
+				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "path", created }, { "linked", link } });
 			} });
 	}
 

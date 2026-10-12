@@ -84,6 +84,13 @@ namespace Strata
 		std::optional<std::filesystem::path> ResolveOutputPath(const EditorContext& context, std::string_view path, std::string_view extension, bool overwrite,
 			std::string* outError);
 
+		// A free path "<folder>/<name><extension>" in the asset directory for an asset named after something people named (an
+		// entity): characters file names cannot hold become '_', a name that still is no valid file name (empty, a device name
+		// such as CON) becomes `fallback`, and " (2)", " (3)"... follow it while a file has the name. Folder: '/'-separated,
+		// relative to the asset directory ("" for the directory itself).
+		std::string MakeUniqueAssetPath(const EditorAssetManager& assets, std::string_view folder, std::string_view name, std::string_view extension,
+			std::string_view fallback);
+
 	}
 
 }
