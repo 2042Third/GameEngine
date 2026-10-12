@@ -3,6 +3,7 @@
 #include "Editor/AssetBrowserView.h"
 #include "UI/DeleteAssetDialog.h"
 #include "UI/EditorPanelRegistry.h"
+#include "UI/ScriptBrowser.h"
 
 #include <Strata/Asset/Asset.h>
 
@@ -39,6 +40,10 @@ namespace Strata
 	// folder. Double-click opens: a folder, a scene (asking about unsaved changes), any other asset in the Asset tab.
 	// Inspecting an asset elsewhere (selection.set {asset}, the Streaming panel) reveals it: its folder opens in the tree and
 	// the grid scrolls to it.
+	//
+	// Below the asset folders the tree has a second root, Scripts: the project's script sources with the classes each registers
+	// (UI/ScriptBrowser, listed only while that root shows), with New Script... and Open in IDE in the toolbar and a search of
+	// its own. A folder, the Up button, Backspace, a revealed asset or another project return to the assets.
 	class ContentBrowserPanel : public EditorPanel
 	{
 	public:
@@ -61,6 +66,11 @@ namespace Strata
 
 		// Shows a folder of the asset directory ('/' separators, empty for the root) from the next frame on.
 		void SetCurrentDirectory(std::string directory);
+
+		// Shows the Scripts root (the project's script sources) instead of the asset folders, or the assets again.
+		void ShowScripts(bool show);
+		bool IsShowingScripts() const { return m_ShowingScripts; }
+		const ScriptBrowser& GetScriptBrowser() const { return m_Scripts; }
 
 		enum class ViewMode : uint8_t
 		{
@@ -108,9 +118,13 @@ namespace Strata
 		};
 
 		void DrawToolbar(EditorPanelContext& context, EditorAssetManager& assets);
+		// The toolbar while the Scripts root shows: back to the assets, its name, its actions and its search.
+		void DrawScriptsToolbar(EditorPanelContext& context);
 		void DrawBreadcrumbs(EditorPanelContext& context);
 		void DrawFilters();
 		void DrawFolderTree(EditorPanelContext& context);
+		// The tree's Scripts root, below the asset folders (which scroll above it, so that it stays in view).
+		void DrawScriptsRoot();
 		void DrawItems(EditorPanelContext& context);
 		void DrawGrid(EditorPanelContext& context);
 		void DrawList(EditorPanelContext& context);
@@ -139,6 +153,7 @@ namespace Strata
 	private:
 		AssetBrowserView m_View;
 		const EditorAssetManager* m_ViewAssets = nullptr; // The manager the view was built for
+		uint64_t m_ViewProjectGeneration = 0;             // And its project (EditorContext::GetProjectGeneration)
 		std::vector<ItemLabels> m_Labels;                // Per item of the view
 		std::vector<std::string> m_FolderLabels;         // Per folder row of the view
 		std::vector<std::string> m_TileTitles;           // Per item, cut to m_TileTitleWidth
@@ -167,6 +182,11 @@ namespace Strata
 		std::string m_RenameFolder;
 		std::string m_RenameText;
 		DeleteAssetDialog m_DeleteDialog;
+
+		// The Scripts root: shown in the items pane instead of the folder's items while m_ShowingScripts, with its own search.
+		ScriptBrowser m_Scripts;
+		bool m_ShowingScripts = false;
+		std::string m_ScriptSearch;
 	};
 
 }

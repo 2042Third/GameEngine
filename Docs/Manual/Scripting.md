@@ -43,6 +43,11 @@ the status bar shows "Building", and a class can be attached once a build holds 
 `Scripts/` (and its folders) belongs to the module; you can also add files there by hand. Tools and agents create scripts
 with the command `script.create {"class", "fields", "template"}`.
 
+The Content Browser shows your scripts too: click **Scripts** below the asset folders to see every source file with the
+script classes it registers. Double-click a file to open it; **New Script...** and **Open in IDE** (the whole Scripts
+folder) are above the list, and the search finds files by their path or by a class name. **New > Script...** writes one
+from the assets as well; a folder, **Up** or Backspace bring the assets back.
+
 Fields registered with `ST_SCRIPT_FIELD` (bool, int32_t, float, glm vectors and quaternions, std::string, Entity,
 AssetHandle) show in the Inspector, are set per entity, and keep their values when the module is rebuilt while the game
 plays.

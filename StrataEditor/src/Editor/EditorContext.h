@@ -159,6 +159,9 @@ namespace Strata
 		const Ref<Project>& GetProject() const { return m_Project; }
 		// Null without a project.
 		EditorAssetManager* GetAssetManager() const { return m_AssetManager.get(); }
+		// Changes whenever a project opens or closes. UI state kept per project compares it rather than the manager's address,
+		// which the next project's manager may take over.
+		uint64_t GetProjectGeneration() const { return m_ProjectGeneration; }
 
 		//////////////////////////////////////////////////////////////////////////
 		// Scene
@@ -535,6 +538,7 @@ namespace Strata
 		EditorContextSpecification m_Specification;
 		Ref<Project> m_Project;
 		Ref<EditorAssetManager> m_AssetManager;
+		uint64_t m_ProjectGeneration = 0;
 
 		Ref<Scene> m_EditScene;
 		Scope<AnimationPreview> m_AnimationPreview; // Of m_EditScene: declared after it, so it goes first

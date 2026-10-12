@@ -2204,9 +2204,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   failed imports and warnings; tooltips say which. Inspecting an asset from elsewhere (`selection.set {asset}`, the
   Streaming panel) reveals it (`RevealAsset`, from `OnUpdate` on a new inspection version): its folder opens, the tree
   expands and scrolls to it, the search and a type filter that would hide it are cleared, a sub-asset's model expands,
-  and the grid scrolls to the item. Another root of the tree (the
-  project's scripts, which live outside the asset directory) would add rows of its own to `DrawFolderTree` with its items
-  and menu.
+  and the grid scrolls to the item. The tree's second root, Scripts (`DrawScriptsRoot`, below the folders, which scroll
+  above it), shows the project's script sources, which live outside the asset directory, through `UI/ScriptBrowser` in
+  the items pane: the toolbar then holds Up (back to the assets, as Backspace), the root's name, New Script... and Open
+  in IDE (`ScriptBrowser::DrawActions`) and a search of its own; a folder, a breadcrumb, a revealed asset or another
+  project return to the assets. The files are listed only while the root shows. New > Script... (and the background
+  menu's New Script...) open the editor's New Script dialog (`EditorShell::ShowNewScriptDialog`).
 - **Thumbnails** (`Editor/ThumbnailCache`, owned by `EditorContext` while a project is open and a GPU runs; updated at the
   end of `EditorContext::Update`). The Content Browser's tiles and the Asset tab ask for an asset's thumbnail every frame
   it is on screen (`Request`: its texture once ready, else null and the tile draws the type's icon). Textures: an I/O job
@@ -2440,7 +2443,7 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   hidden folders and build trees, each code file read for its `ST_SCRIPT_CLASS` registrations outside comments, string
   and raw string literals and preprocessor lines, unchanged files lending what an earlier listing found; at most 4,096
   files and 65,536 directory entries) for `script.list` and for `UI/ScriptBrowser`, the view of the script sources a
-  panel draws (the Content Browser's Scripts root once Content Browser v2 hosts it): it lists on an I/O thread
+  panel draws (the Content Browser's Scripts root, `ContentBrowserPanel::ShowScripts`): it lists on an I/O thread
   (`ScriptSourceList`, whose job compares the new listing with the one before and shares it immutable, so the main
   thread neither copies nor compares files) when it is first drawn and every second while it is drawn, never while it is
   not, and rebuilds its rows only when the files or the search changed. New Script (`UI/ScriptDialogs`) runs

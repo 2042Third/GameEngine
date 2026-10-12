@@ -4,6 +4,7 @@
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
 #include "FeatureTest/FeatureTestUtils.h"
+#include "Panels/ContentBrowserPanel.h"
 #include "Panels/ProblemsPanel.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
@@ -569,5 +570,149 @@ TEST_SUITE("Editor.UI.Scripts")
 		CHECK_FALSE(UI::ItemProbe::Find("ScriptBrowser.Row.0"));
 		REQUIRE(UI::ItemProbe::Find("ScriptBrowser.NewScript"));
 		CHECK_FALSE(UI::ItemProbe::Find("ScriptBrowser.NewScript")->Enabled);
+	}
+
+	TEST_CASE("The Content Browser's Scripts root lists the script sources only while it shows, opens them and writes new ones")
+	{
+		const std::filesystem::path output = CreateTemporaryDirectory("ScriptsRootEditor") / "Arguments.txt";
+		ScopedEnvironmentVariable externalEditor("STRATA_EXTERNAL_EDITOR", fmt::format("\"{}\" --strata-test-helper=record-arguments \"{}\" {{file}} {{line}}",
+			FileSystem::ToUTF8(GetTestExecutablePath()), FileSystem::ToUTF8(output)));
+		// Tall enough that the docked browser shows its tree and a table of files.
+		HarnessEditor editor({ ImVec2(1600.0f, 1200.0f), 1.0f });
+		editor.Frames(1);
+		CreateProject(editor, "Rooted");
+		const std::filesystem::path directory = editor.Context().GetProject()->GetScriptSourceDirectory();
+		editor.Layer->GetPanels().Focus(EditorPanels::c_ContentBrowser);
+		editor.Frames(3);
+		ContentBrowserPanel* browser = editor.Layer->GetPanels().Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser);
+		REQUIRE(browser);
+		const ScriptBrowser& scripts = browser->GetScriptBrowser();
+		const ScriptSourceList& list = scripts.GetList();
+
+		// While the assets show, the script sources are not listed.
+		editor.Frames(30);
+		CHECK_FALSE(browser->IsShowingScripts());
+		CHECK(list.GetDirectory().empty());
+		CHECK_FALSE(list.IsListing());
+		REQUIRE(UI::ItemProbe::Find("ContentBrowser.Filter.Texture"));
+
+		// The Scripts root, below the asset folders: the script directory's files with the classes each registers, in place of
+		// the folder's items, with New Script... and Open in IDE where New and Import are, and no type chips.
+		REQUIRE(editor.Click("ContentBrowser.ScriptsRoot"));
+		CHECK(browser->IsShowingScripts());
+		REQUIRE(editor.FramesUntil([&scripts]() { return scripts.FindFileRect("Spinner.cpp").has_value(); }));
+		CHECK(list.GetDirectory() == directory);
+		REQUIRE(UI::ItemProbe::Find("ScriptBrowser.Row.0"));
+		REQUIRE(UI::ItemProbe::Find("ScriptBrowser.Row.1"));
+		CHECK(UI::ItemProbe::Find("ScriptBrowser.Row.0")->Text == "CMakeLists.txt");
+		CHECK(UI::ItemProbe::Find("ScriptBrowser.Row.1")->Text == "Spinner.cpp");
+		REQUIRE(list.GetListing().Files.size() == 2);
+		CHECK(list.GetListing().Files[1].Classes == std::vector<std::string> { "Spinner" });
+		CHECK(UI::ItemProbe::Find("ContentBrowser.Crumb0")->Text == "Scripts");
+		CHECK_FALSE(UI::ItemProbe::Find("ContentBrowser.Filter.Texture"));
+		const std::optional<UI::ItemProbe::Item> newScript = UI::ItemProbe::Find("ScriptBrowser.NewScript");
+		const std::optional<UI::ItemProbe::Item> openInIDE = UI::ItemProbe::Find("ScriptBrowser.OpenInIDE");
+		REQUIRE(newScript);
+		REQUIRE(openInIDE);
+		CHECK(newScript->Enabled);
+		CHECK(openInIDE->Enabled);
+		ImGuiWindow* window = editor.FindPanelWindow(EditorPanels::c_ContentBrowser);
+		REQUIRE(window);
+		CHECK(openInIDE->Max.x == doctest::Approx(window->WorkRect.Max.x).epsilon(0.002));
+		CHECK(ImGuiHarness::CountFallbackGlyphs(window) == 0);
+
+		// Its own search finds files by every word, in their paths or their classes.
+		REQUIRE(editor.ReplaceText("ContentBrowser.ScriptSearch", "spinner"));
+		editor.Frames(2);
+		CHECK(scripts.GetRows().size() == 1);
+		CHECK(scripts.FindFileRect("Spinner.cpp").has_value());
+		CHECK_FALSE(scripts.FindFileRect("CMakeLists.txt").has_value());
+		REQUIRE(editor.Click("ContentBrowser.ScriptSearch.Clear"));
+		editor.Frames(2);
+		CHECK(scripts.GetRows().size() == 2);
+
+		// A double click opens a file in the external editor, at its first line.
+		const std::optional<ScriptBrowser::FileRect> spinner = scripts.FindFileRect("Spinner.cpp");
+		REQUIRE(spinner);
+		editor.Frames(30); // Past the double-click time of the clicks before
+		editor.ClickAt(GetCenter(spinner->Min, spinner->Max));
+		editor.ClickAt(GetCenter(spinner->Min, spinner->Max));
+		const std::vector<std::string> lines = WaitForLines(output);
+		REQUIRE(lines.size() == 2);
+		std::error_code error;
+		CHECK(std::filesystem::equivalent(FileSystem::FromUTF8(lines[0]), directory / "Spinner.cpp", error));
+		CHECK(lines[1] == "1");
+
+		// New Script... asks the editor for its dialog.
+		REQUIRE(editor.Click("ScriptBrowser.NewScript"));
+		editor.Frames(2);
+		CHECK(editor.Layer->GetNewScriptDialog().IsOpen());
+		REQUIRE(editor.Click("NewScript.Cancel"));
+		editor.Frames(2);
+		REQUIRE_FALSE(editor.Layer->GetNewScriptDialog().IsOpen());
+
+		// A folder of the tree goes back to the assets; then nothing is listed again, whatever changes.
+		REQUIRE(editor.FramesUntil([&list]() { return !list.IsListing(); }));
+		const std::optional<ContentBrowserPanel::ItemRect> root = browser->FindFolderRect("");
+		REQUIRE(root);
+		editor.ClickAt(GetCenter(root->Min, root->Max));
+		CHECK_FALSE(browser->IsShowingScripts());
+		CHECK(UI::ItemProbe::Find("ContentBrowser.Filter.Texture"));
+		const uint64_t version = list.GetVersion();
+		REQUIRE(FileSystem::WriteText(directory / "Unseen.cpp", "ST_SCRIPT_CLASS(Unseen)\n"));
+		editor.Frames(150);
+		CHECK_FALSE(list.IsListing());
+		CHECK(list.GetVersion() == version);
+
+		// Shown again, it lists at once what changed meanwhile; Up and Backspace go back to the assets.
+		REQUIRE(editor.Click("ContentBrowser.ScriptsRoot"));
+		REQUIRE(editor.FramesUntil([&scripts]() { return scripts.FindFileRect("Unseen.cpp").has_value(); }));
+		REQUIRE(editor.Click("ContentBrowser.Up"));
+		editor.Frames(1);
+		CHECK_FALSE(browser->IsShowingScripts());
+		REQUIRE(editor.Click("ContentBrowser.ScriptsRoot"));
+		editor.Frames(1);
+		editor.Harness.SetKey(ImGuiKey_Backspace, true);
+		editor.Frames(1);
+		editor.Harness.SetKey(ImGuiKey_Backspace, false);
+		editor.Frames(1);
+		CHECK_FALSE(browser->IsShowingScripts());
+
+		// An asset inspected elsewhere is revealed among the assets.
+		REQUIRE(editor.Click("ContentBrowser.ScriptsRoot"));
+		REQUIRE(browser->IsShowingScripts());
+		editor.Run("selection.set", { { "asset", "Materials/Ground.stmat" } });
+		editor.Frames(3);
+		CHECK_FALSE(browser->IsShowingScripts());
+		CHECK(browser->GetCurrentDirectory() == "Materials");
+
+		// Agents show the person either view (editor.showPanel); other panels have no Scripts root.
+		CHECK(editor.Run("editor.showPanel", { { "panel", "ContentBrowser" }, { "scripts", true } })["scripts"] == true);
+		editor.Frames(2);
+		CHECK(browser->IsShowingScripts());
+		editor.Run("editor.showPanel", { { "panel", "ContentBrowser" } });
+		editor.Frames(1);
+		CHECK(browser->IsShowingScripts());
+		editor.Run("editor.showPanel", { { "panel", "ContentBrowser" }, { "scripts", false } });
+		editor.Frames(1);
+		CHECK_FALSE(browser->IsShowingScripts());
+		const EditorCommandResult refused = editor.Layer->GetCommands().Execute(editor.Context(), "editor.showPanel", { { "panel", "Console" }, { "scripts", true } });
+		CHECK(refused.ErrorKind == EditorCommandError::InvalidParameters);
+
+		// The assets' New menu writes scripts too.
+		REQUIRE(editor.Click("ContentBrowser.New"));
+		editor.Frames(1);
+		REQUIRE(editor.Click("ContentBrowser.New.Script"));
+		editor.Frames(2);
+		CHECK(editor.Layer->GetNewScriptDialog().IsOpen());
+		REQUIRE(editor.Click("NewScript.Cancel"));
+		editor.Frames(2);
+
+		// Another project opens on its assets.
+		REQUIRE(editor.Click("ContentBrowser.ScriptsRoot"));
+		REQUIRE(browser->IsShowingScripts());
+		CreateProject(editor, "Rerooted");
+		CHECK_FALSE(browser->IsShowingScripts());
+		CHECK(UI::ItemProbe::Find("ContentBrowser.Filter.Texture"));
 	}
 }

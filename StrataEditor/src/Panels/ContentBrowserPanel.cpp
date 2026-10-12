@@ -76,31 +76,6 @@ namespace Strata
 			return dot == std::string::npos || dot == 0 ? fileName : fileName.substr(0, dot);
 		}
 
-		// The text cut at its end with an ellipsis to fit the width in the current font.
-		std::string ElideEnd(const std::string& text, float maxWidth)
-		{
-			if (ImGui::CalcTextSize(text.c_str()).x <= maxWidth)
-				return text;
-			constexpr const char* c_Ellipsis = "...";
-			const float ellipsisWidth = ImGui::CalcTextSize(c_Ellipsis).x;
-			// Whole UTF-8 characters only: a cut inside one would show a broken glyph.
-			size_t low = 0;
-			size_t high = text.size();
-			while (low < high)
-			{
-				size_t middle = (low + high + 1) / 2;
-				while (middle > 0 && middle < text.size() && (static_cast<unsigned char>(text[middle]) & 0xC0) == 0x80)
-					middle--;
-				if (middle <= low)
-					break;
-				if (ImGui::CalcTextSize(text.c_str(), text.c_str() + middle).x + ellipsisWidth <= maxWidth)
-					low = middle;
-				else
-					high = middle - 1;
-			}
-			return text.substr(0, low) + c_Ellipsis;
-		}
-
 		void SetAssetPayload(AssetHandle handle, const std::string& label)
 		{
 			ImGui::SetDragDropPayload(DragDrop::c_Asset, &handle, sizeof(AssetHandle));
@@ -151,12 +126,22 @@ namespace Strata
 		m_Revealed = asset;
 		m_ScrollToRevealed = true;
 		m_ScrollTreeToFolder = true;
+		m_ShowingScripts = false;
 		return true;
 	}
 
 	void ContentBrowserPanel::SetCurrentDirectory(std::string directory)
 	{
 		m_View.SetFolder(std::move(directory));
+		m_ShowingScripts = false;
+	}
+
+	void ContentBrowserPanel::ShowScripts(bool show)
+	{
+		// Listed afresh when the root is opened: files may have changed in the code editor while the assets showed.
+		if (show && !m_ShowingScripts)
+			m_Scripts.RequestRefresh();
+		m_ShowingScripts = show;
 	}
 
 	std::optional<ContentBrowserPanel::ItemRect> ContentBrowserPanel::FindItemRect(AssetHandle asset) const
@@ -225,7 +210,7 @@ namespace Strata
 			m_TileTitles.assign(m_Labels.size(), std::string());
 		}
 		if (m_TileTitles[index].empty())
-			m_TileTitles[index] = ElideEnd(m_Labels[index].Title, width);
+			m_TileTitles[index] = UI::ElideEnd(m_Labels[index].Title, width);
 		return m_TileTitles[index];
 	}
 
@@ -432,13 +417,17 @@ namespace Strata
 			UI::CenteredText("ContentBrowser.NoProject", "Open or create a project to manage its assets (File menu)", UI::GetThemeColors().TextSecondary);
 			return;
 		}
-		// Another project: its rows (a folder it lacks falls back to the asset directory).
-		if (assets != m_ViewAssets)
+		// Another project: its rows (a folder it lacks falls back to the asset directory). Its manager may sit where the last
+		// one was.
+		if (assets != m_ViewAssets || context.GetProjectGeneration() != m_ViewProjectGeneration)
 		{
 			m_View.Invalidate();
 			m_ViewAssets = assets;
+			m_ViewProjectGeneration = context.GetProjectGeneration();
 			m_Selected = UUID::Null();
 			m_SelectedFolder.clear();
+			// A project opens on its assets.
+			m_ShowingScripts = false;
 		}
 		if (m_View.Update(assets))
 			RebuildLabels();
@@ -452,12 +441,20 @@ namespace Strata
 			ImGui::TableSetupColumn("Items", ImGuiTableColumnFlags_WidthStretch);
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(0);
-			if (ImGui::BeginChild("ContentBrowser.Tree", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None))
+			// The folders scroll; the Scripts root stays in view below them, however long the tree is.
+			const float scriptsRootHeight = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+			if (ImGui::BeginChild("ContentBrowser.Tree", ImVec2(0.0f, -scriptsRootHeight), ImGuiChildFlags_None))
 				DrawFolderTree(panelContext);
 			ImGui::EndChild();
+			DrawScriptsRoot();
 			ImGui::TableSetColumnIndex(1);
 			if (ImGui::BeginChild("ContentBrowser.Items", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None))
-				DrawItems(panelContext);
+			{
+				if (m_ShowingScripts)
+					m_Scripts.Draw(panelContext, m_ScriptSearch);
+				else
+					DrawItems(panelContext);
+			}
 			ImGui::EndChild();
 			ImGui::EndTable();
 		}
@@ -471,6 +468,11 @@ namespace Strata
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
 		EditorContext& context = panelContext.Context;
+		if (m_ShowingScripts)
+		{
+			DrawScriptsToolbar(panelContext);
+			return;
+		}
 
 		if (UI::IconButton("ContentBrowser.Up", Icons::CornerLeftUp, "Up one folder (Backspace)", !m_View.GetFolder().empty()))
 			m_View.SetFolder(AssetBrowserView::GetParentFolder(m_View.GetFolder()));
@@ -481,7 +483,7 @@ namespace Strata
 		const float right = UI::GetToolbarButtonWidth(Icons::Plus, "New") + UI::GetToolbarButtonWidth(Icons::Import, "Import") + style.ItemSpacing.x;
 		ImGui::SameLine();
 		ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - right));
-		if (UI::ToolbarButton("ContentBrowser.New", Icons::Plus, "New", "Make a folder or a material here"))
+		if (UI::ToolbarButton("ContentBrowser.New", Icons::Plus, "New", "Make a folder, a material or a script"))
 			ImGui::OpenPopup("ContentBrowser.NewMenu");
 		if (ImGui::BeginPopup("ContentBrowser.NewMenu"))
 		{
@@ -489,10 +491,16 @@ namespace Strata
 			UI::ItemProbe::Record("ContentBrowser.New.Folder");
 			const bool material = ImGui::MenuItem((std::string(Icons::Palette) + "  Material").c_str());
 			UI::ItemProbe::Record("ContentBrowser.New.Material");
+			// Scripts live in the project's script directory, not among the assets: the editor's New Script dialog writes them.
+			const bool canWriteScript = panelContext.Shell != nullptr;
+			const bool script = ImGui::MenuItem((std::string(Icons::FileCode) + "  Script...").c_str(), nullptr, false, canWriteScript);
+			UI::ItemProbe::Record("ContentBrowser.New.Script", canWriteScript);
 			if (folder)
 				CreateFolder(panelContext);
 			if (material)
 				CreateMaterial(panelContext, assets);
+			if (script)
+				panelContext.Shell->ShowNewScriptDialog();
 			ImGui::EndPopup();
 		}
 		ImGui::SameLine();
@@ -543,6 +551,28 @@ namespace Strata
 			m_Mode = ViewMode::List;
 	}
 
+	void ContentBrowserPanel::DrawScriptsToolbar(EditorPanelContext& panelContext)
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		if (UI::IconButton("ContentBrowser.Up", Icons::CornerLeftUp, "Back to the assets (Backspace)"))
+			ShowScripts(false);
+		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+		ImGui::AlignTextToFramePadding();
+		UI::PushFont(UI::EditorFont::SemiBold, UI::TextSize::Body);
+		ImGui::TextUnformatted("Scripts");
+		ImGui::PopFont();
+		UI::ItemProbe::Record("ContentBrowser.Crumb0", true, 0, "Scripts");
+
+		// New Script... and Open in IDE at the right end, where New and Import are for the assets.
+		ImGui::SameLine();
+		ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(), ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - ScriptBrowser::CalcActionsWidth()));
+		m_Scripts.DrawActions(panelContext);
+
+		// The second row: the search (the type chips and the view's mode are the assets').
+		UI::SearchField("ContentBrowser.ScriptSearch", m_ScriptSearch, "Search scripts", ImGui::GetFontSize() * 12.0f,
+			"Script files whose path or script classes contain every word");
+	}
+
 	void ContentBrowserPanel::DrawBreadcrumbs(EditorPanelContext& panelContext)
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
@@ -578,7 +608,7 @@ namespace Strata
 			}
 			else if (UI::LinkButton(id.c_str(), crumbs[index].second))
 			{
-				m_View.SetFolder(crumbs[index].first);
+				SetCurrentDirectory(crumbs[index].first);
 			}
 			AcceptDrops(panelContext, crumbs[index].first);
 		}
@@ -638,7 +668,8 @@ namespace Strata
 				ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_NoTreePushOnOpen;
 				if (!row.HasChildren)
 					flags |= ImGuiTreeNodeFlags_Leaf;
-				const bool current = row.Path == m_View.GetFolder();
+				// While the Scripts root shows, no asset folder is the one shown.
+				const bool current = !m_ShowingScripts && row.Path == m_View.GetFolder();
 				if (current)
 					flags |= ImGuiTreeNodeFlags_Selected;
 				ImGui::SetCursorPosX(ImGui::GetCursorPosX() + indent * static_cast<float>(row.Depth));
@@ -678,7 +709,23 @@ namespace Strata
 			m_Selected = UUID::Null();
 			m_SelectedFolder = *open;
 			m_Revealed = UUID::Null();
+			ShowScripts(false);
 		}
+	}
+
+	void ContentBrowserPanel::DrawScriptsRoot()
+	{
+		// A root of its own below the asset directory's tree: the script sources are no assets (they build into the module).
+		const ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_NoTreePushOnOpen
+			| (m_ShowingScripts ? ImGuiTreeNodeFlags_Selected : ImGuiTreeNodeFlags_None);
+		UI::PushSelectionColors(m_ShowingScripts);
+		ImGui::TreeNodeEx("##Scripts", flags, "%s  Scripts", Icons::FolderCode);
+		UI::PopSelectionColors();
+		UI::ItemProbe::Record("ContentBrowser.ScriptsRoot", true, 0, "Scripts");
+		if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+			ShowScripts(true);
+		if (UI::IsTooltipDue())
+			ImGui::SetTooltip("The project's script sources and the script classes they register");
 	}
 
 	void ContentBrowserPanel::DrawItems(EditorPanelContext& panelContext)
@@ -1054,6 +1101,8 @@ namespace Strata
 			if (EditorAssetManager* assets = context.GetAssetManager())
 				CreateMaterial(panelContext, *assets);
 		}
+		if (ImGui::MenuItem((std::string(Icons::FileCode) + "  New Script...").c_str(), nullptr, false, panelContext.Shell != nullptr))
+			panelContext.Shell->ShowNewScriptDialog();
 		ImGui::Separator();
 		if (ImGui::MenuItem((std::string(Icons::FileUp) + "  Import Files...").c_str()))
 		{
@@ -1073,6 +1122,13 @@ namespace Strata
 		// Only while the browser has the keyboard focus and no text field takes the keys.
 		if (!ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) || ImGui::GetIO().WantTextInput || ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId))
 			return;
+		// The script sources are no assets: Delete, F2 and Enter act on the asset selection, which does not show.
+		if (m_ShowingScripts)
+		{
+			if (ImGui::IsKeyPressed(ImGuiKey_Backspace))
+				ShowScripts(false);
+			return;
+		}
 		const AssetBrowserItem* selected = nullptr;
 		for (const AssetBrowserItem& item : m_View.GetItems())
 		{

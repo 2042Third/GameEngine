@@ -117,24 +117,37 @@ namespace Strata
 			"Streaming (asset memory per pool against its budget, loads, uploads, the assets), Performance (where the frames go, stage by "
 			"stage), Problems (the last script build's errors and warnings, the scripts' crash with where it happened), Activity (every "
 			"command the person, agents and scripts ran: editor.activity), Console, ContentBrowser, Hierarchy, Inspector, AssetInspector (the "
-			"Asset tab: the inspected asset, its settings and preview) or Viewport. Changes no scene data and records no undo; fails in an editor "
-			"without a window (--no-gpu or headless) and while the launcher shows (no project is open).",
-			CommandUtils::ObjectSchema({ { "panel", { { "type", "string" }, { "enum", panels }, { "description", "The panel to show" } } } }, { "panel" }),
+			"Asset tab: the inspected asset, its settings and preview) or Viewport; for the ContentBrowser, scripts: true shows its Scripts root "
+			"(the project's script files with their classes, as script.list lists them) and false its asset folders. Changes no scene data and "
+			"records no undo; fails in an editor without a window (--no-gpu or headless) and while the launcher shows (no project is open).",
+			CommandUtils::ObjectSchema({ { "panel", { { "type", "string" }, { "enum", panels }, { "description", "The panel to show" } } },
+				{ "scripts", CommandUtils::BoolSchema("ContentBrowser only: show its Scripts root (true) or its asset folders (false); "
+					"without it, the browser shows what it showed") } }, { "panel" }),
 			[this](EditorContext&, const nlohmann::json& parameters) -> EditorCommandResult
 			{
 				CommandArguments arguments(parameters);
 				const std::string panel = arguments.GetString("panel");
+				const std::optional<bool> scripts = arguments.Has("scripts") ? std::optional<bool>(arguments.GetBool("scripts", false)) : std::nullopt;
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				const EditorPanelDescriptor* descriptor = m_Panels.FindDescriptor(panel);
 				if (!descriptor || descriptor->Placement != EditorPanelPlacement::Docked)
 					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'panel': the editor has no panel '{}'", panel));
+				if (scripts && panel != EditorPanels::c_ContentBrowser)
+					return EditorCommandResult::InvalidParameters("Parameter 'scripts': only the ContentBrowser has a Scripts root");
 				if (m_Options.Headless)
 					return EditorCommandResult::Fail("This editor runs without a window: it has no panels to show");
 				if (IsLauncherShown())
 					return EditorCommandResult::Fail("No project is open: the editor shows its launcher instead of the panels. Open or create a project first.");
 				m_Panels.Focus(panel);
-				return EditorCommandResult::Ok({ { "panel", panel } });
+				nlohmann::json result = { { "panel", panel } };
+				if (scripts)
+				{
+					if (ContentBrowserPanel* browser = m_Panels.Get<ContentBrowserPanel>(EditorPanels::c_ContentBrowser))
+						browser->ShowScripts(*scripts);
+					result["scripts"] = *scripts;
+				}
+				return EditorCommandResult::Ok(std::move(result));
 			}, EditorCommandKind::Session });
 
 		m_Commands.Register({ "editor.showDialog",

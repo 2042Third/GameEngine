@@ -373,7 +373,8 @@ time), with `stageSum` (at most the frame), `untimed` (the rest of each frame) a
 person at the editor sees the same in the Performance panel (click the frame pill) and the streaming numbers of
 `asset.stats` in the Streaming panel (click the assets pill); `editor.showPanel {"panel": "Streaming"}` (or
 `"Performance"`, `"Console"`, `"Activity"`, ...) brings one to the front for them, also as the first command of a script
-(it fails while no project is open: the editor then shows its launcher instead of panels). `editor.showDialog {"dialog":
+(it fails while no project is open: the editor then shows its launcher instead of panels); `{"panel": "ContentBrowser",
+"scripts": true}` shows the browser's Scripts root, the script files you wrote with their classes. `editor.showDialog {"dialog":
 "export" | "newProject" | "openSample" | "recovery" | "about"}` opens a dialog of the window the same way ("recovery" lets the
 person choose what to recover or discard, instead of you choosing for them).
 

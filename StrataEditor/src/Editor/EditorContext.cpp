@@ -261,6 +261,7 @@ namespace Strata
 
 		CloseProject();
 		m_Project = project;
+		m_ProjectGeneration++;
 		Project::SetActive(m_Project);
 
 		// The editor camera and viewport settings continue where they were when the project was last closed.
@@ -373,6 +374,7 @@ namespace Strata
 			if (Project::GetActive() == m_Project)
 				Project::SetActive(nullptr);
 			m_Project.reset();
+			m_ProjectGeneration++;
 		}
 		if (activateBuiltinAssets)
 			ActivateBuiltinAssets();

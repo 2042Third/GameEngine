@@ -919,9 +919,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
     85% of it and Cinnabar beyond it or on failures; click to open the Streaming panel). The frame pill (`ms · FPS · J
     jobs`, jobs running or queued averaged over 60 frames) opens the Performance panel. Panels collect what the status bar
     shows about them in `OnUpdate`, which runs while they are closed. Widgets drawn every frame write tooltips that take
-    work (formatted statistics) only while they show (`UI::IsTooltipDue`). `editor.showPanel {panel}` (registered by
+    work (formatted statistics) only while they show (`UI::IsTooltipDue`). `editor.showPanel {panel, scripts?}` (registered by
     `EditorLayer`, like `editor.showDialog {dialog: "export" | "newProject" | "openSample" | "recovery" | "about"}`, the commands of the
-    window itself) opens a docked panel and brings it to the front, so agents can show the person what they look at; it
+    window itself) opens a docked panel and brings it to the front, so agents can show the person what they look at
+    (`scripts`: the Content Browser's Scripts root or its asset folders); it
     fails while the launcher shows. A panel asked for (`EditorPanelRegistry::Focus`)
     stays open through a layout reset and the saved open states read at the first frame, and is asked for again until its
     tab shows; while a modal dialog waits for the person it opens behind it (focusing it would close the dialog). Glyphs a font lacks show as its fallback glyph: draw color swatches as rectangles (the monospaced font has no
@@ -1073,8 +1074,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   Script... (`UI/ScriptDialogs`, also `EditorShell::ShowNewScriptDialog` for panels; it starts a build, as the Inspector
   offers the loaded module's classes), Open Scripts Folder, External Editor... (the program a command starts, and the
   editors found on the machine, `ExternalEditor::FindChoices`) and Show Problems. `UI/ScriptBrowser` is the view of the
-  script sources a panel draws (the Content
-  Browser's Scripts root once Content Browser v2 hosts it): the files with their classes, listed on an I/O thread when it
+  script sources a panel draws (the Content Browser's Scripts root, below the asset folders, with New Script... also in the
+  browser's New menu): the files with their classes, listed on an I/O thread when it
   is drawn and every second while it is, never while it is not (`ScriptSourceList`, whose version changes only with the
   files); its search takes every word in a path or a class name, a double click opens a file in the external editor, and
   `DrawActions` offers New Script... and Open in IDE (`CalcActionsWidth` to place them). The **Problems panel**
