@@ -988,22 +988,24 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   4.3 ms). Steps are sized by the queue (`GPUUploadQueue::PlanStep`) to what is left of the call's share of the frame:
   its upload bytes (`AssetFinalizeContext::UploadBudget`), its upload time (`UploadMsBudget`, from
   `AssetResidencyBudgets::UploadMsPerFrame`, 2 ms) and the time until the finalization deadline, at the speed of the
-  latest steps (measured: `GPUUploadQueueStats::BytesPerMs`), planned to end within nine tenths of the time left: a
-  step's speed strays from the average by about a tenth, so steps planned to the budget's end overshot it as often as
-  not (frames that filled their 2 ms took up to 2.18 ms). A step for which the pool has no idle staging of its size
+  latest steps (measured: `GPUUploadQueueStats::BytesPerMs`), keeping a tenth of the frame's upload time
+  (`AssetFinalizeContext::UploadMsFrameBudget`) and of the time until the deadline in reserve: a step's speed strays
+  from the average by a tenth and more, so steps planned to the budget's end overshot it as often as not (frames that
+  filled their 2 ms took up to 2.18 ms), and so did steps that each kept a share of what was left of the frame's time
+  (which still add up to its end: 1.99 to 2.07 ms). A step for which the pool has no idle staging of its size
   (`StagingPool::HasIdleBuffer`) creates the buffer first and writes fresh memory: it is planned with the time creation
   takes (`StagingCreateMs`: a slow creation counts at once and decays over the next ones; at most half the time left, so
   where creating is slow, as under the validation layers, steps still make progress and staging of their size comes
   about) and the speed of such steps (`ColdBytesPerMs`). Creating staging took from 0.03 to 1.1 ms in the stress sweeps,
   so planning without it let a frame's upload steps end up to 0.3 ms over their 2 ms. Steps are in whole granules (a
   row of blocks, and 64 KiB where a level has that much), at most `c_AssetUploadStepBytes` (4 MiB): no frame uploads
-  more than `UploadBytesPerFrame`, and its steps end within its time budgets but for a step that runs slower than
-  planned (a busy machine's memory bandwidth, a slow staging creation). Only the frame's first step (the frame's first
-  call, nothing uploaded in the frame yet) goes whatever the budgets say, one granule at least, so every frame makes
-  progress; a later call past the deadline does not even create its GPU resource. Before, steps were a fixed 4 MiB and a
-  frame's first was exempt from the deadline: one BC7 step cost up to 2 ms on its own. Texture and mesh steps also wait
-  for staging room (see Staging):
-  the frame's first step within the staging budget, the later ones within the budget less a step
+  more than `UploadBytesPerFrame`, and its steps end within nine tenths of its upload time but for a step that runs
+  slower than planned (a busy machine's memory bandwidth, a slow staging creation). Only the frame's first step (the
+  frame's first call, nothing uploaded in the frame yet) goes whatever the budgets say, one granule at least, so every
+  frame makes progress; a later call past the deadline does not even create its GPU resource. Before, steps were a fixed
+  4 MiB and a frame's first was exempt from the deadline: one BC7 step cost up to 2 ms on its own. Texture and mesh
+  steps also wait for staging room (see Staging): the frame's first step within the staging budget, the later ones
+  within the budget less a step
   (`AssetFinalizeContext::GetStagingRoom`), the step they leave for the next frame's first, so staging never exceeds the
   budget (a single step larger than all of it goes once nothing else is in flight). With the GPU keeping up, every
   frame's first step finds room, also without device frames; a frame whose staging is all still in flight waits for

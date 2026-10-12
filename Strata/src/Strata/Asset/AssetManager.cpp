@@ -934,6 +934,7 @@ namespace Strata
 		const float uploadMsBefore = uploadMs;
 		context.UploadBudget = budgets.UploadBytesPerFrame - std::min(uploadedBytes, budgets.UploadBytesPerFrame);
 		context.UploadMsBudget = std::max(0.0f, budgets.UploadMsPerFrame - uploadMs);
+		context.UploadMsFrameBudget = budgets.UploadMsPerFrame;
 		context.Deadline = start + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
 			std::chrono::duration<float, std::milli>(std::min(budgets.FinalizeMsPerFrame, 3600.0f * 1000.0f)));
 		context.StagingBytes = budgets.StagingBytes;
@@ -1114,6 +1115,7 @@ namespace Strata
 				{
 					context.UploadBudget = budgets.UploadBytesPerFrame - std::min(uploadedBytes, budgets.UploadBytesPerFrame);
 					context.UploadMsBudget = std::max(0.0f, budgets.UploadMsPerFrame - uploadMs);
+					context.UploadMsFrameBudget = budgets.UploadMsPerFrame;
 					context.Deadline = deadline;
 					context.StagingBytes = budgets.StagingBytes;
 				}

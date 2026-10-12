@@ -92,6 +92,10 @@ namespace Strata
 		// the frame's earlier calls').
 		float UploadMsBudget = std::numeric_limits<float>::infinity();
 		float* UploadMs = nullptr;
+		// The frame's whole upload time (UploadMsPerFrame), of which UploadMsBudget is what is left for the call: steps keep a
+		// share of it in reserve for steps that run slower than planned (GPUUploadQueue::PlanStep). Infinite: the call's
+		// UploadMsBudget is the frame's.
+		float UploadMsFrameBudget = std::numeric_limits<float>::infinity();
 		// The asset arrives as a dependency prefetch nobody has requested (see AssetManagerBase::GetDependencies): it must not
 		// request what it references, because prefetches do not chain. The manager prefetches its dependencies once
 		// something requests it, and whatever uses them requests them.

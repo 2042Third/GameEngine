@@ -409,13 +409,13 @@ TEST_SUITE("GPU.UploadQueue")
 		GPUUploadQueueStats stats = queue.GetStats();
 		REQUIRE(stats.BytesPerMs > 0.0f);
 		REQUIRE(stats.ColdBytesPerMs > 0.0f);
-		// Steps are planned to end within nine tenths of the time left.
+		// Steps keep a tenth of the frame's upload time in reserve (without UploadMsFrameBudget the call's is the frame's).
 		const auto plannedFor = [&](double milliseconds, float bytesPerMs)
 		{
 			const uint64_t bytes = std::min(GPUUploadQueue::c_MaxStepBytes, static_cast<uint64_t>(std::max(0.0, milliseconds) * static_cast<double>(bytesPerMs)));
 			return std::max(c_Granule, bytes / c_Granule * c_Granule); // The frame's first step: one granule at least
 		};
-		constexpr double c_Planned = 0.25 * 0.9;
+		constexpr double c_Planned = 0.25 - 0.1 * 0.25;
 		const uint64_t warm = plannedFor(c_Planned, stats.BytesPerMs);
 		REQUIRE_FALSE(pool.HasIdleBuffer(std::bit_floor(warm)));
 		const double creationMs = std::min(static_cast<double>(stats.StagingCreateMs), c_Planned * 0.5); // At most half the time left
@@ -429,6 +429,18 @@ TEST_SUITE("GPU.UploadQueue")
 		REQUIRE(plannedFor(c_Planned, stats.BytesPerMs) == warm);
 		CHECK(queue.PlanStep(context, 0, 0.0f, c_Wanted, c_Granule) == warm);
 		CHECK(queue.PlanStep(context, c_Granule, 0.25f, c_Wanted, c_Granule) == 0); // Spent: nothing for a later step of the call...
+
+		// A later call of a frame keeps the reserve of the frame's whole upload time, not a share of what is left of it: steps
+		// planned within a share of what was left still added up to the budget's end. Of a 2 ms frame, 0.425 ms left plan
+		// for 0.225 ms, and 0.15 ms left for nothing.
+		context.UploadMsFrameBudget = 2.0f;
+		context.UploadMsBudget = 0.425f;
+		CHECK(queue.PlanStep(context, 0, 0.0f, c_Wanted, c_Granule) == warm);
+		context.UploadMsBudget = 0.15f;
+		frameUploaded = 1; // The frame uploaded already: no granule for its first step
+		CHECK(queue.PlanStep(context, 0, 0.0f, c_Wanted, c_Granule) == 0);
+		frameUploaded = 0;
+		context.UploadMsFrameBudget = std::numeric_limits<float>::infinity();
 
 		// ... but the frame's first step goes, one granule: every frame makes progress.
 		context.UploadMsBudget = 0.0f;

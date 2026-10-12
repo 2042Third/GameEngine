@@ -69,6 +69,7 @@ namespace
 		uint64_t Frame = 0;           // The manager's frame
 		bool FirstOfFrame = false;
 		uint64_t UploadBudget = 0;
+		float UploadMsFrameBudget = 0.0f;
 		uint64_t UploadedBefore = 0;  // *UploadedBytes when the call began
 		uint32_t Steps = 0;           // Steps the call took
 		bool HadUpload = false;       // It was given the manager's upload context, with a batch open
@@ -96,6 +97,7 @@ namespace
 			call.Frame = context.Manager ? context.Manager->GetFrameIndex() : 0;
 			call.FirstOfFrame = context.FirstOfFrame;
 			call.UploadBudget = context.UploadBudget;
+			call.UploadMsFrameBudget = context.UploadMsFrameBudget;
 			call.UploadedBefore = context.UploadedBytes ? *context.UploadedBytes : 0;
 			call.HadUpload = upload && upload->IsOpen();
 
@@ -258,7 +260,8 @@ TEST_SUITE("Asset.Finalize")
 		CHECK(upload->SubmittedSteps == 9);
 
 		// Every call had the batch open; only the first call of a frame was its first; UploadedBytes held what the frame's
-		// earlier calls uploaded, and the budget what was left of the frame's.
+		// earlier calls uploaded, and the budget what was left of the frame's; the frame's whole upload time came along (steps
+		// keep a share of it in reserve).
 		REQUIRE(calls.size() == 6);
 		uint64_t frame = 0;
 		uint64_t uploadedInFrame = 0;
@@ -275,6 +278,7 @@ TEST_SUITE("Asset.Finalize")
 			CHECK(call.FirstOfFrame == newFrame);
 			CHECK(call.UploadedBefore == uploadedInFrame);
 			CHECK(call.UploadBudget == budgets.UploadBytesPerFrame - uploadedInFrame);
+			CHECK(call.UploadMsFrameBudget == budgets.UploadMsPerFrame);
 			uploadedInFrame += call.Steps * c_MB;
 		}
 		CHECK(manager->GetStats().Resident.GpuTextures == 9 * c_MB);
