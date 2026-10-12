@@ -1,7 +1,11 @@
 #include <doctest/doctest.h>
 
+#include "Animation/SkinnedGltf.h"
+
+#include "Strata/Asset/AssetTypes.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/GltfImporter.h"
+#include "Strata/Core/Base64.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Hash.h"
 #include "Strata/Core/JsonUtils.h"
@@ -22,6 +26,9 @@
 #include <atomic>
 #include <cstring>
 #include <functional>
+#include <map>
+#include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -479,6 +486,110 @@ namespace
 		const std::vector<glm::vec3>& positions = mesh.GetPositions();
 		const std::vector<uint32_t>& indices = mesh.GetIndices();
 		return glm::normalize(glm::cross(positions[indices[corner + 1]] - positions[indices[corner]], positions[indices[corner + 2]] - positions[indices[corner]]));
+	}
+
+	// The bytes of a document's only buffer, taken out of its data URI (the buffer then has none).
+	std::vector<uint8_t> TakeEmbeddedBuffer(nlohmann::json& document)
+	{
+		constexpr std::string_view c_Prefix = "data:application/octet-stream;base64,";
+		REQUIRE(document["buffers"].size() == 1);
+		const std::string uri = document["buffers"][0]["uri"].get<std::string>();
+		REQUIRE(uri.starts_with(c_Prefix));
+		std::optional<std::vector<uint8_t>> bytes = Base64::Decode(std::string_view(uri).substr(c_Prefix.size()));
+		REQUIRE(bytes);
+		document["buffers"][0].erase("uri");
+		return std::move(*bytes);
+	}
+
+	// The document as a .glb whose every buffer view is compressed with EXT_meshopt_compression (vertex attributes, skin
+	// influences, inverse bind matrices and animation keys as ATTRIBUTES of their element's size, the indices as
+	// INDICES), its data in the binary chunk and the views over a fallback buffer without data.
+	std::vector<uint8_t> CompressWithMeshopt(nlohmann::json document)
+	{
+		const std::vector<uint8_t> buffer = TakeEmbeddedBuffer(document);
+		std::set<size_t> indexViews;
+		for (const nlohmann::json& mesh : document["meshes"])
+		{
+			for (const nlohmann::json& primitive : mesh["primitives"])
+			{
+				if (primitive.contains("indices"))
+					indexViews.insert(document["accessors"][primitive["indices"].get<size_t>()]["bufferView"].get<size_t>());
+			}
+		}
+		std::map<size_t, size_t> elementSizes; // Per view: the size of its accessor's elements
+		for (const nlohmann::json& accessor : document["accessors"])
+		{
+			const int componentType = accessor["componentType"].get<int>();
+			const size_t componentSize = componentType == 5120 || componentType == 5121 ? 1 : (componentType == 5122 || componentType == 5123 ? 2 : 4);
+			const std::string type = accessor["type"].get<std::string>();
+			const size_t components = type == "SCALAR" ? 1 : type == "VEC2" ? 2 : type == "VEC3" ? 3 : type == "VEC4" ? 4 : type == "MAT4" ? 16 : 0;
+			REQUIRE(components != 0);
+			elementSizes[accessor["bufferView"].get<size_t>()] = componentSize * components;
+		}
+
+		std::vector<uint8_t> binary;
+		for (size_t index = 0; index < document["bufferViews"].size(); index++)
+		{
+			nlohmann::json& view = document["bufferViews"][index];
+			const size_t offset = view["byteOffset"].get<size_t>();
+			const size_t length = view["byteLength"].get<size_t>();
+			REQUIRE(offset + length <= buffer.size());
+			std::vector<uint8_t> encoded;
+			nlohmann::json extension;
+			if (indexViews.contains(index))
+			{
+				// Unsigned short indices in INDICES mode, which keeps them as they are: TRIANGLES mode may start a triangle at another
+				// of its corners (the same triangle, other bytes; CreateMeshoptGlb's models test that mode).
+				std::vector<uint32_t> indices(length / 2);
+				for (size_t position = 0; position < indices.size(); position++)
+					indices[position] = static_cast<uint32_t>(buffer[offset + position * 2]) | (static_cast<uint32_t>(buffer[offset + position * 2 + 1]) << 8);
+				REQUIRE_FALSE(indices.empty());
+				const size_t vertexCount = *std::max_element(indices.begin(), indices.end()) + 1;
+				encoded.resize(meshopt_encodeIndexSequenceBound(indices.size(), vertexCount));
+				encoded.resize(meshopt_encodeIndexSequence(encoded.data(), encoded.size(), indices.data(), indices.size()));
+				extension = { { "byteStride", 2 }, { "mode", "INDICES" }, { "count", indices.size() } };
+			}
+			else
+			{
+				const size_t stride = elementSizes.at(index);
+				REQUIRE(stride % 4 == 0);
+				REQUIRE(length % stride == 0);
+				const size_t count = length / stride;
+				encoded.resize(meshopt_encodeVertexBufferBound(count, stride));
+				encoded.resize(meshopt_encodeVertexBuffer(encoded.data(), encoded.size(), buffer.data() + offset, count, stride));
+				extension = { { "byteStride", stride }, { "mode", "ATTRIBUTES" }, { "count", count } };
+			}
+			REQUIRE_FALSE(encoded.empty());
+			extension["buffer"] = 0;
+			extension["byteOffset"] = binary.size();
+			extension["byteLength"] = encoded.size();
+			view["buffer"] = 1;
+			view["extensions"] = { { "EXT_meshopt_compression", extension } };
+			binary.insert(binary.end(), encoded.begin(), encoded.end());
+			while (binary.size() % 4 != 0)
+				binary.push_back(0);
+		}
+		document["buffers"] = nlohmann::json::array({ { { "byteLength", binary.size() } },
+			{ { "byteLength", buffer.size() }, { "extensions", { { "EXT_meshopt_compression", { { "fallback", true } } } } } } });
+		document["extensionsUsed"] = { "EXT_meshopt_compression" };
+		document["extensionsRequired"] = { "EXT_meshopt_compression" };
+		return MakeGlb(document, binary);
+	}
+
+	// Two imports made the same assets: the model and every sub-asset, key, type and stored bytes.
+	void CheckSameImport(const ImportOutput& expected, const ImportOutput& actual)
+	{
+		CHECK(actual.Result.Data == expected.Result.Data);
+		REQUIRE(actual.Result.SubAssets.size() == expected.Result.SubAssets.size());
+		for (size_t index = 0; index < expected.Result.SubAssets.size(); index++)
+		{
+			const ImportedSubAsset& wanted = expected.Result.SubAssets[index];
+			const ImportedSubAsset& found = actual.Result.SubAssets[index];
+			CAPTURE(wanted.Key);
+			CHECK(found.Key == wanted.Key);
+			CHECK(found.Type == wanted.Type);
+			CHECK(found.Data == wanted.Data);
+		}
 	}
 
 }
@@ -1168,6 +1279,52 @@ TEST_SUITE("Asset.Gltf")
 		const ImportOutput forbidden = RunImport(assets, "ForbiddenFilter.glb", CreateFilteredMeshoptGlb(4, true));
 		CHECK_FALSE(forbidden.Success);
 		CHECK(forbidden.Error.find("does not allow") != std::string::npos);
+	}
+
+	TEST_CASE("Skinned, animated models import alike from an external buffer and compressed with EXT_meshopt_compression")
+	{
+		// Each form in a project of its own under the same name: the model's root entity is named after the file.
+		const ImportOutput embedded = RunImport(Tests::CreateTemporaryDirectory("GltfSkinEmbedded"), "Arm.gltf", Tests::CreateSkinnedArmGltf());
+		REQUIRE_MESSAGE(embedded.Success, embedded.Error);
+		CHECK(embedded.Result.Warnings.empty());
+		const std::vector<AssetType> types = { AssetType::Skeleton, AssetType::AnimationClip, AssetType::Mesh };
+		for (AssetType type : types)
+		{
+			CAPTURE(AssetTypeToString(type));
+			CHECK(std::any_of(embedded.Result.SubAssets.begin(), embedded.Result.SubAssets.end(), [type](const ImportedSubAsset& subAsset) { return subAsset.Type == type; }));
+		}
+
+		// The buffer in a file beside the model: named as the file the model reads (an import from outside the project copies
+		// it along), read as a dependency, and the skeleton, clips and skinned mesh are the embedded model's.
+		nlohmann::json document = Tests::CreateSkinnedArmDocument();
+		const std::vector<uint8_t> buffer = TakeEmbeddedBuffer(document);
+		document["buffers"][0]["uri"] = "Arm%20Data.bin";
+		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfSkinExternal");
+		REQUIRE(FileSystem::WriteBytes(assets / "Arm Data.bin", buffer));
+		const std::vector<uint8_t> model = ToBytes(document);
+		GltfImporter importer;
+		std::vector<std::string> files;
+		std::string error;
+		REQUIRE_MESSAGE(importer.FindExternalFiles(model, files, &error), error);
+		CHECK(files == std::vector<std::string> { "Arm Data.bin" });
+		const ImportOutput external = RunImport(assets, "Arm.gltf", model);
+		REQUIRE_MESSAGE(external.Success, external.Error);
+		CHECK(external.Result.Warnings.empty());
+		REQUIRE(external.Result.Dependencies.size() == 1);
+		CHECK(external.Result.Dependencies[0].Path == (assets / "Arm Data.bin").lexically_normal());
+		CheckSameImport(embedded, external);
+
+		// Every view compressed, the skin's influences, inverse bind matrices and the animations' keys included: decoded
+		// before anything reads them, so the import is the same again, and a compressed file reads nothing besides itself.
+		const std::vector<uint8_t> compressed = CompressWithMeshopt(Tests::CreateSkinnedArmDocument());
+		files.clear();
+		REQUIRE_MESSAGE(importer.FindExternalFiles(compressed, files, &error), error);
+		CHECK(files.empty());
+		const ImportOutput decoded = RunImport(Tests::CreateTemporaryDirectory("GltfSkinCompressed"), "Arm.glb", compressed);
+		REQUIRE_MESSAGE(decoded.Success, decoded.Error);
+		CHECK(decoded.Result.Warnings.empty());
+		CHECK(decoded.Result.Dependencies.empty());
+		CheckSameImport(embedded, decoded);
 	}
 
 	TEST_CASE("Models name the files they read besides themselves")
