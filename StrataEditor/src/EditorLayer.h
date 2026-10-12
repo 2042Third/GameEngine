@@ -189,6 +189,9 @@ namespace Strata
 		// The status bar's pills of automation and scripts; true when the pill was clicked to show the Console.
 		bool DrawAutomationPill();
 		bool DrawScriptsPill();
+		// The text a status bar pill shows: `text`, or `compact` (when given) while the pills' full texts do not fit side by
+		// side; counts the full text's width for that decision. Returns one of the two views.
+		std::string_view StatusPillText(const char* icon, std::string_view text, std::string_view compact = {});
 		// Tool panels (Streaming, Performance) opened in a layout saved before they existed join the Console's dock node.
 		void DockNewToolPanels();
 		// The question about unsaved changes (RequestDiscardChanges), at the popup level it is called at: over the whole window,
@@ -253,6 +256,8 @@ namespace Strata
 		bool m_ScreenshotRequested = false;
 		bool m_RecoveryDialogWasOpen = false; // Closed with an offer left: a toast says where to find it
 		float m_StatusBarHeight = 0.0f;       // Of the last frame, which the toasts stay above
+		bool m_StatusBarCompact = false;      // The pills show their compact texts (StatusPillText)
+		float m_StatusBarFullWidth = 0.0f;    // What the pills' full texts take side by side, summed as they are drawn
 
 		std::function<void()> m_PendingDiscardAction;
 		// The undo stack's version (UndoStack::GetVersion) the question was asked for: Don't Save discards those changes
@@ -271,6 +276,7 @@ namespace Strata
 		std::string m_AutomationError; // Why automation did not start (when it was asked for)
 		// The automation pill's text, made again only when the connected clients change (EditorAutomation::GetClientsVersion).
 		std::string m_AutomationPillText;
+		std::string m_AutomationPillCompactText;
 		std::vector<RpcClientInfo> m_AutomationClients;
 		uint64_t m_AutomationPillVersion = UINT64_MAX;
 		uint16_t m_AutomationPillPort = 0;

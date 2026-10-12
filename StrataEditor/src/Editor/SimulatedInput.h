@@ -69,6 +69,8 @@ namespace Strata
 		// The value a hold keeps a gamepad axis at (`code` from MakeGamepadCode), 0 without one.
 		float GetAxisValue(uint16_t code) const;
 		bool HasHolds() const { return !m_Holds.empty(); }
+		// How many controls the holds keep down: the ones DescribeHolds names.
+		size_t GetHeldCount() const;
 		// "Space, W, Mouse Left, Gamepad 1 A, Gamepad 1 LeftX 0.50": what the holds keep down, for people (the editor's
 		// status bar; gamepads counted from 1). Empty without holds.
 		std::string DescribeHolds() const;

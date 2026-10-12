@@ -50,6 +50,9 @@ namespace Strata
 		constexpr float c_HierarchyWidth = 0.15f;
 		constexpr float c_InspectorWidth = 0.20f;
 		constexpr float c_BottomHeight = 0.22f;
+		// The status bar's pills grow back from their compact texts once the full ones fit with this margin, in font sizes, so
+		// that a frame time's digits cannot make them flicker between the two.
+		constexpr float c_StatusBarMarginFontSizes = 2.0f;
 
 		// Fields of the snap steps popup, in text heights.
 		constexpr float c_SnapFieldWidthInFontSizes = 8.0f;
@@ -1519,7 +1522,19 @@ namespace Strata
 		const char* stateText = paused ? "Paused" : (state == SceneState::Play ? "Playing" : (state == SceneState::Simulate ? "Simulating" : "Editing"));
 		const ImVec4& stateColor = paused ? colors.PlayState.Paused
 			: (state == SceneState::Play ? colors.PlayState.Play : (state == SceneState::Simulate ? colors.PlayState.Simulate : colors.PlayState.Edit));
-		UI::Pill("Status.PlayState", stateIcon, stateText, stateColor, "The scene's state: changes made while it runs are discarded when it stops");
+
+		// Every stream of work has a pill, and in a laptop-sized window at 150% their full texts do not all fit side by side:
+		// then the pills show compact texts (the details go to their tooltips). Decided from the width the full texts took in
+		// the previous frame; they grow back once the full texts fit with a margin.
+		const float available = ImGui::GetContentRegionAvail().x;
+		if (m_StatusBarFullWidth > available)
+			m_StatusBarCompact = true;
+		else if (m_StatusBarFullWidth <= available - ImGui::GetFontSize() * c_StatusBarMarginFontSizes)
+			m_StatusBarCompact = false;
+		m_StatusBarFullWidth = 0.0f;
+
+		UI::Pill("Status.PlayState", stateIcon, StatusPillText(stateIcon, stateText), stateColor,
+			"The scene's state: changes made while it runs are discarded when it stops");
 
 		ImGui::SameLine();
 		DrawFramePill();
@@ -1534,12 +1549,17 @@ namespace Strata
 		if (const SimulatedInput& simulated = m_Context.GetSimulatedInput(); simulated.HasHolds())
 		{
 			ImGui::SameLine();
-			if (UI::Pill("Status.InputHolds", Icons::Keyboard, "Holds " + simulated.DescribeHolds(), colors.Warning,
-				"Keys and mouse buttons a tool holds down in the running game (input.* commands). They stay down until the tool releases "
-				"them, also after it disconnected, or until play stops. Click to release them all."))
+			const std::string held = simulated.DescribeHolds();
+			const std::string text = "Holds " + held;
+			const std::string compact = fmt::format("{} held", simulated.GetHeldCount());
+			const bool clicked = UI::Pill("Status.InputHolds", Icons::Keyboard, StatusPillText(Icons::Keyboard, text, compact), colors.Warning);
+			if (UI::IsTooltipDue())
 			{
-				RunEditorCommand(m_Context, m_Commands, "input.releaseAll", { { "wait", false } });
+				ImGui::SetTooltip("Held: %s.\nKeys and mouse buttons a tool holds down in the running game (input.* commands). They stay down until "
+					"the tool releases them, also after it disconnected, or until play stops. Click to release them all.", held.c_str());
 			}
+			if (clicked)
+				RunEditorCommand(m_Context, m_Commands, "input.releaseAll", { { "wait", false } });
 		}
 
 		// Unread errors.
@@ -1547,11 +1567,20 @@ namespace Strata
 		if (const uint32_t errors = console ? console->GetUnreadErrors() : 0; errors > 0)
 		{
 			ImGui::SameLine();
-			showConsole |= UI::Pill("Status.Errors", Icons::CircleAlert, fmt::format("{} {}", errors, errors == 1 ? "error" : "errors"), colors.Error,
+			const std::string text = fmt::format("{} {}", errors, errors == 1 ? "error" : "errors");
+			showConsole |= UI::Pill("Status.Errors", Icons::CircleAlert, StatusPillText(Icons::CircleAlert, text), colors.Error,
 				"Errors logged since the Console was last viewed: click to open it");
 		}
 		if (showConsole)
 			m_Panels.Focus(EditorPanels::c_Console);
+	}
+
+	std::string_view EditorLayer::StatusPillText(const char* icon, std::string_view text, std::string_view compact)
+	{
+		if (m_StatusBarFullWidth > 0.0f)
+			m_StatusBarFullWidth += ImGui::GetStyle().ItemSpacing.x;
+		m_StatusBarFullWidth += UI::CalcPillWidth(icon, text);
+		return m_StatusBarCompact && !compact.empty() ? compact : text;
 	}
 
 	void EditorLayer::DrawFramePill()
@@ -1559,7 +1588,8 @@ namespace Strata
 		// Frame time: what a frame takes to run, not the interval the idle frame rate cap stretches it to; then the jobs the
 		// worker, I/O and background threads have in hand (averaged over the last second, so the count does not flicker).
 		const PerformancePanel* performance = m_Panels.Get<PerformancePanel>(EditorPanels::c_Performance);
-		std::string text = fmt::format("{:.1f} ms{}{:.0f} FPS", m_FrameStats.WorkMilliseconds, c_Separator, m_FrameStats.FramesPerSecond);
+		const std::string compact = fmt::format("{:.1f} ms{}{:.0f} FPS", m_FrameStats.WorkMilliseconds, c_Separator, m_FrameStats.FramesPerSecond);
+		std::string text = compact;
 		if (performance)
 		{
 			const long jobs = std::lround(performance->GetAverageJobsInFlight());
@@ -1567,7 +1597,7 @@ namespace Strata
 		}
 		if (m_FrameStats.Idle)
 			text += std::string(c_Separator) + "idle";
-		const bool clicked = UI::Pill("Status.Frame", Icons::Gauge, text, UI::GetThemeColors().TextSecondary);
+		const bool clicked = UI::Pill("Status.Frame", Icons::Gauge, StatusPillText(Icons::Gauge, text, compact), UI::GetThemeColors().TextSecondary);
 		// Written only while it shows: the status bar is drawn every frame.
 		if (UI::IsTooltipDue())
 		{
@@ -1604,21 +1634,23 @@ namespace Strata
 			memory = fmt::format("{} {:.0f}/{:.0f} MB", GetMemoryPoolShortName(*shownPool), static_cast<double>(GetPoolBytes(stats.Resident, *shownPool)) / c_BytesPerMB,
 				static_cast<double>(stats.Budgets.GetPoolBudget(*shownPool)) / c_BytesPerMB);
 		}
-		std::string text = fmt::format("{} ready{}{} streaming{}{}", stats.LoadedAssets, c_Separator, stats.LoadingAssets, c_Separator, memory);
+		// Compact, without the memory (the tooltip lists every pool; the color still says how full the budgets are).
+		std::string compact = fmt::format("{} ready{}{} streaming", stats.LoadedAssets, c_Separator, stats.LoadingAssets);
 		// Imports in the background (a project opened with assets to import): their assets stream in once they finish.
 		const uint32_t importing = m_Context.GetAssetManager()->GetPendingImportCount();
 		if (importing > 0)
-			text = fmt::format("{} importing{}{}", importing, c_Separator, text);
+			compact = fmt::format("{} importing{}{}", importing, c_Separator, compact);
 		// A scene being opened (scene.open, a project's start scene) loads with everything it uses: the largest load while it
 		// lasts. Its progress counts its document as it is read, then what it uses in bytes.
 		if (m_Context.IsSceneLoading())
-			text = fmt::format("Opening scene {:.0f}%{}{}", std::floor(m_Context.GetSceneLoadStatus().Progress * 100.0f), c_Separator, text);
+			compact = fmt::format("Opening scene {:.0f}%{}{}", std::floor(m_Context.GetSceneLoadStatus().Progress * 100.0f), c_Separator, compact);
+		const std::string text = compact + c_Separator + memory;
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		// Failures matter most; then how full the budgets are (a comfortable budget is no news).
 		const ImVec4& color = stats.FailedAssets > 0 ? colors.Error
 			: (pressure == BudgetPressure::High || pressure == BudgetPressure::Over ? GetBudgetPressureColor(pressure) : colors.TextSecondary);
 		ImGui::SameLine();
-		const bool clicked = UI::Pill("Status.Assets", Icons::Package, text, color);
+		const bool clicked = UI::Pill("Status.Assets", Icons::Package, StatusPillText(Icons::Package, text, compact), color);
 		// Written only while it shows: the status bar is drawn every frame.
 		if (UI::IsTooltipDue())
 		{
@@ -1685,14 +1717,25 @@ namespace Strata
 				m_AutomationClients = m_Automation.GetClients();
 				const auto named = std::find_if(m_AutomationClients.begin(), m_AutomationClients.end(), [](const RpcClientInfo& client) { return !client.Name.empty(); });
 				const std::string name = named != m_AutomationClients.end() ? fmt::format("{}{}", c_Separator, named->Name) : std::string();
+				// Compact: who, without the port and the words around it (the tooltip has them).
 				if (m_AutomationClients.empty())
+				{
 					m_AutomationPillText = fmt::format("port {}{}no agent", m_AutomationPillPort, c_Separator);
+					m_AutomationPillCompactText = "No agent";
+				}
 				else if (m_AutomationClients.size() == 1)
+				{
 					m_AutomationPillText = "Agent connected" + name;
+					m_AutomationPillCompactText = named != m_AutomationClients.end() ? named->Name : m_AutomationPillText;
+				}
 				else
+				{
 					m_AutomationPillText = fmt::format("{} agents connected{}", m_AutomationClients.size(), name);
+					m_AutomationPillCompactText = fmt::format("{} agents", m_AutomationClients.size());
+				}
 			}
-			UI::Pill("Status.Automation", Icons::Bot, m_AutomationPillText, m_AutomationClients.empty() ? colors.TextSecondary : colors.Info);
+			UI::Pill("Status.Automation", Icons::Bot, StatusPillText(Icons::Bot, m_AutomationPillText, m_AutomationPillCompactText),
+				m_AutomationClients.empty() ? colors.TextSecondary : colors.Info);
 			if (UI::IsTooltipDue())
 			{
 				std::string tooltip = fmt::format("Tools and AI agents control this editor through StrataCLI (or its MCP server, StrataCLI mcp), which "
@@ -1710,13 +1753,14 @@ namespace Strata
 		}
 		if (!m_Options.EnableAutomation)
 		{
-			UI::Pill("Status.Automation", Icons::Bot, "Automation off", colors.TextSecondary, "Started with --no-automation: tools cannot control this editor");
+			UI::Pill("Status.Automation", Icons::Bot, StatusPillText(Icons::Bot, "Automation off"), colors.TextSecondary,
+				"Started with --no-automation: tools cannot control this editor");
 			return false;
 		}
 		// Asked for, but it could not start (a taken --automation-port, a session file that cannot be written).
 		const std::string tooltip = fmt::format("Automation could not start, so tools cannot control this editor: {}\nClick to open the Console.",
 			m_AutomationError.empty() ? std::string("see the Console") : m_AutomationError);
-		return UI::Pill("Status.Automation", Icons::Bot, "Automation failed", colors.Error, tooltip.c_str());
+		return UI::Pill("Status.Automation", Icons::Bot, StatusPillText(Icons::Bot, "Automation failed"), colors.Error, tooltip.c_str());
 	}
 
 	bool EditorLayer::DrawScriptsPill()
@@ -1728,8 +1772,10 @@ namespace Strata
 		{
 			// Clicking cancels: a build Play waits for, too (Play then does not start).
 			const bool forPlay = m_Context.GetPlayBuildID() == builder.GetCurrentID();
-			if (UI::Pill("Status.Scripts", Icons::LoaderCircle, fmt::format("{} {:.0f} s", forPlay ? "Building to play" : "Building", builder.GetElapsedSeconds()),
-				colors.Info, forPlay ? "The scripts changed: they build before the game plays (the output goes to the Console). Click to cancel."
+			const std::string compact = fmt::format("Building {:.0f} s", builder.GetElapsedSeconds());
+			const std::string text = forPlay ? fmt::format("Building to play {:.0f} s", builder.GetElapsedSeconds()) : compact;
+			if (UI::Pill("Status.Scripts", Icons::LoaderCircle, StatusPillText(Icons::LoaderCircle, text, compact), colors.Info,
+				forPlay ? "The scripts changed: they build before the game plays (the output goes to the Console). Click to cancel."
 				: "The project's scripts are being built (the output goes to the Console). Click to cancel."))
 			{
 				m_Context.CancelScriptBuild();
@@ -1738,7 +1784,7 @@ namespace Strata
 		}
 		if (engine && engine->IsFaulted())
 		{
-			if (UI::Pill("Status.Scripts", Icons::CircleAlert, "Scripts crashed", colors.Error,
+			if (UI::Pill("Status.Scripts", Icons::CircleAlert, StatusPillText(Icons::CircleAlert, "Scripts crashed"), colors.Error,
 				"The scripts crashed: rebuild or reload them. Click to see where (the Problems panel)."))
 			{
 				m_Panels.Focus(EditorPanels::c_Problems);
@@ -1748,15 +1794,19 @@ namespace Strata
 		// A build someone cancelled failed at nothing: the pill goes back to what the module is.
 		if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success && !builder.GetLastResult().Cancelled)
 		{
-			if (UI::Pill("Status.Scripts", Icons::CircleAlert, "Build failed", colors.Error, "The last script build failed. Click to see its errors (the Problems panel)."))
+			if (UI::Pill("Status.Scripts", Icons::CircleAlert, StatusPillText(Icons::CircleAlert, "Build failed"), colors.Error,
+				"The last script build failed. Click to see its errors (the Problems panel)."))
 				m_Panels.Focus(EditorPanels::c_Problems);
 			return false;
 		}
 		if (engine && engine->IsModuleLoaded())
 		{
 			const size_t classes = engine->GetClasses().size();
-			const std::string text = fmt::format("{}{}{} {}", engine->GetModuleName(), c_Separator, classes, classes == 1 ? "class" : "classes");
-			UI::Pill("Status.Scripts", Icons::FileCode, text, colors.TextSecondary, "The loaded script module");
+			const std::string compact = fmt::format("{} {}", classes, classes == 1 ? "class" : "classes");
+			const std::string text = engine->GetModuleName() + c_Separator + compact;
+			UI::Pill("Status.Scripts", Icons::FileCode, StatusPillText(Icons::FileCode, text, compact), colors.TextSecondary);
+			if (UI::IsTooltipDue())
+				ImGui::SetTooltip("The loaded script module, %s: %s", engine->GetModuleName().c_str(), compact.c_str());
 			return false;
 		}
 		// The project has scripts that its scenes use but no module runs them: never built here (e.g. a fresh copy of a sample),
@@ -1764,7 +1814,7 @@ namespace Strata
 		// ask for a build.
 		if (HasScriptBuild() && m_Context.DoScenesUseScripts())
 		{
-			if (UI::Pill("Status.Scripts", Icons::Hammer, "Scripts not built", colors.Warning,
+			if (UI::Pill("Status.Scripts", Icons::Hammer, StatusPillText(Icons::Hammer, "Scripts not built"), colors.Warning,
 				"The project has scripts, but no script module is loaded: they are not built yet, or their module could not be loaded "
 				"(see the Console). Click to build them (Ctrl+B)."))
 			{
@@ -1774,11 +1824,11 @@ namespace Strata
 		}
 		if (HasScriptBuild())
 		{
-			UI::Pill("Status.Scripts", Icons::FileCode, "Scripts unused", colors.TextSecondary,
+			UI::Pill("Status.Scripts", Icons::FileCode, StatusPillText(Icons::FileCode, "Scripts unused"), colors.TextSecondary,
 				"The project has scripts, but no scene uses one yet: add a Script component to an entity (Play builds them first)");
 			return false;
 		}
-		UI::Pill("Status.Scripts", Icons::FileCode, "No scripts", colors.TextSecondary,
+		UI::Pill("Status.Scripts", Icons::FileCode, StatusPillText(Icons::FileCode, "No scripts"), colors.TextSecondary,
 			m_Context.HasProject() ? "The project has no scripts (Scripts > New Script... adds one)" : "No project is open");
 		return false;
 	}

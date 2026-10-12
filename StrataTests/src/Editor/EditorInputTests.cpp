@@ -421,12 +421,15 @@ TEST_SUITE("Editor.Input")
 		const SimulatedInput& simulated = harness.Context.GetSimulatedInput();
 		CHECK_FALSE(simulated.HasHolds());
 		CHECK(simulated.DescribeHolds().empty());
+		CHECK(simulated.GetHeldCount() == 0);
 
 		harness.Run("input.key", { { "key", "W" }, { "action", "press" }, { "wait", false } });
 		harness.Run("input.key", { { "key", "Space" }, { "frames", 100 }, { "wait", false } });
 		harness.Run("input.mouseButton", { { "button", "Left" }, { "action", "press" }, { "wait", false } });
 		CHECK(simulated.HasHolds());
 		CHECK(simulated.DescribeHolds() == "Space, W, Mouse Left");
+		// What the status bar's compact pill counts.
+		CHECK(simulated.GetHeldCount() == 3);
 
 		// What the status bar's Release button runs.
 		harness.Run("input.releaseAll", { { "wait", false } });

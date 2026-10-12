@@ -4,6 +4,7 @@
 #include "Editor/HarnessEditor.h"
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
+#include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/StreamingPanel.h"
 #include "Panels/ViewportPanel.h"
@@ -85,6 +86,49 @@ namespace
 	{
 		REQUIRE(window);
 		return width ? window->Size.x / display.x : window->Size.y / display.y;
+	}
+
+	// The status bar's pills, left to right, when every stream of work has one.
+	const std::vector<std::string> c_EveryStatusPill = { "Status.PlayState", "Status.Frame", "Status.Assets", "Status.Automation", "Status.Scripts",
+		"Status.InputHolds", "Status.Errors" };
+
+	// Makes every pill of the status bar show in an editor started with automation (sessions in `sessions`): two agents (the
+	// automation pill names the first), a loaded module (its name and classes), a game playing with keys a tool holds, and
+	// errors (the feature scripts log some on purpose).
+	void ShowEveryStatusPill(HarnessEditor& editor, const std::filesystem::path& sessions, RpcClient& first, RpcClient& second)
+	{
+		REQUIRE(editor.Context().HasProject());
+		const std::vector<EditorSessionInfo> found = EditorSession::FindSessions(sessions);
+		REQUIRE(found.size() == 1);
+		REQUIRE_MESSAGE(first.Connect(found[0].Address, found[0].Port, found[0].Token, std::chrono::milliseconds(5000), "Claude Code"), first.GetLastError());
+		REQUIRE_MESSAGE(second.Connect(found[0].Address, found[0].Port, found[0].Token, std::chrono::milliseconds(5000), "Visual Studio Code"),
+			second.GetLastError());
+		REQUIRE(editor.FramesUntil([&editor]() { return editor.GetPillText("Status.Automation").starts_with("2 agents"); }));
+		editor.Run("script.load", { { "path", FileSystem::ToUTF8(GetFeatureScriptModule()) } });
+		editor.RunToCompletion("play.start");
+		editor.RunToCompletion("input.key", { { "key", "W" }, { "action", "press" }, { "wait", false } });
+		editor.RunToCompletion("input.key", { { "key", "LeftShift" }, { "action", "press" }, { "wait", false } });
+		editor.RunToCompletion("input.mouseButton", { { "button", "Left" }, { "action", "press" }, { "wait", false } });
+		editor.Layer->GetPanels().SetOpen(EditorPanels::c_Console, false);
+		ST_ERROR("EditorUITests: an error for the status bar");
+		// The pills choose their texts by the width of the previous frame's.
+		editor.Frames(3);
+	}
+
+	// Checks that the pills show side by side, left to right, and returns where the last one ends.
+	float CheckPillsSideBySide(const std::vector<std::string>& pills)
+	{
+		float right = 0.0f;
+		for (const std::string& pill : pills)
+		{
+			CAPTURE(pill);
+			const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(pill);
+			REQUIRE(item.has_value());
+			MESSAGE(pill << ": '" << item->Text << "' from " << item->Min.x << " to " << item->Max.x);
+			CHECK(item->Min.x >= right);
+			right = item->Max.x;
+		}
+		return right;
 	}
 
 	// imgui.ini text as an editor without the given panels saved it: no windows and no open states of them, and the layout
@@ -592,6 +636,61 @@ TEST_SUITE("Editor.UI")
 		editor.Frames(3, 1.0f);
 		CHECK_FALSE(editor.Layer->IsIdle());
 		CHECK(editor.Host->FrameRateChanges == 0);
+	}
+
+	TEST_CASE("The status bar's pills fit side by side in a laptop-sized window: compact at 150% while all show, full again with room")
+	{
+		const std::filesystem::path sessions = CreateTemporaryDirectory("StatusPillsSessions");
+		ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessions));
+		// 1600 x 900 pixels at 150%: about 1067 points of status bar, the narrowest window the editor is laid out for.
+		const ImVec2 display(1600.0f, 900.0f);
+		HarnessEditor editor({ display, 1.5f }, WithFeatureProject("StatusPills"), {}, true);
+		editor.Frames(2);
+		RpcClient first;
+		RpcClient second;
+		ShowEveryStatusPill(editor, sessions, first, second);
+
+		// Their full texts would not fit: every pill shows, in its compact form (the details are in the tooltips).
+		const float right = CheckPillsSideBySide(c_EveryStatusPill);
+		CHECK(right <= display.x);
+		MESSAGE("Free: " << display.x - right << " of " << display.x << " pixels");
+		const Ref<ScriptEngine> engine = editor.Context().GetScriptEngine();
+		REQUIRE(engine);
+		CHECK(editor.GetPillText("Status.PlayState") == "Playing");
+		CHECK(editor.GetPillText("Status.Frame").find("job") == std::string::npos);
+		CHECK(editor.GetPillText("Status.Assets").find(" MB") == std::string::npos);
+		CHECK(editor.GetPillText("Status.Automation") == "2 agents");
+		CHECK(editor.GetPillText("Status.Scripts") == fmt::format("{} classes", engine->GetClasses().size()));
+		CHECK(editor.GetPillText("Status.InputHolds") == "3 held");
+
+		// With the holds released there is room for the full texts again.
+		editor.RunToCompletion("input.releaseAll", { { "wait", false } });
+		editor.Frames(3);
+		CHECK_FALSE(UI::ItemProbe::Find("Status.InputHolds").has_value());
+		CHECK(CheckPillsSideBySide({ "Status.PlayState", "Status.Frame", "Status.Assets", "Status.Automation", "Status.Scripts", "Status.Errors" })
+			<= display.x);
+		CHECK(editor.GetPillText("Status.Frame").find("job") != std::string::npos);
+		CHECK(editor.GetPillText("Status.Automation") == "2 agents connected \xC2\xB7 Claude Code");
+		CHECK(editor.GetPillText("Status.Scripts").starts_with(engine->GetModuleName() + " \xC2\xB7 "));
+		editor.Run("play.stop");
+	}
+
+	TEST_CASE("At 100% the status bar's pills keep their full texts in a laptop-sized window while all show")
+	{
+		const std::filesystem::path sessions = CreateTemporaryDirectory("StatusPillsFullSessions");
+		ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessions));
+		const ImVec2 display(1600.0f, 900.0f);
+		HarnessEditor editor({ display, 1.0f }, WithFeatureProject("StatusPillsFull"), {}, true);
+		editor.Frames(2);
+		RpcClient first;
+		RpcClient second;
+		ShowEveryStatusPill(editor, sessions, first, second);
+
+		CHECK(CheckPillsSideBySide(c_EveryStatusPill) <= display.x);
+		CHECK(editor.GetPillText("Status.Automation") == "2 agents connected \xC2\xB7 Claude Code");
+		CHECK(editor.GetPillText("Status.InputHolds") == "Holds W, LeftShift, Mouse Left");
+		CHECK(editor.GetPillText("Status.Scripts").starts_with(editor.Context().GetScriptEngine()->GetModuleName()));
+		editor.Run("play.stop");
 	}
 
 	TEST_CASE("The status bar counts unread errors and opens the Console")

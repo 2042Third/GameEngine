@@ -1907,8 +1907,13 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   they need copied from the entry (`ActivityPanel::RunAction`). A `force` the person gave was their
   answer to the unsaved-changes question then: Copy as script leaves it out of their commands, and Re-run of a command
   that takes `force` asks again (`EditorShell::RequestDiscardChanges`). `EditorShell::ShowActivity(entry)`
-  selects and reveals an entry (the viewport's agent chip, the toasts). Panels collect what the status bar shows in `OnUpdate`, also while closed: the Streaming
-  panel takes the active asset manager's `GetStats` once per frame after the frame's commands ran (so its totals equal
+  selects and reveals an entry (the viewport's agent chip, the toasts). The status bar's pills (play state, frame,
+  assets, automation, scripts, input holds, errors) choose between their full texts and compact ones
+  (`EditorLayer::StatusPillText`) by the width the full texts took side by side in the previous frame, compact while
+  that overflows the bar and full again once it fits with a margin of two font sizes, so a frame time's digits cannot
+  make them flicker; `Editor.UI` checks that every pill shows within a 1600x900 window at 150% (compact) and at 100%
+  (full). Panels collect what the status bar shows in `OnUpdate`, also while closed: the Streaming panel takes the
+  active asset manager's `GetStats` once per frame after the frame's commands ran (so its totals equal
   what `asset.stats` returned in that frame) and keeps 120 frames of uploaded bytes, the Performance panel samples the
   job system for the frame pill's job count. The assets pill shows the pool closest to its budget
   (`GetMostPressuredPool`), whose pressure also colors it. The Streaming panel draws a budget bar per pool (Ochre,

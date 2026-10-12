@@ -921,9 +921,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
     `N ready · M streaming · <pool> X/Y MB` for the pool closest to its budget, `GetMostPressuredPool`, after
     `K importing` while imports run (`editor.status` has the count as `assets.importing`), in Sulfur from
     85% of it and Cinnabar beyond it or on failures; click to open the Streaming panel). The frame pill (`ms · FPS · J
-    jobs`, jobs running or queued averaged over 60 frames) opens the Performance panel. Panels collect what the status bar
-    shows about them in `OnUpdate`, which runs while they are closed. Widgets drawn every frame write tooltips that take
-    work (formatted statistics) only while they show (`UI::IsTooltipDue`). `editor.showPanel {panel, scripts?}` (registered by
+    jobs`, jobs running or queued averaged over 60 frames) opens the Performance panel. Where the pills' full texts do
+    not fit side by side (a laptop-sized window at 150% with every stream's pill) they all show compact ones, until the
+    full ones fit with a margin again (`EditorLayer::StatusPillText`: who is connected without the port, the class count
+    without the module, how many controls are held, no memory or jobs; the tooltips keep the details): a new pill passes
+    its texts through it. Panels collect what the status bar shows about them in `OnUpdate`, which runs while they are
+    closed. Widgets drawn every frame write tooltips that take work (formatted statistics) only while they show
+    (`UI::IsTooltipDue`). `editor.showPanel {panel, scripts?}` (registered by
     `EditorLayer`, like `editor.showDialog {dialog: "export" | "newProject" | "openSample" | "recovery" | "newScript" |
     "externalEditor" | "about"}`, the commands of the window itself) opens a docked panel and brings it to the front, so
     agents can show the person what they look at (`scripts`: the Content Browser's Scripts root or its asset folders); it

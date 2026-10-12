@@ -56,6 +56,8 @@ namespace Strata::UI
 	// A status pill: an icon and text in a color on a tint of that color, sized to its text in the current font. Returns
 	// true when clicked (pills that lead somewhere, e.g. the errors pill opening the Console).
 	bool Pill(const char* id, const char* icon, std::string_view text, const ImVec4& color, const char* tooltip = nullptr);
+	// The width such a pill takes, e.g. to see whether pills fit side by side.
+	float CalcPillWidth(const char* icon, std::string_view text);
 
 	// Whether the last item's tooltip shows this frame (hovered for the tooltip delay, also while disabled). Widgets take
 	// finished tooltips; one that takes work to write (formatted statistics) is better written only then:

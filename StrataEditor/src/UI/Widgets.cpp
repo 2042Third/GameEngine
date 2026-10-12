@@ -224,13 +224,19 @@ namespace Strata::UI
 		return true;
 	}
 
+	float CalcPillWidth(const char* icon, std::string_view text)
+	{
+		const ImGuiStyle& style = ImGui::GetStyle();
+		return style.FramePadding.x * 2.0f + ImGui::CalcTextSize(icon).x + style.ItemInnerSpacing.x
+			+ ImGui::CalcTextSize(text.data(), text.data() + text.size()).x;
+	}
+
 	bool Pill(const char* id, const char* icon, std::string_view text, const ImVec4& color, const char* tooltip)
 	{
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const float height = ImGui::GetFrameHeight();
 		const ImVec2 iconSize = ImGui::CalcTextSize(icon);
-		const ImVec2 textSize = ImGui::CalcTextSize(text.data(), text.data() + text.size());
-		const float width = style.FramePadding.x * 2.0f + iconSize.x + style.ItemInnerSpacing.x + textSize.x;
+		const float width = CalcPillWidth(icon, text);
 
 		const bool pressed = ImGui::InvisibleButton(id, ImVec2(width, height));
 		const bool hovered = ImGui::IsItemHovered();

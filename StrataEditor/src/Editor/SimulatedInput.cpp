@@ -156,6 +156,12 @@ namespace Strata
 		return 0.0f;
 	}
 
+	size_t SimulatedInput::GetHeldCount() const
+	{
+		return GetHeld(SimulatedControlType::Key).size() + GetHeld(SimulatedControlType::MouseButton).size()
+			+ GetHeld(SimulatedControlType::GamepadButton).size() + GetHeld(SimulatedControlType::GamepadAxis).size();
+	}
+
 	std::string SimulatedInput::DescribeHolds() const
 	{
 		std::string text;
