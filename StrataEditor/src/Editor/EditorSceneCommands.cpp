@@ -204,6 +204,7 @@ namespace Strata
 				{ "state", SubSceneStateToString(status.State) },
 				{ "progress", status.Progress },
 				{ "createdEntities", status.CreatedEntities },
+				{ "skippedEntities", status.SkippedEntities },
 				{ "totalEntities", status.TotalEntities },
 				{ "slices", status.Slices },
 				{ "error", status.Error.empty() ? nlohmann::json(nullptr) : nlohmann::json(status.Error) } };
@@ -439,7 +440,8 @@ namespace Strata
 			"state: LoadingScene | LoadingDependencies, progress 0 to 1}, null when none), lastOpen (the latest of those that finished: {scene, "
 			"startScene, state: Ready | Failed | Cancelled, error, seconds}, null before the first), play (the scene a running game asked for "
 			"while it loads, {scene, progress}, null when none) and subScenes (the running scene's sub-scenes, scene.loadAdditive: {subScene, "
-			"scene, state: Loading | Instantiating | Loaded | Failed, progress, createdEntities, totalEntities, slices, error}). With wait, it "
+			"scene, state: Loading | Instantiating | Loaded | Failed, progress, createdEntities, skippedEntities (not created because an "
+			"ancestor was deleted while the sub-scene loaded), totalEntities, slices, error}). With wait, it "
 			"answers once no scene is being opened, e.g. after starting an editor with a window, which opens its project's start scene in the "
 			"background (scene edits and play.start fail until then).",
 			ObjectSchema({ { "wait", BoolSchema("Answer once no scene is being opened (default false: at once)") } }),
@@ -464,7 +466,7 @@ namespace Strata
 			"only, and like every edit while playing it is discarded by play.stop). The scene and everything it uses load in the background, "
 			"then its entities are created over the following frames (at most the scene's maxEntitiesInstantiatedPerFrame per frame), keeping "
 			"their IDs: a sub-scene whose IDs the running scene has already (the same scene twice) fails. Answers once every entity exists: "
-			"{subScene (its number, for scene.unloadAdditive), scene, state, progress, createdEntities, totalEntities, slices, roots (the "
+			"{subScene (its number, for scene.unloadAdditive), scene, state, progress, createdEntities, skippedEntities, totalEntities, slices, roots (the "
 			"top-level entities), seconds, frames, warning}. scene.loadStatus reports sub-scenes while they load.",
 			ObjectSchema({ { "scene", AssetSchema("Scene asset to load into the running scene") } }, { "scene" }),
 			[](EditorContext& context, const nlohmann::json& parameters)

@@ -136,9 +136,11 @@ namespace Strata
 		// entities are linked under their parents (created before, in this call or an earlier one) or under the options'
 		// parent, references among the prototype's entities point at the copies, prefab links are added, and then every
 		// component of every created entity emits on_update, so systems see each entity complete. With `rootTransform`, the
-		// prototype's first top-level entity gets that local transform instead of its own. Returns how many it created: 0,
-		// creating nothing, with an error when the scene cannot hold them (c_MaxEntities), an ID it keeps collides or the
-		// parent went away (and 0 without an error once every entity exists).
+		// prototype's first top-level entity gets that local transform instead of its own. An entity whose parent, created
+		// by an earlier call, was destroyed since is not created, nor are its descendants (they would have gone with it;
+		// PrototypeInstantiation::GetSkippedCount). Returns how many of the prototype's entities it handled (created or
+		// skipped): 0, creating nothing, with an error when the scene cannot hold them (c_MaxEntities), an ID it keeps
+		// collides or the options' parent went away (and 0 without an error once every entity was handled).
 		size_t ContinueInstantiation(PrototypeInstantiation& instantiation, size_t maxEntities, std::string* outError = nullptr,
 			const TransformComponent* rootTransform = nullptr);
 		// Both in one call: the created top-level entities in order, or none, creating nothing, with the error.
@@ -481,6 +483,8 @@ namespace Strata
 		void FailSubScene(SubSceneLoad& load, std::string error);
 		void DestroySubSceneEntities(SubSceneLoad& load);
 		SubSceneLoad* FindSubScene(SubSceneID id) const;
+		// Whether the entity an instantiation created for its prototype entity `index` still exists.
+		bool IsInstantiatedEntityAlive(const PrototypeInstantiation& instantiation, size_t index) const;
 		// Every entity in hierarchy order (walks the links).
 		void CollectHierarchyOrder(std::vector<entt::entity>& outEntities) const;
 

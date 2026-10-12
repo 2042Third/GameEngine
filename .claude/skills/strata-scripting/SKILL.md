@@ -226,7 +226,9 @@ void OnUpdate(float) override
 
 - A sub-scene's entities appear over the frames after its scene asset and everything it uses loaded, at most the scene's
   `MaxEntitiesInstantiatedPerFrame` per frame (5000 by default, scene settings), and behave like any other: their scripts
-  get `OnCreate`, physics, audio and rendering pick them up. They keep the IDs they have in their file, so loading the same
+  get `OnCreate`, physics, audio and rendering pick them up. Destroying one of them while the rest still appear is fine:
+  its children that did not exist yet are not created (they would have gone with it). They keep the IDs they have in
+  their file, so loading the same
   sub-scene twice fails (an error is logged): unload it first. Keep the `SubScene` (or its `GetID()`) to unload it. A
   hot reload starts members that are not fields over, while the sub-scene stays loaded: keep its ID in an `int32_t` field
   as well (IDs count up from 1 per scene) and get it back in `OnReload` with

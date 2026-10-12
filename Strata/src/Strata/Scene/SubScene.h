@@ -53,6 +53,9 @@ namespace Strata
 		// instantiating, a half plus half the share of its entities that exist.
 		float Progress = 0.0f;
 		size_t CreatedEntities = 0;
+		// Entities not created because an ancestor the load created in an earlier update was destroyed meanwhile (they would
+		// have gone with it).
+		size_t SkippedEntities = 0;
 		size_t TotalEntities = 0; // 0 until its entities are compiled
 		uint32_t Slices = 0;      // Updates that created some of its entities
 		std::string Error;

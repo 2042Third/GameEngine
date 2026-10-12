@@ -339,6 +339,91 @@ TEST_SUITE("Scene.Streaming")
 		CHECK(scene.GetSubSceneRoots(12345).empty());
 	}
 
+	TEST_CASE("Entities whose parent was destroyed after an earlier slice created it are not created")
+	{
+		ScopedJobSystem jobs(2, 1);
+		Scene scene("Running");
+		const Entity resident = scene.CreateEntity("Resident");
+		scene.UpdateWorldTransforms();
+
+		// A room (Room) with two groups of 50 entities each (GroupA, GroupB).
+		Ref<Scene> sub = CreateRef<Scene>("Rooms");
+		const Entity room = sub->CreateEntity("Room");
+		const Entity groupA = sub->CreateChildEntity(room, "GroupA");
+		const Entity groupB = sub->CreateChildEntity(room, "GroupB");
+		for (int index = 0; index < 50; index++)
+		{
+			sub->CreateChildEntity(groupA, "A" + std::to_string(index));
+			sub->CreateChildEntity(groupB, "B" + std::to_string(index));
+		}
+		sub->UpdateWorldTransforms();
+		const UUID roomID = room.GetUUID();
+		const UUID groupAID = groupA.GetUUID();
+		const UUID groupBID = groupB.GetUUID();
+
+		// Two entities per update: gameplay destroys GroupA once it exists, before its children's slices.
+		scene.GetSettings().MaxEntitiesInstantiatedPerFrame = 2;
+		const SubSceneID id = scene.BeginAdditiveLoad(sub);
+		bool destroyed = false;
+		UpdateUntilSettled(scene, id, [&]()
+		{
+			const Entity group = scene.GetEntityByUUID(groupAID);
+			if (!destroyed && group)
+			{
+				scene.DestroyEntity(group);
+				destroyed = true;
+			}
+		});
+		REQUIRE(destroyed);
+		const SubSceneStatus* status = scene.GetSubSceneStatus(id);
+		REQUIRE(status);
+		CHECK(status->State == SubSceneState::Loaded);
+		CHECK(scene.IsSubSceneLoaded(id));
+		CHECK(status->TotalEntities == 103);
+		CHECK(status->SkippedEntities == 50);
+		CHECK(status->CreatedEntities == 53);
+		// The room, GroupB and its 50 entities are there; GroupA and everything below it are not.
+		CHECK(scene.GetEntityCount() == 1 + 52);
+		CHECK_FALSE(scene.GetEntityByUUID(groupAID));
+		CHECK_FALSE(scene.FindEntityByName("A0"));
+		CHECK_FALSE(scene.FindEntityByName("A49"));
+		const Entity streamedGroupB = scene.GetEntityByUUID(groupBID);
+		REQUIRE(streamedGroupB);
+		CHECK(streamedGroupB.GetParent() == scene.GetEntityByUUID(roomID));
+		CHECK(scene.FindEntityByName("B49").GetParent() == streamedGroupB);
+		CheckSceneCaches(scene);
+		CHECK(scene.UnloadSubScene(id));
+		CHECK(scene.GetEntityCount() == 1);
+		CheckSceneCaches(scene);
+
+		// The top-level entity destroyed after the first slice: nothing else of the sub-scene is created, and it counts as
+		// loaded (there is nothing left to create).
+		scene.GetSettings().MaxEntitiesInstantiatedPerFrame = 1;
+		Ref<Scene> nested = MakeNestedScene(300, "Nested");
+		const UUID nestedRoot = nested->GetEntitiesInHierarchyOrder().front().GetUUID();
+		const SubSceneID second = scene.BeginAdditiveLoad(std::move(nested));
+		destroyed = false;
+		UpdateUntilSettled(scene, second, [&]()
+		{
+			const Entity root = scene.GetEntityByUUID(nestedRoot);
+			if (!destroyed && root)
+			{
+				scene.DestroyEntity(root);
+				destroyed = true;
+			}
+		});
+		REQUIRE(destroyed);
+		const SubSceneStatus* secondStatus = scene.GetSubSceneStatus(second);
+		REQUIRE(secondStatus);
+		CHECK(secondStatus->State == SubSceneState::Loaded);
+		CHECK(secondStatus->CreatedEntities == 1);
+		CHECK(secondStatus->SkippedEntities == 299);
+		CHECK(secondStatus->Progress == 1.0f);
+		CHECK(scene.GetEntityCount() == 1);
+		CHECK(scene.GetRootEntities() == std::vector<UUID> { resident.GetUUID() });
+		CheckSceneCaches(scene);
+	}
+
 	TEST_CASE("Cancelling a sub-scene mid-load leaves the scene unchanged and releases every pin")
 	{
 		SceneLoaderFixture fixture;

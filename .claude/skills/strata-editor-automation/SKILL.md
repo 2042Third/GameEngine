@@ -126,7 +126,8 @@ editor started with `--no-gpu` (use `--headless`):
 - **Sub-scenes (play mode).** `scene.loadAdditive {scene}` loads a scene asset into the running game next to what it holds
   (as scripts' `Scene::LoadAdditive` do) and answers once its entities exist: `{subScene, roots, totalEntities, slices,
   seconds, ...}`; they appear over several frames, at most the scene's `maxEntitiesInstantiatedPerFrame` per frame
-  (`scene.setSettings`). Its entities keep their IDs, so loading the same scene twice fails; `scene.unloadAdditive
+  (`scene.setSettings`). Deleting one of its entities before its children appeared leaves those out (`skippedEntities`).
+  Its entities keep their IDs, so loading the same scene twice fails; `scene.unloadAdditive
   {subScene}` removes one (also a failed one), and `play.stop` discards them all with the running copy.
 - `camera.get`; `camera.set {position?, target?, yaw?, pitch?, distance?, fov?, near?, far?, flySpeed?}`;
   `camera.focus {entities?}` frames the given (or selected) entities. Every scene remembers its own editor camera; a

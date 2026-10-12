@@ -588,6 +588,8 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   512 and stopped once `Scene::c_MaxInstantiationMillisecondsPerFrame` (2 ms) went by. Each slice's entities are complete
   when it returns (`ContinueInstantiation`), so systems treat them like any other: their component signals give scripts
   `OnCreate` at the next sync point, physics its bodies in its batches, audio its voices and the render scene its proxies.
+  An entity whose parent an earlier slice created and gameplay or the editor destroyed since is not created, nor are its
+  descendants (they would have gone with it; `SubSceneStatus::SkippedEntities`).
   The entities keep their IDs, so a sub-scene with an ID the scene has already fails with that ID in its error: checked for
   all of them before the first entity exists, and again per slice for IDs the scene gained meanwhile, where the failure
   destroys what the sub-scene created. Its top-level entities carry a runtime-only `SubSceneComponent` (not registered:

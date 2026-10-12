@@ -133,8 +133,11 @@ namespace Strata
 		PrototypeInstantiation() = default;
 
 		const Ref<EntityPrototype>& GetPrototype() const { return m_Prototype; }
-		// Entities created so far, and whether every entity was.
-		size_t GetCreatedCount() const { return m_Next; }
+		// The prototype's entities handled so far: created, or skipped because their parent was destroyed after an earlier
+		// slice created it (Scene::ContinueInstantiation). Every entity was handled once IsComplete.
+		size_t GetHandledCount() const { return m_Next; }
+		size_t GetCreatedCount() const { return m_Next - m_Skipped; }
+		size_t GetSkippedCount() const { return m_Skipped; }
 		bool IsComplete() const { return m_Prototype && m_Next == m_Prototype->GetEntityCount(); }
 		// The created top-level entities, in order.
 		const std::vector<Entity>& GetRoots() const { return m_Roots; }
@@ -148,8 +151,10 @@ namespace Strata
 		bool m_HasParent = false; // A parent was given: its destruction stops the instantiation
 		Scene* m_Scene = nullptr;
 		std::vector<UUID> m_IDs;            // Per prototype entity: its ID in the scene
-		std::vector<entt::entity> m_Handles; // Per prototype entity: its entity in the scene (entt::null until created)
+		std::vector<entt::entity> m_Handles; // Per prototype entity: its entity in the scene (entt::null until created, and if skipped)
 		size_t m_Next = 0;
+		size_t m_Skipped = 0;
+		std::vector<uint8_t> m_SliceSkipped; // The current slice's entities: whether each is skipped (reused between slices)
 		std::vector<Entity> m_Roots;
 	};
 

@@ -87,6 +87,7 @@ namespace Strata
 		outInstantiation.m_Scene = this;
 		outInstantiation.m_Handles.assign(count, entt::null);
 		outInstantiation.m_Next = 0;
+		outInstantiation.m_Skipped = 0;
 		outInstantiation.m_Roots.clear();
 		return true;
 	}
@@ -113,7 +114,33 @@ namespace Strata
 		// Everything that can stop this slice is checked before anything is created.
 		if (instantiation.m_HasParent && !options.Parent.IsValid())
 			return fail("The parent entity was destroyed");
-		const size_t count = end - begin;
+
+		// Entities whose parent is gone are not created: one created in an earlier slice may have been destroyed since (by
+		// gameplay, the editor, or an unload it was moved under), and destroying an entity destroys its descendants, so they
+		// go with it, as do the descendants of those not created. Parents come before their children, so each entity's
+		// parent was decided already: created in an earlier slice (and alive or not), or in this one (or skipped). The first
+		// slice (every Instantiate) has no earlier one, so it creates everything it covers.
+		const std::span<const uint32_t> parents = prototype.GetParentIndices();
+		std::vector<uint8_t>& skipped = instantiation.m_SliceSkipped;
+		skipped.clear();
+		size_t count = end - begin;
+		if (begin > 0)
+		{
+			skipped.assign(end - begin, 0);
+			for (size_t index = begin; index < end; index++)
+			{
+				const uint32_t parentIndex = parents[index];
+				if (parentIndex == EntityPrototype::c_NoParent)
+					continue;
+				if (parentIndex >= begin ? skipped[parentIndex - begin] != 0 : !IsInstantiatedEntityAlive(instantiation, parentIndex))
+				{
+					skipped[index - begin] = 1;
+					count--;
+				}
+			}
+		}
+		const auto isSkipped = [&skipped, begin](size_t index) { return !skipped.empty() && skipped[index - begin] != 0; };
+
 		const size_t existing = std::min(GetRegistryEntityCount(), c_MaxEntities);
 		if (count > c_MaxEntities - existing)
 			return fail(fmt::format("Cannot add {} entities to a scene with {}: a scene holds at most {} entities", count, existing, c_MaxEntities));
@@ -121,7 +148,7 @@ namespace Strata
 		{
 			for (size_t index = begin; index < end; index++)
 			{
-				if (m_EntityMap.contains(instantiation.m_IDs[index]))
+				if (!isSkipped(index) && m_EntityMap.contains(instantiation.m_IDs[index]))
 					return fail(fmt::format("The scene already has an entity with ID {}", instantiation.m_IDs[index].ToString()));
 			}
 		}
@@ -135,6 +162,8 @@ namespace Strata
 		// node comes once the batch exists, so that component signals do not see half-linked entities.
 		for (size_t index = begin; index < end; index++)
 		{
+			if (isSkipped(index))
+				continue;
 			UUID id = instantiation.m_IDs[index];
 			// A fresh ID that happens to exist already is drawn again (IDs kept were checked above).
 			while (!options.KeepIDs && m_EntityMap.contains(id))
@@ -167,9 +196,11 @@ namespace Strata
 		std::vector<entt::entity> subtreeRoots;
 		for (size_t index = begin; index < end; index++)
 		{
+			if (isSkipped(index))
+				continue;
 			const entt::entity handle = instantiation.m_Handles[index];
 			m_Registry.emplace<HierarchyComponent>(handle);
-			const uint32_t parentIndex = prototype.GetParentIndices()[index];
+			const uint32_t parentIndex = parents[index];
 			if (parentIndex == EntityPrototype::c_NoParent)
 			{
 				LinkLast(handle, parentHandle);
@@ -194,6 +225,8 @@ namespace Strata
 				[](const EntityPrototype::EntityReference& entry, uint32_t entity) { return entry.Entity < entity; });
 			for (; reference != references.end() && reference->Entity < end; ++reference)
 			{
+				if (isSkipped(reference->Entity))
+					continue;
 				const entt::entity handle = instantiation.m_Handles[reference->Entity];
 				const UUID target = instantiation.m_IDs[reference->Target];
 				if (reference->Component)
@@ -211,7 +244,7 @@ namespace Strata
 		const bool linkToPrefab = options.SourcePrefab.IsValid();
 		for (size_t index = begin; index < end; index++)
 		{
-			if (linkToPrefab)
+			if (linkToPrefab && !isSkipped(index))
 				m_Registry.emplace_or_replace<PrefabInstanceComponent>(instantiation.m_Handles[index], PrefabInstanceComponent { options.SourcePrefab, prototype.GetEntityID(index) });
 		}
 
@@ -221,6 +254,8 @@ namespace Strata
 		const std::vector<const ComponentInfo*>& registered = ComponentRegistry::GetAll();
 		for (size_t index = begin; index < end; index++)
 		{
+			if (isSkipped(index))
+				continue;
 			const entt::entity handle = instantiation.m_Handles[index];
 			const std::span<const ComponentInfo* const> components = prototype.GetComponents(index);
 			size_t next = 0;
@@ -235,7 +270,18 @@ namespace Strata
 		}
 
 		instantiation.m_Next = end;
-		return count;
+		instantiation.m_Skipped += (end - begin) - count;
+		return end - begin;
+	}
+
+	bool Scene::IsInstantiatedEntityAlive(const PrototypeInstantiation& instantiation, size_t index) const
+	{
+		const entt::entity handle = instantiation.m_Handles[index];
+		if (!m_Registry.valid(handle))
+			return false;
+		// A handle whose slot was reused as often as its version wraps around names another entity: its ID tells.
+		const IDComponent* id = m_Registry.try_get<IDComponent>(handle);
+		return id && id->ID == instantiation.m_IDs[index];
 	}
 
 	std::vector<Entity> Scene::Instantiate(const Ref<EntityPrototype>& prototype, const InstantiationOptions& options, std::string* outError)

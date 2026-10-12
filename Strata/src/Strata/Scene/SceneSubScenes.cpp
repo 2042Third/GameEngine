@@ -248,9 +248,11 @@ namespace Strata
 		if (created > 0)
 			status.Slices++;
 		status.CreatedEntities = instantiation.GetCreatedCount();
+		status.SkippedEntities = instantiation.GetSkippedCount();
 		if (!instantiation.IsComplete())
 		{
-			status.Progress = 0.5f + 0.5f * static_cast<float>(status.CreatedEntities) / static_cast<float>(std::max<size_t>(1, status.TotalEntities));
+			const float handled = static_cast<float>(instantiation.GetHandledCount());
+			status.Progress = 0.5f + 0.5f * handled / static_cast<float>(std::max<size_t>(1, status.TotalEntities));
 			return;
 		}
 
@@ -259,7 +261,8 @@ namespace Strata
 		status.Progress = 1.0f;
 		load.Instantiation.reset();
 		load.Request.reset();
-		ST_CORE_TRACE("Scene '{}': sub-scene {} loaded ({} entities in {} slices)", m_Name, status.ID, status.TotalEntities, status.Slices);
+		ST_CORE_TRACE("Scene '{}': sub-scene {} loaded ({} entities in {} slices, {} not created because an ancestor was destroyed meanwhile)", m_Name,
+			status.ID, status.CreatedEntities, status.Slices, status.SkippedEntities);
 	}
 
 	void Scene::StartSubSceneInstantiation(SubSceneLoad& load)
@@ -304,6 +307,7 @@ namespace Strata
 		load.Instantiation.reset();
 		DestroySubSceneEntities(load);
 		status.CreatedEntities = 0;
+		status.SkippedEntities = 0;
 	}
 
 	void Scene::DestroySubSceneEntities(SubSceneLoad& load)
