@@ -90,6 +90,11 @@ namespace Strata
 		// How the table names an asset: its path; a sub-asset adds its key to its parent's path (and its name when that
 		// differs), so the meshes and materials of one model can be told apart; assets without a file go by their name.
 		static std::string GetAssetLabel(const AssetMetadata& metadata);
+		// How the Type column names an asset type: its identifier (AssetTypeToString), except for the animation clip and
+		// controller, whose identifiers are about twice as long as the others' and go by "Animation" and "Controller". The
+		// column is as wide as the longest of these names, and it decides how much of the asset's name shows and whether the
+		// overview fits beside the table; the row's tooltip names the type in full.
+		static const char* GetTypeLabel(AssetType type);
 	private:
 		struct Label
 		{

@@ -1466,11 +1466,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   throttles reads, it is no memory budget), the queue per priority, an upload sparkline against the per-frame budget
   (saying so when nothing was uploaded), evictions and cancellations, and beside them (in a wide dock) a sortable,
   filtered, clipped table of the listed assets: failed ones first, loading ones in Sulfur and failed ones in Cinnabar as
-  in the viewport's streaming view (`GetAssetStateColor`), sub-assets named by their file and key. At most four times a
-  second, and when the sort or the filter changes, the main thread copies `GetResidencySamples` (and `GetAllMetadata` when
-  `GetMetadataVersion` changed) and a job (`StreamingPanel::BuildTable`) names, sorts and filters the rows, which the
-  table shows once the job finished; so no frame sorts or names tens of thousands of rows. A click on a row reveals the
-  asset in the Content Browser (`ContentBrowserPanel::RevealAsset`). The Performance panel stacks the frame profiler's
+  in the viewport's streaming view (`GetAssetStateColor`), sub-assets named by their file and key, types by short labels
+  (`GetTypeLabel`; the row's tooltip names the type in full). At most four times a second, and when the sort or the
+  filter changes, the main thread copies `GetResidencySamples` (and `GetAllMetadata` when `GetMetadataVersion` changed)
+  and a job (`StreamingPanel::BuildTable`) names, sorts and filters the rows, which the table shows once the job
+  finished; so no frame sorts or names tens of thousands of rows. A click on a row reveals the asset in the Content
+  Browser (`ContentBrowserPanel::RevealAsset`). The Performance panel stacks the frame profiler's
   stage self times of the last 600 frames (newest at the right, untimed work on top, reference lines at 16.7 and 33.3
   ms), scaled to the 95th percentile frame (taller frames are cut at the top), marks spikes (frames over twice the median
   and a 60 FPS frame), explains the frame under the mouse, lists per-stage statistics under the frame's totals (frozen

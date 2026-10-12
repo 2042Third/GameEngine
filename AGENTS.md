@@ -924,7 +924,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   when `GetMetadataVersion` changed) four times a second and a job names, sorts and filters the rows; a row click reveals
   the asset in the Content Browser. Where the table is narrow it drops Pins, CPU MB and then Last used before the asset's
   name gets less than 14 text heights, and the overview stacks above the table where beside it the table would be too
-  narrow even then.
+  narrow even then. Its Type column is as wide as the longest type it names (`StreamingPanel::GetTypeLabel`: the animation
+  clip and controller go by "Animation" and "Controller"; the row's tooltip names the type in full), so keep new types'
+  labels about as short, or the laptop layouts change.
 - Mutating commands report a `warning` in their result while the scene is playing: such changes apply
   to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors.
 - **Viewport state** lives in the core: `EditorContext::GetViewport()` (`EditorViewport`) holds the editor camera
