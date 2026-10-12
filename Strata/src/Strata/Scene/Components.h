@@ -82,6 +82,12 @@ namespace Strata
 	{
 		AssetHandle Prefab = UUID::Null();
 		UUID PrefabEntityID = UUID::Null();
+		// On an instance root, from when the instance last took its prefab's values (PrefabInstances::MarkSynced): the version of
+		// its part of the prefab then and a hash of its own values then. 0: not known (scenes from before, game code's
+		// instances). A prefab that changed while the instance's scene was closed updates it once the scene is open again,
+		// when its values still have that hash.
+		uint64_t PrefabVersion = 0;
+		uint64_t SyncedHash = 0;
 	};
 
 	////////////////////////////////////////////////////////////////////////////////

@@ -60,6 +60,15 @@ namespace Strata
 			ImVec2 Max;
 		};
 		std::optional<RowRect> FindRowRect(UUID entity) const;
+		// What a row's prefab badge showed in the last frame (tests): None for rows without one (no instance root) or out of view.
+		enum class PrefabBadge : uint8_t
+		{
+			None = 0,
+			Linked,   // An instance with its prefab's values
+			Modified, // Its values differ from the prefab's (the warning color)
+			Outdated  // Modified, and made from an older version of the prefab (PrefabSync::IsOutdated)
+		};
+		PrefabBadge FindPrefabBadge(UUID entity) const;
 	private:
 		void DrawHeader(EditorContext& context, const EditorCommandRegistry& commands);
 		void DrawEmptyScene(EditorContext& context, const EditorCommandRegistry& commands);
@@ -108,6 +117,7 @@ namespace Strata
 		{
 			UUID Entity;
 			RowRect Rect;
+			PrefabBadge Badge = PrefabBadge::None;
 		};
 		std::vector<VisibleRow> m_VisibleRows;
 	};

@@ -424,6 +424,91 @@ TEST_SUITE("Editor.Prefab")
 		CHECK(harness.Intensity(setup.Bulb) == 3.0);
 	}
 
+	TEST_CASE("A prefab applied in another scene reaches unmodified instances when their scene opens; modified ones are outdated")
+	{
+		PrefabHarness harness("PrefabClosedScene");
+		const std::string lamp = harness.Create("Lamp", nullptr, 2.0f);
+		const std::string prefab = harness.Run("prefab.create", { { "entities", { lamp } }, { "path", "Prefabs/Lamp.stprefab" } })["asset"].get<std::string>();
+		harness.Run("scene.saveAs", { { "path", "Scenes/A.stscene" } });
+		harness.Run("scene.new");
+		const std::string plain = harness.Run("prefab.instantiate", { { "prefab", prefab } })["id"].get<std::string>();
+		const std::string edited = harness.Run("prefab.instantiate", { { "prefab", prefab } })["id"].get<std::string>();
+		harness.SetIntensity(edited, 4.0f);
+		CHECK(harness.Status(plain)["outdated"] == false);
+		CHECK_FALSE(harness.Get(plain)["components"]["PrefabInstance"]["PrefabVersion"].get<std::string>().empty());
+		harness.Run("scene.saveAs", { { "path", "Scenes/B.stscene" } });
+
+		// Changed and applied in scene A, while B is closed.
+		harness.Run("scene.open", { { "scene", "Scenes/A.stscene" } });
+		harness.Frames(2);
+		harness.SetIntensity(lamp, 9.0f);
+		CHECK(harness.Run("prefab.apply", { { "entity", lamp } })["updatedInstances"] == 0);
+		harness.Run("scene.save");
+
+		// B opens: its unmodified instance takes the change in one undo step, the modified one keeps its values and is outdated.
+		harness.Run("scene.open", { { "scene", "Scenes/B.stscene" } });
+		const uint64_t checks = harness.Context.GetPrefabSync().GetCatchUpCheckCount();
+		harness.Frames(2);
+		CHECK(harness.Context.GetPrefabSync().GetCatchUpCheckCount() == checks + 2);
+		CHECK(harness.Intensity(plain) == 9.0);
+		CHECK(harness.Status(plain)["modified"] == false);
+		CHECK(harness.Status(plain)["outdated"] == false);
+		CHECK(harness.Intensity(edited) == 4.0);
+		CHECK(harness.Status(edited)["modified"] == true);
+		CHECK(harness.Status(edited)["outdated"] == true);
+		CHECK(harness.History() == std::vector<std::string> { "Update Instances of Lamp" });
+		CHECK(harness.Run("scene.info")["modified"] == true);
+		harness.Frames(4); // Once per scene: nothing more happens
+		CHECK(harness.History().size() == 1);
+
+		// The outdated instance would write its older values over the prefab's: refused, unless forced.
+		const EditorCommandResult refused = harness.Fail("prefab.apply", { { "entity", edited } });
+		CHECK(refused.Error.find("older version") != std::string::npos);
+		CHECK(harness.ReadPrefabEntity("Prefabs/Lamp.stprefab", "Lamp")["Components"]["PointLight"]["Intensity"] == 9.0);
+		// Reverting brings it up to date.
+		harness.Run("prefab.revert", { { "entity", edited } });
+		CHECK(harness.Intensity(edited) == 9.0);
+		CHECK(harness.Status(edited)["outdated"] == false);
+
+		// The catch-up is an undo step like any edit.
+		harness.Run("edit.undo");
+		harness.Run("edit.undo");
+		CHECK(harness.Intensity(plain) == 2.0);
+		CHECK(harness.Status(plain)["outdated"] == true);
+	}
+
+	TEST_CASE("A prefab changed on disk while its scene was closed reaches the scene's unmodified instances; unknown ones keep theirs")
+	{
+		PrefabHarness harness("PrefabChangedOnDisk");
+		const std::string lamp = harness.Create("Lamp", nullptr, 2.0f);
+		const std::string prefab = harness.Run("prefab.create", { { "entities", { lamp } }, { "path", "Prefabs/Lamp.stprefab" } })["asset"].get<std::string>();
+		const std::string old = harness.Run("prefab.instantiate", { { "prefab", prefab } })["id"].get<std::string>();
+		// An instance from before instances recorded what they took (a scene of an older editor): nothing known about it.
+		Scene& scene = *harness.Context.GetEditScene();
+		PrefabInstanceComponent& link = scene.GetEntityByUUID(*UUIDFromJson(old)).GetComponent<PrefabInstanceComponent>();
+		link.PrefabVersion = 0;
+		link.SyncedHash = 0;
+		harness.Run("scene.saveAs", { { "path", "Scenes/A.stscene" } });
+		harness.Run("scene.new");
+
+		// Version control brings a brighter lamp.
+		const std::filesystem::path file = harness.Directory / "Assets" / "Prefabs" / "Lamp.stprefab";
+		std::optional<std::string> text = FileSystem::ReadText(file);
+		REQUIRE(text);
+		std::optional<nlohmann::json> document = JsonUtils::Parse(*text);
+		REQUIRE(document);
+		(*document)["Prefab"]["Entities"][0]["Components"]["PointLight"]["Intensity"] = 7.0;
+		REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(*document, 1, '\t') + "\n"));
+		REQUIRE(harness.Context.GetAssetManager()->ReimportAsset(*UUIDFromJson(prefab)));
+
+		harness.Run("scene.open", { { "scene", "Scenes/A.stscene" } });
+		harness.Frames(2);
+		CHECK(harness.Intensity(lamp) == 7.0);
+		CHECK(harness.Intensity(old) == 2.0);
+		CHECK(harness.Status(old)["outdated"] == false); // Not known
+		CHECK(harness.Status(old)["modified"] == true);
+	}
+
 	TEST_CASE("Paths made from entity names are valid, free file names")
 	{
 		PrefabHarness harness("PrefabPaths");

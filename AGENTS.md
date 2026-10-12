@@ -780,7 +780,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   the instance an entity belongs to. An instance root's transform and name are the instance's own and never count as a
   change. When a prefab's file changes, `PrefabSync` gives unmodified instances of the edited scene its new values (one
   undo step); code that writes a prefab for the editor sets its baseline (`PrefabSync::SetBaseline`) so the change is not
-  propagated twice. Several actions that form one step go into an `EditorActionGroup`.
+  propagated twice. Instance roots record the version of their part they last took and a hash of their values then
+  (`PrefabInstanceComponent::PrefabVersion`, `SyncedHash`): code that gives an instance its prefab's values calls
+  `PrefabInstances::MarkSynced` (`Replace` does), so a prefab changed while a scene was closed updates the scene's
+  unmodified instances when it opens (`PrefabSync::CatchUp`), and modified ones are outdated (`prefab.status`;
+  `prefab.apply` refuses them unless `force`). Several actions that form one step go into an `EditorActionGroup`.
 - Commands are named `<group>.<action>`, take a JSON object and return a JSON value or an error. Each
   has a one-line description and a JSON Schema of its parameters (`CommandUtils::ObjectSchema` etc.);
   automation exposes them as tools, so descriptions must tell an agent what the command does. Use

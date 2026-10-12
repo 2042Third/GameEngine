@@ -1510,12 +1510,23 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   and the scene (`AssetDocumentAction` and the scene's action in a group); models are imported and refuse it.
   `prefab.revert` rebuilds the instance from the prefab (`Replace`: entities keep their UUIDs by prefab id, entities the
   prefab lacks go, missing ones are made; nothing changes when the prefab's part is missing or broken), `prefab.unpack`
-  removes the links. `PrefabSync`, updated by `EditorContext` once per frame in edit mode, keeps a baseline snapshot per
-  prefab the edited scene uses and watches their source revisions: when a prefab's file changes (on disk, a reimport),
-  instances that equalled the baseline take the new values in one undo step ("Update Instances of ..."), modified ones
-  keep theirs. The editor's own writes set the baseline first (`SetBaseline`, also when `prefab.apply` is undone or
-  redone), so they are never propagated twice. It also caches per instance root whether it is modified, renewed when the
-  undo history or a baseline changes, for the Hierarchy's mark. Comparing serializes the instance and finding the prefabs
+  removes the links. A snapshot's part is found through the entities' parent links (`ExtractTemplate`, `ReplaceTemplate`),
+  so documents written by hand that list a child before its parent work too. `PrefabSync`, updated by `EditorContext`
+  once per frame in edit mode, keeps a baseline snapshot per prefab the edited scene uses and watches their source
+  revisions: when a prefab's file changes (on disk, a reimport), instances that equalled the baseline take the new values
+  in one undo step ("Update Instances of ..."), modified ones keep theirs. The editor's own writes set the baseline first
+  (`SetBaseline`, also when `prefab.apply` is undone or redone), so they are never propagated twice. A prefab can also
+  change while a scene that uses it is closed (applied from another scene, changed on disk or by version control), so an
+  instance root records what it last took (`PrefabInstances::MarkSynced`, whenever an instance is made, created, applied,
+  reverted or updated): `PrefabInstanceComponent::PrefabVersion`, a hash of its part of the prefab then
+  (`GetPartVersion`: the part without the root's transform and name, its entities in id order), and `SyncedHash`, a hash of
+  its own values then in the same form (`GetContentHash`). The first time the sync looks at a prefab after a scene opens
+  (`PrefabSync::CatchUp`), instances whose recorded version is not the prefab's and whose values still have the recorded
+  hash take the prefab's values, in one undo step; modified ones keep theirs and are *outdated* (`IsOutdated`):
+  `prefab.status` says so, and `prefab.apply` refuses them unless `force`, since it would write their older values over
+  the prefab's later changes. Instances without a record (scenes from before, game code's) are never caught up. It also
+  caches per instance root whether it is modified and outdated, renewed when the undo history or a baseline changes, for
+  the Hierarchy's mark. Comparing serializes the instance and finding the prefabs
   walks every link, so a run of edits that records a step every frame (a gizmo drag) does neither per frame: an edit
   after a pause is looked at at once, and during a run (edits less than `PrefabSync::c_SettleFrames` frames apart) the
   marks and the watched prefabs stay until it pauses; links that come or go are found at once.
@@ -1528,12 +1539,14 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     while filtering, Ctrl+A, ranges and boxes skip the ancestors shown for context).
     A primary selection that changed elsewhere is revealed (`HierarchyView::Reveal`, then the list scrolls to its row).
     Rows are tree nodes with the entity's icon (`UI/EntityIcons`), its name, a prefab badge on an instance's root (a
-    click inspects the prefab; in the warning color while the instance differs from its prefab, `PrefabSync::IsModified`)
+    click inspects the prefab; in the warning color while the instance differs from its prefab, `PrefabSync::IsModified`,
+    and its tooltip, made only while it shows, says when the instance is outdated too)
     and an eye (`entity.setActive`); a drag carries the topmost dragged entities
     (`DragDrop::c_Entities`) and a drop asks `HierarchyView::GetDropTarget` for `entity.setParent`'s parent and index.
     Dropped on a Content Browser folder they become a prefab there (`prefab.create`). A row's menu creates a prefab from
-    the selection (in `Prefabs/`) and, on entities of an instance, applies, reverts, unpacks, selects the instance's
-    root or shows its prefab (the `prefab.*` commands).
+    the selection (in `Prefabs/`) and, on entities of an instance, applies (an outdated instance's item says that it
+    writes over the prefab's newer changes, and forces), reverts, unpacks, selects the instance's root or shows its prefab
+    (the `prefab.*` commands).
     The rename field is drawn after the selection's scope and activated by id: a keyboard move out of that scope would
     make ImGui clear the selection. With 100,000 roots the panel costs about 0.012 ms per frame (it drew every root
     before: 12.9 ms; `Perf.Editor`).

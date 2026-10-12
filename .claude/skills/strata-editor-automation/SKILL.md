@@ -220,8 +220,12 @@ false` leaves them alone), then
 `prefab.instantiate {"prefab": "Prefabs/Block.stprefab", "components": {"Transform": {"Translation": [2, 0, 0]}}}`
 (returns `id`, the instance's root). Instances stay linked: change one instance (any of its entities) and
 `prefab.apply {"entity": "<id>"}` writes it into the prefab, and every instance that still had the prefab's values takes
-the new ones (one undo step for the file and the scene); `prefab.status {"entity"}` says whether an instance differs
-(`modified`, `changed`, `added`, `removed`), `prefab.revert {"entity"}` gives it the prefab's values again (IDs kept),
+the new ones (one undo step for the file and the scene). Instances in other scenes follow when their scene opens next
+(also after the prefab changed on disk): those still as they were take the new values (an undo step,
+"Update Instances of ..."; save the scene), modified ones keep theirs and are `outdated`; `prefab.apply` refuses an
+outdated instance (it would write its older values over the newer ones) unless `"force": true`: `prefab.revert` it
+and make its change again instead. `prefab.status {"entity"}` says whether an instance differs
+(`modified`, `outdated`, `changed`, `added`, `removed`), `prefab.revert {"entity"}` gives it the prefab's values again (IDs kept),
 `prefab.unpack {"entity"}` makes its entities plain ones, `prefab.select {"entity", "asset"?}` selects the root or shows
 the prefab. While playing, revert and unpack change the running copy (their answers carry a `warning`) and apply is
 refused. The root's transform and name always stay the instance's own. Imported models are instantiated the same way

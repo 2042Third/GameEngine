@@ -89,7 +89,9 @@ start scene), or for a scene of your own `scene.saveAs {"path": "Scenes/Main.sts
 
 - Things that appear many times (blocks, enemies, pickups): build one, `prefab.create` it and `prefab.instantiate` the
   rest. Instances stay linked, so a change to one instance followed by `prefab.apply {"entity"}` updates the prefab and
-  every unmodified instance at once; `prefab.status` shows which instances differ.
+  every unmodified instance at once (those of other scenes when the scene opens next: save it then); `prefab.status`
+  shows which instances differ, and which are `outdated` (modified while the prefab changed elsewhere: `prefab.revert`
+  them before changing them again, as `prefab.apply` refuses them without `force`).
 
 - Camera: `{"Camera": {"Primary": true, "PerspectiveFOV": 45}}`; cameras and lights look along their -Z, so a camera at
   `+Z` looking at the origin needs no rotation. Rotations are Euler degrees `[pitch, yaw, roll]`.

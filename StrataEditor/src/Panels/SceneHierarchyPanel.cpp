@@ -215,6 +215,16 @@ namespace Strata
 		return std::nullopt;
 	}
 
+	SceneHierarchyPanel::PrefabBadge SceneHierarchyPanel::FindPrefabBadge(UUID entity) const
+	{
+		for (const VisibleRow& row : m_VisibleRows)
+		{
+			if (row.Entity == entity)
+				return row.Badge;
+		}
+		return PrefabBadge::None;
+	}
+
 	void SceneHierarchyPanel::OnHidden(EditorPanelContext&)
 	{
 		m_Rename = RenameState();
@@ -539,12 +549,29 @@ namespace Strata
 			// The badge leads to the prefab (or model) the entity was made from: the Asset tab shows it. An instance whose
 			// values differ from its prefab's is marked (PrefabSync caches that until the edits or the prefab change).
 			const AssetHandle prefab = registry.get<PrefabInstanceComponent>(row.Handle).Prefab;
-			const bool modified = !context.IsPlaying() && context.GetPrefabSync().IsModified(context, Entity(row.Handle, &scene));
-			const std::string tooltip = modified
-				? fmt::format("An instance of {}, modified: its values differ from the prefab's (Apply or Revert in its menu). Click to show the prefab.",
-					GetAssetName(prefab))
-				: fmt::format("An instance of {}: click to show it in the Asset tab", GetAssetName(prefab));
-			if (RowButton("##Prefab", Icons::Package, modified ? colors.Warning : colors.Info, ImVec2(right - button, min.y), button, tooltip.c_str()))
+			const Entity instance(row.Handle, &scene);
+			const bool modified = !context.IsPlaying() && context.GetPrefabSync().IsModified(context, instance);
+			const bool outdated = modified && context.GetPrefabSync().IsOutdated(context, instance);
+			const ImVec4& badgeColor = modified ? colors.Warning : colors.Info;
+			// The tooltip's text is made only while it shows.
+			const bool tooltipDue = ImGui::IsMouseHoveringRect(ImVec2(right - button, min.y), ImVec2(right, min.y + button));
+			std::string tooltip;
+			if (tooltipDue && outdated)
+			{
+				tooltip = fmt::format("An instance of {}, modified, and made from an older version of it: it missed the prefab's later changes (Revert takes "
+					"them; Apply writes its values over them). Click to show the prefab.", GetAssetName(prefab));
+			}
+			else if (tooltipDue && modified)
+			{
+				tooltip = fmt::format("An instance of {}, modified: its values differ from the prefab's (Apply or Revert in its menu). Click to show the prefab.",
+					GetAssetName(prefab));
+			}
+			else if (tooltipDue)
+			{
+				tooltip = fmt::format("An instance of {}: click to show it in the Asset tab", GetAssetName(prefab));
+			}
+			m_VisibleRows.back().Badge = outdated ? PrefabBadge::Outdated : modified ? PrefabBadge::Modified : PrefabBadge::Linked;
+			if (RowButton("##Prefab", Icons::Package, badgeColor, ImVec2(right - button, min.y), button, tooltipDue ? tooltip.c_str() : nullptr))
 			{
 				m_Deferred.push_back([&context, prefab]()
 				{
@@ -684,9 +711,16 @@ namespace Strata
 	void SceneHierarchyPanel::DrawPrefabMenuItems(EditorContext& context, const EditorCommandRegistry& commands, Scene& scene, const HierarchyRow& row)
 	{
 		auto schedule = [this](std::function<void()> action) { m_Deferred.push_back(std::move(action)); };
+		// The menu's items, recorded for UI tests as "Hierarchy.Prefab.<Item>".
+		auto item = [](const char* label, const char* probe, bool enabled = true)
+		{
+			const bool chosen = ImGui::MenuItem(label, nullptr, false, enabled);
+			UI::ItemProbe::Record(probe, enabled);
+			return chosen;
+		};
 		const bool playing = context.IsPlaying();
 		const EditorAssetManager* assets = context.GetAssetManager();
-		if (ImGui::MenuItem("Create Prefab", nullptr, false, assets && !playing))
+		if (item("Create Prefab", "Hierarchy.Prefab.Create", assets && !playing))
 		{
 			// The selected entities (those below another selected one go with it), or the row's, as a prefab in Prefabs/ that
 			// they become an instance of.
@@ -709,15 +743,22 @@ namespace Strata
 			return;
 		const nlohmann::json instance = { { "entity", UUIDToJson(row.ID) } };
 		const bool isPrefab = AssetManager::GetAssetType(PrefabInstances::GetPrefab(root)) == AssetType::Prefab;
-		if (ImGui::MenuItem("Apply to Prefab", nullptr, false, isPrefab && !playing))
-			schedule([&context, &commands, instance]() { RunEditorCommand(context, commands, "prefab.apply", instance); });
-		if (ImGui::MenuItem("Revert to Prefab"))
+		// An outdated instance missed later changes of its prefab: its Apply says that it writes over them.
+		const bool outdated = !playing && context.GetPrefabSync().IsOutdated(context, root);
+		if (item(outdated ? "Apply to Prefab (Over Its Newer Changes)" : "Apply to Prefab", "Hierarchy.Prefab.Apply", isPrefab && !playing))
+		{
+			nlohmann::json parameters = instance;
+			if (outdated)
+				parameters["force"] = true;
+			schedule([&context, &commands, parameters]() { RunEditorCommand(context, commands, "prefab.apply", parameters); });
+		}
+		if (item("Revert to Prefab", "Hierarchy.Prefab.Revert"))
 			schedule([&context, &commands, instance]() { RunEditorCommand(context, commands, "prefab.revert", instance); });
-		if (ImGui::MenuItem("Unpack Prefab"))
+		if (item("Unpack Prefab", "Hierarchy.Prefab.Unpack"))
 			schedule([&context, &commands, instance]() { RunEditorCommand(context, commands, "prefab.unpack", instance); });
-		if (ImGui::MenuItem("Select Prefab Root", nullptr, false, root.GetUUID() != row.ID))
+		if (item("Select Prefab Root", "Hierarchy.Prefab.SelectRoot", root.GetUUID() != row.ID))
 			schedule([&context, &commands, instance]() { RunEditorCommand(context, commands, "prefab.select", instance); });
-		if (ImGui::MenuItem("Show Prefab Asset"))
+		if (item("Show Prefab Asset", "Hierarchy.Prefab.ShowAsset"))
 		{
 			nlohmann::json parameters = instance;
 			parameters["asset"] = true;

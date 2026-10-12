@@ -991,6 +991,8 @@ namespace Strata
 					for (const Entity entity : entities)
 						transaction.TrackSubtree(entity.GetUUID());
 					PrefabInstances::Link(scene, entities, handle);
+					for (const Entity entity : entities)
+						PrefabInstances::MarkSynced(scene, entity, document["Prefab"]);
 					step->Add(transaction.TakeAction());
 				}
 				if (!context.IsPlaying())

@@ -5,6 +5,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -62,13 +63,31 @@ namespace Strata
 
 		// Replaces an instance with the prefab's values (the template below the root's template id): entities keep their UUIDs
 		// by PrefabEntityID, entities the template lacks go, entities the instance lacks are made with new UUIDs, and the root
-		// keeps its parent, place among its siblings, transform and name. Returns the UUIDs of the entities it made (for undo
-		// tracking); false, changing nothing, when the snapshot lacks the root's template or the scene cannot hold the result.
+		// keeps its parent, place among its siblings, transform and name (and is marked synced, MarkSynced). Returns the UUIDs
+		// of the entities it made (for undo tracking); false, changing nothing, when the snapshot lacks the root's template or
+		// the scene cannot hold the result.
 		bool Replace(Scene& scene, Entity root, const nlohmann::json& snapshot, std::vector<UUID>* outCreated = nullptr, std::string* outError = nullptr);
 
 		// The prefab's snapshot with one root's part (found as ExtractTemplate finds it) replaced by `part` (MakeTemplate's),
 		// where the old part began, or appended when the snapshot lacked it.
 		nlohmann::json ReplaceTemplate(const nlohmann::json& snapshot, UUID templateRoot, const nlohmann::json& part);
+
+		// The version of one root's part of a prefab snapshot: a hash of the part (ExtractTemplate) without the root's transform
+		// and name, its entities in id order. 0 when the snapshot lacks the root.
+		uint64_t GetPartVersion(const nlohmann::json& snapshot, UUID templateRoot);
+		// A hash of an instance's values in the same form (MakeTemplate's, without the root's transform and name): equal for
+		// equal values, so an instance whose hash is the one it had when it took its prefab's values is unmodified since.
+		uint64_t GetContentHash(const Scene& scene, Entity root);
+		// Records on an instance root that the instance has just taken the values of its part of `snapshot` (instantiated,
+		// created, applied, reverted or updated): PrefabInstanceComponent::PrefabVersion and SyncedHash. A prefab that changes
+		// while the instance's scene is closed then still updates it once the scene opens, when it was not modified.
+		void MarkSynced(Scene& scene, Entity root, const nlohmann::json& snapshot);
+		// Whether the instance was made from (or last took) another version of its part than the snapshot's: true only when its
+		// root records a version (MarkSynced) and it differs.
+		bool IsOutdated(Entity root, const nlohmann::json& snapshot);
+		// Whether the instance's values are still the ones it had when it last took its prefab's (a recorded SyncedHash that
+		// matches its content); false when nothing was recorded.
+		bool IsUnchangedSinceSync(const Scene& scene, Entity root);
 
 		// Links entities captured into a prefab (with their UUIDs as its ids, as Prefab::CreateFromEntities captures them) to
 		// it: each entity of their subtrees gets a PrefabInstanceComponent naming the prefab and its own UUID.

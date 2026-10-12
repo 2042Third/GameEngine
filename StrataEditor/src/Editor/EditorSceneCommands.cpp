@@ -2,17 +2,20 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/HierarchyView.h"
+#include "Editor/PrefabSync.h"
 #include "Editor/ProjectTemplates.h"
 #include "Editor/SceneBounds.h"
 #include "Editor/SceneRaycast.h"
 
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/ComponentAccess.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
+#include <Strata/Scene/PrefabInstances.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
 
@@ -949,6 +952,16 @@ namespace Strata
 				{
 					transaction.TrackCreated(root.GetUUID());
 					ids.push_back(UUIDToJson(root.GetUUID()));
+				}
+				// The new instance has its prefab's values: recorded on its roots (before the components given for the root, which
+				// make it differ), so that later changes of the prefab reach it also while its scene is closed.
+				if (EditorAssetManager* assets = context.GetAssetManager())
+				{
+					if (const std::optional<nlohmann::json> snapshot = PrefabSyncUtils::ReadTemplate(*assets, handle))
+					{
+						for (Entity root : roots)
+							PrefabInstances::MarkSynced(scene, root, *snapshot);
+					}
 				}
 				std::string error;
 				if (components && !roots.empty() && !ApplyComponents(roots.front(), *components, &error))

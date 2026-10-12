@@ -197,6 +197,58 @@ TEST_SUITE("Scene.PrefabInstances")
 		Tests::CheckSceneCaches(*crate.World);
 	}
 
+	TEST_CASE("An instance records the version of its part it took and its values then, which tell it outdated or modified later")
+	{
+		LinkedCrate crate;
+		CHECK_FALSE(PrefabInstances::IsOutdated(crate.Crate, crate.Snapshot)); // Nothing recorded: not known to be outdated
+		CHECK_FALSE(PrefabInstances::IsUnchangedSinceSync(*crate.World, crate.Crate));
+		PrefabInstances::MarkSynced(*crate.World, crate.Crate, crate.Snapshot);
+		const PrefabInstanceComponent& link = crate.Crate.GetComponent<PrefabInstanceComponent>();
+		CHECK(link.PrefabVersion == PrefabInstances::GetPartVersion(crate.Snapshot, crate.Crate.GetUUID()));
+		CHECK(link.PrefabVersion != 0);
+		CHECK(link.SyncedHash == PrefabInstances::GetContentHash(*crate.World, crate.Crate));
+		CHECK_FALSE(PrefabInstances::IsOutdated(crate.Crate, crate.Snapshot));
+		CHECK(PrefabInstances::IsUnchangedSinceSync(*crate.World, crate.Crate));
+
+		// The root's place and name are the instance's own: moving and renaming it change neither.
+		crate.Crate.GetTransform().Translation = glm::vec3(3.0f, 0.0f, 0.0f);
+		crate.Crate.MarkModified<TransformComponent>();
+		crate.Crate.GetComponent<NameComponent>().Name = "Moved Crate";
+		crate.Crate.MarkModified<NameComponent>();
+		CHECK(PrefabInstances::IsUnchangedSinceSync(*crate.World, crate.Crate));
+		nlohmann::json moved = crate.Snapshot;
+		moved["Entities"][0]["Components"]["Transform"]["Translation"] = { 9.0, 9.0, 9.0 };
+		CHECK(PrefabInstances::GetPartVersion(moved, crate.Crate.GetUUID()) == link.PrefabVersion);
+		// Nor does the order the snapshot lists its entities in.
+		nlohmann::json shuffled = crate.Snapshot;
+		shuffled["Entities"] = nlohmann::json::array({ shuffled["Entities"][2], shuffled["Entities"][0], shuffled["Entities"][1] });
+		CHECK(PrefabInstances::GetPartVersion(shuffled, crate.Crate.GetUUID()) == link.PrefabVersion);
+
+		// Another version of the prefab: the instance is outdated (it did not take it), and still unchanged since it synced.
+		nlohmann::json brighter = crate.Snapshot;
+		brighter["Entities"][1]["Components"]["PointLight"]["Intensity"] = 7.0;
+		CHECK(PrefabInstances::GetPartVersion(brighter, crate.Crate.GetUUID()) != link.PrefabVersion);
+		CHECK(PrefabInstances::IsOutdated(crate.Crate, brighter));
+		// Taking it (Replace) records the new version.
+		const UUID crateId = crate.Crate.GetUUID();
+		const UUID lidId = crate.Lid.GetUUID();
+		REQUIRE(PrefabInstances::Replace(*crate.World, crate.Crate, brighter));
+		const Entity root = crate.World->GetEntityByUUID(crateId);
+		REQUIRE(root);
+		CHECK_FALSE(PrefabInstances::IsOutdated(root, brighter));
+		CHECK(PrefabInstances::IsOutdated(root, crate.Snapshot));
+		CHECK(PrefabInstances::IsUnchangedSinceSync(*crate.World, root));
+
+		// An edit of the instance: no longer unchanged since it synced.
+		crate.World->GetEntityByUUID(lidId).GetComponent<PointLightComponent>().Intensity = 1.0f;
+		CHECK_FALSE(PrefabInstances::IsUnchangedSinceSync(*crate.World, root));
+		// The stamps serialize as 16 hex digits and come back.
+		const nlohmann::json saved = SceneSerializer::SerializeEntities(*crate.World, { root });
+		const nlohmann::json& stamps = saved["Entities"][0]["Components"]["PrefabInstance"];
+		CHECK(stamps["PrefabVersion"].get<std::string>().size() == 16);
+		CHECK(stamps["SyncedHash"].get<std::string>().size() == 16);
+	}
+
 	TEST_CASE("Unpack and StripLinks remove the links of one prefab")
 	{
 		LinkedCrate crate;

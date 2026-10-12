@@ -1612,7 +1612,9 @@
 					},
 					"PrefabInstance": {
 						"Prefab": "F7A0000000000002",
-						"PrefabEntityID": "F7C0000000000001"
+						"PrefabEntityID": "F7C0000000000001",
+						"PrefabVersion": "9603D9BDDF5599F2",
+						"SyncedHash": "B1A0B2E344006094"
 					},
 					"RigidBody": {
 						"AngularDamping": 0.05,

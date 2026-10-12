@@ -107,8 +107,10 @@ namespace Strata
 	{
 		registry.Register({ "prefab.status",
 			"Whether an entity belongs to a prefab instance and how the instance differs from its prefab as stored now (the root's transform and name "
-			"are the instance's own and never count): {linked, root, prefab, path, modified, changed: [entity ids whose values differ], added: [entities "
-			"the prefab lacks], removed: [ids of prefab entities the instance lacks]}; {linked: false} for entities of no instance.",
+			"are the instance's own and never count): {linked, root, prefab, path, modified, outdated, changed: [entity ids whose values differ], added: "
+			"[entities the prefab lacks], removed: [ids of prefab entities the instance lacks]}; {linked: false} for entities of no instance. outdated: the "
+			"instance was made from an older version of the prefab and did not take its later changes (it was modified meanwhile), so prefab.apply "
+			"would write its older values back.",
 			ObjectSchema({ { "entity", EntitySchema("An entity of the active scene") } }, { "entity" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -133,6 +135,7 @@ namespace Strata
 					{ "prefab", UUIDToJson(prefab) },
 					{ "path", DescribeAssetName(context, prefab) },
 					{ "modified", !difference.IsEmpty() },
+					{ "outdated", PrefabInstances::IsOutdated(root, *snapshot) },
 					{ "changed", ToJson(difference.Changed) },
 					{ "added", ToJson(difference.Added) },
 					{ "removed", ToJson(difference.Removed) } });
@@ -142,8 +145,11 @@ namespace Strata
 			"Writes a prefab instance (the instance the entity belongs to: its root's subtree, also entities added to it) back into its prefab, keeping "
 			"the prefab's own root transform and name. Other instances whose values equalled the prefab's take the new values; entities added to the "
 			"instance are linked. One undo step for the file and the scene (edit.undo restores both). Edit mode only; imported models cannot be changed "
-			"(prefab.unpack them, or prefab.create a prefab). Returns {prefab, path, root, updatedInstances, linked}.",
-			ObjectSchema({ { "entity", EntitySchema("An entity of the instance (its root or below)") } }, { "entity" }),
+			"(prefab.unpack them, or prefab.create a prefab). An outdated instance (prefab.status: made from an older version, it missed the prefab's "
+			"later changes) is refused unless force: true, since it would write its older values over them. Returns {prefab, path, root, "
+			"updatedInstances, linked}.",
+			ObjectSchema({ { "entity", EntitySchema("An entity of the instance (its root or below)") },
+				{ "force", BoolSchema("Apply an outdated instance anyway, writing its values over the prefab's later changes (default false)") } }, { "entity" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				EditorAssetManager* assets = context.GetAssetManager();
@@ -154,6 +160,7 @@ namespace Strata
 				Scene& scene = *context.GetEditScene();
 				CommandArguments arguments(parameters);
 				const Entity root = GetInstanceRoot(arguments, scene);
+				const bool force = arguments.GetBool("force", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				const AssetHandle prefab = PrefabInstances::GetPrefab(root);
@@ -172,6 +179,12 @@ namespace Strata
 				if (!document || !document->contains("Prefab"))
 					return EditorCommandResult::Fail(fmt::format("'{}' cannot be read: {}", metadata->Path, error.empty() ? std::string("no prefab document") : error));
 				const nlohmann::json snapshot = (*document)["Prefab"];
+				if (PrefabInstances::IsOutdated(root, snapshot) && !force)
+				{
+					return EditorCommandResult::Fail(fmt::format("'{}' was made from an older version of {} and did not take its later changes: applying it would "
+						"write its older values over them. Revert it (prefab.revert) and make its changes again, or apply it with force: true", root.GetName(),
+						metadata->Path));
+				}
 
 				// The instance as the prefab's part, with the prefab's own root transform and name.
 				const UUID templateRoot = root.GetComponent<PrefabInstanceComponent>().PrefabEntityID;
@@ -212,6 +225,8 @@ namespace Strata
 						linked++;
 					}
 				}
+				// The instance is the prefab's new version now.
+				PrefabInstances::MarkSynced(scene, root, newSnapshot);
 				for (const UUID other : others)
 				{
 					std::vector<UUID> created;

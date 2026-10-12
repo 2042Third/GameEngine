@@ -613,6 +613,86 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		CHECK(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
 	}
 
+	TEST_CASE("A row's menu makes a prefab of the entity; an instance's menu applies and reverts it, and its badge marks it modified")
+	{
+		AuthoringEditor editor;
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory("HierarchyPrefabMenu") / "Game") }, { "name", "Game" } });
+		const UUID lamp = editor.Create("Lamp", { { "components", { { "PointLight", { { "Intensity", 2.0 } } } } } });
+		editor.Frames(2);
+		auto openMenu = [&editor](UUID id)
+		{
+			editor.Pause();
+			editor.Harness.MoveMouse(AuthoringEditor::Center(editor.Row(id)));
+			editor.Frames(1);
+			editor.Harness.SetMouseButton(ImGuiMouseButton_Right, true);
+			editor.Frames(1);
+			editor.Harness.SetMouseButton(ImGuiMouseButton_Right, false);
+			editor.Frames(2);
+		};
+		auto intensity = [&editor](UUID id) { return editor.Get(id).GetComponent<PointLightComponent>().Intensity; };
+		auto setIntensity = [&editor](UUID id, double value)
+		{
+			editor.Run("component.set", { { "entity", UUIDToJson(id) }, { "component", "PointLight" }, { "values", { { "Intensity", value } } } });
+		};
+		auto settle = [&editor]() { editor.Frames(static_cast<int>(PrefabSync::c_SettleFrames) + 2); };
+		using Badge = SceneHierarchyPanel::PrefabBadge;
+
+		// Create Prefab: a prefab in Prefabs/ named after it, which it is an instance of, in one undo step.
+		openMenu(lamp);
+		CHECK_FALSE(UI::ItemProbe::Find("Hierarchy.Prefab.Apply").has_value()); // No instance yet
+		CHECK(editor.Hierarchy().FindPrefabBadge(lamp) == Badge::None);
+		const size_t before = editor.UndoPosition();
+		REQUIRE(editor.Click("Hierarchy.Prefab.Create"));
+		editor.Frames(2);
+		const AssetHandle prefab = editor.Context().GetAssetManager()->FindAssetByPath("Prefabs/Lamp.stprefab");
+		REQUIRE(prefab.IsValid());
+		CHECK(editor.Run("prefab.status", { { "entity", UUIDToJson(lamp) } })["prefab"] == UUIDToJson(prefab));
+		CHECK(editor.UndoPosition() == before + 1);
+		CHECK(editor.Hierarchy().FindPrefabBadge(lamp) == Badge::Linked);
+
+		// Another instance with an edit of its own; an edit of the lamp marks its badge once the edits pause.
+		const UUID other = *UUIDFromJson(editor.Run("prefab.instantiate", { { "prefab", UUIDToJson(prefab) } })["id"]);
+		setIntensity(other, 3.0);
+		setIntensity(lamp, 9.0);
+		settle();
+		CHECK(editor.Hierarchy().FindPrefabBadge(lamp) == Badge::Modified);
+
+		// Apply to Prefab writes it into the prefab: no longer modified. The other instance keeps its edit and missed the new
+		// version: outdated.
+		openMenu(lamp);
+		REQUIRE(editor.Click("Hierarchy.Prefab.Apply"));
+		editor.Frames(2);
+		CHECK(editor.Run("edit.history")["undo"] == "Apply Prefab Lamp");
+		CHECK(editor.Run("prefab.status", { { "entity", UUIDToJson(lamp) } })["modified"] == false);
+		settle();
+		CHECK(editor.Hierarchy().FindPrefabBadge(lamp) == Badge::Linked);
+		CHECK(editor.Hierarchy().FindPrefabBadge(other) == Badge::Outdated);
+		CHECK(intensity(other) == 3.0f);
+
+		// The outdated instance's Apply says that it writes over the newer version, and does (prefab.apply's force).
+		openMenu(other);
+		REQUIRE(editor.Click("Hierarchy.Prefab.Apply"));
+		editor.Frames(2);
+		CHECK(editor.Run("prefab.status", { { "entity", UUIDToJson(other) } })["outdated"] == false);
+		CHECK(intensity(lamp) == 3.0f); // Unmodified: it follows
+		settle();
+		CHECK(editor.Hierarchy().FindPrefabBadge(other) == Badge::Linked);
+
+		// Revert to Prefab takes the prefab's values back.
+		setIntensity(lamp, 5.0);
+		openMenu(lamp);
+		REQUIRE(editor.Click("Hierarchy.Prefab.Revert"));
+		editor.Frames(2);
+		CHECK(intensity(lamp) == 3.0f);
+
+		// Unpack ends the link: no badge.
+		openMenu(lamp);
+		REQUIRE(editor.Click("Hierarchy.Prefab.Unpack"));
+		editor.Frames(2);
+		CHECK(editor.Run("prefab.status", { { "entity", UUIDToJson(lamp) } })["linked"] == false);
+		CHECK(editor.Hierarchy().FindPrefabBadge(lamp) == Badge::None);
+	}
+
 	TEST_CASE("A banner tops the Hierarchy and the Inspector while playing")
 	{
 		AuthoringEditor editor({}, WithFeatureProject("EditorAuthoringPlay"));

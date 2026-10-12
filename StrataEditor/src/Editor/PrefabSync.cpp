@@ -132,8 +132,15 @@ namespace Strata
 					continue;
 				readOne = true;
 				std::optional<nlohmann::json> snapshot = PrefabSyncUtils::ReadTemplate(*assets, prefab);
-				m_Baselines.emplace(prefab, Baseline { snapshot ? std::move(*snapshot) : nlohmann::json(), revision });
-				continue;
+				found = m_Baselines.emplace(prefab, Baseline { snapshot ? std::move(*snapshot) : nlohmann::json(), revision }).first;
+			}
+			// Once per prefab and scene, with the first look at it: instances that missed a change of it while their scene was
+			// closed.
+			if (!found->second.CaughtUp)
+			{
+				found->second.CaughtUp = true;
+				if (!found->second.Snapshot.is_null())
+					CatchUp(context, prefab, found->second.Snapshot);
 			}
 			if (found->second.SourceRevision == revision)
 				continue;
@@ -165,13 +172,34 @@ namespace Strata
 			if (PrefabInstances::Compare(scene, root, previous).IsEmpty())
 				unchanged.push_back(root);
 		}
-		if (unchanged.empty())
+		UpdateInstances(context, prefab, unchanged, snapshot);
+	}
+
+	void PrefabSync::CatchUp(EditorContext& context, AssetHandle prefab, const nlohmann::json& snapshot)
+	{
+		// An instance whose part of the prefab is another version than the one it last took (MarkSynced), and whose values
+		// are still the ones it had then, missed the prefab's change; one modified since keeps its values (IsOutdated says so).
+		Scene& scene = *context.GetEditScene();
+		std::vector<Entity> missed;
+		for (const Entity root : PrefabInstances::FindInstanceRoots(scene, prefab))
+		{
+			m_CatchUpCheckCount++;
+			if (PrefabInstances::IsOutdated(root, snapshot) && PrefabInstances::IsUnchangedSinceSync(scene, root))
+				missed.push_back(root);
+		}
+		UpdateInstances(context, prefab, missed, snapshot);
+	}
+
+	void PrefabSync::UpdateInstances(EditorContext& context, AssetHandle prefab, const std::vector<Entity>& roots, const nlohmann::json& snapshot)
+	{
+		if (roots.empty())
 			return;
+		Scene& scene = *context.GetEditScene();
 		const std::optional<AssetMetadata> metadata = context.GetAssetManager()->GetMetadata(prefab);
 		SceneEditTransaction transaction(scene, fmt::format("Update Instances of {}", metadata ? metadata->Name : prefab.ToString()), {});
-		for (const Entity root : unchanged)
+		for (const Entity root : roots)
 			transaction.TrackSubtree(root.GetUUID());
-		for (const Entity root : unchanged)
+		for (const Entity root : roots)
 		{
 			const UUID id = root.GetUUID();
 			std::vector<UUID> created;
@@ -209,7 +237,9 @@ namespace Strata
 	void PrefabSync::SetBaseline(EditorContext& context, AssetHandle prefab, nlohmann::json snapshot)
 	{
 		EditorAssetManager* assets = context.GetAssetManager();
-		m_Baselines[prefab] = Baseline { std::move(snapshot), assets ? assets->GetSourceRevisions(prefab).Current : 0 };
+		const auto found = m_Baselines.find(prefab);
+		const bool caughtUp = found != m_Baselines.end() && found->second.CaughtUp;
+		m_Baselines[prefab] = Baseline { std::move(snapshot), assets ? assets->GetSourceRevisions(prefab).Current : 0, caughtUp };
 		m_BaselineVersion++;
 	}
 
@@ -227,9 +257,18 @@ namespace Strata
 		m_CompareCount++;
 		const nlohmann::json* baseline = GetBaseline(context, PrefabInstances::GetPrefab(root));
 		mark.Modified = baseline && !PrefabInstances::Compare(*root.GetScene(), root, *baseline).IsEmpty();
+		mark.Outdated = baseline && PrefabInstances::IsOutdated(root, *baseline);
 		mark.Changes = changes;
 		mark.BaselineVersion = m_BaselineVersion;
 		return mark.Modified;
+	}
+
+	bool PrefabSync::IsOutdated(EditorContext& context, Entity root)
+	{
+		if (!root || !PrefabInstances::IsInstanceRoot(root))
+			return false;
+		IsModified(context, root);
+		return m_Marks.at(root.GetUUID()).Outdated;
 	}
 
 }

@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Scene/PrefabInstances.h"
 
+#include "Strata/Core/Hash.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Reflection/PropertyJson.h"
@@ -114,6 +115,35 @@ namespace Strata
 			return entities;
 		}
 
+		// A hash of a part ({"Entities": [...]}, the root first) as it stands for an instance's values: without the root's place,
+		// transform and name (the instance's own), its entities in id order (Compare matches them by id). Never 0 for a part
+		// with entities; 0 for an empty one.
+		uint64_t HashPart(nlohmann::json part)
+		{
+			nlohmann::json* entities = part.contains("Entities") ? &part["Entities"] : nullptr;
+			if (!entities || !entities->is_array() || entities->empty())
+				return 0;
+			nlohmann::json& root = (*entities)[0];
+			if (root.is_object())
+			{
+				root.erase("Parent");
+				if (nlohmann::json* components = root.contains("Components") ? &root["Components"] : nullptr; components && components->is_object())
+				{
+					components->erase("Transform");
+					components->erase("Name");
+				}
+			}
+			std::vector<std::pair<std::string, const nlohmann::json*>> ordered;
+			ordered.reserve(entities->size());
+			for (const nlohmann::json& entity : *entities)
+				ordered.emplace_back(ToText(GetId(entity)), &entity);
+			std::stable_sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+			uint64_t hash = Hash::FNVOffsetBasis;
+			for (const auto& [id, entity] : ordered)
+				hash = Hash::FNV1a(JsonUtils::Dump(*entity), hash);
+			return hash != 0 ? hash : 1;
+		}
+
 		// The template entity ids of an instance's linked entities -> their UUIDs.
 		std::unordered_map<UUID, UUID> MapLinkedEntities(Entity root)
 		{
@@ -186,6 +216,45 @@ namespace Strata
 					part[0].erase("Parent");
 			}
 			return nlohmann::json { { "Entities", std::move(part) } };
+		}
+
+		uint64_t GetPartVersion(const nlohmann::json& snapshot, UUID templateRoot)
+		{
+			return HashPart(ExtractTemplate(snapshot, templateRoot));
+		}
+
+		uint64_t GetContentHash(const Scene& scene, Entity root)
+		{
+			std::unordered_map<UUID, UUID> ids;
+			return HashPart(MakeTemplate(scene, root, nullptr, nullptr, ids));
+		}
+
+		void MarkSynced(Scene& scene, Entity root, const nlohmann::json& snapshot)
+		{
+			PrefabInstanceComponent* link = root ? root.TryGetComponent<PrefabInstanceComponent>() : nullptr;
+			if (!link)
+				return;
+			const uint64_t version = GetPartVersion(snapshot, link->PrefabEntityID);
+			const uint64_t content = GetContentHash(scene, root);
+			// Taken again: MakeTemplate serializes the entities, which may grow the registry's pools under the component.
+			link = &root.GetComponent<PrefabInstanceComponent>();
+			link->PrefabVersion = version;
+			link->SyncedHash = content;
+		}
+
+		bool IsOutdated(Entity root, const nlohmann::json& snapshot)
+		{
+			const PrefabInstanceComponent* link = root ? root.TryGetComponent<PrefabInstanceComponent>() : nullptr;
+			if (!link || link->PrefabVersion == 0)
+				return false;
+			const uint64_t version = GetPartVersion(snapshot, link->PrefabEntityID);
+			return version != 0 && version != link->PrefabVersion;
+		}
+
+		bool IsUnchangedSinceSync(const Scene& scene, Entity root)
+		{
+			const PrefabInstanceComponent* link = root ? root.TryGetComponent<PrefabInstanceComponent>() : nullptr;
+			return link && link->SyncedHash != 0 && GetContentHash(scene, root) == link->SyncedHash;
 		}
 
 		nlohmann::json MakeTemplate(const Scene& scene, Entity root, const nlohmann::json* rootTransform, const nlohmann::json* rootName,
@@ -360,6 +429,7 @@ namespace Strata
 					ST_CORE_ERROR("An instance whose prefab could not replace it could not be restored either: {}", restoreError);
 				return fail(fmt::format("Rebuilding the instance failed: {}", error.empty() ? std::string("it could not be placed") : error));
 			}
+			MarkSynced(scene, scene.GetEntityByUUID(rootId), snapshot);
 			if (outCreated)
 				*outCreated = std::move(created);
 			return true;
