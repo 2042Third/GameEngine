@@ -471,6 +471,8 @@ namespace Strata
 		uint32_t meshes = 0;
 		uint32_t materials = 0;
 		uint32_t textures = 0;
+		uint32_t skeletons = 0;
+		uint32_t animations = 0;
 		uint32_t others = 0;
 		uint64_t triangles = 0;
 		size_t levels = 0;
@@ -499,6 +501,12 @@ namespace Strata
 				case AssetType::Texture:
 					textures++;
 					break;
+				case AssetType::Skeleton:
+					skeletons++;
+					break;
+				case AssetType::AnimationClip:
+					animations++;
+					break;
 				default:
 					others++;
 					break;
@@ -519,6 +527,12 @@ namespace Strata
 			"AssetInspector.Model.Levels");
 		row("Materials", "Materials the import made", std::to_string(materials), "AssetInspector.Model.Materials");
 		row("Textures", "Images the file embeds or names", std::to_string(textures), "AssetInspector.Model.Textures");
+		// Only models with skins or animations have these, so static models keep their short summary.
+		if (skeletons > 0)
+			row("Skeletons", "Joint hierarchies of the file's skins (an Animator's Skeleton)", std::to_string(skeletons), "AssetInspector.Model.Skeletons");
+		if (animations > 0)
+			row("Animations", "Clips of the file's animations (states of an animation controller play them)", std::to_string(animations),
+				"AssetInspector.Model.Animations");
 		if (others > 0)
 			row("Other", "Further sub-assets", std::to_string(others), "AssetInspector.Model.Other");
 		UI::EndPropertyTable();

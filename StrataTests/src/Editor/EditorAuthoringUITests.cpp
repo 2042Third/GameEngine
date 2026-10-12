@@ -1813,10 +1813,42 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		CHECK(UI::ItemProbe::Find("AssetInspector.Model.Textures")->Text == std::to_string(textures));
 		CHECK(std::stoi(UI::ItemProbe::Find("AssetInspector.Model.Triangles")->Text) > 0);
 		CHECK(std::stoi(UI::ItemProbe::Find("AssetInspector.Model.Levels")->Text) >= 1);
+		// A static model has neither skeletons nor animations to count.
+		CHECK_FALSE(UI::ItemProbe::Find("AssetInspector.Model.Skeletons"));
+		CHECK_FALSE(UI::ItemProbe::Find("AssetInspector.Model.Animations"));
 		// Without a GPU the preview says why it is missing.
 		REQUIRE(UI::ItemProbe::Find("AssetInspector.Thumbnail"));
 		if (!Renderer::IsInitialized())
 			CHECK_FALSE(UI::ItemProbe::Find("AssetInspector.Thumbnail")->Enabled);
+	}
+
+	TEST_CASE("A skinned model's Asset tab counts its skeletons and animations")
+	{
+		AuthoringEditor editor({ ImVec2(1600.0f, 1200.0f), 1.0f }, WithFeatureProject("EditorAuthoringSkinnedSummary"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle model = assets->FindAssetByPath("Models/Arm.gltf");
+		REQUIRE(model.IsValid());
+		uint32_t skeletons = 0;
+		uint32_t animations = 0;
+		uint32_t others = 0;
+		for (AssetHandle subAsset : assets->GetImportInfo(model).SubAssets)
+		{
+			const AssetType type = assets->GetAssetType(subAsset);
+			skeletons += type == AssetType::Skeleton ? 1 : 0;
+			animations += type == AssetType::AnimationClip ? 1 : 0;
+			others += type == AssetType::Mesh || type == AssetType::Material || type == AssetType::Texture || type == AssetType::Skeleton
+				|| type == AssetType::AnimationClip ? 0 : 1;
+		}
+		REQUIRE(skeletons == 1);
+		REQUIRE(animations >= 2);
+		editor.Run("selection.set", { { "asset", UUIDToJson(model) } });
+		CHECK(editor.FramesUntil([]() { return UI::ItemProbe::Find("AssetInspector.Model.Animations").has_value(); }));
+		REQUIRE(UI::ItemProbe::Find("AssetInspector.Model.Skeletons"));
+		CHECK(UI::ItemProbe::Find("AssetInspector.Model.Skeletons")->Text == std::to_string(skeletons));
+		CHECK(UI::ItemProbe::Find("AssetInspector.Model.Animations")->Text == std::to_string(animations));
+		// They are named, not counted among the other sub-assets.
+		CHECK(UI::ItemProbe::Find("AssetInspector.Model.Other").has_value() == (others > 0));
 	}
 
 	TEST_CASE("An audio clip's Asset tab shows its length and waveform, and Play needs audio output")

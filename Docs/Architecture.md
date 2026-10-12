@@ -2371,7 +2371,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
     materials read it (`UI::TextureImage`: sRGB colors encoded again for the display, grayscale BC4/R8 as gray,
     two-channel normal maps with their Z), and its caption names the stored format Compression and Quality chose and what
     the texture takes on the GPU. Materials, meshes, models and prefabs show their thumbnail large; a model adds a summary
-    of its sub-assets (meshes, their triangles and levels of detail once loaded, materials, textures). An audio clip shows
+    of its sub-assets (meshes, their triangles and levels of detail once loaded, materials, textures, and the skeletons
+    and animation clips of a model with skins or animations). An audio clip shows
     its length, rate and channels, a waveform (`Editor/AudioPreview`: per column the lowest and highest sample, computed on
     a job; streamed clips are decoded whole for it, up to ten minutes) and Play and Stop on a preview voice: an
     `AudioSource` of the `AudioEngine` that belongs to no scene, stopped when another asset is inspected or the tab hides.
