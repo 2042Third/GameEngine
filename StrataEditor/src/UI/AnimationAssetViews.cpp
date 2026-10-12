@@ -112,6 +112,15 @@ namespace Strata
 			bool Square = false;
 		};
 
+		// The least width of a column: a field's from its font sizes; a square's the frame's height, or its header's width
+		// when that is wider ("Loop" over a checkbox), so that a header never runs into the next one.
+		float GetLeastColumnWidth(const EditColumn& column, float fontSize, float square)
+		{
+			if (!column.Square)
+				return column.Width * fontSize;
+			return std::max(square, ImGui::CalcTextSize(column.Name, nullptr, true).x);
+		}
+
 		// Begins an editable table (and draws its header) whose fields never get narrower than their least widths: in a
 		// narrower panel the table scrolls sideways rather than squeezing names and numbers into ellipses.
 		bool BeginEditTable(const char* id, std::span<const EditColumn> columns, size_t rows)
@@ -121,7 +130,7 @@ namespace Strata
 			const float square = ImGui::GetFrameHeight();
 			float leastWidth = 0.0f;
 			for (const EditColumn& column : columns)
-				leastWidth += (column.Square ? square : column.Width * fontSize) + style.CellPadding.x * 2.0f;
+				leastWidth += GetLeastColumnWidth(column, fontSize, square) + style.CellPadding.x * 2.0f;
 			ImGuiTableFlags flags = ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg;
 			ImVec2 outerSize(0.0f, 0.0f);
 			float innerWidth = 0.0f;
@@ -140,7 +149,7 @@ namespace Strata
 			for (const EditColumn& column : columns)
 			{
 				if (column.Square)
-					ImGui::TableSetupColumn(column.Name, ImGuiTableColumnFlags_WidthFixed, square);
+					ImGui::TableSetupColumn(column.Name, ImGuiTableColumnFlags_WidthFixed, GetLeastColumnWidth(column, fontSize, square));
 				else
 					ImGui::TableSetupColumn(column.Name, ImGuiTableColumnFlags_WidthStretch, column.Width);
 			}

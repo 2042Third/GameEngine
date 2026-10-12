@@ -206,6 +206,32 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		CHECK(scrolled->Min.x < remove->Min.x - 4.0f * frameHeight);
 	}
 
+	TEST_CASE("The controller tables' checkbox columns are as wide as their headers")
+	{
+		// "Loop" over the states' checkboxes is wider than a checkbox at either scale; it ran into the Events header.
+		for (const float scale : { 1.0f, 1.5f })
+		{
+			CAPTURE(scale);
+			HarnessEditor editor({ ImVec2(2400.0f, 1600.0f), scale }, WithFeatureProject("EditorAnimationHeaders"));
+			REQUIRE(editor.Context().SetInspectedAsset(c_ArmController));
+			REQUIRE(editor.FramesUntil([&]() { return ShowsControllerTables(editor); }));
+			editor.Frames(2);
+			// The states' table: the one whose fifth column is Loop.
+			const ImGuiTable* states = nullptr;
+			ImGuiContext& context = *GImGui;
+			for (int index = 0; index < context.Tables.GetMapSize(); index++)
+			{
+				ImGuiTable* table = context.Tables.TryGetMapData(index);
+				if (table && table->ColumnsCount == 7 && std::string_view(ImGui::TableGetColumnName(table, 4)) == "Loop")
+					states = table;
+			}
+			REQUIRE(states);
+			float header = 0.0f;
+			editor.Harness.Frame([&header]() { header = ImGui::CalcTextSize("Loop").x; });
+			CHECK(states->Columns[4].WidthGiven >= header);
+		}
+	}
+
 	TEST_CASE("An edit that ends in the middle of the tables leaves the rest of the frame drawn from intact data")
 	{
 		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorAnimationControllerCommit"));
