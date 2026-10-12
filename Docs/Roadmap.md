@@ -233,10 +233,13 @@ Open items and deferrals later waves own:
   driver keeps of loading's transient memory once freed (staging's host memory peaked 35 above its start) and of the
   first frames' pipeline compilation. In all about 556 MiB after loading, 563 MiB (590 MB) at the peak. An empty scene
   at 1920x1080 takes 282 MiB (295 MB), with the sun's shadow cascades 349 MiB (366 MB), the stress scene without
-  textures 442 MiB (464 MB). What is left to win belongs to later work: mip streaming keeps only the mips the screen
-  needs of the 106.7 MiB of textures and uploads in smaller steps (`mip-streaming`), and shadow cascades sized to what a
-  view needs (fewer cascades or 16-bit depth for far ones, with the depth bias retuned) would halve the 66 MiB
-  (renderer, later). Overlays that hook every windowed Vulkan process count too: RivaTuner Statistics Server, when it
+  textures 442 MiB (464 MB). Mip streaming (`mip-streaming`, wave 3) keeps only the levels the screen needs of the
+  106.7 MiB of textures and uploads in smaller steps: with the whole world in view (the `TopDown` scene at 1920x1080) the
+  game holds 0.02 MiB of textures, its device 268 MiB and staging at most 24.6 MiB, and peaks at 448 MiB (470 MB;
+  454-470 MB over that stream's runs, against 595-606 MB with every texture resident; 536-542 MB at 2880x1620). What is
+  left to win belongs to later renderer work: shadow cascades sized to what a view needs (fewer cascades or 16-bit depth
+  for far ones, with the depth bias retuned) would halve the 66 MiB, and the render targets take 58 MiB. Overlays that
+  hook every windowed Vulkan process count too: RivaTuner Statistics Server, when it
   runs, adds about 55 MiB to every game and editor (its hook library allocates it as the window opens), which takes the
   stress game to about the 650 MB limit; the gates' measurements must be taken without it.
 - Editor (later editor work, not planned in a wave yet): the Inspector reads every selected entity's values each frame,
