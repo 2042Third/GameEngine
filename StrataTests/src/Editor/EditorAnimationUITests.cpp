@@ -208,11 +208,12 @@ TEST_SUITE("Editor.UI.AssetInspector")
 
 	TEST_CASE("The controller tables' checkbox columns are as wide as their headers")
 	{
-		// "Loop" over the states' checkboxes is wider than a checkbox at either scale; it ran into the Events header.
+		// "Loop" over the states' checkboxes is wider than a checkbox at either scale; it ran into the Events header. In a
+		// maximized window of a 4K display (the default layout's Asset tab) the states still fit without scrolling.
 		for (const float scale : { 1.0f, 1.5f })
 		{
 			CAPTURE(scale);
-			HarnessEditor editor({ ImVec2(2400.0f, 1600.0f), scale }, WithFeatureProject("EditorAnimationHeaders"));
+			HarnessEditor editor({ ImVec2(3840.0f, 2054.0f), scale }, WithFeatureProject("EditorAnimationHeaders"));
 			REQUIRE(editor.Context().SetInspectedAsset(c_ArmController));
 			REQUIRE(editor.FramesUntil([&]() { return ShowsControllerTables(editor); }));
 			editor.Frames(2);
@@ -229,6 +230,7 @@ TEST_SUITE("Editor.UI.AssetInspector")
 			float header = 0.0f;
 			editor.Harness.Frame([&header]() { header = ImGui::CalcTextSize("Loop").x; });
 			CHECK(states->Columns[4].WidthGiven >= header);
+			CHECK((states->Flags & ImGuiTableFlags_ScrollX) == 0);
 		}
 	}
 

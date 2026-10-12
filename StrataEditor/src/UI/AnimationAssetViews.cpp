@@ -561,8 +561,10 @@ namespace Strata
 		static const PropertyInfo c_Events = MakeProperty("Events", PropertyType::String, "Events scripts receive (OnAnimationEvent): Name@seconds, ...");
 
 		std::optional<size_t> removed;
+		// Events take 6.5 font sizes ("SwingEnd@0.9" whole), the room Loop's header needs beside its checkbox, so the table
+		// still fits the Asset tab of the default layout at 100% and 150% without scrolling.
 		static constexpr EditColumn c_Columns[] = { { "##Default", 0.0f, true }, { "Name", 6.0f }, { "Clip", 7.5f }, { "Speed", 4.0f }, { "Loop", 0.0f, true },
-			{ "Events", 7.0f }, { "##Remove", 0.0f, true } };
+			{ "Events", 6.5f }, { "##Remove", 0.0f, true } };
 		if (BeginEditTable("States", c_Columns, data.States.size()))
 		{
 			for (size_t index = 0; index < data.States.size(); index++)
