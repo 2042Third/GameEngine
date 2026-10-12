@@ -269,9 +269,10 @@ ST_SCRIPT_CLASS(Spinner)
 )CPP";
 		}
 
-		const std::string header = fmt::format(R"CPP(// {0}: a script class. Attach it to an entity (Inspector > Add Component > Script, or the command script.add) and press
-// Play, which builds the scripts first. Fields (ST_SCRIPT_FIELD) are set per entity in the Inspector and kept across hot
-// reloads. Docs/Manual/Scripting.md in the Strata engine's folder describes the SDK, building, debugging and hot reload.
+		const std::string header = fmt::format(R"CPP(// {0}: a script class. Once the scripts are built with it (Scripts > Build Scripts; New Script starts a build), attach
+// it to an entity (Inspector > Add Component > Script, or the command script.add); Play rebuilds the scripts when they
+// changed. Fields (ST_SCRIPT_FIELD) are set per entity in the Inspector and kept across hot reloads.
+// Docs/Manual/Scripting.md in the Strata engine's folder describes the SDK, building, debugging and hot reload.
 
 #include "StrataScript/StrataScript.h"
 

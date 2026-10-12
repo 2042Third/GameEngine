@@ -383,7 +383,13 @@ TEST_SUITE("Editor.UI.Scripts")
 		REQUIRE(editor.ReplaceText("NewScript.Class", "DoorOpener"));
 		editor.Frames(1);
 		REQUIRE(UI::ItemProbe::Find("NewScript.Create")->Enabled);
+		const ScriptBuilder& builder = editor.Context().GetScriptBuilder();
+		const uint64_t buildsBefore = builder.GetLastResult().ID;
+		REQUIRE_FALSE(builder.IsRunning());
 		REQUIRE(editor.Click("NewScript.Create"));
+		// The scripts build at once (the stand-in for CMake may have finished already): the new class reaches the Inspector's
+		// Add Script once the build finished.
+		CHECK((builder.IsRunning() ? builder.GetCurrentID() : builder.GetLastResult().ID) == buildsBefore + 1);
 		editor.Frames(2);
 		CHECK_FALSE(editor.Layer->GetNewScriptDialog().IsOpen());
 		const std::filesystem::path file = editor.Context().GetProject()->GetScriptSourceDirectory() / "DoorOpener.cpp";

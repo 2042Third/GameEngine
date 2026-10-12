@@ -38,7 +38,8 @@ ST_SCRIPT_CLASS(DoorOpener)
 ```
 
 The name must be a C++ class name that the project's scripts and the SDK do not use yet (the dialog says why when it
-cannot). The file opens in your code editor (see [Your code editor](#your-code-editor)). Every `.cpp` and `.h` file in
+cannot). The file opens in your code editor (see [Your code editor](#your-code-editor)), and the scripts start building:
+the status bar shows "Building", and a class can be attached once a build holds it. Every `.cpp` and `.h` file in
 `Scripts/` (and its folders) belongs to the module; you can also add files there by hand. Tools and agents create scripts
 with the command `script.create {"class", "fields", "template"}`.
 
@@ -48,10 +49,11 @@ plays.
 
 ## Attach it and play
 
-Select an entity, **Add Component > Script** in the Inspector, and pick the class. Then press **Play** (Ctrl+P): when the
-scripts changed since they were last built, or were never built, Play builds them first and starts the game once the
-build succeeded. The status bar shows "Building to play"; click it to cancel. **Scripts > Build Scripts** (Ctrl+B)
-builds without playing.
+Once the build that New Script started finished, select an entity, **Add Component > Script** in the Inspector, and pick
+the class: the Inspector offers the classes of the built scripts, so a class you added by hand needs **Scripts > Build
+Scripts** (Ctrl+B) first. Then press **Play** (Ctrl+P): when the scripts changed since they were last built (a file
+edited, added or removed), or were never built, Play builds them first and starts the game once the build succeeded. The
+status bar shows "Building to play"; click it to cancel.
 
 A project whose scenes use no script yet is not asked to build: its status bar says "Scripts unused" until an entity has
 a Script component.

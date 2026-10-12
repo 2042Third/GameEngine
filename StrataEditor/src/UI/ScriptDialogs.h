@@ -10,7 +10,8 @@ namespace Strata
 
 	// Scripts > New Script...: a class name and a template (a behaviour with OnCreate, OnUpdate and a field, or an empty
 	// class). The name is checked as it is typed (ValidateNewScriptClass, which reads the script directory: only when the
-	// name changed); Create runs script.create and opens the new file in the external editor. Drawn by EditorLayer.
+	// name changed); Create runs script.create, opens the new file in the external editor and starts building the scripts
+	// (script.build), so that the class can be attached once the build finished. Drawn by EditorLayer.
 	class NewScriptDialog
 	{
 	public:

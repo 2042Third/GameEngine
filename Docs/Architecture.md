@@ -1558,7 +1558,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   panel draws (the Content Browser's Scripts root once Content Browser v2 hosts it): it lists on an I/O thread
   (`ScriptSourceList`, whose job compares the new listing with the one before and shares it immutable, so the main
   thread neither copies nor compares files) when it is first drawn and every second while it is drawn, never while it is
-  not, and rebuilds its rows only when the files or the search changed. Play builds
+  not, and rebuilds its rows only when the files or the search changed. New Script (`UI/ScriptDialogs`) runs
+  `script.create` and starts a build at once, since the Inspector offers the classes of the loaded module only. Play builds
   first: `play.start` asks `EditorContext::GetPlayBuildReason` and, when there is a reason, starts the build
   (`StartPlayBuild`) and defers until it finished. The reasons: the project's module not loaded while a scene or prefab
   uses scripts (`DoScenesUseScripts`, the edited scene's Script components and a scan of the project's scene and prefab

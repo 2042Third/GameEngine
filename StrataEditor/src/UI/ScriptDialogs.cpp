@@ -10,6 +10,7 @@
 #include "UI/Widgets.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Log.h>
 
 #include <imgui.h>
 
@@ -105,8 +106,9 @@ namespace Strata
 
 		const std::filesystem::path file = project->GetScriptSourceDirectory() / FileSystem::FromUTF8((m_ClassName.empty() ? std::string("<Class>") : m_ClassName) + ".cpp");
 		ImGui::Spacing();
-		Caption(m_Problem.empty() ? fmt::format("Writes {}, built with the project's scripts; Play builds them first.",
-			FileSystem::ToUTF8(file.lexically_relative(project->GetProjectDirectory()))) : m_Problem, m_Problem.empty() ? colors.TextSecondary : colors.Error, width);
+		Caption(m_Problem.empty() ? fmt::format("Writes {} and builds the scripts. Once the build finished, attach the class to an entity (Add "
+			"Component > Script); Play rebuilds what changes.", FileSystem::ToUTF8(file.lexically_relative(project->GetProjectDirectory()))) : m_Problem,
+			m_Problem.empty() ? colors.TextSecondary : colors.Error, width);
 		if (!m_Outcome.empty())
 			Caption(m_Outcome, colors.Error, width);
 
@@ -119,6 +121,14 @@ namespace Strata
 				{ { "class", m_ClassName }, { "template", m_Empty ? "empty" : "behaviour" }, { "open", true } });
 			if (result.Success)
 			{
+				// The file exists either way; say why it did not open rather than leave the person waiting for their editor.
+				if (result.Value.contains("openError"))
+					ST_WARN("New Script: '{}' was written, but it did not open: {}", result.Value["relativePath"].get<std::string>(), result.Value["openError"].get<std::string>());
+				// The class can be attached once a module holds it: the build starts now (the status bar shows it), and the
+				// Inspector offers the class when it finished.
+				const EditorCommandResult build = context.Commands.Execute(context.Context, "script.build", { { "wait", false } });
+				if (!build.Success)
+					ST_WARN("New Script: the scripts did not start building ({}); build them before attaching the class (Scripts > Build Scripts)", build.Error);
 				m_Outcome.clear();
 				m_ClassName.clear();
 				m_CheckedName.reset();
