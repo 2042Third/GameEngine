@@ -160,6 +160,43 @@ TEST_SUITE("Scene.PrefabInstances")
 		CHECK(PrefabInstances::ExtractTemplate(replaced, UUID(77))["Entities"].size() == 1);
 	}
 
+	TEST_CASE("A snapshot that lists children before their parents works like one in hierarchy order")
+	{
+		// The crate's snapshot written by hand with the handle first and the lid last: Crate, Lid, Handle -> Handle, Crate, Lid.
+		LinkedCrate crate;
+		nlohmann::json shuffled = crate.Snapshot;
+		nlohmann::json& entities = shuffled["Entities"];
+		REQUIRE(entities.size() == 3);
+		entities = nlohmann::json::array({ entities[2], entities[0], entities[1] });
+
+		// The whole part, the root first and parents before children.
+		const nlohmann::json part = PrefabInstances::ExtractTemplate(shuffled, crate.Crate.GetUUID());
+		REQUIRE(part["Entities"].size() == 3);
+		CHECK(part["Entities"][0]["ID"] == UUIDToJson(crate.Crate.GetUUID()));
+		CHECK(part["Entities"][1]["ID"] == UUIDToJson(crate.Lid.GetUUID()));
+		CHECK(part["Entities"][2]["ID"] == UUIDToJson(crate.Handle.GetUUID()));
+		CHECK(PrefabInstances::Compare(*crate.World, crate.Crate, shuffled).IsEmpty());
+
+		// Revert brings back a handle the instance lost.
+		const UUID crateId = crate.Crate.GetUUID();
+		crate.World->DestroyEntities(std::vector<Entity> { crate.Handle });
+		std::vector<UUID> created;
+		std::string error;
+		REQUIRE(PrefabInstances::Replace(*crate.World, crate.World->GetEntityByUUID(crateId), shuffled, &created, &error));
+		CHECK(created.size() == 1);
+		const Entity root = crate.World->GetEntityByUUID(crateId);
+		CHECK(PrefabInstances::Compare(*crate.World, root, shuffled).IsEmpty());
+
+		// Applying replaces the whole old part: no entity stays behind or comes twice.
+		std::unordered_map<UUID, UUID> ids;
+		const nlohmann::json instance = PrefabInstances::MakeTemplate(*crate.World, root, nullptr, nullptr, ids);
+		const nlohmann::json applied = PrefabInstances::ReplaceTemplate(shuffled, crateId, instance);
+		CHECK(applied["Entities"].size() == 3);
+		CHECK(PrefabInstances::ExtractTemplate(applied, crateId)["Entities"].size() == 3);
+		crate.World->UpdateWorldTransforms();
+		Tests::CheckSceneCaches(*crate.World);
+	}
+
 	TEST_CASE("Unpack and StripLinks remove the links of one prefab")
 	{
 		LinkedCrate crate;

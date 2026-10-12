@@ -8,7 +8,11 @@
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
 
+#include <algorithm>
+#include <optional>
+#include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace Strata
 {
@@ -57,6 +61,41 @@ namespace Strata
 		std::string ToText(UUID id)
 		{
 			return UUIDToJson(id).get<std::string>();
+		}
+
+		// The indices into a snapshot's entity list of the subtree under the entity `root`: the root first, then parents before
+		// their children, siblings in the list's order. Documents may list children before their parents (they are resolved
+		// by id), so the subtree is found through the parent links, whatever the order; a broken document's parent loops end
+		// where an entity comes up again.
+		std::vector<size_t> FindSubtree(const nlohmann::json& entities, UUID root)
+		{
+			std::vector<size_t> subtree;
+			std::unordered_map<UUID, std::vector<size_t>> children;
+			std::optional<size_t> rootIndex;
+			for (size_t index = 0; index < entities.size(); index++)
+			{
+				const UUID id = GetId(entities[index]);
+				if (id == root && !rootIndex)
+					rootIndex = index;
+				else
+					children[GetParentId(entities[index])].push_back(index);
+			}
+			if (!rootIndex)
+				return subtree;
+			std::unordered_set<size_t> visited = { *rootIndex };
+			subtree.push_back(*rootIndex);
+			for (size_t next = 0; next < subtree.size(); next++)
+			{
+				const auto found = children.find(GetId(entities[subtree[next]]));
+				if (found == children.end())
+					continue;
+				for (size_t child : found->second)
+				{
+					if (visited.insert(child).second)
+						subtree.push_back(child);
+				}
+			}
+			return subtree;
 		}
 
 		// The instance's entities (the root's subtree), depth first.
@@ -141,24 +180,10 @@ namespace Strata
 			const nlohmann::json* entities = JsonUtils::Find(snapshot, "Entities");
 			if (entities && entities->is_array())
 			{
-				// Parents come before their children: one pass collects the subtree.
-				std::unordered_set<UUID> members;
-				for (const nlohmann::json& entity : *entities)
-				{
-					const UUID id = GetId(entity);
-					if (id == templateRoot)
-					{
-						members.insert(id);
-						nlohmann::json root = entity;
-						root.erase("Parent");
-						part.push_back(std::move(root));
-					}
-					else if (!members.empty() && members.contains(GetParentId(entity)))
-					{
-						members.insert(id);
-						part.push_back(entity);
-					}
-				}
+				for (size_t index : FindSubtree(*entities, templateRoot))
+					part.push_back((*entities)[index]);
+				if (!part.empty())
+					part[0].erase("Parent");
 			}
 			return nlohmann::json { { "Entities", std::move(part) } };
 		}
@@ -347,16 +372,15 @@ namespace Strata
 			const nlohmann::json* source = JsonUtils::Find(snapshot, "Entities");
 			const nlohmann::json* replacement = JsonUtils::Find(part, "Entities");
 			bool inserted = false;
-			std::unordered_set<UUID> removed;
 			if (source && source->is_array())
 			{
-				for (const nlohmann::json& entity : *source)
+				const std::vector<size_t> subtree = FindSubtree(*source, templateRoot);
+				const std::unordered_set<size_t> removed(subtree.begin(), subtree.end());
+				for (size_t index = 0; index < source->size(); index++)
 				{
-					const UUID id = GetId(entity);
-					if (id == templateRoot || (!removed.empty() && removed.contains(GetParentId(entity))))
+					if (removed.contains(index))
 					{
-						removed.insert(id);
-						// The new part goes where the old one was.
+						// The new part goes where the old one began.
 						if (!inserted && replacement)
 						{
 							for (const nlohmann::json& added : *replacement)
@@ -365,7 +389,7 @@ namespace Strata
 						}
 						continue;
 					}
-					entities.push_back(entity);
+					entities.push_back((*source)[index]);
 				}
 			}
 			if (!inserted && replacement)

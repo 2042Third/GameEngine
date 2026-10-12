@@ -44,8 +44,9 @@ namespace Strata
 		// Every instance root of a prefab in the scene.
 		std::vector<Entity> FindInstanceRoots(Scene& scene, AssetHandle prefab);
 
-		// The part of a prefab snapshot below a template root: that entity and its descendants, in snapshot order (its Parent
-		// left out). Empty "Entities" when the snapshot lacks the root.
+		// The part of a prefab snapshot below a template root: that entity first (its Parent left out), then its descendants,
+		// parents before their children, found through their Parent links whatever order the snapshot lists them in (documents
+		// written by hand may list a child first). Empty "Entities" when the snapshot lacks the root.
 		nlohmann::json ExtractTemplate(const nlohmann::json& snapshot, UUID templateRoot);
 
 		// The template an instance root's subtree makes: its entities with the prefab's ids (their PrefabEntityIDs; entities
@@ -65,8 +66,8 @@ namespace Strata
 		// tracking); false, changing nothing, when the snapshot lacks the root's template or the scene cannot hold the result.
 		bool Replace(Scene& scene, Entity root, const nlohmann::json& snapshot, std::vector<UUID>* outCreated = nullptr, std::string* outError = nullptr);
 
-		// The prefab's snapshot with one root's part replaced by `part` (MakeTemplate's), in its place, or appended when the
-		// snapshot lacked it.
+		// The prefab's snapshot with one root's part (found as ExtractTemplate finds it) replaced by `part` (MakeTemplate's),
+		// where the old part began, or appended when the snapshot lacked it.
 		nlohmann::json ReplaceTemplate(const nlohmann::json& snapshot, UUID templateRoot, const nlohmann::json& part);
 
 		// Links entities captured into a prefab (with their UUIDs as its ids, as Prefab::CreateFromEntities captures them) to
