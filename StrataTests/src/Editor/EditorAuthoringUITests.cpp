@@ -1007,12 +1007,20 @@ TEST_SUITE("Editor.UI.Inspector")
 		REQUIRE(UI::ItemProbe::Find("Inspector.Transform.Menu").has_value());
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.Menu").has_value());
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.Remove").has_value());
+		// Of the link it shows what it links to; the hashes the catch-up keeps (PrefabInstances::MarkSynced) are bookkeeping.
+		CHECK(UI::ItemProbe::Find("Inspector.PrefabInstance.Prefab").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.PrefabInstance.PrefabEntityID").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.PrefabVersion").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.SyncedHash").has_value());
 
 		// Copied values hold only what component.set accepts: the link's read-only values are nothing to paste.
 		const ComponentInfo* prefab = ComponentRegistry::Find<PrefabInstanceComponent>();
 		REQUIRE(prefab);
 		const nlohmann::json values = editor.Run("component.get", { { "entity", found[0] }, { "component", "PrefabInstance" } })["values"];
 		REQUIRE_FALSE(values.empty());
+		// Hidden from the inspector, the hashes are still reported (and serialized).
+		CHECK(values["PrefabVersion"].get<std::string>().size() == 16);
+		CHECK(values["SyncedHash"].get<std::string>().size() == 16);
 		EditorActions::CopyComponentValues(*prefab, values);
 		CHECK_FALSE(EditorActions::ReadComponentValues(*prefab).has_value());
 		// Others keep their settable values.

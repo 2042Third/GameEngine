@@ -205,15 +205,16 @@ namespace Strata
 					component.PrefabEntityID = UUID::FromString(std::get<std::string>(value)).value_or(UUID::Null());
 				},
 				{ .DisplayName = "Prefab Entity ID", .Flags = PropertyFlags::ReadOnly })
-			// Hashes, as 16 hex digits (empty when not known), never edited by hand.
+			// Hashes, as 16 hex digits (empty when not known), never edited by hand: the catch-up's bookkeeping (MarkSynced), which
+			// a person cannot act on, so the inspector leaves them out (they are serialized and reported like the others).
 			.CustomProperty("PrefabVersion", PropertyType::String,
 				[](const PrefabInstanceComponent& component) -> PropertyValue { return FormatHash(component.PrefabVersion); },
 				[](PrefabInstanceComponent& component, const PropertyValue& value) { component.PrefabVersion = ParseHash(std::get<std::string>(value)); },
-				{ .DisplayName = "Prefab Version", .Flags = PropertyFlags::ReadOnly })
+				{ .DisplayName = "Prefab Version", .Flags = PropertyFlags::ReadOnly | PropertyFlags::Hidden })
 			.CustomProperty("SyncedHash", PropertyType::String,
 				[](const PrefabInstanceComponent& component) -> PropertyValue { return FormatHash(component.SyncedHash); },
 				[](PrefabInstanceComponent& component, const PropertyValue& value) { component.SyncedHash = ParseHash(std::get<std::string>(value)); },
-				{ .DisplayName = "Synced Hash", .Flags = PropertyFlags::ReadOnly });
+				{ .DisplayName = "Synced Hash", .Flags = PropertyFlags::ReadOnly | PropertyFlags::Hidden });
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Rendering
