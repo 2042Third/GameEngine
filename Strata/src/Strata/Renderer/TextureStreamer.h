@@ -14,6 +14,7 @@
 #include <mutex>
 #include <span>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace Strata
@@ -98,9 +99,19 @@ namespace Strata
 		// level: such a texture keeps them also under memory pressure).
 		void AddNeed(AssetHandle texture, uint32_t level, float coverage, bool cameraCut, bool whole = false);
 		// Ends the frame: each texture's target follows the frame's needs, finer at once, coarser only once the finer level
-		// was not needed for c_DropDelayFrames frames (c_NoLevel when nothing needed it that long). Needs start anew.
+		// was not needed for c_DropDelayFrames frames (c_NoLevel when nothing needed it that long). Needs start anew. The
+		// textures whose target changed in a way that can call for another level (new or forgotten, another Level, needed in
+		// this frame but not in the one before or the other way round) are listed in GetChanged until the next Update.
 		void Update(uint64_t frame);
 
+		// What a frame needs of a texture (AddNeed): of several uses and views, combined.
+		struct Need
+		{
+			uint32_t Level = c_NoLevel;
+			float Coverage = 0.0f;
+			bool CameraCut = false;
+			bool Whole = false;
+		};
 		struct Target
 		{
 			uint32_t Level = c_NoLevel;   // The level it should have
@@ -109,20 +120,22 @@ namespace Strata
 			bool Whole = false;           // A view of the frame needs every level (TextureStreamingView::Streaming false)
 			uint64_t HeldFrame = 0;       // The latest frame that needed Level or finer
 			uint64_t LastNeededFrame = 0; // The latest frame that needed it at all
+			// What the frame being recorded needs of it so far (AddNeed), which Update turns into the members above: kept here,
+			// so that a frame that needs what the one before needed allocates nothing.
+			Need Pending;
+			bool HasPending = false;
 		};
 		const Target* Find(AssetHandle texture) const;
 		const std::unordered_map<AssetHandle, Target>& GetTargets() const { return m_Targets; }
-		void Forget(AssetHandle texture) { m_Targets.erase(texture); }
+		// See Update.
+		const std::vector<AssetHandle>& GetChanged() const { return m_Changed; }
 	private:
-		struct Need
-		{
-			uint32_t Level = c_NoLevel;
-			float Coverage = 0.0f;
-			bool CameraCut = false;
-			bool Whole = false;
-		};
-		std::unordered_map<AssetHandle, Need> m_Needs; // The frame's
+		static void Combine(Need& need, uint32_t level, float coverage, bool cameraCut, bool whole);
+	private:
 		std::unordered_map<AssetHandle, Target> m_Targets;
+		std::unordered_map<AssetHandle, Need> m_NewNeeds; // The frame's needs of textures without a target
+		std::vector<AssetHandle> m_Changed;
+		uint64_t m_LastFrame = 0; // The frame of the latest Update
 	};
 
 	// A texture a TextureStreamer keeps whole for as long as its owner keeps the hold (TextureStreamer::Hold).
@@ -178,6 +191,9 @@ namespace Strata
 		// previews: requests the load like GetAsset and never asks for finer levels (what views or RequestLevel need still
 		// raises it). Null until it is loaded.
 		static Ref<Texture> GetPreview(AssetManagerBase& manager, AssetHandle texture);
+		// How many textures the latest OnUpdate looked at: those that changed or are not settled (m_Active), none in a still
+		// frame whose textures all have the levels they want (tests).
+		uint32_t GetTexturesLookedAt() const { return m_LookedAt; }
 
 		// AssetManagerExtension
 		bool RefinesPartialAssets(const AssetUploadContext* upload) const override;
@@ -250,6 +266,13 @@ namespace Strata
 		AssetManagerBase& m_Manager;
 		TextureStreamingPolicy m_Policy;
 		std::unordered_map<AssetHandle, Streamed> m_Streamed; // Textures with a read or a change under way, or a retry pending
+		// The textures OnUpdate looks at: those whose targets changed (TextureStreamingPolicy::GetChanged), whose asset objects
+		// changed (loaded, replaced, evicted: AssetManagerBase::GetContentChanges), that were streamed, and those not settled
+		// yet (below their wanted level, or above it where levels can go). A settled texture costs nothing per frame: a still
+		// frame of thousands of textures in view looks at none of them.
+		std::unordered_set<AssetHandle> m_Active;
+		uint64_t m_SeenContentVersion = 0; // The manager's content version m_Active followed last
+		uint32_t m_LookedAt = 0;
 		std::vector<std::weak_ptr<TextureHold>> m_Holds;      // Owned by their holders (Hold): gone once they release them
 		uint64_t m_Frame = 0;
 		// What the frame had used of the budgets when the streamer's update began (MakeCallContext).

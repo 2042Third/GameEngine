@@ -78,6 +78,36 @@ namespace Strata::Tests
 		return cooked;
 	}
 
+	std::vector<uint8_t> CookSolidTexture(uint32_t size, const std::array<uint8_t, 4>& color)
+	{
+		std::array<uint8_t, 64> texels {};
+		for (uint32_t texel = 0; texel < 16; texel++)
+			std::memcpy(texels.data() + texel * 4, color.data(), 4);
+		std::array<uint8_t, 16> block {};
+		BC7Encoder::EncodeBlock(texels.data(), block.data());
+		const uint32_t mips = TextureUtils::CalculateMipCount(size, size);
+		std::vector<std::vector<uint8_t>> levels(mips);
+		std::vector<std::span<const uint8_t>> spans;
+		for (uint32_t level = 0; level < mips; level++)
+		{
+			const uint32_t blocks = (std::max(1u, size >> level) + 3) / 4;
+			std::vector<uint8_t>& data = levels[level];
+			data.resize(static_cast<size_t>(blocks) * blocks * 16);
+			for (size_t offset = 0; offset < data.size(); offset += 16)
+				std::memcpy(data.data() + offset, block.data(), 16);
+			spans.push_back(data);
+		}
+		CookedTextureDescription description;
+		description.Format = TextureFormat::BC7SRGB;
+		description.Width = size;
+		description.Height = size;
+		description.MipCount = mips;
+		description.DebugName = "Solid";
+		std::vector<uint8_t> cooked = WriteCookedTexture(description, spans);
+		REQUIRE_FALSE(cooked.empty());
+		return cooked;
+	}
+
 	std::filesystem::path WriteGradientStreamingPack()
 	{
 		MaterialProperties properties = UnlitColor(glm::vec4(1.0f));

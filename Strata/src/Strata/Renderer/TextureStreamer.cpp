@@ -92,34 +92,55 @@ namespace Strata
 		return glm::distance(position, previousPosition) > c_CameraCutDistance || glm::dot(forward, previousForward) < c_CameraCutCosine;
 	}
 
-	void TextureStreamingPolicy::AddNeed(AssetHandle texture, uint32_t level, float coverage, bool cameraCut, bool whole)
+	void TextureStreamingPolicy::Combine(Need& need, uint32_t level, float coverage, bool cameraCut, bool whole)
 	{
-		Need& need = m_Needs[texture];
 		need.Level = std::min(need.Level, level);
 		need.Coverage = std::max(need.Coverage, std::isfinite(coverage) ? coverage : 0.0f);
 		need.CameraCut = need.CameraCut || cameraCut;
 		need.Whole = need.Whole || whole;
 	}
 
+	void TextureStreamingPolicy::AddNeed(AssetHandle texture, uint32_t level, float coverage, bool cameraCut, bool whole)
+	{
+		const auto found = m_Targets.find(texture);
+		if (found == m_Targets.end())
+		{
+			Combine(m_NewNeeds[texture], level, coverage, cameraCut, whole);
+			return;
+		}
+		Target& target = found->second;
+		if (!target.HasPending)
+		{
+			target.Pending = Need();
+			target.HasPending = true;
+		}
+		Combine(target.Pending, level, coverage, cameraCut, whole);
+	}
+
 	void TextureStreamingPolicy::Update(uint64_t frame)
 	{
+		m_Changed.clear();
 		for (auto it = m_Targets.begin(); it != m_Targets.end();)
 		{
 			Target& target = it->second;
-			auto need = m_Needs.find(it->first);
-			if (need != m_Needs.end())
+			const uint32_t previousLevel = target.Level;
+			const bool neededBefore = m_LastFrame != 0 && target.LastNeededFrame == m_LastFrame;
+			if (target.HasPending)
 			{
+				const Need& need = target.Pending;
 				// Finer at once; coarser once the finer level was not needed for a while.
-				if (need->second.Level <= target.Level || frame - std::min(target.HeldFrame, frame) >= c_DropDelayFrames)
+				if (need.Level <= target.Level || frame - std::min(target.HeldFrame, frame) >= c_DropDelayFrames)
 				{
-					target.Level = need->second.Level;
+					target.Level = need.Level;
 					target.HeldFrame = frame;
 				}
-				target.Coverage = need->second.Coverage;
-				target.CameraCut = need->second.CameraCut;
-				target.Whole = need->second.Whole;
+				target.Coverage = need.Coverage;
+				target.CameraCut = need.CameraCut;
+				target.Whole = need.Whole;
 				target.LastNeededFrame = frame;
-				m_Needs.erase(need);
+				target.HasPending = false;
+				if (target.Level != previousLevel || !neededBefore)
+					m_Changed.push_back(it->first);
 				++it;
 				continue;
 			}
@@ -130,17 +151,24 @@ namespace Strata
 			const uint64_t unneeded = frame - std::min(target.LastNeededFrame, frame);
 			if (unneeded >= c_ForgetFrames)
 			{
+				m_Changed.push_back(it->first);
 				it = m_Targets.erase(it);
 				continue;
 			}
 			if (frame - std::min(target.HeldFrame, frame) >= c_DropDelayFrames)
 				target.Level = c_NoLevel;
+			if (target.Level != previousLevel || neededBefore)
+				m_Changed.push_back(it->first);
 			++it;
 		}
 		// Textures needed for the first time (or again after they were forgotten).
-		for (const auto& [texture, need] : m_Needs)
+		for (const auto& [texture, need] : m_NewNeeds)
+		{
 			m_Targets[texture] = Target { need.Level, need.Coverage, need.CameraCut, need.Whole, frame, frame };
-		m_Needs.clear();
+			m_Changed.push_back(texture);
+		}
+		m_NewNeeds.clear();
+		m_LastFrame = frame;
 	}
 
 	const TextureStreamingPolicy::Target* TextureStreamingPolicy::Find(AssetHandle texture) const
@@ -438,6 +466,30 @@ namespace Strata
 		}
 		m_Frame++;
 		m_Policy.Update(m_Frame);
+		// What may call for another level since the last frame: changed targets and changed asset objects (a texture that
+		// loaded, was replaced by a reload or evicted). Streamed textures join below.
+		for (const AssetHandle handle : m_Policy.GetChanged())
+			m_Active.insert(handle);
+		const uint64_t contentVersion = m_Manager.GetContentVersion();
+		if (contentVersion != m_SeenContentVersion)
+		{
+			std::vector<AssetHandle> changed;
+			if (m_Manager.GetContentChanges(m_SeenContentVersion, changed))
+			{
+				for (const AssetHandle handle : changed)
+				{
+					if (m_Policy.Find(handle))
+						m_Active.insert(handle);
+				}
+			}
+			else
+			{
+				// More changes than the manager remembers: any texture may have changed.
+				for (const auto& [handle, target] : m_Policy.GetTargets())
+					m_Active.insert(handle);
+			}
+			m_SeenContentVersion = contentVersion;
+		}
 		m_StartUploadedBytes = context.UploadedBytes ? *context.UploadedBytes : 0;
 		m_StartUploadMs = context.UploadMs ? *context.UploadMs : 0.0f;
 		const RendererUploadContext* upload = dynamic_cast<const RendererUploadContext*>(context.Upload);
@@ -448,6 +500,8 @@ namespace Strata
 		{
 			const AssetHandle handle = it->first;
 			Streamed& streamed = it->second;
+			// Its levels may change in this frame, or did since the last (a drop for a budget between frames).
+			m_Active.insert(handle);
 			const Ref<Texture> texture = PeekTexture(handle);
 			if (!texture)
 			{
@@ -506,22 +560,32 @@ namespace Strata
 				++it;
 		}
 
-		// Each texture's wanted level; drops of levels no longer needed; queued reads move up as their textures are needed
-		// more (a camera cut's view first); and the textures below their target, to be ranked for the room in the budget.
+		// Each active texture's wanted level; drops of levels no longer needed; queued reads move up as their textures are
+		// needed more (a camera cut's view first); and the textures below their target, to be ranked for the room in the
+		// budget. A texture that has the level it wants (or is at its tail and wants it coarser), with nothing streaming, is
+		// settled: it leaves the active set until something changes it.
 		uint32_t drops = 0;
 		uint32_t belowWanted = 0;
 		std::vector<Raise> raises;
-		for (const auto& [handle, target] : m_Policy.GetTargets())
+		m_LookedAt = 0;
+		for (auto it = m_Active.begin(); it != m_Active.end();)
 		{
-			const Ref<Texture> texture = PeekTexture(handle);
+			m_LookedAt++;
+			const AssetHandle handle = *it;
+			const TextureStreamingPolicy::Target* target = m_Policy.Find(handle);
+			const Ref<Texture> texture = target ? PeekTexture(handle) : nullptr;
 			if (!texture)
+			{
+				// Forgotten, or not loaded: needed anew, or loaded (a content change), it is active again.
+				it = m_Active.erase(it);
 				continue;
+			}
 			const uint32_t tail = texture->GetTailLevel();
-			const uint32_t level = target.Level == TextureStreamingPolicy::c_NoLevel ? tail : std::min(target.Level, texture->GetMipCount() - 1);
+			const uint32_t level = target->Level == TextureStreamingPolicy::c_NoLevel ? tail : std::min(target->Level, texture->GetMipCount() - 1);
 			const uint32_t resident = texture->GetResidentLevel();
 			// What the latest frame did not draw is not raised: its held level (the hysteresis) only keeps what it has from
 			// going, and raising it would take room from what is drawn (and be taken back the next frame).
-			const bool needed = target.LastNeededFrame == m_Frame;
+			const bool needed = target->LastNeededFrame == m_Frame;
 			const uint32_t wanted = needed ? level : std::max(level, resident);
 			texture->SetWantedLevel(wanted);
 			if (wanted < resident)
@@ -529,7 +593,7 @@ namespace Strata
 			auto streamed = m_Streamed.find(handle);
 			if (streamed != m_Streamed.end() && streamed->second.Read != 0 && !streamed->second.Changing && wanted < resident)
 			{
-				const TextureStreamingPolicy::Rank rank = TextureStreamingPolicy::RankRaise(resident - level, target.Coverage, target.CameraCut);
+				const TextureStreamingPolicy::Rank rank = TextureStreamingPolicy::RankRaise(resident - level, target->Coverage, target->CameraCut);
 				if (rank.Outranks(streamed->second.ReadRank))
 				{
 					m_Manager.RaiseRange(streamed->second.Read, rank.Priority, rank.Score);
@@ -537,15 +601,26 @@ namespace Strata
 				}
 			}
 			const bool busy = streamed != m_Streamed.end() && (streamed->second.Read != 0 || streamed->second.Changing || streamed->second.RetryFrame > m_Frame);
-			if (busy || !texture->CanChangeLevels() || !upload || !m_Manager.HasStoredForm(handle))
+			const bool raise = wanted < resident;
+			// Levels go at most down to the tail.
+			const bool drop = level > resident && resident < tail;
+			if (!busy && !raise && !drop)
+			{
+				it = m_Active.erase(it);
+				continue;
+			}
+			++it;
+			if (busy || !texture->CanChangeLevels() || !upload)
 				continue;
 
-			if (wanted < resident)
+			if (raise)
 			{
-				const float need = target.Whole ? std::numeric_limits<float>::infinity() : target.Coverage;
-				raises.push_back(Raise { handle, texture, level, resident, need, TextureStreamingPolicy::RankRaise(resident - level, target.Coverage, target.CameraCut) });
+				if (!m_Manager.HasStoredForm(handle))
+					continue;
+				const float need = target->Whole ? std::numeric_limits<float>::infinity() : target->Coverage;
+				raises.push_back(Raise { handle, texture, level, resident, need, TextureStreamingPolicy::RankRaise(resident - level, target->Coverage, target->CameraCut) });
 			}
-			else if (level > resident && drops < c_MaxDropsPerFrame && m_Manager.ArePartialLoadsActive())
+			else if (drops < c_MaxDropsPerFrame && m_Manager.ArePartialLoadsActive() && m_Manager.HasStoredForm(handle))
 			{
 				if (Drop(handle, *texture, level, false, context) > 0)
 					drops++;

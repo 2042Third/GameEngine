@@ -109,6 +109,7 @@
 	"PerfGPU.Renderer.EditFramePointLights10k": { "Measured": 1.461, "Budget": 2.191, "Unit": "ms" },
 	"PerfGPU.Renderer.Render100kCubes": { "Measured": 0.6915, "Budget": 1.037, "Unit": "ms" },
 	"PerfGPU.Renderer.Render10kMaterials": { "Measured": 1.355, "Budget": 2.032, "Unit": "ms" },
+	"PerfGPU.Renderer.IdleFrame3kStreamedTextures": { "Measured": 1.017, "Budget": 1.525, "Unit": "ms" },
 	"PerfGPU.Renderer.Render10kMaterials.OpaqueDrawCalls": { "Measured": 1, "Budget": 1, "Unit": "count" },
 	"PerfGPU.Renderer.Render300kCubes": { "Measured": 2.262, "Budget": 3.393, "Unit": "ms" },
 	"PerfGPU.Streaming.FramesToSettle": { "Measured": 4, "Budget": 6, "Unit": "count" },

@@ -275,6 +275,11 @@ TEST_SUITE("GPU.TextureStreaming")
 			CHECK(detail.Count == c_TextureMips);
 			// Its pixels are those of the fully resident texture.
 			CHECK(MaxDifference(image, reference) <= 2);
+			// Settled, still frames give the streamer nothing to look at (its work follows what changed).
+			frame.Run(CameraAt(c_SmallDistance));
+			frame.Run(CameraAt(c_SmallDistance));
+			CHECK(TextureStreamer::Find(*manager)->GetTexturesLookedAt() == 0);
+			CHECK(PeekTexture(*manager)->GetResidentLevel() == 5);
 
 			// Filling the screen streams it to level 0 within 30 frames.
 			uint32_t frames = 0;

@@ -7,6 +7,7 @@
 
 #include <glm/glm.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -200,6 +201,79 @@ TEST_SUITE("Renderer.TextureStreamer")
 		CHECK(policy.Find(texture)->Level == TextureStreamingPolicy::c_NoLevel);
 		while (frame < lastNeeded + TextureStreamingPolicy::c_ForgetFrames)
 			policy.Update(++frame);
+		CHECK(policy.Find(texture) == nullptr);
+	}
+
+	TEST_CASE("Only targets that changed in a way that can call for another level are listed as changed")
+	{
+		TextureStreamingPolicy policy;
+		const AssetHandle texture(0x9300);
+		const AssetHandle other(0x9301);
+		uint64_t frame = 1;
+		auto changed = [&policy]()
+		{
+			std::vector<AssetHandle> handles(policy.GetChanged().begin(), policy.GetChanged().end());
+			std::sort(handles.begin(), handles.end());
+			return handles;
+		};
+
+		// New targets.
+		policy.AddNeed(texture, 4, 0.2f, false);
+		policy.AddNeed(other, 6, 0.1f, false);
+		policy.Update(frame);
+		CHECK(changed() == std::vector<AssetHandle> { texture, other });
+
+		// The same needs, also with another coverage or a camera cut: nothing that calls for another level.
+		policy.AddNeed(texture, 4, 0.3f, true);
+		policy.AddNeed(other, 6, 0.1f, false);
+		policy.Update(++frame);
+		CHECK(changed().empty());
+		// A coarser need while the finer level is held: no change either.
+		policy.AddNeed(texture, 5, 0.1f, false);
+		policy.AddNeed(other, 6, 0.1f, false);
+		policy.Update(++frame);
+		CHECK(changed().empty());
+		CHECK(policy.Find(texture)->Level == 4);
+
+		// A finer level.
+		policy.AddNeed(texture, 2, 0.6f, false);
+		policy.AddNeed(other, 6, 0.1f, false);
+		policy.Update(++frame);
+		CHECK(changed() == std::vector<AssetHandle> { texture });
+
+		// Not needed any more (a texture no longer drawn may give up what it does not need), then needed again.
+		policy.AddNeed(texture, 2, 0.6f, false);
+		policy.Update(++frame);
+		CHECK(changed() == std::vector<AssetHandle> { other });
+		policy.AddNeed(texture, 2, 0.6f, false);
+		policy.Update(++frame);
+		CHECK(changed().empty());
+		policy.AddNeed(texture, 2, 0.6f, false);
+		policy.AddNeed(other, 6, 0.1f, false);
+		policy.Update(++frame);
+		CHECK(changed() == std::vector<AssetHandle> { other });
+
+		// Unneeded long enough: its level goes (once), then it is forgotten (once).
+		const uint64_t lastNeeded = frame;
+		uint32_t levelChanges = 0;
+		while (frame < lastNeeded + TextureStreamingPolicy::c_ForgetFrames - 1)
+		{
+			policy.AddNeed(other, 6, 0.1f, false);
+			policy.Update(++frame);
+			if (frame == lastNeeded + 1)
+				CHECK(changed() == std::vector<AssetHandle> { texture });
+			else if (!changed().empty())
+			{
+				CHECK(changed() == std::vector<AssetHandle> { texture });
+				CHECK(policy.Find(texture)->Level == TextureStreamingPolicy::c_NoLevel);
+				levelChanges++;
+			}
+		}
+		CHECK(levelChanges == 1);
+		REQUIRE(policy.Find(texture));
+		policy.AddNeed(other, 6, 0.1f, false);
+		policy.Update(++frame);
+		CHECK(changed() == std::vector<AssetHandle> { texture });
 		CHECK(policy.Find(texture) == nullptr);
 	}
 

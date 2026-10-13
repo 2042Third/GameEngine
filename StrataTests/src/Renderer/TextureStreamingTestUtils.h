@@ -3,6 +3,7 @@
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Renderer/Material.h"
 
+#include <array>
 #include <cstdint>
 #include <filesystem>
 #include <string>
@@ -21,6 +22,8 @@ namespace Strata::Tests
 
 	// The texture's cooked form: every level of the gradient, one color per 4x4 block (solid blocks encode exactly).
 	std::vector<uint8_t> CookGradientTexture();
+	// A `size` x `size` BC7 sRGB texture (a power of two, at least 4) of one color, with every level.
+	std::vector<uint8_t> CookSolidTexture(uint32_t size, const std::array<uint8_t, 4>& color);
 	// An asset pack with the texture and the material, in a new temporary directory.
 	std::filesystem::path WriteGradientStreamingPack();
 

@@ -174,7 +174,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   two clips, and a frame of 10,000 `WhenVisible` animators no renderer sees, both with the job system as applications
   start it), `PerfGPU.Renderer` (`SceneRenderer::Render` alone on 100,000 and 300,000 cubes and on 10,000 cubes with
   unique materials, with the opaque draw calls those take, and on 1,000 skinned characters of about 5,000 vertices posed
-  anew every frame, in `Perf/AnimationPerfTests.cpp`) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000
+  anew every frame, in `Perf/AnimationPerfTests.cpp`; an idle frame, the asset manager's update and the renderer's, of
+  3,000 streamed textures in view) and, in `src/Editor/`, `Perf.Editor` (entity commands among 100,000
   roots, and what the activity journal adds to a command among 100,000
   roots; the hierarchy's rows of 100,000 roots, idle and rebuilt; the Hierarchy panel's share of an editor frame with
   100,000 roots, open against closed; what 100,000 selected entities add to a frame; the longest editor frame while a

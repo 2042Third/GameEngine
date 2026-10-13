@@ -1367,7 +1367,14 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     a grazing angle spans as many texels across the view as facing it, which is what the 16x anisotropic samplers sample
     by. Per texture the streamer takes `floor(log2(size * tiling / UVPixels))` (`ComputeWantedLevel`, clamped to its
     levels), the finest over every use and view; shadow passes report nothing. Detail rises at once and falls only after
-    120 frames without a need of it (`c_DropDelayFrames`); a texture nobody needs falls to its tail. Views without
+    120 frames without a need of it (`c_DropDelayFrames`); a texture nobody needs falls to its tail. A still frame costs the
+    streamer nothing per texture: a frame's needs are kept in the targets they update (no allocation for a texture needed
+    before), and `OnUpdate` looks only at textures whose target changed in a way that can call for another level
+    (`TextureStreamingPolicy::GetChanged`: new or forgotten, another level, needed now and not before or the other way
+    round), whose asset object changed (`AssetManagerBase::GetContentChanges`: loaded, reloaded, evicted), that are
+    streaming, or that are not settled yet (below their wanted level, or above it where levels can still go); the rest
+    keep their wanted level until something changes them (`GetTexturesLookedAt` counts what a frame looked at,
+    `PerfGPU.Renderer.IdleFrame3kStreamedTextures` measures the idle frame of 3,000 textures in view). Views without
     streaming (`SceneRendererSpecification::TextureStreaming` false) need level 0 and count a texture as pending until it
     is whole; with streaming a texture whose tail is resident is not pending. `RequestLevel` asks for a level outside
     views in the frame it is called (the asset inspector's preview). `TextureStreamer::Hold` keeps a texture whole in every
