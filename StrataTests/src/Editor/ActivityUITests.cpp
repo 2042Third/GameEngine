@@ -302,10 +302,12 @@ TEST_SUITE("Editor.UI.Activity")
 		CHECK_FALSE(activity->Hidden);
 	}
 
-	TEST_CASE("The Activity panel shows the names of undo steps whole in the default layout")
+	TEST_CASE("The Activity panel shows results whole in the default layout, and gives parameters what results leave")
 	{
-		// A maximized window on a 4K display at 150% and at 100%, and a 1600x900 window at 150%: a fixed Result column cut
-		// "Rename 'Wall' to 'East Wall'" in all of them.
+		// A maximized window on a 4K display at 150% and at 100%, and a 1600x900 window at 150%, with nothing selected and with
+		// the details pane of the selected entry beside the list: a fixed Result column, and then one of two fifths of the width
+		// parameters and results share, cut "Rename 'Wall' to 'East Wall'" or the error of a failed command, while parameters,
+		// cut in the list anyway, took the rest.
 		const ImGuiHarness::Specification windows[] = { { ImVec2(3840.0f, 2054.0f), 1.5f }, { ImVec2(3840.0f, 2054.0f), 1.0f },
 			{ ImVec2(2400.0f, 1350.0f), 1.5f } };
 		for (const ImGuiHarness::Specification& window : windows)
@@ -315,19 +317,50 @@ TEST_SUITE("Editor.UI.Activity")
 			HarnessEditor editor(window, WithFeatureProject("ActivityResultWidth"));
 			editor.Frames(2);
 			REQUIRE(editor.Context().HasProject());
+			editor.Run("editor.showPanel", { { "panel", "Activity" } });
+			editor.Frames(3);
+			ActivityPanel* panel = editor.Layer->GetPanels().Get<ActivityPanel>(EditorPanels::c_Activity);
+			REQUIRE(panel);
+			const CommandJournal& journal = editor.Context().GetJournal();
+			auto findTable = [&editor]() { return FindTable(editor.FindPanelWindow(EditorPanels::c_Activity), 5); };
+
+			// Only short results ("done"): parameters take most of the shared width.
+			ImGuiTable* table = findTable();
+			REQUIRE(table);
+			CHECK(table->Columns[2].WidthGiven > 2.0f * table->Columns[3].WidthGiven);
+
 			editor.Run("entity.create", { { "name", "Wall" } });
 			const UUID wall = editor.Context().GetEditScene()->FindEntityByName("Wall").GetUUID();
 			editor.Run("entity.rename", { { "entity", wall.ToString() }, { "name", "East Wall" } });
-			editor.Run("editor.showPanel", { { "panel", "Activity" } });
-			editor.Frames(3);
-			const uint64_t rename = FindLatest(editor.Context().GetJournal(), "entity.rename");
-			const std::optional<UI::ItemProbe::Item> result = UI::ItemProbe::Find(fmt::format("Activity.Result.{}", rename));
-			REQUIRE(result);
-			CHECK(result->Text == "Rename 'Wall' to 'East Wall'");
-			ImGuiTable* table = FindTable(editor.FindPanelWindow(EditorPanels::c_Activity), 5);
-			REQUIRE(table);
-			// The text ends within its column (an item's rectangle is the whole text, whatever the column clips).
-			CHECK(result->Max.x <= table->Columns[3].ClipRect.Max.x);
+			const EditorCommandResult failed = editor.Layer->GetCommands().Execute(editor.Context(), "entity.rename",
+				{ { "entity", UUID().ToString() }, { "name", "Somewhere Else Entirely" } });
+			REQUIRE_FALSE(failed.Success);
+			const uint64_t rename = FindLatest(journal, "entity.rename") - 1;
+			const uint64_t failure = FindLatest(journal, "entity.rename");
+			REQUIRE(journal.Find(rename)->Status == CommandStatus::Succeeded);
+			REQUIRE(journal.Find(failure)->Status == CommandStatus::Failed);
+			for (const uint64_t selected : { uint64_t(0), rename })
+			{
+				CAPTURE(selected);
+				panel->Select(selected);
+				editor.Frames(3);
+				table = findTable();
+				REQUIRE(table);
+				const std::optional<UI::ItemProbe::Item> result = UI::ItemProbe::Find(fmt::format("Activity.Result.{}", rename));
+				const std::optional<UI::ItemProbe::Item> error = UI::ItemProbe::Find(fmt::format("Activity.Result.{}", failure));
+				REQUIRE(result);
+				REQUIRE(error);
+				CHECK(result->Text == "Rename 'Wall' to 'East Wall'");
+				CHECK_FALSE(error->Text.empty());
+				// The texts end within their column (an item's rectangle is the whole text, whatever the column clips), and the
+				// parameters keep a share of the width.
+				CHECK(result->Max.x <= table->Columns[3].ClipRect.Max.x);
+				// The error is longer: whole wherever the list leaves parameters their least (here, all but the narrowest
+				// window with the details pane beside the list).
+				if (selected == 0 || window.DisplaySize.x > 3000.0f)
+					CHECK(error->Max.x <= table->Columns[3].ClipRect.Max.x);
+				CHECK(table->Columns[2].WidthGiven >= 7.5f * ImGui::GetFontSize());
+			}
 		}
 	}
 

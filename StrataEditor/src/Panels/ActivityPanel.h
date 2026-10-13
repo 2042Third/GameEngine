@@ -63,12 +63,18 @@ namespace Strata
 		// The undo position "Undo to here" goes back to (the entry's step is the latest applied), when it can.
 		static std::optional<size_t> GetUndoTarget(EditorContext& context, const CommandJournalEntry& entry);
 		const std::string& GetParameterPreview(const CommandJournalEntry& entry);
+		// The width of the entry's Result text at the current font (measured once for a finished command).
+		float GetResultWidth(const CommandJournalEntry& entry);
 	private:
 		std::vector<uint64_t> m_Rows;        // Entries passing the filters, oldest first
 		uint64_t m_RowsVersion = UINT64_MAX; // The journal version m_Rows was built from
 		std::string m_RowsKey;               // The filters m_Rows was built with
 		// Compact parameters of entries, by id, made once (parameters never change); pruned with the journal's ring.
 		std::unordered_map<uint64_t, std::string> m_ParameterPreviews;
+		// Widths of finished entries' Result texts, by id, at m_ResultWidthsFontSize; pruned with the journal's ring.
+		std::unordered_map<uint64_t, float> m_ResultWidths;
+		float m_ResultWidthsFontSize = 0.0f;
+		float m_ResultContentWidth = 0.0f; // The widest Result text of m_Rows
 		uint64_t m_Selected = 0;
 		bool m_ScrollToSelected = false;
 		std::string m_Details;        // The selected entry described as JSON
