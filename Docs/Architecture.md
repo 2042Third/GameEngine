@@ -100,7 +100,9 @@ Applications built on `Application` (editor, runtime) get `main` from `Core/Entr
 **Core** (`Core/`). `Application` owns the window, the graphics device, the layer stack and the main-thread queue
 and runs the frame loop; `Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
 `Platform/GLFW/GLFWWindow` (`SetIcon` takes RGBA images of several sizes; macOS and Wayland windows have no icon of
-their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`), `Assert`,
+their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`; the console and the log file are written by
+the `BackgroundLogSink`'s thread, so a log call never waits for them, except warnings and errors, which are flushed before
+the call returns: writing a line to a console, a pipe or a file blocked the frame for milliseconds), `Assert`,
 `JobSystem`, `FileSystem` (UTF-8 paths), `FileReader` (one open file read at explicit offsets by any number of threads:
 overlapped `ReadFile` on Windows, `pread` on POSIX), `FileWatcher`, `FileLock`, `Platform` (OS services, private directories,
 process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime`),

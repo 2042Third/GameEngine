@@ -361,7 +361,9 @@ Conventions:
 
 - `Ref<T>` / `CreateRef<T>()` (shared ownership) and `Scope<T>` / `CreateScope<T>()` (unique ownership).
 - Log with `ST_CORE_*` in engine code and `ST_*` in applications (`ST_CORE_INFO("Loaded {}", path)`).
-  Messages are fmt-formatted; glm types format directly.
+  Messages are fmt-formatted; glm types format directly. The console and the log file are written by a thread of their own
+  (`Core/BackgroundLogSink`): a log call never waits for them, except warnings and errors, which are flushed before the call
+  returns; what is queued is written at exit and by `Log::Shutdown`.
 - `ST_CORE_ASSERT(condition, "message {}", args)` for programmer errors (compiled out of Dist),
   `ST_CORE_VERIFY` for checks that must stay in shipping builds. Recoverable failures (I/O, bad data,
   user input) return errors (`bool`, `std::optional`, result structs) and log; they never assert.
