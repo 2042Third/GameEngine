@@ -1017,8 +1017,9 @@ namespace Strata
 		registry.Register({ "material.create", "Creates a material asset (.stmat) from the default material with the given property values.",
 			ObjectSchema({
 				{ "path", StringSchema("Path relative to the asset directory, e.g. \"Materials/Red.stmat\"") },
-				{ "properties", AnyObjectSchema(fmt::format("Property values, e.g. {{\"BaseColor\": [1, 0, 0, 1], \"Roughness\": 0.3}}. Properties: {} "
-					"(material.get describes their types)", AssetEdit::ListMaterialProperties())) } }, { "path" }),
+				{ "properties", AnyObjectSchema(fmt::format("Property values, e.g. {{\"BaseColor\": [1, 0, 0, 1], \"Roughness\": 0.3, \"BaseColorMap\": "
+					"\"Textures/Brick.png\"}}; texture maps take a texture by path or handle, null clears them. Properties: {} (material.get describes "
+					"their types)", AssetEdit::ListMaterialProperties())) } }, { "path" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				std::string error;

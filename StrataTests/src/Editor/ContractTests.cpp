@@ -99,6 +99,48 @@ TEST_SUITE("Editor.Contracts")
 			== EditorCommandError::InvalidParameters);
 		CHECK_FALSE(FileSystem::Exists(context.GetProject()->GetAssetDirectory() / "Materials/Bad.stmat"));
 	}
+
+	TEST_CASE("Material texture maps take textures by path or handle and refuse references to nothing or to other assets")
+	{
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		const std::filesystem::path directory = CreateTemporaryDirectory("ContractMaterialMaps") / "Game";
+		RunCommandToCompletion(context, commands, "project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		const std::filesystem::path external = directory.parent_path() / "Checker.png";
+		REQUIRE(FileSystem::WriteBytes(external, CreateSolidPNG(8, 8, 200, 100, 50)));
+		const std::string texture = RunCommandToCompletion(context, commands, "asset.import", { { "file", FileSystem::ToUTF8(external) },
+			{ "directory", "Textures" } })["asset"].get<std::string>();
+
+		// By path, as agents name assets: stored as the texture's handle.
+		const nlohmann::json created = RunCommandToCompletion(context, commands, "material.create", { { "path", "Materials/Checker.stmat" },
+			{ "properties", { { "BaseColorMap", "Textures/Checker.png" } } } });
+		CHECK(RunCommandToCompletion(context, commands, "material.get", { { "material", "Materials/Checker.stmat" } })["values"]["BaseColorMap"] == texture);
+		const std::filesystem::path file = context.GetProject()->GetAssetDirectory() / "Materials/Checker.stmat";
+		const std::optional<std::string> before = FileSystem::ReadText(file);
+		REQUIRE(before.has_value());
+
+		// A handle of nothing, an asset of another type, a path of nothing: refused, the file unchanged.
+		for (const char* reference : { "0000000000000ABC", "0000000000000001", "Textures/Missing.png" })
+		{
+			CAPTURE(reference);
+			const EditorCommandResult result = commands.Execute(context, "material.set", { { "material", "Materials/Checker.stmat" },
+				{ "properties", { { "NormalMap", reference } } } });
+			CHECK(result.ErrorKind == EditorCommandError::InvalidParameters);
+			CHECK(result.Error.find("NormalMap") != std::string::npos);
+		}
+		const EditorCommandResult mesh = commands.Execute(context, "material.set", { { "material", "Materials/Checker.stmat" },
+			{ "properties", { { "NormalMap", "Builtin/Cube" } } } });
+		CHECK(mesh.Error.find("is a Mesh, not a Texture") != std::string::npos);
+		CHECK(FileSystem::ReadText(file) == before);
+		CHECK(commands.Execute(context, "material.create", { { "path", "Materials/Broken.stmat" }, { "properties", { { "BaseColorMap", "0000000000000ABC" } } } })
+			.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK_FALSE(FileSystem::Exists(context.GetProject()->GetAssetDirectory() / "Materials/Broken.stmat"));
+
+		// Null clears a map.
+		RunCommandToCompletion(context, commands, "material.set", { { "material", created["asset"] }, { "properties", { { "BaseColorMap", nullptr } } } });
+		const nlohmann::json cleared = RunCommandToCompletion(context, commands, "material.get", { { "material", "Materials/Checker.stmat" } })["values"]["BaseColorMap"];
+		CHECK((cleared.is_null() || cleared == "0000000000000000"));
+	}
 }
 
 TEST_SUITE("Editor.UI.Dialogs")

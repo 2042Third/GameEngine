@@ -1339,7 +1339,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   entity instead of only the selection's.
 - Materials: `material.create {path, properties}`, `material.set {material, properties, save}` and `material.get {material}`
   (its values, whether they are saved, and every material property described like `component.list` describes component
-  properties); an unknown property name fails with the list of known ones. Edits of asset documents go through
+  properties); an unknown property name fails with the list of known ones, and texture maps take a texture by path or handle
+  like component asset properties (a reference to nothing or to another type of asset is refused). Edits of asset documents go through
   `Editor/AssetEdit` (also the asset inspector's): a saved edit writes the file and publishes the new document as the
   loaded asset at once (`AssetManagerBase::ReplaceLoadedAsset`), recording an `AssetDocumentAction` (the document's bytes
   before and after; merged by key for drags); `save: false` only previews the values in the loaded material. Such steps

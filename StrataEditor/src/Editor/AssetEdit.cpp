@@ -1,5 +1,6 @@
 #include "Editor/AssetEdit.h"
 
+#include "Editor/CommandUtils.h"
 #include "Editor/EditorContext.h"
 
 #include <Strata/Animation/AnimationController.h>
@@ -142,6 +143,23 @@ namespace Strata
 					const PropertyInfo* property = FindMaterialProperty(name);
 					if (!property)
 						return fail(fmt::format("Unknown material property '{}' (properties: {}; material.get describes them)", name, ListMaterialProperties()));
+					// Texture maps take an asset by handle or path, as component asset properties do, and must name one of their
+					// type; null (or the null handle) clears them.
+					const std::optional<UUID> reference = value.is_null() ? std::optional<UUID>(UUID::Null()) : UUIDFromJson(value);
+					if (property->Type == PropertyType::Asset && !(reference && !reference->IsValid()))
+					{
+						const std::optional<CommandUtils::FoundAsset> asset = value.is_string() ? CommandUtils::FindAsset(value.get<std::string>())
+							: (reference ? CommandUtils::FindAsset(reference->ToString()) : std::nullopt);
+						if (!asset)
+							return fail(fmt::format("{}: no asset {}", name, value.dump()));
+						if (property->AssetFilter != AssetType::None && asset->Type != property->AssetFilter)
+						{
+							return fail(fmt::format("{}: {} is a {}, not a {}", name, value.dump(), AssetTypeToString(asset->Type),
+								AssetTypeToString(property->AssetFilter)));
+						}
+						document["Material"][name] = UUIDToJson(asset->Handle);
+						continue;
+					}
 					// Out of the property's range: refused, not clamped (the material editor clamps as it drags).
 					std::string rangeError;
 					if (const std::optional<PropertyValue> parsed = PropertyValueFromJson(*property, value); parsed && !property->IsInRange(*parsed, &rangeError))
