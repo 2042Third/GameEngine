@@ -510,6 +510,12 @@ Open items and deferrals later waves own:
     now and then; cheaper texture creation (suballocated GPU memory) is the way down.
   - The Activity panel's Result column at 150% in the default layout: it is now as wide as the longest result it lists
     (at least six text heights), and Parameters takes what is left.
+  - The round's final verification (its tip, 0a97046): `ctest --preset windows-debug` under the validation layer and
+    `ctest --preset windows-release -LE perf` passed all 47 tests each, and `PerfStability.py --runs 3 --wait-quiet 20`
+    passed 3 of 3 runs (114 metrics each, the canary at 0.96-0.98 of its reference). `SceneOpenOver1MMaxFrame` measured
+    0.66-0.86 ms in all three first attempts; confirmations decided `RuntimeMaxFinalizeStage` twice (first attempts
+    3.77 and 3.93 ms, see above), `ExportMaxFrameStress` once (6.83, then 4.19 ms) and `SceneSwitch100kMaxFrame` once
+    (0.215, then 0.078 ms).
   - Unchanged: `EntityCreate100kRoots` at 85-90% of its budget and the Streaming panel's refresh frames at up to 93%;
     `SceneSwitch100kMaxFrame` (0.31-0.37 ms in 2 of 10 first attempts against 0.2002) and `Mips.MaxFrameRatio` (1.28 in
     1 against 1.19), which need a confirmation now and then; `ContentBrowser10kThumbnailsP95` once at 0.053 ms in 10 runs
