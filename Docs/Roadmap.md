@@ -464,28 +464,60 @@ Open items and deferrals later waves own:
   3600 to 3200 MT/s; it runs at the rated 3600 MT/s again, at which `Budgets.json`'s reference values were measured, and
   compilers kept crashing now and then (files that compiled on the retry). Until a memory and CPU stress test passes,
   one-off crashes on this machine are suspect.
-- Perf to watch after wave 3's campaign: `ImportSettings4kMaxFrame10kCubes`' stalls in the graphics driver (main's build
-  exceeds its budget on this machine too) and `ThumbnailsMaxFrame`'s second mode (see the campaign above);
-  `RuntimeMaxFinalizeStage` at up to 98% of its 3.723 ms budget since the exported game's first frame finalizes what the
-  start scene's load read (the budget came from mip streaming's own build, where one of frames 8-11 was the slowest; in
-  the final verification its first attempts exceeded it in 2 of 4 runs, 3.74-3.93 ms, and the confirmations passed);
-  `EntityCreate100kRoots` at 85-90% of its budget and the Streaming panel's refresh frames at up to 93%; the maxima
-  whose budgets the campaign tightened and that need a confirmation now and then (`SceneOpenOver1MMaxFrame` 2.4-3.3 ms
-  in 2 of 10 first attempts against 1.143; on the evening of 2026-10-12 2.3-4.0 ms in 6 of 7 first attempts of a build
-  with the first fifteen review fixes (3ace802) and in 5 of 10 with the scene preparation, which once failed all three
-  attempts, and in the final verification all three attempts of 2 of 4 full runs and of 1 of 4 runs of its test case
-  both on the tip and on the campaign's tree (883bb2c): the metric is bimodal, about 0.6-1.1 ms or 1.3-4.1 ms, and the
-  budget, 1.5 times the quiet mode's median, holds for that mode only. The long frame comes while the background load
-  parses the 100,000 entities, with the main thread only drawing the million (the frames that prepare and swap the scene
-  in stay below 0.75 ms), so a stall the load causes the main thread is the lead; `SceneSwitch100kMaxFrame` 0.31-0.37 ms
-  in 2 against 0.2002, `Mips.MaxFrameRatio` 1.28 in 1 against 1.19); `ContentBrowser10kThumbnailsP95` once at 0.053 ms
-  in 10 runs (0.036-0.042 otherwise) against 0.057; and `PerfGPU.Editor.ImportSettings4kMaxFrame`, whose first attempt
-  measures 6.9-7.6 ms when run alone in a fresh process (main's build 2.9-3.6 ms; 2.1 ms in the perf label's runs, where
-  the cases before it warmed the process). Its view needed only the texture's tail once textures streamed, so its
-  windows held no upload of the whole texture; it now draws the texture whole, as main did, and its windows end once the
-  texture is whole: later attempts 2.97-5.23 ms (1.34-5.0 with the tail only), the first still 6.9 ms, so the first
-  attempt's hold is not the upload's. Platform code only CI compiles: the POSIX `Platform::FindProgram` and symbolizer
-  (function names only on Linux and macOS).
+- Perf to watch after wave 3's campaign, and what its finishing round (2026-10-13) did about it, measured in interleaved
+  runs against the build before each change (Release, the reference machine):
+  - `SceneOpenOver1MMaxFrame` (bimodal, about 0.6-1.1 ms or 1.3-4.1 ms against 1.143): its scene.open starts as
+    play.stop lets a background job free the million-entity play copy (80-94 ms), and the loading worker then frees the
+    parsed document. Meanwhile the main thread's allocations of sizes the low-fragmentation heap does not serve wait for
+    the process heap's backend: 0.6-2.7 ms. A synthetic benchmark shows it alone: allocations of 1 to 16 KB stall up to
+    2.5 ms while another thread frees 3 million blocks, whatever that thread's priority, also when it frees in slices
+    with a 1 ms sleep between them, and stay under 0.12 ms once it is done. Two of the waits were removed: the console
+    sink's writes, which blocked the first log line after a quiet spell for 2.4-9 ms (log sinks are now written by a
+    background thread, `BackgroundLogSink`; warnings and errors are still written when the call returns), and
+    scene.open's growing vector of frame times, the longest frame in 7 of 10 diagnosed runs (frame times of editor.wait,
+    scene.open and project.export now go into storage reserved when the command starts,
+    `CommandUtils::FrameTimeRecorder`).
+    First attempts over the budget went from 5 of 6 runs to 6 of 24 (and once all three attempts of a run); the
+    remaining long frames wait in the renderer's command recording while the document is freed. Removing those needs the
+    memory of scenes and of parsed documents off the process heap (a registry allocator, an arena per load); the Segment
+    Heap removes the stalls but kept freed memory committed for about 0.6 s (the working set right after opening the
+    million entities grew from 541 to 1300-2200 MB) and slowed extraction (`GatherDraws` 0.31 to 0.46 ms on 100,000
+    cubes), so it was not adopted.
+  - `ImportSettings4kMaxFrame10kCubes`' 6-27 ms frames in `vkBeginCommandBuffer` while BC7 compresses: the background
+    pool ran a thread on every hardware thread but one; below normal priority, they still delayed the graphics driver's
+    own threads by a scheduling quantum. It now leaves four hardware threads, and at least half, to the frame
+    (`JobSystem::GetDefaultBackgroundThreadCount`: 20 of 24 on the reference machine): measured 2.06 ms, its budget
+    lowered from 4.819 to 3.09.
+  - `ThumbnailsMaxFrame`'s second mode (1.2-2.0 ms, 43-45 frames): its confirmations measured another state than the
+    first attempt, whose frame then destroyed the previous attempt's 20 thumbnail textures at once (2.1-2.3 ms, about
+    0.1 ms of driver time each) and found the project's textures already streamed. Completed GPU resources are now
+    destroyed within 0.25 ms per frame (`DeferredReleaseQueue::c_FrameDestroyBudget`), and every attempt starts cold:
+    61-64 frames, 0.70-0.98 ms in 13 of 14 runs (one run's attempts 1.2-2.2 ms in one process, as a main thread on an
+    efficiency core shows).
+  - Still frames with 3,000 streamed textures (1.15-1.27 times main's): resolving 3,000 materials and their textures one
+    by one was 0.58 of the frame's 1.0 ms; frames that use the same materials now take their data over from the frame
+    before when the materials, the textures and their bindless slots are unchanged (`SceneRenderer::MaterialResolution`):
+    `IdleFrame3kStreamedTextures` 1.016 to 0.614 ms, `Render10kMaterials` 1.332 to 0.608, `EditFrameMaterials10k`
+    1.815 to 0.993, their budgets lowered. What a still frame still does per draw (culling, shadow casters, gathering,
+    the streamer's report) costs about 0.3 ms of the rest.
+  - `RuntimeMaxFinalizeStage` (98-105% of 3.723 ms) stays as it is: the exported game's frame 0 finalizes what the start
+    scene's load read before the first frame (17 materials, 17 mip tails at 0.06-0.64 ms each, mostly the driver's image
+    creation, and the first step of a mesh) until the engine's per-frame finalization budget (`FinalizeMsPerFrame`, 4
+    ms) ends it: 3.7-4.2 ms in three runs, frames 1 and 2 1.8-2.1 ms, every later one under 0.7. That is the spreading
+    the budgets already do; spreading it further would mean a smaller finalization budget for every frame (slower loads
+    everywhere), and moving the work before the perf log's first frame would hide it rather than remove it. The
+    metric's budget lies below the engine's own limit since the backlog moved to frame 0, so its first attempts exceed it
+    now and then; cheaper texture creation (suballocated GPU memory) is the way down.
+  - The Activity panel's Result column at 150% in the default layout: it is now as wide as the longest result it lists
+    (at least six text heights), and Parameters takes what is left.
+  - Unchanged: `EntityCreate100kRoots` at 85-90% of its budget and the Streaming panel's refresh frames at up to 93%;
+    `SceneSwitch100kMaxFrame` (0.31-0.37 ms in 2 of 10 first attempts against 0.2002) and `Mips.MaxFrameRatio` (1.28 in
+    1 against 1.19), which need a confirmation now and then; `ContentBrowser10kThumbnailsP95` once at 0.053 ms in 10 runs
+    (0.036-0.042 otherwise) against 0.057; and `PerfGPU.Editor.ImportSettings4kMaxFrame`, whose first attempt measures
+    6.9-7.6 ms when run alone in a fresh process (main's build 2.9-3.6 ms; 2.1 ms in the perf label's runs, where the
+    cases before it warmed the process): its view draws the texture whole, as main did, and its windows end once the
+    texture is whole (later attempts 2.97-5.23 ms), so the first attempt's hold is not the upload's. Platform code only
+    CI compiles: the POSIX `Platform::FindProgram` and symbolizer (function names only on Linux and macOS).
 
 ## Waves
 
