@@ -143,6 +143,17 @@ namespace
 		return file;
 	}
 
+	// Puts the API test module at `module` as a module built before the project's sources were written. A copy keeps the
+	// original's write time on Windows but gets the current time on Linux and macOS, so the time is set explicitly.
+	void WriteOutdatedModule(const std::filesystem::path& module)
+	{
+		REQUIRE(FileSystem::CreateDirectories(module.parent_path()));
+		REQUIRE(FileSystem::Copy(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), module));
+		std::error_code error;
+		std::filesystem::last_write_time(module, std::filesystem::file_time_type::clock::now() - std::chrono::hours(1), error);
+		REQUIRE_FALSE(error);
+	}
+
 	bool IsSameFile(const std::filesystem::path& a, const std::filesystem::path& b)
 	{
 		std::error_code error;
@@ -485,8 +496,7 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		WorkflowHarness harness(MakeFakeBuildSpecification());
 		// A module of the project's own (the stand-in for CMake builds nothing), older than the sources.
 		const std::filesystem::path module = harness.GetProject().GetScriptModulePath();
-		REQUIRE(FileSystem::CreateDirectories(module.parent_path()));
-		REQUIRE(FileSystem::Copy(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), module));
+		WriteOutdatedModule(module);
 		harness.Run("script.reload");
 		const std::optional<std::string> reason = harness.Context.GetPlayBuildReason();
 		REQUIRE(reason);
@@ -532,8 +542,7 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		WorkflowHarness harness(MakeFakeBuildSpecification());
 		// Scripts that need a build: a module of the project's own, older than the sources.
 		const std::filesystem::path module = harness.GetProject().GetScriptModulePath();
-		REQUIRE(FileSystem::CreateDirectories(module.parent_path()));
-		REQUIRE(FileSystem::Copy(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), module));
+		WriteOutdatedModule(module);
 		harness.Run("script.reload");
 		REQUIRE(harness.Context.GetPlayBuildReason());
 
@@ -572,8 +581,7 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		WorkflowHarness harness(MakeFakeBuildSpecification());
 		const std::filesystem::path scripts = harness.GetProject().GetScriptSourceDirectory();
 		const std::filesystem::path module = harness.GetProject().GetScriptModulePath();
-		REQUIRE(FileSystem::CreateDirectories(module.parent_path()));
-		REQUIRE(FileSystem::Copy(GetTestScriptModule(STRATA_TEST_SCRIPTS_API), module));
+		WriteOutdatedModule(module);
 		harness.Run("script.reload");
 		// The stand-in for CMake builds nothing: the module stays as it was, older than every source.
 		const auto build = [&harness]()
