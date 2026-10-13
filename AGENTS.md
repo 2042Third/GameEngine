@@ -126,7 +126,7 @@ fixes get patch versions):
    the runtime's log report it.
 2. Write `Docs/Releases/<version>.md` for the people who download it (what Strata can do, requirements, known issues,
    reporting problems), link it from `Docs/README.md`, and bring `Docs/Releases/PackageReadme.md` up to date.
-3. Run `ctest --preset <platform>-dist -LE "gpu|perf"` locally: CI tests Debug, the release workflow tests the Dist
+3. Run `ctest --preset <platform>-dist -LE "gpu|perf"` locally: CI tests Release, the release workflow tests the Dist
    build it ships, where asserts are compiled out and `ST_DIST` code paths differ (a test whose expectations depend on
    the configuration says so with `#if defined(ST_DIST)`). Then push a tag `v<version>-rc1` for a dry run: the workflow
    builds Dist on CI's runners, runs the tests CI runs (`-LE "gpu|perf"`, with `StrataEditor.Install`) in Dist, packs
