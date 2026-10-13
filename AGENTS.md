@@ -91,9 +91,24 @@ branch that lands many changes (a wave's integration) as `ci/<name>` and wait fo
 
 **Windows subsystem:** `StrataEditor` and `StrataRuntime` (and so every exported game) are GUI-subsystem programs on
 Windows, so that no console window opens with them; `StrataCLI` and `StrataTests` are console programs. Their `main`
-first calls `Platform::ConnectStandardStreams` (`Core/EntryPoint.h`): pipes and files their callers pass are kept, so
-tests and tools read their output and exit codes as before, and otherwise they print into the terminal that started
-them. `EndToEnd.StandardStreams` and `StrataEditor.Install` check the executables' PE subsystem.
+(`Core/EntryPoint.h`) first asks the client what kind of run its command line is (`GetProgramRun`, next to
+`CreateApplication`: `ProgramRun` in `Core/Platform.h`) and calls `Platform::ConnectStandardStreams` with it: pipes and
+files their callers pass are kept, so tests and tools read their output and exit codes as before. A *Console* run
+(output is the point: `--version`, `--help`, usage errors, headless and scripted runs: the editor's `--headless`,
+`--no-gpu`, `--frames`, `--commands`, `--quit-after-commands`, the runtime's `--headless`, `--frames` and option
+mistakes) prints into the terminal that started it; an *Interactive* run (a person's window) leaves that terminal alone,
+so its Ctrl+C or closing it does not end the program and the log does not run into the shell's prompt. Then
+`Platform::InstallInterruptHandler` turns Ctrl+C, Ctrl+Break and the console closing (Windows) or SIGINT and SIGTERM
+(POSIX) into an orderly quit through the main loop (`Platform::IsInterruptRequested`; exit code
+`Application::c_InterruptedExitCode`, 130, unless the run had failed); a second request ends the process at once. Fatal
+startup failures go through `Application::ReportFatalError` (no graphics device, no game to run, a game that cannot
+start): logged, and for an Interactive run whose stderr nobody reads (`Platform::ShouldShowErrorDialogs`: started from
+the desktop, from a terminal it left alone, or with its output sent to the null device) also shown in a native dialog
+(`Platform::ShowErrorDialog`: MessageBoxW, osascript, zenity or kdialog) with the advice and the log file's path; tests
+read its text from the file `STRATA_ERROR_DIALOG_FILE` names instead. PowerShell does not wait for windowed programs it
+starts directly: pipe their output (`StrataEditor --commands script.json --quit-after-commands | Out-Host`) or use
+`Start-Process -Wait` when the exit code matters (cmd.exe and bash wait). `EndToEnd.StandardStreams` (pipes, a terminal,
+Ctrl+C, the dialogs' text) and `StrataEditor.Install` check this and the executables' PE subsystem.
 
 **Packages:** `cmake --install build/<preset> --config Dist --prefix <dir>` installs Strata the way a release archive
 holds it (`CMake/StrataPackaging.cmake`): the executables side by side, `StrataInstall.json` (which makes the editor
@@ -147,7 +162,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   CTest label `gpu`. They share one device per process through `Tests::GPUContext` (never create
   devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
   test. Run them under the Khronos validation layer locally by pointing `VK_ADD_LAYER_PATH` at its
-  build. Rendering features are tested on pixels read back with `Renderer::ReadTexture`.
+  build. Rendering features are tested on pixels read back with `Renderer::ReadTexture`. `GPU.Startup` needs a desktop
+  rather than the device, like the label's other windowed tests: it starts the editor in a window with a Vulkan loader
+  that finds no driver and reads what its error dialog says.
 - **Perf tests** (the perf lab, `StrataTests/src/Perf/PerfUtils.h`): suites named `Perf.*` (CPU) and `PerfGPU.*`
   run as the CTests `StrataTests.Perf` and `StrataTests.PerfGPU` (label `perf`; PerfGPU also `gpu`) in Release and
   Dist only, one at a time: `ctest --preset windows-release -L perf`. No other CTest runs them; the lab's own logic is
@@ -302,7 +319,11 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 - `StrataTests.exe --strata-test-helper=<mode>` turns the test binary into a child process for
   process tests (see `TestMain.cpp`), so tests never depend on external programs: e.g. `record-arguments <file>` stands in
   for the external code editor (it writes its arguments to the file), `broad-phase-churn` adds and removes bodies until
-  Jolt's broad phase would run out of nodes. With `STRATA_TEST_FAKE_CMAKE=succeed` it also stands in for CMake in script
+  Jolt's broad phase would run out of nodes, `run-with-environment NAME=VALUE... -- <program>` runs a program with an
+  environment of its own (a test never changes its process's environment for one child, e.g. a Vulkan loader without
+  drivers for `GPU.Startup`) and, on Windows, `console-output [--interrupt-when <text>] <program>` runs a program as a
+  terminal does, pressing Ctrl+C once the console shows the text (`Tests::RunInConsole`). With
+  `STRATA_TEST_FAKE_CMAKE=succeed` it also stands in for CMake in script
   builds (`ScriptBuildSettings::CMake`), building nothing; with `fail` it fails the build with an MSVC error and a warning
   in its output (diagnostics, the Problems panel).
 - **Feature test** (golden rule 6): `StrataTests/FeatureTest/` is a real project (`FeatureTest.stproj`, `Assets/`
@@ -1209,7 +1230,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   the panel layout in that file instead of the user's (`<user data>/Strata/EditorLayout.ini`), and `--imgui-demo` offers
   ImGui's demo window (Help menu) for UI work.
   Without `--frames`, a headless editor runs until `editor.quit` (which, like the other commands that replace the scene,
-  refuses to discard unsaved scene changes unless `force` is true) or a signal; headless editors run at most 60 frames
+  refuses to discard unsaved scene changes unless `force` is true), Ctrl+C in its terminal or a termination signal (both
+  close it in order, exit code 130: see "Windows subsystem" under Building); headless editors run at most 60 frames
   per second.
   The editor serves automation by default (`EditorAutomation`, see [Automation](#automation-editor-rpc--mcp));
   `--no-automation` turns it off and `--automation-port <port>` picks the port (default 0: a free one).
@@ -1621,8 +1643,9 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   The session moves along when the editor opens or creates another project. On exit the editor cancels pending
   commands (their clients get `Cancelled`), removes the session files and stops the server with a grace period
   (`RpcServer::Stop(gracePeriod)`) so the last answers, such as `editor.quit`'s, still arrive. A headless editor
-  without `--frames` runs until `editor.quit` or a signal (a killed editor leaves a stale session file, which
-  clients prune), or, with `--idle-timeout <seconds>`, until no client has been connected and no request
+  without `--frames` runs until `editor.quit`, Ctrl+C or a termination signal (which close it in order; a killed editor
+  leaves a stale session file, which clients prune), or, with `--idle-timeout <seconds>`, until no client has been
+  connected and no request
   pending for that long (unsaved changes are then discarded, with a warning). The status bar's automation pill shows
   the port, or who is connected ("Agent connected · <name>", from `clientName`); `editor.status` has an `automation`
   section. The viewport names the latest automation command in a chip at its top right ("Agent: entity.create · 3 s

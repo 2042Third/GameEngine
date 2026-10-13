@@ -77,6 +77,8 @@ namespace Strata
 		static void Init(const LogSpecification& specification = {});
 		static void Shutdown();
 		static bool IsInitialized();
+		// The file the log writes to: the one Init opened, empty without one (none asked for, or it could not be opened).
+		static std::filesystem::path GetLogFile();
 
 		static Ref<spdlog::logger>& GetCoreLogger();
 		static Ref<spdlog::logger>& GetClientLogger();

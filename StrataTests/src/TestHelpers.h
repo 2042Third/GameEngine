@@ -108,12 +108,15 @@ namespace Strata::Tests
 	{
 		std::string Text; // The console's lines up to its cursor, without trailing blanks
 		int ExitCode = -1;
+		bool Interrupted = false; // Ctrl+C was pressed (interruptWhenShown appeared)
 	};
 
 	// Runs a program the way a terminal does: this process's console (a hidden one in a helper that Process started) is its
-	// output, nothing redirected, and the program is waited for. Nullopt (outError says why) when this process has no
-	// console, the program cannot start or it runs longer than a minute.
-	std::optional<ConsoleRun> RunInConsole(const std::filesystem::path& program, const std::vector<std::string>& arguments, std::string* outError = nullptr);
+	// output, nothing redirected, and the program is waited for. With `interruptWhenShown`, Ctrl+C is pressed once the
+	// console shows that text (this process ignores it; the program gets it as from a terminal). Nullopt (outError says why)
+	// when this process has no console, the program cannot start or it runs longer than 45 seconds (it is then ended).
+	std::optional<ConsoleRun> RunInConsole(const std::filesystem::path& program, const std::vector<std::string>& arguments, std::string* outError = nullptr,
+		std::string_view interruptWhenShown = {});
 #endif
 
 	inline std::filesystem::path GetTestExecutablePath()

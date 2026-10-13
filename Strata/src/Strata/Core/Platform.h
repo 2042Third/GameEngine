@@ -25,6 +25,19 @@ namespace Strata
 		BelowNormal
 	};
 
+	// What a run of a program is for, as its command line says (Platform::ConnectStandardStreams).
+	//   Console:     its output is the point: it prints information (--version, --help) or a usage error, or runs headless or
+	//                scripted for a tool or for a person at a terminal. It prints into the terminal that started it, and the
+	//                terminal's Ctrl+C asks it to quit (InstallInterruptHandler).
+	//   Interactive: a person's windowed session. It leaves the terminal that started it alone: on Windows it does not attach
+	//                to its console, so that the terminal's Ctrl+C or closing it do not end the program and its log does not
+	//                run into the shell's prompt. A fatal error that no stream shows goes to a dialog (ShouldShowErrorDialogs).
+	enum class ProgramRun : uint8_t
+	{
+		Console = 0,
+		Interactive
+	};
+
 	// Memory of the current process in bytes, as the operating system accounts it (Platform::GetProcessMemory).
 	// PrivateBytes is memory that only this process uses; WorkingSet is what is resident in physical memory, including
 	// pages shared with other processes (code, mapped files). Peaks are the largest values since the process started.
@@ -173,11 +186,28 @@ namespace Strata
 		static void SetBinaryStandardStreams();
 		// Gives stdout and stderr of a program without a console of its own (the editor and the runtime, GUI-subsystem
 		// programs on Windows, so that no console window opens with them) somewhere to go: streams its parent passed (pipes,
-		// files, the null device: CTest, StrataCLI, CI) stay as they are, and the others go to the console of the process
-		// that started it, if it has one (a terminal), so what the program prints shows there. Started from the desktop it
-		// prints nowhere. Call first in main, before anything prints or logging starts. No-op on POSIX, where programs keep
-		// the streams they are given.
-		static void ConnectStandardStreams();
+		// files, the null device: CTest, StrataCLI, CI) stay as they are, and for a Console run the others go to the console
+		// of the process that started it, if it has one (a terminal), so what the program prints shows there. Interactive
+		// runs, and runs started from the desktop, print nowhere but their log. Call first in main, before anything prints
+		// or logging starts. On POSIX, where programs keep the streams they are given, it only notes the run and whether
+		// anything reads stderr (ShouldShowErrorDialogs).
+		static void ConnectStandardStreams(ProgramRun run);
+		// Whether a fatal error should also show in a dialog: an Interactive run whose stderr reaches no reader (started from
+		// the desktop or a file manager, from a terminal it leaves alone, or with its output sent to the null device; a
+		// terminal, a pipe or a file are read). Console runs never show dialogs, so tools, CI and servers are never stopped
+		// by one.
+		static bool ShouldShowErrorDialogs();
+		// Shows a modal error message and returns once the person dismissed it: MessageBoxW on Windows, osascript on macOS,
+		// zenity or kdialog on Linux where one is installed. False when no dialog could be shown (the caller has logged the
+		// error, which is all that is left).
+		static bool ShowErrorDialog(std::string_view title, std::string_view message);
+
+		// Turns a request to stop from outside into a request to quit that the application's main loop honors in order
+		// (IsInterruptRequested): on Windows the console's Ctrl+C, Ctrl+Break and closing it (a Console run attached to a
+		// terminal), on POSIX SIGINT and SIGTERM. A second Ctrl+C or signal while the first is honored ends the process at
+		// once, as it would without the handler. Call once, in main.
+		static void InstallInterruptHandler();
+		static bool IsInterruptRequested();
 
 		static std::optional<std::string> GetEnvVar(std::string_view name);
 		static bool SetEnvVar(std::string_view name, std::string_view value);

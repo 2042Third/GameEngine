@@ -27,8 +27,9 @@ samples next to itself.
 
 ## Requirements
 
-Every platform needs a GPU with a Vulkan 1.2 driver to show the editor and play games. Without one, the editor still
-runs headless (`StrataEditor --no-gpu`, for automation and exports) and games run with `--headless`.
+Every platform needs a GPU with a Vulkan 1.2 driver to show the editor and play games. Started without one, the editor
+(and a game) shows a message that says so, what to install and where its log is. Without a GPU the editor still runs
+headless (`StrataEditor --no-gpu`, for automation and exports) and games run with `--headless`.
 
 - **Windows 10 or 11, x64.** The Vulkan runtime comes with the graphics driver of NVIDIA, AMD and Intel GPUs; update the
   driver if the editor reports that Vulkan is not available. Nothing else is needed to run Strata.
@@ -68,9 +69,13 @@ The executables are not signed, so the system asks before it runs them the first
   `./StrataEditor` from that folder.
 - **Linux:** start `./StrataEditor` from the folder.
 
-The editor and exported games are windowed programs: they open no console window. Started from a terminal they print
-their log into it, but the terminal does not wait for them; to wait for one and get its exit code in PowerShell, pipe
-its output, e.g. `.\StrataEditor --version | Write-Output`.
+The editor and exported games are windowed programs: they open no console window, and a window started from a terminal
+leaves the terminal alone (closing the terminal or pressing Ctrl+C in it does not close the window). Their logs are in
+your user data folder: `Strata/Logs/StrataEditor.log` for the editor and `<Game>/Logs/Game.log` for a game, under
+`%LOCALAPPDATA%` on Windows, `~/.local/share` on Linux and `~/Library/Application Support` on macOS. `--version`,
+`--help` and runs without a window or with a fixed number of frames (`--headless`, `--no-gpu`, `--frames`, `--commands`)
+print into the terminal, and Ctrl+C ends them in order. PowerShell does not wait for windowed programs: to wait for one
+and get its exit code, pipe its output, e.g. `.\StrataEditor --version | Write-Output`.
 
 ## Make a game
 

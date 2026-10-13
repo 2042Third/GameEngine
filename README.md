@@ -10,7 +10,8 @@ can drive in the same way, plus a runtime that plays exported games.
 
 Releases for Windows (x64), Linux (x64, Ubuntu 24.04 or newer) and macOS (Apple silicon) are on the
 [releases page](https://github.com/2042Third/GameEngine/releases): unpack the archive and run `StrataEditor`. Its
-`README.md` lists what each platform needs; [Docs/Releases/](Docs/Releases/) has the notes of every release
+`README.md` lists what each platform needs (a GPU with a Vulkan 1.2 driver; started without one, the editor says so in a
+message with what to install and where its log is); [Docs/Releases/](Docs/Releases/) has the notes of every release
 ([0.3.0](Docs/Releases/0.3.0.md) is the first).
 
 ## Features
@@ -64,7 +65,7 @@ Binaries land in `build/<preset>/bin/<Config>/`:
 
 | Executable | Purpose |
 | --- | --- |
-| `StrataEditor` | The editor. Without a project it opens its launcher (recent projects, templates, samples, connecting an AI agent). `--project <dir>` opens a project, `--commands <script.json>` runs editor commands at startup, `--headless` runs without UI for automation. |
+| `StrataEditor` | The editor. Without a project it opens its launcher (recent projects, templates, samples, connecting an AI agent). `--project <dir>` opens a project, `--commands <script.json>` runs editor commands at startup, `--headless` runs without UI for automation. It is a windowed program: PowerShell does not wait for it unless its output is piped (`StrataEditor --commands script.json --quit-after-commands \| Out-Host`). |
 | `StrataRuntime` | Plays an exported game; the export copies it next to the game files under the game's name. |
 | `StrataCLI` | Command-line client and MCP server (`StrataCLI mcp`) for controlling a running editor. |
 | `StrataTests` | Unit, integration, GPU and end-to-end tests (doctest). |

@@ -4,6 +4,7 @@
 #include "Strata/Core/CommandLine.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Core/LayerStack.h"
+#include "Strata/Core/Platform.h"
 #include "Strata/Core/Timer.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Core/Window.h"
@@ -13,6 +14,7 @@
 #include <functional>
 #include <mutex>
 #include <optional>
+#include <string_view>
 #include <vector>
 
 namespace Strata
@@ -68,6 +70,15 @@ namespace Strata
 		// after printing what --help asked for, or 3 for a command line it does not understand.
 		static void SetStartupExitCode(int exitCode);
 		static int GetStartupExitCode();
+
+		// The exit code of a run that quit because it was interrupted (Ctrl+C, SIGINT, SIGTERM: Platform::InstallInterruptHandler),
+		// unless it had failed before: 128 + SIGINT, as shells report an interrupted program.
+		static constexpr int c_InterruptedExitCode = 130;
+
+		// A failure that ends the program before it could do what it was started for (no graphics device, no game to run):
+		// logged as critical, and, for a person who would not see the log (Platform::ShouldShowErrorDialogs), also shown in a
+		// dialog titled `title` with the advice and the log file's path. Main thread; blocks until the dialog is dismissed.
+		static void ReportFatalError(std::string_view title, std::string_view problem, std::string_view advice = {});
 
 		void OnEvent(Event& event);
 
@@ -139,6 +150,10 @@ namespace Strata
 		static Application* s_Instance;
 	};
 
+	// Implemented by the client (editor, runtime) with CreateApplication: what kind of run the command line asks for
+	// (ProgramRun), decided before anything prints. Console runs print into the terminal that started them; Interactive
+	// ones leave it alone.
+	ProgramRun GetProgramRun(const CommandLine& commandLine);
 	// Implemented by the client (editor, runtime, sandbox).
 	Application* CreateApplication(const CommandLine& commandLine);
 

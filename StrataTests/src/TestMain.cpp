@@ -186,11 +186,20 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 #if defined(ST_PLATFORM_WINDOWS)
 	if (mode == "console-output" && argc > 2)
 	{
-		// <program> [arguments]: runs the program as a terminal does, with this helper's console (hidden: Process starts the
-		// helper without a window) as its output; prints what the console shows and ends with the program's exit code.
-		std::vector<std::string> arguments(argv + 3, argv + argc);
+		// [--interrupt-when <text>] <program> [arguments]: runs the program as a terminal does, with this helper's console
+		// (hidden: Process starts the helper without a window) as its output, pressing Ctrl+C once the console shows the text;
+		// prints what the console shows and ends with the program's exit code.
+		int first = 2;
+		std::string interruptWhen;
+		if (std::string_view(argv[2]) == "--interrupt-when" && argc > 4)
+		{
+			interruptWhen = argv[3];
+			first = 4;
+		}
+		std::vector<std::string> arguments(argv + first + 1, argv + argc);
 		std::string error;
-		const std::optional<Strata::Tests::ConsoleRun> run = Strata::Tests::RunInConsole(Strata::FileSystem::FromUTF8(argv[2]), arguments, &error);
+		const std::optional<Strata::Tests::ConsoleRun> run = Strata::Tests::RunInConsole(Strata::FileSystem::FromUTF8(argv[first]), arguments, &error,
+			interruptWhen);
 		if (!run)
 		{
 			std::fprintf(stderr, "console-output: %s\n", error.c_str());
@@ -201,6 +210,39 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		return run->ExitCode;
 	}
 #endif
+	if (mode == "run-with-environment")
+	{
+		// <NAME=VALUE>... -- <program> [arguments]: runs the program with these environment variables (and this helper's
+		// standard streams) and ends with its exit code, so tests change a child's environment without changing their own.
+		int index = 2;
+		for (; index < argc && std::string_view(argv[index]) != "--"; index++)
+		{
+			const std::string_view assignment = argv[index];
+			const size_t equals = assignment.find('=');
+			if (equals == std::string_view::npos || equals == 0)
+			{
+				std::fprintf(stderr, "run-with-environment: '%s' is not NAME=VALUE\n", argv[index]);
+				return 99;
+			}
+			Strata::Platform::SetEnvVar(assignment.substr(0, equals), assignment.substr(equals + 1));
+		}
+		if (index + 1 >= argc)
+		{
+			std::fprintf(stderr, "run-with-environment: no program after --\n");
+			return 99;
+		}
+		Strata::ProcessSpecification specification;
+		specification.Executable = Strata::FileSystem::FromUTF8(argv[index + 1]);
+		specification.Arguments.assign(argv + index + 2, argv + argc);
+		specification.Output = Strata::ProcessOutputMode::Inherit;
+		Strata::Process process;
+		if (!process.Start(specification))
+		{
+			std::fprintf(stderr, "run-with-environment: %s\n", process.GetLastError().c_str());
+			return 99;
+		}
+		return process.Wait().value_or(99);
+	}
 	if (mode == "echo")
 	{
 		for (int index = 2; index < argc; index++)

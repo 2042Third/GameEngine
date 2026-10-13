@@ -314,7 +314,44 @@ namespace Strata::Tests
 		return sizes;
 	}
 
-	std::optional<ConsoleRun> RunInConsole(const std::filesystem::path& program, const std::vector<std::string>& arguments, std::string* outError)
+	namespace
+	{
+
+		// The console's lines up to its cursor, without trailing blanks; nothing when it cannot be read.
+		std::optional<std::string> ReadConsoleText(HANDLE console)
+		{
+			CONSOLE_SCREEN_BUFFER_INFO info = {};
+			if (!GetConsoleScreenBufferInfo(console, &info))
+				return std::nullopt;
+			std::string text;
+			std::wstring line(static_cast<size_t>(info.dwSize.X), L' ');
+			for (SHORT row = 0; row <= info.dwCursorPosition.Y; row++)
+			{
+				DWORD read = 0;
+				if (!ReadConsoleOutputCharacterW(console, line.data(), static_cast<DWORD>(line.size()), COORD { 0, row }, &read))
+					break;
+				std::wstring shown = line.substr(0, read);
+				const size_t end = shown.find_last_not_of(L' ');
+				shown.resize(end == std::wstring::npos ? 0 : end + 1);
+				text += FileSystem::ToUTF8(std::filesystem::path(shown)) + "\n";
+			}
+			return text;
+		}
+
+		// Shorter than the minute tests give the helper that runs this, so the program is ended here, never left behind.
+		constexpr std::chrono::seconds c_ConsoleRunTimeout(45);
+
+		// The Ctrl+C this process sends to its console reaches it too: it is handled here (not ignored with a null handler,
+		// which the programs it starts would inherit).
+		BOOL WINAPI KeepRunningOnInterrupt(DWORD type)
+		{
+			return type == CTRL_C_EVENT ? TRUE : FALSE;
+		}
+
+	}
+
+	std::optional<ConsoleRun> RunInConsole(const std::filesystem::path& program, const std::vector<std::string>& arguments, std::string* outError,
+		std::string_view interruptWhenShown)
 	{
 		auto fail = [outError](std::string message) -> std::optional<ConsoleRun>
 		{
@@ -326,6 +363,14 @@ namespace Strata::Tests
 			nullptr);
 		if (console == INVALID_HANDLE_VALUE)
 			return fail("this process has no console");
+
+		// Programs started from a terminal process Ctrl+C: whoever started this helper may have turned it off, which its
+		// children would inherit. This process keeps running when it presses Ctrl+C itself.
+		if (!interruptWhenShown.empty())
+		{
+			SetConsoleCtrlHandler(nullptr, FALSE);
+			SetConsoleCtrlHandler(KeepRunningOnInterrupt, TRUE);
+		}
 
 		// A terminal's standard streams are its console; the program gets them as a terminal passes them (inherited, not
 		// redirected). This process's own streams are given back once it has started.
@@ -346,34 +391,39 @@ namespace Strata::Tests
 			CloseHandle(console);
 			return fail("cannot start it: " + process.GetLastError());
 		}
-		const std::optional<int> exitCode = process.Wait(std::chrono::minutes(1));
+		ConsoleRun run;
+		const auto deadline = std::chrono::steady_clock::now() + c_ConsoleRunTimeout;
+		std::optional<int> exitCode;
+		while (!exitCode && std::chrono::steady_clock::now() < deadline)
+		{
+			exitCode = process.Wait(std::chrono::milliseconds(50));
+			if (exitCode || interruptWhenShown.empty() || run.Interrupted)
+				continue;
+			const std::optional<std::string> shown = ReadConsoleText(console);
+			if (shown && shown->find(interruptWhenShown) != std::string::npos)
+			{
+				run.Interrupted = GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0) != FALSE;
+				if (!run.Interrupted)
+				{
+					process.Terminate();
+					CloseHandle(console);
+					return fail("cannot press Ctrl+C in the console");
+				}
+			}
+		}
 		if (!exitCode)
 		{
 			process.Terminate();
 			CloseHandle(console);
-			return fail("it did not end within a minute");
+			return fail(run.Interrupted ? "it did not end within 45 seconds, also after Ctrl+C" : "it did not end within 45 seconds");
 		}
 
-		ConsoleRun run;
 		run.ExitCode = *exitCode;
-		CONSOLE_SCREEN_BUFFER_INFO info = {};
-		if (!GetConsoleScreenBufferInfo(console, &info))
-		{
-			CloseHandle(console);
-			return fail("cannot read the console");
-		}
-		std::wstring line(static_cast<size_t>(info.dwSize.X), L' ');
-		for (SHORT row = 0; row <= info.dwCursorPosition.Y; row++)
-		{
-			DWORD read = 0;
-			if (!ReadConsoleOutputCharacterW(console, line.data(), static_cast<DWORD>(line.size()), COORD { 0, row }, &read))
-				break;
-			std::wstring text = line.substr(0, read);
-			const size_t end = text.find_last_not_of(L' ');
-			text.resize(end == std::wstring::npos ? 0 : end + 1);
-			run.Text += FileSystem::ToUTF8(std::filesystem::path(text)) + "\n";
-		}
+		const std::optional<std::string> text = ReadConsoleText(console);
 		CloseHandle(console);
+		if (!text)
+			return fail("cannot read the console");
+		run.Text = *text;
 		return run;
 	}
 #endif

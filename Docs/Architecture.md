@@ -95,12 +95,31 @@ What may depend on what:
 Applications built on `Application` (editor, runtime) get `main` from `Core/EntryPoint.h`, which calls the client's
 `CreateApplication`, runs it and returns its exit code. `StrataCLI` has its own `main` and no `Application`. On Windows
 the editor and the runtime (and so every exported game) are GUI-subsystem programs, so that no console window opens with
-them; they keep `main` (`/ENTRY:mainCRTStartup`, `StrataEditor/CMakeLists.txt`, `StrataRuntime/CMakeLists.txt`), whose
-first call, `Platform::ConnectStandardStreams`, keeps the streams callers pass (pipes, files, the null device: CTest,
-StrataCLI, CI get the output and the exit code as from a console program) and otherwise attaches to the console of the
-process that started it (a terminal), before anything prints or the log opens its console sink.
-`EndToEnd.StandardStreams` checks both (the terminal through a helper with a hidden console, `Tests::RunInConsole`) and
-the executables' subsystems, as `StrataEditor.Install` checks the installed ones.
+them; they keep `main` (`/ENTRY:mainCRTStartup`, `StrataEditor/CMakeLists.txt`, `StrataRuntime/CMakeLists.txt`). Before
+anything prints or the log opens its console sink, `main` asks the client what kind of run the command line is
+(`GetProgramRun`, defined next to `CreateApplication`) and passes it to `Platform::ConnectStandardStreams`, which keeps
+the streams callers pass (pipes, files, the null device: CTest, StrataCLI, CI get the output and the exit code as from a
+console program). A `ProgramRun::Console` run (`--version`, `--help`, usage errors, headless and scripted runs) attaches
+to the console of the process that started it (a terminal) for the streams it was not given; a `ProgramRun::Interactive`
+run (a person's window) never does, because a process attached to a console ends with it: the terminal's Ctrl+C or
+closing it would kill the editor, and its log would run into the shell's prompt (shells do not wait for windowed
+programs). `main` then installs `Platform::InstallInterruptHandler`: Ctrl+C, Ctrl+Break and the console closing on
+Windows (a console control handler), SIGINT and SIGTERM on POSIX (a handler that only counts the request, async-signal
+safe) become a request the main loop honors after its frame (`Application::Run` polls `Platform::IsInterruptRequested`
+and closes with exit code 130 unless the run had failed), so layers shut down as after any close (the editor cancels
+commands, removes its automation session, closes the project); a second request goes to the default handler and ends the
+process. Failures that end a program before it could do anything go through `Application::ReportFatalError`: logged as
+critical and, where nobody would read that (`Platform::ShouldShowErrorDialogs`: an Interactive run whose stderr is no
+terminal, pipe or file), shown in a native dialog with the advice and the log's path (`Platform::ShowErrorDialog`:
+MessageBoxW on Windows, osascript on macOS, zenity or kdialog on Linux, without new dependencies; nothing else is left
+when none can show). The Application constructor reports a missing graphics device this way (after closing its window),
+with the driver advice of `GraphicsDevice::GetDriverInstallAdvice`; the runtime reports a missing manifest and a game
+that cannot start. Console runs never show dialogs, so tools and servers are never stopped by one;
+`STRATA_ERROR_DIALOG_FILE` makes `ReportFatalError` write the dialog's title and text to that file instead (tests).
+`EndToEnd.StandardStreams` checks pipes, the terminal (through a helper with a hidden console, `Tests::RunInConsole`,
+which also presses Ctrl+C), SIGINT and SIGTERM on POSIX, the dialogs' text and the executables' subsystems;
+`GPU.Startup` an editor whose Vulkan loader finds no driver; `StrataEditor.Install` the installed executables'
+subsystems.
 
 ## Engine modules
 

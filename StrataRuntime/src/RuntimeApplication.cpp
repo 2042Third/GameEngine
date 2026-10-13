@@ -21,6 +21,9 @@ namespace Strata
 	constexpr uint32_t c_HeadlessFrameRate = 60;
 	// The largest --asset-budget-mb (16 TB): beyond any device, and far from overflowing when converted to bytes.
 	constexpr int64_t c_MaxAssetBudgetMB = 16ll << 20;
+	// What a person learns when the game cannot start for want of its files.
+	constexpr const char* c_GameFilesAdvice = "StrataRuntime plays games exported from Strata Editor (File > Export Game...): run the "
+		"executable the export wrote, in its folder with the game's .stgame manifest and .stpak pack, or pass --game <file>.";
 
 	struct RuntimeOptions
 	{
@@ -66,15 +69,25 @@ namespace Strata
 			m_Runtime = GameRuntime::Create(m_Options.ManifestPath, &error, runtimeOptions);
 			if (!m_Runtime)
 			{
-				ST_CRITICAL("Cannot start the game '{}': {}", FileSystem::ToUTF8(m_Options.ManifestPath), error);
-				Application::Get().SetExitCode(1);
-				Application::Get().Close();
+				ReportStartFailure(error);
 				return;
 			}
 			if (renders)
 				m_Renderer = CreateScope<GameRenderer>();
 			if (!m_Options.PerfLogPath.empty())
 				StartPerfLog();
+		}
+
+		// A game that cannot start ends the process with exit code 1, and a person who started it learns why (a dialog where
+		// nothing else would show it: Application::ReportFatalError).
+		void ReportStartFailure(const std::string& error)
+		{
+			Application& application = Application::Get();
+			Application::ReportFatalError(application.GetSpecification().Name, fmt::format("Cannot start the game '{}': {}",
+				FileSystem::ToUTF8(m_Options.ManifestPath), error), "Its files may be incomplete or damaged: export the game again, or "
+				"download or unpack it again.");
+			application.SetExitCode(1);
+			application.Close();
 		}
 
 		void OnDetach() override
@@ -92,11 +105,9 @@ namespace Strata
 				return;
 			m_Runtime->Update(timestep);
 			// A start scene that cannot be loaded leaves nothing to play.
-			if (const std::optional<std::string>& startError = m_Runtime->GetStartError())
+			if (const std::optional<std::string> startError = m_Runtime->GetStartError())
 			{
-				ST_CRITICAL("Cannot start the game '{}': {}", FileSystem::ToUTF8(m_Options.ManifestPath), *startError);
-				Application::Get().SetExitCode(1);
-				Application::Get().Close();
+				ReportStartFailure(*startError);
 				m_Runtime.reset();
 				return;
 			}
@@ -238,6 +249,42 @@ namespace Strata
 		}
 	};
 
+	namespace
+	{
+
+		// What is wrong with the values of the command line's options, before anything starts.
+		std::optional<std::string> CheckOptions(const CommandLine& commandLine)
+		{
+			if ((commandLine.HasFlag("--resolution") || commandLine.GetOption("--resolution")) && !commandLine.GetSizeOption("--resolution"))
+				return fmt::format("--resolution needs the pixels of the window as <width>x<height>, each from 1 to {}", CommandLine::c_MaxSizeOption);
+			if (commandLine.HasFlag("--asset-budget-mb") || commandLine.GetOption("--asset-budget-mb"))
+			{
+				const std::optional<int64_t> megabytes = commandLine.GetIntOption("--asset-budget-mb");
+				if (!megabytes || *megabytes <= 0 || *megabytes > c_MaxAssetBudgetMB)
+					return fmt::format("--asset-budget-mb needs a whole number of megabytes from 1 to {}", c_MaxAssetBudgetMB);
+			}
+			// The screenshot is taken on the last frame, so it needs a frame count and a window.
+			const std::optional<int64_t> frames = commandLine.GetIntOption("--frames");
+			if (commandLine.GetOption("--screenshot") && (!frames || *frames <= 0 || commandLine.HasFlag("--headless")))
+				return std::string("--screenshot needs --frames <count> and a window (not --headless)");
+			if (commandLine.HasFlag("--perf-log") && commandLine.GetOption("--perf-log").value_or(std::string()).empty())
+				return std::string("--perf-log needs the path of the CSV file to write");
+			if (commandLine.HasFlag("--save-directory") && commandLine.GetOption("--save-directory").value_or(std::string()).empty())
+				return std::string("--save-directory needs the folder to keep the game's save files in");
+			return std::nullopt;
+		}
+
+	}
+
+	ProgramRun GetProgramRun(const CommandLine& commandLine)
+	{
+		// Runs that end by themselves (servers, checks, screenshots, perf logs) and command lines with a mistake print into
+		// the terminal that started them; a person playing in a window leaves it alone.
+		if (commandLine.HasFlag("--headless") || commandLine.HasFlag("--frames") || CheckOptions(commandLine))
+			return ProgramRun::Console;
+		return ProgramRun::Interactive;
+	}
+
 	Application* CreateApplication(const CommandLine& commandLine)
 	{
 		// Games read cooked asset packs and never name the asset pipeline: the Application constructor registers the
@@ -257,12 +304,20 @@ namespace Strata
 		logSpecification.LogFile = Platform::GetUserDataDirectory(SaveFiles::MakeGameDirectoryName(name)) / "Logs" / "Game.log";
 		Log::Init(logSpecification);
 		ST_INFO("{} (Strata {}, {})", name, c_EngineVersion, Platform::GetName());
+		// A Console run (GetProgramRun): the terminal that started it shows the mistake.
+		if (const std::optional<std::string> problem = CheckOptions(commandLine))
+		{
+			ST_CRITICAL("{}", *problem);
+			return nullptr;
+		}
 		if (!manifest)
 		{
-			ST_CRITICAL("No game to run: {}", options.ManifestPath.empty() ? std::string("no single .stgame manifest next to the executable (pass --game <file>)") : error);
+			Application::ReportFatalError(name, fmt::format("No game to run: {}", options.ManifestPath.empty()
+				? std::string("no single .stgame manifest next to the executable (pass --game <file>)") : error), c_GameFilesAdvice);
 			return nullptr;
 		}
 
+		// The options' values were checked above (CheckOptions).
 		ApplicationSpecification specification;
 		specification.Name = name;
 		specification.CommandLineArgs = commandLine;
@@ -277,16 +332,10 @@ namespace Strata
 		specification.Window.Height = manifest->WindowHeight;
 		specification.Window.Fullscreen = manifest->Fullscreen && !commandLine.HasFlag("--windowed");
 		specification.Window.VSync = manifest->VSync;
-		if (commandLine.HasFlag("--resolution") || commandLine.GetOption("--resolution"))
+		if (const std::optional<std::pair<uint32_t, uint32_t>> resolution = commandLine.GetSizeOption("--resolution"))
 		{
 			// A window of exactly that many pixels, whatever the display's scale: perf logs and screenshots that compare
 			// across machines and displays.
-			const std::optional<std::pair<uint32_t, uint32_t>> resolution = commandLine.GetSizeOption("--resolution");
-			if (!resolution)
-			{
-				ST_CRITICAL("--resolution needs the pixels of the window as <width>x<height>, each from 1 to {}", CommandLine::c_MaxSizeOption);
-				return nullptr;
-			}
 			specification.Window.Width = resolution->first;
 			specification.Window.Height = resolution->second;
 			specification.Window.SizeInPixels = true;
@@ -295,46 +344,16 @@ namespace Strata
 		if (std::optional<int64_t> frames = commandLine.GetIntOption("--frames"); frames && *frames > 0)
 			specification.MaxFrames = static_cast<uint64_t>(*frames);
 		options.MaxFrames = specification.MaxFrames;
-		if (commandLine.GetOption("--asset-budget-mb"))
-		{
-			// Megabytes of GPU texture memory the game's assets may keep resident (1 MB = 1048576 bytes).
-			const std::optional<int64_t> megabytes = commandLine.GetIntOption("--asset-budget-mb");
-			if (!megabytes || *megabytes <= 0 || *megabytes > c_MaxAssetBudgetMB)
-			{
-				ST_CRITICAL("--asset-budget-mb needs a whole number of megabytes from 1 to {}", c_MaxAssetBudgetMB);
-				return nullptr;
-			}
+		// Megabytes of GPU texture memory the game's assets may keep resident (1 MB = 1048576 bytes).
+		if (const std::optional<int64_t> megabytes = commandLine.GetIntOption("--asset-budget-mb"))
 			options.TextureBudget = static_cast<uint64_t>(*megabytes) << 20;
-		}
 		if (std::optional<std::string> screenshot = commandLine.GetOption("--screenshot"))
-		{
-			// The screenshot is taken on the last frame, so it needs a frame count and a window.
-			if (!options.MaxFrames || specification.Headless)
-			{
-				ST_CRITICAL("--screenshot needs --frames <count> and a window (not --headless)");
-				return nullptr;
-			}
 			options.ScreenshotPath = FileSystem::FromUTF8(*screenshot);
-		}
-		if (commandLine.HasFlag("--perf-log") || commandLine.GetOption("--perf-log"))
-		{
-			const std::optional<std::string> perfLog = commandLine.GetOption("--perf-log");
-			if (!perfLog || perfLog->empty())
-			{
-				ST_CRITICAL("--perf-log needs the path of the CSV file to write");
-				return nullptr;
-			}
+		if (std::optional<std::string> perfLog = commandLine.GetOption("--perf-log"))
 			options.PerfLogPath = FileSystem::FromUTF8(*perfLog);
-		}
-		if (commandLine.HasFlag("--save-directory") || commandLine.GetOption("--save-directory"))
+		if (std::optional<std::string> saves = commandLine.GetOption("--save-directory"))
 		{
 			// Saves somewhere else than the player's data directory: tests and tools that must not touch it.
-			const std::optional<std::string> saves = commandLine.GetOption("--save-directory");
-			if (!saves || saves->empty())
-			{
-				ST_CRITICAL("--save-directory needs the folder to keep the game's save files in");
-				return nullptr;
-			}
 			options.SaveDirectory = FileSystem::FromUTF8(*saves);
 			ST_INFO("Keeping the game's save files in {}", FileSystem::ToUTF8(options.SaveDirectory));
 		}

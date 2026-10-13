@@ -16,6 +16,7 @@
 #include <shlobj.h>
 
 #include <algorithm>
+#include <atomic>
 #include <climits>
 #include <cstdio>
 #include <initializer_list>
@@ -650,8 +651,41 @@ namespace Strata
 		_setmode(_fileno(stdout), _O_BINARY);
 	}
 
-	void Platform::ConnectStandardStreams()
+	namespace
 	{
+
+		// What ConnectStandardStreams found and did (main thread, before other threads exist).
+		ProgramRun s_ProgramRun = ProgramRun::Interactive;
+		bool s_ErrorOutputRead = false;
+		// Requests to stop (InstallInterruptHandler); read by the main loop, written by the console's handler thread.
+		std::atomic<uint32_t> s_InterruptRequests = 0;
+		// Windows ends a process whose console closes once its handler returns, at the latest after 5 seconds: the main loop
+		// gets that long to finish in order (it ends the process itself sooner).
+		constexpr DWORD c_ConsoleCloseGraceMilliseconds = 4500;
+
+		BOOL WINAPI OnConsoleControl(DWORD type)
+		{
+			switch (type)
+			{
+				case CTRL_C_EVENT:
+				case CTRL_BREAK_EVENT:
+					// The first request is honored by the main loop; a second one goes to the default handler, which ends the
+					// process (a program that does not quit when asked).
+					return s_InterruptRequests.fetch_add(1) == 0 ? TRUE : FALSE;
+				case CTRL_CLOSE_EVENT:
+					s_InterruptRequests.fetch_add(1);
+					Sleep(c_ConsoleCloseGraceMilliseconds);
+					return TRUE;
+				default:
+					return FALSE;
+			}
+		}
+
+	}
+
+	void Platform::ConnectStandardStreams(ProgramRun run)
+	{
+		s_ProgramRun = run;
 		// A stream the parent passed is anything but a console: a pipe, a file or the null device. Those are kept, never
 		// replaced, so that whoever reads them (CTest, StrataCLI, CI) gets the output and the program's exit code as before.
 		const auto isPassed = [](DWORD id)
@@ -662,7 +696,11 @@ namespace Strata
 		};
 		const bool outputPassed = isPassed(STD_OUTPUT_HANDLE);
 		const bool errorPassed = isPassed(STD_ERROR_HANDLE);
-		if (outputPassed && errorPassed)
+		// Someone reads a pipe or a file; nobody reads the null device (a character device that is no console).
+		s_ErrorOutputRead = errorPassed && GetFileType(GetStdHandle(STD_ERROR_HANDLE)) != FILE_TYPE_CHAR;
+		// An Interactive run leaves the terminal alone: attached to its console, the terminal's Ctrl+C and closing it would
+		// end the program, and the log would run into the shell's prompt (shells do not wait for windowed programs).
+		if ((outputPassed && errorPassed) || run != ProgramRun::Console)
 			return;
 		// Started from a terminal: print into it. Started from Explorer, there is no console to attach to.
 		if (!AttachConsole(ATTACH_PARENT_PROCESS))
@@ -673,16 +711,41 @@ namespace Strata
 			const HANDLE console = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
 				0, nullptr);
 			if (console == INVALID_HANDLE_VALUE)
-				return;
+				return false;
 			SetStdHandle(id, console);
 			// A stream that cannot be reopened prints nowhere, as when started from the desktop: there is nothing else to try.
 			FILE* reopened = nullptr;
-			freopen_s(&reopened, "CONOUT$", "w", stream);
+			return freopen_s(&reopened, "CONOUT$", "w", stream) == 0;
 		};
 		if (!outputPassed)
 			connect(STD_OUTPUT_HANDLE, stdout);
 		if (!errorPassed)
-			connect(STD_ERROR_HANDLE, stderr);
+			s_ErrorOutputRead = connect(STD_ERROR_HANDLE, stderr);
+	}
+
+	bool Platform::ShouldShowErrorDialogs()
+	{
+		return s_ProgramRun == ProgramRun::Interactive && !s_ErrorOutputRead;
+	}
+
+	bool Platform::ShowErrorDialog(std::string_view title, std::string_view message)
+	{
+		const std::wstring wideTitle = WindowsUtils::Utf8ToWide(title);
+		const std::wstring wideMessage = WindowsUtils::Utf8ToWide(message);
+		// No owner: the program may have no window yet, or one that is about to close. MB_SETFOREGROUND brings it in front of
+		// the window a person started the program from.
+		return MessageBoxW(nullptr, wideMessage.c_str(), wideTitle.c_str(), MB_OK | MB_ICONERROR | MB_SETFOREGROUND) != 0;
+	}
+
+	void Platform::InstallInterruptHandler()
+	{
+		// A process without a console gets no console events: the handler then never runs.
+		SetConsoleCtrlHandler(OnConsoleControl, TRUE);
+	}
+
+	bool Platform::IsInterruptRequested()
+	{
+		return s_InterruptRequests.load() > 0;
 	}
 
 }

@@ -14,6 +14,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <initializer_list>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -218,6 +219,22 @@ namespace Strata
 			PushLayer(new EditorLayer(options, CreateScope<ApplicationEditorHost>(*this)));
 		}
 	};
+
+	ProgramRun GetProgramRun(const CommandLine& commandLine)
+	{
+		// What it prints is the point: information, a usage error, and the log of runs that tools and command scripts drive
+		// (they end by themselves or through automation). A person's window leaves the terminal it was started from alone.
+		if (commandLine.HasFlag("--help") || commandLine.HasFlag("-h") || commandLine.HasFlag("--version"))
+			return ProgramRun::Console;
+		if (CheckArguments(commandLine) || CheckValues(commandLine))
+			return ProgramRun::Console;
+		for (const char* scripted : { "--headless", "--no-gpu", "--frames", "--commands", "--quit-after-commands" })
+		{
+			if (commandLine.HasFlag(scripted))
+				return ProgramRun::Console;
+		}
+		return ProgramRun::Interactive;
+	}
 
 	Application* CreateApplication(const CommandLine& commandLine)
 	{

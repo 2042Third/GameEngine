@@ -2,24 +2,34 @@
 
 #include "TestHelpers.h"
 
+#include <Strata/Core/Application.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/PlatformDetection.h>
 #include <Strata/Core/Process.h>
 #include <Strata/Core/Version.h>
+#include <Strata/Renderer/GraphicsDevice.h>
 
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
+
+#if !defined(ST_PLATFORM_WINDOWS)
+	#include <csignal>
+	#include <sys/types.h>
+#endif
 
 // What the editor and the runtime print, and the exit codes they end with, reach the processes that start them: on Windows
 // they are GUI-subsystem programs, so that no console window opens with them, and keep the pipes their callers pass
-// (Platform::ConnectStandardStreams). CTest runs this suite with the editor automation tests (StrataEditor.Automation),
-// passing the executables' paths in STRATA_TEST_EDITOR_PATH, STRATA_TEST_RUNTIME_PATH and STRATA_TEST_CLI_PATH; run
-// directly, the tests look next to the test executable.
+// (Platform::ConnectStandardStreams). Console runs (scripted, headless, --version) print into the terminal that started
+// them and quit in order on its Ctrl+C; Interactive runs (a person's window) leave the terminal alone and show fatal
+// errors nobody would read in a dialog, whose text tests read from STRATA_ERROR_DIALOG_FILE instead. CTest runs this suite
+// with the editor automation tests (StrataEditor.Automation), passing the executables' paths in STRATA_TEST_EDITOR_PATH,
+// STRATA_TEST_RUNTIME_PATH and STRATA_TEST_CLI_PATH; run directly, the tests look next to the test executable.
 
 using namespace Strata;
 
@@ -27,6 +37,8 @@ namespace
 {
 
 	constexpr std::chrono::milliseconds c_ProcessTimeout = std::chrono::milliseconds(60000);
+	// What a headless editor without automation or --frames logs before its first frame (it then runs until it is stopped).
+	constexpr const char* c_RunningMessage = "Running headless without automation or --frames";
 
 	std::filesystem::path FindBuiltExecutable(const char* variable, const std::string& name)
 	{
@@ -73,6 +85,35 @@ namespace
 	}
 #endif
 
+	// Runs a program with its output sent to the null device, as a launcher that reads none of it does.
+	int RunDiscarded(const std::filesystem::path& program, const std::vector<std::string>& arguments)
+	{
+		REQUIRE_MESSAGE(FileSystem::IsRegularFile(program), FileSystem::ToUTF8(program), " is not built");
+		ProcessSpecification specification;
+		specification.Executable = program;
+		specification.Arguments = arguments;
+		specification.Output = ProcessOutputMode::Discard;
+		// Process::Run captures the output: this starts the process itself.
+		Process process;
+		REQUIRE_MESSAGE(process.Start(specification), process.GetLastError());
+		const std::optional<int> exitCode = process.Wait(c_ProcessTimeout);
+		if (!exitCode)
+			process.Terminate();
+		REQUIRE(exitCode);
+		return *exitCode;
+	}
+
+	// What the error dialog of a run said (STRATA_ERROR_DIALOG_FILE): its title, a line, then its message; nothing without one.
+	std::optional<std::string> ReadDialog(const std::filesystem::path& file)
+	{
+		return FileSystem::IsRegularFile(file) ? FileSystem::ReadText(file) : std::nullopt;
+	}
+
+	bool Contains(const std::string& text, const std::string& part)
+	{
+		return text.find(part) != std::string::npos;
+	}
+
 }
 
 TEST_SUITE("EndToEnd.StandardStreams")
@@ -100,6 +141,70 @@ TEST_SUITE("EndToEnd.StandardStreams")
 		CHECK(result.ExitCode == 1);
 		CHECK((result.Output + result.ErrorOutput).find("No game to run") != std::string::npos);
 		CHECK((result.Output + result.ErrorOutput).find(std::string("Strata ") + c_EngineVersion) != std::string::npos);
+	}
+
+	TEST_CASE("A game that cannot start shows a person why, and never stops a tool with a dialog")
+	{
+		const std::filesystem::path runtime = FindBuiltExecutable("STRATA_TEST_RUNTIME_PATH", "StrataRuntime");
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("StandardStreams");
+		const std::filesystem::path missing = directory / "Missing.stgame";
+		const std::filesystem::path dialog = directory / "Dialog.txt";
+		Tests::ScopedEnvironmentVariable dialogFile("STRATA_ERROR_DIALOG_FILE", FileSystem::ToUTF8(dialog));
+
+		// A person's run whose output nobody reads (a launcher, the desktop): the dialog says what is wrong, what to do and
+		// where the log is.
+		CHECK(RunDiscarded(runtime, { "--game", FileSystem::ToUTF8(missing) }) == 1);
+		const std::optional<std::string> shown = ReadDialog(dialog);
+		REQUIRE(shown);
+		CHECK(shown->rfind("Strata Game\n", 0) == 0);
+		CHECK(Contains(*shown, "No game to run: "));
+		CHECK(Contains(*shown, "StrataRuntime plays games exported from Strata Editor"));
+		CHECK(Contains(*shown, "The log has the details: "));
+		CHECK(Contains(*shown, "Game.log"));
+		REQUIRE(FileSystem::Remove(dialog));
+
+		// Whoever reads the output gets the error there: no dialog. Nor in a headless run (a server, CI), whatever its output.
+		CHECK(RunCaptured(runtime, { "--game", FileSystem::ToUTF8(missing) }).ExitCode == 1);
+		CHECK_FALSE(ReadDialog(dialog));
+		CHECK(RunDiscarded(runtime, { "--game", FileSystem::ToUTF8(missing), "--headless" }) == 1);
+		CHECK_FALSE(ReadDialog(dialog));
+	}
+#endif
+
+#if !defined(ST_PLATFORM_WINDOWS)
+	TEST_CASE("SIGINT and SIGTERM end a headless editor in order")
+	{
+		const std::filesystem::path editor = FindBuiltExecutable("STRATA_TEST_EDITOR_PATH", "StrataEditor");
+		REQUIRE_MESSAGE(FileSystem::IsRegularFile(editor), FileSystem::ToUTF8(editor), " is not built");
+		for (const int stopSignal : { SIGINT, SIGTERM })
+		{
+			CAPTURE(stopSignal);
+			ProcessSpecification specification;
+			specification.Executable = editor;
+			// Without automation or --frames it runs until it is stopped.
+			specification.Arguments = { "--no-gpu", "--no-automation" };
+			Process process;
+			REQUIRE_MESSAGE(process.Start(specification), process.GetLastError());
+			std::string output;
+			const auto deadline = std::chrono::steady_clock::now() + c_ProcessTimeout;
+			while (!Contains(output, c_RunningMessage) && process.IsRunning() && std::chrono::steady_clock::now() < deadline)
+			{
+				output += process.TakeOutput();
+				std::this_thread::sleep_for(std::chrono::milliseconds(20));
+			}
+			REQUIRE_MESSAGE(Contains(output, c_RunningMessage), output);
+			REQUIRE(kill(static_cast<pid_t>(process.GetProcessID()), stopSignal) == 0);
+			const std::optional<int> exitCode = process.Wait(c_ProcessTimeout);
+			if (!exitCode)
+				process.Terminate();
+			REQUIRE(exitCode);
+			const auto outputDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+			while (!process.IsOutputFinished() && std::chrono::steady_clock::now() < outputDeadline)
+				std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			output += process.TakeOutput();
+			CHECK(*exitCode == Application::c_InterruptedExitCode);
+			CHECK_MESSAGE(Contains(output, "Interrupted (Ctrl+C or a request to terminate): closing"), output);
+		}
 	}
 #endif
 
@@ -134,5 +239,78 @@ TEST_SUITE("EndToEnd.StandardStreams")
 		CHECK(usage.ExitCode == 3);
 		CHECK(usage.Output.find("Usage: StrataEditor [options]") != std::string::npos);
 	}
+
+	TEST_CASE("On Windows Ctrl+C in the terminal ends a headless editor in order")
+	{
+		// Without automation or --frames it runs until it is stopped; once it says so, Ctrl+C is pressed in its terminal.
+		// Killed by the console, it would end with STATUS_CONTROL_C_EXIT before it shut down.
+		const std::filesystem::path editor = FindBuiltExecutable("STRATA_TEST_EDITOR_PATH", "StrataEditor");
+		const Process::RunResult run = RunCaptured(Tests::GetTestExecutablePath(), { "--strata-test-helper=console-output", "--interrupt-when",
+			c_RunningMessage, FileSystem::ToUTF8(editor), "--no-gpu", "--no-automation" });
+		INFO(run.Output);
+		INFO(run.ErrorOutput);
+		CHECK(run.ExitCode == Application::c_InterruptedExitCode);
+		CHECK(Contains(run.Output, "Interrupted (Ctrl+C or a request to terminate): closing"));
+	}
+
+#if defined(STRATA_TESTS_HAVE_RUNTIME)
+	TEST_CASE("On Windows a game played in a window leaves the terminal alone, and a headless one prints into it")
+	{
+		const std::filesystem::path runtime = FindBuiltExecutable("STRATA_TEST_RUNTIME_PATH", "StrataRuntime");
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("StandardStreams");
+		const std::filesystem::path missing = directory / "Missing.stgame";
+		const std::filesystem::path dialog = directory / "Dialog.txt";
+		Tests::ScopedEnvironmentVariable dialogFile("STRATA_ERROR_DIALOG_FILE", FileSystem::ToUTF8(dialog));
+
+		// A person's window: nothing in the terminal (whose Ctrl+C and closing would end it, and whose prompt the log would run
+		// into), so the person learns in a dialog why the game cannot start.
+		const Process::RunResult windowed = RunCaptured(Tests::GetTestExecutablePath(), { "--strata-test-helper=console-output",
+			FileSystem::ToUTF8(runtime), "--game", FileSystem::ToUTF8(missing) });
+		INFO(windowed.ErrorOutput);
+		CHECK(windowed.ExitCode == 1);
+		CHECK_FALSE(Contains(windowed.Output, "No game to run"));
+		CHECK_FALSE(Contains(windowed.Output, std::string("Strata ") + c_EngineVersion));
+		const std::optional<std::string> shown = ReadDialog(dialog);
+		REQUIRE(shown);
+		CHECK(Contains(*shown, "No game to run: "));
+		REQUIRE(FileSystem::Remove(dialog));
+
+		// A headless run prints into the terminal and shows no dialog.
+		const Process::RunResult headless = RunCaptured(Tests::GetTestExecutablePath(), { "--strata-test-helper=console-output",
+			FileSystem::ToUTF8(runtime), "--game", FileSystem::ToUTF8(missing), "--headless" });
+		INFO(headless.ErrorOutput);
+		CHECK(headless.ExitCode == 1);
+		CHECK(Contains(headless.Output, "No game to run"));
+		CHECK_FALSE(ReadDialog(dialog));
+	}
 #endif
+#endif
+}
+
+// A desktop, not a GPU: the editor opens its window before it looks for a graphics device, and windows need a machine like
+// the other GPU tests' (CI's runners skip them).
+TEST_SUITE("GPU.Startup")
+{
+	TEST_CASE("An editor without a usable graphics device tells the person what to install")
+	{
+		const std::filesystem::path editor = FindBuiltExecutable("STRATA_TEST_EDITOR_PATH", "StrataEditor");
+		REQUIRE_MESSAGE(FileSystem::IsRegularFile(editor), FileSystem::ToUTF8(editor), " is not built");
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("NoGraphicsDevice");
+		const std::filesystem::path dialog = directory / "Dialog.txt";
+		// The Vulkan loader finds no driver (VK_DRIVER_FILES, and VK_ICD_FILENAMES for older loaders), as on a machine without
+		// one. Only the editor's environment says so (a helper sets it), never this process's, whose tests use the GPU.
+		const std::string noDriver = FileSystem::ToUTF8(directory / "NoDriver.json");
+
+		// A person's window (no --frames, --commands or --headless) whose output nobody reads.
+		CHECK(RunDiscarded(Tests::GetTestExecutablePath(), { "--strata-test-helper=run-with-environment", "VK_DRIVER_FILES=" + noDriver,
+			"VK_ICD_FILENAMES=" + noDriver, "STRATA_ERROR_DIALOG_FILE=" + FileSystem::ToUTF8(dialog), "--", FileSystem::ToUTF8(editor), "--windowed",
+			"--layout", FileSystem::ToUTF8(directory / "Layout.ini") }) == 1);
+		const std::optional<std::string> shown = ReadDialog(dialog);
+		REQUIRE(shown);
+		CHECK(shown->rfind("Strata Editor\n", 0) == 0);
+		CHECK(Contains(*shown, "Strata Editor cannot start: no usable graphics device was found (it needs Vulkan 1.2 or later)."));
+		CHECK(Contains(*shown, GraphicsDevice::GetDriverInstallAdvice()));
+		CHECK(Contains(*shown, "The log has the details: "));
+		CHECK(Contains(*shown, "StrataEditor.log"));
+	}
 }

@@ -38,6 +38,28 @@ namespace Strata
 		return s_StartupExitCode;
 	}
 
+	void Application::ReportFatalError(std::string_view title, std::string_view problem, std::string_view advice)
+	{
+		ST_CORE_CRITICAL("{}{}{}", problem, advice.empty() ? "" : " ", advice);
+		if (!Platform::ShouldShowErrorDialogs())
+			return;
+		std::string message(problem);
+		if (!advice.empty())
+			message += fmt::format("\n\n{}", advice);
+		if (const std::filesystem::path logFile = Log::GetLogFile(); !logFile.empty())
+			message += fmt::format("\n\nThe log has the details: {}", FileSystem::ToUTF8(logFile));
+		Log::Flush();
+		// Tests read what the dialog would say instead of a dialog nobody could dismiss.
+		if (const std::optional<std::string> file = Platform::GetEnvVar("STRATA_ERROR_DIALOG_FILE"); file && !file->empty())
+		{
+			if (!FileSystem::WriteText(FileSystem::FromUTF8(*file), fmt::format("{}\n{}\n", title, message)))
+				ST_CORE_ERROR("Cannot write the error dialog's text to '{}'", *file);
+			return;
+		}
+		if (!Platform::ShowErrorDialog(title, message))
+			ST_CORE_WARN("No dialog could show the error: it is only in the log");
+	}
+
 	Application::Application(const ApplicationSpecification& specification)
 		: m_Specification(specification), m_FramePacer(specification.MaxFrameRate)
 	{
@@ -75,7 +97,12 @@ namespace Strata
 
 		if (m_Specification.EnableRenderer && !InitializeGraphics())
 		{
-			ST_CORE_CRITICAL("No usable graphics device; the application cannot run");
+			// The device logged why; the person learns what to do about it. The window, which will never show anything, closes
+			// first.
+			Input::SetWindow(nullptr);
+			m_Window.reset();
+			ReportFatalError(m_Specification.Name, fmt::format("{} cannot start: no usable graphics device was found (it needs Vulkan 1.2 or "
+				"later).", m_Specification.Name), GraphicsDevice::GetDriverInstallAdvice());
 			m_Running = false;
 			m_ExitCode = 1;
 			return;
@@ -226,6 +253,15 @@ namespace Strata
 				m_FrameCount++;
 				if (m_Specification.MaxFrames && m_FrameCount >= *m_Specification.MaxFrames)
 					m_Running = false;
+			}
+			// Ctrl+C in the terminal of a Console run, or a termination signal: the frame ran to its end, and the layers
+			// shut down as after any other close.
+			if (m_Running && Platform::IsInterruptRequested())
+			{
+				ST_CORE_WARN("Interrupted (Ctrl+C or a request to terminate): closing");
+				if (m_ExitCode == 0)
+					m_ExitCode = c_InterruptedExitCode;
+				m_Running = false;
 			}
 			if (m_Running)
 				m_FramePacer.WaitForNextFrame();

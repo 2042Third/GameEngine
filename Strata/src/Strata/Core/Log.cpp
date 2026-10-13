@@ -139,6 +139,7 @@ namespace Strata
 			Ref<spdlog::logger> ClientLogger;
 			Ref<spdlog::logger> ScriptLogger;
 			Scope<LogBuffer> Buffer;
+			std::filesystem::path LogFile; // The file Init opened
 		};
 
 		LogData& GetLogData()
@@ -158,6 +159,7 @@ namespace Strata
 			Shutdown();
 
 		data.Buffer = CreateScope<LogBuffer>(specification.BufferCapacity);
+		data.LogFile.clear();
 
 		std::vector<spdlog::sink_ptr> sinks;
 		sinks.push_back(std::make_shared<LogBufferSink>(*data.Buffer, std::chrono::system_clock::now()));
@@ -180,6 +182,7 @@ namespace Strata
 				auto fileSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(specification.LogFile.string(), true);
 				fileSink->set_pattern("[%Y-%m-%d %T.%e] [%l] %n: %v");
 				sinks.push_back(fileSink);
+				data.LogFile = specification.LogFile;
 			}
 			catch (const spdlog::spdlog_ex& exception)
 			{
@@ -221,6 +224,13 @@ namespace Strata
 	bool Log::IsInitialized()
 	{
 		return GetLogData().Initialized.load();
+	}
+
+	std::filesystem::path Log::GetLogFile()
+	{
+		LogData& data = GetLogData();
+		std::scoped_lock<std::recursive_mutex> lock(data.Mutex);
+		return data.Initialized ? data.LogFile : std::filesystem::path();
 	}
 
 	static LogData& GetInitializedLogData()

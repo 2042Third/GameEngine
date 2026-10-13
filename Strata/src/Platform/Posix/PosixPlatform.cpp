@@ -4,6 +4,7 @@
 #include "Strata/Core/BoundedRead.h"
 #include "Strata/Core/Crypto.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/Process.h"
 
 #include <algorithm>
 #include <array>
@@ -872,9 +873,103 @@ namespace Strata
 		// POSIX streams never translate newlines.
 	}
 
-	void Platform::ConnectStandardStreams()
+	namespace
+	{
+
+		// What ConnectStandardStreams found (main thread, before other threads exist).
+		ProgramRun s_ProgramRun = ProgramRun::Interactive;
+		bool s_ErrorOutputRead = false;
+		// Requests to stop (InstallInterruptHandler): written by the signal handler, read by the main loop. Lock-free, so the
+		// handler may touch it.
+		std::atomic<uint32_t> s_InterruptRequests = 0;
+		static_assert(std::atomic<uint32_t>::is_always_lock_free);
+
+		void OnInterruptSignal(int signal)
+		{
+			if (s_InterruptRequests.fetch_add(1) == 0)
+				return;
+			// A second request while the first is honored: what the signal does without the handler (sigaction and raise are
+			// async-signal-safe).
+			struct sigaction action = {};
+			action.sa_handler = SIG_DFL;
+			sigemptyset(&action.sa_mask);
+			sigaction(signal, &action, nullptr);
+			raise(signal);
+		}
+
+		// Whether whoever started the program reads what it writes to stderr: a terminal, a pipe or a file. A desktop or a file
+		// manager passes the null device (macOS) or the session's journal (a socket, Linux), which nobody reads.
+		bool IsErrorOutputRead()
+		{
+			struct stat status = {};
+			if (fstat(STDERR_FILENO, &status) != 0)
+				return false;
+			return isatty(STDERR_FILENO) || S_ISFIFO(status.st_mode) || S_ISREG(status.st_mode);
+		}
+
+	}
+
+	void Platform::ConnectStandardStreams(ProgramRun run)
 	{
 		// Programs inherit the terminal's (or the parent's) streams whatever kind of program they are.
+		s_ProgramRun = run;
+		s_ErrorOutputRead = IsErrorOutputRead();
+	}
+
+	bool Platform::ShouldShowErrorDialogs()
+	{
+		return s_ProgramRun == ProgramRun::Interactive && !s_ErrorOutputRead;
+	}
+
+	bool Platform::ShowErrorDialog(std::string_view title, std::string_view message)
+	{
+		// The programs every desktop of the platform has, or that its common desktops bring along, so Strata needs no
+		// toolkit of its own; their arguments carry the text (never a shell or a script that would read it as code).
+		ProcessSpecification specification;
+		specification.Output = ProcessOutputMode::Discard;
+#if defined(ST_PLATFORM_MACOS)
+		specification.Executable = "/usr/bin/osascript";
+		specification.Arguments = { "-e", "on run argv", "-e",
+			"display alert (item 1 of argv) message (item 2 of argv) as critical buttons {\"OK\"} default button \"OK\"", "-e", "end run",
+			std::string(title), std::string(message) };
+#else
+		if (const std::optional<std::filesystem::path> zenity = FindProgram("zenity"))
+		{
+			specification.Executable = *zenity;
+			specification.Arguments = { "--error", "--no-markup", "--width=480", "--title=" + std::string(title), "--text=" + std::string(message) };
+		}
+		else if (const std::optional<std::filesystem::path> kdialog = FindProgram("kdialog"))
+		{
+			specification.Executable = *kdialog;
+			specification.Arguments = { "--title", std::string(title), "--error", std::string(message) };
+		}
+		else
+		{
+			return false;
+		}
+#endif
+		// Until the person dismisses it: 0 for its button, 1 for closing it (other codes: it could not show, e.g. no display).
+		Process process;
+		if (!process.Start(specification))
+			return false;
+		const std::optional<int> exitCode = process.Wait();
+		return exitCode && (*exitCode == 0 || *exitCode == 1);
+	}
+
+	void Platform::InstallInterruptHandler()
+	{
+		struct sigaction action = {};
+		action.sa_handler = OnInterruptSignal;
+		sigemptyset(&action.sa_mask);
+		// System calls the signal interrupts go on: the request is only noted, and the main loop honors it.
+		action.sa_flags = SA_RESTART;
+		sigaction(SIGINT, &action, nullptr);
+		sigaction(SIGTERM, &action, nullptr);
+	}
+
+	bool Platform::IsInterruptRequested()
+	{
+		return s_InterruptRequests.load() > 0;
 	}
 
 }
