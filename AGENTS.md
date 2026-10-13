@@ -83,6 +83,12 @@ Useful CMake options: `-DSTRATA_BUILD_EDITOR=OFF`, `-DSTRATA_BUILD_RUNTIME=OFF`,
 **Parallel agents:** each concurrently working agent must use its own build directory, e.g.
 `cmake --preset windows -B build/agent-<name>`, because two builds in one directory corrupt each other.
 
+**CI before main:** CI (`.github/workflows/ci.yml`: Windows with MSVC, Linux with GCC 14, macOS with Apple Clang 15)
+runs on pushes to `main`, on pull requests and on pushes to branches named `ci/<name>`. Older compilers and other
+standard libraries reject code that the local ones accept (Apple Clang 15's libc++ has no floating-point
+`std::from_chars`; `size_t` and `uint64_t` are different types on macOS; GCC 14 warns where newer GCCs do not), so push a
+branch that lands many changes (a wave's integration) as `ci/<name>` and wait for green CI before it moves `main`.
+
 ## Testing
 
 ```sh

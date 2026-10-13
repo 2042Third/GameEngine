@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # ci/<name> branches run CI before a change lands on main (AGENTS.md, "CI before main").
+    branches: [main, 'ci/**']
   pull_request:
 
 concurrency:
