@@ -7,13 +7,16 @@
 #include <spdlog/sinks/base_sink.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <future>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace Strata;
@@ -73,6 +76,44 @@ namespace
 		size_t m_Flushes = 0;
 	};
 
+	// An inner sink whose every write takes a while (a slow console), recording what it wrote.
+	class SlowSink final : public spdlog::sinks::base_sink<std::mutex>
+	{
+	public:
+		explicit SlowSink(std::chrono::microseconds writeTime)
+			: m_WriteTime(writeTime)
+		{
+		}
+
+		std::vector<std::string> GetWritten() const
+		{
+			std::scoped_lock<std::mutex> lock(m_RecordMutex);
+			return m_Written;
+		}
+
+		bool HasWritten(const std::string& text) const
+		{
+			std::scoped_lock<std::mutex> lock(m_RecordMutex);
+			return std::find(m_Written.begin(), m_Written.end(), text) != m_Written.end();
+		}
+	protected:
+		void sink_it_(const spdlog::details::log_msg& message) override
+		{
+			// Busy, as a console write is (sleeping would take at least a scheduler tick).
+			const auto end = std::chrono::steady_clock::now() + m_WriteTime;
+			while (std::chrono::steady_clock::now() < end)
+				std::this_thread::yield();
+			std::scoped_lock<std::mutex> lock(m_RecordMutex);
+			m_Written.emplace_back(message.payload.data(), message.payload.size());
+		}
+
+		void flush_() override {}
+	private:
+		const std::chrono::microseconds m_WriteTime;
+		mutable std::mutex m_RecordMutex;
+		std::vector<std::string> m_Written;
+	};
+
 	// A logger as Log::Init makes them: the background sink, and a flush on warnings and errors.
 	spdlog::logger MakeLogger(const std::shared_ptr<BackgroundLogSink>& sink)
 	{
@@ -83,6 +124,52 @@ namespace
 	}
 
 	constexpr std::chrono::seconds c_Timeout(30);
+
+	// A thread that logs "busy <n>" a little faster than the slow sink writes, so the writer never finds the queue empty,
+	// until it is stopped (when it goes out of scope at the latest) or for `limit`.
+	class BusyLogger
+	{
+	public:
+		BusyLogger(spdlog::logger& logger, std::chrono::microseconds interval, std::chrono::seconds limit)
+		{
+			m_Thread = std::thread([this, &logger, interval, limit]()
+			{
+				const auto start = std::chrono::steady_clock::now();
+				for (uint64_t index = 0; !m_StopRequested && std::chrono::steady_clock::now() < start + limit; index++)
+				{
+					const auto due = start + interval * static_cast<int64_t>(index);
+					while (std::chrono::steady_clock::now() < due)
+						std::this_thread::yield();
+					logger.info("busy {}", index);
+					m_Logged++;
+				}
+				m_Logging = false;
+			});
+		}
+
+		~BusyLogger()
+		{
+			Stop();
+		}
+
+		BusyLogger(const BusyLogger&) = delete;
+		BusyLogger& operator=(const BusyLogger&) = delete;
+
+		void Stop()
+		{
+			m_StopRequested = true;
+			if (m_Thread.joinable())
+				m_Thread.join();
+		}
+
+		bool IsLogging() const { return m_Logging; }
+		uint64_t GetLogged() const { return m_Logged; }
+	private:
+		std::atomic<bool> m_StopRequested = false;
+		std::atomic<bool> m_Logging = true;
+		std::atomic<uint64_t> m_Logged = 0;
+		std::thread m_Thread;
+	};
 
 }
 
@@ -131,6 +218,62 @@ TEST_SUITE("Core.Log")
 		written = inner->GetWritten();
 		REQUIRE(written.size() == 3);
 		CHECK(written[2] == "error");
+	}
+
+	TEST_CASE("A warning and Stop wait for what was logged before them, not for what another thread keeps logging")
+	{
+		// The writer takes 100 microseconds a line and another thread logs a line every 75: the queue is never empty. A
+		// warning (which flushes) and Stop returned only once the writer found the queue empty, so they waited for as long
+		// as the other thread logged, holding whatever lock the warning's thread held.
+		const auto inner = std::make_shared<SlowSink>(std::chrono::microseconds(100));
+		const auto sink = std::make_shared<BackgroundLogSink>(std::vector<spdlog::sink_ptr> { inner });
+		spdlog::logger logger = MakeLogger(sink);
+		BusyLogger busy(logger, std::chrono::microseconds(75), std::chrono::seconds(20));
+		std::this_thread::sleep_for(std::chrono::milliseconds(200));
+		REQUIRE(busy.IsLogging());
+
+		struct Outcome
+		{
+			bool Written = false;      // The warning was written when the call returned
+			bool OtherLogging = false; // The other thread was still logging then
+		};
+		std::future<Outcome> warned = std::async(std::launch::async, [&logger, &inner, &busy]()
+		{
+			logger.warn("warning");
+			return Outcome { inner->HasWritten("warning"), busy.IsLogging() };
+		});
+		REQUIRE(warned.wait_for(c_Timeout) == std::future_status::ready);
+		const Outcome warning = warned.get();
+		CHECK(warning.Written);
+		CHECK(warning.OtherLogging);
+
+		std::future<bool> stopped = std::async(std::launch::async, [&sink, &busy]()
+		{
+			sink->Stop();
+			return busy.IsLogging();
+		});
+		REQUIRE(stopped.wait_for(c_Timeout) == std::future_status::ready);
+		CHECK(stopped.get());
+		CHECK_FALSE(sink->IsRunning());
+
+		// Nothing lost and nothing out of order: the queue's messages, then those the thread wrote itself after Stop.
+		busy.Stop();
+		const std::vector<std::string> written = inner->GetWritten();
+		uint64_t next = 0;
+		size_t warnings = 0;
+		size_t unexpected = 0;
+		for (const std::string& message : written)
+		{
+			if (message == "busy " + std::to_string(next))
+				next++;
+			else if (message == "warning")
+				warnings++;
+			else
+				unexpected++;
+		}
+		CHECK(next == busy.GetLogged());
+		CHECK(warnings == 1);
+		CHECK(unexpected == 0);
 	}
 
 	TEST_CASE("Stopping the writer writes what is queued, and later messages are written by the thread that logs")

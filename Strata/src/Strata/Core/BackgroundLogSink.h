@@ -20,11 +20,13 @@ namespace Strata
 	// A spdlog sink that hands messages to a thread of its own, which writes them to its inner sinks (the console and the log
 	// file) in the order they were logged. Writing a line can block for milliseconds (a console, a pipe whose reader is
 	// busy, a file the system is scanning), which must never hold up the thread that logs, such as the frame's. flush()
-	// returns once every message logged before it is written and the inner sinks are flushed: loggers flush on warnings and
-	// errors, so those have reached their destination when the call that logged them returns.
+	// returns once every message logged before it is written and the inner sinks are flushed, whatever other threads log
+	// meanwhile: loggers flush on warnings and errors, so those have reached their destination when the call that logged
+	// them returns.
 	//
-	// Stop (also called by the destructor and, for the logs of the process, when the process exits) writes what is queued
-	// and ends the thread; messages logged afterwards are written right away by the thread that logs them.
+	// Stop (also called by the destructor and, for the logs of the process, when the process exits) writes the messages
+	// logged before it and those still queued, then ends the thread; messages logged afterwards are written right away by
+	// the thread that logs them.
 	class BackgroundLogSink final : public spdlog::sinks::sink
 	{
 	public:
@@ -53,8 +55,11 @@ namespace Strata
 		void FlushSinks();
 	private:
 		std::vector<spdlog::sink_ptr> m_Sinks;
-		// Guards writing to the inner sinks once the thread has stopped (the writer thread is their only user before).
-		std::mutex m_WriteMutex;
+		// Guards writing to the inner sinks once the thread has stopped (the writer thread is their only user before). The
+		// writer holds it while it writes the messages left when it stops, so that threads writing their own messages from then
+		// on come after them; recursive for an inner sink that logs on the writer thread meanwhile. Taken under m_Mutex only
+		// by the writer: log and flush take it with m_Mutex released.
+		std::recursive_mutex m_WriteMutex;
 
 		mutable std::mutex m_Mutex;
 		std::condition_variable m_WriterWake;    // Messages, a flush request or Stop for the writer
@@ -64,8 +69,10 @@ namespace Strata
 		uint64_t m_Written = 0;         // Of those, written to the inner sinks
 		uint64_t m_FlushRequested = 0;  // A flush is due once this many messages are written
 		uint64_t m_Flushed = 0;         // The inner sinks were flushed after this many messages
+		uint64_t m_StopTarget = 0;      // Stop ends the thread once this many messages are written
 		bool m_Stopping = false;
-		bool m_Running = false;
+		bool m_Running = false;         // Messages go to the queue (else the threads that log write them)
+		bool m_Finished = false;        // The writer wrote and flushed everything queued and ended
 		std::thread::id m_WriterId;     // The writer thread's (guarded by m_Mutex)
 		std::mutex m_StopMutex;         // Serializes Stop (joining the thread)
 		std::thread m_Thread;

@@ -5,8 +5,10 @@
 
 #include <spdlog/formatter.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <exception>
+#include <iterator>
 
 namespace Strata
 {
@@ -48,8 +50,9 @@ namespace Strata
 				}
 			}
 		}
-		// The writer has stopped (or this is the writer itself, should an inner sink log): written right away.
-		std::scoped_lock<std::mutex> writeLock(m_WriteMutex);
+		// The writer has stopped (or this is the writer itself, should an inner sink log): written right away, after what the
+		// writer had left (it holds the write lock while it writes that).
+		std::scoped_lock<std::recursive_mutex> writeLock(m_WriteMutex);
 		WriteToSinks(message);
 	}
 
@@ -59,15 +62,15 @@ namespace Strata
 		if (!m_Running || std::this_thread::get_id() == m_WriterId)
 		{
 			lock.unlock();
-			std::scoped_lock<std::mutex> writeLock(m_WriteMutex);
+			std::scoped_lock<std::recursive_mutex> writeLock(m_WriteMutex);
 			FlushSinks();
 			return;
 		}
-		// Everything logged before this call, written and flushed.
+		// Everything logged before this call, written and flushed; what other threads log meanwhile is not waited for.
 		const uint64_t target = m_Queued;
 		m_FlushRequested = std::max(m_FlushRequested, target);
 		m_WriterWake.notify_one();
-		m_ProgressMade.wait(lock, [this, target]() { return m_Flushed >= target || !m_Running; });
+		m_ProgressMade.wait(lock, [this, target]() { return m_Flushed >= target || m_Finished; });
 	}
 
 	void BackgroundLogSink::set_pattern(const std::string& pattern)
@@ -89,7 +92,12 @@ namespace Strata
 			return;
 		{
 			std::scoped_lock<std::mutex> lock(m_Mutex);
-			m_Stopping = true;
+			if (!m_Stopping)
+			{
+				m_Stopping = true;
+				// The writer ends once the messages logged before this call are written, whatever other threads log meanwhile.
+				m_StopTarget = m_Queued;
+			}
 		}
 		m_WriterWake.notify_one();
 		m_Thread.join();
@@ -107,35 +115,70 @@ namespace Strata
 		while (true)
 		{
 			m_WriterWake.wait(lock, [this]() { return !m_Queue.empty() || m_FlushRequested > m_Flushed || m_Stopping; });
-			if (!m_Queue.empty())
-			{
-				// Everything queued so far, written outside the lock: the threads that log go on queueing meanwhile.
-				std::deque<spdlog::details::log_msg_buffer> batch;
-				batch.swap(m_Queue);
-				lock.unlock();
-				m_ProgressMade.notify_all(); // Room in the queue
-				for (const spdlog::details::log_msg_buffer& message : batch)
-					WriteToSinks(message);
-				lock.lock();
-				m_Written += batch.size();
-				continue;
-			}
-			// The queue is empty: every message queued is written, so a flush covers all of them.
-			if (m_FlushRequested > m_Flushed || m_Stopping)
+
+			// A flush is done once the messages logged before it are written, also while other threads go on logging: had it
+			// to wait for an empty queue, a thread that logs as fast as the sinks write would hold every warning (and whatever
+			// lock its thread holds) until it pauses.
+			if (m_FlushRequested > m_Flushed && m_Written >= m_FlushRequested)
 			{
 				const uint64_t written = m_Written;
 				lock.unlock();
 				FlushSinks();
 				lock.lock();
 				m_Flushed = written;
-				if (m_Stopping && m_Queue.empty())
-				{
-					// From here on, the threads that log write themselves (log and flush check m_Running under the lock).
-					m_Running = false;
-					m_ProgressMade.notify_all();
-					return;
-				}
 				m_ProgressMade.notify_all();
+				continue;
+			}
+
+			// Stopping, and what was logged before Stop is written: what was queued since is written here, holding the write
+			// lock before the threads that log can take it, so that the messages they write themselves from now on come after.
+			// The write lock is taken under m_Mutex only here; log and flush take it with m_Mutex released.
+			if (m_Stopping && m_Written >= m_StopTarget)
+			{
+				std::unique_lock<std::recursive_mutex> writeLock(m_WriteMutex);
+				std::deque<spdlog::details::log_msg_buffer> rest;
+				rest.swap(m_Queue);
+				m_Running = false;
+				lock.unlock();
+				m_ProgressMade.notify_all(); // Threads waiting for room write their own messages now (after these)
+				for (const spdlog::details::log_msg_buffer& message : rest)
+					WriteToSinks(message);
+				FlushSinks();
+				writeLock.unlock();
+
+				lock.lock();
+				m_Written += rest.size();
+				m_Flushed = m_Written;
+				m_Finished = true;
+				lock.unlock();
+				m_ProgressMade.notify_all();
+				return;
+			}
+
+			if (!m_Queue.empty())
+			{
+				// What is queued, written outside the lock: the threads that log go on queueing meanwhile. With a flush due, only
+				// up to its messages, so that the thread waiting for it does not wait for messages logged after it as well.
+				size_t count = m_Queue.size();
+				if (m_FlushRequested > m_Written)
+					count = std::min(count, static_cast<size_t>(m_FlushRequested - m_Written));
+				std::deque<spdlog::details::log_msg_buffer> batch;
+				if (count == m_Queue.size())
+				{
+					batch.swap(m_Queue);
+				}
+				else
+				{
+					const auto end = m_Queue.begin() + static_cast<std::ptrdiff_t>(count);
+					batch.insert(batch.end(), std::make_move_iterator(m_Queue.begin()), std::make_move_iterator(end));
+					m_Queue.erase(m_Queue.begin(), end);
+				}
+				lock.unlock();
+				m_ProgressMade.notify_all(); // Room in the queue
+				for (const spdlog::details::log_msg_buffer& message : batch)
+					WriteToSinks(message);
+				lock.lock();
+				m_Written += batch.size();
 			}
 		}
 	}
