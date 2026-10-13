@@ -59,7 +59,8 @@ ctest --preset windows-release  # add -LE gpu on machines without a GPU
 
 Requirements: CMake 3.25+, a C++20 compiler (MSVC 19.40+, GCC 13+, Clang 17+ or Apple Clang 15+) and a
 Vulkan 1.2+ driver. The Vulkan SDK is optional (it provides the validation layers used by Debug
-builds). Linux also needs the X11, Wayland and GTK 3 development packages. `AGENTS.md` lists them.
+builds). Linux also needs the X11, Wayland and GTK 3 development packages. `Docs/DeveloperGuide.md` lists them
+("Building").
 
 Binaries land in `build/<preset>/bin/<Config>/`:
 

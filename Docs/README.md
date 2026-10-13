@@ -4,9 +4,10 @@ Documentation of how Strata works. Rules for changing it live in [AGENTS.md](../
 design and links to the code that implements it.
 
 - [DeveloperGuide.md](DeveloperGuide.md): the Strata Developer Guide, the details of how to work in every area that
-  AGENTS.md has rules for: the repository layout, packages and releases, the test runners, the perf lab and the feature
-  test, the asset pipeline, scripting, audio, animation, the editor and its commands, rendering and automation. Read the
-  section of the area you work on before changing it.
+  AGENTS.md has rules for: the repository layout and engine modules, the build requirements and options, packages and
+  releases, the test runners, the perf lab and the feature test, the asset pipeline, scripting, audio, animation, the
+  editor and its commands, rendering, automation and the editor's fonts. Read the section of the area you work on before
+  changing it.
 - [Architecture.md](Architecture.md): the targets and their dependencies, the engine modules, the frame loop and the
   scene runtime lifecycle, the threading model, the asset pipeline, streaming and residency (memory budgets, eviction,
   the load queue), the render scene, animation, scripting, the editor, export and the runtime.
@@ -68,6 +69,8 @@ Task playbooks for people and AI agents, in `.claude/skills/<name>/SKILL.md`:
 
 - A change that makes a statement here wrong updates it in the same commit (AGENTS.md, review checklist item 5).
   Statements name the files and types they describe, so they can be checked against the code.
-- Rules and conventions belong in AGENTS.md, their details in DeveloperGuide.md (a rule that changes is changed in
-  both, and AGENTS.md stays under 40,000 characters); they are linked from here, not copied.
-- Markdown with lines of at most 120 columns.
+- Rules and conventions belong in AGENTS.md, their details in DeveloperGuide.md (a rule AGENTS.md shortens is stated in
+  full in the guide and changed in both, a rule AGENTS.md keeps whole is only there, and AGENTS.md stays under 40,000
+  characters); they are linked from here, not copied.
+- Markdown with lines of at most 120 columns. DeveloperGuide.md keeps the wrapping of the text it took over from
+  AGENTS.md, so that `git blame -C` follows each of those lines into AGENTS.md's history.

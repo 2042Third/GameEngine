@@ -3,8 +3,11 @@
 This guide holds the details of how to work on Strata: how each area works, how it is tested and extended, and the
 conventions its code follows. [AGENTS.md](../AGENTS.md) has the rules every change follows (Claude Code loads it into
 every session) and, for each area, a digest of its hard rules that links the sections here. Read the section of the area
-you work on before changing it. A rule that changes is changed in both files; details go only here, so that AGENTS.md
-stays under 40,000 characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together is described in
+you work on before changing it. A rule AGENTS.md shortens (in a digest, or one of the building steps, architecture rules
+and third-party rules it states in short) is stated in full here, and a change to it changes both files; the rules
+AGENTS.md keeps whole (the golden rules, the code style, the review checklist and the rest of its building steps,
+architecture rules and third-party rules) are only there. Details go only here, so that AGENTS.md stays under 40,000
+characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together is described in
 [Architecture.md](Architecture.md).
 
 ## Contents
@@ -93,10 +96,12 @@ stays under 40,000 characters (the test `Docs.AgentGuide` fails beyond). How the
   - [Session files](#session-files)
   - [Clients and environment](#clients-and-environment)
   - [Other methods and tests](#other-methods-and-tests)
+- [Working with third-party code](#working-with-third-party-code)
 
 ## Repository layout
 
-The rows of the repository layout that AGENTS.md shortens, in full (`Docs/` also holds this guide):
+The rows of the repository layout that AGENTS.md shortens, in full (`Docs/` also holds this guide), and the engine
+modules:
 
 | Path | Contents |
 | --- | --- |
@@ -105,11 +110,29 @@ The rows of the repository layout that AGENTS.md shortens, in full (`Docs/` also
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). `Samples.json` lists them; the build copies them next to the executables (`StrataSamples`), where the launcher's Open Sample and `project.openSample` offer them as copies. Open one in place only to change the sample: `StrataEditor --project Samples/<Game>`. |
 | `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables) and `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)). |
 | `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, render scene, animation, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands), `Manual/` (guides for people making games in the editor: `Scripting.md`), `Releases/` (the notes of each release, `<version>.md`, and the README of the release archives, `PackageReadme.md`). |
+| `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
+
+Engine modules (`Strata/src/Strata/`): `Core` (application, logging, jobs, platform services),
+`Events`, `Input`, `Math`, `Reflection`, `Scene` (ECS, components, serialization, prefabs),
+`Asset` (asset database, importers, cooking, streaming, packs), `Renderer`, `Physics`, `Audio`,
+`Animation` (skeletons, clips, animation controllers, animators), `Scripting`, `Project` (projects, game manifests),
+`Runtime` (running exported games), `Network` (sockets, JSON-RPC, editor automation sessions), `ImGui`, `Engine` (the
+composition root that registers every module).
 
 ## Building
 
-The commands, configurations, requirements, options and CI rules are in AGENTS.md,
-[Building](../AGENTS.md#building).
+The commands, configurations and CI rules are in AGENTS.md, [Building](../AGENTS.md#building). The requirements and
+the CMake options:
+
+Requirements: CMake 3.25+, a C++20 compiler (MSVC 19.40+, GCC 13+, Clang 17+/Apple Clang 15+),
+a Vulkan 1.2+ driver. The Vulkan SDK is **not** required to build (headers and the shader compiler
+are vendored), but installing it enables the Khronos validation layers used by Debug builds.
+Linux also needs: `libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev
+libxkbcommon-dev libgtk-3-dev` (window system + native file dialogs).
+
+Useful CMake options: `-DSTRATA_BUILD_EDITOR=OFF`, `-DSTRATA_BUILD_RUNTIME=OFF`,
+`-DSTRATA_BUILD_CLI=OFF`, `-DSTRATA_BUILD_TESTS=OFF`, `-DSTRATA_ENABLE_TRACY=ON`,
+`-DSTRATA_WARNINGS_AS_ERRORS=OFF` (local experiments only — CI always builds with warnings as errors).
 
 ### Windows subsystem
 
@@ -373,6 +396,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 
 ### Feature test
 
+The feature test keeps [golden rule 6](../AGENTS.md#golden-rules): every component, script API and engine feature is
+exercised by it.
+
 - **Feature test** (golden rule 6): `StrataTests/FeatureTest/` is a real project (`FeatureTest.stproj`, `Assets/`
   with committed `.meta` files). Its scene `Scenes/Feature.stscene` contains every registered component, the project
   has assets of every type (the tiny binary ones come from `Tools/GenerateAssets.py`, whose outputs are committed), and
@@ -440,7 +466,7 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 
 ## Architecture rules
 
-AGENTS.md, [Architecture rules](../AGENTS.md#architecture-rules), states every architecture rule, four of them in
+AGENTS.md, [Architecture rules](../AGENTS.md#architecture-rules), states every architecture rule, five of them in
 short. Their full wording:
 
 - **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background
@@ -463,6 +489,16 @@ short. Their full wording:
   `Renderer::ReleaseDeferred` (`DeferredReleaseQueue`: held until the GPU finished the work submitted
   before, never waiting, then destroyed within a frame's budget, `c_FrameDestroyBudget`, since a texture costs the
   driver about 0.1 ms), as `SceneRenderer` does when it is resized.
+- **Layers:** every file under `Strata/src` belongs to one layer of `StrataTests/Architecture/Layers.json`, and an
+  include that crosses layers must be allowed there (a layer includes only itself and the lower layers it lists).
+  `Architecture.Layering` (in `StrataTests.Core`) fails on any other include, on files in no layer (new folders and
+  files get a pattern) and on stale lines of `LayeringAllowlist.txt`, the known exceptions, each with the workstream
+  that removes it. Never add a line or widen `MayInclude` to make a sideways or upward include pass: invert the
+  dependency (an interface in the lower layer, like `InputWindow`; a registry the higher module fills; a scene service,
+  `Scene/SceneServices.h`, through which the systems of a playing scene use each other, or an engine service,
+  `Core/EngineServices.h`, for what outlives scenes) instead. A
+  proven downward dependency may widen `MayInclude`, with the reason in the layer's `Notes`. Removing an exception
+  lowers `MaxAllowlistEntries`. Details: Docs/Architecture.md, "Layers".
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers,
   built-in asset objects, scene systems), never through lower layers calling functions of higher ones. Each module
   has one registration function in its own folder (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`);
@@ -633,6 +669,11 @@ short. Their full wording:
   or drops without being replaced (`AssetManagerBase::UpdateMemoryUsage`) and its levels (`Asset::GetDetailLevels`); the
   work a module does for every manager each frame is an `AssetManagerExtension` (registry filled by the module's
   registration function).
+- A type whose documents or stored form reference other assets records those references
+  ([References and bounds](#references-and-bounds)): pruned exports, the delete checks and dependency prefetches know
+  an asset's references only from those records. An importer that makes sub-assets derives their handles with
+  `DeriveSubAssetHandle` ([Engine-native assets, sub-assets and built-in
+  assets](#engine-native-assets-sub-assets-and-built-in-assets)).
 
 ### Mip streaming
 
@@ -1847,3 +1888,13 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   never need a real editor (`Tests::PumpedRpcServer` plays the editor, `Tests::LiveProcess` gives fake sessions
   a running process id, and `STRATA_TEST_FAKE_EDITOR=1` makes the test executable act as a launched editor, see
   `StrataTests/src/Network/FakeEditorProcess.h`); the `EndToEnd` suites run the real editor and StrataCLI.
+
+## Working with third-party code
+
+AGENTS.md, [Working with third-party code](../AGENTS.md#working-with-third-party-code), says how submodules are
+upgraded and states the rule for the editor's fonts in short. In full:
+
+The editor's fonts are not submodules: the release files of Inter, JetBrains Mono and Lucide (with Lucide's codepoint
+map) and their licenses are committed in `StrataEditor/Resources/Fonts/` and compiled in (`strata_embed_file`). To
+upgrade one, replace its files with those of the new release, update `ThirdPartyNotices.md` and, for Lucide, run
+`StrataEditor/Tools/GenerateIconHeader.py --version <release>` and commit the regenerated `UI/Icons.h` with it.
