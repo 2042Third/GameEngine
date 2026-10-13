@@ -460,6 +460,35 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 		CHECK(EditorSession::FindSessions(environment.SessionDirectory).empty());
 	}
 
+	TEST_CASE("StrataCLI launch opens a project that was never imported, with its start scene")
+	{
+		if (!HasBuiltExecutables())
+			return;
+		EndToEndEnvironment environment("EndToEndLaunchFresh");
+		// A copy of a sample as an agent makes one: no .strata, so every asset imports in the background as the editor opens
+		// it, and the start scene uses some of them (its sounds).
+		std::string error;
+		const std::filesystem::path projectDirectory = Tests::CopySampleProject("Tetris", &error);
+		REQUIRE_MESSAGE(!projectDirectory.empty(), error);
+		REQUIRE_FALSE(FileSystem::Exists(projectDirectory / ".strata"));
+
+		const auto start = std::chrono::steady_clock::now();
+		const CliResult launched = RunCli({ "launch", "--no-gpu", "--project", FileSystem::ToUTF8(projectDirectory), "--idle-timeout", "60" });
+		const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+		REQUIRE_MESSAGE(launched.ExitCode == 0, launched.ErrorOutput);
+		CHECK_MESSAGE(seconds < 30.0, "Launching took ", seconds, " s");
+
+		const CliResult status = RunCli({ "call", "editor.status", "--project", FileSystem::ToUTF8(projectDirectory) });
+		REQUIRE_MESSAGE(status.ExitCode == 0, status.ErrorOutput);
+		CHECK(status.Json["scene"]["scene"] == "BD75622ED18E84E4"); // Tetris.stproj's start scene
+		CHECK(status.Json["scene"]["entityCount"].get<int>() > 0);
+		CHECK(status.Json["sceneLoad"].is_null());
+
+		const CliResult quit = RunCli({ "call", "editor.quit", "--project", FileSystem::ToUTF8(projectDirectory) });
+		REQUIRE_MESSAGE(quit.ExitCode == 0, quit.ErrorOutput);
+		CHECK(Tests::WaitUntil([&]() { return EditorSession::FindSessions(environment.SessionDirectory).empty(); }, c_ProcessTimeout));
+	}
+
 	TEST_CASE("Editor automation options are checked at start-up")
 	{
 		if (!HasBuiltExecutables())

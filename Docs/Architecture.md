@@ -934,7 +934,10 @@ handles) are in AGENTS.md, "Asset pipeline". The data flow:
   (`ImportRequest::Replaced`). Jobs use only `BackgroundWork` (the directories, the file lock, the job set and the
   results; `ImportContext::ResolveAsset` reaches the manager through a pointer `Close` clears), which they keep alive, so
   `Close` and the destructor return without waiting for any import; a job that outlives its manager finishes alone.
-  `WaitForImports` and `BuildAssetPack` still wait for every wanted import: tools and tests. The editor's export polls
+  `WaitForImports` and `BuildAssetPack` still wait for every wanted import: tools and tests. A wait for a scene load
+  outside frames (`EditorContext::WaitForSceneLoad`: a headless editor opening its project's start scene before its first
+  frame) applies imports as they finish (`WaitForImportProgress`), since loads that wait for a first import resume only
+  when it is applied. The editor's export polls
   `HasPendingImports` between frames instead (`GameExport`, "Waiting for asset imports to finish").
 - **References and bounds** (`Asset/AssetDependencies.h`). What an asset references is recorded with its import:
   importers add what their stored form does not show as a document (`ImportResult::References`; a glTF mesh's default

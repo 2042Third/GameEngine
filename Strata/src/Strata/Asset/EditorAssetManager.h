@@ -204,6 +204,11 @@ namespace Strata
 		// Blocks until no background import or search is pending and applies the results: tools and tests (it waits for
 		// every cook). Editors poll HasPendingImports or IsImportPending between frames instead.
 		void WaitForImports();
+		// Waits until a background import or search ends, at most `timeout` (not at all while none is pending), and applies
+		// the results that finished as Update does, so that loads that waited for a first import go on. For code that waits
+		// outside frames for loads while imports run in the background (EditorContext::WaitForSceneLoad), which would
+		// otherwise wait for an import nothing applies; frames call Update.
+		void WaitForImportProgress(std::chrono::milliseconds timeout);
 
 		const std::filesystem::path& GetAssetDirectory() const { return m_Specification.AssetDirectory; }
 		const std::filesystem::path& GetCacheDirectory() const { return m_Specification.CacheDirectory; }

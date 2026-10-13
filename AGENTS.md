@@ -486,7 +486,9 @@ The threading model, frame loop and pipelines these rules protect are described 
   `IsImportPending`); the blocking forms are for tools and tests. The editor also opens projects with their imports in the
   background (`Scan(ScanImports::InBackground)`, `EditorContextSpecification::ImportInBackground`; tests and scripted runs
   scan blocking, so every asset is imported when the project is open): a load of an asset whose first import is still
-  running waits for it instead of failing (`AssetManagerBase::IsAwaitingImport`, `ResumeLoadsAwaitingImport`).
+  running waits for it instead of failing (`AssetManagerBase::IsAwaitingImport`, `ResumeLoadsAwaitingImport`; frames apply
+  finished imports, and a wait before the first frame, `EditorContext::WaitForSceneLoad`, applies them itself:
+  `EditorAssetManager::WaitForImportProgress`).
   **Nothing in the editor waits for a background import** (only `WaitForImports` and `BuildAssetPack`, for tools and
   tests): imports are cancelled instead. Closing the project, opening another and quitting cancel them all
   (`EditorAssetManager::Close`); moving, deleting or re-importing an asset, new settings and file changes cancel only that

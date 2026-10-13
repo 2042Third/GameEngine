@@ -1822,6 +1822,19 @@ namespace Strata
 		}
 	}
 
+	void EditorAssetManager::WaitForImportProgress(std::chrono::milliseconds timeout)
+	{
+		{
+			// Condition is notified whenever a job leaves Jobs, which a finished job does after handing its result over.
+			std::unique_lock<std::mutex> lock(m_Work->Mutex);
+			m_Work->Condition.wait_for(lock, timeout, [this]()
+			{
+				return m_Work->Jobs.empty() || !m_Work->CompletedImports.empty() || !m_Work->CompletedReferences.empty();
+			});
+		}
+		ProcessCompletedImports();
+	}
+
 	EditorAssetManager::NativeReferences EditorAssetManager::BackgroundWork::FindNativeReferences(AssetHandle handle, AssetType type, const std::string& relativePath,
 		std::span<const uint8_t> data, const std::vector<AssetHandle>* references, bool deferRecord) const
 	{

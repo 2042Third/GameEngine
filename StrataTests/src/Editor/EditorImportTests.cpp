@@ -31,6 +31,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 using namespace Strata;
@@ -534,6 +535,63 @@ TEST_SUITE("Editor.ImportSettings")
 			return assets->GetAssetState(asset) == AssetState::Failed;
 		}, std::chrono::seconds(60)));
 		CHECK(assets->GetAssetError(asset).find("Requested failure") != std::string::npos);
+	}
+
+	TEST_CASE("Opening a project before the first frame waits for the background imports its start scene uses")
+	{
+		RegisterGatedImporter();
+		Tests::ScopedJobSystem jobs(2, 2);
+		OpenGateAtEnd gate;
+		// A project whose start scene draws a text in a font that has to be imported again when it opens: its cache is gone.
+		std::filesystem::path projectDirectory;
+		UUID font = UUID::Null();
+		AssetHandle startScene = UUID::Null();
+		{
+			ImportHarness harness("EditorOpenStartSceneImports");
+			const std::string handle = harness.Add("Data/Slow.stgated", { 's' });
+			const std::optional<UUID> parsed = UUID::FromString(handle);
+			REQUIRE(parsed);
+			font = *parsed;
+			harness.Run("entity.create", { { "name", "Title" }, { "components", { { "Text", { { "Text", "Hello" }, { "Font", handle } } } } } });
+			harness.Run("scene.saveAs", { { "path", "Scenes/Main.stscene" } });
+			harness.Run("project.setStartScene", { { "scene", "Scenes/Main.stscene" } });
+			startScene = harness.Context.GetSceneHandle();
+			projectDirectory = harness.Context.GetProject()->GetProjectDirectory();
+			harness.Context.CloseProject();
+		}
+		REQUIRE(startScene.IsValid());
+		REQUIRE(FileSystem::Remove(projectDirectory / ".strata" / "Cache"));
+
+		// A headless editor opens its project and start scene before its first frame (EditorContext::OpenProject) while the
+		// font imports in the background: the wait applies the import once it is done, so the scene opens as soon as it is in
+		// instead of when the wait gives up.
+		EditorContextSpecification specification { false };
+		specification.ImportInBackground = true;
+		EditorContext context { specification };
+		GatedImporter::SetGate(false);
+		std::thread opener([]()
+		{
+			if (Tests::WaitUntil([]() { return GatedImporter::IsWaiting(); }, std::chrono::seconds(20)))
+				std::this_thread::sleep_for(std::chrono::milliseconds(200));
+			GatedImporter::SetGate(true);
+		});
+		const auto start = std::chrono::steady_clock::now();
+		std::string error;
+		const bool opened = context.OpenProject(projectDirectory, &error);
+		const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+		opener.join();
+		REQUIRE_MESSAGE(opened, error);
+		CHECK_MESSAGE(seconds < 30.0, "Opening took ", seconds, " s");
+		const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+		INFO(status.Error);
+		CHECK(status.StartScene);
+		CHECK(status.State == SceneLoadState::Ready);
+		CHECK(context.GetSceneHandle() == startScene);
+		CHECK(context.GetEditScene()->FindEntityByName("Title"));
+		EditorAssetManager* assets = context.GetAssetManager();
+		REQUIRE(assets);
+		CHECK(assets->GetImportInfo(font).Imported);
+		CHECK(assets->GetAssetState(font) == AssetState::Ready);
 	}
 
 	TEST_CASE("The assets pill counts the imports running in the background")
