@@ -187,10 +187,6 @@ namespace Strata
 		// (SceneRenderer), so one that draws only now and then (a capture renderer in a headless editor) finds the map whole
 		// instead of raising it for its frame and losing it again before its next.
 		void Hold(const Ref<TextureHold>& hold);
-		// The texture with what a first load holds (its mip tail, the whole texture for small ones), for thumbnails and
-		// previews: requests the load like GetAsset and never asks for finer levels (what views or RequestLevel need still
-		// raises it). Null until it is loaded.
-		static Ref<Texture> GetPreview(AssetManagerBase& manager, AssetHandle texture);
 		// How many textures the latest OnUpdate looked at: those that changed or are not settled (m_Active), none in a still
 		// frame whose textures all have the levels they want (tests).
 		uint32_t GetTexturesLookedAt() const { return m_LookedAt; }

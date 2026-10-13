@@ -895,9 +895,9 @@ TEST_SUITE("GPU.TextureStreaming")
 		}
 	}
 
-	TEST_CASE("A preview holds what a first load holds and never asks for finer levels")
+	TEST_CASE("A texture requested but drawn by no view holds what a first load holds and never asks for finer levels")
 	{
-		// TextureStreamer::GetPreview, for thumbnails: the texture loads partly and stays at its tail while no view needs it.
+		// The texture loads partly and stays at its tail while no view needs it, however often it is requested.
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		const std::filesystem::path pack = WriteGradientStreamingPack();
@@ -908,7 +908,7 @@ TEST_SUITE("GPU.TextureStreaming")
 		for (uint32_t step = 0; step < 150; step++)
 		{
 			RunFrame(gpu, manager, {}, CameraAt(1.0f));
-			preview = TextureStreamer::GetPreview(*manager, c_TextureHandle);
+			preview = std::dynamic_pointer_cast<Texture>(manager->GetAsset(c_TextureHandle));
 		}
 		REQUIRE(preview);
 		CHECK(manager->GetAssetState(c_TextureHandle) == AssetState::Ready);
@@ -919,7 +919,6 @@ TEST_SUITE("GPU.TextureStreaming")
 		CHECK(stats.Detail.LevelsRaised == 0);
 		CHECK(stats.RangeReads == 0);
 		CHECK(stats.RangeReadsCompleted == 0);
-		CHECK(TextureStreamer::GetPreview(*manager, c_GradientMaterialHandle) == nullptr); // Not a texture
 
 		preview.reset();
 		AssetManager::SetActive(nullptr);

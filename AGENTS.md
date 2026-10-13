@@ -581,7 +581,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   resolved, `GetVisibleTextures`, so reports look nothing up: texel density where each surface is nearest the camera,
   from the meshes' `Submesh::UVDensity` and the instances' scales, not the size of their bounds, worked out only for
   draws of textured materials; `RequestLevel` for other uses in a frame, `TextureStreamer::Hold` to keep a texture whole
-  across frames nothing draws it in, `TextureStreamer::GetPreview` for thumbnails). Under a
+  across frames nothing draws it in; a texture only requested, `GetAsset`, keeps what its first load holds, and thumbnails
+  do not even load it: they read its cooked mip tail by byte range, `ThumbnailCache`). Under a
   texture budget the most needed textures come first: the less needed give up their finest levels
   (`LevelsDroppedForBudget`), and what does not fit gets the finest level that does. A texture's GPU texture and
   bindless slot change when its levels do: resolve the slot every frame (`Texture::GetBindlessSlot`), never cache it.

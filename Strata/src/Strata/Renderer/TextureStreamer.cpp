@@ -201,12 +201,6 @@ namespace Strata
 		return manager.FindExtension<TextureStreamer>();
 	}
 
-	Ref<Texture> TextureStreamer::GetPreview(AssetManagerBase& manager, AssetHandle texture)
-	{
-		const Ref<Asset> asset = manager.GetAsset(texture);
-		return asset && asset->GetType() == AssetType::Texture ? std::static_pointer_cast<Texture>(asset) : nullptr;
-	}
-
 	Ref<Texture> TextureStreamer::PeekTexture(AssetHandle handle) const
 	{
 		const Ref<Asset> asset = m_Manager.PeekLoadedAsset(handle);

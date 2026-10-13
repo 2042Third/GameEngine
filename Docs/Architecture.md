@@ -1387,7 +1387,9 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     instead of raising it for one frame and losing it again before the next. Renderers share the environment computed
     from a map while any of them lights with it, so one that starts drawing the scene later, such as the editor's capture
     renderer beside the viewport's, takes it over in its first frame instead of waiting for the map's levels.
-    `TextureStreamer::GetPreview` gets a texture without asking for more than its tail (thumbnails).
+    A texture that is only requested (`GetAsset`) and that no view draws keeps what its first load holds; thumbnails do
+    not load textures at all, they read the cooked header and mip tail by byte range (`ThumbnailCache`, "Thumbnails"), and
+    the Asset tab's preview asks for the level its pixels need (`RequestLevel`).
   - *Raising* (`Texture::RaiseLevels`, `ContinueLevelChange`). The streamer reads the missing levels as one range
     (`CookedTextureLayout::GetLevelsByteRange`) at Low priority, scored by missing levels times coverage (a view that
     jumped - moved 10 units or turned 45 degrees since its previous frame, `TextureStreamingPolicy::IsCameraCut` - reads
