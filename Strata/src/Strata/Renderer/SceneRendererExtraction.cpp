@@ -8,6 +8,7 @@
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RenderScene.h"
+#include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureStreamer.h"
 #include "Strata/Scene/Scene.h"
@@ -218,7 +219,6 @@ namespace Strata
 		}
 		m_VisibleMaterials.clear();
 		m_VisibleTextures.clear();
-		m_ResolvedTextures.clear();
 		m_DefaultMaterialData.reset();
 		m_DefaultMaterialFlags = 0;
 	}
@@ -621,12 +621,68 @@ namespace Strata
 		}
 
 		std::sort(m_UsedMaterialSlots.begin(), m_UsedMaterialSlots.end());
+		if (!ReuseResolvedMaterials(renderScene))
+			ResolveMaterials(renderScene);
+	}
+
+	bool SceneRenderer::ReuseResolvedMaterials(const RenderScene& renderScene)
+	{
+		const MaterialResolution& resolution = m_MaterialResolution;
+		if (!resolution.Valid || resolution.RenderSceneId != m_RenderSceneId || resolution.Slots.size() != m_UsedMaterialSlots.size())
+			return false;
+		for (size_t index = 0; index < resolution.Slots.size(); index++)
+		{
+			const MaterialResolution::Slot& resolved = resolution.Slots[index];
+			const uint32_t slot = m_UsedMaterialSlots[index];
+			if (resolved.Index != slot || resolved.Usage != m_MaterialUsage[slot] || resolved.Handle != renderScene.GetMaterialHandle(slot))
+				return false;
+		}
+		// The textures' slots before the replay, which counts the lookups: after it, the frame could not look the assets up
+		// one by one without counting them twice.
+		if (!Renderer::GetBindlessTextures().AreSlotsUnchanged(resolution.TextureSlots, resolution.TextureSlotGenerations))
+			return false;
+		if (!m_Assets.Replay(resolution.Lookups))
+			return false;
+
+		for (const MaterialResolution::Slot& resolved : resolution.Slots)
+		{
+			if ((resolved.Usage & (c_UseView | c_UseHigh | c_UseShadow)) == 0)
+			{
+				// Prefetched only (not recorded): requested again as ResolveMaterials does, which keeps loads that are not done
+				// on their way.
+				m_Assets.Prefetch(resolved.Handle);
+				continue;
+			}
+			// The data is what the material buffer holds, unless an upload of it is still due.
+			m_MaterialFlags[resolved.Index] = resolved.Flags;
+			if (!m_MaterialUploaded[resolved.Index])
+				m_DirtyMaterialSlots.push_back(resolved.Index);
+			if ((resolved.Usage & (c_UseView | c_UseHigh)) != 0)
+				m_Stats.Materials++;
+			m_Stats.ReusedMaterials++;
+		}
+		return true;
+	}
+
+	void SceneRenderer::ResolveMaterials(RenderScene& renderScene)
+	{
+		MaterialResolution& resolution = m_MaterialResolution;
+		resolution.Valid = false;
+		resolution.RenderSceneId = m_RenderSceneId;
+		resolution.Slots.clear();
+		resolution.TextureSlots.clear();
+		resolution.TextureSlotGenerations.clear();
+		m_ResolvedTextures.clear();
+		// Frames whose materials are all loaded (none drawn as the default material) can be replayed.
+		bool replayable = true;
+		m_Assets.BeginRecording();
 		for (const uint32_t slot : m_UsedMaterialSlots)
 		{
 			const uint32_t usage = m_MaterialUsage[slot];
 			const AssetHandle handle = renderScene.GetMaterialHandle(slot);
 			const bool drawn = (usage & (c_UseView | c_UseHigh)) != 0;
 			m_MaterialTextures[slot] = {};
+			resolution.Slots.push_back(MaterialResolution::Slot { slot, usage, handle, 0 });
 			Ref<Material> material;
 			if (drawn)
 			{
@@ -656,6 +712,7 @@ namespace Strata
 			else
 			{
 				// The default material stands in while the material loads (or when it never will).
+				replayable = false;
 				if (!m_DefaultMaterialData)
 				{
 					const Ref<Material> fallback = m_Assets.Resolve<Material>(BuiltinAssets::DefaultMaterial, AssetPriority::High);
@@ -669,6 +726,7 @@ namespace Strata
 				m_MaterialUVScales[slot] = 1.0f;
 			}
 			m_MaterialFlags[slot] = flags;
+			resolution.Slots.back().Flags = flags;
 			if (!m_MaterialUploaded[slot] || std::memcmp(&data, &m_MaterialData[slot], sizeof(data)) != 0)
 			{
 				m_MaterialData[slot] = data;
@@ -678,6 +736,23 @@ namespace Strata
 			if (drawn)
 				m_Stats.Materials++;
 		}
+		replayable = m_Assets.EndRecording(resolution.Lookups) && replayable && !resolution.Lookups.IsEmpty();
+		if (!replayable)
+			return;
+
+		// The materials' data names their textures by bindless slot: it stays right while those slots hold them.
+		for (const std::weak_ptr<Asset>& asset : resolution.Lookups.GetAssets())
+		{
+			const Ref<Asset> loaded = asset.lock(); // Held by the frame
+			if (!loaded || loaded->GetType() != AssetType::Texture)
+				continue;
+			const uint32_t bindlessSlot = static_cast<const Texture&>(*loaded).GetBindlessSlot();
+			if (bindlessSlot == BindlessTextureTable::c_InvalidSlot)
+				return; // Not uploaded yet: its materials sample the loading texture until it is
+			resolution.TextureSlots.push_back(bindlessSlot);
+		}
+		Renderer::GetBindlessTextures().GetSlotGenerations(resolution.TextureSlots, resolution.TextureSlotGenerations);
+		resolution.Valid = true;
 	}
 
 	void SceneRenderer::BuildBatches(std::vector<SortItem>& draws, std::vector<SceneDrawBatch>& outBatches, std::vector<uint32_t>& outDrawList)

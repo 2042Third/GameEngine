@@ -240,12 +240,23 @@ TEST_SUITE("GPU.TextureStreaming")
 			std::optional<uint32_t> arrivedLevel;
 			bool groupCompleteOnArrival = false;
 			bool fallbackAfterArrival = false;
+			// A frame in which the texture moved to a new bindless slot (its levels raised) resolves its material again: the
+			// material data of the frame before names the slot it left (SceneRendererStats::ReusedMaterials).
+			uint32_t previousSlot = BindlessTextureTable::c_InvalidSlot;
+			uint32_t slotChanges = 0;
+			bool reusedAfterSlotChange = false;
 			for (int attempt = 0; attempt < 100; attempt++)
 			{
 				image = frame.Run(CameraAt(c_SmallDistance));
 				const Ref<Texture> texture = PeekTexture(*manager);
 				if (!texture || texture->GetBindlessSlot() == BindlessTextureTable::c_InvalidSlot)
 					continue;
+				if (previousSlot != BindlessTextureTable::c_InvalidSlot && texture->GetBindlessSlot() != previousSlot)
+				{
+					slotChanges++;
+					reusedAfterSlotChange = reusedAfterSlotChange || renderer.GetStats().ReusedMaterials != 0;
+				}
+				previousSlot = texture->GetBindlessSlot();
 				if (!arrivedLevel)
 				{
 					arrivedLevel = texture->GetResidentLevel();
@@ -265,6 +276,8 @@ TEST_SUITE("GPU.TextureStreaming")
 			CHECK(PeekTexture(*manager)->GetTailLevel() == 6);
 			CHECK(PeekTexture(*manager)->GetResidentLevel() == 5);
 			CHECK_FALSE(fallbackAfterArrival);
+			CHECK(slotChanges == 1);
+			CHECK_FALSE(reusedAfterSlotChange);
 			CHECK(manager->GetStats().PartialLoads == 1);
 			CHECK(manager->GetStats().Detail.LevelsRaised == 1);
 			CHECK(manager->GetStats().Resident.GpuTextures == PeekTexture(*manager)->GetLevelBytes(5, c_TextureMips));
@@ -279,6 +292,7 @@ TEST_SUITE("GPU.TextureStreaming")
 			frame.Run(CameraAt(c_SmallDistance));
 			frame.Run(CameraAt(c_SmallDistance));
 			CHECK(TextureStreamer::Find(*manager)->GetTexturesLookedAt() == 0);
+			CHECK(renderer.GetStats().ReusedMaterials == 1); // Nor anything to resolve again
 			CHECK(PeekTexture(*manager)->GetResidentLevel() == 5);
 
 			// Filling the screen streams it to level 0 within 30 frames.

@@ -156,4 +156,77 @@ TEST_SUITE("Renderer.AssetResolveCache")
 		CHECK(cache.GetStats().Prefetched == 0);
 		cache.EndFrame();
 	}
+
+	TEST_CASE("A frame's lookups of loaded assets are replayed by a later frame in one call, counting as the frame counted them")
+	{
+		const AssetHandle first(0xC031);
+		const AssetHandle second(0xC032);
+		const AssetHandle elsewhere(0xC033); // Unknown: prefetched only
+		const Ref<RuntimeAssetManager> manager = CreateManager(first, second);
+		REQUIRE(manager->LoadAssetSync(first));
+		REQUIRE(manager->LoadAssetSync(second));
+		AssetResolveCache cache;
+
+		// Recorded: a request, a resident lookup, a lookup the frame answers itself, and a prefetch of what is not loaded,
+		// which is left out (its request is the caller's to make again).
+		cache.BeginFrame(manager);
+		cache.BeginRecording();
+		const Ref<Material> secondMaterial = cache.Resolve<Material>(second, AssetPriority::Normal);
+		REQUIRE(secondMaterial);
+		REQUIRE(cache.FindResident<Material>(first));
+		CHECK(cache.Resolve<Material>(second, AssetPriority::High) == secondMaterial);
+		cache.Prefetch(elsewhere);
+		AssetResolveCache::Recording recording;
+		REQUIRE(cache.EndRecording(recording));
+		const AssetResolveStats recorded = cache.GetStats();
+		cache.EndFrame();
+		REQUIRE(recording.GetHandles().size() == 2);
+		CHECK(recording.GetHandles()[0] == first); // Sorted
+		CHECK(recording.GetHandles()[1] == second);
+		CHECK(recording.GetAssets()[1].lock() == secondMaterial);
+
+		// Replayed: one call stamps both as used; the frame counts what the recorded one counted, and its later lookups of
+		// them ask the manager nothing.
+		const uint64_t calls = manager->GetStats().GetAssetCalls;
+		cache.BeginFrame(manager);
+		REQUIRE(cache.Replay(recording));
+		CHECK(manager->GetStats().GetAssetCalls == calls + 2);
+		CHECK(cache.Resolve<Material>(second, AssetPriority::Normal) == secondMaterial);
+		CHECK(cache.FindResident<Material>(first));
+		cache.Prefetch(first); // Found loaded: nothing to prefetch
+		cache.Prefetch(elsewhere);
+		CHECK(manager->GetStats().GetAssetCalls == calls + 2);
+		CHECK(cache.GetStats().GetAssetCalls == recorded.GetAssetCalls);
+		CHECK(cache.GetStats().Requested == recorded.Requested);
+		CHECK(cache.GetStats().ResidentLookups == recorded.ResidentLookups);
+		CHECK(cache.GetStats().Prefetched == recorded.Prefetched);
+		CHECK(cache.GetStats().Pending == 0);
+		CHECK_FALSE(cache.Replay(recording)); // Once per frame
+		// The replay's references end with the frame, as the lookups' do.
+		const std::weak_ptr<Material> held = secondMaterial;
+		cache.EndFrame();
+		CHECK(held.use_count() == 2); // The manager's and the test's
+
+		// An asset unloaded since: the replay changes nothing, and the frame looks them up one by one.
+		manager->UnloadAsset(first);
+		const uint64_t before = manager->GetStats().GetAssetCalls;
+		cache.BeginFrame(manager);
+		CHECK_FALSE(cache.Replay(recording));
+		CHECK(manager->GetStats().GetAssetCalls == before);
+		CHECK(cache.GetStats().GetAssetCalls == 0);
+		// A recording of a frame that found an asset loading cannot be replayed.
+		cache.BeginRecording();
+		CHECK(cache.Resolve<Material>(second, AssetPriority::Normal));
+		CHECK_FALSE(cache.Resolve<Material>(first, AssetPriority::Normal));
+		AssetResolveCache::Recording loading;
+		CHECK_FALSE(cache.EndRecording(loading));
+		CHECK(loading.IsEmpty());
+		cache.EndFrame();
+
+		// Loaded again, it is another object: the old recording no longer replays.
+		REQUIRE(manager->WaitForPendingLoads());
+		cache.BeginFrame(manager);
+		CHECK_FALSE(cache.Replay(recording));
+		cache.EndFrame();
+	}
 }

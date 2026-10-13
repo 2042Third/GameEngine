@@ -1,11 +1,14 @@
 #include "stpch.h"
 #include "Strata/Core/Log.h"
 
+#include "Strata/Core/BackgroundLogSink.h"
+
 #include <spdlog/sinks/base_sink.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #include <atomic>
+#include <cstdlib>
 
 namespace Strata
 {
@@ -140,6 +143,9 @@ namespace Strata
 			Ref<spdlog::logger> ScriptLogger;
 			Scope<LogBuffer> Buffer;
 			std::filesystem::path LogFile; // The file Init opened
+			// Writes the console and the log file on a thread of its own (null without either).
+			Ref<BackgroundLogSink> Writer;
+			bool ExitHandlerRegistered = false;
 		};
 
 		LogData& GetLogData()
@@ -147,6 +153,20 @@ namespace Strata
 			// Intentionally leaked so logging stays valid during static destruction.
 			static LogData* s_Data = new LogData();
 			return *s_Data;
+		}
+
+		// At exit, what is queued for the console and the log file is written before the process ends; messages logged later
+		// (static destructors) are written by the threads that log them.
+		void StopWriterAtExit()
+		{
+			LogData& data = GetLogData();
+			Ref<BackgroundLogSink> writer;
+			{
+				std::scoped_lock<std::recursive_mutex> lock(data.Mutex);
+				writer = data.Writer;
+			}
+			if (writer)
+				writer->Stop();
 		}
 
 	}
@@ -161,14 +181,17 @@ namespace Strata
 		data.Buffer = CreateScope<LogBuffer>(specification.BufferCapacity);
 		data.LogFile.clear();
 
+		// The shared buffer is filled at once (the editor's console and automation read it); the console and the log file are
+		// written by the background writer, so that a log call never waits for them (BackgroundLogSink).
 		std::vector<spdlog::sink_ptr> sinks;
 		sinks.push_back(std::make_shared<LogBufferSink>(*data.Buffer, std::chrono::system_clock::now()));
+		std::vector<spdlog::sink_ptr> writtenSinks;
 
 		if (specification.ConsoleOutput)
 		{
 			auto consoleSink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
 			consoleSink->set_pattern("%^[%T] %n: %v%$");
-			sinks.push_back(consoleSink);
+			writtenSinks.push_back(consoleSink);
 		}
 
 		if (!specification.LogFile.empty())
@@ -181,7 +204,7 @@ namespace Strata
 
 				auto fileSink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(specification.LogFile.string(), true);
 				fileSink->set_pattern("[%Y-%m-%d %T.%e] [%l] %n: %v");
-				sinks.push_back(fileSink);
+				writtenSinks.push_back(fileSink);
 				data.LogFile = specification.LogFile;
 			}
 			catch (const spdlog::spdlog_ex& exception)
@@ -190,7 +213,17 @@ namespace Strata
 			}
 		}
 
+		if (!writtenSinks.empty())
+		{
+			data.Writer = CreateRef<BackgroundLogSink>(std::move(writtenSinks));
+			sinks.push_back(data.Writer);
+			if (!data.ExitHandlerRegistered)
+				data.ExitHandlerRegistered = std::atexit(&StopWriterAtExit) == 0;
+		}
+
 		const spdlog::level::level_enum level = ToSpdlogLevel(specification.Level);
+		// Warnings and errors flush the sinks, which waits for the writer: they are on the console and in the file when the
+		// call that logged them returns (and survive a crash right after).
 		auto createLogger = [&](const char* name)
 		{
 			auto logger = std::make_shared<spdlog::logger>(name, sinks.begin(), sinks.end());
@@ -219,6 +252,10 @@ namespace Strata
 		data.CoreLogger.reset();
 		data.ClientLogger.reset();
 		data.ScriptLogger.reset();
+		// Writes what is left and ends the writer's thread.
+		if (data.Writer)
+			data.Writer->Stop();
+		data.Writer.reset();
 	}
 
 	bool Log::IsInitialized()

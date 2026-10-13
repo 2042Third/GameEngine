@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -28,9 +29,29 @@ namespace Strata
 	// reference the frame took and of the manager, so through the cache a renderer that stops rendering (a capture
 	// renderer between captures, a hidden view) keeps no asset from being evicted and no asset manager alive. Main thread
 	// only.
+	//
+	// A frame that asks for the same loaded assets as an earlier one (a renderer's still frames, which resolve thousands of
+	// materials and textures) can make the earlier frame's lookups again in one call to the manager instead of one per
+	// handle: the earlier frame records them (BeginRecording, EndRecording) and the later one replays the recording (Replay).
 	class AssetResolveCache
 	{
 	public:
+		// The lookups of loaded assets a frame made while recording, for later frames to make again (Replay).
+		class Recording
+		{
+		public:
+			bool IsEmpty() const { return m_Handles.empty(); }
+			// The assets looked up (distinct, sorted) and the loaded objects the lookups found.
+			std::span<const AssetHandle> GetHandles() const { return m_Handles; }
+			std::span<const std::weak_ptr<Asset>> GetAssets() const { return m_Assets; }
+			void Clear();
+		private:
+			friend class AssetResolveCache;
+			std::vector<AssetHandle> m_Handles;
+			std::vector<std::weak_ptr<Asset>> m_Assets; // Weak: a recording keeps no asset from being evicted
+			std::vector<uint8_t> m_Counted;             // The statistics each asset's lookups counted (the lookup flags)
+		};
+
 		// Starts a frame with the active asset manager (null: none, every resolve fails), held until EndFrame.
 		void BeginFrame(const Ref<AssetManagerBase>& manager);
 		// Ends the frame: releases the references it handed out and the manager. The GPU work recorded with the assets
@@ -60,6 +81,20 @@ namespace Strata
 		// for a renderer that needs them all), once per frame.
 		void CountPending(AssetHandle handle);
 
+		// Records the frame's lookups (Resolve, FindResident, Prefetch, CountPending) until EndRecording.
+		void BeginRecording();
+		// Ends the recording: `out` gets the assets looked up since BeginRecording with the objects found. Returns false, with
+		// `out` empty, when a lookup found nothing (an asset loading, unloaded, unknown or failed) or counted one pending, as
+		// such lookups cannot be replayed. Assets only prefetched are left out: requests of what is not loaded are the
+		// caller's to make again.
+		bool EndRecording(Recording& out);
+		// Makes a recording's lookups again in this frame, in one call to the manager (AssetManagerBase::TouchLoadedAssets),
+		// when every asset is still loaded with the object the recording found: they count in the frame's statistics as they
+		// did when recorded, and answer the frame's later lookups of the assets. Call it before the frame looks any of them
+		// up (they would count twice), and keep the recording unchanged until EndFrame. Returns false, changing nothing,
+		// when an asset is no longer loaded as recorded (or without a manager): the frame then looks them up one by one.
+		bool Replay(const Recording& recording);
+
 		const AssetResolveStats& GetStats() const { return m_Stats; }
 	private:
 		// What the current frame asked of a handle (Entry::Lookups).
@@ -75,9 +110,22 @@ namespace Strata
 			uint8_t Lookups = 0;
 		};
 
+		// A call made while recording: the statistics it counted (lookup flags; 0 when the frame had answered it already).
+		struct RecordedCall
+		{
+			AssetHandle Handle;
+			Entry* Target = nullptr;
+			uint8_t Counted = 0;
+			bool Lookup = false; // Resolve or FindResident (else Prefetch)
+		};
+
 		// The entry's asset (null when there is none).
 		const Ref<Asset>& ResolveAsset(AssetHandle handle, AssetPriority priority, bool residentOnly);
+		// Answers a lookup of the entry, asking the manager unless the frame answered it already; returns what it counted.
+		uint8_t LookUp(Entry& entry, AssetHandle handle, AssetPriority priority, bool residentOnly);
 		Entry& GetEntry(AssetHandle handle);
+		// Gives an entry new in this frame what the frame's replay found for its handle, if the replay has it.
+		void AdoptReplayed(Entry& entry, AssetHandle handle);
 	private:
 		Ref<AssetManagerBase> m_Manager;               // The frame's manager, between BeginFrame and EndFrame
 		std::weak_ptr<AssetManagerBase> m_LastManager; // The manager of the latest frame: tells whether the entries are its
@@ -87,6 +135,10 @@ namespace Strata
 		std::unordered_map<AssetHandle, Entry> m_Entries;
 		std::vector<Entry*> m_Used; // Entries holding references for the current frame
 		AssetResolveStats m_Stats;
+		bool m_Recording = false;
+		bool m_RecordedPending = false; // CountPending counted something while recording
+		std::vector<RecordedCall> m_Recorded;
+		const Recording* m_Replay = nullptr; // Replayed in the current frame
 		static const Ref<Asset> s_None;
 	};
 

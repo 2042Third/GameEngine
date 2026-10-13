@@ -14,6 +14,8 @@
 
 #include <algorithm>
 #include <cstring>
+#include <limits>
+#include <memory>
 #include <optional>
 #include <random>
 #include <set>
@@ -254,6 +256,93 @@ TEST_SUITE("Asset.Residency")
 		for (size_t index : { size_t(7), size_t(8), size_t(9), size_t(10) })
 			CHECK(manager->GetAssetState(textures[index]) == AssetState::Ready);
 		CHECK(manager->GetStats().Evictions == 6);
+	}
+
+	TEST_CASE("Loaded assets touched together count as used, as GetAsset counts them, unless one is no longer loaded as expected")
+	{
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateManager(MakeBudgets(AssetResidencyBudgets::c_Unlimited, AssetResidencyBudgets::c_Unlimited, AssetResidencyBudgets::c_Unlimited));
+		std::vector<AssetHandle> textures;
+		for (uint64_t index = 0; index < 3; index++)
+			textures.push_back(manager->Add(0x21000 + index, MakeUsage(0, 1 * c_MB)));
+		LoadAll(*manager, textures);
+		std::vector<std::weak_ptr<Asset>> objects;
+		for (AssetHandle texture : textures)
+			objects.push_back(manager->PeekLoadedAsset(texture));
+		const auto lastRequested = [&manager](AssetHandle handle)
+		{
+			for (const AssetResidencyInfo& asset : manager->GetResidencyInfo())
+			{
+				if (asset.Handle == handle)
+					return asset.LastRequestedFrame;
+			}
+			return std::numeric_limits<uint64_t>::max();
+		};
+		for (int frame = 0; frame < 3; frame++)
+			manager->Update();
+		const uint64_t frame = manager->GetStats().Frame;
+		const uint64_t calls = manager->GetStats().GetAssetCalls;
+		const uint64_t untouched = lastRequested(textures[2]);
+		REQUIRE(untouched < frame);
+
+		// Two of them, still the objects that were loaded: requested in this frame, a lookup each.
+		const std::vector<AssetHandle> pair = { textures[0], textures[1] };
+		CHECK(manager->TouchLoadedAssets(pair, std::span(objects).first(2)));
+		CHECK(manager->GetStats().GetAssetCalls == calls + 2);
+		CHECK(lastRequested(textures[0]) == frame);
+		CHECK(lastRequested(textures[1]) == frame);
+		CHECK(lastRequested(textures[2]) == untouched);
+
+		// Refused without touching anything: an object that is not the asset's, an unknown handle, an asset unloaded, and one
+		// loaded again (a new object, whatever its address).
+		manager->Update();
+		const uint64_t later = manager->GetStats().Frame;
+		const std::vector<std::weak_ptr<Asset>> swapped = { objects[1], objects[0] };
+		CHECK_FALSE(manager->TouchLoadedAssets(pair, swapped));
+		const std::vector<AssetHandle> unknown = { textures[0], AssetHandle(0xBAD) };
+		CHECK_FALSE(manager->TouchLoadedAssets(unknown, std::span(objects).first(2)));
+		manager->UnloadAsset(textures[2]);
+		const std::vector<AssetHandle> withUnloaded = { textures[0], textures[2] };
+		const std::vector<std::weak_ptr<Asset>> withUnloadedObjects = { objects[0], objects[2] };
+		CHECK_FALSE(manager->TouchLoadedAssets(withUnloaded, withUnloadedObjects));
+		LoadAll(*manager, { textures[2] });
+		CHECK_FALSE(manager->TouchLoadedAssets(withUnloaded, withUnloadedObjects));
+		CHECK(manager->GetStats().GetAssetCalls == calls + 2);
+		CHECK(lastRequested(textures[0]) == frame);
+		CHECK(lastRequested(textures[0]) < later);
+
+		// With the new object it is touched again.
+		const std::vector<std::weak_ptr<Asset>> reloaded = { objects[0], manager->PeekLoadedAsset(textures[2]) };
+		CHECK(manager->TouchLoadedAssets(withUnloaded, reloaded));
+		CHECK(lastRequested(textures[0]) == manager->GetStats().Frame);
+		CHECK(manager->GetStats().GetAssetCalls == calls + 4);
+	}
+
+	TEST_CASE("Assets touched together keep their place in the eviction order like assets requested one by one")
+	{
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateManager(MakeBudgets(AssetResidencyBudgets::c_Unlimited, 2 * c_MB, AssetResidencyBudgets::c_Unlimited));
+		const uint32_t grace = manager->GetEvictionGraceFrames();
+		std::vector<AssetHandle> textures;
+		for (uint64_t index = 0; index < 3; index++)
+			textures.push_back(manager->Add(0x22000 + index, MakeUsage(0, 1 * c_MB)));
+		LoadAll(*manager, textures);
+		std::vector<std::weak_ptr<Asset>> objects;
+		for (AssetHandle texture : { textures[0], textures[2] })
+			objects.push_back(manager->PeekLoadedAsset(texture));
+
+		// The first and the last are touched every frame (the middle one was requested last when they loaded): the middle one
+		// is the least recently requested once the grace window passes, and goes for the budget.
+		const std::vector<AssetHandle> used = { textures[0], textures[2] };
+		for (uint32_t frame = 0; frame <= grace + 1; frame++)
+		{
+			REQUIRE(manager->TouchLoadedAssets(used, objects));
+			manager->Update();
+		}
+		CHECK(manager->GetAssetState(textures[0]) == AssetState::Ready);
+		CHECK(manager->GetAssetState(textures[1]) == AssetState::Unloaded);
+		CHECK(manager->GetAssetState(textures[2]) == AssetState::Ready);
+		CHECK(manager->GetStats().Evictions == 1);
 	}
 
 	TEST_CASE("Eviction for a pool over budget looks only at the assets holding memory of that pool")

@@ -126,7 +126,9 @@ subsystems.
 **Core** (`Core/`). `Application` owns the window, the graphics device, the layer stack and the main-thread queue
 and runs the frame loop; `Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
 `Platform/GLFW/GLFWWindow` (`SetIcon` takes RGBA images of several sizes; macOS and Wayland windows have no icon of
-their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`), `Assert`,
+their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`; the console and the log file are written by
+the `BackgroundLogSink`'s thread, so a log call never waits for them, except warnings and errors, which are flushed before
+the call returns: writing a line to a console, a pipe or a file blocked the frame for milliseconds), `Assert`,
 `JobSystem`, `FileSystem` (UTF-8 paths), `FileReader` (one open file read at explicit offsets by any number of threads:
 overlapped `ReadFile` on Windows, `pread` on POSIX), `FileWatcher`, `FileLock`, `Platform` (OS services, private directories,
 process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime`),
@@ -203,9 +205,11 @@ AnimationController (`AssetTypes.h`; the animation types belong to the Animation
 holds the process-wide services: the device, `ShaderLibrary` (SPIR-V compiled from `Strata/shaders` by glslang at
 build time and embedded, `CMake/StrataShaders.cmake`), samplers, fallback textures, `BindlessTextureTable`,
 `StagingPool` (staging memory for texture and mesh uploads, reused), `DeferredReleaseQueue` (`ReleaseDeferred`:
-resources dropped while the GPU may still use them, held until an event query set at the release completes and collected
-every frame and at every release, never waiting; NVRHI's Vulkan backend keeps what command lists reference alive, but not
-the textures of clears) and the blocking `ReadTexture`. `RenderScene` keeps a scene's render proxies in a `SpatialIndex`,
+resources dropped while the GPU may still use them, held until an event query set at the release completes, never
+waiting; NVRHI's Vulkan backend keeps what command lists reference alive, but not the textures of clears. Destroying a
+texture costs the driver about 0.1 ms, so every frame destroys what completed within `c_FrameDestroyBudget` (0.25 ms,
+the oldest first, at least one) and every release as many as it hands over, which keeps the queue bounded without
+frames) and the blocking `ReadTexture`. `RenderScene` keeps a scene's render proxies in a `SpatialIndex`,
 and `SceneRenderer` extracts each frame's draws from it (`SceneRendererExtraction.cpp`, resolving assets through its
 `AssetResolveCache`; see [Render scene](#render-scene)). `SceneRenderer` draws a scene (light clustering, shadow cascades,
 depth/normal/entity-ID prepass, GTAO, forward PBR, sky, transparents, exposure, bloom, tone mapping, FXAA, then overlays
@@ -834,13 +838,18 @@ rules"). Other threads:
   captures. Much of it is frame work: a frame that waits for a batch or a Jolt job a worker has started goes on only once
   that worker has the processor again, so workers keep the main thread's priority (below it, a machine whose processors
   other programs keep busy, a build for one, would starve them and stall frames for seconds).
-- **Background threads** (`JobSystem::Init`; as many as workers by default): long work no frame waits for, submitted with
+- **Background threads** (`JobSystem::Init`; by default as many as workers but leaving four hardware threads,
+  `JobSystem::GetDefaultBackgroundThreadCount`): long work no frame waits for, submitted with
   `JobPriority::Background` - imports (the project scan's and the background re-imports, with their texture
   compression) and the block compression of game exports. They run below the normal thread priority
   (`Platform::SetCurrentThreadPriority`): a pool as large as the processors busy with long jobs (an import compressing a
   4096x4096 texture keeps every thread busy for seconds) would otherwise share them evenly with the main thread, the
   workers and the graphics driver's threads, and the editor's frames, which take about 3 ms, would stretch to 10-30 ms by
-  whole scheduling quanta. What background work starts (`Submit`, `ParallelFor`) stays on the background threads.
+  whole scheduling quanta. The lower priority alone did not keep the frames free: with every processor running background
+  work, a thread of the normal priority that became ready (the graphics driver's, which the frame's
+  `vkBeginCommandBuffer` waited for) waited up to a quantum for a processor, which held the editor's frames 5-27 ms while
+  an import compressed to BC7; so the pool leaves processors to the frame's threads (20 of 24 hardware threads: those
+  frames took 2.0-2.8 ms). What background work starts (`Submit`, `ParallelFor`) stays on the background threads.
 - **I/O threads** (`JobSystem::Init`; 2 by default): `JobSystem::SubmitIO` work such as asset reads (dispatched by the
   streaming queue, at most two per I/O thread at a time; a pack read hands its blocks to worker jobs to decompress while
   it reads on, and never runs other jobs while it waits for them), searches of what documents reference, saving
@@ -1561,7 +1570,8 @@ AssetResolveCache::BeginFrame    the frame's asset manager
 CullView                         SpatialIndex::QueryFrustum; screen fractions and request priorities (parallel chunks);
                                  meshes of unknown bounds as if in view; QuerySphere for the prefetch distance
 FindShadowCasters                cascade boxes; QueryPlanes per cascade, then the exact test in light space
-ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident
+ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident; materials used
+                                 as in the frame before: its data, their assets looked up in one call (below)
 GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches
 UploadSceneData                  changed instances, changed materials, the changed range of each draw list
 ReleaseFrameAssets               (when Render returns, however it ends) every reference the frame took, and the manager
@@ -1675,6 +1685,21 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   long as the fonts are loaded.
   Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what `GetOpaqueBatches` reports after the frame holds no
   pointers.
+- **Material data taken over by still frames** (`SceneRenderer::MaterialResolution`). Resolving a material builds its GPU
+  data from its properties and the bindless slots of its textures, one lookup per material and texture: 0.58 of the
+  1.0 ms a still frame of 3,000 streamed textures took (`PerfGPU.Renderer.IdleFrame3kStreamedTextures`). A frame whose
+  material slots, their uses and their handles are those of the latest frame that resolved them one by one takes that
+  frame's data, flags and texture maps over when nothing they come from changed: the materials and textures are still
+  the loaded objects it found (compared by ownership under one lock of the manager, `AssetManagerBase::TouchLoadedAssets`,
+  which also stamps them as used, as the lookups would) and no bindless slot of those textures was released since
+  (`BindlessTextureTable::AreSlotsUnchanged`: a texture that streams levels moves to a new slot and releases its old
+  one, so data naming the old slot would sample a recycled descriptor and can lose the device). The lookups are those
+  the resolving frame recorded (`AssetResolveCache::BeginRecording`, `EndRecording`), replayed with the statistics they
+  counted (`Replay`); frames that drew a material as the default material, found an asset loading or counted one
+  pending are not replayed. Loaded materials are not changed in place (edits publish new objects), so their properties
+  need no comparison. The camera takes no part: views that move over the same materials reuse them too. Still frames of
+  3,000 streamed textures went from 1.01-1.06 ms to 0.61 ms, of 10,000 materials from 1.33 to 0.61 ms, and the editor's
+  frames of 10,000 materials from 1.82 to 0.99 ms.
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same
   result on any number of threads), then sorted with a stable radix sort (`Core/RadixSort.h`) of 64-bit keys: cascade,
   alpha mask, winding, culling, mesh slot, submesh and level of detail. The sort reads the keys once to find the bytes
@@ -1682,7 +1707,7 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   material is not in the key, so the instances of a mesh share a draw call whatever their materials: shaders read
   `u_Materials[instance.MaterialIndex]` (`SceneRendererSpecification::BatchAcrossMaterials` off splits batches by
   material, for comparisons). Transparent surfaces stay one draw each, back to front. Material data (by slot) is built
-  every frame for the materials drawn and uploaded where it changed.
+  for the materials drawn (or taken over, above) and uploaded where it changed.
 - **A still frame** updates no proxy and uploads no instance, material or draw list (`SceneRendererStats::ProxyUpdates`,
   `InstanceBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
   on screen and texture tiling (`GetVisibleMaterials`, and their loaded texture maps, `GetVisibleTextures`, for mip

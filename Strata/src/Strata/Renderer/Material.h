@@ -66,7 +66,9 @@ namespace Strata
 		// Parameters only: the textures are assets of their own.
 		AssetMemoryUsage GetMemoryUsage() const override { return AssetMemoryUsage { sizeof(Material) }; }
 
-		MaterialProperties& GetProperties() { return m_Properties; }
+		// Read only: a material is not changed once made. Edits publish a new object (AssetManagerBase::ReplaceLoadedAsset),
+		// which is how renderers that keep a material's GPU data from frame to frame learn of them
+		// (SceneRenderer::MaterialResolution).
 		const MaterialProperties& GetProperties() const { return m_Properties; }
 		std::vector<AssetHandle> GetTextureHandles() const;
 

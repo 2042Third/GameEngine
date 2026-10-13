@@ -179,6 +179,26 @@ namespace Strata
 				{ "maxMs", frameTimes.back() } };
 		}
 
+		FrameTimeRecorder::FrameTimeRecorder(uint64_t firstMeasured, size_t expectedFrames)
+			: m_FrameTimes(std::make_shared<std::vector<double>>()), m_FirstMeasured(firstMeasured)
+		{
+			m_FrameTimes->reserve(expectedFrames);
+		}
+
+		void FrameTimeRecorder::Update(const EditorContext& context)
+		{
+			const uint64_t recorded = context.GetRecordedFrameCount();
+			if (recorded < m_FirstMeasured || recorded == m_LastRecorded)
+				return;
+			m_FrameTimes->push_back(context.GetLastFrameTime());
+			m_LastRecorded = recorded;
+		}
+
+		nlohmann::json FrameTimeRecorder::Describe() const
+		{
+			return DescribeFrameTimes(*m_FrameTimes);
+		}
+
 		nlohmann::json ForceSchema()
 		{
 			return BoolSchema("Go on although the edited scene has unsaved changes, discarding them (default false: the command fails instead). "

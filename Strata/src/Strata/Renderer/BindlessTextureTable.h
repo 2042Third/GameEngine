@@ -6,6 +6,7 @@
 
 #include <deque>
 #include <mutex>
+#include <span>
 #include <vector>
 
 namespace Strata
@@ -47,6 +48,14 @@ namespace Strata
 		// Main thread, once per frame: recycles slots whose last possible use has completed on the GPU.
 		void BeginFrame(uint64_t frameIndex);
 
+		// Slots change generation whenever they are released, so a holder of slot indices can tell whether they still name
+		// the textures they were allocated for (a texture that streams levels moves to a new slot, releasing its old one).
+		// Thread-safe, under one lock for all of `slots` (callers check thousands of slots each frame: SceneRenderer's still
+		// frames). GetSlotGenerations replaces `out` with the generation of each slot (0 for slots beyond the table).
+		void GetSlotGenerations(std::span<const uint32_t> slots, std::vector<uint32_t>& out) const;
+		// Whether no slot was released since `generations` were read (GetSlotGenerations), and every one is allocated.
+		bool AreSlotsUnchanged(std::span<const uint32_t> slots, std::span<const uint32_t> generations) const;
+
 		nvrhi::IBindingLayout* GetLayout() const { return m_Layout; }
 		nvrhi::IDescriptorTable* GetTable() const { return m_Table; }
 		uint32_t GetAllocatedCount() const;
@@ -63,6 +72,7 @@ namespace Strata
 		mutable std::mutex m_Mutex;
 		std::vector<nvrhi::TextureHandle> m_SlotTextures; // Size = current table capacity
 		std::vector<bool> m_SlotAllocated;                // False once released, even while the release is pending
+		std::vector<uint32_t> m_SlotGenerations;          // Per slot: how often it was released
 		std::vector<uint32_t> m_FreeSlots;
 		uint32_t m_NextSlot = c_ReservedSlots;
 		struct PendingRelease

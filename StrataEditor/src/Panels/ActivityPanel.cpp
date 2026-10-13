@@ -36,10 +36,11 @@ namespace Strata
 		constexpr float c_SourceColumnInFontSizes = 1.6f;
 		constexpr float c_CommandColumnInFontSizes = 11.0f;
 		constexpr float c_DurationColumnInFontSizes = 4.5f;
-		// Parameters and results share the rest of the width: results (the names of undo steps, such as "Rename 'Wall' to
-		// 'East Wall'") get two fifths, so they show whole where a fixed width cut them; parameters show cut anyway.
-		constexpr float c_ParametersColumnWeight = 3.0f;
-		constexpr float c_ResultColumnWeight = 2.0f;
+		// Results (the names of undo steps, such as "Rename 'Wall' to 'East Wall'", the first line of errors) are as wide as the
+		// widest one listed, but at least this; parameters (cut in the list anyway, whole in the details pane) take the rest of
+		// the width, at least this.
+		constexpr float c_MinResultInFontSizes = 6.0f;
+		constexpr float c_MinParametersInFontSizes = 8.0f;
 		constexpr float c_SourceFilterInFontSizes = 9.0f;
 		constexpr float c_SearchInFontSizes = 14.0f;
 		// The details pane beside the list takes this share of the width, but not less than this many font sizes; narrower
@@ -163,21 +164,42 @@ namespace Strata
 			ImGui::SetTooltip("Only commands that change the scene, its assets or the project (what a replay repeats)");
 	}
 
+	float ActivityPanel::GetResultWidth(const CommandJournalEntry& entry)
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		// A running command's outcome is still to come; a finished one's never changes.
+		if (entry.Status == CommandStatus::Pending)
+			return ImGui::CalcTextSize(DescribeOutcome(entry, colors).first.c_str()).x;
+		auto [it, added] = m_ResultWidths.try_emplace(entry.Id, 0.0f);
+		if (added)
+			it->second = ImGui::CalcTextSize(DescribeOutcome(entry, colors).first.c_str()).x;
+		return it->second;
+	}
+
 	void ActivityPanel::RebuildRows(const CommandJournal& journal)
 	{
 		const std::string filter = StringUtils::ToLower(m_Filter);
-		const std::string key = fmt::format("{}|{}|{}", m_SourceFilter, m_EditsOnly, filter);
+		// The font size too: the widths of the results follow the UI scale.
+		const float fontSize = ImGui::GetFontSize();
+		const std::string key = fmt::format("{}|{}|{}|{}", m_SourceFilter, m_EditsOnly, fontSize, filter);
 		if (journal.GetVersion() == m_RowsVersion && key == m_RowsKey)
 			return;
 		m_RowsVersion = journal.GetVersion();
 		m_RowsKey = key;
+		if (fontSize != m_ResultWidthsFontSize)
+		{
+			m_ResultWidths.clear();
+			m_ResultWidthsFontSize = fontSize;
+		}
 
 		const std::deque<CommandJournalEntry>& entries = journal.GetEntries();
-		// Previews of entries the ring dropped go with them.
+		// Previews and widths of entries the ring dropped go with them.
 		const uint64_t oldest = entries.empty() ? UINT64_MAX : entries.front().Id;
 		std::erase_if(m_ParameterPreviews, [oldest](const auto& preview) { return preview.first < oldest; });
+		std::erase_if(m_ResultWidths, [oldest](const auto& width) { return width.first < oldest; });
 
 		m_Rows.clear();
+		m_ResultContentWidth = 0.0f;
 		for (const CommandJournalEntry& entry : entries)
 		{
 			if (m_SourceFilter > 0 && static_cast<int>(entry.Source) != m_SourceFilter - 1)
@@ -194,6 +216,7 @@ namespace Strata
 					continue;
 			}
 			m_Rows.push_back(entry.Id);
+			m_ResultContentWidth = std::max(m_ResultContentWidth, GetResultWidth(entry));
 		}
 	}
 
@@ -202,15 +225,24 @@ namespace Strata
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		constexpr ImGuiTableFlags flags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable
 			| ImGuiTableFlags_SizingFixedFit;
+		const float fontSize = ImGui::GetFontSize();
+		const float sourceWidth = fontSize * c_SourceColumnInFontSizes;
+		const float commandWidth = fontSize * c_CommandColumnInFontSizes;
+		const float durationWidth = fontSize * c_DurationColumnInFontSizes;
+		// The width the fixed columns and every column's padding leave for parameters and results.
+		const float padding = ImGui::GetStyle().CellPadding.x * 2.0f;
+		const float shared = ImGui::GetContentRegionAvail().x - sourceWidth - commandWidth - durationWidth - 5.0f * padding;
+		const float minResult = fontSize * c_MinResultInFontSizes;
+		const float resultWidth = std::clamp(m_ResultContentWidth, minResult, std::max(minResult, shared - fontSize * c_MinParametersInFontSizes));
 		if (!ImGui::BeginTable("Entries", 5, flags))
 			return;
-		const float fontSize = ImGui::GetFontSize();
 		ImGui::TableSetupScrollFreeze(0, 1);
-		ImGui::TableSetupColumn("##Source", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, fontSize * c_SourceColumnInFontSizes);
-		ImGui::TableSetupColumn("Command", ImGuiTableColumnFlags_WidthFixed, fontSize * c_CommandColumnInFontSizes);
-		ImGui::TableSetupColumn("Parameters", ImGuiTableColumnFlags_WidthStretch, c_ParametersColumnWeight);
-		ImGui::TableSetupColumn("Result", ImGuiTableColumnFlags_WidthStretch, c_ResultColumnWeight);
-		ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthFixed, fontSize * c_DurationColumnInFontSizes);
+		ImGui::TableSetupColumn("##Source", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, sourceWidth);
+		ImGui::TableSetupColumn("Command", ImGuiTableColumnFlags_WidthFixed, commandWidth);
+		ImGui::TableSetupColumn("Parameters", ImGuiTableColumnFlags_WidthStretch);
+		// Follows the widest result listed (not resizable: its width is set every frame).
+		ImGui::TableSetupColumn("Result", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, resultWidth);
+		ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthFixed, durationWidth);
 		ImGui::TableHeadersRow();
 
 		const bool atBottom = ImGui::GetScrollY() >= ImGui::GetScrollMaxY();

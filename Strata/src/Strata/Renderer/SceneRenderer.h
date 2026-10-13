@@ -192,6 +192,10 @@ namespace Strata
 		uint32_t CulledLights = 0;    // Point and spot lights outside the view frustum
 		uint32_t DroppedLights = 0;   // Visible point and spot lights beyond SceneRendererSpecification::MaxLights
 		uint32_t Materials = 0;       // Distinct materials drawn
+		// Of the materials drawn and casting shadows, those whose data the frame took over from an earlier frame's (the same
+		// materials used the same ways, their textures in the same bindless slots: still frames), with their assets looked
+		// up in one call to the asset manager (AssetResolveCache::Replay) instead of one by one.
+		uint32_t ReusedMaterials = 0;
 		uint32_t PendingAssets = 0;   // Distinct meshes, materials and textures still loading (drawn with fallbacks or skipped)
 
 		// The render scene (RenderScene) and what the frame cost.
@@ -425,6 +429,28 @@ namespace Strata
 			uint32_t Count = 0;
 		};
 
+		// The materials a frame resolved one by one (ResolveMaterials), for later frames that use the same material slots in
+		// the same ways (ReuseResolvedMaterials): when the materials and their textures are still the loaded objects that
+		// frame found (materials are not changed in place: edits publish new objects) and the textures' bindless slots
+		// still hold them, the materials' data, flags and texture maps are what that frame built.
+		struct MaterialResolution
+		{
+			struct Slot
+			{
+				uint32_t Index = 0; // The material slot
+				uint32_t Usage = 0; // How the frame used it (usage bits)
+				AssetHandle Handle;
+				uint32_t Flags = 0; // m_MaterialFlags
+			};
+
+			bool Valid = false;
+			uint64_t RenderSceneId = 0;
+			std::vector<Slot> Slots; // In the order of m_UsedMaterialSlots
+			AssetResolveCache::Recording Lookups;        // The materials and textures, replayed by later frames
+			std::vector<uint32_t> TextureSlots;           // The bindless slots of the textures among them
+			std::vector<uint32_t> TextureSlotGenerations; // BindlessTextureTable::GetSlotGenerations of TextureSlots
+		};
+
 		// What one chunk of the parallel extraction produced; chunks are merged in order, so the result does not depend on
 		// how they were spread over threads.
 		struct ExtractionChunk
@@ -540,6 +566,11 @@ namespace Strata
 		bool CanShadowView(const AABB& caster, const glm::vec3& lightDirection, const AABB& receivers, std::span<const glm::vec4> planes) const;
 		// Resolves every mesh and material the frame uses, once each, at the priority its use asks for.
 		void ResolveAssets(RenderScene& renderScene);
+		// The materials of m_UsedMaterialSlots, one by one, recorded in m_MaterialResolution for later frames.
+		void ResolveMaterials(RenderScene& renderScene);
+		// Takes the materials' data over from m_MaterialResolution when the frame uses the same material slots the same ways
+		// and nothing it depends on changed (see MaterialResolution). Returns false, having resolved nothing, otherwise.
+		bool ReuseResolvedMaterials(const RenderScene& renderScene);
 		// The view's draws in batches: opaque ones sorted by pipeline state and mesh, transparent ones back to front.
 		void GatherDraws(RenderScene& renderScene, const SceneCamera& camera);
 		// The shadow casters' draws per cascade, and the cascades' projections fitted to the casters.
@@ -772,8 +803,9 @@ namespace Strata
 		std::vector<float> m_MaterialPixelSizes;    // Per material slot: the frame's VisibleMaterialUse::PixelSize
 		std::vector<float> m_MaterialUVPixels;      // Per material slot: the frame's VisibleMaterialUse::UVPixels
 		std::vector<float> m_MaterialUVScales;
-		std::vector<ResolvedTexture> m_ResolvedTextures;          // The loaded texture maps of the materials the frame draws
+		std::vector<ResolvedTexture> m_ResolvedTextures;          // The loaded texture maps of the materials the frame draws (kept when it reuses them)
 		std::vector<ResolvedTextureRange> m_MaterialTextures;     // Per material slot: its range of m_ResolvedTextures this frame
+		MaterialResolution m_MaterialResolution;                 // The latest frame that resolved its materials one by one
 		std::vector<VisibleMaterialUse> m_VisibleMaterials;
 		std::vector<VisibleTextureUse> m_VisibleTextures;
 		std::optional<RenderData::MaterialData> m_DefaultMaterialData; // The default material, resolved once per frame

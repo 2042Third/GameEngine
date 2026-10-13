@@ -63,7 +63,7 @@ namespace Strata
 	{
 		uint32_t WorkerThreadCount = 0;     // 0 = hardware threads - 1 (at least 1)
 		uint32_t IOThreadCount = 2;         // 0 = I/O jobs run on the worker pool
-		uint32_t BackgroundThreadCount = 0; // 0 = as many as worker threads
+		uint32_t BackgroundThreadCount = 0; // 0 = as many as worker threads, at most JobSystem::GetDefaultBackgroundThreadCount
 	};
 
 	// The work of one thread pool since JobSystem::Init: what its own threads ran (a job that a waiting thread runs itself,
@@ -124,6 +124,17 @@ namespace Strata
 		// indices are skipped).
 		static void ParallelFor(uint32_t count, uint32_t minBatchSize, const std::function<void(uint32_t begin, uint32_t end)>& function,
 			JobPriority helperPriority = JobPriority::High);
+
+		// The background pool's size when the specification leaves it to the system: the hardware threads but
+		// c_FrameHardwareThreads, and at least half of them (at least 1). Below the normal priority alone was not enough:
+		// with every processor running background work (an import compressing a 4096x4096 texture to BC7), a thread of the
+		// normal priority that became ready (the graphics driver's, which the frame's vkBeginCommandBuffer waited for) waited
+		// up to a scheduling quantum for a processor, which held frames for 5-27 ms; with processors left to the frame's
+		// threads it runs at once.
+		static uint32_t GetDefaultBackgroundThreadCount(uint32_t hardwareThreads);
+		// Hardware threads the default background pool leaves to the main thread, the graphics driver's threads and the
+		// frame's helpers.
+		static constexpr uint32_t c_FrameHardwareThreads = 4;
 
 		static uint32_t GetWorkerThreadCount();
 		// Threads that run I/O jobs: the I/O pool's, or the worker pool's when there is no I/O pool (0 before Init).

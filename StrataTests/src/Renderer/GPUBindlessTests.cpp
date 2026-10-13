@@ -3,6 +3,8 @@
 #include "Renderer/GPUTestUtils.h"
 #include "Strata/Renderer/BindlessTextureTable.h"
 
+#include <vector>
+
 using namespace Strata;
 
 namespace
@@ -83,6 +85,41 @@ TEST_SUITE("GPU.Renderer")
 		for (uint32_t index = BindlessTextureTable::c_ReservedSlots; index < 8; index++)
 			CHECK(small.Allocate(texture) == index);
 		CHECK(small.Allocate(texture) == BindlessTextureTable::c_InvalidSlot);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Bindless slots change generation when released, so holders of slot indices can tell they no longer name their texture")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		nvrhi::IDevice* device = gpu.GetNvrhiDevice();
+		nvrhi::TextureHandle texture = CreateTestTexture(device);
+		REQUIRE(texture);
+		BindlessTextureTable table(device, 64, 2);
+
+		const std::vector<uint32_t> slots = { table.Allocate(texture), table.Allocate(texture), BindlessTextureTable::c_WhiteSlot };
+		std::vector<uint32_t> generations;
+		table.GetSlotGenerations(slots, generations);
+		REQUIRE(generations.size() == slots.size());
+		CHECK(table.AreSlotsUnchanged(slots, generations));
+
+		// Released: no longer the texture it was, also once the slot is handed out again.
+		table.BeginFrame(1);
+		table.Release(slots[1]);
+		CHECK_FALSE(table.AreSlotsUnchanged(slots, generations));
+		table.BeginFrame(10);
+		CHECK(table.Allocate(texture) == slots[1]);
+		CHECK_FALSE(table.AreSlotsUnchanged(slots, generations));
+		const std::vector<uint32_t> first = { slots[0], slots[2] };
+		const std::vector<uint32_t> firstGenerations = { generations[0], generations[2] };
+		CHECK(table.AreSlotsUnchanged(first, firstGenerations));
+
+		// Slots the table does not have, and mismatched lists, are never unchanged.
+		const std::vector<uint32_t> beyond = { 1000 };
+		const std::vector<uint32_t> zero = { 0 };
+		CHECK_FALSE(table.AreSlotsUnchanged(beyond, zero));
+		CHECK_FALSE(table.AreSlotsUnchanged(first, zero));
+		CHECK(table.AreSlotsUnchanged({}, {}));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

@@ -3,6 +3,7 @@
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Core/Platform.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -84,6 +85,27 @@ TEST_SUITE("Core.JobSystem")
 		JobHandle handle = JobSystem::SubmitIO([&]() { onWorker = JobSystem::IsWorkerThread(); });
 		handle.Wait();
 		CHECK_FALSE(onWorker.load());
+	}
+
+	TEST_CASE("The background threads leave hardware threads to the frame")
+	{
+		// Every hardware thread but four (the main thread, the graphics driver's threads, the frame's helpers), and at least
+		// half of them.
+		CHECK(JobSystem::GetDefaultBackgroundThreadCount(1) == 1);
+		CHECK(JobSystem::GetDefaultBackgroundThreadCount(2) == 1);
+		CHECK(JobSystem::GetDefaultBackgroundThreadCount(4) == 2);
+		CHECK(JobSystem::GetDefaultBackgroundThreadCount(8) == 4);
+		CHECK(JobSystem::GetDefaultBackgroundThreadCount(16) == 12);
+		CHECK(JobSystem::GetDefaultBackgroundThreadCount(24) == 20);
+		CHECK(JobSystem::GetDefaultBackgroundThreadCount(64) == 60);
+
+		// As applications start it: fewer background threads than hardware threads wherever there are more than two.
+		JobSystem::Init(JobSystemSpecification());
+		const uint32_t hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
+		CHECK(JobSystem::GetBackgroundThreadCount() == std::min(JobSystem::GetWorkerThreadCount(), JobSystem::GetDefaultBackgroundThreadCount(hardwareThreads)));
+		if (hardwareThreads > 2)
+			CHECK(JobSystem::GetBackgroundThreadCount() < hardwareThreads - 1);
+		JobSystem::Shutdown();
 	}
 
 	TEST_CASE("Workers and I/O threads run at the normal priority, background threads below it")

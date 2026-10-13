@@ -420,7 +420,9 @@ Conventions:
 
 - `Ref<T>` / `CreateRef<T>()` (shared ownership) and `Scope<T>` / `CreateScope<T>()` (unique ownership).
 - Log with `ST_CORE_*` in engine code and `ST_*` in applications (`ST_CORE_INFO("Loaded {}", path)`).
-  Messages are fmt-formatted; glm types format directly.
+  Messages are fmt-formatted; glm types format directly. The console and the log file are written by a thread of their own
+  (`Core/BackgroundLogSink`): a log call never waits for them, except warnings and errors, which are flushed before the call
+  returns; what is queued is written at exit and by `Log::Shutdown`.
 - `ST_CORE_ASSERT(condition, "message {}", args)` for programmer errors (compiled out of Dist),
   `ST_CORE_VERIFY` for checks that must stay in shipping builds. Recoverable failures (I/O, bad data,
   user input) return errors (`bool`, `std::optional`, result structs) and log; they never assert.
@@ -456,8 +458,8 @@ The threading model, frame loop and pipelines these rules protect are described 
 - **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background
   work goes through `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O, `JobPriority::Background` for long
   work no frame waits for, such as an import's texture compression or an export's pack compression: it runs on background
-  threads below the normal thread priority, so it never takes the processors from the frame, whose own work runs on the
-  normal-priority workers). A thread that waits for a job runs that job itself if it has not started, and never other
+  threads below the normal thread priority, which leave four hardware threads free, so it never takes the processors from
+  the frame, whose own work runs on the normal-priority workers). A thread that waits for a job runs that job itself if it has not started, and never other
   jobs. Results return to
   the main thread through `Application::SubmitToMainThread` or polled queues — never callbacks that
   touch engine state from worker threads.
@@ -480,7 +482,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   target that a frame in flight only cleared is destroyed with its last handle (a validation error,
   and freed memory in use can lose the device). Drop render targets, and what references them, through
   `Renderer::ReleaseDeferred` (`DeferredReleaseQueue`: held until the GPU finished the work submitted
-  before, never waiting), as `SceneRenderer` does when it is resized.
+  before, never waiting, then destroyed within a frame's budget, `c_FrameDestroyBudget`, since a texture costs the
+  driver about 0.1 ms), as `SceneRenderer` does when it is resized.
 - **Scripting isolation:** game scripts only see `StrataScriptCore`. Every call into script code goes
   through `CrashGuard`; anything crossing the ABI is plain data (no STL types, no exceptions).
 - **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous;
@@ -1195,7 +1198,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   next frame, and reports through a completion callback. Command scripts, automation and UI actions that
   can take frames (e.g. Build Scripts) run commands through the runner; UI actions that finish at once
   call the registry through `RunEditorCommand`, which rejects pending results.
-  Poll functions own their data (copy parameters, never capture them by reference). `editor.wait
+  Poll functions own their data (copy parameters, never capture them by reference) and allocate nothing per frame (frame
+  times go into a `CommandUtils::FrameTimeRecorder`, reserved when the command starts: an allocation in a frame can wait
+  milliseconds for the heap while a scene is freed in the background). `editor.wait
   {frames}` returns after that many frames, e.g. to let a playing scene run, with `frameTimes` (count, median, mean, 95th
   percentile and maximum in milliseconds) of the frames that ran entirely while it waited: the CPU time of each frame
   (`Application::GetLastFrameWorkTime`, recorded by `EditorLayer` through `EditorContext::RecordFrameTime`), without the
@@ -1499,8 +1504,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   above 5% of the viewport height, Normal below), those within `SceneRendererSpecification::PrefetchDistance` at Low;
   each asset is looked up once per frame (`AssetResolveCache`), and the cache's references end with the frame (no mesh,
   material or texture it resolved, and not the asset manager, is held once `Render` returns), so what leaves the view
-  becomes evictable, also for a renderer that stops rendering. Two caches keep assets across frames: `SceneRenderer`'s
-  environment cache holds the sky light's environment map until the environment changes (the maps computed from a map
+  becomes evictable, also for a renderer that stops rendering. A frame that uses the same material slots the same ways as
+  the one before (still frames, and views that move over the same materials) takes their data over when the materials
+  and textures are the loaded objects that frame found and the textures' bindless slots still hold them
+  (`SceneRenderer::ReuseResolvedMaterials`, `BindlessTextureTable::AreSlotsUnchanged`; `SceneRendererStats::ReusedMaterials`),
+  looking them up again in one call (`AssetResolveCache::Replay`, `AssetManagerBase::TouchLoadedAssets`). Loaded
+  materials are never changed in place: an edit publishes a new object (`ReplaceLoadedAsset`). Two caches keep assets
+  across frames: `SceneRenderer`'s environment cache holds the sky light's environment map until the environment changes (the maps computed from a map
   are shared by every renderer lighting with it, so a renderer that starts later, such as a capture renderer, takes them
   over after the map dropped to its mip tail; until one has computed them it holds the map whole in the streamer,
   `TextureStreamer::Hold`, also through frames it does not draw), and `TextRenderer`'s glyph
