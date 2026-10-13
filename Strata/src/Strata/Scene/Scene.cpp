@@ -1837,6 +1837,8 @@ namespace Strata
 				m_FixedUpdateCalls.push_back(SystemCall { system.get(), stage });
 			if (descriptor.CallsLateUpdate)
 				m_LateUpdateCalls.push_back(SystemCall { system.get(), stage });
+			if (descriptor.CallsPausedUpdate)
+				m_PausedUpdateCalls.push_back(SystemCall { system.get(), stage });
 		}
 
 		// Systems may create or destroy entities while starting (e.g. scripts in OnCreate).
@@ -1861,6 +1863,7 @@ namespace Strata
 		m_UpdateCalls.clear();
 		m_FixedUpdateCalls.clear();
 		m_LateUpdateCalls.clear();
+		m_PausedUpdateCalls.clear();
 		// A system being destroyed still finds the systems created before it.
 		while (!m_Systems.empty())
 		{
@@ -1917,6 +1920,14 @@ namespace Strata
 		if (m_IsPaused && !stepping)
 		{
 			UpdateWorldTransforms();
+			if (!m_PausedUpdateCalls.empty())
+			{
+				m_IsUpdating = true;
+				ForEachSystemCall(m_PausedUpdateCalls, [](SceneSystem& system) { system.OnPausedUpdate(); });
+				m_IsUpdating = false;
+				FlushPendingDestroys();
+				UpdateWorldTransforms();
+			}
 #ifdef ST_DEBUG
 			AssertCachesValid();
 #endif

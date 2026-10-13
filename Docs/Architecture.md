@@ -567,7 +567,9 @@ are, in update order:
   built by hand). `MakeSceneSystemDescriptor<T>` sets them from the callbacks `T` overrides, told apart at compile time by
   the type of `&T::OnUpdate`, so the built-ins cost an idle play frame seven calls (Scripting all three, Animation
   `OnUpdate`, Physics `OnUpdate` and `OnFixedUpdate`, Audio `OnLateUpdate`) and a new system adds only the phases it uses
-  (`Perf.Scene.IdlePlayFrame1M`). `OnUpdateRuntime` walks one list of systems per phase, built when the scene starts.
+  (`Perf.Scene.IdlePlayFrame1M`). `OnUpdateRuntime` walks one list of systems per phase, built when the scene starts. A
+  paused frame (no step due) calls `OnPausedUpdate` instead (`CallsPausedUpdate`; of the built-ins only Animation's), for
+  work the paused frame shows that advances no time.
 - **Profiling.** A system's start and update callbacks run in the frame profiler stage its descriptor names
   (`SceneSystemDescriptor::ProfileStage`: `Scene.Scripts`, `Scene.Animation`, `Scene.Physics`, `Scene.Audio`; empty: not
   timed on its own),
@@ -1739,7 +1741,12 @@ system, not to entities: a character's joints add no entities and no transform c
   what it follows changes: what plays (`AnimatorInstance::GetPlayRevision`: a state started, a cross-fade's end, a clip
   played directly), the asset set's clips and their reaches (`AssetSet::ReachVersion`), a sync of the animator (which may
   bind a played clip again), the culling mode or the root motion setting (`AnimationSystemStats::ReachUpdates` counts the
-  animators that did). Unseen animators thus cost an update of their state, a few comparisons and no sampling; a renderer
+  animators that did). A renderer that draws such an animator's meshes with a pose older than its time learns it from
+  `ReportVisible`'s answer (`SceneRendererStats::StalePoses`): the report poses the animator in the next update, and while
+  the scene is paused, when no update runs, in the next paused frame at its time without advancing it
+  (`AnimationSystem::OnPausedUpdate`, `AnimationSystemStats::PausedEvaluations`; attachments follow), so a capture
+  (`viewport.capture`, which renders again while `StalePoses` is not 0) shows what the game is at, also in a headless
+  editor whose only renderer is the capture's. Unseen animators thus cost an update of their state, a few comparisons and no sampling; a renderer
   shows a re-entering animator's previous pose for one frame. An animator that skins no mesh (no `SkinComponent` names
   it) but places attachments, a model of rigid parts, has no mesh a renderer could see it by: it computes its pose every
   update whatever its culling mode.

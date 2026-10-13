@@ -43,6 +43,9 @@ namespace Strata
 		uint32_t Advanced = 0;         // Animators whose time advanced in the latest update
 		uint32_t Evaluated = 0;        // Poses computed in the latest update
 		uint32_t Culled = 0;           // WhenVisible animators the latest update advanced without computing their pose
+		// Poses computed while the scene was paused, of animators a renderer reported with a pose older than their time
+		// (OnPausedUpdate), since the scene started.
+		uint64_t PausedEvaluations = 0;
 		// Animators whose reach (published while WhenVisible) the latest update worked out: only those whose played states or
 		// clips, clip assets, culling mode or root motion setting changed.
 		uint32_t ReachUpdates = 0;
@@ -90,6 +93,9 @@ namespace Strata
 		void OnRuntimeStart() override;
 		void OnRuntimeStop() override;
 		void OnUpdate(Timestep timestep) override;
+		// While the scene is paused no time passes, but an animator that skipped its poses while unseen still shows an older
+		// one: those a renderer reported since are posed at their time, so the paused frame shows what the game is at.
+		void OnPausedUpdate() override;
 
 		//////////////////////////////////////////////////////////////////////////
 		// ISkinningPoses
@@ -97,7 +103,7 @@ namespace Strata
 
 		bool GetPose(entt::entity animator, SkeletonPose& outPose) const override;
 		uint64_t GetPosesVersion() const override { return m_PosesVersion; }
-		void ReportVisible(entt::entity animator) override;
+		bool ReportVisible(entt::entity animator) override;
 
 		//////////////////////////////////////////////////////////////////////////
 		// IAnimatorControl (see Scene/SceneServices.h)
@@ -189,6 +195,8 @@ namespace Strata
 			bool Active = false;
 			std::vector<glm::mat4> Pose; // Model space, per joint of the skeleton
 			uint64_t PoseVersion = 0;    // 0: no pose; changes with the pose and with the reach
+			// Its time advanced since its pose was computed (a WhenVisible animator unseen): the pose is older than the time.
+			bool PoseStale = false;
 			uint64_t SeenUpdate = 0;     // The update before which a renderer last drew a mesh it skins
 			uint64_t AttachedUpdate = 0; // The update that last placed an attachment of it
 			// Published with the pose while the animator may skip poses (SkeletonPose::Reach): where its clips take the joints.

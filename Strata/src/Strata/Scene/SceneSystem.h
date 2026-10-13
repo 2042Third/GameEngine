@@ -28,7 +28,8 @@ namespace Strata
 	// OnRuntimeStarted (both in update order), so that game code run while starting (the scripts' OnCreate, in
 	// OnRuntimeStarted) finds every system running.
 	// Per frame the scene calls OnUpdate, then OnFixedUpdate zero or more times at the fixed timestep,
-	// then OnLateUpdate (of the systems whose descriptor asks for them: SceneSystemDescriptor::CallsUpdate and the others).
+	// then OnLateUpdate (of the systems whose descriptor asks for them: SceneSystemDescriptor::CallsUpdate and the others);
+	// a paused scene calls OnPausedUpdate instead.
 	// React to entity/component changes through the registry's EnTT signals.
 	class SceneSystem
 	{
@@ -48,6 +49,10 @@ namespace Strata
 		// While paused the scene calls no update functions (except for Scene::Step), so systems that keep running on their own
 		// (audio playback) halt here.
 		virtual void OnPausedChanged(bool) {}
+		// Called once per frame while the scene is paused (and not stepping) instead of the update functions: work whose
+		// result the paused frame shows and that advances no time (the animation system poses animators that skipped their
+		// poses while unseen once a renderer reports them).
+		virtual void OnPausedUpdate() {}
 
 		// Called while the scene is running, right before an entity is destroyed (descendants before their ancestors).
 		// The entity is still complete and valid. Destruction requested from here is deferred; entities attached to
@@ -77,6 +82,7 @@ namespace Strata
 		bool CallsUpdate = true;
 		bool CallsFixedUpdate = true;
 		bool CallsLateUpdate = true;
+		bool CallsPausedUpdate = true;
 	};
 
 	namespace Detail
@@ -91,6 +97,8 @@ namespace Strata
 		constexpr bool c_OverridesFixedUpdate = !std::is_same_v<decltype(&T::OnFixedUpdate), void (SceneSystem::*)(float)>;
 		template<typename T>
 		constexpr bool c_OverridesLateUpdate = !std::is_same_v<decltype(&T::OnLateUpdate), void (SceneSystem::*)(Timestep)>;
+		template<typename T>
+		constexpr bool c_OverridesPausedUpdate = !std::is_same_v<decltype(&T::OnPausedUpdate), void (SceneSystem::*)()>;
 
 	}
 
@@ -109,6 +117,7 @@ namespace Strata
 		descriptor.CallsUpdate = Detail::c_OverridesUpdate<T>;
 		descriptor.CallsFixedUpdate = Detail::c_OverridesFixedUpdate<T>;
 		descriptor.CallsLateUpdate = Detail::c_OverridesLateUpdate<T>;
+		descriptor.CallsPausedUpdate = Detail::c_OverridesPausedUpdate<T>;
 		return descriptor;
 	}
 

@@ -1023,7 +1023,10 @@ namespace Strata
 		std::sort(m_VisibleAnimators.begin(), m_VisibleAnimators.end());
 		m_VisibleAnimators.erase(std::unique(m_VisibleAnimators.begin(), m_VisibleAnimators.end()), m_VisibleAnimators.end());
 		for (const entt::entity animator : m_VisibleAnimators)
-			poses->ReportVisible(animator);
+		{
+			if (poses->ReportVisible(animator))
+				m_Stats.StalePoses++;
+		}
 	}
 
 	void SceneRenderer::UploadSceneData(nvrhi::ICommandList* commandList, const RenderScene& renderScene, bool instancesRecreated, bool materialsRecreated,

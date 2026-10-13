@@ -858,7 +858,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   publish their reach with the pose (`SkeletonPose::Reach`, where their clips take the joints), which bounds their meshes
   too, so a frozen pose never hides an animator from the view that would pose it. An animator that skins no mesh but
   places attachments poses every update. Code that needs a pose of a skipped animator (a joint transform) gets its latest
-  pose.
+  pose. A renderer learns when it drew a pose older than its animator's time (`ReportVisible` returns it,
+  `SceneRendererStats::StalePoses`), and the system poses such an animator for the next frame, also while the scene is
+  paused (`SceneSystem::OnPausedUpdate`, which paused frames call instead of the updates): `viewport.capture` renders
+  again until it shows the pose of the moment.
 
 ## Editor
 
@@ -1317,10 +1320,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   being rasterized, so text is never half drawn, and with `waitForAssets` (default true) up to `c_MaxCaptureAssetFrames`
   while assets of the view are loading, so the first capture after opening or playing a scene shows its materials, and up
   to `c_MaxCaptureMipFrames` while textures it draws are coarser than its view wants them, as a texture counts as loaded
-  with its mip tail), reads
+  with its mip tail, and up to `c_MaxCapturePoseFrames` while animators it draws show a pose older than their time), reads
   the image back without stalling, encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data":
   <base64>}, "width", "height", "camera", "view": {"position", "forward", "fov"}, "waitedFrames", "overlays",
-  "pendingAssets", "texturesBelowWanted", "pendingTextGlyphs", "previewLighting", "screenSpaceTexts", "hiddenScreenSpaceTexts", "debugView":
+  "pendingAssets", "texturesBelowWanted", "stalePoses", "pendingTextGlyphs", "previewLighting", "screenSpaceTexts", "hiddenScreenSpaceTexts", "debugView":
   {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD",
   "entitiesPerMipShortfall"}, "notice"?, "path"?}` (the mip view counts entities with textures by the mip levels their
   worst texture lacks: none, 1, 2, 3 or more or still loading); it defaults to the viewport's size, camera, overlays and

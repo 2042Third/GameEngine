@@ -32,7 +32,11 @@ namespace Strata::Tests
 
 		uint64_t GetPosesVersion() const override { return Version; }
 
-		void ReportVisible(entt::entity animator) override { Reported.push_back(animator); }
+		bool ReportVisible(entt::entity animator) override
+		{
+			Reported.push_back(animator);
+			return false;
+		}
 	};
 
 	// A quarter turn about +Z, exact (x -> y, y -> -x).

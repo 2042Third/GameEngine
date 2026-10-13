@@ -510,6 +510,48 @@ TEST_SUITE("Animation.System")
 		CHECK(scene.System()->GetStats().Culled == 1);
 	}
 
+	TEST_CASE("A renderer learns when it drew an older pose than its animator's time, and a paused scene poses such animators")
+	{
+		AnimationScene scene;
+		Entity always = scene.CreateAnimator("Always", c_WaveHandle);
+		Entity seen = scene.CreateAnimator("Seen", c_WaveHandle);
+		seen.GetComponent<AnimatorComponent>().CullingMode = AnimatorCullingMode::WhenVisible;
+		scene.Start();
+		ISkinningPoses* poses = scene.SceneRef->GetService<ISkinningPoses>();
+		scene.Update(0.25f);
+		// Posed in this update (its first pose): not older than its time.
+		CHECK_FALSE(poses->ReportVisible(seen.GetHandle()));
+		scene.Update(0.25f); // Seen: posed again
+		CHECK_FALSE(poses->ReportVisible(always.GetHandle()));
+		scene.Update(0.25f); // Unseen in the update before: its time went on without its pose
+		CHECK(scene.System()->GetStats().Culled == 1);
+		CHECK(poses->ReportVisible(seen.GetHandle()));
+		// The report poses it in the next update.
+		scene.Update(0.25f);
+		CHECK_FALSE(poses->ReportVisible(seen.GetHandle()));
+		CHECK(SameMatrices(scene.GetJoint(seen, 1), scene.GetJoint(always, 1), 1e-5f));
+
+		// Unseen, then paused: no update runs, but a renderer's report poses it in the next paused frame, at its time (as an
+		// animator that animates always has it), without advancing it.
+		scene.Update(0.25f);
+		scene.Update(0.25f);
+		CHECK(scene.System()->GetStats().Culled == 1);
+		scene.SceneRef->SetPaused(true);
+		const double time = scene.System()->FindInstance(seen)->GetNormalizedTime();
+		CHECK_FALSE(SameMatrices(scene.GetJoint(seen, 1), scene.GetJoint(always, 1), 1e-3f));
+		scene.Update(0.25f); // Paused frames pose nothing nobody reported
+		CHECK(scene.System()->GetStats().PausedEvaluations == 0);
+		CHECK(poses->ReportVisible(seen.GetHandle()));
+		scene.Update(0.25f);
+		CHECK(scene.System()->GetStats().PausedEvaluations == 1);
+		CHECK(scene.System()->FindInstance(seen)->GetNormalizedTime() == doctest::Approx(time));
+		CHECK(SameMatrices(scene.GetJoint(seen, 1), scene.GetJoint(always, 1), 1e-5f));
+		CHECK_FALSE(poses->ReportVisible(seen.GetHandle()));
+		scene.Update(0.25f);
+		CHECK(scene.System()->GetStats().PausedEvaluations == 1);
+		CheckSceneCaches(*scene.SceneRef);
+	}
+
 	TEST_CASE("WhenVisible animators that skin no mesh but place attachments animate every update")
 	{
 		// A rigid-part model: its parts follow joints, no skinned mesh could tell the animator that it is seen.

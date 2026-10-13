@@ -27,6 +27,8 @@
 #include <cmath>
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -568,6 +570,65 @@ TEST_SUITE("GPU.Editor.Viewport")
 		harness.Capture(immediate, &at);
 		CHECK(at["waitedFrames"] == 0);
 		harness.Run("play.stop");
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Captures of an animator that animates only while seen show its pose of the moment, paused and playing")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu;
+		const std::filesystem::path project = Tests::CopyFeatureProject(Tests::CreateTemporaryDirectory("CaptureWhenVisible") / "Project");
+		const EditorCommandResult opened = harness.RunFrames("project.open", { { "path", FileSystem::ToUTF8(project) } });
+		REQUIRE_MESSAGE(opened.Success, opened.Error);
+		const nlohmann::json size = { { "width", 160 }, { "height", 120 }, { "camera", "scene" }, { "overlays", false } };
+
+		// The feature project's arm swinging in front of the template's camera, once animating always and once only while
+		// seen. Nothing but the captures draws it (no viewport), so the second skips its poses while the game runs.
+		std::vector<DecodedImage> pausedImages;
+		std::vector<double> pausedTimes;
+		for (const char* mode : { "AlwaysAnimate", "WhenVisible" })
+		{
+			CAPTURE(mode);
+			REQUIRE(harness.RunFrames("scene.new", { { "name", "Capture" }, { "template", "basic3d" }, { "force", true } }).Success);
+			const EditorCommandResult arm = harness.RunFrames("prefab.instantiate", { { "prefab", "Models/Arm.gltf" },
+				{ "components", { { "Transform", { { "Translation", { 0.0, 0.5, 2.0 } }, { "Scale", { 1.5, 1.5, 1.5 } } } } } } });
+			REQUIRE_MESSAGE(arm.Success, arm.Error);
+			const std::string id = arm.Value["id"].get<std::string>();
+			harness.Run("component.set", { { "entity", id }, { "component", "Animator" },
+				{ "values", { { "CullingMode", mode }, { "Loop", true }, { "PlayOnStart", true }, { "Clip", "B24808E5B27B99CD" } } } }); // Swing
+			harness.Run("play.start", { { "build", false } });
+			REQUIRE(harness.RunFrames("editor.wait", { { "frames", 40 } }).Success);
+			harness.Run("play.pause", { { "paused", true } });
+
+			// Paused: the capture's first render draws the pose the animator had when it was last seen, and the paused frame
+			// after it poses the animator at its time; the capture shows that pose.
+			nlohmann::json result;
+			pausedImages.push_back(harness.Capture(size, &result));
+			CHECK(result["stalePoses"] == 0);
+			if (std::string_view(mode) == "WhenVisible")
+				CHECK(result["waitedFrames"].get<int>() >= 1);
+			const EditorCommandResult info = harness.RunFrames("animation.info", { { "entity", id } });
+			REQUIRE_MESSAGE(info.Success, info.Error);
+			REQUIRE(info.Value["playing"] == true);
+			pausedTimes.push_back(info.Value["normalizedTime"].get<double>());
+
+			// Playing: unseen for a while again, and captured while time goes on.
+			harness.Run("play.pause", { { "paused", false } });
+			REQUIRE(harness.RunFrames("editor.wait", { { "frames", 20 } }).Success);
+			harness.Capture(size, &result);
+			CHECK(result["stalePoses"] == 0);
+			harness.Run("play.stop");
+		}
+		// At the same time of the swing, both show the same pose: the arm covers the same pixels. A few pixels of the shadows
+		// may differ, as the meshes of an animator that may skip poses are also bounded by where its clips take them, which
+		// the shadow cascades are fitted to; an older pose moves the arm across hundreds of pixels.
+		REQUIRE(pausedTimes.size() == 2);
+		CHECK(pausedTimes[0] == doctest::Approx(pausedTimes[1]));
+		CHECK(pausedTimes[0] > 0.0);
+		const int differences = harness.CountDifferences(pausedImages[0], pausedImages[1]);
+		CHECK_MESSAGE(differences < 60, differences, " pixels differ");
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

@@ -71,7 +71,7 @@ namespace Strata
 
 		bool GetPose(entt::entity animator, SkeletonPose& outPose) const override;
 		uint64_t GetPosesVersion() const override { return m_PosesVersion; }
-		void ReportVisible(entt::entity) override {}
+		bool ReportVisible(entt::entity) override { return false; } // Previews show the pose of their time
 		// The mesh renderers of the posed animators' attachments, and of what is under them, at the attachments' joints: each
 		// moved by the change from where the scene has its attachment to the animator's world transform times the joint's pose.
 		std::span<const RenderTransform> GetRenderTransforms() const override { return m_RenderTransforms; }

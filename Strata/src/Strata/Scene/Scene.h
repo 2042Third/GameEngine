@@ -601,10 +601,11 @@ namespace Strata
 
 		std::vector<Scope<SceneSystem>> m_Systems;
 		std::vector<FrameStageID> m_SystemStages; // Per system: its FrameProfiler stage (SceneSystemDescriptor::ProfileStage)
-		// In update order, the systems whose descriptors ask for OnUpdate, OnFixedUpdate and OnLateUpdate.
+		// In update order, the systems whose descriptors ask for OnUpdate, OnFixedUpdate, OnLateUpdate and OnPausedUpdate.
 		std::vector<SystemCall> m_UpdateCalls;
 		std::vector<SystemCall> m_FixedUpdateCalls;
 		std::vector<SystemCall> m_LateUpdateCalls;
+		std::vector<SystemCall> m_PausedUpdateCalls;
 		std::unordered_map<entt::id_type, SceneSystem*> m_SystemsByType; // SceneSystemDescriptor::Type -> running system
 		std::unordered_map<entt::id_type, void*> m_Services;              // Interface type -> provider (see RegisterService)
 		std::vector<UUID> m_PendingDestroy;

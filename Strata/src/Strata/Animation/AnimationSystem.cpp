@@ -670,13 +670,17 @@ namespace Strata
 			if (record.Evaluated)
 			{
 				record.PoseVersion = m_NextPoseVersion++;
+				record.PoseStale = false;
 				posesChanged = true;
 				stats.Evaluated++;
 			}
 			else
 			{
 				if (!record.Evaluate)
+				{
 					stats.Culled++;
+					record.PoseStale = true;
+				}
 				// The pose stays, where its clips take it changed (a transition while unseen).
 				if (record.ReachChanged && record.PoseVersion != 0)
 				{
@@ -927,10 +931,39 @@ namespace Strata
 		return true;
 	}
 
-	void AnimationSystem::ReportVisible(entt::entity animator)
+	bool AnimationSystem::ReportVisible(entt::entity animator)
 	{
-		if (AnimatorRecord* record = FindRecord(animator))
-			record->SeenUpdate = m_UpdateIndex;
+		AnimatorRecord* record = FindRecord(animator);
+		if (!record)
+			return false;
+		record->SeenUpdate = m_UpdateIndex;
+		return record->PoseStale && record->Active && record->PoseVersion != 0;
+	}
+
+	void AnimationSystem::OnPausedUpdate()
+	{
+		ST_PROFILE_FUNCTION();
+		// Reported since the latest update (SeenUpdate is that update's index while no update runs): few, on the main thread.
+		bool posesChanged = false;
+		std::vector<JointPose> scratch;
+		for (AnimatorRecord& record : m_Records)
+		{
+			if (record.Removed || !record.Active || !record.PoseStale || record.PoseVersion == 0 || record.SeenUpdate != m_UpdateIndex || !IsReady(record))
+				continue;
+			// At its time, with the settings of its latest update: nothing advances, so no events, transitions or root motion.
+			if (!record.Instance.Evaluate(MakeAssets(record), record.Settings, scratch, record.Pose))
+				continue;
+			record.PoseVersion = m_NextPoseVersion++;
+			record.PoseStale = false;
+			posesChanged = true;
+			m_Stats.PausedEvaluations++;
+		}
+		if (!posesChanged)
+			return;
+		m_PosesVersion++;
+		// Parts attached to the joints follow the new poses.
+		PlaceAttachments();
+		CompactRecords();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

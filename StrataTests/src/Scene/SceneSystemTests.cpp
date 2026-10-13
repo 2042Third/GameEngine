@@ -44,6 +44,7 @@ namespace
 		uint32_t Updates = 0;
 		uint32_t FixedUpdates = 0;
 		uint32_t LateUpdates = 0;
+		uint32_t PausedUpdates = 0;
 	};
 
 	// Counts the per-frame callbacks the scene calls.
@@ -58,6 +59,7 @@ namespace
 		void OnUpdate(Timestep) override { m_Counts.Updates++; }
 		void OnFixedUpdate(float) override { m_Counts.FixedUpdates++; }
 		void OnLateUpdate(Timestep) override { m_Counts.LateUpdates++; }
+		void OnPausedUpdate() override { m_Counts.PausedUpdates++; }
 	private:
 		PhaseCounts& m_Counts;
 	};
@@ -272,6 +274,7 @@ TEST_SUITE("Scene.Systems")
 		CHECK_FALSE(lateOnly.CallsUpdate);
 		CHECK_FALSE(lateOnly.CallsFixedUpdate);
 		CHECK(lateOnly.CallsLateUpdate);
+		CHECK_FALSE(lateOnly.CallsPausedUpdate);
 		const SceneSystemDescriptor derived = MakeSceneSystemDescriptor<OtherRecordingSystem>("TestDerived", false, [](Scene&) { return CreateScope<OtherRecordingSystem>("TestDerived"); });
 		CHECK(derived.CallsUpdate);
 		CHECK_FALSE(derived.CallsFixedUpdate);
@@ -280,15 +283,16 @@ TEST_SUITE("Scene.Systems")
 		CHECK(typeless.CallsUpdate);
 		CHECK(typeless.CallsFixedUpdate);
 		CHECK(typeless.CallsLateUpdate);
+		CHECK(typeless.CallsPausedUpdate);
 
 		// The built-ins take part in seven calls of an idle frame: Scripting in all three phases, Animation in OnUpdate,
-		// Physics in OnUpdate and OnFixedUpdate, Audio in OnLateUpdate.
+		// Physics in OnUpdate and OnFixedUpdate, Audio in OnLateUpdate; a paused frame calls Animation alone.
 		const std::vector<SceneSystemDescriptor>& builtins = SceneSystemRegistry::GetAll();
 		REQUIRE(builtins.size() == 4);
-		CHECK((builtins[0].CallsUpdate && builtins[0].CallsFixedUpdate && builtins[0].CallsLateUpdate));
-		CHECK((builtins[1].CallsUpdate && !builtins[1].CallsFixedUpdate && !builtins[1].CallsLateUpdate));
-		CHECK((builtins[2].CallsUpdate && builtins[2].CallsFixedUpdate && !builtins[2].CallsLateUpdate));
-		CHECK((!builtins[3].CallsUpdate && !builtins[3].CallsFixedUpdate && builtins[3].CallsLateUpdate));
+		CHECK((builtins[0].CallsUpdate && builtins[0].CallsFixedUpdate && builtins[0].CallsLateUpdate && !builtins[0].CallsPausedUpdate));
+		CHECK((builtins[1].CallsUpdate && !builtins[1].CallsFixedUpdate && !builtins[1].CallsLateUpdate && builtins[1].CallsPausedUpdate));
+		CHECK((builtins[2].CallsUpdate && builtins[2].CallsFixedUpdate && !builtins[2].CallsLateUpdate && !builtins[2].CallsPausedUpdate));
+		CHECK((!builtins[3].CallsUpdate && !builtins[3].CallsFixedUpdate && builtins[3].CallsLateUpdate && !builtins[3].CallsPausedUpdate));
 
 		// The scene calls what the descriptors ask for, in frames and in steps of a paused scene.
 		PhaseCounts all;
@@ -302,6 +306,7 @@ TEST_SUITE("Scene.Systems")
 		withoutFixedDescriptor.Name = "TestWithoutFixed";
 		withoutFixedDescriptor.Create = [&withoutFixed](Scene&) -> Scope<SceneSystem> { return CreateScope<PhaseCountingSystem>(withoutFixed); };
 		withoutFixedDescriptor.CallsFixedUpdate = false;
+		withoutFixedDescriptor.CallsPausedUpdate = false;
 		REQUIRE(systems.Register(std::move(withoutFixedDescriptor)));
 		{
 			Scene scene;
@@ -310,14 +315,19 @@ TEST_SUITE("Scene.Systems")
 			scene.SetPaused(true);
 			scene.Step(1);
 			scene.OnUpdateRuntime(0.016f);
+			// Paused frames without a step call the paused update instead.
+			scene.OnUpdateRuntime(0.016f);
+			scene.OnUpdateRuntime(0.016f);
 			scene.OnRuntimeStop();
 		}
 		CHECK(all.Updates == 2);
 		CHECK(all.FixedUpdates == 2);
 		CHECK(all.LateUpdates == 2);
+		CHECK(all.PausedUpdates == 2);
 		CHECK(withoutFixed.Updates == 2);
 		CHECK(withoutFixed.FixedUpdates == 0);
 		CHECK(withoutFixed.LateUpdates == 2);
+		CHECK(withoutFixed.PausedUpdates == 0);
 	}
 
 	TEST_CASE("GetSystem finds the running systems by their class")

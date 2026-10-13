@@ -290,8 +290,11 @@ namespace Strata
 		virtual bool GetPose(entt::entity animator, SkeletonPose& outPose) const = 0;
 		// Changes whenever any pose changes: a renderer that saw this version has seen every pose.
 		virtual uint64_t GetPosesVersion() const = 0;
-		// A renderer drew (in its view or its shadows) a mesh this animator poses, or would have, had it been posed.
-		virtual void ReportVisible(entt::entity animator) = 0;
+		// A renderer drew (in its view or its shadows) a mesh this animator poses, or would have, had it been posed. Returns
+		// whether the pose it drew is older than the animator's time (a WhenVisible animator that skipped its poses while
+		// unseen): the provider poses it for the next frame, also while the scene is paused, so a renderer that must show the
+		// pose of the moment (a capture) renders again then.
+		virtual bool ReportVisible(entt::entity animator) = 0;
 
 		// Entities renderers draw at other world transforms than the scene's: a provider that may not change the scene (the
 		// editor's pose preview of a scene that does not play) places attachments (AttachToJointComponent), and the meshes

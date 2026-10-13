@@ -44,6 +44,10 @@ namespace Strata
 		// a texture counts as loaded with its mip tail, and the finer levels stream in over the next frames. A texture budget
 		// may keep a view from ever getting them: then the picture shows what fits after about two seconds.
 		constexpr uint32_t c_MaxCaptureMipFrames = 120;
+		// Frames a capture may render again (waitForAssets) while animators it draws show a pose older than their time: an
+		// animator that animates only while seen (WhenVisible) and that no renderer drew before skipped its poses, and the
+		// capture's report poses it in the next frame (also while the game is paused).
+		constexpr uint32_t c_MaxCapturePoseFrames = 8;
 
 		nlohmann::json ToJson(const glm::vec3& value)
 		{
@@ -219,7 +223,9 @@ namespace Strata
 			uint32_t TextFrames = 0;  // Renders repeated so far to complete the text
 			uint32_t AssetFrames = 0; // Renders repeated so far while assets of the view were loading
 			uint32_t MipFrames = 0;   // Renders repeated so far while textures were coarser than the view wants
+			uint32_t PoseFrames = 0;  // Renders repeated so far while animators showed poses older than their time
 			uint32_t TexturesBelowWanted = 0;
+			uint32_t StalePoses = 0;
 			std::chrono::steady_clock::time_point Submitted;
 			Ref<EncodedCapture> Encoded; // Set once the pixels are on the CPU
 			JobHandle EncodeJob;
@@ -311,14 +317,17 @@ namespace Strata
 			progress.ScreenSpaceTexts = stats.ScreenSpaceTexts;
 			progress.HiddenScreenSpaceTexts = stats.HiddenScreenSpaceTexts;
 			progress.TexturesBelowWanted = CountTexturesBelowWanted(renderer->GetSceneRenderer());
+			progress.StalePoses = stats.StalePoses;
 			const bool textPending = progress.PendingTextGlyphs > 0 && progress.TextFrames < c_MaxCaptureTextFrames;
 			const bool assetsPending = request.WaitForAssets && progress.PendingAssets > 0 && progress.AssetFrames < c_MaxCaptureAssetFrames;
 			const bool mipsPending = request.WaitForAssets && progress.TexturesBelowWanted > 0 && progress.MipFrames < c_MaxCaptureMipFrames;
-			if (textPending || assetsPending || mipsPending)
+			const bool posesPending = request.WaitForAssets && progress.StalePoses > 0 && progress.PoseFrames < c_MaxCapturePoseFrames;
+			if (textPending || assetsPending || mipsPending || posesPending)
 			{
 				progress.TextFrames += textPending ? 1 : 0;
 				progress.AssetFrames += assetsPending ? 1 : 0;
 				progress.MipFrames += mipsPending ? 1 : 0;
+				progress.PoseFrames += posesPending ? 1 : 0;
 				return std::nullopt;
 			}
 			progress.Readback = TextureReadback::Create(renderer->GetOutputTexture(), {}, &error);
@@ -392,10 +401,11 @@ namespace Strata
 				{ "height", encoded.Image.Height },
 				{ "camera", request.OwnCamera.IsSet() ? "custom" : (progress.View.FromScene ? "scene" : "editor") },
 				{ "view", DescribeView(progress.View.Camera) },
-				{ "waitedFrames", std::max({ progress.TextFrames, progress.AssetFrames, progress.MipFrames }) },
+				{ "waitedFrames", std::max({ progress.TextFrames, progress.AssetFrames, progress.MipFrames, progress.PoseFrames }) },
 				{ "overlays", progress.Overlays },
 				{ "pendingAssets", progress.PendingAssets },
 				{ "texturesBelowWanted", progress.TexturesBelowWanted },
+				{ "stalePoses", progress.StalePoses },
 				{ "pendingTextGlyphs", progress.PendingTextGlyphs },
 				{ "previewLighting", progress.PreviewLighting },
 				{ "screenSpaceTexts", progress.ScreenSpaceTexts },
@@ -584,9 +594,10 @@ namespace Strata
 			"(hiddenScreenSpaceTexts counts it): see viewport.setSettings, or use camera \"scene\" to see what the game shows. Text whose glyphs are still being "
 			"prepared delays the picture by a few frames, so it is complete, and so do meshes, materials and textures of the view that are still loading "
 			"(waitForAssets, default true: up to about five seconds of frames; waitedFrames counts the extra renders), and textures it draws that still "
-			"lack the finer mip levels the view wants (up to about two seconds, as a texture budget may keep them out). Reports what was still "
-			"loading when the picture was taken (pendingAssets), the textures drawn coarser than the view wants (texturesBelowWanted) and glyphs that "
-			"could not be prepared in time (pendingTextGlyphs). debugView colors the picture "
+			"lack the finer mip levels the view wants (up to about two seconds, as a texture budget may keep them out), and animators that animate only "
+			"while seen (WhenVisible) until they show the pose of their time (a few frames, also while paused). Reports what was still "
+			"loading when the picture was taken (pendingAssets), the textures drawn coarser than the view wants (texturesBelowWanted), animators "
+			"drawn with an older pose (stalePoses) and glyphs that could not be prepared in time (pendingTextGlyphs). debugView colors the picture "
 			"by streaming state, level of detail or mip levels (default: the viewport's, viewport.setSettings) and the result's debugView says what it "
 			"found: {view, tintedEntities, pendingEntities, failedEntities, placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], "
 			"entitiesPerMipShortfall: [at the wanted level, 1 level coarser, 2, 3+ or loading]} among the entities in view. "

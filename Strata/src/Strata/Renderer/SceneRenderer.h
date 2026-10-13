@@ -216,6 +216,9 @@ namespace Strata
 		bool PreviewLighting = false;     // SceneRenderOptions::PreviewEnvironment lit the scene (it has no light of its own)
 		uint32_t ShadowCasters = 0;       // Instances drawn into shadow cascades (summed over cascades)
 		uint32_t SkinnedInstances = 0;    // Drawn instances of posed skinned meshes (view; also counted in Instances)
+		// Animators whose meshes the frame drew (in view or by their shadows) with a pose older than their time: WhenVisible
+		// ones that skipped their poses while unseen; the next frame shows them posed (a capture renders again for it).
+		uint32_t StalePoses = 0;
 		uint64_t PaletteBytesUploaded = 0; // Joint matrices uploaded this frame (only palettes that changed)
 		uint32_t DebugLines = 0;          // Lines drawn from SceneRenderOptions::DebugShapes
 		uint32_t OutlinedEntities = 0;    // Selected entities of the rendered scene
