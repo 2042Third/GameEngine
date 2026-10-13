@@ -4,6 +4,7 @@
 #include "Strata/Core/BoundedRead.h"
 #include "Strata/Core/Crypto.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/Log.h"
 
 #include "Platform/Windows/WindowsFileSecurity.h"
 #include "Platform/Windows/WindowsUtils.h"
@@ -17,6 +18,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <climits>
 #include <cstdio>
 #include <initializer_list>
@@ -662,6 +664,10 @@ namespace Strata
 		// Windows ends a process whose console closes once its handler returns, at the latest after 5 seconds: the main loop
 		// gets that long to finish in order (it ends the process itself sooner).
 		constexpr DWORD c_ConsoleCloseGraceMilliseconds = 4500;
+		// Before Windows ends the process without its exit handlers (the default handler of a second Ctrl+C, the end of a
+		// console close's grace), the log gets this long to write what it has queued for the console and the file: the lines
+		// that tell what the program was doing when it was ended (Log::FlushFor).
+		constexpr std::chrono::milliseconds c_LogDrainTime(250);
 
 		BOOL WINAPI OnConsoleControl(DWORD type)
 		{
@@ -671,10 +677,15 @@ namespace Strata
 				case CTRL_BREAK_EVENT:
 					// The first request is honored by the main loop; a second one goes to the default handler, which ends the
 					// process (a program that does not quit when asked).
-					return s_InterruptRequests.fetch_add(1) == 0 ? TRUE : FALSE;
+					if (s_InterruptRequests.fetch_add(1) == 0)
+						return TRUE;
+					Log::FlushFor(c_LogDrainTime);
+					return FALSE;
 				case CTRL_CLOSE_EVENT:
 					s_InterruptRequests.fetch_add(1);
-					Sleep(c_ConsoleCloseGraceMilliseconds);
+					Sleep(c_ConsoleCloseGraceMilliseconds - static_cast<DWORD>(c_LogDrainTime.count()));
+					// The main loop has not ended the process in time: Windows will once this returns.
+					Log::FlushFor(c_LogDrainTime);
 					return TRUE;
 				default:
 					return FALSE;

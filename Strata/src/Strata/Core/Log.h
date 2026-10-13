@@ -10,6 +10,7 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/fmt/fmt.h>
 
+#include <chrono>
 #include <deque>
 #include <filesystem>
 #include <mutex>
@@ -87,6 +88,11 @@ namespace Strata
 
 		static void SetLevel(LogLevel level);
 		static void Flush();
+		// Writes what is queued for the console and the log file (BackgroundLogSink), waiting at most `timeout`; returns
+		// whether everything logged before the call is written and flushed (also when there is nothing to write). It takes
+		// none of the locks the loggers hold while they log, so any thread may call it at any time: the console's control
+		// handler does before the process is ended without its exit handlers (a second Ctrl+C, the console closing).
+		static bool FlushFor(std::chrono::milliseconds timeout);
 	};
 
 }

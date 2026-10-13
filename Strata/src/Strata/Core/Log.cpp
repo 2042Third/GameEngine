@@ -143,8 +143,10 @@ namespace Strata
 			Ref<spdlog::logger> ScriptLogger;
 			Scope<LogBuffer> Buffer;
 			std::filesystem::path LogFile; // The file Init opened
-			// Writes the console and the log file on a thread of its own (null without either).
+			// Writes the console and the log file on a thread of its own (null without either). Changed under Mutex and
+			// WriterMutex, read under either: Log::FlushFor must not wait for Mutex, which Init and Shutdown hold for long.
 			Ref<BackgroundLogSink> Writer;
+			std::mutex WriterMutex;
 			bool ExitHandlerRegistered = false;
 		};
 
@@ -215,8 +217,12 @@ namespace Strata
 
 		if (!writtenSinks.empty())
 		{
-			data.Writer = CreateRef<BackgroundLogSink>(std::move(writtenSinks));
-			sinks.push_back(data.Writer);
+			Ref<BackgroundLogSink> writer = CreateRef<BackgroundLogSink>(std::move(writtenSinks));
+			sinks.push_back(writer);
+			{
+				std::scoped_lock<std::mutex> writerLock(data.WriterMutex);
+				data.Writer = std::move(writer);
+			}
 			if (!data.ExitHandlerRegistered)
 				data.ExitHandlerRegistered = std::atexit(&StopWriterAtExit) == 0;
 		}
@@ -255,6 +261,7 @@ namespace Strata
 		// Writes what is left and ends the writer's thread.
 		if (data.Writer)
 			data.Writer->Stop();
+		std::scoped_lock<std::mutex> writerLock(data.WriterMutex);
 		data.Writer.reset();
 	}
 
@@ -321,6 +328,18 @@ namespace Strata
 		data.CoreLogger->flush();
 		data.ClientLogger->flush();
 		data.ScriptLogger->flush();
+	}
+
+	bool Log::FlushFor(std::chrono::milliseconds timeout)
+	{
+		LogData& data = GetLogData();
+		Ref<BackgroundLogSink> writer;
+		{
+			std::scoped_lock<std::mutex> writerLock(data.WriterMutex);
+			writer = data.Writer;
+		}
+		// Without a writer, the sinks are written by the threads that log, which nothing waits for here.
+		return !writer || writer->FlushFor(timeout);
 	}
 
 }

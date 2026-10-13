@@ -889,7 +889,8 @@ namespace Strata
 			if (s_InterruptRequests.fetch_add(1) == 0)
 				return;
 			// A second request while the first is honored: what the signal does without the handler (sigaction and raise are
-			// async-signal-safe).
+			// async-signal-safe). What the log has queued for the console and the file is lost with the process: waiting for
+			// its writer (Log::FlushFor, as the Windows console handler does) is not async-signal-safe.
 			struct sigaction action = {};
 			action.sa_handler = SIG_DFL;
 			sigemptyset(&action.sa_mask);

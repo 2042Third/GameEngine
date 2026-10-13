@@ -73,6 +73,21 @@ namespace Strata
 		m_ProgressMade.wait(lock, [this, target]() { return m_Flushed >= target || m_Finished; });
 	}
 
+	bool BackgroundLogSink::FlushFor(std::chrono::nanoseconds timeout)
+	{
+		std::unique_lock<std::mutex> lock(m_Mutex);
+		// Finished: the threads that log write their own messages, and the writer wrote and flushed what it had.
+		if (m_Finished)
+			return true;
+		// The writer cannot wait for its own progress (an inner sink that flushes the log).
+		if (std::this_thread::get_id() == m_WriterId)
+			return false;
+		const uint64_t target = m_Queued;
+		m_FlushRequested = std::max(m_FlushRequested, target);
+		m_WriterWake.notify_one();
+		return m_ProgressMade.wait_for(lock, timeout, [this, target]() { return m_Flushed >= target || m_Finished; });
+	}
+
 	void BackgroundLogSink::set_pattern(const std::string& pattern)
 	{
 		for (const spdlog::sink_ptr& sink : m_Sinks)

@@ -5,6 +5,7 @@
 #include <spdlog/details/log_msg_buffer.h>
 #include <spdlog/sinks/sink.h>
 
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -26,7 +27,9 @@ namespace Strata
 	//
 	// Stop (also called by the destructor and, for the logs of the process, when the process exits) writes the messages
 	// logged before it and those still queued, then ends the thread; messages logged afterwards are written right away by
-	// the thread that logs them.
+	// the thread that logs them. A process that ends without its exit handlers (a crash, a second Ctrl+C) loses the info and
+	// trace lines still queued (warnings and errors are written before their call returns): FlushFor writes them where the
+	// platform gives the process a moment before it ends it.
 	class BackgroundLogSink final : public spdlog::sinks::sink
 	{
 	public:
@@ -46,6 +49,10 @@ namespace Strata
 		void set_pattern(const std::string& pattern) override;
 		void set_formatter(std::unique_ptr<spdlog::formatter> formatter) override;
 
+		// Like flush, but waits at most `timeout`. Returns whether every message logged before the call is written and the
+		// inner sinks are flushed. Waits for nothing but the writer, so any thread may call it at any time (a console's
+		// control handler before the process is ended).
+		bool FlushFor(std::chrono::nanoseconds timeout);
 		// Writes what is queued and ends the writer thread (idempotent).
 		void Stop();
 		bool IsRunning() const;

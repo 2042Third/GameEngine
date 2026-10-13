@@ -350,6 +350,35 @@ TEST_SUITE("Core.Log")
 		CHECK(written.back() == "bulk " + std::to_string(count - 1));
 	}
 
+	TEST_CASE("A bounded flush waits at most its time for a blocked console, and writes everything once it can")
+	{
+		// What a console's control handler does before Windows ends the process (a second Ctrl+C): the writer gets a moment
+		// to write the last lines, and the handler is not held beyond it by a console that does not take them.
+		const auto inner = std::make_shared<GatedSink>();
+		const auto sink = std::make_shared<BackgroundLogSink>(std::vector<spdlog::sink_ptr> { inner });
+		spdlog::logger logger = MakeLogger(sink);
+
+		inner->Close();
+		logger.info("last line");
+		const auto start = std::chrono::steady_clock::now();
+		const bool flushed = sink->FlushFor(std::chrono::milliseconds(50));
+		const auto waited = std::chrono::steady_clock::now() - start;
+		inner->Open();
+		CHECK_FALSE(flushed);
+		CHECK(waited >= std::chrono::milliseconds(40));
+		CHECK(waited < c_Timeout);
+
+		CHECK(sink->FlushFor(c_Timeout));
+		CHECK(inner->GetWritten() == std::vector<std::string> { "last line" });
+		CHECK(inner->GetFlushCount() >= 1);
+
+		// Stopped: nothing is left for the writer.
+		sink->Stop();
+		CHECK(sink->FlushFor(std::chrono::milliseconds(0)));
+		// The process's logs: the test runner's writes its console.
+		CHECK(Log::FlushFor(c_Timeout));
+	}
+
 	TEST_CASE("The engine's loggers write the console and the log file through the background writer")
 	{
 		// Log::Init (the test runner logs to the console): the console and the file sinks sit behind a BackgroundLogSink, so
