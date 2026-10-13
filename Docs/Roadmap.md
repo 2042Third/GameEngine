@@ -317,6 +317,45 @@ interleaved A/Bs against wave 2's build; the quiet campaign that decided the bud
   out 1.18-1.23x when editing and 0.88-0.92x when playing in the perf test's runs; `editor.perf` profiles of interleaved
   runs on a 100,000-entity scene put the difference in the UI stage, 0.11 against 0.09-0.10 ms a frame (the wave's
   pills, chips and panels).
+- Review round (2026-10-12, after the campaign): five reviews of the merged tree (fidelity to the workstreams' branches,
+  the interactions between the workstreams, the product as a person meets it, an agent's use, perf) found 25 problems,
+  which 21 commits addressed, with tests. The largest: a headless editor started with `--project` on a fresh copy of a
+  project waited out a two-minute timeout for imports no frame applied and then served an empty scene, so `StrataCLI
+  launch` and the MCP server gave up on every fresh copy after 60 s (the wait before the first frame now applies
+  finished imports itself, `EditorAssetManager::WaitForImportProgress`); `scene.recover` opened its scene in one frame
+  (2.5 s for 300,000 entities) and ignored opens in progress (it now opens in the background like `scene.open`), and the
+  toast of an agent's or a command script's forced `scene.open` blamed the person's Don't Save; `WhenVisible` animators
+  showed in captures the pose of the capture before, also while paused (a renderer learns that it drew a stale pose,
+  `ISkinningPoses::ReportVisible`, and paused scenes pose such animators, `SceneSystem::OnPausedUpdate`). Four were
+  costs that grew with content: the prefab catch-up of a scene of 20,000 instances held the frame that swapped it in for
+  about 300 ms (each prefab part's version is now worked out once: 4.6-4.9 ms); with 3,000 streamed textures in view an
+  idle editor frame took 1.57 ms against main's 0.93, the texture streamer looking at every texture each frame (now only
+  at those whose levels may change: 1.22-1.25 ms, `Assets.Finalize` from 0.39 to 0.012 ms; the rest is mip streaming's
+  texel density per draw); the frame that swapped in a scene of 100,000 mesh renderers built all their render proxies
+  (51-52 ms; a load now builds them over frames before the swap, `RenderScene::PrepareLoadedScene`: 15.5-17.0 ms); and
+  the recovery journal worked out its text on the I/O threads that asset loads share (46 ms a write; now on a background
+  worker, leaving 5.5 ms of writing there). The smaller ones: New Script refused "Player" and "Spinner" (names in the
+  SDK's comments), the start scene could be set as the exported game's loading scene, the project's picture showed
+  textures at their mip tails and the HUD oversized, material texture maps took no paths, `animation.preview` refused
+  unknown states only after its deferral, the prefab catch-up's hashes showed in the Inspector, the trash toast promised
+  an Undo that the next scene drops, three dialogs put their primary button first (two of them ignored Escape), F framed
+  characters around their feet, nothing in the viewport named pose previews, `ImportSettings4kMaxFrame` timed windows
+  that held no upload of the whole texture, and `TextureStreamer::GetPreview` was documented but unused (removed). Four
+  metrics came with the fixes, set from their locked A/B runs: `SceneOpen10kPrefabInstancesMaxFrame` 4.96 ms (budget
+  7.44), `IdleFrame3kStreamedTextures` 1.017 (1.525), `SceneOpen100kCubesMaxFrame` 20.9 (31.35) and
+  `RecoveryWriteIOTime100k` 5.51 (8.26).
+- Final verification (2026-10-12, the review round's tree with corrections of its documentation; Release, nothing else
+  running, the memory at 3600 MT/s): `ctest --preset windows-debug` under the validation layer passed all 47 tests and
+  `ctest --preset windows-release` with the perf label 49 of 50, `StrataTests.PerfGPU` failing on
+  `SceneOpenOver1MMaxFrame` (3.92, 3.07 and 3.32 ms against 1.143); `PerfStability.py --runs 3 --wait-quiet 20` then
+  passed 2 of 3 runs (114 metrics each, the canary at 0.98 of its reference), the other failing on the same metric
+  (1.44, 3.43 and 3.25 ms). A build of the campaign's tree (883bb2c) shows that metric's slow mode at least as often as
+  the tip in interleaved runs of its test case, so the review round did not cause it and its budget stays (see the open
+  items' perf to watch). Every other metric passed in all four runs, after confirmations of the import-settings and
+  export maxima (first attempts of up to 23.5 ms, the known stalls), `RuntimeMaxFinalizeStage` and `Mips.MaxFrameRatio`;
+  the review round's four metrics had medians of 3.47 ms (`SceneOpen10kPrefabInstancesMaxFrame`), 1.05
+  (`IdleFrame3kStreamedTextures`), 21.0 (`SceneOpen100kCubesMaxFrame`) and 5.36 (`RecoveryWriteIOTime100k`). The GCC
+  lint of 506 translation units, the brace check and the compat check found nothing.
 
 Open items and deferrals later waves own:
 
@@ -428,17 +467,22 @@ Open items and deferrals later waves own:
 - Perf to watch after wave 3's campaign: `ImportSettings4kMaxFrame10kCubes`' stalls in the graphics driver (main's build
   exceeds its budget on this machine too) and `ThumbnailsMaxFrame`'s second mode (see the campaign above);
   `RuntimeMaxFinalizeStage` at up to 98% of its 3.723 ms budget since the exported game's first frame finalizes what the
-  start scene's load read (the budget came from mip streaming's own build, where one of frames 8-11 was the slowest);
+  start scene's load read (the budget came from mip streaming's own build, where one of frames 8-11 was the slowest; in
+  the final verification its first attempts exceeded it in 2 of 4 runs, 3.74-3.93 ms, and the confirmations passed);
   `EntityCreate100kRoots` at 85-90% of its budget and the Streaming panel's refresh frames at up to 93%; the maxima
   whose budgets the campaign tightened and that need a confirmation now and then (`SceneOpenOver1MMaxFrame` 2.4-3.3 ms
-  in 2 of 10 first attempts against 1.143; on the evening of 2026-10-12 2.3-4.0 ms in 6 of 7 first attempts of the
-  review fixes' base and in 5 of 10 with the scene preparation, which once failed all three attempts: both builds show
-  the slow mode, and the budget holds for the quiet one only; `SceneSwitch100kMaxFrame` 0.31-0.37 ms in 2 against 0.2002,
-  `Mips.MaxFrameRatio` 1.28 in 1 against 1.19); `ContentBrowser10kThumbnailsP95` once at 0.053 ms in 10 runs
-  (0.036-0.042 otherwise) against 0.057; and `PerfGPU.Editor.ImportSettings4kMaxFrame`, whose first attempt measures
-  6.9-7.6 ms when run alone in a fresh process (main's build 2.9-3.6 ms; 2.1 ms in the perf label's runs, where the
-  cases before it warmed the process). Its view needed only the texture's tail once textures streamed, so its windows
-  held no upload of the whole texture; it now draws the texture whole, as main did, and its windows end once the
+  in 2 of 10 first attempts against 1.143; on the evening of 2026-10-12 2.3-4.0 ms in 6 of 7 first attempts of a build
+  with the first fifteen review fixes (3ace802) and in 5 of 10 with the scene preparation, which once failed all three
+  attempts, and in the final verification all three attempts of 2 of 4 full runs and of 1 of 4 runs of its test case
+  both on the tip and on the campaign's tree (883bb2c): the metric is bimodal, about 0.6-1.1 ms or 1.3-4.1 ms, and the
+  budget, 1.5 times the quiet mode's median, holds for that mode only. The long frame comes while the background load
+  parses the 100,000 entities, with the main thread only drawing the million (the frames that prepare and swap the scene
+  in stay below 0.75 ms), so a stall the load causes the main thread is the lead; `SceneSwitch100kMaxFrame` 0.31-0.37 ms
+  in 2 against 0.2002, `Mips.MaxFrameRatio` 1.28 in 1 against 1.19); `ContentBrowser10kThumbnailsP95` once at 0.053 ms
+  in 10 runs (0.036-0.042 otherwise) against 0.057; and `PerfGPU.Editor.ImportSettings4kMaxFrame`, whose first attempt
+  measures 6.9-7.6 ms when run alone in a fresh process (main's build 2.9-3.6 ms; 2.1 ms in the perf label's runs, where
+  the cases before it warmed the process). Its view needed only the texture's tail once textures streamed, so its
+  windows held no upload of the whole texture; it now draws the texture whole, as main did, and its windows end once the
   texture is whole: later attempts 2.97-5.23 ms (1.34-5.0 with the tail only), the first still 6.9 ms, so the first
   attempt's hold is not the upload's. Platform code only CI compiles: the POSIX `Platform::FindProgram` and symbolizer
   (function names only on Linux and macOS).
