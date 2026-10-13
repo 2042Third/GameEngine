@@ -1977,18 +1977,17 @@ is the `strata-scripting` skill. The layers:
   `UI/Theme` (the Bedrock palette and its meanings; `ApplyTheme` is the `ImGuiLayer` style callback), `UI/EditorFonts`
   (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's icons merged into the Inter
   fonts' Private Use Area, and behind them the system's fonts for Chinese, Japanese and Korean, read on an I/O thread)
-  and the widget kit (`UI/Widgets`), whose widgets record their rectangles in `UI/ItemProbe`.
-  Rules for UI code: DeveloperGuide.md, "Editor UI rules". **Idle throttling**: after drawing,
-  `EditorLayer::UpdateFrameRate` sets the cap to 0 (full rate) while anything happens and to 30 (10 unfocused) frames
-  per second otherwise; headless, `--frames` and command-script runs are never throttled. The frame time shown (status
-  bar, viewport stats, `editor.status`) is `Application::GetLastFrameWorkTime` averaged over 60 frames: a frame's CPU
-  time without the waits for the GPU, the display and the pacer, which panels get in `EditorPanelContext::Frame`.
-  **Instruments**: the
-  Streaming panel (`Panels/StreamingPanel`) and the Performance panel (`Panels/PerformancePanel`) are closed until the
-  status bar's assets and frame pills (or the View menu) open them, docked beside the Console (`DockNewToolPanels` for
-  layouts saved before them: it places panels closed by default the first time they open), and so is the **Activity
-  panel** (`Panels/ActivityPanel`): the activity journal as a clipped table (source icon, command, compact parameters,
-  result or error, milliseconds) filtered by text, source and "changes only" (kind Edit), its rows rebuilt only when
+  and the widget kit (`UI/Widgets`), whose widgets record their rectangles in `UI/ItemProbe`. Rules for UI code:
+  DeveloperGuide.md, "Editor UI rules". **Idle throttling**: after drawing, `EditorLayer::UpdateFrameRate` sets the cap
+  to 0 (full rate) while anything happens and to 30 (10 unfocused) frames per second otherwise; headless, `--frames` and
+  command-script runs are never throttled. The frame time shown (status bar, viewport stats, `editor.status`) is
+  `Application::GetLastFrameWorkTime` averaged over 60 frames: a frame's CPU time without the waits for the GPU, the
+  display and the pacer, which panels get in `EditorPanelContext::Frame`. **Instruments**: the Streaming panel
+  (`Panels/StreamingPanel`) and the Performance panel (`Panels/PerformancePanel`) are closed until the status bar's
+  assets and frame pills (or the View menu) open them, docked beside the Console (`DockNewToolPanels` for layouts saved
+  before them: it places panels closed by default the first time they open), and so is the **Activity panel**
+  (`Panels/ActivityPanel`): the activity journal as a clipped table (source icon, command, compact parameters, result or
+  error, milliseconds) filtered by text, source and "changes only" (kind Edit), its rows rebuilt only when
   `CommandJournal::GetVersion` or the filters change and the parameter previews made once per entry, with the selected
   entry's JSON (`CommandJournal::Describe`) and its actions: Copy as script (a one-step command script), Re-run (through
   the runner, from the UI) and Undo to here (`edit.undo`

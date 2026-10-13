@@ -42,15 +42,15 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   `StrataTests/Architecture/Layers.json` - fix the dependency, see AGENTS.md "Architecture rules"),
   `StrataTests.GPU` (label `gpu`), the perf tests `StrataTests.Perf` and `StrataTests.PerfGPU` (suites `Perf.*`
   and `PerfGPU.*`, label `perf`, Release and Dist only, after `StrataTests.PerfResults.Clean`; budgets, confirmed
-  checks and the ratchet rule in Docs/DeveloperGuide.md, "Perf tests": a metric over its budget is measured again, up
-  to three attempts, and fails only when all are over; the attempts follow each other within about a minute, so load
-  that lasts longer (another build) can still fail one metric or many: before treating "over the budget in all 3
-  attempts" as a regression, run the suite again on a quiet machine (the canary `Perf.Harness.Sort200k` is single-threaded and usually
-  unchanged under load on many cores, so a normal canary does not rule load out); `PerfGPU.Editor` writes a 100,000-
-  and a 1,000,000-entity scene to a temporary project and opens a maximized StrataEditor on them for about 20 seconds,
-  again to confirm a failure; `PerfGPU.Streaming` writes and imports the stress project (17 large textures, 111.8 MB
-  once block-compressed) and runs its camera sweeps in helper processes: the evicting one with whole textures, about
-  15 s, the one with all textures resident at 1920x1080, and mip streaming's fly-through 3 units over the textured
+  checks and the ratchet rule in Docs/DeveloperGuide.md, "Perf tests": a metric over its budget is measured again, up to
+  three attempts, and fails only when all are over; the attempts follow each other within about a minute, so load that
+  lasts longer (another build) can still fail one metric or many: before treating "over the budget in all 3 attempts" as
+  a regression, run the suite again on a quiet machine (the canary `Perf.Harness.Sort200k` is single-threaded and
+  usually unchanged under load on many cores, so a normal canary does not rule load out); `PerfGPU.Editor` writes a
+  100,000- and a 1,000,000-entity scene to a temporary project and opens a maximized StrataEditor on them for about 20
+  seconds, again to confirm a failure; `PerfGPU.Streaming` writes and imports the stress project (17 large textures,
+  111.8 MB once block-compressed) and runs its camera sweeps in helper processes: the evicting one with whole textures,
+  about 15 s, the one with all textures resident at 1920x1080, and mip streaming's fly-through 3 units over the textured
   ground of the `Flight` scene (1920x1080, 600 frames, about 30 s: with a 96 MB texture budget, again within 8 MB, and
   its whole-texture baseline; `PerfGPU.Streaming.Mips.*`: peak private memory, the most bytes and upload-step
   milliseconds of a frame, the longest frame to the baseline's; within 96 MB it must reach level 0 and its last frame
@@ -105,14 +105,15 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   `StrataTests.FeatureTest` (suites `FeatureTest` and `Editor.FeatureTest`) plus `StrataFeatureTest.Clean` → `.Copy` →
   `StrataEditor.FeatureTest` → `StrataRuntime.FeatureTest` (the real executables with a copy of
   `StrataTests/FeatureTest`). See Docs/DeveloperGuide.md ("Feature test") for what the feature test enforces when you
-  add components or script API. Label `package` marks the tests that build script modules with CMake and the compiler at test time:
-  `StrataScriptCore.Package` and `.PackageDist`, `StrataTests.Package` (suites `Package*`), `StrataEditor.Scripts` (the
-  real editor builds, plays and exports a scripted game, `StrataTests/Editor/ScriptsEndToEnd.cmake`) and
-  `StrataEditor.Tetris` (the editor plays `Samples/Tetris` with simulated input and checks its HUD, then exports it in
-  full and pruned and runs both games headless, `StrataTests/Editor/TetrisSample.cmake`) and `StrataEditor.Install`
-  (installs the build into a fresh prefix, as a release archive holds it, and makes, builds, plays and exports a game
-  with the installed editor alone, `StrataTests/Editor/InstallEndToEnd.cmake`); `-LE package` skips them on machines
-  without a toolchain. Packaging and releases: Docs/DeveloperGuide.md, "Packages" and "Releases".
+  add components or script API. Label `package` marks the tests that build script modules with CMake and the compiler at
+  test time: `StrataScriptCore.Package` and `.PackageDist`, `StrataTests.Package` (suites `Package*`),
+  `StrataEditor.Scripts` (the real editor builds, plays and exports a scripted game,
+  `StrataTests/Editor/ScriptsEndToEnd.cmake`) and `StrataEditor.Tetris` (the editor plays `Samples/Tetris` with
+  simulated input and checks its HUD, then exports it in full and pruned and runs both games headless,
+  `StrataTests/Editor/TetrisSample.cmake`) and `StrataEditor.Install` (installs the build into a fresh prefix, as a
+  release archive holds it, and makes, builds, plays and exports a game with the installed editor alone,
+  `StrataTests/Editor/InstallEndToEnd.cmake`); `-LE package` skips them on machines without a toolchain. Packaging and
+  releases: Docs/DeveloperGuide.md, "Packages" and "Releases".
 - Scripted editor runs in CTest pass `--no-automation`, so they never publish sessions for real clients.
 - Editor tests: commands that defer (`scene.open`, `project.open` of a project with a start scene, `asset.import`, a
   `play.start` that builds) need `Tests::RunCommandToCompletion` (`StrataTests/src/Editor/CommandTestUtils.h`); UI
