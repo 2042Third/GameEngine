@@ -4,6 +4,7 @@
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 #include <limits>
@@ -76,8 +77,9 @@ TEST_SUITE("Renderer.Mesh")
 			CAPTURE(length);
 			CHECK_FALSE(Mesh::Deserialize(std::span<const uint8_t>(cooked.data(), length)));
 		}
-		std::vector<uint8_t> trailing = cooked;
-		trailing.push_back(0);
+		// The cooked bytes and one more, sized up front: GCC 14 falsely reports a push_back on a copy as out of bounds.
+		std::vector<uint8_t> trailing(cooked.size() + 1, 0);
+		std::copy(cooked.begin(), cooked.end(), trailing.begin());
 		CHECK_FALSE(Mesh::Deserialize(trailing));
 
 		// Any single corrupted byte is rejected or loads a mesh whose skin passes validation.

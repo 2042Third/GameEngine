@@ -462,7 +462,10 @@ namespace Strata
 			const uint64_t skinBytes = m_SkinVertices.size() * sizeof(MeshSkinVertex);
 			if (!m_IndexBuffer)
 			{
-				for (size_t bytes : { m_Positions.size() * sizeof(glm::vec3), attributeBytes, m_Indices.size() * sizeof(uint32_t) })
+				// One element type for the list: size_t and uint64_t are different types on macOS.
+				const uint64_t positionBytes = m_Positions.size() * sizeof(glm::vec3);
+				const uint64_t indexBytes = m_Indices.size() * sizeof(uint32_t);
+				for (const uint64_t bytes : { positionBytes, attributeBytes, indexBytes })
 					usage.GpuBuffers += GetStaticBufferSize(bytes);
 				if (m_SkinBinding)
 					usage.GpuBuffers += GetStaticBufferSize(skinBytes);

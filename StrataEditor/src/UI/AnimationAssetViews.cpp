@@ -18,9 +18,10 @@
 
 #include <algorithm>
 #include <cfloat>
-#include <charconv>
 #include <cmath>
+#include <locale>
 #include <span>
+#include <sstream>
 
 namespace Strata
 {
@@ -60,9 +61,13 @@ namespace Strata
 			text = Trim(text);
 			if (text.empty())
 				return false;
+			// Apple Clang 15's libc++ has no std::from_chars for floating point; a stream with the classic locale reads
+			// the number independent of the C locale. The whole text must be the number.
+			std::istringstream stream{ std::string(text) };
+			stream.imbue(std::locale::classic());
 			float value = 0.0f;
-			const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
-			if (error != std::errc() || end != text.data() + text.size() || !std::isfinite(value))
+			stream >> value;
+			if (stream.fail() || stream.peek() != std::istringstream::traits_type::eof() || !std::isfinite(value))
 				return false;
 			outValue = value;
 			return true;

@@ -56,7 +56,9 @@ namespace
 		return fault;
 	}
 
-	// Line `line` (from 1) of a source file, empty when the file or the line does not exist.
+#if defined(ST_PLATFORM_WINDOWS)
+	// Line `line` (from 1) of a source file, empty when the file or the line does not exist. Only Windows names the
+	// source line of a crash.
 	std::string ReadSourceLine(const std::string& file, uint32_t line)
 	{
 		const std::optional<std::string> source = FileSystem::ReadText(FileSystem::FromUTF8(file));
@@ -73,6 +75,7 @@ namespace
 		const size_t end = source->find('\n', start);
 		return source->substr(start, end == std::string::npos ? std::string::npos : end - start);
 	}
+#endif
 
 	std::string DescribeStack(const std::vector<ScriptCodeLocation>& stack)
 	{

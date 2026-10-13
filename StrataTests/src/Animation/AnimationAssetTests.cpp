@@ -7,6 +7,7 @@
 
 #include <glm/gtc/quaternion.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -25,8 +26,9 @@ namespace
 			CAPTURE(length);
 			CHECK_FALSE(load(std::span<const uint8_t>(cooked.data(), length)));
 		}
-		std::vector<uint8_t> trailing = cooked;
-		trailing.push_back(0);
+		// The cooked bytes and one more, sized up front: GCC 14 falsely reports a push_back on a copy as out of bounds.
+		std::vector<uint8_t> trailing(cooked.size() + 1, 0);
+		std::copy(cooked.begin(), cooked.end(), trailing.begin());
 		CHECK_FALSE(load(trailing));
 		std::vector<uint8_t> wrongMagic = cooked;
 		wrongMagic[0] ^= 0xFF;
