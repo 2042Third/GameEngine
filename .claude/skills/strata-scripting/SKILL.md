@@ -12,7 +12,10 @@ SDK in `StrataScriptCore/Include/StrataScript/` - never engine headers. Include 
 #include "StrataScript/StrataScript.h"
 ```
 
-The engine-side rules (ABI, adding host functions) are in AGENTS.md, section "Scripting".
+The SDK (`StrataScriptCore/`) and Strata's executables (StrataEditor, StrataRuntime, StrataCLI) are in the Strata
+folder of a downloaded release; in a source checkout the SDK is at its root and the executables are in
+`build/<preset>/bin/<Config>/`. In a source checkout, the engine-side rules (ABI, adding host functions) are in
+AGENTS.md, section "Scripting".
 
 ## A script class
 
@@ -492,8 +495,12 @@ every step below is a command, and source files are written with your own file t
    a class before changing it). `script.open {"file": "Scripts/Player.cpp", "line": 12}` shows a file to the person at
    the editor in their code editor.
 3. **Build.** `script.build` (waits by default) configures CMake on the first run (a few seconds) and builds with the
-   engine's compiler and configuration into `.strata/Scripts/Bin`, then loads the module. On failure the command fails
-   with the first errors (`File(Line,Column): error C2065: ...`, undefined references or symbols of the linker, CMake
+   editor's configuration and a C++ toolchain (`script.status` -> `toolchain`) into `.strata/Scripts/Bin`, then loads
+   the module. In a source checkout that is the engine's toolchain; a downloaded Strata finds one on the machine
+   (Windows: Visual Studio 2022 17.10 or later or 2026 with the C++ workload, or its Build Tools, and CMake; Linux: g++
+   or clang++, Ninja or Make, and CMake 3.25 or later; macOS: the Xcode Command Line Tools and CMake), and without one
+   the build fails naming what to install. On failure the command fails with the first errors
+   (`File(Line,Column): error C2065: ...`, undefined references or symbols of the linker, CMake
    errors), followed by the end of the build log when only summaries such as `ld returned 1 exit status` were found;
    `script.status` -> `build.last` lists every diagnostic (`file`, `line`, `column`, `severity`, `code`, `message`)
    and the end of the build log (`log`). Fix and build again. One build runs at a time (a second request fails while
@@ -544,35 +551,39 @@ build) and Build Scripts buttons, the Problems panel (build errors and crashes; 
 external editor, Scripts > External Editor..., which lists the editors found on the machine), the Content Browser's
 Scripts root (the script files with their classes, below the asset folders; what `script.list` returns) and the
 inspector's Script section (add a class from the module, edit fields with their default shown and a reset button). People's guide:
-`Docs/Manual/Scripting.md`.
+`Docs/Manual/Scripting.md` in the Strata folder (a download or a source checkout).
 
 ## Building outside the editor
 
-A game's `Scripts/CMakeLists.txt` uses the StrataScriptCore package (`STRATA_ENGINE_DIR` names the engine checkout;
-`script.build` sets it):
+A game's `Scripts/CMakeLists.txt` uses the StrataScriptCore package (`STRATA_ENGINE_DIR` names the Strata folder that
+holds `StrataScriptCore/`, a downloaded release or a source checkout; `script.build` sets it):
 
 ```cmake
 cmake_minimum_required(VERSION 3.25)
 project(MyGameScripts CXX)
-set(STRATA_ENGINE_DIR "" CACHE PATH "The Strata engine checkout")
+set(STRATA_ENGINE_DIR "" CACHE PATH "The Strata folder, a source checkout or an installation")
 find_package(StrataScriptCore CONFIG REQUIRED PATHS "${STRATA_ENGINE_DIR}/StrataScriptCore/CMake" NO_DEFAULT_PATH)
 strata_add_script_module(MyGameScripts SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
 ```
 
-Build it with the engine's compiler and configuration. The editor watches the module it runs and reloads it when the
-file changes (an IDE build works too). Rebuilding while the game runs is safe with hot reload enabled
+Build it with the toolchain and configuration `script.status` -> `toolchain` names once its `found` is true (a
+downloaded Strata finds its toolchain in the first `script.build`; `engineDirectory` is the value for
+`STRATA_ENGINE_DIR`). The editor watches the module it runs and reloads it when the file changes (an IDE build works
+too). Rebuilding while the game runs is safe with hot reload enabled
 (`ScriptEngine::SetHotReloadEnabled`, on in the editor): the engine then runs a private copy of the module and reloads
 the new build once the file is completely written. A build that fails to load (or crashes while loading) leaves the
 running version in place. Field values survive the reload when the field keeps its name and type. Without hot reload
-(shipped games) the module runs from its file. Inside this repository, test modules use
+(shipped games) the module runs from its file. In a source checkout, the engine's test modules use
 `strata_add_script_module(<Target> SOURCE_DIR <dir>)` directly and load with `script.load {"path": "<module file>"}`.
 
 Prefer static libraries for third-party code in scripts. Shared libraries the module links against must sit next to the
 module file (Windows) or be reachable through its RUNPATH (Linux, macOS; `$ORIGIN` does not work under hot reload,
-because the module then runs from a private copy - see AGENTS.md).
+because the module then runs from a private copy; AGENTS.md in a source checkout has the details).
 
 ## Testing scripts
 
+A game project tests its scripts with command scripts (`StrataEditor --commands`, see the `strata-make-a-game` skill,
+"Leave a regression test"). The rest of this section is for a source checkout of the engine.
 Engine-side tests load a module, play a scene and inspect fields: see `StrataTests/src/Scripting/` (helpers in
 `ScriptTestUtils.h`: `ScopedScriptEngine`, `AddScriptEntry`, `AddFieldOverride`, `GetField<T>`, `RunFrames`).
 Editor-side tests drive the script commands on a new project with in-tree modules (`script.load`):
@@ -582,7 +593,8 @@ Editor-side tests drive the script commands on a new project with in-tree module
 
 ## Extending the script API: the feature test
 
-`StrataTests/FeatureTest/Scripts/` is a script module that uses the **whole** SDK in the feature scene
+Source checkout only (changing the engine's script API): `StrataTests/FeatureTest/Scripts/` is a script module that uses
+the **whole** SDK in the feature scene
 (`StrataTests/FeatureTest/Assets/Scenes/Feature.stscene`), and `StrataTests.FeatureTest` fails when any public SDK
 function or macro is unused there, or any host function of `StrataScriptHostAPI` is never called during the run.
 When you add or change script API:

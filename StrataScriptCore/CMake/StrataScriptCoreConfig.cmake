@@ -4,21 +4,30 @@
 #   project(MyGameScripts CXX)
 #   find_package(StrataScriptCore CONFIG REQUIRED PATHS "<engine>/StrataScriptCore/CMake" NO_DEFAULT_PATH)
 #   strata_add_script_module(MyGameScripts SOURCE_DIR Scripts)
+#
+# <engine> is the engine's source checkout or an installed Strata (an unpacked release), which carries glm in the SDK.
 
 include_guard(GLOBAL)
 
 get_filename_component(_strataScriptCoreRoot "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
 
 if(NOT TARGET StrataScriptCore)
-	if(NOT EXISTS "${_strataScriptCoreRoot}/../Strata/vendor/glm/glm/glm.hpp")
-		message(FATAL_ERROR "StrataScriptCore: glm not found in the engine's vendor directory; run `git submodule update --init --recursive --depth 1` in the engine")
+	# An installed SDK carries glm (ThirdParty/glm, the root CMakeLists.txt's install rules); in the source tree it is the
+	# engine's vendored submodule.
+	if(EXISTS "${_strataScriptCoreRoot}/ThirdParty/glm/glm/glm.hpp")
+		set(_strataGlmDirectory "${_strataScriptCoreRoot}/ThirdParty/glm")
+	elseif(EXISTS "${_strataScriptCoreRoot}/../Strata/vendor/glm/glm/glm.hpp")
+		set(_strataGlmDirectory "${_strataScriptCoreRoot}/../Strata/vendor/glm")
+	else()
+		message(FATAL_ERROR "StrataScriptCore: glm not found, neither in the SDK (ThirdParty/glm: unpack the Strata release again) nor in the "
+			"engine's vendor directory (a source checkout: run `git submodule update --init --recursive --depth 1` in the engine)")
 	endif()
 
 	# The glm definitions must match the engine's glm target (Strata/vendor/CMakeLists.txt), so scripts and the engine
 	# agree on glm's behavior; the StrataScriptCore.Package test compares them.
 	add_library(StrataScriptCore INTERFACE IMPORTED)
 	set_target_properties(StrataScriptCore PROPERTIES
-		INTERFACE_INCLUDE_DIRECTORIES "${_strataScriptCoreRoot}/Include;${_strataScriptCoreRoot}/../Strata/vendor/glm"
+		INTERFACE_INCLUDE_DIRECTORIES "${_strataScriptCoreRoot}/Include;${_strataGlmDirectory}"
 		INTERFACE_COMPILE_DEFINITIONS "GLM_FORCE_DEPTH_ZERO_TO_ONE;GLM_ENABLE_EXPERIMENTAL;GLM_FORCE_SILENT_WARNINGS"
 		INTERFACE_COMPILE_FEATURES cxx_std_20)
 endif()
@@ -53,4 +62,5 @@ unset(_strataMultiConfig)
 unset(_strataLanguage)
 unset(_strataKind)
 
+unset(_strataGlmDirectory)
 unset(_strataScriptCoreRoot)

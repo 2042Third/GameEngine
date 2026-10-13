@@ -2642,3 +2642,20 @@ the scripts crashed in a headless run (a windowed game keeps running without scr
 quit with. Exported games are the end-to-end check of the whole pipeline: the CTest export chain
 (`StrataEditor.Export`, `StrataRuntime.Smoke`, ...) is listed in the `strata-build-test` skill, the feature test
 runners in AGENTS.md, "Testing".
+
+**The installed layout.** `cmake --install` and `cpack` (`CMake/StrataPackaging.cmake`, included by the root
+`CMakeLists.txt` when the editor, the runtime and the CLI are built) lay Strata out as one folder, which is what a
+release archive holds: `StrataEditor`, `StrataRuntime` and `StrataCLI` side by side (the export copies the runtime from
+beside the editor, `project.samples` reads `Samples/` beside it, the launcher's MCP line names the CLI beside it),
+`StrataInstall.json`, `README.md` (`Docs/Releases/PackageReadme.md`), `ThirdPartyNotices.md`, `Samples/` (without
+`.strata`), the script SDK in `StrataScriptCore/` (`CMake/`, `Include/`, `Source/` and glm's headers and license in
+`ThirdParty/glm`, where `StrataScriptCoreConfig.cmake` looks before the source tree's `Strata/vendor/glm`),
+`Docs/Manual/` and the skills `strata-editor-automation`, `strata-make-a-game` and `strata-scripting` in `Skills/`. The
+marker makes an editor beside it an installed one (`FindEngineInstallation`): its script builds use the folder as
+`STRATA_ENGINE_DIR` and find their toolchain on the machine ([Editor](#editor), "The toolchain of script builds"), since
+the paths baked in at the build machine's configure step mean nothing where the archive is unpacked. Nothing else
+depends on where Strata was built. Archives are named `Strata-<STRATA_PACKAGE_VERSION>-<platform>` (the project's
+version, or it with a pre-release suffix the release workflow passes; configuring refuses another), with that folder at
+their top. `StrataEditor.Install` installs each build and makes a game with the installed editor alone
+(`StrataTests/Editor/InstallEndToEnd.cmake`); `.github/workflows/release.yml` builds, tests, packs and publishes the
+archives (AGENTS.md, "Releases").

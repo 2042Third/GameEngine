@@ -461,6 +461,25 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/ScriptsEndToEnd.cmake")
 	set_tests_properties(StrataEditor.Scripts PROPERTIES LABELS "package" TIMEOUT 1800)
 
+	# The installed layout a release archive holds (CMake/StrataPackaging.cmake): installed into a fresh prefix, its editor
+	# creates a project, builds its scripts with the installed SDK and the toolchain it finds on this machine, plays and
+	# exports it, and the exported game runs headless (see Editor/InstallEndToEnd.cmake). Like StrataEditor.Scripts it needs
+	# CMake and the compiler at test time.
+	if(TARGET StrataCLI)
+		add_test(NAME StrataEditor.Install
+			COMMAND "${CMAKE_COMMAND}"
+				"-DBUILD_DIR=${PROJECT_BINARY_DIR}"
+				"-DCONFIG=$<CONFIG>"
+				"-DSOURCE_DIR=${PROJECT_SOURCE_DIR}"
+				"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/InstallEndToEnd/$<CONFIG>"
+				"-DSCRIPT=${CMAKE_CURRENT_SOURCE_DIR}/Editor/ScriptProject/Greeter.cpp"
+				"-DVERSION=${PROJECT_VERSION}"
+				"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
+				"-DMODULE_SUFFIX=${STRATA_SCRIPT_MODULE_SUFFIX}"
+				-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/InstallEndToEnd.cmake")
+		set_tests_properties(StrataEditor.Install PROPERTIES LABELS "package" TIMEOUT 1800)
+	endif()
+
 	# The Tetris sample (Samples/Tetris), played through the real editor with simulated input: its scripts are built, moves
 	# from its fixed piece sequence clear a line (checked on the HUD), gravity ends the game, it restarts, and the exported
 	# game runs headless (see Editor/TetrisSample.cmake).

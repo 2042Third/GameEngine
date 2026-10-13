@@ -44,6 +44,9 @@ if(STRATA_BUILD_CLI)
 	add_subdirectory(StrataCLI)
 endif()
 
+# The installed layout and the release archives (cmake --install, cpack).
+include(StrataPackaging)
+
 if(STRATA_BUILD_TESTS)
 	enable_testing()
 	add_subdirectory(StrataTests)

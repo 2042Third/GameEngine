@@ -38,7 +38,7 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 | `Samples/` | Games made through the editor by an AI agent, as projects (`.stproj`, `Assets/` with `.meta` files, `Scripts/`): `Tetris` (played and exported by the CTest `StrataEditor.Tetris`). `Samples.json` lists them; the build copies them next to the executables (`StrataSamples`), where the launcher's Open Sample and `project.openSample` offer them as copies. Open one in place only to change the sample: `StrataEditor --project Samples/<Game>`. |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest, the build's git commit). |
 | `Tools/` | Standard-library Python tools: generators whose outputs are committed (`GenerateBrandAssets.py` draws the strata mark into `StrataEditor/Resources/Brand/`: PNGs, raw RGBA for the window icon, the `.ico` of the executables) and `PerfStability.py` (runs the perf tests repeatedly and reports how stable every metric is, see [Testing](#testing)). |
-| `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, render scene, animation, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands), `Manual/` (guides for people making games in the editor: `Scripting.md`). |
+| `Docs/` | Documentation of how the engine works, linked to the code: `README.md` (index), `Architecture.md` (targets and dependencies, modules, frame loop, threading, asset pipeline, streaming and residency, render scene, animation, scripting, editor, export and runtime), `Roadmap.md` (the pillars, the waves of workstreams and what each landed wave delivered; update its Status when a wave lands), `Manual/` (guides for people making games in the editor: `Scripting.md`), `Releases/` (the notes of each release, `<version>.md`, and the README of the release archives, `PackageReadme.md`). |
 | `.claude/skills/` | Task-specific skills for agents (build/test, adding components, script API, editor automation, making a game end to end: `strata-make-a-game`). |
 
 Engine modules (`Strata/src/Strata/`): `Core` (application, logging, jobs, platform services),
@@ -88,6 +88,15 @@ runs on pushes to `main`, on pull requests and on pushes to branches named `ci/<
 standard libraries reject code that the local ones accept (Apple Clang 15's libc++ has no floating-point
 `std::from_chars`; `size_t` and `uint64_t` are different types on macOS; GCC 14 warns where newer GCCs do not), so push a
 branch that lands many changes (a wave's integration) as `ci/<name>` and wait for green CI before it moves `main`.
+
+**Packages:** `cmake --install build/<preset> --config Dist --prefix <dir>` installs Strata the way a release archive
+holds it (`CMake/StrataPackaging.cmake`): the executables side by side, `StrataInstall.json` (which makes the editor
+build scripts with the installation's SDK and a toolchain it finds on the machine, see Scripting, "Building and loading
+scripts"), `README.md` (from `Docs/Releases/PackageReadme.md`), `ThirdPartyNotices.md`, `Samples/`, the script SDK in
+`StrataScriptCore/` (with glm's headers in `ThirdParty/glm`), `Docs/Manual/` and the skills for making games in
+`Skills/`. `cpack --config build/<preset>/CPackConfig.cmake -C Dist` packs it into
+`build/<preset>/Packages/Strata-<version>-<windows-x64|linux-x64|macos-arm64>.<zip|tar.gz>`. A file that releases must
+ship gets an install rule there and an entry in the layout `StrataEditor.Install` checks (Testing).
 
 ## Testing
 
@@ -327,9 +336,12 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   script, plays and exports, and the game runs headless) and `StrataEditor.Tetris` (`Editor/TetrisSample.cmake`: the real
   editor builds a copy of `Samples/Tetris`, plays it with `input.*` commands and `expect`s on its HUD from
   `Editor/TetrisCommands.json.in`, and exports it; the game runs headless). A change to the sample's scene or scripts
-  must keep that command script passing. The `Package*` suites build in the system temp directory,
-  where MSBuild does not track files (MSB8029) and may relink unchanged modules: do not rely on a build leaving the
-  module unchanged there (use the fake CMake instead).
+  must keep that command script passing. `StrataEditor.Install` (`Editor/InstallEndToEnd.cmake`) installs the build into
+  a fresh prefix, checks the layout (exactly the top-level entries a release holds), and makes a game with the installed
+  editor alone: `project.create` from `basic3d`, `script.build` (whose cache must name the installation as
+  `STRATA_ENGINE_DIR`, never the source tree), play and export; the exported game runs headless. The `Package*` suites
+  build in the system temp directory, where MSBuild does not track files (MSB8029) and may relink unchanged modules: do
+  not rely on a build leaving the module unchanged there (use the fake CMake instead).
 
 ## Code style (Hazel conventions)
 

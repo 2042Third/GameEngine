@@ -11,6 +11,8 @@ copies in. Everything else - project, materials, scene, entities, fields, start 
 Never edit `.stscene`, `.stmat`, `.stproj` or `.meta` files by hand. Command details: `strata-editor-automation`;
 the script SDK: `strata-scripting`. `Samples/Tetris` is a finished example of everything below; to study it in a running
 editor without touching the sample, open a copy: `project.openSample {"sample": "Tetris", "directory": "<new absolute dir>"}`.
+Strata's executables (StrataEditor, StrataRuntime, StrataCLI) and `Samples/` are in the Strata folder of a downloaded
+release; in a source checkout the executables are in `build/<preset>/bin/<Config>/` and `Samples/` is at its root.
 
 ## 1. An editor
 
@@ -21,13 +23,14 @@ StrataCLI launch --no-gpu            # no GPU at all: everything but captures
 StrataCLI list                       # the commands this build has; check that input.* is there
 ```
 
-- Binaries are in `build/<preset>/bin/<Config>/`. Use one configuration throughout: `script.build` builds the game's
-  module with the editor's configuration, and the export ships that module.
+- `script.build` builds the game's module with the editor's configuration, and the export ships that module: in a source
+  checkout, use the executables of one configuration (`build/<preset>/bin/<Config>/`) throughout.
 - Pass parameters as files or stdin (`StrataCLI call entity.create @p.json`, `echo '{...}' | StrataCLI call x -`); shell
   quoting of inline JSON breaks on Windows. A tiny wrapper script (`cli.sh call "$@"` with the session directory set) and
   one for taps (`key.sh Left` -> `input.key {"key": "Left"}`) save a lot of typing.
-- Rebuilding the engine while your editor runs fails (the executable is locked): `scene.save`, `editor.quit`, rebuild,
-  `StrataCLI launch --headless --project <dir>` (it reopens the start scene and loads the built module).
+- In a source checkout, rebuilding the engine while your editor runs fails (the executable is locked): `scene.save`,
+  `editor.quit`, rebuild, `StrataCLI launch --headless --project <dir>` (it reopens the start scene and loads the built
+  module).
 
 ## 2. Project and plan
 
@@ -141,7 +144,8 @@ builds changed sources first. Patterns that worked:
 - Hot reload replaces the instance: non-field members are gone in `OnReload`; find your entities again (e.g. children of
   the script's entity by name) instead of creating more.
 - Script builds use the compiler's default warnings; compile your sources with `-Wall -Wextra` once (GCC or Clang with
-  `-I StrataScriptCore/Include -isystem Strata/vendor/glm`) to catch what other platforms' compilers would report.
+  `-I StrataScriptCore/Include` and, for glm, `-isystem StrataScriptCore/ThirdParty/glm` in the Strata folder of a
+  download or `-isystem Strata/vendor/glm` in a source checkout) to catch what other platforms' compilers would report.
 
 ## 5. Scene
 
@@ -225,7 +229,8 @@ Steps that create something can name what they made for later steps: `"bind": {"
 your session: `editor.activity.export {"path": "Build.json", "since": <journal.latest of editor.activity before you began>}`
 writes it with those bindings, ready to run on a fresh copy of the project as it was then (take IDs for it from
 `entity.find` or creating results rather than from the selection, which the script does not repeat).
-`StrataTests/Editor/TetrisCommands.json.in` and `TetrisSample.cmake` are the full example (CTest `StrataEditor.Tetris`).
+In a source checkout, `StrataTests/Editor/TetrisCommands.json.in` and `TetrisSample.cmake` are the full example (CTest
+`StrataEditor.Tetris`).
 
 ## 8. Export and check the game
 

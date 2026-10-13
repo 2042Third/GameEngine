@@ -8,7 +8,8 @@ description: Drive the Strata editor from outside, as an AI agent, through Strat
 Every editor feature is a **command** (`entity.create`, `scene.saveAs`, `project.export`, ...). The editor serves
 all of them over a local, token-authenticated JSON-RPC connection (`EditorAutomation`), and two clients reach it:
 
-- **StrataCLI** (`build/<preset>/bin/<Config>/StrataCLI[.exe]`): one command per call, JSON result on stdout.
+- **StrataCLI** (`StrataCLI[.exe]`, next to `StrataEditor` and `StrataRuntime`: in the Strata folder of a downloaded
+  release, or in `build/<preset>/bin/<Config>/` of a source checkout): one command per call, JSON result on stdout.
 - **MCP** (`StrataCLI mcp`): every command becomes a tool, `.` replaced by `_` (`entity.create` -> `entity_create`).
 
 Both find the editor through its **session file** (`<user data>/Sessions/<pid>.json`, written by the editor,
@@ -62,7 +63,7 @@ StrataCLI call viewport.capture --save-image shot.png    # image results are wri
 ### MCP
 
 Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "args": ["mcp"]}` (Claude Code:
-`claude mcp add strata -- <bin>/StrataCLI mcp`). Tools:
+`claude mcp add strata -- <bin>/StrataCLI mcp`; `<bin>` is the folder that holds StrataCLI, see above). Tools:
 
 - `strata_status`, `strata_launch_editor` (`project`, `headless`, `noGpu`; without `project` it starts an empty
   editor, or reconnects to the empty one it started before), `strata_list_methods`, `strata_call` (`method`,
@@ -168,11 +169,11 @@ editor started with `--no-gpu` (use `--headless`):
   or `--frames` import before the project opens.
 - Game logic: write C++ scripts into the project's `Scripts/` folder (`script.create {"class", "fields"}` starts one) and
   use `script.build`, `script.status`, `script.list` (the source files with the classes each registers), `script.add`,
-  `script.setField`, `script.reload` (see
-  `.claude/skills/strata-scripting/SKILL.md`, "The workflow in a game project"). Builds need CMake and the engine's
-  compiler on the machine; they work with `--no-gpu`. `script.open {"file", "line"}` shows a source line to the person
-  in their code editor (`script.setExternalEditor` sets which: its program must be a path or a name in PATH, and the
-  answer's `program` says which file it starts).
+  `script.setField`, `script.reload` (see the `strata-scripting` skill, "The workflow in a game project"). Builds need
+  CMake and a C++ compiler on the machine (`script.status` -> `toolchain`: the engine's in a source checkout, one found
+  on the machine in a download); they work with `--no-gpu`. `script.open {"file", "line"}` shows a source line to the
+  person in their code editor (`script.setExternalEditor` sets which: its program must be a path or a name in PATH, and
+  the answer's `program` says which file it starts).
 
 ## 4. Conventions
 

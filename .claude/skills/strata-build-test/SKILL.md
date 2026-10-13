@@ -109,8 +109,10 @@ build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard 
   `StrataScriptCore.Package` and `.PackageDist`, `StrataTests.Package` (suites `Package*`), `StrataEditor.Scripts` (the
   real editor builds, plays and exports a scripted game, `StrataTests/Editor/ScriptsEndToEnd.cmake`) and
   `StrataEditor.Tetris` (the editor plays `Samples/Tetris` with simulated input and checks its HUD, then exports it in
-  full and pruned and runs both games headless, `StrataTests/Editor/TetrisSample.cmake`); `-LE package` skips them on
-  machines without a toolchain.
+  full and pruned and runs both games headless, `StrataTests/Editor/TetrisSample.cmake`) and `StrataEditor.Install`
+  (installs the build into a fresh prefix, as a release archive holds it, and makes, builds, plays and exports a game
+  with the installed editor alone, `StrataTests/Editor/InstallEndToEnd.cmake`); `-LE package` skips them on machines
+  without a toolchain. Packaging and releases: AGENTS.md, "Packages" and "Releases".
 - Scripted editor runs in CTest pass `--no-automation`, so they never publish sessions for real clients.
 - Editor tests: commands that defer (`scene.open`, `project.open` of a project with a start scene, `asset.import`, a
   `play.start` that builds) need `Tests::RunCommandToCompletion` (`StrataTests/src/Editor/CommandTestUtils.h`); UI
