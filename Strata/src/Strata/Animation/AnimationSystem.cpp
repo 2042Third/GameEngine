@@ -1052,6 +1052,20 @@ namespace Strata
 		return record && record->Instance.IsInTransition();
 	}
 
+	std::optional<std::string> AnimationSystem::GetBlendSource(Entity animator) const
+	{
+		const AnimatorRecord* record = animator.GetScene() == &m_Scene ? FindRecord(animator.GetHandle()) : nullptr;
+		if (!record || !record->Instance.IsInTransition())
+			return std::nullopt;
+		// The newest entry is the state faded to; the one before it the state faded from.
+		const std::span<const AnimatorInstance::Playing> playing = record->Instance.GetPlaying();
+		const uint32_t state = playing[playing.size() - 2].State;
+		const AnimationController* controller = record->Set != c_NoSet ? m_Sets[record->Set].Controller.get() : nullptr;
+		if (state == AnimatorInstance::c_ClipState || !controller || state >= controller->GetStates().size())
+			return std::string();
+		return controller->GetStates()[state].Name;
+	}
+
 	std::optional<glm::mat4> AnimationSystem::GetJointTransform(Entity animator, std::string_view joint)
 	{
 		const AnimatorRecord* record = animator.GetScene() == &m_Scene ? FindRecord(animator.GetHandle()) : nullptr;

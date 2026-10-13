@@ -9,6 +9,7 @@
 #include "Strata/Scene/Scene.h"
 
 #include <cmath>
+#include <algorithm>
 #include <cstring>
 
 namespace Strata
@@ -99,6 +100,17 @@ namespace Strata
 		entry.Error = std::move(error);
 		entry.RequestInvalid = requestInvalid;
 		entry.Dirty = false;
+	}
+
+	std::vector<std::pair<entt::entity, AnimationPreview::Request>> AnimationPreview::GetRequests() const
+	{
+		std::vector<std::pair<entt::entity, Request>> requests;
+		requests.reserve(m_Entries.size());
+		for (const auto& [handle, entry] : m_Entries)
+			requests.emplace_back(handle, entry.Asked);
+		// In a fixed order: entity handles, not the map's.
+		std::sort(requests.begin(), requests.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+		return requests;
 	}
 
 	std::string AnimationPreview::DescribeStates(const AnimationController& controller)

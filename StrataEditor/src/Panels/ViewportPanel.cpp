@@ -17,6 +17,7 @@
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
+#include <Strata/Animation/AnimationPreview.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Input/Input.h>
@@ -246,6 +247,7 @@ namespace Strata
 		if (!m_GameView)
 		{
 			DrawChips(context);
+			DrawPreviewChip(panelContext);
 		}
 		else if (!m_GameInputEnabled)
 		{
@@ -371,6 +373,41 @@ namespace Strata
 			"Show the game's screen-space text (its HUD) in the editor view; the game and the scene camera always show it");
 		ImGui::SameLine();
 		DrawDebugViewChip(settings);
+	}
+
+	void ViewportPanel::DrawPreviewChip(EditorPanelContext& panelContext)
+	{
+		EditorContext& context = panelContext.Context;
+		const AnimationPreview* preview = context.FindAnimationPreview();
+		if (!preview || preview->GetCount() == 0 || context.IsPlaying())
+			return;
+		// Previews are few and rare: the text is made while one shows.
+		const std::vector<std::pair<entt::entity, AnimationPreview::Request>> requests = preview->GetRequests();
+		std::string text;
+		if (requests.size() == 1)
+		{
+			const auto& [handle, request] = requests.front();
+			const Entity animator(handle, context.GetEditScene().get());
+			std::string what = request.State;
+			if (what.empty() && request.Clip.IsValid())
+			{
+				const std::optional<AssetMetadata> clip = AssetManager::HasActive() ? AssetManager::GetActive()->GetMetadata(request.Clip) : std::nullopt;
+				what = clip ? clip->Name : request.Clip.ToString();
+			}
+			const std::string name = animator.IsValid() ? animator.GetName() : std::string("an animator");
+			text = what.empty() ? fmt::format("Previewing {} at {:.2f} s", name, request.Time)
+				: fmt::format("Previewing '{}' at {:.2f} s \xC2\xB7 {}", what, request.Time, name);
+		}
+		else
+		{
+			text = fmt::format("Previewing {} animators", requests.size());
+		}
+		ImGui::SameLine();
+		const bool clicked = UI::Chip("Viewport.AnimationPreview", Icons::Bone, text.c_str(), nullptr);
+		if (UI::IsTooltipDue())
+			ImGui::SetTooltip("%s", "Poses shown by animation.preview: the scene is unchanged.\nClick to stop the preview.");
+		if (clicked)
+			RunEditorCommand(context, panelContext.Commands, "animation.preview", { { "stop", true } });
 	}
 
 	void ViewportPanel::DrawAgentChip(EditorPanelContext& panelContext, float right, float top)

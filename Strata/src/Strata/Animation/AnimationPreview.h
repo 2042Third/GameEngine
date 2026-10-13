@@ -14,6 +14,7 @@
 #include <span>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace Strata
@@ -64,6 +65,9 @@ namespace Strata
 		bool Clear(Entity animator);
 		void ClearAll();
 		size_t GetCount() const { return m_Entries.size(); }
+		// The animators previewed now with what was asked of them (the viewport names them, so that a preview is never taken
+		// for scene data).
+		std::vector<std::pair<entt::entity, Request>> GetRequests() const;
 
 		// Requests the assets of every preview and computes the poses whose assets arrived, again when the request, the
 		// component's assets or an asset object (a reload) changed, then where the attachments are drawn. Once per frame,

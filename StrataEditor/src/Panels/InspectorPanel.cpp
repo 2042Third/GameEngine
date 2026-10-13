@@ -757,21 +757,31 @@ namespace Strata
 			return;
 		}
 		const std::optional<std::string> state = system->GetCurrentState(entity);
-		const bool blending = system->IsInTransition(entity);
+		const std::optional<std::string> blendSource = system->GetBlendSource(entity);
 		const std::vector<AnimatorParameterValue> parameters = system->GetParameters(entity);
 		if (!UI::BeginPropertyTable("Inspector.Animator.Live"))
 			return;
-		UI::PropertyLabel("State", "The state the animator is in (a clip played directly has none); blending while a cross-fade runs",
-			"Inspector.Animator.State");
+		UI::PropertyLabel("State", "The state the animator is in (a clip played directly has none); while a cross-fade runs, the state it comes "
+			"from and the state it goes to", "Inspector.Animator.State");
+		const auto describe = [](const std::string& name) { return name.empty() ? std::string("(clip)") : name; };
 		std::string stateText = state && !state->empty() ? *state : std::string(system->FindInstance(entity)->IsPlaying() ? "(clip)" : "(not playing)");
-		if (blending)
-			stateText = fmt::format("{}  {}  blending", stateText, Icons::ArrowRight);
+		if (blendSource)
+			stateText = fmt::format("{}  {}  {}", describe(*blendSource), Icons::ArrowRight, stateText);
 		ImGui::TextUnformatted(stateText.c_str());
 		UI::ItemProbe::Record("Inspector.Animator.State", true, 0, stateText);
 		UI::PropertyLabel("Time", "The state's time over its clip's duration, counting loops", "Inspector.Animator.Time");
 		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Body);
 		ImGui::Text("%.2f", system->GetNormalizedTime(entity));
 		ImGui::PopFont();
+		UI::EndPropertyTable();
+		if (parameters.empty())
+			return;
+		// The controller's parameters under a heading of their own: the component's properties above have names such as Speed too.
+		ImGui::Spacing();
+		ImGui::TextColored(colors.TextSecondary, "Parameters");
+		UI::ItemProbe::Record("Inspector.Animator.Parameters");
+		if (!UI::BeginPropertyTable("Inspector.Animator.LiveParameters"))
+			return;
 		for (const AnimatorParameterValue& parameter : parameters)
 		{
 			UI::PropertyLabel(parameter.Name, fmt::format("{} parameter of the controller", AnimationParameterTypeToString(parameter.Type)));

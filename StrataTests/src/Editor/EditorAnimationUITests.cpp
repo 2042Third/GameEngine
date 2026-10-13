@@ -9,6 +9,8 @@
 #include "UI/ItemProbe.h"
 
 #include <Strata/Animation/AnimationController.h>
+#include <Strata/Animation/AnimationPreview.h>
+#include <Strata/Animation/AnimationSystem.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -287,9 +289,47 @@ TEST_SUITE("Editor.UI.Inspector")
 		REQUIRE(editor.FramesUntil([]() { return UI::ItemProbe::Find("Inspector.Animator.State").has_value()
 			&& UI::ItemProbe::Find("Inspector.Animator.State")->Text == "Wave"; }));
 		CHECK(UI::ItemProbe::Find("Inspector.Animator.Time.Label").has_value());
+		// The controller's parameters under a heading of their own (the component's Speed is not the parameter Speed).
+		CHECK(UI::ItemProbe::Find("Inspector.Animator.Parameters").has_value());
+
+		// A cross-fade names the state it comes from and the state it goes to.
+		const Ref<Scene>& running = editor.Context().GetActiveScene();
+		AnimationSystem* system = running->GetSystem<AnimationSystem>();
+		REQUIRE(system);
+		REQUIRE(system->CrossFade(running->GetEntityByUUID(*UUIDFromJson(nlohmann::json(rig))), "Swing", 60.0f));
+		REQUIRE(editor.FramesUntil([]()
+		{
+			const std::optional<UI::ItemProbe::Item> state = UI::ItemProbe::Find("Inspector.Animator.State");
+			return state && state->Text.starts_with("Wave") && state->Text.ends_with("Swing");
+		}));
 		editor.Run("play.stop");
 		editor.Frames(2);
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Animator.State").has_value());
+	}
+
+	TEST_CASE("The viewport names a pose preview, and a click on its chip stops it")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorAnimationPreviewChip"));
+		editor.Run("scene.open", { { "scene", "Scenes/Feature.stscene" } });
+		REQUIRE(editor.FramesUntil([&]() { return !editor.Context().IsSceneLoading(); }));
+		LoadAllAssets(*editor.Context().GetAssetManager());
+		const std::string rig = editor.Run("entity.find", { { "name", "Arm Rig" } })["entities"][0].get<std::string>();
+		editor.Frames(2);
+		CHECK_FALSE(UI::ItemProbe::Find("Viewport.AnimationPreview").has_value());
+
+		// A pose an agent previews is not scene data: the viewport says what it shows.
+		editor.RunToCompletion("animation.preview", { { "entity", rig }, { "state", "Wave" }, { "time", 0.5 } });
+		editor.Frames(2);
+		const std::optional<UI::ItemProbe::Item> chip = UI::ItemProbe::Find("Viewport.AnimationPreview");
+		REQUIRE(chip.has_value());
+		CHECK(chip->Text == "Previewing 'Wave' at 0.50 s \xC2\xB7 Arm Rig");
+		CHECK_FALSE(editor.Context().IsSceneModified());
+
+		REQUIRE(editor.Click("Viewport.AnimationPreview"));
+		editor.Frames(2);
+		const AnimationPreview* preview = editor.Context().FindAnimationPreview();
+		CHECK((preview == nullptr || preview->GetCount() == 0));
+		CHECK_FALSE(UI::ItemProbe::Find("Viewport.AnimationPreview").has_value());
 	}
 
 	TEST_CASE("Skeletons, clips and controllers drag from the Content Browser onto an animator's fields, one undo step each")

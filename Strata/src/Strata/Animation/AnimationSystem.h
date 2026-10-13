@@ -120,6 +120,9 @@ namespace Strata
 		std::optional<std::string> GetCurrentState(Entity animator) override;
 		float GetNormalizedTime(Entity animator) override;
 		bool IsInTransition(Entity animator) override;
+		// The state a cross-fade under way comes from (its name; empty for a clip played without one), or nothing while no
+		// cross-fade runs: the Inspector shows "<from> -> <to>".
+		std::optional<std::string> GetBlendSource(Entity animator) const;
 		std::optional<glm::mat4> GetJointTransform(Entity animator, std::string_view joint) override;
 
 		//////////////////////////////////////////////////////////////////////////

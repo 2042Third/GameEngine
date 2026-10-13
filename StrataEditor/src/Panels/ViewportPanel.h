@@ -96,6 +96,9 @@ namespace Strata
 		void DrawSceneLoadOverlay(EditorContext& context);
 		// The latest automation command, as a chip right-aligned at `top` against `right`.
 		void DrawAgentChip(EditorPanelContext& context, float right, float top);
+		// While animation.preview poses animators of the edited scene: a chip naming what it shows, so that the pose is never
+		// taken for scene data; a click stops every preview (animation.preview {stop: true}).
+		void DrawPreviewChip(EditorPanelContext& context);
 		// The projected bounds of the entities the latest automation command changed, outlined in the accent while they fade.
 		void DrawAgentFlash(EditorContext& context, const ViewportView& view);
 		std::chrono::steady_clock::time_point Now() const { return m_Clock ? m_Clock() : std::chrono::steady_clock::now(); }
