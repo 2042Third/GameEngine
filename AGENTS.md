@@ -13,7 +13,8 @@ together (targets, modules, frame loop, threading, asset pipeline, scripting, ed
 Claude Code loads this file into every session, so it holds the rules every change follows and, for each area, a
 digest of what must always or never be done there. The details are in [Docs/DeveloperGuide.md](Docs/DeveloperGuide.md):
 read the guide's section for the area you work on before changing it (each digest links it). Keep this file under
-40,000 characters: details go into the guide, and a rule that changes is changed in both files.
+40,000 characters (`Docs.AgentGuide` fails beyond): details go into the guide, and a rule that changes is changed in
+both files.
 
 ## Golden rules
 

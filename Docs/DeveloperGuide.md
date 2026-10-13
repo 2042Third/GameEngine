@@ -4,7 +4,8 @@ This guide holds the details of how to work on Strata: how each area works, how 
 conventions its code follows. [AGENTS.md](../AGENTS.md) has the rules every change follows (Claude Code loads it into
 every session) and, for each area, a digest of its hard rules that links the sections here. Read the section of the area
 you work on before changing it. A rule that changes is changed in both files; details go only here, so that AGENTS.md
-stays under 40,000 characters. How the parts fit together is described in [Architecture.md](Architecture.md).
+stays under 40,000 characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together is described in
+[Architecture.md](Architecture.md).
 
 ## Contents
 
