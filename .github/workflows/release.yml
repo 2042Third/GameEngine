@@ -1,7 +1,7 @@
 name: Release
 
 # Builds Strata's release archives (CMake/StrataPackaging.cmake) on the runners CI uses, tests them, and publishes them as a
-# GitHub release (AGENTS.md, "Releases").
+# GitHub release (Docs/DeveloperGuide.md, "Releases").
 #   - Tag vX.Y.Z: build, test, upload the archives and create the release "Strata X.Y.Z" with Docs/Releases/X.Y.Z.md.
 #   - Tag vX.Y.Z-<suffix> (e.g. v0.3.0-rc1): a dry run: build, test and upload the archives as workflow artifacts only.
 #   - Run manually: with a tag, as if that tag was pushed; without one, a dry run of the branch it runs on.

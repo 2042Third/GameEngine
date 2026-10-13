@@ -12,7 +12,8 @@
 namespace Strata
 {
 
-	// The project's game scripts: C++ sources built with CMake into one script module (see AGENTS.md, "Scripting").
+	// The project's game scripts: C++ sources built with CMake into one script module (see Docs/DeveloperGuide.md,
+	// "Building and loading scripts").
 	struct ProjectScriptSettings
 	{
 		// Directory holding the CMakeLists.txt of the scripts. Relative to the project directory, '/' separators, same rules

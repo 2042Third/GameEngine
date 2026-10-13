@@ -24,7 +24,7 @@
 // script module exercising the whole script API) and the helpers its runners share. The headless runner
 // (FeatureTests.cpp) and the editor runner (Editor/EditorFeatureTests.cpp, which also plays the exported game) play the
 // scripted scenario of PlayFeatureScene; the GPU runner (GPUFeatureTests.cpp) only renders the scene, without scripts.
-// See AGENTS.md, "Testing".
+// See Docs/DeveloperGuide.md, "Feature test".
 namespace Strata::Tests
 {
 

@@ -2,7 +2,7 @@
 """Runs the perf tests several times and reports how stable every metric is.
 
 A perf gate is only useful when it fails on regressions and passes on noise. Integrators run this before merging a change
-that can affect performance, on the reference machine (AGENTS.md, "Testing"):
+that can affect performance, on the reference machine (Docs/DeveloperGuide.md, "Perf tests"):
 
     python Tools/PerfStability.py --runs 5                    # ctest --preset windows-release -L perf, five times
     python Tools/PerfStability.py --preset linux-release --runs 3

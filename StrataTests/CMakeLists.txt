@@ -17,7 +17,7 @@ set_target_properties(StrataTestLibrary PROPERTIES CXX_VISIBILITY_PRESET hidden 
 #   NewerSDK    describes itself with a larger StrataScriptModuleAPI, as a module of a newer SDK would
 #   Dependent   links StrataTestScriptDependency, a library built into a directory of its own
 #   FeatureTest the scripts of the feature test project (FeatureTest/Scripts), which exercise every SDK and host API
-#               function in the feature scene (see AGENTS.md, "Testing")
+#               function in the feature scene (see Docs/DeveloperGuide.md, "Feature test")
 set(STRATA_TEST_SCRIPTS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/Scripts")
 add_library(StrataTestScriptDependency SHARED "${STRATA_TEST_SCRIPTS_DIR}/Dependency/ScriptDependency.cpp")
 strata_configure_target(StrataTestScriptDependency)
@@ -68,7 +68,8 @@ if(NOT TARGET StrataEditorUI)
 	list(REMOVE_ITEM STRATA_TEST_SOURCES ${STRATA_EDITOR_TEST_SOURCES})
 endif()
 
-# The perf tests (src/Perf, see AGENTS.md "Testing") write their results here, one file per configuration.
+# The perf tests (src/Perf, see Docs/DeveloperGuide.md, "Perf tests") write their results here, one file per
+# configuration.
 set(STRATA_PERF_RESULTS_DIR "${CMAKE_BINARY_DIR}/PerfResults")
 
 add_executable(StrataTests ${STRATA_TEST_SOURCES})
@@ -116,7 +117,8 @@ if(WIN32)
 	target_sources(StrataTests PRIVATE "${PROJECT_SOURCE_DIR}/CMake/Strata.manifest")
 endif()
 
-# The feature test (FeatureTest/, see AGENTS.md "Testing") runs as its own test; its GPU suite runs with the GPU tests.
+# The feature test (FeatureTest/, see Docs/DeveloperGuide.md, "Feature test") runs as its own test; its GPU suite runs
+# with the GPU tests.
 set(STRATA_FEATURE_TEST_SUITES "FeatureTest,Editor.FeatureTest")
 
 add_test(NAME StrataTests.Core

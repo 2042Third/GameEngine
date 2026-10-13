@@ -1,7 +1,8 @@
 #pragma once
 
 // Strata script SDK. Game scripts include this header only; it builds on the C ABI in ScriptABI.h and never touches
-// engine headers. See Script.h for the script lifecycle and AGENTS.md ("Scripting") for how modules are built.
+// engine headers. See Script.h for the script lifecycle and Docs/DeveloperGuide.md ("Building and loading scripts") for
+// how modules are built.
 
 #include "StrataScript/ScriptABI.h"
 

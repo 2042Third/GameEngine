@@ -87,5 +87,5 @@ otherwise the cached world transforms go stale and Debug runs assert.
 
 ## 5. Document
 
-Mention the component where the module is described in `AGENTS.md` if it changes conventions. Its
-reflection description, categories and tooltips are the user-facing documentation.
+Mention the component where its module is described in `Docs/DeveloperGuide.md`, and in `AGENTS.md` if it changes a
+rule. Its reflection description, categories and tooltips are the user-facing documentation.

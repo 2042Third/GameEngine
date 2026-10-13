@@ -15,7 +15,7 @@ SDK in `StrataScriptCore/Include/StrataScript/` - never engine headers. Include 
 The SDK (`StrataScriptCore/`) and Strata's executables (StrataEditor, StrataRuntime, StrataCLI) are in the Strata
 folder of a downloaded release; in a source checkout the SDK is at its root and the executables are in
 `build/<preset>/bin/<Config>/`. In a source checkout, the engine-side rules (ABI, adding host functions) are in
-AGENTS.md, section "Scripting".
+AGENTS.md, section "Scripting", and their details in Docs/DeveloperGuide.md, section "Scripting".
 
 ## A script class
 
@@ -578,7 +578,7 @@ running version in place. Field values survive the reload when the field keeps i
 
 Prefer static libraries for third-party code in scripts. Shared libraries the module links against must sit next to the
 module file (Windows) or be reachable through its RUNPATH (Linux, macOS; `$ORIGIN` does not work under hot reload,
-because the module then runs from a private copy; AGENTS.md in a source checkout has the details).
+because the module then runs from a private copy; Docs/DeveloperGuide.md in a source checkout has the details).
 
 ## Testing scripts
 

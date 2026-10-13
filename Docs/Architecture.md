@@ -1,9 +1,10 @@
 # Strata architecture
 
 How the engine, the editor, the runtime and the tools fit together, for an engineer joining the project. Rules and
-conventions (code style, testing, the review checklist) are in [AGENTS.md](../AGENTS.md) and are not repeated here;
-task playbooks are the skills in [.claude/skills/](../.claude/skills/). Every section names the code it describes:
-when that code changes, update this file in the same commit (AGENTS.md, review checklist item 5).
+conventions (code style, testing, the review checklist) are in [AGENTS.md](../AGENTS.md), their details in
+[DeveloperGuide.md](DeveloperGuide.md), and are not repeated here; task playbooks are the skills in
+[.claude/skills/](../.claude/skills/). Every section names the code it describes: when that code changes, update this
+file in the same commit (AGENTS.md, review checklist item 5).
 
 Paths are relative to the repository root. Engine modules live in `Strata/src/Strata/<Module>/`, so `Scene/Scene.h`
 means `Strata/src/Strata/Scene/Scene.h`.
@@ -63,7 +64,7 @@ when the commit does).
 | script modules | `MODULE` libraries | Game code: the tests' modules and every game project's `Scripts/`. |
 
 CTest runs the `StrataTests` suites in groups selected by suite name (`StrataTests/CMakeLists.txt`; the groups and
-labels are listed in AGENTS.md, "Testing"). The perf lab is one of them: suites `Perf.*` and `PerfGPU.*`
+labels are listed in DeveloperGuide.md, "Testing"). The perf lab is one of them: suites `Perf.*` and `PerfGPU.*`
 (`StrataTests/src/Perf/`) measure metrics against the budgets in `StrataTests/Perf/Budgets.json`, in Release and Dist
 only, confirm a metric over its budget by measuring it again before failing (`Perf::CheckBudgetsConfirmed`), and write
 `<build>/PerfResults/<config>.json` with every attempt; `Tools/PerfStability.py` runs them repeatedly and reports how
@@ -230,8 +231,8 @@ skin's joints in the skeleton, their inverse bind matrices and the bind-pose ext
 format version 2, version 1 still loads), `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`;
 texture formats, the cooked texture format and the block decoders are `TextureFormat`, `CookedTexture` and
 `BlockCompression` (see [Texture cooking](#texture-cooking)). Also `TextRenderer`/`FontAtlas`, `DebugDraw`/`SceneGizmos`, `TextureReadback`
-(non-blocking GPU readback) and `ImageWriter` (PNG). Conventions and rules: AGENTS.md, "Architecture rules" and
-"Rendering".
+(non-blocking GPU readback) and `ImageWriter` (PNG). Conventions and rules: AGENTS.md, "Architecture rules", and
+DeveloperGuide.md, "Rendering".
 
 **Physics** (`Physics/`). `PhysicsSystem` is the "Physics" scene system (Play and Simulate). `PhysicsWorld` builds a
 Jolt world from RigidBody and collider components and steps it; `PhysicsRuntime` reference-counts Jolt's global
@@ -308,7 +309,7 @@ air), ground normal, velocity and entity are `CharacterState` (`ICharacterContro
 API; mixing runs on miniaudio's audio thread, or is pulled with `AdvanceNullDevice`/`ReadFrames` without a device).
 `AudioClip` is immutable sound data, decompressed or streamed; `AudioClipAsset` is its asset, `AudioSource` a voice
 with settings, and `AudioSystem` the "Audio" scene system (Play only), which offers the scene service `IAudioPlayback`;
-the module registers the engine service `IAudioOutput` (master volume). Details: AGENTS.md, "Audio".
+the module registers the engine service `IAudioOutput` (master volume). Details: DeveloperGuide.md, "Audio".
 
 **Animation** (`Animation/`). Skeletal animation: the assets `Skeleton` (joint names, parents in topological order, rest
 pose; the cooked `STSK` form), `AnimationClip` (per-joint translation, rotation and scale channels with step, linear and
@@ -340,7 +341,7 @@ buffer (`SceneRendererSpecification::EntityIDs`: games do not pick by pixel). Se
 `Platform/Windows/WindowsSocket.cpp` and `Platform/Posix/PosixSocket.cpp`), `JsonRpc` (newline-delimited JSON-RPC
 2.0), `RpcServer` (network thread, `RpcAuthentication` handshake, handlers on the main thread), `RpcClient`
 (synchronous) and `EditorSession` (session files and discovery). Used by editor automation and StrataCLI; the
-runtime does not use it. Protocol and security model: AGENTS.md, "Automation (editor RPC + MCP)".
+runtime does not use it. Protocol and security model: DeveloperGuide.md, "Automation (editor RPC + MCP)".
 
 **ImGui** (`ImGui/`). `ImGuiLayer` owns the Dear ImGui context; `Application` pushes it as an overlay when ImGui is
 enabled and a window and graphics device exist, and calls `Begin`/`End` around the layers' `OnImGuiRender`. It styles
@@ -892,7 +893,7 @@ the runner's completions on the main thread.
 ## Asset pipeline
 
 Rules (handles in `.meta`, the cache, importer version bumps, `ReadImportDependency`, sub-asset and built-in
-handles) are in AGENTS.md, "Asset pipeline". The data flow:
+handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
 
 ```text
  Editor                                                          Shipped game
@@ -1828,15 +1829,16 @@ system, not to entities: a character's joints add no entities and no transform c
   (`ISkinningPoses::GetRenderTransforms`, see [Render scene](#render-scene)), computed each update from the scene's
   transforms. The editor keeps one for its edited scene (`EditorContext::GetAnimationPreview`, `animation.preview`).
 - **Editor.** `animation.createController`, `animation.setController`, `animation.info` and `animation.preview` give
-  agents the whole workflow without hand-written JSON (AGENTS.md, "Editor"); the Asset tab edits controllers as tables
-  (`UI/AnimationAssetViews`; each field has a least width in font sizes, which is also its share of a wider table, and
-  a tab narrower than a table's least width scrolls it sideways instead of squeezing names and numbers into ellipses)
-  and shows skeletons and clips, and the Inspector shows a playing animator's state and parameters.
+  agents the whole workflow without hand-written JSON (DeveloperGuide.md, "Animation commands"); the Asset tab edits
+  controllers as tables (`UI/AnimationAssetViews`; each field has a least width in font sizes, which is also its share
+  of a wider table, and a tab narrower than a table's least width scrolls it sideways instead of squeezing names and
+  numbers into ellipses) and shows skeletons and clips, and the Inspector shows a playing animator's state and
+  parameters.
 
 ## Scripting
 
-Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; writing scripts is the
-`strata-scripting` skill. The layers:
+Rules for the ABI, host functions and the SDK are in AGENTS.md and DeveloperGuide.md, "Scripting"; writing scripts
+is the `strata-scripting` skill. The layers:
 
 ```text
  game code (Script subclasses)    StrataScriptCore/Include/StrataScript/*.h   C++ SDK, header-only
@@ -1976,11 +1978,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   (Inter, Inter SemiBold and JetBrains Mono embedded with `strata_embed_file`, Lucide's icons merged into the Inter
   fonts' Private Use Area, and behind them the system's fonts for Chinese, Japanese and Korean, read on an I/O thread)
   and the widget kit (`UI/Widgets`), whose widgets record their rectangles in `UI/ItemProbe`.
-  Rules for UI code: AGENTS.md, "Editor UI rules". **Idle throttling**: after drawing, `EditorLayer::UpdateFrameRate`
-  sets the cap to 0 (full rate) while anything happens and to 30 (10 unfocused) frames per second otherwise; headless,
-  `--frames` and command-script runs are never throttled. The frame time shown (status bar, viewport stats,
-  `editor.status`) is `Application::GetLastFrameWorkTime` averaged over 60 frames: a frame's CPU time without the waits
-  for the GPU, the display and the pacer, which panels get in `EditorPanelContext::Frame`. **Instruments**: the
+  Rules for UI code: DeveloperGuide.md, "Editor UI rules". **Idle throttling**: after drawing,
+  `EditorLayer::UpdateFrameRate` sets the cap to 0 (full rate) while anything happens and to 30 (10 unfocused) frames
+  per second otherwise; headless, `--frames` and command-script runs are never throttled. The frame time shown (status
+  bar, viewport stats, `editor.status`) is `Application::GetLastFrameWorkTime` averaged over 60 frames: a frame's CPU
+  time without the waits for the GPU, the display and the pacer, which panels get in `EditorPanelContext::Frame`.
+  **Instruments**: the
   Streaming panel (`Panels/StreamingPanel`) and the Performance panel (`Panels/PerformancePanel`) are closed until the
   status bar's assets and frame pills (or the View menu) open them, docked beside the Console (`DockNewToolPanels` for
   layouts saved before them: it places panels closed by default the first time they open), and so is the **Activity
@@ -2053,7 +2056,8 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   log, play, selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
   `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`) and
   `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel` and `editor.showDialog` (the
-  export, project, recovery, script and about dialogs), the commands about its window. Conventions: AGENTS.md, "Editor".
+  export, project, recovery, script and about dialogs), the commands about its window. Conventions:
+  DeveloperGuide.md, "Command conventions".
   Every command has a kind (`EditorCommandKind`: Edit, the default, Query or Session), which `editor.commands` lists and
   replays use (`Editor.Journal` lists every built-in command's kind, so a new one is a decision), and queries whose
   results follow the editor's session rather than the project's content (the selection, `editor.status`, the journal,
@@ -2697,7 +2701,7 @@ black for want of a scene. Exit codes: 1 when the game cannot start, 2 when
 the scripts crashed in a headless run (a windowed game keeps running without scripts), otherwise the code the game
 quit with. Exported games are the end-to-end check of the whole pipeline: the CTest export chain
 (`StrataEditor.Export`, `StrataRuntime.Smoke`, ...) is listed in the `strata-build-test` skill, the feature test
-runners in AGENTS.md, "Testing".
+runners in DeveloperGuide.md, "Feature test".
 
 **The installed layout.** `cmake --install` and `cpack` (`CMake/StrataPackaging.cmake`, included by the root
 `CMakeLists.txt` when the editor, the runtime and the CLI are built) lay Strata out as one folder, which is what a
@@ -2714,4 +2718,4 @@ depends on where Strata was built. Archives are named `Strata-<STRATA_PACKAGE_VE
 version, or it with a pre-release suffix the release workflow passes; configuring refuses another), with that folder at
 their top. `StrataEditor.Install` installs each build and makes a game with the installed editor alone
 (`StrataTests/Editor/InstallEndToEnd.cmake`); `.github/workflows/release.yml` builds, tests, packs and publishes the
-archives (AGENTS.md, "Releases").
+archives (DeveloperGuide.md, "Releases").
