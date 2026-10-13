@@ -307,6 +307,13 @@ namespace Strata
 		// the queued request to this priority). During a hot reload the previous version is returned until the new one is
 		// ready.
 		Ref<Asset> GetAsset(AssetHandle handle, AssetPriority priority = AssetPriority::Normal);
+		// What GetAsset does for each of `handles` (distinct) when every one is ready and its loaded object is still the one
+		// in `expected` (compared by ownership, so a new object at a freed one's address is another object), under one lock
+		// of the manager instead of one per handle: each counts as used in this frame (residency's recency order and
+		// GetAssetCalls). For callers that ask for the same loaded assets frame after frame (a renderer's still frames,
+		// AssetResolveCache::Replay). Returns false, changing nothing, when one is not ready, was replaced, or waits for a
+		// request (dependencies deferred while it was only prefetched): the caller then asks for them one by one.
+		bool TouchLoadedAssets(std::span<const AssetHandle> handles, std::span<const std::weak_ptr<Asset>> expected);
 		// The loaded object (the previous version during a reload), or null, without requesting anything: no load starts and
 		// the asset does not count as used (residency's recency order and GetAssetCalls stay as they are). For tools that
 		// observe streaming without changing it, such as the editor's debug views; code that draws or plays an asset requests
@@ -753,6 +760,7 @@ namespace Strata
 		std::unordered_map<std::string, AssetHandle> m_PathIndex; // Path -> top-level asset handle
 		uint64_t m_TotalLoadsCompleted = 0;
 		uint64_t m_GetAssetCalls = 0; // Guarded by m_Mutex
+		std::vector<AssetEntry*> m_TouchedEntries; // TouchLoadedAssets' (guarded by m_Mutex; kept for its capacity)
 		uint64_t m_NextGeneration = 1; // Guarded by m_Mutex
 		Ref<LoadState> m_LoadState;
 		AssetStreamingQueue m_Queue;

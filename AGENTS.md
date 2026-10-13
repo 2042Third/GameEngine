@@ -1431,8 +1431,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   above 5% of the viewport height, Normal below), those within `SceneRendererSpecification::PrefetchDistance` at Low;
   each asset is looked up once per frame (`AssetResolveCache`), and the cache's references end with the frame (no mesh,
   material or texture it resolved, and not the asset manager, is held once `Render` returns), so what leaves the view
-  becomes evictable, also for a renderer that stops rendering. Two caches keep assets across frames: `SceneRenderer`'s
-  environment cache holds the sky light's environment map until the environment changes (the maps computed from a map
+  becomes evictable, also for a renderer that stops rendering. A frame that uses the same material slots the same ways as
+  the one before (still frames, and views that move over the same materials) takes their data over when the materials
+  and textures are the loaded objects that frame found and the textures' bindless slots still hold them
+  (`SceneRenderer::ReuseResolvedMaterials`, `BindlessTextureTable::AreSlotsUnchanged`; `SceneRendererStats::ReusedMaterials`),
+  looking them up again in one call (`AssetResolveCache::Replay`, `AssetManagerBase::TouchLoadedAssets`). Loaded
+  materials are never changed in place: an edit publishes a new object (`ReplaceLoadedAsset`). Two caches keep assets
+  across frames: `SceneRenderer`'s environment cache holds the sky light's environment map until the environment changes (the maps computed from a map
   are shared by every renderer lighting with it, so a renderer that starts later, such as a capture renderer, takes them
   over after the map dropped to its mip tail; until one has computed them it holds the map whole in the streamer,
   `TextureStreamer::Hold`, also through frames it does not draw), and `TextRenderer`'s glyph

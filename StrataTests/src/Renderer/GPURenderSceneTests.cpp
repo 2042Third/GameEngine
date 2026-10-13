@@ -3,6 +3,7 @@
 #include "Asset/AssetTestUtils.h"
 #include "Perf/StressProject.h"
 #include "Renderer/MeshTestUtils.h"
+#include "Renderer/TextureStreamingTestUtils.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Renderer/RenderScene.h"
@@ -317,6 +318,124 @@ TEST_SUITE("GPU.RenderScene")
 		CHECK(stats.RequestsByVisibility == distinct);
 		CHECK(calls <= distinct);
 		CHECK(stats.GetAssetCalls == calls);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Frames that use the same materials take their data over from the frame before; what changed is resolved again")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		// Two materials with textures of their own, read from a pack: loaded objects of a pack can be replaced, as editors
+		// publish the documents they edit.
+		constexpr AssetHandle c_RedTexture(0xD100);
+		constexpr AssetHandle c_RedMaterial(0xD101);
+		constexpr AssetHandle c_BlueTexture(0xD102);
+		constexpr AssetHandle c_BlueMaterial(0xD103);
+		MaterialProperties red = UnlitColor(glm::vec4(1.0f));
+		red.BaseColorMap = c_RedTexture;
+		MaterialProperties blue = UnlitColor(glm::vec4(1.0f));
+		blue.BaseColorMap = c_BlueTexture;
+		const std::filesystem::path pack = WriteStreamingPack({
+			StreamingPackAsset { c_RedTexture, AssetType::Texture, "Textures/Red.png", CookSolidTexture(4, { 255, 0, 0, 255 }) },
+			StreamingPackAsset { c_RedMaterial, AssetType::Material, "Materials/Red.stmat", SerializeMaterial(red) },
+			StreamingPackAsset { c_BlueTexture, AssetType::Texture, "Textures/Blue.png", CookSolidTexture(4, { 0, 0, 255, 255 }) },
+			StreamingPackAsset { c_BlueMaterial, AssetType::Material, "Materials/Blue.stmat", SerializeMaterial(blue) } });
+		std::string error;
+		const Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(pack, &error);
+		REQUIRE_MESSAGE(manager, error);
+		AssetManager::SetActive(manager);
+
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		const glm::vec3 leftPosition(-1.2f, 0.0f, 0.0f);
+		const glm::vec3 rightPosition(1.2f, 0.0f, 0.0f);
+		AddMesh(scene, BuiltinAssets::CubeMesh, c_RedMaterial, leftPosition, "Left");
+		Entity right = AddMesh(scene, BuiltinAssets::CubeMesh, c_BlueMaterial, rightPosition, "Right");
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 5.0f), glm::vec3(0.0f));
+		const glm::uvec2 left = ProjectToPixel(camera, leftPosition + glm::vec3(0.0f, 0.0f, 0.5f), c_Size);
+		const glm::uvec2 rightPixel = ProjectToPixel(camera, rightPosition + glm::vec3(0.0f, 0.0f, 0.5f), c_Size);
+		uint64_t calls = 0; // The asset manager's lookups during the latest frame
+		const auto frame = [&](const SceneCamera& view)
+		{
+			manager->Update();
+			const uint64_t before = manager->GetStats().GetAssetCalls;
+			ReadbackImage image = RenderToImage(renderer, scene, view);
+			calls = manager->GetStats().GetAssetCalls - before;
+			return image;
+		};
+		const auto settle = [&]()
+		{
+			for (int attempt = 0; attempt < 200; attempt++)
+			{
+				frame(camera);
+				if (renderer.GetStats().PendingAssets == 0 && !manager->HasPendingLoads())
+					return;
+			}
+			FAIL("The scene's assets did not load");
+		};
+		settle();
+		frame(camera);
+
+		// A still frame: the materials' data is the frame before's, their assets looked up in one call; the picture and the
+		// statistics are those of a renderer that resolves them one by one (a new one, which has no frame before).
+		SceneRenderer fresh;
+		fresh.SetViewportSize(c_Size, c_Size);
+		const ReadbackImage resolved = RenderToImage(fresh, scene, camera);
+		const SceneRendererStats resolvedStats = fresh.GetStats();
+		REQUIRE(resolvedStats.ReusedMaterials == 0);
+		const ReadbackImage still = frame(camera);
+		const SceneRendererStats& stats = renderer.GetStats();
+		CHECK(stats.ReusedMaterials == 2);
+		CHECK(stats.Materials == 2);
+		CHECK(MaxDifference(still, resolved) == 0);
+		CHECK(GetPixelRGBA8(still, left.x, left.y).r > 200);
+		CHECK(GetPixelRGBA8(still, rightPixel.x, rightPixel.y).b > 200);
+		CHECK(stats.GetAssetCalls == calls);
+		CHECK(stats.GetAssetCalls == resolvedStats.GetAssetCalls);
+		CHECK(stats.RequestsByVisibility == resolvedStats.RequestsByVisibility);
+		CHECK(stats.PendingAssets == 0);
+		CHECK(stats.MaterialBytesUploaded == 0);
+
+		// The view moved: the same materials, used the same ways.
+		frame(LookAt(glm::vec3(0.3f, 0.2f, 5.0f), glm::vec3(0.0f)));
+		CHECK(renderer.GetStats().ReusedMaterials == 2);
+
+		// A material replaced (an edit published): resolved again at once, then taken over again.
+		MaterialProperties edited = UnlitColor(glm::vec4(1.0f));
+		edited.BaseColorMap = c_BlueTexture;
+		REQUIRE(manager->ReplaceLoadedAsset(c_RedMaterial, Material::Create(edited)));
+		ReadbackImage image = frame(camera);
+		CHECK(renderer.GetStats().ReusedMaterials == 0);
+		CHECK(GetPixelRGBA8(image, left.x, left.y).b > 200);
+		CHECK(GetPixelRGBA8(image, left.x, left.y).r < 50);
+		CHECK(renderer.GetStats().MaterialBytesUploaded > 0);
+		image = frame(camera);
+		CHECK(renderer.GetStats().ReusedMaterials == 2);
+		CHECK(GetPixelRGBA8(image, left.x, left.y).b > 200);
+
+		// A texture unloaded: the materials that show it are resolved again (the loading texture stands in), until it is back.
+		manager->UnloadAsset(c_BlueTexture);
+		image = frame(camera);
+		CHECK(renderer.GetStats().ReusedMaterials == 0);
+		CHECK(GetPixelRGBA8(image, rightPixel.x, rightPixel.y).r > 200); // White while it loads
+		settle();
+		image = frame(camera);
+		CHECK(renderer.GetStats().ReusedMaterials == 2);
+		CHECK(GetPixelRGBA8(image, rightPixel.x, rightPixel.y).b > 200);
+		CHECK(GetPixelRGBA8(image, rightPixel.x, rightPixel.y).r < 50);
+
+		// A material no longer used: the frame resolves the other one again, the next takes it over.
+		right.SetActive(false);
+		frame(camera);
+		CHECK(renderer.GetStats().ReusedMaterials == 0);
+		CHECK(renderer.GetStats().Materials == 1);
+		frame(camera);
+		CHECK(renderer.GetStats().ReusedMaterials == 1);
+		CHECK(renderer.GetStats().Materials == 1);
+
+		AssetManager::SetActive(nullptr);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

@@ -1544,7 +1544,8 @@ AssetResolveCache::BeginFrame    the frame's asset manager
 CullView                         SpatialIndex::QueryFrustum; screen fractions and request priorities (parallel chunks);
                                  meshes of unknown bounds as if in view; QuerySphere for the prefetch distance
 FindShadowCasters                cascade boxes; QueryPlanes per cascade, then the exact test in light space
-ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident
+ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident; materials used
+                                 as in the frame before: its data, their assets looked up in one call (below)
 GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches
 UploadSceneData                  changed instances, changed materials, the changed range of each draw list
 ReleaseFrameAssets               (when Render returns, however it ends) every reference the frame took, and the manager
@@ -1658,6 +1659,21 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   long as the fonts are loaded.
   Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what `GetOpaqueBatches` reports after the frame holds no
   pointers.
+- **Material data taken over by still frames** (`SceneRenderer::MaterialResolution`). Resolving a material builds its GPU
+  data from its properties and the bindless slots of its textures, one lookup per material and texture: 0.58 of the
+  1.0 ms a still frame of 3,000 streamed textures took (`PerfGPU.Renderer.IdleFrame3kStreamedTextures`). A frame whose
+  material slots, their uses and their handles are those of the latest frame that resolved them one by one takes that
+  frame's data, flags and texture maps over when nothing they come from changed: the materials and textures are still
+  the loaded objects it found (compared by ownership under one lock of the manager, `AssetManagerBase::TouchLoadedAssets`,
+  which also stamps them as used, as the lookups would) and no bindless slot of those textures was released since
+  (`BindlessTextureTable::AreSlotsUnchanged`: a texture that streams levels moves to a new slot and releases its old
+  one, so data naming the old slot would sample a recycled descriptor and can lose the device). The lookups are those
+  the resolving frame recorded (`AssetResolveCache::BeginRecording`, `EndRecording`), replayed with the statistics they
+  counted (`Replay`); frames that drew a material as the default material, found an asset loading or counted one
+  pending are not replayed. Loaded materials are not changed in place (edits publish new objects), so their properties
+  need no comparison. The camera takes no part: views that move over the same materials reuse them too. Still frames of
+  3,000 streamed textures went from 1.01-1.06 ms to 0.61 ms, of 10,000 materials from 1.33 to 0.61 ms, and the editor's
+  frames of 10,000 materials from 1.82 to 0.99 ms.
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same
   result on any number of threads), then sorted with a stable radix sort (`Core/RadixSort.h`) of 64-bit keys: cascade,
   alpha mask, winding, culling, mesh slot, submesh and level of detail. The sort reads the keys once to find the bytes
@@ -1665,7 +1681,7 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   material is not in the key, so the instances of a mesh share a draw call whatever their materials: shaders read
   `u_Materials[instance.MaterialIndex]` (`SceneRendererSpecification::BatchAcrossMaterials` off splits batches by
   material, for comparisons). Transparent surfaces stay one draw each, back to front. Material data (by slot) is built
-  every frame for the materials drawn and uploaded where it changed.
+  for the materials drawn (or taken over, above) and uploaded where it changed.
 - **A still frame** updates no proxy and uploads no instance, material or draw list (`SceneRendererStats::ProxyUpdates`,
   `InstanceBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
   on screen and texture tiling (`GetVisibleMaterials`, and their loaded texture maps, `GetVisibleTextures`, for mip

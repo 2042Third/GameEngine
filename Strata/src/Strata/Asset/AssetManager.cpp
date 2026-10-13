@@ -343,6 +343,36 @@ namespace Strata
 		return current;
 	}
 
+	bool AssetManagerBase::TouchLoadedAssets(std::span<const AssetHandle> handles, std::span<const std::weak_ptr<Asset>> expected)
+	{
+		ST_CORE_ASSERT(handles.size() == expected.size(), "TouchLoadedAssets needs an expected object per handle");
+		if (handles.size() != expected.size())
+			return false;
+
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		// Everything is checked before anything is touched, so a refusal changes nothing.
+		m_TouchedEntries.clear();
+		for (size_t index = 0; index < handles.size(); index++)
+		{
+			auto it = m_Entries.find(handles[index]);
+			if (it == m_Entries.end())
+				return false;
+			AssetEntry& entry = it->second;
+			const std::weak_ptr<Asset>& object = expected[index];
+			// GetAsset requests the load of an asset that is not ready, and of one whose dependencies wait for a request.
+			if (entry.State != AssetState::Ready || entry.DependenciesDeferred || !entry.Loaded || object.owner_before(entry.Loaded)
+				|| entry.Loaded.owner_before(object))
+				return false;
+			m_TouchedEntries.push_back(&entry);
+		}
+		for (AssetEntry* entry : m_TouchedEntries)
+		{
+			m_GetAssetCalls++;
+			TouchLocked(*entry);
+		}
+		return true;
+	}
+
 	Ref<Asset> AssetManagerBase::PeekLoadedAsset(AssetHandle handle) const
 	{
 		std::scoped_lock<std::mutex> lock(m_Mutex);
