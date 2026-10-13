@@ -49,6 +49,10 @@ namespace Strata::UI
 		static bool IsLoadingFallback();
 		// Whether fallback fonts are merged into the current atlas.
 		static bool HasFallback();
+		// Changes whenever the glyphs of the fonts may have changed at the same size (Load, a merge of the fallback fonts,
+		// after which text in those scripts is wider than ImGui's fallback character): widths of text measured before, and
+		// kept, are to be measured again.
+		static uint64_t GetGlyphGeneration();
 	};
 
 	// Pushes one of the editor's fonts at a size of the type scale; pair it with ImGui::PopFont(). Before the fonts are

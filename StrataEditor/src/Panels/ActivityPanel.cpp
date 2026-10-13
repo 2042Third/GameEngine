@@ -179,17 +179,20 @@ namespace Strata
 	void ActivityPanel::RebuildRows(const CommandJournal& journal)
 	{
 		const std::string filter = StringUtils::ToLower(m_Filter);
-		// The font size too: the widths of the results follow the UI scale.
+		// The font size and glyphs too: the widths of the results follow the UI scale, and text in Chinese, Japanese and Korean
+		// gets wider once the system's fonts for it are merged (measured before, it showed ImGui's fallback character).
 		const float fontSize = ImGui::GetFontSize();
-		const std::string key = fmt::format("{}|{}|{}|{}", m_SourceFilter, m_EditsOnly, fontSize, filter);
+		const uint64_t glyphs = UI::EditorFonts::GetGlyphGeneration();
+		const std::string key = fmt::format("{}|{}|{}|{}|{}", m_SourceFilter, m_EditsOnly, fontSize, glyphs, filter);
 		if (journal.GetVersion() == m_RowsVersion && key == m_RowsKey)
 			return;
 		m_RowsVersion = journal.GetVersion();
 		m_RowsKey = key;
-		if (fontSize != m_ResultWidthsFontSize)
+		if (fontSize != m_ResultWidthsFontSize || glyphs != m_ResultWidthsGlyphs)
 		{
 			m_ResultWidths.clear();
 			m_ResultWidthsFontSize = fontSize;
+			m_ResultWidthsGlyphs = glyphs;
 		}
 
 		const std::deque<CommandJournalEntry>& entries = journal.GetEntries();

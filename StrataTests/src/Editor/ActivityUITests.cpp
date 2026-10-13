@@ -8,10 +8,12 @@
 #include "Panels/ActivityPanel.h"
 #include "Panels/ViewportPanel.h"
 #include "TestHelpers.h"
+#include "UI/EditorFonts.h"
 #include "UI/ItemProbe.h"
 #include "UI/Theme.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Platform.h>
 #include <Strata/Network/EditorSession.h>
 #include <Strata/Network/RpcClient.h>
 
@@ -362,6 +364,46 @@ TEST_SUITE("Editor.UI.Activity")
 				CHECK(table->Columns[2].WidthGiven >= 7.5f * ImGui::GetFontSize());
 			}
 		}
+	}
+
+	TEST_CASE("Results in Chinese, Japanese and Korean are measured again once the system's fonts for them are merged")
+	{
+		// An undo step naming an entity in Han characters, listed before the system's fonts were read: measured then, each of
+		// them was ImGui's fallback character, half as wide. The Result column kept that width and cut the text.
+		HarnessEditor editor({ ImVec2(3840.0f, 2054.0f), 1.0f }, WithFeatureProject("ActivityFallbackFonts"));
+		editor.Frames(2);
+		REQUIRE(editor.Context().HasProject());
+		REQUIRE_FALSE(UI::EditorFonts::HasFallback());
+		// "Rename 'Wall' to '東壁西壁北壁南壁大門'": Han characters only, which every system font for these scripts has.
+		const std::string name = "\xE6\x9D\xB1\xE5\xA3\x81\xE8\xA5\xBF\xE5\xA3\x81\xE5\x8C\x97\xE5\xA3\x81\xE5\x8D\x97\xE5\xA3\x81"
+								 "\xE5\xA4\xA7\xE9\x96\x80";
+		editor.Run("entity.create", { { "name", "Wall" } });
+		const UUID wall = editor.Context().GetEditScene()->FindEntityByName("Wall").GetUUID();
+		editor.Run("entity.rename", { { "entity", wall.ToString() }, { "name", name } });
+		editor.Run("editor.showPanel", { { "panel", "Activity" } });
+		editor.Frames(3);
+		const uint64_t rename = FindLatest(editor.Context().GetJournal(), "entity.rename");
+		const std::string resultKey = fmt::format("Activity.Result.{}", rename);
+		std::optional<UI::ItemProbe::Item> result = UI::ItemProbe::Find(resultKey);
+		REQUIRE(result);
+		const float widthBefore = result->Max.x - result->Min.x;
+
+		UI::EditorFonts::BeginLoadingFallback();
+		REQUIRE(editor.FramesUntil([]() { return !UI::EditorFonts::IsLoadingFallback(); }));
+		editor.Frames(3);
+		if (Platform::FindFallbackFontFiles().empty())
+		{
+			MESSAGE("This system has no fonts for Chinese, Japanese and Korean text");
+			return;
+		}
+		REQUIRE(UI::EditorFonts::HasFallback());
+		result = UI::ItemProbe::Find(resultKey);
+		REQUIRE(result);
+		ImGuiTable* table = FindTable(editor.FindPanelWindow(EditorPanels::c_Activity), 5);
+		REQUIRE(table);
+		// Wider now (the merged glyphs), and still whole in its column.
+		CHECK(result->Max.x - result->Min.x > widthBefore + 3.0f * ImGui::GetFontSize());
+		CHECK(result->Max.x <= table->Columns[3].ClipRect.Max.x);
 	}
 
 	TEST_CASE("A panel asked for while a dialog waits for the person opens behind it, and comes forward after")

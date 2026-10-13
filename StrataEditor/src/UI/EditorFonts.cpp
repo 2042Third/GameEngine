@@ -63,6 +63,8 @@ namespace Strata::UI
 		// created where a destroyed one was is never taken for it.
 		ImFontAtlas* s_FallbackRequestedAtlas = nullptr;
 		ImFontAtlas* s_FallbackAtlas = nullptr;
+		// Counts the changes of the glyphs the fonts have (GetGlyphGeneration).
+		uint64_t s_GlyphGeneration = 0;
 
 		ImFont* AddFont(ImFontAtlas& atlas, std::span<const uint8_t> data, const char* name, ImFontConfig config, float size)
 		{
@@ -122,6 +124,7 @@ namespace Strata::UI
 		s_Fonts = { regular, semiBold, mono };
 		s_FallbackRequestedAtlas = nullptr;
 		s_FallbackAtlas = nullptr;
+		s_GlyphGeneration++;
 		return true;
 	}
 
@@ -189,6 +192,7 @@ namespace Strata::UI
 		if (!merged)
 			return false;
 		s_FallbackAtlas = &atlas;
+		s_GlyphGeneration++;
 		return true;
 	}
 
@@ -200,6 +204,11 @@ namespace Strata::UI
 	bool EditorFonts::HasFallback()
 	{
 		return ImGui::GetCurrentContext() && s_FallbackAtlas == ImGui::GetIO().Fonts;
+	}
+
+	uint64_t EditorFonts::GetGlyphGeneration()
+	{
+		return s_GlyphGeneration;
 	}
 
 	ImFont* EditorFonts::Get(EditorFont font)

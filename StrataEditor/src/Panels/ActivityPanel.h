@@ -71,9 +71,11 @@ namespace Strata
 		std::string m_RowsKey;               // The filters m_Rows was built with
 		// Compact parameters of entries, by id, made once (parameters never change); pruned with the journal's ring.
 		std::unordered_map<uint64_t, std::string> m_ParameterPreviews;
-		// Widths of finished entries' Result texts, by id, at m_ResultWidthsFontSize; pruned with the journal's ring.
+		// Widths of finished entries' Result texts, by id, at m_ResultWidthsFontSize with the glyphs of
+		// m_ResultWidthsGlyphs (EditorFonts::GetGlyphGeneration); pruned with the journal's ring.
 		std::unordered_map<uint64_t, float> m_ResultWidths;
 		float m_ResultWidthsFontSize = 0.0f;
+		uint64_t m_ResultWidthsGlyphs = 0;
 		float m_ResultContentWidth = 0.0f; // The widest Result text of m_Rows
 		uint64_t m_Selected = 0;
 		bool m_ScrollToSelected = false;
