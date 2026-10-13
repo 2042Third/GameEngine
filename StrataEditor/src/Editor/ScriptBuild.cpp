@@ -1,9 +1,11 @@
 #include "Editor/ScriptBuild.h"
 
 #include "Editor/ScriptBuildConfig.h"
+#include "Editor/ScriptToolchain.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/Hash.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
@@ -13,6 +15,7 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <iterator>
 #include <optional>
@@ -95,7 +98,7 @@ namespace Strata
 		// What the configured build tree depends on; a different stamp means the tree must be configured again.
 		nlohmann::json MakeStamp(const ScriptBuildSettings& settings, const std::filesystem::path& sourceDirectory, const std::filesystem::path& binaryDirectory)
 		{
-			return {
+			nlohmann::json stamp = {
 				{ "Generator", settings.Generator },
 				{ "Platform", settings.Platform },
 				{ "Toolset", settings.Toolset },
@@ -105,6 +108,10 @@ namespace Strata
 				{ "EngineDirectory", FileSystem::ToUTF8(settings.EngineDirectory) },
 				{ "SourceDirectory", FileSystem::ToUTF8(sourceDirectory) },
 				{ "BinaryDirectory", FileSystem::ToUTF8(binaryDirectory) } };
+			// Only where one is named, so that the trees of toolchains without one keep their stamps.
+			if (!settings.GeneratorInstance.empty())
+				stamp["GeneratorInstance"] = settings.GeneratorInstance;
+			return stamp;
 		}
 
 		std::string JoinArguments(const std::vector<std::string>& arguments)
@@ -405,6 +412,9 @@ namespace Strata
 			arguments.insert(arguments.end(), { "-A", settings.Platform });
 		if (!settings.Toolset.empty())
 			arguments.insert(arguments.end(), { "-T", settings.Toolset });
+		// The Visual Studio installation the toolchain was found in (several can have the generator's version).
+		if (IsVisualStudio(settings) && !settings.GeneratorInstance.empty())
+			arguments.push_back("-DCMAKE_GENERATOR_INSTANCE=" + settings.GeneratorInstance);
 		// Visual Studio and Xcode pick their own compiler and build tool.
 		const bool ownToolchain = IsVisualStudio(settings) || settings.Generator == "Xcode";
 		if (!ownToolchain && !settings.CXXCompiler.empty())
@@ -510,6 +520,9 @@ namespace Strata
 
 	std::string MakeScriptCMakePresets(const Project& project, const ScriptBuildSettings& settings)
 	{
+		// Preferences are no toolchain: IDEs would get the build machine's.
+		if (settings.FindToolchain)
+			return {};
 		const std::optional<ScriptBuildLocation> location = ResolveScriptBuildLocation(project, settings);
 		if (!location)
 			return {};
@@ -565,7 +578,7 @@ namespace Strata
 		const std::filesystem::path path = directory / c_PresetsFile;
 		const std::string content = MakeScriptCMakePresets(project, settings);
 		if (content.empty())
-			return true; // The project cannot build its scripts here: nothing for an IDE either
+			return true; // The project cannot build its scripts here, or the toolchain is not known yet: nothing for an IDE either
 
 		if (const std::optional<std::string> existing = FileSystem::ReadText(path))
 		{
@@ -845,6 +858,13 @@ namespace Strata
 	// ScriptBuilder
 	////////////////////////////////////////////////////////////////////////////////
 
+	// Filled by the job that looks for a toolchain; read by the main thread once Done.
+	struct ScriptBuilder::ToolchainSearch
+	{
+		std::atomic<bool> Done = false;
+		ScriptToolchainResolution Result;
+	};
+
 	const char* ScriptBuildPhaseToString(ScriptBuildPhase phase)
 	{
 		switch (phase)
@@ -852,6 +872,7 @@ namespace Strata
 			case ScriptBuildPhase::Idle:        return "Idle";
 			case ScriptBuildPhase::Configuring: return "Configuring";
 			case ScriptBuildPhase::Building:    return "Building";
+			case ScriptBuildPhase::FindingToolchain: return "FindingToolchain";
 		}
 		return "Unknown";
 	}
@@ -889,6 +910,65 @@ namespace Strata
 		const std::filesystem::path sourceDirectory = project.GetScriptSourceDirectory();
 		if (!FileSystem::IsRegularFile(sourceDirectory / "CMakeLists.txt"))
 			return fail(fmt::format("The project has no script build: '{}' is missing (script.init creates it)", FileSystem::ToUTF8(sourceDirectory / "CMakeLists.txt")));
+		if (!settings.FindToolchain)
+			return Begin(project, settings, false, outError);
+		// The toolchain found for these settings before serves while it is there: only the first build looks (and one after
+		// the tools changed).
+		if (const ScriptBuildSettings* found = GetFoundToolchain(settings); found && IsScriptToolchainPresent(*found))
+			return Begin(project, *found, false, outError);
+
+		m_Settings = settings;
+		m_PendingProject = CreateScope<Project>(project);
+		m_BuildDirectory.clear();
+		m_Module = project.GetScriptModulePath();
+		m_ModuleExistedBefore = FileSystem::IsRegularFile(m_Module);
+		m_ModuleTimeBefore = FileSystem::GetLastWriteTime(m_Module).value_or(0);
+		m_Configured = false;
+		m_Log.clear();
+		m_OutputLines.Reset();
+		m_StartTime = std::chrono::steady_clock::now();
+		m_LastResult.ID = 0;
+		const uint64_t id = m_NextID++;
+		m_Phase = ScriptBuildPhase::FindingToolchain;
+		ST_INFO("Building the scripts of '{}' (build {}): finding a C++ toolchain on this machine", project.GetConfig().Name, id);
+		m_Log += "Finding a C++ toolchain on this machine\n";
+
+		Ref<ToolchainSearch> search = CreateRef<ToolchainSearch>();
+		m_ToolchainSearch = search;
+		std::function<Scope<ScriptToolchainEnvironment>()> environment = m_ToolchainEnvironment ? m_ToolchainEnvironment
+			: std::function<Scope<ScriptToolchainEnvironment>()>(&CreateSystemScriptToolchainEnvironment);
+		// It runs programs (vswhere, cmake --version) and waits for them: an I/O job, never the frame. A cancelled build drops
+		// the search, which the job alone then holds.
+		JobSystem::SubmitIO([search, settings, environment = std::move(environment)]()
+		{
+			const Scope<ScriptToolchainEnvironment> machine = environment();
+			search->Result = ResolveScriptToolchain(settings, GetScriptToolchainHost(), *machine);
+			search->Done.store(true, std::memory_order_release);
+		});
+		return true;
+	}
+
+	bool ScriptBuilder::Begin(const Project& project, const ScriptBuildSettings& settings, bool counted, std::string* outError)
+	{
+		// What stops a build before it starts a process: a build that already counts (it found its toolchain) finishes as
+		// failed; one that does not is refused, as if it had never started.
+		auto fail = [this, counted, outError](std::string message)
+		{
+			if (counted)
+				Finish(false, message);
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+		auto finishFailed = [this, outError](std::string message)
+		{
+			Finish(false, std::move(message));
+			if (outError)
+				*outError = m_LastResult.Error;
+			return false;
+		};
+
+		const std::filesystem::path sourceDirectory = project.GetScriptSourceDirectory();
 		// Refused before anything is written: the build would fail later with errors that do not name the cause.
 		std::string locationError;
 		const std::optional<ScriptBuildLocation> location = ResolveScriptBuildLocation(project, settings, &locationError);
@@ -910,13 +990,17 @@ namespace Strata
 		m_Settings = settings;
 		m_BuildDirectory = location->BuildDirectory;
 		m_Module = project.GetScriptModulePath();
-		m_ModuleExistedBefore = FileSystem::IsRegularFile(m_Module);
-		m_ModuleTimeBefore = FileSystem::GetLastWriteTime(m_Module).value_or(0);
-		m_Log.clear();
-		m_OutputLines.Reset();
-		m_StartTime = std::chrono::steady_clock::now();
-		m_LastResult.ID = 0;
-		const uint64_t id = m_NextID++;
+		if (!counted)
+		{
+			m_ModuleExistedBefore = FileSystem::IsRegularFile(m_Module);
+			m_ModuleTimeBefore = FileSystem::GetLastWriteTime(m_Module).value_or(0);
+			m_Log.clear();
+			m_OutputLines.Reset();
+			m_StartTime = std::chrono::steady_clock::now();
+			m_LastResult.ID = 0;
+			m_NextID++;
+		}
+		const uint64_t id = m_NextID - 1;
 
 		// The configure step runs when the build tree is new or was configured differently. A tree configured with another
 		// generator cannot be reused, so it is removed first.
@@ -942,21 +1026,51 @@ namespace Strata
 			ST_INFO("[Scripts] {}", location->MovedReason);
 		}
 		if (!configured && !FileSystem::WriteText(m_BuildDirectory / c_StampFile, ""))
-		{
-			Finish(false, fmt::format("Cannot write to the script build directory '{}'", FileSystem::ToUTF8(m_BuildDirectory)));
-			return fail(m_LastResult.Error);
-		}
+			return finishFailed(fmt::format("Cannot write to the script build directory '{}'", FileSystem::ToUTF8(m_BuildDirectory)));
 		if (!StartProcess(arguments, &error))
-		{
-			Finish(false, error);
-			return fail(error);
-		}
+			return finishFailed(error);
 		if (!configured)
 		{
 			// Written once the configure step succeeds; an empty stamp never matches, so a failed configure runs again.
 			m_PendingStamp = JsonUtils::Dump(stamp, 1, '\t') + "\n";
 		}
 		return true;
+	}
+
+	void ScriptBuilder::FinishToolchainSearch()
+	{
+		const Ref<ToolchainSearch> search = std::move(m_ToolchainSearch);
+		m_ToolchainSearch.reset();
+		const Scope<Project> project = std::move(m_PendingProject);
+		m_PendingProject.reset();
+		const ScriptToolchainResolution& resolution = search->Result;
+		if (!resolution.Settings)
+		{
+			// One row for the Problems panel and the notification, saying what to install; the error leads to it.
+			ScriptDiagnostic diagnostic;
+			diagnostic.Severity = "error";
+			diagnostic.Message = resolution.Error;
+			Finish(false, "No C++ toolchain to build the scripts with was found on this machine", false, std::move(diagnostic));
+			return;
+		}
+		m_FoundToolchainPreferences = m_Settings;
+		m_FoundToolchain = resolution.Settings;
+		m_FoundToolchainDescription = resolution.Description;
+		const std::string found = "Found " + resolution.Description;
+		m_Log += found + "\n";
+		ST_INFO("[Scripts] {}", found);
+		// A build that cannot begin finishes as failed there.
+		Begin(*project, *m_FoundToolchain, true, nullptr);
+	}
+
+	const ScriptBuildSettings* ScriptBuilder::GetFoundToolchain(const ScriptBuildSettings& settings) const
+	{
+		return m_FoundToolchain && m_FoundToolchainPreferences == settings ? &*m_FoundToolchain : nullptr;
+	}
+
+	void ScriptBuilder::SetToolchainEnvironment(std::function<Scope<ScriptToolchainEnvironment>()> factory)
+	{
+		m_ToolchainEnvironment = std::move(factory);
 	}
 
 	bool ScriptBuilder::StartProcess(const std::vector<std::string>& arguments, std::string* outError)
@@ -1015,6 +1129,14 @@ namespace Strata
 	{
 		if (!IsRunning())
 			return false;
+		if (m_Phase == ScriptBuildPhase::FindingToolchain)
+		{
+			if (!m_ToolchainSearch->Done.load(std::memory_order_acquire))
+				return false;
+			FinishToolchainSearch();
+			// Finished in this call when no toolchain was found or the build could not begin.
+			return !IsRunning();
+		}
 
 		CollectOutput(false);
 		if (!m_Draining)
@@ -1084,16 +1206,22 @@ namespace Strata
 			CollectOutput(true);
 			m_Process.reset();
 		}
+		// A search that still runs ends on its own; its result is dropped with it.
+		m_ToolchainSearch.reset();
+		m_PendingProject.reset();
 		Finish(false, "The script build was cancelled", true);
 	}
 
-	void ScriptBuilder::Finish(bool success, std::string error, bool cancelled)
+	void ScriptBuilder::Finish(bool success, std::string error, bool cancelled, std::optional<ScriptDiagnostic> diagnostic)
 	{
 		ScriptBuildResult result;
 		result.ID = m_NextID - 1;
 		result.Success = success;
 		result.Cancelled = cancelled;
 		result.Diagnostics = ParseScriptBuildDiagnostics(m_Log);
+		if (diagnostic)
+			result.Diagnostics.insert(result.Diagnostics.begin(), std::move(*diagnostic));
+		result.Settings = m_Settings;
 		result.LogTail = GetLogTail(m_Log, c_LogTailLines);
 		result.Configured = m_Configured;
 		result.BuildDirectory = m_BuildDirectory;
@@ -1121,6 +1249,8 @@ namespace Strata
 		m_Phase = ScriptBuildPhase::Idle;
 		m_Draining = false;
 		m_PendingStamp.clear();
+		m_ToolchainSearch.reset();
+		m_PendingProject.reset();
 		m_LastResult = std::move(result);
 	}
 

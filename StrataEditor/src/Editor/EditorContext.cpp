@@ -118,6 +118,8 @@ namespace Strata
 		  m_RecentProjects(specification.RecentProjectsFile, specification.RecentProjectsReadOnly)
 	{
 		ActivateBuiltinAssets();
+		if (specification.ToolchainEnvironment)
+			m_ScriptBuilder.SetToolchainEnvironment(specification.ToolchainEnvironment);
 		m_GameWindowProvider = CreateScope<EngineServices::ScopedProvider<IGameWindow>>(m_GameWindow);
 		m_GameSavesProvider = CreateScope<EngineServices::ScopedProvider<IGameSaves>>(m_GameSaves);
 		// What the game asked of its shell: window requests (recorded, not applied), its cursor, where its saves go.
@@ -200,7 +202,7 @@ namespace Strata
 		if (!project)
 			return false;
 		// New projects come with their script build and an example script.
-		if (!CreateScriptProjectFiles(*project, true, nullptr, outError, &m_Specification.ScriptBuild))
+		if (!CreateScriptProjectFiles(*project, true, nullptr, outError, &GetScriptBuildSettings()))
 			return false;
 		if (!OpenProjectInternal(project->GetProjectFile(), true, outError))
 			return false;
@@ -1619,6 +1621,12 @@ namespace Strata
 		return true;
 	}
 
+	const ScriptBuildSettings& EditorContext::GetScriptBuildSettings() const
+	{
+		const ScriptBuildSettings* found = m_ScriptBuilder.GetFoundToolchain(m_Specification.ScriptBuild);
+		return found ? *found : m_Specification.ScriptBuild;
+	}
+
 	bool EditorContext::HasScriptBuild() const
 	{
 		return m_Project && FileSystem::IsRegularFile(m_Project->GetScriptSourceDirectory() / "CMakeLists.txt");
@@ -1675,7 +1683,8 @@ namespace Strata
 			notification.Title = "Script build failed";
 			// The Problems panel lists the diagnostics with their places, which a double click opens.
 			notification.ShowProblems = true;
-			notification.Message = result.Diagnostics.empty() ? result.Error
+			// A diagnostic without a file (no toolchain, a CMake message) is its message.
+			notification.Message = result.Diagnostics.empty() ? result.Error : result.Diagnostics.front().File.empty() ? result.Diagnostics.front().Message
 				: fmt::format("{}{}{}: {}", FileSystem::ToUTF8(FileSystem::FromUTF8(result.Diagnostics.front().File).filename()), result.Diagnostics.front().Line > 0 ? ":" : "",
 					result.Diagnostics.front().Line > 0 ? std::to_string(result.Diagnostics.front().Line) : std::string(), result.Diagnostics.front().Message);
 		}

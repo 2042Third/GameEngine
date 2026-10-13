@@ -14,7 +14,8 @@ namespace Strata
 	struct ScriptBuildSettings;
 
 	// The CMakeLists.txt of a project's script directory: builds every .cpp/.h file below it into the project's script
-	// module through the StrataScriptCore package (STRATA_ENGINE_DIR names the engine checkout; script.build sets it).
+	// module through the StrataScriptCore package (STRATA_ENGINE_DIR names the Strata folder, a source checkout or an
+	// installation; script.build sets it).
 	std::string MakeScriptCMakeLists(const Project& project);
 	// A small example script class ("Spinner") for new projects.
 	std::string MakeExampleScript();

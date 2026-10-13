@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,22 +17,33 @@ namespace Strata
 
 	class Process;
 	class Project;
+	class ScriptToolchainEnvironment;
 
-	// The toolchain a game's scripts are built with. Script modules must match the engine's compiler, standard library
-	// and configuration, so the defaults are the ones the engine itself was configured with (baked in at its configure
-	// time, see StrataEditor/CMakeLists.txt).
+	// The toolchain a game's scripts are built with. The defaults are the ones the engine itself was configured with (baked
+	// in at its configure time, see StrataEditor/CMakeLists.txt), so modules match the engine's configuration; modules only
+	// talk to the engine through the C ABI, so another compiler of the platform builds them as well, which is what an
+	// installed editor uses (FindToolchain).
 	struct ScriptBuildSettings
 	{
 		std::filesystem::path CMake;       // CMake executable; when missing, "cmake" is looked up on PATH
 		std::string Generator;             // e.g. "Visual Studio 18 2026", "Ninja"
 		std::string Platform;              // -A (Visual Studio), empty for none
 		std::string Toolset;               // -T, empty for none
+		std::string GeneratorInstance;     // Visual Studio: the installation to use (CMAKE_GENERATOR_INSTANCE), empty for CMake's choice
 		std::filesystem::path CXXCompiler; // Passed to generators that do not pick their own compiler (not Visual Studio)
 		std::filesystem::path MakeProgram; // Ninja or make, for the generators that use one
 		std::string Configuration;         // Debug, Release, Dist
-		std::filesystem::path EngineDirectory; // Engine checkout: holds StrataScriptCore/CMake (the package)
+		std::filesystem::path EngineDirectory; // Engine checkout or installation: holds StrataScriptCore/CMake (the package)
+		// The toolchain fields are only preferences: a build first finds a toolchain on this machine (ResolveScriptToolchain,
+		// Editor/ScriptToolchain.h), using them where they exist. Set for installed editors, whose baked toolchain is the build
+		// machine's, and wherever the baked tools are gone.
+		bool FindToolchain = false;
 
+		// The toolchain and checkout this editor was configured with, as they were (FindToolchain false).
 		static ScriptBuildSettings GetEngineDefaults();
+		// What this editor's script builds start from: GetEngineDefaults, with FindToolchain where a baked tool does not exist;
+		// in an installed Strata (FindEngineInstallation) the installation's SDK, and a toolchain found on this machine.
+		static ScriptBuildSettings Detect();
 
 		bool IsMultiConfig() const;
 		bool operator==(const ScriptBuildSettings& other) const = default;
@@ -80,7 +92,8 @@ namespace Strata
 	// "strata" with the engine's toolchain and STRATA_ENGINE_DIR (as script builds use them), the module's output in the
 	// project's binary directory (an IDE build is hot reloaded like the editor's), compile_commands.json for generators that
 	// write it, and a build preset for the engine's configuration. Its vendor field names Strata. Empty when the project
-	// cannot build (ResolveScriptBuildLocation).
+	// cannot build (ResolveScriptBuildLocation), or while the toolchain is still to be found (FindToolchain: the build that
+	// finds it writes the presets).
 	std::string MakeScriptCMakePresets(const Project& project, const ScriptBuildSettings& settings);
 	// Writes Scripts/CMakePresets.json when it is missing, or when Strata wrote it and it differs (the engine moved, its
 	// toolchain changed); a file the project wrote itself is kept. Its directory's .gitignore (written when missing) keeps it
@@ -150,13 +163,17 @@ namespace Strata
 		double Seconds = 0.0;
 		std::filesystem::path Module; // The built module file
 		bool ModuleChanged = false;   // The build wrote a new module file (false when it was up to date)
+		// The toolchain the build used: the settings it was started with, or the toolchain it found on this machine
+		// (ScriptBuildSettings::FindToolchain; still the settings it was started with when it found none).
+		ScriptBuildSettings Settings;
 	};
 
 	enum class ScriptBuildPhase : uint8_t
 	{
 		Idle = 0,
 		Configuring,
-		Building
+		Building,
+		FindingToolchain // Before configuring: looking for a toolchain on this machine (ScriptBuildSettings::FindToolchain)
 	};
 
 	const char* ScriptBuildPhaseToString(ScriptBuildPhase phase);
@@ -178,6 +195,10 @@ namespace Strata
 		// is not the project's). Fails (returning false with a reason) while a build runs, when the project has no
 		// CMakeLists.txt in its script directory, or when its path is too long for the build's tools even in the per-user
 		// build directory. Also brings Scripts/CMakePresets.json up to date (UpdateScriptCMakePresets).
+		// With settings.FindToolchain the build first finds a toolchain on this machine on an I/O job
+		// (ScriptBuildPhase::FindingToolchain, ResolveScriptToolchain), unless the toolchain found for the same settings
+		// before is still there; the checks that need the toolchain then happen when it is found, and a failure there (no
+		// toolchain: the error says what to install) finishes the build as failed.
 		bool Start(const Project& project, const ScriptBuildSettings& settings, std::string* outError = nullptr);
 		// Advances a running build. Returns true in the call in which the build finished (see GetLastResult).
 		bool Update();
@@ -191,11 +212,25 @@ namespace Strata
 		double GetElapsedSeconds() const;
 		// The result of the last finished build (ID 0 when no build finished yet).
 		const ScriptBuildResult& GetLastResult() const { return m_LastResult; }
+		// The toolchain a build found on this machine for these settings (ScriptBuildSettings::FindToolchain), which later
+		// builds with them use while its files exist; null before one was found. The description says what it is.
+		const ScriptBuildSettings* GetFoundToolchain(const ScriptBuildSettings& settings) const;
+		const std::string& GetFoundToolchainDescription() const { return m_FoundToolchainDescription; }
+		// Where builds look for a toolchain (tests describe machines); this machine by default
+		// (CreateSystemScriptToolchainEnvironment). Called on the job that looks.
+		void SetToolchainEnvironment(std::function<Scope<ScriptToolchainEnvironment>()> factory);
 	private:
+		struct ToolchainSearch;
+
+		// The part of Start that needs the toolchain: the build tree, the presets, the configure or build process.
+		bool Begin(const Project& project, const ScriptBuildSettings& settings, bool counted, std::string* outError);
+		// Takes the search's result once its job finished: begins the build with the toolchain, or finishes it as failed.
+		void FinishToolchainSearch();
 		bool StartProcess(const std::vector<std::string>& arguments, std::string* outError);
 		// Moves new output into the log text and streams complete lines to the log.
 		void CollectOutput(bool flushPartialLine);
-		void Finish(bool success, std::string error, bool cancelled = false);
+		// `diagnostic` comes first in the result's diagnostics (a failure the build's output does not show, such as no toolchain).
+		void Finish(bool success, std::string error, bool cancelled = false, std::optional<ScriptDiagnostic> diagnostic = std::nullopt);
 	private:
 		ScriptBuildSettings m_Settings;
 		std::filesystem::path m_BuildDirectory;
@@ -217,6 +252,14 @@ namespace Strata
 
 		uint64_t m_NextID = 1;
 		ScriptBuildResult m_LastResult;
+
+		// A build in FindingToolchain: the search its job fills, and a copy of the project it builds (the caller's may go).
+		Ref<ToolchainSearch> m_ToolchainSearch;
+		Scope<Project> m_PendingProject;
+		std::function<Scope<ScriptToolchainEnvironment>()> m_ToolchainEnvironment;
+		std::optional<ScriptBuildSettings> m_FoundToolchainPreferences;
+		std::optional<ScriptBuildSettings> m_FoundToolchain;
+		std::string m_FoundToolchainDescription;
 	};
 
 }

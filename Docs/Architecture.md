@@ -2510,6 +2510,24 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `<user data>/Strata/Builds/<hash>`, said in the build's log), and only one too deep even for that is refused, naming a
   shorter folder. Every build brings `Scripts/CMakePresets.json` up to date for IDEs (`UpdateScriptCMakePresets`: the
   same toolchain and `STRATA_ENGINE_DIR`, an IDE build tree of its own, the module's output where the editor loads it).
+- **The toolchain of script builds** (`ScriptToolchain.h`). The editor's settings come from
+  `ScriptBuildSettings::Detect`: in a build tree the toolchain and checkout the engine was configured with
+  (`Editor/ScriptBuildConfig.h`); in an installed Strata (`StrataInstall.json` beside the executables,
+  `FindEngineInstallation`) the installation as `STRATA_ENGINE_DIR`, with the baked toolchain (the build machine's) only
+  as preferences (`FindToolchain`), as also where a baked tool no longer exists. A build with preferences starts in
+  `ScriptBuildPhase::FindingToolchain`: an I/O job runs `ResolveScriptToolchain` against the machine
+  (`ScriptToolchainEnvironment`, which tests replace with described machines) and the build configures once it has a
+  toolchain, which later builds with the same preferences reuse while its files exist
+  (`ScriptBuilder::GetFoundToolchain`; `EditorContext::GetScriptBuildSettings` then answers it, so presets and
+  `script.status` show it). Windows: Visual Studio installations with the C++ tools from vswhere (2022 from 17.10, whose
+  MSVC is 19.40, and 2026), the one the preferred compiler lies in first, then those of the preferred generator, then
+  the newest, each with the first CMake that knows its generator (3.25, 4.2 for Visual Studio 2026; the preferred one,
+  PATH, Program Files, the one the installation ships), passed as `CMAKE_GENERATOR_INSTANCE`. Linux and macOS: the
+  compiler (the preferred one, `CXX`, `c++`, `g++`, `clang++`; on macOS only once `xcode-select -p` names the Command
+  Line Tools), Ninja (Ninja Multi-Config) or Make, and CMake 3.25 or later from PATH or the usual places. Script modules
+  only talk to the engine through the C ABI (on Windows with a C runtime of their own), so another compiler of the
+  platform builds them as well. Without a toolchain (or without the SDK) the build fails at once with a diagnostic that
+  names what to install.
 - **The scripting workflow**. `script.create` writes a class from a template (`Editor/ScriptProject.cpp`). The script
   sources are listed by `Editor/ScriptSources` (`ListScriptSources`: the script directory's code and CMake files without
   hidden folders and build trees, each code file read for its `ST_SCRIPT_CLASS` registrations outside comments, string

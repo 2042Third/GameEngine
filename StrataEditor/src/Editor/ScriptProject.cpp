@@ -213,11 +213,11 @@ namespace Strata
 		return fmt::format(R"CMAKE(# Game scripts of "{0}": every .cpp and .h file in this directory (and below) belongs to the script module {1}.
 # The editor builds it (script.build) with the engine's compiler and configuration and loads it from .strata/Scripts/Bin.
 # Keep the module's name and output directory; to build by hand:
-#   cmake -S {2} -B <build directory> -DSTRATA_ENGINE_DIR=<engine checkout> && cmake --build <build directory>
+#   cmake -S {2} -B <build directory> -DSTRATA_ENGINE_DIR=<Strata folder> && cmake --build <build directory>
 cmake_minimum_required(VERSION 3.25)
 project({1} CXX)
 
-set(STRATA_ENGINE_DIR "" CACHE PATH "The Strata engine checkout (the editor sets it)")
+set(STRATA_ENGINE_DIR "" CACHE PATH "The Strata folder, a source checkout or an installation (the editor sets it)")
 find_package(StrataScriptCore CONFIG REQUIRED PATHS "${{STRATA_ENGINE_DIR}}/StrataScriptCore/CMake" NO_DEFAULT_PATH)
 strata_add_script_module({1} SOURCE_DIR "${{CMAKE_CURRENT_SOURCE_DIR}}")
 )CMAKE", ToCMakeComment(project.GetConfig().Name), module, ToCMakeComment(project.GetConfig().Scripts.SourceDirectory));

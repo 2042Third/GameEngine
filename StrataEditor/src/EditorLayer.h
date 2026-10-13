@@ -67,6 +67,8 @@ namespace Strata
 		// The toolchain script builds use instead of the engine's (EditorContextSpecification::ScriptBuild); UI tests build
 		// with a stand-in for CMake.
 		std::optional<ScriptBuildSettings> ScriptBuild;
+		// Where those builds look for a toolchain when they find one (EditorContextSpecification::ToolchainEnvironment).
+		std::function<Scope<ScriptToolchainEnvironment>()> ToolchainEnvironment;
 	};
 
 	// Built-in panel ids (EditorPanelRegistry).

@@ -69,8 +69,12 @@ namespace Strata
 		// Reload the script module when its file changes (e.g. rebuilt from an IDE). With it, modules run from a private copy;
 		// without it they load in place, which on Windows keeps script.build from replacing a loaded module.
 		bool HotReloadScripts = true;
-		// The toolchain script.build uses (the engine's own by default).
-		ScriptBuildSettings ScriptBuild = ScriptBuildSettings::GetEngineDefaults();
+		// The toolchain script.build uses: the engine's own, or in an installed Strata the installation's SDK with a toolchain
+		// found on this machine (ScriptBuildSettings::Detect).
+		ScriptBuildSettings ScriptBuild = ScriptBuildSettings::Detect();
+		// Where builds that find their toolchain look (ScriptBuilder::SetToolchainEnvironment); empty: this machine. Tests
+		// describe machines.
+		std::function<Scope<ScriptToolchainEnvironment>()> ToolchainEnvironment;
 		// Where the list of recently opened projects is kept (RecentProjects; the editor application passes the user's,
 		// RecentProjects::GetDefaultFile). Empty: in memory only, as tests need. Read-only: read but never written.
 		std::filesystem::path RecentProjectsFile;
@@ -370,8 +374,11 @@ namespace Strata
 		// Whether the open project has a script build, a CMakeLists.txt in its script directory, that BuildScripts can run
 		// (false without a project). Looks at the file system.
 		bool HasScriptBuild() const;
-		// The toolchain script builds use (EditorContextSpecification::ScriptBuild).
-		const ScriptBuildSettings& GetScriptBuildSettings() const { return m_Specification.ScriptBuild; }
+		// The toolchain script builds use: EditorContextSpecification::ScriptBuild or, where those are only preferences
+		// (ScriptBuildSettings::FindToolchain), the toolchain a build found for them on this machine once one did.
+		const ScriptBuildSettings& GetScriptBuildSettings() const;
+		// EditorContextSpecification::ScriptBuild, what builds start from.
+		const ScriptBuildSettings& GetScriptBuildPreferences() const { return m_Specification.ScriptBuild; }
 		const ScriptBuilder& GetScriptBuilder() const { return m_ScriptBuilder; }
 		// Ends a running script build (it finishes as failed, "cancelled"); a play waiting for it then fails.
 		void CancelScriptBuild();

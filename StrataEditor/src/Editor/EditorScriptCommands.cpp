@@ -75,6 +75,20 @@ namespace Strata
 				{ "message", diagnostic.Message } };
 		}
 
+		nlohmann::json DescribeToolchain(const ScriptBuildSettings& settings)
+		{
+			return {
+				{ "cmake", FileSystem::ToUTF8(settings.CMake) },
+				{ "generator", settings.Generator },
+				{ "platform", settings.Platform },
+				{ "toolset", settings.Toolset },
+				{ "generatorInstance", settings.GeneratorInstance },
+				{ "cxxCompiler", FileSystem::ToUTF8(settings.CXXCompiler) },
+				{ "makeProgram", FileSystem::ToUTF8(settings.MakeProgram) },
+				{ "configuration", settings.Configuration },
+				{ "engineDirectory", FileSystem::ToUTF8(settings.EngineDirectory) } };
+		}
+
 		nlohmann::json DescribeBuild(const ScriptBuildResult& result, const ScriptBuildLoad& load)
 		{
 			nlohmann::json diagnostics = nlohmann::json::array();
@@ -102,6 +116,7 @@ namespace Strata
 				{ "errorCount", errors },
 				{ "warningCount", warnings },
 				{ "diagnostics", std::move(diagnostics) },
+				{ "toolchain", DescribeToolchain(result.Settings) },
 				{ "log", result.LogTail } };
 		}
 
@@ -143,6 +158,13 @@ namespace Strata
 				const std::optional<std::string> playBuild = context.GetPlayBuildReason();
 				status["playBuildsFirst"] = playBuild ? nlohmann::json(*playBuild) : nlohmann::json(nullptr);
 			}
+			// The toolchain the next build uses. An installed editor's are only preferences until its first build found one on
+			// this machine (ScriptBuildSettings::FindToolchain): "found" is false until then.
+			const ScriptBuildSettings& toolchain = context.GetScriptBuildSettings();
+			status["toolchain"] = DescribeToolchain(toolchain);
+			status["toolchain"]["found"] = !toolchain.FindToolchain;
+			status["toolchain"]["searchesThisMachine"] = context.GetScriptBuildPreferences().FindToolchain;
+			status["toolchain"]["description"] = toolchain.FindToolchain ? std::string() : builder.GetFoundToolchainDescription();
 			const ExternalEditorLauncher& editor = context.GetExternalEditor();
 			status["externalEditor"] = { { "command", editor.GetCommand() }, { "source", ExternalEditorSourceToString(editor.GetSource()) } };
 			return status;
@@ -224,8 +246,9 @@ namespace Strata
 	{
 		registry.Register({ "script.status",
 			"The project's scripts: the loaded module (path, load count, hot reload), its classes with their fields (name, type, default) and "
-			"implemented callbacks, the current crash fault and the last one that stopped play mode, and the running and last build (with "
-			"compiler diagnostics).",
+			"implemented callbacks, the current crash fault and the last one that stopped play mode, the running and last build (with "
+			"compiler diagnostics and the toolchain it used), and the toolchain the next build uses (an installed editor finds one on this "
+			"machine at its first build: toolchain.found).",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{

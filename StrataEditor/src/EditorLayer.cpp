@@ -74,6 +74,7 @@ namespace Strata
 			specification.ImportInBackground = options.ImportInBackground && !options.MaxFrames && options.CommandScript.empty();
 			if (options.ScriptBuild)
 				specification.ScriptBuild = *options.ScriptBuild;
+			specification.ToolchainEnvironment = options.ToolchainEnvironment;
 			return specification;
 		}
 
