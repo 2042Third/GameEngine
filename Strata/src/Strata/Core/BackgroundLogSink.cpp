@@ -210,8 +210,9 @@ namespace Strata
 			}
 			catch (const std::exception& exception)
 			{
-				// A console or file that cannot be written (a closed pipe, a full disk) loses the line: logging must not fail
-				// the program, and logging the failure would only try the same sink again.
+				// A log file that cannot be written (a full disk, a removed drive) loses the line: logging must not fail the
+				// program, and logging the failure would only try the same sink again. (The console sinks report no failures:
+				// they ignore what their writes return, and a closed pipe raises SIGPIPE on POSIX instead.)
 				std::fprintf(stderr, "Strata: a log sink failed to write: %s\n", exception.what());
 			}
 		}
