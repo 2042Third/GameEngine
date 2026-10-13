@@ -32,6 +32,37 @@ namespace Strata
 		return projectDirectory / ".strata" / "Thumbnail.png";
 	}
 
+	std::optional<ReadbackImage> ProjectThumbnail::Downscale(const ReadbackImage& image, uint32_t factor)
+	{
+		if (factor == 0 || image.BytesPerPixel != 4 || image.Width % factor != 0 || image.Height % factor != 0
+			|| image.Pixels.size() != static_cast<size_t>(image.Width) * image.Height * 4)
+			return std::nullopt;
+		ReadbackImage result;
+		result.Width = image.Width / factor;
+		result.Height = image.Height / factor;
+		result.Format = image.Format;
+		result.BytesPerPixel = 4;
+		result.Pixels.resize(static_cast<size_t>(result.Width) * result.Height * 4);
+		const uint32_t samples = factor * factor;
+		for (uint32_t y = 0; y < result.Height; y++)
+		{
+			for (uint32_t x = 0; x < result.Width; x++)
+			{
+				uint32_t sums[4] = {};
+				for (uint32_t row = 0; row < factor; row++)
+				{
+					const uint8_t* source = image.Pixels.data() + ((static_cast<size_t>(y) * factor + row) * image.Width + static_cast<size_t>(x) * factor) * 4;
+					for (uint32_t column = 0; column < factor * 4; column++)
+						sums[column % 4] += source[column];
+				}
+				uint8_t* target = result.Pixels.data() + (static_cast<size_t>(y) * result.Width + x) * 4;
+				for (uint32_t channel = 0; channel < 4; channel++)
+					target[channel] = static_cast<uint8_t>((sums[channel] + samples / 2) / samples);
+			}
+		}
+		return result;
+	}
+
 	ProjectThumbnail::ProjectThumbnail()
 		: m_Write(CreateRef<WriteState>())
 	{
@@ -84,6 +115,7 @@ namespace Strata
 				return;
 			}
 			const float aspectRatio = static_cast<float>(c_Width) / static_cast<float>(c_Height);
+			const glm::uvec2 size(c_Width * c_RenderScale, c_Height * c_RenderScale);
 			std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Scene, aspectRatio);
 			if (!view)
 				view = ResolveViewportView(context, ViewportCameraSource::Editor, aspectRatio);
@@ -96,14 +128,16 @@ namespace Strata
 			ViewportSettings settings = context.GetViewport().GetSettings();
 			settings.DebugView = ViewportDebugView::None;
 			renderer->GetSceneRenderer().ResetExposureAdaptation();
-			if (!renderer->Render(context, glm::uvec2(c_Width, c_Height), *view, settings, false))
+			if (!renderer->Render(context, size, *view, settings, false))
 			{
 				renderer->ReleaseTargets();
 				Cancel();
 				return;
 			}
+			// Complete, as captures wait for it: what loads, glyphs still being prepared, and the finer levels of textures the
+			// view wants (a texture counts as loaded with its mip tail).
 			const SceneRendererStats& stats = renderer->GetStats();
-			if ((stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0) && ++m_Frames < c_MaxFrames)
+			if ((stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || renderer->CountTexturesBelowWanted() > 0) && ++m_Frames < c_MaxFrames)
 				return;
 			std::string error;
 			m_Readback = TextureReadback::Create(renderer->GetOutputTexture(), {}, &error);
@@ -128,12 +162,13 @@ namespace Strata
 		m_RequestedAgain = false;
 		if (!read)
 			return;
-		// Encoded and written on an I/O thread: a PNG of this size takes milliseconds.
+		// Averaged down, encoded and written on an I/O thread: milliseconds of work for a picture of this size.
 		m_Write->Running++;
 		JobSystem::SubmitIO([state = m_Write, image = std::move(image), file = m_File]()
 		{
-			std::string error;
-			const std::optional<std::vector<uint8_t>> png = ImageWriter::EncodePNG(image, true, &error);
+			std::string error = "the rendered picture has an unexpected format or size";
+			const std::optional<ReadbackImage> picture = Downscale(image, c_RenderScale);
+			const std::optional<std::vector<uint8_t>> png = picture ? ImageWriter::EncodePNG(*picture, true, &error) : std::nullopt;
 			if (png && FileSystem::WriteBytes(file, *png))
 				state->Written++;
 			else

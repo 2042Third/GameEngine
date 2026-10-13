@@ -506,6 +506,88 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The project's picture shows the levels its textures stream in, and the game's text as a game window shows it")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		const std::filesystem::path project = Tests::CopyFeatureProject(Tests::CreateTemporaryDirectory("GPUProjectPicture") / "Project").parent_path();
+		// Black and white stripes 16 texels wide, which the 32x32 mip tail averages to gray (see the thumbnail test above).
+		constexpr uint32_t size = 1024;
+		std::vector<uint8_t> pixels(size * size * 4, 255);
+		for (uint32_t y = 0; y < size; y++)
+		{
+			for (uint32_t x = 0; x < size; x++)
+			{
+				const uint8_t value = (x / 16) % 2 == 0 ? 0 : 255;
+				for (uint32_t channel = 0; channel < 3; channel++)
+					pixels[(static_cast<size_t>(y) * size + x) * 4 + channel] = value;
+			}
+		}
+		REQUIRE(FileSystem::WriteBytes(project / "Assets" / "Textures" / "Stripes.png", Tests::EncodePNG(size, size, pixels)));
+		ThumbnailHarness harness(gpu, project);
+		const AssetHandle stripes = harness.Find("Textures/Stripes.png");
+		const nlohmann::json material = harness.Run("material.create", { { "path", "Materials/Stripes.stmat" },
+			{ "properties", { { "BaseColorMap", UUIDToJson(stripes) }, { "Unlit", true } } } })["asset"];
+
+		// A wall of the stripes filling the camera's view and the game's score over it, in red: a HUD sized in pixels.
+		harness.Run("scene.new", { { "name", "Picture" }, { "force", true } });
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Transform", { { "Translation", { 0.0, 0.0, 2.0 } } } },
+			{ "Camera", { { "Primary", true } } } } } });
+		harness.Run("entity.create", { { "name", "Wall" }, { "components", { { "Transform", { { "Scale", { 8.0, 8.0, 1.0 } } } },
+			{ "MeshRenderer", { { "Mesh", "Builtin/Quad" }, { "Material", material } } } } } });
+		harness.Run("entity.create", { { "name", "Score" }, { "components", { { "Text", { { "Text", "SCORE" }, { "Color", { 1.0, 0.0, 0.0, 1.0 } },
+			{ "FontSize", 48.0 }, { "ScreenSpace", true }, { "ScreenAnchor", { 0.5, 0.25 } } } } } } });
+		harness.Run("scene.saveAs", { { "path", "Scenes/Picture.stscene" } });
+		for (int frame = 0; frame < 3000 && harness.Context.GetProjectThumbnail().IsPending(); frame++)
+		{
+			harness.Frame();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		REQUIRE_FALSE(harness.Context.GetProjectThumbnail().IsPending());
+		const std::optional<std::vector<uint8_t>> png = FileSystem::ReadBytes(ProjectThumbnail::GetFile(project));
+		REQUIRE(png);
+		const std::optional<ReadbackImage> image = ImageReader::DecodeRGBA8(*png);
+		REQUIRE(image);
+		REQUIRE(image->Width == ProjectThumbnail::c_Width);
+		REQUIRE(image->Height == ProjectThumbnail::c_Height);
+
+		// The stripes, not the tail's gray, across the lower middle of the picture.
+		int darkest = 255;
+		int brightest = 0;
+		for (uint32_t x = image->Width * 3 / 8; x < image->Width * 5 / 8; x++)
+		{
+			const glm::u8vec4 pixel = Tests::GetPixelRGBA8(*image, x, image->Height * 3 / 4);
+			darkest = std::min(darkest, static_cast<int>(pixel.g));
+			brightest = std::max(brightest, static_cast<int>(pixel.g));
+		}
+		CAPTURE(darkest);
+		CAPTURE(brightest);
+		CHECK(brightest - darkest > 50); // Exposed by the scene's mean: white shows near 90, and the tail as one gray as bright
+
+		// The score's capitals span about 0.7 of their 48-pixel em in a window 810 pixels tall, 4% of the picture's height
+		// (11 rows of 270); rendered at the picture's own 270 rows they would cover 12% (34 rows).
+		uint32_t firstRow = image->Height;
+		uint32_t lastRow = 0;
+		for (uint32_t y = 0; y < image->Height; y++)
+		{
+			for (uint32_t x = 0; x < image->Width; x++)
+			{
+				const glm::u8vec4 pixel = Tests::GetPixelRGBA8(*image, x, y);
+				if (pixel.r > 150 && pixel.g < 90 && pixel.b < 90)
+				{
+					firstRow = std::min(firstRow, y);
+					lastRow = std::max(lastRow, y);
+				}
+			}
+		}
+		REQUIRE(firstRow <= lastRow);
+		const uint32_t textRows = lastRow - firstRow + 1;
+		CAPTURE(textRows);
+		CHECK(textRows >= 6);
+		CHECK(textRows <= 18);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Closing the project never waits for texture thumbnails whose reads have not started")
 	{
 		Tests::GPUContext gpu;

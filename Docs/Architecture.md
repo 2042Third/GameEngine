@@ -2462,9 +2462,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   `LightRangeEntities`); other lights show as their icons, so a scene full of point lights stays readable.
 - **Project pictures** (`Editor/ProjectThumbnail.h`). After each scene save (`EditorContext::OnSceneSaved`, from
   `SaveScene` and `SaveSceneAs`) the next frames render the saved scene from its primary camera (the editor camera without
-  one) at 480x270 with the viewport's capture renderer, without overlays, until nothing is loading (at most 120 frames),
-  read it back without stalling and encode and write it as `<project>/.strata/Thumbnail.png` on an I/O job; a save while
-  one is being made makes another after it. The launcher's cards show it (`DisplayImage::Upload` makes the texture, as
+  one) with the viewport's capture renderer, without overlays, at three times the picture's 480x270 (`c_RenderScale`: the
+  size of a game's window, so the game's screen-space text, sized in pixels, covers the share of the picture it covers in
+  the game), until nothing is loading, no glyph is pending and its textures have the levels the view wants
+  (`ViewportRenderer::CountTexturesBelowWanted`, as captures wait; at most 120 frames), read it back without stalling,
+  average it down to 480x270 (`ProjectThumbnail::Downscale`) and encode and write it as `<project>/.strata/Thumbnail.png`
+  on an I/O job; a save while one is being made makes another after it. The launcher's cards show it (`DisplayImage::Upload` makes the texture, as
   the thumbnail cache does). Nothing happens without a GPU or while playing.
 - **Placement** (`Editor/SceneRaycast.h`, `Editor/EditorPlacement.h`). `SceneRaycast::Cast` finds what a ray meets among
   the mesh renderers of a scene: the scene's `RenderScene` (synced first) answers which boxes lie along the ray (its

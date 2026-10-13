@@ -2,7 +2,6 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 
-#include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
@@ -10,8 +9,6 @@
 #include <Strata/Renderer/ImageWriter.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/SceneRenderer.h>
-#include <Strata/Renderer/Texture.h>
-#include <Strata/Renderer/TextureStreamer.h>
 #include <Strata/Renderer/TextureReadback.h>
 #include <Strata/Scene/Scene.h>
 
@@ -233,29 +230,6 @@ namespace Strata
 			bool SaveStarted = false;
 		};
 
-		// The textures the renderer drew in its last frame coarser than its view wants them: the level the texture streamer
-		// works out from the view's report (TextureStreamingPolicy::ComputeWantedLevel), known from the first render on, while
-		// the streamer's own wanted level follows a frame later. Looked up without requesting them: the frame that drew them
-		// did.
-		uint32_t CountTexturesBelowWanted(const SceneRenderer& renderer)
-		{
-			const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
-			if (!manager)
-				return 0;
-			uint32_t count = 0;
-			for (const VisibleTextureUse& use : renderer.GetVisibleTextures())
-			{
-				const Ref<Asset> asset = manager->PeekLoadedAsset(use.Texture);
-				if (!asset || asset->GetType() != AssetType::Texture)
-					continue;
-				// Level 0 is the finest: a resident level above the wanted one is coarser than the view needs.
-				const uint32_t wanted = TextureStreamingPolicy::ComputeWantedLevel(use.Size, use.MipCount, use.UVScale, use.UVPixels);
-				if (static_cast<const Texture&>(*asset).GetResidentLevel() > wanted)
-					count++;
-			}
-			return count;
-		}
-
 		// The view of a capture: the viewport's choice of camera, or the capture's own camera (an editor view while the game
 		// is not playing, like the editor camera it starts from).
 		std::optional<ViewportView> ResolveCaptureView(EditorContext& context, const CaptureRequest& request, float aspectRatio, std::string* outError)
@@ -316,7 +290,7 @@ namespace Strata
 			progress.PreviewLighting = stats.PreviewLighting;
 			progress.ScreenSpaceTexts = stats.ScreenSpaceTexts;
 			progress.HiddenScreenSpaceTexts = stats.HiddenScreenSpaceTexts;
-			progress.TexturesBelowWanted = CountTexturesBelowWanted(renderer->GetSceneRenderer());
+			progress.TexturesBelowWanted = renderer->CountTexturesBelowWanted();
 			progress.StalePoses = stats.StalePoses;
 			const bool textPending = progress.PendingTextGlyphs > 0 && progress.TextFrames < c_MaxCaptureTextFrames;
 			const bool assetsPending = request.WaitForAssets && progress.PendingAssets > 0 && progress.AssetFrames < c_MaxCaptureAssetFrames;

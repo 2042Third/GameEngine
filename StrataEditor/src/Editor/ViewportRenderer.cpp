@@ -4,7 +4,10 @@
 #include "Editor/EditorViewport.h"
 #include "Editor/SceneEdit.h"
 
+#include <Strata/Asset/AssetManager.h>
 #include <Strata/Renderer/SceneGizmos.h>
+#include <Strata/Renderer/Texture.h>
+#include <Strata/Renderer/TextureStreamer.h>
 #include <Strata/Scene/Scene.h>
 
 #include <algorithm>
@@ -133,6 +136,26 @@ namespace Strata
 		if (rendered)
 			m_RenderedScene = scene;
 		return rendered;
+	}
+
+	uint32_t ViewportRenderer::CountTexturesBelowWanted() const
+	{
+		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+		if (!manager)
+			return 0;
+		uint32_t count = 0;
+		for (const VisibleTextureUse& use : m_Renderer->GetVisibleTextures())
+		{
+			// Looked up without requesting them: the frame that drew them did.
+			const Ref<Asset> asset = manager->PeekLoadedAsset(use.Texture);
+			if (!asset || asset->GetType() != AssetType::Texture)
+				continue;
+			// Level 0 is the finest: a resident level above the wanted one is coarser than the view needs.
+			const uint32_t wanted = TextureStreamingPolicy::ComputeWantedLevel(use.Size, use.MipCount, use.UVScale, use.UVPixels);
+			if (static_cast<const Texture&>(*asset).GetResidentLevel() > wanted)
+				count++;
+		}
+		return count;
 	}
 
 }

@@ -4,27 +4,35 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 
 namespace Strata
 {
 
 	class EditorContext;
 	class TextureReadback;
+	struct ReadbackImage;
 
 	// The picture of a project the launcher shows on its card: after each scene save, the scene from its primary camera (the
-	// editor camera without one) at c_Width x c_Height, rendered by the viewport's capture renderer on the next frames (until
-	// nothing is loading, at most c_MaxFrames), read back without stalling (TextureReadback) and written as PNG on an I/O job
-	// to <project>/.strata/Thumbnail.png (GetFile). Main thread; nothing happens without a GPU.
+	// editor camera without one), rendered by the viewport's capture renderer on the next frames at c_RenderScale times
+	// c_Width x c_Height, the size of a game's window, so that the game's screen-space text, sized in pixels, keeps its
+	// share of the picture (until nothing is loading and its textures have the levels the view wants, at most c_MaxFrames),
+	// read back without stalling (TextureReadback), averaged down to c_Width x c_Height (Downscale) and written as PNG on an
+	// I/O job to <project>/.strata/Thumbnail.png (GetFile). Main thread; nothing happens without a GPU.
 	class ProjectThumbnail
 	{
 	public:
 		static constexpr uint32_t c_Width = 480;
 		static constexpr uint32_t c_Height = 270;
+		static constexpr uint32_t c_RenderScale = 3; // Rendered at 1440x810
 		// Frames rendered while assets still load before the picture is taken as it is.
 		static constexpr uint32_t c_MaxFrames = 120;
 
 		// Where a project keeps its thumbnail (its intermediate directory).
 		static std::filesystem::path GetFile(const std::filesystem::path& projectDirectory);
+		// An RGBA8 image averaged over blocks of `factor` x `factor` pixels (the box filter of an exact downscale); nothing
+		// for other formats or sizes that are not multiples of the factor.
+		static std::optional<ReadbackImage> Downscale(const ReadbackImage& image, uint32_t factor);
 
 		ProjectThumbnail();
 		~ProjectThumbnail();

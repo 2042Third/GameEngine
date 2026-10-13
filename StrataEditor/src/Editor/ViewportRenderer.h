@@ -71,6 +71,11 @@ namespace Strata
 		nvrhi::ITexture* GetOutputTexture() const { return m_Renderer->GetOutputTexture(); }
 		glm::uvec2 GetSize() const { return m_Renderer->GetViewportSize(); }
 		const SceneRendererStats& GetStats() const { return m_Renderer->GetStats(); }
+		// The textures the last Render drew coarser than its view wants them: the level the texture streamer works out from
+		// the view's report (TextureStreamingPolicy::ComputeWantedLevel), known from the first render on, while the streamer's
+		// own wanted level follows a frame later. A texture counts as loaded with its mip tail, so a picture that must show
+		// the view's detail (captures, the project's picture) renders again while this is not 0.
+		uint32_t CountTexturesBelowWanted() const;
 		// What the debug view of the last Render found (empty without one).
 		const StreamingViewStats& GetDebugViewStats() const { return m_StreamingView.GetStats(); }
 		SceneRenderer& GetSceneRenderer() { return *m_Renderer; }

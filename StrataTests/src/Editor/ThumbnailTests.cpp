@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Editor/AudioPreview.h"
+#include "Editor/ProjectThumbnail.h"
 #include "Editor/ThumbnailCache.h"
 #include "TestHelpers.h"
 
@@ -10,6 +11,7 @@
 #include <Strata/Audio/AudioEngine.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Renderer/CookedTexture.h>
+#include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/Texture.h>
 
 #include <glm/gtc/packing.hpp>
@@ -250,5 +252,50 @@ TEST_SUITE("Editor.Thumbnails")
 		}
 		REQUIRE(waveform);
 		CHECK(waveform->Min.size() == 32);
+	}
+
+	TEST_CASE("The project's picture is averaged down from the game window's size it is rendered at")
+	{
+		// 6x3 RGBA8 averaged over 3x3 blocks: two pixels, each the rounded mean of its block.
+		ReadbackImage image;
+		image.Width = 6;
+		image.Height = 3;
+		image.BytesPerPixel = 4;
+		image.Pixels.resize(6 * 3 * 4);
+		for (uint32_t y = 0; y < 3; y++)
+		{
+			for (uint32_t x = 0; x < 6; x++)
+			{
+				uint8_t* pixel = image.Pixels.data() + (static_cast<size_t>(y) * 6 + x) * 4;
+				pixel[0] = x < 3 ? 255 : 0;                                // Left block white, right black
+				pixel[1] = static_cast<uint8_t>(10 * (y * 6 + x));           // A ramp
+				pixel[2] = (x + y) % 2 == 0 ? 200 : 100;                     // A checker
+				pixel[3] = 255;
+			}
+		}
+		const std::optional<ReadbackImage> small = ProjectThumbnail::Downscale(image, 3);
+		REQUIRE(small);
+		CHECK(small->Width == 2);
+		CHECK(small->Height == 1);
+		CHECK(small->BytesPerPixel == 4);
+		REQUIRE(small->Pixels.size() == 8);
+		CHECK(small->Pixels[0] == 255);
+		CHECK(small->Pixels[4] == 0);
+		CHECK(small->Pixels[1] == 70);  // (0+10+20+60+70+80+120+130+140) / 9
+		CHECK(small->Pixels[5] == 100); // (30+40+50+90+100+110+150+160+170) / 9
+		CHECK(small->Pixels[2] == 156); // 5 x 200 + 4 x 100 over 9, rounded
+		CHECK(small->Pixels[6] == 144); // 4 x 200 + 5 x 100 over 9, rounded
+		CHECK(small->Pixels[3] == 255);
+
+		// Sizes that are not multiples of the factor, other formats and a factor of 0 are refused.
+		CHECK_FALSE(ProjectThumbnail::Downscale(image, 4));
+		CHECK_FALSE(ProjectThumbnail::Downscale(image, 0));
+		ReadbackImage other = image;
+		other.BytesPerPixel = 8;
+		CHECK_FALSE(ProjectThumbnail::Downscale(other, 3));
+		other = image;
+		other.Pixels.pop_back();
+		CHECK_FALSE(ProjectThumbnail::Downscale(other, 3));
+		CHECK(ProjectThumbnail::c_Width * ProjectThumbnail::c_RenderScale == 1440);
 	}
 }
