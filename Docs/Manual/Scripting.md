@@ -92,8 +92,8 @@ user data, not in the project); the environment variable `STRATA_EXTERNAL_EDITOR
 
 ### IntelliSense and building in the IDE
 
-The editor writes `Scripts/CMakePresets.json` with the engine's compiler, configuration and folder, so IDEs resolve the
-SDK's headers:
+The editor writes `Scripts/CMakePresets.json` with the toolchain its builds use, the configuration and the Strata
+folder, so IDEs resolve the SDK's headers:
 
 - **Visual Studio**: File > Open > Folder... on the project's `Scripts` folder; it picks the "strata" configure preset.
 - **VS Code** with the CMake Tools and C/C++ extensions: open the `Scripts` folder and select the "strata" preset.
@@ -138,8 +138,13 @@ names its PDB, which stays in `.strata/Scripts/Bin`, so breakpoints bind. If you
 
 ## Where builds happen
 
-Builds use the engine's own CMake, compiler and configuration, in `.strata/Scripts/Build` of the project (the module goes
-to `.strata/Scripts/Bin`). With Visual Studio, a project in a deep folder would make MSBuild's file tracker fail (it
-cannot create files at paths over 259 characters): such projects build in a folder of your user data instead
-(`Strata/Builds/<hash of the project's folder>`), and the build's first log line says so. Only when even that is too deep
-is the build refused, with a shorter folder to move the project to.
+Builds run in `.strata/Scripts/Build` of the project (the module goes to `.strata/Scripts/Bin`), in the configuration
+the editor was built in. An editor built from source uses the CMake and compiler it was built with. A downloaded Strata
+finds them on your machine at its first build: on Windows Visual Studio 2022 (17.10 or later) or 2026 with its C++ tools
+and a CMake that knows that Visual Studio (one in `PATH`, in Program Files or the one Visual Studio ships), on Linux and
+macOS the system's C++ compiler, Ninja or Make and CMake 3.25 or later; without them the build says what to install, and
+`script.status` names the toolchain the next build uses. Scripts build against the SDK in the Strata folder. With Visual
+Studio, a project in a deep folder would make MSBuild's file tracker fail (it cannot create files at paths over 259
+characters): such projects build in a folder of your user data instead (`Strata/Builds/<hash of the project's folder>`),
+and the build's first log line says so. Only when even that is too deep is the build refused, with a shorter folder to
+move the project to.

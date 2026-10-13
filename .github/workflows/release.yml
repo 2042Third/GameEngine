@@ -17,8 +17,9 @@ on:
         required: false
         default: ''
 
+# Only the job that publishes may write to the repository.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ inputs.tag || github.ref }}
@@ -39,6 +40,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          persist-credentials: false
 
       - name: Check the version
         id: version
@@ -123,6 +125,7 @@ jobs:
         with:
           ref: ${{ needs.version.outputs.ref }}
           submodules: recursive
+          persist-credentials: false
 
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
@@ -175,7 +178,8 @@ jobs:
           set -euo pipefail
           exec > >(tee package.log) 2>&1
           build="build/${{ matrix.preset }}"
-          cpack --config "$build/CPackConfig.cmake" -C Dist
+          # CMake's own cpack: on the Windows runners `cpack` alone is Chocolatey's (choco pack), earlier in PATH.
+          "$(dirname "$(command -v cmake)")/cpack" --config "$build/CPackConfig.cmake" -C Dist
           archive="$build/Packages/$PACKAGE.${{ matrix.archive }}"
           if [ ! -f "$archive" ]; then
             echo "::error::cpack did not write $archive"
@@ -238,11 +242,14 @@ jobs:
     needs: [version, build]
     if: needs.version.outputs.publish == 'true'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write # gh release create
     steps:
       - name: Check out
         uses: actions/checkout@v4
         with:
           ref: ${{ needs.version.outputs.ref }}
+          persist-credentials: false
 
       - name: Download the archives
         uses: actions/download-artifact@v4
