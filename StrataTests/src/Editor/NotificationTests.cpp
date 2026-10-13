@@ -177,7 +177,8 @@ TEST_SUITE("Editor.Notifications")
 		const EditorNotification& deleted = notifications.GetActive()[0];
 		CHECK(deleted.Level == NotificationLevel::Info);
 		CHECK(deleted.Title == "Claude deleted an asset");
-		CHECK(deleted.Message == "'Materials/Theirs.stmat' went to the project's trash; Undo restores it.");
+		CHECK(deleted.Message == "'Materials/Theirs.stmat' went to the project's trash; Undo restores it while this scene stays open (the trash keeps "
+			"it 30 days).");
 		CHECK(deleted.JournalEntry == context.GetJournal().GetLatestId());
 		CHECK(context.GetJournal().Find(deleted.JournalEntry)->UndoStep == "Delete Materials/Theirs.stmat");
 
@@ -194,7 +195,8 @@ TEST_SUITE("Editor.Notifications")
 		REQUIRE(commands.Execute(context, "asset.deleteFolder", { { "path", "Old" } }, CommandOrigin { CommandSource::CommandScript }).Success);
 		REQUIRE(notifications.GetActive().size() == 1);
 		CHECK(notifications.GetActive()[0].Title == "A command script deleted a folder");
-		CHECK(notifications.GetActive()[0].Message == "'Old' and its 2 assets went to the project's trash; Undo restores them.");
+		CHECK(notifications.GetActive()[0].Message == "'Old' and its 2 assets went to the project's trash; Undo restores them while this scene stays "
+			"open (the trash keeps them 30 days).");
 	}
 
 	TEST_CASE("Commands the person runs post their failures and warnings; others do not")

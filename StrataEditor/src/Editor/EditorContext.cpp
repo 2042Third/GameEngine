@@ -1260,8 +1260,10 @@ namespace Strata
 			: std::string("A command script");
 		notification.Title = fmt::format("{} deleted {}", who, folder ? "a folder" : "an asset");
 		const std::string what = folder ? fmt::format("'{}' and its {} {}", path, assets, assets == 1 ? "asset" : "assets") : fmt::format("'{}'", path);
-		notification.Message = fmt::format("{} went to the project's trash{}; Undo restores {}.", what,
-			referencesLeft ? ", leaving references to it missing" : "", folder ? "them" : "it");
+		// The step is the edited scene's: opening or creating another scene clears it. The trash keeps the files meanwhile.
+		notification.Message = fmt::format("{} went to the project's trash{}; Undo restores {} while this scene stays open (the trash keeps {} {} "
+			"days).", what, referencesLeft ? ", leaving references to it missing" : "", folder ? "them" : "it", folder ? "them" : "it",
+			c_TrashKeepTime.count() / 24);
 		notification.JournalEntry = command->Id;
 		m_Notifications.Post(std::move(notification));
 	}

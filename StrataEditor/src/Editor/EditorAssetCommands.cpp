@@ -806,7 +806,8 @@ namespace Strata
 
 		registry.Register({ "asset.delete",
 			"Deletes an asset: moves its file, .meta and cached import to the project's trash (.strata/Trash) and removes it from the project, in one undo "
-			"step (edit.undo restores it with the same handle, so references to it work again). Fails while scenes, prefabs, models, materials or the open "
+			"step (edit.undo restores it with the same handle, so references to it work again, as long as the edited scene stays: opening or creating "
+			"another clears the undo history; the trash keeps the files for 30 days). Fails while scenes, prefabs, models, materials or the open "
 			"scene use it, listing them in the error's data (referencedBy, as asset.findReferences returns it); force: true deletes it anyway, leaving "
 			"those references missing. The open scene itself cannot be deleted. Returns {asset, path, trash, referencedBy}.",
 			ObjectSchema({ { "asset", AssetSchema("Asset to delete") },
@@ -894,7 +895,8 @@ namespace Strata
 
 		registry.Register({ "asset.deleteFolder",
 			"Deletes a folder with everything in it: moves it to the project's trash (.strata/Trash) and removes its assets from the project, in one undo "
-			"step (edit.undo restores it, every asset with its handle). Fails while assets outside the folder or the open scene use an asset in it, "
+			"step (edit.undo restores it, every asset with its handle, as long as the edited scene stays; the trash keeps it for 30 days). Fails while "
+			"assets outside the folder or the open scene use an asset in it, "
 			"listing them in the error's data (referencedBy); force: true deletes it anyway. Fails when it holds the open scene. Returns {path, assets, "
 			"trash, referencedBy}.",
 			ObjectSchema({ { "path", StringSchema("Folder relative to the asset directory") },

@@ -955,7 +955,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `asset.deleteFolder` fail while scenes, prefabs, models, materials or the open scene (from memory, unsaved uses
   included) use what they delete, listing them in the error's data (`referencedBy`, `EditorCommandResult::ErrorData`),
   unless `force`; deleting moves the files with their `.meta` and cached imports to `<project>/.strata/Trash`
-  (`EditorAssetManager::MoveToTrash`, kept 30 days) and is one undo step that restores the handle.
+  (`EditorAssetManager::MoveToTrash`, kept 30 days) and is one undo step that restores the handle (the edited scene's: replacing
+  the scene clears the history, so the toast of an agent's delete says so).
   `asset.findReferences`, `asset.move`, `asset.createFolder` and `asset.moveFolder` (handles kept) complete the set; each
   mutating one is one undo step that never marks the scene unsaved. Steps check the files before they act, since files
   change outside the history: an undo that cannot be done now fails and keeps the step applied (`EditorAction::Undo`
