@@ -3,6 +3,7 @@
 #include <Strata/Asset/AssetTypes.h>
 #include <Strata/Core/UUID.h>
 #include <Strata/Scene/Entity.h>
+#include <Strata/Scene/PrefabInstances.h>
 
 #include <nlohmann/json.hpp>
 
@@ -85,6 +86,8 @@ namespace Strata
 			nlohmann::json Snapshot;
 			uint64_t SourceRevision = 0;
 			bool CaughtUp = false; // The scene's instances that missed changes of the prefab were looked at
+			// The versions of the snapshot's parts, worked out once for all its instances (cleared with a new snapshot).
+			PrefabInstances::PartVersionCache PartVersions;
 		};
 		struct ModifiedMark
 		{
@@ -96,8 +99,10 @@ namespace Strata
 
 		// Updates the instances of a prefab whose file changed from the baseline to `snapshot`.
 		void Propagate(EditorContext& context, AssetHandle prefab, const nlohmann::json& previous, const nlohmann::json& snapshot);
-		// Updates the instances that missed a change of the prefab while their scene was closed.
-		void CatchUp(EditorContext& context, AssetHandle prefab, const nlohmann::json& snapshot);
+		// Updates the instances (`roots`, of the prefab) that missed a change of it while their scene was closed.
+		void CatchUp(EditorContext& context, AssetHandle prefab, Baseline& baseline, const std::vector<Entity>& roots);
+		// The baseline of a prefab, its template read on first use; null when it cannot be read.
+		Baseline* FindBaseline(EditorContext& context, AssetHandle prefab);
 		// Gives instance roots the snapshot's values, in one undo step.
 		void UpdateInstances(EditorContext& context, AssetHandle prefab, const std::vector<Entity>& roots, const nlohmann::json& snapshot);
 		void Watch(EditorContext& context);

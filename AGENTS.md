@@ -180,7 +180,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   100,000 roots, open against closed; what 100,000 selected entities add to a frame; the longest editor frame while a
   4096x4096 texture re-imports uncompressed and then block-compressed again; `asset.findReferences` among 10,000
   assets; the frames while the recovery journal of edits of a 100,000-entity scene is written, and the capture of a
-  recovery snapshot), `PerfGPU.Editor`, which runs the real
+  recovery snapshot; the longest frame while `scene.open` opens a scene of 10,000 up-to-date prefab instances, whose
+  swap checks each against its prefab), `PerfGPU.Editor`, which runs the real
   `StrataEditor` maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its
   `editor.wait` steps report, and maxima by nature: the longest frame while `scene.open` loads the 100,000 and the
   1,000,000 entities and while it opens the 100,000 again over the million (`frameTimes.maxMs` of its result), the frame

@@ -204,6 +204,19 @@ namespace Strata
 			return roots;
 		}
 
+		std::unordered_map<AssetHandle, std::vector<UUID>> FindInstanceRootsByPrefab(Scene& scene)
+		{
+			std::unordered_map<AssetHandle, std::vector<UUID>> roots;
+			auto view = scene.GetRegistry().view<PrefabInstanceComponent>();
+			for (const entt::entity handle : view)
+			{
+				const Entity entity(handle, &scene);
+				if (IsInstanceRoot(entity))
+					roots[view.get<PrefabInstanceComponent>(handle).Prefab].push_back(entity.GetUUID());
+			}
+			return roots;
+		}
+
 		nlohmann::json ExtractTemplate(const nlohmann::json& snapshot, UUID templateRoot)
 		{
 			nlohmann::json part = nlohmann::json::array();
@@ -248,6 +261,23 @@ namespace Strata
 			if (!link || link->PrefabVersion == 0)
 				return false;
 			const uint64_t version = GetPartVersion(snapshot, link->PrefabEntityID);
+			return version != 0 && version != link->PrefabVersion;
+		}
+
+		uint64_t PartVersionCache::Get(const nlohmann::json& snapshot, UUID templateRoot)
+		{
+			const auto [it, added] = m_Versions.try_emplace(templateRoot, 0);
+			if (added)
+				it->second = GetPartVersion(snapshot, templateRoot);
+			return it->second;
+		}
+
+		bool IsOutdated(Entity root, const nlohmann::json& snapshot, PartVersionCache& versions)
+		{
+			const PrefabInstanceComponent* link = root ? root.TryGetComponent<PrefabInstanceComponent>() : nullptr;
+			if (!link || link->PrefabVersion == 0)
+				return false;
+			const uint64_t version = versions.Get(snapshot, link->PrefabEntityID);
 			return version != 0 && version != link->PrefabVersion;
 		}
 

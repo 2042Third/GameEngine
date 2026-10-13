@@ -1,10 +1,12 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/HierarchyView.h"
+#include "Editor/PrefabSync.h"
 #include "Editor/ThumbnailCache.h"
 #include "EditorLayer.h"
 #include "Perf/PerfUtils.h"
@@ -15,6 +17,7 @@
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Timestep.h>
@@ -26,6 +29,7 @@
 #include <Strata/Renderer/Texture.h>
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/Scene/SceneSerializer.h>
 
 #include <nlohmann/json.hpp>
 
@@ -34,6 +38,7 @@
 #include <cmath>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -513,6 +518,88 @@ TEST_SUITE("Perf.Editor")
 				const std::vector<EntityState> states = SceneEdit::CaptureEntities(scene, ids);
 				CHECK(states.size() == ids.size());
 			}).MedianMs;
+		});
+	}
+
+	TEST_CASE("Opening a scene of 10,000 prefab instances holds no frame")
+	{
+		// The loading worker and the I/O threads, as in the editor.
+		Perf::ScopedApplicationJobSystem jobs;
+		const std::filesystem::path directory = CreateTemporaryDirectory("PerfPrefabInstancesOpen") / "Game";
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		auto run = [&](std::string_view name, const nlohmann::json& parameters) { return RunCommandToCompletion(context, commands, name, parameters); };
+		run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+
+		// A prefab of a root and four children, instantiated once by prefab.instantiate (which records the version of the
+		// prefab the instance took and the hash of its values, as every instance the editor makes does), then copied 9,999
+		// times in the scene's document: a forest of up-to-date instances.
+		constexpr size_t c_Instances = 10'000;
+		const std::string tree = run("entity.create", { { "name", "Tree" } })["id"].get<std::string>();
+		for (int branch = 0; branch < 4; branch++)
+			run("entity.create", { { "name", fmt::format("Branch {}", branch) }, { "parent", tree } });
+		run("prefab.create", { { "entities", { tree } }, { "path", "Prefabs/Tree.stprefab" } });
+		run("scene.new", { { "force", true } });
+		const std::string instance = run("prefab.instantiate", { { "prefab", "Prefabs/Tree.stprefab" } })["id"].get<std::string>();
+		nlohmann::json document = SceneSerializer::Serialize(*context.GetEditScene());
+		nlohmann::json& entities = document["Scene"]["Entities"];
+		std::vector<nlohmann::json> parts;
+		for (const nlohmann::json& entity : entities)
+		{
+			if (entity["ID"] == instance || entity.value("Parent", "") == instance)
+				parts.push_back(entity);
+		}
+		REQUIRE(parts.size() == 5);
+		REQUIRE(parts[0]["Components"]["PrefabInstance"]["PrefabVersion"] != "0000000000000000");
+		for (size_t copy = 1; copy < c_Instances; copy++)
+		{
+			const std::string root = UUID().ToString();
+			for (const nlohmann::json& part : parts)
+			{
+				nlohmann::json entity = part;
+				if (part["ID"] == instance)
+				{
+					entity["ID"] = root;
+					entity["Components"]["Transform"]["Translation"] = { static_cast<double>(copy % 100) * 3.0, 0.0, static_cast<double>(copy / 100) * 3.0 };
+				}
+				else
+				{
+					entity["ID"] = UUID().ToString();
+					entity["Parent"] = root;
+				}
+				entities.push_back(std::move(entity));
+			}
+		}
+		const std::string text = JsonUtils::Dump(document, 1, '\t');
+		std::string error;
+		REQUIRE_MESSAGE(context.GetAssetManager()->CreateNativeAsset("Scenes/Forest.stscene", std::span(reinterpret_cast<const uint8_t*>(text.data()), text.size()),
+			&error).IsValid(), error);
+
+		// The longest frame (an editor update and the command's poll) while scene.open opens it: the frame that swaps the scene
+		// in checks every instance against its prefab (PrefabSync's catch-up), a maximum by nature.
+		Perf::CheckBudgetConfirmed("Perf.Editor.SceneOpen10kPrefabInstancesMaxFrame", [&]
+		{
+			run("scene.new", { { "force", true } });
+			const uint64_t checks = context.GetPrefabSync().GetCatchUpCheckCount();
+			EditorCommandResult result = commands.Execute(context, "scene.open", { { "scene", "Scenes/Forest.stscene" } });
+			double longest = 0.0;
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+			while (result.IsPending() && std::chrono::steady_clock::now() < deadline)
+			{
+				const auto start = std::chrono::steady_clock::now();
+				context.Update(Timestep(1.0f / 60.0f));
+				const bool finished = PollCommandResult(result, context);
+				longest = std::max(longest, MillisecondsSince(start));
+				// The loading worker prepares the scene between frames, as between an editor's.
+				if (!finished)
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			REQUIRE_MESSAGE(result.Success, result.Error);
+			CHECK(context.GetEditScene()->GetEntityCount() == c_Instances * 5);
+			// Every instance was looked at, and none had missed a change of its prefab.
+			CHECK(context.GetPrefabSync().GetCatchUpCheckCount() == checks + c_Instances);
+			CHECK_FALSE(context.IsSceneModified());
+			return longest;
 		});
 	}
 }

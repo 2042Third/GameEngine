@@ -44,6 +44,10 @@ namespace Strata
 		AssetHandle GetPrefab(Entity entity);
 		// Every instance root of a prefab in the scene.
 		std::vector<Entity> FindInstanceRoots(Scene& scene, AssetHandle prefab);
+		// The UUIDs of every instance root of the scene by their prefab, found in one pass over the links: for code that looks
+		// at the instances of many prefabs (resolve them as their turn comes, as updating one prefab's instances may remove
+		// another's).
+		std::unordered_map<AssetHandle, std::vector<UUID>> FindInstanceRootsByPrefab(Scene& scene);
 
 		// The part of a prefab snapshot below a template root: that entity first (its Parent left out), then its descendants,
 		// parents before their children, found through their Parent links whatever order the snapshot lists them in (documents
@@ -85,6 +89,21 @@ namespace Strata
 		// Whether the instance was made from (or last took) another version of its part than the snapshot's: true only when its
 		// root records a version (MarkSynced) and it differs.
 		bool IsOutdated(Entity root, const nlohmann::json& snapshot);
+
+		// The versions of the parts of one prefab snapshot (GetPartVersion), each worked out once: hashing a part serializes it,
+		// so code that checks many instances against the same snapshot (a scene's catch-up, the Hierarchy's marks) asks here.
+		// Pass the same snapshot every time, and Clear the cache when it changes.
+		class PartVersionCache
+		{
+		public:
+			uint64_t Get(const nlohmann::json& snapshot, UUID templateRoot);
+			void Clear() { m_Versions.clear(); }
+			size_t GetSize() const { return m_Versions.size(); }
+		private:
+			std::unordered_map<UUID, uint64_t> m_Versions;
+		};
+		// IsOutdated with the snapshot's part versions from a cache of that snapshot.
+		bool IsOutdated(Entity root, const nlohmann::json& snapshot, PartVersionCache& versions);
 		// Whether the instance's values are still the ones it had when it last took its prefab's (a recorded SyncedHash that
 		// matches its content); false when nothing was recorded.
 		bool IsUnchangedSinceSync(const Scene& scene, Entity root);

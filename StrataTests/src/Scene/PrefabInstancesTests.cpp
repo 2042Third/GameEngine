@@ -249,6 +249,50 @@ TEST_SUITE("Scene.PrefabInstances")
 		CHECK(stamps["SyncedHash"].get<std::string>().size() == 16);
 	}
 
+	TEST_CASE("Many instances of one snapshot share its part versions, worked out once each, and are found in one pass")
+	{
+		LinkedCrate crate;
+		PrefabInstances::MarkSynced(*crate.World, crate.Crate, crate.Snapshot);
+		// More instances of the crate, and one of another prefab nested in the first.
+		std::vector<Entity> roots { crate.Crate };
+		for (int copy = 0; copy < 3; copy++)
+		{
+			std::string error;
+			Entity root = crate.World->CreateEntity("Crate Copy");
+			root.AddComponent<PrefabInstanceComponent>(PrefabInstanceComponent { c_Prefab, crate.Crate.GetUUID() });
+			const UUID id = root.GetUUID();
+			// Replace makes the instance anew (the root keeps its UUID, not its handle).
+			REQUIRE_MESSAGE(PrefabInstances::Replace(*crate.World, root, crate.Snapshot, nullptr, &error), error);
+			roots.push_back(crate.World->GetEntityByUUID(id));
+		}
+		crate.Handle.AddOrReplaceComponent<PrefabInstanceComponent>(PrefabInstanceComponent { AssetHandle(0x99), UUID(5) });
+
+		const std::unordered_map<AssetHandle, std::vector<UUID>> byPrefab = PrefabInstances::FindInstanceRootsByPrefab(*crate.World);
+		REQUIRE(byPrefab.size() == 2);
+		std::vector<UUID> expected;
+		for (const Entity root : PrefabInstances::FindInstanceRoots(*crate.World, c_Prefab))
+			expected.push_back(root.GetUUID());
+		CHECK(byPrefab.at(c_Prefab) == expected);
+		CHECK(byPrefab.at(c_Prefab).size() == roots.size());
+		CHECK(byPrefab.at(AssetHandle(0x99)) == std::vector<UUID> { crate.Handle.GetUUID() });
+
+		nlohmann::json brighter = crate.Snapshot;
+		brighter["Entities"][1]["Components"]["PointLight"]["Intensity"] = 7.0;
+		for (const nlohmann::json* snapshot : { &crate.Snapshot, &brighter })
+		{
+			PrefabInstances::PartVersionCache versions;
+			for (const Entity root : roots)
+				CHECK(PrefabInstances::IsOutdated(root, *snapshot, versions) == PrefabInstances::IsOutdated(root, *snapshot));
+			// Every root takes the same part: one version worked out for all of them.
+			CHECK(versions.GetSize() == 1);
+			CHECK(versions.Get(*snapshot, crate.Crate.GetUUID()) == PrefabInstances::GetPartVersion(*snapshot, crate.Crate.GetUUID()));
+		}
+		PrefabInstances::PartVersionCache versions;
+		CHECK(PrefabInstances::IsOutdated(roots[1], brighter, versions));
+		versions.Clear();
+		CHECK(versions.GetSize() == 0);
+	}
+
 	TEST_CASE("Unpack and StripLinks remove the links of one prefab")
 	{
 		LinkedCrate crate;
