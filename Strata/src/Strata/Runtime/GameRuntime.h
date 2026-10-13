@@ -33,6 +33,10 @@ namespace Strata
 		// Where the game keeps its save files (scripts' Game::WriteSaveFile: the engine service IGameSaves while the runtime
 		// lives); empty: the player's, <user data>/<game name>/Saves.
 		std::filesystem::path SaveFilesDirectory;
+		// Build each loaded scene's render proxies over frames before it starts (SceneLoadOptions::Prepare with
+		// RenderScene::PrepareLoadedScene), for applications that render the game (StrataRuntime with a window): otherwise the
+		// first frame that draws a scene builds all of them. Off for headless runs, where nothing draws them.
+		bool PrepareRenderScenes = false;
 	};
 
 	// Runs an exported game: opens its asset pack (the active asset manager while the runtime lives), loads its script
@@ -131,6 +135,7 @@ namespace Strata
 		Scope<PendingScene> m_SceneLoad;
 		Scope<PendingScene> m_LoadingSceneLoad;
 		bool m_TimeDilation = false; // GameRuntimeOptions::TimeDilation, for every scene the game plays
+		SceneLoadOptions m_LoadOptions; // Of every scene the game loads (GameRuntimeOptions::PrepareRenderScenes)
 		std::optional<int32_t> m_QuitRequest;
 		Ref<ScriptEngine> m_ScriptEngine;
 		Ref<ScriptEngine> m_PreviousScriptEngine; // Active before this runtime; restored when it ends

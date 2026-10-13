@@ -560,7 +560,8 @@ namespace Strata
 
 		registry.Register({ "scene.loadStatus",
 			"The scene loads under way: open (the scene scene.open, or project.open for the project's start scene, is opening: {scene, startScene, "
-			"state: LoadingScene | LoadingDependencies, progress 0 to 1}, null when none), lastOpen (the latest of those that finished: {scene, "
+			"state: LoadingScene | LoadingDependencies | Preparing (its render proxies are built for the viewport), progress 0 to 1}, null when "
+			"none), lastOpen (the latest of those that finished: {scene, "
 			"startScene, state: Ready | Failed | Cancelled, error, seconds}, null before the first), play (the scene a running game asked for "
 			"while it loads, {scene, progress}, null when none) and subScenes (the running scene's sub-scenes, scene.loadAdditive: {subScene, "
 			"scene, state: Loading | Instantiating | Loaded | Failed, progress, createdEntities, skippedEntities (not created because an "

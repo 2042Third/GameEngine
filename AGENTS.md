@@ -185,7 +185,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   swap checks each against its prefab), `PerfGPU.Editor`, which runs the real
   `StrataEditor` maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its
   `editor.wait` steps report, and maxima by nature: the longest frame while `scene.open` loads the 100,000 and the
-  1,000,000 entities and while it opens the 100,000 again over the million (`frameTimes.maxMs` of its result), the frame
+  1,000,000 entities, while it opens the 100,000 again over the million and while it opens 100,000 cubes over those, whose
+  render proxies their load builds before the swap (`frameTimes.maxMs` of its result), the frame
   that starts playing the million (`editor.perf`'s frame maximum) and the editor's working set once they are open
   (`editor.status`' `memory.workingSetMB`) (when the editor fails, the test describes the scene files on disk with
   `Tests::DescribeJsonFile`, which tells a damaged file from a failed read or parse), exports the stress project (the
@@ -1057,7 +1058,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   the scene that is loading keeps its load (scripts may ask in every update); a request for another scene replaces it.
   Scene loads never stop a frame: never load scenes with `LoadAssetSync` in the editor or games; go through `SceneLoader`
   (Docs/Architecture.md, "Scene runtime lifecycle"), and let go of a scene a switch replaces with
-  `Scene::ReleaseInBackground` (stopped on the main thread, destroyed by a background job).
+  `Scene::ReleaseInBackground` (stopped on the main thread, destroyed by a background job). Owners that render the scenes
+  they load build their render proxies over frames before the swap (`SceneLoadOptions::Prepare` with
+  `RenderScene::PrepareLoadedScene`, state `Preparing`: the editor with a GPU, `GameRuntimeOptions::PrepareRenderScenes`
+  for StrataRuntime with a window), so the frame that shows a scene builds none.
 - **Opening scenes** (`scene.open`, `EditorContext::BeginOpenScene`) loads in the background and answers once the scene
   replaced the edited one; meanwhile the edited scene is read-only (`CommitEdit` rolls edits back; mutating scene commands,
   undo, settings, script and property edits fail through `EditorContext::CheckSceneEditable`, which code editing the scene

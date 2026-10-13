@@ -4,6 +4,7 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Profiling.h"
+#include "Strata/Renderer/RenderScene.h"
 
 #include <algorithm>
 #include <utility>
@@ -48,6 +49,8 @@ namespace Strata
 		if (options.AssetBudgets)
 			runtime->m_AssetManager->SetResidencyBudgets(*options.AssetBudgets);
 		runtime->m_TimeDilation = options.TimeDilation;
+		if (options.PrepareRenderScenes)
+			runtime->m_LoadOptions.Prepare = &RenderScene::PrepareLoadedScene;
 		const AssetResidencyBudgets budgets = runtime->m_AssetManager->GetResidencyBudgets();
 		ST_CORE_INFO("Asset budgets: GPU textures {}, GPU buffers {}, CPU {}", DescribeBudget(budgets.GpuTextures), DescribeBudget(budgets.GpuBuffers),
 			DescribeBudget(budgets.Cpu));
@@ -85,7 +88,7 @@ namespace Strata
 			}
 			runtime->m_LoadingSceneLoad = CreateScope<PendingScene>();
 			runtime->m_LoadingSceneLoad->Scene = loadingScene;
-			runtime->m_LoadingSceneLoad->Request = SceneLoader::LoadAsync(loadingScene);
+			runtime->m_LoadingSceneLoad->Request = SceneLoader::LoadAsync(loadingScene, runtime->m_LoadOptions);
 		}
 		if (!runtime->LoadScene(runtime->m_Manifest.StartScene, outError))
 			return nullptr;
@@ -131,7 +134,7 @@ namespace Strata
 		// starts first, so that what both use keeps loading (Cancel leaves assets others pin alone).
 		Scope<PendingScene> next = CreateScope<PendingScene>();
 		next->Scene = scene;
-		next->Request = SceneLoader::LoadAsync(scene);
+		next->Request = SceneLoader::LoadAsync(scene, m_LoadOptions);
 		m_SceneLoad = std::move(next);
 		if (m_Scene)
 			m_Scene->SetSceneLoadProgress(0.0f);
@@ -144,7 +147,7 @@ namespace Strata
 			return;
 		Scope<PendingScene> next = CreateScope<PendingScene>();
 		next->Scene = m_SceneHandle;
-		next->Request = SceneLoader::LoadAsync(m_SceneHandle);
+		next->Request = SceneLoader::LoadAsync(m_SceneHandle, m_LoadOptions);
 		m_LoadingSceneLoad = std::move(next);
 	}
 

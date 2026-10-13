@@ -49,6 +49,10 @@ namespace Strata
 			// A game runs on the wall clock; runs of a fixed number of frames (--frames: checks, screenshots) keep every step.
 			runtimeOptions.TimeDilation = !m_Options.MaxFrames;
 			runtimeOptions.SaveFilesDirectory = m_Options.SaveDirectory;
+			// Headless runs (servers, CI) have no window to render to; with one, scenes have their render proxies built before
+			// they start, so the frame that shows one does not build them all.
+			const bool renders = Application::Get().GetWindow() && Renderer::IsInitialized();
+			runtimeOptions.PrepareRenderScenes = renders;
 			if (m_Options.TextureBudget)
 			{
 				runtimeOptions.AssetBudgets = AssetManagerBase::GetDefaultResidencyBudgets();
@@ -67,8 +71,7 @@ namespace Strata
 				Application::Get().Close();
 				return;
 			}
-			// Headless runs (servers, CI) have no window to render to.
-			if (Application::Get().GetWindow() && Renderer::IsInitialized())
+			if (renders)
 				m_Renderer = CreateScope<GameRenderer>();
 			if (!m_Options.PerfLogPath.empty())
 				StartPerfLog();

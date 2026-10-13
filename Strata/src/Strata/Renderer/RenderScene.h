@@ -9,6 +9,7 @@
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -124,9 +125,27 @@ namespace Strata
 		// from `assets` (the active asset manager; null: layouts change only through SetMeshLayout). Returns the number of
 		// proxies updated.
 		uint32_t Sync(const Ref<AssetManagerBase>& assets);
+		// Sync that reads at most `maxPending` of the queued entities (GetPendingCount): the latest queued; the others stay
+		// queued for the next sync. Everything else is synced as by Sync. For building a scene's proxies a share at a time
+		// before it is shown (Prepare).
+		uint32_t Sync(const Ref<AssetManagerBase>& assets, uint32_t maxPending);
 		// Entities whose MeshRendererComponent was created or signaled since the last sync: each at most once, however
 		// often it was signaled, so a scene that is changed but not rendered queues no more than its entities.
 		uint32_t GetPendingCount() const { return static_cast<uint32_t>(m_Pending.size()); }
+
+		// Builds the proxies of a scene no renderer shows yet (a scene that was loaded and has still to replace the shown
+		// one), within `budget` of this call: syncs chunks of its queued entities (Sync with c_PrepareChunk) until none is
+		// left or the budget is spent; at least one chunk. Returns true once none is queued. A scene's first sync would build
+		// every proxy in one frame (about 36 ms for 100,000 mesh renderers): owners that load scenes call this once per
+		// frame until it returns true before they show the scene, so that the frame that shows it builds none. Main thread.
+		static bool Prepare(Scene& scene, const Ref<AssetManagerBase>& assets, std::chrono::microseconds budget);
+		// The entities Prepare's syncs read at a time: a few hundred microseconds of work.
+		static constexpr uint32_t c_PrepareChunk = 2048;
+		// What a frame spends preparing a loaded scene (PrepareLoadedScene): 100,000 mesh renderers take about ten frames.
+		static constexpr std::chrono::microseconds c_PrepareFrameBudget { 4000 };
+		// SceneLoadOptions::Prepare for owners that render the scenes they load (the editor, StrataRuntime with a window):
+		// Prepare with the active asset manager and c_PrepareFrameBudget.
+		static bool PrepareLoadedScene(Scene& scene);
 
 		// Compares every proxy, the spatial index and the instance data with what a rebuild from the scene would produce.
 		// Returns false with the first difference.

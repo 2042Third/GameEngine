@@ -93,6 +93,7 @@
 	"PerfGPU.Editor.SceneOpen1MWorkingSet": { "Measured": 543.1, "Budget": 814.6, "Unit": "MB" },
 	"PerfGPU.Editor.PlayStart1MMaxFrame": { "Measured": 48.6, "Budget": 69.78, "Unit": "ms", "Target": 50.0 },
 	"PerfGPU.Editor.SceneOpenOver1MMaxFrame": { "Measured": 0.762, "Budget": 1.143, "Unit": "ms" },
+	"PerfGPU.Editor.SceneOpen100kCubesMaxFrame": { "Measured": 20.9, "Budget": 31.35, "Unit": "ms" },
 	"PerfGPU.Editor.ExportFrameStress": { "Measured": 0.4145, "Budget": 0.6217, "Unit": "ms" },
 	"PerfGPU.Editor.ExportStress": { "Measured": 466.7, "Budget": 700, "Unit": "ms" },
 	"PerfGPU.Editor.ExportMaxFrameStress": { "Measured": 4.254, "Budget": 6.38, "Unit": "ms" },

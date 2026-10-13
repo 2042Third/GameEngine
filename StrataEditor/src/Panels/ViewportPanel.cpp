@@ -852,8 +852,9 @@ namespace Strata
 				name = metadata->Path.empty() ? metadata->Name : metadata->Path;
 		}
 		// The load's progress counts the scene's document as it is read (SceneReadProgress), then what the scene uses by bytes:
-		// the bar moves on in both steps, and the step says what the time goes to.
-		const char* step = status.State == SceneLoadState::LoadingScene ? "Reading the scene" : "Loading what it uses";
+		// the bar moves on in both steps, and the step says what the time goes to (last, the view's render proxies are built).
+		const char* step = status.State == SceneLoadState::LoadingScene ? "Reading the scene"
+			: status.State == SceneLoadState::Preparing ? "Preparing the view" : "Loading what it uses";
 		const std::string stage = fmt::format("{} {:.0f}%", step, std::floor(status.Progress * 100.0f));
 
 		// A card in the middle of the image: the scene's name over the progress bar (no item takes the image's clicks but the

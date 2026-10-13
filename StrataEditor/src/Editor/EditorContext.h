@@ -489,6 +489,9 @@ namespace Strata
 		void ReplaceRuntimeScene(Ref<Scene> next, AssetHandle asset, std::span<const AssetHandle> loaded);
 		// Advances the scene being opened and makes it the edited scene once it is ready (Update).
 		void UpdateSceneLoad();
+		// SceneLoadOptions::Prepare of the editor's scene loads (opened and switched to in play mode): the loaded scene's
+		// render proxies while the editor renders (RenderScene::PrepareLoadedScene), nothing without a GPU.
+		static std::function<bool(Scene&)> GetScenePreparation();
 		// Makes a scene that was opened the edited one: the editor camera, the trim of what the previous scene used (sparing
 		// what the load brought in, `loaded`).
 		void FinishOpenScene(Ref<Scene> scene, AssetHandle handle, std::span<const AssetHandle> loaded);

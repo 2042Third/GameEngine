@@ -16,6 +16,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <limits>
 
 namespace Strata
 {
@@ -200,6 +201,28 @@ namespace Strata
 
 	uint32_t RenderScene::Sync(const Ref<AssetManagerBase>& assets)
 	{
+		return Sync(assets, std::numeric_limits<uint32_t>::max());
+	}
+
+	bool RenderScene::Prepare(Scene& scene, const Ref<AssetManagerBase>& assets, std::chrono::microseconds budget)
+	{
+		ST_PROFILE_FUNCTION();
+		RenderScene& renderScene = Get(scene);
+		const auto start = std::chrono::steady_clock::now();
+		do
+		{
+			renderScene.Sync(assets, c_PrepareChunk);
+		} while (renderScene.GetPendingCount() > 0 && std::chrono::steady_clock::now() - start < budget);
+		return renderScene.GetPendingCount() == 0;
+	}
+
+	bool RenderScene::PrepareLoadedScene(Scene& scene)
+	{
+		return Prepare(scene, AssetManager::GetActive(), c_PrepareFrameBudget);
+	}
+
+	uint32_t RenderScene::Sync(const Ref<AssetManagerBase>& assets, uint32_t maxPending)
+	{
 		ST_PROFILE_FUNCTION();
 		m_Scene->UpdateWorldTransforms();
 		m_SyncCount++;
@@ -208,7 +231,16 @@ namespace Strata
 		UpdateRenderTransforms(m_Scene->GetService<ISkinningPoses>());
 
 		m_PendingScratch.clear();
-		m_PendingScratch.swap(m_Pending);
+		if (m_Pending.size() <= maxPending)
+		{
+			m_PendingScratch.swap(m_Pending);
+		}
+		else
+		{
+			// The latest queued, so that the others keep their places in the queue.
+			m_PendingScratch.assign(m_Pending.end() - maxPending, m_Pending.end());
+			m_Pending.resize(m_Pending.size() - maxPending);
+		}
 		for (const entt::entity entity : m_PendingScratch)
 			m_PendingPositions[static_cast<size_t>(entt::to_entity(entity))] = c_InvalidIndex;
 		for (const entt::entity entity : m_PendingScratch)
@@ -238,8 +270,9 @@ namespace Strata
 		m_Stats.TotalUpdates += m_SyncUpdates;
 
 #ifdef ST_DEBUG
+		// Entities a partial sync left queued have no proxies yet (or older ones): the proxies match the scene once all are read.
 		std::string error;
-		if (!Validate(&error))
+		if (m_Pending.empty() && !Validate(&error))
 			ST_CORE_ASSERT(false, "The render proxies of scene '{}' differ from the scene (was a MeshRendererComponent written without a signal?): {}",
 				m_Scene->GetName(), error);
 #endif

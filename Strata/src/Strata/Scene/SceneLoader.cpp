@@ -126,6 +126,7 @@ namespace Strata
 		{
 			case SceneLoadState::LoadingScene:        return "LoadingScene";
 			case SceneLoadState::LoadingDependencies: return "LoadingDependencies";
+			case SceneLoadState::Preparing:           return "Preparing";
 			case SceneLoadState::Ready:               return "Ready";
 			case SceneLoadState::Failed:              return "Failed";
 			case SceneLoadState::Cancelled:           return "Cancelled";
@@ -276,6 +277,9 @@ namespace Strata
 		}
 
 		if (m_State == SceneLoadState::LoadingDependencies && m_Group.Progress() >= m_Options.RequiredProgress)
+			m_State = m_Options.Prepare ? SceneLoadState::Preparing : SceneLoadState::Ready;
+		// A frame's share of the preparation, from the frame that reached the requirement on.
+		if (m_State == SceneLoadState::Preparing && m_Options.Prepare(*m_Prepared))
 			m_State = SceneLoadState::Ready;
 	}
 

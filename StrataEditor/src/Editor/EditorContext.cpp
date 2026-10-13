@@ -16,6 +16,7 @@
 #include <Strata/Core/Profiling.h>
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
+#include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
@@ -477,6 +478,7 @@ namespace Strata
 		SceneLoadOptions options;
 		// The current file, not a copy loaded earlier.
 		options.Reload = true;
+		options.Prepare = GetScenePreparation();
 		Scope<SceneLoad> next = CreateScope<SceneLoad>();
 		next->Request = SceneLoader::LoadAsync(handle, options);
 		next->RequestedBy = m_Journal->GetOutermostRunningId();
@@ -496,6 +498,16 @@ namespace Strata
 			return fail(m_SceneLoadStatus.Error);
 		}
 		return true;
+	}
+
+	std::function<bool(Scene&)> EditorContext::GetScenePreparation()
+	{
+		// The viewport draws a scene from its render proxies: built while the scene waits to replace the shown one, so the
+		// frame that swaps it in builds none (a hundred thousand mesh renderers take tens of milliseconds). Without a GPU
+		// nothing draws them.
+		if (!Renderer::IsInitialized())
+			return {};
+		return &RenderScene::PrepareLoadedScene;
 	}
 
 	bool EditorContext::OpenScene(AssetHandle handle, std::string* outError)
@@ -845,7 +857,9 @@ namespace Strata
 			return true;
 		Scope<RuntimeSceneLoad> next = CreateScope<RuntimeSceneLoad>();
 		next->Scene = target;
-		next->Request = SceneLoader::LoadAsync(target);
+		SceneLoadOptions options;
+		options.Prepare = GetScenePreparation();
+		next->Request = SceneLoader::LoadAsync(target, options);
 		m_RuntimeSceneLoad = std::move(next);
 		m_RuntimeScene->SetSceneLoadProgress(0.0f);
 		return true;

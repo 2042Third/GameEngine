@@ -59,6 +59,15 @@ namespace
 		REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(SceneSerializer::Serialize(scene)) + "\n"));
 	}
 
+	// A grid of `count` cubes (the built-in mesh: one render proxy each) with a camera and a light, saved like WriteNestedScene's.
+	void WriteCubeScene(const std::filesystem::path& file, size_t count)
+	{
+		Scene scene("Cubes");
+		Perf::AddCameraAndLight(scene);
+		Perf::CreateCubeGrid(scene, count);
+		REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(SceneSerializer::Serialize(scene)) + "\n"));
+	}
+
 	// The results the command script logged for its steps running `command` ("editor.wait -> {...}"), in order.
 	std::vector<nlohmann::json> FindCommandResults(const std::string& output, std::string_view command)
 	{
@@ -123,20 +132,23 @@ TEST_SUITE("PerfGPU.Editor")
 		REQUIRE_MESSAGE(project, error);
 		const std::filesystem::path scenes = project->GetAssetDirectory() / "Scenes";
 		REQUIRE(FileSystem::CreateDirectories(scenes));
-		const std::vector<std::filesystem::path> sceneFiles = { scenes / "Nested100k.stscene", scenes / "Nested1M.stscene" };
+		const std::vector<std::filesystem::path> sceneFiles = { scenes / "Nested100k.stscene", scenes / "Nested1M.stscene", scenes / "Cubes100k.stscene" };
 		WriteNestedScene(sceneFiles[0], 100'000);
 		WriteNestedScene(sceneFiles[1], 1'000'000);
+		WriteCubeScene(sceneFiles[2], 100'000);
 
 		// Once the editor's first frames are drawn (they create its renderers), each scene is opened (scene.open reports the
 		// frames that ran while it loaded), edited for 120 frames, then played for 120 frames. After the million entities are
 		// in, editor.status reports the editor's memory; the frame that starts playing them (copying the scene) is the longest
-		// of the latest few frames editor.perf summarizes. Last, the smaller scene is opened again over the million entities,
-		// which it replaces.
+		// of the latest few frames editor.perf summarizes. Then the smaller scene is opened again over the million entities,
+		// which it replaces, and last 100,000 cubes over it: render proxies the viewport draws, which their load builds over
+		// frames before the swap (RenderScene::PrepareLoadedScene), so the frame that shows them builds none.
 		constexpr int c_PlayStartFrames = 8;
 		const nlohmann::json script = nlohmann::json::array({ Wait(),
 			OpenScene("Scenes/Nested100k.stscene"), Wait(), Command("play.start"), Wait(), Command("play.stop"),
 			OpenScene("Scenes/Nested1M.stscene"), Wait(), Command("editor.status"), Command("play.start"), Wait(c_PlayStartFrames / 2),
-			Command("editor.perf", { { "frames", c_PlayStartFrames } }), Wait(), Command("play.stop"), OpenScene("Scenes/Nested100k.stscene") });
+			Command("editor.perf", { { "frames", c_PlayStartFrames } }), Wait(), Command("play.stop"), OpenScene("Scenes/Nested100k.stscene"),
+			OpenScene("Scenes/Cubes100k.stscene") });
 		const std::filesystem::path scriptFile = directory / "Commands.json";
 		REQUIRE(FileSystem::WriteText(scriptFile, script.dump(1, '\t') + "\n"));
 
@@ -150,7 +162,7 @@ TEST_SUITE("PerfGPU.Editor")
 			"PerfGPU.Editor.EditFrameNested1M", "PerfGPU.Editor.PlayFrameNested1M" };
 		std::vector<std::string> metrics = frameMetrics;
 		metrics.insert(metrics.end(), { "PerfGPU.Editor.SceneOpen100kMaxFrame", "PerfGPU.Editor.SceneOpen1MMaxFrame", "PerfGPU.Editor.SceneOpen1MWorkingSet",
-			"PerfGPU.Editor.PlayStart1MMaxFrame", "PerfGPU.Editor.SceneOpenOver1MMaxFrame" });
+			"PerfGPU.Editor.PlayStart1MMaxFrame", "PerfGPU.Editor.SceneOpenOver1MMaxFrame", "PerfGPU.Editor.SceneOpen100kCubesMaxFrame" });
 		Perf::CheckBudgetsConfirmed(metrics, [&]
 		{
 			// Maximized (the default): the frames draw the editor at the size people use it. --frames keeps the run from
@@ -196,15 +208,17 @@ TEST_SUITE("PerfGPU.Editor")
 
 			// scene.open answers once the scene is in, with the frames that ran meanwhile.
 			const std::vector<nlohmann::json> opens = FindCommandResults(run.Output, "scene.open");
-			REQUIRE(opens.size() == 3);
+			REQUIRE(opens.size() == 4);
 			CHECK(GetNumber(opens[0], "/entities") == 100'000 + 2);
 			CHECK(GetNumber(opens[1], "/entities") == 1'000'000 + 2);
 			CHECK(GetNumber(opens[2], "/entities") == 100'000 + 2);
+			CHECK(GetNumber(opens[3], "/entities") == 100'000 + 2);
 			MESSAGE("Opening 100,000 entities: ", GetNumber(opens[0], "/seconds"), " s over ", GetNumber(opens[0], "/frames"), " frames; 1,000,000: ",
 				GetNumber(opens[1], "/seconds"), " s over ", GetNumber(opens[1], "/frames"), " frames");
 			values["PerfGPU.Editor.SceneOpen100kMaxFrame"] = GetNumber(opens[0], "/frameTimes/maxMs");
 			values["PerfGPU.Editor.SceneOpen1MMaxFrame"] = GetNumber(opens[1], "/frameTimes/maxMs");
 			values["PerfGPU.Editor.SceneOpenOver1MMaxFrame"] = GetNumber(opens[2], "/frameTimes/maxMs");
+			values["PerfGPU.Editor.SceneOpen100kCubesMaxFrame"] = GetNumber(opens[3], "/frameTimes/maxMs");
 			const std::vector<nlohmann::json> statuses = FindCommandResults(run.Output, "editor.status");
 			REQUIRE(statuses.size() == 1);
 			values["PerfGPU.Editor.SceneOpen1MWorkingSet"] = GetNumber(statuses[0], "/memory/workingSetMB");

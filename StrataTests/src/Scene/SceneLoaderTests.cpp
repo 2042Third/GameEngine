@@ -114,6 +114,70 @@ TEST_SUITE("Scene.Loader")
 		REQUIRE(manager.WaitForPendingLoads());
 	}
 
+	TEST_CASE("A load with a preparation works on its scene once per update after all it uses is in, and is ready when that is done")
+	{
+		SceneLoaderFixture fixture;
+		FakeAssetManager& manager = *fixture.Manager;
+		struct Call
+		{
+			const Scene* Prepared = nullptr;
+			size_t LoadedDependencies = 0;
+		};
+		std::vector<Call> calls;
+		SceneLoadOptions options;
+		options.Prepare = [&](Scene& scene)
+		{
+			Call call { &scene };
+			for (const AssetHandle dependency : fixture.Dependencies)
+				call.LoadedDependencies += manager.GetAssetState(dependency) == AssetState::Ready ? 1 : 0;
+			calls.push_back(call);
+			return calls.size() == 3;
+		};
+		SceneLoadRequest request = SceneLoader::LoadAsync(fixture.SceneHandle, options);
+		REQUIRE(WaitUntil([&]()
+		{
+			manager.Update();
+			request.Update();
+			return request.GetState() == SceneLoadState::Preparing || request.IsFinished();
+		}, std::chrono::milliseconds(10000)));
+		REQUIRE(request.GetState() == SceneLoadState::Preparing);
+		CHECK(std::string(SceneLoadStateToString(request.GetState())) == "Preparing");
+		// Called in the update that found everything in, not before.
+		REQUIRE(calls.size() == 1);
+		CHECK(calls[0].LoadedDependencies == fixture.Dependencies.size());
+		CHECK_FALSE(request.IsFinished());
+		CHECK_FALSE(request.TakeScene());
+
+		request.Update();
+		CHECK(request.GetState() == SceneLoadState::Preparing);
+		request.Update();
+		CHECK(request.GetState() == SceneLoadState::Ready);
+		CHECK(request.GetProgress() == 1.0f);
+		const Ref<Scene> scene = request.TakeScene();
+		REQUIRE(scene);
+		REQUIRE(calls.size() == 3);
+		for (const Call& call : calls)
+			CHECK(call.Prepared == scene.get()); // The scene the load hands over
+		request.Update();
+		CHECK(calls.size() == 3); // Never again once ready
+
+		// A load cancelled while it prepares stops preparing.
+		calls.clear();
+		SceneLoadRequest cancelled = SceneLoader::LoadAsync(fixture.SceneHandle, options);
+		REQUIRE(WaitUntil([&]()
+		{
+			manager.Update();
+			cancelled.Update();
+			return cancelled.GetState() == SceneLoadState::Preparing || cancelled.IsFinished();
+		}, std::chrono::milliseconds(10000)));
+		REQUIRE(cancelled.GetState() == SceneLoadState::Preparing);
+		cancelled.Cancel();
+		CHECK(cancelled.GetState() == SceneLoadState::Cancelled);
+		cancelled.Update();
+		CHECK(calls.size() == 1);
+		CHECK_FALSE(cancelled.TakeScene());
+	}
+
 	TEST_CASE("Two loads of one scene each get a scene of their own")
 	{
 		SceneLoaderFixture fixture;

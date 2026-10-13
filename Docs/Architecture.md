@@ -516,7 +516,7 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Input` | `Input::BeginFrame` and the window's events (`Application::RunFrame`) |
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
-| `Scene.Load` | scene loads' main-thread work: swapping a loaded scene in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
+| `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (`SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
 | `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
@@ -666,10 +666,13 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   part would fill the room it needs, to be evicted again (`GetSkippedAssetCount`). A level larger than a budget never
   pushes the pool past it. States: `LoadingScene` (the document is read and the
   scene prepared on the loading worker, its world transforms included), `LoadingDependencies` (the prepared scene is
-  taken and the spent asset unloaded; the rest goes on loading), `Ready` (the share of the stored bytes it waits for that
-  `SceneLoadOptions::RequiredProgress` asks for is in: all of it by default; a dependency that fails, or is deleted
-  meanwhile, counts as finished, the scene shows a fallback for it), `Failed` (the scene asset could not be loaded, or was
-  deleted before it was read) and `Cancelled`. `GetProgress` is the
+  taken and the spent asset unloaded; the rest goes on loading), `Preparing` (enough of it is in, and
+  `SceneLoadOptions::Prepare` works on the scene once per frame until it returns true: owners that render the scenes
+  they load, the editor with a GPU and `StrataRuntime` with a window (`GameRuntimeOptions::PrepareRenderScenes`), build
+  its render proxies so, `RenderScene::PrepareLoadedScene`, see Render scene), `Ready` (the share of the stored bytes it
+  waits for that `SceneLoadOptions::RequiredProgress` asks for is in: all of it by default; a dependency that fails, or is
+  deleted meanwhile, counts as finished, the scene shows a fallback for it; and the scene is prepared), `Failed` (the
+  scene asset could not be loaded, or was deleted before it was read) and `Cancelled`. `GetProgress` is the
   group's share of stored bytes (it never decreases); while the document is read, the read's own progress counts for the
   document's share (`Scene/SceneReadProgress.h`: the scene asset's loader, `RegisterSceneModule`, registers a
   `SceneReadProgress::Tracker` per read, and
@@ -1548,7 +1551,14 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   `MeshRendererComponent` fields must therefore signal, like transform writes (AGENTS.md, "Architecture rules"); Debug
   builds compare the proxies with the scene after every `Sync` (`RenderScene::Validate`). Signaled entities wait for the
   next `Sync` in a queue that holds each entity once (destroyed ones leave it), so a scene that changes while nothing
-  renders it (a hidden view, an agent capturing now and then) queues no more than its entities.
+  renders it (a hidden view, an agent capturing now and then) queues no more than its entities. A scene's first sync
+  builds every proxy (about 36 ms for 100,000 mesh renderers, Release), so a loaded scene is prepared before it is shown:
+  `RenderScene::Prepare` syncs chunks of `c_PrepareChunk` queued entities (`Sync(assets, maxPending)` reads the latest
+  queued ones and leaves the others queued) until its budget is spent, and `PrepareLoadedScene`, the scene loads'
+  `SceneLoadOptions::Prepare` where the owner renders, spends `c_PrepareFrameBudget` (4 ms) per frame. The frame that
+  swaps the scene in then builds no proxy (the longest frame of opening 20,000 prefab instances of five cubes in the
+  editor: 51-52 ms before, 15.5-17 ms with it, most of it the first frame's upload of every instance and the
+  Hierarchy's rows).
 - **Mesh layouts**. The bounds, submeshes and submesh materials of a mesh are learned from the loaded mesh
   (`SetMeshLayout`) and kept when it is evicted. `Sync(assets)` keeps them current with the asset manager whatever the
   renderers look at: it reads the manager's content changes since its own content version (all of them when the

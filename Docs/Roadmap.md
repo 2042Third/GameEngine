@@ -431,7 +431,9 @@ Open items and deferrals later waves own:
   start scene's load read (the budget came from mip streaming's own build, where one of frames 8-11 was the slowest);
   `EntityCreate100kRoots` at 85-90% of its budget and the Streaming panel's refresh frames at up to 93%; the maxima
   whose budgets the campaign tightened and that need a confirmation now and then (`SceneOpenOver1MMaxFrame` 2.4-3.3 ms
-  in 2 of 10 first attempts against 1.143, `SceneSwitch100kMaxFrame` 0.31-0.37 ms in 2 against 0.2002,
+  in 2 of 10 first attempts against 1.143; on the evening of 2026-10-12 2.3-4.0 ms in 6 of 7 first attempts of the
+  review fixes' base and in 5 of 10 with the scene preparation, which once failed all three attempts: both builds show
+  the slow mode, and the budget holds for the quiet one only; `SceneSwitch100kMaxFrame` 0.31-0.37 ms in 2 against 0.2002,
   `Mips.MaxFrameRatio` 1.28 in 1 against 1.19); `ContentBrowser10kThumbnailsP95` once at 0.053 ms in 10 runs
   (0.036-0.042 otherwise) against 0.057; and `PerfGPU.Editor.ImportSettings4kMaxFrame`, whose first attempt measures
   6.9-7.6 ms when run alone in a fresh process (main's build 2.9-3.6 ms; 2.1 ms in the perf label's runs, where the

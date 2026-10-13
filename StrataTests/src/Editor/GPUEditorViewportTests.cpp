@@ -17,7 +17,9 @@
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/SceneRenderer.h>
+#include <Strata/Scene/Components.h>
 
 #include <stb_image.h>
 
@@ -629,6 +631,64 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(pausedTimes[0] > 0.0);
 		const int differences = harness.CountDifferences(pausedImages[0], pausedImages[1]);
 		CHECK_MESSAGE(differences < 60, differences, " pixels differ");
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A scene the editor opens, or a running game switches to, has its render proxies built before it is shown")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("PreparedScenes");
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
+		const uint32_t count = RenderScene::c_PrepareChunk * 3 + 1;
+		{
+			Scene& scene = *harness.Context.GetEditScene();
+			for (uint32_t index = 0; index < count; index++)
+			{
+				Entity cube = scene.CreateEntity("Cube");
+				cube.GetComponent<TransformComponent>().Translation = glm::vec3(static_cast<float>(index % 64) * 2.0f, 0.0f, static_cast<float>(index / 64) * 2.0f);
+				cube.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+			}
+		}
+		const std::string cubes = harness.Run("scene.saveAs", { { "path", "Scenes/Cubes.stscene" } })["scene"].get<std::string>();
+		// The project's picture renders the edited scene in the frames after a save: done before the scene is replaced.
+		for (int frame = 0; frame < 3000 && harness.Context.GetProjectThumbnail().IsPending(); frame++)
+		{
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			harness.Context.Update(Timestep(1.0f / 60.0f));
+			gpu.GetDevice().EndFrame();
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		REQUIRE_FALSE(harness.Context.GetProjectThumbnail().IsPending());
+		harness.Run("scene.new");
+
+		// Nothing renders in these frames (no viewport panel draws): what the scene brings, its load built.
+		const EditorCommandResult opened = harness.RunFrames("scene.open", { { "scene", cubes } });
+		REQUIRE_MESSAGE(opened.Success, opened.Error);
+		const size_t entities = opened.Value["entities"].get<size_t>();
+		const RenderScene* edited = RenderScene::Find(*harness.Context.GetEditScene());
+		REQUIRE(edited);
+		CHECK(edited->GetPendingCount() == 0);
+		CHECK(edited->GetStats().Proxies == count);
+
+		// A switch the running game asks for, the same way.
+		harness.Run("scene.new");
+		harness.Run("play.start", { { "build", false } });
+		harness.Context.GetActiveScene()->RequestSceneLoad(UUIDFromJson(nlohmann::json(cubes)).value());
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (harness.Context.GetActiveScene()->GetEntityCount() != entities)
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			harness.Context.Update(Timestep(1.0f / 60.0f));
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		const RenderScene* running = RenderScene::Find(*harness.Context.GetActiveScene());
+		REQUIRE(running);
+		CHECK(running->GetPendingCount() == 0);
+		CHECK(running->GetStats().Proxies == count);
+		harness.Run("play.stop");
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

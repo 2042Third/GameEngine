@@ -3,10 +3,12 @@
 #include "Asset/AssetTestUtils.h"
 #include "Scene/SceneTestUtils.h"
 #include "Strata/Asset/AssetPackWriter.h"
+#include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Project/GameManifest.h"
+#include "Strata/Renderer/RenderScene.h"
 #include "Strata/Runtime/GameRuntime.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
@@ -41,6 +43,20 @@ namespace
 		scene.CreateEntity("Camera").AddComponent<CameraComponent>().Primary = true;
 		for (size_t index = 0; index < count; index++)
 			scene.CreateEntity("Entity");
+		return ToBytes(JsonUtils::Dump(SceneSerializer::Serialize(scene)));
+	}
+
+	// A scene document named `name` with a camera and `count` cubes (the built-in mesh, which every asset manager has).
+	std::vector<uint8_t> MakeCubeScene(const std::string& name, size_t count)
+	{
+		Scene scene(name);
+		scene.CreateEntity("Camera").AddComponent<CameraComponent>().Primary = true;
+		for (size_t index = 0; index < count; index++)
+		{
+			Entity cube = scene.CreateEntity("Cube");
+			cube.GetComponent<TransformComponent>().Translation = glm::vec3(static_cast<float>(index % 100) * 2.0f, 0.0f, static_cast<float>(index / 100) * 2.0f);
+			cube.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		}
 		return ToBytes(JsonUtils::Dump(SceneSerializer::Serialize(scene)));
 	}
 
@@ -199,6 +215,41 @@ TEST_SUITE("Runtime.Game")
 		CHECK(game->GetLoadingSceneAsset() == UUID(0x1012));
 		UpdateUntil(*game, [&]() { return !game->IsLoadingScene(); });
 		CHECK(game->GetSceneHandle() == UUID(0x1012));
+	}
+
+	TEST_CASE("A game that renders starts and switches to scenes whose render proxies are built already")
+	{
+		ScopedJobSystem jobs(2, 2);
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimePreparedScenes");
+		const size_t startCubes = RenderScene::c_PrepareChunk * 2 + 3;
+		const size_t nextCubes = RenderScene::c_PrepareChunk + 5;
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeCubeScene("Start", startCubes) }, { 0x1012, MakeCubeScene("Next", nextCubes) } },
+			UUID(0x1010));
+		GameRuntimeOptions options;
+		options.PrepareRenderScenes = true;
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, options);
+		REQUIRE_MESSAGE(game, error);
+		REQUIRE(game->WaitForStart());
+		// Nothing has drawn the scene, yet its proxies are all there: the first frame that draws it builds none.
+		const RenderScene* start = RenderScene::Find(*game->GetScene());
+		REQUIRE(start);
+		CHECK(start->GetPendingCount() == 0);
+		CHECK(start->GetStats().Proxies == startCubes);
+
+		game->GetScene()->RequestSceneLoad(UUID(0x1012));
+		UpdateUntil(*game, [&]() { return game->GetSceneHandle() == UUID(0x1012); });
+		const RenderScene* next = RenderScene::Find(*game->GetScene());
+		REQUIRE(next);
+		CHECK(next->GetPendingCount() == 0);
+		CHECK(next->GetStats().Proxies == nextCubes);
+
+		// A headless game (the default) draws nothing, so it builds no proxies.
+		game.reset();
+		Scope<GameRuntime> headless = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(headless, error);
+		REQUIRE(headless->WaitForStart());
+		CHECK(RenderScene::Find(*headless->GetScene()) == nullptr);
 	}
 
 	TEST_CASE("A scene the running scene asks for in every update loads once and replaces it")

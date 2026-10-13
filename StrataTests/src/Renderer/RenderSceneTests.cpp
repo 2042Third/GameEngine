@@ -688,6 +688,62 @@ TEST_SUITE("Renderer.RenderScene")
 		CheckProxies(renderScene);
 	}
 
+	TEST_CASE("A scene's proxies are built a chunk at a time before it is shown, and match the scene however it changes meanwhile")
+	{
+		// A loaded scene waiting to replace the shown one (SceneLoadOptions::Prepare): nothing renders it yet.
+		Scene scene("Loaded");
+		const uint32_t count = RenderScene::c_PrepareChunk * 3 + 7;
+		std::vector<Entity> cubes;
+		for (uint32_t index = 0; index < count; index++)
+			cubes.push_back(AddCube(scene, glm::vec3(static_cast<float>(index % 100) * 2.0f, 0.5f, static_cast<float>(index / 100) * 2.0f)));
+		RenderScene& renderScene = RenderScene::Get(scene);
+		REQUIRE(renderScene.GetPendingCount() == count);
+
+		// A partial sync reads only as many queued entities as it is given; the others wait in the queue.
+		CHECK(renderScene.Sync(nullptr, 5) == 5);
+		CHECK(renderScene.GetStats().Proxies == 5);
+		CHECK(renderScene.GetPendingCount() == count - 5);
+		const size_t built = static_cast<size_t>(std::count_if(cubes.begin(), cubes.end(),
+			[&](Entity cube) { return renderScene.FindProxy(cube.GetHandle()) != RenderScene::c_InvalidIndex; }));
+		CHECK(built == 5);
+
+		// Without a budget each call reads one chunk, so a frame's share stays bounded however large the scene is.
+		CHECK_FALSE(RenderScene::Prepare(scene, nullptr, std::chrono::microseconds(0)));
+		CHECK(renderScene.GetStats().Proxies == 5 + RenderScene::c_PrepareChunk);
+		CHECK(renderScene.GetPendingCount() == count - 5 - RenderScene::c_PrepareChunk);
+
+		// The scene changes between the calls: a built proxy moves, a queued entity gets another material, another is destroyed,
+		// and a new one is created.
+		std::vector<Entity> withProxy;
+		std::vector<Entity> withoutProxy;
+		for (Entity cube : cubes)
+			(renderScene.FindProxy(cube.GetHandle()) != RenderScene::c_InvalidIndex ? withProxy : withoutProxy).push_back(cube);
+		REQUIRE(withoutProxy.size() >= 2);
+		Entity moved = withProxy.front();
+		moved.GetComponent<TransformComponent>().Translation.y = 7.0f;
+		moved.MarkModified<TransformComponent>();
+		Entity queued = withoutProxy[0];
+		queued.GetComponent<MeshRendererComponent>().Material = UUID(0x4242);
+		queued.MarkModified<MeshRendererComponent>();
+		scene.DestroyEntity(withoutProxy[1]);
+		const Entity added = AddCube(scene, glm::vec3(-5.0f));
+		CHECK_FALSE(RenderScene::Prepare(scene, nullptr, std::chrono::microseconds(0)));
+		const auto start = std::chrono::steady_clock::now();
+		while (!RenderScene::Prepare(scene, nullptr, std::chrono::microseconds(0)))
+			REQUIRE(std::chrono::steady_clock::now() - start < std::chrono::seconds(30));
+
+		// Built as one sync would build them.
+		CHECK(renderScene.GetPendingCount() == 0);
+		CHECK(renderScene.GetStats().Proxies == count); // One destroyed, one added
+		CHECK(renderScene.GetWorldBounds(renderScene.FindProxy(moved.GetHandle())).Min.y == doctest::Approx(6.0f));
+		CHECK(renderScene.GetMaterialOverride(renderScene.FindProxy(queued.GetHandle())) == UUID(0x4242));
+		CHECK(renderScene.FindProxy(added.GetHandle()) != RenderScene::c_InvalidIndex);
+		CheckProxies(renderScene);
+		// Prepared: the frame that shows it finds nothing to build.
+		CHECK(RenderScene::Prepare(scene, nullptr, std::chrono::microseconds(0)));
+		CHECK(renderScene.Sync(nullptr) == 0);
+	}
+
 	TEST_CASE("Mesh and material slots are shared by their users and released with the last one")
 	{
 		Scene scene("Slots");

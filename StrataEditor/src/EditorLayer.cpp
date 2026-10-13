@@ -1665,7 +1665,8 @@ namespace Strata
 			{
 				const EditorSceneLoadStatus& load = m_Context.GetSceneLoadStatus();
 				tooltip += fmt::format(" A scene is being opened ({:.0f}% of it and what it uses is in; {}); it replaces the edited scene once all of it is.",
-					std::floor(load.Progress * 100.0f), load.State == SceneLoadState::LoadingScene ? "its document is being read" : "what it uses is loading");
+					std::floor(load.Progress * 100.0f), load.State == SceneLoadState::LoadingScene ? "its document is being read"
+					: load.State == SceneLoadState::Preparing ? "its view is being prepared" : "what it uses is loading");
 			}
 			if (!shownPool)
 			{

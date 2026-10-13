@@ -4,6 +4,7 @@
 #include "Strata/Core/Base.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -16,7 +17,8 @@ namespace Strata
 	{
 		LoadingScene = 0,    // The scene asset is read and its scene prepared (on the loading worker)
 		LoadingDependencies, // The scene is prepared; what it uses is still loading
-		Ready,               // The scene and enough of what it uses are loaded (SceneLoadOptions::RequiredProgress)
+		Preparing,           // Enough of what it uses is loaded; SceneLoadOptions::Prepare works on the scene
+		Ready,               // The scene and enough of what it uses are loaded (SceneLoadOptions::RequiredProgress), and prepared
 		Failed,              // The scene asset could not be loaded (GetError)
 		Cancelled            // Cancel was called
 	};
@@ -33,6 +35,11 @@ namespace Strata
 		float RequiredProgress = 1.0f;
 		// Read the scene asset's stored form again even when it is loaded (an editor opens the file as it is now).
 		bool Reload = false;
+		// Work on the loaded scene before it is Ready, a frame's share per call: once enough of what it uses is loaded, Update
+		// calls it once per frame with the scene (state Preparing) until it returns true. Owners that render the scenes they
+		// load build their render proxies so (RenderScene::PrepareLoadedScene), which the frame that shows a scene would
+		// otherwise build all at once. Empty: Ready at once.
+		std::function<bool(Scene& scene)> Prepare;
 	};
 
 	// One asynchronous scene load (SceneLoader::LoadAsync): the scene asset is read into a prepared scene on the loading
@@ -80,7 +87,8 @@ namespace Strata
 		size_t GetSkippedAssetCount() const { return m_SkippedAssets; }
 
 		// Advances the load: takes the prepared scene once its asset is loaded (the spent asset is unloaded, so a later load
-		// reads the file again) and becomes Ready once the closure's progress reaches the options' requirement. A dependency
+		// reads the file again), calls the options' Prepare once the closure's progress reaches the options' requirement, and
+		// becomes Ready once that progress is reached and Prepare (if any) returned true. A dependency
 		// that fails to load, or is unregistered meanwhile, counts as finished (the scene shows a fallback for it); a scene
 		// asset that fails, or is unregistered before it was read, fails the load. Main thread, once per frame (after the
 		// asset manager's Update).
