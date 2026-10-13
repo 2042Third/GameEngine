@@ -111,9 +111,12 @@ fixes get patch versions):
    the runtime's log report it.
 2. Write `Docs/Releases/<version>.md` for the people who download it (what Strata can do, requirements, known issues,
    reporting problems), link it from `Docs/README.md`, and bring `Docs/Releases/PackageReadme.md` up to date.
-3. Push a tag `v<version>-rc1` for a dry run: the workflow builds Dist on CI's runners, runs the tests CI runs (with
-   `StrataEditor.Install`), packs the archives, unpacks each and runs its executables, and uploads them with SHA256
-   checksums as workflow artifacts without publishing. Download and try them.
+3. Run `ctest --preset <platform>-dist -LE "gpu|perf"` locally: CI tests Debug, the release workflow tests the Dist
+   build it ships, where asserts are compiled out and `ST_DIST` code paths differ (a test whose expectations depend on
+   the configuration says so with `#if defined(ST_DIST)`). Then push a tag `v<version>-rc1` for a dry run: the workflow
+   builds Dist on CI's runners, runs the tests CI runs (`-LE "gpu|perf"`, with `StrataEditor.Install`) in Dist, packs
+   the archives, unpacks each and runs its executables, and uploads them with SHA256 checksums as workflow artifacts
+   without publishing. Download and try them.
 4. Push the tag `v<version>`: the same, then `gh release create` publishes the archives, their checksums and
    `SHA256SUMS.txt` as "Strata <version>" with the notes. The workflow fails when the tag's version is not the project's
    or the notes are missing. Run by hand (workflow_dispatch) with a tag it does the same; without one it is a dry run of

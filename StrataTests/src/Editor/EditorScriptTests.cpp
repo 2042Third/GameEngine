@@ -453,8 +453,13 @@ TEST_SUITE("Editor.Scripts")
 		CHECK(FileSystem::IsRegularFile(module));
 		std::filesystem::path symbols = GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS);
 		symbols.replace_extension(".pdb");
+#if !defined(ST_DIST)
 		if (FileSystem::IsRegularFile(symbols))
 			CHECK(FileSystem::IsRegularFile(build / symbols.filename()));
+#else
+		// A Dist editor leaves the symbols out by default (GameExportOptions::IncludeScriptSymbols).
+		CHECK_FALSE(FileSystem::Exists(build / symbols.filename()));
+#endif
 		const std::filesystem::path manifestPath = FileSystem::FromUTF8(exported["manifest"].get<std::string>());
 		const std::optional<GameManifest> manifest = GameManifest::Load(manifestPath);
 		REQUIRE(manifest);
