@@ -618,8 +618,10 @@ namespace Strata
 
 		std::vector<AppliedStep> steps = std::move(m_PendingSteps);
 		m_PendingSteps.clear();
-		Enqueue([journal, directory = m_Directory, steps = std::move(steps), snapshot, settings = SerializeSettings(scene.GetSettings()),
-			sceneName = scene.GetName(), discarded, lastWriteTime = m_LastWriteTime, processId = m_ProcessId, processStartTime = m_ProcessStartTime]()
+		// The journal's text is worked out by a background worker, then written by the file operation queued after it.
+		Ref<std::string> text = CreateRef<std::string>();
+		Enqueue([journal, text, steps = std::move(steps), snapshot, settings = SerializeSettings(scene.GetSettings()), sceneName = scene.GetName(),
+			discarded, processId = m_ProcessId, processStartTime = m_ProcessStartTime]()
 		{
 			Journal& target = *journal;
 			if (snapshot)
@@ -696,21 +698,31 @@ namespace Strata
 				{ "Entities", entityCount },
 				{ "Steps", target.Segments.size() + (target.Base ? 1 : 0) },
 				{ "Complete", target.Complete } };
+			*text = JsonUtils::Dump(header) + "\n" + body;
+		}, true);
+		Enqueue([journal, text, directory = m_Directory, sceneName = scene.GetName(), lastWriteTime = m_LastWriteTime]()
+		{
+			// Empty when working it out failed (reported then).
+			if (text->empty())
+				return;
 			std::string error;
-			if (!WriteFileReplacing(directory / FileSystem::FromUTF8(target.Stem + c_FileExtension), JsonUtils::Dump(header) + "\n" + body, error))
+			const bool written = WriteFileReplacing(directory / FileSystem::FromUTF8(journal->Stem + c_FileExtension), *text, error);
+			// A large journal's text goes with its write.
+			std::string().swap(*text);
+			if (!written)
 			{
 				ST_WARN("Recovery: the unsaved changes of '{}' could not be written: {}", sceneName, error);
 				return;
 			}
-			target.Written = true;
+			journal->Written = true;
 			lastWriteTime->store(GetUnixMilliseconds(), std::memory_order_release);
 		});
 		return true;
 	}
 
-	void SceneRecovery::Enqueue(std::function<void()> operation)
+	void SceneRecovery::Enqueue(std::function<void()> operation, bool compute)
 	{
-		m_Operations.push_back(std::move(operation));
+		m_Operations.push_back(Operation { std::move(operation), compute });
 		PumpOperations();
 	}
 
@@ -719,20 +731,21 @@ namespace Strata
 		// One at a time, in order; without a job system the operation runs at once.
 		while (!m_Operations.empty() && (!m_Running.IsValid() || m_Running.IsComplete()))
 		{
-			std::function<void()> operation = std::move(m_Operations.front());
+			Operation operation = std::move(m_Operations.front());
 			m_Operations.pop_front();
-			m_Running = JobSystem::SubmitIO([operation = std::move(operation)]()
+			std::function<void()> job = [function = std::move(operation.Function)]()
 			{
-				// File operations use third-party code (JSON) that may throw: contained, so the I/O thread goes on.
+				// Operations use third-party code (JSON) that may throw: contained, so the thread goes on.
 				try
 				{
-					operation();
+					function();
 				}
 				catch (const std::exception& exception)
 				{
 					ST_ERROR("Recovery: a file operation failed: {}", exception.what());
 				}
-			});
+			};
+			m_Running = operation.Compute ? JobSystem::Submit(std::move(job), JobPriority::Background) : JobSystem::SubmitIO(std::move(job));
 		}
 	}
 

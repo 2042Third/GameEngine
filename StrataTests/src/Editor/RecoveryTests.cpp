@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Asset/AssetTestUtils.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -13,6 +14,7 @@
 #include "UI/RecoveryDialog.h"
 
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Reflection/ComponentRegistry.h>
@@ -237,6 +239,34 @@ TEST_SUITE("Editor.Recovery")
 			return !ListRecoveryFiles(harness.GetRecoveryDirectory()).empty();
 		}, std::chrono::seconds(10)));
 		CHECK(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() >= SceneRecovery::c_QuietSeconds);
+	}
+
+	TEST_CASE("A journal's text is worked out on a background worker, and only its file is written on an I/O thread")
+	{
+		// The editor's threads (without a job system the operations run at once). The I/O threads also serve asset loads and
+		// mip reads, which would wait behind the work of a large journal.
+		Tests::ScopedJobSystem jobs(2, 2);
+		RecoveryHarness harness(Tests::CreateTemporaryDirectory("RecoveryThreads") / "Game");
+		harness.Run("entity.create", { { "name", "Crate" } });
+		SceneRecovery& recovery = harness.Context.GetRecovery();
+		recovery.Wait();
+
+		const JobSystemStats before = JobSystem::GetStats();
+		REQUIRE(recovery.Flush(*harness.Context.GetEditScene(), harness.Context.IsSceneModified()));
+		// Frames go on meanwhile and nothing waits for the operations, so each runs on its own pool (a thread that waits for
+		// a job runs it itself).
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			harness.Context.Update(Timestep(1.0f / 60.0f));
+			return !recovery.IsBusy();
+		}, std::chrono::seconds(10)));
+		const JobSystemStats after = JobSystem::GetStats();
+		CHECK(after.Background.CompletedJobs - before.Background.CompletedJobs >= 1);
+		CHECK(after.IO.CompletedJobs - before.IO.CompletedJobs >= 1);
+		const std::vector<std::filesystem::path> files = ListRecoveryFiles(harness.GetRecoveryDirectory());
+		REQUIRE(files.size() == 1);
+		CHECK(ReadRecoveryHeader(files[0])["Entities"].get<uint64_t>() >= 1);
+		CHECK(harness.Run("editor.status")["recovery"]["journal"]["writes"] == 1);
 	}
 
 	TEST_CASE("A journal of an editor that is gone is offered, also when its process id is this process's")

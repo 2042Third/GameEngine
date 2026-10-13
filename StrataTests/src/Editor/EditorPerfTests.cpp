@@ -19,6 +19,7 @@
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JobSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -450,11 +451,18 @@ TEST_SUITE("Perf.Editor")
 		};
 
 		// Edits of 10,000 of the roots (one undo step each, component.set of their positions), each followed by the frames while its journal is written: the
-		// first asks for the write as Update does once edits stop, the others go on until the I/O job has written the file.
-		// Each write's longest frame above the median idle frame is the hitch a person would see; the metric is their median
-		// over the writes of an attempt, so one frame the machine's other work held up does not decide it.
+		// first asks for the write as Update does once edits stop, the others go on until the file is written. Each write's
+		// longest frame above the median idle frame is the hitch a person would see, and the time the I/O threads spent on it
+		// (JobSystem::GetStats) is the time asset loads and mip reads, which share them, could wait behind it; the metrics
+		// are their medians over the writes of an attempt (the journal grows with every write), so one write the machine's
+		// other work held up does not decide them.
 		constexpr int c_Writes = 7;
 		size_t round = 0;
+		struct JournalWrite
+		{
+			double HitchMs = 0.0;
+			double IOMs = 0.0;
+		};
 		auto writeJournal = [&](const nlohmann::json& edited, double idleMs)
 		{
 			// A position no earlier round set: every round changes every entity it lists.
@@ -463,6 +471,7 @@ TEST_SUITE("Perf.Editor")
 			REQUIRE(commands.Execute(context, "component.set", { { "entities", edited }, { "component", "Transform" }, { "values", values } }).Success);
 			// The frame after the edit updates what it changed (world transforms): the edit's cost, not the journal's.
 			context.Update(Timestep(1.0f / 60.0f));
+			const std::chrono::nanoseconds ioBefore = JobSystem::GetStats().IO.BusyTime;
 			const auto writeStart = std::chrono::steady_clock::now();
 			double longest = 0.0;
 			{
@@ -478,28 +487,33 @@ TEST_SUITE("Perf.Editor")
 				longest = std::max(longest, timeFrame());
 				frames++;
 			}
+			const double ioMs = std::chrono::duration<double, std::milli>(JobSystem::GetStats().IO.BusyTime - ioBefore).count();
 			MESSAGE("Journal of ", edited.size(), " entities written in ", MillisecondsSince(writeStart), " ms over ", frames, " frames; the longest ", longest,
-				" ms, the idle median ", idleMs, " ms");
-			return std::max(longest - idleMs, 0.0);
+				" ms, the idle median ", idleMs, " ms; the I/O threads busy ", ioMs, " ms");
+			return JournalWrite { std::max(longest - idleMs, 0.0), ioMs };
 		};
-		Perf::CheckBudgetConfirmed("Perf.Editor.RecoveryWriteMaxFrame100k", [&]
+		Perf::CheckBudgetsConfirmed({ "Perf.Editor.RecoveryWriteMaxFrame100k", "Perf.Editor.RecoveryWriteIOTime100k" }, [&]
 		{
 			std::vector<double> idle;
 			for (int frame = 0; frame < 60; frame++)
 				idle.push_back(timeFrame());
 			const double idleMs = Perf::Summarize(idle).MedianMs;
 			std::vector<double> hitches;
+			std::vector<double> io;
 			for (int write = 0; write < c_Writes; write++)
 			{
 				nlohmann::json edited = nlohmann::json::array();
 				for (size_t index = round % 10; index < roots.size(); index += 10)
 					edited.push_back(UUIDToJson(roots[index].GetUUID()));
-				hitches.push_back(writeJournal(edited, idleMs));
+				const JournalWrite written = writeJournal(edited, idleMs);
+				hitches.push_back(written.HitchMs);
+				io.push_back(written.IOMs);
 			}
-			return Perf::Summarize(hitches).MedianMs;
+			return Perf::MetricValues { { "Perf.Editor.RecoveryWriteMaxFrame100k", Perf::Summarize(hitches).MedianMs },
+				{ "Perf.Editor.RecoveryWriteIOTime100k", Perf::Summarize(io).MedianMs } };
 		});
 		CHECK(recovery.GetStatus().LastWrite > 0);
-		// For the record (Docs/Architecture.md, "Autosave and recovery"): the I/O job's time for a journal of every entity.
+		// For the record (Docs/Architecture.md, "Autosave and recovery"): the time for a journal of every entity.
 		nlohmann::json all = nlohmann::json::array();
 		for (const Entity root : roots)
 			all.push_back(UUIDToJson(root.GetUUID()));

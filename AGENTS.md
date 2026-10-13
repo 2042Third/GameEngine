@@ -180,7 +180,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   roots; the hierarchy's rows of 100,000 roots, idle and rebuilt; the Hierarchy panel's share of an editor frame with
   100,000 roots, open against closed; what 100,000 selected entities add to a frame; the longest editor frame while a
   4096x4096 texture re-imports uncompressed and then block-compressed again; `asset.findReferences` among 10,000
-  assets; the frames while the recovery journal of edits of a 100,000-entity scene is written, and the capture of a
+  assets; the frames while the recovery journal of edits of a 100,000-entity scene is written and the I/O threads' time
+  per write, and the capture of a
   recovery snapshot; the longest frame while `scene.open` opens a scene of 10,000 up-to-date prefab instances, whose
   swap checks each against its prefab), `PerfGPU.Editor`, which runs the real
   `StrataEditor` maximized on generated 100,000- and 1,000,000-entity scenes and checks the median CPU frame time its
@@ -1001,7 +1002,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   for the person (the Activity panel's Re-run asks).
 - **Autosave and recovery** (`Editor/SceneRecovery`, Docs/Architecture.md "Autosave and recovery"): the edited scene's
   unsaved changes are journaled in `<project>/.strata/Recovery` by following the undo stack (`UndoStackObserver`): the
-  entity states of the steps since the last save, written on an I/O job 2 s after edits stop (at least every 10 s), removed
+  entity states of the steps since the last save, written 2 s after edits stop (at least every 10 s; the text worked out
+  on a background worker, the file written on an I/O job), removed
   by a save. Replacing a modified scene in any way (`EditorContext::ResetScene`) writes them first, marked discarded, offers
   them at once (the directory is scanned again) and tells the person who discarded them; scans keep the newest
   `SceneRecovery::c_MaxOfferedDiscards` discards on offer and move older ones to `Recovery/Discarded` (never what a crash

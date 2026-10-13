@@ -253,8 +253,8 @@ namespace Strata
 			std::unordered_map<UUID, std::pair<Ref<const std::vector<EntityState>>, size_t>> States;
 		};
 
-		// What the journal's writes and the file operations around it share. Changed only by the file operations, which run
-		// one at a time (and by the main thread before it asks for the first one that uses it).
+		// What the journal's writes and the file operations around it share. Changed only by the operations, which run one at
+		// a time (and by the main thread before it asks for the first one that uses it).
 		struct Journal
 		{
 			std::string Stem;                    // File name without the extension
@@ -280,7 +280,17 @@ namespace Strata
 			std::atomic<bool> Done = false;
 		};
 
-		void Enqueue(std::function<void()> operation);
+		// An operation on the recovery files, run after those queued before it. A file operation runs on an I/O thread; one
+		// that works out what to write without touching a file (Compute: a journal's text, which takes about 0.2 s for 100,000
+		// entities) runs on a background worker (JobPriority::Background), since asset loads and mip reads share the I/O
+		// threads.
+		struct Operation
+		{
+			std::function<void()> Function;
+			bool Compute = false;
+		};
+
+		void Enqueue(std::function<void()> operation, bool compute = false);
 		void PumpOperations();
 		// Queues a write of the edited scene's journal, or the removal of its file when the scene is unmodified.
 		bool Write(const Scene& scene, bool modified, bool discarded);
@@ -306,7 +316,7 @@ namespace Strata
 		uint64_t m_Writes = 0;
 		Ref<std::atomic<int64_t>> m_LastWriteTime;
 
-		std::deque<std::function<void()>> m_Operations;
+		std::deque<Operation> m_Operations;
 		JobHandle m_Running;
 
 		Ref<ScanResult> m_Scan; // The scan in progress

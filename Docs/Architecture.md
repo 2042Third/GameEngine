@@ -2185,7 +2185,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   the window back inside it (it never re-centers one, which would move a dialog under the person's pointer as an error
   line comes and goes). File operations (writes, removals,
   scans, reads) run one at a time on I/O jobs in the order they were asked for, so a removal after a save is never
-  overtaken by an earlier write; the editor waits for them only when it closes. Opening a project scans the directory:
+  overtaken by an earlier write; a write's text is worked out by an operation of its own in that order on a background
+  worker (`JobPriority::Background`), so the I/O threads, which asset loads and mip reads share, only write the file;
+  the editor waits for them only when it closes. Opening a project scans the directory:
   a file whose owner process still runs (its id with the start time recorded, since ids are reused, also this process's)
   and has not discarded it belongs to that editor and is left out; the others are
   offered (the editor's Recover Unsaved Changes dialog, `UI/RecoveryDialog`, opens by itself once per opened project
@@ -2205,12 +2207,13 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   for it), and the scene stays modified, its own journal is written at once and the applied file removed after that
   write. `"discard"`
   moves the file to `Recovery/Discarded` (the newest 20 are kept); the dialog's Discard All does that for every entry.
-  Measurements on the reference machine (Release, `Perf.Editor.RecoveryWriteMaxFrame100k`, `RecoverySnapshotMaxEntities`): on a saved scene of 100,000 entities, a
-  frame that asks for the write of an edit of 10,000 of them costs 0.04 ms above an idle frame (handing over references
-  and the settings), the I/O job writes those 10,000 states in 15 to 30 ms and a journal of all 100,000 in about 180 ms
-  while frames stay at 0.05 ms, so writing every 10 s keeps an I/O thread at most 2% busy even for edits of the whole
-  scene; capturing a snapshot costs about 2.3 us per entity on the main thread (0.6 ms for 256), which is why snapshots
-  stop there.
+  Measurements on the reference machine (Release, `Perf.Editor.RecoveryWriteMaxFrame100k`, `RecoveryWriteIOTime100k`,
+  `RecoverySnapshotMaxEntities`): on a saved scene of 100,000 entities, a frame that asks for the write of an edit of
+  10,000 of them costs 0.04 ms above an idle frame (handing over references and the settings); the seven writes of the
+  test, whose journal grows by 10,000 states each, take 25 to 90 ms, of which the I/O threads spend about 5.5 ms on the
+  median one (46 ms when the text was worked out on them), and a journal of all 100,000 takes about 180 ms, 10 to 14 ms
+  of it on an I/O thread (170-177 ms before), while frames stay at 0.05 ms; capturing a snapshot costs about 2.3 us per
+  entity on the main thread (0.6 ms for 256), which is why snapshots stop there.
 - **Hierarchy model** (`HierarchyView.h`). The hierarchy panel's rows without UI: the visible entities of the active
   scene as a flat depth-first list (`HierarchyRow`: handle, ID, depth, has-children, expanded, match), walked along the
   scene's sibling links into expanded entities only, or, with a filter (`HierarchyFilter`: name words, `c:` component,

@@ -57,6 +57,7 @@
 	"Perf.Editor.FindReferences10k": { "Measured": 0.1332, "Budget": 0.165, "Unit": "ms" },
 	"Perf.Editor.JournalPerCommand": { "Measured": 1.461, "Budget": 2.191, "Unit": "us" },
 	"Perf.Editor.RecoveryWriteMaxFrame100k": { "Measured": 0.0407, "Budget": 0.057, "Unit": "ms" },
+	"Perf.Editor.RecoveryWriteIOTime100k": { "Measured": 5.51, "Budget": 8.26, "Unit": "ms" },
 	"Perf.Editor.RecoverySnapshotMaxEntities": { "Measured": 0.5986, "Budget": 0.8979, "Unit": "ms" },
 	"Perf.Editor.SceneOpen10kPrefabInstancesMaxFrame": { "Measured": 4.96, "Budget": 7.44, "Unit": "ms" },
 	"Perf.EditorPanels.Performance600FramesP95": { "Measured": 0.0616, "Budget": 0.0924, "Unit": "ms" },
