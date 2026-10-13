@@ -17,6 +17,14 @@ Guides for people making games in the editor:
   panel, crash reports with file and line, opening scripts in an IDE (CMake presets for IntelliSense) and attaching a
   debugger.
 
+## Releases
+
+What each release of Strata delivers, for the people who download it, and what the archives hold:
+
+- [Releases/0.3.0.md](Releases/0.3.0.md): Strata 0.3.0, the first release (waves 1 to 3).
+- [Releases/PackageReadme.md](Releases/PackageReadme.md): the `README.md` of the release archives (requirements, first
+  start, making a game, connecting an AI agent). How releases are cut: AGENTS.md, "Releases".
+
 ## Elsewhere in the repository
 
 - [AGENTS.md](../AGENTS.md): the development guide and the source of truth for rules: building, testing and the

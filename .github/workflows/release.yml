@@ -1,0 +1,270 @@
+name: Release
+
+# Builds Strata's release archives (CMake/StrataPackaging.cmake) on the runners CI uses, tests them, and publishes them as a
+# GitHub release (AGENTS.md, "Releases").
+#   - Tag vX.Y.Z: build, test, upload the archives and create the release "Strata X.Y.Z" with Docs/Releases/X.Y.Z.md.
+#   - Tag vX.Y.Z-<suffix> (e.g. v0.3.0-rc1): a dry run: build, test and upload the archives as workflow artifacts only.
+#   - Run manually: with a tag, as if that tag was pushed; without one, a dry run of the branch it runs on.
+# The tag's version must be the project's (project(Strata VERSION) in CMakeLists.txt), and Docs/Releases/X.Y.Z.md must exist.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build (vX.Y.Z publishes a release, vX.Y.Z-rc1 is a dry run); empty for a dry run of this branch
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-24.04
+    outputs:
+      ref: ${{ steps.version.outputs.ref }}
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      base: ${{ steps.version.outputs.base }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
+
+      - name: Check the version
+        id: version
+        shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          project=$(sed -n '/^project(Strata/,/)/s/^[[:space:]]*VERSION[[:space:]]\+\([0-9][0-9.]*\)[[:space:]]*$/\1/p' CMakeLists.txt)
+          if [ -z "$project" ]; then
+            echo "::error file=CMakeLists.txt::Cannot read project(Strata VERSION ...)"
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            tag="$GITHUB_REF_NAME"
+          else
+            tag="$INPUT_TAG"
+          fi
+          if [ -n "$tag" ]; then
+            if ! [[ "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)(-[0-9A-Za-z.]+)?$ ]]; then
+              echo "::error::Tag '$tag' is not vX.Y.Z or vX.Y.Z-<suffix>"
+              exit 1
+            fi
+            version="${tag#v}"
+            base="${BASH_REMATCH[1]}"
+            if [ "$base" != "$project" ]; then
+              echo "::error file=CMakeLists.txt::Tag $tag is version $base, but project(Strata VERSION) is $project: bump the project's version or tag the right commit"
+              exit 1
+            fi
+            ref="refs/tags/$tag"
+            if [ "$version" = "$base" ]; then publish=true; else publish=false; fi
+          else
+            # A dry run of the branch: the project's version marked as such, never published.
+            version="$project-dryrun.$GITHUB_RUN_NUMBER"
+            base="$project"
+            ref="$GITHUB_SHA"
+            publish=false
+          fi
+          if [ ! -f "Docs/Releases/$base.md" ]; then
+            echo "::error::Docs/Releases/$base.md is missing: write the release notes of $base before tagging"
+            exit 1
+          fi
+          echo "Building Strata $version from $ref (publish: $publish)"
+          {
+            echo "ref=$ref"
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "base=$base"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    name: ${{ matrix.name }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-2022
+            preset: windows-vs2022
+            platform: windows-x64
+            archive: zip
+          - name: Linux
+            os: ubuntu-24.04
+            preset: linux
+            platform: linux-x64
+            archive: tar.gz
+          - name: macOS
+            os: macos-14
+            preset: macos
+            platform: macos-arm64
+            archive: tar.gz
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    env:
+      PACKAGE: Strata-${{ needs.version.outputs.version }}-${{ matrix.platform }}
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+          submodules: recursive
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build gcc-14 g++-14 xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols \
+            libgtk-3-dev libvulkan-dev pkg-config
+          echo "CC=gcc-14" >> "$GITHUB_ENV"
+          echo "CXX=g++-14" >> "$GITHUB_ENV"
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --preset ${{ matrix.preset }} -DSTRATA_PACKAGE_VERSION=${{ needs.version.outputs.version }} 2>&1 | tee configure.log
+
+      - name: Build (Dist)
+        shell: bash
+        run: |
+          set -o pipefail
+          # Ninja (Linux, macOS) keeps building after a failure, so one run reports every compile error.
+          keepGoing=()
+          if [ "$RUNNER_OS" != "Windows" ]; then keepGoing=(-- -k 0); fi
+          cmake --build --preset ${{ matrix.preset }}-dist --parallel "${keepGoing[@]}" 2>&1 | tee build.log
+
+      # The tests CI runs, in the configuration that ships: hosted runners have no GPU ("gpu") and the perf budgets hold
+      # for the reference machine only ("perf"). The package label includes StrataEditor.Install, which installs this build
+      # and makes, builds, plays and exports a game with the installed editor alone.
+      - name: Test (Dist)
+        shell: bash
+        env:
+          STRATA_TEST_TRACE: "1" # Tests print each test case as it starts, so a crash names its test
+        run: |
+          set -o pipefail
+          # Linux overcommits memory: a test that runs away with memory or disk would take the whole runner down (the
+          # job ends with exit code 143 and no annotations). Limits make such a test fail on its own instead.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            ulimit -v 10000000 # KiB of address space per process
+            ulimit -f 2097152  # KiB per file
+          fi
+          ctest --preset ${{ matrix.preset }}-dist -LE "gpu|perf" --output-on-failure --timeout 900 2>&1 | tee test.log
+
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec > >(tee package.log) 2>&1
+          build="build/${{ matrix.preset }}"
+          cpack --config "$build/CPackConfig.cmake" -C Dist
+          archive="$build/Packages/$PACKAGE.${{ matrix.archive }}"
+          if [ ! -f "$archive" ]; then
+            echo "::error::cpack did not write $archive"
+            ls -l "$build/Packages" || true
+            exit 1
+          fi
+          # The archive as a person gets it: unpacked into a fresh folder, its executables run and report the version.
+          check="$RUNNER_TEMP/PackageCheck"
+          rm -rf "$check" && mkdir -p "$check"
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z x -o"$check" "$archive" > /dev/null
+            suffix=".exe"
+          else
+            tar -xzf "$archive" -C "$check"
+            suffix=""
+          fi
+          root="$check/$PACKAGE"
+          ls -l "$root"
+          for file in StrataEditor$suffix StrataRuntime$suffix StrataCLI$suffix StrataInstall.json README.md ThirdPartyNotices.md \
+              Samples/Samples.json StrataScriptCore/CMake/StrataScriptCoreConfig.cmake Skills/strata-make-a-game/SKILL.md; do
+            if [ ! -f "$root/$file" ]; then
+              echo "::error::The archive lacks $file"
+              exit 1
+            fi
+          done
+          # The binaries carry the project's version (an rc archive holds the version it is a candidate for).
+          "$root/StrataEditor$suffix" --version | tee version.txt
+          grep -q "^Strata Editor ${{ needs.version.outputs.base }}" version.txt \
+            || { echo "::error::The packaged editor does not report Strata ${{ needs.version.outputs.base }}"; exit 1; }
+          "$root/StrataCLI$suffix" --version
+          # Checksums of what is published.
+          mkdir -p dist
+          cp "$archive" dist/
+          cd dist
+          if command -v sha256sum > /dev/null; then
+            sha256sum "$PACKAGE.${{ matrix.archive }}" > "$PACKAGE.${{ matrix.archive }}.sha256"
+          else
+            shasum -a 256 "$PACKAGE.${{ matrix.archive }}" > "$PACKAGE.${{ matrix.archive }}.sha256"
+          fi
+          cat "$PACKAGE.${{ matrix.archive }}.sha256"
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PACKAGE }}
+          path: dist/*
+          if-no-files-found: error
+
+      # Job logs need repository admin rights to download; annotations are public, so failures are readable from the
+      # checks API.
+      - name: Annotate failures
+        if: failure() || cancelled()
+        shell: bash
+        run: |
+          python=$(command -v python3 || command -v python)
+          "$python" .github/scripts/annotate_failures.py configure.log build.log test.log package.log
+
+  release:
+    name: Publish
+    needs: [version, build]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.ref }}
+
+      - name: Download the archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: Strata-*
+          merge-multiple: true
+
+      - name: Create the release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          cd dist
+          cat ./*.sha256 > SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
+          ls -l
+          cd ..
+          # The release's title is the notes' heading: the page shows the rest.
+          sed '1{/^# /d;}' "Docs/Releases/$VERSION.md" | sed '1{/^$/d;}' > "$RUNNER_TEMP/notes.md"
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --title "Strata $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md"

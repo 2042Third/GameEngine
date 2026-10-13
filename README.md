@@ -6,6 +6,13 @@ Strata is a 3D game engine written in C++20 for Windows, Linux (Ubuntu 24+) and 
 [NVRHI](https://github.com/NVIDIA-RTX/NVRHI) on Vulkan and comes with an editor that people and AI agents
 can drive in the same way, plus a runtime that plays exported games.
 
+## Download
+
+Releases for Windows (x64), Linux (x64, Ubuntu 24.04 or newer) and macOS (Apple silicon) are on the
+[releases page](https://github.com/2042Third/GameEngine/releases): unpack the archive and run `StrataEditor`. Its
+`README.md` lists what each platform needs; [Docs/Releases/](Docs/Releases/) has the notes of every release
+([0.3.0](Docs/Releases/0.3.0.md) is the first).
+
 ## Features
 
 - **Engine core:** an entity-component system (EnTT) with reflection-driven components, hierarchy and

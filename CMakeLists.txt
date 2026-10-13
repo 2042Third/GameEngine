@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(Strata
-	VERSION 0.1.0
+	VERSION 0.3.0
 	DESCRIPTION "Strata - a production-grade 3D game engine"
 	HOMEPAGE_URL "https://github.com/2042Third/GameEngine"
 	LANGUAGES C CXX)

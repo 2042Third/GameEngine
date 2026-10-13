@@ -98,6 +98,21 @@ scripts"), `README.md` (from `Docs/Releases/PackageReadme.md`), `ThirdPartyNotic
 `build/<preset>/Packages/Strata-<version>-<windows-x64|linux-x64|macos-arm64>.<zip|tar.gz>`. A file that releases must
 ship gets an install rule there and an entry in the layout `StrataEditor.Install` checks (Testing).
 
+**Releases** (`.github/workflows/release.yml`) are cut at the end of every wave (0.3.0 for wave 3, 0.4.0 for wave 4;
+fixes get patch versions):
+
+1. Bump `project(Strata VERSION)` in `CMakeLists.txt`; the About dialog, the launcher, `editor.status`, `--version` and
+   the runtime's log report it.
+2. Write `Docs/Releases/<version>.md` for the people who download it (what Strata can do, requirements, known issues,
+   reporting problems), link it from `Docs/README.md`, and bring `Docs/Releases/PackageReadme.md` up to date.
+3. Push a tag `v<version>-rc1` for a dry run: the workflow builds Dist on CI's runners, runs the tests CI runs (with
+   `StrataEditor.Install`), packs the archives, unpacks each and runs its executables, and uploads them with SHA256
+   checksums as workflow artifacts without publishing. Download and try them.
+4. Push the tag `v<version>`: the same, then `gh release create` publishes the archives, their checksums and
+   `SHA256SUMS.txt` as "Strata <version>" with the notes. The workflow fails when the tag's version is not the project's
+   or the notes are missing. Run by hand (workflow_dispatch) with a tag it does the same; without one it is a dry run of
+   the branch.
+
 ## Testing
 
 ```sh
