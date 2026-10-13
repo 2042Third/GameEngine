@@ -458,6 +458,27 @@ TEST_SUITE("Editor.SceneLoad")
 		for (const nlohmann::json& excluded : exported["excludedAssets"])
 			CHECK(excluded["path"] != "Scenes/Two.stscene");
 
+		// The start scene cannot be the loading scene (the game would start it twice): refused, the setting kept.
+		const EditorCommandResult startAsLoading = project.Commands.Execute(context, "project.setExportSettings", { { "loadingScene", "Scenes/One.stscene" } });
+		CHECK(startAsLoading.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(startAsLoading.Error.find("start scene") != std::string::npos);
+		CHECK(context.GetProject()->GetConfig().Export.LoadingScene == project.Two);
+		// Making the loading scene the start scene takes it off as the loading scene.
+		const nlohmann::json started = project.Run("project.setStartScene", { { "scene", UUIDToJson(project.Two) } });
+		CHECK(started["loadingSceneCleared"] == true);
+		CHECK_FALSE(context.GetProject()->GetConfig().Export.LoadingScene.IsValid());
+		const Ref<Project> reloaded = Project::Load(context.GetProject()->GetProjectFile(), &error);
+		REQUIRE_MESSAGE(reloaded, error);
+		CHECK(reloaded->GetConfig().StartScene == project.Two);
+		CHECK_FALSE(reloaded->GetConfig().Export.LoadingScene.IsValid());
+		CHECK(project.Run("project.setStartScene", { { "scene", UUIDToJson(project.One) } })["loadingSceneCleared"] == false);
+		// A project file that names its start scene as the loading scene (edited by hand) does not export.
+		context.GetProject()->GetConfig().Export.LoadingScene = project.One;
+		const EditorCommandResult twice = Tests::CompleteCommand(context, project.Commands.Execute(context, "project.export",
+			{ { "directory", FileSystem::ToUTF8(directory / "BuildTwice") }, { "includeRuntime", false } }));
+		CHECK_FALSE(twice.Success);
+		CHECK(twice.Error.find("loading scene is its start scene") != std::string::npos);
+
 		// Null takes it off again.
 		CHECK(project.Run("project.setExportSettings", { { "loadingScene", nullptr } })["loadingScene"].is_null());
 		CHECK_FALSE(context.GetProject()->GetConfig().Export.LoadingScene.IsValid());

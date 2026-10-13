@@ -204,6 +204,12 @@ namespace Strata
 				return fail(fmt::format("The project's loading scene {} is not a scene asset of the project; set another or none with "
 					"project.setExportSettings", loadingScene.ToString()));
 			}
+			// The game would start the scene twice: as the loading scene, and again once it loaded as the start scene.
+			if (loadingScene == startScene)
+			{
+				return fail(fmt::format("The project's loading scene is its start scene '{}': the loading scene plays while the start scene loads, so "
+					"set another or none with project.setExportSettings", loadingSceneMetadata->Path));
+			}
 		}
 
 		AssetPackBuildOptions packOptions;

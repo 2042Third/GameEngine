@@ -379,7 +379,9 @@ namespace Strata
 					{ "discardedChanges", discarded } });
 			}, EditorCommandKind::Session });
 
-		registry.Register({ "project.setStartScene", "Sets the scene a built game starts with and saves the project file.",
+		registry.Register({ "project.setStartScene", "Sets the scene a built game starts with and saves the project file. When it is the "
+			"export settings' loading scene (project.setExportSettings), that setting is cleared (loadingSceneCleared: true), as the loading scene "
+			"plays while the start scene loads. Returns startScene and loadingSceneCleared.",
 			ObjectSchema({ { "scene", AssetSchema("Start scene") } }, { "scene" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -392,13 +394,19 @@ namespace Strata
 					return arguments.Fail();
 				Project& project = *context.GetProject();
 				const AssetHandle previous = project.GetConfig().StartScene;
+				const AssetHandle previousLoading = project.GetConfig().Export.LoadingScene;
 				project.GetConfig().StartScene = scene;
+				// The loading scene plays while the start scene loads: the scene that starts now no longer is the loading scene.
+				const bool loadingSceneCleared = previousLoading.IsValid() && previousLoading == scene;
+				if (loadingSceneCleared)
+					project.GetConfig().Export.LoadingScene = UUID::Null();
 				if (!project.Save(&error))
 				{
 					project.GetConfig().StartScene = previous;
+					project.GetConfig().Export.LoadingScene = previousLoading;
 					return EditorCommandResult::Fail(error);
 				}
-				return EditorCommandResult::Ok();
+				return EditorCommandResult::Ok({ { "startScene", UUIDToJson(scene) }, { "loadingSceneCleared", loadingSceneCleared } });
 			} });
 
 		registry.Register({ "project.export", "Exports the project as a playable game (runtime executable, asset pack, script module, manifest) into a "
@@ -554,6 +562,12 @@ namespace Strata
 						settings.LoadingScene = ResolveAsset(context, arguments, "loadingScene", AssetType::Scene);
 						if (!arguments.IsValid())
 							return arguments.Fail();
+						// It plays while the start scene loads: as the start scene the game would start it twice.
+						if (settings.LoadingScene == project.GetConfig().StartScene)
+						{
+							return EditorCommandResult::InvalidParameters("Parameter 'loadingScene': that is the start scene, and the loading scene plays "
+								"while the start scene loads; pick another scene (or null for none)");
+						}
 					}
 				}
 

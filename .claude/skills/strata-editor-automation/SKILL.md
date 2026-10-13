@@ -432,7 +432,8 @@ from the frame that started it); a large project takes a while, so give the call
 `"prune": true` ships only what the scenes use: assets the scripts load by path must then be named with
 `project.setExportSettings {"alwaysInclude": ["Prefabs", "Sounds/Win.wav"]}` (folders or assets, saved in the project).
 `project.setExportSettings {"loadingScene": "Scenes/Loading.stscene"}` names a scene the game plays while its start scene
-loads (null: none; the game shows black until its start scene is in); exports keep it, also pruned ones.
+loads (null: none; the game shows black until its start scene is in; never the start scene itself, which is refused, and
+`project.setStartScene` of the loading scene clears that setting); exports keep it, also pruned ones.
 Check the result headless: `<dir>/<Game> --headless --frames 120` (exit code 0). Games load scenes in the background
 too: the first frames run before the start scene is in, so give short checks enough `--frames`.
 
