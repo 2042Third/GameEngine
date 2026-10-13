@@ -346,6 +346,8 @@ namespace
 
 	// Checks the links of the documents to repository files (web links are not followed): each names a file or
 	// directory inside the repository that exists, and an anchor of a checked document names one of its headings.
+	// Existence follows the file system's case rules, so a link whose case differs from the file's passes on Windows
+	// and macOS while GitHub, which compares exactly, breaks it; CI's Linux job catches those.
 	LinkReport CheckLinks(const std::filesystem::path& root, const std::vector<Document>& documents)
 	{
 		std::map<std::string, std::set<std::string>> anchors;
