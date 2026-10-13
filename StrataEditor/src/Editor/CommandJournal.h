@@ -177,9 +177,11 @@ namespace Strata
 		void Complete(uint64_t id, const EditorCommandResult& result);
 		// A deferred command's handler returned: it is no longer the running command (its entry stays pending).
 		void Suspend(uint64_t id);
-		// A deferred command's poll runs (PollCommandResult): it is the running command again until Suspend or Complete, so
-		// commands it runs are its children and work it causes is known to be its (GetOutermostRunningId).
-		void Resume(uint64_t id);
+		// A deferred command's poll runs (PollCommandResult), or work it caused that ends between frames (a scene load it
+		// started): it is the running command again until Suspend or Complete, so commands it runs are its children and work it
+		// causes is known to be its (GetOutermostRunningId). False when it did not become running: unknown, finished, or
+		// running already.
+		bool Resume(uint64_t id);
 
 		const std::deque<CommandJournalEntry>& GetEntries() const { return m_Entries; }
 		const CommandJournalEntry* Find(uint64_t id) const;

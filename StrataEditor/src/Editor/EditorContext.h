@@ -342,11 +342,16 @@ namespace Strata
 		// The file of a scene asset of the project (absolute) and its path relative to the asset directory; empty for the
 		// null handle or without a project.
 		std::pair<std::filesystem::path, std::string> GetSceneFile(AssetHandle scene) const;
-		// Applies recovery data (SceneRecovery::Read): opens its scene (a scene never saved: a new scene of its name) unless
-		// it is the edited scene without unsaved changes, then turns it into what the recovered edits left as one undo step
-		// back to the saved state. The scene stays modified (unsaved). Fails while playing, and while the edited scene has
-		// unsaved changes that opening another would discard, unless `force`. outApplied: the entities it touched.
-		bool ApplyRecovery(const RecoveryData& data, bool force, size_t* outApplied = nullptr, std::string* outError = nullptr);
+		// Starts applying recovery data (SceneRecovery::Read, scene.recover): unless the edited scene is the data's scene without
+		// unsaved changes, opens that scene in the background (BeginOpenScene; *outSceneLoad is the load's ID, to wait for in
+		// GetSceneLoadStatus), or makes a new scene of its name for a scene never saved (*outSceneLoad 0: ApplyRecovery may
+		// follow at once). Fails while playing, while a scene is being opened (a pending open would replace what is recovered)
+		// and while the edited scene has unsaved changes that this would discard, unless `force`.
+		bool BeginRecovery(const RecoveryData& data, bool force, uint64_t* outSceneLoad, std::string* outError = nullptr);
+		// Turns the edited scene, which BeginRecovery made the data's scene as saved (or a new one), into what the recovered
+		// edits left, as one undo step back to the state before it. The scene stays modified (unsaved). Fails when the edited
+		// scene is not that scene any more (another replaced it, or is being opened). outApplied: the entities it touched.
+		bool ApplyRecovery(const RecoveryData& data, size_t* outApplied = nullptr, std::string* outError = nullptr);
 
 		//////////////////////////////////////////////////////////////////////////
 		// Scripts
@@ -559,6 +564,10 @@ namespace Strata
 		struct SceneLoad
 		{
 			SceneLoadRequest Request;
+			// The journal entry of the command that started it (scene.open, project.open, scene.recover; 0 for none): the
+			// replacement happens between frames, when no command runs, and is that command's work (who discarded unsaved
+			// changes, the undo step of the prefab catch-up).
+			uint64_t RequestedBy = 0;
 		};
 		Scope<SceneLoad> m_SceneLoad;
 		EditorSceneLoadStatus m_SceneLoadStatus;

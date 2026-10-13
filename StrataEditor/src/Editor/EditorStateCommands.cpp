@@ -456,10 +456,11 @@ namespace Strata
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "scene.recover",
-			"Applies or discards recovery data (scene.recoveryStatus). apply: opens the scene the changes were made to (a scene never saved: a "
-			"new scene of its name) and turns it into what the edits left, as one undo step back to the saved scene; the scene stays modified "
-			"(save it to keep the changes). It refuses when the scene file changed since the changes were made (applicable false), while "
-			"playing, and while the edited scene has unsaved changes it would discard unless force is true. discard: moves the data to "
+			"Applies or discards recovery data (scene.recoveryStatus). apply: opens the scene the changes were made to in the background as "
+			"scene.open does (a scene never saved: a new scene of its name) and, once it is in, turns it into what the edits left, as one undo "
+			"step back to the saved scene; the scene stays modified (save it to keep the changes). It refuses when the scene file changed since "
+			"the changes were made (applicable false), while playing, while a scene is being opened (scene.loadStatus), and while the edited "
+			"scene has unsaved changes it would discard unless force is true. discard: moves the data to "
 			".strata/Recovery/Discarded, where it is not offered again. Returns {recovered | discarded: id, ...}; apply also scene, sceneName, "
 			"entities (how many it restored or removed) and discardedChanges.",
 			ObjectSchema({
@@ -480,10 +481,14 @@ namespace Strata
 				if (!context.GetRecovery().IsActive())
 					return EditorCommandResult::Fail("No project is open (project.open or project.create)");
 
-				// The entries come from the scan the project's opening (or scene.recoveryStatus) started: wait for it first.
+				// The entries come from the scan the project's opening (or scene.recoveryStatus) started: wait for it first. Then
+				// the scene opens in the background like scene.open's (SceneLoad: its load's ID), and the changes apply once it is in.
 				struct Progress
 				{
 					Ref<SceneRecovery::Load> Load;
+					bool Begun = false;
+					uint64_t SceneLoad = 0;
+					bool Discarded = false;
 				};
 				auto progress = std::make_shared<Progress>();
 				return EditorCommandResult::Defer([reference, action, force, progress](EditorContext& context) -> std::optional<EditorCommandResult>
@@ -496,18 +501,36 @@ namespace Strata
 						if (!progress->Load->Error.empty())
 							return EditorCommandResult::Fail(progress->Load->Error);
 						const RecoveryData& data = *progress->Load->Data;
-						const bool replaces = !data.Entry.Scene.IsValid() || context.GetSceneHandle() != data.Entry.Scene || context.IsSceneModified();
-						const bool discarded = replaces && context.IsSceneModified();
-						size_t applied = 0;
 						std::string error;
-						if (!context.ApplyRecovery(data, force, &applied, &error))
+						if (!progress->Begun)
+						{
+							const bool replaces = !data.Entry.Scene.IsValid() || context.GetSceneHandle() != data.Entry.Scene || context.IsSceneModified();
+							progress->Discarded = replaces && context.IsSceneModified();
+							if (!context.BeginRecovery(data, force, &progress->SceneLoad, &error))
+								return EditorCommandResult::Fail(error);
+							progress->Begun = true;
+						}
+						if (progress->SceneLoad != 0)
+						{
+							const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+							if (status.ID != progress->SceneLoad)
+								return EditorCommandResult::Fail("Recovering was cancelled: another scene is being opened", EditorCommandError::Cancelled);
+							if (!status.IsFinished())
+								return std::nullopt;
+							if (status.State == SceneLoadState::Cancelled)
+								return EditorCommandResult::Fail(status.Error, EditorCommandError::Cancelled);
+							if (status.State == SceneLoadState::Failed)
+								return EditorCommandResult::Fail(status.Error);
+						}
+						size_t applied = 0;
+						if (!context.ApplyRecovery(data, &applied, &error))
 							return EditorCommandResult::Fail(error);
 						return EditorCommandResult::Ok({
 							{ "recovered", data.Entry.Id },
 							{ "scene", data.Entry.Scene.IsValid() ? UUIDToJson(data.Entry.Scene) : nlohmann::json(nullptr) },
 							{ "sceneName", data.Entry.SceneName },
 							{ "entities", applied },
-							{ "discardedChanges", discarded } });
+							{ "discardedChanges", progress->Discarded } });
 					}
 					if (recovery.IsScanning())
 						return std::nullopt;
@@ -545,6 +568,10 @@ namespace Strata
 					}
 					if (context.IsPlaying())
 						return EditorCommandResult::Fail("Stop play mode first (play.stop): recovering replaces the edited scene");
+					// A scene being opened would replace what is recovered (BeginRecovery checks again once the data is read).
+					std::string loading;
+					if (!context.CheckSceneEditable(&loading))
+						return EditorCommandResult::Fail(loading);
 					progress->Load = recovery.Read(entry->Id, context.GetSceneFile(entry->Scene).first);
 					return std::nullopt;
 				});

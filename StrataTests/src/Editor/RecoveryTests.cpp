@@ -130,6 +130,45 @@ namespace
 		return *header;
 	}
 
+	// An action that changes the scene without describing its effect as entity states.
+	class RenameEverything final : public EditorAction
+	{
+	public:
+		explicit RenameEverything(Scene& scene)
+			: m_Scene(scene)
+		{
+		}
+
+		const std::string& GetName() const override
+		{
+			static const std::string s_Name = "Rename Everything";
+			return s_Name;
+		}
+
+		bool Execute(std::string*) override
+		{
+			Rename("Renamed");
+			return true;
+		}
+
+		bool Undo(std::string*) override
+		{
+			Rename("Entity");
+			return true;
+		}
+	private:
+		void Rename(const std::string& name)
+		{
+			for (Entity entity : m_Scene.GetEntitiesInHierarchyOrder())
+			{
+				entity.GetComponent<NameComponent>().Name = name;
+				entity.MarkModified<NameComponent>();
+			}
+		}
+	private:
+		Scene& m_Scene;
+	};
+
 	// Edits of every kind a journal must replay: creating, renaming, component values, reparenting, reordering, deleting
 	// and the scene's settings.
 	void MakeEdits(RecoveryHarness& harness)
@@ -399,45 +438,6 @@ TEST_SUITE("Editor.Recovery")
 
 	TEST_CASE("A step only a snapshot captures turns the journal into a snapshot of the scene")
 	{
-		// An action that changes the scene without describing its effect as entity states.
-		class RenameEverything final : public EditorAction
-		{
-		public:
-			explicit RenameEverything(Scene& scene)
-				: m_Scene(scene)
-			{
-			}
-
-			const std::string& GetName() const override
-			{
-				static const std::string s_Name = "Rename Everything";
-				return s_Name;
-			}
-
-			bool Execute(std::string*) override
-			{
-				Rename("Renamed");
-				return true;
-			}
-
-			bool Undo(std::string*) override
-			{
-				Rename("Entity");
-				return true;
-			}
-		private:
-			void Rename(const std::string& name)
-			{
-				for (Entity entity : m_Scene.GetEntitiesInHierarchyOrder())
-				{
-					entity.GetComponent<NameComponent>().Name = name;
-					entity.MarkModified<NameComponent>();
-				}
-			}
-		private:
-			Scene& m_Scene;
-		};
-
 		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryOther") / "Game";
 		nlohmann::json edited;
 		{
@@ -818,6 +818,144 @@ TEST_SUITE("Editor.Recovery")
 		REQUIRE(lost != nullptr);
 		CHECK(lost->Message.find("are gone: no project is open") != std::string::npos);
 		CHECK_FALSE(lost->ShowRecovery);
+	}
+
+	TEST_CASE("A scene.open of an agent or a command script that discards changes says who did it, also when none could be kept")
+	{
+		// scene.open replaces the edited scene between frames, after its handler returned: the discard is still its own.
+		RecoveryHarness harness(Tests::CreateTemporaryDirectory("RecoveryDiscardByOpen") / "Game");
+		const EditorNotifications& notifications = harness.Context.GetNotifications();
+		auto find = [&notifications](std::string_view title) -> const EditorNotification*
+		{
+			const auto it = std::find_if(notifications.GetActive().begin(), notifications.GetActive().end(),
+				[title](const EditorNotification& notification) { return notification.Title == title; });
+			return it != notifications.GetActive().end() ? &*it : nullptr;
+		};
+
+		harness.Run("entity.create", { { "name", "Crate" } });
+		const EditorCommandResult byAgent = harness.Execute("scene.open", { { "scene", "Scenes/Main.stscene" }, { "force", true } },
+			CommandOrigin { CommandSource::Automation, "Claude Code" });
+		REQUIRE(byAgent.Success);
+		CHECK(byAgent.Value["discardedChanges"] == true);
+		const EditorNotification* agentNotice = find("Claude Code discarded unsaved changes");
+		REQUIRE(agentNotice != nullptr);
+		CHECK(agentNotice->Level == NotificationLevel::Warning);
+		CHECK(agentNotice->ShowRecovery);
+		CHECK(agentNotice->JournalEntry == byAgent.JournalId);
+		CHECK(agentNotice->Message.find("scene.open replaced the scene 'Main'") != std::string::npos);
+		CHECK(find("Unsaved changes discarded") == nullptr);
+
+		harness.Context.GetNotifications().Clear();
+		harness.Run("entity.create", { { "name", "Barrel" } });
+		const EditorCommandResult byScript = harness.Execute("scene.open", { { "scene", "Scenes/Main.stscene" }, { "force", true } },
+			CommandOrigin { CommandSource::CommandScript });
+		REQUIRE(byScript.Success);
+		const EditorNotification* scriptNotice = find("A command script discarded unsaved changes");
+		REQUIRE(scriptNotice != nullptr);
+		CHECK(scriptNotice->JournalEntry == byScript.JournalId);
+
+		// Changes that could not be journaled (a step only a snapshot captures, in a scene too large for one) are gone: an
+		// agent's open that discards them still says so.
+		harness.Context.GetNotifications().Clear();
+		for (size_t index = 0; index <= SceneRecovery::c_MaxSnapshotEntities; index++)
+			harness.Context.GetEditScene()->CreateEntity("Bulk");
+		harness.Run("scene.save");
+		REQUIRE(harness.Context.GetUndoStack().Execute(CreateScope<RenameEverything>(*harness.Context.GetEditScene())));
+		REQUIRE(harness.Context.IsSceneModified());
+		const EditorCommandResult lostByAgent = harness.Execute("scene.open", { { "scene", "Scenes/Main.stscene" }, { "force", true } },
+			CommandOrigin { CommandSource::Automation, "Claude Code" });
+		REQUIRE(lostByAgent.Success);
+		const EditorNotification* lost = find("Claude Code discarded unsaved changes");
+		REQUIRE(lost != nullptr);
+		CHECK(lost->Message.find("are gone: they could not be journaled") != std::string::npos);
+		CHECK_FALSE(lost->ShowRecovery);
+		CHECK(lost->JournalEntry == lostByAgent.JournalId);
+	}
+
+	TEST_CASE("scene.recover opens the scene in the background, applies once it is in, and gives way to another open")
+	{
+		RecoveryHarness harness(Tests::CreateTemporaryDirectory("RecoveryOpensInBackground") / "Game");
+		harness.Run("entity.create", { { "name", "Recovered" } });
+		harness.Run("scene.new", { { "name", "Other" }, { "force", true } });
+		REQUIRE(harness.UpdateUntil([](const std::vector<RecoveryEntry>& entries) { return entries.size() == 1 && entries[0].Applicable; }));
+
+		// Polled without editor frames, the command reads the data and starts opening the scene, and answers only once a frame
+		// has brought it in: it never loads a scene within one poll.
+		auto startRecovery = [&harness]()
+		{
+			EditorCommandResult result = harness.Commands.Execute(harness.Context, "scene.recover", { { "scene", "Scenes/Main.stscene" }, { "action", "apply" } });
+			for (int poll = 0; poll < 100 && result.IsPending() && !harness.Context.IsSceneLoading(); poll++)
+			{
+				PollCommandResult(result, harness.Context);
+				harness.Context.GetRecovery().Wait();
+			}
+			return result;
+		};
+		EditorCommandResult recovering = startRecovery();
+		REQUIRE(recovering.IsPending());
+		REQUIRE(harness.Context.IsSceneLoading());
+		CHECK(harness.Context.GetEditScene()->GetName() == "Other");
+		const EditorCommandResult recovered = Tests::CompleteCommand(harness.Context, std::move(recovering));
+		INFO(recovered.Error);
+		REQUIRE(recovered.Success);
+		CHECK(recovered.Value["discardedChanges"] == false);
+		CHECK(harness.Context.GetEditScene()->FindEntityByName("Recovered"));
+		CHECK(harness.Context.IsSceneModified());
+
+		// Another open while it loads replaces its load: the recovery is cancelled and applies nothing.
+		harness.Run("scene.new", { { "name", "Third" }, { "force", true } });
+		REQUIRE(harness.UpdateUntil([](const std::vector<RecoveryEntry>& entries)
+		{
+			return std::any_of(entries.begin(), entries.end(), [](const RecoveryEntry& entry) { return entry.Applicable && entry.SceneName == "Main"; });
+		}));
+		recovering = startRecovery();
+		REQUIRE(recovering.IsPending());
+		REQUIRE(harness.Context.IsSceneLoading());
+		EditorCommandResult opening = harness.Commands.Execute(harness.Context, "scene.open", { { "scene", "Scenes/Main.stscene" } });
+		REQUIRE(opening.IsPending());
+		const EditorCommandResult cancelled = Tests::CompleteCommand(harness.Context, std::move(recovering));
+		CHECK_FALSE(cancelled.Success);
+		CHECK(cancelled.ErrorKind == EditorCommandError::Cancelled);
+		REQUIRE(Tests::CompleteCommand(harness.Context, std::move(opening)).Success);
+		CHECK_FALSE(harness.Context.GetEditScene()->FindEntityByName("Recovered"));
+		CHECK_FALSE(harness.Context.IsSceneModified());
+	}
+
+	TEST_CASE("scene.recover refuses while a scene is being opened, for saved and never saved scenes alike")
+	{
+		RecoveryHarness harness(Tests::CreateTemporaryDirectory("RecoveryWhileOpening") / "Game");
+		// Changes of the saved Main and of a scene never saved, both discarded.
+		harness.Run("entity.create", { { "name", "Recovered" } });
+		harness.Run("scene.new", { { "name", "Draft" }, { "force", true } });
+		harness.Run("entity.create", { { "name", "Sketch" } });
+		harness.Run("scene.new", { { "name", "Other" }, { "force", true } });
+		REQUIRE(harness.UpdateUntil([](const std::vector<RecoveryEntry>& entries) { return entries.size() == 2; }));
+		std::vector<std::string> ids;
+		for (const RecoveryEntry& entry : harness.Context.GetRecovery().GetEntries())
+			ids.push_back(entry.Id);
+
+		// Main is being opened (no frame has run since): a recovery now would be replaced by it once it is in.
+		EditorCommandResult opening = harness.Commands.Execute(harness.Context, "scene.open", { { "scene", "Scenes/Main.stscene" } });
+		REQUIRE(opening.IsPending());
+		REQUIRE(harness.Context.IsSceneLoading());
+		for (const std::string& id : ids)
+		{
+			INFO(id);
+			EditorCommandResult recovering = harness.Commands.Execute(harness.Context, "scene.recover", { { "scene", id }, { "action", "apply" } });
+			REQUIRE(recovering.IsPending());
+			REQUIRE(PollCommandResult(recovering, harness.Context));
+			CHECK_FALSE(recovering.Success);
+			CHECK(recovering.ErrorKind == EditorCommandError::Failed);
+			CHECK(recovering.Error.find("scene.loadStatus") != std::string::npos);
+			CHECK(harness.Context.IsSceneLoading());
+		}
+		const EditorCommandResult opened = Tests::CompleteCommand(harness.Context, std::move(opening));
+		REQUIRE(opened.Success);
+		CHECK(opened.Value["discardedChanges"] == false);
+		CHECK(harness.Context.GetEditScene()->GetName() == "Main");
+		CHECK_FALSE(harness.Context.GetEditScene()->FindEntityByName("Recovered"));
+		CHECK_FALSE(harness.Context.IsSceneModified());
+		CHECK(harness.Context.GetRecovery().GetEntries().size() == 2);
 	}
 
 	TEST_CASE("Changes discarded on purpose are offered up to a limit, what a crash left always")

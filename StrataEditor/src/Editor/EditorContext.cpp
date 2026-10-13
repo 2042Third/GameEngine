@@ -479,6 +479,7 @@ namespace Strata
 		options.Reload = true;
 		Scope<SceneLoad> next = CreateScope<SceneLoad>();
 		next->Request = SceneLoader::LoadAsync(handle, options);
+		next->RequestedBy = m_Journal->GetOutermostRunningId();
 		// A load under way is replaced: its pins and the loads only it needed go. The new one started first, so that what
 		// both use keeps loading (Cancel leaves assets others pin alone).
 		CancelSceneLoad();
@@ -577,23 +578,34 @@ namespace Strata
 		m_SceneLoadStatus.Seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_SceneLoadStatus.Started).count();
 		const AssetHandle handle = request.GetSceneAsset();
 		const bool opened = request.GetState() == SceneLoadState::Ready;
-		if (opened)
-		{
-			// The scene is in place before the request (and its pins) goes, so what it uses is requested from now on.
-			FinishOpenScene(request.TakeScene(), handle, request.GetAssets());
-		}
-		else
+		if (!opened)
 		{
 			m_SceneLoadStatus.Error = request.GetError();
 			// scene.open reports its own failures; the start scene's has nobody else to tell (the project stays open).
 			if (m_SceneLoadStatus.StartScene)
 				ST_WARN("Could not open the start scene: {}", m_SceneLoadStatus.Error);
+			m_SceneLoad.reset();
+			return;
 		}
+
+		// The command that started the load no longer runs between frames: the replacement is its work all the same, as a poll
+		// of it would be. So the person hears who discarded unsaved changes (NotifyDiscardedChanges), and the prefab catch-up's
+		// undo step is the command's, which a replay of it repeats, not an edit outside commands.
+		const uint64_t requestedBy = m_SceneLoad->RequestedBy;
+		const uint64_t records = m_UndoStack.GetRecordCount();
+		if (requestedBy != 0)
+			m_Journal->NoteEditsOutsideCommands(m_UndoStack);
+		const bool resumed = m_Journal->Resume(requestedBy);
+		// The scene is in place before the request (and its pins) goes, so what it uses is requested from now on.
+		FinishOpenScene(request.TakeScene(), handle, request.GetAssets());
 		m_SceneLoad.reset();
 		// Once the scene is editable: instances of prefabs that changed while it was closed take their values (an undo step)
 		// before anything else, scene.open's answer included, sees the scene.
-		if (opened)
-			m_PrefabSync.OnSceneOpened(*this);
+		m_PrefabSync.OnSceneOpened(*this);
+		if (resumed)
+			m_Journal->Suspend(requestedBy);
+		if (requestedBy != 0)
+			m_Journal->NoteUndo(requestedBy, m_UndoStack, records);
 	}
 
 	void EditorContext::FinishOpenScene(Ref<Scene> scene, AssetHandle handle, std::span<const AssetHandle> loaded)
@@ -1078,7 +1090,47 @@ namespace Strata
 	// Recovery
 	////////////////////////////////////////////////////////////////////////////////
 
-	bool EditorContext::ApplyRecovery(const RecoveryData& data, bool force, size_t* outApplied, std::string* outError)
+	bool EditorContext::BeginRecovery(const RecoveryData& data, bool force, uint64_t* outSceneLoad, std::string* outError)
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		*outSceneLoad = 0;
+		const RecoveryEntry& entry = data.Entry;
+		if (!m_AssetManager)
+			return fail("No project is open");
+		if (IsPlaying())
+			return fail("Stop play mode first (play.stop): recovering replaces the edited scene");
+		// The open under way would replace whatever is recovered now.
+		if (!CheckSceneEditable(outError))
+			return false;
+		const bool modified = IsSceneModified();
+		const bool replaces = !entry.Scene.IsValid() || m_SceneHandle != entry.Scene || modified;
+		if (replaces && modified && !force)
+		{
+			return fail(fmt::format("The scene '{}' has unsaved changes, which recovering '{}' would discard: save them first or pass force: true",
+				m_EditScene->GetName(), entry.SceneName));
+		}
+		if (!replaces)
+			return true;
+		if (entry.Scene.IsValid())
+		{
+			// The saved scene the changes apply to, as its file holds it, opened like scene.open does: never in one frame.
+			if (!BeginOpenScene(entry.Scene, outError))
+				return false;
+			*outSceneLoad = m_SceneLoadStatus.ID;
+			return true;
+		}
+		// A scene that was never saved: its complete journal fills a new, empty scene of its name.
+		ResetScene(CreateRef<Scene>(entry.SceneName), UUID::Null());
+		return true;
+	}
+
+	bool EditorContext::ApplyRecovery(const RecoveryData& data, size_t* outApplied, std::string* outError)
 	{
 		auto fail = [outError](std::string message)
 		{
@@ -1092,24 +1144,13 @@ namespace Strata
 			return fail("No project is open");
 		if (IsPlaying())
 			return fail("Stop play mode first (play.stop): recovering replaces the edited scene");
-		const bool modified = IsSceneModified();
-		const bool replaces = !entry.Scene.IsValid() || m_SceneHandle != entry.Scene || modified;
-		if (replaces && modified && !force)
-		{
-			return fail(fmt::format("The scene '{}' has unsaved changes, which recovering '{}' would discard: save them first or pass force: true",
-				m_EditScene->GetName(), entry.SceneName));
-		}
-		if (entry.Scene.IsValid())
-		{
-			// The saved scene the changes apply to, as its file holds it.
-			if (replaces && !OpenScene(entry.Scene, outError))
-				return false;
-		}
-		else
-		{
-			// A scene that was never saved: its complete journal fills a new, empty scene of its name.
-			ResetScene(CreateRef<Scene>(entry.SceneName), UUID::Null());
-		}
+		if (!CheckSceneEditable(outError))
+			return false;
+		// What BeginRecovery opened or made. Opening it may have recorded a step already (the prefab catch-up): the recovered
+		// entity states apply over it, as they would have over the scene its file holds.
+		const bool isEntryScene = entry.Scene.IsValid() ? m_SceneHandle == entry.Scene : !m_SceneHandle.IsValid() && m_EditScene->GetName() == entry.SceneName;
+		if (!isEntryScene)
+			return fail(fmt::format("The edited scene is no longer '{}' (another scene replaced it meanwhile): run scene.recover again", entry.SceneName));
 
 		Scene& scene = *m_EditScene;
 		// Every entity the steps touch; for a snapshot also every entity it lacks, which goes.

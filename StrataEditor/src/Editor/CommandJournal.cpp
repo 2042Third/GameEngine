@@ -521,11 +521,13 @@ namespace Strata
 			m_Running.erase(std::next(it).base());
 	}
 
-	void CommandJournal::Resume(uint64_t id)
+	bool CommandJournal::Resume(uint64_t id)
 	{
 		const CommandJournalEntry* entry = id != 0 ? Find(id) : nullptr;
-		if (entry && entry->Status == CommandStatus::Pending && std::find(m_Running.begin(), m_Running.end(), id) == m_Running.end())
-			m_Running.push_back(id);
+		if (!entry || entry->Status != CommandStatus::Pending || std::find(m_Running.begin(), m_Running.end(), id) != m_Running.end())
+			return false;
+		m_Running.push_back(id);
+		return true;
 	}
 
 	void CommandJournal::Complete(uint64_t id, const EditorCommandResult& result)

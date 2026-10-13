@@ -102,6 +102,7 @@ namespace Strata
 			ImGui::TextColored(colors.TextSecondary, "%s", recovery.IsScanning() ? "Looking for recovery data..." : "Nothing left to recover.");
 		const int64_t now = GetUnixSeconds();
 		const bool idle = m_Running == 0;
+		const bool sceneLoading = context.Context.IsSceneLoading();
 		// Many entries scroll in a list of a fixed height instead of growing the dialog past the window. Fixed, because the
 		// dialog sizes itself to its contents when it appears (and is centered for that size): a list that measured itself
 		// only in its second frame would leave it off center.
@@ -130,10 +131,12 @@ namespace Strata
 
 			UI::ButtonStyle recover;
 			recover.Primary = entry.Applicable;
-			recover.Enabled = entry.Applicable && idle;
+			// A scene being opened (the project's start scene, as the dialog appears) would replace what is recovered.
+			recover.Enabled = entry.Applicable && idle && !sceneLoading;
 			const std::string recoverId = fmt::format("Recovery.Recover.{}", index);
-			if (UI::ActionButton(recoverId.c_str(), Icons::ArchiveRestore, "Recover", "Open the scene with these changes (unsaved; undo returns to the saved scene)",
-				recover))
+			const char* recoverTooltip = sceneLoading ? "Available once the scene being opened is in"
+				: "Open the scene with these changes (unsaved; undo returns to the saved scene)";
+			if (UI::ActionButton(recoverId.c_str(), Icons::ArchiveRestore, "Recover", recoverTooltip, recover))
 			{
 				// Recovering replaces the edited scene: its own unsaved changes are asked about first, over the dialog
 				// (DrawDiscardQuestion below). The answer may come in a later frame, so the action keeps what outlives this one.

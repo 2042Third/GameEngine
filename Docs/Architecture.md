@@ -2172,9 +2172,12 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   Content Browser) stay recoverable; the journal of the edited scene follows a move at the next frame (or before a
   discard) and names the new path from its next write (`EditorContext::FollowSceneMoves`, which looks only when the
   asset manager's metadata version changed), and entries of a scene that moved, also while a scan ran, are read again.
-  `scene.recover {action: "apply"}` reads the file on an I/O job, opens the scene (a scene never saved: a new one of its
-  name) and applies the steps as one undo step back to the saved state (`SceneRecoveryAction`, also the settings); the
-  scene stays modified, its own journal is written at once and the applied file removed after that write. `"discard"`
+  `scene.recover {action: "apply"}` reads the file on an I/O job, opens the scene in the background like `scene.open`
+  (`EditorContext::BeginRecovery`; a scene never saved: a new one of its name) and, once it replaced the edited scene,
+  applies the steps as one undo step back to the saved state (`ApplyRecovery`, `SceneRecoveryAction`, also the settings);
+  it refuses while another scene is being opened (that open would replace what it recovered; the dialog's Recover waits
+  for it), and the scene stays modified, its own journal is written at once and the applied file removed after that
+  write. `"discard"`
   moves the file to `Recovery/Discarded` (the newest 20 are kept); the dialog's Discard All does that for every entry.
   Measurements on the reference machine (Release, `Perf.Editor.RecoveryWriteMaxFrame100k`, `RecoverySnapshotMaxEntities`): on a saved scene of 100,000 entities, a
   frame that asks for the write of an edit of 10,000 of them costs 0.04 ms above an idle frame (handing over references

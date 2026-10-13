@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CommandJournal.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
@@ -447,11 +448,20 @@ TEST_SUITE("Editor.Prefab")
 		// B opens: by the time scene.open answers, its unmodified instance took the change in one undo step, and the modified
 		// one keeps its values and is outdated.
 		const uint64_t checks = harness.Context.GetPrefabSync().GetCatchUpCheckCount();
+		const uint64_t outsideCommands = harness.Context.GetJournal().GetEditsOutsideCommands();
 		harness.Run("scene.open", { { "scene", "Scenes/B.stscene" } });
+		const uint64_t openEntry = harness.Context.GetJournal().GetLatestId();
 		CHECK(harness.Context.GetPrefabSync().GetCatchUpCheckCount() == checks + 2);
 		harness.Frames(2);
 		CHECK(harness.Context.GetPrefabSync().GetCatchUpCheckCount() == checks + 2);
+		// The catch-up happened between frames, while scene.open waited: it is the open's work (its undo step), which a replay
+		// of the open repeats, not an edit outside commands.
+		const CommandJournalEntry* opened = harness.Context.GetJournal().Find(openEntry);
+		REQUIRE(opened != nullptr);
+		CHECK(opened->Command == "scene.open");
+		CHECK(opened->UndoStep == "Update Instances of Lamp");
 		CHECK(harness.Intensity(plain) == 9.0);
+		CHECK(harness.Context.GetJournal().GetEditsOutsideCommands() == outsideCommands);
 		CHECK(harness.Status(plain)["modified"] == false);
 		CHECK(harness.Status(plain)["outdated"] == false);
 		CHECK(harness.Intensity(edited) == 4.0);
