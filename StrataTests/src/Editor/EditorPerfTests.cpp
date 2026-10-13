@@ -27,6 +27,7 @@
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Renderer/Texture.h>
+#include <Strata/Renderer/TextureStreamer.h>
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
@@ -636,7 +637,11 @@ TEST_SUITE("PerfGPU.Editor")
 		constexpr uint32_t c_Width = 1280;
 		constexpr uint32_t c_Height = 720;
 		const SceneCamera camera = GetStressSweepFrame(GetLargeTextureSpec(), StressSweepPath(), 0, static_cast<float>(c_Width) / static_cast<float>(c_Height)).Camera;
-		SceneRenderer renderer;
+		// Drawn whole (a view without streaming waits for every level), so that every re-import uploads the whole new texture
+		// in steps, the work this test is about: with streaming, this view needs no more than the texture's tail.
+		SceneRendererSpecification specification;
+		specification.TextureStreaming = false;
+		SceneRenderer renderer(specification);
 		renderer.SetViewportSize(c_Width, c_Height);
 		// A second view of 10,000 cubes, drawn in the frames of the last measurement: its draws are extracted in parallel
 		// chunks (more than one chunk's proxies in view), so the frame waits for work of its own on the workers while the
@@ -669,14 +674,27 @@ TEST_SUITE("PerfGPU.Editor")
 			device.EndFrame();
 			return milliseconds;
 		};
+		// The texture is uploaded and drawn once it is whole (the view's renderer counts it pending until then) and its
+		// streamer, which raised it, has nothing left to do.
+		EditorAssetManager* manager = context.GetAssetManager();
+		REQUIRE(manager);
+		const TextureStreamer* streamer = TextureStreamer::Find(*manager);
+		REQUIRE(streamer);
+		const auto drawn = [&]()
+		{
+			const AssetManagerStats stats = manager->GetStats();
+			return AssetManager::GetAssetState(texture) == AssetState::Ready && renderer.GetStats().PendingAssets == 0 && stats.Detail.Reads == 0
+				&& stats.Detail.Changes == 0 && stats.Detail.AssetsBelowWanted == 0 && streamer->GetTexturesLookedAt() == 0;
+		};
 		// The texture uploaded and drawn before the measured re-imports.
 		const auto loaded = std::chrono::steady_clock::now() + std::chrono::minutes(2);
-		while (!(AssetManager::GetAssetState(texture) == AssetState::Ready && renderer.GetStats().PendingAssets == 0) && std::chrono::steady_clock::now() < loaded)
+		while (!drawn() && std::chrono::steady_clock::now() < loaded)
 			frame();
-		REQUIRE(AssetManager::GetAssetState(texture) == AssetState::Ready);
+		REQUIRE(drawn());
 
-		// One re-import with the given settings, until the new texture is uploaded and drawn; returns the longest frame, or
-		// with importOnly the longest frame while the import runs (until the command answers, before the new texture loads).
+		// One re-import with the given settings, until the new texture is uploaded and drawn at the levels the view wants;
+		// returns the longest frame, or with importOnly the longest frame while the import runs (until the command answers,
+		// before the new texture loads).
 		const auto reimport = [&](const nlohmann::json& settings, bool importOnly = false)
 		{
 			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
@@ -686,8 +704,7 @@ TEST_SUITE("PerfGPU.Editor")
 			double maxFrame = MillisecondsSince(start);
 			uint32_t frames = 0;
 			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
-			while ((!*completed || AssetManager::GetAssetState(texture) != AssetState::Ready || renderer.GetStats().PendingAssets > 0)
-				&& std::chrono::steady_clock::now() < deadline)
+			while ((!*completed || !drawn()) && std::chrono::steady_clock::now() < deadline)
 			{
 				const bool importing = !*completed;
 				const double milliseconds = frame();
@@ -698,9 +715,12 @@ TEST_SUITE("PerfGPU.Editor")
 			REQUIRE(*completed);
 			INFO((*completed)->Error);
 			REQUIRE((*completed)->Success);
-			REQUIRE(AssetManager::GetAssetState(texture) == AssetState::Ready);
+			REQUIRE(drawn());
 			CHECK(frames > 1);
-			MESSAGE(settings.dump(), ": ", frames, " frames, the longest ", maxFrame, " ms");
+			AssetDetailLevels levels;
+			REQUIRE(AssetManager::GetAsset<Texture>(texture)->GetDetailLevels(levels));
+			MESSAGE(settings.dump(), ": ", frames, " frames, the longest ", maxFrame, " ms; levels from ", levels.Resident, " of ", levels.Count,
+				" resident (wanted ", levels.Wanted, ")");
 			return maxFrame;
 		};
 
@@ -768,7 +788,9 @@ TEST_SUITE("PerfGPU.Editor")
 			return milliseconds;
 		};
 		// The longest frame (a maximum by nature: one held frame is the hitch the user sees) from the command until the
-		// imported texture is uploaded; the acceptance limit is 33 ms (two frames at 60 Hz).
+		// imported texture is loaded, which uploads its mip tail: nothing draws it here, and its finer levels stream once
+		// something does (the import's work ends with the first load; GPU.TextureStreaming and PerfGPU.Streaming cover the
+		// streaming). The acceptance limit is 33 ms (two frames at 60 Hz).
 		Perf::CheckBudgetConfirmed("PerfGPU.Editor.ImportTexture4kMaxFrame", [&]
 		{
 			auto completed = std::make_shared<std::optional<EditorCommandResult>>();
@@ -793,7 +815,7 @@ TEST_SUITE("PerfGPU.Editor")
 			REQUIRE(AssetManager::GetAssetState(imported) == AssetState::Ready);
 			CHECK(frames > 1); // The import outlasted a frame: it ran beside them
 			CHECK(AssetManager::GetAsset<Texture>(imported)->GetWidth() == 4096u);
-			MESSAGE("asset.import of a 4096x4096 texture: ", frames, " frames, the longest ", maxFrame, " ms");
+			MESSAGE("asset.import of a 4096x4096 texture until its mip tail is in: ", frames, " frames, the longest ", maxFrame, " ms");
 			return maxFrame;
 		});
 		device.WaitForIdle();

@@ -435,7 +435,10 @@ Open items and deferrals later waves own:
   `Mips.MaxFrameRatio` 1.28 in 1 against 1.19); `ContentBrowser10kThumbnailsP95` once at 0.053 ms in 10 runs
   (0.036-0.042 otherwise) against 0.057; and `PerfGPU.Editor.ImportSettings4kMaxFrame`, whose first attempt measures
   6.9-7.6 ms when run alone in a fresh process (main's build 2.9-3.6 ms; 2.1 ms in the perf label's runs, where the
-  cases before it warmed the process). Platform code only CI compiles: the POSIX `Platform::FindProgram` and symbolizer
+  cases before it warmed the process). Its view needed only the texture's tail once textures streamed, so its windows
+  held no upload of the whole texture; it now draws the texture whole, as main did, and its windows end once the
+  texture is whole: later attempts 2.97-5.23 ms (1.34-5.0 with the tail only), the first still 6.9 ms, so the first
+  attempt's hold is not the upload's. Platform code only CI compiles: the POSIX `Platform::FindProgram` and symbolizer
   (function names only on Linux and macOS).
 
 ## Waves
