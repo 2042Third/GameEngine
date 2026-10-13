@@ -148,6 +148,8 @@ namespace Strata
 			Ref<BackgroundLogSink> Writer;
 			std::mutex WriterMutex;
 			bool ExitHandlerRegistered = false;
+			// The exit handler ran: no writer started later would be stopped before the process ends.
+			bool ProcessExiting = false;
 		};
 
 		LogData& GetLogData()
@@ -157,14 +159,17 @@ namespace Strata
 			return *s_Data;
 		}
 
-		// At exit, what is queued for the console and the log file is written before the process ends; messages logged later
-		// (static destructors) are written by the threads that log them.
+		// At exit, what is queued for the console and the log file is written before the process ends. Messages logged later
+		// (static destructors) are written by the threads that log them: by the stopped writer's sinks, or, when the log was
+		// shut down before (as programs do at the end of main) and a late message initializes it again, by sinks Init then
+		// leaves without a writer (ProcessExiting).
 		void StopWriterAtExit()
 		{
 			LogData& data = GetLogData();
 			Ref<BackgroundLogSink> writer;
 			{
 				std::scoped_lock<std::recursive_mutex> lock(data.Mutex);
+				data.ProcessExiting = true;
 				writer = data.Writer;
 			}
 			if (writer)
@@ -215,7 +220,13 @@ namespace Strata
 			}
 		}
 
-		if (!writtenSinks.empty())
+		if (!writtenSinks.empty() && data.ProcessExiting)
+		{
+			// Logged from a static destructor after the exit handler ran: a writer started now would never be stopped, and its
+			// queue would end with the process.
+			sinks.insert(sinks.end(), writtenSinks.begin(), writtenSinks.end());
+		}
+		else if (!writtenSinks.empty())
 		{
 			Ref<BackgroundLogSink> writer = CreateRef<BackgroundLogSink>(std::move(writtenSinks));
 			sinks.push_back(writer);

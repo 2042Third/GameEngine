@@ -9,6 +9,7 @@
 #include "Renderer/GPUTestUtils.h"
 #include "Runtime/PerfLogReader.h"
 #include "Strata/Asset/AssetImporter.h"
+#include "Strata/Core/BackgroundLogSink.h"
 #include "Strata/Core/CommandLine.h"
 #include "Strata/Core/CrashGuard.h"
 #include "Strata/Core/FileLock.h"
@@ -36,12 +37,14 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #if defined(ST_PLATFORM_LINUX)
@@ -137,6 +140,42 @@ namespace
 
 }
 #endif
+
+// Logs from its destructor, as a static object of a program does that logs after main called Log::Shutdown: constructed
+// before main, it is destroyed after the log's exit handler, which main registers, has run. Armed by the "log-after-exit"
+// helper mode; it prints how its line was written.
+class LateLogProbe
+{
+public:
+	void Arm(std::filesystem::path logFile)
+	{
+		m_LogFile = std::move(logFile);
+	}
+
+	~LateLogProbe()
+	{
+		if (m_LogFile.empty())
+			return;
+		Strata::LogSpecification specification;
+		specification.ConsoleOutput = false;
+		specification.LogFile = m_LogFile;
+		Strata::Log::Init(specification);
+		ST_CORE_INFO("Logged after exit");
+		const std::vector<spdlog::sink_ptr>& sinks = Strata::Log::GetCoreLogger()->sinks();
+		const bool background = std::any_of(sinks.begin(), sinks.end(), [](const spdlog::sink_ptr& sink)
+		{
+			return std::dynamic_pointer_cast<Strata::BackgroundLogSink>(sink) != nullptr;
+		});
+		Strata::Log::Flush();
+		std::printf("late log: %s\n", background ? "background writer" : "written by the thread that logs");
+		std::fflush(stdout);
+	}
+private:
+	std::filesystem::path m_LogFile;
+};
+
+static LateLogProbe s_LateLogProbe;
+
 // Helper processes that could outlive their test stop when it says so: once the stop file exists or its directory is gone
 // (temporary directories are removed when the tests end), and after a minute at the latest.
 static bool KeepHelperRunning(const std::filesystem::path& stop, std::chrono::steady_clock::time_point deadline)
@@ -526,6 +565,20 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		std::fflush(stdout);
 		std::fflush(stderr);
 		std::_Exit(result);
+	}
+	if (mode == "log-after-exit" && argc > 2)
+	{
+		// <directory>: logs into <directory>/Main.log and shuts the log down as programs do at the end of main; then a static
+		// object logs into <directory>/Late.log after the log's exit handler ran (LateLogProbe).
+		const std::filesystem::path directory = Strata::FileSystem::FromUTF8(argv[2]);
+		Strata::LogSpecification specification;
+		specification.ConsoleOutput = false;
+		specification.LogFile = directory / "Main.log";
+		Strata::Log::Init(specification);
+		ST_CORE_INFO("Logged in main");
+		Strata::Log::Shutdown();
+		s_LateLogProbe.Arm(directory / "Late.log");
+		return 0;
 	}
 	if (mode == "active-engine-at-exit")
 	{

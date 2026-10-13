@@ -1,7 +1,10 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Core/BackgroundLogSink.h"
+#include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Core/Process.h"
+#include "TestHelpers.h"
 
 #include <spdlog/logger.h>
 #include <spdlog/sinks/base_sink.h>
@@ -12,9 +15,11 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <future>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -377,6 +382,28 @@ TEST_SUITE("Core.Log")
 		CHECK(sink->FlushFor(std::chrono::milliseconds(0)));
 		// The process's logs: the test runner's writes its console.
 		CHECK(Log::FlushFor(c_Timeout));
+	}
+
+	TEST_CASE("Lines logged after the log's exit handler ran are written by the thread that logs them")
+	{
+		// A static object logging from its destructor after main shut the log down initializes it again; a writer started
+		// then would never be stopped, and the process would end with its queue (TestMain.cpp, "log-after-exit").
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("LateLog");
+		ProcessSpecification specification;
+		specification.Executable = Tests::GetTestExecutablePath();
+		specification.Arguments = { "--strata-test-helper=log-after-exit", FileSystem::ToUTF8(directory) };
+		const Process::RunResult result = Process::Run(specification, std::chrono::milliseconds(60000));
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
+		CHECK(result.Output.find("late log: written by the thread that logs") != std::string::npos);
+		const std::optional<std::string> mainLog = FileSystem::ReadText(directory / "Main.log");
+		REQUIRE(mainLog);
+		CHECK(mainLog->find("Logged in main") != std::string::npos);
+		const std::optional<std::string> lateLog = FileSystem::ReadText(directory / "Late.log");
+		REQUIRE(lateLog);
+		CHECK(lateLog->find("Logged after exit") != std::string::npos);
 	}
 
 	TEST_CASE("The engine's loggers write the console and the log file through the background writer")
