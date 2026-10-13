@@ -691,20 +691,15 @@ namespace Strata
 				// sees the time of the frame before it. The frame this command runs in also runs whatever came before it (in a
 				// command script, e.g. a scene load), so the measured frames start with the next one.
 				const uint64_t firstMeasured = context.GetRecordedFrameCount() + 2;
-				return EditorCommandResult::Defer([frames, remaining = frames, firstMeasured, lastRecorded = uint64_t(0), frameTimes = std::vector<double>()](
+				return EditorCommandResult::Defer([frames, remaining = frames, frameTimes = FrameTimeRecorder(firstMeasured, static_cast<size_t>(frames))](
 					EditorContext& context) mutable -> std::optional<EditorCommandResult>
 				{
-					const uint64_t recorded = context.GetRecordedFrameCount();
-					if (recorded >= firstMeasured && recorded != lastRecorded)
-					{
-						frameTimes.push_back(context.GetLastFrameTime());
-						lastRecorded = recorded;
-					}
+					frameTimes.Update(context);
 					if (--remaining > 0)
 						return std::nullopt;
 					nlohmann::json result = { { "frames", frames } };
-					if (!frameTimes.empty())
-						result["frameTimes"] = DescribeFrameTimes(std::move(frameTimes));
+					if (!frameTimes.IsEmpty())
+						result["frameTimes"] = frameTimes.Describe();
 					return EditorCommandResult::Ok(std::move(result));
 				});
 			}, EditorCommandKind::Query });

@@ -448,16 +448,11 @@ namespace Strata
 				// editor records at the start of the next frame.
 				const Ref<GameExport> exporter = context.GetGameExport();
 				const uint64_t firstMeasured = context.GetRecordedFrameCount() + 1;
-				return EditorCommandResult::Defer([exporter, firstMeasured, frames = uint64_t(0), lastRecorded = uint64_t(0), frameTimes = std::vector<double>()](
+				return EditorCommandResult::Defer([exporter, frames = uint64_t(0), frameTimes = FrameTimeRecorder(firstMeasured, c_FrameTimeReserve)](
 					EditorContext& context) mutable -> std::optional<EditorCommandResult>
 				{
 					frames++;
-					const uint64_t recorded = context.GetRecordedFrameCount();
-					if (recorded >= firstMeasured && recorded != lastRecorded)
-					{
-						frameTimes.push_back(context.GetLastFrameTime());
-						lastRecorded = recorded;
-					}
+					frameTimes.Update(context);
 					if (!exporter->IsFinished())
 						return std::nullopt;
 					if (exporter->GetState() == GameExportState::Cancelled)
@@ -480,8 +475,8 @@ namespace Strata
 						{ "storedBytes", result.Pack.StoredBytes },
 						{ "seconds", result.Seconds },
 						{ "frames", frames } };
-					if (!frameTimes.empty())
-						value["frameTimes"] = DescribeFrameTimes(std::move(frameTimes));
+					if (!frameTimes.IsEmpty())
+						value["frameTimes"] = frameTimes.Describe();
 					return EditorCommandResult::Ok(std::move(value));
 				});
 			}, EditorCommandKind::Session });

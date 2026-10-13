@@ -267,16 +267,12 @@ namespace Strata
 			const uint64_t id = context.GetSceneLoadStatus().ID;
 			// Frames are measured from the one that started the load, which the editor records at the start of the next frame.
 			const uint64_t firstMeasured = context.GetRecordedFrameCount() + 1;
-			return EditorCommandResult::Defer([id, firstMeasured, discardsChanges, frames = uint64_t(0), lastRecorded = uint64_t(0), frameTimes = std::vector<double>(),
+			return EditorCommandResult::Defer([id, discardsChanges, frames = uint64_t(0), frameTimes = FrameTimeRecorder(firstMeasured, c_FrameTimeReserve),
 				finishedAt = std::optional<uint64_t>()](EditorContext& context) mutable -> std::optional<EditorCommandResult>
 			{
 				frames++;
 				const uint64_t recorded = context.GetRecordedFrameCount();
-				if (recorded >= firstMeasured && recorded != lastRecorded)
-				{
-					frameTimes.push_back(context.GetLastFrameTime());
-					lastRecorded = recorded;
-				}
+				frameTimes.Update(context);
 				const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
 				if (status.ID != id)
 					return EditorCommandResult::Fail("Opening the scene was cancelled: another scene is being opened", EditorCommandError::Cancelled);
@@ -300,8 +296,8 @@ namespace Strata
 					{ "discardedChanges", discardsChanges },
 					{ "seconds", status.Seconds },
 					{ "frames", frames } };
-				if (!frameTimes.empty())
-					value["frameTimes"] = DescribeFrameTimes(std::move(frameTimes));
+				if (!frameTimes.IsEmpty())
+					value["frameTimes"] = frameTimes.Describe();
 				return EditorCommandResult::Ok(std::move(value));
 			});
 		}

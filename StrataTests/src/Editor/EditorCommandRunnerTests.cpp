@@ -257,6 +257,32 @@ TEST_SUITE("Editor.CommandRunner")
 		CHECK(harness.Context.GetRecordedFrameCount() == 6);
 		CHECK(harness.Context.GetLastFrameTime() == 3.0);
 	}
+
+	TEST_CASE("Frame times go into storage reserved when the command starts, which copies of its poll function share")
+	{
+		// Recording in the frames a command measures must not allocate there (CommandUtils::FrameTimeRecorder): a frame
+		// that waits for the heap while a scene is freed in the background measures the wait.
+		RunnerHarness harness;
+		CommandUtils::FrameTimeRecorder recorder(harness.Context.GetRecordedFrameCount() + 1, 16);
+		const size_t capacity = recorder.GetCapacity();
+		CHECK(capacity >= 16);
+		recorder.Update(harness.Context); // Before the first measured frame: nothing
+		CHECK(recorder.IsEmpty());
+		const CommandUtils::FrameTimeRecorder copy = recorder;
+		for (int frame = 1; frame <= 16; frame++)
+		{
+			harness.Context.RecordFrameTime(static_cast<double>(frame));
+			recorder.Update(harness.Context);
+			recorder.Update(harness.Context); // Polled twice in a frame: recorded once
+		}
+		CHECK(recorder.GetCount() == 16);
+		CHECK(recorder.GetCapacity() == capacity); // Never reallocated
+		CHECK(copy.GetCount() == 16);
+		const nlohmann::json described = copy.Describe();
+		CHECK(described["count"] == 16);
+		CHECK(described["medianMs"] == 8.5);
+		CHECK(described["maxMs"] == 16.0);
+	}
 }
 
 TEST_SUITE("Editor.CommandScript")

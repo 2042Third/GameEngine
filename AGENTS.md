@@ -1128,7 +1128,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   next frame, and reports through a completion callback. Command scripts, automation and UI actions that
   can take frames (e.g. Build Scripts) run commands through the runner; UI actions that finish at once
   call the registry through `RunEditorCommand`, which rejects pending results.
-  Poll functions own their data (copy parameters, never capture them by reference). `editor.wait
+  Poll functions own their data (copy parameters, never capture them by reference) and allocate nothing per frame (frame
+  times go into a `CommandUtils::FrameTimeRecorder`, reserved when the command starts: an allocation in a frame can wait
+  milliseconds for the heap while a scene is freed in the background). `editor.wait
   {frames}` returns after that many frames, e.g. to let a playing scene run, with `frameTimes` (count, median, mean, 95th
   percentile and maximum in milliseconds) of the frames that ran entirely while it waited: the CPU time of each frame
   (`Application::GetLastFrameWorkTime`, recorded by `EditorLayer` through `EditorContext::RecordFrameTime`), without the

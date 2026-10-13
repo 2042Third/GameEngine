@@ -7,8 +7,10 @@
 
 #include <nlohmann/json.hpp>
 
+#include <cstdint>
 #include <filesystem>
 #include <initializer_list>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -71,6 +73,34 @@ namespace Strata
 		// Statistics of frame times in milliseconds (at least one), as editor.wait and project.export report them: {count,
 		// medianMs (the mean of the two middle ones for an even count), meanMs, p95Ms (nearest rank), maxMs}.
 		nlohmann::json DescribeFrameTimes(std::vector<double> frameTimes);
+
+		// The CPU times of the frames that run while a deferred command waits (editor.wait, scene.open, project.export),
+		// recorded by its poll function, which runs in the frames it measures. The storage is reserved when the command
+		// starts (past that it grows by doubling), so recording does not allocate in those frames: an allocation there can
+		// wait for the heap while background threads free a scene (the play copy play.stop lets go of), 0.6-2.7 ms in 7 of
+		// 10 runs of PerfGPU.Editor's scene opened over a million entities, when the frames take 0.6. Copies of the poll
+		// function share the storage.
+		class FrameTimeRecorder
+		{
+		public:
+			// Records the frames from the editor's recorded frame `firstMeasured` on (EditorContext::GetRecordedFrameCount),
+			// with room for `expectedFrames`.
+			FrameTimeRecorder(uint64_t firstMeasured, size_t expectedFrames);
+
+			// Records the latest frame the editor recorded, if it is measured and new (call it once per poll).
+			void Update(const EditorContext& context);
+			bool IsEmpty() const { return m_FrameTimes->empty(); }
+			size_t GetCount() const { return m_FrameTimes->size(); }
+			size_t GetCapacity() const { return m_FrameTimes->capacity(); }
+			// DescribeFrameTimes of the recorded frames (at least one).
+			nlohmann::json Describe() const;
+		private:
+			std::shared_ptr<std::vector<double>> m_FrameTimes;
+			uint64_t m_FirstMeasured = 0;
+			uint64_t m_LastRecorded = 0;
+		};
+		// Room for the frames of a scene.open or project.export: a few seconds at the rate of an editor with pending commands.
+		constexpr size_t c_FrameTimeReserve = 8192;
 
 		// A frame profile as editor.perf reports it (EditorStateCommands.cpp): {"frames", "frame", "framesPerSecond", "stageSum",
 		// "untimed", "jobs", "stages": {"<name>": {"avgMs", "p50Ms", "p95Ms", "maxMs", "inFrameTime"}}}, statistics in
