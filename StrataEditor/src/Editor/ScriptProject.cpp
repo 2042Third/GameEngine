@@ -96,10 +96,92 @@ namespace Strata
 			return text.substr(start, position - start);
 		}
 
-		// Names after the words class, struct and enum (also "enum class"), and in ST_SCRIPT_CLASS(...). Comments are not told
-		// apart: a name mentioned there is taken as declared, which only refuses a few more names.
-		void CollectDeclaredTypes(std::string_view text, std::vector<std::string>& outNames)
+		// Whether the identifier characters right before `quote` are a character literal's encoding prefix (u8'a', u'a', U'a',
+		// L'a') rather than the digits a digit separator follows.
+		bool IsCharacterLiteralPrefix(std::string_view code, size_t quote)
 		{
+			size_t start = quote;
+			while (start > 0 && IsIdentifierCharacter(code[start - 1]))
+				start--;
+			const std::string_view prefix = code.substr(start, quote - start);
+			return prefix == "u8" || prefix == "u" || prefix == "U" || prefix == "L";
+		}
+
+		// The code of a C++ file with its comments and the contents of its string and character literals (raw ones too) blanked
+		// out, so that only declarations are scanned: the SDK's usage comments mention ST_SCRIPT_CLASS(Player), which declares
+		// nothing. Unterminated comments and literals run to the end of the text.
+		std::string BlankCommentsAndLiterals(std::string_view text)
+		{
+			std::string code(text);
+			size_t position = 0;
+			auto blank = [&code](size_t from, size_t to)
+			{
+				for (size_t index = from; index < to && index < code.size(); index++)
+				{
+					if (code[index] != '\n')
+						code[index] = ' ';
+				}
+			};
+			while (position < code.size())
+			{
+				const char character = code[position];
+				const char next = position + 1 < code.size() ? code[position + 1] : '\0';
+				if (character == '/' && next == '/')
+				{
+					const size_t end = code.find('\n', position);
+					blank(position, end == std::string::npos ? code.size() : end);
+					position = end == std::string::npos ? code.size() : end;
+				}
+				else if (character == '/' && next == '*')
+				{
+					const size_t end = code.find("*/", position + 2);
+					const size_t stop = end == std::string::npos ? code.size() : end + 2;
+					blank(position, stop);
+					position = stop;
+				}
+				else if (character == 'R' && next == '"' && (position == 0 || !IsIdentifierCharacter(code[position - 1])
+					|| code[position - 1] == '8' || code[position - 1] == 'u' || code[position - 1] == 'U' || code[position - 1] == 'L'))
+				{
+					// R"delimiter( ... )delimiter": the delimiter is at most 16 characters.
+					const size_t open = code.find('(', position + 2);
+					if (open == std::string::npos || open - (position + 2) > 16)
+					{
+						position += 2;
+						continue;
+					}
+					const std::string terminator = ")" + code.substr(position + 2, open - (position + 2)) + "\"";
+					const size_t end = code.find(terminator, open + 1);
+					const size_t stop = end == std::string::npos ? code.size() : end + terminator.size();
+					blank(position + 1, stop);
+					position = stop;
+				}
+				else if (character == '\'' && position > 0 && IsIdentifierCharacter(code[position - 1]) && !IsCharacterLiteralPrefix(code, position))
+				{
+					position++; // A digit separator (1'000'000)
+				}
+				else if (character == '"' || character == '\'')
+				{
+					size_t index = position + 1;
+					while (index < code.size() && code[index] != character && code[index] != '\n')
+						index += code[index] == '\\' ? 2 : 1;
+					const size_t stop = std::min(index + 1, code.size());
+					blank(position, stop);
+					position = stop;
+				}
+				else
+				{
+					position++;
+				}
+			}
+			return code;
+		}
+
+		// Names after the words class, struct and enum (also "enum class"), and in ST_SCRIPT_CLASS(...), in code: not in
+		// comments or literals (BlankCommentsAndLiterals).
+		void CollectDeclaredTypes(std::string_view source, std::vector<std::string>& outNames)
+		{
+			const std::string code = BlankCommentsAndLiterals(source);
+			const std::string_view text = code;
 			constexpr std::string_view c_Words[] = { "class", "struct", "enum", "ST_SCRIPT_CLASS(" };
 			for (std::string_view word : c_Words)
 			{

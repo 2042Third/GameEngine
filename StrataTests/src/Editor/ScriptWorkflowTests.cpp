@@ -192,6 +192,30 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		REQUIRE(sdkName);
 		CHECK(sdkName->find("SDK") != std::string::npos);
 		CHECK(ValidateNewScriptClass(harness.GetProject(), engine, "not valid"));
+
+		// Names the SDK's usage comments mention (ST_SCRIPT_CLASS(Player), ST_SCRIPT_CLASS(Spinner)) are no names of the SDK,
+		// and neither are names in the project's comments and literals.
+		CHECK_FALSE(std::binary_search(sdk.begin(), sdk.end(), std::string("Player")));
+		CHECK_FALSE(std::binary_search(sdk.begin(), sdk.end(), std::string("Spinner")));
+		CHECK_FALSE(ValidateNewScriptClass(harness.GetProject(), engine, "Player"));
+		const std::filesystem::path scripts = harness.GetProject().GetScriptSourceDirectory();
+		REQUIRE(FileSystem::Remove(scripts / "Spinner.cpp"));
+		CHECK_FALSE(ValidateNewScriptClass(harness.GetProject(), engine, "Spinner"));
+		REQUIRE(FileSystem::WriteText(scripts / "Notes.h", "#pragma once\n"
+			"// class Ghost : public Script, one day\n"
+			"/* struct Phantom\n   ST_SCRIPT_CLASS(Wraith) */\n"
+			"inline const char* c_Banner = \"enum Banner\";\n"
+			"inline const char* c_Raw = R\"text(class Raw \"quoted\" )\" struct Still)text\";\n"
+			"inline constexpr int c_Million = 1'000'000; struct Counted {};\n"
+			"inline constexpr char c_Quote = '\"'; struct AfterQuote {};\n"));
+		const std::vector<std::string> declared = FindDeclaredScriptTypes(scripts);
+		CHECK(declared == std::vector<std::string> { "AfterQuote", "Counted" });
+		for (const char* name : { "Ghost", "Phantom", "Wraith", "Banner", "Raw", "Still" })
+		{
+			INFO(name);
+			CHECK_FALSE(ValidateNewScriptClass(harness.GetProject(), engine, name));
+		}
+		CHECK(ValidateNewScriptClass(harness.GetProject(), engine, "Counted"));
 	}
 
 	TEST_CASE("script.create writes a script class with its fields, and refuses what would not build")

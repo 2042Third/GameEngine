@@ -40,7 +40,7 @@ namespace Strata
 	// of at most 128 characters that is no keyword and no reserved name ("__" anywhere, '_' and a capital letter first).
 	bool IsValidScriptIdentifier(std::string_view name);
 	// The classes, structs and enums the code below `directory` declares, and the ST_SCRIPT_CLASS registrations (code
-	// files only; each read up to a bounded size).
+	// files only, each read up to a bounded size; what comments and string literals mention is not declared).
 	std::vector<std::string> FindDeclaredScriptTypes(const std::filesystem::path& directory);
 	// Why `className` cannot name a new script class of the project, or nothing when it can: an invalid identifier, a name
 	// the project's scripts declare already, or a name of the script SDK (which the scripts' `using namespace Strata`
