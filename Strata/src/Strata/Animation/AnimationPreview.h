@@ -19,6 +19,8 @@
 namespace Strata
 {
 
+	class AnimationController;
+
 	class Asset;
 	class Scene;
 	struct AttachToJointComponent;
@@ -67,7 +69,11 @@ namespace Strata
 		// component's assets or an asset object (a reload) changed, then where the attachments are drawn. Once per frame,
 		// before rendering.
 		void Update();
-		Status GetStatus(Entity animator, std::string* outError = nullptr) const;
+		// `outRequestInvalid`: a failure because the request names what the animator does not have (a state its controller
+		// lacks), rather than because an asset did not load.
+		Status GetStatus(Entity animator, std::string* outError = nullptr, bool* outRequestInvalid = nullptr) const;
+		// The states of a controller as a list for messages ("Idle, Run").
+		static std::string DescribeStates(const AnimationController& controller);
 
 		bool GetPose(entt::entity animator, SkeletonPose& outPose) const override;
 		uint64_t GetPosesVersion() const override { return m_PosesVersion; }
@@ -82,6 +88,7 @@ namespace Strata
 			Request Asked;
 			Status State = Status::Waiting;
 			std::string Error;
+			bool RequestInvalid = false; // The failure is the request's (GetStatus)
 			bool Dirty = true;
 			// What the pose was computed from: the component's assets and settings, and the asset objects.
 			AssetHandle Skeleton = UUID::Null();
@@ -95,7 +102,7 @@ namespace Strata
 		};
 
 		void UpdateEntry(entt::entity handle, Entry& entry);
-		void Fail(Entry& entry, std::string error);
+		void Fail(Entry& entry, std::string error, bool requestInvalid = false);
 		// Where an attachment is drawn: its animator's world transform times its joint's pose, while the animator is posed.
 		std::optional<glm::mat4> GetAttachmentWorld(Entity entity, const AttachToJointComponent& attachment) const;
 		// Computes the render transforms again (GetRenderTransforms); a new list gets a new version.

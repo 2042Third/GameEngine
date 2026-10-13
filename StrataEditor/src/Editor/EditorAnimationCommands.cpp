@@ -331,6 +331,23 @@ namespace Strata
 					return EditorCommandResult::InvalidParameters(fmt::format("'{}' has no Animator component", entity.GetName()));
 				if (!std::isfinite(time) || time < 0.0)
 					return EditorCommandResult::InvalidParameters("time must be finite and not negative");
+				// A state the loaded controller lacks is refused before the preview changes (one still loading is checked once
+				// it is in, below).
+				if (!request.State.empty())
+				{
+					const AnimatorComponent& component = entity.GetComponent<AnimatorComponent>();
+					const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+					const Ref<Asset> loaded = manager && component.Controller.IsValid() ? manager->PeekLoadedAsset(component.Controller) : nullptr;
+					if (loaded && loaded->GetType() == AssetType::AnimationController)
+					{
+						const AnimationController& controller = static_cast<const AnimationController&>(*loaded);
+						if (controller.FindState(request.State) == ~0u)
+						{
+							return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'state': the controller has no state '{}' (its states: {})",
+								request.State, AnimationPreview::DescribeStates(controller)));
+						}
+					}
+				}
 				request.Time = static_cast<float>(time);
 				std::string error;
 				AnimationPreview& preview = context.GetAnimationPreview();
@@ -345,11 +362,15 @@ namespace Strata
 					if (!preview || !target)
 						return EditorCommandResult::Fail("The preview ended (the edited scene changed)");
 					std::string reason;
-					switch (preview->GetStatus(target, &reason))
+					bool requestInvalid = false;
+					switch (preview->GetStatus(target, &reason, &requestInvalid))
 					{
 						case AnimationPreview::Status::Posed:
 							return EditorCommandResult::Ok({ { "entity", UUIDToJson(id) }, { "state", state }, { "time", time }, { "posed", true } });
 						case AnimationPreview::Status::Failed:
+							// A request that names what the animator does not have is the caller's to correct, not the editor's state.
+							if (requestInvalid)
+								return EditorCommandResult::InvalidParameters(fmt::format("The preview cannot be shown: {}", reason));
 							return EditorCommandResult::Fail(fmt::format("The preview cannot be shown: {}", reason));
 						case AnimationPreview::Status::None:
 							return EditorCommandResult::Fail("The preview was stopped");

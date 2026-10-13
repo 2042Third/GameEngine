@@ -219,9 +219,22 @@ TEST_SUITE("Editor.Animation")
 		CHECK_FALSE(harness.Context.IsSceneModified());
 		CHECK(harness.Context.GetUndoStack().GetHistory().empty());
 
-		// A clip, then failures: an unknown state, an entity without an animator, a negative time.
+		// A clip, then failures: an unknown state (the request's fault, refused before the preview changes, naming the states
+		// there are), an entity without an animator, a negative time.
 		harness.Run("animation.preview", { { "entity", c_ArmRig }, { "clip", c_SwingClip }, { "time", 1.0 } });
-		CHECK(harness.Fail("animation.preview", { { "entity", c_ArmRig }, { "state", "Swim" } }).Error.find("no state 'Swim'") != std::string::npos);
+		REQUIRE(poses->GetPose(rig.GetHandle(), pose));
+		const uint64_t clipPose = pose.Version;
+		const EditorCommandResult unknownState = harness.Fail("animation.preview", { { "entity", c_ArmRig }, { "state", "Swim" } });
+		CHECK(unknownState.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(unknownState.Error.find("no state 'Swim' (its states: ") != std::string::npos);
+		CHECK(unknownState.Error.find("Wave") != std::string::npos);
+		REQUIRE(poses->GetPose(rig.GetHandle(), pose));
+		CHECK(pose.Version == clipPose);
+		// With the controller not loaded, the preview finds out once it is, and refuses the request the same way.
+		harness.Context.GetAssetManager()->UnloadAsset(*UUIDFromJson(nlohmann::json(c_ArmController)));
+		const EditorCommandResult unknownLater = harness.Fail("animation.preview", { { "entity", c_ArmRig }, { "state", "Fly" } });
+		CHECK(unknownLater.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(unknownLater.Error.find("no state 'Fly' (its states: ") != std::string::npos);
 		const std::string ground = harness.Run("entity.find", { { "name", "Ground" } })["entities"][0].get<std::string>();
 		CHECK(harness.Fail("animation.preview", { { "entity", ground } }).ErrorKind == EditorCommandError::InvalidParameters);
 		CHECK(harness.Fail("animation.preview", { { "entity", c_ArmRig }, { "time", -1.0 } }).ErrorKind == EditorCommandError::InvalidParameters);

@@ -88,7 +88,7 @@ namespace Strata
 		UpdateRenderTransforms();
 	}
 
-	void AnimationPreview::Fail(Entry& entry, std::string error)
+	void AnimationPreview::Fail(Entry& entry, std::string error, bool requestInvalid)
 	{
 		if (entry.Version != 0)
 		{
@@ -97,7 +97,20 @@ namespace Strata
 		}
 		entry.State = Status::Failed;
 		entry.Error = std::move(error);
+		entry.RequestInvalid = requestInvalid;
 		entry.Dirty = false;
+	}
+
+	std::string AnimationPreview::DescribeStates(const AnimationController& controller)
+	{
+		std::string names;
+		for (const AnimationState& state : controller.GetStates())
+		{
+			if (!names.empty())
+				names += ", ";
+			names += state.Name;
+		}
+		return names.empty() ? std::string("none") : names;
 	}
 
 	void AnimationPreview::Update()
@@ -243,13 +256,13 @@ namespace Strata
 		{
 			if (!controller)
 			{
-				Fail(entry, fmt::format("the Animator has no controller with a state '{}'", entry.Asked.State));
+				Fail(entry, fmt::format("the Animator has no controller with a state '{}'", entry.Asked.State), true);
 				return;
 			}
 			state = controller->FindState(entry.Asked.State);
 			if (state == ~0u)
 			{
-				Fail(entry, fmt::format("the controller has no state '{}'", entry.Asked.State));
+				Fail(entry, fmt::format("the controller has no state '{}' (its states: {})", entry.Asked.State, DescribeStates(*controller)), true);
 				return;
 			}
 			clipHandle = controller->GetStates()[state].Clip;
@@ -341,13 +354,15 @@ namespace Strata
 		m_PosesVersion++;
 	}
 
-	AnimationPreview::Status AnimationPreview::GetStatus(Entity animator, std::string* outError) const
+	AnimationPreview::Status AnimationPreview::GetStatus(Entity animator, std::string* outError, bool* outRequestInvalid) const
 	{
 		auto it = m_Entries.find(animator.GetHandle());
 		if (it == m_Entries.end())
 			return Status::None;
 		if (outError)
 			*outError = it->second.Error;
+		if (outRequestInvalid)
+			*outRequestInvalid = it->second.State == Status::Failed && it->second.RequestInvalid;
 		return it->second.State;
 	}
 
