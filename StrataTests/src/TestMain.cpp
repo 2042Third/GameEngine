@@ -183,6 +183,24 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		std::filesystem::rename(partial, file, error);
 		return error ? 1 : 0;
 	}
+#if defined(ST_PLATFORM_WINDOWS)
+	if (mode == "console-output" && argc > 2)
+	{
+		// <program> [arguments]: runs the program as a terminal does, with this helper's console (hidden: Process starts the
+		// helper without a window) as its output; prints what the console shows and ends with the program's exit code.
+		std::vector<std::string> arguments(argv + 3, argv + argc);
+		std::string error;
+		const std::optional<Strata::Tests::ConsoleRun> run = Strata::Tests::RunInConsole(Strata::FileSystem::FromUTF8(argv[2]), arguments, &error);
+		if (!run)
+		{
+			std::fprintf(stderr, "console-output: %s\n", error.c_str());
+			return 99;
+		}
+		std::fputs(run->Text.c_str(), stdout);
+		std::fflush(stdout);
+		return run->ExitCode;
+	}
+#endif
 	if (mode == "echo")
 	{
 		for (int index = 2; index < argc; index++)

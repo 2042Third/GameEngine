@@ -12,6 +12,12 @@ target_include_directories(StrataRuntime PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/sr
 target_link_libraries(StrataRuntime PRIVATE Strata)
 
 if(WIN32)
+	# A windowed program, as every exported game is: no console window opens with it. It keeps main (Core/EntryPoint.h),
+	# and prints to the pipes its callers pass or the terminal that started it (Platform::ConnectStandardStreams).
+	set_target_properties(StrataRuntime PROPERTIES WIN32_EXECUTABLE TRUE)
+	if(MSVC)
+		target_link_options(StrataRuntime PRIVATE /ENTRY:mainCRTStartup)
+	endif()
 	target_sources(StrataRuntime PRIVATE "${PROJECT_SOURCE_DIR}/CMake/Strata.manifest")
 	# The strata mark as the executable's icon (exported games carry it), and version information.
 	set(STRATA_BRAND_ICON "${PROJECT_SOURCE_DIR}/StrataEditor/Resources/Brand/StrataMark.ico")

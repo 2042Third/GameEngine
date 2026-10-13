@@ -241,6 +241,9 @@ project.export {"directory": "<another one>", "prune": true}       # smaller: on
 <dir>/<Game> --windowed --frames 120 --screenshot shot.png        # look at shot.png
 ```
 
+In PowerShell pipe a game's or the editor's output (`... | Write-Output`) to wait for it and get its exit code: they are
+windowed programs on Windows, which PowerShell does not wait for otherwise.
+
 The exported game has no `--help`: unknown arguments are ignored and the game starts (fullscreen if the manifest says so).
 The export runs in the background and answers when it finished (give the CLI call a long `--timeout` for big projects).
 A pruned export leaves out assets no scene references (its result lists them in `excludedAssets`): when the scripts load

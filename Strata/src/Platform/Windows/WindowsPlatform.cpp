@@ -650,4 +650,39 @@ namespace Strata
 		_setmode(_fileno(stdout), _O_BINARY);
 	}
 
+	void Platform::ConnectStandardStreams()
+	{
+		// A stream the parent passed is anything but a console: a pipe, a file or the null device. Those are kept, never
+		// replaced, so that whoever reads them (CTest, StrataCLI, CI) gets the output and the program's exit code as before.
+		const auto isPassed = [](DWORD id)
+		{
+			const HANDLE handle = GetStdHandle(id);
+			DWORD mode = 0;
+			return handle != nullptr && handle != INVALID_HANDLE_VALUE && !GetConsoleMode(handle, &mode);
+		};
+		const bool outputPassed = isPassed(STD_OUTPUT_HANDLE);
+		const bool errorPassed = isPassed(STD_ERROR_HANDLE);
+		if (outputPassed && errorPassed)
+			return;
+		// Started from a terminal: print into it. Started from Explorer, there is no console to attach to.
+		if (!AttachConsole(ATTACH_PARENT_PROCESS))
+			return;
+		// The Win32 handle for code that writes to it (the log's console sink reads GetStdHandle), and the C runtime's stream.
+		const auto connect = [](DWORD id, FILE* stream)
+		{
+			const HANDLE console = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING,
+				0, nullptr);
+			if (console == INVALID_HANDLE_VALUE)
+				return;
+			SetStdHandle(id, console);
+			// A stream that cannot be reopened prints nowhere, as when started from the desktop: there is nothing else to try.
+			FILE* reopened = nullptr;
+			freopen_s(&reopened, "CONOUT$", "w", stream);
+		};
+		if (!outputPassed)
+			connect(STD_OUTPUT_HANDLE, stdout);
+		if (!errorPassed)
+			connect(STD_ERROR_HANDLE, stderr);
+	}
+
 }

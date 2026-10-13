@@ -78,9 +78,10 @@ Binaries land in `build/<preset>/bin/<Config>/`:
 2. Build scenes in the viewport, hierarchy and inspector. Write scripts in `Scripts/`, build them with
    **Scripts > Build Scripts** (Ctrl+B), attach them in the inspector, and try the scene with **Play**. Rebuilding
    while the game plays hot reloads the scripts.
-3. Choose the start scene (**File > Set as Start Scene**) and export with the `project.export` command.
-   The output folder contains everything the game needs. Run it with `<Game> --headless --frames 600` to check that it
-   plays without errors, or with `--windowed --frames 120 --screenshot shot.png` to see it.
+3. Choose the start scene (**File > Set as Start Scene**) and export with the `project.export` command. The output
+   folder contains everything the game needs. Run it with `<Game> --headless --frames 600` (in PowerShell add
+   `| Write-Output` to wait for it) to check that it plays without errors, or with
+   `--windowed --frames 120 --screenshot shot.png` to see it.
 
 Games can be play-tested without a person: while a game runs in the editor, the `input.key`, `input.mouseButton`,
 `input.mouseMove` and `input.scroll` commands press keys and buttons the way a player would, and `viewport.capture`

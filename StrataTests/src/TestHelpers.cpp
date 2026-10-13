@@ -1,6 +1,7 @@
 #include "TestHelpers.h"
 
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/Process.h"
 #include "Strata/Core/UUID.h"
 
 #include <nlohmann/json.hpp>
@@ -311,6 +312,69 @@ namespace Strata::Tests
 		if (!sizes)
 			return fail("its icon group cannot be read");
 		return sizes;
+	}
+
+	std::optional<ConsoleRun> RunInConsole(const std::filesystem::path& program, const std::vector<std::string>& arguments, std::string* outError)
+	{
+		auto fail = [outError](std::string message) -> std::optional<ConsoleRun>
+		{
+			if (outError)
+				*outError = std::move(message);
+			return std::nullopt;
+		};
+		const HANDLE console = CreateFileW(L"CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_EXISTING, 0,
+			nullptr);
+		if (console == INVALID_HANDLE_VALUE)
+			return fail("this process has no console");
+
+		// A terminal's standard streams are its console; the program gets them as a terminal passes them (inherited, not
+		// redirected). This process's own streams are given back once it has started.
+		const HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+		const HANDLE error = GetStdHandle(STD_ERROR_HANDLE);
+		SetStdHandle(STD_OUTPUT_HANDLE, console);
+		SetStdHandle(STD_ERROR_HANDLE, console);
+		ProcessSpecification specification;
+		specification.Executable = program;
+		specification.Arguments = arguments;
+		specification.Output = ProcessOutputMode::Inherit;
+		Process process;
+		const bool started = process.Start(specification);
+		SetStdHandle(STD_OUTPUT_HANDLE, output);
+		SetStdHandle(STD_ERROR_HANDLE, error);
+		if (!started)
+		{
+			CloseHandle(console);
+			return fail("cannot start it: " + process.GetLastError());
+		}
+		const std::optional<int> exitCode = process.Wait(std::chrono::minutes(1));
+		if (!exitCode)
+		{
+			process.Terminate();
+			CloseHandle(console);
+			return fail("it did not end within a minute");
+		}
+
+		ConsoleRun run;
+		run.ExitCode = *exitCode;
+		CONSOLE_SCREEN_BUFFER_INFO info = {};
+		if (!GetConsoleScreenBufferInfo(console, &info))
+		{
+			CloseHandle(console);
+			return fail("cannot read the console");
+		}
+		std::wstring line(static_cast<size_t>(info.dwSize.X), L' ');
+		for (SHORT row = 0; row <= info.dwCursorPosition.Y; row++)
+		{
+			DWORD read = 0;
+			if (!ReadConsoleOutputCharacterW(console, line.data(), static_cast<DWORD>(line.size()), COORD { 0, row }, &read))
+				break;
+			std::wstring text = line.substr(0, read);
+			const size_t end = text.find_last_not_of(L' ');
+			text.resize(end == std::wstring::npos ? 0 : end + 1);
+			run.Text += FileSystem::ToUTF8(std::filesystem::path(text)) + "\n";
+		}
+		CloseHandle(console);
+		return run;
 	}
 #endif
 

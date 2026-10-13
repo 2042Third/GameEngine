@@ -49,6 +49,9 @@ StrataCLI call viewport.capture --save-image shot.png    # image results are wri
 ```
 
 - On Windows, quoting JSON on the command line is fragile (PowerShell strips inner quotes): prefer `@file` or `-`.
+- On Windows `StrataEditor` and exported games are windowed programs: PowerShell neither waits for them nor sets
+  `$LASTEXITCODE` unless their output is piped (`StrataEditor --version | Write-Output`); bash, CTest and StrataCLI
+  wait.
 - Exit codes: `0` success (result on stdout); `1` the editor answered with an error (`{"code", "message",
   "data"}` on stderr); `2` no editor reachable or the connection was lost; `3` invalid command line; `4` no
   answer within `--timeout` (the editor is still there and the command may still finish: wait or call

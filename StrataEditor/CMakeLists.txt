@@ -65,6 +65,12 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_EDITOR_SOURCE
 target_link_libraries(StrataEditor PRIVATE StrataEditorUI)
 
 if(WIN32)
+	# A windowed program: no console window opens with it. It keeps main (Core/EntryPoint.h), and prints to the pipes its
+	# callers pass or the terminal that started it (Platform::ConnectStandardStreams).
+	set_target_properties(StrataEditor PROPERTIES WIN32_EXECUTABLE TRUE)
+	if(MSVC)
+		target_link_options(StrataEditor PRIVATE /ENTRY:mainCRTStartup)
+	endif()
 	target_sources(StrataEditor PRIVATE "${PROJECT_SOURCE_DIR}/CMake/Strata.manifest")
 	# The strata mark as the executable's icon, and version information (Explorer, taskbar, Task Manager).
 	set(STRATA_BRAND_ICON "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Brand/StrataMark.ico")

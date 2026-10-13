@@ -872,4 +872,9 @@ namespace Strata
 		// POSIX streams never translate newlines.
 	}
 
+	void Platform::ConnectStandardStreams()
+	{
+		// Programs inherit the terminal's (or the parent's) streams whatever kind of program they are.
+	}
+
 }

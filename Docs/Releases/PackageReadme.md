@@ -68,7 +68,9 @@ The executables are not signed, so the system asks before it runs them the first
   `./StrataEditor` from that folder.
 - **Linux:** start `./StrataEditor` from the folder.
 
-On Windows the editor opens a console window next to its own window: it shows the log.
+The editor and exported games are windowed programs: they open no console window. Started from a terminal they print
+their log into it, but the terminal does not wait for them; to wait for one and get its exit code in PowerShell, pipe
+its output, e.g. `.\StrataEditor --version | Write-Output`.
 
 ## Make a game
 

@@ -93,7 +93,14 @@ What may depend on what:
   `Renderer/GraphicsDevice.h`. Engine code outside `src/Platform/` includes no OS headers.
 
 Applications built on `Application` (editor, runtime) get `main` from `Core/EntryPoint.h`, which calls the client's
-`CreateApplication`, runs it and returns its exit code. `StrataCLI` has its own `main` and no `Application`.
+`CreateApplication`, runs it and returns its exit code. `StrataCLI` has its own `main` and no `Application`. On Windows
+the editor and the runtime (and so every exported game) are GUI-subsystem programs, so that no console window opens with
+them; they keep `main` (`/ENTRY:mainCRTStartup`, `StrataEditor/CMakeLists.txt`, `StrataRuntime/CMakeLists.txt`), whose
+first call, `Platform::ConnectStandardStreams`, keeps the streams callers pass (pipes, files, the null device: CTest,
+StrataCLI, CI get the output and the exit code as from a console program) and otherwise attaches to the console of the
+process that started it (a terminal), before anything prints or the log opens its console sink.
+`EndToEnd.StandardStreams` checks both (the terminal through a helper with a hidden console, `Tests::RunInConsole`) and
+the executables' subsystems, as `StrataEditor.Install` checks the installed ones.
 
 ## Engine modules
 

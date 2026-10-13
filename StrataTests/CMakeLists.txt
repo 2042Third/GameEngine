@@ -107,6 +107,10 @@ if(TARGET StrataCLILib)
 	target_link_libraries(StrataTests PRIVATE StrataCLILib)
 	target_compile_definitions(StrataTests PRIVATE STRATA_TESTS_HAVE_CLI)
 endif()
+# Tests that run the StrataRuntime executable compile only when it is part of the build.
+if(TARGET StrataRuntime)
+	target_compile_definitions(StrataTests PRIVATE STRATA_TESTS_HAVE_RUNTIME)
+endif()
 
 if(WIN32)
 	target_sources(StrataTests PRIVATE "${PROJECT_SOURCE_DIR}/CMake/Strata.manifest")
@@ -292,14 +296,16 @@ if(TARGET StrataEditor)
 endif()
 
 # Editor automation end to end (no GPU): the "EndToEnd" suites start the real editor headless and drive it with StrataCLI
-# and its MCP server, the way an AI agent does.
+# and its MCP server, the way an AI agent does, and read what the editor and the runtime print (EndToEnd.StandardStreams).
 if(TARGET StrataEditor AND TARGET StrataCLI)
+	set(STRATA_END_TO_END_ENVIRONMENT "STRATA_TEST_EDITOR_PATH=$<TARGET_FILE:StrataEditor>;STRATA_TEST_CLI_PATH=$<TARGET_FILE:StrataCLI>")
+	if(TARGET StrataRuntime)
+		list(APPEND STRATA_END_TO_END_ENVIRONMENT "STRATA_TEST_RUNTIME_PATH=$<TARGET_FILE:StrataRuntime>")
+	endif()
 	add_test(NAME StrataEditor.Automation
 		COMMAND StrataTests --test-suite=EndToEnd* --no-intro=true
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
-	set_tests_properties(StrataEditor.Automation PROPERTIES
-		ENVIRONMENT "STRATA_TEST_EDITOR_PATH=$<TARGET_FILE:StrataEditor>;STRATA_TEST_CLI_PATH=$<TARGET_FILE:StrataCLI>"
-		TIMEOUT 600)
+	set_tests_properties(StrataEditor.Automation PROPERTIES ENVIRONMENT "${STRATA_END_TO_END_ENVIRONMENT}" TIMEOUT 600)
 endif()
 
 # Editor export to a playable game, then the exported runtime: headless without a GPU (--no-gpu, --headless), then in a

@@ -171,6 +171,13 @@ namespace Strata
 		// Switches stdin and stdout to binary mode (no newline translation) for machine-readable protocols such as
 		// MCP over stdio. No-op on POSIX, where streams are always binary.
 		static void SetBinaryStandardStreams();
+		// Gives stdout and stderr of a program without a console of its own (the editor and the runtime, GUI-subsystem
+		// programs on Windows, so that no console window opens with them) somewhere to go: streams its parent passed (pipes,
+		// files, the null device: CTest, StrataCLI, CI) stay as they are, and the others go to the console of the process
+		// that started it, if it has one (a terminal), so what the program prints shows there. Started from the desktop it
+		// prints nowhere. Call first in main, before anything prints or logging starts. No-op on POSIX, where programs keep
+		// the streams they are given.
+		static void ConnectStandardStreams();
 
 		static std::optional<std::string> GetEnvVar(std::string_view name);
 		static bool SetEnvVar(std::string_view name, std::string_view value);

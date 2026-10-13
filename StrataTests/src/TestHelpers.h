@@ -102,6 +102,18 @@ namespace Strata::Tests
 	// read with the executable loaded as a data file. Nullopt (outError says why) when it cannot be loaded or has no
 	// icon group.
 	std::optional<std::vector<uint32_t>> ReadExecutableIconSizes(const std::filesystem::path& executable, std::string* outError = nullptr);
+
+	// What a program printed into a console and the code it ended with.
+	struct ConsoleRun
+	{
+		std::string Text; // The console's lines up to its cursor, without trailing blanks
+		int ExitCode = -1;
+	};
+
+	// Runs a program the way a terminal does: this process's console (a hidden one in a helper that Process started) is its
+	// output, nothing redirected, and the program is waited for. Nullopt (outError says why) when this process has no
+	// console, the program cannot start or it runs longer than a minute.
+	std::optional<ConsoleRun> RunInConsole(const std::filesystem::path& program, const std::vector<std::string>& arguments, std::string* outError = nullptr);
 #endif
 
 	inline std::filesystem::path GetTestExecutablePath()

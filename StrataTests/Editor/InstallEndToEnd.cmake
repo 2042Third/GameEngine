@@ -80,6 +80,25 @@ if(marker_error OR NOT marker_version STREQUAL VERSION)
 	fail("StrataInstall.json names version '${marker_version}' (${marker_error}), expected ${VERSION}")
 endif()
 
+# On Windows the editor and the runtime (which every exported game is) are windowed programs, so that no console window
+# opens with them; the CLI is a console program. The subsystem is a field of the executable's optional header.
+function(check_subsystem file expected)
+	if(NOT EXECUTABLE_SUFFIX STREQUAL ".exe")
+		return()
+	endif()
+	file(READ "${file}" header OFFSET 60 LIMIT 4 HEX)
+	# e_lfanew, little endian.
+	string(REGEX REPLACE "^(..)(..)(..)(..)$" "\\4\\3\\2\\1" header "${header}")
+	math(EXPR subsystemOffset "0x${header} + 4 + 20 + 68")
+	file(READ "${file}" subsystem OFFSET ${subsystemOffset} LIMIT 2 HEX)
+	if(NOT subsystem STREQUAL expected)
+		fail("'${file}' has the PE subsystem '${subsystem}', expected '${expected}' (0200 windowed, 0300 console)")
+	endif()
+endfunction()
+check_subsystem("${prefix}/StrataEditor${EXECUTABLE_SUFFIX}" "0200")
+check_subsystem("${prefix}/StrataRuntime${EXECUTABLE_SUFFIX}" "0200")
+check_subsystem("${prefix}/StrataCLI${EXECUTABLE_SUFFIX}" "0300")
+
 set(editor "${prefix}/StrataEditor${EXECUTABLE_SUFFIX}")
 execute_process(COMMAND "${editor}" --version OUTPUT_VARIABLE output ERROR_VARIABLE output RESULT_VARIABLE result)
 if(NOT result EQUAL 0 OR NOT output MATCHES "Strata Editor ${VERSION}")
@@ -181,6 +200,7 @@ foreach(file "${game}" "${build}/Install Game.stgame" "${build}/InstallGameScrip
 		fail("the export did not write '${file}'")
 	endif()
 endforeach()
+check_subsystem("${game}" "0200")
 execute_process(COMMAND "${game}" --headless --frames 30 --save-directory "${WORK_DIR}/Saves" WORKING_DIRECTORY "${build}"
 	OUTPUT_VARIABLE output ERROR_VARIABLE output RESULT_VARIABLE result)
 message("${output}")

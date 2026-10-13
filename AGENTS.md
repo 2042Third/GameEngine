@@ -89,6 +89,12 @@ standard libraries reject code that the local ones accept (Apple Clang 15's libc
 `std::from_chars`; `size_t` and `uint64_t` are different types on macOS; GCC 14 warns where newer GCCs do not), so push a
 branch that lands many changes (a wave's integration) as `ci/<name>` and wait for green CI before it moves `main`.
 
+**Windows subsystem:** `StrataEditor` and `StrataRuntime` (and so every exported game) are GUI-subsystem programs on
+Windows, so that no console window opens with them; `StrataCLI` and `StrataTests` are console programs. Their `main`
+first calls `Platform::ConnectStandardStreams` (`Core/EntryPoint.h`): pipes and files their callers pass are kept, so
+tests and tools read their output and exit codes as before, and otherwise they print into the terminal that started
+them. `EndToEnd.StandardStreams` and `StrataEditor.Install` check the executables' PE subsystem.
+
 **Packages:** `cmake --install build/<preset> --config Dist --prefix <dir>` installs Strata the way a release archive
 holds it (`CMake/StrataPackaging.cmake`): the executables side by side, `StrataInstall.json` (which makes the editor
 build scripts with the installation's SDK and a toolchain it finds on the machine, see Scripting, "Building and loading
@@ -275,9 +281,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   the hardware prefetchers follow heap blocks only when they recognize the pattern by the reading instruction's address:
   a perf difference between builds of identical sources points at such a layout effect; compare the builds' profiles
   before blaming noise.
-- Suites whose names start with `EndToEnd` start the built `StrataEditor` and `StrataCLI` (paths in
-  `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`, else next to the test executable) and run as the CTest
-  `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
+- Suites whose names start with `EndToEnd` start the built `StrataEditor`, `StrataCLI` and `StrataRuntime` (paths in
+  `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`/`STRATA_TEST_RUNTIME_PATH`, else next to the test executable) and run
+  as the CTest `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
   directories, free ports and timeouts, and terminate the processes they started when they fail.
 - Tests follow the transform contract (see [Architecture rules](#architecture-rules)): a direct write to a
   `TransformComponent` after the scene was updated is followed by `MarkModified<TransformComponent>()` (or
