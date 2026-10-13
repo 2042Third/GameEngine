@@ -199,7 +199,8 @@ jobs:
           root="$check/$PACKAGE"
           ls -l "$root"
           # What the archive weighs and its largest files, as an annotation (job logs need admin rights to read).
-          largest=$(find "$root" -type f -exec wc -c {} + | grep -v ' total$' | sort -rn | sed -n "1,8s|$root/||p")
+          # Listed from inside the package: on Windows $root holds backslashes, which a sed pattern would read as escapes.
+          largest=$(cd "$root" && find . -type f -exec wc -c {} + | grep -v ' total$' | sort -rn | sed -n '1,8s|\./||p')
           echo "::notice title=Package $PACKAGE::$(wc -c < "$archive" | tr -d ' ') bytes packed; its largest files:%0A${largest//$'\n'/%0A}"
           for file in StrataEditor$suffix StrataRuntime$suffix StrataCLI$suffix StrataInstall.json README.md ThirdPartyNotices.md \
               Samples/Samples.json StrataScriptCore/CMake/StrataScriptCoreConfig.cmake Skills/strata-make-a-game/SKILL.md; do
