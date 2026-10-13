@@ -810,13 +810,18 @@ rules"). Other threads:
   captures. Much of it is frame work: a frame that waits for a batch or a Jolt job a worker has started goes on only once
   that worker has the processor again, so workers keep the main thread's priority (below it, a machine whose processors
   other programs keep busy, a build for one, would starve them and stall frames for seconds).
-- **Background threads** (`JobSystem::Init`; as many as workers by default): long work no frame waits for, submitted with
+- **Background threads** (`JobSystem::Init`; by default as many as workers but leaving four hardware threads,
+  `JobSystem::GetDefaultBackgroundThreadCount`): long work no frame waits for, submitted with
   `JobPriority::Background` - imports (the project scan's and the background re-imports, with their texture
   compression) and the block compression of game exports. They run below the normal thread priority
   (`Platform::SetCurrentThreadPriority`): a pool as large as the processors busy with long jobs (an import compressing a
   4096x4096 texture keeps every thread busy for seconds) would otherwise share them evenly with the main thread, the
   workers and the graphics driver's threads, and the editor's frames, which take about 3 ms, would stretch to 10-30 ms by
-  whole scheduling quanta. What background work starts (`Submit`, `ParallelFor`) stays on the background threads.
+  whole scheduling quanta. The lower priority alone did not keep the frames free: with every processor running background
+  work, a thread of the normal priority that became ready (the graphics driver's, which the frame's
+  `vkBeginCommandBuffer` waited for) waited up to a quantum for a processor, which held the editor's frames 5-27 ms while
+  an import compressed to BC7; so the pool leaves processors to the frame's threads (20 of 24 hardware threads: those
+  frames took 2.0-2.8 ms). What background work starts (`Submit`, `ParallelFor`) stays on the background threads.
 - **I/O threads** (`JobSystem::Init`; 2 by default): `JobSystem::SubmitIO` work such as asset reads (dispatched by the
   streaming queue, at most two per I/O thread at a time; a pack read hands its blocks to worker jobs to decompress while
   it reads on, and never runs other jobs while it waits for them), searches of what documents reference, saving

@@ -399,8 +399,8 @@ The threading model, frame loop and pipelines these rules protect are described 
 - **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background
   work goes through `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O, `JobPriority::Background` for long
   work no frame waits for, such as an import's texture compression or an export's pack compression: it runs on background
-  threads below the normal thread priority, so it never takes the processors from the frame, whose own work runs on the
-  normal-priority workers). A thread that waits for a job runs that job itself if it has not started, and never other
+  threads below the normal thread priority, which leave four hardware threads free, so it never takes the processors from
+  the frame, whose own work runs on the normal-priority workers). A thread that waits for a job runs that job itself if it has not started, and never other
   jobs. Results return to
   the main thread through `Application::SubmitToMainThread` or polled queues — never callbacks that
   touch engine state from worker threads.

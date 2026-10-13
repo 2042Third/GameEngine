@@ -81,7 +81,7 @@
 	"Perf.Physics.Create10kBodies": { "Measured": 7.995, "Budget": 11.99, "Unit": "ms" },
 	"Perf.Physics.Characters1000Step": { "Measured": 0.8108, "Budget": 1.2, "Unit": "ms" },
 	"PerfGPU.Editor.ImportSettings4kMaxFrame": { "Measured": 3.866, "Budget": 5.799, "Unit": "ms" },
-	"PerfGPU.Editor.ImportSettings4kMaxFrame10kCubes": { "Measured": 3.213, "Budget": 4.819, "Unit": "ms" },
+	"PerfGPU.Editor.ImportSettings4kMaxFrame10kCubes": { "Measured": 2.06, "Budget": 3.09, "Unit": "ms" },
 	"PerfGPU.Editor.ContentBrowser10kThumbnailsP95": { "Measured": 0.0397, "Budget": 0.057, "Unit": "ms" },
 	"PerfGPU.Editor.ImportTexture4kMaxFrame": { "Measured": 2.459, "Budget": 3.688, "Unit": "ms" },
 	"PerfGPU.Editor.ThumbnailsMaxFrame": { "Measured": 0.766, "Budget": 1.149, "Unit": "ms" },

@@ -407,13 +407,12 @@ namespace Strata
 			return;
 		}
 
+		const uint32_t hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
 		uint32_t workerCount = specification.WorkerThreadCount;
 		if (workerCount == 0)
-		{
-			const uint32_t hardwareThreads = std::thread::hardware_concurrency();
 			workerCount = hardwareThreads > 1 ? hardwareThreads - 1 : 1;
-		}
-		const uint32_t backgroundCount = specification.BackgroundThreadCount > 0 ? specification.BackgroundThreadCount : workerCount;
+		const uint32_t backgroundCount = specification.BackgroundThreadCount > 0 ? specification.BackgroundThreadCount
+			: std::min(workerCount, GetDefaultBackgroundThreadCount(hardwareThreads));
 
 		auto* data = new JobSystemData();
 		data->Workers.Start(workerCount, "Strata Worker", PoolKind::Workers);
@@ -540,6 +539,13 @@ namespace Strata
 
 		std::unique_lock<std::mutex> lock(state->Mutex);
 		state->Condition.wait(lock, [&state]() { return state->FinishedBatches.load(std::memory_order_acquire) == state->BatchCount; });
+	}
+
+	uint32_t JobSystem::GetDefaultBackgroundThreadCount(uint32_t hardwareThreads)
+	{
+		const uint32_t half = hardwareThreads / 2;
+		const uint32_t leftToFrames = hardwareThreads > c_FrameHardwareThreads ? hardwareThreads - c_FrameHardwareThreads : 0;
+		return std::max(1u, std::max(half, leftToFrames));
 	}
 
 	uint32_t JobSystem::GetWorkerThreadCount()
