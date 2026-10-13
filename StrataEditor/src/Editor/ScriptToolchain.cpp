@@ -12,7 +12,6 @@
 #include <algorithm>
 #include <cctype>
 #include <chrono>
-#include <map>
 #include <utility>
 
 namespace Strata
@@ -242,11 +241,13 @@ namespace Strata
 
 			if (usable.empty())
 			{
+				// What to do first: notifications show the start of the message.
 				std::vector<std::string> sentences = {
-					"Building scripts needs Visual Studio 2022 (version 17.10 or later) or Visual Studio 2026 with the \"Desktop development with "
-					"C++\" workload, or the Build Tools for Visual Studio with the C++ build tools, and none is installed.",
-					"Install one from https://visualstudio.microsoft.com/downloads/ (the free Community edition or the Build Tools will do; their "
-					"C++ CMake tools, included by default, provide CMake), then build the scripts again." };
+					"Building scripts needs Visual Studio's C++ tools: install Visual Studio 2022 (17.10 or later) or 2026 with the \"Desktop "
+					"development with C++\" workload, or the Build Tools for Visual Studio, from https://visualstudio.microsoft.com/downloads/, "
+					"then build the scripts again.",
+					"None is installed (the Community edition and the Build Tools are free; their C++ CMake tools, included by default, provide "
+					"CMake)." };
 				if (!tooOld.empty())
 				{
 					std::string text = "Found: ";
@@ -304,10 +305,10 @@ namespace Strata
 			const std::string generator = GetVisualStudioGenerator(best.Version);
 			const ScriptToolVersion minimum = GetMinimumCMakeVersion(generator);
 			std::vector<std::string> sentences = {
-				fmt::format("Building scripts with {} needs CMake {} or later, and none was found (in PATH, in Program Files\\CMake or in Visual "
-					"Studio).", DescribeInstance(best), FormatScriptToolVersion(minimum)),
-				"Install CMake from https://cmake.org/download/ (let its installer add it to PATH), or add the \"C++ CMake tools for Windows\" "
-				"component in the Visual Studio Installer, then build the scripts again." };
+				fmt::format("Building scripts needs CMake {} or later: install it from https://cmake.org/download/ (let its installer add it to "
+					"PATH), or add the \"C++ CMake tools for Windows\" component in the Visual Studio Installer, then build the scripts again.",
+					FormatScriptToolVersion(minimum)),
+				fmt::format("None that knows {} was found in PATH, in Program Files\\CMake or in {}.", generator, DescribeInstance(best)) };
 			if (std::string unusable = DescribeUnusableCMakes(cmakes, minimum); !unusable.empty())
 				sentences.push_back(std::move(unusable));
 			resolution.Error = JoinSentences(sentences);
@@ -401,6 +402,8 @@ namespace Strata
 		{
 			const bool macOS = host == ScriptToolchainHost::MacOS;
 			ScriptToolchainResolution resolution;
+			// What is missing in a few words (the message starts with them and what to install, which notifications show), and
+			// what was looked for (after it).
 			std::vector<std::string> missing;
 			std::vector<std::string> notes;
 
@@ -412,16 +415,25 @@ namespace Strata
 				const std::optional<std::string> developerDirectory = environment.Run("/usr/bin/xcode-select", { "-p" });
 				developerTools = developerDirectory && !Trim(*developerDirectory).empty() && environment.IsDirectory(FileSystem::FromUTF8(Trim(*developerDirectory)));
 				if (!developerTools)
-					missing.push_back("Apple's Command Line Tools for Xcode (the C++ compiler and Make)");
+				{
+					missing.push_back("Apple's Command Line Tools (the C++ compiler and Make)");
+					notes.push_back("xcode-select names no developer directory.");
+				}
 			}
 
 			// Without the developer tools the compiler and make shims cannot run: they are what is missing.
 			const std::optional<std::filesystem::path> compiler = developerTools ? FindCompiler(preferred, environment) : std::nullopt;
 			if (developerTools && !compiler)
-				missing.push_back("a C++ compiler with C++20 support (GCC 13 or later, or Clang 17 or later; none of CXX, c++, g++ or clang++ was found)");
+			{
+				missing.push_back("a C++20 compiler (GCC 13 or later, or Clang 17 or later)");
+				notes.push_back("None of CXX, c++, g++ or clang++ was found.");
+			}
 			const std::optional<BuildTool> buildTool = developerTools ? FindBuildTool(preferred, host, environment) : std::nullopt;
 			if (developerTools && !buildTool)
-				missing.push_back("Ninja or Make (neither was found)");
+			{
+				missing.push_back("Ninja or Make");
+				notes.push_back("Neither ninja nor make was found in PATH.");
+			}
 
 			const std::string generator = buildTool ? buildTool->Generator : preferred.Generator;
 			const ScriptToolVersion minimum = GetMinimumCMakeVersion(generator);
@@ -437,7 +449,8 @@ namespace Strata
 			const CMakeCandidate* cmake = cmakes.FindFirst(minimum);
 			if (!cmake)
 			{
-				missing.push_back(fmt::format("CMake {} or later (none in PATH or the usual places)", FormatScriptToolVersion(minimum)));
+				missing.push_back(fmt::format("CMake {} or later", FormatScriptToolVersion(minimum)));
+				notes.push_back("No CMake that new was found in PATH or the usual places.");
 				if (std::string unusable = DescribeUnusableCMakes(cmakes, minimum); !unusable.empty())
 					notes.push_back(std::move(unusable));
 			}
@@ -447,7 +460,7 @@ namespace Strata
 				std::string list;
 				for (size_t index = 0; index < missing.size(); index++)
 					list += (index == 0 ? "" : index + 1 == missing.size() ? " and " : ", ") + missing[index];
-				std::vector<std::string> sentences = { fmt::format("Building scripts needs {}.", list) };
+				std::string install;
 				if (macOS)
 				{
 					// The Command Line Tools bring the compiler and Make; CMake comes from Homebrew or cmake.org.
@@ -455,14 +468,15 @@ namespace Strata
 					if (!developerTools || !compiler || !buildTool)
 						steps.push_back("the Command Line Tools with `xcode-select --install` in Terminal (or install Xcode)");
 					if (!cmake)
-						steps.push_back("CMake with Homebrew (`brew install cmake ninja`) or CMake.app from https://cmake.org/download/");
-					sentences.push_back(fmt::format("Install {}, then build the scripts again.", steps.size() == 2 ? steps[0] + ", and " + steps[1] : steps[0]));
+						steps.push_back("CMake with `brew install cmake ninja` or CMake.app from https://cmake.org/download/");
+					install = steps.size() == 2 ? steps[0] + ", and " + steps[1] : steps[0];
 				}
 				else
 				{
-					sentences.push_back("Install them with your package manager, on Ubuntu with `sudo apt install g++ cmake ninja-build`, then build the "
-						"scripts again.");
+					install = missing.size() == 1 ? "it" : "them";
+					install += " with your package manager, on Ubuntu with `sudo apt install g++ cmake ninja-build`";
 				}
+				std::vector<std::string> sentences = { fmt::format("Building scripts needs {}: install {}, then build the scripts again.", list, install) };
 				sentences.insert(sentences.end(), notes.begin(), notes.end());
 				resolution.Error = JoinSentences(sentences);
 				return resolution;

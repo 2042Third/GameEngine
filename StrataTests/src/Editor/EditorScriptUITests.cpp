@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Editor/HarnessEditor.h"
+#include "Editor/ScriptToolchain.h"
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
 #include "FeatureTest/FeatureTestUtils.h"
@@ -28,6 +29,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -36,6 +38,20 @@ using namespace Strata::Tests;
 
 namespace
 {
+
+	// A machine with the script SDK and no C++ toolchain: no compiler, CMake, vswhere or Command Line Tools.
+	class MachineWithoutToolchain final : public ScriptToolchainEnvironment
+	{
+	public:
+		bool IsFile(const std::filesystem::path& path) const override
+		{
+			return path.filename() == "StrataScriptCoreConfig.cmake" && FileSystem::IsRegularFile(path);
+		}
+		bool IsDirectory(const std::filesystem::path&) const override { return false; }
+		std::optional<std::filesystem::path> FindProgram(std::string_view) const override { return std::nullopt; }
+		std::optional<std::string> GetEnvVar(std::string_view) const override { return std::nullopt; }
+		std::optional<std::string> Run(const std::filesystem::path&, const std::vector<std::string>&) const override { return std::nullopt; }
+	};
 
 	// Script builds that run the test executable as CMake (STRATA_TEST_FAKE_CMAKE, see TestMain.cpp).
 	EditorOptions WithFakeScriptBuild()
@@ -436,6 +452,56 @@ TEST_SUITE("Editor.UI.Scripts")
 		REQUIRE_FALSE(problems->GetRows().empty());
 		CHECK(problems->GetRows()[0].Kind == ProblemsPanel::RowKind::Crash);
 		CHECK(FindToast("Script crash: play mode stopped").empty());
+	}
+
+	TEST_CASE("An editor that finds no C++ toolchain says what to install: in its toast, the Problems panel and script.status")
+	{
+		// An installed editor's toolchain is only preferences: its first build looks for one, here on a machine without any.
+		EditorOptions options = WithFakeScriptBuild();
+		options.ScriptBuild->FindToolchain = true;
+		options.ToolchainEnvironment = []() { return Scope<ScriptToolchainEnvironment>(CreateScope<MachineWithoutToolchain>()); };
+		HarnessEditor editor({}, options);
+		editor.Frames(1);
+		CreateProject(editor, "NoToolchain");
+		editor.Context().GetNotifications().Clear();
+		editor.Layer->GetPanels().SetOpen(EditorPanels::c_Problems, false);
+		editor.Frames(2);
+		const nlohmann::json before = editor.Run("script.status");
+		CHECK(before["toolchain"]["found"] == false);
+		CHECK(before["toolchain"]["searchesThisMachine"] == true);
+
+		const ScriptBuilder& builder = editor.Context().GetScriptBuilder();
+		REQUIRE(editor.Click("Toolbar.BuildScripts"));
+		REQUIRE(editor.FramesUntil([&builder]() { return !builder.IsRunning() && builder.GetLastResult().ID != 0; }));
+		editor.Frames(2);
+		const ScriptBuildResult& result = builder.GetLastResult();
+		CHECK_FALSE(result.Success);
+		CHECK(result.Error.find("No C++ toolchain to build the scripts with was found on this machine") != std::string::npos);
+		// What to install, for this platform.
+		const std::string install = GetScriptToolchainHost() == ScriptToolchainHost::Windows ? "https://visualstudio.microsoft.com/downloads/"
+			: GetScriptToolchainHost() == ScriptToolchainHost::MacOS ? "xcode-select --install" : "sudo apt install g++ cmake ninja-build";
+
+		// The toast's message is the diagnostic's (which has no file to name), and leads to the Problems panel.
+		const std::string toast = FindToast("Script build failed");
+		REQUIRE_FALSE(toast.empty());
+		CHECK(UI::ItemProbe::Find(toast)->Text.find("Script build failed\nBuilding scripts needs ") != std::string::npos);
+		CHECK(UI::ItemProbe::Find(toast)->Text.find(install) != std::string::npos);
+		CHECK(editor.GetPillText("Status.Scripts") == "Build failed");
+		REQUIRE(editor.Click(toast + ".Problems"));
+		editor.Frames(3);
+		ProblemsPanel* problems = editor.Layer->GetPanels().Get<ProblemsPanel>(EditorPanels::c_Problems);
+		REQUIRE(problems);
+		REQUIRE(problems->GetRows().size() == 1);
+		CHECK(problems->GetRows()[0].Kind == ProblemsPanel::RowKind::Error);
+		CHECK(problems->GetRows()[0].Text.find(install) != std::string::npos);
+		CHECK(problems->GetRows()[0].File.empty());
+		CHECK(UI::ItemProbe::Find("Problems.Summary")->Text.find("1 error") != std::string::npos);
+
+		// script.status has the build's error and diagnostic, and still no toolchain.
+		const nlohmann::json status = editor.Run("script.status");
+		CHECK(status["toolchain"]["found"] == false);
+		CHECK(status["build"]["last"]["success"] == false);
+		CHECK(status["build"]["last"]["diagnostics"][0]["message"].get<std::string>().find(install) != std::string::npos);
 	}
 
 	TEST_CASE("New Script writes a script class, opens it and builds the scripts, so that the class can be attached")

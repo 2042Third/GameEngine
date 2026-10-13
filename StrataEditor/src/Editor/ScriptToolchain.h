@@ -4,6 +4,7 @@
 
 #include <Strata/Core/Base.h>
 
+#include <compare>
 #include <cstdint>
 #include <filesystem>
 #include <optional>

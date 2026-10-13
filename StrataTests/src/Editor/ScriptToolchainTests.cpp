@@ -391,7 +391,9 @@ TEST_SUITE("Editor.ScriptToolchain")
 			machine.AddCMake("C:/Tools/cmake.exe", "3.31.6");
 			ScriptToolchainResolution resolution = ResolveScriptToolchain(preferences, ScriptToolchainHost::Windows, machine);
 			CHECK_FALSE(resolution.Settings);
-			CHECK(Contains(resolution.Error, "Building scripts needs Visual Studio 2022 (version 17.10 or later) or Visual Studio 2026"));
+			// What to install comes first, with where from: notifications show the start of the message.
+			CHECK(resolution.Error.rfind("Building scripts needs Visual Studio's C++ tools: install Visual Studio 2022 (17.10 or later) or 2026", 0) == 0);
+			CHECK(resolution.Error.find("https://visualstudio.microsoft.com/downloads/") < 280);
 			CHECK(Contains(resolution.Error, "\"Desktop development with C++\" workload"));
 			CHECK(Contains(resolution.Error, "Build Tools for Visual Studio"));
 			CHECK(Contains(resolution.Error, "https://visualstudio.microsoft.com/downloads/"));
@@ -415,8 +417,9 @@ TEST_SUITE("Editor.ScriptToolchain")
 			machine.AddFile("C:/Program Files/CMake/bin/cmake.exe"); // Prints nothing: does not run
 			const ScriptToolchainResolution resolution = ResolveScriptToolchain(preferences, ScriptToolchainHost::Windows, machine);
 			CHECK_FALSE(resolution.Settings);
-			CHECK(Contains(resolution.Error, "Building scripts with Visual Studio Community 2026 18.0 ('C:/VS/18/Community') needs CMake 4.2.0 or later"));
-			CHECK(Contains(resolution.Error, "https://cmake.org/download/"));
+			CHECK(resolution.Error.rfind("Building scripts needs CMake 4.2.0 or later: install it from https://cmake.org/download/", 0) == 0);
+			CHECK(Contains(resolution.Error, "None that knows Visual Studio 18 2026 was found in PATH, in Program Files\\CMake or in Visual Studio "
+				"Community 2026 18.0 ('C:/VS/18/Community')."));
 			CHECK(Contains(resolution.Error, "\"C++ CMake tools for Windows\" component"));
 			CHECK(Contains(resolution.Error, "CMake 3.31.6 ('" + Shown("C:/Tools/cmake.exe") + "') is too old"));
 			CHECK(Contains(resolution.Error, "'" + Shown("C:/Program Files/CMake/bin/cmake.exe") + "' does not run"));
@@ -489,10 +492,11 @@ TEST_SUITE("Editor.ScriptToolchain")
 		{
 			const ScriptToolchainResolution resolution = ResolveScriptToolchain(preferences, ScriptToolchainHost::Linux, machine);
 			CHECK_FALSE(resolution.Settings);
-			CHECK(Contains(resolution.Error, "Building scripts needs a C++ compiler with C++20 support (GCC 13 or later, or Clang 17 or later"));
-			CHECK(Contains(resolution.Error, "Ninja or Make (neither was found)"));
-			CHECK(Contains(resolution.Error, "and CMake 3.25.0 or later"));
-			CHECK(Contains(resolution.Error, "sudo apt install g++ cmake ninja-build"));
+			CHECK(resolution.Error.rfind("Building scripts needs a C++20 compiler (GCC 13 or later, or Clang 17 or later), Ninja or Make and CMake 3.25.0 "
+				"or later: install them with your package manager, on Ubuntu with `sudo apt install g++ cmake ninja-build`, then build the scripts "
+				"again.", 0) == 0);
+			CHECK(Contains(resolution.Error, "None of CXX, c++, g++ or clang++ was found."));
+			CHECK(Contains(resolution.Error, "Neither ninja nor make was found in PATH."));
 		}
 
 		SUBCASE("A CMake that is too old")
@@ -503,7 +507,7 @@ TEST_SUITE("Editor.ScriptToolchain")
 			machine.AddCMake("/usr/bin/cmake", "3.22.1");
 			const ScriptToolchainResolution resolution = ResolveScriptToolchain(preferences, ScriptToolchainHost::Linux, machine);
 			CHECK_FALSE(resolution.Settings);
-			CHECK(Contains(resolution.Error, "Building scripts needs CMake 3.25.0 or later"));
+			CHECK(resolution.Error.rfind("Building scripts needs CMake 3.25.0 or later: install it with your package manager", 0) == 0);
 			CHECK_FALSE(Contains(resolution.Error, "compiler"));
 			CHECK(Contains(resolution.Error, "CMake 3.22.1 ('" + Shown("/usr/bin/cmake") + "') is too old"));
 		}
@@ -523,8 +527,8 @@ TEST_SUITE("Editor.ScriptToolchain")
 			machine.AddCMake("/opt/homebrew/bin/cmake", "3.31.6");
 			const ScriptToolchainResolution resolution = ResolveScriptToolchain(preferences, ScriptToolchainHost::MacOS, machine);
 			CHECK_FALSE(resolution.Settings);
-			CHECK(Contains(resolution.Error, "Building scripts needs Apple's Command Line Tools for Xcode"));
-			CHECK(Contains(resolution.Error, "xcode-select --install"));
+			CHECK(resolution.Error.rfind("Building scripts needs Apple's Command Line Tools (the C++ compiler and Make): install the Command Line Tools "
+				"with `xcode-select --install`", 0) == 0);
 			CHECK_FALSE(Contains(resolution.Error, "brew install cmake"));
 		}
 
@@ -546,8 +550,7 @@ TEST_SUITE("Editor.ScriptToolchain")
 			machine.AddDirectory("/Applications/Xcode.app/Contents/Developer");
 			const ScriptToolchainResolution resolution = ResolveScriptToolchain(preferences, ScriptToolchainHost::MacOS, machine);
 			CHECK_FALSE(resolution.Settings);
-			CHECK(Contains(resolution.Error, "Building scripts needs CMake 3.25.0 or later"));
-			CHECK(Contains(resolution.Error, "brew install cmake ninja"));
+			CHECK(resolution.Error.rfind("Building scripts needs CMake 3.25.0 or later: install CMake with `brew install cmake ninja`", 0) == 0);
 			CHECK(Contains(resolution.Error, "CMake.app from https://cmake.org/download/"));
 			CHECK_FALSE(Contains(resolution.Error, "xcode-select --install"));
 		}
