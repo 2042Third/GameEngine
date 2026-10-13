@@ -2528,8 +2528,13 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   (`ScriptBuilder::GetFoundToolchain`; `EditorContext::GetScriptBuildSettings` then answers it, so presets and
   `script.status` show it). Windows: Visual Studio installations with the C++ tools from vswhere (2022 from 17.10, whose
   MSVC is 19.40, and 2026), the one the preferred compiler lies in first, then those of the preferred generator, then
-  the newest, each with the first CMake that knows its generator (3.25, 4.2 for Visual Studio 2026; the preferred one,
-  PATH, Program Files, the one the installation ships), passed as `CMAKE_GENERATOR_INSTANCE`. Linux and macOS: the
+  the newest, each with the first CMake 3.25 or later that knows its generator (the preferred one, PATH, Program Files,
+  the one the installation ships), passed as `CMAKE_GENERATOR_INSTANCE`. Whether a CMake knows a generator is read from
+  `cmake -E capabilities` (`ParseCMakeCapabilities`, CMake 3.7 and later; older ones answer `--version`, which only says
+  they are too old), never inferred from its version: Visual Studio 2026 ships CMake 4.1.2-msvc8, which knows "Visual
+  Studio 18 2026" although CMake's own releases only know it from 4.2. An editor's baked compiler counts only for
+  generators that are given one (`ScriptBuildSettings::PicksOwnCompiler`: not Visual Studio or Xcode), so a Visual
+  Studio update that replaced the versioned directory of `cl.exe` keeps the baked toolchain. Linux and macOS: the
   compiler (the preferred one, `CXX`, `c++`, `g++`, `clang++`; on macOS only once `xcode-select -p` names the Command
   Line Tools), Ninja (Ninja Multi-Config) or Make, and CMake 3.25 or later from PATH or the usual places. Script modules
   only talk to the engine through the C ABI (on Windows with a C runtime of their own), so another compiler of the

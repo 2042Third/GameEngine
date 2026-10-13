@@ -35,8 +35,10 @@ namespace Strata
 	// (a missing SDK is reported by the build, ResolveScriptToolchain).
 	std::optional<EngineInstallation> FindEngineInstallation(const std::filesystem::path& executableDirectory);
 
-	// Whether the toolchain of these settings is on this machine: CMake, the compiler, the build tool and the Visual Studio
-	// installation (where named) exist. The engine's own settings are, in the tree it was built in.
+	// Whether the toolchain of these settings is on this machine: CMake, the compiler (for generators that are given one: not
+	// Visual Studio or Xcode, which pick their own, so an update that replaced the versioned compiler directory changes
+	// nothing), the build tool and the Visual Studio installation (where named) exist. The engine's own settings are, in the
+	// tree it was built in.
 	bool IsScriptToolchainPresent(const ScriptBuildSettings& settings);
 
 	// The platform whose toolchains ResolveScriptToolchain looks for (tests resolve for every platform on any machine).
@@ -61,8 +63,8 @@ namespace Strata
 		// A program in the directories of PATH (Platform::FindProgram); `name` as the platform spells it ("cmake.exe" on Windows).
 		virtual std::optional<std::filesystem::path> FindProgram(std::string_view name) const = 0;
 		virtual std::optional<std::string> GetEnvVar(std::string_view name) const = 0;
-		// Runs a program to completion: its output (stdout and stderr), or nothing when it cannot start, fails or does not end in
-		// time.
+		// Runs a program to completion: what it printed to stdout (stderr is left out, so that warnings cannot spoil the output a
+		// caller parses), or nothing when it cannot start, fails or does not end in time.
 		virtual std::optional<std::string> Run(const std::filesystem::path& program, const std::vector<std::string>& arguments) const = 0;
 	};
 
@@ -77,9 +79,27 @@ namespace Strata
 		auto operator<=>(const ScriptToolVersion& other) const = default;
 	};
 
+	// The oldest CMake that builds scripts: the scripts' CMakeLists.txt requires it.
+	constexpr ScriptToolVersion c_MinimumScriptCMakeVersion { 3, 25, 0 };
+
 	std::string FormatScriptToolVersion(const ScriptToolVersion& version);
 	// The version `cmake --version` prints ("cmake version 3.31.6", also "cmake3 version 3.28.1-dirty").
 	std::optional<ScriptToolVersion> ParseCMakeVersion(std::string_view output);
+
+	// What `cmake -E capabilities` (CMake 3.7 and later) reports: its version and the generators it knows. Whether a CMake
+	// knows a generator is read from there, never inferred from its version: Visual Studio's own CMake ("4.1.2-msvc8") knows
+	// Visual Studio 2026, which CMake's releases only know from 4.2.
+	struct CMakeCapabilities
+	{
+		ScriptToolVersion Version;
+		std::string VersionText;             // As CMake names it, e.g. "4.1.2-msvc8"
+		std::vector<std::string> Generators; // e.g. "Visual Studio 17 2022", "Ninja Multi-Config"
+
+		bool KnowsGenerator(std::string_view generator) const;
+	};
+
+	// The capabilities of `cmake -E capabilities` output; nothing for output that is not such a document.
+	std::optional<CMakeCapabilities> ParseCMakeCapabilities(std::string_view json);
 
 	// A Visual Studio installation as vswhere reports it.
 	struct VisualStudioInstance
@@ -95,10 +115,6 @@ namespace Strata
 	// The CMake generator of a Visual Studio version ("Visual Studio 17 2022"), or empty for versions Strata does not build
 	// scripts with (older than 2022, or newer than it knows).
 	std::string GetVisualStudioGenerator(const ScriptToolVersion& version);
-	// The oldest CMake that can configure a project with this generator: 3.25 (the scripts' CMakeLists.txt requires it), 4.2
-	// for Visual Studio 2026.
-	ScriptToolVersion GetMinimumCMakeVersion(std::string_view generator);
-
 	struct ScriptToolchainResolution
 	{
 		std::optional<ScriptBuildSettings> Settings; // The toolchain found (FindToolchain false), nothing when none is usable
@@ -108,11 +124,11 @@ namespace Strata
 
 	// Finds a toolchain to build scripts with on a machine: the preferred settings' tools where they exist and work, else the
 	// machine's own: on Windows a Visual Studio 2022 (17.10 or later) or 2026 installation with the C++ tools (vswhere) and a
-	// CMake that knows its generator (the preferred one, PATH, Program Files or the one Visual Studio ships); on Linux and
-	// macOS the C++ compiler (CXX, c++, g++, clang++; on macOS the Command Line Tools must be installed), Ninja or Make and
-	// a CMake 3.25 or later (the preferred one, PATH, the usual install places). The configuration and the engine directory
-	// are the preferred ones; the engine directory must hold the script SDK. When nothing is usable, Error names what to
-	// install for this platform.
+	// CMake 3.25 or later that knows its generator (CMakeCapabilities; the preferred one, PATH, Program Files or the one Visual
+	// Studio ships); on Linux and macOS the C++ compiler (CXX, c++, g++, clang++; on macOS the Command Line Tools must be
+	// installed), Ninja or Make and a CMake 3.25 or later that knows their generator (the preferred one, PATH, the usual
+	// install places). The configuration and the engine directory are the preferred ones; the engine directory must hold the
+	// script SDK. When nothing is usable, Error names what to install for this platform.
 	ScriptToolchainResolution ResolveScriptToolchain(const ScriptBuildSettings& preferred, ScriptToolchainHost host,
 		const ScriptToolchainEnvironment& environment);
 

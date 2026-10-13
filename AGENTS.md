@@ -773,8 +773,11 @@ Building and loading scripts:
   `ScriptBuildSettings::Detect`) builds against the installation's SDK, and its first build finds a toolchain on the
   machine instead (`ScriptBuildSettings::FindToolchain`, `ResolveScriptToolchain` in `Editor/ScriptToolchain`, on an I/O
   job: phase `FindingToolchain`; later builds keep it while its files exist), as does an editor whose baked tools are
-  gone: Visual Studio 2022 17.10+ or 2026 with the C++ tools (vswhere, `CMAKE_GENERATOR_INSTANCE`) and a CMake that
-  knows its generator on Windows, the system compiler, Ninja or Make and CMake 3.25+ on Linux and macOS (modules only
+  gone (the compiler counts only for generators that are given one: a Visual Studio update replaces the versioned
+  directory of `cl.exe`): Visual Studio 2022 17.10+ or 2026 with the C++ tools (vswhere, `CMAKE_GENERATOR_INSTANCE`) and
+  a CMake 3.25+ that knows its generator on Windows (read from `cmake -E capabilities`, `ParseCMakeCapabilities`, never
+  inferred from the version: Visual Studio 2026's own CMake 4.1.2-msvc8 knows it, CMake's 4.1 releases do not), the
+  system compiler, Ninja or Make and CMake 3.25+ on Linux and macOS (modules only
   cross the C ABI, so another compiler of the platform builds them as well). Without one the build fails with what to
   install (its first diagnostic, which the Problems panel and the notification show; `script.status` -> `toolchain` says
   what the next build uses). The configure step only runs when the build tree is new or the toolchain changed, and

@@ -404,6 +404,11 @@ namespace Strata
 		return IsVisualStudio(*this) || Generator == "Xcode" || Generator.find("Multi-Config") != std::string::npos;
 	}
 
+	bool ScriptBuildSettings::PicksOwnCompiler() const
+	{
+		return IsVisualStudio(*this) || Generator == "Xcode";
+	}
+
 	std::vector<std::string> MakeScriptConfigureArguments(const ScriptBuildSettings& settings, const std::filesystem::path& sourceDirectory,
 		const std::filesystem::path& buildDirectory, const std::filesystem::path& binaryDirectory)
 	{
@@ -415,8 +420,7 @@ namespace Strata
 		// The Visual Studio installation the toolchain was found in (several can have the generator's version).
 		if (IsVisualStudio(settings) && !settings.GeneratorInstance.empty())
 			arguments.push_back("-DCMAKE_GENERATOR_INSTANCE=" + settings.GeneratorInstance);
-		// Visual Studio and Xcode pick their own compiler and build tool.
-		const bool ownToolchain = IsVisualStudio(settings) || settings.Generator == "Xcode";
+		const bool ownToolchain = settings.PicksOwnCompiler();
 		if (!ownToolchain && !settings.CXXCompiler.empty())
 			arguments.push_back("-DCMAKE_CXX_COMPILER=" + FileSystem::ToUTF8(settings.CXXCompiler));
 		if (!ownToolchain && !settings.MakeProgram.empty())

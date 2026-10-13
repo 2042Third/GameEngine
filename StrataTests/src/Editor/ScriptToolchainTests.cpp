@@ -56,8 +56,29 @@ namespace
 		{
 			m_Outputs[MakeRunKey(program, arguments)] = output;
 		}
-		// A CMake of this version at `path`.
-		void AddCMake(const std::filesystem::path& path, const std::string& version)
+		// A CMake at `path` that names its version `version` (as CMake does: "3.31.6", "4.1.2-msvc8") and knows `generators`; by
+		// default those a CMake release of that version knows (Visual Studio 2026 from 4.2).
+		void AddCMake(const std::filesystem::path& path, const std::string& version, std::optional<std::vector<std::string>> generators = std::nullopt)
+		{
+			AddOldCMake(path, version);
+			const std::optional<ScriptToolVersion> number = ParseCMakeVersion("cmake version " + version);
+			REQUIRE(number);
+			if (!generators)
+			{
+				generators = std::vector<std::string> { "Unix Makefiles", "Ninja", "Ninja Multi-Config", "Visual Studio 17 2022", "Xcode" };
+				if (*number >= ScriptToolVersion { 4, 2, 0 })
+					generators->push_back("Visual Studio 18 2026");
+			}
+			nlohmann::json list = nlohmann::json::array();
+			for (const std::string& generator : *generators)
+				list.push_back({ { "name", generator }, { "extraGenerators", nlohmann::json::array() }, { "platformSupport", false } });
+			const nlohmann::json capabilities = { { "generators", list }, { "serverMode", false },
+				{ "version", { { "major", number->Major }, { "minor", number->Minor }, { "patch", number->Patch }, { "string", version },
+					{ "isDirty", false } } } };
+			SetOutput(path, { "-E", "capabilities" }, capabilities.dump());
+		}
+		// A CMake before 3.7, which has no `-E capabilities`.
+		void AddOldCMake(const std::filesystem::path& path, const std::string& version)
 		{
 			AddFile(path);
 			SetOutput(path, { "--version" }, "cmake version " + version + "\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n");
@@ -256,15 +277,62 @@ TEST_SUITE("Editor.ScriptToolchain")
 		gone.CMake = engine.EngineDirectory / "no-such-cmake" / "cmake.exe";
 		CHECK_FALSE(IsScriptToolchainPresent(gone));
 		gone = engine;
-		gone.CXXCompiler = engine.EngineDirectory / "no-such-compiler";
+		gone.MakeProgram = engine.EngineDirectory / "no-such-build-tool";
 		CHECK_FALSE(IsScriptToolchainPresent(gone));
 		gone = engine;
 		gone.GeneratorInstance = FileSystem::ToUTF8(engine.EngineDirectory / "no-such-installation");
 		CHECK_FALSE(IsScriptToolchainPresent(gone));
+
+		// A missing compiler counts only for generators that are given one: Visual Studio and Xcode pick their own, and a
+		// Visual Studio update replaces the versioned directory of the compiler the engine was built with.
+		ScriptBuildSettings tools;
+		tools.CMake = Tests::GetTestExecutablePath();
+		tools.CXXCompiler = engine.EngineDirectory / "no-such-compiler";
+		for (const char* generator : { "Visual Studio 17 2022", "Visual Studio 18 2026", "Xcode" })
+		{
+			tools.Generator = generator;
+			CHECK_MESSAGE(IsScriptToolchainPresent(tools), generator);
+		}
+		for (const char* generator : { "Ninja Multi-Config", "Unix Makefiles" })
+		{
+			tools.Generator = generator;
+			CHECK_FALSE_MESSAGE(IsScriptToolchainPresent(tools), generator);
+		}
+		tools.CXXCompiler = Tests::GetTestExecutablePath();
+		CHECK(IsScriptToolchainPresent(tools));
 	}
 
-	TEST_CASE("Tool versions are read from cmake --version and vswhere")
+	TEST_CASE("Tool versions and generators are read from cmake -E capabilities, cmake --version and vswhere")
 	{
+		// What Visual Studio 2026 18.3's own CMake reports (shortened): a 4.1 that knows Visual Studio 2026.
+		std::optional<CMakeCapabilities> capabilities = ParseCMakeCapabilities(R"({"debugger":true,"fileApi":{"requests":[]},"generators":[
+			{"extraGenerators":[],"name":"Visual Studio 18 2026","platformSupport":true,"supportedPlatforms":["x64","Win32","ARM","ARM64","ARM64EC"],
+			 "toolsetSupport":true},
+			{"extraGenerators":["Kate"],"name":"Ninja Multi-Config","platformSupport":false,"toolsetSupport":false},
+			{"extraGenerators":[],"name":"Visual Studio 17 2022","platformSupport":true,"toolsetSupport":true},
+			{"name":""}, "not a generator"],
+			"serverMode":false,"tls":true,"version":{"isDirty":false,"major":4,"minor":1,"patch":2,"string":"4.1.2-msvc8","suffix":"msvc8"}})");
+		REQUIRE(capabilities);
+		CHECK(capabilities->Version == ScriptToolVersion { 4, 1, 2 });
+		CHECK(capabilities->VersionText == "4.1.2-msvc8");
+		CHECK(capabilities->Generators == std::vector<std::string> { "Visual Studio 18 2026", "Ninja Multi-Config", "Visual Studio 17 2022" });
+		CHECK(capabilities->KnowsGenerator("Visual Studio 18 2026"));
+		CHECK(capabilities->KnowsGenerator("Visual Studio 17 2022"));
+		CHECK_FALSE(capabilities->KnowsGenerator("Visual Studio 18"));
+		CHECK_FALSE(capabilities->KnowsGenerator("Unix Makefiles"));
+		capabilities = ParseCMakeCapabilities(R"({"generators":[],"version":{"major":3,"minor":28,"patch":3}})");
+		REQUIRE(capabilities);
+		CHECK(capabilities->VersionText == "3.28.3");
+		CHECK(capabilities->Generators.empty());
+		CHECK_FALSE(ParseCMakeCapabilities(""));
+		CHECK_FALSE(ParseCMakeCapabilities("CMake Error: unknown command capabilities"));
+		CHECK_FALSE(ParseCMakeCapabilities("[]"));
+		CHECK_FALSE(ParseCMakeCapabilities(R"({"version":{"major":4,"minor":1,"patch":2}})"));
+		CHECK_FALSE(ParseCMakeCapabilities(R"({"generators":[],"version":{"major":4,"minor":1}})"));
+		CHECK_FALSE(ParseCMakeCapabilities(R"({"generators":[],"version":{"major":-4,"minor":1,"patch":2}})"));
+		CHECK_FALSE(ParseCMakeCapabilities(R"({"generators":[],"version":{"major":"4","minor":1,"patch":2}})"));
+		CHECK_FALSE(ParseCMakeCapabilities(R"({"generators":{},"version":{"major":4,"minor":1,"patch":2}})"));
+
 		CHECK(ParseCMakeVersion("cmake version 3.31.6\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n") == ScriptToolVersion { 3, 31, 6 });
 		CHECK(ParseCMakeVersion("cmake version 4.2.2\r\n") == ScriptToolVersion { 4, 2, 2 });
 		CHECK(ParseCMakeVersion("cmake3 version 3.28.1-dirty\n") == ScriptToolVersion { 3, 28, 1 });
@@ -301,9 +369,6 @@ TEST_SUITE("Editor.ScriptToolchain")
 		CHECK(GetVisualStudioGenerator({ 16, 11, 0 }).empty());
 		CHECK(GetVisualStudioGenerator({ 18, 0, 0 }) == "Visual Studio 18 2026");
 		CHECK(GetVisualStudioGenerator({ 19, 0, 0 }).empty());
-		CHECK(GetMinimumCMakeVersion("Visual Studio 18 2026") == ScriptToolVersion { 4, 2, 0 });
-		CHECK(GetMinimumCMakeVersion("Visual Studio 17 2022") == ScriptToolVersion { 3, 25, 0 });
-		CHECK(GetMinimumCMakeVersion("Ninja Multi-Config") == ScriptToolVersion { 3, 25, 0 });
 	}
 
 	TEST_CASE("Windows: a Visual Studio installation with the C++ tools and a CMake that knows its generator")
@@ -336,17 +401,32 @@ TEST_SUITE("Editor.ScriptToolchain")
 			CHECK(resolution.Error.empty());
 		}
 
-		SUBCASE("Visual Studio 2026 uses the CMake it ships when the one in PATH is too old for it")
+		SUBCASE("Visual Studio 2026 uses the CMake it ships when the one in PATH does not know it")
 		{
-			AddVisualStudio(machine, { { "C:/VS/18/Community", "18.0.11111.16", "Visual Studio Community 2026" } });
+			// Visual Studio 2026 18.3 ships "4.1.2-msvc8", which knows its generator although CMake's own 4.1 releases do not.
+			AddVisualStudio(machine, { { "C:/VS/18/Community", "18.3.11520.95", "Visual Studio Community 2026" } });
 			machine.AddProgram("cmake.exe", "C:/Tools/CMake/bin/cmake.exe");
-			machine.AddCMake("C:/Tools/CMake/bin/cmake.exe", "3.31.6");
-			machine.AddCMake(BundledCMake("C:/VS/18/Community"), "4.2.1");
+			machine.AddCMake("C:/Tools/CMake/bin/cmake.exe", "4.1.2");
+			machine.AddCMake(BundledCMake("C:/VS/18/Community"), "4.1.2-msvc8",
+				std::vector<std::string> { "Visual Studio 18 2026", "Visual Studio 17 2022", "Ninja Multi-Config", "Ninja" });
 			const ScriptToolchainResolution resolution = ResolveScriptToolchain(preferences, ScriptToolchainHost::Windows, machine);
 			REQUIRE_MESSAGE(resolution.Settings, resolution.Error);
 			CHECK(resolution.Settings->Generator == "Visual Studio 18 2026");
 			CHECK(Key(resolution.Settings->CMake) == Key(BundledCMake("C:/VS/18/Community")));
 			CHECK(resolution.Settings->MakeProgram.empty());
+			CHECK(Contains(resolution.Description, "CMake 4.1.2-msvc8"));
+		}
+
+		SUBCASE("A CMake in PATH that knows Visual Studio 2026 comes before the one Visual Studio ships")
+		{
+			AddVisualStudio(machine, { { "C:/VS/18/Community", "18.3.11520.95", "Visual Studio Community 2026" } });
+			machine.AddProgram("cmake.exe", "C:/Tools/CMake/bin/cmake.exe");
+			machine.AddCMake("C:/Tools/CMake/bin/cmake.exe", "4.2.2");
+			machine.AddCMake(BundledCMake("C:/VS/18/Community"), "4.1.2-msvc8", std::vector<std::string> { "Visual Studio 18 2026" });
+			const ScriptToolchainResolution resolution = ResolveScriptToolchain(preferences, ScriptToolchainHost::Windows, machine);
+			REQUIRE_MESSAGE(resolution.Settings, resolution.Error);
+			CHECK(Key(resolution.Settings->CMake) == "C:/Tools/CMake/bin/cmake.exe");
+			CHECK(Contains(resolution.Description, "CMake 4.2.2"));
 		}
 
 		SUBCASE("The engine's generator and the installation of the build machine's compiler come first")
@@ -409,20 +489,25 @@ TEST_SUITE("Editor.ScriptToolchain")
 			CHECK_FALSE(Contains(resolution.Error, "Broken"));
 		}
 
-		SUBCASE("Without a CMake that knows the generator the error names the versions found")
+		SUBCASE("Without a CMake that knows the generator the error says what each CMake found lacks")
 		{
 			AddVisualStudio(machine, { { "C:/VS/18/Community", "18.0.11111.16", "Visual Studio Community 2026" } });
+			machine.AddOldCMake(preferences.CMake, "3.5.1"); // No capabilities
 			machine.AddProgram("cmake.exe", "C:/Tools/cmake.exe");
 			machine.AddCMake("C:/Tools/cmake.exe", "3.31.6");
 			machine.AddFile("C:/Program Files/CMake/bin/cmake.exe"); // Prints nothing: does not run
+			machine.AddCMake(BundledCMake("C:/VS/18/Community"), "3.24.1"); // Too old although it is the installation's own
 			const ScriptToolchainResolution resolution = ResolveScriptToolchain(preferences, ScriptToolchainHost::Windows, machine);
 			CHECK_FALSE(resolution.Settings);
-			CHECK(resolution.Error.rfind("Building scripts needs CMake 4.2.0 or later: install it from https://cmake.org/download/", 0) == 0);
-			CHECK(Contains(resolution.Error, "None that knows Visual Studio 18 2026 was found in PATH, in Program Files\\CMake or in Visual Studio "
+			CHECK(resolution.Error.rfind("Building scripts needs a CMake that knows Visual Studio 18 2026: install the latest CMake from "
+				"https://cmake.org/download/", 0) == 0);
+			CHECK(Contains(resolution.Error, "None (3.25.0 or later) was found in PATH, in Program Files\\CMake or in Visual Studio "
 				"Community 2026 18.0 ('C:/VS/18/Community')."));
 			CHECK(Contains(resolution.Error, "\"C++ CMake tools for Windows\" component"));
-			CHECK(Contains(resolution.Error, "CMake 3.31.6 ('" + Shown("C:/Tools/cmake.exe") + "') is too old"));
+			CHECK(Contains(resolution.Error, "CMake 3.5.1 ('" + Shown(FileSystem::ToUTF8(preferences.CMake)) + "') is too old"));
+			CHECK(Contains(resolution.Error, "CMake 3.31.6 ('" + Shown("C:/Tools/cmake.exe") + "') does not know Visual Studio 18 2026"));
 			CHECK(Contains(resolution.Error, "'" + Shown("C:/Program Files/CMake/bin/cmake.exe") + "' does not run"));
+			CHECK(Contains(resolution.Error, "CMake 3.24.1 ('" + Shown(FileSystem::ToUTF8(BundledCMake("C:/VS/18/Community"))) + "') is too old"));
 		}
 
 		SUBCASE("Without the SDK no toolchain helps")

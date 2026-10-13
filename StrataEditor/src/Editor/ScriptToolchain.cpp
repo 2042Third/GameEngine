@@ -22,12 +22,10 @@ namespace Strata
 
 		// Larger markers are not ours.
 		constexpr uint64_t c_MaxMarkerSize = 64 * 1024;
-		// vswhere and `cmake --version` answer in well under a second; a program that hangs must not hold the build forever.
+		// vswhere and `cmake -E capabilities` answer in well under a second; a program that hangs must not hold the build forever.
 		constexpr std::chrono::seconds c_ProbeTimeout(30);
 		constexpr const char* c_VisualStudioCppComponent = "Microsoft.VisualStudio.Component.VC.Tools.x86.x64";
 		constexpr const char* c_SDKConfigFile = "StrataScriptCoreConfig.cmake";
-		constexpr ScriptToolVersion c_MinimumCMake { 3, 25, 0 };
-		constexpr ScriptToolVersion c_MinimumCMakeVisualStudio2026 { 4, 2, 0 };
 		// Visual Studio 2022 before 17.10 has an MSVC older than 19.40, the oldest the engine's C++20 code is built with.
 		constexpr ScriptToolVersion c_MinimumVisualStudio { 17, 10, 0 };
 
@@ -80,12 +78,20 @@ namespace Strata
 			return text;
 		}
 
-		// A CMake the resolution may use, with its version once asked for.
+		// A CMake the resolution may use, with what it can do once asked.
 		struct CMakeCandidate
 		{
 			std::filesystem::path Path;
-			std::optional<ScriptToolVersion> Version; // Nothing when it does not run or prints no version
+			std::optional<ScriptToolVersion> Version; // Nothing when it does not run or reports no version
+			std::string VersionText;
+			std::vector<std::string> Generators;      // Empty for a CMake without capabilities (before 3.7)
 			bool Probed = false;
+
+			bool CanBuild(std::string_view generator) const
+			{
+				return Version && *Version >= c_MinimumScriptCMakeVersion &&
+					std::find(Generators.begin(), Generators.end(), generator) != Generators.end();
+			}
 		};
 
 		class CMakeCandidates
@@ -107,17 +113,19 @@ namespace Strata
 					if (candidate.Path == normal)
 						return;
 				}
-				m_Candidates.push_back({ normal, std::nullopt, false });
+				CMakeCandidate candidate;
+				candidate.Path = normal;
+				m_Candidates.push_back(std::move(candidate));
 			}
 
-			// The first candidate (in the order added, starting at `first`) whose version reaches `minimum`.
-			const CMakeCandidate* FindFirst(const ScriptToolVersion& minimum, size_t first = 0)
+			// The first candidate (in the order added, starting at `first`) that can configure the scripts with `generator`.
+			const CMakeCandidate* FindFirst(std::string_view generator, size_t first = 0)
 			{
 				for (size_t index = first; index < m_Candidates.size(); index++)
 				{
 					CMakeCandidate& candidate = m_Candidates[index];
 					Probe(candidate);
-					if (candidate.Version && *candidate.Version >= minimum)
+					if (candidate.CanBuild(generator))
 						return &candidate;
 				}
 				return nullptr;
@@ -125,18 +133,21 @@ namespace Strata
 
 			size_t GetCount() const { return m_Candidates.size(); }
 
-			// "CMake 3.22.1 (/usr/bin/cmake)" for every candidate that was asked and is older than `minimum` or does not run.
-			std::vector<std::string> DescribeUnusable(const ScriptToolVersion& minimum) const
+			// Why every candidate that was asked cannot configure the scripts with `generator`: "CMake 3.22.1 ('/usr/bin/cmake') is
+			// too old", "CMake 3.31.6 ('...') does not know Visual Studio 18 2026", "'...' does not run".
+			std::vector<std::string> DescribeUnusable(std::string_view generator) const
 			{
 				std::vector<std::string> unusable;
 				for (const CMakeCandidate& candidate : m_Candidates)
 				{
-					if (!candidate.Probed)
+					if (!candidate.Probed || candidate.CanBuild(generator))
 						continue;
 					if (!candidate.Version)
 						unusable.push_back(fmt::format("'{}' does not run", ToUTF8(candidate.Path)));
-					else if (*candidate.Version < minimum)
-						unusable.push_back(fmt::format("CMake {} ('{}') is too old", FormatScriptToolVersion(*candidate.Version), ToUTF8(candidate.Path)));
+					else if (*candidate.Version < c_MinimumScriptCMakeVersion)
+						unusable.push_back(fmt::format("CMake {} ('{}') is too old", candidate.VersionText, ToUTF8(candidate.Path)));
+					else
+						unusable.push_back(fmt::format("CMake {} ('{}') does not know {}", candidate.VersionText, ToUTF8(candidate.Path), generator));
 				}
 				return unusable;
 			}
@@ -146,17 +157,32 @@ namespace Strata
 				if (candidate.Probed)
 					return;
 				candidate.Probed = true;
+				if (const std::optional<std::string> output = m_Environment.Run(candidate.Path, { "-E", "capabilities" }))
+				{
+					if (std::optional<CMakeCapabilities> capabilities = ParseCMakeCapabilities(*output))
+					{
+						candidate.Version = capabilities->Version;
+						candidate.VersionText = std::move(capabilities->VersionText);
+						candidate.Generators = std::move(capabilities->Generators);
+						return;
+					}
+				}
+				// CMakes before 3.7 have no capabilities: their version says why they do not count.
 				if (const std::optional<std::string> output = m_Environment.Run(candidate.Path, { "--version" }))
+				{
 					candidate.Version = ParseCMakeVersion(*output);
+					if (candidate.Version)
+						candidate.VersionText = FormatScriptToolVersion(*candidate.Version);
+				}
 			}
 		private:
 			const ScriptToolchainEnvironment& m_Environment;
 			std::vector<CMakeCandidate> m_Candidates;
 		};
 
-		std::string DescribeUnusableCMakes(const CMakeCandidates& candidates, const ScriptToolVersion& minimum)
+		std::string DescribeUnusableCMakes(const CMakeCandidates& candidates, std::string_view generator)
 		{
-			const std::vector<std::string> unusable = candidates.DescribeUnusable(minimum);
+			const std::vector<std::string> unusable = candidates.DescribeUnusable(generator);
 			if (unusable.empty())
 				return {};
 			std::string text = "Found: ";
@@ -269,14 +295,13 @@ namespace Strata
 			for (const VisualStudioInstance& instance : usable)
 			{
 				const std::string generator = GetVisualStudioGenerator(instance.Version);
-				const ScriptToolVersion minimum = GetMinimumCMakeVersion(generator);
-				const CMakeCandidate* cmake = cmakes.FindFirst(minimum);
+				const CMakeCandidate* cmake = cmakes.FindFirst(generator);
 				if (!cmake)
 				{
 					// The candidates so far were all asked: only the installation's own CMake is new.
 					const size_t first = cmakes.GetCount();
 					cmakes.Add(instance.Path / "Common7" / "IDE" / "CommonExtensions" / "Microsoft" / "CMake" / "CMake" / "bin" / "cmake.exe");
-					cmake = cmakes.FindFirst(minimum, first);
+					cmake = cmakes.FindFirst(generator, first);
 				}
 				if (!cmake)
 					continue;
@@ -294,8 +319,8 @@ namespace Strata
 				settings.CXXCompiler.clear();
 				const std::filesystem::path msbuild = instance.Path / "MSBuild" / "Current" / "Bin" / "amd64" / "MSBuild.exe";
 				settings.MakeProgram = environment.IsFile(msbuild) ? msbuild : std::filesystem::path();
-				resolution.Description = fmt::format("{} with {}, CMake {} ('{}')", generator, DescribeInstance(instance),
-					FormatScriptToolVersion(*cmake->Version), ToUTF8(cmake->Path));
+				resolution.Description = fmt::format("{} with {}, CMake {} ('{}')", generator, DescribeInstance(instance), cmake->VersionText,
+					ToUTF8(cmake->Path));
 				resolution.Settings = std::move(settings);
 				return resolution;
 			}
@@ -303,13 +328,13 @@ namespace Strata
 			// An installation, but no CMake that knows its generator.
 			const VisualStudioInstance& best = usable.front();
 			const std::string generator = GetVisualStudioGenerator(best.Version);
-			const ScriptToolVersion minimum = GetMinimumCMakeVersion(generator);
 			std::vector<std::string> sentences = {
-				fmt::format("Building scripts needs CMake {} or later: install it from https://cmake.org/download/ (let its installer add it to "
-					"PATH), or add the \"C++ CMake tools for Windows\" component in the Visual Studio Installer, then build the scripts again.",
-					FormatScriptToolVersion(minimum)),
-				fmt::format("None that knows {} was found in PATH, in Program Files\\CMake or in {}.", generator, DescribeInstance(best)) };
-			if (std::string unusable = DescribeUnusableCMakes(cmakes, minimum); !unusable.empty())
+				fmt::format("Building scripts needs a CMake that knows {}: install the latest CMake from https://cmake.org/download/ (let its "
+					"installer add it to PATH), or add the \"C++ CMake tools for Windows\" component in the Visual Studio Installer, then build "
+					"the scripts again.", generator),
+				fmt::format("None ({} or later) was found in PATH, in Program Files\\CMake or in {}.", FormatScriptToolVersion(c_MinimumScriptCMakeVersion),
+					DescribeInstance(best)) };
+			if (std::string unusable = DescribeUnusableCMakes(cmakes, generator); !unusable.empty())
 				sentences.push_back(std::move(unusable));
 			resolution.Error = JoinSentences(sentences);
 			return resolution;
@@ -436,7 +461,6 @@ namespace Strata
 			}
 
 			const std::string generator = buildTool ? buildTool->Generator : preferred.Generator;
-			const ScriptToolVersion minimum = GetMinimumCMakeVersion(generator);
 			CMakeCandidates cmakes(environment);
 			cmakes.Add(preferred.CMake);
 			if (const std::optional<std::filesystem::path> onPath = environment.FindProgram("cmake"))
@@ -446,12 +470,13 @@ namespace Strata
 				: std::vector<std::string_view> { "/usr/bin/cmake", "/usr/local/bin/cmake", "/snap/bin/cmake" };
 			for (std::string_view place : places)
 				cmakes.Add(FileSystem::FromUTF8(place));
-			const CMakeCandidate* cmake = cmakes.FindFirst(minimum);
+			const CMakeCandidate* cmake = cmakes.FindFirst(generator);
 			if (!cmake)
 			{
-				missing.push_back(fmt::format("CMake {} or later", FormatScriptToolVersion(minimum)));
-				notes.push_back("No CMake that new was found in PATH or the usual places.");
-				if (std::string unusable = DescribeUnusableCMakes(cmakes, minimum); !unusable.empty())
+				missing.push_back(fmt::format("CMake {} or later", FormatScriptToolVersion(c_MinimumScriptCMakeVersion)));
+				notes.push_back(fmt::format("No CMake {} or later that knows {} was found in PATH or the usual places.",
+					FormatScriptToolVersion(c_MinimumScriptCMakeVersion), generator));
+				if (std::string unusable = DescribeUnusableCMakes(cmakes, generator); !unusable.empty())
 					notes.push_back(std::move(unusable));
 			}
 
@@ -492,7 +517,7 @@ namespace Strata
 			settings.CXXCompiler = *compiler;
 			settings.MakeProgram = buildTool->Program;
 			resolution.Description = fmt::format("{} ('{}'), compiler '{}', CMake {} ('{}')", buildTool->Generator, ToUTF8(buildTool->Program), ToUTF8(*compiler),
-				FormatScriptToolVersion(*cmake->Version), ToUTF8(cmake->Path));
+				cmake->VersionText, ToUTF8(cmake->Path));
 			resolution.Settings = std::move(settings);
 			return resolution;
 		}
@@ -555,8 +580,9 @@ namespace Strata
 
 	bool IsScriptToolchainPresent(const ScriptBuildSettings& settings)
 	{
-		return FileSystem::IsRegularFile(settings.CMake) && (settings.CXXCompiler.empty() || FileSystem::IsRegularFile(settings.CXXCompiler)) &&
-			(settings.MakeProgram.empty() || FileSystem::IsRegularFile(settings.MakeProgram)) &&
+		// Visual Studio and Xcode are not given the compiler (MakeScriptConfigureArguments).
+		const bool compilerPresent = settings.CXXCompiler.empty() || settings.PicksOwnCompiler() || FileSystem::IsRegularFile(settings.CXXCompiler);
+		return FileSystem::IsRegularFile(settings.CMake) && compilerPresent && (settings.MakeProgram.empty() || FileSystem::IsRegularFile(settings.MakeProgram)) &&
 			(settings.GeneratorInstance.empty() || FileSystem::IsDirectory(FileSystem::FromUTF8(settings.GeneratorInstance)));
 	}
 
@@ -607,6 +633,45 @@ namespace Strata
 		return ParseVersionNumbers(line.substr(marker + std::string_view(" version ").size()));
 	}
 
+	bool CMakeCapabilities::KnowsGenerator(std::string_view generator) const
+	{
+		return std::find(Generators.begin(), Generators.end(), generator) != Generators.end();
+	}
+
+	std::optional<CMakeCapabilities> ParseCMakeCapabilities(std::string_view json)
+	{
+		const std::optional<nlohmann::json> parsed = JsonUtils::Parse(json);
+		const nlohmann::json* version = parsed ? JsonUtils::Find(*parsed, "version") : nullptr;
+		const nlohmann::json* generators = parsed ? JsonUtils::Find(*parsed, "generators") : nullptr;
+		if (!version || !version->is_object() || !generators || !generators->is_array())
+			return std::nullopt;
+		const auto number = [version](std::string_view key) -> std::optional<uint32_t>
+		{
+			const int64_t value = JsonUtils::GetInt(*version, key, -1);
+			if (value < 0 || value > static_cast<int64_t>(UINT32_MAX))
+				return std::nullopt;
+			return static_cast<uint32_t>(value);
+		};
+		const std::optional<uint32_t> major = number("major");
+		const std::optional<uint32_t> minor = number("minor");
+		const std::optional<uint32_t> patch = number("patch");
+		if (!major || !minor || !patch)
+			return std::nullopt;
+
+		CMakeCapabilities capabilities;
+		capabilities.Version = { *major, *minor, *patch };
+		capabilities.VersionText = JsonUtils::GetString(*version, "string");
+		if (capabilities.VersionText.empty())
+			capabilities.VersionText = FormatScriptToolVersion(capabilities.Version);
+		for (const nlohmann::json& generator : *generators)
+		{
+			std::string name = generator.is_object() ? JsonUtils::GetString(generator, "name") : std::string();
+			if (!name.empty())
+				capabilities.Generators.push_back(std::move(name));
+		}
+		return capabilities;
+	}
+
 	std::optional<std::vector<VisualStudioInstance>> ParseVisualStudioInstances(std::string_view json)
 	{
 		const std::optional<nlohmann::json> parsed = JsonUtils::Parse(json);
@@ -638,11 +703,6 @@ namespace Strata
 		if (version.Major == 18)
 			return "Visual Studio 18 2026";
 		return {};
-	}
-
-	ScriptToolVersion GetMinimumCMakeVersion(std::string_view generator)
-	{
-		return generator == "Visual Studio 18 2026" ? c_MinimumCMakeVisualStudio2026 : c_MinimumCMake;
 	}
 
 	ScriptToolchainResolution ResolveScriptToolchain(const ScriptBuildSettings& preferred, ScriptToolchainHost host,

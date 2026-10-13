@@ -46,6 +46,8 @@ namespace Strata
 		static ScriptBuildSettings Detect();
 
 		bool IsMultiConfig() const;
+		// Visual Studio and Xcode pick their own compiler and build tool: they are not given CXXCompiler or MakeProgram.
+		bool PicksOwnCompiler() const;
 		bool operator==(const ScriptBuildSettings& other) const = default;
 	};
 
