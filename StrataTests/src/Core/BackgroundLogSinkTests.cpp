@@ -189,9 +189,11 @@ TEST_SUITE("Core.Log")
 			for (int index = 0; index < 5; index++)
 				logger.info("message {}", index);
 		});
-		REQUIRE(logged.wait_for(c_Timeout) == std::future_status::ready);
-
+		const bool returned = logged.wait_for(c_Timeout) == std::future_status::ready;
+		// Opened before anything can end the test: the future's destructor waits for calls that wait for the gate.
 		inner->Open();
+		REQUIRE(returned);
+
 		logger.flush();
 		const std::vector<std::string> written = inner->GetWritten();
 		REQUIRE(written.size() == 5);
@@ -307,17 +309,40 @@ TEST_SUITE("Core.Log")
 		spdlog::logger logger = MakeLogger(sink);
 
 		// The writer takes what is queued when it wakes (at most the bound) and blocks writing it; the queue then fills up to
-		// its bound again, and the message after that waits for room.
+		// its bound again, and the call after that waits for room: at most twice the bound of calls return.
 		inner->Close();
-		const size_t count = 2 * BackgroundLogSink::c_MaxQueuedMessages + 1;
-		std::future<void> logged = std::async(std::launch::async, [&logger, count]()
+		constexpr size_t c_Bound = BackgroundLogSink::c_MaxQueuedMessages;
+		const size_t count = 2 * c_Bound + 1;
+		std::atomic<size_t> returned = 0;
+		std::future<void> logged = std::async(std::launch::async, [&logger, &returned, count]()
 		{
 			for (size_t index = 0; index < count; index++)
+			{
 				logger.trace("bulk {}", index);
+				returned++;
+			}
 		});
-		CHECK(logged.wait_for(std::chrono::milliseconds(200)) == std::future_status::timeout);
-
+		// Until the calls stop returning (for a quarter of a second, past the bound) or all of them returned.
+		const auto deadline = std::chrono::steady_clock::now() + c_Timeout;
+		size_t settled = returned;
+		auto settledSince = std::chrono::steady_clock::now();
+		while (std::chrono::steady_clock::now() < deadline)
+		{
+			std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			const size_t now = returned;
+			if (now != settled)
+			{
+				settled = now;
+				settledSince = std::chrono::steady_clock::now();
+			}
+			if (settled == count || (settled > c_Bound && std::chrono::steady_clock::now() - settledSince > std::chrono::milliseconds(250)))
+				break;
+		}
+		// Opened before anything can end the test: the future's destructor waits for the calls.
 		inner->Open();
+		CHECK(settled > c_Bound);
+		CHECK(settled <= 2 * c_Bound);
+
 		REQUIRE(logged.wait_for(c_Timeout) == std::future_status::ready);
 		logger.flush();
 		const std::vector<std::string> written = inner->GetWritten();
