@@ -16,10 +16,12 @@
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/SceneServices.h"
+#include "TestHelpers.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <optional>
@@ -985,9 +987,12 @@ TEST_SUITE("Animation.Streaming")
 
 		const SubSceneID id = scene.SceneRef->BeginAdditiveLoad(room);
 		REQUIRE(id != 0);
-		for (int update = 0; update < 600 && !scene.SceneRef->IsSubSceneLoaded(id); update++)
+		// The load's preparation runs on a job: wait for it by the clock, not a number of frames (a busy machine may need more).
+		REQUIRE(WaitUntil([&]()
+		{
 			scene.Update(1.0f / 60.0f);
-		REQUIRE(scene.SceneRef->IsSubSceneLoaded(id));
+			return scene.SceneRef->IsSubSceneLoaded(id);
+		}, std::chrono::seconds(10)));
 		const Entity loaded = scene.SceneRef->GetEntityByUUID(walkerID);
 		REQUIRE(loaded);
 		const float startZ = GetWorldPosition(*scene.SceneRef, loaded).z;

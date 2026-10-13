@@ -7,6 +7,7 @@
 #include "Strata/Scene/SceneServices.h"
 #include "TestHelpers.h"
 
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <string>
@@ -534,9 +535,12 @@ TEST_SUITE("Physics.Character")
 		room->UpdateWorldTransforms();
 		const SubSceneID id = scene.BeginAdditiveLoad(room);
 		REQUIRE(id != 0);
-		for (int update = 0; update < 600 && !scene.IsSubSceneLoaded(id); update++)
+		// The load's preparation runs on a job: wait for it by the clock, not a number of frames (a busy machine may need more).
+		REQUIRE(WaitUntil([&]()
+		{
 			StepScene(scene, 1);
-		REQUIRE(scene.IsSubSceneLoaded(id));
+			return scene.IsSubSceneLoaded(id);
+		}, std::chrono::seconds(10)));
 		StepScene(scene, 30);
 
 		const Entity walker = scene.GetEntityByUUID(walkerID);
