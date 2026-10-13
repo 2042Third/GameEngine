@@ -31,8 +31,10 @@
 		{
 			"name": "macos",
 			"displayName": "macOS (Ninja Multi-Config)",
+			"description": "Binaries run on macOS 14 and later, whatever the SDK of the Xcode that builds them",
 			"inherits": "base",
 			"generator": "Ninja Multi-Config",
+			"cacheVariables": { "CMAKE_OSX_DEPLOYMENT_TARGET": "14.0" },
 			"condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Darwin" }
 		}
 	],
