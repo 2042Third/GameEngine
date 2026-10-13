@@ -106,9 +106,9 @@ namespace Strata
 	// through UndoStackObserver, so following them costs a reference per step). Applied step by step, as redo would apply
 	// them, they turn the saved file into the edited scene; consecutive steps that move no entity (component edits, drags)
 	// fold into one, so the journal grows with the structural edits only. Its cost follows the edits, not the scene's
-	// size: a write hands references to the steps since the last write to an I/O job, which folds and serializes them.
-	// It is written c_QuietSeconds after changes stop, and at least every c_MaxIntervalSeconds while they go on; saving
-	// removes it, and so does undoing back to the saved state.
+	// size: a write hands references to the steps since the last write to a background worker, which folds and
+	// serializes them, and an I/O job writes the text. It is written c_QuietSeconds after changes stop, and at least
+	// every c_MaxIntervalSeconds while they go on; saving removes it, and so does undoing back to the saved state.
 	//
 	// A scene that was never saved has no file to apply changes to: its journal is complete, starting from an empty scene
 	// with every entity the scene started with (a template's handful, captured once when it opens), followed by the steps.

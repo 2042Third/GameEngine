@@ -2164,8 +2164,9 @@ Rules for the ABI, host functions and the SDK are in AGENTS.md, "Scripting"; wri
   or moves no entity folds into the step before it (positions recorded there stay true), so the file grows with the
   structural edits only, and drags and value edits keep one step. The journal follows the undo stack as its observer,
   which costs a reference per step on the main thread (a drag merges a frame at a time into its step, and each merge
-  replaces the step's states waiting for the write, so a drag of many entities holds one frame's, not every frame's); a write hands the references to an I/O job that folds and
-  serializes them, so its cost follows the edits, not the scene's size. It is written `c_QuietSeconds` (2 s) after edits
+  replaces the step's states waiting for the write, so a drag of many entities holds one frame's, not every frame's); a
+  write hands the references to a background worker that folds and serializes them, and an I/O job writes the text (see
+  below), so its cost follows the edits, not the scene's size. It is written `c_QuietSeconds` (2 s) after edits
   stop and at least every `c_MaxIntervalSeconds` (10 s) while they go on: the most work a crash can take is about ten
   seconds. Saving removes the file and so does undoing back to the save point. A scene that was never saved has no file
   to apply changes to: its journal is complete, its first step every entity the scene started with (a template's
