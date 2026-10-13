@@ -188,7 +188,7 @@ namespace Strata
 		s_Data->BindlessTextures->BeginFrame(s_Data->Device->GetFrameIndex());
 		s_Data->Staging->BeginFrame(s_Data->Device->GetFrameIndex());
 		s_Data->UploadQueue->BeginFrame();
-		s_Data->DeferredReleases->Collect();
+		s_Data->DeferredReleases->Collect(DeferredReleaseQueue::c_FrameDestroyBudget);
 		s_Data->BackBufferPrepared = false;
 	}
 

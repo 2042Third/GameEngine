@@ -179,9 +179,11 @@ AnimationController (`AssetTypes.h`; the animation types belong to the Animation
 holds the process-wide services: the device, `ShaderLibrary` (SPIR-V compiled from `Strata/shaders` by glslang at
 build time and embedded, `CMake/StrataShaders.cmake`), samplers, fallback textures, `BindlessTextureTable`,
 `StagingPool` (staging memory for texture and mesh uploads, reused), `DeferredReleaseQueue` (`ReleaseDeferred`:
-resources dropped while the GPU may still use them, held until an event query set at the release completes and collected
-every frame and at every release, never waiting; NVRHI's Vulkan backend keeps what command lists reference alive, but not
-the textures of clears) and the blocking `ReadTexture`. `RenderScene` keeps a scene's render proxies in a `SpatialIndex`,
+resources dropped while the GPU may still use them, held until an event query set at the release completes, never
+waiting; NVRHI's Vulkan backend keeps what command lists reference alive, but not the textures of clears. Destroying a
+texture costs the driver about 0.1 ms, so every frame destroys what completed within `c_FrameDestroyBudget` (0.25 ms,
+the oldest first, at least one) and every release as many as it hands over, which keeps the queue bounded without
+frames) and the blocking `ReadTexture`. `RenderScene` keeps a scene's render proxies in a `SpatialIndex`,
 and `SceneRenderer` extracts each frame's draws from it (`SceneRendererExtraction.cpp`, resolving assets through its
 `AssetResolveCache`; see [Render scene](#render-scene)). `SceneRenderer` draws a scene (light clustering, shadow cascades,
 depth/normal/entity-ID prepass, GTAO, forward PBR, sky, transparents, exposure, bloom, tone mapping, FXAA, then overlays

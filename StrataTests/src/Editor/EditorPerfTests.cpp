@@ -902,12 +902,29 @@ TEST_SUITE("PerfGPU.Editor")
 		renderAll();
 		assets = everything;
 
-		// The longest frame (a maximum by nature: one held frame is the hitch the user sees) until every thumbnail is ready;
-		// each attempt starts without them.
+		// Each attempt starts as the first does: without thumbnails, with nothing of an earlier attempt left to destroy, and
+		// with the project's assets unloaded, so the textures the materials draw stream their levels anew. Confirmations
+		// otherwise measured another state: their first frame destroyed the 20 thumbnails of the attempt before (2.1-2.3 ms
+		// while frames destroyed everything at once, DeferredReleaseQueue), and the textures had their levels already (43-45
+		// frames instead of 59-61).
+		EditorAssetManager* manager = context.GetAssetManager();
+		REQUIRE(manager);
+		const auto startCold = [&]()
+		{
+			thumbnails->Clear();
+			device.WaitForIdle();
+			for (AssetHandle asset : everything)
+				manager->UnloadAsset(asset);
+			device.WaitForIdle();
+			Renderer::GetDeferredReleases().Collect();
+			REQUIRE(Renderer::GetDeferredReleases().GetPendingCount() == 0);
+		};
+
+		// The longest frame (a maximum by nature: one held frame is the hitch the user sees) until every thumbnail is ready.
 		uint64_t rendered = 0;
 		Perf::CheckBudgetConfirmed("PerfGPU.Editor.ThumbnailsMaxFrame", [&]
 		{
-			thumbnails->Clear();
+			startCold();
 			const uint64_t before = thumbnails->GetStats().ScenesRendered;
 			const double maxFrame = renderAll();
 			rendered = thumbnails->GetStats().ScenesRendered - before;

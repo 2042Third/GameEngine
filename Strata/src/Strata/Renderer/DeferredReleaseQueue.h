@@ -4,8 +4,10 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include <chrono>
 #include <cstddef>
 #include <deque>
+#include <optional>
 #include <vector>
 
 namespace Strata
@@ -21,6 +23,11 @@ namespace Strata
 	//
 	// Completion is tracked with event queries on the graphics queue, where everything renders, so releases do not
 	// depend on frames advancing (tools and tests render without them). Main thread only.
+	//
+	// Dropping the last reference destroys the resource, which costs the driver about 0.1 ms for a texture: a frame that
+	// dropped every completed resource at once held the editor 2.1-2.3 ms for the 20 thumbnails a cache let go of, and
+	// would hold it for tens of milliseconds for hundreds. Frames destroy within a time budget (Collect's), the rest in the
+	// frames after.
 	class DeferredReleaseQueue
 	{
 	public:
@@ -31,16 +38,26 @@ namespace Strata
 		DeferredReleaseQueue(const DeferredReleaseQueue&) = delete;
 		DeferredReleaseQueue& operator=(const DeferredReleaseQueue&) = delete;
 
-		// Takes over references to resources and drops them once every command list executed so far has completed. Hand
-		// resources over after executing the command lists that use them. Also collects what has completed meanwhile, so
-		// the queue stays bounded by the GPU's progress when no frames run.
-		void Release(std::vector<nvrhi::ResourceHandle> resources);
-		// Drops the references whose work has completed. Never waits for the GPU. Called once per frame
-		// (Renderer::BeginFrame).
-		void Collect();
+		// What a frame spends destroying the resources whose work has completed (Renderer::BeginFrame).
+		static constexpr std::chrono::microseconds c_FrameDestroyBudget { 250 };
 
-		// Resources held until the GPU is done with them.
-		size_t GetPendingCount() const { return m_PendingCount; }
+		// Takes over references to resources and drops them once every command list executed so far has completed. Hand
+		// resources over after executing the command lists that use them. Also drops as many references as it takes over
+		// among those whose work has completed (the oldest), so the queue stays bounded by the GPU's progress when no frames
+		// run.
+		void Release(std::vector<nvrhi::ResourceHandle> resources);
+		// Drops the references whose work has completed, the oldest first, until `budget` has passed (at least one per call,
+		// so the queue always drains); without a budget, all of them. Never waits for the GPU. Called once per frame with
+		// c_FrameDestroyBudget (Renderer::BeginFrame).
+		void Collect(std::optional<std::chrono::nanoseconds> budget = std::nullopt);
+
+		// Resources held: until the GPU is done with them, or done with and waiting to be destroyed.
+		size_t GetPendingCount() const { return m_PendingCount + m_Completed.size(); }
+		// Of those, the ones whose work has completed.
+		size_t GetCompletedCount() const { return m_Completed.size(); }
+	private:
+		// Moves the resources of the batches whose work has completed to m_Completed.
+		void TakeCompleted();
 	private:
 		struct Batch
 		{
@@ -50,6 +67,7 @@ namespace Strata
 	private:
 		nvrhi::IDevice* m_Device;
 		std::deque<Batch> m_Pending; // Oldest first: a batch never completes before an older one
+		std::deque<nvrhi::ResourceHandle> m_Completed; // Done on the GPU, to be destroyed, oldest first
 		std::vector<nvrhi::EventQueryHandle> m_IdleQueries;
 		size_t m_PendingCount = 0;
 	};

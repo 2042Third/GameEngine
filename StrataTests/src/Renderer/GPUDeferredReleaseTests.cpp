@@ -4,6 +4,9 @@
 
 #include "Strata/Renderer/DeferredReleaseQueue.h"
 
+#include <chrono>
+#include <vector>
+
 using namespace Strata;
 
 namespace
@@ -35,6 +38,13 @@ namespace
 		commandList->clearTextureUInt(texture, nvrhi::AllSubresources, 7);
 		commandList->close();
 		device->executeCommandList(commandList);
+	}
+
+	// The references held on a resource (NVRHI's AddRef and Release return the count they leave).
+	unsigned long GetReferenceCount(nvrhi::IResource* resource)
+	{
+		resource->AddRef();
+		return resource->Release();
 	}
 
 }
@@ -82,13 +92,15 @@ TEST_SUITE("GPU.Renderer.DeferredRelease")
 		second = nullptr;
 		CHECK(queue.GetPendingCount() == 2);
 
-		// A release collects what completed before it: without frames, the queue holds only what the GPU may still use.
+		// A release drops as many references to resources that completed before it as it takes over, the oldest first:
+		// without frames, the queue does not grow beyond what the GPU may still use and what earlier releases left.
 		gpu.GetDevice().WaitForIdle();
 		nvrhi::TextureHandle third = CreateTarget(device, "DeferredRelease.Third");
 		SubmitClear(device, third);
 		queue.Release({ third.Get() });
 		third = nullptr;
-		CHECK(queue.GetPendingCount() == 1);
+		CHECK(queue.GetPendingCount() == 2);
+		CHECK(queue.GetCompletedCount() == 1);
 
 		// Later rounds reuse the event queries of the batches that completed.
 		for (int round = 0; round < 3; round++)
@@ -97,9 +109,44 @@ TEST_SUITE("GPU.Renderer.DeferredRelease")
 			nvrhi::TextureHandle texture = CreateTarget(device, "DeferredRelease.Round");
 			SubmitClear(device, texture);
 			queue.Release({ texture.Get() });
-			CHECK(queue.GetPendingCount() == 1);
+			CHECK(queue.GetPendingCount() == 2);
+			CHECK(queue.GetCompletedCount() == 1);
 		}
 		gpu.GetDevice().WaitForIdle();
+		queue.Collect();
+		CHECK(queue.GetPendingCount() == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A collection within a budget destroys the completed resources over several calls, the oldest first")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		nvrhi::IDevice* device = gpu.GetNvrhiDevice();
+		DeferredReleaseQueue queue(device);
+
+		// Eight textures released at once (a cache letting go of its thumbnails), done on the GPU. The test keeps references
+		// of its own to see which ones the queue let go of.
+		std::vector<nvrhi::TextureHandle> textures;
+		for (int index = 0; index < 8; index++)
+			textures.push_back(CreateTarget(device, "DeferredRelease.Budget"));
+		queue.Release(std::vector<nvrhi::ResourceHandle>(textures.begin(), textures.end()));
+		CHECK(queue.GetPendingCount() == 8);
+		CHECK(queue.GetCompletedCount() == 0);
+		gpu.GetDevice().WaitForIdle();
+
+		// A budget no destruction fits in still drops one reference per call, so the queue drains; the rest waits for later
+		// calls.
+		queue.Collect(std::chrono::nanoseconds(0));
+		CHECK(queue.GetPendingCount() == 7);
+		CHECK(queue.GetCompletedCount() == 7);
+		CHECK(GetReferenceCount(textures[0]) == 1);
+		CHECK(GetReferenceCount(textures[1]) == 2);
+		queue.Collect(std::chrono::nanoseconds(0));
+		CHECK(queue.GetPendingCount() == 6);
+		CHECK(GetReferenceCount(textures[1]) == 1);
+		CHECK(GetReferenceCount(textures[2]) == 2);
+		// Without a budget, everything completed goes.
 		queue.Collect();
 		CHECK(queue.GetPendingCount() == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -111,12 +158,16 @@ TEST_SUITE("GPU.Renderer.DeferredRelease")
 		REQUIRE(gpu.IsValid());
 		nvrhi::IDevice* device = gpu.GetNvrhiDevice();
 		DeferredReleaseQueue& releases = Renderer::GetDeferredReleases();
+		// Without what earlier tests left, which a frame's budget might not cover.
+		gpu.GetDevice().WaitForIdle();
+		releases.Collect();
+		REQUIRE(releases.GetPendingCount() == 0);
 
 		nvrhi::TextureHandle texture = CreateTarget(device, "DeferredRelease.Renderer");
 		SubmitClear(device, texture);
 		Renderer::ReleaseDeferred({ texture.Get() });
 		texture = nullptr;
-		CHECK(releases.GetPendingCount() >= 1);
+		CHECK(releases.GetPendingCount() == 1);
 
 		gpu.GetDevice().WaitForIdle();
 		REQUIRE(gpu.GetDevice().BeginFrame());

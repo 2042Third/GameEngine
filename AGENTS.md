@@ -423,7 +423,8 @@ The threading model, frame loop and pipelines these rules protect are described 
   target that a frame in flight only cleared is destroyed with its last handle (a validation error,
   and freed memory in use can lose the device). Drop render targets, and what references them, through
   `Renderer::ReleaseDeferred` (`DeferredReleaseQueue`: held until the GPU finished the work submitted
-  before, never waiting), as `SceneRenderer` does when it is resized.
+  before, never waiting, then destroyed within a frame's budget, `c_FrameDestroyBudget`, since a texture costs the
+  driver about 0.1 ms), as `SceneRenderer` does when it is resized.
 - **Scripting isolation:** game scripts only see `StrataScriptCore`. Every call into script code goes
   through `CrashGuard`; anything crossing the ABI is plain data (no STL types, no exceptions).
 - **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous;
