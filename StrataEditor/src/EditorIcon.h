@@ -50,7 +50,7 @@ namespace Strata
 		} };
 		for (size_t index = 0; index < images.size(); index++)
 		{
-			const size_t size = c_EditorIconSizes[index];
+			[[maybe_unused]] const size_t size = c_EditorIconSizes[index]; // Only the assert reads it, which Dist compiles out
 			ST_CORE_ASSERT(images[index].Width == size && images[index].Pixels.size() == size * size * 4, "The window icon's image {} does not match c_EditorIconSizes",
 				index);
 		}
