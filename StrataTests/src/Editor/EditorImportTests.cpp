@@ -6,9 +6,11 @@
 #include "Editor/EditorContext.h"
 #include "Editor/EditorNotifications.h"
 #include "Editor/HarnessEditor.h"
+#include "Renderer/GPUTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetImporter.h>
+#include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
@@ -17,6 +19,8 @@
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Font.h>
+#include <Strata/Renderer/RenderScene.h>
+#include <Strata/Scene/Components.h>
 
 #include <algorithm>
 #include <atomic>
@@ -1119,5 +1123,68 @@ TEST_SUITE("Editor.Import")
 		CHECK(fileResult.Value["path"] == "Imported/D.stgated");
 		CHECK(assets.FindAssetByAbsolutePath(copied).IsValid());
 		CHECK(HeldCopyImporter::s_ImportCount == imports + 2);
+	}
+}
+
+TEST_SUITE("GPU.Editor.ImportSettings")
+{
+	TEST_CASE("A start scene opened before the first frame is prepared for the viewport without waiting for imports it does not use")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		RegisterGatedImporter();
+		Tests::ScopedJobSystem jobs(2, 2);
+		OpenGateAtEnd gate;
+		// A project whose start scene draws cubes, with an asset no scene uses that has to be imported again when it opens.
+		std::filesystem::path projectDirectory;
+		UUID unused = UUID::Null();
+		// More than a frame's share of preparation, also in optimized builds.
+		const uint32_t cubes = RenderScene::c_PrepareChunk * 12;
+		{
+			ImportHarness harness("EditorPrepareWhileImporting");
+			const std::optional<UUID> parsed = UUID::FromString(harness.Add("Data/Unused.stgated", { 's' }));
+			REQUIRE(parsed);
+			unused = *parsed;
+			Scene& scene = *harness.Context.GetEditScene();
+			for (uint32_t index = 0; index < cubes; index++)
+			{
+				Entity cube = scene.CreateEntity("Cube");
+				cube.GetComponent<TransformComponent>().Translation = glm::vec3(static_cast<float>(index % 64) * 2.0f, 0.0f, static_cast<float>(index / 64) * 2.0f);
+				cube.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+			}
+			harness.Run("scene.saveAs", { { "path", "Scenes/Cubes.stscene" } });
+			harness.Run("project.setStartScene", { { "scene", "Scenes/Cubes.stscene" } });
+			projectDirectory = harness.Context.GetProject()->GetProjectDirectory();
+			harness.Context.CloseProject();
+		}
+		REQUIRE(FileSystem::Remove(projectDirectory / ".strata" / "Cache"));
+
+		// The editor opens its project and start scene before its first frame (EditorContext::OpenProject) while the unused
+		// asset's import is held: the scene opens, its render proxies built, without waiting for that import (released after
+		// 15 s, so that a wait shows as a slow open rather than a hang).
+		EditorContextSpecification specification { false };
+		specification.ImportInBackground = true;
+		EditorContext context { specification };
+		GatedImporter::SetGate(false);
+		std::thread opener([]()
+		{
+			std::this_thread::sleep_for(std::chrono::seconds(15));
+			GatedImporter::SetGate(true);
+		});
+		const auto start = std::chrono::steady_clock::now();
+		std::string error;
+		const bool opened = context.OpenProject(projectDirectory, &error);
+		const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+		const bool stillImporting = context.GetAssetManager() && context.GetAssetManager()->IsImportPending(unused);
+		opener.join();
+		REQUIRE_MESSAGE(opened, error);
+		CHECK_MESSAGE(seconds < 10.0, "Opening took ", seconds, " s");
+		CHECK(stillImporting);
+		const RenderScene* renderScene = RenderScene::Find(*context.GetEditScene());
+		REQUIRE(renderScene);
+		CHECK(renderScene->GetPendingCount() == 0);
+		CHECK(renderScene->GetStats().Proxies == cubes);
+		context.CloseProject();
+		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

@@ -542,8 +542,10 @@ namespace Strata
 			UpdateSceneLoad();
 			// Loads of assets whose first import still runs in the background (a project opened with ImportInBackground) wait
 			// for it and are not pending loads; only applying the import resumes them, which frames do (the manager's Update).
-			// Without frames the wait applies imports itself, sleeping until one finishes instead of spinning.
-			if (m_SceneLoad && !m_AssetManager->HasPendingLoads() && m_AssetManager->HasPendingImports())
+			// Without frames the wait applies imports itself, sleeping until one finishes instead of spinning. A scene being
+			// prepared (its render proxies) waits for nothing: other imports must not hold it up.
+			if (m_SceneLoad && m_SceneLoadStatus.State != SceneLoadState::Preparing && !m_AssetManager->HasPendingLoads()
+				&& m_AssetManager->HasPendingImports())
 			{
 				const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - std::chrono::steady_clock::now());
 				m_AssetManager->WaitForImportProgress(std::max(remaining, std::chrono::milliseconds(0)));
