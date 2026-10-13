@@ -297,6 +297,9 @@ TEST_SUITE("Editor.UI.ContentBrowser")
 		// The confirmation lists the scene that uses it; nothing is deleted yet.
 		REQUIRE(UI::ItemProbe::Find("DeleteAsset.Confirm").has_value());
 		CHECK(editor.Assets().IsHandleValid(material));
+		// Cancel, then the primary button at the right end, as in the editor's other dialogs.
+		REQUIRE(UI::ItemProbe::Find("DeleteAsset.Cancel").has_value());
+		CHECK(UI::ItemProbe::Find("DeleteAsset.Cancel")->Max.x < UI::ItemProbe::Find("DeleteAsset.Confirm")->Min.x);
 		ImGuiWindow* dialog = ImGui::FindWindowByName(DeleteAssetDialog::c_PopupName);
 		REQUIRE(dialog);
 		REQUIRE(editor.Click("DeleteAsset.Cancel"));

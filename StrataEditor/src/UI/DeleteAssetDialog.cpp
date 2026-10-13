@@ -141,20 +141,24 @@ namespace Strata
 		ImGui::PopTextWrapPos();
 		ImGui::Spacing();
 
+		// Cancel, then the primary button at the right end, as the editor's other dialogs place them.
 		const bool referenced = !m_Referencers.empty();
-		if (UI::DialogButton("DeleteAsset.Confirm", referenced ? "Delete Anyway" : "Delete", true))
+		const char* confirm = referenced ? "Delete Anyway" : "Delete";
+		const float buttons = UI::DialogButtonWidth("Cancel") + ImGui::GetStyle().ItemSpacing.x + UI::DialogButtonWidth(confirm);
+		ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(wrap - buttons, 0.0f));
+		// Escape cancels too: ImGui leaves modals open on it.
+		if (UI::DialogButton("DeleteAsset.Cancel", "Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+		{
+			ImGui::CloseCurrentPopup();
+			m_Open = false;
+		}
+		ImGui::SameLine();
+		if (UI::DialogButton("DeleteAsset.Confirm", confirm, true) && m_Open)
 		{
 			nlohmann::json parameters = m_Folder ? nlohmann::json { { "path", m_Path } } : nlohmann::json { { "asset", UUIDToJson(m_Asset) } };
 			if (referenced)
 				parameters["force"] = true;
 			RunEditorCommand(context, commands, m_Folder ? "asset.deleteFolder" : "asset.delete", parameters);
-			ImGui::CloseCurrentPopup();
-			m_Open = false;
-		}
-		ImGui::SameLine();
-		// Escape cancels too: ImGui leaves modals open on it.
-		if (UI::DialogButton("DeleteAsset.Cancel", "Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
-		{
 			ImGui::CloseCurrentPopup();
 			m_Open = false;
 		}

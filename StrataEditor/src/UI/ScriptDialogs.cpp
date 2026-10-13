@@ -76,6 +76,8 @@ namespace Strata
 		m_Open = UI::BeginModal(c_Popup, "New Script", &open);
 		if (!m_Open)
 			return;
+		// Escape leaves the field first, then closes the dialog (UI::BeginModal leaves modals open on it).
+		const bool editing = ImGui::IsAnyItemActive();
 		const float width = ImGui::GetFontSize() * c_WidthInFontSizes;
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		const Ref<Project>& project = context.Context.GetProject();
@@ -114,10 +116,15 @@ namespace Strata
 		if (!m_Outcome.empty())
 			Caption(m_Outcome, colors.Error, width);
 
+		// Cancel, then the primary button at the right end, as the editor's other dialogs place them.
 		ImGui::Spacing();
-		PlaceButtons(width, { "Create", "Cancel" });
+		PlaceButtons(width, { "Cancel", "Create" });
+		const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+		if (UI::DialogButton("NewScript.Cancel", "Cancel") || (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !editing && focused))
+			open = false;
+		ImGui::SameLine();
 		const bool canCreate = !m_ClassName.empty() && m_Problem.empty();
-		if (UI::DialogButton("NewScript.Create", "Create", true, canCreate) || (submitted && canCreate))
+		if (UI::DialogButton("NewScript.Create", "Create", true, canCreate) || (submitted && canCreate && open))
 		{
 			const EditorCommandResult result = context.Commands.Execute(context.Context, "script.create",
 				{ { "class", m_ClassName }, { "template", m_Empty ? "empty" : "behaviour" }, { "open", true } }, CommandOrigin { CommandSource::UI });
@@ -141,9 +148,6 @@ namespace Strata
 				m_Outcome = result.Error;
 			}
 		}
-		ImGui::SameLine();
-		if (UI::DialogButton("NewScript.Cancel", "Cancel"))
-			open = false;
 		if (!open)
 			ImGui::CloseCurrentPopup();
 		UI::EndModal();
@@ -179,6 +183,8 @@ namespace Strata
 		m_Open = UI::BeginModal(c_Popup, "External Editor", &open);
 		if (!m_Open)
 			return;
+		// Escape leaves the field first, then closes the dialog.
+		const bool editing = ImGui::IsAnyItemActive();
 		const float width = ImGui::GetFontSize() * c_WidthInFontSizes;
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		const ExternalEditorLauncher& launcher = context.Context.GetExternalEditor();
@@ -216,8 +222,12 @@ namespace Strata
 			Caption(m_Error, colors.Error, width);
 
 		ImGui::Spacing();
-		PlaceButtons(width, { "Save", "Cancel" });
-		if (UI::DialogButton("ExternalEditor.Save", "Save", true) || submitted)
+		PlaceButtons(width, { "Cancel", "Save" });
+		const bool focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+		if (UI::DialogButton("ExternalEditor.Cancel", "Cancel") || (ImGui::IsKeyPressed(ImGuiKey_Escape, false) && !editing && focused))
+			open = false;
+		ImGui::SameLine();
+		if (UI::DialogButton("ExternalEditor.Save", "Save", true) || (submitted && open))
 		{
 			const EditorCommandResult result = context.Commands.Execute(context.Context, "script.setExternalEditor", { { "command", m_Command } },
 				CommandOrigin { CommandSource::UI });
@@ -226,9 +236,6 @@ namespace Strata
 			else
 				m_Error = result.Error;
 		}
-		ImGui::SameLine();
-		if (UI::DialogButton("ExternalEditor.Cancel", "Cancel"))
-			open = false;
 		if (!open)
 			ImGui::CloseCurrentPopup();
 		UI::EndModal();

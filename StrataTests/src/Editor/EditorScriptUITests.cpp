@@ -467,6 +467,9 @@ TEST_SUITE("Editor.UI.Scripts")
 		REQUIRE(editor.ReplaceText("NewScript.Class", "DoorOpener"));
 		editor.Frames(1);
 		REQUIRE(UI::ItemProbe::Find("NewScript.Create")->Enabled);
+		// Cancel, then the primary button at the right end, as in the editor's other dialogs.
+		REQUIRE(UI::ItemProbe::Find("NewScript.Cancel"));
+		CHECK(UI::ItemProbe::Find("NewScript.Cancel")->Max.x < UI::ItemProbe::Find("NewScript.Create")->Min.x);
 		const ScriptBuilder& builder = editor.Context().GetScriptBuilder();
 		const uint64_t buildsBefore = builder.GetLastResult().ID;
 		REQUIRE_FALSE(builder.IsRunning());
@@ -482,6 +485,46 @@ TEST_SUITE("Editor.UI.Scripts")
 		REQUIRE(lines.size() == 2);
 		std::error_code error;
 		CHECK(std::filesystem::equivalent(FileSystem::FromUTF8(lines[0]), file, error));
+	}
+
+	TEST_CASE("Escape closes the script dialogs, once it has left their fields")
+	{
+		ScopedEnvironmentVariable noOverride("STRATA_EXTERNAL_EDITOR", "");
+		HarnessEditor editor;
+		editor.Frames(1);
+		CreateProject(editor, "Escape");
+		const auto pressEscape = [&editor]()
+		{
+			editor.Harness.SetKey(ImGuiKey_Escape, true);
+			editor.Frames(1);
+			editor.Harness.SetKey(ImGuiKey_Escape, false);
+			editor.Frames(2);
+		};
+
+		// New Script's name field has the keyboard when it opens: the first Escape leaves it, the second closes the dialog.
+		editor.Layer->GetNewScriptDialog().Open();
+		editor.Frames(2);
+		REQUIRE(editor.Layer->GetNewScriptDialog().IsOpen());
+		editor.Harness.TypeText("Door");
+		editor.Frames(1);
+		pressEscape();
+		CHECK(editor.Layer->GetNewScriptDialog().IsOpen());
+		pressEscape();
+		CHECK_FALSE(editor.Layer->GetNewScriptDialog().IsOpen());
+		CHECK_FALSE(FileSystem::Exists(editor.Context().GetProject()->GetScriptSourceDirectory() / "Door.cpp"));
+
+		// External Editor opens with no field active: Escape closes it, saving nothing; Cancel sits left of Save.
+		ExternalEditorDialog& dialog = editor.Layer->GetExternalEditorDialog();
+		EditorPanelContext context { editor.Context(), editor.Layer->GetCommands(), editor.Layer->GetCommandRunner(), {}, editor.Layer.get() };
+		dialog.Open(context);
+		editor.Frames(2);
+		REQUIRE(dialog.IsOpen());
+		REQUIRE(UI::ItemProbe::Find("ExternalEditor.Cancel"));
+		REQUIRE(UI::ItemProbe::Find("ExternalEditor.Save"));
+		CHECK(UI::ItemProbe::Find("ExternalEditor.Cancel")->Max.x < UI::ItemProbe::Find("ExternalEditor.Save")->Min.x);
+		pressEscape();
+		CHECK_FALSE(dialog.IsOpen());
+		CHECK(editor.Context().GetExternalEditor().GetUserCommand().empty());
 	}
 
 	TEST_CASE("The External Editor dialog offers the editors found here and says which program a command starts")
