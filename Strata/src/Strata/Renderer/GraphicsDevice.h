@@ -81,6 +81,8 @@ namespace Strata
 		// Creates the device for the platform's graphics API. Returns nullptr (after logging the reason) when
 		// no suitable GPU or driver is available.
 		static Scope<GraphicsDevice> Create(const GraphicsDeviceSpecification& specification);
+		// What to install when Create finds no graphics API or GPU on this platform (one sentence; its errors end with it).
+		static std::string GetDriverInstallAdvice();
 
 		virtual nvrhi::IDevice* GetDevice() const = 0;
 		virtual const GraphicsDeviceInfo& GetInfo() const = 0;

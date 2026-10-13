@@ -300,12 +300,17 @@ namespace Strata
 		return device;
 	}
 
+	std::string GraphicsDevice::GetDriverInstallAdvice()
+	{
+		return VulkanLoader::GetInstallAdvice();
+	}
+
 	bool VulkanGraphicsDevice::LoadVulkanLibrary()
 	{
 		const PFN_vkGetInstanceProcAddr getInstanceProcAddr = VulkanLoader::GetInstanceProcAddr();
 		if (!getInstanceProcAddr)
 		{
-			ST_CORE_ERROR("Vulkan is not available: {}. Install or update your GPU driver.", VulkanLoader::GetLoadError());
+			ST_CORE_ERROR("Vulkan is not available: {}. {}", VulkanLoader::GetLoadError(), VulkanLoader::GetInstallAdvice());
 			return false;
 		}
 
@@ -403,7 +408,8 @@ namespace Strata
 		const VkResult result = dispatch.vkCreateInstance(&instanceInfo, nullptr, &m_Instance);
 		if (result != VK_SUCCESS)
 		{
-			ST_CORE_ERROR("vkCreateInstance failed: {}", nvrhi::vulkan::resultToString(result));
+			// VK_ERROR_INCOMPATIBLE_DRIVER: a loader without a driver (e.g. without MoltenVK on macOS).
+			ST_CORE_ERROR("vkCreateInstance failed: {}. {}", nvrhi::vulkan::resultToString(result), VulkanLoader::GetInstallAdvice());
 			return false;
 		}
 		VULKAN_HPP_DEFAULT_DISPATCHER.init(vk::Instance(m_Instance));
@@ -425,7 +431,7 @@ namespace Strata
 		dispatch.vkEnumeratePhysicalDevices(m_Instance, &deviceCount, devices.data());
 		if (devices.empty())
 		{
-			ST_CORE_ERROR("No Vulkan-capable GPU found");
+			ST_CORE_ERROR("No Vulkan-capable GPU found. {}", VulkanLoader::GetInstallAdvice());
 			return false;
 		}
 

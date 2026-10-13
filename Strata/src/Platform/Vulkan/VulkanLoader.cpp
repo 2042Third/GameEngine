@@ -75,4 +75,17 @@ namespace Strata::VulkanLoader
 		return Load().Error;
 	}
 
+	std::string GetInstallAdvice()
+	{
+#if defined(ST_PLATFORM_WINDOWS)
+		return "Install or update the GPU driver: the drivers of NVIDIA, AMD and Intel GPUs include the Vulkan runtime.";
+#elif defined(ST_PLATFORM_MACOS)
+		return "Vulkan runs on Metal through MoltenVK: install the Vulkan SDK from https://vulkan.lunarg.com/sdk/home#mac (with \"System Global "
+			"Installation\"), or run `brew install molten-vk vulkan-loader`.";
+#else
+		return "Install the Vulkan loader and a Vulkan driver, on Ubuntu with `sudo apt install libvulkan1 mesa-vulkan-drivers` (NVIDIA GPUs get "
+			"Vulkan from NVIDIA's driver).";
+#endif
+	}
+
 }

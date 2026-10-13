@@ -12,5 +12,8 @@ namespace Strata::VulkanLoader
 	// (glfwInitVulkanLoader), so the instance and window surfaces always come from one loader. Thread-safe.
 	PFN_vkGetInstanceProcAddr GetInstanceProcAddr();
 	std::string GetLoadError();
+	// What to install on this platform when Vulkan is missing or finds no GPU: the driver on Windows, the loader and a driver
+	// on Linux, MoltenVK and the loader on macOS. A sentence for error messages.
+	std::string GetInstallAdvice();
 
 }
