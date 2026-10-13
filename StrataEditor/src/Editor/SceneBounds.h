@@ -15,7 +15,8 @@ namespace Strata
 	// World-space bounds of scene content for framing the editor camera. Bounds cover what renders: mesh renderers and
 	// world-space text. Content that renders nothing (cameras, lights, empty entities, screen-space text) only counts
 	// when nothing in the measured set renders, as a placeholder box around each entity's origin, so a selected light
-	// can still be framed.
+	// can still be framed; entities and selections (not the whole scene) that render nothing but have a physical shape (a
+	// character controller's capsule, colliders) are framed by that shape first.
 	namespace SceneBounds
 	{
 
@@ -24,7 +25,7 @@ namespace Strata
 		constexpr float c_PlaceholderExtent = 0.5f;
 
 		// Bounds of an entity's content (with includeDescendants, united with its descendants'): its renderable content,
-		// or the placeholder box when none of them renders anything. Mesh bounds come from loaded meshes (a mesh that is
+		// else the shapes of character controllers and colliders among them, else the placeholder boxes. Mesh bounds come from loaded meshes (a mesh that is
 		// still loading stands as the placeholder box). Updates the scene's world transforms. Invalid for an invalid
 		// entity.
 		AABB GetEntityBounds(Scene& scene, Entity entity, bool includeDescendants = true);

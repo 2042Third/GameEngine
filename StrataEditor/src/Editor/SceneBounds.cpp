@@ -84,6 +84,43 @@ namespace Strata
 			return bounds;
 		}
 
+		bool IsFinite(const glm::vec3& value)
+		{
+			return std::isfinite(value.x) && std::isfinite(value.y) && std::isfinite(value.z);
+		}
+
+		// World-space bounds of an entity's physical shape: a character controller's capsule (upright from the entity's
+		// origin, as physics places it, whatever the entity's rotation and scale) and its box, sphere and capsule colliders
+		// (with their offsets, in the entity's space). Invalid without any. For framing what renders nothing: a character made
+		// of a controller is framed by its capsule, not by a box at its feet.
+		AABB GetShapeBounds(Entity entity, const glm::mat4& world)
+		{
+			AABB bounds;
+			if (const CharacterControllerComponent* controller = entity.TryGetComponent<CharacterControllerComponent>())
+			{
+				const float height = std::abs(controller->Height);
+				const float radius = std::min(std::abs(controller->Radius), height * 0.5f);
+				const glm::vec3 origin(world[3]);
+				if (height > 0.0f && std::isfinite(height) && IsFinite(origin))
+					bounds.Expand(AABB(origin - glm::vec3(radius, 0.0f, radius), origin + glm::vec3(radius, height, radius)));
+			}
+			AABB local;
+			if (const BoxColliderComponent* box = entity.TryGetComponent<BoxColliderComponent>(); box && IsFinite(box->HalfExtents) && IsFinite(box->Offset))
+				local.Expand(AABB(box->Offset - glm::abs(box->HalfExtents), box->Offset + glm::abs(box->HalfExtents)));
+			if (const SphereColliderComponent* sphere = entity.TryGetComponent<SphereColliderComponent>(); sphere && std::isfinite(sphere->Radius) && IsFinite(sphere->Offset))
+				local.Expand(AABB(sphere->Offset - glm::vec3(std::abs(sphere->Radius)), sphere->Offset + glm::vec3(std::abs(sphere->Radius))));
+			if (const CapsuleColliderComponent* capsule = entity.TryGetComponent<CapsuleColliderComponent>();
+				capsule && std::isfinite(capsule->Radius) && std::isfinite(capsule->HalfHeight) && IsFinite(capsule->Offset))
+			{
+				const float radius = std::abs(capsule->Radius);
+				const glm::vec3 extent(radius, std::abs(capsule->HalfHeight) + radius, radius);
+				local.Expand(AABB(capsule->Offset - extent, capsule->Offset + extent));
+			}
+			if (local.IsValid())
+				bounds.Expand(local.Transformed(world));
+			return bounds;
+		}
+
 		glm::mat4 GetCachedWorldTransform(const Scene& scene, Entity entity)
 		{
 			const WorldTransformComponent* world = entity.TryGetComponent<WorldTransformComponent>();
@@ -101,6 +138,7 @@ namespace Strata
 				members.push_back(entity.GetUUID());
 
 			AABB renderable;
+			AABB shapes;
 			AABB placeholders;
 			for (UUID id : members)
 			{
@@ -110,11 +148,18 @@ namespace Strata
 				const glm::mat4 world = GetCachedWorldTransform(scene, member);
 				const AABB local = GetRenderableLocalBounds(member, nullptr);
 				if (local.IsValid())
+				{
 					renderable.Expand(local.Transformed(world));
-				else if (!renderable.IsValid())
+					continue;
+				}
+				if (renderable.IsValid())
+					continue;
+				if (const AABB shape = GetShapeBounds(member, world); shape.IsValid())
+					shapes.Expand(shape);
+				else
 					placeholders.Expand(GetPlaceholderBounds().Transformed(world));
 			}
-			return renderable.IsValid() ? renderable : placeholders;
+			return renderable.IsValid() ? renderable : (shapes.IsValid() ? shapes : placeholders);
 		}
 
 	}

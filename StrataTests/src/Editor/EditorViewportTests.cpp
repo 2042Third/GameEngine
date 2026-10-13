@@ -100,6 +100,30 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(bounds.Min.z == doctest::Approx(-20.0f - SceneBounds::c_PlaceholderExtent));
 		CHECK(bounds.Max.x == doctest::Approx(6.0f));
 
+		// A character made of a controller (no mesh) is framed by its capsule, upright from its feet whatever its rotation and
+		// scale, and an invisible wall by its collider; a mesh among them still decides.
+		Entity walker = CreateEntity(scene, "Walker", glm::vec3(10.0f, 0.0f, 0.0f), glm::vec3(3.0f));
+		walker.GetComponent<TransformComponent>().Rotation = glm::angleAxis(glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+		CharacterControllerComponent& controller = walker.AddComponent<CharacterControllerComponent>();
+		controller.Height = 1.6f;
+		controller.Radius = 0.4f;
+		bounds = SceneBounds::GetEntityBounds(scene, walker, true);
+		CHECK(Near(bounds.Min, glm::vec3(9.6f, 0.0f, -0.4f)));
+		CHECK(Near(bounds.Max, glm::vec3(10.4f, 1.6f, 0.4f)));
+		Entity wall = CreateEntity(scene, "Wall", glm::vec3(0.0f, 0.0f, 10.0f), glm::vec3(2.0f));
+		BoxColliderComponent& box = wall.AddComponent<BoxColliderComponent>();
+		box.HalfExtents = glm::vec3(1.0f, 2.0f, 0.25f);
+		box.Offset = glm::vec3(0.0f, 2.0f, 0.0f);
+		bounds = SceneBounds::GetEntityBounds(scene, wall, false);
+		CHECK(Near(bounds.Min, glm::vec3(-2.0f, 0.0f, 9.5f)));
+		CHECK(Near(bounds.Max, glm::vec3(2.0f, 8.0f, 10.5f)));
+		Entity body = CreateEntity(scene, "Body", glm::vec3(0.0f), glm::vec3(1.0f), walker);
+		body.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		bounds = SceneBounds::GetEntityBounds(scene, walker, true);
+		CHECK(bounds.Max.y < 1.6f); // The body's cube (scaled by 3, turned), not the capsule
+		walker.SetActive(false);
+		wall.SetActive(false);
+
 		// Inactive entities do not count for the whole scene.
 		distant.SetActive(false);
 		bounds = SceneBounds::GetSceneBounds(scene);
