@@ -116,7 +116,9 @@ build scripts with the installation's SDK and a toolchain it finds on the machin
 scripts"), `README.md` (from `Docs/Releases/PackageReadme.md`), `ThirdPartyNotices.md`, `Samples/`, the script SDK in
 `StrataScriptCore/` (with glm's headers in `ThirdParty/glm`), `Docs/Manual/` and the skills for making games in
 `Skills/`. `cpack --config build/<preset>/CPackConfig.cmake -C Dist` packs it into
-`build/<preset>/Packages/Strata-<version>-<windows-x64|linux-x64|macos-arm64>.<zip|tar.gz>`. A file that releases must
+`build/<preset>/Packages/Strata-<version>-<windows-x64|linux-x64|macos-arm64>.<zip|tar.gz>` (Linux executables
+stripped of their symbol tables, as Windows packages hold no PDBs; the release workflow annotates every package with its
+size and largest files). A file that releases must
 ship gets an install rule there and an entry in the layout `StrataEditor.Install` checks (Testing).
 
 **Releases** (`.github/workflows/release.yml`) are cut at the end of every wave (0.3.0 for wave 3, 0.4.0 for wave 4;

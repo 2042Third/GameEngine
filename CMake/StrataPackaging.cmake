@@ -96,4 +96,10 @@ else()
 	set(CPACK_GENERATOR "TGZ")
 endif()
 set(CPACK_INCLUDE_TOPLEVEL_DIRECTORY ON)
+# Linux executables keep their full symbol tables, a large share of their size (and of every exported game's runtime);
+# packages ship them stripped, as Windows packages ship without PDBs. Crash reports name script modules' functions from
+# the modules' own files, which stay as they are built. macOS packages keep theirs: strip would have to re-sign them.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+	set(CPACK_STRIP_FILES ON)
+endif()
 include(CPack)
