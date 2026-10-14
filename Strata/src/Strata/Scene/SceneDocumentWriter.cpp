@@ -207,8 +207,8 @@ namespace Strata
 				{
 					std::vector<AssetHandle> extra;
 					context.Options->ExtraReferences(*plan.Info, json, extra);
-					for (const AssetHandle handle : extra)
-						references.Add(handle);
+					for (const AssetHandle asset : extra)
+						references.Add(asset);
 				}
 				return;
 			}
