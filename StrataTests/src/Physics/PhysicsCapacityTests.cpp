@@ -271,6 +271,48 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(PhysicsSystem::GetRememberedCapacityDemand(other.GetLineageID()).IsEmpty());
 	}
 
+	TEST_CASE("Bodies waiting for a slot cost the steps nothing and get freed slots in the order they started waiting")
+	{
+		ScopedCapacityDemands demands;
+		Scene scene("Waiting");
+		scene.GetSettings().PhysicsCapacity.MaxBodies = 1024;
+		std::vector<Entity> boxes;
+		boxes.reserve(3000);
+		for (uint32_t index = 0; index < 3000; index++)
+		{
+			const glm::vec3 position(static_cast<float>(index % 64) * 2.0f, 0.0f, static_cast<float>(index / 64) * 2.0f);
+			boxes.push_back(CreateStaticBox(scene, "Box " + std::to_string(index), position, glm::vec3(0.5f)));
+		}
+
+		// The first 1,024 boxes (in hierarchy order) get bodies; the others wait, and the steps do not look at them.
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		PhysicsStats stats = physics.GetStats();
+		CHECK(stats.BodyCount == 1024);
+		CHECK(stats.BodyOverflowCount == 1976);
+		for (uint32_t step = 0; step < 3; step++)
+		{
+			StepScene(scene, 1);
+			CHECK(physics.GetStats().SyncedBodyCount == 0);
+		}
+		CHECK(physics.HasBody(boxes[1023]));
+		CHECK_FALSE(physics.HasBody(boxes[1024]));
+
+		// 100 bodies go: exactly the first 100 waiting boxes get their slots, in the next update.
+		scene.DestroyEntities(std::vector<Entity>(boxes.begin(), boxes.begin() + 100));
+		StepScene(scene, 1);
+		stats = physics.GetStats();
+		CHECK(stats.BodyCount == 1024);
+		CHECK(stats.BodyOverflowCount == 1876);
+		CHECK(stats.SyncedBodyCount == 0);
+		uint32_t given = 0;
+		for (uint32_t index = 1024; index < 1124; index++)
+			given += physics.HasBody(boxes[index]) ? 1u : 0u;
+		CHECK(given == 100);
+		CHECK_FALSE(physics.HasBody(boxes[1124]));
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Steps that overflow the contact buffers are counted, warned about once and remembered")
 	{
 		ScopedCapacityDemands demands;

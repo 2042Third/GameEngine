@@ -248,7 +248,8 @@ and character controllers read the world's live matrix). A world's capacities ar
 scene does not set (`SceneSettings::PhysicsCapacity`) are sized from the bodies the scene starts with
 (`PhysicsWorld::ResolveCapacities`: at least 65,536 bodies, the next power of two of twice the bodies; four body pairs per
 body slot; at least 10,240 contacts, two per body; scratch memory for them), bodies that find the world full wait for a
-slot and are reported in one error, steps that overflow the pair or contact buffers are counted
+slot in a queue in the order they failed (no step looks at them: slots freed by a round of changes go to the first of
+them, which get their bodies in the same round) and are reported in one error, steps that overflow the pair or contact buffers are counted
 (`PhysicsStats::BodyOverflowCount`, `ContactOverflowSteps`), and what a world lacked is remembered per scene
 (`Scene::GetLineageID`: the scene asset it was loaded from or saved as, else the scene and its copies; never another
 scene of the same name), so the scene's next world is sized for it. Jolt reserves a world's buffers when it is created

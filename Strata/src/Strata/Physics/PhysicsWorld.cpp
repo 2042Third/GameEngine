@@ -43,6 +43,7 @@
 #include <atomic>
 #include <bit>
 #include <cstring>
+#include <deque>
 #include <map>
 #include <set>
 #include <span>
@@ -141,7 +142,7 @@ namespace Strata
 			InvalidColliders,    // Every collider has invalid data; waits for a component change
 			DegenerateTransform, // Retried when a transform change is signaled (on the entity or an ancestor)
 			MissingMesh,         // Retried when the mesh provider reports new data or a shape finished cooking
-			BodyLimit            // Retried every step while the world is full
+			WaitingForSlot       // The world is full: queued in PhysicsWorldData::SlotWaiters, retried when a slot frees or the world grows
 		};
 
 		//////////////////////////////////////////////////////////////////////////
@@ -753,6 +754,7 @@ namespace Strata
 			bool KinematicMoving = false;                   // MoveKinematic gave the body a velocity during the last step
 			bool TransformDirty = false;                    // A signaled transform change to apply at the next step
 			bool Polled = false;                            // Listed in PhysicsWorldData::PolledBodies
+			uint64_t SlotTicket = 0;                        // Its entry in PhysicsWorldData::SlotWaiters while it waits for a slot
 			uint64_t WriteBackPass = 0;                     // Last write-back pass that wrote this body
 			uint64_t SyncPass = 0;                          // Last step whose synchronization handled this record
 			glm::vec3 ShapeScale = glm::vec3(1.0f);         // World scale baked into the shape
@@ -1000,14 +1002,19 @@ namespace Strata
 		JPH::EPhysicsUpdateError ReportedErrors = JPH::EPhysicsUpdateError::None;
 
 		// Capacities: whether each was sized automatically (the advice of the overflow messages differs), the records waiting
-		// for a free body slot (BuildFailure::BodyLimit), the first of them since the overflow was last reported, and what the
-		// world needed beyond its capacities.
+		// for a free body slot (BuildFailure::WaitingForSlot), the first of them since the overflow was last reported, and what
+		// the world needed beyond its capacities.
 		bool AutomaticMaxBodies = false;
 		bool AutomaticMaxBodyPairs = false;
 		bool AutomaticMaxContactConstraints = false;
-		uint32_t BodyLimitCount = 0;
-		entt::entity FirstBodyLimitFailure = entt::null;
-		ErrorThrottle BodyLimitErrors { "Physics" };                  // One aggregated error while bodies wait for a slot
+		uint32_t SlotWaiterCount = 0;
+		entt::entity FirstSlotWaiter = entt::null;
+		ErrorThrottle SlotWaiterErrors { "Physics" };                 // One aggregated error while bodies wait for a slot
+		// The records waiting for a slot, in the order they started waiting, with the ticket each got then: an entry whose
+		// record has another ticket (it stopped waiting, or waits again from a later place) or no longer exists is skipped.
+		// Waiting records are never polled: freed slots (see GiveSlotsToWaiters) take them from the front.
+		std::deque<std::pair<entt::entity, uint64_t>> SlotWaiters;
+		uint64_t NextSlotTicket = 1;
 		PhysicsCapacityDemand Demand;
 		uint64_t ContactOverflowSteps = 0;
 		uint64_t StepCount = 0;
@@ -1155,16 +1162,41 @@ namespace Strata
 			return slot.Record;
 		}
 
-		// Sets why a record has no body (BuildFailure::None: it has one), counting the records that wait for a free slot.
+		bool IsSlotWaiter(const PhysicsWorldData& data, const std::pair<entt::entity, uint64_t>& entry)
+		{
+			const auto it = data.Bodies.find(entry.first);
+			return it != data.Bodies.end() && it->second.Failure == BuildFailure::WaitingForSlot && it->second.SlotTicket == entry.second;
+		}
+
+		// Drops the entries of records that stopped waiting from the queue once they are most of it, so that entities that wait
+		// and go again (spawns at the growth limit) do not grow it without end. Linear, amortized over the entries dropped.
+		void CompactSlotWaiters(PhysicsWorldData& data)
+		{
+			constexpr size_t c_MinCompactedSize = 1024;
+			if (data.SlotWaiters.size() < c_MinCompactedSize || data.SlotWaiters.size() < 2 * static_cast<size_t>(data.SlotWaiterCount))
+				return;
+			std::erase_if(data.SlotWaiters, [&](const std::pair<entt::entity, uint64_t>& entry) { return !IsSlotWaiter(data, entry); });
+		}
+
+		// Sets why a record has no body (BuildFailure::None: it has one), counting the records that wait for a free slot and
+		// queuing them in the order they start waiting. A record that fails on a full world again keeps its place.
 		void SetFailure(PhysicsWorldData& data, entt::entity handle, BodyRecord& record, BuildFailure failure)
 		{
-			if (record.Failure == BuildFailure::BodyLimit)
-				data.BodyLimitCount--;
-			if (failure == BuildFailure::BodyLimit)
+			if (record.Failure == BuildFailure::WaitingForSlot && failure == BuildFailure::WaitingForSlot)
+				return;
+			if (record.Failure == BuildFailure::WaitingForSlot)
 			{
-				data.BodyLimitCount++;
-				if (data.FirstBodyLimitFailure == entt::null)
-					data.FirstBodyLimitFailure = handle;
+				data.SlotWaiterCount--;
+				record.SlotTicket = 0;
+			}
+			if (failure == BuildFailure::WaitingForSlot)
+			{
+				data.SlotWaiterCount++;
+				record.SlotTicket = data.NextSlotTicket++;
+				CompactSlotWaiters(data);
+				data.SlotWaiters.emplace_back(handle, record.SlotTicket);
+				if (data.FirstSlotWaiter == entt::null)
+					data.FirstSlotWaiter = handle;
 			}
 			record.Failure = failure;
 		}
@@ -1181,42 +1213,43 @@ namespace Strata
 		// what the world would have needed, so that the scene's next world can grow.
 		void ReportBodyLimit(PhysicsWorldData& data)
 		{
-			if (data.BodyLimitCount == 0)
+			if (data.SlotWaiterCount == 0)
 			{
-				data.BodyLimitErrors.Clear();
-				data.FirstBodyLimitFailure = entt::null;
+				data.SlotWaiterErrors.Clear();
+				data.FirstSlotWaiter = entt::null;
 				return;
 			}
 
-			const uint64_t needed = static_cast<uint64_t>(GetUsedBodySlots(data)) + data.BodyLimitCount;
+			const uint64_t needed = static_cast<uint64_t>(GetUsedBodySlots(data)) + data.SlotWaiterCount;
 			data.Demand.Bodies = std::max(data.Demand.Bodies, static_cast<uint32_t>(std::min<uint64_t>(needed, PhysicsCapacitySettings::c_MaxBodiesLimit)));
-			if (!data.BodyLimitErrors.GetLastMessage().empty())
+			if (!data.SlotWaiterErrors.GetLastMessage().empty())
 				return;
 
-			const Entity first(data.FirstBodyLimitFailure, data.OwnerScene);
+			const Entity first(data.FirstSlotWaiter, data.OwnerScene);
 			std::string entities = first.IsValid() ? fmt::format("'{}'", first.GetName()) : std::string("an entity");
-			if (data.BodyLimitCount > 1)
-				entities += fmt::format(" and {} more entities", data.BodyLimitCount - 1);
+			if (data.SlotWaiterCount > 1)
+				entities += fmt::format(" and {} more entities", data.SlotWaiterCount - 1);
 			const char* advice = data.AutomaticMaxBodies ? "the scene's next play start sizes the world for them"
 				: "raise the scene's PhysicsCapacity.MaxBodies to make room";
-			data.BodyLimitErrors.Report(fmt::format("cannot create a body for {}: the world's limit of {} bodies is reached; they get one when bodies "
+			data.SlotWaiterErrors.Report(fmt::format("cannot create a body for {}: the world's limit of {} bodies is reached; they get one when bodies "
 				"are removed ({})", entities, data.Settings.MaxBodies, advice));
 		}
 
 		// Whether a record without a body waits for a body that can be built later (rather than for a component change).
 		bool IsPending(const BodyRecord& record)
 		{
-			return !record.HasBody() && (record.Failure == BuildFailure::DegenerateTransform || record.Failure == BuildFailure::MissingMesh || record.Failure == BuildFailure::BodyLimit);
+			return !record.HasBody() && (record.Failure == BuildFailure::DegenerateTransform || record.Failure == BuildFailure::MissingMesh || record.Failure == BuildFailure::WaitingForSlot);
 		}
 
 		// Whether a record needs attention at the next step although its body may be asleep or out of the simulation (awake
 		// bodies are synchronized anyway): a signaled transform change, which also retries a build that failed on a
-		// degenerate transform and brings back a body suspended for one, or a build waiting for a free body slot. Nothing
-		// else is polled: activity changes bring bodies back through their signals, and mesh data is checked when the mesh
-		// provider reports changes (see RefreshMeshBodies).
+		// degenerate transform and brings back a body suspended for one. Nothing else is polled: activity changes bring
+		// bodies back through their signals, mesh data is checked when the mesh provider reports changes (see
+		// RefreshMeshBodies), and records waiting for a body slot are handed slots as they free (see GiveSlotsToWaiters), so
+		// a step costs nothing per waiting record.
 		bool NeedsPolling(const BodyRecord& record)
 		{
-			return record.TransformDirty || (!record.HasBody() && record.Failure == BuildFailure::BodyLimit);
+			return record.TransformDirty;
 		}
 
 		const ShapeMember* FindShapeMember(const BodyRecord& record, entt::entity handle)
@@ -1549,7 +1582,8 @@ namespace Strata
 				bodies.DestroyBodies(all.data(), static_cast<int>(all.size()));
 
 			data.Bodies.clear();
-			data.BodyLimitCount = 0;
+			data.SlotWaiterCount = 0;
+			data.SlotWaiters.clear();
 			data.MergedOwners.clear();
 			data.PolledBodies.clear();
 			data.RecheckedEntities.clear();
@@ -2103,7 +2137,7 @@ namespace Strata
 			if (!record.HasBody() && GetUsedBodySlots(data) - data.PendingDestructions.size() >= data.Settings.MaxBodies)
 			{
 				// Reported for all such entities at once (ReportBodyLimit).
-				SetBuildFailure(data, handle, record, BuildFailure::BodyLimit, worldTransform);
+				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, worldTransform);
 				return;
 			}
 
@@ -2146,7 +2180,7 @@ namespace Strata
 			{
 				record.SavedLinearVelocity = linearVelocity;
 				record.SavedAngularVelocity = angularVelocity;
-				SetBuildFailure(data, handle, record, BuildFailure::BodyLimit, worldTransform);
+				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, worldTransform);
 				return;
 			}
 
@@ -2330,17 +2364,45 @@ namespace Strata
 			}
 		}
 
-		void ApplyChanges(PhysicsWorldData& data)
+		bool HasChanges(const PhysicsWorldData& data)
 		{
-			ST_PROFILE_FUNCTION();
+			return !data.StructureChanges.IsEmpty() || !data.SubtreeChanges.IsEmpty() || !data.ActivityChanges.IsEmpty() || !data.TransformChanges.IsEmpty() || !data.OwnerRefreshes.IsEmpty();
+		}
 
-			Scene& scene = *data.OwnerScene;
-			const auto hasChanges = [&]()
+		// Hands the body slots that are free now (those of bodies destroyed in this round of changes count) to the records that
+		// waited longest for one, in the order they started waiting: they are rebuilt with the next round. Entries of records
+		// that no longer wait are dropped on the way. Returns whether a record was handed a slot. A record handed a slot keeps
+		// its place until it has a body, so one that loses its slot to another build of the round stays first.
+		bool GiveSlotsToWaiters(PhysicsWorldData& data)
+		{
+			if (data.SlotWaiterCount == 0)
+				return false;
+			const uint64_t used = GetUsedBodySlots(data) - data.PendingDestructions.size();
+			if (used >= data.Settings.MaxBodies)
+				return false;
+
+			uint64_t free = data.Settings.MaxBodies - used;
+			while (!data.SlotWaiters.empty() && !IsSlotWaiter(data, data.SlotWaiters.front()))
+				data.SlotWaiters.pop_front();
+
+			bool given = false;
+			for (size_t index = 0; index < data.SlotWaiters.size() && free > 0; index++)
 			{
-				return !data.StructureChanges.IsEmpty() || !data.SubtreeChanges.IsEmpty() || !data.ActivityChanges.IsEmpty() || !data.TransformChanges.IsEmpty() || !data.OwnerRefreshes.IsEmpty();
-			};
+				if (!IsSlotWaiter(data, data.SlotWaiters[index]))
+					continue;
+				data.OwnerRefreshes.Add(data.SlotWaiters[index].first);
+				free--;
+				given = true;
+			}
+			return given;
+		}
 
-			for (uint32_t round = 0; round < c_MaxChangeRounds && hasChanges(); round++)
+		// Applies recorded changes round after round until none are left (a round's changes can record more: colliders move
+		// to other bodies). False if c_MaxChangeRounds rounds did not settle them.
+		bool ApplyChangeRounds(PhysicsWorldData& data)
+		{
+			Scene& scene = *data.OwnerScene;
+			for (uint32_t round = 0; round < c_MaxChangeRounds && HasChanges(data); round++)
 			{
 				// Hierarchy changes may move any physics entity of the subtree to another body.
 				for (entt::entity handle : data.SubtreeChanges.TakeInto(data.ChangeScratch))
@@ -2425,8 +2487,19 @@ namespace Strata
 				for (entt::entity handle : data.OwnerRefreshes.TakeInto(data.ChangeScratch))
 					RefreshOwner(data, handle);
 			}
+			return !HasChanges(data);
+		}
 
-			if (hasChanges())
+		void ApplyChanges(PhysicsWorldData& data)
+		{
+			ST_PROFILE_FUNCTION();
+
+			Scene& scene = *data.OwnerScene;
+			bool settled = ApplyChangeRounds(data);
+			// Slots freed by this call go to the records waiting for one, which get their bodies in the same call.
+			if (settled && GiveSlotsToWaiters(data))
+				settled = ApplyChangeRounds(data);
+			if (!settled)
 			{
 				ST_CORE_ERROR("Physics: scene '{}' did not settle after {} rounds of changes; remaining changes are dropped", scene.GetName(), c_MaxChangeRounds);
 				data.StructureChanges.Clear();
@@ -2742,7 +2815,6 @@ namespace Strata
 						case BuildFailure::DegenerateTransform:
 							retry = scene.GetWorldTransform(entity) != record->LastWorldTransform || (record->WaitsForParent && HasInvertibleParent(scene, entity));
 							break;
-						case BuildFailure::BodyLimit: retry = GetUsedBodySlots(data) < data.Settings.MaxBodies; break;
 						default: break;
 					}
 				}
@@ -4126,7 +4198,7 @@ namespace Strata
 		stats.MaxBodies = data.Settings.MaxBodies;
 		stats.MaxBodyPairs = data.Settings.MaxBodyPairs;
 		stats.MaxContactConstraints = data.Settings.MaxContactConstraints;
-		stats.BodyOverflowCount = data.BodyLimitCount;
+		stats.BodyOverflowCount = data.SlotWaiterCount;
 		stats.ContactOverflowSteps = data.ContactOverflowSteps;
 		stats.Demand = data.Demand;
 		stats.SyncedBodyCount = data.LastSyncedBodies;
