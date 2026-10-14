@@ -82,7 +82,7 @@ TEST_SUITE("Scripting.Module")
 			"DestroyOtherOnContact", "RemoveSelfOnContact", "ContactThrower", "ContactCounter", "AudioAPI", "AudioMisuse", "AudioUnavailable",
 			"GameFlow", "GameFlowMisuse", "HelperChecks", "KeyRepeatProbe", "LateContactProbe", "AssetHolder", "SubSceneStreamer", "StreamingMisuse",
 			"AnimatorAPI", "AnimatorMisuse", "AnimatorUnavailable", "CharacterAPI", "CharacterMisuse", "GamepadProbe", "CursorProbe", "WindowRequests",
-			"SaveRoundTrip", "SaveLoader", "PhysicsLayersAPI"
+			"SaveRoundTrip", "SaveLoader", "PhysicsLayersAPI", "KeyboardWalker"
 		};
 		std::set<std::string> classes;
 		for (const ScriptClassInfo& info : engine.GetClasses())

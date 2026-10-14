@@ -1670,24 +1670,39 @@ and `AudioSystem`, the built-in "Audio" scene system.
 ### Simulated input
 
 - **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person
-  would: `input.key {key, action: tap|press|release, frames, wait}`, `input.mouseButton {button, action, frames, wait}`,
-  `input.mouseMove {position, wait}` (pixels from the game view's top-left corner), `input.scroll {delta, wait}`,
-  `input.gamepadButton {gamepad, button, action, frames, wait}`, `input.gamepadAxis {gamepad, axis, value, frames, wait}`
-  (a value holds until replaced, `null` or, with `frames`, for that many frames; clamped to the axis' range),
-  `input.releaseAll {wait}` and `input.state`. Keys, buttons and gamepad controls are named like the `Key::`/`Mouse::`/
-  `GamepadButton::`/`GamepadAxis::` constants (`InputNames`, ignoring case); a gamepad simulated input used counts as
-  connected until play stops. The commands feed the engine's virtual device (`Input::SimulateKey` and friends): its
-  events apply at the next input frame, are merged with device input (one source pressing a key the other holds is no
-  transition) and reach the game even while the viewport has no focus. Holds belong to commands (`SimulatedInput`, owned
-  by `EditorContext`): a tap ends only its own hold, overlapping holds of a button keep it down until the last ends, a
-  release ends every hold of its button, and `input.releaseAll` ends all of them and drops presses still queued
-  (`Input::ReleaseAllSimulated`). Frames are input frames, and those follow the game's updates: `EditorContext` suspends
-  them (`Input::SetSuspended`) while the game is paused without a pending step, so input given while paused arrives in
-  the next frame `play.step` runs or after resuming, with its transitions, and a tap of N frames lasts N game updates. A
-  command answers once the game has seen its input (a tap: its release; `seen: true`) or, with `wait: false` (the
-  default while paused, where waiting would block a client that has to step the game), at once. Holds outlive the client
-  that made them (no attempt is made to tie them to connections): the status bar lists them in a pill that releases them
-  when clicked (`input.releaseAll`), and starting or stopping play drops them (`Input::ClearSimulated`).
+  would: `input.key {key, action: tap|press|release, steps | seconds, wait}`, `input.mouseButton {button, action, steps |
+  seconds, wait}`, `input.mouseMove {position, wait}` (pixels from the game view's top-left corner), `input.scroll {delta,
+  wait}`, `input.gamepadButton {gamepad, button, action, steps | seconds, wait}`, `input.gamepadAxis {gamepad, axis, value,
+  steps | seconds, wait}` (a value holds until replaced, `null` or for its duration; clamped to the axis' range),
+  `input.releaseAll {wait}` and `input.state` (also every hold with the fixed steps it covers). Keys, buttons and gamepad
+  controls are named like the `Key::`/`Mouse::`/`GamepadButton::`/`GamepadAxis::` constants (`InputNames`, ignoring
+  case); a gamepad simulated input used counts as connected until play stops. The commands feed the engine's virtual
+  device (`Input::SimulateKey` and friends): its events apply at the next input frame, are merged with device input (one
+  source pressing a key the other holds is no transition) and reach the game even while the viewport has no focus. Holds
+  belong to commands (`SimulatedInput`, owned by `EditorContext`): a tap ends only its own hold, overlapping holds of a
+  button keep it down until the last ends, a release ends every hold of its button, and `input.releaseAll` ends all of
+  them and drops presses still queued (`Input::ReleaseAllSimulated`).
+- **Durations count fixed steps**, the game's own time base (`EditorContext::GetFixedStepCount`), never frames: a tap of
+  N `steps` (or `seconds` of game time, rounded up to whole steps of the scene's `FixedTimestep`; `frames` is an accepted
+  older name of `steps`) goes down in the next input frame and is let go after the frame whose update ran its N-th step
+  (`SimulatedHold::FirstStep`/`LastStep`, `SimulatedInput::Update(fixedSteps)`). It covers exactly N steps when frames
+  run at most one step each (always while stepping and in `input.sequence`); in a running game a release lands at the
+  end of the frame in which its last step ran, which with several steps per frame may cover up to
+  `MaxFixedStepsPerFrame - 1` more. `EditorContext` suspends input frames (`Input::SetSuspended`) while the game is
+  paused without a pending step, so input given while paused arrives in the next step `play.step` runs or after resuming,
+  with its transitions. A command answers once the game has seen its input (a tap: its release; `seen: true`) or, with
+  `wait: false` (the default while paused, where waiting would block a client that has to step the game), at once. Holds
+  outlive the client that made them (no attempt is made to tie them to connections): the status bar lists them in a pill
+  that releases them when clicked (`input.releaseAll`), and starting or stopping play drops them (`Input::ClearSimulated`).
+- **`input.sequence {events, steps, observe, keepHeld, wait}`** (`Editor/InputSequence`, owned and driven by
+  `EditorContext` after the game's update every frame) plays a script of input timed in fixed steps: it pauses the game
+  (resumed at the end if it ran) and runs exactly one step per frame, giving each step its events (`key`, `mouseButton`,
+  `gamepadButton` with `action` and a tap's `steps`; `gamepadAxis`; `mouseMove`; `scroll`; `command`: any `input.*`
+  command, run with `wait: false`), so the game ends in the same state whatever the frame rate (`Editor.Input` compares
+  frames of 1, 16.7 and 50 ms bit for bit; CTest `StrataEditor.InputSequence` headless and windowed). `observe` samples
+  component properties, script fields or world transforms every few steps and at the end. Its holds are its own, released
+  at its end unless `keepHeld`; a play stop or a resume fails it with `stepsRun`, and `play.step` and another sequence are
+  refused while it runs.
 
 ### Output paths
 

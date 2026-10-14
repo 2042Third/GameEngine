@@ -960,6 +960,32 @@ namespace Strata
 		UpdateInputSuspension();
 	}
 
+	uint64_t EditorContext::StartInputSequence(Scope<InputSequence> sequence, std::string* outError)
+	{
+		if (IsInputSequenceRunning())
+		{
+			if (outError)
+				*outError = "An input sequence is running: it steps the game until it ends";
+			return 0;
+		}
+		if (HasPendingSteps())
+		{
+			if (outError)
+				*outError = "play.step's steps are still running: wait for them (or resume the game) first";
+			return 0;
+		}
+		m_InputSequence = std::move(sequence);
+		m_InputSequenceId++;
+		if (!m_InputSequence->Start(*this, outError))
+			return 0;
+		return m_InputSequenceId;
+	}
+
+	bool EditorContext::IsInputSequenceRunning() const
+	{
+		return m_InputSequence && !m_InputSequence->IsFinished();
+	}
+
 	uint32_t EditorContext::GetPendingSteps() const
 	{
 		return m_RuntimeScene && m_RuntimeScene->IsPaused() ? m_RuntimeScene->GetStepFrames() : 0;
@@ -1863,7 +1889,10 @@ namespace Strata
 			m_AnimationPreview->Update();
 		// After the game's update and before the next input frame: taps whose frames passed let go, and input frames stop
 		// while the game is paused (a step was used up, or play mode stopped).
-		m_SimulatedInput.Update();
+		// An input sequence counts the step the game ran and gives the next one its events (taps it made end below).
+		if (m_InputSequence)
+			m_InputSequence->Update(*this);
+		m_SimulatedInput.Update(GetFixedStepCount());
 		UpdateInputSuspension();
 		PruneSelection();
 		m_Viewport.UpdatePicking(*this);

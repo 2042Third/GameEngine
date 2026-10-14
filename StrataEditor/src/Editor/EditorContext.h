@@ -7,6 +7,7 @@
 #include "Editor/EditorViewport.h"
 #include "Editor/ExternalEditor.h"
 #include "Editor/GameExport.h"
+#include "Editor/InputSequence.h"
 #include "Editor/PrefabSync.h"
 #include "Editor/ProjectTemplates.h"
 #include "Editor/ProjectThumbnail.h"
@@ -260,6 +261,12 @@ namespace Strata
 		// GetFixedStepCount when the game was last resumed (SetPaused(false) of a paused game), which dropped the pending
 		// steps: how many of them had run.
 		uint64_t GetFixedStepCountAtResume() const { return m_FixedStepsAtResume; }
+		// The input sequence (input.sequence) that steps the game, driven after the game's update every frame; play.step and
+		// other sequences are refused while it runs. Returns its id, or 0 with the reason when it cannot start. The last one
+		// stays readable (FindInputSequence) until the next starts.
+		uint64_t StartInputSequence(Scope<InputSequence> sequence, std::string* outError = nullptr);
+		const InputSequence* FindInputSequence(uint64_t id) const { return id == m_InputSequenceId ? m_InputSequence.get() : nullptr; }
+		bool IsInputSequenceRunning() const;
 		// GetFixedStepCount when play session `session` stopped (Stop, also for a quit or a crash); nullopt while it runs or
 		// when a later session stopped since.
 		std::optional<uint64_t> GetFixedStepCountAtStop(uint64_t session) const
@@ -591,6 +598,8 @@ namespace Strata
 		uint64_t m_PlaySession = 0;
 		uint64_t m_ReplacedFixedSteps = 0; // Fixed steps of the scenes a game switch replaced in this play session
 		uint64_t m_FixedStepsAtResume = 0;
+		Scope<InputSequence> m_InputSequence;
+		uint64_t m_InputSequenceId = 0;
 		uint64_t m_FixedStepsAtStop = 0;
 		uint64_t m_StoppedSession = 0;
 		Ref<Scene> m_RuntimeScene;

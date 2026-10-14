@@ -138,7 +138,7 @@ namespace
 		"asset.setBudget",
 		"camera.focus", "camera.set",
 		"editor.activity.export", "editor.quit", "editor.removeRecentProject",
-		"input.gamepadAxis", "input.gamepadButton", "input.key", "input.mouseButton", "input.mouseMove", "input.releaseAll", "input.scroll",
+		"input.gamepadAxis", "input.gamepadButton", "input.key", "input.mouseButton", "input.mouseMove", "input.releaseAll", "input.scroll", "input.sequence",
 		"play.pause", "play.simulate", "play.start", "play.step", "play.stop",
 		"prefab.select",
 		"project.cancelExport", "project.close", "project.create", "project.export", "project.open", "project.openSample",

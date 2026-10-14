@@ -402,7 +402,8 @@ player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyRelea
 
 ```text
 input.key         {"key": "Left"}                         # tap: down for 1 frame, answers after the game saw the release
-input.key         {"key": "Space", "frames": 30}          # held for half a second
+input.key         {"key": "Space", "steps": 30}           # held for 30 fixed steps (half a second at 60 steps per second)
+input.key         {"key": "W", "seconds": 0.5}            # game time, rounded up to whole fixed steps
 input.key         {"key": "Right", "action": "press"}     # held across commands ... until
 input.key         {"key": "Right", "action": "release"}
 input.mouseMove   {"position": [640, 360]}                # pixels from the game view's top-left corner
@@ -410,7 +411,7 @@ input.mouseButton {"button": "Left"}                      # Left, Right, Middle,
 input.scroll      {"delta": [0, 1]}
 input.gamepadButton {"button": "A"}                       # gamepad 0 unless "gamepad": 0..3; same actions as keys
 input.gamepadAxis {"axis": "LeftY", "value": 1}           # stick up, held until replaced, "value": null or play.stop
-input.gamepadAxis {"axis": "RightTrigger", "value": 1, "frames": 30} # half a second, then back to rest
+input.gamepadAxis {"axis": "RightTrigger", "value": 1, "steps": 30} # 30 fixed steps, then back to rest
 input.state       {}                                      # what simulated input holds; input.releaseAll lets go of it
 ```
 
@@ -421,10 +422,21 @@ commands used is connected for the game until play stops. Each command answers o
 and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
 
 - Input only reaches play mode (not edit or simulate); `play.stop` drops held keys.
-- Frames are game frames. While the game is paused (`play.pause`), input waits for the next frame `play.step` runs (or for
-  `play.pause {"paused": false}`) and arrives with its press: `input.key {"key": "Space"}` then `play.step {"steps": 1}` makes the
-  game see Space pressed in that step, and released in the following one. Commands answer at once while paused
-  (`"seen": false`), because waiting would block you from stepping; pass `"wait": true` to wait anyway.
+- Durations are the game's fixed steps (its physics and `OnFixedUpdate` time base), not frames: a tap of 30 `steps` lasts
+  30 steps whatever the frame rate (`frames` is an older name of `steps`). It is exact while the game is stepped
+  (`play.step`, `input.sequence`); in a running game a frame may run several steps, so a release can land up to
+  `maxFixedStepsPerFrame - 1` steps late. While the game is paused (`play.pause`), input waits for the next step `play.step`
+  runs (or for `play.pause {"paused": false}`) and arrives with its press: `input.key {"key": "Space"}` then
+  `play.step {"steps": 1}` makes the game see Space pressed in that step, and released in the following one. Commands
+  answer at once while paused (`"seen": false`), because waiting would block you from stepping; pass `"wait": true` to wait
+  anyway.
+- **`input.sequence`** plays a whole script of input in game time, exactly, and samples what happened:
+  `{"events": [{"step": 0, "key": "W", "action": "tap", "steps": 60}, {"step": 20, "key": "Space"}], "steps": 90,
+  "observe": [{"entity": "<hero>", "world": true, "every": 10}, {"entity": "<hero>", "script": "Player", "field": "Score"}]}`.
+  It pauses the game, runs one step per frame with each step's events (also `mouseButton`, `gamepadButton`, `gamepadAxis`,
+  `mouseMove`, `scroll`, and `command` for any `input.*` command), and answers `{stepsRun, seen, samples: [{step, values}]}`
+  once done (the same answer at any frame rate), resuming the game if it ran and releasing its holds (`keepHeld` keeps
+  them). Prefer it to loops of `input.key` + `play.step`.
 - Each command ends only its own hold: overlapping taps of a key keep it down until the last ends; `"action": "release"` ends
   every hold of the key and `input.releaseAll` every hold of every button. Holds outlive your connection; the editor's status bar
   lists them in a pill that releases them when a person clicks it.

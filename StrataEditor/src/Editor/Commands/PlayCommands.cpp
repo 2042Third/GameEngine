@@ -194,6 +194,8 @@ namespace Strata
 					return arguments.Fail();
 				if (!context.IsPaused())
 					return EditorCommandResult::Fail("Stepping needs a paused running scene (play.pause)");
+				if (context.IsInputSequenceRunning())
+					return EditorCommandResult::Fail("An input sequence is running: it steps the game until it ends (input.sequence)");
 				// This request's last step runs after the steps already pending.
 				const uint64_t first = context.GetFixedStepCount() + context.GetPendingSteps();
 				const uint64_t target = first + static_cast<uint64_t>(steps);

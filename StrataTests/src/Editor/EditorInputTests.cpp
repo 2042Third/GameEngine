@@ -12,6 +12,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scripting/ScriptSystem.h>
 
+#include <chrono>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -71,11 +72,35 @@ namespace
 			Runner.Run(Context, Commands, name, parameters, [&outResult](const EditorCommandResult& result) { outResult = result; });
 		}
 
-		void Frame()
+		void Frame(float seconds = 1.0f / 60.0f)
 		{
 			Input::BeginFrame();
-			Context.Update(Timestep(1.0f / 60.0f));
+			Context.Update(Timestep(seconds));
 			Runner.Update(Context);
+		}
+
+		// A ground (a static box whose top is y = 0) and "Hero", a character controller at the origin walked by the API
+		// module's KeyboardWalker (W walks toward -Z at 3 m/s, Space jumps). Returns Hero's id.
+		std::string AddWalker()
+		{
+			Run("entity.create", { { "name", "Ground" }, { "components", { { "Transform", { { "Translation", { 0, -0.5, 0 } } } },
+				{ "BoxCollider", { { "HalfExtents", { 20, 0.5, 20 } } } } } } });
+			const std::string hero = Run("entity.create", { { "name", "Hero" }, { "components", { { "CharacterController", nlohmann::json::object() } } } })["id"]
+				.get<std::string>();
+			Run("script.add", { { "entity", hero }, { "class", "KeyboardWalker" } });
+			return hero;
+		}
+
+		// Runs a command through the runner, frames of `seconds` each, until it answers.
+		EditorCommandResult RunToEnd(std::string_view name, const nlohmann::json& parameters, float seconds = 1.0f / 60.0f)
+		{
+			std::optional<EditorCommandResult> result;
+			Start(name, parameters, result);
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+			while (!result && std::chrono::steady_clock::now() < deadline)
+				Frame(seconds);
+			REQUIRE(result);
+			return *result;
 		}
 
 		bool ProbeField(std::string_view field)
@@ -158,7 +183,7 @@ TEST_SUITE("Editor.Input")
 		REQUIRE(result->Success);
 		CHECK(result->Value["key"] == "W");
 		CHECK(result->Value["action"] == "tap");
-		CHECK(result->Value["frames"] == 2);
+		CHECK(result->Value["steps"] == 2); // frames is an older name of steps
 		CHECK(result->Value["held"]["keys"].empty());
 
 		harness.Frame();
@@ -438,5 +463,140 @@ TEST_SUITE("Editor.Input")
 		harness.Frame();
 		CHECK_FALSE(harness.ProbeField("WDown"));
 		CHECK_FALSE(harness.ProbeField("LeftDown"));
+	}
+
+	TEST_CASE("A tap lasts its fixed steps whatever the frame rate")
+	{
+		InputHarness harness;
+		harness.Run("play.start");
+		harness.Frame();
+		// Frames of 1 ms: a fixed step about every 17 frames. The key is down for exactly 30 of them (the base held it for 30
+		// frames: about 2 steps).
+		std::optional<EditorCommandResult> tap;
+		harness.Start("input.key", { { "key", "W" }, { "steps", 30 } }, tap);
+		uint64_t stepsDown = 0;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+		while (!tap && std::chrono::steady_clock::now() < deadline)
+		{
+			const uint64_t before = harness.Context.GetFixedStepCount();
+			harness.Frame(0.001f);
+			if (harness.ProbeField("WDown"))
+				stepsDown += harness.Context.GetFixedStepCount() - before;
+		}
+		REQUIRE(tap);
+		REQUIRE(tap->Success);
+		CHECK(tap->Value["steps"] == 30);
+		CHECK(stepsDown == 30);
+
+		// Seconds of game time round up to whole fixed steps; one duration only.
+		const nlohmann::json timed = harness.Run("input.key", { { "key", "W" }, { "seconds", 0.1 }, { "wait", false } });
+		CHECK(timed["steps"] == 6);
+		CHECK(harness.Fail("input.key", { { "key", "W" }, { "steps", 2 }, { "frames", 2 } }).ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(harness.Fail("input.key", { { "key", "W" }, { "seconds", -1 } }).ErrorKind == EditorCommandError::InvalidParameters);
+		// input.state reports holds with their steps.
+		const nlohmann::json state = harness.Run("input.state");
+		REQUIRE(state["holds"].size() == 1);
+		CHECK(state["holds"][0]["name"] == "W");
+		CHECK(state["holds"][0]["lastStep"].get<uint64_t>() - state["holds"][0]["firstStep"].get<uint64_t>() == 5);
+	}
+
+	TEST_CASE("An input sequence gives the same game whatever the frame rate")
+	{
+		const nlohmann::json sequence = {
+			{ "events", { { { "step", 0 }, { "key", "W" }, { "action", "tap" }, { "steps", 60 } }, { { "step", 20 }, { "key", "Space" } } } },
+			{ "steps", 90 } };
+		std::optional<nlohmann::json> reference;
+		for (const float frameSeconds : { 0.001f, 1.0f / 60.0f, 0.05f })
+		{
+			CAPTURE(frameSeconds);
+			InputHarness harness;
+			const std::string hero = harness.AddWalker();
+			// Started right away, before the game's first update: every run starts from the same state.
+			harness.Run("play.start");
+			nlohmann::json parameters = sequence;
+			parameters["observe"] = { { { "entity", hero }, { "world", true }, { "every", 10 } }, { { "entity", hero }, { "script", "KeyboardWalker" },
+				{ "field", "Jumps" } } };
+			const uint64_t start = harness.Context.GetFixedStepCount();
+			const EditorCommandResult result = harness.RunToEnd("input.sequence", parameters, frameSeconds);
+			REQUIRE_MESSAGE(result.Success, result.Error);
+			CHECK(result.Value["stepsRun"] == 90);
+			CHECK(harness.Context.GetFixedStepCount() == start + 90);
+			CHECK(result.Value["seen"].size() == 2);
+			CHECK(result.Value["interrupted"] == false);
+			const nlohmann::json& samples = result.Value["samples"];
+			REQUIRE(samples.size() == 9); // Steps 10, 20, ..., 90
+			CHECK(samples.back()["step"] == 90);
+			// The final sample has both observations: the jump happened once, and 60 steps at 3 m/s walk 3 m along -Z.
+			REQUIRE(samples.back()["values"].size() == 2);
+			CHECK(samples.back()["values"][1]["value"] == 1);
+			const nlohmann::json& world = samples.back()["values"][0]["value"];
+			CHECK(world["position"][2].get<double>() == doctest::Approx(-3.0).epsilon(1e-4));
+			CHECK(world["position"][0].get<double>() == doctest::Approx(0.0).epsilon(1e-4));
+			if (reference)
+				CHECK(samples == *reference); // Bit for bit
+			else
+				reference = samples;
+			// The game runs again (it ran before), and the sequence's holds are gone.
+			CHECK_FALSE(harness.Context.IsPaused());
+			CHECK(harness.Run("input.state")["holds"].empty());
+			harness.Run("play.stop");
+		}
+	}
+
+	TEST_CASE("An input sequence keeps a paused game paused, refuses events beyond its steps and play.step while it runs")
+	{
+		InputHarness harness;
+		const std::string hero = harness.AddWalker();
+		harness.Run("play.start");
+		harness.Frame();
+		harness.Run("play.pause", { { "paused", true } });
+
+		// Events past the last step, unknown keys and two kinds in one event are refused before anything runs.
+		CHECK(harness.Fail("input.sequence", { { "events", { { { "step", 5 }, { "key", "W" } } } }, { "steps", 5 } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+		CHECK(harness.Fail("input.sequence", { { "events", { { { "step", 0 }, { "key", "Nope" } } } }, { "steps", 5 } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+		CHECK(harness.Fail("input.sequence", { { "events", { { { "step", 0 }, { "key", "W" }, { "scroll", { 0, 1 } } } } }, { "steps", 5 } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+		CHECK(harness.Fail("input.sequence", { { "events", nlohmann::json::array() }, { "steps", 5 }, { "observe", { { { "entity", hero } } } } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+		CHECK_FALSE(harness.Context.IsInputSequenceRunning());
+
+		// A press kept held, and a command event: the sequence's press outlives it with keepHeld.
+		std::optional<EditorCommandResult> sequence;
+		harness.Start("input.sequence", { { "events", {
+			{ { "step", 0 }, { "key", "W" }, { "action", "press" } },
+			{ { "step", 1 }, { "command", "input.mouseMove" }, { "parameters", { { "position", { 10, 20 } } } } } } },
+			{ "steps", 4 }, { "keepHeld", true } }, sequence);
+		CHECK(harness.Context.IsInputSequenceRunning());
+		const EditorCommandResult stepping = harness.Fail("play.step", { { "steps", 1 } });
+		CHECK(stepping.Error.find("input sequence is running") != std::string::npos);
+		CHECK(harness.Fail("input.sequence", { { "events", nlohmann::json::array() }, { "steps", 1 } }).Error.find("input sequence is running")
+			!= std::string::npos);
+		for (int frame = 0; frame < 6 && !sequence; frame++)
+			harness.Frame();
+		REQUIRE(sequence);
+		REQUIRE_MESSAGE(sequence->Success, sequence->Error);
+		CHECK(harness.Context.IsPaused()); // It was paused before
+		CHECK(harness.ProbeVector("MousePosition") == glm::vec2(10.0f, 20.0f));
+		CHECK(harness.Run("input.state")["keys"] == nlohmann::json { "W" });
+
+		// Without keepHeld its holds are released at the end; stopping play fails a running sequence with its steps.
+		harness.Run("input.releaseAll");
+		harness.Start("input.sequence", { { "events", { { { "step", 0 }, { "key", "W" }, { "action", "press" } } } }, { "steps", 3 } }, sequence);
+		for (int frame = 0; frame < 5 && !sequence; frame++)
+			harness.Frame();
+		REQUIRE(sequence);
+		CHECK(sequence->Success);
+		CHECK(harness.Run("input.state")["keys"].empty());
+		harness.Start("input.sequence", { { "events", nlohmann::json::array() }, { "steps", 50 } }, sequence);
+		harness.Frame();
+		harness.Frame();
+		harness.Run("play.stop");
+		for (int frame = 0; frame < 3 && !sequence; frame++)
+			harness.Frame();
+		REQUIRE(sequence);
+		CHECK_FALSE(sequence->Success);
+		CHECK(sequence->ErrorData["stepsRun"] == 2);
 	}
 }

@@ -524,7 +524,8 @@ every step below is a command, and source files are written with your own file t
    text, an entity ID, an asset handle or path. Save the scene (`scene.save`) to keep them.
 6. **Play and observe.** `play.start`, `editor.wait {"frames": 60}`, then read state with `component.get`,
    `entity.find`, `scene.hierarchy`; script `Log::Info(...)` output is in `log.read`. Play it like a person with
-   simulated input: `input.key {"key": "Left"}` (a tap), `{"key": "Space", "frames": 20}` (held), `input.mouseMove`,
+   simulated input: `input.key {"key": "Left"}` (a tap), `{"key": "Space", "steps": 20}` (held for 20 fixed steps: input
+   durations count the game's fixed steps, its `OnFixedUpdate` ticks, not frames; `seconds` gives game time), `input.mouseMove`,
    `input.mouseButton`. While playing, `script.setField` changes the live instance too (and the running copy only:
    `play.stop` discards it).
 7. **Iterate with hot reload.** Edit the sources and `script.build` again while the scene plays: the module is reloaded

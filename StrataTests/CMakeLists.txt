@@ -501,3 +501,30 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/TetrisSample.cmake")
 	set_tests_properties(StrataEditor.Tetris PROPERTIES LABELS "package" TIMEOUT 1800)
 endif()
+
+# input.sequence through the real editor (Editor/InputSequenceCommands.json.in, on a copy of the feature project): the same
+# sequence of input ends with the feature scene's ball at the same place headless (60 frames per second) and in a window
+# (an unthrottled --frames run), as it runs one fixed step per frame whatever the frame rate.
+if(TARGET StrataEditor)
+	set(STRATA_INPUT_SEQUENCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/InputSequenceRun")
+	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/InputSequenceCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/InputSequenceCommands.json.configured" @ONLY)
+	file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/InputSequenceCommands-$<CONFIG>.json" INPUT "${CMAKE_CURRENT_BINARY_DIR}/InputSequenceCommands.json.configured")
+
+	add_test(NAME StrataEditor.InputSequenceClean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${STRATA_INPUT_SEQUENCE_DIR}")
+	set_tests_properties(StrataEditor.InputSequenceClean PROPERTIES FIXTURES_SETUP StrataInputSequenceClean LABELS "feature")
+	add_test(NAME StrataEditor.InputSequenceCopy COMMAND "${CMAKE_COMMAND}" -E copy_directory "${STRATA_FEATURE_TEST_DIR}" "${STRATA_INPUT_SEQUENCE_DIR}/Project")
+	set_tests_properties(StrataEditor.InputSequenceCopy PROPERTIES FIXTURES_REQUIRED StrataInputSequenceClean FIXTURES_SETUP StrataInputSequenceProject
+		LABELS "feature")
+
+	add_test(NAME StrataEditor.InputSequence
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
+			"-DARGUMENTS=--no-gpu|--no-automation|--frames|600|--project|${STRATA_INPUT_SEQUENCE_DIR}/Project/FeatureTest.stproj|--commands|${CMAKE_CURRENT_BINARY_DIR}/InputSequenceCommands-$<CONFIG>.json"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataEditor.InputSequence PROPERTIES FIXTURES_REQUIRED StrataInputSequenceProject LABELS "feature")
+	add_test(NAME StrataEditor.InputSequenceWindowed
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
+			"-DARGUMENTS=--windowed|--no-automation|--frames|600|--project|${STRATA_INPUT_SEQUENCE_DIR}/Project/FeatureTest.stproj|--commands|${CMAKE_CURRENT_BINARY_DIR}/InputSequenceCommands-$<CONFIG>.json"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataEditor.InputSequenceWindowed PROPERTIES FIXTURES_REQUIRED StrataInputSequenceProject DEPENDS StrataEditor.InputSequence
+		LABELS "gpu")
+endif()

@@ -1,0 +1,22 @@
+[
+	{ "command": "scene.open", "parameters": { "scene": "Scenes/Feature.stscene" } },
+	{ "command": "script.load", "parameters": { "path": "$<TARGET_FILE:StrataTestScriptsFeatureTest>" },
+		"expect": { "/classes": { "min": 1 } } },
+	{ "command": "play.start" },
+	{ "command": "input.sequence",
+		"parameters": {
+			"events": [
+				{ "step": 0, "key": "W", "action": "tap", "steps": 30 },
+				{ "step": 40, "key": "Space" },
+				{ "step": 60, "command": "input.mouseMove", "parameters": { "position": [ 100, 50 ] } } ],
+			"steps": 150,
+			"observe": [ { "entity": "F7E0000000000012", "world": true } ] },
+		"expect": {
+			"/stepsRun": { "equals": 150 },
+			"/interrupted": { "equals": false },
+			"/samples/0/step": { "equals": 150 },
+			"/samples/0/values/0/value/position/0": { "min": -4.05, "max": -3.95 },
+			"/samples/0/values/0/value/position/1": { "min": 1.6354, "max": 1.6374 } } },
+	{ "command": "input.state", "expect": { "/holds": { "equals": [] }, "/sequenceRunning": { "equals": false } } },
+	{ "command": "play.stop" }
+]

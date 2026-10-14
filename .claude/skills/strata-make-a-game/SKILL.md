@@ -137,8 +137,8 @@ first run and after files were added or removed; answers with compiler diagnosti
   };
   ```
 
-  Register the fields with `ST_SCRIPT_FIELD`. Test it with `input.key {"key": "W", "frames": 60}` (or `input.gamepadAxis
-  {"axis": "LeftY", "value": 1, "frames": 60}`) and read the player's `Translation` with `component.get`: it walks on the
+  Register the fields with `ST_SCRIPT_FIELD`. Test it with `input.key {"key": "W", "steps": 60}` (or `input.gamepadAxis
+  {"axis": "LeftY", "value": 1, "steps": 60}`) and read the player's `Translation` with `component.get`: it walks on the
   template's ground and stops at walls. In the editor the cursor stays locked only while the game view has the focus
   (Shift+F1 frees it); `input.mouseMove` moves the simulated pointer, so mouse look works from commands too.
 - Hot reload replaces the instance: non-field members are gone in `OnReload`; find your entities again (e.g. children of
@@ -186,7 +186,7 @@ the scene has unsaved changes (pass `"force": true` only to throw away edits you
 ```text
 play.start
 input.key {"key": "Left"}                 # tap: answers after the game saw the release; issue taps one after another
-input.key {"key": "Down", "frames": 20}   # held for 20 frames (KeyRepeat repeats)
+input.key {"key": "Down", "steps": 20}    # held for 20 fixed steps (KeyRepeat repeats)
 component.get {"entity": "<HUD id>", "component": "Text"}      # -> {"values": {"Text": "Score: 209", ...}}
 log.read {"minLevel": "Info"}             # the script's Log::Info lines
 viewport.capture {"camera": "scene", "width": 1280, "height": 720}   # CLI: --save-image shot.png, then look at it
@@ -259,7 +259,7 @@ scripts read the start scene's progress with `Game::GetSceneLoadProgress()` for 
 | Symptom | Cause and fix |
 | --- | --- |
 | `input.key` fails "start it with play.start" | Input only reaches play mode (not edit or `play.simulate`). |
-| A tap does nothing | The game is paused: the tap waits for the next `play.step` (or resuming). Or the game reacts to keys held over time: hold longer with `frames` or press/release. |
+| A tap does nothing | The game is paused: the tap waits for the next `play.step` (or resuming). Or the game reacts to keys held over time: hold longer with `steps` (fixed steps of the game) or press/release. |
 | HUD text cut off at the left edge | `Text` alignment defaults to `Center`; set `Alignment: Left`. |
 | Everything looks washed out or gray | Automatic exposure; add `PostProcess` with `AutoExposure: false`. |
 | Lit in captures, dark in the game | The capture used preview lighting (`"previewLighting": true`): add a `DirectionalLight` and a `SkyLight`. |

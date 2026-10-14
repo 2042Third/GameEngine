@@ -363,7 +363,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Commands never block a frame: one that waits returns `EditorCommandResult::Defer(poll)`, whose poll owns its data and
   allocates nothing per frame.
 - Tools count game time in fixed steps (`Scene::GetFixedStepCount`), never in frames: `play.step` answers once its steps
-  ran, and resuming drops steps not run ([Stepping a paused game](Docs/DeveloperGuide.md#stepping-a-paused-game)).
+  ran, resuming drops steps not run, and input durations (`input.*`, `input.sequence`) are fixed steps
+  ([Stepping a paused game](Docs/DeveloperGuide.md#stepping-a-paused-game)).
 - UI code takes colors only from theme tokens, sizes relative to the font (no fixed pixels above 16), panels through
   `EditorPanelRegistry` (never `ImGui::Begin`), the editor's fonts and the widget kit (`UI/Widgets.h`);
   `Editor.UI.Source` enforces the first three ([Editor UI rules](Docs/DeveloperGuide.md#editor-ui-rules)). Selection
