@@ -153,6 +153,8 @@ namespace Strata
 		// An optional entity reference: absent or null gives an invalid entity; an unknown UUID is an error.
 		Entity FindEntity(Scene& scene, std::string_view name);
 		std::vector<Entity> GetEntities(Scene& scene, std::string_view name); // Array of UUIDs, at least one
+		// An optional array of strings (absent or null: empty).
+		std::vector<std::string> GetStringArray(std::string_view name);
 	private:
 		const nlohmann::json* Get(std::string_view name);
 		void TypeError(std::string_view name, std::string_view expected);

@@ -143,6 +143,10 @@ TEST_SUITE("Editor.Notifications")
 		CHECK(toast.Message.rfind(metadata->Path + ": ", 0) == 0);
 		// Named once, although the importer's error names the file too.
 		CHECK(toast.Message.find(metadata->Path, 1) == std::string::npos);
+		// editor.status counts them until the project closes.
+		const EditorCommandResult status = commands.Execute(context, "editor.status");
+		REQUIRE(status.Success);
+		CHECK(status.Value["errors"]["importFailures"] == 2);
 		CHECK(context.GetAssetManager()->GetImportInfo(toast.Asset).Error.rfind(metadata->Path + ": ", 0) == 0);
 
 		// A re-import asked for by a command reports its failure to the command (and, from the UI, through its toast).
@@ -151,6 +155,10 @@ TEST_SUITE("Editor.Notifications")
 		CHECK_FALSE(reimport.Success);
 		context.Update(Timestep(1.0f / 60.0f));
 		CHECK(notifications.IsEmpty());
+		// The command was told, so the failure is not counted as one nobody heard of.
+		CHECK(commands.Execute(context, "editor.status").Value["errors"]["importFailures"] == 2);
+		REQUIRE(commands.Execute(context, "project.close").Success);
+		CHECK(commands.Execute(context, "editor.status").Value["errors"]["importFailures"] == 0);
 	}
 
 	TEST_CASE("Assets an agent or a command script moves to the trash are announced with who did it; the person's own deletes are not")

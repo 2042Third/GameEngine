@@ -221,7 +221,7 @@ namespace Strata
 		// Project
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "project.info", "The open project: name, directories and start scene (null fields without a project).", ObjectSchema({}),
+		registry.Register({ "project.info", "The open project: name, path (the project file), directories, start scene and export settings ({open: false} without a project).", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeProject(context));

@@ -40,6 +40,8 @@ namespace Strata::CLI
 		std::optional<std::string> SaveImage; // call: where to write an image result
 		// launch/mcp: launched editors close themselves after this many seconds without a client (0: never)
 		std::optional<int64_t> IdleTimeoutSeconds;
+		// mcp: the toolsets whose commands are listed as tools ("core" by default; "all")
+		std::optional<std::vector<std::string>> Toolsets;
 		bool Headless = false;
 		bool NoGpu = false;
 		bool Json = false;

@@ -211,7 +211,7 @@ TEST_SUITE("Editor.Recovery")
 		CHECK(header["ScenePath"] == "Scenes/Main.stscene");
 		CHECK(header["Discarded"] == false);
 		CHECK(header["BaseHash"].is_string());
-		CHECK(harness.Run("editor.status")["recovery"]["journal"]["writes"] == 1);
+		CHECK(harness.Run("editor.status", { { "sections", { "recovery" } } })["recovery"]["journal"]["writes"] == 1);
 
 		// Undoing back to the saved scene leaves nothing to recover.
 		harness.Run("edit.undo");
@@ -266,7 +266,7 @@ TEST_SUITE("Editor.Recovery")
 		const std::vector<std::filesystem::path> files = ListRecoveryFiles(harness.GetRecoveryDirectory());
 		REQUIRE(files.size() == 1);
 		CHECK(ReadRecoveryHeader(files[0])["Entities"].get<uint64_t>() >= 1);
-		CHECK(harness.Run("editor.status")["recovery"]["journal"]["writes"] == 1);
+		CHECK(harness.Run("editor.status", { { "sections", { "recovery" } } })["recovery"]["journal"]["writes"] == 1);
 	}
 
 	TEST_CASE("A journal of an editor that is gone is offered, also when its process id is this process's")
@@ -336,7 +336,7 @@ TEST_SUITE("Editor.Recovery")
 		CHECK(entry["sceneName"] == "Main");
 		CHECK(entry["discarded"] == true);
 		CHECK(entry["applicable"] == true);
-		CHECK(harness.Run("editor.status")["recovery"]["applicable"] == 1);
+		CHECK(harness.Run("editor.status", { { "sections", { "recovery" } } })["recovery"]["applicable"] == 1);
 
 		CHECK(harness.Snapshot() == saved);
 		const nlohmann::json recovered = harness.Run("scene.recover", { { "scene", "Scenes/Main.stscene" }, { "action", "apply" } });

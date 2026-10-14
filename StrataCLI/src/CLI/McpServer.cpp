@@ -1,6 +1,7 @@
 #include "CLI/McpServer.h"
 
 #include "CLI/EditorLauncher.h"
+#include "CLI/McpToolsets.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
@@ -23,6 +24,8 @@ namespace Strata::CLI
 		constexpr const char* c_LaunchEditorTool = "strata_launch_editor";
 		constexpr const char* c_ListMethodsTool = "strata_list_methods";
 		constexpr const char* c_CallTool = "strata_call";
+		constexpr const char* c_DescribeTool = "strata_describe";
+		constexpr const char* c_ToolsetsTool = "strata_toolsets";
 		constexpr const char* c_ListMethodsMethod = "rpc.listMethods";
 		constexpr std::string_view c_ReservedMethodPrefix = "rpc.";
 		constexpr std::chrono::milliseconds c_ListMethodsTimeout = std::chrono::milliseconds(10000);
@@ -31,12 +34,14 @@ namespace Strata::CLI
 		constexpr const char* c_Instructions =
 			"Controls the Strata game engine editor. Call strata_status to check whether an editor is connected; "
 			"if none is, call strata_launch_editor (with a project directory to open one, or without to create one with "
-			"project_create). While an editor is connected, each of its commands is available as a tool (command name with "
-			"'.' replaced by '_', e.g. entity_create), and strata_call invokes any method by name. editor_status gives an "
-			"overview of the editor, editor_commands lists every command with its parameters, and component_list the "
-			"component types. Entities and assets are referenced by 16-digit hexadecimal IDs (assets also by path). "
-			"Commands that take frames (editor_wait, captures) answer when they finish. Changes made while playing are "
-			"discarded by play_stop. Save with scene_save or scene_saveAs before editor_quit.";
+			"project_create). While an editor is connected, the commands of the enabled toolsets are tools (command name with "
+			"'.' replaced by '_', e.g. entity_create): the core toolset (project, scene, entities, components, prefabs, assets, "
+			"scripts, play, play_step, input_sequence, captures) by default. strata_describe lists the toolsets (scene, assets, "
+			"play, scripts, animation, viewport, streaming, perf, editor, ui, world), a toolset's commands, or one command's full "
+			"description and parameters; strata_toolsets enables more toolsets as tools; strata_call runs any command by name. "
+			"editor_status gives an overview of the editor. Entities and assets are referenced by 16-digit hexadecimal IDs (assets "
+			"also by path). Commands that take frames (play_step, input_sequence, captures) answer when they finish. Changes made "
+			"while playing are discarded by play_stop. Save with scene_save or scene_saveAs before editor_quit.";
 
 		std::string PrettyPrint(const nlohmann::json& value)
 		{
@@ -76,9 +81,23 @@ namespace Strata::CLI
 				"available as tools. The editor keeps running until editor_quit.",
 				std::move(launchSchema)));
 
-			tools.push_back(MakeTool(c_ListMethodsTool,
-				"Lists every method of the connected editor with its description and JSON Schema of its parameters.",
-				MakeEmptyObjectSchema()));
+			nlohmann::json describeSchema = MakeEmptyObjectSchema();
+			describeSchema["properties"]["command"] = nlohmann::json { { "type", "string" }, { "description", "A command, e.g. entity.get: its full description and parameters" } };
+			describeSchema["properties"]["toolset"] = nlohmann::json { { "type", "string" }, { "description", "A toolset, e.g. scene: its commands, one line each" } };
+			tools.push_back(MakeTool(c_DescribeTool,
+				"Describes the editor's commands: without arguments the toolsets (and which are enabled as tools), with toolset its commands, with "
+				"command its full description and JSON Schema. Any command runs through strata_call, enabled or not.",
+				std::move(describeSchema)));
+
+			nlohmann::json toolsetsSchema = MakeEmptyObjectSchema();
+			toolsetsSchema["properties"]["enable"] = nlohmann::json { { "type", "array" }, { "items", { { "type", "string" } } },
+				{ "description", "Toolsets to list as tools too (\"all\": every command)" } };
+			toolsetsSchema["properties"]["disable"] = nlohmann::json { { "type", "array" }, { "items", { { "type", "string" } } },
+				{ "description", "Toolsets to list no longer" } };
+			tools.push_back(MakeTool(c_ToolsetsTool,
+				"Enables or disables toolsets, the groups of editor commands listed as tools (core by default); the tool list changes at once. "
+				"Returns the enabled toolsets and the number of editor tools.",
+				std::move(toolsetsSchema)));
 
 			nlohmann::json callSchema = MakeEmptyObjectSchema();
 			callSchema["properties"]["method"] = nlohmann::json { { "type", "string" }, { "description", "Editor method name, e.g. entity.create" } };
@@ -92,7 +111,8 @@ namespace Strata::CLI
 
 		bool IsGenericTool(std::string_view name)
 		{
-			return name == c_StatusTool || name == c_LaunchEditorTool || name == c_ListMethodsTool || name == c_CallTool;
+			return name == c_StatusTool || name == c_LaunchEditorTool || name == c_ListMethodsTool || name == c_CallTool || name == c_DescribeTool
+				|| name == c_ToolsetsTool;
 		}
 
 		std::vector<RpcMethodInfo> ParseMethodList(const nlohmann::json& result)
@@ -245,6 +265,40 @@ namespace Strata::CLI
 	McpServer::McpServer(McpServerSpecification specification, OutputFunction output)
 		: m_Specification(std::move(specification)), m_Output(std::move(output)), m_Connection(m_Specification.Connection)
 	{
+		for (const std::string& toolset : m_Specification.Toolsets)
+		{
+			if (toolset == McpToolsets::c_All)
+				m_AllToolsets = true;
+			else
+				m_Toolsets.insert(toolset);
+		}
+	}
+
+	bool McpServer::IsToolsetEnabled(std::string_view method) const
+	{
+		if (m_AllToolsets)
+			return true;
+		for (const std::string& toolset : McpToolsets::GetToolsets(method))
+		{
+			if (m_Toolsets.contains(toolset))
+				return true;
+		}
+		return false;
+	}
+
+	size_t McpServer::CountEditorTools() const
+	{
+		return static_cast<size_t>(std::count_if(m_EditorMethods.begin(), m_EditorMethods.end(), [this](const RpcMethodInfo& method)
+		{
+			return IsToolsetEnabled(method.Name);
+		}));
+	}
+
+	std::vector<std::string> McpServer::GetEnabledToolsets() const
+	{
+		if (m_AllToolsets)
+			return { std::string(McpToolsets::c_All) };
+		return { m_Toolsets.begin(), m_Toolsets.end() };
 	}
 
 	void McpServer::HandleLine(std::string_view line)
@@ -403,6 +457,10 @@ namespace Strata::CLI
 			return CallListMethodsTool();
 		if (name == c_CallTool)
 			return CallGenericCallTool(arguments);
+		if (name == c_DescribeTool)
+			return CallDescribeTool(arguments);
+		if (name == c_ToolsetsTool)
+			return CallToolsetsTool(arguments);
 
 		auto method = m_ToolToMethod.find(name);
 		if (method == m_ToolToMethod.end() || !m_Connection.IsConnected())
@@ -428,7 +486,9 @@ namespace Strata::CLI
 		RefreshEditorState();
 
 		nlohmann::json status = m_Connection.DescribeStatus();
-		status["editorTools"] = m_ToolToMethod.size();
+		status["editorTools"] = CountEditorTools();
+		status["editorCommands"] = m_EditorMethods.size();
+		status["toolsets"] = GetEnabledToolsets();
 		nlohmann::json sessions = nlohmann::json::array();
 		if (const std::optional<std::filesystem::path> sessionDirectory = m_Connection.GetSessionDirectory())
 		{
@@ -470,7 +530,7 @@ namespace Strata::CLI
 				{ "launched", false },
 				{ "message", message },
 				{ "session", DescribeSession(session) },
-				{ "editorTools", m_ToolToMethod.size() } }));
+				{ "editorTools", CountEditorTools() } }));
 		};
 
 		if (!projectDirectory.empty())
@@ -522,7 +582,126 @@ namespace Strata::CLI
 		return MakeToolResult(RpcResult::Success(nlohmann::json {
 			{ "launched", true },
 			{ "session", DescribeSession(launched.Session) },
-			{ "editorTools", m_ToolToMethod.size() } }));
+			{ "editorTools", CountEditorTools() } }));
+	}
+
+	nlohmann::json McpServer::CallDescribeTool(const nlohmann::json& arguments)
+	{
+		std::string error;
+		std::optional<std::string> command;
+		std::optional<std::string> toolset;
+		if (!GetStringArgument(arguments, "command", command, error) || !GetStringArgument(arguments, "toolset", toolset, error))
+			return MakeToolError(error);
+		if (command && toolset)
+			return MakeToolError("Give either 'command' or 'toolset', not both");
+		RefreshEditorState();
+		if (!m_Connection.IsConnected())
+			return MakeToolError(fmt::format("No Strata editor is connected ({}). Use strata_launch_editor to start one.", m_Connection.GetLastError()));
+
+		if (command)
+		{
+			const auto method = std::find_if(m_EditorMethods.begin(), m_EditorMethods.end(), [&command](const RpcMethodInfo& info)
+			{
+				return info.Name == *command || MakeToolName(info.Name) == *command;
+			});
+			if (method == m_EditorMethods.end())
+				return MakeToolError(fmt::format("The editor has no command '{}' (strata_describe without arguments lists the toolsets)", *command));
+			return MakeToolResult(RpcResult::Success(nlohmann::json {
+				{ "command", method->Name },
+				{ "tool", MakeToolName(method->Name) },
+				{ "toolsets", McpToolsets::GetToolsets(method->Name) },
+				{ "enabled", IsToolsetEnabled(method->Name) },
+				{ "description", method->Description },
+				{ "paramsSchema", method->ParamsSchema } }));
+		}
+
+		// The toolsets: the table's, and those of groups the table does not know, with their commands.
+		std::map<std::string, std::vector<const RpcMethodInfo*>> commandsByToolset;
+		for (const RpcMethodInfo& method : m_EditorMethods)
+		{
+			for (const std::string& name : McpToolsets::GetToolsets(method.Name))
+				commandsByToolset[name].push_back(&method);
+		}
+		auto describeOf = [](std::string_view name) -> std::string
+		{
+			for (const McpToolsets::ToolsetInfo& info : McpToolsets::GetKnownToolsets())
+			{
+				if (info.Name == name)
+					return std::string(info.Description);
+			}
+			return fmt::format("The {}.* commands", name);
+		};
+		auto enabled = [this](const std::string& name) { return m_AllToolsets || m_Toolsets.contains(name); };
+		if (toolset)
+		{
+			const auto found = commandsByToolset.find(*toolset);
+			if (found == commandsByToolset.end())
+				return MakeToolError(fmt::format("No toolset '{}' (strata_describe without arguments lists them)", *toolset));
+			nlohmann::json commands = nlohmann::json::array();
+			for (const RpcMethodInfo* method : found->second)
+				commands.push_back({ { "command", method->Name }, { "summary", McpToolsets::FirstSentence(method->Description, 160) } });
+			return MakeToolResult(RpcResult::Success(nlohmann::json {
+				{ "toolset", *toolset }, { "description", describeOf(*toolset) }, { "enabled", enabled(*toolset) }, { "commands", std::move(commands) } }));
+		}
+		nlohmann::json toolsets = nlohmann::json::array();
+		for (const auto& [name, commands] : commandsByToolset)
+		{
+			toolsets.push_back({ { "toolset", name }, { "description", describeOf(name) }, { "enabled", enabled(name) },
+				{ "commands", commands.size() } });
+		}
+		return MakeToolResult(RpcResult::Success(nlohmann::json { { "toolsets", std::move(toolsets) }, { "enabled", GetEnabledToolsets() } }));
+	}
+
+	nlohmann::json McpServer::CallToolsetsTool(const nlohmann::json& arguments)
+	{
+		auto readList = [&arguments](const char* name, std::vector<std::string>& outList, std::string& outError)
+		{
+			const auto it = arguments.find(name);
+			if (it == arguments.end() || it->is_null())
+				return true;
+			if (!it->is_array())
+			{
+				outError = fmt::format("Argument '{}' must be an array of toolset names", name);
+				return false;
+			}
+			for (const nlohmann::json& entry : *it)
+			{
+				if (!entry.is_string() || entry.get_ref<const std::string&>().empty())
+				{
+					outError = fmt::format("Argument '{}' must be an array of toolset names", name);
+					return false;
+				}
+				outList.push_back(entry.get<std::string>());
+			}
+			return true;
+		};
+		std::string error;
+		std::vector<std::string> enable;
+		std::vector<std::string> disable;
+		if (!readList("enable", enable, error) || !readList("disable", disable, error))
+			return MakeToolError(error);
+		for (const std::string& name : disable)
+		{
+			if (name == McpToolsets::c_All)
+			{
+				m_AllToolsets = false;
+				m_Toolsets.clear();
+			}
+			else
+			{
+				m_Toolsets.erase(name);
+			}
+		}
+		for (const std::string& name : enable)
+		{
+			if (name == McpToolsets::c_All)
+				m_AllToolsets = true;
+			else
+				m_Toolsets.insert(name);
+		}
+		RefreshEditorState();
+		// The changed list is announced after this answer (HandleLine: AnnounceToolChanges).
+		return MakeToolResult(RpcResult::Success(nlohmann::json { { "enabled", GetEnabledToolsets() }, { "editorTools", CountEditorTools() } }));
 	}
 
 	nlohmann::json McpServer::CallListMethodsTool()
@@ -588,8 +767,10 @@ namespace Strata::CLI
 		nlohmann::json tools = nlohmann::json::array();
 		for (const RpcMethodInfo& method : m_EditorMethods)
 		{
+			if (!IsToolsetEnabled(method.Name))
+				continue;
 			const std::string description = method.Description.empty() ? fmt::format("Calls the editor method '{}'.", method.Name) : method.Description;
-			tools.push_back(MakeTool(MakeToolName(method.Name), description, MakeToolInputSchema(method.ParamsSchema)));
+			tools.push_back(McpToolsets::MakeCompactToolDefinition(MakeToolName(method.Name), description, MakeToolInputSchema(method.ParamsSchema)));
 		}
 		return tools;
 	}

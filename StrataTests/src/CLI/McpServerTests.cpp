@@ -4,6 +4,8 @@
 
 #include "CLI/FakeEditor.h"
 #include "CLI/McpServer.h"
+#include "CLI/McpToolsets.h"
+#include "Editor/EditorCommands.h"
 #include "Strata/Core/Version.h"
 #include "Strata/Network/EditorSession.h"
 #include "Strata/Network/JsonRpc.h"
@@ -11,6 +13,7 @@
 #include "TestHelpers.h"
 
 #include <algorithm>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -110,7 +113,10 @@ namespace
 		int64_t m_NextId = 1;
 	};
 
-	const std::vector<std::string> c_GenericTools = { "strata_status", "strata_launch_editor", "strata_list_methods", "strata_call" };
+	const std::vector<std::string> c_GenericTools = { "strata_status", "strata_launch_editor", "strata_describe", "strata_toolsets", "strata_call" };
+	// The fake editor's methods in the core toolset (entity.create, viewport.capture); scene.fail, math.add and list.sum
+	// are in others.
+	constexpr size_t c_FakeCoreTools = 2;
 
 	std::string GetText(const nlohmann::json& toolResult, size_t index = 0)
 	{
@@ -223,6 +229,12 @@ TEST_SUITE("CLI.Mcp")
 		nlohmann::json call = client.CallTool("strata_call", nlohmann::json { { "method", "entity.create" } });
 		CHECK(call["isError"] == true);
 		CHECK(client.CallTool("strata_list_methods")["isError"] == true);
+		CHECK(GetText(client.CallTool("strata_describe")).find("No Strata editor is connected") != std::string::npos);
+		// Toolsets can be chosen before an editor connects.
+		const nlohmann::json toolsets = client.CallTool("strata_toolsets", nlohmann::json { { "enable", { "scene" } } });
+		CHECK(toolsets["isError"] == false);
+		CHECK(toolsets["structuredContent"]["enabled"] == nlohmann::json::array({ "core", "scene" }));
+		CHECK(toolsets["structuredContent"]["editorTools"] == 0);
 	}
 
 	TEST_CASE("Editor methods are exposed as tools")
@@ -244,11 +256,12 @@ TEST_SUITE("CLI.Mcp")
 
 		for (const std::string& generic : c_GenericTools)
 			CHECK(std::find(names.begin(), names.end(), generic) != names.end());
-		for (const char* expected : { "entity_create", "scene_fail", "viewport_capture", "math_add", "list_sum" })
+		// The core toolset by default.
+		for (const char* expected : { "entity_create", "viewport_capture" })
 			CHECK(std::find(names.begin(), names.end(), expected) != names.end());
 		for (const std::string& name : names)
 			CHECK(name.rfind("rpc_", 0) == std::string::npos);
-		CHECK(names.size() == c_GenericTools.size() + 5);
+		CHECK(names.size() == c_GenericTools.size() + c_FakeCoreTools);
 
 		const auto create = std::find_if(tools.begin(), tools.end(), [](const nlohmann::json& tool) { return tool.value("name", "") == "entity_create"; });
 		REQUIRE(create != tools.end());
@@ -258,6 +271,19 @@ TEST_SUITE("CLI.Mcp")
 
 		// Joining after the initial listing, the client was never told about a change.
 		CHECK(client.CountNotifications("notifications/tools/list_changed") == 0);
+
+		// Every method once every toolset is enabled; the change is announced.
+		const nlohmann::json enabled = client.CallTool("strata_toolsets", nlohmann::json { { "enable", { "all" } } });
+		CHECK(enabled["structuredContent"]["editorTools"] == 5);
+		CHECK(client.CountNotifications("notifications/tools/list_changed") == 1);
+		names = client.ListToolNames();
+		for (const char* expected : { "entity_create", "scene_fail", "viewport_capture", "math_add", "list_sum" })
+			CHECK(std::find(names.begin(), names.end(), expected) != names.end());
+		CHECK(names.size() == c_GenericTools.size() + 5);
+		client.CallTool("strata_toolsets", nlohmann::json { { "disable", { "all" } }, { "enable", { "math" } } });
+		CHECK(client.ListToolNames().size() == c_GenericTools.size() + 1);
+		CHECK(client.CountNotifications("notifications/tools/list_changed") == 2);
+		CHECK(client.CallTool("strata_toolsets", nlohmann::json { { "enable", "scene" } })["isError"] == true);
 	}
 
 	TEST_CASE("Tool calls are routed to the editor and results are mapped")
@@ -333,7 +359,12 @@ TEST_SUITE("CLI.Mcp")
 			CHECK(status["structuredContent"]["connected"] == true);
 			CHECK(status["structuredContent"]["endpoint"]["port"] == editor.GetPort());
 			CHECK(status["structuredContent"]["endpoint"]["source"] == "explicit");
-			CHECK(status["structuredContent"]["editorTools"] == 5);
+			CHECK(status["structuredContent"]["editorTools"] == c_FakeCoreTools);
+			CHECK(status["structuredContent"]["editorCommands"] == 5);
+			CHECK(status["structuredContent"]["toolsets"] == nlohmann::json::array({ "core" }));
+
+			// Methods outside the enabled toolsets are still called by their tool names and through strata_call.
+			CHECK(client.CallTool("strata_call", nlohmann::json { { "method", "math.add" }, { "params", { { "a", 1 }, { "b", 2 } } } })["isError"] == false);
 		}
 
 		SUBCASE("Tool name and argument errors are isError results")
@@ -369,7 +400,7 @@ TEST_SUITE("CLI.Mcp")
 
 		client.GetServer().Tick();
 		CHECK(client.CountNotifications("notifications/tools/list_changed") == 1);
-		CHECK(client.ListToolNames().size() == c_GenericTools.size() + 5);
+		CHECK(client.ListToolNames().size() == c_GenericTools.size() + c_FakeCoreTools);
 
 		client.GetServer().Tick();
 		CHECK(client.CountNotifications("notifications/tools/list_changed") == 1); // Unchanged: no repeat
@@ -442,6 +473,8 @@ TEST_SUITE("CLI.Mcp")
 		McpServerSpecification specification = MakeSpecification(sessionDirectory);
 		specification.EditorPath = FileSystem::ToUTF8(Tests::GetTestExecutablePath());
 		specification.LaunchTimeout = std::chrono::milliseconds(20000);
+		// The fake editor's methods (editor.info, editor.quit) are in the editor toolset.
+		specification.Toolsets = { "core", "editor" };
 		McpTestClient client(specification);
 		client.Initialize();
 		CHECK(client.ListToolNames() == c_GenericTools);
@@ -542,7 +575,7 @@ TEST_SUITE("CLI.Mcp")
 		auto firstEditor = CreateScope<Tests::PumpedRpcServer>();
 		REQUIRE(Tests::StartFakeEditor(*firstEditor));
 		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(firstOwner->GetProcessId(), firstEditor->GetPort(), "2026-01-01T00:00:00Z", FileSystem::ToUTF8(firstProject))));
-		CHECK(client.ListToolNames().size() == c_GenericTools.size() + 5);
+		CHECK(client.ListToolNames().size() == c_GenericTools.size() + c_FakeCoreTools);
 
 		// The first editor exits; an editor for another project is running.
 		firstEditor.reset();
@@ -605,6 +638,147 @@ TEST_SUITE("CLI.Mcp")
 		nlohmann::json malformedImage = MakeToolResult(RpcResult::Success(nlohmann::json { { "Image", { { "Data", 5 } } } }));
 		CHECK(malformedImage["content"].size() == 1);
 		CHECK(malformedImage["structuredContent"].contains("Image"));
+	}
+}
+
+TEST_SUITE("CLI.McpToolsets")
+{
+	TEST_CASE("Commands map to toolsets by exact name, then by group")
+	{
+		CHECK(McpToolsets::GetCoreCommands().size() == 26);
+		CHECK(McpToolsets::IsCore("entity.create"));
+		CHECK_FALSE(McpToolsets::IsCore("entity.rename"));
+		CHECK(McpToolsets::GetToolsets("entity.create") == std::vector<std::string> { "core", "scene" });
+		CHECK(McpToolsets::GetToolsets("entity.rename") == std::vector<std::string> { "scene" });
+		CHECK(McpToolsets::GetToolsets("asset.stats") == std::vector<std::string> { "streaming" });
+		CHECK(McpToolsets::GetToolsets("asset.info") == std::vector<std::string> { "core", "assets" });
+		CHECK(McpToolsets::GetToolsets("editor.perf") == std::vector<std::string> { "perf" });
+		CHECK(McpToolsets::GetToolsets("editor.status") == std::vector<std::string> { "core", "editor" });
+		CHECK(McpToolsets::GetToolsets("input.click") == std::vector<std::string> { "play" });
+		CHECK(McpToolsets::GetToolsets("physics.stats") == std::vector<std::string> { "world" });
+		// Groups the table does not know get a toolset named after them.
+		CHECK(McpToolsets::GetToolsets("weather.set") == std::vector<std::string> { "weather" });
+		CHECK(McpToolsets::GetToolsets("nodot") == std::vector<std::string> { "nodot" });
+	}
+
+	TEST_CASE("Compact definitions keep the first sentence and the schema's structure")
+	{
+		bool cut = false;
+		CHECK(McpToolsets::FirstSentence("Creates an entity. Returns its ID.", 160, &cut) == "Creates an entity.");
+		CHECK(cut);
+		CHECK(McpToolsets::FirstSentence("Lists assets, e.g. textures. More.", 160, &cut) == "Lists assets, e.g. textures.");
+		CHECK(McpToolsets::FirstSentence("One sentence only", 160, &cut) == "One sentence only");
+		CHECK_FALSE(cut);
+		CHECK(McpToolsets::FirstSentence("A rather long sentence", 12, &cut) == "A rather\xE2\x80\xA6");
+		CHECK(cut);
+		CHECK(McpToolsets::FirstSentence("Unbroken", 4, &cut) == "Unb\xE2\x80\xA6");
+		// Never inside a UTF-8 sequence.
+		CHECK(McpToolsets::FirstSentence("\xC3\xA9\xC3\xA9\xC3\xA9", 4, &cut) == "\xC3\xA9\xE2\x80\xA6");
+		CHECK(McpToolsets::FirstSentence("Anything", 0, &cut).empty());
+
+		const std::string longDescription = "Moves the entities of the selection by the given offset in world space, keeping their children where they are "
+			"relative to them and recording one undo step. Also more.";
+		const nlohmann::json schema = {
+			{ "type", "object" },
+			{ "properties", {
+				{ "mode", { { "type", "string" }, { "enum", { "a", "b" } }, { "description", "How to move. The rest is detail." } } },
+				{ "box", { { "type", "object" }, { "properties", { { "min", { { "type", "array" }, { "description", "Lower corner. Detail." } } } } } } },
+				{ "names", { { "type", "array" }, { "items", { { "type", "string" }, { "description", "A name. Detail." } } } } } } },
+			{ "required", { "mode" } } };
+		const nlohmann::json tool = McpToolsets::MakeCompactToolDefinition("entity_move", longDescription, schema);
+		CHECK(tool["name"] == "entity_move");
+		const std::string description = tool["description"].get<std::string>();
+		CHECK(description.ends_with(" (details: strata_describe)"));
+		CHECK(description.size() <= 160 + 2 + std::string_view(" (details: strata_describe)").size());
+		CHECK(tool["inputSchema"]["required"] == nlohmann::json::array({ "mode" }));
+		CHECK(tool["inputSchema"]["properties"]["mode"]["enum"] == nlohmann::json::array({ "a", "b" }));
+		CHECK(tool["inputSchema"]["properties"]["mode"]["description"] == "How to move.");
+		CHECK(tool["inputSchema"]["properties"]["box"]["properties"]["min"]["description"] == "Lower corner.");
+		CHECK(tool["inputSchema"]["properties"]["names"]["items"]["description"] == "A name.");
+		// Short descriptions stay as they are.
+		CHECK(McpToolsets::MakeCompactToolDefinition("x", "Short.", schema)["description"] == "Short.");
+	}
+
+	TEST_CASE("The editor's commands are few tools by default, all through toolsets, and any through strata_call")
+	{
+		// The editor's real commands (and the window's editor.showPanel) as the RPC methods a fake editor serves.
+		EditorCommandRegistry registry;
+		std::vector<RpcMethodInfo> methods;
+		for (const EditorCommand* command : registry.GetAll())
+			methods.push_back({ command->Name, command->Description, command->Parameters });
+		methods.push_back({ "editor.showPanel", "Opens a panel of the editor's window and brings it to the front.", nlohmann::json { { "type", "object" },
+			{ "properties", nlohmann::json::object() } } });
+		Tests::PumpedRpcServer editor;
+		for (const RpcMethodInfo& method : methods)
+		{
+			editor.GetServer().RegisterMethod(method, [name = method.Name](const nlohmann::json&)
+			{
+				return RpcResult::Success(nlohmann::json { { "ran", name } });
+			});
+		}
+		RpcServerSpecification serverSpecification;
+		serverSpecification.AuthToken = Tests::c_FakeEditorToken;
+		REQUIRE(editor.Start(serverSpecification));
+		McpTestClient client(MakeSpecification(Tests::CreateTemporaryDirectory("McpToolsets"), editor.GetPort()));
+		client.Initialize();
+
+		// Every command maps to a toolset the table names, and every core command exists.
+		std::set<std::string> known;
+		for (const McpToolsets::ToolsetInfo& toolset : McpToolsets::GetKnownToolsets())
+			known.insert(std::string(toolset.Name));
+		for (const RpcMethodInfo& method : methods)
+			CHECK_MESSAGE(known.contains(McpToolsets::GetGroupToolset(method.Name)), method.Name, " is in no toolset of the table");
+		for (const std::string_view core : McpToolsets::GetCoreCommands())
+			CHECK_MESSAGE(registry.Find(core) != nullptr, core, " is in the core toolset but not a command");
+
+		// The default (core) list stays within what clients take in.
+		nlohmann::json response = client.Request("tools/list");
+		const nlohmann::json& tools = response["result"]["tools"];
+		const size_t defaultTools = tools.size();
+		const size_t defaultBytes = response["result"].dump().size();
+		CHECK(defaultTools <= 32);
+		CHECK(defaultBytes <= 30720);
+		CHECK(defaultTools == c_GenericTools.size() + McpToolsets::GetCoreCommands().size());
+
+		// strata_call reaches a command outside the core toolset.
+		const nlohmann::json call = client.CallTool("strata_call", nlohmann::json { { "method", "camera.get" } });
+		CHECK(call["isError"] == false);
+		CHECK(call["structuredContent"]["ran"] == "camera.get");
+
+		// strata_describe: the toolsets, one toolset's commands, one command in full.
+		const nlohmann::json toolsets = client.CallTool("strata_describe")["structuredContent"];
+		CHECK(toolsets["enabled"] == nlohmann::json::array({ "core" }));
+		bool sceneListed = false;
+		for (const nlohmann::json& toolset : toolsets["toolsets"])
+			sceneListed = sceneListed || (toolset["toolset"] == "scene" && toolset["enabled"] == false && toolset["commands"].get<size_t>() > 10);
+		CHECK(sceneListed);
+		const nlohmann::json scene = client.CallTool("strata_describe", nlohmann::json { { "toolset", "scene" } })["structuredContent"];
+		CHECK(scene["toolset"] == "scene");
+		CHECK(scene["commands"].size() > 10);
+		const EditorCommand* entityGet = registry.Find("entity.get");
+		REQUIRE(entityGet);
+		const nlohmann::json described = client.CallTool("strata_describe", nlohmann::json { { "command", "entity.get" } })["structuredContent"];
+		CHECK(described["description"] == entityGet->Description);
+		CHECK(described["paramsSchema"] == entityGet->Parameters);
+		CHECK(described["toolsets"] == nlohmann::json::array({ "core", "scene" }));
+		CHECK(client.CallTool("strata_describe", nlohmann::json { { "command", "entity_get" } })["structuredContent"]["command"] == "entity.get");
+		CHECK(client.CallTool("strata_describe", nlohmann::json { { "command", "no.such" } })["isError"] == true);
+		CHECK(client.CallTool("strata_describe", nlohmann::json { { "toolset", "nothing" } })["isError"] == true);
+		CHECK(client.CallTool("strata_describe", nlohmann::json { { "toolset", "scene" }, { "command", "entity.get" } })["isError"] == true);
+
+		// Enabling a toolset lists its commands and tells the client.
+		const nlohmann::json enabled = client.CallTool("strata_toolsets", nlohmann::json { { "enable", { "scene" } } });
+		CHECK(enabled["structuredContent"]["enabled"] == nlohmann::json::array({ "core", "scene" }));
+		CHECK(client.CountNotifications("notifications/tools/list_changed") == 1);
+		const std::vector<std::string> withScene = client.ListToolNames();
+		CHECK(std::find(withScene.begin(), withScene.end(), "entity_rename") != withScene.end());
+		CHECK(withScene.size() > defaultTools);
+
+		// All toolsets together list every command.
+		client.CallTool("strata_toolsets", nlohmann::json { { "enable", { "all" } } });
+		const nlohmann::json all = client.Request("tools/list")["result"];
+		CHECK(all["tools"].size() == c_GenericTools.size() + methods.size());
+		CHECK(client.CountNotifications("notifications/tools/list_changed") == 2);
 	}
 }
 

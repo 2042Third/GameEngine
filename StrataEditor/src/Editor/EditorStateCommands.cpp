@@ -10,9 +10,12 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/Version.h>
+#include <Strata/Project/Project.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Scripting/ScriptEngine.h>
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <limits>
 #include <optional>
@@ -64,6 +67,46 @@ namespace Strata
 				{ "workingSetMB", toMB(memory->WorkingSet) },
 				{ "peakPrivateMB", toMB(memory->PeakPrivateBytes) },
 				{ "peakWorkingSetMB", toMB(memory->PeakWorkingSet) } };
+		}
+
+		// The sections editor.status reports itself (besides the status providers'), in the order its description lists them.
+		constexpr std::array<std::string_view, 6> c_StatusSections = { "engine", "project", "selection", "undo", "sceneLoad", "memory" };
+
+		// Every key the built-in part of editor.status can have: a status provider of that name is not reported.
+		bool IsBuiltinStatusSection(std::string_view section)
+		{
+			static constexpr std::array<std::string_view, 10> c_Keys = { "engineVersion", "engineCommit", "platform", "scene", "play", "errors",
+				"saving", "selection", "undo", "project" };
+			return std::find(c_StatusSections.begin(), c_StatusSections.end(), section) != c_StatusSections.end()
+				|| std::find(c_Keys.begin(), c_Keys.end(), section) != c_Keys.end();
+		}
+
+		nlohmann::json DescribeProjectBriefly(const EditorContext& context)
+		{
+			const Ref<Project>& project = context.GetProject();
+			if (!project)
+				return { { "open", false }, { "name", nullptr }, { "path", nullptr } };
+			return { { "open", true }, { "name", project->GetConfig().Name }, { "path", FileSystem::ToUTF8(project->GetProjectFile()) } };
+		}
+
+		// What went wrong that an agent should look at: errors logged since it last read the log, the last script build's
+		// failure, the script fault that stopped play mode, imports that failed without anyone waiting for them.
+		nlohmann::json DescribeErrors(const EditorContext& context)
+		{
+			const ScriptBuildResult& build = context.GetScriptBuilder().GetLastResult();
+			size_t buildErrors = 0;
+			for (const ScriptDiagnostic& diagnostic : build.Diagnostics)
+				buildErrors += diagnostic.Severity == "error" ? 1 : 0;
+			const Ref<ScriptEngine>& engine = context.GetScriptEngine();
+			const std::optional<ScriptFault> fault = engine ? engine->GetFault() : std::nullopt;
+			nlohmann::json scriptFault = nullptr;
+			if (fault)
+				scriptFault = fmt::format("{}::{} on '{}': {}", fault->ClassName, fault->Method, fault->EntityName, fault->Description);
+			return {
+				{ "unread", Log::GetBuffer().CountEntries(context.GetLogReadSequence(), LogLevel::Error) },
+				{ "scriptBuild", { { "failed", build.ID != 0 && !build.Success && !build.Cancelled }, { "errors", buildErrors } } },
+				{ "scriptFault", std::move(scriptFault) },
+				{ "importFailures", context.GetImportFailureCount() } };
 		}
 
 		nlohmann::json DescribeFrameTimeStats(const FrameTimeStats& stats)
@@ -488,48 +531,88 @@ namespace Strata
 		////////////////////////////////////////////////////////////////////////////////
 
 		registry.Register({ "editor.status",
-			"Overview of the editor: engine version and commit, open project, scene (name, asset, unsaved changes, entity count), play state, "
-			"selection, undo history, sceneLoad (the scene scene.open or project.open is opening: {scene, startScene, state, progress}, null when "
-			"none), the process's memory (privateMB, workingSetMB and their peaks), and sections such as automation (port, clients, "
-			"connectedClients with the names agents gave, pending requests and commands), assets (memory and budgets per pool, streaming queue, "
-			"uploads; see asset.stats), game (the running game's window requests, cursor and save directory) and recovery (the edited scene's "
-			"journal of unsaved changes and how many recovery entries apply; see scene.recoveryStatus). Start here to orient yourself.",
-			ObjectSchema({}),
-			[](EditorContext& context, const nlohmann::json&)
+			"Overview of the editor; start here to orient yourself. The default answer is compact: engineVersion, project {open, name, path}, "
+			"scene {name, scene, modified, entityCount}, play {state, paused, pendingSteps, running}, selection {count, primary}, undo {undo, "
+			"redo}, errors {unread (errors logged since the last log.read), scriptBuild {failed, errors}, scriptFault, importFailures}, assets "
+			"{ready, loading, importing, scanning, failed}, saving and editor {launcher}. sections adds whole sections: engine (engineCommit, "
+			"platform), project (directories, start scene, export settings), selection (with inspectedAsset), undo (position, count), sceneLoad "
+			"(the scene scene.open or project.open is opening: {scene, startScene, state, progress}, null when none), memory (privateMB, "
+			"workingSetMB and their peaks) and the sections of editor parts: automation (port, clients, connectedClients with the names agents "
+			"gave, pending requests and commands), assets (memory and budgets per pool, streaming queue, uploads; see asset.stats), game (the "
+			"running game's window requests, cursor and save directory), recovery (the edited scene's journal of unsaved changes and how many "
+			"recovery entries apply; see scene.recoveryStatus) and editor (window, frame rate, GPU). sections: [\"all\"] returns everything.",
+			ObjectSchema({ { "sections", { { "type", "array" }, { "items", { { "type", "string" } } }, { "uniqueItems", true },
+				{ "description", "Sections to add to the compact answer: engine, project, selection, undo, sceneLoad, memory, automation, assets, "
+					"game, recovery, editor, or all" } } } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
 			{
+				CommandArguments arguments(parameters);
+				const std::vector<std::string> sections = arguments.GetStringArray("sections");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				const bool all = std::find(sections.begin(), sections.end(), "all") != sections.end();
+				for (const std::string& section : sections)
+				{
+					if (section != "all" && !IsBuiltinStatusSection(section) && !context.GetStatusProviders().contains(section))
+					{
+						std::string known;
+						for (const std::string_view name : c_StatusSections)
+							known += fmt::format("{}{}", known.empty() ? "" : ", ", name);
+						for (const auto& [name, provider] : context.GetStatusProviders())
+							known += fmt::format(", {}", name);
+						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'sections': unknown section '{}' (sections: {}, all)", section, known));
+					}
+				}
+				const auto wants = [&](std::string_view section)
+				{
+					return all || std::find(sections.begin(), sections.end(), section) != sections.end();
+				};
+
 				Entity primary = context.GetPrimarySelection();
 				const UndoStack& undo = context.GetUndoStack();
-				nlohmann::json status = {
-					{ "engineVersion", c_EngineVersion },
-					{ "engineCommit", c_EngineCommit },
-					{ "platform", std::string(Platform::GetName()) },
-					{ "project", DescribeProject(context) },
-					{ "scene", {
-						{ "name", context.GetEditScene()->GetName() },
-						{ "scene", context.GetSceneHandle().IsValid() ? UUIDToJson(context.GetSceneHandle()) : nlohmann::json(nullptr) },
-						{ "modified", context.IsSceneModified() },
-						{ "entityCount", context.GetActiveScene()->GetEntityCount() } } },
-					{ "play", [&context]()
-						{
-							nlohmann::json play = DescribePlayState(context);
-							play["pendingSteps"] = context.GetPendingSteps();
-							play["running"] = DescribeRunningScene(context);
-							return play;
-						}() },
-					{ "selection", {
-						{ "count", context.GetSelection().size() },
-						{ "primary", primary ? UUIDToJson(primary.GetUUID()) : nlohmann::json(nullptr) },
-						{ "inspectedAsset", context.GetInspectedAsset().IsValid() ? UUIDToJson(context.GetInspectedAsset()) : nlohmann::json(nullptr) } } },
-					{ "undo", {
-						{ "position", undo.GetPosition() },
-						{ "count", undo.GetHistory().size() },
-						{ "undo", undo.GetUndoName() },
-						{ "redo", undo.GetRedoName() } } },
-					{ "sceneLoad", DescribeSceneLoad(context) },
-					{ "memory", DescribeProcessMemory() } };
+				nlohmann::json status = { { "engineVersion", c_EngineVersion } };
+				if (wants("engine"))
+				{
+					status["engineCommit"] = c_EngineCommit;
+					status["platform"] = std::string(Platform::GetName());
+				}
+				status["project"] = wants("project") ? DescribeProject(context) : DescribeProjectBriefly(context);
+				status["scene"] = {
+					{ "name", context.GetEditScene()->GetName() },
+					{ "scene", context.GetSceneHandle().IsValid() ? UUIDToJson(context.GetSceneHandle()) : nlohmann::json(nullptr) },
+					{ "modified", context.IsSceneModified() },
+					{ "entityCount", context.GetActiveScene()->GetEntityCount() } };
+				status["play"] = DescribePlayState(context);
+				status["play"]["pendingSteps"] = context.GetPendingSteps();
+				status["play"]["running"] = DescribeRunningScene(context);
+				status["selection"] = {
+					{ "count", context.GetSelection().size() },
+					{ "primary", primary ? UUIDToJson(primary.GetUUID()) : nlohmann::json(nullptr) } };
+				if (wants("selection"))
+					status["selection"]["inspectedAsset"] = context.GetInspectedAsset().IsValid() ? UUIDToJson(context.GetInspectedAsset()) : nlohmann::json(nullptr);
+				status["undo"] = { { "undo", undo.GetUndoName() }, { "redo", undo.GetRedoName() } };
+				if (wants("undo"))
+				{
+					status["undo"]["position"] = undo.GetPosition();
+					status["undo"]["count"] = undo.GetHistory().size();
+				}
+				status["errors"] = DescribeErrors(context);
+				// Saves running in the background (none: scene.save writes before it answers).
+				status["saving"] = nlohmann::json::array();
+				if (wants("sceneLoad"))
+					status["sceneLoad"] = DescribeSceneLoad(context);
+				if (wants("memory"))
+					status["memory"] = DescribeProcessMemory();
 				// Sections of other editor parts; they never replace the built-in ones.
 				for (const auto& [section, provider] : context.GetStatusProviders())
-					status.emplace(section, provider());
+				{
+					if (IsBuiltinStatusSection(section) || status.contains(section))
+						continue;
+					if (wants(section))
+						status[section] = provider.Full();
+					else if (provider.Compact)
+						status[section] = provider.Compact();
+				}
 				return EditorCommandResult::Ok(std::move(status));
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
@@ -646,7 +729,7 @@ namespace Strata
 				{ "after", IntegerSchema("Return messages with a sequence number above this (default 0)", 0, std::numeric_limits<int64_t>::max()) },
 				{ "maxCount", IntegerSchema("Maximum number of messages (default 200)", 1, 10000) },
 				{ "minLevel", { { "type", "string" }, { "enum", { "Trace", "Info", "Warn", "Error", "Critical" } }, { "description", "Lowest level returned (default Info)" } } } }),
-			[](EditorContext&, const nlohmann::json& parameters)
+			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const int64_t after = arguments.GetInt("after", 0, 0, std::numeric_limits<int64_t>::max());
@@ -691,6 +774,9 @@ namespace Strata
 						{ "message", entry.Message },
 						{ "time", entry.Timestamp } });
 				}
+				// Errors up to `latest` were returned (or skipped below a higher minLevel, which leaves them unread).
+				if (minLevel <= LogLevel::Error)
+					context.MarkLogRead(latest);
 				return EditorCommandResult::Ok({ { "messages", std::move(messages) }, { "latest", latest }, { "more", more } });
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 	}

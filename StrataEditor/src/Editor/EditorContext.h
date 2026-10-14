@@ -33,6 +33,7 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
@@ -500,11 +501,24 @@ namespace Strata
 		double GetLastFrameTime() const { return m_LastFrameTime; }
 
 		// Extra sections of editor.status, reported by the parts of the editor that own the information (e.g.
-		// "automation" by EditorAutomation). Providers run on the main thread whenever editor.status runs. A null provider
-		// removes the section; a section named like one of the built-in ones is not reported.
+		// "automation" by EditorAutomation). Providers run on the main thread whenever editor.status reports their section:
+		// the full form when a client asks for the section (editor.status {sections}), the compact form in the default
+		// answer (sections without one are left out of it, so keep it to the few values an agent checks every time). A
+		// null provider removes the section; a section named like one of the built-in ones is not reported.
 		using StatusProvider = std::function<nlohmann::json()>;
-		void SetStatusProvider(const std::string& section, StatusProvider provider);
-		const std::map<std::string, StatusProvider>& GetStatusProviders() const { return m_StatusProviders; }
+		struct StatusSection
+		{
+			StatusProvider Full;
+			StatusProvider Compact; // Null: only reported when asked for
+		};
+		void SetStatusProvider(const std::string& section, StatusProvider provider, StatusProvider compactProvider = nullptr);
+		// Imports of the open project that failed while nobody waited for them (editor.status: errors.importFailures).
+		uint64_t GetImportFailureCount() const { return m_ImportFailureCount; }
+		// The log's latest sequence number a client has read (log.read): editor.status counts errors logged after it as
+		// unread.
+		uint64_t GetLogReadSequence() const { return m_LogReadSequence; }
+		void MarkLogRead(uint64_t sequence) { m_LogReadSequence = std::max(m_LogReadSequence, sequence); }
+		const std::map<std::string, StatusSection>& GetStatusProviders() const { return m_StatusProviders; }
 	private:
 		bool OpenProjectInternal(const std::filesystem::path& path, bool created, std::string* outError);
 		bool StartRuntime(SceneRuntimeMode mode, std::string* outError);
@@ -711,7 +725,9 @@ namespace Strata
 		bool m_QuitRequested = false;
 		uint64_t m_RecordedFrameCount = 0;
 		double m_LastFrameTime = 0.0;
-		std::map<std::string, StatusProvider> m_StatusProviders;
+		std::map<std::string, StatusSection> m_StatusProviders;
+		uint64_t m_ImportFailureCount = 0;
+		uint64_t m_LogReadSequence = 0;
 	};
 
 }

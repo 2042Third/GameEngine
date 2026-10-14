@@ -402,6 +402,10 @@ The editor serves JSON-RPC 2.0 on loopback (`RpcServer`); `StrataCLI` is its cli
 
 - Commands are the API: every registered command is a method and an MCP tool, so a feature reaches agents by
   registering a command (IDs as 16-digit hex strings, camelCase result keys); no RPC code is needed.
+- MCP lists the commands of its enabled toolsets (`core` by default) with their descriptions' first sentence: a new
+  command group gets a toolset in `CLI/McpToolsets`, and the default list stays within 32 tools and 30 KiB
+  ([MCP toolsets](Docs/DeveloperGuide.md#mcp-toolsets)). `editor.status` answers compactly; read other sections with
+  `sections`.
 - Loopback only, no server without a token; the token never crosses the wire (challenge-response; clients check the
   server first) and is never logged or printed; before authentication only the handshake is served, and the project's
   `.strata/EditorSession.json` is untrusted and never holds the port or token

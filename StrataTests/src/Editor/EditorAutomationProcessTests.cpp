@@ -330,7 +330,7 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 		CHECK((*entityCreate)["paramsSchema"]["properties"].contains("name"));
 		CHECK_FALSE((*entityCreate)["description"].get<std::string>().empty());
 
-		nlohmann::json status = Call("editor.status");
+		nlohmann::json status = Call("editor.status", { { "sections", { "automation", "editor" } } });
 		CHECK(status["project"]["open"] == false);
 		CHECK(status["automation"]["port"] == session->Port);
 		CHECK(status["editor"]["headless"] == true);
@@ -429,8 +429,14 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 			if (tool["name"] == "entity_create")
 				entityCreate = &tool;
 		}
-		for (const char* name : { "strata_status", "strata_call", "entity_create", "editor_wait", "editor_status", "editor_quit" })
-			CHECK_MESSAGE(std::find(names.begin(), names.end(), name) != names.end(), name);
+		// The core toolset by default: the commands a game is made and tested with; the others through strata_call, by their
+		// tool names, or listed once strata_toolsets enables their toolsets.
+		for (const char* name : { "strata_status", "strata_call", "strata_describe", "strata_toolsets", "entity_create", "editor_status", "play_step",
+			"input_sequence" })
+			CHECK_MESSAGE(std::find(names.begin(), names.end(), name) != names.end(), std::string(name));
+		for (const char* name : { "editor_wait", "editor_quit", "strata_list_methods" })
+			CHECK_MESSAGE(std::find(names.begin(), names.end(), name) == names.end(), std::string(name));
+		CHECK(names.size() <= 32);
 		REQUIRE(entityCreate != nullptr);
 		CHECK((*entityCreate)["inputSchema"]["type"] == "object");
 		CHECK((*entityCreate)["inputSchema"]["properties"].contains("components"));
@@ -478,7 +484,7 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 		REQUIRE_MESSAGE(launched.ExitCode == 0, launched.ErrorOutput);
 		CHECK_MESSAGE(seconds < 30.0, "Launching took ", seconds, " s");
 
-		const CliResult status = RunCli({ "call", "editor.status", "--project", FileSystem::ToUTF8(projectDirectory) });
+		const CliResult status = RunCli({ "call", "editor.status", R"({"sections": ["sceneLoad"]})", "--project", FileSystem::ToUTF8(projectDirectory) });
 		REQUIRE_MESSAGE(status.ExitCode == 0, status.ErrorOutput);
 		CHECK(status.Json["scene"]["scene"] == "BD75622ED18E84E4"); // Tetris.stproj's start scene
 		CHECK(status.Json["scene"]["entityCount"].get<int>() > 0);
@@ -613,7 +619,7 @@ TEST_SUITE("EndToEnd.Recovery")
 			// The journal reaches the disk a few seconds after the edits stop.
 			const bool journaled = Tests::WaitUntil([]()
 			{
-				const nlohmann::json journal = Call("editor.status")["recovery"]["journal"];
+				const nlohmann::json journal = Call("editor.status", { { "sections", { "recovery" } } })["recovery"]["journal"];
 				return journal["lastWrite"].get<int64_t>() > 0 && journal["pending"] == false && journal["busy"] == false;
 			}, std::chrono::seconds(30));
 			REQUIRE(journaled);
@@ -633,7 +639,7 @@ TEST_SUITE("EndToEnd.Recovery")
 		CHECK(entry["scenePath"] == "Levels/Moved.stscene");
 		CHECK(entry["discarded"] == false); // Left behind by a crash
 		CHECK(entry["applicable"] == true);
-		CHECK(Call("editor.status")["recovery"]["applicable"] == 1);
+		CHECK(Call("editor.status", { { "sections", { "recovery" } } })["recovery"]["applicable"] == 1);
 		CHECK(Call("scene.hierarchy")["entities"] == savedEntities);
 
 		const nlohmann::json recovered = Call("scene.recover", { { "scene", entry["id"] }, { "action", "apply" } });

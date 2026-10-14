@@ -330,4 +330,27 @@ namespace Strata
 		return entities;
 	}
 
+	std::vector<std::string> CommandArguments::GetStringArray(std::string_view name)
+	{
+		std::vector<std::string> strings;
+		const nlohmann::json* value = Get(name);
+		if (!value)
+			return strings;
+		if (!value->is_array())
+		{
+			TypeError(name, "an array of strings");
+			return strings;
+		}
+		for (const nlohmann::json& element : *value)
+		{
+			if (!element.is_string())
+			{
+				TypeError(name, "an array of strings");
+				return {};
+			}
+			strings.push_back(element.get<std::string>());
+		}
+		return strings;
+	}
+
 }

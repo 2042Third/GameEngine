@@ -209,7 +209,7 @@ TEST_SUITE("Editor.Automation")
 		CHECK(image.GetValue()["Image"]["Data"] == c_ImageData);
 
 		// editor.status carries the automation section.
-		const RpcResult status = harness.Call(client, "editor.status");
+		const RpcResult status = harness.Call(client, "editor.status", { { "sections", { "automation" } } });
 		REQUIRE(status.IsSuccess());
 		const nlohmann::json& automation = status.GetValue()["automation"];
 		CHECK(automation["running"] == true);
@@ -250,7 +250,7 @@ TEST_SUITE("Editor.Automation")
 		REQUIRE(rejected.IsError());
 		CHECK(rejected.GetError().Code == JsonRpc::ErrorCode::InvalidParams);
 
-		const RpcResult status = harness.Call(client, "editor.status");
+		const RpcResult status = harness.Call(client, "editor.status", { { "sections", { "assets" } } });
 		REQUIRE(status.IsSuccess());
 		CHECK(status.GetValue()["assets"]["pools"]["gpuTextures"]["budgetBytes"] == 128ull << 20);
 	}

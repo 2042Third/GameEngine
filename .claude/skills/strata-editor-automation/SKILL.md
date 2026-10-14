@@ -40,8 +40,10 @@ StrataCLI launch --headless --project <dir>   # existing project; no window, but
 ```sh
 StrataCLI list                              # every command with its one-line description
 StrataCLI list --json                       # ... with the JSON Schema of each command's parameters
-StrataCLI call editor.status                # start here: project, scene, play state, selection, undo, automation,
-                                            # window, UI scale and frame rate (an idle windowed editor draws 30 per second)
+StrataCLI call editor.status                # start here: project, scene, play state, selection, undo, errors to look
+                                            # at (unread log errors, script build, script fault, failed imports), assets
+StrataCLI call editor.status '{"sections": ["editor", "automation"]}'   # more: window, UI scale, frame rate,
+                                            # clients; "all" for everything
 StrataCLI call entity.create '{"name": "Player"}'
 StrataCLI call entity.create @params.json   # params from a file (no shell quoting problems)
 echo '{"frames": 60}' | StrataCLI call editor.wait -     # params from stdin
@@ -69,10 +71,19 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 `claude mcp add strata -- <bin>/StrataCLI mcp`; `<bin>` is the folder that holds StrataCLI, see above). Tools:
 
 - `strata_status`, `strata_launch_editor` (`project`, `headless`, `noGpu`; without `project` it starts an empty
-  editor, or reconnects to the empty one it started before), `strata_list_methods`, `strata_call` (`method`,
-  `params`) are always there.
-- While an editor is connected, each command is a tool with the command's schema as `inputSchema`. The tool list
-  changes (`notifications/tools/list_changed`) when an editor connects or goes away.
+  editor, or reconnects to the empty one it started before), `strata_describe`, `strata_toolsets` and `strata_call`
+  (`method`, `params`: any command, listed or not) are always there.
+- While an editor is connected, the commands of the enabled **toolsets** are tools, with the first sentence of their
+  description and their schema as `inputSchema`. `core` is enabled by default: `editor.status`, `log.read`, projects,
+  `scene.open`/`save`/`info`/`hierarchy`, `entity.create`/`get`/`find`/`delete`, `component.add`/`set`,
+  `prefab.instantiate`, `asset.list`/`info`/`import`, `material.create`, `script.build`/`status`, `play.start`/`stop`/
+  `step`, `input.sequence` and `viewport.capture`. The others are in `scene`, `assets`, `play`, `scripts`, `animation`,
+  `viewport`, `streaming`, `perf`, `editor`, `ui` and `world`.
+- `strata_describe` lists the toolsets (`{}`), a toolset's commands (`{"toolset": "scene"}`) or one command's full
+  description and schema (`{"command": "entity.rename"}`); read it before a command whose short description leaves you
+  unsure. `strata_toolsets {"enable": ["scene"]}` lists a toolset's commands as tools too (`"all"` for every command;
+  `disable` takes them away again); `StrataCLI mcp --toolsets core,scene` (or `all`) chooses them at start. The tool list
+  changes (`notifications/tools/list_changed`) when toolsets change and when an editor connects or goes away.
 - Results come as text plus `structuredContent`; `{"Image": {"MimeType", "Data"}}` results come as image content.
 - Once connected, the server stays with that editor (also when it opens another project, or restarts with the same
   project) and never silently switches to another one.
@@ -82,14 +93,15 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Question | Call |
 | --- | --- |
 | What is open, is it playing, unsaved changes? | `editor.status` |
-| Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress` and whether it is the project's `startScene`, `lastOpen` with how it ended, `play` for a switch a running game asked for, `subScenes` of the running game; `{"wait": true}` answers once nothing is opening); also `editor.status`'s `sceneLoad` |
+| Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress` and whether it is the project's `startScene`, `lastOpen` with how it ended, `play` for a switch a running game asked for, `subScenes` of the running game; `{"wait": true}` answers once nothing is opening); also `editor.status {"sections": ["sceneLoad"]}` |
 | What did the person, other agents or I just do? | `editor.activity {since, limit, source, command}` (every command run: source UI / Automation with the client's name / CommandScript / Internal, parameters, result or error, undo step, entities touched); page with `since` = the returned `latest` |
 | Are there unsaved changes a crashed (or discarding) editor left? | `scene.recoveryStatus` (entries with `id`, `sceneName`, `applicable`; the edited scene's `journal`), then `scene.recover {scene: <id or scene>, action: "apply" \| "discard"}` |
 | Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`; editors run with `--commands` or `--frames` list what they opened without saving it); `editor.removeRecentProject {path}` takes one off |
 | What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
 | Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; `play.start` builds its scripts first) |
-| Does the person at the editor see the launcher or the editor? | `editor.status` (`editor.launcher`; also `editor.gpu` and `editor.startupSeconds`) |
-| Did the game ask for fullscreen or a resolution, lock the cursor, where do its saves go? | `editor.status` (`game`: `windowRequests`, recorded but not applied in play mode; `cursor`; `saveDirectory`, the project's `.strata/Saves`) |
+| Did something fail that I have not seen? | `editor.status` `errors`: `unread` (errors logged since your last `log.read`), `scriptBuild {failed, errors}`, `scriptFault`, `importFailures`; then `log.read`, `script.status` or `asset.info` |
+| Does the person at the editor see the launcher or the editor? | `editor.status` (`editor.launcher`; `{"sections": ["editor"]}` adds `gpu` and `startupSeconds`) |
+| Did the game ask for fullscreen or a resolution, lock the cursor, where do its saves go? | `editor.status {"sections": ["game"]}` (`windowRequests`, recorded but not applied in play mode; `cursor`; `saveDirectory`, the project's `.strata/Saves`) |
 | Which commands and parameters exist? | `editor.commands` (or `list --json`) |
 | Which components and properties (types, ranges, enum values)? | `component.list` |
 | Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` (meshes, models, prefabs: `bounds`, their size as placed) |
@@ -202,7 +214,7 @@ editor started with `--no-gpu` (use `--headless`):
   report `discardedChanges`. A person may be editing beside you: never force away work you did not make. The person sees
   a toast naming your client ("Claude Code discarded unsaved changes") with a Recover button.
 - **Recovery**: the editor journals the edited scene's unsaved changes in `.strata/Recovery` (written about 2 s after
-  edits stop; `editor.status` `recovery.journal` has `lastWrite` and `pending`), and even forced discards are kept
+  edits stop; `editor.status {"sections": ["recovery"]}` `recovery.journal` has `lastWrite` and `pending`), and even forced discards are kept
   there and listed at once (the newest 8 discards stay on offer, older ones move to `Recovery/Discarded`; what a crash
   left always stays). When a project opens with changes an editor left behind, `scene.recoveryStatus` lists them;
   `scene.recover {"scene": "<id>", "action": "apply"}` reopens the scene (in the background, like `scene.open`; it fails

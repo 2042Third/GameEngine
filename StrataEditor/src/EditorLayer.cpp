@@ -357,7 +357,7 @@ namespace Strata
 					{ "cap", m_Host->GetMaxFrameRate() },
 					{ "idle", m_Idle },
 					{ "throttling", IsThrottlingEnabled() } } } };
-		});
+		}, [this]() { return nlohmann::json { { "launcher", IsLauncherShown() } }; });
 		if (m_Options.EnableAutomation)
 			StartAutomation();
 		else if (m_Options.Headless && !m_Options.MaxFrames && !m_Options.QuitAfterCommands)

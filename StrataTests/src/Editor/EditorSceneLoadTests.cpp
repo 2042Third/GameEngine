@@ -111,7 +111,7 @@ TEST_SUITE("Editor.SceneLoad")
 		CHECK_FALSE(SetPropertyWithUndo(context, hero, *transform, *translation, PropertyValue(glm::vec3(5.0f)), &error));
 		CHECK(error.find("read-only") != std::string::npos);
 		CHECK(hero.GetComponent<TransformComponent>().Translation == glm::vec3(0.0f));
-		const nlohmann::json status = project.Run("editor.status");
+		const nlohmann::json status = project.Run("editor.status", { { "sections", { "sceneLoad", "memory" } } });
 		REQUIRE(status["sceneLoad"].is_object());
 		CHECK(status["sceneLoad"]["scene"] == UUIDToJson(project.Two));
 		CHECK(status["sceneLoad"]["progress"].get<double>() >= 0.0);
@@ -134,7 +134,7 @@ TEST_SUITE("Editor.SceneLoad")
 		CHECK(context.GetSceneHandle() == project.Two);
 		CHECK(context.GetEditScene()->FindEntityByName("Boss").IsValid());
 		CHECK(context.GetSceneLoadStatus().State == SceneLoadState::Ready);
-		CHECK(project.Run("editor.status")["sceneLoad"].is_null());
+		CHECK(project.Run("editor.status", { { "sections", { "sceneLoad" } } })["sceneLoad"].is_null());
 		const nlohmann::json loaded = project.Run("scene.loadStatus");
 		CHECK(loaded["open"].is_null());
 		CHECK(loaded["lastOpen"]["state"] == "Ready");
@@ -310,7 +310,7 @@ TEST_SUITE("Editor.SceneLoad")
 		REQUIRE(loading["open"].is_object());
 		CHECK(loading["open"]["scene"] == UUIDToJson(one));
 		CHECK(loading["open"]["startScene"] == true);
-		CHECK(RunCommandToCompletion(context, commands, "editor.status")["sceneLoad"]["startScene"] == true);
+		CHECK(RunCommandToCompletion(context, commands, "editor.status", { { "sections", { "sceneLoad" } } })["sceneLoad"]["startScene"] == true);
 		// scene.loadStatus with wait answers once no scene is being opened.
 		EditorCommandResult waiting = commands.Execute(context, "scene.loadStatus", { { "wait", true } });
 		REQUIRE(waiting.Success);

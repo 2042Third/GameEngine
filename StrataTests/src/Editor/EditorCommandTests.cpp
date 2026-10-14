@@ -5,6 +5,7 @@
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "FeatureTest/FeatureTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetDependencies.h>
@@ -195,53 +196,148 @@ TEST_SUITE("Editor.Commands")
 		CHECK_FALSE(harness.Commands.Execute(harness.Context, "scene.info", nlohmann::json::array()).Success);
 	}
 
-	TEST_CASE("editor.status gives an overview with the sections other editor parts provide")
+	TEST_CASE("editor.status gives a compact overview, and the sections other editor parts provide when asked")
 	{
 		CommandHarness harness;
 		nlohmann::json status = harness.Run("editor.status");
 		CHECK_FALSE(status["engineVersion"].get<std::string>().empty());
+		// The compact answer has these keys and no others ("assets" is the asset manager's compact form; the provider of
+		// "editor" is the EditorLayer's, which this harness has none of).
+		std::vector<std::string> keys;
+		for (const auto& [key, value] : status.items())
+			keys.push_back(key);
+		CHECK(keys == std::vector<std::string> { "assets", "engineVersion", "errors", "play", "project", "saving", "scene", "selection", "undo" });
+		CHECK(status["project"] == nlohmann::json { { "open", false }, { "name", nullptr }, { "path", nullptr } });
+		CHECK(status["scene"]["modified"] == false);
+		CHECK(status["scene"]["scene"].is_null());
+		CHECK(status["scene"]["entityCount"] == 0);
+		CHECK(status["play"] == nlohmann::json { { "state", "Edit" }, { "paused", false }, { "pendingSteps", 0 }, { "running", nullptr } });
+		CHECK(status["selection"] == nlohmann::json { { "count", 0 }, { "primary", nullptr } });
+		CHECK(status["undo"] == nlohmann::json { { "undo", "" }, { "redo", "" } });
+		CHECK(status["errors"]["scriptBuild"] == nlohmann::json { { "failed", false }, { "errors", 0 } });
+		CHECK(status["errors"]["scriptFault"].is_null());
+		CHECK(status["errors"]["importFailures"] == 0);
+		std::vector<std::string> assetKeys;
+		for (const auto& [key, value] : status["assets"].items())
+			assetKeys.push_back(key);
+		CHECK(assetKeys == std::vector<std::string> { "failed", "importing", "loading", "ready", "scanning" });
+		CHECK(status["saving"] == nlohmann::json::array());
+
+		// Sections add what the compact answer leaves out.
+		status = harness.Run("editor.status", { { "sections", { "engine", "undo", "memory" } } });
 		// The commit the build was configured from: a short hash in a git checkout.
 		const std::string commit = status["engineCommit"].get<std::string>();
 		CHECK(commit == c_EngineCommit);
 		CHECK((commit == "unknown" || (commit.size() == 12 && commit.find_first_not_of("0123456789abcdef") == std::string::npos)));
 		CHECK_FALSE(status["platform"].get<std::string>().empty());
-		CHECK(status["project"]["open"] == false);
-		CHECK(status["scene"]["modified"] == false);
-		CHECK(status["scene"]["scene"].is_null());
-		CHECK(status["scene"]["entityCount"] == 0);
-		CHECK(status["play"]["state"] == "Edit");
-		CHECK(status["selection"]["count"] == 0);
-		CHECK(status["selection"]["primary"].is_null());
 		CHECK(status["undo"]["position"] == 0);
+		CHECK(status["undo"]["count"] == 0);
+		CHECK(status.contains("memory"));
+		CHECK_FALSE(status.contains("sceneLoad"));
+		CHECK_FALSE(status.contains("game"));
+		CHECK(harness.Error("editor.status", { { "sections", { "nothing" } } }).find("unknown section 'nothing'") != std::string::npos);
+		CHECK(harness.Error("editor.status", { { "sections", "engine" } }).find("array of strings") != std::string::npos);
 
 		const std::string entity = harness.Run("entity.create", { { "name", "Player" } })["id"].get<std::string>();
 		harness.Run("selection.set", { { "entities", { entity } } });
 		harness.Context.SetStatusProvider("automation", []() { return nlohmann::json { { "port", 1234 } }; });
+		harness.Context.SetStatusProvider("brief", []() { return nlohmann::json { { "everything", 1 } }; },
+			[]() { return nlohmann::json { { "some", 1 } }; });
 		// A provider cannot replace a built-in section.
 		harness.Context.SetStatusProvider("scene", []() { return nlohmann::json("replaced"); });
+		harness.Context.SetStatusProvider("memory", []() { return nlohmann::json("replaced"); });
 		status = harness.Run("editor.status");
 		CHECK(status["scene"]["modified"] == true);
 		CHECK(status["scene"]["entityCount"] == 1);
 		CHECK(status["selection"]["count"] == 1);
 		CHECK(status["selection"]["primary"] == entity);
+		CHECK(status["undo"]["undo"] == "Create 'Player'");
+		// Providers without a compact form are reported only when asked for; the others compactly.
+		CHECK_FALSE(status.contains("automation"));
+		CHECK_FALSE(status.contains("memory"));
+		CHECK(status["brief"] == nlohmann::json { { "some", 1 } });
+		status = harness.Run("editor.status", { { "sections", { "automation", "brief", "memory" } } });
+		CHECK(status["automation"]["port"] == 1234);
+		CHECK(status["brief"] == nlohmann::json { { "everything", 1 } });
+		CHECK(status["memory"] != "replaced");
+		CHECK(status["undo"].contains("count") == false);
+
+		// All of it: every section (the built-in ones, then every provider's full form).
+		status = harness.Run("editor.status", { { "sections", { "all" } } });
+		keys.clear();
+		for (const auto& [key, value] : status.items())
+			keys.push_back(key);
+		CHECK(keys == std::vector<std::string> { "assets", "automation", "brief", "engineCommit", "engineVersion", "errors", "game", "memory",
+			"platform", "play", "project", "recovery", "saving", "scene", "sceneLoad", "selection", "undo" });
 		CHECK(status["undo"]["position"] == 1);
 		CHECK(status["undo"]["count"] == 1);
-		CHECK(status["undo"]["undo"] == "Create 'Player'");
-		CHECK(status["automation"]["port"] == 1234);
+		CHECK(status["selection"]["inspectedAsset"].is_null());
+		CHECK(status["assets"].contains("pools"));
+		CHECK(status["assets"]["scanning"].is_null());
 
 		harness.Run("play.start");
 		CHECK(harness.Run("editor.status")["play"]["state"] == "Play");
 		harness.Run("play.stop");
 
 		harness.Context.SetStatusProvider("automation", nullptr);
+		harness.Context.SetStatusProvider("brief", nullptr);
 		harness.Context.SetStatusProvider("scene", nullptr);
-		CHECK_FALSE(harness.Run("editor.status").contains("automation"));
+		harness.Context.SetStatusProvider("memory", nullptr);
+		CHECK_FALSE(harness.Run("editor.status", { { "sections", { "all" } } }).contains("automation"));
+		CHECK(harness.Error("editor.status", { { "sections", { "automation" } } }).find("unknown section") != std::string::npos);
 
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorStatusProject");
 		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "StatusGame" }, { "force", true } });
-		const nlohmann::json project = harness.Run("editor.status")["project"];
+		const nlohmann::json project = harness.Run("editor.status", { { "sections", { "project" } } })["project"];
 		CHECK(project == harness.Run("project.info"));
 		CHECK(project["name"] == "StatusGame");
+		const nlohmann::json compact = harness.Run("editor.status")["project"];
+		CHECK(compact["open"] == true);
+		CHECK(compact["name"] == "StatusGame");
+		CHECK(compact["path"] == project["path"]);
+		CHECK(FileSystem::FromUTF8(compact["path"].get<std::string>()) == harness.Context.GetProject()->GetProjectFile());
+	}
+
+	TEST_CASE("The compact editor.status of the feature project fits in 1.5 KiB")
+	{
+		CommandHarness harness;
+		const std::filesystem::path projectFile = Tests::CopyFeatureProject(Tests::CreateTemporaryDirectory("CompactStatus") / "Project");
+		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "scene.open", { { "scene", "Scenes/Feature.stscene" } });
+		const nlohmann::json entities = harness.Run("scene.hierarchy")["entities"];
+		REQUIRE_FALSE(entities.empty());
+		harness.Run("selection.set", { { "entities", { entities[0]["id"] } } });
+		harness.Run("entity.rename", { { "entity", entities[0]["id"] }, { "name", "A name long enough to be noticed in the status" } });
+		const nlohmann::json status = harness.Run("editor.status");
+		CHECK(status["project"]["open"] == true);
+		CHECK(status["scene"]["entityCount"].get<size_t>() > 10);
+		CHECK(status["selection"]["count"] == 1);
+		const size_t bytes = status.dump().size();
+		CHECK_MESSAGE(bytes <= 1536, "The compact editor.status takes ", bytes, " bytes: ", status.dump());
+		CHECK(harness.Run("editor.status", { { "sections", { "all" } } }).dump().size() > bytes);
+	}
+
+	TEST_CASE("editor.status counts the errors logged since a client last read the log")
+	{
+		CommandHarness harness;
+		harness.Run("log.read", { { "after", Log::GetBuffer().GetLatestSequence() } });
+		CHECK(harness.Run("editor.status")["errors"]["unread"] == 0);
+		ST_CORE_ERROR("status-unread-test one");
+		ST_CORE_WARN("status-unread-test warning");
+		ST_CORE_CRITICAL("status-unread-test two");
+		CHECK(harness.Run("editor.status")["errors"]["unread"] == 2);
+		// Reading only the critical messages leaves the error unread; reading from Error on marks both read.
+		const nlohmann::json critical = harness.Run("log.read", { { "after", 0 }, { "minLevel", "Critical" }, { "maxCount", 10000 } });
+		CHECK(harness.Run("editor.status")["errors"]["unread"] == 2);
+		uint64_t after = 0;
+		nlohmann::json page;
+		do
+		{
+			page = harness.Run("log.read", { { "after", after }, { "minLevel", "Error" } });
+			after = page["latest"].get<uint64_t>();
+		} while (page["more"] == true);
+		CHECK(harness.Run("editor.status")["errors"]["unread"] == 0);
+		CHECK(critical["messages"].back()["message"] == "status-unread-test two");
 	}
 
 	TEST_CASE("editor.quit keeps unsaved changes unless forced")
@@ -429,7 +525,7 @@ TEST_SUITE("Editor.Commands")
 		nlohmann::json selection = harness.Run("selection.get");
 		CHECK(selection["entities"] == nlohmann::json::array({ entity }));
 		CHECK(selection["inspectedAsset"] == material);
-		CHECK(harness.Run("editor.status")["selection"]["inspectedAsset"] == material);
+		CHECK(harness.Run("editor.status", { { "sections", { "selection" } } })["selection"]["inspectedAsset"] == material);
 
 		// Selecting an entity inspects the entities again; clearing the selection does not.
 		version = context.GetInspectionVersion();

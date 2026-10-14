@@ -527,7 +527,7 @@ TEST_SUITE("Editor.Launcher")
 		editor.Frames(2);
 
 		// The startup time is the process's age once the first frame was on screen.
-		const nlohmann::json status = editor.Run("editor.status")["editor"];
+		const nlohmann::json status = editor.Run("editor.status", { { "sections", { "editor" } } })["editor"];
 		CHECK(status["startupSeconds"].get<double>() == doctest::Approx(0.41));
 		CHECK(status["gpu"]["name"] == "Test GPU");
 		CHECK(status["gpu"]["driver"] == "1.2.3");

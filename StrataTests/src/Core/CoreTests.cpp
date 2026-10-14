@@ -118,6 +118,13 @@ TEST_SUITE("Core")
 		CHECK(newer[0].Message == "four");
 
 		CHECK(buffer.GetEntries(0, 1).size() == 1);
+
+		// Counts cover only what the buffer still holds ("one" was dropped).
+		CHECK(buffer.CountEntries(0, LogLevel::Trace) == 3);
+		CHECK(buffer.CountEntries(0, LogLevel::Warn) == 2);
+		CHECK(buffer.CountEntries(entries[0].Sequence, LogLevel::Error) == 1);
+		CHECK(buffer.CountEntries(entries[1].Sequence, LogLevel::Error) == 0);
+		CHECK(buffer.CountEntries(0, LogLevel::Critical) == 0);
 	}
 
 	TEST_CASE("Log messages reach the shared buffer")

@@ -350,8 +350,8 @@ std::vector<std::string> slots = Game::ListSaveFiles();  // Sorted names
 Game::DeleteSaveFile("Slot 1");
 ```
 
-Window requests apply after the frame in an exported game; the editor's play mode only records them (`editor.status`
-section `game`, a notice over the game view), its own window stays. Saves go to `<user data>/<Game>/Saves` in an exported
+Window requests apply after the frame in an exported game; the editor's play mode only records them (`editor.status
+{"sections": ["game"]}`, a notice over the game view), its own window stays. Saves go to `<user data>/<Game>/Saves` in an exported
 game and to `<project>/.strata/Saves` in the editor. Names are 1 to 64 ASCII letters, digits, spaces, `-`, `_` and `.`
 (not first or last), without `..` (no paths); the calls read and write the disk before they return, so save at quiet
 moments (checkpoints, menus) and keep saves small.

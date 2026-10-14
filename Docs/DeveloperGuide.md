@@ -97,6 +97,7 @@ characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together
   - [Security model](#security-model)
   - [Session files](#session-files)
   - [Clients and environment](#clients-and-environment)
+  - [MCP toolsets](#mcp-toolsets)
   - [Other methods and tests](#other-methods-and-tests)
 - [Working with third-party code](#working-with-third-party-code)
 
@@ -1454,12 +1455,21 @@ and `AudioSystem`, the built-in "Audio" scene system.
   Shortcuts that act on the selection (Delete, Ctrl+D, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, F2, End) are
   `ImGuiInputFlags_RouteFocused` shortcuts of the Hierarchy and the Viewport (`UI/EditorActions.h`,
   `HandleSelectionShortcuts`): a key pressed in another panel never edits the scene. The Edit menu runs the same actions.
-- `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
-  parts of the editor add sections to it through `EditorContext::SetStatusProvider`: `automation`, `assets` (the
-  totals of `asset.stats`), `game` (the window requests of the running game, `null` without any, its cursor mode and its
-  save directory) and `editor`: the window, UI scale and frame rate, whether the launcher shows (`launcher`),
-  the GPU (`gpu`) and the startup time (`startupSeconds`: from the process's creation to its first frame on screen,
-  `Platform::GetProcessUptime`, also logged as "Started in ... s").
+- `editor.status` summarizes the editor. Its default answer is compact (agents call it often; about 700 bytes on the
+  feature project, at most 1.5 KiB): `engineVersion`, `project {open, name, path}`, `scene`, `play {state, paused,
+  pendingSteps, running}`, `selection {count, primary}`, `undo {undo, redo}`, `errors` (`unread`: errors and criticals
+  logged after the latest message a `log.read` from level Error or below returned, `EditorContext::MarkLogRead`;
+  `scriptBuild {failed, errors}`; `scriptFault`, the current fault in one line; `importFailures`, the open project's
+  imports that failed with nobody waiting for them), `assets {ready, loading, importing, scanning, failed}`, `saving` and
+  `editor {launcher}`. `sections: [...]` adds `engine` (`engineCommit`, `platform`), `project`, `selection` and `undo` in
+  full, `sceneLoad`, `memory` and the sections of other editor parts, which add them through
+  `EditorContext::SetStatusProvider(section, full, compact)`: `automation`, `assets` (the totals of `asset.stats`),
+  `game` (the window requests of the running game, `null` without any, its cursor mode and its save directory),
+  `recovery` and `editor`: the window, UI scale and frame rate, whether the launcher shows (`launcher`), the GPU (`gpu`)
+  and the startup time (`startupSeconds`: from the process's creation to its first frame on screen,
+  `Platform::GetProcessUptime`, also logged as "Started in ... s"). A provider's compact form (none: the section is only
+  reported when asked for) holds the few values an agent checks every time; `["all"]` returns every section. Tests and
+  command scripts that read beyond the compact form ask for the sections they read.
 
 ### Asset streaming commands
 
@@ -1898,8 +1908,8 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
 - **Commands are the API:** `EditorAutomation` (`StrataEditor/src/Editor/`) owns the editor's server and offers
   every command of the `EditorCommandRegistry` as a method with the command's name, description and parameter
   schema; commands registered later (or again, with another description or schema) are picked up on the next
-  frame. `rpc.listMethods` lists them, and `StrataCLI mcp` turns each into a tool (`entity.create` ->
-  `entity_create`, `inputSchema` = the parameter schema). So a new feature reaches agents by registering a
+  frame. `rpc.listMethods` lists them, and `StrataCLI mcp` turns those of its enabled toolsets into tools (`entity.create`
+  -> `entity_create`, `inputSchema` = the parameter schema). So a new feature reaches agents by registering a
   command; no RPC code is needed. Write commands for agents: a description that says what the command does
   and returns, a complete schema (property descriptions, `required`), IDs as 16-digit hex strings, assets by
   handle or path, results as JSON objects with camelCase keys, and images as
@@ -1982,6 +1992,26 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
 - **Environment:** `STRATA_SESSION_DIR` overrides the session directory for editors and clients alike (tests
   use it to stay isolated from real editors). `STRATA_EDITOR_PORT`/`STRATA_EDITOR_TOKEN` select an explicit
   endpoint, and `STRATA_EDITOR_PATH` the editor executable for `launch`/`strata_launch_editor`.
+
+### MCP toolsets
+
+- **Toolsets:** MCP clients take a limited number of tools (some 128) and pay for every tool definition in tokens, so
+  `StrataCLI mcp` lists only the commands of its enabled toolsets (`CLI/McpToolsets`): `core` by default, the commands
+  a game is made and tested with (`McpToolsets::GetCoreCommands`), plus one toolset per command group: `scene`
+  (`scene.`, `entity.`, `component.`, `prefab.`, `selection.`, `edit.`), `assets` (`asset.`, `material.`, `project.`),
+  `play` (`play.`, `input.`, `audio.`), `scripts`, `animation`, `viewport` (`viewport.`, `camera.`), `streaming`
+  (`asset.stats`, `asset.setBudget`), `perf` (`editor.perf`), `editor` (`editor.`, `log.`), `ui` and `world` (`world.`,
+  `physics.`). Exact names win over prefixes; a group the table does not know gets a toolset named after it, but a new
+  built-in group goes into the table (`CLI.McpToolsets` checks that every command maps to a toolset it names).
+  `--toolsets <a,b>|all` picks them at start, the generic tool `strata_toolsets {enable, disable}` while it runs (the
+  client hears `notifications/tools/list_changed`), `strata_describe` lists the toolsets, a toolset's commands (one line
+  each) or one command's full description and schema, and `strata_call` runs any command. Tools of commands outside the
+  enabled toolsets still answer when called by name. `strata_list_methods` answers older clients but is not listed.
+- **Compact definitions:** tools carry the description's first sentence (at most 160 characters, with "(details:
+  strata_describe)" when cut) and property descriptions cut to their first sentence (100 characters); types, enums,
+  ranges and `required` stay (`McpToolsets::MakeCompactToolDefinition`). So the first sentence of a command's
+  description says what it does, and a property's first sentence what it is. The default list stays at most 32 tools
+  and 30 KiB of `tools/list` JSON (`CLI.McpToolsets`; 31 tools in about 17 KB, every command in about 70 KB).
 
 ### Other methods and tests
 

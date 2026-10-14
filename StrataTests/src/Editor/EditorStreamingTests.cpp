@@ -171,7 +171,7 @@ TEST_SUITE("Editor.Streaming")
 		CHECK(harness.Execute("asset.stats", { { "assets", "yes" } }).ErrorKind == EditorCommandError::InvalidParameters);
 
 		// editor.status carries the same totals.
-		const nlohmann::json status = harness.Run("editor.status");
+		const nlohmann::json status = harness.Run("editor.status", { { "sections", { "assets" } } });
 		REQUIRE(status.contains("assets"));
 		CHECK(status["assets"]["registered"] == stats.RegisteredAssets);
 		CHECK(status["assets"]["pools"]["cpu"]["residentBytes"] == AssetManager::GetActive()->GetStats().Resident.Cpu);

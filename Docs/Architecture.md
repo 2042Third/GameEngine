@@ -2527,11 +2527,13 @@ is the `strata-scripting` skill. The layers:
   each frame `EditorAutomation::Update` registers new or changed commands as methods and runs queued requests through
   the runner, so a deferred command answers when it completes. Clients find the editor through session files
   (`Network/EditorSession.h`). StrataCLI (`StrataCLI/src/CLI/`) connects with `RpcClient` (`EditorConnection`),
-  starts editors (`EditorLauncher`) and serves MCP (`McpServer`, one tool per command). Clients may name themselves in
+  starts editors (`EditorLauncher`) and serves MCP (`McpServer`: one tool per command of the enabled toolsets, which
+  `McpToolsets` assigns by command group, with compact definitions; `strata_describe` and `strata_call` reach the rest,
+  `strata_toolsets` changes the set). Clients may name themselves in
   `rpc.handshake` (`clientName`: at most 64 characters, control and text-direction characters removed by
   `SanitizeRpcClientName`, informational only and never used for trust): `RpcServer::GetClients` lists them, responders
   carry them (`RpcResponder::GetClient`) into the activity journal, and `editor.status` lists them under
-  `automation.connectedClients`. StrataCLI names itself "StrataCLI"; its MCP server forwards the MCP client's
+  `automation.connectedClients` (`{"sections": ["automation"]}`: its default answer is compact). StrataCLI names itself "StrataCLI"; its MCP server forwards the MCP client's
   `clientInfo.name` from `initialize` (reconnecting to the same editor when the name changes). **Presence**: the person
   sees who works with them. The automation pill reads "Agent connected · <name>" (several: "N agents connected"), its
   text made again only when `RpcServer::GetClientsVersion` changes and its tooltip (each client and when it connected)

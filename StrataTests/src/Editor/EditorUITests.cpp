@@ -616,7 +616,7 @@ TEST_SUITE("Editor.UI")
 		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
 
 		// editor.status reports it.
-		const nlohmann::json status = editor.Run("editor.status");
+		const nlohmann::json status = editor.Run("editor.status", { { "sections", { "editor" } } });
 		const nlohmann::json& frameRate = status["editor"]["frameRate"];
 		CHECK(frameRate["idle"] == true);
 		CHECK(frameRate["cap"] == EditorLayer::c_IdleFrameRate);
@@ -925,7 +925,7 @@ TEST_SUITE("Editor.UI")
 		CHECK(frame.WorkMilliseconds == doctest::Approx(4.0f));
 		CHECK(frame.FramesPerSecond == doctest::Approx(30.0f).epsilon(0.02));
 		CHECK(frame.Idle);
-		const nlohmann::json status = editor.Run("editor.status");
+		const nlohmann::json status = editor.Run("editor.status", { { "sections", { "editor" } } });
 		CHECK(status["editor"]["frameRate"]["frameMilliseconds"].get<double>() == doctest::Approx(4.0));
 		// editor.wait reports the same measurement, recorded per frame from the host.
 		CHECK(editor.Context().GetLastFrameTime() == doctest::Approx(4.0));
@@ -1167,7 +1167,7 @@ TEST_SUITE("Editor.UI")
 		REQUIRE(editor.Context().IsPlaying());
 		// The requests reach the editor's game window service only (EditorHost offers no way to change the editor's window).
 		CHECK(viewport->GetShownGameWindowNotice() == "The game asked for fullscreen at 1920 x 1080 pixels with vsync off; play mode keeps the editor's window.");
-		CHECK(editor.Run("editor.status")["game"]["windowRequests"]["mode"] == "fullscreen");
+		CHECK(editor.Run("editor.status", { { "sections", { "game" } } })["game"]["windowRequests"]["mode"] == "fullscreen");
 
 		REQUIRE(editor.Click("Toolbar.Stop"));
 		editor.Frames(1);

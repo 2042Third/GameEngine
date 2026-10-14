@@ -218,12 +218,12 @@ TEST_SUITE("Scripting.Input")
 		harness.Run("play.start");
 		CHECK(Input::GetGameCursorMode() == CursorMode::Locked);
 		CHECK(window.Cursor == CursorMode::Locked);
-		CHECK(harness.Run("editor.status")["game"]["cursor"] == "locked");
+		CHECK(harness.Run("editor.status", { { "sections", { "game" } } })["game"]["cursor"] == "locked");
 
 		harness.Run("play.stop");
 		CHECK(Input::GetGameCursorMode() == CursorMode::Normal);
 		CHECK(window.Cursor == CursorMode::Normal);
-		CHECK(harness.Run("editor.status")["game"]["cursor"] == "normal");
+		CHECK(harness.Run("editor.status", { { "sections", { "game" } } })["game"]["cursor"] == "normal");
 	}
 }
 
@@ -233,7 +233,7 @@ TEST_SUITE("Scripting.Game")
 	{
 		ShellHarness harness;
 		const std::string requests = harness.AddScript("Window", "WindowRequests", { { "Mode", 2 }, { "Width", 1600 }, { "Height", 900 } });
-		CHECK(harness.Run("editor.status")["game"]["windowRequests"].is_null());
+		CHECK(harness.Run("editor.status", { { "sections", { "game" } } })["game"]["windowRequests"].is_null());
 		Input::SetViewport({ 0.0f, 0.0f }, { 512.0f, 288.0f }); // The game view
 		harness.Run("play.start");
 		harness.Frame();
@@ -243,7 +243,7 @@ TEST_SUITE("Scripting.Game")
 		CHECK(harness.Field<glm::vec2>(requests, "WindowRequests", "Size") == glm::vec2(512.0f, 288.0f));
 		const EditorGameWindow& window = harness.Context.GetGameWindow();
 		CHECK(window.HasRequests());
-		const nlohmann::json reported = harness.Run("editor.status")["game"]["windowRequests"];
+		const nlohmann::json reported = harness.Run("editor.status", { { "sections", { "game" } } })["game"]["windowRequests"];
 		CHECK(reported["mode"] == "borderless");
 		CHECK(reported["resolution"] == nlohmann::json::array({ 1600, 900 }));
 		CHECK(reported["vsync"] == false);
@@ -255,7 +255,7 @@ TEST_SUITE("Scripting.Game")
 
 		harness.Run("play.stop");
 		CHECK_FALSE(window.HasRequests());
-		CHECK(harness.Run("editor.status")["game"]["windowRequests"].is_null());
+		CHECK(harness.Run("editor.status", { { "sections", { "game" } } })["game"]["windowRequests"].is_null());
 		Input::SetViewport({ 0.0f, 0.0f }, { 0.0f, 0.0f });
 	}
 
@@ -288,7 +288,7 @@ TEST_SUITE("Scripting.Game")
 		const std::filesystem::path saves = harness.Directory / ".strata" / "Saves";
 		REQUIRE(harness.Context.GetGameSaveDirectory());
 		CHECK(*harness.Context.GetGameSaveDirectory() == saves);
-		CHECK(harness.Run("editor.status")["game"]["saveDirectory"] == FileSystem::ToUTF8(saves));
+		CHECK(harness.Run("editor.status", { { "sections", { "game" } } })["game"]["saveDirectory"] == FileSystem::ToUTF8(saves));
 
 		const std::string saver = harness.AddScript("Saver", "SaveRoundTrip");
 		harness.Run("play.start");
@@ -302,7 +302,7 @@ TEST_SUITE("Scripting.Game")
 		// Without a project there is nowhere to save. (The scene's unsaved script is of no interest here: discarded.)
 		harness.Run("project.close", { { "force", true } });
 		CHECK_FALSE(harness.Context.GetGameSaveDirectory());
-		CHECK(harness.Run("editor.status")["game"]["saveDirectory"].is_null());
+		CHECK(harness.Run("editor.status", { { "sections", { "game" } } })["game"]["saveDirectory"].is_null());
 	}
 
 	TEST_CASE("An exported game saves in the player's data directory, or where the program running it says")

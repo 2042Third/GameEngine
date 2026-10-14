@@ -156,16 +156,30 @@ namespace Strata
 			return scenes;
 		});
 		SetStatusProvider("recovery", [this]() { return m_Recovery.DescribeStatus(); });
-		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details).
+		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details). Imports
+		// still running (a project opened with assets to import, re-imports) deliver their assets when they finish; scanning
+		// is the scan of the project's files while it registers them (null: none runs).
 		SetStatusProvider("assets", [this]()
 		{
 			const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
 			if (!manager)
 				return nlohmann::json(nullptr);
 			nlohmann::json description = CommandUtils::DescribeAssetStats(manager->GetStats());
-			// Imports still running (a project opened with assets to import, re-imports): their assets arrive when they finish.
 			description["importing"] = m_AssetManager && manager == m_AssetManager ? m_AssetManager->GetPendingImportCount() : 0u;
+			description["scanning"] = nullptr;
 			return description;
+		}, [this]()
+		{
+			const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+			if (!manager)
+				return nlohmann::json(nullptr);
+			const AssetManagerStats stats = manager->GetStats();
+			return nlohmann::json {
+				{ "ready", stats.LoadedAssets },
+				{ "loading", stats.LoadingAssets },
+				{ "importing", m_AssetManager && manager == m_AssetManager ? m_AssetManager->GetPendingImportCount() : 0u },
+				{ "scanning", nullptr },
+				{ "failed", stats.FailedAssets } };
 		});
 	}
 
@@ -373,6 +387,7 @@ namespace Strata
 				AssetManager::SetActive(nullptr);
 			m_AssetManager.reset();
 			m_SceneMetadataVersion = UINT64_MAX;
+			m_ImportFailureCount = 0;
 		}
 		if (m_Project)
 		{
@@ -1972,6 +1987,7 @@ namespace Strata
 		const std::vector<AssetImportFailure> failures = m_AssetManager->TakeImportFailures(&count);
 		if (failures.empty())
 			return;
+		m_ImportFailureCount += count;
 		// One toast however many fail (a project whose files are broken fails many imports as it opens): it counts them and
 		// shows the latest; the Console lists them all.
 		const AssetImportFailure& latest = failures.back();
@@ -2018,10 +2034,10 @@ namespace Strata
 		return m_Specification.SamplesDirectory.empty() ? ProjectSamples::GetDefaultDirectory() : m_Specification.SamplesDirectory;
 	}
 
-	void EditorContext::SetStatusProvider(const std::string& section, StatusProvider provider)
+	void EditorContext::SetStatusProvider(const std::string& section, StatusProvider provider, StatusProvider compactProvider)
 	{
 		if (provider)
-			m_StatusProviders.insert_or_assign(section, std::move(provider));
+			m_StatusProviders.insert_or_assign(section, StatusSection { std::move(provider), std::move(compactProvider) });
 		else
 			m_StatusProviders.erase(section);
 	}

@@ -202,6 +202,7 @@ namespace Strata
 			return {
 				{ "open", true },
 				{ "name", config.Name },
+				{ "path", FileSystem::ToUTF8(project->GetProjectFile()) },
 				{ "directory", FileSystem::ToUTF8(project->GetProjectDirectory()) },
 				{ "assetDirectory", FileSystem::ToUTF8(project->GetAssetDirectory()) },
 				{ "startScene", config.StartScene.IsValid() ? UUIDToJson(config.StartScene) : nlohmann::json(nullptr) },
