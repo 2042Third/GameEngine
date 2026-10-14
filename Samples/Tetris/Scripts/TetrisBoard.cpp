@@ -1,6 +1,7 @@
 // Plays Tetris on the entity it is attached to. The well's bottom-left cell sits at the entity's origin, one world unit per
 // cell; the script creates the cube entities it draws with (under a child named "Cells") and shows score, level and lines
-// in the Text entities named by its fields.
+// in the UI text elements named by its fields (on the HUD canvas), and game over and pause messages on a panel it shows
+// while there is one.
 //
 // Controls: Left/Right or A/D move (held keys repeat), Down or S soft drop, Space hard drop, Up or X rotate clockwise,
 // Z rotate counterclockwise, P pause, R or Enter restart, Escape quit.
@@ -43,11 +44,12 @@ public:
 	float CellScale = 0.92f;   // Gaps between the cubes
 	glm::vec3 PreviewOffset = { 12.0f, 15.0f, 0.0f }; // Where the next piece is shown, relative to the board
 
-	// HUD: entities with a Text component
+	// HUD: UI elements with a UIText component, and the panel around the message (shown while there is a message)
 	Entity ScoreText;
 	Entity LevelText;
 	Entity LinesText;
 	Entity MessageText;
+	Entity MessagePanel;
 
 	// Sounds (optional)
 	AssetHandle MoveSound;
@@ -345,6 +347,8 @@ private:
 		{
 			m_ShownMessage = message;
 			SetText(MessageText, message);
+			if (MessagePanel)
+				MessagePanel.SetActive(!message.empty());
 		}
 	}
 
@@ -382,7 +386,7 @@ private:
 	static void SetText(Entity entity, const std::string& text)
 	{
 		if (entity)
-			entity.SetProperty("Text", "Text", text);
+			entity.SetProperty("UIText", "Text", text);
 	}
 
 	static void PlaySound(AssetHandle clip)
@@ -440,6 +444,7 @@ ST_SCRIPT_CLASS(TetrisBoard)
 	ST_SCRIPT_FIELD(LevelText);
 	ST_SCRIPT_FIELD(LinesText);
 	ST_SCRIPT_FIELD(MessageText);
+	ST_SCRIPT_FIELD(MessagePanel);
 	ST_SCRIPT_FIELD(MoveSound);
 	ST_SCRIPT_FIELD(LockSound);
 	ST_SCRIPT_FIELD(ClearSound);

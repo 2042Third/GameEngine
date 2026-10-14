@@ -10,6 +10,8 @@
 #include "Strata/Renderer/TextureStreamer.h"
 #include "Strata/Runtime/GameRenderer.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/SceneSerializer.h"
+#include "TestHelpers.h"
 
 #include <string>
 #include <vector>
@@ -382,6 +384,60 @@ TEST_SUITE("GPU.GameUI")
 			else
 				CHECK(level == 3);
 			AssetManager::SetActive(nullptr);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The Tetris HUD covers the same fraction of the screen at 1280x720 and 2560x1440")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		std::string error;
+		const std::filesystem::path project = CopySampleProject("Tetris", &error);
+		REQUIRE_MESSAGE(!project.empty(), error);
+		const Ref<Scene> scene = SceneSerializer::LoadFromFile(project / "Assets" / "Scenes" / "Main.stscene", &error);
+		REQUIRE_MESSAGE(scene, error);
+		// The HUD alone, over black: every lit pixel is the HUD's.
+		const Entity hud = scene->FindEntityByName("HUD");
+		REQUIRE(hud.IsValid());
+		std::vector<Entity> others;
+		for (const UUID& root : scene->GetRootEntities())
+		{
+			if (root != hud.GetUUID())
+				others.push_back(scene->GetEntityByUUID(root));
+		}
+		scene->DestroyEntities(others);
+		AddNeutralPostProcess(*scene);
+
+		SceneRenderer renderer(ExactSpecification());
+		glm::vec4 fractions[2];
+		int index = 0;
+		for (const glm::uvec2 size : { glm::uvec2(1280, 720), glm::uvec2(2560, 1440) })
+		{
+			CAPTURE(size);
+			const ReadbackImage image = RenderUI(renderer, *scene, size);
+			glm::uvec2 min(size);
+			glm::uvec2 max(0);
+			for (uint32_t y = 0; y < image.Height; y++)
+			{
+				for (uint32_t x = 0; x < image.Width; x++)
+				{
+					const glm::u8vec4 pixel = GetPixelRGBA8(image, x, y);
+					if (pixel.r + pixel.g + pixel.b < 24)
+						continue;
+					min = glm::min(min, glm::uvec2(x, y));
+					max = glm::max(max, glm::uvec2(x + 1, y + 1));
+				}
+			}
+			REQUIRE(max.x > min.x);
+			fractions[index++] = glm::vec4(glm::vec2(min) / glm::vec2(size), glm::vec2(max) / glm::vec2(size));
+		}
+		// On a canvas the HUD scales with the screen: the same box within 1% of the screen (a HUD of fixed pixel sizes covers
+		// half the fraction at the larger size).
+		for (int component = 0; component < 4; component++)
+		{
+			CAPTURE(component);
+			CHECK(std::abs(fractions[0][component] - fractions[1][component]) <= 0.01f);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
