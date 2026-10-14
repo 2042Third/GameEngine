@@ -236,6 +236,8 @@ TEST_SUITE("Editor.World")
 	{
 		WorldProject project("EditorWorldOpen", 5);
 		CHECK(project.Run("world.status")["world"].is_null());
+		CHECK(project.Run("scene.loadStatus")["world"].is_null());
+		CHECK(project.Run("editor.status")["world"].is_null());
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		REQUIRE(project.Context.GetWorld());
 		const glm::vec3 start(14.0f, 10.0f, 14.0f); // Off every cell's edge at 48 m
@@ -249,6 +251,16 @@ TEST_SUITE("Editor.World")
 		CHECK(status["cells"]["loaded"] == GroundCellsWithin(5, start, 48.0f).size());
 		CHECK(status["cells"]["dirty"] == 0);
 		CHECK(status["sources"][0]["position"][0].get<float>() == doctest::Approx(start.x));
+		// scene.loadStatus and editor.status agree with it.
+		const nlohmann::json loads = project.Run("scene.loadStatus")["world"];
+		CHECK(loads["editor"]["cellsLoaded"] == status["cells"]["loaded"]);
+		CHECK(loads["editor"]["cellsWanted"] == status["cells"]["wanted"]);
+		CHECK(loads["editor"]["cellsLoading"] == 0);
+		CHECK(loads["game"].is_null());
+		const nlohmann::json summary = project.Run("editor.status")["world"];
+		CHECK(summary["name"] == "Gen");
+		CHECK(summary["cellsLoaded"] == status["cells"]["loaded"]);
+		CHECK(summary["cellsDirty"] == 0);
 		// The cells' entities are in the edited scene, which is not modified by them.
 		CHECK(project.Context.GetEditScene()->FindEntityByName("Box 0").IsValid());
 		CHECK_FALSE(project.Context.IsSceneModified());
@@ -639,6 +651,9 @@ TEST_SUITE("Editor.World")
 		CHECK(game.GetEntityByUUID(boxID).GetComponent<TransformComponent>().Scale.x == 2.0f);
 		CHECK_FALSE(game.GetEntityByUUID(nearBox).IsValid());
 		CHECK(project.Run("world.status")["playing"]["loaded"].get<uint32_t>() >= 2);
+		const nlohmann::json loads = project.Run("scene.loadStatus")["world"];
+		CHECK(loads["game"]["cellsLoaded"] == streaming->GetStats().CellsLoaded);
+		CHECK(loads["editor"]["cellsLoaded"] == project.Context.GetWorld()->GetStreamer().GetStats().CellsLoaded);
 
 		project.Run("play.stop");
 		CHECK(project.Context.GetEditScene()->GetEntityByUUID(boxID).GetComponent<TransformComponent>().Scale.x == 2.0f);

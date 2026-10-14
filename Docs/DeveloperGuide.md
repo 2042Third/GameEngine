@@ -1290,7 +1290,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   outside `Finish`/`CommitEdit` checks first; play mode is refused; the Hierarchy and the Inspector draw their contents
   disabled under a banner, `DrawSceneLoadBanner`, and the gizmo hides) and the viewport shows the load's progress
   (`ViewportPanel::DrawSceneLoadOverlay`).
-  `scene.loadStatus` and `editor.status` (`sceneLoad`) report it (`scene.loadStatus` also the running game's sub-scenes,
+  `scene.loadStatus` and `editor.status` (`sceneLoad`) report it (`scene.loadStatus` also the cells a world streams, in the
+  editor and the running game, `world`, and the running game's sub-scenes,
   which `scene.loadAdditive {scene}` and `scene.unloadAdditive {subScene}` load and unload in play mode, see Scripting;
   `scene.loadStatus {wait: true}` answers once no scene is being opened); `EditorContext::OpenScene` waits for it (tools,
   tests). Opening a project (`project.open`, `project.openSample`, `EditorContext::BeginOpenProject`) opens the project at
@@ -1450,7 +1451,7 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - `editor.status` summarizes the editor (project, scene, play state, selection, undo history); other
   parts of the editor add sections to it through `EditorContext::SetStatusProvider`: `automation`, `assets` (the
   totals of `asset.stats`), `game` (the window requests of the running game, `null` without any, its cursor mode and its
-  save directory) and `editor`: the window, UI scale and frame rate, whether the launcher shows (`launcher`),
+  save directory), `world` (the open world's name, loaded, loading and dirty cells; `null` without one) and `editor`: the window, UI scale and frame rate, whether the launcher shows (`launcher`),
   the GPU (`gpu`) and the startup time (`startupSeconds`: from the process's creation to its first frame on screen,
   `Platform::GetProcessUptime`, also logged as "Started in ... s").
 

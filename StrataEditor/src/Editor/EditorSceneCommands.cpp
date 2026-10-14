@@ -344,7 +344,8 @@ namespace Strata
 			nlohmann::json subScenes = nlohmann::json::array();
 			for (const SubSceneStatus& subScene : context.GetActiveScene()->GetSubScenes())
 				subScenes.push_back(DescribeSubScene(subScene));
-			return { { "open", std::move(open) }, { "lastOpen", std::move(lastOpen) }, { "play", std::move(play) }, { "subScenes", std::move(subScenes) } };
+			return { { "open", std::move(open) }, { "lastOpen", std::move(lastOpen) }, { "play", std::move(play) }, { "subScenes", std::move(subScenes) },
+				{ "world", DescribeWorldLoads(context) } };
 		}
 
 		// The load of scene.loadAdditive: starts loading the scene asset into the running scene and answers once every entity
@@ -567,7 +568,9 @@ namespace Strata
 			"startScene, state: Ready | Failed | Cancelled, error, seconds}, null before the first), play (the scene a running game asked for "
 			"while it loads, {scene, progress}, null when none) and subScenes (the running scene's sub-scenes, scene.loadAdditive: {subScene, "
 			"scene, state: Loading | Instantiating | Loaded | Failed, progress, createdEntities, skippedEntities (not created because an "
-			"ancestor was deleted while the sub-scene loaded), totalEntities, slices, error}). With wait, it "
+			"ancestor was deleted while the sub-scene loaded), totalEntities, slices, error}) and world (the cells the open world streams around "
+			"the editor camera, editor, and while playing those of the running game, game: each {cellsWanted, cellsLoading, cellsLoaded, "
+			"cellsUnloading, cellsPinned, cellsFailed} or null; null when no world streams). With wait, it "
 			"answers once no scene is being opened, e.g. after starting an editor with a window, which opens its project's start scene in the "
 			"background (scene edits and play.start fail until then).",
 			ObjectSchema({ { "wait", BoolSchema("Answer once no scene is being opened (default false: at once)") } }),

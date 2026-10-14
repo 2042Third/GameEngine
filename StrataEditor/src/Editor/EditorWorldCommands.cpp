@@ -280,6 +280,38 @@ namespace Strata
 	namespace CommandUtils
 	{
 
+		nlohmann::json DescribeWorldLoads(const EditorContext& context)
+		{
+			auto describe = [](const WorldStreamingStats& stats)
+			{
+				return nlohmann::json { { "cellsWanted", stats.CellsWanted }, { "cellsLoading", stats.CellsLoading }, { "cellsLoaded", stats.CellsLoaded },
+					{ "cellsUnloading", stats.CellsUnloading }, { "cellsPinned", stats.CellsPinned }, { "cellsFailed", stats.CellsFailed } };
+			};
+			nlohmann::json editor = nullptr;
+			if (const EditorWorld* world = context.GetWorld())
+				editor = describe(world->GetStreamer().GetStats());
+			nlohmann::json game = nullptr;
+			if (context.IsPlaying())
+			{
+				if (const IWorldStreaming* streaming = context.GetActiveScene()->GetService<IWorldStreaming>())
+					game = describe(streaming->GetStats());
+			}
+			if (editor.is_null() && game.is_null())
+				return nullptr;
+			return { { "editor", std::move(editor) }, { "game", std::move(game) } };
+		}
+
+		nlohmann::json DescribeWorldSummary(const EditorContext& context)
+		{
+			const EditorWorld* world = context.GetWorld();
+			if (!world)
+				return nullptr;
+			const WorldStreamingStats stats = world->GetStreamer().GetStats();
+			const Ref<WorldAsset> asset = world->GetWorldAsset();
+			return { { "name", asset ? nlohmann::json(asset->GetData().Name) : nlohmann::json(nullptr) }, { "cellsLoaded", stats.CellsLoaded },
+				{ "cellsLoading", stats.CellsLoading }, { "cellsDirty", world->GetDirtyCells().size() }, { "persistentDirty", world->IsPersistentDirty() } };
+		}
+
 		nlohmann::json DescribePhysicsStats(const Scene* scene)
 		{
 			if (!scene || !scene->IsRunning())

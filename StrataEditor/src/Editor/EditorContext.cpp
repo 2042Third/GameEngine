@@ -158,6 +158,8 @@ namespace Strata
 			return scenes;
 		});
 		SetStatusProvider("recovery", [this]() { return m_Recovery.DescribeStatus(); });
+		// The world the edited scene is, when it is one (world.status has the details).
+		SetStatusProvider("world", [this]() { return CommandUtils::DescribeWorldSummary(*this); });
 		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details).
 		SetStatusProvider("assets", [this]()
 		{

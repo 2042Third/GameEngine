@@ -71,6 +71,13 @@ namespace Strata
 		nlohmann::json DescribeAssetStats(const AssetManagerStats& stats);
 		// physics.stats' answer for a scene (EditorWorldCommands.cpp): {running: false} for none or one that does not run.
 		nlohmann::json DescribePhysicsStats(const Scene* scene);
+		// scene.loadStatus's world streaming (EditorWorldCommands.cpp): the editor's world (editor) and, while playing, the
+		// running game's (game), each {cellsWanted, cellsLoading, cellsLoaded, cellsUnloading, cellsPinned, cellsFailed} or
+		// null; null when neither streams a world.
+		nlohmann::json DescribeWorldLoads(const EditorContext& context);
+		// editor.status's world section (EditorWorldCommands.cpp): the open world's {name (null while its asset loads),
+		// cellsLoaded, cellsLoading, cellsDirty, persistentDirty}; null without one.
+		nlohmann::json DescribeWorldSummary(const EditorContext& context);
 
 		// Statistics of frame times in milliseconds (at least one), as editor.wait and project.export report them: {count,
 		// medianMs (the mean of the two middle ones for an even count), meanMs, p95Ms (nearest rank), maxMs}.
