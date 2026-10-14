@@ -191,7 +191,8 @@ the scene has unsaved changes (pass `"force": true` only to throw away edits you
   or `UILayout` (a vertical or horizontal stack; children with `"FitContent": "Both"` take their text's size).
   `Samples/Tetris` shows the score on a rounded panel in the top-left corner and its messages on a centered panel. `Text`
   stays for world text (`ScreenSpace: false`, `FontSize` in world units); screen-space `Text` keeps its pixel size on
-  every screen, so do not build HUDs with it.
+  every screen, so do not build HUDs with it. Panels with buttons in the level (a terminal, a shop sign) are canvases
+  with `"RenderMode": "WorldSpace"`: the player clicks them through the camera.
 - `script.add {"entity", "class", "fields": {...}}`: asset fields take paths (`"Materials/Red.stmat"`, `"Builtin/Cube"`),
   entity fields take IDs from `entity.create`. Fields left out keep the class defaults.
 

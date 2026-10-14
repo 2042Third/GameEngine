@@ -141,7 +141,7 @@ namespace Strata
 		// Never part of the scene (not saved, not in games).
 		bool PreviewEnvironment = false;
 		// The game's screen-space UI: the HUD text and screen-space canvases (the overlay passes, SceneOverlayRegistry). Editor
-		// views turn it off so the HUD does not cover the scene being edited; world-space text is always drawn.
+		// views turn it off so the HUD does not cover the scene being edited; world-space text and canvases are always drawn.
 		bool DrawScreenSpaceText = true;
 		// Where the game's screen lies in the image, for that screen-space UI: by default the whole image. The editor's 2D
 		// canvas mode zooms and pans it (SceneScreenView).
@@ -618,7 +618,7 @@ namespace Strata
 		// Draws the overlays into the output texture (which must hold the finished image); false when GPU resources failed.
 		bool RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneRenderOptions& options, bool drawText, bool drawOverlayPasses);
 		// Prepare of every overlay pass (SceneOverlayRegistry); whether any draws.
-		bool PrepareOverlayPasses(Scene& scene, const SceneRenderOptions& options, nvrhi::ICommandList* commandList);
+		bool PrepareOverlayPasses(Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, nvrhi::ICommandList* commandList);
 		void DrawDebugLines(nvrhi::ICommandList* commandList, DebugDrawDepth depth, uint32_t firstVertex, uint32_t vertexCount);
 		// The tints of SceneRenderOptions::EntityTints (StatusTint.frag); false when GPU resources failed.
 		bool DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport);

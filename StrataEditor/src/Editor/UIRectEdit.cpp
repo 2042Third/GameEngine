@@ -4,10 +4,13 @@
 #include "Editor/SceneEdit.h"
 
 #include <Strata/Core/Log.h>
+#include <Strata/GameUI/GameUIHitTest.h>
 #include <Strata/Scene/Scene.h>
 
+#include <algorithm>
 #include <cmath>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace Strata::UIRectEdit
@@ -189,6 +192,7 @@ namespace Strata::UIRectEdit
 		Placement placement;
 		placement.Box = ui.GetElementBox(view, element);
 		placement.Scale = view.Scale;
+		placement.WorldSpace = view.WorldSpace;
 		for (Entity parent = entity.GetParent(); parent; parent = parent.GetParent())
 		{
 			UICanvasView parentView;
@@ -202,17 +206,16 @@ namespace Strata::UIRectEdit
 		return std::nullopt;
 	}
 
-	Entity PickElement(Scene& scene, const UIScreen& screen, const glm::vec2& pixel)
+	Entity PickElement(Scene& scene, const UIScreen& screen, const glm::vec2& pixel, bool screenCanvases, const glm::mat4* viewProjection)
 	{
 		if (!GameUIScene::HasCanvases(scene))
 			return {};
 		GameUIScene& ui = GameUIScene::Get(scene);
-		const std::span<const UICanvasView> views = ui.EnsureLayout(screen);
+		const std::span<const UICanvasView> laidOut = ui.EnsureLayout(screen, screenCanvases);
+		const std::vector<UICanvasView> views(laidOut.begin(), laidOut.end());
 		const entt::registry& registry = scene.GetRegistry();
-		for (size_t index = views.size(); index-- > 0;)
+		auto pick = [&](const UICanvasView& view, const glm::vec2& point) -> Entity
 		{
-			const UICanvasView& view = views[index];
-			const glm::vec2 point = pixel / view.Scale;
 			for (uint32_t element = ui.GetElementCount(view); element-- > 1;)
 			{
 				const entt::entity entity = ui.GetElementEntity(view, element);
@@ -221,6 +224,33 @@ namespace Strata::UIRectEdit
 				if (ui.GetVisibleBox(view, element).Contains(point))
 					return Entity(entity, &scene);
 			}
+			return {};
+		};
+		// The screen's canvases are in front of the scene's.
+		for (size_t index = views.size(); index-- > 0;)
+		{
+			if (views[index].WorldSpace)
+				continue;
+			if (const Entity picked = pick(views[index], pixel / views[index].Scale))
+				return picked;
+		}
+		// The canvases in the scene where the view's ray through the pixel crosses them, nearest first.
+		const std::optional<UIPointerRay> ray = viewProjection ? GameUIPointer::MakeRay(*viewProjection, screen.Size, pixel) : std::nullopt;
+		if (!ray)
+			return {};
+		std::vector<std::pair<float, std::pair<size_t, glm::vec2>>> crossings;
+		for (size_t index = 0; index < views.size(); index++)
+		{
+			if (!views[index].WorldSpace)
+				continue;
+			if (const std::optional<std::pair<glm::vec2, float>> crossing = GameUIPointer::IntersectCanvas(ui.GetCanvasWorldMatrix(views[index]), *ray))
+				crossings.push_back({ crossing->second, { index, crossing->first } });
+		}
+		std::stable_sort(crossings.begin(), crossings.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+		for (const auto& [distance, crossing] : crossings)
+		{
+			if (const Entity picked = pick(views[crossing.first], crossing.second))
+				return picked;
 		}
 		return {};
 	}

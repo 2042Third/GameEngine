@@ -50,7 +50,7 @@ namespace Strata
 		UIRectComponent PlaceRect(const UIRectComponent& rect, const UIBox& box, const UIBox& parent);
 
 		// The canvas the 2D canvas mode shows: the selection's (its root canvas), else the scene's first root canvas in draw
-		// order; invalid when the scene has none.
+		// order, of the screen-space ones (a world-space canvas is edited in the scene); invalid when the scene has none.
 		Entity FindShownCanvas(EditorContext& context);
 
 		// The aspect ratio (width / height) the canvas mode shows a canvas at: its reference resolution's when it scales with

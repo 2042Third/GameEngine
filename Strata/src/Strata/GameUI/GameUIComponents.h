@@ -32,9 +32,21 @@ namespace Strata
 		ConstantPhysicalSize   // One canvas unit is ScaleFactor pixels at 96 DPI (the screen's content scale times ScaleFactor)
 	};
 
+	enum class UICanvasRenderMode : uint8_t
+	{
+		ScreenSpace = 0, // Over the scene, laid out for the screen (the scale mode)
+		WorldSpace       // A plane in the scene at the entity's transform
+	};
+
 	// A screen of UI. A root canvas lays its elements out for the screen it is shown on: at a scale s (pixels per canvas
 	// unit) over a size of screen / s canvas units, inset by SafeAreaPadding. Root canvases draw over the scene in SortOrder
 	// (higher on top), and the topmost one gets input first.
+	//
+	// A WorldSpace canvas is a sign, a screen or a name tag in the scene instead: ReferenceResolution canvas units wide and
+	// high (the scale settings do nothing), each WorldUnitsPerUnit world units, in the entity's XY plane facing +Z (like world
+	// text) with the point its UIRect's Pivot names at the entity's origin. Every view of the scene draws it depth-tested
+	// like world text (editor views too: it is no screen-space UI), and the pointer hits it where the game camera's ray
+	// through the pointer crosses it, below every screen-space canvas.
 	struct UICanvasComponent
 	{
 		UICanvasScaleMode ScaleMode = UICanvasScaleMode::ScaleWithScreen;
@@ -47,6 +59,8 @@ namespace Strata
 		bool PixelSnap = true;     // Rect edges and text baselines on whole pixels
 		bool ReceivesInput = true; // False: drawn, but never hit or navigated (a HUD that never blocks clicks)
 		UUID FirstSelected = UUID::Null(); // The selectable focused when navigation starts
+		UICanvasRenderMode RenderMode = UICanvasRenderMode::ScreenSpace;
+		float WorldUnitsPerUnit = 0.01f;   // WorldSpace: world units per canvas unit (a canvas 100 units wide is a meter)
 	};
 
 	enum class UIFitContent : uint8_t

@@ -107,12 +107,22 @@ namespace Strata::CanvasEdit
 				break;
 			canvas = outer;
 		}
-		if (canvas)
+		// The mode lays canvases out for a screen: a canvas placed in the scene is edited there instead.
+		auto onScreen = [](Entity entity)
+		{
+			const UICanvasComponent* settings = entity ? entity.TryGetComponent<UICanvasComponent>() : nullptr;
+			return settings && settings->RenderMode == UICanvasRenderMode::ScreenSpace;
+		};
+		if (onScreen(canvas))
 			return canvas;
 		if (!GameUIScene::HasCanvases(scene))
 			return {};
-		const std::span<const UICanvasView> views = GameUIScene::Get(scene).EnsureLayout(UIRectEdit::GetGameScreen(context));
-		return views.empty() ? Entity() : Entity(views.front().Canvas, &scene);
+		for (const UICanvasView& view : GameUIScene::Get(scene).EnsureLayout(UIRectEdit::GetGameScreen(context)))
+		{
+			if (!view.WorldSpace)
+				return Entity(view.Canvas, &scene);
+		}
+		return {};
 	}
 
 	float GetCanvasAspect(Entity canvas, float fallback)

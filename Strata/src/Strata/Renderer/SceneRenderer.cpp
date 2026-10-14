@@ -1889,7 +1889,7 @@ namespace Strata
 		m_Stats.TextGlyphs = textStats.Glyphs;
 		m_Stats.PendingTextGlyphs = textStats.PendingGlyphs;
 		m_Stats.RasterizedTextGlyphs = textStats.RasterizedGlyphs;
-		const bool overlayPasses = PrepareOverlayPasses(scene, options, commandList);
+		const bool overlayPasses = PrepareOverlayPasses(scene, camera, options, commandList);
 		const AssetResolveStats& assetStats = m_Assets.GetStats();
 		m_Stats.PendingAssets = assetStats.Pending + textStats.PendingFonts + m_Stats.Overlays.PendingAssets;
 		m_Stats.RequestsByVisibility = assetStats.Requested;
@@ -2090,10 +2090,12 @@ namespace Strata
 		commandList->draw(nvrhi::DrawArguments().setVertexCount(vertexCount).setStartVertexLocation(firstVertex));
 	}
 
-	bool SceneRenderer::PrepareOverlayPasses(Scene& scene, const SceneRenderOptions& options, nvrhi::ICommandList* commandList)
+	bool SceneRenderer::PrepareOverlayPasses(Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, nvrhi::ICommandList* commandList)
 	{
 		SceneOverlayFrame frame;
 		frame.OverlayScene = options.OverlayScene ? options.OverlayScene : &scene;
+		frame.ViewProjection = camera.Projection * camera.View;
+		frame.HasCamera = frame.OverlayScene == &scene;
 		frame.ViewportSize = m_ViewportSize;
 		frame.ScreenView = options.ScreenView;
 		frame.DrawScreenSpace = options.DrawScreenSpaceText;
@@ -2217,6 +2219,12 @@ namespace Strata
 			DrawDebugLines(commandList, DebugDrawDepth::Tested, 0, testedVertices);
 		if (drawText)
 			m_TextRenderer->Draw(commandList, m_OverlayFramebuffer, false);
+		// The game UI placed in the scene, with the world-space text.
+		if (drawOverlayPasses)
+		{
+			for (const Scope<ISceneOverlayPass>& pass : m_OverlayPasses)
+				pass->DrawWorld(commandList, m_OverlayFramebuffer);
+		}
 
 		// Selection outline from the entity-ID buffer (ids + 1, sorted for the shader's binary search). The sorted list and its
 		// upload are kept while the same entities of the same scene stay selected and no entity was created or destroyed

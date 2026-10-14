@@ -217,6 +217,49 @@ TEST_SUITE("Editor.UIRectEdit")
 		scene.Button.SetActive(false);
 		CHECK(UIRectEdit::PickElement(active, GameUIScene::c_DefaultScreen, button.GetCenter()) == scene.Panel);
 	}
+
+	TEST_CASE("A click picks elements of the canvases in the scene where the view's camera shows them, nearest first, behind the screen's")
+	{
+		UIRectScene scene;
+		Scene& active = *scene.Context.GetActiveScene();
+		// A 4 x 2 m sign at the origin with an image filling it, seen from 5 m: its center at the screen's (no screen UI there).
+		auto addSign = [&](const std::string& name, const glm::vec3& position)
+		{
+			Entity sign = active.CreateEntity(name);
+			sign.GetComponent<TransformComponent>().Translation = position;
+			sign.AddComponent<UIRectComponent>();
+			UICanvasComponent& canvas = sign.AddComponent<UICanvasComponent>();
+			canvas.RenderMode = UICanvasRenderMode::WorldSpace;
+			canvas.ReferenceResolution = { 400.0f, 200.0f };
+			canvas.WorldUnitsPerUnit = 0.01f;
+			Entity image = active.CreateChildEntity(sign, name + " Image");
+			UIRectComponent& rect = image.AddComponent<UIRectComponent>();
+			rect.AnchorMin = glm::vec2(0.0f);
+			rect.AnchorMax = glm::vec2(1.0f);
+			image.AddComponent<UIImageComponent>();
+			return std::pair<Entity, Entity>(sign, image);
+		};
+		auto [sign, image] = addSign("Sign", glm::vec3(0.0f));
+		const UIScreen screen = GameUIScene::c_DefaultScreen;
+		const glm::mat4 viewProjection = Math::PerspectiveReverseZ(glm::radians(60.0f), screen.Size.x / screen.Size.y, 0.1f, 100.0f) *
+			glm::lookAt(glm::vec3(0.0f, 0.0f, 5.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		const glm::vec2 center = screen.Size * 0.5f;
+		CHECK(UIRectEdit::PickElement(active, screen, center, true, &viewProjection) == image);
+		CHECK(UIRectEdit::PickElement(active, screen, center, false, &viewProjection) == image); // Game UI hidden: still in the scene
+		CHECK_FALSE(UIRectEdit::PickElement(active, screen, center)); // Without the view's camera
+		CHECK_FALSE(UIRectEdit::PickElement(active, screen, { 960.0f, 1000.0f }, true, &viewProjection)); // Below the sign
+
+		// A nearer sign in front of it is picked first.
+		auto [nearSign, nearImage] = addSign("Near Sign", { 0.0f, 0.0f, 2.0f });
+		CHECK(UIRectEdit::PickElement(active, screen, center, true, &viewProjection) == nearImage);
+		nearSign.SetActive(false);
+
+		// Grown over the whole view, the sign is behind the screen's panel, and in front where the game UI is hidden.
+		sign.GetComponent<UICanvasComponent>().WorldUnitsPerUnit = 0.1f;
+		sign.MarkModified<UICanvasComponent>();
+		CHECK(UIRectEdit::PickElement(active, screen, { 110.0f, 60.0f }, true, &viewProjection) == scene.Panel);
+		CHECK(UIRectEdit::PickElement(active, screen, { 110.0f, 60.0f }, false, &viewProjection) == image);
+	}
 }
 
 TEST_SUITE("Editor.UI.Hierarchy")
@@ -243,6 +286,22 @@ TEST_SUITE("Editor.UI.Hierarchy")
 
 TEST_SUITE("Editor.UI.Inspector")
 {
+	TEST_CASE("The UI Rect drawer shows an element of a canvas in the scene where it is on its canvas, in units")
+	{
+		GameUIEditor editor;
+		const nlohmann::json canvas = editor.Run("ui.create", { { "type", "canvas" } });
+		const nlohmann::json panel = editor.Run("ui.create", { { "type", "panel" }, { "parent", canvas["entity"] }, { "size", { 200, 100 } } });
+		editor.Context().Select(editor.Find(panel["entity"]).GetUUID());
+		editor.Frames(3);
+		REQUIRE(UI::ItemProbe::Find("Inspector.UIRect.Pixels").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Pixels")->Text.find("units") == std::string::npos);
+		editor.Run("component.set", { { "entity", canvas["entity"] }, { "component", "UICanvas" }, { "values", { { "RenderMode", "WorldSpace" } } } });
+		editor.Frames(3);
+		const std::optional<UI::ItemProbe::Item> units = UI::ItemProbe::Find("Inspector.UIRect.Pixels");
+		REQUIRE(units.has_value());
+		CHECK(units->Text == "860, 490   200 x 100 units"); // Centered on the 1920 x 1080 canvas
+	}
+
 	TEST_CASE("The UI Rect drawer's anchor grid keeps the rect in place, and stretched axes show margins")
 	{
 		GameUIEditor editor;

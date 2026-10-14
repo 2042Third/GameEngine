@@ -76,13 +76,17 @@ namespace Strata
 			UIBox Box;
 			UIBox Parent;
 			float Scale = 1.0f;
+			bool WorldSpace = false; // On a canvas in the scene: laid out in its units whatever the screen (Scale is 1)
 		};
 		std::optional<Placement> FindPlacement(Scene& scene, Entity entity, const UIScreen& screen);
 
 		// What a click at a pixel of a screen selects in the editor: the topmost visible element that draws something (an image
-		// or a text) there, where no mask clips it, in every canvas whether it receives input or not. Root canvases and empty layout rects are never
-		// picked, so they do not hide the scene behind them. Invalid when there is none.
-		Entity PickElement(Scene& scene, const UIScreen& screen, const glm::vec2& pixel);
+		// or a text) there, where no mask clips it, in every canvas whether it receives input or not: the screen-space canvases
+		// first (with `screenCanvases`: the view shows them), then the world-space ones the view's ray through the pixel crosses
+		// (with `viewProjection`, the view's camera), nearest first. Root canvases and empty layout rects are never picked, so
+		// they do not hide the scene behind them. Invalid when there is none.
+		Entity PickElement(Scene& scene, const UIScreen& screen, const glm::vec2& pixel, bool screenCanvases = true,
+			const glm::mat4* viewProjection = nullptr);
 
 		// Gives every entity an anchor preset (ApplyPreset at the game's screen), as one undo step. Fails, changing nothing,
 		// when an entity has no UIRect, is no laid-out element or is a root canvas (its rect is the screen), or the scene cannot

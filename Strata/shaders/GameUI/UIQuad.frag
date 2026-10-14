@@ -26,6 +26,8 @@ layout(location = 5) flat in vec4 v_Parameters;
 layout(location = 6) flat in uint v_Texture;
 layout(location = 7) flat in vec4 v_ClipRect;
 layout(location = 8) flat in float v_ClipSoftness;
+layout(location = 9) in vec2 v_Position;
+layout(location = 10) flat in uint v_World;
 
 layout(location = 0) out vec4 o_Color;
 
@@ -50,7 +52,8 @@ float ClipCoverage()
 {
 	if (v_ClipRect.z < v_ClipRect.x)
 		return 1.0;
-	vec2 pixel = gl_FragCoord.xy;
+	// On the screen the pixel's center, in the scene the point of the canvas the pixel shows.
+	vec2 pixel = v_World != 0u ? v_Position : gl_FragCoord.xy;
 	float inside = min(min(pixel.x - v_ClipRect.x, v_ClipRect.z - pixel.x), min(pixel.y - v_ClipRect.y, v_ClipRect.w - pixel.y));
 	if (v_ClipSoftness > 0.0)
 		return clamp(inside / v_ClipSoftness, 0.0, 1.0);
@@ -98,12 +101,14 @@ void main()
 		color *= texel;
 	}
 
-	// The rect's signed distance in pixels (negative inside), with rounded corners; coverage over one pixel at the edge.
+	// The rect's signed distance in pixels (negative inside), with rounded corners; coverage over one pixel at the edge. A
+	// world-space canvas measures in canvas units: its distances become pixels through how many units a pixel spans.
+	float unitsPerPixel = v_World != 0u ? max(max(fwidth(v_Local.x), fwidth(v_Local.y)), 1e-6) : 1.0;
 	float radius = min(v_Parameters.x, min(v_HalfSize.x, v_HalfSize.y));
 	vec2 q = abs(v_Local) - (v_HalfSize - radius);
-	float distanceToEdge = length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+	float distanceToEdge = (length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - radius) / unitsPerPixel;
 	float coverage = clamp(0.5 - distanceToEdge, 0.0, 1.0);
-	float border = v_Parameters.y;
+	float border = v_Parameters.y / unitsPerPixel;
 	if (border > 0.0)
 	{
 		// The border's band inside the edge in its color, the fill inside it.

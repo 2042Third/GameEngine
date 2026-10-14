@@ -59,6 +59,10 @@ namespace Strata
 		glm::uvec2 ViewportSize = glm::uvec2(0);  // Pixels
 		SceneScreenView ScreenView;               // SceneRenderOptions::ScreenView: where the game's screen lies in the image
 		bool DrawScreenSpace = true;              // SceneRenderOptions::DrawScreenSpaceText: the game's screen-space UI
+		// The frame's camera (clip space: reversed-Z), for overlays placed in the scene (world-space canvases). HasCamera is false
+		// when the overlay scene is not the rendered one (its camera would be another scene's).
+		glm::mat4 ViewProjection = glm::mat4(1.0f);
+		bool HasCamera = false;
 		nvrhi::ICommandList* CommandList = nullptr; // Open: uploads are recorded here
 		FontAtlasCache* Atlases = nullptr;        // The renderer's glyph atlases, with what the frame's raster budget has left
 		std::vector<VisibleTextureUse>* VisibleTextures = nullptr; // Textures drawn, appended for mip streaming
@@ -76,8 +80,10 @@ namespace Strata
 		// Lays out and uploads what the frame draws; false when it draws nothing (a scene without such overlays costs as
 		// little as a check whether it has any).
 		virtual bool Prepare(const SceneOverlayFrame& frame) = 0;
-		// Draws what Prepare prepared into `framebuffer` (the renderer's output: display values, the scene depth attached
-		// read-only), over everything drawn before.
+		// Draws what Prepare prepared in the scene (world-space canvases) into `framebuffer` (the renderer's output: display
+		// values, the scene depth attached read-only), depth-tested, right after the world-space text.
+		virtual void DrawWorld(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer) = 0;
+		// Draws what Prepare prepared on the screen into `framebuffer`, over everything drawn before.
 		virtual void Draw(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer) = 0;
 		// Whether the scene has screen-space content this pass would draw (GameRenderer shows a scene without a camera
 		// that has some, e.g. a main menu, instead of its missing-camera message).

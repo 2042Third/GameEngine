@@ -6,17 +6,19 @@
 
 // The game UI's quads (GameUIRenderer): instanced, six vertices per quad from gl_VertexIndex, the quad from
 // gl_InstanceIndex. Canvas units become pixels at the canvas's scale; edges (images) and baselines (glyphs) snap to whole
-// pixels when the canvas asks for it.
+// pixels when the canvas asks for it. A world-space canvas stays in canvas units, placed in the scene by its transform.
 
-layout(location = 0) out vec2 v_Local;          // Pixels from the quad's center (images: the rounded rect's distance)
-layout(location = 1) flat out vec2 v_HalfSize;  // Pixels
+layout(location = 0) out vec2 v_Local;          // Pixels (world space: canvas units) from the quad's center (images: the rounded rect's distance)
+layout(location = 1) flat out vec2 v_HalfSize;  // Pixels (world space: canvas units)
 layout(location = 2) out vec3 v_TexCoord;       // Images: texture coordinates; glyphs: atlas texels and page
 layout(location = 3) flat out vec4 v_Color;
 layout(location = 4) flat out vec4 v_BorderColor;
 layout(location = 5) flat out vec4 v_Parameters; // x: corner radius (px), y: border (px) or outline (distance), z: kind, w: atlas slot
 layout(location = 6) flat out uint v_Texture;   // Images: UI texture index + 1 (0: a solid color)
-layout(location = 7) flat out vec4 v_ClipRect;  // Pixels: x0, y0, x1, y1 of the masks' clip rect (x1 < x0: none)
-layout(location = 8) flat out float v_ClipSoftness; // Pixels
+layout(location = 7) flat out vec4 v_ClipRect;  // Pixels (world space: canvas units): x0, y0, x1, y1 of the masks' clip rect (x1 < x0: none)
+layout(location = 8) flat out float v_ClipSoftness; // Pixels (world space: canvas units)
+layout(location = 9) out vec2 v_Position;       // Pixels (world space: canvas units): where the clip rect is tested
+layout(location = 10) flat out uint v_World;    // 1 for a world-space canvas
 
 const vec2 c_Corners[6] = vec2[6](vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));
 
@@ -33,6 +35,8 @@ void Hide()
 	v_Texture = 0u;
 	v_ClipRect = vec4(0.0, 0.0, -1.0, -1.0);
 	v_ClipSoftness = 0.0;
+	v_Position = vec2(0.0);
+	v_World = 0u;
 }
 
 void main()
@@ -45,8 +49,13 @@ void main()
 		return;
 	}
 	vec2 corner = c_Corners[gl_VertexIndex % 6];
-	vec2 minimum = quad.Rect.xy * u_Draw.Scale + u_Draw.Origin;
-	vec2 maximum = quad.Rect.zw * u_Draw.Scale + u_Draw.Origin;
+	// A world-space canvas stays in canvas units (its transform places it) and never snaps.
+	bool world = (u_Draw.Flags & UI_DRAW_WORLD) != 0u;
+	bool snap = !world && (u_Draw.Flags & UI_DRAW_PIXEL_SNAP) != 0u;
+	float scale = world ? 1.0 : u_Draw.Scale;
+	vec2 origin = world ? vec2(0.0) : u_Draw.Origin;
+	vec2 minimum = quad.Rect.xy * scale + origin;
+	vec2 maximum = quad.Rect.zw * scale + origin;
 
 	if (kind == UI_QUAD_GLYPH)
 	{
@@ -73,10 +82,10 @@ void main()
 		}
 		vec2 texel = vec2(float(placement.x & 0xFFFFu), float(placement.x >> 16));
 		v_TexCoord = vec3(texel + corner * vec2(float(width), float(height)), float(placement.y >> 16));
-		if (u_Draw.PixelSnap != 0u)
+		if (snap)
 		{
 			// The whole glyph moves with its baseline onto a whole pixel, so glyphs keep their shapes.
-			float baseline = quad.UV.y * u_Draw.Scale + u_Draw.Origin.y;
+			float baseline = quad.UV.y * scale + origin.y;
 			float offset = round(baseline) - baseline;
 			minimum.y += offset;
 			maximum.y += offset;
@@ -87,13 +96,13 @@ void main()
 	}
 	else
 	{
-		if (u_Draw.PixelSnap != 0u)
+		if (snap)
 		{
 			minimum = round(minimum);
 			maximum = round(maximum);
 		}
 		v_TexCoord = vec3(mix(quad.UV.xy, quad.UV.zw, corner), 0.0);
-		v_Parameters = vec4(quad.CornerRadius * u_Draw.Scale, quad.BorderWidth * u_Draw.Scale, float(kind), 0.0);
+		v_Parameters = vec4(quad.CornerRadius * scale, quad.BorderWidth * scale, float(kind), 0.0);
 		v_Texture = quad.Resource;
 	}
 
@@ -103,9 +112,9 @@ void main()
 	if (quad.Clip != 0u)
 	{
 		UIClipRect clip = u_Clips[u_Draw.FirstClip + quad.Clip - 1u];
-		vec2 clipMin = clip.Rect.xy * u_Draw.Scale + u_Draw.Origin;
-		vec2 clipMax = clip.Rect.zw * u_Draw.Scale + u_Draw.Origin;
-		if (u_Draw.PixelSnap != 0u)
+		vec2 clipMin = clip.Rect.xy * scale + origin;
+		vec2 clipMax = clip.Rect.zw * scale + origin;
+		if (snap)
 		{
 			clipMin = round(clipMin);
 			clipMax = round(clipMax);
@@ -117,7 +126,7 @@ void main()
 			return;
 		}
 		v_ClipRect = vec4(clipMin, clipMax);
-		v_ClipSoftness = max(clip.Parameters.x, 0.0) * u_Draw.Scale;
+		v_ClipSoftness = max(clip.Parameters.x, 0.0) * scale;
 	}
 
 	vec2 size = maximum - minimum;
@@ -126,5 +135,10 @@ void main()
 	v_Local = (corner - 0.5) * size;
 	v_Color = UnpackColor(quad.Color);
 	v_BorderColor = UnpackColor(quad.BorderColor);
-	gl_Position = vec4(UVToNDC(position / u_Draw.ViewportSize), 0.5, 1.0);
+	v_Position = position;
+	v_World = world ? 1u : 0u;
+	if (world)
+		gl_Position = u_Transforms[u_Draw.Flags >> UI_DRAW_TRANSFORM_SHIFT] * vec4(position, 0.0, 1.0);
+	else
+		gl_Position = vec4(UVToNDC(position / u_Draw.ViewportSize), 0.5, 1.0);
 }

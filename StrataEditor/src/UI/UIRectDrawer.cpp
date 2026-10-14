@@ -141,6 +141,12 @@ namespace Strata::UI
 		{
 			if (GameUIPresets::FindCanvas(primary.GetParent()))
 				Notice(Icons::Info, "A canvas inside another canvas is an element of the outer one: its scale settings do nothing.", colors.Info);
+			else if (primary.GetComponent<UICanvasComponent>().RenderMode == UICanvasRenderMode::WorldSpace)
+			{
+				Notice(Icons::Info, "A canvas in the scene is its Reference Resolution in canvas units: of its rect only the Pivot counts, the point "
+					"at the entity's origin.", colors.Info);
+				return;
+			}
 			else
 			{
 				Notice(Icons::Info, "A root canvas fills the screen: its rect's values do nothing.", colors.Info);
@@ -249,10 +255,13 @@ namespace Strata::UI
 			}
 		}
 
-		PropertyLabel("On Screen", "Where the game shows the rect: x, y, width and height in pixels at the game's screen", "Inspector.UIRect.Pixels");
+		// On a canvas in the scene the rect has no place on the screen (that depends on the camera): where it is on the canvas.
+		const bool world = placement && placement->WorldSpace;
+		PropertyLabel(world ? "On Canvas" : "On Screen", world ? "Where the rect is on its canvas in the scene: x, y, width and height in canvas units"
+			: "Where the game shows the rect: x, y, width and height in pixels at the game's screen", "Inspector.UIRect.Pixels");
 		const std::string pixels = placement
-			? fmt::format("{:.0f}, {:.0f}   {:.0f} x {:.0f}", placement->Box.Min.x * placement->Scale, placement->Box.Min.y * placement->Scale,
-				placement->Box.Size.x * placement->Scale, placement->Box.Size.y * placement->Scale)
+			? fmt::format("{:.0f}, {:.0f}   {:.0f} x {:.0f}{}", placement->Box.Min.x * placement->Scale, placement->Box.Min.y * placement->Scale,
+				placement->Box.Size.x * placement->Scale, placement->Box.Size.y * placement->Scale, world ? " units" : "")
 			: std::string("not laid out");
 		PushFont(EditorFont::Mono);
 		ImGui::TextUnformatted(pixels.c_str());

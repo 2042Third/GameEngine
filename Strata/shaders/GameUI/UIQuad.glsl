@@ -55,12 +55,22 @@ layout(set = 0, binding = ST_SRV(7), std430) readonly buffer ClipBuffer
 	UIClipRect u_Clips[];
 };
 
+// World-space canvases: canvas units to clip space, one per canvas the frame draws in the scene.
+layout(set = 0, binding = ST_SRV(8), std430) readonly buffer TransformBuffer
+{
+	mat4 u_Transforms[];
+};
+
+#define UI_DRAW_PIXEL_SNAP 1u
+#define UI_DRAW_WORLD 2u
+#define UI_DRAW_TRANSFORM_SHIFT 8u
+
 layout(push_constant) uniform DrawParameters
 {
 	vec2 ViewportSize;
 	vec2 Origin;
 	float Scale;
-	uint PixelSnap;
+	uint Flags; // UI_DRAW_PIXEL_SNAP, UI_DRAW_WORLD and the world transform's index
 	uint FirstQuad;
 	uint FirstClip; // The canvas's clip rects: a quad's Clip n (n > 0) is u_Clips[FirstClip + n - 1]
 	uvec4 Fonts;

@@ -64,6 +64,7 @@ namespace Strata
 		int32_t SortOrder = 0;
 		bool ReceivesInput = true;
 		bool PixelSnap = true;
+		bool WorldSpace = false;  // A plane in the scene (UICanvasRenderMode::WorldSpace): Scale is 1, UnitSize its reference size
 		uint32_t CanvasIndex = 0; // Internal: of the scene's root canvases
 		uint32_t LayoutIndex = 0; // Internal: of the canvas's layouts
 	};
@@ -145,10 +146,17 @@ namespace Strata
 		GameUIScene& operator=(const GameUIScene&) = delete;
 
 		// Lays every root canvas out for the screen (only what changed since that screen's layout) and returns them in draw
-		// order: by SortOrder, then in hierarchy order. Valid until the next EnsureLayout or a change of the scene.
-		std::span<const UICanvasView> EnsureLayout(const UIScreen& screen);
-		// The scene's root canvases, counted once per change of the canvases or the hierarchy (hidden UI costs this).
+		// order: by SortOrder, then in hierarchy order. A world-space canvas is laid out at its reference size whatever the
+		// screen. Without `screenSpaceCanvases` the screen-space ones are left out (not laid out: views that hide the game's
+		// screen-space UI still draw the world-space canvases). Valid until the next EnsureLayout or a change of the scene.
+		std::span<const UICanvasView> EnsureLayout(const UIScreen& screen, bool screenSpaceCanvases = true);
+		// The scene's root canvases, and of them the world-space ones, counted once per change of the canvases, their render
+		// modes or the hierarchy (hidden UI costs this).
 		uint32_t GetRootCanvasCount();
+		uint32_t GetWorldCanvasCount();
+		// A world-space canvas's plane: canvas units to world (the entity's world transform, the point its UIRect's pivot names
+		// at the entity's origin, canvas +Y down becoming the entity's -Y, WorldUnitsPerUnit). Identity for screen-space views.
+		glm::mat4 GetCanvasWorldMatrix(const UICanvasView& view) const;
 
 		// The elements of a canvas view (EnsureLayout) in hierarchy order: the canvas first, parents before children.
 		uint32_t GetElementCount(const UICanvasView& view) const;
@@ -212,9 +220,9 @@ namespace Strata
 		// element. Without a state a field shows its text from its start.
 		void SetInputFieldState(entt::entity field, const UIInputFieldState& state);
 		void ClearInputFieldState(entt::entity field);
-		// The caret stop of the field's text nearest a pixel of a screen, where its text element shows the text there (bytes;
-		// nullopt when the field's text element is not laid out on that screen).
-		std::optional<uint32_t> FindInputFieldCaret(entt::entity field, const UIScreen& screen, const glm::vec2& pixel);
+		// The caret stop of the field's text nearest a point of its canvas (units), where its text element shows the text on a
+		// screen (bytes; nullopt when the field's text element is not laid out on that screen).
+		std::optional<uint32_t> FindInputFieldCaret(entt::entity field, const UIScreen& screen, const glm::vec2& point);
 		// The text an element with a UIText shows: its own, or its input field's when it is one's text element.
 		std::string_view GetElementText(const UICanvasView& view, uint32_t element) const;
 
@@ -353,6 +361,9 @@ namespace Strata
 		uint64_t m_AssetContentVersion = 0;      // Asset changes read up to it
 		uint64_t m_LayoutStamp = 0;              // EnsureLayout calls (layouts used longest ago are replaced first)
 		uint32_t m_RootCanvasCount = 0;
+		uint32_t m_WorldCanvasCount = 0;
+		bool m_ViewsIncludeScreen = true;   // Whether the latest EnsureLayout laid out the screen-space canvases
+		uint64_t m_CanvasSettingsStamp = 1; // Root canvases' settings changed (their render modes)
 		uint64_t m_RootCanvasCountVersion = ~0ull; // Hierarchy version of the count
 		uint64_t m_CanvasSetStamp = 1;           // Canvases added or removed
 		uint64_t m_RootCanvasCountStamp = 0;

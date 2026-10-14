@@ -1866,7 +1866,7 @@ units with +Y down and (0, 0) at the top left; colors are display (sRGB) colors.
 
 | Component | What it is |
 | --- | --- |
-| `UICanvas` | A screen of UI: its scale mode (`ConstantPixelSize`, `ScaleWithScreen` with a reference resolution and a width/height match, `ConstantPhysicalSize`), safe-area padding, sort order, pixel snapping, whether it takes input, and the selectable navigation starts at |
+| `UICanvas` | A screen of UI: its scale mode (`ConstantPixelSize`, `ScaleWithScreen` with a reference resolution and a width/height match, `ConstantPhysicalSize`), safe-area padding, sort order, pixel snapping, whether it takes input, the selectable navigation starts at, and its render mode: over the scene (`ScreenSpace`) or a plane in it (`WorldSpace`, `WorldUnitsPerUnit`) |
 | `UIRect` | The element's rect in its parent's: anchors, pivot, position, size, fit to content, and whether a layout group places it |
 | `UIImage` | A texture or solid color, simple, nine-sliced or filled, with rounded corners and a border; a raycast target by default |
 | `UIText` | Text in the rect: font, size in canvas units per em, alignment, wrapping, truncation with or without an ellipsis, line spacing, outline |
@@ -1891,6 +1891,10 @@ pixel size and content scale) at a scale s and a size of screen / s canvas units
 - `ConstantPixelSize`: s = `ScaleFactor`; `ConstantPhysicalSize`: s = content scale x `ScaleFactor` (content scale 1 is 96
   DPI); `ScaleWithScreen`: s = 2^lerp(log2(W / Rw), log2(H / Rh), `MatchWidthOrHeight`) for the reference resolution
   (Rw, Rh). The root rect is the canvas's size in units inset by `SafeAreaPadding`.
+- A `WorldSpace` canvas (a sign, a monitor, a name tag) is laid out at its reference resolution in units whatever the
+  screen (s = 1, no pixel snapping) and placed in the scene by `GetCanvasWorldMatrix`: units of `WorldUnitsPerUnit` world
+  units in the entity's XY plane facing +Z (canvas +Y down becomes the entity's -Y), the point its rect's `Pivot` names at
+  the entity's origin, then the entity's world transform.
 - Rect math, per axis, in the parent's box P: anchors A0 = P.min + `AnchorMin` x P.size, A1 = P.min + `AnchorMax` x P.size;
   size = max(A1 - A0 + `Size`, 0) (or the content's size on axes the rect fits); pivot point A0 + (A1 - A0) x `Pivot` +
   `Position`; min = pivot point - size x `Pivot`.
@@ -1942,12 +1946,15 @@ per renderer).
 
 **The pass** (`GameUIRenderer`, `shaders/GameUI/UIQuad.*`). The renderer cannot include GameUI: modules add passes to
 every `SceneRenderer` through `SceneOverlayRegistry` (`Renderer/SceneOverlay.h`: `ISceneOverlayPass` with `Prepare`,
-`Draw` and `HasScreenContent`), and the renderer calls them at four places: `Prepare` after the text renderer's (with
+`DrawWorld`, `Draw` and `HasScreenContent`), and the renderer calls them at four places: `Prepare` after the text renderer's (with
 the scene, viewport size, command list, the renderer's `FontAtlasCache` and what the frame's raster budget left, the
 frame's visible-texture list and the stats), the overlay condition, `Draw` after the screen-space text (the UI goes over
-the legacy HUD), and `SceneRendererStats::Overlays`. A scene without a `UICanvasComponent` costs one storage-size check;
-with screen-space UI hidden (`DrawScreenSpaceText` off: editor views, thumbnails), a count of root canvases cached per
-hierarchy version. Per frame the pass lays the canvases out for the game's screen (`EnsureLayout`, with the content
+the legacy HUD), and `SceneRendererStats::Overlays`; a fifth, `DrawWorld`, draws world-space canvases right after the
+world-space text (`SceneOverlayFrame` carries the frame's view-projection, and `HasCamera` only when the overlay scene is
+the rendered one). A scene without a `UICanvasComponent` costs one storage-size check; with screen-space UI hidden
+(`DrawScreenSpaceText` off: editor views, thumbnails), a count of root canvases and of the world-space ones among them,
+cached per hierarchy version and change of the canvases, and world-space canvases are still drawn (they are part of the
+scene). Per frame the pass lays the canvases out for the game's screen (`EnsureLayout`, with the content
 scale of the game's window): the viewport, unless `SceneRenderOptions::ScreenView` puts a screen of another size in the
 image (`SceneScreenView`: the editor's canvas mode zooms and pans the fit's layout, drawn magnified through the draws'
 scale and origin, and screen-space text follows the same view). It uploads the quad ranges that changed since its last
@@ -1958,7 +1965,12 @@ while shown), and reports drawn textures for mip streaming. Canvases draw by sor
 quad and no vertex buffer, with up to four atlases bound, so a canvas with up to four fonts is one draw; push constants
 carry the canvas's scale and pixel snapping (rect edges and glyph baselines on whole pixels) and where the canvas's clip
 rects start in a clip buffer uploaded beside the quads (when they change): a masked quad entirely outside its clip rect
-draws nothing, others are clipped per pixel with the mask's soft edge, so masks break no batch. `GameRenderer` shows a
+draws nothing, others are clipped per pixel with the mask's soft edge, so masks break no batch. A world-space canvas
+draws with a depth-tested pipeline (reversed-Z, no depth writes, so what is nearer hides it) from a transform buffer
+(canvas units to clip space, one per world-space canvas, uploaded when the camera or the entity moved; the push
+constants' flags name it): its quads stay in canvas units, its edges and outlines are antialiased over what a canvas unit
+covers on the screen (`fwidth`), its clip rects are tested in canvas units, and its textures stream to the pixels a
+canvas unit projects to. `GameRenderer` shows a
 scene without a primary camera that has screen-space UI (a main menu) as that UI over black instead of its
 missing-camera message (`SceneRenderOptions::OverlayScene`).
 
@@ -1967,7 +1979,12 @@ scripts (stage `Scene.UI`), so a click the UI takes is hidden from the scripts' 
 events reach them first. Each update it lays the canvases out for the game's input screen (the pixels `IGameWindow`
 renders, input coordinates scaled to them) and keeps a uniform grid of raycast-target rects per canvas
 (`GameUIHitTester`, rebuilt when the layout or what hit tests see changes: `GameUIScene::GetHitStamp`), so a query
-compares the targets of one cell: the topmost by canvas sort order, then the last drawn, rect edges half-open. The
+compares the targets of one cell: the topmost by canvas sort order, then the last drawn, rect edges half-open. World-space
+canvases come after every screen-space one: the pointer's ray from the scene's primary camera (`GameUIPointer`:
+`GetGameViewProjection`, `MakeRay`, `IntersectCanvas`, `ProjectCanvasPoint`) meets each, the nearest crossing first, and
+the crossing point is hit-tested in the canvas's grid (the scene's geometry does not block it), so sliders drag and input
+fields place their caret through the same ray; navigation starts on the screen's canvases and moves within a world-space
+canvas. The
 pointer is the UI's while a press that started over a target is held and while it rests over the UI; then
 `Input::SetPointerCapture` hides mouse buttons and scrolling from gameplay (`Input::GetPointerState` reads them for the
 UI), and a press that started elsewhere stays the game's until its release. Buttons click on a release over the button

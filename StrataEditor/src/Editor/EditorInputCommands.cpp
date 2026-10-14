@@ -642,10 +642,22 @@ namespace Strata
 						? fmt::format("'{}' is outside the clip rect of a UI Mask above it: nothing of it is shown", target.GetName())
 						: fmt::format("'{}' has an empty rect", target.GetName()));
 				}
-				const glm::vec2 pixel = box.GetCenter() * view.Scale;
+				// A canvas in the scene shows the element where the game camera projects its center.
+				const std::optional<glm::mat4> viewProjection = GameUIPointer::GetGameViewProjection(scene, screen.Screen);
+				glm::vec2 pixel = box.GetCenter() * view.Scale;
+				if (view.WorldSpace)
+				{
+					const std::optional<glm::vec2> projected = viewProjection
+						? GameUIPointer::ProjectCanvasPoint(*viewProjection, ui.GetCanvasWorldMatrix(view), screen.Screen.Size, box.GetCenter())
+						: std::nullopt;
+					if (!projected)
+						return EditorCommandResult::Fail(fmt::format("'{}' is on a canvas in the scene that the game's camera does not see", target.GetName()));
+					pixel = *projected;
+				}
+				const std::optional<UIPointerRay> ray = viewProjection ? GameUIPointer::MakeRay(*viewProjection, screen.Screen.Size, pixel) : std::nullopt;
 				GameUIHitTester tester;
 				tester.Update(ui, views);
-				const std::optional<UIHitResult> hit = tester.HitTest(pixel);
+				const std::optional<UIHitResult> hit = tester.HitTest(pixel, false, ray ? &*ray : nullptr);
 				if (!hit)
 					return EditorCommandResult::Fail(fmt::format("Nothing at the center of '{}' takes clicks: it is no raycast target (an image or text that "
 						"is one, or a selectable)", target.GetName()));

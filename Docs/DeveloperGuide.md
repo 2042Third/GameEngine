@@ -1095,13 +1095,18 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 ### The UI pass
 
 - The renderer never includes GameUI: `RegisterGameUIModule` registers the pass with `SceneOverlayRegistry`
-  (`Renderer/SceneOverlay.h`), and every `SceneRenderer` makes one pass per registered factory. Its four hooks are single
-  calls: the passes' `Prepare` after the text renderer's, the overlay condition, `Draw` after the screen-space text, and
+  (`Renderer/SceneOverlay.h`), and every `SceneRenderer` makes one pass per registered factory. Its hooks are single
+  calls: the passes' `Prepare` after the text renderer's, the overlay condition, `DrawWorld` after the world-space text
+  (depth-tested, into the output with the scene depth), `Draw` after the screen-space text, and
   `SceneRendererStats::Overlays` (`SceneOverlayStats`), whose `PendingAssets` count in the frame's.
 - Screen-space canvases follow `SceneRenderOptions::DrawScreenSpaceText` (the game's screen-space UI): editor views hide
   them unless the viewport's Game UI setting is on, captures follow the viewport, thumbnails hide them; hidden canvases
   are counted, not laid out. `SceneRenderOptions::OverlayScene` draws another scene's UI: `GameRenderer` shows a scene
   without a camera that has screen-space UI (`SceneRenderer::HasOverlayContent`) as its UI over black.
+- World-space canvases (`UICanvasComponent::RenderMode`) belong to the scene: every view draws them, also with the HUD
+  hidden, but only when the overlay scene is the rendered one (`SceneOverlayFrame::HasCamera`: another scene's camera
+  would misplace them). Their transforms (`GameUIScene::GetCanvasWorldMatrix`, times the frame's view-projection) are
+  computed every frame and uploaded when they change; their layouts never depend on the screen.
 - The pass requests each distinct UI texture and font once per frame through `Scene::GetAssetManager()` at High priority
   (a texture draws white while it loads, a text uses the default font), keeps a table of their bindless slots and a
   table of glyph placements per font (from the renderer's `FontAtlasCache`, the frame's raster budget lent to it), and
@@ -1149,6 +1154,13 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - Typed text: `Input::GetTypedText()` returns the UTF-8 typed during the input frame (the window's character events through
   `Input::ProcessText`, while input is enabled, then simulated text from `Input::SimulateText`), at most
   `Input::c_MaxTypedTextBytes`, whole characters, the first typed kept.
+- World-space canvases are hit through the pointer's ray from the scene's primary camera at the input screen's aspect
+  (`GameUIPointer`), after every screen-space canvas, the nearest crossing first; code that asks where such an element
+  is on the screen projects it (`ProjectCanvasPoint`: `input.click`, `ui.layout`'s `screenRect`) and code that reads the
+  pointer on it intersects the ray (`GameUISystem::GetPointerOn`), never dividing pixels by the canvas's scale.
+  Automatic navigation never leaves a world-space canvas, and the first move focuses a screen-space canvas's selectable
+  before one in the scene. The editor picks them with its view's camera (`UIRectEdit::PickElement`), also with the
+  Game UI setting off; the 2D canvas mode shows screen-space canvases only.
 - Tests drive the UI with simulated input (`Input::SimulateMouseMove`/`SimulateMouseButton`/`SimulateKey`) and an input
   frame (`Input::BeginFrame`) before each `OnUpdateRuntime` (`GameUIInputTests.cpp`); `GameUIHitTester` alone checks hit
   tests against a layout.

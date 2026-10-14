@@ -81,6 +81,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(5),
 			nvrhi::BindingLayoutItem::Texture_SRV(6),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(8),
 			nvrhi::BindingLayoutItem::Sampler(0),
 			nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::UIDrawParameters))
 		};
@@ -105,7 +106,11 @@ namespace Strata
 
 	bool GameUIRenderer::HasScreenContent(Scene& scene)
 	{
-		return GameUIScene::HasCanvases(scene) && GameUIScene::Get(scene).GetRootCanvasCount() > 0;
+		// Canvases placed in the scene need its camera: they are no screen content.
+		if (!GameUIScene::HasCanvases(scene))
+			return false;
+		GameUIScene& ui = GameUIScene::Get(scene);
+		return ui.GetRootCanvasCount() > ui.GetWorldCanvasCount();
 	}
 
 	bool GameUIRenderer::EnsureBuffer(nvrhi::BufferHandle& buffer, uint64_t bytes, uint32_t stride, const char* name)
@@ -138,11 +143,14 @@ namespace Strata
 			return false;
 		GameUIScene& ui = GameUIScene::Get(*scene);
 		SceneOverlayStats& stats = *frame.Stats;
+		// World-space canvases are part of the scene: drawn in every view of it that has its camera.
+		const uint32_t worldCanvases = ui.GetWorldCanvasCount();
 		if (!frame.DrawScreenSpace)
 		{
-			// Hidden (editor views without the game UI): counted, not laid out.
-			stats.HiddenCanvases += ui.GetRootCanvasCount();
-			return false;
+			// Hidden screen-space canvases (editor views without the game UI): counted, not laid out.
+			stats.HiddenCanvases += ui.GetRootCanvasCount() - worldCanvases;
+			if (worldCanvases == 0 || !frame.HasCamera)
+				return false;
 		}
 		if (frame.ViewportSize.x == 0 || frame.ViewportSize.y == 0 || !frame.CommandList || !frame.Atlases)
 			return false;
@@ -153,7 +161,7 @@ namespace Strata
 		m_ScreenZoom = frame.ScreenView.GetZoom();
 		m_ScreenOrigin = frame.ScreenView.GetOffset();
 		const UIScreen screen { frame.ScreenView.GetScreenSize(frame.ViewportSize), GetContentScale() };
-		const std::span<const UICanvasView> views = ui.EnsureLayout(screen);
+		const std::span<const UICanvasView> views = ui.EnsureLayout(screen, frame.DrawScreenSpace);
 		if (views.empty())
 			return false;
 
@@ -165,20 +173,33 @@ namespace Strata
 			m_EmptyAtlasWritten = true;
 		}
 		AssetManagerBase* assets = scene->GetAssetManager();
-		if (!UploadQuads(ui, views, commandList, stats) || !UploadClips(ui, views, commandList, stats))
+		if (!UploadQuads(ui, views, commandList, stats) || !UploadClips(ui, views, commandList, stats) || !UploadTransforms(ui, views, frame, stats))
 			return false;
+		// Textures stream to the most pixels a texture coordinate unit of theirs spans: on the screen the canvases' scale, in
+		// the scene what the camera makes of a canvas unit where each canvas is.
 		float maxScale = 0.0f;
-		for (const UICanvasView& view : views)
-			maxScale = std::max(maxScale, view.Scale * m_ScreenZoom);
+		for (size_t index = 0; index < views.size(); index++)
+		{
+			const UICanvasView& view = views[index];
+			if (!view.WorldSpace)
+				maxScale = std::max(maxScale, view.Scale * m_ScreenZoom);
+			else if (m_ViewTransforms[index] != c_NoTransform)
+				maxScale = std::max(maxScale, GetProjectedUnitPixels(m_Transforms[m_ViewTransforms[index]], m_ViewportSize, view.UnitSize * 0.5f));
+		}
 		UpdateTextures(ui, frame, assets, maxScale);
 		UpdateGlyphs(ui, frame, assets);
-		if (!m_QuadBuffer || !m_TextureSlotBuffer || !m_GlyphBuffer || !m_ClipBuffer)
+		if (!m_QuadBuffer || !m_TextureSlotBuffer || !m_GlyphBuffer || !m_ClipBuffer || !m_TransformBuffer)
 			return false;
 		BuildRuns(ui, views);
 
-		for (const UICanvasView& view : views)
-			stats.Elements += ui.GetElementCount(view);
-		stats.Canvases += static_cast<uint32_t>(views.size());
+		for (size_t index = 0; index < views.size(); index++)
+		{
+			// Canvases in the scene count only where they are drawn (a view with the scene's camera).
+			if (views[index].WorldSpace && m_ViewTransforms[index] == c_NoTransform)
+				continue;
+			stats.Elements += ui.GetElementCount(views[index]);
+			stats.Canvases++;
+		}
 		stats.DrawCalls += static_cast<uint32_t>(m_Runs.size());
 		for (const UploadedCanvas& canvas : m_Uploaded)
 			stats.Quads += canvas.Count;
@@ -289,6 +310,56 @@ namespace Strata
 		}
 		m_Uploaded = std::move(uploaded);
 		return true;
+	}
+
+	bool GameUIRenderer::UploadTransforms(GameUIScene& ui, std::span<const UICanvasView> views, const SceneOverlayFrame& frame, SceneOverlayStats& stats)
+	{
+		// A world-space canvas's transform (canvas units to clip space) follows the camera and the canvas's entity: computed
+		// every frame, uploaded when it changed.
+		m_ViewTransforms.assign(views.size(), c_NoTransform);
+		m_Transforms.clear();
+		for (size_t index = 0; index < views.size(); index++)
+		{
+			if (!views[index].WorldSpace || !frame.HasCamera)
+				continue;
+			m_ViewTransforms[index] = static_cast<uint32_t>(m_Transforms.size());
+			m_Transforms.push_back(frame.ViewProjection * ui.GetCanvasWorldMatrix(views[index]));
+		}
+		const bool recreated = EnsureBuffer(m_TransformBuffer, std::max<uint64_t>(m_Transforms.size(), 1) * sizeof(glm::mat4), sizeof(glm::mat4), "UITransforms");
+		if (!m_TransformBuffer)
+		{
+			m_Errors.Report(fmt::format("failed to allocate {} UI canvas transforms", m_Transforms.size()));
+			return false;
+		}
+		if (!m_Transforms.empty() && (recreated || m_Transforms != m_UploadedTransforms))
+		{
+			const uint64_t bytes = m_Transforms.size() * sizeof(glm::mat4);
+			frame.CommandList->writeBuffer(m_TransformBuffer, m_Transforms.data(), bytes);
+			stats.UploadedBytes += bytes;
+			m_UploadedTransforms = m_Transforms;
+		}
+		return true;
+	}
+
+	float GameUIRenderer::GetProjectedUnitPixels(const glm::mat4& transform, const glm::vec2& viewport, const glm::vec2& point)
+	{
+		// The pixels between a point of a canvas and its neighbours one unit right and down, once projected (0 behind the
+		// camera).
+		auto project = [&](const glm::vec2& at, glm::vec2& outPixel)
+		{
+			const glm::vec4 clip = transform * glm::vec4(at, 0.0f, 1.0f);
+			if (!(clip.w > 1e-6f))
+				return false;
+			outPixel = glm::vec2(clip) / clip.w * 0.5f * viewport;
+			return true;
+		};
+		glm::vec2 center;
+		glm::vec2 right;
+		glm::vec2 down;
+		if (!project(point, center) || !project(point + glm::vec2(1.0f, 0.0f), right) || !project(point + glm::vec2(0.0f, 1.0f), down))
+			return 0.0f;
+		const float pixels = std::max(glm::length(right - center), glm::length(down - center));
+		return std::isfinite(pixels) ? pixels : 0.0f;
 	}
 
 	bool GameUIRenderer::UploadClips(GameUIScene& ui, std::span<const UICanvasView> views, nvrhi::ICommandList* commandList, SceneOverlayStats& stats)
@@ -511,11 +582,14 @@ namespace Strata
 		{
 			const UICanvasView& view = views[index];
 			const UploadedCanvas& uploaded = m_Uploaded[index];
-			if (uploaded.Count == 0)
+			// A canvas in the scene draws only with the scene's camera.
+			if (uploaded.Count == 0 || (view.WorldSpace && m_ViewTransforms[index] == c_NoTransform))
 				continue;
 			DrawRun empty;
 			empty.Scale = view.Scale * m_ScreenZoom;
 			empty.PixelSnap = view.PixelSnap;
+			empty.World = view.WorldSpace;
+			empty.Transform = view.WorldSpace ? m_ViewTransforms[index] : 0;
 			empty.FirstClip = uploaded.ClipOffset;
 			empty.Atlases.fill(m_EmptyAtlas.Get());
 
@@ -562,9 +636,10 @@ namespace Strata
 		}
 	}
 
-	nvrhi::IGraphicsPipeline* GameUIRenderer::GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo)
+	nvrhi::IGraphicsPipeline* GameUIRenderer::GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo, bool world)
 	{
-		for (const auto& [info, pipeline] : m_Pipelines)
+		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>>& pipelines = world ? m_WorldPipelines : m_Pipelines;
+		for (const auto& [info, pipeline] : pipelines)
 		{
 			if (info == framebufferInfo)
 				return pipeline;
@@ -583,10 +658,11 @@ namespace Strata
 		desc.bindingLayouts = { m_BindingLayout, Renderer::GetBindlessTextures().GetLayout() };
 		desc.renderState.rasterState.setCullNone();
 		desc.renderState.blendState.setRenderTarget(0, blend);
-		desc.renderState.depthStencilState.setDepthTestEnable(false).setDepthWriteEnable(false);
+		// A canvas in the scene hides behind what is in front of it (reversed-Z), like world text; it never writes depth.
+		desc.renderState.depthStencilState.setDepthTestEnable(world).setDepthWriteEnable(false).setDepthFunc(nvrhi::ComparisonFunc::GreaterOrEqual);
 		nvrhi::GraphicsPipelineHandle pipeline = m_Device->createGraphicsPipeline(desc, framebufferInfo);
 		ST_CORE_VERIFY(pipeline, "GameUIRenderer: failed to create the UI pipeline");
-		m_Pipelines.emplace_back(framebufferInfo, pipeline);
+		pipelines.emplace_back(framebufferInfo, pipeline);
 		return pipeline;
 	}
 
@@ -605,6 +681,7 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(5, atlases[2]),
 				nvrhi::BindingSetItem::Texture_SRV(6, atlases[3]),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(7, m_ClipBuffer),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(8, m_TransformBuffer),
 				nvrhi::BindingSetItem::Sampler(0, m_Sampler),
 				nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::UIDrawParameters))
 			};
@@ -617,18 +694,33 @@ namespace Strata
 		return it->second.first;
 	}
 
+	void GameUIRenderer::DrawWorld(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer)
+	{
+		DrawRuns(commandList, framebuffer, true);
+	}
+
 	void GameUIRenderer::Draw(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer)
 	{
-		if (m_Runs.empty())
+		DrawRuns(commandList, framebuffer, false);
+		// Binding sets of atlases no draw used this frame are let go (atlases grow and change).
+		for (auto it = m_BindingSets.begin(); it != m_BindingSets.end();)
+			it = it->second.second ? std::next(it) : m_BindingSets.erase(it);
+	}
+
+	void GameUIRenderer::DrawRuns(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer, bool world)
+	{
+		if (std::none_of(m_Runs.begin(), m_Runs.end(), [world](const DrawRun& run) { return run.World == world; }))
 			return;
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.UI");
 		nvrhi::GraphicsState state;
-		state.pipeline = GetPipeline(framebuffer->getFramebufferInfo());
+		state.pipeline = GetPipeline(framebuffer->getFramebufferInfo(), world);
 		state.framebuffer = framebuffer;
 		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(m_ViewportSize.x, m_ViewportSize.y));
 		for (const DrawRun& run : m_Runs)
 		{
+			if (run.World != world)
+				continue;
 			nvrhi::IBindingSet* set = GetBindingSet(run.Atlases);
 			if (!set)
 			{
@@ -641,7 +733,8 @@ namespace Strata
 			parameters.ViewportSize = m_ViewportSize;
 			parameters.Origin = m_ScreenOrigin;
 			parameters.Scale = run.Scale;
-			parameters.PixelSnap = run.PixelSnap ? 1u : 0u;
+			parameters.Flags = (run.PixelSnap ? RenderData::c_UIDrawPixelSnap : 0u)
+				| (run.World ? RenderData::c_UIDrawWorld | (run.Transform << RenderData::c_UIDrawTransformShift) : 0u);
 			parameters.FirstQuad = run.FirstQuad;
 			parameters.FirstClip = run.FirstClip;
 			parameters.Fonts = run.Fonts;
@@ -649,9 +742,6 @@ namespace Strata
 			commandList->setPushConstants(&parameters, sizeof(parameters));
 			commandList->draw(nvrhi::DrawArguments().setVertexCount(6).setInstanceCount(run.QuadCount).setStartInstanceLocation(run.FirstQuad));
 		}
-		// Binding sets of atlases no draw used this frame are let go (atlases grow and change).
-		for (auto it = m_BindingSets.begin(); it != m_BindingSets.end();)
-			it = it->second.second ? std::next(it) : m_BindingSets.erase(it);
 	}
 
 }

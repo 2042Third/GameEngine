@@ -54,13 +54,19 @@ namespace Strata::RenderData
 	};
 	static_assert(sizeof(UIClipRect) == 32);
 
+	// UIDrawParameters::Flags: rect edges and baselines on whole pixels; a world-space canvas (its quads placed by the
+	// transform of index Flags >> c_UIDrawTransformShift, depth-tested, without snapping).
+	constexpr uint32_t c_UIDrawPixelSnap = 1u;
+	constexpr uint32_t c_UIDrawWorld = 2u;
+	constexpr uint32_t c_UIDrawTransformShift = 8u;
+
 	// Per draw (push constants): how a canvas maps to the viewport, and the fonts whose atlases the draw binds.
 	struct UIDrawParameters
 	{
 		glm::vec2 ViewportSize = glm::vec2(1.0f); // Pixels
-		glm::vec2 Origin = glm::vec2(0.0f);       // The canvas's top-left corner, in pixels
-		float Scale = 1.0f;                       // Pixels per canvas unit
-		uint32_t PixelSnap = 1;
+		glm::vec2 Origin = glm::vec2(0.0f);       // The canvas's top-left corner, in pixels (screen space)
+		float Scale = 1.0f;                       // Pixels per canvas unit (screen space)
+		uint32_t Flags = c_UIDrawPixelSnap;
 		uint32_t FirstQuad = 0;                   // Of the draw, in the quad buffer
 		uint32_t FirstClip = 0;                   // The canvas's first clip rect in the clip buffer
 		glm::uvec4 Fonts = glm::uvec4(~0u);       // Scene font index bound to each atlas slot (~0: none)

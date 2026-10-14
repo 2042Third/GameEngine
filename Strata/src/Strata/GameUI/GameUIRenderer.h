@@ -22,7 +22,9 @@ namespace Strata
 	class Font;
 
 	// The game UI's overlay pass (one per SceneRenderer, made through SceneOverlayRegistry): draws the root canvases of the
-	// scene's GameUIScene over the finished image, after the screen-space text, in display values.
+	// scene's GameUIScene over the finished image in display values: the screen-space ones after the screen-space text
+	// (Draw), the world-space ones in the scene with the world-space text, depth-tested, through the frame's camera
+	// (DrawWorld; also in views that hide the game's screen-space UI).
 	//
 	// The quads (built by GameUIScene, in canvas units) live in one storage buffer per renderer, uploaded only where they
 	// changed since this renderer's last frame (the scene's journal of changed ranges; a canvas whose array was rebuilt, or
@@ -43,6 +45,7 @@ namespace Strata
 		GameUIRenderer& operator=(const GameUIRenderer&) = delete;
 
 		bool Prepare(const SceneOverlayFrame& frame) override;
+		void DrawWorld(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer) override;
 		void Draw(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer) override;
 		bool HasScreenContent(Scene& scene) override;
 	private:
@@ -57,7 +60,10 @@ namespace Strata
 			uint32_t FirstClip = 0; // The canvas's clip rects in the clip buffer
 			float Scale = 1.0f;
 			bool PixelSnap = true;
+			bool World = false;     // A world-space canvas: drawn by DrawWorld with its transform
+			uint32_t Transform = 0; // Its transform in the transform buffer
 		};
+		static constexpr uint32_t c_NoTransform = ~0u;
 
 		// What this renderer's quad buffer holds of a canvas view.
 		struct UploadedCanvas
@@ -86,11 +92,15 @@ namespace Strata
 		bool UploadQuads(GameUIScene& ui, std::span<const UICanvasView> views, nvrhi::ICommandList* commandList, SceneOverlayStats& stats);
 		// The canvases' clip rects, after their quads (only those that changed since this renderer's last frame).
 		bool UploadClips(GameUIScene& ui, std::span<const UICanvasView> views, nvrhi::ICommandList* commandList, SceneOverlayStats& stats);
+		// The world-space canvases' transforms (canvas units to clip space), when they changed; views without one draw nothing.
+		bool UploadTransforms(GameUIScene& ui, std::span<const UICanvasView> views, const SceneOverlayFrame& frame, SceneOverlayStats& stats);
+		static float GetProjectedUnitPixels(const glm::mat4& transform, const glm::vec2& viewport, const glm::vec2& point);
+		void DrawRuns(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer, bool world);
 		void UpdateGlyphs(GameUIScene& ui, const SceneOverlayFrame& frame, AssetManagerBase* assets);
 		void UpdateTextures(GameUIScene& ui, const SceneOverlayFrame& frame, AssetManagerBase* assets, float maxScale);
 		void BuildRuns(GameUIScene& ui, std::span<const UICanvasView> views);
 		bool EnsureBuffer(nvrhi::BufferHandle& buffer, uint64_t bytes, uint32_t stride, const char* name);
-		nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo);
+		nvrhi::IGraphicsPipeline* GetPipeline(const nvrhi::FramebufferInfo& framebufferInfo, bool world);
 		nvrhi::IBindingSet* GetBindingSet(const std::array<nvrhi::ITexture*, RenderData::c_MaxBoundAtlases>& atlases);
 	private:
 		std::string m_DebugName;
@@ -103,12 +113,17 @@ namespace Strata
 		nvrhi::TextureHandle m_EmptyAtlas; // Bound to atlas slots no font of the draw uses
 		bool m_EmptyAtlasWritten = false;
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_Pipelines;
+		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_WorldPipelines; // Depth-tested
 		std::map<std::array<nvrhi::ITexture*, RenderData::c_MaxBoundAtlases>, std::pair<nvrhi::BindingSetHandle, bool>> m_BindingSets; // With "used this frame"
 
 		nvrhi::BufferHandle m_QuadBuffer;
 		nvrhi::BufferHandle m_TextureSlotBuffer;
 		nvrhi::BufferHandle m_GlyphBuffer;
 		nvrhi::BufferHandle m_ClipBuffer;
+		nvrhi::BufferHandle m_TransformBuffer;
+		std::vector<glm::mat4> m_Transforms;         // This frame's, by world-space view
+		std::vector<glm::mat4> m_UploadedTransforms; // What the transform buffer holds
+		std::vector<uint32_t> m_ViewTransforms;      // By view: its transform, or c_NoTransform
 
 		uint64_t m_SceneId = 0; // The GameUIScene the buffers hold
 		std::vector<UploadedCanvas> m_Uploaded;

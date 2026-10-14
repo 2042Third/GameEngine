@@ -6,6 +6,7 @@
 #include "Renderer/TextureStreamingTestUtils.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/GameUI/GameUIComponents.h"
+#include "Strata/GameUI/GameUIHitTest.h"
 #include "Strata/GameUI/GameUIScene.h"
 #include "Strata/Renderer/Font.h"
 #include "Strata/Renderer/TextureStreamer.h"
@@ -16,8 +17,12 @@
 #include "Strata/Scene/SceneSerializer.h"
 #include "TestHelpers.h"
 
+#include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <optional>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -364,6 +369,12 @@ TEST_SUITE("GPU.GameUI")
 		const glm::u8vec4 corner = GetPixelRGBA8(image, 2, 2);
 		CHECK(corner == glm::u8vec4(0, 0, 0, 255));
 
+		// A canvas placed in the scene is no screen content: without a camera nothing shows it, so the message does.
+		canvas.GetComponent<UICanvasComponent>().RenderMode = UICanvasRenderMode::WorldSpace;
+		canvas.MarkModified<UICanvasComponent>();
+		REQUIRE(game.Render(scene, framebuffer, { 64, 64 }));
+		CHECK(game.IsShowingMessage());
+
 		// Without the canvas it is the message again.
 		scene->DestroyEntity(canvas);
 		REQUIRE(game.Render(scene, framebuffer, { 64, 64 }));
@@ -475,6 +486,135 @@ TEST_SUITE("GPU.GameUI")
 		CHECK(startMin.x >= 108);
 		CHECK(startMin.x <= 112);
 		CHECK(FindPixels(unedited, [](const glm::u8vec4& pixel) { return pixel == c_Red; }).first.x > 640); // No caret
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A world-space canvas draws in perspective where the camera sees it, behind nearer geometry, with the HUD hidden")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		UIScene ui;
+		// A HUD square in the screen's top-left corner, and a 4 x 2 m sign at the origin: green, a blue square on its left,
+		// a white "I" on its right.
+		ui.AddImage(ui.Canvas, "HUD", { 0.0f, 0.0f }, { 20.0f, 20.0f }, { 0.0f, 0.0f, 1.0f, 1.0f });
+		Entity sign = ui.Target.CreateEntity("Sign");
+		sign.AddComponent<UIRectComponent>();
+		UICanvasComponent& canvas = sign.AddComponent<UICanvasComponent>();
+		canvas.RenderMode = UICanvasRenderMode::WorldSpace;
+		canvas.ReferenceResolution = { 400.0f, 200.0f };
+		canvas.WorldUnitsPerUnit = 0.01f;
+		ui.AddImage(sign, "Panel", { 0.0f, 0.0f }, { 400.0f, 200.0f }, { 0.0f, 1.0f, 0.0f, 1.0f });
+		ui.AddImage(sign, "Square", { 40.0f, 60.0f }, { 80.0f, 80.0f }, { 0.0f, 0.0f, 1.0f, 1.0f });
+		Entity label = ui.Target.CreateChildEntity(sign, "Label");
+		UIRectComponent& labelRect = label.AddComponent<UIRectComponent>();
+		labelRect.AnchorMin = { 0.0f, 0.0f };
+		labelRect.AnchorMax = { 0.0f, 0.0f };
+		labelRect.Pivot = { 0.0f, 0.0f };
+		labelRect.Position = { 260.0f, 20.0f };
+		labelRect.Size = { 120.0f, 160.0f };
+		UITextComponent& text = label.AddComponent<UITextComponent>();
+		text.Text = "I";
+		text.FontSize = 150.0f;
+		text.Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+
+		const glm::uvec2 size(400, 200);
+		SceneCamera camera = BlackCamera();
+		camera.Projection = Math::PerspectiveReverseZ(camera.VerticalFOV, 2.0f, camera.Near, camera.Far);
+		const glm::mat4 viewProjection = camera.Projection * camera.View;
+		GameUIScene& scene = GameUIScene::Get(ui.Target);
+		auto projectedBox = [&]()
+		{
+			const std::span<const UICanvasView> views = scene.EnsureLayout({ glm::vec2(size), 1.0f });
+			const auto world = std::find_if(views.begin(), views.end(), [](const UICanvasView& view) { return view.WorldSpace; });
+			REQUIRE(world != views.end());
+			const glm::mat4 toWorld = scene.GetCanvasWorldMatrix(*world);
+			glm::vec2 min(std::numeric_limits<float>::max());
+			glm::vec2 max(std::numeric_limits<float>::lowest());
+			for (const glm::vec2 corner : { glm::vec2(0.0f, 0.0f), glm::vec2(400.0f, 0.0f), glm::vec2(0.0f, 200.0f), glm::vec2(400.0f, 200.0f) })
+			{
+				const std::optional<glm::vec2> pixel = GameUIPointer::ProjectCanvasPoint(viewProjection, toWorld, glm::vec2(size), corner);
+				REQUIRE(pixel.has_value());
+				min = glm::min(min, *pixel);
+				max = glm::max(max, *pixel);
+			}
+			return std::pair<glm::vec2, glm::vec2>(min, max);
+		};
+		auto isGreen = [](const glm::u8vec4& pixel) { return pixel.g > 128 && pixel.r < 64 && pixel.b < 64; };
+		auto checkBox = [&](const ReadbackImage& image)
+		{
+			const auto [expectedMin, expectedMax] = projectedBox();
+			const auto [min, max] = FindPixels(image, isGreen);
+			CHECK(std::abs(static_cast<float>(min.x) - expectedMin.x) <= 1.0f);
+			CHECK(std::abs(static_cast<float>(min.y) - expectedMin.y) <= 1.0f);
+			CHECK(std::abs(static_cast<float>(max.x) - expectedMax.x) <= 1.0f);
+			CHECK(std::abs(static_cast<float>(max.y) - expectedMax.y) <= 1.0f);
+		};
+
+		SceneRenderer renderer(ExactSpecification());
+		{
+			const ReadbackImage image = RenderUI(renderer, ui.Target, size);
+			checkBox(image);
+			CHECK(Pixel(image, 5.0f, 5.0f) == c_Blue); // The HUD
+			CHECK(Pixel(image, 200.0f, 100.0f) == c_Green);
+			// The blue square and the white glyph, in their halves of the sign.
+			CHECK(Pixel(image, 200.0f - 120.0f * 138.6f / 400.0f, 100.0f) == c_Blue); // The sign is about 138.6 pixels wide
+			CHECK(Pixel(image, 200.0f - 40.0f * 138.6f / 400.0f, 100.0f) == c_Green);
+			const auto [whiteMin, whiteMax] = FindPixels(image, [](const glm::u8vec4& pixel) { return pixel == c_White; });
+			CHECK(whiteMin.x > 200);
+			CHECK(whiteMax.x < 300);
+			CHECK(whiteMax.y - whiteMin.y > 30); // 1.5 m at 5 m: about 50 pixels
+			const SceneOverlayStats& stats = renderer.GetStats().Overlays;
+			CHECK(stats.Canvases == 2);
+			CHECK(stats.DrawCalls == 2); // One for the scene's canvases, one for the screen's
+		}
+
+		// Turned 40 degrees about Y it is a trapezoid, still where the camera sees its corners.
+		sign.GetComponent<TransformComponent>().Rotation = glm::quat(glm::vec3(0.0f, glm::radians(40.0f), 0.0f));
+		sign.MarkModified<TransformComponent>();
+		{
+			const ReadbackImage image = RenderUI(renderer, ui.Target, size);
+			checkBox(image);
+			const auto [min, max] = FindPixels(image, isGreen);
+			const auto columnHeight = [&](int x)
+			{
+				int height = 0;
+				for (uint32_t y = 0; y < image.Height; y++)
+					height += isGreen(GetPixelRGBA8(image, static_cast<uint32_t>(x), y)) ? 1 : 0;
+				return height;
+			};
+			// The edge turned towards the camera (+X turns to -Z, away from it) is taller.
+			CHECK(columnHeight(min.x + 2) > columnHeight(max.x - 3) + 4);
+		}
+		sign.GetComponent<TransformComponent>().Rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+		sign.MarkModified<TransformComponent>();
+
+		// A red cube between the camera and the sign hides its middle; behind it, the sign hides the cube.
+		Entity cube = AddMesh(ui.Target, BuiltinAssets::CubeMesh, assets.AddMaterial(UnlitColor({ 1.0f, 0.0f, 0.0f, 1.0f })), { 0.0f, 0.0f, 1.5f }, "Cube");
+		{
+			const ReadbackImage image = RenderUI(renderer, ui.Target, size);
+			CHECK(Pixel(image, 200.0f, 100.0f) == c_Red);
+			const auto [expectedMin, expectedMax] = projectedBox();
+			CHECK(Pixel(image, expectedMin.x + 3.0f, expectedMin.y + 3.0f) == c_Green);
+		}
+		cube.GetComponent<TransformComponent>().Translation = { 0.0f, 0.0f, -1.5f };
+		cube.MarkModified<TransformComponent>();
+		{
+			const ReadbackImage image = RenderUI(renderer, ui.Target, size);
+			CHECK(Pixel(image, 200.0f, 100.0f) == c_Green);
+			CHECK(FindPixels(image, [](const glm::u8vec4& pixel) { return pixel == c_Red; }).first.x == std::numeric_limits<int>::max());
+		}
+
+		// Hiding the screen-space UI hides the HUD, not the sign.
+		SceneRenderOptions hidden;
+		hidden.DrawScreenSpaceText = false;
+		{
+			const ReadbackImage image = RenderUI(renderer, ui.Target, size, nullptr, hidden);
+			CHECK(Pixel(image, 5.0f, 5.0f) == c_Black);
+			checkBox(image);
+			CHECK(renderer.GetStats().Overlays.Canvases == 1);
+			CHECK(renderer.GetStats().Overlays.HiddenCanvases == 1);
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

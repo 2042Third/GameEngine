@@ -1193,3 +1193,140 @@ TEST_SUITE("GameUI.InputField")
 		CHECK_MESSAGE(ui.Validate(&error), error);
 	}
 }
+
+namespace
+{
+
+	// A world-space canvas "Sign" at the origin facing +Z, 400 x 200 units of 1 cm (4 x 2 m, its center at the origin), seen
+	// by a primary camera 5 m in front of it: the canvas's center is at the screen's.
+	Entity AddWorldCanvas(UIInputScene& scene)
+	{
+		Entity camera = scene.Target.CreateEntity("Camera");
+		camera.GetComponent<TransformComponent>().Translation = { 0.0f, 0.0f, 5.0f };
+		camera.AddComponent<CameraComponent>();
+		Entity sign = scene.Target.CreateEntity("Sign");
+		sign.AddComponent<UIRectComponent>();
+		UICanvasComponent& canvas = sign.AddComponent<UICanvasComponent>();
+		canvas.RenderMode = UICanvasRenderMode::WorldSpace;
+		canvas.ReferenceResolution = { 400.0f, 200.0f };
+		canvas.WorldUnitsPerUnit = 0.01f;
+		return sign;
+	}
+
+}
+
+TEST_SUITE("GameUI.WorldSpace")
+{
+	TEST_CASE("A world-space canvas is laid out at its reference size on every screen, on a plane through its entity")
+	{
+		UIInputScene scene;
+		Entity sign = AddWorldCanvas(scene);
+		sign.GetComponent<TransformComponent>().Translation = { 1.0f, 2.0f, -3.0f };
+		sign.MarkModified<TransformComponent>();
+		GameUIScene& ui = GameUIScene::Get(scene.Target);
+		for (const UIScreen& screen : { UIScreen { { 1920.0f, 1080.0f }, 1.0f }, UIScreen { { 800.0f, 1200.0f }, 2.0f } })
+		{
+			const std::span<const UICanvasView> views = ui.EnsureLayout(screen);
+			const auto world = std::find_if(views.begin(), views.end(), [](const UICanvasView& view) { return view.WorldSpace; });
+			REQUIRE(world != views.end());
+			CHECK(world->UnitSize == glm::vec2(400.0f, 200.0f));
+			CHECK(world->Scale == 1.0f);
+			CHECK_FALSE(world->PixelSnap);
+			// The pivot (the center) at the entity's origin, +X right, canvas +Y down becoming -Y, 1 cm per unit.
+			const glm::mat4 matrix = ui.GetCanvasWorldMatrix(*world);
+			auto at = [&](const glm::vec2& point) { return glm::vec3(matrix * glm::vec4(point, 0.0f, 1.0f)); };
+			CHECK(glm::length(at({ 200.0f, 100.0f }) - glm::vec3(1.0f, 2.0f, -3.0f)) < 1e-4f);
+			CHECK(glm::length(at({ 400.0f, 200.0f }) - glm::vec3(3.0f, 1.0f, -3.0f)) < 1e-4f);
+			CHECK(glm::length(at({ 0.0f, 0.0f }) - glm::vec3(-1.0f, 3.0f, -3.0f)) < 1e-4f);
+		}
+		// Hidden screen-space UI leaves it in the views, and only it (the scene's other canvas is screen-space).
+		CHECK(ui.GetWorldCanvasCount() == 1);
+		CHECK(ui.EnsureLayout(GameUIScene::c_DefaultScreen).size() == 2);
+		const std::span<const UICanvasView> worldOnly = ui.EnsureLayout(GameUIScene::c_DefaultScreen, false);
+		REQUIRE(worldOnly.size() == 1);
+		CHECK(worldOnly[0].WorldSpace);
+	}
+
+	TEST_CASE("The pointer's ray finds the point of a world-space canvas a pixel shows, and the pixel a point shows at")
+	{
+		UIInputScene scene;
+		AddWorldCanvas(scene);
+		GameUIScene& ui = GameUIScene::Get(scene.Target);
+		const UIScreen screen = GameUIScene::c_DefaultScreen;
+		const std::optional<glm::mat4> viewProjection = GameUIPointer::GetGameViewProjection(scene.Target, screen);
+		REQUIRE(viewProjection.has_value());
+		const UICanvasView world = *std::find_if(ui.EnsureLayout(screen).begin(), ui.EnsureLayout(screen).end(), [](const UICanvasView& view) { return view.WorldSpace; });
+		const glm::mat4 matrix = ui.GetCanvasWorldMatrix(world);
+		for (const glm::vec2 point : { glm::vec2(200.0f, 100.0f), glm::vec2(10.0f, 190.0f), glm::vec2(399.0f, 1.0f) })
+		{
+			CAPTURE(point);
+			const std::optional<glm::vec2> pixel = GameUIPointer::ProjectCanvasPoint(*viewProjection, matrix, screen.Size, point);
+			REQUIRE(pixel.has_value());
+			const std::optional<UIPointerRay> ray = GameUIPointer::MakeRay(*viewProjection, screen.Size, *pixel);
+			REQUIRE(ray.has_value());
+			const std::optional<std::pair<glm::vec2, float>> crossing = GameUIPointer::IntersectCanvas(matrix, *ray);
+			REQUIRE(crossing.has_value());
+			CHECK(glm::length(crossing->first - point) < 0.05f);
+			CHECK(crossing->second > 4.0f);
+		}
+		// The center of the canvas is at the center of the screen; a ray pointing away crosses nothing.
+		const std::optional<glm::vec2> center = GameUIPointer::ProjectCanvasPoint(*viewProjection, matrix, screen.Size, { 200.0f, 100.0f });
+		REQUIRE(center.has_value());
+		CHECK(glm::length(*center - glm::vec2(960.0f, 540.0f)) < 0.5f);
+		CHECK_FALSE(GameUIPointer::IntersectCanvas(matrix, UIPointerRay { glm::vec3(0.0f, 0.0f, 5.0f), glm::vec3(0.0f, 0.0f, 1.0f) }).has_value());
+	}
+
+	TEST_CASE("Navigation starts on the screen's canvases, and a canvas in the scene navigates within itself")
+	{
+		UIInputScene scene;
+		Entity sign = AddWorldCanvas(scene); // Drawn after the screen's canvas
+		scene.AddButton(sign, "Sign A", { 20.0f, 20.0f }, { 100.0f, 50.0f });
+		scene.AddButton(sign, "Sign B", { 20.0f, 120.0f }, { 100.0f, 50.0f });
+		scene.AddButton(scene.Canvas, "Menu", { 800.0f, 900.0f }, { 200.0f, 80.0f });
+		scene.Play();
+		scene.Key(Key::Down);
+		CHECK(scene.Focused() == "Menu");
+		scene.Key(Key::Up); // The sign's buttons are not above it on the screen (their units are no pixels)
+		CHECK(scene.Focused() == "Menu");
+		REQUIRE(scene.System().SetFocus(scene.Target.FindEntityByName("Sign A")));
+		scene.Key(Key::Down);
+		CHECK(scene.Focused() == "Sign B");
+		scene.Key(Key::Down);
+		CHECK(scene.Focused() == "Sign B");
+	}
+
+	TEST_CASE("A world-space button is clicked through the game camera, below the screen's canvases; sliders drag along it")
+	{
+		UIInputScene scene;
+		Entity sign = AddWorldCanvas(scene);
+		Entity button = scene.AddButton(sign, "Sign Button", { 150.0f, 75.0f }, { 100.0f, 50.0f });
+		Entity slider = scene.AddSlider(sign, "Sign Slider", { 0.0f, 150.0f }, { 400.0f, 50.0f }, UIFillDirection::LeftToRight);
+		scene.Play();
+		scene.Frame();
+		scene.Click({ 960.0f, 540.0f });
+		REQUIRE(scene.Count(UIEventType::Click) == 1);
+		CHECK(scene.Events.back().Widget == button);
+		CHECK(scene.System().IsPointerOverUI());
+
+		// A screen-space panel over the center takes the click instead.
+		Entity cover = scene.AddImage(scene.Canvas, "Cover", { 900.0f, 500.0f }, { 120.0f, 80.0f });
+		scene.Frame();
+		scene.Click({ 960.0f, 540.0f });
+		CHECK(scene.Count(UIEventType::Click) == 1);
+		scene.Target.DestroyEntity(cover);
+
+		// The slider follows the pointer along the canvas: from its left part to beyond its right end.
+		GameUIScene& ui = GameUIScene::Get(scene.Target);
+		const UICanvasView world = *std::find_if(ui.EnsureLayout(GameUIScene::c_DefaultScreen).begin(), ui.EnsureLayout(GameUIScene::c_DefaultScreen).end(),
+			[](const UICanvasView& view) { return view.WorldSpace; });
+		const glm::mat4 viewProjection = *GameUIPointer::GetGameViewProjection(scene.Target, GameUIScene::c_DefaultScreen);
+		const glm::vec2 left = *GameUIPointer::ProjectCanvasPoint(viewProjection, ui.GetCanvasWorldMatrix(world), { 1920.0f, 1080.0f }, { 2.0f, 175.0f });
+		const glm::vec2 beyond = *GameUIPointer::ProjectCanvasPoint(viewProjection, ui.GetCanvasWorldMatrix(world), { 1920.0f, 1080.0f }, { 600.0f, 175.0f });
+		scene.MoveTo(left);
+		scene.Press();
+		CHECK(slider.GetComponent<UISliderComponent>().Value == doctest::Approx(0.05f).epsilon(0.05));
+		scene.MoveTo(beyond);
+		CHECK(slider.GetComponent<UISliderComponent>().Value == 10.0f);
+		scene.Release();
+	}
+}

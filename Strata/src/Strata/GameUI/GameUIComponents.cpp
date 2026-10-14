@@ -73,7 +73,12 @@ namespace Strata
 			.Property("PixelSnap", &UICanvasComponent::PixelSnap, WithTooltip({}, "Rect edges and text baselines on whole pixels"))
 			.Property("ReceivesInput", &UICanvasComponent::ReceivesInput,
 				WithTooltip({}, "Off: drawn, but never hit by the pointer or reached by navigation (a HUD that never blocks clicks)"))
-			.EntityProperty("FirstSelected", &UICanvasComponent::FirstSelected, { .Tooltip = "The selectable focused when keyboard or gamepad navigation starts" });
+			.EntityProperty("FirstSelected", &UICanvasComponent::FirstSelected, { .Tooltip = "The selectable focused when keyboard or gamepad navigation starts" })
+			.EnumProperty("RenderMode", &UICanvasComponent::RenderMode, { { "ScreenSpace", 0, "Screen Space" }, { "WorldSpace", 1, "World Space" } },
+				{ .Tooltip = "Screen Space: over the scene, laid out for the screen; World Space: a plane in the scene at the entity's transform, "
+					"Reference Resolution canvas units wide and high, depth-tested like world text" })
+			.Property("WorldUnitsPerUnit", &UICanvasComponent::WorldUnitsPerUnit,
+				WithTooltip(Range(1.0e-5f, 100.0f, 0.0001f), "World Space: world units per canvas unit (0.01: a canvas 100 units wide is a meter)"));
 
 		ComponentRegistry::Register<UIRectComponent>(c_RectName)
 			.DisplayName("UI Rect")

@@ -117,8 +117,9 @@ TEST_SUITE("GPU.FeatureTest")
 		CHECK_FALSE(IsHudPixel(GetPixelRGBA8(image, c_Width - 2, c_Height - 2)));
 
 		// The menu canvas in the top-right corner (ScaleWithScreen at 1280x720: a quarter of its units here): its panel's dark
-		// blue in its left padding, over the scene; without the game UI the scene shows there.
-		CHECK(stats.Overlays.Canvases == 2);
+		// blue in its left padding, over the scene; without the game UI the scene shows there. The world sign is a canvas in
+		// the scene: drawn either way.
+		CHECK(stats.Overlays.Canvases == 3);
 		CHECK(stats.Overlays.Elements >= 20);
 		CHECK(stats.Overlays.PendingGlyphs == 0);
 		const glm::u8vec4 panel = GetPixelRGBA8(image, 236, 37);
@@ -129,6 +130,7 @@ TEST_SUITE("GPU.FeatureTest")
 		hidden.DrawScreenSpaceText = false;
 		REQUIRE(renderer.Render(*scene, camera, nullptr, hidden));
 		CHECK(renderer.GetStats().Overlays.HiddenCanvases == 2);
+		CHECK(renderer.GetStats().Overlays.Canvases == 1);
 		ReadbackImage withoutUI;
 		REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), withoutUI));
 		CHECK(GetPixelRGBA8(withoutUI, 236, 37) != panel);

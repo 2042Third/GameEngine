@@ -12,10 +12,12 @@
 #include <Strata/GameUI/GameUIComponents.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
 
+#include <cmath>
 #include <optional>
 #include <string>
 #include <vector>
@@ -337,6 +339,59 @@ TEST_SUITE("Editor.UICommands")
 		CHECK_FALSE(covered.Success);
 		CHECK(covered.Error.find("Canvas/Cover") != std::string::npos);
 		CHECK(covered.ErrorData["cover"] == cover["entity"]);
+	}
+
+	TEST_CASE("A canvas in the scene: ui.layout reports where the game camera shows it, ui.hitTest and input.click reach it through it")
+	{
+		PlayingUIHarness harness;
+		// A 3.84 x 2.16 m sign at the origin, a button in its middle, and a camera 5 m in front of it, 0.6 m right and 0.3 m up:
+		// the button shows left of and below the screen's center (187 pixels per meter at that distance, 60 degrees high).
+		Entity camera = harness.Context.GetEditScene()->CreateEntity("Camera");
+		camera.GetComponent<TransformComponent>().Translation = { 0.6f, 0.3f, 5.0f };
+		camera.AddComponent<CameraComponent>();
+		const nlohmann::json canvas = harness.Run("ui.create", { { "type", "canvas" }, { "name", "Sign" } });
+		const nlohmann::json button = harness.Run("ui.create", { { "type", "button" }, { "parent", canvas["entity"] } });
+		harness.Run("component.set", { { "entity", canvas["entity"] }, { "component", "UICanvas" },
+			{ "values", { { "RenderMode", "WorldSpace" }, { "WorldUnitsPerUnit", 0.002 } } } });
+
+		const nlohmann::json layout = harness.Run("ui.layout", { { "entity", button["entity"] } });
+		REQUIRE(layout["canvases"].size() == 1);
+		CHECK(layout["canvases"][0]["worldSpace"] == true);
+		CHECK(layout["canvases"][0]["scale"] == 1.0f);
+		const glm::vec4 rect = ToRect(layout["elements"][0]["rect"]); // Canvas units
+		CHECK(rect.x + rect.z * 0.5f == doctest::Approx(960.0f));
+		const glm::vec4 screenRect = ToRect(layout["elements"][0]["screenRect"]); // Pixels where the camera shows it
+		const glm::vec2 shown(screenRect.x + screenRect.z * 0.5f, screenRect.y + screenRect.w * 0.5f);
+		const float pixelsPerMeter = 540.0f / (5.0f * std::tan(glm::radians(30.0f)));
+		CHECK(glm::length(shown - glm::vec2(960.0f - 0.6f * pixelsPerMeter, 540.0f + 0.3f * pixelsPerMeter)) < 1.0f);
+		CHECK(screenRect.z == doctest::Approx(rect.z * 0.002f * pixelsPerMeter).epsilon(0.01)); // Far smaller than on the screen
+		CHECK(harness.Run("ui.hitTest", { { "position", { shown.x, shown.y } } })["entity"] == button["entity"]);
+		CHECK(harness.Run("ui.hitTest", { { "position", { 960, 540 } } })["entity"].is_null()); // The sign's own rect: no target
+		const nlohmann::json above = harness.Run("ui.hitTest", { { "position", { shown.x, shown.y - screenRect.w } }, { "all", true } });
+		REQUIRE(above["hits"].size() == 1);
+		CHECK(above["hits"][0]["entity"] == canvas["entity"]);
+		CHECK(harness.Run("ui.hitTest", { { "position", { 10, 10 } }, { "all", true } })["hits"].empty());
+
+		harness.Run("play.start");
+		harness.Frame();
+		const EditorCommandResult clicked = harness.RunFrames("input.click", { { "entity", button["entity"] } });
+		INFO(clicked.Error);
+		REQUIRE(clicked.Success);
+		CHECK(clicked.Value["clicked"] == true);
+		const glm::vec2 position(clicked.Value["position"][0].get<float>(), clicked.Value["position"][1].get<float>());
+		CHECK(glm::length(position - shown) < 1.0f);
+		bool click = false;
+		for (const nlohmann::json& event : clicked.Value["events"])
+			click |= event["type"] == "click" && event["widget"] == button["entity"];
+		CHECK(click);
+
+		// Without a camera the scene's canvases are nowhere on the screen.
+		harness.Context.GetActiveScene()->GetPrimaryCameraEntity().GetComponent<CameraComponent>().Primary = false;
+		const EditorCommandResult unseen = harness.Commands.Execute(harness.Context, "input.click", { { "entity", button["entity"] } });
+		REQUIRE_FALSE(unseen.IsPending());
+		CHECK_FALSE(unseen.Success);
+		CHECK(unseen.Error.find("camera") != std::string::npos);
+		CHECK(harness.Run("ui.layout", { { "entity", button["entity"] } })["elements"][0]["screenRect"].is_null());
 	}
 
 	TEST_CASE("input.type types text the game reads in its next frame")

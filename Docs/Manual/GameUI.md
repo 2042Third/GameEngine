@@ -104,6 +104,20 @@ shows while the field is empty; text longer than the field scrolls to keep the c
   Selected** is where the focus starts.
 - **Pause menus** work at time scale 0: the UI animates on real time (`Time::GetUnscaledDeltaTime` for your own fades).
 
+## UI in the world
+
+A canvas can also be part of the scene: a shop sign, a computer screen, a name tag over a character. Set the canvas's
+**Render Mode** to **World Space**: it becomes a flat panel at the entity's position and rotation, facing the entity's +Z
+axis, **Reference Resolution** canvas units wide and high, each **World Units Per Unit** meters (0.01: a canvas 400
+units wide is 4 m). The canvas's **Pivot** is the point at the entity's origin. Move, turn and parent it like any
+entity; what is in front of it hides it, and the editor's viewport shows it with **Game UI** off too. Like 3D text it is
+not lit and casts no shadow: its colors show as you set them.
+
+The player clicks it through the game's camera, after any screen-space canvas over that point; sliders drag along it and
+input fields work as on the screen. The keyboard and gamepad move the focus within one world-space canvas (set its
+**First Selected**, or focus a widget from a script). The 2D chip edits screen-space canvases only: lay a world-space
+canvas out in the viewport, or turn it to Screen Space while you build it.
+
 ## A main menu scene
 
 A scene without a camera that has a canvas shows its UI over black: make the main menu a scene of its own with just the

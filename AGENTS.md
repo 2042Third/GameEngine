@@ -346,8 +346,9 @@ includes the module ([Game UI](Docs/DeveloperGuide.md#game-ui)).
   `Scene::GetAssetManager()`, never per element.
 - UI input belongs to the "UI" scene system: gameplay keeps reading `Input` (pointer capture hides the UI's clicks and
   scrolling from it, keyboard capture an edited input field's keys and text), UI code reads `Input::GetPointerState` and
-  `GetKeyState`, and widgets write their values with `registry.patch` and report them through `IUIEvents`
-  ([UI input](Docs/DeveloperGuide.md#ui-input)).
+  `GetKeyState`, and widgets write their values with `registry.patch` and report them through `IUIEvents`. Elements of
+  world-space canvases are placed on the screen by projection and hit through the camera's ray (`GameUIPointer`), never
+  by dividing pixels by a canvas's scale ([UI input](Docs/DeveloperGuide.md#ui-input)).
 
 ## Editor
 

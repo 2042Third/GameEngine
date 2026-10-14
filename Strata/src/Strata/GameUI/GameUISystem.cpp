@@ -256,12 +256,20 @@ namespace Strata
 		const bool moved = !m_PointerKnown || pixel != m_Pointer;
 		m_Pointer = pixel;
 		m_PointerKnown = true;
+		// Canvases in the scene meet the pointer's ray from the game camera, which may move every frame.
+		m_PointerRay.reset();
+		const bool worldCanvases = ui.GetWorldCanvasCount() > 0;
+		if (worldCanvases)
+		{
+			if (const std::optional<glm::mat4> viewProjection = GameUIPointer::GetGameViewProjection(m_Scene, screen.Screen))
+				m_PointerRay = GameUIPointer::MakeRay(*viewProjection, screen.Screen.Size, pixel);
+		}
 
 		// Hover follows only what can change it: the pointer, the layout (which destroyed elements change), presses and
-		// releases.
-		if (moved || layoutChanged || pointer.Pressed != 0 || pointer.Released != 0)
+		// releases, and with canvases in the scene the camera.
+		if (moved || layoutChanged || pointer.Pressed != 0 || pointer.Released != 0 || worldCanvases)
 		{
-			const std::optional<UIHitResult> hit = m_HitTester.HitTest(pixel);
+			const std::optional<UIHitResult> hit = m_HitTester.HitTest(pixel, false, m_PointerRay ? &*m_PointerRay : nullptr);
 			m_HoveredTarget = hit ? hit->Entity : entt::null;
 			m_PointerOverUI = hit.has_value();
 			const entt::entity selectable = hit ? FindSelectable(hit->Entity) : entt::null;
@@ -282,7 +290,10 @@ namespace Strata
 				// A click on an input field puts its caret at the character nearest the pointer.
 				if (m_Editing != entt::null && m_Editing == m_Pressed)
 				{
-					if (const std::optional<uint32_t> caret = ui.FindInputFieldCaret(m_Editing, screen.Screen, pixel))
+					UIBox fieldBox;
+					UICanvasView fieldView;
+					const std::optional<glm::vec2> point = FindOnScreen(ui, m_Editing, fieldBox, &fieldView) ? GetPointerOn(ui, fieldView) : std::nullopt;
+					if (const std::optional<uint32_t> caret = point ? ui.FindInputFieldCaret(m_Editing, screen.Screen, *point) : std::nullopt)
 					{
 						m_FieldState.Caret = *caret;
 						m_FieldState.Anchor = *caret;
@@ -294,7 +305,7 @@ namespace Strata
 		}
 		// A slider follows the pointer while it is dragged, also outside its rect.
 		if (m_Dragging != entt::null && (pointer.Down & c_Left) != 0)
-			DragSlider(ui, m_Dragging, pixel);
+			DragSlider(ui, m_Dragging);
 		if ((pointer.Released & c_Left) != 0)
 		{
 			// A click is a release over what was pressed: a press dragged off and released elsewhere clicks nothing.
@@ -342,16 +353,26 @@ namespace Strata
 		m_ViewScreen = screen;
 	}
 
-	bool GameUISystem::FindOnScreen(GameUIScene& ui, entt::entity entity, UIBox& outPixels) const
+	bool GameUISystem::FindOnScreen(GameUIScene& ui, entt::entity entity, UIBox& outBox, UICanvasView* outView) const
 	{
 		UICanvasView view;
 		uint32_t element = 0;
 		if (!ui.FindElement(entity, m_ViewScreen, view, element) || !view.ReceivesInput || !ui.IsElementVisible(view, element))
 			return false;
-		const UIBox box = ui.GetElementBox(view, element);
-		outPixels.Min = box.Min * view.Scale;
-		outPixels.Size = box.Size * view.Scale;
+		outBox = ui.GetElementBox(view, element);
+		if (outView)
+			*outView = view;
 		return true;
+	}
+
+	std::optional<glm::vec2> GameUISystem::GetPointerOn(GameUIScene& ui, const UICanvasView& view) const
+	{
+		if (!view.WorldSpace)
+			return m_Pointer / view.Scale;
+		if (!m_PointerRay)
+			return std::nullopt;
+		const std::optional<std::pair<glm::vec2, float>> crossing = GameUIPointer::IntersectCanvas(ui.GetCanvasWorldMatrix(view), *m_PointerRay);
+		return crossing ? std::optional<glm::vec2>(crossing->first) : std::nullopt;
 	}
 
 	void GameUISystem::Click(entt::entity selectable)
@@ -398,17 +419,21 @@ namespace Strata
 		QueueEvent(UIEventType::ValueChanged, slider, clamped);
 	}
 
-	void GameUISystem::DragSlider(GameUIScene& ui, entt::entity slider, const glm::vec2& pixel)
+	void GameUISystem::DragSlider(GameUIScene& ui, entt::entity slider)
 	{
 		const UISliderComponent* component = m_Scene.GetRegistry().try_get<UISliderComponent>(slider);
 		UIBox box;
-		if (!component || !FindOnScreen(ui, slider, box))
+		UICanvasView view;
+		if (!component || !FindOnScreen(ui, slider, box, &view))
+			return;
+		const std::optional<glm::vec2> point = GetPointerOn(ui, view);
+		if (!point)
 			return;
 		const bool horizontal = component->Direction == UIFillDirection::LeftToRight || component->Direction == UIFillDirection::RightToLeft;
 		const int axis = horizontal ? 0 : 1;
 		if (!(box.Size[axis] > 0.0f))
 			return;
-		float fraction = std::clamp((pixel[axis] - box.Min[axis]) / box.Size[axis], 0.0f, 1.0f);
+		float fraction = std::clamp(((*point)[axis] - box.Min[axis]) / box.Size[axis], 0.0f, 1.0f);
 		if (component->Direction == UIFillDirection::RightToLeft || component->Direction == UIFillDirection::BottomToTop)
 			fraction = 1.0f - fraction;
 		SetSliderValue(slider, component->MinValue + (component->MaxValue - component->MinValue) * fraction);
@@ -738,11 +763,13 @@ namespace Strata
 	entt::entity GameUISystem::FindStartSelectable(GameUIScene& ui, std::span<const UICanvasView> views) const
 	{
 		const entt::registry& registry = m_Scene.GetRegistry();
-		// The topmost canvas that receives input and has a selectable: its FirstSelected, else its top-left selectable.
-		for (size_t index = views.size(); index-- > 0;)
+		// The topmost canvas that receives input and has a selectable: its FirstSelected, else its top-left selectable. The
+		// screen's canvases come first, then those in the scene.
+		for (size_t step = 0; step < views.size() * 2; step++)
 		{
+			const size_t index = views.size() - 1 - step % views.size();
 			const UICanvasView& view = views[index];
-			if (!view.ReceivesInput)
+			if (!view.ReceivesInput || view.WorldSpace != (step >= views.size()))
 				continue;
 			const UICanvasComponent* canvas = registry.try_get<UICanvasComponent>(view.Canvas);
 			if (canvas && canvas->FirstSelected.IsValid())
@@ -790,17 +817,18 @@ namespace Strata
 		}
 
 		// Automatic: the selectable ahead with the lowest along + 2 x across distance between the centers (in screen pixels,
-		// so canvases of different scales compare); ties keep draw order.
+		// so canvases of different scales compare); ties keep draw order. A canvas in the scene navigates within itself.
 		UIBox fromBox;
-		if (!FindOnScreen(ui, from, fromBox))
+		UICanvasView fromView;
+		if (!FindOnScreen(ui, from, fromBox, &fromView))
 			return entt::null;
-		const glm::vec2 origin = fromBox.GetCenter();
+		const glm::vec2 origin = fromBox.GetCenter() * fromView.Scale;
 		const glm::vec2 axis = GetDirectionVector(direction);
 		entt::entity best = entt::null;
 		float bestScore = std::numeric_limits<float>::max();
 		for (const UICanvasView& view : views)
 		{
-			if (!view.ReceivesInput)
+			if (!view.ReceivesInput || view.WorldSpace != fromView.WorldSpace || (view.WorldSpace && view.CanvasIndex != fromView.CanvasIndex))
 				continue;
 			for (uint32_t element = 0; element < ui.GetElementCount(view); element++)
 			{

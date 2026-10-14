@@ -2,6 +2,9 @@
 #include "Strata/GameUI/GameUIHitTest.h"
 
 #include "Strata/Core/Profiling.h"
+#include "Strata/Renderer/SceneRenderer.h"
+#include "Strata/Scene/Entity.h"
+#include "Strata/Scene/Scene.h"
 
 #include <algorithm>
 #include <cmath>
@@ -28,6 +31,14 @@ namespace Strata
 			CanvasGrid& grid = m_Grids[index];
 			grid.Scale = view.Scale;
 			grid.ReceivesInput = view.ReceivesInput;
+			grid.WorldSpace = view.WorldSpace;
+			// Where a world-space canvas is follows its entity (and so may move without changing the canvas's layout).
+			if (view.WorldSpace)
+			{
+				const glm::mat4 canvasToWorld = ui.GetCanvasWorldMatrix(view);
+				changed = changed || canvasToWorld != grid.CanvasToWorld;
+				grid.CanvasToWorld = canvasToWorld;
+			}
 			if (grid.LayoutId == ui.GetLayoutId(view) && grid.HitStamp == ui.GetHitStamp(view) && grid.CanvasIndex == view.CanvasIndex)
 				continue;
 			Build(ui, view, grid);
@@ -100,44 +111,147 @@ namespace Strata
 		}
 	}
 
-	std::optional<UIHitResult> GameUIHitTester::HitTest(const glm::vec2& pixel, bool anyCanvas) const
+	std::optional<UIHitResult> GameUIHitTester::HitTestGrid(uint32_t viewIndex, const glm::vec2& point) const
 	{
-		m_LastCandidates = 0;
-		// From the topmost canvas down.
-		for (size_t viewIndex = m_Grids.size(); viewIndex-- > 0;)
+		const CanvasGrid& grid = m_Grids[viewIndex];
+		// Points beyond the canvas fall in its border cells, which hold the rects that reach out of it.
+		const glm::uvec2 cellPosition = glm::uvec2(glm::clamp(glm::floor(point / grid.CellSize), glm::vec2(0.0f), glm::vec2(grid.Cells) - 1.0f));
+		const uint32_t cell = cellPosition.y * grid.Cells.x + cellPosition.x;
+		// The last drawn first: the cell's targets are in draw order.
+		for (uint32_t index = grid.CellStarts[cell + 1]; index-- > grid.CellStarts[cell];)
 		{
-			const CanvasGrid& grid = m_Grids[viewIndex];
-			if ((!grid.ReceivesInput && !anyCanvas) || grid.Targets.empty())
-				continue;
-			const glm::vec2 point = pixel / grid.Scale;
-			// Points beyond the canvas fall in its border cells, which hold the rects that reach out of it.
-			const glm::uvec2 cellPosition = glm::uvec2(glm::clamp(glm::floor(point / grid.CellSize), glm::vec2(0.0f), glm::vec2(grid.Cells) - 1.0f));
-			const uint32_t cell = cellPosition.y * grid.Cells.x + cellPosition.x;
-			// The last drawn first: the cell's targets are in draw order.
-			for (uint32_t index = grid.CellStarts[cell + 1]; index-- > grid.CellStarts[cell];)
-			{
-				m_LastCandidates++;
-				const Target& target = grid.Targets[grid.CellTargets[index]];
-				if (target.Box.Contains(point))
-					return UIHitResult { target.Entity, static_cast<uint32_t>(viewIndex), target.Element };
-			}
+			m_LastCandidates++;
+			const Target& target = grid.Targets[grid.CellTargets[index]];
+			if (target.Box.Contains(point))
+				return UIHitResult { target.Entity, viewIndex, target.Element };
 		}
 		return std::nullopt;
 	}
 
-	void GameUIHitTester::HitTestAll(GameUIScene& ui, std::span<const UICanvasView> views, const glm::vec2& pixel, std::vector<UIHitResult>& outHits) const
+	void GameUIHitTester::FindWorldCrossings(const UIPointerRay& ray, bool anyCanvas) const
+	{
+		m_Crossings.clear();
+		for (uint32_t viewIndex = 0; viewIndex < m_Grids.size(); viewIndex++)
+		{
+			const CanvasGrid& grid = m_Grids[viewIndex];
+			if (!grid.WorldSpace || (!grid.ReceivesInput && !anyCanvas))
+				continue;
+			if (const std::optional<std::pair<glm::vec2, float>> crossing = GameUIPointer::IntersectCanvas(grid.CanvasToWorld, ray))
+				m_Crossings.push_back(WorldCrossing { crossing->second, viewIndex, crossing->first });
+		}
+		std::stable_sort(m_Crossings.begin(), m_Crossings.end(), [](const WorldCrossing& a, const WorldCrossing& b) { return a.Distance < b.Distance; });
+	}
+
+	std::optional<UIHitResult> GameUIHitTester::HitTest(const glm::vec2& pixel, bool anyCanvas, const UIPointerRay* ray) const
+	{
+		m_LastCandidates = 0;
+		// From the topmost screen-space canvas down.
+		for (size_t viewIndex = m_Grids.size(); viewIndex-- > 0;)
+		{
+			const CanvasGrid& grid = m_Grids[viewIndex];
+			if (grid.WorldSpace || (!grid.ReceivesInput && !anyCanvas) || grid.Targets.empty())
+				continue;
+			if (const std::optional<UIHitResult> hit = HitTestGrid(static_cast<uint32_t>(viewIndex), pixel / grid.Scale))
+				return hit;
+		}
+		// Then the canvases in the scene, the nearest first.
+		if (!ray)
+			return std::nullopt;
+		FindWorldCrossings(*ray, anyCanvas);
+		for (const WorldCrossing& crossing : m_Crossings)
+		{
+			if (m_Grids[crossing.View].Targets.empty())
+				continue;
+			if (const std::optional<UIHitResult> hit = HitTestGrid(crossing.View, crossing.Point))
+				return hit;
+		}
+		return std::nullopt;
+	}
+
+	void GameUIHitTester::HitTestAll(GameUIScene& ui, std::span<const UICanvasView> views, const glm::vec2& pixel, std::vector<UIHitResult>& outHits,
+		const UIPointerRay* ray) const
 	{
 		outHits.clear();
-		for (size_t viewIndex = views.size(); viewIndex-- > 0;)
+		auto collect = [&](size_t viewIndex, const glm::vec2& point)
 		{
 			const UICanvasView& view = views[viewIndex];
-			const glm::vec2 point = pixel / view.Scale;
 			for (uint32_t element = ui.GetElementCount(view); element-- > 0;)
 			{
 				if (ui.IsElementVisible(view, element) && ui.GetVisibleBox(view, element).Contains(point))
 					outHits.push_back(UIHitResult { ui.GetElementEntity(view, element), static_cast<uint32_t>(viewIndex), element });
 			}
+		};
+		for (size_t viewIndex = views.size(); viewIndex-- > 0;)
+		{
+			if (!views[viewIndex].WorldSpace)
+				collect(viewIndex, pixel / views[viewIndex].Scale);
 		}
+		if (!ray || m_Grids.size() != views.size())
+			return;
+		FindWorldCrossings(*ray, true);
+		for (const WorldCrossing& crossing : m_Crossings)
+			collect(crossing.View, crossing.Point);
+	}
+
+	namespace GameUIPointer
+	{
+
+		std::optional<glm::mat4> GetGameViewProjection(Scene& scene, const UIScreen& screen)
+		{
+			const Entity camera = scene.GetPrimaryCameraEntity();
+			if (!camera || !(screen.Size.x > 0.0f && screen.Size.y > 0.0f))
+				return std::nullopt;
+			const SceneCamera view = SceneCamera::FromEntity(scene, camera, screen.Size.x / screen.Size.y);
+			return view.Projection * view.View;
+		}
+
+		std::optional<UIPointerRay> MakeRay(const glm::mat4& viewProjection, const glm::vec2& screenSize, const glm::vec2& pixel)
+		{
+			if (!(screenSize.x > 0.0f && screenSize.y > 0.0f))
+				return std::nullopt;
+			// Pixel centers to normalized device coordinates (+Y up); reversed-Z: depth 1 is near, 0 far.
+			const glm::vec2 ndc((pixel.x / screenSize.x) * 2.0f - 1.0f, 1.0f - (pixel.y / screenSize.y) * 2.0f);
+			const glm::mat4 inverse = glm::inverse(viewProjection);
+			glm::vec4 nearPoint = inverse * glm::vec4(ndc, 1.0f, 1.0f);
+			glm::vec4 farPoint = inverse * glm::vec4(ndc, 0.5f, 1.0f); // Halfway: finite also for infinite far planes
+			if (!(std::abs(nearPoint.w) > 1e-12f) || !(std::abs(farPoint.w) > 1e-12f))
+				return std::nullopt;
+			const glm::vec3 from = glm::vec3(nearPoint) / nearPoint.w;
+			const glm::vec3 to = glm::vec3(farPoint) / farPoint.w;
+			const glm::vec3 direction = to - from;
+			const float length = glm::length(direction);
+			if (!(length > 1e-12f) || !std::isfinite(length))
+				return std::nullopt;
+			return UIPointerRay { from, direction / length };
+		}
+
+		std::optional<std::pair<glm::vec2, float>> IntersectCanvas(const glm::mat4& canvasToWorld, const UIPointerRay& ray)
+		{
+			// In the canvas's own space the plane is z = 0, x and y its units.
+			const glm::mat4 worldToCanvas = glm::inverse(canvasToWorld);
+			const glm::vec3 origin = glm::vec3(worldToCanvas * glm::vec4(ray.Origin, 1.0f));
+			const glm::vec3 direction = glm::vec3(worldToCanvas * glm::vec4(ray.Direction, 0.0f));
+			if (!(std::abs(direction.z) > 1e-12f) || !std::isfinite(origin.z))
+				return std::nullopt;
+			const float t = -origin.z / direction.z;
+			if (!(t >= 0.0f))
+				return std::nullopt;
+			const glm::vec3 point = origin + direction * t;
+			// The distance along the world ray (direction keeps its length through the inverse's scale).
+			const float distance = glm::length(glm::vec3(canvasToWorld * glm::vec4(point, 1.0f)) - ray.Origin);
+			return std::pair<glm::vec2, float>(glm::vec2(point), distance);
+		}
+
+		std::optional<glm::vec2> ProjectCanvasPoint(const glm::mat4& viewProjection, const glm::mat4& canvasToWorld, const glm::vec2& screenSize,
+			const glm::vec2& point)
+		{
+			const glm::vec4 clip = viewProjection * canvasToWorld * glm::vec4(point, 0.0f, 1.0f);
+			if (!(clip.w > 1e-6f))
+				return std::nullopt;
+			const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+			return glm::vec2((ndc.x * 0.5f + 0.5f) * screenSize.x, (0.5f - ndc.y * 0.5f) * screenSize.y);
+		}
+
 	}
 
 }

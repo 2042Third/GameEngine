@@ -14,6 +14,8 @@
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneHierarchy.h"
 
+#include <glm/gtc/matrix_transform.hpp>
+
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -172,6 +174,7 @@ namespace Strata
 		{
 			MarkCanvasDirty(ref->Canvas);
 			m_ViewsValid = false;
+			m_CanvasSettingsStamp++; // Its render mode may have changed
 		}
 	}
 
@@ -921,7 +924,7 @@ namespace Strata
 	// Screens
 	////////////////////////////////////////////////////////////////////////////////
 
-	std::span<const UICanvasView> GameUIScene::EnsureLayout(const UIScreen& screen)
+	std::span<const UICanvasView> GameUIScene::EnsureLayout(const UIScreen& screen, bool screenSpaceCanvases)
 	{
 		ST_PROFILE_FUNCTION();
 		ProcessChanges();
@@ -934,8 +937,13 @@ namespace Strata
 			const UICanvasComponent* settings = m_Registry->try_get<UICanvasComponent>(canvas.Entity);
 			if (!settings)
 				continue;
-			const float scale = ComputeScale(*settings, screen);
-			const glm::vec2 unitSize = glm::max(screen.Size, glm::vec2(0.0f)) / scale;
+			// A world-space canvas is a plane of its reference size in units: the screen changes nothing of its layout.
+			const bool world = settings->RenderMode == UICanvasRenderMode::WorldSpace;
+			if (!world && !screenSpaceCanvases)
+				continue;
+			const float scale = world ? 1.0f : ComputeScale(*settings, screen);
+			const glm::vec2 unitSize = world ? glm::clamp(settings->ReferenceResolution, glm::vec2(1.0f), glm::vec2(16384.0f))
+				: glm::max(screen.Size, glm::vec2(0.0f)) / scale;
 			uint32_t layoutIndex = 0;
 			Layout& layout = GetLayout(canvas, unitSize, layoutIndex);
 			layout.LastUsed = m_LayoutStamp;
@@ -948,7 +956,8 @@ namespace Strata
 			view.UnitSize = unitSize;
 			view.SortOrder = settings->SortOrder;
 			view.ReceivesInput = settings->ReceivesInput;
-			view.PixelSnap = settings->PixelSnap;
+			view.PixelSnap = settings->PixelSnap && !world;
+			view.WorldSpace = world;
 			view.CanvasIndex = canvasIndex;
 			view.LayoutIndex = layoutIndex;
 		}
@@ -956,6 +965,7 @@ namespace Strata
 		std::stable_sort(m_Views.begin(), m_Views.end(), [](const UICanvasView& a, const UICanvasView& b) { return a.SortOrder < b.SortOrder; });
 		m_ViewsScreen = screen;
 		m_ViewsValid = true;
+		m_ViewsIncludeScreen = screenSpaceCanvases;
 
 #ifdef ST_DEBUG
 		std::string error;
@@ -1006,13 +1016,15 @@ namespace Strata
 
 	uint32_t GameUIScene::GetRootCanvasCount()
 	{
-		// Counted once per hierarchy version and set of canvases: hidden UI costs a comparison per frame.
+		// Counted once per hierarchy version, set of canvases and change of their settings: hidden UI costs a comparison per
+		// frame.
 		if (!HasCanvases(*m_Scene))
 			return 0;
-		if (m_RootCanvasCountVersion != m_Scene->GetHierarchyVersion() || m_RootCanvasCountStamp != m_CanvasSetStamp)
+		if (m_RootCanvasCountVersion != m_Scene->GetHierarchyVersion() || m_RootCanvasCountStamp != m_CanvasSetStamp + m_CanvasSettingsStamp)
 		{
 			uint32_t count = 0;
-			for (const entt::entity entity : m_Registry->view<UICanvasComponent>())
+			uint32_t world = 0;
+			for (const auto [entity, canvas] : m_Registry->view<UICanvasComponent>().each())
 			{
 				if (!m_Registry->all_of<HierarchyComponent>(entity))
 					continue;
@@ -1020,13 +1032,37 @@ namespace Strata
 				for (entt::entity parent = m_Registry->get<HierarchyComponent>(entity).Parent; parent != entt::null && !nested;
 					parent = m_Registry->get<HierarchyComponent>(parent).Parent)
 					nested = m_Registry->all_of<UICanvasComponent>(parent);
-				count += nested ? 0 : 1;
+				if (nested)
+					continue;
+				count++;
+				world += canvas.RenderMode == UICanvasRenderMode::WorldSpace ? 1 : 0;
 			}
 			m_RootCanvasCount = count;
+			m_WorldCanvasCount = world;
 			m_RootCanvasCountVersion = m_Scene->GetHierarchyVersion();
-			m_RootCanvasCountStamp = m_CanvasSetStamp;
+			m_RootCanvasCountStamp = m_CanvasSetStamp + m_CanvasSettingsStamp;
 		}
 		return m_RootCanvasCount;
+	}
+
+	uint32_t GameUIScene::GetWorldCanvasCount()
+	{
+		GetRootCanvasCount();
+		return HasCanvases(*m_Scene) ? m_WorldCanvasCount : 0;
+	}
+
+	glm::mat4 GameUIScene::GetCanvasWorldMatrix(const UICanvasView& view) const
+	{
+		const UICanvasComponent* settings = m_Registry->try_get<UICanvasComponent>(view.Canvas);
+		if (!view.WorldSpace || !settings || !m_Registry->valid(view.Canvas))
+			return glm::mat4(1.0f);
+		const UIRectComponent* rect = m_Registry->try_get<UIRectComponent>(view.Canvas);
+		const glm::vec2 pivot = rect ? rect->Pivot : glm::vec2(0.5f);
+		const float units = std::isfinite(settings->WorldUnitsPerUnit) ? std::clamp(settings->WorldUnitsPerUnit, 1.0e-5f, 100.0f) : 0.01f;
+		// Canvas units (+Y down) from the pivot point, to the entity's XY plane (+Y up), then the entity's world transform.
+		const glm::mat4 local = glm::scale(glm::mat4(1.0f), glm::vec3(units, -units, units))
+			* glm::translate(glm::mat4(1.0f), glm::vec3(-pivot * view.UnitSize, 0.0f));
+		return m_Scene->GetWorldTransform(Entity(view.Canvas, m_Scene)) * local;
 	}
 
 	uint64_t GameUIScene::GetLayoutId(const UICanvasView& view) const
@@ -1146,7 +1182,7 @@ namespace Strata
 
 	bool GameUIScene::FindElement(entt::entity entity, const UIScreen& screen, UICanvasView& outView, uint32_t& outElement)
 	{
-		if (!m_ViewsValid || !(m_ViewsScreen == screen))
+		if (!m_ViewsValid || !(m_ViewsScreen == screen) || !m_ViewsIncludeScreen)
 			EnsureLayout(screen);
 		const ElementRef* ref = FindRef(entity);
 		if (!ref)
@@ -1252,7 +1288,7 @@ namespace Strata
 		}
 	}
 
-	std::optional<uint32_t> GameUIScene::FindInputFieldCaret(entt::entity field, const UIScreen& screen, const glm::vec2& pixel)
+	std::optional<uint32_t> GameUIScene::FindInputFieldCaret(entt::entity field, const UIScreen& screen, const glm::vec2& point)
 	{
 		UICanvasView view;
 		uint32_t fieldElement = 0;
@@ -1275,7 +1311,7 @@ namespace Strata
 		auto found = m_FieldStates.find(field);
 		const glm::vec2 line = PlaceFieldLine(*text, shaped, box, size, found != m_FieldStates.end() ? &found->second : nullptr, m_CaretScratch);
 		// The stop nearest the point along the line.
-		const float x = pixel.x / view.Scale;
+		const float x = point.x;
 		uint32_t best = 0;
 		float bestDistance = std::numeric_limits<float>::max();
 		for (const TextCaretStop& stop : m_CaretScratch)

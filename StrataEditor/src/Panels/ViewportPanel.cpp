@@ -223,11 +223,12 @@ namespace Strata
 				const ViewportPickMode mode = io.KeyCtrl ? ViewportPickMode::Toggle : (io.KeyShift ? ViewportPickMode::Add : ViewportPickMode::Replace);
 				if (const std::optional<glm::uvec2> pixel = m_Image.ToPixel(glm::vec2(io.MousePos.x, io.MousePos.y)))
 				{
-					// The game UI the view shows is in front of the scene: a click on one of its elements selects it.
+					// The game UI the view shows is in front of the scene (its screen-space canvases while Game UI is on, the
+					// canvases in the scene always): a click on one of its elements selects it.
 					const UIScreen screen { glm::vec2(size), context.GetGameWindow().GetState().ContentScale };
-					const Entity element = viewport.GetSettings().ShowGameUI
-						? UIRectEdit::PickElement(*context.GetActiveScene(), screen, glm::vec2(*pixel) + glm::vec2(0.5f))
-						: Entity();
+					const glm::mat4 viewProjection = view ? view->Camera.Projection * view->Camera.View : glm::mat4(1.0f);
+					const Entity element = UIRectEdit::PickElement(*context.GetActiveScene(), screen, glm::vec2(*pixel) + glm::vec2(0.5f),
+						viewport.GetSettings().ShowGameUI, view ? &viewProjection : nullptr);
 					if (element)
 						EditorViewport::ApplyPick(context, element, mode);
 					else

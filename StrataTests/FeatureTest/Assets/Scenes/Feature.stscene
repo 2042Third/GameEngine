@@ -2658,7 +2658,9 @@
 						],
 						"ScaleFactor": 1,
 						"ScaleMode": "ScaleWithScreen",
-						"SortOrder": 0
+						"SortOrder": 0,
+						"RenderMode": "ScreenSpace",
+						"WorldUnitsPerUnit": 0.01
 					},
 					"UIRect": {
 						"AnchorMax": [
@@ -4417,7 +4419,9 @@
 						],
 						"ScaleFactor": 1.25,
 						"ScaleMode": "ConstantPhysicalSize",
-						"SortOrder": 2
+						"SortOrder": 2,
+						"RenderMode": "ScreenSpace",
+						"WorldUnitsPerUnit": 0.01
 					},
 					"UIRect": {
 						"AnchorMax": [
@@ -4520,6 +4524,238 @@
 				},
 				"ID": "F7E0000000000082",
 				"Parent": "F7E0000000000081"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "World Sign"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							-1,
+							1.5,
+							-5
+						]
+					},
+					"UICanvas": {
+						"FirstSelected": "0000000000000000",
+						"MatchWidthOrHeight": 0.5,
+						"PixelSnap": true,
+						"ReceivesInput": true,
+						"ReferenceResolution": [
+							400,
+							200
+						],
+						"SafeAreaPadding": [
+							0,
+							0,
+							0,
+							0
+						],
+						"ScaleFactor": 1,
+						"ScaleMode": "ScaleWithScreen",
+						"SortOrder": 0,
+						"RenderMode": "WorldSpace",
+						"WorldUnitsPerUnit": 0.005
+					},
+					"UIRect": {
+						"AnchorMax": [
+							0.5,
+							0.5
+						],
+						"AnchorMin": [
+							0.5,
+							0.5
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							100,
+							100
+						]
+					}
+				},
+				"ID": "F7E000000000008A"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "World Panel"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIImage": {
+						"BorderColor": [
+							0.4,
+							0.5,
+							0.9,
+							1
+						],
+						"BorderWidth": 2,
+						"Color": [
+							0.1,
+							0.3,
+							0.6,
+							0.9
+						],
+						"CornerRadius": 12,
+						"FillAmount": 1,
+						"FillDirection": "LeftToRight",
+						"PreserveAspect": false,
+						"RaycastTarget": true,
+						"SliceBorders": [
+							0,
+							0,
+							0,
+							0
+						],
+						"SliceScale": 1,
+						"Texture": "0000000000000000",
+						"Type": "Simple",
+						"UVRect": [
+							0,
+							0,
+							1,
+							1
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							1,
+							1
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							0,
+							0
+						]
+					}
+				},
+				"ID": "F7E000000000008B",
+				"Parent": "F7E000000000008A"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "World Label"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"UIRect": {
+						"AnchorMax": [
+							1,
+							1
+						],
+						"AnchorMin": [
+							0,
+							0
+						],
+						"FitContent": "None",
+						"IgnoreLayout": false,
+						"Pivot": [
+							0.5,
+							0.5
+						],
+						"Position": [
+							0,
+							0
+						],
+						"Size": [
+							-20,
+							-20
+						]
+					},
+					"UIText": {
+						"Alignment": "Center",
+						"Color": [
+							1,
+							1,
+							1,
+							1
+						],
+						"Font": "0000000000000000",
+						"FontSize": 48,
+						"LineSpacing": 1,
+						"OutlineColor": [
+							0,
+							0,
+							0,
+							1
+						],
+						"OutlineWidth": 0,
+						"Overflow": "Overflow",
+						"RaycastTarget": false,
+						"Text": "World UI",
+						"VerticalAlignment": "Middle",
+						"Wrap": true
+					}
+				},
+				"ID": "F7E000000000008C",
+				"Parent": "F7E000000000008B"
 			},
 			{
 				"Components": {

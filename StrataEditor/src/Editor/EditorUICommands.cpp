@@ -15,6 +15,7 @@
 
 #include <array>
 #include <cmath>
+#include <limits>
 #include <optional>
 #include <string>
 #include <vector>
@@ -121,6 +122,27 @@ namespace Strata
 			if (!ui.FindElement(entity.GetHandle(), screen, view, element))
 				return nullptr;
 			return ToJson(ui.GetElementBox(view, element), view.Scale);
+		}
+
+		// The pixels of a screen around the projected corners of a world-space canvas's box (null without a camera, or when a
+		// corner is behind it).
+		nlohmann::json DescribeProjectedRect(GameUIScene& ui, const UICanvasView& view, const UIBox& box, const std::optional<glm::mat4>& viewProjection,
+			const glm::vec2& screenSize)
+		{
+			if (!viewProjection)
+				return nullptr;
+			const glm::mat4 canvasToWorld = ui.GetCanvasWorldMatrix(view);
+			glm::vec2 min(std::numeric_limits<float>::max());
+			glm::vec2 max(std::numeric_limits<float>::lowest());
+			for (const glm::vec2 corner : { box.Min, glm::vec2(box.GetMax().x, box.Min.y), box.GetMax(), glm::vec2(box.Min.x, box.GetMax().y) })
+			{
+				const std::optional<glm::vec2> pixel = GameUIPointer::ProjectCanvasPoint(*viewProjection, canvasToWorld, screenSize, corner);
+				if (!pixel)
+					return nullptr;
+				min = glm::min(min, *pixel);
+				max = glm::max(max, *pixel);
+			}
+			return nlohmann::json { min.x, min.y, max.x - min.x, max.y - min.y };
 		}
 
 		nlohmann::json DescribeElement(Scene& scene, GameUIScene& ui, const UICanvasView& view, uint32_t element, Entity focused)
@@ -311,7 +333,8 @@ namespace Strata
 		registry.Register({ "ui.layout",
 			"Where the game UI's elements are at a screen size, without rendering: the root canvases (entity, name, scale in pixels per canvas "
 			"unit, unitSize, sortOrder, receivesInput) and the elements of an entity's subtree (all canvases without one), in draw order: "
-			"entity, name, rect ([x, y, width, height] in screen pixels), visible, visibleRect for elements under a UI Mask (what its clip rect "
+			"entity, name, rect ([x, y, width, height] in screen pixels; on a canvas in the scene (worldSpace) in canvas units, with screenRect "
+			"where the scene's camera shows it), visible, visibleRect for elements under a UI Mask (what its clip rect "
 			"leaves of the rect: where it is drawn and clicked), and for selectables interactable, state (normal, hover, pressed, focused, "
 			"disabled) and focused, for texts and input fields text (and editing for a field the player types into), for sliders and toggles "
 			"value. At most 1,000 elements (truncated tells). "
@@ -359,12 +382,14 @@ namespace Strata
 					first = element;
 					end = ui.GetElementSubtreeEnd(view, element);
 				}
+				const std::optional<glm::mat4> viewProjection = GameUIPointer::GetGameViewProjection(scene, *screen);
 				for (uint32_t index = 0; index < views.size(); index++)
 				{
 					const UICanvasView& view = views[index];
 					const Entity canvas(view.Canvas, &scene);
 					value["canvases"].push_back({ { "entity", UUIDToJson(canvas.GetUUID()) }, { "name", canvas.GetName() }, { "scale", view.Scale },
-						{ "unitSize", { view.UnitSize.x, view.UnitSize.y } }, { "sortOrder", view.SortOrder }, { "receivesInput", view.ReceivesInput } });
+						{ "unitSize", { view.UnitSize.x, view.UnitSize.y } }, { "sortOrder", view.SortOrder }, { "receivesInput", view.ReceivesInput },
+						{ "worldSpace", view.WorldSpace } });
 					if (rootView && *rootView != index)
 						continue;
 					const uint32_t from = rootView ? first : 0;
@@ -376,7 +401,11 @@ namespace Strata
 							value["truncated"] = true;
 							break;
 						}
-						value["elements"].push_back(DescribeElement(scene, ui, view, element, focused));
+						nlohmann::json described = DescribeElement(scene, ui, view, element, focused);
+						// In the scene: where the game's camera shows the element (the box around its projected corners).
+						if (view.WorldSpace)
+							described["screenRect"] = DescribeProjectedRect(ui, view, ui.GetVisibleBox(view, element), viewProjection, screen->Size);
+						value["elements"].push_back(std::move(described));
 					}
 				}
 				return EditorCommandResult::Ok(std::move(value));
@@ -385,8 +414,9 @@ namespace Strata
 		registry.Register({ "ui.hitTest",
 			"What the player would hit at a position of the game's screen (edit and play mode): the topmost raycast target (an image or text "
 			"that is one, or a selectable) of the canvases that receive input, as entity, name, path (from its canvas), selectable (the "
-			"selectable it belongs to, which a click would press) and interactable; entity null when the position hits nothing. With all, every "
-			"element whose rect contains the position, topmost first, raycast target or not, in every canvas.",
+			"selectable it belongs to, which a click would press) and interactable; entity null when the position hits nothing. World-space "
+			"canvases are hit where the scene's camera looks through the position, after every screen-space canvas. With all, every element whose "
+			"rect contains the position, topmost first, raycast target or not, in every canvas.",
 			ObjectSchema({
 				{ "position", PairSchema("[x, y] in screen pixels from the top-left corner") },
 				{ "screen", ScreenSchema() },
@@ -412,6 +442,9 @@ namespace Strata
 				const std::vector<UICanvasView> views(laidOut.begin(), laidOut.end());
 				GameUIHitTester tester;
 				tester.Update(ui, views);
+				// The canvases in the scene where the game camera's ray through the position crosses them.
+				const std::optional<glm::mat4> viewProjection = GameUIPointer::GetGameViewProjection(scene, *screen);
+				const std::optional<UIPointerRay> ray = viewProjection ? GameUIPointer::MakeRay(*viewProjection, screen->Size, *position) : std::nullopt;
 				auto describe = [&](entt::entity handle)
 				{
 					const Entity entity(handle, &scene);
@@ -434,13 +467,13 @@ namespace Strata
 				if (all)
 				{
 					std::vector<UIHitResult> hits;
-					tester.HitTestAll(ui, views, *position, hits);
+					tester.HitTestAll(ui, views, *position, hits, ray ? &*ray : nullptr);
 					value["hits"] = nlohmann::json::array();
 					for (const UIHitResult& hit : hits)
 						value["hits"].push_back(describe(hit.Entity));
 					return EditorCommandResult::Ok(std::move(value));
 				}
-				const std::optional<UIHitResult> hit = tester.HitTest(*position);
+				const std::optional<UIHitResult> hit = tester.HitTest(*position, false, ray ? &*ray : nullptr);
 				if (!hit)
 				{
 					value["entity"] = nullptr;

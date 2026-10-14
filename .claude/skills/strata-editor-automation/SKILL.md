@@ -460,6 +460,10 @@ ui.hitTest {"position": [960, 540]}                                      # what 
   and `input.click` aims at what the mask leaves.
 - Check proportions without rendering: `ui.layout` at two screens of the same aspect gives the same fractions under
   `ScaleWithScreen`. `ui.layout {"entity": ...}` lists one subtree (state, focused, text and value too).
+- UI in the scene (a sign, a name tag): `component.set` on the canvas's `UICanvas` with `"RenderMode": "WorldSpace"` and
+  `WorldUnitsPerUnit` (0.01: 100 canvas units are a meter); move it with its transform (it faces +Z). `ui.layout` marks
+  it `worldSpace`, its elements' `rect` are canvas units and `screenRect` is where the primary camera shows them (null
+  without one); `ui.hitTest` and `input.click` reach it through that camera.
 - For the person: `viewport.setSettings {"canvasMode": true}` shows the selection's canvas in 2D at its reference aspect
   with handles (the "2D" chip); `{"gameUI": true}` draws the UI over the editor view, where a click selects an element.
 
