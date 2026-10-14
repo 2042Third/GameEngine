@@ -104,6 +104,25 @@ namespace Strata
 		return json.dump(indent, indentCharacter, false, nlohmann::json::error_handler_t::replace);
 	}
 
+	void JsonUtils::AppendString(std::string& out, std::string_view text)
+	{
+		// Printable ASCII but the quote and the backslash is written as it is; anything else (escapes, UTF-8, invalid bytes)
+		// goes through the serializer, so the rules stay nlohmann's.
+		const bool plain = std::all_of(text.begin(), text.end(), [](char character)
+		{
+			const unsigned char byte = static_cast<unsigned char>(character);
+			return byte >= 0x20 && byte < 0x7F && byte != '"' && byte != '\\';
+		});
+		if (!plain)
+		{
+			out += Dump(nlohmann::json(std::string(text)));
+			return;
+		}
+		out += '"';
+		out.append(text);
+		out += '"';
+	}
+
 	const nlohmann::json* JsonUtils::Find(const nlohmann::json& object, std::string_view key)
 	{
 		if (!object.is_object())

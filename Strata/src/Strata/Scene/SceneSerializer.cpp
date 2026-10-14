@@ -1,10 +1,12 @@
 #include "stpch.h"
 #include "Strata/Scene/SceneSerializer.h"
 
+#include "Strata/Core/AtomicFileWriter.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Scene/ComponentAccess.h"
+#include "Strata/Scene/SceneDocumentWriter.h"
 #include "Strata/Scene/UnknownComponents.h"
 
 #include <algorithm>
@@ -250,21 +252,26 @@ namespace Strata
 
 	}
 
-	nlohmann::json SceneSerializer::Serialize(const Scene& scene)
+	nlohmann::json SceneSerializer::SerializeSettings(const SceneSettings& sceneSettings)
 	{
 		nlohmann::json settings;
-		const glm::vec3& gravity = scene.GetSettings().Gravity;
+		const glm::vec3& gravity = sceneSettings.Gravity;
 		settings["Gravity"] = nlohmann::json::array({ FloatToJson(gravity.x), FloatToJson(gravity.y), FloatToJson(gravity.z) });
-		settings["FixedTimestep"] = FloatToJson(scene.GetSettings().FixedTimestep);
-		settings["MaxFixedStepsPerFrame"] = scene.GetSettings().MaxFixedStepsPerFrame;
-		settings["MaxEntitiesInstantiatedPerFrame"] = scene.GetSettings().MaxEntitiesInstantiatedPerFrame;
-		const PhysicsCapacitySettings& capacity = scene.GetSettings().PhysicsCapacity;
+		settings["FixedTimestep"] = FloatToJson(sceneSettings.FixedTimestep);
+		settings["MaxFixedStepsPerFrame"] = sceneSettings.MaxFixedStepsPerFrame;
+		settings["MaxEntitiesInstantiatedPerFrame"] = sceneSettings.MaxEntitiesInstantiatedPerFrame;
+		const PhysicsCapacitySettings& capacity = sceneSettings.PhysicsCapacity;
 		settings["PhysicsCapacity"] = {
 			{ "MaxBodies", capacity.MaxBodies },
 			{ "MaxBodyPairs", capacity.MaxBodyPairs },
 			{ "MaxContactConstraints", capacity.MaxContactConstraints } };
-		settings["PhysicsLayers"] = WritePhysicsLayers(scene.GetSettings().PhysicsLayers);
+		settings["PhysicsLayers"] = WritePhysicsLayers(sceneSettings.PhysicsLayers);
+		return settings;
+	}
 
+	nlohmann::json SceneSerializer::Serialize(const Scene& scene)
+	{
+		const nlohmann::json settings = SerializeSettings(scene.GetSettings());
 		nlohmann::json entities = nlohmann::json::array();
 		for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
 			entities.push_back(SerializeEntity(entity, true));
@@ -351,11 +358,15 @@ namespace Strata
 
 	bool SceneSerializer::SaveToFile(const Scene& scene, const std::filesystem::path& path, std::string* outError)
 	{
-		const std::string text = JsonUtils::Dump(Serialize(scene), 1, '\t');
-		if (!FileSystem::WriteText(path, text + "\n"))
+		AtomicFileWriter file(path);
+		std::string error = file.GetError();
+		// Tools and tests wait for it: the workers help, rather than the background threads.
+		SceneWriteOptions options;
+		options.Priority = JobPriority::Normal;
+		if (!file.IsOpen() || !SceneDocumentWriter::Write(scene, file, options, nullptr, &error) || !file.Commit(&error))
 		{
 			if (outError)
-				*outError = fmt::format("Failed to write scene file '{}'", FileSystem::ToUTF8(path));
+				*outError = fmt::format("Failed to write scene file '{}': {}", FileSystem::ToUTF8(path), error);
 			return false;
 		}
 		return true;

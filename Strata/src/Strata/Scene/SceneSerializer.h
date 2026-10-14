@@ -48,6 +48,8 @@ namespace Strata
 		static constexpr uint32_t c_FormatVersion = 1;
 
 		static nlohmann::json Serialize(const Scene& scene);
+		// The scene settings as a scene document stores them ({"Gravity", "FixedTimestep", ...}).
+		static nlohmann::json SerializeSettings(const SceneSettings& settings);
 		// Loads into an empty scene. Returns false (with an error) for structurally invalid documents.
 		static bool Deserialize(Scene& scene, const nlohmann::json& json, std::string* outError = nullptr, std::vector<std::string>* outWarnings = nullptr,
 			const EntityReadProgress& progress = {});
@@ -55,6 +57,8 @@ namespace Strata
 		// once, whoever takes the scene (SceneAsset::TakePreparedScene), and tests check it with the difference of two calls.
 		static uint64_t GetDeserializeCount();
 
+		// Writes the scene's document through SceneDocumentWriter (an entity per line), replacing the file only once all of it
+		// is written (AtomicFileWriter).
 		static bool SaveToFile(const Scene& scene, const std::filesystem::path& path, std::string* outError = nullptr);
 		static Ref<Scene> LoadFromFile(const std::filesystem::path& path, std::string* outError = nullptr);
 

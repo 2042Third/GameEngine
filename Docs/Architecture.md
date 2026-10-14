@@ -832,6 +832,30 @@ A frame of a scene where nothing changed costs (almost) nothing, however many en
   `GetHierarchyOrderBuildCount`, `GetLookupVisitCount` and `GetLookupIndexBuildCount` (tests use them to prove that
   lookups and clean updates traverse nothing).
 
+### Scene documents
+
+Scenes, prefabs and models are JSON documents (`{"Strata": {"Format", "Version": 1}, "<Kind>": {...}}`). Small ones
+(undo snapshots, the clipboard, commands) go through `SceneSerializer::Serialize`/`SerializeEntities` as DOMs; documents
+of whole scenes never become one:
+
+- **Writer** (`Scene/SceneDocumentWriter`): writes into a `DocumentOutput` (`Core/DocumentOutput.h`: a file through
+  `Core/AtomicFileWriter`, which streams into `<path>.tmp<n>` through a 1 MiB buffer and renames it over the file on
+  `Commit`, or a string). The header comes first, then `"Name"`, `"Settings"`, `"EntityCount"` (new and optional: readers
+  that know it refuse an over-cap document at once) and `"Entities"` with **one entity per line**, in hierarchy order. Each
+  line is byte for byte `JsonUtils::Dump` of the entity object `SceneSerializer` builds (components and properties sorted
+  by name, floats in `FloatToJson`'s form, which `AppendFloatJson` writes without parsing a number: fmt's shortest digits
+  read back as nlohmann does, exactly, through one IEEE operation where the significand and the power of ten are exact,
+  and through nlohmann's reader otherwise), so a re-save of an old file differs only in whitespace, files diff entity by
+  entity and take about half of the old tab-indented size. Entities are serialized in parallel chunks of
+  `SceneWriteOptions::ChunkEntities` (4,096) on the job system (`JobPriority::Background` by default) and written in
+  order by a job of their own while the next batch is serialized, so the bytes never depend on the thread count. While
+  writing it collects the references (asset properties in order, and extra data such as script fields through
+  `SceneWriteOptions::ExtraReferences`: exactly what `AssetDependencies::Scan` finds in the bytes), counts entities and
+  bytes and hashes them (SHA-256 for the recovery journal, FNV-1a for the import records). Options: the document kind,
+  entity subsets by root ID (`Roots`: each root with its descendants, parents written only within the subset; world
+  cells), `WriteSettings`, `Name`, `Cancel` (checked between chunks) and `Progress`. `SceneSerializer::SaveToFile` writes
+  through it.
+
 ## Threading model
 
 The main thread owns the scene, input, scripts, editor state and rendering submission (AGENTS.md, "Architecture
