@@ -1352,7 +1352,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   those frames went: the frame profiler's statistics (mean, nearest-rank p50 and p95, maximum) of the latest frames (120 by
   default, at most 600) for the frame, every stage (`stages/<name>`, self times, `inFrameTime` false for Present), the
   stages added up (`stageSum`, at most the frame), the rest of each frame (`untimed`) and the job threads (busy percent,
-  running and queued jobs).
+  running and queued jobs); `stages` lists the main thread's stages only. `gpu` is the GPU's side of the same frames
+  (frames with GPU times, the latency, busy time, per GPU stage, and `boundBy`: `FrameBound` by the 90% rules), and
+  `renderStats` the viewport panel's latest frame (`CommandUtils::DescribeRenderStats` of its `SceneRendererStats` and
+  `SceneRendererGPUStats`; null while the panel renders none). `viewport.capture` returns the captured frame's
+  `renderStats`, waiting up to 8 frames for its GPU times once the GPU finished it.
 - `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters", "expect", "bind"}` at startup
   (`EditorCommandScript`); a pending command holds the script until it completes. `expect` (optional) maps JSON
   pointers into the command's result to conditions, e.g. `{"/values/Translation/1": {"min": 1.6, "max": 1.7}}` or

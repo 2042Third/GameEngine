@@ -3,6 +3,7 @@
 #include "Editor/EditorCommands.h"
 
 #include <Strata/Asset/AssetTypes.h>
+#include <Strata/Core/FrameProfiler.h>
 #include <Strata/Scene/Entity.h>
 
 #include <nlohmann/json.hpp>
@@ -26,6 +27,8 @@ namespace Strata
 	struct AssetManagerStats;
 	struct FrameProfileSummary;
 	struct JobSystemStats;
+	struct SceneRendererGPUStats;
+	struct SceneRendererStats;
 
 	// Helpers shared by the built-in editor commands.
 	namespace CommandUtils
@@ -107,6 +110,12 @@ namespace Strata
 		// "untimed", "jobs", "stages": {"<name>": {"avgMs", "p50Ms", "p95Ms", "maxMs", "inFrameTime"}}}, statistics in
 		// milliseconds; `jobs` adds the job system's current running and queued jobs.
 		nlohmann::json DescribeFrameProfile(const FrameProfileSummary& summary, const JobSystemStats& jobs);
+		// A renderer's latest frame as viewport.capture and editor.perf report it (renderStats): what the CPU recorded and the
+		// frame drew, culled and uploaded (SceneRendererStats), and the GPU's side of the latest frame whose GPU work is known
+		// (SceneRendererGPUStats: gpuMs per GPU stage, gpuStatsFrame its frame profiler frame, null without GPU times).
+		nlohmann::json DescribeRenderStats(const SceneRendererStats& stats, const SceneRendererGPUStats& gpu);
+		// The name editor.perf and renderStats give a FrameBound ("gpu", "cpu", "capped", "unknown").
+		const char* GetFrameBoundName(FrameBound bound);
 
 		// The "force" parameter of the commands that replace the edited scene (see CheckUnsavedChanges).
 		nlohmann::json ForceSchema();

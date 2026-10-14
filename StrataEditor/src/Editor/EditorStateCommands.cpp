@@ -2,6 +2,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/RecentProjects.h"
+#include "Editor/ViewportRenderer.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/FrameProfiler.h>
@@ -74,6 +75,24 @@ namespace Strata
 		nlohmann::json DescribeFrameTimeStats(const FrameTimeStats& stats)
 		{
 			return { { "avgMs", stats.Average }, { "p50Ms", stats.P50 }, { "p95Ms", stats.P95 }, { "maxMs", stats.Max } };
+		}
+
+		// editor.perf's gpu: the frames with GPU times, their busy time, how late the times came, each GPU stage, and what
+		// bounds the frames.
+		nlohmann::json DescribeGPUProfile(const FrameProfileSummary& summary)
+		{
+			nlohmann::json stages = nlohmann::json::object();
+			for (const FrameStageSummary& stage : summary.Stages)
+			{
+				if (stage.Kind == FrameStageKind::GPU)
+					stages[stage.Name] = DescribeFrameTimeStats(stage.Time);
+			}
+			return {
+				{ "frames", summary.GPU.Frames },
+				{ "latencyFrames", summary.GPU.LatencyFrames },
+				{ "busy", DescribeFrameTimeStats(summary.GPU.Busy) },
+				{ "stages", std::move(stages) },
+				{ "boundBy", CommandUtils::GetFrameBoundName(summary.GPU.BoundBy) } };
 		}
 
 		// Where play.start is while the scripts build first.
@@ -196,7 +215,54 @@ namespace Strata
 					{ "backgroundBusyPercent", summary.BackgroundBusyPercent },
 					{ "running", jobs.Workers.RunningJobs + jobs.IO.RunningJobs + jobs.Background.RunningJobs },
 					{ "queued", jobs.Workers.QueuedJobs + jobs.IO.QueuedJobs + jobs.Background.QueuedJobs } } },
-				{ "stages", std::move(stages) } };
+				{ "stages", std::move(stages) },
+				{ "gpu", DescribeGPUProfile(summary) } };
+		}
+
+		const char* GetFrameBoundName(FrameBound bound)
+		{
+			switch (bound)
+			{
+				case FrameBound::CPU: return "cpu";
+				case FrameBound::GPU: return "gpu";
+				case FrameBound::Capped: return "capped";
+				case FrameBound::Unknown: break;
+			}
+			return "unknown";
+		}
+
+		nlohmann::json DescribeRenderStats(const SceneRendererStats& stats, const SceneRendererGPUStats& gpu)
+		{
+			nlohmann::json lods = nlohmann::json::array();
+			for (const uint32_t count : stats.InstancesPerLOD)
+				lods.push_back(count);
+			nlohmann::json gpuMs = nlohmann::json::object();
+			for (const GPUStageTime& stage : gpu.StageMs)
+				gpuMs[FrameProfiler::Get().GetStageName(stage.Stage)] = stage.Milliseconds;
+			return {
+				{ "gpuDriven", false },
+				{ "drawCommands", stats.DrawCommands },
+				{ "draws", stats.DrawCommands },
+				{ "opaqueDraws", stats.OpaqueDrawCalls },
+				{ "shadowDraws", stats.ShadowDrawCalls },
+				{ "instances", stats.Instances },
+				{ "shadowCasters", stats.ShadowCasters },
+				{ "triangles", stats.Triangles },
+				{ "visibleProxies", stats.VisibleProxies },
+				{ "occludedProxies", 0 },
+				{ "culledProxies", stats.CulledInstances },
+				{ "instancesPerLod", std::move(lods) },
+				{ "lights", stats.Lights },
+				{ "droppedLights", stats.DroppedLights },
+				{ "materials", stats.Materials },
+				{ "pendingAssets", stats.PendingAssets },
+				{ "extractMs", stats.ExtractMs },
+				{ "sortMs", stats.SortMs },
+				{ "proxyUpdates", stats.ProxyUpdates },
+				{ "instanceBytesUploaded", stats.InstanceBytesUploaded },
+				{ "deferredInstanceBytes", 0 },
+				{ "gpuMs", std::move(gpuMs) },
+				{ "gpuStatsFrame", gpu.HasTimes ? nlohmann::json(gpu.Frame) : nlohmann::json(nullptr) } };
 		}
 
 	}
@@ -714,17 +780,29 @@ namespace Strata
 			"Render.Extract, Render.Submit, Editor.UI and Present, plus stages modules registered; each its self "
 			"time, nested stages excluded, with inFrameTime false for Present, which comes after the frame time is measured), stageSum (the "
 			"stages inside the frame time added up per frame), untimed (the rest of each frame, work no stage accounts for) and jobs (worker, "
-			"I/O and background threads (imports, exports), how busy they were in percent, running and queued jobs now). Times are milliseconds as avgMs, p50Ms and p95Ms "
-			"(nearest rank) and maxMs.",
+			"I/O and background threads (imports, exports), how busy they were in percent, running and queued jobs now). gpu is the GPU's side of "
+			"the same frames, known 2-3 frames late: frames (with GPU times), latencyFrames, busy (the GPU stages added up per frame), stages (per GPU "
+			"stage: GPU.Uploads, GPU.Setup, GPU.Cull, GPU.Shadows, GPU.Prepass, GPU.AO, GPU.Opaque (with the sky), GPU.Transparent, GPU.Post, "
+			"GPU.Overlays, GPU.ImGui) and boundBy: gpu when the GPU's median busy time takes at least 90% of the median frame interval and exceeds "
+			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
+			"times. renderStats is the viewport's latest frame (null while it renders none): gpuDriven, drawCommands (draws the CPU recorded), "
+			"draws, opaqueDraws, shadowDraws, instances, shadowCasters, triangles, visibleProxies, occludedProxies, culledProxies, instancesPerLod, "
+			"lights, droppedLights, materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes, gpuMs "
+			"(per GPU stage of the frame gpuStatsFrame names). Times are milliseconds as avgMs, p50Ms and p95Ms (nearest rank) and maxMs.",
 			ObjectSchema({ { "frames", IntegerSchema("How many of the latest frames to summarize (default 120)", 1, FrameProfiler::c_DefaultCapacity) } }),
-			[](EditorContext&, const nlohmann::json& parameters)
+			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const int64_t frames = arguments.GetInt("frames", c_DefaultPerfFrames, 1, FrameProfiler::c_DefaultCapacity);
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				const FrameProfileSummary summary = FrameProfiler::Get().Summarize(static_cast<uint32_t>(frames));
-				return EditorCommandResult::Ok(DescribeFrameProfile(summary, JobSystem::GetStats()));
+				nlohmann::json result = DescribeFrameProfile(summary, JobSystem::GetStats());
+				// The viewport's latest frame, while the viewport panel renders one.
+				const ViewportRenderer* viewport = context.GetViewport().FindRenderer();
+				result["renderStats"] = viewport && viewport->GetStats().Rendered
+					? DescribeRenderStats(viewport->GetStats(), viewport->GetGPUStats()) : nlohmann::json(nullptr);
+				return EditorCommandResult::Ok(std::move(result));
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		////////////////////////////////////////////////////////////////////////////////

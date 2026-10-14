@@ -1,9 +1,11 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/ViewportRenderer.h"
 
 #include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Core/FrameProfiler.h>
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Renderer/ImageWriter.h>
@@ -45,6 +47,8 @@ namespace Strata
 		// animator that animates only while seen (WhenVisible) and that no renderer drew before skipped its poses, and the
 		// capture's report poses it in the next frame (also while the game is paused).
 		constexpr uint32_t c_MaxCapturePoseFrames = 8;
+		// Polls a finished capture waits for its frame's GPU times (they are resolved 1-3 frames after the GPU finished it).
+		constexpr uint32_t c_MaxCaptureGPUStatsPolls = 8;
 
 		nlohmann::json ToJson(const glm::vec3& value)
 		{
@@ -223,6 +227,10 @@ namespace Strata
 			uint32_t PoseFrames = 0;  // Renders repeated so far while animators showed poses older than their time
 			uint32_t TexturesBelowWanted = 0;
 			uint32_t StalePoses = 0;
+			SceneRendererStats Stats;     // The captured frame's
+			uint64_t RenderFrame = 0;     // The frame profiler's frame that rendered it
+			uint32_t GPUStatsPolls = 0;   // Polls that waited for its GPU times
+			nlohmann::json RenderStats;   // renderStats, once its GPU times are known
 			std::chrono::steady_clock::time_point Submitted;
 			Ref<EncodedCapture> Encoded; // Set once the pixels are on the CPU
 			JobHandle EncodeJob;
@@ -283,6 +291,8 @@ namespace Strata
 				return EditorCommandResult::Fail("Rendering the capture failed (see the log)");
 			}
 			const SceneRendererStats& stats = renderer->GetStats();
+			progress.Stats = stats;
+			progress.RenderFrame = FrameProfiler::Get().GetTotalFrameCount();
 			progress.DebugViewStats = renderer->GetDebugViewStats();
 			progress.TintedEntities = stats.TintedEntities;
 			progress.PendingAssets = stats.PendingAssets;
@@ -316,7 +326,7 @@ namespace Strata
 
 		// Later polls: wait for the GPU copy, encode the image on a worker thread (PNG compression and Base64 of a large
 		// image take long enough to hitch the editor), save it on an I/O thread when asked to, then report.
-		std::optional<EditorCommandResult> ContinueCapture(const CaptureRequest& request, CaptureProgress& progress)
+		std::optional<EditorCommandResult> ContinueCapture(EditorContext& context, const CaptureRequest& request, CaptureProgress& progress)
 		{
 			if (!progress.Encoded)
 			{
@@ -325,6 +335,18 @@ namespace Strata
 					if (std::chrono::steady_clock::now() - progress.Submitted > c_CaptureReadbackTimeout)
 						return EditorCommandResult::Fail(fmt::format("The GPU did not finish the capture within {} seconds", c_CaptureReadbackTimeout.count()));
 					return std::nullopt;
+				}
+				// The GPU finished the capture: its GPU times are known once the profiler resolved its frame (a frame or two).
+				if (progress.RenderStats.is_null())
+				{
+					ViewportRenderer* renderer = context.GetViewport().GetCaptureRenderer();
+					SceneRenderer& sceneRenderer = renderer->GetSceneRenderer();
+					sceneRenderer.ResolveGPUStats(false);
+					const SceneRendererGPUStats& gpu = sceneRenderer.GetGPUStats();
+					const bool known = gpu.HasTimes && gpu.Frame >= progress.RenderFrame;
+					if (!known && Renderer::GetGPUProfiler().IsEnabled() && progress.GPUStatsPolls++ < c_MaxCaptureGPUStatsPolls)
+						return std::nullopt;
+					progress.RenderStats = DescribeRenderStats(progress.Stats, known ? gpu : SceneRendererGPUStats());
 				}
 				Ref<EncodedCapture> encoded = CreateRef<EncodedCapture>();
 				if (!progress.Readback->GetResult(encoded->Image))
@@ -384,7 +406,8 @@ namespace Strata
 				{ "previewLighting", progress.PreviewLighting },
 				{ "screenSpaceTexts", progress.ScreenSpaceTexts },
 				{ "hiddenScreenSpaceTexts", progress.HiddenScreenSpaceTexts },
-				{ "debugView", DescribeDebugView(progress.DebugView, progress.DebugViewStats, progress.TintedEntities) }
+				{ "debugView", DescribeDebugView(progress.DebugView, progress.DebugViewStats, progress.TintedEntities) },
+				{ "renderStats", std::move(progress.RenderStats) }
 			};
 			if (!progress.View.Notice.empty())
 				result["notice"] = progress.View.Notice;
@@ -574,7 +597,9 @@ namespace Strata
 			"drawn with an older pose (stalePoses) and glyphs that could not be prepared in time (pendingTextGlyphs). debugView colors the picture "
 			"by streaming state, level of detail or mip levels (default: the viewport's, viewport.setSettings) and the result's debugView says what it "
 			"found: {view, tintedEntities, pendingEntities, failedEntities, placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], "
-			"entitiesPerMipShortfall: [at the wanted level, 1 level coarser, 2, 3+ or loading]} among the entities in view. "
+			"entitiesPerMipShortfall: [at the wanted level, 1 level coarser, 2, 3+ or loading]} among the entities in view. renderStats is what the "
+			"captured frame drew, as editor.perf's renderStats (draws, instances, shadow casters, triangles, proxies, lights, timings), with gpuMs: "
+			"the GPU's milliseconds per stage of the captured frame (empty, with gpuStatsFrame null, where the GPU writes no timestamps). "
 			"Needs a GPU (fails in editors started with --no-gpu).",
 			ObjectSchema({
 				{ "width", IntegerSchema("Image width in pixels; without height the viewport's aspect ratio is kept", c_MinCaptureSize, c_MaxCaptureSize) },
@@ -679,7 +704,7 @@ namespace Strata
 				{
 					if (!progress->Readback && !progress->Encoded)
 						return StartCapture(context, request, *progress);
-					return ContinueCapture(request, *progress);
+					return ContinueCapture(context, request, *progress);
 				});
 			}, EditorCommandKind::Query });
 	}

@@ -49,7 +49,7 @@ namespace
 	// The result's shape, which tools and command scripts rely on.
 	void CheckProfileSchema(const nlohmann::json& profile)
 	{
-		CHECK(GetKeys(profile) == std::set<std::string> { "frames", "frame", "framesPerSecond", "stageSum", "untimed", "jobs", "stages" });
+		CHECK(GetKeys(profile) == std::set<std::string> { "frames", "frame", "framesPerSecond", "stageSum", "untimed", "jobs", "stages", "gpu", "renderStats" });
 		CHECK(profile["frames"].is_number_unsigned());
 		CHECK(profile["framesPerSecond"].is_number());
 		CHECK(GetKeys(profile["frame"]) == c_TimeKeys);
@@ -72,7 +72,27 @@ namespace
 			for (const std::string& key : c_TimeKeys)
 				CHECK(stages[name][key].is_number());
 		}
-		CHECK(stages.size() == FrameProfiler::Get().GetStageCount());
+		// The main thread's stages only: the GPU's are in gpu.
+		uint32_t cpuStages = 0;
+		for (FrameStageID stage = 0; stage < FrameProfiler::Get().GetStageCount(); stage++)
+			cpuStages += FrameProfiler::Get().GetStageKind(stage) == FrameStageKind::CPU ? 1 : 0;
+		CHECK(stages.size() == cpuStages);
+		CHECK_FALSE(stages.contains("GPU.Opaque"));
+
+		const nlohmann::json& gpu = profile["gpu"];
+		CHECK(GetKeys(gpu) == std::set<std::string> { "frames", "latencyFrames", "busy", "stages", "boundBy" });
+		CHECK(gpu["frames"].is_number_unsigned());
+		CHECK(gpu["latencyFrames"].is_number());
+		CHECK(GetKeys(gpu["busy"]) == c_TimeKeys);
+		CHECK(std::set<std::string> { "gpu", "cpu", "capped", "unknown" }.count(gpu["boundBy"].get<std::string>()) == 1);
+		// Every GPU stage the renderer registered.
+		for (const char* name : { "GPU.Uploads", "GPU.Setup", "GPU.Cull", "GPU.Shadows", "GPU.Prepass", "GPU.AO", "GPU.Opaque", "GPU.Transparent", "GPU.Post",
+			"GPU.Overlays" })
+		{
+			CAPTURE(name);
+			REQUIRE(gpu["stages"].contains(name));
+			CHECK(GetKeys(gpu["stages"][name]) == c_TimeKeys);
+		}
 	}
 
 }
@@ -122,6 +142,10 @@ TEST_SUITE("Editor.Perf")
 		CHECK(stages["Editor.UI"]["maxMs"] == 0.0f);
 		CHECK(profile["frame"]["avgMs"].get<float>() > 0.0f);
 		CHECK(profile["framesPerSecond"].get<float>() > 0.0f);
+		// Without a GPU: no GPU times, nothing bounds the frames known, and no viewport frame.
+		CHECK(profile["gpu"]["frames"] == 0);
+		CHECK(profile["gpu"]["boundBy"] == "unknown");
+		CHECK(profile["renderStats"].is_null());
 
 		// In every frame the stages add up to at most the frame's time, and so do their statistics.
 		for (uint32_t age = 0; age < c_ProfiledFrames; age++)

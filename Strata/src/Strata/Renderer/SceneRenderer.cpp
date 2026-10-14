@@ -1041,6 +1041,7 @@ namespace Strata
 			arguments.startVertexLocation = submesh.BaseVertex;
 			arguments.startInstanceLocation = batch.FirstInstance;
 			commandList->drawIndexed(arguments);
+			m_Stats.DrawCommands++;
 		}
 	}
 
@@ -1593,6 +1594,7 @@ namespace Strata
 			arguments.startVertexLocation = submesh.BaseVertex;
 			arguments.startInstanceLocation = batch.FirstInstance;
 			commandList->drawIndexed(arguments);
+			m_Stats.DrawCommands++;
 
 			if (pass != Pass::Prepass)
 			{

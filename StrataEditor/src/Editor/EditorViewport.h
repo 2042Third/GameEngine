@@ -128,6 +128,8 @@ namespace Strata
 		// null without an initialized renderer (headless editors).
 		ViewportRenderer* GetRenderer();
 		ViewportRenderer* GetCaptureRenderer();
+		// The viewport panel's renderer when it exists (never created here).
+		const ViewportRenderer* FindRenderer() const { return m_Renderer.get(); }
 
 		// Frames the entities (with their descendants) in the editor camera, or the whole scene when the span is empty.
 		// False (camera unchanged) when there is nothing to frame.

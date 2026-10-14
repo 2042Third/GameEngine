@@ -100,7 +100,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What does the person have selected, what does the inspector show? | `selection.get` (`entities`, the last is the primary one; `inspectedAsset` while the inspector shows an asset); `selection.set {entities?, asset?}` changes them |
 | What happened (errors, script output)? | `log.read` (`after` = the previous `latest` to page; `minLevel`) |
 | How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`); `asset.setBudget` changes the open project's budgets (MB of memory, staging and uploads per frame; ms of finalization and of upload steps per frame) |
-| Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %) |
+| Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %; `gpu`: the GPU's stages and `boundBy`; `renderStats`: what the viewport's frame drew) |
 
 Commands added at run time (for example `script.*`, `viewport.*`, `camera.*` when those features are present)
 appear in `editor.commands` and as tools automatically. The viewport commands need rendering: they fail in an
@@ -376,7 +376,20 @@ with a window, not `--no-gpu`, to include rendering). A command script can gate 
 finished loading, creating sub-scenes' entities), `Scene.Scripts`, `Scene.Animation` (animators: poses, root motion,
 attachments, events), `Scene.Physics`, `Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Editor.UI`, and `Present` outside the frame
 time), with `stageSum` (at most the frame), `untimed` (the rest of each frame) and `jobs` (`workerBusyPercent`,
-`ioBusyPercent`, `backgroundBusyPercent` (imports, exports), `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage. The
+`ioBusyPercent`, `backgroundBusyPercent` (imports, exports), `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage.
+
+**Render statistics and GPU time**: `editor.perf` also has `gpu` (`frames` with GPU times, `latencyFrames`: they arrive
+2-3 frames late, `busy`, `stages` per GPU stage: `GPU.Uploads`, `GPU.Setup`, `GPU.Cull`, `GPU.Shadows`, `GPU.Prepass`,
+`GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent`, `GPU.Post`, `GPU.Overlays`, `GPU.ImGui`) and `boundBy`: `"gpu"`
+(the GPU's median busy time takes at least 90% of the frame interval and exceeds the CPU's frame time: make the scene
+cheaper to draw), `"cpu"` (the CPU's frame time does: look at `stages`), `"capped"` (vsync or a frame-rate cap sets the
+pace: neither is the limit) or `"unknown"` (no GPU times: `--no-gpu`, or a driver without timestamps). Its `renderStats`
+(and every `viewport.capture` result's, for the captured frame) says what a frame drew: `drawCommands` (draws the CPU
+recorded), `draws`, `opaqueDraws`, `shadowDraws`, `instances`, `shadowCasters`, `triangles`, `visibleProxies`,
+`culledProxies`, `occludedProxies`, `instancesPerLod`, `lights`, `droppedLights`, `materials`, `pendingAssets`,
+`extractMs`, `sortMs`, `proxyUpdates`, `instanceBytesUploaded`, `deferredInstanceBytes` and `gpuMs` (the GPU's ms per stage of
+frame `gpuStatsFrame`). Gate it like the stages: `{"expect": {"/gpu/stages/GPU.Shadows/p50Ms": {"max": 2}}}`. On macOS a
+stage that begins inside a render pass shows its time in the stage before it (`GPU.Transparent` in `GPU.Opaque`). The
 person at the editor sees the same in the Performance panel (click the frame pill) and the streaming numbers of
 `asset.stats` in the Streaming panel (click the assets pill); `editor.showPanel {"panel": "Streaming"}` (or
 `"Performance"`, `"Console"`, `"Activity"`, ...) brings one to the front for them, also as the first command of a script

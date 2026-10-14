@@ -184,6 +184,7 @@ namespace Strata
 		uint32_t DrawCalls = 0;       // Draw calls of the forward passes (opaque and transparent)
 		uint32_t OpaqueDrawCalls = 0; // Of those, opaque batches: also the draw calls of the depth prepass
 		uint32_t ShadowDrawCalls = 0; // Draw calls into the shadow cascades
+		uint32_t DrawCommands = 0;    // Draw commands the CPU recorded for the scene's meshes in every pass (shadows, prepass, forward)
 		uint32_t Instances = 0;       // Drawn submesh instances
 		uint32_t CulledInstances = 0; // Mesh renderers outside the view frustum
 		uint64_t Triangles = 0;
