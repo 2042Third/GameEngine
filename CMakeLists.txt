@@ -22,6 +22,7 @@ option(STRATA_BUILD_CLI "Build StrataCLI (editor automation client and MCP serve
 option(STRATA_BUILD_TESTS "Build the Strata test suites" ON)
 option(STRATA_ENABLE_TRACY "Instrument the engine for the Tracy profiler" OFF)
 option(STRATA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors in first-party targets" ON)
+option(STRATA_PRECOMPILED_HEADERS "Build the engine, editor and test targets with precompiled headers" ON)
 
 include(StrataConfigurations)
 include(StrataCompilerOptions)

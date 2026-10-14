@@ -14,12 +14,14 @@ characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together
 
 - [Repository layout](#repository-layout)
 - [Building](#building)
+  - [Precompiled headers](#precompiled-headers)
   - [macOS and MoltenVK](#macos-and-moltenvk)
   - [Windows subsystem](#windows-subsystem)
   - [Packages](#packages)
   - [Releases](#releases)
 - [Testing](#testing)
   - [Unit tests](#unit-tests)
+  - [Shards, sweeps and locks](#shards-sweeps-and-locks)
   - [GPU tests](#gpu-tests)
   - [Perf tests](#perf-tests)
   - [End-to-end tests](#end-to-end-tests)
@@ -140,7 +142,25 @@ full path, `$(brew --prefix)/lib/libVkLayer_khronos_validation.dylib` (the build
 
 Useful CMake options: `-DSTRATA_BUILD_EDITOR=OFF`, `-DSTRATA_BUILD_RUNTIME=OFF`,
 `-DSTRATA_BUILD_CLI=OFF`, `-DSTRATA_BUILD_TESTS=OFF`, `-DSTRATA_ENABLE_TRACY=ON`,
-`-DSTRATA_WARNINGS_AS_ERRORS=OFF` (local experiments only — CI always builds with warnings as errors).
+`-DSTRATA_WARNINGS_AS_ERRORS=OFF` (local experiments only — CI always builds with warnings as errors),
+`-DSTRATA_PRECOMPILED_HEADERS=OFF` (builds without precompiled headers, below).
+
+### Precompiled headers
+
+Every layer library builds its own precompiled header from `Strata/src/stpch.h` (vendor definitions differ between
+layers, so one library cannot reuse another's), `StrataEditorCore` and `StrataEditorUI` from `StrataEditor/src/EditorPch.h`
+(the UI adds `<imgui.h>`, which the core does not link), and `StrataTests` from `StrataTests/src/TestsPch.h` (its own
+definitions rule out reusing the editor's; `TestMain.cpp`, which defines `DOCTEST_CONFIG_IMPLEMENT`, compiles without
+it). CMake force-includes them (`strata_precompile_headers`, `CMake/StrataCompilerOptions.cmake`); in Debug they cut the
+compile time of the editor's and the tests' objects by about 40%.
+
+- They hold only the standard library, vendor headers (EnTT, nlohmann::json, glm, spdlog, doctest, Dear ImGui) and the
+  Core basics (`Base.h`, `Log.h`, `Assert.h`, `Profiling.h`, `PlatformDetection.h`): never an engine, editor or test
+  header that changes often, because every object of the target rebuilds when its precompiled header changes.
+  `Architecture.PrecompiledHeaders` fails on any other include.
+- Sources and headers still include what they use. The lint (`Tools/CompatLint.py`) compiles without precompiled headers,
+  and so does a build configured with `-DSTRATA_PRECOMPILED_HEADERS=OFF`: a missing include that the precompiled header
+  hides fails there.
 
 ### macOS and MoltenVK
 

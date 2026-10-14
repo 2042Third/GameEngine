@@ -189,8 +189,10 @@ Conventions:
   `Platform::EnsurePrivateDirectory`, `CreatePrivateDirectory`, `GetUserRuntimeDirectory`, `WritePrivateFile` and
   `ReadTrustedFile`, which follow one contract (`Strata/Core/Platform.h`); never create them with default permissions.
   Windows security descriptors and their checks live in `Platform/Windows/WindowsFileSecurity`.
-- Headers must be self-contained (compile without the precompiled header): include what you use,
-  e.g. `Strata/Core/Assert.h` for `ST_CORE_ASSERT`.
+- Headers must be self-contained and sources include what they use (the lint and `STRATA_PRECOMPILED_HEADERS=OFF`
+  compile without precompiled headers), e.g. `Strata/Core/Assert.h` for `ST_CORE_ASSERT`. The precompiled headers
+  (`stpch.h`, `EditorPch.h`, `TestsPch.h`) hold only the standard library, vendor headers and the Core basics
+  ([Precompiled headers](Docs/DeveloperGuide.md#precompiled-headers)).
 - Tag components (empty structs) carry no data: use `HasComponent`/`AddComponent`, never `GetComponent`.
 - Prefer clear, verbose code over clever abstractions; comment *why*, not *what*.
 - Profile hot paths with `ST_PROFILE_FUNCTION()` / `ST_PROFILE_SCOPE("Name")` (Tracy). Work that belongs to a stage of

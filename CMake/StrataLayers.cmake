@@ -7,7 +7,8 @@
 #   Exclude does not (globs relative to SOURCE_ROOT: '**/' is any directories or none, '**' anything, '*' and '?' stay
 #   within one path component). A file in no layer or in two fails the configure, naming it.
 #   For every layer whose option is on (a layer's "Option" names the CMake option that builds it), it makes
-#   Strata_<Layer> (ALIAS Strata::<Layer>): STATIC with strata_configure_target, the precompiled header stpch.h and the
+#   Strata_<Layer> (ALIAS Strata::<Layer>): STATIC with strata_configure_target, the precompiled header stpch.h (each
+#   library its own: vendor definitions differ between layers, so one cannot reuse another's) and the
 #   code generation every engine object shares (StrataEngineCodegen, PRIVATE), or INTERFACE when the layer has nothing to
 #   compile. It links PUBLIC the built layers of its MayInclude. Layers marked "Tooling" (no game contains them) are
 #   EXCLUDE_FROM_ALL.
@@ -207,7 +208,7 @@ function(strata_add_layer_libraries)
 				add_library(${target} STATIC ${excludeFromAll} ${absoluteSources})
 				strata_configure_target(${target})
 				target_link_libraries(${target} PRIVATE StrataEngineCodegen)
-				target_precompile_headers(${target} PRIVATE "${ARG_SOURCE_ROOT}/stpch.h")
+				strata_precompile_headers(${target} "${ARG_SOURCE_ROOT}/stpch.h")
 				set(scope PUBLIC)
 			else()
 				add_library(${target} INTERFACE ${excludeFromAll} ${absoluteSources})

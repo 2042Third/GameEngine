@@ -13,6 +13,7 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_EDITOR_CORE_S
 target_include_directories(StrataEditorCore PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 # The engine, and the tooling only editors contain: the asset pipeline and the network (automation).
 target_link_libraries(StrataEditorCore PUBLIC Strata Strata::AssetPipeline Strata::Network)
+strata_precompile_headers(StrataEditorCore "${CMAKE_CURRENT_SOURCE_DIR}/src/EditorPch.h")
 
 # Script builds (script.build) configure game script modules with the engine's own toolchain and configuration and the
 # StrataScriptCore package of this checkout; the values are baked into Editor/ScriptBuildConfig.h as C string literals.
@@ -49,6 +50,8 @@ strata_configure_target(StrataEditorUI)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_EDITOR_UI_SOURCES})
 # Dear ImGui (the engine's ImGui layer brings it); the gizmos (ImGuizmo) only the viewport draws.
 target_link_libraries(StrataEditorUI PUBLIC StrataEditorCore Strata::ImGui PRIVATE ImGuizmo nfd)
+# Its own precompiled header: the core's definitions differ (no ImGui), so it cannot reuse the core's.
+strata_precompile_headers(StrataEditorUI "${CMAKE_CURRENT_SOURCE_DIR}/src/EditorPch.h" <imgui.h>)
 
 # The editor's typefaces are compiled in (UI/EditorFonts.cpp), so the editor reads no font files. Licenses and versions:
 # ThirdPartyNotices.md. UI/Icons.h is generated from the icon font's codepoint map by Tools/GenerateIconHeader.py.

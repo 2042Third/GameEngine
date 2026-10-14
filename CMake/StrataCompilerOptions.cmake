@@ -27,6 +27,16 @@ function(strata_configure_target target)
 	set_target_properties(${target} PROPERTIES FOLDER "Strata")
 endfunction()
 
+# strata_precompile_headers(<target> <header>...)
+#   Gives <target> a precompiled header made of <header>s (paths, or <system> headers) when STRATA_PRECOMPILED_HEADERS is
+#   on. It is force-included into every source of the target. Sources still include what they use: the lint and builds
+#   with the option off compile without it.
+function(strata_precompile_headers target)
+	if(STRATA_PRECOMPILED_HEADERS)
+		target_precompile_headers(${target} PRIVATE ${ARGN})
+	endif()
+endfunction()
+
 # strata_copy_runtime_resources(<target> <source dir> <destination subdir>)
 #   Copies a resource directory next to the target's binary after every build.
 function(strata_copy_runtime_resources target sourceDir destinationSubdir)
