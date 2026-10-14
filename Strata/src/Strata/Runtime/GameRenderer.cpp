@@ -74,6 +74,19 @@ namespace Strata
 			return m_Renderer->Render(*scene, SceneCamera::FromEntity(*scene, camera, aspectRatio), target);
 		}
 
+		// A scene without a camera that has screen-space UI (a main menu needs no camera): its UI over an empty frame.
+		if (m_Renderer->HasOverlayContent(*scene))
+		{
+			m_ShowingMessage = false;
+			m_MessageText.GetComponent<TextComponent>().Text.clear();
+			SceneCamera camera;
+			camera.Projection = Math::PerspectiveReverseZ(camera.VerticalFOV, aspectRatio, camera.Near, camera.Far);
+			camera.ClearColor = c_EmptyBackground;
+			SceneRenderOptions options;
+			options.OverlayScene = scene.get();
+			return m_Renderer->Render(*m_MessageScene, camera, target, options);
+		}
+
 		if (!m_ShowingMessage)
 		{
 			ST_CORE_ERROR("The scene '{}' has no active entity with a Camera component marked Primary: showing a message instead", scene->GetName());

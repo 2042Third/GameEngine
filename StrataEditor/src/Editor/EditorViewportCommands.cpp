@@ -217,6 +217,7 @@ namespace Strata
 			bool PreviewLighting = false;
 			uint32_t ScreenSpaceTexts = 0;
 			uint32_t HiddenScreenSpaceTexts = 0;
+			SceneOverlayStats UI;     // The game UI's canvases (the overlay passes)
 			uint32_t TextFrames = 0;  // Renders repeated so far to complete the text
 			uint32_t AssetFrames = 0; // Renders repeated so far while assets of the view were loading
 			uint32_t MipFrames = 0;   // Renders repeated so far while textures were coarser than the view wants
@@ -290,9 +291,11 @@ namespace Strata
 			progress.PreviewLighting = stats.PreviewLighting;
 			progress.ScreenSpaceTexts = stats.ScreenSpaceTexts;
 			progress.HiddenScreenSpaceTexts = stats.HiddenScreenSpaceTexts;
+			progress.UI = stats.Overlays;
 			progress.TexturesBelowWanted = renderer->CountTexturesBelowWanted();
 			progress.StalePoses = stats.StalePoses;
-			const bool textPending = progress.PendingTextGlyphs > 0 && progress.TextFrames < c_MaxCaptureTextFrames;
+			// The UI's glyphs complete like the text's (its fonts and textures count in pendingAssets).
+			const bool textPending = progress.PendingTextGlyphs + progress.UI.PendingGlyphs > 0 && progress.TextFrames < c_MaxCaptureTextFrames;
 			const bool assetsPending = request.WaitForAssets && progress.PendingAssets > 0 && progress.AssetFrames < c_MaxCaptureAssetFrames;
 			const bool mipsPending = request.WaitForAssets && progress.TexturesBelowWanted > 0 && progress.MipFrames < c_MaxCaptureMipFrames;
 			const bool posesPending = request.WaitForAssets && progress.StalePoses > 0 && progress.PoseFrames < c_MaxCapturePoseFrames;
@@ -384,6 +387,8 @@ namespace Strata
 				{ "previewLighting", progress.PreviewLighting },
 				{ "screenSpaceTexts", progress.ScreenSpaceTexts },
 				{ "hiddenScreenSpaceTexts", progress.HiddenScreenSpaceTexts },
+				{ "ui", { { "canvases", progress.UI.Canvases }, { "hiddenCanvases", progress.UI.HiddenCanvases }, { "elements", progress.UI.Elements },
+					{ "drawCalls", progress.UI.DrawCalls }, { "pendingGlyphs", progress.UI.PendingGlyphs } } },
 				{ "debugView", DescribeDebugView(progress.DebugView, progress.DebugViewStats, progress.TintedEntities) }
 			};
 			if (!progress.View.Notice.empty())
@@ -564,9 +569,10 @@ namespace Strata
 			"capture's own (the editor camera with those changes; camera.get stays as it was): position + target looks from one at the other, either "
 			"alone moves the editor camera's view keeping its direction; the result's camera is then \"custom\", and view has the position, forward "
 			"direction and fov used. With the editor camera outside play mode, a scene without any light "
-			"of its own is lit by preview lighting (previewLighting: true in the result; the game will be unlit) and the game's screen-space text is hidden "
-			"(hiddenScreenSpaceTexts counts it): see viewport.setSettings, or use camera \"scene\" to see what the game shows. Text whose glyphs are still being "
-			"prepared delays the picture by a few frames, so it is complete, and so do meshes, materials and textures of the view that are still loading "
+			"of its own is lit by preview lighting (previewLighting: true in the result; the game will be unlit) and the game's screen-space text and UI canvases are "
+			"hidden (hiddenScreenSpaceTexts and ui.hiddenCanvases count them): see viewport.setSettings, or use camera \"scene\" to see what the game shows. "
+			"ui reports the game UI drawn: {canvases, hiddenCanvases, elements, drawCalls, pendingGlyphs}. Text and UI whose glyphs are still being "
+			"prepared delay the picture by a few frames, so they are complete, and so do meshes, materials and textures of the view that are still loading "
 			"(waitForAssets, default true: up to about five seconds of frames; waitedFrames counts the extra renders), and textures it draws that still "
 			"lack the finer mip levels the view wants (up to about two seconds, as a texture budget may keep them out), and animators that animate only "
 			"while seen (WhenVisible) until they show the pose of their time (a few frames, also while paused). Reports what was still "

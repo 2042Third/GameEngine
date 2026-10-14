@@ -27,6 +27,9 @@ namespace Strata
 
 		void Clear();
 		bool HasRequests() const;
+		// The content scale of the display the editor's window is on, which the game's state reports (the editor's
+		// application sets it every frame; 1 until it does).
+		void SetContentScale(float contentScale) { m_ContentScale = contentScale > 0.0f ? contentScale : 1.0f; }
 		// Changes with every request and Clear, so that what shows them is rebuilt only then.
 		uint64_t GetVersion() const { return m_Version; }
 		// The requests as editor.status reports them ({"mode", "resolution": [w, h], "vsync"}, each only when asked for), or
@@ -41,6 +44,7 @@ namespace Strata
 		std::optional<uint32_t> m_Height;
 		std::optional<bool> m_VSync;
 		uint64_t m_Version = 0;
+		float m_ContentScale = 1.0f;
 	};
 
 }

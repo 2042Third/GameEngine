@@ -47,6 +47,7 @@ namespace Strata
 			return it->second;
 		const uint32_t index = static_cast<uint32_t>(m_Textures.size());
 		m_Textures.push_back(texture);
+		m_TextureUses.push_back(0);
 		m_TextureIndices.emplace(texture, index);
 		m_WatchedAssets.insert(texture);
 		m_ResourceVersion++;
@@ -68,24 +69,55 @@ namespace Strata
 		return index;
 	}
 
-	void GameUIScene::AddGlyphUse(uint32_t font, uint32_t glyph)
+	void GameUIScene::CountQuadUses(Layout& layout, const RenderData::UIQuad& quad, int delta)
 	{
-		if (m_FontGlyphUses[font][glyph]++ == 0)
-			m_ResourceVersion++;
+		const uint32_t kind = quad.Flags & RenderData::c_UIQuadKindMask;
+		if (kind == RenderData::c_UIQuadGlyph)
+		{
+			const uint32_t font = (quad.Flags >> RenderData::c_UIQuadFontShift) & RenderData::c_UIQuadFontMask;
+			if (font >= m_FontGlyphUses.size())
+				return;
+			std::unordered_map<uint32_t, uint32_t>& glyphs = m_FontGlyphUses[font];
+			if (delta > 0)
+			{
+				if (glyphs[quad.Resource]++ == 0)
+					m_ResourceVersion++;
+				layout.FontUses[font]++;
+			}
+			else
+			{
+				auto glyph = glyphs.find(quad.Resource);
+				if (glyph != glyphs.end() && --glyph->second == 0)
+				{
+					glyphs.erase(glyph);
+					m_ResourceVersion++;
+				}
+				auto fontUse = layout.FontUses.find(font);
+				if (fontUse != layout.FontUses.end() && --fontUse->second == 0)
+					layout.FontUses.erase(fontUse);
+			}
+		}
+		else if (kind == RenderData::c_UIQuadImage && quad.Resource > 0 && quad.Resource - 1 < m_TextureUses.size())
+		{
+			uint32_t& uses = m_TextureUses[quad.Resource - 1];
+			if (delta > 0)
+			{
+				if (uses++ == 0)
+					m_ResourceVersion++;
+			}
+			else if (uses > 0 && --uses == 0)
+			{
+				m_ResourceVersion++;
+			}
+		}
 	}
 
-	void GameUIScene::RemoveGlyphUse(uint32_t font, uint32_t glyph)
+	void GameUIScene::GetCanvasFonts(const UICanvasView& view, std::vector<uint32_t>& outFonts) const
 	{
-		if (font >= m_FontGlyphUses.size())
-			return;
-		auto it = m_FontGlyphUses[font].find(glyph);
-		if (it == m_FontGlyphUses[font].end())
-			return;
-		if (--it->second == 0)
-		{
-			m_FontGlyphUses[font].erase(it);
-			m_ResourceVersion++;
-		}
+		outFonts.clear();
+		for (const auto& [font, uses] : m_Canvases[view.CanvasIndex].Layouts[view.LayoutIndex].FontUses)
+			outFonts.push_back(font);
+		std::sort(outFonts.begin(), outFonts.end());
 	}
 
 	void GameUIScene::GetFontGlyphs(uint32_t font, std::vector<uint32_t>& outGlyphs) const
@@ -102,10 +134,8 @@ namespace Strata
 	void GameUIScene::ReleaseLayoutGlyphs(Layout& layout)
 	{
 		for (const RenderData::UIQuad& quad : layout.Quads)
-		{
-			if ((quad.Flags & RenderData::c_UIQuadKindMask) == RenderData::c_UIQuadGlyph)
-				RemoveGlyphUse((quad.Flags >> RenderData::c_UIQuadFontShift) & RenderData::c_UIQuadFontMask, quad.Resource);
-		}
+			CountQuadUses(layout, quad, -1);
+		layout.FontUses.clear();
 	}
 
 	void GameUIScene::RecordQuadChange(Layout& layout, uint32_t first, uint32_t count)
@@ -184,11 +214,9 @@ namespace Strata
 				for (uint32_t index = 0; index < layout.QuadCapacity[element]; index++)
 				{
 					RenderData::UIQuad& quad = slot[index];
-					if ((quad.Flags & RenderData::c_UIQuadKindMask) == RenderData::c_UIQuadGlyph)
-						RemoveGlyphUse((quad.Flags >> RenderData::c_UIQuadFontShift) & RenderData::c_UIQuadFontMask, quad.Resource);
+					CountQuadUses(layout, quad, -1);
 					quad = index < written ? scratch[index] : HiddenQuad();
-					if ((quad.Flags & RenderData::c_UIQuadKindMask) == RenderData::c_UIQuadGlyph)
-						AddGlyphUse((quad.Flags >> RenderData::c_UIQuadFontShift) & RenderData::c_UIQuadFontMask, quad.Resource);
+					CountQuadUses(layout, quad, 1);
 				}
 				m_Stats.QuadsBuilt += written;
 				RecordQuadChange(layout, layout.QuadFirst[element], layout.QuadCapacity[element]);
@@ -220,10 +248,7 @@ namespace Strata
 			layout.QuadFirst[element] = static_cast<uint32_t>(layout.Quads.size());
 			layout.QuadCapacity[element] = capacity;
 			for (const RenderData::UIQuad& quad : scratch)
-			{
-				if ((quad.Flags & RenderData::c_UIQuadKindMask) == RenderData::c_UIQuadGlyph)
-					AddGlyphUse((quad.Flags >> RenderData::c_UIQuadFontShift) & RenderData::c_UIQuadFontMask, quad.Resource);
-			}
+				CountQuadUses(layout, quad, 1);
 			layout.Quads.insert(layout.Quads.end(), scratch.begin(), scratch.end());
 			layout.Quads.resize(layout.Quads.size() + (capacity - written), HiddenQuad());
 			m_Stats.QuadsBuilt += written;

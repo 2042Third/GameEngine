@@ -74,6 +74,8 @@ strata_add_shaders(Strata
 		Overlay/DebugLine.frag
 		Overlay/Text.vert
 		Overlay/Text.frag
+		GameUI/UIQuad.vert
+		GameUI/UIQuad.frag
 	VARIANTS
 		"Scene/Forward.frag|Scene/ForwardTransparent.frag|ST_FORWARD_TRANSPARENT"
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassNoEntityIDs.frag|ST_NO_ENTITY_IDS"

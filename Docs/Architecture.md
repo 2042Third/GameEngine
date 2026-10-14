@@ -430,7 +430,7 @@ RegisterScriptingModule    Scripting/ScriptingRegistration.cpp "Scripting" syste
 RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     "Physics" system
 RegisterAudioModule        Audio/AudioRegistration.cpp         AudioClip loader, "Audio" system
 RegisterAnimationModule    Animation/AnimationRegistration.cpp Skeleton, AnimationClip, AnimationController loaders, "Animation" system
-RegisterGameUIModule       GameUI/GameUIRegistration.cpp       the UI components (category "UI")
+RegisterGameUIModule       GameUI/GameUIRegistration.cpp       the UI components (category "UI"); the UI pass (SceneOverlayRegistry)
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
 ComponentRegistry::Freeze
@@ -1925,6 +1925,23 @@ room to spare for texts, so a changed element rewrites its slot alone and a jour
 rebuilds the array (`GetQuadArrayId` changes). Quads refer to UI texture indices and scene font indices (`GetTextures`,
 `GetFonts`), never to GPU slots or atlas placements, which each renderer resolves (mip streaming moves slots, atlases are
 per renderer).
+
+**The pass** (`GameUIRenderer`, `shaders/GameUI/UIQuad.*`). The renderer cannot include GameUI: modules add passes to
+every `SceneRenderer` through `SceneOverlayRegistry` (`Renderer/SceneOverlay.h`: `ISceneOverlayPass` with `Prepare`,
+`Draw` and `HasScreenContent`), and the renderer calls them at four places: `Prepare` after the text renderer's (with the
+scene, viewport size, command list, the renderer's `FontAtlasCache` and what the frame's raster budget left, the frame's
+visible-texture list and the stats), the overlay condition, `Draw` after the screen-space text (the UI goes over the
+legacy HUD), and `SceneRendererStats::Overlays`. A scene without a `UICanvasComponent` costs one storage-size check;
+with screen-space UI hidden (`DrawScreenSpaceText` off: editor views, thumbnails), a count of root canvases cached per
+hierarchy version. Per frame the pass lays the canvases out for the viewport (`EnsureLayout`, with the content scale of
+the game's window), uploads the quad ranges that changed since its last frame (or whole arrays that were rebuilt) into
+one storage buffer, resolves each texture in use to its bindless slot (a small table, so quads never change when mip
+streaming moves a slot) and each distinct glyph to its place in this renderer's atlas (a table per font: asking for the
+glyph also rasterizes it within the budget and keeps it from eviction while shown), and reports drawn textures for mip
+streaming. Canvases draw by sort order, instanced, six vertices per quad and no vertex buffer, with up to four atlases
+bound, so a canvas with up to four fonts is one draw; push constants carry the canvas's scale and pixel snapping (rect
+edges and glyph baselines on whole pixels). `GameRenderer` shows a scene without a primary camera that has screen-space
+UI (a main menu) as that UI over black instead of its missing-camera message (`SceneRenderOptions::OverlayScene`).
 
 ## Scripting
 

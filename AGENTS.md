@@ -341,7 +341,9 @@ includes the module ([Game UI](Docs/DeveloperGuide.md#game-ui)).
 - The UI contract: code that writes UI component fields directly signals the change (`MarkModified`, `registry.patch`);
   `GameUIScene` recomputes only what changed, and Debug builds assert after every `EnsureLayout` that its layout equals a
   full recomputation (`GameUIScene::Validate` names the entity).
-- UI components live in GameUI (`Requires("UIRect")`, category "UI"), never in `Scene/Components.h`.
+- UI components live in GameUI (`Requires("UIRect")`, category "UI"), never in `Scene/Components.h`. The renderer reaches
+  the UI only through `SceneOverlayRegistry`; the UI pass requests each distinct UI texture and font once per frame through
+  `Scene::GetAssetManager()`, never per element.
 
 ## Editor
 

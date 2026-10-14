@@ -145,11 +145,16 @@ namespace Strata
 		// Appends the ranges written after quad version `sinceVersion`; false when they are no longer known (upload it whole).
 		bool GetQuadChanges(const UICanvasView& view, uint64_t sinceVersion, std::vector<UIQuadRange>& outRanges) const;
 
-		// What the quads refer to: UI texture index -> texture, scene font index -> font (index 0 and null handles: the
-		// engine's default font), and the distinct glyphs the quads of each font use.
+		// What the quads refer to: UI texture index -> texture (with the number of quads that use each, 0 for textures no quad
+		// uses any more), scene font index -> font (index 0 and null handles: the engine's default font), the distinct glyphs
+		// the quads of each font use, and the fonts a canvas view's quads use.
 		std::span<const AssetHandle> GetTextures() const { return m_Textures; }
+		std::span<const uint32_t> GetTextureUses() const { return m_TextureUses; }
 		std::span<const AssetHandle> GetFonts() const { return m_Fonts; }
 		void GetFontGlyphs(uint32_t font, std::vector<uint32_t>& outGlyphs) const;
+		void GetCanvasFonts(const UICanvasView& view, std::vector<uint32_t>& outFonts) const;
+		// Unique in the process, so that renderers tell scenes' UIs apart (a new one may reuse an address).
+		uint64_t GetId() const { return m_Id; }
 		// Changes whenever the textures, the fonts or a font's glyph set change.
 		uint64_t GetResourceVersion() const { return m_ResourceVersion; }
 
@@ -245,8 +250,8 @@ namespace Strata
 		uint32_t GetFontIndex(AssetHandle font);
 		void RecordQuadChange(Layout& layout, uint32_t first, uint32_t count);
 		void ReleaseLayoutGlyphs(Layout& layout);
-		void AddGlyphUse(uint32_t font, uint32_t glyph);
-		void RemoveGlyphUse(uint32_t font, uint32_t glyph);
+		// Counts what a quad written into (`delta` 1) or removed from (-1) a layout's array uses: glyphs, fonts, textures.
+		void CountQuadUses(Layout& layout, const RenderData::UIQuad& quad, int delta);
 	private:
 		Scene* m_Scene = nullptr;
 		entt::registry* m_Registry = nullptr;
@@ -281,6 +286,8 @@ namespace Strata
 		std::vector<AssetHandle> m_Fonts;                    // Scene font index -> font (0: the default font)
 		std::unordered_map<AssetHandle, uint32_t> m_FontIndices;
 		std::vector<std::unordered_map<uint32_t, uint32_t>> m_FontGlyphUses; // Per font: glyph -> quads using it
+		std::vector<uint32_t> m_TextureUses;                 // Per UI texture index: quads using it
+		uint64_t m_Id = 0;
 		std::unordered_set<AssetHandle> m_WatchedAssets;     // Fonts and textures the UI asked for
 		uint64_t m_ResourceVersion = 1;
 

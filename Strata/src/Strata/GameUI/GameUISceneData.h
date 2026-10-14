@@ -7,6 +7,7 @@
 #include "Strata/GameUI/GameUIScene.h"
 
 #include <deque>
+#include <unordered_map>
 #include <vector>
 
 namespace Strata
@@ -72,6 +73,7 @@ namespace Strata
 		};
 		std::deque<QuadChange> QuadChanges;
 		uint64_t QuadChangesFloor = 0;      // Changes up to this version may be missing
+		std::unordered_map<uint32_t, uint32_t> FontUses; // Scene font index -> glyph quads of this array
 	};
 
 	struct GameUIScene::Canvas

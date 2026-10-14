@@ -81,6 +81,7 @@ namespace Strata
 		const glm::vec2 size = Input::GetViewportSize();
 		state.Width = static_cast<uint32_t>(std::max(size.x, 0.0f));
 		state.Height = static_cast<uint32_t>(std::max(size.y, 0.0f));
+		state.ContentScale = m_ContentScale;
 		return state;
 	}
 

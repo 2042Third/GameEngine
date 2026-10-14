@@ -109,7 +109,7 @@ editor started with `--no-gpu` (use `--headless`):
 - `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?, fov?, overlays?, debugView?,
   waitForAssets?, path?}` returns `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, view, waitedFrames,
   overlays, pendingAssets, texturesBelowWanted, stalePoses, pendingTextGlyphs, previewLighting, screenSpaceTexts,
-  hiddenScreenSpaceTexts, debugView, notice?, path?}`. Text is complete in the picture, and so are the view's meshes,
+  hiddenScreenSpaceTexts, ui: {canvases, hiddenCanvases, elements, drawCalls, pendingGlyphs}, debugView, notice?, path?}`. Text is complete in the picture, and so are the view's meshes,
   materials and textures: the capture renders again for up to about five seconds of frames while they load, up to about
   two more while textures still lack the finer mip levels the view wants, and a few while animated characters that
   animate only while seen (`CullingMode: WhenVisible`) still show an older pose, also while paused (`waitForAssets: false`
@@ -474,7 +474,7 @@ the scene has unsaved changes; `{"force": true}` discards them. The editor answe
 | The editor went away on its own | It was started with `--idle-timeout` (MCP: 10 minutes) and no client stayed connected; start it again. |
 | `viewport.*` / `camera.*` fail or are missing | The editor runs with `--no-gpu` (restart it with `--headless`), or this build has no viewport commands (check `editor.commands`). |
 | The capture is lit, but the game is dark | The capture says `"previewLighting": true`: the scene has no light of its own. Add a directional light and a sky light (or start from the `basic3d` template); check with `{"camera": "scene"}`. |
-| The HUD is missing from a capture | Editor views hide screen-space text (`hiddenScreenSpaceTexts`); capture with `{"camera": "scene"}`, while playing, or turn on `viewport.setSettings {"gameUI": true}`. |
+| The HUD is missing from a capture | Editor views hide screen-space text and UI canvases (`hiddenScreenSpaceTexts`, `ui.hiddenCanvases`); capture with `{"camera": "scene"}`, while playing, or turn on `viewport.setSettings {"gameUI": true}`. |
 | Script or import errors | `log.read {"minLevel": "Warn"}`, `asset.info`. |
 
 Session files of editors that exited are removed by the clients automatically; never edit or copy them (they

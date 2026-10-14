@@ -50,6 +50,7 @@ characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together
 - [Animation](#animation)
 - [Game UI](#game-ui)
   - [The UI contract](#the-ui-contract)
+  - [The UI pass](#the-ui-pass)
 - [Editor](#editor)
   - [Editor UI rules](#editor-ui-rules)
   - [Changes go through commands](#changes-go-through-commands)
@@ -1075,6 +1076,27 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `GameUIScene::Validate`) and count the work with `GameUIScene::TakeStats` (`GameUI.Dirty`).
 - `GameUIScene` holds asset handles, never Refs or GPU objects: scenes are released on background threads.
 
+### The UI pass
+
+- The renderer never includes GameUI: `RegisterGameUIModule` registers the pass with `SceneOverlayRegistry`
+  (`Renderer/SceneOverlay.h`), and every `SceneRenderer` makes one pass per registered factory. Its four hooks are single
+  calls: the passes' `Prepare` after the text renderer's, the overlay condition, `Draw` after the screen-space text, and
+  `SceneRendererStats::Overlays` (`SceneOverlayStats`), whose `PendingAssets` count in the frame's.
+- Screen-space canvases follow `SceneRenderOptions::DrawScreenSpaceText` (the game's screen-space UI): editor views hide
+  them unless the viewport's Game UI setting is on, captures follow the viewport, thumbnails hide them; hidden canvases
+  are counted, not laid out. `SceneRenderOptions::OverlayScene` draws another scene's UI: `GameRenderer` shows a scene
+  without a camera that has screen-space UI (`SceneRenderer::HasOverlayContent`) as its UI over black.
+- The pass requests each distinct UI texture and font once per frame through `Scene::GetAssetManager()` at High priority
+  (a texture draws white while it loads, a text uses the default font), keeps a table of their bindless slots and a table
+  of glyph placements per font (from the renderer's `FontAtlasCache`, the frame's raster budget lent to it), and reports
+  each drawn texture to the texture streamer (`VisibleTextureUse`, at the pixels a texture coordinate unit spans), so UI
+  images stream to the level they are drawn at. It uploads only the quad ranges that changed since its renderer's last
+  frame; an idle frame uploads nothing. A canvas with up to `RenderData::c_MaxBoundAtlases` (4) fonts is one draw.
+- `UIQuad`, the draw parameters and the table formats live in `GameUI/GameUIRenderData.h` and
+  `shaders/GameUI/UIQuad.glsl`: change both together. Images blend in display values (sRGB textures sample linear values
+  and are converted back), corners and borders come from the rect's signed distance, glyphs share `Include/SDFText.glsl`
+  with the text renderer.
+
 ## Editor
 
 - `StrataEditorCore` (`StrataEditor/src/Editor/`) is the editor without UI: `EditorContext` (project, asset
@@ -1617,7 +1639,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   with its mip tail, and up to `c_MaxCapturePoseFrames` while animators it draws show a pose older than their time), reads
   the image back without stalling, encodes it on a job thread and returns `{"Image": {"MimeType": "image/png", "Data":
   <base64>}, "width", "height", "camera", "view": {"position", "forward", "fov"}, "waitedFrames", "overlays",
-  "pendingAssets", "texturesBelowWanted", "stalePoses", "pendingTextGlyphs", "previewLighting", "screenSpaceTexts", "hiddenScreenSpaceTexts", "debugView":
+  "pendingAssets", "texturesBelowWanted", "stalePoses", "pendingTextGlyphs", "previewLighting", "screenSpaceTexts", "hiddenScreenSpaceTexts", "ui": {"canvases",
+  "hiddenCanvases", "elements", "drawCalls", "pendingGlyphs"}, "debugView":
   {"view", "tintedEntities", "pendingEntities", "failedEntities", "placeholderBoxes", "entitiesPerLOD",
   "entitiesPerMipShortfall"}, "notice"?, "path"?}` (the mip view counts entities with textures by the mip levels their
   worst texture lacks: none, 1, 2, 3 or more or still loading); it defaults to the viewport's size, camera, overlays and

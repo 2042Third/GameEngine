@@ -12,6 +12,7 @@
 #include "Strata/Scene/SceneHierarchy.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 namespace Strata
@@ -26,6 +27,8 @@ namespace Strata
 
 	namespace
 	{
+
+		std::atomic<uint64_t> s_NextId = 1;
 
 		// Whether two boxes are the same within the tolerance layouts are compared at.
 		bool SameBox(const UIBox& a, const UIBox& b, float tolerance)
@@ -95,7 +98,8 @@ namespace Strata
 	}
 
 	GameUIScene::GameUIScene(Scene& scene)
-		: m_Scene(&scene), m_Registry(&scene.GetRegistry()), m_HierarchyVersion(scene.GetHierarchyVersion()), m_TransformsVersion(scene.GetTransformsVersion())
+		: m_Scene(&scene), m_Registry(&scene.GetRegistry()), m_HierarchyVersion(scene.GetHierarchyVersion()), m_TransformsVersion(scene.GetTransformsVersion()),
+		m_Id(s_NextId.fetch_add(1, std::memory_order_relaxed))
 	{
 		// The connections are never released (see GameUISceneContext): this object lives exactly as long as the storages.
 		entt::registry& registry = *m_Registry;
@@ -363,20 +367,17 @@ namespace Strata
 			{
 				canvas.Elements = std::move(kept->Elements);
 				canvas.Layouts = std::move(kept->Layouts);
+				kept->Entity = entt::null;
 			}
 			canvas.StructureDirty = true;
 		}
-		// Glyphs of the quads of canvases that went are no longer used.
+		// What the quads of canvases that went used is no longer used.
 		for (Canvas& old : previous)
 		{
+			if (old.Entity == entt::null)
+				continue; // Moved into the new list
 			for (Layout& layout : old.Layouts)
-			{
-				for (const RenderData::UIQuad& quad : layout.Quads)
-				{
-					if ((quad.Flags & RenderData::c_UIQuadKindMask) == RenderData::c_UIQuadGlyph)
-						RemoveGlyphUse((quad.Flags >> RenderData::c_UIQuadFontShift) & RenderData::c_UIQuadFontMask, quad.Resource);
-				}
-			}
+				ReleaseLayoutGlyphs(layout);
 		}
 		std::fill(m_ElementRefs.begin(), m_ElementRefs.end(), ElementRef {});
 	}
