@@ -26,7 +26,7 @@ namespace Strata
 
 		constexpr uint32_t c_SamplerCount = 6; // TextureFilter (2) x TextureWrap (3)
 
-		// Material texture slots (MaterialData's maps): the bindless slot in bits 0-23, the sampler index in bits 24-30 and
+		// Texture table entries (TextureTable::PackEntry): the bindless slot in bits 0-23, the sampler index in bits 24-30 and
 		// this bit for one-channel textures that stand for gray (TextureSpecification::Grayscale), sampled as (r, r, r, 1).
 		constexpr uint32_t c_TextureSlotGrayscale = 1u << 31;
 
@@ -112,7 +112,8 @@ namespace Strata
 			float OcclusionStrength;
 			float AlphaCutoff;
 			uint32_t Flags;
-			uint32_t BaseColorMap; // Bits 0-23: bindless slot, bits 24-31: sampler index
+			// The maps: texture table indices (TextureTable), whose entries hold the bindless slot, the sampler and the grayscale bit.
+		uint32_t BaseColorMap;
 			uint32_t MetallicRoughnessMap;
 			glm::vec4 UVTransform; // xy: tiling, zw: offset
 			uint32_t NormalMap;

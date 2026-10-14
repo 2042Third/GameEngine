@@ -289,8 +289,9 @@ Details: [Asset pipeline](Docs/DeveloperGuide.md#asset-pipeline).
   pin what must stay and never block on a load ([Residency](Docs/DeveloperGuide.md#residency)).
 - GPU uploads go in steps of at most `c_AssetUploadStepBytes` within the frame's budget
   ([Adding an asset type](Docs/DeveloperGuide.md#adding-an-asset-type)). Resolve bindless slots every frame
-  (`Texture::GetBindlessSlot`): mip streaming changes them, and a texture only requested keeps its mip tail (more
-  through `RequestLevel` or `TextureStreamer::Hold`: [Mip streaming](Docs/DeveloperGuide.md#mip-streaming)).
+  (`Texture::GetBindlessSlot`): mip streaming changes them; material data names textures by texture table index
+  (`Texture::GetTableIndex`), which stays. A texture only requested keeps its mip tail (more through `RequestLevel` or
+  `TextureStreamer::Hold`: [Mip streaming](Docs/DeveloperGuide.md#mip-streaming)).
 
 ## Scripting
 

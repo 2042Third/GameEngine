@@ -10,6 +10,7 @@
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureFormat.h"
 #include "Strata/Renderer/TextureStreamer.h"
+#include "Strata/Renderer/TextureTable.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 #include "TestHelpers.h"
@@ -240,11 +241,14 @@ TEST_SUITE("GPU.TextureStreaming")
 			std::optional<uint32_t> arrivedLevel;
 			bool groupCompleteOnArrival = false;
 			bool fallbackAfterArrival = false;
-			// A frame in which the texture moved to a new bindless slot (its levels raised) resolves its material again: the
-			// material data of the frame before names the slot it left (SceneRendererStats::ReusedMaterials).
+			// A frame in which the texture moved to a new bindless slot (its levels raised) keeps its material's data: the data
+			// names the texture by its texture table index, the same for the texture's life, whose entry follows the slot
+			// (SceneRendererStats::ReusedMaterials, MaterialBytesUploaded).
 			uint32_t previousSlot = BindlessTextureTable::c_InvalidSlot;
+			uint32_t tableIndex = TextureTable::c_InvalidIndex;
 			uint32_t slotChanges = 0;
-			bool reusedAfterSlotChange = false;
+			bool reusedAfterSlotChange = true;
+			bool entryFollowsSlot = true;
 			for (int attempt = 0; attempt < 100; attempt++)
 			{
 				image = frame.Run(CameraAt(c_SmallDistance));
@@ -254,9 +258,13 @@ TEST_SUITE("GPU.TextureStreaming")
 				if (previousSlot != BindlessTextureTable::c_InvalidSlot && texture->GetBindlessSlot() != previousSlot)
 				{
 					slotChanges++;
-					reusedAfterSlotChange = reusedAfterSlotChange || renderer.GetStats().ReusedMaterials != 0;
+					reusedAfterSlotChange = reusedAfterSlotChange && renderer.GetStats().ReusedMaterials == 1 && renderer.GetStats().MaterialBytesUploaded == 0;
 				}
 				previousSlot = texture->GetBindlessSlot();
+				if (tableIndex == TextureTable::c_InvalidIndex)
+					tableIndex = texture->GetTableIndex();
+				entryFollowsSlot = entryFollowsSlot && texture->GetTableIndex() == tableIndex
+					&& (Renderer::GetTextureTable().GetEntry(tableIndex) & 0xFFFFFFu) == texture->GetBindlessSlot();
 				if (!arrivedLevel)
 				{
 					arrivedLevel = texture->GetResidentLevel();
@@ -277,7 +285,8 @@ TEST_SUITE("GPU.TextureStreaming")
 			CHECK(PeekTexture(*manager)->GetResidentLevel() == 5);
 			CHECK_FALSE(fallbackAfterArrival);
 			CHECK(slotChanges == 1);
-			CHECK_FALSE(reusedAfterSlotChange);
+			CHECK(reusedAfterSlotChange);
+			CHECK(entryFollowsSlot);
 			CHECK(manager->GetStats().PartialLoads == 1);
 			CHECK(manager->GetStats().Detail.LevelsRaised == 1);
 			CHECK(manager->GetStats().Resident.GpuTextures == PeekTexture(*manager)->GetLevelBytes(5, c_TextureMips));

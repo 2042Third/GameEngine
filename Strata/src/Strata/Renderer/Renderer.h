@@ -19,6 +19,7 @@ namespace Strata
 {
 
 	class RenderSceneGPUCache;
+	class TextureTable;
 
 	struct ReadbackImage
 	{
@@ -52,6 +53,8 @@ namespace Strata
 		static nvrhi::IDevice* GetDevice();
 		static ShaderLibrary& GetShaderLibrary();
 		static BindlessTextureTable& GetBindlessTextures();
+		// Stable indices of textures for material data, following their bindless slots (TextureTable).
+		static TextureTable& GetTextureTable();
 		// Staging memory for uploads (textures and meshes upload through it).
 		static StagingPool& GetStagingPool();
 		// Where the asset managers' finalizations record their uploads (the IAssetGraphics engine service hands it to them).

@@ -735,7 +735,9 @@ short. Their full wording:
   do not even load it: they read its cooked mip tail by byte range, `ThumbnailCache`). Under a
   texture budget the most needed textures come first: the less needed give up their finest levels
   (`LevelsDroppedForBudget`), and what does not fit gets the finest level that does. A texture's GPU texture and
-  bindless slot change when its levels do: resolve the slot every frame (`Texture::GetBindlessSlot`), never cache it.
+  bindless slot change when its levels do: resolve the slot every frame (`Texture::GetBindlessSlot`), never cache it;
+  material data names a texture by its texture table index instead (`Texture::GetTableIndex`, stable for the texture's
+  life; its entry follows the slot).
   Renderers and tests that compare exact pixels set `SceneRendererSpecification::TextureStreaming = false` (every level,
   pending until resident); tests of whole-asset residency turn the manager's partial loads off
   (`AssetManagerBase::SetPartialLoads(false)`).
@@ -1708,9 +1710,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   material or texture it resolved, and not the asset manager, is held once `Render` returns), so what leaves the view
   becomes evictable, also for a renderer that stops rendering. A frame that uses the same material slots the same ways
   as the one before (still frames, and views that move over the same materials) takes their data over when the materials
-  and textures are the loaded objects that frame found and the textures' bindless slots still hold them
-  (`SceneRenderer::ReuseResolvedMaterials`, `BindlessTextureTable::AreSlotsUnchanged`;
-  `SceneRendererStats::ReusedMaterials`), looking them up again in one call (`AssetResolveCache::Replay`,
+  and textures are the loaded objects that frame found (`SceneRenderer::ReuseResolvedMaterials`;
+  `SceneRendererStats::ReusedMaterials`; the data names textures by texture table index, so textures streaming levels
+  change nothing of it), looking them up again in one call (`AssetResolveCache::Replay`,
   `AssetManagerBase::TouchLoadedAssets`). Loaded materials are never changed in place: an edit publishes a new object
   (`ReplaceLoadedAsset`). Two caches keep assets across frames: `SceneRenderer`'s environment cache holds the sky
   light's environment map until the environment changes (the maps computed from a map are shared by every renderer
@@ -1845,8 +1847,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
 
 ### Material texture slots
 
-- Material texture slots (`SampleMaterialTexture` in `Include/Scene.glsl`) pack the bindless slot, the sampler index and a
-  grayscale bit (`RenderData::c_TextureSlotGrayscale`, from `TextureSpecification::Grayscale`). Normal maps are read as X
+- Material maps hold texture table indices (`Renderer/TextureTable.h`: 0-2 white, black and flat normal); the table's
+  entries (`u_TextureTable`, read first by `SampleMaterialTexture` in `Include/Scene.glsl`) pack the bindless slot, the
+  sampler index and a grayscale bit (`TextureTable::PackEntry`, `RenderData::c_TextureSlotGrayscale`, from
+  `TextureSpecification::Grayscale`). Every pass that samples materials binds the table (`ST_SRV(16)` of the scene
+  layout) after `TextureTable::RecordUploads` ran in its frame. Normal maps are read as X
   and Y with Z reconstructed (`Forward.frag`), so BC5 and RGBA8 normal maps shade alike; a shader that reads a normal map
   must do the same.
 

@@ -529,8 +529,9 @@ namespace Strata
 
 		// The materials a frame resolved one by one (ResolveMaterials), for later frames that use the same material slots in
 		// the same ways (ReuseResolvedMaterials): when the materials and their textures are still the loaded objects that
-		// frame found (materials are not changed in place: edits publish new objects) and the textures' bindless slots
-		// still hold them, the materials' data, flags and texture maps are what that frame built.
+		// frame found (materials are not changed in place: edits publish new objects), the materials' data, flags and texture
+		// maps are what that frame built. The data names textures by their texture table indices, which stay the same while
+		// textures stream levels (their entries follow the bindless slots).
 		struct MaterialResolution
 		{
 			struct Slot
@@ -545,8 +546,6 @@ namespace Strata
 			uint64_t RenderSceneId = 0;
 			std::vector<Slot> Slots; // In the order of m_UsedMaterialSlots
 			AssetResolveCache::Recording Lookups;        // The materials and textures, replayed by later frames
-			std::vector<uint32_t> TextureSlots;           // The bindless slots of the textures among them
-			std::vector<uint32_t> TextureSlotGenerations; // BindlessTextureTable::GetSlotGenerations of TextureSlots
 		};
 
 		// What one chunk of the parallel extraction produced; chunks are merged in order, so the result does not depend on
@@ -695,7 +694,8 @@ namespace Strata
 		// The GPU data of a material, its textures resolved (only those already loaded with residentOnly). The loaded ones
 		// are appended to `resolved` when it is given (the materials the frame draws, for streaming their levels).
 		RenderData::MaterialData BuildMaterialData(const Material& material, bool residentOnly, std::vector<ResolvedTexture>* resolved = nullptr);
-		uint32_t ResolveTexture(AssetHandle handle, uint32_t missingSlot, uint32_t loadingSlot, bool residentOnly, std::vector<ResolvedTexture>* resolved);
+		// A material map's texture table index (TextureTable): the fallback index where the map is missing or still loading.
+		uint32_t ResolveTexture(AssetHandle handle, uint32_t missingIndex, uint32_t loadingIndex, bool residentOnly, std::vector<ResolvedTexture>* resolved);
 		// Sorted draws into batches and the draw list (instance indices in batch order).
 		void BuildBatches(std::vector<SortItem>& draws, std::vector<SceneDrawBatch>& outBatches, std::vector<uint32_t>& outDrawList);
 		// Uploads what changed of the material data and the draw lists (the render scene's GPU copy uploads the instances and
@@ -859,6 +859,7 @@ namespace Strata
 		// (RenderSceneGPU::GetBufferVersion) the binding sets were made for.
 		RenderSceneGPU* m_SceneGPU = nullptr;
 		uint64_t m_BoundSceneGPUVersion = 0;
+		uint64_t m_BoundTextureTableVersion = 0; // TextureTable::GetBufferVersion the binding sets were made for
 		nvrhi::BufferHandle m_LightBuffer;
 
 		nvrhi::TextureHandle m_DepthTexture;

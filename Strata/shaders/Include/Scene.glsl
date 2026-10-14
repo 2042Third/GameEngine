@@ -21,8 +21,8 @@
 
 #define ST_SAMPLER_COUNT 6
 
-// Material texture slots: bindless slot in bits 0-23, sampler index in bits 24-30, and this bit for one-channel textures
-// that stand for gray (sampled as (r, r, r, 1)).
+// Texture table entries (u_TextureTable): bindless slot in bits 0-23, sampler index in bits 24-30, and this bit for
+// one-channel textures that stand for gray (sampled as (r, r, r, 1)).
 #define ST_TEXTURE_SLOT_GRAYSCALE 0x80000000u
 
 struct FrameConstants
@@ -164,7 +164,7 @@ struct MaterialData
 	float OcclusionStrength;
 	float AlphaCutoff;
 	uint Flags;
-	uint BaseColorMap;       // Bits 0-23: bindless texture slot, bits 24-31: sampler index
+	uint BaseColorMap;       // Texture table indices (u_TextureTable) from here on
 	uint MetallicRoughnessMap;
 	vec4 UVTransform;        // xy: tiling, zw: offset
 	uint NormalMap;
@@ -224,8 +224,16 @@ vec3 RotateEnvironmentDirection(vec3 direction)
 // Bindless texture table (descriptor set 1, see BindlessTextureTable).
 layout(set = 1, binding = 0) uniform texture2D u_Textures[];
 
-vec4 SampleMaterialTexture(uint packedSlot, vec2 uv)
+// The texture table (Strata/Renderer/TextureTable.h): per texture index of material data, its bindless slot (bits 0-23),
+// sampler index (bits 24-30) and ST_TEXTURE_SLOT_GRAYSCALE. Textures keep their index while their levels stream.
+layout(set = 0, binding = ST_SRV(16), std430) readonly buffer TextureTableBuffer
 {
+	uint u_TextureTable[];
+};
+
+vec4 SampleMaterialTexture(uint textureIndex, vec2 uv)
+{
+	uint packedSlot = u_TextureTable[textureIndex];
 	uint slot = packedSlot & 0xFFFFFFu;
 	uint samplerIndex = min((packedSlot >> 24) & 0x7Fu, uint(ST_SAMPLER_COUNT - 1));
 	vec4 value = texture(sampler2D(u_Textures[nonuniformEXT(slot)], u_Samplers[nonuniformEXT(samplerIndex)]), uv);

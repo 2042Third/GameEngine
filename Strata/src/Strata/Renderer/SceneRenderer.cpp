@@ -14,6 +14,7 @@
 #include "Strata/Renderer/TextRenderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureStreamer.h"
+#include "Strata/Renderer/TextureTable.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 
@@ -290,6 +291,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(14),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(15), // Joint matrices (only the skinned vertex shaders read them)
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(16), // The texture table (material data names textures by its indices)
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -825,6 +827,7 @@ namespace Strata
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_SceneGPU->GetInstanceBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(14, drawList),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(15, m_SceneGPU->GetPaletteBuffer()),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(16, Renderer::GetTextureTable().GetBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_MaterialBuffer),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
@@ -860,6 +863,7 @@ namespace Strata
 		m_BoundEnvironment = environmentCube;
 		m_BoundShadowMap = shadowMap;
 		m_BoundSceneGPUVersion = m_SceneGPU->GetBufferVersion();
+		m_BoundTextureTableVersion = Renderer::GetTextureTable().GetBufferVersion();
 		if (!m_SceneBindingSet || !m_ShadowBindingSet || !m_ClusterBindingSet || (gpuSets && (!m_GPUSceneBindingSet || !m_GPUShadowBindingSet)))
 		{
 			m_SceneBindingSet = nullptr; // Recreated next frame
@@ -1927,13 +1931,18 @@ namespace Strata
 		const RendererGPUStages& gpuStages = RendererGPUStages::Get();
 		GPUPassTimer gpuTimer(commandList, gpuStages.Setup, &BeginGPURecord());
 		UpdateEnvironment(scene, preview, frame, commandList);
-		if ((buffersRecreated || m_BoundEnvironment != GetEnvironmentCube()) && !CreateSceneBindingSets())
+		// The texture table's changed entries (textures that streamed levels moved to other bindless slots) before anything
+		// samples them; a table that grew has a new buffer, which the binding sets follow.
+		TextureTable& textureTable = Renderer::GetTextureTable();
+		const bool tableUploaded = textureTable.RecordUploads(commandList);
+		const bool rebind = buffersRecreated || m_BoundEnvironment != GetEnvironmentCube() || m_BoundTextureTableVersion != textureTable.GetBufferVersion();
+		if (!tableUploaded || (rebind && !CreateSceneBindingSets()))
 		{
 			gpuTimer.End();
 			commandList->endMarker();
 			commandList->close();
 			m_Device->executeCommandList(commandList); // Keeps the environment processing that was recorded
-			m_Errors.Report("failed to create the scene binding sets");
+			m_Errors.Report(tableUploaded ? "failed to create the scene binding sets" : "the texture table could not be uploaded (see the previous error)");
 			m_FullUpload = m_FullUpload || materialsRecreated || drawListsRecreated;
 			m_Stats = {};
 			return false;

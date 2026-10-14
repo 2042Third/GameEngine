@@ -127,6 +127,12 @@ namespace Strata
 		// GPU state (main thread, after the asset became Ready).
 		nvrhi::ITexture* GetGPUTexture() const { return m_GPUTexture; }
 		uint32_t GetBindlessSlot() const { return m_BindlessSlot; }
+		// Its index in the renderer's texture table (Renderer::GetTextureTable), which material data names it by: the same for
+		// the texture's life, its entry following the bindless slot as levels stream (TextureTable::c_InvalidIndex before the
+		// texture was uploaded).
+		uint32_t GetTableIndex() const { return m_TableIndex; }
+		// Its texture table entry: the bindless slot with the sampler and grayscale bit (TextureTable::PackEntry).
+		uint32_t GetTableEntry() const;
 
 		// Partial residency (see the class comment; main thread unless noted).
 		//
@@ -229,6 +235,7 @@ namespace Strata
 
 		nvrhi::TextureHandle m_GPUTexture;
 		uint32_t m_BindlessSlot = UINT32_MAX;
+		uint32_t m_TableIndex = UINT32_MAX;
 		// While the texture is finalized over several calls: the GPU texture being filled and how far its upload got.
 		nvrhi::TextureHandle m_UploadTexture;
 		UploadPosition m_UploadPosition;

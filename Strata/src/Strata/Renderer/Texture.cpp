@@ -5,6 +5,7 @@
 #include "Strata/Renderer/BlockCompression.h"
 #include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/TextureTable.h"
 
 #include <glm/gtc/packing.hpp>
 
@@ -233,8 +234,18 @@ namespace Strata
 
 	Texture::~Texture()
 	{
-		if (m_BindlessSlot != UINT32_MAX && Renderer::IsInitialized())
+		if (!Renderer::IsInitialized())
+			return;
+		if (m_TableIndex != TextureTable::c_InvalidIndex)
+			Renderer::GetTextureTable().Free(m_TableIndex);
+		if (m_BindlessSlot != UINT32_MAX)
 			Renderer::GetBindlessTextures().Release(m_BindlessSlot);
+	}
+
+	uint32_t Texture::GetTableEntry() const
+	{
+		const uint32_t sampler = static_cast<uint32_t>(m_Specification.Filter) * 3 + static_cast<uint32_t>(m_Specification.Wrap);
+		return TextureTable::PackEntry(m_BindlessSlot, sampler, m_Specification.Grayscale);
 	}
 
 	bool Texture::IsBlockCompressionSupported()
@@ -425,6 +436,7 @@ namespace Strata
 			return AssetFinalizeResult::Failed; // Table full (logged by the table)
 		}
 		m_BindlessSlot = slot;
+		m_TableIndex = Renderer::GetTextureTable().Allocate(GetTableEntry());
 		m_GPUTexture = std::move(m_UploadTexture);
 		m_ResidentLevel.store(m_LoadedLevel, std::memory_order_release);
 		m_ResidentBytes.store(GetLevelBytes(m_LoadedLevel, m_MipCount), std::memory_order_release);
@@ -735,6 +747,8 @@ namespace Strata
 		// The old slot keeps its texture until no frame in flight samples it; frames from now on sample the new one.
 		bindless.Release(m_BindlessSlot);
 		m_BindlessSlot = slot;
+		// Material data names the texture by its table index: only the entry follows the new slot.
+		Renderer::GetTextureTable().Set(m_TableIndex, GetTableEntry());
 		m_GPUTexture = std::move(texture);
 		m_ResidentLevel.store(firstLevel, std::memory_order_release);
 		m_ResidentBytes.store(GetLevelBytes(firstLevel, m_MipCount), std::memory_order_release);

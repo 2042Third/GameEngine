@@ -3,6 +3,7 @@
 
 #include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Texture.h"
+#include "Strata/Renderer/TextureTable.h"
 #include "Strata/Renderer/TextureReadback.h"
 
 namespace Strata
@@ -16,6 +17,7 @@ namespace Strata
 			GraphicsDevice* Device = nullptr;
 			Scope<ShaderLibrary> Shaders;
 			Scope<BindlessTextureTable> BindlessTextures;
+			Scope<TextureTable> Textures;
 			Scope<StagingPool> Staging;
 			Scope<GPUUploadQueue> UploadQueue;          // Records into the staging pool: destroyed before it
 			Scope<RendererUploadContext> UploadContext; // Records into the upload queue: destroyed before it
@@ -103,6 +105,7 @@ namespace Strata
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_WhiteSlot, s_Data->WhiteTexture);
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_BlackSlot, s_Data->BlackTexture);
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_FlatNormalSlot, s_Data->FlatNormalTexture);
+		s_Data->Textures = CreateScope<TextureTable>(nvrhiDevice, device.GetMaxFramesInFlight());
 		s_Data->Staging = CreateScope<StagingPool>(nvrhiDevice);
 		s_Data->UploadQueue = CreateScope<GPUUploadQueue>(device, *s_Data->Staging);
 		s_Data->UploadContext = CreateScope<RendererUploadContext>(*s_Data->UploadQueue, *s_Data->Staging);
@@ -162,6 +165,12 @@ namespace Strata
 	{
 		ST_CORE_ASSERT(s_Data, "Renderer is not initialized");
 		return *s_Data->BindlessTextures;
+	}
+
+	TextureTable& Renderer::GetTextureTable()
+	{
+		ST_CORE_ASSERT(s_Data, "Renderer is not initialized");
+		return *s_Data->Textures;
 	}
 
 	StagingPool& Renderer::GetStagingPool()
@@ -225,6 +234,7 @@ namespace Strata
 		s_Data->Geometry->BeginFrame();
 		s_Data->SceneGPUs->BeginFrame();
 		s_Data->BindlessTextures->BeginFrame(s_Data->Device->GetFrameIndex());
+		s_Data->Textures->BeginFrame(s_Data->Device->GetFrameIndex());
 		s_Data->Staging->BeginFrame(s_Data->Device->GetFrameIndex());
 		s_Data->UploadQueue->BeginFrame();
 		s_Data->DeferredReleases->Collect(DeferredReleaseQueue::c_FrameDestroyBudget);

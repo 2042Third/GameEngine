@@ -4,7 +4,6 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Math/Math.h"
-#include "Strata/Renderer/BindlessTextureTable.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RenderScene.h"
@@ -12,6 +11,7 @@
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureStreamer.h"
+#include "Strata/Renderer/TextureTable.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneServices.h"
 
@@ -98,16 +98,6 @@ namespace Strata
 		bool IsDrawnSkinned(const RenderScene& renderScene, uint32_t proxy, const Mesh& mesh)
 		{
 			return (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0 && mesh.IsSkinned();
-		}
-
-		uint32_t PackTextureSlot(uint32_t slot, uint32_t samplerIndex, bool grayscale = false)
-		{
-			return (slot & 0xFFFFFFu) | ((samplerIndex & 0x7Fu) << 24) | (grayscale ? RenderData::c_TextureSlotGrayscale : 0u);
-		}
-
-		uint32_t GetSamplerIndex(const TextureSpecification& specification)
-		{
-			return static_cast<uint32_t>(specification.Filter) * 3 + static_cast<uint32_t>(specification.Wrap);
 		}
 
 		uint32_t GetMaterialFlags(const MaterialProperties& properties)
@@ -594,20 +584,20 @@ namespace Strata
 		return true;
 	}
 
-	uint32_t SceneRenderer::ResolveTexture(AssetHandle handle, uint32_t missingSlot, uint32_t loadingSlot, bool residentOnly, std::vector<ResolvedTexture>* resolved)
+	uint32_t SceneRenderer::ResolveTexture(AssetHandle handle, uint32_t missingIndex, uint32_t loadingIndex, bool residentOnly, std::vector<ResolvedTexture>* resolved)
 	{
 		if (!handle.IsValid())
-			return PackTextureSlot(missingSlot, 0);
+			return missingIndex;
 
 		const Ref<Texture> texture = residentOnly ? m_Assets.FindResident<Texture>(handle) : m_Assets.Resolve<Texture>(handle, AssetPriority::Normal);
 		if (texture && resolved)
 			resolved->push_back(ResolvedTexture { handle, std::max(texture->GetWidth(), texture->GetHeight()), texture->GetMipCount() });
-		if (!texture || texture->GetBindlessSlot() == BindlessTextureTable::c_InvalidSlot)
-			return PackTextureSlot(loadingSlot, 0);
+		if (!texture || texture->GetTableIndex() == TextureTable::c_InvalidIndex)
+			return loadingIndex;
 		// Without streaming the renderer needs every level: it draws what is resident and waits for the rest.
 		if (!m_Specification.TextureStreaming && texture->GetResidentLevel() > 0 && !residentOnly)
 			m_Assets.CountPending(handle);
-		return PackTextureSlot(texture->GetBindlessSlot(), GetSamplerIndex(texture->GetSpecification()), texture->GetSpecification().Grayscale);
+		return texture->GetTableIndex();
 	}
 
 	RenderData::MaterialData SceneRenderer::BuildMaterialData(const Material& material, bool residentOnly, std::vector<ResolvedTexture>* resolved)
@@ -629,11 +619,11 @@ namespace Strata
 
 		// Missing maps use neutral textures; maps still loading use neutral ones too, except emission (black until the map
 		// arrives, so surfaces do not flash at full emissive strength).
-		data.BaseColorMap = ResolveTexture(properties.BaseColorMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot, residentOnly, resolved);
-		data.MetallicRoughnessMap = ResolveTexture(properties.MetallicRoughnessMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot, residentOnly, resolved);
-		data.NormalMap = ResolveTexture(properties.NormalMap, BindlessTextureTable::c_FlatNormalSlot, BindlessTextureTable::c_FlatNormalSlot, residentOnly, resolved);
-		data.OcclusionMap = ResolveTexture(properties.OcclusionMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot, residentOnly, resolved);
-		data.EmissiveMap = ResolveTexture(properties.EmissiveMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_BlackSlot, residentOnly, resolved);
+		data.BaseColorMap = ResolveTexture(properties.BaseColorMap, TextureTable::c_White, TextureTable::c_White, residentOnly, resolved);
+		data.MetallicRoughnessMap = ResolveTexture(properties.MetallicRoughnessMap, TextureTable::c_White, TextureTable::c_White, residentOnly, resolved);
+		data.NormalMap = ResolveTexture(properties.NormalMap, TextureTable::c_FlatNormal, TextureTable::c_FlatNormal, residentOnly, resolved);
+		data.OcclusionMap = ResolveTexture(properties.OcclusionMap, TextureTable::c_White, TextureTable::c_White, residentOnly, resolved);
+		data.EmissiveMap = ResolveTexture(properties.EmissiveMap, TextureTable::c_White, TextureTable::c_Black, residentOnly, resolved);
 		return data;
 	}
 
@@ -691,10 +681,8 @@ namespace Strata
 			if (resolved.Index != slot || resolved.Usage != m_MaterialUsage[slot] || resolved.Handle != renderScene.GetMaterialHandle(slot))
 				return false;
 		}
-		// The textures' slots before the replay, which counts the lookups: after it, the frame could not look the assets up
-		// one by one without counting them twice.
-		if (!Renderer::GetBindlessTextures().AreSlotsUnchanged(resolution.TextureSlots, resolution.TextureSlotGenerations))
-			return false;
+		// The data names textures by table index, the same for a texture's life: the textures being the same objects (the
+		// replay) is all the data needs.
 		if (!m_Assets.Replay(resolution.Lookups))
 			return false;
 
@@ -724,8 +712,6 @@ namespace Strata
 		resolution.Valid = false;
 		resolution.RenderSceneId = m_RenderSceneId;
 		resolution.Slots.clear();
-		resolution.TextureSlots.clear();
-		resolution.TextureSlotGenerations.clear();
 		m_ResolvedTextures.clear();
 		// Frames whose materials are all loaded (none drawn as the default material) can be replayed.
 		bool replayable = true;
@@ -794,18 +780,14 @@ namespace Strata
 		if (!replayable)
 			return;
 
-		// The materials' data names their textures by bindless slot: it stays right while those slots hold them.
+		// The materials' data names their textures by table index, once they are uploaded: a texture still uploading is drawn
+		// with a fallback until it is, so a frame that found one is not replayed.
 		for (const std::weak_ptr<Asset>& asset : resolution.Lookups.GetAssets())
 		{
 			const Ref<Asset> loaded = asset.lock(); // Held by the frame
-			if (!loaded || loaded->GetType() != AssetType::Texture)
-				continue;
-			const uint32_t bindlessSlot = static_cast<const Texture&>(*loaded).GetBindlessSlot();
-			if (bindlessSlot == BindlessTextureTable::c_InvalidSlot)
-				return; // Not uploaded yet: its materials sample the loading texture until it is
-			resolution.TextureSlots.push_back(bindlessSlot);
+			if (loaded && loaded->GetType() == AssetType::Texture && static_cast<const Texture&>(*loaded).GetTableIndex() == TextureTable::c_InvalidIndex)
+				return;
 		}
-		Renderer::GetBindlessTextures().GetSlotGenerations(resolution.TextureSlots, resolution.TextureSlotGenerations);
 		resolution.Valid = true;
 	}
 

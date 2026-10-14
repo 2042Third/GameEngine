@@ -1754,14 +1754,17 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what `GetOpaqueBatches` reports after the frame holds no
   pointers.
 - **Material data taken over by still frames** (`SceneRenderer::MaterialResolution`). Resolving a material builds its GPU
-  data from its properties and the bindless slots of its textures, one lookup per material and texture: 0.58 of the
+  data from its properties and its textures' texture table indices, one lookup per material and texture: 0.58 of the
   1.0 ms a still frame of 3,000 streamed textures took (`PerfGPU.Renderer.IdleFrame3kStreamedTextures`). A frame whose
   material slots, their uses and their handles are those of the latest frame that resolved them one by one takes that
   frame's data, flags and texture maps over when nothing they come from changed: the materials and textures are still
   the loaded objects it found (compared by ownership under one lock of the manager, `AssetManagerBase::TouchLoadedAssets`,
-  which also stamps them as used, as the lookups would) and no bindless slot of those textures was released since
-  (`BindlessTextureTable::AreSlotsUnchanged`: a texture that streams levels moves to a new slot and releases its old
-  one, so data naming the old slot would sample a recycled descriptor and can lose the device). The lookups are those
+  which also stamps them as used, as the lookups would). The data names textures by their index in the texture table
+  (`Renderer/TextureTable.h`, `Renderer::GetTextureTable`), which a texture keeps for its life: a texture that streams
+  levels moves to a new bindless slot and releases its old one, and only its table entry follows (`Texture::
+  SwapResidentTexture`; the renderers upload changed entries before they draw, `TextureTable::RecordUploads`), so
+  material data never names a released slot and a level change rebuilds no material. A freed index draws white and is
+  reused only once frames in flight completed. The lookups are those
   the resolving frame recorded (`AssetResolveCache::BeginRecording`, `EndRecording`), replayed with the statistics they
   counted (`Replay`); frames that drew a material as the default material, found an asset loading or counted one
   pending are not replayed. Loaded materials are not changed in place (edits publish new objects), so their properties
