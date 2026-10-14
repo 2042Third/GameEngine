@@ -1582,12 +1582,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
   while hovered or focused: Alt + left drag orbits, middle drag pans, the wheel dollies, right drag flies (WASD, Q/E
   down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo (as do the main
   toolbar's tool buttons, next to the gizmo space and the snap toggle, `ViewportSettings::Snap`; holding Ctrl inverts
-  snapping). Chips over the image's top left hold the camera settings, the overlay toggles (grid, outline, gizmos,
-  stats), the editor-view settings (preview lighting, game UI) and the debug view (named after the view, "Lit" without
-  one, and lit while one colors the image; a click offers Lit, Streaming, LOD and Mip); clicking a chip does not focus the
-  panel. A strip in the play state's color tops the image while the scene runs. In the game view only the stats and
-  debug view chips remain, and only while the game does not have the input: once the view is clicked, every click on the
-  image is the game's. A debug view shows a legend at the image's bottom left (`UI::Legend`: its colors with the number
+  snapping). A toolbar strip above the image holds the chips, so none ever covers the image (the game's HUD, its
+  canvases): the camera settings, the overlay toggles (grid, outline, gizmos, stats), the editor-view settings (preview
+  lighting, game UI) and the debug view (named after the view, "Lit" without one, and lit while one colors the image; a
+  click offers Lit, Streaming, LOD and Mip) from its left, the agent chip at its right; clicking a chip does not focus the
+  panel. The toolbar's bottom border takes the play state's color while the scene runs. In the game view only the stats
+  and debug view chips remain; once the view is clicked, every click on the image is the game's. A debug view shows a legend at the image's bottom left (`UI::Legend`: its colors with the number
   of entities in view per color, counts aligned in a column, and the placeholder boxes). The
   selection outline is the theme's accent and the debug views use its meanings (`ViewportSettings::SelectionColor` and
   `DebugColors`, set by the UI, not saved).
@@ -1952,8 +1952,9 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   connected and no request
   pending for that long (unsaved changes are then discarded, with a warning). The status bar's automation pill shows
   the port, or who is connected ("Agent connected · <name>", from `clientName`); `editor.status` has an `automation`
-  section. The viewport names the latest automation command in a chip at its top right ("Agent: entity.create · 3 s
-  ago"; a click shows it in the Activity panel) and outlines the entities it changed for 600 ms in the accent
+  section. The viewport names the latest automation command that changed something (kind Edit, or an edit of the
+  running copy; queries do not count) in a chip at its toolbar's right ("Agent: entity.create · 3 s ago"; a click shows
+  it in the Activity panel) and outlines the entities it changed for 600 ms in the accent
   (`CommandJournal::GetLatestAutomationActivity`, `ViewportPanel::DrawAgentFlash`).
 
 ### Security model

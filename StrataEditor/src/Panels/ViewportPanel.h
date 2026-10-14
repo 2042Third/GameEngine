@@ -90,7 +90,7 @@ namespace Strata
 		void HandleShortcuts(EditorPanelContext& context);
 		void UpdateCamera(EditorContext& context, bool hovered);
 		void UpdateGizmo(EditorContext& context, const ViewportView& view);
-		void DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom, const EditorFrameStats& frame);
+		void DrawOverlays(EditorContext& context, const ViewportView& view, const EditorFrameStats& frame);
 		// While a scene is being opened (EditorContext::IsSceneLoading): a card in the middle of the image naming the scene, with
 		// the load's progress. The edited scene stays visible (and read-only) behind it.
 		void DrawSceneLoadOverlay(EditorContext& context);

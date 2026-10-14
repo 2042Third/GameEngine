@@ -2537,8 +2537,9 @@ is the `strata-scripting` skill. The layers:
   `clientInfo.name` from `initialize` (reconnecting to the same editor when the name changes). **Presence**: the person
   sees who works with them. The automation pill reads "Agent connected · <name>" (several: "N agents connected"), its
   text made again only when `RpcServer::GetClientsVersion` changes and its tooltip (each client and when it connected)
-  only while it shows. The journal keeps the latest finished automation command (`GetLatestAutomationActivity`: command,
-  client, outcome, the entities its undo step touched); the viewport draws it as a chip at the image's top right ("Agent:
+  only while it shows. The journal keeps the latest finished automation command that changes something (the entry's
+  `mutating`: kind Edit or an edit of the running copy; `GetLatestAutomationActivity`: command, client, outcome, the
+  entities its undo step touched); the viewport draws it as a chip at the right of its toolbar, above the image ("Agent:
   entity.create · 3 s ago", while a client is connected or for `c_AgentChipSeconds` after; a click shows it in the
   Activity panel) and, for `c_AgentFlashSeconds` (600 ms), outlines the projected bounds of those entities (at most 64)
   in the accent, fading out (`ViewportPanel::DrawAgentFlash`, an `ImDrawList` rectangle per entity, bounds taken once when

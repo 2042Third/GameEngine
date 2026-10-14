@@ -570,7 +570,9 @@ namespace Strata
 		entry->Bytes += added;
 		m_Bytes += added;
 		m_Version++;
-		if (entry->Source == CommandSource::Automation && entry->Parent == 0)
+		// What an agent changed, not what it looked at: a query after an edit leaves the chip naming the edit.
+		const bool mutating = entry->Kind == EditorCommandKind::Edit || entry->RunningCopy;
+		if (entry->Source == CommandSource::Automation && entry->Parent == 0 && mutating)
 		{
 			m_LatestAutomation.Id = entry->Id;
 			m_LatestAutomation.Command = entry->Command;
@@ -635,7 +637,7 @@ namespace Strata
 			{ "source", CommandSourceToString(entry.Source) },
 			{ "command", entry.Command },
 			{ "kind", EditorCommandKindToString(entry.Kind) },
-			{ "mutating", entry.Kind == EditorCommandKind::Edit },
+			{ "mutating", entry.Kind == EditorCommandKind::Edit || entry.RunningCopy },
 			{ "parameters", entry.Parameters },
 			{ "status", CommandStatusToString(entry.Status) },
 			{ "durationMs", entry.DurationMs },

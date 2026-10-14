@@ -474,6 +474,13 @@ TEST_SUITE("Editor.UI.Activity")
 		});
 		REQUIRE(editor.FramesUntil([&call]() { return call.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; }));
 		REQUIRE(call.get().IsSuccess());
+		// A query the agent runs afterwards does not replace it: the chip names what changed the scene.
+		std::future<RpcResult> query = std::async(std::launch::async, [&client]()
+		{
+			return client.Call("editor.status", nlohmann::json::object(), std::chrono::milliseconds(10000));
+		});
+		REQUIRE(editor.FramesUntil([&query]() { return query.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready; }));
+		REQUIRE(query.get().IsSuccess());
 		const AutomationActivity& latest = editor.Context().GetJournal().GetLatestAutomationActivity();
 		REQUIRE(latest.Command == "entity.create");
 		const auto finished = latest.Finished;

@@ -110,8 +110,9 @@ namespace Strata
 		std::chrono::steady_clock::time_point Started;
 	};
 
-	// The latest command an automation client ran, once it finished (CommandJournal::GetLatestAutomationActivity): what the
-	// viewport's agent chip names and the entities it outlines for a moment.
+	// The latest mutating command (kind Edit, or an edit of the running copy) an automation client ran, once it finished
+	// (CommandJournal::GetLatestAutomationActivity): what the viewport's agent chip names and the entities it outlines for a
+	// moment. Queries do not replace it.
 	struct AutomationActivity
 	{
 		uint64_t Id = 0; // Its journal entry; 0 before the first

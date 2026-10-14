@@ -47,8 +47,9 @@ namespace Strata
 
 		// Widths of the camera popup's fields, in text heights.
 		constexpr float c_CameraFieldWidthInFontSizes = 11.0f;
-		// The play-state strip over the image, in text heights (2 pixels at the base text size).
-		constexpr float c_PlayStripInFontSizes = 1.0f / 7.0f;
+		// The toolbar's bottom border, in the play state's color while the scene runs, in text heights (2 pixels at the base text
+		// size).
+		constexpr float c_ToolbarBorderInFontSizes = 1.0f / 7.0f;
 		// The scene load card's width, in text heights.
 		constexpr float c_SceneLoadCardInFontSizes = 22.0f;
 		// The agent flash's outline, in text heights (2 pixels at the base text size), and how many entities it outlines.
@@ -152,11 +153,20 @@ namespace Strata
 		EditorViewport& viewport = context.GetViewport();
 		m_Focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
-		// The image fills the panel, rendered in framebuffer pixels (Retina displays have more than one per unit). Viewports
-		// only get a framebuffer scale of their own with multi-viewport support; like ImGui's renderer data, the panel falls
-		// back to the display's otherwise.
-		const ImVec2 available = ImGui::GetContentRegionAvail();
-		const ImVec2 imageMin = ImGui::GetCursorScreenPos();
+		// A toolbar strip at the top holds the chips, so none of them ever covers the image (the game's HUD, its canvases).
+		// The image fills the rest of the panel, rendered in framebuffer pixels (Retina displays have more than one per
+		// unit). Viewports only get a framebuffer scale of their own with multi-viewport support; like ImGui's renderer data,
+		// the panel falls back to the display's otherwise.
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const ImVec2 panelMin = ImGui::GetCursorScreenPos();
+		const ImVec2 panelSize = ImGui::GetContentRegionAvail();
+		// The chips' row with half the item spacing above and below: the toolbar takes little of the image's height.
+		const float toolbarHeight = ImGui::GetFrameHeight() + style.ItemSpacing.y;
+		const float toolbarBorder = std::max(1.0f, std::floor(ImGui::GetFontSize() * c_ToolbarBorderInFontSizes));
+		const ImVec2 toolbarMax(panelMin.x + panelSize.x, panelMin.y + toolbarHeight);
+		const ImVec2 imageMin(panelMin.x, toolbarMax.y + toolbarBorder);
+		const ImVec2 available(std::max(panelSize.x, 0.0f), std::max(panelSize.y - toolbarHeight - toolbarBorder, 0.0f));
+		ImGui::SetCursorScreenPos(imageMin);
 		const ImVec2 viewportScale = ImGui::GetWindowViewport()->FramebufferScale;
 		const ImVec2 displayScale = ImGui::GetIO().DisplayFramebufferScale;
 		m_Image.Min = glm::vec2(imageMin.x, imageMin.y);
@@ -182,6 +192,7 @@ namespace Strata
 			ImGui::InvisibleButton("SceneImage", available, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
 		}
 		m_Hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+		UI::ItemProbe::RecordRect("Viewport.Image", imageMin, ImVec2(imageMin.x + available.x, imageMin.y + available.y));
 		AcceptAssetDrops(context, panelContext.Commands);
 
 		const float aspectRatio = static_cast<float>(size.x) / static_cast<float>(size.y);
@@ -227,44 +238,42 @@ namespace Strata
 				renderer ? "The scene could not be rendered (see the Console)" : "No GPU: the viewport cannot render");
 		}
 
-		// A strip in the play state's color while the scene runs: changes made now are discarded when it stops.
-		if (context.IsPlaying())
-		{
-			const float strip = std::max(1.0f, std::floor(ImGui::GetFontSize() * c_PlayStripInFontSizes));
-			drawList->AddRectFilled(imageMin, ImVec2(imageMax.x, imageMin.y + strip), ImGui::GetColorU32(GetPlayStateColor(context)));
-		}
+		// The toolbar: a chrome band whose bottom border takes the play state's color while the scene runs (changes made now
+		// are discarded when it stops).
+		drawList->AddRectFilled(panelMin, toolbarMax, ImGui::GetColorU32(colors.Chrome));
+		drawList->AddRectFilled(ImVec2(panelMin.x, toolbarMax.y), ImVec2(toolbarMax.x, imageMin.y),
+			ImGui::GetColorU32(context.IsPlaying() ? GetPlayStateColor(context) : colors.Border));
 
 		if (view)
 			DrawAgentFlash(context, *view);
 		if (view && !m_GameView)
 			UpdateGizmo(context, *view);
 
-		// The chips go over the image's top left. The game view keeps only the stats toggle, and only while the game does not
-		// have the input (before the view is clicked, or after Shift+F1): while it has, every click on the image is the game's.
-		const ImGuiStyle& style = ImGui::GetStyle();
-		const ImVec2 chipsMin(imageMin.x + style.ItemSpacing.x, imageMin.y + style.ItemSpacing.y);
+		// The chips, in the toolbar from its left; the agent's at its right. The game view keeps the stats and debug view
+		// toggles (debug views apply to it too: streaming while playing is what they are for). Clicks on them never reach the
+		// game, whose input is the image's.
+		const ImVec2 chipsMin(panelMin.x + style.ItemSpacing.x, panelMin.y + style.ItemSpacing.y * 0.5f);
+		ImGui::PushClipRect(panelMin, toolbarMax, true);
 		ImGui::SetCursorScreenPos(chipsMin);
 		if (!m_GameView)
 		{
 			DrawChips(context);
 			DrawPreviewChip(panelContext);
 		}
-		else if (!m_GameInputEnabled)
+		else
 		{
 			DrawStatsChip(viewport.GetSettings());
-			// Debug views apply to the game view too: streaming while playing is what they are for.
 			ImGui::SameLine();
 			DrawDebugViewChip(viewport.GetSettings());
 		}
-		if (!m_GameView || !m_GameInputEnabled)
-			DrawAgentChip(panelContext, imageMax.x - style.ItemSpacing.x, chipsMin.y);
+		DrawAgentChip(panelContext, toolbarMax.x - style.ItemSpacing.x, chipsMin.y);
+		ImGui::PopClipRect();
 		if (rendered && viewport.GetSettings().DebugView != ViewportDebugView::None)
 			DrawDebugViewLegend(context);
-		// Text boxes go below the chip row, also while it is hidden, so they stay in place when it comes and goes.
 		m_GameWindowNoticeShown = false;
 		m_MouseHintShown = false;
 		if (view)
-			DrawOverlays(context, *view, chipsMin.y + ImGui::GetFrameHeight(), panelContext.Frame);
+			DrawOverlays(context, *view, panelContext.Frame);
 		if (context.IsSceneLoading())
 			DrawSceneLoadOverlay(context);
 	}
@@ -811,13 +820,12 @@ namespace Strata
 	// Overlays and drops
 	////////////////////////////////////////////////////////////////////////////////
 
-	void ViewportPanel::DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom, const EditorFrameStats& frame)
+	void ViewportPanel::DrawOverlays(EditorContext& context, const ViewportView& view, const EditorFrameStats& frame)
 	{
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		const ImVec2 imageMin(m_Image.Min.x, m_Image.Min.y);
 		const float margin = ImGui::GetStyle().ItemSpacing.x;
-		// Text boxes go below the chips.
-		const float top = chipRowBottom + margin;
+		const float top = imageMin.y + margin;
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 
 		if (!view.Notice.empty())

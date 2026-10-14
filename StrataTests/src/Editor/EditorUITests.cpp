@@ -931,6 +931,45 @@ TEST_SUITE("Editor.UI")
 		CHECK(editor.Context().GetLastFrameTime() == doctest::Approx(4.0));
 	}
 
+	TEST_CASE("The viewport's chips are in a toolbar above its image, never over what the game draws")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIViewportToolbar"));
+		editor.Frames(2);
+		const auto checkChips = [](std::initializer_list<const char*> chips)
+		{
+			const std::optional<UI::ItemProbe::Item> image = UI::ItemProbe::Find("Viewport.Image");
+			REQUIRE(image.has_value());
+			REQUIRE(image->Max.y > image->Min.y);
+			for (const char* key : chips)
+			{
+				CAPTURE(key);
+				const std::optional<UI::ItemProbe::Item> chip = UI::ItemProbe::Find(key);
+				REQUIRE(chip.has_value());
+				// Rectangles that do not intersect: the chip ends above the image's first row, so it covers nothing the game
+				// draws in it (its screen-space text, its canvases).
+				CHECK(chip->Max.y <= image->Min.y);
+			}
+		};
+		checkChips({ "Viewport.Camera", "Viewport.Grid", "Viewport.Outline", "Viewport.Gizmos", "Viewport.Stats", "Viewport.PreviewLighting",
+			"Viewport.GameUI", "Viewport.DebugView" });
+		// The image keeps the panel's full width and starts below the toolbar.
+		const ViewportPanel* viewport = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
+		REQUIRE(viewport);
+		const ViewportImageArea& area = viewport->GetImageArea();
+		CHECK(area.Min.y == doctest::Approx(UI::ItemProbe::Find("Viewport.Image")->Min.y));
+
+		// Playing (the game view), the chips stay above the image, also while the game has the input.
+		editor.Run("play.start", { { "build", false } });
+		editor.Frames(2);
+		REQUIRE(editor.Context().IsPlaying());
+		checkChips({ "Viewport.Stats", "Viewport.DebugView" });
+		editor.ClickAt(ImVec2(area.Min.x + area.Size.x * 0.5f, area.Min.y + area.Size.y * 0.5f));
+		editor.Frames(1);
+		REQUIRE(editor.Context().IsGameInputActive());
+		checkChips({ "Viewport.Stats", "Viewport.DebugView" });
+		editor.Run("play.stop");
+	}
+
 	TEST_CASE("The toolbar's tools and the viewport's chips change the viewport's settings")
 	{
 		HarnessEditor editor({}, WithFeatureProject("EditorUIToolbar"));
@@ -1064,16 +1103,18 @@ TEST_SUITE("Editor.UI")
 		// The chip does not hand the game the input.
 		CHECK_FALSE(editor.Context().IsGameInputActive());
 
-		// Clicking the game gives it the input, and every click on the image is the game's: no chip.
+		// Clicking the game gives it the input: every click on the image is the game's, and the chips stay in the toolbar
+		// above it.
 		const ViewportPanel* viewport = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
 		REQUIRE(viewport);
 		const ViewportImageArea& image = viewport->GetImageArea();
 		editor.ClickAt(ImVec2(image.Min.x + image.Size.x * 0.5f, image.Min.y + image.Size.y * 0.5f));
 		editor.Frames(1);
 		REQUIRE(editor.Context().IsGameInputActive());
-		CHECK_FALSE(UI::ItemProbe::Find("Viewport.Stats").has_value());
+		REQUIRE(UI::ItemProbe::Find("Viewport.Stats").has_value());
+		CHECK(UI::ItemProbe::Find("Viewport.Stats")->Max.y <= image.Min.y);
 
-		// Shift+F1 takes the input back: the toggle returns.
+		// Shift+F1 takes the input back.
 		editor.Harness.SetKey(ImGuiMod_Shift, true);
 		editor.Harness.SetKey(ImGuiKey_F1, true);
 		editor.Frames(1);
