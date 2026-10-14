@@ -1,11 +1,15 @@
 #include "CLI/EditorLauncher.h"
 
 #include "Strata/Core/FileSystem.h"
+#include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
+#include "Strata/Core/StringUtils.h"
+#include "Strata/Network/JsonRpc.h"
 #include "Strata/Network/RpcClient.h"
 #include "Strata/Network/Socket.h"
 
+#include <algorithm>
 #include <thread>
 
 namespace Strata::CLI
@@ -17,6 +21,10 @@ namespace Strata::CLI
 		constexpr const char* c_EditorPathVariable = "STRATA_EDITOR_PATH";
 		constexpr std::chrono::milliseconds c_SessionPollInterval = std::chrono::milliseconds(50);
 		constexpr std::chrono::milliseconds c_SessionConnectTimeout = std::chrono::milliseconds(1000);
+		// How often a launch asks the editor how far its project is, and how long one answer may take.
+		constexpr std::chrono::milliseconds c_ProjectPollInterval = std::chrono::milliseconds(250);
+		constexpr std::chrono::milliseconds c_StatusTimeout = std::chrono::milliseconds(10000);
+		constexpr std::string_view c_LaunchClientName = "StrataCLI launch";
 
 		std::filesystem::path GetDefaultEditorFileName()
 		{
@@ -115,9 +123,93 @@ namespace Strata::CLI
 			return result;
 		}
 
+		if (specification.WaitForProject && !specification.ProjectDirectory.empty()
+			&& !WaitForEditorProject(*session, specification.StallTimeout, specification.OnProgress, [&process]() { return process.IsRunning(); }, &result.Error))
+		{
+			if (process.IsRunning() && process.Terminate())
+				result.Error += "; the editor was stopped";
+			return result;
+		}
+
 		result.Success = true;
 		result.Session = std::move(*session);
 		return result;
+	}
+
+	bool WaitForEditorProject(const EditorSessionInfo& session, std::chrono::milliseconds stallTimeout,
+		const std::function<void(const EditorStartupProgress&)>& onProgress, const std::function<bool()>& isProcessAlive, std::string* error)
+	{
+		auto fail = [error](std::string message)
+		{
+			if (error)
+				*error = std::move(message);
+			return false;
+		};
+		RpcClient client;
+		if (!client.Connect(session.Address, session.Port, session.Token, c_SessionConnectTimeout, c_LaunchClientName))
+			return fail(fmt::format("The editor's session on port {} does not accept connections: {}", session.Port, client.GetLastError()));
+
+		std::optional<EditorStartupProgress> last;
+		auto lastChange = std::chrono::steady_clock::now();
+		while (true)
+		{
+			const RpcResult status = client.Call("editor.status", nlohmann::json::object(), c_StatusTimeout);
+			// An editor without the status (an older one) has nothing to wait for.
+			if (status.IsError() && status.GetError().Code == static_cast<int>(JsonRpc::ErrorCode::MethodNotFound))
+				return true;
+			if (status.IsError())
+			{
+				if (isProcessAlive && !isProcessAlive())
+					return fail("The editor exited while its project was opening");
+				if (!client.IsConnected() && !client.Connect(session.Address, session.Port, session.Token, c_SessionConnectTimeout, c_LaunchClientName))
+					return fail(fmt::format("The editor stopped answering while its project was opening: {}", client.GetLastError()));
+			}
+			else
+			{
+				const nlohmann::json& value = status.GetValue();
+				const nlohmann::json* assets = value.is_object() ? JsonUtils::Find(value, "assets") : nullptr;
+				const nlohmann::json* scanning = assets && assets->is_object() ? JsonUtils::Find(*assets, "scanning") : nullptr;
+				const nlohmann::json* sceneLoad = value.is_object() ? JsonUtils::Find(value, "sceneLoad") : nullptr;
+				EditorStartupProgress progress;
+				if (scanning && scanning->is_object())
+				{
+					progress.Phase = JsonUtils::GetString(*scanning, "phase");
+					progress.Done = JsonUtils::GetUInt(*scanning, "done", 0);
+					progress.Total = JsonUtils::GetUInt(*scanning, "total", 0);
+					progress.Message = progress.Total > 0
+						? fmt::format("Scanning the project's assets: {} / {}", StringUtils::FormatThousands(progress.Done), StringUtils::FormatThousands(progress.Total))
+						: fmt::format("Scanning the project's assets: {} files found", StringUtils::FormatThousands(progress.Done));
+				}
+				else if (sceneLoad && sceneLoad->is_object())
+				{
+					progress.Phase = "OpeningScene";
+					progress.Done = static_cast<uint64_t>(std::clamp(static_cast<double>(JsonUtils::GetFloat(*sceneLoad, "progress", 0.0f)), 0.0, 1.0) * 100.0);
+					progress.Total = 100;
+					progress.Message = fmt::format("Opening the start scene: {}%", progress.Done);
+				}
+				else
+				{
+					return true;
+				}
+				const bool changed = !last || last->Phase != progress.Phase || last->Done != progress.Done || last->Total != progress.Total;
+				if (changed)
+				{
+					lastChange = std::chrono::steady_clock::now();
+					if (onProgress)
+						onProgress(progress);
+					last = std::move(progress);
+				}
+			}
+			if (std::chrono::steady_clock::now() - lastChange >= stallTimeout)
+			{
+				const std::string where = last ? last->Message : std::string("the editor's status");
+				return fail(fmt::format("The editor's project stopped progressing: no change for {} s ({})",
+					std::chrono::duration_cast<std::chrono::seconds>(stallTimeout).count(), where));
+			}
+			if (isProcessAlive && !isProcessAlive())
+				return fail("The editor exited while its project was opening");
+			std::this_thread::sleep_for(c_ProjectPollInterval);
+		}
 	}
 
 	std::optional<EditorSessionInfo> WaitForEditorSession(uint32_t processId, const std::filesystem::path& sessionDirectory, std::chrono::milliseconds timeout,

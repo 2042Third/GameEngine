@@ -7,8 +7,10 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -19,6 +21,7 @@ namespace Strata::Tests
 	namespace
 	{
 		constexpr const char* c_FakeEditorVariable = "STRATA_TEST_FAKE_EDITOR";
+		constexpr const char* c_FakeScanVariable = "STRATA_TEST_FAKE_SCAN";
 		// A fake editor left behind by a failed test still goes away on its own.
 		constexpr std::chrono::seconds c_FakeEditorLifetime = std::chrono::seconds(60);
 		constexpr std::chrono::seconds c_QuitGracePeriod = std::chrono::seconds(2);
@@ -84,6 +87,31 @@ namespace Strata::Tests
 			return RpcResult::Success(nlohmann::json { { "Project", project }, { "Headless", headless }, { "NoGpu", noGpu }, { "IdleTimeout", idleTimeout },
 				{ "ProcessId", Platform::GetProcessID() } });
 		});
+		// What a launch waits for: the project's asset scan (STRATA_TEST_FAKE_SCAN: "<milliseconds>" from the session on,
+		// advancing from 0 to 1,000 files; "stall": stuck at 5 of 1,000), then nothing.
+		const std::string scanMode = Platform::GetEnvVar(c_FakeScanVariable).value_or(std::string());
+		const auto scanStart = std::chrono::steady_clock::now();
+		RpcMethodInfo status;
+		status.Name = "editor.status";
+		status.Description = "The fake editor's status (its asset scan)";
+		server.RegisterMethod(status, [&scanMode, scanStart](const nlohmann::json&)
+		{
+			constexpr uint64_t c_Files = 1000;
+			nlohmann::json scanning = nullptr;
+			if (scanMode == "stall")
+			{
+				scanning = { { "phase", "Registering" }, { "done", 5 }, { "total", c_Files } };
+			}
+			else if (!scanMode.empty())
+			{
+				const double duration = std::max(1.0, std::strtod(scanMode.c_str(), nullptr));
+				const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - scanStart).count();
+				if (elapsed < duration)
+					scanning = { { "phase", "Registering" }, { "done", static_cast<uint64_t>(elapsed / duration * c_Files) }, { "total", c_Files } };
+			}
+			return RpcResult::Success(nlohmann::json { { "assets", { { "scanning", scanning } } }, { "sceneLoad", nullptr } });
+		});
+
 		RpcMethodInfo quit;
 		quit.Name = "editor.quit";
 		quit.Description = "Exits the fake editor";

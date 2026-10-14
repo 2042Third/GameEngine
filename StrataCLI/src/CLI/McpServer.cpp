@@ -398,7 +398,16 @@ namespace Strata::CLI
 		if (name == c_StatusTool)
 			return CallStatusTool();
 		if (name == c_LaunchEditorTool)
-			return CallLaunchEditorTool(arguments);
+		{
+			// MCP: a client that wants progress names a token in the request's _meta.
+			nlohmann::json progressToken = nullptr;
+			if (const auto meta = params.find("_meta"); meta != params.end() && meta->is_object())
+			{
+				if (const auto token = meta->find("progressToken"); token != meta->end() && (token->is_string() || token->is_number_integer()))
+					progressToken = *token;
+			}
+			return CallLaunchEditorTool(arguments, progressToken);
+		}
 		if (name == c_ListMethodsTool)
 			return CallListMethodsTool();
 		if (name == c_CallTool)
@@ -439,7 +448,7 @@ namespace Strata::CLI
 		return MakeToolResult(RpcResult::Success(std::move(status)));
 	}
 
-	nlohmann::json McpServer::CallLaunchEditorTool(const nlohmann::json& arguments)
+	nlohmann::json McpServer::CallLaunchEditorTool(const nlohmann::json& arguments, const nlohmann::json& progressToken)
 	{
 		std::string error;
 		std::optional<std::string> project;
@@ -506,6 +515,30 @@ namespace Strata::CLI
 		launch.SessionDirectory = m_Connection.GetOptions().SessionDirectory;
 		if (m_Specification.LaunchIdleTimeout.count() > 0)
 			launch.IdleTimeout = m_Specification.LaunchIdleTimeout;
+		// The tool answers once the project is ready (its assets scanned, its start scene open), however long that takes while
+		// it progresses; the client hears how far it is when it asked to.
+		launch.StallTimeout = m_Specification.LaunchStallTimeout;
+		double sentProgress = -1.0;
+		if (!progressToken.is_null())
+		{
+			// MCP progress only grows: the steps (the scan's registering and applying, then the start scene) make one percentage.
+			launch.OnProgress = [this, &progressToken, &sentProgress](const EditorStartupProgress& progress)
+			{
+				const double share = progress.Total > 0 ? static_cast<double>(progress.Done) / static_cast<double>(progress.Total) : 0.0;
+				double percent = 0.0;
+				if (progress.Phase == "Registering")
+					percent = 50.0 * share;
+				else if (progress.Phase == "Applying")
+					percent = 50.0 + 40.0 * share;
+				else if (progress.Phase == "OpeningScene")
+					percent = 90.0 + 10.0 * share;
+				if (percent <= sentProgress)
+					return;
+				sentProgress = percent;
+				Send(JsonRpc::MakeNotification("notifications/progress",
+					{ { "progressToken", progressToken }, { "progress", percent }, { "total", 100 }, { "message", progress.Message } }));
+			};
+		}
 
 		EditorLaunchResult launched = LaunchEditor(launch);
 		if (!launched.Success)

@@ -1890,6 +1890,14 @@ JSON-RPC 2.0, one compact JSON message per line, over TCP on loopback. `StrataCL
 `list`, `status`, `launch`) and an MCP server on stdio (`StrataCLI mcp`). How an agent drives the editor is
 described in `.claude/skills/strata-editor-automation/SKILL.md`.
 
+- **Launching waits for progress, not a fixed time.** The editor publishes its session within its startup (its
+  project's assets are scanned in the background). `StrataCLI launch` (`CLI::LaunchEditor`) bounds only the wait for the
+  session (`--wait-timeout`); with a project it then polls `editor.status` every 250 ms until `assets.scanning` and
+  `sceneLoad` are null, reporting the progress (stderr; `strata_launch_editor` sends MCP `notifications/progress`,
+  growing only, when the call names a `progressToken`), and fails, stopping the editor, only when the editor exits or
+  nothing progressed for `--stall-timeout` (60 s). `--no-wait-scan` returns at the session. The test executable's fake
+  editor (`STRATA_TEST_FAKE_EDITOR`) reports a scan as `STRATA_TEST_FAKE_SCAN` says (`<milliseconds>` or `stall`).
+
 ### Commands and requests
 
 - **Commands are the API:** `EditorAutomation` (`StrataEditor/src/Editor/`) owns the editor's server and offers

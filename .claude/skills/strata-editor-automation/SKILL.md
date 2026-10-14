@@ -25,6 +25,13 @@ StrataCLI launch --no-gpu             # start one without window and GPU, no pro
 StrataCLI launch --headless --project <dir>   # existing project; no window, but rendering works (captures)
 ```
 
+- With a project, `launch` returns once the project is ready (its assets scanned and its start scene open), printing
+  the progress to stderr ("Scanning the project's assets: 12,345 / 30,000"); a large project takes as long as it takes
+  while it progresses, and `launch` fails only when nothing progressed for `--stall-timeout` seconds (default 60).
+  `--no-wait-scan` returns as soon as the editor answers: edits and asset queries then wait until the project is
+  ready, `editor.status` answers at once (`assets.scanning`). `strata_launch_editor` (MCP) waits the same way and sends
+  `notifications/progress` when the call has a `progressToken`.
+
 - `--no-gpu`: no graphics device at all (any machine, CI). `--headless`: no window but rendering works.
   Without either, the editor opens its window (a human can watch).
 - Started by hand: `StrataEditor --no-gpu [--project <dir>]` (keep it running in the background). It serves

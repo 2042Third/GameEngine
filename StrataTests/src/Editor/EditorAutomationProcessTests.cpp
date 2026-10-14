@@ -4,6 +4,7 @@
 
 #include "CLI/EditorLauncher.h"
 #include "Network/NetworkTestHelpers.h"
+#include "Perf/WorldFixture.h"
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
@@ -581,6 +582,35 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 			CHECK(*exitCode == 1);
 			CHECK(editor.OutputContains("needs automation"));
 		}
+	}
+
+	TEST_CASE("An editor opening a project of 10,000 assets publishes its session and answers while it still scans them")
+	{
+		if (!HasBuiltExecutables())
+			return;
+		EndToEndEnvironment environment("EndToEndScan");
+		std::string error;
+		const std::optional<Tests::ManyAssetsProject> project = Tests::WriteManyAssetsProject(environment.Root / "Many", 10'000, error);
+		REQUIRE_MESSAGE(project.has_value(), error);
+
+		EditorProcess editor;
+		REQUIRE(editor.Start({ "--no-gpu", "--project", FileSystem::ToUTF8(project->Directory) }));
+		const std::optional<EditorSessionInfo> session = editor.WaitForSession(environment.SessionDirectory);
+		REQUIRE(session.has_value());
+		// The first answer comes while the project is not ready: its assets are scanned (or, the scan just done, its start
+		// scene is still opening).
+		const nlohmann::json first = Call("editor.status");
+		CHECK((!first["assets"]["scanning"].is_null() || !first["sceneLoad"].is_null()));
+		// Edits wait for it (they answer once it is ready).
+		const nlohmann::json created = Call("entity.create", { { "name", "After The Scan" } });
+		CHECK(created.contains("id"));
+		const nlohmann::json ready = Call("editor.status");
+		CHECK(ready["assets"]["scanning"].is_null());
+		CHECK(ready["sceneLoad"].is_null());
+		CHECK(Call("entity.find", { { "name", "Cube 9999" } })["entities"].size() == 1);
+		CHECK(Call("asset.list", { { "type", "Material" }, { "includeBuiltin", false } })["assets"].size() == 10'000);
+		Call("editor.quit", { { "force", true } });
+		REQUIRE(editor.Wait().has_value());
 	}
 }
 
