@@ -42,6 +42,9 @@ namespace Strata
 		// The share of the stored bytes of the scene asset and its dependency closure that must be in before its entities are
 		// created (SceneLoadOptions::RequiredProgress): all of it by default, so that they appear complete.
 		float RequiredProgress = 1.0f;
+		// Read the scene asset's stored form again even when it is loaded (SceneLoadOptions::Reload): an editor reads a
+		// world's cells as their files are now.
+		bool Reload = false;
 	};
 
 	// What became of a sub-scene so far (Scene::GetSubSceneStatus).

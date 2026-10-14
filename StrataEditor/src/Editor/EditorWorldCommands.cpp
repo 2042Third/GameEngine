@@ -2,6 +2,7 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorWorld.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/UndoStack.h"
 #include "Editor/WorldCook.h"
@@ -14,6 +15,7 @@
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneServices.h>
 #include <Strata/World/WorldAsset.h>
+#include <Strata/World/WorldStreamer.h>
 
 #include <nlohmann/json.hpp>
 
@@ -30,6 +32,186 @@ namespace Strata
 	{
 
 		constexpr double c_BytesPerMB = 1024.0 * 1024.0;
+
+		nlohmann::json CellKeyJson(const WorldData& data, const WorldCellKey& key)
+		{
+			const WorldLayer* layer = data.FindLayer(key.Layer);
+			return { { "layer", layer ? nlohmann::json(layer->Name) : nlohmann::json(key.Layer) }, { "x", key.X }, { "z", key.Z } };
+		}
+
+		nlohmann::json DescribeStats(const WorldStreamingStats& stats)
+		{
+			return { { "wanted", stats.CellsWanted }, { "loading", stats.CellsLoading }, { "loaded", stats.CellsLoaded }, { "unloading", stats.CellsUnloading },
+				{ "pinned", stats.CellsPinned }, { "failed", stats.CellsFailed } };
+		}
+
+		// world.status's answer: null without an open world.
+		nlohmann::json DescribeWorldStatus(EditorContext& context, bool listCells, size_t limit)
+		{
+			const EditorWorld* world = context.GetWorld();
+			if (!world)
+				return { { "world", nullptr } };
+			const WorldStreamer& streamer = world->GetStreamer();
+			nlohmann::json cells = DescribeStats(streamer.GetStats());
+			cells["dirty"] = world->GetDirtyCells().size();
+			nlohmann::json result = {
+				{ "world", UUIDToJson(world->GetWorld()) },
+				{ "editLayer", world->GetEditLayer() },
+				{ "visibleLayers", world->GetVisibleLayers() },
+				{ "radiusScale", world->GetRadiusScale() },
+				{ "persistentDirty", world->IsPersistentDirty() },
+				{ "cells", std::move(cells) } };
+			nlohmann::json sources = nlohmann::json::array();
+			for (const WorldStreamingSource& source : streamer.GetSources())
+				sources.push_back({ { "position", { source.Position.x, source.Position.y, source.Position.z } }, { "forward", { source.Forward.x, source.Forward.y, source.Forward.z } } });
+			result["sources"] = std::move(sources);
+			if (const Ref<WorldAsset> asset = world->GetWorldAsset())
+			{
+				result["name"] = asset->GetData().Name;
+				if (listCells)
+				{
+					std::vector<WorldCellState> states;
+					streamer.GetCellStates(states);
+					nlohmann::json list = nlohmann::json::array();
+					for (const WorldCellState& state : states)
+					{
+						if (state.Status == WorldCellStatus::Unloaded && !state.Wanted && !world->IsCellDirty(state.Scene))
+							continue;
+						if (list.size() >= limit)
+							break;
+						nlohmann::json cell = CellKeyJson(asset->GetData(), state.Key);
+						cell["state"] = WorldCellStatusToString(state.Status);
+						cell["entities"] = state.Entities;
+						cell["dirty"] = world->IsCellDirty(state.Scene);
+						cell["pinned"] = state.Pinned;
+						cell["wanted"] = state.Wanted;
+						if (!state.Error.empty())
+							cell["error"] = state.Error;
+						list.push_back(std::move(cell));
+					}
+					result["list"] = std::move(list);
+				}
+			}
+			// While playing: the running game's streaming too.
+			if (context.IsPlaying())
+			{
+				if (const IWorldStreaming* streaming = context.GetActiveScene()->GetService<IWorldStreaming>())
+					result["playing"] = DescribeStats(streaming->GetStats());
+			}
+			return result;
+		}
+
+		// Cells named by key ({layer, x, z}), in a region ({center, radius} or {min: [x, z], max: [x, z]}) of the given layers;
+		// false with the reason for invalid input.
+		bool ReadCells(const EditorWorld& world, const nlohmann::json& parameters, std::vector<WorldCellKey>& outCells, std::string& outError)
+		{
+			const Ref<WorldAsset> asset = world.GetWorldAsset();
+			if (!asset)
+			{
+				outError = "The world is still loading";
+				return false;
+			}
+			const WorldData& data = asset->GetData();
+			auto readLayer = [&](const nlohmann::json& value, uint8_t& out) -> bool
+			{
+				const WorldLayer* layer = value.is_string() ? data.FindLayer(value.get<std::string>()) : nullptr;
+				if (!layer && value.is_number_unsigned() && value.get<uint64_t>() <= 255)
+					layer = data.FindLayer(static_cast<uint8_t>(value.get<uint64_t>()));
+				if (!layer)
+				{
+					outError = fmt::format("The world has no layer {}", value.dump());
+					return false;
+				}
+				out = layer->ID;
+				return true;
+			};
+			if (const nlohmann::json* cells = JsonUtils::Find(parameters, "cells"))
+			{
+				for (const nlohmann::json& cell : *cells)
+				{
+					WorldCellKey key;
+					const nlohmann::json* layer = JsonUtils::Find(cell, "layer");
+					const nlohmann::json* x = JsonUtils::Find(cell, "x");
+					const nlohmann::json* z = JsonUtils::Find(cell, "z");
+					if (!layer || !x || !z || !x->is_number_integer() || !z->is_number_integer() || !readLayer(*layer, key.Layer))
+					{
+						if (outError.empty())
+							outError = "cells: each cell is {layer, x, z}";
+						return false;
+					}
+					key.X = static_cast<int32_t>(std::clamp<int64_t>(x->get<int64_t>(), -WorldCellKey::c_MaxCoordinate, WorldCellKey::c_MaxCoordinate));
+					key.Z = static_cast<int32_t>(std::clamp<int64_t>(z->get<int64_t>(), -WorldCellKey::c_MaxCoordinate, WorldCellKey::c_MaxCoordinate));
+					if (asset->FindCell(key) < 0)
+					{
+						outError = fmt::format("The world has no cell {}", world.DescribeKey(key));
+						return false;
+					}
+					outCells.push_back(key);
+				}
+			}
+			if (const nlohmann::json* region = JsonUtils::Find(parameters, "region"))
+			{
+				std::vector<uint8_t> layers;
+				if (const nlohmann::json* names = JsonUtils::Find(parameters, "layers"))
+				{
+					for (const nlohmann::json& name : *names)
+					{
+						uint8_t layer = 0;
+						if (!readLayer(name, layer))
+							return false;
+						layers.push_back(layer);
+					}
+				}
+				glm::dvec2 minimum(0.0);
+				glm::dvec2 maximum(0.0);
+				const nlohmann::json* center = JsonUtils::Find(*region, "center");
+				const nlohmann::json* radius = JsonUtils::Find(*region, "radius");
+				const nlohmann::json* min = JsonUtils::Find(*region, "min");
+				const nlohmann::json* max = JsonUtils::Find(*region, "max");
+				if (center && radius && center->is_array() && center->size() == 3 && radius->is_number() && radius->get<double>() >= 0.0)
+				{
+					const double r = radius->get<double>();
+					minimum = glm::dvec2((*center)[0].get<double>() - r, (*center)[2].get<double>() - r);
+					maximum = glm::dvec2((*center)[0].get<double>() + r, (*center)[2].get<double>() + r);
+				}
+				else if (min && max && min->is_array() && max->is_array() && min->size() == 2 && max->size() == 2)
+				{
+					minimum = glm::dvec2((*min)[0].get<double>(), (*min)[1].get<double>());
+					maximum = glm::dvec2((*max)[0].get<double>(), (*max)[1].get<double>());
+				}
+				else
+				{
+					outError = "region: {center: [x, y, z], radius} or {min: [x, z], max: [x, z]}";
+					return false;
+				}
+				for (const WorldCell& cell : data.Cells)
+				{
+					if (!layers.empty() && std::find(layers.begin(), layers.end(), cell.Layer) == layers.end())
+						continue;
+					const WorldCellSquare square = WorldGrid::CellBounds(*data.FindLayer(cell.Layer), data.GridOrigin, cell.X, cell.Z);
+					if (square.Max.x >= minimum.x && square.Min.x <= maximum.x && square.Max.y >= minimum.y && square.Min.y <= maximum.y)
+						outCells.push_back(cell.GetKey());
+				}
+			}
+			return true;
+		}
+
+		nlohmann::json DescribeCells(const EditorWorld& world, const std::vector<WorldCellKey>& keys)
+		{
+			nlohmann::json cells = nlohmann::json::array();
+			const Ref<WorldAsset> asset = world.GetWorldAsset();
+			std::vector<WorldCellState> states;
+			world.GetStreamer().GetCellStates(states);
+			for (const WorldCellKey& key : keys)
+			{
+				nlohmann::json cell = CellKeyJson(asset->GetData(), key);
+				const auto state = std::find_if(states.begin(), states.end(), [&](const WorldCellState& item) { return item.Key == key; });
+				cell["state"] = state != states.end() ? WorldCellStatusToString(state->Status) : "Unloaded";
+				cell["entities"] = state != states.end() ? state->Entities : 0;
+				cells.push_back(std::move(cell));
+			}
+			return cells;
+		}
 
 		nlohmann::json DescribeLayers(const WorldData& data)
 		{
@@ -203,6 +385,144 @@ namespace Strata
 						{ "warnings", std::move(warnings) } });
 				});
 			}, EditorCommandKind::Edit });
+
+		registry.Register({ "world.status",
+			"The world the editor edits (null when the edited scene is no world's persistent scene): its edit layer, visible layers and "
+			"radius scale (world.edit), the source (the editor camera), its cells' counts (wanted, loading, loaded, unloading, pinned, failed, "
+			"dirty: changed since saved) and whether the persistent scene is dirty; with cells: true, the cells that are not plain unloaded ones, at "
+			"most limit (state, entities, dirty, pinned, wanted, error). While playing, playing has the running game's streaming counts.",
+			ObjectSchema({ { "cells", BoolSchema("List the cells (default false)") }, { "limit", IntegerSchema("Most cells listed (default 1000)", 1, 100000) } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				CommandArguments arguments(parameters);
+				const bool cells = arguments.GetBool("cells", false);
+				const int64_t limit = arguments.GetInt("limit", 1000, 1, 100000);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				return EditorCommandResult::Ok(DescribeWorldStatus(context, cells, static_cast<size_t>(limit)));
+			}, EditorCommandKind::Query, EditorCommandResults::Session });
+
+		registry.Register({ "world.edit",
+			"How the editor edits the open world, for the session: editLayer, the layer new top-level entities go into (a layer's name, or "
+			"\"Persistent\" for the persistent scene, the default); visibleLayers, the layers it streams (empty: all); radiusScale, a factor of "
+			"every layer's streaming distance around the editor camera (0.1-10, default 1). Returns world.status.",
+			ObjectSchema({ { "editLayer", StringSchema("A layer's name or \"Persistent\"") },
+				{ "visibleLayers", { { "type", "array" }, { "items", { { "type", "string" } } }, { "description", "Layer names (empty: all)" } } },
+				{ "radiusScale", NumberSchema("Factor of the layers' streaming distances (0.1-10)") } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				EditorWorld* world = context.GetWorld();
+				if (!world)
+					return EditorCommandResult::Fail("The edited scene is no world's persistent scene (scene.open one, or world.create)");
+				CommandArguments arguments(parameters);
+				const std::string editLayer = arguments.GetString("editLayer", world->GetEditLayer());
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				std::optional<std::vector<std::string>> visible;
+				if (const nlohmann::json* layers = JsonUtils::Find(parameters, "visibleLayers"))
+				{
+					if (!layers->is_array())
+						return EditorCommandResult::InvalidParameters("visibleLayers: an array of layer names");
+					visible.emplace();
+					for (const nlohmann::json& layer : *layers)
+					{
+						if (!layer.is_string())
+							return EditorCommandResult::InvalidParameters("visibleLayers: an array of layer names");
+						visible->push_back(layer.get<std::string>());
+					}
+				}
+				std::optional<float> radiusScale;
+				if (const nlohmann::json* scale = JsonUtils::Find(parameters, "radiusScale"))
+				{
+					if (!scale->is_number() || scale->get<double>() < 0.1 || scale->get<double>() > 10.0)
+						return EditorCommandResult::InvalidParameters("radiusScale: a number from 0.1 to 10");
+					radiusScale = scale->get<float>();
+				}
+				// Checked before anything changes.
+				const Ref<WorldAsset> asset = world->GetWorldAsset();
+				if ((editLayer != EditorWorld::c_PersistentLayer || visible) && !asset)
+					return EditorCommandResult::Fail("The world is still loading; try again in a moment");
+				if (editLayer != EditorWorld::c_PersistentLayer && !asset->GetData().FindLayer(editLayer))
+					return EditorCommandResult::InvalidParameters(fmt::format("The world has no layer '{}'", editLayer));
+				if (visible)
+				{
+					for (const std::string& layer : *visible)
+					{
+						if (!asset->GetData().FindLayer(layer))
+							return EditorCommandResult::InvalidParameters(fmt::format("The world has no layer '{}'", layer));
+					}
+				}
+				world->SetEditLayer(editLayer);
+				if (visible)
+					world->SetVisibleLayers(std::move(*visible));
+				if (radiusScale)
+					world->SetRadiusScale(*radiusScale);
+				return EditorCommandResult::Ok(DescribeWorldStatus(context, false, 0));
+			}, EditorCommandKind::Session });
+
+		registry.Register({ "world.loadCells",
+			"Loads cells of the open world and keeps them (pinned) until unpinned: cells by key ([{layer, x, z}], layer by name or ID) or in a "
+			"region ({center: [x, y, z], radius} or {min: [x, z], max: [x, z]}, of the given layers or all). pin (default true): false loads them "
+			"without keeping them (they go when the camera leaves). unpin: cells to let go; unpinAll: let every pinned cell go. wait: answer once "
+			"the cells are loaded (or failed). Returns {cells: [{layer, x, z, state, entities}]}.",
+			ObjectSchema({ { "cells", { { "type", "array" }, { "description", "Cells: [{layer, x, z}]" } } },
+				{ "region", AnyObjectSchema("{center: [x, y, z], radius} or {min: [x, z], max: [x, z]}") },
+				{ "layers", { { "type", "array" }, { "items", { { "type", "string" } } }, { "description", "The region's layers (default: all)" } } },
+				{ "pin", BoolSchema("Keep the cells loaded (default true)") },
+				{ "unpin", { { "type", "array" }, { "description", "Cells to let go: [{layer, x, z}]" } } },
+				{ "unpinAll", BoolSchema("Let every pinned cell go") },
+				{ "wait", BoolSchema("Answer once the cells are loaded") } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				EditorWorld* world = context.GetWorld();
+				if (!world)
+					return EditorCommandResult::Fail("The edited scene is no world's persistent scene (scene.open one, or world.create)");
+				CommandArguments arguments(parameters);
+				const bool pin = arguments.GetBool("pin", true);
+				const bool unpinAll = arguments.GetBool("unpinAll", false);
+				const bool wait = arguments.GetBool("wait", false);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				std::vector<WorldCellKey> cells;
+				std::vector<WorldCellKey> unpinned;
+				std::string error;
+				if (!ReadCells(*world, parameters, cells, error))
+					return EditorCommandResult::InvalidParameters(error);
+				if (const nlohmann::json* unpin = JsonUtils::Find(parameters, "unpin"))
+				{
+					if (!ReadCells(*world, { { "cells", *unpin } }, unpinned, error))
+						return EditorCommandResult::InvalidParameters(error);
+				}
+				if (unpinAll)
+					world->UnpinAllCells();
+				for (const WorldCellKey& key : unpinned)
+					world->UnpinCell(key);
+				// Loaded through a pin either way; without pin, the pin goes once they are in.
+				for (const WorldCellKey& key : cells)
+					world->PinCell(key);
+				if (!wait && pin)
+					return EditorCommandResult::Ok({ { "cells", DescribeCells(*world, cells) } });
+				return EditorCommandResult::Defer([cells, pin, scene = world->GetWorld()](EditorContext& pollContext) -> std::optional<EditorCommandResult>
+				{
+					EditorWorld* current = pollContext.GetWorld();
+					if (!current || current->GetWorld() != scene)
+						return EditorCommandResult::Fail("The world was closed before its cells were in");
+					std::vector<WorldCellState> states;
+					current->GetStreamer().GetCellStates(states);
+					for (const WorldCellKey& key : cells)
+					{
+						const auto state = std::find_if(states.begin(), states.end(), [&](const WorldCellState& item) { return item.Key == key; });
+						if (state == states.end() || (state->Status != WorldCellStatus::Loaded && state->Status != WorldCellStatus::Failed))
+							return std::nullopt;
+					}
+					if (!pin)
+					{
+						for (const WorldCellKey& key : cells)
+							current->UnpinCell(key);
+					}
+					return EditorCommandResult::Ok({ { "cells", DescribeCells(*current, cells) } });
+				});
+			}, EditorCommandKind::Session });
 
 		registry.Register({ "world.info",
 			"Describes a world: its name, persistent scene and grid origin, its layers (id, name, cell size and streaming distance in meters, "

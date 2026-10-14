@@ -47,6 +47,7 @@ namespace Strata
 		SceneLoadOptions loadOptions;
 		loadOptions.Priority = options.Priority;
 		loadOptions.RequiredProgress = options.RequiredProgress;
+		loadOptions.Reload = options.Reload;
 		Scope<SceneLoadRequest> request = CreateScope<SceneLoadRequest>(SceneLoader::LoadAsync(scene, loadOptions));
 		if (request->GetState() == SceneLoadState::Failed)
 		{

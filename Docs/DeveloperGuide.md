@@ -1480,7 +1480,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - **`world.cook`** (`Editor/EditorWorldCommands.cpp`, deferred: it reads cells off the frame) measures a world's cells into
   its index (entities, bodies, bounds, closure bytes, `MaxBodiesInRadius`), re-reading only cells whose files changed; it
   fails, writing nothing, on entity IDs cells share; `apply` (default true) also sets the persistent scene's capacity
-  when it is open in edit mode (else a warning; an explicit `apply: true` fails). **`world.info`** describes a world, its layers and how many cells its index misses.
+  when it is open in edit mode (else a warning; an explicit `apply: true` fails). **`world.info`** describes a world,
+  its layers and how many cells its index misses.
+- **`world.status`**, **`world.edit`** and **`world.loadCells`** (`Editor/EditorWorldCommands.cpp`) drive the world the editor
+  edits (`Editor/EditorWorld.h`): its cells by state and dirty documents; the session's edit layer, visible layers and
+  radius scale; cells loaded by key or region and kept (pinned) until let go.
 - **`physics.stats`** (`Editor/EditorWorldCommands.cpp`, a query whose results follow the session) reports the running
   game's physics (`PhysicsSystem::GetStats` and `IPhysicsCapacity`): bodies by type, awake ones, character controllers and
   the body slots in use; capacities and the megabytes they reserve; bodies waiting for a slot (a world at its growth limit)

@@ -106,6 +106,9 @@ namespace Strata
 		// The World asset, once it is loaded (null before, and for a handle that is not a world).
 		Ref<WorldAsset> GetWorldAsset() const;
 
+		// Whether cells load with SubSceneOptions::Reload (the editor reads cells as their files are now).
+		void SetReloadCells(bool reload) { m_ReloadCells = reload; }
+
 		// This update's sources (the owner gathers them every update).
 		void SetSources(std::span<const WorldStreamingSource> sources);
 		const std::vector<WorldStreamingSource>& GetSources() const { return m_Sources; }
@@ -191,6 +194,7 @@ namespace Strata
 		std::vector<uint64_t> m_InFlight;                 // Keys of the Loading and Unloading cells
 		std::unordered_set<uint64_t> m_Wanted;            // The last evaluation's wanted cells
 		bool m_Dirty = true;
+		bool m_ReloadCells = false;
 		bool m_HasEvaluated = false;
 		bool m_AdoptPending = false;   // AdoptLoadedCells was called before the world was loaded
 		uint32_t m_FailedCells = 0;    // Records in state Failed

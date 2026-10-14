@@ -133,7 +133,7 @@ namespace
 		"script.get", "script.list", "script.status",
 		"selection.get",
 		"viewport.capture", "viewport.getSettings",
-		"world.info",
+		"world.info", "world.status",
 	};
 	constexpr std::string_view c_SessionCommands[] = {
 		"animation.preview",
@@ -148,13 +148,14 @@ namespace
 		"script.open", "script.setExternalEditor",
 		"selection.set",
 		"viewport.setSettings",
+		"world.edit", "world.loadCells",
 	};
 	// Queries whose results show what the editor's session holds (EditorCommandResults::Session): replays never bind IDs
 	// from them.
 	constexpr std::string_view c_SessionResultCommands[] = {
 		"asset.stats", "camera.get", "edit.history", "editor.activity", "editor.perf", "editor.recentProjects", "editor.status", "input.state",
 		"log.read", "physics.stats", "play.state", "project.exportStatus", "scene.loadStatus", "scene.recoveryStatus", "script.status", "selection.get",
-		"viewport.getSettings",
+		"viewport.getSettings", "world.status",
 	};
 
 	template<size_t N>

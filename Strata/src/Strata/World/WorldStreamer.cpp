@@ -605,6 +605,7 @@ namespace Strata
 		const WorldCell& cell = world.GetData().Cells[static_cast<size_t>(index)];
 		SubSceneOptions options;
 		options.Priority = candidate.High ? AssetPriority::High : AssetPriority::Normal;
+		options.Reload = m_ReloadCells;
 		std::string error;
 		const SubSceneID id = m_Scene.LoadSubScene(cell.Scene, options, &error);
 		CellRecord record;

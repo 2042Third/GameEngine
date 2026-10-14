@@ -2037,6 +2037,23 @@ how many cells changed since its index was made. An export cooks every world of 
 like an import's result (no undo step, only when they changed), so the packed World assets carry them; games then size
 their physics from them when they start (see A world's start).
 
+**The editor's world** (`StrataEditor/src/Editor/EditorWorld.h`). When the edited scene is a world's persistent scene
+(its first active `WorldComponent` names a registered World asset), `EditorContext::ResetScene` attaches an
+`EditorWorld` (`EditorContext::GetWorld`; a WorldComponent naming no world of the project logs one warning and the scene
+is edited as a plain one). It streams the cells around the editor camera with a `WorldStreamer` in edit mode, before the
+scene's update advances the sub-scenes (stage `World.Streaming`): each layer's distance times the radius scale, the
+visible layers only, cells read as their files are now (`SubSceneOptions::Reload`). It keeps loaded the cells some reason
+needs (pins: those `world.loadCells` pins, those holding selected entities, those undo steps asked for through the
+scene's `ISceneCellLoader` service, until the next save, and dirty ones). As an `UndoStackObserver` it marks the documents
+every step touches dirty: the cells and the persistent scene of the states before and after (an entity moved between
+cells dirties both; descendants count for their top-level ancestor's document), the persistent scene for a settings
+step, everything loaded for a step only a snapshot describes. Undo steps carry membership: `EntityState::Cell` is the
+scene asset of a top-level entity's sub-scene, restored through `Scene::SetSubSceneOf`, and `SceneEdit::CheckCells`
+fails a step whose cell is not loaded before anything changes ("it is loading now, undo again once it is in"); the
+recovery journal records `Cell` too. `world.status` describes it (cells by state, dirty documents, edit settings, the
+cell list), `world.edit` sets the edit layer, visible layers and radius scale for the session, and `world.loadCells`
+loads cells by key or region, pinned until let go (`wait` answers once they are in).
+
 ## Scripting
 
 Rules for the ABI, host functions and the SDK are in AGENTS.md and DeveloperGuide.md, "Scripting"; writing scripts

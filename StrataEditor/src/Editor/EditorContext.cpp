@@ -3,6 +3,7 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/ProjectSamples.h"
 #include "Editor/ScriptProject.h"
+#include "Editor/EditorWorld.h"
 #include "Editor/WorldCook.h"
 
 #include <Strata/Asset/AssetDependencies.h>
@@ -341,6 +342,8 @@ namespace Strata
 		}
 		CancelSceneLoad();
 		Stop();
+		// The world reads the project's assets: it goes before them.
+		m_World.reset();
 		const bool hadProject = m_Project != nullptr;
 		if (hadProject)
 		{
@@ -404,10 +407,14 @@ namespace Strata
 		m_Viewport.StoreSceneCamera(m_SceneHandle);
 		m_PendingFrame.reset();
 		m_AnimationPreview.reset(); // Of the scene that goes, which it refers to: before the scene is released
+		m_World.reset();             // Likewise
 		Ref<Scene> previous = std::exchange(m_EditScene, std::move(scene));
 		m_SceneHandle = handle;
 		ClearSelection();
 		m_UndoStack.Clear();
+		// A world's persistent scene streams its cells around the editor camera.
+		if (m_AssetManager)
+			m_World = EditorWorld::Attach(*m_AssetManager, *m_EditScene, m_UndoStack);
 		// The scene that goes is destroyed off the frame (a million entities take tens of milliseconds).
 		Scene::ReleaseInBackground(std::move(previous));
 		const auto [sceneFile, scenePath] = GetSceneFile(handle);
@@ -1821,6 +1828,13 @@ namespace Strata
 			// rolled back (the opened scene is caught up with once it is in).
 			if (!IsSceneLoading())
 				m_PrefabSync.Update(*this);
+			// The world's cells around the editor camera; the scene's update below advances their loads and unloads.
+			if (m_World)
+			{
+				ST_PROFILE_STAGE("World.Streaming");
+				const EditorCamera& camera = m_Viewport.GetCamera();
+				m_World->Update(camera.GetPosition(), camera.GetForward(), m_Selection);
+			}
 			m_EditScene->OnUpdateEditor(timestep, &budget);
 		}
 		// Before the viewports render: previews whose assets arrived get their poses.
