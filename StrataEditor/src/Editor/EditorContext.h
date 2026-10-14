@@ -682,6 +682,7 @@ namespace Strata
 		Ref<GameExport> m_GameExport;
 		bool m_GameExportNotified = false; // Its outcome was posted (EditorNotifications, NotifyExportFinished)
 		EditorNotifications m_Notifications;
+		uint64_t m_BuildNotification = 0; // The running script build's "Building scripts" toast, which its outcome replaces
 		ScriptBuildLoad m_LastScriptBuildLoad;
 		std::optional<ScriptFault> m_LastScriptFault;
 		uint64_t m_PlayBuildID = 0;

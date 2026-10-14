@@ -1741,7 +1741,7 @@ namespace Strata
 		notification.Title = "Building scripts";
 		notification.Message = fmt::format("{} (output in the Console)", m_Project->GetScriptModuleName());
 		notification.ShowConsole = true;
-		m_Notifications.Post(std::move(notification));
+		m_BuildNotification = m_Notifications.Post(std::move(notification));
 		return true;
 	}
 
@@ -1824,7 +1824,9 @@ namespace Strata
 			notification.Title = m_LastScriptBuildLoad.Reloaded ? "Scripts built and reloaded" : "Scripts built";
 			notification.Message = fmt::format("{:.1f} s", result.Seconds);
 		}
-		m_Notifications.Post(std::move(notification));
+		// In the place of "Building scripts", when it still shows: one toast that changes, not two side by side.
+		m_Notifications.Replace(m_BuildNotification, std::move(notification));
+		m_BuildNotification = 0;
 	}
 
 	bool EditorContext::StopOnScriptFault()

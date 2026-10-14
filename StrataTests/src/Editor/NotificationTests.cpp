@@ -92,6 +92,35 @@ TEST_SUITE("Editor.Notifications")
 		CHECK(notifications.IsEmpty());
 	}
 
+	TEST_CASE("Replace shows a notification in the place of another, and posts it when that one is gone")
+	{
+		EditorNotifications notifications;
+		const uint64_t first = notifications.Post(Make(NotificationLevel::Info, "First"));
+		const uint64_t building = notifications.Post(Make(NotificationLevel::Info, "Building scripts"));
+		const uint64_t last = notifications.Post(Make(NotificationLevel::Warning, "Last"));
+		const auto before = notifications.GetActive()[1].Expires;
+		const uint64_t version = notifications.GetVersion();
+
+		CHECK(notifications.Replace(building, Make(NotificationLevel::Success, "Scripts built")) == building);
+		REQUIRE(notifications.GetActive().size() == 3);
+		const EditorNotification& replaced = notifications.GetActive()[1];
+		CHECK(replaced.Id == building);
+		CHECK(replaced.Title == "Scripts built");
+		CHECK(replaced.Level == NotificationLevel::Success);
+		CHECK(replaced.Expires >= before);
+		CHECK(notifications.GetVersion() != version);
+		CHECK(notifications.GetActive()[0].Id == first);
+		CHECK(notifications.GetActive()[2].Id == last);
+
+		// Gone (dismissed, expired): posted as a new one.
+		notifications.Dismiss(building);
+		const uint64_t posted = notifications.Replace(building, Make(NotificationLevel::Error, "Script build failed"));
+		CHECK(posted != building);
+		REQUIRE(notifications.GetActive().size() == 3);
+		CHECK(notifications.GetActive().back().Id == posted);
+		CHECK(notifications.Replace(0, Make(NotificationLevel::Info, "Again")) != 0);
+	}
+
 	TEST_CASE("Notifications of a group merge into one that shows the latest and counts them all")
 	{
 		EditorNotifications notifications;

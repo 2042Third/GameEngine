@@ -380,6 +380,18 @@ TEST_SUITE("Editor.Scripts")
 		harness.Run("script.setField", { { "entity", id }, { "class", "Faulty" }, { "field", "Fault" }, { "value", "" } });
 		std::string error;
 		REQUIRE_MESSAGE(harness.Context.BuildScripts(&error), error);
+		// The person hears that the build started, then how it ended, in the same toast.
+		const std::deque<EditorNotification>& notifications = harness.Context.GetNotifications().GetActive();
+		const auto find = [&notifications](NotificationLevel level, std::string_view title)
+		{
+			return std::find_if(notifications.begin(), notifications.end(), [&](const EditorNotification& notification)
+			{
+				return notification.Level == level && notification.Title.starts_with(title);
+			});
+		};
+		const auto building = find(NotificationLevel::Info, "Building scripts");
+		REQUIRE(building != notifications.end());
+		const uint64_t toast = building->Id;
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
 		while (harness.Context.GetScriptBuilder().IsRunning() && std::chrono::steady_clock::now() < deadline)
 		{
@@ -391,17 +403,14 @@ TEST_SUITE("Editor.Scripts")
 		REQUIRE_MESSAGE(result.Success, result.Error);
 		CHECK_FALSE(result.ModuleChanged);
 		CHECK(harness.Context.GetLastScriptBuildLoad().Loaded);
-		// The person hears that the build started and how it ended.
-		const std::deque<EditorNotification>& notifications = harness.Context.GetNotifications().GetActive();
-		const auto posted = [&notifications](NotificationLevel level, std::string_view title)
+		CHECK(find(NotificationLevel::Info, "Building scripts") == notifications.end());
+		const auto built = find(NotificationLevel::Success, "Scripts built and reloaded"); // The crashed module loaded again
+		REQUIRE(built != notifications.end());
+		CHECK(built->Id == toast);
+		CHECK(std::count_if(notifications.begin(), notifications.end(), [](const EditorNotification& notification)
 		{
-			return std::any_of(notifications.begin(), notifications.end(), [&](const EditorNotification& notification)
-			{
-				return notification.Level == level && notification.Title.starts_with(title);
-			});
-		};
-		CHECK(posted(NotificationLevel::Info, "Building scripts"));
-		CHECK(posted(NotificationLevel::Success, "Scripts built and reloaded")); // The crashed module loaded again
+			return notification.Title.starts_with("Building scripts") || notification.Title.starts_with("Scripts built");
+		}) == 1);
 		CHECK_FALSE(harness.Context.GetScriptEngine()->IsFaulted());
 		harness.Run("play.start", { { "build", false } }); // The stand-in for CMake leaves the module older than the sources
 		harness.Frames(2);

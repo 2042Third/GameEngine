@@ -2121,11 +2121,13 @@ is the `strata-scripting` skill. The layers:
   (`EditorNotification`: level, title, message, the journal entry, the asset, whether the Console, the Problems panel or
   the recovery dialog has more): at most `c_MaxActive` (4), identical ones merged with a count, and those of a `Group` merged into one that
   shows the latest (a post may stand for several: `Count`), each expiring after its level's lifetime (`Expire`,
-  `KeepAlive` while hovered). Feeds: `NotifyCommandOutcome` for commands of the UI (`RunEditorCommand`, the runner when
+  `KeepAlive` while hovered); `Replace(id, notification)` shows one in the place of another, keeping its id and
+  restarting its lifetime (posted when that one is gone). Feeds: `NotifyCommandOutcome` for commands of the UI (`RunEditorCommand`, the runner when
   the origin is `CommandSource::UI`: failures and warnings, with `EditorCommandResult::JournalId`, which `Execute` now sets
   for every result; not for a failure a notification of its own announced, `EditorCommandResult::Announced`, which
   `script.build` and `play.start` set when the build they waited for failed: one toast per failure),
-  `EditorContext::BuildScripts` and `OnScriptBuildFinished` (failed with Show Problems, cancelled as information),
+  `EditorContext::BuildScripts` and `OnScriptBuildFinished` (one toast that changes: the outcome replaces "Building
+  scripts", failed with Show Problems, cancelled as information),
   `StopOnScriptFault` (with Show Problems, whose panel leads with the crash), the end of a game
   export (`NotifyExportFinished`, once per export: an export that does not start leaves the announced one), imports that
   failed while nobody waited for them (`NotifyImportFailures`, below), files dropped on the editor that no importer reads
@@ -2136,8 +2138,9 @@ is the `strata-scripting` skill. The layers:
   are kept when it closes, and nothing when the person discarded what could not be kept), assets and folders an agent or a
   command script moved to the trash (`NotifyAssetsTrashed`, from `asset.delete` and `asset.deleteFolder`, found the same
   way: who did it, that Undo restores them, a warning when `force` left references missing, the command's entry for Show
-  in Activity; the person's own deletes post nothing, as they asked and saw them go) and `EditorLayer` when the
-  recovery dialog closes with changes still on offer. `UI::DrawNotifications` draws them as toasts in one window at the
+  in Activity; the person's own deletes post nothing, as they asked and saw them go), `EditorLayer` when the
+  recovery dialog closes with changes still on offer, and `RecoveryDialog` once per opened project that offers changes
+  discarded on purpose before. `UI::DrawNotifications` draws them as toasts in one window at the
   bottom right of the work area, above the status bar, kept in front without being focused (`BringWindowToDisplayFront`,
   `NoFocusOnAppearing`); it returns at once while there are none. A title too long for its line wraps before the close
   button, and its count then leads the message. Their actions go through the `EditorShell`: Show in Activity, Show Asset
