@@ -8,11 +8,28 @@
 #include <glm/glm.hpp>
 
 #include <optional>
+#include <string>
+#include <string_view>
 
 namespace Strata
 {
 
 	class InputWindow;
+
+	// The pointer as the devices and simulated input give it, before pointer capture (Input::GetPointerState): what the game
+	// UI reads to hit test, hover and click.
+	struct PointerState
+	{
+		glm::vec2 Position = glm::vec2(0.0f); // Input::GetMousePosition
+		glm::vec2 ScrollDelta = glm::vec2(0.0f);
+		uint32_t Down = 0;     // Bit per MouseCode
+		uint32_t Pressed = 0;
+		uint32_t Released = 0;
+
+		bool IsDown(MouseCode button) const { return button < 32 && (Down & (1u << button)) != 0; }
+		bool IsPressed(MouseCode button) const { return button < 32 && (Pressed & (1u << button)) != 0; }
+		bool IsReleased(MouseCode button) const { return button < 32 && (Released & (1u << button)) != 0; }
+	};
 
 	// Polling-style input state, updated from window events once per frame. Main thread only.
 	//
@@ -56,6 +73,19 @@ namespace Strata
 
 		static glm::vec2 GetViewportSize();
 
+		// Text typed during the current input frame, as UTF-8: the devices' (while input is enabled), then simulated input's
+		// (SimulateText), at most c_MaxTypedTextBytes a frame in whole characters (from the first that does not fit, the rest
+		// of the frame's text is dropped, so what is kept is what was typed first).
+		static constexpr size_t c_MaxTypedTextBytes = 1024;
+		static std::string GetTypedText();
+
+		// Pointer capture (the game UI): while set, the game's mouse button queries (IsMouseButtonDown, Pressed, Released) and
+		// GetScrollDelta report nothing, so a click the UI takes never reaches gameplay. GetPointerState reads the pointer
+		// regardless. Reset (and the UI system, when play stops) clears it.
+		static void SetPointerCapture(bool captured);
+		static bool IsPointerCaptured();
+		static PointerState GetPointerState();
+
 		//////////////////////////////////////////////////////////////////////////
 		// Engine integration (application, window backends, editor, automation)
 		//////////////////////////////////////////////////////////////////////////
@@ -84,6 +114,9 @@ namespace Strata
 		static void ProcessMouseMove(const glm::vec2& windowPosition);
 		static void ProcessScroll(const glm::vec2& offset);
 		static void ProcessGamepad(uint32_t gamepad, bool connected, const float* axes, const bool* buttons);
+		// A character typed on the keyboard (the window's character event: layouts, dead keys and input methods applied).
+		// Control characters and invalid code points are ignored.
+		static void ProcessText(uint32_t codepoint);
 
 		//////////////////////////////////////////////////////////////////////////
 		// Simulated input (editor automation, tests)
@@ -101,6 +134,8 @@ namespace Strata
 		// From then on GetMousePosition reports it, and GetMouseDelta includes the moves after the first.
 		static void SimulateMouseMove(const glm::vec2& viewportPosition);
 		static void SimulateScroll(const glm::vec2& offset);
+		// Typed text (UTF-8; malformed sequences become U+FFFD), reported by GetTypedText in the next input frame.
+		static void SimulateText(std::string_view utf8);
 		// A virtual gamepad (the editor's input.gamepadButton and input.gamepadAxis): its button events merge with the device's
 		// like keys, and an axis it holds replaces the device's value until ReleaseSimulatedGamepadAxis. A gamepad simulated
 		// input used counts as connected until ClearSimulated. Axis values are clamped to the axis' range.

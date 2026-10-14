@@ -162,7 +162,11 @@ cursor mode a game asks for (`SetGameCursorMode`, scripts' `Input::SetCursorMode
 is enabled: disabling input gives the cursor back, enabling it applies the game's mode again, so a locked cursor in the
 editor stays in the focused game view (the editor's UI ignores the mouse meanwhile, and the game view says that Shift+F1
 frees it and Ctrl+P stops the game) and Shift+F1 frees it. `InputNames` maps key, button and gamepad control names for
-the `input.*` commands.
+the `input.*` commands. Text typed in an input frame (`GetTypedText`: the window's character events, `ProcessText`, and
+`SimulateText`) comes as UTF-8, at most 1,024 bytes a frame. Pointer capture (`SetPointerCapture`, which the game UI's
+system sets while the UI owns the pointer) hides mouse buttons and scrolling from gameplay queries; `GetPointerState`
+reads the pointer regardless. `UIActions.h` maps keys, gamepad buttons and stick directions to the game UI's fixed
+actions (Submit, Cancel, Up, Down, Left, Right) with key repeat and stick hysteresis.
 
 **Math** (`Math/`). Engine conventions in `Math.h`: right-handed, +Y up, -Z forward, reversed-Z projections, Euler
 angles in degrees. `AABB`, `Frustum`, `Ray`, and `Random` (thread-local generators).
