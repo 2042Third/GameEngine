@@ -148,7 +148,7 @@ TEST_SUITE("Engine.Modules")
 
 	TEST_CASE("Using a registry before the modules are registered fails a verify naming Engine::RegisterBuiltinModules")
 	{
-		for (const char* registry : { "components", "loaders", "importers", "builtin-assets", "systems" })
+		for (const char* registry : { "components", "loaders", "importers", "builtin-assets", "systems", "mesh-geometry" })
 		{
 			const Process::RunResult result = RunHelper({ "--strata-test-helper=unregistered-registry", registry });
 			INFO("Registry ", registry, ", output: ", result.Output);

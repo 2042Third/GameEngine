@@ -4,7 +4,3 @@
 # The list only shrinks. Architecture.Layering fails on a line that matches no forbidden include (remove it), on a
 # forbidden include without a line (fix the dependency instead of adding one), and when the number of lines differs from
 # MaxAllowlistEntries in Layers.json (lower that number when you remove a line).
-
-# Physics takes collision geometry from the renderer's mesh asset; a renderer-independent MeshGeometry asset replaces it
-# (Mesh v2, on the roadmap's deferred list).
-Strata/Physics/AssetMeshProvider.cpp:Strata/Renderer/Mesh.h | mesh-v2 | Mesh collider shapes read the vertices and indices of the renderer's Mesh.

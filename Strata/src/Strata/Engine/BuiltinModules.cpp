@@ -4,6 +4,7 @@
 #include "Strata/Animation/AnimationRegistration.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"
+#include "Strata/Asset/MeshGeometry.h"
 #include "Strata/Audio/AudioRegistration.h"
 #include "Strata/Physics/PhysicsRegistration.h"
 #include "Strata/Reflection/ComponentRegistry.h"
@@ -50,6 +51,7 @@ namespace Strata::Engine
 		AssetLoaderRegistry::BeginRegistration();
 		AssetManagerExtensionRegistry::BeginRegistration();
 		BuiltinAssets::BeginRegistration();
+		MeshGeometryRegistry::BeginRegistration();
 		SceneSystemRegistry::BeginRegistration();
 
 		// Lower layers first. A scene system can only name registered systems in its update order: Physics runs after

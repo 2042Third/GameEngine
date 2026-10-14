@@ -244,7 +244,9 @@ DeveloperGuide.md, "Rendering".
 **Physics** (`Physics/`). `PhysicsSystem` is the "Physics" scene system (Play and Simulate). `PhysicsWorld` builds a
 Jolt world from RigidBody and collider components and steps it; `PhysicsRuntime` reference-counts Jolt's global
 state; `PhysicsJobSystem` runs Jolt's jobs on the engine's worker pool; `PhysicsMeshShapes` cooks mesh collider shapes
-on jobs and caches them process-wide; `AssetMeshProvider` supplies mesh data from the active asset manager.
+on jobs and caches them process-wide; `AssetMeshProvider` supplies mesh data from the active asset manager, reading
+the triangles through `MeshGeometryRegistry` (`Asset/MeshGeometry.h`: the renderer registers the reader of its `Mesh`,
+the full-detail level of every submesh with indices offset by its base vertex), so physics never depends on the renderer.
 `PhysicsTypes.h` has the settings and statistics. Collision layers are the scene's (`SceneSettings::PhysicsLayers`,
 `Scene/PhysicsLayerSettings.h`: names for up to 32 layers and a symmetric matrix of which collide, everything by
 default); `PhysicsSystem` gives its world that matrix, restricted by the default settings' (`GetDefaultSettings`), when
@@ -410,9 +412,10 @@ and third-party headers match no layer and are checked only against the prefixes
 layers and fails on every file that is in no layer or in several, on every forbidden include that is not in
 `StrataTests/Architecture/LayeringAllowlist.txt`, and on every allowlist line that matches nothing. Each allowlist line
 names the include, the roadmap workstream that removes it and the reason; the list holds exactly `MaxAllowlistEntries`
-lines (1: physics reading renderer meshes), so it can only shrink. The application shell, which used to start the
+lines, so it can only shrink; it is empty (`MaxAllowlistEntries` 0). The application shell, which used to start the
 renderer, audio and ImGui and release the project itself, runs engine modules instead (`Core/EngineModule.h`, in App:
-Audio and Project implement it, a downward dependency their `Notes` record). Scripting
+Audio and Project implement it, a downward dependency their `Notes` record), and physics, which used to read the
+renderer's `Mesh`, reads mesh geometry through the registry the renderer fills (`Asset/MeshGeometry.h`). Scripting
 and Audio, which used to include the physics and audio systems, reach them through scene services (see
 [Scene services](#scene-services)); the asset layer, which used to record uploads on the renderer's command list, records
 them into the `AssetUploadContext` the renderer provides through the engine service `IAssetGraphics`
@@ -423,8 +426,8 @@ them into the `AssetUploadContext` the renderer provides through the engine serv
 The engine is extended through registries rather than through code that knows its modules: `ComponentRegistry`
 (components), `AssetLoaderRegistry` (stored bytes to asset objects, and the prefixes partial loads read),
 `AssetImporterRegistry` (source files to stored bytes), `AssetManagerExtensionRegistry` (work modules do for every asset
-manager: the texture streamer), `BuiltinAssets` (objects of the built-in assets) and `SceneSystemRegistry` (runtime
-systems of playing scenes).
+manager: the texture streamer), `BuiltinAssets` (objects of the built-in assets), `MeshGeometryRegistry` (the triangles of
+mesh assets for modules that do not draw them: physics) and `SceneSystemRegistry` (runtime systems of playing scenes).
 `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`) fills them, once per process, before anything reads
 them:
 
@@ -432,7 +435,8 @@ them:
 open the registries (BeginRegistration; not the importers')
 RegisterSceneModule        Scene/SceneRegistration.cpp         components (ComponentRegistration.cpp); Scene, Prefab, Model loaders
 RegisterRendererModule     Renderer/RendererRegistration.cpp   Texture (with its prefix), Mesh, Material, Font loaders; built-in
-                                                               meshes and material; the texture streamer of every manager
+                                                               meshes and material; the texture streamer of every manager;
+                                                               the Mesh geometry reader
 RegisterScriptingModule    Scripting/ScriptingRegistration.cpp "Scripting" system
 RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     "Physics" system
 RegisterAudioModule        Audio/AudioRegistration.cpp         AudioClip loader, "Audio" system

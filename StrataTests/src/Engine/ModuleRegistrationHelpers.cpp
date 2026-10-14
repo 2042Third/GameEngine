@@ -3,6 +3,7 @@
 #include "Strata/Asset/AssetImporter.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"
+#include "Strata/Asset/MeshGeometry.h"
 #include "Strata/Core/Assert.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
@@ -151,6 +152,8 @@ namespace Strata::Tests
 				std::printf("factory: %s\n", BuiltinAssets::RegisterFactory(BuiltinAssets::CubeMesh, []() { return Ref<Asset>(); }) ? "registered" : "refused");
 			else if (registry == "systems")
 				std::printf("%zu systems\n", SceneSystemRegistry::GetAll().size());
+			else if (registry == "mesh-geometry")
+				MeshGeometryRegistry::Register(AssetType::Mesh, [](const Asset&, MeshGeometry&) { return false; });
 			else
 				return 2;
 			// Reaching this means the registry was used without a verify failing.

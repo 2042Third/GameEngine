@@ -11,9 +11,9 @@ namespace Strata::Tests
 	//   custom-component <directory>    registers the asset pipeline and a component through ModuleRegistrationOptions, saves
 	//                                   and reloads a scene with the component there and tries registrations the registry
 	//                                   must refuse; prints what it found and exits with 0 when everything behaved
-	//   unregistered-registry <name>    uses a registry ("components", "loaders", "importers", "builtin-assets" or
-	//                                   "systems") without registering the modules: prints the failed verify's message and
-	//                                   exits with c_VerifyExitCode
+	//   unregistered-registry <name>    uses a registry ("components", "loaders", "importers", "builtin-assets",
+	//                                   "systems" or "mesh-geometry") without registering the modules: prints the failed
+	//                                   verify's message and exits with c_VerifyExitCode
 	//   no-asset-pipeline               registers the modules without options, like a shipped game: prints the loaders and
 	//                                   systems it finds, then uses the importer registry, which fails a verify (the
 	//                                   message is printed, the exit code is c_VerifyExitCode)
