@@ -25,17 +25,33 @@ namespace Strata::UI
 
 	}
 
+	void ComponentDrawResult::Replace(std::string_view property)
+	{
+		if (!Replaces(property) && ReplacedCount < c_MaxReplaced)
+			Replaced[ReplacedCount++] = property;
+	}
+
+	bool ComponentDrawResult::Replaces(std::string_view property) const
+	{
+		for (uint32_t index = 0; index < ReplacedCount; index++)
+		{
+			if (Replaced[index] == property)
+				return true;
+		}
+		return false;
+	}
+
 	void ComponentDrawers::Register(entt::id_type type, ComponentDrawer drawer)
 	{
 		GetDrawers()[type] = std::move(drawer);
 	}
 
-	bool ComponentDrawers::Draw(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info)
+	bool ComponentDrawers::Draw(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, ComponentDrawResult& result)
 	{
 		const auto it = GetDrawers().find(info.TypeId);
 		if (it == GetDrawers().end() || entities.empty())
 			return false;
-		it->second(context, entities, info);
+		it->second(context, entities, info, result);
 		return true;
 	}
 

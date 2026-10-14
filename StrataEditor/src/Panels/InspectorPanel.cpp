@@ -574,9 +574,11 @@ namespace Strata
 			}
 			else
 			{
-				// What the generic rows cannot show (a UIRect's anchor presets and margins), above them.
-				UI::ComponentDrawers::Draw(context, entities, info);
-				DrawProperties(context, entities, info);
+				// What the generic rows cannot show (a UIRect's anchor presets and margins), above them; they leave out what
+				// the drawer showed in its own way.
+				UI::ComponentDrawResult drawn;
+				UI::ComponentDrawers::Draw(context, entities, info, drawn);
+				DrawProperties(context, entities, info, &drawn);
 			}
 			if (info.TypeId == entt::type_id<MeshRendererComponent>().hash())
 				DrawMaterialSection(context, commands, entities);
@@ -626,7 +628,7 @@ namespace Strata
 		ImGui::EndPopup();
 	}
 
-	void InspectorPanel::DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info)
+	void InspectorPanel::DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const UI::ComponentDrawResult* drawn)
 	{
 		if (!UI::BeginPropertyTable("Properties"))
 			return;
@@ -635,7 +637,7 @@ namespace Strata
 		for (size_t index = 0; index < info.Properties.size(); index++)
 		{
 			const PropertyInfo& property = info.Properties[index];
-			if (property.IsHidden() || property.IsTransient())
+			if (property.IsHidden() || property.IsTransient() || (drawn && drawn->Replaces(property.Name)))
 				continue;
 			const std::optional<SharedPropertyValue> shared = GetSharedProperty(entities, info, property);
 			if (!shared)

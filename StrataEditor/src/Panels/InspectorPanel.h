@@ -21,6 +21,11 @@ namespace Strata
 	class EditorCommandRegistry;
 	class EditorContext;
 
+	namespace UI
+	{
+		struct ComponentDrawResult;
+	}
+
 	// The selected entities, drawn from component reflection: every registered component is editable without inspector code
 	// of its own.
 	// - A header with the entity's icon, its name (renamed in place), its active toggle and its ID (with a copy button); for
@@ -47,7 +52,8 @@ namespace Strata
 		void DrawHeader(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
 		void DrawComponent(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
 		void DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
-		void DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info);
+		// The generic rows of a component's properties, without those a component drawer showed (`drawn`).
+		void DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const UI::ComponentDrawResult* drawn = nullptr);
 		// An edit of a rotation shared by several entities: continues the edit in progress, or begins one from the angles the
 		// widget showed (RotationAnglesEdit keeps each entity's own angles through a drag).
 		bool UpdateRotationEdit(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PropertyInfo& property,

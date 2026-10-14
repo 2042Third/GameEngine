@@ -21,6 +21,7 @@
 
 #include <cmath>
 #include <string>
+#include <string_view>
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -90,6 +91,31 @@ namespace
 		Entity Find(const nlohmann::json& id)
 		{
 			return Context().GetActiveScene()->GetEntityByUUID(*UUIDFromJson(id));
+		}
+
+		// Types a number into a drag field (Ctrl+click turns it into text) in place of its value and presses Enter.
+		void TypeNumber(std::string_view probeKey, std::string_view text)
+		{
+			const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(probeKey);
+			REQUIRE_MESSAGE(item.has_value(), "No ", std::string(probeKey), " in the last frame");
+			// The modifier in a frame of its own: ImGui applies input queued after a key change a frame later.
+			Harness.SetKey(ImGuiMod_Ctrl, true);
+			Frames(1);
+			ClickAt(item->GetCenter());
+			Harness.SetKey(ImGuiMod_Ctrl, false);
+			Frames(1);
+			Harness.SetKey(ImGuiMod_Ctrl, true);
+			Harness.SetKey(ImGuiKey_A, true);
+			Frames(1);
+			Harness.SetKey(ImGuiKey_A, false);
+			Harness.SetKey(ImGuiMod_Ctrl, false);
+			Frames(1);
+			Harness.TypeText(text);
+			Frames(1);
+			Harness.SetKey(ImGuiKey_Enter, true);
+			Frames(1);
+			Harness.SetKey(ImGuiKey_Enter, false);
+			Frames(2);
 		}
 	};
 
@@ -230,7 +256,10 @@ TEST_SUITE("Editor.UI.Inspector")
 		const UIScreen screen = UIRectEdit::GetGameScreen(editor.Context());
 		const std::optional<UIRectEdit::Placement> before = UIRectEdit::FindPlacement(*editor.Context().GetActiveScene(), element, screen);
 		REQUIRE(before.has_value());
-		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIRect.Left").has_value()); // Not stretched
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIRect.Left").has_value()); // Not stretched: the generic rows place it
+		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Position").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Size").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIRect.Height").has_value());
 
 		REQUIRE(editor.Click("Inspector.UIRect.AnchorButton"));
 		editor.Frames(2); // The popup appears, sized and placed, in the frames after the click
@@ -241,11 +270,33 @@ TEST_SUITE("Editor.UI.Inspector")
 		const std::optional<UIRectEdit::Placement> after = UIRectEdit::FindPlacement(*editor.Context().GetActiveScene(), element, screen);
 		REQUIRE(after.has_value());
 		CheckSameBox(after->Box, before->Box);
+		// Stretched across: margins place it horizontally, its position and height vertically, in place of the generic
+		// Position and Size rows.
 		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Left").has_value());
 		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Right").has_value());
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIRect.Top").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.UIRect.PosY").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Height").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIRect.PosX").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIRect.Width").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIRect.Position").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIRect.Size").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Pivot").has_value()); // Other generic rows stay
+
+		// The height row sets the height alone, in one undo step.
+		const glm::vec2 stretchedSize = element.GetComponent<UIRectComponent>().Size;
+		const size_t beforeHeight = editor.Context().GetUndoStack().GetPosition();
+		editor.TypeNumber("Inspector.UIRect.Height", "120");
+		CHECK(element.GetComponent<UIRectComponent>().Size.y == doctest::Approx(120.0f));
+		CHECK(element.GetComponent<UIRectComponent>().Size.x == doctest::Approx(stretchedSize.x));
+		CHECK(editor.Context().GetUndoStack().GetPosition() == beforeHeight + 1);
+		editor.Run("edit.undo");
+		CHECK(element.GetComponent<UIRectComponent>().Size.y == doctest::Approx(stretchedSize.y));
+
 		editor.Run("edit.undo");
 		CHECK(UIRectEdit::FindPreset(element.GetComponent<UIRectComponent>()) == UIAnchorPreset::MiddleCenter);
+		editor.Frames(2);
+		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Position").has_value());
 
 		// Outside a canvas the drawer says so.
 		const std::string plain = editor.Run("entity.create", { { "name", "Loose" }, { "components", { { "UIRect", nlohmann::json::object() } } } })["id"].get<std::string>();

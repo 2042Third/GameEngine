@@ -26,8 +26,9 @@ Select an element: the Inspector's **UI Rect** section shows where it is.
   instead, and **Pivot** sets the point it is placed and scaled by to match (a top-left preset: the top-left corner).
 - Anchors decide what happens when the screen changes: a score anchored to the top-right corner stays there on every
   screen; a bar stretched along the bottom edge keeps its margins and grows with the screen.
-- Along a stretched axis the drawer edits the **Left** and **Right** (or **Top** and **Bottom**) margins; **On Screen**
-  shows the rect in pixels at the game's screen.
+- Along a stretched axis the drawer edits the **Left** and **Right** (or **Top** and **Bottom**) margins, and along the
+  other the position and width (or height), in place of **Position** and **Size**; **On Screen** shows the rect in
+  pixels at the game's screen.
 - The canvas's **Scale Mode** decides how the whole UI scales: **Scale With Screen** (the default) lays the UI out for its
   **Reference Resolution** and scales it to the screen (**Match Width Or Height** picks which of the two it follows), so a
   HUD keeps its proportions from 1280x720 to 4K; **Constant Pixel Size** keeps sizes in pixels; **Constant Physical Size**

@@ -1767,11 +1767,14 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   out first).
 - People make the same presets from the Hierarchy's create menu (its UI submenu runs `ui.create`; the world-space text
   preset is "3D Text"). The Inspector draws a component's extras above its generic rows through `UI/ComponentDrawers` (a
-  drawer per component type): the `UIRect` drawer shows a notice outside a canvas or for a canvas, the anchor-preset grid
-  (with its Pivot and Position toggles; `UIRectEdit::ApplyPresetWithUndo`, one undo step that keeps the rect in place),
-  the margins along stretched axes (`SetMarginWithUndo`, a drag merging into one step) and the rect in pixels at the
-  game's screen. With Game UI shown, a click in the viewport (edit mode) selects the topmost UI element that draws
-  something there (`UIRectEdit::PickElement`) before the scene's ID-buffer pick.
+  drawer per component type; the properties it names in its `ComponentDrawResult` are left out of the generic rows): the
+  `UIRect` drawer shows a notice outside a canvas or for a canvas, the anchor-preset grid (with its Pivot and Position
+  toggles; `UIRectEdit::ApplyPresetWithUndo`, one undo step that keeps the rect in place), the rect in pixels at the
+  game's screen and, while every selected rect stretches along an axis, rows per axis in place of Position and Size: the
+  margins along a stretched axis (`SetMarginWithUndo`, a drag merging into one step), the position and width (height)
+  along the other (`SetPropertyComponentsWithUndo` of that axis). With Game UI shown, a click in the viewport (edit
+  mode) selects the topmost UI element that draws something there (`UIRectEdit::PickElement`) before the scene's
+  ID-buffer pick.
 - The 2D canvas mode (`ViewportSettings::CanvasMode`, the viewport's "2D" chip, `viewport.setSettings {canvasMode}`,
   saved per project) is `Panels/CanvasModeView`, called from `ViewportPanel` in one place: the image is letterboxed to
   the shown canvas's reference aspect (`CanvasEdit::FindShownCanvas`, `GetCanvasAspect`) and rendered through the

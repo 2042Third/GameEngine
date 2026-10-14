@@ -2,6 +2,7 @@
 
 #include "Editor/EditorContext.h"
 #include "Editor/GameUIPresets.h"
+#include "Editor/PropertyEdit.h"
 #include "Editor/UIRectEdit.h"
 #include "UI/EditorFonts.h"
 #include "UI/Icons.h"
@@ -15,6 +16,7 @@
 
 #include <imgui.h>
 
+#include <array>
 #include <optional>
 #include <string>
 
@@ -124,7 +126,7 @@ namespace Strata::UI
 
 	}
 
-	void DrawUIRect(EditorContext& context, std::span<const Entity> entities, const ComponentInfo&)
+	void DrawUIRect(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, ComponentDrawResult& result)
 	{
 		const ThemeColors& colors = GetThemeColors();
 		const Entity primary = entities.back();
@@ -165,28 +167,79 @@ namespace Strata::UI
 			ImGui::EndPopup();
 		}
 
-		// Along a stretched axis the rect is placed by its distance to the parent's edges.
+		// Along an axis every selected rect stretches, a rect is placed by its distances to the parent's edges. While one is,
+		// and the selection agrees along the other axis, the rect is placed per axis here instead of by the generic Position
+		// and Size rows: its position and width (height) along the axis it does not stretch.
+		std::array<bool, 2> allStretched = { true, true };
+		std::array<bool, 2> noneStretched = { true, true };
+		for (const Entity entity : entities)
+		{
+			for (int axis = 0; axis < 2; axis++)
+			{
+				const bool stretched = UIRectEdit::IsStretched(entity.GetComponent<UIRectComponent>(), axis);
+				allStretched[axis] = allStretched[axis] && stretched;
+				noneStretched[axis] = noneStretched[axis] && !stretched;
+			}
+		}
+		const PropertyInfo* positionProperty = info.FindProperty("Position");
+		const PropertyInfo* sizeProperty = info.FindProperty("Size");
+		const bool perAxis = placement && positionProperty && sizeProperty && (allStretched[0] || allStretched[1])
+			&& (allStretched[0] || noneStretched[0]) && (allStretched[1] || noneStretched[1]);
+		if (perAxis)
+		{
+			result.Replace("Position");
+			result.Replace("Size");
+		}
 		if (placement)
 		{
 			for (int axis = 0; axis < 2; axis++)
 			{
-				if (!UIRectEdit::IsStretched(rect, axis))
-					continue;
-				const glm::vec2 margins = UIRectEdit::GetMargins(rect, placement->Box, placement->Parent, axis);
-				for (int side = 0; side < 2; side++)
+				if (allStretched[axis])
 				{
-					const char* name = axis == 0 ? (side == 0 ? "Left" : "Right") : (side == 0 ? "Top" : "Bottom");
-					const std::string probe = fmt::format("Inspector.UIRect.{}", name);
-					PropertyLabel(name, "The distance from the parent's edge, in canvas units (positive: inside)", probe);
-					float value = margins[side];
+					const glm::vec2 margins = UIRectEdit::GetMargins(rect, placement->Box, placement->Parent, axis);
+					for (int side = 0; side < 2; side++)
+					{
+						const char* name = axis == 0 ? (side == 0 ? "Left" : "Right") : (side == 0 ? "Top" : "Bottom");
+						const std::string probe = fmt::format("Inspector.UIRect.{}", name);
+						PropertyLabel(name, "The distance from the parent's edge, in canvas units (positive: inside)", probe);
+						float value = margins[side];
+						ImGui::SetNextItemWidth(-FLT_MIN);
+						ImGui::PushID(probe.c_str());
+						const bool changed = ImGui::DragFloat("##Margin", &value, 0.5f, 0.0f, 0.0f, "%.1f");
+						ItemProbe::Record(probe);
+						if (changed)
+						{
+							std::string error;
+							if (!UIRectEdit::SetMarginWithUndo(context, entities, axis, side == 1, value, &error))
+								ST_WARN("UI Rect {}: {}", name, error);
+						}
+						if (ImGui::IsItemDeactivatedAfterEdit())
+							context.GetUndoStack().BreakMerge();
+						ImGui::PopID();
+					}
+					continue;
+				}
+				if (!perAxis)
+					continue;
+				// The pivot's offset from the anchor point, and the size, along this axis (the primary's values: an edit
+				// sets every selected rect's).
+				for (const PropertyInfo* property : { positionProperty, sizeProperty })
+				{
+					const bool position = property == positionProperty;
+					const char* name = position ? (axis == 0 ? "Pos X" : "Pos Y") : (axis == 0 ? "Width" : "Height");
+					const std::string probe = fmt::format("Inspector.UIRect.{}", position ? (axis == 0 ? "PosX" : "PosY") : name);
+					PropertyLabel(name, position ? "The pivot's offset from the anchor point, in canvas units" : "The rect's size, in canvas units", probe);
+					glm::vec2 value = position ? rect.Position : rect.Size;
 					ImGui::SetNextItemWidth(-FLT_MIN);
 					ImGui::PushID(probe.c_str());
-					const bool changed = ImGui::DragFloat("##Margin", &value, 0.5f, 0.0f, 0.0f, "%.1f");
+					const bool changed = ImGui::DragFloat("##Axis", &value[axis], 0.5f, 0.0f, 0.0f, "%.1f");
 					ItemProbe::Record(probe);
 					if (changed)
 					{
+						PropertyComponentMask components = { false, false, false, false };
+						components[static_cast<size_t>(axis)] = true;
 						std::string error;
-						if (!UIRectEdit::SetMarginWithUndo(context, entities, axis, side == 1, value, &error))
+						if (!SetPropertyComponentsWithUndo(context, entities, info, *property, PropertyValue(value), components, &error))
 							ST_WARN("UI Rect {}: {}", name, error);
 					}
 					if (ImGui::IsItemDeactivatedAfterEdit())
