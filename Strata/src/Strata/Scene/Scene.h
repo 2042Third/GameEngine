@@ -450,6 +450,35 @@ namespace Strata
 			return it != m_Services.end() ? static_cast<T*>(it->second) : nullptr;
 		}
 
+		// What a scene system prepared for a loaded scene before it runs (SceneSystemDescriptor::PrepareLoadedScene, physics'
+		// bodies): kept by type until the system takes it when the scene starts. Dropped on the main thread when the scene is
+		// destroyed or let go (ReleaseInBackground), and never copied. Main thread.
+		template<typename T>
+		T* GetPreparedState() const
+		{
+			auto it = m_PreparedStates.find(entt::type_id<T>().hash());
+			return it != m_PreparedStates.end() ? static_cast<PreparedState<T>*>(it->second.get())->Value.get() : nullptr;
+		}
+		template<typename T>
+		T& SetPreparedState(Scope<T> state)
+		{
+			Scope<PreparedState<T>> holder = CreateScope<PreparedState<T>>();
+			holder->Value = std::move(state);
+			T& value = *holder->Value;
+			m_PreparedStates[entt::type_id<T>().hash()] = std::move(holder);
+			return value;
+		}
+		template<typename T>
+		Scope<T> TakePreparedState()
+		{
+			auto it = m_PreparedStates.find(entt::type_id<T>().hash());
+			if (it == m_PreparedStates.end())
+				return nullptr;
+			Scope<T> value = std::move(static_cast<PreparedState<T>*>(it->second.get())->Value);
+			m_PreparedStates.erase(it);
+			return value;
+		}
+
 		//////////////////////////////////////////////////////////////////////////
 		// Assets
 		//////////////////////////////////////////////////////////////////////////
@@ -702,6 +731,19 @@ namespace Strata
 		bool m_AdvancingSubScenes = false;               // UpdateSubScenes runs: unloads wait for its end
 		std::vector<SubSceneID> m_DeferredSubSceneUnloads; // Unloads requested meanwhile
 		std::vector<std::pair<entt::entity, entt::entity>> m_UnloadWalk; // Scratch of CollectUnloadSlice: entity, next child
+
+		// Prepared states (GetPreparedState), by type. Declared after the registry: what they hold (a physics world listening to
+		// the registry) goes before it.
+		struct PreparedStateBase
+		{
+			virtual ~PreparedStateBase() = default;
+		};
+		template<typename T>
+		struct PreparedState final : PreparedStateBase
+		{
+			Scope<T> Value;
+		};
+		std::unordered_map<entt::id_type, Scope<PreparedStateBase>> m_PreparedStates;
 
 		// Declared last: disconnected before anything the handlers use is destroyed.
 		std::vector<entt::scoped_connection> m_Connections;

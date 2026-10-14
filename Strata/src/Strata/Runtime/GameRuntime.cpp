@@ -52,6 +52,9 @@ namespace Strata
 		runtime->m_TimeDilation = options.TimeDilation;
 		if (options.PrepareRenderScenes)
 			runtime->m_LoadOptions.Prepare = &RenderScene::PrepareLoadedScene;
+		// Every scene the game loads will run: its systems prepare it (physics' bodies, a world's first cells), so that its
+		// first frame builds nothing.
+		runtime->m_LoadOptions.PrepareSystems = true;
 		const AssetResidencyBudgets budgets = runtime->m_AssetManager->GetResidencyBudgets();
 		ST_CORE_INFO("Asset budgets: GPU textures {}, GPU buffers {}, CPU {}", DescribeBudget(budgets.GpuTextures), DescribeBudget(budgets.GpuBuffers),
 			DescribeBudget(budgets.Cpu));
@@ -166,7 +169,7 @@ namespace Strata
 		CheckScriptFault();
 	}
 
-	void GameRuntime::UpdateSceneLoads()
+	void GameRuntime::UpdateSceneLoads(SceneWorkBudget* budget)
 	{
 		if (!m_LoadingSceneLoad && !m_SceneLoad)
 			return;
@@ -176,7 +179,7 @@ namespace Strata
 		if (m_LoadingSceneLoad)
 		{
 			SceneLoadRequest& request = m_LoadingSceneLoad->Request;
-			request.Update();
+			request.Update(budget);
 			if (request.GetState() == SceneLoadState::Ready)
 			{
 				StartScene(request.TakeScene(), m_LoadingSceneLoad->Scene, request.GetAssets());
@@ -193,7 +196,7 @@ namespace Strata
 		if (!m_SceneLoad)
 			return;
 		SceneLoadRequest& request = m_SceneLoad->Request;
-		request.Update();
+		request.Update(budget);
 		if (m_Scene)
 			m_Scene->SetSceneLoadProgress(request.GetProgress());
 		if (!request.IsFinished())
@@ -241,9 +244,9 @@ namespace Strata
 		if (m_QuitRequest)
 			return;
 		m_AssetManager->Update();
-		// One budget for the frame's loading work: the running scene's sub-scenes draw from it.
+		// One budget for the frame's loading work: the scene loads' preparation and the running scene's sub-scenes draw from it.
 		SceneWorkBudget budget = SceneWorkBudget::ForFrame(m_Scene ? m_Scene->GetSettings() : SceneSettings());
-		UpdateSceneLoads();
+		UpdateSceneLoads(&budget);
 		if (!m_Scene)
 			return;
 		m_Scene->OnUpdateRuntime(timestep, &budget);

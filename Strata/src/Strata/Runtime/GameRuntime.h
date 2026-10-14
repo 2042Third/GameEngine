@@ -21,6 +21,8 @@
 namespace Strata
 {
 
+	struct SceneWorkBudget;
+
 	struct GameRuntimeOptions
 	{
 		// Budgets for the game's asset manager instead of the defaults (AssetManagerBase::GetDefaultResidencyBudgets), in
@@ -114,8 +116,9 @@ namespace Strata
 			SceneLoadRequest Request;
 		};
 
-		// Advances the loading scene's and the next scene's loads; starts what is ready.
-		void UpdateSceneLoads();
+		// Advances the loading scene's and the next scene's loads, whose preparation draws from `budget` (null: each makes its
+		// own); starts what is ready.
+		void UpdateSceneLoads(SceneWorkBudget* budget = nullptr);
 		// Loads the playing loading scene again, to start it over (unless that load is under way already).
 		void RestartLoadingScene();
 		// Stops the running scene and starts `scene` (of asset `handle`) in its place; what the previous scene used goes a few

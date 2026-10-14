@@ -574,7 +574,7 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Input` | `Input::BeginFrame` and the window's events (`Application::RunFrame`) |
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
-| `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (`SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
+| `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (the systems' `PrepareLoadedScene`: physics' bodies; `SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
 | `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
@@ -724,10 +724,17 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   part would fill the room it needs, to be evicted again (`GetSkippedAssetCount`). A level larger than a budget never
   pushes the pool past it. States: `LoadingScene` (the document is read and the
   scene prepared on the loading worker, its world transforms included), `LoadingDependencies` (the prepared scene is
-  taken and the spent asset unloaded; the rest goes on loading), `Preparing` (enough of it is in, and
-  `SceneLoadOptions::Prepare` works on the scene once per frame until it returns true: owners that render the scenes
-  they load, the editor with a GPU and `StrataRuntime` with a window (`GameRuntimeOptions::PrepareRenderScenes`), build
-  its render proxies so, `RenderScene::PrepareLoadedScene`, see Render scene), `Ready` (the share of the stored bytes it
+  taken and the spent asset unloaded; the rest goes on loading), `Preparing` (enough of it is in, and the scene is
+  prepared once per frame, drawing from the frame's `SceneWorkBudget` that `SceneLoadRequest::Update(budget)` gets from
+  the owner, until every step returned true: with `SceneLoadOptions::PrepareSystems`, which the owners of scenes that
+  will run set (`GameRuntime` for every scene it loads, `EditorContext::SwitchRuntimeScene`; never `scene.open`, whose
+  scene is edited), first the scene systems' hooks (`SceneSystemDescriptor::PrepareLoadedScene`), in update order and
+  one after the other (physics builds the bodies, `PhysicsSystem::PrepareLoadedScene`, a slice of 8,192 owners at a time
+  in parallel, into a world it keeps as the scene's prepared state, `Scene::SetPreparedState`, and adopts when the scene
+  starts, so the frame the scene starts in builds no body); then `SceneLoadOptions::Prepare`: owners that render the
+  scenes they load, the editor with a GPU and `StrataRuntime` with a window (`GameRuntimeOptions::PrepareRenderScenes`),
+  build its render proxies so, `RenderScene::PrepareLoadedScene`, see Render scene; `GetPreparedScene` shows the scene
+  meanwhile), `Ready` (the share of the stored bytes it
   waits for that `SceneLoadOptions::RequiredProgress` asks for is in: all of it by default; a dependency that fails, or is
   deleted meanwhile, counts as finished, the scene shows a fallback for it; and the scene is prepared), `Failed` (the
   scene asset could not be loaded, or was deleted before it was read) and `Cancelled`. `GetProgress` is the
@@ -747,7 +754,8 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   again beside the start scene's load. The new scene replaces the running one between updates, then its systems start and
   the trim of what only the previous scene used is scheduled. The scene it replaces is let go with
   `Scene::ReleaseInBackground`: stopped on the main thread (systems, scripts' `OnDestroy`, bodies, voices; its sub-scene
-  loads and their pins dropped), then destroyed by a background job, since destroying a million entities takes tens of
+  loads and their pins dropped; what systems prepared for it, `Scene::SetPreparedState`, dropped), then destroyed by a
+  background job, since destroying a million entities takes tens of
   milliseconds (also the edited scene `scene.open` replaces, the copy `play.stop` ends and a scene a cancelled or failed
   load had read). The registry signals nothing while it is destroyed and its render scene is plain data, so nothing the
   main thread uses goes with it. The swap, the per-frame advance of the loads and sub-scene slices are the frame
@@ -1644,7 +1652,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   builds every proxy (about 36 ms for 100,000 mesh renderers, Release), so a loaded scene is prepared before it is shown:
   `RenderScene::Prepare` syncs chunks of `c_PrepareChunk` queued entities (`Sync(assets, maxPending)` reads the latest
   queued ones and leaves the others queued) until its budget is spent, and `PrepareLoadedScene`, the scene loads'
-  `SceneLoadOptions::Prepare` where the owner renders, spends `c_PrepareFrameBudget` (4 ms) per frame. The frame that
+  `SceneLoadOptions::Prepare` where the owner renders, spends what is left of the frame's `SceneWorkBudget` (4 ms in all,
+  after the systems' preparation; at least one chunk). The frame that
   swaps the scene in then builds no proxy (the longest frame of opening 20,000 prefab instances of five cubes in the
   editor: 51-52 ms before, 15.5-17 ms with it, most of it the first frame's upload of every instance and the
   Hierarchy's rows).

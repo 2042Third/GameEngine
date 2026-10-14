@@ -25,6 +25,7 @@ namespace Strata
 	class ISkinningPoses;
 	class Mesh;
 	class Scene;
+	struct SceneWorkBudget;
 	struct MeshSkinBinding;
 	struct WorldTransformComponent;
 
@@ -141,11 +142,10 @@ namespace Strata
 		static bool Prepare(Scene& scene, const Ref<AssetManagerBase>& assets, std::chrono::microseconds budget);
 		// The entities Prepare's syncs read at a time: a few hundred microseconds of work.
 		static constexpr uint32_t c_PrepareChunk = 2048;
-		// What a frame spends preparing a loaded scene (PrepareLoadedScene): 100,000 mesh renderers take about ten frames.
-		static constexpr std::chrono::microseconds c_PrepareFrameBudget { 4000 };
 		// SceneLoadOptions::Prepare for owners that render the scenes they load (the editor, StrataRuntime with a window):
-		// Prepare with the active asset manager and c_PrepareFrameBudget.
-		static bool PrepareLoadedScene(Scene& scene);
+		// Prepare with the active asset manager and the time left in the frame's loading budget (at least one chunk; a frame's
+		// 4 ms build about 10,000 mesh renderers' proxies).
+		static bool PrepareLoadedScene(Scene& scene, SceneWorkBudget& budget);
 
 		// Compares every proxy, the spatial index and the instance data with what a rebuild from the scene would produce.
 		// Returns false with the first difference.

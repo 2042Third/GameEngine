@@ -18,6 +18,13 @@ namespace Strata
 	class Scene;
 	struct PhysicsWorldData;
 
+	// How a world builds the bodies of the scene it is created for.
+	enum class PhysicsBuildMode : uint8_t
+	{
+		Immediate = 0, // In the constructor (play starts, tools)
+		Sliced         // Over calls of BuildSlice: a loaded scene prepared before it runs (PhysicsSystem::PrepareLoadedScene)
+	};
+
 	// One rigid body simulation (a Jolt physics system) bound to a scene.
 	//
 	// Bodies are built from entity components:
@@ -88,7 +95,9 @@ namespace Strata
 	public:
 		// Creates the bodies of every entity in the scene and starts listening to its changes. `demand` is what an earlier
 		// world of the scene needed beyond its capacities: automatic capacities are sized for at least that much.
-		explicit PhysicsWorld(Scene& scene, const PhysicsSettings& settings = PhysicsSettings(), const PhysicsCapacityDemand& demand = {});
+		// A Sliced world only starts listening and builds its bodies over BuildSlice calls.
+		explicit PhysicsWorld(Scene& scene, const PhysicsSettings& settings = PhysicsSettings(), const PhysicsCapacityDemand& demand = {},
+			PhysicsBuildMode mode = PhysicsBuildMode::Immediate);
 		~PhysicsWorld(); // Destroys every body without emitting collision events
 
 		// The settings a world is created with for `bodyCount` bodies: capacities given in `settings` stay (clamped to the
@@ -131,6 +140,12 @@ namespace Strata
 
 		// Applies the component, hierarchy-activity and destruction changes recorded since the last call.
 		void ApplyPendingChanges();
+
+		// Builds the bodies of up to `maxOwners` more entities of a Sliced world, in hierarchy order (in parallel, see
+		// "Parallel creation"), with the changes recorded meanwhile; true once every body is built (at once for an Immediate
+		// world). The last call rebuilds the broad phase's trees, as the constructor of an Immediate world does.
+		bool BuildSlice(uint32_t maxOwners);
+		bool IsBuilt() const;
 
 		// What the world holds and has room for, without work that grows with the bodies (see IPhysicsCapacity). The last
 		// update's counters (also PhysicsStats::BodiesAddedLastUpdate, BodiesRemovedLastUpdate, ChangeTime) are those of the

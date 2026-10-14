@@ -7,6 +7,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Runtime/GameRuntime.h"
@@ -43,6 +44,20 @@ namespace
 		scene.CreateEntity("Camera").AddComponent<CameraComponent>().Primary = true;
 		for (size_t index = 0; index < count; index++)
 			scene.CreateEntity("Entity");
+		return ToBytes(JsonUtils::Dump(SceneSerializer::Serialize(scene)));
+	}
+
+	// A scene document named `name` with a camera and `count` static boxes with colliders.
+	std::vector<uint8_t> MakeColliderScene(const std::string& name, size_t count)
+	{
+		Scene scene(name);
+		scene.CreateEntity("Camera").AddComponent<CameraComponent>().Primary = true;
+		for (size_t index = 0; index < count; index++)
+		{
+			Entity box = scene.CreateEntity("Box");
+			box.GetComponent<TransformComponent>().Translation = glm::vec3(static_cast<float>(index % 100) * 2.0f, 0.0f, static_cast<float>(index / 100) * 2.0f);
+			box.AddComponent<BoxColliderComponent>();
+		}
 		return ToBytes(JsonUtils::Dump(SceneSerializer::Serialize(scene)));
 	}
 
@@ -250,6 +265,30 @@ TEST_SUITE("Runtime.Game")
 		REQUIRE_MESSAGE(headless, error);
 		REQUIRE(headless->WaitForStart());
 		CHECK(RenderScene::Find(*headless->GetScene()) == nullptr);
+	}
+
+	TEST_CASE("A game starts and switches to scenes whose physics bodies are built already")
+	{
+		ScopedJobSystem jobs(2, 2);
+		const std::filesystem::path directory = CreateTemporaryDirectory("RuntimePreparedPhysics");
+		const std::filesystem::path manifest = WriteGame(directory, { { 0x1010, MakeColliderScene("Start", 300) }, { 0x1012, MakeColliderScene("Next", 20) } },
+			UUID(0x1010));
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		REQUIRE(game->WaitForStart());
+		// The bodies were built while the scene loaded: the frame it started in built none.
+		const PhysicsSystem* start = game->GetScene()->GetSystem<PhysicsSystem>();
+		REQUIRE(start);
+		CHECK(start->GetStats().BodyCount == 300);
+		CHECK(start->GetStats().PreparedSlices >= 1);
+
+		game->GetScene()->RequestSceneLoad(UUID(0x1012));
+		UpdateUntil(*game, [&]() { return game->GetSceneHandle() == UUID(0x1012); });
+		const PhysicsSystem* next = game->GetScene()->GetSystem<PhysicsSystem>();
+		REQUIRE(next);
+		CHECK(next->GetStats().BodyCount == 20);
+		CHECK(next->GetStats().PreparedSlices >= 1);
 	}
 
 	TEST_CASE("A scene the running scene asks for in every update loads once and replaces it")

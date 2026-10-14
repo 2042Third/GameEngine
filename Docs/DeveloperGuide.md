@@ -1480,8 +1480,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - **`physics.stats`** (`Editor/EditorWorldCommands.cpp`, a query whose results follow the session) reports the running
   game's physics (`PhysicsSystem::GetStats` and `IPhysicsCapacity`): bodies by type, awake ones, character controllers and
   the body slots in use; capacities and the megabytes they reserve; bodies waiting for a slot (a world at its growth limit)
-  or for other reasons; the bodies built and destroyed and the milliseconds spent on them in the last frame; growths;
-  demand; dropped contact steps; the last step's time, the steps run and held. `{running: false}` while editing. While a
+  or for other reasons; the bodies built and destroyed and the milliseconds spent on them in the last frame; the slices
+  the bodies of a scene switched to were built in while it loaded (`preparedSlices`, 0 for bodies built as the scene
+  started: a play copy); growths; demand; dropped contact steps; the last step's time, the steps run and held. `{running: false}` while editing. While a
   game runs, the Streaming panel's Physics section shows the same capacity, read once per frame through
   `IPhysicsCapacity` (constant time), and leads the status bar's pill of bodies without collision.
 

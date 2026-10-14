@@ -1079,6 +1079,13 @@ namespace Strata
 		std::vector<entt::entity> ChangeScratch;                      // See ChangeList::TakeInto
 		std::unordered_set<entt::entity> VisitedOwners;
 
+		// A Sliced world's entities with physics components, in hierarchy order, and how many BuildSlice has handed to the
+		// rounds of changes so far (see PhysicsWorld::BuildSlice).
+		std::vector<entt::entity> PendingBuild;
+		size_t PendingBuildIndex = 0;
+		uint32_t PreparedSlices = 0; // BuildSlice calls that built bodies
+		bool Built = false;
+
 		// Recorded by registry signals, applied by ApplyPendingChanges.
 		ChangeList StructureChanges; // Components added, removed or modified; entity destroyed
 		ChangeList SubtreeChanges;   // Hierarchy changed: re-evaluate every physics entity of the subtree
@@ -4309,7 +4316,7 @@ namespace Strata
 	// PhysicsWorld
 	////////////////////////////////////////////////////////////////////////////////
 
-	PhysicsWorld::PhysicsWorld(Scene& scene, const PhysicsSettings& settings, const PhysicsCapacityDemand& demand)
+	PhysicsWorld::PhysicsWorld(Scene& scene, const PhysicsSettings& settings, const PhysicsCapacityDemand& demand, PhysicsBuildMode mode)
 		: m_Data(CreateScope<PhysicsWorldData>(scene, SanitizeSettings(ResolveCapacities(settings, CountBodyCandidates(scene), demand))))
 	{
 		ST_PROFILE_FUNCTION();
@@ -4348,13 +4355,53 @@ namespace Strata
 		RememberMeshState(data); // Before the bodies read mesh data: later changes are noticed against it
 		for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
 		{
-			if (HasPhysicsComponent(entity))
+			if (!HasPhysicsComponent(entity))
+				continue;
+			if (mode == PhysicsBuildMode::Sliced)
+				data.PendingBuild.push_back(entity.GetHandle());
+			else
 				data.StructureChanges.Add(entity.GetHandle());
 		}
-		ApplyChanges(data);
+		if (mode == PhysicsBuildMode::Immediate)
+		{
+			ApplyChanges(data);
+			// Bodies were inserted in batches; rebuilding the broad phase trees once makes the first queries and steps fast.
+			data.JoltSystem->OptimizeBroadPhase();
+			data.Built = true;
+		}
+	}
 
-		// Bodies were inserted one by one; rebuilding the broad phase trees once makes the first queries and steps fast.
+	bool PhysicsWorld::BuildSlice(uint32_t maxOwners)
+	{
+		ST_PROFILE_FUNCTION();
+		PhysicsWorldData& data = *m_Data;
+		if (data.Built)
+			return true;
+		// The owners of the next entities (colliders merged into an ancestor's body are built with it), handed to a round of
+		// changes with what was recorded meanwhile.
+		uint32_t owners = 0;
+		for (; data.PendingBuildIndex < data.PendingBuild.size() && owners < maxOwners; data.PendingBuildIndex++)
+		{
+			const Entity entity(data.PendingBuild[data.PendingBuildIndex], data.OwnerScene);
+			if (entity.IsValid() && FindBodyOwner(entity) == entity)
+			{
+				data.OwnerRefreshes.Add(entity.GetHandle());
+				owners++;
+			}
+		}
+		ApplyChanges(data);
+		data.PreparedSlices++;
+		if (data.PendingBuildIndex < data.PendingBuild.size())
+			return false;
+		data.PendingBuild = {};
 		data.JoltSystem->OptimizeBroadPhase();
+		data.Built = true;
+		return true;
+	}
+
+	bool PhysicsWorld::IsBuilt() const
+	{
+		return m_Data->Built;
 	}
 
 	PhysicsSettings PhysicsWorld::ResolveCapacities(const PhysicsSettings& settings, uint32_t bodyCount, const PhysicsCapacityDemand& demand)
@@ -4978,6 +5025,7 @@ namespace Strata
 		stats.BuildCount = data.BuildCount;
 		stats.ParallelBuildCount = data.ParallelBuildCount;
 		stats.WakeQueryCount = data.WakeQueryCount;
+		stats.PreparedSlices = data.PreparedSlices;
 		const PhysicsWorldData::UpdateCounters lastUpdate = GetLastUpdateCounters(data);
 		stats.BodiesAddedLastUpdate = lastUpdate.BodiesAdded;
 		stats.BodiesRemovedLastUpdate = lastUpdate.BodiesRemoved;

@@ -503,7 +503,7 @@ namespace Strata
 		return true;
 	}
 
-	std::function<bool(Scene&)> EditorContext::GetScenePreparation()
+	std::function<bool(Scene&, SceneWorkBudget&)> EditorContext::GetScenePreparation()
 	{
 		// The viewport draws a scene from its render proxies: built while the scene waits to replace the shown one, so the
 		// frame that swaps it in builds none (a hundred thousand mesh renderers take tens of milliseconds). Without a GPU
@@ -580,13 +580,13 @@ namespace Strata
 		m_SceneLoadStatus.Seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_SceneLoadStatus.Started).count();
 	}
 
-	void EditorContext::UpdateSceneLoad()
+	void EditorContext::UpdateSceneLoad(SceneWorkBudget* budget)
 	{
 		if (!m_SceneLoad)
 			return;
 		ST_PROFILE_STAGE("Scene.Load");
 		SceneLoadRequest& request = m_SceneLoad->Request;
-		request.Update();
+		request.Update(budget);
 		m_SceneLoadStatus.State = request.GetState();
 		m_SceneLoadStatus.Progress = request.GetProgress();
 		if (!request.IsFinished())
@@ -864,19 +864,21 @@ namespace Strata
 		next->Scene = target;
 		SceneLoadOptions options;
 		options.Prepare = GetScenePreparation();
+		// The scene will run: its systems prepare it too (physics' bodies), so that the swap builds nothing.
+		options.PrepareSystems = true;
 		next->Request = SceneLoader::LoadAsync(target, options);
 		m_RuntimeSceneLoad = std::move(next);
 		m_RuntimeScene->SetSceneLoadProgress(0.0f);
 		return true;
 	}
 
-	void EditorContext::UpdateRuntimeSceneLoad()
+	void EditorContext::UpdateRuntimeSceneLoad(SceneWorkBudget& budget)
 	{
 		if (!m_RuntimeSceneLoad || !m_RuntimeScene)
 			return;
 		ST_PROFILE_STAGE("Scene.Load");
 		SceneLoadRequest& request = m_RuntimeSceneLoad->Request;
-		request.Update();
+		request.Update(&budget);
 		m_RuntimeScene->SetSceneLoadProgress(request.GetProgress());
 		if (!request.IsFinished())
 			return;
@@ -1787,8 +1789,11 @@ namespace Strata
 			if (m_AssetManager->HasImportFailures())
 				NotifyImportFailures();
 		}
+		// One budget for the frame's loading work: a scene being opened, the running game's switch and the updated scene's
+		// sub-scenes draw from it.
+		SceneWorkBudget budget = SceneWorkBudget::ForFrame((m_RuntimeScene ? m_RuntimeScene : m_EditScene)->GetSettings());
 		// A scene being opened replaces the edited one between frames, before anything draws or updates it.
-		UpdateSceneLoad();
+		UpdateSceneLoad(&budget);
 		if (m_GameExport)
 		{
 			m_GameExport->Update();
@@ -1801,11 +1806,9 @@ namespace Strata
 		// An inspected asset that was deleted (also outside the editor) is no longer shown.
 		if (m_InspectedAsset.IsValid() && !AssetManager::IsHandleValid(m_InspectedAsset))
 			InspectEntities();
-		// One budget for the frame's loading work: the updated scene's sub-scenes draw from it.
-		SceneWorkBudget budget = SceneWorkBudget::ForFrame((m_RuntimeScene ? m_RuntimeScene : m_EditScene)->GetSettings());
 		if (m_RuntimeScene)
 		{
-			UpdateRuntimeSceneLoad();
+			UpdateRuntimeSceneLoad(budget);
 			m_RuntimeScene->OnUpdateRuntime(timestep, &budget);
 			// A crashed game stops; one that still runs gets what it asked for.
 			if (!StopOnScriptFault())

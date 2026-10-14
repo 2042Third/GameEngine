@@ -10,6 +10,7 @@
 #include "Strata/Scene/SceneLoader.h"
 #include "Strata/Scene/SceneReadProgress.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scene/SceneWorkBudget.h"
 #include "TestHelpers.h"
 
 #include <algorithm>
@@ -125,7 +126,7 @@ TEST_SUITE("Scene.Loader")
 		};
 		std::vector<Call> calls;
 		SceneLoadOptions options;
-		options.Prepare = [&](Scene& scene)
+		options.Prepare = [&](Scene& scene, SceneWorkBudget&)
 		{
 			Call call { &scene };
 			for (const AssetHandle dependency : fixture.Dependencies)

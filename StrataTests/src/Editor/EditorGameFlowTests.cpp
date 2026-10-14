@@ -32,7 +32,7 @@ namespace
 {
 
 	// A project with two saved scenes: "Levels/One.stscene" (with an entity "Hero", the edited scene) and
-	// "Levels/Two.stscene" (with "Boss").
+	// "Levels/Two.stscene" (with "Boss", a box collider).
 	struct GameFlowProject
 	{
 		EditorContext Context { EditorContextSpecification { false } };
@@ -45,7 +45,8 @@ namespace
 		{
 			Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Flow" } });
 			Material = ToUUID(Run("material.create", { { "path", "Materials/Plain.stmat" } })["asset"]);
-			Run("entity.create", { { "name", "Boss" } });
+			const nlohmann::json boss = Run("entity.create", { { "name", "Boss" } })["id"];
+			Run("component.add", { { "entity", boss }, { "component", "BoxCollider" } });
 			LevelTwo = ToUUID(Run("scene.saveAs", { { "path", "Levels/Two.stscene" } })["scene"]);
 			Run("scene.new");
 			Run("entity.create", { { "name", "Hero" } });
@@ -152,6 +153,10 @@ TEST_SUITE("Editor.GameFlow")
 		CHECK(running->FindEntityByName("Boss").IsValid());
 		CHECK_FALSE(running->FindEntityByName("Hero").IsValid());
 		CHECK_FALSE(running->GetSceneLoadProgress().has_value());
+		// Its physics was built while it loaded, so the frame that swapped it in built no body.
+		const nlohmann::json physics = project.Run("physics.stats");
+		CHECK(physics["bodies"]["total"] == 1);
+		CHECK(physics["preparedSlices"].get<uint32_t>() >= 1);
 
 		// The null handle restarts the scene that runs (Two now), from its asset.
 		running->DestroyEntity(running->FindEntityByName("Boss"));

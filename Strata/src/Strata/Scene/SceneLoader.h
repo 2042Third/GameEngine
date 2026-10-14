@@ -12,6 +12,7 @@ namespace Strata
 {
 
 	class Scene;
+	struct SceneWorkBudget;
 
 	enum class SceneLoadState : uint8_t
 	{
@@ -36,10 +37,14 @@ namespace Strata
 		// Read the scene asset's stored form again even when it is loaded (an editor opens the file as it is now).
 		bool Reload = false;
 		// Work on the loaded scene before it is Ready, a frame's share per call: once enough of what it uses is loaded, Update
-		// calls it once per frame with the scene (state Preparing) until it returns true. Owners that render the scenes they
-		// load build their render proxies so (RenderScene::PrepareLoadedScene), which the frame that shows a scene would
-		// otherwise build all at once. Empty: Ready at once.
-		std::function<bool(Scene& scene)> Prepare;
+		// calls it once per frame with the scene and the frame's budget (state Preparing) until it returns true. Owners that
+		// render the scenes they load build their render proxies so (RenderScene::PrepareLoadedScene), which the frame that
+		// shows a scene would otherwise build all at once. Empty: Ready at once (unless PrepareSystems).
+		std::function<bool(Scene& scene, SceneWorkBudget& budget)> Prepare;
+		// Whether the scene systems prepare the scene too (SceneSystemDescriptor::PrepareLoadedScene, in update order, before
+		// Prepare): for scenes that will run (a game's start scene and switches, the editor's switches in play mode), so that
+		// their first frame builds nothing (physics' bodies, a world's first cells). Off for scenes that are edited.
+		bool PrepareSystems = false;
 	};
 
 	// One asynchronous scene load (SceneLoader::LoadAsync): the scene asset is read into a prepared scene on the loading
@@ -92,7 +97,11 @@ namespace Strata
 		// that fails to load, or is unregistered meanwhile, counts as finished (the scene shows a fallback for it); a scene
 		// asset that fails, or is unregistered before it was read, fails the load. Main thread, once per frame (after the
 		// asset manager's Update).
-		void Update();
+		// `budget` is the frame's loading budget the preparation draws from; null makes one from the scene's settings.
+		void Update(SceneWorkBudget* budget = nullptr);
+		// The scene being prepared (state Preparing; also once Ready, until it is taken), for tools and tests that watch what
+		// its preparation did; null otherwise. Nothing may change it but the preparation.
+		const Scene* GetPreparedScene() const { return m_State == SceneLoadState::Preparing || m_State == SceneLoadState::Ready ? m_Prepared.get() : nullptr; }
 		// The prepared scene, once Ready: the first call takes it (the request keeps its pins), later calls return null.
 		Ref<Scene> TakeScene();
 		// Abandons the load: releases every pin and abandons the loads the request started that have not finished
@@ -104,6 +113,10 @@ namespace Strata
 		friend class SceneLoader;
 
 		void Fail(std::string error);
+		// Runs the systems' preparation hooks from the first that has not finished; true once all did (see PrepareSystems).
+		bool PrepareWithSystems(SceneWorkBudget& budget);
+		// Whether any registered system prepares loaded scenes.
+		static bool HasSystemPreparation();
 	private:
 		std::weak_ptr<AssetManagerBase> m_Manager;
 		AssetHandle m_Scene = UUID::Null();
@@ -118,6 +131,7 @@ namespace Strata
 		mutable float m_ReportedProgress = 0.0f;
 		Ref<Scene> m_Prepared;
 		bool m_Taken = false;
+		size_t m_PreparedSystems = 0; // The systems (SceneSystemRegistry::GetAll) whose preparation finished, in order
 	};
 
 	// Starts asynchronous scene loads from the active asset manager (see SceneLoadRequest). Main thread only.

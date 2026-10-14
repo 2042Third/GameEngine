@@ -147,6 +147,9 @@ namespace Strata
 		// Broad phase queries that woke the bodies around removed, destroyed, moved or reshaped bodies since the world was
 		// created: bodies removed together are woken around in merged regions, so a cell leaving costs a few dozen.
 		uint64_t WakeQueryCount = 0;
+		// The slices a loaded scene's world was built in while its load prepared it, before the scene ran
+		// (PhysicsSystem::PrepareLoadedScene); 0 for a world built when its scene started.
+		uint32_t PreparedSlices = 0;
 	};
 
 	// Triangle data used to build MeshColliderComponent shapes.

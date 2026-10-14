@@ -130,6 +130,8 @@ namespace Strata
 		// Sub-scene loads hold asset requests (main thread only); a compilation still running finishes into its own result.
 		scene->m_SubScenes.clear();
 		scene->m_DeferredSubSceneUnloads.clear();
+		// What systems prepared listens to the registry or holds engine objects (a physics world): it goes here.
+		scene->m_PreparedStates.clear();
 		// What is left are storages and caches nothing else reaches: component values hold no engine objects, and the registry
 		// signals nothing while it is destroyed (its render scene, in the registry's context, is plain data). Whoever lets go
 		// last destroys it: the job, unless someone else still holds the scene.

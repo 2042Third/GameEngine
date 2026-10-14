@@ -55,6 +55,7 @@ namespace Strata
 				{ "addedLastFrame", capacity.AddedLastUpdate },
 				{ "removedLastFrame", capacity.RemovedLastUpdate },
 				{ "changeMsLastFrame", stats.ChangeTime },
+				{ "preparedSlices", stats.PreparedSlices },
 				{ "growths", {
 					{ "count", stats.GrowthCount },
 					{ "lastMs", stats.LastGrowthMs },
@@ -80,7 +81,8 @@ namespace Strata
 			"controllers) and the body slots in use, the world's capacities (maxBodies, maxBodyPairs, maxContactConstraints) and the memory they "
 			"reserve (reservedMB), bodies waiting for a slot (only a world at its growth limit leaves bodies without collision; others grow before "
 			"their next step) and waiting for other reasons (meshes loading, degenerate transforms), the bodies built and destroyed and the "
-			"milliseconds spent on it in the last frame, the world's growths (count, the last one's milliseconds and capacities), what the world "
+			"milliseconds spent on it in the last frame, the slices a switched-to scene's bodies were built in while it loaded (preparedSlices; 0 when they "
+			"were built as the scene started), the world's growths (count, the last one's milliseconds and capacities), what the world "
 			"needed beyond its capacities (demand), steps that dropped contacts, the last step's milliseconds, the steps run, the steps held while "
 			"mesh colliders wait for their meshes, and whether the last step was held. {running: false} while editing; simulating is false while "
 			"a running scene has no physics components.",

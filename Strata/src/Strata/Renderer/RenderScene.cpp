@@ -9,6 +9,7 @@
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneServices.h"
+#include "Strata/Scene/SceneWorkBudget.h"
 
 #include <spdlog/fmt/fmt.h>
 
@@ -216,9 +217,9 @@ namespace Strata
 		return renderScene.GetPendingCount() == 0;
 	}
 
-	bool RenderScene::PrepareLoadedScene(Scene& scene)
+	bool RenderScene::PrepareLoadedScene(Scene& scene, SceneWorkBudget& budget)
 	{
-		return Prepare(scene, AssetManager::GetActive(), c_PrepareFrameBudget);
+		return Prepare(scene, AssetManager::GetActive(), budget.GetRemainingTime());
 	}
 
 	uint32_t RenderScene::Sync(const Ref<AssetManagerBase>& assets, uint32_t maxPending)

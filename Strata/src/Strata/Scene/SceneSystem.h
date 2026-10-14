@@ -15,6 +15,7 @@ namespace Strata
 
 	class Entity;
 	class Scene;
+	struct SceneWorkBudget;
 
 	enum class SceneRuntimeMode : uint8_t
 	{
@@ -83,6 +84,12 @@ namespace Strata
 		bool CallsFixedUpdate = true;
 		bool CallsLateUpdate = true;
 		bool CallsPausedUpdate = true;
+		// Work on a loaded scene before it first runs, while its load is Preparing (SceneLoadOptions::PrepareSystems): called
+		// once per frame with the frame's budget until it returns true; the systems' hooks run in update order, one after the
+		// other (a hook starts once the hooks before it returned true), before the load's own Prepare. The system keeps what
+		// it prepared in the scene (Scene::SetPreparedState) and takes it in OnRuntimeStart; a scene that starts without
+		// preparation (a play copy, tools) is built there as before. Empty: nothing to prepare.
+		std::function<bool(Scene&, SceneWorkBudget&)> PrepareLoadedScene;
 	};
 
 	namespace Detail

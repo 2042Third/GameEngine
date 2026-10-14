@@ -6,6 +6,8 @@
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneReadProgress.h"
+#include "Strata/Scene/SceneSystem.h"
+#include "Strata/Scene/SceneWorkBudget.h"
 
 #include <algorithm>
 #include <array>
@@ -214,7 +216,7 @@ namespace Strata
 		return m_ReportedProgress;
 	}
 
-	void SceneLoadRequest::Update()
+	void SceneLoadRequest::Update(SceneWorkBudget* budget)
 	{
 		if (IsFinished())
 			return;
@@ -277,10 +279,43 @@ namespace Strata
 		}
 
 		if (m_State == SceneLoadState::LoadingDependencies && m_Group.Progress() >= m_Options.RequiredProgress)
-			m_State = m_Options.Prepare ? SceneLoadState::Preparing : SceneLoadState::Ready;
-		// A frame's share of the preparation, from the frame that reached the requirement on.
-		if (m_State == SceneLoadState::Preparing && m_Options.Prepare(*m_Prepared))
-			m_State = SceneLoadState::Ready;
+		{
+			const bool prepares = m_Options.Prepare || (m_Options.PrepareSystems && HasSystemPreparation());
+			m_State = prepares ? SceneLoadState::Preparing : SceneLoadState::Ready;
+		}
+		// A frame's share of the preparation, from the frame that reached the requirement on: the systems' first, then the
+		// owner's.
+		if (m_State == SceneLoadState::Preparing)
+		{
+			SceneWorkBudget ownBudget;
+			if (!budget)
+			{
+				ownBudget = SceneWorkBudget::ForFrame(m_Prepared->GetSettings());
+				budget = &ownBudget;
+			}
+			if (PrepareWithSystems(*budget) && (!m_Options.Prepare || m_Options.Prepare(*m_Prepared, *budget)))
+				m_State = SceneLoadState::Ready;
+		}
+	}
+
+	bool SceneLoadRequest::PrepareWithSystems(SceneWorkBudget& budget)
+	{
+		if (!m_Options.PrepareSystems)
+			return true;
+		const std::vector<SceneSystemDescriptor>& systems = SceneSystemRegistry::GetAll();
+		for (; m_PreparedSystems < systems.size(); m_PreparedSystems++)
+		{
+			const SceneSystemDescriptor& system = systems[m_PreparedSystems];
+			if (system.PrepareLoadedScene && !system.PrepareLoadedScene(*m_Prepared, budget))
+				return false;
+		}
+		return true;
+	}
+
+	bool SceneLoadRequest::HasSystemPreparation()
+	{
+		const std::vector<SceneSystemDescriptor>& systems = SceneSystemRegistry::GetAll();
+		return std::any_of(systems.begin(), systems.end(), [](const SceneSystemDescriptor& system) { return static_cast<bool>(system.PrepareLoadedScene); });
 	}
 
 	Ref<Scene> SceneLoadRequest::TakeScene()
