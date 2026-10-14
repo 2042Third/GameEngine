@@ -39,27 +39,27 @@ int SelectCascade(float viewDepth)
 	return -1;
 }
 
-// Receiver plane depth bias: the gradient of the receiver's light-space depth over the shadow map's uv, from the
-// screen-space derivatives of its world position. Filter samples are compared against the receiver's own depth at
-// their offset rather than at the center, which would let a surface tilted toward the light shadow itself wherever
-// the filter reaches past the depth bias (acne at grazing light angles). Zero when the derivatives are degenerate.
-vec2 ReceiverDepthGradient(mat4 cascadeViewProjection, vec3 positionDx, vec3 positionDy)
+// Receiver plane depth bias: the gradient of the receiver's light-space depth over the shadow map's uv, from the plane
+// through the receiver with its normal (in the cascade's orthographic light clip space the plane's normal is the world
+// normal through the inverse transpose of the projection, the cofactor matrix up to scale). Filter samples are compared
+// against the receiver's own depth at their offset rather than at the center, which would let a surface tilted toward
+// the light shadow itself wherever the filter reaches past the depth bias (acne at grazing light angles). Screen-space
+// derivatives would give the plane too, but they are wrong at silhouettes and depend on how the GPU groups pixels of
+// adjacent triangles into quads, which changes with the order of the draws. Zero for planes along the light.
+vec2 ReceiverDepthGradient(mat4 cascadeViewProjection, vec3 normal)
 {
-	// The cascade projection is orthographic: light-space differences transform without the translation.
-	vec3 lightDx = (cascadeViewProjection * vec4(positionDx, 0.0)).xyz;
-	vec3 lightDy = (cascadeViewProjection * vec4(positionDy, 0.0)).xyz;
-	vec2 uvDx = vec2(0.5, -0.5) * lightDx.xy;
-	vec2 uvDy = vec2(0.5, -0.5) * lightDy.xy;
-	// Solve [uvDx; uvDy] * gradient = (depth change along x, depth change along y).
-	float determinant = uvDx.x * uvDy.y - uvDx.y * uvDy.x;
-	if (abs(determinant) < 1e-24)
+	vec3 column0 = cascadeViewProjection[0].xyz;
+	vec3 column1 = cascadeViewProjection[1].xyz;
+	vec3 column2 = cascadeViewProjection[2].xyz;
+	vec3 lightNormal = cross(column1, column2) * normal.x + cross(column2, column0) * normal.y + cross(column0, column1) * normal.z;
+	if (abs(lightNormal.z) < 1e-6 * length(lightNormal))
 		return vec2(0.0);
-	return vec2(uvDy.y * lightDx.z - uvDx.y * lightDy.z, uvDx.x * lightDy.z - uvDy.x * lightDx.z) / determinant;
+	// On the plane, depth changes by -(n.x dx + n.y dy) / n.z; uv = (0.5 x + 0.5, 0.5 - 0.5 y), so dx = 2 du and dy = -2 dv.
+	return vec2(-2.0 * lightNormal.x, 2.0 * lightNormal.y) / lightNormal.z;
 }
 
-// Fraction of light reaching the surface (1 = fully lit). positionDx and positionDy are the screen-space derivatives of
-// worldPosition (taken in uniform control flow by the caller).
-float SampleDirectionalShadow(vec3 worldPosition, vec3 normal, float viewDepth, vec2 pixel, vec3 positionDx, vec3 positionDy)
+// Fraction of light reaching the surface (1 = fully lit); `normal` is the receiver's geometric normal (facing the viewer).
+float SampleDirectionalShadow(vec3 worldPosition, vec3 normal, float viewDepth, vec2 pixel)
 {
 	int cascade = SelectCascade(viewDepth);
 	if (cascade < 0)
@@ -77,9 +77,9 @@ float SampleDirectionalShadow(vec3 worldPosition, vec3 normal, float viewDepth, 
 	float depthRange = max(cascadeData.y, 1e-6);
 	float receiverDepth = lightPosition.z + u_Frame.ShadowBias.x * cascadeData.x / depthRange;
 
-	// The receiver plane correction is limited to the search distance, so wrong derivatives (at silhouettes, where a
-	// pixel quad spans several surfaces) cannot move the comparison arbitrarily far.
-	vec2 depthGradient = ReceiverDepthGradient(cascadeViewProjection, positionDx, positionDy);
+	// The receiver plane correction is limited to the search distance, so planes nearly along the light (curved receivers'
+	// normals at their silhouettes) cannot move the comparison arbitrarily far.
+	vec2 depthGradient = ReceiverDepthGradient(cascadeViewProjection, normal);
 	float maxCorrection = cascadeData.z / depthRange;
 
 	float texelSize = u_Frame.ShadowParams.y;

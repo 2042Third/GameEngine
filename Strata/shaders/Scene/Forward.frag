@@ -47,10 +47,6 @@ vec3 GetShadingNormal(MaterialData material, vec2 uv)
 
 void main()
 {
-	// Derivatives need uniform control flow: take them before any branch or discard.
-	vec3 positionDx = dFdx(v_WorldPosition);
-	vec3 positionDy = dFdy(v_WorldPosition);
-
 	InstanceData instance = u_Instances[v_InstanceIndex];
 	MaterialData material = u_Materials[instance.MaterialIndex];
 	vec2 uv = TransformUV(material, v_TexCoord);
@@ -91,7 +87,7 @@ void main()
 		if (u_Frame.ShadowParams.w > 0.0)
 		{
 			vec3 geometricNormal = normalize(v_Normal) * (gl_FrontFacing ? 1.0 : -1.0);
-			shadow = SampleDirectionalShadow(v_WorldPosition, geometricNormal, viewDepth, gl_FragCoord.xy, positionDx, positionDy);
+			shadow = SampleDirectionalShadow(v_WorldPosition, geometricNormal, viewDepth, gl_FragCoord.xy);
 		}
 		color += EvaluateLight(surface, -u_Frame.DirectionalLightDirection.xyz, u_Frame.DirectionalLightColor.rgb) * shadow;
 	}
