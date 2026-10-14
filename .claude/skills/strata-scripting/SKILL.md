@@ -120,6 +120,11 @@ ST_SCRIPT_CLASS(Turret)
   the image. Tools play the game with the `input.*` editor commands (simulated input, see the editor automation skill),
   which reach the scripts whether or not the viewport has the focus. Gamepads and the cursor: see
   [Gamepads and the cursor](#gamepads-and-the-cursor).
+- Input timing: `Pressed`/`Released` are transitions since the previous frame, so read them in `OnUpdate` (once per
+  frame); `OnFixedUpdate` runs zero or several times in a frame and would miss or repeat them. Held state (`IsKeyDown`,
+  sticks) is fine in either. Simulated input (`input.*`, `input.sequence`) lasts whole fixed steps of the game, and
+  `play.step` and `input.sequence` run one step per frame: a script that applies held input per fixed step (or scales by
+  the frame's `deltaTime`) behaves the same in tests at any frame rate.
 - `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`.
 - `Log::Info/Warn/Error/Trace(args...)` - arguments are concatenated (`Log::Info("Health ", health)`).
 - `RigidBody` (`GetEntity().GetRigidBody()`), `Physics` (raycasts, overlaps), `Collision` (contact callbacks),

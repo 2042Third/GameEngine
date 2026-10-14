@@ -31,6 +31,13 @@ StrataCLI list                       # the commands this build has; check that i
 - In a source checkout, rebuilding the engine while your editor runs fails (the executable is locked): `scene.save`,
   `editor.quit`, rebuild, `StrataCLI launch --headless --project <dir>` (it reopens the start scene and loads the built
   module).
+- **Note where your work starts.** The editor's activity journal records every command you run (the person sees it in
+  the Activity panel), and section 7 turns your session into a regression script from that point: before your first
+  change, call `editor.activity {"newest": true, "limit": 1}` and keep `journal.latest`.
+- Through MCP only the `core` toolset is listed at first; `strata_describe` lists the others and `strata_toolsets
+  {"enable": ["scene"]}` adds them, and `strata_call` runs any command. Start every check with `editor.status`: its
+  `errors` say whether a build failed, a script crashed, an import failed or errors were logged since your last
+  `log.read`.
 
 ## 2. Project and plan
 
@@ -77,6 +84,16 @@ Design the code for verification before writing it:
   `CharacterController` on the root, the controller walks the root motion and collides as it walks); otherwise move
   the entity from the script and keep the clips in place. Check poses in edit mode with `animation.preview` and a
   `viewport.capture`; while playing, `animation.info {"entity": "<root>"}` reports the state and parameters.
+- **Models, before you place them:**
+  - Size: `asset.info {"asset": "<model>"}` gives `bounds` (`size` in meters, as placed; skinned models in their rest
+    pose), and `entity.get {"entity", "world": true}` an instance's world transform and bounds. Characters are about 1.8
+    m tall; a model 100 times too large was authored in centimeters: set its import `Scale` (`asset.setImportSettings
+    {"asset", "settings": {"Scale": 0.01}}`). The scale is baked into the model's content (the root keeps scale 1), and
+    instances placed before keep their size.
+  - Facing: glTF models face +Z, while `GetForward()` (cameras, lights, scripts) is -Z. A character that walks
+    backwards needs its facing computed for +Z (below) or a child entity turned 180 degrees holding the model.
+  - Textures: normal maps and roughness maps import by their name tokens (`_normal`, `_n`, `_rough`...); `material.get`
+    and `material.set` return `warnings` with a `fix` when a texture was imported for another use than its slot.
 
 ## 4. Scripts
 
@@ -141,6 +158,72 @@ first run and after files were added or removed; answers with compiler diagnosti
   {"axis": "LeftY", "value": 1, "steps": 60}`) and read the player's `Translation` with `component.get`: it walks on the
   template's ground and stops at walls. In the editor the cursor stays locked only while the game view has the focus
   (Shift+F1 frees it); `input.mouseMove` moves the simulated pointer, so mouse look works from commands too.
+- A third-person player and a follow camera: the player entity has a `CharacterController` and the model (the root of
+  a model instance, or a child holding it); the primary camera is a separate entity (not a child) with the second
+  script, its `Target` field set to the player. Movement is relative to the camera, and the model turns to face where it
+  walks:
+
+  ```cpp
+  class ThirdPersonPlayer : public Script
+  {
+  public:
+  	float Speed = 4.0f;
+  	float JumpSpeed = 5.0f;
+  	Entity Camera;   // The follow camera: movement is relative to where it looks
+
+  	void OnUpdate(float) override
+  	{
+  		glm::vec2 input = Input::GetGamepadStick(GamepadStick::Left);    // +y forward
+  		input.x += (Input::IsKeyDown(Key::D) ? 1.0f : 0.0f) - (Input::IsKeyDown(Key::A) ? 1.0f : 0.0f);
+  		input.y += (Input::IsKeyDown(Key::W) ? 1.0f : 0.0f) - (Input::IsKeyDown(Key::S) ? 1.0f : 0.0f);
+  		if (glm::length(input) > 1.0f)
+  			input = glm::normalize(input);
+  		// The camera's forward and right, flattened onto the ground.
+  		glm::vec3 forward = Camera ? Camera.GetTransform().GetForward() : glm::vec3(0.0f, 0.0f, -1.0f);
+  		forward = glm::normalize(glm::vec3(forward.x, 0.0f, forward.z));
+  		const glm::vec3 right = glm::cross(forward, glm::vec3(0.0f, 1.0f, 0.0f));
+  		const glm::vec3 direction = forward * input.y + right * input.x;
+  		CharacterController controller = GetEntity().GetCharacterController();
+  		controller.Move(direction * Speed);
+  		// Face the walking direction. glTF models face +Z: yaw = atan2(x, z) turns +Z onto it.
+  		if (glm::length(direction) > 0.01f)
+  			GetTransform().SetEulerAngles(glm::vec3(0.0f, std::atan2(direction.x, direction.z), 0.0f));
+  		if (controller.IsGrounded() && (Input::IsKeyPressed(Key::Space) || Input::IsGamepadButtonPressed(GamepadButton::A)))
+  			controller.Jump(JumpSpeed);
+  		GetEntity().GetAnimator().SetFloat("Speed", glm::length(controller.GetVelocity())); // False without an Animator
+  	}
+  };
+
+  class FollowCamera : public Script
+  {
+  public:
+  	Entity Target;
+  	float Distance = 6.0f;
+  	float Height = 3.0f;
+  	float Smoothing = 8.0f; // Higher follows faster
+  	float Yaw = 0.0f;       // Degrees around the target; the right stick turns it
+
+  	void OnUpdate(float deltaTime) override
+  	{
+  		if (!Target)
+  			return;
+  		Yaw -= Input::GetGamepadStick(GamepadStick::Right).x * 120.0f * deltaTime;
+  		const glm::vec3 target = Target.GetTransform().GetWorldPosition() + glm::vec3(0.0f, 1.0f, 0.0f);
+  		const float yaw = glm::radians(Yaw);
+  		const glm::vec3 wanted = target + glm::vec3(std::sin(yaw) * Distance, Height, std::cos(yaw) * Distance);
+  		TransformComponent transform = GetTransform();
+  		const float blend = 1.0f - std::exp(-Smoothing * deltaTime); // The same smoothing at any frame rate
+  		const glm::vec3 position = glm::mix(transform.GetWorldPosition(), wanted, blend);
+  		transform.SetWorldPosition(position);
+  		// Cameras look along -Z: quatLookAt gives that rotation.
+  		transform.SetWorldRotation(glm::quatLookAt(glm::normalize(target - position), glm::vec3(0.0f, 1.0f, 0.0f)));
+  	}
+  };
+  ```
+
+  Register the fields with `ST_SCRIPT_FIELD` (each class in its own `.cpp`, which includes `<cmath>` and, for
+  `glm::quatLookAt`, `<glm/gtc/quaternion.hpp>`). Test it with `input.sequence` (section 6) observing the player's `world` position: W
+  held walks away from the camera, A and D walk across its view.
 - Hot reload replaces the instance: non-field members are gone in `OnReload`; find your entities again (e.g. children of
   the script's entity by name) instead of creating more.
 - Script builds use the compiler's default warnings; compile your sources with `-Wall -Wextra` once (GCC or Clang with
@@ -198,10 +281,20 @@ play.stop
   elsewhere without moving the person's view, pass `position` and `target` (`camera.get` stays as it was).
 - Editor-camera captures in edit mode leave the HUD out (`hiddenScreenSpaceTexts`); the scene's camera and play mode show
   it.
-- Gravity and other timers keep running between your calls (a call takes about 0.1 s): plan sequences and send them in
-  one go, set slow timings with `script.setField` while exploring, or `play.pause` the game and advance it with `play.step
-  {"steps": n}`, which answers once its n fixed steps ran (exact whatever the frame rate): input given while paused arrives
-  in the next stepped frame.
+- **Play-test deterministically.** Gravity and other timers keep running between your calls (a call takes about 0.1 s),
+  and how many fixed steps run per frame depends on the machine. For exact results:
+  - `input.sequence` plays a whole script of input in the game's fixed steps and samples what happened: it pauses the
+    game, runs exactly one step per frame with that step's events, resumes, and answers with the samples. For example
+    W held for 60 steps, then a jump, watching the player:
+    `{"steps": 90, "events": [{"step": 0, "key": "W", "action": "press"}, {"step": 60, "key": "W", "action": "release"},
+    {"step": 60, "key": "Space", "action": "tap"}], "observe": [{"entity": "<player>", "world": true, "every": 30},
+    {"entity": "<game>", "script": "GameManager", "field": "Coins"}]}`. The same sequence gives the same samples at any
+    frame rate, in a headless editor and in a window: assert on them in your regression script.
+  - `play.pause {"paused": true}` and `play.step {"steps": n}` answer once those n fixed steps ran (`fixedSteps` in the
+    result counts them); input given while paused arrives in the next step.
+  - Input durations (`input.key {"steps": 20}`, `{"seconds": 0.5}`) count the game's fixed steps, not frames: a key held
+    for 60 steps moves a player the same distance however fast the editor draws.
+  - Or set slow timings with `script.setField` while exploring.
 - Check every feature you built: movement, rotation, repeats, scoring, level changes, game over, restart, pause.
 
 ## 7. Leave a regression test
@@ -227,9 +320,15 @@ while checking an exact score), then turn them back to let time play its part (f
 
 Steps that create something can name what they made for later steps: `"bind": {"ball": "/id"}` on the step, then
 `{"$ref": "ball"}` wherever a later step's parameters need the ID. To turn how you built the scene into a script, export
-your session: `editor.activity.export {"path": "Build.json", "since": <journal.latest of editor.activity before you began>}`
+your session: `editor.activity.export {"path": "Build.json", "since": <the journal.latest you noted in section 1>}`
 writes it with those bindings, ready to run on a fresh copy of the project as it was then (take IDs for it from
-`entity.find` or creating results rather than from the selection, which the script does not repeat).
+`entity.find` or creating results rather than from the selection, which the script does not repeat). Files you wrote
+yourself are not commands: to replay on a fresh copy, copy the project's `Scripts/` (and source assets you generated)
+into it first, then run the script, which builds them.
+
+If the editor crashed or was killed, nothing you did is lost: the project's recovery journal kept the unsaved changes.
+`scene.recoveryStatus` lists entries (`complete: true` for a scene never saved: a snapshot of every entity rather than
+the changes), and `scene.recover {"scene": "<id>", "action": "apply"}` brings them back.
 In a source checkout, `StrataTests/Editor/TetrisCommands.json.in` and `TetrisSample.cmake` are the full example (CTest
 `StrataEditor.Tetris`).
 
@@ -264,7 +363,8 @@ scripts read the start scene's progress with `Game::GetSceneLoadProgress()` for 
 | Everything looks washed out or gray | Automatic exposure; add `PostProcess` with `AutoExposure: false`. |
 | Lit in captures, dark in the game | The capture used preview lighting (`"previewLighting": true`): add a `DirectionalLight` and a `SkyLight`. |
 | The HUD is missing from a capture | Editor views hide screen-space text: capture with `{"camera": "scene"}` or while playing. |
-| The score differs by a few points between runs | Gravity ticked between commands; make the check deterministic (slow gravity via a field). |
+| The score differs by a few points between runs | Gravity ticked between commands; play the moves with `input.sequence` (exact in game steps), or slow gravity via a field. |
+| The model is huge, tiny or walks backwards | Check `asset.info` `bounds` and set the import `Scale`; glTF faces +Z while `GetForward()` is -Z (see section 3). |
 | `editor.quit` refuses | Unsaved changes: `scene.save` (or `edit.undo` the test's edits), or `{"force": true}`. |
 | Script edits did nothing | Not built: `script.build` (it hot reloads while playing and restarts instances via `OnReload`). |
 | The exported game logs no gameplay | The headless run was too short: frames are paced at 60 per second. |
