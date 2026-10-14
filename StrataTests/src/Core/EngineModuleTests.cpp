@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include "Asset/AssetTestUtils.h"
+#include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/Application.h"
 #include "Strata/Core/EngineModule.h"
 #include "Strata/Core/JobSystem.h"
@@ -7,12 +9,17 @@
 #include "Strata/Core/Log.h"
 #include "Strata/Events/KeyEvent.h"
 #include "Strata/Input/KeyCodes.h"
+#include "Strata/Project/Project.h"
+#include "Strata/Project/ProjectModule.h"
 #include "TestHelpers.h"
 
 #include <chrono>
+#include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
@@ -134,6 +141,41 @@ namespace
 			: JournalModule(std::string(c_Name), journal)
 		{
 		}
+	};
+
+	// What a module released after the Project module (listed before it) finds when it is released.
+	struct ReleaseObservation
+	{
+		bool Released = false;
+		bool AssetManagerActive = true;
+		bool ProjectActive = true;
+		bool AssetManagerDestroyed = false;
+		bool JobsRunning = false;
+	};
+
+	class ReleaseProbeModule : public EngineModule
+	{
+	public:
+		// `manager` is read when the module is released: the test sets it once the application started.
+		ReleaseProbeModule(ReleaseObservation& observation, const WeakRef<AssetManagerBase>& manager)
+			: m_Observation(observation), m_Manager(manager)
+		{
+		}
+
+		std::string_view GetName() const override { return "ReleaseProbe"; }
+		bool OnInit(EngineContext&) override { return true; }
+
+		void OnRelease() override
+		{
+			m_Observation.Released = true;
+			m_Observation.AssetManagerActive = AssetManager::GetActive() != nullptr;
+			m_Observation.ProjectActive = Project::GetActive() != nullptr;
+			m_Observation.AssetManagerDestroyed = m_Manager.expired();
+			m_Observation.JobsRunning = JobSystem::IsInitialized();
+		}
+	private:
+		ReleaseObservation& m_Observation;
+		const WeakRef<AssetManagerBase>& m_Manager;
 	};
 
 	EngineModuleFactory MakeModule(std::string name, Journal& journal, ModuleBehavior behavior = {})
@@ -314,6 +356,54 @@ TEST_SUITE("Core.EngineModules")
 		CHECK(journal == Journal { "Init A", "Init B", "Release A jobs", "Shutdown A no jobs" });
 		CHECK(Tests::CountLogMessages(logStart, "Engine module 'B' could not start; the application cannot run") == 1);
 		CHECK(Tests::CountLogMessages(logStart, "B has no device to work with.") == 1);
+	}
+
+	TEST_CASE("The Project module lets go of the active project and asset manager after the layers, while jobs run")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ProjectModuleRelease");
+		// Whatever the module does, the next test starts without an active project or asset manager.
+		struct ClearActive
+		{
+			~ClearActive()
+			{
+				AssetManager::SetActive(nullptr);
+				Project::SetActive(nullptr);
+			}
+		} clearActive;
+		Journal journal;
+		ReleaseObservation observation;
+		WeakRef<AssetManagerBase> weakManager;
+		{
+			// The probe is listed first, so it is released after the Project module (OnRelease runs in reverse).
+			std::vector<EngineModuleFactory> modules;
+			modules.push_back([&observation, &weakManager]() -> Scope<EngineModule>
+			{
+				return CreateScope<ReleaseProbeModule>(observation, weakManager);
+			});
+			modules.push_back(ProjectModule::Factory());
+			JournalApplication application(MakeSpecification(std::move(modules)), journal);
+			REQUIRE(application.IsRunning());
+
+			// What the program's layers open: the active project and asset manager, held only as the active ones.
+			Ref<Project> project = Project::Create(directory, "ProjectModuleRelease");
+			REQUIRE(project);
+			Project::SetActive(project);
+			project.reset();
+			Ref<AssetManagerBase> manager = CreateRef<Tests::FakeAssetManager>();
+			weakManager = manager;
+			AssetManager::SetActive(manager);
+			manager.reset();
+
+			application.Run();
+			CHECK_FALSE(observation.Released);
+			CHECK(AssetManager::GetActive() != nullptr);
+		}
+		CHECK(observation.Released);
+		CHECK_FALSE(observation.AssetManagerActive);
+		CHECK_FALSE(observation.ProjectActive);
+		// Let go while the job system still runs (the manager waits for its load jobs when it is destroyed).
+		CHECK(observation.AssetManagerDestroyed);
+		CHECK(observation.JobsRunning);
 	}
 
 	TEST_CASE("A program whose modules cannot be ordered does not start, and the message names them")

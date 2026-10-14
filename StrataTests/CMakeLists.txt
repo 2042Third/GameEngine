@@ -379,6 +379,14 @@ if(TARGET StrataEditor)
 			"-DEXPECTED_OUTPUT=viewport[.]capture failed: viewport[.]capture needs a GPU"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake"
 		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
+	# So does --screenshot: the last frame's capture is answered with an empty image while the editor still runs (after
+	# the last frame, before its layers go), so the run says why and exits with 1, neither crashing nor losing the code.
+	add_test(NAME StrataEditor.ScreenshotWithoutGPU
+		COMMAND "${CMAKE_COMMAND}"
+			"-DCOMMAND=$<TARGET_FILE:StrataEditor>;--no-gpu;--no-automation;--frames;3;--screenshot;${CMAKE_CURRENT_BINARY_DIR}/ScreenshotWithoutGPU.png"
+			"-DEXPECTED_OUTPUT=Screenshot failed: Image is empty"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake"
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataEditor>")
 	# Without --frames a headless editor runs until editor.quit (here at the end of its script); a quit that does not
 	# close it runs into the timeout.
 	add_test(NAME StrataEditor.QuitScript

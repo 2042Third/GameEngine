@@ -254,6 +254,11 @@ namespace Strata
 				m_FramePacer.WaitForNextFrame();
 		}
 
+		// What the last frame posted for the main thread (a screenshot answered without the Graphics module, a job's
+		// result) runs as the next frame would have run it: while the layers that asked for it still exist, and before
+		// main reads the exit code it may set.
+		ExecuteMainThreadQueue();
+
 		OnShutdown();
 		const std::span<EngineModule* const> started = GetStartedModules();
 		for (auto it = started.rbegin(); it != started.rend(); ++it)

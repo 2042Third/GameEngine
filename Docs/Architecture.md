@@ -605,7 +605,8 @@ it calls the modules' hooks.
 
   Code that needs a module finds it: the editor's `ApplicationEditorHost` reaches the device, the UI scale and
   screenshots through `GetModules().Find<GraphicsModule>()` and `Find<ImGuiModule>()`; without the Graphics module a
-  screenshot is answered with an empty image on the next frame (`SubmitToMainThread`).
+  screenshot is answered with an empty image on the next frame (`SubmitToMainThread`), or, when it was asked for on the
+  last frame, once the loop ends, while the layers that asked still exist.
 - **Job threads per program.** Each program sets its `JobSystemSpecification`: StrataRuntime runs the default workers,
   2 I/O and 2 background threads (a game's only background work is `Scene::ReleaseInBackground`); the editor and the
   tests keep the defaults, whose background pool imports and compresses.
@@ -691,7 +692,8 @@ The runtime's layer update (`RuntimeLayer::OnUpdate`, `StrataRuntime/src/Runtime
 then the headless script-crash and quit checks, then `GameRenderer::Render` into the back buffer (windowed only) and the
 `--screenshot` request on the last frame. The runtime runs no ImGui: its programs list no ImGui module.
 
-Shutdown: when `Run`'s loop ends, the program's `OnShutdown` and the modules' `OnStop` run (reverse). In
+Shutdown: when `Run`'s loop ends, the main-thread queue drains (what the last frame posted runs as the next frame would
+have run it, before `main` reads the exit code), then the program's `OnShutdown` and the modules' `OnStop` run (reverse). In
 `Application::~Application` the layers detach and are deleted top-down, the modules get `OnRelease` (reverse: the
 Project module releases the active asset manager and project), the main-thread queue drains, `JobSystem::Shutdown` runs
 the queued jobs and joins the threads, the queue drains again, the modules get `OnShutdown` (reverse: audio, then the
@@ -1062,7 +1064,7 @@ Results come back to the main thread by polling, never through callbacks into en
 | Job-based commands | `JobHandle` | deferred command polls, e.g. `viewport.capture` (`EditorViewportCommands.cpp`) |
 | Game export | `GameExport`'s shared state (atomics, outcome under a mutex) | `GameExport::Update` from `EditorContext::Update`; `project.export`'s poll |
 | Child processes | captured output | `ScriptBuilder::Update` |
-| Any thread | `Application::SubmitToMainThread` | start of the next frame |
+| Any thread | `Application::SubmitToMainThread` | start of the next frame (after the last frame: when `Run`'s loop ends) |
 
 `RpcResponder::Respond` is thread-safe, so an answer may be produced on any thread; in the editor, answers are given by
 the runner's completions on the main thread.

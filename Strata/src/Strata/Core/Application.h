@@ -98,7 +98,8 @@ namespace Strata
 		void SetMaxFrameRate(uint32_t framesPerSecond) { m_FramePacer.SetMaxFrameRate(framesPerSecond); }
 		uint32_t GetMaxFrameRate() const { return m_FramePacer.GetMaxFrameRate(); }
 
-		// Queues a function to run on the main thread at the start of the next frame. Thread-safe.
+		// Queues a function to run on the main thread at the start of the next frame, or, after the last frame, before the
+		// layers are destroyed and the modules shut down. Thread-safe.
 		void SubmitToMainThread(std::function<void()> function);
 
 		static Application& Get() { return *s_Instance; }
