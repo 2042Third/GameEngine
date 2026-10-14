@@ -2031,7 +2031,10 @@ when its IDs are new to the scene; IDs of cells unchanged since a cook of an ear
 beyond the 20 km worlds are supported within, and empty ones, are warnings. The fresh index is written into the world
 document (an `AssetDocumentAction`), and with `apply` the recommended capacity into the persistent scene's
 `PhysicsCapacity.MaxBodies` (a `SceneSettingsAction`), one undo step. `world.info` describes a world with its layers and
-how many cells changed since its index was made.
+how many cells changed since its index was made. An export cooks every world of the project first (`GameExport`'s
+`CookingWorlds` state, between `WaitingForImports` and `Packing`), writing the fresh indexes into the world documents
+like an import's result (no undo step, only when they changed), so the packed World assets carry them; games then size
+their physics from them when they start (see A world's start).
 
 ## Scripting
 

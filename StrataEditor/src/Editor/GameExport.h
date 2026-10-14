@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Editor/WorldCook.h"
+
 #include <Strata/Asset/AssetPackWriter.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/Base.h>
@@ -55,6 +57,7 @@ namespace Strata
 	enum class GameExportState : uint8_t
 	{
 		WaitingForImports = 0, // Background imports finish first, so that the pack holds their results
+		CookingWorlds,         // The project's worlds' indexes are brought up to date (WorldCook), so that the pack holds them
 		Packing,               // Writing the asset pack
 		Copying,               // Writing the script module, the manifest and the runtime
 		Succeeded,
@@ -64,7 +67,8 @@ namespace Strata
 
 	const char* GameExportStateToString(GameExportState state);
 
-	// Exports the open project as a playable game without blocking a frame: an asset pack (EditorAssetManager::PlanAssetPack,
+	// Exports the open project as a playable game without blocking a frame: the project's worlds' indexes brought up to date
+	// (WorldCook, for cells whose files changed since), an asset pack (EditorAssetManager::PlanAssetPack,
 	// ordered by first use from the project's start scene, or the open scene when none is set), the script module the editor
 	// runs (the loaded module, exactly as it was loaded: see EditorContext::ReadRunningScriptModule), a game manifest naming
 	// the start scene and the module, and the runtime executable with the third-party notices found next to it.
@@ -91,7 +95,7 @@ namespace Strata
 		// Asks the export to stop: it ends Cancelled (unless it was done already) once its I/O job noticed.
 		void Cancel();
 		// Main thread: blocks until the I/O job (if one runs) has ended and takes its outcome; an export cancelled while it
-		// waited for imports ends at once.
+		// waited for imports or cooked worlds ends at once.
 		void Wait();
 
 		GameExportState GetState() const;
@@ -107,6 +111,10 @@ namespace Strata
 	private:
 		GameExport() = default;
 
+		// Starts cooking the project's worlds whose indexes miss changed cells (main thread); false when there is none.
+		bool BeginCooking();
+		// Writes the fresh indexes once every cook finished; false, with the export failed, when one failed (main thread).
+		bool FinishCooking();
 		// Plans the pack and starts the I/O job (main thread).
 		void Begin();
 		// Takes the outcome of the I/O job once it ended (main thread).
@@ -130,6 +138,8 @@ namespace Strata
 
 		GameExportOptions m_Options;
 		Ref<EditorAssetManager> m_Assets; // Kept alive while the I/O job reads from it
+		WorldCookCache* m_WorldCookCache = nullptr; // The editor's (EditorContext::GetWorldCookCache), which outlives the export
+		std::vector<Scope<WorldCook>> m_Cooks;
 		AssetPackBuildOptions m_PackOptions;
 		GameManifest m_Manifest;
 		std::string m_FileName; // Of the pack, manifest and executable, without extension

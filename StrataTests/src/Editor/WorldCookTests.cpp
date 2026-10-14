@@ -4,7 +4,6 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/WorldCook.h"
-#include "FeatureTest/FeatureTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetImporter.h>
@@ -13,9 +12,11 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Runtime/GameRuntime.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/SceneSerializer.h>
+#include <Strata/Scene/SceneServices.h>
 #include <Strata/World/WorldAsset.h>
 #include <Strata/World/WorldComponents.h>
 
@@ -58,7 +59,7 @@ namespace
 		REQUIRE(FileSystem::WriteText(FileSystem::FromUTF8(FileSystem::ToUTF8(file) + ".meta"), ToText(meta)));
 	}
 
-	// A copy of the feature project with a generated world "Gen": `side` x `side` Ground cells of 32 m, cell (x, z) holding
+	// A new project with a generated world "Gen": `side` x `side` Ground cells of 32 m, cell (x, z) holding
 	// 7 + x renderers of which (3 x + 5 z) % 7 are static boxes (uneven, so that the hysteresis changes the busiest radius),
 	// and a persistent scene with the WorldComponent, a source of radius 40 m and a floor (one body).
 	struct WorldProject
@@ -75,8 +76,11 @@ namespace
 		WorldProject(const std::string& name, uint32_t side)
 			: Side(side)
 		{
-			const std::filesystem::path projectFile = CopyFeatureProject(CreateTemporaryDirectory(name) / "Project");
+			// A new project (its example script used by no scene), closed while the world's files are written into it.
+			Run("project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory(name) / "Project") }, { "name", "Worlds" } });
+			const std::filesystem::path projectFile = Context.GetProject()->GetProjectFile();
 			Directory = projectFile.parent_path();
+			Run("project.close", { { "force", true } });
 			const std::filesystem::path assets = Directory / "Assets";
 			WorldData data;
 			data.Name = "Gen";
@@ -267,7 +271,7 @@ TEST_SUITE("Editor.WorldCook")
 		CHECK_FALSE(refused.Success);
 		CHECK(refused.ErrorKind == EditorCommandError::InvalidParameters);
 		CHECK_FALSE(project.ReadWorld()->GetData().Index.has_value());
-		CHECK_FALSE(project.Try("world.cook", { { "world", "Scenes/Feature.stscene" } }).Success);
+		CHECK_FALSE(project.Try("world.cook", { { "world", "Scenes/GenPersistent.stscene" } }).Success);
 		CHECK_FALSE(project.Try("world.cook", {}).Success);
 		CHECK(project.Context.GetUndoStack().GetPosition() == 0);
 
@@ -306,5 +310,36 @@ TEST_SUITE("Editor.WorldCook")
 		CHECK(result.Error.find("cell (Ground, 0, 1)") != std::string::npos);
 		CHECK(result.Error.find("cell (Ground, 1, 0)") != std::string::npos);
 		CHECK_FALSE(project.ReadWorld()->GetData().Index.has_value());
+	}
+}
+
+TEST_SUITE("Editor.WorldCook")
+{
+	TEST_CASE("An export cooks the stale worlds, and its game starts with the fresh index and the cooked capacity")
+	{
+		WorldProject project("WorldCookExport", 3);
+		project.Run("project.setStartScene", { { "scene", UUIDToJson(project.Persistent) } });
+		CHECK_FALSE(project.ReadWorld()->GetData().Index.has_value());
+		const std::filesystem::path output = project.Directory.parent_path() / "Build";
+		const nlohmann::json exported = project.Run("project.export", { { "directory", FileSystem::ToUTF8(output) }, { "includeRuntime", false } });
+		const Ref<WorldAsset> cooked = project.ReadWorld();
+		REQUIRE(cooked->GetData().Index.has_value());
+		CHECK(cooked->GetData().Index->Cells.size() == 9);
+		const uint32_t recommended = cooked->GetData().Index->GetRecommendedMaxBodies();
+		REQUIRE(recommended > 0);
+		CHECK(project.Context.GetUndoStack().GetPosition() == 0); // Derived data: no undo step
+
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(FileSystem::FromUTF8(exported["manifest"].get<std::string>()), &error);
+		REQUIRE_MESSAGE(game, error);
+		REQUIRE(game->WaitForStart());
+		const Ref<WorldAsset> packed = game->GetAssetManager()->LoadAssetSync<WorldAsset>(project.World);
+		REQUIRE(packed);
+		REQUIRE(packed->GetData().Index.has_value());
+		CHECK(packed->GetData().Index->MaxBodiesInRadius == cooked->GetData().Index->MaxBodiesInRadius);
+		CHECK(game->GetScene()->GetSettings().PhysicsCapacity.MaxBodies == recommended);
+		const IPhysicsCapacity* capacity = game->GetScene()->GetService<IPhysicsCapacity>();
+		REQUIRE(capacity);
+		CHECK(capacity->GetCapacityInfo().MaxBodies >= recommended);
 	}
 }

@@ -58,6 +58,181 @@
 			200.0,
 			200.0
 		],
+		"Index": {
+			"Cells": [
+				{
+					"Bodies": 1,
+					"Bounds": {
+						"Max": [
+							232.0,
+							0.0,
+							232.0
+						],
+						"Min": [
+							200.0,
+							-1.0,
+							200.0
+						]
+					},
+					"ClosureBytes": 8367,
+					"Entities": 1,
+					"Layer": 1,
+					"Stamp": "D5A6706D9E574AB2",
+					"X": 0,
+					"Z": 0
+				},
+				{
+					"Bodies": 1,
+					"Bounds": {
+						"Max": [
+							232.0,
+							0.0,
+							264.0
+						],
+						"Min": [
+							200.0,
+							-1.0,
+							232.0
+						]
+					},
+					"ClosureBytes": 8367,
+					"Entities": 1,
+					"Layer": 1,
+					"Stamp": "9C85C3397FABAFD5",
+					"X": 0,
+					"Z": 1
+				},
+				{
+					"Bodies": 1,
+					"Bounds": {
+						"Max": [
+							264.0,
+							0.0,
+							232.0
+						],
+						"Min": [
+							232.0,
+							-1.0,
+							200.0
+						]
+					},
+					"ClosureBytes": 8367,
+					"Entities": 1,
+					"Layer": 1,
+					"Stamp": "C027DC5B724E35A3",
+					"X": 1,
+					"Z": 0
+				},
+				{
+					"Bodies": 1,
+					"Bounds": {
+						"Max": [
+							264.0,
+							0.0,
+							264.0
+						],
+						"Min": [
+							232.0,
+							-1.0,
+							232.0
+						]
+					},
+					"ClosureBytes": 8367,
+					"Entities": 1,
+					"Layer": 1,
+					"Stamp": "949E9A18BD42ABF7",
+					"X": 1,
+					"Z": 1
+				},
+				{
+					"Bodies": 1,
+					"Bounds": {
+						"Max": [
+							211.5,
+							1.0,
+							208.5
+						],
+						"Min": [
+							205.0,
+							0.0,
+							207.5
+						]
+					},
+					"ClosureBytes": 9196,
+					"Entities": 2,
+					"Layer": 2,
+					"Stamp": "5F27D203038816E9",
+					"X": 0,
+					"Z": 0
+				},
+				{
+					"Bodies": 1,
+					"Bounds": {
+						"Max": [
+							211.5,
+							1.0,
+							224.5
+						],
+						"Min": [
+							205.0,
+							0.0,
+							223.5
+						]
+					},
+					"ClosureBytes": 9196,
+					"Entities": 2,
+					"Layer": 2,
+					"Stamp": "FA7F8C1DAD73B988",
+					"X": 0,
+					"Z": 1
+				},
+				{
+					"Bodies": 1,
+					"Bounds": {
+						"Max": [
+							227.5,
+							1.0,
+							208.5
+						],
+						"Min": [
+							221.0,
+							0.0,
+							207.5
+						]
+					},
+					"ClosureBytes": 9196,
+					"Entities": 2,
+					"Layer": 2,
+					"Stamp": "DEE895A21D022303",
+					"X": 1,
+					"Z": 0
+				},
+				{
+					"Bodies": 1,
+					"Bounds": {
+						"Max": [
+							227.5,
+							1.0,
+							224.5
+						],
+						"Min": [
+							221.0,
+							0.0,
+							223.5
+						]
+					},
+					"ClosureBytes": 9196,
+					"Entities": 2,
+					"Layer": 2,
+					"Stamp": "9A48B96FE167DE76",
+					"X": 1,
+					"Z": 1
+				}
+			],
+			"MaxBodiesInRadius": 24,
+			"PersistentBodies": 16,
+			"Version": 1
+		},
 		"Layers": [
 			{
 				"CellSize": 32.0,

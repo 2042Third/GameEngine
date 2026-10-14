@@ -1895,6 +1895,7 @@ namespace Strata
 				notification.Message = FileSystem::ToUTF8(exporter.GetOptions().Directory);
 				break;
 			case GameExportState::WaitingForImports:
+			case GameExportState::CookingWorlds:
 			case GameExportState::Packing:
 			case GameExportState::Copying:
 				return;

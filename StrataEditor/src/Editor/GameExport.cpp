@@ -1,5 +1,6 @@
 #include "Editor/GameExport.h"
 
+#include "Editor/AssetEdit.h"
 #include "Editor/EditorContext.h"
 
 #include <Strata/Core/FileSystem.h>
@@ -7,6 +8,7 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/StringUtils.h>
+#include <Strata/World/WorldAsset.h>
 
 #include <algorithm>
 #include <cctype>
@@ -95,6 +97,7 @@ namespace Strata
 		switch (state)
 		{
 			case GameExportState::WaitingForImports: return "WaitingForImports";
+			case GameExportState::CookingWorlds:     return "CookingWorlds";
 			case GameExportState::Packing:           return "Packing";
 			case GameExportState::Copying:           return "Copying";
 			case GameExportState::Succeeded:         return "Succeeded";
@@ -233,6 +236,7 @@ namespace Strata
 		Ref<GameExport> exporter(new GameExport());
 		exporter->m_Options = options;
 		exporter->m_Assets = std::static_pointer_cast<EditorAssetManager>(assets->shared_from_this());
+		exporter->m_WorldCookCache = &context.GetWorldCookCache();
 		exporter->m_PackOptions = std::move(packOptions);
 		exporter->m_FileName = ToFileName(project.GetConfig().Name);
 		exporter->m_Runtime = runtime;
@@ -282,9 +286,91 @@ namespace Strata
 			// Finished imports are applied by the asset manager's update, which runs every frame.
 			if (m_Assets->HasPendingImports())
 				return;
+			if (BeginCooking())
+				return;
 			Begin();
 		}
+		if (m_Shared->State == GameExportState::CookingWorlds)
+		{
+			if (m_Shared->Cancel)
+			{
+				m_Cooks.clear();
+				{
+					std::scoped_lock<std::mutex> lock(m_Shared->Mutex);
+					m_Shared->Ended = true;
+					m_Shared->Outcome = GameExportState::Cancelled;
+					m_Shared->Error = "The export was cancelled";
+				}
+				Collect();
+				return;
+			}
+			for (const Scope<WorldCook>& cook : m_Cooks)
+			{
+				if (!cook->Poll())
+					return;
+			}
+			if (FinishCooking())
+				Begin();
+		}
 		Collect();
+	}
+
+	bool GameExport::BeginCooking()
+	{
+		// Every world of the project, as cooks read only cells whose files changed since its index: a world cooked already
+		// costs a look at its cells' stamps.
+		for (const AssetMetadata& metadata : m_Assets->GetAllMetadata())
+		{
+			if (metadata.Type != AssetType::World || metadata.IsSubAsset())
+				continue;
+			std::string error;
+			Scope<WorldCook> cook = WorldCook::Start(*m_Assets, metadata.Handle, *m_WorldCookCache, &error);
+			if (!cook)
+			{
+				std::scoped_lock<std::mutex> lock(m_Shared->Mutex);
+				m_Shared->Ended = true;
+				m_Shared->Outcome = GameExportState::Failed;
+				m_Shared->Error = fmt::format("The world '{}' cannot be cooked: {}", metadata.Path, error);
+				m_Shared->State = GameExportState::CookingWorlds;
+				return true;
+			}
+			m_Cooks.push_back(std::move(cook));
+		}
+		if (m_Cooks.empty())
+			return false;
+		m_Shared->State = GameExportState::CookingWorlds;
+		return true;
+	}
+
+	bool GameExport::FinishCooking()
+	{
+		auto fail = [this](std::string message)
+		{
+			std::scoped_lock<std::mutex> lock(m_Shared->Mutex);
+			m_Shared->Ended = true;
+			m_Shared->Outcome = GameExportState::Failed;
+			m_Shared->Error = std::move(message);
+			return false;
+		};
+		for (const Scope<WorldCook>& cook : m_Cooks)
+		{
+			const std::optional<AssetMetadata> metadata = m_Assets->GetMetadata(cook->GetWorld());
+			const std::string path = metadata ? metadata->Path : cook->GetWorld().ToString();
+			if (!cook->Succeeded())
+				return fail(fmt::format("The world '{}' cannot be cooked: {}", path, cook->GetError()));
+			// The index is derived data, like an import's result: written into the document without an undo step, and only
+			// when it changed.
+			std::vector<uint8_t> before;
+			std::string error;
+			if (!AssetEdit::ReadDocument(*m_Assets, cook->GetWorld(), before, &error))
+				return fail(fmt::format("The world '{}' cannot be read: {}", path, error));
+			const std::string text = JsonUtils::Dump(WorldAsset::ToDocument(cook->GetCookedData()), 1, '\t') + "\n";
+			const std::vector<uint8_t> after(text.begin(), text.end());
+			if (before != after && !AssetEdit::ApplyDocument(*m_Assets, cook->GetWorld(), after, &error))
+				return fail(fmt::format("The cooked index of the world '{}' cannot be written: {}", path, error));
+		}
+		m_Cooks.clear();
+		return true;
 	}
 
 	void GameExport::Begin()
@@ -474,8 +560,9 @@ namespace Strata
 			return;
 		if (m_Job.IsValid())
 			m_Job.Wait();
-		else if (m_Shared->State == GameExportState::WaitingForImports && m_Shared->Cancel)
+		else if ((m_Shared->State == GameExportState::WaitingForImports || m_Shared->State == GameExportState::CookingWorlds) && m_Shared->Cancel)
 		{
+			m_Cooks.clear();
 			std::scoped_lock<std::mutex> lock(m_Shared->Mutex);
 			m_Shared->Ended = true;
 			m_Shared->Outcome = GameExportState::Cancelled;
@@ -510,6 +597,8 @@ namespace Strata
 		{
 			case GameExportState::WaitingForImports:
 				return "Waiting for asset imports to finish";
+			case GameExportState::CookingWorlds:
+				return fmt::format("Cooking {} {}", m_Cooks.size(), m_Cooks.size() == 1 ? "world" : "worlds");
 			case GameExportState::Packing:
 				return fmt::format("Packing {} {} ({:.0f} of {:.0f} MB)", m_AssetCount, m_AssetCount == 1 ? "asset" : "assets",
 					megabytes(std::min(m_Shared->DoneBytes.load(), m_Shared->TotalBytes.load())), megabytes(m_Shared->TotalBytes.load()));
