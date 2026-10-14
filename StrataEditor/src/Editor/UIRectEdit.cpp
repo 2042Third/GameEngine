@@ -1,7 +1,14 @@
 #include "Editor/UIRectEdit.h"
 
+#include "Editor/EditorContext.h"
+#include "Editor/SceneEdit.h"
+
+#include <Strata/Core/Log.h>
+#include <Strata/Scene/Scene.h>
+
 #include <cmath>
 #include <string>
+#include <vector>
 
 namespace Strata::UIRectEdit
 {
@@ -144,6 +151,158 @@ namespace Strata::UIRectEdit
 		result.Size[axis] = -(margins.x + margins.y);
 		result.Position[axis] = margins.x * (1.0f - rect.Pivot[axis]) - margins.y * rect.Pivot[axis];
 		return result;
+	}
+
+	UIScreen GetGameScreen(EditorContext& context)
+	{
+		if (context.IsPlaying())
+			return GameUIScene::GetInputScreen().Screen;
+		const glm::uvec2 viewport = context.GetViewport().GetSize();
+		if (viewport.x > 0 && viewport.y > 0)
+			return UIScreen { glm::vec2(viewport), context.GetGameWindow().GetState().ContentScale };
+		return GameUIScene::c_DefaultScreen;
+	}
+
+	std::optional<Placement> FindPlacement(Scene& scene, Entity entity, const UIScreen& screen)
+	{
+		if (!entity || !GameUIScene::HasCanvases(scene))
+			return std::nullopt;
+		GameUIScene& ui = GameUIScene::Get(scene);
+		ui.EnsureLayout(screen); // Changes since the latest layout included
+		UICanvasView view;
+		uint32_t element = 0;
+		if (!ui.FindElement(entity.GetHandle(), screen, view, element) || element == 0)
+			return std::nullopt;
+		Placement placement;
+		placement.Box = ui.GetElementBox(view, element);
+		placement.Scale = view.Scale;
+		for (Entity parent = entity.GetParent(); parent; parent = parent.GetParent())
+		{
+			UICanvasView parentView;
+			uint32_t parentElement = 0;
+			if (ui.FindElement(parent.GetHandle(), screen, parentView, parentElement) && parentView.CanvasIndex == view.CanvasIndex)
+			{
+				placement.Parent = ui.GetElementBox(parentView, parentElement);
+				return placement;
+			}
+		}
+		return std::nullopt;
+	}
+
+	Entity PickElement(Scene& scene, const UIScreen& screen, const glm::vec2& pixel)
+	{
+		if (!GameUIScene::HasCanvases(scene))
+			return {};
+		GameUIScene& ui = GameUIScene::Get(scene);
+		const std::span<const UICanvasView> views = ui.EnsureLayout(screen);
+		const entt::registry& registry = scene.GetRegistry();
+		for (size_t index = views.size(); index-- > 0;)
+		{
+			const UICanvasView& view = views[index];
+			const glm::vec2 point = pixel / view.Scale;
+			for (uint32_t element = ui.GetElementCount(view); element-- > 1;)
+			{
+				const entt::entity entity = ui.GetElementEntity(view, element);
+				if (!registry.any_of<UIImageComponent, UITextComponent>(entity) || !ui.IsElementVisible(view, element))
+					continue;
+				if (ui.GetElementBox(view, element).Contains(point))
+					return Entity(entity, &scene);
+			}
+		}
+		return {};
+	}
+
+	namespace
+	{
+
+		// The entities' placements at the game's screen, or the reason one has none.
+		bool FindPlacements(EditorContext& context, std::span<const Entity> entities, std::vector<Placement>& outPlacements, std::string* outError)
+		{
+			if (entities.empty())
+			{
+				if (outError)
+					*outError = "No entities";
+				return false;
+			}
+			Scene& scene = *entities.front().GetScene();
+			const UIScreen screen = GetGameScreen(context);
+			outPlacements.clear();
+			for (const Entity entity : entities)
+			{
+				std::optional<Placement> placement = entity.HasComponent<UIRectComponent>() ? FindPlacement(scene, entity, screen) : std::nullopt;
+				if (!placement)
+				{
+					if (outError)
+						*outError = fmt::format("'{}' is no element laid out on a UI canvas", entity.GetName());
+					return false;
+				}
+				outPlacements.push_back(*placement);
+			}
+			return true;
+		}
+
+		// Writes new rects as one edit of the active scene (mergeKey: empty for its own undo step).
+		bool CommitRects(EditorContext& context, std::span<const Entity> entities, const std::vector<UIRectComponent>& rects, std::string name, std::string mergeKey,
+			std::string* outError)
+		{
+			if (!context.CheckSceneEditable(outError))
+				return false;
+			std::vector<UUID> ids;
+			for (const Entity entity : entities)
+				ids.push_back(entity.GetUUID());
+			SceneEditTransaction transaction(*entities.front().GetScene(), std::move(name), ids, std::move(mergeKey));
+			for (size_t index = 0; index < entities.size(); index++)
+			{
+				Entity entity = entities[index];
+				entity.GetComponent<UIRectComponent>() = rects[index];
+				entity.MarkModified<UIRectComponent>();
+			}
+			context.CommitEdit(transaction);
+			return true;
+		}
+
+	}
+
+	bool ApplyPresetWithUndo(EditorContext& context, std::span<const Entity> entities, UIAnchorPreset preset, bool setPivot, bool snapToAnchors, std::string* outError)
+	{
+		std::vector<Placement> placements;
+		if (!FindPlacements(context, entities, placements, outError))
+			return false;
+		std::vector<UIRectComponent> rects;
+		for (size_t index = 0; index < entities.size(); index++)
+			rects.push_back(ApplyPreset(entities[index].GetComponent<UIRectComponent>(), placements[index].Box, placements[index].Parent, preset, setPivot, snapToAnchors));
+		return CommitRects(context, entities, rects, fmt::format("Anchor {}", GetPresetName(preset)), {}, outError);
+	}
+
+	bool SetMarginWithUndo(EditorContext& context, std::span<const Entity> entities, int axis, bool end, float margin, std::string* outError)
+	{
+		if ((axis != 0 && axis != 1) || !std::isfinite(margin))
+		{
+			if (outError)
+				*outError = "The margin must be a finite number of an axis 0 or 1";
+			return false;
+		}
+		std::vector<Placement> placements;
+		if (!FindPlacements(context, entities, placements, outError))
+			return false;
+		std::vector<UIRectComponent> rects;
+		std::string mergeKey = fmt::format("UIRectMargin/{}/{}", axis, end ? "End" : "Start");
+		for (size_t index = 0; index < entities.size(); index++)
+		{
+			const UIRectComponent& rect = entities[index].GetComponent<UIRectComponent>();
+			if (!IsStretched(rect, axis))
+			{
+				if (outError)
+					*outError = fmt::format("'{}' is not stretched {}", entities[index].GetName(), axis == 0 ? "horizontally" : "vertically");
+				return false;
+			}
+			glm::vec2 margins = GetMargins(rect, placements[index].Box, placements[index].Parent, axis);
+			margins[end ? 1 : 0] = margin;
+			rects.push_back(SetMargins(rect, placements[index].Parent, axis, margins));
+			mergeKey += "/" + entities[index].GetUUID().ToString();
+		}
+		const char* side = axis == 0 ? (end ? "Right" : "Left") : (end ? "Bottom" : "Top");
+		return CommitRects(context, entities, rects, fmt::format("Edit UI Rect {}", side), std::move(mergeKey), outError);
 	}
 
 }

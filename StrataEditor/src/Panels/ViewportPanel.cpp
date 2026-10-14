@@ -6,6 +6,7 @@
 #include "Editor/EditorPlacement.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/SceneBounds.h"
+#include "Editor/UIRectEdit.h"
 #include "Editor/ViewportRenderer.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
@@ -198,7 +199,17 @@ namespace Strata
 			{
 				const ViewportPickMode mode = io.KeyCtrl ? ViewportPickMode::Toggle : (io.KeyShift ? ViewportPickMode::Add : ViewportPickMode::Replace);
 				if (const std::optional<glm::uvec2> pixel = m_Image.ToPixel(glm::vec2(io.MousePos.x, io.MousePos.y)))
-					viewport.RequestPick(*pixel, size, mode);
+				{
+					// The game UI the view shows is in front of the scene: a click on one of its elements selects it.
+					const UIScreen screen { glm::vec2(size), context.GetGameWindow().GetState().ContentScale };
+					const Entity element = viewport.GetSettings().ShowGameUI
+						? UIRectEdit::PickElement(*context.GetActiveScene(), screen, glm::vec2(*pixel) + glm::vec2(0.5f))
+						: Entity();
+					if (element)
+						EditorViewport::ApplyPick(context, element, mode);
+					else
+						viewport.RequestPick(*pixel, size, mode);
+				}
 			}
 			// The camera may have moved this frame.
 			view = ResolveViewportView(context, ViewportCameraSource::Automatic, aspectRatio);

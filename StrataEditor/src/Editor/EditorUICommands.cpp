@@ -60,18 +60,6 @@ namespace Strata
 			return std::nullopt;
 		}
 
-		// The game's screen: while playing the UI's input screen (the game view's image), in edit mode the viewport's image,
-		// without either (headless) the default screen.
-		UIScreen GetGameScreen(EditorContext& context)
-		{
-			if (context.IsPlaying())
-				return GameUIScene::GetInputScreen().Screen;
-			const glm::uvec2 viewport = context.GetViewport().GetSize();
-			if (viewport.x > 0 && viewport.y > 0)
-				return UIScreen { glm::vec2(viewport), context.GetGameWindow().GetState().ContentScale };
-			return GameUIScene::c_DefaultScreen;
-		}
-
 		// The screen a command lays canvases out for: its "screen" parameter, else the game's screen.
 		std::optional<UIScreen> ReadScreen(EditorContext& context, const nlohmann::json& parameters, CommandArguments& arguments)
 		{
@@ -89,7 +77,7 @@ namespace Strata
 				arguments.SetError(fmt::format("Parameter 'screen' must be [width, height] in whole pixels from 1 to {}", c_MaxScreenPixels));
 				return std::nullopt;
 			}
-			return GetGameScreen(context);
+			return UIRectEdit::GetGameScreen(context);
 		}
 
 		nlohmann::json ToJson(const UIBox& box, float scale)
@@ -299,7 +287,7 @@ namespace Strata
 						described[key] = UUIDToJson(part.GetUUID());
 				}
 				// The rect where the game will show it (the layout follows the new entities at once).
-				const UIScreen screen = GetGameScreen(context);
+				const UIScreen screen = UIRectEdit::GetGameScreen(context);
 				nlohmann::json value = {
 					{ "entity", UUIDToJson(element.GetUUID()) },
 					{ "canvas", UUIDToJson(parts->Canvas.GetUUID()) },

@@ -1761,9 +1761,17 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   group, with a look of its own and no texture assets) in one `SceneEditTransaction`, under a new top-level canvas when
   its parent is outside every canvas, and places it with an anchor preset (`Editor/UIRectEdit`, shared with the
   Inspector: the 16 presets, keeping a rect in place while its anchors change, margins along stretched axes).
-- Their screen is the game's: while playing the UI's input screen, in edit mode the viewport's image size, headless
-  1920x1080; `screen` overrides it. Rects are reported in screen pixels (canvas units times the canvas's scale), after
-  `GameUIScene::EnsureLayout` for that screen (code that reads boxes after changes lays out first).
+- Their screen is the game's (`UIRectEdit::GetGameScreen`): while playing the UI's input screen, in edit mode the
+  viewport's image size, headless 1920x1080; `screen` overrides it. Rects are reported in screen pixels (canvas units
+  times the canvas's scale), after `GameUIScene::EnsureLayout` for that screen (code that reads boxes after changes lays
+  out first).
+- People make the same presets from the Hierarchy's create menu (its UI submenu runs `ui.create`; the world-space text
+  preset is "3D Text"). The Inspector draws a component's extras above its generic rows through `UI/ComponentDrawers` (a
+  drawer per component type): the `UIRect` drawer shows a notice outside a canvas or for a canvas, the anchor-preset grid
+  (with its Pivot and Position toggles; `UIRectEdit::ApplyPresetWithUndo`, one undo step that keeps the rect in place),
+  the margins along stretched axes (`SetMarginWithUndo`, a drag merging into one step) and the rect in pixels at the
+  game's screen. With Game UI shown, a click in the viewport (edit mode) selects the topmost UI element that draws
+  something there (`UIRectEdit::PickElement`) before the scene's ID-buffer pick.
 
 ### Output paths
 

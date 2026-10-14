@@ -4,6 +4,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/PropertyEdit.h"
 #include "Editor/ScriptEdit.h"
+#include "UI/ComponentDrawers.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/EntityIcons.h"
@@ -573,6 +574,8 @@ namespace Strata
 			}
 			else
 			{
+				// What the generic rows cannot show (a UIRect's anchor presets and margins), above them.
+				UI::ComponentDrawers::Draw(context, entities, info);
 				DrawProperties(context, entities, info);
 			}
 			if (info.TypeId == entt::type_id<MeshRendererComponent>().hash())
