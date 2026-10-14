@@ -77,7 +77,10 @@ ctest --preset macos-debug -LE perf
   and `IdleFrame3kStreamedTextures` times an idle frame of 3,000 settled streamed textures in view;
   `Perf.Editor` adds `FindReferences10k`, `JournalPerCommand`, the recovery journal's write (the frames and the I/O
   threads' time, `RecoveryWriteIOTime100k`) and snapshot, and the longest frame while `scene.open` opens 10,000 prefab
-  instances (`SceneOpen10kPrefabInstancesMaxFrame`); `Perf.EditorPanels` and `PerfGPU.Editor` time the Content Browser
+  instances (`SceneOpen10kPrefabInstancesMaxFrame`), and saving the realistic worlds in a helper process (the longest frame
+  from the save's start to its publication, `SaveMaxFrame250k` and `SaveMaxFrame1M`; the 1M save's `SaveSeconds1M` and
+  `SavePeakPrivateIncrease1M`; `--strata-test-helper=save-world <project> <scene> <result file>` runs one by hand);
+  `Perf.EditorPanels` and `PerfGPU.Editor` time the Content Browser
   with 10,001 assets (icons; thumbnails); and `PerfGPU.Editor` the longest frames of `scene.open` of the 100,000- and
   1,000,000-entity scenes (and of the 100,000 over the million, and of 100,000 cubes over the 100,000, whose render
   proxies the load builds before the swap: `SceneOpen100kCubesMaxFrame`), of starting play of the million, of

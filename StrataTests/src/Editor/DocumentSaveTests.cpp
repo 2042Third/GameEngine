@@ -7,6 +7,7 @@
 #include "Editor/HarnessEditor.h"
 #include "Editor/PropertyEdit.h"
 #include "Editor/SaveTestUtils.h"
+#include "Editor/WorldSaveMeasurement.h"
 #include "Perf/WorldFixture.h"
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
@@ -705,6 +706,39 @@ TEST_SUITE("Editor.Saves")
 		CHECK_FALSE(CompleteCommand(editor.Context, editor.Commands.Execute(editor.Context, "scene.saveAs", { { "path", "Materials/Not.stmat" } })).Success);
 		CHECK_FALSE(CompleteCommand(editor.Context, editor.Commands.Execute(editor.Context, "scene.saveAs", { { "path", "Scenes/Main.stscene" } })).Success);
 		CHECK(editor.Context.GetSceneHandle() == previous);
+	}
+
+	TEST_CASE("The perf gates' save of a world, measured in a helper process, reports what it wrote and the frames meanwhile")
+	{
+		const WorldSceneSpec world { "Small", 3000, true };
+		std::optional<WorldProject> project;
+		{
+			SaverJobSystem jobs;
+			std::string error;
+			WorldProjectSpec spec;
+			spec.Scenes.push_back(world);
+			project = WriteWorldProject(CreateTemporaryDirectory("WorldSaveHelper") / "World", spec, error);
+			REQUIRE_MESSAGE(project.has_value(), error);
+		}
+		std::string error;
+		const std::optional<WorldSaveMeasurement> measurement = MeasureWorldSaveInHelper(project->Directory, project->Scenes.front().Handle, error);
+		REQUIRE_MESSAGE(measurement.has_value(), error);
+		// The world and the edit's entity, in the document the save wrote.
+		CHECK(measurement->Entities == GetWorldEntityCount(world) + 1);
+		const std::optional<std::string> text = FileSystem::ReadText(project->Scenes.front().Path);
+		REQUIRE(text.has_value());
+		CHECK(measurement->Bytes == text->size());
+		CHECK(text->find("Saved Edit") != std::string::npos);
+		CHECK(measurement->Frames >= 1);
+		CHECK(measurement->MaxFrameMs >= measurement->SaveFrameMs);
+		CHECK(measurement->Seconds * 1000.0 >= measurement->SaveFrameMs);
+		CHECK(measurement->PrivateMBBefore > 0.0);
+		CHECK(measurement->PeakPrivateIncreaseMB >= 0.0);
+		CHECK(measurement->OpenSeconds > 0.0);
+
+		// A scene the project lacks fails with the reason.
+		CHECK_FALSE(MeasureWorldSaveInHelper(project->Directory, UUID(0x5C000000002FFFFFull), error).has_value());
+		CHECK(error.find("scene.open") != std::string::npos);
 	}
 }
 

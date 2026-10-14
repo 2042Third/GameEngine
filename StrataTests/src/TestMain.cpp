@@ -2,6 +2,7 @@
 #include <doctest/doctest.h>
 
 #include "Editor/SceneComparison.h"
+#include "Editor/WorldSaveMeasurement.h"
 #include "Engine/ModuleRegistrationHelpers.h"
 #include "Network/FakeEditorProcess.h"
 #include "Perf/StressProject.h"
@@ -777,6 +778,10 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 
 	// write-world-project, write-many-assets-project, write-texture-folder: the world-scale fixtures (Perf/WorldFixture.h).
 	if (const std::optional<int> result = Strata::Tests::RunWorldFixtureHelper(mode, argc, argv))
+		return *result;
+	// save-world <project directory> <scene handle> <result file>: a save of a world scene measured in an editor without a
+	// GPU, in a process of its own for its peak memory (Editor/WorldSaveMeasurement.h).
+	if (const std::optional<int> result = Strata::Tests::RunWorldSaveHelper(mode, argc, argv))
 		return *result;
 	if (mode == "write-stress-project")
 	{

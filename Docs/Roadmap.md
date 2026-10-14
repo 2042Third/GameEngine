@@ -532,6 +532,10 @@ Open items and deferrals later waves own:
     perf findings for it: `RuntimeMaxFinalizeStage` (its budget lies below the engine's designed frame-0 cost),
     `ThumbnailsMaxFrame` (redefined with a cold first attempt, its `Measured` not taken again) and
     `SceneOpenOver1MMaxFrame` (still over its budget in some runs).
+  - Provisional metrics (`"Provisional": true` in `Budgets.json`: measured and recorded, never checked) that wave 4 added
+    on the Mac, for the reference machine to measure and give their `Measured` and `Budget`: world-io's background
+    saves, `Perf.Editor.SaveMaxFrame250k` (Mac 5-16 ms on a shared machine, target 16), `SaveMaxFrame1M` (18-52 ms,
+    target 60), `SaveSeconds1M` (2.4-6.1 s, target 3,000 ms) and `SavePeakPrivateIncrease1M` (374-382 MB, target 600).
   - GPU tests on Windows and NVIDIA: CI runs no test of the `gpu` label, so renderer changes are validated on the Mac
     alone until `ctest --preset windows-debug` runs under the validation layer there again (drivers differ: NVIDIA has
     `drawIndirectCount`, a transfer queue and min/max samplers, which MoltenVK lacks).
