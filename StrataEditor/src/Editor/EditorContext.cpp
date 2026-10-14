@@ -16,6 +16,7 @@
 #include <Strata/Core/Profiling.h>
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
+#include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Scene/Components.h>
@@ -900,6 +901,20 @@ namespace Strata
 		const bool paused = m_RuntimeScene->IsPaused();
 		const uint32_t steps = m_RuntimeScene->GetStepFrames();
 		m_ReplacedFixedSteps += m_RuntimeScene->GetFixedStepCount();
+		// Said in the log and the activity journal: commands and agents would otherwise think the edited scene still runs.
+		auto describe = [this](AssetHandle scene, const std::string& name) -> nlohmann::json
+		{
+			const std::optional<AssetMetadata> metadata = scene.IsValid() && m_AssetManager ? m_AssetManager->GetMetadata(scene) : std::nullopt;
+			return { { "scene", scene.IsValid() ? UUIDToJson(scene) : nlohmann::json(nullptr) }, { "name", name },
+				{ "path", metadata ? nlohmann::json(metadata->Path) : nlohmann::json(nullptr) } };
+		};
+		const nlohmann::json from = describe(m_RuntimeSceneAsset, m_RuntimeScene->GetName());
+		const nlohmann::json to = describe(asset, next->GetName());
+		if (to["path"].is_string())
+			ST_INFO("Play mode switched to '{}' ({})", next->GetName(), to["path"].get<std::string>());
+		else
+			ST_INFO("Play mode switched to '{}'", next->GetName());
+		m_Journal->RecordEvent("play.sceneSwitched", { { "from", from }, { "to", to } }, true);
 		// The scene that goes stops here and is destroyed off the frame (a million entities take tens of milliseconds).
 		Scene::ReleaseInBackground(std::move(m_RuntimeScene));
 		m_RuntimeScene = std::move(next);

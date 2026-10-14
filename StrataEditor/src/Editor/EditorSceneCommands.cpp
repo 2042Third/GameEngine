@@ -311,7 +311,9 @@ namespace Strata
 		// Scene
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "scene.info", "Name, asset, modification and play state, entity count and settings of the open scene.", ObjectSchema({}),
+		registry.Register({ "scene.info", "Name, asset, modification and play state, entity count and settings of the edited scene, and what runs "
+			"while playing (running: the running scene, which a game's scene switch makes another than the edited one; null in edit mode; see "
+			"play.state). entityCount counts the active scene's entities (the running one while playing).", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				const Ref<Scene>& scene = context.GetActiveScene();
@@ -322,7 +324,8 @@ namespace Strata
 					{ "state", SceneStateToString(context.GetSceneState()) },
 					{ "paused", context.IsPaused() },
 					{ "entityCount", scene->GetEntityCount() },
-					{ "settings", DescribeSettings(scene->GetSettings()) } });
+					{ "settings", DescribeSettings(scene->GetSettings()) },
+					{ "running", DescribeRunningScene(context) } });
 			}, EditorCommandKind::Query });
 
 		registry.Register({ "scene.hierarchy", "Every entity of the active scene in hierarchy order, with parent, depth and component names.", ObjectSchema({}),

@@ -615,6 +615,15 @@ namespace Strata
 		m_Version++;
 	}
 
+	uint64_t CommandJournal::RecordEvent(std::string_view name, const nlohmann::json& details, bool playing)
+	{
+		const uint64_t id = Begin(CommandOrigin {}, name, EditorCommandKind::Session, EditorCommandResults::Session, details, playing);
+		if (CommandJournalEntry* entry = FindMutable(id))
+			entry->Event = true;
+		Complete(id, EditorCommandResult::Ok());
+		return id;
+	}
+
 	nlohmann::json CommandJournal::Describe(const CommandJournalEntry& entry)
 	{
 		nlohmann::json entities = nlohmann::json::array();
@@ -640,6 +649,8 @@ namespace Strata
 			description["parametersTruncated"] = true;
 		if (entry.Playing)
 			description["playing"] = true;
+		if (entry.Event)
+			description["event"] = true;
 		if (entry.RunningCopy)
 			description["runningCopy"] = true;
 		if (entry.Status == CommandStatus::Failed)

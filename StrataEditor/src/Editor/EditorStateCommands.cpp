@@ -509,7 +509,13 @@ namespace Strata
 						{ "scene", context.GetSceneHandle().IsValid() ? UUIDToJson(context.GetSceneHandle()) : nlohmann::json(nullptr) },
 						{ "modified", context.IsSceneModified() },
 						{ "entityCount", context.GetActiveScene()->GetEntityCount() } } },
-					{ "play", DescribePlayState(context) },
+					{ "play", [&context]()
+						{
+							nlohmann::json play = DescribePlayState(context);
+							play["pendingSteps"] = context.GetPendingSteps();
+							play["running"] = DescribeRunningScene(context);
+							return play;
+						}() },
 					{ "selection", {
 						{ "count", context.GetSelection().size() },
 						{ "primary", primary ? UUIDToJson(primary.GetUUID()) : nlohmann::json(nullptr) },

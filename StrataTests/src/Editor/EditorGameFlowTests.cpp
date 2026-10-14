@@ -289,6 +289,49 @@ TEST_SUITE("Editor.GameFlow")
 		CHECK(stopped.ErrorData["stepsRun"] == 1);
 	}
 
+	TEST_CASE("After a scene switch the game asked for, play.state names the running scene, and the journal records the switch")
+	{
+		GameFlowProject project(CreateTemporaryDirectory("EditorGameFlowRunning") / "Flow");
+		EditorContext& context = project.Context;
+		CHECK(project.Run("play.state")["running"].is_null());
+		project.Run("play.start");
+		const nlohmann::json copy = project.Run("play.state")["running"];
+		CHECK(copy["scene"].is_null()); // The edited scene's copy runs
+		CHECK(copy["name"] == "One");
+
+		const Ref<Scene> previous = context.GetActiveScene();
+		previous->RequestSceneLoad(project.LevelTwo);
+		UpdateUntil([&] { project.Update(); }, [&] { return context.GetActiveScene() != previous; });
+		const nlohmann::json running = project.Run("play.state")["running"];
+		CHECK(running["scene"] == UUIDToJson(project.LevelTwo));
+		CHECK(running["name"] == "Two");
+		CHECK(running["path"] == "Levels/Two.stscene");
+		CHECK(running["entityCount"] == context.GetActiveScene()->GetEntityCount());
+		CHECK(running["subScenes"].empty());
+		CHECK(running["switching"].is_null());
+		// scene.info names the edited scene, and what runs.
+		const nlohmann::json info = project.Run("scene.info");
+		CHECK(info["name"] == "One");
+		CHECK(info["running"]["name"] == "Two");
+		CHECK(project.Run("editor.status")["play"]["running"]["path"] == "Levels/Two.stscene");
+
+		// The journal has the switch as an event (not a command a replay would repeat).
+		const CommandJournalEntry* event = nullptr;
+		for (const CommandJournalEntry& entry : context.GetJournal().GetEntries())
+		{
+			if (entry.Command == "play.sceneSwitched")
+				event = &entry;
+		}
+		REQUIRE(event);
+		CHECK(event->Event);
+		CHECK(event->Kind == EditorCommandKind::Session);
+		CHECK(event->Parameters["from"]["name"] == "One");
+		CHECK(event->Parameters["to"]["path"] == "Levels/Two.stscene");
+		CHECK(CommandJournal::Describe(*event)["event"] == true);
+		project.Run("play.stop");
+		CHECK(project.Run("play.state")["running"].is_null());
+	}
+
 	TEST_CASE("Exported games quit with an exit code and switch scenes when their scene asks")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("GameRuntimeFlow");

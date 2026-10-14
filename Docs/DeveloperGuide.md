@@ -1270,7 +1270,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - A running game asks its owner to quit or to switch scenes through `Scene::RequestQuit`/`RequestSceneLoad` (scripts: the
   SDK's `Game`), honored after each update: the editor stops play mode, or loads the scene while the running one goes on
   and replaces it once the scene and everything it uses are in (`SceneLoader`; a paused game stays paused, with its pending
-  steps; `play.stop` still returns to the edited scene); `GameRuntime` ends the game (`GetQuitRequest`; StrataRuntime exits
+  steps; `play.stop` still returns to the edited scene; the switch is logged, "Play mode switched to 'Level2'
+  (Scenes/Level2.stscene)", and recorded in the activity journal as the event `play.sceneSwitched {from, to}`, an entry
+  of kind Session that no replay repeats, and `play.state`, `scene.info` and `editor.status` name what runs as `running`
+  (`CommandUtils::DescribeRunningScene`)); `GameRuntime` ends the game (`GetQuitRequest`; StrataRuntime exits
   with the code) or loads the scene from the pack the same way. A null handle restarts the running scene. Asking again for
   the scene that is loading keeps its load (scripts may ask in every update); a request for another scene replaces it.
   Scene loads never stop a frame: never load scenes with `LoadAssetSync` in the editor or games; go through `SceneLoader`

@@ -81,6 +81,7 @@ namespace Strata
 		EditorCommandKind Kind = EditorCommandKind::Edit;
 		EditorCommandResults Results = EditorCommandResults::Content;
 		bool Playing = false;     // It ran while the scene played
+		bool Event = false;       // Not a command: something that happened (RecordEvent), e.g. a scene switch the game asked for
 		bool RunningCopy = false; // It changed the running copy of the playing scene (EditorCommandResult::RunningCopy)
 		// The parameters as given, unless they were larger than CommandJournal::c_MaxParameterBytes: then shortened (long
 		// strings and arrays cut) and ParametersTruncated, so the entry cannot be run again exactly.
@@ -171,6 +172,9 @@ namespace Strata
 		// merges into a step recorded before (one for those between two commands).
 		uint64_t GetEditsOutsideCommands() const { return m_EditsOutsideCommands; }
 		const AutomationActivity& GetLatestAutomationActivity() const { return m_LatestAutomation; }
+		// Records something that happened without a command (a scene switch the game asked for: "play.sceneSwitched") as a
+		// finished entry of kind Session (replays skip it), source Internal, with `details` as its parameters. Returns its id.
+		uint64_t RecordEvent(std::string_view name, const nlohmann::json& details, bool playing);
 		// A deferred command was polled once more.
 		void NotePoll(uint64_t id);
 		// Ends the entry (only the first call counts) and, for a command begun with Begin, ends it as the running command.

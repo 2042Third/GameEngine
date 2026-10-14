@@ -118,8 +118,13 @@ namespace Strata
 		// nullopt when the command may go on. A forced discard keeps the changes as recovery data (EditorContext::ResetScene).
 		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action);
 
-		// The play state the play.* commands and editor.status report: {state, paused}.
+		// The play state the play.* commands report: {state, paused}.
 		nlohmann::json DescribePlayState(const EditorContext& context);
+		// What runs while playing (null in edit mode), for play.state, scene.info and editor.status: {scene (the running scene
+		// asset after a switch the game asked for; null while the edited scene's copy runs), name, path, entityCount,
+		// subScenes: [{id, scene, name, state, entities}], switching: {scene, progress} or null (a scene the game asked for
+		// loads)}.
+		nlohmann::json DescribeRunningScene(const EditorContext& context);
 
 		// What mutating commands report while the scene is running.
 		std::string GetRunningCopyWarning(const EditorContext& context);

@@ -227,6 +227,41 @@ namespace Strata
 			return { { "state", SceneStateToString(context.GetSceneState()) }, { "paused", context.IsPaused() } };
 		}
 
+		nlohmann::json DescribeRunningScene(const EditorContext& context)
+		{
+			if (!context.IsPlaying())
+				return nullptr;
+			const EditorAssetManager* assets = context.GetAssetManager();
+			auto metadataOf = [assets](AssetHandle asset)
+			{
+				return asset.IsValid() && assets ? assets->GetMetadata(asset) : std::nullopt;
+			};
+			Scene& scene = *context.GetActiveScene();
+			const AssetHandle asset = context.GetRuntimeSceneAsset();
+			const std::optional<AssetMetadata> metadata = metadataOf(asset);
+			nlohmann::json subScenes = nlohmann::json::array();
+			for (const SubSceneStatus& subScene : scene.GetSubScenes())
+			{
+				const std::optional<AssetMetadata> subSceneMetadata = metadataOf(subScene.Scene);
+				subScenes.push_back({
+					{ "id", subScene.ID },
+					{ "scene", subScene.Scene.IsValid() ? UUIDToJson(subScene.Scene) : nlohmann::json(nullptr) },
+					{ "name", subSceneMetadata ? nlohmann::json(subSceneMetadata->Name) : nlohmann::json(nullptr) },
+					{ "state", SubSceneStateToString(subScene.State) },
+					{ "entities", subScene.CreatedEntities } });
+			}
+			nlohmann::json switching = nullptr;
+			if (context.IsRuntimeSceneLoading())
+				switching = { { "scene", UUIDToJson(context.GetRuntimeSceneLoadTarget()) }, { "progress", context.GetRuntimeSceneLoadProgress() } };
+			return {
+				{ "scene", asset.IsValid() ? UUIDToJson(asset) : nlohmann::json(nullptr) },
+				{ "name", scene.GetName() },
+				{ "path", metadata ? nlohmann::json(metadata->Path) : nlohmann::json(nullptr) },
+				{ "entityCount", scene.GetEntityCount() },
+				{ "subScenes", std::move(subScenes) },
+				{ "switching", std::move(switching) } };
+		}
+
 		std::string GetRunningCopyWarning(const EditorContext& context)
 		{
 			return fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",

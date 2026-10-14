@@ -239,6 +239,8 @@ namespace Strata
 		bool IsPaused() const;
 		// The scene a running game asked for (Scene::RequestSceneLoad) while it loads (SwitchRuntimeScene), and its progress.
 		bool IsRuntimeSceneLoading() const { return m_RuntimeSceneLoad != nullptr; }
+		// The scene asset the game switched to (Scene::RequestSceneLoad); null while the copy of the edited scene runs.
+		AssetHandle GetRuntimeSceneAsset() const { return m_RuntimeSceneAsset; }
 		AssetHandle GetRuntimeSceneLoadTarget() const { return m_RuntimeSceneLoad ? m_RuntimeSceneLoad->Scene : UUID::Null(); }
 		float GetRuntimeSceneLoadProgress() const { return m_RuntimeSceneLoad ? m_RuntimeSceneLoad->Request.GetProgress() : 1.0f; }
 		// While paused, advances the simulation by `frames` fixed steps over the next updates, one per frame. Resuming

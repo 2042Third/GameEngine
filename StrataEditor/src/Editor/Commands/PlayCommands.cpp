@@ -236,10 +236,19 @@ namespace Strata
 				});
 			}, EditorCommandKind::Session });
 
-		registry.Register({ "play.state", "Whether the scene is being edited, played or simulated, and whether it is paused.", ObjectSchema({}),
+		registry.Register({ "play.state",
+			"Whether the scene is being edited, played or simulated, whether it is paused, the steps play.step still runs (pendingSteps), the fixed "
+			"steps run since play started (fixedSteps), and what runs (running, null in edit mode): {scene (the scene asset the game switched to, "
+			"null while the edited scene's copy runs), name, path, entityCount, subScenes: [{id, scene, name, state, entities}], switching: {scene, "
+			"progress} while a scene the game asked for loads, else null}.",
+			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
-				return EditorCommandResult::Ok(DescribePlayState(context));
+				nlohmann::json value = DescribePlayState(context);
+				value["pendingSteps"] = context.GetPendingSteps();
+				value["fixedSteps"] = context.GetFixedStepCount();
+				value["running"] = DescribeRunningScene(context);
+				return EditorCommandResult::Ok(std::move(value));
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 	}
 

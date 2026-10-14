@@ -372,7 +372,9 @@ Asset tab edits controllers as tables (one undo step per edit) and shows skeleto
 a paused scene by exactly n fixed steps, one per frame (unthrottled), and **answer once the steps ran** (`stepsRun`,
 `fixedSteps`, `time`): read the state right after, no `editor.wait` needed. Resuming (`play.pause {"paused": false}`)
 drops steps not run yet (a waiting `play.step` then fails with `stepsRun`); `"wait": false` answers at once with
-`pendingSteps`. `frames` is an older name of `steps`. `play.simulate` runs physics only.
+`pendingSteps`. `frames` is an older name of `steps`. `play.simulate` runs physics only. After the game switched scenes
+itself (`Game::LoadScene`), `play.state` (and `scene.info`, `editor.status`) name what runs as `running` (`scene`, `name`,
+`path`, `entityCount`, `subScenes`, `switching`); `scene.info`'s `name` stays the edited scene's.
 
 **Frame cost**: every `editor.wait` result of a running editor has `frameTimes` (`count`, `medianMs`, `meanMs`, `p95Ms`,
 `maxMs`): the CPU time of the frames that ran entirely during the wait, without the waits for the GPU and vsync (measure
