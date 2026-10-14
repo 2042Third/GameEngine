@@ -112,7 +112,9 @@ TEST_SUITE("Core.JobSystem")
 	{
 		REQUIRE(Platform::GetCurrentThreadPriority() == ThreadPriority::Normal);
 		ScopedJobSystem jobSystem(3, 2);
-		CHECK(JobSystem::GetBackgroundThreadCount() == 3);
+		// As many background threads as workers, unless the machine has too few hardware threads to leave the frame its own.
+		const uint32_t hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
+		CHECK(JobSystem::GetBackgroundThreadCount() == std::min(3u, JobSystem::GetDefaultBackgroundThreadCount(hardwareThreads)));
 		CHECK_FALSE(JobSystem::IsBackgroundThread());
 		// Which kind of thread ran a job, at what priority. Polled rather than waited for: a waiting thread would run the
 		// job itself.
@@ -152,20 +154,25 @@ TEST_SUITE("Core.JobSystem")
 		CHECK(background.Background);
 		CHECK(background.Priority == ThreadPriority::BelowNormal);
 
-		// What background work starts stays on the background threads, whatever priority it asks for.
+		// What background work starts stays on the background threads, whatever priority it asks for. This thread polls the
+		// inner job: a background job that did would hold the only background thread of a machine with three hardware
+		// threads or fewer (CI's macOS runners), where the inner job could never start.
 		std::atomic<bool> innerBackground = false;
 		std::atomic<ThreadPriority> innerPriority = ThreadPriority::Normal;
+		JobHandle inner;
 		const JobHandle outer = JobSystem::Submit([&]()
 		{
-			const JobHandle inner = JobSystem::Submit([&]()
+			inner = JobSystem::Submit([&]()
 			{
 				innerBackground = JobSystem::IsBackgroundThread();
 				innerPriority = Platform::GetCurrentThreadPriority();
 			}, JobPriority::High);
-			while (!inner.IsComplete())
-				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}, JobPriority::Background);
 		while (!outer.IsComplete())
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		// The outer job's completion publishes the handle it wrote.
+		REQUIRE(inner.IsValid());
+		while (!inner.IsComplete())
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		CHECK(innerBackground.load());
 		CHECK(innerPriority.load() == ThreadPriority::BelowNormal);
