@@ -888,6 +888,23 @@ of whole scenes never become one:
   `ParallelChunkEntities` (2,048) into `EntityColumns` while the reading thread hands the finished chunks to the sink in
   order, at most twice the worker count of chunks in memory. The scene and its reports do not depend on the path. A
   cancel is noticed after every chunk; an over-limit document is refused before any check.
+- **Cooked scenes** (`Scene/CookedScene`): the binary form exports put into packs (`AssetPackCook`'s `CookForPack`, called
+  by `EditorAssetManager::WriteAssetPack` with `AssetPackWriteOptions::CookDocuments`; `GameExportOptions::CookDocuments`,
+  `project.export`'s `cookDocuments`, defaults to true). "STSC" version 1: a 64-byte header with its own CRC-32C and a
+  table of 16-byte aligned sections with a CRC-32C each (strings; a scene's name and settings as compact JSON; entity IDs;
+  parent indices, each before its entity; the component types with their properties' names and types; one column per
+  type, a dense flag or strictly increasing entity indices, then each property's values together through
+  `Reflection/PropertyBinary` and each value's extra data, binary (`ComponentInfo::SerializeExtraBinary`: scripts) or the
+  JSON extra as MessagePack; the unknown components as MessagePack). Entity references are recomputed from the values on
+  load, never stored. `CookedSceneWriter::Write` writes a prototype; `CookedSceneReader::Read` validates the header, the
+  table and every checksum and bounds every count and index before it allocates, decodes the columns in parallel (a job
+  per type, values through `PropertyInfo::SetValue`, properties mapped by name: unknown ones skipped with a warning, a
+  changed type refused, types this build lacks kept as unknown components) into an `EntityPrototype`, and `ReadScene`
+  instantiates it keeping the IDs. The scene, prefab and model loaders take documents that start with the magic
+  (`CookedScene::IsCooked`) to it; the editor only ever has JSON in projects. The export cooks with the same streamed read
+  that finds a document's references for the pack's reference check, and applies
+  `AssetPackCookOptions::AdjustSceneSettings` (the export's scene transform) to cooked and JSON output alike. The
+  realistic 1M world starts in a game in 0.5 s cooked against 2.2 s with its JSON (`Perf.Runtime.World1MStart`).
 - **Cancellation.** `AssetLoadData::IsCancelled` turns true once a load is given up (cancelled, superseded, or the
   manager closing: `WaitForInFlightLoads` sets its load state's `Closing` before it waits); the scene, prefab and model
   loaders pass it to the reader, so a cancelled `SceneLoadRequest`, another scene opened or the editor quitting ends a

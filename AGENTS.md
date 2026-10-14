@@ -284,7 +284,8 @@ Details: [Asset pipeline](Docs/DeveloperGuide.md#asset-pipeline).
 - Scene, prefab and model documents stream: write them with `SceneDocumentWriter`, read them with `SceneDocumentReader`
   and an `EntitySink`, never through a DOM of a whole document (DOMs are for snapshots and small documents).
 - Loaders reject truncated or garbage bytes without crashing, and those of large documents ask
-  `AssetLoadData::IsCancelled` as they go; a pack format change extends the corruption tests of `AssetPackTests.cpp`.
+  `AssetLoadData::IsCancelled` as they go; a pack format change extends the corruption tests of `AssetPackTests.cpp`, a
+  cooked scene format change those of `CookedSceneTests.cpp`.
 - Texture sizes come from `GetMipByteSize`, never from bytes per pixel; cooked textures are read through
   `ParseCookedTexture`.
 - Hold `AssetHandle`s across frames, not `Ref`s (a held `Ref` defeats the budget), request what you use every frame,

@@ -538,7 +538,9 @@ Open items and deferrals later waves own:
     its streamed reads, `Perf.Scene.CancelLoad1M` (13.6-38 ms, target 100), `RefuseOverCap1M` (25-27 ms, target 100),
     `PerfGPU.Editor.WorldOpen1MPeakPrivate` (1,093 MB, target 2,048), `WorldOpen1MMaxFrame` (32.5 ms: the scene's swap,
     about 30 ms in main's build on the Mac too; target `SceneOpen1MMaxFrame`'s budget), `WorldOpen1MSeconds` (2.4 s,
-    target 4,000 ms), `WorldOpen1MSavedPeakPrivate` (1,109 MB) and `WorldOpen1MSavedSeconds` (2.6 s); and its
+    target 4,000 ms), `WorldOpen1MSavedPeakPrivate` (1,109 MB) and `WorldOpen1MSavedSeconds` (2.6 s); its cooked scenes,
+    `Perf.Runtime.World1MStart` (526 ms, target 1,500), `World1MTransientMemory` (97 MB, target 300) and
+    `QuitDuringLoad1M` (13 ms, target 500); and its
     registration, `Perf.Asset.FirstScan10k`, `WarmScan10k`, `Perf.Editor.ImportFolder600MaxFrame` and
     `PerfGPU.Editor.Launch30kStatus`.
   - GPU tests on Windows and NVIDIA: CI runs no test of the `gpu` label, so renderer changes are validated on the Mac

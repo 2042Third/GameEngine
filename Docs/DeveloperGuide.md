@@ -609,7 +609,12 @@ short. Their full wording:
   it needs of each entity. Never parse a whole document into a DOM (a million entities' DOM takes gigabytes and blocks
   cancellation); `SceneSerializer::Serialize`/`Deserialize` and snapshots are for small documents (undo, the clipboard,
   commands). A sink that can take entities prepared in parallel implements `ReadPrepared`; the reader's results must not
-  depend on the path, which `Scene.Documents` checks for every sink.
+  depend on the path, which `Scene.Documents` checks for every sink. Exports put the documents into packs cooked
+  (`CookedScene`, Architecture.md "Scene documents"): a component whose extra data is not JSON-only gives it a binary
+  form (`ComponentInfoBuilder::ExtraBinary`, read back as its JSON form reads), every change of the cooked format extends
+  the corruption tests of `CookedSceneTests.cpp` (truncation at every byte, bit flips of the header and table, huge counts
+  with the checksums rewritten), and a `PropertyType` added gets its binary form in `Reflection/PropertyBinary` (a
+  `static_assert` fails the build until it has one).
 
 ### Importers
 
