@@ -1874,6 +1874,58 @@ rect requires the rect (`ComponentInfo::Requires`), so adding an image by name a
 event targets) are reflected entity properties: duplicates, pastes and prefab instances remap them, play mode's copy
 keeps them.
 
+**Layout** (`GameUIScene`, `GameUILayout.cpp`). One `GameUIScene` per scene, in its registry's context (`Get`, created on
+first use; it holds handles, never Refs or GPU objects). It keeps the root canvases in hierarchy order and each canvas's
+elements in depth-first order (parents before children: the draw order), and lays a canvas out for a **screen** (`UIScreen`:
+pixel size and content scale) at a scale s and a size of screen / s canvas units:
+
+- `ConstantPixelSize`: s = `ScaleFactor`; `ConstantPhysicalSize`: s = content scale x `ScaleFactor` (content scale 1 is 96
+  DPI); `ScaleWithScreen`: s = 2^lerp(log2(W / Rw), log2(H / Rh), `MatchWidthOrHeight`) for the reference resolution
+  (Rw, Rh). The root rect is the canvas's size in units inset by `SafeAreaPadding`.
+- Rect math, per axis, in the parent's box P: anchors A0 = P.min + `AnchorMin` x P.size, A1 = P.min + `AnchorMax` x P.size;
+  size = max(A1 - A0 + `Size`, 0) (or the content's size on axes the rect fits); pivot point A0 + (A1 - A0) x `Pivot` +
+  `Position`; min = pivot point - size x `Pivot`.
+- Layout groups place their active children that do not `IgnoreLayout`, in sibling order: stacked at their preferred
+  sizes (their `Size`, or their content when they fit it) with `Spacing`, the block aligned in the padded rect by
+  `ChildAlignment`, children filling the cross axis with `StretchChildren`; grids in `CellSize` cells, `Columns` per row
+  or as many as fit. A group's own anchors still place it; the children it places ignore theirs.
+- Fitting content: a rect that fits takes its content's preferred size on those axes: a `UIText`'s shaped text (unwrapped
+  width; the height at the width it has), a `UILayout`'s children block plus padding. Layout runs per axis, widths first,
+  each axis bottom up for preferred sizes and top down for boxes, because a wrapped text's height depends on its width.
+- Widget parts: a slider's `Fill` is anchored from the slider's start to its normalized value along `Direction`, its
+  `Handle` at the value; a toggle's `Checkmark` (with its descendants) is drawn only while the toggle is on. They read the
+  widgets' values, never write the scene, so they behave the same in edit mode, play mode and under undo.
+
+Rects are kept in canvas units and turned into pixels as units x s, so a canvas keeps up to `c_MaxLayoutsPerCanvas` (4)
+layouts keyed by its size in units (a game view, a capture of another aspect, the editor's canvas mode; the one used
+longest ago goes first), and a window resized at the same aspect ratio under `ScaleWithScreen` lays nothing out again.
+
+**The UI contract** (as the transform contract): `GameUIScene` listens to the UI components' `on_construct`, `on_update`
+and `on_destroy` signals and reads the scene's hierarchy moves and activity changes (`GetHierarchyMoves`,
+`GetWorldTransformChanges`, each changed entity checked against its element index), so code that writes UI component
+fields directly signals the change (`MarkModified`, `registry.patch`; `ComponentAccess`, the script host and the UI system
+do). A change marks its element in every layout of its canvas: a rect or layout change lays out the element's subtree from
+the highest ancestor whose rect depends on its children (a layout group, or a rect fitting its content), so a leaf moved
+under a plain parent lays out one element; a text change reshapes the text and lays out only when its rect fits it; colors,
+textures and toggles rewrite quads only. Structural changes (elements added, removed, reparented or reordered) rebuild the
+canvas's element list, keep the boxes and shaped texts of the elements that stay, and lay out what moved and the groups it
+left and entered. Layout is lazy: `EnsureLayout(screen)` brings every canvas up to date for a screen when the UI pass or
+the UI system asks. Debug builds compare every cached layout with a full recomputation after each `EnsureLayout`
+(`GameUIScene::Validate`, which names the entity whose write was not signaled); `Tests::CheckSceneCaches` checks it too.
+`GameUISceneStats` (`ElementsLaidOut`, `TextsShaped`, `QuadsBuilt`, `FullRebuilds`) counts the work for tests: an idle
+frame does none.
+
+**Text and quads.** Texts are shaped with `ShapeText` on their font's `FontFace` (never rasterizing: layout measures
+fitted text this way), once per change of the text, its font or the options its rect gives it, per layout; a font that
+loads replaces the default font its texts were shaped with (`GetContentChanges` of the assets the UI watches). The quads
+(`RenderData::UIQuad`, 64 bytes, `GameUI/GameUIRenderData.h`) are built per layout in element order: an image is one quad
+(nine when sliced, one cut quad when filled), a text one quad per glyph. Each element writes into a slot of its own with
+room to spare for texts, so a changed element rewrites its slot alone and a journal of changed ranges
+(`GetQuadChanges`) lets each renderer upload only those; a text that outgrows its slot, or a change of the elements,
+rebuilds the array (`GetQuadArrayId` changes). Quads refer to UI texture indices and scene font indices (`GetTextures`,
+`GetFonts`), never to GPU slots or atlas placements, which each renderer resolves (mip streaming moves slots, atlases are
+per renderer).
+
 ## Scripting
 
 Rules for the ABI, host functions and the SDK are in AGENTS.md and DeveloperGuide.md, "Scripting"; writing scripts

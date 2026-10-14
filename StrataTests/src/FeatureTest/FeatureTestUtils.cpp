@@ -2,6 +2,7 @@
 
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/GameUI/GameUIScene.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Components.h"
@@ -296,6 +297,8 @@ namespace Strata::Tests
 			std::string error;
 			REQUIRE_MESSAGE(scene.ValidateWorldTransforms(&error), error);
 			REQUIRE_MESSAGE(scene.ValidateHierarchy(&error), error);
+			if (GameUIScene* ui = GameUIScene::Find(scene))
+				REQUIRE_MESSAGE(ui->Validate(&error), error);
 			if (frame == c_FeatureReloadFrame)
 				REQUIRE_MESSAGE(engine.Reload(&error), error);
 		}

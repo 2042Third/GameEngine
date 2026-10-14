@@ -333,6 +333,16 @@ Skeletons, clips, controllers and the "Animation" scene system live in `Strata/s
   the main thread afterwards (a test compares thread counts bit for bit).
 - Root motion moves entities only in `AnimationSystem::ApplyRootMotion`.
 
+## Game UI
+
+Canvases, rects, images, texts, widgets and layout groups live in `Strata/src/Strata/GameUI/`; only the composition root
+includes the module ([Game UI](Docs/DeveloperGuide.md#game-ui)).
+
+- The UI contract: code that writes UI component fields directly signals the change (`MarkModified`, `registry.patch`);
+  `GameUIScene` recomputes only what changed, and Debug builds assert after every `EnsureLayout` that its layout equals a
+  full recomputation (`GameUIScene::Validate` names the entity).
+- UI components live in GameUI (`Requires("UIRect")`, category "UI"), never in `Scene/Components.h`.
+
 ## Editor
 
 `StrataEditorCore` (`EditorContext`, `EditorCommandRegistry`) is the editor without UI; `StrataEditorUI` draws it and

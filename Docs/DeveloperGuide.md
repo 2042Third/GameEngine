@@ -48,6 +48,8 @@ characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together
   - [Crash locations and containment](#crash-locations-and-containment)
 - [Audio](#audio)
 - [Animation](#animation)
+- [Game UI](#game-ui)
+  - [The UI contract](#the-ui-contract)
 - [Editor](#editor)
   - [Editor UI rules](#editor-ui-rules)
   - [Changes go through commands](#changes-go-through-commands)
@@ -1049,6 +1051,29 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `SceneRendererStats::StalePoses`), and the system poses such an animator for the next frame, also while the scene is
   paused (`SceneSystem::OnPausedUpdate`, which paused frames call instead of the updates): `viewport.capture` renders
   again until it shows the pose of the moment.
+
+## Game UI
+
+The game's own UI lives in the GameUI module (`Strata/src/Strata/GameUI/`): canvases, rects, images, texts, widgets and
+layout groups (`GameUIComponents.h`), the per-scene layout and quads (`GameUIScene`), registered by `RegisterGameUIModule`.
+How it works: Architecture.md, "Game UI". Only the composition root includes the module.
+
+- New UI components live in `GameUI/GameUIComponents.h`, registered in `RegisterGameUIComponents` with category "UI" and
+  `Requires("UIRect")`, never in `Scene/Components.h`.
+- Coordinates are canvas units, +Y down, (0, 0) at the top left; colors are display (sRGB) colors. A root canvas maps units
+  to pixels with its scale; commands and hit tests report pixels.
+- Text is measured and laid out with `ShapeText` on the font's `FontFace`; nothing in layout rasterizes glyphs.
+
+### The UI contract
+
+- Code that writes UI component fields directly signals the change (`Entity::MarkModified<T>()`, `registry.patch`), as
+  `ComponentAccess`, `SetPropertyWithUndo`, the script host and the UI system do; values written right after
+  `AddComponent` need no signal. `GameUIScene` follows the signals, the scene's hierarchy moves and its activity changes,
+  and recomputes only what changed.
+- Debug builds assert after every `GameUIScene::EnsureLayout` that the cached layout equals a full recomputation; the
+  message names the entity whose write was not signaled. Tests check it with `Tests::CheckSceneCaches` (or
+  `GameUIScene::Validate`) and count the work with `GameUIScene::TakeStats` (`GameUI.Dirty`).
+- `GameUIScene` holds asset handles, never Refs or GPU objects: scenes are released on background threads.
 
 ## Editor
 
