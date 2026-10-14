@@ -27,15 +27,33 @@ means `Strata/src/Strata/Scene/Scene.h`.
 The root `CMakeLists.txt` adds `Strata/vendor`, `StrataScriptCore` and `Strata`, then the optional targets
 (`STRATA_BUILD_EDITOR`, `STRATA_BUILD_RUNTIME`, `STRATA_BUILD_CLI`, `STRATA_BUILD_TESTS`). An arrow means "links".
 
+**The layer table is the build.** `Strata/CMakeLists.txt` calls `strata_add_layer_libraries` (`CMake/StrataLayers.cmake`)
+with `StrataTests/Architecture/Layers.json`: it globs the engine's sources once (the extensions `LayeringAnalyzer` reads,
+other operating systems' `Platform/<OS>/` folders left out), gives each file to the one layer whose `Paths` match it and
+whose `Exclude` does not (the same glob semantics as `MatchesGlob`; a file in no layer or in two fails the configure,
+naming it), and makes one static library per layer, `Strata_<Layer>` (alias `Strata::<Layer>`), that links `PUBLIC`
+exactly the built layers of its `MayInclude`: a library can only link what its layer may include. Every layer library
+gets `strata_configure_target`, the precompiled header `stpch.h` and `StrataEngineCodegen` (`PRIVATE`: Jolt's public
+compile options and definitions, the code generation every engine object had while the engine was one library that
+linked Jolt). Layers the table marks `"Tooling": true` (AssetPipeline, Network, ImGui) are `EXCLUDE_FROM_ALL`; a layer
+with `"Option"` is built only when that CMake option is on. `Strata` is an `INTERFACE` library of every built layer a
+game contains, `StrataTooling` one of the tooling layers. CMake writes `<build>/Strata/LayerLibraries.json` (each layer's
+target, whether it is built, its sources and the layers it links), which `Architecture.Libraries` checks against the
+table. A new layer is a `Layers.json` entry only.
+
 ```mermaid
 graph TD
   Editor[StrataEditor exe] --> EditorUI[StrataEditorUI static]
   EditorUI --> EditorCore[StrataEditorCore static]
-  EditorCore --> Strata[Strata static]
+  EditorUI --> ImGuiLayer[Strata::ImGui]
+  EditorCore --> Strata[Strata interface: the runtime layers]
+  EditorCore --> Pipeline[Strata::AssetPipeline]
+  EditorCore --> Network[Strata::Network]
   Runtime[StrataRuntime exe] --> Strata
   CLI[StrataCLI exe] --> CLILib[StrataCLILib static]
-  CLILib --> Strata
+  CLILib --> Network
   Tests[StrataTests exe] --> Strata
+  Tests --> Tooling[StrataTooling interface: the tooling layers]
   Tests --> EditorUI
   Tests --> CLILib
   Tests --> ScriptCore
@@ -43,6 +61,35 @@ graph TD
   Module[script modules] --> ScriptCore
   Strata --> Vendor[Strata/vendor]
 ```
+
+The layer libraries link each other along the layer table (Core at the bottom, Engine at the top: the composition root
+and the entry point), so static-library order follows the layer DAG on every linker; registration is explicit (the
+composition root calls every module's registration function), so no object depends on self-registration surviving the
+linker. Vendor and system libraries attach to the layers that use them (`strata_layer_link` in `Strata/CMakeLists.txt`):
+
+| Layer | Links |
+| --- | --- |
+| Core | `PUBLIC` glm, EnTT, spdlog, nlohmann_json, Tracy when enabled; `PRIVATE` shell32, ole32, bcrypt, dbghelp (Windows), CoreFoundation (Apple), Threads and dl (Linux); the generated `Version.h` and `VersionCommit.h` (`StrataVersionCommit`) |
+| App | `PRIVATE` glfw, Vulkan headers (`VulkanLoader`), stb (window icon) |
+| Asset | `PRIVATE` zstd_decompress |
+| Renderer | `PUBLIC` nvrhi; `PRIVATE` nvrhi_vk, Vulkan headers, glfw, stb, MikkTSpace, meshoptimizer; the shaders (`strata_add_shaders(Strata_Renderer ...)`) and the default font |
+| Physics | `PRIVATE` Jolt |
+| Audio | `PRIVATE` miniaudio |
+| Scripting | `PRIVATE` StrataScriptCore (`ScriptABI.h` only) |
+| Network | `PRIVATE` ws2_32 (Windows) |
+| ImGui | `PUBLIC` imgui |
+| AssetPipeline | `PRIVATE` stb, cgltf, meshoptimizer, zstd_compress |
+
+The vendor libraries only tools use (imgui, ImGuizmo, cgltf, zstd_compress, nfd) are `EXCLUDE_FROM_ALL`, and stb has one
+object per header (`Strata/vendor/Implementations/Stb*.c`; rect_pack and truetype share one), so the linker leaves out
+what a program never calls. **Games link no tooling**, proven twice: at configure time `strata_check_link_closure`
+walks what `StrataRuntime` links (`LINK_LIBRARIES` and `INTERFACE_LINK_LIBRARIES`, transitively) and fails on a tooling
+layer, imgui, ImGuizmo, nfd, cgltf, zstd_compress, the editor's or the CLI's libraries or doctest, naming the path; and
+the CTest `StrataRuntime.NoTooling` reads the linker map StrataRuntime is linked with (`StrataRuntime.map` next to it:
+`/MAP`, `-Map=`, `-map,`; exports copy the executable only) and fails when it names an object or a library of Dear
+ImGui, the ImGui layer, ImGuizmo, the asset pipeline, the network layer or zstd's compressor
+(`StrataTests/Architecture/CheckNoTooling.cmake`). Dist builds also leave NVRHI's validation layer out
+(`VulkanGraphicsDevice.cpp`: a validation request logs a warning and makes the plain device).
 
 Each target is defined in the `CMakeLists.txt` of its directory; script modules by `strata_add_script_module()` in
 `StrataScriptCore/CMake/StrataScriptModule.cmake`. The brand assets (the strata mark as PNGs, raw RGBA and `.ico`, in
@@ -53,13 +100,15 @@ when the commit does).
 
 | Target | Kind | What it is |
 | --- | --- | --- |
-| `Strata` | static library | Engine modules, platform code, embedded shaders and default font (`Strata/src/`). |
+| `Strata_<Layer>` (`Strata::<Layer>`) | static libraries | One per layer of `Layers.json`: the engine modules, platform code, embedded shaders and default font (`Strata/src/`). |
+| `Strata`, `StrataTooling` | interface libraries | Every built layer a game contains; the tooling layers (AssetPipeline, Network, ImGui). |
+| `StrataEngineCodegen` | interface library | The compile options and definitions every engine object shares (Jolt's public ones). |
 | `StrataScriptCore` | interface library | Script C ABI and header-only C++ SDK; links glm only (`StrataScriptCore/`). |
-| `StrataEditorCore` | static library | The editor without UI (`StrataEditor/src/Editor/`). |
-| `StrataEditorUI` | static library | The ImGui interface on the core: `EditorLayer`, panels, widget kit, theme, embedded fonts; links `nfd` (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer.*`). |
+| `StrataEditorCore` | static library | The editor without UI (`StrataEditor/src/Editor/`); links `Strata`, `Strata::AssetPipeline` and `Strata::Network`. |
+| `StrataEditorUI` | static library | The ImGui interface on the core: `EditorLayer`, panels, widget kit, theme, embedded fonts; links `Strata::ImGui`, and `ImGuizmo` and `nfd` privately (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer.*`). |
 | `StrataEditor` | executable | Runs the UI: `EditorApplication` (options, theme and fonts, `EditorHost`) (`StrataEditor/src/EditorApplication.cpp`). Embeds the window icon (`EditorIcon.h`); on Windows `StrataEditor.rc.in` adds the `.ico` and version information. |
-| `StrataRuntime` | executable | Plays exported games (`StrataRuntime/src/RuntimeApplication.cpp`); on Windows `StrataRuntime.rc.in` gives it (and every exported game) the `.ico`. |
-| `StrataCLILib`, `StrataCLI` | static library, executable | Automation client and MCP server (`StrataCLI/src/`). |
+| `StrataRuntime` | executable | Plays exported games (`StrataRuntime/src/RuntimeApplication.cpp`); links `Strata` only; on Windows `StrataRuntime.rc.in` gives it (and every exported game) the `.ico`. |
+| `StrataCLILib`, `StrataCLI` | static library, executable | Automation client and MCP server (`StrataCLI/src/`); links `Strata::Network` only (Core comes with it). |
 | `StrataTests` | executable | doctest suites; builds the test script modules as dependencies (`StrataTests/`). |
 | script modules | `MODULE` libraries | Game code: the tests' modules and every game project's `Scripts/`. |
 
@@ -76,11 +125,11 @@ point lights); `Perf.Editor` (editor commands), `PerfGPU.Editor` (the real `Stra
 
 What may depend on what:
 
-- `Strata` knows nothing about the editor, the runtime executable, the CLI or the tests. It links `StrataScriptCore`
-  privately and only for `StrataScript/ScriptABI.h`; it never includes the C++ SDK (comment in
-  `Strata/CMakeLists.txt`). Its public dependencies are glm, EnTT, spdlog, nlohmann_json, NVRHI, Dear ImGui and
-  ImGuizmo; Vulkan, GLFW, Jolt, miniaudio, stb, cgltf, MikkTSpace and meshoptimizer are private, so dependents do not
-  see their headers.
+- The engine's libraries know nothing about the editor, the runtime executable, the CLI or the tests. The Scripting
+  layer links `StrataScriptCore` privately and only for `StrataScript/ScriptABI.h`; it never includes the C++ SDK. The
+  public dependencies are glm, EnTT, spdlog and nlohmann_json (Core), NVRHI (Renderer) and Dear ImGui (the ImGui layer,
+  tooling); everything else is private to the layer that uses it (the table above), so dependents do not see its
+  headers. ImGuizmo is the editor UI's own.
 - Script modules link `StrataScriptCore` only and never the engine; only two entry points are exported
   (`StrataScriptModule.cmake`). See [Scripting](#scripting).
 - `StrataEditorCore` holds the editor's state and commands; `StrataEditorUI` only draws that state and calls the
@@ -89,7 +138,7 @@ What may depend on what:
 - StrataCLI's logic lives in `StrataCLILib` so that `StrataTests` can link it (`STRATA_TESTS_HAVE_CLI`). Editor and
   CLI tests compile only when those targets exist (`StrataTests/CMakeLists.txt`).
 - Platform code is in `Strata/src/Platform/` (`Windows`, `Posix`, `GLFW`, `Vulkan`), filtered per OS by
-  `Strata/CMakeLists.txt`; engine modules reach it through interfaces such as `Core/Platform.h`, `Core/Window.h`,
+  `strata_add_layer_libraries`; engine modules reach it through interfaces such as `Core/Platform.h`, `Core/Window.h`,
   `Core/CrashGuard.h`, `Core/Process.h`, `Core/DynamicLibrary.h`, `Core/FileChangeNotifier.h` and
   `Renderer/GraphicsDevice.h`. Engine code outside `src/Platform/` includes no OS headers.
 
@@ -378,9 +427,10 @@ runtime module (tooling, the asset pipeline, is handed in by the programs that u
 
 ### Layers
 
-The modules form a stack of layers, defined by path patterns in `StrataTests/Architecture/Layers.json` (the patterns
-stand in for the library split of wave 4, so the rules apply before files move). A file may include files of its own
-layer and of the layers it lists, which are always lower ones:
+The modules form a stack of layers, defined by path patterns in `StrataTests/Architecture/Layers.json`, and each layer
+is a library of its own (`Strata_<Layer>`, made from the table: see [Targets and dependencies](#targets-and-dependencies)).
+A file may include files of its own layer and of the layers it lists, which are always lower ones; layers marked
+`Tooling` (AssetPipeline, Network, ImGui) are never part of a game:
 
 | Layer | Files (under `Strata/src`) | May include |
 | --- | --- | --- |
@@ -397,9 +447,9 @@ layer and of the layers it lists, which are always lower ones:
 | Scripting | `Scripting/**` | Core, Input, Asset, Reflection, Scene |
 | Project | `Project/**` | Core, App (its engine module), Asset, Reflection |
 | Runtime | `Runtime/**` | Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Scripting, Project |
-| Network | `Network/**`, `Platform/*/*Socket.cpp` | Core |
-| ImGui | `ImGui/**` | Core, Input, App, Renderer |
-| AssetPipeline | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `TextureCooker.*`, `BC7Encoder.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio, Animation (the glTF importer writes skeletons and clips) |
+| Network (tooling) | `Network/**`, `Platform/*/*Socket.cpp` | Core |
+| ImGui (tooling) | `ImGui/**` | Core, Input, App, Renderer |
+| AssetPipeline (tooling) | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `TextureCooker.*`, `BC7Encoder.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio, Animation (the glTF importer writes skeletons and clips) |
 | Engine | `Engine/**` | the layers a game contains: Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Animation, Scripting (shipped games link the composition root and the entry point too; see below) |
 
 `Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in `StrataTests.Core`) reads every C, C++ and

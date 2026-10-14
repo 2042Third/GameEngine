@@ -19,6 +19,13 @@ cmake --build --preset windows-debug --target StrataTests   # just the tests
 
 - Source files are globbed: a new `.cpp`/`.h` needs a re-configure. Shaders are not globbed: add every new
   shader to `strata_add_shaders` in `Strata/CMakeLists.txt`.
+- The engine is one static library per layer of `StrataTests/Architecture/Layers.json` (`Strata_<Layer>`, made by
+  `CMake/StrataLayers.cmake`): a new engine file needs a layer pattern there (the configure names files in no layer or
+  in two), a new layer is a table entry, and a vendor library a layer needs is a `strata_layer_link` row in
+  `Strata/CMakeLists.txt`. Programs link `Strata` (the runtime layers) and, for tools, the tooling layers
+  (`Strata::AssetPipeline`, `Strata::Network`, `Strata::ImGui`, or `StrataTooling`). A configure that fails with
+  "StrataRuntime links tooling that games must not contain" names the path through which a runtime layer reached a
+  tooling one: invert that dependency.
 - Warnings are errors (`/W4 /WX`, `-Wall -Wextra -Werror`). Fix them; never silence them locally.
 - Cached options survive a re-configure. If a target you expect is missing, check `build/<preset>/CMakeCache.txt`
   (for example `STRATA_BUILD_RUNTIME`) and pass `-D<OPTION>=ON`.
@@ -111,7 +118,9 @@ ctest --preset macos-debug -LE perf
   (`StrataTests --strata-test-helper=check-image <png> [--dominant red|green|blue <percent>]`: not black, not a single
   color, and here at least 1% of the blue box), plus `StrataRuntime.NoCameraScreenshot` (a screenshot of the
   missing-camera message fails the run), `StrataEditor.Automation` (the `EndToEnd*` suites: the real editor, headless
-  without a GPU, driven by StrataCLI and its MCP server), and the feature test (label `feature`):
+  without a GPU, driven by StrataCLI and its MCP server), `StrataRuntime.NoTooling` (the runtime's linker map,
+  `StrataRuntime.map` next to it, names no object or library of ImGui, ImGuizmo, the asset pipeline, the network or
+  zstd's compressor: `StrataTests/Architecture/CheckNoTooling.cmake`), and the feature test (label `feature`):
   `StrataTests.FeatureTest` (suites `FeatureTest` and `Editor.FeatureTest`) plus `StrataFeatureTest.Clean` → `.Copy` →
   `StrataEditor.FeatureTest` → `StrataRuntime.FeatureTest` (the real executables with a copy of
   `StrataTests/FeatureTest`). See Docs/DeveloperGuide.md ("Feature test") for what the feature test enforces when you

@@ -75,13 +75,16 @@ set(STRATA_PERF_RESULTS_DIR "${CMAKE_BINARY_DIR}/PerfResults")
 add_executable(StrataTests ${STRATA_TEST_SOURCES})
 strata_configure_target(StrataTests)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_TEST_SOURCES})
+# The engine with its tooling (the asset pipeline: importers; the network: the RPC tests; ImGui: the UI tests).
 # StrataScriptCore: the scripting tests call the script C ABI directly.
-target_link_libraries(StrataTests PRIVATE Strata StrataScriptCore doctest stb)
+target_link_libraries(StrataTests PRIVATE Strata StrataTooling StrataScriptCore doctest stb)
 # The glTF tests compress models with meshoptimizer's encoders (EXT_meshopt_compression), which the engine only decodes.
 target_link_libraries(StrataTests PRIVATE meshoptimizer)
 # The editor's UI library brings the editor core; the UI tests draw it headless (src/Editor/ImGuiHarness.h).
 if(TARGET StrataEditorUI)
 	target_link_libraries(StrataTests PRIVATE StrataEditorUI)
+	# One UI test checks the viewport's gizmo (ImGuizmo), which the editor's UI library links privately.
+	target_link_libraries(StrataTests PRIVATE ImGuizmo)
 	# The samples the editor offers are copied next to the executables; the tests check that copy.
 	add_dependencies(StrataTests StrataSamples)
 endif()
@@ -95,6 +98,7 @@ target_compile_definitions(StrataTests PRIVATE
 	"STRATA_TEST_SCRIPT_DEPENDENCY=\"$<TARGET_FILE:StrataTestScriptDependency>\""
 	"STRATA_SOURCE_DIR=\"${PROJECT_SOURCE_DIR}\""
 	"STRATA_FEATURE_TEST_DIR=\"${STRATA_FEATURE_TEST_DIR}\""
+	"STRATA_LAYER_LIBRARIES_FILE=\"${PROJECT_BINARY_DIR}/Strata/LayerLibraries.json\""
 	"STRATA_PERF_RESULTS_FILE=\"${STRATA_PERF_RESULTS_DIR}/$<CONFIG>.json\"")
 foreach(module IN LISTS STRATA_TEST_SCRIPT_MODULES)
 	string(REPLACE "StrataTestScripts" "" moduleKind "${module}")
@@ -174,6 +178,14 @@ add_test(NAME StrataTests.GPU
 	COMMAND StrataTests --test-suite=GPU* --no-intro=true
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
 set_tests_properties(StrataTests.GPU PROPERTIES LABELS "gpu")
+
+# Games contain no tooling: the runtime's linker map names no object or library of Dear ImGui, ImGuizmo, the asset
+# pipeline, the network or zstd's compressor (Architecture/CheckNoTooling.cmake; the configure checks what it links).
+if(TARGET StrataRuntime)
+	add_test(NAME StrataRuntime.NoTooling
+		COMMAND "${CMAKE_COMMAND}" "-DMAP=$<TARGET_FILE_DIR:StrataRuntime>/StrataRuntime.map"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Architecture/CheckNoTooling.cmake")
+endif()
 
 # Builds a game project's scripts through the StrataScriptCore package (outside this build, as game projects do) and
 # checks that the engine loads the result. The package must give scripts the same glm definitions as the engine's glm

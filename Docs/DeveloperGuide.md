@@ -542,7 +542,15 @@ short. Their full wording:
   `Scene/SceneServices.h`, through which the systems of a playing scene use each other, or an engine service,
   `Core/EngineServices.h`, for what outlives scenes) instead. A
   proven downward dependency may widen `MayInclude`, with the reason in the layer's `Notes`. Removing an exception
-  lowers `MaxAllowlistEntries`. Details: Docs/Architecture.md, "Layers".
+  lowers `MaxAllowlistEntries`. The table is also the build (`CMake/StrataLayers.cmake`): every layer is a static
+  library, `Strata_<Layer>`, that links `PUBLIC` exactly the built layers of its `MayInclude`, so a library cannot link
+  what its layer may not include, and `Architecture.Libraries` checks that every source compiles into its layer's
+  library. A new layer is a table entry only (it becomes a library at the next configure), a vendor or system library a
+  layer needs is a `strata_layer_link(<Layer> PUBLIC|PRIVATE ...)` row in `Strata/CMakeLists.txt`, and a layer games
+  never contain is marked `"Tooling": true` (excluded from all; programs link it through `Strata::<Layer>` or
+  `StrataTooling`). Games link no tooling: the configure fails when `StrataRuntime`'s link closure reaches a tooling
+  layer or library, and `StrataRuntime.NoTooling` reads its linker map. Details: Docs/Architecture.md, "Targets and
+  dependencies" and "Layers".
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers,
   built-in asset objects, scene systems), never through lower layers calling functions of higher ones. Each module
   has one registration function in its own folder (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`);

@@ -25,6 +25,7 @@ option(STRATA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors in first-par
 
 include(StrataConfigurations)
 include(StrataCompilerOptions)
+include(StrataLayers)
 include(StrataShaders)
 include(StrataEmbeddedFiles)
 
@@ -38,6 +39,9 @@ endif()
 
 if(STRATA_BUILD_RUNTIME)
 	add_subdirectory(StrataRuntime)
+	# Games contain no tooling: neither a tooling layer nor what only tools link (StrataRuntime.NoTooling checks the
+	# linked executable too).
+	strata_check_link_closure(StrataRuntime FORBID imgui ImGuizmo nfd cgltf zstd_compress StrataEditorCore StrataEditorUI StrataCLILib doctest)
 endif()
 
 if(STRATA_BUILD_CLI)

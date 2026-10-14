@@ -34,7 +34,7 @@ the work: checklist item 5.
 
 | Path | Contents |
 | --- | --- |
-| `Strata/` | Engine static library. `src/Strata/<Module>/` holds the engine modules, `src/Platform/<OS or backend>/` the platform implementations, `shaders/` the GLSL sources, `vendor/` the pinned third-party submodules. |
+| `Strata/` | The engine: a static library per layer. `src/Strata/<Module>/` holds the engine modules, `src/Platform/<OS or backend>/` the platform implementations, `shaders/` the GLSL sources, `vendor/` the pinned third-party submodules. |
 | `StrataEditor/` | The editor: `src/Editor/` its core without UI (`StrataEditorCore`), `src/UI/`, `src/Panels/` and `EditorLayer` its ImGui interface (`StrataEditorUI`) ([details](Docs/DeveloperGuide.md#repository-layout)). |
 | `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`): the `.stgame` manifest next to it, or `--game <file>` ([options](Docs/DeveloperGuide.md#repository-layout)). |
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
@@ -236,7 +236,9 @@ The threading model, frame loop and pipelines these rules protect are described 
   layer and on stale lines of `LayeringAllowlist.txt`. Never add a line or widen `MayInclude` to make a sideways or
   upward include pass: invert the dependency (an interface in the lower layer, a registry, a scene service,
   `Scene/SceneServices.h`, or an engine service, `Core/EngineServices.h`); only a proven downward dependency widens
-  `MayInclude`, with the reason in the layer's `Notes`. Removing an exception lowers `MaxAllowlistEntries`.
+  `MayInclude`, with the reason in the layer's `Notes`. Removing an exception lowers `MaxAllowlistEntries`. The table is
+  the build: each layer is a library (`Strata_<Layer>`) linking its `MayInclude`; a new layer is a table entry, its vendor
+  libraries a `strata_layer_link` row, and games link no `Tooling` layer (`StrataRuntime.NoTooling`).
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers, scene
   systems...), never through lower layers calling functions of higher ones. Each module has one registration function
   (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`), called only by the composition root,

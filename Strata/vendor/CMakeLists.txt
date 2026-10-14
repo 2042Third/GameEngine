@@ -81,10 +81,12 @@ strata_vendor_option(JSON_Install OFF)
 strata_vendor_option(JSON_ImplicitConversions OFF)
 add_subdirectory(json SYSTEM)
 
+# Libraries only tools use (the editor, the tests) are excluded from all: a build of the runtime alone never compiles them.
+
 # --- Dear ImGui, docking branch (imgui) -----------------------------------------------------------
 # The core only: its platform backend (Strata/ImGui/ImGuiPlatform) and renderer backend (ImGuiRenderer) are the engine's.
 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/imgui")
-add_library(imgui STATIC
+add_library(imgui STATIC EXCLUDE_FROM_ALL
 	"${IMGUI_DIR}/imgui.cpp"
 	"${IMGUI_DIR}/imgui_demo.cpp"
 	"${IMGUI_DIR}/imgui_draw.cpp"
@@ -95,16 +97,23 @@ target_include_directories(imgui SYSTEM PUBLIC "${IMGUI_DIR}" "${IMGUI_DIR}/misc
 target_compile_definitions(imgui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
 
 # --- ImGuizmo -------------------------------------------------------------------------------------
-add_library(ImGuizmo STATIC "${CMAKE_CURRENT_SOURCE_DIR}/ImGuizmo/src/ImGuizmo.cpp")
+add_library(ImGuizmo STATIC EXCLUDE_FROM_ALL "${CMAKE_CURRENT_SOURCE_DIR}/ImGuizmo/src/ImGuizmo.cpp")
 target_include_directories(ImGuizmo SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/ImGuizmo/src")
 target_link_libraries(ImGuizmo PUBLIC imgui)
 
 # --- stb (image, image_write, image_resize2, dxt, truetype, rect_pack) -----------------------------
-add_library(stb STATIC "${STRATA_VENDOR_IMPLEMENTATIONS}/StbImplementation.c")
+# One object per header, so that the linker leaves out what a program never calls (games: the DXT encoder and the
+# resizer). rect_pack and truetype share one: stb_truetype uses rect_pack's packer when it sees its implementation.
+add_library(stb STATIC
+	"${STRATA_VENDOR_IMPLEMENTATIONS}/StbImage.c"
+	"${STRATA_VENDOR_IMPLEMENTATIONS}/StbImageWrite.c"
+	"${STRATA_VENDOR_IMPLEMENTATIONS}/StbImageResize.c"
+	"${STRATA_VENDOR_IMPLEMENTATIONS}/StbDxt.c"
+	"${STRATA_VENDOR_IMPLEMENTATIONS}/StbTrueType.c")
 target_include_directories(stb SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/stb")
 
 # --- cgltf ----------------------------------------------------------------------------------------
-add_library(cgltf STATIC "${STRATA_VENDOR_IMPLEMENTATIONS}/CgltfImplementation.c")
+add_library(cgltf STATIC EXCLUDE_FROM_ALL "${STRATA_VENDOR_IMPLEMENTATIONS}/CgltfImplementation.c")
 target_include_directories(cgltf SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/cgltf")
 
 # --- MikkTSpace -----------------------------------------------------------------------------------
@@ -171,7 +180,7 @@ add_library(zstd_decompress STATIC
 	"${ZSTD_DIR}/decompress/zstd_decompress_block.c")
 target_include_directories(zstd_decompress SYSTEM PUBLIC "${ZSTD_DIR}")
 target_compile_definitions(zstd_decompress PUBLIC ZSTD_DISABLE_ASM=1 ZSTD_LEGACY_SUPPORT=0)
-add_library(zstd_compress STATIC
+add_library(zstd_compress STATIC EXCLUDE_FROM_ALL
 	"${ZSTD_DIR}/compress/fse_compress.c"
 	"${ZSTD_DIR}/compress/hist.c"
 	"${ZSTD_DIR}/compress/huf_compress.c"
@@ -221,5 +230,5 @@ endif()
 if(STRATA_BUILD_EDITOR)
 	strata_vendor_option(NFD_BUILD_TESTS OFF)
 	strata_vendor_option(NFD_INSTALL OFF)
-	add_subdirectory(nfd SYSTEM)
+	add_subdirectory(nfd SYSTEM EXCLUDE_FROM_ALL)
 endif()

@@ -1,5 +1,5 @@
 {
-	"Description": "The engine's layers, bottom up. Every file under SourceRoot belongs to exactly one layer (Paths minus Exclude, globs relative to SourceRoot) and may include only files of its own layer and of the layers in MayInclude, which must be listed below it, and none of the third-party headers whose path starts with a prefix of its MayNotIncludeExternal. Architecture.Layering (StrataTests/src/Architecture/LayeringTests.cpp) enforces it; LayeringAllowlist.txt lists the known exceptions, each with the workstream that removes it, and holds exactly MaxAllowlistEntries lines (lower it when you remove one). Widen a MayInclude only for a proven downward dependency, with the reason in the layer's Notes; never to legalize a sideways or upward include. The paths stand in for the planned moves of files between libraries (wave 4, engine-modules).",
+	"Description": "The engine's layers, bottom up, and the build: CMake makes one static library per layer from this table (Strata_<Name>, CMake/StrataLayers.cmake), linking exactly the built layers of its MayInclude. Every file under SourceRoot belongs to exactly one layer (Paths minus Exclude, globs relative to SourceRoot) and may include only files of its own layer and of the layers in MayInclude, which must be listed below it, and none of the third-party headers whose path starts with a prefix of its MayNotIncludeExternal. Tooling marks the layers games never contain (their libraries are excluded from all, linked through StrataTooling); Option names the CMake option that builds an optional layer. Architecture.Layering (StrataTests/src/Architecture/LayeringTests.cpp) enforces the includes and Architecture.Libraries the libraries; LayeringAllowlist.txt lists the known exceptions, each with the workstream that removes it, and holds exactly MaxAllowlistEntries lines (lower it when you remove one). Widen a MayInclude only for a proven downward dependency, with the reason in the layer's Notes; never to legalize a sideways or upward include",
 	"SourceRoot": "Strata/src",
 	"MaxAllowlistEntries": 0,
 	"Layers": [
@@ -83,16 +83,20 @@
 		{
 			"Name": "Network",
 			"Notes": "Sockets, JSON-RPC and editor sessions (tooling); includes the OS socket implementations.",
+			"Tooling": true,
 			"Paths": [ "Strata/Network/**", "Platform/*/*Socket.cpp" ],
 			"MayInclude": [ "Core" ]
 		},
 		{
 			"Name": "ImGui",
+			"Notes": "Dear ImGui's layer and engine module (tooling: editors and tools; games have no ImGui).",
+			"Tooling": true,
 			"Paths": [ "Strata/ImGui/**" ],
 			"MayInclude": [ "Core", "Input", "App", "Renderer" ]
 		},
 		{
 			"Name": "AssetPipeline",
+			"Tooling": true,
 			"Notes": "Importers, the texture cooker and its BC7 encoder, the editor's asset database, the dependency scanner and the pack writer (tooling, never in shipped games: games only read packs, so they link no compressor). Animation is a proven downward dependency: the glTF importer writes the stored forms of skeletons and clips, and the dependency scanner reads the clips an animation controller plays.",
 			"Paths": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*", "Strata/Asset/TextureCooker.*", "Strata/Asset/BC7Encoder.*", "Strata/Asset/AssetPackWriter.*", "Strata/Asset/AssetDependencies.*" ],
 			"MayInclude": [ "Core", "Asset", "Reflection", "Scene", "Renderer", "Audio", "Animation" ]
