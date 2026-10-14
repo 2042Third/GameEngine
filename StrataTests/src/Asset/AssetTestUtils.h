@@ -101,7 +101,9 @@ namespace Strata::Tests
 		std::atomic<uint32_t> m_Calls = 0;
 	};
 
-	// Starts the job system for a test and shuts it down at the end, also when the test fails.
+	// Starts the job system for a test and shuts it down at the end, also when the test fails. It has as many background
+	// threads as workers on any machine: the application's default leaves hardware threads to the frame, which leaves one
+	// background thread on a machine of three (CI's macOS runners), and tests that run imports side by side need theirs.
 	class ScopedJobSystem
 	{
 	public:
@@ -111,6 +113,7 @@ namespace Strata::Tests
 			JobSystemSpecification specification;
 			specification.WorkerThreadCount = workerThreads;
 			specification.IOThreadCount = ioThreads;
+			specification.BackgroundThreadCount = workerThreads;
 			JobSystem::Init(specification);
 		}
 
