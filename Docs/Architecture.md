@@ -556,7 +556,10 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Editor.UI` | `Application::RenderImGui`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
 | `Present` | `GraphicsDevice::EndFrame`, after the work time is measured (outside the frame time) |
 
-Modules and games register more (`RegisterStage`, up to 64); a scene system names its stage in its descriptor. Each frame
+Modules and games register more (`RegisterStage`, up to 64); a scene system names its stage in its descriptor, and the
+editor times its commands as `Editor.Commands` (`EditorCommandRegistry::Execute` and `PollCommandResult`: a `scene.save`
+or an `entity.create` shows there instead of as untimed time; the stages of what a command runs, a capture's render,
+nest in it). Each frame
 also records how busy the job system's worker, I/O and background threads were since the previous frame
 (`JobSystem::GetStats`: per-thread busy time and completed jobs, written by each pool thread under a sequence lock and
 read without stopping it).

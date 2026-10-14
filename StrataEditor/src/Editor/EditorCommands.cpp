@@ -3,6 +3,7 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorContext.h"
 
+#include <Strata/Core/Profiling.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Scene.h>
 
@@ -89,6 +90,9 @@ namespace Strata
 	EditorCommandResult EditorCommandRegistry::Execute(EditorContext& context, std::string_view name, const nlohmann::json& parameters,
 		const CommandOrigin& origin) const
 	{
+		// Command work shows in the frame profiler (editor.perf) instead of as untimed time; the stages of what a command runs
+		// (a scene load's, the renderer's of a capture) nest in it and count for themselves.
+		ST_PROFILE_STAGE("Editor.Commands");
 		const EditorCommand* command = Find(name);
 		CommandJournal& journal = context.GetJournal();
 		const UndoStack& undo = context.GetUndoStack();
