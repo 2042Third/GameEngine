@@ -1121,7 +1121,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
     pools close to or over their budget (the assets pill,
     `N ready · M streaming · <pool> X/Y MB` for the pool closest to its budget, `GetMostPressuredPool`, after
     `K importing` while imports run (`editor.status` has the count as `assets.importing`), in Sulfur from
-    85% of it and Cinnabar beyond it or on failures; click to open the Streaming panel). The frame pill (`ms · FPS · J
+    85% of it and Cinnabar beyond it or on failures; click to open the Streaming panel), bodies of the running game
+    without collision (`N bodies without collision`, Cinnabar, only while its physics world is at its growth limit with
+    bodies waiting; click to open the Streaming panel's Physics section). The frame pill (`ms · FPS · J
     jobs`, jobs running or queued averaged over 60 frames) opens the Performance panel. Where the pills' full texts do
     not fit side by side (a window about 1,000 points wide with every stream's pill) they all show compact ones, until the
     full ones fit with a margin again (`EditorLayer::StatusPillText`: who is connected without the port, the class count
@@ -1474,6 +1476,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   too narrow even then. Its Type column is as wide as the longest type it names (`StreamingPanel::GetTypeLabel`: the
   animation clip and controller go by "Animation" and "Controller"; the row's tooltip names the type in full), so keep new
   types' labels about as short, or the laptop layouts change.
+- **`physics.stats`** (`Editor/EditorWorldCommands.cpp`, a query whose results follow the session) reports the running
+  game's physics (`PhysicsSystem::GetStats` and `IPhysicsCapacity`): bodies by type, awake ones, character controllers and
+  the body slots in use; capacities and the megabytes they reserve; bodies waiting for a slot (a world at its growth limit)
+  or for other reasons; the bodies built and destroyed and the milliseconds spent on them in the last frame; growths;
+  demand; dropped contact steps; the last step's time, the steps run and held. `{running: false}` while editing. While a
+  game runs, the Streaming panel's Physics section shows the same capacity, read once per frame through
+  `IPhysicsCapacity` (constant time), and leads the status bar's pill of bodies without collision.
 
 ### Edits while playing and value ranges
 

@@ -2080,7 +2080,8 @@ is the `strata-scripting` skill. The layers:
   `project.exportStatus`, `project.cancelExport` and `project.setExportSettings`),
   `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects`, `editor.removeRecentProject` and `editor.perf`,
   log, play, selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
-  `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`) and
+  `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`),
+  `EditorWorldCommands.cpp` (`physics.stats`) and
   `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel` and `editor.showDialog` (the
   export, project, recovery, script and about dialogs), the commands about its window. Conventions:
   DeveloperGuide.md, "Command conventions".

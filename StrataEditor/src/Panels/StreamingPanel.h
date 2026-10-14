@@ -4,6 +4,7 @@
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/JobSystem.h>
+#include <Strata/Scene/SceneServices.h>
 
 #include <imgui.h>
 
@@ -55,6 +56,9 @@ namespace Strata
 	//
 	// The totals come from one AssetManagerBase::GetStats per frame, taken in OnUpdate (also while the panel is hidden, for
 	// the status bar's assets pill) after the frame's commands ran, so they equal what asset.stats returned in that frame.
+	// While a game runs, its physics capacity (IPhysicsCapacity, constant time) is read there too, for the Physics section
+	// (bodies against the capacity, waiting bodies, the last frame's builds and destructions, growths, reserved memory) and
+	// the status bar's pill of bodies without collision.
 	// The table is read at most every c_TableRefreshSeconds while the panel is visible (and when its sort or filter
 	// changes): the main thread only copies the residency (GetResidencySamples) and, when GetMetadataVersion changed, the
 	// metadata; a job names, sorts and filters the rows (BuildTable), and the table shows them once it finished. So no frame
@@ -80,6 +84,10 @@ namespace Strata
 
 		// The statistics of this frame's OnUpdate (nullopt without an active asset manager).
 		const std::optional<AssetManagerStats>& GetStats() const { return m_Stats; }
+		// The running game's physics capacity as this frame's OnUpdate read it (nullopt while editing or without physics).
+		const std::optional<PhysicsCapacityInfo>& GetPhysics() const { return m_Physics; }
+		// Opens the Physics section at the next draw (the status bar's pill of bodies without collision leads there).
+		void RevealPhysics() { m_RevealPhysics = true; }
 		// The asset table as last built, for tests and tools: its rows (every listed asset, unfiltered), the labels of the
 		// rows it shows (filtered, in their order), whether a build is running and how many builds started.
 		size_t GetTableRowCount() const;
@@ -133,6 +141,7 @@ namespace Strata
 		void DrawPools(const AssetManagerStats& stats);
 		void DrawStreaming(const AssetManagerStats& stats);
 		void DrawUploads(const AssetManagerStats& stats);
+		void DrawPhysics(const PhysicsCapacityInfo& physics);
 		void DrawTable();
 		// Measures the fixed columns' widths (again only when the text size changed).
 		void UpdateColumnWidths();
@@ -149,6 +158,8 @@ namespace Strata
 		static void BuildTable(TableBuild& build);
 	private:
 		std::optional<AssetManagerStats> m_Stats;
+		std::optional<PhysicsCapacityInfo> m_Physics;
+		bool m_RevealPhysics = false;
 		std::array<float, c_UploadHistoryFrames> m_UploadHistory = {}; // MB per frame, a ring
 		uint32_t m_UploadCursor = 0;
 		uint32_t m_UploadSamples = 0;

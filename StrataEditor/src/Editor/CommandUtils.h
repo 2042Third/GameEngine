@@ -69,6 +69,8 @@ namespace Strata
 
 		// The totals of AssetManagerBase::GetStats as asset.stats and editor.status report them (EditorStreamingCommands.cpp).
 		nlohmann::json DescribeAssetStats(const AssetManagerStats& stats);
+		// physics.stats' answer for a scene (EditorWorldCommands.cpp): {running: false} for none or one that does not run.
+		nlohmann::json DescribePhysicsStats(const Scene* scene);
 
 		// Statistics of frame times in milliseconds (at least one), as editor.wait and project.export report them: {count,
 		// medianMs (the mean of the two middle ones for an even count), meanMs, p95Ms (nearest rank), maxMs}.

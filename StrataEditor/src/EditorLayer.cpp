@@ -1540,6 +1540,7 @@ namespace Strata
 		ImGui::SameLine();
 		DrawFramePill();
 		DrawAssetsPill();
+		DrawPhysicsPill();
 
 		ImGui::SameLine();
 		bool showConsole = DrawAutomationPill();
@@ -1616,6 +1617,31 @@ namespace Strata
 		}
 		if (clicked)
 			m_Panels.Focus(EditorPanels::c_Performance);
+	}
+
+	void EditorLayer::DrawPhysicsPill()
+	{
+		// Only a world at its growth limit leaves bodies without collision (others grow before their next step): rare, and
+		// something to fix. The Streaming panel reads the running game's capacity once per frame.
+		StreamingPanel* streaming = m_Panels.Get<StreamingPanel>(EditorPanels::c_Streaming);
+		if (!streaming || !streaming->GetPhysics() || streaming->GetPhysics()->WaitingForSlot == 0)
+			return;
+		const PhysicsCapacityInfo& physics = *streaming->GetPhysics();
+		const std::string text = fmt::format("{} {} without collision", physics.WaitingForSlot, physics.WaitingForSlot == 1 ? "body" : "bodies");
+		const std::string compact = fmt::format("{} no collision", physics.WaitingForSlot);
+		ImGui::SameLine();
+		const bool clicked = UI::Pill("Status.Physics", Icons::CircleAlert, StatusPillText(Icons::CircleAlert, text, compact), UI::GetThemeColors().Error);
+		if (UI::IsTooltipDue())
+		{
+			ImGui::SetTooltip("%u bodies of the running game have no collision: its physics world is at its growth limit of %u bodies "
+				"(PhysicsSettings::GrowthLimit), so they wait until bodies are removed. Click to see the world's capacity (Streaming, Physics).",
+				physics.WaitingForSlot, physics.MaxBodies);
+		}
+		if (clicked)
+		{
+			streaming->RevealPhysics();
+			m_Panels.Focus(EditorPanels::c_Streaming);
+		}
 	}
 
 	void EditorLayer::DrawAssetsPill()

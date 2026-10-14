@@ -124,6 +124,7 @@ namespace
 		"input.state",
 		"log.read",
 		"material.get",
+		"physics.stats",
 		"play.state",
 		"prefab.status",
 		"project.exportStatus", "project.info", "project.samples", "project.templates",
@@ -150,7 +151,7 @@ namespace
 	// from them.
 	constexpr std::string_view c_SessionResultCommands[] = {
 		"asset.stats", "camera.get", "edit.history", "editor.activity", "editor.perf", "editor.recentProjects", "editor.status", "input.state",
-		"log.read", "play.state", "project.exportStatus", "scene.loadStatus", "scene.recoveryStatus", "script.status", "selection.get",
+		"log.read", "physics.stats", "play.state", "project.exportStatus", "scene.loadStatus", "scene.recoveryStatus", "script.status", "selection.get",
 		"viewport.getSettings",
 	};
 

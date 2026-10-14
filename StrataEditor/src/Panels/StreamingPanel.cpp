@@ -1,11 +1,13 @@
 #include "Panels/StreamingPanel.h"
 
+#include "Editor/EditorContext.h"
 #include "UI/EditorFonts.h"
 #include "UI/ItemProbe.h"
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
 #include <Strata/Core/StringUtils.h>
+#include <Strata/Scene/Scene.h>
 
 #include <imgui.h>
 #include <spdlog/fmt/fmt.h>
@@ -237,8 +239,17 @@ namespace Strata
 		return AssetTypeToString(type);
 	}
 
-	void StreamingPanel::OnUpdate(EditorPanelContext&)
+	void StreamingPanel::OnUpdate(EditorPanelContext& context)
 	{
+		// Only a running game has physics; reading its capacity costs a service lookup.
+		m_Physics.reset();
+		if (context.Context.IsPlaying())
+		{
+			const Ref<Scene>& scene = context.Context.GetActiveScene();
+			if (const IPhysicsCapacity* physics = scene && scene->IsRunning() ? scene->GetService<IPhysicsCapacity>() : nullptr)
+				m_Physics = physics->GetCapacityInfo();
+		}
+
 		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
 		if (!manager)
 		{
@@ -302,6 +313,14 @@ namespace Strata
 			DrawStreaming(stats);
 			DrawUploads(stats);
 		}
+		if (m_Physics)
+		{
+			if (m_RevealPhysics)
+				ImGui::SetNextItemOpen(true);
+			m_RevealPhysics = false;
+			if (UI::SectionHeader("Streaming.Physics", "Physics"))
+				DrawPhysics(*m_Physics);
+		}
 		if (sideBySide)
 		{
 			ImGui::EndChild();
@@ -341,6 +360,39 @@ namespace Strata
 		ImGui::Text("Evictions %llu (%llu checked) \xC2\xB7 cancellations %llu \xC2\xB7 staging releases %llu", static_cast<unsigned long long>(stats.Evictions),
 			static_cast<unsigned long long>(stats.EvictionChecks), static_cast<unsigned long long>(stats.Cancellations),
 			static_cast<unsigned long long>(stats.StagingReleases));
+	}
+
+	void StreamingPanel::DrawPhysics(const PhysicsCapacityInfo& physics)
+	{
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		if (physics.MaxBodies == 0)
+		{
+			ImGui::TextDisabled("The game has no physics bodies");
+			return;
+		}
+		// Body slots against the capacity, colored like a memory budget: a world grows before it is full, so High says it
+		// will grow soon and Over that it is at its growth limit with bodies waiting.
+		const BudgetPressure pressure = physics.WaitingForSlot > 0 ? BudgetPressure::Over : GetBudgetPressure(physics.Bodies, physics.MaxBodies);
+		DrawBar("Bodies", GetFraction(physics.Bodies, physics.MaxBodies), GetBudgetPressureColor(pressure),
+			fmt::format("{} / {} ({:.0f}%)", physics.Bodies, physics.MaxBodies, 100.0 * static_cast<double>(physics.Bodies) / static_cast<double>(physics.MaxBodies)));
+		UI::ItemProbe::Record("Streaming.PhysicsBodies");
+		if (ImGui::IsItemHovered())
+			ImGui::SetTooltip("Body slots in use (bodies of inactive entities and character controllers' presence bodies count) against the world's capacity, "
+				"which grows before it is full (physics.stats)");
+		if (physics.WaitingForSlot > 0)
+		{
+			ImGui::TextColored(colors.Error, "%u bodies without collision: the world is at its growth limit", physics.WaitingForSlot);
+			UI::ItemProbe::Record("Streaming.PhysicsWaiting");
+		}
+		ImGui::Text("Last frame: +%u built Â· -%u destroyed", physics.AddedLastUpdate, physics.RemovedLastUpdate);
+		ImGui::SameLine();
+		ImGui::TextColored(physics.PendingOther > 0 ? colors.Warning : colors.TextSecondary, "Â· %u waiting for meshes or valid transforms", physics.PendingOther);
+		if (physics.GrowthCount > 0)
+			ImGui::Text("Grew %u %s, the last in %.1f ms", physics.GrowthCount, physics.GrowthCount == 1 ? "time" : "times", physics.LastGrowthMs);
+		else
+			ImGui::TextColored(colors.TextSecondary, "Never grew");
+		ImGui::SameLine();
+		ImGui::TextColored(colors.TextSecondary, "Â· reserves %.1f MB", ToMB(physics.ReservedBytes));
 	}
 
 	void StreamingPanel::DrawUploads(const AssetManagerStats& stats)
