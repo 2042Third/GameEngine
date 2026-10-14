@@ -185,6 +185,11 @@ namespace Strata
 
 		uint32_t GetMeshSlotCapacity() const { return static_cast<uint32_t>(m_Meshes.size()); }
 		AssetHandle GetMeshHandle(uint32_t slot) const { return m_Meshes[slot].Handle; }
+		// The slot of a mesh (or material) the scene uses, or c_InvalidIndex.
+		uint32_t FindMeshSlot(AssetHandle mesh) const;
+		uint32_t FindMaterialSlot(AssetHandle material) const;
+		// Changes whenever a mesh or material slot is taken or let go: caches by slot compare the slots' handles again.
+		uint64_t GetSlotsVersion() const { return m_SlotsVersion; }
 		bool IsMeshLayoutKnown(uint32_t slot) const { return m_Meshes[slot].LayoutKnown; }
 		// Material slot of each submesh (the default material where the submesh has none).
 		std::span<const uint32_t> GetSubmeshMaterialSlots(uint32_t slot) const { return m_Meshes[slot].SubmeshMaterialSlots; }
@@ -425,6 +430,7 @@ namespace Strata
 		std::vector<uint32_t> m_MeshCheckScratch;
 		std::vector<MaterialEntry> m_Materials;
 		std::vector<uint32_t> m_FreeMaterials;
+		uint64_t m_SlotsVersion = 0;
 		std::unordered_map<AssetHandle, uint32_t> m_MaterialSlotsByHandle;
 
 		std::vector<RenderData::InstanceData> m_Instances;

@@ -7,7 +7,9 @@
 
 #include <nvrhi/nvrhi.h>
 
+#include <array>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -17,6 +19,7 @@
 namespace Strata
 {
 
+	class AssetManagerBase;
 	class RenderScene;
 
 	// What one RenderSceneGPU::Update uploaded.
@@ -27,6 +30,10 @@ namespace Strata
 		uint64_t ProxyBytes = 0;     // Culling records (RenderData::GPUProxy)
 		uint64_t PaletteBytes = 0;   // Joint matrices of posed skinned proxies
 		uint32_t NewProxies = 0;     // Proxies that became drawable (resident)
+		uint32_t MeshesChecked = 0;  // Mesh slots whose table entry was worked out again (content changes, new slots)
+		uint32_t MaterialsBuilt = 0; // Material slots whose data was built again
+		uint64_t MaterialBytes = 0;  // Material data uploaded (RenderData::MaterialData)
+		uint64_t TableBytes = 0;     // Mesh table entries and material flags uploaded
 	};
 
 	// The GPU's copy of a render scene (RenderScene), shared by every renderer of the scene: its instance data, a culling
@@ -39,7 +46,16 @@ namespace Strata
 	// resident proxies upload at once, every update (a moved object never lags); new proxies (a scene's first frame, entities
 	// created, a proxy index taken over) upload within the frame's budget for them (BeginFrame), oldest first, and wait
 	// meanwhile (GetDeferredBytes) with a record of zeros, which draws nothing. A destroyed proxy's record is cleared at once.
-	// The buffers grow by a GPU copy into larger ones, so growth uploads nothing again. Main thread only.
+	// The buffers grow by a GPU copy into larger ones, so growth uploads nothing again.
+	//
+	// The GPU's culling draws what is resident, whatever a frame requested, so the mirror also keeps the scene's mesh table
+	// (per mesh slot the GeometryHandle of the loaded mesh, with c_CullMeshSkinnedArena for the Skinned arena; 0 while it is
+	// not loaded) and its material data and flags (per material slot, of the loaded material, or of the default material
+	// while it is not loaded; flags 0 while neither is), naming textures by texture table index (a map not uploaded yet has
+	// its fallback). They follow the asset manager's content changes and the scene's slots (GetSlotsVersion): a material is
+	// built again when it, the default material or one of its textures was loaded, reloaded or dropped (a reverse index from
+	// textures to their materials), never because a texture streamed levels. Nothing here requests or stamps an asset:
+	// the renderers do. Main thread only.
 	class RenderSceneGPU
 	{
 	public:
@@ -55,7 +71,7 @@ namespace Strata
 		// own that it executes at once, so that work recorded later reads them. New proxies upload while the frame's budget of
 		// `newProxyBytesPerFrame` (records and instances) lasts, at least one per frame. Returns false when a buffer could not
 		// be made (logged): the buffers keep what they held, and a later update tries again.
-		bool Update(const RenderScene& renderScene, uint64_t newProxyBytesPerFrame, RenderSceneGPUUpdate* outUpdate = nullptr);
+		bool Update(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, uint64_t newProxyBytesPerFrame, RenderSceneGPUUpdate* outUpdate = nullptr);
 		// A device frame began (RenderSceneGPUCache::BeginFrame): the budget for new proxies starts again.
 		void BeginFrame(uint64_t frame);
 
@@ -65,9 +81,30 @@ namespace Strata
 		uint64_t GetDeferredBytes() const { return m_DeferredBytes; }
 		uint32_t GetDeferredProxies() const { return m_DeferredProxies; }
 
+		// Whether every buffer exists (a failed update keeps those an earlier one made): renderers draw only then.
+		bool HasBuffers() const
+		{
+			return m_Instances.Buffer && m_Proxies.Buffer && m_Palette.Buffer && m_MeshTableBuffer.Buffer && m_MaterialBuffer.Buffer && m_MaterialFlagBuffer.Buffer;
+		}
 		nvrhi::IBuffer* GetInstanceBuffer() const { return m_Instances.Buffer; }
 		nvrhi::IBuffer* GetProxyBuffer() const { return m_Proxies.Buffer; }
 		nvrhi::IBuffer* GetPaletteBuffer() const { return m_Palette.Buffer; }
+		nvrhi::IBuffer* GetMeshTableBuffer() const { return m_MeshTableBuffer.Buffer; }
+		nvrhi::IBuffer* GetMaterialBuffer() const { return m_MaterialBuffer.Buffer; }
+		nvrhi::IBuffer* GetMaterialFlagBuffer() const { return m_MaterialFlagBuffer.Buffer; }
+
+		// The tables as the buffers hold them after the latest update.
+		uint32_t GetMeshTableEntry(uint32_t slot) const { return slot < m_MeshTable.size() ? m_MeshTable[slot] : 0u; }
+		uint32_t GetMaterialFlags(uint32_t slot) const { return slot < m_MaterialFlags.size() ? m_MaterialFlags[slot] : 0u; }
+		const RenderData::MaterialData* GetMaterialData(uint32_t slot) const { return slot < m_MaterialData.size() ? &m_MaterialData[slot] : nullptr; }
+		uint32_t GetMeshRecords(uint32_t slot) const { return slot < m_MeshRecords.size() ? m_MeshRecords[slot] : 0u; }
+		uint32_t GetMeshSlotCount() const { return static_cast<uint32_t>(m_MeshTable.size()); }
+		uint32_t GetMaterialSlotCount() const { return static_cast<uint32_t>(m_MaterialFlags.size()); }
+		// The LOD records (draw records) of the loaded meshes of an arena (0: Static, 1: Skinned), and whether any material the
+		// mirror draws is double-sided or alpha-masked: the buckets a frame can have.
+		uint32_t GetArenaRecords(uint32_t arena) const { return m_ArenaRecords[arena]; }
+		bool HasDoubleSidedMaterials() const { return m_DoubleSidedMaterials > 0; }
+		bool HasAlphaMaskedMaterials() const { return m_AlphaMaskedMaterials > 0; }
 		// Changes whenever a buffer is replaced, to a value no mirror had before: binding sets made for another value are
 		// made again.
 		uint64_t GetBufferVersion() const { return m_BufferVersion; }
@@ -90,6 +127,15 @@ namespace Strata
 		void AddRuns(std::vector<uint32_t>& marks, nvrhi::IBuffer* buffer, const uint8_t* data, uint32_t elementSize, uint32_t gap, uint32_t* outRuns);
 		void MarkRecord(uint32_t proxy);
 		void MarkInstances(uint32_t first, uint32_t count);
+		// Whether the asset tables may have to change: another manager, content changes or slot changes since the last update.
+		bool AssetTablesChanged(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets) const;
+		// The mesh table and the material data and flags after the asset manager's content changes and the scene's slot
+		// changes, marking the entries to upload (m_MeshMarks, m_MaterialMarks).
+		void UpdateAssetTables(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, RenderSceneGPUUpdate& update);
+		void BuildMeshEntry(uint32_t slot, AssetHandle mesh, const AssetManagerBase* assets);
+		void BuildMaterial(uint32_t slot, AssetHandle material, const AssetManagerBase* assets);
+		void SetMaterialFlags(uint32_t slot, uint32_t flags);
+		void RemoveTextureUsers(uint32_t slot);
 	private:
 		nvrhi::IDevice* m_Device;
 		uint64_t m_RenderSceneId;
@@ -125,6 +171,34 @@ namespace Strata
 		uint64_t m_BudgetFrame = ~0ull; // The frame m_BudgetLeft belongs to
 		uint64_t m_BudgetLeft = 0;
 		uint32_t m_FrameNewProxies = 0;
+
+		// The asset tables (see the class comment): what each slot was built for, and what the GPU holds.
+		std::weak_ptr<AssetManagerBase> m_Assets;
+		bool m_HasAssets = false;               // m_Assets names the manager the tables were built from
+		uint64_t m_AssetContentVersion = 0;
+		uint64_t m_SlotsVersion = ~0ull;
+		bool m_UploadAllTables = false;         // An upload of the tables failed: the next one writes them whole
+		std::vector<AssetHandle> m_MeshSlotHandles;
+		std::vector<uint32_t> m_MeshTable;
+		std::vector<uint32_t> m_MeshRecords;           // Per mesh slot: the LOD records of its loaded mesh
+		std::array<uint32_t, 2> m_ArenaRecords = {};
+		std::vector<AssetHandle> m_MaterialSlotHandles;
+		std::vector<RenderData::MaterialData> m_MaterialData;
+		std::vector<uint32_t> m_MaterialFlags;
+		std::vector<uint8_t> m_MaterialUsesDefault;    // Drawn with the default material while its own is not loaded
+		// Per material slot the distinct textures its data was built with, and each one's place in its m_TextureUsers list
+		// (so that a slot leaves the lists in constant time).
+		std::vector<std::array<AssetHandle, 5>> m_MaterialTextures;
+		std::vector<std::array<uint32_t, 5>> m_MaterialTexturePositions;
+		std::unordered_map<AssetHandle, std::vector<uint32_t>> m_TextureUsers; // Texture -> material slots naming it
+		uint32_t m_DoubleSidedMaterials = 0;
+		uint32_t m_AlphaMaskedMaterials = 0;
+		GrowingBuffer m_MeshTableBuffer;
+		GrowingBuffer m_MaterialBuffer;
+		GrowingBuffer m_MaterialFlagBuffer;
+		std::vector<uint32_t> m_MeshMarks;
+		std::vector<uint32_t> m_MaterialMarks;
+		std::vector<AssetHandle> m_ContentChanges;
 
 		// Scratch of an update, reused.
 		std::vector<uint32_t> m_Changes;

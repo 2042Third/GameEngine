@@ -243,9 +243,9 @@ namespace Strata
 		uint32_t CulledLights = 0;    // Point and spot lights outside the view frustum
 		uint32_t DroppedLights = 0;   // Visible point and spot lights beyond SceneRendererSpecification::MaxLights
 		uint32_t Materials = 0;       // Distinct materials drawn
-		// Of the materials drawn and casting shadows, those whose data the frame took over from an earlier frame's (the same
-		// materials used the same ways, their textures in the same bindless slots: still frames), with their assets looked
-		// up in one call to the asset manager (AssetResolveCache::Replay) instead of one by one.
+		// Of the materials drawn and casting shadows, those whose flags and texture maps the frame took over from an earlier
+		// frame's (the same materials and textures used the same ways: still frames), with their assets looked up in one call
+		// to the asset manager (AssetResolveCache::Replay) instead of one by one.
 		uint32_t ReusedMaterials = 0;
 		uint32_t PendingAssets = 0;   // Distinct meshes, materials and textures still loading (drawn with fallbacks or skipped)
 
@@ -258,7 +258,9 @@ namespace Strata
 		// New proxies whose records and instances wait for a later frame's upload (NewInstanceBytesPerFrame): not drawn yet.
 		uint64_t DeferredInstanceBytes = 0;
 		uint32_t DeferredProxies = 0;
-		uint64_t MaterialBytesUploaded = 0;  // Material data uploaded this frame (only materials whose data changed)
+		// Material data the render scene's GPU copy uploaded in this frame's update (materials built again: loaded, edited,
+		// dropped, or a texture of theirs was).
+		uint64_t MaterialBytesUploaded = 0;
 		float ExtractMs = 0.0f;              // CPU time of culling, asset resolution and gathering draws (view and shadows)
 		float SortMs = 0.0f;                 // CPU time of sorting the draws into batches and draw lists
 		uint32_t RequestsByVisibility = 0;   // Distinct meshes, materials and textures requested for drawing
@@ -529,9 +531,9 @@ namespace Strata
 
 		// The materials a frame resolved one by one (ResolveMaterials), for later frames that use the same material slots in
 		// the same ways (ReuseResolvedMaterials): when the materials and their textures are still the loaded objects that
-		// frame found (materials are not changed in place: edits publish new objects), the materials' data, flags and texture
-		// maps are what that frame built. The data names textures by their texture table indices, which stay the same while
-		// textures stream levels (their entries follow the bindless slots).
+		// frame found (materials are not changed in place: edits publish new objects), the materials' flags and texture maps
+		// are what that frame found. Their GPU data is the render scene's GPU copy's (RenderSceneGPU), which follows content
+		// changes by itself.
 		struct MaterialResolution
 		{
 			struct Slot
@@ -679,8 +681,9 @@ namespace Strata
 		void ResolveAssets(RenderScene& renderScene);
 		// The materials of m_UsedMaterialSlots, one by one, recorded in m_MaterialResolution for later frames.
 		void ResolveMaterials(RenderScene& renderScene);
-		// Takes the materials' data over from m_MaterialResolution when the frame uses the same material slots the same ways
-		// and nothing it depends on changed (see MaterialResolution). Returns false, having resolved nothing, otherwise.
+		// Takes the materials' flags and texture maps over from m_MaterialResolution when the frame uses the same material
+		// slots the same ways and nothing it depends on changed (see MaterialResolution). Returns false, having resolved
+		// nothing, otherwise.
 		bool ReuseResolvedMaterials(const RenderScene& renderScene);
 		// The view's draws in batches: opaque ones sorted by pipeline state and mesh (only with `opaqueDraws`: the GPU-driven
 		// path draws them itself), transparent ones back to front; and what the drawn materials need of their textures.
@@ -691,16 +694,14 @@ namespace Strata
 		void MarkMaterial(uint32_t slot, uint32_t usage);
 		// Sizes the per-material-slot state for `count` slots.
 		void EnsureMaterialSlots(uint32_t count);
-		// The GPU data of a material, its textures resolved (only those already loaded with residentOnly). The loaded ones
-		// are appended to `resolved` when it is given (the materials the frame draws, for streaming their levels).
-		RenderData::MaterialData BuildMaterialData(const Material& material, bool residentOnly, std::vector<ResolvedTexture>* resolved = nullptr);
-		// A material map's texture table index (TextureTable): the fallback index where the map is missing or still loading.
-		uint32_t ResolveTexture(AssetHandle handle, uint32_t missingIndex, uint32_t loadingIndex, bool residentOnly, std::vector<ResolvedTexture>* resolved);
+		// Resolves a material's texture maps for the frame (requested, or with residentOnly only looked up), appending the
+		// loaded ones to `resolved` when it is given (the materials the frame draws, for streaming their levels); returns how
+		// many it appended. The material's GPU data is the render scene's GPU copy's.
+		uint32_t ResolveMaterialTextures(const Material& material, bool residentOnly, std::vector<ResolvedTexture>* resolved);
 		// Sorted draws into batches and the draw list (instance indices in batch order).
 		void BuildBatches(std::vector<SortItem>& draws, std::vector<SceneDrawBatch>& outBatches, std::vector<uint32_t>& outDrawList);
-		// Uploads what changed of the material data and the draw lists (the render scene's GPU copy uploads the instances and
-		// palettes).
-		void UploadSceneData(nvrhi::ICommandList* commandList, bool materialsRecreated, bool drawListsRecreated);
+		// Uploads what changed of the draw lists (the render scene's GPU copy uploads the instances, palettes and material data).
+		void UploadSceneData(nvrhi::ICommandList* commandList, bool drawListsRecreated);
 		// Tells the scene's ISkinningPoses which animators' meshes the frame drew (or would have, unposed).
 		void ReportVisibleAnimators(Scene& scene);
 		// Uploads the range of a draw list that differs from the list the buffer holds (`uploaded`), which then holds the new one.
@@ -854,8 +855,8 @@ namespace Strata
 
 		nvrhi::BufferHandle m_FrameConstantBuffer;
 		nvrhi::BufferHandle m_DrawListBuffer; // Instance indices of the view's draws
-		nvrhi::BufferHandle m_MaterialBuffer; // Persistent: by material slot, uploaded where it changed
-		// The render scene's GPU copy (instances, palettes, culling records) during a frame, and the buffer version
+		// The render scene's GPU copy (instances, palettes, culling records, mesh and material tables) during a frame, and the
+		// buffer version
 		// (RenderSceneGPU::GetBufferVersion) the binding sets were made for.
 		RenderSceneGPU* m_SceneGPU = nullptr;
 		uint64_t m_BoundSceneGPUVersion = 0;
@@ -950,7 +951,7 @@ namespace Strata
 		uint64_t m_RenderSceneId = 0;   // The render scene the per-slot state and the GPU copies below belong to
 		uint64_t m_ProxyUpdatesScene = 0; // The render scene whose RenderSceneStats::TotalUpdates this renderer saw last
 		uint64_t m_ProxyUpdatesSeen = 0;
-		bool m_FullUpload = true;       // The material buffer and draw lists hold nothing of that render scene yet
+		bool m_FullUpload = true;       // The draw lists hold nothing of that render scene yet
 		std::vector<entt::entity> m_VisibleAnimators; // Animators of the frame's visible Skin proxies, reported to ISkinningPoses
 		AABB m_VisibleReceivers; // The world bounds of the frame's visible proxies (scenes with Skin proxies only)
 		uint32_t m_FrameStamp = 0;
@@ -969,9 +970,6 @@ namespace Strata
 		std::vector<uint32_t> m_MaterialUsage;      // Per material slot
 		std::vector<uint32_t> m_UsedMaterialSlots;
 		std::vector<uint32_t> m_MaterialFlags;      // Per material slot: how the frame draws it (material flags)
-		std::vector<RenderData::MaterialData> m_MaterialData; // What the material buffer holds, by slot
-		std::vector<uint8_t> m_MaterialUploaded;    // Per material slot: the buffer holds its m_MaterialData
-		std::vector<uint32_t> m_DirtyMaterialSlots;
 		std::vector<float> m_MaterialPixelSizes;    // Per material slot: the frame's VisibleMaterialUse::PixelSize
 		std::vector<float> m_MaterialUVPixels;      // Per material slot: the frame's VisibleMaterialUse::UVPixels
 		std::vector<float> m_MaterialUVScales;
@@ -980,8 +978,7 @@ namespace Strata
 		MaterialResolution m_MaterialResolution;                 // The latest frame that resolved its materials one by one
 		std::vector<VisibleMaterialUse> m_VisibleMaterials;
 		std::vector<VisibleTextureUse> m_VisibleTextures;
-		std::optional<RenderData::MaterialData> m_DefaultMaterialData; // The default material, resolved once per frame
-		uint32_t m_DefaultMaterialFlags = 0;
+		std::optional<uint32_t> m_DefaultMaterialFlags; // The default material's flags, resolved once per frame (0: not loaded)
 		std::vector<ExtractionChunk> m_Chunks;
 		std::vector<SortItem> m_Draws;
 		std::vector<SortItem> m_ShadowDraws;
@@ -1005,8 +1002,6 @@ namespace Strata
 		nvrhi::ComputePipelineHandle m_CullShadowPipeline;
 		nvrhi::ComputePipelineHandle m_CullBuildPipeline;
 		nvrhi::BufferHandle m_CullConstantBuffer;
-		nvrhi::BufferHandle m_MeshTableBuffer;       // Per mesh slot: the GeometryHandle of a mesh the frame draws
-		nvrhi::BufferHandle m_MaterialFlagBuffer;    // Per material slot: RenderData::c_CullMaterial* flags
 		nvrhi::BufferHandle m_BucketTableBuffer;     // Per bucket: its dense index (RenderData::c_CullNoBucket)
 		nvrhi::BufferHandle m_CullCountBuffer;       // Per (dense bucket, LOD record): instances
 		nvrhi::BufferHandle m_CullOffsetBuffer;      // Per (dense bucket, LOD record): its range of the draw list
@@ -1020,10 +1015,6 @@ namespace Strata
 		uint64_t m_CullBoundSceneVersion = 0;        // What m_CullBindingSet was made for
 		uint64_t m_CullBoundTableVersion = 0;
 		RenderData::CullConstants m_CullConstants;
-		std::vector<uint32_t> m_CullMeshTable;
-		std::vector<uint32_t> m_CullMeshTableUploaded;
-		std::vector<uint32_t> m_CullMaterialFlags;
-		std::vector<uint32_t> m_CullMaterialFlagsUploaded;
 		// Per bucket its dense index (RenderData::c_CullBuckets entries), then per dense bucket its draw slots.
 		std::vector<uint32_t> m_CullBucketTable;
 		std::vector<uint32_t> m_CullBucketTableUploaded;
@@ -1031,12 +1022,10 @@ namespace Strata
 		std::vector<uint32_t> m_CullBuckets;             // Per dense index: its bucket (view buckets first)
 		// The draw slots of the buckets (all of which a path without a GPU-written count draws): the LOD records of the meshes
 		// the frame can draw there, by arena (0: Static, 1: Skinned): the meshes in view for the view's buckets, each
-		// cascade's casters' meshes for its buckets. The argument storage per bucket holds the records of all the frame's
-		// meshes of an arena (m_CullArenaRecords).
+		// cascade's casters' meshes for its buckets. The argument storage per bucket holds the records of all the loaded meshes
+		// of an arena (RenderSceneGPU::GetArenaRecords).
 		std::array<uint32_t, 2> m_CullViewSlots = {};
 		std::array<std::array<uint32_t, 2>, RenderData::c_CullMaxCascades> m_CullShadowSlots = {};
-		std::array<uint32_t, 2> m_CullArenaRecords = {};
-		std::vector<uint32_t> m_CullMeshRecords;   // Per mesh slot: the LOD records of the frame's mesh (0: not drawn)
 		std::array<std::vector<uint32_t>, RenderData::c_CullMaxCascades> m_CullCasterStamps; // Per mesh slot: counted for the cascade
 		uint32_t m_CullCasterStamp = 0;
 		struct CounterReadback

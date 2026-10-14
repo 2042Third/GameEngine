@@ -5,6 +5,7 @@
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Math/Math.h"
 #include "Strata/Renderer/Material.h"
+#include "Strata/Renderer/MaterialData.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
@@ -100,12 +101,6 @@ namespace Strata
 			return (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0 && mesh.IsSkinned();
 		}
 
-		uint32_t GetMaterialFlags(const MaterialProperties& properties)
-		{
-			return c_MaterialAvailable | (properties.DoubleSided ? c_MaterialDoubleSided : 0u) | (properties.AlphaMode == MaterialAlphaMode::Mask ? c_MaterialAlphaMask : 0u)
-				| (properties.AlphaMode == MaterialAlphaMode::Blend ? c_MaterialTransparent : 0u);
-		}
-
 		// Run-length lists: consecutive proxies mostly share meshes and materials.
 		void AppendMark(std::vector<std::pair<uint32_t, uint32_t>>& marks, uint32_t slot, uint32_t usage)
 		{
@@ -171,8 +166,6 @@ namespace Strata
 			m_FrameMeshes.clear();
 			m_MaterialUsage.clear();
 			m_MaterialFlags.clear();
-			m_MaterialData.clear();
-			m_MaterialUploaded.clear();
 			m_MaterialPixelSizes.clear();
 			m_MaterialUVPixels.clear();
 			m_MaterialUVScales.clear();
@@ -216,8 +209,7 @@ namespace Strata
 		}
 		m_VisibleMaterials.clear();
 		m_VisibleTextures.clear();
-		m_DefaultMaterialData.reset();
-		m_DefaultMaterialFlags = 0;
+		m_DefaultMaterialFlags.reset();
 	}
 
 	void SceneRenderer::ReleaseFrameAssets()
@@ -233,8 +225,6 @@ namespace Strata
 			return;
 		m_MaterialUsage.resize(count, 0);
 		m_MaterialFlags.resize(count, 0);
-		m_MaterialData.resize(count, RenderData::MaterialData {});
-		m_MaterialUploaded.resize(count, 0);
 		m_MaterialPixelSizes.resize(count, 0.0f);
 		m_MaterialUVPixels.resize(count, 0.0f);
 		m_MaterialUVScales.resize(count, 1.0f);
@@ -584,47 +574,26 @@ namespace Strata
 		return true;
 	}
 
-	uint32_t SceneRenderer::ResolveTexture(AssetHandle handle, uint32_t missingIndex, uint32_t loadingIndex, bool residentOnly, std::vector<ResolvedTexture>* resolved)
+	uint32_t SceneRenderer::ResolveMaterialTextures(const Material& material, bool residentOnly, std::vector<ResolvedTexture>* resolved)
 	{
-		if (!handle.IsValid())
-			return missingIndex;
-
-		const Ref<Texture> texture = residentOnly ? m_Assets.FindResident<Texture>(handle) : m_Assets.Resolve<Texture>(handle, AssetPriority::Normal);
-		if (texture && resolved)
-			resolved->push_back(ResolvedTexture { handle, std::max(texture->GetWidth(), texture->GetHeight()), texture->GetMipCount() });
-		if (!texture || texture->GetTableIndex() == TextureTable::c_InvalidIndex)
-			return loadingIndex;
-		// Without streaming the renderer needs every level: it draws what is resident and waits for the rest.
-		if (!m_Specification.TextureStreaming && texture->GetResidentLevel() > 0 && !residentOnly)
-			m_Assets.CountPending(handle);
-		return texture->GetTableIndex();
-	}
-
-	RenderData::MaterialData SceneRenderer::BuildMaterialData(const Material& material, bool residentOnly, std::vector<ResolvedTexture>* resolved)
-	{
-		const MaterialProperties& properties = material.GetProperties();
-		RenderData::MaterialData data = {};
-		data.BaseColor = properties.BaseColor;
-		data.Emissive = glm::vec4(properties.EmissiveColor * properties.EmissiveIntensity, 0.0f);
-		data.Metallic = properties.Metallic;
-		data.Roughness = properties.Roughness;
-		data.NormalScale = properties.NormalScale;
-		data.OcclusionStrength = properties.OcclusionStrength;
-		data.AlphaCutoff = properties.AlphaCutoff;
-		data.Flags = (properties.AlphaMode == MaterialAlphaMode::Mask ? RenderData::c_MaterialAlphaMask : 0u)
-			| (properties.AlphaMode == MaterialAlphaMode::Blend ? RenderData::c_MaterialAlphaBlend : 0u)
-			| (properties.Unlit ? RenderData::c_MaterialUnlit : 0u)
-			| (properties.DoubleSided ? RenderData::c_MaterialDoubleSided : 0u);
-		data.UVTransform = glm::vec4(properties.UVTiling, properties.UVOffset);
-
-		// Missing maps use neutral textures; maps still loading use neutral ones too, except emission (black until the map
-		// arrives, so surfaces do not flash at full emissive strength).
-		data.BaseColorMap = ResolveTexture(properties.BaseColorMap, TextureTable::c_White, TextureTable::c_White, residentOnly, resolved);
-		data.MetallicRoughnessMap = ResolveTexture(properties.MetallicRoughnessMap, TextureTable::c_White, TextureTable::c_White, residentOnly, resolved);
-		data.NormalMap = ResolveTexture(properties.NormalMap, TextureTable::c_FlatNormal, TextureTable::c_FlatNormal, residentOnly, resolved);
-		data.OcclusionMap = ResolveTexture(properties.OcclusionMap, TextureTable::c_White, TextureTable::c_White, residentOnly, resolved);
-		data.EmissiveMap = ResolveTexture(properties.EmissiveMap, TextureTable::c_White, TextureTable::c_Black, residentOnly, resolved);
-		return data;
+		uint32_t appended = 0;
+		for (const AssetHandle handle : MaterialGPU::GetTextureMaps(material.GetProperties()))
+		{
+			if (!handle.IsValid())
+				continue;
+			const Ref<Texture> texture = residentOnly ? m_Assets.FindResident<Texture>(handle) : m_Assets.Resolve<Texture>(handle, AssetPriority::Normal);
+			if (!texture)
+				continue;
+			if (resolved)
+			{
+				resolved->push_back(ResolvedTexture { handle, std::max(texture->GetWidth(), texture->GetHeight()), texture->GetMipCount() });
+				appended++;
+			}
+			// Without streaming the renderer needs every level: it draws what is resident and waits for the rest.
+			if (!m_Specification.TextureStreaming && texture->GetResidentLevel() > 0 && !residentOnly)
+				m_Assets.CountPending(handle);
+		}
+		return appended;
 	}
 
 	void SceneRenderer::ResolveAssets(RenderScene& renderScene)
@@ -695,10 +664,7 @@ namespace Strata
 				m_Assets.Prefetch(resolved.Handle);
 				continue;
 			}
-			// The data is what the material buffer holds, unless an upload of it is still due.
 			m_MaterialFlags[resolved.Index] = resolved.Flags;
-			if (!m_MaterialUploaded[resolved.Index])
-				m_DirtyMaterialSlots.push_back(resolved.Index);
 			if ((resolved.Usage & (c_UseView | c_UseHigh)) != 0)
 				m_Stats.Materials++;
 			m_Stats.ReusedMaterials++;
@@ -737,58 +703,39 @@ namespace Strata
 				material = m_Assets.FindResident<Material>(handle);
 			}
 
-			RenderData::MaterialData data;
+			// The material's GPU data is the render scene's GPU copy's (RenderSceneGPU), built from the same loaded objects.
 			uint32_t flags = 0;
 			if (material)
 			{
 				// The textures of what the frame draws stream at the level its draws need (VisibleTextureUse).
 				const uint32_t firstTexture = static_cast<uint32_t>(m_ResolvedTextures.size());
-				data = BuildMaterialData(*material, !drawn, drawn ? &m_ResolvedTextures : nullptr);
-				const uint32_t textures = static_cast<uint32_t>(m_ResolvedTextures.size()) - firstTexture;
+				const uint32_t textures = ResolveMaterialTextures(*material, !drawn, drawn ? &m_ResolvedTextures : nullptr);
 				m_MaterialTextures[slot] = ResolvedTextureRange { firstTexture, textures };
-				flags = GetMaterialFlags(material->GetProperties()) | (textures > 0 ? c_MaterialTextured : 0u);
+				flags = MaterialGPU::GetFlags(material->GetProperties()) | (textures > 0 ? c_MaterialTextured : 0u);
 				m_MaterialUVScales[slot] = std::max(std::abs(material->GetProperties().UVTiling.x), std::abs(material->GetProperties().UVTiling.y));
 			}
 			else
 			{
 				// The default material stands in while the material loads (or when it never will).
 				replayable = false;
-				if (!m_DefaultMaterialData)
+				if (!m_DefaultMaterialFlags)
 				{
 					const Ref<Material> fallback = m_Assets.Resolve<Material>(BuiltinAssets::DefaultMaterial, AssetPriority::High);
-					if (!fallback)
-						continue; // No asset manager with built-in assets: nothing can be drawn with this material
-					m_DefaultMaterialData = BuildMaterialData(*fallback, false);
-					m_DefaultMaterialFlags = GetMaterialFlags(fallback->GetProperties());
+					if (fallback)
+						ResolveMaterialTextures(*fallback, false, nullptr);
+					// Without an asset manager with built-in assets nothing can be drawn with this material.
+					m_DefaultMaterialFlags = fallback ? MaterialGPU::GetFlags(fallback->GetProperties()) : 0u;
 				}
-				data = *m_DefaultMaterialData;
-				flags = m_DefaultMaterialFlags;
+				flags = *m_DefaultMaterialFlags;
 				m_MaterialUVScales[slot] = 1.0f;
 			}
 			m_MaterialFlags[slot] = flags;
 			resolution.Slots.back().Flags = flags;
-			if (!m_MaterialUploaded[slot] || std::memcmp(&data, &m_MaterialData[slot], sizeof(data)) != 0)
-			{
-				m_MaterialData[slot] = data;
-				m_MaterialUploaded[slot] = 0;
-				m_DirtyMaterialSlots.push_back(slot);
-			}
-			if (drawn)
+			if (drawn && flags != 0)
 				m_Stats.Materials++;
 		}
 		replayable = m_Assets.EndRecording(resolution.Lookups) && replayable && !resolution.Lookups.IsEmpty();
-		if (!replayable)
-			return;
-
-		// The materials' data names their textures by table index, once they are uploaded: a texture still uploading is drawn
-		// with a fallback until it is, so a frame that found one is not replayed.
-		for (const std::weak_ptr<Asset>& asset : resolution.Lookups.GetAssets())
-		{
-			const Ref<Asset> loaded = asset.lock(); // Held by the frame
-			if (loaded && loaded->GetType() == AssetType::Texture && static_cast<const Texture&>(*loaded).GetTableIndex() == TextureTable::c_InvalidIndex)
-				return;
-		}
-		resolution.Valid = true;
+		resolution.Valid = replayable;
 	}
 
 	void SceneRenderer::BuildBatches(std::vector<SortItem>& draws, std::vector<SceneDrawBatch>& outBatches, std::vector<uint32_t>& outDrawList)
@@ -1166,48 +1113,14 @@ namespace Strata
 		}
 	}
 
-	void SceneRenderer::UploadSceneData(nvrhi::ICommandList* commandList, bool materialsRecreated, bool drawListsRecreated)
+	void SceneRenderer::UploadSceneData(nvrhi::ICommandList* commandList, bool drawListsRecreated)
 	{
 		ST_PROFILE_FUNCTION();
-		if (materialsRecreated || m_FullUpload)
-		{
-			if (!m_MaterialData.empty())
-			{
-				commandList->writeBuffer(m_MaterialBuffer, m_MaterialData.data(), m_MaterialData.size() * sizeof(RenderData::MaterialData));
-				m_Stats.MaterialBytesUploaded += m_MaterialData.size() * sizeof(RenderData::MaterialData);
-			}
-			std::fill(m_MaterialUploaded.begin(), m_MaterialUploaded.end(), uint8_t(1));
-		}
-		else if (!m_DirtyMaterialSlots.empty())
-		{
-			// A frame that failed before its upload leaves its dirty slots to the next one, which may list them again.
-			std::sort(m_DirtyMaterialSlots.begin(), m_DirtyMaterialSlots.end());
-			m_DirtyMaterialSlots.erase(std::unique(m_DirtyMaterialSlots.begin(), m_DirtyMaterialSlots.end()), m_DirtyMaterialSlots.end());
-			size_t start = 0;
-			for (size_t index = 1; index <= m_DirtyMaterialSlots.size(); index++)
-			{
-				if (index < m_DirtyMaterialSlots.size() && m_DirtyMaterialSlots[index] == m_DirtyMaterialSlots[index - 1] + 1)
-					continue;
-				const uint32_t firstSlot = m_DirtyMaterialSlots[start];
-				const uint32_t endSlot = m_DirtyMaterialSlots[index - 1] + 1;
-				const size_t bytes = (endSlot - firstSlot) * sizeof(RenderData::MaterialData);
-				commandList->writeBuffer(m_MaterialBuffer, m_MaterialData.data() + firstSlot, bytes, firstSlot * sizeof(RenderData::MaterialData));
-				m_Stats.MaterialBytesUploaded += bytes;
-				for (uint32_t slot = firstSlot; slot < endSlot; slot++)
-					m_MaterialUploaded[slot] = 1;
-				start = index;
-			}
-		}
-		m_DirtyMaterialSlots.clear();
-
 		const bool fullLists = drawListsRecreated || m_FullUpload;
 		m_Stats.InstanceBytesUploaded += UploadDrawList(commandList, m_DrawListBuffer, m_DrawInstancesBuild, m_DrawInstances, fullLists);
 		m_Stats.InstanceBytesUploaded += UploadDrawList(commandList, m_ShadowDrawListBuffer, m_ShadowDrawInstancesBuild, m_ShadowDrawInstances, fullLists);
 		m_Stats.InstanceBytesUploaded += UploadChangedRange(commandList, m_DrawArgumentBuffer, m_DrawArgumentsBuild, m_DrawArguments, fullLists);
 		m_FullUpload = false;
 	}
-
-	// The GPU-driven path's tables upload through it too (SceneRendererGPUDriven.cpp).
-	template uint64_t SceneRenderer::UploadChangedRange<uint32_t>(nvrhi::ICommandList*, nvrhi::IBuffer*, std::vector<uint32_t>&, std::vector<uint32_t>&, bool);
 
 }

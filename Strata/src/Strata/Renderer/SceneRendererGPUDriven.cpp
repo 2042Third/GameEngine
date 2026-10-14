@@ -16,8 +16,8 @@
 // (Scene/Cull.comp counts the instances of each bucket and LOD record, CullBuild.comp gives each record a range of the draw
 // list and an indirect draw, and Cull.comp then writes the instances into their ranges). The CPU records a fixed number of
 // dispatches and one indirect draw per pass and bucket the frame can have, and draws transparent surfaces itself, sorted.
-// The CPU's extraction still resolves the frame's assets (the mesh and material tables follow what it resolved) and fits
-// the cascades to the casters.
+// The CPU's extraction still requests the frame's assets and fits the cascades to the casters; the GPU draws the meshes and
+// materials the render scene's GPU copy holds (RenderSceneGPU's tables, which follow what is loaded).
 
 namespace Strata
 {
@@ -195,31 +195,21 @@ namespace Strata
 	void SceneRenderer::PrepareGPUCulling(const RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum)
 	{
 		ST_PROFILE_FUNCTION();
-		// The meshes the frame draws on the CPU path: those it resolved with their geometry in the pool. Their LOD records
-		// bound the draws a bucket can have: those in view for the view's buckets, each cascade's casters' for its own.
-		const uint32_t meshSlots = renderScene.GetMeshSlotCapacity();
-		m_CullMeshTable.assign(meshSlots, 0u);
-		m_CullMeshRecords.assign(meshSlots, 0u);
+		// The GPU draws the meshes and materials of the scene's GPU copy's tables (RenderSceneGPU): whatever is loaded. The LOD
+		// records of the meshes the CPU's marks found bound the draws a bucket can have: those in view for the view's buckets,
+		// each cascade's casters' for its own.
+		const RenderSceneGPU& mirror = *m_SceneGPU;
+		const uint32_t meshSlots = mirror.GetMeshSlotCount();
+		const auto arenaOf = [&mirror](uint32_t slot) -> size_t
+		{
+			return (mirror.GetMeshTableEntry(slot) & RenderData::c_CullMeshSkinnedArena) != 0 ? 1 : 0;
+		};
 		m_CullViewSlots = {};
 		m_CullShadowSlots = {};
-		m_CullArenaRecords = {};
 		for (const uint32_t slot : m_UsedMeshSlots)
 		{
-			const Mesh* mesh = m_FrameMeshes[slot];
-			if (!mesh)
-				continue;
-			uint32_t records = 0;
-			for (const Submesh& submesh : mesh->GetSubmeshes())
-				records += static_cast<uint32_t>(submesh.LODs.size());
-			const bool skinnedArena = m_FrameGeometry[slot].Arena == GeometryArena::Skinned;
-			const GeometryHandle handle = mesh->GetGeometryHandle();
-			ST_CORE_ASSERT(handle != c_InvalidGeometry && handle < RenderData::c_CullMeshSkinnedArena, "Geometry handle {} does not fit the mesh table", handle);
-			m_CullMeshTable[slot] = handle | (skinnedArena ? RenderData::c_CullMeshSkinnedArena : 0u);
-			m_CullMeshRecords[slot] = records;
-			const size_t arena = skinnedArena ? 1 : 0;
-			m_CullArenaRecords[arena] += records;
-			if (IsMeshInView(slot))
-				m_CullViewSlots[arena] += records;
+			if (slot < meshSlots && IsMeshInView(slot))
+				m_CullViewSlots[arenaOf(slot)] += mirror.GetMeshRecords(slot);
 		}
 		if (++m_CullCasterStamp == 0)
 		{
@@ -232,30 +222,24 @@ namespace Strata
 		for (const ShadowCaster& caster : m_ShadowCasters)
 		{
 			const uint32_t slot = renderScene.GetMeshSlot(caster.Proxy);
-			if (slot >= meshSlots || m_CullMeshRecords[slot] == 0)
+			if (slot >= meshSlots || mirror.GetMeshRecords(slot) == 0)
 				continue;
-			const size_t arena = m_FrameGeometry[slot].Arena == GeometryArena::Skinned ? 1 : 0;
+			const size_t arena = arenaOf(slot);
 			for (uint32_t cascade = 0; cascade < m_CascadeCount; cascade++)
 			{
 				if ((caster.CascadeMask & (1u << cascade)) == 0 || m_CullCasterStamps[cascade][slot] == m_CullCasterStamp)
 					continue;
 				m_CullCasterStamps[cascade][slot] = m_CullCasterStamp;
-				m_CullShadowSlots[cascade][arena] += m_CullMeshRecords[slot];
+				m_CullShadowSlots[cascade][arena] += mirror.GetMeshRecords(slot);
 			}
 		}
-		m_CullMaterialFlags.assign(m_MaterialFlags.begin(), m_MaterialFlags.end());
-		bool doubleSided = false;
-		bool alphaMask = false;
-		for (const uint32_t slot : m_UsedMaterialSlots)
-		{
-			doubleSided = doubleSided || (m_MaterialFlags[slot] & RenderData::c_CullMaterialDoubleSided) != 0;
-			alphaMask = alphaMask || (m_MaterialFlags[slot] & RenderData::c_CullMaterialAlphaMask) != 0;
-		}
+		const bool doubleSided = mirror.HasDoubleSidedMaterials();
+		const bool alphaMask = mirror.HasAlphaMaskedMaterials();
 
 		// The buckets the frame can have get dense indices, the view's first.
 		const bool mirrored = renderScene.GetStats().MirroredProxies > 0;
-		const std::array<bool, 3> geometries = { m_CullArenaRecords[0] > 0, m_CullArenaRecords[1] > 0,
-			m_CullArenaRecords[1] > 0 && renderScene.GetStats().PosedProxies > 0 };
+		const std::array<bool, 3> geometries = { mirror.GetArenaRecords(0) > 0, mirror.GetArenaRecords(1) > 0,
+			mirror.GetArenaRecords(1) > 0 && renderScene.GetStats().PosedProxies > 0 };
 		m_CullBuckets.clear();
 		m_CullBucketTable.assign(RenderData::c_CullBuckets, RenderData::c_CullNoBucket);
 		// A bucket of the frame's geometry with nothing to draw (no mesh of its arena in view, or casting into its cascade)
@@ -305,10 +289,10 @@ namespace Strata
 		constants.ProxyCount = renderScene.GetProxyCapacity();
 		constants.CascadeCount = m_CascadeCount;
 		constants.LODCapacity = std::max(Renderer::GetGeometryPool()->GetLODCapacity(), 1u);
-		constants.MeshSlotCount = static_cast<uint32_t>(m_CullMeshTable.size());
-		constants.MaterialSlotCount = static_cast<uint32_t>(m_CullMaterialFlags.size());
+		constants.MeshSlotCount = meshSlots;
+		constants.MaterialSlotCount = mirror.GetMaterialSlotCount();
 		constants.DrawListCapacity = static_cast<uint32_t>(std::min<uint64_t>(renderScene.GetInstances().size() * (1ull + m_CascadeCount), 0xFFFFFFF0ull));
-		constants.ArgumentsPerBucket = std::max({ m_CullArenaRecords[0], m_CullArenaRecords[1], 1u });
+		constants.ArgumentsPerBucket = std::max({ mirror.GetArenaRecords(0), mirror.GetArenaRecords(1), 1u });
 		constants.BucketCount = static_cast<uint32_t>(m_CullBuckets.size());
 		constants.ViewBucketCount = viewBuckets;
 		constants.DrawsBounded = GetGPUIndirectPath() != GPUIndirectPath::Count ? 1u : 0u;
@@ -322,9 +306,7 @@ namespace Strata
 		const RenderData::CullConstants& constants = m_CullConstants;
 		const uint64_t keys = static_cast<uint64_t>(std::max(constants.BucketCount, 1u)) * constants.LODCapacity;
 		const uint64_t arguments = static_cast<uint64_t>(std::max(constants.BucketCount, 1u)) * constants.ArgumentsPerBucket * c_ArgumentWords;
-		return EnsureBufferCapacity(m_MeshTableBuffer, m_CullMeshTable.size(), sizeof(uint32_t), "CullMeshTable", outRecreated)
-			&& EnsureBufferCapacity(m_MaterialFlagBuffer, m_CullMaterialFlags.size(), sizeof(uint32_t), "CullMaterialFlags", outRecreated)
-			&& EnsureBufferCapacity(m_CullCountBuffer, keys, sizeof(uint32_t), "CullCounts", outRecreated, BufferKind::StructuredUAV)
+		return EnsureBufferCapacity(m_CullCountBuffer, keys, sizeof(uint32_t), "CullCounts", outRecreated, BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_CullOffsetBuffer, keys, sizeof(uint32_t), "CullOffsets", outRecreated, BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_CullArgumentBuffer, arguments, sizeof(uint32_t), "CullArguments", outRecreated, BufferKind::IndirectArgumentsUAV)
 			&& EnsureBufferCapacity(m_GPUDrawListBuffer, constants.DrawListCapacity, sizeof(uint32_t), "GPUDrawList", outRecreated, BufferKind::StructuredUAV);
@@ -338,8 +320,8 @@ namespace Strata
 			nvrhi::BindingSetItem::ConstantBuffer(0, m_CullConstantBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_SceneGPU->GetProxyBuffer()),
 			nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetInstanceBuffer()),
-			nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_MeshTableBuffer),
-			nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_MaterialFlagBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_SceneGPU->GetMeshTableBuffer()),
+			nvrhi::BindingSetItem::StructuredBuffer_SRV(3, m_SceneGPU->GetMaterialFlagBuffer()),
 			nvrhi::BindingSetItem::StructuredBuffer_SRV(4, pool.GetEntryBuffer()),
 			nvrhi::BindingSetItem::StructuredBuffer_SRV(5, pool.GetSubmeshBuffer()),
 			nvrhi::BindingSetItem::StructuredBuffer_SRV(6, pool.GetLODBuffer()),
@@ -373,10 +355,7 @@ namespace Strata
 				return false;
 			}
 		}
-		const bool full = !m_CullTablesUploaded;
-		m_Stats.InstanceBytesUploaded += UploadChangedRange(commandList, m_MeshTableBuffer, m_CullMeshTable, m_CullMeshTableUploaded, full);
-		m_Stats.InstanceBytesUploaded += UploadChangedRange(commandList, m_MaterialFlagBuffer, m_CullMaterialFlags, m_CullMaterialFlagsUploaded, full);
-		if (full || m_CullBucketTable != m_CullBucketTableUploaded)
+		if (!m_CullTablesUploaded || m_CullBucketTable != m_CullBucketTableUploaded)
 		{
 			commandList->writeBuffer(m_BucketTableBuffer, m_CullBucketTable.data(), m_CullBucketTable.size() * sizeof(uint32_t));
 			m_CullBucketTableUploaded = m_CullBucketTable;

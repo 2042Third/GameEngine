@@ -1,9 +1,18 @@
 #include "stpch.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
 
+#include "Strata/Asset/AssetManager.h"
+#include "Strata/Asset/BuiltinAssets.h"
+#include "Strata/Core/Assert.h"
 #include "Strata/Renderer/GPUProfiler.h"
+#include "Strata/Renderer/GeometryPool.h"
+#include "Strata/Renderer/Material.h"
+#include "Strata/Renderer/MaterialData.h"
+#include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/Texture.h"
+#include "Strata/Renderer/TextureTable.h"
 
 #include <algorithm>
 #include <cstring>
@@ -18,6 +27,10 @@ namespace Strata
 		// Changed instances (or records) this close together are uploaded in one run: fewer copies for a little more data.
 		constexpr uint32_t c_InstanceRunGap = 16;
 		constexpr uint32_t c_RecordRunGap = 16;
+		constexpr uint32_t c_TableRunGap = 16;
+		// A material slot's textures before it names any (AssetHandle's default constructor makes a random handle).
+		constexpr std::array<AssetHandle, 5> c_NoTextures = { AssetHandle::Null(), AssetHandle::Null(), AssetHandle::Null(), AssetHandle::Null(),
+			AssetHandle::Null() };
 
 		// Buffer versions are unique in the process (main thread only), so a mirror made again for a scene never repeats one a
 		// renderer's binding sets were made for.
@@ -147,7 +160,243 @@ namespace Strata
 		}
 	}
 
-	bool RenderSceneGPU::Update(const RenderScene& renderScene, uint64_t newProxyBytesPerFrame, RenderSceneGPUUpdate* outUpdate)
+	void RenderSceneGPU::SetMaterialFlags(uint32_t slot, uint32_t flags)
+	{
+		const uint32_t previous = m_MaterialFlags[slot];
+		if ((previous & RenderData::c_CullMaterialDoubleSided) != 0)
+			m_DoubleSidedMaterials--;
+		if ((previous & RenderData::c_CullMaterialAlphaMask) != 0)
+			m_AlphaMaskedMaterials--;
+		if ((flags & RenderData::c_CullMaterialDoubleSided) != 0)
+			m_DoubleSidedMaterials++;
+		if ((flags & RenderData::c_CullMaterialAlphaMask) != 0)
+			m_AlphaMaskedMaterials++;
+		m_MaterialFlags[slot] = flags;
+	}
+
+	void RenderSceneGPU::RemoveTextureUsers(uint32_t slot)
+	{
+		std::array<AssetHandle, 5>& textures = m_MaterialTextures[slot];
+		for (size_t map = 0; map < textures.size(); map++)
+		{
+			const AssetHandle texture = textures[map];
+			if (!texture.IsValid())
+				continue;
+			textures[map] = AssetHandle::Null();
+			const auto found = m_TextureUsers.find(texture);
+			ST_CORE_ASSERT(found != m_TextureUsers.end(), "Material slot {} names a texture without users", slot);
+			if (found == m_TextureUsers.end())
+				continue;
+			// The list's last user takes the slot's place.
+			std::vector<uint32_t>& users = found->second;
+			const uint32_t position = m_MaterialTexturePositions[slot][map];
+			const uint32_t moved = users.back();
+			users[position] = moved;
+			users.pop_back();
+			if (moved != slot)
+			{
+				for (size_t other = 0; other < m_MaterialTextures[moved].size(); other++)
+				{
+					if (m_MaterialTextures[moved][other] == texture)
+					{
+						m_MaterialTexturePositions[moved][other] = position;
+						break;
+					}
+				}
+			}
+			if (users.empty())
+				m_TextureUsers.erase(found);
+		}
+	}
+
+	void RenderSceneGPU::BuildMeshEntry(uint32_t slot, AssetHandle handle, const AssetManagerBase* assets)
+	{
+		if (m_MeshRecords[slot] > 0)
+			m_ArenaRecords[(m_MeshTable[slot] & RenderData::c_CullMeshSkinnedArena) != 0 ? 1 : 0] -= m_MeshRecords[slot];
+		m_MeshSlotHandles[slot] = handle;
+		m_MeshTable[slot] = 0;
+		m_MeshRecords[slot] = 0;
+		const Ref<Mesh> mesh = assets ? assets->PeekLoadedAsset<Mesh>(handle) : nullptr;
+		const GeometryAllocation* geometry = mesh ? mesh->GetGeometry() : nullptr;
+		if (!geometry)
+			return; // Not loaded, or its geometry not in the pool yet: nothing to draw
+		const GeometryHandle geometryHandle = mesh->GetGeometryHandle();
+		ST_CORE_ASSERT(geometryHandle != c_InvalidGeometry && geometryHandle < RenderData::c_CullMeshSkinnedArena, "Geometry handle {} does not fit the mesh table",
+			geometryHandle);
+		uint32_t records = 0;
+		for (const Submesh& submesh : mesh->GetSubmeshes())
+			records += static_cast<uint32_t>(submesh.LODs.size());
+		const bool skinnedArena = geometry->Arena == GeometryArena::Skinned;
+		m_MeshTable[slot] = geometryHandle | (skinnedArena ? RenderData::c_CullMeshSkinnedArena : 0u);
+		m_MeshRecords[slot] = records;
+		m_ArenaRecords[skinnedArena ? 1 : 0] += records;
+	}
+
+	void RenderSceneGPU::BuildMaterial(uint32_t slot, AssetHandle handle, const AssetManagerBase* assets)
+	{
+		RemoveTextureUsers(slot);
+		m_MaterialSlotHandles[slot] = handle;
+		m_MaterialUsesDefault[slot] = 0;
+		RenderData::MaterialData data = {};
+		uint32_t flags = 0;
+		if (handle.IsValid() && assets)
+		{
+			// The default material stands in while the material loads (or when it never will).
+			Ref<Material> material = assets->PeekLoadedAsset<Material>(handle);
+			if (!material)
+			{
+				m_MaterialUsesDefault[slot] = 1;
+				material = assets->PeekLoadedAsset<Material>(BuiltinAssets::DefaultMaterial);
+			}
+			if (material)
+			{
+				data = MaterialGPU::Build(*material, [assets](AssetHandle texture, uint32_t missingIndex, uint32_t loadingIndex)
+				{
+					if (!texture.IsValid())
+						return missingIndex;
+					const Ref<Texture> loaded = assets->PeekLoadedAsset<Texture>(texture);
+					return loaded && loaded->GetTableIndex() != TextureTable::c_InvalidIndex ? loaded->GetTableIndex() : loadingIndex;
+				});
+				flags = MaterialGPU::GetFlags(material->GetProperties());
+
+				// Its textures, each once, whether loaded or not: their loads and evictions build the slot again.
+				const std::array<AssetHandle, MaterialGPU::c_TextureMapCount> maps = MaterialGPU::GetTextureMaps(material->GetProperties());
+				std::array<AssetHandle, 5>& textures = m_MaterialTextures[slot];
+				for (size_t map = 0; map < maps.size(); map++)
+				{
+					const AssetHandle texture = maps[map];
+					if (!texture.IsValid() || std::find(maps.begin(), maps.begin() + static_cast<ptrdiff_t>(map), texture) != maps.begin() + static_cast<ptrdiff_t>(map))
+						continue;
+					std::vector<uint32_t>& users = m_TextureUsers[texture];
+					textures[map] = texture;
+					m_MaterialTexturePositions[slot][map] = static_cast<uint32_t>(users.size());
+					users.push_back(slot);
+				}
+			}
+		}
+		m_MaterialData[slot] = data;
+		SetMaterialFlags(slot, flags);
+	}
+
+	bool RenderSceneGPU::AssetTablesChanged(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets) const
+	{
+		if (m_UploadAllTables || renderScene.GetSlotsVersion() != m_SlotsVersion || renderScene.GetMeshSlotCapacity() != m_MeshTable.size()
+			|| renderScene.GetMaterialSlotCapacity() != m_MaterialFlags.size())
+			return true;
+		if (m_HasAssets != (assets != nullptr) || m_Assets.lock() != assets)
+			return true;
+		return assets && assets->GetContentVersion() != m_AssetContentVersion;
+	}
+
+	void RenderSceneGPU::UpdateAssetTables(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, RenderSceneGPUUpdate& update)
+	{
+		ST_PROFILE_FUNCTION();
+		const AssetManagerBase* manager = assets.get();
+		m_MeshMarks.clear();
+		m_MaterialMarks.clear();
+
+		// Slots the scene no longer has (render scenes only grow theirs) leave the counts first.
+		const uint32_t meshSlots = renderScene.GetMeshSlotCapacity();
+		const uint32_t materialSlots = renderScene.GetMaterialSlotCapacity();
+		for (uint32_t slot = meshSlots; slot < m_MeshTable.size(); slot++)
+			BuildMeshEntry(slot, AssetHandle::Null(), nullptr);
+		for (uint32_t slot = materialSlots; slot < m_MaterialFlags.size(); slot++)
+			BuildMaterial(slot, AssetHandle::Null(), nullptr);
+		m_MeshSlotHandles.resize(meshSlots, AssetHandle::Null());
+		m_MeshTable.resize(meshSlots, 0u);
+		m_MeshRecords.resize(meshSlots, 0u);
+		m_MaterialSlotHandles.resize(materialSlots, AssetHandle::Null());
+		m_MaterialData.resize(materialSlots, RenderData::MaterialData {});
+		m_MaterialFlags.resize(materialSlots, 0u);
+		m_MaterialUsesDefault.resize(materialSlots, 0);
+		m_MaterialTextures.resize(materialSlots, c_NoTextures);
+		m_MaterialTexturePositions.resize(materialSlots, std::array<uint32_t, 5> {});
+
+		// Another manager (or none) means other objects for every handle; so does a manager that no longer remembers the
+		// changes since the tables were built.
+		bool rebuildAll = m_HasAssets != (assets != nullptr) || m_Assets.lock() != assets;
+		const uint64_t contentVersion = manager ? manager->GetContentVersion() : 0;
+		m_ContentChanges.clear();
+		if (!rebuildAll && manager && contentVersion != m_AssetContentVersion && !manager->GetContentChanges(m_AssetContentVersion, m_ContentChanges))
+			rebuildAll = true;
+		m_Assets = assets;
+		m_HasAssets = assets != nullptr;
+		m_AssetContentVersion = contentVersion;
+
+		if (rebuildAll)
+		{
+			for (uint32_t slot = 0; slot < meshSlots; slot++)
+				m_MeshMarks.push_back(slot);
+			for (uint32_t slot = 0; slot < materialSlots; slot++)
+				m_MaterialMarks.push_back(slot);
+		}
+		else
+		{
+			// Slots taken by other assets.
+			if (renderScene.GetSlotsVersion() != m_SlotsVersion)
+			{
+				for (uint32_t slot = 0; slot < meshSlots; slot++)
+				{
+					if (renderScene.GetMeshHandle(slot) != m_MeshSlotHandles[slot])
+						m_MeshMarks.push_back(slot);
+				}
+				for (uint32_t slot = 0; slot < materialSlots; slot++)
+				{
+					if (renderScene.GetMaterialHandle(slot) != m_MaterialSlotHandles[slot])
+						m_MaterialMarks.push_back(slot);
+				}
+			}
+			// Assets loaded, reloaded or dropped: the slots of the meshes and materials, the materials naming the textures, and
+			// those drawn as the default material when it is the one that changed.
+			for (const AssetHandle handle : m_ContentChanges)
+			{
+				const uint32_t meshSlot = renderScene.FindMeshSlot(handle);
+				if (meshSlot < meshSlots)
+					m_MeshMarks.push_back(meshSlot);
+				const uint32_t materialSlot = renderScene.FindMaterialSlot(handle);
+				if (materialSlot < materialSlots)
+					m_MaterialMarks.push_back(materialSlot);
+				const auto users = m_TextureUsers.find(handle);
+				if (users != m_TextureUsers.end())
+					m_MaterialMarks.insert(m_MaterialMarks.end(), users->second.begin(), users->second.end());
+				if (handle == BuiltinAssets::DefaultMaterial)
+				{
+					for (uint32_t slot = 0; slot < materialSlots; slot++)
+					{
+						if (m_MaterialUsesDefault[slot])
+							m_MaterialMarks.push_back(slot);
+					}
+				}
+			}
+		}
+		m_SlotsVersion = renderScene.GetSlotsVersion();
+
+		// Each marked slot built once.
+		std::sort(m_MeshMarks.begin(), m_MeshMarks.end());
+		m_MeshMarks.erase(std::unique(m_MeshMarks.begin(), m_MeshMarks.end()), m_MeshMarks.end());
+		std::sort(m_MaterialMarks.begin(), m_MaterialMarks.end());
+		m_MaterialMarks.erase(std::unique(m_MaterialMarks.begin(), m_MaterialMarks.end()), m_MaterialMarks.end());
+		for (const uint32_t slot : m_MeshMarks)
+			BuildMeshEntry(slot, renderScene.GetMeshHandle(slot), manager);
+		for (const uint32_t slot : m_MaterialMarks)
+			BuildMaterial(slot, renderScene.GetMaterialHandle(slot), manager);
+		update.MeshesChecked = static_cast<uint32_t>(m_MeshMarks.size());
+		update.MaterialsBuilt = static_cast<uint32_t>(m_MaterialMarks.size());
+
+		if (m_UploadAllTables)
+		{
+			// The previous upload of the tables failed: all of them again.
+			m_MeshMarks.resize(meshSlots);
+			for (uint32_t slot = 0; slot < meshSlots; slot++)
+				m_MeshMarks[slot] = slot;
+			m_MaterialMarks.resize(materialSlots);
+			for (uint32_t slot = 0; slot < materialSlots; slot++)
+				m_MaterialMarks[slot] = slot;
+			m_UploadAllTables = false;
+		}
+	}
+
+	bool RenderSceneGPU::Update(const RenderScene& renderScene, const Ref<AssetManagerBase>& assets, uint64_t newProxyBytesPerFrame, RenderSceneGPUUpdate* outUpdate)
 	{
 		ST_PROFILE_FUNCTION();
 		RenderSceneGPUUpdate update;
@@ -161,7 +410,8 @@ namespace Strata
 		const bool changed = !m_Initialized || renderScene.GetProxyVersion() != m_ProxyVersion || renderScene.GetInstanceVersion() != m_InstanceVersion
 			|| renderScene.GetPaletteVersion() != m_PaletteVersion;
 		const bool pendingRoom = m_PendingHead < m_Pending.size() && (m_BudgetLeft > 0 || m_FrameNewProxies == 0);
-		if (!changed && !pendingRoom)
+		const bool tablesChanged = AssetTablesChanged(renderScene, assets);
+		if (!changed && !pendingRoom && !tablesChanged)
 		{
 			if (outUpdate)
 				*outUpdate = update;
@@ -176,7 +426,10 @@ namespace Strata
 		GPUPassTimer gpuTimer(m_CommandList, RendererGPUStages::Get().Uploads);
 		const bool buffersReady = EnsureCapacity(m_Proxies, proxyCount, sizeof(RenderData::GPUProxy), "Proxies", true)
 			&& EnsureCapacity(m_Instances, instances.size(), sizeof(RenderData::InstanceData), "Instances", false)
-			&& EnsureCapacity(m_Palette, palette.size(), sizeof(RenderData::AffineTransform), "Palette", false);
+			&& EnsureCapacity(m_Palette, palette.size(), sizeof(RenderData::AffineTransform), "Palette", false)
+			&& EnsureCapacity(m_MeshTableBuffer, renderScene.GetMeshSlotCapacity(), sizeof(uint32_t), "MeshTable", true)
+			&& EnsureCapacity(m_MaterialBuffer, renderScene.GetMaterialSlotCapacity(), sizeof(RenderData::MaterialData), "Materials", true)
+			&& EnsureCapacity(m_MaterialFlagBuffer, renderScene.GetMaterialSlotCapacity(), sizeof(uint32_t), "MaterialFlags", true);
 		if (!buffersReady)
 		{
 			// The copies of the buffers made so far keep what they held.
@@ -343,6 +596,20 @@ namespace Strata
 			flush();
 		}
 
+		// The asset tables: what the scene's mesh and material slots hold now.
+		if (tablesChanged)
+		{
+			UpdateAssetTables(renderScene, assets, update);
+			const size_t tableRegions = m_Regions.size();
+			AddRuns(m_MeshMarks, m_MeshTableBuffer.Buffer, reinterpret_cast<const uint8_t*>(m_MeshTable.data()), sizeof(uint32_t), c_TableRunGap, nullptr);
+			AddRuns(m_MaterialMarks, m_MaterialFlagBuffer.Buffer, reinterpret_cast<const uint8_t*>(m_MaterialFlags.data()), sizeof(uint32_t), c_TableRunGap, nullptr);
+			const size_t materialRegions = m_Regions.size();
+			AddRuns(m_MaterialMarks, m_MaterialBuffer.Buffer, reinterpret_cast<const uint8_t*>(m_MaterialData.data()), sizeof(RenderData::MaterialData), c_TableRunGap,
+				nullptr);
+			for (size_t index = tableRegions; index < m_Regions.size(); index++)
+				(index < materialRegions ? update.TableBytes : update.MaterialBytes) += m_Regions[index].Size;
+		}
+
 		const size_t recordRegions = m_Regions.size();
 		AddRuns(m_RecordMarks, m_Proxies.Buffer, reinterpret_cast<const uint8_t*>(m_Records.data()), sizeof(RenderData::GPUProxy), c_RecordRunGap, nullptr);
 		for (size_t index = recordRegions; index < m_Regions.size(); index++)
@@ -365,6 +632,7 @@ namespace Strata
 			// Staging could not be had. The versions stay, so the next update reads the same changes again; the proxies this
 			// one made resident wait again (their records were not uploaded).
 			ST_CORE_ERROR("RenderSceneGPU: no staging memory for the scene's data; the next update tries again");
+			m_UploadAllTables = m_UploadAllTables || tablesChanged;
 			for (const uint32_t proxy : m_Promoted)
 			{
 				m_Resident[proxy] = 0;
@@ -436,7 +704,8 @@ namespace Strata
 		const RenderSceneGPU& mirror = *found->second;
 		// Frames in flight may still read its buffers.
 		std::vector<nvrhi::ResourceHandle> buffers;
-		for (nvrhi::IBuffer* buffer : { mirror.GetInstanceBuffer(), mirror.GetProxyBuffer(), mirror.GetPaletteBuffer() })
+		for (nvrhi::IBuffer* buffer : { mirror.GetInstanceBuffer(), mirror.GetProxyBuffer(), mirror.GetPaletteBuffer(), mirror.GetMeshTableBuffer(),
+			mirror.GetMaterialBuffer(), mirror.GetMaterialFlagBuffer() })
 		{
 			if (buffer)
 				buffers.emplace_back(buffer);

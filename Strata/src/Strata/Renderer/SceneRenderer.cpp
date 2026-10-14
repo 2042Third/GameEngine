@@ -370,7 +370,6 @@ namespace Strata
 
 		bool recreated = false;
 		const bool buffersCreated = EnsureBufferCapacity(m_DrawListBuffer, 1024, sizeof(uint32_t), "DrawList", recreated)
-			&& EnsureBufferCapacity(m_MaterialBuffer, 256, sizeof(RenderData::MaterialData), "Materials", recreated)
 			&& EnsureBufferCapacity(m_LightBuffer, 64, sizeof(RenderData::LightData), "Lights", recreated)
 			&& EnsureBufferCapacity(m_LightBoundsBuffer, 64, sizeof(RenderData::LightBounds), "LightBounds", recreated)
 			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, 1024, sizeof(uint32_t), "ShadowDrawList", recreated);
@@ -828,7 +827,7 @@ namespace Strata
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(14, drawList),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(15, m_SceneGPU->GetPaletteBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(16, Renderer::GetTextureTable().GetBuffer()),
-				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_MaterialBuffer),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
 				nvrhi::BindingSetItem::Texture_SRV(4, hasEnvironment ? m_Environment->Prefiltered.Get() : blackCube),
@@ -1834,23 +1833,6 @@ namespace Strata
 			PrepareExtraction(renderScene);
 		}
 
-		// The GPU's copy of the render scene, shared with the scene's other renderers: what changed since its last update
-		// uploads now, in a command list of its own, ahead of this frame's. Only proxies it holds are drawn.
-		m_SceneGPU = &Renderer::GetRenderSceneGPUs().Get(renderScene);
-		RenderSceneGPUUpdate sceneUpload;
-		if (!m_SceneGPU->Update(renderScene, m_Specification.NewInstanceBytesPerFrame, &sceneUpload) && !m_SceneGPU->GetInstanceBuffer())
-		{
-			m_Errors.Report("the scene's GPU buffers are unavailable (see the previous error)");
-			m_Stats = {};
-			return false;
-		}
-		m_Stats.InstanceBytesUploaded += sceneUpload.InstanceBytes;
-		m_Stats.InstanceUploadRanges += sceneUpload.InstanceRanges;
-		m_Stats.ProxyBytesUploaded = sceneUpload.ProxyBytes;
-		m_Stats.PaletteBytesUploaded = sceneUpload.PaletteBytes;
-		m_Stats.DeferredInstanceBytes = m_SceneGPU->GetDeferredBytes();
-		m_Stats.DeferredProxies = m_SceneGPU->GetDeferredProxies();
-
 		RenderData::FrameConstants frame = {};
 		frame.View = camera.View;
 		frame.Projection = camera.Projection;
@@ -1877,13 +1859,36 @@ namespace Strata
 		CullView(renderScene, camera, frustum);
 		FindShadowCasters(renderScene, camera, frustum, frame);
 		ResolveAssets(renderScene);
+
+		// The GPU's copy of the render scene, shared with the scene's other renderers: what changed since its last update
+		// uploads now, in a command list of its own, ahead of this frame's. Only proxies it holds are drawn, with the meshes and
+		// materials its tables hold (after the frame's requests, which publish nothing: the tables match what was resolved).
+		const auto sceneUpdateStart = std::chrono::steady_clock::now();
+		m_SceneGPU = &Renderer::GetRenderSceneGPUs().Get(renderScene);
+		RenderSceneGPUUpdate sceneUpload;
+		if (!m_SceneGPU->Update(renderScene, assets, m_Specification.NewInstanceBytesPerFrame, &sceneUpload) && !m_SceneGPU->HasBuffers())
+		{
+			m_Errors.Report("the scene's GPU buffers are unavailable (see the previous error)");
+			m_Stats = {};
+			return false;
+		}
+		m_Stats.InstanceBytesUploaded += sceneUpload.InstanceBytes;
+		m_Stats.InstanceUploadRanges += sceneUpload.InstanceRanges;
+		m_Stats.ProxyBytesUploaded = sceneUpload.ProxyBytes;
+		m_Stats.PaletteBytesUploaded = sceneUpload.PaletteBytes;
+		m_Stats.MaterialBytesUploaded = sceneUpload.MaterialBytes;
+		m_Stats.DeferredInstanceBytes = m_SceneGPU->GetDeferredBytes();
+		m_Stats.DeferredProxies = m_SceneGPU->GetDeferredProxies();
+		// Uploads, not extraction.
+		const float sceneUpdateMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - sceneUpdateStart).count();
+
 		GatherDraws(renderScene, camera, !m_GPUDrivenFrame);
 		GatherShadowDraws(renderScene, camera, frame, !m_GPUDrivenFrame);
 		BuildDrawArguments();
 		if (m_GPUDrivenFrame)
 			PrepareGPUCulling(renderScene, camera, frustum);
 		ReportVisibleAnimators(scene);
-		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
+		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs - sceneUpdateMs;
 		bool degraded = false; // Rendered with a reported limitation: keep the error so it is not logged every frame
 		if (frame.ShadowParams.w > 0.0f && !EnsureShadowMap())
 		{
@@ -1896,18 +1901,16 @@ namespace Strata
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
 			|| m_BoundSceneGPUVersion != m_SceneGPU->GetBufferVersion();
-		bool materialsRecreated = false;
 		bool drawListsRecreated = false;
 		bool cullRecreated = false;
 		const bool buffersReady = (!m_GPUDrivenFrame || EnsureCullBuffers(cullRecreated))
-			&& EnsureBufferCapacity(m_MaterialBuffer, m_MaterialData.size(), sizeof(RenderData::MaterialData), "Materials", materialsRecreated)
 			&& EnsureBufferCapacity(m_DrawListBuffer, m_DrawInstancesBuild.size(), sizeof(uint32_t), "DrawList", drawListsRecreated)
 			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, m_ShadowDrawInstancesBuild.size(), sizeof(uint32_t), "ShadowDrawList", drawListsRecreated)
 			&& EnsureBufferCapacity(m_LightBuffer, m_Lights.size(), sizeof(RenderData::LightData), "Lights", buffersRecreated)
 			&& EnsureBufferCapacity(m_LightBoundsBuffer, m_LightBounds.size(), sizeof(RenderData::LightBounds), "LightBounds", buffersRecreated)
 			&& EnsureBufferCapacity(m_DrawArgumentBuffer, m_DrawArgumentsBuild.size(), sizeof(nvrhi::DrawIndexedIndirectArguments), "DrawArguments", drawListsRecreated,
 				BufferKind::IndirectArguments);
-		buffersRecreated = buffersRecreated || materialsRecreated || drawListsRecreated || cullRecreated;
+		buffersRecreated = buffersRecreated || drawListsRecreated || cullRecreated;
 		if (cullRecreated)
 		{
 			// The culling tables start again in their new buffers, and the binding set names the new ones.
@@ -1917,7 +1920,7 @@ namespace Strata
 		if (!buffersReady)
 		{
 			// A replaced buffer holds nothing yet: upload everything to the next one.
-			m_FullUpload = m_FullUpload || materialsRecreated || drawListsRecreated;
+			m_FullUpload = m_FullUpload || drawListsRecreated;
 			m_Stats = {};
 			return false;
 		}
@@ -1943,13 +1946,13 @@ namespace Strata
 			commandList->close();
 			m_Device->executeCommandList(commandList); // Keeps the environment processing that was recorded
 			m_Errors.Report(tableUploaded ? "failed to create the scene binding sets" : "the texture table could not be uploaded (see the previous error)");
-			m_FullUpload = m_FullUpload || materialsRecreated || drawListsRecreated;
+			m_FullUpload = m_FullUpload || drawListsRecreated;
 			m_Stats = {};
 			return false;
 		}
 
 		commandList->writeBuffer(m_FrameConstantBuffer, &frame, sizeof(frame));
-		UploadSceneData(commandList, materialsRecreated, drawListsRecreated);
+		UploadSceneData(commandList, drawListsRecreated);
 		if (!m_Lights.empty())
 		{
 			commandList->writeBuffer(m_LightBuffer, m_Lights.data(), m_Lights.size() * sizeof(RenderData::LightData));

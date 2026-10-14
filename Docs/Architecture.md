@@ -1609,20 +1609,21 @@ A frame of `SceneRenderer::Render`:
 RenderScene::Get(scene).Sync()   world transforms, then the proxies of signaled mesh renderers and changed transforms,
                                  then the mesh layouts of meshes the asset manager loaded, reloaded or dropped since
 AssetResolveCache::BeginFrame    the frame's asset manager
-RenderSceneGPU::Update           the render scene's GPU copy: what changed since its last update (shared by the
-                                 scene's renderers), new proxies within the frame's budget; executed at once
 CullView                         SpatialIndex::QueryFrustum; screen fractions and request priorities (parallel chunks);
                                  meshes of unknown bounds as if in view; QuerySphere for the prefetch distance
 FindShadowCasters                cascade boxes; QueryPlanes per cascade (a job each, merged in cascade order), then
                                  the exact test in light space in parallel chunks (casters below a texel of a cascade
                                  left out of it), animator reports and the assets casters need merged in chunk order
 ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident; materials used
-                                 as in the frame before: its data, their assets looked up in one call (below)
+                                 as in the frame before: their flags, their assets looked up in one call (below)
+RenderSceneGPU::Update           the render scene's GPU copy: what changed since its last update (shared by the
+                                 scene's renderers), new proxies within the frame's budget, the mesh and material
+                                 tables after the asset manager's content changes; executed at once
 GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches (the
                                  GPU-driven path: transparent draws, the materials' screen sizes and the cascades only)
 BuildDrawArguments               the batches' indirect arguments at their meshes' places in the geometry pool
-PrepareGPUCulling                (GPU-driven) the frame's mesh and material tables, its buckets and their draw slots
-UploadSceneData                  changed materials, the changed range of each draw list (and the culling tables)
+PrepareGPUCulling                (GPU-driven) the frame's buckets and their draw slots, the culling constants
+UploadSceneData                  the changed range of each draw list (and the bucket table)
 RunGPUCulling                    (GPU-driven) Cull.comp counts, CullBuild.comp places the draws, Cull.comp writes the
                                  draw list; the passes then draw each bucket indirectly
 ReleaseFrameAssets               (when Render returns, however it ends) every reference the frame took, and the manager
@@ -1729,6 +1730,19 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   within `c_PrepareUploadBytes` a frame, so the frame that shows the scene uploads no proxy. A render scene's
   destructor posts its id (any thread) and `Renderer::BeginFrame` releases its mirror; mirrors no renderer updated for
   `RenderSceneGPUCache::c_UnusedFrames` (300) frames go too, and a later frame of their scene uploads it again.
+  The mirror also holds the scene's asset tables, by slot: the mesh table (per mesh slot the `GeometryHandle` of the
+  loaded mesh, with its arena; 0 while it is not loaded or not in the geometry pool), and per material slot its GPU data
+  (`RenderData::MaterialData`, `MaterialGPU::Build`) and flags (available, double-sided, alpha-masked, transparent), of
+  the loaded material or, while it is not loaded, of the default material. They follow the asset manager's content
+  changes (`AssetManagerBase::GetContentChanges`; another manager, or one that no longer remembers that far back,
+  builds every slot) and the scene's slots (`RenderScene::GetSlotsVersion`, `FindMeshSlot`, `FindMaterialSlot`): a
+  mesh or material is built again when it was loaded, reloaded or dropped, a material also when one of its textures or,
+  for those drawn as the default material, the default material was (a reverse index from textures to the material
+  slots naming them). Textures are named by texture table index, so a texture streaming levels builds nothing. Only
+  the slots built upload (`RenderSceneGPUUpdate::MeshesChecked`, `MaterialsBuilt`, `MaterialBytes`). Both paths read
+  the materials from this buffer, and the GPU-driven path culls with these tables, so it draws whatever is loaded; the
+  mirror requests nothing (the renderers' extraction does) and is updated after the frame's requests, which publish
+  nothing, so the CPU's flags and the tables agree.
 - **Spatial index** (`SpatialIndex`). A loose grid: a proxy lives in the 32-unit cell that holds the center of its
   bounds, cells keep the union of their proxies' bounds and form blocks of 8x8x8 cells, and proxies longer than four
   cells are kept in a list of their own. Queries (frustum, convex planes, sphere) skip blocks and cells outside the
@@ -1753,13 +1767,14 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   long as the fonts are loaded.
   Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what `GetOpaqueBatches` reports after the frame holds no
   pointers.
-- **Material data taken over by still frames** (`SceneRenderer::MaterialResolution`). Resolving a material builds its GPU
-  data from its properties and its textures' texture table indices, one lookup per material and texture: 0.58 of the
-  1.0 ms a still frame of 3,000 streamed textures took (`PerfGPU.Renderer.IdleFrame3kStreamedTextures`). A frame whose
-  material slots, their uses and their handles are those of the latest frame that resolved them one by one takes that
-  frame's data, flags and texture maps over when nothing they come from changed: the materials and textures are still
+- **Materials taken over by still frames** (`SceneRenderer::MaterialResolution`). Resolving a material requests it and
+  its textures, one lookup per material and texture: 0.58 of the 1.0 ms a still frame of 3,000 streamed textures took
+  (`PerfGPU.Renderer.IdleFrame3kStreamedTextures`). A frame whose material slots, their uses and their handles are those
+  of the latest frame that resolved them one by one takes that frame's flags and texture maps over when nothing they
+  come from changed: the materials and textures are still
   the loaded objects it found (compared by ownership under one lock of the manager, `AssetManagerBase::TouchLoadedAssets`,
-  which also stamps them as used, as the lookups would). The data names textures by their index in the texture table
+  which also stamps them as used, as the lookups would). The materials' GPU data is the render scene's GPU copy's
+  (above), built when a material or its textures change, not per frame. It names textures by their index in the texture table
   (`Renderer/TextureTable.h`, `Renderer::GetTextureTable`), which a texture keeps for its life: a texture that streams
   levels moves to a new bindless slot and releases its old one, and only its table entry follows (`Texture::
   SwapResidentTexture`; the renderers upload changed entries before they draw, `TextureTable::RecordUploads`), so
@@ -1768,17 +1783,16 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   the resolving frame recorded (`AssetResolveCache::BeginRecording`, `EndRecording`), replayed with the statistics they
   counted (`Replay`); frames that drew a material as the default material, found an asset loading or counted one
   pending are not replayed. Loaded materials are not changed in place (edits publish new objects), so their properties
-  need no comparison. The camera takes no part: views that move over the same materials reuse them too. Still frames of
+  need no comparison, and no frame compares material data. The camera takes no part: views that move over the same materials reuse them too. Still frames of
   3,000 streamed textures went from 1.01-1.06 ms to 0.61 ms, of 10,000 materials from 1.33 to 0.61 ms, and the editor's
   frames of 10,000 materials from 1.82 to 0.99 ms.
 - **The GPU-driven path** (`SceneRendererSpecification::GPUDriven`, Auto where the device has
   `drawIndirectFirstInstance`; `SceneRendererGPUDriven.cpp`, `Scene/Cull.comp`, `CullBuild.comp`, `Include/Culling.glsl`).
   The GPU culls the render scene's GPU copy and builds the opaque and shadow draws; the CPU path (Off) stays as the
-  reference and the fallback. The CPU still resolves the frame's assets (the request marks of `CullView` and
-  `FindShadowCasters`), fits the cascades to the casters and gathers transparent draws, sorted; it then uploads the
-  frame's mesh table (per mesh slot the `GeometryHandle` of a mesh it resolved, with its arena) and material table (per
-  material slot the flags: available, double-sided, alpha-masked, transparent), the bucket table and the constants
-  (`RenderData::CullConstants`). `Cull.comp` runs one thread per proxy, for the view and (variant `ST_CULL_SHADOW`) for
+  reference and the fallback. The CPU still requests the frame's assets (the request marks of `CullView` and
+  `FindShadowCasters`), fits the cascades to the casters and gathers transparent draws, sorted; the GPU culls with the
+  mirror's mesh table and material flags (above: whatever is loaded, whether this frame requested it or not), and the CPU
+  uploads the bucket table and the constants (`RenderData::CullConstants`). `Cull.comp` runs one thread per proxy, for the view and (variant `ST_CULL_SHADOW`) for
   the cascades: the decisions are the CPU path's on the same data (active and indexed, the frustum, the screen size of
   `MinProjectedPixels` for the view, the light-space box and the sub-texel rule for cascades, per instance the material
   and the level of detail, `Include/LODSelection.glsl`), and each instance counts on its (bucket, LOD record). Buckets are
@@ -1787,8 +1801,9 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   and storage. `CullBuild.comp` gives each record with instances a range of the draw list and an indirect draw in its
   bucket, then `Cull.comp` runs again and writes each instance into its record's range (the same decisions, counting
   the record down). The passes then draw each bucket with one `drawIndexedIndirectCount` (devices with
-  `drawIndirectCount`), one `drawIndexedIndirect` over the bucket's draw slots (`NoCount`: as many slots as the frame's
-  meshes have LOD records in that arena, those without instances zeroed), or one per slot (`PerDraw`), through the
+  `drawIndirectCount`), one `drawIndexedIndirect` over the bucket's draw slots (`NoCount`: as many slots as the meshes the
+  CPU's marks found have LOD records in that arena, those without instances zeroed; storage for every loaded mesh's
+  records), or one per slot (`PerDraw`), through the
   vertex shaders' `u_DrawList[gl_InstanceIndex]` as before. MoltenVK has no `drawIndirectCount`: there the `NoCount`
   path runs. The counts (instances, draws, triangles, levels, shadow casters, visible and size-culled proxies) come back
   2-3 frames late through a readback (`BufferReadback`, `SceneRendererGPUStats`, `AddGPUCounts`). The opaque pixels do not
@@ -1801,8 +1816,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   that differ and spends passes and histograms on those only (draws of one mesh share a key: nothing to sort). The
   material is not in the key, so the instances of a mesh share a draw call whatever their materials: shaders read
   `u_Materials[instance.MaterialIndex]` (`SceneRendererSpecification::BatchAcrossMaterials` off splits batches by
-  material, for comparisons). Transparent surfaces stay one draw each, back to front. Material data (by slot) is built
-  for the materials drawn (or taken over, above) and uploaded where it changed.
+  material, for comparisons). Transparent surfaces stay one draw each, back to front. Material data (by slot) is the
+  render scene's GPU copy's, built and uploaded where a material or its textures changed.
 - **A still frame** updates no proxy and uploads no instance, proxy record, material or draw list
   (`SceneRendererStats::ProxyUpdates`, `InstanceBytesUploaded`, `ProxyBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
   on screen and texture tiling (`GetVisibleMaterials`, and their loaded texture maps, `GetVisibleTextures`, for mip

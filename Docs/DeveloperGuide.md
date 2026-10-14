@@ -1709,10 +1709,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   asset is looked up once per frame (`AssetResolveCache`), and the cache's references end with the frame (no mesh,
   material or texture it resolved, and not the asset manager, is held once `Render` returns), so what leaves the view
   becomes evictable, also for a renderer that stops rendering. A frame that uses the same material slots the same ways
-  as the one before (still frames, and views that move over the same materials) takes their data over when the materials
+  as the one before (still frames, and views that move over the same materials) takes their flags over when the materials
   and textures are the loaded objects that frame found (`SceneRenderer::ReuseResolvedMaterials`;
-  `SceneRendererStats::ReusedMaterials`; the data names textures by texture table index, so textures streaming levels
-  change nothing of it), looking them up again in one call (`AssetResolveCache::Replay`,
+  `SceneRendererStats::ReusedMaterials`), looking them up again in one call (`AssetResolveCache::Replay`,
   `AssetManagerBase::TouchLoadedAssets`). Loaded materials are never changed in place: an edit publishes a new object
   (`ReplaceLoadedAsset`). Two caches keep assets across frames: `SceneRenderer`'s environment cache holds the sky
   light's environment map until the environment changes (the maps computed from a map are shared by every renderer
@@ -1736,6 +1735,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
   device frame and wait undrawn meanwhile (`SceneRendererStats::DeferredInstanceBytes`); changes of resident ones upload
   at once. A reader of the proxy log that takes `GetProxyVersion` reads every change after it. Mirrors go with their
   render scenes (at the next `Renderer::BeginFrame`) or after 300 frames unused.
+- The mirror also keeps the mesh table and the material data and flags by slot (both paths read materials from it;
+  `MaterialGPU::Build` is the one place material data is made). They follow the asset manager's content changes and the
+  scene's slots, never a frame's requests: what is loaded is drawn. A change that alters what a material's GPU data
+  depends on must reach them as a content change (loaded materials are never changed in place) or through
+  `RenderScene::GetSlotsVersion`; the data names textures by texture table index, so textures streaming levels change
+  nothing of it. The mirror never requests or stamps an asset.
 
 ### Batching
 
@@ -1774,8 +1779,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
 
 - Renderers cull and build their opaque and shadow draws on the GPU where the device has `drawIndirectFirstInstance`
   (`SceneRendererSpecification::GPUDriven`, Docs/Architecture.md, "Render scene"): `Scene/Cull.comp` (the view, and
-  `ST_CULL_SHADOW` for the cascades) and `CullBuild.comp` over the render scene's GPU copy, the geometry pool's tables and
-  the frame's mesh and material tables; the passes draw each bucket indirectly (`IndirectMode`: Auto uses
+  `ST_CULL_SHADOW` for the cascades) and `CullBuild.comp` over the render scene's GPU copy (with its mesh and material
+  tables) and the geometry pool's tables; the passes draw each bucket indirectly (`IndirectMode`: Auto uses
   `drawIndexedIndirectCount` where the device has `drawIndirectCount`, else `NoCount`; `PerDraw` draws slot by slot).
   The CPU path is the reference and the fallback (`GPUDriven` Off, devices without `drawIndirectFirstInstance`).
 - The rules that decide what is drawn exist twice: on the CPU (`SceneRendererExtraction.cpp`: frustum, screen size
@@ -1791,7 +1796,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `GetOpaqueBatches`, `GetShadowBatches` and the shadow draw list are empty.
 - Buckets the frame cannot have get no storage: the CPU lists the present ones (mirrored proxies, double-sided and
   alpha-masked materials, the arenas of its meshes, posed proxies; `RenderSceneStats::MirroredProxies`, `PosedProxies`)
-  and gives each a dense index; a bucket's draw slots are its arena's LOD records among the frame's meshes. Buffers grow
+  and gives each a dense index; a bucket's draw slots are its arena's LOD records among the meshes the CPU's marks found
+  (storage for those of every loaded mesh). Buffers grow
   with the scene (`EnsureCullBuffers`); `SceneRendererGPUStats::Overflow` counts instances there was no room for (0
   unless a buffer could not grow).
 

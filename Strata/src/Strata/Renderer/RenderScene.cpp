@@ -180,6 +180,18 @@ namespace Strata
 		m_PendingPositions[index] = c_InvalidIndex;
 	}
 
+	uint32_t RenderScene::FindMeshSlot(AssetHandle mesh) const
+	{
+		const auto found = m_MeshSlotsByHandle.find(mesh);
+		return found != m_MeshSlotsByHandle.end() ? found->second : c_InvalidIndex;
+	}
+
+	uint32_t RenderScene::FindMaterialSlot(AssetHandle material) const
+	{
+		const auto found = m_MaterialSlotsByHandle.find(material);
+		return found != m_MaterialSlotsByHandle.end() ? found->second : c_InvalidIndex;
+	}
+
 	uint32_t RenderScene::FindProxy(entt::entity entity) const
 	{
 		const size_t index = static_cast<size_t>(entt::to_entity(entity));
@@ -224,14 +236,15 @@ namespace Strata
 
 	bool RenderScene::PrepareLoadedScene(Scene& scene)
 	{
-		if (!Prepare(scene, AssetManager::GetActive(), c_PrepareFrameBudget))
+		const Ref<AssetManagerBase>& assets = AssetManager::GetActive();
+		if (!Prepare(scene, assets, c_PrepareFrameBudget))
 			return false;
 		if (!Renderer::IsInitialized())
 			return true;
 		// The GPU's copy too, within a frame's budget for new proxies, so that the frame that shows the scene uploads none.
 		RenderScene& renderScene = Get(scene);
 		RenderSceneGPU& mirror = Renderer::GetRenderSceneGPUs().Get(renderScene);
-		mirror.Update(renderScene, c_PrepareUploadBytes);
+		mirror.Update(renderScene, assets, c_PrepareUploadBytes);
 		return mirror.GetDeferredProxies() == 0;
 	}
 
@@ -618,6 +631,7 @@ namespace Strata
 			m_MeshSlotsByHandle.emplace(handle, slot);
 			m_NewMeshSlots.push_back(slot);
 			m_Stats.Meshes++;
+			m_SlotsVersion++;
 		}
 		MeshEntry& entry = m_Meshes[slot];
 		m_MeshUserPositions[proxy] = static_cast<uint32_t>(entry.Users.size());
@@ -651,6 +665,7 @@ namespace Strata
 		entry = MeshEntry();
 		m_FreeMeshes.push_back(slot);
 		m_Stats.Meshes--;
+		m_SlotsVersion++;
 	}
 
 	void RenderScene::UpdateBoundsMembership(uint32_t slot)
@@ -694,6 +709,7 @@ namespace Strata
 		m_Materials[slot] = MaterialEntry { handle, 1 };
 		m_MaterialSlotsByHandle.emplace(handle, slot);
 		m_Stats.Materials++;
+		m_SlotsVersion++;
 		return slot;
 	}
 
@@ -707,6 +723,7 @@ namespace Strata
 		entry = MaterialEntry();
 		m_FreeMaterials.push_back(slot);
 		m_Stats.Materials--;
+		m_SlotsVersion++;
 	}
 
 	uint32_t RenderScene::SetMeshLayout(uint32_t slot, const Mesh& mesh, uint64_t sourceRevision)

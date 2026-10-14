@@ -1,14 +1,20 @@
 #include "Renderer/SceneRendererTestUtils.h"
 
+#include "Renderer/TextureStreamingTestUtils.h"
+#include "Strata/Renderer/MaterialData.h"
+#include "Strata/Renderer/Mesh.h"
+#include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
+#include "Strata/Renderer/Texture.h"
+#include "Strata/Renderer/TextureTable.h"
 
 #include <cstring>
 #include <random>
 #include <vector>
 
 // The GPU's copy of a render scene (RenderSceneGPU): shared by the scene's renderers, uploaded where it changed, new proxies
-// within a frame's budget, grown by GPU copies, released with its scene.
+// within a frame's budget, grown by GPU copies, released with its scene; its mesh and material tables follow what is loaded.
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -92,6 +98,56 @@ namespace
 	void EmptyFrame(GPUContext& gpu)
 	{
 		Frame(gpu, []() {});
+	}
+
+	// The mesh and material tables' buffers hold what the mirror says they hold.
+	void CheckTables(GPUContext& gpu, const RenderSceneGPU& mirror)
+	{
+		gpu.GetDevice().WaitForIdle();
+		const uint32_t meshSlots = mirror.GetMeshSlotCount();
+		const uint32_t materialSlots = mirror.GetMaterialSlotCount();
+		REQUIRE(meshSlots > 0);
+		REQUIRE(materialSlots > 0);
+		const std::vector<uint32_t> meshTable = ReadRecords<uint32_t>(gpu, mirror.GetMeshTableBuffer(), meshSlots);
+		const std::vector<uint32_t> flags = ReadRecords<uint32_t>(gpu, mirror.GetMaterialFlagBuffer(), materialSlots);
+		const std::vector<RenderData::MaterialData> data = ReadRecords<RenderData::MaterialData>(gpu, mirror.GetMaterialBuffer(), materialSlots);
+		for (uint32_t slot = 0; slot < meshSlots; slot++)
+		{
+			CAPTURE(slot);
+			CHECK(meshTable[slot] == mirror.GetMeshTableEntry(slot));
+		}
+		for (uint32_t slot = 0; slot < materialSlots; slot++)
+		{
+			CAPTURE(slot);
+			CHECK(flags[slot] == mirror.GetMaterialFlags(slot));
+			CHECK(std::memcmp(&data[slot], mirror.GetMaterialData(slot), sizeof(RenderData::MaterialData)) == 0);
+		}
+	}
+
+	// A device frame that syncs the scene's render scene and updates its GPU copy with `manager`.
+	RenderSceneGPUUpdate UpdateMirror(GPUContext& gpu, Scene& scene, const Ref<AssetManagerBase>& manager)
+	{
+		RenderSceneGPUUpdate update;
+		Frame(gpu, [&]()
+		{
+			RenderScene& renderScene = RenderScene::Get(scene);
+			renderScene.Sync(manager);
+			REQUIRE(Renderer::GetRenderSceneGPUs().Get(renderScene).Update(renderScene, manager, 64ull << 20, &update));
+		});
+		return update;
+	}
+
+	// What the mesh table holds for a loaded mesh, and its LOD records.
+	uint32_t ExpectedMeshEntry(const AssetManagerBase& manager, AssetHandle handle, uint32_t* outRecords)
+	{
+		const Ref<Mesh> mesh = manager.PeekLoadedAsset<Mesh>(handle);
+		REQUIRE(mesh);
+		const GeometryAllocation* geometry = mesh->GetGeometry();
+		REQUIRE(geometry);
+		*outRecords = 0;
+		for (const Submesh& submesh : mesh->GetSubmeshes())
+			*outRecords += static_cast<uint32_t>(submesh.LODs.size());
+		return mesh->GetGeometryHandle() | (geometry->Arena == GeometryArena::Skinned ? RenderData::c_CullMeshSkinnedArena : 0u);
 	}
 
 }
@@ -333,6 +389,152 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		CHECK(renderer.GetStats().InstanceUploadRanges == 0);
 		CHECK(GetDrawnCounts(renderer).Instances > 0);
 		CheckMirror(gpu, RenderScene::Get(scene), *mirror);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The GPU copy's mesh and material tables follow loads, edits and evictions, and build only what changed")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		// A material with a texture of its own, one without and a mesh, in a pack: loaded objects of a pack can be unloaded and
+		// replaced (built-in assets cannot).
+		constexpr AssetHandle c_Texture(0xE100);
+		constexpr AssetHandle c_TexturedMaterial(0xE101);
+		constexpr AssetHandle c_PlainMaterial(0xE102);
+		constexpr AssetHandle c_Torus(0xE103);
+		MaterialProperties textured = UnlitColor(glm::vec4(1.0f));
+		textured.BaseColorMap = c_Texture;
+		const std::filesystem::path pack = WriteStreamingPack({
+			StreamingPackAsset { c_Texture, AssetType::Texture, "Textures/Red.png", CookSolidTexture(4, { 255, 0, 0, 255 }) },
+			StreamingPackAsset { c_TexturedMaterial, AssetType::Material, "Materials/Textured.stmat", SerializeMaterial(textured) },
+			StreamingPackAsset { c_PlainMaterial, AssetType::Material, "Materials/Plain.stmat", SerializeMaterial(UnlitColor(glm::vec4(0.0f, 1.0f, 0.0f, 1.0f))) },
+			StreamingPackAsset { c_Torus, AssetType::Mesh, "Meshes/Torus.mesh", MeshFactory::CreateTorus()->Serialize() } });
+		std::string error;
+		const Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(pack, &error);
+		REQUIRE_MESSAGE(manager, error);
+		AssetManager::SetActive(manager);
+		REQUIRE(manager->LoadAssetSync(BuiltinAssets::CubeMesh));
+		const Ref<Material> defaultMaterial = manager->LoadAssetSync<Material>(BuiltinAssets::DefaultMaterial);
+		REQUIRE(defaultMaterial);
+
+		Scene scene;
+		AddMesh(scene, BuiltinAssets::CubeMesh, c_TexturedMaterial, glm::vec3(-2.0f, 0.0f, 0.0f), "Textured");
+		Entity plain = AddMesh(scene, BuiltinAssets::CubeMesh, c_PlainMaterial, glm::vec3(2.0f, 0.0f, 0.0f), "Plain");
+		const Ref<AssetManagerBase> assets = manager;
+		UpdateMirror(gpu, scene, assets);
+		RenderScene& renderScene = RenderScene::Get(scene);
+		const RenderSceneGPU& mirror = Renderer::GetRenderSceneGPUs().Get(renderScene);
+		const uint32_t cubeSlot = renderScene.FindMeshSlot(BuiltinAssets::CubeMesh);
+		const uint32_t texturedSlot = renderScene.FindMaterialSlot(c_TexturedMaterial);
+		const uint32_t plainSlot = renderScene.FindMaterialSlot(c_PlainMaterial);
+		REQUIRE(cubeSlot < mirror.GetMeshSlotCount());
+		REQUIRE(texturedSlot < mirror.GetMaterialSlotCount());
+		REQUIRE(plainSlot < mirror.GetMaterialSlotCount());
+
+		// The loaded cube is drawn; the materials, not loaded yet, as the default material.
+		uint32_t cubeRecords = 0;
+		CHECK(mirror.GetMeshTableEntry(cubeSlot) == ExpectedMeshEntry(*manager, BuiltinAssets::CubeMesh, &cubeRecords));
+		CHECK(mirror.GetMeshRecords(cubeSlot) == cubeRecords);
+		CHECK(mirror.GetArenaRecords(0) == cubeRecords);
+		const uint32_t defaultFlags = MaterialGPU::GetFlags(defaultMaterial->GetProperties());
+		CHECK(mirror.GetMaterialFlags(texturedSlot) == defaultFlags);
+		CHECK(mirror.GetMaterialFlags(plainSlot) == defaultFlags);
+		CHECK(mirror.GetMaterialData(texturedSlot)->BaseColor == defaultMaterial->GetProperties().BaseColor);
+		CHECK(std::memcmp(mirror.GetMaterialData(texturedSlot), mirror.GetMaterialData(plainSlot), sizeof(RenderData::MaterialData)) == 0);
+		CheckTables(gpu, mirror);
+
+		// Nothing changed: nothing is built or uploaded.
+		RenderSceneGPUUpdate update = UpdateMirror(gpu, scene, assets);
+		CHECK(update.MeshesChecked == 0);
+		CHECK(update.MaterialsBuilt == 0);
+		CHECK(update.TableBytes == 0);
+		CHECK(update.MaterialBytes == 0);
+
+		// The textured material loads before its texture: the texture's place holds the loading fallback.
+		REQUIRE(manager->LoadAssetSync(c_TexturedMaterial));
+		update = UpdateMirror(gpu, scene, assets);
+		CHECK(update.MaterialsBuilt == 1);
+		CHECK(update.MaterialBytes == sizeof(RenderData::MaterialData));
+		CHECK(mirror.GetMaterialFlags(texturedSlot) == MaterialGPU::GetFlags(textured));
+		CHECK(mirror.GetMaterialData(texturedSlot)->BaseColorMap == TextureTable::c_White);
+		CHECK(mirror.GetMaterialFlags(plainSlot) == defaultFlags);
+		CheckTables(gpu, mirror);
+
+		// The texture arrives: only the material that names it is built again, now with the texture's table index.
+		const Ref<Texture> texture = manager->LoadAssetSync<Texture>(c_Texture);
+		REQUIRE(texture);
+		REQUIRE(texture->GetTableIndex() != TextureTable::c_InvalidIndex);
+		update = UpdateMirror(gpu, scene, assets);
+		CHECK(update.MaterialsBuilt == 1);
+		CHECK(update.MeshesChecked == 0);
+		CHECK(mirror.GetMaterialData(texturedSlot)->BaseColorMap == texture->GetTableIndex());
+		CheckTables(gpu, mirror);
+
+		// An edit publishes a new object: its flags follow (alpha-masked and double-sided now).
+		REQUIRE(manager->LoadAssetSync(c_PlainMaterial));
+		UpdateMirror(gpu, scene, assets);
+		CHECK_FALSE(mirror.HasAlphaMaskedMaterials());
+		CHECK_FALSE(mirror.HasDoubleSidedMaterials());
+		MaterialProperties edited = UnlitColor(glm::vec4(0.0f, 0.0f, 1.0f, 1.0f));
+		edited.AlphaMode = MaterialAlphaMode::Mask;
+		edited.DoubleSided = true;
+		REQUIRE(manager->ReplaceLoadedAsset(c_PlainMaterial, Material::Create(edited)));
+		update = UpdateMirror(gpu, scene, assets);
+		CHECK(update.MaterialsBuilt == 1);
+		CHECK(mirror.GetMaterialFlags(plainSlot) == MaterialGPU::GetFlags(edited));
+		CHECK(mirror.GetMaterialData(plainSlot)->BaseColor == edited.BaseColor);
+		CHECK(mirror.HasAlphaMaskedMaterials());
+		CHECK(mirror.HasDoubleSidedMaterials());
+		CheckTables(gpu, mirror);
+
+		// The texture is evicted: the material that names it shows the fallback again. Then the material goes too.
+		manager->UnloadAsset(c_Texture);
+		update = UpdateMirror(gpu, scene, assets);
+		CHECK(update.MaterialsBuilt == 1);
+		CHECK(mirror.GetMaterialData(texturedSlot)->BaseColorMap == TextureTable::c_White);
+		manager->UnloadAsset(c_TexturedMaterial);
+		UpdateMirror(gpu, scene, assets);
+		CHECK(mirror.GetMaterialFlags(texturedSlot) == defaultFlags);
+		CHECK(mirror.GetMaterialData(texturedSlot)->BaseColor == defaultMaterial->GetProperties().BaseColor);
+		CheckTables(gpu, mirror);
+
+		// Another mesh takes a new slot: nothing to draw until it loads, and nothing again once it is evicted.
+		plain.GetComponent<MeshRendererComponent>().Mesh = c_Torus;
+		plain.MarkModified<MeshRendererComponent>();
+		UpdateMirror(gpu, scene, assets);
+		const uint32_t torusSlot = renderScene.FindMeshSlot(c_Torus);
+		REQUIRE(torusSlot < mirror.GetMeshSlotCount());
+		CHECK(mirror.GetMeshTableEntry(torusSlot) == 0);
+		CHECK(mirror.GetArenaRecords(0) == cubeRecords);
+		REQUIRE(manager->LoadAssetSync(c_Torus));
+		update = UpdateMirror(gpu, scene, assets);
+		CHECK(update.MeshesChecked == 1);
+		uint32_t torusRecords = 0;
+		CHECK(mirror.GetMeshTableEntry(torusSlot) == ExpectedMeshEntry(*manager, c_Torus, &torusRecords));
+		CHECK(mirror.GetMeshRecords(torusSlot) == torusRecords);
+		CHECK(mirror.GetArenaRecords(0) == cubeRecords + torusRecords);
+		CheckTables(gpu, mirror);
+		manager->UnloadAsset(c_Torus);
+		UpdateMirror(gpu, scene, assets);
+		CHECK(mirror.GetMeshTableEntry(torusSlot) == 0);
+		CHECK(mirror.GetArenaRecords(0) == cubeRecords);
+		CheckTables(gpu, mirror);
+
+		// Another asset manager: every slot is built again from its objects (its own built-in cube, nothing of the pack).
+		{
+			SceneTestAssets other;
+			update = UpdateMirror(gpu, scene, other.Manager);
+			CHECK(update.MeshesChecked == mirror.GetMeshSlotCount());
+			CHECK(update.MaterialsBuilt == mirror.GetMaterialSlotCount());
+			uint32_t otherCubeRecords = 0;
+			CHECK(mirror.GetMeshTableEntry(cubeSlot) == ExpectedMeshEntry(*other.Manager, BuiltinAssets::CubeMesh, &otherCubeRecords));
+			CHECK(mirror.GetMeshTableEntry(torusSlot) == 0);
+			CHECK(mirror.GetMaterialFlags(plainSlot) == defaultFlags);
+			CHECK_FALSE(mirror.HasAlphaMaskedMaterials());
+			CheckTables(gpu, mirror);
+		}
+
+		AssetManager::SetActive(nullptr);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }
