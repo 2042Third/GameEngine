@@ -125,9 +125,69 @@ endif()
 # with the GPU tests.
 set(STRATA_FEATURE_TEST_SUITES "FeatureTest,Editor.FeatureTest")
 
-add_test(NAME StrataTests.Core
-	COMMAND StrataTests "--test-suite-exclude=GPU*,EndToEnd*,Package*,Perf.*,PerfGPU.*,${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
+# The suites without a CTest of their own run in shards, StrataTests.Core.<Shard> (label core; ctest -R StrataTests.Core
+# selects them all), so that ctest -j runs them side by side: CoreShards.json lists the shards and the suites that have
+# their own CTests, and Testing.Shards checks that every suite runs in exactly one. Suites ending in .Sweep run a sample of
+# their corruption sweep in their shard and all of it in StrataTests.Fuzz.
+set(STRATA_CORE_SHARDS_FILE "${CMAKE_CURRENT_SOURCE_DIR}/CoreShards.json")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${STRATA_CORE_SHARDS_FILE}")
+file(READ "${STRATA_CORE_SHARDS_FILE}" STRATA_CORE_SHARDS)
+set(STRATA_OWN_TEST_SUITES "")
+string(JSON STRATA_OWN_TEST_COUNT LENGTH "${STRATA_CORE_SHARDS}" OwnTests)
+math(EXPR STRATA_LAST_OWN_TEST "${STRATA_OWN_TEST_COUNT} - 1")
+foreach(index RANGE ${STRATA_LAST_OWN_TEST})
+	string(JSON suiteCount LENGTH "${STRATA_CORE_SHARDS}" OwnTests ${index} Suites)
+	math(EXPR lastSuite "${suiteCount} - 1")
+	foreach(suiteIndex RANGE ${lastSuite})
+		string(JSON suite GET "${STRATA_CORE_SHARDS}" OwnTests ${index} Suites ${suiteIndex})
+		list(APPEND STRATA_OWN_TEST_SUITES "${suite}")
+	endforeach()
+endforeach()
+string(JSON STRATA_SHARD_COUNT LENGTH "${STRATA_CORE_SHARDS}" Shards)
+math(EXPR STRATA_LAST_SHARD "${STRATA_SHARD_COUNT} - 1")
+foreach(index RANGE ${STRATA_LAST_SHARD})
+	string(JSON shardName GET "${STRATA_CORE_SHARDS}" Shards ${index} Name)
+	set(shardSuites "")
+	string(JSON suiteCount LENGTH "${STRATA_CORE_SHARDS}" Shards ${index} Suites)
+	math(EXPR lastSuite "${suiteCount} - 1")
+	foreach(suiteIndex RANGE ${lastSuite})
+		string(JSON suite GET "${STRATA_CORE_SHARDS}" Shards ${index} Suites ${suiteIndex})
+		list(APPEND shardSuites "${suite}")
+	endforeach()
+	# The suites of the own CTests never run in a shard, whatever its filters say.
+	set(shardExcludes ${STRATA_OWN_TEST_SUITES})
+	string(JSON excludeType ERROR_VARIABLE excludeError TYPE "${STRATA_CORE_SHARDS}" Shards ${index} Exclude)
+	if(NOT excludeError)
+		string(JSON excludeCount LENGTH "${STRATA_CORE_SHARDS}" Shards ${index} Exclude)
+		math(EXPR lastExclude "${excludeCount} - 1")
+		foreach(excludeIndex RANGE ${lastExclude})
+			string(JSON exclude GET "${STRATA_CORE_SHARDS}" Shards ${index} Exclude ${excludeIndex})
+			list(APPEND shardExcludes "${exclude}")
+		endforeach()
+	endif()
+	string(REPLACE ";" "," shardSuites "${shardSuites}")
+	string(REPLACE ";" "," shardExcludes "${shardExcludes}")
+	add_test(NAME StrataTests.Core.${shardName}
+		COMMAND StrataTests "--test-suite=${shardSuites}" "--test-suite-exclude=${shardExcludes}" --no-intro=true
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+	set_tests_properties(StrataTests.Core.${shardName} PROPERTIES LABELS "core")
+endforeach()
+
+# Every corruption sweep in full (STRATA_TEST_SWEEP=full: Tests::SelectSweepOffsets), in the optimized configurations,
+# which every Release ctest -LE perf (CI's included) runs: the Core shards' samples leave nothing unchecked.
+string(JSON STRATA_FUZZ_SUITE_COUNT LENGTH "${STRATA_CORE_SHARDS}" FuzzSuites)
+math(EXPR STRATA_LAST_FUZZ_SUITE "${STRATA_FUZZ_SUITE_COUNT} - 1")
+set(STRATA_FUZZ_SUITES "")
+foreach(index RANGE ${STRATA_LAST_FUZZ_SUITE})
+	string(JSON suite GET "${STRATA_CORE_SHARDS}" FuzzSuites ${index})
+	list(APPEND STRATA_FUZZ_SUITES "${suite}")
+endforeach()
+string(REPLACE ";" "," STRATA_FUZZ_SUITES "${STRATA_FUZZ_SUITES}")
+add_test(NAME StrataTests.Fuzz
+	COMMAND StrataTests "--test-suite=${STRATA_FUZZ_SUITES}" --no-intro=true
+	CONFIGURATIONS Release Dist
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+set_tests_properties(StrataTests.Fuzz PROPERTIES LABELS "fuzz" ENVIRONMENT "STRATA_TEST_SWEEP=full")
 
 # Perf tests: suites Perf.* (CPU) and PerfGPU.* (GPU) measure metrics against the budgets in Perf/Budgets.json, so they
 # exist only in optimized configurations. They run serially (other tests running beside them would skew the numbers) and
@@ -163,11 +223,13 @@ set_tests_properties(StrataTests.PerfGPU PROPERTIES
 	FIXTURES_REQUIRED StrataPerfResults
 	ENVIRONMENT "${STRATA_PERF_GPU_ENVIRONMENT}")
 
-# Suites whose names start with "Package" build script modules with the real toolchain (CMake and the compiler).
+# Suites whose names start with "Package" build script modules with the real toolchain (CMake and the compiler). Every
+# test of the package label holds the "toolchain" lock: concurrent builds through one toolchain are a known source of
+# flaky failures (MSBuild's and mspdbsrv's C1090 and LNK errors), so ctest -j runs them one at a time.
 add_test(NAME StrataTests.Package
 	COMMAND StrataTests "--test-suite=Package*" --no-intro=true
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
-set_tests_properties(StrataTests.Package PROPERTIES LABELS "package" TIMEOUT 1800)
+set_tests_properties(StrataTests.Package PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
 
 add_test(NAME StrataTests.FeatureTest
 	COMMAND StrataTests "--test-suite=${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
@@ -203,7 +265,7 @@ add_test(NAME StrataScriptCore.Package
 		"-DCONFIG=$<CONFIG>"
 		"-DTEST_EXECUTABLE=$<TARGET_FILE:StrataTests>"
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/PackageProject/BuildPackageProject.cmake")
-set_tests_properties(StrataScriptCore.Package PROPERTIES LABELS "package")
+set_tests_properties(StrataScriptCore.Package PROPERTIES LABELS "package" RESOURCE_LOCK toolchain)
 
 # The same in the Dist configuration, whatever this build's configuration: CMake does not define Dist, so the package
 # must for the scripts of a Dist engine to build.
@@ -220,7 +282,7 @@ add_test(NAME StrataScriptCore.PackageDist
 		"-DCONFIG=Dist"
 		"-DTEST_EXECUTABLE=$<TARGET_FILE:StrataTests>"
 		-P "${CMAKE_CURRENT_SOURCE_DIR}/PackageProject/BuildPackageProject.cmake")
-set_tests_properties(StrataScriptCore.PackageDist PROPERTIES LABELS "package")
+set_tests_properties(StrataScriptCore.PackageDist PROPERTIES LABELS "package" RESOURCE_LOCK toolchain)
 
 # The real editor in a window, driven by a command script: catches startup, UI and shutdown failures.
 if(TARGET StrataEditor)
@@ -479,7 +541,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
 			"-DMODULE_SUFFIX=${STRATA_SCRIPT_MODULE_SUFFIX}"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/ScriptsEndToEnd.cmake")
-	set_tests_properties(StrataEditor.Scripts PROPERTIES LABELS "package" TIMEOUT 1800)
+	set_tests_properties(StrataEditor.Scripts PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
 
 	# The installed layout a release archive holds (CMake/StrataPackaging.cmake): installed into a fresh prefix, its editor
 	# creates a project, builds its scripts with the installed SDK and the toolchain it finds on this machine, plays and
@@ -497,7 +559,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 				"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
 				"-DMODULE_SUFFIX=${STRATA_SCRIPT_MODULE_SUFFIX}"
 				-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/InstallEndToEnd.cmake")
-		set_tests_properties(StrataEditor.Install PROPERTIES LABELS "package" TIMEOUT 1800)
+		set_tests_properties(StrataEditor.Install PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
 	endif()
 
 	# The Tetris sample (Samples/Tetris), played through the real editor with simulated input: its scripts are built, moves
@@ -511,5 +573,5 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/TetrisSample/$<CONFIG>"
 			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/TetrisSample.cmake")
-	set_tests_properties(StrataEditor.Tetris PROPERTIES LABELS "package" TIMEOUT 1800)
+	set_tests_properties(StrataEditor.Tetris PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
 endif()

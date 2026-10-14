@@ -12,6 +12,7 @@
 #include <cmath>
 #include <mutex>
 #include <numbers>
+#include <random>
 #include <string_view>
 #include <vector>
 
@@ -469,4 +470,53 @@ namespace Strata::Tests
 #endif
 	}
 
+
+	bool IsFullSweep()
+	{
+		return Platform::GetEnvVar("STRATA_TEST_SWEEP").value_or(std::string()) == "full";
+	}
+
+	std::vector<size_t> SelectSweepOffsets(size_t size, const std::vector<SweepRange>& mustInclude, size_t boundary, size_t randomCount)
+	{
+		std::vector<size_t> offsets;
+		if (size == 0)
+			return offsets;
+		if (IsFullSweep())
+		{
+			offsets.resize(size);
+			for (size_t offset = 0; offset < size; offset++)
+				offsets[offset] = offset;
+			return offsets;
+		}
+
+		for (const SweepRange& range : mustInclude)
+		{
+			for (size_t offset = range.Begin; offset < std::min(range.End, size); offset++)
+				offsets.push_back(offset);
+		}
+		constexpr size_t c_BoundaryReach = 8;
+		if (boundary > 0)
+		{
+			for (size_t edge = 0; edge <= size; edge += boundary)
+			{
+				const size_t first = edge > c_BoundaryReach ? edge - c_BoundaryReach : 0;
+				for (size_t offset = first; offset <= edge + c_BoundaryReach && offset < size; offset++)
+					offsets.push_back(offset);
+			}
+		}
+		// A fixed seed: every run tests the same offsets, so a failure repeats.
+		std::mt19937_64 random(0x5EEDF00DCAFEull ^ size);
+		std::uniform_int_distribution<size_t> pick(0, size - 1);
+		for (size_t index = 0; index < randomCount; index++)
+			offsets.push_back(pick(random));
+
+		std::sort(offsets.begin(), offsets.end());
+		offsets.erase(std::unique(offsets.begin(), offsets.end()), offsets.end());
+		return offsets;
+	}
+
+	uint32_t SelectSweepIterations(uint32_t sample, uint32_t full)
+	{
+		return IsFullSweep() ? full : std::min(sample, full);
+	}
 }

@@ -113,7 +113,9 @@ when the commit does).
 | script modules | `MODULE` libraries | Game code: the tests' modules and every game project's `Scripts/`. |
 
 CTest runs the `StrataTests` suites in groups selected by suite name (`StrataTests/CMakeLists.txt`; the groups and
-labels are listed in DeveloperGuide.md, "Testing"). The perf lab is one of them: suites `Perf.*` and `PerfGPU.*`
+labels are listed in DeveloperGuide.md, "Testing"): the suites without a CTest of their own in the shards of
+`StrataTests/CoreShards.json` (`StrataTests.Core.<Shard>`, label `core`), which `ctest -j` runs side by side, and the
+corruption sweeps again in full in `StrataTests.Fuzz` (Release and Dist). The perf lab is one of them: suites `Perf.*` and `PerfGPU.*`
 (`StrataTests/src/Perf/`) measure metrics against the budgets in `StrataTests/Perf/Budgets.json`, in Release and Dist
 only, confirm a metric over its budget by measuring it again before failing (`Perf::CheckBudgetsConfirmed`), and write
 `<build>/PerfResults/<config>.json` with every attempt; `Tools/PerfStability.py` runs them repeatedly and reports how
@@ -452,7 +454,7 @@ A file may include files of its own layer and of the layers it lists, which are 
 | AssetPipeline (tooling) | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `TextureCooker.*`, `BC7Encoder.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio, Animation (the glTF importer writes skeletons and clips) |
 | Engine | `Engine/**` | the layers a game contains: Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Animation, Scripting (shipped games link the composition root and the entry point too; see below) |
 
-`Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in `StrataTests.Core`) reads every C, C++ and
+`Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in the shard `StrataTests.Core.Core`) reads every C, C++ and
 Objective-C(++) source and header under `Strata/src` (`STRATA_SOURCE_DIR`; `.h`, `.hpp`, `.inl`, `.c`, `.cpp`, `.m`, `.mm`,
 so the macOS platform code too), parses its `#include`s, quoted and angle-bracketed (`Strata/src` is a public include
 directory, so `<Strata/...>` reaches engine headers too; `LayeringAnalyzer`: comments, literals and `#if 0` blocks

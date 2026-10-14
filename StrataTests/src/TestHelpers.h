@@ -144,6 +144,26 @@ namespace Strata::Tests
 		return Platform::GetExecutablePath();
 	}
 
+	// Corruption sweeps (suites named *.Sweep) test a deterministic sample of what they could test, and everything when
+	// STRATA_TEST_SWEEP is "full": the CTest StrataTests.Fuzz (Release and Dist) runs every sweep in full, so the sample
+	// makes the Core shards fast without leaving anything unchecked.
+	bool IsFullSweep();
+
+	// Bytes a sweep must always test, [Begin, End): a format's header and tables.
+	struct SweepRange
+	{
+		size_t Begin = 0;
+		size_t End = 0;
+	};
+
+	// The offsets in [0, size) a sweep over `size` bytes tests, ascending and unique: all of them in a full sweep, else
+	// every offset of the ranges given, the bytes within 8 of each multiple of `boundary` (the blocks of a format: 0 for
+	// none) and `randomCount` offsets drawn with a fixed seed.
+	std::vector<size_t> SelectSweepOffsets(size_t size, const std::vector<SweepRange>& mustInclude, size_t boundary = 4096, size_t randomCount = 512);
+
+	// The number of iterations a randomized sweep runs: `full` in a full sweep, else `sample` (at most `full`).
+	uint32_t SelectSweepIterations(uint32_t sample, uint32_t full);
+
 	// Sets an environment variable for the lifetime of the object. An empty value counts as unset for every
 	// variable Strata reads, so restoring an absent variable sets it to empty.
 	class ScopedEnvironmentVariable

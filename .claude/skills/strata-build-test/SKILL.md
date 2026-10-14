@@ -54,9 +54,14 @@ ctest --preset macos-debug -LE perf
 
 - doctest filters split on commas. A test name containing a comma must be matched with `?`/`*`, e.g.
   `--test-case="Hierarchy?*"`.
-- CTest runs: `StrataTests.Core` (everything but the GPU, EndToEnd, `Package*`, perf and feature test suites; it
-  includes `Architecture.Layering`, which fails on an include that crosses the layers of
+- Run the CTests side by side: `ctest --preset <platform>-debug -j 8`.
+- CTest runs: the shards `StrataTests.Core.<Shard>` (label `core`: Core, Asset, Scene, Systems, Renderer, Network,
+  EditorUI, EditorData, Editor; every suite but the GPU, EndToEnd, `Package*`, perf and feature test suites, split as
+  `StrataTests/CoreShards.json` says: a new suite prefix needs an entry there, or `Testing.Shards` fails naming it; the
+  Core shard includes `Architecture.Layering`, which fails on an include that crosses the layers of
   `StrataTests/Architecture/Layers.json` - fix the dependency, see AGENTS.md "Architecture rules"),
+  `StrataTests.Fuzz` (label `fuzz`, Release and Dist: the `*.Sweep` suites in full, `STRATA_TEST_SWEEP=full`; their
+  shards test a sample),
   `StrataTests.GPU` (label `gpu`), the perf tests `StrataTests.Perf` and `StrataTests.PerfGPU` (suites `Perf.*`
   and `PerfGPU.*`, label `perf`, Release and Dist only, after `StrataTests.PerfResults.Clean`; budgets, confirmed
   checks and the ratchet rule in Docs/DeveloperGuide.md, "Perf tests": a metric over its budget is measured again, up to

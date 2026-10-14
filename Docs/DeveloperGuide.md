@@ -226,8 +226,9 @@ fixes get patch versions):
 ## Testing
 
 ```sh
-ctest --preset windows-debug            # all tests (Windows, Debug)
+ctest --preset windows-debug -j 8       # all tests (Windows, Debug), eight at a time
 ctest --preset linux-debug -LE gpu      # skip tests that need a GPU
+ctest --preset windows-debug -L core -j 8   # the unit test shards only
 ctest --preset windows-release -L perf  # perf tests against their budgets (Release and Dist only)
 build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset directly (doctest filters)
 ```
@@ -247,6 +248,30 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   and a UI test that brings a tab forward (the Asset tab, the Inspector) waits until it shows before it clicks in it:
   ImGui draws a tab hidden in its first frame, where clicks are lost.
 
+### Shards, sweeps and locks
+
+- **Shards.** CTest runs the suites that have no CTest of their own (`GPU*`, `EndToEnd*`, `Package*`, `Perf.*`,
+  `PerfGPU.*`, `FeatureTest`, `Editor.FeatureTest`) in shards, one CTest `StrataTests.Core.<Shard>` each (label `core`;
+  `ctest -R StrataTests.Core` selects them all): Core, Asset, Scene, Systems, Renderer, Network, EditorUI, EditorData and
+  Editor. `StrataTests/CoreShards.json` lists them with their doctest filters (`Suites`, `Exclude`; `*` and `?`,
+  case-insensitive) and the suites of the own CTests (`OwnTests`); `StrataTests/CMakeLists.txt` makes the CTests from it.
+  `Testing.Shards` fails, naming them, on suites that run in no shard or in two (it reads the binary's
+  `--list-test-suites`): **a new suite prefix gets a shard**. Filters for suites a build lacks are only reported (`World*`
+  and `GameUI*` are there for wave 4's layers). Keep a shard under about a minute in Debug; split one that grows past it.
+  Run everything side by side with `ctest ... -j 8`.
+- **Sweeps.** Tests that try every byte offset or many random corruptions (packs, fonts, the scene caches) live in suites
+  ending in `.Sweep` (`Asset.Pack.Sweep`, `Renderer.Font.Sweep`, `Scene.Transforms.Sweep`). In their shard they test a
+  deterministic sample: `Tests::SelectSweepOffsets(size, mustInclude)` keeps every offset of the ranges given (headers and
+  tables), the bytes within 8 of every multiple of the format's block size and 512 offsets of a fixed seed, and
+  `Tests::SelectSweepIterations(sample, full)` a prefix of a random sequence. `StrataTests.Fuzz` (label `fuzz`, Release
+  and Dist: every Release `ctest -LE perf`, CI's included) runs them with `STRATA_TEST_SWEEP=full`
+  (`Tests::IsFullSweep`): every offset and every iteration, so the sample makes Debug faster and leaves nothing unchecked.
+- **Locks.** Tests of the `package` label hold the `toolchain` resource lock (concurrent builds through one toolchain fail
+  at random: MSBuild and mspdbsrv's C1090 and LNK errors); perf tests are `RUN_SERIAL`. Nothing else is shared between
+  CTests: test processes make their files in temporary directories of their own, editors and games the CTests start use
+  free ports and private session directories or build-tree directories that fixtures order, and the log files in the
+  user's data directory are opened shared and read by no test.
+
 ### GPU tests
 
 - Suites whose names start with `GPU` need a Vulkan device and are registered separately under the CTest label `gpu`.
@@ -262,7 +287,7 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 - **Perf tests** (the perf lab, `StrataTests/src/Perf/PerfUtils.h`): suites named `Perf.*` (CPU) and `PerfGPU.*`
   run as the CTests `StrataTests.Perf` and `StrataTests.PerfGPU` (label `perf`; PerfGPU also `gpu`) in Release and
   Dist only, one at a time: `ctest --preset windows-release -L perf`. No other CTest runs them; the lab's own logic is
-  tested by the suite `PerfLab` in `StrataTests.Core`. A perf test measures metrics in a measurement function
+  tested by the suite `PerfLab` in the shard `StrataTests.Core.Core`. A perf test measures metrics in a measurement function
   (`Perf::Measure(name, warmup, iterations, function)` times each call and returns the median, 95th percentile, minimum
   and maximum in milliseconds; `Platform::GetProcessMemory` reports private bytes and the working set with their peaks)
   and checks them with `Perf::CheckBudgetConfirmed("<Suite>.<Metric>", measure)`, or with
@@ -405,7 +430,7 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 
 - Suites whose names start with `EndToEnd` start the built `StrataEditor`, `StrataCLI` and `StrataRuntime` (paths in
   `STRATA_TEST_EDITOR_PATH`/`STRATA_TEST_CLI_PATH`/`STRATA_TEST_RUNTIME_PATH`, else next to the test executable) and run
-  as the CTest `StrataEditor.Automation`, not in `StrataTests.Core`. They need no GPU (`--no-gpu`), use private session
+  as the CTest `StrataEditor.Automation`, not in a Core shard. They need no GPU (`--no-gpu`), use private session
   directories, free ports and timeouts, and terminate the processes they started when they fail.
 
 ### Test rules and helper processes
@@ -535,7 +560,7 @@ short. Their full wording:
   driver about 0.1 ms), as `SceneRenderer` does when it is resized.
 - **Layers:** every file under `Strata/src` belongs to one layer of `StrataTests/Architecture/Layers.json`, and an
   include that crosses layers must be allowed there (a layer includes only itself and the lower layers it lists).
-  `Architecture.Layering` (in `StrataTests.Core`) fails on any other include, on files in no layer (new folders and
+  `Architecture.Layering` (in the shard `StrataTests.Core.Core`) fails on any other include, on files in no layer (new folders and
   files get a pattern) and on stale lines of `LayeringAllowlist.txt`, the known exceptions, each with the workstream
   that removes it. Never add a line or widen `MayInclude` to make a sideways or upward include pass: invert the
   dependency (an interface in the lower layer, like `InputWindow`; a registry the higher module fills; a scene service,

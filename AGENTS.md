@@ -94,7 +94,7 @@ in the layout `StrataEditor.Install` checks. A release, cut at the end of every 
 ## Testing
 
 ```sh
-ctest --preset windows-debug            # all tests (Windows, Debug)
+ctest --preset windows-debug -j 8       # all tests (Windows, Debug), side by side
 ctest --preset linux-debug -LE gpu      # skip tests that need a GPU
 ctest --preset windows-release -L perf  # perf tests against their budgets (Release and Dist only)
 build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset directly (doctest filters)
@@ -103,7 +103,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
 
 - Unit tests live in `StrataTests/src/<Module>/*Tests.cpp` (doctest), in suites named after the module
-  (`TEST_SUITE("Scene.Serialization")`); the editor's UI is tested headless with `ImGuiHarness`. Deferred commands run
+  (`TEST_SUITE("Scene.Serialization")`), which run in the CTest shards of `StrataTests/CoreShards.json`
+  (`StrataTests.Core.<Shard>`; a new suite prefix gets a shard, `Testing.Shards`); byte and random corruption sweeps go in
+  `*.Sweep` suites (a sample in the shard, all of it in `StrataTests.Fuzz`, Release and Dist); the editor's UI is tested headless with `ImGuiHarness`. Deferred commands run
   with `Tests::RunCommandToCompletion`, UI tests click in a tab only once it shows, and a test's own component is
   registered in a child process (`--strata-test-helper=custom-component`).
 - `GPU*` suites (label `gpu`) share one device through `Tests::GPUContext` (never create devices in tests) and end with
