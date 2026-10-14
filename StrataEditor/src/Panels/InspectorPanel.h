@@ -79,7 +79,9 @@ namespace Strata
 		void DrawAddComponentPopup(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
 		// The scripts of the entity: fields edited through the same undoable path as script.setField, scripts added and
 		// removed through script.add/script.remove. Without a loaded module the stored overrides are shown read-only.
-		void DrawScripts(EditorContext& context, const EditorCommandRegistry& commands, Entity entity);
+		// The entity's scripts and their fields; an instance's overridden fields are marked (PropertyLabelOptions::Overridden)
+		// with Apply to Prefab and Revert on a right-click.
+		void DrawScripts(EditorContext& context, const EditorCommandRegistry& commands, Entity entity, const PrefabView* prefab);
 		void DrawSceneSettings(EditorContext& context, const EditorCommandRegistry& commands);
 		// The scene's collision layers: their names and the matrix of which collide (scene.setSettings, one step per edit).
 		void DrawCollisionLayers(EditorContext& context, const EditorCommandRegistry& commands);

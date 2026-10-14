@@ -7,6 +7,7 @@
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/ContentBrowserPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
+#include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
 #include "UI/EditorActions.h"
 #include "UI/EntityIcons.h"
@@ -707,6 +708,44 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		editor.Run("selection.set", { { "entities", { UUIDToJson(editor.Create("Plain")) } } });
 		editor.Frames(2);
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Prefab.Overrides").has_value());
+	}
+
+	TEST_CASE("An instance's overridden script fields are marked, and revert from their label's menu")
+	{
+		AuthoringEditor editor;
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory("InspectorScriptOverrides") / "Game") }, { "name", "Game" } });
+		editor.Run("script.load", { { "path", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS)) } });
+		const UUID source = editor.Create("Trap");
+		editor.Run("script.add", { { "entity", UUIDToJson(source) }, { "class", "Faulty" } });
+		editor.Run("prefab.create", { { "entities", { UUIDToJson(source) } }, { "path", "Prefabs/Trap.stprefab" } });
+		const UUID instance = *UUIDFromJson(editor.Run("prefab.instantiate", { { "prefab", "Prefabs/Trap.stprefab" } })["id"]);
+		editor.Run("script.setField", { { "entity", UUIDToJson(instance) }, { "class", "Faulty" }, { "field", "FaultIn" }, { "value", "OnCreate" } });
+		editor.Run("selection.set", { { "entities", { UUIDToJson(instance) } } });
+		editor.Frames(3);
+
+		const ImU32 accent = ImGui::GetColorU32(UI::GetThemeColors().Accent);
+		REQUIRE(UI::ItemProbe::Find("Inspector.Script.Faulty.FaultIn.Label").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Script.Faulty.FaultIn.Label")->Color == accent);
+		REQUIRE(UI::ItemProbe::Find("Inspector.Script.Faulty.Fault.Label").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Script.Faulty.Fault.Label")->Color == 0);
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Overrides")->Text == "Overrides (1)");
+
+		editor.Pause();
+		editor.Harness.MoveMouse(UI::ItemProbe::Find("Inspector.Script.Faulty.FaultIn.Label")->GetCenter());
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Right, true);
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Right, false);
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("Inspector.Script.Faulty.FaultIn.Apply").has_value());
+		REQUIRE(editor.Click("Inspector.Script.Faulty.FaultIn.Revert"));
+		editor.Frames(2);
+		// The prefab never set the field: the instance stores no value for it again (the class default applies).
+		const ScriptComponent& scripts = editor.Get(instance).GetComponent<ScriptComponent>();
+		REQUIRE(scripts.Scripts.size() == 1);
+		CHECK(scripts.Scripts[0].FindField("FaultIn") == nullptr);
+		CHECK(UI::ItemProbe::Find("Inspector.Script.Faulty.FaultIn.Label")->Color == 0);
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Overrides")->Text == "Overrides (0)");
 	}
 
 	TEST_CASE("A row's menu makes a prefab of the entity; an instance's menu applies and reverts it, and its badge marks it modified")

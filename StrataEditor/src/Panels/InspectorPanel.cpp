@@ -37,6 +37,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cfloat>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -96,7 +97,17 @@ namespace Strata
 			return field.DefaultValue;
 		}
 
-		void DrawScriptFields(EditorContext& context, Entity entity, const ScriptEntry& entry, const ScriptClassInfo& info)
+		// A script field of a prefab instance's entity that overrides its prefab ("Script", "<Class>.<Field>"): marked like
+		// other overridden properties, Apply to Prefab and Revert on a right-click of its label.
+		struct ScriptFieldOverrides
+		{
+			std::function<bool(const std::string& property)> IsOverridden;
+			std::function<void(const std::string& property, const char* command)> Run; // prefab.apply or prefab.revert
+			bool Model = false; // Imported models offer Revert only
+		};
+
+		void DrawScriptFields(EditorContext& context, Entity entity, const ScriptEntry& entry, const ScriptClassInfo& info,
+			const ScriptFieldOverrides* overrides)
 		{
 			if (info.Fields.empty())
 			{
@@ -122,7 +133,21 @@ namespace Strata
 
 				const std::string tooltip = fmt::format("{} ({}), default {}{}", field.Name, PropertyTypeToString(field.Type),
 					JsonUtils::Dump(ScriptEdit::FieldValueToJson(field.DefaultValue, field.Type)), overridden ? "; overridden on this entity" : "");
-				UI::PropertyLabel(property.DisplayName, tooltip);
+				const std::string prefabProperty = entry.ClassName + "." + field.Name;
+				const std::string probe = fmt::format("Inspector.Script.{}", prefabProperty);
+				UI::PropertyLabelOptions labelOptions;
+				labelOptions.Overridden = overrides && overrides->IsOverridden(prefabProperty);
+				UI::PropertyLabel(property.DisplayName, tooltip, probe, labelOptions);
+				if (labelOptions.Overridden && ImGui::BeginPopupContextItem("FieldOverride"))
+				{
+					if (!overrides->Model && ImGui::MenuItem("Apply to Prefab"))
+						overrides->Run(prefabProperty, "prefab.apply");
+					UI::ItemProbe::Record(probe + ".Apply", !overrides->Model);
+					if (ImGui::MenuItem("Revert"))
+						overrides->Run(prefabProperty, "prefab.revert");
+					UI::ItemProbe::Record(probe + ".Revert");
+					ImGui::EndPopup();
+				}
 				const PropertyEditResult result = DrawPropertyWidget(property, value, *entity.GetScene());
 				std::string error;
 				if (result.Changed && !ScriptEdit::SetField(context, entity, entry.ClassName, field, value, &error))
@@ -667,7 +692,7 @@ namespace Strata
 			if (info.TypeId == entt::type_id<ScriptComponent>().hash())
 			{
 				if (entities.size() == 1)
-					DrawScripts(context, commands, entities.front());
+					DrawScripts(context, commands, entities.front(), prefab);
 				else
 					ImGui::TextDisabled("Select one entity to edit its scripts");
 			}
@@ -985,8 +1010,20 @@ namespace Strata
 		ImGui::EndPopup();
 	}
 
-	void InspectorPanel::DrawScripts(EditorContext& context, const EditorCommandRegistry& commands, Entity entity)
+	void InspectorPanel::DrawScripts(EditorContext& context, const EditorCommandRegistry& commands, Entity entity, const PrefabView* prefab)
 	{
+		std::optional<ScriptFieldOverrides> fieldOverrides;
+		if (prefab)
+		{
+			fieldOverrides = ScriptFieldOverrides {
+				[prefab](const std::string& property) { return prefab->IsOverridden(PrefabOverrides::c_ScriptComponent, property); },
+				[&context, &commands, entity = prefab->SceneEntity](const std::string& property, const char* command)
+				{
+					RunEditorCommand(context, commands, command, { { "entity", UUIDToJson(entity) }, { "component", PrefabOverrides::c_ScriptComponent },
+						{ "property", property } });
+				},
+				prefab->Model };
+		}
 		const Ref<ScriptEngine>& engine = context.GetScriptEngine();
 		const bool moduleLoaded = engine && engine->IsModuleLoaded();
 		if (!moduleLoaded)
@@ -1014,7 +1051,7 @@ namespace Strata
 				const ScriptClassInfo* info = moduleLoaded ? engine->FindClass(entry.ClassName) : nullptr;
 				if (info)
 				{
-					DrawScriptFields(context, entity, entry, *info);
+					DrawScriptFields(context, entity, entry, *info, fieldOverrides ? &*fieldOverrides : nullptr);
 				}
 				else
 				{
