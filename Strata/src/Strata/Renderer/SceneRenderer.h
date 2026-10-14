@@ -221,6 +221,8 @@ namespace Strata
 		uint32_t EnvironmentUpdates = 0;
 		bool PreviewLighting = false;     // SceneRenderOptions::PreviewEnvironment lit the scene (it has no light of its own)
 		uint32_t ShadowCasters = 0;       // Instances drawn into shadow cascades (summed over cascades)
+		// Casters left out of cascades in which they would span less than a texel (summed over cascades): they would only flicker.
+		uint32_t SubTexelCasters = 0;
 		uint32_t SkinnedInstances = 0;    // Drawn instances of posed skinned meshes (view; also counted in Instances)
 		// Animators whose meshes the frame drew (in view or by their shadows) with a pose older than their time: WhenVisible
 		// ones that skipped their poses while unseen; the next frame shows them posed (a capture renders again for it).
@@ -479,7 +481,9 @@ namespace Strata
 			std::array<uint32_t, SceneRendererStats::c_LODStatCount> InstancesPerLOD = {};
 			std::array<float, RenderData::c_MaxCascades> CasterNearZ = {};
 			uint32_t Skipped = 0; // Submeshes beyond what a sort key can address
-			std::vector<entt::entity> Animators; // Animators of the chunk's visible Skin proxies (WhenVisible culling)
+			std::vector<entt::entity> Animators; // Animators of the chunk's visible Skin proxies (WhenVisible culling), or of its casters
+			std::vector<ShadowCaster> Casters;   // The chunk's shadow casters (FindShadowCasters)
+			uint32_t SubTexelCasters = 0;
 			AABB Receivers; // The world bounds of the chunk's visible proxies (scenes with Skin proxies only)
 			uint32_t SkinnedInstances = 0;
 		};
@@ -816,6 +820,8 @@ namespace Strata
 		std::vector<uint32_t> m_VisibleProxies;
 		std::vector<float> m_VisibleFractions;      // Screen fraction of each visible proxy
 		std::vector<uint32_t> m_QueryScratch;
+		std::array<std::vector<uint32_t>, RenderData::c_MaxCascades> m_CascadeQueries; // Per cascade: what its query found
+		std::vector<uint32_t> m_CasterCandidates;   // The cascades' query results, each proxy once, in cascade order
 		std::vector<ShadowCaster> m_ShadowCasters;
 		std::vector<uint32_t> m_MeshUsage;          // Per mesh slot: how the frame uses it (usage bits)
 		std::vector<uint32_t> m_UsedMeshSlots;

@@ -1757,7 +1757,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   pixel's cluster. Only the directional light casts shadows.
 - Shadows: cascade depth ranges are fitted to the casters toward the light (casters beyond
   `c_MaxShadowCasterDistance` are pancaked onto the near plane); acne is handled by the rasterizer
-  depth bias, the light's depth and normal offsets and a receiver plane depth bias in the PCSS filter.
+  depth bias, the light's depth and normal offsets and a receiver plane depth bias in the PCSS filter. A caster is
+  drawn into a cascade only while its light-space extent (the larger of x and y) covers at least `c_MinCasterTexels`
+  (1) of the cascade's texels (`SceneRendererStats::SubTexelCasters` counts those left out, per cascade): smaller ones
+  only flicker in and out of texels. `FindShadowCasters` queries the cascades as one job each and tests the candidates
+  in parallel chunks merged in chunk order, so its casters do not depend on the threads.
 - HDR targets are RGBA16F: shaders writing them clamp with `SanitizeHDR` (Inf and NaN would turn
   black after tone mapping). Instances with a mirroring transform (negative determinant) use
   pipelines with clockwise front faces and flip their tangent handedness (`c_InstanceMirrored`). The ambient occlusion

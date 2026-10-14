@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -51,8 +52,9 @@ namespace Strata::Tests::Perf
 	// in the first second, then every box asleep in its stack.
 	BoxStacks CreateBoxStacks(Scene& scene, size_t count, uint32_t height = c_BoxStackHeight);
 
-	// A primary camera looking toward the origin and a directional light, as a scene opened in the editor has.
-	void AddCameraAndLight(Scene& scene);
+	// A primary camera looking toward the origin and a directional light, as a scene opened in the editor has; the light's
+	// shadows reach `shadowDistance` from the camera (DirectionalLightComponent::ShadowDistance; its default when not given).
+	void AddCameraAndLight(Scene& scene, std::optional<float> shadowDistance = std::nullopt);
 
 	// Spacing of the generated grids (CreateCubeGrid, CreatePointLightGrid): the unit cubes leave a unit of space between
 	// them.

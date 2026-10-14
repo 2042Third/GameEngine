@@ -1611,7 +1611,9 @@ RenderScene::Get(scene).Sync()   world transforms, then the proxies of signaled 
 AssetResolveCache::BeginFrame    the frame's asset manager
 CullView                         SpatialIndex::QueryFrustum; screen fractions and request priorities (parallel chunks);
                                  meshes of unknown bounds as if in view; QuerySphere for the prefetch distance
-FindShadowCasters                cascade boxes; QueryPlanes per cascade, then the exact test in light space
+FindShadowCasters                cascade boxes; QueryPlanes per cascade (a job each, merged in cascade order), then
+                                 the exact test in light space in parallel chunks (casters below a texel of a cascade
+                                 left out of it), animator reports and the assets casters need merged in chunk order
 ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident; materials used
                                  as in the frame before: its data, their assets looked up in one call (below)
 GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches

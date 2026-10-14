@@ -13,6 +13,7 @@
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -115,6 +116,42 @@ TEST_SUITE("PerfGPU.Renderer")
 			return Perf::MetricValues { { "PerfGPU.Renderer.Render10kMaterials", measurement.CPU.MedianMs },
 				{ "PerfGPU.Renderer.Render10kMaterials.OpaqueDrawCalls", static_cast<double>(renderer.GetStats().OpaqueDrawCalls) } };
 		});
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Render cost of 100,000 and 300,000 cubes whose shadows cover the view")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+
+		for (const size_t count : { size_t(100'000), size_t(300'000) })
+		{
+			CAPTURE(count);
+			// The sun's shadows reach four times the grid's half extent from the camera, as the scale audit's scenes have it:
+			// every cube of the view casts into the cascades.
+			const float halfExtent = static_cast<float>(std::ceil(std::sqrt(static_cast<double>(count)))) * Perf::c_GridSpacing * 0.5f;
+			Scene scene("ShadowedCubes");
+			Perf::AddCameraAndLight(scene, 4.0f * halfExtent);
+			Perf::CreateCubeGrid(scene, count);
+			SceneRenderer renderer;
+			renderer.SetViewportSize(c_Width, c_Height);
+			const char* key = count == 100'000 ? "PerfGPU.Renderer.Render100kCubesShadowed" : "PerfGPU.Renderer.Render300kCubesShadowed";
+			Perf::CheckBudgetConfirmed(key, [&]
+			{
+				const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(count), count == 100'000 ? "100k shadowed cubes"
+					: "300k shadowed cubes");
+				const SceneRendererStats& stats = renderer.GetStats();
+				CHECK(stats.Instances == count);
+				// Every cube is a caster: drawn into the cascades where it spans a texel, left out of those where it does not (the
+				// far cascades' texels are wider than a cube: SubTexelCasters). Both are summed over the cascades.
+				CHECK(stats.ShadowCasters + stats.SubTexelCasters >= count * 9 / 10);
+				CHECK(stats.ShadowCasters >= count / 10);
+				MESSAGE("shadow casters ", stats.ShadowCasters, ", left out below a texel ", stats.SubTexelCasters, ", shadow draws ", stats.ShadowDrawCalls);
+				return measurement.CPU.MedianMs;
+			});
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

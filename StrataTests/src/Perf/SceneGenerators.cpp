@@ -115,7 +115,7 @@ namespace Strata::Tests::Perf
 		return stacks;
 	}
 
-	void AddCameraAndLight(Scene& scene)
+	void AddCameraAndLight(Scene& scene, std::optional<float> shadowDistance)
 	{
 		Entity camera = Created(scene.CreateEntity("Camera"));
 		camera.GetTransform().Translation = glm::vec3(0.0f, 2.0f, 10.0f);
@@ -123,7 +123,9 @@ namespace Strata::Tests::Perf
 
 		Entity light = Created(scene.CreateEntity("Sun"));
 		light.GetTransform().Rotation = glm::angleAxis(glm::radians(-50.0f), glm::vec3(1.0f, 0.0f, 0.0f));
-		light.AddComponent<DirectionalLightComponent>();
+		DirectionalLightComponent& sun = light.AddComponent<DirectionalLightComponent>();
+		if (shadowDistance)
+			sun.ShadowDistance = *shadowDistance;
 	}
 
 	namespace

@@ -58,6 +58,9 @@ namespace Strata
 
 		// Proxies per chunk of the parallel extraction.
 		constexpr uint32_t c_ExtractionChunkSize = 2048;
+		// A shadow caster is drawn into a cascade only while its light-space extent (the larger of x and y) covers at least this
+		// many of the cascade's texels: smaller casters only flicker in and out of texels (SceneRendererStats::SubTexelCasters).
+		constexpr float c_MinCasterTexels = 1.0f;
 		// Changed instances this close together are uploaded in one range: fewer copies for a little more data.
 		constexpr uint32_t c_UploadRangeGap = 16;
 
@@ -424,53 +427,37 @@ namespace Strata
 		// A caster shadows the cascades whose square it overlaps and whose far side it does not lie beyond; casters closer to
 		// the light than a cascade's sphere are kept (its depth range grows to include them), so each cascade's volume is open
 		// toward the light. The index finds candidates by their world bounds, whose extent along any axis covers that of the
-		// light-space bounds tested below, so no caster is missed.
+		// light-space bounds tested below, so no caster is missed. The cascades' queries run as one job each (queries only
+		// read the index) and merge in cascade order.
 		const SpatialIndex& index = renderScene.GetSpatialIndex();
 		const glm::vec3 lightX(m_LightView[0][0], m_LightView[1][0], m_LightView[2][0]);
 		const glm::vec3 lightY(m_LightView[0][1], m_LightView[1][1], m_LightView[2][1]);
 		const glm::vec3 lightZ(m_LightView[0][2], m_LightView[1][2], m_LightView[2][2]);
 		const glm::vec3 lightOffset(m_LightView[3]);
+		JobSystem::ParallelFor(cascadeCount, 1, [&](uint32_t begin, uint32_t end)
+		{
+			for (uint32_t cascade = begin; cascade < end; cascade++)
+			{
+				const CascadeBox& box = m_Cascades[cascade];
+				const std::array<glm::vec4, 5> planes = {
+					glm::vec4(lightX, lightOffset.x - box.Min.x), glm::vec4(-lightX, box.Max.x - lightOffset.x),
+					glm::vec4(lightY, lightOffset.y - box.Min.y), glm::vec4(-lightY, box.Max.y - lightOffset.y),
+					glm::vec4(lightZ, lightOffset.z - box.FarZ) };
+				m_CascadeQueries[cascade].clear();
+				index.QueryPlanes(planes, m_CascadeQueries[cascade]);
+			}
+		});
+		m_CasterCandidates.clear();
 		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
 		{
-			const CascadeBox& box = m_Cascades[cascade];
-			const std::array<glm::vec4, 5> planes = {
-				glm::vec4(lightX, lightOffset.x - box.Min.x), glm::vec4(-lightX, box.Max.x - lightOffset.x),
-				glm::vec4(lightY, lightOffset.y - box.Min.y), glm::vec4(-lightY, box.Max.y - lightOffset.y),
-				glm::vec4(lightZ, lightOffset.z - box.FarZ) };
-			m_QueryScratch.clear();
-			index.QueryPlanes(planes, m_QueryScratch);
-			for (const uint32_t proxy : m_QueryScratch)
+			for (const uint32_t proxy : m_CascadeQueries[cascade])
 			{
 				if (m_CasterStamps[proxy] == m_FrameStamp)
 					continue;
 				m_CasterStamps[proxy] = m_FrameStamp;
-				m_ShadowCasters.push_back(ShadowCaster { proxy, 0, 0.0f });
+				m_CasterCandidates.push_back(proxy);
 			}
 		}
-
-		// The exact test, on the bounds of the mesh in light space.
-		size_t kept = 0;
-		for (const ShadowCaster& candidate : m_ShadowCasters)
-		{
-			const uint32_t proxy = candidate.Proxy;
-			const uint32_t flags = renderScene.GetProxyFlags(proxy);
-			if ((flags & RenderProxyFlags::CastShadows) == 0 || (flags & RenderProxyFlags::MeshBounds) == 0 || renderScene.GetInstanceCount(proxy) == 0)
-				continue;
-			const AABB lightBounds = renderScene.GetLocalBounds(proxy).Transformed(m_LightView * renderScene.GetWorldTransform(proxy));
-			uint32_t cascadeMask = 0;
-			for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-			{
-				const CascadeBox& box = m_Cascades[cascade];
-				if (lightBounds.Max.x < box.Min.x || lightBounds.Min.x > box.Max.x || lightBounds.Max.y < box.Min.y || lightBounds.Min.y > box.Max.y
-					|| lightBounds.Max.z < box.FarZ)
-					continue;
-				cascadeMask |= 1u << cascade;
-			}
-			if (cascadeMask == 0)
-				continue;
-			m_ShadowCasters[kept++] = ShadowCaster { proxy, cascadeMask, lightBounds.Max.z };
-		}
-		m_ShadowCasters.resize(kept);
 
 		// Shadows of a skinned mesh move with its animator, also when the mesh itself is out of view; the cascades reach far
 		// beyond the view (spheres around its slices), so a caster out of view reports its animator only when its shadow can
@@ -489,15 +476,69 @@ namespace Strata
 			const glm::vec3 forward = -glm::normalize(glm::vec3(inverseView[2]));
 			viewPlanes[6] = glm::vec4(-forward, glm::dot(forward, glm::vec3(inverseView[3])) + farClip);
 		}
-		for (const ShadowCaster& caster : m_ShadowCasters)
+
+		// The exact test, on the bounds of the mesh in light space, in parallel chunks merged in chunk order (the casters, the
+		// assets they need and the animators they report do not depend on the threads). A caster stays in a cascade only while
+		// it spans at least c_MinCasterTexels of the cascade's texels: smaller ones would only flicker in and out of texels.
+		const uint32_t candidates = static_cast<uint32_t>(m_CasterCandidates.size());
+		const uint32_t chunks = ChunkCount(candidates);
+		if (m_Chunks.size() < chunks)
+			m_Chunks.resize(chunks);
+		ForEachChunk(chunks, [&](uint32_t chunk)
 		{
-			if (skins && renderScene.GetSkinAnimator(caster.Proxy) != entt::null && m_ProxyStamps[caster.Proxy] != m_FrameStamp
-				&& CanShadowView(renderScene.GetWorldBounds(caster.Proxy), lightDirection, receivers, viewPlanes))
-				m_VisibleAnimators.push_back(renderScene.GetSkinAnimator(caster.Proxy));
-			const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(caster.Proxy);
-			MarkMesh(renderScene.GetMeshSlot(caster.Proxy), c_UseShadow | (overrideSlot == RenderScene::c_InvalidIndex ? c_UseShadow << c_SubmeshMaterialsShift : 0u));
-			if (overrideSlot != RenderScene::c_InvalidIndex)
-				MarkMaterial(overrideSlot, c_UseShadow);
+			ExtractionChunk& output = m_Chunks[chunk];
+			output.Casters.clear();
+			output.MeshMarks.clear();
+			output.MaterialMarks.clear();
+			output.Animators.clear();
+			uint32_t subTexel = 0;
+			const uint32_t end = std::min(candidates, (chunk + 1) * c_ExtractionChunkSize);
+			for (uint32_t item = chunk * c_ExtractionChunkSize; item < end; item++)
+			{
+				const uint32_t proxy = m_CasterCandidates[item];
+				const uint32_t flags = renderScene.GetProxyFlags(proxy);
+				if ((flags & RenderProxyFlags::CastShadows) == 0 || (flags & RenderProxyFlags::MeshBounds) == 0 || renderScene.GetInstanceCount(proxy) == 0)
+					continue;
+				const AABB lightBounds = renderScene.GetLocalBounds(proxy).Transformed(m_LightView * renderScene.GetWorldTransform(proxy));
+				const float extent = std::max(lightBounds.Max.x - lightBounds.Min.x, lightBounds.Max.y - lightBounds.Min.y);
+				uint32_t cascadeMask = 0;
+				for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
+				{
+					const CascadeBox& box = m_Cascades[cascade];
+					if (lightBounds.Max.x < box.Min.x || lightBounds.Min.x > box.Max.x || lightBounds.Max.y < box.Min.y || lightBounds.Min.y > box.Max.y
+						|| lightBounds.Max.z < box.FarZ)
+						continue;
+					if (extent < c_MinCasterTexels * box.WorldPerTexel)
+					{
+						subTexel++;
+						continue;
+					}
+					cascadeMask |= 1u << cascade;
+				}
+				if (cascadeMask == 0)
+					continue;
+				output.Casters.push_back(ShadowCaster { proxy, cascadeMask, lightBounds.Max.z });
+				// The stamps and the receivers are only read here.
+				if (skins && renderScene.GetSkinAnimator(proxy) != entt::null && m_ProxyStamps[proxy] != m_FrameStamp
+					&& CanShadowView(renderScene.GetWorldBounds(proxy), lightDirection, receivers, viewPlanes))
+					output.Animators.push_back(renderScene.GetSkinAnimator(proxy));
+				const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(proxy);
+				AppendMark(output.MeshMarks, renderScene.GetMeshSlot(proxy), c_UseShadow | (overrideSlot == RenderScene::c_InvalidIndex ? c_UseShadow << c_SubmeshMaterialsShift : 0u));
+				if (overrideSlot != RenderScene::c_InvalidIndex)
+					AppendMark(output.MaterialMarks, overrideSlot, c_UseShadow);
+			}
+			output.SubTexelCasters = subTexel;
+		});
+		for (uint32_t chunk = 0; chunk < chunks; chunk++)
+		{
+			const ExtractionChunk& output = m_Chunks[chunk];
+			m_ShadowCasters.insert(m_ShadowCasters.end(), output.Casters.begin(), output.Casters.end());
+			for (const auto& [slot, usage] : output.MeshMarks)
+				MarkMesh(slot, usage);
+			for (const auto& [slot, usage] : output.MaterialMarks)
+				MarkMaterial(slot, usage);
+			m_VisibleAnimators.insert(m_VisibleAnimators.end(), output.Animators.begin(), output.Animators.end());
+			m_Stats.SubTexelCasters += output.SubTexelCasters;
 		}
 	}
 

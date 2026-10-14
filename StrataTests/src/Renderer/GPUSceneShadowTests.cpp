@@ -258,6 +258,43 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Casters smaller than a texel of a cascade are left out of it")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddMesh(scene, BuiltinAssets::PlaneMesh, UUID::Null(), glm::vec3(0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(100.0f);
+		AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(0.0f, 1.0f, 0.0f), "Cube");
+		// A grain of a centimeter: the cascades of a kilometer of shadows have texels of 5 cm and more.
+		Entity grain = AddMesh(scene, BuiltinAssets::CubeMesh, UUID::Null(), glm::vec3(2.0f, 0.5f, 0.0f), "Grain");
+		grain.GetComponent<TransformComponent>().Scale = glm::vec3(0.01f);
+		Entity sun = AddSun(scene, SunDirection(60.0f, 30.0f), 3.0f);
+		sun.GetComponent<DirectionalLightComponent>().ShadowDistance = 1000.0f;
+
+		constexpr uint32_t size = 64;
+		SceneRenderer renderer;
+		renderer.SetViewportSize(size, size);
+		SceneCamera camera = LookAt(glm::vec3(0.0f, 8.0f, 8.0f), glm::vec3(0.0f));
+		camera.Far = 2000.0f;
+		camera.Projection = Math::PerspectiveReverseZ(glm::radians(60.0f), 1.0f, 0.1f, 2000.0f);
+		REQUIRE(renderer.Render(scene, camera));
+		const uint32_t withGrain = renderer.GetStats().ShadowCasters;
+		const uint32_t subTexel = renderer.GetStats().SubTexelCasters;
+		CHECK(subTexel >= 1);
+		CHECK(withGrain > 0); // The floor and the cube
+
+		// Grown to a metre, it casts into every cascade it overlaps, and nothing is left out.
+		grain.GetComponent<TransformComponent>().Scale = glm::vec3(1.0f);
+		grain.MarkModified<TransformComponent>();
+		REQUIRE(renderer.Render(scene, camera));
+		CHECK(renderer.GetStats().SubTexelCasters == 0);
+		CHECK(renderer.GetStats().ShadowCasters == withGrain + subTexel);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Alpha-masked surfaces are cut out and cast shadows with holes")
 	{
 		GPUContext gpu;
