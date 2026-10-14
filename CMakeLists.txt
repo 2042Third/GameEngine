@@ -67,7 +67,7 @@ endif()
 if(STRATA_BUILD_RUNTIME)
 	add_subdirectory(StrataRuntime)
 	# Games contain no tooling: neither a tooling layer nor what only tools link (StrataRuntime.NoTooling checks the
-	# linked executable too).
+	# linked executable too). Checked once every directory below has been added (StrataCLILib comes later).
 	strata_check_link_closure(StrataRuntime FORBID imgui ImGuizmo nfd cgltf zstd_compress StrataEditorCore StrataEditorUI StrataCLILib doctest)
 endif()
 

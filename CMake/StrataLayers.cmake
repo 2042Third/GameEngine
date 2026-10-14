@@ -21,7 +21,20 @@
 #
 # strata_check_link_closure(<target> FORBID <name>...)
 #   Fails the configure when what <target> links, directly or through any library it links, holds one of the named
-#   targets or a tooling layer's library: the proof that games link no tooling.
+#   targets or a tooling layer's library: the proof that games link no tooling. The check runs at the end of the top-level
+#   directory (cmake_language(DEFER)), once every directory has defined its targets and links: a name that is not a target
+#   yet would otherwise be skipped, whatever it links.
+
+# Calls `command` with these arguments at the end of the top-level directory, once every directory has defined its targets
+# and links. cmake_language(DEFER CALL) expands variable references only when the call runs, in that directory's scope, so
+# the values are written into the call here.
+function(strata_defer_to_end command)
+	set(arguments "")
+	foreach(argument IN LISTS ARGN)
+		string(APPEND arguments " [==[${argument}]==]")
+	endforeach()
+	cmake_language(EVAL CODE "cmake_language(DEFER DIRECTORY [==[${PROJECT_SOURCE_DIR}]==] CALL ${command}${arguments})")
+endfunction()
 
 # A glob of Layers.json as an anchored CMake regular expression, with LayeringAnalyzer's MatchesGlob semantics.
 function(strata_glob_to_regex glob outVariable)
@@ -304,7 +317,14 @@ function(strata_collect_link_closure item path)
 endfunction()
 
 function(strata_check_link_closure target)
+	strata_defer_to_end(strata_check_link_closure_now "${target}" ${ARGN})
+endfunction()
+
+function(strata_check_link_closure_now target)
 	cmake_parse_arguments(ARG "" "" "FORBID" ${ARGN})
+	if(NOT TARGET ${target})
+		message(FATAL_ERROR "strata_check_link_closure: ${target} is no target")
+	endif()
 	set_property(GLOBAL PROPERTY STRATA_LINK_CLOSURE "")
 	foreach(property IN ITEMS LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
 		get_target_property(linked ${target} ${property})

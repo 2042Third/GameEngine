@@ -85,11 +85,13 @@ linker. Vendor and system libraries attach to the layers that use them (`strata_
 The vendor libraries only tools use (imgui, ImGuizmo, cgltf, zstd_compress, nfd) are `EXCLUDE_FROM_ALL`, and stb has one
 object per header (`Strata/vendor/Implementations/Stb*.c`; rect_pack and truetype share one), so the linker leaves out
 what a program never calls. **Games link no tooling**, proven twice: at configure time `strata_check_link_closure`
-walks what `StrataRuntime` links (`LINK_LIBRARIES` and `INTERFACE_LINK_LIBRARIES`, transitively) and fails on a tooling
-layer, imgui, ImGuizmo, nfd, cgltf, zstd_compress, the editor's or the CLI's libraries or doctest, naming the path; and
-the CTest `StrataRuntime.NoTooling` reads the linker map StrataRuntime is linked with (`StrataRuntime.map` next to it:
-`/MAP`, `-Map=`, `-map,`; exports copy the executable only) and fails when it names an object or a library of Dear
-ImGui, the ImGui layer, ImGuizmo, the asset pipeline, the network layer or zstd's compressor
+walks what `StrataRuntime` links (`LINK_LIBRARIES` and `INTERFACE_LINK_LIBRARIES`, transitively, at the end of the
+configure, once every directory has defined its targets) and fails on a tooling layer, imgui, ImGuizmo, nfd, cgltf,
+zstd_compress, the editor's or the CLI's libraries or doctest, naming the path; and the CTest `StrataRuntime.NoTooling`
+reads the linker map StrataRuntime is linked with (`StrataRuntime.map` next to it: `/MAP`, `-Map=`, `-map,`; exports copy
+the executable only), requires the objects every runtime contains (`RuntimeApplication`, `Application`: a map without
+them proves nothing) and fails when it names an object or a library of Dear ImGui, the ImGui layer, ImGuizmo, the asset
+pipeline, the network layer or zstd's compressor
 (`StrataTests/Architecture/CheckNoTooling.cmake`). Dist builds also leave NVRHI's validation layer out
 (`VulkanGraphicsDevice.cpp`: a validation request logs a warning and makes the plain device).
 
