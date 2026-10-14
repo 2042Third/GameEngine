@@ -5,6 +5,7 @@
 #include "Strata/Input/UIActions.h"
 
 #include <limits>
+#include <string>
 #include <string_view>
 
 using namespace Strata;
@@ -34,7 +35,7 @@ TEST_SUITE("Core.UIActions")
 			{
 				if (binding.empty())
 					continue;
-				CAPTURE(binding);
+				INFO("Binding ", std::string(binding)); // A string: doctest prints no std::string_view without <ostream>
 				if (binding.starts_with("Key/"))
 				{
 					CHECK(InputNames::FindKey(binding.substr(4)).has_value());
