@@ -11,6 +11,7 @@
 #include "Strata/Physics/PhysicsLayers.h"
 #include "Strata/Physics/PhysicsMeshShapes.h"
 #include "Strata/Physics/PhysicsRuntime.h"
+#include "Strata/Physics/PhysicsStateBuffer.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneHierarchy.h"
@@ -37,6 +38,7 @@
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
 #include <Jolt/Physics/Constraints/ContactConstraintManager.h>
 #include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/Physics/StateRecorder.h>
 
 #include <algorithm>
 #include <array>
@@ -44,7 +46,9 @@
 #include <bit>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <map>
+#include <memory>
 #include <set>
 #include <span>
 #include <utility>
@@ -578,6 +582,12 @@ namespace Strata
 				m_BodyInterest.assign(bodyCapacity, 0);
 			}
 
+			// Main thread, between steps: a world that grew has more body indices; the interest of the existing ones stays.
+			void Grow(uint32_t bodyCapacity)
+			{
+				m_BodyInterest.resize(std::max<size_t>(m_BodyInterest.size(), bodyCapacity), 0);
+			}
+
 			void SetTrackAll(bool trackAll) { m_TrackAll = trackAll; }
 			bool IsTrackingAll() const { return m_TrackAll; }
 			void SetBodyInterest(const JPH::BodyID& body, bool interested)
@@ -1007,6 +1017,7 @@ namespace Strata
 		bool AutomaticMaxBodies = false;
 		bool AutomaticMaxBodyPairs = false;
 		bool AutomaticMaxContactConstraints = false;
+		bool AutomaticTempAllocatorSize = false;
 		uint32_t SlotWaiterCount = 0;
 		entt::entity FirstSlotWaiter = entt::null;
 		ErrorThrottle SlotWaiterErrors { "Physics" };                 // One aggregated error while bodies wait for a slot
@@ -1016,6 +1027,12 @@ namespace Strata
 		std::deque<std::pair<entt::entity, uint64_t>> SlotWaiters;
 		uint64_t NextSlotTicket = 1;
 		PhysicsCapacityDemand Demand;
+		// Growth (see GrowWorld): the bodies asked to have room for (PhysicsWorld::Reserve), and the growths so far.
+		uint32_t ReservedBodies = 0;
+		uint32_t GrowthCount = 0;
+		float LastGrowthMs = 0.0f;
+		uint32_t LastGrowthFrom = 0;
+		uint32_t LastGrowthTo = 0;
 		uint64_t ContactOverflowSteps = 0;
 		uint64_t StepCount = 0;
 		uint64_t WriteBackPass = 0;
@@ -1208,6 +1225,13 @@ namespace Strata
 			return data.JoltSystem->GetNumBodies() - c_BroadPhaseAnchorCount;
 		}
 
+		// The most bodies the world may grow to: PhysicsSettings::GrowthLimit (0: the engine's limit), never below MaxBodies.
+		uint32_t GetGrowthLimit(const PhysicsSettings& settings)
+		{
+			const uint32_t limit = settings.GrowthLimit == 0 ? PhysicsCapacitySettings::c_MaxBodiesLimit : std::min(settings.GrowthLimit, PhysicsCapacitySettings::c_MaxBodiesLimit);
+			return std::max(limit, settings.MaxBodies);
+		}
+
 		// One error for the entities that found the world full, instead of one per entity (thousands at once when a scene
 		// outgrows an explicit capacity); logged again only once they all got a body and the world fills up again. Records
 		// what the world would have needed, so that the scene's next world can grow.
@@ -1222,17 +1246,17 @@ namespace Strata
 
 			const uint64_t needed = static_cast<uint64_t>(GetUsedBodySlots(data)) + data.SlotWaiterCount;
 			data.Demand.Bodies = std::max(data.Demand.Bodies, static_cast<uint32_t>(std::min<uint64_t>(needed, PhysicsCapacitySettings::c_MaxBodiesLimit)));
-			if (!data.SlotWaiterErrors.GetLastMessage().empty())
+			// Below its growth limit the world grows before the next step, which gives them their bodies (and says so).
+			if (data.Settings.MaxBodies < GetGrowthLimit(data.Settings) || !data.SlotWaiterErrors.GetLastMessage().empty())
 				return;
 
 			const Entity first(data.FirstSlotWaiter, data.OwnerScene);
 			std::string entities = first.IsValid() ? fmt::format("'{}'", first.GetName()) : std::string("an entity");
 			if (data.SlotWaiterCount > 1)
 				entities += fmt::format(" and {} more entities", data.SlotWaiterCount - 1);
-			const char* advice = data.AutomaticMaxBodies ? "the scene's next play start sizes the world for them"
-				: "raise the scene's PhysicsCapacity.MaxBodies to make room";
-			data.SlotWaiterErrors.Report(fmt::format("cannot create a body for {}: the world's limit of {} bodies is reached; they get one when bodies "
-				"are removed ({})", entities, data.Settings.MaxBodies, advice));
+			const bool engineLimit = data.Settings.MaxBodies >= PhysicsCapacitySettings::c_MaxBodiesLimit;
+			data.SlotWaiterErrors.Report(fmt::format("cannot create a body for {}: the world is at {} of {} bodies and cannot grow; they get one when bodies "
+				"are removed", entities, engineLimit ? "the engine's limit" : "its growth limit (PhysicsSettings::GrowthLimit)", data.Settings.MaxBodies));
 		}
 
 		// Whether a record without a body waits for a body that can be built later (rather than for a component change).
@@ -1518,6 +1542,18 @@ namespace Strata
 			data.PendingDestructions.clear();
 		}
 
+		// A grown world's Jolt system counts body sequence numbers from 0 (see GrowWorld), so a body made there may get the ID
+		// of a body that was destroyed since the growth, whose pairs Jolt's contact cache still holds from the last step:
+		// their cache is cleared for the next step. Before any growth, IDs never repeat that way.
+		void InvalidateReusedIDs(PhysicsWorldData& data, std::span<const JPH::BodyID> bodies)
+		{
+			if (data.GrowthCount == 0)
+				return;
+			JPH::BodyInterface& bodyInterface = data.JoltSystem->GetBodyInterface();
+			for (const JPH::BodyID& body : bodies)
+				bodyInterface.InvalidateContactCache(body);
+		}
+
 		// Adds the bodies created since the last flush to the simulation, in one batch per activation mode, after the queued
 		// removals and destructions. Bodies destroyed or taken out of the simulation since they were queued are skipped.
 		void FlushBodyBatches(PhysicsWorldData& data)
@@ -1541,6 +1577,7 @@ namespace Strata
 				const JPH::BodyInterface::AddState state = bodies.AddBodiesPrepare(batch.data(), static_cast<int>(batch.size()));
 				bodies.AddBodiesFinalize(batch.data(), static_cast<int>(batch.size()), state, activation);
 				data.AddBatchCount++;
+				InvalidateReusedIDs(data, batch);
 				batch.clear();
 			};
 			addBatch(data.PendingAdds, JPH::EActivation::DontActivate);
@@ -2356,7 +2393,11 @@ namespace Strata
 				if (change.OldBody != c_NoCharacterBody)
 					data.Contacts.SetBodyInterest(JPH::BodyID(change.OldBody), false);
 				if (change.NewBody != c_NoCharacterBody)
+				{
 					data.Contacts.SetBodyInterest(JPH::BodyID(change.NewBody), data.ContactInterest.contains(change.Entity));
+					const JPH::BodyID newBody(change.NewBody);
+					InvalidateReusedIDs(data, std::span<const JPH::BodyID>(&newBody, 1));
+				}
 				if (change.Removed)
 					EndContactsOf(data, change.Entity);
 				else if (data.EntityPairs.find(change.Entity) != data.EntityPairs.end())
@@ -2511,6 +2552,252 @@ namespace Strata
 			FlushBodyBatches(data);
 			ReportBodyLimit(data);
 			ApplyCharacterChanges(data);
+		}
+
+		//////////////////////////////////////////////////////////////////////////
+		// Growth
+		//////////////////////////////////////////////////////////////////////////
+
+		// Bodies a growth moves per job (fixed, so that the result does not depend on the number of threads).
+		constexpr uint32_t c_MigrationChunk = 4096;
+
+		// The bodies the world must have room for now: its bodies, the records and character controllers waiting for a slot,
+		// and what was reserved (PhysicsWorld::Reserve).
+		uint64_t GetRequiredBodies(const PhysicsWorldData& data)
+		{
+			const uint64_t waiting = static_cast<uint64_t>(data.SlotWaiterCount) + (data.Characters ? data.Characters->GetWaitingPresenceBodyCount() : 0u);
+			return std::max<uint64_t>(static_cast<uint64_t>(GetUsedBodySlots(data)) + waiting, data.ReservedBodies);
+		}
+
+		bool NeedsGrowth(const PhysicsWorldData& data)
+		{
+			return data.Settings.MaxBodies < GetGrowthLimit(data.Settings) && GetRequiredBodies(data) > data.Settings.MaxBodies;
+		}
+
+		// The settings of a world grown to `maxBodies`: the automatic pair and contact capacities and scratch memory follow
+		// ResolveCapacities' ratios for the bodies it must hold; capacities the settings gave stay.
+		PhysicsSettings GetGrownSettings(const PhysicsWorldData& data, uint32_t maxBodies, uint64_t requiredBodies)
+		{
+			PhysicsSettings grown = data.Settings;
+			grown.MaxBodies = maxBodies;
+			if (data.AutomaticMaxBodyPairs)
+				grown.MaxBodyPairs = ClampCapacity(std::max<uint64_t>(uint64_t(c_BodyPairsPerBody) * maxBodies, data.Settings.MaxBodyPairs), PhysicsCapacitySettings::c_MaxBodyPairsLimit);
+			if (data.AutomaticMaxContactConstraints)
+			{
+				grown.MaxContactConstraints = ClampCapacity(std::max<uint64_t>(uint64_t(c_ContactConstraintsPerBody) * requiredBodies, data.Settings.MaxContactConstraints),
+					PhysicsCapacitySettings::c_MaxContactConstraintsLimit);
+			}
+			if (data.AutomaticTempAllocatorSize)
+			{
+				const uint64_t scratch = c_TempAllocatorBaseSize + c_TempBytesPerBody * grown.MaxBodies + c_TempBytesPerContactConstraint * grown.MaxContactConstraints;
+				grown.TempAllocatorSize = static_cast<uint32_t>(std::min<uint64_t>(std::max(scratch, c_MinTempAllocatorSize), UINT32_MAX));
+			}
+			return SanitizeSettings(grown);
+		}
+
+		// A Jolt system and its scratch memory that a growth replaced: destroyed by a background job, with Jolt kept initialized
+		// until then (its bodies' shapes are reference counted, so the bodies of the new system keep theirs).
+		struct RetiredJoltSystem
+		{
+			PhysicsRuntimeReference Runtime;
+			Scope<JPH::PhysicsSystem> System;
+			Scope<JPH::TempAllocator> Allocator;
+		};
+
+		void RetireJoltSystem(Scope<JPH::PhysicsSystem> system, Scope<JPH::TempAllocator> allocator)
+		{
+			std::shared_ptr<RetiredJoltSystem> retired = std::make_shared<RetiredJoltSystem>();
+			retired->System = std::move(system);
+			retired->Allocator = std::move(allocator);
+			if (!JobSystem::IsInitialized())
+				return; // Destroyed here
+			JobSystem::Submit([retired = std::move(retired)]() mutable { retired.reset(); }, JobPriority::Background);
+		}
+
+		// Moves the world into a Jolt system with room for the bodies it needs (see PhysicsWorld, "Capacities"). Every body
+		// keeps its JPH::BodyID (index and sequence number), so the records, BodySlots, contacts, character controllers and
+		// anything else that kept a body ID stay valid; bodies keep their poses, velocities, accumulated forces, sleep state
+		// and the contact cache (warm starting), so resting bodies keep resting and no touching pair begins again. Runs between
+		// steps, after the batches of a round of changes were flushed. Returns false when the world is at its growth limit (or
+		// the move failed, which leaves the old system in place).
+		bool GrowWorld(PhysicsWorldData& data)
+		{
+			ST_PROFILE_FUNCTION();
+			ST_CORE_ASSERT(data.PendingAdds.empty() && data.PendingActivatedAdds.empty() && data.PendingDestructions.empty(), "A world grows between rounds of changes");
+
+			using Clock = std::chrono::steady_clock;
+			const Clock::time_point start = Clock::now();
+			const uint32_t from = data.Settings.MaxBodies;
+			const uint64_t required = GetRequiredBodies(data);
+			const uint32_t to = static_cast<uint32_t>(std::min<uint64_t>(NextPowerOfTwo(std::max<uint64_t>(2ull * from, required)), GetGrowthLimit(data.Settings)));
+			if (to <= from)
+				return false;
+			const PhysicsSettings grown = GetGrownSettings(data, to, required);
+
+			Scope<JPH::PhysicsSystem> system = CreateScope<JPH::PhysicsSystem>();
+			system->Init(grown.MaxBodies + c_BroadPhaseAnchorCount, 0, grown.MaxBodyPairs, grown.MaxContactConstraints, data.BroadPhaseLayers, data.ObjectVsBroadPhase,
+				data.LayerPairFilter);
+			system->SetPhysicsSettings(data.JoltSystem->GetPhysicsSettings());
+			system->SetGravity(data.JoltSystem->GetGravity());
+
+			// Every body of the old system (the anchors and character controllers' presence bodies included), in index order:
+			// created in the new one on the job threads, chunk by chunk, from the old body's settings and its exact mass
+			// properties (settings round-trip the inertia through an inverse).
+			JPH::BodyIDVector bodyIDs;
+			data.JoltSystem->GetBodies(bodyIDs);
+			const uint32_t bodyCount = static_cast<uint32_t>(bodyIDs.size());
+			const uint32_t chunkCount = (bodyCount + c_MigrationChunk - 1) / c_MigrationChunk;
+			std::vector<JPH::Body*> created(bodyCount, nullptr);
+			std::vector<uint8_t> states(bodyCount, 0); // Bit 0: in the broad phase; bit 1: active
+			const JPH::BodyLockInterfaceNoLock& oldLocks = data.JoltSystem->GetBodyLockInterfaceNoLock();
+			// Creating bodies and preparing their broad phase batches are safe on any thread (disjoint bodies, Jolt's lock-free
+			// node allocator); the main thread waits meanwhile.
+			JPH::BodyInterface& newBodies = system->GetBodyInterfaceNoLock();
+			const auto forChunks = [&](const std::function<void(uint32_t begin, uint32_t end)>& function)
+			{
+				const auto run = [&](uint32_t firstChunk, uint32_t lastChunk)
+				{
+					for (uint32_t chunk = firstChunk; chunk < lastChunk; chunk++)
+						function(chunk * c_MigrationChunk, std::min(bodyCount, (chunk + 1) * c_MigrationChunk));
+				};
+				if (chunkCount > 1 && JobSystem::IsInitialized())
+					JobSystem::ParallelFor(chunkCount, 1, run);
+				else
+					run(0, chunkCount);
+			};
+			forChunks([&](uint32_t begin, uint32_t end)
+			{
+				for (uint32_t index = begin; index < end; index++)
+				{
+					const JPH::Body* old = oldLocks.TryGetBody(bodyIDs[index]);
+					if (!old)
+						continue;
+					JPH::Body* body = newBodies.CreateBodyWithoutID(old->GetBodyCreationSettings());
+					if (body && old->IsDynamic())
+					{
+						const JPH::MotionProperties& oldMotion = *old->GetMotionProperties();
+						JPH::MotionProperties& motion = *body->GetMotionProperties();
+						motion.SetInverseMass(oldMotion.GetInverseMassUnchecked());
+						motion.SetInverseInertia(oldMotion.GetInverseInertiaDiagonal(), oldMotion.GetInertiaRotation());
+					}
+					created[index] = body;
+					states[index] = static_cast<uint8_t>((old->IsInBroadPhase() ? 1u : 0u) | (old->IsActive() ? 2u : 0u));
+				}
+			});
+
+			// Their IDs, in index order on the main thread.
+			JPH::BodyInterface& newInterface = system->GetBodyInterface();
+			bool moved = true;
+			for (uint32_t index = 0; index < bodyCount; index++)
+			{
+				if (moved && created[index] && newInterface.AssignBodyID(created[index], bodyIDs[index]))
+					continue;
+				moved = false;
+				if (created[index] && created[index]->GetID().IsInvalid())
+					newInterface.DestroyBodyWithoutID(created[index]);
+				created[index] = nullptr;
+			}
+			if (!moved)
+			{
+				// Nothing changed yet: the old system stays, and its bodies keep waiting (the new system takes the bodies it
+				// already got with it).
+				ST_CORE_ERROR("Physics: the world of scene '{}' could not grow from {} to {} bodies: its bodies could not be moved", data.OwnerScene->GetName(), from, to);
+				return false;
+			}
+
+			// The bodies that were in the old broad phase join the new one chunk by chunk (prepared on the job threads, added in
+			// chunk order), awake ones activated.
+			struct AddBatch
+			{
+				std::vector<JPH::BodyID> Bodies;
+				JPH::BodyInterface::AddState State = nullptr;
+				JPH::EActivation Activation = JPH::EActivation::DontActivate;
+			};
+			std::vector<AddBatch> batches(2 * static_cast<size_t>(chunkCount));
+			forChunks([&](uint32_t begin, uint32_t end)
+			{
+				AddBatch& sleeping = batches[2 * (begin / c_MigrationChunk)];
+				AddBatch& awake = batches[2 * (begin / c_MigrationChunk) + 1];
+				awake.Activation = JPH::EActivation::Activate;
+				for (uint32_t index = begin; index < end; index++)
+				{
+					if (states[index] & 1u)
+						((states[index] & 2u) ? awake : sleeping).Bodies.push_back(bodyIDs[index]);
+				}
+				for (AddBatch* batch : { &sleeping, &awake })
+				{
+					if (!batch->Bodies.empty())
+						batch->State = newBodies.AddBodiesPrepare(batch->Bodies.data(), static_cast<int>(batch->Bodies.size()));
+				}
+			});
+			for (AddBatch& batch : batches)
+			{
+				if (!batch.Bodies.empty())
+					newInterface.AddBodiesFinalize(batch.Bodies.data(), static_cast<int>(batch.Bodies.size()), batch.State, batch.Activation);
+			}
+
+			// What the creation settings do not carry, once activation reset it: forces and torques accumulated for the next
+			// step, sleep timers and spheres.
+			forChunks([&](uint32_t begin, uint32_t end)
+			{
+				PhysicsStateBuffer motion;
+				for (uint32_t index = begin; index < end; index++)
+				{
+					const JPH::Body* old = oldLocks.TryGetBody(bodyIDs[index]);
+					if (!old || !created[index] || old->IsStatic())
+						continue;
+					motion.Clear();
+					old->GetMotionProperties()->SaveState(motion);
+					created[index]->GetMotionProperties()->RestoreState(motion);
+				}
+			});
+
+			// The contact cache, so that touching pairs warm start and are not reported as new.
+			PhysicsStateBuffer contacts;
+			data.JoltSystem->SaveState(contacts, JPH::EStateRecorderState::Contacts);
+			if (!system->RestoreState(contacts) || contacts.IsFailed())
+				ST_CORE_WARN("Physics: the world of scene '{}' lost its contact cache while it grew; contacts warm start again", data.OwnerScene->GetName());
+
+			// The swap.
+			Scope<JPH::TempAllocator> oldAllocator;
+			if (grown.TempAllocatorSize != data.Settings.TempAllocatorSize)
+			{
+				oldAllocator = std::move(data.Allocator);
+				data.Allocator = CreateScope<JPH::TempAllocatorImplWithMallocFallback>(grown.TempAllocatorSize);
+			}
+			std::swap(data.JoltSystem, system);
+			data.JoltSystem->SetContactListener(&data.Contacts);
+			data.JoltSystem->SetBodyActivationListener(&data.Activations);
+			data.Settings = grown;
+			data.BodySlots.resize(data.JoltSystem->GetMaxBodies());
+			data.MovedBodyBits.resize((data.BodySlots.size() + 63) / 64, 0);
+			data.Contacts.Grow(data.JoltSystem->GetMaxBodies());
+			std::vector<CharacterBodyChange>& characterChanges = data.CharacterChanges;
+			characterChanges.clear();
+			data.Characters->Rebind(*data.JoltSystem, characterChanges);
+			for (const CharacterBodyChange& change : characterChanges)
+				data.Contacts.SetBodyInterest(JPH::BodyID(change.NewBody), data.ContactInterest.contains(change.Entity));
+			RetireJoltSystem(std::move(system), std::move(oldAllocator));
+
+			// Every waiting record tries again (in the order they waited).
+			for (const auto& [handle, ticket] : data.SlotWaiters)
+			{
+				if (IsSlotWaiter(data, { handle, ticket }))
+					data.OwnerRefreshes.Add(handle);
+			}
+
+			data.GrowthCount++;
+			data.LastGrowthFrom = from;
+			data.LastGrowthTo = to;
+			data.LastGrowthMs = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
+			ST_CORE_INFO("Physics: the world of scene '{}' grew from {} to {} bodies in {:.1f} ms; cook the world (world.cook) or raise its physics capacity to "
+				"start at that size", data.OwnerScene->GetName(), from, to, data.LastGrowthMs);
+			if (!data.AutomaticMaxBodies && data.GrowthCount == 1)
+			{
+				ST_CORE_WARN("Physics: scene '{}' needs more bodies than its PhysicsCapacity.MaxBodies of {}; its world grew beyond it, to {} bodies", data.OwnerScene->GetName(),
+					from, to);
+			}
+			return true;
 		}
 
 		//////////////////////////////////////////////////////////////////////////
@@ -3632,6 +3919,7 @@ namespace Strata
 		data.AutomaticMaxBodies = settings.MaxBodies == 0;
 		data.AutomaticMaxBodyPairs = settings.MaxBodyPairs == 0;
 		data.AutomaticMaxContactConstraints = settings.MaxContactConstraints == 0;
+		data.AutomaticTempAllocatorSize = settings.TempAllocatorSize == 0;
 		data.Allocator = CreateScope<JPH::TempAllocatorImplWithMallocFallback>(data.Settings.TempAllocatorSize);
 		data.Jobs = CreatePhysicsJobSystem(&data.JobCounters);
 		data.JoltSystem = CreateScope<JPH::PhysicsSystem>();
@@ -3757,6 +4045,26 @@ namespace Strata
 		ApplyChanges(*m_Data);
 	}
 
+	void PhysicsWorld::Reserve(uint32_t bodies)
+	{
+		m_Data->ReservedBodies = std::min(bodies, PhysicsCapacitySettings::c_MaxBodiesLimit);
+	}
+
+	uint32_t PhysicsWorld::GetReservedBodies() const
+	{
+		return m_Data->ReservedBodies;
+	}
+
+	bool PhysicsWorld::Grow()
+	{
+		PhysicsWorldData& data = *m_Data;
+		ApplyChanges(data);
+		if (!NeedsGrowth(data) || !GrowWorld(data))
+			return false;
+		ApplyChanges(data);
+		return true;
+	}
+
 	bool PhysicsWorld::HasBody(Entity entity) const
 	{
 		return FindSimulatedRecord(*m_Data, entity) != nullptr;
@@ -3779,6 +4087,9 @@ namespace Strata
 		const auto millisecondsBetween = [](Clock::time_point start, Clock::time_point end) { return std::chrono::duration<float, std::milli>(end - start).count(); };
 		const Clock::time_point startTime = Clock::now();
 		ApplyChanges(data);
+		// Bodies that found the world full, or bodies reserved for, get room before the step (see "Capacities").
+		if (NeedsGrowth(data) && GrowWorld(data))
+			ApplyChanges(data);
 		data.HeldLastStep = HoldForMeshes(data, timestep);
 		if (data.HeldLastStep)
 		{
@@ -4219,6 +4530,10 @@ namespace Strata
 		stats.SyncTime = data.LastSyncTime;
 		stats.WriteBackTime = data.LastWriteBackTime;
 		stats.ContactTime = data.LastContactTime;
+		stats.GrowthCount = data.GrowthCount;
+		stats.LastGrowthMs = data.LastGrowthMs;
+		stats.LastGrowthFrom = data.LastGrowthFrom;
+		stats.LastGrowthTo = data.LastGrowthTo;
 		return stats;
 	}
 

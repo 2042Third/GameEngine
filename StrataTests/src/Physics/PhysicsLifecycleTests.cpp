@@ -515,6 +515,7 @@ TEST_SUITE("Physics.Lifecycle")
 	{
 		PhysicsSettings settings;
 		settings.MaxBodies = 2;
+		settings.GrowthLimit = 2; // The world stays full
 		ScopedPhysicsSettings scopedSettings(settings);
 
 		Scene scene;
@@ -544,7 +545,7 @@ TEST_SUITE("Physics.Lifecycle")
 		CHECK(physics.GetLinearVelocity(mover).x == doctest::Approx(1.0f));
 		CHECK(physics.GetStats().BodyCount == 2);
 		CHECK(physics.GetStats().PendingBodyCount == 0);
-		CHECK(CountLogMessages(logStart, "limit of 2 bodies") == 0);
+		CHECK(CountLogMessages(logStart, "cannot create a body") == 0);
 
 		const float x = GetWorldPosition(scene, mover).x;
 		StepScene(scene, 30);
@@ -559,7 +560,7 @@ TEST_SUITE("Physics.Lifecycle")
 		Entity late = CreateDynamicBox(scene, "Late", glm::vec3(0.0f, -10.0f, 0.0f));
 		CHECK_FALSE(physics.HasBody(late));
 		CHECK(physics.GetStats().PendingBodyCount == 1);
-		CHECK(CountLogMessages(logStart, "'Late': the world's limit of 2 bodies is reached") == 1);
+		CHECK(CountLogMessages(logStart, "'Late': the world is at its growth limit (PhysicsSettings::GrowthLimit) of 2 bodies") == 1);
 		scene.DestroyEntity(other);
 		StepScene(scene, 1);
 		CHECK(physics.HasBody(late));

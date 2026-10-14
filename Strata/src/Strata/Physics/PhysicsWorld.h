@@ -71,9 +71,16 @@ namespace Strata
 	//
 	// Capacities: Jolt allocates the world for fixed numbers of bodies, body pairs and contact constraints. Capacities that are
 	// 0 in the settings are sized when the world is created from the bodies the scene has then (ResolveCapacities), so a scene
-	// gets the room it needs without settings; a body that finds the world full waits for a free slot (one aggregated error
-	// names the entities), and steps that overflow the pair or contact buffers drop contacts (a warning once per world). Both
-	// are recorded (PhysicsStats::BodyOverflowCount, ContactOverflowSteps, Demand), so the next world of the scene can grow.
+	// gets the room it needs without settings. A body that finds the world full waits for a slot, queued in the order it
+	// failed (no step looks at it; slots that free go to the first waiters), and the world grows before its next step (also
+	// when Reserve asked for more room than it has): it moves into a new Jolt system for the next power of two of at least
+	// twice its bodies and what it needs, up to PhysicsSettings::GrowthLimit. Every body keeps its JPH::BodyID, pose,
+	// velocity, sleep state and contacts, and character controllers keep their state; automatic pair and contact capacities
+	// grow with it, given ones stay, and a given MaxBodies is exceeded with a warning (correctness comes first). The bodies
+	// are moved in fixed chunks on the job threads, and the old system is destroyed by a background job. At its growth limit
+	// a world keeps bodies waiting (one aggregated error names them) until bodies are removed. Steps that overflow the pair
+	// or contact buffers drop contacts (a warning once per world). Both are recorded (PhysicsStats::BodyOverflowCount,
+	// ContactOverflowSteps, Demand, GrowthCount), so the next world of the scene starts large enough.
 	//
 	// Main thread only. Jolt runs the step on Strata's JobSystem workers when it is initialized.
 	class PhysicsWorld
@@ -115,6 +122,15 @@ namespace Strata
 
 		// Applies the component, hierarchy-activity and destruction changes recorded since the last call.
 		void ApplyPendingChanges();
+
+		// Asks for room for `bodies` bodies in all (character controllers' presence bodies included): a world with less grows
+		// before its next step (see "Capacities"). The world streamer reserves for the cells it is about to load, so their
+		// bodies never find the world full. The latest call counts; 0 reserves nothing.
+		void Reserve(uint32_t bodies);
+		uint32_t GetReservedBodies() const;
+		// Applies the pending changes and grows the world now if bodies wait for a slot or more were reserved than it has room
+		// for, as the next step would. Returns whether it grew. Never call it during a step, a query or a collision dispatch.
+		bool Grow();
 
 		// True if the entity owns a body that is part of the simulation.
 		bool HasBody(Entity entity) const;

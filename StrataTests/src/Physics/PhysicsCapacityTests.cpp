@@ -9,8 +9,10 @@
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scene/SceneServices.h"
 #include "TestHelpers.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -45,6 +47,19 @@ namespace
 		for (uint32_t index = 0; index < count; index++)
 			boxes.push_back(CreateDynamicBox(scene, "Box " + std::to_string(index), glm::vec3(static_cast<float>(index) * 2.0f - 10.0f, height, 0.0f)));
 		return boxes;
+	}
+
+	// Steps the scene until `condition` holds, at most `maxSteps` fixed steps (simulation time, the same on every machine).
+	template<typename Condition>
+	bool WaitForSteps(Scene& scene, uint32_t maxSteps, Condition condition)
+	{
+		for (uint32_t step = 0; step < maxSteps; step++)
+		{
+			if (condition())
+				return true;
+			StepScene(scene, 1);
+		}
+		return condition();
 	}
 
 	// Spawns `count` boxes (dynamic or static) in a grid, has the world build their bodies, and destroys them again before the
@@ -221,9 +236,12 @@ TEST_SUITE("Physics.Capacity")
 		scene.OnRuntimeStop();
 	}
 
-	TEST_CASE("Bodies that find the world full are reported in one error, counted, and remembered for the scene's next world")
+	TEST_CASE("At its growth limit a full world keeps bodies waiting, reported in one error, counted and remembered")
 	{
 		ScopedCapacityDemands demands;
+		PhysicsSettings limited;
+		limited.GrowthLimit = 4;
+		ScopedPhysicsSettings scopedLimit(limited);
 		Scene scene("Crowded");
 		scene.GetSettings().Gravity = glm::vec3(0.0f);
 		scene.GetSettings().PhysicsCapacity.MaxBodies = 4;
@@ -239,16 +257,18 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(stats.PendingBodyCount == 6);
 		CHECK(stats.Demand.Bodies == 10);
 		CHECK(CountLogMessages(logStart, "cannot create a body") == 1);
-		CHECK(CountLogMessages(logStart, "'Box 4' and 5 more entities: the world's limit of 4 bodies is reached") == 1);
-		CHECK(CountLogMessages(logStart, "raise the scene's PhysicsCapacity.MaxBodies") == 1);
+		CHECK(CountLogMessages(logStart, "'Box 4' and 5 more entities: the world is at its growth limit (PhysicsSettings::GrowthLimit) of 4 bodies and cannot grow") == 1);
 
-		// Waiting entities get the slots of removed bodies; while some still wait, nothing is logged again.
+		// Waiting entities get the slots of removed bodies; while some still wait, nothing is logged again, and the world
+		// never grows.
 		StepScene(scene, 5);
 		scene.DestroyEntities(std::vector<Entity>(boxes.begin(), boxes.begin() + 3));
 		StepScene(scene, 2);
 		stats = physics.GetStats();
 		CHECK(stats.BodyCount == 4);
 		CHECK(stats.BodyOverflowCount == 3);
+		CHECK(stats.GrowthCount == 0);
+		CHECK(stats.MaxBodies == 4);
 		CHECK(CountLogMessages(logStart, "cannot create a body") == 1);
 
 		// Once every entity has a body, a new overflow is reported again.
@@ -271,9 +291,172 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(PhysicsSystem::GetRememberedCapacityDemand(other.GetLineageID()).IsEmpty());
 	}
 
+	TEST_CASE("A full world grows before its next step, beyond a capacity the scene gives with a warning")
+	{
+		ScopedCapacityDemands demands;
+		Scene scene("Growing");
+		scene.GetSettings().Gravity = glm::vec3(0.0f);
+		scene.GetSettings().PhysicsCapacity.MaxBodies = 4;
+		const std::vector<Entity> boxes = CreateBoxRow(scene, 10);
+
+		// The bodies wait until the step, which grows the world first: no error, one info and one warning about the setting.
+		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		CHECK(physics.GetStats().BodyOverflowCount == 6);
+		StepScene(scene, 1);
+		PhysicsStats stats = physics.GetStats();
+		CHECK(stats.BodyCount == 10);
+		CHECK(stats.BodyOverflowCount == 0);
+		CHECK(stats.MaxBodies == 16); // The next power of two of twice the capacity and of the bodies needed
+		CHECK(stats.MaxBodyPairs == 4 * 16); // Automatic pairs grow with it
+		CHECK(stats.GrowthCount == 1);
+		CHECK(stats.LastGrowthFrom == 4);
+		CHECK(stats.LastGrowthTo == 16);
+		CHECK(stats.LastGrowthMs >= 0.0f);
+		CHECK(CountLogMessages(logStart, "cannot create a body") == 0);
+		CHECK(CountLogMessages(logStart, "needs more bodies than its PhysicsCapacity.MaxBodies of 4; its world grew beyond it, to 16 bodies") == 1);
+		for (const Entity box : boxes)
+			CHECK(physics.HasBody(box));
+
+		// The bodies of the grown world behave as before: queries find them, new ones are built, removed ones go.
+		CHECK(physics.Raycast(glm::vec3(-10.0f, 5.0f, 0.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f).has_value());
+		CreateBoxRow(scene, 3, 10.0f);
+		scene.DestroyEntities(std::vector<Entity>(boxes.begin(), boxes.begin() + 2));
+		StepScene(scene, 2);
+		stats = physics.GetStats();
+		CHECK(stats.BodyCount == 11);
+		CHECK(stats.GrowthCount == 1);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Growth keeps every body's ID, motion, sleep and touching pairs")
+	{
+		// The scale audit's streamed cells, scaled down for Debug runs: a world created for 4,096 bodies, four "cells" of
+		// 2,500 static boxes arriving at once, while 100 bodies move with known velocities and 20 rest asleep on a floor.
+		ScopedCapacityDemands demands;
+		ScopedJobSystem jobs(3);
+		Scene scene("Streamed");
+		scene.GetSettings().PhysicsCapacity.MaxBodies = 4096;
+		CreateGround(scene);
+		std::vector<Entity> resting;
+		for (uint32_t index = 0; index < 20; index++)
+			resting.push_back(CreateDynamicBox(scene, "Resting " + std::to_string(index), glm::vec3(static_cast<float>(index) * 2.0f - 20.0f, 0.5f, 10.0f)));
+		std::vector<Entity> moving;
+		for (uint32_t index = 0; index < 100; index++)
+		{
+			Entity sphere = CreateDynamicSphere(scene, "Moving " + std::to_string(index), glm::vec3(static_cast<float>(index % 10) * 3.0f - 15.0f, 50.0f + static_cast<float>(index / 10) * 3.0f, -20.0f));
+			RigidBodyComponent& body = sphere.GetComponent<RigidBodyComponent>();
+			body.GravityScale = 0.0f;
+			body.LinearDamping = 0.0f;
+			body.AngularDamping = 0.0f;
+			moving.push_back(sphere);
+		}
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		CollisionRecorder recorder(physics); // Tracks every touching pair
+		for (uint32_t index = 0; index < moving.size(); index++)
+		{
+			REQUIRE(physics.SetLinearVelocity(moving[index], glm::vec3(0.01f * static_cast<float>(index), 0.0f, 0.5f)));
+			REQUIRE(physics.SetAngularVelocity(moving[index], glm::vec3(0.0f, 0.02f * static_cast<float>(index), 0.0f)));
+		}
+		REQUIRE(WaitForSteps(scene, 600, [&]() { return std::all_of(resting.begin(), resting.end(), [&](Entity box) { return physics.IsSleeping(box); }); }));
+		const size_t restingPairs = physics.GetStats().ContactPairCount;
+		CHECK(restingPairs == 20);
+		recorder.Clear();
+
+		// The cells arrive: 10,000 bodies more than the world has room for.
+		for (uint32_t cell = 0; cell < 4; cell++)
+		{
+			for (uint32_t index = 0; index < 2500; index++)
+			{
+				const glm::vec3 position(1000.0f + static_cast<float>(cell) * 200.0f + static_cast<float>(index % 50) * 3.0f, 0.0f, static_cast<float>(index / 50) * 3.0f);
+				CreateStaticBox(scene, "Cell Box", position, glm::vec3(1.0f));
+			}
+		}
+		std::vector<glm::vec3> linear;
+		std::vector<glm::vec3> angular;
+		for (const Entity sphere : moving)
+		{
+			linear.push_back(physics.GetLinearVelocity(sphere));
+			angular.push_back(physics.GetAngularVelocity(sphere));
+		}
+		CHECK(physics.GetStats().BodyOverflowCount > 0);
+
+		StepScene(scene, 1);
+		const PhysicsStats stats = physics.GetStats();
+		CHECK(stats.BodyOverflowCount == 0);
+		CHECK(stats.GrowthCount == 1);
+		CHECK(stats.MaxBodies == 16384);
+		CHECK(stats.BodyCount == 1 + 20 + 100 + 10'000);
+		for (size_t index = 0; index < moving.size(); index++)
+		{
+			const glm::vec3 linearAfter = physics.GetLinearVelocity(moving[index]);
+			const glm::vec3 angularAfter = physics.GetAngularVelocity(moving[index]);
+			CHECK(glm::all(glm::lessThanEqual(glm::abs(linearAfter - linear[index]), glm::vec3(1.0e-6f))));
+			CHECK(glm::all(glm::lessThanEqual(glm::abs(angularAfter - angular[index]), glm::vec3(1.0e-6f))));
+		}
+		for (const Entity box : resting)
+			CHECK(physics.IsSleeping(box));
+		StepScene(scene, 30);
+		CHECK(physics.GetStats().ContactPairCount == restingPairs);
+		CHECK(recorder.Count(CollisionEventType::Begin) == 0);
+		CHECK(recorder.Count(CollisionEventType::End) == 0);
+		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("A walking character controller keeps its position, velocity and ground across a growth")
+	{
+		ScopedCapacityDemands demands;
+		Scene scene("Walker");
+		scene.GetSettings().PhysicsCapacity.MaxBodies = 64;
+		CreateGround(scene);
+		Entity walker = scene.CreateEntity("Walker");
+		CharacterControllerComponent& controller = walker.AddComponent<CharacterControllerComponent>();
+		controller.Height = 1.8f;
+		controller.Radius = 0.3f;
+
+		scene.OnRuntimeStart();
+		ICharacterControl* characters = scene.GetService<ICharacterControl>();
+		REQUIRE(characters != nullptr);
+		REQUIRE(characters->MoveCharacter(walker, glm::vec3(2.0f, 0.0f, 0.0f)));
+		StepScene(scene, 30);
+		const std::optional<CharacterState> before = characters->GetCharacterState(walker);
+		REQUIRE(before.has_value());
+		REQUIRE(before->Ground == CharacterGroundState::OnGround);
+		const glm::vec3 positionBefore = GetWorldPosition(scene, walker);
+
+		for (uint32_t index = 0; index < 100; index++)
+			CreateStaticBox(scene, "Far Box", glm::vec3(500.0f + static_cast<float>(index) * 3.0f, 0.0f, 0.0f), glm::vec3(1.0f));
+		PhysicsWorld* world = GetPhysics(scene).GetWorld();
+		REQUIRE(world != nullptr);
+		REQUIRE(world->Grow());
+		CHECK(world->GetStats().MaxBodies == 128);
+		const std::optional<CharacterState> after = characters->GetCharacterState(walker);
+		REQUIRE(after.has_value());
+		CHECK(after->Ground == before->Ground);
+		CHECK(after->Velocity == before->Velocity);
+		CHECK(after->GroundNormal == before->GroundNormal);
+		CHECK(GetWorldPosition(scene, walker) == positionBefore);
+
+		// It walks on, on the ground, and dynamic bodies still land on its presence body.
+		Entity crate = CreateDynamicBox(scene, "Crate", positionBefore + glm::vec3(1.0f, 4.0f, 0.0f), glm::vec3(0.2f));
+		StepScene(scene, 30);
+		const std::optional<CharacterState> walking = characters->GetCharacterState(walker);
+		REQUIRE(walking.has_value());
+		CHECK(walking->Ground == CharacterGroundState::OnGround);
+		CHECK(GetWorldPosition(scene, walker).x > positionBefore.x + 0.5f);
+		CHECK(GetPhysics(scene).HasBody(crate));
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Bodies waiting for a slot cost the steps nothing and get freed slots in the order they started waiting")
 	{
 		ScopedCapacityDemands demands;
+		PhysicsSettings limited;
+		limited.GrowthLimit = 1024; // A memory cap: the world may not grow
+		ScopedPhysicsSettings scopedLimit(limited);
 		Scene scene("Waiting");
 		scene.GetSettings().PhysicsCapacity.MaxBodies = 1024;
 		std::vector<Entity> boxes;

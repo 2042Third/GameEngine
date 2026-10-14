@@ -244,13 +244,21 @@ on jobs and caches them process-wide; `AssetMeshProvider` supplies mesh data fro
 default); `PhysicsSystem` gives its world that matrix, restricted by the default settings' (`GetDefaultSettings`), when
 it creates the world and before every step after it changed (`scene.setSettings`, undo, the inspector, scripts'
 `Physics::SetLayersCollide`, `PhysicsSystem::SetLayersCollide`; `PhysicsWorld::SetLayerCollisionMasks` wakes the bodies,
-and character controllers read the world's live matrix). A world's capacities are fixed when it is created: those the
+and character controllers read the world's live matrix). A world's capacities are set when it is created: those the
 scene does not set (`SceneSettings::PhysicsCapacity`) are sized from the bodies the scene starts with
 (`PhysicsWorld::ResolveCapacities`: at least 65,536 bodies, the next power of two of twice the bodies; four body pairs per
-body slot; at least 10,240 contacts, two per body; scratch memory for them), bodies that find the world full wait for a
+body slot; at least 10,240 contacts, two per body; scratch memory for them). Bodies that find the world full wait for a
 slot in a queue in the order they failed (no step looks at them: slots freed by a round of changes go to the first of
-them, which get their bodies in the same round) and are reported in one error, steps that overflow the pair or contact buffers are counted
-(`PhysicsStats::BodyOverflowCount`, `ContactOverflowSteps`), and what a world lacked is remembered per scene
+them, which get their bodies in the same round), and before its next step the world grows (`PhysicsWorld::Grow`, also
+when `PhysicsWorld::Reserve` asked for more room): it moves every body into a new Jolt system for the next power of two
+of at least twice its bodies and what it needs, up to `PhysicsSettings::GrowthLimit` (default the engine's limit, a
+memory cap for games). Bodies keep their `JPH::BodyID`, pose, velocity, accumulated forces, sleep state and the contact
+cache, character controllers keep their state (`CharacterControllerSet::Rebind`), automatic pair and contact capacities
+grow with it, a `MaxBodies` the scene gives is exceeded with a warning, the bodies move in fixed chunks of 4,096 on the
+job threads, and the old system is destroyed by a background job (`PhysicsStats::GrowthCount`, `LastGrowthMs`); a grown
+world clears the contact cache of the bodies it creates, because its Jolt system counts their sequence numbers anew. Only
+a world at its growth limit leaves bodies waiting, reported in one error. Steps that overflow the pair or contact buffers
+are counted (`PhysicsStats::BodyOverflowCount`, `ContactOverflowSteps`), and what a world lacked is remembered per scene
 (`Scene::GetLineageID`: the scene asset it was loaded from or saved as, else the scene and its copies; never another
 scene of the same name), so the scene's next world is sized for it. Jolt reserves a world's buffers when it is created
 and does not survive a failed allocation, so the capacities a scene may ask for are limited (`PhysicsCapacitySettings`:

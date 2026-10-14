@@ -6,6 +6,7 @@
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Physics/PhysicsSystem.h"
+#include "Strata/Physics/PhysicsWorld.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
@@ -305,6 +306,51 @@ TEST_SUITE("Perf.Physics")
 				stats.JoltStepTime, " ms");
 			scene.OnRuntimeStop();
 			return step.MedianMs;
+		});
+	}
+
+	TEST_CASE("Growing a world of 65,536 bodies to 131,072")
+	{
+		// A full world (90% static bodies, 10% dynamic ones awake) grows: every body moves into a Jolt system twice the size,
+		// keeping its ID and state (PhysicsWorld, "Capacities"). The growth's own time (PhysicsStats::LastGrowthMs), the
+		// median of 5 fresh worlds: a growth happens once per world, so each sample needs a world of its own.
+		Perf::ScopedApplicationJobSystem jobs;
+		constexpr uint32_t c_Bodies = 65'536;
+		Scene scene("Grow65k");
+		scene.GetSettings().Gravity = glm::vec3(0.0f);
+		scene.GetSettings().PhysicsCapacity.MaxBodies = c_Bodies;
+		for (uint32_t index = 0; index < c_Bodies; index++)
+		{
+			const glm::vec3 position(static_cast<float>(index % 256) * 3.0f, 0.0f, static_cast<float>(index / 256) * 3.0f);
+			if (index % 10 == 0)
+				CreateDynamicBox(scene, "Dynamic", position + glm::vec3(0.0f, 5.0f, 0.0f));
+			else
+				CreateStaticBox(scene, "Static", position, glm::vec3(0.5f));
+		}
+
+		Perf::CheckBudgetConfirmed("Perf.Physics.Grow65kMigration", [&]
+		{
+			constexpr uint32_t c_Warmup = 1;
+			constexpr uint32_t c_Samples = 5;
+			std::vector<double> samples;
+			for (uint32_t round = 0; round < c_Warmup + c_Samples; round++)
+			{
+				scene.OnRuntimeStart();
+				PhysicsWorld* world = GetPhysics(scene).GetWorld();
+				REQUIRE(world != nullptr);
+				REQUIRE(world->GetStats().BodyCount == c_Bodies);
+				world->Reserve(c_Bodies + 1);
+				REQUIRE(world->Grow());
+				const PhysicsStats stats = world->GetStats();
+				CHECK(stats.MaxBodies == 2 * c_Bodies);
+				CHECK(stats.BodyCount == c_Bodies);
+				if (round >= c_Warmup)
+					samples.push_back(stats.LastGrowthMs);
+				scene.OnRuntimeStop();
+			}
+			const Perf::Measurement growth = Perf::Summarize(samples);
+			MESSAGE("Growing 65,536 bodies to 131,072: median ", growth.MedianMs, " ms, max ", growth.MaxMs, " ms");
+			return growth.MedianMs;
 		});
 	}
 
