@@ -18,6 +18,8 @@
 namespace Strata
 {
 
+	class RenderSceneGPUCache;
+
 	struct ReadbackImage
 	{
 		uint32_t Width = 0;
@@ -62,6 +64,8 @@ namespace Strata
 		static GPUProfiler& GetGPUProfiler();
 		// The profiler, or null without a renderer (any time, also while the renderer initializes).
 		static GPUProfiler* FindGPUProfiler();
+		// The render scenes' GPU copies, shared by each scene's renderers (RenderSceneGPU).
+		static RenderSceneGPUCache& GetRenderSceneGPUs();
 		// Resources dropped while the GPU may still use them (see ReleaseDeferred).
 		static DeferredReleaseQueue& GetDeferredReleases();
 		// Drops the references once the GPU has finished every command list executed so far, without waiting for it. Use
@@ -71,8 +75,9 @@ namespace Strata
 
 		// Called by the application after the graphics device began a frame: hands the GPU times of completed frames to the
 		// frame profiler (GPUProfiler::BeginFrame), returns the geometry pool's freed ranges and grows or compacts it
-		// (GeometryPool::BeginFrame), recycles bindless slots and staging memory, rolls the upload queue's frame and drops
-		// deferred releases the GPU is done with.
+		// (GeometryPool::BeginFrame), releases the GPU copies of render scenes that went (RenderSceneGPUCache::BeginFrame),
+		// recycles bindless slots and staging memory, rolls the upload queue's frame and drops deferred releases the GPU is
+		// done with.
 		static void BeginFrame();
 		// Before the first command list of a frame that renders into the back buffer: the GPU waits for the display to hand
 		// the image over only from here on (GraphicsDevice::PrepareBackBuffer), so the frame's earlier work - asset uploads,

@@ -278,7 +278,7 @@ namespace Strata
 				{ "sortMs", stats.SortMs },
 				{ "proxyUpdates", stats.ProxyUpdates },
 				{ "instanceBytesUploaded", stats.InstanceBytesUploaded },
-				{ "deferredInstanceBytes", 0 },
+				{ "deferredInstanceBytes", stats.DeferredInstanceBytes },
 				{ "geometryPool", DescribeGeometryPool() },
 				{ "gpuMs", std::move(gpuMs) },
 				{ "gpuStatsFrame", gpu.HasTimes ? nlohmann::json(gpu.Frame) : nlohmann::json(nullptr) } };

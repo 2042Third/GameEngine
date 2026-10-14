@@ -210,9 +210,13 @@ namespace Strata
 	{
 		m_Stats.LastFrameBytes = m_Stats.FrameBytes;
 		m_Stats.LastFrameMs = m_Stats.FrameMs;
+		m_Stats.LastFrameSceneDataBytes = m_Stats.SceneDataBytes;
+		m_Stats.LastFrameSceneDataMs = m_Stats.SceneDataMs;
 		m_Stats.FrameBytes = 0;
 		m_Stats.FrameMs = 0.0f;
 		m_Stats.FrameSteps = 0;
+		m_Stats.SceneDataBytes = 0;
+		m_Stats.SceneDataMs = 0.0f;
 		CollectCompleted();
 	}
 
@@ -411,6 +415,89 @@ namespace Strata
 		const float milliseconds = MillisecondsSince(start);
 		RecordStep(context, bytes, milliseconds, acquireMs, created, false, queue);
 		return GPUUploadStep { true, bytes, milliseconds };
+	}
+
+	GPUUploadStep GPUUploadQueue::RecordSceneUpload(nvrhi::ICommandList* commandList, std::span<const GPUBufferRegion> regions)
+	{
+		ST_PROFILE_FUNCTION();
+		GPUUploadStep result { true, 0, 0.0f };
+		const auto start = std::chrono::steady_clock::now();
+		size_t region = 0;
+		uint64_t regionOffset = 0; // Into the current region: large regions are split over steps
+		while (region < regions.size())
+		{
+			// A step: the next regions (or pieces of them) up to c_SceneStagingBytes, through one staging buffer.
+			uint64_t stepBytes = 0;
+			size_t endRegion = region;
+			uint64_t endOffset = regionOffset;
+			while (endRegion < regions.size() && stepBytes < c_SceneStagingBytes)
+			{
+				const uint64_t take = std::min(regions[endRegion].Size - endOffset, c_SceneStagingBytes - stepBytes);
+				stepBytes += take;
+				endOffset += take;
+				if (endOffset == regions[endRegion].Size)
+				{
+					endRegion++;
+					endOffset = 0;
+				}
+			}
+			if (stepBytes == 0)
+			{
+				// Empty regions only.
+				region = endRegion;
+				regionOffset = endOffset;
+				continue;
+			}
+
+			const uint64_t createdBefore = m_Staging.GetCreatedCount();
+			nvrhi::BufferHandle staging = m_Staging.AcquireBuffer(stepBytes);
+			const bool created = m_Staging.GetCreatedCount() != createdBefore;
+			auto* destination = staging ? static_cast<uint8_t*>(m_Device->mapBuffer(staging, nvrhi::CpuAccessMode::Write)) : nullptr;
+			if (!destination)
+			{
+				m_Staging.Release(std::move(staging));
+				result.Recorded = false;
+				break;
+			}
+			m_SceneCopies.clear();
+			uint64_t stagingOffset = 0;
+			while (region < endRegion || (region == endRegion && regionOffset < endOffset))
+			{
+				const GPUBufferRegion& source = regions[region];
+				const uint64_t until = region < endRegion ? source.Size : endOffset;
+				const uint64_t size = until - regionOffset;
+				if (size > 0)
+				{
+					AddCopy(destination + stagingOffset, source.Data + regionOffset, static_cast<size_t>(size));
+					m_SceneCopies.push_back(SceneCopy { source.Buffer, source.Offset + regionOffset, stagingOffset, size });
+					stagingOffset += size;
+				}
+				if (region < endRegion)
+				{
+					region++;
+					regionOffset = 0;
+				}
+				else
+				{
+					regionOffset = endOffset;
+				}
+			}
+			RunCopies(!created);
+			m_Device->unmapBuffer(staging);
+			for (const SceneCopy& copy : m_SceneCopies)
+				commandList->copyBuffer(copy.Buffer, copy.Offset, staging, copy.StagingOffset, copy.Size);
+			m_Staging.Release(std::move(staging));
+			result.Bytes += stepBytes;
+			m_Stats.FrameSteps++;
+			m_Stats.BufferSteps++;
+		}
+		result.Milliseconds = MillisecondsSince(start);
+		m_Stats.FrameBytes += result.Bytes;
+		m_Stats.FrameMs += result.Milliseconds;
+		m_Stats.BufferBytes += result.Bytes;
+		m_Stats.SceneDataBytes += result.Bytes;
+		m_Stats.SceneDataMs += result.Milliseconds;
+		return result;
 	}
 
 	void GPUUploadQueue::AddCopy(uint8_t* destination, const uint8_t* source, size_t bytes)

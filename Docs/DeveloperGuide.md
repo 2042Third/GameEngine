@@ -1722,6 +1722,14 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `RenderScene::GetMeshesWithoutBounds`) is requested as if in view while any of its entities is active, since its
   proxies' placeholder bounds say nothing about where it is. Never resolve assets per entity in renderer code: go
   through the proxies and the cache.
+- **The render scene's GPU copy** (`RenderSceneGPU`, `Renderer::GetRenderSceneGPUs`): the instances, palettes and a
+  culling record per proxy (`RenderData::GPUProxy`), shared by the scene's renderers and updated from the render
+  scene's change logs (`GetInstanceChanges`, `GetPaletteChanges`, `GetProxyChanges`) through staging
+  (`GPUUploadQueue::RecordSceneUpload`), never `writeBuffer`. Renderers draw only resident proxies
+  (`RenderSceneGPU::IsResident`): new proxies upload within `SceneRendererSpecification::NewInstanceBytesPerFrame` per
+  device frame and wait undrawn meanwhile (`SceneRendererStats::DeferredInstanceBytes`); changes of resident ones upload
+  at once. A reader of the proxy log that takes `GetProxyVersion` reads every change after it. Mirrors go with their
+  render scenes (at the next `Renderer::BeginFrame`) or after 300 frames unused.
 
 ### Batching
 

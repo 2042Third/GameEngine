@@ -1609,6 +1609,8 @@ A frame of `SceneRenderer::Render`:
 RenderScene::Get(scene).Sync()   world transforms, then the proxies of signaled mesh renderers and changed transforms,
                                  then the mesh layouts of meshes the asset manager loaded, reloaded or dropped since
 AssetResolveCache::BeginFrame    the frame's asset manager
+RenderSceneGPU::Update           the render scene's GPU copy: what changed since its last update (shared by the
+                                 scene's renderers), new proxies within the frame's budget; executed at once
 CullView                         SpatialIndex::QueryFrustum; screen fractions and request priorities (parallel chunks);
                                  meshes of unknown bounds as if in view; QuerySphere for the prefetch distance
 FindShadowCasters                cascade boxes; QueryPlanes per cascade (a job each, merged in cascade order), then
@@ -1618,7 +1620,7 @@ ResolveAssets                    each mesh and material used once: Resolve, Pref
                                  as in the frame before: its data, their assets looked up in one call (below)
 GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches
 BuildDrawArguments               the batches' indirect arguments at their meshes' places in the geometry pool
-UploadSceneData                  changed instances, changed materials, the changed range of each draw list
+UploadSceneData                  changed materials, the changed range of each draw list
 ReleaseFrameAssets               (when Render returns, however it ends) every reference the frame took, and the manager
 ```
 
@@ -1703,9 +1705,26 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   back at their entities' transforms; `Validate` expects the same. Scenes without such a provider pay nothing for it.
 - **Slots and instances**. Meshes and materials get dense slots shared by their users. Every submesh of a proxy whose
   mesh layout is known has an `InstanceData` (64 bytes: the 3x4 world matrix, the material slot, the entity ID, flags) in
-  one array that persists between frames. Changes are logged by version (`GetInstanceChanges`, the latest 65,536), so
-  each renderer uploads only the instances that changed since its own last upload, in ranges. Shaders find an instance
-  through the frame's draw list (`u_DrawList[gl_InstanceIndex]`) and derive the normal matrix from the 3x4 rows.
+  one array that persists between frames. Changes are logged by version (`GetInstanceChanges`, the latest 65,536), and
+  so are the proxies themselves (`GetProxyChanges`: placement, flags, mesh slot, instance range, creation, destruction;
+  a proxy changed several times between two reads is logged once, and taking the version, `GetProxyVersion`, counts as
+  a read) and the palettes. Shaders find an instance through the frame's draw list (`u_DrawList[gl_InstanceIndex]`) and
+  derive the normal matrix from the 3x4 rows.
+- **The GPU copy** (`Renderer/RenderSceneGPU.h`). The instances, the palettes and a 64-byte culling record per proxy
+  (`RenderData::GPUProxy`: local and world bounds, instance range, mesh slot, flags) live in buffers of a mirror per
+  render scene, which every renderer of the scene shares (`Renderer::GetRenderSceneGPUs`, keyed by
+  `RenderScene::GetId`, not in the registry context: scenes die on background jobs). `Update` follows the three change
+  logs and uploads what changed through staging (`GPUUploadQueue::RecordSceneUpload`, counted as the frame's
+  `SceneDataBytes` and in `--perf-log`'s `UploadQueue*` columns) in a command list it executes at once, so a second
+  renderer of the scene uploads nothing. A proxy is drawn once it is resident (its record and instances uploaded in one
+  update): changes of resident proxies upload at once; new proxies (a scene's first frame, new entities, a reused proxy
+  index) upload oldest first within `SceneRendererSpecification::NewInstanceBytesPerFrame` (16 MiB) per device frame, at
+  least one a frame, and wait meanwhile with a record of zeros (`SceneRendererStats::DeferredInstanceBytes`,
+  `DeferredProxies`); a destroyed proxy's record is cleared at once. Buffers grow by a GPU copy into larger ones (the
+  old ones released deferred), so growth uploads nothing again. `PrepareLoadedScene` fills a loaded scene's mirror too,
+  within `c_PrepareUploadBytes` a frame, so the frame that shows the scene uploads no proxy. A render scene's
+  destructor posts its id (any thread) and `Renderer::BeginFrame` releases its mirror; mirrors no renderer updated for
+  `RenderSceneGPUCache::c_UnusedFrames` (300) frames go too, and a later frame of their scene uploads it again.
 - **Spatial index** (`SpatialIndex`). A loose grid: a proxy lives in the 32-unit cell that holds the center of its
   bounds, cells keep the union of their proxies' bounds and form blocks of 8x8x8 cells, and proxies longer than four
   cells are kept in a list of their own. Queries (frustum, convex planes, sphere) skip blocks and cells outside the
@@ -1753,8 +1772,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   `u_Materials[instance.MaterialIndex]` (`SceneRendererSpecification::BatchAcrossMaterials` off splits batches by
   material, for comparisons). Transparent surfaces stay one draw each, back to front. Material data (by slot) is built
   for the materials drawn (or taken over, above) and uploaded where it changed.
-- **A still frame** updates no proxy and uploads no instance, material or draw list (`SceneRendererStats::ProxyUpdates`,
-  `InstanceBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
+- **A still frame** updates no proxy and uploads no instance, proxy record, material or draw list
+  (`SceneRendererStats::ProxyUpdates`, `InstanceBytesUploaded`, `ProxyBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
   on screen and texture tiling (`GetVisibleMaterials`, and their loaded texture maps, `GetVisibleTextures`, for mip
   streaming) and its counts and times (`VisibleProxies`,
   `ProxyUpdates`, `InstanceUploadRanges`, `ExtractMs`, `SortMs`, `RequestsByVisibility`, `PrefetchRequests`,

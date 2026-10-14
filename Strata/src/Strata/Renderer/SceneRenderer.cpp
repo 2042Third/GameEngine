@@ -9,6 +9,7 @@
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RenderScene.h"
+#include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/TextRenderer.h"
 #include "Strata/Renderer/Texture.h"
@@ -366,14 +367,11 @@ namespace Strata
 			.setDebugName(m_Specification.DebugName + ".FrameConstants"));
 
 		bool recreated = false;
-		const bool buffersCreated = EnsureBufferCapacity(m_InstanceBuffer, 1024, sizeof(RenderData::InstanceData), "Instances", recreated)
-			&& EnsureBufferCapacity(m_DrawListBuffer, 1024, sizeof(uint32_t), "DrawList", recreated)
+		const bool buffersCreated = EnsureBufferCapacity(m_DrawListBuffer, 1024, sizeof(uint32_t), "DrawList", recreated)
 			&& EnsureBufferCapacity(m_MaterialBuffer, 256, sizeof(RenderData::MaterialData), "Materials", recreated)
 			&& EnsureBufferCapacity(m_LightBuffer, 64, sizeof(RenderData::LightData), "Lights", recreated)
 			&& EnsureBufferCapacity(m_LightBoundsBuffer, 64, sizeof(RenderData::LightBounds), "LightBounds", recreated)
-			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, 1024, sizeof(uint32_t), "ShadowDrawList", recreated)
-			// Bound in every scene pass; it grows only once posed skinned meshes are drawn.
-			&& EnsureBufferCapacity(m_JointBuffer, 1, sizeof(RenderData::AffineTransform), "Joints", recreated);
+			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, 1024, sizeof(uint32_t), "ShadowDrawList", recreated);
 		ST_CORE_VERIFY(buffersCreated, "SceneRenderer: failed to create the scene buffers");
 
 		m_ClusterBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
@@ -823,9 +821,9 @@ namespace Strata
 			nvrhi::BindingSetDesc desc;
 			desc.bindings = {
 				nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
-				nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_InstanceBuffer),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_SceneGPU->GetInstanceBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(14, drawList),
-				nvrhi::BindingSetItem::StructuredBuffer_SRV(15, m_JointBuffer),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(15, m_SceneGPU->GetPaletteBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_MaterialBuffer),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
@@ -856,6 +854,7 @@ namespace Strata
 
 		m_BoundEnvironment = environmentCube;
 		m_BoundShadowMap = shadowMap;
+		m_BoundSceneGPUVersion = m_SceneGPU->GetBufferVersion();
 		if (!m_SceneBindingSet || !m_ShadowBindingSet || !m_ClusterBindingSet)
 		{
 			m_SceneBindingSet = nullptr; // Recreated next frame
@@ -1710,6 +1709,7 @@ namespace Strata
 		// captures, a hidden view) keeps none of the meshes, materials and textures it drew resident (the environment
 		// cache keeps the sky light's map) and no asset manager alive.
 		ReleaseFrameAssets();
+		m_SceneGPU = nullptr; // Its mirror may go before the next frame (RenderSceneGPUCache::BeginFrame)
 		return rendered;
 	}
 
@@ -1810,6 +1810,23 @@ namespace Strata
 			PrepareExtraction(renderScene);
 		}
 
+		// The GPU's copy of the render scene, shared with the scene's other renderers: what changed since its last update
+		// uploads now, in a command list of its own, ahead of this frame's. Only proxies it holds are drawn.
+		m_SceneGPU = &Renderer::GetRenderSceneGPUs().Get(renderScene);
+		RenderSceneGPUUpdate sceneUpload;
+		if (!m_SceneGPU->Update(renderScene, m_Specification.NewInstanceBytesPerFrame, &sceneUpload) && !m_SceneGPU->GetInstanceBuffer())
+		{
+			m_Errors.Report("the scene's GPU buffers are unavailable (see the previous error)");
+			m_Stats = {};
+			return false;
+		}
+		m_Stats.InstanceBytesUploaded += sceneUpload.InstanceBytes;
+		m_Stats.InstanceUploadRanges += sceneUpload.InstanceRanges;
+		m_Stats.ProxyBytesUploaded = sceneUpload.ProxyBytes;
+		m_Stats.PaletteBytesUploaded = sceneUpload.PaletteBytes;
+		m_Stats.DeferredInstanceBytes = m_SceneGPU->GetDeferredBytes();
+		m_Stats.DeferredProxies = m_SceneGPU->GetDeferredProxies();
+
 		RenderData::FrameConstants frame = {};
 		frame.View = camera.View;
 		frame.Projection = camera.Projection;
@@ -1847,25 +1864,22 @@ namespace Strata
 		const PostProcessComponent postProcess = GetPostProcessSettings(scene);
 		frame.AOParams = glm::vec4(postProcess.AmbientOcclusion ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 
-		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get());
-		bool instancesRecreated = false;
+		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
+			|| m_BoundSceneGPUVersion != m_SceneGPU->GetBufferVersion();
 		bool materialsRecreated = false;
 		bool drawListsRecreated = false;
-		bool jointsRecreated = false;
-		const bool buffersReady = EnsureBufferCapacity(m_InstanceBuffer, renderScene.GetInstances().size(), sizeof(RenderData::InstanceData), "Instances", instancesRecreated)
-			&& EnsureBufferCapacity(m_JointBuffer, renderScene.GetPalette().size(), sizeof(RenderData::AffineTransform), "Joints", jointsRecreated)
-			&& EnsureBufferCapacity(m_MaterialBuffer, m_MaterialData.size(), sizeof(RenderData::MaterialData), "Materials", materialsRecreated)
+		const bool buffersReady = EnsureBufferCapacity(m_MaterialBuffer, m_MaterialData.size(), sizeof(RenderData::MaterialData), "Materials", materialsRecreated)
 			&& EnsureBufferCapacity(m_DrawListBuffer, m_DrawInstancesBuild.size(), sizeof(uint32_t), "DrawList", drawListsRecreated)
 			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, m_ShadowDrawInstancesBuild.size(), sizeof(uint32_t), "ShadowDrawList", drawListsRecreated)
 			&& EnsureBufferCapacity(m_LightBuffer, m_Lights.size(), sizeof(RenderData::LightData), "Lights", buffersRecreated)
 			&& EnsureBufferCapacity(m_LightBoundsBuffer, m_LightBounds.size(), sizeof(RenderData::LightBounds), "LightBounds", buffersRecreated)
 			&& EnsureBufferCapacity(m_DrawArgumentBuffer, m_DrawArgumentsBuild.size(), sizeof(nvrhi::DrawIndexedIndirectArguments), "DrawArguments", drawListsRecreated,
 				BufferKind::IndirectArguments);
-		buffersRecreated = buffersRecreated || instancesRecreated || materialsRecreated || drawListsRecreated || jointsRecreated;
+		buffersRecreated = buffersRecreated || materialsRecreated || drawListsRecreated;
 		if (!buffersReady)
 		{
 			// A replaced buffer holds nothing yet: upload everything to the next one.
-			m_FullUpload = m_FullUpload || instancesRecreated || materialsRecreated || drawListsRecreated || jointsRecreated;
+			m_FullUpload = m_FullUpload || materialsRecreated || drawListsRecreated;
 			m_Stats = {};
 			return false;
 		}
@@ -1886,13 +1900,13 @@ namespace Strata
 			commandList->close();
 			m_Device->executeCommandList(commandList); // Keeps the environment processing that was recorded
 			m_Errors.Report("failed to create the scene binding sets");
-			m_FullUpload = m_FullUpload || instancesRecreated || materialsRecreated || drawListsRecreated || jointsRecreated;
+			m_FullUpload = m_FullUpload || materialsRecreated || drawListsRecreated;
 			m_Stats = {};
 			return false;
 		}
 
 		commandList->writeBuffer(m_FrameConstantBuffer, &frame, sizeof(frame));
-		UploadSceneData(commandList, renderScene, instancesRecreated, materialsRecreated, drawListsRecreated, jointsRecreated);
+		UploadSceneData(commandList, materialsRecreated, drawListsRecreated);
 		if (!m_Lights.empty())
 		{
 			commandList->writeBuffer(m_LightBuffer, m_Lights.data(), m_Lights.size() * sizeof(RenderData::LightData));

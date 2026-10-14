@@ -6,6 +6,8 @@
 #include "Strata/Core/Assert.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Renderer/Mesh.h"
+#include "Strata/Renderer/RenderSceneGPU.h"
+#include "Strata/Renderer/Renderer.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneServices.h"
@@ -122,7 +124,11 @@ namespace Strata
 			QueuePending(entity);
 	}
 
-	RenderScene::~RenderScene() = default;
+	RenderScene::~RenderScene()
+	{
+		// Scenes go on any thread (Scene::ReleaseInBackground): the renderer releases the GPU copy at its next frame.
+		RenderSceneGPUCache::NotifyDestroyed(m_Id);
+	}
 
 	void RenderScene::OnMeshRendererChanged(entt::registry&, entt::entity entity)
 	{
@@ -218,7 +224,15 @@ namespace Strata
 
 	bool RenderScene::PrepareLoadedScene(Scene& scene)
 	{
-		return Prepare(scene, AssetManager::GetActive(), c_PrepareFrameBudget);
+		if (!Prepare(scene, AssetManager::GetActive(), c_PrepareFrameBudget))
+			return false;
+		if (!Renderer::IsInitialized())
+			return true;
+		// The GPU's copy too, within a frame's budget for new proxies, so that the frame that shows the scene uploads none.
+		RenderScene& renderScene = Get(scene);
+		RenderSceneGPU& mirror = Renderer::GetRenderSceneGPUs().Get(renderScene);
+		mirror.Update(renderScene, c_PrepareUploadBytes);
+		return mirror.GetDeferredProxies() == 0;
 	}
 
 	uint32_t RenderScene::Sync(const Ref<AssetManagerBase>& assets, uint32_t maxPending)
@@ -969,7 +983,7 @@ namespace Strata
 
 	bool RenderScene::GetProxyChanges(uint64_t sinceVersion, std::vector<uint32_t>& outProxies) const
 	{
-		m_ProxyChangesRead = std::max(m_ProxyChangesRead, m_ProxyVersion);
+		m_ProxyChangesRead = m_ProxyVersion;
 		if (sinceVersion >= m_ProxyVersion)
 			return true;
 		if (sinceVersion < m_ProxyChangesFloor)

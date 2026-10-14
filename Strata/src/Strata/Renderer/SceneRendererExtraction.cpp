@@ -8,6 +8,7 @@
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RenderScene.h"
+#include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureStreamer.h"
@@ -61,8 +62,6 @@ namespace Strata
 		// A shadow caster is drawn into a cascade only while its light-space extent (the larger of x and y) covers at least this
 		// many of the cascade's texels: smaller casters only flicker in and out of texels (SceneRendererStats::SubTexelCasters).
 		constexpr float c_MinCasterTexels = 1.0f;
-		// Changed instances this close together are uploaded in one range: fewer copies for a little more data.
-		constexpr uint32_t c_UploadRangeGap = 16;
 
 		// The sort key of a draw: pipeline state first (cascade, alpha mask, winding, culling, skinning), then mesh, submesh
 		// and level of detail, which together make a batch; the material in the lowest bits only when batches are split by
@@ -857,7 +856,8 @@ namespace Strata
 				const uint32_t meshSlot = renderScene.GetMeshSlot(proxy);
 				const Mesh* mesh = m_FrameMeshes[meshSlot];
 				const uint32_t count = renderScene.GetInstanceCount(proxy);
-				if (!mesh || count == 0 || mesh->GetSubmeshes().size() != count)
+				// Drawn once the GPU holds its instances (a new proxy may wait for a later frame's upload).
+				if (!mesh || count == 0 || mesh->GetSubmeshes().size() != count || !m_SceneGPU->IsResident(proxy))
 					continue;
 
 				const AABB& bounds = renderScene.GetWorldBounds(proxy);
@@ -1014,7 +1014,7 @@ namespace Strata
 				const uint32_t meshSlot = renderScene.GetMeshSlot(caster.Proxy);
 				const Mesh* mesh = m_FrameMeshes[meshSlot];
 				const uint32_t count = renderScene.GetInstanceCount(caster.Proxy);
-				if (!mesh || count == 0 || mesh->GetSubmeshes().size() != count)
+				if (!mesh || count == 0 || mesh->GetSubmeshes().size() != count || !m_SceneGPU->IsResident(caster.Proxy))
 					continue;
 				// Every drawn caster extends the depth range of its cascades toward the light.
 				for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
@@ -1158,78 +1158,9 @@ namespace Strata
 		}
 	}
 
-	void SceneRenderer::UploadSceneData(nvrhi::ICommandList* commandList, const RenderScene& renderScene, bool instancesRecreated, bool materialsRecreated,
-		bool drawListsRecreated, bool jointsRecreated)
+	void SceneRenderer::UploadSceneData(nvrhi::ICommandList* commandList, bool materialsRecreated, bool drawListsRecreated)
 	{
 		ST_PROFILE_FUNCTION();
-		// Palettes of posed skinned meshes: the joint ranges that changed since this renderer's last upload.
-		const std::span<const RenderData::AffineTransform> palette = renderScene.GetPalette();
-		if (!palette.empty() && (jointsRecreated || m_FullUpload || renderScene.GetPaletteVersion() != m_UploadedPaletteVersion))
-		{
-			m_PaletteChanges.clear();
-			if (jointsRecreated || m_FullUpload || !renderScene.GetPaletteChanges(m_UploadedPaletteVersion, m_PaletteChanges))
-			{
-				commandList->writeBuffer(m_JointBuffer, palette.data(), palette.size_bytes());
-				m_Stats.PaletteBytesUploaded += palette.size_bytes();
-			}
-			else
-			{
-				// Ranges are logged newest first and may repeat: upload each joint once, in merged runs.
-				std::sort(m_PaletteChanges.begin(), m_PaletteChanges.end());
-				uint32_t runStart = 0;
-				uint32_t runEnd = 0;
-				auto flush = [&]()
-				{
-					if (runEnd <= runStart)
-						return;
-					const size_t bytes = (runEnd - runStart) * sizeof(RenderData::AffineTransform);
-					commandList->writeBuffer(m_JointBuffer, palette.data() + runStart, bytes, runStart * sizeof(RenderData::AffineTransform));
-					m_Stats.PaletteBytesUploaded += bytes;
-				};
-				for (const auto& [first, count] : m_PaletteChanges)
-				{
-					if (first > runEnd)
-					{
-						flush();
-						runStart = first;
-					}
-					runEnd = std::max(runEnd, first + count);
-				}
-				flush();
-			}
-		}
-		m_UploadedPaletteVersion = renderScene.GetPaletteVersion();
-		const std::span<const RenderData::InstanceData> instances = renderScene.GetInstances();
-		if (!instances.empty())
-		{
-			m_InstanceChanges.clear();
-			const bool full = instancesRecreated || m_FullUpload || !renderScene.GetInstanceChanges(m_UploadedInstanceVersion, m_InstanceChanges);
-			if (full)
-			{
-				commandList->writeBuffer(m_InstanceBuffer, instances.data(), instances.size_bytes());
-				m_Stats.InstanceBytesUploaded += instances.size_bytes();
-				m_Stats.InstanceUploadRanges++;
-			}
-			else if (!m_InstanceChanges.empty())
-			{
-				std::sort(m_InstanceChanges.begin(), m_InstanceChanges.end());
-				size_t start = 0;
-				for (size_t index = 1; index <= m_InstanceChanges.size(); index++)
-				{
-					if (index < m_InstanceChanges.size() && m_InstanceChanges[index] <= m_InstanceChanges[index - 1] + c_UploadRangeGap)
-						continue;
-					const uint32_t firstInstance = m_InstanceChanges[start];
-					const uint32_t endInstance = m_InstanceChanges[index - 1] + 1;
-					const size_t bytes = (endInstance - firstInstance) * sizeof(RenderData::InstanceData);
-					commandList->writeBuffer(m_InstanceBuffer, instances.data() + firstInstance, bytes, firstInstance * sizeof(RenderData::InstanceData));
-					m_Stats.InstanceBytesUploaded += bytes;
-					m_Stats.InstanceUploadRanges++;
-					start = index;
-				}
-			}
-		}
-		m_UploadedInstanceVersion = renderScene.GetInstanceVersion();
-
 		if (materialsRecreated || m_FullUpload)
 		{
 			if (!m_MaterialData.empty())

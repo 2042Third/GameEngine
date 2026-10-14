@@ -907,6 +907,16 @@ TEST_SUITE("Renderer.RenderScene")
 		RenderScene& renderScene = RenderScene::Get(scene);
 		renderScene.Sync(nullptr);
 		renderScene.SetMeshLayout(renderScene.GetMeshesWithoutBounds()[0], *MeshFactory::CreateCube());
+
+		// A reader that takes the version without reading the log (it reads every proxy itself) is told of the next change.
+		const uint64_t taken = renderScene.GetProxyVersion();
+		cubes[3].GetComponent<TransformComponent>().Translation.y += 1.0f;
+		cubes[3].MarkModified<TransformComponent>();
+		CHECK(renderScene.Sync(nullptr) == 1);
+		std::vector<uint32_t> changes;
+		REQUIRE(renderScene.GetProxyChanges(taken, changes));
+		CHECK(changes == std::vector<uint32_t> { renderScene.FindProxy(cubes[3].GetHandle()) });
+
 		ProxyLogReader reader;
 		reader.Update(renderScene);
 		CHECK(reader.FullReads == 0); // From version 0: everything since the scene began is in the log
@@ -914,7 +924,7 @@ TEST_SUITE("Renderer.RenderScene")
 
 		// Nothing changed: nothing to read.
 		const uint64_t quiet = renderScene.GetProxyVersion();
-		std::vector<uint32_t> changes;
+		changes.clear();
 		CHECK(renderScene.Sync(nullptr) == 0);
 		CHECK(renderScene.GetProxyVersion() == quiet);
 		CHECK(renderScene.GetProxyChanges(quiet, changes));

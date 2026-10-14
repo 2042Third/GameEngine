@@ -32,6 +32,7 @@ namespace Strata
 	class Material;
 	class Mesh;
 	class RenderScene;
+	class RenderSceneGPU;
 	class Scene;
 	class TextRenderer;
 	class Texture;
@@ -109,6 +110,10 @@ namespace Strata
 		// it draws is made resident at full resolution and counts as pending until it is (SceneRendererStats::PendingAssets):
 		// exact-pixel tests and the baseline streaming is measured against.
 		bool TextureStreaming = true;
+		// The render scene's GPU copy (RenderSceneGPU, shared by the scene's renderers) uploads new proxies' records and
+		// instances within this many bytes per frame, at least one proxy per frame; the others wait, undrawn
+		// (SceneRendererStats::DeferredInstanceBytes). Changes of proxies already on the GPU always upload at once.
+		uint64_t NewInstanceBytesPerFrame = 16ull << 20;
 	};
 
 	// A material the last frame drew, for streaming its textures at the resolution the screen needs.
@@ -219,6 +224,10 @@ namespace Strata
 		uint32_t ProxyUpdates = 0;           // Render proxies updated since this renderer's previous frame (changed components, transforms, mesh layouts)
 		uint64_t InstanceBytesUploaded = 0;  // Instance data and draw lists uploaded this frame (nothing when nothing changed)
 		uint32_t InstanceUploadRanges = 0;   // Separate ranges of instance data uploaded
+		uint64_t ProxyBytesUploaded = 0;     // Culling records of the render scene's GPU copy uploaded this frame (RenderData::GPUProxy)
+		// New proxies whose records and instances wait for a later frame's upload (NewInstanceBytesPerFrame): not drawn yet.
+		uint64_t DeferredInstanceBytes = 0;
+		uint32_t DeferredProxies = 0;
 		uint64_t MaterialBytesUploaded = 0;  // Material data uploaded this frame (only materials whose data changed)
 		float ExtractMs = 0.0f;              // CPU time of culling, asset resolution and gathering draws (view and shadows)
 		float SortMs = 0.0f;                 // CPU time of sorting the draws into batches and draw lists
@@ -628,10 +637,9 @@ namespace Strata
 		uint32_t ResolveTexture(AssetHandle handle, uint32_t missingSlot, uint32_t loadingSlot, bool residentOnly, std::vector<ResolvedTexture>* resolved);
 		// Sorted draws into batches and the draw list (instance indices in batch order).
 		void BuildBatches(std::vector<SortItem>& draws, std::vector<SceneDrawBatch>& outBatches, std::vector<uint32_t>& outDrawList);
-		// Uploads what changed of the instance data and the palettes (since this renderer's last upload), the material data and
-		// the draw lists.
-		void UploadSceneData(nvrhi::ICommandList* commandList, const RenderScene& renderScene, bool instancesRecreated, bool materialsRecreated, bool drawListsRecreated,
-			bool jointsRecreated);
+		// Uploads what changed of the material data and the draw lists (the render scene's GPU copy uploads the instances and
+		// palettes).
+		void UploadSceneData(nvrhi::ICommandList* commandList, bool materialsRecreated, bool drawListsRecreated);
 		// Tells the scene's ISkinningPoses which animators' meshes the frame drew (or would have, unposed).
 		void ReportVisibleAnimators(Scene& scene);
 		// Uploads the range of a draw list that differs from the list the buffer holds (`uploaded`), which then holds the new one.
@@ -749,10 +757,12 @@ namespace Strata
 		nvrhi::SamplerHandle m_PointClampSampler;
 
 		nvrhi::BufferHandle m_FrameConstantBuffer;
-		nvrhi::BufferHandle m_InstanceBuffer; // Persistent: RenderScene::GetInstances, uploaded where it changed
 		nvrhi::BufferHandle m_DrawListBuffer; // Instance indices of the view's draws
 		nvrhi::BufferHandle m_MaterialBuffer; // Persistent: by material slot, uploaded where it changed
-		nvrhi::BufferHandle m_JointBuffer;    // Persistent: RenderScene::GetPalette, uploaded where it changed
+		// The render scene's GPU copy (instances, palettes, culling records) during a frame, and the buffer version
+		// (RenderSceneGPU::GetBufferVersion) the binding sets were made for.
+		RenderSceneGPU* m_SceneGPU = nullptr;
+		uint64_t m_BoundSceneGPUVersion = 0;
 		nvrhi::BufferHandle m_LightBuffer;
 
 		nvrhi::TextureHandle m_DepthTexture;
@@ -843,10 +853,7 @@ namespace Strata
 		uint64_t m_RenderSceneId = 0;   // The render scene the per-slot state and the GPU copies below belong to
 		uint64_t m_ProxyUpdatesScene = 0; // The render scene whose RenderSceneStats::TotalUpdates this renderer saw last
 		uint64_t m_ProxyUpdatesSeen = 0;
-		bool m_FullUpload = true;       // The GPU copies hold nothing of that render scene yet
-		uint64_t m_UploadedInstanceVersion = 0;
-		uint64_t m_UploadedPaletteVersion = 0;
-		std::vector<std::pair<uint32_t, uint32_t>> m_PaletteChanges;
+		bool m_FullUpload = true;       // The material buffer and draw lists hold nothing of that render scene yet
 		std::vector<entt::entity> m_VisibleAnimators; // Animators of the frame's visible Skin proxies, reported to ISkinningPoses
 		AABB m_VisibleReceivers; // The world bounds of the frame's visible proxies (scenes with Skin proxies only)
 		uint32_t m_FrameStamp = 0;
@@ -883,7 +890,6 @@ namespace Strata
 		std::vector<SortItem> m_ShadowDraws;
 		std::vector<SortItem> m_SortScratch;
 		std::vector<TransparentDraw> m_Transparent;
-		std::vector<uint32_t> m_InstanceChanges;
 		std::vector<SceneDrawBatch> m_OpaqueBatches;
 		std::vector<SceneDrawBatch> m_TransparentBatches;
 		std::vector<uint32_t> m_DrawInstances;          // The view's draw list (what m_DrawListBuffer holds after the upload)

@@ -147,8 +147,11 @@ namespace Strata
 		static constexpr uint32_t c_PrepareChunk = 2048;
 		// What a frame spends preparing a loaded scene (PrepareLoadedScene): 100,000 mesh renderers take about ten frames.
 		static constexpr std::chrono::microseconds c_PrepareFrameBudget { 4000 };
+		// What a frame uploads of a loaded scene's GPU copy (PrepareLoadedScene): new proxies' records and instances.
+		static constexpr uint64_t c_PrepareUploadBytes = 16ull << 20;
 		// SceneLoadOptions::Prepare for owners that render the scenes they load (the editor, StrataRuntime with a window):
-		// Prepare with the active asset manager and c_PrepareFrameBudget.
+		// Prepare with the active asset manager and c_PrepareFrameBudget, then, with a renderer, the scene's GPU copy
+		// (RenderSceneGPU) within c_PrepareUploadBytes per call; true once both are complete.
 		static bool PrepareLoadedScene(Scene& scene);
 
 		// Compares every proxy, the spatial index and the instance data with what a rebuild from the scene would produce.
@@ -214,8 +217,13 @@ namespace Strata
 		const RenderSceneStats& GetStats() const { return m_Stats; }
 
 		// Changes with every change of a proxy's placement (transform, bounds, flags, mesh slot) or instance range, creation
-		// and destruction.
-		uint64_t GetProxyVersion() const { return m_ProxyVersion; }
+		// and destruction. A reader takes it to read the changes after it later: from then on every change is logged again
+		// (a proxy changed several times between two reads is logged once).
+		uint64_t GetProxyVersion() const
+		{
+			m_ProxyChangesRead = m_ProxyVersion;
+			return m_ProxyVersion;
+		}
 		// Appends the proxies that changed after proxy version `sinceVersion` (a proxy may appear more than once; a destroyed
 		// proxy too, with a null entity). Returns false, appending nothing, when more than c_MaxProxyChanges changes happened
 		// since: then any proxy may have changed. The GPU mirror of the scene follows the proxies through it.
@@ -431,7 +439,8 @@ namespace Strata
 		std::vector<InstanceChange> m_ProxyChanges; // Instance: the proxy
 		size_t m_ProxyChangesStart = 0;
 		std::vector<uint64_t> m_ProxyLoggedVersions; // Per proxy: the version of its newest entry in the log
-		mutable uint64_t m_ProxyChangesRead = 0;    // The newest version a reader has read: entries after it are not read yet
+		// The newest version a reader has taken (GetProxyVersion, GetProxyChanges): changes after it are not read yet.
+		mutable uint64_t m_ProxyChangesRead = 0;
 
 		// Skinned proxies: per proxy its entry in m_Skins (c_InvalidIndex without a SkinComponent)
 		std::vector<uint32_t> m_SkinIndices;

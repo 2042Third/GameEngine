@@ -66,6 +66,11 @@ namespace Strata
 		uint32_t FrameSteps = 0;
 		uint64_t LastFrameBytes = 0; // The previous frame's
 		float LastFrameMs = 0.0f;
+		// Of the frame's, the render scenes' data (RecordSceneUpload: instances, proxies, joints), and of the previous frame's.
+		uint64_t SceneDataBytes = 0;
+		float SceneDataMs = 0.0f;
+		uint64_t LastFrameSceneDataBytes = 0;
+		float LastFrameSceneDataMs = 0.0f;
 		uint64_t TextureSteps = 0;   // Since the queue was created
 		uint64_t BufferSteps = 0;
 		uint64_t TextureBytes = 0;
@@ -163,6 +168,14 @@ namespace Strata
 			GPUUploadQueueKind queue);
 		// Copies the ranges into their buffers through one staging buffer (their sizes added up), like UploadTexture.
 		GPUUploadStep UploadBuffer(const AssetFinalizeContext& context, std::span<const GPUBufferRegion> regions, GPUUploadQueueKind queue);
+		// Copies the ranges into their buffers through staging, recorded into `commandList` (a graphics command list, which the
+		// caller executes before the next FenceReleased or BeginFrame of the staging pool, before anything reads the buffers):
+		// the render scenes' GPU data (RenderSceneGPU), which every frame's rendering reads, outside the asset managers'
+		// batches and budgets. Steps of at most c_SceneStagingBytes of staging; counted in the frame's statistics
+		// (SceneDataBytes, SceneDataMs, and FrameBytes, FrameMs, FrameSteps). Recorded false, with what was recorded before it
+		// in place, when staging could not be had.
+		GPUUploadStep RecordSceneUpload(nvrhi::ICommandList* commandList, std::span<const GPUBufferRegion> regions);
+		static constexpr uint64_t c_SceneStagingBytes = 16ull << 20;
 		// Copies `levels` mip levels of `source` from sourceMip on into `destination` from destinationMip on, on the GPU (the
 		// levels' sizes must match). On the graphics queue, within a batch.
 		void CopyTextureLevels(nvrhi::ITexture* destination, uint32_t destinationMip, nvrhi::ITexture* source, uint32_t sourceMip, uint32_t levels);
@@ -242,6 +255,15 @@ namespace Strata
 		std::vector<nvrhi::EventQueryHandle> m_IdleQueries;
 
 		std::vector<CopyRun> m_Copies; // The step's writes (AddCopy), reused
+		// A scene upload step's copies from its staging buffer (RecordSceneUpload), reused.
+		struct SceneCopy
+		{
+			nvrhi::IBuffer* Buffer = nullptr;
+			uint64_t Offset = 0;
+			uint64_t StagingOffset = 0;
+			uint64_t Size = 0;
+		};
+		std::vector<SceneCopy> m_SceneCopies;
 		size_t m_CopyBytes = 0;
 
 		GPUUploadQueueStats m_Stats;

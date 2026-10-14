@@ -1,11 +1,28 @@
 #pragma once
 
+#include <glm/glm.hpp>
+
 #include <cstdint>
 
 // GPU data layouts of the GPU-driven path (GPU culling and indirect draws), shared with its shaders. Every struct is std430
 // compatible (16-byte aligned vectors, no implicit padding).
 namespace Strata::RenderData
 {
+
+	// A render proxy as the GPU's culling reads it (RenderSceneGPU's proxy buffer, by RenderScene proxy index). A record of
+	// zeros draws nothing: proxies destroyed, and those whose upload is still to come.
+	struct GPUProxy
+	{
+		glm::vec3 LocalMin = glm::vec3(0.0f); // RenderScene::GetLocalBounds (posed bounds for posed skinned proxies)
+		uint32_t FirstInstance = 0;
+		glm::vec3 LocalMax = glm::vec3(0.0f);
+		uint32_t InstanceCount = 0;           // One instance per submesh; 0 until the mesh layout is known
+		glm::vec3 WorldMin = glm::vec3(0.0f); // RenderScene::GetWorldBounds
+		uint32_t MeshSlot = 0;                // RenderScene's mesh slot (0xFFFFFFFF: none)
+		glm::vec3 WorldMax = glm::vec3(0.0f);
+		uint32_t Flags = 0;                   // RenderProxyFlags
+	};
+	static_assert(sizeof(GPUProxy) == 64);
 
 	// A mesh's place in the geometry pool (GeometryPool's entry table, by GeometryHandle).
 	struct GeometryEntry

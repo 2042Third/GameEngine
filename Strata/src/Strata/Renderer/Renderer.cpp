@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Renderer/Renderer.h"
 
+#include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureReadback.h"
 
@@ -21,6 +22,7 @@ namespace Strata
 			Scope<DeferredReleaseQueue> DeferredReleases;
 			Scope<GPUProfiler> Profiler;
 			Ref<GeometryPool> Geometry;
+			Scope<RenderSceneGPUCache> SceneGPUs;
 
 			nvrhi::SamplerHandle LinearClamp;
 			nvrhi::SamplerHandle LinearWrap;
@@ -114,6 +116,7 @@ namespace Strata
 			Shutdown();
 			return false;
 		}
+		s_Data->SceneGPUs = CreateScope<RenderSceneGPUCache>(nvrhiDevice);
 		s_Data->Profiler = CreateScope<GPUProfiler>(device);
 		if (!s_Data->Profiler->IsEnabled())
 			ST_CORE_INFO("Renderer: the device writes no GPU timestamps; GPU stages are not measured");
@@ -190,6 +193,12 @@ namespace Strata
 		return s_Data ? s_Data->Geometry : nullptr;
 	}
 
+	RenderSceneGPUCache& Renderer::GetRenderSceneGPUs()
+	{
+		ST_CORE_ASSERT(s_Data, "Renderer is not initialized");
+		return *s_Data->SceneGPUs;
+	}
+
 	GPUProfiler* Renderer::FindGPUProfiler()
 	{
 		return s_Data ? s_Data->Profiler.get() : nullptr;
@@ -214,6 +223,7 @@ namespace Strata
 
 		s_Data->Profiler->BeginFrame();
 		s_Data->Geometry->BeginFrame();
+		s_Data->SceneGPUs->BeginFrame();
 		s_Data->BindlessTextures->BeginFrame(s_Data->Device->GetFrameIndex());
 		s_Data->Staging->BeginFrame(s_Data->Device->GetFrameIndex());
 		s_Data->UploadQueue->BeginFrame();
