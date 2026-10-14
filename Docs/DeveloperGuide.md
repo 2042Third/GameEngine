@@ -167,6 +167,11 @@ compile time of the editor's and the tests' objects by about 40%.
   Headers that need the complete type (JSON members, default arguments, inline code) are listed with the reason in
   `StrataTests/src/Architecture/HeaderWeightTests.cpp`, and `Architecture.HeaderWeight` fails on any other engine
   header including the complete one.
+- A header that uses a type only by reference, pointer or owning pointer declares it instead of including its header, and
+  holds values of it through `Scope<>` with the destructor in the `.cpp`: an edit of the declared header then rebuilds
+  only its own users. `EditorContext.h`, included by about a hundred editor and test objects, does so for the command
+  journal, the external editor, game exports, thumbnails and scene recovery (an edit of `SceneRecovery.h` rebuilds 8
+  objects instead of 100), and `Architecture.HeaderWeight` keeps those includes out.
 
 ### macOS and MoltenVK
 

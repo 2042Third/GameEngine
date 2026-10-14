@@ -1,6 +1,7 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/ExternalEditor.h"
 #include "Editor/ScriptEdit.h"
 #include "Editor/ScriptProject.h"
 #include "Editor/ScriptSources.h"

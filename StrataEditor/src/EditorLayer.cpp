@@ -4,6 +4,7 @@
 #include "Editor/GameExport.h"
 #include "Editor/ProjectSamples.h"
 #include "Editor/ProjectTemplates.h"
+#include "Editor/SceneRecovery.h"
 #include "Panels/ActivityPanel.h"
 #include "Panels/AssetInspectorPanel.h"
 #include "Panels/ConsolePanel.h"

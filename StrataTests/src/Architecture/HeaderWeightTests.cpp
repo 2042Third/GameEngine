@@ -40,6 +40,17 @@ namespace
 		{ "Strata/Scene/UnknownComponents.h", "a JSON member with an initializer and inline code" },
 	} };
 
+	// The headers EditorContext.h (included by about a hundred editor and test objects) declares instead of including:
+	// it uses their types only by reference, pointer or owning pointer, so an edit of one rebuilds only its own users.
+	constexpr std::array<std::string_view, 6> c_EditorContextDeclares = {
+		"Editor/CommandJournal.h",
+		"Editor/ExternalEditor.h",
+		"Editor/GameExport.h",
+		"Editor/ProjectThumbnail.h",
+		"Editor/SceneRecovery.h",
+		"Editor/ThumbnailCache.h",
+	};
+
 	bool NeedsFullJson(std::string_view path)
 	{
 		return std::any_of(c_FullJsonHeaders.begin(), c_FullJsonHeaders.end(), [path](const FullJsonHeader& header) { return header.Path == path; });
@@ -108,6 +119,22 @@ TEST_SUITE("Architecture.HeaderWeight")
 			REQUIRE(it != headers.end());
 			const std::vector<Tests::Layering::IncludeDirective> includes = Tests::Layering::ParseIncludes(it->second);
 			CHECK(std::any_of(includes.begin(), includes.end(), [](const auto& include) { return include.Path == "nlohmann/json.hpp"; }));
+		}
+	}
+
+	TEST_CASE("EditorContext.h declares the types it only refers to instead of including their headers")
+	{
+		const std::filesystem::path path = FileSystem::FromUTF8(STRATA_SOURCE_DIR) / "StrataEditor" / "src" / "Editor" / "EditorContext.h";
+		const std::optional<std::string> source = FileSystem::ReadText(path);
+		REQUIRE(source);
+		for (const Tests::Layering::IncludeDirective& include : Tests::Layering::ParseIncludes(*source))
+		{
+			for (std::string_view declared : c_EditorContextDeclares)
+			{
+				if (include.Path == declared)
+					FAIL_CHECK(fmt::format("EditorContext.h:{} includes {}: declare its types instead (EditorContext.cpp includes it), and hold "
+						"values of them through Scope<> with the destructor in the .cpp", include.Line, declared));
+			}
 		}
 	}
 }
