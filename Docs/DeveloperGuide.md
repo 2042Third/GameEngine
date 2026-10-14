@@ -1172,6 +1172,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
 
 - **Prefab instances stay linked** (`Scene/PrefabInstances`, `Editor/PrefabSync`, `Editor/EditorPrefabCommands.cpp`):
   `prefab.instantiate` and `prefab.create` (unless `link: false`) link entities to their prefab (`PrefabInstanceComponent`);
+  `prefab.instantiate {instances: [{parent?, components?}]}` makes many in one undo step (checked before anything is made;
+  instances that give only a Transform go through `EntityTemplate::InstantiateMany` per parent, the others one by one with
+  their components applied after; one version and content hash for all, `MarkSynced(root, version, hash)`);
   `prefab.status`, `prefab.apply` (the instance into the prefab, unmodified instances follow; one step for the file and the
   scene; not for models, not while playing), `prefab.revert` (UUIDs kept), `prefab.unpack` and `prefab.select` work on
   the instance an entity belongs to. An instance root's transform and name are the instance's own and never count as a

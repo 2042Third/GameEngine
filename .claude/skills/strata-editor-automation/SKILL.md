@@ -315,7 +315,9 @@ failed step undoes the ones before it unless `"atomic": false`; commands that ta
 `prefab.create {"entities": ["<id>"], "path": "Prefabs/Block.stprefab"}` (the entities become an instance of it; `"link":
 false` leaves them alone), then
 `prefab.instantiate {"prefab": "Prefabs/Block.stprefab", "components": {"Transform": {"Translation": [2, 0, 0]}}}`
-(returns `id`, the instance's root). Instances stay linked: change one instance (any of its entities) and
+(returns `id`, the instance's root; many at once, in one undo step: `{"prefab", "instances": [{"components": {"Transform":
+{"Translation": [0, 0, 0]}}}, {"parent": "<id>"}, ...]}` returns `instances: [{id, entities}]`, fastest when they give only
+a Transform). Instances stay linked: change one instance (any of its entities) and
 `prefab.apply {"entity": "<id>"}` writes it into the prefab (or only one override: `{"entity": "<the entity>", "component":
 "PointLight", "property": "Intensity"}`), and every other instance takes the new values except what it overrides itself
 (one undo step for the file and the scene). An instance's overrides are its own values: `prefab.status {"entity"}` lists

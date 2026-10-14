@@ -418,6 +418,60 @@ TEST_SUITE("Editor.Commands")
 		CHECK(harness.Commands.Execute(harness.Context, "editor.batch", { { "steps", tooMany } }).ErrorKind == EditorCommandError::InvalidParameters);
 	}
 
+	TEST_CASE("prefab.instantiate {instances} makes a thousand instances in one undo step")
+	{
+		CommandHarness harness;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorInstantiateMany") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		const std::string crate = harness.Run("entity.create", { { "name", "Crate" }, { "components", {
+			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } })["id"].get<std::string>();
+		harness.Run("entity.create", { { "name", "Lid" }, { "parent", crate } });
+		const nlohmann::json prefab = harness.Run("prefab.create", { { "entities", { crate } }, { "path", "Prefabs/Crate.stprefab" }, { "link", false } })["asset"];
+		const std::string holder = harness.Run("entity.create", { { "name", "Holder" } })["id"].get<std::string>();
+		const size_t entitiesBefore = harness.Context.GetEditScene()->GetEntityCount();
+		const size_t position = harness.Context.GetUndoStack().GetPosition();
+		const nlohmann::json before = harness.SceneSnapshot();
+
+		// 998 placed by their translation, one under the holder with nothing given, one with a light on its root.
+		nlohmann::json instances = nlohmann::json::array();
+		for (int index = 0; index < 998; index++)
+			instances.push_back({ { "components", { { "Transform", { { "Translation", { index, 0, 0 } } } } } } });
+		instances.push_back({ { "parent", holder } });
+		instances.push_back({ { "components", { { "PointLight", { { "Intensity", 3.0 } } } } } });
+		const nlohmann::json result = harness.Run("prefab.instantiate", { { "prefab", prefab }, { "instances", instances } });
+		REQUIRE(result["instances"].size() == 1000);
+		CHECK(harness.Context.GetEditScene()->GetEntityCount() == entitiesBefore + 2000);
+		CHECK(harness.Context.GetUndoStack().GetPosition() == position + 1);
+
+		Scene& scene = *harness.Context.GetEditScene();
+		const Entity placed = scene.GetEntityByUUID(*UUIDFromJson(result["instances"][997]["id"]));
+		REQUIRE(placed);
+		CHECK(placed.GetComponent<TransformComponent>().Translation == glm::vec3(997.0f, 0.0f, 0.0f));
+		CHECK(placed.GetChildren().size() == 1);
+		CHECK(harness.Run("prefab.status", { { "entity", result["instances"][997]["id"] } })["modified"] == false);
+		const Entity held = scene.GetEntityByUUID(*UUIDFromJson(result["instances"][998]["id"]));
+		REQUIRE(held);
+		CHECK(held.GetParent().GetUUID().ToString() == holder);
+		const Entity lit = scene.GetEntityByUUID(*UUIDFromJson(result["instances"][999]["id"]));
+		REQUIRE(lit.HasComponent<PointLightComponent>());
+		CHECK(lit.GetComponent<PointLightComponent>().Intensity == 3.0f);
+		// Siblings get numbered names, as one at a time would.
+		CHECK(scene.GetEntityByUUID(*UUIDFromJson(result["instances"][1]["id"])).GetName() != placed.GetName());
+
+		harness.Run("edit.undo");
+		CHECK(harness.SceneSnapshot() == before);
+
+		// Checked before anything is made: a bad instance, or instances with parent and components.
+		const size_t count = scene.GetEntityCount();
+		CHECK(harness.Commands.Execute(harness.Context, "prefab.instantiate", { { "prefab", prefab }, { "instances", { { { "components", { { "Transform",
+			{ { "Translation", "far" } } } } } } } } }).ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(harness.Commands.Execute(harness.Context, "prefab.instantiate", { { "prefab", prefab }, { "instances", { { { "colour", 1 } } } } })
+			.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(harness.Commands.Execute(harness.Context, "prefab.instantiate", { { "prefab", prefab }, { "parent", holder },
+			{ "instances", { nlohmann::json::object() } } }).ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(scene.GetEntityCount() == count);
+	}
+
 	TEST_CASE("project.create refuses an empty directory as invalid parameters")
 	{
 		EditorContext context { EditorContextSpecification { false } };
