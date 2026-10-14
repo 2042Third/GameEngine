@@ -2,17 +2,33 @@
 # strata_add_layer_libraries (CMake/StrataLayers.cmake): the table is the build. Strata (INTERFACE) links every layer a
 # game contains, StrataTooling (INTERFACE) the tooling layers (the asset pipeline, the network, ImGui).
 
-# Code generation every engine object shares, whichever layer compiles it: Jolt's public compile options and definitions
-# (the CPU features it requires, /arch:AVX2 on MSVC x64 and -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c on x86 GCC and Clang, its
-# JPH_* definitions), which every engine object was compiled with while the engine was one library that linked Jolt.
-# Builds without the physics module have no Jolt and compile for the baseline CPU of their toolchain.
+# Code generation every engine object shares, whichever layer compiles it: the instruction sets Jolt requires of its users
+# (/arch:AVX2 on MSVC x64 with the Visual Studio generators, whose platform Jolt reads, nothing with cl under Ninja;
+# -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse on x86 GCC and Clang; -pthread off Windows), which every engine
+# object was compiled with while the engine was one library that linked Jolt. They come from
+# strata_engine_cpu_options (CMake/StrataCompilerOptions.cmake), so that builds without the physics module generate the
+# same code; when Jolt is built they must be exactly its options. Jolt's JPH_* definitions only matter to code that
+# includes Jolt, which a build without physics has none of.
+strata_engine_cpu_options(STRATA_ENGINE_CPU_OPTIONS)
 add_library(StrataEngineCodegen INTERFACE)
+target_compile_options(StrataEngineCodegen INTERFACE ${STRATA_ENGINE_CPU_OPTIONS})
 if(TARGET Jolt)
 	get_target_property(STRATA_JOLT_OPTIONS Jolt INTERFACE_COMPILE_OPTIONS)
-	get_target_property(STRATA_JOLT_DEFINITIONS Jolt INTERFACE_COMPILE_DEFINITIONS)
-	if(STRATA_JOLT_OPTIONS)
-		target_compile_options(StrataEngineCodegen INTERFACE ${STRATA_JOLT_OPTIONS})
+	if(NOT STRATA_JOLT_OPTIONS)
+		set(STRATA_JOLT_OPTIONS "")
 	endif()
+	list(REMOVE_DUPLICATES STRATA_JOLT_OPTIONS)
+	# Quoted: both lists are empty where Jolt sets no options (cl under Ninja), and set() with nothing unsets.
+	set(strataJoltSorted "${STRATA_JOLT_OPTIONS}")
+	set(strataEngineSorted "${STRATA_ENGINE_CPU_OPTIONS}")
+	list(SORT strataJoltSorted)
+	list(SORT strataEngineSorted)
+	if(NOT "${strataJoltSorted}" STREQUAL "${strataEngineSorted}")
+		message(FATAL_ERROR "Jolt compiles its users with '${STRATA_JOLT_OPTIONS}', but strata_engine_cpu_options gives "
+			"'${STRATA_ENGINE_CPU_OPTIONS}': bring strata_engine_cpu_options (CMake/StrataCompilerOptions.cmake) to Jolt's "
+			"conditions (Strata/vendor/JoltPhysics/Jolt/Jolt.cmake), so that builds without physics generate the same code")
+	endif()
+	get_target_property(STRATA_JOLT_DEFINITIONS Jolt INTERFACE_COMPILE_DEFINITIONS)
 	if(STRATA_JOLT_DEFINITIONS)
 		target_compile_definitions(StrataEngineCodegen INTERFACE ${STRATA_JOLT_DEFINITIONS})
 	endif()

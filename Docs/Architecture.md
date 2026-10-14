@@ -33,10 +33,12 @@ other operating systems' `Platform/<OS>/` folders left out), gives each file to 
 whose `Exclude` does not (the same glob semantics as `MatchesGlob`; a file in no layer or in two fails the configure,
 naming it), and makes one static library per layer, `Strata_<Layer>` (alias `Strata::<Layer>`), that links `PUBLIC`
 exactly the built layers of its `MayInclude`: a library can only link what its layer may include. Every layer library
-gets `strata_configure_target`, the precompiled header `stpch.h` and `StrataEngineCodegen` (`PRIVATE`: Jolt's public
-compile options and definitions, the code generation every engine object had while the engine was one library that
-linked Jolt). Layers the table marks `"Tooling": true` (AssetPipeline, Network, ImGui) are `EXCLUDE_FROM_ALL`; a layer
-with `"Option"` is built only when that CMake option is on: Physics, Audio and Animation (`STRATA_WITH_PHYSICS`, `_AUDIO`,
+gets `strata_configure_target`, the precompiled header `stpch.h` and `StrataEngineCodegen` (`PRIVATE`: the instruction
+sets Jolt requires of its users and its definitions, the code generation every engine object had while the engine was one
+library that linked Jolt; `strata_engine_cpu_options` gives builds without the physics module the same instruction sets,
+and the configure checks them against Jolt's whenever Jolt is built). Layers the table marks `"Tooling": true`
+(AssetPipeline, Network, ImGui) are `EXCLUDE_FROM_ALL`; a layer with `"Option"` is built only when that CMake option is
+on: Physics, Audio and Animation (`STRATA_WITH_PHYSICS`, `_AUDIO`,
 `_ANIMATION`, with their vendor libraries; `ST_WITH_*` definitions tell code which it has, Docs/DeveloperGuide.md,
 "Optional modules"). `Strata` is an `INTERFACE` library of every built layer a
 game contains, `StrataTooling` one of the tooling layers. CMake writes `<build>/Strata/LayerLibraries.json` at the end of
@@ -106,7 +108,7 @@ when the commit does).
 | --- | --- | --- |
 | `Strata_<Layer>` (`Strata::<Layer>`) | static libraries | One per layer of `Layers.json`: the engine modules, platform code, embedded shaders and default font (`Strata/src/`). |
 | `Strata`, `StrataTooling` | interface libraries | Every built layer a game contains; the tooling layers (AssetPipeline, Network, ImGui). |
-| `StrataEngineCodegen` | interface library | The compile options and definitions every engine object shares (Jolt's public ones). |
+| `StrataEngineCodegen` | interface library | The compile options and definitions every engine object shares: Jolt's instruction sets, also without the physics module (`strata_engine_cpu_options`), and with it Jolt's definitions. |
 | `StrataScriptCore` | interface library | Script C ABI and header-only C++ SDK; links glm only (`StrataScriptCore/`). |
 | `StrataEditorCore` | static library | The editor without UI (`StrataEditor/src/Editor/`); links `Strata`, `Strata::AssetPipeline` and `Strata::Network`. |
 | `StrataEditorUI` | static library | The ImGui interface on the core: `EditorLayer`, panels, widget kit, theme, embedded fonts; links `Strata::ImGui`, and `ImGuizmo` and `nfd` privately (`StrataEditor/src/UI/`, `Panels/`, `EditorLayer.*`). |
@@ -1261,7 +1263,7 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   about as fast as from version 1: PerfGPU.Pack). The reading thread never waits in the job system, which would make it
   run unrelated queued jobs (a texture's decoding, a mesh cook) while the reads behind it stall: it decodes blocks of its
   own read, or sleeps until the blocks its helpers claimed are done (`AssetPack::BlockDecoding`). zstd is built with
-  its BMI2 bit readers (MSVC: `/arch:AVX2`, which Jolt requires already). The writer runs on any thread, compresses each
+  its BMI2 bit readers (MSVC: `/arch:AVX2`, which the engine's instruction sets require already). The writer runs on any thread, compresses each
   batch of 64 blocks in parallel on the background threads, reports progress and stops when cancelled; zstd's
   compressor is linked only by it, so shipped games contain the decompressor only.
 - **Pack layout** (`EditorAssetManager::PlanAssetPack`, then `WriteAssetPack`; `BuildAssetPack` does both, blocking). Packs
