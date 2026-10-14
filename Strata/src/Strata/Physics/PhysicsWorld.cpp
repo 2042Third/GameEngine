@@ -348,6 +348,13 @@ namespace Strata
 			return true;
 		}
 
+		// Whether an entity has no children.
+		bool IsLeaf(Entity entity)
+		{
+			const RelationshipComponent* relationship = entity.TryGetComponent<RelationshipComponent>();
+			return !relationship || relationship->Children.empty();
+		}
+
 		// Visits root and its descendants depth first, parents before children. The visitor returns whether to descend into
 		// the visited entity's children. The stack is scratch memory reused between calls (empty when a visit ends), so
 		// visitors must not start a visit with the same stack.
@@ -2866,6 +2873,20 @@ namespace Strata
 					if (!changed.IsValid())
 					{
 						data.StructureChanges.Add(handle);
+						continue;
+					}
+					// A leaf (the top-level entities of a cell that unloads, most often): nothing to walk, and no owner it could
+					// reach twice.
+					if (IsLeaf(changed))
+					{
+						if (BodyRecord* record = FindRecord(data, handle))
+						{
+							RefreshActivity(data, handle, *record);
+						}
+						else if (const auto merged = data.MergedOwners.find(handle); merged != data.MergedOwners.end())
+						{
+							RefreshOwnerIfShapeChanged(data, merged->second, changed);
+						}
 						continue;
 					}
 
