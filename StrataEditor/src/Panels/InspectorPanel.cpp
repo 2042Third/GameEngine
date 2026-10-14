@@ -3,9 +3,11 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/PropertyEdit.h"
+#include "Editor/SceneEdit.h"
 #include "Editor/ScriptEdit.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
+#include "UI/EditorShell.h"
 #include "UI/EntityIcons.h"
 #include "UI/Icons.h"
 #include "UI/ItemProbe.h"
@@ -23,6 +25,8 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/ComponentAccess.h>
 #include <Strata/Scene/Components.h>
+#include <Strata/Scene/PrefabInstances.h>
+#include <Strata/Scene/PrefabOverrides.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scripting/ScriptSystem.h>
 
@@ -385,14 +389,18 @@ namespace Strata
 		}
 
 		DrawHeader(context, commands, entities);
+		const std::optional<PrefabView> prefab = FindPrefabView(entities);
+		if (prefab)
+			DrawPrefabBar(panelContext, *prefab);
 		for (const ComponentInfo* info : ComponentRegistry::GetAll())
 		{
-			// The name is the header's; hidden and internal components are not shown.
-			if (info->IsHidden() || HasFlag(info->Flags, ComponentFlags::NoSerialize) || info->TypeId == entt::type_id<NameComponent>().hash())
+			// The name is the header's, the prefab link the prefab bar's; hidden and internal components are not shown.
+			if (info->IsHidden() || HasFlag(info->Flags, ComponentFlags::NoSerialize) || info->TypeId == entt::type_id<NameComponent>().hash()
+				|| info->TypeId == entt::type_id<PrefabInstanceComponent>().hash())
 				continue;
 			if (!HasComponentOnAll(entities, *info))
 				continue;
-			DrawComponent(panelContext, entities, *info);
+			DrawComponent(panelContext, entities, *info, prefab ? &*prefab : nullptr);
 		}
 		if (entities.size() > 1)
 		{
@@ -499,19 +507,102 @@ namespace Strata
 			ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
 			if (UI::IconButton("Inspector.CopyID", Icons::Copy, "Copy the ID (as commands and scripts take it)"))
 				ImGui::SetClipboardText(id.c_str());
-			if (const PrefabInstanceComponent* prefab = scene.GetRegistry().try_get<PrefabInstanceComponent>(primary.GetHandle()))
+		}
+		ImGui::Spacing();
+	}
+
+	bool InspectorPanel::PrefabView::IsOverridden(std::string_view component, std::string_view property) const
+	{
+		return Overrides && PrefabOverrides::IsOverridden(*Overrides, PrefabEntity, component, property);
+	}
+
+	std::optional<InspectorPanel::PrefabView> InspectorPanel::FindPrefabView(std::span<const Entity> entities) const
+	{
+		if (entities.size() != 1)
+			return std::nullopt;
+		const Entity entity = entities.front();
+		const PrefabInstanceComponent* link = entity.TryGetComponent<PrefabInstanceComponent>();
+		const Entity root = PrefabInstances::FindInstanceRoot(entity);
+		if (!link || !root)
+			return std::nullopt;
+		PrefabView view;
+		view.Root = root;
+		view.SceneEntity = entity.GetUUID();
+		view.PrefabEntity = link->PrefabEntityID;
+		view.Prefab = link->Prefab;
+		view.Overrides = &root.GetComponent<PrefabInstanceComponent>().Overrides;
+		view.Model = AssetManager::HasActive() && AssetManager::GetActive()->GetAssetType(link->Prefab) == AssetType::Model;
+		return view;
+	}
+
+	void InspectorPanel::DrawPrefabBar(EditorPanelContext& panelContext, const PrefabView& view)
+	{
+		EditorContext& context = panelContext.Context;
+		const EditorCommandRegistry& commands = panelContext.Commands;
+		const ImGuiStyle& style = ImGui::GetStyle();
+		std::string name = view.Model ? "Model" : "Prefab";
+		if (AssetManager::HasActive())
+		{
+			if (const std::optional<AssetMetadata> metadata = AssetManager::GetActive()->GetMetadata(view.Prefab))
+				name = metadata->Name.empty() ? metadata->Path : metadata->Name;
+		}
+		const nlohmann::json entity = UUIDToJson(view.SceneEntity);
+		const nlohmann::json root = UUIDToJson(view.Root.GetUUID());
+
+		ImGui::AlignTextToFramePadding();
+		if (UI::LinkButton("Inspector.Prefab.Asset", name, view.Model ? Icons::Shapes : Icons::Package,
+			view.Model ? "Show the model this instance comes from" : "Show the prefab this instance comes from") && panelContext.Shell)
+			panelContext.Shell->ShowAsset(view.Prefab);
+		ImGui::SameLine();
+		if (UI::Chip("Inspector.Prefab.Select", Icons::MousePointer2, "Select", "Select the instance's root"))
+			RunEditorCommand(context, commands, "prefab.select", { { "entity", entity } });
+		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+		if (UI::Chip("Inspector.Prefab.Open", Icons::FolderOpen, "Open", "Show the prefab in the Asset tab and the Content Browser") && panelContext.Shell)
+			panelContext.Shell->ShowAsset(view.Prefab);
+		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+		const size_t count = view.Overrides ? view.Overrides->size() : 0;
+		const std::string overrides = fmt::format("Overrides ({})", count);
+		if (UI::Chip("Inspector.Prefab.Overrides", Icons::Layers, overrides.c_str(), "What this instance changed of its prefab: apply it to the prefab or revert it"))
+			ImGui::OpenPopup("PrefabOverrides");
+
+		if (ImGui::BeginPopup("PrefabOverrides"))
+		{
+			if (!view.Model && ImGui::MenuItem("Apply All to Prefab", nullptr, false, count > 0))
+				RunEditorCommand(context, commands, "prefab.apply", { { "entity", root }, { "force", true } });
+			UI::ItemProbe::Record("Inspector.Prefab.ApplyAll", count > 0);
+			if (ImGui::MenuItem("Revert All", nullptr, false, count > 0))
+				RunEditorCommand(context, commands, "prefab.revert", { { "entity", root } });
+			UI::ItemProbe::Record("Inspector.Prefab.RevertAll", count > 0);
+			if (count > 0)
+				ImGui::Separator();
+			Scene& scene = *view.Root.GetScene();
+			// Each override, under its entity and component: Apply and Revert (an entity the instance removed: Revert All).
+			for (size_t index = 0; view.Overrides && index < view.Overrides->size(); index++)
 			{
-				std::string name = "Prefab";
-				if (AssetManager::HasActive())
+				const PrefabOverride& entry = (*view.Overrides)[index];
+				Entity target;
+				for (const UUID id : SceneEdit::CollectSubtree(scene, view.Root.GetUUID()))
 				{
-					if (const std::optional<AssetMetadata> metadata = AssetManager::GetActive()->GetMetadata(prefab->Prefab))
-						name = metadata->Name.empty() ? metadata->Path : metadata->Name;
+					const PrefabInstanceComponent* link = scene.GetEntityByUUID(id).TryGetComponent<PrefabInstanceComponent>();
+					if (link && link->Prefab == view.Prefab && link->PrefabEntityID == entry.Entity)
+						target = scene.GetEntityByUUID(id);
 				}
-				ImGui::SameLine();
-				UI::PushFont(UI::EditorFont::Regular, UI::TextSize::Caption);
-				UI::Pill("Inspector.Prefab", Icons::Package, name, colors.Info, "An instance of this prefab or model");
-				ImGui::PopFont();
+				const std::string what = entry.Kind == PrefabOverrideKind::RemovedEntity ? "Removed entity"
+					: entry.Kind == PrefabOverrideKind::AddedComponent ? fmt::format("Added {}{}{}", entry.Component, entry.Property.empty() ? "" : " ", entry.Property)
+					: entry.Kind == PrefabOverrideKind::RemovedComponent ? fmt::format("Removed {}{}{}", entry.Component, entry.Property.empty() ? "" : " ", entry.Property)
+					: fmt::format("{}.{}", entry.Component, entry.Property);
+				const std::string label = fmt::format("{} \xC2\xB7 {}###Override{}", target ? target.GetName() : std::string("(removed)"), what, index);
+				if (!ImGui::BeginMenu(label.c_str(), target.IsValid()))
+					continue;
+				const nlohmann::json parameters = { { "entity", UUIDToJson(target.GetUUID()) }, { "component", entry.Component },
+					{ "property", entry.Kind == PrefabOverrideKind::Property || PrefabOverrides::c_ScriptComponent == entry.Component ? entry.Property : std::string() } };
+				if (!view.Model && ImGui::MenuItem("Apply to Prefab"))
+					RunEditorCommand(context, commands, "prefab.apply", parameters);
+				if (ImGui::MenuItem("Revert"))
+					RunEditorCommand(context, commands, "prefab.revert", parameters);
+				ImGui::EndMenu();
 			}
+			ImGui::EndPopup();
 		}
 		ImGui::Spacing();
 	}
@@ -520,7 +611,7 @@ namespace Strata
 	// Components
 	////////////////////////////////////////////////////////////////////////////////
 
-	void InspectorPanel::DrawComponent(EditorPanelContext& panelContext, std::span<const Entity> entities, const ComponentInfo& info)
+	void InspectorPanel::DrawComponent(EditorPanelContext& panelContext, std::span<const Entity> entities, const ComponentInfo& info, const PrefabView* prefab)
 	{
 		EditorContext& context = panelContext.Context;
 		const EditorCommandRegistry& commands = panelContext.Commands;
@@ -533,8 +624,18 @@ namespace Strata
 		// link, has no menu.
 		const bool removable = info.IsRemovable() && !HasFlag(info.Flags, ComponentFlags::EngineAdded);
 		const bool settable = HasSettableProperties(info);
-		const bool hasMenu = settable || removable;
+		// Overridden in its prefab instance: marked, with Apply and Revert in its menu.
+		const bool overridden = prefab && prefab->IsOverridden(info.Name);
+		const bool hasMenu = settable || removable || overridden;
 		const bool open = UI::SectionHeader("Component", label.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
+		if (overridden)
+		{
+			const ImVec2 min = ImGui::GetItemRectMin();
+			const ImVec2 max = ImGui::GetItemRectMax();
+			const float bar = std::max(1.0f, std::floor(ImGui::GetFontSize() * 0.15f));
+			ImGui::GetWindowDrawList()->AddRectFilled(min, ImVec2(min.x + bar, max.y), ImGui::GetColorU32(UI::GetThemeColors().Accent));
+			UI::ItemProbe::RecordRect(fmt::format("Inspector.{}.Overridden", info.Name), min, max, true, ImGui::GetColorU32(UI::GetThemeColors().Accent));
+		}
 		if (hasMenu && ImGui::IsItemClicked(ImGuiMouseButton_Right))
 			ImGui::OpenPopup("ComponentMenu");
 		if (!info.Description.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
@@ -556,7 +657,7 @@ namespace Strata
 			const std::string tooltip = "Remove " + info.DisplayName;
 			remove = UI::IconButton(removeId.c_str(), Icons::X, tooltip.c_str());
 		}
-		DrawComponentMenu(context, commands, entities, info);
+		DrawComponentMenu(context, commands, entities, info, prefab);
 
 		if (remove)
 			RunEditorCommand(context, commands, "component.remove", { { "entities", ToJson(entities) }, { "component", info.Name } });
@@ -576,7 +677,7 @@ namespace Strata
 			}
 			else
 			{
-				DrawProperties(context, entities, info);
+				DrawProperties(context, commands, entities, info, prefab);
 			}
 			if (info.TypeId == entt::type_id<MeshRendererComponent>().hash())
 				DrawMaterialSection(panelContext, entities);
@@ -587,12 +688,24 @@ namespace Strata
 		ImGui::PopID();
 	}
 
-	void InspectorPanel::DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info)
+	void InspectorPanel::DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
+		const PrefabView* prefab)
 	{
 		if (!ImGui::BeginPopup("ComponentMenu"))
 			return;
 		const nlohmann::json ids = ToJson(entities);
 		const std::string probe = fmt::format("Inspector.{}.Menu.", info.Name);
+		if (prefab && prefab->IsOverridden(info.Name))
+		{
+			const nlohmann::json parameters = { { "entity", UUIDToJson(prefab->SceneEntity) }, { "component", info.Name } };
+			if (!prefab->Model && ImGui::MenuItem("Apply to Prefab"))
+				RunEditorCommand(context, commands, "prefab.apply", parameters);
+			UI::ItemProbe::Record(probe + "Apply", !prefab->Model);
+			if (ImGui::MenuItem("Revert to Prefab"))
+				RunEditorCommand(context, commands, "prefab.revert", parameters);
+			UI::ItemProbe::Record(probe + "Revert");
+			ImGui::Separator();
+		}
 		// Reset, Copy and Paste work on the properties component.set can set; a component without any has none of them.
 		const bool settable = HasSettableProperties(info);
 		if (settable)
@@ -626,7 +739,8 @@ namespace Strata
 		ImGui::EndPopup();
 	}
 
-	void InspectorPanel::DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info)
+	void InspectorPanel::DrawProperties(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
+		const PrefabView* prefab)
 	{
 		if (!UI::BeginPropertyTable("Properties"))
 			return;
@@ -642,7 +756,26 @@ namespace Strata
 				continue;
 
 			const std::string probe = fmt::format("Inspector.{}.{}", info.Name, property.Name);
-			UI::PropertyLabel(property.DisplayName, property.Tooltip, probe);
+			UI::PropertyLabelOptions labelOptions;
+			labelOptions.Overridden = prefab && prefab->IsOverridden(info.Name, property.Name);
+			UI::PropertyLabel(property.DisplayName, property.Tooltip, probe, labelOptions);
+			// An override's label offers Apply to Prefab and Revert on a right-click.
+			if (labelOptions.Overridden)
+			{
+				ImGui::PushID(static_cast<int>(index));
+				if (ImGui::BeginPopupContextItem("PropertyOverride"))
+				{
+					const nlohmann::json parameters = { { "entity", UUIDToJson(prefab->SceneEntity) }, { "component", info.Name }, { "property", property.Name } };
+					if (!prefab->Model && ImGui::MenuItem("Apply to Prefab"))
+						RunEditorCommand(context, commands, "prefab.apply", parameters);
+					UI::ItemProbe::Record(probe + ".Apply", !prefab->Model);
+					if (ImGui::MenuItem("Revert"))
+						RunEditorCommand(context, commands, "prefab.revert", parameters);
+					UI::ItemProbe::Record(probe + ".Revert");
+					ImGui::EndPopup();
+				}
+				ImGui::PopID();
+			}
 			PropertyWidgetOptions options;
 			options.Mixed = shared->Mixed;
 			options.MixedComponents = shared->MixedComponents;
@@ -1217,7 +1350,7 @@ namespace Strata
 			return;
 		const Entity entities[] = { sky };
 		ImGui::PushID("Sky");
-		DrawProperties(context, entities, *info);
+		DrawProperties(context, commands, entities, *info, nullptr);
 		ImGui::PopID();
 	}
 

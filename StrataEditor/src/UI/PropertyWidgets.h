@@ -72,10 +72,19 @@ namespace Strata
 		// share one label width, which the user changes by dragging the divider between the columns.
 		bool BeginPropertyTable(const char* id);
 		void EndPropertyTable();
+		// How a property's label shows what is special about its value.
+		struct PropertyLabelOptions
+		{
+			// A prefab instance's own value (an override of its prefab): the label in SemiBold with an accent bar at the row's
+			// left edge.
+			bool Overridden = false;
+			// Why the property has no effect now (empty: it has): the label in the disabled color, the reason in its tooltip.
+			std::string_view InactiveReason;
+		};
 		// Starts a row: the label (with its tooltip) in the first column, then moves to the second for the widget. A label
 		// wider than its column ends in an ellipsis and its tooltip names it whole. With a probe key, the probe records the
-		// label and the text it shows under "<probeKey>.Label".
-		void PropertyLabel(std::string_view label, std::string_view tooltip = {}, std::string_view probeKey = {});
+		// label and the text it shows under "<probeKey>.Label" (its color: the accent while overridden).
+		void PropertyLabel(std::string_view label, std::string_view tooltip = {}, std::string_view probeKey = {}, const PropertyLabelOptions& options = {});
 
 		// The type icon of an asset type (UI/Icons.h), as lists and pickers show assets.
 		const char* GetAssetTypeIcon(AssetType type);

@@ -1078,25 +1078,42 @@ namespace Strata
 			ImGui::EndTable();
 		}
 
-		void PropertyLabel(std::string_view label, std::string_view tooltip, std::string_view probeKey)
+		void PropertyLabel(std::string_view label, std::string_view tooltip, std::string_view probeKey, const PropertyLabelOptions& options)
 		{
+			const ThemeColors& colors = GetThemeColors();
 			ImGui::TableNextRow();
 			ImGui::TableSetColumnIndex(0);
 			ImGui::AlignTextToFramePadding();
+			if (options.Overridden)
+			{
+				// The accent bar at the row's left edge, as tall as the row's frame.
+				const ImVec2 cursor = ImGui::GetCursorScreenPos();
+				const float bar = std::max(1.0f, std::floor(ImGui::GetFontSize() * 0.15f));
+				const float left = cursor.x - ImGui::GetStyle().CellPadding.x;
+				ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(left, cursor.y), ImVec2(left + bar, cursor.y + ImGui::GetFrameHeight()),
+					ImGui::GetColorU32(colors.Accent));
+			}
 			// A label wider than its column (which it may fill up to the cell's padding: the clip rectangle ends there) ends in
 			// an ellipsis; its tooltip names it whole.
+			if (options.Overridden)
+				PushFont(EditorFont::SemiBold, TextSize::Body);
 			const std::string shown = FitWidth(label, std::max(ImGui::GetContentRegionAvail().x + ImGui::GetStyle().CellPadding.x, 1.0f));
 			const bool cut = std::string_view(shown) != label;
-			ImGui::PushStyleColor(ImGuiCol_Text, GetThemeColors().TextSecondary);
+			const ImVec4& color = !options.InactiveReason.empty() ? colors.TextDisabled : (options.Overridden ? colors.Text : colors.TextSecondary);
+			ImGui::PushStyleColor(ImGuiCol_Text, color);
 			ImGui::TextUnformatted(shown.c_str());
 			ImGui::PopStyleColor();
-			if ((cut || !tooltip.empty()) && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
-			{
-				const std::string text = !cut ? std::string(tooltip) : (tooltip.empty() ? std::string(label) : fmt::format("{}\n{}", label, tooltip));
+			if (options.Overridden)
+				ImGui::PopFont();
+			std::string text = !cut ? std::string(tooltip) : (tooltip.empty() ? std::string(label) : fmt::format("{}\n{}", label, tooltip));
+			if (!options.InactiveReason.empty())
+				text += fmt::format("{}{}", text.empty() ? "" : "\n", options.InactiveReason);
+			if (options.Overridden)
+				text += fmt::format("{}{}", text.empty() ? "" : "\n", "Overridden: this instance's own value (right-click to apply it to the prefab or revert it)");
+			if (!text.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
 				ImGui::SetTooltip("%s", text.c_str());
-			}
 			if (!probeKey.empty())
-				ItemProbe::Record(ProbeKey(probeKey, "Label"), true, 0, shown);
+				ItemProbe::Record(ProbeKey(probeKey, "Label"), true, options.Overridden ? ImGui::GetColorU32(colors.Accent) : 0, shown);
 			ImGui::TableSetColumnIndex(1);
 		}
 

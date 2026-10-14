@@ -43,11 +43,32 @@ namespace Strata
 		void OnHidden(EditorPanelContext& context) override;
 	private:
 		// The selected entities' components, or the scene's settings with nothing selected.
+		// A single selected entity of a prefab instance: its prefab entity id, its instance's overrides and whether the prefab is
+		// an imported model (which is never applied to).
+		struct PrefabView
+		{
+			Entity Root;
+			UUID SceneEntity = UUID::Null();
+			UUID PrefabEntity = UUID::Null();
+			AssetHandle Prefab = UUID::Null();
+			const std::vector<PrefabOverride>* Overrides = nullptr;
+			bool Model = false;
+
+			bool IsOverridden(std::string_view component, std::string_view property = {}) const;
+		};
+		std::optional<PrefabView> FindPrefabView(std::span<const Entity> entities) const;
+
 		void DrawSelection(EditorPanelContext& panelContext);
 		void DrawHeader(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
-		void DrawComponent(EditorPanelContext& panelContext, std::span<const Entity> entities, const ComponentInfo& info);
-		void DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
-		void DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info);
+		// Under the header for an entity of a prefab instance: the prefab (a click inspects it), Select (the instance's root),
+		// Open (the prefab in the Asset tab and the Content Browser) and the Overrides menu (Apply All, Revert All, each
+		// override).
+		void DrawPrefabBar(EditorPanelContext& panelContext, const PrefabView& view);
+		void DrawComponent(EditorPanelContext& panelContext, std::span<const Entity> entities, const ComponentInfo& info, const PrefabView* prefab);
+		void DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
+			const PrefabView* prefab);
+		void DrawProperties(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
+			const PrefabView* prefab);
 		// An edit of a rotation shared by several entities: continues the edit in progress, or begins one from the angles the
 		// widget showed (RotationAnglesEdit keeps each entity's own angles through a drag).
 		bool UpdateRotationEdit(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PropertyInfo& property,

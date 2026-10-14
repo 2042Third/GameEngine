@@ -622,6 +622,53 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		CHECK(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
 	}
 
+	TEST_CASE("The Inspector's prefab bar lists an instance's overrides, and overridden values are marked and revert from their menu")
+	{
+		AuthoringEditor editor;
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory("InspectorPrefabBar") / "Game") }, { "name", "Game" } });
+		const UUID lamp = editor.Create("Lamp", { { "components", { { "PointLight", { { "Intensity", 2.0 } } } } } });
+		editor.Run("prefab.create", { { "entities", { UUIDToJson(lamp) } }, { "path", "Prefabs/Lamp.stprefab" } });
+		const UUID instance = *UUIDFromJson(editor.Run("prefab.instantiate", { { "prefab", "Prefabs/Lamp.stprefab" } })["id"]);
+		editor.Run("component.set", { { "entity", UUIDToJson(instance) }, { "component", "PointLight" }, { "values", { { "Intensity", 7.0 } } } });
+		editor.Run("selection.set", { { "entities", { UUIDToJson(instance) } } });
+		editor.Frames(3);
+
+		// The bar names the prefab and counts the overrides; the raw link is not drawn as a component.
+		REQUIRE(UI::ItemProbe::Find("Inspector.Prefab.Overrides").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Overrides")->Text == "Overrides (1)");
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Asset").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.Menu").has_value());
+		// The overridden property and its component are marked in the accent; the others are not.
+		const ImU32 accent = ImGui::GetColorU32(UI::GetThemeColors().Accent);
+		REQUIRE(UI::ItemProbe::Find("Inspector.PointLight.Intensity.Label").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.PointLight.Intensity.Label")->Color == accent);
+		CHECK(UI::ItemProbe::Find("Inspector.PointLight.Range.Label")->Color == 0);
+		CHECK(UI::ItemProbe::Find("Inspector.PointLight.Overridden").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Transform.Overridden").has_value());
+
+		// A right-click on the label offers Revert, which gives it the prefab's value back.
+		editor.Pause();
+		editor.Harness.MoveMouse(UI::ItemProbe::Find("Inspector.PointLight.Intensity.Label")->GetCenter());
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Right, true);
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Right, false);
+		editor.Frames(2);
+		REQUIRE(editor.Click("Inspector.PointLight.Intensity.Revert"));
+		editor.Frames(2);
+		CHECK(editor.Get(instance).GetComponent<PointLightComponent>().Intensity == 2.0f);
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Overrides")->Text == "Overrides (0)");
+		CHECK(UI::ItemProbe::Find("Inspector.PointLight.Intensity.Label")->Color == 0);
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PointLight.Overridden").has_value());
+
+		// Select picks the instance's root (here the entity itself); the selection of a plain entity has no bar.
+		REQUIRE(editor.Click("Inspector.Prefab.Select"));
+		CHECK(editor.Context().GetSelection() == std::vector<UUID> { instance });
+		editor.Run("selection.set", { { "entities", { UUIDToJson(editor.Create("Plain")) } } });
+		editor.Frames(2);
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Prefab.Overrides").has_value());
+	}
+
 	TEST_CASE("A row's menu makes a prefab of the entity; an instance's menu applies and reverts it, and its badge marks it modified")
 	{
 		AuthoringEditor editor;
@@ -1003,15 +1050,14 @@ TEST_SUITE("Editor.UI.Inspector")
 		REQUIRE(editor.Get(*UUIDFromJson(found[0])).HasComponent<PrefabInstanceComponent>());
 		editor.Context().Select(*UUIDFromJson(found[0]));
 		editor.Frames(2);
-		// The prefab link: shown, but every property is read-only and the engine adds it, so it has no menu at all.
+		// The prefab link is the prefab bar's: its raw fields are not drawn as a component (no menu, no Remove, no fields).
 		REQUIRE(UI::ItemProbe::Find("Inspector.Transform.Menu").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Asset").has_value());
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.Menu").has_value());
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.Remove").has_value());
-		// Of the link it shows what it links to; the hashes the catch-up keeps (PrefabInstances::MarkSynced) are bookkeeping.
-		CHECK(UI::ItemProbe::Find("Inspector.PrefabInstance.Prefab").has_value());
-		CHECK(UI::ItemProbe::Find("Inspector.PrefabInstance.PrefabEntityID").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.Prefab").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.PrefabEntityID").has_value());
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.PrefabVersion").has_value());
-		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.SyncedHash").has_value());
 
 		// Copied values hold only what component.set accepts: the link's read-only values are nothing to paste.
 		const ComponentInfo* prefab = ComponentRegistry::Find<PrefabInstanceComponent>();

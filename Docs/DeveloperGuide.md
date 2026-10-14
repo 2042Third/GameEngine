@@ -1442,7 +1442,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   matching tab (Inspector or Asset) forward without taking the keyboard focus. The Inspector edits every selected entity
   at once (shared components only; values that differ show as mixed; one undo step per edit), offers per component
   Reset, Copy Values and Paste Values (the values component.set can set; not for components without such properties)
-  and Remove (not for components the engine adds), and shows the scene's settings (gravity, the fixed step, the physics
+  and Remove (not for components the engine adds). For an entity of a prefab instance it draws the prefab bar instead of
+  the link's fields (`InspectorPanel::DrawPrefabBar`: the prefab, Select, Open, an Overrides menu with Apply All, Revert
+  All and each override) and marks overrides: the property's label in SemiBold with an accent bar
+  (`UI::PropertyLabelOptions::Overridden`; right-click: Apply to Prefab, Revert) and the component's header, whose menu
+  gets Apply to Prefab and Revert to Prefab (models: Revert only). It shows the scene's settings (gravity, the fixed step, the physics
   world's capacities and the collision layers: names and a compact matrix, long names elided; bodies and controllers
   choose their layer among layer 0 and the named ones; how many entities sub-scenes create per frame) and sky with
   nothing selected, in sections that start closed with a summary on their headers
