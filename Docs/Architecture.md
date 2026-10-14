@@ -124,23 +124,24 @@ subsystems.
 
 ## Engine modules
 
-**Core** (`Core/`). `Application` owns the window, the graphics device, the layer stack and the main-thread queue
-and runs the frame loop; `Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
+**Core** (`Core/`). `Application` owns the window, the graphics device, the layer stack and the main-thread queue and
+runs the frame loop; `Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
 `Platform/GLFW/GLFWWindow` (`SetIcon` takes RGBA images of several sizes; macOS and Wayland windows have no icon of
-their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`; the console and the log file are written by
-the `BackgroundLogSink`'s thread, so a log call never waits for them, except warnings and errors, which are flushed before
-the call returns: writing a line to a console, a pipe or a file blocked the frame for milliseconds), `Assert`,
-`JobSystem`, `FileSystem` (UTF-8 paths), `FileReader` (one open file read at explicit offsets by any number of threads:
-overlapped `ReadFile` on Windows, `pread` on POSIX), `FileWatcher`, `FileLock`, `Platform` (OS services, private directories,
-process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime`),
-`Process` (child processes), `DynamicLibrary`, `CrashGuard`, `UUID`, `Hash` (FNV-1a, and CRC-32C with the processor's CRC
-instructions where it has them), `Crypto` (SHA-256, peer authentication), `Base64`,
-`CommandLine`, `Timer`/`FramePacer`, `JsonUtils` (exception-free JSON reads), `SequenceLock` (lock-free hand-off to the
-audio thread), `EngineServices` (process-wide interfaces a module or the program running a game offers the modules that
-may not include it, such as the audio output's master volume, `IAudioOutput`, the game's window, `IGameWindow`, and its
-save directory, `IGameSaves`), `SaveFiles` (a game's save files: names checked before any path is formed, atomic writes;
-`SaveDirectory`), `FrameProfiler` (the always-on timer of the main thread's frame stages,
-see [Frame profiler](#frame-profiler)) and `Profiling` (`ST_PROFILE_STAGE`; Tracy with `STRATA_ENABLE_TRACY`).
+their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`; the console and
+the log file are written by the `BackgroundLogSink`'s thread, so a log call waits for them only for warnings and errors,
+which are flushed before the call returns, and while 65,536 messages are queued (a burst the writer cannot keep up
+with): writing a line to a console, a pipe or a file blocked the frame for milliseconds), `Assert`, `JobSystem`,
+`FileSystem` (UTF-8 paths), `FileReader` (one open file read at explicit offsets by any number of threads: overlapped
+`ReadFile` on Windows, `pread` on POSIX), `FileWatcher`, `FileLock`, `Platform` (OS services, private directories,
+process memory with peaks: `GetProcessMemory`, process uptime: `GetProcessUptime`), `Process` (child processes),
+`DynamicLibrary`, `CrashGuard`, `UUID`, `Hash` (FNV-1a, and CRC-32C with the processor's CRC instructions where it has
+them), `Crypto` (SHA-256, peer authentication), `Base64`, `CommandLine`, `Timer`/`FramePacer`, `JsonUtils`
+(exception-free JSON reads), `SequenceLock` (lock-free hand-off to the audio thread), `EngineServices` (process-wide
+interfaces a module or the program running a game offers the modules that may not include it, such as the audio output's
+master volume, `IAudioOutput`, the game's window, `IGameWindow`, and its save directory, `IGameSaves`), `SaveFiles` (a
+game's save files: names checked before any path is formed, atomic writes; `SaveDirectory`), `FrameProfiler` (the
+always-on timer of the main thread's frame stages, see [Frame profiler](#frame-profiler)) and `Profiling`
+(`ST_PROFILE_STAGE`; Tracy with `STRATA_ENABLE_TRACY`).
 
 **Events** (`Events/`). Window, key and mouse events (`ApplicationEvent.h`, `KeyEvent.h`, `MouseEvent.h`, including
 `WindowFileDropEvent` and `WindowContentScaleEvent`, raised when the window moves to a display with another DPI setting
@@ -839,8 +840,8 @@ rules"). Other threads:
   captures. Much of it is frame work: a frame that waits for a batch or a Jolt job a worker has started goes on only once
   that worker has the processor again, so workers keep the main thread's priority (below it, a machine whose processors
   other programs keep busy, a build for one, would starve them and stall frames for seconds).
-- **Background threads** (`JobSystem::Init`; by default as many as workers but leaving four hardware threads,
-  `JobSystem::GetDefaultBackgroundThreadCount`): long work no frame waits for, submitted with
+- **Background threads** (`JobSystem::Init`; by default every hardware thread but four, at least half of them and at
+  most as many as workers, `JobSystem::GetDefaultBackgroundThreadCount`): long work no frame waits for, submitted with
   `JobPriority::Background` - imports (the project scan's and the background re-imports, with their texture
   compression) and the block compression of game exports. They run below the normal thread priority
   (`Platform::SetCurrentThreadPriority`): a pool as large as the processors busy with long jobs (an import compressing a
@@ -864,6 +865,9 @@ rules"). Other threads:
 - **RPC network** (`RpcServer::Start`): all socket I/O of editor automation and the built-in `rpc.*` methods.
 - **Script watchdog** (`ScriptEngine::SetWatchdogTimeout`): off unless a timeout is set; only logs long script calls.
 - **Process output readers** (`Core/Process.h`): read a child's output pipes (script builds).
+- **Log writer** (`Core/BackgroundLogSink`, started by `Log::Init` when it writes a console or a log file): writes them
+  in the order messages were logged. Warnings and errors wait for it (flush), and so does a thread that logs while
+  65,536 messages are queued; `Log::Shutdown` and process exit stop it.
 - **MCP input** (`StrataCLI/src/CLI/McpServer.cpp`, in the StrataCLI process): reads stdin lines into a queue.
 
 Jobs submitted before `JobSystem::Init` or after `Shutdown` run inline. A thread that waits for a job runs it itself when

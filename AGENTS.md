@@ -162,10 +162,11 @@ Formatting (enforced by `.clang-format` and `.editorconfig`):
 Conventions:
 
 - `Ref<T>` / `CreateRef<T>()` (shared ownership) and `Scope<T>` / `CreateScope<T>()` (unique ownership).
-- Log with `ST_CORE_*` in engine code and `ST_*` in applications (`ST_CORE_INFO("Loaded {}", path)`).
-  Messages are fmt-formatted; glm types format directly. The console and the log file are written by a thread of their own
-  (`Core/BackgroundLogSink`): a log call never waits for them, except warnings and errors, which are flushed before the call
-  returns; what is queued is written at exit and by `Log::Shutdown`.
+- Log with `ST_CORE_*` in engine code and `ST_*` in applications (`ST_CORE_INFO("Loaded {}", path)`). Messages are
+  fmt-formatted; glm types format directly. The console and the log file are written by a thread of their own
+  (`Core/BackgroundLogSink`): a log call waits for them only for warnings and errors (flushed before the call returns)
+  and while 65,536 messages are queued (a burst the writer cannot keep up with); what is queued is written at exit and
+  by `Log::Shutdown`.
 - `ST_CORE_ASSERT(condition, "message {}", args)` for programmer errors (compiled out of Dist),
   `ST_CORE_VERIFY` for checks that must stay in shipping builds. Recoverable failures (I/O, bad data,
   user input) return errors (`bool`, `std::optional`, result structs) and log; they never assert.
@@ -198,12 +199,12 @@ Conventions:
 The threading model, frame loop and pipelines these rules protect are described in
 [Docs/Architecture.md](Docs/Architecture.md).
 
-- **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background
-  work goes through `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O, `JobPriority::Background` for long
-  work no frame waits for: below normal priority, leaving four hardware threads to the main thread, the driver and the
-  frame's helpers). A thread that waits for a job runs that job itself if it has not started, and never other jobs.
-  Results return to the main thread through `Application::SubmitToMainThread` or polled queues — never callbacks that
-  touch engine state from worker threads.
+- **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background work goes through
+  `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O, `JobPriority::Background` for long work no frame
+  waits for: below normal priority, leaving four hardware threads to the main thread, the driver and the frame's helpers
+  but keeping at least half of them, `JobSystem::GetDefaultBackgroundThreadCount`). A thread that waits for a job runs
+  that job itself if it has not started, and never other jobs. Results return to the main thread through
+  `Application::SubmitToMainThread` or polled queues — never callbacks that touch engine state from worker threads.
 - **Renderer conventions:** NVRHI flips the Vulkan viewport to D3D conventions: framebuffer origin is
   top-left, NDC +Y is up, depth range is [0, 1] and the engine uses reversed-Z (near = 1, far = 0).
   Fullscreen-pass UVs are `uv = (ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5)`. Front faces are

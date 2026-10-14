@@ -469,14 +469,14 @@ exercised by it.
 AGENTS.md, [Architecture rules](../AGENTS.md#architecture-rules), states every architecture rule, five of them in
 short. Their full wording:
 
-- **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background
-  work goes through `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O, `JobPriority::Background` for long
-  work no frame waits for, such as an import's texture compression or an export's pack compression: it runs on background
-  threads below the normal thread priority, which leave four hardware threads free, so it never takes the processors from
-  the frame, whose own work runs on the normal-priority workers). A thread that waits for a job runs that job itself if it has not started, and never other
-  jobs. Results return to
-  the main thread through `Application::SubmitToMainThread` or polled queues — never callbacks that
-  touch engine state from worker threads.
+- **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background work goes through
+  `JobSystem` (`Submit` for CPU work, `SubmitIO` for blocking I/O, `JobPriority::Background` for long work no frame
+  waits for, such as an import's texture compression or an export's pack compression: it runs on background threads
+  below the normal thread priority, which leave four hardware threads to the frame but keep at least half of them
+  (`JobSystem::GetDefaultBackgroundThreadCount`), so it never takes the processors from the frame, whose own work runs
+  on the normal-priority workers). A thread that waits for a job runs that job itself if it has not started, and never
+  other jobs. Results return to the main thread through `Application::SubmitToMainThread` or polled queues — never
+  callbacks that touch engine state from worker threads.
 - **NVRHI pitfalls:** never take the address of a handle (`&m_Pipeline`): `RefCountPtr::operator&`
   releases the reference and returns the raw pointer's address, so assigning through it leaves a
   dangling object. NVRHI places automatic barriers only when the binding sets change; consecutive
@@ -1640,27 +1640,28 @@ and `AudioSystem`, the built-in "Audio" scene system.
 
 - **Render scene** (Docs/Architecture.md, "Render scene"): what a frame draws comes from the scene's `RenderScene`, one
   per scene (in its registry's context, shared by every renderer of it): render proxies of the mesh renderers, updated
-  only where components were signaled or transforms changed, in a `SpatialIndex` (loose grid) that the view frustum,
-  the prefetch sphere and the shadow cascades query. Only meshes and materials of proxies in view are requested (High
-  above 5% of the viewport height, Normal below), those within `SceneRendererSpecification::PrefetchDistance` at Low;
-  each asset is looked up once per frame (`AssetResolveCache`), and the cache's references end with the frame (no mesh,
+  only where components were signaled or transforms changed, in a `SpatialIndex` (loose grid) that the view frustum, the
+  prefetch sphere and the shadow cascades query. Only meshes and materials of proxies in view are requested (High above
+  5% of the viewport height, Normal below), those within `SceneRendererSpecification::PrefetchDistance` at Low; each
+  asset is looked up once per frame (`AssetResolveCache`), and the cache's references end with the frame (no mesh,
   material or texture it resolved, and not the asset manager, is held once `Render` returns), so what leaves the view
-  becomes evictable, also for a renderer that stops rendering. A frame that uses the same material slots the same ways as
-  the one before (still frames, and views that move over the same materials) takes their data over when the materials
+  becomes evictable, also for a renderer that stops rendering. A frame that uses the same material slots the same ways
+  as the one before (still frames, and views that move over the same materials) takes their data over when the materials
   and textures are the loaded objects that frame found and the textures' bindless slots still hold them
-  (`SceneRenderer::ReuseResolvedMaterials`, `BindlessTextureTable::AreSlotsUnchanged`; `SceneRendererStats::ReusedMaterials`),
-  looking them up again in one call (`AssetResolveCache::Replay`, `AssetManagerBase::TouchLoadedAssets`). Loaded
-  materials are never changed in place: an edit publishes a new object (`ReplaceLoadedAsset`). Two caches keep assets
-  across frames: `SceneRenderer`'s environment cache holds the sky light's environment map until the environment changes (the maps computed from a map
-  are shared by every renderer lighting with it, so a renderer that starts later, such as a capture renderer, takes them
-  over after the map dropped to its mip tail; until one has computed them it holds the map whole in the streamer,
-  `TextureStreamer::Hold`, also through frames it does not draw), and `TextRenderer`'s glyph
-  atlases hold their fonts (an atlas lives as long as its font is loaded). Mesh layouts (bounds, submeshes) follow the
-  asset manager's content changes in `RenderScene::Sync`, whoever renders the scene; an evicted mesh keeps its layout
-  until a reimport changes its source revision (`AssetManagerBase::GetSourceRevisions`). Until a mesh's layout is known,
-  the bounds the asset pipeline recorded for it place it (`AssetManagerBase::GetBounds`: import records, a pack's bounds
-  table; read through `RenderScene::ResolveUnloadedBounds`, and a change of them is a content change), so imported and
-  packed meshes are culled before they load. A mesh whose bounds are unknown (not loaded and no bounds recorded:
+  (`SceneRenderer::ReuseResolvedMaterials`, `BindlessTextureTable::AreSlotsUnchanged`;
+  `SceneRendererStats::ReusedMaterials`), looking them up again in one call (`AssetResolveCache::Replay`,
+  `AssetManagerBase::TouchLoadedAssets`). Loaded materials are never changed in place: an edit publishes a new object
+  (`ReplaceLoadedAsset`). Two caches keep assets across frames: `SceneRenderer`'s environment cache holds the sky
+  light's environment map until the environment changes (the maps computed from a map are shared by every renderer
+  lighting with it, so a renderer that starts later, such as a capture renderer, takes them over after the map dropped
+  to its mip tail; until one has computed them it holds the map whole in the streamer, `TextureStreamer::Hold`, also
+  through frames it does not draw), and `TextRenderer`'s glyph atlases hold their fonts (an atlas lives as long as its
+  font is loaded). Mesh layouts (bounds, submeshes) follow the asset manager's content changes in `RenderScene::Sync`,
+  whoever renders the scene; an evicted mesh keeps its layout until a reimport changes its source revision
+  (`AssetManagerBase::GetSourceRevisions`). Until a mesh's layout is known, the bounds the asset pipeline recorded for
+  it place it (`AssetManagerBase::GetBounds`: import records, a pack's bounds table; read through
+  `RenderScene::ResolveUnloadedBounds`, and a change of them is a content change), so imported and packed meshes are
+  culled before they load. A mesh whose bounds are unknown (not loaded and no bounds recorded:
   `RenderScene::GetMeshesWithoutBounds`) is requested as if in view while any of its entities is active, since its
   proxies' placeholder bounds say nothing about where it is. Never resolve assets per entity in renderer code: go
   through the proxies and the cache.

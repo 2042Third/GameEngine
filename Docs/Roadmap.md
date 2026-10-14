@@ -485,9 +485,10 @@ Open items and deferrals later waves own:
     cubes), so it was not adopted.
   - `ImportSettings4kMaxFrame10kCubes`' 6-27 ms frames in `vkBeginCommandBuffer` while BC7 compresses: the background
     pool ran a thread on every hardware thread but one; below normal priority, they still delayed the graphics driver's
-    own threads by a scheduling quantum. It now leaves four hardware threads, and at least half, to the frame
-    (`JobSystem::GetDefaultBackgroundThreadCount`: 20 of 24 on the reference machine): measured 2.06 ms, its budget
-    lowered from 4.819 to 3.09.
+    own threads by a scheduling quantum. It now leaves four hardware threads to the frame, keeping at least half for
+    itself (`JobSystem::GetDefaultBackgroundThreadCount`: 20 of 24 on the reference machine): measured 2.0-2.1 ms in the
+    A/B runs, its budget lowered from 4.819 to 3.09; the round's final PerfStability runs measured 1.7-2.8 ms, up to 92%
+    of that budget, so it is one to watch.
   - `ThumbnailsMaxFrame`'s second mode (1.2-2.0 ms, 43-45 frames): its confirmations measured another state than the
     first attempt, whose frame then destroyed the previous attempt's 20 thumbnail textures at once (2.1-2.3 ms, about
     0.1 ms of driver time each) and found the project's textures already streamed. Completed GPU resources are now
@@ -496,18 +497,18 @@ Open items and deferrals later waves own:
     efficiency core shows).
   - Still frames with 3,000 streamed textures (1.15-1.27 times main's): resolving 3,000 materials and their textures one
     by one was 0.58 of the frame's 1.0 ms; frames that use the same materials now take their data over from the frame
-    before when the materials, the textures and their bindless slots are unchanged (`SceneRenderer::MaterialResolution`):
-    `IdleFrame3kStreamedTextures` 1.016 to 0.614 ms, `Render10kMaterials` 1.332 to 0.608, `EditFrameMaterials10k`
-    1.815 to 0.993, their budgets lowered. What a still frame still does per draw (culling, shadow casters, gathering,
-    the streamer's report) costs about 0.3 ms of the rest.
+    before when the materials, the textures and their bindless slots are unchanged
+    (`SceneRenderer::MaterialResolution`): `IdleFrame3kStreamedTextures` 1.016 to 0.614 ms, `Render10kMaterials` 1.332
+    to 0.608, `EditFrameMaterials10k` 1.815 to 0.993, their budgets lowered. What a still frame still does per draw
+    (culling, shadow casters, gathering, the streamer's report) costs about 0.3 ms of the rest.
   - `RuntimeMaxFinalizeStage` (98-105% of 3.723 ms) stays as it is: the exported game's frame 0 finalizes what the start
     scene's load read before the first frame (17 materials, 17 mip tails at 0.06-0.64 ms each, mostly the driver's image
     creation, and the first step of a mesh) until the engine's per-frame finalization budget (`FinalizeMsPerFrame`, 4
     ms) ends it: 3.7-4.2 ms in three runs, frames 1 and 2 1.8-2.1 ms, every later one under 0.7. That is the spreading
     the budgets already do; spreading it further would mean a smaller finalization budget for every frame (slower loads
-    everywhere), and moving the work before the perf log's first frame would hide it rather than remove it. The
-    metric's budget lies below the engine's own limit since the backlog moved to frame 0, so its first attempts exceed it
-    now and then; cheaper texture creation (suballocated GPU memory) is the way down.
+    everywhere), and moving the work before the perf log's first frame would hide it rather than remove it. The metric's
+    budget lies below the engine's own limit since the backlog moved to frame 0, so its first attempts exceed it now and
+    then; cheaper texture creation (suballocated GPU memory) is the way down.
   - The Activity panel's Result column at 150% in the default layout: it is now as wide as the longest result it lists
     (at least six text heights), and Parameters takes what is left.
   - The round's final verification (its tip, 0a97046): `ctest --preset windows-debug` under the validation layer and
