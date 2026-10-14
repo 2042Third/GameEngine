@@ -8,10 +8,12 @@
 #include <spdlog/fmt/fmt.h>
 
 #include <cctype>
+#include <chrono>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
@@ -158,18 +160,19 @@ namespace
 		return text;
 	}
 
-	// The suites this binary registers, as `--list-test-suites` prints them (a child process: doctest's registry is not
-	// part of its interface).
-	std::vector<std::string> ListRegisteredSuites()
+	// The names this binary prints for a doctest query (`--list-test-suites`, `--list-test-cases` and its filters), without
+	// doctest's own lines (a child process: doctest's registry is not part of its interface).
+	std::vector<std::string> ListNames(std::vector<std::string> arguments)
 	{
+		arguments.push_back("--no-intro=true");
 		ProcessSpecification specification;
 		specification.Executable = Tests::GetTestExecutablePath();
-		specification.Arguments = { "--list-test-suites", "--no-intro=true" };
+		specification.Arguments = std::move(arguments);
 		const Process::RunResult result = Process::Run(specification, std::chrono::milliseconds(60000));
 		REQUIRE(result.Started);
 		REQUIRE_FALSE(result.TimedOut);
 		REQUIRE(result.ExitCode == 0);
-		std::vector<std::string> suites;
+		std::vector<std::string> names;
 		std::istringstream lines(result.Output);
 		for (std::string line; std::getline(lines, line);)
 		{
@@ -178,9 +181,9 @@ namespace
 			// doctest's own lines: "[doctest] ..." and its rulers.
 			if (line.empty() || line.starts_with("[doctest]") || line.starts_with("==="))
 				continue;
-			suites.push_back(line);
+			names.push_back(line);
 		}
-		return suites;
+		return names;
 	}
 
 }
@@ -232,11 +235,16 @@ TEST_SUITE("Testing.Shards")
 		REQUIRE(table);
 		CHECK_FALSE(table->FuzzSuites.empty());
 
-		const std::vector<std::string> suites = ListRegisteredSuites();
+		const std::vector<std::string> suites = ListNames({ "--list-test-suites" });
 		REQUIRE(suites.size() > 100);
 		const ShardReport report = CheckShards(*table, suites);
 		INFO("StrataTests/CoreShards.json:", JoinLines(report.Problems));
 		CHECK(report.Problems.empty());
+		// A TEST_CASE outside any TEST_SUITE has the suite "": --list-test-suites leaves it out and no CTest's --test-suite
+		// filter matches it, so it would run nowhere.
+		const std::vector<std::string> suiteless = ListNames({ "--list-test-cases", "--test-suite-exclude=?*" });
+		INFO("Test cases outside any TEST_SUITE (they run in no CTest):", JoinLines(suiteless));
+		CHECK(suiteless.empty());
 		// Filters for suites this build does not have (other streams' layers, modules a build leaves out) are allowed.
 		if (!report.UnusedFilters.empty())
 			MESSAGE("Shard filters that match no suite of this build:", JoinLines(report.UnusedFilters));

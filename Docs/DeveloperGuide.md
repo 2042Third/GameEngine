@@ -331,7 +331,8 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   Editor. `StrataTests/CoreShards.json` lists them with their doctest filters (`Suites`, `Exclude`; `*` and `?`,
   case-insensitive) and the suites of the own CTests (`OwnTests`); `StrataTests/CMakeLists.txt` makes the CTests from it.
   `Testing.Shards` fails, naming them, on suites that run in no shard or in two (it reads the binary's
-  `--list-test-suites`): **a new suite prefix gets a shard**. Filters for suites a build lacks are only reported (`World*`
+  `--list-test-suites`), and on test cases outside any `TEST_SUITE`, which no shard's filter matches: **a new suite
+  prefix gets a shard, and every test case a suite**. Filters for suites a build lacks are only reported (`World*`
   and `GameUI*` are there for wave 4's layers). Keep a shard under about a minute in Debug; split one that grows past it.
   Run everything side by side with `ctest ... -j 8`.
 - **Sweeps.** Tests that try every byte offset or many random corruptions (packs, fonts, the scene caches) live in suites
