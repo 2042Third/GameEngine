@@ -2,19 +2,25 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/AssetFileAction.h"
 #include "Editor/EditorWorld.h"
+#include "Editor/ProjectTemplates.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/UndoStack.h"
+#include "Editor/WorldCellIO.h"
 #include "Editor/WorldCook.h"
 
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Physics/PhysicsSystem.h>
 #include <Strata/Physics/PhysicsWorld.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/Scene/SceneSerializer.h>
 #include <Strata/Scene/SceneServices.h>
 #include <Strata/World/WorldAsset.h>
+#include <Strata/World/WorldComponents.h>
 #include <Strata/World/WorldStreamer.h>
 
 #include <nlohmann/json.hpp>
@@ -213,6 +219,48 @@ namespace Strata
 			return cells;
 		}
 
+		// world.create's and world.setLayers' layers: names (with the defaults) or objects {name, cellSize, streamingDistance,
+		// enabledByDefault, loadBeforeStart}; IDs follow their order unless an object gives one.
+		bool ReadLayers(const nlohmann::json& layers, float cellSize, std::vector<WorldLayer>& outLayers, std::string& outError)
+		{
+			if (!layers.is_array() || layers.empty())
+			{
+				outError = "layers: an array of layer names or {name, cellSize, streamingDistance, enabledByDefault, loadBeforeStart}";
+				return false;
+			}
+			uint8_t nextID = 1;
+			for (const nlohmann::json& item : layers)
+			{
+				WorldLayer layer;
+				layer.ID = nextID;
+				layer.CellSize = cellSize;
+				layer.StreamingDistance = 4.0f * cellSize;
+				if (item.is_string())
+				{
+					layer.Name = item.get<std::string>();
+				}
+				else if (item.is_object())
+				{
+					layer.Name = JsonUtils::GetString(item, "name");
+					layer.ID = static_cast<uint8_t>(std::clamp<int64_t>(JsonUtils::GetInt(item, "id", nextID), 0, 255));
+					layer.CellSize = JsonUtils::GetFloat(item, "cellSize", cellSize);
+					layer.StreamingDistance = JsonUtils::GetFloat(item, "streamingDistance", 4.0f * layer.CellSize);
+					layer.EnabledByDefault = JsonUtils::GetBool(item, "enabledByDefault", true);
+					layer.LoadBeforeStart = JsonUtils::GetBool(item, "loadBeforeStart", outLayers.empty());
+				}
+				else
+				{
+					outError = "layers: an array of layer names or {name, cellSize, streamingDistance, enabledByDefault, loadBeforeStart}";
+					return false;
+				}
+				if (item.is_string())
+					layer.LoadBeforeStart = outLayers.empty(); // The first layer (the terrain) holds the ground a game starts on
+				nextID = static_cast<uint8_t>(std::max<int>(nextID, layer.ID) + 1);
+				outLayers.push_back(std::move(layer));
+			}
+			return true;
+		}
+
 		nlohmann::json DescribeLayers(const WorldData& data)
 		{
 			nlohmann::json layers = nlohmann::json::array();
@@ -385,6 +433,98 @@ namespace Strata
 						{ "warnings", std::move(warnings) } });
 				});
 			}, EditorCommandKind::Edit });
+
+		registry.Register({ "world.create",
+			"Makes a new world: <path>.stworld and its persistent scene <path>.stscene (the basic3d content, a \"World\" entity with its "
+			"WorldComponent; the primary camera streams the cells). Layers default to Terrain, Buildings, Props and Gameplay, each of cellSize "
+			"meters with a streaming distance of four cells (the first loads before a game starts); give names, or objects {name, cellSize, "
+			"streamingDistance, enabledByDefault, loadBeforeStart}. open (default true) opens it (failing on unsaved changes unless force; a new "
+			"history starts, like scene.open); without open, one undo step that removes the files. Returns {world, persistentScene, layers}.",
+			ObjectSchema({ { "path", StringSchema("Path relative to the asset directory without extension, e.g. \"Worlds/Island\"") },
+				{ "cellSize", NumberSchema("Side of the layers' cells in meters (1-65536, default 64)") },
+				{ "layers", { { "type", "array" }, { "description", "Layer names, or {name, cellSize, streamingDistance, enabledByDefault, loadBeforeStart}" } } },
+				{ "open", BoolSchema("Open the new world (default true)") },
+				{ "force", ForceSchema() } }, { "path" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				EditorAssetManager* assets = context.GetAssetManager();
+				if (!assets)
+					return EditorCommandResult::Fail("No project is open (project.open or project.create)");
+				CommandArguments arguments(parameters);
+				std::string path = arguments.GetString("path");
+				const bool open = arguments.GetBool("open", true);
+				const bool force = arguments.GetBool("force", false);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				double cellSize = 64.0;
+				if (const nlohmann::json* size = JsonUtils::Find(parameters, "cellSize"))
+				{
+					if (!size->is_number() || size->get<double>() < WorldData::c_MinCellSize || size->get<double>() > WorldData::c_MaxCellSize)
+						return EditorCommandResult::InvalidParameters("cellSize: a number of meters from 1 to 65536");
+					cellSize = size->get<double>();
+				}
+				if (path.ends_with(".stworld"))
+					path.resize(path.size() - std::string_view(".stworld").size());
+				const std::filesystem::path relative = FileSystem::FromUTF8(path);
+				if (path.empty() || relative.is_absolute() || path.find("..") != std::string::npos || relative.filename().empty())
+					return EditorCommandResult::InvalidParameters("path: a path relative to the asset directory, e.g. \"Worlds/Island\"");
+				const std::string worldPath = path + ".stworld";
+				const std::string scenePath = path + ".stscene";
+				for (const std::string& file : { worldPath, scenePath })
+				{
+					if (FileSystem::Exists(assets->GetAssetDirectory() / FileSystem::FromUTF8(file)))
+						return EditorCommandResult::InvalidParameters(fmt::format("'{}' exists already", file));
+				}
+
+				WorldData data;
+				data.Name = FileSystem::ToUTF8(relative.filename());
+				std::string error;
+				const nlohmann::json defaultLayers = { "Terrain", "Buildings", "Props", "Gameplay" };
+				if (!ReadLayers(parameters.contains("layers") ? parameters["layers"] : defaultLayers, static_cast<float>(cellSize), data.Layers, error))
+					return EditorCommandResult::InvalidParameters(error);
+				const AssetHandle worldHandle;
+				const AssetHandle sceneHandle;
+				data.PersistentScene = sceneHandle;
+				if (!data.Validate(&error))
+					return EditorCommandResult::InvalidParameters(fmt::format("Invalid world: {}", error));
+				if (open)
+				{
+					if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("creating and opening the world '{}'", path)))
+						return std::move(*refused);
+				}
+
+				// The persistent scene and the world name each other: both handles are chosen first.
+				Scene persistent(data.Name);
+				ProjectTemplates::Populate(ProjectTemplates::c_Basic3D, persistent);
+				persistent.CreateEntity("World").AddComponent<WorldComponent>().World = worldHandle;
+				if (WorldCellIO::CreateDocument(*assets, scenePath, AssetType::Scene, sceneHandle, SceneSerializer::Serialize(persistent), &error) != sceneHandle)
+					return EditorCommandResult::Fail(fmt::format("'{}' cannot be written: {}", scenePath, error));
+				if (WorldCellIO::CreateDocument(*assets, worldPath, AssetType::World, worldHandle, WorldAsset::ToDocument(data), &error) != worldHandle)
+				{
+					TrashedAssets trashed;
+					assets->MoveToTrash(scenePath, trashed);
+					return EditorCommandResult::Fail(fmt::format("'{}' cannot be written: {}", worldPath, error));
+				}
+				nlohmann::json result = { { "world", UUIDToJson(worldHandle) }, { "persistentScene", UUIDToJson(sceneHandle) }, { "layers", DescribeLayers(data) } };
+				if (!open)
+				{
+					Scope<EditorActionGroup> group = CreateScope<EditorActionGroup>(fmt::format("Create World {}", data.Name));
+					group->Add(CreateScope<AssetCreateAction>(*assets, fmt::format("Create {}", scenePath), sceneHandle, scenePath));
+					group->Add(CreateScope<AssetCreateAction>(*assets, fmt::format("Create {}", worldPath), worldHandle, worldPath));
+					context.GetUndoStack().Record(std::move(group));
+					return EditorCommandResult::Ok(std::move(result));
+				}
+				if (!context.BeginOpenScene(sceneHandle, &error))
+					return EditorCommandResult::Fail(error);
+				return EditorCommandResult::Defer([result, sceneHandle](EditorContext& pollContext) -> std::optional<EditorCommandResult>
+				{
+					if (pollContext.IsSceneLoading())
+						return std::nullopt;
+					if (pollContext.GetSceneHandle() != sceneHandle)
+						return EditorCommandResult::Fail("The new world's persistent scene could not be opened (scene.loadStatus says why)");
+					return EditorCommandResult::Ok(result);
+				});
+			} });
 
 		registry.Register({ "world.status",
 			"The world the editor edits (null when the edited scene is no world's persistent scene): its edit layer, visible layers and "

@@ -496,7 +496,7 @@ namespace Strata
 				path = fmt::format("{}{}{}/{}/{}_{}.stscene", folder, folder.empty() ? "" : "/", FileSystem::ToUTF8(worldPath.stem()), layer->Name, key.X, key.Z);
 				std::replace(path.begin(), path.end(), '\\', '/');
 				document = WorldCellIO::SerializeDocument(m_Scene, fmt::format("{}_{}", key.X, key.Z), cellEntities, false);
-				const AssetHandle createdHandle = WorldCellIO::CreateDocument(assets, path, cell, document, &error);
+				const AssetHandle createdHandle = WorldCellIO::CreateDocument(assets, path, AssetType::Scene, cell, document, &error);
 				if (createdHandle != cell)
 					return fail(fmt::format("The new cell {} cannot be saved: {}", DescribeKey(key), error.empty() ? std::string("its file took another handle") : error));
 				bytes = FileSystem::GetFileSize(assets.GetAssetDirectory() / FileSystem::FromUTF8(path)).value_or(0);

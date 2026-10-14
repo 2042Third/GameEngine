@@ -112,7 +112,7 @@ namespace
 		"project.setExportSettings", "project.setStartScene",
 		"scene.loadAdditive", "scene.new", "scene.open", "scene.save", "scene.saveAs", "scene.setSettings", "scene.unloadAdditive",
 		"script.add", "script.build", "script.create", "script.init", "script.load", "script.reload", "script.remove", "script.setField",
-		"world.cook", "world.moveEntities",
+		"world.cook", "world.create", "world.moveEntities",
 	};
 	constexpr std::string_view c_QueryCommands[] = {
 		"animation.info",

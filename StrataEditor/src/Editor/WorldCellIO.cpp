@@ -116,7 +116,8 @@ namespace Strata
 			return text.size();
 		}
 
-		AssetHandle CreateDocument(EditorAssetManager& assets, const std::string& path, AssetHandle handle, const nlohmann::json& document, std::string* outError)
+		AssetHandle CreateDocument(EditorAssetManager& assets, const std::string& path, AssetType type, AssetHandle handle, const nlohmann::json& document,
+			std::string* outError)
 		{
 			const std::filesystem::path file = assets.GetAssetDirectory() / FileSystem::FromUTF8(path);
 			if (FileSystem::Exists(file))
@@ -127,7 +128,7 @@ namespace Strata
 			}
 			const std::filesystem::path metaFile = FileSystem::FromUTF8(FileSystem::ToUTF8(file) + std::string(EditorAssetManager::c_MetaExtension));
 			const nlohmann::json meta = { { "Handle", handle.ToString() }, { "ImportSettings", nlohmann::json::object() },
-				{ "Strata", { { "Format", "AssetMeta" }, { "Version", 1 } } }, { "Type", AssetTypeToString(AssetType::Scene) } };
+				{ "Strata", { { "Format", "AssetMeta" }, { "Version", 1 } } }, { "Type", AssetTypeToString(type) } };
 			if (!FileSystem::CreateDirectories(file.parent_path()) || !FileSystem::WriteText(metaFile, JsonUtils::Dump(meta, 1, '\t') + "\n"))
 			{
 				if (outError)
@@ -135,7 +136,7 @@ namespace Strata
 				return UUID::Null();
 			}
 			std::vector<AssetHandle> references;
-			const bool scanned = AssetDependencies::ScanDocument(AssetType::Scene, document, references);
+			const bool scanned = AssetDependencies::ScanDocument(type, document, references);
 			const std::string text = JsonUtils::Dump(document, 1, '\t') + "\n";
 			const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(text.data()), text.size());
 			const AssetHandle created = assets.CreateNativeAsset(path, bytes, outError, scanned ? &references : nullptr);

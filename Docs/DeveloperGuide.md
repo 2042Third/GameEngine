@@ -1482,6 +1482,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   fails, writing nothing, on entity IDs cells share; `apply` (default true) also sets the persistent scene's capacity
   when it is open in edit mode (else a warning; an explicit `apply: true` fails). **`world.info`** describes a world,
   its layers and how many cells its index misses.
+- **`world.create`** makes `<path>.stworld` and its persistent scene `<path>.stscene` (basic3d content and the
+  `WorldComponent`; default layers Terrain, Buildings, Props, Gameplay of `cellSize` with four cells of streaming
+  distance), opened (unsaved-changes guard, a new history) or as one undo step that removes the files.
 - **`world.status`**, **`world.edit`** and **`world.loadCells`** (`Editor/EditorWorldCommands.cpp`) drive the world the editor
   edits (`Editor/EditorWorld.h`): its cells by state and dirty documents; the session's edit layer, visible layers and
   radius scale; cells loaded by key or region and kept (pinned) until let go. **`world.moveEntities`** moves top-level

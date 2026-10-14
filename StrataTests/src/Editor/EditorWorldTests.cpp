@@ -467,3 +467,45 @@ TEST_SUITE("Editor.World")
 		CHECK(CellOf(project.Context, rock) == newCell);
 	}
 }
+
+TEST_SUITE("Editor.World")
+{
+	TEST_CASE("world.create makes a world and its persistent scene, opened or as one undo step")
+	{
+		WorldProject project("EditorWorldCreate", 2);
+		const std::filesystem::path assets = project.Directory / "Assets";
+		const nlohmann::json created = project.Run("world.create", { { "path", "Worlds/Island" }, { "cellSize", 32 } });
+		CHECK(FileSystem::Exists(assets / "Worlds" / "Island.stworld"));
+		CHECK(FileSystem::Exists(assets / "Worlds" / "Island.stscene"));
+		REQUIRE(created["layers"].size() == 4);
+		CHECK(created["layers"][0]["name"] == "Terrain");
+		CHECK(created["layers"][0]["cellSize"] == 32.0);
+		CHECK(created["layers"][0]["streamingDistance"] == 128.0);
+		CHECK(created["layers"][0]["loadBeforeStart"] == true);
+		CHECK(created["layers"][3]["loadBeforeStart"] == false);
+		// Opened: the world is the edited one, with a camera that streams it.
+		const UUID persistent = WorldProject::ToUUID(created["persistentScene"]);
+		CHECK(project.Context.GetSceneHandle() == persistent);
+		REQUIRE(project.Context.GetWorld());
+		CHECK(project.Context.GetWorld()->GetWorld() == WorldProject::ToUUID(created["world"]));
+		CHECK(project.Context.GetEditScene()->FindEntityByName("World").HasComponent<WorldComponent>());
+		CHECK(project.Context.GetEditScene()->GetPrimaryCameraEntity().IsValid());
+
+		// Without open: one undo step, which removes the files.
+		const size_t steps = project.Context.GetUndoStack().GetPosition();
+		project.Run("world.create", { { "path", "Worlds/Valley" }, { "layers", { "Ground", { { "name", "Trees" }, { "cellSize", 16 } } } }, { "open", false } });
+		CHECK(FileSystem::Exists(assets / "Worlds" / "Valley.stworld"));
+		CHECK(project.Context.GetUndoStack().GetPosition() == steps + 1);
+		CHECK(project.Context.GetSceneHandle() == persistent);
+		project.Run("edit.undo");
+		CHECK_FALSE(FileSystem::Exists(assets / "Worlds" / "Valley.stworld"));
+		CHECK_FALSE(FileSystem::Exists(assets / "Worlds" / "Valley.stscene"));
+
+		// Invalid input writes nothing.
+		CHECK_FALSE(project.Try("world.create", { { "path", "Worlds/Island" }, { "open", false } }).Success);
+		CHECK_FALSE(project.Try("world.create", { { "path", "Worlds/Bad" }, { "cellSize", 0 }, { "open", false } }).Success);
+		CHECK_FALSE(project.Try("world.create", { { "path", "Worlds/Bad" }, { "layers", { "A", "A" } }, { "open", false } }).Success);
+		CHECK_FALSE(project.Try("world.create", { { "path", "../Outside" }, { "open", false } }).Success);
+		CHECK_FALSE(FileSystem::Exists(assets / "Worlds" / "Bad.stworld"));
+	}
+}
