@@ -221,6 +221,21 @@ namespace Strata
 				"force: true to discard them (they are kept as recovery data, scene.recoveryStatus)", scene, action, save));
 		}
 
+		EditorCommandHandler AfterSaves(EditorCommandHandler handler)
+		{
+			return [handler = std::move(handler)](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
+			{
+				if (!context.HasSavesInFlight())
+					return handler(context, parameters);
+				return EditorCommandResult::Defer([handler, parameters = nlohmann::json(parameters)](EditorContext& context) -> std::optional<EditorCommandResult>
+				{
+					if (context.HasSavesInFlight())
+						return std::nullopt;
+					return handler(context, parameters);
+				});
+			};
+		}
+
 		std::optional<std::filesystem::path> ResolveOutputPath(const EditorContext& context, std::string_view path, std::string_view extension, bool overwrite,
 			std::string* outError)
 		{

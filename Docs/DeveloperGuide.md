@@ -1215,6 +1215,16 @@ and `AudioSystem`, the built-in "Audio" scene system.
   command later asks again when the scene changed since (`UndoStack::GetVersion`), a modal dialog asks over itself
   (`EditorShell::DrawDiscardQuestion` between its `BeginModal` and `EndModal`), and a recorded `force` is never repeated
   for the person (the Activity panel's Re-run asks).
+- **Saves are never lost and never hold a frame:** the edited scene and every engine-native document a command or a
+  panel writes as a whole go through `Editor/DocumentSaver` (`EditorContext::BeginSaveScene`, `BeginSaveSceneAs`; world
+  cells too), which serializes, scans and writes on a background job and publishes on the main thread; never serialize a
+  document on the main thread for a save (the blocking `SaveScene`/`SaveSceneAs` are for tools, tests and a template's
+  start scene). `scene.save` and `scene.saveAs` take `wait` (default true: they answer once the file is published; false:
+  at once, with `saveId`), and `editor.status` lists `saving`. The commands that replace the edited scene, close the
+  project or quit wrap their handlers in `CommandUtils::AfterSaves`, so they defer while saves are in flight and then
+  decide as above (`force` never discards a save in flight); a new command of that kind does the same. UI code saves
+  through the command runner (the result comes in a later frame), `RequestDiscardChanges` waits for saves in a saving
+  dialog, and `EditorContext::ReleaseProject` finishes every save before the project goes.
 
 ### Autosave and recovery
 

@@ -199,6 +199,14 @@ editor started with `--no-gpu` (use `--headless`):
   `scene.saveAs` for a scene never saved), or pass `"force": true` when discarding them is what you want; their results
   report `discardedChanges`. A person may be editing beside you: never force away work you did not make. The person sees
   a toast naming your client ("Claude Code discarded unsaved changes") with a Recover button.
+- **Saves run in the background**: `scene.save` and `scene.saveAs` take a snapshot of the scene in the frame and write the
+  file on a background thread, so even a million-entity scene never holds the editor. By default (`wait: true`) they answer
+  once the file is written: `{scene, path, bytes, entities, seconds, frames, frameTimes, memory}`. With
+  `{"wait": false}` they answer at once with `{scene, path, saveId, state}`; `editor.status`'s `saving` lists the saves in
+  flight (`saveId`, `label`, `documents`, `state`, `progress`; empty when none writes). Edits made while a save writes
+  are not in it and stay unsaved. Commands that replace the scene, close the project or quit (`scene.open`, `scene.new`,
+  `scene.recover`, `project.*`, `editor.quit`) wait for saves in flight before they decide, also with `force` (a save is
+  never lost), so `scene.save {"wait": false}` followed by `scene.open` needs no force.
 - **Recovery**: the editor journals the edited scene's unsaved changes in `.strata/Recovery` (written about 2 s after
   edits stop; `editor.status` `recovery.journal` has `lastWrite` and `pending`), and even forced discards are kept
   there and listed at once (the newest 8 discards stay on offer, older ones move to `Recovery/Discarded`; what a crash

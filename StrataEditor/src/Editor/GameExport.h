@@ -18,6 +18,7 @@
 namespace Strata
 {
 
+	class DocumentSaver;
 	class EditorContext;
 
 	struct GameExportOptions
@@ -54,7 +55,7 @@ namespace Strata
 
 	enum class GameExportState : uint8_t
 	{
-		WaitingForImports = 0, // Background imports finish first, so that the pack holds their results
+		WaitingForImports = 0, // Background imports and saves finish first, so that the pack holds their results
 		Packing,               // Writing the asset pack
 		Copying,               // Writing the script module, the manifest and the runtime
 		Succeeded,
@@ -130,6 +131,9 @@ namespace Strata
 
 		GameExportOptions m_Options;
 		Ref<EditorAssetManager> m_Assets; // Kept alive while the I/O job reads from it
+		// The editor's saves: the pack is planned once none is in flight, so that it holds what they write (the context
+		// outlives its export).
+		const DocumentSaver* m_Saver = nullptr;
 		AssetPackBuildOptions m_PackOptions;
 		GameManifest m_Manifest;
 		std::string m_FileName; // Of the pack, manifest and executable, without extension

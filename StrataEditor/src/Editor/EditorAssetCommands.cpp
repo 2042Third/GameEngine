@@ -244,7 +244,8 @@ namespace Strata
 		registry.Register({ "project.create",
 			"Creates a project in a directory and opens it. With template \"basic3d\" it starts with a saved, lit start scene (Scenes/Main.stscene: Main "
 			"Camera, Sun, Sky, Ground, Post Process); the default \"empty\" has no scene (see project.templates). Fails while the edited scene has "
-			"unsaved changes unless force is true (save first), before anything is created. Returns projectFile, template, startScene and "
+			"unsaved changes unless force is true (save first), before anything is created; waits for saves in flight (scene.save) first. Returns "
+			"projectFile, template, startScene and "
 			"discardedChanges (whether unsaved changes were discarded).",
 			ObjectSchema({
 				{ "directory", StringSchema("Absolute directory for the project") },
@@ -252,7 +253,7 @@ namespace Strata
 				{ "template", { { "type", "string" }, { "enum", { ProjectTemplates::c_Empty, ProjectTemplates::c_Basic3D } },
 					{ "description", "What the project starts with (default \"empty\"; see project.templates)" } } },
 				{ "force", ForceSchema() } }, { "directory", "name" }),
-			[](EditorContext& context, const nlohmann::json& parameters)
+			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string directory = arguments.GetString("directory");
@@ -275,16 +276,17 @@ namespace Strata
 					{ "template", templateId },
 					{ "startScene", startScene.IsValid() ? UUIDToJson(startScene) : nlohmann::json(nullptr) },
 					{ "discardedChanges", discarded } });
-			}, EditorCommandKind::Session });
+			}), EditorCommandKind::Session });
 
 		registry.Register({ "project.open",
-			"Opens a project file or the project in a directory. Fails while the edited scene has unsaved changes unless force is true (save first). "
+			"Opens a project file or the project in a directory. Fails while the edited scene has unsaved changes unless force is true (save first); "
+			"waits for saves in flight (scene.save) first, also with force. "
 			"The project opens at once; its start scene loads in the background like scene.open's (the frames go on, scene.loadStatus reports it) "
 			"and the command answers once it is the edited scene: {projectFile, discardedChanges (whether unsaved changes were discarded), "
 			"startScene (null when the project has none), startSceneOpened, startSceneError (why it was not opened; the project stays open with an "
 			"empty scene), seconds (the start scene's load)}.",
 			ObjectSchema({ { "path", StringSchema("Project file (.stproj) or project directory") }, { "force", ForceSchema() } }, { "path" }),
-			[](EditorContext& context, const nlohmann::json& parameters)
+			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string path = arguments.GetString("path");
@@ -300,13 +302,14 @@ namespace Strata
 					return EditorCommandResult::Fail(error);
 				return FinishProjectOpen(context, { { "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) },
 					{ "discardedChanges", modified } });
-			}, EditorCommandKind::Session });
+			}), EditorCommandKind::Session });
 
 		registry.Register({ "project.close",
 			"Closes the open project; the editor shows its launcher. Without a project it does nothing. Fails while the edited scene has unsaved "
-			"changes unless force is true (save first). Returns closed and discardedChanges (whether unsaved changes were discarded).",
+			"changes unless force is true (save first). Waits for saves in flight (scene.save) first, also with force: a save is never lost. Returns "
+			"closed and discardedChanges (whether unsaved changes were discarded).",
 			ObjectSchema({ { "force", ForceSchema() } }),
-			[](EditorContext& context, const nlohmann::json& parameters)
+			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const bool force = arguments.GetBool("force", false);
@@ -320,7 +323,7 @@ namespace Strata
 				const bool discarded = context.IsSceneModified();
 				context.CloseProject();
 				return EditorCommandResult::Ok({ { "closed", true }, { "discardedChanges", discarded } });
-			}, EditorCommandKind::Session });
+			}), EditorCommandKind::Session });
 
 		registry.Register({ "project.samples",
 			"The sample projects that come with the editor (finished games to learn from, e.g. Tetris): id, name, description. Open one with "
@@ -341,13 +344,14 @@ namespace Strata
 		registry.Register({ "project.openSample",
 			"Copies a sample project (project.samples) into a new directory and opens the copy, like project.open; the sample itself stays unchanged. "
 			"The copy leaves out local editor data (.strata): build its scripts with script.build before playing. Fails while the edited scene has "
-			"unsaved changes unless force is true (save first), before anything is copied. It answers once the start scene is open, with "
+			"unsaved changes unless force is true (save first), before anything is copied; waits for saves in flight (scene.save) first. It answers "
+			"once the start scene is open, with "
 			"project.open's fields (projectFile, discardedChanges: whether unsaved changes were discarded, the start scene's) and sample.",
 			ObjectSchema({
 				{ "sample", StringSchema("The sample's id from project.samples, e.g. \"Tetris\"") },
 				{ "directory", StringSchema("Absolute directory for the copy: created, or an existing empty directory") },
 				{ "force", ForceSchema() } }, { "sample", "directory" }),
-			[](EditorContext& context, const nlohmann::json& parameters)
+			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const std::string id = arguments.GetString("sample");
@@ -377,7 +381,7 @@ namespace Strata
 					return EditorCommandResult::Fail(fmt::format("The sample was copied to '{}' but could not be opened: {}", directory, error));
 				return FinishProjectOpen(context, { { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) },
 					{ "discardedChanges", discarded } });
-			}, EditorCommandKind::Session });
+			}), EditorCommandKind::Session });
 
 		registry.Register({ "project.setStartScene", "Sets the scene a built game starts with and saves the project file. When it is the "
 			"export settings' loading scene (project.setExportSettings), that setting is cleared (loadingSceneCleared: true), as the loading scene "

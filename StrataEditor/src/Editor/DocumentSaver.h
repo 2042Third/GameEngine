@@ -82,6 +82,7 @@ namespace Strata
 		// that replaced it while it waited (both end when the newer one is written).
 		uint64_t WrittenID = 0;
 		std::string Label;
+		size_t Documents = 0;    // Items of the request
 		DocumentSaveState State = DocumentSaveState::Queued;
 		float Progress = 0.0f;   // In [0, 1]
 		uint64_t Bytes = 0;      // Written so far
@@ -128,7 +129,8 @@ namespace Strata
 
 		// Queues a request and returns its ID, or 0 (with the reason) when it cannot be saved: no asset manager, no items, an
 		// item whose asset is no engine-native asset of the project nor reserved, an item without a Document and no snapshot.
-		// The completion runs on the main thread, from Update (or FinishAll), once the request ended.
+		// It starts writing at once when no other request writes, and otherwise waits for its turn. The completion runs on the
+		// main thread, from Update (or FinishAll), once the request ended.
 		uint64_t Submit(DocumentSaveRequest request, Completion onComplete, std::string* outError = nullptr);
 		// Once per frame (EditorContext::Update): publishes a request whose writing ended and calls its completions, then
 		// starts writing the next one.

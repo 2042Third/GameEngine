@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Editor/CommandJournal.h"
+#include "Editor/DocumentSaver.h"
 #include "Editor/EditorNotifications.h"
 #include "Editor/EditorGameWindow.h"
 #include "Editor/EditorViewport.h"
@@ -201,11 +202,31 @@ namespace Strata
 		const EditorSceneLoadStatus& GetSceneLoadStatus() const { return m_SceneLoadStatus; }
 		// Abandons the scene load in progress (its pins and unfinished loads go); the edited scene stays.
 		void CancelSceneLoad();
-		// Saves the edited scene to its asset; fails for scenes that were never saved (use SaveSceneAs).
+		// Starts saving the edited scene to its asset in the background (DocumentSaver) and returns the save's ID, or 0 with
+		// the reason (no project; a scene never saved needs BeginSaveSceneAs). The frame only takes a snapshot of the scene
+		// (Scene::Copy with SerializedOnly) and the undo history's save point (after breaking a merge, so a drag that goes on
+		// starts a new step); writing, scanning references and hashing run on a background job. When the save is published
+		// (Update), that save point is marked saved (edits made meanwhile stay unsaved), the recovery journal starts again
+		// from the written document with the edits made meanwhile, and the project's picture is made again; a failure posts a
+		// notification. A save whose edited scene was replaced meanwhile writes its file and marks nothing.
+		uint64_t BeginSaveScene(std::string* outError = nullptr);
+		// The same as a new ".stscene" asset at a path relative to the asset directory, which is reserved at once: the scene
+		// takes the file's name and the new asset's handle (so a following save writes it), and gets its previous handle and
+		// name back when the save fails.
+		uint64_t BeginSaveSceneAs(const std::string& relativePath, std::string* outError = nullptr);
+		// BeginSaveScene, then waits for the save (tools, tests, a template's start scene): false with the reason when it
+		// failed.
 		bool SaveScene(std::string* outError = nullptr);
-		// Saves the edited scene as a new ".stscene" asset (path relative to the asset directory) and continues
-		// editing that asset.
 		bool SaveSceneAs(const std::string& relativePath, std::string* outError = nullptr);
+		// Saves that have not ended (writing, waiting behind another or not published yet).
+		bool HasSavesInFlight() const { return m_DocumentSaver.IsBusy(); }
+		// Whether a save in flight holds the edited scene as it is now: once it is published the scene is unmodified (unless
+		// edited meanwhile).
+		bool IsSavingCurrentState() const;
+		std::vector<DocumentSaveStatus> GetSaveStatuses() const { return m_DocumentSaver.GetActiveStatuses(); }
+		// The background saves of the project's documents: the edited scene's (above), and those of other editor parts.
+		DocumentSaver& GetDocumentSaver() { return m_DocumentSaver; }
+		const DocumentSaver& GetDocumentSaver() const { return m_DocumentSaver; }
 		AssetHandle GetSceneHandle() const { return m_SceneHandle; }
 		bool IsSceneModified() const { return m_UndoStack.IsModified(); }
 
@@ -529,6 +550,20 @@ namespace Strata
 		void OpenThumbnails();
 		// After the edited scene was saved: the project's picture for the launcher is made again.
 		void OnSceneSaved();
+		// What a save of the edited scene restores when it fails (BeginSaveSceneAs).
+		struct SceneSaveRestore
+		{
+			AssetHandle Handle = UUID::Null();
+			std::string Name;
+			AssetHandle SourceAsset = UUID::Null();
+		};
+		// Takes the snapshot and submits the save of the edited scene as `handle` (a new asset: at `newPath`).
+		uint64_t SubmitSceneSave(AssetHandle handle, const std::string& newPath, std::optional<SceneSaveRestore> restore, std::string* outError);
+		// A save of the edited scene ended (DocumentSaver's completion).
+		void OnSceneSaveEnded(const DocumentSaveStatus& status, AssetHandle handle, const SceneRecovery::SaveToken& token,
+			const std::optional<SceneSaveRestore>& restore);
+		// Blocks until the save ended (SaveScene, SaveSceneAs): false with the reason when it failed.
+		bool WaitForSave(uint64_t id, std::string* outError);
 		void CloseScriptEngine();
 		// Fingerprints the loaded module's file after a load. `expected` is its digest from before the load (if known):
 		// a file that changed while it was being loaded leaves the running version unknown.
@@ -671,6 +706,9 @@ namespace Strata
 		uint64_t m_RecordedFrameCount = 0;
 		double m_LastFrameTime = 0.0;
 		std::map<std::string, StatusProvider> m_StatusProviders;
+		// Declared after what its completions use (the undo stack, the recovery journal, the notifications); idle by the time
+		// the context goes (ReleaseProject finishes every save).
+		DocumentSaver m_DocumentSaver;
 	};
 
 }

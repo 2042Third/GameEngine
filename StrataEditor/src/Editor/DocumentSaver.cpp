@@ -259,8 +259,11 @@ namespace Strata
 		pending->Completions.push_back(std::move(onComplete));
 		pending->Request = std::move(request);
 		pending->Assets = m_Assets;
-		m_Queue.push_back(std::move(pending));
-		// Started at the next update (or at once by FinishAll), so that a caller's later submissions can still replace it.
+		// Nothing writes: it starts at once; otherwise it waits for its turn (Update).
+		if (!m_Running && m_Queue.empty())
+			Start(std::move(pending));
+		else
+			m_Queue.push_back(std::move(pending));
 		return id;
 	}
 
@@ -372,6 +375,7 @@ namespace Strata
 		status.ID = id;
 		status.WrittenID = pending.IDs.back();
 		status.Label = pending.Request.Label;
+		status.Documents = pending.Request.Items.size();
 		status.SavePoint = pending.Request.SavePoint;
 		if (const Ref<Job>& job = pending.Running)
 		{

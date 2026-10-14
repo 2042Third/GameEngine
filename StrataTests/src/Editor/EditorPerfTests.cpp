@@ -440,7 +440,7 @@ TEST_SUITE("Perf.Editor")
 		EditorCommandRegistry commands;
 		REQUIRE(commands.Execute(context, "project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } }).Success);
 		const std::vector<Entity> roots = Perf::CreateFlatRoots(*context.GetEditScene(), c_Roots);
-		REQUIRE(commands.Execute(context, "scene.saveAs", { { "path", "Scenes/Big.stscene" } }).Success);
+		REQUIRE(Tests::CompleteCommand(context, commands.Execute(context, "scene.saveAs", { { "path", "Scenes/Big.stscene" } })).Success);
 		SceneRecovery& recovery = context.GetRecovery();
 		recovery.Wait(); // The saved document's hash
 		Scene& scene = *context.GetEditScene();

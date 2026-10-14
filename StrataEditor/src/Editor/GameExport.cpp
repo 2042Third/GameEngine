@@ -163,7 +163,8 @@ namespace Strata
 			return fail("No project is open");
 		if (context.IsPlaying())
 			return fail("Stop playing before exporting");
-		if (context.IsSceneModified())
+		// A save in flight of the scene as it is now counts as saved: the export plans once it is written.
+		if (context.IsSceneModified() && !context.IsSavingCurrentState())
 			return fail("The open scene has unsaved changes; save it first (the export uses the saved files)");
 		const Project& project = *context.GetProject();
 		if (std::optional<std::string> problem = CheckExportDirectory(options.Directory, project.GetProjectDirectory()))
@@ -233,6 +234,7 @@ namespace Strata
 		Ref<GameExport> exporter(new GameExport());
 		exporter->m_Options = options;
 		exporter->m_Assets = std::static_pointer_cast<EditorAssetManager>(assets->shared_from_this());
+		exporter->m_Saver = &context.GetDocumentSaver();
 		exporter->m_PackOptions = std::move(packOptions);
 		exporter->m_FileName = ToFileName(project.GetConfig().Name);
 		exporter->m_Runtime = runtime;
@@ -280,7 +282,7 @@ namespace Strata
 				return;
 			}
 			// Finished imports are applied by the asset manager's update, which runs every frame.
-			if (m_Assets->HasPendingImports())
+			if (m_Assets->HasPendingImports() || (m_Saver && m_Saver->IsBusy()))
 				return;
 			Begin();
 		}

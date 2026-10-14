@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Audio/AudioTestUtils.h"
+#include "Editor/CommandTestUtils.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
@@ -1758,7 +1759,7 @@ TEST_SUITE("Editor.UI.AssetInspector")
 		REQUIRE_MESSAGE(context.OpenProject(commandProject, &error), error);
 		auto run = [&](std::string_view name, const nlohmann::json& parameters)
 		{
-			const EditorCommandResult result = commands.Execute(context, name, parameters);
+			const EditorCommandResult result = Tests::CompleteCommand(context, commands.Execute(context, name, parameters));
 			INFO(name, ": ", result.Error);
 			REQUIRE(result.Success);
 			return result.Value;

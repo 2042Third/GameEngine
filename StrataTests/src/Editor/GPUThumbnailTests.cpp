@@ -469,7 +469,7 @@ TEST_SUITE("GPU.Editor.Thumbnails")
 		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));
 		const uint64_t written = context.GetProjectThumbnail().GetWrittenCount();
 		CHECK(written >= 1);
-		const EditorCommandResult saved = commands.Execute(context, "scene.save", nlohmann::json::object());
+		const EditorCommandResult saved = Tests::CompleteCommand(context, commands.Execute(context, "scene.save", nlohmann::json::object()));
 		REQUIRE(saved.Success);
 		CHECK(context.GetProjectThumbnail().IsPending());
 		REQUIRE(frameUntil([&]() { return !context.GetProjectThumbnail().IsPending(); }));

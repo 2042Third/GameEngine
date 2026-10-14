@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Editor/CommandTestUtils.h"
 #include "Editor/ImGuiHarness.h"
 #include "EditorLayer.h"
 #include "FeatureTest/FeatureTestUtils.h"
@@ -140,9 +141,11 @@ namespace Strata::Tests
 
 		EditorContext& Context() { return Layer->GetContext(); }
 
+		// Runs a command to its end (CompleteCommand: deferred ones, a save among them, over editor updates) and REQUIREs that it
+		// succeeded.
 		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{
-			const EditorCommandResult result = Layer->GetCommands().Execute(Context(), name, parameters);
+			const EditorCommandResult result = Tests::CompleteCommand(Context(), Layer->GetCommands().Execute(Context(), name, parameters));
 			INFO(std::string(name), ": ", result.Error);
 			REQUIRE(result.Success);
 			return result.Value;

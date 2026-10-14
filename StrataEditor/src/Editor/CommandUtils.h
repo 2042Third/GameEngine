@@ -116,6 +116,12 @@ namespace Strata
 		// command would do, e.g. "opening the scene 'Level2'". Returns the failure (naming the scene and how to proceed), or
 		// nullopt when the command may go on. A forced discard keeps the changes as recovery data (EditorContext::ResetScene).
 		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action);
+		// A command handler that runs `handler` once no save is in flight (EditorContext::HasSavesInFlight): at once when none
+		// is, otherwise deferred until the saves are published (then it runs as the command's poll and decides as it would
+		// have, CheckUnsavedChanges included). The commands that replace the edited scene, close the project or quit the editor
+		// use it, so that a save that runs is never lost and `force` never discards one, and scene.save {wait: false} followed
+		// by scene.open needs no force.
+		EditorCommandHandler AfterSaves(EditorCommandHandler handler);
 
 		// A file a command writes for its client (e.g. a capture). Relative paths resolve against the project directory
 		// and fail without a project (the editor's working directory means nothing to a client); absolute paths stay.

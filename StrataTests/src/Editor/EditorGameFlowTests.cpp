@@ -54,7 +54,7 @@ namespace
 
 		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{
-			EditorCommandResult result = Commands.Execute(Context, name, parameters);
+			const EditorCommandResult result = Tests::CompleteCommand(Context, Commands.Execute(Context, name, parameters));
 			INFO(std::string(name), ": ", result.Error);
 			REQUIRE(result.Success);
 			return result.Value;

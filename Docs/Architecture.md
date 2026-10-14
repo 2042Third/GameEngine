@@ -2234,6 +2234,20 @@ is the `strata-scripting` skill. The layers:
   a queued request for the same documents is replaced by a newer one, whose snapshot is written for both (repeated saves
   never hold two snapshots), and both completions get its status (`WrittenID`, `SavePoint`). Replaced snapshots and the
   written one are destroyed on background threads.
+  The edited scene saves through it (`EditorContext::BeginSaveScene`, `BeginSaveSceneAs`; `SaveScene` and `SaveSceneAs`
+  wait for them, for tools, tests and a template's start scene): the frame breaks the undo merge, takes
+  `UndoStack::GetSavePoint` and the snapshot, and the recovery journal's `BeginSave` token; the completion marks that point
+  saved (`UndoStack::MarkSaved(SavePoint)`: edits made meanwhile stay unsaved), gives the recovery journal the written
+  document's SHA-256 (`SceneRecovery::OnSaved`, which starts the new journal with the steps applied since the snapshot and
+  writes it before the old file goes, so nothing edited during a save is ever out of a journal), and makes the project's
+  picture; a failed save posts an error notification and gives a scene saved as a new asset its previous handle and name
+  back. A save whose edited scene was replaced meanwhile writes its file and marks nothing (the undo history's generation
+  and the journal's epoch tell). `scene.save` and `scene.saveAs` answer once the save is published (`wait`, default) or
+  at once with its `saveId`; the commands that replace the scene, close the project or quit run their handlers through
+  `CommandUtils::AfterSaves`, which defers them while saves are in flight; the UI's save (Ctrl+S, File > Save, the question's
+  Save) goes through the command runner, `RequestDiscardChanges` waits for saves in a saving dialog (Cancel gives up the
+  action, never the save), and a status pill shows them. `GameExport` plans once no save is in flight, and starts while
+  the scene's current state is being saved. Closing the project (`ReleaseProject`) and the editor finish every save first.
 - **Undo** (`SceneEdit.h`, `UndoStack.h`). A `SceneEditTransaction` snapshots the entities an edit touches as
   `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
   `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs

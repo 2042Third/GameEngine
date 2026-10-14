@@ -5,6 +5,7 @@
 #include "Editor/ScriptProject.h"
 
 #include <Strata/Asset/AssetDependencies.h>
+#include <Strata/Asset/AssetImporter.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Audio/AudioEngine.h>
 #include <Strata/Core/Crypto.h>
@@ -154,6 +155,17 @@ namespace Strata
 			return scenes;
 		});
 		SetStatusProvider("recovery", [this]() { return m_Recovery.DescribeStatus(); });
+		// The saves in flight (empty when none writes), so that agents see a save they started without waiting for it.
+		SetStatusProvider("saving", [this]()
+		{
+			nlohmann::json saves = nlohmann::json::array();
+			for (const DocumentSaveStatus& status : m_DocumentSaver.GetActiveStatuses())
+			{
+				saves.push_back({ { "saveId", status.ID }, { "label", status.Label }, { "documents", status.Documents },
+					{ "state", DocumentSaveStateToString(status.State) }, { "progress", status.Progress } });
+			}
+			return saves;
+		});
 		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details).
 		SetStatusProvider("assets", [this]()
 		{
@@ -280,6 +292,7 @@ namespace Strata
 		specification.WatchFiles = m_Specification.WatchAssetFiles;
 		m_AssetManager = CreateRef<EditorAssetManager>(specification);
 		AssetManager::SetActive(m_AssetManager);
+		m_DocumentSaver.SetAssetManager(m_AssetManager);
 		m_AssetManager->Scan(m_Specification.ImportInBackground ? ScanImports::InBackground : ScanImports::Wait);
 		m_AssetManager->PurgeTrash(c_TrashKeepTime);
 		OpenThumbnails();
@@ -331,6 +344,9 @@ namespace Strata
 
 	void EditorContext::ReleaseProject(bool activateBuiltinAssets)
 	{
+		// Saves in flight are written and published before anything of the project goes: closing never loses one. Through
+		// commands and the UI the project closes only once they ended, so this blocks only when the editor goes away.
+		m_DocumentSaver.FinishAll();
 		// The export reads the project's assets on an I/O thread: it stops before they go.
 		if (m_GameExport && !m_GameExport->IsFinished())
 		{
@@ -369,6 +385,7 @@ namespace Strata
 			m_AssetManager->Close();
 			if (AssetManager::GetActive() == m_AssetManager)
 				AssetManager::SetActive(nullptr);
+			m_DocumentSaver.SetAssetManager(nullptr);
 			m_AssetManager.reset();
 			m_SceneMetadataVersion = UINT64_MAX;
 		}
@@ -662,59 +679,155 @@ namespace Strata
 		m_Viewport.FrameScene(*this);
 	}
 
-	bool EditorContext::SaveScene(std::string* outError)
-	{
-		if (!m_AssetManager || !m_SceneHandle.IsValid())
-		{
-			if (outError)
-				*outError = "The scene has not been saved yet; save it under a path first";
-			return false;
-		}
-		// What the scene references comes from the JSON at hand: saving a large scene parses no document again.
-		const nlohmann::json json = SceneSerializer::Serialize(*m_EditScene);
-		std::vector<AssetHandle> references;
-		const bool scanned = AssetDependencies::ScanDocument(AssetType::Scene, json, references);
-		std::string document = JsonUtils::Dump(json, 1, '\t') + "\n";
-		const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(document.data()), document.size());
-		if (!m_AssetManager->SaveNativeAsset(m_SceneHandle, bytes, false, outError, scanned ? &references : nullptr))
-			return false;
-		m_UndoStack.MarkSaved();
-		OnSceneSaved();
-		// The changes are on disk now: the recovery journal starts again from this document.
-		const auto [sceneFile, scenePath] = GetSceneFile(m_SceneHandle);
-		m_Recovery.OnSaved(m_SceneHandle, sceneFile, scenePath, std::move(document));
-		return true;
-	}
-
-	bool EditorContext::SaveSceneAs(const std::string& relativePath, std::string* outError)
+	uint64_t EditorContext::BeginSaveScene(std::string* outError)
 	{
 		if (!m_AssetManager)
 		{
 			if (outError)
 				*outError = "No project is open";
-			return false;
+			return 0;
 		}
-		// The scene takes the name of its file.
-		const std::string previousName = m_EditScene->GetName();
-		m_EditScene->SetName(FileSystem::ToUTF8(FileSystem::FromUTF8(relativePath).stem()));
-		const nlohmann::json json = SceneSerializer::Serialize(*m_EditScene);
-		std::vector<AssetHandle> references;
-		const bool scanned = AssetDependencies::ScanDocument(AssetType::Scene, json, references);
-		std::string document = JsonUtils::Dump(json, 1, '\t') + "\n";
-		const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(document.data()), document.size());
-		const AssetHandle handle = m_AssetManager->CreateNativeAsset(relativePath, bytes, outError, scanned ? &references : nullptr);
-		if (!handle.IsValid())
+		if (!m_SceneHandle.IsValid())
 		{
-			m_EditScene->SetName(previousName);
-			return false;
+			if (outError)
+				*outError = "The scene has not been saved yet; save it under a path first";
+			return 0;
 		}
+		return SubmitSceneSave(m_SceneHandle, {}, std::nullopt, outError);
+	}
+
+	uint64_t EditorContext::BeginSaveSceneAs(const std::string& relativePath, std::string* outError)
+	{
+		if (!m_AssetManager)
+		{
+			if (outError)
+				*outError = "No project is open";
+			return 0;
+		}
+		const std::filesystem::path path = FileSystem::FromUTF8(relativePath);
+		const AssetImporter* importer = AssetImporterRegistry::FindByExtension(StringUtils::ToLower(FileSystem::ToUTF8(path.extension())));
+		if (!importer || importer->GetType() != AssetType::Scene)
+		{
+			if (outError)
+				*outError = fmt::format("'{}' is not a scene file (.stscene)", relativePath);
+			return 0;
+		}
+		const AssetHandle handle = m_AssetManager->ReserveNativeAsset(relativePath, UUID::Null(), outError);
+		if (!handle.IsValid())
+			return 0;
+
+		// The scene is the new asset from now on (a following save writes it) and takes the file's name; a failed save gives
+		// the previous ones back.
+		const SceneSaveRestore restore { m_SceneHandle, m_EditScene->GetName(), m_EditScene->GetSourceAsset() };
+		m_EditScene->SetName(FileSystem::ToUTF8(path.stem()));
 		m_SceneHandle = handle;
 		m_EditScene->SetSourceAsset(handle);
-		m_UndoStack.MarkSaved();
+		const uint64_t id = SubmitSceneSave(handle, m_AssetManager->GetReservedPath(handle), restore, outError);
+		if (id == 0)
+		{
+			m_SceneHandle = restore.Handle;
+			m_EditScene->SetName(restore.Name);
+			m_EditScene->SetSourceAsset(restore.SourceAsset);
+			m_AssetManager->ReleaseNativeAssetReservation(handle);
+		}
+		return id;
+	}
+
+	uint64_t EditorContext::SubmitSceneSave(AssetHandle handle, const std::string& newPath, std::optional<SceneSaveRestore> restore, std::string* outError)
+	{
+		// The snapshot holds the history's state from here on: a drag that goes on makes a step of its own.
+		m_UndoStack.BreakMerge();
+		DocumentSaveRequest request;
+		request.SavePoint = m_UndoStack.GetSavePoint();
+		request.Snapshot = Scene::Copy(m_EditScene, SceneCopyOptions { true });
+		request.Label = m_EditScene->GetName();
+		DocumentSaveItem item;
+		item.Asset = handle;
+		item.NewPath = newPath;
+		request.Items.push_back(std::move(item));
+		const SceneRecovery::SaveToken token = m_Recovery.BeginSave();
+		const uint64_t id = m_DocumentSaver.Submit(std::move(request), [this, handle, token, restore](const DocumentSaveStatus& status)
+		{
+			OnSceneSaveEnded(status, handle, token, restore);
+		}, outError);
+		if (id == 0)
+			m_Recovery.ReleaseSave(token);
+		return id;
+	}
+
+	void EditorContext::OnSceneSaveEnded(const DocumentSaveStatus& status, AssetHandle handle, const SceneRecovery::SaveToken& token,
+		const std::optional<SceneSaveRestore>& restore)
+	{
+		// A newer save of the same scene replaced this one before it began: the newer one's completion does the rest.
+		if (status.WrittenID != status.ID)
+		{
+			m_Recovery.ReleaseSave(token);
+			return;
+		}
+		// The edited scene was replaced meanwhile (another scene or project): the file is written, but nothing of the scene now
+		// edited is marked, and its journal hears nothing (MarkSaved and OnSaved recognize another scene's point and token).
+		const bool sameScene = status.SavePoint.Generation == m_UndoStack.GetSavePoint().Generation;
+		if (status.State != DocumentSaveState::Done)
+		{
+			m_Recovery.ReleaseSave(token);
+			if (sameScene && restore && m_SceneHandle == handle)
+			{
+				m_SceneHandle = restore->Handle;
+				m_EditScene->SetName(restore->Name);
+				m_EditScene->SetSourceAsset(restore->SourceAsset);
+			}
+			EditorNotification notification;
+			notification.Level = NotificationLevel::Error;
+			notification.Title = fmt::format("Saving '{}' failed", status.Label);
+			notification.Message = status.Error;
+			notification.ShowConsole = true;
+			if (m_AssetManager && m_AssetManager->IsHandleValid(handle))
+				notification.Asset = handle;
+			m_Notifications.Post(std::move(notification));
+			return;
+		}
+		if (!sameScene)
+		{
+			m_Recovery.ReleaseSave(token);
+			return;
+		}
+		m_UndoStack.MarkSaved(status.SavePoint);
 		OnSceneSaved();
 		const auto [sceneFile, scenePath] = GetSceneFile(handle);
-		m_Recovery.OnSaved(handle, sceneFile, scenePath, std::move(document));
+		const std::string baseHash = status.Items.empty() ? std::string() : Crypto::ToHex(status.Items.front().Sha256);
+		m_Recovery.OnSaved(handle, sceneFile, scenePath, baseHash, token, *m_EditScene, IsSceneModified());
+	}
+
+	bool EditorContext::WaitForSave(uint64_t id, std::string* outError)
+	{
+		m_DocumentSaver.FinishAll();
+		const std::optional<DocumentSaveStatus> status = m_DocumentSaver.GetStatus(id);
+		if (!status || status->State != DocumentSaveState::Done)
+		{
+			if (outError)
+				*outError = status ? status->Error : std::string("The save ended without a status");
+			return false;
+		}
 		return true;
+	}
+
+	bool EditorContext::IsSavingCurrentState() const
+	{
+		const UndoStack::SavePoint current = m_UndoStack.GetSavePoint();
+		const std::vector<DocumentSaveStatus> saves = m_DocumentSaver.GetActiveStatuses();
+		return std::any_of(saves.begin(), saves.end(), [&current](const DocumentSaveStatus& save) { return save.SavePoint == current; });
+	}
+
+	bool EditorContext::SaveScene(std::string* outError)
+	{
+		const uint64_t id = BeginSaveScene(outError);
+		return id != 0 && WaitForSave(id, outError);
+	}
+
+	bool EditorContext::SaveSceneAs(const std::string& relativePath, std::string* outError)
+	{
+		const uint64_t id = BeginSaveSceneAs(relativePath, outError);
+		return id != 0 && WaitForSave(id, outError);
 	}
 
 	void EditorContext::OnSceneSaved()
@@ -1786,6 +1899,8 @@ namespace Strata
 			if (m_AssetManager->HasImportFailures())
 				NotifyImportFailures();
 		}
+		// Saves written in the background are published (and their completions run) between frames.
+		m_DocumentSaver.Update();
 		// A scene being opened replaces the edited one between frames, before anything draws or updates it.
 		UpdateSceneLoad();
 		if (m_GameExport)

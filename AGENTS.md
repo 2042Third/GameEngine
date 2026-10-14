@@ -352,6 +352,10 @@ reaches the application only through `EditorHost`. Every command family, panel a
   device paths refused; an existing file replaced only with `overwrite: true`).
 - A command that replaces the edited scene starts with `CommandUtils::CheckUnsavedChanges` (fails unless `force`); UI
   code passes `force` only once the person answered `EditorShell::RequestDiscardChanges`, for the changes asked about.
+- Saves never serialize on the main thread: documents go through `Editor/DocumentSaver` (a snapshot in the frame, the
+  writing on a background job), commands that replace the scene, close the project or quit wrap their handler in
+  `CommandUtils::AfterSaves`, and UI code saves through the command runner
+  ([No silent data loss](Docs/DeveloperGuide.md#no-silent-data-loss)).
 - Asset deletes go to the trash and refuse while something uses the asset; steps that change files check them first
   and fail with the reason when they no longer fit (never overwriting), and asset steps never mark the scene unsaved.
 - A scene being opened is read-only: code that edits the scene outside `CommitEdit` checks
