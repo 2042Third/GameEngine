@@ -21,11 +21,12 @@ namespace Strata
 		{
 			return Model::Deserialize(data, outError);
 		});
-		// Reading a large scene takes seconds: the read reports how far it got (SceneReadProgress), which scene loads show.
-		AssetLoaderRegistry::Register(AssetType::Scene, [](const AssetMetadata& metadata, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
+		// Reading a large scene takes seconds: the read reports how far it got (SceneReadProgress), which scene loads show, and
+		// stops once the load is given up (a cancelled SceneLoadRequest, another scene opened, the manager closing).
+		AssetLoaderRegistry::Register(AssetType::Scene, [](const AssetMetadata& metadata, AssetLoadData& data, std::string* outError) -> Ref<Asset>
 		{
 			SceneReadProgress::Tracker progress(metadata.Handle);
-			return SceneAsset::Deserialize(data, outError, [&progress](float share) { progress.Report(share); });
+			return SceneAsset::Deserialize(data.GetBytes(), outError, [&progress](float share) { progress.Report(share); }, [&data]() { return data.IsCancelled(); });
 		});
 	}
 

@@ -281,8 +281,8 @@ Details: [Asset pipeline](Docs/DeveloperGuide.md#asset-pipeline).
 - A new document type, or a stored form that references assets, records its references (`AssetDependencies::Scan` or
   `ImportResult::References`; each valid handle once, never itself: `NormalizeReferences`): pruned exports, delete
   checks and prefetches follow them ([References and bounds](Docs/DeveloperGuide.md#references-and-bounds)).
-- Loaders reject truncated or garbage bytes without crashing; a pack format change extends the corruption tests of
-  `AssetPackTests.cpp`.
+- Loaders reject truncated or garbage bytes without crashing, and those of large documents ask
+  `AssetLoadData::IsCancelled` as they go; a pack format change extends the corruption tests of `AssetPackTests.cpp`.
 - Texture sizes come from `GetMipByteSize`, never from bytes per pixel; cooked textures are read through
   `ParseCookedTexture`.
 - Hold `AssetHandle`s across frames, not `Ref`s (a held `Ref` defeats the budget), request what you use every frame,

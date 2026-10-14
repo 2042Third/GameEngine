@@ -13,13 +13,61 @@
 #include "TestHelpers.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
 
 using namespace Strata;
 using namespace Strata::Tests;
+
+namespace
+{
+
+	// Watches the reads of a scene asset's document on a thread of its own (SceneReadProgress, polled every millisecond):
+	// the furthest share they reached until Stop.
+	class ReadWatcher
+	{
+	public:
+		explicit ReadWatcher(AssetHandle scene)
+			: m_Thread([this, scene]()
+			{
+				while (!m_Stop.load())
+				{
+					if (const std::optional<float> share = SceneReadProgress::Get(scene); share && *share > m_Furthest.load())
+						m_Furthest.store(*share);
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
+				}
+			})
+		{
+		}
+
+		~ReadWatcher() { Stop(); }
+
+		ReadWatcher(const ReadWatcher&) = delete;
+		ReadWatcher& operator=(const ReadWatcher&) = delete;
+
+		void Stop()
+		{
+			m_Stop.store(true);
+			if (m_Thread.joinable())
+				m_Thread.join();
+		}
+
+		float GetFurthest() const { return m_Furthest.load(); }
+	private:
+		std::atomic<bool> m_Stop { false };
+		std::atomic<float> m_Furthest { 0.0f };
+		std::thread m_Thread;
+	};
+
+	// Entities of the documents whose reads the cancellation tests stop: their reads take a while in Debug builds, and their
+	// text reports its progress several times (about every megabyte).
+	constexpr size_t c_CancelledSceneEntities = 60'000;
+
+}
 
 TEST_SUITE("Scene.Loader")
 {
@@ -303,6 +351,50 @@ TEST_SUITE("Scene.Loader")
 		}
 		CHECK(parsing >= 3);
 		CHECK(linking >= 6);
+	}
+
+	TEST_CASE("Cancelling a scene load while its document is read ends the read where it is")
+	{
+		SceneLoaderFixture fixture(MakeSceneDocument(c_CancelledSceneEntities));
+		ReadWatcher watcher(fixture.SceneHandle);
+		SceneLoadRequest request = SceneLoader::LoadAsync(fixture.SceneHandle);
+		REQUIRE(request.GetState() == SceneLoadState::LoadingScene);
+		REQUIRE(WaitUntil([&]()
+		{
+			fixture.Manager->Update();
+			return watcher.GetFurthest() > 0.0f;
+		}, std::chrono::seconds(60)));
+		request.Cancel();
+		CHECK(request.GetState() == SceneLoadState::Cancelled);
+		// The loader asks every few hundred entities whether the load is still wanted: the read ends, before the end of the text
+		// (the entities are linked after it, from a share of 0.8 on).
+		REQUIRE(WaitUntil([&]()
+		{
+			fixture.Manager->Update();
+			return !SceneReadProgress::Get(fixture.SceneHandle).has_value();
+		}, std::chrono::seconds(60)));
+		watcher.Stop();
+		CHECK(watcher.GetFurthest() < 0.79f);
+		CHECK(fixture.Manager->GetAssetState(fixture.SceneHandle) != AssetState::Ready);
+	}
+
+	TEST_CASE("A manager that closes while a scene document is read ends the read where it is")
+	{
+		ScopedJobSystem jobs(2, 1);
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		const AssetHandle scene = manager->AddStored(0x100, AssetType::Scene, MakeSceneDocument(c_CancelledSceneEntities));
+		ReadWatcher watcher(scene);
+		manager->RequestLoad(scene);
+		REQUIRE(WaitUntil([&]()
+		{
+			manager->Update();
+			return watcher.GetFurthest() > 0.0f;
+		}, std::chrono::seconds(60)));
+		// The manager waits for the loads in flight as it goes: the read gives up instead of finishing.
+		manager.reset();
+		CHECK_FALSE(SceneReadProgress::Get(scene).has_value());
+		watcher.Stop();
+		CHECK(watcher.GetFurthest() < 0.79f);
 	}
 
 	TEST_CASE("The reads of scene documents under way are found by scene asset, the furthest one counting")

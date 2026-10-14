@@ -120,10 +120,13 @@ namespace Strata
 		static AssetType GetStaticType() { return AssetType::Scene; }
 		AssetType GetType() const override { return GetStaticType(); }
 
-		// Reads the document into the prepared scene. `progress` (when given) receives the share of the read done so far, in
-		// [0, 1], as it goes: about every megabyte parsed and every few thousand entities read, and 1 at the end (the asset
-		// loader passes it on to SceneReadProgress, which scene loads show).
-		static Ref<SceneAsset> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr, const std::function<void(float share)>& progress = {});
+		// Reads the document into the prepared scene, as a stream (SceneSerializer::DeserializeText). `progress` (when given)
+		// receives the share of the read done so far, in [0, 1], as it goes: about every megabyte parsed and every few thousand
+		// entities linked, and 1 at the end (the asset loader passes it on to SceneReadProgress, which scene loads show).
+		// `isCancelled` (when given) is asked every few hundred entities: once it is true the read stops and fails
+		// (AssetLoadData::IsCancelled, so that a cancelled load of a large scene ends at once).
+		static Ref<SceneAsset> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr, const std::function<void(float share)>& progress = {},
+			const std::function<bool()>& isCancelled = {});
 
 		// Main thread. Hands the prepared scene over without copying it; its source asset (Scene::GetSourceAsset) is this
 		// asset. The first call takes it: the asset holds no scene afterwards (IsTaken; it reports no memory), and a later call

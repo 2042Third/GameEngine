@@ -189,6 +189,9 @@ namespace Strata
 		std::deque<Completion> Completions;
 		uint32_t InFlight = 0;  // Load jobs running (each ends in exactly one PushCompletion)
 		uint32_t RangeJobs = 0; // Range read jobs running (RunRange; each ends in EndRangeJob)
+		// The manager waits for the loads in flight before it goes (WaitForInFlightLoads): they give up instead of finishing
+		// (AssetLoadData::IsCancelled).
+		std::atomic<bool> Closing { false };
 	};
 
 	AssetManagerBase::AssetManagerBase()
@@ -270,8 +273,10 @@ namespace Strata
 
 	void AssetManagerBase::WaitForInFlightLoads()
 	{
-		// Nothing new starts: a job finishing its read would otherwise dispatch the next queued load to this manager.
+		// Nothing new starts: a job finishing its read would otherwise dispatch the next queued load to this manager. What is
+		// being decoded gives up (a scene of a million entities would otherwise hold the manager's end for seconds).
 		m_Queue.Close();
+		m_LoadState->Closing.store(true, std::memory_order_relaxed);
 		std::unique_lock<std::mutex> lock(m_LoadState->Mutex);
 		m_LoadState->Condition.wait(lock, [this]() { return m_LoadState->InFlight == 0 && m_LoadState->RangeJobs == 0; });
 	}
@@ -624,7 +629,9 @@ namespace Strata
 
 			if (storedSize > 0)
 				m_PartialLoads.fetch_add(1, std::memory_order_relaxed);
-			JobSystem::Submit([loadState, metadata, data, storedSize, completion]() mutable
+			// The job asks the manager whether the load is still wanted: the manager outlives it, since it waits for every load in
+			// flight before it goes (WaitForInFlightLoads, which sets Closing first so that the job gives up instead of finishing).
+			JobSystem::Submit([manager = this, loadState, metadata, data, storedSize, completion]() mutable
 			{
 				try
 				{
@@ -637,6 +644,10 @@ namespace Strata
 					{
 						// The bytes are not needed after decoding: the loader may take them over.
 						AssetLoadData loadData(*data, storedSize);
+						loadData.SetCancelCheck([manager, &loadState, handle = metadata.Handle, generation = completion.Generation]()
+						{
+							return loadState->Closing.load(std::memory_order_relaxed) || !manager->IsLoadCurrent(handle, generation);
+						});
 						completion.LoadedAsset = (*loader)(metadata, loadData, &completion.Error);
 						if (completion.LoadedAsset)
 							completion.LoadedAsset->Handle = metadata.Handle;

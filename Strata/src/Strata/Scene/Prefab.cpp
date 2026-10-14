@@ -304,13 +304,15 @@ namespace Strata
 		return payload ? CreateFromSnapshot(*payload, outError) : nullptr;
 	}
 
-	Ref<SceneAsset> SceneAsset::Deserialize(std::span<const uint8_t> data, std::string* outError, const std::function<void(float share)>& progress)
+	Ref<SceneAsset> SceneAsset::Deserialize(std::span<const uint8_t> data, std::string* outError, const std::function<void(float share)>& progress,
+		const std::function<bool()>& isCancelled)
 	{
 		Ref<SceneAsset> asset = CreateRef<SceneAsset>();
 		{
 			// The document is read as a stream into the scene the asset keeps, which validates it too (a broken scene fails here,
 			// at load time): the text and one entity's DOM at a time, never a DOM of the whole document.
 			SceneReadOptions options;
+			options.IsCancelled = isCancelled;
 			EntityReadProgress linkProgress;
 			if (progress)
 			{

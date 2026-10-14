@@ -724,7 +724,10 @@ short. Their full wording:
   with `AssetLoadData::TakeBytes` when the asset keeps them, instead of copying them), an importer if it comes from
   external files (`RegisterAssetPipeline`), `GetMemoryUsage` reporting what it holds in each pool once finalized (and
   `GetFinalizedMemoryUsage` when finalizing moves data between pools), and tests for round trips and corrupt data
-  (every loader must reject truncated or garbage bytes without crashing). GPU uploads in `FinalizeOnMainThread` go in
+  (every loader must reject truncated or garbage bytes without crashing). A loader whose decoding takes long (documents of
+  many entities) asks `AssetLoadData::IsCancelled` every few milliseconds of work and gives up, returning no asset, once
+  it is true: the load was cancelled or replaced, or the manager is closing (scene loads pass it to
+  `SceneReadOptions::IsCancelled`, so a cancelled `SceneLoadRequest` or a closing editor ends the read at once). GPU uploads in `FinalizeOnMainThread` go in
   steps of at most `c_AssetUploadStepBytes` within the context's budget (`AssetFinalizeContext`,
   `AssetFinalizeResult::Pending`) and report their bytes; never upload an unbounded amount in one call. They record into
   `AssetFinalizeContext::Upload` (the renderer's assets downcast it with `RendererUploadContext::From`): the asset layer

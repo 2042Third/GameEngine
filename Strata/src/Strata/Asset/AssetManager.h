@@ -150,6 +150,14 @@ namespace Strata
 		uint64_t GetStoredSize() const { return m_StoredSize; }
 		bool IsPartial() const { return m_StoredSize > m_ReadSize; }
 
+		// Whether the load was given up meanwhile: cancelled (AssetManagerBase::CancelLoad, a SceneLoadRequest cancelled or
+		// replaced), superseded by a newer load, or its manager shuts down. Loaders of large documents ask between pieces of
+		// their work (SceneReadOptions::IsCancelled) and give up, returning no asset: nobody takes what they would make. Any
+		// thread; costs a lock of the manager, so ask every few hundred entities rather than every one.
+		bool IsCancelled() const { return m_IsCancelled && m_IsCancelled(); }
+		// What IsCancelled asks (the manager sets it for every load; without it a load is never cancelled).
+		void SetCancelCheck(std::function<bool()> check) { m_IsCancelled = std::move(check); }
+
 		// The bytes as a vector of the caller's own: moved out when they were handed over (GetBytes is empty afterwards),
 		// copied otherwise.
 		std::vector<uint8_t> TakeBytes()
@@ -167,6 +175,7 @@ namespace Strata
 		std::vector<uint8_t>* m_Owner = nullptr;
 		uint64_t m_ReadSize = 0;
 		uint64_t m_StoredSize = 0;
+		std::function<bool()> m_IsCancelled;
 	};
 
 	// The first bytes of an asset's stored form a partial load reads to find out how much it needs (AssetPrefixFunction):
