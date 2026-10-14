@@ -1806,6 +1806,18 @@ and `AudioSystem`, the built-in "Audio" scene system.
   alignment). World-space text is depth-tested, screen-space text goes over everything. Text without a
   font, or whose font is loading, uses `Font::GetDefault()` (Roboto, embedded with
   `strata_embed_file` from `CMake/StrataEmbeddedFiles.cmake`).
+- Text is measured without rasterizing: a font's `FontFace` (`Font::GetFace`, made on first use, main thread only)
+  holds the glyph metrics (code points to glyphs, advances, kerning, vertical metrics, the plane bounds and raster
+  sizes of the distance fields) and `ShapeText(face, text, TextShapeOptions, ShapedText&)` lays text out from them:
+  alignment, word wrap (after spaces and hyphens, inside words longer than a line, `\n` kept), line spacing, vertical
+  alignment in a box, and truncation by height or width with or without an ellipsis (U+2026, or "..." when the font
+  lacks it). `FontAtlas` places and rasterizes what the face describes; `FontAtlas::Resolve` turns shaped text into
+  quads, and `LayoutText` is `ShapeText` with the atlas's kerning cache followed by `Resolve`. Layout code (the game
+  UI's fit-to-content and wrapping) never rasterizes to measure.
+- A `SceneRenderer`'s atlases are a `FontAtlasCache` (one atlas per font) shared by every pass that draws glyphs: the
+  text renderer first, then the overlay passes (the game UI). `BeginFrame` gives the frame
+  `TextRenderer::c_FrameRasterBudget`, which each pass lends to the atlases it asks for glyphs and gives back what is
+  left, and drops, at the start of the next frame, atlases no pass used whose font only the cache still holds.
 - Glyph atlases stay bounded: glyphs live in cells of up to `FontAtlasSpecification::MaxPages` texture
   array pages, the least recently used ones (never those of the current frame) are evicted, and only
   changed rows are uploaded. New glyphs are rasterized within `TextRenderer::c_FrameRasterBudget` per

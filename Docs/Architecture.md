@@ -231,7 +231,8 @@ Assets: `Mesh` (skinned meshes also have a skin stream, four joint influences pe
 skin's joints in the skeleton, their inverse bind matrices and the bind-pose extent of what each joint moves; cooked mesh
 format version 2, version 1 still loads), `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`;
 texture formats, the cooked texture format and the block decoders are `TextureFormat`, `CookedTexture` and
-`BlockCompression` (see [Texture cooking](#texture-cooking)). Also `TextRenderer`/`FontAtlas`, `DebugDraw`/`SceneGizmos`, `TextureReadback`
+`BlockCompression` (see [Texture cooking](#texture-cooking)). Also `TextRenderer`/`FontAtlas`/`FontAtlasCache` (glyph atlases, one per
+font per renderer) with `FontFace`/`TextLayout` (glyph metrics and text shaping without rasterizing), `DebugDraw`/`SceneGizmos`, `TextureReadback`
 (non-blocking GPU readback) and `ImageWriter` (PNG). Conventions and rules: AGENTS.md, "Architecture rules", and
 DeveloperGuide.md, "Rendering".
 
@@ -1693,8 +1694,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   environment map (the source of its cube maps) until the environment changes, also while the renderer idles or after
   its project closed (the maps computed from a map, and with them the map, are shared by every renderer lighting with it
   and released with the last one; until a renderer has computed them it holds the map whole in the texture streamer,
-  `TextureStreamer::Hold`, also through frames it does not draw), and `TextRenderer`'s glyph atlases hold their fonts as
-  long as the fonts are loaded.
+  `TextureStreamer::Hold`, also through frames it does not draw), and the renderer's glyph atlases (`FontAtlasCache`)
+  hold their fonts as long as the fonts are loaded.
   Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what `GetOpaqueBatches` reports after the frame holds no
   pointers.
 - **Material data taken over by still frames** (`SceneRenderer::MaterialResolution`). Resolving a material builds its GPU

@@ -4,6 +4,7 @@
 #include "Strata/Core/Assert.h"
 #include "Strata/Core/EmbeddedFiles.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Renderer/FontFace.h"
 #include "Strata/Renderer/FontValidation.h"
 
 namespace Strata
@@ -41,6 +42,20 @@ namespace Strata
 		font->m_KerningUsable = facts.KerningUsable;
 		font->m_GlyphShapes = std::move(facts.GlyphShapes);
 		return font;
+	}
+
+	Font::~Font() = default;
+
+	const FontFace* Font::GetFace(std::string* outError) const
+	{
+		if (!m_FaceTried)
+		{
+			m_FaceTried = true;
+			m_Face = FontFace::Create(*this, &m_FaceError);
+		}
+		if (!m_Face && outError)
+			*outError = m_FaceError;
+		return m_Face.get();
 	}
 
 	const GlyphShapeCost& Font::GetGlyphShape(uint32_t glyph) const

@@ -26,6 +26,7 @@
 namespace Strata
 {
 
+	class FontAtlasCache;
 	class Material;
 	class Mesh;
 	class RenderScene;
@@ -766,6 +767,7 @@ namespace Strata
 		nvrhi::FramebufferHandle m_OverlayFramebuffer; // Output texture with the scene depth (read-only)
 		nvrhi::BindingSetHandle m_CopyBindingSet;      // Output texture, copied into external targets
 		std::vector<std::pair<nvrhi::FramebufferInfo, nvrhi::GraphicsPipelineHandle>> m_CopyPipelines;
+		Scope<FontAtlasCache> m_FontAtlases; // Glyph atlases of the text and the overlay passes (one per font)
 		Scope<TextRenderer> m_TextRenderer; // TextComponents, drawn with the overlays
 
 		// Lights gathered per frame (kept between frames to reuse the allocations)

@@ -5,6 +5,7 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Math/Frustum.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Renderer/FontAtlasCache.h"
 #include "Strata/Renderer/LODSelection.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
@@ -469,7 +470,8 @@ namespace Strata
 			"SceneRenderer: failed to create GPU resources");
 		CreateIBLResources();
 		CreateOverlayResources();
-		m_TextRenderer = CreateScope<TextRenderer>(m_Specification.DebugName, m_FrameConstantBuffer);
+		m_FontAtlases = CreateScope<FontAtlasCache>();
+		m_TextRenderer = CreateScope<TextRenderer>(m_Specification.DebugName, m_FrameConstantBuffer, *m_FontAtlases);
 	}
 
 	void SceneRenderer::CreateIBLResources()
@@ -1873,6 +1875,7 @@ namespace Strata
 		tonemap.BloomAdditive = postProcess.BloomThreshold > 0.0f ? 1u : 0u;
 
 		TextRenderStats textStats;
+		m_FontAtlases->BeginFrame(TextRenderer::c_FrameRasterBudget);
 		const bool text = m_TextRenderer->Prepare(scene, m_ViewportSize, options.DrawScreenSpaceText, commandList, textStats);
 		m_Stats.Texts = textStats.Texts;
 		m_Stats.ScreenSpaceTexts = textStats.ScreenSpaceTexts;

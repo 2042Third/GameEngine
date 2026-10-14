@@ -388,7 +388,8 @@ lights, overlays and text: [Rendering](Docs/DeveloperGuide.md#rendering).
 - Shaders writing HDR targets clamp with `SanitizeHDR`; normal maps are read as X and Y with Z reconstructed.
 - Skinning costs unskinned scenes nothing (`RenderScene::HasSkinProxies`).
 - Font files are untrusted input: extend `Renderer/FontValidation.h`, with crafted-font tests, before calling another
-  stb_truetype function.
+  stb_truetype function. Text is measured with `ShapeText` on the font's `FontFace`, never by rasterizing; passes that
+  draw glyphs share the renderer's `FontAtlasCache` and its frame budget.
 - Read GPU data back with `TextureReadback`, polled per frame; `Renderer::ReadTexture` blocks (tests and tools only).
 
 ## Automation (editor RPC + MCP)
