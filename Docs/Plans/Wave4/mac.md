@@ -31,8 +31,8 @@ The old machine's scratch tools are gone; these replace them.
 - **Brace check:** none; `.clang-format` states the style, and the review reads it.
 - **Perf lock:** `python3 Tools/PerfLock.py --label <key> -- <command> [arguments...]`. It waits up to 30 minutes for
   the lock (then exits 75), ends a command after 25 minutes (exit 124), and `--status` names the holder.
-- **CI:** the orchestrator pushes `ci/<key>`; read the results with `python3 -I Docs/Handoff/tools/ci_status.py <sha>`
-  and `ci_annotations.py <sha>`, or `gh run view`.
+- **CI:** the orchestrator pushes `ci/<key>`; read the results with `python3 Tools/CIStatus.py status <sha>` and
+  `python3 Tools/CIStatus.py annotations <sha>`.
 
 ## Perf on the Mac
 
