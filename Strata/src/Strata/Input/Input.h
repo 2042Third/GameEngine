@@ -31,6 +31,15 @@ namespace Strata
 		bool IsReleased(MouseCode button) const { return button < 32 && (Released & (1u << button)) != 0; }
 	};
 
+	// A key as the devices and simulated input give it, before keyboard capture (Input::GetKeyState): what the game UI's text
+	// fields read.
+	struct KeyState
+	{
+		bool Down = false;
+		bool Pressed = false;
+		bool Released = false;
+	};
+
 	// Polling-style input state, updated from window events once per frame. Main thread only.
 	//
 	// "Down" queries report the current state; "Pressed"/"Released" report transitions that happened
@@ -75,7 +84,7 @@ namespace Strata
 
 		// Text typed during the current input frame, as UTF-8: the devices' (while input is enabled), then simulated input's
 		// (SimulateText), at most c_MaxTypedTextBytes a frame in whole characters (from the first that does not fit, the rest
-		// of the frame's text is dropped, so what is kept is what was typed first).
+		// of the frame's text is dropped, so what is kept is what was typed first). Empty while the keyboard is captured.
 		static constexpr size_t c_MaxTypedTextBytes = 1024;
 		static std::string GetTypedText();
 
@@ -85,6 +94,15 @@ namespace Strata
 		static void SetPointerCapture(bool captured);
 		static bool IsPointerCaptured();
 		static PointerState GetPointerState();
+
+		// Keyboard capture (the game UI's text fields, while one is edited): while set, the game's key queries (IsKeyDown,
+		// IsKeyPressed, IsKeyReleased) and GetTypedText report nothing, so typing a name never moves the player. GetKeyState
+		// and GetUncapturedTypedText read the keyboard regardless. Reset (and the UI system, when the field loses the focus or
+		// play stops) clears it.
+		static void SetKeyboardCapture(bool captured);
+		static bool IsKeyboardCaptured();
+		static KeyState GetKeyState(KeyCode key);
+		static std::string GetUncapturedTypedText();
 
 		//////////////////////////////////////////////////////////////////////////
 		// Engine integration (application, window backends, editor, automation)

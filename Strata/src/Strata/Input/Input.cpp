@@ -117,6 +117,7 @@ namespace Strata
 
 			SimulatedState Simulated;
 			bool PointerCaptured = false;
+			bool KeyboardCaptured = false;
 
 			bool Suspended = false;
 			bool FrameSeen = true; // Whether the game has had the current transitions (false once suspended frames collect them)
@@ -320,17 +321,17 @@ namespace Strata
 
 	bool Input::IsKeyDown(KeyCode key)
 	{
-		return IsMergedDown(s_State.Keys, s_State.Simulated.Keys, key);
+		return !s_State.KeyboardCaptured && IsMergedDown(s_State.Keys, s_State.Simulated.Keys, key);
 	}
 
 	bool Input::IsKeyPressed(KeyCode key)
 	{
-		return IsMergedTransition(&ButtonStates<c_MaxKeyCode>::Pressed, s_State.Keys, s_State.Simulated.Keys, key);
+		return !s_State.KeyboardCaptured && IsMergedTransition(&ButtonStates<c_MaxKeyCode>::Pressed, s_State.Keys, s_State.Simulated.Keys, key);
 	}
 
 	bool Input::IsKeyReleased(KeyCode key)
 	{
-		return IsMergedTransition(&ButtonStates<c_MaxKeyCode>::Released, s_State.Keys, s_State.Simulated.Keys, key);
+		return !s_State.KeyboardCaptured && IsMergedTransition(&ButtonStates<c_MaxKeyCode>::Released, s_State.Keys, s_State.Simulated.Keys, key);
 	}
 
 	bool Input::IsMouseButtonDown(MouseCode button)
@@ -369,6 +370,11 @@ namespace Strata
 
 	std::string Input::GetTypedText()
 	{
+		return s_State.KeyboardCaptured ? std::string() : GetUncapturedTypedText();
+	}
+
+	std::string Input::GetUncapturedTypedText()
+	{
 		std::string text = s_State.Enabled ? s_State.TypedText.Bytes : std::string();
 		// Together within the frame's limit: simulated text after the devices', whole characters only.
 		const std::string& simulated = s_State.Simulated.TypedText.Bytes;
@@ -393,6 +399,25 @@ namespace Strata
 	bool Input::IsPointerCaptured()
 	{
 		return s_State.PointerCaptured;
+	}
+
+	void Input::SetKeyboardCapture(bool captured)
+	{
+		s_State.KeyboardCaptured = captured;
+	}
+
+	bool Input::IsKeyboardCaptured()
+	{
+		return s_State.KeyboardCaptured;
+	}
+
+	KeyState Input::GetKeyState(KeyCode key)
+	{
+		KeyState state;
+		state.Down = IsMergedDown(s_State.Keys, s_State.Simulated.Keys, key);
+		state.Pressed = IsMergedTransition(&ButtonStates<c_MaxKeyCode>::Pressed, s_State.Keys, s_State.Simulated.Keys, key);
+		state.Released = IsMergedTransition(&ButtonStates<c_MaxKeyCode>::Released, s_State.Keys, s_State.Simulated.Keys, key);
+		return state;
 	}
 
 	PointerState Input::GetPointerState()

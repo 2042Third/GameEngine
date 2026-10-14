@@ -659,6 +659,46 @@ TEST_SUITE("Core.Input")
 		CHECK_FALSE(Input::IsPointerCaptured());
 	}
 
+	TEST_CASE("Keyboard capture hides keys and typed text from the game, never from the key state")
+	{
+		Input::Reset();
+		Input::BeginFrame();
+		Input::ProcessKey(Key::A, true);
+		Input::ProcessText('a');
+		Input::SimulateText("b");
+		Input::SimulateKey(Key::Enter, true);
+		Input::SetKeyboardCapture(true);
+		CHECK(Input::IsKeyboardCaptured());
+		CHECK_FALSE(Input::IsKeyDown(Key::A));
+		CHECK_FALSE(Input::IsKeyPressed(Key::A));
+		CHECK(Input::GetTypedText().empty());
+		KeyState a = Input::GetKeyState(Key::A);
+		CHECK(a.Down);
+		CHECK(a.Pressed);
+		CHECK_FALSE(a.Released);
+		CHECK(Input::GetUncapturedTypedText() == "a");
+
+		// Simulated keys and text reach the key state alike, in the next input frame.
+		Input::BeginFrame();
+		CHECK(Input::GetKeyState(Key::Enter).Pressed);
+		CHECK_FALSE(Input::IsKeyPressed(Key::Enter));
+		CHECK(Input::GetUncapturedTypedText() == "b");
+		Input::ProcessKey(Key::A, false);
+		a = Input::GetKeyState(Key::A);
+		CHECK(a.Released);
+		CHECK_FALSE(Input::IsKeyReleased(Key::A));
+		// Out-of-range codes are no key.
+		CHECK_FALSE(Input::GetKeyState(static_cast<KeyCode>(60000)).Down);
+
+		// Capture lasts until it is cleared: by its owner, or by Reset.
+		Input::SetKeyboardCapture(false);
+		CHECK(Input::IsKeyDown(Key::Enter));
+		CHECK(Input::GetTypedText() == "b");
+		Input::SetKeyboardCapture(true);
+		Input::Reset();
+		CHECK_FALSE(Input::IsKeyboardCaptured());
+	}
+
 	TEST_CASE("Disabled input hides the devices' pointer buttons from the pointer state, not simulated ones")
 	{
 		Input::Reset();
