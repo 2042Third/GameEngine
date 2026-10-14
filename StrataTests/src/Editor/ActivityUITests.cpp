@@ -20,6 +20,7 @@
 #include <nlohmann/json.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <future>
 #include <memory>
 #include <optional>
@@ -387,6 +388,14 @@ TEST_SUITE("Editor.UI.Activity")
 		std::optional<UI::ItemProbe::Item> result = UI::ItemProbe::Find(resultKey);
 		REQUIRE(result);
 		const float widthBefore = result->Max.x - result->Min.x;
+		// The name's width in the font the Result column draws with (the UI's), with the fonts the editor has at the time.
+		const auto nameWidth = [&editor, &name]()
+		{
+			float width = 0.0f;
+			editor.FrameWith([&width, &name]() { width = ImGui::CalcTextSize(name.c_str()).x; });
+			return width;
+		};
+		const float nameBefore = nameWidth();
 
 		UI::EditorFonts::BeginLoadingFallback();
 		REQUIRE(editor.FramesUntil([]() { return !UI::EditorFonts::IsLoadingFallback(); }));
@@ -401,8 +410,12 @@ TEST_SUITE("Editor.UI.Activity")
 		REQUIRE(result);
 		ImGuiTable* table = FindTable(editor.FindPanelWindow(EditorPanels::c_Activity), 5);
 		REQUIRE(table);
-		// Wider now (the merged glyphs), and still whole in its column.
-		CHECK(result->Max.x - result->Min.x > widthBefore + 3.0f * ImGui::GetFontSize());
+		// Wider now by what the merged glyphs add to the name (as much as the system's font makes them wider than ImGui's
+		// fallback character), and still whole in its column.
+		const float growth = nameWidth() - nameBefore;
+		CHECK(growth > 0.0f);
+		// Item rectangles are whole pixels: within one of the measured growth.
+		CHECK(std::abs(result->Max.x - result->Min.x - (widthBefore + growth)) <= 1.0f);
 		CHECK(result->Max.x <= table->Columns[3].ClipRect.Max.x);
 	}
 
