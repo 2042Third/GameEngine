@@ -973,7 +973,6 @@ namespace Strata
 		std::vector<JPH::BodyID> PendingRemovals;
 		std::vector<JPH::BodyID> PendingDestructions;
 		uint64_t AddBatchCount = 0;                                   // Batches of new bodies added since the world was created
-		std::vector<JPH::BodyInterface::AddState> AddStates;          // Scratch of FlushBodyBatches
 		std::unordered_map<PairKey, TouchingPair, PairKeyHash> TouchingPairs;
 		std::unordered_map<UUID, std::vector<PairKey>> EntityPairs;   // Touching pairs of each entity (see AddTouchingPair)
 		uint64_t PairIndexOperations = 0;                             // Entries of EntityPairs written since the world was created
@@ -1578,9 +1577,6 @@ namespace Strata
 				bodyInterface.InvalidateContactCache(body);
 		}
 
-		// New bodies per broad phase batch (see FlushBodyBatches).
-		constexpr uint32_t c_AddChunk = 4096;
-
 		// Adds the bodies created since the last flush to the simulation, in one batch per activation mode, after the queued
 		// removals and destructions. Bodies destroyed or taken out of the simulation since they were queued are skipped.
 		void FlushBodyBatches(PhysicsWorldData& data)
@@ -1600,30 +1596,12 @@ namespace Strata
 				});
 				if (batch.empty())
 					return;
-				// AddBodiesPrepare may reorder the batch; Finalize takes it as it left it. Large batches go in chunks of fixed size
-				// (the broad phase does not depend on the number of threads), prepared on the job threads and added in order.
-				const uint32_t count = static_cast<uint32_t>(batch.size());
-				const uint32_t chunkCount = (count + c_AddChunk - 1) / c_AddChunk;
-				std::vector<JPH::BodyInterface::AddState>& states = data.AddStates;
-				states.assign(chunkCount, nullptr);
-				const auto prepare = [&](uint32_t firstChunk, uint32_t lastChunk)
-				{
-					for (uint32_t chunk = firstChunk; chunk < lastChunk; chunk++)
-					{
-						const uint32_t begin = chunk * c_AddChunk;
-						states[chunk] = bodies.AddBodiesPrepare(batch.data() + begin, static_cast<int>(std::min(count, begin + c_AddChunk) - begin));
-					}
-				};
-				if (chunkCount > 1 && JobSystem::IsInitialized())
-					JobSystem::ParallelFor(chunkCount, 1, prepare);
-				else
-					prepare(0, chunkCount);
-				for (uint32_t chunk = 0; chunk < chunkCount; chunk++)
-				{
-					const uint32_t begin = chunk * c_AddChunk;
-					bodies.AddBodiesFinalize(batch.data() + begin, static_cast<int>(std::min(count, begin + c_AddChunk) - begin), states[chunk], activation);
-				}
-				data.AddBatchCount += chunkCount;
+				// AddBodiesPrepare may reorder the batch; Finalize takes it as it left it. Never prepared on several threads at once:
+				// Jolt's broad phase node allocator (FixedSizeFreeList, Jolt 5.6) publishes a new page's size before its pointer
+				// without ordering, so a thread preparing beside one that allocates a page may read a page that is not there yet.
+				const JPH::BodyInterface::AddState state = bodies.AddBodiesPrepare(batch.data(), static_cast<int>(batch.size()));
+				bodies.AddBodiesFinalize(batch.data(), static_cast<int>(batch.size()), state, activation);
+				data.AddBatchCount++;
 				InvalidateReusedIDs(data, batch);
 				batch.clear();
 			};
@@ -2983,9 +2961,8 @@ namespace Strata
 			std::vector<JPH::Body*> created(bodyCount, nullptr);
 			std::vector<uint8_t> states(bodyCount, 0); // Bit 0: in the broad phase; bit 1: active
 			const JPH::BodyLockInterfaceNoLock& oldLocks = data.JoltSystem->GetBodyLockInterfaceNoLock();
-			// Creating bodies and preparing their broad phase batches are safe on any thread (disjoint bodies, Jolt's lock-free
-			// node allocator); the main thread waits meanwhile.
-			JPH::BodyInterface& newBodies = system->GetBodyInterfaceNoLock();
+			// Creating bodies is safe on any thread (disjoint bodies); the main thread waits meanwhile.
+			const JPH::BodyInterface& newBodies = system->GetBodyInterfaceNoLock();
 			const auto forChunks = [&](const std::function<void(uint32_t begin, uint32_t end)>& function)
 			{
 				const auto run = [&](uint32_t firstChunk, uint32_t lastChunk)
@@ -3038,36 +3015,24 @@ namespace Strata
 				return false;
 			}
 
-			// The bodies that were in the old broad phase join the new one chunk by chunk (prepared on the job threads, added in
-			// chunk order), awake ones activated.
-			struct AddBatch
+			// The bodies that were in the old broad phase join the new one, sleeping and awake ones in a batch each (awake ones
+			// activated). Prepared on this thread only: see FlushBodyBatches.
+			std::vector<JPH::BodyID> sleeping;
+			std::vector<JPH::BodyID> awake;
+			for (uint32_t index = 0; index < bodyCount; index++)
 			{
-				std::vector<JPH::BodyID> Bodies;
-				JPH::BodyInterface::AddState State = nullptr;
-				JPH::EActivation Activation = JPH::EActivation::DontActivate;
-			};
-			std::vector<AddBatch> batches(2 * static_cast<size_t>(chunkCount));
-			forChunks([&](uint32_t begin, uint32_t end)
-			{
-				AddBatch& sleeping = batches[2 * (begin / c_MigrationChunk)];
-				AddBatch& awake = batches[2 * (begin / c_MigrationChunk) + 1];
-				awake.Activation = JPH::EActivation::Activate;
-				for (uint32_t index = begin; index < end; index++)
-				{
-					if (states[index] & 1u)
-						((states[index] & 2u) ? awake : sleeping).Bodies.push_back(bodyIDs[index]);
-				}
-				for (AddBatch* batch : { &sleeping, &awake })
-				{
-					if (!batch->Bodies.empty())
-						batch->State = newBodies.AddBodiesPrepare(batch->Bodies.data(), static_cast<int>(batch->Bodies.size()));
-				}
-			});
-			for (AddBatch& batch : batches)
-			{
-				if (!batch.Bodies.empty())
-					newInterface.AddBodiesFinalize(batch.Bodies.data(), static_cast<int>(batch.Bodies.size()), batch.State, batch.Activation);
+				if (states[index] & 1u)
+					((states[index] & 2u) ? awake : sleeping).push_back(bodyIDs[index]);
 			}
+			const auto addBatch = [&](std::vector<JPH::BodyID>& batch, JPH::EActivation activation)
+			{
+				if (batch.empty())
+					return;
+				const JPH::BodyInterface::AddState state = newInterface.AddBodiesPrepare(batch.data(), static_cast<int>(batch.size()));
+				newInterface.AddBodiesFinalize(batch.data(), static_cast<int>(batch.size()), state, activation);
+			};
+			addBatch(sleeping, JPH::EActivation::DontActivate);
+			addBatch(awake, JPH::EActivation::Activate);
 
 			// What the creation settings do not carry, once activation reset it: forces and torques accumulated for the next
 			// step, sleep timers and spheres.

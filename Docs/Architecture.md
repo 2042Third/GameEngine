@@ -254,8 +254,8 @@ when `PhysicsWorld::Reserve` asked for more room): it moves every body into a ne
 of at least twice its bodies and what it needs, up to `PhysicsSettings::GrowthLimit` (default the engine's limit, a
 memory cap for games). Bodies keep their `JPH::BodyID`, pose, velocity, accumulated forces, sleep state and the contact
 cache, character controllers keep their state (`CharacterControllerSet::Rebind`), automatic pair and contact capacities
-grow with it, a `MaxBodies` the scene gives is exceeded with a warning, the bodies move in fixed chunks of 4,096 on the
-job threads, and the old system is destroyed by a background job (`PhysicsStats::GrowthCount`, `LastGrowthMs`); a grown
+grow with it, a `MaxBodies` the scene gives is exceeded with a warning, the bodies are created in fixed chunks of 4,096
+on the job threads, and the old system is destroyed by a background job (`PhysicsStats::GrowthCount`, `LastGrowthMs`); a grown
 world clears the contact cache of the bodies it creates, because its Jolt system counts their sequence numbers anew. Only
 a world at its growth limit leaves bodies waiting, reported in one error. A round of changes with at least 256 bodies to
 build (a play start, a streamed cell) builds them on the job threads (`RefreshOwnersInParallel`): the main thread starts
@@ -263,9 +263,10 @@ each build in record order (records, merged colliders, transforms, velocities), 
 shapes (each chunk shares its own box and sphere shapes: one shape shared by every thread would make the bodies' reference
 counting contend for one cache line; the main thread merges them into the world's), settings and Jolt bodies in fixed
 chunks of 512, and the main thread gives them
-their IDs in record order, building the serial way what the jobs left to it (mesh colliders, anything that warns);
-batches of more than 4,096 new bodies join the broad phase in chunks prepared on the job threads. So body IDs and the
-simulation do not depend on the number of threads (`PhysicsStats::ParallelBuildCount`). Steps that overflow the pair or contact buffers
+their IDs in record order, building the serial way what the jobs left to it (mesh colliders, anything that warns). So
+body IDs and the simulation do not depend on the number of threads (`PhysicsStats::ParallelBuildCount`). Broad phase
+batches are prepared on one thread at a time: Jolt 5.6's node allocator publishes a new page's size before its pointer
+without ordering, so two threads preparing at once can crash on processors that reorder stores (Apple silicon). Steps that overflow the pair or contact buffers
 are counted (`PhysicsStats::BodyOverflowCount`, `ContactOverflowSteps`), and what a world lacked is remembered per scene
 (`Scene::GetLineageID`: the scene asset it was loaded from or saved as, else the scene and its copies; never another
 scene of the same name), so the scene's next world is sized for it. Jolt reserves a world's buffers when it is created

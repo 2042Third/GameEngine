@@ -115,7 +115,7 @@ namespace Strata
 		// Body slots read to put the moved bodies in body order for the write-back: the groups of 64 that hold a moved body.
 		uint32_t OrderedSlotCount = 0;
 		uint64_t BuildCount = 0;         // Bodies built or rebuilt since the world was created (attempts that failed included)
-		uint64_t AddBatchCount = 0;      // Batches that added new bodies to the simulation since then (one per activation mode per round of changes, one per 4,096 bodies of larger rounds)
+		uint64_t AddBatchCount = 0;      // Batches that added new bodies to the simulation since then (one per activation mode per round of changes)
 		uint32_t SharedShapeCount = 0;   // Box and sphere shapes the world built, each shared by the bodies of its size
 		uint64_t MeshCheckCount = 0;     // Mesh collider bodies checked for changed, arrived or cooked mesh data since then
 		uint64_t StepCount = 0;          // Simulation steps since the world was created
