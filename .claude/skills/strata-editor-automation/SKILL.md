@@ -101,7 +101,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What happened (errors, script output)? | `log.read` (`after` = the previous `latest` to page; `minLevel`) |
 | How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`); `asset.setBudget` changes the open project's budgets (MB of memory, staging and uploads per frame; ms of finalization and of upload steps per frame) |
 | How big is a world, which cells changed since its index? | `world.info {"world": "Worlds/Island.stworld"}`: layers (cell size, streaming distance), cells, `index.staleCells`, `maxBodiesInRadius` |
-| Measure a world's cells (bodies, bounds) and size its physics | `world.cook {"world": ..., "apply": true}` with the persistent scene open: reads changed cells only, writes the index, sets the capacity (one undo step); fails naming entity IDs cells share |
+| Measure a world's cells (bodies, bounds) and size its physics | `world.cook {"world": ...}` with the persistent scene open: reads changed cells only, writes the index, sets the capacity (`apply`, default true; one undo step); fails naming entity IDs cells share |
 | Are physics bodies missing collision, how full is the physics world? | `physics.stats` while playing: bodies, capacity (`maxBodies`, `reservedMB`), `waitingForSlot` (bodies without collision: only a world at its growth limit has them; others grow before their next step), last frame's `addedLastFrame`/`removedLastFrame`, `growths` |
 | Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %) |
 

@@ -169,7 +169,11 @@ TEST_SUITE("Editor.WorldCook")
 		CHECK(result["cellsReused"] == 0);
 		CHECK(result["persistentBodies"] == 1);
 		CHECK(result["sources"] == 1);
-		CHECK(result["warnings"].empty());
+		CHECK(result["staleBefore"] == 25);
+		CHECK(result["applied"] == false);
+		REQUIRE(result["warnings"].size() == 1); // The persistent scene is not open: no capacity set
+		CHECK(result["warnings"][0].get<std::string>().find("not the edited scene") != std::string::npos);
+		CHECK(result["seconds"].get<double>() >= 0.0);
 
 		const Ref<WorldAsset> world = project.ReadWorld();
 		const WorldData& data = world->GetData();
@@ -222,6 +226,7 @@ TEST_SUITE("Editor.WorldCook")
 		CHECK(data.Index->PersistentBodies == 1);
 		CHECK(result["maxBodiesInRadius"] == most + 1);
 		CHECK(result["recommendedMaxBodies"] == (5 * (most + 1) + 3) / 4);
+		CHECK(result["maxBodies"] == result["recommendedMaxBodies"]);
 		CHECK(result["reservedMB"].get<double>() > 0.0);
 
 		const nlohmann::json info = project.Run("world.info", { { "world", "Worlds/Gen.stworld" } });

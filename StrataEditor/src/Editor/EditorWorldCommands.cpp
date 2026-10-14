@@ -17,6 +17,8 @@
 
 #include <nlohmann/json.hpp>
 
+#include <chrono>
+
 // Worlds and the physics that holds them: world.cook, world.info and physics.stats.
 
 namespace Strata
@@ -102,12 +104,13 @@ namespace Strata
 			"Measures a world's cells for its index, off the frame: per cell its entities, physics bodies, bounds and the stored bytes it loads, and "
 			"the most bodies the persistent scene's streaming sources can keep loaded anywhere (maxBodiesInRadius); writes them into the world "
 			"document. Only cells whose files changed since the last cook are read again (cellsRead; cellsReused). Fails, writing nothing, when "
-			"cells share entity IDs with each other or with the persistent scene (the error names them) or a cell cannot be read. apply: also "
-			"sets the persistent scene's physics capacity (Physics Capacity > Max Bodies) to the recommended one, 1.25 times maxBodiesInRadius for "
-			"spawns; the persistent scene must be the edited scene, in edit mode. One undo step. warnings: cells beyond the 20 km worlds are "
-			"supported within, and empty cells.",
+			"cells share entity IDs with each other or with the persistent scene (the error names them) or a cell cannot be read. apply (default "
+			"true): also sets the persistent scene's physics capacity (Physics Capacity > Max Bodies) to the recommended one, 1.25 times "
+			"maxBodiesInRadius for spawns, when the persistent scene is the edited scene in edit mode (otherwise a warning says it was not set; an "
+			"explicit apply: true then fails). One undo step. Returns staleBefore (cells measured again), maxBodies (the recommended capacity), "
+			"seconds, and warnings: cells beyond the 20 km worlds are supported within, empty cells.",
 			ObjectSchema({ { "world", AssetSchema("The world (.stworld): handle or path") },
-				{ "apply", BoolSchema("Also set the persistent scene's physics capacity (default false)") } }, { "world" }),
+				{ "apply", BoolSchema("Also set the persistent scene's physics capacity (default true)") } }, { "world" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				EditorAssetManager* assets = context.GetAssetManager();
@@ -115,17 +118,25 @@ namespace Strata
 					return EditorCommandResult::Fail("No project is open (project.open or project.create)");
 				CommandArguments arguments(parameters);
 				const AssetHandle world = ResolveAsset(context, arguments, "world", AssetType::World);
-				const bool apply = arguments.GetBool("apply", false);
+				const bool explicitApply = arguments.Has("apply");
+				bool apply = arguments.GetBool("apply", true);
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				const auto started = std::chrono::steady_clock::now();
 				std::string error;
 				Ref<WorldCook> cook(WorldCook::Start(*assets, world, context.GetWorldCookCache(), &error).release());
 				if (!cook)
 					return EditorCommandResult::Fail(error);
-				if (apply && (context.IsPlaying() || context.GetSceneHandle() != cook->GetCookedData().PersistentScene))
-					return EditorCommandResult::InvalidParameters("apply sets the persistent scene's capacity: open the world's persistent scene (scene.open), "
-						"in edit mode, first");
-				return EditorCommandResult::Defer([cook, apply](EditorContext& pollContext) -> std::optional<EditorCommandResult>
+				const bool persistentOpen = !context.IsPlaying() && context.GetSceneHandle() == cook->GetCookedData().PersistentScene;
+				if (apply && !persistentOpen)
+				{
+					if (explicitApply)
+						return EditorCommandResult::InvalidParameters("apply sets the persistent scene's capacity: open the world's persistent scene (scene.open), "
+							"in edit mode, first");
+					apply = false;
+				}
+				const bool skippedApply = !explicitApply && !persistentOpen;
+				return EditorCommandResult::Defer([cook, apply, skippedApply, started](EditorContext& pollContext) -> std::optional<EditorCommandResult>
 				{
 					if (!cook->Poll())
 						return std::nullopt;
@@ -172,18 +183,24 @@ namespace Strata
 					}
 					if (recorded)
 						pollContext.GetUndoStack().Record(std::move(group));
+					std::vector<std::string> warnings = report.Warnings;
+					if (skippedApply)
+						warnings.push_back("The persistent scene is not the edited scene: its physics capacity was not set (open it and cook again)");
 					return EditorCommandResult::Ok({
 						{ "world", UUIDToJson(cook->GetWorld()) },
 						{ "cells", cook->GetCookedData().Cells.size() },
+						{ "staleBefore", report.CellsRead },
 						{ "cellsRead", report.CellsRead },
 						{ "cellsReused", report.CellsReused },
 						{ "persistentBodies", report.Index.PersistentBodies },
 						{ "maxBodiesInRadius", report.Index.MaxBodiesInRadius },
 						{ "sources", report.SourceCount },
+						{ "maxBodies", report.RecommendedMaxBodies },
 						{ "recommendedMaxBodies", report.RecommendedMaxBodies },
 						{ "reservedMB", static_cast<double>(report.ReservedBytes) / c_BytesPerMB },
 						{ "applied", applied },
-						{ "warnings", report.Warnings } });
+						{ "seconds", std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count() },
+						{ "warnings", std::move(warnings) } });
 				});
 			}, EditorCommandKind::Edit });
 
