@@ -482,6 +482,14 @@ namespace Strata
 		}
 
 		DrawToolbar(panelContext, *assets);
+		// While the project's assets are scanned in the background, the listing fills as they are registered: said above it.
+		if (const std::optional<AssetScanProgress> scan = context.GetAssetScanProgress())
+		{
+			ImGui::PushStyleColor(ImGuiCol_Text, UI::GetThemeColors().Info);
+			ImGui::TextUnformatted((std::string(Icons::Loader) + "  " + FormatAssetScan(*scan) + "  (asset commands wait until every asset is registered)").c_str());
+			ImGui::PopStyleColor();
+			UI::ItemProbe::Record("ContentBrowser.Scanning");
+		}
 
 		const ImGuiTableFlags flags = ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_NoSavedSettings;
 		if (ImGui::BeginTable("ContentBrowser.Panes", 2, flags, ImGui::GetContentRegionAvail()))

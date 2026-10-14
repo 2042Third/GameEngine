@@ -96,6 +96,10 @@ namespace Strata
 		// Queries whose results follow the editor's session (the selection, the journal, what is loaded) say so: replays
 		// never bind the IDs those show.
 		EditorCommandResults Results = EditorCommandResults::Content;
+		// Commands that answer from the whole asset registry (asset, material, prefab queries; the export) say so: while the
+		// project's assets are scanned in the background they wait for the scan, as every Edit command does
+		// (EditorCommandRegistry::Execute). Session queries (editor.status, editor.wait, log.read) answer at once.
+		bool WaitsForAssets = false;
 	};
 
 	class EditorCommandRegistry
@@ -110,6 +114,12 @@ namespace Strata
 
 		// Adds a command, replacing one with the same name.
 		void Register(EditorCommand command);
+		// Whether a command waits while the project's assets are scanned: Edit commands and those marked WaitsForAssets.
+		static bool WaitsForAssetScan(const EditorCommand& command);
+		// Why a command cannot run at once from the UI (RunEditorCommand, which runs commands that finish at once): "the
+		// project's assets are still being scanned (12,345 of 30,000)" while it would wait for the scan (or for the start scene
+		// that waited for it, EditorContext::IsWaitingForAssets); nothing otherwise.
+		std::optional<std::string> DescribeAssetScanWait(const EditorContext& context, std::string_view name) const;
 		const EditorCommand* Find(std::string_view name) const;
 		std::vector<const EditorCommand*> GetAll() const; // Sorted by name
 		// Changes whenever a command is registered, so users that mirror the commands (automation) notice additions.

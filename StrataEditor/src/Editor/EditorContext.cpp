@@ -175,6 +175,10 @@ namespace Strata
 			nlohmann::json description = CommandUtils::DescribeAssetStats(manager->GetStats());
 			// Imports still running (a project opened with assets to import, re-imports): their assets arrive when they finish.
 			description["importing"] = m_AssetManager && manager == m_AssetManager ? m_AssetManager->GetPendingImportCount() : 0u;
+			// The background scan of the project's assets, while it runs (commands that need the whole registry wait for it).
+			const std::optional<AssetScanProgress> scan = GetAssetScanProgress();
+			description["scanning"] = scan ? nlohmann::json { { "phase", AssetScanPhaseToString(scan->Phase) }, { "done", scan->Done }, { "total", scan->Total } }
+				: nlohmann::json(nullptr);
 			return description;
 		});
 	}
@@ -293,7 +297,12 @@ namespace Strata
 		m_AssetManager = CreateRef<EditorAssetManager>(specification);
 		AssetManager::SetActive(m_AssetManager);
 		m_DocumentSaver.SetAssetManager(m_AssetManager);
-		m_AssetManager->Scan(m_Specification.ImportInBackground ? ScanImports::InBackground : ScanImports::Wait);
+		// In the background, the project opens at once: the scan's jobs prepare the assets while frames go on, and what needs
+		// the whole registry waits for it (commands, the start scene, the script usage scan).
+		if (m_Specification.ImportInBackground)
+			m_AssetManager->BeginScan(ScanImports::InBackground);
+		else
+			m_AssetManager->Scan(ScanImports::Wait);
 		m_AssetManager->PurgeTrash(c_TrashKeepTime);
 		OpenThumbnails();
 		ST_INFO("Opened project '{}' ({})", m_Project->GetConfig().Name, FileSystem::ToUTF8(m_Project->GetProjectDirectory()));
@@ -301,29 +310,80 @@ namespace Strata
 		m_Recovery.SetProject(m_Project->GetIntermediateDirectory() / SceneRecovery::c_DirectoryName, m_Project->GetAssetDirectory());
 		m_Recovery.Scan();
 		OpenScriptEngine(created);
-		StartScriptUsageScan();
 
 		// Continue with the start scene when the project has one: it loads in the background (UpdateSceneLoad warns when it
-		// cannot be opened).
+		// cannot be opened), once the assets are registered. Meanwhile it counts as the scene being opened (IsSceneLoading).
 		const AssetHandle startScene = m_Project->GetConfig().StartScene;
-		std::string sceneError;
-		if (startScene.IsValid())
+		if (m_AssetManager->IsScanning())
 		{
-			if (!BeginOpenScene(startScene, &sceneError))
+			m_AfterAssetScan = true;
+			if (startScene.IsValid())
 			{
-				ST_WARN("Could not open the start scene: {}", sceneError);
-				// Reported like a load that failed (project.open, scene.loadStatus).
+				CancelSceneLoad();
+				m_StartSceneAfterScan = startScene;
 				m_SceneLoadStatus = EditorSceneLoadStatus();
 				m_SceneLoadStatus.ID = m_NextSceneLoadID++;
 				m_SceneLoadStatus.Scene = startScene;
-				m_SceneLoadStatus.State = SceneLoadState::Failed;
-				m_SceneLoadStatus.Error = std::move(sceneError);
+				m_SceneLoadStatus.State = SceneLoadState::LoadingScene;
+				m_SceneLoadStatus.StartScene = true;
 				m_SceneLoadStatus.Started = std::chrono::steady_clock::now();
 			}
-			m_SceneLoadStatus.StartScene = true;
+		}
+		else
+		{
+			StartScriptUsageScan();
+			if (startScene.IsValid())
+				OpenStartScene(startScene, m_NextSceneLoadID);
 		}
 		m_RecentProjects.Add(m_Project->GetConfig().Name, m_Project->GetProjectFile());
 		return true;
+	}
+
+	void EditorContext::OpenStartScene(AssetHandle startScene, uint64_t id)
+	{
+		std::string sceneError;
+		if (!BeginOpenScene(startScene, &sceneError))
+		{
+			ST_WARN("Could not open the start scene: {}", sceneError);
+			// Reported like a load that failed (project.open, scene.loadStatus).
+			m_SceneLoadStatus = EditorSceneLoadStatus();
+			m_SceneLoadStatus.Scene = startScene;
+			m_SceneLoadStatus.State = SceneLoadState::Failed;
+			m_SceneLoadStatus.Error = std::move(sceneError);
+			m_SceneLoadStatus.Started = std::chrono::steady_clock::now();
+		}
+		// The load the project's opening announced (its ID) goes on as this one.
+		m_SceneLoadStatus.ID = id;
+		m_NextSceneLoadID = std::max(m_NextSceneLoadID, id + 1);
+		m_SceneLoadStatus.StartScene = true;
+	}
+
+	void EditorContext::FinishAssetScan()
+	{
+		if (!m_AfterAssetScan || !m_AssetManager || m_AssetManager->IsScanning())
+			return;
+		m_AfterAssetScan = false;
+		StartScriptUsageScan();
+		if (const AssetHandle startScene = std::exchange(m_StartSceneAfterScan, UUID::Null()); startScene.IsValid())
+		{
+			OpenStartScene(startScene, m_SceneLoadStatus.ID);
+			m_StartSceneAfterScanID = m_SceneLoadStatus.ID;
+		}
+	}
+
+	bool EditorContext::IsScanningAssets() const
+	{
+		return m_AssetManager && m_AssetManager->IsScanning();
+	}
+
+	bool EditorContext::IsWaitingForAssets() const
+	{
+		return IsScanningAssets() || m_StartSceneAfterScan.IsValid() || (m_SceneLoad && m_SceneLoadStatus.ID == m_StartSceneAfterScanID);
+	}
+
+	std::optional<AssetScanProgress> EditorContext::GetAssetScanProgress() const
+	{
+		return m_AssetManager ? m_AssetManager->GetScanProgress() : std::nullopt;
 	}
 
 	void EditorContext::OpenThumbnails()
@@ -354,6 +414,7 @@ namespace Strata
 			m_GameExport->Wait();
 		}
 		CancelSceneLoad();
+		m_AfterAssetScan = false;
 		Stop();
 		const bool hadProject = m_Project != nullptr;
 		if (hadProject)
@@ -542,6 +603,12 @@ namespace Strata
 
 	bool EditorContext::WaitForSceneLoad(std::chrono::milliseconds timeout)
 	{
+		// A start scene waiting for the asset scan: the scan finishes here (it inserts everything at once).
+		if (m_AfterAssetScan && m_AssetManager)
+		{
+			m_AssetManager->Scan(ScanImports::InBackground);
+			FinishAssetScan();
+		}
 		if (!m_SceneLoad)
 			return m_SceneLoadStatus.State == SceneLoadState::Ready;
 		const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -587,6 +654,13 @@ namespace Strata
 
 	void EditorContext::CancelSceneLoad()
 	{
+		if (m_StartSceneAfterScan.IsValid())
+		{
+			m_StartSceneAfterScan = UUID::Null();
+			m_SceneLoadStatus.State = SceneLoadState::Cancelled;
+			m_SceneLoadStatus.Error = "Opening the scene was cancelled";
+			m_SceneLoadStatus.Seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_SceneLoadStatus.Started).count();
+		}
 		if (!m_SceneLoad)
 			return;
 		m_SceneLoad->Request.Cancel();
@@ -1901,6 +1975,8 @@ namespace Strata
 		}
 		// Saves written in the background are published (and their completions run) between frames.
 		m_DocumentSaver.Update();
+		// The asset scan ended: what waited for the whole registry goes on (the start scene, the script usage scan).
+		FinishAssetScan();
 		// A scene being opened replaces the edited one between frames, before anything draws or updates it.
 		UpdateSceneLoad();
 		if (m_GameExport)

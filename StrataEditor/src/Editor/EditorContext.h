@@ -194,7 +194,7 @@ namespace Strata
 		// then cancelled); GetSceneLoadStatus says why.
 		bool WaitForSceneLoad(std::chrono::milliseconds timeout = std::chrono::minutes(2));
 		// A scene is being opened (BeginOpenScene) and has not replaced the edited scene yet.
-		bool IsSceneLoading() const { return m_SceneLoad != nullptr; }
+		bool IsSceneLoading() const { return m_SceneLoad != nullptr || m_StartSceneAfterScan.IsValid(); }
 		// The edited scene cannot change while a scene is being opened (edits of a running copy are allowed): false, with the
 		// reason, then. Code that edits the scene outside SceneEditTransaction/CommitEdit (which rolls such edits back) checks it.
 		bool CheckSceneEditable(std::string* outError = nullptr) const;
@@ -202,6 +202,14 @@ namespace Strata
 		const EditorSceneLoadStatus& GetSceneLoadStatus() const { return m_SceneLoadStatus; }
 		// Abandons the scene load in progress (its pins and unfinished loads go); the edited scene stays.
 		void CancelSceneLoad();
+		// Whether the open project's assets are being scanned in the background (EditorAssetManager::BeginScan, when projects
+		// open with ImportInBackground): commands that need the whole registry wait for it (EditorCommandRegistry), and the
+		// start scene opens once it ended (it counts as the scene being opened meanwhile).
+		bool IsScanningAssets() const;
+		std::optional<AssetScanProgress> GetAssetScanProgress() const;
+		// The scan runs, or the start scene that waited for it is still being opened: commands that need the whole registry
+		// (and every edit, which the start scene would replace) wait until the project is ready.
+		bool IsWaitingForAssets() const;
 		// Starts saving the edited scene to its asset in the background (DocumentSaver) and returns the save's ID, or 0 with
 		// the reason (no project; a scene never saved needs BeginSaveSceneAs). The frame only takes a snapshot of the scene
 		// (Scene::Copy with SerializedOnly) and the undo history's save point (after breaking a merge, so a drag that goes on
@@ -550,6 +558,10 @@ namespace Strata
 		void OpenThumbnails();
 		// After the edited scene was saved: the project's picture for the launcher is made again.
 		void OnSceneSaved();
+		// Opens the project's start scene as the load with this ID (the one the project's opening announced).
+		void OpenStartScene(AssetHandle startScene, uint64_t id);
+		// Once the asset scan ended: what waited for the whole registry (the start scene, the script usage scan).
+		void FinishAssetScan();
 		// What a save of the edited scene restores when it fails (BeginSaveSceneAs).
 		struct SceneSaveRestore
 		{
@@ -706,6 +718,11 @@ namespace Strata
 		uint64_t m_RecordedFrameCount = 0;
 		double m_LastFrameTime = 0.0;
 		std::map<std::string, StatusProvider> m_StatusProviders;
+		// The project's start scene, opened once the background asset scan ended (null when none waits), and whether work
+		// waits for the scan's end.
+		AssetHandle m_StartSceneAfterScan = UUID::Null();
+		uint64_t m_StartSceneAfterScanID = 0; // Its load, once it began
+		bool m_AfterAssetScan = false;
 		// Declared after what its completions use (the undo stack, the recovery journal, the notifications); idle by the time
 		// the context goes (ReleaseProject finishes every save).
 		DocumentSaver m_DocumentSaver;

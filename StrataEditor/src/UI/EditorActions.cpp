@@ -14,6 +14,7 @@
 #include <Strata/Core/Base.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Core/StringUtils.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Entity.h>
@@ -30,6 +31,14 @@ namespace Strata
 
 	nlohmann::json RunEditorCommand(EditorContext& context, const EditorCommandRegistry& commands, std::string_view name, const nlohmann::json& parameters)
 	{
+		// What would wait for the asset scan cannot run from here (it finishes at once or not at: the person tries again).
+		if (const std::optional<std::string> waiting = commands.DescribeAssetScanWait(context, name))
+		{
+			const EditorCommandResult refused = EditorCommandResult::Fail(fmt::format("Not yet: {}", *waiting));
+			NotifyCommandOutcome(context.GetNotifications(), name, refused);
+			ST_WARN("{}: {}", name, refused.Error);
+			return nullptr;
+		}
 		EditorCommandResult result = commands.Execute(context, name, parameters, CommandOrigin { CommandSource::UI });
 		NotifyCommandOutcome(context.GetNotifications(), name, result);
 		if (result.IsPending())
@@ -79,6 +88,13 @@ namespace Strata
 				outcome->Error = result.Error;
 		}, CommandOrigin { CommandSource::UI });
 		return outcome->Error;
+	}
+
+	std::string FormatAssetScan(const AssetScanProgress& progress)
+	{
+		if (progress.Phase == AssetScanPhase::Walking || progress.Total == 0)
+			return fmt::format("Scanning {} files found", StringUtils::FormatThousands(progress.Done));
+		return fmt::format("Scanning {} / {}", StringUtils::FormatThousands(progress.Done), StringUtils::FormatThousands(progress.Total));
 	}
 
 	bool DrawSceneLoadBanner(const char* id, const EditorContext& context)

@@ -144,7 +144,7 @@ namespace Strata
 					{ "changed", ToJson(difference.Changed) },
 					{ "added", ToJson(difference.Added) },
 					{ "removed", ToJson(difference.Removed) } });
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Content, true });
 
 		registry.Register({ "prefab.apply",
 			"Writes a prefab instance (the instance the entity belongs to: its root's subtree, also entities added to it) back into its prefab, keeping "

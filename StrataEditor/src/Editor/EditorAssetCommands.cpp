@@ -483,7 +483,7 @@ namespace Strata
 						value["frameTimes"] = frameTimes.Describe();
 					return EditorCommandResult::Ok(std::move(value));
 				});
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session, EditorCommandResults::Content, true });
 
 		registry.Register({ "project.exportStatus", "The running export (project.export) or the last one: {running, state (WaitingForImports, Packing, Copying, "
 			"Succeeded, Failed, Cancelled), progress (0 to 1), stage (what it does, or how it ended), directory}; {running: false, state: null} before the "
@@ -618,7 +618,7 @@ namespace Strata
 					assets.push_back(DescribeAsset(metadata));
 				}
 				return EditorCommandResult::Ok({ { "assets", std::move(assets) } });
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Content, true });
 
 		registry.Register({ "asset.info",
 			"An asset's metadata, load state, import errors and warnings, sub-assets, import settings with the description of every setting "
@@ -660,7 +660,7 @@ namespace Strata
 					result["importing"] = assets->IsImportPending(handle);
 				}
 				return EditorCommandResult::Ok(std::move(result));
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Content, true });
 
 		registry.Register({ "asset.import",
 			"Copies external files and folders into the project and imports them in the background: the editor keeps running, and the command answers "
@@ -801,7 +801,7 @@ namespace Strata
 				const std::optional<AssetMetadata> metadata = assets->GetMetadata(handle);
 				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "path", metadata ? metadata->Path : std::string() },
 					{ "referencedBy", AssetReferences::ToJson(referencers) } });
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Content, true });
 
 		registry.Register({ "asset.delete",
 			"Deletes an asset: moves its file, .meta and cached import to the project's trash (.strata/Trash) and removes it from the project, in one undo "
@@ -1013,7 +1013,7 @@ namespace Strata
 				nlohmann::json values = material->Serialize()["Material"];
 				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", std::move(values) }, { "properties", std::move(properties) },
 					{ "saved", !assets || AssetEdit::IsMaterialSaved(*assets, handle) } });
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query, EditorCommandResults::Content, true });
 
 		registry.Register({ "material.create", "Creates a material asset (.stmat) from the default material with the given property values.",
 			ObjectSchema({

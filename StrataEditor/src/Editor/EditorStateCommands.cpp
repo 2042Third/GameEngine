@@ -576,7 +576,7 @@ namespace Strata
 					progress->Load = recovery.Read(entry->Id, context.GetSceneFile(entry->Scene).first);
 					return std::nullopt;
 				});
-			}), EditorCommandKind::Session });
+			}), EditorCommandKind::Session, EditorCommandResults::Content, true });
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Editor

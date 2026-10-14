@@ -61,8 +61,9 @@ namespace Strata
 		// scripted runs (--frames, --commands). UI tests turn it off: they expect every asset imported once a project is open.
 		bool ImportInBackground = true;
 		// Open ProjectPath's start scene in the background (EditorContext::BeginOpenProject: the window shows its load in the
-		// viewport) instead of before the first frame. The editor application turns it on for windowed sessions that are not
-		// scripted (--frames, --commands): those, headless editors and tests expect the project's scene once the editor started.
+		// viewport; with ImportInBackground the assets are scanned in the background first) instead of before the first frame,
+		// so that automation starts at once. The editor application turns it on for sessions that are not scripted (--frames,
+		// --commands): those and tests expect the project's scene once the editor started.
 		bool OpenStartSceneInBackground = false;
 		// The toolchain script builds use instead of the engine's (EditorContextSpecification::ScriptBuild); UI tests build
 		// with a stand-in for CMake.

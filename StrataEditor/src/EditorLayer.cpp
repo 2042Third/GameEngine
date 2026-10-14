@@ -1664,8 +1664,12 @@ namespace Strata
 			compact = fmt::format("{} importing{}{}", importing, c_Separator, compact);
 		// A scene being opened (scene.open, a project's start scene) loads with everything it uses: the largest load while it
 		// lasts. Its progress counts its document as it is read, then what it uses in bytes.
-		if (m_Context.IsSceneLoading())
+		if (m_Context.IsSceneLoading() && !m_Context.IsScanningAssets())
 			compact = fmt::format("Opening scene {:.0f}%{}{}", std::floor(m_Context.GetSceneLoadStatus().Progress * 100.0f), c_Separator, compact);
+		// The project's assets being scanned in the background come first: what needs them waits for it.
+		const std::optional<AssetScanProgress> scan = m_Context.GetAssetScanProgress();
+		if (scan)
+			compact = FormatAssetScan(*scan) + c_Separator + compact;
 		const std::string text = compact + c_Separator + memory;
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		// Failures matter most; then how full the budgets are (a comfortable budget is no news).
@@ -1678,6 +1682,11 @@ namespace Strata
 		{
 			std::string tooltip = stats.FailedAssets > 0 ? fmt::format("{} assets failed to load (see the Console or the Streaming panel).", stats.FailedAssets)
 				: fmt::format("Assets ready and streaming in; {} are registered.", stats.RegisteredAssets);
+			if (scan)
+			{
+				tooltip += " The project's assets are being scanned: edits, asset commands and the start scene wait until every asset is "
+					"registered.";
+			}
 			if (importing > 0)
 			{
 				tooltip += fmt::format(" {} {} importing in the background: {} once imported.", importing, importing == 1 ? "asset is" : "assets are",

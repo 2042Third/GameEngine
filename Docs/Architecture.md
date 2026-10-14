@@ -970,7 +970,10 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   reports changes; `Update` re-registers files and queues re-imports as background jobs, and applies finished imports
   through `ReloadAsset`: loaded assets load again, and every reloaded asset gets a new source revision
   (`GetSourceRevisions`), announced as a content change at once when no object of it is loaded. The import record remembers the source state,
-  settings, importer version and dependencies, so a current import is reused.
+  settings, importer version and dependencies, so a current import is reused. The editor opens projects this way (`EditorContextSpecification::ImportInBackground`): the
+  project is open at once, the automation session is published within the startup, commands that need the whole
+  registry wait (`EditorContext::IsWaitingForAssets`, `EditorCommand::WaitsForAssets`), and the start scene and the
+  script usage scan follow the scan (`EditorContext::FinishAssetScan`).
 - **Import records** (`Asset/ImportRecordStore.h`). Every asset's record (and, for assets stored as their source, what
   they reference) and the path of every handle (which resolves duplicated `.meta` files the same way on every scan) live
   in one append-only file, `.strata/Cache/ImportRecords.log`: a header line, then one entry per line, the CRC-32C of

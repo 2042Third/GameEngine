@@ -1210,6 +1210,16 @@ and `AudioSystem`, the built-in "Audio" scene system.
   mistyped parameter, a reference to nothing) is `InvalidParameters` (`CommandArguments::Fail`,
   `EditorCommandResult::InvalidParameters`); a valid request that cannot be carried out in the current
   state is `Failed` (`EditorCommandResult::Fail`). Automation reports them with different error codes.
+- **Commands wait for the asset scan.** A project opened in the background (the editor's interactive and automation
+  runs: `EditorContextSpecification::ImportInBackground`) is open at once while its assets are scanned
+  (`EditorAssetManager::BeginScan`), and its start scene opens after the scan. Until both are done
+  (`EditorContext::IsWaitingForAssets`), `EditorCommandRegistry::Execute` defers every Edit command and every command
+  marked `EditorCommand::WaitsForAssets` before its handler runs: a new command that answers from the whole asset
+  registry (asset, material, prefab and animation queries, the export, recovery) sets the flag. Session queries
+  (`editor.status`, `editor.wait`, `editor.perf`, `log.read`, `scene.loadStatus`) answer at once; `editor.status`'s
+  `assets.scanning` reports `{phase, done, total}` (null when no scan runs). UI code that runs a command at once
+  (`RunEditorCommand`) refuses it meanwhile with `EditorCommandRegistry::DescribeAssetScanWait`'s reason; the assets pill
+  and the Content Browser show the scan (`FormatAssetScan`).
 
 ### No silent data loss
 

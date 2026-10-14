@@ -366,7 +366,8 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Projects never choose what runs: the external editor is the user's setting (or `STRATA_EXTERNAL_EDITOR`), started
   without a shell, and `script.open` opens only code, CMake and text files of the project or engine.
 - Commands never block a frame: one that waits returns `EditorCommandResult::Defer(poll)`, whose poll owns its data and
-  allocates nothing per frame.
+  allocates nothing per frame. A command that answers from the whole asset registry sets `WaitsForAssets` (it waits for
+  a background scan, as Edit commands do).
 - UI code takes colors only from theme tokens, sizes relative to the font (no fixed pixels above 16), panels through
   `EditorPanelRegistry` (never `ImGui::Begin`), the editor's fonts and the widget kit (`UI/Widgets.h`);
   `Editor.UI.Source` enforces the first three ([Editor UI rules](Docs/DeveloperGuide.md#editor-ui-rules)). Selection

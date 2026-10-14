@@ -34,13 +34,16 @@ namespace Strata::Tests
 		Scope<EditorLayer> Layer;
 
 		// iniSettings: imgui.ini contents loaded before the first frame (the editor's saved layout and panel states).
+		// importInBackground: the project's assets are scanned and imported in the background, as in the editor (tests that
+		// look at a scan in progress); otherwise everything is registered and imported once the editor started.
 		explicit HarnessEditor(const ImGuiHarness::Specification& specification = {}, EditorOptions options = {}, const std::string& iniSettings = {},
-			bool automation = false)
+			bool automation = false, bool importInBackground = false)
 			: Harness(specification)
 		{
 			options.EnableAutomation = automation;
 			options.WatchFiles = false;
-			options.ImportInBackground = false;
+			options.ImportInBackground = importInBackground;
+			options.OpenStartSceneInBackground = options.OpenStartSceneInBackground || importInBackground;
 			Host->UIScale = specification.ContentScale;
 			Log::GetBuffer().Clear();
 			Layer = CreateScope<EditorLayer>(options, CreateScope<FakeEditorHost>(Host));
