@@ -123,7 +123,8 @@ Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
 - Tests follow the transform contract, use `Tests::CreateTemporaryDirectory()` for files (never the source tree), never
   open samples in place (`Tests::CopySampleProject`) or change their process's environment for a child, and depend on
   no program outside the build: stand-ins are the test binary's helper modes (`--strata-test-helper=<mode>`). Check
-  that a new regression test fails without its fix.
+  that a new regression test fails without its fix. Tests hold on CI's slowest machines (3 hardware threads): they wait
+  by the clock or a condition, never by a count of frames, and size their own job pools.
 - Expectations that differ in Dist (asserts compiled out, host calls not counted) say so with `#if defined(ST_DIST)`:
   CI tests Release, and only the release steps run the tests in Dist.
 - The **feature test** (golden rule 6, `StrataTests/FeatureTest/`) fails when a registered component is missing from

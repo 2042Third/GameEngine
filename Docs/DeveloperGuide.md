@@ -410,6 +410,11 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 
 ### Test rules and helper processes
 
+- Tests hold on any machine CI runs them on, the slowest included (its macOS runners have 3 hardware threads): waits go
+  by the clock (`Tests::WaitUntil`) or by a condition, never by a count of frames or updates; tests size their own job
+  pools (`Tests::ScopedJobSystem`) instead of relying on the application's defaults, which follow the hardware; a thread
+  that races another paces itself from its previous step, not by a fixed schedule it would catch up with in bursts; and
+  file times are not assumed to survive a copy (a copied file gets the current time on POSIX).
 - Tests follow the transform contract (see [Architecture rules](../AGENTS.md#architecture-rules)): a direct write to a
   `TransformComponent` after the scene was updated is followed by `MarkModified<TransformComponent>()` (or
   `Scene::MarkTransformChanged` when the test is about listeners not being signaled), otherwise Debug runs assert.
