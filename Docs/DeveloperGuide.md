@@ -1575,6 +1575,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
 
 ### Placing content
 
+- **Create menus** (the Hierarchy's and the Entity menu, `SceneHierarchyPanel::DrawCreateMenu`): the built-in meshes come
+  with static colliders sized from their bounds (Cube and Plane a `BoxCollider`, the plane's a thin box whose top is the
+  plane; Sphere and Capsule their own colliders; Cylinder, Cone and Torus a convex `MeshCollider` of the mesh), no
+  `RigidBody`; the "Mesh only" submenu (probes `Create.MeshOnly.<Mesh>`) makes them without.
 - **Placing content** (`Editor/SceneRaycast`, `Editor/EditorPlacement`): new top-level entities from the create menus
   appear under the view's pivot, resting on the surface there (`EditorPlacement::FindPivotSurface`, `RestOn` with the
   mesh's bounds), with the translation sent through `entity.create`; prefabs and models rest by the bounds of what they

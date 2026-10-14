@@ -622,6 +622,46 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		CHECK(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
 	}
 
+	TEST_CASE("The Create menu's meshes come with static colliders, and its Mesh only submenu makes them without")
+	{
+		AuthoringEditor editor;
+		editor.Frames(1);
+		auto create = [&](std::initializer_list<const char*> items)
+		{
+			REQUIRE(editor.Click("Hierarchy.Create"));
+			for (const char* item : items)
+				REQUIRE_MESSAGE(editor.Click(item), item);
+			const Entity entity = editor.Context().GetPrimarySelection();
+			REQUIRE(entity);
+			CHECK(entity.HasComponent<MeshRendererComponent>());
+			CHECK_FALSE(entity.HasComponent<RigidBodyComponent>());
+			return entity;
+		};
+
+		const Entity cube = create({ "Create.Cube" });
+		REQUIRE(cube.HasComponent<BoxColliderComponent>());
+		CHECK(cube.GetComponent<BoxColliderComponent>().HalfExtents == glm::vec3(0.5f));
+		// The plane's box is thin, its top the plane.
+		const Entity plane = create({ "Create.Plane" });
+		REQUIRE(plane.HasComponent<BoxColliderComponent>());
+		const BoxColliderComponent& box = plane.GetComponent<BoxColliderComponent>();
+		CHECK(box.HalfExtents.y < 0.05f);
+		CHECK(box.Offset.y + box.HalfExtents.y == doctest::Approx(0.0f));
+		CHECK(create({ "Create.Sphere" }).GetComponent<SphereColliderComponent>().Radius == 0.5f);
+		CHECK(create({ "Create.Capsule" }).HasComponent<CapsuleColliderComponent>());
+		for (const char* convex : { "Create.Cylinder", "Create.Cone", "Create.Torus" })
+		{
+			const Entity entity = create({ convex });
+			REQUIRE_MESSAGE(entity.HasComponent<MeshColliderComponent>(), convex);
+			CHECK(entity.GetComponent<MeshColliderComponent>().Convex);
+		}
+
+		const Entity plain = create({ "Create.MeshOnly", "Create.MeshOnly.Cube" });
+		CHECK(plain.GetComponent<MeshRendererComponent>().Mesh == BuiltinAssets::CubeMesh);
+		CHECK_FALSE(plain.HasComponent<BoxColliderComponent>());
+		CHECK_FALSE(plain.HasComponent<MeshColliderComponent>());
+	}
+
 	TEST_CASE("The Inspector's prefab bar lists an instance's overrides, and overridden values are marked and revert from their menu")
 	{
 		AuthoringEditor editor;
@@ -1839,7 +1879,9 @@ TEST_SUITE("Editor.UI.AssetInspector")
 			REQUIRE(result.Success);
 			return result.Value;
 		};
+		// What the Create menu's Cube is: the mesh with its static box collider.
 		const nlohmann::json cube = run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } },
+			{ "BoxCollider", { { "HalfExtents", { 0.5, 0.5, 0.5 } } } },
 			{ "Transform", { { "Translation", { handTranslation.x, handTranslation.y, handTranslation.z } } } } } } })["id"];
 		const nlohmann::json material = run("material.create", { { "path", "Materials/Cube.stmat" } })["asset"];
 		run("component.set", { { "entity", cube }, { "component", "MeshRenderer" }, { "values", { { "Material", material } } } });
