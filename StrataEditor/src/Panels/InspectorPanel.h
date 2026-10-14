@@ -43,16 +43,16 @@ namespace Strata
 		void OnHidden(EditorPanelContext& context) override;
 	private:
 		// The selected entities' components, or the scene's settings with nothing selected.
-		void DrawSelection(EditorContext& context, const EditorCommandRegistry& commands);
+		void DrawSelection(EditorPanelContext& panelContext);
 		void DrawHeader(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
-		void DrawComponent(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
+		void DrawComponent(EditorPanelContext& panelContext, std::span<const Entity> entities, const ComponentInfo& info);
 		void DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
 		void DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info);
 		// An edit of a rotation shared by several entities: continues the edit in progress, or begins one from the angles the
 		// widget showed (RotationAnglesEdit keeps each entity's own angles through a drag).
 		bool UpdateRotationEdit(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PropertyInfo& property,
 			const PropertyEditResult& result, std::string* outError);
-		void DrawMaterialSection(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
+		void DrawMaterialSection(EditorPanelContext& panelContext, std::span<const Entity> entities);
 		// While the scene plays: what the entity's animator plays (state, time, blending) and its parameters, read-only.
 		void DrawAnimatorState(EditorContext& context, Entity entity);
 		void DrawAddComponentPopup(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);

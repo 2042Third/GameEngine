@@ -351,7 +351,6 @@ namespace Strata
 	void InspectorPanel::OnImGuiRender(EditorPanelContext& panelContext)
 	{
 		EditorContext& context = panelContext.Context;
-		const EditorCommandRegistry& commands = panelContext.Commands;
 		if (context.IsPlaying())
 		{
 			const bool paused = context.IsPaused();
@@ -362,12 +361,14 @@ namespace Strata
 		// While a scene is being opened, the scene shown cannot change: its values show, disabled.
 		const bool readOnly = DrawSceneLoadBanner("Inspector.SceneLoadBanner", context);
 		ImGui::BeginDisabled(readOnly);
-		DrawSelection(context, commands);
+		DrawSelection(panelContext);
 		ImGui::EndDisabled();
 	}
 
-	void InspectorPanel::DrawSelection(EditorContext& context, const EditorCommandRegistry& commands)
+	void InspectorPanel::DrawSelection(EditorPanelContext& panelContext)
 	{
+		EditorContext& context = panelContext.Context;
+		const EditorCommandRegistry& commands = panelContext.Commands;
 		// The selection in selection order (the last is the primary one).
 		std::vector<Entity> entities;
 		entities.reserve(context.GetSelection().size());
@@ -391,7 +392,7 @@ namespace Strata
 				continue;
 			if (!HasComponentOnAll(entities, *info))
 				continue;
-			DrawComponent(context, commands, entities, *info);
+			DrawComponent(panelContext, entities, *info);
 		}
 		if (entities.size() > 1)
 		{
@@ -519,8 +520,10 @@ namespace Strata
 	// Components
 	////////////////////////////////////////////////////////////////////////////////
 
-	void InspectorPanel::DrawComponent(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info)
+	void InspectorPanel::DrawComponent(EditorPanelContext& panelContext, std::span<const Entity> entities, const ComponentInfo& info)
 	{
+		EditorContext& context = panelContext.Context;
+		const EditorCommandRegistry& commands = panelContext.Commands;
 		const ImGuiStyle& style = ImGui::GetStyle();
 		ImGui::PushID(info.Name.c_str());
 		const float headerRight = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
@@ -576,7 +579,7 @@ namespace Strata
 				DrawProperties(context, entities, info);
 			}
 			if (info.TypeId == entt::type_id<MeshRendererComponent>().hash())
-				DrawMaterialSection(context, commands, entities);
+				DrawMaterialSection(panelContext, entities);
 			if (info.TypeId == entt::type_id<AnimatorComponent>().hash() && entities.size() == 1)
 				DrawAnimatorState(context, entities.front());
 			ImGui::Spacing();
@@ -684,8 +687,10 @@ namespace Strata
 		return m_RotationEdit && m_RotationEdit->Update(context, entities, info, property, result.EulerAngles, result.ChangedComponents, outError);
 	}
 
-	void InspectorPanel::DrawMaterialSection(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities)
+	void InspectorPanel::DrawMaterialSection(EditorPanelContext& panelContext, std::span<const Entity> entities)
 	{
+		EditorContext& context = panelContext.Context;
+		const EditorCommandRegistry& commands = panelContext.Commands;
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		const ComponentInfo* info = ComponentRegistry::Find<MeshRendererComponent>();
 		const PropertyInfo* property = info ? info->FindProperty("Material") : nullptr;
@@ -736,7 +741,7 @@ namespace Strata
 				ImGui::SetTooltip("%s: changes apply to every entity that uses this material", name.c_str());
 			if (open)
 			{
-				m_MaterialEditor.Draw(context, material, "Inspector.Material");
+				m_MaterialEditor.Draw(panelContext, material, "Inspector.Material");
 				ImGui::TreePop();
 			}
 		}

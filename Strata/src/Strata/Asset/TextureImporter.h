@@ -56,13 +56,20 @@ namespace Strata
 		TextureWrap Wrap = TextureWrap::Repeat;
 		uint32_t MaxSize = 0; // Longest side; larger images are downscaled. 0 = engine limit only
 		bool FlipVertically = false;
+		// Inverts green, for normal maps of DirectX's convention (+Y down): only with Usage NormalMap.
+		bool FlipGreen = false;
 
 		nlohmann::json ToJson() const;
 		// Missing or invalid values keep their defaults (each invalid value adds a warning).
 		static TextureImportSettings FromJson(const nlohmann::json& json, std::vector<std::string>* outWarnings = nullptr);
-		// Defaults guessed from the file name: ".hdr" files are HDR, "*_normal"/"*_n" normal maps, roughness/metallic/
-		// occlusion/mask textures linear data, everything else sRGB color.
+		// Defaults guessed from the file name: ".hdr" files are HDR; otherwise the stem's tokens (split at '_', '-', '.',
+		// spaces and lower-to-upper case changes, lowercased, resolution and convention tokens such as "2k", "1024",
+		// "2048x2048", "gl" and "dx" dropped) name normal maps ("nor", "nrm", "normal", ..., "n" as the last token) and data
+		// ("rough", "metal", "ao", "orm", "mask", "height", ...), anywhere in the name; everything else is sRGB color. A
+		// "dx", "directx" or "normaldx" token turns FlipGreen on.
 		static TextureImportSettings GetDefaults(const std::filesystem::path& path);
+		// The tokens GetDefaults matches, in order (exposed for tests and messages).
+		static std::vector<std::string> GetNameTokens(std::string_view stem, bool* outDirectX = nullptr);
 	};
 
 	// Imports PNG, JPEG, TGA, BMP, PSD, GIF (first frame) and Radiance HDR images.
@@ -73,9 +80,10 @@ namespace Strata
 
 		AssetType GetType() const override { return AssetType::Texture; }
 		std::vector<std::string> GetExtensions() const override;
-		uint32_t GetVersion() const override { return 4; }
+		// 5: FlipGreen.
+		uint32_t GetVersion() const override { return 5; }
 		nlohmann::json GetDefaultSettings(const std::filesystem::path& sourcePath) const override;
-		// Usage, MaxSize, Filter, Wrap, GenerateMips, FlipVertically (TextureImportSettings).
+		// Usage, MaxSize, Filter, Wrap, GenerateMips, FlipVertically, FlipGreen (TextureImportSettings).
 		std::vector<PropertyInfo> GetSettingsProperties() const override;
 		// Compression has no effect on HDR textures (they stay RGBA16F), Quality none but on color that is compressed.
 		std::string GetInactiveReason(std::string_view setting, const nlohmann::json& settings) const override;

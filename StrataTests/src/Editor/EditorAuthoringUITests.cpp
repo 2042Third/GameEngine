@@ -1301,6 +1301,36 @@ TEST_SUITE("Editor.UI.Inspector")
 
 TEST_SUITE("Editor.UI.AssetInspector")
 {
+	TEST_CASE("The material editor warns under a slot whose texture is imported for another use, and its button imports it right")
+	{
+		AuthoringEditor editor({ ImVec2(1600.0f, 1400.0f), 1.0f }, WithFeatureProject("EditorAuthoringTextureUsage"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle material = assets->FindAssetByPath("Materials/Feature.stmat");
+		const AssetHandle checker = assets->FindAssetByPath("Textures/Checker.png");
+		REQUIRE(material.IsValid());
+		REQUIRE(checker.IsValid());
+		// A color texture as the normal map.
+		const nlohmann::json set = editor.Run("material.set", { { "material", UUIDToJson(material) }, { "properties", { { "NormalMap", UUIDToJson(checker) } } } });
+		REQUIRE(set["warnings"].size() == 1);
+		REQUIRE(editor.Context().SetInspectedAsset(material));
+		REQUIRE(editor.FramesUntil([]() { return UI::ItemProbe::Find("AssetInspector.Material.NormalMap.Fix").has_value(); }));
+		editor.Frames(1);
+		const std::optional<UI::ItemProbe::Item> warning = UI::ItemProbe::Find("AssetInspector.Material.NormalMap.Warning");
+		REQUIRE(warning.has_value());
+		CHECK(warning->Text == "Checker is imported as Color: its normals will be wrong");
+		CHECK(UI::ItemProbe::Find("AssetInspector.Material.NormalMap.Fix")->Enabled);
+		// No other slot warns.
+		CHECK_FALSE(UI::ItemProbe::Find("AssetInspector.Material.BaseColorMap.Warning").has_value());
+
+		REQUIRE(editor.Click("AssetInspector.Material.NormalMap.Fix"));
+		REQUIRE(editor.FramesUntil([&]() { return !assets->IsImportPending(checker) && assets->GetImportSettings(checker)["Usage"] == "NormalMap"; }));
+		UI::ItemProbe::Clear();
+		editor.Frames(3);
+		CHECK(UI::ItemProbe::Find("AssetInspector.Material.NormalMap").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("AssetInspector.Material.NormalMap.Warning").has_value());
+	}
+
 	TEST_CASE("Clicking an asset in the Content Browser shows it in the Asset tab, and selecting an entity returns to the Inspector")
 	{
 		AuthoringEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorAuthoringAssetTab"));

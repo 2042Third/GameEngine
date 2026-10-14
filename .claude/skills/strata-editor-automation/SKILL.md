@@ -252,7 +252,7 @@ to two folders above it, such as `../Textures`, keep their layout), so it import
 command** (the message names the file; the error's data has `items` with each `error`) and its copied files are removed
 again, unless `"keepOnFailure": true`; the result lists `items` with their `assets`. `asset.info` reports import errors and warnings, the import
 settings and what each accepts (`importSettingsProperties`: textures `Usage`, `Compression`, `Quality`, `MaxSize`,
-`Filter`, `Wrap`, `GenerateMips`, `FlipVertically`; models `Scale` (baked into the model's meshes, skeleton and clips: the
+`Filter`, `Wrap`, `GenerateMips`, `FlipVertically`, `FlipGreen` (DirectX normal maps); models `Scale` (baked into the model's meshes, skeleton and clips: the
 root keeps scale 1 and placed instances follow a change), `GenerateLODs`, `LODCount`, `MaxTextureSize`,
 `TextureCompression`, `TextureQuality`, `OptimizeMeshes`, `Import*`; audio `LoadMode`; fonts and the engine's own files
 have none). `asset.setImportSettings {"asset", "settings":
@@ -326,7 +326,10 @@ lets everything collide again first; `scene.info` lists `physicsLayers`), and `R
 file and is one undo step (`edit.undo` restores the file and what entities show); entities using it show the change in
 the same frame. `"save": false` only previews the values in the loaded material (no file, no undo step) until a saving
 `material.set` saves them too; `material.get` says `"saved": false` meanwhile. Built-in materials and those imported
-with a model cannot be changed: make one with `material.create` and assign it.
+with a model cannot be changed: make one with `material.create` and assign it. `material.set`, `material.create` and
+`material.get` return `warnings` for texture maps imported for another use than their slot reads (a Color texture as
+`NormalMap`, color in `MetallicRoughnessMap` or `OcclusionMap`): run each warning's `fix` (`{command, parameters}`, an
+`asset.setImportSettings` of the texture's `Usage`) and the warning is gone.
 
 **Animation**: an imported model with skins or animations comes with a skeleton and clips as sub-assets; instantiated,
 its root entity is the animator (`Animator` component: `Skeleton`, `Controller`, `Clip`, `Speed`, `Loop`, `PlayOnStart`,

@@ -1135,8 +1135,20 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   `Usage`, `Compression` (`Auto`, the default, or `Uncompressed`), `Quality` (`High`, the default, or `Fast`: opaque
   color as BC1, half of BC7's bytes, and translucent color's BC7 searched over modes 6 and 5 only; normal maps, data and
   HDR are stored the same at either quality), `GenerateMips`, `Filter`, `Wrap`,
-  `MaxSize`, `FlipVertically`. The importer writes every setting into a new `.meta`; files from before keep the
-  defaults for keys they lack (the feature project's `.meta` files hold every key, which its test checks). The image
+  `MaxSize`, `FlipVertically`, `FlipGreen` (normal maps only: inverts green before the mips are filtered, for
+  DirectX's +Y-down convention; version 5). The importer writes every setting into a new `.meta`; files from before keep
+  the defaults for keys they lack (the feature project's `.meta` files hold every key, which its test checks). Defaults
+  come from the file name (`TextureImportSettings::GetDefaults`): `.hdr` is HDR; otherwise the stem is split into tokens
+  (at `_`, `-`, `.`, spaces and lower-to-upper case changes, lowercased), resolution and convention tokens are dropped
+  (`1k` to `16k`, powers of two from 256 to 16384, `<w>x<h>`, `gl`, `ogl`, `opengl`, `dx`, `directx`), and a token
+  anywhere names normal maps (`nor`, `nrm`, `norm`, `normal`, `normals`, `normalmap`, `nml`, `normalgl`, `normaldx`, and
+  `n` as the last one) or data (`rough`, `metal`, `ao`, `orm`, `arm`, `mask`, `height`, `disp`, `bump`, `spec`, `gloss`
+  and their long forms); `dx`, `directx` or `normaldx` turn `FlipGreen` on, so Poly Haven's `aerial_rocks_02_nor_gl_1k`
+  and `rocks_nor_dx_2k` import as the normal maps they are. A texture in a material slot that reads it as something
+  else (a Color texture as the normal map or in Metal/Rough or Occlusion, a normal map or data as color) is reported by
+  `AssetEdit::FindTextureUsageMismatches`: `material.get`, `material.set` and `material.create` return it as `warnings`
+  with the `asset.setImportSettings` call that fixes it, and the material editor draws it under the slot with a button
+  that runs that fix (textures a model's import made are left out: the importer chose their usage from the slot). The image
   decodes with only the channels its format needs (color keeps RGB or RGBA, gray color becomes RGB, normal maps XYZ,
   data its own channels), and `TextureImporter::ChooseFormat` picks the format: color `BC7SRGB` (at `Fast`, `BC1SRGB`
   when every texel is opaque), normal maps `BC5`, data `BC4` for one channel (marked grayscale, below), else `BC7`, HDR

@@ -65,6 +65,44 @@ namespace
 
 TEST_SUITE("Editor.Commands")
 {
+	TEST_CASE("Materials warn about textures imported for another use than their slot reads, with the command that fixes it")
+	{
+		CommandHarness harness;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorTextureUsage") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		// A Poly Haven name: the importer of the base took "_1k" for the end of the name and imported it as Color.
+		std::vector<uint8_t> pixels;
+		for (int texel = 0; texel < 16; texel++)
+			pixels.insert(pixels.end(), { 128, 128, 255, 255 });
+		REQUIRE(FileSystem::CreateDirectories(directory / "Assets" / "Textures"));
+		REQUIRE(FileSystem::WriteBytes(directory / "Assets" / "Textures" / "aerial_rocks_02_nor_gl_1k.png", Tests::EncodePNG(4, 4, pixels)));
+		harness.Context.GetAssetManager()->Scan();
+		const std::string texture = UUIDToJson(harness.Context.GetAssetManager()->FindAssetByPath("Textures/aerial_rocks_02_nor_gl_1k.png")).get<std::string>();
+		harness.Run("asset.setImportSettings", { { "asset", texture }, { "settings", { { "Usage", "Color" } } } });
+
+		harness.Run("material.create", { { "path", "Materials/Rocks.stmat" } });
+		const nlohmann::json set = harness.Run("material.set", { { "material", "Materials/Rocks.stmat" }, { "properties", { { "NormalMap", texture } } } });
+		REQUIRE(set["warnings"].size() == 1);
+		const nlohmann::json& warning = set["warnings"][0];
+		CHECK(warning["property"] == "NormalMap");
+		CHECK(warning["texture"] == texture);
+		CHECK(warning["usage"] == "Color");
+		CHECK(warning["expected"] == "NormalMap");
+		CHECK(warning["message"] == "aerial_rocks_02_nor_gl_1k is imported as Color: its normals will be wrong");
+		CHECK(warning["fix"]["command"] == "asset.setImportSettings");
+		CHECK(harness.Run("material.get", { { "material", "Materials/Rocks.stmat" } })["warnings"] == set["warnings"]);
+
+		// The fix imports the texture as a normal map; the warning is gone.
+		harness.Run(warning["fix"]["command"].get<std::string>(), warning["fix"]["parameters"]);
+		CHECK(harness.Context.GetAssetManager()->GetImportSettings(*UUIDFromJson(nlohmann::json(texture)))["Usage"] == "NormalMap");
+		CHECK(harness.Run("material.get", { { "material", "Materials/Rocks.stmat" } })["warnings"].empty());
+
+		// A normal map as base color warns too; material.create reports it.
+		const nlohmann::json created = harness.Run("material.create", { { "path", "Materials/Odd.stmat" }, { "properties", { { "BaseColorMap", texture } } } });
+		REQUIRE(created["warnings"].size() == 1);
+		CHECK(created["warnings"][0]["expected"] == "Color");
+	}
+
 	TEST_CASE("Saving a scene records what it references as its file shows")
 	{
 		CommandHarness harness;

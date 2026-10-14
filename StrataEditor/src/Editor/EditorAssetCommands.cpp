@@ -991,7 +991,10 @@ namespace Strata
 
 		registry.Register({ "material.get",
 			"A material asset's property values, and every material property with its type, range or options: what material.create and "
-			"material.set accept. \"saved\" is false while values previewed with material.set {save: false} are not saved.",
+			"material.set accept. \"saved\" is false while values previewed with material.set {save: false} are not saved. \"warnings\" lists texture "
+			"maps whose import usage does not fit their slot (a Color texture as the normal map, color in Metal/Rough or Occlusion, a normal map or "
+			"data as color): [{property, texture, usage, expected, message, fix: {command, parameters}}]; run fix (asset.setImportSettings) to "
+			"import the texture as the slot reads it.",
 			ObjectSchema({ { "material", AssetSchema("Material: handle, path or Builtin/DefaultMaterial") } }, { "material" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -1008,10 +1011,12 @@ namespace Strata
 					properties.push_back(DescribeProperty(property));
 				nlohmann::json values = material->Serialize()["Material"];
 				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", std::move(values) }, { "properties", std::move(properties) },
-					{ "saved", !assets || AssetEdit::IsMaterialSaved(*assets, handle) } });
+					{ "saved", !assets || AssetEdit::IsMaterialSaved(*assets, handle) },
+					{ "warnings", AssetEdit::DescribeTextureUsageMismatches(context, AssetEdit::FindTextureUsageMismatches(context, material->GetProperties())) } });
 			}, EditorCommandKind::Query });
 
-		registry.Register({ "material.create", "Creates a material asset (.stmat) from the default material with the given property values.",
+		registry.Register({ "material.create", "Creates a material asset (.stmat) from the default material with the given property values. Returns "
+			"{asset, warnings}: textures whose import usage does not fit their slot (see material.get).",
 			ObjectSchema({
 				{ "path", StringSchema("Path relative to the asset directory, e.g. \"Materials/Red.stmat\"") },
 				{ "properties", AnyObjectSchema(fmt::format("Property values, e.g. {{\"BaseColor\": [1, 0, 0, 1], \"Roughness\": 0.3, \"BaseColorMap\": "
@@ -1035,14 +1040,19 @@ namespace Strata
 				const AssetHandle handle = assets->CreateNativeAsset(path, AsBytes(*document), &error);
 				if (!handle.IsValid())
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) } });
+				const std::optional<nlohmann::json> created = JsonUtils::Parse(*document);
+				const Ref<Material> material = created ? Material::FromJson(*created) : nullptr;
+				const nlohmann::json warnings = material ? AssetEdit::DescribeTextureUsageMismatches(context, AssetEdit::FindTextureUsageMismatches(context,
+					material->GetProperties())) : nlohmann::json::array();
+				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "warnings", warnings } });
 			} });
 
 		registry.Register({ "material.set",
 			"Changes property values of a material asset of the project; entities using it show the change in the same frame. By default it saves the "
 			"material (one undo step, edit.undo restores the file and the loaded values); save: false only previews the values in the loaded material "
 			"(no file is written, no undo step), e.g. while a value is dragged, until a saving material.set (which saves them too), an undo or a "
-			"reload replaces them. Returns the material's values.",
+			"reload replaces them. Returns the material's values and warnings (texture maps whose import usage does not fit their slot, with the "
+			"command that fixes each: see material.get).",
 			ObjectSchema({
 				{ "material", AssetSchema("Material") },
 				{ "properties", AnyObjectSchema(fmt::format("Property values to change, e.g. {{\"BaseColor\": [1, 0, 0, 1]}}. Properties: {} (material.get "
@@ -1068,7 +1078,8 @@ namespace Strata
 				Ref<Material> material = AssetManager::LoadAssetSync<Material>(handle);
 				if (!material)
 					return EditorCommandResult::Fail(fmt::format("Loading the material failed: {}", context.GetAssetManager()->GetAssetError(handle)));
-				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", material->Serialize()["Material"] }, { "saved", save } });
+				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", material->Serialize()["Material"] }, { "saved", save },
+					{ "warnings", AssetEdit::DescribeTextureUsageMismatches(context, AssetEdit::FindTextureUsageMismatches(context, material->GetProperties())) } });
 			} });
 
 		registry.Register({ "prefab.create",

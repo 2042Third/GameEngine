@@ -844,7 +844,7 @@ TEST_SUITE("Editor.ImportSettings")
 		// Every setting with what it accepts, for the inspector and for agents.
 		const nlohmann::json info = harness.Run("asset.info", { { "asset", texture } });
 		const nlohmann::json& properties = info["importSettingsProperties"];
-		REQUIRE(properties.size() == 8);
+		REQUIRE(properties.size() == 9);
 		CHECK(properties[0]["Name"] == "Usage");
 		CHECK(properties[0]["Options"] == nlohmann::json { "Color", "NormalMap", "Data", "HDR" });
 		CHECK(properties[1]["Name"] == "Compression");
