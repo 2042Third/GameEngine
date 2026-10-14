@@ -529,6 +529,9 @@ Open items and deferrals later waves own:
     perf findings for it: `RuntimeMaxFinalizeStage` (its budget lies below the engine's designed frame-0 cost),
     `ThumbnailsMaxFrame` (redefined with a cold first attempt, its `Measured` not taken again) and
     `SceneOpenOver1MMaxFrame` (still over its budget in some runs).
+  - Provisional metrics, measured and recorded but without a budget until the reference machine measures them:
+    `Perf.Jobs.SubmitWait`, `SubmitMany`, `ParallelForOverhead` and `WakeLatency` (wave 4, engine-modules; the Mac under
+    other agents' load measured 3.1, 0.41, 96 and 20 us).
   - GPU tests on Windows and NVIDIA: CI runs no test of the `gpu` label, so renderer changes are validated on the Mac
     alone until `ctest --preset windows-debug` runs under the validation layer there again (drivers differ: NVIDIA has
     `drawIndirectCount`, a transfer queue and min/max samplers, which MoltenVK lacks).

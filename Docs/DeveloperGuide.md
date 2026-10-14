@@ -448,6 +448,12 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   streaming's limit): the game started in the stress project's `TopDown` scene
   (`WriteStressTopDownScene`: the world with its camera looking down on all of it), 300 frames with its own budgets,
   every texture at the level its view needs at the end (`MipsBelowWanted` 0), none evicted or loading.
+  `Perf.Jobs` (`Perf/JobsPerfTests.cpp`, empty jobs under the application's job system) measures the job system's own
+  costs, each a median in microseconds: `SubmitWait` (one `Submit` and `Wait` from the main thread, in batches of 1,000),
+  `SubmitMany` (per job of 100,000 submitted, then `WaitAll`), `ParallelForOverhead` (per `ParallelFor` over workers x 64
+  items in batches of one) and `WakeLatency` (from `Submit` to the job's first instruction after 50 ms without work, the
+  workers parked; the test watches for the start instead of waiting, which would run the job itself): the numbers a
+  JobSystem v2 is decided on.
   `Perf.FrameProfiler` measures the frame profiler's cost per frame and `Perf.EditorPanels` (in `src/Editor/`) the
   Streaming panel with 10,000 assets (with the job threads, which build its table), the Content Browser with 10,001 assets
   in a folder (and, in `PerfGPU.Editor`, with the thumbnails of the tiles in view shown) and the Performance panel with a
