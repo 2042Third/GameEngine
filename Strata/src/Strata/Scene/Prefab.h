@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Asset/Asset.h"
+#include "Strata/Core/DocumentOutput.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/EntityPrototype.h"
 
@@ -98,6 +99,9 @@ namespace Strata
 		nlohmann::json Serialize() const;
 		static Ref<Prefab> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr, const std::function<bool()>& isCancelled = {});
 		static Ref<Prefab> FromJson(const nlohmann::json& json, std::string* outError = nullptr);
+		// Writes the document as a stream from the prototype (SceneDocumentWriter::WritePrototype: an entity per line, the
+		// layout scenes are saved in), without the prefab links of its entities: a prefab stores none, its instances do.
+		bool WriteDocument(DocumentOutput& output, std::string* outError = nullptr) const;
 	};
 
 	class Model : public EntityTemplate

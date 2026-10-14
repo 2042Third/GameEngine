@@ -1102,10 +1102,14 @@ namespace Strata
 				Ref<Prefab> prefab = Prefab::CreateFromEntities(scene, entities);
 				if (!prefab)
 					return EditorCommandResult::Fail("Capturing the entities failed");
-				// A prefab stores no links: they belong to the instances in scenes.
-				nlohmann::json document = prefab->Serialize();
-				PrefabInstances::StripLinks(document["Prefab"]);
-				const std::string text = JsonUtils::Dump(document, 1, '\t') + "\n";
+				// A prefab stores no links: they belong to the instances in scenes (WriteDocument leaves them out, and so does the
+				// snapshot the instances are marked in sync with).
+				StringDocumentOutput output;
+				if (!prefab->WriteDocument(output, &error))
+					return EditorCommandResult::Fail(fmt::format("Writing the prefab failed: {}", error));
+				const std::string text = output.TakeText();
+				nlohmann::json snapshot = prefab->GetSnapshot();
+				PrefabInstances::StripLinks(snapshot);
 				const AssetHandle handle = assets->CreateNativeAsset(path, AsBytes(text), &error);
 				if (!handle.IsValid())
 					return EditorCommandResult::Fail(error);
@@ -1121,7 +1125,7 @@ namespace Strata
 						transaction.TrackSubtree(entity.GetUUID());
 					PrefabInstances::Link(scene, entities, handle);
 					for (const Entity entity : entities)
-						PrefabInstances::MarkSynced(scene, entity, document["Prefab"]);
+						PrefabInstances::MarkSynced(scene, entity, snapshot);
 					step->Add(transaction.TakeAction());
 				}
 				if (!context.IsPlaying())

@@ -16,6 +16,7 @@
 #include "Strata/Scene/EntityPrototype.h"
 #include "Strata/Scene/EntitySink.h"
 #include "Strata/Scene/Prefab.h"
+#include "Strata/Scene/PrefabInstances.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneDocumentReader.h"
 #include "Strata/Scene/SceneDocumentWriter.h"
@@ -1121,5 +1122,61 @@ TEST_SUITE("Scene.Documents")
 			CHECK(sink.Entities == (cancelAt + 255) / 256 * 256);
 			CHECK_FALSE(sink.Finished);
 		}
+	}
+}
+
+TEST_SUITE("Scene.Documents")
+{
+	TEST_CASE("A prototype is written as a scene holding its entities is, and a parsed prefab document is laid out the same way")
+	{
+		ScopedJobSystem jobs(4, 1);
+		const Ref<Scene> feature = LoadFeatureScene();
+		AddUnknownComponents(*feature, feature->GetEntityByUUID(feature->GetRootEntities().front()));
+		std::vector<Entity> roots;
+		for (const UUID root : feature->GetRootEntities())
+			roots.push_back(feature->GetEntityByUUID(root));
+		const Ref<Prefab> prefab = Prefab::CreateFromEntities(*feature, roots);
+		REQUIRE(prefab);
+
+		for (const SceneDocumentKind kind : { SceneDocumentKind::Prefab, SceneDocumentKind::Model })
+		{
+			SceneWriteOptions options;
+			options.Kind = kind;
+			options.Roots = std::vector<UUID>(feature->GetRootEntities().begin(), feature->GetRootEntities().end());
+			options.ChunkEntities = 3;
+			const WrittenText fromScene = WriteDocument(*feature, options);
+			StringDocumentOutput output;
+			SceneWriteResult result;
+			std::string error;
+			REQUIRE_MESSAGE(SceneDocumentWriter::WritePrototype(*prefab->GetPrototype(), output, options, &result, &error), error);
+			CHECK(output.GetText() == fromScene.Text);
+			CHECK(result.References == fromScene.Result.References);
+			CHECK(result.Entities == prefab->GetEntityCount());
+
+			// A parsed document of the same entities lays out to the same bytes.
+			const std::string format = SceneDocumentKindToString(kind);
+			const nlohmann::json document = { { "Strata", { { "Format", format }, { "Version", 1 } } }, { format, prefab->GetSnapshot() } };
+			StringDocumentOutput laidOut;
+			REQUIRE(SceneDocumentWriter::WriteJson(document, kind, laidOut, &error));
+			CHECK(laidOut.GetText() == fromScene.Text);
+		}
+
+		// Prefab files leave the prefab links out (the feature scene's instances hold some), as StripLinks does.
+		StringDocumentOutput written;
+		std::string error;
+		REQUIRE(prefab->WriteDocument(written, &error));
+		nlohmann::json stripped = { { "Strata", { { "Format", "Prefab" }, { "Version", 1 } } }, { "Prefab", prefab->GetSnapshot() } };
+		CHECK(stripped.dump().find("\"PrefabInstance\"") != std::string::npos);
+		PrefabInstances::StripLinks(stripped["Prefab"]);
+		StringDocumentOutput expected;
+		REQUIRE(SceneDocumentWriter::WriteJson(stripped, SceneDocumentKind::Prefab, expected, &error));
+		CHECK(written.GetText() == expected.GetText());
+		CHECK(written.GetText().find("\"PrefabInstance\"") == std::string::npos);
+
+		// Scenes are written from scenes; documents of other kinds are no prefab.
+		StringDocumentOutput refused;
+		CHECK_FALSE(SceneDocumentWriter::WritePrototype(*prefab->GetPrototype(), refused, SceneWriteOptions {}, nullptr, &error));
+		CHECK_FALSE(SceneDocumentWriter::WriteJson(SceneSerializer::Serialize(*feature), SceneDocumentKind::Prefab, refused, &error));
+		CHECK(error == "Not a Strata Prefab document");
 	}
 }

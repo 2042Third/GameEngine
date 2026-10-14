@@ -6,6 +6,7 @@
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/EntitySink.h"
 #include "Strata/Scene/SceneDocumentReader.h"
+#include "Strata/Scene/SceneDocumentWriter.h"
 #include "Strata/Scene/SceneSerializer.h"
 
 #include <algorithm>
@@ -293,6 +294,21 @@ namespace Strata
 	{
 		const nlohmann::json* payload = ReadDocument(json, "Prefab", "Prefab", c_FormatVersion, outError);
 		return payload ? CreateFromSnapshot(*payload, outError) : nullptr;
+	}
+
+	bool Prefab::WriteDocument(DocumentOutput& output, std::string* outError) const
+	{
+		if (!GetPrototype())
+		{
+			if (outError)
+				*outError = "The prefab has no entities to write";
+			return false;
+		}
+		SceneWriteOptions options;
+		options.Kind = SceneDocumentKind::Prefab;
+		if (const ComponentInfo* link = ComponentRegistry::Find<PrefabInstanceComponent>())
+			options.LeaveOut.push_back(link);
+		return SceneDocumentWriter::WritePrototype(*GetPrototype(), output, options, nullptr, outError);
 	}
 
 	Ref<Prefab> Prefab::Deserialize(std::span<const uint8_t> data, std::string* outError, const std::function<bool()>& isCancelled)

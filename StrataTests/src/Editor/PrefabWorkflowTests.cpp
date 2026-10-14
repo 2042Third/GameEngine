@@ -78,6 +78,18 @@ namespace
 		nlohmann::json Status(const std::string& entity) { return Run("prefab.status", { { "entity", entity } }); }
 		std::vector<std::string> History() { return Run("edit.history")["history"].get<std::vector<std::string>>(); }
 
+		// Whether the prefab's file is in the layout scenes are saved in (SceneDocumentWriter): the header line, then an entity
+		// per line.
+		bool IsInWriterLayout(const std::string& path)
+		{
+			const std::optional<std::string> text = FileSystem::ReadText(Directory / "Assets" / FileSystem::FromUTF8(path));
+			REQUIRE(text);
+			if (!text->starts_with("{\"Strata\":{\"Format\":\"Prefab\",\"Version\":1},\"Prefab\":{\"EntityCount\":"))
+				return false;
+			const size_t firstEntity = text->find("\"Entities\":[\n{");
+			return firstEntity != std::string::npos && text->find('\n') == firstEntity + 12 && text->ends_with("}\n]}}\n");
+		}
+
 		// The prefab's file as stored: its entities by name.
 		nlohmann::json ReadPrefabEntity(const std::string& path, const std::string& name)
 		{
@@ -143,6 +155,7 @@ TEST_SUITE("Editor.Prefab")
 			CHECK(link["PrefabEntityID"] == entity);
 		}
 		CHECK_FALSE(harness.ReadPrefabEntity("Prefabs/Lamp.stprefab", "Lamp")["Components"].contains("PrefabInstance"));
+		CHECK(harness.IsInWriterLayout("Prefabs/Lamp.stprefab"));
 		CHECK(harness.Status(bulb)["root"] == lamp);
 		CHECK(harness.Status(lamp)["modified"] == false);
 		std::vector<std::string> expected = before;
@@ -219,6 +232,7 @@ TEST_SUITE("Editor.Prefab")
 		CHECK(applied["path"] == "Prefabs/Lamp.stprefab");
 		CHECK(applied["updatedInstances"] == 1); // The lamp the prefab was made from; the second instance was modified
 		CHECK(harness.ReadPrefabEntity("Prefabs/Lamp.stprefab", "Bulb")["Components"]["PointLight"]["Intensity"] == 5.0);
+		CHECK(harness.IsInWriterLayout("Prefabs/Lamp.stprefab"));
 		// The prefab keeps its own root transform.
 		CHECK(harness.ReadPrefabEntity("Prefabs/Lamp.stprefab", "Lamp")["Components"]["Transform"]["Translation"] == nlohmann::json::array({ 0, 0, 0 }));
 		CHECK(harness.Intensity(originalBulb) == 5.0); // Unmodified: updated, keeping its UUID

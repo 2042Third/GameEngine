@@ -17,6 +17,7 @@
 namespace Strata
 {
 
+	class EntityPrototype;
 	class Scene;
 	struct ComponentInfo;
 
@@ -57,6 +58,8 @@ namespace Strata
 		// references: called, on the serializing threads, with each such component's JSON, appending the assets it names. Without
 		// it, only asset properties count (SceneWriteResult::References).
 		std::function<void(const ComponentInfo& info, const nlohmann::json& component, std::vector<AssetHandle>& outReferences)> ExtraReferences;
+		// Components not written (a prefab stores no prefab links: its instances do).
+		std::vector<const ComponentInfo*> LeaveOut;
 	};
 
 	struct SceneWriteResult
@@ -96,6 +99,15 @@ namespace Strata
 		// (outResult->Cancelled); the output then holds part of a document.
 		static bool Write(const Scene& scene, DocumentOutput& output, const SceneWriteOptions& options = {}, SceneWriteResult* outResult = nullptr,
 			std::string* outError = nullptr);
+		// Writes a prototype's entities (a prefab's or a model's: options.Kind is Prefab or Model; Roots, WriteSettings and Name
+		// do not apply) in the same layout: what Write writes of a scene that holds them, in the prototype's order.
+		static bool WritePrototype(const EntityPrototype& prototype, DocumentOutput& output, const SceneWriteOptions& options, SceneWriteResult* outResult = nullptr,
+			std::string* outError = nullptr);
+		// Lays a parsed prefab or model document ({"Strata": header, "<Kind>": {"Entities": [...]}}) out in the writer's
+		// layout, its entities as they are (each line is JsonUtils::Dump of its entity object): for documents edited as JSON
+		// (prefab.apply). Keys of the content object besides the entity list are not written. False, with the reason, when it
+		// is no such document.
+		static bool WriteJson(const nlohmann::json& document, SceneDocumentKind kind, DocumentOutput& output, std::string* outError = nullptr);
 
 		// The entities serialized on the calling thread so far: tests check that a thread (the main thread, while a save runs
 		// in the background) serialized none.
