@@ -226,7 +226,8 @@ editor started with `--no-gpu` (use `--headless`):
   are not built while scenes use them (it answers once the game plays, with `built`; a failed build fails it with the
   errors; `{"build": false}` plays what is loaded; while a scene is being opened it fails at once, so wait for
   `scene.open` first). Changes made while playing apply to that copy, carry a
-  `warning` in the result, and are discarded by `play.stop`. Undo and redo are not available while playing;
+  `warning` in the result, and are discarded by `play.stop`; commands made for the running game (`scene.loadAdditive`,
+  `scene.unloadAdditive`, `script.add`/`remove`/`setField` on live scripts) are discarded too, without the warning. Undo and redo are not available while playing;
   `scene.save` saves the edited scene, never the running copy.
 - **Errors** (JSON-RPC codes): `-32602` invalid parameters (the error's `data.parameters` is the command's schema:
   fix the request and retry), `-32005` the request was valid but cannot be done now (message says why, e.g.

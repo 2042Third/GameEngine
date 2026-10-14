@@ -286,7 +286,9 @@ TEST_SUITE("Editor.Scripts")
 		CHECK(GetField<int32_t>(system, live, "FieldTypes", "IntSeenInCreate") == 9);
 
 		const nlohmann::json edited = harness.Run("script.setField", { { "entity", id }, { "class", "FieldTypes" }, { "field", "StringField" }, { "value", "Live" } });
-		CHECK(edited.contains("warning"));
+		// Live scripts are what it changes while playing: no warning (the journal marks it, replays leave it out).
+		CHECK_FALSE(edited.contains("warning"));
+		CHECK(harness.Context.GetJournal().GetEntries().back().RunningCopy);
 		CHECK(GetField<std::string>(system, live, "FieldTypes", "StringField") == "Live");
 		harness.Run("script.setField", { { "entity", id }, { "class", "FieldTypes" }, { "field", "IntField" }, { "value", nullptr } });
 		CHECK(GetField<int32_t>(system, live, "FieldTypes", "IntField") == 42);

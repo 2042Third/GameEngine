@@ -1499,7 +1499,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
 
 - Mutating commands report a `warning` in their result while the scene is playing (and set
   `EditorCommandResult::RunningCopy`, which replays read): such changes apply
-  to the running copy and are discarded by `play.stop`. Unknown or missing parameters are errors, and so are values out of
+  to the running copy and are discarded by `play.stop`. Commands whose only target is the running game set
+  `RunningCopy` without the warning, which would only repeat what they are for: `scene.loadAdditive`,
+  `scene.unloadAdditive` and, while playing, `script.add`, `script.remove` and `script.setField` (live scripts). Unknown or missing parameters are errors, and so are values out of
   a property's range (`PropertyInfo::IsInRange`, checked by `CommandUtils::ApplyComponents` for `component.set`,
   `component.add`, `entity.create` and `prefab.instantiate`, and by `material.set`/`material.create`; scene settings name
   their ranges too): `InvalidParameters` naming the range, nothing changed. The inspector's widgets keep clamping as they

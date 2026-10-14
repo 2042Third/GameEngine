@@ -220,15 +220,13 @@ namespace Strata
 			return { { "class", entry.ClassName }, { "live", live }, { "known", info != nullptr }, { "fields", std::move(fields) } };
 		}
 
-		// Ends a script edit: while playing the change applied to the running copy, which play.stop discards.
+		// Ends a script edit: while playing the change applied to the running copy, which play.stop discards. Changing the live
+		// scripts is what such an edit is for (trying a value in the running game), so no warning says so; the journal marks it
+		// an edit of the running copy, which replays leave out.
 		EditorCommandResult FinishScriptEdit(EditorContext& context, nlohmann::json value)
 		{
-			if (!context.IsPlaying())
-				return EditorCommandResult::Ok(std::move(value));
-			value["warning"] = fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
-				SceneStateToString(context.GetSceneState()));
 			EditorCommandResult result = EditorCommandResult::Ok(std::move(value));
-			result.RunningCopy = true;
+			result.RunningCopy = context.IsPlaying();
 			return result;
 		}
 

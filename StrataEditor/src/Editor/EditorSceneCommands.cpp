@@ -295,8 +295,8 @@ namespace Strata
 				value["roots"] = std::move(roots);
 				value["seconds"] = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
 				value["frames"] = frames;
-				value["warning"] = GetRunningCopyWarning(context);
-				// Sub-scenes belong to the running copy, which play.stop discards: replays leave the load out.
+				// Sub-scenes belong to the running copy, which play.stop discards: replays leave the load out. Their only target is
+				// the running game, so no warning says so.
 				EditorCommandResult result = EditorCommandResult::Ok(std::move(value));
 				result.RunningCopy = true;
 				return result;
@@ -443,11 +443,11 @@ namespace Strata
 
 		registry.Register({ "scene.loadAdditive",
 			"Loads a scene asset into the running game next to what it holds (a sub-scene, as scripts' Scene::LoadAdditive does; play mode "
-			"only, and like every edit while playing it is discarded by play.stop). The scene and everything it uses load in the background, "
+			"only: play.stop ends it with the game). The scene and everything it uses load in the background, "
 			"then its entities are created over the following frames (at most the scene's maxEntitiesInstantiatedPerFrame per frame), keeping "
 			"their IDs: a sub-scene whose IDs the running scene has already (the same scene twice) fails. Answers once every entity exists: "
 			"{subScene (its number, for scene.unloadAdditive), scene, state, progress, createdEntities, skippedEntities, totalEntities, slices, roots (the "
-			"top-level entities), seconds, frames, warning}. scene.loadStatus reports sub-scenes while they load.",
+			"top-level entities), seconds, frames}. scene.loadStatus reports sub-scenes while they load.",
 			ObjectSchema({ { "scene", AssetSchema("Scene asset to load into the running scene") } }, { "scene" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -462,7 +462,7 @@ namespace Strata
 
 		registry.Register({ "scene.unloadAdditive",
 			"Removes a sub-scene from the running game (play mode only): stops its load, releasing what it held loaded, or destroys its entities "
-			"with their descendants (their scripts get OnDestroy). Returns {subScene, entities (the running scene's count afterwards), warning}.",
+			"with their descendants (their scripts get OnDestroy). Returns {subScene, entities (the running scene's count afterwards)}.",
 			ObjectSchema({ { "subScene", IntegerSchema("The sub-scene's number (scene.loadAdditive, scene.loadStatus)", 1, std::numeric_limits<int64_t>::max()) } },
 				{ "subScene" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
@@ -479,8 +479,8 @@ namespace Strata
 				if (!scene.GetSubSceneStatus(static_cast<SubSceneID>(id)))
 					return EditorCommandResult::InvalidParameters(fmt::format("The running scene has no sub-scene {} (see scene.loadStatus)", id));
 				scene.UnloadSubScene(static_cast<SubSceneID>(id));
-				EditorCommandResult result = EditorCommandResult::Ok({ { "subScene", id }, { "entities", scene.GetEntityCount() },
-					{ "warning", GetRunningCopyWarning(context) } });
+				// Only the running game has sub-scenes: no warning that play.stop discards this; replays leave it out.
+				EditorCommandResult result = EditorCommandResult::Ok({ { "subScene", id }, { "entities", scene.GetEntityCount() } });
 				result.RunningCopy = true;
 				return result;
 			} });

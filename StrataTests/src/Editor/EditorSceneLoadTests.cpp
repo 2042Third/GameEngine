@@ -507,7 +507,8 @@ TEST_SUITE("Editor.SceneLoad")
 		CHECK(loaded["scene"] == UUIDToJson(project.Two));
 		CHECK(loaded["totalEntities"] == 1);
 		CHECK(loaded["slices"] == 1);
-		CHECK(loaded["warning"].is_string());
+		// Its only target is the running game: no warning that play.stop discards it.
+		CHECK_FALSE(loaded.contains("warning"));
 		REQUIRE(loaded["roots"].size() == 1);
 		const std::optional<UUID> boss = UUIDFromJson(loaded["roots"][0]);
 		REQUIRE(boss.has_value());
@@ -531,6 +532,8 @@ TEST_SUITE("Editor.SceneLoad")
 
 		const nlohmann::json unloaded = project.Run("scene.unloadAdditive", { { "subScene", subScene } });
 		CHECK(unloaded["entities"] == entities);
+		CHECK_FALSE(unloaded.contains("warning"));
+		CHECK(context.GetJournal().GetEntries().back().RunningCopy);
 		CHECK_FALSE(running->GetEntityByUUID(*boss).IsValid());
 		CHECK(project.Run("scene.loadStatus")["subScenes"].empty());
 		const EditorCommandResult unknown = failure("scene.unloadAdditive", { { "subScene", subScene } });
