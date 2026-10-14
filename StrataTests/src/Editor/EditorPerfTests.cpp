@@ -537,7 +537,7 @@ TEST_SUITE("Perf.Editor")
 		});
 	}
 
-	TEST_CASE("Opening a scene of 10,000 prefab instances holds no frame")
+	TEST_CASE("Opening a scene of 10,000 prefab instances holds no frame, and applying one reaches the others in one step")
 	{
 		// The loading worker and the I/O threads, as in the editor.
 		Perf::ScopedApplicationJobSystem jobs;
@@ -616,6 +616,25 @@ TEST_SUITE("Perf.Editor")
 			CHECK(context.GetPrefabSync().GetCatchUpCheckCount() == checks + c_Instances);
 			CHECK_FALSE(context.IsSceneModified());
 			return longest;
+		});
+
+		// prefab.apply of one instance's change: the file, and every other instance takes it (PrefabOverrides::Propagate), in
+		// one undo step that tracks only what changed. The median of five applies, each of a new value.
+		const std::string branch = context.GetEditScene()->GetEntityByUUID(*UUIDFromJson(nlohmann::json(instance))).GetChildren().front().GetUUID().ToString();
+		int round = 0;
+		Perf::CheckBudgetConfirmed("Perf.Editor.PrefabApply10kInstances", [&]
+		{
+			std::vector<double> samples;
+			for (int apply = 0; apply < 5; apply++)
+			{
+				round++;
+				run("component.set", { { "entity", branch }, { "component", "Transform" }, { "values", { { "Translation", { round, 0, 0 } } } } });
+				const auto start = std::chrono::steady_clock::now();
+				const nlohmann::json applied = run("prefab.apply", { { "entity", instance } });
+				samples.push_back(MillisecondsSince(start));
+				CHECK(applied["updatedInstances"] == c_Instances - 1);
+			}
+			return Perf::Summarize(samples).MedianMs;
 		});
 	}
 }

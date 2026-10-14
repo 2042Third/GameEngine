@@ -5,6 +5,9 @@
 		"expect": { "/classes": { "min": 1 } } },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "RigidBody" },
 		"expect": { "/values/Type": { "equals": "Dynamic" } } },
+	{ "command": "prefab.status", "parameters": { "entity": "F7E0000000000031" }, "expect": { "/overrides": { "equals":
+		[ { "entity": "F7E0000000000030", "prefabEntity": "F7C0000000000001", "component": "Script", "property": "CrateScript.Value", "kind": "Property" },
+			{ "entity": "F7E0000000000031", "prefabEntity": "F7C0000000000002", "component": "MeshRenderer", "property": "CastShadows", "kind": "Property" } ] } } },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "Transform" },
 		"expect": { "/values/Translation": { "equals": [ -4, 4, 0 ] } } },
 	{ "command": "play.start" },
