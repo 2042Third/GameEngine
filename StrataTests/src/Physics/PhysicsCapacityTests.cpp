@@ -694,6 +694,44 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(PhysicsWorld::CountBodyCandidates(scene) == 6);
 	}
 
+	TEST_CASE("Bodies leaving the simulation together go in one batch, and what rested on them wakes")
+	{
+		// A cell: 2,500 static boxes under one root, 2 m apart over 100 x 100 m; a crate of the persistent scene rests on one.
+		Scene scene("Leaving");
+		Entity cell = scene.CreateEntity("Cell");
+		for (uint32_t index = 0; index < 2500; index++)
+		{
+			Entity box = scene.CreateChildEntity(cell, "Floor");
+			box.GetTransform().Translation = glm::vec3(static_cast<float>(index % 50) * 2.0f, -0.5f, static_cast<float>(index / 50) * 2.0f);
+			box.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(1.0f, 0.5f, 1.0f);
+		}
+		Entity crate = CreateDynamicBox(scene, "Crate", glm::vec3(51.0f, 0.5f, 51.0f));
+
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		REQUIRE(WaitForSteps(scene, 600, [&]() { return physics.IsSleeping(crate); }));
+		const PhysicsStats before = physics.GetStats();
+		REQUIRE(before.StaticBodyCount == 2500);
+
+		// The cell leaves the simulation in one update: its bodies leave Jolt's broad phase in one batch, and the bodies around
+		// them are woken in merged regions (16 m squares: at most 7 x 7 of them), not one query per body.
+		cell.AddComponent<InactiveComponent>();
+		StepScene(scene, 1);
+		const PhysicsStats after = physics.GetStats();
+		CHECK(after.StaticBodyCount == 0);
+		CHECK(after.WakeQueryCount - before.WakeQueryCount <= 49);
+		CHECK_FALSE(physics.IsSleeping(crate));
+		const float height = GetWorldPosition(scene, crate).y;
+		StepScene(scene, 30);
+		CHECK(GetWorldPosition(scene, crate).y < height - 1.0f); // Nothing holds it up any more
+
+		// Back again in one update, the bodies return.
+		cell.RemoveComponent<InactiveComponent>();
+		StepScene(scene, 1);
+		CHECK(physics.GetStats().StaticBodyCount == 2500);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Steps that overflow the contact buffers are counted, warned about once and remembered")
 	{
 		ScopedCapacityDemands demands;

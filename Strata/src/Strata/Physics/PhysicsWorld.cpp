@@ -44,11 +44,13 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <cmath>
 #include <cstring>
 #include <deque>
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <set>
 #include <span>
 #include <utility>
@@ -767,6 +769,9 @@ namespace Strata
 			// Created and counted as part of the simulation, but waiting for the batch that adds the bodies of this round of
 			// changes to Jolt (see FlushBodyBatches); only ApplyChanges sees such records.
 			bool AddPending = false;
+			// Out of the simulation, but still in Jolt's broad phase until the batch of this round removes it
+			// (PhysicsWorldData::PendingDeactivations); a body that joins the simulation again meanwhile just stays.
+			bool RemovalPending = false;
 			bool Suspended = false;                         // Out of the simulation because the world transform is degenerate
 			bool WaitsForParent = false;                    // Not built because the parent cannot be inverted (dynamic bodies)
 			bool KinematicMoving = false;                   // MoveKinematic gave the body a velocity during the last step
@@ -972,6 +977,11 @@ namespace Strata
 		std::vector<JPH::BodyID> PendingActivatedAdds;
 		std::vector<JPH::BodyID> PendingRemovals;
 		std::vector<JPH::BodyID> PendingDestructions;
+		std::vector<JPH::BodyID> PendingDeactivations;                // Bodies leaving the simulation (BodyRecord::RemovalPending)
+		// Where the bodies removed or destroyed since the last flush were: the bodies resting on them are woken after the
+		// batch, in merged regions (see WakeAroundRemovedBodies), instead of a query per body.
+		std::vector<JPH::AABox> WakeBounds;
+		uint64_t WakeQueryCount = 0;                                  // Broad phase queries that woke bodies since the world was created
 		uint64_t AddBatchCount = 0;                                   // Batches of new bodies added since the world was created
 		std::unordered_map<PairKey, TouchingPair, PairKeyHash> TouchingPairs;
 		std::unordered_map<UUID, std::vector<PairKey>> EntityPairs;   // Touching pairs of each entity (see AddTouchingPair)
@@ -1409,22 +1419,77 @@ namespace Strata
 		// Simulation membership
 		//////////////////////////////////////////////////////////////////////////
 
-		// Wakes the bodies around a body (which may rest on it) before it is removed, moved or reshaped.
+		// Wakes the bodies in a box: only the tree of moving bodies is searched, since static bodies never sleep.
+		void WakeBodiesIn(PhysicsWorldData& data, JPH::AABox bounds)
+		{
+			bounds.ExpandBy(JPH::Vec3::sReplicate(c_WakeMargin));
+			const JPH::SpecifiedBroadPhaseLayerFilter movingBodies(c_MovingBroadPhaseLayer);
+			const JPH::ObjectLayerFilter layerFilter;
+			data.JoltSystem->GetBodyInterface().ActivateBodiesInAABox(bounds, movingBodies, layerFilter);
+			data.WakeQueryCount++;
+		}
+
+		// The world bounds of a body, if it exists. Main thread, between steps: nothing else changes bodies then.
+		std::optional<JPH::AABox> GetBodyBounds(const PhysicsWorldData& data, const JPH::BodyID& bodyID)
+		{
+			const JPH::BodyLockRead lock(data.JoltSystem->GetBodyLockInterfaceNoLock(), bodyID);
+			if (!lock.Succeeded())
+				return std::nullopt;
+			return lock.GetBody().GetWorldSpaceBounds();
+		}
+
+		// Wakes the bodies around a body (which may rest on it) before it is moved or reshaped.
 		void WakeBodiesAround(PhysicsWorldData& data, const JPH::BodyID& bodyID)
 		{
-			JPH::AABox bounds;
+			if (const std::optional<JPH::AABox> bounds = GetBodyBounds(data, bodyID))
+				WakeBodiesIn(data, *bounds);
+		}
+
+		// Remembers where a body that leaves the broad phase in this round's batch is, so that the bodies resting on it wake
+		// once it is gone (WakeAroundRemovedBodies).
+		void QueueWakeAround(PhysicsWorldData& data, const JPH::BodyID& bodyID)
+		{
+			if (const std::optional<JPH::AABox> bounds = GetBodyBounds(data, bodyID))
+				data.WakeBounds.push_back(*bounds);
+		}
+
+		// Wakes the bodies around the bodies a batch removed. A few are woken box by box; many (a cell leaving) in merged
+		// regions of a coarse grid, one query per region instead of one per body: bodies near the removed ones that rested on
+		// something else may wake too, and fall asleep again.
+		void WakeAroundRemovedBodies(PhysicsWorldData& data)
+		{
+			constexpr size_t c_MaxSingleWakes = 16;
+			constexpr float c_WakeRegionSize = 16.0f;
+			std::vector<JPH::AABox>& bounds = data.WakeBounds;
+			if (bounds.size() <= c_MaxSingleWakes)
 			{
-				JPH::BodyLockRead lock(data.JoltSystem->GetBodyLockInterface(), bodyID);
-				if (!lock.Succeeded())
-					return;
-				bounds = lock.GetBody().GetWorldSpaceBounds();
+				for (const JPH::AABox& box : bounds)
+					WakeBodiesIn(data, box);
+				bounds.clear();
+				return;
 			}
 
-			// The lock must be released first: activation locks the bodies it finds, possibly including this one.
-			bounds.ExpandBy(JPH::Vec3::sReplicate(c_WakeMargin));
-			const JPH::BroadPhaseLayerFilter broadPhaseFilter;
-			const JPH::ObjectLayerFilter layerFilter;
-			data.JoltSystem->GetBodyInterface().ActivateBodiesInAABox(bounds, broadPhaseFilter, layerFilter);
+			// Regions keyed by the grid square of each box's center, in key order (deterministic).
+			std::vector<std::pair<uint64_t, JPH::AABox>> regions;
+			regions.reserve(bounds.size());
+			for (const JPH::AABox& box : bounds)
+			{
+				const JPH::Vec3 center = box.GetCenter();
+				const int32_t x = static_cast<int32_t>(std::floor(center.GetX() / c_WakeRegionSize));
+				const int32_t z = static_cast<int32_t>(std::floor(center.GetZ() / c_WakeRegionSize));
+				regions.emplace_back((static_cast<uint64_t>(static_cast<uint32_t>(x)) << 32) | static_cast<uint32_t>(z), box);
+			}
+			std::sort(regions.begin(), regions.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+			for (size_t first = 0; first < regions.size();)
+			{
+				JPH::AABox region = regions[first].second;
+				size_t next = first + 1;
+				for (; next < regions.size() && regions[next].first == regions[first].first; next++)
+					region.Encapsulate(regions[next].second);
+				WakeBodiesIn(data, region);
+				first = next;
+			}
+			bounds.clear();
 		}
 
 		void WakeAllBodies(PhysicsWorldData& data)
@@ -1466,8 +1531,10 @@ namespace Strata
 			}
 			else
 			{
-				WakeBodiesAround(data, record.BodyID);
-				data.JoltSystem->GetBodyInterface().RemoveBody(record.BodyID);
+				// Leaves Jolt's broad phase with the round's batch (FlushBodyDestructions), with the bodies around it woken then.
+				QueueWakeAround(data, record.BodyID);
+				data.PendingDeactivations.push_back(record.BodyID);
+				record.RemovalPending = true;
 			}
 			record.InSimulation = false;
 			record.KinematicMoving = false;
@@ -1508,7 +1575,17 @@ namespace Strata
 				record.KinematicTargetRotation = rotation;
 			}
 
-			bodies.AddBody(record.BodyID, record.Type == RigidBodyType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+			if (record.RemovalPending)
+			{
+				// Still in the broad phase: it stays, and the batch leaves it there.
+				record.RemovalPending = false;
+				if (record.Type != RigidBodyType::Static)
+					bodies.ActivateBody(record.BodyID);
+			}
+			else
+			{
+				bodies.AddBody(record.BodyID, record.Type == RigidBodyType::Static ? JPH::EActivation::DontActivate : JPH::EActivation::Activate);
+			}
 			if (record.Type == RigidBodyType::Dynamic)
 			{
 				// Motion resumes where it stopped.
@@ -1539,10 +1616,16 @@ namespace Strata
 			GetUpdateCounters(data).BodiesRemoved++;
 			if (record.InSimulation && !record.AddPending)
 			{
-				// The bodies resting on it must notice, while it can still be found where it is.
-				WakeBodiesAround(data, record.BodyID);
+				// The bodies resting on it wake once the batch removed it.
+				QueueWakeAround(data, record.BodyID);
 				data.PendingRemovals.push_back(record.BodyID);
 			}
+			else if (record.RemovalPending)
+			{
+				// Its pending removal becomes part of its destruction (the deactivation's entry is skipped: the slot is empty).
+				data.PendingRemovals.push_back(record.BodyID);
+			}
+			record.RemovalPending = false;
 			data.PendingDestructions.push_back(record.BodyID);
 			data.BodySlots[record.BodyID.GetIndex()] = BodySlot();
 			data.Contacts.SetBodyInterest(record.BodyID, false);
@@ -1553,16 +1636,32 @@ namespace Strata
 			record.KinematicMoving = false;
 		}
 
-		// Removes and destroys the bodies DestroyJoltBody queued, in one batch each (their slots become free).
+		// Removes the bodies that left the simulation (RemoveFromSimulation) from Jolt's broad phase, and removes and
+		// destroys the bodies DestroyJoltBody queued (their slots become free), in one batch each; then wakes the bodies around
+		// them.
 		void FlushBodyDestructions(PhysicsWorldData& data)
 		{
 			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
+			// Deactivations still wanted: a body that joined the simulation again or was destroyed meanwhile is skipped.
+			std::erase_if(data.PendingDeactivations, [&](const JPH::BodyID& bodyID)
+			{
+				BodyRecord* record = FindBodyRecord(data, bodyID);
+				if (!record || !record->RemovalPending)
+					return true;
+				record->RemovalPending = false;
+				return false;
+			});
+			if (!data.PendingDeactivations.empty())
+				bodies.RemoveBodies(data.PendingDeactivations.data(), static_cast<int>(data.PendingDeactivations.size()));
 			if (!data.PendingRemovals.empty())
 				bodies.RemoveBodies(data.PendingRemovals.data(), static_cast<int>(data.PendingRemovals.size()));
 			if (!data.PendingDestructions.empty())
 				bodies.DestroyBodies(data.PendingDestructions.data(), static_cast<int>(data.PendingDestructions.size()));
+			data.PendingDeactivations.clear();
 			data.PendingRemovals.clear();
 			data.PendingDestructions.clear();
+			if (!data.WakeBounds.empty())
+				WakeAroundRemovedBodies(data);
 		}
 
 		// A grown world's Jolt system counts body sequence numbers from 0 (see GrowWorld), so a body made there may get the ID
@@ -4878,6 +4977,7 @@ namespace Strata
 		stats.OrderedSlotCount = data.LastOrderedSlots;
 		stats.BuildCount = data.BuildCount;
 		stats.ParallelBuildCount = data.ParallelBuildCount;
+		stats.WakeQueryCount = data.WakeQueryCount;
 		const PhysicsWorldData::UpdateCounters lastUpdate = GetLastUpdateCounters(data);
 		stats.BodiesAddedLastUpdate = lastUpdate.BodiesAdded;
 		stats.BodiesRemovedLastUpdate = lastUpdate.BodiesRemoved;

@@ -266,7 +266,11 @@ chunks of 512, and the main thread gives them
 their IDs in record order, building the serial way what the jobs left to it (mesh colliders, anything that warns). So
 body IDs and the simulation do not depend on the number of threads (`PhysicsStats::ParallelBuildCount`). Broad phase
 batches are prepared on one thread at a time: Jolt 5.6's node allocator publishes a new page's size before its pointer
-without ordering, so two threads preparing at once can crash on processors that reorder stores (Apple silicon). Steps that overflow the pair or contact buffers
+without ordering, so two threads preparing at once can crash on processors that reorder stores (Apple silicon). Bodies
+that leave the simulation (inactive entities, a cell leaving) and bodies destroyed in a round of changes leave the broad
+phase in one batch at its end, and the bodies around them are woken afterwards: box by box for a few, in merged 16 m
+regions of the moving tree for many (`PhysicsStats::WakeQueryCount`), so a cell of thousands of bodies leaves in a few
+dozen queries. Steps that overflow the pair or contact buffers
 are counted (`PhysicsStats::BodyOverflowCount`, `ContactOverflowSteps`), and what a world lacked is remembered per scene
 (`Scene::GetLineageID`: the scene asset it was loaded from or saved as, else the scene and its copies; never another
 scene of the same name), so the scene's next world is sized for it. Jolt reserves a world's buffers when it is created

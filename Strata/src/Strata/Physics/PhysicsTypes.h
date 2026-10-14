@@ -144,6 +144,9 @@ namespace Strata
 		uint32_t BodiesAddedLastUpdate = 0;
 		uint32_t BodiesRemovedLastUpdate = 0;
 		float ChangeTime = 0.0f;
+		// Broad phase queries that woke the bodies around removed, destroyed, moved or reshaped bodies since the world was
+		// created: bodies removed together are woken around in merged regions, so a cell leaving costs a few dozen.
+		uint64_t WakeQueryCount = 0;
 	};
 
 	// Triangle data used to build MeshColliderComponent shapes.
