@@ -16,6 +16,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Events/ApplicationEvent.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Scene/Components.h>
@@ -793,6 +794,37 @@ TEST_SUITE("Editor.UI.Saves")
 		CHECK_FALSE(editor.Context().HasSavesInFlight());
 		editor.Frames(1);
 		CHECK_FALSE(UI::ItemProbe::Find("Status.Saving").has_value());
+	}
+
+	TEST_CASE("Closing the window while a save writes shows the saving dialog, also when the scene is unmodified meanwhile")
+	{
+		GatedJobSystem jobs;
+		HarnessEditor editor({}, WithFeatureProject("SaveWindowClose"));
+		editor.Frames(2);
+		REQUIRE(editor.Context().HasProject());
+		editor.Run("entity.create", { { "name", "Saved Then Undone" } });
+		{
+			BackgroundGate gate;
+			editor.Run("scene.save", { { "wait", false } });
+			// Undone back to the file's state: unmodified, while the save of the edit writes.
+			editor.Run("edit.undo");
+			REQUIRE_FALSE(editor.Context().IsSceneModified());
+			REQUIRE(editor.Context().HasSavesInFlight());
+			WindowCloseEvent close;
+			editor.Layer->OnEvent(close);
+			CHECK(close.Handled);
+			editor.Frames(2);
+			CHECK(UI::ItemProbe::Find("Saving.Dialog").has_value());
+			CHECK(editor.Host->Running);
+		}
+		// Written: the file holds the entity the scene no longer has, and closing asks about that difference.
+		REQUIRE(editor.FramesUntil([&]() { return UI::ItemProbe::Find("UnsavedChanges.DontSave").has_value(); }));
+		CHECK(editor.Host->Running);
+		// A dialog that sizes itself to its contents settles over its first frames.
+		editor.Frames(2);
+		REQUIRE(editor.Click("UnsavedChanges.DontSave"));
+		editor.Frames(1);
+		CHECK_FALSE(editor.Host->Running);
 	}
 
 	TEST_CASE("The unsaved-changes question's Save goes on with what was asked once the save is written")

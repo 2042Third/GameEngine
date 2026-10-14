@@ -634,9 +634,9 @@ namespace Strata
 		EventDispatcher dispatcher(event);
 		dispatcher.Dispatch<WindowCloseEvent>([this](WindowCloseEvent&)
 		{
-			if (!m_Context.IsSceneModified())
+			if (!m_Context.IsSceneModified() && !m_Context.HasSavesInFlight())
 				return false;
-			// Keep running and ask first; closing happens from the dialog.
+			// Keep running and ask first (after the saving dialog while saves write); closing happens from the dialog.
 			RequestDiscardChanges([this]() { m_Host->Close(); });
 			return true;
 		});
