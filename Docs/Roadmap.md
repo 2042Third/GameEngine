@@ -536,7 +536,7 @@ Open items and deferrals later waves own:
     alone until `ctest --preset windows-debug` runs under the validation layer there again (drivers differ: NVIDIA has
     `drawIndirectCount`, a transfer queue and min/max samplers, which MoltenVK lacks).
   - Windows Debug builds and the visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds Release
-    only).
+    everywhere and Dist on Windows, never Debug).
 
 ## Waves
 
@@ -615,9 +615,6 @@ the workstreams it depends on have merged.
 - **`agent-activity`: Agent-native editor: no silent discards, autosave and recovery, activity journal and replay,
   agent presence, notifications, captures for agents, command contracts.** Make the AI-drivable editor visible and
   trustworthy. Depends on `editor-shell`, `editor-authoring`.
-
-### Wave 4" section and the "### Later (wave 5 and beyond)" section,
-from "### Wave 4" to the end of the file. The Pillars, Status and earlier waves stay as they are. -->
 
 ### Wave 4
 
