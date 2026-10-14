@@ -63,6 +63,39 @@ jobs:
           if [ "$RUNNER_OS" != "Windows" ]; then keepGoing=(-- -k 0); fi
           cmake --build --preset ${{ matrix.preset }}-release --parallel "${keepGoing[@]}" 2>&1 | tee build.log
 
+      - name: Diagnose a hang (temporary)
+        if: runner.os == 'Linux'
+        shell: bash
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y gdb > /dev/null 2>&1 || true
+          cd build/linux/bin/Release
+          ulimit -v 10000000
+          ulimit -f 2097152
+          export STRATA_TEST_TRACE=1
+          run() {
+            timeout -k 60 -s INT "$1" gdb -q -batch -ex "set pagination off" -ex "set print frame-arguments none" -ex run -ex "info threads" \
+              -ex "thread apply all bt 30" --args ./StrataTests "$2" --no-intro=true > "$3" 2>&1 || true
+          }
+          run 150 "--test-suite=World.Streaming" diag1.log
+          run 840 "--test-suite-exclude=GPU*,EndToEnd*,Package*,Perf.*,PerfGPU.*,FeatureTest,Editor.FeatureTest" diag2.log
+          python3 - <<'PY'
+          import re
+          for number, name in ((1, "diag1.log"), (2, "diag2.log")):
+              try:
+                  lines = open(name, errors="replace").read().splitlines()
+              except OSError:
+                  continue
+              cases = [l for l in lines if l.startswith("[test case]")]
+              kept = cases[-3:] + [l for l in lines if l.startswith(("[doctest] test cases", "Program", "Thread ", "#", "Fatal", "terminate"))]
+              kept = [re.sub(r"0x[0-9a-f]{8,16} in ", "", l) for l in kept]
+              text = "\n".join(kept)
+              pieces = [text[i:i + 3900] for i in range(0, len(text), 3900)][:4]
+              for index, piece in enumerate(pieces):
+                  escaped = piece.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                  print("::error title=Diag %d.%d::%s" % (number, index + 1, escaped))
+          PY
+
       # Hosted runners have no GPU: suites that need one carry the "gpu" label. Perf budgets (label "perf") hold for the
       # reference machine (StrataTests/Perf/Budgets.json); shared runners of other speeds would fail or pass them at
       # random, so the perf gate runs on the reference machine (Docs/DeveloperGuide.md, "Perf tests").
