@@ -49,6 +49,7 @@ namespace Strata
 
 	struct SceneWorkBudget;
 	struct WorldCookCache;
+	struct WorldSavedDocument;
 	class EditorWorld;
 
 	enum class SceneState : uint8_t
@@ -309,6 +310,8 @@ namespace Strata
 		WorldCookCache& GetWorldCookCache();
 		// The world the edited scene is the persistent scene of, streamed around the editor camera; null when it is none.
 		EditorWorld* GetWorld() const { return m_World.get(); }
+		// The documents the last save of a world wrote (scene.save's documents).
+		const std::vector<WorldSavedDocument>& GetLastWorldSave() const { return m_LastWorldSave; }
 		// Thumbnails of the open project's assets (Content Browser, Asset tab); null without a project or a GPU.
 		ThumbnailCache* GetThumbnails() const { return m_Thumbnails.get(); }
 		// The project's picture for the launcher, made after each scene save.
@@ -683,6 +686,7 @@ namespace Strata
 		const EditorAssetManager* m_WorldCookCacheOwner = nullptr; // The project the cache belongs to
 		// Declared after the undo stack and the edited scene, which it observes and streams into: it goes first.
 		Scope<EditorWorld> m_World;
+		std::vector<WorldSavedDocument> m_LastWorldSave;
 	};
 
 }

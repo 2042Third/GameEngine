@@ -2050,7 +2050,14 @@ cells dirties both; descendants count for their top-level ancestor's document), 
 step, everything loaded for a step only a snapshot describes. Undo steps carry membership: `EntityState::Cell` is the
 scene asset of a top-level entity's sub-scene, restored through `Scene::SetSubSceneOf`, and `SceneEdit::CheckCells`
 fails a step whose cell is not loaded before anything changes ("it is loading now, undo again once it is in"); the
-recovery journal records `Cell` too. `world.status` describes it (cells by state, dirty documents, edit settings, the
+recovery journal records `Cell` too. Saves write only dirty documents (`EditorWorld::Save`, from
+`EditorContext::SaveScene`): the persistent scene's entities without the cells' (and with the scene's settings), each
+dirty cell's top-level entities and their descendants (without settings: cells use their host's), and the World
+document when the saved cells' index entries (refreshed from what was written) changed; one `UndoStack::MarkSaved`, and
+the persistent scene's document as the recovery journal's new base. `scene.save` lists the documents written
+(`documents: [{path, kind, bytes, entities}]`); `scene.saveAs` refuses worlds. Documents go through
+`Editor/WorldCellIO.h` (`SerializeDocument`, `WriteDocument`), the seam world-io's entity-subset writer and background
+save replace. `world.status` describes it (cells by state, dirty documents, edit settings, the
 cell list), `world.edit` sets the edit layer, visible layers and radius scale for the session, and `world.loadCells`
 loads cells by key or region, pinned until let go (`wait` answers once they are in).
 

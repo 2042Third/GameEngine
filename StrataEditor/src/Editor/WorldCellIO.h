@@ -3,6 +3,8 @@
 #include <Strata/Asset/AssetTypes.h>
 #include <Strata/World/WorldAsset.h>
 
+#include <nlohmann/json.hpp>
+
 #include <optional>
 #include <string>
 #include <vector>
@@ -11,6 +13,8 @@ namespace Strata
 {
 
 	class AssetManagerBase;
+	class EditorAssetManager;
+	class Entity;
 	class Scene;
 
 	// The editor's reads and writes of a world's cell documents (the cook's summaries now; EditorWorld's saves later). The
@@ -32,6 +36,14 @@ namespace Strata
 		// positions, renderers' recorded mesh bounds, colliders) and entity IDs; ClosureBytes is the stored size of `asset`'s
 		// dependency closure without other scenes (0 for a null asset).
 		CellSummary SummarizeScene(const Scene& scene, const AssetManagerBase& assets, AssetHandle asset);
+
+		// The scene document of some top-level entities of a scene with their descendants, in hierarchy order: a cell's
+		// (withSettings false: cells use their host scene's settings) or the persistent scene's.
+		nlohmann::json SerializeDocument(const Scene& scene, const std::string& name, const std::vector<Entity>& roots, bool withSettings);
+		// Writes a document over an engine-native asset's file (EditorAssetManager::SaveNativeAsset, with its references;
+		// reload: loaded copies take the saved version). The bytes written, or nullopt with the reason.
+		std::optional<size_t> WriteDocument(EditorAssetManager& assets, AssetHandle asset, AssetType type, const nlohmann::json& document, bool reload,
+			std::string* outError = nullptr);
 
 	}
 

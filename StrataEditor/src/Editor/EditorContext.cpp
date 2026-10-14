@@ -679,6 +679,19 @@ namespace Strata
 				*outError = "The scene has not been saved yet; save it under a path first";
 			return false;
 		}
+		// A world saves its changed documents: the persistent scene without the cells' entities, the dirty cells, its index.
+		if (m_World)
+		{
+			WorldSaveResult saved;
+			if (!m_World->Save(*m_AssetManager, m_SceneHandle, saved, outError))
+				return false;
+			m_LastWorldSave = std::move(saved.Documents);
+			m_UndoStack.MarkSaved();
+			OnSceneSaved();
+			const auto [sceneFile, scenePath] = GetSceneFile(m_SceneHandle);
+			m_Recovery.OnSaved(m_SceneHandle, sceneFile, scenePath, std::move(saved.PersistentDocument));
+			return true;
+		}
 		// What the scene references comes from the JSON at hand: saving a large scene parses no document again.
 		const nlohmann::json json = SceneSerializer::Serialize(*m_EditScene);
 		std::vector<AssetHandle> references;
@@ -701,6 +714,12 @@ namespace Strata
 		{
 			if (outError)
 				*outError = "No project is open";
+			return false;
+		}
+		if (m_World)
+		{
+			if (outError)
+				*outError = "A world is saved in place (scene.save); world.create makes another";
 			return false;
 		}
 		// The scene takes the name of its file.

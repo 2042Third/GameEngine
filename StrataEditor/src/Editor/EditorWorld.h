@@ -23,6 +23,22 @@ namespace Strata
 	class Scene;
 	class WorldAsset;
 
+	// A document an EditorWorld save wrote (scene.save's documents).
+	struct WorldSavedDocument
+	{
+		std::string Path;     // Relative to the asset directory
+		std::string Kind;     // "persistent", "cell" or "world"
+		size_t Bytes = 0;
+		uint64_t Entities = 0;
+	};
+
+	struct WorldSaveResult
+	{
+		std::vector<WorldSavedDocument> Documents;
+		// The persistent scene's document as it is on disk now (written or not): the recovery journal's new base.
+		std::string PersistentDocument;
+	};
+
 	// The world the editor edits: the edited scene is a world's persistent scene (its first active WorldComponent names a
 	// registered World asset), and the cells around the editor camera are loaded into it as sub-scenes, edited in place and
 	// saved by cell. EditorContext owns it (GetWorld; null while the edited scene is no world). Main thread.
@@ -72,6 +88,12 @@ namespace Strata
 		bool IsPersistentDirty() const { return m_PersistentDirty; }
 		const std::unordered_set<AssetHandle>& GetDirtyCells() const { return m_DirtyCells; }
 		bool IsCellDirty(AssetHandle cell) const { return m_DirtyCells.contains(cell); }
+
+		// Saves the documents changed since the last save: the persistent scene's entities without the cells' (with the scene's
+		// settings), each dirty cell's top-level entities and their descendants (without settings), and the World document
+		// with the saved cells' index entries refreshed from memory (written when it changed). Clears the dirty marks. False,
+		// with the reason and the marks kept, when a document cannot be written (those written before stay written).
+		bool Save(EditorAssetManager& assets, AssetHandle persistent, WorldSaveResult& outResult, std::string* outError = nullptr);
 
 		// The cell of a cell scene (the world's, or a new one's), and the reverse; nullopt / null when unknown.
 		std::optional<WorldCellKey> FindCellKey(AssetHandle cell) const;

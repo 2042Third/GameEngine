@@ -1,9 +1,13 @@
 #include "Editor/EditorWorld.h"
 
+#include "Editor/WorldCellIO.h"
+
 #include <Strata/Asset/AssetImporter.h>
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/Scene/SceneSerializer.h>
 #include <Strata/World/WorldAsset.h>
 #include <Strata/World/WorldComponents.h>
 
@@ -277,6 +281,115 @@ namespace Strata
 		m_Sources.assign(1, source);
 		m_Streamer.SetSources(m_Sources);
 		m_Streamer.Update();
+	}
+
+	bool EditorWorld::Save(EditorAssetManager& assets, AssetHandle persistent, WorldSaveResult& outResult, std::string* outError)
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+		outResult = {};
+		RefreshCellTable();
+		const Ref<WorldAsset> world = GetWorldAsset();
+		if (!world)
+			return fail("The world is still loading: save again in a moment");
+
+		// The top-level entities by document, in hierarchy order: a cell's belong to its sub-scene, the rest to the persistent
+		// scene (also those of other additive loads, as a plain scene's save keeps them).
+		std::vector<Entity> persistentRoots;
+		std::unordered_map<AssetHandle, std::vector<Entity>> cellRoots;
+		for (const Entity entity : m_Scene.GetEntitiesInHierarchyOrder())
+		{
+			if (entity.GetComponent<RelationshipComponent>().Parent.IsValid())
+				continue;
+			const SubSceneStatus* status = m_Scene.GetSubSceneStatus(m_Scene.GetSubSceneOf(entity));
+			if (status && status->Scene.IsValid() && m_CellKeys.contains(status->Scene))
+				cellRoots[status->Scene].push_back(entity);
+			else
+				persistentRoots.push_back(entity);
+		}
+
+		// The persistent scene.
+		const std::optional<AssetMetadata> persistentMetadata = assets.GetMetadata(persistent);
+		if (!persistentMetadata)
+			return fail("The persistent scene has no asset of the project");
+		const nlohmann::json persistentDocument = WorldCellIO::SerializeDocument(m_Scene, m_Scene.GetName(), persistentRoots, true);
+		outResult.PersistentDocument = JsonUtils::Dump(persistentDocument, 1, '\t') + "\n";
+		if (m_PersistentDirty)
+		{
+			std::string error;
+			const std::optional<size_t> bytes = WorldCellIO::WriteDocument(assets, persistent, AssetType::Scene, persistentDocument, false, &error);
+			if (!bytes)
+				return fail(fmt::format("The persistent scene cannot be saved: {}", error));
+			outResult.Documents.push_back({ persistentMetadata->Path, "persistent", *bytes, persistentDocument["Scene"]["Entities"].size() });
+			m_PersistentDirty = false;
+		}
+		else
+		{
+			std::vector<uint8_t> bytes;
+			if (assets.ReadStoredData(persistent, bytes))
+				outResult.PersistentDocument.assign(bytes.begin(), bytes.end());
+		}
+
+		// The dirty cells, in key order.
+		std::vector<std::pair<WorldCellKey, AssetHandle>> dirty;
+		for (const AssetHandle cell : m_DirtyCells)
+		{
+			if (const std::optional<WorldCellKey> key = FindCellKey(cell))
+				dirty.emplace_back(*key, cell);
+		}
+		std::sort(dirty.begin(), dirty.end());
+		WorldData data = world->GetData();
+		if (!data.Index)
+			data.Index = WorldIndex();
+		for (const auto& [key, cell] : dirty)
+		{
+			const std::optional<AssetMetadata> metadata = assets.GetMetadata(cell);
+			if (!metadata)
+				return fail(fmt::format("The cell {} has no asset of the project", DescribeKey(key)));
+			const auto roots = cellRoots.find(cell);
+			const nlohmann::json document = WorldCellIO::SerializeDocument(m_Scene, metadata->Name, roots != cellRoots.end() ? roots->second : std::vector<Entity>(), false);
+			std::string error;
+			const std::optional<size_t> bytes = WorldCellIO::WriteDocument(assets, cell, AssetType::Scene, document, false, &error);
+			if (!bytes)
+				return fail(fmt::format("The cell {} cannot be saved: {}", DescribeKey(key), error));
+			outResult.Documents.push_back({ metadata->Path, "cell", *bytes, document["Scene"]["Entities"].size() });
+			m_DirtyCells.erase(cell);
+
+			// Its index entry, from what was just written.
+			Scene saved("Cell");
+			if (SceneSerializer::Deserialize(saved, document))
+			{
+				saved.UpdateWorldTransforms();
+				WorldCellIO::CellSummary summary = WorldCellIO::SummarizeScene(saved, assets, cell);
+				summary.Summary.Layer = key.Layer;
+				summary.Summary.X = key.X;
+				summary.Summary.Z = key.Z;
+				summary.Summary.Stamp = fmt::format("{:016X}", assets.GetContentStamp(cell));
+				std::vector<WorldCellSummary>& entries = data.Index->Cells;
+				const auto entry = std::find_if(entries.begin(), entries.end(), [&](const WorldCellSummary& item) { return item.GetKey() == key; });
+				if (entry != entries.end())
+					*entry = summary.Summary;
+				else
+					entries.push_back(summary.Summary);
+			}
+		}
+		// The World document, when the index changed.
+		if (!dirty.empty() && WorldAsset::ToDocument(data) != WorldAsset::ToDocument(world->GetData()))
+		{
+			std::string error;
+			const std::optional<AssetMetadata> metadata = assets.GetMetadata(m_World);
+			const std::optional<size_t> bytes = WorldCellIO::WriteDocument(assets, m_World, AssetType::World, WorldAsset::ToDocument(data), true, &error);
+			if (!bytes)
+				return fail(fmt::format("The world's document cannot be saved: {}", error));
+			outResult.Documents.push_back({ metadata ? metadata->Path : m_World.ToString(), "world", *bytes, 0 });
+		}
+		// What undo steps asked for may go now.
+		m_RequestedPins.clear();
+		return true;
 	}
 
 }

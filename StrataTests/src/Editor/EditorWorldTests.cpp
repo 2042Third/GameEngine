@@ -9,6 +9,8 @@
 #include "Physics/PhysicsTestUtils.h"
 #include "UI/ItemProbe.h"
 
+#include <Strata/Core/FileSystem.h>
+#include <Strata/Core/JsonUtils.h>
 #include <Strata/Physics/PhysicsSystem.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
@@ -17,6 +19,9 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <thread>
 #include <cmath>
 #include <optional>
 #include <set>
@@ -276,5 +281,98 @@ TEST_SUITE("Editor.World")
 		CHECK(cells.contains({ 0, 0 }));
 		CHECK_FALSE(cells.contains({ 1, 0 }));
 		CHECK(project.Context.GetEditScene()->GetEntityByUUID(box.GetUUID()).GetComponent<TransformComponent>().Scale.x == 2.0f);
+	}
+}
+
+namespace
+{
+
+	struct FileState
+	{
+		std::string Text;
+		std::filesystem::file_time_type Time;
+
+		bool operator==(const FileState&) const = default;
+	};
+
+	FileState ReadFileState(const std::filesystem::path& path)
+	{
+		FileState state;
+		state.Text = FileSystem::ReadText(path).value_or(std::string());
+		state.Time = std::filesystem::last_write_time(path);
+		return state;
+	}
+
+}
+
+TEST_SUITE("Editor.World")
+{
+	TEST_CASE("Saving a world writes only the dirty cell, and the persistent scene never holds the cells' entities")
+	{
+		WorldProject project("EditorWorldSave", 3);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
+		Settle(project);
+		const std::filesystem::path assets = project.Directory / "Assets";
+		const std::filesystem::path persistentFile = assets / "Scenes" / "GenPersistent.stscene";
+		const std::filesystem::path cellA = assets / "Worlds" / "Gen" / "Ground" / "0_0.stscene";
+		const std::filesystem::path cellB = assets / "Worlds" / "Gen" / "Ground" / "1_0.stscene";
+		const std::filesystem::path worldFile = assets / "Worlds" / "Gen.stworld";
+		const FileState persistentBefore = ReadFileState(persistentFile);
+		const FileState cellBefore = ReadFileState(cellA);
+		const FileState otherBefore = ReadFileState(cellB);
+		// File times have a coarse grain on some systems: a write now must show.
+		std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+		// Cell A's box is edited, then saved.
+		const Entity box = project.Context.GetEditScene()->FindEntityByName("Box 0");
+		REQUIRE(box);
+		const UUID boxID = box.GetUUID();
+		REQUIRE(project.Context.GetEditScene()->GetSubSceneStatus(project.Context.GetEditScene()->GetSubSceneOf(box))->Scene == project.GetCell(0, 0));
+		project.Run("component.set", { { "entity", UUIDToJson(box.GetUUID()) }, { "component", "Transform" }, { "values", { { "Scale", { 2.0, 2.0, 2.0 } } } } });
+		const nlohmann::json saved = project.Run("scene.save");
+		REQUIRE(saved["documents"].size() == 2); // The cell and the world's index
+		CHECK(saved["documents"][0]["kind"] == "cell");
+		CHECK(saved["documents"][0]["path"] == "Worlds/Gen/Ground/0_0.stscene");
+		CHECK(saved["documents"][0]["entities"] == 7);
+		CHECK(saved["documents"][1]["kind"] == "world");
+		CHECK_FALSE(project.Context.IsSceneModified());
+		CHECK(project.Run("world.status")["cells"]["dirty"] == 0);
+
+		CHECK(ReadFileState(persistentFile) == persistentBefore);
+		CHECK(ReadFileState(cellB) == otherBefore);
+		CHECK_FALSE(ReadFileState(cellA) == cellBefore);
+		// The cell's document holds its seven boxes, the scaled one among them, and no settings.
+		const std::optional<nlohmann::json> cell = JsonUtils::Parse(ReadFileState(cellA).Text);
+		REQUIRE(cell.has_value());
+		CHECK((*cell)["Scene"]["Entities"].size() == 7);
+		CHECK_FALSE((*cell)["Scene"].contains("Settings"));
+		CHECK(ReadFileState(cellA).Text.find("\"Scale\": [\n\t\t\t\t\t\t\t2") != std::string::npos);
+		// The world's index has the cell's entry, current.
+		const Ref<WorldAsset> world = project.ReadWorld();
+		REQUIRE(world->GetData().Index.has_value());
+		const WorldCellSummary* entry = world->FindSummary(WorldCellKey { 1, 0, 0 });
+		REQUIRE(entry);
+		CHECK(entry->Entities == 7);
+		CHECK(entry->Stamp == fmt::format("{:016X}", project.Context.GetAssetManager()->GetContentStamp(project.GetCell(0, 0))));
+		(void)worldFile;
+
+		// The persistent scene changes: its save leaves the cells' entities out.
+		project.Run("entity.create", { { "name", "Lamp" } });
+		const nlohmann::json second = project.Run("scene.save");
+		REQUIRE(second["documents"].size() == 1);
+		CHECK(second["documents"][0]["kind"] == "persistent");
+		const std::string persistent = ReadFileState(persistentFile).Text;
+		CHECK(persistent.find("\"Lamp\"") != std::string::npos);
+		CHECK(persistent.find("\"Box 0\"") == std::string::npos);
+		CHECK(persistent.find("\"Source\"") != std::string::npos);
+
+		// Reopened, the scale is there.
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) }, { "force", true } });
+		Settle(project);
+		const Entity reopened = project.Context.GetEditScene()->GetEntityByUUID(boxID);
+		REQUIRE(reopened);
+		CHECK(reopened.GetComponent<TransformComponent>().Scale.x == 2.0f);
+		CHECK_FALSE(project.Try("scene.saveAs", { { "path", "Scenes/Copy.stscene" } }).Success);
 	}
 }

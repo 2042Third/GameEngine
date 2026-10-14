@@ -1,6 +1,7 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorWorld.h"
 #include "Editor/HierarchyView.h"
 #include "Editor/PrefabSync.h"
 #include "Editor/ProjectTemplates.h"
@@ -636,13 +637,23 @@ namespace Strata
 				return result;
 			} });
 
-		registry.Register({ "scene.save", "Saves the edited scene to its asset. New scenes need scene.saveAs first.", ObjectSchema({}),
+		registry.Register({ "scene.save", "Saves the edited scene to its asset. New scenes need scene.saveAs first. A world's persistent scene saves "
+			"the documents changed since the last save: the persistent scene (without the cells' entities), each dirty cell and the world's "
+			"document with those cells' index entries; documents lists them ({path, kind: persistent, cell or world, bytes, entities}).", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				std::string error;
 				if (!context.SaveScene(&error))
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok({ { "scene", UUIDToJson(context.GetSceneHandle()) } });
+				nlohmann::json result = { { "scene", UUIDToJson(context.GetSceneHandle()) } };
+				if (context.GetWorld())
+				{
+					nlohmann::json documents = nlohmann::json::array();
+					for (const WorldSavedDocument& document : context.GetLastWorldSave())
+						documents.push_back({ { "path", document.Path }, { "kind", document.Kind }, { "bytes", document.Bytes }, { "entities", document.Entities } });
+					result["documents"] = std::move(documents);
+				}
+				return EditorCommandResult::Ok(std::move(result));
 			} });
 
 		registry.Register({ "scene.saveAs", "Saves the edited scene as a new .stscene asset and continues editing it.",

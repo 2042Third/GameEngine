@@ -1,6 +1,8 @@
 #include "Editor/WorldCellIO.h"
 
+#include <Strata/Asset/AssetDependencies.h>
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Math/AABB.h>
 #include <Strata/Physics/PhysicsWorld.h>
@@ -87,6 +89,30 @@ namespace Strata
 				}
 			}
 			return result;
+		}
+
+		nlohmann::json SerializeDocument(const Scene& scene, const std::string& name, const std::vector<Entity>& roots, bool withSettings)
+		{
+			// A scene of no entities with the settings gives the document's frame.
+			Scene shell(name);
+			shell.GetSettings() = scene.GetSettings();
+			nlohmann::json document = SceneSerializer::Serialize(shell);
+			document["Scene"]["Entities"] = SceneSerializer::SerializeEntities(scene, roots)["Entities"];
+			if (!withSettings)
+				document["Scene"].erase("Settings");
+			return document;
+		}
+
+		std::optional<size_t> WriteDocument(EditorAssetManager& assets, AssetHandle asset, AssetType type, const nlohmann::json& document, bool reload,
+			std::string* outError)
+		{
+			std::vector<AssetHandle> references;
+			const bool scanned = AssetDependencies::ScanDocument(type, document, references);
+			const std::string text = JsonUtils::Dump(document, 1, '\t') + "\n";
+			const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+			if (!assets.SaveNativeAsset(asset, bytes, reload, outError, scanned ? &references : nullptr))
+				return std::nullopt;
+			return text.size();
 		}
 
 		std::optional<CellSummary> ReadCellSummary(AssetManagerBase& assets, AssetHandle scene, std::string* outError)
