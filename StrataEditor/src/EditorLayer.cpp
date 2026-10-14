@@ -813,6 +813,8 @@ namespace Strata
 			SaveScene();
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S, global))
 			SaveSceneAs();
+		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_O, global))
+			ShowOpenSceneDialog();
 		// Like the menu item and the toolbar button, the shortcut does nothing while a build runs.
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_B, global) && !m_Context.GetScriptBuilder().IsRunning())
 			BuildScripts();
@@ -966,6 +968,42 @@ namespace Strata
 			return false;
 		}
 		return !RunEditorCommand(m_Context, m_Commands, "scene.saveAs", { { "path", FileSystem::ToUTF8(relative) } }).is_null();
+	}
+
+	bool EditorLayer::ShowOpenSceneDialog()
+	{
+		if (!m_Context.HasProject() || m_Context.IsPlaying())
+			return false;
+		const std::optional<std::filesystem::path> file = FileDialogs::OpenFile({ { "Strata Scene", "stscene" } }, m_Context.GetProject()->GetAssetDirectory());
+		return file && OpenSceneFile(*file);
+	}
+
+	bool EditorLayer::OpenSceneFile(const std::filesystem::path& file)
+	{
+		if (!m_Context.HasProject())
+		{
+			ST_WARN("Open or create a project to open its scenes");
+			return false;
+		}
+		if (m_Context.IsPlaying())
+		{
+			ST_WARN("Stop playing before opening another scene");
+			return false;
+		}
+		const std::filesystem::path assetDirectory = m_Context.GetProject()->GetAssetDirectory();
+		const std::filesystem::path relative = FileSystem::GetRelativePath(file, assetDirectory);
+		if (relative.empty())
+		{
+			ST_ERROR("Scenes open from the project's asset directory ({}), not from '{}'", FileSystem::ToUTF8(assetDirectory), FileSystem::ToUTF8(file));
+			return false;
+		}
+		// The person answers the question about unsaved changes first; the scene then loads over the next frames.
+		const std::string scene = FileSystem::ToUTF8(relative);
+		RequestDiscardChanges([this, scene]()
+		{
+			RunEditorCommandDeferred(m_CommandRunner, m_Context, m_Commands, "scene.open", { { "scene", scene }, { "force", true } });
+		});
+		return true;
 	}
 
 	void EditorLayer::RenameEntity(UUID entity)
@@ -1220,6 +1258,10 @@ namespace Strata
 				if (ImGui::MenuItem("New Scene", nullptr, false, !m_Context.IsPlaying()))
 					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "scene.new", { { "force", true } }); });
 				UI::ItemProbe::Record("Menu.File.NewScene", !m_Context.IsPlaying());
+				const bool canOpenScene = m_Context.HasProject() && !m_Context.IsPlaying();
+				if (ImGui::MenuItem("Open Scene...", "Ctrl+O", false, canOpenScene))
+					ShowOpenSceneDialog();
+				UI::ItemProbe::Record("Menu.File.OpenScene", canOpenScene);
 				if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, !m_Context.IsPlaying()))
 					SaveScene();
 				if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S", false, m_Context.HasProject() && !m_Context.IsPlaying()))

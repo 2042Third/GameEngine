@@ -149,6 +149,10 @@ namespace Strata
 		NewScriptDialog& GetNewScriptDialog() { return m_NewScriptDialog; }
 		ExternalEditorDialog& GetExternalEditorDialog() { return m_ExternalEditorDialog; }
 		const RecoveryDialog& GetRecoveryDialog() const { return m_RecoveryDialog; }
+		// File > Open Scene... (Ctrl+O) once its file dialog chose `file`: a scene file of the project's asset directory opens
+		// (scene.open through the runner) after the question about the edited scene's unsaved changes. False, with the reason
+		// logged, without a project, while playing, or for a file outside the asset directory.
+		bool OpenSceneFile(const std::filesystem::path& file);
 
 		// EditorShell
 		void RequestDiscardChanges(std::function<void()> action) override;
@@ -223,6 +227,8 @@ namespace Strata
 
 		bool SaveScene();
 		bool SaveSceneAs();
+		// File > Open Scene...: the file dialog in the project's asset directory, then OpenSceneFile.
+		bool ShowOpenSceneDialog();
 		// Opens a project file (project.open) once unsaved changes are dealt with; failures go to ReportError.
 		void OpenProjectFile(const std::filesystem::path& projectFile);
 		// Runs project.open through the command runner at once (the start scene loads over the next frames).

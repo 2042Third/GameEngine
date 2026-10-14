@@ -1469,7 +1469,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
 
 ### Shortcuts and editor status
 
-- **Shortcuts:** `EditorLayer` handles the global ones (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+Shift+S, Ctrl+P, Ctrl+B).
+- **Shortcuts:** `EditorLayer` handles the global ones (Ctrl+Z, Ctrl+Y, Ctrl+S, Ctrl+Shift+S, Ctrl+O, Ctrl+P, Ctrl+B). Ctrl+O
+  is File > Open Scene...: a file dialog in the project's asset directory filtered to `.stscene`, then `scene.open` through
+  the runner once the question about unsaved changes is answered (`EditorLayer::OpenSceneFile`).
   Shortcuts that act on the selection (Delete, Ctrl+D, Ctrl+C, Ctrl+X, Ctrl+V, Ctrl+A, F2, End) are
   `ImGuiInputFlags_RouteFocused` shortcuts of the Hierarchy and the Viewport (`UI/EditorActions.h`,
   `HandleSelectionShortcuts`): a key pressed in another panel never edits the scene. The Edit menu runs the same actions.
