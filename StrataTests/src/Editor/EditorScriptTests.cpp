@@ -161,6 +161,17 @@ TEST_SUITE("Editor.Scripts")
 		const nlohmann::json* fieldTypes = FindClass(status, "FieldTypes");
 		REQUIRE(fieldTypes);
 		CHECK((*fieldTypes)["callbacks"] == nlohmann::json::array({ "OnCreate" }));
+		// Every callback a class implements is listed, contacts and animation events too.
+		const nlohmann::json* contacts = FindClass(status, "ContactRecorder");
+		REQUIRE(contacts);
+		for (const char* callback : { "OnCollisionEnter", "OnCollisionExit", "OnTriggerEnter", "OnTriggerExit" })
+		{
+			CAPTURE(callback);
+			CHECK(std::find((*contacts)["callbacks"].begin(), (*contacts)["callbacks"].end(), callback) != (*contacts)["callbacks"].end());
+		}
+		const nlohmann::json* animator = FindClass(status, "AnimatorAPI");
+		REQUIRE(animator);
+		CHECK(std::find((*animator)["callbacks"].begin(), (*animator)["callbacks"].end(), "OnAnimationEvent") != (*animator)["callbacks"].end());
 		bool sawInt = false;
 		for (const nlohmann::json& field : (*fieldTypes)["fields"])
 		{

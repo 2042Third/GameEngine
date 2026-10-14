@@ -101,9 +101,10 @@ namespace Strata
 			for (const ScriptFieldInfo& field : info.Fields)
 				fields.push_back(DescribeField(field));
 			nlohmann::json callbacks = nlohmann::json::array();
-			for (ScriptCallback callback : { ScriptCallback::OnCreate, ScriptCallback::OnUpdate, ScriptCallback::OnFixedUpdate, ScriptCallback::OnLateUpdate,
-					 ScriptCallback::OnDestroy, ScriptCallback::OnReload })
+			// Every callback the class implements, contacts and animation events included.
+			for (size_t index = 0; index < c_ScriptCallbackCount; index++)
 			{
+				const ScriptCallback callback = static_cast<ScriptCallback>(index);
 				if (info.Implements(callback))
 					callbacks.push_back(ScriptCallbackToString(callback));
 			}
