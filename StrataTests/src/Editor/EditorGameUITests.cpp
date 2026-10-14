@@ -260,6 +260,7 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Position").has_value());
 		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Size").has_value());
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIRect.Height").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.UIRect.AnchorButton")->Text.find("Middle Center") != std::string::npos);
 
 		REQUIRE(editor.Click("Inspector.UIRect.AnchorButton"));
 		editor.Frames(2); // The popup appears, sized and placed, in the frames after the click
@@ -282,6 +283,7 @@ TEST_SUITE("Editor.UI.Inspector")
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIRect.Position").has_value());
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIRect.Size").has_value());
 		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Pivot").has_value()); // Other generic rows stay
+		CHECK(UI::ItemProbe::Find("Inspector.UIRect.AnchorButton")->Text.find("Top Stretch") != std::string::npos);
 
 		// The height row sets the height alone, in one undo step.
 		const glm::vec2 stretchedSize = element.GetComponent<UIRectComponent>().Size;
@@ -539,6 +541,10 @@ TEST_SUITE("Editor.UI.CanvasMode")
 			const std::optional<UI::ItemProbe::Item> area = UI::ItemProbe::Find("Canvas.Panel");
 			REQUIRE(fit.has_value());
 			REQUIRE(area.has_value());
+			// The canvas lies below the viewport's chips, so they cover none of it.
+			const std::optional<UI::ItemProbe::Item> chip = UI::ItemProbe::Find("Viewport.CanvasMode");
+			REQUIRE(chip.has_value());
+			CHECK(area->Min.y >= chip->Max.y);
 			const size_t position = editor.Context().GetUndoStack().GetPosition();
 			auto width = [](const UI::ItemProbe::Item& item) { return item.Max.x - item.Min.x; };
 

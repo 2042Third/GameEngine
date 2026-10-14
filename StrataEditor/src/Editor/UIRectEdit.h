@@ -36,6 +36,8 @@ namespace Strata
 
 		// "topLeft" ... "stretch" (camelCase, as commands take them).
 		const char* GetPresetName(UIAnchorPreset preset);
+		// "Top Left" ... "Stretch", as the Inspector shows them.
+		const char* GetPresetDisplayName(UIAnchorPreset preset);
 		std::optional<UIAnchorPreset> FindPreset(std::string_view name);
 		// The preset whose anchors the rect has (nullopt for anchors of no preset).
 		std::optional<UIAnchorPreset> FindPreset(const UIRectComponent& rect);

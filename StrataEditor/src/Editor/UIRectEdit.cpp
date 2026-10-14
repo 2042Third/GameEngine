@@ -22,6 +22,13 @@ namespace Strata::UIRectEdit
 			"bottomLeft", "bottomCenter", "bottomRight", "bottomStretch",
 			"stretchLeft", "stretchCenter", "stretchRight", "stretch"
 		};
+		// As people read them (the Inspector).
+		constexpr std::array<const char*, c_UIAnchorPresetCount> c_PresetDisplayNames = {
+			"Top Left", "Top Center", "Top Right", "Top Stretch",
+			"Middle Left", "Middle Center", "Middle Right", "Middle Stretch",
+			"Bottom Left", "Bottom Center", "Bottom Right", "Bottom Stretch",
+			"Stretch Left", "Stretch Center", "Stretch Right", "Stretch"
+		};
 
 		// Where a row (vertical) or column (horizontal) puts the anchors: start, center, end, or both ends (stretch).
 		struct AxisAnchors
@@ -60,6 +67,12 @@ namespace Strata::UIRectEdit
 	{
 		const uint32_t index = static_cast<uint32_t>(preset);
 		return index < c_UIAnchorPresetCount ? c_PresetNames[index] : "middleCenter";
+	}
+
+	const char* GetPresetDisplayName(UIAnchorPreset preset)
+	{
+		const uint32_t index = static_cast<uint32_t>(preset);
+		return index < c_UIAnchorPresetCount ? c_PresetDisplayNames[index] : "Middle Center";
 	}
 
 	std::optional<UIAnchorPreset> FindPreset(std::string_view name)

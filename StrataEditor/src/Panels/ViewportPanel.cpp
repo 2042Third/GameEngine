@@ -163,8 +163,10 @@ namespace Strata
 		m_Image.Min = glm::vec2(imageMin.x, imageMin.y);
 		m_Image.Size = glm::max(glm::vec2(available.x, available.y), glm::vec2(0.0f));
 		m_Image.PixelScale = ViewportImageArea::ChoosePixelScale(glm::vec2(viewportScale.x, viewportScale.y), glm::vec2(displayScale.x, displayScale.y));
-		// The 2D canvas mode shows the canvas at its reference aspect ratio: the image is letterboxed in the panel.
-		const bool canvasMode = CanvasModeView::IsActive(context) && m_CanvasMode.Layout(context, m_Image);
+		// The 2D canvas mode shows the canvas at its reference aspect ratio: the image is letterboxed in the panel, below the
+		// chip row.
+		const float chipRow = ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.y * 2.0f;
+		const bool canvasMode = CanvasModeView::IsActive(context) && m_CanvasMode.Layout(context, m_Image, chipRow);
 		if (!canvasMode)
 			m_CanvasMode.Reset(context);
 		const glm::uvec2 size = m_Image.GetPixelSize();

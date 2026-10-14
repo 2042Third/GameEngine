@@ -50,7 +50,7 @@ namespace Strata
 		return UIScreen { glm::vec2(m_Frame.ScreenPixels), context.GetGameWindow().GetState().ContentScale };
 	}
 
-	Entity CanvasModeView::Layout(EditorContext& context, ViewportImageArea& image)
+	Entity CanvasModeView::Layout(EditorContext& context, ViewportImageArea& image, float topInset)
 	{
 		const Entity canvas = CanvasEdit::FindShownCanvas(context);
 		// Another canvas is shown whole.
@@ -58,10 +58,13 @@ namespace Strata
 			m_Framing.Reset();
 		m_Canvas = canvas;
 		m_Frame = {};
-		if (!m_Canvas || !(image.Size.x > 0.0f && image.Size.y > 0.0f))
+		// The canvas goes below the chip row, so nothing covers it at its fit.
+		const float inset = std::clamp(topInset, 0.0f, image.Size.y);
+		const UIBox panel { image.Min + glm::vec2(0.0f, inset), image.Size - glm::vec2(0.0f, inset) };
+		if (!m_Canvas || !(panel.Size.x > 0.0f && panel.Size.y > 0.0f))
 			return {};
-		const float aspect = CanvasEdit::GetCanvasAspect(m_Canvas, image.Size.x / image.Size.y);
-		m_Frame = m_Framing.Compute(UIBox { image.Min, image.Size }, aspect, image.PixelScale);
+		const float aspect = CanvasEdit::GetCanvasAspect(m_Canvas, panel.Size.x / panel.Size.y);
+		m_Frame = m_Framing.Compute(panel, aspect, image.PixelScale);
 		if (m_Frame.IsEmpty())
 			return {};
 		image.Min = m_Frame.Visible.Min;

@@ -113,7 +113,7 @@ namespace Strata::UI
 				DrawPresetGlyph(drawList, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), preset, current && *current == preset, hovered);
 				ItemProbe::Record(std::string("Inspector.UIRect.Anchor.") + UIRectEdit::GetPresetName(preset));
 				if (hovered)
-					ImGui::SetTooltip("%s", UIRectEdit::GetPresetName(preset));
+					ImGui::SetTooltip("%s", UIRectEdit::GetPresetDisplayName(preset));
 				ImGui::PopID();
 				if (!clicked)
 					continue;
@@ -157,7 +157,7 @@ namespace Strata::UI
 		PropertyLabel("Anchors", "Where the rect sits on its parent: a corner, an edge's middle, the center, or stretched along an edge or "
 			"over the whole parent", "Inspector.UIRect.Anchors");
 		const std::optional<UIAnchorPreset> current = UIRectEdit::FindPreset(rect);
-		const std::string label = fmt::format("{}  {}", Icons::Anchor, current ? UIRectEdit::GetPresetName(*current) : "custom");
+		const std::string label = fmt::format("{}  {}", Icons::Anchor, current ? UIRectEdit::GetPresetDisplayName(*current) : "Custom");
 		if (ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0.0f)))
 			ImGui::OpenPopup("UIRectAnchors");
 		ItemProbe::Record("Inspector.UIRect.AnchorButton", placement.has_value(), 0, label);
