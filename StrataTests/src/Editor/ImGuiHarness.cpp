@@ -84,6 +84,11 @@ namespace Strata::Tests
 		ImGui::GetIO().AddMouseButtonEvent(button, down);
 	}
 
+	void ImGuiHarness::ScrollMouse(float wheel)
+	{
+		ImGui::GetIO().AddMouseWheelEvent(0.0f, wheel);
+	}
+
 	void ImGuiHarness::SetKey(ImGuiKey key, bool down)
 	{
 		// With macOS behaviors (ImGui's default on Apple platforms) AddKeyEvent swaps Cmd and Ctrl as a platform backend

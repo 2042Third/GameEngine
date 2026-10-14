@@ -149,7 +149,9 @@ namespace Strata
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.UI");
 		m_ViewportSize = glm::vec2(frame.ViewportSize);
-		const UIScreen screen { m_ViewportSize, GetContentScale() };
+		m_ScreenZoom = frame.ScreenView.GetZoom();
+		m_ScreenOrigin = frame.ScreenView.GetOffset();
+		const UIScreen screen { frame.ScreenView.GetScreenSize(frame.ViewportSize), GetContentScale() };
 		const std::span<const UICanvasView> views = ui.EnsureLayout(screen);
 		if (views.empty())
 			return false;
@@ -166,7 +168,7 @@ namespace Strata
 			return false;
 		float maxScale = 0.0f;
 		for (const UICanvasView& view : views)
-			maxScale = std::max(maxScale, view.Scale);
+			maxScale = std::max(maxScale, view.Scale * m_ScreenZoom);
 		UpdateTextures(ui, frame, assets, maxScale);
 		UpdateGlyphs(ui, frame, assets);
 		if (!m_QuadBuffer || !m_TextureSlotBuffer || !m_GlyphBuffer)
@@ -464,7 +466,7 @@ namespace Strata
 			if (uploaded.Count == 0)
 				continue;
 			DrawRun empty;
-			empty.Scale = view.Scale;
+			empty.Scale = view.Scale * m_ScreenZoom;
 			empty.PixelSnap = view.PixelSnap;
 			empty.Atlases.fill(m_EmptyAtlas.Get());
 
@@ -587,6 +589,7 @@ namespace Strata
 			commandList->setGraphicsState(state);
 			RenderData::UIDrawParameters parameters;
 			parameters.ViewportSize = m_ViewportSize;
+			parameters.Origin = m_ScreenOrigin;
 			parameters.Scale = run.Scale;
 			parameters.PixelSnap = run.PixelSnap ? 1u : 0u;
 			parameters.FirstQuad = run.FirstQuad;

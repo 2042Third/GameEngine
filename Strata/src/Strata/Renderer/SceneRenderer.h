@@ -143,6 +143,9 @@ namespace Strata
 		// The game's screen-space UI: the HUD text and screen-space canvases (the overlay passes, SceneOverlayRegistry). Editor
 		// views turn it off so the HUD does not cover the scene being edited; world-space text is always drawn.
 		bool DrawScreenSpaceText = true;
+		// Where the game's screen lies in the image, for that screen-space UI: by default the whole image. The editor's 2D
+		// canvas mode zooms and pans it (SceneScreenView).
+		SceneScreenView ScreenView;
 		// The scene whose overlay passes (the game UI) are drawn, when not the rendered scene's: GameRenderer shows a scene
 		// without a camera as its UI over an empty frame. Must stay valid during Render.
 		Scene* OverlayScene = nullptr;

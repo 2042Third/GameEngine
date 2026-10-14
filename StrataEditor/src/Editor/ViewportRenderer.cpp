@@ -48,6 +48,7 @@ namespace Strata
 		SceneRenderOptions options;
 		options.PreviewEnvironment = view.EditorView && settings.PreviewLighting;
 		options.DrawScreenSpaceText = !view.EditorView || settings.ShowGameUI;
+		options.ScreenView = view.ScreenView;
 		return options;
 	}
 

@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 #include <nvrhi/nvrhi.h>
 
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -16,6 +17,26 @@ namespace Strata
 	class FontAtlasCache;
 	class Scene;
 	struct VisibleTextureUse;
+
+	// Where the game's screen lies in a renderer's image (SceneRenderOptions::ScreenView). The game's screen-space UI (the
+	// HUD text and the canvases of the overlay passes) is laid out for a screen of ScreenSize pixels and drawn Zoom times
+	// larger, the screen's top-left corner at Offset in the image's pixels. The default is the whole image; the editor's 2D
+	// canvas mode zooms and pans it, so the UI keeps the layout of the game's screen while it is magnified.
+	struct SceneScreenView
+	{
+		glm::vec2 ScreenSize = glm::vec2(0.0f); // Pixels; zero or invalid: the image's size
+		float Zoom = 1.0f;                       // Image pixels per screen pixel; zero or invalid: 1
+		glm::vec2 Offset = glm::vec2(0.0f);      // Image pixels; invalid: 0
+
+		// The screen's size for an image of `viewport` pixels.
+		glm::vec2 GetScreenSize(const glm::uvec2& viewport) const
+		{
+			const bool valid = std::isfinite(ScreenSize.x) && std::isfinite(ScreenSize.y) && ScreenSize.x >= 1.0f && ScreenSize.y >= 1.0f;
+			return valid ? ScreenSize : glm::vec2(viewport);
+		}
+		float GetZoom() const { return std::isfinite(Zoom) && Zoom > 0.0f ? Zoom : 1.0f; }
+		glm::vec2 GetOffset() const { return std::isfinite(Offset.x) && std::isfinite(Offset.y) ? Offset : glm::vec2(0.0f); }
+	};
 
 	// What a renderer's overlay passes drew in a frame (SceneRendererStats::Overlays): screen-space UI, which modules above
 	// the renderer (the game UI) draw over the finished image.
@@ -36,6 +57,7 @@ namespace Strata
 	{
 		Scene* OverlayScene = nullptr;            // Whose overlays are drawn (SceneRenderOptions::OverlayScene, else the rendered scene)
 		glm::uvec2 ViewportSize = glm::uvec2(0);  // Pixels
+		SceneScreenView ScreenView;               // SceneRenderOptions::ScreenView: where the game's screen lies in the image
 		bool DrawScreenSpace = true;              // SceneRenderOptions::DrawScreenSpaceText: the game's screen-space UI
 		nvrhi::ICommandList* CommandList = nullptr; // Open: uploads are recorded here
 		FontAtlasCache* Atlases = nullptr;        // The renderer's glyph atlases, with what the frame's raster budget has left

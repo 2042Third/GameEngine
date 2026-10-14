@@ -3,6 +3,7 @@
 #include "Strata/Core/Base.h"
 #include "Strata/Core/ErrorThrottle.h"
 #include "Strata/Renderer/FontAtlas.h"
+#include "Strata/Renderer/SceneOverlay.h"
 #include "Strata/Renderer/TextLayout.h"
 
 #include <glm/glm.hpp>
@@ -53,8 +54,10 @@ namespace Strata
 
 		// Lays out the scene's active text and uploads glyphs and vertices with the command list. Without drawScreenSpace
 		// only world-space text is prepared (screen-space text is counted as hidden, and its glyphs are not rasterized).
-		// Returns false when there is nothing to draw (or the upload failed, which is logged).
-		bool Prepare(Scene& scene, const glm::uvec2& viewportSize, bool drawScreenSpace, nvrhi::ICommandList* commandList, TextRenderStats& outStats);
+		// Screen-space text is placed on the screen `screenView` puts in the image (the whole image by default). Returns
+		// false when there is nothing to draw (or the upload failed, which is logged).
+		bool Prepare(Scene& scene, const glm::uvec2& viewportSize, bool drawScreenSpace, nvrhi::ICommandList* commandList, TextRenderStats& outStats,
+			const SceneScreenView& screenView = {});
 		// Draws the prepared world-space or screen-space text into a framebuffer whose depth attachment holds the scene
 		// depth (world-space text is hidden behind it).
 		void Draw(nvrhi::ICommandList* commandList, nvrhi::IFramebuffer* framebuffer, bool screenSpace);

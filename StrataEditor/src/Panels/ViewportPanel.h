@@ -89,6 +89,8 @@ namespace Strata
 		// What the colors of the debug view mean, with how many entities in view have each, at the image's bottom left.
 		void DrawDebugViewLegend(EditorContext& context);
 		void HandleShortcuts(EditorPanelContext& context);
+		// Delete, Ctrl+D, Ctrl+C/X/V, Ctrl+A and F2 on the selection (also in the 2D canvas mode).
+		void HandleSelectionShortcuts(EditorPanelContext& context);
 		void UpdateCamera(EditorContext& context, bool hovered);
 		void UpdateGizmo(EditorContext& context, const ViewportView& view);
 		void DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom, const EditorFrameStats& frame);

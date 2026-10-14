@@ -142,6 +142,171 @@ namespace Strata::CanvasEdit
 		return {};
 	}
 
+	////////////////////////////////////////////////////////////////////////////////
+	// CanvasFraming
+	////////////////////////////////////////////////////////////////////////////////
+
+	namespace
+	{
+
+		// Keeps c_KeepVisible of the panel (or the whole display, when it is smaller) showing the display on each axis.
+		glm::vec2 ClampDisplayMin(const UIBox& panel, const glm::vec2& displayMin, const glm::vec2& displaySize)
+		{
+			glm::vec2 result = displayMin;
+			for (int axis = 0; axis < 2; axis++)
+			{
+				const float keep = std::min(displaySize[axis], panel.Size[axis] * CanvasFraming::c_KeepVisible);
+				result[axis] = std::clamp(displayMin[axis], panel.Min[axis] + keep - displaySize[axis], panel.Min[axis] + panel.Size[axis] - keep);
+			}
+			return result;
+		}
+
+	}
+
+	glm::vec2 CanvasFraming::Frame::ToScreenPixels(const glm::vec2& panelPoint) const
+	{
+		return (panelPoint - Display.Min) * PixelScale / Zoom;
+	}
+
+	glm::vec2 CanvasFraming::Frame::ToPanel(const glm::vec2& screenPixels) const
+	{
+		return Display.Min + screenPixels * Zoom / PixelScale;
+	}
+
+	CanvasFraming::Frame CanvasFraming::Compute(const UIBox& panel, float aspect, const glm::vec2& pixelScale) const
+	{
+		Frame frame;
+		frame.Panel = panel;
+		const bool validScale = pixelScale.x > 0.0f && pixelScale.y > 0.0f && std::isfinite(pixelScale.x) && std::isfinite(pixelScale.y);
+		frame.PixelScale = validScale ? pixelScale : glm::vec2(1.0f);
+		frame.Zoom = m_Zoom;
+		if (!(panel.Size.x >= 1.0f && panel.Size.y >= 1.0f) || !(aspect > 0.0f) || !std::isfinite(aspect))
+			return frame;
+
+		// The fit: the canvas's aspect ratio in whole units, centered with bars on the sides or above and below.
+		const float available = panel.Size.x / panel.Size.y;
+		glm::vec2 size = panel.Size;
+		if (available > aspect)
+			size.x = std::floor(panel.Size.y * aspect);
+		else
+			size.y = std::floor(panel.Size.x / aspect);
+		size = glm::max(size, glm::vec2(1.0f));
+		frame.Fit = UIBox { panel.Min + glm::floor((panel.Size - size) * 0.5f), size };
+		frame.ScreenPixels = glm::uvec2(size * frame.PixelScale);
+		if (frame.ScreenPixels.x == 0 || frame.ScreenPixels.y == 0)
+			return frame;
+
+		// Zoomed about the fit's center, then panned (and kept partly in the panel).
+		const glm::vec2 displaySize = glm::vec2(frame.ScreenPixels) * m_Zoom / frame.PixelScale;
+		const glm::vec2 displayMin = frame.Fit.Min + (frame.Fit.Size - displaySize) * 0.5f + m_Pan * frame.Fit.Size;
+		frame.Display = UIBox { ClampDisplayMin(panel, displayMin, displaySize), displaySize };
+
+		// The visible part, on whole pixels: the image the viewport renders.
+		const glm::vec2 visibleMin = glm::round(glm::max(frame.Display.Min, panel.Min) * frame.PixelScale) / frame.PixelScale;
+		const glm::vec2 visibleMax = glm::round(glm::min(frame.Display.GetMax(), panel.GetMax()) * frame.PixelScale) / frame.PixelScale;
+		frame.Visible = UIBox { visibleMin, glm::max(visibleMax - visibleMin, glm::vec2(0.0f)) };
+		return frame;
+	}
+
+	void CanvasFraming::SetDisplayMin(const Frame& frame, const glm::vec2& displayMin, const glm::vec2& displaySize)
+	{
+		const glm::vec2 clamped = ClampDisplayMin(frame.Panel, displayMin, displaySize);
+		m_Pan = (clamped - frame.Fit.Min - (frame.Fit.Size - displaySize) * 0.5f) / frame.Fit.Size;
+	}
+
+	void CanvasFraming::ZoomAbout(const Frame& frame, const glm::vec2& point, float factor)
+	{
+		if (frame.IsEmpty() || !(factor > 0.0f) || !std::isfinite(factor))
+			return;
+		const float zoom = std::clamp(m_Zoom * factor, c_MinZoom, c_MaxZoom);
+		if (zoom == m_Zoom)
+			return;
+		// The canvas point under `point` stays there.
+		const glm::vec2 fraction = (point - frame.Display.Min) / frame.Display.Size;
+		const glm::vec2 displaySize = glm::vec2(frame.ScreenPixels) * zoom / frame.PixelScale;
+		m_Zoom = zoom;
+		SetDisplayMin(frame, point - fraction * displaySize, displaySize);
+	}
+
+	void CanvasFraming::Pan(const Frame& frame, const glm::vec2& delta)
+	{
+		if (frame.IsEmpty() || !std::isfinite(delta.x) || !std::isfinite(delta.y))
+			return;
+		SetDisplayMin(frame, frame.Display.Min + delta, frame.Display.Size);
+	}
+
+	void CanvasFraming::FrameBox(const Frame& frame, const UIBox& fraction)
+	{
+		if (frame.IsEmpty())
+			return;
+		// The zoom that makes the box fill c_FrameFill of the panel along its tighter axis (an empty box keeps the zoom).
+		const glm::vec2 fitSize = glm::vec2(frame.ScreenPixels) / frame.PixelScale;
+		float zoom = c_MaxZoom;
+		bool sized = false;
+		for (int axis = 0; axis < 2; axis++)
+		{
+			if (fraction.Size[axis] > 0.0f)
+			{
+				zoom = std::min(zoom, c_FrameFill * frame.Panel.Size[axis] / (fitSize[axis] * fraction.Size[axis]));
+				sized = true;
+			}
+		}
+		m_Zoom = sized && std::isfinite(zoom) ? std::clamp(zoom, c_MinZoom, c_MaxZoom) : m_Zoom;
+		const glm::vec2 displaySize = fitSize * m_Zoom;
+		SetDisplayMin(frame, frame.Panel.GetCenter() - fraction.GetCenter() * displaySize, displaySize);
+	}
+
+	void CanvasFraming::Reset()
+	{
+		m_Zoom = 1.0f;
+		m_Pan = glm::vec2(0.0f);
+	}
+
+	SceneCamera CropCamera(const SceneCamera& camera, const UIBox& display, const UIBox& visible)
+	{
+		if (!(display.Size.x > 0.0f && display.Size.y > 0.0f && visible.Size.x > 0.0f && visible.Size.y > 0.0f))
+			return camera;
+		// The visible part in the display's normalized device coordinates (+Y up).
+		const glm::vec2 start = (visible.Min - display.Min) / display.Size;
+		const glm::vec2 end = (visible.GetMax() - display.Min) / display.Size;
+		const float left = start.x * 2.0f - 1.0f;
+		const float right = end.x * 2.0f - 1.0f;
+		const float top = 1.0f - start.y * 2.0f;
+		const float bottom = 1.0f - end.y * 2.0f;
+		if (!(right > left) || !(top > bottom))
+			return camera;
+
+		// Clip x' = sx * x + tx * w maps [left, right] onto [-1, 1] after the division by w (likewise y): the same pixels,
+		// magnified, for perspective and orthographic projections alike.
+		glm::mat4 crop(1.0f);
+		crop[0][0] = 2.0f / (right - left);
+		crop[3][0] = -(right + left) / (right - left);
+		crop[1][1] = 2.0f / (top - bottom);
+		crop[3][1] = -(top + bottom) / (top - bottom);
+		SceneCamera result = camera;
+		result.Projection = crop * camera.Projection;
+
+		// The symmetric frustum (at the cropped image's aspect ratio) that holds the crop, in units of the full view's half
+		// height.
+		const float displayAspect = display.Size.x / display.Size.y;
+		const float visibleAspect = visible.Size.x / visible.Size.y;
+		const float halfHeight = std::max(std::max(std::abs(top), std::abs(bottom)), displayAspect * std::max(std::abs(left), std::abs(right)) / visibleAspect);
+		if (camera.Orthographic)
+			result.VerticalFOV = camera.VerticalFOV * halfHeight;
+		else
+			result.VerticalFOV = 2.0f * std::atan(std::tan(camera.VerticalFOV * 0.5f) * halfHeight);
+		return result;
+	}
+
+	SceneScreenView GetScreenView(const CanvasFraming::Frame& frame)
+	{
+		SceneScreenView view;
+		view.ScreenSize = glm::vec2(frame.ScreenPixels);
+		view.Zoom = frame.Zoom;
+		view.Offset = (frame.Display.Min - frame.Visible.Min) * frame.PixelScale;
+		return view;
+	}
+
 	std::optional<CanvasRectDrag> CanvasRectDrag::Begin(EditorContext& context, Entity element, CanvasHandle handle, const glm::vec2& pointer,
 		const UIScreen& screen, std::string* outError)
 	{

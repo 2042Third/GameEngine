@@ -33,6 +33,9 @@ namespace Strata
 		// running game show the scene as the game does.
 		bool EditorView = false;
 		std::string Notice;          // Shown over the image, e.g. when the scene has no camera to play from
+		// Where the game's screen lies in the image (SceneRenderOptions::ScreenView): the whole image, unless the 2D canvas
+		// mode zooms and pans it.
+		SceneScreenView ScreenView;
 	};
 
 	enum class ViewportCameraSource : uint8_t

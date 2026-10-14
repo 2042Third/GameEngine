@@ -1935,20 +1935,23 @@ per renderer).
 
 **The pass** (`GameUIRenderer`, `shaders/GameUI/UIQuad.*`). The renderer cannot include GameUI: modules add passes to
 every `SceneRenderer` through `SceneOverlayRegistry` (`Renderer/SceneOverlay.h`: `ISceneOverlayPass` with `Prepare`,
-`Draw` and `HasScreenContent`), and the renderer calls them at four places: `Prepare` after the text renderer's (with the
-scene, viewport size, command list, the renderer's `FontAtlasCache` and what the frame's raster budget left, the frame's
-visible-texture list and the stats), the overlay condition, `Draw` after the screen-space text (the UI goes over the
-legacy HUD), and `SceneRendererStats::Overlays`. A scene without a `UICanvasComponent` costs one storage-size check;
+`Draw` and `HasScreenContent`), and the renderer calls them at four places: `Prepare` after the text renderer's (with
+the scene, viewport size, command list, the renderer's `FontAtlasCache` and what the frame's raster budget left, the
+frame's visible-texture list and the stats), the overlay condition, `Draw` after the screen-space text (the UI goes over
+the legacy HUD), and `SceneRendererStats::Overlays`. A scene without a `UICanvasComponent` costs one storage-size check;
 with screen-space UI hidden (`DrawScreenSpaceText` off: editor views, thumbnails), a count of root canvases cached per
-hierarchy version. Per frame the pass lays the canvases out for the viewport (`EnsureLayout`, with the content scale of
-the game's window), uploads the quad ranges that changed since its last frame (or whole arrays that were rebuilt) into
-one storage buffer, resolves each texture in use to its bindless slot (a small table, so quads never change when mip
-streaming moves a slot) and each distinct glyph to its place in this renderer's atlas (a table per font: asking for the
-glyph also rasterizes it within the budget and keeps it from eviction while shown), and reports drawn textures for mip
-streaming. Canvases draw by sort order, instanced, six vertices per quad and no vertex buffer, with up to four atlases
-bound, so a canvas with up to four fonts is one draw; push constants carry the canvas's scale and pixel snapping (rect
-edges and glyph baselines on whole pixels). `GameRenderer` shows a scene without a primary camera that has screen-space
-UI (a main menu) as that UI over black instead of its missing-camera message (`SceneRenderOptions::OverlayScene`).
+hierarchy version. Per frame the pass lays the canvases out for the game's screen (`EnsureLayout`, with the content
+scale of the game's window): the viewport, unless `SceneRenderOptions::ScreenView` puts a screen of another size in the
+image (`SceneScreenView`: the editor's canvas mode zooms and pans the fit's layout, drawn magnified through the draws'
+scale and origin, and screen-space text follows the same view). It uploads the quad ranges that changed since its last
+frame (or whole arrays that were rebuilt) into one storage buffer, resolves each texture in use to its bindless slot (a
+small table, so quads never change when mip streaming moves a slot) and each distinct glyph to its place in this
+renderer's atlas (a table per font: asking for the glyph also rasterizes it within the budget and keeps it from eviction
+while shown), and reports drawn textures for mip streaming. Canvases draw by sort order, instanced, six vertices per
+quad and no vertex buffer, with up to four atlases bound, so a canvas with up to four fonts is one draw; push constants
+carry the canvas's scale and pixel snapping (rect edges and glyph baselines on whole pixels). `GameRenderer` shows a
+scene without a primary camera that has screen-space UI (a main menu) as that UI over black instead of its
+missing-camera message (`SceneRenderOptions::OverlayScene`).
 
 **Input** (`GameUISystem`, `GameUIHitTest`, `Input/UIActions`). The "UI" scene system runs in Play mode before the
 scripts (stage `Scene.UI`), so a click the UI takes is hidden from the scripts' `OnUpdate` of the same frame and widget

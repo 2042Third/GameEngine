@@ -39,7 +39,9 @@ selects it.
 The viewport's **2D** chip shows the canvas of the selection on its own, at its reference aspect ratio, as the game lays
 it out: every element is outlined, the selected one has handles. Drag inside it to move it and drag a handle to resize
 it (with **Snap** on, edges land on whole canvas units; Ctrl does the opposite of Snap). A click selects what is on top
-there.
+there. Turn the mouse wheel to zoom in on the point under the pointer and drag with the middle button to move around;
+**F** zooms in on the selected element and **Home** shows the whole canvas again. Zooming only magnifies: the UI keeps
+the layout it has at its reference size.
 
 ## Make it look right
 

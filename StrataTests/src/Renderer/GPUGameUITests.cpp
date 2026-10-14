@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CanvasEdit.h"
 #include "Renderer/FontTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Renderer/TextureStreamingTestUtils.h"
@@ -9,11 +10,15 @@
 #include "Strata/Renderer/Font.h"
 #include "Strata/Renderer/TextureStreamer.h"
 #include "Strata/Runtime/GameRenderer.h"
+#include "Strata/Asset/BuiltinAssets.h"
+#include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "TestHelpers.h"
 
+#include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
@@ -87,6 +92,25 @@ namespace
 		SceneRendererSpecification specification;
 		specification.TextureStreaming = false;
 		return specification;
+	}
+
+	// The smallest box holding every pixel whose color passes `select` (min inclusive, max exclusive); empty: min > max.
+	template<typename Select>
+	std::pair<glm::ivec2, glm::ivec2> FindPixels(const ReadbackImage& image, Select select)
+	{
+		glm::ivec2 min(std::numeric_limits<int>::max());
+		glm::ivec2 max(std::numeric_limits<int>::min());
+		for (uint32_t y = 0; y < image.Height; y++)
+		{
+			for (uint32_t x = 0; x < image.Width; x++)
+			{
+				if (!select(GetPixelRGBA8(image, x, y)))
+					continue;
+				min = glm::min(min, glm::ivec2(static_cast<int>(x), static_cast<int>(y)));
+				max = glm::max(max, glm::ivec2(static_cast<int>(x) + 1, static_cast<int>(y) + 1));
+			}
+		}
+		return { min, max };
 	}
 
 	const glm::u8vec4 c_Black(0, 0, 0, 255);
@@ -343,6 +367,98 @@ TEST_SUITE("GPU.GameUI")
 		scene->DestroyEntity(canvas);
 		REQUIRE(game.Render(scene, framebuffer, { 64, 64 }));
 		CHECK(game.IsShowingMessage());
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A screen view zooms and pans the canvases and the HUD text without laying them out again")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		UIScene ui;
+		ui.AddImage(ui.Canvas, "Panel", { 100.0f, 50.0f }, { 200.0f, 100.0f }, { 1.0f, 0.0f, 0.0f, 1.0f });
+		TextComponent& text = ui.Target.CreateEntity("HUD").AddComponent<TextComponent>();
+		text.Text = "HUD";
+		text.ScreenSpace = true;
+		text.ScreenAnchor = { 0.0f, 0.0f };
+		text.ScreenOffset = { 300.0f, 200.0f };
+		text.FontSize = 40.0f;
+		text.Color = { 0.0f, 1.0f, 0.0f, 1.0f };
+		auto green = [](const glm::u8vec4& pixel) { return pixel.g > 128 && pixel.r < 64; };
+
+		// The game's screen as an image of its own.
+		SceneRenderer renderer(ExactSpecification());
+		const ReadbackImage plain = RenderUI(renderer, ui.Target, { 640, 360 });
+		const auto [plainMin, plainMax] = FindPixels(plain, green);
+		REQUIRE(plainMin.x < plainMax.x);
+		GameUIScene::Get(ui.Target).TakeStats();
+
+		// The same screen twice as large, its top-left corner at (-40, 20) of a 1280x720 image.
+		SceneRenderOptions options;
+		options.ScreenView.ScreenSize = { 640.0f, 360.0f };
+		options.ScreenView.Zoom = 2.0f;
+		options.ScreenView.Offset = { -40.0f, 20.0f };
+		const ReadbackImage zoomed = RenderUI(renderer, ui.Target, { 1280, 720 }, nullptr, options);
+		CHECK(GameUIScene::Get(ui.Target).TakeStats().ElementsLaidOut == 0); // The screen's layout, magnified
+		// The panel's (100, 50)-(300, 150) on the screen.
+		CHECK(Pixel(zoomed, 160.0f, 120.0f) == c_Red);
+		CHECK(Pixel(zoomed, 159.0f, 120.0f) == c_Black);
+		CHECK(Pixel(zoomed, 160.0f, 119.0f) == c_Black);
+		CHECK(Pixel(zoomed, 559.0f, 319.0f) == c_Red);
+		CHECK(Pixel(zoomed, 560.0f, 319.0f) == c_Black);
+		CHECK(Pixel(zoomed, 559.0f, 320.0f) == c_Black);
+		// The HUD text's glyphs, twice as large from the same place (their distance fields' edges may round differently).
+		const auto [zoomedMin, zoomedMax] = FindPixels(zoomed, green);
+		const glm::ivec2 offset(-40, 20);
+		CHECK(std::abs(zoomedMin.x - (offset.x + 2 * plainMin.x)) <= 3);
+		CHECK(std::abs(zoomedMin.y - (offset.y + 2 * plainMin.y)) <= 3);
+		CHECK(std::abs(zoomedMax.x - (offset.x + 2 * plainMax.x)) <= 3);
+		CHECK(std::abs(zoomedMax.y - (offset.y + 2 * plainMax.y)) <= 3);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The canvas mode's cropped camera renders the visible part of the whole view, pixel for pixel")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene("Crop");
+		AddNeutralPostProcess(scene);
+		AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(UnlitColor({ 1.0f, 0.0f, 0.0f, 1.0f })), { -1.5f, 0.5f, 0.0f }, "Red");
+		AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(UnlitColor({ 0.0f, 1.0f, 0.0f, 1.0f })), { 1.0f, -0.5f, -1.0f }, "Green");
+		AddMesh(scene, BuiltinAssets::CubeMesh, assets.AddMaterial(UnlitColor({ 0.0f, 0.0f, 1.0f, 1.0f })), { 0.3f, 1.2f, 1.0f }, "Blue");
+		SceneRenderer renderer(ExactSpecification());
+		for (const bool orthographic : { false, true })
+		{
+			CAPTURE(orthographic);
+			SceneCamera camera = orthographic ? OrthographicLookAt({ 0.0f, 1.0f, 6.0f }, { 0.0f, 0.0f, 0.0f }, 5.0f) : LookAt({ 0.0f, 1.0f, 6.0f }, { 0.0f, 0.0f, 0.0f }, 2.0f);
+			if (orthographic)
+				camera.Projection = Math::OrthographicReverseZ(-5.0f, 5.0f, -2.5f, 2.5f, 0.1f, 100.0f);
+			camera.ClearColor = { 0.0f, 0.0f, 0.0f, 1.0f };
+			renderer.SetViewportSize(800, 400);
+			const ReadbackImage whole = RenderToImage(renderer, scene, camera);
+
+			const UIBox display { { 0.0f, 0.0f }, { 800.0f, 400.0f } };
+			const UIBox visible { { 200.0f, 100.0f }, { 400.0f, 200.0f } };
+			renderer.SetViewportSize(400, 200);
+			const ReadbackImage part = RenderToImage(renderer, scene, CanvasEdit::CropCamera(camera, display, visible));
+			uint32_t mismatches = 0;
+			uint32_t colored = 0;
+			for (uint32_t y = 0; y < part.Height; y++)
+			{
+				for (uint32_t x = 0; x < part.Width; x++)
+				{
+					const glm::ivec4 a(GetPixelRGBA8(part, x, y));
+					const glm::ivec4 b(GetPixelRGBA8(whole, x + 200, y + 100));
+					const glm::ivec4 difference = glm::abs(a - b);
+					if (std::max({ difference.r, difference.g, difference.b }) > 8)
+						mismatches++;
+					if (a.r + a.g + a.b > 0)
+						colored++;
+				}
+			}
+			CHECK(colored > part.Width * part.Height / 10); // The cubes are in view
+			CHECK(mismatches <= part.Width * part.Height / 200); // Only edges may round differently
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

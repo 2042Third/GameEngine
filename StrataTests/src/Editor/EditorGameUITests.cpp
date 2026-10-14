@@ -6,15 +6,20 @@
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/UIRectEdit.h"
+#include "Panels/CanvasModeView.h"
 #include "UI/ItemProbe.h"
 
 #include <Strata/GameUI/GameUIComponents.h>
 #include <Strata/GameUI/GameUIScene.h>
+#include <Strata/Math/Math.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
 
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <cmath>
 #include <string>
 
 using namespace Strata;
@@ -279,6 +284,129 @@ TEST_SUITE("Editor.CanvasEdit")
 		CHECK(placed.Size == glm::vec2(-300.0f, 50.0f));
 		CHECK(placed.Position == glm::vec2(-140.0f, -105.0f)); // Pivot (60, 45) from the anchors' (200, 150)
 	}
+
+	TEST_CASE("Canvas framing zooms about a point, pans within the panel, frames a box and goes back to the fit")
+	{
+		auto checkVec = [](const glm::vec2& actual, const glm::vec2& expected)
+		{
+			CHECK(actual.x == doctest::Approx(expected.x).epsilon(1e-4));
+			CHECK(actual.y == doctest::Approx(expected.y).epsilon(1e-4));
+		};
+		CanvasEdit::CanvasFraming framing;
+		const UIBox panel { { 10.0f, 20.0f }, { 800.0f, 600.0f } };
+		const glm::vec2 pixelScale(2.0f);
+		CanvasEdit::CanvasFraming::Frame frame = framing.Compute(panel, 16.0f / 9.0f, pixelScale);
+
+		// The fit: the canvas's aspect ratio, letterboxed, rendered whole at the screen's pixels.
+		REQUIRE_FALSE(frame.IsEmpty());
+		checkVec(frame.Fit.Min, { 10.0f, 95.0f });
+		checkVec(frame.Fit.Size, { 800.0f, 450.0f });
+		CHECK(frame.ScreenPixels == glm::uvec2(1600, 900));
+		checkVec(frame.Display.Min, frame.Fit.Min);
+		checkVec(frame.Visible.Min, frame.Fit.Min);
+		checkVec(frame.Visible.Size, frame.Fit.Size);
+		const SceneScreenView fitView = CanvasEdit::GetScreenView(frame);
+		CHECK(fitView.Zoom == 1.0f);
+		checkVec(fitView.Offset, { 0.0f, 0.0f });
+		checkVec(fitView.ScreenSize, { 1600.0f, 900.0f });
+
+		// Zooming keeps the canvas point under the pointer where it is; the visible part is what lies in the panel.
+		const glm::vec2 point(210.0f, 145.0f);
+		const glm::vec2 under = frame.ToScreenPixels(point);
+		framing.ZoomAbout(frame, point, 2.0f);
+		frame = framing.Compute(panel, 16.0f / 9.0f, pixelScale);
+		CHECK(frame.Zoom == 2.0f);
+		checkVec(frame.Display.Size, { 1600.0f, 900.0f });
+		checkVec(frame.ToScreenPixels(point), under);
+		checkVec(frame.ToPanel(under), point);
+		checkVec(frame.Visible.Min, glm::max(frame.Display.Min, panel.Min));
+		CHECK(frame.Visible.GetMax().x <= panel.GetMax().x);
+		CHECK(frame.Visible.GetMax().y <= panel.GetMax().y);
+		const SceneScreenView zoomed = CanvasEdit::GetScreenView(frame);
+		CHECK(zoomed.Zoom == 2.0f);
+		checkVec(zoomed.Offset, (frame.Display.Min - frame.Visible.Min) * pixelScale);
+
+		// Panning moves the canvas; however far, a quarter of the panel keeps showing it.
+		const glm::vec2 before = frame.Display.Min;
+		framing.Pan(frame, { 30.0f, -10.0f });
+		frame = framing.Compute(panel, 16.0f / 9.0f, pixelScale);
+		checkVec(frame.Display.Min, before + glm::vec2(30.0f, -10.0f));
+		framing.Pan(frame, { 100000.0f, -100000.0f });
+		frame = framing.Compute(panel, 16.0f / 9.0f, pixelScale);
+		CHECK(frame.Display.Min.x == doctest::Approx(panel.GetMax().x - panel.Size.x * CanvasEdit::CanvasFraming::c_KeepVisible));
+		CHECK(frame.Display.GetMax().y == doctest::Approx(panel.Min.y + panel.Size.y * CanvasEdit::CanvasFraming::c_KeepVisible));
+		CHECK_FALSE(frame.IsEmpty());
+
+		// The zoom stays within its limits.
+		framing.ZoomAbout(frame, point, 1e6f);
+		CHECK(framing.GetZoom() == CanvasEdit::CanvasFraming::c_MaxZoom);
+		framing.ZoomAbout(frame, point, 1e-6f);
+		CHECK(framing.GetZoom() == CanvasEdit::CanvasFraming::c_MinZoom);
+
+		// Framing a tenth of the canvas fills 80% of the panel along its tighter axis, centered.
+		framing.FrameBox(frame, UIBox { { 0.6f, 0.2f }, { 0.1f, 0.1f } });
+		frame = framing.Compute(panel, 16.0f / 9.0f, pixelScale);
+		CHECK(framing.GetZoom() == doctest::Approx(8.0f));
+		const glm::vec2 boxMin = frame.Display.Min + glm::vec2(0.6f, 0.2f) * frame.Display.Size;
+		const glm::vec2 boxSize = glm::vec2(0.1f) * frame.Display.Size;
+		checkVec(boxMin + boxSize * 0.5f, panel.GetCenter());
+		CHECK(boxSize.x == doctest::Approx(panel.Size.x * CanvasEdit::CanvasFraming::c_FrameFill));
+
+		framing.Reset();
+		CHECK(framing.IsFit());
+		frame = framing.Compute(panel, 16.0f / 9.0f, pixelScale);
+		checkVec(frame.Visible.Min, frame.Fit.Min);
+
+		// A panel too small to show anything frames nothing.
+		CHECK(framing.Compute(UIBox { { 0.0f, 0.0f }, { 0.0f, 300.0f } }, 1.0f, pixelScale).IsEmpty());
+	}
+
+	TEST_CASE("A cropped camera shows the visible part of the display, magnified, and its symmetric frustum holds it")
+	{
+		const UIBox display { { 0.0f, 0.0f }, { 1000.0f, 500.0f } };
+		for (const bool orthographic : { false, true })
+		{
+			CAPTURE(orthographic);
+			SceneCamera camera;
+			camera.View = glm::lookAt(glm::vec3(1.0f, 2.0f, 8.0f), glm::vec3(0.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+			camera.Orthographic = orthographic;
+			camera.VerticalFOV = orthographic ? 6.0f : glm::radians(60.0f);
+			camera.Projection = orthographic ? Math::OrthographicReverseZ(-6.0f, 6.0f, -3.0f, 3.0f, 0.1f, 100.0f)
+				: Math::PerspectiveReverseZ(camera.VerticalFOV, 2.0f, 0.1f, 100.0f);
+			for (const UIBox& visible : { UIBox { { 250.0f, 0.0f }, { 250.0f, 250.0f } }, UIBox { { 375.0f, 187.5f }, { 250.0f, 125.0f } } })
+			{
+				CAPTURE(visible.Min);
+				const SceneCamera cropped = CanvasEdit::CropCamera(camera, display, visible);
+				// A world point lands at the same place of the panel through both.
+				for (const glm::vec3 world : { glm::vec3(0.0f), glm::vec3(-1.0f, 1.5f, 0.5f), glm::vec3(0.7f, -0.3f, 2.0f) })
+				{
+					const glm::vec4 full = camera.Projection * camera.View * glm::vec4(world, 1.0f);
+					const glm::vec4 part = cropped.Projection * cropped.View * glm::vec4(world, 1.0f);
+					const glm::vec2 fullNDC = glm::vec2(full) / full.w;
+					const glm::vec2 partNDC = glm::vec2(part) / part.w;
+					const glm::vec2 fullPanel = display.Min + glm::vec2(fullNDC.x * 0.5f + 0.5f, 0.5f - fullNDC.y * 0.5f) * display.Size;
+					const glm::vec2 partPanel = visible.Min + glm::vec2(partNDC.x * 0.5f + 0.5f, 0.5f - partNDC.y * 0.5f) * visible.Size;
+					CHECK(partPanel.x == doctest::Approx(fullPanel.x).epsilon(1e-4));
+					CHECK(partPanel.y == doctest::Approx(fullPanel.y).epsilon(1e-4));
+					CHECK(part.z / part.w == doctest::Approx(full.z / full.w).epsilon(1e-5)); // Depth unchanged
+				}
+			}
+			// The center quarter of a 4x zoom: a symmetric frustum a quarter as high. An off-center corner keeps the full
+			// height (it reaches the view's edge).
+			const SceneCamera center = CanvasEdit::CropCamera(camera, display, UIBox { { 375.0f, 187.5f }, { 250.0f, 125.0f } });
+			const SceneCamera corner = CanvasEdit::CropCamera(camera, display, UIBox { { 750.0f, 0.0f }, { 250.0f, 125.0f } });
+			if (orthographic)
+			{
+				CHECK(center.VerticalFOV == doctest::Approx(camera.VerticalFOV * 0.25f));
+				CHECK(corner.VerticalFOV == doctest::Approx(camera.VerticalFOV));
+			}
+			else
+			{
+				CHECK(std::tan(center.VerticalFOV * 0.5f) == doctest::Approx(std::tan(camera.VerticalFOV * 0.5f) * 0.25f));
+				CHECK(corner.VerticalFOV == doctest::Approx(camera.VerticalFOV));
+			}
+		}
+	}
 }
 
 TEST_SUITE("Editor.UI.CanvasMode")
@@ -338,6 +466,103 @@ TEST_SUITE("Editor.UI.CanvasMode")
 			REQUIRE(picked);
 			CHECK(picked == editor.Find(button["parts"]["label"]));
 			CHECK(editor.Context().GetUndoStack().GetPosition() == position); // A click moves nothing
+		}
+	}
+
+	TEST_CASE("Canvas mode zooms about the pointer, pans with the middle button, frames the selection with F and fits with Home")
+	{
+		for (const float scale : { 1.0f, 1.5f })
+		{
+			CAPTURE(scale);
+			ImGuiHarness::Specification specification;
+			specification.ContentScale = scale;
+			GameUIEditor editor(specification);
+			const nlohmann::json canvas = editor.Run("ui.create", { { "type", "canvas" } });
+			const nlohmann::json panel = editor.Run("ui.create", { { "type", "panel" }, { "parent", canvas["entity"] } });
+			const Entity element = editor.Find(panel["entity"]);
+			editor.Context().Select(element.GetUUID());
+			editor.Run("viewport.setSettings", { { "canvasMode", true } });
+			editor.Frames(3);
+			const glm::uvec2 screen = editor.Context().GetViewport().GetSize();
+			const std::optional<UI::ItemProbe::Item> fit = UI::ItemProbe::Find("Canvas.Selection");
+			const std::optional<UI::ItemProbe::Item> area = UI::ItemProbe::Find("Canvas.Panel");
+			REQUIRE(fit.has_value());
+			REQUIRE(area.has_value());
+			const size_t position = editor.Context().GetUndoStack().GetPosition();
+			auto width = [](const UI::ItemProbe::Item& item) { return item.Max.x - item.Min.x; };
+
+			// Two notches of the wheel over the panel's corner: the canvas grows about the pointer.
+			const ImVec2 pointer(fit->Min.x + width(*fit) * 0.25f, fit->Min.y + (fit->Max.y - fit->Min.y) * 0.25f);
+			editor.Harness.MoveMouse(pointer);
+			editor.Frames(1);
+			editor.Harness.ScrollMouse(2.0f);
+			editor.Frames(2);
+			const std::optional<UI::ItemProbe::Item> zoomed = UI::ItemProbe::Find("Canvas.Selection");
+			REQUIRE(zoomed.has_value());
+			const float factor = CanvasModeView::c_WheelZoomStep * CanvasModeView::c_WheelZoomStep;
+			CHECK(width(*zoomed) == doctest::Approx(width(*fit) * factor).epsilon(0.01));
+			CHECK(pointer.x - zoomed->Min.x == doctest::Approx((pointer.x - fit->Min.x) * factor).epsilon(0.01));
+			CHECK(pointer.y - zoomed->Min.y == doctest::Approx((pointer.y - fit->Min.y) * factor).epsilon(0.01));
+			CHECK(editor.Context().GetViewport().GetSize() == screen); // The game's screen stays the fit
+			CHECK(editor.Context().GetActiveScene() != nullptr);
+
+			// A handle drag while zoomed resizes by the canvas units dragged.
+			const std::optional<UI::ItemProbe::Item> right = UI::ItemProbe::Find("Canvas.Handle.Right");
+			REQUIRE(right.has_value());
+			const float unitsPerScreen = 400.0f / width(*zoomed);
+			const ImVec2 start = right->GetCenter();
+			editor.Harness.MoveMouse(start);
+			editor.Frames(1);
+			editor.Harness.SetMouseButton(ImGuiMouseButton_Left, true);
+			editor.Frames(1);
+			editor.Harness.MoveMouse(ImVec2(start.x + 30.0f, start.y));
+			editor.Frames(1);
+			editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+			editor.Frames(2);
+			CHECK(element.GetComponent<UIRectComponent>().Size.x == doctest::Approx(400.0f + 30.0f * unitsPerScreen).epsilon(0.01));
+			CHECK(editor.Context().GetUndoStack().GetPosition() == position + 1);
+			editor.Run("edit.undo");
+			editor.Frames(2);
+
+			// A middle drag pans by what it dragged.
+			const std::optional<UI::ItemProbe::Item> before = UI::ItemProbe::Find("Canvas.Selection");
+			REQUIRE(before.has_value());
+			editor.Harness.MoveMouse(pointer);
+			editor.Frames(1);
+			editor.Harness.SetMouseButton(ImGuiMouseButton_Middle, true);
+			editor.Frames(1);
+			editor.Harness.MoveMouse(ImVec2(pointer.x + 60.0f, pointer.y + 30.0f));
+			editor.Frames(1);
+			editor.Harness.SetMouseButton(ImGuiMouseButton_Middle, false);
+			editor.Frames(2);
+			const std::optional<UI::ItemProbe::Item> panned = UI::ItemProbe::Find("Canvas.Selection");
+			REQUIRE(panned.has_value());
+			CHECK(panned->Min.x == doctest::Approx(before->Min.x + 60.0f).epsilon(0.01));
+			CHECK(panned->Min.y == doctest::Approx(before->Min.y + 30.0f).epsilon(0.01));
+
+			// F frames the selection: centered, filling most of the panel along its tighter axis.
+			editor.Harness.SetKey(ImGuiKey_F, true);
+			editor.Frames(1);
+			editor.Harness.SetKey(ImGuiKey_F, false);
+			editor.Frames(2);
+			const std::optional<UI::ItemProbe::Item> framed = UI::ItemProbe::Find("Canvas.Selection");
+			REQUIRE(framed.has_value());
+			CHECK(framed->GetCenter().x == doctest::Approx(area->GetCenter().x).epsilon(0.01));
+			CHECK(framed->GetCenter().y == doctest::Approx(area->GetCenter().y).epsilon(0.01));
+			const float fill = std::max(width(*framed) / width(*area), (framed->Max.y - framed->Min.y) / (area->Max.y - area->Min.y));
+			CHECK(fill == doctest::Approx(CanvasEdit::CanvasFraming::c_FrameFill).epsilon(0.01));
+
+			// Home shows the whole canvas again.
+			editor.Harness.SetKey(ImGuiKey_Home, true);
+			editor.Frames(1);
+			editor.Harness.SetKey(ImGuiKey_Home, false);
+			editor.Frames(2);
+			const std::optional<UI::ItemProbe::Item> home = UI::ItemProbe::Find("Canvas.Selection");
+			REQUIRE(home.has_value());
+			CHECK(home->Min.x == doctest::Approx(fit->Min.x));
+			CHECK(home->Min.y == doctest::Approx(fit->Min.y));
+			CHECK(width(*home) == doctest::Approx(width(*fit)));
+			CHECK(editor.Context().GetUndoStack().GetPosition() == position); // Looking changes nothing
 		}
 	}
 }

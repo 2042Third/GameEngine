@@ -168,7 +168,10 @@ namespace Strata
 		if (!canvasMode)
 			m_CanvasMode.Reset(context);
 		const glm::uvec2 size = m_Image.GetPixelSize();
-		viewport.SetSize(size);
+		// What the view shows of the game is its screen: in canvas mode the canvas at its fit, however it is zoomed (ui.layout,
+		// the Inspector's pixels and captures use it).
+		const glm::uvec2 screenSize = canvasMode ? m_CanvasMode.GetScreenPixels() : size;
+		viewport.SetSize(screenSize);
 		if (size.x == 0 || size.y == 0)
 		{
 			Reset(context);
@@ -189,17 +192,22 @@ namespace Strata
 		m_Hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
 		AcceptAssetDrops(context, panelContext.Commands);
 
-		const float aspectRatio = static_cast<float>(size.x) / static_cast<float>(size.y);
+		const float aspectRatio = static_cast<float>(screenSize.x) / static_cast<float>(screenSize.y);
 		std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, aspectRatio);
 		m_GameView = view && view->FromScene;
 		if (canvasMode)
 		{
-			// The canvas over the scene as the game shows it: through the scene's camera, else the editor camera's view.
+			// The canvas over the scene as the game shows it: through the scene's camera, else the editor camera's view, of
+			// the part of the screen the zoomed and panned canvas shows.
 			view = ResolveViewportView(context, ViewportCameraSource::Scene, aspectRatio);
 			if (!view)
 				view = ResolveViewportView(context, ViewportCameraSource::Editor, aspectRatio);
+			if (view)
+				m_CanvasMode.ApplyView(*view);
 			EndCameraDrag();
 			EndGizmoDrag(context);
+			if (!m_CanvasMode.IsDragging())
+				HandleSelectionShortcuts(panelContext);
 		}
 		else if (!m_GameView)
 		{
@@ -258,7 +266,7 @@ namespace Strata
 		}
 		// The canvas's outlines and handles, also without an image (a headless editor still edits the layout).
 		if (canvasMode)
-			m_CanvasMode.Update(context, m_Image, m_Hovered);
+			m_CanvasMode.Update(context, m_Hovered, m_Hovered || m_Focused);
 
 		// A strip in the play state's color while the scene runs: changes made now are discarded when it stops.
 		if (context.IsPlaying())
@@ -629,19 +637,22 @@ namespace Strata
 	// Input
 	////////////////////////////////////////////////////////////////////////////////
 
+	void ViewportPanel::HandleSelectionShortcuts(EditorPanelContext& panelContext)
+	{
+		EditorContext& context = panelContext.Context;
+		EditorActions::HandleSelectionShortcuts(context, panelContext.Commands, true);
+		const Entity primary = context.GetPrimarySelection();
+		if (primary && panelContext.Shell && context.AcceptsEditShortcuts() && ImGui::Shortcut(ImGuiKey_F2, ImGuiInputFlags_RouteFocused))
+			panelContext.Shell->RenameEntity(primary.GetUUID());
+	}
+
 	void ViewportPanel::HandleShortcuts(EditorPanelContext& panelContext)
 	{
 		EditorContext& context = panelContext.Context;
 		const ImGuiIO& io = ImGui::GetIO();
-		// The selection's shortcuts (Delete, Ctrl+D, Ctrl+C/X/V, Ctrl+A, F2) while the viewport has the keyboard focus, never
-		// during a camera fly or a gizmo drag.
+		// The selection's shortcuts while the viewport has the keyboard focus, never during a camera fly or a gizmo drag.
 		if (m_CameraDrag != CameraDrag::Fly && !m_GizmoDrag && !ImGuizmo::IsUsing())
-		{
-			EditorActions::HandleSelectionShortcuts(context, panelContext.Commands, true);
-			const Entity primary = context.GetPrimarySelection();
-			if (primary && panelContext.Shell && context.AcceptsEditShortcuts() && ImGui::Shortcut(ImGuiKey_F2, ImGuiInputFlags_RouteFocused))
-				panelContext.Shell->RenameEntity(primary.GetUUID());
-		}
+			HandleSelectionShortcuts(panelContext);
 
 		// Only while the viewport is the target of the keyboard, never while typing or flying (WASD/QE move the camera).
 		// Nor during a gizmo drag, whose operation must not change under it.

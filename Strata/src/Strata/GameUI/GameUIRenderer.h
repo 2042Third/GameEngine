@@ -114,6 +114,8 @@ namespace Strata
 		std::vector<uint32_t> m_FontScratch;
 		std::vector<DrawRun> m_Runs;
 		glm::vec2 m_ViewportSize = glm::vec2(1.0f);
+		float m_ScreenZoom = 1.0f;                  // SceneScreenView: the screen's pixels -> the image's
+		glm::vec2 m_ScreenOrigin = glm::vec2(0.0f); // Image pixels
 	};
 
 	// Registers the pass with SceneOverlayRegistry (RegisterGameUIModule).

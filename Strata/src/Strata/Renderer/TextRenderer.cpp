@@ -97,12 +97,17 @@ namespace Strata
 			ranges.push_back(DrawRange { &binding, firstVertex, vertexCount });
 	}
 
-	bool TextRenderer::Prepare(Scene& scene, const glm::uvec2& viewportSize, bool drawScreenSpace, nvrhi::ICommandList* commandList, TextRenderStats& outStats)
+	bool TextRenderer::Prepare(Scene& scene, const glm::uvec2& viewportSize, bool drawScreenSpace, nvrhi::ICommandList* commandList, TextRenderStats& outStats,
+		const SceneScreenView& screenView)
 	{
 		m_Vertices.clear();
 		m_WorldRanges.clear();
 		m_ScreenRanges.clear();
 		m_ViewportSize = glm::max(glm::vec2(viewportSize), glm::vec2(1.0f));
+		// Screen-space text is placed on the game's screen, which lies in the image where the screen view puts it.
+		const glm::vec2 screenSize = glm::max(screenView.GetScreenSize(viewportSize), glm::vec2(1.0f));
+		const float screenZoom = screenView.GetZoom();
+		const glm::vec2 screenOffset = screenView.GetOffset();
 		for (auto& [id, binding] : m_Bindings)
 			binding.Used = false;
 		// One budget for every font and pass: each atlas receives what the previous ones left (FontAtlasCache).
@@ -144,10 +149,12 @@ namespace Strata
 			{
 				// The anchor is also the pivot: (0, 0) puts the block's top-left corner on it, (1, 1) its bottom-right
 				// (horizontally the alignment decides). Whole pixels keep the glyphs crisp.
-				const glm::vec2 anchor = text.ScreenAnchor * m_ViewportSize + text.ScreenOffset;
+				const glm::vec2 anchor = text.ScreenAnchor * screenSize + text.ScreenOffset;
 				const float blockHeight = (m_Layout.Max.y - m_Layout.Min.y) * size;
-				const glm::vec2 origin(std::round(anchor.x), std::round(anchor.y - text.ScreenAnchor.y * blockHeight));
-				transform = glm::translate(glm::mat4(1.0f), glm::vec3(origin, 0.0f)) * glm::scale(glm::mat4(1.0f), glm::vec3(size, -size, 1.0f));
+				const glm::vec2 placed = screenOffset + screenZoom * glm::vec2(anchor.x, anchor.y - text.ScreenAnchor.y * blockHeight);
+				const glm::vec2 origin(std::round(placed.x), std::round(placed.y));
+				const float scaled = size * screenZoom;
+				transform = glm::translate(glm::mat4(1.0f), glm::vec3(origin, 0.0f)) * glm::scale(glm::mat4(1.0f), glm::vec3(scaled, -scaled, 1.0f));
 			}
 			else
 			{

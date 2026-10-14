@@ -1882,7 +1882,7 @@ namespace Strata
 
 		TextRenderStats textStats;
 		m_FontAtlases->BeginFrame(TextRenderer::c_FrameRasterBudget);
-		const bool text = m_TextRenderer->Prepare(scene, m_ViewportSize, options.DrawScreenSpaceText, commandList, textStats);
+		const bool text = m_TextRenderer->Prepare(scene, m_ViewportSize, options.DrawScreenSpaceText, commandList, textStats, options.ScreenView);
 		m_Stats.Texts = textStats.Texts;
 		m_Stats.ScreenSpaceTexts = textStats.ScreenSpaceTexts;
 		m_Stats.HiddenScreenSpaceTexts = textStats.HiddenScreenSpaceTexts;
@@ -2095,6 +2095,7 @@ namespace Strata
 		SceneOverlayFrame frame;
 		frame.OverlayScene = options.OverlayScene ? options.OverlayScene : &scene;
 		frame.ViewportSize = m_ViewportSize;
+		frame.ScreenView = options.ScreenView;
 		frame.DrawScreenSpace = options.DrawScreenSpaceText;
 		frame.CommandList = commandList;
 		frame.Atlases = m_FontAtlases.get();
