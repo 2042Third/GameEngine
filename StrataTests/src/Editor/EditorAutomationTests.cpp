@@ -52,7 +52,7 @@ namespace
 					return EditorCommandResult::Ok({ { "Width", 1 }, { "Height", 1 }, { "Image", { { "MimeType", "image/png" }, { "Data", c_ImageData } } } });
 				} });
 			// Finishes after a number of frames with {"polls": n}.
-			Commands.Register({ "test.defer", "Test command that finishes after a number of frames.",
+			Commands.Register(MayDefer({ "test.defer", "Test command that finishes after a number of frames.",
 				CommandUtils::ObjectSchema({ { "polls", CommandUtils::IntegerSchema("Frames", 1, 1000000) } }),
 				[](EditorContext&, const nlohmann::json& parameters)
 				{
@@ -66,7 +66,7 @@ namespace
 							return std::nullopt;
 						return EditorCommandResult::Ok({ { "polls", count } });
 					});
-				} });
+				} }));
 			Commands.Register({ "test.throw", "Test command that throws, as third-party code may.", CommandUtils::ObjectSchema({}),
 				[](EditorContext&, const nlohmann::json&) -> EditorCommandResult
 				{

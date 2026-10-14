@@ -361,7 +361,7 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Projects never choose what runs: the external editor is the user's setting (or `STRATA_EXTERNAL_EDITOR`), started
   without a shell, and `script.open` opens only code, CMake and text files of the project or engine.
 - Commands never block a frame: one that waits returns `EditorCommandResult::Defer(poll)`, whose poll owns its data and
-  allocates nothing per frame.
+  allocates nothing per frame, and is registered with `MayDefer` (Debug builds assert).
 - Tools count game time in fixed steps (`Scene::GetFixedStepCount`), never in frames: `play.step` answers once its steps
   ran, resuming drops steps not run, and input durations (`input.*`, `input.sequence`) are fixed steps
   ([Stepping a paused game](Docs/DeveloperGuide.md#stepping-a-paused-game)).

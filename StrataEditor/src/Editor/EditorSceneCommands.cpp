@@ -394,7 +394,7 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "discardedChanges", discarded } });
 			} });
 
-		registry.Register({ "scene.open",
+		registry.Register(MayDefer({ "scene.open",
 			"Opens a scene asset for editing. Fails while the edited scene has unsaved changes unless force is true (save first). The scene is "
 			"read and loaded with everything it uses in the background while the editor goes on showing the edited scene, which stays read-only "
 			"meanwhile (edits and play.start fail); the command answers once the opened scene replaced it: {scene, name, entities, "
@@ -412,9 +412,9 @@ namespace Strata
 				if (std::optional<EditorCommandResult> refused = CheckUnsavedChanges(context, force, fmt::format("opening the scene {}", parameters["scene"].dump())))
 					return std::move(*refused);
 				return OpenSceneAndWait(context, handle, context.IsSceneModified());
-			} });
+			} }));
 
-		registry.Register({ "scene.loadStatus",
+		registry.Register(MayDefer({ "scene.loadStatus",
 			"The scene loads under way: open (the scene scene.open, or project.open for the project's start scene, is opening: {scene, startScene, "
 			"state: LoadingScene | LoadingDependencies | Preparing (its render proxies are built for the viewport), progress 0 to 1}, null when "
 			"none), lastOpen (the latest of those that finished: {scene, "
@@ -439,9 +439,9 @@ namespace Strata
 						return std::nullopt;
 					return EditorCommandResult::Ok(DescribeSceneLoads(context));
 				});
-			}, EditorCommandKind::Query, EditorCommandResults::Session });
+			}, EditorCommandKind::Query, EditorCommandResults::Session }));
 
-		registry.Register({ "scene.loadAdditive",
+		registry.Register(MayDefer({ "scene.loadAdditive",
 			"Loads a scene asset into the running game next to what it holds (a sub-scene, as scripts' Scene::LoadAdditive does; play mode "
 			"only: play.stop ends it with the game). The scene and everything it uses load in the background, "
 			"then its entities are created over the following frames (at most the scene's maxEntitiesInstantiatedPerFrame per frame), keeping "
@@ -458,7 +458,7 @@ namespace Strata
 				if (!context.IsPlaying())
 					return EditorCommandResult::Fail("Sub-scenes load into a running game: start play mode first (play.start)");
 				return LoadSubSceneAndWait(context, handle);
-			} });
+			} }));
 
 		registry.Register({ "scene.unloadAdditive",
 			"Removes a sub-scene from the running game (play mode only): stops its load, releasing what it held loaded, or destroys its entities "

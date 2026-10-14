@@ -284,7 +284,7 @@ namespace Strata
 					{ "discardedChanges", discarded } });
 			}, EditorCommandKind::Session });
 
-		registry.Register({ "project.open",
+		registry.Register(MayDefer({ "project.open",
 			"Opens a project file or the project in a directory. Fails while the edited scene has unsaved changes unless force is true (save first). "
 			"The project opens at once; its start scene loads in the background like scene.open's (the frames go on, scene.loadStatus reports it) "
 			"and the command answers once it is the edited scene: {projectFile, discardedChanges (whether unsaved changes were discarded), "
@@ -307,7 +307,7 @@ namespace Strata
 					return EditorCommandResult::Fail(error);
 				return FinishProjectOpen(context, { { "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) },
 					{ "discardedChanges", modified } });
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
 		registry.Register({ "project.close",
 			"Closes the open project; the editor shows its launcher. Without a project it does nothing. Fails while the edited scene has unsaved "
@@ -345,7 +345,7 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "samples", std::move(list) } });
 			}, EditorCommandKind::Query });
 
-		registry.Register({ "project.openSample",
+		registry.Register(MayDefer({ "project.openSample",
 			"Copies a sample project (project.samples) into a new directory and opens the copy, like project.open; the sample itself stays unchanged. "
 			"The copy leaves out local editor data (.strata): build its scripts with script.build before playing. Fails while the edited scene has "
 			"unsaved changes unless force is true (save first), before anything is copied. It answers once the start scene is open, with "
@@ -384,7 +384,7 @@ namespace Strata
 					return EditorCommandResult::Fail(fmt::format("The sample was copied to '{}' but could not be opened: {}", directory, error));
 				return FinishProjectOpen(context, { { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) },
 					{ "discardedChanges", discarded } });
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
 		registry.Register({ "project.setStartScene", "Sets the scene a built game starts with and saves the project file. When it is the "
 			"export settings' loading scene (project.setExportSettings), that setting is cleared (loadingSceneCleared: true), as the loading scene "
@@ -416,7 +416,7 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "startScene", UUIDToJson(scene) }, { "loadingSceneCleared", loadingSceneCleared } });
 			} });
 
-		registry.Register({ "project.export", "Exports the project as a playable game (runtime executable, asset pack, script module, manifest) into a "
+		registry.Register(MayDefer({ "project.export", "Exports the project as a playable game (runtime executable, asset pack, script module, manifest) into a "
 			"directory outside the project, in the background: the editor keeps running, and the command answers when the export finished (it fails at once "
 			"when it cannot start, and fails naming the document when a scene, prefab or material saved meanwhile references what the export did not plan "
 			"for: export again). The pack is ordered by first use from the start scene; with prune it holds only what the scenes use and what the "
@@ -486,7 +486,7 @@ namespace Strata
 						value["frameTimes"] = frameTimes.Describe();
 					return EditorCommandResult::Ok(std::move(value));
 				});
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
 		registry.Register({ "project.exportStatus", "The running export (project.export) or the last one: {running, state (WaitingForImports, Packing, Copying, "
 			"Succeeded, Failed, Cancelled), progress (0 to 1), stage (what it does, or how it ended), directory}; {running: false, state: null} before the "
@@ -623,7 +623,7 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "assets", std::move(assets) } });
 			}, EditorCommandKind::Query });
 
-		registry.Register({ "asset.info",
+		registry.Register(MayDefer({ "asset.info",
 			"An asset's metadata, load state, import errors and warnings, sub-assets, import settings with the description of every setting "
 			"(importSettingsProperties: type, range, options; what asset.setImportSettings accepts) and whether an import is running. Meshes, models "
 			"and prefabs add bounds: {min, max, size}, what they draw around their origin as an instance placed there (skinned characters in their "
@@ -706,9 +706,9 @@ namespace Strata
 					addBounds(result, measured, measured.Pending);
 					return EditorCommandResult::Ok(std::move(result));
 				});
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query }));
 
-		registry.Register({ "asset.import",
+		registry.Register(MayDefer({ "asset.import",
 			"Copies external files and folders into the project and imports them in the background: the editor keeps running, and the command answers "
 			"when every import is done. A file goes into `directory` (\" (n)\" added when its name is taken) with the files it reads (a glTF model's "
 			"buffers and images, in a new folder named after it, keeping their layout); a folder goes there with its tree (asset files, their .meta files, "
@@ -796,7 +796,7 @@ namespace Strata
 						return EditorCommandResult::Fail(import->GetError());
 					return DescribeExternalImport(*current, *import);
 				});
-			} });
+			} }));
 
 		registry.Register({ "asset.move",
 			"Moves or renames an asset (with its .meta and cached import) within the asset directory; its handle and every reference to it stay "
@@ -980,7 +980,7 @@ namespace Strata
 					{ "referencedBy", AssetReferences::ToJson(referencers) } });
 			} });
 
-		registry.Register({ "asset.reimport",
+		registry.Register(MayDefer({ "asset.reimport",
 			"Imports an asset again from its source file, in the background (the editor keeps running and the asset keeps its previous version until "
 			"the new one is loaded). Returns when the import is done (its settings, warnings) and fails when it failed; wait: false returns at once "
 			"(asset.info tells when it is done).",
@@ -1001,9 +1001,9 @@ namespace Strata
 				if (!assets->ReimportAssetInBackground(handle, &error))
 					return EditorCommandResult::Fail(error);
 				return FinishImport(*assets, handle, wait);
-			} });
+			} }));
 
-		registry.Register({ "asset.setImportSettings",
+		registry.Register(MayDefer({ "asset.setImportSettings",
 			"Changes import settings (merged into the current ones; asset.info lists every setting with its type, range or options), saves the .meta "
 			"and imports the asset again in the background, without blocking the editor. Returns when the import is done (settings, warnings) and "
 			"fails when it failed; wait: false returns at once. Unknown settings, invalid values and numbers outside a setting's range change "
@@ -1033,7 +1033,7 @@ namespace Strata
 				if (!assets->SetImportSettingsInBackground(handle, normalized, &error))
 					return EditorCommandResult::Fail(error);
 				return FinishImport(*assets, handle, wait);
-			} });
+			} }));
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Materials and prefabs

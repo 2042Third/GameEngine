@@ -101,6 +101,8 @@ namespace Strata
 			command ? command->Results : EditorCommandResults::Content, parameters, context.IsPlaying());
 		const uint64_t records = undo.GetRecordCount();
 		EditorCommandResult result = Run(context, command, name, parameters);
+		// The flag keeps editor.batch from starting what cannot finish in its frame: it must be right.
+		ST_ASSERT(!result.IsPending() || !command || command->MayDefer, "Command '{}' answered later (Defer) but is not registered with MayDefer", name);
 		// A step the handler recorded (or extended) is the command's.
 		journal.NoteUndo(entry, undo, records);
 		result.JournalId = entry;

@@ -589,7 +589,7 @@ namespace Strata
 		// Capture
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "viewport.capture",
+		registry.Register(MayDefer({ "viewport.capture",
 			"Renders the scene on the next frame and returns the picture as a PNG image, with its width and height. By default it looks like the viewport: "
 			"its size (1280x720 while the viewport is hidden), the scene's primary camera while playing (the editor camera otherwise) and the editor overlays "
 			"(grid, selection outline, light/camera/collider shapes) for the editor camera; camera \"scene\" takes the Game view's size when it keeps an "
@@ -729,7 +729,7 @@ namespace Strata
 						return StartCapture(context, request, *progress);
 					return ContinueCapture(request, *progress);
 				});
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query }));
 	}
 
 }

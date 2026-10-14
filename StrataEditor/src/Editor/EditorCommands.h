@@ -96,7 +96,17 @@ namespace Strata
 		// Queries whose results follow the editor's session (the selection, the journal, what is loaded) say so: replays
 		// never bind the IDs those show.
 		EditorCommandResults Results = EditorCommandResults::Content;
+		// The handler may answer later (EditorCommandResult::Defer: loads, builds, captures, waits): editor.batch refuses such
+		// commands, which cannot finish within its frame, and Debug builds assert that an unmarked command never defers.
+		bool MayDefer = false;
 	};
+
+	// The command marked MayDefer, for registrations: registry.Register(MayDefer({ "scene.open", ... })).
+	inline EditorCommand MayDefer(EditorCommand command)
+	{
+		command.MayDefer = true;
+		return command;
+	}
 
 	class EditorCommandRegistry
 	{

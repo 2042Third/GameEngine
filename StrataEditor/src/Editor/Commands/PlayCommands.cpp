@@ -116,7 +116,7 @@ namespace Strata
 
 	void RegisterPlayCommands(EditorCommandRegistry& registry)
 	{
-		registry.Register({ "play.start",
+		registry.Register(MayDefer({ "play.start",
 			"Runs a copy of the scene with scripts, physics and audio. Changes made while playing are discarded by play.stop. When the project's "
 			"scripts need building first (their sources changed since the module was built, or scenes use scripts that are not built or "
 			"loaded), it builds them, then plays the new code: the answer comes once the build finished (a failed build fails play.start with "
@@ -138,7 +138,7 @@ namespace Strata
 				if (!context.Play(&error))
 					return EditorCommandResult::Fail(error);
 				return EditorCommandResult::Ok(DescribePlayState(context));
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
 		registry.Register({ "play.simulate", "Runs a copy of the scene with physics only (no scripts or audio).", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
@@ -172,7 +172,7 @@ namespace Strata
 				return EditorCommandResult::Ok(DescribePlayState(context));
 			}, EditorCommandKind::Session });
 
-		registry.Register({ "play.step",
+		registry.Register(MayDefer({ "play.step",
 			"While paused, runs fixed steps of the game, one per frame (frames run unthrottled meanwhile, so 600 steps take the frames' work, not "
 			"ten seconds), and answers once its last step ran: {state, paused, stepsRun, frameIndex, time, fixedSteps (run since play started)}. "
 			"Results are exact: the same steps give the same state whatever the frame rate. A play.step while another waits adds its steps after "
@@ -236,7 +236,7 @@ namespace Strata
 					}
 					return std::nullopt;
 				});
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
 		registry.Register({ "play.state",
 			"Whether the scene is being edited, played or simulated, whether it is paused, the steps play.step still runs (pendingSteps), the fixed "

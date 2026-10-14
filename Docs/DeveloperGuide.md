@@ -1361,7 +1361,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `EditorCommandResult::Defer(poll)`; `EditorCommandRunner` polls it once per frame, starting with the
   next frame, and reports through a completion callback. Command scripts, automation and UI actions that
   can take frames (e.g. Build Scripts) run commands through the runner; UI actions that finish at once
-  call the registry through `RunEditorCommand`, which rejects pending results.
+  call the registry through `RunEditorCommand`, which rejects pending results. A command whose handler may defer is
+  registered with `EditorCommand::MayDefer` (`registry.Register(MayDefer({ ... }))`): `editor.batch` refuses those before
+  it runs anything, and Debug builds assert in `EditorCommandRegistry::Execute` when an unmarked command defers
+  (`CommandJournalTests.cpp`'s `c_DeferringCommands` lists them, checked like the kind lists).
   Poll functions own their data (copy parameters, never capture them by reference) and allocate nothing per frame (frame
   times go into a `CommandUtils::FrameTimeRecorder`, reserved when the command starts: an allocation in a frame can wait
   milliseconds for the heap while a scene is freed in the background). `editor.wait

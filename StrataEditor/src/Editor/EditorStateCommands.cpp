@@ -408,7 +408,7 @@ namespace Strata
 		// Recovery
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "scene.recoveryStatus",
+		registry.Register(MayDefer({ "scene.recoveryStatus",
 			"The recovery data of the open project (.strata/Recovery): unsaved scene changes an editor left behind when it ended without closing "
 			"the scene (a crash), or that were discarded on purpose (force, Don't Save) and kept anyway. Returns entries, newest first, each {id, "
 			"scene (null for a scene never saved), sceneName, scenePath, time (milliseconds since 1970-01-01 UTC), discarded, entityCount, complete "
@@ -435,9 +435,9 @@ namespace Strata
 					result["entries"] = std::move(entries);
 					return EditorCommandResult::Ok(std::move(result));
 				});
-			}, EditorCommandKind::Query, EditorCommandResults::Session });
+			}, EditorCommandKind::Query, EditorCommandResults::Session }));
 
-		registry.Register({ "scene.recover",
+		registry.Register(MayDefer({ "scene.recover",
 			"Applies or discards recovery data (scene.recoveryStatus). apply: opens the scene the changes were made to in the background as "
 			"scene.open does (a scene never saved: a new scene of its name) and, once it is in, turns it into what the edits left, as one undo "
 			"step back to the saved scene; the scene stays modified (save it to keep the changes). It refuses when the scene file changed since "
@@ -557,7 +557,7 @@ namespace Strata
 					progress->Load = recovery.Read(entry->Id, context.GetSceneFile(entry->Scene).first);
 					return std::nullopt;
 				});
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Editor
@@ -703,7 +703,7 @@ namespace Strata
 		// Frames
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "editor.wait",
+		registry.Register(MayDefer({ "editor.wait",
 			"Returns after the given number of frames. Use it to let a playing scene run, assets load or the viewport render before the next "
 			"command. Returns {frames} and, when the editor measures its frames (not when a test drives it without its EditorLayer), "
 			"frameTimes: the CPU time of the frames that ran entirely while waiting (all but the first), in milliseconds {count, medianMs, "
@@ -730,7 +730,7 @@ namespace Strata
 						result["frameTimes"] = frameTimes.Describe();
 					return EditorCommandResult::Ok(std::move(result));
 				});
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query }));
 
 		registry.Register({ "editor.perf",
 			"Where the editor's frames go: statistics of the latest frames the frame profiler recorded (at most 600). Returns frames (how many "

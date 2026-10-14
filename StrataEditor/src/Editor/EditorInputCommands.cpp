@@ -547,7 +547,7 @@ namespace Strata
 
 	void RegisterInputCommands(EditorCommandRegistry& registry)
 	{
-		registry.Register({ "input.sequence",
+		registry.Register(MayDefer({ "input.sequence",
 			"Plays a script of input in the running game, timed in its fixed steps (play mode): pauses the game (and resumes it at the end if it "
 			"ran), then every frame runs exactly one step with the events of that step, so the result is the same whatever the frame rate. "
 			"events: [{step (0-based, below steps), then one of: key | mouseButton | gamepadButton (+ gamepad) with action press | release | tap "
@@ -624,9 +624,9 @@ namespace Strata
 						return EditorCommandResult::Fail(result.Error, DescribeSequenceResult(result));
 					return EditorCommandResult::Ok(DescribeSequenceResult(result));
 				});
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
-		registry.Register({ "input.key",
+		registry.Register(MayDefer({ "input.key",
 			"Presses a key for the running game (play mode), as if a player did: scripts see it through Input::IsKeyDown/IsKeyPressed/"
 			"IsKeyReleased, also while the viewport has no focus. tap (default) holds the key for 'steps' fixed steps of the game (or 'seconds' "
 			"of game time), press holds it until a release (or input.releaseAll, play.stop), release ends every hold of the key. Each command ends "
@@ -658,9 +658,9 @@ namespace Strata
 				if (*action == ButtonAction::Tap)
 					result["steps"] = steps;
 				return RunButtonAction(context, SimulatedControlType::Key, *key, *action, steps, wait, std::move(result), "key");
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
-		registry.Register({ "input.mouseButton",
+		registry.Register(MayDefer({ "input.mouseButton",
 			"Presses a mouse button for the running game (play mode), like input.key: scripts see it through Input::IsMouseButtonDown/Pressed/"
 			"Released. tap (default) holds it for 'steps' fixed steps (or 'seconds'), press until a release; answers once the game has seen it, or at once "
 			"with wait false (the default while paused). Move the pointer first with input.mouseMove if the game reads where the click is.",
@@ -688,9 +688,9 @@ namespace Strata
 				if (*action == ButtonAction::Tap)
 					result["steps"] = steps;
 				return RunButtonAction(context, SimulatedControlType::MouseButton, *button, *action, steps, wait, std::move(result), "mouse button");
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
-		registry.Register({ "input.mouseMove",
+		registry.Register(MayDefer({ "input.mouseMove",
 			"Moves the simulated mouse pointer of the running game (play mode) to a position in the game view, in pixels from its top-left "
 			"corner: scripts read it with Input::GetMousePosition (and the move with GetMouseDelta, from the second move on). Answers once the "
 			"game has seen it (its next frame), or at once with wait false (the default while paused).",
@@ -706,9 +706,9 @@ namespace Strata
 					return NoGameError();
 				Input::SimulateMouseMove(*position);
 				return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, { { "position", { position->x, position->y } } }, "pointer move");
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
-		registry.Register({ "input.scroll",
+		registry.Register(MayDefer({ "input.scroll",
 			"Turns the simulated scroll wheel of the running game (play mode) for one game frame: scripts read it with Input::GetScrollDelta "
 			"(+y scrolls up/away). Answers once the game has seen it, or at once with wait false (the default while paused).",
 			ObjectSchema({ { "delta", Vec2Schema("[x, y] scroll offset, e.g. [0, 1] for one notch up") }, { "wait", WaitSchema() } }, { "delta" }),
@@ -723,9 +723,9 @@ namespace Strata
 					return NoGameError();
 				Input::SimulateScroll(*delta);
 				return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, { { "delta", { delta->x, delta->y } } }, "scroll");
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
-		registry.Register({ "input.gamepadButton",
+		registry.Register(MayDefer({ "input.gamepadButton",
 			"Presses a gamepad button for the running game (play mode), like input.key: scripts see it through Input::IsGamepadButtonDown/"
 			"Pressed/Released, and the gamepad counts as connected (Input::IsGamepadConnected) from then until play stops, with or without a "
 			"device. tap (default) holds it for 'steps' fixed steps (or 'seconds'), press until a release; answers once the game has seen it, or at once "
@@ -758,9 +758,9 @@ namespace Strata
 					result["steps"] = steps;
 				const uint16_t code = SimulatedInput::MakeGamepadCode(gamepad, static_cast<uint32_t>(*button));
 				return RunButtonAction(context, SimulatedControlType::GamepadButton, code, *action, steps, wait, std::move(result), "gamepad button");
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
-		registry.Register({ "input.gamepadAxis",
+		registry.Register(MayDefer({ "input.gamepadAxis",
 			"Moves a gamepad stick or trigger of the running game (play mode): scripts read the value through Input::GetGamepadAxis and "
 			"GetGamepadStick (sticks -1 to 1 with +x right and +y up, triggers 0 released to 1 pressed; values are clamped to that range), "
 			"and the gamepad counts as connected until play stops. The value holds for 'steps' fixed steps (or 'seconds' of game time) and then "
@@ -833,9 +833,9 @@ namespace Strata
 					answer["held"] = DescribeSimulatedInput(pollContext);
 					return EditorCommandResult::Ok(std::move(answer));
 				});
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
-		registry.Register({ "input.releaseAll",
+		registry.Register(MayDefer({ "input.releaseAll",
 			"Ends every hold of simulated input in the running game (play mode): held keys, mouse buttons and gamepad buttons go up and held "
 			"gamepad axes return to the device's values in the game's next frame, "
 			"unfinished taps end there (their commands answer with interrupted true), and presses still waiting for a game frame are dropped. "
@@ -857,7 +857,7 @@ namespace Strata
 					{ "gamepadAxes", DescribeGamepadAxes(input) } };
 				input.ReleaseAll();
 				return AnswerWhenSeen(context, wait, Input::GetFrameIndex() + 1, { { "released", std::move(released) } }, "releases");
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
 		registry.Register({ "input.state",
 			"Simulated input in the running game: the keys, mouse buttons and gamepad buttons the input.* commands hold, the gamepad axes they "

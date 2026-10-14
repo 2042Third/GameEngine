@@ -155,6 +155,20 @@ namespace
 		"viewport.getSettings",
 	};
 
+	// Commands whose handlers may answer later (EditorCommand::MayDefer): editor.batch refuses them, and Debug builds assert
+	// when another command defers. A command that starts waiting (a load, a build, a capture, steps of the game) joins it.
+	constexpr std::string_view c_DeferringCommands[] = {
+		"animation.preview",
+		"asset.import", "asset.info", "asset.reimport", "asset.setImportSettings",
+		"editor.wait",
+		"input.gamepadAxis", "input.gamepadButton", "input.key", "input.mouseButton", "input.mouseMove", "input.releaseAll", "input.scroll", "input.sequence",
+		"play.start", "play.step",
+		"project.export", "project.open", "project.openSample",
+		"scene.loadAdditive", "scene.loadStatus", "scene.open", "scene.recover", "scene.recoveryStatus",
+		"script.build",
+		"viewport.capture",
+	};
+
 	template<size_t N>
 	bool Contains(const std::string_view (&names)[N], std::string_view name)
 	{
@@ -186,9 +200,12 @@ TEST_SUITE("Editor.Journal")
 				CHECK(command->Kind == EditorCommandKind::Session);
 			const bool sessionResults = Contains(c_SessionResultCommands, command->Name);
 			CHECK(command->Results == (sessionResults ? EditorCommandResults::Session : EditorCommandResults::Content));
+			CHECK(command->MayDefer == Contains(c_DeferringCommands, command->Name));
 		}
 		// No list names a command the registry lacks.
 		CHECK(listed == std::size(c_EditCommands) + std::size(c_QueryCommands) + std::size(c_SessionCommands));
+		for (const std::string_view name : c_DeferringCommands)
+			CHECK_MESSAGE(registry.Find(name) != nullptr, name);
 	}
 
 	TEST_CASE("Commands of every source are recorded once, with their source and the client's name")
@@ -272,7 +289,7 @@ TEST_SUITE("Editor.Journal")
 	{
 		JournalHarness harness;
 		uint64_t runningDuringPoll = 0;
-		harness.Commands.Register({ "test.deferredNested", "Test command whose poll creates an entity through entity.create.", CommandUtils::ObjectSchema({}),
+		harness.Commands.Register(MayDefer({ "test.deferredNested", "Test command whose poll creates an entity through entity.create.", CommandUtils::ObjectSchema({}),
 			[&harness, &runningDuringPoll](EditorContext&, const nlohmann::json&)
 			{
 				return EditorCommandResult::Defer([&harness, &runningDuringPoll](EditorContext& context) -> std::optional<EditorCommandResult>
@@ -280,7 +297,7 @@ TEST_SUITE("Editor.Journal")
 					runningDuringPoll = context.GetJournal().GetOutermostRunningId();
 					return harness.Commands.Execute(context, "entity.create", { { "name", "Inner" } });
 				});
-			}, EditorCommandKind::Edit });
+			}, EditorCommandKind::Edit }));
 
 		bool done = false;
 		REQUIRE(harness.Runner.Run(harness.Context, harness.Commands, "test.deferredNested", nlohmann::json::object(),
