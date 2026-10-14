@@ -193,14 +193,18 @@ namespace
 		{
 			m_Thread = std::thread([this, &logger, interval, limit]()
 			{
+				// Each message `interval` after the previous one: a thread that kept to a fixed schedule would log in bursts to
+				// catch up after the machine held it up, outrunning a writer held up as well, and the queue would grow with the
+				// machine's load.
 				const auto start = std::chrono::steady_clock::now();
+				auto due = start;
 				for (uint64_t index = 0; !m_StopRequested && std::chrono::steady_clock::now() < start + limit; index++)
 				{
-					const auto due = start + interval * static_cast<int64_t>(index);
 					while (std::chrono::steady_clock::now() < due)
 						std::this_thread::yield();
 					logger.info("busy {}", index);
 					m_Logged++;
+					due = std::chrono::steady_clock::now() + interval;
 				}
 				m_Logging = false;
 			});
