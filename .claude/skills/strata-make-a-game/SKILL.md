@@ -89,8 +89,10 @@ first run and after files were added or removed; answers with compiler diagnosti
   show and hide them with `SetActive` and recolor them with `SetProperty("MeshRenderer", "Material", handle)`. Remember
   what each one shows and touch only the ones that change.
 - HUD: a UI canvas (below) with `UIText` elements; `Entity` fields that point at them, and
-  `entity.SetProperty("UIText", "Text", std::string(...))` when the value changes. A panel that shows only sometimes (a
-  pause or game-over message): `panel.SetActive(...)`.
+  `entity.GetUI().SetText(...)` when the value changes. A panel that shows only sometimes (a pause or game-over message):
+  `panel.SetActive(...)`. Menus: buttons whose `EventTarget` is the entity of a menu script, which gets
+  `OnUIClick(widget)`; keyboard and gamepad navigation work by themselves, and `UI::IsActionPressed(UIAction::Cancel)`
+  closes a menu (the scripting skill's "Game UI").
 - Input: `Input::IsKeyPressed` for one-shot actions, `KeyRepeat` for held movement (construct it from fields in
   `OnCreate`), and update both keys of a pair every frame (`a.Update(dt) || b.Update(dt)` would skip `b`).
 - Sounds: `Assets::RequestLoad` in `OnCreate`, `Audio::PlayOneShot(clip)` later.

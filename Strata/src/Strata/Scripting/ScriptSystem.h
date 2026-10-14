@@ -67,6 +67,10 @@ namespace Strata
 	// Animation events: the scene's IAnimationEventSource (the animation system) reports the events of animator states after
 	// the animators were evaluated; the scripts of the animator's entity receive OnAnimationEvent with the event's name, if
 	// the entity is active.
+	//
+	// Game UI events: the scene's IUIEvents (the GameUI module's system, which updates before this one) reports clicks, value
+	// changes and focus changes; the scripts of the widget's entity receive OnUIClick, OnUIValueChanged or OnUIFocusChanged,
+	// then those of its event target (when it names another entity), each instance once.
 	class ScriptSystem final : public SceneSystem
 	{
 	public:
@@ -238,6 +242,8 @@ namespace Strata
 		void DeliverContact(UUID entityID, UUID otherID, bool begin, ScriptCallback callback, const glm::vec3& point, const glm::vec3& normal);
 		// Calls OnAnimationEvent on the scripts of the animator's entity.
 		void OnAnimationEvent(const AnimationEventInfo& event);
+		// Calls the UI callback of the event on the scripts of the widget's entity, then on those of its event target.
+		void OnUIEvent(const UIEventInfo& event);
 	private:
 		Scene& m_Scene;
 		Ref<ScriptEngine> m_Engine;
@@ -284,6 +290,7 @@ namespace Strata
 		std::unordered_set<std::string> m_ReportedProblems;
 		CollisionListenerID m_CollisionListener = c_InvalidCollisionListener; // Registered with the scene's ICollisionEventSource while running
 		AnimationEventListenerID m_AnimationListener = 0; // Registered with the scene's IAnimationEventSource while running (0: none)
+		UIEventListenerID m_UIListener = 0;               // Registered with the scene's IUIEvents while running (0: none)
 		std::vector<entt::scoped_connection> m_Connections;
 		float m_DeltaTime = 0.0f;
 		bool m_Running = false;

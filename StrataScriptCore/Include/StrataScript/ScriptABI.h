@@ -235,6 +235,17 @@ extern "C"
 		StrataScriptWindowMode_Borderless = 2  /* A window covering the display at the desktop's resolution */
 	} StrataScriptWindowMode;
 
+	/* The game UI's actions (UIIsActionPressed, UIIsActionDown); the engine's UIAction values. */
+	typedef enum StrataScriptUIAction
+	{
+		StrataScriptUIAction_Submit = 0, /* Enter, keypad Enter, Space, gamepad A */
+		StrataScriptUIAction_Cancel = 1, /* Escape, gamepad B */
+		StrataScriptUIAction_Up = 2,     /* Arrow keys, the d-pad and the left stick of any gamepad */
+		StrataScriptUIAction_Down = 3,
+		StrataScriptUIAction_Left = 4,
+		StrataScriptUIAction_Right = 5
+	} StrataScriptUIAction;
+
 	/*
 	 * Engine services for scripts. Unless noted otherwise, functions taking a context only work while the engine is
 	 * calling into the module for that context, on the engine's main thread; otherwise they fail (returning false, 0
@@ -543,6 +554,41 @@ extern "C"
 		bool (*PhysicsGetLayersCollide)(StrataScriptContext* context, uint32_t layerA, uint32_t layerB);
 		int32_t (*PhysicsGetLayerIndex)(StrataScriptContext* context, StrataScriptString name);
 
+		/*
+		 * The game UI (added after the initial set of ABI version 1: check ST_SCRIPT_HAS_MEMBER before use). Elements are
+		 * entities with UI components; each function fails (false, 0, empty text) for an entity without the component it
+		 * needs: text a UIText, the image a UIImage, the color a UIImage (its tint) or else a UIText, interactable a
+		 * UISelectable, the value a UISlider (clamped and snapped like input) or a UIToggle (0 or 1; switching one on switches
+		 * the others of its group off). Values set here raise no OnUIValueChanged: the callbacks report the player's input.
+		 * UIGetText follows the text buffer protocol; colors are display (sRGB) RGBA from 0 to 1. UISetFocus focuses an
+		 * interactable selectable shown on a canvas that receives input (0 clears the focus). The pointer and the actions
+		 * (StrataScriptUIAction: Submit, Cancel, Up, Down, Left, Right, from keys, gamepad buttons and the left stick) are
+		 * those of the UI's latest update, which runs before the scripts' OnUpdate.
+		 */
+		uint64_t (*UIGetText)(StrataScriptContext* context, StrataScriptEntityID entity, char* buffer, uint64_t capacity);
+		bool (*UISetText)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString text);
+		StrataScriptAssetHandle (*UIGetImage)(StrataScriptContext* context, StrataScriptEntityID entity);
+		bool (*UISetImage)(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptAssetHandle texture);
+		bool (*UIGetColor)(StrataScriptContext* context, StrataScriptEntityID entity, float outColor[4]);
+		bool (*UISetColor)(StrataScriptContext* context, StrataScriptEntityID entity, const float color[4]);
+		bool (*UIIsInteractable)(StrataScriptContext* context, StrataScriptEntityID entity);
+		bool (*UISetInteractable)(StrataScriptContext* context, StrataScriptEntityID entity, bool interactable);
+		float (*UIGetValue)(StrataScriptContext* context, StrataScriptEntityID entity);
+		bool (*UISetValue)(StrataScriptContext* context, StrataScriptEntityID entity, float value);
+		StrataScriptEntityID (*UIGetFocus)(StrataScriptContext* context);
+		bool (*UISetFocus)(StrataScriptContext* context, StrataScriptEntityID entity);
+		bool (*UIIsPointerOverUI)(StrataScriptContext* context);
+		bool (*UIIsActionPressed)(StrataScriptContext* context, uint32_t action);
+		bool (*UIIsActionDown)(StrataScriptContext* context, uint32_t action);
+		/*
+		 * Unscaled time (same block): GetUnscaledDeltaTime is the frame's duration before the time scale (menus and fades
+		 * that go on at time scale 0), GetRealTime the sum of those since the scene started playing, in seconds.
+		 * GetTypedText copies the text typed during the frame (UTF-8, at most 1,024 bytes, the text buffer protocol).
+		 */
+		float (*GetUnscaledDeltaTime)(StrataScriptContext* context);
+		double (*GetRealTime)(StrataScriptContext* context);
+		uint64_t (*GetTypedText)(StrataScriptContext* context, char* buffer, uint64_t capacity);
+
 		/* New functions are appended here (see the compatibility rules above). */
 	} StrataScriptHostAPI;
 
@@ -600,6 +646,17 @@ extern "C"
 		 * the call.
 		 */
 		uint32_t (*OnAnimationEvent)(StrataScriptInstance instance, StrataScriptString name);
+
+		/*
+		 * Events of the game UI's widgets (added after the initial set of ABI version 1: the engine reads them only when
+		 * StructSize covers them), from the player's input: a button clicked, a slider's or toggle's value changed (the new
+		 * value; a toggle's is 0 or 1), a selectable gained or lost the focus. Each reaches the scripts on the widget's entity,
+		 * then those on its event target (when it names another entity), once per instance, before the scripts' OnUpdate of
+		 * the frame and in the order the inputs happened.
+		 */
+		uint32_t (*OnUIClick)(StrataScriptInstance instance, StrataScriptEntityID widget);
+		uint32_t (*OnUIValueChanged)(StrataScriptInstance instance, StrataScriptEntityID widget, float value);
+		uint32_t (*OnUIFocusChanged)(StrataScriptInstance instance, StrataScriptEntityID widget, bool focused);
 
 		/* New callbacks are appended here. */
 	} StrataScriptClassDesc;

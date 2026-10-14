@@ -25,8 +25,9 @@ namespace Strata
 	// selectable's state with tints that fade over unscaled time. Widget events go to IUIEvents listeners at the end of its
 	// update, before the scripts' OnUpdate of the frame, in the order their inputs happened: pointer, navigation, submit.
 	// Toggle and slider values are written with registry.patch (the running scene, without undo). A frame without UI under
-	// the pointer and without a focus changes nothing the game sees. Main thread only.
-	class GameUISystem final : public SceneSystem, public IUIEvents
+	// the pointer and without a focus changes nothing the game sees. It also offers IUIControl, the UI's elements for the
+	// script host. Main thread only.
+	class GameUISystem final : public SceneSystem, public IUIEvents, public IUIControl
 	{
 	public:
 		explicit GameUISystem(Scene& scene);
@@ -42,13 +43,26 @@ namespace Strata
 		UIEventListenerID AddUIEventListener(UIEventCallback callback) override;
 		bool RemoveUIEventListener(UIEventListenerID id) override;
 
+		bool GetText(Entity element, std::string& outText, std::string* outError = nullptr) override;
+		bool SetText(Entity element, std::string_view text, std::string* outError = nullptr) override;
+		bool GetImage(Entity element, AssetHandle& outTexture, std::string* outError = nullptr) override;
+		bool SetImage(Entity element, AssetHandle texture, std::string* outError = nullptr) override;
+		bool GetColor(Entity element, glm::vec4& outColor, std::string* outError = nullptr) override;
+		bool SetColor(Entity element, const glm::vec4& color, std::string* outError = nullptr) override;
+		bool IsInteractable(Entity element, bool& outInteractable, std::string* outError = nullptr) override;
+		bool SetInteractable(Entity element, bool interactable, std::string* outError = nullptr) override;
+		bool GetValue(Entity element, float& outValue, std::string* outError = nullptr) override;
+		bool SetValue(Entity element, float value, std::string* outError = nullptr) override;
+		Entity GetFocus() override { return GetFocused(); }
+		// Gives an interactable, visible selectable the focus (FocusChanged events at the end of the next update, or of this
+		// one when called during it), or clears it with an invalid entity. False (nothing changes) for anything else.
+		bool SetFocus(Entity selectable, std::string* outError = nullptr) override;
+		bool IsPointerOverUI() override { return m_PointerOverUI; }
+		bool IsActionPressed(uint32_t action) override;
+		bool IsActionDown(uint32_t action) override;
+
 		// The selectable with the focus (keyboard and gamepad navigation, Submit), or an invalid entity.
 		Entity GetFocused() const;
-		// Gives an interactable, visible selectable the focus (FocusChanged events next update), or clears it with an
-		// invalid entity. False (nothing changes) for anything else.
-		bool SetFocus(Entity selectable);
-		// Whether the pointer is over a raycast target of a canvas that receives input (as of this frame's update).
-		bool IsPointerOverUI() const { return m_PointerOverUI; }
 		const UIActionState& GetActions() const { return m_Actions; }
 		// The selectable the pointer hovers, or an invalid entity.
 		Entity GetHovered() const;
@@ -83,6 +97,13 @@ namespace Strata
 		void DispatchEvents();
 		// Lays the canvases out for the screen and keeps their views for this update's queries.
 		void RefreshViews(GameUIScene& ui, const UIScreen& screen);
+
+		// The entity an element function of IUIControl acts on, with the component it needs (null, with the reason, when
+		// there is none).
+		template<typename Component>
+		Component* FindElementComponent(Entity element, const char* componentName, std::string* outError);
+		// Switches the other toggles of an on toggle's group off (without events).
+		void EnforceGroup(entt::entity toggle);
 
 		// The selectable a hit element belongs to: itself, or its nearest ancestor with a UISelectable.
 		entt::entity FindSelectable(entt::entity element) const;

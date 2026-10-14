@@ -28,7 +28,11 @@ namespace Strata
 		OnTriggerEnter,
 		OnTriggerExit,
 		// Events of the entity's animator (see StrataScriptClassDesc and ScriptSystem).
-		OnAnimationEvent
+		OnAnimationEvent,
+		// Events of the game UI's widgets on the entity or naming it as their event target.
+		OnUIClick,
+		OnUIValueChanged,
+		OnUIFocusChanged
 	};
 
 	const char* ScriptCallbackToString(ScriptCallback callback);

@@ -93,7 +93,7 @@ namespace Strata::Tests
 	};
 
 	// Plays the started feature scene for c_FeatureFrames frames as the feature scripts expect: input is simulated around
-	// InputFeatures.PressFrame and the module is hot reloaded after c_FeatureReloadFrame. `advanceFrame` runs one frame of
+	// InputFeatures.PressFrame and UIFeatures.ClickFrame, and the module is hot reloaded after c_FeatureReloadFrame. `advanceFrame` runs one frame of
 	// the application (its asset manager and scene update); the global input state is reset before and after.
 	void PlayFeatureScene(Scene& scene, ScriptEngine& engine, const std::function<void()>& advanceFrame);
 

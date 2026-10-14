@@ -788,7 +788,8 @@ which means the module is not in the build or its system does not run in this mo
 | `ISkinningPoses`: each animator's pose (model-space joint matrices with a version), and which animators renderers drew | `AnimationSystem`; the editor's pose preview for edited scenes | `RenderScene` (palettes of skinned meshes), `SceneRenderer` (reports the animators of what it drew) |
 | `IAnimatorControl`: play, cross-fade, parameters, speed, state queries, joint transforms | `AnimationSystem` | script host (`Animator`), tools and tests |
 | `IAnimationEventSource`: listeners of the events controller states fire | `AnimationSystem` | `ScriptSystem` (`OnAnimationEvent`), tools and tests |
-| `IUIEvents`: listeners of the game UI's widget events (clicks, value changes, focus changes) | `GameUISystem` | tools and tests |
+| `IUIEvents`: listeners of the game UI's widget events (clicks, value changes, focus changes) | `GameUISystem` | `ScriptSystem` (`OnUIClick`, `OnUIValueChanged`, `OnUIFocusChanged`), tools and tests |
+| `IUIControl`: the game UI's elements (texts, images, colors, interactability, values), the focus, the pointer and the UI actions | `GameUISystem` | script host (`UIElement`, `UI`) |
 
 What outlives scenes is an engine service (`Core/EngineServices.h`): a module registers it in its registration function
 while the composition root runs, e.g. the Audio module's `IAudioOutput` (the master volume, which scripts change in any

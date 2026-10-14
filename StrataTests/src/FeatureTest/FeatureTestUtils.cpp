@@ -85,6 +85,80 @@ namespace Strata::Tests
 			}
 		}
 
+		// A UI element of the feature canvas where the player sees it: its rect in input coordinates.
+		UIBox FindUIElement(Scene& scene, std::string_view name)
+		{
+			GameUIScene& ui = GameUIScene::Get(scene);
+			const UIInputScreen input = GameUIScene::GetInputScreen();
+			UICanvasView view;
+			uint32_t element = 0;
+			INFO("UI element '", std::string(name), "' of the feature scene");
+			REQUIRE(ui.FindElement(RequireEntity(scene, name).GetHandle(), input.Screen, view, element));
+			const UIBox box = ui.GetElementBox(view, element);
+			return UIBox { box.Min * view.Scale / input.InputToPixels, box.Size * view.Scale / input.InputToPixels };
+		}
+
+		// The player UIFeatures expects around its click frame (see UIFeatures.cpp), as device input.
+		void SimulateUIInput(Scene& scene, int32_t frame, int32_t clickFrame)
+		{
+			switch (frame - clickFrame)
+			{
+				case -1:
+					Input::ProcessMouseMove(FindUIElement(scene, "Play Button").GetCenter());
+					break;
+				case 0:
+					Input::ProcessMouseButton(Mouse::ButtonLeft, true);
+					break;
+				case 2:
+					Input::ProcessMouseMove(FindUIElement(scene, "Sound Toggle").GetCenter());
+					Input::ProcessMouseButton(Mouse::ButtonLeft, true);
+					break;
+				case 4:
+				{
+					const UIBox slider = FindUIElement(scene, "Volume Slider");
+					Input::ProcessMouseMove({ slider.Min.x + 1.0f, slider.GetCenter().y });
+					Input::ProcessMouseButton(Mouse::ButtonLeft, true);
+					break;
+				}
+				case 5:
+				{
+					const UIBox slider = FindUIElement(scene, "Volume Slider");
+					Input::ProcessMouseMove({ slider.GetMax().x + slider.Size.x, slider.GetCenter().y });
+					break;
+				}
+				case 1:
+				case 3:
+				case 6:
+					Input::ProcessMouseButton(Mouse::ButtonLeft, false);
+					break;
+				case 7:
+					Input::ProcessKey(Key::Up, true);
+					break;
+				case 8:
+					Input::ProcessKey(Key::Up, false);
+					Input::ProcessText('O');
+					Input::ProcessText('K');
+					break;
+				case 9:
+				case 10:
+				{
+					// Gamepad 1 (InputFeatures watches gamepad 0): B down, then up.
+					const float axes[c_GamepadAxisCount] = {};
+					bool buttons[c_GamepadButtonCount] = {};
+					buttons[static_cast<size_t>(GamepadButton::B)] = frame - clickFrame == 9;
+					Input::ProcessGamepad(1, true, axes, buttons);
+					if (frame - clickFrame == 10)
+						Input::ProcessKey(Key::Enter, true);
+					break;
+				}
+				case 11:
+					Input::ProcessKey(Key::Enter, false);
+					break;
+				default:
+					break;
+			}
+		}
+
 		// Leaves the global input state clean for other tests, also when a check fails.
 		struct ScopedInput
 		{
@@ -284,12 +358,17 @@ namespace Strata::Tests
 		const int32_t pressFrame = GetField<int32_t>(GetScriptSystem(scene), RequireEntity(scene, "Input Features"), "InputFeatures", "PressFrame");
 		REQUIRE(pressFrame > 1);
 		REQUIRE(pressFrame + 2 < c_FeatureReloadFrame);
+		// The player's UI input comes after InputFeatures' (which checks that no mouse button is down before its press).
+		const int32_t clickFrame = GetField<int32_t>(GetScriptSystem(scene), RequireEntity(scene, "UI Features"), "UIFeatures", "ClickFrame");
+		REQUIRE(clickFrame - 1 > pressFrame + 2);
+		REQUIRE(clickFrame + 11 < c_FeatureReloadFrame);
 
 		for (int32_t frame = 0; frame < c_FeatureFrames; frame++)
 		{
 			INFO("Frame ", frame);
 			Input::BeginFrame();
 			SimulateInput(frame, pressFrame);
+			SimulateUIInput(scene, frame, clickFrame);
 			advanceFrame();
 			REQUIRE_FALSE(engine.IsFaulted());
 			// The scene's caches (world transforms, activity, hierarchy links, lookup indices) match a full recomputation after

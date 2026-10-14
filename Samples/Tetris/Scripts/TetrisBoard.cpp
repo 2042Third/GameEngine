@@ -386,7 +386,7 @@ private:
 	static void SetText(Entity entity, const std::string& text)
 	{
 		if (entity)
-			entity.SetProperty("UIText", "Text", text);
+			entity.GetUI().SetText(text);
 	}
 
 	static void PlaySound(AssetHandle clip)

@@ -19,6 +19,9 @@ namespace Strata
 			case ScriptCallback::OnTriggerEnter:   return "OnTriggerEnter";
 			case ScriptCallback::OnTriggerExit:    return "OnTriggerExit";
 			case ScriptCallback::OnAnimationEvent: return "OnAnimationEvent";
+			case ScriptCallback::OnUIClick:        return "OnUIClick";
+			case ScriptCallback::OnUIValueChanged: return "OnUIValueChanged";
+			case ScriptCallback::OnUIFocusChanged: return "OnUIFocusChanged";
 		}
 		return "Unknown";
 	}

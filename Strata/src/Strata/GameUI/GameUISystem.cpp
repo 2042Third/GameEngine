@@ -1,6 +1,8 @@
 #include "stpch.h"
 #include "Strata/GameUI/GameUISystem.h"
 
+#include "Strata/Asset/AssetManager.h"
+#include "Strata/Core/Log.h"
 #include "Strata/GameUI/GameUIComponents.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Input/MouseCodes.h"
@@ -68,10 +70,12 @@ namespace Strata
 		: m_Scene(scene)
 	{
 		scene.RegisterService<IUIEvents>(*this);
+		scene.RegisterService<IUIControl>(*this);
 	}
 
 	GameUISystem::~GameUISystem()
 	{
+		m_Scene.UnregisterService<IUIControl>(*this);
 		m_Scene.UnregisterService<IUIEvents>(*this);
 	}
 
@@ -312,21 +316,33 @@ namespace Strata
 		return m_Hovered != entt::null ? Entity(m_Hovered, &m_Scene) : Entity();
 	}
 
-	bool GameUISystem::SetFocus(Entity selectable)
+	bool GameUISystem::SetFocus(Entity selectable, std::string* outError)
 	{
 		if (!selectable)
 		{
 			Focus(entt::null);
 			return true;
 		}
-		if (selectable.GetScene() != &m_Scene || !IsInteractable(selectable.GetHandle()) || !GameUIScene::HasCanvases(m_Scene))
+		auto fail = [&](std::string reason)
+		{
+			if (outError)
+				*outError = std::move(reason);
 			return false;
+		};
+		if (selectable.GetScene() != &m_Scene || !m_Scene.GetRegistry().valid(selectable.GetHandle()))
+			return fail("the entity is not in the playing scene");
+		if (!selectable.HasComponent<UISelectableComponent>())
+			return fail(fmt::format("'{}' has no UISelectable component", selectable.GetName()));
+		if (!IsInteractable(selectable.GetHandle()))
+			return fail(fmt::format("'{}' is not interactable or not active", selectable.GetName()));
+		if (!GameUIScene::HasCanvases(m_Scene))
+			return fail(fmt::format("'{}' is not on a canvas", selectable.GetName()));
 		// Also before the first update, and after changes since the latest one: the layout the player will see next.
 		GameUIScene& ui = GameUIScene::Get(m_Scene);
 		RefreshViews(ui, GameUIScene::GetInputScreen().Screen);
 		UIBox box;
 		if (!FindOnScreen(ui, selectable.GetHandle(), box))
-			return false;
+			return fail(fmt::format("'{}' is not shown on a canvas that receives input", selectable.GetName()));
 		Focus(selectable.GetHandle());
 		return true;
 	}
@@ -550,6 +566,218 @@ namespace Strata
 			ui.SetSelectableState(selectable, desired, glm::mix(fade.From, fade.To, progress));
 			++it;
 		}
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// IUIControl
+	////////////////////////////////////////////////////////////////////////////////
+
+	template<typename Component>
+	Component* GameUISystem::FindElementComponent(Entity element, const char* componentName, std::string* outError)
+	{
+		if (!element || element.GetScene() != &m_Scene || !m_Scene.GetRegistry().valid(element.GetHandle()))
+		{
+			if (outError)
+				*outError = "the entity is not in the playing scene";
+			return nullptr;
+		}
+		Component* component = m_Scene.GetRegistry().try_get<Component>(element.GetHandle());
+		if (!component && outError)
+			*outError = fmt::format("'{}' has no {} component", element.GetName(), componentName);
+		return component;
+	}
+
+	bool GameUISystem::GetText(Entity element, std::string& outText, std::string* outError)
+	{
+		const UITextComponent* text = FindElementComponent<UITextComponent>(element, "UIText", outError);
+		if (!text)
+			return false;
+		outText = text->Text;
+		return true;
+	}
+
+	bool GameUISystem::SetText(Entity element, std::string_view text, std::string* outError)
+	{
+		const UITextComponent* component = FindElementComponent<UITextComponent>(element, "UIText", outError);
+		if (!component)
+			return false;
+		// Unchanged text is no change: games set their HUD every frame, and a signal would reshape it.
+		if (component->Text != text)
+			m_Scene.GetRegistry().patch<UITextComponent>(element.GetHandle(), [text](UITextComponent& value) { value.Text = std::string(text); });
+		return true;
+	}
+
+	bool GameUISystem::GetImage(Entity element, AssetHandle& outTexture, std::string* outError)
+	{
+		const UIImageComponent* image = FindElementComponent<UIImageComponent>(element, "UIImage", outError);
+		if (!image)
+			return false;
+		outTexture = image->Texture;
+		return true;
+	}
+
+	bool GameUISystem::SetImage(Entity element, AssetHandle texture, std::string* outError)
+	{
+		const UIImageComponent* image = FindElementComponent<UIImageComponent>(element, "UIImage", outError);
+		if (!image)
+			return false;
+		if (texture.IsValid())
+		{
+			const AssetManagerBase* assets = m_Scene.GetAssetManager();
+			if (!assets || assets->GetAssetType(texture) != AssetType::Texture)
+			{
+				if (outError)
+					*outError = fmt::format("asset {} is not a texture", texture.ToString());
+				return false;
+			}
+		}
+		if (image->Texture != texture)
+			m_Scene.GetRegistry().patch<UIImageComponent>(element.GetHandle(), [texture](UIImageComponent& value) { value.Texture = texture; });
+		return true;
+	}
+
+	bool GameUISystem::GetColor(Entity element, glm::vec4& outColor, std::string* outError)
+	{
+		entt::registry& registry = m_Scene.GetRegistry();
+		if (!element || element.GetScene() != &m_Scene || !registry.valid(element.GetHandle()))
+			return FindElementComponent<UIImageComponent>(element, "UIImage", outError) != nullptr;
+		if (const UIImageComponent* image = registry.try_get<UIImageComponent>(element.GetHandle()))
+		{
+			outColor = image->Color;
+			return true;
+		}
+		if (const UITextComponent* text = registry.try_get<UITextComponent>(element.GetHandle()))
+		{
+			outColor = text->Color;
+			return true;
+		}
+		if (outError)
+			*outError = fmt::format("'{}' has neither a UIImage nor a UIText component", element.GetName());
+		return false;
+	}
+
+	bool GameUISystem::SetColor(Entity element, const glm::vec4& color, std::string* outError)
+	{
+		entt::registry& registry = m_Scene.GetRegistry();
+		if (!element || element.GetScene() != &m_Scene || !registry.valid(element.GetHandle()))
+			return FindElementComponent<UIImageComponent>(element, "UIImage", outError) != nullptr;
+		if (!std::isfinite(color.r) || !std::isfinite(color.g) || !std::isfinite(color.b) || !std::isfinite(color.a))
+		{
+			if (outError)
+				*outError = "the color must be finite";
+			return false;
+		}
+		const glm::vec4 clamped = glm::clamp(color, glm::vec4(0.0f), glm::vec4(1.0f));
+		if (const UIImageComponent* image = registry.try_get<UIImageComponent>(element.GetHandle()))
+		{
+			if (image->Color != clamped)
+				registry.patch<UIImageComponent>(element.GetHandle(), [&clamped](UIImageComponent& value) { value.Color = clamped; });
+			return true;
+		}
+		if (const UITextComponent* text = registry.try_get<UITextComponent>(element.GetHandle()))
+		{
+			if (text->Color != clamped)
+				registry.patch<UITextComponent>(element.GetHandle(), [&clamped](UITextComponent& value) { value.Color = clamped; });
+			return true;
+		}
+		if (outError)
+			*outError = fmt::format("'{}' has neither a UIImage nor a UIText component", element.GetName());
+		return false;
+	}
+
+	bool GameUISystem::IsInteractable(Entity element, bool& outInteractable, std::string* outError)
+	{
+		const UISelectableComponent* selectable = FindElementComponent<UISelectableComponent>(element, "UISelectable", outError);
+		if (!selectable)
+			return false;
+		outInteractable = selectable->Interactable;
+		return true;
+	}
+
+	bool GameUISystem::SetInteractable(Entity element, bool interactable, std::string* outError)
+	{
+		const UISelectableComponent* selectable = FindElementComponent<UISelectableComponent>(element, "UISelectable", outError);
+		if (!selectable)
+			return false;
+		if (selectable->Interactable != interactable)
+			m_Scene.GetRegistry().patch<UISelectableComponent>(element.GetHandle(), [interactable](UISelectableComponent& value) { value.Interactable = interactable; });
+		// A disabled selectable loses the focus at the next update (OnUpdate checks it), with its events.
+		return true;
+	}
+
+	bool GameUISystem::GetValue(Entity element, float& outValue, std::string* outError)
+	{
+		entt::registry& registry = m_Scene.GetRegistry();
+		if (!element || element.GetScene() != &m_Scene || !registry.valid(element.GetHandle()))
+			return FindElementComponent<UISliderComponent>(element, "UISlider", outError) != nullptr;
+		if (const UISliderComponent* slider = registry.try_get<UISliderComponent>(element.GetHandle()))
+		{
+			outValue = slider->Value;
+			return true;
+		}
+		if (const UIToggleComponent* toggle = registry.try_get<UIToggleComponent>(element.GetHandle()))
+		{
+			outValue = toggle->IsOn ? 1.0f : 0.0f;
+			return true;
+		}
+		if (outError)
+			*outError = fmt::format("'{}' has neither a UISlider nor a UIToggle component", element.GetName());
+		return false;
+	}
+
+	bool GameUISystem::SetValue(Entity element, float value, std::string* outError)
+	{
+		entt::registry& registry = m_Scene.GetRegistry();
+		if (!element || element.GetScene() != &m_Scene || !registry.valid(element.GetHandle()))
+			return FindElementComponent<UISliderComponent>(element, "UISlider", outError) != nullptr;
+		if (!std::isfinite(value))
+		{
+			if (outError)
+				*outError = "the value must be finite";
+			return false;
+		}
+		if (const UISliderComponent* slider = registry.try_get<UISliderComponent>(element.GetHandle()))
+		{
+			const float clamped = ClampSliderValue(*slider, value);
+			if (clamped != slider->Value)
+				registry.patch<UISliderComponent>(element.GetHandle(), [clamped](UISliderComponent& current) { current.Value = clamped; });
+			return true;
+		}
+		if (const UIToggleComponent* toggle = registry.try_get<UIToggleComponent>(element.GetHandle()))
+		{
+			const bool on = value != 0.0f;
+			if (toggle->IsOn != on)
+				registry.patch<UIToggleComponent>(element.GetHandle(), [on](UIToggleComponent& current) { current.IsOn = on; });
+			if (on)
+				EnforceGroup(element.GetHandle());
+			return true;
+		}
+		if (outError)
+			*outError = fmt::format("'{}' has neither a UISlider nor a UIToggle component", element.GetName());
+		return false;
+	}
+
+	void GameUISystem::EnforceGroup(entt::entity toggle)
+	{
+		entt::registry& registry = m_Scene.GetRegistry();
+		const UUID group = registry.get<UIToggleComponent>(toggle).Group;
+		if (!group.IsValid())
+			return;
+		for (const auto [other, otherToggle] : registry.view<UIToggleComponent>().each())
+		{
+			if (other != toggle && otherToggle.IsOn && otherToggle.Group == group)
+				registry.patch<UIToggleComponent>(other, [](UIToggleComponent& value) { value.IsOn = false; });
+		}
+	}
+
+	bool GameUISystem::IsActionPressed(uint32_t action)
+	{
+		return action < c_UIActionCount && m_Actions.IsPressed(static_cast<UIAction>(action));
+	}
+
+	bool GameUISystem::IsActionDown(uint32_t action)
+	{
+		return action < c_UIActionCount && m_Actions.IsDown(static_cast<UIAction>(action));
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

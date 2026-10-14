@@ -28,8 +28,8 @@
 // The built-in providers: PhysicsSystem offers ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries and
 // ICharacterControl; AudioSystem offers IAudioPlayback; the Animation module's system offers ISkinningPoses, IAnimatorControl and
 // IAnimationEventSource (the editor's pose preview provides ISkinningPoses for edited scenes, where no system runs); the
-// GameUI module's system offers IUIEvents. All services are main thread only, like the scene. IAudioOutput, defined here
-// too, is an engine service (Core/EngineServices.h): it belongs to the process, not to a scene.
+// GameUI module's system offers IUIEvents and IUIControl. All services are main thread only, like the scene.
+// IAudioOutput, defined here too, is an engine service (Core/EngineServices.h): it belongs to the process, not to a scene.
 namespace Strata
 {
 
@@ -399,6 +399,41 @@ namespace Strata
 
 		virtual UIEventListenerID AddUIEventListener(UIEventCallback callback) = 0;
 		virtual bool RemoveUIEventListener(UIEventListenerID id) = 0;
+	};
+
+	// The game UI's elements for gameplay code (the script host), offered by the GameUI module's system while the scene plays.
+	// Element functions fail (false, with the reason in outError when given) for an invalid entity or one without the
+	// component they need: text needs a UIText, the image a UIImage, the color either (the image's tint first), interactable
+	// a UISelectable, the value a UISlider (its value, clamped and snapped like input) or a UIToggle (0 or 1; switching one on
+	// switches the others of its group off). Values set here raise no UI events: events report the player's input.
+	class IUIControl
+	{
+	public:
+		virtual ~IUIControl() = default;
+
+		virtual bool GetText(Entity element, std::string& outText, std::string* outError = nullptr) = 0;
+		virtual bool SetText(Entity element, std::string_view text, std::string* outError = nullptr) = 0;
+		virtual bool GetImage(Entity element, AssetHandle& outTexture, std::string* outError = nullptr) = 0;
+		// A null handle draws the image's color alone; other handles must be textures.
+		virtual bool SetImage(Entity element, AssetHandle texture, std::string* outError = nullptr) = 0;
+		virtual bool GetColor(Entity element, glm::vec4& outColor, std::string* outError = nullptr) = 0;
+		virtual bool SetColor(Entity element, const glm::vec4& color, std::string* outError = nullptr) = 0;
+		virtual bool IsInteractable(Entity element, bool& outInteractable, std::string* outError = nullptr) = 0;
+		virtual bool SetInteractable(Entity element, bool interactable, std::string* outError = nullptr) = 0;
+		virtual bool GetValue(Entity element, float& outValue, std::string* outError = nullptr) = 0;
+		virtual bool SetValue(Entity element, float value, std::string* outError = nullptr) = 0;
+
+		// The selectable with the keyboard and gamepad focus, or an invalid entity.
+		virtual Entity GetFocus() = 0;
+		// Focuses an interactable selectable shown on a canvas that receives input (FocusChanged events follow), or clears the
+		// focus with an invalid entity.
+		virtual bool SetFocus(Entity selectable, std::string* outError = nullptr) = 0;
+		// Whether the pointer is over a raycast target of a canvas that receives input (as of the UI's latest update).
+		virtual bool IsPointerOverUI() = 0;
+		// The UI actions (Input/UIActions.h, by index: Submit, Cancel, Up, Down, Left, Right) as of the UI's latest update;
+		// false for other indices.
+		virtual bool IsActionPressed(uint32_t action) = 0;
+		virtual bool IsActionDown(uint32_t action) = 0;
 	};
 
 	// The engine's audio output (AudioEngine), which outlives every scene: an engine service (Core/EngineServices.h) the

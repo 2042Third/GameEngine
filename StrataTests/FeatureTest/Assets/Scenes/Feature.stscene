@@ -2580,6 +2580,23 @@
 					"Name": {
 						"Name": "UI Features"
 					},
+					"Script": {
+						"Scripts": [
+							{
+								"Class": "UIFeatures",
+								"Fields": {
+									"ClickFrame": {
+										"Type": "Int",
+										"Value": 30
+									},
+									"Texture": {
+										"Type": "Asset",
+										"Value": "F7A0000000000005"
+									}
+								}
+							}
+						]
+					},
 					"Transform": {
 						"Rotation": [
 							0,
