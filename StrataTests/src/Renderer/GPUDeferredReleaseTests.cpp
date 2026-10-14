@@ -5,6 +5,7 @@
 #include "Strata/Renderer/DeferredReleaseQueue.h"
 
 #include <chrono>
+#include <cstddef>
 #include <vector>
 
 using namespace Strata;
@@ -149,6 +150,45 @@ TEST_SUITE("GPU.Renderer.DeferredRelease")
 		// Without a budget, everything completed goes.
 		queue.Collect();
 		CHECK(queue.GetPendingCount() == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A frame destroys completed releases within its budget and leaves the rest to the frames after")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		nvrhi::IDevice* device = gpu.GetNvrhiDevice();
+		DeferredReleaseQueue& releases = Renderer::GetDeferredReleases();
+		gpu.GetDevice().WaitForIdle();
+		releases.Collect();
+		REQUIRE(releases.GetPendingCount() == 0);
+
+		// Hundreds of textures released at once, as when a cache lets go of its thumbnails, all done on the GPU. Destroying
+		// one costs the driver microseconds to a tenth of a millisecond, so one frame's budget cannot hold them all: a frame
+		// that destroyed every completed resource held the editor for milliseconds.
+		constexpr size_t c_Count = 512;
+		std::vector<nvrhi::TextureHandle> textures;
+		for (size_t index = 0; index < c_Count; index++)
+			textures.push_back(CreateTarget(device, "DeferredRelease.FrameBudget"));
+		Renderer::ReleaseDeferred(std::vector<nvrhi::ResourceHandle>(textures.begin(), textures.end()));
+		textures.clear(); // The queue holds the only references
+		CHECK(releases.GetPendingCount() == c_Count);
+		gpu.GetDevice().WaitForIdle();
+
+		const auto frame = [&gpu]()
+		{
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			gpu.GetDevice().EndFrame();
+		};
+		frame();
+		CHECK(releases.GetPendingCount() < c_Count);
+		CHECK(releases.GetCompletedCount() > 0);
+		CHECK(releases.GetCompletedCount() == releases.GetPendingCount());
+		// Every frame destroys at least one, so the frames after drain the rest.
+		for (size_t round = 0; round < c_Count && releases.GetPendingCount() > 0; round++)
+			frame();
+		CHECK(releases.GetPendingCount() == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
