@@ -67,7 +67,7 @@ namespace Strata
 	}
 
 	GameUISystem::GameUISystem(Scene& scene)
-		: m_Scene(scene)
+		: m_Scene(scene), m_CanvasStorage(&scene.GetRegistry().storage<UICanvasComponent>())
 	{
 		scene.RegisterService<IUIEvents>(*this);
 		scene.RegisterService<IUIControl>(*this);
@@ -94,9 +94,7 @@ namespace Strata
 
 	void GameUISystem::OnUpdate(Timestep)
 	{
-		// Menus work at time scale 0: everything here runs on unscaled time.
-		const float deltaTime = m_Scene.GetUnscaledDeltaTime();
-		if (!GameUIScene::HasCanvases(m_Scene))
+		if (m_CanvasStorage->empty())
 		{
 			// No UI: the game gets every click (one storage-size check per frame).
 			if (m_Gesture != Gesture::None || m_PointerOverUI || m_Focused != entt::null || Input::IsPointerCaptured())
@@ -109,6 +107,8 @@ namespace Strata
 			return;
 		}
 
+		// Menus work at time scale 0: everything here runs on unscaled time.
+		const float deltaTime = m_Scene.GetUnscaledDeltaTime();
 		GameUIScene& ui = GameUIScene::Get(m_Scene);
 		const UIInputScreen screen = GameUIScene::GetInputScreen();
 		RefreshViews(ui, screen.Screen);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Core/Base.h"
+#include "Strata/GameUI/GameUIComponents.h"
 #include "Strata/GameUI/GameUIHitTest.h"
 #include "Strata/GameUI/GameUIScene.h"
 #include "Strata/Input/UIActions.h"
@@ -122,6 +123,8 @@ namespace Strata
 		UIVisualState GetDesiredState(entt::entity selectable) const;
 	private:
 		Scene& m_Scene;
+		// The scene's canvases, looked up once: a scene without UI costs a size check per frame.
+		const entt::storage_for_t<UICanvasComponent>* m_CanvasStorage = nullptr;
 		GameUIHitTester m_HitTester;
 		UIActionState m_Actions;
 		std::vector<UICanvasView> m_Views; // This update's (EnsureLayout's results move as layouts change)
