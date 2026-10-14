@@ -39,9 +39,9 @@ linked Jolt). Layers the table marks `"Tooling": true` (AssetPipeline, Network, 
 with `"Option"` is built only when that CMake option is on: Physics, Audio and Animation (`STRATA_WITH_PHYSICS`, `_AUDIO`,
 `_ANIMATION`, with their vendor libraries; `ST_WITH_*` definitions tell code which it has, Docs/DeveloperGuide.md,
 "Optional modules"). `Strata` is an `INTERFACE` library of every built layer a
-game contains, `StrataTooling` one of the tooling layers. CMake writes `<build>/Strata/LayerLibraries.json` (each layer's
-target, whether it is built, its sources and the layers it links), which `Architecture.Libraries` checks against the
-table. A new layer is a `Layers.json` entry only.
+game contains, `StrataTooling` one of the tooling layers. CMake writes `<build>/Strata/LayerLibraries.json` at the end of
+the configure (each layer's target, whether it is built, its sources and the layers its library really links, read from
+the target once every directory added its links), which `Architecture.Libraries` checks against the table. A new layer is a `Layers.json` entry only.
 
 ```mermaid
 graph TD

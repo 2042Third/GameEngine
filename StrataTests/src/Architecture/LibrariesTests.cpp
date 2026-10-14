@@ -131,11 +131,13 @@ TEST_SUITE("Architecture.Libraries")
 					problems.push_back(fmt::format("{} is in the libraries of {} and {}", source, libraryOfFile[source], layer.Name));
 			}
 
-			// A library links exactly the built layers its layer may include, in the table's order.
+			// A library links exactly the built layers its layer may include, in the table's order. "Links" holds what the
+			// target links once every directory added its links, so a link added anywhere else (a vendor table row, another
+			// CMakeLists) shows here. A layer that is not built has no library and links nothing.
 			std::vector<std::string> expectedLinks;
 			for (const std::string& dependency : layer.MayInclude)
 			{
-				if (builtLayers.contains(dependency))
+				if (built && builtLayers.contains(dependency))
 					expectedLinks.push_back(dependency);
 			}
 			CHECK(GetStrings(library, "Links") == expectedLinks);
