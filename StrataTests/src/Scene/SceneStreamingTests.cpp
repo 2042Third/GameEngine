@@ -146,8 +146,9 @@ TEST_SUITE("Scene.Streaming")
 		CHECK(scene.GetRootEntities() == std::vector<UUID> { existing.GetUUID(), subRootID });
 		CheckSceneCaches(scene);
 
-		// The scene's setting bounds every slice; it is saved with the scene.
+		// The scene's setting bounds every slice; it is saved with the scene, and so is the unloads' bound.
 		scene.GetSettings().MaxEntitiesInstantiatedPerFrame = 1500;
+		scene.GetSettings().MaxEntitiesDestroyedPerFrame = 700;
 		const SubSceneID second = scene.BeginAdditiveLoad(MakeNestedScene(6000, "Second"));
 		for (const size_t count : UpdateUntilSettled(scene, second))
 			CHECK(count <= 1500);
@@ -156,17 +157,21 @@ TEST_SUITE("Scene.Streaming")
 		const Ref<Scene> reloaded = CreateRef<Scene>();
 		REQUIRE_MESSAGE(SceneSerializer::Deserialize(*reloaded, SceneSerializer::Serialize(scene), &error), error);
 		CHECK(reloaded->GetSettings().MaxEntitiesInstantiatedPerFrame == 1500);
+		CHECK(reloaded->GetSettings().MaxEntitiesDestroyedPerFrame == 700);
 		// Sub-scene tags are runtime only: neither saved nor copied.
 		CHECK(CountSubSceneTags(scene) == 2);
 		CHECK(CountSubSceneTags(*reloaded) == 0);
 		CHECK(CountSubSceneTags(*Scene::Copy(running)) == 0);
 
-		// Unloading removes exactly what each brought.
+		// Unloading removes exactly what each brought (finished at once here; updates destroy it a slice at a time).
 		CHECK(scene.UnloadSubScene(id));
-		CHECK_FALSE(scene.UnloadSubScene(id));
+		CHECK(scene.UnloadSubScene(id)); // Being unloaded: nothing changes
+		scene.FlushSubSceneUnloads();
 		CHECK(scene.GetSubSceneStatus(id) == nullptr);
+		CHECK_FALSE(scene.UnloadSubScene(id));
 		CHECK(scene.GetEntityCount() == 6001);
 		CHECK(scene.UnloadSubScene(second));
+		scene.FlushSubSceneUnloads();
 		CHECK(scene.GetEntityCount() == 1);
 		CHECK(scene.GetSubScenes().empty());
 		CheckSceneCaches(scene);
@@ -328,6 +333,9 @@ TEST_SUITE("Scene.Streaming")
 		listener.Disconnect();
 		CHECK(scene.GetSubSceneStatus(doomedID)->State == SubSceneState::Failed);
 		CHECK(listener.Unloaded);
+		// The unload started once the update returned; its entities go over the next updates, or at once here.
+		CHECK(scene.GetSubSceneStatus(resident)->State == SubSceneState::Unloading);
+		scene.FlushSubSceneUnloads();
 		CHECK(scene.GetSubSceneStatus(resident) == nullptr);
 		CHECK(scene.GetEntityCount() == 4);
 		CHECK(CountSubSceneTags(scene) == 0);
@@ -395,6 +403,7 @@ TEST_SUITE("Scene.Streaming")
 		CHECK(scene.FindEntityByName("B49").GetParent() == streamedGroupB);
 		CheckSceneCaches(scene);
 		CHECK(scene.UnloadSubScene(id));
+		scene.FlushSubSceneUnloads();
 		CHECK(scene.GetEntityCount() == 1);
 		CheckSceneCaches(scene);
 
@@ -567,6 +576,7 @@ TEST_SUITE("Scene.Streaming")
 		CHECK(scene.GetRegistry().get<SubSceneComponent>(roots[0].GetHandle()).Source == fixture.SceneHandle);
 		CHECK(roots[4].GetComponent<TransformComponent>().Translation.x == 4.0f);
 		CHECK(scene.UnloadSubScene(loaded));
+		scene.FlushSubSceneUnloads();
 		CHECK(saveEntities() == before);
 
 		// What cannot load fails at once, adding nothing.

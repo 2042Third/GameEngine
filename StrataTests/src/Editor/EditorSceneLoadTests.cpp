@@ -529,9 +529,19 @@ TEST_SUITE("Editor.SceneLoad")
 		const int64_t failed = project.Run("scene.loadStatus")["subScenes"][1]["subScene"].get<int64_t>();
 		CHECK(project.Run("scene.unloadAdditive", { { "subScene", failed } })["entities"] == entities + 1);
 
+		// Unloaded, it leaves the game at once (inactive) and its entities go over the next frames.
 		const nlohmann::json unloaded = project.Run("scene.unloadAdditive", { { "subScene", subScene } });
-		CHECK(unloaded["entities"] == entities);
+		CHECK(unloaded["entities"] == entities + 1);
+		CHECK(unloaded["unloadingEntities"] == 1);
+		REQUIRE(running->GetEntityByUUID(*boss).IsValid());
+		CHECK_FALSE(running->IsActiveInHierarchy(running->GetEntityByUUID(*boss)));
+		const nlohmann::json unloading = project.Run("scene.loadStatus")["subScenes"];
+		REQUIRE(unloading.size() == 1);
+		CHECK(unloading[0]["state"] == "Unloading");
+		CHECK(unloading[0]["destroyedEntities"] == 0);
+		context.Update(Timestep(1.0f / 60.0f));
 		CHECK_FALSE(running->GetEntityByUUID(*boss).IsValid());
+		CHECK(running->GetEntityCount() == entities);
 		CHECK(project.Run("scene.loadStatus")["subScenes"].empty());
 		const EditorCommandResult unknown = failure("scene.unloadAdditive", { { "subScene", subScene } });
 		CHECK(unknown.ErrorKind == EditorCommandError::InvalidParameters);

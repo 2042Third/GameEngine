@@ -84,6 +84,7 @@ namespace Strata
 		struct StreamingSummary
 		{
 			uint32_t MaxEntitiesInstantiatedPerFrame = 0;
+			uint32_t MaxEntitiesDestroyedPerFrame = 0;
 			std::string Text;
 		};
 		std::optional<StreamingSummary> m_StreamingSummary;

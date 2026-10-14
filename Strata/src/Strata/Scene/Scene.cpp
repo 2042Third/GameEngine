@@ -6,6 +6,7 @@
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scene/SceneWorkBudget.h"
 #include "Strata/Scene/SubSceneLoad.h"
 #include "Strata/Scene/UnknownComponents.h"
 
@@ -395,6 +396,23 @@ namespace Strata
 				stack.push_back(child);
 		}
 		return subtree;
+	}
+
+	size_t Scene::CountSubtree(Entity entity) const
+	{
+		if (!entity.IsValid() || entity.GetScene() != this)
+			return 0;
+		size_t count = 0;
+		std::vector<entt::entity> stack = { entity.GetHandle() };
+		while (!stack.empty())
+		{
+			const entt::entity current = stack.back();
+			stack.pop_back();
+			count++;
+			for (entt::entity child = GetHierarchy(current).FirstChild; child != entt::null; child = GetHierarchy(child).NextSibling)
+				stack.push_back(child);
+		}
+		return count;
 	}
 
 	void Scene::CollectHierarchyOrder(std::vector<entt::entity>& outEntities) const
@@ -1856,6 +1874,8 @@ namespace Strata
 		if (!m_IsRunning)
 			return;
 
+		// Sub-scenes being unloaded go before the systems stop, so that their scripts still get OnDestroy.
+		FlushSubSceneUnloads();
 		m_IsUpdating = true;
 		for (auto it = m_Systems.rbegin(); it != m_Systems.rend(); ++it)
 			(*it)->OnRuntimeStop();
@@ -1905,14 +1925,19 @@ namespace Strata
 			m_Services.erase(it);
 	}
 
-	void Scene::OnUpdateRuntime(Timestep timestep)
+	void Scene::OnUpdateRuntime(Timestep timestep, SceneWorkBudget* budget)
 	{
 		ST_PROFILE_FUNCTION();
 
 		// Before the systems update, so that they see the slice's entities in this update. Idle frames of scenes without
 		// sub-scenes (nearly all) skip even the call.
 		if (!m_SubScenes.empty())
-			UpdateSubScenes();
+		{
+			if (budget)
+				UpdateSubScenes(*budget);
+			else
+				UpdateSubScenes();
+		}
 		if (!m_IsRunning)
 		{
 			UpdateWorldTransforms();
@@ -2024,11 +2049,16 @@ namespace Strata
 			system->OnPausedChanged(paused);
 	}
 
-	void Scene::OnUpdateEditor(Timestep)
+	void Scene::OnUpdateEditor(Timestep, SceneWorkBudget* budget)
 	{
 		ST_PROFILE_FUNCTION();
 		if (!m_SubScenes.empty())
-			UpdateSubScenes();
+		{
+			if (budget)
+				UpdateSubScenes(*budget);
+			else
+				UpdateSubScenes();
+		}
 		UpdateWorldTransforms();
 #ifdef ST_DEBUG
 		AssertCachesValid();

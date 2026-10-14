@@ -546,6 +546,7 @@ TEST_SUITE("Editor.Replay")
 			CHECK(editor.Context.GetActiveScene()->FindEntityByName("Prop"));
 			CHECK(editor.Run("entity.create", { { "name", "Played" } }).contains("warning"));
 			editor.Run("scene.unloadAdditive", { { "subScene", loaded["subScene"] } });
+			editor.Frame(); // Its entities go over the next frames
 			CHECK_FALSE(editor.Context.GetActiveScene()->FindEntityByName("Prop"));
 			editor.Run("play.stop");
 			editor.Run("entity.create", { { "name", "After" } });

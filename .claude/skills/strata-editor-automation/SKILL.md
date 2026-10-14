@@ -158,7 +158,10 @@ editor started with `--no-gpu` (use `--headless`):
   seconds, ...}`; they appear over several frames, at most the scene's `maxEntitiesInstantiatedPerFrame` per frame
   (`scene.setSettings`). Deleting one of its entities before its children appeared leaves those out (`skippedEntities`).
   Its entities keep their IDs, so loading the same scene twice fails; `scene.unloadAdditive
-  {subScene}` removes one (also a failed one), and `play.stop` discards them all with the running copy.
+  {subScene}` removes one (also a failed one): its entities leave the game at once (inactive) and are destroyed over the
+  next frames (`unloadingEntities`; `scene.loadStatus` shows it `Unloading` with `destroyedEntities`, at most the scene's
+  `maxEntitiesDestroyedPerFrame` a frame), and loading the same scene again meanwhile waits until they are gone.
+  `play.stop` discards them all with the running copy.
 - `camera.get`; `camera.set {position?, target?, yaw?, pitch?, distance?, fov?, near?, far?, flySpeed?}`;
   `camera.focus {entities?}` frames the given (or selected) entities. Every scene remembers its own editor camera; a
   scene opened for the first time is framed on what it renders, seen from the direction of its primary camera.
@@ -316,7 +319,8 @@ To rest entities on what is below them,
 undo step (as the inspector does for a multi-selection); `entity.rename`, `entity.delete`, `scene.setSettings` (gravity,
 timestep, and `physicsCapacity {maxBodies, maxBodyPairs, maxContactConstraints}` for scenes that spawn many bodies while
 they play; 0 sizes a capacity from the bodies the scene starts with; set capacities in edit mode: they apply when play
-starts; `maxEntitiesInstantiatedPerFrame` bounds how many entities sub-scenes create per frame, 5000 by default).
+starts; `maxEntitiesInstantiatedPerFrame` and `maxEntitiesDestroyedPerFrame` bound how many entities sub-scenes create
+and destroy per frame, 5000 each by default).
 Collision layers: `scene.setSettings {"layerNames": {"1": "Player", "2": "Debris"}, "layerCollisions":
 [{"layers": ["Player", "Debris"], "collide": false}]}` names layers and keeps pairs apart (`resetLayerCollisions: true`
 lets everything collide again first; `scene.info` lists `physicsLayers`), and `RigidBody.Layer` and

@@ -758,9 +758,13 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   through `SceneLoader` (pinned at `SubSceneOptions::Priority` until every entity exists), the prepared scene is compiled
   into an `EntityPrototype` on the job system (which also drops the prepared scene, so the main thread never pays for
   destroying it), and its entities are created by `Scene::UpdateSubScenes`, which `OnUpdateRuntime` and `OnUpdateEditor`
-  call first: in slices of at most `SceneSettings::MaxEntitiesInstantiatedPerFrame` entities per update for all sub-scenes
-  together (default 5,000; saved with the scene, `scene.setSettings`, the Inspector's Streaming section), cut in chunks of
-  512 and stopped once `Scene::c_MaxInstantiationMillisecondsPerFrame` (2 ms) went by. Each slice's entities are complete
+  call first with the frame's `SceneWorkBudget` (`Scene/SceneWorkBudget.h`: a deadline and the entities still to create and
+  to destroy, made once per frame by the scenes' owner, `GameRuntime::Update` and `EditorContext::Update`, with
+  `SceneWorkBudget::ForFrame`: 4 ms; without one the scene makes its own): in slices of at most
+  `SceneSettings::MaxEntitiesInstantiatedPerFrame` entities per update for all sub-scenes together (default 5,000; saved with
+  the scene, `scene.setSettings`, the Inspector's Streaming section), cut in chunks of 512 and stopped once
+  `Scene::c_MaxSubSceneMillisecondsPerFrame` (2 ms, for creation and destruction together; `SceneWorkBudget::SubSceneMilliseconds`)
+  went by. Each slice's entities are complete
   when it returns (`ContinueInstantiation`), so systems treat them like any other: their component signals give scripts
   `OnCreate` at the next sync point, physics its bodies in its batches, audio its voices and the render scene its proxies.
   An entity whose parent an earlier slice created and gameplay or the editor destroyed since is not created, nor are its
@@ -768,15 +772,25 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   The entities keep their IDs, so a sub-scene with an ID the scene has already fails with that ID in its error: checked for
   all of them before the first entity exists, and again per slice for IDs the scene gained meanwhile, where the failure
   destroys what the sub-scene created. Its top-level entities carry a runtime-only `SubSceneComponent` (not registered:
-  never saved, copied or shown) naming it, and `UnloadSubScene(id)` cancels the load (releasing every pin) and destroys
-  them with `DestroyEntities` (systems hear `OnEntityDestroying`; deferred while the scene updates). `GetSubSceneStatus`
-  reports the state (`Loading`, `Instantiating`, `Loaded`, `Failed` with the error), the progress (half the closure's
-  bytes, half the entities), the entities created and the slices; failed sub-scenes stay until unloaded. A sub-scene's own
+  never saved, copied or shown) naming it. `UnloadSubScene(id)` cancels the load (releasing every pin) and makes those
+  top-level entities inactive at once (`InactiveComponent`: the sub-scene leaves rendering, the scripts' updates, physics, in
+  one batch, and audio in that frame); the sub-scene is then `Unloading`, and each `UpdateSubScenes` destroys a slice first
+  (before creating), within `SceneSettings::MaxEntitiesDestroyedPerFrame` (default 5,000) and the shared time limit: the
+  first entities of a post-order walk from its top-level entities as they are then (children before parents, so the
+  slice's topmost ones are destroyed with their descendants in one `DestroyEntities` per chunk of 512; systems hear
+  `OnEntityDestroying`, scripts get `OnDestroy`). What the game moved out of its subtrees meanwhile survives. Its ID is
+  known until its last entity is gone (`SubSceneStatus::DestroyedEntities`); a second unload changes nothing; the same
+  scene loaded again meanwhile waits in `Loading` until it is gone (its entities keep the IDs the new ones take);
+  `FlushSubSceneUnloads` finishes every unload at once (tools, tests, and `OnRuntimeStop` before the systems stop).
+  `GetSubSceneStatus` reports the state (`Loading`, `Instantiating`, `Loaded`, `Failed` with the error, `Unloading`), the
+  progress (half the closure's bytes, half the entities), the entities created and the slices; failed sub-scenes stay until
+  unloaded. A sub-scene's own
   settings (gravity...) are not applied. Scripts load sub-scenes with `Scene::LoadAdditive` (the SDK's `SubScene`), read
   an asset closure's progress with `Assets::GetLoadProgress` (`ScriptSystem::GetAssetLoadProgress`, an
   `AssetGroupRequest` the scene pins until `Assets::Release`) and make many prefab instances with
   `Scene::InstantiateMany`; the editor's commands are `scene.loadAdditive` (play mode; deferred until the sub-scene's entities
-  exist), `scene.unloadAdditive` and `scene.loadStatus` (`subScenes`).
+  exist), `scene.unloadAdditive` (answers at once with `unloadingEntities`) and `scene.loadStatus` (`subScenes`, with
+  `destroyedEntities` while one unloads).
 - A scene knows the scene asset it was loaded from or saved as (`Scene::GetSourceAsset`, set when a scene asset's
   scene is taken or copied and by the editor's save-as) and keeps an ID across its copies (`GetLineageID`: the source
   asset, else an ID of its own), by which systems recognize it from one play session to the next.

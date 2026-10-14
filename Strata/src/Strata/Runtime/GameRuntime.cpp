@@ -5,6 +5,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Profiling.h"
 #include "Strata/Renderer/RenderScene.h"
+#include "Strata/Scene/SceneWorkBudget.h"
 
 #include <algorithm>
 #include <utility>
@@ -240,10 +241,12 @@ namespace Strata
 		if (m_QuitRequest)
 			return;
 		m_AssetManager->Update();
+		// One budget for the frame's loading work: the running scene's sub-scenes draw from it.
+		SceneWorkBudget budget = SceneWorkBudget::ForFrame(m_Scene ? m_Scene->GetSettings() : SceneSettings());
 		UpdateSceneLoads();
 		if (!m_Scene)
 			return;
-		m_Scene->OnUpdateRuntime(timestep);
+		m_Scene->OnUpdateRuntime(timestep, &budget);
 		CheckScriptFault();
 		HandleSceneRequests();
 	}

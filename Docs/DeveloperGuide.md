@@ -783,7 +783,8 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   progress the owner sets (`Scene::GetSceneLoadProgress`, negative without a switch).
 - Scene streaming (host functions `LoadSceneAdditive`, `UnloadSubScene`, `IsSubSceneLoaded`, `GetSceneLoadProgress`,
   `GetAssetLoadProgress` and `InstantiateMany`, appended to ABI version 1 in that order): `Scene::LoadAdditive` loads a
-  scene asset into the playing scene (`Scene::LoadSubScene`) and returns a `SubScene` (`IsLoaded`, `Unload`);
+  scene asset into the playing scene (`Scene::LoadSubScene`) and returns a `SubScene` (`IsLoaded`, `Unload`: the
+  sub-scene leaves the game at once and its entities are destroyed over the next frames, `Scene::UnloadSubScene`);
   `Assets::GetLoadProgress` requests what using an asset needs (its dependency closure without other scenes it names)
   and returns the share of its bytes in
   (`ScriptSystem::GetAssetLoadProgress`: pinned like `RequestLoad` until `Assets::Release`; at 1 a prefab's instance draws

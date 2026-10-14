@@ -258,6 +258,7 @@ namespace Strata
 		settings["FixedTimestep"] = FloatToJson(scene.GetSettings().FixedTimestep);
 		settings["MaxFixedStepsPerFrame"] = scene.GetSettings().MaxFixedStepsPerFrame;
 		settings["MaxEntitiesInstantiatedPerFrame"] = scene.GetSettings().MaxEntitiesInstantiatedPerFrame;
+		settings["MaxEntitiesDestroyedPerFrame"] = scene.GetSettings().MaxEntitiesDestroyedPerFrame;
 		const PhysicsCapacitySettings& capacity = scene.GetSettings().PhysicsCapacity;
 		settings["PhysicsCapacity"] = {
 			{ "MaxBodies", capacity.MaxBodies },
@@ -327,6 +328,8 @@ namespace Strata
 			sceneSettings.MaxFixedStepsPerFrame = static_cast<uint32_t>(std::clamp<uint64_t>(JsonUtils::GetUInt(*settings, "MaxFixedStepsPerFrame", sceneSettings.MaxFixedStepsPerFrame), 1, 64));
 			sceneSettings.MaxEntitiesInstantiatedPerFrame = static_cast<uint32_t>(std::clamp<uint64_t>(JsonUtils::GetUInt(*settings, "MaxEntitiesInstantiatedPerFrame",
 				sceneSettings.MaxEntitiesInstantiatedPerFrame), 1, SceneSettings::c_MaxEntitiesInstantiatedLimit));
+			sceneSettings.MaxEntitiesDestroyedPerFrame = static_cast<uint32_t>(std::clamp<uint64_t>(JsonUtils::GetUInt(*settings, "MaxEntitiesDestroyedPerFrame",
+				sceneSettings.MaxEntitiesDestroyedPerFrame), 1, SceneSettings::c_MaxEntitiesDestroyedLimit));
 			// Scenes saved before capacities existed have none: every capacity is automatic.
 			if (const nlohmann::json* capacity = JsonUtils::Find(*settings, "PhysicsCapacity"))
 				ReadPhysicsCapacity(*capacity, sceneSettings.PhysicsCapacity, outWarnings);

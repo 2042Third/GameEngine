@@ -22,6 +22,7 @@
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/SceneLoader.h>
 #include <Strata/Scene/SceneSerializer.h>
+#include <Strata/Scene/SceneWorkBudget.h>
 
 #include <algorithm>
 #include <limits>
@@ -1800,10 +1801,12 @@ namespace Strata
 		// An inspected asset that was deleted (also outside the editor) is no longer shown.
 		if (m_InspectedAsset.IsValid() && !AssetManager::IsHandleValid(m_InspectedAsset))
 			InspectEntities();
+		// One budget for the frame's loading work: the updated scene's sub-scenes draw from it.
+		SceneWorkBudget budget = SceneWorkBudget::ForFrame((m_RuntimeScene ? m_RuntimeScene : m_EditScene)->GetSettings());
 		if (m_RuntimeScene)
 		{
 			UpdateRuntimeSceneLoad();
-			m_RuntimeScene->OnUpdateRuntime(timestep);
+			m_RuntimeScene->OnUpdateRuntime(timestep, &budget);
 			// A crashed game stops; one that still runs gets what it asked for.
 			if (!StopOnScriptFault())
 				HandleRuntimeRequests();
@@ -1814,7 +1817,7 @@ namespace Strata
 			// rolled back (the opened scene is caught up with once it is in).
 			if (!IsSceneLoading())
 				m_PrefabSync.Update(*this);
-			m_EditScene->OnUpdateEditor(timestep);
+			m_EditScene->OnUpdateEditor(timestep, &budget);
 		}
 		// Before the viewports render: previews whose assets arrived get their poses.
 		if (m_AnimationPreview)

@@ -82,8 +82,9 @@ namespace Strata
 			return host && m_ID != 0 && host->IsSubSceneLoaded(Detail::GetContext(), m_ID);
 		}
 
-		// Removes it: stops its load, or destroys its entities with their descendants (at the end of the frame; their scripts
-		// receive OnDestroy). Returns false when it is gone already.
+		// Removes it: stops its load, and takes its entities out of the game at once (inactive: not drawn, updated or
+		// simulated); they are destroyed with their descendants over the following frames (their scripts receive OnDestroy).
+		// Loading the same scene again meanwhile waits until they are gone. Returns false when it is gone already.
 		bool Unload() const
 		{
 			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(UnloadSubScene);

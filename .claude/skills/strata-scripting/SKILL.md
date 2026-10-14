@@ -289,7 +289,7 @@ void OnCreate() override
 void OnUpdate(float) override
 {
 	if (m_Room.IsLoaded() && PlayerLeft())
-		m_Room.Unload();                                   // Its entities go at the end of the frame (OnDestroy runs)
+		m_Room.Unload();                                   // Leaves the game at once; its entities go over the next frames (OnDestroy runs)
 	if (!m_Planted && Assets::GetLoadProgress(Tree) >= 1.0f)
 	{
 		std::vector<glm::mat4> transforms;                 // Translation, rotation and scale per instance

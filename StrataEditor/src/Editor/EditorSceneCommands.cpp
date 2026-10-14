@@ -76,6 +76,7 @@ namespace Strata
 				{ "fixedTimestep", settings.FixedTimestep },
 				{ "maxFixedStepsPerFrame", settings.MaxFixedStepsPerFrame },
 				{ "maxEntitiesInstantiatedPerFrame", settings.MaxEntitiesInstantiatedPerFrame },
+				{ "maxEntitiesDestroyedPerFrame", settings.MaxEntitiesDestroyedPerFrame },
 				{ "physicsCapacity", {
 					{ "maxBodies", settings.PhysicsCapacity.MaxBodies },
 					{ "maxBodyPairs", settings.PhysicsCapacity.MaxBodyPairs },
@@ -304,7 +305,7 @@ namespace Strata
 
 		nlohmann::json DescribeSubScene(const SubSceneStatus& status)
 		{
-			return {
+			nlohmann::json value = {
 				{ "subScene", status.ID },
 				{ "scene", status.Scene.IsValid() ? UUIDToJson(status.Scene) : nlohmann::json(nullptr) },
 				{ "state", SubSceneStateToString(status.State) },
@@ -314,6 +315,10 @@ namespace Strata
 				{ "totalEntities", status.TotalEntities },
 				{ "slices", status.Slices },
 				{ "error", status.Error.empty() ? nlohmann::json(nullptr) : nlohmann::json(status.Error) } };
+			// Being unloaded: its entities are inactive and go a slice per frame.
+			if (status.State == SubSceneState::Unloading)
+				value["destroyedEntities"] = status.DestroyedEntities;
+			return value;
 		}
 
 		// What scene.loadStatus reports: the scene being opened or the last one, the running game's switch and its sub-scenes.
@@ -601,8 +606,11 @@ namespace Strata
 			} });
 
 		registry.Register({ "scene.unloadAdditive",
-			"Removes a sub-scene from the running game (play mode only): stops its load, releasing what it held loaded, or destroys its entities "
-			"with their descendants (their scripts get OnDestroy). Returns {subScene, entities (the running scene's count afterwards), warning}.",
+			"Removes a sub-scene from the running game (play mode only): stops its load, releasing what it held loaded, and takes its entities out "
+			"of the game at once (inactive: no rendering, scripts' updates, physics or audio); they are destroyed with their descendants over the "
+			"following frames (at most the scene's maxEntitiesDestroyedPerFrame a frame; their scripts get OnDestroy; scene.loadStatus shows the "
+			"sub-scene Unloading with destroyedEntities until its last entity is gone). Returns {subScene, entities (the running scene's count now), "
+			"unloadingEntities (those still to destroy), warning}.",
 			ObjectSchema({ { "subScene", IntegerSchema("The sub-scene's number (scene.loadAdditive, scene.loadStatus)", 1, std::numeric_limits<int64_t>::max()) } },
 				{ "subScene" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
@@ -619,8 +627,11 @@ namespace Strata
 				if (!scene.GetSubSceneStatus(static_cast<SubSceneID>(id)))
 					return EditorCommandResult::InvalidParameters(fmt::format("The running scene has no sub-scene {} (see scene.loadStatus)", id));
 				scene.UnloadSubScene(static_cast<SubSceneID>(id));
+				size_t unloading = 0;
+				for (const Entity root : scene.GetSubSceneRoots(static_cast<SubSceneID>(id)))
+					unloading += scene.CountSubtree(root);
 				EditorCommandResult result = EditorCommandResult::Ok({ { "subScene", id }, { "entities", scene.GetEntityCount() },
-					{ "warning", GetRunningCopyWarning(context) } });
+					{ "unloadingEntities", unloading }, { "warning", GetRunningCopyWarning(context) } });
 				result.RunningCopy = true;
 				return result;
 			} });
@@ -689,6 +700,9 @@ namespace Strata
 				{ "maxEntitiesInstantiatedPerFrame", IntegerSchema("Entities sub-scenes loading into the scene (scene.loadAdditive, scripts' "
 					"Scene::LoadAdditive) may create per frame, all together (default 5000); each frame also stops creating after about 2 ms", 1,
 					SceneSettings::c_MaxEntitiesInstantiatedLimit) },
+				{ "maxEntitiesDestroyedPerFrame", IntegerSchema("Entities sub-scenes being unloaded (scene.unloadAdditive, scripts' SubScene::Unload, a "
+					"world's cells) may destroy per frame, all together (default 5000); creation and destruction together stop after about 2 ms a frame",
+					1, SceneSettings::c_MaxEntitiesDestroyedLimit) },
 				{ "physicsCapacity", std::move(capacitySchema) },
 				{ "layerNames", layerNamesSchema },
 				{ "resetLayerCollisions", BoolSchema("Lets every pair of layers collide again before layerCollisions applies") },
@@ -726,6 +740,8 @@ namespace Strata
 				after.MaxFixedStepsPerFrame = static_cast<uint32_t>(arguments.GetInt("maxFixedStepsPerFrame", before.MaxFixedStepsPerFrame, 1, 64));
 				after.MaxEntitiesInstantiatedPerFrame = static_cast<uint32_t>(arguments.GetInt("maxEntitiesInstantiatedPerFrame", before.MaxEntitiesInstantiatedPerFrame,
 					1, SceneSettings::c_MaxEntitiesInstantiatedLimit));
+				after.MaxEntitiesDestroyedPerFrame = static_cast<uint32_t>(arguments.GetInt("maxEntitiesDestroyedPerFrame", before.MaxEntitiesDestroyedPerFrame,
+					1, SceneSettings::c_MaxEntitiesDestroyedLimit));
 				if (arguments.GetBool("resetLayerCollisions", false))
 					after.PhysicsLayers.ResetMatrix();
 				if (!arguments.IsValid())
@@ -740,7 +756,8 @@ namespace Strata
 
 				const bool changed = after.Gravity != before.Gravity || after.FixedTimestep != before.FixedTimestep
 					|| after.MaxFixedStepsPerFrame != before.MaxFixedStepsPerFrame || after.PhysicsCapacity != before.PhysicsCapacity
-					|| after.MaxEntitiesInstantiatedPerFrame != before.MaxEntitiesInstantiatedPerFrame || after.PhysicsLayers != before.PhysicsLayers;
+					|| after.MaxEntitiesInstantiatedPerFrame != before.MaxEntitiesInstantiatedPerFrame
+					|| after.MaxEntitiesDestroyedPerFrame != before.MaxEntitiesDestroyedPerFrame || after.PhysicsLayers != before.PhysicsLayers;
 				scene.GetSettings() = after;
 				if (changed && !context.IsPlaying())
 					context.GetUndoStack().Record(CreateScope<SceneSettingsAction>(scene, before, after));

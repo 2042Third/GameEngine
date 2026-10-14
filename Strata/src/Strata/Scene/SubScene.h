@@ -28,7 +28,8 @@ namespace Strata
 		Loading = 0,   // The scene asset and everything it uses load (SceneLoader), then its entities are compiled (job system)
 		Instantiating, // Its entities are created, a slice in each update of the scene
 		Loaded,        // Every entity of it exists
-		Failed         // The asset could not be loaded, or its entities could not be added (Error says why); nothing of it remains
+		Failed,        // The asset could not be loaded, or its entities could not be added (Error says why); nothing of it remains
+		Unloading      // Being unloaded: its entities are inactive and go a slice per update (Scene::UnloadSubScene)
 	};
 
 	const char* SubSceneStateToString(SubSceneState state);
@@ -59,6 +60,7 @@ namespace Strata
 		size_t TotalEntities = 0; // 0 until its entities are compiled
 		uint32_t Slices = 0;      // Updates that created some of its entities
 		std::string Error;
+		size_t DestroyedEntities = 0; // While unloading: its entities destroyed so far
 	};
 
 }

@@ -33,6 +33,7 @@ namespace Strata
 	class EntityPrototype;
 	class PrototypeInstantiation;
 	struct InstantiationOptions;
+	struct SceneWorkBudget;
 	struct SubSceneLoad;
 	struct TransformComponent;
 
@@ -68,6 +69,11 @@ namespace Strata
 		uint32_t MaxEntitiesInstantiatedPerFrame = 5000;
 		static constexpr uint32_t c_MaxEntitiesInstantiatedLimit = 1u << 20;
 		PhysicsLayerSettings PhysicsLayers; // Layer names and which layers collide
+		// Entities sub-scenes being unloaded may destroy per update of the scene, all of them together; each update also stops
+		// destroying once Scene::c_MaxSubSceneMillisecondsPerFrame went by (shared with creation). From 1 to
+		// c_MaxEntitiesDestroyedLimit.
+		uint32_t MaxEntitiesDestroyedPerFrame = 5000;
+		static constexpr uint32_t c_MaxEntitiesDestroyedLimit = 1u << 20;
 	};
 
 	// A world of entities. Owns the EnTT registry, the hierarchy, and (while playing) the runtime systems.
@@ -159,9 +165,12 @@ namespace Strata
 		// Additive scenes (Scene/SceneSubScenes.cpp)
 		//////////////////////////////////////////////////////////////////////////
 
-		// How long the updates of a scene may spend creating the entities of sub-scenes at most (besides
-		// SceneSettings::MaxEntitiesInstantiatedPerFrame): they create them in chunks and stop once this much time went by.
-		static constexpr double c_MaxInstantiationMillisecondsPerFrame = 2.0;
+		// How long an update of a scene may spend creating and destroying the entities of sub-scenes at most, together (besides
+		// SceneSettings::MaxEntitiesInstantiatedPerFrame and MaxEntitiesDestroyedPerFrame, and within the frame's
+		// SceneWorkBudget): they create and destroy them in chunks and stop once this much time went by.
+		static constexpr double c_MaxSubSceneMillisecondsPerFrame = 2.0;
+		// The former name of c_MaxSubSceneMillisecondsPerFrame, kept through wave 4.
+		static constexpr double c_MaxInstantiationMillisecondsPerFrame = c_MaxSubSceneMillisecondsPerFrame;
 
 		// Loads the scene asset `scene` into this scene, next to what it holds (a sub-scene: a level's streamed part, a room):
 		// the asset and everything it uses load in the background (SceneLoader, pinned at the options' priority), its
@@ -176,25 +185,36 @@ namespace Strata
 		// Adds the entities of a prepared scene the same way, without loading anything (the scene is compiled on the job
 		// system: nothing may use or change it afterwards; its systems must not run). 0 with an error for a null scene.
 		SubSceneID BeginAdditiveLoad(Ref<Scene> prepared, std::string* outError = nullptr);
-		// Removes a sub-scene: cancels its load (releasing every pin it holds) and destroys the entities it created with their
-		// descendants (DestroyEntities: running systems hear OnEntityDestroying first; deferred while the scene updates).
-		// Its ID is unknown afterwards. False for an unknown ID. While UpdateSubScenes runs (scripts' OnDestroy when a failed
-		// sub-scene's entities go), the unload happens once it returns.
+		// Removes a sub-scene: cancels its load (releasing every pin it holds) and makes its top-level entities inactive at
+		// once (InactiveComponent), so that it leaves rendering, the scripts' updates, physics and audio in this frame; then
+		// the updates destroy its entities with their descendants a slice at a time (state Unloading, see UpdateSubScenes:
+		// children before their parents, one DestroyEntities call per chunk, so running systems hear OnEntityDestroying and
+		// scripts get OnDestroy). What the game moved out of its subtrees meanwhile is not destroyed: each slice walks from its
+		// top-level entities as they are then. Once its last entity is gone its ID is unknown. True for an Unloading one
+		// (nothing changes); false for an unknown ID. While UpdateSubScenes runs (scripts' OnDestroy when a failed
+		// sub-scene's entities go), the unload starts once it returns.
 		bool UnloadSubScene(SubSceneID id);
-		// Whether every entity of the sub-scene exists.
+		// Destroys what is left of the sub-scenes being unloaded at once, for tools and tests that need them gone now (and the
+		// scene's runtime stop, which finishes them before its systems stop).
+		void FlushSubSceneUnloads();
+		// Whether every entity of the sub-scene exists (false while it is unloaded).
 		bool IsSubSceneLoaded(SubSceneID id) const;
-		// The sub-scene's state, or null for an unknown ID (never loaded, or unloaded). Failed sub-scenes stay until they are
-		// unloaded, so that their error can be read.
+		// The sub-scene's state, or null for an unknown ID (never loaded, or unloaded to its last entity). Failed sub-scenes
+		// stay until they are unloaded, so that their error can be read.
 		const SubSceneStatus* GetSubSceneStatus(SubSceneID id) const;
 		// Every sub-scene that was not unloaded, in the order of their loads.
 		std::vector<SubSceneStatus> GetSubScenes() const;
 		// The top-level entities the sub-scene created that still exist (with its SubSceneComponent), in order.
 		std::vector<Entity> GetSubSceneRoots(SubSceneID id) const;
-		// Whether a sub-scene still loads or creates entities.
+		// Whether a sub-scene still loads, creates entities or is being unloaded.
 		bool HasPendingSubScenes() const;
-		// Advances the sub-scenes: their loads (after the asset manager's update), compilations and a slice of entity creation
-		// within the budgets above. OnUpdateRuntime and OnUpdateEditor call it first (also while the scene is paused or not
-		// running); owners of scenes they do not update call it once per frame themselves.
+		// Advances the sub-scenes: their loads (after the asset manager's update), compilations, a slice of the entities of
+		// sub-scenes being unloaded (destroyed first) and a slice of entity creation, within the frame's budget (its entity
+		// counts, which they lower, and its deadline) and at most c_MaxSubSceneMillisecondsPerFrame. OnUpdateRuntime and
+		// OnUpdateEditor call it first (also while the scene is paused or not running), with the frame's budget their owner
+		// hands them; owners of scenes they do not update call it once per frame themselves. Without a budget, it makes one
+		// from the scene's settings (SceneWorkBudget::ForFrame), for tests and tools.
+		void UpdateSubScenes(SceneWorkBudget& budget);
 		void UpdateSubScenes();
 
 		Entity GetEntityByUUID(UUID uuid) const; // Invalid Entity when not found
@@ -265,6 +285,8 @@ namespace Strata
 		// stays linear. Entities whose parent changed emit their RelationshipComponent on_update signal, like SetParent.
 		bool PlaceEntities(std::span<const EntityPlacement> placements);
 		bool IsDescendantOf(Entity entity, Entity ancestor) const;
+		// The entity and its descendants: how many there are (0 for an invalid entity). Linear in the subtree.
+		size_t CountSubtree(Entity entity) const;
 		// Negative if a comes before b in hierarchy order, positive if after, 0 if they are the same entity. Costs the depth of
 		// the two entities while the sibling list where their ancestors meet has current positions; after a change of that
 		// list it renumbers it once, like GetSiblingIndex. Both must be valid entities of this scene.
@@ -334,8 +356,10 @@ namespace Strata
 
 		void OnRuntimeStart(SceneRuntimeMode mode = SceneRuntimeMode::Play);
 		void OnRuntimeStop();
-		void OnUpdateRuntime(Timestep timestep);
-		void OnUpdateEditor(Timestep timestep);
+		// `budget`: the frame's loading budget its owner shares among the scene's sub-scenes and what else loads (see
+		// UpdateSubScenes); null makes one from the scene's settings.
+		void OnUpdateRuntime(Timestep timestep, SceneWorkBudget* budget = nullptr);
+		void OnUpdateEditor(Timestep timestep, SceneWorkBudget* budget = nullptr);
 
 		bool IsRunning() const { return m_IsRunning; }
 		SceneRuntimeMode GetRuntimeMode() const { return m_RuntimeMode; }
@@ -504,10 +528,20 @@ namespace Strata
 		void FlushPendingDestroys();
 		// Sub-scenes (Scene/SceneSubScenes.cpp): advances one load, creating at most `budget` entities (which it lowers) while
 		// time is left before `deadline`; fails one, destroying what it created, with the reason logged.
-		void AdvanceSubScene(SubSceneLoad& load, size_t& budget, std::chrono::steady_clock::time_point deadline);
+		void AdvanceSubScene(SubSceneLoad& load, uint32_t& budget, std::chrono::steady_clock::time_point deadline);
 		void StartSubSceneInstantiation(SubSceneLoad& load);
 		void FailSubScene(SubSceneLoad& load, std::string error);
 		void DestroySubSceneEntities(SubSceneLoad& load);
+		// Starts unloading a sub-scene: its load ends and its top-level entities become inactive (UnloadSubScene).
+		void BeginSubSceneUnload(SubSceneLoad& load);
+		// Destroys a slice of an unloading sub-scene, at most `budget` entities (which it lowers) while time is left before
+		// `deadline` (unlimited: all of it); returns whether its last entity is gone.
+		bool AdvanceSubSceneUnload(SubSceneLoad& load, uint32_t& budget, std::chrono::steady_clock::time_point deadline);
+		// The first `limit` entities of a post-order walk (descendants before their ancestors, children in order) of the
+		// sub-scene's living top-level entities, as the topmost of them (each with its descendants): what a slice destroys.
+		size_t CollectUnloadSlice(SubSceneLoad& load, size_t limit, std::vector<Entity>& outTops);
+		// Erases sub-scenes whose unload finished (their IDs become unknown).
+		void RemoveUnloadedSubScenes();
 		SubSceneLoad* FindSubScene(SubSceneID id) const;
 		// Whether the entity an instantiation created for its prototype entity `index` still exists.
 		bool IsInstantiatedEntityAlive(const PrototypeInstantiation& instantiation, size_t index) const;
@@ -643,6 +677,7 @@ namespace Strata
 		SubSceneID m_NextSubSceneID = 1;
 		bool m_AdvancingSubScenes = false;               // UpdateSubScenes runs: unloads wait for its end
 		std::vector<SubSceneID> m_DeferredSubSceneUnloads; // Unloads requested meanwhile
+		std::vector<std::pair<entt::entity, entt::entity>> m_UnloadWalk; // Scratch of CollectUnloadSlice: entity, next child
 
 		// Declared last: disconnected before anything the handlers use is destroyed.
 		std::vector<entt::scoped_connection> m_Connections;

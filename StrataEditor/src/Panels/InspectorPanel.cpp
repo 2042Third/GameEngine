@@ -178,8 +178,9 @@ namespace Strata
 			SceneSettingRow MaxBodies;
 			SceneSettingRow MaxBodyPairs;
 			SceneSettingRow MaxContactConstraints;
-			// Sub-scenes (SceneSettings::MaxEntitiesInstantiatedPerFrame).
+			// Sub-scenes (SceneSettings::MaxEntitiesInstantiatedPerFrame, MaxEntitiesDestroyedPerFrame).
 			SceneSettingRow MaxEntitiesInstantiated;
+			SceneSettingRow MaxEntitiesDestroyed;
 		};
 
 		SceneSettingRow MakeSceneSettingRow(PropertyInfo property)
@@ -201,10 +202,10 @@ namespace Strata
 			return s_Header.c_str();
 		}
 
-		// The streaming section's summary ("5000 entities per frame").
+		// The streaming section's summary ("5000 / 5000 entities per frame": created / destroyed).
 		std::string DescribeStreaming(const SceneSettings& settings)
 		{
-			return fmt::format("{} entities per frame", settings.MaxEntitiesInstantiatedPerFrame);
+			return fmt::format("{} / {} entities per frame", settings.MaxEntitiesInstantiatedPerFrame, settings.MaxEntitiesDestroyedPerFrame);
 		}
 
 		const char* GetLayersHeader()
@@ -337,6 +338,17 @@ namespace Strata
 				maxEntitiesInstantiated.Max = static_cast<float>(SceneSettings::c_MaxEntitiesInstantiatedLimit); // A power of two: exact as a float
 				maxEntitiesInstantiated.Speed = 50.0f;
 				properties.MaxEntitiesInstantiated = MakeSceneSettingRow(std::move(maxEntitiesInstantiated));
+				PropertyInfo maxEntitiesDestroyed;
+				maxEntitiesDestroyed.Name = "MaxEntitiesDestroyedPerFrame";
+				maxEntitiesDestroyed.DisplayName = "Destroyed per Frame";
+				maxEntitiesDestroyed.Tooltip = "Entities sub-scenes being unloaded (a world's cells, streamed parts of a level) may destroy per frame, all "
+					"together; they leave the game at once and go over the following frames. Creating and destroying together stop after about 2 ms "
+					"a frame";
+				maxEntitiesDestroyed.Type = PropertyType::UInt;
+				maxEntitiesDestroyed.Min = 1.0f;
+				maxEntitiesDestroyed.Max = static_cast<float>(SceneSettings::c_MaxEntitiesDestroyedLimit); // A power of two: exact as a float
+				maxEntitiesDestroyed.Speed = 50.0f;
+				properties.MaxEntitiesDestroyed = MakeSceneSettingRow(std::move(maxEntitiesDestroyed));
 				return properties;
 			}();
 			return s_Properties;
@@ -941,8 +953,11 @@ namespace Strata
 		SceneSettings shown = m_SettingsDraft.value_or(scene.GetSettings());
 		if (!m_PhysicsSummary || m_PhysicsSummary->Gravity != shown.Gravity || m_PhysicsSummary->FixedTimestep != shown.FixedTimestep)
 			m_PhysicsSummary = PhysicsSummary { shown.Gravity, shown.FixedTimestep, DescribePhysics(shown) };
-		if (!m_StreamingSummary || m_StreamingSummary->MaxEntitiesInstantiatedPerFrame != shown.MaxEntitiesInstantiatedPerFrame)
-			m_StreamingSummary = StreamingSummary { shown.MaxEntitiesInstantiatedPerFrame, DescribeStreaming(shown) };
+		if (!m_StreamingSummary || m_StreamingSummary->MaxEntitiesInstantiatedPerFrame != shown.MaxEntitiesInstantiatedPerFrame
+			|| m_StreamingSummary->MaxEntitiesDestroyedPerFrame != shown.MaxEntitiesDestroyedPerFrame)
+		{
+			m_StreamingSummary = StreamingSummary { shown.MaxEntitiesInstantiatedPerFrame, shown.MaxEntitiesDestroyedPerFrame, DescribeStreaming(shown) };
+		}
 		const SceneSettingProperties& properties = GetSceneSettingProperties();
 		const SceneSettings defaults;
 		bool changed = false;
@@ -993,6 +1008,9 @@ namespace Strata
 				draw(properties.MaxEntitiesInstantiated, shown.MaxEntitiesInstantiatedPerFrame, PropertyValue(defaults.MaxEntitiesInstantiatedPerFrame), {},
 					[&](const PropertyValue& value)
 					{ shown.MaxEntitiesInstantiatedPerFrame = std::clamp(std::get<uint32_t>(value), 1u, SceneSettings::c_MaxEntitiesInstantiatedLimit); });
+				draw(properties.MaxEntitiesDestroyed, shown.MaxEntitiesDestroyedPerFrame, PropertyValue(defaults.MaxEntitiesDestroyedPerFrame), {},
+					[&](const PropertyValue& value)
+					{ shown.MaxEntitiesDestroyedPerFrame = std::clamp(std::get<uint32_t>(value), 1u, SceneSettings::c_MaxEntitiesDestroyedLimit); });
 				UI::EndPropertyTable();
 			}
 		}
@@ -1009,6 +1027,7 @@ namespace Strata
 				{ "fixedTimestep", settings.FixedTimestep },
 				{ "maxFixedStepsPerFrame", settings.MaxFixedStepsPerFrame },
 				{ "maxEntitiesInstantiatedPerFrame", settings.MaxEntitiesInstantiatedPerFrame },
+				{ "maxEntitiesDestroyedPerFrame", settings.MaxEntitiesDestroyedPerFrame },
 				{ "physicsCapacity", { { "maxBodies", capacity.MaxBodies }, { "maxBodyPairs", capacity.MaxBodyPairs },
 					{ "maxContactConstraints", capacity.MaxContactConstraints } } } });
 		}
