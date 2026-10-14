@@ -39,10 +39,20 @@ namespace Strata::RenderData
 		uint32_t BorderColor = 0;         // RGBA8, display color
 		float CornerRadius = 0.0f;        // Canvas units
 		float BorderWidth = 0.0f;         // Canvas units (images), em (glyph outlines)
-		uint32_t Clip = 0;                // Reserved for masks: 0 clips nothing
+		uint32_t Clip = 0;                // 1 + the canvas's clip rect (UIClipRect) the quad is clipped to; 0 clips nothing
 		uint32_t Padding = 0;
 	};
 	static_assert(sizeof(UIQuad) == 64);
+
+	// A canvas's clip rect (a UIMaskComponent's, met with the masks above it), in canvas units. Quads name theirs.
+	struct UIClipRect
+	{
+		glm::vec4 Rect = glm::vec4(0.0f);       // x0, y0, x1, y1 (empty when x1 <= x0 or y1 <= y0: clips everything)
+		glm::vec4 Parameters = glm::vec4(0.0f); // x: softness (canvas units); yzw: unused
+
+		bool operator==(const UIClipRect& other) const = default;
+	};
+	static_assert(sizeof(UIClipRect) == 32);
 
 	// Per draw (push constants): how a canvas maps to the viewport, and the fonts whose atlases the draw binds.
 	struct UIDrawParameters
@@ -52,7 +62,7 @@ namespace Strata::RenderData
 		float Scale = 1.0f;                       // Pixels per canvas unit
 		uint32_t PixelSnap = 1;
 		uint32_t FirstQuad = 0;                   // Of the draw, in the quad buffer
-		uint32_t Padding = 0;
+		uint32_t FirstClip = 0;                   // The canvas's first clip rect in the clip buffer
 		glm::uvec4 Fonts = glm::uvec4(~0u);       // Scene font index bound to each atlas slot (~0: none)
 		glm::uvec4 GlyphBases = glm::uvec4(0u);   // Each slot's font's first entry in the glyph table
 	};

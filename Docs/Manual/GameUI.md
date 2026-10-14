@@ -55,6 +55,9 @@ the layout it has at its reference size.
   disabled), or images to swap, and the fade time between them.
 - A canvas's **Sort Order** puts it in front of canvases with a lower one; a HUD that should never block clicks turns
   **Receives Input** off.
+- **UI Mask** keeps an element's children inside its rect: a card whose content must not spill, a list that shows only
+  what fits. **Padding** moves the clipping edges in (or out, negative), **Softness** fades the content out toward them.
+  What a mask hides is not clicked either. Masks inside masks show only where both overlap.
 
 ## Make it do something
 

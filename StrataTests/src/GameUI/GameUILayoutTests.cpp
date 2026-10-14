@@ -3,6 +3,7 @@
 #include "Perf/SceneGenerators.h"
 #include "Scene/SceneTestUtils.h"
 #include "Strata/GameUI/GameUIComponents.h"
+#include "Strata/GameUI/GameUIHitTest.h"
 #include "Strata/GameUI/GameUIScene.h"
 #include "Strata/Renderer/Font.h"
 #include "Strata/Renderer/FontFace.h"
@@ -10,7 +11,10 @@
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 
+#include <algorithm>
 #include <cmath>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -596,5 +600,154 @@ TEST_SUITE("GameUI.Dirty")
 		CHECK(stats.ElementsLaidOut <= 1 + 20 + 20 * 24);
 		std::string error;
 		CHECK_MESSAGE(ui.Validate(&error), error);
+	}
+}
+
+TEST_SUITE("GameUI.Mask")
+{
+	TEST_CASE("Masks clip their descendants to their padded rects, nested masks to where both overlap")
+	{
+		UITestScene ui;
+		const glm::vec2 topLeft(0.0f);
+		Entity panel = ui.Add(ui.Canvas, "Panel", PointRect(topLeft, topLeft, { 100.0f, 100.0f }, { 400.0f, 300.0f }));
+		UIMaskComponent& mask = panel.AddComponent<UIMaskComponent>();
+		mask.Padding = { 10.0f, 20.0f, 30.0f, 40.0f };
+		Entity spill = ui.Add(panel, "Spill", PointRect(topLeft, topLeft, { -50.0f, -50.0f }, { 600.0f, 600.0f }));
+		Entity inner = ui.Add(panel, "Inner", PointRect(topLeft, topLeft, { 200.0f, 150.0f }, { 400.0f, 400.0f }));
+		inner.AddComponent<UIMaskComponent>().Softness = 4.0f;
+		Entity deep = ui.Add(inner, "Deep", PointRect(topLeft, topLeft, { 0.0f, 0.0f }, { 50.0f, 50.0f }));
+		Entity outside = ui.Add(ui.Canvas, "Outside", PointRect(topLeft, topLeft, { 0.0f, 0.0f }, { 50.0f, 50.0f }));
+
+		GameUIScene& scene = ui.GetUI();
+		scene.EnsureLayout(GameUIScene::c_DefaultScreen);
+		auto clipOf = [&](Entity entity)
+		{
+			UICanvasView view;
+			uint32_t element = 0;
+			REQUIRE(scene.FindElement(entity.GetHandle(), GameUIScene::c_DefaultScreen, view, element));
+			return scene.GetElementClip(view, element);
+		};
+		auto visibleOf = [&](Entity entity)
+		{
+			UICanvasView view;
+			uint32_t element = 0;
+			REQUIRE(scene.FindElement(entity.GetHandle(), GameUIScene::c_DefaultScreen, view, element));
+			return scene.GetVisibleBox(view, element);
+		};
+		// A mask clips what is below it, never itself or what is beside it.
+		CHECK_FALSE(clipOf(panel).has_value());
+		CHECK_FALSE(clipOf(outside).has_value());
+		CheckBox(visibleOf(panel), { 100.0f, 100.0f }, { 400.0f, 300.0f });
+		// The panel's rect (100, 100)-(500, 400) inset by its padding.
+		REQUIRE(clipOf(spill).has_value());
+		CheckBox(*clipOf(spill), { 110.0f, 120.0f }, { 360.0f, 240.0f });
+		CheckBox(visibleOf(spill), { 110.0f, 120.0f }, { 360.0f, 240.0f });
+		REQUIRE(clipOf(inner).has_value());
+		CheckBox(*clipOf(inner), { 110.0f, 120.0f }, { 360.0f, 240.0f });
+		// Inside both: the inner rect (300, 250)-(700, 650) within (110, 120)-(470, 360).
+		REQUIRE(clipOf(deep).has_value());
+		CheckBox(*clipOf(deep), { 300.0f, 250.0f }, { 170.0f, 110.0f });
+		CheckBox(visibleOf(deep), { 300.0f, 250.0f }, { 50.0f, 50.0f });
+
+		// The quads name the clip rects, which carry the softness.
+		for (const UICanvasView& view : scene.EnsureLayout(GameUIScene::c_DefaultScreen))
+		{
+			const std::span<const RenderData::UIClipRect> clips = scene.GetClipRects(view);
+			REQUIRE(clips.size() == 2);
+			CHECK(clips[0].Parameters.x == 0.0f);
+			CHECK(clips[1].Parameters.x == 4.0f);
+		}
+		std::string error;
+		CHECK_MESSAGE(scene.Validate(&error), error);
+
+		// Removing the outer mask leaves the inner one, which no longer meets it.
+		panel.RemoveComponent<UIMaskComponent>();
+		scene.EnsureLayout(GameUIScene::c_DefaultScreen);
+		CHECK_FALSE(clipOf(spill).has_value());
+		REQUIRE(clipOf(deep).has_value());
+		CheckBox(*clipOf(deep), { 300.0f, 250.0f }, { 400.0f, 400.0f });
+	}
+
+	TEST_CASE("Masked elements are hit only where their mask leaves them, and their quads name its clip rect")
+	{
+		UITestScene ui;
+		const glm::vec2 topLeft(0.0f);
+		Entity panel = ui.Add(ui.Canvas, "Panel", PointRect(topLeft, topLeft, { 100.0f, 100.0f }, { 200.0f, 100.0f }));
+		panel.AddComponent<UIMaskComponent>();
+		Entity item = ui.Add(panel, "Item", PointRect(topLeft, topLeft, { 0.0f, 50.0f }, { 200.0f, 100.0f }));
+		item.AddComponent<UIImageComponent>();
+
+		GameUIScene& scene = ui.GetUI();
+		const std::span<const UICanvasView> views = scene.EnsureLayout(GameUIScene::c_DefaultScreen);
+		GameUIHitTester tester;
+		tester.Update(scene, views);
+		// The item spans (100, 150)-(300, 250); the mask leaves (100, 150)-(300, 200).
+		const std::optional<UIHitResult> inside = tester.HitTest({ 150.0f, 180.0f });
+		REQUIRE(inside.has_value());
+		CHECK(inside->Entity == item.GetHandle());
+		CHECK_FALSE(tester.HitTest({ 150.0f, 220.0f }).has_value());
+		std::vector<UIHitResult> all;
+		tester.HitTestAll(scene, views, { 150.0f, 220.0f }, all);
+		CHECK(std::none_of(all.begin(), all.end(), [&](const UIHitResult& hit) { return hit.Entity == item.GetHandle(); }));
+		tester.HitTestAll(scene, views, { 150.0f, 180.0f }, all);
+		CHECK(std::any_of(all.begin(), all.end(), [&](const UIHitResult& hit) { return hit.Entity == item.GetHandle(); }));
+
+		const std::vector<RenderData::UIQuad>& quads = scene.EnsureQuads(views[0]);
+		bool named = false;
+		for (const RenderData::UIQuad& quad : quads)
+		{
+			if ((quad.Flags & RenderData::c_UIQuadKindMask) == RenderData::c_UIQuadImage)
+			{
+				CHECK(quad.Clip == 1);
+				named = true;
+			}
+		}
+		CHECK(named);
+	}
+}
+
+TEST_SUITE("GameUI.Dirty")
+{
+	TEST_CASE("A mask's padding changes its clip rects alone; a write without a signal fails validation")
+	{
+		UITestScene ui;
+		const glm::vec2 topLeft(0.0f);
+		Entity panel = ui.Add(ui.Canvas, "Masked Panel", PointRect(topLeft, topLeft, { 100.0f, 100.0f }, { 200.0f, 100.0f }));
+		panel.AddComponent<UIMaskComponent>();
+		Entity item = ui.Add(panel, "Item", PointRect(topLeft, topLeft, { 0.0f, 0.0f }, { 50.0f, 50.0f }));
+		item.AddComponent<UIImageComponent>();
+		GameUIScene& scene = ui.GetUI();
+		Frame(scene);
+		scene.TakeStats();
+		const UICanvasView view = scene.EnsureLayout(GameUIScene::c_DefaultScreen)[0];
+		const uint64_t version = scene.GetClipVersion(view);
+		const uint64_t hits = scene.GetHitStamp(view);
+
+		// An idle frame computes nothing.
+		Frame(scene);
+		CHECK(scene.GetClipVersion(view) == version);
+
+		panel.GetComponent<UIMaskComponent>().Padding = { 5.0f, 5.0f, 5.0f, 5.0f };
+		panel.MarkModified<UIMaskComponent>();
+		Frame(scene);
+		const GameUISceneStats stats = scene.TakeStats();
+		CHECK(stats.ElementsLaidOut == 0);
+		CHECK(stats.QuadsBuilt == 0);
+		CHECK(scene.GetClipVersion(view) == version + 1);
+		CHECK(scene.GetHitStamp(view) != hits); // What the pointer can hit changed
+		CheckBox(*scene.GetElementClip(view, 2), { 105.0f, 105.0f }, { 190.0f, 90.0f });
+
+		// Moving the mask moves its clip rect.
+		panel.GetComponent<UIRectComponent>().Position = { 120.0f, 100.0f };
+		panel.MarkModified<UIRectComponent>();
+		Frame(scene);
+		CHECK(scene.TakeStats().ElementsLaidOut == 1 + 1);
+		CheckBox(*scene.GetElementClip(view, 2), { 125.0f, 105.0f }, { 190.0f, 90.0f });
+
+		std::string error;
+		CHECK_MESSAGE(scene.Validate(&error), error);
+		panel.GetComponent<UIMaskComponent>().Padding = { 0.0f, 0.0f, 0.0f, 0.0f }; // No MarkModified
+		CHECK_FALSE(scene.Validate(&error));
+		CHECK(error.find("Masked Panel") != std::string::npos);
 	}
 }

@@ -16,6 +16,7 @@
 #include "Strata/Scene/SceneSerializer.h"
 #include "TestHelpers.h"
 
+#include <cstdlib>
 #include <limits>
 #include <string>
 #include <utility>
@@ -367,6 +368,52 @@ TEST_SUITE("GPU.GameUI")
 		scene->DestroyEntity(canvas);
 		REQUIRE(game.Render(scene, framebuffer, { 64, 64 }));
 		CHECK(game.IsShowingMessage());
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Masks clip their children's pixels, with soft edges, in one draw that an idle frame does not upload again")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		UIScene ui;
+		// A red panel masking a green child that spills out of it on every side.
+		Entity panel = ui.AddImage(ui.Canvas, "Panel", { 100.0f, 50.0f }, { 200.0f, 100.0f }, { 1.0f, 0.0f, 0.0f, 1.0f });
+		panel.AddComponent<UIMaskComponent>().Padding = { 10.0f, 0.0f, 0.0f, 0.0f };
+		ui.AddImage(panel, "Spill", { -50.0f, -50.0f }, { 300.0f, 200.0f }, { 0.0f, 1.0f, 0.0f, 1.0f });
+		// A soft mask beside it: its child fades over 20 pixels inside the edges.
+		Entity soft = ui.AddImage(ui.Canvas, "Soft", { 400.0f, 50.0f }, { 100.0f, 100.0f }, { 0.0f, 0.0f, 0.0f, 0.0f });
+		soft.AddComponent<UIMaskComponent>().Softness = 20.0f;
+		ui.AddImage(soft, "Faded", { -10.0f, -10.0f }, { 120.0f, 120.0f }, { 0.0f, 0.0f, 1.0f, 1.0f });
+
+		SceneRenderer renderer(ExactSpecification());
+		const ReadbackImage image = RenderUI(renderer, ui.Target, { 640, 360 });
+		// The child shows only inside (110, 50)-(300, 150); the panel itself is not clipped by its own mask.
+		CHECK(Pixel(image, 110.0f, 50.0f) == c_Green);
+		CHECK(Pixel(image, 299.0f, 149.0f) == c_Green);
+		CHECK(Pixel(image, 105.0f, 100.0f) == c_Red);
+		CHECK(Pixel(image, 300.0f, 100.0f) == c_Black);
+		CHECK(Pixel(image, 200.0f, 150.0f) == c_Black);
+		CHECK(Pixel(image, 200.0f, 49.0f) == c_Black);
+		// The soft edge: transparent outside, half at 10 pixels in, whole from 20 in.
+		CHECK(Pixel(image, 399.0f, 100.0f) == c_Black);
+		const glm::u8vec4 edge = Pixel(image, 400.0f, 100.0f);
+		const glm::u8vec4 half = Pixel(image, 410.0f, 100.0f);
+		CHECK(edge.b < 16);
+		CHECK(std::abs(static_cast<int>(half.b) - 134) <= 3); // 10.5 / 20 of full blue
+		CHECK(Pixel(image, 450.0f, 100.0f) == c_Blue);
+		const SceneOverlayStats& stats = renderer.GetStats().Overlays;
+		CHECK(stats.DrawCalls == 1);
+
+		// Nothing changed: nothing uploaded. A mask's padding uploads its clip rects alone.
+		REQUIRE(renderer.Render(ui.Target, BlackCamera(), nullptr, {}));
+		CHECK(renderer.GetStats().Overlays.UploadedBytes == 0);
+		panel.GetComponent<UIMaskComponent>().Padding = { 0.0f, 0.0f, 0.0f, 0.0f };
+		panel.MarkModified<UIMaskComponent>();
+		REQUIRE(renderer.Render(ui.Target, BlackCamera(), nullptr, {}));
+		CHECK(renderer.GetStats().Overlays.UploadedBytes == 2 * sizeof(RenderData::UIClipRect));
+		ReadbackImage after;
+		REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), after));
+		CHECK(Pixel(after, 100.0f, 50.0f) == c_Green);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

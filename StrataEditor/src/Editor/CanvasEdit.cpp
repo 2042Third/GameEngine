@@ -135,7 +135,7 @@ namespace Strata::CanvasEdit
 			const glm::vec2 point = pixel / view.Scale;
 			for (uint32_t element = ui.GetElementCount(view); element-- > 1;)
 			{
-				if (ui.IsElementVisible(view, element) && ui.GetElementBox(view, element).Contains(point))
+				if (ui.IsElementVisible(view, element) && ui.GetVisibleBox(view, element).Contains(point))
 					return Entity(ui.GetElementEntity(view, element), &scene);
 			}
 		}

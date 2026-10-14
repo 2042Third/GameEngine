@@ -22,7 +22,8 @@ namespace Strata
 	};
 
 	// Finds the game UI element under a point of a screen: the topmost raycast target (an element with a UIImage or UIText
-	// that is a raycast target, or a UISelectable) that is visible and whose rect contains the point (half-open), in canvases
+	// that is a raycast target, or a UISelectable) that is visible and whose rect, as far as masks leave it
+	// (GameUIScene::GetVisibleBox), contains the point (half-open), in canvases
 	// that receive input, searched from the highest sort order down and within a canvas from the last element drawn. Each
 	// canvas keeps a uniform grid of its targets' rects, rebuilt when what hit tests see changed (GameUIScene::GetHitStamp),
 	// so a query looks at the targets of one cell. Main thread only.
@@ -33,7 +34,7 @@ namespace Strata
 		bool Update(GameUIScene& ui, std::span<const UICanvasView> views);
 		// The topmost raycast target at a point in screen pixels, among canvases that receive input (`anyCanvas`: all of them).
 		std::optional<UIHitResult> HitTest(const glm::vec2& pixel, bool anyCanvas = false) const;
-		// Every visible element whose rect contains the point, raycast target or not, topmost first.
+		// Every visible element whose rect (as far as masks leave it) contains the point, raycast target or not, topmost first.
 		void HitTestAll(GameUIScene& ui, std::span<const UICanvasView> views, const glm::vec2& pixel, std::vector<UIHitResult>& outHits) const;
 		// The targets the latest HitTest compared with the point (at most a cell's).
 		uint32_t GetLastCandidateCount() const { return m_LastCandidates; }

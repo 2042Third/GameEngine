@@ -29,7 +29,7 @@ namespace Strata
 	// another scene, is uploaded whole), so an idle frame uploads nothing. Images reach their textures through a small table
 	// of bindless slots (UI texture index -> slot, rewritten when mip streaming moves a slot), glyphs their atlas placements
 	// through a table per font (glyph -> place in this renderer's atlas, from the renderer's FontAtlasCache), so quads never
-	// change for either. Each canvas is drawn instanced, six vertices per quad, one draw per run of quads whose fonts fit
+	// change for either; masked quads name their canvas's clip rects, uploaded beside them when they change. Each canvas is drawn instanced, six vertices per quad, one draw per run of quads whose fonts fit
 	// the c_MaxBoundAtlases atlases bound at once: a canvas with up to four fonts is one draw call. Each distinct texture and
 	// font is requested once per frame through the scene's asset manager (High priority), and the textures drawn are
 	// reported for mip streaming at the pixels one texture coordinate unit spans on screen. Main thread only.
@@ -54,6 +54,7 @@ namespace Strata
 			glm::uvec4 Fonts = glm::uvec4(~0u);
 			glm::uvec4 GlyphBases = glm::uvec4(0u);
 			std::array<nvrhi::ITexture*, RenderData::c_MaxBoundAtlases> Atlases = {};
+			uint32_t FirstClip = 0; // The canvas's clip rects in the clip buffer
 			float Scale = 1.0f;
 			bool PixelSnap = true;
 		};
@@ -65,6 +66,11 @@ namespace Strata
 			uint64_t QuadVersion = 0;
 			uint32_t Offset = 0;
 			uint32_t Count = 0;
+			// Its clip rects (masks): where they are in the clip buffer, and what was uploaded there.
+			uint64_t ClipLayoutId = 0;
+			uint64_t ClipVersion = 0;
+			uint32_t ClipOffset = 0;
+			uint32_t ClipCount = 0;
 		};
 
 		// A font's place in the glyph table, for the atlas it was filled from.
@@ -78,6 +84,8 @@ namespace Strata
 
 		// False when the quads cannot be uploaded (logged).
 		bool UploadQuads(GameUIScene& ui, std::span<const UICanvasView> views, nvrhi::ICommandList* commandList, SceneOverlayStats& stats);
+		// The canvases' clip rects, after their quads (only those that changed since this renderer's last frame).
+		bool UploadClips(GameUIScene& ui, std::span<const UICanvasView> views, nvrhi::ICommandList* commandList, SceneOverlayStats& stats);
 		void UpdateGlyphs(GameUIScene& ui, const SceneOverlayFrame& frame, AssetManagerBase* assets);
 		void UpdateTextures(GameUIScene& ui, const SceneOverlayFrame& frame, AssetManagerBase* assets, float maxScale);
 		void BuildRuns(GameUIScene& ui, std::span<const UICanvasView> views);
@@ -100,6 +108,7 @@ namespace Strata
 		nvrhi::BufferHandle m_QuadBuffer;
 		nvrhi::BufferHandle m_TextureSlotBuffer;
 		nvrhi::BufferHandle m_GlyphBuffer;
+		nvrhi::BufferHandle m_ClipBuffer;
 
 		uint64_t m_SceneId = 0; // The GameUIScene the buffers hold
 		std::vector<UploadedCanvas> m_Uploaded;

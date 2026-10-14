@@ -131,6 +131,9 @@ namespace Strata
 				{ "name", entity.GetName() },
 				{ "rect", ToJson(ui.GetElementBox(view, element), view.Scale) },
 				{ "visible", ui.IsElementVisible(view, element) } };
+			// Under a mask: what its clip rect leaves of the rect (where it is drawn and hit).
+			if (ui.GetElementClip(view, element))
+				described["visibleRect"] = ToJson(ui.GetVisibleBox(view, element), view.Scale);
 			if (const UISelectableComponent* selectable = entity.TryGetComponent<UISelectableComponent>())
 			{
 				described["interactable"] = selectable->Interactable;
@@ -300,8 +303,9 @@ namespace Strata
 		registry.Register({ "ui.layout",
 			"Where the game UI's elements are at a screen size, without rendering: the root canvases (entity, name, scale in pixels per canvas "
 			"unit, unitSize, sortOrder, receivesInput) and the elements of an entity's subtree (all canvases without one), in draw order: "
-			"entity, name, rect ([x, y, width, height] in screen pixels), visible, and for selectables interactable, state (normal, hover, "
-			"pressed, focused, disabled) and focused, for texts text, for sliders and toggles value. At most 1,000 elements (truncated tells). "
+			"entity, name, rect ([x, y, width, height] in screen pixels), visible, visibleRect for elements under a UI Mask (what its clip rect "
+			"leaves of the rect: where it is drawn and clicked), and for selectables interactable, state (normal, hover, pressed, focused, "
+			"disabled) and focused, for texts text, for sliders and toggles value. At most 1,000 elements (truncated tells). "
 			"Check that a HUD keeps its proportions by comparing rects at several screens.",
 			ObjectSchema({
 				{ "entity", OptionalEntitySchema("A canvas or element whose subtree to list (default: every canvas)") },

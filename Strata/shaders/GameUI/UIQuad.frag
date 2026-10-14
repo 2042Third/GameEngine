@@ -8,7 +8,7 @@
 
 // The game UI's quads, blended in display values over the finished image: images (a texture from the bindless table, or a
 // solid color) with rounded corners and borders from the rect's signed distance, and distance field glyphs with an
-// optional outline.
+// optional outline, both clipped by the masks above them.
 
 layout(set = 0, binding = ST_SRV(3)) uniform texture2DArray u_Atlas0; // The glyph atlases of the draw's fonts
 layout(set = 0, binding = ST_SRV(4)) uniform texture2DArray u_Atlas1;
@@ -24,6 +24,8 @@ layout(location = 3) flat in vec4 v_Color;
 layout(location = 4) flat in vec4 v_BorderColor;
 layout(location = 5) flat in vec4 v_Parameters;
 layout(location = 6) flat in uint v_Texture;
+layout(location = 7) flat in vec4 v_ClipRect;
+layout(location = 8) flat in float v_ClipSoftness;
 
 layout(location = 0) out vec4 o_Color;
 
@@ -42,8 +44,24 @@ float SampleAtlas(int slot, vec3 texel)
 	return textureLod(sampler2DArray(u_Atlas3, u_LinearClamp), coordinates, 0.0).r;
 }
 
+// How much of the pixel the masks leave: 1 inside their clip rect, 0 outside (pixel centers decide, like the rects' edges),
+// fading over the softness inside its edges.
+float ClipCoverage()
+{
+	if (v_ClipRect.z < v_ClipRect.x)
+		return 1.0;
+	vec2 pixel = gl_FragCoord.xy;
+	float inside = min(min(pixel.x - v_ClipRect.x, v_ClipRect.z - pixel.x), min(pixel.y - v_ClipRect.y, v_ClipRect.w - pixel.y));
+	if (v_ClipSoftness > 0.0)
+		return clamp(inside / v_ClipSoftness, 0.0, 1.0);
+	return inside > 0.0 ? 1.0 : 0.0;
+}
+
 void main()
 {
+	float clipCoverage = ClipCoverage();
+	if (clipCoverage <= 0.0)
+		discard;
 	uint kind = uint(v_Parameters.z + 0.5);
 	if (kind == UI_QUAD_GLYPH)
 	{
@@ -55,7 +73,7 @@ void main()
 			// The outline band around the glyph in its color, the glyph over it.
 			float outer = SDFCoverage(distanceValue, c_SDFOnEdgeValue - outline);
 			vec4 color = mix(v_BorderColor, v_Color, outer > 0.0 ? fill / outer : 0.0);
-			float alpha = mix(v_BorderColor.a * outer, v_Color.a, fill);
+			float alpha = mix(v_BorderColor.a * outer, v_Color.a, fill) * clipCoverage;
 			if (alpha <= 0.0)
 				discard;
 			o_Color = vec4(color.rgb, alpha);
@@ -63,7 +81,7 @@ void main()
 		}
 		if (fill <= 0.0)
 			discard;
-		o_Color = vec4(v_Color.rgb, v_Color.a * fill);
+		o_Color = vec4(v_Color.rgb, v_Color.a * fill * clipCoverage);
 		return;
 	}
 
@@ -92,7 +110,7 @@ void main()
 		float inner = clamp(0.5 - (distanceToEdge + border), 0.0, 1.0);
 		color = mix(v_BorderColor, color, inner);
 	}
-	float alpha = color.a * coverage;
+	float alpha = color.a * coverage * clipCoverage;
 	if (alpha <= 0.0)
 		discard;
 	o_Color = vec4(color.rgb, alpha);

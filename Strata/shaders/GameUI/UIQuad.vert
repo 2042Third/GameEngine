@@ -15,6 +15,8 @@ layout(location = 3) flat out vec4 v_Color;
 layout(location = 4) flat out vec4 v_BorderColor;
 layout(location = 5) flat out vec4 v_Parameters; // x: corner radius (px), y: border (px) or outline (distance), z: kind, w: atlas slot
 layout(location = 6) flat out uint v_Texture;   // Images: UI texture index + 1 (0: a solid color)
+layout(location = 7) flat out vec4 v_ClipRect;  // Pixels: x0, y0, x1, y1 of the masks' clip rect (x1 < x0: none)
+layout(location = 8) flat out float v_ClipSoftness; // Pixels
 
 const vec2 c_Corners[6] = vec2[6](vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));
 
@@ -29,6 +31,8 @@ void Hide()
 	v_BorderColor = vec4(0.0);
 	v_Parameters = vec4(0.0);
 	v_Texture = 0u;
+	v_ClipRect = vec4(0.0, 0.0, -1.0, -1.0);
+	v_ClipSoftness = 0.0;
 }
 
 void main()
@@ -91,6 +95,29 @@ void main()
 		v_TexCoord = vec3(mix(quad.UV.xy, quad.UV.zw, corner), 0.0);
 		v_Parameters = vec4(quad.CornerRadius * u_Draw.Scale, quad.BorderWidth * u_Draw.Scale, float(kind), 0.0);
 		v_Texture = quad.Resource;
+	}
+
+	// Masks: the quad's clip rect in pixels (on whole pixels like the rects); a quad entirely outside it draws nothing.
+	v_ClipRect = vec4(0.0, 0.0, -1.0, -1.0);
+	v_ClipSoftness = 0.0;
+	if (quad.Clip != 0u)
+	{
+		UIClipRect clip = u_Clips[u_Draw.FirstClip + quad.Clip - 1u];
+		vec2 clipMin = clip.Rect.xy * u_Draw.Scale + u_Draw.Origin;
+		vec2 clipMax = clip.Rect.zw * u_Draw.Scale + u_Draw.Origin;
+		if (u_Draw.PixelSnap != 0u)
+		{
+			clipMin = round(clipMin);
+			clipMax = round(clipMax);
+		}
+		if (!(clipMax.x > clipMin.x && clipMax.y > clipMin.y) || maximum.x <= clipMin.x || minimum.x >= clipMax.x || maximum.y <= clipMin.y
+			|| minimum.y >= clipMax.y)
+		{
+			Hide();
+			return;
+		}
+		v_ClipRect = vec4(clipMin, clipMax);
+		v_ClipSoftness = max(clip.Parameters.x, 0.0) * u_Draw.Scale;
 	}
 
 	vec2 size = maximum - minimum;

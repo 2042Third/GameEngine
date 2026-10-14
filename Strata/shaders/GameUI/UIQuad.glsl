@@ -44,6 +44,17 @@ layout(set = 0, binding = ST_SRV(2), std430) readonly buffer GlyphBuffer
 	uvec2 u_Glyphs[];
 };
 
+struct UIClipRect
+{
+	vec4 Rect;       // x0, y0, x1, y1 in canvas units
+	vec4 Parameters; // x: softness in canvas units
+};
+
+layout(set = 0, binding = ST_SRV(7), std430) readonly buffer ClipBuffer
+{
+	UIClipRect u_Clips[];
+};
+
 layout(push_constant) uniform DrawParameters
 {
 	vec2 ViewportSize;
@@ -51,7 +62,7 @@ layout(push_constant) uniform DrawParameters
 	float Scale;
 	uint PixelSnap;
 	uint FirstQuad;
-	uint Padding;
+	uint FirstClip; // The canvas's clip rects: a quad's Clip n (n > 0) is u_Clips[FirstClip + n - 1]
 	uvec4 Fonts;
 	uvec4 GlyphBases;
 } u_Draw;

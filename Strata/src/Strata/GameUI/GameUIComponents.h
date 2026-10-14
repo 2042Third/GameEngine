@@ -238,4 +238,13 @@ namespace Strata
 		uint32_t Columns = 0;                    // Grid: 0 fits as many cells as the width holds
 	};
 
+	// Clips the element's descendants to its rect inset by Padding: what lies outside is neither drawn nor hit by the
+	// pointer (scrolling lists, cards whose content must not spill). Masks nest: a descendant of two shows only where both
+	// rects overlap. The element's own image and text are clipped only by the masks above it.
+	struct UIMaskComponent
+	{
+		glm::vec4 Padding = glm::vec4(0.0f); // Left, top, right, bottom insets of the clip rect, in canvas units
+		float Softness = 0.0f;                // Canvas units over which content fades out toward the clip rect's edges
+	};
+
 }

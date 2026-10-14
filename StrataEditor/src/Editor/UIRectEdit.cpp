@@ -218,7 +218,7 @@ namespace Strata::UIRectEdit
 				const entt::entity entity = ui.GetElementEntity(view, element);
 				if (!registry.any_of<UIImageComponent, UITextComponent>(entity) || !ui.IsElementVisible(view, element))
 					continue;
-				if (ui.GetElementBox(view, element).Contains(point))
+				if (ui.GetVisibleBox(view, element).Contains(point))
 					return Entity(entity, &scene);
 			}
 		}

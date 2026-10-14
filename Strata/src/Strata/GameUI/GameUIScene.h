@@ -10,6 +10,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <unordered_map>
@@ -148,6 +149,10 @@ namespace Strata
 		bool IsElementVisible(const UICanvasView& view, uint32_t element) const;
 		// Whether the pointer can hit the element: it has a UIImage or UIText that is a raycast target, or a UISelectable.
 		bool IsRaycastTarget(const UICanvasView& view, uint32_t element) const;
+		// The rect the masks above the element clip it to (canvas units; nullopt: no mask clips it). It may be empty.
+		std::optional<UIBox> GetElementClip(const UICanvasView& view, uint32_t element) const;
+		// What the masks leave of the element's box: where it is drawn and hit (its box when no mask clips it).
+		UIBox GetVisibleBox(const UICanvasView& view, uint32_t element) const;
 		// The view and element of an entity in the canvases of the latest EnsureLayout of `screen`; false for entities that
 		// are not laid-out UI elements.
 		bool FindElement(entt::entity entity, const UIScreen& screen, UICanvasView& outView, uint32_t& outElement);
@@ -165,6 +170,9 @@ namespace Strata
 		uint64_t GetQuadVersion(const UICanvasView& view) const;
 		// Appends the ranges written after quad version `sinceVersion`; false when they are no longer known (upload it whole).
 		bool GetQuadChanges(const UICanvasView& view, uint64_t sinceVersion, std::vector<UIQuadRange>& outRanges) const;
+		// The canvas view's clip rects (UIQuad::Clip names them), and a version that changes with them.
+		std::span<const RenderData::UIClipRect> GetClipRects(const UICanvasView& view) const;
+		uint64_t GetClipVersion(const UICanvasView& view) const;
 
 		// What the quads refer to: UI texture index -> texture (with the number of quads that use each, 0 for textures no quad
 		// uses any more), scene font index -> font (index 0 and null handles: the engine's default font), the distinct glyphs
@@ -227,6 +235,7 @@ namespace Strata
 		bool ComputeRaycastTarget(entt::entity entity, bool ignoreImage = false, bool ignoreText = false, bool ignoreSelectable = false) const;
 		void OnSliderChanged(entt::registry& registry, entt::entity entity);
 		void OnToggleChanged(entt::registry& registry, entt::entity entity);
+		void OnMaskChanged(entt::registry& registry, entt::entity entity);
 
 		// Changes since the last update: structure, hierarchy moves, activity, assets.
 		void ProcessChanges();
@@ -251,6 +260,10 @@ namespace Strata
 		// Layout (GameUILayout.cpp).
 		Layout& GetLayout(Canvas& canvas, const glm::vec2& unitSize, uint32_t& outIndex);
 		void UpdateLayout(Canvas& canvas, Layout& layout);
+		// The layout's clip rects, when its boxes or the masks changed (each mask's rect inset by its padding, met with the
+		// clip rect of the masks above it).
+		void UpdateClips(Canvas& canvas, Layout& layout);
+		void ComputeClips(const Canvas& canvas, const std::vector<UIBox>& boxes, std::vector<RenderData::UIClipRect>& outClips) const;
 		// Lays out the subtree of `root` into `boxes`, the root placed in its parent's box (the root rect for the canvas).
 		void LayOutSubtree(const Canvas& canvas, Layout& layout, uint32_t root, std::vector<UIBox>& boxes);
 		UIBox GetRootBox(const Canvas& canvas, const glm::vec2& unitSize) const;
@@ -333,6 +346,7 @@ namespace Strata
 		std::vector<uint8_t> m_Placed;
 		std::vector<UIBox> m_BoxScratch;
 		std::vector<RenderData::UIQuad> m_QuadScratch;
+		std::vector<RenderData::UIClipRect> m_ClipScratch;
 		struct SelectableState
 		{
 			UIVisualState State = UIVisualState::Normal;

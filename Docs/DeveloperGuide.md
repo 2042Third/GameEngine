@@ -1102,12 +1102,17 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   are counted, not laid out. `SceneRenderOptions::OverlayScene` draws another scene's UI: `GameRenderer` shows a scene
   without a camera that has screen-space UI (`SceneRenderer::HasOverlayContent`) as its UI over black.
 - The pass requests each distinct UI texture and font once per frame through `Scene::GetAssetManager()` at High priority
-  (a texture draws white while it loads, a text uses the default font), keeps a table of their bindless slots and a table
-  of glyph placements per font (from the renderer's `FontAtlasCache`, the frame's raster budget lent to it), and reports
-  each drawn texture to the texture streamer (`VisibleTextureUse`, at the pixels a texture coordinate unit spans), so UI
-  images stream to the level they are drawn at. It uploads only the quad ranges that changed since its renderer's last
-  frame; an idle frame uploads nothing. A canvas with up to `RenderData::c_MaxBoundAtlases` (4) fonts is one draw.
-- `UIQuad`, the draw parameters and the table formats live in `GameUI/GameUIRenderData.h` and
+  (a texture draws white while it loads, a text uses the default font), keeps a table of their bindless slots and a
+  table of glyph placements per font (from the renderer's `FontAtlasCache`, the frame's raster budget lent to it), and
+  reports each drawn texture to the texture streamer (`VisibleTextureUse`, at the pixels a texture coordinate unit
+  spans), so UI images stream to the level they are drawn at. It uploads only the quad ranges (and the canvases' mask
+  clip rects) that changed since its renderer's last frame; an idle frame uploads nothing. A canvas with up to
+  `RenderData::c_MaxBoundAtlases` (4) fonts is one draw.
+- Masks (`UIMask`) clip in the pass, never by splitting draws: a quad names its canvas's clip rect (`UIQuad::Clip`, 1 +
+  the slot of the nearest mask above its element), and code that tests where an element is shown or hit uses
+  `GameUIScene::GetVisibleBox` (what the masks leave of its box), as hit tests, `input.click` and the editor's picking
+  do.
+- `UIQuad`, `UIClipRect`, the draw parameters and the table formats live in `GameUI/GameUIRenderData.h` and
   `shaders/GameUI/UIQuad.glsl`: change both together. Images blend in display values (sRGB textures sample linear values
   and are converted back), corners and borders come from the rect's signed distance, glyphs share `Include/SDFText.glsl`
   with the text renderer.

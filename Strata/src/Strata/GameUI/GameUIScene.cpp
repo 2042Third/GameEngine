@@ -129,6 +129,10 @@ namespace Strata
 		registry.on_construct<UISliderComponent>().connect<&GameUIScene::OnSliderChanged>(*this);
 		registry.on_update<UISliderComponent>().connect<&GameUIScene::OnSliderChanged>(*this);
 		registry.on_destroy<UISliderComponent>().connect<&GameUIScene::OnSliderChanged>(*this);
+		// A mask added or removed changes which clip rect each element of its subtree has: the canvas is rebuilt.
+		registry.on_construct<UIMaskComponent>().connect<&GameUIScene::OnStructureChanged>(*this);
+		registry.on_update<UIMaskComponent>().connect<&GameUIScene::OnMaskChanged>(*this);
+		registry.on_destroy<UIMaskComponent>().connect<&GameUIScene::OnStructureChanged>(*this);
 		if (const AssetManagerBase* assets = scene.GetAssetManager())
 			m_AssetContentVersion = assets->GetContentVersion();
 		// Index 0 is the default font (texts without a font, or whose font loads).
@@ -320,6 +324,16 @@ namespace Strata
 		TouchHits(ref->Canvas);
 	}
 
+	void GameUIScene::OnMaskChanged(entt::registry&, entt::entity entity)
+	{
+		// Its padding or softness: the clip rects are computed again (the quads name them, so they stay).
+		if (const ElementRef* ref = FindRef(entity))
+		{
+			for (Layout& layout : m_Canvases[ref->Canvas].Layouts)
+				layout.ClipsDirty = true;
+		}
+	}
+
 	void GameUIScene::MarkElementLayoutDirty(uint32_t canvasIndex, uint32_t element)
 	{
 		for (Layout& layout : m_Canvases[canvasIndex].Layouts)
@@ -355,6 +369,7 @@ namespace Strata
 		{
 			layout.AllDirty = true;
 			layout.QuadsRepack = true;
+			layout.ClipsDirty = true;
 		}
 		TouchHits(canvasIndex);
 	}
@@ -490,6 +505,24 @@ namespace Strata
 			if (element.Parent != c_NoElement)
 				canvas.Elements[element.Parent].SubtreeEnd = std::max(canvas.Elements[element.Parent].SubtreeEnd, element.SubtreeEnd);
 		}
+		// Masks: each takes a slot (parents before children), and every element is clipped by the nearest mask above it.
+		canvas.Masks.clear();
+		for (uint32_t index = 0; index < count; index++)
+		{
+			Element& element = canvas.Elements[index];
+			element.MaskSlot = c_NoElement;
+			element.Clip = 0;
+			if (element.Parent != c_NoElement)
+			{
+				const Element& parent = canvas.Elements[element.Parent];
+				element.Clip = parent.MaskSlot != c_NoElement ? parent.MaskSlot + 1 : parent.Clip;
+			}
+			if (m_Registry->all_of<UIMaskComponent>(element.Entity))
+			{
+				element.MaskSlot = static_cast<uint32_t>(canvas.Masks.size());
+				canvas.Masks.push_back(index);
+			}
+		}
 
 		// Where each element is, and where it was.
 		std::unordered_map<entt::entity, uint32_t> oldIndices;
@@ -548,6 +581,7 @@ namespace Strata
 			layout.Dirty.clear();
 			layout.DirtyMarks.assign(count, 0);
 			layout.QuadsRepack = true;
+			layout.ClipsDirty = true;
 			layout.HitStamp = ++m_HitStamp;
 		}
 		// An element moved when its parent or the sibling before it changed: each list's previous siblings in one pass.
@@ -830,6 +864,7 @@ namespace Strata
 			Layout& layout = GetLayout(canvas, unitSize, layoutIndex);
 			layout.LastUsed = m_LayoutStamp;
 			UpdateLayout(canvas, layout);
+			UpdateClips(canvas, layout);
 
 			UICanvasView& view = m_Views.emplace_back();
 			view.Canvas = canvas.Entity;
@@ -979,6 +1014,38 @@ namespace Strata
 	bool GameUIScene::IsRaycastTarget(const UICanvasView& view, uint32_t element) const
 	{
 		return m_Canvases[view.CanvasIndex].Elements[element].RaycastTarget;
+	}
+
+	std::optional<UIBox> GameUIScene::GetElementClip(const UICanvasView& view, uint32_t element) const
+	{
+		const Canvas& canvas = m_Canvases[view.CanvasIndex];
+		const Layout& layout = canvas.Layouts[view.LayoutIndex];
+		const uint32_t clip = element < canvas.Elements.size() ? canvas.Elements[element].Clip : 0;
+		if (clip == 0 || clip > layout.Clips.size())
+			return std::nullopt;
+		const glm::vec4& rect = layout.Clips[clip - 1].Rect;
+		return UIBox { glm::vec2(rect.x, rect.y), glm::max(glm::vec2(rect.z, rect.w) - glm::vec2(rect.x, rect.y), glm::vec2(0.0f)) };
+	}
+
+	UIBox GameUIScene::GetVisibleBox(const UICanvasView& view, uint32_t element) const
+	{
+		const UIBox box = GetElementBox(view, element);
+		const std::optional<UIBox> clip = GetElementClip(view, element);
+		if (!clip)
+			return box;
+		const glm::vec2 min = glm::max(box.Min, clip->Min);
+		const glm::vec2 max = glm::min(box.GetMax(), clip->GetMax());
+		return UIBox { min, glm::max(max - min, glm::vec2(0.0f)) };
+	}
+
+	std::span<const RenderData::UIClipRect> GameUIScene::GetClipRects(const UICanvasView& view) const
+	{
+		return m_Canvases[view.CanvasIndex].Layouts[view.LayoutIndex].Clips;
+	}
+
+	uint64_t GameUIScene::GetClipVersion(const UICanvasView& view) const
+	{
+		return m_Canvases[view.CanvasIndex].Layouts[view.LayoutIndex].ClipVersion;
 	}
 
 	bool GameUIScene::IsVisible(const Canvas& canvas, uint32_t element) const
@@ -1134,6 +1201,20 @@ namespace Strata
 							layout.Boxes[index].Min.x, layout.Boxes[index].Min.y, layout.Boxes[index].Size.x, layout.Boxes[index].Size.y, boxes[index].Min.x,
 							boxes[index].Min.y, boxes[index].Size.x, boxes[index].Size.y, layout.UnitSize.x, layout.UnitSize.y));
 					}
+				}
+				if (!valid || layout.ClipsDirty)
+					continue;
+				// The clip rects follow the boxes and the masks' values.
+				std::vector<RenderData::UIClipRect> clips;
+				ComputeClips(canvas, layout.Boxes, clips);
+				for (uint32_t slot = 0; slot < clips.size() && valid; slot++)
+				{
+					const RenderData::UIClipRect* cached = slot < layout.Clips.size() ? &layout.Clips[slot] : nullptr;
+					const UIBox recomputed { glm::vec2(clips[slot].Rect), glm::vec2(clips[slot].Rect.z, clips[slot].Rect.w) - glm::vec2(clips[slot].Rect) };
+					const bool same = cached && SameBox(UIBox { glm::vec2(cached->Rect), glm::vec2(cached->Rect.z, cached->Rect.w) - glm::vec2(cached->Rect) },
+						recomputed, 1e-4f) && std::abs(cached->Parameters.x - clips[slot].Parameters.x) <= 1e-4f;
+					if (!same)
+						valid = fail(canvas.Elements[canvas.Masks[slot]].Entity, "its mask's clip rect changed unnoticed");
 				}
 			}
 		}

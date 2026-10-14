@@ -31,6 +31,9 @@ namespace Strata
 		// A selectable and the image it tints (itself, or its TargetImage), both ways.
 		uint32_t TintTarget = c_NoElement;
 		uint32_t TintFrom = c_NoElement;
+		// Masks: 1 + the clip rect of the nearest mask above the element (0: none), and its own mask's (c_NoElement: none).
+		uint32_t Clip = 0;
+		uint32_t MaskSlot = c_NoElement;
 		// Of a slider, toggle or selectable: the parts it named when they were resolved (a change of them rebuilds the canvas).
 		UUID FillID = UUID::Null();
 		UUID HandleID = UUID::Null();
@@ -60,6 +63,11 @@ namespace Strata
 		std::vector<uint8_t> DirtyMarks;    // Per element: in Dirty
 		bool AllDirty = true;               // Everything is laid out again (new layouts, lost changes)
 
+		// The clip rects of the canvas's masks (by mask slot), from the boxes; recomputed when boxes or masks change.
+		std::vector<RenderData::UIClipRect> Clips;
+		uint64_t ClipVersion = 0;
+		bool ClipsDirty = true;
+
 		// Quads: each element has a slot of QuadCapacity quads from QuadFirst, in element order; unused quads are hidden.
 		std::vector<RenderData::UIQuad> Quads;
 		std::vector<uint32_t> QuadFirst;
@@ -83,6 +91,7 @@ namespace Strata
 	{
 		entt::entity Entity = entt::null;
 		std::vector<Element> Elements;
+		std::vector<uint32_t> Masks; // Elements with a UIMaskComponent, in element order (their slots)
 		std::vector<Layout> Layouts;
 		bool StructureDirty = true;
 	};

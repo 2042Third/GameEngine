@@ -201,6 +201,16 @@ namespace Strata
 			.Property("StretchChildren", &UILayoutComponent::StretchChildren, WithTooltip({}, "Children fill the cross axis"))
 			.Property("CellSize", &UILayoutComponent::CellSize, WithTooltip(Range(1.0f, c_Unbounded, 1.0f), "Grid: the size of a cell, in canvas units"))
 			.Property("Columns", &UILayoutComponent::Columns, WithTooltip(Range(0.0f, 4096.0f), "Grid: 0 fits as many columns as the width holds"));
+
+		ComponentRegistry::Register<UIMaskComponent>("UIMask")
+			.DisplayName("UI Mask")
+			.Category(c_Category)
+			.Description("Clips the element's children to its rect: what lies outside is neither drawn nor hit")
+			.Requires(c_RectName)
+			.Property("Padding", &UIMaskComponent::Padding, WithTooltip(Range(-c_Unbounded, c_Unbounded, 1.0f),
+				"Left, top, right and bottom insets of the clip rect, in canvas units (negative: outside the rect)"))
+			.Property("Softness", &UIMaskComponent::Softness, WithTooltip(Range(0.0f, c_Unbounded, 0.5f),
+				"Canvas units over which the children fade out toward the clip rect's edges (0: a hard edge)"));
 	}
 
 }

@@ -80,7 +80,7 @@ namespace Strata
 		std::optional<Placement> FindPlacement(Scene& scene, Entity entity, const UIScreen& screen);
 
 		// What a click at a pixel of a screen selects in the editor: the topmost visible element that draws something (an image
-		// or a text) there, in every canvas whether it receives input or not. Root canvases and empty layout rects are never
+		// or a text) there, where no mask clips it, in every canvas whether it receives input or not. Root canvases and empty layout rects are never
 		// picked, so they do not hide the scene behind them. Invalid when there is none.
 		Entity PickElement(Scene& scene, const UIScreen& screen, const glm::vec2& pixel);
 

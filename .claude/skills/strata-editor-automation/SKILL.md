@@ -449,10 +449,12 @@ ui.hitTest {"position": [960, 540]}                                      # what 
   `middleStretch`, `bottomLeft`, ..., `stretchLeft`, `stretchCenter`, `stretchRight`, `stretch`; it sets the pivot too.
   `position` is the pivot's offset in canvas units (+y down); along a stretched axis `size` is added to the parent's span
   (`[-40, 60]` on `bottomStretch`: a 60-high bar with 20 units of margin each side).
-- Tune with `component.set` on `UIRect`, `UIImage` (`Color`, `CornerRadius`, `BorderWidth`, `Texture`), `UIText` (`Text`,
-  `FontSize`, `Alignment`), `UICanvas` (`ScaleMode`, `ReferenceResolution`, `MatchWidthOrHeight`, `SortOrder`,
-  `ReceivesInput`: false for HUDs that never block clicks), `UIButton`/`UIToggle`/`UISlider` (`EventTarget`: the entity whose
-  scripts get `OnUIClick`/`OnUIValueChanged`), `UISelectable` (colors, `Navigation`).
+- Tune with `component.set` on `UIRect`, `UIImage` (`Color`, `CornerRadius`, `BorderWidth`, `Texture`), `UIText`
+  (`Text`, `FontSize`, `Alignment`), `UICanvas` (`ScaleMode`, `ReferenceResolution`, `MatchWidthOrHeight`, `SortOrder`,
+  `ReceivesInput`: false for HUDs that never block clicks), `UIButton`/`UIToggle`/`UISlider` (`EventTarget`: the entity
+  whose scripts get `OnUIClick`/`OnUIValueChanged`), `UISelectable` (colors, `Navigation`). `component.add` of `UIMask`
+  (`Padding`, `Softness`) keeps an element's children inside its rect: `ui.layout` then reports `visibleRect` for them,
+  and `input.click` aims at what the mask leaves.
 - Check proportions without rendering: `ui.layout` at two screens of the same aspect gives the same fractions under
   `ScaleWithScreen`. `ui.layout {"entity": ...}` lists one subtree (state, focused, text and value too).
 - For the person: `viewport.setSettings {"canvasMode": true}` shows the selection's canvas in 2D at its reference aspect

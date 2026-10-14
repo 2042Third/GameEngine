@@ -634,9 +634,13 @@ namespace Strata
 						Entity(view.Canvas, &scene).GetName()));
 				if (!ui.IsElementVisible(view, element))
 					return EditorCommandResult::Fail(fmt::format("'{}' is not shown (it is inactive, or inside the checkmark of a toggle that is off)", target.GetName()));
-				const UIBox box = ui.GetElementBox(view, element);
+				const UIBox box = ui.GetVisibleBox(view, element);
 				if (!(box.Size.x > 0.0f && box.Size.y > 0.0f))
-					return EditorCommandResult::Fail(fmt::format("'{}' has an empty rect", target.GetName()));
+				{
+					return EditorCommandResult::Fail(ui.GetElementClip(view, element)
+						? fmt::format("'{}' is outside the clip rect of a UI Mask above it: nothing of it is shown", target.GetName())
+						: fmt::format("'{}' has an empty rect", target.GetName()));
+				}
 				const glm::vec2 pixel = box.GetCenter() * view.Scale;
 				GameUIHitTester tester;
 				tester.Update(ui, views);

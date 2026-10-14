@@ -2765,6 +2765,15 @@
 						"StretchChildren": true,
 						"Type": "Vertical"
 					},
+					"UIMask": {
+						"Padding": [
+							2,
+							2,
+							2,
+							2
+						],
+						"Softness": 1
+					},
 					"UIRect": {
 						"AnchorMax": [
 							1,

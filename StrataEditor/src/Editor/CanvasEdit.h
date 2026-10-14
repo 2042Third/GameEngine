@@ -58,7 +58,7 @@ namespace Strata
 		float GetCanvasAspect(Entity canvas, float fallback);
 
 		// What a click at a pixel of a screen selects in canvas mode: the topmost visible element there (any element but the
-		// root canvas, drawn or not), in the canvas `canvas`. Invalid when there is none.
+		// root canvas, drawn or not) where no mask clips it, in the canvas `canvas`. Invalid when there is none.
 		Entity PickElement(Scene& scene, Entity canvas, const UIScreen& screen, const glm::vec2& pixel);
 
 		// The canvas mode's zoom and pan of the canvas it shows. At zoom 1 without a pan the canvas fills the panel at its

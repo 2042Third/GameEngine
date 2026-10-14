@@ -17,7 +17,8 @@ using namespace Strata;
 namespace
 {
 
-	constexpr const char* c_UIComponents[] = { "UICanvas", "UIRect", "UIImage", "UIText", "UISelectable", "UIButton", "UIToggle", "UISlider", "UILayout" };
+	constexpr const char* c_UIComponents[] = { "UICanvas", "UIRect", "UIImage", "UIText", "UISelectable", "UIButton", "UIToggle", "UISlider", "UILayout",
+		"UIMask" };
 
 	// A canvas with a slider whose parts, a button and a toggle reference each other and an entity outside.
 	struct ReferencingUI
@@ -173,6 +174,9 @@ TEST_SUITE("GameUI.Serialization")
 		layout.StretchChildren = true;
 		layout.CellSize = { 64.0f, 32.0f };
 		layout.Columns = 3;
+		UIMaskComponent& mask = ui.Slider.AddComponent<UIMaskComponent>();
+		mask.Padding = { 2.0f, -3.0f, 4.0f, 5.5f };
+		mask.Softness = 6.0f;
 		UICanvasComponent& canvas = ui.Canvas.GetComponent<UICanvasComponent>();
 		canvas.ScaleMode = UICanvasScaleMode::ConstantPhysicalSize;
 		canvas.ReferenceResolution = { 1280.0f, 720.0f };
@@ -198,6 +202,8 @@ TEST_SUITE("GameUI.Serialization")
 		CHECK(loadedImage.FillDirection == UIFillDirection::BottomToTop);
 		CHECK(slider.GetComponent<UIRectComponent>().FitContent == UIFitContent::Height);
 		CHECK(slider.GetComponent<UISliderComponent>().Fill == ui.Fill.GetUUID());
+		CHECK(slider.GetComponent<UIMaskComponent>().Padding == mask.Padding);
+		CHECK(slider.GetComponent<UIMaskComponent>().Softness == 6.0f);
 		const Entity handle = loaded->GetEntityByUUID(ui.Handle.GetUUID());
 		CHECK(handle.GetComponent<UITextComponent>().Text == "Lives: 3\nScore: 9");
 		CHECK(handle.GetComponent<UITextComponent>().Overflow == UITextOverflow::Ellipsis);

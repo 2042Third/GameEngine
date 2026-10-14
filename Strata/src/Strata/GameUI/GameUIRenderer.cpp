@@ -80,6 +80,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::Texture_SRV(4),
 			nvrhi::BindingLayoutItem::Texture_SRV(5),
 			nvrhi::BindingLayoutItem::Texture_SRV(6),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(7),
 			nvrhi::BindingLayoutItem::Sampler(0),
 			nvrhi::BindingLayoutItem::PushConstants(0, sizeof(RenderData::UIDrawParameters))
 		};
@@ -164,14 +165,14 @@ namespace Strata
 			m_EmptyAtlasWritten = true;
 		}
 		AssetManagerBase* assets = scene->GetAssetManager();
-		if (!UploadQuads(ui, views, commandList, stats))
+		if (!UploadQuads(ui, views, commandList, stats) || !UploadClips(ui, views, commandList, stats))
 			return false;
 		float maxScale = 0.0f;
 		for (const UICanvasView& view : views)
 			maxScale = std::max(maxScale, view.Scale * m_ScreenZoom);
 		UpdateTextures(ui, frame, assets, maxScale);
 		UpdateGlyphs(ui, frame, assets);
-		if (!m_QuadBuffer || !m_TextureSlotBuffer || !m_GlyphBuffer)
+		if (!m_QuadBuffer || !m_TextureSlotBuffer || !m_GlyphBuffer || !m_ClipBuffer)
 			return false;
 		BuildRuns(ui, views);
 
@@ -272,10 +273,57 @@ namespace Strata
 				stats.UploadedBytes += bytes;
 				noteDensity(quads.data(), count);
 			}
-			uploaded.push_back(UploadedCanvas { ui.GetQuadArrayId(view), ui.GetQuadVersion(view), offset, count });
+			UploadedCanvas& canvas = uploaded.emplace_back();
+			canvas.QuadArrayId = ui.GetQuadArrayId(view);
+			canvas.QuadVersion = ui.GetQuadVersion(view);
+			canvas.Offset = offset;
+			canvas.Count = count;
+			if (sameScene && index < m_Uploaded.size())
+			{
+				canvas.ClipLayoutId = m_Uploaded[index].ClipLayoutId;
+				canvas.ClipVersion = m_Uploaded[index].ClipVersion;
+				canvas.ClipOffset = m_Uploaded[index].ClipOffset;
+				canvas.ClipCount = m_Uploaded[index].ClipCount;
+			}
 			offset += count;
 		}
 		m_Uploaded = std::move(uploaded);
+		return true;
+	}
+
+	bool GameUIRenderer::UploadClips(GameUIScene& ui, std::span<const UICanvasView> views, nvrhi::ICommandList* commandList, SceneOverlayStats& stats)
+	{
+		// The clip rects of every canvas view, one after the other (a buffer of one rect when no canvas has a mask).
+		uint64_t total = 0;
+		for (const UICanvasView& view : views)
+			total += ui.GetClipRects(view).size();
+		const bool recreated = EnsureBuffer(m_ClipBuffer, std::max<uint64_t>(total, 1) * sizeof(RenderData::UIClipRect), sizeof(RenderData::UIClipRect), "UIClips");
+		if (!m_ClipBuffer)
+		{
+			m_Errors.Report(fmt::format("failed to allocate {} UI clip rects", total));
+			return false;
+		}
+		uint32_t offset = 0;
+		for (size_t index = 0; index < views.size(); index++)
+		{
+			const UICanvasView& view = views[index];
+			UploadedCanvas& canvas = m_Uploaded[index];
+			const std::span<const RenderData::UIClipRect> clips = ui.GetClipRects(view);
+			const uint32_t count = static_cast<uint32_t>(clips.size());
+			const bool current = !recreated && canvas.ClipLayoutId == ui.GetLayoutId(view) && canvas.ClipVersion == ui.GetClipVersion(view)
+				&& canvas.ClipOffset == offset && canvas.ClipCount == count;
+			if (!current && count > 0)
+			{
+				const uint64_t bytes = static_cast<uint64_t>(count) * sizeof(RenderData::UIClipRect);
+				commandList->writeBuffer(m_ClipBuffer, clips.data(), bytes, static_cast<uint64_t>(offset) * sizeof(RenderData::UIClipRect));
+				stats.UploadedBytes += bytes;
+			}
+			canvas.ClipLayoutId = ui.GetLayoutId(view);
+			canvas.ClipVersion = ui.GetClipVersion(view);
+			canvas.ClipOffset = offset;
+			canvas.ClipCount = count;
+			offset += count;
+		}
 		return true;
 	}
 
@@ -468,6 +516,7 @@ namespace Strata
 			DrawRun empty;
 			empty.Scale = view.Scale * m_ScreenZoom;
 			empty.PixelSnap = view.PixelSnap;
+			empty.FirstClip = uploaded.ClipOffset;
 			empty.Atlases.fill(m_EmptyAtlas.Get());
 
 			// Up to four fonts: the whole canvas in one draw.
@@ -555,6 +604,7 @@ namespace Strata
 				nvrhi::BindingSetItem::Texture_SRV(4, atlases[1]),
 				nvrhi::BindingSetItem::Texture_SRV(5, atlases[2]),
 				nvrhi::BindingSetItem::Texture_SRV(6, atlases[3]),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(7, m_ClipBuffer),
 				nvrhi::BindingSetItem::Sampler(0, m_Sampler),
 				nvrhi::BindingSetItem::PushConstants(0, sizeof(RenderData::UIDrawParameters))
 			};
@@ -593,6 +643,7 @@ namespace Strata
 			parameters.Scale = run.Scale;
 			parameters.PixelSnap = run.PixelSnap ? 1u : 0u;
 			parameters.FirstQuad = run.FirstQuad;
+			parameters.FirstClip = run.FirstClip;
 			parameters.Fonts = run.Fonts;
 			parameters.GlyphBases = run.GlyphBases;
 			commandList->setPushConstants(&parameters, sizeof(parameters));

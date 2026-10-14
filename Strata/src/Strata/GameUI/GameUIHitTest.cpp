@@ -48,7 +48,8 @@ namespace Strata
 		{
 			if (!ui.IsElementVisible(view, element) || !ui.IsRaycastTarget(view, element))
 				continue;
-			const UIBox box = ui.GetElementBox(view, element);
+			// What the masks above it leave of it: the pointer hits only what is drawn.
+			const UIBox box = ui.GetVisibleBox(view, element);
 			if (box.Size.x > 0.0f && box.Size.y > 0.0f)
 				grid.Targets.push_back(Target { element, ui.GetElementEntity(view, element), box });
 		}
@@ -133,7 +134,7 @@ namespace Strata
 			const glm::vec2 point = pixel / view.Scale;
 			for (uint32_t element = ui.GetElementCount(view); element-- > 0;)
 			{
-				if (ui.IsElementVisible(view, element) && ui.GetElementBox(view, element).Contains(point))
+				if (ui.IsElementVisible(view, element) && ui.GetVisibleBox(view, element).Contains(point))
 					outHits.push_back(UIHitResult { ui.GetElementEntity(view, element), static_cast<uint32_t>(viewIndex), element });
 			}
 		}

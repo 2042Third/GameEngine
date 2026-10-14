@@ -1873,6 +1873,7 @@ units with +Y down and (0, 0) at the top left; colors are display (sRGB) colors.
 | `UISelectable` | The interaction states shared by every widget (normal, hover, pressed, focused, disabled; color tints or image swaps over a fade time) and keyboard and gamepad navigation (automatic, explicit neighbours, none) |
 | `UIButton`, `UIToggle`, `UISlider` | Widgets: a click, an on/off switch with a checkmark and exclusive groups, a value with a fill and a handle; each may name an event target besides its own entity |
 | `UILayout` | Places the children: horizontal, vertical or grid, with padding, spacing, the alignment of the block and stretching |
+| `UIMask` | Clips the element's descendants to its rect inset by padding, with an optional soft edge; masks nest |
 
 An entity is a UI element when it has a `UIRect` and a root canvas (a canvas without a canvas among its ancestors) is the
 entity itself or an ancestor; a canvas under another canvas is an element of the outer one. Every UI component but the
@@ -1899,6 +1900,11 @@ pixel size and content scale) at a scale s and a size of screen / s canvas units
 - Fitting content: a rect that fits takes its content's preferred size on those axes: a `UIText`'s shaped text (unwrapped
   width; the height at the width it has), a `UILayout`'s children block plus padding. Layout runs per axis, widths first,
   each axis bottom up for preferred sizes and top down for boxes, because a wrapped text's height depends on its width.
+- Masks: each `UIMask` element takes a slot of its canvas (parents first), every element is clipped by the nearest mask
+  above it (`Element::Clip`), and each layout keeps the masks' clip rects (`RenderData::UIClipRect`: the mask's box
+  inset by its padding, met with the clip rect of the masks above it), computed again when a mask's box or values
+  change. Quads name their clip rect, so a padding change rewrites the clip rects alone; hit tests and the editor's
+  picking use what the masks leave of a box (`GameUIScene::GetVisibleBox`).
 - Widget parts: a slider's `Fill` is anchored from the slider's start to its normalized value along `Direction`, its
   `Handle` at the value; a toggle's `Checkmark` (with its descendants) is drawn only while the toggle is on. They read the
   widgets' values, never write the scene, so they behave the same in edit mode, play mode and under undo.
@@ -1949,7 +1955,9 @@ small table, so quads never change when mip streaming moves a slot) and each dis
 renderer's atlas (a table per font: asking for the glyph also rasterizes it within the budget and keeps it from eviction
 while shown), and reports drawn textures for mip streaming. Canvases draw by sort order, instanced, six vertices per
 quad and no vertex buffer, with up to four atlases bound, so a canvas with up to four fonts is one draw; push constants
-carry the canvas's scale and pixel snapping (rect edges and glyph baselines on whole pixels). `GameRenderer` shows a
+carry the canvas's scale and pixel snapping (rect edges and glyph baselines on whole pixels) and where the canvas's clip
+rects start in a clip buffer uploaded beside the quads (when they change): a masked quad entirely outside its clip rect
+draws nothing, others are clipped per pixel with the mask's soft edge, so masks break no batch. `GameRenderer` shows a
 scene without a primary camera that has screen-space UI (a main menu) as that UI over black instead of its
 missing-camera message (`SceneRenderOptions::OverlayScene`).
 

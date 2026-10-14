@@ -438,6 +438,10 @@ namespace Strata
 				}
 			}
 		}
+		// Every quad of the element is clipped by the masks above it.
+		const uint32_t clip = canvas.Elements[element].Clip;
+		for (size_t index = first; index < out.size(); index++)
+			out[index].Clip = clip;
 		return static_cast<uint32_t>(out.size() - first);
 	}
 

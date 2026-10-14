@@ -111,6 +111,7 @@ namespace Strata
 			layout.Dirty.clear();
 			std::fill(layout.DirtyMarks.begin(), layout.DirtyMarks.end(), 0);
 			layout.QuadsRepack = true;
+			layout.ClipsDirty = true;
 			layout.HitStamp = ++m_HitStamp;
 			return;
 		}
@@ -147,11 +148,55 @@ namespace Strata
 				{
 					markQuads(element);
 					layout.HitStamp = m_HitStamp + 1;
+					// A mask's clip rect follows its box (and those of masks inside it follow it).
+					if (!canvas.Masks.empty())
+						layout.ClipsDirty = true;
 				}
 			}
 		}
 		roots.clear();
 		m_HitStamp = std::max(m_HitStamp, layout.HitStamp);
+	}
+
+	void GameUIScene::UpdateClips(Canvas& canvas, Layout& layout)
+	{
+		if (!layout.ClipsDirty)
+			return;
+		layout.ClipsDirty = false;
+		ComputeClips(canvas, layout.Boxes, m_ClipScratch);
+		if (m_ClipScratch == layout.Clips)
+			return;
+		layout.Clips.swap(m_ClipScratch);
+		layout.ClipVersion++;
+		// What the pointer can hit changed with them.
+		layout.HitStamp = ++m_HitStamp;
+	}
+
+	void GameUIScene::ComputeClips(const Canvas& canvas, const std::vector<UIBox>& boxes, std::vector<RenderData::UIClipRect>& outClips) const
+	{
+		outClips.resize(canvas.Masks.size());
+		for (uint32_t slot = 0; slot < canvas.Masks.size(); slot++)
+		{
+			const uint32_t element = canvas.Masks[slot];
+			const UIMaskComponent* mask = m_Registry->try_get<UIMaskComponent>(canvas.Elements[element].Entity);
+			const UIBox box = element < boxes.size() ? boxes[element] : UIBox {};
+			glm::vec4 padding = mask ? mask->Padding : glm::vec4(0.0f);
+			for (int side = 0; side < 4; side++)
+				padding[side] = std::isfinite(padding[side]) ? padding[side] : 0.0f;
+			const float softness = mask && std::isfinite(mask->Softness) ? std::max(mask->Softness, 0.0f) : 0.0f;
+			glm::vec2 min = box.Min + glm::vec2(padding.x, padding.y);
+			glm::vec2 max = box.GetMax() - glm::vec2(padding.z, padding.w);
+			// Within the clip rect of the masks above it (their slots come first).
+			const uint32_t outer = canvas.Elements[element].Clip;
+			if (outer != 0 && outer - 1 < slot)
+			{
+				const glm::vec4& rect = outClips[outer - 1].Rect;
+				min = glm::max(min, glm::vec2(rect.x, rect.y));
+				max = glm::min(max, glm::vec2(rect.z, rect.w));
+			}
+			outClips[slot].Rect = glm::vec4(min, max);
+			outClips[slot].Parameters = glm::vec4(softness, 0.0f, 0.0f, 0.0f);
+		}
 	}
 
 	void GameUIScene::LayOutSubtree(const Canvas& canvas, Layout& layout, uint32_t root, std::vector<UIBox>& boxes)
