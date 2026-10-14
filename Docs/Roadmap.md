@@ -359,10 +359,6 @@ interleaved A/Bs against wave 2's build; the quiet campaign that decided the bud
 
 Open items and deferrals later waves own:
 
-- Optional modules: Physics, Audio and Animation can be left out of a game's build (`STRATA_WITH_*`), Scripting not
-  yet: `GameRuntime`, the editor and many tests use the script engine directly, and a runtime without scripting would
-  have to refuse games that name a script module ("this runtime was built without scripting").
-
 - Physics: what an overflowing world needed is remembered per scene for the process, not saved with the scene;
   automatic capacities reserve Jolt's buffers generously (70,000 bodies reserve about a million body pairs), and a world
   at the largest capacities still reserves about 940 MiB at play start; dynamic bodies below other dynamic bodies are
@@ -533,14 +529,6 @@ Open items and deferrals later waves own:
     perf findings for it: `RuntimeMaxFinalizeStage` (its budget lies below the engine's designed frame-0 cost),
     `ThumbnailsMaxFrame` (redefined with a cold first attempt, its `Measured` not taken again) and
     `SceneOpenOver1MMaxFrame` (still over its budget in some runs).
-  - Provisional metrics, measured and recorded but without a budget until the reference machine measures them:
-    `Perf.Jobs.SubmitWait`, `SubmitMany`, `ParallelForOverhead` and `WakeLatency` (wave 4, engine-modules; the Mac under
-    other agents' load measured 3.1, 0.41, 96 and 20 us).
-  - Build and test throughput (wave 4, engine-modules), whose targets are the reference machine's: a clean Debug build
-    30% below the base's 3,099 CPU-s, and `ctest --preset windows-debug -j 8` in at most half of 658 s. The Mac (Apple
-    Clang, every target, 6 jobs, two interleaved pairs) measured the clean Debug build at 1,194 CPU-s before and 1,036
-    after (-13%), an edit of `Scene/Components.h` at 782 and 564 CPU-s (251 objects), one of `Editor/EditorContext.h` at
-    372 and 284 (99 objects), and the Debug ctest at 500-804 s serially before and 97-163 s with `-j 8` after.
   - GPU tests on Windows and NVIDIA: CI runs no test of the `gpu` label, so renderer changes are validated on the Mac
     alone until `ctest --preset windows-debug` runs under the validation layer there again (drivers differ: NVIDIA has
     `drawIndirectCount`, a transfer queue and min/max samplers, which MoltenVK lacks).
