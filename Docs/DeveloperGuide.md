@@ -1225,7 +1225,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   by a save. Replacing a modified scene in any way (`EditorContext::ResetScene`) writes them first, marked discarded, offers
   them at once (the directory is scanned again) and tells the person who discarded them; scans keep the newest
   `SceneRecovery::c_MaxOfferedDiscards` discards on offer and move older ones to `Recovery/Discarded` (never what a crash
-  left). Opening a project offers what a crashed or discarding editor left (the Recover Unsaved Changes dialog,
+  left). Opening a project offers what a crashed or discarding editor left (the Recover Unsaved Changes dialog, which
+  opens by itself only for what an editor left behind, `RecoveryDialog::HasOffer(context, true)`, while earlier discards
+  get one toast with Recover,
   `scene.recoveryStatus`, `scene.recover {scene, action: "apply" | "discard", force}`: one undo step back to the saved
   scene). Entries find their scene by its handle, so a moved or renamed scene keeps its changes recoverable, and the
   journal follows the edited scene when it moves (`EditorContext::FollowSceneMoves`); the merges of a drag replace the

@@ -171,6 +171,27 @@ namespace
 		Scene& m_Scene;
 	};
 
+	// What a crashed editor leaves in a new project: the journal of an entity it created (named `name`) and never saved,
+	// owned by a process that is gone (another start time), not marked discarded.
+	void LeaveCrashJournal(const std::filesystem::path& project, const std::string& name)
+	{
+		RecoveryHarness harness(project);
+		harness.Run("entity.create", { { "name", name } });
+		harness.FlushJournal();
+		const std::vector<std::filesystem::path> files = ListRecoveryFiles(harness.GetRecoveryDirectory());
+		REQUIRE(files.size() == 1);
+		const std::optional<std::string> text = FileSystem::ReadText(files[0]);
+		REQUIRE(text.has_value());
+		nlohmann::json header = ReadRecoveryHeader(files[0]);
+		REQUIRE(header["Discarded"] == false);
+		header["Owner"]["ProcessStartTime"] = header["Owner"]["ProcessStartTime"].get<uint64_t>() + 1;
+		REQUIRE(FileSystem::WriteText(harness.GetRecoveryDirectory() / (std::string("Crashed-0000000000000001") + SceneRecovery::c_FileExtension),
+			JsonUtils::Dump(header) + "\n" + text->substr(text->find('\n') + 1)));
+		// Back to the saved scene: this editor leaves nothing of its own behind.
+		harness.Run("edit.undo");
+		harness.FlushJournal();
+	}
+
 	// Edits of every kind a journal must replay: creating, renaming, component values, reparenting, reordering, deleting
 	// and the scene's settings.
 	void MakeEdits(RecoveryHarness& harness)
@@ -671,14 +692,10 @@ TEST_SUITE("Editor.Recovery")
 		undo.SetObserver(nullptr);
 	}
 
-	TEST_CASE("The editor offers recovery data when the project opens, and Recover applies it")
+	TEST_CASE("The editor offers recovery data a crash left when the project opens, and Recover applies it")
 	{
 		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryOffer") / "Game";
-		{
-			RecoveryHarness harness(project);
-			harness.Run("entity.create", { { "name", "Recovered" } });
-			harness.Run("project.close", { { "force", true } });
-		}
+		LeaveCrashJournal(project, "Recovered");
 
 		EditorOptions options;
 		options.ProjectPath = project;
@@ -733,11 +750,7 @@ TEST_SUITE("Editor.Recovery")
 	TEST_CASE("Recover asks about the edited scene's own unsaved changes over the dialog, which stays open")
 	{
 		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryOfferAsks") / "Game";
-		{
-			RecoveryHarness harness(project);
-			harness.Run("entity.create", { { "name", "Recovered" } });
-			harness.Run("project.close", { { "force", true } });
-		}
+		LeaveCrashJournal(project, "Recovered");
 
 		EditorOptions options;
 		options.ProjectPath = project;
@@ -1146,9 +1159,39 @@ TEST_SUITE("Editor.Recovery")
 		CHECK(RecoveryDialog::HasOffer(editor.Context()));
 		CHECK_FALSE(RecoveryDialog::HasOffer(editor.Context(), true));
 
-		// Closed with the project and opened again, the discard is what an earlier session left: offered as the project opens.
+		// Closed with the project and opened again, the discard (on purpose) is offered by one toast as the project opens; the
+		// dialog opens only for what editors left behind.
 		editor.Run("project.close", { { "force", true } });
+		editor.Context().GetNotifications().Clear();
 		editor.RunToCompletion("project.open", { { "path", FileSystem::ToUTF8(project) } });
+		REQUIRE(editor.FramesUntil([&]() { return UI::ItemProbe::Find("Toast.0.Recover").has_value(); }));
+		editor.Frames(3);
+		CHECK_FALSE(editor.Layer->GetRecoveryDialog().IsOpen());
+		CHECK(editor.Context().GetNotifications().GetActive().size() == 1);
+		CHECK(RecoveryDialog::HasOffer(editor.Context()));
+		CHECK_FALSE(RecoveryDialog::HasOffer(editor.Context(), true));
+		REQUIRE(editor.Click("Toast.0.Recover"));
+		CHECK(editor.FramesUntil([&]() { return editor.Layer->GetRecoveryDialog().IsOpen(); }));
+	}
+
+	TEST_CASE("A project with changes a crash left and changes discarded on purpose opens the dialog with both")
+	{
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryCrashAndDiscard") / "Game";
+		LeaveCrashJournal(project, "Crashed");
+		{
+			RecoveryHarness harness(project, false);
+			harness.Run("entity.create", { { "name", "Discarded" } });
+			harness.Run("project.close", { { "force", true } });
+		}
+		EditorOptions options;
+		options.ProjectPath = project;
+		Tests::HarnessEditor editor({}, options);
 		REQUIRE(editor.FramesUntil([&]() { return editor.Layer->GetRecoveryDialog().IsOpen(); }));
+		editor.Frames(3);
+		CHECK(UI::ItemProbe::Find("Recovery.Recover.0").has_value());
+		CHECK(UI::ItemProbe::Find("Recovery.Recover.1").has_value());
+		// The dialog offers both: no toast besides.
+		const std::deque<EditorNotification>& notifications = editor.Context().GetNotifications().GetActive();
+		CHECK(std::none_of(notifications.begin(), notifications.end(), [](const EditorNotification& notification) { return notification.ShowRecovery; }));
 	}
 }
