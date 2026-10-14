@@ -66,8 +66,8 @@ float SampleDirectionalShadow(vec3 worldPosition, vec3 normal, float viewDepth, 
 		return 1.0;
 
 	// Normal offset: push the lookup position off the surface by about a shadow texel to avoid acne.
-	vec4 cascadeData = u_Frame.CascadeData[cascade]; // x: world units per texel, y: depth range, z: search distance (world units)
-	mat4 cascadeViewProjection = u_Frame.CascadeViewProjection[cascade];
+	vec4 cascadeData = u_Cascades[cascade].Parameters; // x: world units per texel, y: depth range, z: search distance (world units)
+	mat4 cascadeViewProjection = u_Cascades[cascade].ViewProjection;
 	vec3 offsetPosition = worldPosition + normal * cascadeData.x * u_Frame.ShadowBias.y;
 	vec4 lightClip = cascadeViewProjection * vec4(offsetPosition, 1.0);
 	vec3 lightPosition = lightClip.xyz / lightClip.w;

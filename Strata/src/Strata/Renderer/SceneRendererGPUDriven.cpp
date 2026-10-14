@@ -155,6 +155,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(7),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(8),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(9),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(10),
 			// The pass (counting or writing): a slot no constant buffer of the layout uses.
 			nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t))
 		};
@@ -243,6 +244,24 @@ namespace Strata
 		}
 		for (uint32_t cascade = 0; cascade < m_CascadeCount; cascade++)
 			m_CullCasterStamps[cascade].resize(meshSlots, 0u);
+		if (m_FeedbackFrame)
+		{
+			// The GPU finds the casters: the meshes the feedback saw cast, a quarter and some more, in every cascade.
+			std::array<uint32_t, 2> casterRecords = {};
+			for (const uint32_t slot : m_UsedMeshSlots)
+			{
+				if (slot < meshSlots && IsMeshCaster(slot))
+					casterRecords[arenaOf(slot)] += mirror.GetMeshRecords(slot);
+			}
+			for (uint32_t cascade = 0; cascade < m_CascadeCount; cascade++)
+			{
+				for (size_t arena = 0; arena < casterRecords.size(); arena++)
+				{
+					m_CullShadowSlots[cascade][arena] = std::min(mirror.GetArenaRecords(static_cast<uint32_t>(arena)),
+						casterRecords[arena] + casterRecords[arena] / 4 + c_FeedbackSlotHeadroom);
+				}
+			}
+		}
 		for (const ShadowCaster& caster : m_ShadowCasters)
 		{
 			const uint32_t slot = renderScene.GetMeshSlot(caster.Proxy);
@@ -370,6 +389,7 @@ namespace Strata
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(7, m_FeedbackMaterialBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(8, m_FeedbackListBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(9, m_FeedbackRecordBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(10, m_CasterDepthBuffer),
 			nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t))
 		};
 		m_CullBindingSet = m_Device->createBindingSet(desc, m_CullBindingLayout);
@@ -412,6 +432,8 @@ namespace Strata
 		commandList->clearBufferUInt(m_CullCounterBuffer, 0);
 		// Draw slots no record takes draw nothing.
 		commandList->clearBufferUInt(m_CullArgumentBuffer, 0);
+		if (shadows)
+			commandList->clearBufferUInt(m_CasterDepthBuffer, 0); // No caster yet in any cascade
 		const bool feedback = constants.Feedback != 0;
 		if (feedback)
 		{
@@ -441,7 +463,7 @@ namespace Strata
 		{
 			for (nvrhi::IBuffer* buffer : { m_CullCountBuffer.Get(), m_CullOffsetBuffer.Get(), m_CullArgumentBuffer.Get(), m_CullBucketCountBuffer.Get(),
 				m_CullCounterBuffer.Get(), m_GPUDrawListBuffer.Get(), m_FeedbackMeshBuffer.Get(), m_FeedbackMaterialBuffer.Get(), m_FeedbackListBuffer.Get(),
-				m_FeedbackRecordBuffer.Get() })
+				m_FeedbackRecordBuffer.Get(), m_CasterDepthBuffer.Get() })
 				commandList->setBufferState(buffer, nvrhi::ResourceStates::UnorderedAccess);
 			commandList->commitBarriers();
 		};

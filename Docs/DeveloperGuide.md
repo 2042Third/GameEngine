@@ -1830,7 +1830,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   cluster of a 16x9x24 froxel grid (exponential depth slices) and `Forward.frag` loops only over its
   pixel's cluster. Only the directional light casts shadows.
 - Shadows: cascade depth ranges are fitted to the casters toward the light (casters beyond
-  `c_MaxShadowCasterDistance` are pancaked onto the near plane); acne is handled by the rasterizer
+  `c_MaxShadowCasterDistance` are pancaked onto the near plane), on the GPU on both paths (`Scene/CascadeFit.comp` writes
+  `u_Cascades`, which the shadow and forward shaders read: never put cascade projections back into `FrameConstants`; the
+  CPU path hands it the nearest casters it found, the GPU-driven path's culling finds them the same frame); acne is handled by the rasterizer
   depth bias, the light's depth and normal offsets and a receiver plane depth bias in the PCSS filter. A caster is
   drawn into a cascade only while its light-space extent (the larger of x and y) covers at least `c_MinCasterTexels`
   (1) of the cascade's texels (`SceneRendererStats::SubTexelCasters` counts those left out, per cascade): smaller ones

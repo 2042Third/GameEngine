@@ -45,9 +45,7 @@ struct FrameConstants
 	vec4 ClusterDepth;              // Depth slice = log(view depth) * x + y; z, w: near and far view depth
 	vec4 TimeParams;                // x: scene time in seconds
 	vec4 SkyParams;                 // x: background mip (blur), y: 1 when the environment is the background
-	mat4 CascadeViewProjection[4];  // Directional shadow cascades (light clip space, reversed-Z)
-	vec4 CascadeSplits;             // View distance where each cascade ends
-	vec4 CascadeData[4];            // x: world units per shadow texel, y: depth range in world units, z: penumbra search distance
+	vec4 CascadeSplits;             // View distance where each cascade ends (their projections: u_Cascades)
 	vec4 ShadowParams;              // x: 2 tan(light angular radius), y: 1 / shadow map size, w: cascade count (0 = none)
 	vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 	vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
@@ -229,6 +227,18 @@ layout(set = 1, binding = 0) uniform texture2D u_Textures[];
 layout(set = 0, binding = ST_SRV(16), std430) readonly buffer TextureTableBuffer
 {
 	uint u_TextureTable[];
+};
+
+// The directional shadow cascades (RenderData::CascadeData), fitted on the GPU (Scene/CascadeFit.comp).
+struct CascadeData
+{
+	mat4 ViewProjection; // Light clip space, reversed-Z
+	vec4 Parameters;     // x: world units per shadow texel, y: depth range in world units, z: penumbra search distance
+};
+
+layout(set = 0, binding = ST_SRV(17), std430) readonly buffer CascadeBuffer
+{
+	CascadeData u_Cascades[];
 };
 
 vec4 SampleMaterialTexture(uint textureIndex, vec2 uv)

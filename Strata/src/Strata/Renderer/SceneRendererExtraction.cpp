@@ -243,6 +243,11 @@ namespace Strata
 		return (m_MeshUsage[slot] & (c_UseView | c_UseHigh)) != 0;
 	}
 
+	bool SceneRenderer::IsMeshCaster(uint32_t slot) const
+	{
+		return (m_MeshUsage[slot] & c_UseShadow) != 0;
+	}
+
 	void SceneRenderer::MarkMaterial(uint32_t slot, uint32_t usage)
 	{
 		if (m_MaterialUsage[slot] == 0)
@@ -389,7 +394,7 @@ namespace Strata
 		MarkMeshesWithoutBounds(renderScene);
 	}
 
-	void SceneRenderer::FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, RenderData::FrameConstants& frame)
+	void SceneRenderer::FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, RenderData::FrameConstants& frame, bool findCasters)
 	{
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Extract");
@@ -466,6 +471,45 @@ namespace Strata
 		}
 		m_CascadeCount = cascadeCount;
 
+		// Shadows of a skinned mesh move with its animator, also when the mesh itself is out of view; the cascades reach far
+		// beyond the view (spheres around its slices), so a caster out of view reports its animator only when its shadow can
+		// fall on what the view shows: on the visible proxies, within the shadowed part of the view.
+		const bool skins = renderScene.HasSkinProxies();
+		AABB receivers;
+		std::array<glm::vec4, 7> viewPlanes = {};
+		if (skins)
+		{
+			// A feedback frame looked at some of the visible proxies only: the shadowed part of the view stands in for the
+			// receivers (conservative).
+			receivers = m_FeedbackFrame ? shadowedView : m_VisibleReceivers;
+			receivers.Min = glm::max(receivers.Min, shadowedView.Min);
+			receivers.Max = glm::min(receivers.Max, shadowedView.Max);
+			for (size_t plane = 0; plane < 6; plane++)
+				viewPlanes[plane] = frustum.GetPlanes()[plane];
+			// The cascades end at the shadow distance: no shadow shows beyond it.
+			const glm::vec3 forward = -glm::normalize(glm::vec3(inverseView[2]));
+			viewPlanes[6] = glm::vec4(-forward, glm::dot(forward, glm::vec3(inverseView[3])) + farClip);
+		}
+
+		if (!findCasters)
+		{
+			// The GPU's culling finds the casters (and its feedback what they use): only skinned proxies out of view are
+			// tested here, for their animators.
+			uint32_t subTexel = 0;
+			for (uint32_t index = 0; skins && index < renderScene.GetSkinProxyCount(); index++)
+			{
+				const uint32_t proxy = renderScene.GetSkinProxy(index);
+				const uint32_t flags = renderScene.GetProxyFlags(proxy);
+				if ((flags & RenderProxyFlags::CastShadows) == 0 || (flags & RenderProxyFlags::MeshBounds) == 0 || renderScene.GetInstanceCount(proxy) == 0
+					|| m_ProxyStamps[proxy] == m_FrameStamp || renderScene.GetSkinAnimator(proxy) == entt::null)
+					continue;
+				const AABB lightBounds = renderScene.GetLocalBounds(proxy).Transformed(m_LightView * renderScene.GetWorldTransform(proxy));
+				if (GetCascadeMask(lightBounds, subTexel) != 0 && CanShadowView(renderScene.GetWorldBounds(proxy), lightDirection, receivers, viewPlanes))
+					m_VisibleAnimators.push_back(renderScene.GetSkinAnimator(proxy));
+			}
+			return;
+		}
+
 		// A caster shadows the cascades whose square it overlaps and whose far side it does not lie beyond; casters closer to
 		// the light than a cascade's sphere are kept (its depth range grows to include them), so each cascade's volume is open
 		// toward the light. The index finds candidates by their world bounds, whose extent along any axis covers that of the
@@ -501,26 +545,6 @@ namespace Strata
 			}
 		}
 
-		// Shadows of a skinned mesh move with its animator, also when the mesh itself is out of view; the cascades reach far
-		// beyond the view (spheres around its slices), so a caster out of view reports its animator only when its shadow can
-		// fall on what the view shows: on the visible proxies, within the shadowed part of the view.
-		const bool skins = renderScene.HasSkinProxies();
-		AABB receivers;
-		std::array<glm::vec4, 7> viewPlanes = {};
-		if (skins)
-		{
-			// A feedback frame looked at some of the visible proxies only: the shadowed part of the view stands in for the
-			// receivers (conservative).
-			receivers = m_FeedbackFrame ? shadowedView : m_VisibleReceivers;
-			receivers.Min = glm::max(receivers.Min, shadowedView.Min);
-			receivers.Max = glm::min(receivers.Max, shadowedView.Max);
-			for (size_t plane = 0; plane < 6; plane++)
-				viewPlanes[plane] = frustum.GetPlanes()[plane];
-			// The cascades end at the shadow distance: no shadow shows beyond it.
-			const glm::vec3 forward = -glm::normalize(glm::vec3(inverseView[2]));
-			viewPlanes[6] = glm::vec4(-forward, glm::dot(forward, glm::vec3(inverseView[3])) + farClip);
-		}
-
 		// The exact test, on the bounds of the mesh in light space, in parallel chunks merged in chunk order (the casters, the
 		// assets they need and the animators they report do not depend on the threads). A caster stays in a cascade only while
 		// it spans at least c_MinCasterTexels of the cascade's texels: smaller ones would only flicker in and out of texels.
@@ -544,21 +568,7 @@ namespace Strata
 				if ((flags & RenderProxyFlags::CastShadows) == 0 || (flags & RenderProxyFlags::MeshBounds) == 0 || renderScene.GetInstanceCount(proxy) == 0)
 					continue;
 				const AABB lightBounds = renderScene.GetLocalBounds(proxy).Transformed(m_LightView * renderScene.GetWorldTransform(proxy));
-				const float extent = std::max(lightBounds.Max.x - lightBounds.Min.x, lightBounds.Max.y - lightBounds.Min.y);
-				uint32_t cascadeMask = 0;
-				for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-				{
-					const CascadeBox& box = m_Cascades[cascade];
-					if (lightBounds.Max.x < box.Min.x || lightBounds.Min.x > box.Max.x || lightBounds.Max.y < box.Min.y || lightBounds.Min.y > box.Max.y
-						|| lightBounds.Max.z < box.FarZ)
-						continue;
-					if (extent < c_MinCasterTexels * box.WorldPerTexel)
-					{
-						subTexel++;
-						continue;
-					}
-					cascadeMask |= 1u << cascade;
-				}
+				const uint32_t cascadeMask = GetCascadeMask(lightBounds, subTexel);
 				if (cascadeMask == 0)
 					continue;
 				output.Casters.push_back(ShadowCaster { proxy, cascadeMask, lightBounds.Max.z });
@@ -584,6 +594,28 @@ namespace Strata
 			m_VisibleAnimators.insert(m_VisibleAnimators.end(), output.Animators.begin(), output.Animators.end());
 			m_Stats.SubTexelCasters += output.SubTexelCasters;
 		}
+	}
+
+	uint32_t SceneRenderer::GetCascadeMask(const AABB& lightBounds, uint32_t& subTexel) const
+	{
+		// A caster shadows the cascades whose square it overlaps and whose far side it does not lie beyond, while it spans
+		// at least c_MinCasterTexels of their texels.
+		const float extent = std::max(lightBounds.Max.x - lightBounds.Min.x, lightBounds.Max.y - lightBounds.Min.y);
+		uint32_t cascadeMask = 0;
+		for (uint32_t cascade = 0; cascade < m_CascadeCount; cascade++)
+		{
+			const CascadeBox& box = m_Cascades[cascade];
+			if (lightBounds.Max.x < box.Min.x || lightBounds.Min.x > box.Max.x || lightBounds.Max.y < box.Min.y || lightBounds.Min.y > box.Max.y
+				|| lightBounds.Max.z < box.FarZ)
+				continue;
+			if (extent < c_MinCasterTexels * box.WorldPerTexel)
+			{
+				subTexel++;
+				continue;
+			}
+			cascadeMask |= 1u << cascade;
+		}
+		return cascadeMask;
 	}
 
 	bool SceneRenderer::CanShadowView(const AABB& caster, const glm::vec3& lightDirection, const AABB& receivers, std::span<const glm::vec4> planes) const
@@ -998,7 +1030,29 @@ namespace Strata
 		if (m_CascadeCount == 0)
 			return;
 
+		// The fit's inputs (Scene/CascadeFit.comp): each cascade's square and its slice's sphere, and the nearest drawn
+		// casters (the CPU's below, or those the GPU's culling finds).
 		const uint32_t cascadeCount = m_CascadeCount;
+		RenderData::CascadeFitConstants& fit = m_CascadeFit;
+		fit = RenderData::CascadeFitConstants {};
+		fit.LightView = m_LightView;
+		fit.CascadeCount = cascadeCount;
+		fit.CasterDepthsFromGPU = casterDraws ? 0u : 1u;
+		fit.MaxCasterDistance = c_MaxShadowCasterDistance;
+		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
+		{
+			const CascadeBox& box = m_Cascades[cascade];
+			fit.Boxes[cascade] = glm::vec4(box.Min, box.Max);
+			fit.Depths[cascade] = glm::vec4(box.FarZ, box.SphereNearZ, box.WorldPerTexel, box.Radius);
+			fit.CasterNearZ[cascade] = box.SphereNearZ;
+		}
+		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
+		const float halfAngle = glm::radians(std::clamp(m_ShadowLight.Softness, 0.0f, 10.0f)) * 0.5f;
+		frame.ShadowParams = glm::vec4(2.0f * std::tan(halfAngle), 1.0f / mapSize, 0.0f, static_cast<float>(cascadeCount));
+		frame.ShadowBias = glm::vec4(m_ShadowLight.Bias, m_ShadowLight.NormalBias, 0.0f, 0.0f);
+		if (!casterDraws)
+			return; // The GPU's culling draws the casters
+
 		const uint32_t casters = static_cast<uint32_t>(m_ShadowCasters.size());
 		const uint32_t chunks = ChunkCount(casters);
 		if (m_Chunks.size() < chunks)
@@ -1030,8 +1084,6 @@ namespace Strata
 					if ((caster.CascadeMask & (1u << cascade)) != 0)
 						casterNearZ[cascade] = std::max(casterNearZ[cascade], caster.LightNearZ);
 				}
-				if (!casterDraws)
-					continue; // The GPU's culling draws them
 
 				const AABB& bounds = renderScene.GetWorldBounds(caster.Proxy);
 				const float fraction = GetScreenFraction(camera, bounds.GetCenter(), glm::length(bounds.GetExtents()));
@@ -1084,24 +1136,9 @@ namespace Strata
 		if (skipped > 0)
 			m_Errors.Report(fmt::format("{} shadow caster instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, c_MaxKeySubmeshes, c_MaxKeyLODs));
 
-		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
+		// The depth range reaches from the far side of the slice's sphere to the nearest caster (CascadeFit.comp clamps it).
 		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-		{
-			const CascadeBox& box = m_Cascades[cascade];
-			// The depth range reaches from the far side of the slice's sphere to the nearest caster (up to a limit beyond which
-			// ShadowMesh.vert flattens casters onto the near plane).
-			const float nearZ = std::clamp(casterNearZ[cascade], box.SphereNearZ, box.SphereNearZ + c_MaxShadowCasterDistance);
-			const float nearPlane = -nearZ;
-			const float farPlane = -box.FarZ;
-			const glm::mat4 projection = Math::OrthographicReverseZ(box.Min.x, box.Max.x, box.Min.y, box.Max.y, nearPlane, farPlane);
-			frame.CascadeViewProjection[cascade] = projection * m_LightView;
-			// Penumbrae are searched for blockers up to this distance from the receiver (world units).
-			const float searchDistance = 0.2f * box.Radius + 5.0f;
-			frame.CascadeData[cascade] = glm::vec4(box.WorldPerTexel, farPlane - nearPlane, searchDistance, 0.0f);
-		}
-		const float halfAngle = glm::radians(std::clamp(m_ShadowLight.Softness, 0.0f, 10.0f)) * 0.5f;
-		frame.ShadowParams = glm::vec4(2.0f * std::tan(halfAngle), 1.0f / mapSize, 0.0f, static_cast<float>(cascadeCount));
-		frame.ShadowBias = glm::vec4(m_ShadowLight.Bias, m_ShadowLight.NormalBias, 0.0f, 0.0f);
+			fit.CasterNearZ[cascade] = casterNearZ[cascade];
 
 		const auto sortStart = std::chrono::steady_clock::now();
 		RadixSort(m_ShadowDraws, m_SortScratch);
@@ -1109,6 +1146,16 @@ namespace Strata
 		m_Stats.SortMs += MillisecondsSince(sortStart);
 		m_Stats.ShadowCasters = static_cast<uint32_t>(m_ShadowDrawInstancesBuild.size());
 		m_Stats.ShadowDrawCalls = static_cast<uint32_t>(m_ShadowBatches.size());
+	}
+
+	void SceneRenderer::FitCascades(nvrhi::ICommandList* commandList)
+	{
+		commandList->writeBuffer(m_CascadeFitConstantBuffer, &m_CascadeFit, sizeof(m_CascadeFit));
+		nvrhi::ComputeState state;
+		state.pipeline = m_CascadeFitPipeline;
+		state.bindings = { m_CascadeFitBindingSet };
+		commandList->setComputeState(state);
+		commandList->dispatch(1, 1, 1);
 	}
 
 	uint64_t SceneRenderer::UploadDrawList(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, std::vector<uint32_t>& list, std::vector<uint32_t>& uploaded, bool full)

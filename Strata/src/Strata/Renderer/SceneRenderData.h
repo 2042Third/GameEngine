@@ -52,14 +52,37 @@ namespace Strata
 			glm::vec4 ClusterDepth;              // Depth slice = log(view depth) * x + y; z, w: near and far view depth
 			glm::vec4 TimeParams;                // x: scene time in seconds
 			glm::vec4 SkyParams;                 // x: background mip (blur), y: 1 when the environment is the background
-			glm::mat4 CascadeViewProjection[c_MaxCascades];
-			glm::vec4 CascadeSplits;             // View distance where each cascade ends
-			glm::vec4 CascadeData[c_MaxCascades]; // x: world units per shadow texel, y: depth range in world units, z: penumbra search distance
+			glm::vec4 CascadeSplits;             // View distance where each cascade ends (their projections: CascadeData)
 			glm::vec4 ShadowParams;              // x: 2 tan(light angular radius), y: 1 / map size, w: cascade count
 			glm::vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 			glm::vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
 		};
-		static_assert(sizeof(FrameConstants) == 10 * 64 + 20 * 16);
+		static_assert(sizeof(FrameConstants) == 6 * 64 + 16 * 16);
+
+		// A directional shadow cascade as shaders read it (u_Cascades, Include/Scene.glsl): written on the GPU by
+		// Scene/CascadeFit.comp, which fits its depth range to the casters (CascadeFitConstants).
+		struct CascadeData
+		{
+			glm::mat4 ViewProjection;           // Light clip space, reversed-Z
+			glm::vec4 Parameters = glm::vec4(0.0f); // x: world units per shadow texel, y: depth range in world units, z: penumbra search distance
+		};
+		static_assert(sizeof(CascadeData) == 80);
+
+		// What Scene/CascadeFit.comp fits the cascades from (a constant buffer, std140): each cascade's square in light view
+		// space and the bounding sphere of its view slice, and the nearest caster toward the light, which the CPU path finds
+		// and the GPU-driven path's culling does (u_CasterDepths).
+		struct CascadeFitConstants
+		{
+			glm::mat4 LightView = glm::mat4(1.0f);
+			glm::vec4 Boxes[c_MaxCascades] = {};     // Light view space: min.xy, max.xy
+			glm::vec4 Depths[c_MaxCascades] = {};    // x: the far side's z, y: the sphere's near side's z, z: world units per texel, w: the sphere's radius
+			glm::vec4 CasterNearZ = glm::vec4(0.0f); // Per cascade: the nearest drawn caster's z, as the CPU found it
+			uint32_t CascadeCount = 0;
+			uint32_t CasterDepthsFromGPU = 0;        // 1: the nearest casters come from the GPU's culling instead of CasterNearZ
+			float MaxCasterDistance = 0.0f;          // How far beyond its sphere a cascade's depth range may reach toward the light
+			uint32_t Reserved = 0;
+		};
+		static_assert(sizeof(CascadeFitConstants) == 64 + 9 * 16 + 16);
 
 		// The upper three rows of an affine world matrix, whose fourth row is (0, 0, 0, 1). Shaders transform points with
 		// one dot product per row and derive the normal matrix from the rows (no inverse on the CPU).

@@ -251,6 +251,16 @@ void CullProxy(uint proxyIndex)
 	}
 	if (!meshDrawable)
 		return;
+	if (u_Parameters.Mode == ST_CULL_MODE_COUNT)
+	{
+		// Every drawn caster extends the depth range of its cascades toward the light (Scene/CascadeFit.comp).
+		uint nearZ = EncodeOrderedFloat(lightMax.z);
+		for (uint cascade = 0u; cascade < u_Cull.CascadeCount; cascade++)
+		{
+			if ((cascadeMask & (1u << cascade)) != 0u && u_CasterDepths[cascade] < nearZ)
+				atomicMax(u_CasterDepths[cascade], nearZ);
+		}
+	}
 	for (uint submesh = 0u; submesh < proxy.InstanceCount; submesh++)
 	{
 		uint instance = proxy.FirstInstance + submesh;

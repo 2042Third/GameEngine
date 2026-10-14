@@ -696,9 +696,13 @@ namespace Strata
 		// CullView's work on a feedback frame: the feedback's marks and screen sizes, and the proxies the CPU still looks at in
 		// the view (users of transparent materials, skinned proxies).
 		void ApplyFeedback(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum);
-		// Computes the cascades and finds the shadow casters of each; leaves ShadowParams.w at 0 without shadows. Reports the
-		// animators of skinned casters out of view whose shadows can fall on what the view shows (CanShadowView).
-		void FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, RenderData::FrameConstants& frame);
+		// Computes the cascades and, with `findCasters`, finds the shadow casters of each (feedback frames leave that to the
+		// GPU); leaves ShadowParams.w at 0 without shadows. Reports the animators of skinned casters out of view whose shadows
+		// can fall on what the view shows (CanShadowView).
+		void FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, RenderData::FrameConstants& frame, bool findCasters);
+		// The cascades a caster's light view bounds fall into (bits; casters below a texel of a cascade left out of it, and
+		// counted in `subTexel`).
+		uint32_t GetCascadeMask(const AABB& lightBounds, uint32_t& subTexel) const;
 		// Whether a caster's shadow can fall on what the view shows within the shadow distance: the caster's box swept along
 		// the light, as far as the visible receivers' bounds reach (m_VisibleReceivers, clipped to the shadowed part of the
 		// view), is not separated from the view by any of `planes`. Conservative: it never rejects a shadow that shows.
@@ -714,8 +718,11 @@ namespace Strata
 		// The view's draws in batches: opaque ones sorted by pipeline state and mesh (only with `opaqueDraws`: the GPU-driven
 		// path draws them itself), transparent ones back to front; and what the drawn materials need of their textures.
 		void GatherDraws(RenderScene& renderScene, const SceneCamera& camera, bool opaqueDraws);
-		// The cascades' projections fitted to the drawn casters, and with `casterDraws` the casters' draws per cascade.
+		// The cascades' fit (m_CascadeFit: to the drawn casters the CPU found, or with `casterDraws` false to those the GPU's
+		// culling finds) and with `casterDraws` the casters' draws per cascade.
 		void GatherShadowDraws(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame, bool casterDraws);
+		// Records Scene/CascadeFit.comp: the cascades' projections into m_CascadeBuffer, before anything draws or samples them.
+		void FitCascades(nvrhi::ICommandList* commandList);
 		void MarkMesh(uint32_t slot, uint32_t usage);
 		void MarkMaterial(uint32_t slot, uint32_t usage);
 		// Sizes the per-material-slot state for `count` slots.
@@ -784,8 +791,9 @@ namespace Strata
 		void DrawGPUBucket(nvrhi::ICommandList* commandList, uint32_t dense, uint32_t slots);
 		// The draw slots of a bucket (m_CullViewSlots, m_CullShadowSlots).
 		uint32_t GetBucketSlots(uint32_t bucket) const;
-		// Whether the frame draws the mesh slot in its view (requested at Normal or High priority).
+		// Whether the frame draws the mesh slot in its view (requested at Normal or High priority), or casts shadows with it.
 		bool IsMeshInView(uint32_t slot) const;
+		bool IsMeshCaster(uint32_t slot) const;
 		// Reads the culling counters of completed frames into m_GPUStats (with `wait`, the latest frame's), and their visibility
 		// feedback into m_Feedback.
 		void ResolveCullCounters(bool wait);
@@ -889,6 +897,15 @@ namespace Strata
 		uint64_t m_BoundSceneGPUVersion = 0;
 		uint64_t m_BoundTextureTableVersion = 0; // TextureTable::GetBufferVersion the binding sets were made for
 		nvrhi::BufferHandle m_LightBuffer;
+		// The shadow cascades' projections (RenderData::CascadeData), fitted on the GPU every frame with shadows
+		// (Scene/CascadeFit.comp) from m_CascadeFit and, on the GPU-driven path, the nearest casters its culling found.
+		nvrhi::BufferHandle m_CascadeBuffer;
+		nvrhi::BufferHandle m_CasterDepthBuffer; // Per cascade: the nearest caster's light view z (Cull.comp, encoded)
+		nvrhi::BufferHandle m_CascadeFitConstantBuffer;
+		nvrhi::BindingLayoutHandle m_CascadeFitBindingLayout;
+		nvrhi::BindingSetHandle m_CascadeFitBindingSet;
+		nvrhi::ComputePipelineHandle m_CascadeFitPipeline;
+		RenderData::CascadeFitConstants m_CascadeFit;
 
 		nvrhi::TextureHandle m_DepthTexture;
 		nvrhi::TextureHandle m_NormalTexture;

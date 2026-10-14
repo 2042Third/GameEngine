@@ -348,6 +348,13 @@ TEST_SUITE("GPU.Animation")
 		const glm::uvec2 shaded = ProjectToPixel(camera, glm::vec3(0.0f, 0.0f, -3.0f), size);
 		const glm::uvec2 lit = ProjectToPixel(camera, glm::vec3(1.0f, 0.0f, -3.0f), size);
 		CHECK(Red(image, shaded) < Red(image, lit) / 2);
+		// A frame that takes its requests from the GPU's visibility feedback tests the skinned casters out of view on the CPU
+		// alike (against the shadowed part of the view: it may report more, never fewer), and casts the same shadow.
+		poses.Reported.clear();
+		const ReadbackImage again = RenderToImage(renderer, scene, camera);
+		CHECK(renderer.GetStats().FeedbackRequests == renderer.GetStats().GPUDriven);
+		CHECK(reported(shadowing));
+		CHECK(MaxDifference(image, again) <= 1);
 		// The characters behind and beside are shadow casters of the cascades (each one gone, fewer instances are drawn into
 		// them): only the test of where their shadows can fall keeps their animators unreported.
 		for (Entity unseen : { behind, beside })

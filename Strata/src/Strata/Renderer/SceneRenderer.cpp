@@ -292,6 +292,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(14),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(15), // Joint matrices (only the skinned vertex shaders read them)
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(16), // The texture table (material data names textures by its indices)
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(17), // The shadow cascades (Scene/CascadeFit.comp)
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -417,6 +418,46 @@ namespace Strata
 		m_GTAOPipeline = createComputePipeline(halfAO ? "Effects/GTAOHalf.comp" : "Effects/GTAO.comp", m_AOBindingLayout);
 		m_AOBlurPipeline = createComputePipeline(halfAO ? "Effects/AOBlurHalf.comp" : "Effects/AOBlur.comp", m_AOBindingLayout);
 		m_ClusterPipeline = createComputePipeline("Scene/LightClusters.comp", m_ClusterBindingLayout);
+
+		// The shadow cascades, fitted on the GPU (both paths), and what the fit reads.
+		m_CascadeBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
+			.setByteSize(RenderData::c_MaxCascades * sizeof(RenderData::CascadeData))
+			.setStructStride(sizeof(RenderData::CascadeData))
+			.setCanHaveUAVs(true)
+			.setInitialState(nvrhi::ResourceStates::ShaderResource)
+			.setKeepInitialState(true)
+			.setDebugName(m_Specification.DebugName + ".Cascades"));
+		m_CasterDepthBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
+			.setByteSize(RenderData::c_MaxCascades * sizeof(uint32_t))
+			.setStructStride(sizeof(uint32_t))
+			.setCanHaveUAVs(true)
+			.setInitialState(nvrhi::ResourceStates::ShaderResource)
+			.setKeepInitialState(true)
+			.setDebugName(m_Specification.DebugName + ".CasterDepths"));
+		m_CascadeFitConstantBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
+			.setByteSize(sizeof(RenderData::CascadeFitConstants))
+			.setIsConstantBuffer(true)
+			.setInitialState(nvrhi::ResourceStates::ConstantBuffer)
+			.setKeepInitialState(true)
+			.setDebugName(m_Specification.DebugName + ".CascadeFit"));
+		nvrhi::BindingLayoutDesc fitLayout;
+		fitLayout.visibility = nvrhi::ShaderType::Compute;
+		fitLayout.bindings = {
+			nvrhi::BindingLayoutItem::ConstantBuffer(0),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1)
+		};
+		m_CascadeFitBindingLayout = m_Device->createBindingLayout(fitLayout);
+		m_CascadeFitPipeline = createComputePipeline("Scene/CascadeFit.comp", m_CascadeFitBindingLayout);
+		nvrhi::BindingSetDesc fitSet;
+		fitSet.bindings = {
+			nvrhi::BindingSetItem::ConstantBuffer(0, m_CascadeFitConstantBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_CasterDepthBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_CascadeBuffer)
+		};
+		m_CascadeFitBindingSet = m_Device->createBindingSet(fitSet, m_CascadeFitBindingLayout);
+		ST_CORE_VERIFY(m_CascadeBuffer && m_CasterDepthBuffer && m_CascadeFitConstantBuffer && m_CascadeFitPipeline && m_CascadeFitBindingSet,
+			"SceneRenderer: failed to create the shadow cascades' resources");
 		CreateCullResources();
 
 		nvrhi::BindingLayoutDesc exposureLayout;
@@ -827,6 +868,7 @@ namespace Strata
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(14, drawList),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(15, m_SceneGPU->GetPaletteBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(16, Renderer::GetTextureTable().GetBuffer()),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(17, m_CascadeBuffer),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
@@ -1900,7 +1942,7 @@ namespace Strata
 			CullView(renderScene, camera, frustum);
 			m_MarksRender = m_RenderCount + 1;
 		}
-		FindShadowCasters(renderScene, camera, frustum, frame);
+		FindShadowCasters(renderScene, camera, frustum, frame, !m_FeedbackFrame);
 		ResolveAssets(renderScene);
 		GatherDraws(renderScene, camera, !m_GPUDrivenFrame);
 		GatherShadowDraws(renderScene, camera, frame, !m_GPUDrivenFrame);
@@ -2008,6 +2050,7 @@ namespace Strata
 		{
 			gpuTimer.Next(gpuStages.Shadows);
 			commandList->beginMarker("Shadows");
+			FitCascades(commandList);
 			if (m_GPUDrivenFrame)
 				DrawGPUShadows(commandList);
 			else

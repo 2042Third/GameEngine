@@ -6,6 +6,7 @@
 
 #include "Include/Common.glsl"
 #include "Include/LODSelection.glsl"
+#include "Include/OrderedFloat.glsl"
 
 // RenderProxyFlags
 #define ST_PROXY_ACTIVE       1u
@@ -155,6 +156,8 @@ layout(set = 0, binding = ST_UAV(6), std430) buffer MeshFeedbackBuffer { uint u_
 layout(set = 0, binding = ST_UAV(7), std430) buffer MaterialFeedbackBuffer { uint u_MaterialFeedback[]; };
 layout(set = 0, binding = ST_UAV(8), std430) buffer FeedbackListBuffer { uint u_FeedbackLists[]; };
 layout(set = 0, binding = ST_UAV(9), std430) buffer FeedbackRecordBuffer { uvec4 u_FeedbackRecords[]; };
+// Per cascade the nearest drawn caster's light view z (EncodeOrderedFloat; 0: none), for Scene/CascadeFit.comp.
+layout(set = 0, binding = ST_UAV(10), std430) buffer CasterDepthBuffer { uint u_CasterDepths[]; };
 
 // The projected diameter of a bounding sphere as a fraction of the viewport height, as LODSelection::GetScreenFraction
 // computes it.

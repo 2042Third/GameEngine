@@ -1619,6 +1619,7 @@ CullView                         SpatialIndex::QueryFrustum; screen fractions an
 FindShadowCasters                cascade boxes; QueryPlanes per cascade (a job each, merged in cascade order), then
                                  the exact test in light space in parallel chunks (casters below a texel of a cascade
                                  left out of it), animator reports and the assets casters need merged in chunk order
+                                 (feedback frames: the boxes, and the skinned proxies out of view for their animators)
 ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident; materials used
                                  as in the frame before: their flags, their assets looked up in one call (below)
 GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches (the
@@ -1793,7 +1794,7 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
 - **The GPU-driven path** (`SceneRendererSpecification::GPUDriven`, Auto where the device has
   `drawIndirectFirstInstance`; `SceneRendererGPUDriven.cpp`, `Scene/Cull.comp`, `CullBuild.comp`, `Include/Culling.glsl`).
   The GPU culls the render scene's GPU copy and builds the opaque and shadow draws; the CPU path (Off) stays as the
-  reference and the fallback. The CPU requests the frame's assets, fits the cascades to the casters and gathers transparent
+  reference and the fallback. The CPU requests the frame's assets, places the cascades' squares and gathers transparent
   draws, sorted; the GPU culls with the mirror's mesh table and material flags (above: whatever is loaded, whether this
   frame requested it or not), and the CPU uploads the bucket table and the constants (`RenderData::CullConstants`). `Cull.comp` runs one thread per proxy, for the view and (variant `ST_CULL_SHADOW`) for
   the cascades: the decisions are the CPU path's on the same data (active and indexed, the frustum, the screen size of
@@ -1834,7 +1835,18 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   than 8 frames old, and once after a frame whose draws overflowed the slots the feedback foresaw (paths without a
   GPU-written count bound each bucket's draws by the records of the meshes the feedback saw in view, plus a quarter and
   16, and count what lies beyond as overflow). Feedback is a few frames late by design: a material no longer drawn is
-  requested until the GPU saw it go. `FindShadowCasters` still runs on the CPU for the cascades' depth ranges.
+  requested until the GPU saw it go. The casters are the GPU's too: on feedback frames `FindShadowCasters` only places the
+  cascades and tests the skinned proxies out of view for their animators (with the shadowed part of the view as their
+  receivers: it may report more animators than the CPU's walk, never fewer), the shadow buckets' slots follow the meshes
+  the feedback saw cast, and the cascades' depth ranges are fitted on the GPU the same frame.
+- **Cascades fitted on the GPU** (`Scene/CascadeFit.comp`, `RenderData::CascadeFitConstants`, `CascadeData`). Each
+  cascade's projection reaches from the far side of its view slice's bounding sphere to the nearest drawn caster toward
+  the light (at most `c_MaxShadowCasterDistance` beyond the sphere; `ShadowMesh.vert` pancakes the casters beyond). One
+  compute thread per cascade builds it (`Math::OrthographicReverseZ` times the light view) into `u_Cascades`, which the
+  shadow pass and the receivers read, on both paths: the CPU path hands it the nearest casters it found
+  (`GatherShadowDraws`), the GPU-driven path's shadow culling records them (`u_CasterDepths`, an atomic maximum of
+  order-preserving encoded floats, `Include/OrderedFloat.glsl`) before the fit runs. So no frame waits for the GPU and
+  both paths build the same matrices from the same inputs.
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same
   result on any number of threads), then sorted with a stable radix sort (`Core/RadixSort.h`) of 64-bit keys: cascade,
   alpha mask, winding, culling, mesh slot, submesh and level of detail. The sort reads the keys once to find the bytes
