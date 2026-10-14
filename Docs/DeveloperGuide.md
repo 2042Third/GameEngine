@@ -1255,6 +1255,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `DescribeEntities`), which `edit.history` and the Activity panel show. The inspector edits a
   multi-selection through `PropertyEdit` (`GetSharedProperty`, multi-entity `SetPropertyWithUndo`, `RotationAnglesEdit`
   for rotations edited as Euler angles, `GetDefaultComponentValues` for Reset).
+- Saves run in the background, so the history moves on while one writes: a save breaks the merge (`BreakMerge`, so a drag
+  that goes on starts a step of its own) and takes `UndoStack::GetSavePoint()` (the serial of the latest applied step and
+  the history's generation) with its snapshot; once the file is written, `MarkSaved(SavePoint)` marks that point, wherever
+  edits, undos and redos have moved the history since (edits made meanwhile stay unsaved; undoing them reaches the saved
+  state). A point the history no longer holds (undone past and edited, trimmed, dropped by a failed redo) leaves the
+  scene modified; a point of a history cleared since (another scene) marks nothing.
 
 ### Exporting games
 

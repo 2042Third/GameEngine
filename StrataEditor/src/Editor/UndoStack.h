@@ -155,6 +155,27 @@ namespace Strata
 		void MarkSaved();
 		bool IsModified() const;
 
+		// A state of the history, as a save that writes the scene in the background took it (GetSavePoint): the state after
+		// the action with Serial was applied (0: before every action the history holds), which stays the same state for as
+		// long as the history holds that action, wherever later edits, undos and redos move the history. The edits that
+		// continue an action (a drag merging frames) change its state, so whoever takes a point breaks merging first
+		// (BreakMerge), and the next edit starts a step of its own.
+		struct SavePoint
+		{
+			size_t Position = 0;        // Applied actions when it was taken
+			uint64_t Serial = 0;        // Of the latest of them (0: none)
+			uint64_t Generation = 0;    // Of the history (Clear starts another)
+			uint64_t SceneTrims = 0;    // Scene changes trimmed from the front of the history before it was taken
+
+			bool operator==(const SavePoint& other) const = default;
+		};
+		SavePoint GetSavePoint() const;
+		// Marks a point saved once what was saved there is on disk (a background save finished): IsModified then compares with
+		// it. When the history no longer holds it (undone past and edited since, trimmed, dropped by a failed redo), no point of
+		// the history is the saved one and the scene stays modified. A point of a history that was cleared since (another
+		// scene) marks nothing.
+		void MarkSaved(const SavePoint& point);
+
 		void Clear();
 
 		// Told about every change the stack applies (null: nobody). The observer must outlive the stack or be removed.
@@ -180,6 +201,8 @@ namespace Strata
 		uint64_t m_RecordCount = 0;
 		uint64_t m_LastRecordedSerial = 0;
 		uint64_t m_Version = 0;
+		uint64_t m_Generation = 0;  // Changes with Clear (SavePoint)
+		uint64_t m_SceneTrims = 0;  // Steps that change the scene trimmed from the front (SavePoint)
 		UndoStackObserver* m_Observer = nullptr;
 	};
 
