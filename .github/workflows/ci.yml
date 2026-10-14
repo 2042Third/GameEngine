@@ -65,7 +65,7 @@ jobs:
 
       # Hosted runners have no GPU: suites that need one carry the "gpu" label. Perf budgets (label "perf") hold for the
       # reference machine (StrataTests/Perf/Budgets.json); shared runners of other speeds would fail or pass them at
-      # random, so the perf gate runs on the reference machine (AGENTS.md, "Testing").
+      # random, so the perf gate runs on the reference machine (Docs/DeveloperGuide.md, "Perf tests").
       - name: Test (Release)
         shell: bash
         env:

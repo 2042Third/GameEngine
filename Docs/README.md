@@ -3,6 +3,11 @@
 Documentation of how Strata works. Rules for changing it live in [AGENTS.md](../AGENTS.md); this folder explains the
 design and links to the code that implements it.
 
+- [DeveloperGuide.md](DeveloperGuide.md): the Strata Developer Guide, the details of how to work in every area that
+  AGENTS.md has rules for: the repository layout and engine modules, the build requirements and options, packages and
+  releases, the test runners, the perf lab and the feature test, the asset pipeline, scripting, audio, animation, the
+  editor and its commands, rendering, automation and the editor's fonts. Read the section of the area you work on before
+  changing it.
 - [Architecture.md](Architecture.md): the targets and their dependencies, the engine modules, the frame loop and the
   scene runtime lifecycle, the threading model, the asset pipeline, streaming and residency (memory budgets, eviction,
   the load queue), the render scene, animation, scripting, the editor, export and the runtime.
@@ -23,18 +28,19 @@ What each release of Strata delivers, for the people who download it, and what t
 
 - [Releases/0.3.0.md](Releases/0.3.0.md): Strata 0.3.0, the first release (waves 1 to 3).
 - [Releases/PackageReadme.md](Releases/PackageReadme.md): the `README.md` of the release archives (requirements, first
-  start, making a game, connecting an AI agent). How releases are cut: AGENTS.md, "Releases".
+  start, making a game, connecting an AI agent). How releases are cut: DeveloperGuide.md, "Releases".
 
 ## Elsewhere in the repository
 
-- [AGENTS.md](../AGENTS.md): the development guide and the source of truth for rules: building, testing and the
-  feature test, code style, architecture rules, the asset pipeline, the script ABI, audio, animation, editor commands,
-  rendering, automation and the pre-commit review checklist.
+- [AGENTS.md](../AGENTS.md): the source of truth for rules, which agents load into every session: the golden rules,
+  building, code style, architecture rules, a digest of the hard rules of every area (testing and the feature test, the
+  asset pipeline, the script ABI, audio, animation, the editor, rendering, automation) and the pre-commit review
+  checklist. Their details are in [DeveloperGuide.md](DeveloperGuide.md).
 - [README.md](../README.md): features, building, and making a game with the editor.
 - [.claude/skills/](../.claude/skills/): task playbooks, see [Skills](#skills).
 - [Samples/](../Samples/): example games as editor projects, see [Samples](#samples).
 - [StrataTests/FeatureTest/](../StrataTests/FeatureTest/): the feature test project, a scene with every component
-  and scripts that use the whole SDK (AGENTS.md, "Testing").
+  and scripts that use the whole SDK (DeveloperGuide.md, "Feature test").
 - [ThirdPartyNotices.md](../ThirdPartyNotices.md): third-party components and their licenses.
 - [GameEngineDoc.md](../GameEngineDoc.md): the original project brief.
 
@@ -63,5 +69,8 @@ Task playbooks for people and AI agents, in `.claude/skills/<name>/SKILL.md`:
 
 - A change that makes a statement here wrong updates it in the same commit (AGENTS.md, review checklist item 5).
   Statements name the files and types they describe, so they can be checked against the code.
-- Rules and conventions belong in AGENTS.md and are linked from here, not copied.
-- Markdown with lines of at most 120 columns.
+- Rules and conventions belong in AGENTS.md, their details in DeveloperGuide.md (a rule AGENTS.md shortens is stated in
+  full in the guide and changed in both, a rule AGENTS.md keeps whole is only there, and AGENTS.md stays under 40,000
+  characters); they are linked from here, not copied.
+- Markdown with lines of at most 120 columns. DeveloperGuide.md keeps the wrapping of the text it took over from
+  AGENTS.md, so that `git blame -C` follows each of those lines into AGENTS.md's history.

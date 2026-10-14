@@ -1,6 +1,7 @@
 {
 	"_comment": [
-		"Budgets of the perf tests (StrataTests/src/Perf, suites Perf.* and PerfGPU.*; AGENTS.md, 'Testing').",
+		"Budgets of the perf tests (StrataTests/src/Perf, suites Perf.* and PerfGPU.*; Docs/DeveloperGuide.md,",
+		"'Perf tests').",
 		"Every metric a test checks (Perf::CheckBudgetConfirmed, CheckBudgetsConfirmed) or records (Perf::Record) needs an",
 		"entry, or the test fails:",
 		"  \"<Suite>.<Metric>\": { \"Measured\": <number>, \"Budget\": <number>, \"Unit\": <unit>, \"Target\": <number> }",

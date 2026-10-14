@@ -15,9 +15,9 @@
 
 using namespace Strata;
 
-// Rules for the editor's UI code that a compiler cannot check (AGENTS.md, "Editor"): colors come only from the theme's
-// tokens (UI/Theme.h), sizes scale with the font (they follow the UI scale), panels draw through the panel registry, and
-// ImGui's built-in font is never used. The allowlists are empty: fix the code, never list it here.
+// Rules for the editor's UI code that a compiler cannot check (Docs/DeveloperGuide.md, "Editor UI rules"): colors come
+// only from the theme's tokens (UI/Theme.h), sizes scale with the font (they follow the UI scale), panels draw through
+// the panel registry, and ImGui's built-in font is never used. The allowlists are empty: fix the code, never list it here.
 
 namespace
 {

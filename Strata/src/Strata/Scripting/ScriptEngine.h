@@ -19,8 +19,8 @@ namespace Strata
 	class ScriptWatchdog;
 
 	// Owns the game's script module: a shared library of C++ script classes built against StrataScriptCore (see
-	// AGENTS.md, "Scripting"). Scenes that play while an engine is active (SetActive) run their Script components through
-	// it (ScriptSystem). Main thread only.
+	// Docs/DeveloperGuide.md, "Scripting"). Scenes that play while an engine is active (SetActive) run their Script
+	// components through it (ScriptSystem). Main thread only.
 	//
 	// Crash containment: every call into the module is guarded. When script code crashes (access violation, division by
 	// zero, stack overflow, an exception escaping the SDK, and on Windows abort() - also from a failed assert() or

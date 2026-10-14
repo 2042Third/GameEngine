@@ -47,10 +47,11 @@
 #include <vector>
 
 // Perf tests of the editor on generated scenes and projects (CTest StrataTests.Perf and, with a GPU, StrataTests.PerfGPU:
-// Release and Dist only; see AGENTS.md "Testing"). Statistics, each confirmed by measuring again when over its budget: the
-// median time of a command over its calls (200 single-entity commands; three rounds of the 10,000-entity delete and its
-// undo, each of which takes tens of milliseconds), the median of batched or repeated calls of the hierarchy's rows, the
-// difference of the median editor frames with and without a panel or a selection, and the longest frame of a re-import.
+// Release and Dist only; see Docs/DeveloperGuide.md, "Perf tests"). Statistics, each confirmed by measuring again when
+// over its budget: the median time of a command over its calls (200 single-entity commands; three rounds of the
+// 10,000-entity delete and its undo, each of which takes tens of milliseconds), the median of batched or repeated calls of
+// the hierarchy's rows, the difference of the median editor frames with and without a panel or a selection, and the
+// longest frame of a re-import.
 
 using namespace Strata;
 using namespace Strata::Tests;

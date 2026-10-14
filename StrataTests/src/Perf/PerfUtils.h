@@ -12,11 +12,11 @@
 #include <vector>
 
 // The perf lab: performance tests with checked-in budgets, run in optimized builds only (suites Perf.* in the CTest
-// StrataTests.Perf, PerfGPU.* in StrataTests.PerfGPU; see AGENTS.md, "Testing"). A test measures metrics (Measure, or
-// its own counters) in a measurement function and checks them against their budgets in StrataTests/Perf/Budgets.json
-// with CheckBudgetConfirmed or CheckBudgetsConfirmed: a metric over its budget is measured again, and fails only when
-// every attempt is over budget, so that the machine's other work does not fail a test while a regression does. Every
-// check is recorded in <build>/PerfResults/<config>.json, attempts included.
+// StrataTests.Perf, PerfGPU.* in StrataTests.PerfGPU; see Docs/DeveloperGuide.md, "Perf tests"). A test measures
+// metrics (Measure, or its own counters) in a measurement function and checks them against their budgets in
+// StrataTests/Perf/Budgets.json with CheckBudgetConfirmed or CheckBudgetsConfirmed: a metric over its budget is
+// measured again, and fails only when every attempt is over budget, so that the machine's other work does not fail a
+// test while a regression does. Every check is recorded in <build>/PerfResults/<config>.json, attempts included.
 namespace Strata::Tests::Perf
 {
 
