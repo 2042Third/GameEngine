@@ -89,8 +89,9 @@ namespace Strata
 			const std::function<void(UUID)>& beforeChange = {}, std::string* outError = nullptr);
 
 		// Gives one entity of an instance its prefab entity's value of a component (absent there: the component goes), or of one
-		// property (`property` not empty; a script: "<Class>" for a whole script, "<Class>.<Field>" for a field). False, with
-		// the reason, when the part lacks the entity, or the property where the component exists in both.
+		// property (`property` not empty; a script: "<Class>" for a whole script, "<Class>.<Field>" for a field, whose stored
+		// value goes when the prefab stores none: the class default). False, with the reason, when the part lacks the entity,
+		// the property where the component exists in both, or a field's script in either.
 		bool Revert(Scene& scene, Entity entity, const nlohmann::json& part, std::string_view component, std::string_view property, std::string* outError = nullptr);
 		// The part with one entity's component (or one property of it) taken from the instance: what prefab.apply writes for a
 		// single override. `instancePart` is the instance as a template (PrefabInstances::MakeTemplate).

@@ -131,6 +131,19 @@ TEST_SUITE("Scene.PrefabOverrides")
 		CHECK(overrides.size() == 3);
 		CHECK(PrefabOverrides::IsOverridden(overrides, lid, "Script", "Blinker.Rate"));
 		CHECK_FALSE(PrefabOverrides::IsOverridden(overrides, lid, "Script", "Spinner.Range"));
+
+		// A field the prefab stores no value for (the class default) reverts by dropping the instance's value.
+		crate.Lid.GetComponent<ScriptComponent>().Scripts[0].Fields.push_back(ScriptFieldValue { "Range", PropertyType::Float, PropertyValue(5.0f) });
+		crate.Lid.MarkModified<ScriptComponent>();
+		REQUIRE(PrefabOverrides::IsOverridden(crate.Compute(), lid, "Script", "Spinner.Range"));
+		std::string error;
+		REQUIRE_MESSAGE(PrefabOverrides::Revert(*crate.World, crate.Lid, crate.Part, "Script", "Spinner.Range", &error), error);
+		CHECK(crate.Lid.GetComponent<ScriptComponent>().Scripts[0].FindField("Range") == nullptr);
+		CHECK_FALSE(PrefabOverrides::IsOverridden(crate.Compute(), lid, "Script", "Spinner.Range"));
+		REQUIRE_MESSAGE(PrefabOverrides::Revert(*crate.World, crate.Lid, crate.Part, "Script", "Spinner.Speed", &error), error);
+		CHECK(std::get<float>(crate.Lid.GetComponent<ScriptComponent>().Scripts[0].FindField("Speed")->Value) == 1.0f);
+		// A field of a script the instance added has nothing to revert to.
+		CHECK_FALSE(PrefabOverrides::Revert(*crate.World, crate.Lid, crate.Part, "Script", "Wobbler.Speed", &error));
 	}
 
 	TEST_CASE("The list is stored on the root only when it has entries, and malformed entries are dropped on load")

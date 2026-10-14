@@ -774,12 +774,19 @@ namespace Strata
 				}
 				else
 				{
-					const nlohmann::json* value = templateFields ? JsonUtils::Find(*templateFields, field) : nullptr;
-					if (current == scripts.end() || !value)
-						return Fail(outError, fmt::format("'{}' and its prefab do not both have the script field {}", entity.GetName(), property));
-					nlohmann::json remapped = *value;
-					RemapStrings(remapped, remap);
-					current->second[std::string(field)] = std::move(remapped);
+					if (current == scripts.end() || !templateFields)
+						return Fail(outError, fmt::format("'{}' and its prefab do not both have the script {}", entity.GetName(), className));
+					// A field the prefab stores no value for uses the class default: the instance's value goes too.
+					if (const nlohmann::json* value = JsonUtils::Find(*templateFields, field))
+					{
+						nlohmann::json remapped = *value;
+						RemapStrings(remapped, remap);
+						current->second[std::string(field)] = std::move(remapped);
+					}
+					else
+					{
+						current->second.erase(std::string(field));
+					}
 				}
 				return ApplyComponentValues(entity, *info, MakeScriptComponent(scripts), !has, outError);
 			}
