@@ -100,6 +100,12 @@ namespace Strata
 		// is not top-level or a target cell that is not loaded yet (it is loading then).
 		bool MoveEntities(const std::vector<Entity>& entities, const std::string& layer, std::string* outError = nullptr);
 
+		// Readies the play copy of the edited scene (Scene::Copy) before it starts: the cells loaded in the editor become its
+		// sub-scenes (adopted by their roots' IDs), and the entities of cells still loading or unloading leave the copy, so
+		// that the game's streamer loads those whole from their documents. Returns the cells with unsaved edits, which the
+		// game's World system keeps loaded for the session (WorldStreamingSystem::PinCell).
+		std::vector<WorldCellKey> PrepareRuntimeCopy(Scene& copy) const;
+
 		// Saves the documents changed since the last save: the persistent scene's entities without the cells' (with the scene's
 		// settings), each dirty cell's top-level entities and their descendants (without settings), and the World document
 		// with the saved cells' index entries refreshed from memory (written when it changed). Clears the dirty marks. False,

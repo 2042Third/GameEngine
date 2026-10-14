@@ -552,3 +552,54 @@ TEST_SUITE("Editor.World")
 		CHECK(project.Context.GetAssetManager()->GetAssetType(project.GetCell(0, 0)) == AssetType::Scene);
 	}
 }
+
+TEST_SUITE("Editor.World")
+{
+	TEST_CASE("Playing a world copies the cells the editor has loaded, keeps the dirty ones and streams the rest")
+	{
+		WorldProject project("EditorWorldPlay", 8);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(46.0f, 10.0f, 46.0f));
+		Settle(project);
+		REQUIRE(project.Run("world.status")["cells"]["loaded"] == 9);
+		// The first box of cell (0, 0), and those of cells (6, 6) and (1, 1) (WorldProject's IDs).
+		const UUID boxID = UUID(0x6F0000000000ull);
+		const UUID farBox = UUID(0x6F0000000000ull + (uint64_t(6 * 8 + 6) << 8));
+		const UUID nearBox = UUID(0x6F0000000000ull + (uint64_t(1 * 8 + 1) << 8));
+		REQUIRE(project.Context.GetEditScene()->GetEntityByUUID(boxID));
+		project.Run("component.set", { { "entity", UUIDToJson(boxID) }, { "component", "Transform" }, { "values", { { "Scale", { 2.0, 2.0, 2.0 } } } } });
+		const size_t editEntities = project.Context.GetEditScene()->GetEntityCount();
+
+		project.Run("play.start");
+		Scene& game = *project.Context.GetActiveScene();
+		REQUIRE(&game != project.Context.GetEditScene().get());
+		// The persistent scene and the nine cells, adopted as the game's sub-scenes: nothing loaded twice.
+		CHECK(game.GetEntityCount() == editEntities);
+		size_t adopted = 0;
+		for (const SubSceneStatus& status : game.GetSubScenes())
+			adopted += status.State == SubSceneState::Loaded ? 1 : 0;
+		CHECK(adopted == 9);
+		const IWorldStreaming* streaming = game.GetService<IWorldStreaming>();
+		REQUIRE(streaming);
+		CHECK(game.GetEntityByUUID(boxID).GetComponent<TransformComponent>().Scale.x == 2.0f);
+
+		// The game's source moves far away: other cells come from their documents, the dirty cell stays.
+		const Entity source = game.FindEntityByName("Source");
+		REQUIRE(source);
+		project.Run("component.set", { { "entity", UUIDToJson(source.GetUUID()) }, { "component", "Transform" }, { "values", { { "Translation", { 200.0, 0.0, 200.0 } } } } });
+		REQUIRE(WaitUntil([&]()
+		{
+			project.Context.Update(Timestep(1.0f / 60.0f));
+			const WorldStreamingStats stats = streaming->GetStats();
+			return stats.CellsLoading == 0 && stats.CellsUnloading == 0 && game.GetEntityByUUID(farBox).IsValid();
+		}, std::chrono::seconds(60)));
+		CHECK(game.GetEntityByUUID(boxID));
+		CHECK(game.GetEntityByUUID(boxID).GetComponent<TransformComponent>().Scale.x == 2.0f);
+		CHECK_FALSE(game.GetEntityByUUID(nearBox).IsValid());
+		CHECK(project.Run("world.status")["playing"]["loaded"].get<uint32_t>() >= 2);
+
+		project.Run("play.stop");
+		CHECK(project.Context.GetEditScene()->GetEntityByUUID(boxID).GetComponent<TransformComponent>().Scale.x == 2.0f);
+		CHECK(project.Context.GetEditScene()->GetEntityCount() == editEntities);
+	}
+}

@@ -551,4 +551,40 @@ namespace Strata
 		return true;
 	}
 
+	std::vector<WorldCellKey> EditorWorld::PrepareRuntimeCopy(Scene& copy) const
+	{
+		std::vector<Entity> partial;
+		for (const SubSceneStatus& status : m_Scene.GetSubScenes())
+		{
+			if (!status.Scene.IsValid() || !m_CellKeys.contains(status.Scene))
+				continue;
+			std::vector<Entity> roots;
+			for (const Entity& root : m_Scene.GetSubSceneRoots(status.ID))
+			{
+				if (const Entity copied = copy.GetEntityByUUID(root.GetUUID()))
+					roots.push_back(copied);
+			}
+			if (status.State == SubSceneState::Loaded)
+			{
+				std::string error;
+				if (copy.AdoptSubScene(status.Scene, roots, &error) == 0)
+					ST_WARN("Play: the cell {} stays in the persistent scene: {}", DescribeCell(status.Scene), error);
+			}
+			else
+			{
+				partial.insert(partial.end(), roots.begin(), roots.end());
+			}
+		}
+		copy.DestroyEntities(partial);
+
+		std::vector<WorldCellKey> dirty;
+		for (const AssetHandle cell : m_DirtyCells)
+		{
+			if (const std::optional<WorldCellKey> key = FindCellKey(cell); key && !m_NewCells.contains(cell))
+				dirty.push_back(*key);
+		}
+		std::sort(dirty.begin(), dirty.end());
+		return dirty;
+	}
+
 }

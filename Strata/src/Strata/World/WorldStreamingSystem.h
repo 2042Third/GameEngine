@@ -45,6 +45,9 @@ namespace Strata
 
 		// The streamer, while the scene streams a world (null otherwise): the cell map reads its cell states.
 		const WorldStreamer* GetStreamer() const { return m_Streamer.get(); }
+		// Keeps cells loaded for the session whatever the sources do (the editor's play copy pins the cells with unsaved edits,
+		// whose saved documents the game would read otherwise). False while the scene streams no world.
+		bool PinCell(const WorldCellKey& key);
 		// For tools and tests that start a world without preparing it (Scene::OnRuntimeStart directly): advances the asset
 		// manager, the scene's sub-scenes and the streaming until the cells of the LoadBeforeStart layers around the sources
 		// are loaded or failed. False at the timeout, or when the scene streams no world.

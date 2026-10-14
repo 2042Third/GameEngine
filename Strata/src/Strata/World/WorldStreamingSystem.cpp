@@ -203,6 +203,14 @@ namespace Strata
 		m_Streamer->Update();
 	}
 
+	bool WorldStreamingSystem::PinCell(const WorldCellKey& key)
+	{
+		if (!m_Streamer)
+			return false;
+		m_Streamer->PinCell(key);
+		return true;
+	}
+
 	uint64_t WorldStreamingSystem::RequestCellsAround(const glm::vec3& position, float radius)
 	{
 		if (!std::isfinite(position.x) || !std::isfinite(position.y) || !std::isfinite(position.z) || !std::isfinite(radius) || radius < 0.0f)

@@ -25,6 +25,7 @@
 #include <Strata/Scene/SceneLoader.h>
 #include <Strata/Scene/SceneSerializer.h>
 #include <Strata/Scene/SceneWorkBudget.h>
+#include <Strata/World/WorldStreamingSystem.h>
 
 #include <algorithm>
 #include <limits>
@@ -806,12 +807,21 @@ namespace Strata
 		m_UndoStack.BreakMerge();
 		m_MasterVolumeBeforePlay = AudioEngine::GetMasterVolume();
 		m_RuntimeScene = Scene::Copy(m_EditScene);
+		// A world plays with the cells the editor has loaded (its edit radius), never the whole world: the game streams the
+		// others around the play camera from their saved documents.
+		const std::vector<WorldCellKey> pinnedCells = m_World ? m_World->PrepareRuntimeCopy(*m_RuntimeScene) : std::vector<WorldCellKey>();
 		m_RuntimeSceneAsset = UUID::Null();
 		// Keys a tool held down in an earlier session (input.* commands) must not leak into this one.
 		ResetSimulatedInput();
 		ResetGameShell();
 		m_RuntimeScene->SetTimeDilation(m_Specification.TimeDilation);
 		m_RuntimeScene->OnRuntimeStart(mode);
+		// Cells with unsaved edits stay for the session: their documents on disk are older than what plays.
+		if (WorldStreamingSystem* streaming = m_RuntimeScene->GetSystem<WorldStreamingSystem>())
+		{
+			for (const WorldCellKey& key : pinnedCells)
+				streaming->PinCell(key);
+		}
 		m_SceneState = mode == SceneRuntimeMode::Play ? SceneState::Play : SceneState::Simulate;
 		UpdateInputSuspension();
 		return true;

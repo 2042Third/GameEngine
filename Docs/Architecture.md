@@ -2057,7 +2057,12 @@ document when the saved cells' index entries (refreshed from what was written) c
 the persistent scene's document as the recovery journal's new base. `scene.save` lists the documents written
 (`documents: [{path, kind, bytes, entities}]`); `scene.saveAs` refuses worlds. Documents go through
 `Editor/WorldCellIO.h` (`SerializeDocument`, `WriteDocument`), the seam world-io's entity-subset writer and background
-save replace. Edits re-cell by position: `EditorContext::CommitEdit` calls `EditorWorld::Recell` before recording, so
+save replace. Playing a world copies the edited scene as any play start does, which is the persistent scene plus the
+cells the editor has loaded (its edit radius), never the whole world; `EditorWorld::PrepareRuntimeCopy` then makes the
+fully loaded cells the copy's sub-scenes (adopted by their roots' IDs, so the game's World system adopts them and loads
+nothing twice), removes the entities of cells still loading or unloading (the game loads those whole), and the game's
+streamer pins the cells with unsaved edits for the session (`WorldStreamingSystem::PinCell`), whose documents are older
+than what plays. Further cells stream around the game's sources from their saved documents. Edits re-cell by position: `EditorContext::CommitEdit` calls `EditorWorld::Recell` before recording, so
 a tracked top-level entity of a cell whose world position now lies in another cell of its layer moves into it
 (`Scene::SetSubSceneOf`) within the same undo step (a gizmo drag across a border, a translation, a paste), and an entity
 the edit created that belongs to no sub-scene goes into the edit layer's cell at its position (`world.edit {editLayer}`;
