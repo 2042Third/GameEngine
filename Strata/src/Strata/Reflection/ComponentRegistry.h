@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Core/Base.h"
+#include "Strata/Core/BinaryStream.h"
 #include "Strata/Reflection/Property.h"
 #include "Strata/Reflection/PropertyBuilder.h"
 
@@ -158,6 +159,11 @@ namespace Strata
 		// Optional serialization of data that is not expressed as properties (e.g. script fields).
 		std::function<void(const void* component, nlohmann::json& out)> SerializeExtra;
 		std::function<bool(void* component, const nlohmann::json& in, std::string* outError)> DeserializeExtra;
+		// Its binary form (cooked scenes), written after the properties and read back as the JSON form reads (what it cannot
+		// read as written is skipped; data that ends early fails). Optional: cooked scenes keep the JSON extra of a component
+		// without it as MessagePack.
+		std::function<bool(const void* component, BinaryWriter& out, std::string* outError)> SerializeExtraBinary;
+		std::function<bool(void* component, BinaryReader& in, std::string* outError)> DeserializeExtraBinary;
 
 		bool IsHidden() const { return HasFlag(Flags, ComponentFlags::Hidden); }
 		bool IsRemovable() const { return !HasFlag(Flags, ComponentFlags::NotRemovable); }
@@ -271,6 +277,21 @@ namespace Strata
 			ComponentInfo& info = GetTarget();
 			info.SerializeExtra = [serialize](const void* component, nlohmann::json& out) { serialize(*static_cast<const T*>(component), out); };
 			info.DeserializeExtra = [deserialize](void* component, const nlohmann::json& in, std::string* outError) { return deserialize(*static_cast<T*>(component), in, outError); };
+			return *this;
+		}
+
+		// The binary form of the extra data (ComponentInfo::SerializeExtraBinary).
+		ComponentInfoBuilder& ExtraBinary(std::function<bool(const T&, BinaryWriter&, std::string*)> serialize, std::function<bool(T&, BinaryReader&, std::string*)> deserialize)
+		{
+			ComponentInfo& info = GetTarget();
+			info.SerializeExtraBinary = [serialize](const void* component, BinaryWriter& out, std::string* outError)
+			{
+				return serialize(*static_cast<const T*>(component), out, outError);
+			};
+			info.DeserializeExtraBinary = [deserialize](void* component, BinaryReader& in, std::string* outError)
+			{
+				return deserialize(*static_cast<T*>(component), in, outError);
+			};
 			return *this;
 		}
 	};

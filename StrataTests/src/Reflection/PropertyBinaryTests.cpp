@@ -1,7 +1,11 @@
 #include <doctest/doctest.h>
 
 #include <Strata/Core/BinaryStream.h>
+#include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyBinary.h>
+#include <Strata/Scene/Components.h>
+
+#include <nlohmann/json.hpp>
 
 #include <cstring>
 #include <limits>
@@ -170,5 +174,63 @@ TEST_SUITE("Reflection.PropertyBinary")
 		CHECK_FALSE(WritePropertyValue(writer, PropertyType::Vec3, PropertyValue(1.0f), &error));
 		CHECK_FALSE(WritePropertyValue(writer, PropertyType::Enum, PropertyValue(uint32_t(1)), &error));
 		CHECK(writer.GetSize() == 0);
+	}
+}
+
+TEST_SUITE("Reflection.PropertyBinary")
+{
+	TEST_CASE("The Script component's binary extra data holds its scripts and typed fields as the JSON form does")
+	{
+		const ComponentInfo* info = ComponentRegistry::Find<ScriptComponent>();
+		REQUIRE(info);
+		REQUIRE(info->SerializeExtraBinary);
+		REQUIRE(info->DeserializeExtraBinary);
+
+		ScriptComponent scripts;
+		ScriptEntry& player = scripts.Scripts.emplace_back();
+		player.ClassName = "Player";
+		player.Fields = { { "Alive", PropertyType::Bool, PropertyValue(true) }, { "Count", PropertyType::Int, PropertyValue(int32_t(-4)) },
+			{ "Mode", PropertyType::Enum, PropertyValue(int32_t(2)) }, { "Name", PropertyType::String, PropertyValue(std::string("Ada")) },
+			{ "Speed", PropertyType::Float, PropertyValue(2.5f) }, { "Target", PropertyType::Entity, PropertyValue(UUID(42)) },
+			{ "Tint", PropertyType::Color4, PropertyValue(glm::vec4(1.0f, 0.5f, 0.25f, 1.0f)) },
+			// A value that is not of its type is left out, as the JSON form leaves it out.
+			{ "Broken", PropertyType::Vec3, PropertyValue(1.0f) } };
+		scripts.Scripts.emplace_back().ClassName = "Empty";
+
+		BinaryWriter writer;
+		std::string error;
+		REQUIRE(info->SerializeExtraBinary(&scripts, writer, &error));
+		ScriptComponent read;
+		BinaryReader reader(writer.GetData());
+		REQUIRE_MESSAGE(info->DeserializeExtraBinary(&read, reader, &error), error);
+		CHECK(reader.GetRemaining() == 0);
+
+		// What the JSON form reads back.
+		nlohmann::json json;
+		info->SerializeExtra(&scripts, json);
+		ScriptComponent fromJson;
+		REQUIRE(info->DeserializeExtra(&fromJson, json, &error));
+		REQUIRE(read.Scripts.size() == fromJson.Scripts.size());
+		for (size_t script = 0; script < read.Scripts.size(); script++)
+		{
+			CHECK(read.Scripts[script].ClassName == fromJson.Scripts[script].ClassName);
+			REQUIRE(read.Scripts[script].Fields.size() == fromJson.Scripts[script].Fields.size());
+			for (size_t field = 0; field < read.Scripts[script].Fields.size(); field++)
+			{
+				const ScriptFieldValue& binary = read.Scripts[script].Fields[field];
+				const ScriptFieldValue& text = fromJson.Scripts[script].Fields[field];
+				CHECK(binary.Name == text.Name);
+				CHECK(binary.Type == text.Type);
+				CHECK(binary.Value == text.Value);
+			}
+		}
+
+		// Data that ends early fails, at every byte.
+		for (size_t size = 0; size < writer.GetSize(); size++)
+		{
+			ScriptComponent truncated;
+			BinaryReader cut(std::span<const uint8_t>(writer.GetData().data(), size));
+			CHECK_FALSE(info->DeserializeExtraBinary(&truncated, cut, &error));
+		}
 	}
 }
