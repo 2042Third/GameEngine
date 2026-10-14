@@ -44,9 +44,10 @@ namespace Strata
 	//   Windows: PrivateBytes is the commit charge (committed private memory, also pages never touched yet), WorkingSet
 	//            the working set; the system tracks both peaks.
 	//   Linux:   PrivateBytes is anonymous resident memory plus swapped-out memory (RssAnon + VmSwap of
-	//            /proc/self/status: every private page the process has touched), WorkingSet is VmRSS and its peak VmHWM.
-	//            The kernel keeps no peak of private memory: PeakPrivateBytes is the largest PrivateBytes any call in this
-	//            process has seen, so a spike between two calls is missed.
+	//            /proc/self/status: every private page the process has touched), WorkingSet is VmRSS and its peak VmHWM
+	//            or the largest WorkingSet any call has seen, whichever is larger (the kernel raises VmHWM only when
+	//            memory is unmapped). The kernel keeps no peak of private memory: PeakPrivateBytes is the largest
+	//            PrivateBytes any call in this process has seen, so a spike between two calls is missed.
 	//   macOS:   PrivateBytes is the physical footprint (dirty private and compressed memory, what Activity Monitor
 	//            shows), WorkingSet the resident size; the kernel tracks both peaks (kernels too old to report the
 	//            footprint's peak fall back to the largest value seen, as on Linux).

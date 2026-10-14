@@ -91,12 +91,16 @@ namespace Strata
 
 		// The largest private memory GetProcessMemory has reported, the peak on systems that do not track one.
 		std::atomic<uint64_t> s_ObservedPeakPrivateBytes = 0;
+#if !defined(ST_PLATFORM_MACOS)
+		// The largest working set GetProcessMemory has reported (see its use).
+		std::atomic<uint64_t> s_ObservedPeakWorkingSet = 0;
+#endif
 
-		// Raises the observed peak to value and returns the new peak.
-		uint64_t UpdateObservedPeakPrivateBytes(uint64_t value)
+		// Raises an observed peak to value and returns the new peak.
+		uint64_t UpdateObservedPeak(std::atomic<uint64_t>& observedPeak, uint64_t value)
 		{
-			uint64_t peak = s_ObservedPeakPrivateBytes.load(std::memory_order_relaxed);
-			while (peak < value && !s_ObservedPeakPrivateBytes.compare_exchange_weak(peak, value, std::memory_order_relaxed))
+			uint64_t peak = observedPeak.load(std::memory_order_relaxed);
+			while (peak < value && !observedPeak.compare_exchange_weak(peak, value, std::memory_order_relaxed))
 			{
 			}
 			return std::max(peak, value);
@@ -614,7 +618,7 @@ namespace Strata
 		memory.PrivateBytes = static_cast<uint64_t>(information.phys_footprint);
 		memory.WorkingSet = static_cast<uint64_t>(information.resident_size);
 		memory.PeakWorkingSet = std::max(static_cast<uint64_t>(information.resident_size_peak), memory.WorkingSet);
-		const uint64_t observedPeak = UpdateObservedPeakPrivateBytes(memory.PrivateBytes);
+		const uint64_t observedPeak = UpdateObservedPeak(s_ObservedPeakPrivateBytes, memory.PrivateBytes);
 		const bool hasFootprintPeak = TaskInfoCovers(count,
 			offsetof(task_vm_info_data_t, ledger_phys_footprint_peak) + sizeof(information.ledger_phys_footprint_peak));
 		if (hasFootprintPeak && information.ledger_phys_footprint_peak > 0)
@@ -636,8 +640,10 @@ namespace Strata
 		// reserved address space never touched, such as the full stack size of every thread.)
 		memory.PrivateBytes = *anonymous + *swapped;
 		memory.WorkingSet = *resident;
-		memory.PeakWorkingSet = std::max(*residentPeak, memory.WorkingSet);
-		memory.PeakPrivateBytes = UpdateObservedPeakPrivateBytes(memory.PrivateBytes);
+		// The kernel raises VmHWM to the resident size only when memory is unmapped, not as pages are touched: pages other
+		// threads give back before an unmap leave it below the resident size an earlier call reported.
+		memory.PeakWorkingSet = UpdateObservedPeak(s_ObservedPeakWorkingSet, std::max(*residentPeak, memory.WorkingSet));
+		memory.PeakPrivateBytes = UpdateObservedPeak(s_ObservedPeakPrivateBytes, memory.PrivateBytes);
 #endif
 		return memory;
 	}
