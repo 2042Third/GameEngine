@@ -45,6 +45,8 @@ namespace Strata
 		constexpr const char* c_UnsavedChangesModal = "Unsaved Changes";
 		// Between the parts of a pill's text.
 		constexpr const char* c_Separator = " \xC2\xB7 ";
+		// Frames the frame pill's tooltip summarizes for what bounds them: two seconds at 60 frames per second.
+		constexpr uint32_t c_FramePillBoundFrames = 120;
 
 		// The default layout, as fractions of the dock space: the viewport gets over 45% of a 3840 x 2054 window at 150%.
 		constexpr float c_HierarchyWidth = 0.15f;
@@ -1612,7 +1614,10 @@ namespace Strata
 					PerformancePanel::c_JobSamples, stats.Workers.RunningJobs + stats.IO.RunningJobs + stats.Background.RunningJobs,
 					stats.Workers.QueuedJobs + stats.IO.QueuedJobs + stats.Background.QueuedJobs);
 			}
+			// What paces the frames, of the last two seconds' frames: summarized only while the tooltip shows.
+			tooltip += "\n" + PerformancePanel::DescribeBound(FrameProfiler::Get().Summarize(c_FramePillBoundFrames));
 			ImGui::SetTooltip("%s", tooltip.c_str());
+			UI::ItemProbe::Record("Status.FrameTooltip", true, 0, tooltip);
 		}
 		if (clicked)
 			m_Panels.Focus(EditorPanels::c_Performance);

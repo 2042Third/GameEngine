@@ -2061,7 +2061,12 @@ is the `strata-scripting` skill. The layers:
   ms), scaled to the 95th percentile frame (taller frames are cut at the top), marks spikes (frames over twice the
   median and a 60 FPS frame), explains the frame under the mouse, lists per-stage statistics under the frame's totals
   (frozen under the header) and copies `editor.perf`'s JSON (Copy as JSON); its statistics are computed four times a
-  second. The timeline takes at most 40% of the panel's height, or sits beside the table in a short, wide dock, so the
+  second. While GPU times arrive (or are expected) a GPU strip under the timeline stacks the GPU stages of the same frames
+  at the same scale (frames without GPU times stay blank), and the table ends with a GPU section: what bounds the frames
+  (`PerformancePanel::DescribeBound`: GPU-bound, CPU-bound, capped or unknown, by `FrameBound`), the GPU's busy time and
+  each GPU stage. The status bar's frame pill keeps its text; its tooltip adds the same bound line (a summary of the last
+  120 frames, made only while the tooltip shows). The viewport's stats overlay adds the GPU's time of the latest frame
+  it is known for with its three largest stages, and the draw commands the CPU recorded beside the draws the GPU made. The timeline takes at most 40% of the panel's height, or sits beside the table in a short, wide dock, so the
   table keeps rows in view. Color swatches are drawn as rectangles: the monospaced font has no icons. **UI tests**
   (`StrataTests/src/Editor/ImGuiHarness.h`) create an ImGui context with the editor's fonts and theme (styled by an
   unattached `ImGuiLayer`), honor ImGui's texture requests without a renderer, inject input (clicks, keys, typed text),

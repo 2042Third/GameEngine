@@ -19,6 +19,7 @@
 
 #include <Strata/Animation/AnimationPreview.h>
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Core/FrameProfiler.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -899,11 +900,32 @@ namespace Strata
 	{
 		const SceneRendererStats& stats = renderer.GetStats();
 		const glm::uvec2 size = renderer.GetSize();
+		// The GPU's time of the latest frame it is known for (2-3 frames late): the total and the three largest stages.
+		const SceneRendererGPUStats& gpu = renderer.GetGPUStats();
+		std::string gpuLine = "GPU: no times (yet)";
+		if (gpu.HasTimes)
+		{
+			std::vector<GPUStageTime> largest = gpu.StageMs;
+			const size_t shown = std::min<size_t>(largest.size(), 3);
+			std::partial_sort(largest.begin(), largest.begin() + static_cast<std::ptrdiff_t>(shown), largest.end(),
+				[](const GPUStageTime& a, const GPUStageTime& b) { return a.Milliseconds > b.Milliseconds; });
+			gpuLine = fmt::format("GPU {:.2f} ms", gpu.BusyMs);
+			for (size_t index = 0; index < shown; index++)
+			{
+				// The stage's name without its "GPU." prefix.
+				const std::string& name = FrameProfiler::Get().GetStageName(largest[index].Stage);
+				gpuLine += fmt::format("{}{} {:.2f}", index == 0 ? " (" : ", ", name.starts_with("GPU.") ? name.substr(4) : name, largest[index].Milliseconds);
+			}
+			if (shown > 0)
+				gpuLine += ")";
+		}
 		// The frame's own time: while the editor idles, its frame rate is capped, which says nothing about what frames cost.
 		const std::vector<std::string> lines = {
 			fmt::format("{:.2f} ms ({:.0f} FPS{})", frame.WorkMilliseconds, frame.FramesPerSecond, frame.Idle ? ", idle" : ""),
 			fmt::format("{} x {} pixels", size.x, size.y),
+			gpuLine,
 			fmt::format("{} draw calls ({} opaque, {} shadow), {} instances", stats.DrawCalls, stats.OpaqueDrawCalls, stats.ShadowDrawCalls, stats.Instances),
+			fmt::format("{} draw commands, {} drawn by the GPU, 0 occluded", stats.DrawCommands, stats.DrawCommands),
 			fmt::format("{} triangles, {} lights, {} materials", stats.Triangles, stats.Lights, stats.Materials),
 			fmt::format("{} visible of {} proxies, {} updated", stats.VisibleProxies, stats.VisibleProxies + stats.CulledInstances, stats.ProxyUpdates),
 			fmt::format("extract {:.2f} ms, sort {:.2f} ms", stats.ExtractMs, stats.SortMs),
