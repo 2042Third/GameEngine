@@ -909,17 +909,20 @@ TEST_SUITE("GPU.Editor.Viewport")
 		ViewportGPUHarness harness;
 		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.open", { { "path", FileSystem::ToUTF8(tetris) } });
 
+		// The HUD is a UI canvas: its stats panel with score, level and lines, the controls and the (hidden) message panel.
 		nlohmann::json result;
 		harness.Capture({ { "width", 320 }, { "height", 180 }, { "camera", "editor" } }, &result);
-		CHECK(result["screenSpaceTexts"] == 0);
-		CHECK(result["hiddenScreenSpaceTexts"].get<int>() >= 4); // Score, level, lines and controls (the message is empty)
+		CHECK(result["ui"]["canvases"] == 0);
+		CHECK(result["ui"]["hiddenCanvases"] == 1);
 		harness.Capture({ { "width", 320 }, { "height", 180 }, { "camera", "scene" } }, &result);
-		CHECK(result["screenSpaceTexts"].get<int>() >= 4);
-		CHECK(result["hiddenScreenSpaceTexts"] == 0);
+		CHECK(result["ui"]["canvases"] == 1);
+		CHECK(result["ui"]["elements"].get<int>() >= 6);
+		CHECK(result["ui"]["hiddenCanvases"] == 0);
 		// gameUI shows it in editor views too.
 		harness.Run("viewport.setSettings", { { "gameUI", true } });
 		harness.Capture({ { "width", 320 }, { "height", 180 }, { "camera", "editor" } }, &result);
-		CHECK(result["screenSpaceTexts"].get<int>() >= 4);
+		CHECK(result["ui"]["canvases"] == 1);
+		CHECK(result["screenSpaceTexts"] == 0); // Nothing of the HUD is a screen-space Text component any more
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
