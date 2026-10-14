@@ -161,6 +161,17 @@ namespace Strata
 			count->second++;
 		}
 
+		void UnknownComponentTally::Merge(const UnknownComponentTally& other)
+		{
+			for (const std::string& name : other.Names)
+			{
+				auto [count, firstSeen] = Counts.try_emplace(name, 0);
+				if (firstSeen)
+					Names.push_back(name);
+				count->second += other.Counts.at(name);
+			}
+		}
+
 		void UnknownComponentTally::AppendWarnings(std::vector<std::string>& outWarnings) const
 		{
 			for (const std::string& name : Names)
@@ -351,6 +362,35 @@ namespace Strata
 			m_Warnings ? &m_EntityWarnings : nullptr);
 		if (!unknown.empty())
 			registry.emplace<UnknownComponentsComponent>(handle, UnknownComponentsComponent { std::move(unknown) });
+		return true;
+	}
+
+	bool SceneBuilder::ReadPrepared(PreparedEntities& entities, std::string* outError)
+	{
+		if (!m_WasEmpty)
+			return Fail(outError, "Scenes can only be deserialized into an empty scene");
+		// What reading them reported comes first: an entity refused here (its ID taken) fails the whole read.
+		if (m_Warnings)
+		{
+			for (std::string& warning : entities.Warnings)
+				m_EntityWarnings.push_back(std::move(warning));
+		}
+		m_Unknown.Merge(entities.Unknown);
+
+		entt::registry& registry = m_Scene.m_Registry;
+		EntityColumns& columns = entities.Columns;
+		for (size_t index = 0; index < columns.GetEntityCount(); index++)
+		{
+			const EntityColumns::EntityRecord& record = columns.GetEntity(index);
+			entt::entity handle = entt::null;
+			if (!CreateEntity(record.ID, record.Parent, record.InvalidParent, handle, outError))
+				return false;
+			// Name and Transform come first among the columns' components, as ReadEntity creates them first.
+			for (const EntityColumns::ComponentRecord& component : columns.GetComponents(index))
+				component.Info->EmplaceCopy(registry, handle, columns.GetValue(component));
+			if (record.Unknown != EntityColumns::c_NoUnknownComponents)
+				registry.emplace<UnknownComponentsComponent>(handle, UnknownComponentsComponent { std::move(columns.GetUnknown(record.Unknown)) });
+		}
 		return true;
 	}
 

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Strata/Core/JobSystem.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneDocumentWriter.h"
 
@@ -28,6 +29,16 @@ namespace Strata
 		// The share of the text parsed so far, in [0, 1], on the reading thread: about every megabyte, and 1 at the end of the
 		// parse (the sink's Finish follows).
 		std::function<void(float share)> Progress;
+		// Documents in the writer's layout (an entity per line) of at least ParallelMinEntities entities are parsed on the job
+		// system's threads, ParallelChunkEntities lines per job, when the sink takes prepared entities
+		// (EntitySink::TakesPreparedEntities): the reading thread hands the chunks to the sink in order, asking IsCancelled
+		// after each. Every line is checked to parse alone first; a document whose lines do not is read as a stream, as are
+		// documents in other layouts. The result does not depend on the path.
+		bool Parallel = true;
+		uint32_t ParallelChunkEntities = 2048;
+		uint32_t ParallelMinEntities = 16384;
+		// Of the jobs that parse chunks (from background work they are background jobs).
+		JobPriority Priority = JobPriority::Normal;
 	};
 
 	struct SceneReadResult
@@ -36,6 +47,7 @@ namespace Strata
 		bool Cancelled = false;  // SceneReadOptions::IsCancelled ended the read
 		bool EntityError = false; // The sink refused the entity data (the error is the sink's)
 		bool SyntaxError = false; // The text is not valid JSON
+		bool Parallel = false;    // The entities were parsed in parallel (SceneReadOptions::Parallel)
 	};
 
 	// Reads scene, prefab and model documents (SceneDocumentKind) as a stream of parse events, handing the content to an

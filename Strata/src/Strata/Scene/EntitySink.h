@@ -21,6 +21,7 @@ namespace Strata
 {
 
 	class Scene;
+	struct PreparedEntities;
 
 	// What SceneDocumentReader hands a document's content to as it parses it: the small fields of its content object (a
 	// scene's "Name" and "Settings") and each value of its entity list, one at a time, in document order. Each value is a
@@ -38,6 +39,12 @@ namespace Strata
 		virtual void ReadField([[maybe_unused]] std::string_view key, [[maybe_unused]] const nlohmann::json& value) {}
 		// One value of the entity list (an entity object when the document is valid). False, with the reason, ends the read.
 		virtual bool ReadEntity(const nlohmann::json& entity, std::string* outError) = 0;
+		// Whether the sink takes entities prepared on worker threads (ReadPrepared): the reader then reads large documents in
+		// the writer's layout in parallel (SceneReadOptions::Parallel).
+		virtual bool TakesPreparedEntities() const { return false; }
+		// The next entities of the list, read into columns on a worker thread as ReadEntity would read them one by one, in
+		// document order. The sink may take the values over. False, with the reason, ends the read.
+		virtual bool ReadPrepared([[maybe_unused]] PreparedEntities& entities, [[maybe_unused]] std::string* outError) { return false; }
 		// Once the whole document is read and its header validated. False, with the reason, fails the read.
 		virtual bool Finish(std::string* outError) = 0;
 	};
@@ -53,6 +60,8 @@ namespace Strata
 			std::unordered_map<std::string, size_t> Counts;
 
 			void Add(const std::string& name);
+			// Adds another tally's counts, as if its entities were read after this one's.
+			void Merge(const UnknownComponentTally& other);
 			void AppendWarnings(std::vector<std::string>& outWarnings) const;
 		};
 
@@ -115,6 +124,15 @@ namespace Strata
 		std::vector<nlohmann::json> m_Unknown;
 	};
 
+	// A chunk of a document's entities read into columns on a worker thread (SceneDocumentReader's parallel read), with what
+	// reading them reported, in order: what a sink that takes prepared entities (EntitySink::ReadPrepared) adds.
+	struct PreparedEntities
+	{
+		EntityColumns Columns;
+		std::vector<std::string> Warnings;
+		Detail::UnknownComponentTally Unknown;
+	};
+
 	// Builds a scene of a document's entities as they are read (SceneDocumentReader): each entity and its components are
 	// created in the scene's registry at once (ComponentAccess::Deserialize per component, as
 	// SceneSerializer::DeserializeEntities does), and only its entity and parent ID are kept until the end, which links the
@@ -134,6 +152,8 @@ namespace Strata
 		void ReserveEntities(uint64_t count) override;
 		void ReadField(std::string_view key, const nlohmann::json& value) override;
 		bool ReadEntity(const nlohmann::json& entity, std::string* outError) override;
+		bool TakesPreparedEntities() const override { return true; }
+		bool ReadPrepared(PreparedEntities& entities, std::string* outError) override;
 		bool Finish(std::string* outError) override;
 	private:
 		// Creates an entity with the components every entity has besides Name and Transform; false when its ID is taken.

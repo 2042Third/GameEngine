@@ -486,10 +486,16 @@ TEST_SUITE("Scene.Documents")
 namespace
 {
 
-	// Counts what a reader hands it, refusing nothing; `OnEntity` hears of each entity's number (from 1).
+	// Counts what a reader hands it, refusing nothing; `OnEntity` hears of each entity's number (from 1). With
+	// `takesPrepared` it takes prepared chunks too (the parallel read).
 	class CountingSink final : public EntitySink
 	{
 	public:
+		explicit CountingSink(bool takesPrepared = false)
+			: m_TakesPrepared(takesPrepared)
+		{
+		}
+
 		void ReserveEntities(uint64_t count) override { Reserved = count; }
 		void ReadField(std::string_view key, const nlohmann::json&) override { Fields.emplace_back(key); }
 		bool ReadEntity(const nlohmann::json&, std::string*) override
@@ -497,6 +503,18 @@ namespace
 			Entities++;
 			if (OnEntity)
 				OnEntity(Entities);
+			return true;
+		}
+		bool TakesPreparedEntities() const override { return m_TakesPrepared; }
+		bool ReadPrepared(PreparedEntities& entities, std::string*) override
+		{
+			for (size_t index = 0; index < entities.Columns.GetEntityCount(); index++)
+			{
+				Entities++;
+				if (OnEntity)
+					OnEntity(Entities);
+			}
+			Chunks++;
 			return true;
 		}
 		bool Finish(std::string*) override
@@ -508,8 +526,11 @@ namespace
 		std::function<void(uint64_t)> OnEntity;
 		uint64_t Reserved = 0;
 		uint64_t Entities = 0;
+		uint64_t Chunks = 0;
 		std::vector<std::string> Fields;
 		bool Finished = false;
+	private:
+		bool m_TakesPrepared = false;
 	};
 
 	struct SceneRead
@@ -950,6 +971,142 @@ TEST_SUITE("Scene.Documents")
 				CHECK_FALSE(loaded);
 				CHECK(error == expected);
 			}
+		}
+	}
+}
+
+namespace
+{
+
+	// Options that read any document in the writer's layout in parallel, in chunks of `chunk` entities.
+	SceneReadOptions ParallelOptions(uint32_t chunk)
+	{
+		SceneReadOptions options;
+		options.ParallelMinEntities = 0;
+		options.ParallelChunkEntities = chunk;
+		return options;
+	}
+
+	SceneReadOptions StreamOptions()
+	{
+		SceneReadOptions options;
+		options.Parallel = false;
+		return options;
+	}
+
+	// The parallel read and the stream read load the text to the same scene, with the same reports; the parallel one took
+	// the parallel path.
+	void CheckSameParallelRead(const std::string& text, uint32_t chunk)
+	{
+		const SceneRead streamed = ReadStreamed(text, StreamOptions());
+		const SceneRead parallel = ReadStreamed(text, ParallelOptions(chunk));
+		INFO(streamed.Error);
+		INFO(parallel.Error);
+		REQUIRE(streamed.Success);
+		REQUIRE(parallel.Success);
+		CHECK_FALSE(streamed.Result.Parallel);
+		CHECK(parallel.Result.Parallel);
+		CHECK(parallel.Result.Entities == streamed.Result.Entities);
+		CHECK(SceneSerializer::Serialize(*parallel.Loaded) == SceneSerializer::Serialize(*streamed.Loaded));
+		CHECK(parallel.Loaded->GetName() == streamed.Loaded->GetName());
+		CHECK(parallel.Loaded->GetRootEntities() == streamed.Loaded->GetRootEntities());
+		CHECK(parallel.Warnings == streamed.Warnings);
+	}
+
+}
+
+TEST_SUITE("Scene.Documents")
+{
+	TEST_CASE("Documents in the writer's layout read in parallel to the scene a stream read makes, with the same reports")
+	{
+		ScopedJobSystem jobs(4, 1);
+		const Ref<Scene> feature = LoadFeatureScene();
+		AddUnknownComponents(*feature, feature->GetEntityByUUID(feature->GetRootEntities().front()));
+		const std::string written = WriteDocument(*feature).Text;
+		for (const uint32_t chunk : { 1u, 3u, 1000u })
+			CheckSameParallelRead(written, chunk);
+		// Everything a read reports, over chunks; and a file checked out with Windows line ends.
+		const std::string problems = WriteInWriterOrder(MakeProblemScene());
+		CheckSameParallelRead(problems, 2);
+		std::string crlf;
+		for (const char character : written)
+			crlf += character == '\n' ? std::string("\r\n") : std::string(1, character);
+		CheckSameParallelRead(crlf, 4);
+		CheckSameParallelRead(MakeEntityListText(5000, true), 256);
+
+		// Large documents take the parallel path by default; small ones are read as a stream.
+		CHECK(ReadStreamed(MakeEntityListText(SceneReadOptions().ParallelMinEntities, true)).Result.Parallel);
+		CHECK_FALSE(ReadStreamed(written).Result.Parallel);
+	}
+
+	TEST_CASE("A parallel read fails as the stream read does, falls back to it for lines that do not parse alone, and is refused or cancelled by the chunk")
+	{
+		ScopedJobSystem jobs(4, 1);
+		// Invalid entities in a later chunk: the stream read's errors.
+		std::string text = MakeEntityListText(40, false);
+		for (const auto& [from, to] : { std::pair<std::string, std::string> { "{\"Components\":{\"Name\":{\"Name\":\"E30\"}},\"ID\":\"000000000000001F\"", "{\"Components\":{\"Name\":{\"Name\":\"E30\"}},\"ID\":\"0000000000000003\"" },
+			std::pair<std::string, std::string> { "{\"Components\":{\"Name\":{\"Name\":\"E30\"}},\"ID\":\"000000000000001F\"", "{\"Components\":{\"Name\":{\"Name\":\"E30\"}},\"ID\":\"zz\"" } })
+		{
+			std::string broken = text;
+			const size_t at = broken.find(from);
+			REQUIRE(at != std::string::npos);
+			broken.replace(at, from.size(), to);
+			const SceneRead streamed = ReadStreamed(broken, StreamOptions());
+			const SceneRead parallel = ReadStreamed(broken, ParallelOptions(8));
+			CHECK_FALSE(streamed.Success);
+			CHECK_FALSE(parallel.Success);
+			CHECK(parallel.Result.Parallel);
+			CHECK(parallel.Error == streamed.Error);
+			CHECK(parallel.Result.EntityError);
+		}
+
+		// Two entities on one line: valid JSON, read as a stream.
+		std::string shared = MakeEntityListText(40, false);
+		const size_t lineEnd = shared.find(",\n{", shared.find("\"Entities\":[\n") + 14);
+		REQUIRE(lineEnd != std::string::npos);
+		shared.replace(lineEnd, 2, ",");
+		const SceneRead fallback = ReadStreamed(shared, ParallelOptions(8));
+		REQUIRE(fallback.Success);
+		CHECK_FALSE(fallback.Result.Parallel);
+		CHECK(fallback.Loaded->GetEntityCount() == 40);
+		// Not even valid JSON: the stream read's error.
+		std::string invalid = MakeEntityListText(40, false);
+		invalid.insert(invalid.find("\"E20\""), "\"");
+		const SceneRead broken = ReadStreamed(invalid, ParallelOptions(8));
+		CHECK_FALSE(broken.Success);
+		CHECK_FALSE(broken.Result.Parallel);
+		CHECK(broken.Result.SyntaxError);
+
+		// Over the limit: refused before any entity, declared or not.
+		for (const bool declare : { true, false })
+		{
+			SceneReadOptions options = ParallelOptions(8);
+			options.MaxEntities = 30;
+			CountingSink sink(true);
+			std::string error;
+			SceneReadResult result;
+			CHECK_FALSE(SceneDocumentReader::Read(MakeEntityListText(40, declare), SceneDocumentKind::Scene, sink, options, &result, &error));
+			CHECK(sink.Entities == 0);
+			CHECK(error.find(declare ? "40 entities" : "more than the 30") != std::string::npos);
+		}
+
+		// Cancelled: it stops after the chunk in which the cancel came.
+		const std::string many = MakeEntityListText(5000, true);
+		for (const uint64_t cancelAt : { 500u, 2500u, 4500u })
+		{
+			CAPTURE(cancelAt);
+			bool cancelled = false;
+			CountingSink sink(true);
+			sink.OnEntity = [&](uint64_t entity) { cancelled = cancelled || entity == cancelAt; };
+			SceneReadOptions options = ParallelOptions(256);
+			options.IsCancelled = [&cancelled]() { return cancelled; };
+			SceneReadResult result;
+			std::string error;
+			CHECK_FALSE(SceneDocumentReader::Read(many, SceneDocumentKind::Scene, sink, options, &result, &error));
+			CHECK(result.Parallel);
+			CHECK(result.Cancelled);
+			CHECK(sink.Entities == (cancelAt + 255) / 256 * 256);
+			CHECK_FALSE(sink.Finished);
 		}
 	}
 }

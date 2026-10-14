@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Scene/SceneDocumentReader.h"
 
+#include "Strata/Core/JobSystem.h"
 #include "Strata/Core/JsonEvents.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Scene/EntitySink.h"
@@ -8,6 +9,8 @@
 #include "Strata/Scene/SceneSerializer.h"
 
 #include <algorithm>
+#include <atomic>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -489,6 +492,119 @@ namespace Strata
 			std::string m_Error;
 		};
 
+		// The entity lines of a document in the writer's layout (SceneDocumentWriter): its first line holds the header and the
+		// content's fields up to the entity list's opening bracket, each entity follows on a line of its own (each but the last
+		// with a comma), and the last line closes the list and the document. A line may end with a carriage return as well (a
+		// file checked out with Windows line ends).
+		struct EntityLines
+		{
+			std::string_view Head;               // The first line
+			std::vector<std::string_view> Lines; // Each entity's object, without its comma
+		};
+
+		std::string_view TrimLineEnd(std::string_view line)
+		{
+			if (!line.empty() && line.back() == '\r')
+				line.remove_suffix(1);
+			return line;
+		}
+
+		std::optional<EntityLines> FindEntityLines(std::string_view text)
+		{
+			const size_t headEnd = text.find('\n');
+			if (headEnd == std::string_view::npos)
+				return std::nullopt;
+			EntityLines lines;
+			lines.Head = TrimLineEnd(text.substr(0, headEnd));
+			if (!lines.Head.starts_with('{') || !lines.Head.ends_with("\"Entities\":["))
+				return std::nullopt;
+			size_t start = headEnd + 1;
+			while (start < text.size())
+			{
+				const size_t end = text.find('\n', start);
+				const std::string_view line = TrimLineEnd(text.substr(start, end == std::string_view::npos ? std::string_view::npos : end - start));
+				if (line == "]}}")
+				{
+					// Nothing but the line's end may follow.
+					if (end != std::string_view::npos && end + 1 != text.size())
+						return std::nullopt;
+					for (size_t index = 0; index < lines.Lines.size(); index++)
+					{
+						std::string_view& entity = lines.Lines[index];
+						const bool last = index + 1 == lines.Lines.size();
+						if (last == entity.ends_with(','))
+							return std::nullopt;
+						if (!last)
+							entity.remove_suffix(1);
+						if (!entity.starts_with('{') || !entity.ends_with('}'))
+							return std::nullopt;
+					}
+					return lines;
+				}
+				if (end == std::string_view::npos)
+					return std::nullopt;
+				lines.Lines.push_back(line);
+				start = end + 1;
+			}
+			return std::nullopt;
+		}
+
+		// Whether the head and every entity line parse alone, checked on the job system's threads before anything is handed to
+		// the sink: a document whose entities span lines or share one is read as a stream instead.
+		bool LinesParseAlone(const EntityLines& lines, uint32_t chunkEntities, JobPriority priority)
+		{
+			const std::string head = std::string(lines.Head) + "]}}";
+			if (!nlohmann::json::accept(head.begin(), head.end()))
+				return false;
+			std::atomic<bool> failed = false;
+			const uint32_t chunks = static_cast<uint32_t>((lines.Lines.size() + chunkEntities - 1) / chunkEntities);
+			JobSystem::ParallelFor(chunks, 1, [&](uint32_t begin, uint32_t end)
+			{
+				for (uint32_t chunk = begin; chunk < end && !failed.load(std::memory_order_relaxed); chunk++)
+				{
+					const size_t last = std::min<size_t>(lines.Lines.size(), static_cast<size_t>(chunk + 1) * chunkEntities);
+					for (size_t index = static_cast<size_t>(chunk) * chunkEntities; index < last; index++)
+					{
+						if (!nlohmann::json::accept(lines.Lines[index].begin(), lines.Lines[index].end()))
+						{
+							failed.store(true, std::memory_order_relaxed);
+							return;
+						}
+					}
+				}
+			}, priority);
+			return !failed.load();
+		}
+
+		// One chunk of entity lines on its way to the sink: prepared by a job, handed over in order by the reading thread.
+		struct ChunkSlot
+		{
+			PreparedEntities Entities;
+			std::string Error;   // The entity of the chunk that cannot be read (the chunk's entities before it are prepared)
+			bool Failed = false;
+			bool Complete = false; // The job ran to its end (a job that threw leaves it false)
+			JobHandle Job;
+		};
+
+		void PrepareChunk(const EntityLines& lines, size_t first, size_t count, ChunkSlot& slot, const std::atomic<bool>& stop)
+		{
+			slot.Entities = PreparedEntities {};
+			slot.Entities.Columns.Reserve(count);
+			for (size_t index = first; index < first + count; index++)
+			{
+				if (stop.load(std::memory_order_relaxed))
+					return;
+				// Every line parsed alone when the read began (LinesParseAlone).
+				const std::optional<nlohmann::json> entity = JsonUtils::Parse(lines.Lines[index], &slot.Error);
+				if (!entity || !slot.Entities.Columns.Add(*entity, &slot.Entities.Warnings, slot.Entities.Unknown, &slot.Error))
+				{
+					slot.Failed = true;
+					break;
+				}
+			}
+			slot.Complete = true;
+		}
+
 	}
 
 	bool SceneDocumentReader::Read(std::string_view text, SceneDocumentKind kind, EntitySink& sink, const SceneReadOptions& options,
@@ -512,6 +628,106 @@ namespace Strata
 
 		const DocumentRules rules = GetRules(kind);
 		DocumentHandler handler(rules, sink, options, text.size());
+
+		// Large documents in the writer's layout: the entities parsed on the job system's threads, chunk by chunk, handed over
+		// in order.
+		const uint32_t chunkEntities = std::max<uint32_t>(options.ParallelChunkEntities, 1);
+		if (options.Parallel && sink.TakesPreparedEntities() && JobSystem::IsInitialized())
+		{
+			std::optional<EntityLines> lines = FindEntityLines(text);
+			if (lines && lines->Lines.size() >= options.ParallelMinEntities && LinesParseAlone(*lines, chunkEntities, options.Priority))
+			{
+				result.Parallel = true;
+				// The head with an empty list is the document without its entities: its header and fields reach the sink as a
+				// stream's would (and a declared count over the limit is refused there).
+				const std::string head = std::string(lines->Head) + "]}}";
+				if (!ParseJsonEvents(head, handler))
+				{
+					result.SyntaxError = handler.IsSyntaxError();
+					return finish(false, handler.GetError());
+				}
+				const size_t total = lines->Lines.size();
+				if (total > options.MaxEntities)
+					return finish(false, fmt::format("The document holds more than the {} entities that fit (a scene holds at most {})", options.MaxEntities,
+						Scene::c_MaxEntities));
+
+				const size_t chunks = (total + chunkEntities - 1) / chunkEntities;
+				// Enough chunks under way to keep the threads busy while the reading thread hands them over, and no more: what is
+				// prepared waits in memory.
+				const size_t window = std::min(chunks, 2 * (static_cast<size_t>(JobSystem::GetWorkerThreadCount()) + 1));
+				std::vector<ChunkSlot> slots(window);
+				std::atomic<bool> stop = false;
+				auto submit = [&](size_t chunk)
+				{
+					ChunkSlot& slot = slots[chunk % window];
+					const size_t first = chunk * chunkEntities;
+					const size_t count = std::min<size_t>(chunkEntities, total - first);
+					slot.Failed = false;
+					slot.Complete = false;
+					slot.Error.clear();
+					slot.Job = JobSystem::Submit([&lines, &slot, &stop, first, count]() { PrepareChunk(*lines, first, count, slot, stop); }, options.Priority);
+				};
+				// Ends the jobs under way (they stop at their next entity) before the lines and slots they use go.
+				auto abandon = [&](std::string error)
+				{
+					stop.store(true);
+					for (ChunkSlot& slot : slots)
+					{
+						if (slot.Job.IsValid())
+							JobSystem::Wait(slot.Job);
+					}
+					return finish(false, std::move(error));
+				};
+
+				for (size_t chunk = 0; chunk < window; chunk++)
+					submit(chunk);
+				for (size_t chunk = 0; chunk < chunks; chunk++)
+				{
+					ChunkSlot& slot = slots[chunk % window];
+					JobSystem::Wait(slot.Job);
+					slot.Job = JobHandle();
+					if (!slot.Complete)
+						return abandon("A chunk of entities could not be read");
+					const size_t prepared = slot.Entities.Columns.GetEntityCount();
+					std::string error;
+					if (!sink.ReadPrepared(slot.Entities, &error))
+					{
+						result.EntityError = true;
+						return abandon(std::move(error));
+					}
+					result.Entities += prepared;
+					if (slot.Failed)
+					{
+						result.EntityError = true;
+						return abandon(slot.Error);
+					}
+					slot.Entities = PreparedEntities {};
+					if (chunk + window < chunks)
+						submit(chunk + window);
+					if (options.Progress)
+					{
+						const size_t next = std::min(total, (chunk + 1) * chunkEntities);
+						const size_t parsed = next < total ? static_cast<size_t>(lines->Lines[next].data() - text.data()) : text.size();
+						options.Progress(static_cast<float>(static_cast<double>(parsed) / static_cast<double>(std::max<size_t>(text.size(), 1))));
+					}
+					if (options.IsCancelled && options.IsCancelled())
+					{
+						result.Cancelled = true;
+						return abandon("The read was cancelled");
+					}
+				}
+				if (!handler.Complete())
+					return finish(false, handler.GetError());
+				std::string error;
+				if (!sink.Finish(&error))
+				{
+					result.EntityError = true;
+					return finish(false, std::move(error));
+				}
+				return finish(true, {});
+			}
+		}
+
 		JsonParseProgress progress;
 		if (options.Progress)
 		{
