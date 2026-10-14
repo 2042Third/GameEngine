@@ -260,7 +260,9 @@ world clears the contact cache of the bodies it creates, because its Jolt system
 a world at its growth limit leaves bodies waiting, reported in one error. A round of changes with at least 256 bodies to
 build (a play start, a streamed cell) builds them on the job threads (`RefreshOwnersInParallel`): the main thread starts
 each build in record order (records, merged colliders, transforms, velocities), jobs build box, sphere and capsule
-shapes (shared shapes behind a mutex), settings and Jolt bodies in fixed chunks of 512, and the main thread gives them
+shapes (each chunk shares its own box and sphere shapes: one shape shared by every thread would make the bodies' reference
+counting contend for one cache line; the main thread merges them into the world's), settings and Jolt bodies in fixed
+chunks of 512, and the main thread gives them
 their IDs in record order, building the serial way what the jobs left to it (mesh colliders, anything that warns);
 batches of more than 4,096 new bodies join the broad phase in chunks prepared on the job threads. So body IDs and the
 simulation do not depend on the number of threads (`PhysicsStats::ParallelBuildCount`). Steps that overflow the pair or contact buffers

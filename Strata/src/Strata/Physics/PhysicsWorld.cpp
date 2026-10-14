@@ -50,7 +50,6 @@
 #include <map>
 #include <memory>
 #include <set>
-#include <shared_mutex>
 #include <span>
 #include <utility>
 
@@ -954,7 +953,6 @@ namespace Strata
 		Scope<JPH::JobSystem> Jobs;
 		std::unordered_map<MeshShapeKey, RestoredMeshShape, MeshShapeKeyHash> MeshShapes; // See PhysicsMeshShapes
 		std::unordered_map<PrimitiveShapeKey, JPH::RefConst<JPH::Shape>, PrimitiveShapeKeyHash> PrimitiveShapes; // See GetPrimitiveShape
-		std::shared_mutex PrimitiveShapesMutex;
 		Scope<JPH::PhysicsSystem> JoltSystem; // Destroyed before the listeners, filters and allocators it references
 		Scope<CharacterControllerSet> Characters; // Destroyed (with its presence bodies) before the Jolt system it uses
 		std::vector<CharacterBodyChange> CharacterChanges;            // Scratch of ApplyCharacterChanges
@@ -1694,9 +1692,19 @@ namespace Strata
 			JPH::Quat Rotation = JPH::Quat::sIdentity();
 		};
 
+		// The box and sphere shapes a chunk of a parallel build shares between its bodies (see RefreshOwnersInParallel): a
+		// shape shared across threads would make every body's reference counting contend for one cache line. Searched
+		// linearly: chunks hold a few sizes.
+		struct ChunkShapes
+		{
+			static constexpr size_t c_MaxShapes = 64;
+			std::vector<std::pair<PrimitiveShapeKey, JPH::RefConst<JPH::Shape>>> Shapes;
+		};
+
 		// What building a body's shape found. Shapes are built on the main thread, which warns about what it cannot use, or
 		// on a job thread (OffThread, see RefreshOwnersInParallel), which stops at the first problem or mesh collider and
-		// leaves the body to the main thread (NeedsMainThread), so that warnings and mesh data stay on the main thread.
+		// leaves the body to the main thread (NeedsMainThread), so that warnings and mesh data stay on the main thread, and
+		// shares shapes within its chunk (ChunkShapes).
 		struct ShapeBuild
 		{
 			std::vector<ShapePart> Parts;
@@ -1706,6 +1714,7 @@ namespace Strata
 			uint32_t ColliderCount = 0;              // Collider components considered, usable or not
 			bool OffThread = false;
 			bool NeedsMainThread = false;
+			ChunkShapes* Chunk = nullptr; // Off the main thread
 		};
 
 		JPH::RefConst<JPH::Shape> CreateShape(PhysicsWorldData& data, ShapeBuild& build, const JPH::ShapeSettings& settings, const Entity& entity, std::string_view what,
@@ -1828,27 +1837,31 @@ namespace Strata
 		// The shape of a box or sphere collider of these (scaled) dimensions. Shapes are immutable, so bodies of the same size
 		// share one: a scene of thousands of identical boxes builds one shape (up to c_MaxSharedPrimitiveShapes sizes per
 		// world). Null, with a warning about the entity, for dimensions the shape rejects.
-		// Job threads share the shapes through PrimitiveShapesMutex (read on a hit, exclusive to insert); the main thread builds
-		// none while they run.
+		// Off the main thread, a chunk of a parallel build shares its own shapes (ChunkShapes), which the main thread merges
+		// into the world's afterwards; the world's are only read there (the main thread changes none while jobs run).
 		JPH::RefConst<JPH::Shape> GetPrimitiveShape(PhysicsWorldData& data, ShapeBuild& build, const Entity& entity, const PrimitiveShapeKey& key,
 			const JPH::ShapeSettings& settings, std::string_view what)
 		{
-			{
-				std::shared_lock<std::shared_mutex> lock(data.PrimitiveShapesMutex, std::defer_lock);
-				if (build.OffThread)
-					lock.lock();
-				auto it = data.PrimitiveShapes.find(key);
-				if (it != data.PrimitiveShapes.end())
-					return it->second;
-			}
-			JPH::RefConst<JPH::Shape> shape = CreateShape(data, build, settings, entity, what, PhysicsWarning::InvalidCollider);
-			if (!shape)
-				return nullptr;
-			std::unique_lock<std::shared_mutex> lock(data.PrimitiveShapesMutex, std::defer_lock);
 			if (build.OffThread)
-				lock.lock();
-			if (data.PrimitiveShapes.size() < c_MaxSharedPrimitiveShapes)
-				return data.PrimitiveShapes.emplace(key, shape).first->second; // Another thread's shape of that size, if it was first
+			{
+				ST_CORE_ASSERT(build.Chunk, "A shape built off the main thread belongs to a chunk");
+				for (const auto& [chunkKey, chunkShape] : build.Chunk->Shapes)
+				{
+					if (chunkKey == key)
+						return chunkShape;
+				}
+				JPH::RefConst<JPH::Shape> shape = CreateShape(data, build, settings, entity, what, PhysicsWarning::InvalidCollider);
+				if (shape && build.Chunk->Shapes.size() < ChunkShapes::c_MaxShapes)
+					build.Chunk->Shapes.emplace_back(key, shape);
+				return shape;
+			}
+
+			auto it = data.PrimitiveShapes.find(key);
+			if (it != data.PrimitiveShapes.end())
+				return it->second;
+			JPH::RefConst<JPH::Shape> shape = CreateShape(data, build, settings, entity, what, PhysicsWarning::InvalidCollider);
+			if (shape && data.PrimitiveShapes.size() < c_MaxSharedPrimitiveShapes)
+				data.PrimitiveShapes.emplace(key, shape);
 			return shape;
 		}
 
@@ -2445,9 +2458,10 @@ namespace Strata
 			bool NeedsMainThread = true;
 		};
 
-		// Builds what the jobs may for one owner: its shape from box, sphere and capsule colliders (shared shapes behind their
-		// mutex), its settings and its Jolt body. Reads only components, the transforms read before and the world's settings.
-		void BuildBodyOffThread(PhysicsWorldData& data, ParallelBodyBuild& item)
+		// Builds what the jobs may for one owner: its shape from box, sphere and capsule colliders (box and sphere shapes shared
+		// within the chunk), its settings and its Jolt body. Reads only components, the transforms read before and the world's
+		// settings.
+		void BuildBodyOffThread(PhysicsWorldData& data, ParallelBodyBuild& item, ChunkShapes& chunkShapes)
 		{
 			const Entity& entity = item.Start.Owner;
 			BodyPose& pose = item.Pose;
@@ -2457,6 +2471,7 @@ namespace Strata
 
 			ShapeBuild build;
 			build.OffThread = true;
+			build.Chunk = &chunkShapes;
 			AddColliderParts(data, entity, glm::mat4(1.0f), glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), pose.Scale, item.Start.Type, build);
 			const glm::mat4 worldToBody = glm::inverse(Math::ComposeTransform(pose.Position, pose.Rotation, glm::vec3(1.0f)));
 			for (const auto& [mergedHandle, mergedWorld] : item.Parts)
@@ -2535,18 +2550,32 @@ namespace Strata
 
 			const uint32_t itemCount = static_cast<uint32_t>(items.size());
 			const uint32_t chunkCount = (itemCount + c_ParallelBuildChunk - 1) / c_ParallelBuildChunk;
+			std::vector<ChunkShapes> chunkShapes(chunkCount);
 			const auto build = [&](uint32_t firstChunk, uint32_t lastChunk)
 			{
-				for (uint32_t index = firstChunk * c_ParallelBuildChunk; index < std::min(itemCount, lastChunk * c_ParallelBuildChunk); index++)
+				for (uint32_t chunk = firstChunk; chunk < lastChunk; chunk++)
 				{
-					if (items[index].Eligible)
-						BuildBodyOffThread(data, items[index]);
+					for (uint32_t index = chunk * c_ParallelBuildChunk; index < std::min(itemCount, (chunk + 1) * c_ParallelBuildChunk); index++)
+					{
+						if (items[index].Eligible)
+							BuildBodyOffThread(data, items[index], chunkShapes[chunk]);
+					}
 				}
 			};
 			if (chunkCount > 1 && JobSystem::IsInitialized())
 				JobSystem::ParallelFor(chunkCount, 1, build);
 			else
 				build(0, chunkCount);
+			// Later builds share the chunks' shapes, in chunk order.
+			for (const ChunkShapes& chunk : chunkShapes)
+			{
+				for (const auto& [key, shape] : chunk.Shapes)
+				{
+					if (data.PrimitiveShapes.size() >= c_MaxSharedPrimitiveShapes)
+						break;
+					data.PrimitiveShapes.emplace(key, shape);
+				}
+			}
 
 			for (ParallelBodyBuild& item : items)
 			{
