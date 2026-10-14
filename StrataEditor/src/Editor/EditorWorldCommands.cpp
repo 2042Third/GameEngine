@@ -526,6 +526,149 @@ namespace Strata
 				});
 			} });
 
+		registry.Register({ "world.setLayers",
+			"Replaces a world's layer list: adds, renames, reorders and retunes layers (streaming distance, enabledByDefault, loadBeforeStart). "
+			"Layers are matched to the existing ones by id (objects may give it) or name; a rename moves the layer's cell folder (handles kept). "
+			"Removing a layer that has cells, or changing the cell size of one, is refused unless deleteCells moves those cells to the trash "
+			"(never cells loaded in the open world: hide the layer first, world.edit visibleLayers). One undo step.",
+			ObjectSchema({ { "world", AssetSchema("The world (.stworld): handle or path") },
+				{ "layers", { { "type", "array" }, { "description", "Layer names, or {id, name, cellSize, streamingDistance, enabledByDefault, loadBeforeStart}" } } },
+				{ "deleteCells", BoolSchema("Move the cells of removed or re-gridded layers to the trash (default false)") } }, { "world", "layers" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				EditorAssetManager* assets = context.GetAssetManager();
+				if (!assets)
+					return EditorCommandResult::Fail("No project is open (project.open or project.create)");
+				CommandArguments arguments(parameters);
+				const AssetHandle handle = ResolveAsset(context, arguments, "world", AssetType::World);
+				const bool deleteCells = arguments.GetBool("deleteCells", false);
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				std::vector<uint8_t> before;
+				std::string error;
+				if (!AssetEdit::ReadDocument(*assets, handle, before, &error))
+					return EditorCommandResult::Fail(error);
+				const Ref<WorldAsset> current = WorldAsset::Deserialize(before, &error);
+				if (!current)
+					return EditorCommandResult::Fail(fmt::format("The world is invalid: {}", error));
+				const WorldData& old = current->GetData();
+				const float defaultSize = old.Layers.front().CellSize;
+
+				// Names given alone keep the matching layer's settings and ID.
+				nlohmann::json layers = parameters["layers"];
+				if (layers.is_array())
+				{
+					for (nlohmann::json& item : layers)
+					{
+						if (item.is_string())
+						{
+							if (const WorldLayer* existing = old.FindLayer(item.get<std::string>()))
+								item = { { "id", existing->ID }, { "name", existing->Name }, { "cellSize", existing->CellSize }, { "streamingDistance", existing->StreamingDistance },
+									{ "enabledByDefault", existing->EnabledByDefault }, { "loadBeforeStart", existing->LoadBeforeStart } };
+						}
+						else if (item.is_object() && !item.contains("id"))
+						{
+							if (const WorldLayer* existing = old.FindLayer(JsonUtils::GetString(item, "name")))
+								item["id"] = existing->ID;
+						}
+					}
+				}
+				WorldData data = old;
+				data.Layers.clear();
+				if (!ReadLayers(layers, defaultSize, data.Layers, error))
+					return EditorCommandResult::InvalidParameters(error);
+				// IDs of new layers not taken by old ones that stay.
+				for (WorldLayer& layer : data.Layers)
+				{
+					const WorldLayer* existing = old.FindLayer(layer.ID);
+					const bool matched = existing && std::any_of(layers.begin(), layers.end(), [&](const nlohmann::json& item) { return item.is_object() && JsonUtils::GetInt(item, "id", -1) == layer.ID; });
+					if (existing && !matched)
+					{
+						uint8_t id = 1;
+						while (old.FindLayer(id) || std::count_if(data.Layers.begin(), data.Layers.end(), [&](const WorldLayer& other) { return other.ID == id; }) > 0)
+							id++;
+						layer.ID = id;
+					}
+				}
+
+				// Cells of removed layers and of layers whose cell size changed.
+				std::vector<WorldCell> dropped;
+				for (const WorldCell& cell : old.Cells)
+				{
+					const WorldLayer* oldLayer = old.FindLayer(cell.Layer);
+					const WorldLayer* newLayer = data.FindLayer(cell.Layer);
+					if (!newLayer || newLayer->CellSize != oldLayer->CellSize)
+						dropped.push_back(cell);
+				}
+				if (!dropped.empty() && !deleteCells)
+					return EditorCommandResult::InvalidParameters(fmt::format("{} cells belong to removed or re-gridded layers: keep the layers and their cell sizes, or pass "
+						"deleteCells to move those cells to the trash", dropped.size()));
+				const EditorWorld* open = context.GetWorld() && context.GetWorld()->GetWorld() == handle ? context.GetWorld() : nullptr;
+				for (const WorldCell& cell : dropped)
+				{
+					if (open && open->GetScene().FindSubSceneBySource(cell.Scene) != 0)
+						return EditorCommandResult::InvalidParameters(fmt::format("The cell {} is loaded in the open world: hide its layer first (world.edit visibleLayers)",
+							open->DescribeKey(cell.GetKey())));
+				}
+				std::erase_if(data.Cells, [&](const WorldCell& cell) { return std::any_of(dropped.begin(), dropped.end(), [&](const WorldCell& gone) { return gone.Scene == cell.Scene; }); });
+				if (data.Index)
+					std::erase_if(data.Index->Cells, [&](const WorldCellSummary& summary) { return !data.FindLayer(summary.Layer) || std::none_of(data.Cells.begin(), data.Cells.end(), [&](const WorldCell& cell) { return cell.GetKey() == summary.GetKey(); }); });
+				if (!data.Validate(&error))
+					return EditorCommandResult::InvalidParameters(fmt::format("Invalid layers: {}", error));
+
+				// The changes, as one step: cells to the trash, renamed layers' folders, the document.
+				const std::optional<AssetMetadata> metadata = assets->GetMetadata(handle);
+				const std::filesystem::path worldPath = FileSystem::FromUTF8(metadata->Path);
+				const std::string worldFolder = FileSystem::ToUTF8(worldPath.parent_path());
+				auto layerFolder = [&](const std::string& layer)
+				{
+					return fmt::format("{}{}{}/{}", worldFolder, worldFolder.empty() ? "" : "/", FileSystem::ToUTF8(worldPath.stem()), layer);
+				};
+				Scope<EditorActionGroup> group = CreateScope<EditorActionGroup>(fmt::format("Set the layers of {}", metadata->Name));
+				for (const WorldCell& cell : dropped)
+				{
+					const std::optional<AssetMetadata> cellMetadata = assets->GetMetadata(cell.Scene);
+					if (!cellMetadata)
+						continue;
+					TrashedAssets trashed;
+					if (!assets->MoveToTrash(cellMetadata->Path, trashed, &error))
+					{
+						std::string undoError;
+						group->Undo(&undoError);
+						return EditorCommandResult::Fail(fmt::format("'{}' cannot be moved to the trash: {}", cellMetadata->Path, error));
+					}
+					group->Add(CreateScope<AssetTrashAction>(context, *assets, fmt::format("Delete {}", cellMetadata->Path), std::move(trashed), true));
+				}
+				for (const WorldLayer& layer : data.Layers)
+				{
+					const WorldLayer* existing = old.FindLayer(layer.ID);
+					if (!existing || existing->Name == layer.Name)
+						continue;
+					const std::string from = layerFolder(existing->Name);
+					const std::string to = layerFolder(layer.Name);
+					if (!FileSystem::IsDirectory(assets->GetAssetDirectory() / FileSystem::FromUTF8(from)))
+						continue;
+					if (!assets->MoveFolder(from, to, &error))
+					{
+						std::string undoError;
+						group->Undo(&undoError);
+						return EditorCommandResult::Fail(fmt::format("The folder of layer '{}' cannot be renamed: {}", existing->Name, error));
+					}
+					group->Add(CreateScope<AssetMoveAction>(*assets, fmt::format("Rename {}", from), UUID::Null(), from, to));
+				}
+				const std::string text = JsonUtils::Dump(WorldAsset::ToDocument(data), 1, '\t') + "\n";
+				std::vector<uint8_t> after(text.begin(), text.end());
+				if (!AssetEdit::ApplyDocument(*assets, handle, after, &error))
+				{
+					std::string undoError;
+					group->Undo(&undoError);
+					return EditorCommandResult::Fail(error);
+				}
+				group->Add(CreateScope<AssetDocumentAction>(*assets, handle, metadata->Name, std::move(before), std::move(after)));
+				context.GetUndoStack().Record(std::move(group));
+				return EditorCommandResult::Ok({ { "world", UUIDToJson(handle) }, { "layers", DescribeLayers(data) }, { "deletedCells", dropped.size() } });
+			} });
+
 		registry.Register({ "world.status",
 			"The world the editor edits (null when the edited scene is no world's persistent scene): its edit layer, visible layers and "
 			"radius scale (world.edit), the source (the editor camera), its cells' counts (wanted, loading, loaded, unloading, pinned, failed, "

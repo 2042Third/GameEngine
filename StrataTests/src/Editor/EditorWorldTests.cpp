@@ -509,3 +509,46 @@ TEST_SUITE("Editor.World")
 		CHECK_FALSE(FileSystem::Exists(assets / "Worlds" / "Bad.stworld"));
 	}
 }
+
+TEST_SUITE("Editor.World")
+{
+	TEST_CASE("world.setLayers adds, renames and removes layers in one undo step each")
+	{
+		WorldProject project("EditorWorldLayers", 2);
+		const std::filesystem::path assets = project.Directory / "Assets";
+		const std::string world = UUIDToJson(project.World).get<std::string>();
+
+		// A layer added; the Ground keeps its ID.
+		nlohmann::json result = project.Run("world.setLayers", { { "world", world }, { "layers", { "Ground", "Props" } } });
+		REQUIRE(result["layers"].size() == 2);
+		CHECK(result["layers"][0]["id"] == 1);
+		CHECK(result["layers"][1]["name"] == "Props");
+		CHECK(project.ReadWorld()->GetData().Cells.size() == 4);
+		project.Run("edit.undo");
+		CHECK(project.ReadWorld()->GetData().Layers.size() == 1);
+
+		// A rename moves the layer's folder; the cells keep their handles.
+		project.Run("world.setLayers", { { "world", world }, { "layers", { { { "id", 1 }, { "name", "Terrain" } } } } });
+		CHECK(project.ReadWorld()->GetData().Layers[0].Name == "Terrain");
+		CHECK(FileSystem::Exists(assets / "Worlds" / "Gen" / "Terrain" / "0_0.stscene"));
+		CHECK_FALSE(FileSystem::Exists(assets / "Worlds" / "Gen" / "Ground"));
+		CHECK(project.Context.GetAssetManager()->GetMetadata(project.GetCell(0, 0))->Path == "Worlds/Gen/Terrain/0_0.stscene");
+		project.Run("edit.undo");
+		CHECK(FileSystem::Exists(assets / "Worlds" / "Gen" / "Ground" / "0_0.stscene"));
+		CHECK(project.ReadWorld()->GetData().Layers[0].Name == "Ground");
+
+		// Removing the Ground, or re-gridding it, needs deleteCells; then its cells go to the trash until undone.
+		CHECK_FALSE(project.Try("world.setLayers", { { "world", world }, { "layers", { "Props" } } }).Success);
+		CHECK_FALSE(project.Try("world.setLayers", { { "world", world }, { "layers", { { { "name", "Ground" }, { "cellSize", 64 } } } } }).Success);
+		CHECK_FALSE(project.Try("world.setLayers", { { "world", world }, { "layers", nlohmann::json::array() } }).Success);
+		CHECK(project.ReadWorld()->GetData().Cells.size() == 4);
+		result = project.Run("world.setLayers", { { "world", world }, { "layers", { "Props" } }, { "deleteCells", true } });
+		CHECK(result["deletedCells"] == 4);
+		CHECK(project.ReadWorld()->GetData().Cells.empty());
+		CHECK_FALSE(FileSystem::Exists(assets / "Worlds" / "Gen" / "Ground" / "0_0.stscene"));
+		project.Run("edit.undo");
+		CHECK(project.ReadWorld()->GetData().Cells.size() == 4);
+		CHECK(FileSystem::Exists(assets / "Worlds" / "Gen" / "Ground" / "0_0.stscene"));
+		CHECK(project.Context.GetAssetManager()->GetAssetType(project.GetCell(0, 0)) == AssetType::Scene);
+	}
+}
