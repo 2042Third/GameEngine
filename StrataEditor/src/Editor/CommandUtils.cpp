@@ -1,6 +1,7 @@
 #include "Editor/CommandUtils.h"
 
 #include "Editor/EditorContext.h"
+#include "Editor/SceneEdit.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
@@ -219,6 +220,41 @@ namespace Strata
 			const char* save = context.GetSceneHandle().IsValid() ? "scene.save" : "scene.saveAs, as the scene was never saved";
 			return EditorCommandResult::Fail(fmt::format("The scene '{}' has unsaved changes, which {} would discard: save them first ({}) or pass "
 				"force: true to discard them (they are kept as recovery data, scene.recoveryStatus)", scene, action, save));
+		}
+
+		nlohmann::json DescribePlayState(const EditorContext& context)
+		{
+			return { { "state", SceneStateToString(context.GetSceneState()) }, { "paused", context.IsPaused() } };
+		}
+
+		std::string GetRunningCopyWarning(const EditorContext& context)
+		{
+			return fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
+				SceneStateToString(context.GetSceneState()));
+		}
+
+		EditorCommandResult FinishEdit(EditorContext& context, SceneEditTransaction& transaction, nlohmann::json value)
+		{
+			if (std::string error; !context.CheckSceneEditable(&error))
+			{
+				transaction.Rollback();
+				return EditorCommandResult::Fail(std::move(error));
+			}
+			context.CommitEdit(transaction);
+			if (!context.IsPlaying())
+				return EditorCommandResult::Ok(std::move(value));
+			if (!value.is_object())
+				value = nlohmann::json::object();
+			value["warning"] = GetRunningCopyWarning(context);
+			EditorCommandResult result = EditorCommandResult::Ok(std::move(value));
+			result.RunningCopy = true;
+			return result;
+		}
+
+		EditorCommandResult RollBackEdit(SceneEditTransaction& transaction, std::string error, EditorCommandError kind)
+		{
+			transaction.Rollback();
+			return EditorCommandResult::Fail(std::move(error), kind);
 		}
 
 		std::optional<std::filesystem::path> ResolveOutputPath(const EditorContext& context, std::string_view path, std::string_view extension, bool overwrite,

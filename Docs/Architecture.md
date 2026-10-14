@@ -2050,13 +2050,14 @@ is the `strata-scripting` skill. The layers:
   the one shown already), so the panels bring the matching inspector to the front.
 - **Commands** (`EditorCommands.h`). Handlers take a JSON object and return an `EditorCommandResult`: a value, an error
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
-  `EditorSceneCommands.cpp` (scene, entity, component, `prefab.instantiate`), `EditorPrefabCommands.cpp` (`prefab.status`,
-  `prefab.apply`, `prefab.revert`, `prefab.unpack`, `prefab.select`), `EditorAssetCommands.cpp` (asset, including
+  `EditorSceneCommands.cpp` (scene), `Commands/EntityCommands.cpp` (entity, component), `EditorPrefabCommands.cpp`
+  (`prefab.instantiate`, `prefab.status`, `prefab.apply`, `prefab.revert`, `prefab.unpack`, `prefab.select`),
+  `EditorAssetCommands.cpp` (asset, including
   `asset.findReferences`, `asset.createFolder`, `asset.moveFolder` and `asset.deleteFolder`, material, prefab,
   project, including `project.templates`, `project.samples`, `project.openSample`, `project.close`, `project.export`,
   `project.exportStatus`, `project.cancelExport` and `project.setExportSettings`),
   `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects`, `editor.removeRecentProject` and `editor.perf`,
-  log, play, selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
+  log, selection), `Commands/PlayCommands.cpp` (play), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
   `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`) and
   `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel` and `editor.showDialog` (the
   export, project, recovery, script and about dialogs), the commands about its window. Conventions:

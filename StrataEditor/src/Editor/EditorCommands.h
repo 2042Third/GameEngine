@@ -166,11 +166,13 @@ namespace Strata
 	constexpr const char* c_EntityDataFormat = "Entities";
 	constexpr uint32_t c_EntityDataFormatVersion = 1;
 
-	// Built-in command groups (EditorCommands*.cpp).
+	// Built-in command groups (Editor*Commands.cpp and Commands/*.cpp).
 	void RegisterSceneCommands(EditorCommandRegistry& registry);
-	void RegisterPrefabWorkflowCommands(EditorCommandRegistry& registry); // prefab.apply, revert, unpack, select, status (EditorPrefabCommands.cpp)
+	void RegisterEntityCommands(EditorCommandRegistry& registry); // entity.* and component.* (Commands/EntityCommands.cpp)
+	void RegisterPrefabCommands(EditorCommandRegistry& registry); // prefab.* (EditorPrefabCommands.cpp)
 	void RegisterAssetCommands(EditorCommandRegistry& registry);
 	void RegisterEditorStateCommands(EditorCommandRegistry& registry);
+	void RegisterPlayCommands(EditorCommandRegistry& registry); // play.* (Commands/PlayCommands.cpp)
 	void RegisterViewportCommands(EditorCommandRegistry& registry);
 	void RegisterScriptCommands(EditorCommandRegistry& registry);
 	void RegisterInputCommands(EditorCommandRegistry& registry);

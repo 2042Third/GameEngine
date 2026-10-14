@@ -5,6 +5,7 @@
 #include "Editor/PrefabSync.h"
 #include "Editor/SceneEdit.h"
 
+#include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -97,10 +98,7 @@ namespace Strata
 		{
 			const bool playing = context.IsPlaying();
 			if (playing)
-			{
-				result["warning"] = fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
-					SceneStateToString(context.GetSceneState()));
-			}
+				result["warning"] = GetRunningCopyWarning(context);
 			EditorCommandResult outcome = EditorCommandResult::Ok(std::move(result));
 			outcome.RunningCopy = playing;
 			return outcome;
@@ -108,8 +106,68 @@ namespace Strata
 
 	}
 
-	void RegisterPrefabWorkflowCommands(EditorCommandRegistry& registry)
+	void RegisterPrefabCommands(EditorCommandRegistry& registry)
 	{
+		registry.Register({ "prefab.instantiate", "Instantiates a prefab or imported model, optionally under a parent and with component values on its root (undoable; "
+			"while playing it changes the running copy only). An instance whose name a sibling has gets a number ('Crate' -> 'Crate (1)'). Returns "
+			"{id (the first root), entities (every root)}; the instance stays linked to the prefab (prefab.status, prefab.apply, prefab.revert).",
+			ObjectSchema({
+				{ "prefab", AssetSchema("Prefab or model") },
+				{ "parent", OptionalEntitySchema("Parent; null or omitted for the top level") },
+				{ "components", AnyObjectSchema("Component values applied to the instance's root, e.g. {\"Transform\": {\"Translation\": [2, 0, 0]}}") } }, { "prefab" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				Scene& scene = *context.GetActiveScene();
+				CommandArguments arguments(parameters);
+				const AssetHandle handle = ResolveAsset(context, arguments, "prefab", AssetType::None);
+				Entity parent = arguments.FindEntity(scene, "parent");
+				const nlohmann::json* components = arguments.FindObject("components");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				const AssetType type = AssetManager::GetAssetType(handle);
+				if (type != AssetType::Prefab && type != AssetType::Model)
+					return EditorCommandResult::InvalidParameters(fmt::format("'{}' is a {}, not a prefab or model", parameters["prefab"].get<std::string>(), AssetTypeToString(type)));
+
+				Ref<EntityTemplate> asset = std::static_pointer_cast<EntityTemplate>(AssetManager::GetActive()->LoadAssetSync(handle));
+				if (!asset)
+					return EditorCommandResult::Fail("Loading the prefab failed");
+
+				SceneEditTransaction transaction(scene, "Instantiate Prefab", {});
+				std::string instantiateError;
+				const std::vector<Entity> roots = asset->Instantiate(scene, parent, &instantiateError);
+				// Instantiation fails as a whole, e.g. when the scene cannot hold the entities.
+				if (!instantiateError.empty())
+					return RollBackEdit(transaction, fmt::format("Instantiating '{}' failed: {}", parameters["prefab"].get<std::string>(), instantiateError), EditorCommandError::Failed);
+				nlohmann::json ids = nlohmann::json::array();
+				for (Entity root : roots)
+				{
+					transaction.TrackCreated(root.GetUUID());
+					ids.push_back(UUIDToJson(root.GetUUID()));
+				}
+				// The new instance has its prefab's values: recorded on its roots (before the components given for the root, which
+				// make it differ), so that later changes of the prefab reach it also while its scene is closed.
+				if (EditorAssetManager* assets = context.GetAssetManager())
+				{
+					if (const std::optional<nlohmann::json> snapshot = PrefabSyncUtils::ReadTemplate(*assets, handle))
+					{
+						for (Entity root : roots)
+							PrefabInstances::MarkSynced(scene, root, *snapshot);
+					}
+				}
+				std::string error;
+				if (components && !roots.empty() && !ApplyComponents(roots.front(), *components, &error))
+					return RollBackEdit(transaction, error, EditorCommandError::InvalidParameters);
+				// A second instance among the same siblings: "Crate (1)". The root's name is the instance's own, so the number does not
+				// make it differ from its prefab.
+				SceneEdit::NameNumbers numbers;
+				for (const Entity root : roots)
+					SceneEdit::MakeNameUnique(scene, root, &numbers);
+				transaction.SetName(fmt::format("Instantiate {}", SceneEdit::DescribeEntities(roots)));
+				nlohmann::json result = { { "entities", std::move(ids) } };
+				result["id"] = roots.empty() ? nlohmann::json(nullptr) : UUIDToJson(roots.front().GetUUID());
+				return FinishEdit(context, transaction, std::move(result));
+			} });
+
 		registry.Register({ "prefab.status",
 			"Whether an entity belongs to a prefab instance and how the instance differs from its prefab as stored now (the root's transform and name "
 			"are the instance's own and never count): {linked, root, prefab, path, modified, outdated, changed: [entity ids whose values differ], added: "

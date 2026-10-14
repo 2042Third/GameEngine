@@ -23,6 +23,7 @@ namespace Strata
 	class EditorAssetManager;
 	class EditorContext;
 	class Scene;
+	class SceneEditTransaction;
 	struct AssetManagerStats;
 	struct FrameProfileSummary;
 	struct JobSystemStats;
@@ -116,6 +117,18 @@ namespace Strata
 		// command would do, e.g. "opening the scene 'Level2'". Returns the failure (naming the scene and how to proceed), or
 		// nullopt when the command may go on. A forced discard keeps the changes as recovery data (EditorContext::ResetScene).
 		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action);
+
+		// The play state the play.* commands and editor.status report: {state, paused}.
+		nlohmann::json DescribePlayState(const EditorContext& context);
+
+		// What mutating commands report while the scene is running.
+		std::string GetRunningCopyWarning(const EditorContext& context);
+		// Ends a mutating command: records the undo step (edit mode) and reports the result. While playing, edits change
+		// the running copy only; the result says so, because play.stop discards them. While a scene is being opened the
+		// edited scene is read-only (EditorContext::CheckSceneEditable): the edit is undone and the command fails.
+		EditorCommandResult FinishEdit(EditorContext& context, SceneEditTransaction& transaction, nlohmann::json value = nullptr);
+		// Fails a mutating command after undoing what its transaction changed.
+		EditorCommandResult RollBackEdit(SceneEditTransaction& transaction, std::string error, EditorCommandError kind);
 
 		// A file a command writes for its client (e.g. a capture). Relative paths resolve against the project directory
 		// and fail without a project (the editor's working directory means nothing to a client); absolute paths stay.

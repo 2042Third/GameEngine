@@ -39,8 +39,11 @@ namespace Strata
 	EditorCommandRegistry::EditorCommandRegistry()
 	{
 		RegisterSceneCommands(*this);
+		RegisterEntityCommands(*this);
+		RegisterPrefabCommands(*this);
 		RegisterAssetCommands(*this);
 		RegisterEditorStateCommands(*this);
+		RegisterPlayCommands(*this);
 		RegisterViewportCommands(*this);
 		RegisterScriptCommands(*this);
 		RegisterInputCommands(*this);
