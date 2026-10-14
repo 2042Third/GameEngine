@@ -442,9 +442,12 @@ TEST_SUITE("Core.JobSystem")
 			JobSystem::Submit([]()
 			{
 				s_Observation.Submitter = std::this_thread::get_id();
-				const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+				const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
 				while (s_Observation.UseCount.load() < 0 && std::chrono::steady_clock::now() < deadline)
 				{
+					// Sleeping, not spinning: the background threads run below the normal priority, and on a busy machine they
+					// would not get a processor to finish stopping while this worker kept one.
+					std::this_thread::sleep_for(std::chrono::milliseconds(1));
 					auto capture = std::make_shared<int>(0);
 					s_Observation.InsideSubmit = true;
 					const JobHandle handle = JobSystem::Submit([capture = std::move(capture)]()

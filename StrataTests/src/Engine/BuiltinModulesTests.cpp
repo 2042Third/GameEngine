@@ -49,12 +49,15 @@ namespace
 		return names;
 	}
 
+	// Runs a helper mode of this executable; its output with line ends as '\n' (Windows' console writes "\r\n").
 	Process::RunResult RunHelper(std::vector<std::string> arguments)
 	{
 		ProcessSpecification specification;
 		specification.Executable = GetTestExecutablePath();
 		specification.Arguments = std::move(arguments);
-		return Process::Run(specification, std::chrono::milliseconds(60000));
+		Process::RunResult result = Process::Run(specification, std::chrono::milliseconds(60000));
+		std::erase(result.Output, '\r');
+		return result;
 	}
 
 }
