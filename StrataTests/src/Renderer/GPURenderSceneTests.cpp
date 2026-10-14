@@ -370,7 +370,11 @@ TEST_SUITE("GPU.RenderScene")
 		const glm::vec3 rightPosition(1.2f, 0.0f, 0.0f);
 		AddMesh(scene, BuiltinAssets::CubeMesh, c_RedMaterial, leftPosition, "Left");
 		Entity right = AddMesh(scene, BuiltinAssets::CubeMesh, c_BlueMaterial, rightPosition, "Right");
-		SceneRenderer renderer;
+		// The materials each frame uses are those the CPU's marks find in its view: visibility feedback would tell of a
+		// material no longer used frames later (GPU.SceneRenderer.Feedback tests that latency).
+		SceneRendererSpecification specification;
+		specification.VisibilityFeedback = false;
+		SceneRenderer renderer(specification);
 		renderer.SetViewportSize(c_Size, c_Size);
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 5.0f), glm::vec3(0.0f));
 		const glm::uvec2 left = ProjectToPixel(camera, leftPosition + glm::vec3(0.0f, 0.0f, 0.5f), c_Size);

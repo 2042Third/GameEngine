@@ -339,7 +339,8 @@ namespace Strata
 			submeshes.reserve(m_Submeshes.size());
 			for (const Submesh& submesh : m_Submeshes)
 			{
-				submeshes.push_back(RenderData::GeometrySubmesh { submesh.BaseVertex, static_cast<uint32_t>(lods.size()), static_cast<uint32_t>(submesh.LODs.size()), 0 });
+				submeshes.push_back(RenderData::GeometrySubmesh { submesh.BaseVertex, static_cast<uint32_t>(lods.size()), static_cast<uint32_t>(submesh.LODs.size()), 0,
+					glm::vec4(submesh.UVDensity, 0.0f) });
 				for (const MeshLOD& lod : submesh.LODs)
 					lods.push_back(RenderData::GeometryLOD { lod.IndexOffset, lod.IndexCount, submesh.BaseVertex, 0 });
 			}

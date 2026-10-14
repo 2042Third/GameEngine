@@ -2,6 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "Include/Culling.glsl"
+#include "Include/TextureStreaming.glsl"
 
 // GPU culling, one thread per render proxy: the view's frustum and screen-size tests, or with ST_CULL_SHADOW
 // (registered as Scene/CullShadow.comp) the shadow cascades' boxes and sub-texel test, then per instance its material
@@ -12,6 +13,11 @@
 // record's range in the draw list; mode 1 runs the same decisions again and writes each instance into its record's range
 // (counting the record down to zero). The order of instances within a record follows GPU scheduling, which opaque
 // pixels do not depend on.
+//
+// Mode 0 also writes visibility feedback (with u_Cull.Feedback): the mesh and material slots of proxies within the prefetch
+// distance, in the view (frustum and size tests) or casting into a cascade, whether their meshes are loaded or not
+// (unloaded ones are placed by their recorded bounds), with the largest projected size and, for textured materials, UV
+// pixels. CullFeedback.comp packs the touched slots for the CPU's requests (SceneRenderer::ApplyFeedback).
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -56,18 +62,100 @@ void Emit(uint instance, uint bucket, uint lodRecord)
 	u_CullDrawList[offset + slot] = instance;
 }
 
+// Feedback for a mesh or material slot: its use bits, its largest sizes, and its place in the touched lists the first time
+// a frame touches it. Read before the atomics: thousands of proxies of one mesh mostly find their use recorded already.
+void MarkMeshFeedback(uint slot, uint use, float pixels)
+{
+	uint base = slot * 2u;
+	if ((u_MeshFeedback[base + 1u] & use) != use)
+	{
+		uint previous = atomicOr(u_MeshFeedback[base + 1u], use);
+		if (previous == 0u)
+			u_FeedbackLists[ST_FEEDBACK_LIST_HEADER + atomicAdd(u_FeedbackLists[0], 1u)] = slot;
+	}
+	uint bits = floatBitsToUint(pixels);
+	if (pixels > 0.0 && u_MeshFeedback[base] < bits)
+		atomicMax(u_MeshFeedback[base], bits);
+}
+
+void MarkMaterialFeedback(uint slot, uint use, float pixels, float uvPixels)
+{
+	if (slot >= u_Cull.MaterialSlotCount)
+		return;
+	uint base = slot * 4u;
+	if ((u_MaterialFeedback[base + 2u] & use) != use)
+	{
+		uint previous = atomicOr(u_MaterialFeedback[base + 2u], use);
+		if (previous == 0u)
+			u_FeedbackLists[ST_FEEDBACK_LIST_HEADER + u_Cull.MeshSlotCount + atomicAdd(u_FeedbackLists[1], 1u)] = slot;
+	}
+	uint pixelBits = floatBitsToUint(pixels);
+	if (pixels > 0.0 && u_MaterialFeedback[base] < pixelBits)
+		atomicMax(u_MaterialFeedback[base], pixelBits);
+	uint uvBits = floatBitsToUint(uvPixels);
+	if (uvPixels > 0.0 && u_MaterialFeedback[base + 1u] < uvBits)
+		atomicMax(u_MaterialFeedback[base + 1u], uvBits);
+}
+
+// The proxy's materials as feedback: its instances' (once the mesh's layout gave it instances), else its override material.
+// Sizes only where the mesh is drawable (`sized`, with its geometry entry), as the CPU's screen uses count drawn instances
+// only.
+void MarkProxyMaterials(GPUProxy proxy, uint use, bool sized, float pixels, GeometryEntry entry)
+{
+	if (proxy.InstanceCount == 0u)
+	{
+		uint overrideSlot = proxy.Flags >> ST_PROXY_OVERRIDE_SHIFT;
+		if (overrideSlot != 0u)
+			MarkMaterialFeedback(overrideSlot - 1u, use, 0.0, 0.0);
+		return;
+	}
+	// TextureStreamingPolicy::GetViewScale and GetWorldPixels, as GatherDraws works them out: once per proxy.
+	bool orthographic = u_Cull.CameraPosition.w > 0.5;
+	float unitPixels = orthographic ? u_Cull.ViewParameters.x / u_Cull.LODParameters.y : u_Cull.ViewParameters.x / (2.0 * u_Cull.LODParameters.y);
+	float worldPixels = -1.0;
+	vec3 axisScale = vec3(1.0);
+	for (uint submesh = 0u; submesh < proxy.InstanceCount; submesh++)
+	{
+		CullInstance instance = u_CullInstances[proxy.FirstInstance + submesh];
+		uint material = instance.MaterialIndex < u_Cull.MaterialSlotCount ? u_MaterialFlags[instance.MaterialIndex] : 0u;
+		bool drawn = sized && (material & ST_CULL_MATERIAL_AVAILABLE) != 0u;
+		float uvPixels = 0.0;
+		if (drawn && (material & ST_CULL_MATERIAL_TEXTURED) != 0u)
+		{
+			if (worldPixels < 0.0)
+			{
+				worldPixels = GetWorldPixels(u_Cull.CameraPosition.xyz, orthographic, unitPixels, u_Cull.ViewParameters.y, proxy.WorldMin, proxy.WorldMax);
+				CullInstance first = u_CullInstances[proxy.FirstInstance];
+				axisScale = sqrt(first.WorldRows[0].xyz * first.WorldRows[0].xyz + first.WorldRows[1].xyz * first.WorldRows[1].xyz
+					+ first.WorldRows[2].xyz * first.WorldRows[2].xyz);
+			}
+			uvPixels = GetUVPixels(worldPixels, u_GeometrySubmeshes[entry.FirstSubmesh + submesh].UVDensity.xyz, axisScale);
+		}
+		MarkMaterialFeedback(instance.MaterialIndex, use, drawn ? pixels : 0.0, uvPixels);
+	}
+}
+
+// Whether the mesh table holds a drawable mesh for the proxy: loaded, with the layout its instances were made for.
+bool IsDrawable(GPUProxy proxy, out uint mesh, out GeometryEntry entry)
+{
+	mesh = u_MeshTable[proxy.MeshSlot];
+	entry = GeometryEntry(0u, 0u, 0u, 0u);
+	if (mesh == 0u || proxy.InstanceCount == 0u)
+		return false; // Not drawn this frame: not loaded, or not uploaded yet
+	entry = u_GeometryEntries[mesh & ~ST_CULL_MESH_SKINNED_ARENA];
+	return entry.SubmeshCount == proxy.InstanceCount; // Else instances of another layout of the mesh
+}
+
 void CullProxy(uint proxyIndex)
 {
 	GPUProxy proxy = u_Proxies[proxyIndex];
 	const uint drawable = ST_PROXY_ACTIVE | ST_PROXY_INDEXED;
-	if (proxy.InstanceCount == 0u || (proxy.Flags & drawable) != drawable || proxy.MeshSlot >= u_Cull.MeshSlotCount)
+	if ((proxy.Flags & drawable) != drawable || proxy.MeshSlot >= u_Cull.MeshSlotCount)
 		return;
-	uint mesh = u_MeshTable[proxy.MeshSlot];
-	if (mesh == 0u)
-		return; // Not drawn this frame: not loaded, or not uploaded yet
-	GeometryEntry entry = u_GeometryEntries[mesh & ~ST_CULL_MESH_SKINNED_ARENA];
-	if (entry.SubmeshCount != proxy.InstanceCount)
-		return; // Instances of another layout of the mesh
+	bool feedback = u_Parameters.Mode == ST_CULL_MODE_COUNT && u_Cull.Feedback != 0u;
+	uint mesh;
+	GeometryEntry entry;
+	bool meshDrawable = IsDrawable(proxy, mesh, entry);
 	bool skinnedArena = (mesh & ST_CULL_MESH_SKINNED_ARENA) != 0u;
 	uint geometry = skinnedArena ? ((proxy.Flags & ST_PROXY_SKINNED) != 0u ? ST_CULL_GEOMETRY_SKINNED : ST_CULL_GEOMETRY_SKINNED_ARENA) : ST_CULL_GEOMETRY_STATIC;
 	uint mirrored = (proxy.Flags & ST_PROXY_MIRRORED) != 0u ? 1u : 0u;
@@ -76,13 +164,35 @@ void CullProxy(uint proxyIndex)
 	float fraction = GetScreenFraction(center, length(extents));
 
 #ifndef ST_CULL_SHADOW
+	// Within the prefetch distance (SpatialIndex::QuerySphere's test): requested at low priority, in view or not.
+	float prefetch = u_Cull.ViewParameters.z;
+	if (feedback && prefetch > 0.0)
+	{
+		vec3 outside = max(max(proxy.WorldMin - u_Cull.CameraPosition.xyz, u_Cull.CameraPosition.xyz - proxy.WorldMax), vec3(0.0));
+		if (dot(outside, outside) <= prefetch * prefetch)
+		{
+			MarkMeshFeedback(proxy.MeshSlot, ST_FEEDBACK_PREFETCH, 0.0);
+			MarkProxyMaterials(proxy, ST_FEEDBACK_PREFETCH, false, 0.0, entry);
+		}
+	}
 	if (!IsBoxInFrustum(proxy.WorldMin, proxy.WorldMax))
 		return;
-	if (u_Cull.LODParameters.w > 0.0 && fraction * u_Cull.ViewParameters.x < u_Cull.LODParameters.w)
+	float pixels = fraction * u_Cull.ViewParameters.x;
+	if (u_Cull.LODParameters.w > 0.0 && pixels < u_Cull.LODParameters.w)
 	{
-		Count(ST_COUNTER_SIZE_CULLED);
+		// Counted as the CPU path counts them: among the proxies it could draw.
+		if (meshDrawable)
+			Count(ST_COUNTER_SIZE_CULLED);
 		return;
 	}
+	if (feedback)
+	{
+		uint use = ST_FEEDBACK_VIEW | (fraction > u_Cull.ViewParameters.w ? ST_FEEDBACK_HIGH : 0u);
+		MarkMeshFeedback(proxy.MeshSlot, use, pixels);
+		MarkProxyMaterials(proxy, use, meshDrawable, pixels, entry);
+	}
+	if (!meshDrawable)
+		return;
 	Count(ST_COUNTER_VISIBLE_PROXIES);
 	for (uint submesh = 0u; submesh < proxy.InstanceCount; submesh++)
 	{
@@ -101,7 +211,7 @@ void CullProxy(uint proxyIndex)
 			Count(ST_COUNTER_SKINNED_INSTANCES);
 	}
 #else
-	if ((proxy.Flags & ST_PROXY_CAST_SHADOWS) == 0u || (proxy.Flags & ST_PROXY_MESH_BOUNDS) == 0u)
+	if ((proxy.Flags & ST_PROXY_CAST_SHADOWS) == 0u || (proxy.Flags & ST_PROXY_MESH_BOUNDS) == 0u || proxy.InstanceCount == 0u)
 		return;
 	// The local bounds in light space (AABB::Transformed of the light view times the world transform).
 	CullInstance first = u_CullInstances[proxy.FirstInstance];
@@ -132,6 +242,14 @@ void CullProxy(uint proxyIndex)
 		cascadeMask |= 1u << cascade;
 	}
 	if (cascadeMask == 0u)
+		return;
+	if (feedback)
+	{
+		// Casters are kept resident, not requested (as FindShadowCasters marks them).
+		MarkMeshFeedback(proxy.MeshSlot, ST_FEEDBACK_SHADOW, 0.0);
+		MarkProxyMaterials(proxy, ST_FEEDBACK_SHADOW, false, 0.0, entry);
+	}
+	if (!meshDrawable)
 		return;
 	for (uint submesh = 0u; submesh < proxy.InstanceCount; submesh++)
 	{

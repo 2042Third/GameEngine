@@ -262,6 +262,7 @@ namespace Strata
 			return {
 				{ "gpuDriven", stats.GPUDriven },
 				{ "gpuCounts", stats.GPUDriven && gpu.HasCounters },
+				{ "feedbackRequests", stats.FeedbackRequests },
 				{ "drawCommands", stats.DrawCommands },
 				{ "draws", stats.DrawCalls },
 				{ "opaqueDraws", stats.OpaqueDrawCalls },
@@ -809,7 +810,8 @@ namespace Strata
 			"GPU.Overlays, GPU.ImGui) and boundBy: gpu when the GPU's median busy time takes at least 90% of the median frame interval and exceeds "
 			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
 			"times. renderStats is the viewport's latest frame (null while it renders none): gpuDriven (the GPU culled the frame and built its draws: "
-			"its counts are the GPU's, of a frame 2-3 frames older, once gpuCounts is true; transparent surfaces are the CPU's), drawCommands (draw "
+			"its counts are the GPU's, of a frame 2-3 frames older, once gpuCounts is true; transparent surfaces are the CPU's), feedbackRequests (its "
+			"asset requests came from the GPU's visibility feedback of an earlier frame, not from the CPU walking the view), drawCommands (draw "
 			"calls the CPU recorded), draws (instanced draws of the view), opaqueDraws, shadowDraws, instances, shadowCasters, triangles, "
 			"visibleProxies, occludedProxies, culledProxies, sizeCulledProxies (in view but below a pixel), instancesPerLod, lights, droppedLights, "
 			"materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes (new mesh renderers waiting for "

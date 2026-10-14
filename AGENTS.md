@@ -396,9 +396,10 @@ lights, overlays and text: [Rendering](Docs/DeveloperGuide.md#rendering).
   ([GPU timing](Docs/DeveloperGuide.md#gpu-timing)).
 - Read mesh geometry only through the geometry pool, every frame (`Mesh::GetGeometry`: compaction moves it)
   ([Batching](Docs/DeveloperGuide.md#batching)).
-- What is drawn is decided twice, by the CPU path (`SceneRendererExtraction.cpp`) and the GPU's culling (`Cull.comp`):
-  change both, keep shading independent of draw order (no screen-space derivatives there), and keep
-  `GPU.SceneRenderer.GPUDriven` passing ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
+- What is drawn and what is requested are decided twice, by the CPU path (`SceneRendererExtraction.cpp`) and the GPU's
+  culling and visibility feedback (`Cull.comp`): change both, keep shading independent of draw order (no screen-space
+  derivatives there), and keep `GPU.SceneRenderer.GPUDriven` and `.Feedback` passing
+  ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
 
 ## Automation (editor RPC + MCP)
 

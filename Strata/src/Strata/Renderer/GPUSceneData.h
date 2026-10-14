@@ -20,9 +20,14 @@ namespace Strata::RenderData
 		glm::vec3 WorldMin = glm::vec3(0.0f); // RenderScene::GetWorldBounds
 		uint32_t MeshSlot = 0;                // RenderScene's mesh slot (0xFFFFFFFF: none)
 		glm::vec3 WorldMax = glm::vec3(0.0f);
-		uint32_t Flags = 0;                   // RenderProxyFlags
+		// RenderProxyFlags in the low c_GPUProxyOverrideShift bits; above them the override material slot plus one (0: none,
+		// or a slot beyond c_GPUProxyMaxOverrideSlot), which feedback requests before the mesh's layout gives the proxy
+		// instances.
+		uint32_t Flags = 0;
 	};
 	static_assert(sizeof(GPUProxy) == 64);
+	constexpr uint32_t c_GPUProxyOverrideShift = 8;
+	constexpr uint32_t c_GPUProxyMaxOverrideSlot = (1u << (32 - c_GPUProxyOverrideShift)) - 2;
 
 	// A mesh's place in the geometry pool (GeometryPool's entry table, by GeometryHandle).
 	struct GeometryEntry
@@ -40,8 +45,9 @@ namespace Strata::RenderData
 		uint32_t FirstLOD = 0;   // In the LOD table: the draw record of each level (GPU culling counts per record)
 		uint32_t LODCount = 0;
 		uint32_t Reserved = 0;
+		glm::vec4 UVDensity = glm::vec4(0.0f); // xyz: Submesh::UVDensity (texture streaming's UV pixels, from feedback)
 	};
-	static_assert(sizeof(GeometrySubmesh) == 16);
+	static_assert(sizeof(GeometrySubmesh) == 32);
 
 	// A level of detail of a submesh: the draw record GPU culling counts instances per.
 	struct GeometryLOD
@@ -55,13 +61,34 @@ namespace Strata::RenderData
 
 	// GPU culling (Scene/Cull.comp, CullShadow, CullBuild.comp; Include/Culling.glsl mirrors these layouts).
 	//
-	// A renderer's mesh table holds per mesh slot the GeometryHandle of a mesh the frame draws (0: none), with this bit for
-	// meshes of the Skinned arena; its material table per material slot these flags (0: not drawn).
+	// The mesh table (RenderSceneGPU) holds per mesh slot the GeometryHandle of the loaded mesh (0: none), with this bit for
+	// meshes of the Skinned arena; the material flags per material slot these bits (0: not drawn).
 	constexpr uint32_t c_CullMeshSkinnedArena = 1u << 31;
 	constexpr uint32_t c_CullMaterialAvailable = 1u << 0;
 	constexpr uint32_t c_CullMaterialDoubleSided = 1u << 1;
 	constexpr uint32_t c_CullMaterialAlphaMask = 1u << 2;
 	constexpr uint32_t c_CullMaterialTransparent = 1u << 3;
+	constexpr uint32_t c_CullMaterialTextured = 1u << 4; // Names texture maps: feedback works out its UV pixels
+
+	// Visibility feedback (Scene/Cull.comp's counting passes, packed by CullFeedback.comp, read back frames later): how the
+	// frame uses each mesh and material slot it touched. The use bits are SceneRenderer's request marks.
+	constexpr uint32_t c_FeedbackView = 1u << 0;     // In the view
+	constexpr uint32_t c_FeedbackHigh = 1u << 1;     // In the view above SceneRendererSpecification::HighPriorityScreenFraction
+	constexpr uint32_t c_FeedbackPrefetch = 1u << 2; // Within SceneRendererSpecification::PrefetchDistance
+	constexpr uint32_t c_FeedbackShadow = 1u << 3;   // Casts into a cascade
+	// The touched-slot lists' header (mesh count, material count, two reserved words); the mesh slots follow, then (after
+	// MeshSlotCount entries) the material slots.
+	constexpr uint32_t c_FeedbackListHeader = 4;
+	// A packed record: the header record (MeshRecords, MaterialRecords) first, then MeshSlotCount mesh records and
+	// MaterialSlotCount material records, the touched ones first in each part.
+	struct FeedbackRecord
+	{
+		uint32_t Slot = 0;
+		uint32_t Use = 0;       // c_Feedback* bits
+		float Pixels = 0.0f;    // The largest projected size in pixels of a drawable instance (0: none, e.g. not loaded)
+		float UVPixels = 0.0f;  // Materials: the largest TextureStreamingPolicy::GetUVPixels of their textured instances
+	};
+	static_assert(sizeof(FeedbackRecord) == 16);
 
 	// Draw buckets: one per pipeline state and vertex arena. A view bucket's index: mirrored (bit 0), double-sided (bit 1),
 	// geometry (bits 2-3, c_CullGeometry*); shadow buckets follow the view's, c_CullShadowBucketsPerCascade per cascade,
@@ -94,7 +121,9 @@ namespace Strata::RenderData
 		// x: LODThreshold, y: tan(vertical FOV / 2) (perspective) or the vertical extent (orthographic), z: the near plane,
 		// w: the smallest projected size drawn in pixels (0: no screen-size culling)
 		glm::vec4 LODParameters = glm::vec4(0.0f);
-		glm::vec4 ViewParameters = glm::vec4(0.0f);  // x: viewport height in pixels
+		// x: viewport height in pixels, y: the near distance texture streaming measures from (TextureStreamingPolicy::
+		// ViewScale::Near), z: the prefetch distance (0: none), w: SceneRendererSpecification::HighPriorityScreenFraction
+		glm::vec4 ViewParameters = glm::vec4(0.0f);
 		glm::mat4 LightView = glm::mat4(1.0f);
 		glm::vec4 CascadeBoxes[c_CullMaxCascades] = {};      // Light view space: min.xy, max.xy
 		glm::vec4 CascadeParameters[c_CullMaxCascades] = {}; // x: the far side's z, y: the smallest light-space extent drawn
@@ -110,7 +139,8 @@ namespace Strata::RenderData
 		// 1 where the draws read a bucket's first slots only (without a GPU-written count): records beyond them are counted
 		// as overflow. Each dense bucket's slots follow the bucket table's c_CullBuckets entries.
 		uint32_t DrawsBounded = 0;
-		uint32_t Reserved[2] = {};
+		uint32_t Feedback = 0;           // 1: the counting passes write visibility feedback
+		uint32_t Reserved = 0;
 	};
 	static_assert(sizeof(CullConstants) == 6 * 16 + 3 * 16 + 64 + 8 * 16 + 48);
 

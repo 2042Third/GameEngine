@@ -32,6 +32,12 @@ namespace Strata
 		// SceneRendererExtraction.cpp).
 		constexpr float c_MinCasterTexels = 1.0f;
 		constexpr uint32_t c_ArgumentWords = sizeof(nvrhi::DrawIndexedIndirectArguments) / sizeof(uint32_t);
+		// Feedback frames bound a bucket's draw slots (paths without a GPU-written count) by the records of the meshes the
+		// feedback saw, two or three frames old: this much more, so meshes the view turns to meanwhile are drawn too.
+		constexpr uint32_t c_FeedbackSlotHeadroom = 16;
+		// Feedback older than this many of the renderer's frames says too little of the view (a renderer that did not render
+		// for a while): the CPU's marks run instead.
+		constexpr uint64_t c_MaxFeedbackAge = 8;
 		static_assert(sizeof(nvrhi::DrawIndexedIndirectArguments) == 5 * sizeof(uint32_t));
 
 		// The workgroups of a dispatch over `items` items: in rows of at most 65,535 groups (the dispatch limit); the shaders
@@ -89,7 +95,10 @@ namespace Strata
 		combined.SubTexelCasters = gpu.SubTexelCasters;
 		combined.SkinnedInstances += gpu.SkinnedInstances;
 		combined.Triangles += gpu.Triangles;
+		// The CPU counts every indexed proxy as visible or culled (on feedback frames only those it looked at as visible).
+		const uint32_t indexed = stats.VisibleProxies + stats.CulledInstances;
 		combined.VisibleProxies = gpu.VisibleProxies + gpu.SizeCulledProxies;
+		combined.CulledInstances = indexed > combined.VisibleProxies ? indexed - combined.VisibleProxies : 0u;
 		combined.SizeCulledProxies = gpu.SizeCulledProxies;
 		for (size_t lod = 0; lod < combined.InstancesPerLOD.size(); lod++)
 			combined.InstancesPerLOD[lod] += gpu.InstancesPerLOD[lod];
@@ -142,6 +151,10 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(3),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(4),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(5),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(6),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(7),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(8),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(9),
 			// The pass (counting or writing): a slot no constant buffer of the layout uses.
 			nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t))
 		};
@@ -158,6 +171,7 @@ namespace Strata
 		m_CullViewPipeline = createPipeline("Scene/Cull.comp");
 		m_CullShadowPipeline = createPipeline("Scene/CullShadow.comp");
 		m_CullBuildPipeline = createPipeline("Scene/CullBuild.comp");
+		m_CullFeedbackPipeline = createPipeline("Scene/CullFeedback.comp");
 
 		bool recreated = false;
 		const bool created = EnsureBufferCapacity(m_BucketTableBuffer, 2 * RenderData::c_CullBuckets, sizeof(uint32_t), "CullBuckets", recreated)
@@ -173,7 +187,7 @@ namespace Strata
 		for (uint32_t index = 0; index < c_GPURecordCount; index++)
 			m_CounterReadbacks[index].Readback = CreateScope<BufferReadback>(m_Device, sizeof(RenderData::CullCounters), m_Specification.DebugName + ".CullCounterReadback");
 		const bool readbacks = std::all_of(m_CounterReadbacks.begin(), m_CounterReadbacks.end(), [](const CounterReadback& entry) { return entry.Readback->IsValid(); });
-		if (!m_CullViewPipeline || !m_CullShadowPipeline || !m_CullBuildPipeline || !created || !m_CullConstantBuffer || !readbacks)
+		if (!m_CullViewPipeline || !m_CullShadowPipeline || !m_CullBuildPipeline || !m_CullFeedbackPipeline || !created || !m_CullConstantBuffer || !readbacks)
 		{
 			// The CPU path draws instead.
 			ST_CORE_ERROR("{}: the GPU-driven path is unavailable (its pipelines or buffers could not be created); the CPU culls and draws",
@@ -210,6 +224,16 @@ namespace Strata
 		{
 			if (slot < meshSlots && IsMeshInView(slot))
 				m_CullViewSlots[arenaOf(slot)] += mirror.GetMeshRecords(slot);
+		}
+		if (m_FeedbackFrame)
+		{
+			// The feedback's view is a few frames old: room for meshes that came into view since (more show as overflow, after
+			// which the CPU's marks run once).
+			for (size_t arena = 0; arena < m_CullViewSlots.size(); arena++)
+			{
+				const uint32_t slots = m_CullViewSlots[arena];
+				m_CullViewSlots[arena] = std::min(mirror.GetArenaRecords(static_cast<uint32_t>(arena)), slots + slots / 4 + c_FeedbackSlotHeadroom);
+			}
 		}
 		if (++m_CullCasterStamp == 0)
 		{
@@ -278,7 +302,8 @@ namespace Strata
 		// As LODSelection::GetScreenFraction computes them.
 		const float viewExtent = camera.Orthographic ? std::max(camera.VerticalFOV, 1e-4f) : std::tan(std::max(camera.VerticalFOV, 1e-3f) * 0.5f);
 		constants.LODParameters = glm::vec4(m_Specification.LODThreshold, viewExtent, camera.Near, std::max(m_Specification.MinProjectedPixels, 0.0f));
-		constants.ViewParameters = glm::vec4(static_cast<float>(m_ViewportSize.y), 0.0f, 0.0f, 0.0f);
+		constants.ViewParameters = glm::vec4(static_cast<float>(m_ViewportSize.y), std::max(camera.Near, 1e-4f), std::max(m_Specification.PrefetchDistance, 0.0f),
+			m_Specification.HighPriorityScreenFraction);
 		constants.LightView = m_LightView;
 		for (uint32_t cascade = 0; cascade < m_CascadeCount; cascade++)
 		{
@@ -296,6 +321,7 @@ namespace Strata
 		constants.BucketCount = static_cast<uint32_t>(m_CullBuckets.size());
 		constants.ViewBucketCount = viewBuckets;
 		constants.DrawsBounded = GetGPUIndirectPath() != GPUIndirectPath::Count ? 1u : 0u;
+		constants.Feedback = m_Specification.VisibilityFeedback ? 1u : 0u;
 		// The bucket table's second part: each dense bucket's draw slots.
 		for (const uint32_t bucket : m_CullBuckets)
 			m_CullBucketTable.push_back(GetBucketSlots(bucket));
@@ -309,7 +335,15 @@ namespace Strata
 		return EnsureBufferCapacity(m_CullCountBuffer, keys, sizeof(uint32_t), "CullCounts", outRecreated, BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_CullOffsetBuffer, keys, sizeof(uint32_t), "CullOffsets", outRecreated, BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_CullArgumentBuffer, arguments, sizeof(uint32_t), "CullArguments", outRecreated, BufferKind::IndirectArgumentsUAV)
-			&& EnsureBufferCapacity(m_GPUDrawListBuffer, constants.DrawListCapacity, sizeof(uint32_t), "GPUDrawList", outRecreated, BufferKind::StructuredUAV);
+			&& EnsureBufferCapacity(m_GPUDrawListBuffer, constants.DrawListCapacity, sizeof(uint32_t), "GPUDrawList", outRecreated, BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_FeedbackMeshBuffer, static_cast<size_t>(constants.MeshSlotCount) * 2, sizeof(uint32_t), "FeedbackMeshes", outRecreated,
+				BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_FeedbackMaterialBuffer, static_cast<size_t>(constants.MaterialSlotCount) * 4, sizeof(uint32_t), "FeedbackMaterials", outRecreated,
+				BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_FeedbackListBuffer, RenderData::c_FeedbackListHeader + static_cast<size_t>(constants.MeshSlotCount) + constants.MaterialSlotCount,
+				sizeof(uint32_t), "FeedbackLists", outRecreated, BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_FeedbackRecordBuffer, 1 + static_cast<size_t>(constants.MeshSlotCount) + constants.MaterialSlotCount,
+				sizeof(RenderData::FeedbackRecord), "FeedbackRecords", outRecreated, BufferKind::StructuredUAV);
 	}
 
 	bool SceneRenderer::CreateCullBindingSet()
@@ -332,6 +366,10 @@ namespace Strata
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(3, m_CullBucketCountBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(4, m_CullCounterBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(5, m_GPUDrawListBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(6, m_FeedbackMeshBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(7, m_FeedbackMaterialBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(8, m_FeedbackListBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(9, m_FeedbackRecordBuffer),
 			nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t))
 		};
 		m_CullBindingSet = m_Device->createBindingSet(desc, m_CullBindingLayout);
@@ -374,6 +412,13 @@ namespace Strata
 		commandList->clearBufferUInt(m_CullCounterBuffer, 0);
 		// Draw slots no record takes draw nothing.
 		commandList->clearBufferUInt(m_CullArgumentBuffer, 0);
+		const bool feedback = constants.Feedback != 0;
+		if (feedback)
+		{
+			commandList->clearBufferUInt(m_FeedbackMeshBuffer, 0);
+			commandList->clearBufferUInt(m_FeedbackMaterialBuffer, 0);
+			commandList->clearBufferUInt(m_FeedbackListBuffer, 0);
+		}
 
 		nvrhi::ComputeState state;
 		state.bindings = { m_CullBindingSet };
@@ -395,7 +440,8 @@ namespace Strata
 		const auto barrier = [&]()
 		{
 			for (nvrhi::IBuffer* buffer : { m_CullCountBuffer.Get(), m_CullOffsetBuffer.Get(), m_CullArgumentBuffer.Get(), m_CullBucketCountBuffer.Get(),
-				m_CullCounterBuffer.Get(), m_GPUDrawListBuffer.Get() })
+				m_CullCounterBuffer.Get(), m_GPUDrawListBuffer.Get(), m_FeedbackMeshBuffer.Get(), m_FeedbackMaterialBuffer.Get(), m_FeedbackListBuffer.Get(),
+				m_FeedbackRecordBuffer.Get() })
 				commandList->setBufferState(buffer, nvrhi::ResourceStates::UnorderedAccess);
 			commandList->commitBarriers();
 		};
@@ -407,6 +453,14 @@ namespace Strata
 		const uint32_t mode = c_CullModeCount;
 		commandList->setPushConstants(&mode, sizeof(mode));
 		Dispatch(commandList, static_cast<uint64_t>(constants.BucketCount) * constants.LODCapacity);
+		if (feedback)
+		{
+			// The touched slots' feedback, packed (it reads the counting passes' writes, as the build does).
+			state.pipeline = m_CullFeedbackPipeline;
+			commandList->setComputeState(state);
+			commandList->setPushConstants(&mode, sizeof(mode));
+			Dispatch(commandList, 1 + static_cast<uint64_t>(constants.MeshSlotCount) + constants.MaterialSlotCount);
+		}
 		barrier();
 		cullPasses(c_CullModeWrite);
 		barrier();
@@ -414,11 +468,38 @@ namespace Strata
 		CounterReadback& readback = m_CounterReadbacks[m_CounterReadbackIndex];
 		readback.Readback->Record(commandList, m_CullCounterBuffer, 0, sizeof(RenderData::CullCounters));
 		readback.Render = m_RenderCount + 1;
+		readback.HasFeedback = false;
+		if (!feedback)
+			return;
+		// The feedback's copy: a readback whose earlier copy may still be under way is replaced only once it completed.
+		const uint64_t feedbackBytes = (1 + static_cast<uint64_t>(constants.MeshSlotCount) + constants.MaterialSlotCount) * sizeof(RenderData::FeedbackRecord);
+		if (!readback.Feedback || readback.Feedback->GetCapacity() < feedbackBytes)
+		{
+			if (readback.Feedback && readback.Feedback->IsPending() && !readback.Feedback->IsReady())
+				return;
+			uint64_t capacity = readback.Feedback ? readback.Feedback->GetCapacity() : 4096;
+			while (capacity < feedbackBytes)
+				capacity *= 2;
+			readback.Feedback = CreateScope<BufferReadback>(m_Device, capacity, m_Specification.DebugName + ".FeedbackReadback");
+			if (!readback.Feedback->IsValid())
+			{
+				readback.Feedback.reset();
+				return; // Logged; the CPU's marks run while there is no feedback
+			}
+		}
+		readback.Feedback->Record(commandList, m_FeedbackRecordBuffer, 0, feedbackBytes);
+		readback.HasFeedback = true;
+		readback.RenderSceneId = m_RenderSceneId;
+		readback.TablesVersion = m_SceneGPU->GetTablesVersion();
+		readback.MeshSlots = constants.MeshSlotCount;
+		readback.MaterialSlots = constants.MaterialSlotCount;
 	}
 
 	void SceneRenderer::SubmitCullReadback()
 	{
 		m_CounterReadbacks[m_CounterReadbackIndex].Readback->Submit();
+		if (m_CounterReadbacks[m_CounterReadbackIndex].HasFeedback)
+			m_CounterReadbacks[m_CounterReadbackIndex].Feedback->Submit();
 		m_CounterReadbackIndex = (m_CounterReadbackIndex + 1) % c_GPURecordCount;
 	}
 
@@ -552,6 +633,36 @@ namespace Strata
 		stats.Overflow = counters.Overflow;
 		for (size_t lod = 0; lod < stats.InstancesPerLOD.size(); lod++)
 			stats.InstancesPerLOD[lod] = counters.InstancesPerLOD[lod];
+
+		// The frame's visibility feedback: the touched mesh slots' records, then the material slots' (each part's count in
+		// the header, at most its places).
+		if (!newest->HasFeedback || !newest->Feedback)
+			return;
+		RenderData::FeedbackRecord header;
+		if (!newest->Feedback->Read(&header, sizeof(header)))
+			return;
+		const uint32_t meshes = std::min(header.Slot, newest->MeshSlots);
+		const uint32_t materials = std::min(header.Use, newest->MaterialSlots);
+		m_Feedback.Meshes.resize(meshes);
+		m_Feedback.Materials.resize(materials);
+		const bool read = (meshes == 0 || newest->Feedback->Read(m_Feedback.Meshes.data(), meshes * sizeof(RenderData::FeedbackRecord), sizeof(header)))
+			&& (materials == 0 || newest->Feedback->Read(m_Feedback.Materials.data(), materials * sizeof(RenderData::FeedbackRecord),
+				(1 + static_cast<uint64_t>(newest->MeshSlots)) * sizeof(RenderData::FeedbackRecord)));
+		m_Feedback.Valid = read;
+		m_Feedback.Render = newest->Render;
+		m_Feedback.RenderSceneId = newest->RenderSceneId;
+		m_Feedback.TablesVersion = newest->TablesVersion;
+	}
+
+	bool SceneRenderer::UsesFeedback(const RenderScene& renderScene) const
+	{
+		if (!m_GPUDrivenFrame || !m_Specification.VisibilityFeedback || !m_Feedback.Valid || m_Feedback.RenderSceneId != renderScene.GetId())
+			return false;
+		const uint64_t frame = m_RenderCount + 1;
+		if (m_Feedback.Render < m_CutRender || frame - m_Feedback.Render > c_MaxFeedbackAge || m_Feedback.TablesVersion != m_SceneGPU->GetTablesVersion())
+			return false;
+		// Draws beyond the slots a feedback frame foresaw were left out: the CPU's marks bound them exactly once.
+		return !(m_GPUStats.HasCounters && m_GPUStats.Overflow > 0 && m_GPUStats.CountersRender > m_MarksRender);
 	}
 
 }

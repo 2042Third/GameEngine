@@ -20,6 +20,17 @@
 #define ST_CULL_MATERIAL_DOUBLE_SIDED  2u
 #define ST_CULL_MATERIAL_ALPHA_MASK    4u
 #define ST_CULL_MATERIAL_TRANSPARENT   8u
+#define ST_CULL_MATERIAL_TEXTURED      16u
+
+// GPUProxy::Flags: RenderProxyFlags below this shift, the override material slot plus one above it.
+#define ST_PROXY_OVERRIDE_SHIFT        8u
+
+// Visibility feedback (RenderData::c_Feedback*, FeedbackRecord).
+#define ST_FEEDBACK_VIEW               1u
+#define ST_FEEDBACK_HIGH               2u
+#define ST_FEEDBACK_PREFETCH           4u
+#define ST_FEEDBACK_SHADOW             8u
+#define ST_FEEDBACK_LIST_HEADER        4u
 
 #define ST_CULL_GEOMETRY_STATIC        0u
 #define ST_CULL_GEOMETRY_SKINNED_ARENA 1u
@@ -71,6 +82,7 @@ struct GeometrySubmesh
 	uint FirstLOD;
 	uint LODCount;
 	uint Reserved;
+	vec4 UVDensity; // xyz: Submesh::UVDensity
 };
 
 struct GeometryLOD
@@ -95,7 +107,7 @@ struct CullConstants
 	vec4 Planes[6];
 	vec4 CameraPosition;     // xyz; w: 1 for orthographic cameras
 	vec4 LODParameters;      // x: LOD threshold, y: tan(fov / 2) or the vertical extent, z: near plane, w: smallest projected pixels
-	vec4 ViewParameters;     // x: viewport height in pixels
+	vec4 ViewParameters;     // x: viewport height in pixels, y: texture streaming's near distance, z: prefetch distance, w: high priority fraction
 	mat4 LightView;
 	vec4 CascadeBoxes[4];    // Light view space: min.xy, max.xy
 	vec4 CascadeParameters[4]; // x: far side z, y: smallest light-space extent drawn
@@ -109,8 +121,8 @@ struct CullConstants
 	uint BucketCount;
 	uint ViewBucketCount;    // Dense buckets of the view (they come first)
 	uint DrawsBounded;       // 1: the draws read only a bucket's first slots (u_BucketTable[ST_CULL_BUCKETS + dense])
-	uint Reserved0;
-	uint Reserved1;
+	uint Feedback;           // 1: the counting passes write visibility feedback
+	uint Reserved;
 };
 
 layout(set = 0, binding = ST_CBV(0), std140) uniform CullBuffer
@@ -136,6 +148,13 @@ layout(set = 0, binding = ST_UAV(2), std430) buffer ArgumentBuffer { uint u_Argu
 layout(set = 0, binding = ST_UAV(3), std430) buffer BucketCountBuffer { uint u_BucketCounts[]; };
 layout(set = 0, binding = ST_UAV(4), std430) buffer CounterBuffer { uint u_Counters[]; };
 layout(set = 0, binding = ST_UAV(5), std430) buffer CullDrawListBuffer { uint u_CullDrawList[]; };
+// Visibility feedback: per mesh slot (pixels, use) and per material slot (pixels, UV pixels, use, unused), as float bits where
+// they are sizes (non-negative floats order like their bits); the touched slots' lists (ST_FEEDBACK_LIST_HEADER words, then
+// MeshSlotCount mesh slots, then the material slots); the packed records (Scene/CullFeedback.comp).
+layout(set = 0, binding = ST_UAV(6), std430) buffer MeshFeedbackBuffer { uint u_MeshFeedback[]; };
+layout(set = 0, binding = ST_UAV(7), std430) buffer MaterialFeedbackBuffer { uint u_MaterialFeedback[]; };
+layout(set = 0, binding = ST_UAV(8), std430) buffer FeedbackListBuffer { uint u_FeedbackLists[]; };
+layout(set = 0, binding = ST_UAV(9), std430) buffer FeedbackRecordBuffer { uvec4 u_FeedbackRecords[]; };
 
 // The projected diameter of a bounding sphere as a fraction of the viewport height, as LODSelection::GetScreenFraction
 // computes it.

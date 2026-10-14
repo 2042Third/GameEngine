@@ -54,6 +54,7 @@ strata_add_shaders(Strata
 		Scene/LightClusters.comp
 		Scene/Cull.comp
 		Scene/CullBuild.comp
+		Scene/CullFeedback.comp
 		Debug/LODSelection.comp
 		IBL/EquirectToCube.comp
 		IBL/ProceduralSky.comp

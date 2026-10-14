@@ -24,6 +24,8 @@ namespace Strata
 	{
 
 		constexpr uint32_t c_NoOwner = ~0u;
+		constexpr uint32_t c_NotListed = ~0u;
+		static_assert(RenderProxyFlags::Skinned < (1u << RenderData::c_GPUProxyOverrideShift), "The proxy flags must fit below the override slot");
 		// Changed instances (or records) this close together are uploaded in one run: fewer copies for a little more data.
 		constexpr uint32_t c_InstanceRunGap = 16;
 		constexpr uint32_t c_RecordRunGap = 16;
@@ -78,6 +80,9 @@ namespace Strata
 		record.FirstInstance = renderScene.GetFirstInstance(proxy);
 		record.InstanceCount = renderScene.GetInstanceCount(proxy);
 		record.MeshSlot = renderScene.GetMeshSlot(proxy);
+		const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(proxy);
+		if (overrideSlot <= RenderData::c_GPUProxyMaxOverrideSlot)
+			flags |= (overrideSlot + 1) << RenderData::c_GPUProxyOverrideShift;
 		record.Flags = flags;
 		return record;
 	}
@@ -171,6 +176,22 @@ namespace Strata
 			m_DoubleSidedMaterials++;
 		if ((flags & RenderData::c_CullMaterialAlphaMask) != 0)
 			m_AlphaMaskedMaterials++;
+		const bool wasTransparent = (previous & RenderData::c_CullMaterialTransparent) != 0;
+		const bool transparent = (flags & RenderData::c_CullMaterialTransparent) != 0;
+		if (transparent && !wasTransparent)
+		{
+			m_TransparentPositions[slot] = static_cast<uint32_t>(m_TransparentSlots.size());
+			m_TransparentSlots.push_back(slot);
+		}
+		else if (!transparent && wasTransparent)
+		{
+			const uint32_t position = m_TransparentPositions[slot];
+			const uint32_t moved = m_TransparentSlots.back();
+			m_TransparentSlots[position] = moved;
+			m_TransparentPositions[moved] = position;
+			m_TransparentSlots.pop_back();
+			m_TransparentPositions[slot] = c_NotListed;
+		}
 		m_MaterialFlags[slot] = flags;
 	}
 
@@ -261,6 +282,8 @@ namespace Strata
 
 				// Its textures, each once, whether loaded or not: their loads and evictions build the slot again.
 				const std::array<AssetHandle, MaterialGPU::c_TextureMapCount> maps = MaterialGPU::GetTextureMaps(material->GetProperties());
+				if (std::any_of(maps.begin(), maps.end(), [](AssetHandle map) { return map.IsValid(); }))
+					flags |= RenderData::c_CullMaterialTextured;
 				std::array<AssetHandle, 5>& textures = m_MaterialTextures[slot];
 				for (size_t map = 0; map < maps.size(); map++)
 				{
@@ -311,6 +334,7 @@ namespace Strata
 		m_MaterialUsesDefault.resize(materialSlots, 0);
 		m_MaterialTextures.resize(materialSlots, c_NoTextures);
 		m_MaterialTexturePositions.resize(materialSlots, std::array<uint32_t, 5> {});
+		m_TransparentPositions.resize(materialSlots, c_NotListed);
 
 		// Another manager (or none) means other objects for every handle; so does a manager that no longer remembers the
 		// changes since the tables were built.
@@ -382,6 +406,8 @@ namespace Strata
 			BuildMaterial(slot, renderScene.GetMaterialHandle(slot), manager);
 		update.MeshesChecked = static_cast<uint32_t>(m_MeshMarks.size());
 		update.MaterialsBuilt = static_cast<uint32_t>(m_MaterialMarks.size());
+		if (!m_MeshMarks.empty() || !m_MaterialMarks.empty())
+			m_TablesVersion++;
 
 		if (m_UploadAllTables)
 		{

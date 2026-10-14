@@ -1735,12 +1735,22 @@ namespace Strata
 		return rendered;
 	}
 
+	glm::vec3 SceneRenderer::GetViewDirection(const SceneCamera& camera)
+	{
+		const glm::vec3 forward = -glm::vec3(camera.View[0][2], camera.View[1][2], camera.View[2][2]);
+		const float forwardLength = glm::length(forward);
+		return forwardLength > 0.0f ? forward / forwardLength : glm::vec3(0.0f, 0.0f, -1.0f);
+	}
+
+	bool SceneRenderer::IsCameraCut(const SceneCamera& camera) const
+	{
+		return !m_HasPreviousCamera || TextureStreamingPolicy::IsCameraCut(m_PreviousCameraPosition, m_PreviousCameraForward, camera.Position, GetViewDirection(camera));
+	}
+
 	void SceneRenderer::ReportTextureUse(const SceneCamera& camera)
 	{
 		// A view that jumped since the previous frame: what it needs now goes first.
-		const glm::vec3 forward = -glm::vec3(camera.View[0][2], camera.View[1][2], camera.View[2][2]);
-		const float forwardLength = glm::length(forward);
-		const glm::vec3 direction = forwardLength > 0.0f ? forward / forwardLength : glm::vec3(0.0f, 0.0f, -1.0f);
+		const glm::vec3 direction = GetViewDirection(camera);
 		const bool cut = m_HasPreviousCamera && TextureStreamingPolicy::IsCameraCut(m_PreviousCameraPosition, m_PreviousCameraForward, camera.Position, direction);
 		m_HasPreviousCamera = true;
 		m_PreviousCameraPosition = camera.Position;
@@ -1833,6 +1843,25 @@ namespace Strata
 			PrepareExtraction(renderScene);
 		}
 
+		// The GPU's copy of the render scene, shared with the scene's other renderers: what changed since its last update
+		// uploads now, in a command list of its own, ahead of this frame's. Only proxies it holds are drawn, with the meshes and
+		// materials its tables hold: what is loaded (the frame's requests publish nothing, so they are what the frame resolves).
+		m_SceneGPU = &Renderer::GetRenderSceneGPUs().Get(renderScene);
+		RenderSceneGPUUpdate sceneUpload;
+		if (!m_SceneGPU->Update(renderScene, assets, m_Specification.NewInstanceBytesPerFrame, &sceneUpload) && !m_SceneGPU->HasBuffers())
+		{
+			m_Errors.Report("the scene's GPU buffers are unavailable (see the previous error)");
+			m_Stats = {};
+			return false;
+		}
+		m_Stats.InstanceBytesUploaded += sceneUpload.InstanceBytes;
+		m_Stats.InstanceUploadRanges += sceneUpload.InstanceRanges;
+		m_Stats.ProxyBytesUploaded = sceneUpload.ProxyBytes;
+		m_Stats.PaletteBytesUploaded = sceneUpload.PaletteBytes;
+		m_Stats.MaterialBytesUploaded = sceneUpload.MaterialBytes;
+		m_Stats.DeferredInstanceBytes = m_SceneGPU->GetDeferredBytes();
+		m_Stats.DeferredProxies = m_SceneGPU->GetDeferredProxies();
+
 		RenderData::FrameConstants frame = {};
 		frame.View = camera.View;
 		frame.Projection = camera.Projection;
@@ -1856,39 +1885,30 @@ namespace Strata
 		m_Stats.GPUDriven = m_GPUDrivenFrame;
 		const auto extractionStart = std::chrono::steady_clock::now();
 		const Frustum frustum(frame.ViewProjection);
-		CullView(renderScene, camera, frustum);
+		// What the frame requests: the GPU's visibility feedback where it can tell (SceneRendererSpecification::
+		// VisibilityFeedback), else the CPU's walk of the view.
+		if (IsCameraCut(camera))
+			m_CutRender = m_RenderCount + 1;
+		m_FeedbackFrame = UsesFeedback(renderScene);
+		m_Stats.FeedbackRequests = m_FeedbackFrame;
+		if (m_FeedbackFrame)
+		{
+			ApplyFeedback(renderScene, camera, frustum);
+		}
+		else
+		{
+			CullView(renderScene, camera, frustum);
+			m_MarksRender = m_RenderCount + 1;
+		}
 		FindShadowCasters(renderScene, camera, frustum, frame);
 		ResolveAssets(renderScene);
-
-		// The GPU's copy of the render scene, shared with the scene's other renderers: what changed since its last update
-		// uploads now, in a command list of its own, ahead of this frame's. Only proxies it holds are drawn, with the meshes and
-		// materials its tables hold (after the frame's requests, which publish nothing: the tables match what was resolved).
-		const auto sceneUpdateStart = std::chrono::steady_clock::now();
-		m_SceneGPU = &Renderer::GetRenderSceneGPUs().Get(renderScene);
-		RenderSceneGPUUpdate sceneUpload;
-		if (!m_SceneGPU->Update(renderScene, assets, m_Specification.NewInstanceBytesPerFrame, &sceneUpload) && !m_SceneGPU->HasBuffers())
-		{
-			m_Errors.Report("the scene's GPU buffers are unavailable (see the previous error)");
-			m_Stats = {};
-			return false;
-		}
-		m_Stats.InstanceBytesUploaded += sceneUpload.InstanceBytes;
-		m_Stats.InstanceUploadRanges += sceneUpload.InstanceRanges;
-		m_Stats.ProxyBytesUploaded = sceneUpload.ProxyBytes;
-		m_Stats.PaletteBytesUploaded = sceneUpload.PaletteBytes;
-		m_Stats.MaterialBytesUploaded = sceneUpload.MaterialBytes;
-		m_Stats.DeferredInstanceBytes = m_SceneGPU->GetDeferredBytes();
-		m_Stats.DeferredProxies = m_SceneGPU->GetDeferredProxies();
-		// Uploads, not extraction.
-		const float sceneUpdateMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - sceneUpdateStart).count();
-
 		GatherDraws(renderScene, camera, !m_GPUDrivenFrame);
 		GatherShadowDraws(renderScene, camera, frame, !m_GPUDrivenFrame);
 		BuildDrawArguments();
 		if (m_GPUDrivenFrame)
 			PrepareGPUCulling(renderScene, camera, frustum);
 		ReportVisibleAnimators(scene);
-		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs - sceneUpdateMs;
+		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
 		bool degraded = false; // Rendered with a reported limitation: keep the error so it is not logged every frame
 		if (frame.ShadowParams.w > 0.0f && !EnsureShadowMap())
 		{

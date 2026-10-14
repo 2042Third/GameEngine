@@ -35,8 +35,9 @@ namespace Strata
 		bool IsReady() const;
 		// Blocks until the submitted copy completed (tests and tools).
 		void Wait();
-		// The copied bytes (at most what was recorded) once ready; false otherwise or when the staging cannot be mapped.
-		bool Read(void* destination, uint64_t bytes) const;
+		// The copied bytes from `offset` on (at most what was recorded) once ready; false otherwise, when the staging cannot be
+		// mapped, or when `offset` lies beyond what was recorded.
+		bool Read(void* destination, uint64_t bytes, uint64_t offset = 0) const;
 	private:
 		nvrhi::IDevice* m_Device;
 		nvrhi::BufferHandle m_Staging;

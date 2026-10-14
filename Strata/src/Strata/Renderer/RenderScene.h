@@ -190,6 +190,10 @@ namespace Strata
 		uint32_t FindMaterialSlot(AssetHandle material) const;
 		// Changes whenever a mesh or material slot is taken or let go: caches by slot compare the slots' handles again.
 		uint64_t GetSlotsVersion() const { return m_SlotsVersion; }
+		// The proxies that may draw any of `materialSlots`: those with one as their override material, and those without one
+		// whose mesh has a submesh with one. Appended to `outProxies`; a proxy appears more than once when its mesh uses
+		// several of the slots. How renderers find the users of a few materials (transparent ones) without walking every proxy.
+		void CollectMaterialUsers(std::span<const uint32_t> materialSlots, std::vector<uint32_t>& outProxies) const;
 		bool IsMeshLayoutKnown(uint32_t slot) const { return m_Meshes[slot].LayoutKnown; }
 		// Material slot of each submesh (the default material where the submesh has none).
 		std::span<const uint32_t> GetSubmeshMaterialSlots(uint32_t slot) const { return m_Meshes[slot].SubmeshMaterialSlots; }
@@ -244,6 +248,9 @@ namespace Strata
 		entt::entity GetSkinAnimator(uint32_t proxy) const { return m_SkinIndices[proxy] != c_InvalidIndex ? m_Skins[m_SkinIndices[proxy]].Animator : entt::null; }
 		// Whether any proxy has a SkinComponent: renderers skip skinning work entirely otherwise.
 		bool HasSkinProxies() const { return !m_Skins.empty(); }
+		// The proxies with a skin entry, by index (in no particular order).
+		uint32_t GetSkinProxyCount() const { return static_cast<uint32_t>(m_Skins.size()); }
+		uint32_t GetSkinProxy(uint32_t index) const { return m_Skins[index].Proxy; }
 		// A posed proxy's palette: GetPaletteCount joint matrices from GetPaletteFirst on in GetPalette.
 		uint32_t GetPaletteFirst(uint32_t proxy) const { return m_SkinIndices[proxy] != c_InvalidIndex ? m_Skins[m_SkinIndices[proxy]].PaletteFirst : 0u; }
 		uint32_t GetPaletteCount(uint32_t proxy) const { return m_SkinIndices[proxy] != c_InvalidIndex ? m_Skins[m_SkinIndices[proxy]].PaletteCount : 0u; }
@@ -279,6 +286,9 @@ namespace Strata
 			uint64_t CheckedSync = 0;                          // The sync that last compared the layout with the loaded mesh
 			Ref<const MeshSkinBinding> Skin;                   // Skinned meshes: their binding (part of the layout)
 			uint32_t SkinJointsNeeded = 0;                     // One past the largest skeleton joint the binding names
+			// The distinct material slots of SubmeshMaterialSlots, and the mesh's place in each one's MaterialEntry::Meshes.
+			std::vector<uint32_t> Materials;
+			std::vector<uint32_t> MaterialPositions;
 		};
 
 		struct PaletteChange
@@ -320,6 +330,8 @@ namespace Strata
 		{
 			AssetHandle Handle = UUID::Null();
 			uint32_t References = 0; // Proxy overrides and mesh layouts naming it
+			std::vector<uint32_t> OverrideUsers; // Proxies with it as their override material
+			std::vector<uint32_t> Meshes;        // Mesh slots with a submesh using it
 		};
 
 		struct InstanceChange
@@ -359,6 +371,12 @@ namespace Strata
 		void ReleaseMesh(uint32_t slot, uint32_t proxy);
 		uint32_t AcquireMaterial(AssetHandle handle);
 		void ReleaseMaterial(uint32_t slot);
+		// The mesh's place in the user lists of its submeshes' materials (MaterialEntry::Meshes), from its
+		// SubmeshMaterialSlots; unlinked before those slots are released.
+		void LinkMeshMaterials(uint32_t slot);
+		void UnlinkMeshMaterials(uint32_t slot);
+		void AddOverrideUser(uint32_t materialSlot, uint32_t proxy);
+		void RemoveOverrideUser(uint32_t materialSlot, uint32_t proxy);
 
 		// Mesh layouts from the asset manager (see Sync): the meshes whose objects or sources changed and new mesh slots.
 		void UpdateMeshLayouts(const Ref<AssetManagerBase>& assets);
@@ -412,6 +430,7 @@ namespace Strata
 		std::vector<uint32_t> m_MeshUserPositions;
 		std::vector<AssetHandle> m_MaterialOverrides;
 		std::vector<uint32_t> m_OverrideSlots;
+		std::vector<uint32_t> m_OverrideUserPositions; // The proxy's place in its override material's OverrideUsers
 		std::vector<uint32_t> m_FirstInstances;
 		std::vector<uint32_t> m_InstanceCounts;
 		std::vector<uint32_t> m_FreeProxies;

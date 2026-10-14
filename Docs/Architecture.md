@@ -551,7 +551,7 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (`SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
 | `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays, or by `FramePerfLog::Create`) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
-| `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
+| `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView` (or `ApplyFeedback`), `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
 | `Editor.UI` | `Application::RenderImGui`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
 | `Present` | `GraphicsDevice::EndFrame`, after the work time is measured (outside the frame time) |
@@ -1609,23 +1609,26 @@ A frame of `SceneRenderer::Render`:
 RenderScene::Get(scene).Sync()   world transforms, then the proxies of signaled mesh renderers and changed transforms,
                                  then the mesh layouts of meshes the asset manager loaded, reloaded or dropped since
 AssetResolveCache::BeginFrame    the frame's asset manager
+RenderSceneGPU::Update           the render scene's GPU copy: what changed since its last update (shared by the
+                                 scene's renderers), new proxies within the frame's budget, the mesh and material
+                                 tables after the asset manager's content changes; executed at once
 CullView                         SpatialIndex::QueryFrustum; screen fractions and request priorities (parallel chunks);
                                  meshes of unknown bounds as if in view; QuerySphere for the prefetch distance
+  or ApplyFeedback               (GPU-driven, VisibilityFeedback) the marks and screen sizes of an earlier frame's GPU
+                                 culling; the users of transparent materials and the skinned proxies in view
 FindShadowCasters                cascade boxes; QueryPlanes per cascade (a job each, merged in cascade order), then
                                  the exact test in light space in parallel chunks (casters below a texel of a cascade
                                  left out of it), animator reports and the assets casters need merged in chunk order
 ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident; materials used
                                  as in the frame before: their flags, their assets looked up in one call (below)
-RenderSceneGPU::Update           the render scene's GPU copy: what changed since its last update (shared by the
-                                 scene's renderers), new proxies within the frame's budget, the mesh and material
-                                 tables after the asset manager's content changes; executed at once
 GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches (the
                                  GPU-driven path: transparent draws, the materials' screen sizes and the cascades only)
 BuildDrawArguments               the batches' indirect arguments at their meshes' places in the geometry pool
 PrepareGPUCulling                (GPU-driven) the frame's buckets and their draw slots, the culling constants
 UploadSceneData                  the changed range of each draw list (and the bucket table)
-RunGPUCulling                    (GPU-driven) Cull.comp counts, CullBuild.comp places the draws, Cull.comp writes the
-                                 draw list; the passes then draw each bucket indirectly
+RunGPUCulling                    (GPU-driven) Cull.comp counts (and writes visibility feedback), CullBuild.comp places
+                                 the draws, CullFeedback.comp packs the feedback, Cull.comp writes the draw list; the
+                                 passes then draw each bucket indirectly
 ReleaseFrameAssets               (when Render returns, however it ends) every reference the frame took, and the manager
 ```
 
@@ -1752,7 +1755,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   High priority above `HighPriorityScreenFraction` (5%) of the viewport height and at Normal below; proxies within
   `PrefetchDistance` (100 units) of the camera request them at Low (also a mesh another lookup of the frame found not
   loaded); meshes of unknown bounds are requested as if in view (above); shadow casters outside the view and the
-  prefetch distance are drawn only from what is resident. Each distinct mesh, material and texture is looked up once
+  prefetch distance are drawn only from what is resident. GPU-driven frames learn these uses from the GPU's culling of an
+  earlier frame (visibility feedback, below) and walk the view on the CPU only where it cannot tell. Each distinct mesh, material and texture is looked up once
   per frame (one `GetAsset`, which also
   stamps it for the least-recently-used order; `AssetManagerStats::GetAssetCalls` counts them at the manager). The
   references are held only while the frame is rendered (the command lists keep the GPU resources they use, the bindless
@@ -1789,10 +1793,9 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
 - **The GPU-driven path** (`SceneRendererSpecification::GPUDriven`, Auto where the device has
   `drawIndirectFirstInstance`; `SceneRendererGPUDriven.cpp`, `Scene/Cull.comp`, `CullBuild.comp`, `Include/Culling.glsl`).
   The GPU culls the render scene's GPU copy and builds the opaque and shadow draws; the CPU path (Off) stays as the
-  reference and the fallback. The CPU still requests the frame's assets (the request marks of `CullView` and
-  `FindShadowCasters`), fits the cascades to the casters and gathers transparent draws, sorted; the GPU culls with the
-  mirror's mesh table and material flags (above: whatever is loaded, whether this frame requested it or not), and the CPU
-  uploads the bucket table and the constants (`RenderData::CullConstants`). `Cull.comp` runs one thread per proxy, for the view and (variant `ST_CULL_SHADOW`) for
+  reference and the fallback. The CPU requests the frame's assets, fits the cascades to the casters and gathers transparent
+  draws, sorted; the GPU culls with the mirror's mesh table and material flags (above: whatever is loaded, whether this
+  frame requested it or not), and the CPU uploads the bucket table and the constants (`RenderData::CullConstants`). `Cull.comp` runs one thread per proxy, for the view and (variant `ST_CULL_SHADOW`) for
   the cascades: the decisions are the CPU path's on the same data (active and indexed, the frustum, the screen size of
   `MinProjectedPixels` for the view, the light-space box and the sub-texel rule for cascades, per instance the material
   and the level of detail, `Include/LODSelection.glsl`), and each instance counts on its (bucket, LOD record). Buckets are
@@ -1810,6 +1813,28 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   depend on the order of a record's instances; shadows' receiver plane bias follows the receiver's normal, not
   screen-space derivatives, which on some GPUs depend on how draws group pixels into quads (`Include/Shadows.glsl`), so
   both paths agree to the pixel (`GPU.SceneRenderer.GPUDriven`, `IndirectFallback`).
+- **Visibility feedback** (`SceneRendererSpecification::VisibilityFeedback`, on by default; `Cull.comp`'s counting
+  passes, `Scene/CullFeedback.comp`, `SceneRenderer::ApplyFeedback`). What a GPU-driven frame requests comes from the GPU's
+  culling of an earlier frame instead of the CPU walking the view's proxies. For every proxy within the prefetch distance,
+  in the view (frustum and screen-size tests) or casting into a cascade, whether its mesh is loaded or not (unloaded ones
+  are placed by their recorded bounds), the counting pass marks its mesh slot and its materials' slots (its instances',
+  or its override material, which the proxy record carries above its flags, while its mesh's layout is unknown) with the
+  use (view, high above `HighPriorityScreenFraction`, prefetch, shadow: the CPU's request marks) and the largest projected
+  size, and for textured materials the UV pixels texture streaming follows (`Include/TextureStreaming.glsl`, the port of
+  `TextureStreamingPolicy::GetWorldPixels` and `GetUVPixels`). The first touch of a slot appends it to a list, so the
+  pack pass and the CPU's read are proportional to the distinct assets in use, not to the proxies; slots are read
+  before their atomics, so a million proxies of one mesh cost one atomic each slot. The records come back with the
+  counters, 2-3 frames late (`BufferReadback` reads at offsets), and a frame applies the newest: it marks the slots,
+  takes the screen sizes for `VisibleMaterialUse`, and walks on the CPU only the users of transparent materials
+  (`RenderScene::CollectMaterialUsers` over `RenderSceneGPU::GetTransparentMaterialSlots`: the CPU draws them, sorted) and
+  the skinned proxies (their animators learn that they are seen; cascades take the shadowed part of the view as their
+  receivers) in the frustum, and the meshes of unknown bounds. The CPU's walk (`CullView`) runs instead on a renderer's
+  first frames, after a camera cut (until feedback of a later frame arrives), whenever the mirror's tables changed since
+  the feedback's frame (an asset loaded, edited or dropped: its users were not seen with it), when the feedback is more
+  than 8 frames old, and once after a frame whose draws overflowed the slots the feedback foresaw (paths without a
+  GPU-written count bound each bucket's draws by the records of the meshes the feedback saw in view, plus a quarter and
+  16, and count what lies beyond as overflow). Feedback is a few frames late by design: a material no longer drawn is
+  requested until the GPU saw it go. `FindShadowCasters` still runs on the CPU for the cascades' depth ranges.
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same
   result on any number of threads), then sorted with a stable radix sort (`Core/RadixSort.h`) of 64-bit keys: cascade,
   alpha mask, winding, culling, mesh slot, submesh and level of detail. The sort reads the keys once to find the bytes

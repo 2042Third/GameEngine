@@ -322,6 +322,11 @@ namespace
 			Comparison comparison(indirect);
 			const PathFrame frame = comparison.Check(scene, camera);
 			CHECK(frame.Counts.Instances > 0);
+			// The GPU path's second frame takes its requests from the first one's visibility feedback, and looks at only
+			// the transparent and skinned proxies of the view itself: it draws the same.
+			CHECK_FALSE(comparison.GPU.GetStats().FeedbackRequests);
+			comparison.Check(scene, camera);
+			CHECK(comparison.GPU.GetStats().FeedbackRequests);
 			if (scene.GetService<ISkinningPoses>())
 			{
 				CHECK(frame.Counts.SkinnedInstances == 3);

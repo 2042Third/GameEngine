@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -93,6 +94,9 @@ namespace Strata
 		nvrhi::IBuffer* GetMaterialBuffer() const { return m_MaterialBuffer.Buffer; }
 		nvrhi::IBuffer* GetMaterialFlagBuffer() const { return m_MaterialFlagBuffer.Buffer; }
 
+		// Changes whenever an update built a mesh or material slot again: what was culled with an earlier version of the tables
+		// (visibility feedback) may be out of date.
+		uint64_t GetTablesVersion() const { return m_TablesVersion; }
 		// The tables as the buffers hold them after the latest update.
 		uint32_t GetMeshTableEntry(uint32_t slot) const { return slot < m_MeshTable.size() ? m_MeshTable[slot] : 0u; }
 		uint32_t GetMaterialFlags(uint32_t slot) const { return slot < m_MaterialFlags.size() ? m_MaterialFlags[slot] : 0u; }
@@ -105,6 +109,8 @@ namespace Strata
 		uint32_t GetArenaRecords(uint32_t arena) const { return m_ArenaRecords[arena]; }
 		bool HasDoubleSidedMaterials() const { return m_DoubleSidedMaterials > 0; }
 		bool HasAlphaMaskedMaterials() const { return m_AlphaMaskedMaterials > 0; }
+		// The material slots whose flags say transparent, in no order: the GPU's culling leaves their instances to the CPU.
+		std::span<const uint32_t> GetTransparentMaterialSlots() const { return m_TransparentSlots; }
 		// Changes whenever a buffer is replaced, to a value no mirror had before: binding sets made for another value are
 		// made again.
 		uint64_t GetBufferVersion() const { return m_BufferVersion; }
@@ -177,6 +183,7 @@ namespace Strata
 		bool m_HasAssets = false;               // m_Assets names the manager the tables were built from
 		uint64_t m_AssetContentVersion = 0;
 		uint64_t m_SlotsVersion = ~0ull;
+		uint64_t m_TablesVersion = 0;
 		bool m_UploadAllTables = false;         // An upload of the tables failed: the next one writes them whole
 		std::vector<AssetHandle> m_MeshSlotHandles;
 		std::vector<uint32_t> m_MeshTable;
@@ -193,6 +200,8 @@ namespace Strata
 		std::unordered_map<AssetHandle, std::vector<uint32_t>> m_TextureUsers; // Texture -> material slots naming it
 		uint32_t m_DoubleSidedMaterials = 0;
 		uint32_t m_AlphaMaskedMaterials = 0;
+		std::vector<uint32_t> m_TransparentSlots;
+		std::vector<uint32_t> m_TransparentPositions; // Per material slot: its place in m_TransparentSlots (~0: not listed)
 		GrowingBuffer m_MeshTableBuffer;
 		GrowingBuffer m_MaterialBuffer;
 		GrowingBuffer m_MaterialFlagBuffer;

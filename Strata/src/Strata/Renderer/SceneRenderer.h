@@ -137,6 +137,14 @@ namespace Strata
 		// instances within this many bytes per frame, at least one proxy per frame; the others wait, undrawn
 		// (SceneRendererStats::DeferredInstanceBytes). Changes of proxies already on the GPU always upload at once.
 		uint64_t NewInstanceBytesPerFrame = 16ull << 20;
+		// GPU-driven frames take their asset requests (and the screen sizes texture streaming follows) from the GPU's
+		// visibility feedback of a frame two or three frames earlier instead of walking the view's proxies on the CPU: what
+		// each mesh and material is used for, in the view (above HighPriorityScreenFraction or not), within PrefetchDistance
+		// or casting shadows. The CPU's marks still run on a renderer's first frames, after camera cuts
+		// (TextureStreamingPolicy::IsCameraCut), and after a frame whose draws overflowed the slots the feedback foresaw;
+		// meshes of unknown bounds, transparent surfaces and skinned proxies are always the CPU's. Off: the CPU's marks every
+		// frame.
+		bool VisibilityFeedback = true;
 	};
 
 	// A material the last frame drew, for streaming its textures at the resolution the screen needs.
@@ -228,6 +236,9 @@ namespace Strata
 		// InstancesPerLOD, SkinnedInstances, ShadowCasters and ShadowDrawCalls count only what the CPU drew (transparent
 		// surfaces). DrawCommands counts every draw call the CPU recorded.
 		bool GPUDriven = false;
+		// The frame's requests came from the GPU's visibility feedback (SceneRendererSpecification::VisibilityFeedback); its
+		// VisibleProxies and CulledInstances then count only the proxies the CPU still looked at.
+		bool FeedbackRequests = false;
 		uint32_t DrawCalls = 0;       // Draw calls of the forward passes (opaque and transparent)
 		uint32_t OpaqueDrawCalls = 0; // Of those, opaque batches: also the draw calls of the depth prepass
 		uint32_t ShadowDrawCalls = 0; // Draw calls into the shadow cascades
@@ -670,6 +681,21 @@ namespace Strata
 		// The proxies in the view frustum and in the prefetch distance, and the assets they need; meshes whose bounds are
 		// unknown are needed as if in view.
 		void CullView(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum);
+		// The marks of m_VisibleProxies (in the view): screen fractions, request priorities, animators and receivers.
+		void MarkVisibleProxies(RenderScene& renderScene, const SceneCamera& camera);
+		// Meshes whose bounds are unknown, requested as if in view while any of their proxies is active.
+		void MarkMeshesWithoutBounds(RenderScene& renderScene);
+		// The direction a camera looks in, and whether it jumped since the previous frame (no previous frame counts as a cut).
+		static glm::vec3 GetViewDirection(const SceneCamera& camera);
+		bool IsCameraCut(const SceneCamera& camera) const;
+		// Whether the frame takes its requests from the GPU's visibility feedback (SceneRendererSpecification::
+		// VisibilityFeedback): a GPU-driven frame with recent feedback of the render scene, culled after the latest camera cut
+		// with the mesh and material tables its GPU copy holds now (assets loaded or dropped since then were not seen), and
+		// no overflow since the CPU's marks last ran.
+		bool UsesFeedback(const RenderScene& renderScene) const;
+		// CullView's work on a feedback frame: the feedback's marks and screen sizes, and the proxies the CPU still looks at in
+		// the view (users of transparent materials, skinned proxies).
+		void ApplyFeedback(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum);
 		// Computes the cascades and finds the shadow casters of each; leaves ShadowParams.w at 0 without shadows. Reports the
 		// animators of skinned casters out of view whose shadows can fall on what the view shows (CanShadowView).
 		void FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, RenderData::FrameConstants& frame);
@@ -760,7 +786,8 @@ namespace Strata
 		uint32_t GetBucketSlots(uint32_t bucket) const;
 		// Whether the frame draws the mesh slot in its view (requested at Normal or High priority).
 		bool IsMeshInView(uint32_t slot) const;
-		// Reads the culling counters of completed frames into m_GPUStats (with `wait`, the latest frame's).
+		// Reads the culling counters of completed frames into m_GPUStats (with `wait`, the latest frame's), and their visibility
+		// feedback into m_Feedback.
 		void ResolveCullCounters(bool wait);
 		void CreateOverlayResources();
 		static bool HasOverlays(const SceneRenderOptions& options);
@@ -1032,9 +1059,37 @@ namespace Strata
 		{
 			Scope<BufferReadback> Readback;
 			uint64_t Render = 0; // The renderer's frame whose counters it holds (GetRenderCount)
+			// The frame's visibility feedback (RenderData::FeedbackRecord) when it wrote any, with the render scene and the
+			// version of its GPU copy's tables it was culled with, and the record places of its mesh and material parts.
+			Scope<BufferReadback> Feedback;
+			bool HasFeedback = false;
+			uint64_t RenderSceneId = 0;
+			uint64_t TablesVersion = 0;
+			uint32_t MeshSlots = 0;
+			uint32_t MaterialSlots = 0;
 		};
 		std::array<CounterReadback, c_GPURecordCount> m_CounterReadbacks;
 		uint32_t m_CounterReadbackIndex = 0;
+		nvrhi::ComputePipelineHandle m_CullFeedbackPipeline;
+		nvrhi::BufferHandle m_FeedbackMeshBuffer;     // Per mesh slot: pixels, use
+		nvrhi::BufferHandle m_FeedbackMaterialBuffer; // Per material slot: pixels, UV pixels, use, unused
+		nvrhi::BufferHandle m_FeedbackListBuffer;     // The touched slots (RenderData::c_FeedbackListHeader, then the lists)
+		nvrhi::BufferHandle m_FeedbackRecordBuffer;   // The packed records the readback copies
+		// The newest visibility feedback read back (ResolveCullCounters), which frames apply until a newer one arrives.
+		struct VisibilityFeedback
+		{
+			bool Valid = false;
+			uint64_t Render = 0;
+			uint64_t RenderSceneId = 0;
+			uint64_t TablesVersion = 0;
+			std::vector<RenderData::FeedbackRecord> Meshes;
+			std::vector<RenderData::FeedbackRecord> Materials;
+		};
+		VisibilityFeedback m_Feedback;
+		bool m_FeedbackFrame = false;      // The frame being rendered takes its requests from m_Feedback
+		uint64_t m_MarksRender = 0;        // The latest frame (RenderCount + 1 while rendering) that ran the CPU's marks
+		uint64_t m_CutRender = 0;          // The latest frame that followed a camera cut
+		std::vector<uint32_t> m_UserScratch;
 	};
 
 }

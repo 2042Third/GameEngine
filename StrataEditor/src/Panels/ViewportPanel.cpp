@@ -932,7 +932,8 @@ namespace Strata
 			fmt::format("extract {:.2f} ms, sort {:.2f} ms", stats.ExtractMs, stats.SortMs),
 			fmt::format("{:.1f} KB instances, {:.1f} KB materials uploaded", static_cast<double>(stats.InstanceBytesUploaded) / 1024.0,
 				static_cast<double>(stats.MaterialBytesUploaded) / 1024.0),
-			fmt::format("{} assets requested, {} prefetched, {} loading", stats.RequestsByVisibility, stats.PrefetchRequests, stats.PendingAssets),
+			fmt::format("{} assets requested{}, {} prefetched, {} loading", stats.RequestsByVisibility, stats.FeedbackRequests ? " (GPU feedback)" : "",
+				stats.PrefetchRequests, stats.PendingAssets),
 			view.FromScene ? std::string("Scene camera") : std::string("Editor camera")
 		};
 		// Numbers read best in the monospaced font.

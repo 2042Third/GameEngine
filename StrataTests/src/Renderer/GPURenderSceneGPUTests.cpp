@@ -308,7 +308,9 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 			Frame(gpu, [&]() { REQUIRE(renderer.Render(scene, camera)); });
 		}
 		CHECK(frames == 4);
-		CHECK(renderer.GetStats().VisibleProxies == GetDrawnCounts(renderer).Instances);
+		const DrawnCounts drawn = GetDrawnCounts(renderer);
+		CHECK(drawn.VisibleProxies == 1000);
+		CHECK(drawn.Instances == 1000);
 		CheckMirror(gpu, RenderScene::Get(scene), *mirror);
 
 		// Destroyed: its record holds zeros in the same frame.
@@ -455,7 +457,7 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		update = UpdateMirror(gpu, scene, assets);
 		CHECK(update.MaterialsBuilt == 1);
 		CHECK(update.MaterialBytes == sizeof(RenderData::MaterialData));
-		CHECK(mirror.GetMaterialFlags(texturedSlot) == MaterialGPU::GetFlags(textured));
+		CHECK(mirror.GetMaterialFlags(texturedSlot) == (MaterialGPU::GetFlags(textured) | RenderData::c_CullMaterialTextured));
 		CHECK(mirror.GetMaterialData(texturedSlot)->BaseColorMap == TextureTable::c_White);
 		CHECK(mirror.GetMaterialFlags(plainSlot) == defaultFlags);
 		CheckTables(gpu, mirror);

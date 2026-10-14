@@ -49,7 +49,7 @@ namespace
 		const SceneRendererStats& stats = renderer.GetStats();
 		const DrawnCounts drawn = GetDrawnCounts(renderer);
 		MESSAGE(name, ": ", measurement.CPU.MedianMs, " ms median, GPU ", measurement.GPU ? measurement.GPU->MedianMs : 0.0, " ms busy (",
-			std::string(stats.GPUDriven ? "GPU-driven, " : ""), drawn.Instances, " instances, ", drawn.Draws, " draws, ", stats.DrawCommands, " draw commands, ", drawn.Triangles,
+			std::string(stats.GPUDriven ? "GPU-driven, " : ""), std::string(stats.FeedbackRequests ? "requests from feedback, " : ""), drawn.Instances, " instances, ", drawn.Draws, " draws, ", stats.DrawCommands, " draw commands, ", drawn.Triangles,
 			" triangles, extract ", stats.ExtractMs, " ms, sort ", stats.SortMs, " ms; GPU timer ", measurement.TimerCostMs, " ms per frame)");
 		return measurement;
 	}
@@ -58,14 +58,14 @@ namespace
 
 TEST_SUITE("PerfGPU.Renderer")
 {
-	TEST_CASE("Render cost of 100,000 and 300,000 cubes and of 10,000 cubes with unique materials")
+	TEST_CASE("Render cost of 100,000, 300,000 and 1,000,000 cubes and of 10,000 cubes with unique materials")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		Perf::ScopedApplicationJobSystem jobs;
 		SceneTestAssets assets;
 
-		for (const size_t count : { size_t(100'000), size_t(300'000) })
+		for (const size_t count : { size_t(100'000), size_t(300'000), size_t(1'000'000) })
 		{
 			CAPTURE(count);
 			Scene scene("Cubes");
@@ -84,6 +84,20 @@ TEST_SUITE("PerfGPU.Renderer")
 					CHECK(renderer.GetStats().InstanceBytesUploaded == 0); // A still frame uploads nothing
 					return Perf::MetricValues { { "PerfGPU.Renderer.Render100kCubes", measurement.CPU.MedianMs },
 						{ "PerfGPU.Renderer.Render100kCubesGPU", Perf::MeasureGPU(measurement) }, { "PerfGPU.Renderer.GPUTimerCost", measurement.TimerCostMs } };
+				});
+				continue;
+			}
+			// A million: the GPU-driven path's CPU cost does not grow with the instances (its frames take their requests from
+			// the GPU's visibility feedback); far ones below half a pixel are left out of the draws.
+			if (count == 1'000'000)
+			{
+				Perf::CheckBudgetsConfirmed({ "PerfGPU.Renderer.Render1MCubes", "PerfGPU.Renderer.Render1MCubesGPU" }, [&]
+				{
+					const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(count), "1M cubes");
+					CHECK(GetDrawnCounts(renderer).VisibleProxies == count);
+					CHECK(renderer.GetStats().InstanceBytesUploaded == 0);
+					return Perf::MetricValues { { "PerfGPU.Renderer.Render1MCubes", measurement.CPU.MedianMs },
+						{ "PerfGPU.Renderer.Render1MCubesGPU", Perf::MeasureGPU(measurement) } };
 				});
 				continue;
 			}

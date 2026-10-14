@@ -66,7 +66,8 @@ namespace
 		return positions == filled.Positions && indices == filled.Indices;
 	}
 
-	// A layout of submeshes and levels for SetLayout: per submesh its base vertex and its levels' (index offset, count).
+	// A layout of submeshes and levels for SetLayout: per submesh its base vertex and its levels' (index offset, count); each
+	// submesh's UV density is made from its base vertex, so the tables tell submeshes apart.
 	struct TestLayout
 	{
 		std::vector<RenderData::GeometrySubmesh> Submeshes;
@@ -74,7 +75,8 @@ namespace
 
 		void AddSubmesh(uint32_t baseVertex, std::initializer_list<std::pair<uint32_t, uint32_t>> levels)
 		{
-			Submeshes.push_back(RenderData::GeometrySubmesh { baseVertex, static_cast<uint32_t>(LODs.size()), static_cast<uint32_t>(levels.size()), 0 });
+			Submeshes.push_back(RenderData::GeometrySubmesh { baseVertex, static_cast<uint32_t>(LODs.size()), static_cast<uint32_t>(levels.size()), 0,
+				glm::vec4(0.5f + static_cast<float>(baseVertex), 1.0f, 2.0f, 0.0f) });
 			for (const auto& [offset, count] : levels)
 				LODs.push_back(RenderData::GeometryLOD { offset, count, baseVertex, 0 });
 		}
@@ -123,6 +125,7 @@ namespace
 				const RenderData::GeometrySubmesh& submesh = submeshes[entry.FirstSubmesh + index];
 				const RenderData::GeometrySubmesh& expected = layout.Submeshes[index];
 				CHECK(submesh.BaseVertex == expected.BaseVertex);
+				CHECK(submesh.UVDensity == expected.UVDensity);
 				REQUIRE(submesh.LODCount == expected.LODCount);
 				for (uint32_t level = 0; level < submesh.LODCount; level++)
 				{

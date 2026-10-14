@@ -400,7 +400,12 @@ namespace Strata
 			m_MaterialOverrides[proxy] = renderer.Material;
 			m_OverrideSlots[proxy] = renderer.Material.IsValid() ? AcquireMaterial(renderer.Material) : c_InvalidIndex;
 			if (previous != c_InvalidIndex)
+			{
+				RemoveOverrideUser(previous, proxy);
 				ReleaseMaterial(previous);
+			}
+			if (m_OverrideSlots[proxy] != c_InvalidIndex)
+				AddOverrideUser(m_OverrideSlots[proxy], proxy);
 			changed = true;
 		}
 		const uint32_t castShadows = renderer.CastShadows ? RenderProxyFlags::CastShadows : 0u;
@@ -465,6 +470,7 @@ namespace Strata
 			m_MeshUserPositions.push_back(c_InvalidIndex);
 			m_MaterialOverrides.push_back(UUID::Null());
 			m_OverrideSlots.push_back(c_InvalidIndex);
+			m_OverrideUserPositions.push_back(c_InvalidIndex);
 			m_FirstInstances.push_back(0);
 			m_InstanceCounts.push_back(0);
 			m_SkinIndices.push_back(c_InvalidIndex);
@@ -506,7 +512,10 @@ namespace Strata
 			ReleaseMesh(m_MeshSlots[proxy], proxy);
 		m_MeshSlots[proxy] = c_InvalidIndex;
 		if (m_OverrideSlots[proxy] != c_InvalidIndex)
+		{
+			RemoveOverrideUser(m_OverrideSlots[proxy], proxy);
 			ReleaseMaterial(m_OverrideSlots[proxy]);
+		}
 		m_OverrideSlots[proxy] = c_InvalidIndex;
 		// Without its Skin flag the proxy loses its skin entry (and its palette, were it posed).
 		m_Flags[proxy] &= ~RenderProxyFlags::Skin;
@@ -657,6 +666,7 @@ namespace Strata
 		if (!entry.Users.empty())
 			return;
 
+		UnlinkMeshMaterials(slot);
 		for (const uint32_t materialSlot : entry.SubmeshMaterialSlots)
 			ReleaseMaterial(materialSlot);
 		m_MeshSlotsByHandle.erase(entry.Handle);
@@ -706,7 +716,7 @@ namespace Strata
 			slot = static_cast<uint32_t>(m_Materials.size());
 			m_Materials.emplace_back();
 		}
-		m_Materials[slot] = MaterialEntry { handle, 1 };
+		m_Materials[slot] = MaterialEntry { handle, 1, {}, {} };
 		m_MaterialSlotsByHandle.emplace(handle, slot);
 		m_Stats.Materials++;
 		m_SlotsVersion++;
@@ -719,11 +729,92 @@ namespace Strata
 		ST_CORE_ASSERT(entry.References > 0, "RenderScene: material slot {} released more often than acquired", slot);
 		if (--entry.References > 0)
 			return;
+		ST_CORE_ASSERT(entry.OverrideUsers.empty() && entry.Meshes.empty(), "RenderScene: material slot {} released while users name it", slot);
 		m_MaterialSlotsByHandle.erase(entry.Handle);
 		entry = MaterialEntry();
 		m_FreeMaterials.push_back(slot);
 		m_Stats.Materials--;
 		m_SlotsVersion++;
+	}
+
+	void RenderScene::LinkMeshMaterials(uint32_t slot)
+	{
+		MeshEntry& entry = m_Meshes[slot];
+		ST_CORE_ASSERT(entry.Materials.empty(), "RenderScene: mesh slot {} is linked to its materials twice", slot);
+		for (const uint32_t materialSlot : entry.SubmeshMaterialSlots)
+		{
+			if (std::find(entry.Materials.begin(), entry.Materials.end(), materialSlot) != entry.Materials.end())
+				continue;
+			std::vector<uint32_t>& meshes = m_Materials[materialSlot].Meshes;
+			entry.Materials.push_back(materialSlot);
+			entry.MaterialPositions.push_back(static_cast<uint32_t>(meshes.size()));
+			meshes.push_back(slot);
+		}
+	}
+
+	void RenderScene::UnlinkMeshMaterials(uint32_t slot)
+	{
+		MeshEntry& entry = m_Meshes[slot];
+		for (size_t index = 0; index < entry.Materials.size(); index++)
+		{
+			// The list's last mesh takes this one's place.
+			std::vector<uint32_t>& meshes = m_Materials[entry.Materials[index]].Meshes;
+			const uint32_t position = entry.MaterialPositions[index];
+			const uint32_t moved = meshes.back();
+			meshes[position] = moved;
+			meshes.pop_back();
+			if (moved != slot)
+			{
+				MeshEntry& movedEntry = m_Meshes[moved];
+				for (size_t other = 0; other < movedEntry.Materials.size(); other++)
+				{
+					if (movedEntry.Materials[other] == entry.Materials[index])
+					{
+						movedEntry.MaterialPositions[other] = position;
+						break;
+					}
+				}
+			}
+		}
+		entry.Materials.clear();
+		entry.MaterialPositions.clear();
+	}
+
+	void RenderScene::AddOverrideUser(uint32_t materialSlot, uint32_t proxy)
+	{
+		std::vector<uint32_t>& users = m_Materials[materialSlot].OverrideUsers;
+		m_OverrideUserPositions[proxy] = static_cast<uint32_t>(users.size());
+		users.push_back(proxy);
+	}
+
+	void RenderScene::RemoveOverrideUser(uint32_t materialSlot, uint32_t proxy)
+	{
+		std::vector<uint32_t>& users = m_Materials[materialSlot].OverrideUsers;
+		const uint32_t position = m_OverrideUserPositions[proxy];
+		const uint32_t moved = users.back();
+		users[position] = moved;
+		m_OverrideUserPositions[moved] = position;
+		users.pop_back();
+		m_OverrideUserPositions[proxy] = c_InvalidIndex;
+	}
+
+	void RenderScene::CollectMaterialUsers(std::span<const uint32_t> materialSlots, std::vector<uint32_t>& outProxies) const
+	{
+		for (const uint32_t materialSlot : materialSlots)
+		{
+			if (materialSlot >= m_Materials.size())
+				continue;
+			const MaterialEntry& material = m_Materials[materialSlot];
+			outProxies.insert(outProxies.end(), material.OverrideUsers.begin(), material.OverrideUsers.end());
+			for (const uint32_t meshSlot : material.Meshes)
+			{
+				for (const uint32_t proxy : m_Meshes[meshSlot].Users)
+				{
+					if (m_OverrideSlots[proxy] == c_InvalidIndex)
+						outProxies.push_back(proxy);
+				}
+			}
+		}
 	}
 
 	uint32_t RenderScene::SetMeshLayout(uint32_t slot, const Mesh& mesh, uint64_t sourceRevision)
@@ -743,10 +834,12 @@ namespace Strata
 		materialSlots.reserve(materials.size());
 		for (const AssetHandle material : materials)
 			materialSlots.push_back(AcquireMaterial(material));
+		UnlinkMeshMaterials(slot);
 		for (const uint32_t materialSlot : entry.SubmeshMaterialSlots)
 			ReleaseMaterial(materialSlot);
 		entry.SubmeshMaterials = std::move(materials);
 		entry.SubmeshMaterialSlots = std::move(materialSlots);
+		LinkMeshMaterials(slot);
 		entry.Bounds = mesh.GetBounds();
 		entry.Skin = mesh.GetSkinBinding();
 		entry.SkinJointsNeeded = 0;
@@ -874,6 +967,7 @@ namespace Strata
 	void RenderScene::ForgetMeshLayout(uint32_t slot)
 	{
 		MeshEntry& entry = m_Meshes[slot];
+		UnlinkMeshMaterials(slot);
 		for (const uint32_t materialSlot : entry.SubmeshMaterialSlots)
 			ReleaseMaterial(materialSlot);
 		entry.SubmeshMaterials.clear();
@@ -1402,6 +1496,47 @@ namespace Strata
 		}
 		if (withoutBounds != m_MeshesWithoutBounds.size())
 			return fail(fmt::format("{} meshes are listed without bounds instead of {}", m_MeshesWithoutBounds.size(), withoutBounds));
+
+		// The material users: each proxy with an override in its material's list, each mesh in the lists of its submeshes'
+		// distinct materials, and nothing else in them.
+		std::vector<size_t> overrideUsers(m_Materials.size(), 0);
+		std::vector<size_t> materialMeshes(m_Materials.size(), 0);
+		for (uint32_t proxy = 0; proxy < m_Entities.size(); proxy++)
+		{
+			const uint32_t overrideSlot = m_OverrideSlots[proxy];
+			if (m_Entities[proxy] == entt::null || overrideSlot == c_InvalidIndex)
+				continue;
+			const std::vector<uint32_t>& users = m_Materials[overrideSlot].OverrideUsers;
+			const uint32_t position = m_OverrideUserPositions[proxy];
+			if (position >= users.size() || users[position] != proxy)
+				return fail(fmt::format("proxy {} is missing from the override users of material slot {}", proxy, overrideSlot));
+			overrideUsers[overrideSlot]++;
+		}
+		for (uint32_t slot = 0; slot < m_Meshes.size(); slot++)
+		{
+			const MeshEntry& mesh = m_Meshes[slot];
+			std::vector<uint32_t> distinct;
+			for (const uint32_t materialSlot : mesh.SubmeshMaterialSlots)
+			{
+				if (std::find(distinct.begin(), distinct.end(), materialSlot) == distinct.end())
+					distinct.push_back(materialSlot);
+			}
+			if (distinct != mesh.Materials || mesh.MaterialPositions.size() != mesh.Materials.size())
+				return fail(fmt::format("mesh slot {} lists other materials than its submeshes use", slot));
+			for (size_t index = 0; index < mesh.Materials.size(); index++)
+			{
+				const std::vector<uint32_t>& meshes = m_Materials[mesh.Materials[index]].Meshes;
+				if (mesh.MaterialPositions[index] >= meshes.size() || meshes[mesh.MaterialPositions[index]] != slot)
+					return fail(fmt::format("mesh slot {} is missing from the meshes of material slot {}", slot, mesh.Materials[index]));
+				materialMeshes[mesh.Materials[index]]++;
+			}
+		}
+		for (uint32_t slot = 0; slot < m_Materials.size(); slot++)
+		{
+			if (m_Materials[slot].OverrideUsers.size() != overrideUsers[slot] || m_Materials[slot].Meshes.size() != materialMeshes[slot])
+				return fail(fmt::format("material slot {} lists {} override users and {} meshes instead of {} and {}", slot, m_Materials[slot].OverrideUsers.size(),
+					m_Materials[slot].Meshes.size(), overrideUsers[slot], materialMeshes[slot]));
+		}
 		return true;
 	}
 

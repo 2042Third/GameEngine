@@ -1794,6 +1794,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `AddGPUCounts` adds them to a frame's `SceneRendererStats` for display (`renderStats`, the viewport's statistics).
   `SceneRendererStats` of a GPU-driven frame (`GPUDriven`) counts only what the CPU drew (transparent surfaces), and
   `GetOpaqueBatches`, `GetShadowBatches` and the shadow draw list are empty.
+- Requests on the GPU path follow the GPU's visibility feedback, 2-3 frames late (`SceneRendererSpecification::
+  VisibilityFeedback`, `SceneRendererStats::FeedbackRequests`, `renderStats.feedbackRequests`; Docs/Architecture.md,
+  "Render scene"). Feedback marks exactly what the CPU's walk of the view marks (`GPU.SceneRenderer.Feedback` compares the
+  two): a change to the CPU's marks (`CullView`, `FindShadowCasters`) or to how texture streaming measures surfaces
+  (`TextureStreamingPolicy`) changes `Cull.comp` and `Include/TextureStreaming.glsl` with it. Tests that check a frame's
+  requests in the frame its scene changed either wait for the feedback to see the change or set `VisibilityFeedback`
+  off; the CPU still walks transparent users (`RenderScene::CollectMaterialUsers`) and skinned proxies itself.
 - Buckets the frame cannot have get no storage: the CPU lists the present ones (mirrored proxies, double-sided and
   alpha-masked materials, the arenas of its meshes, posed proxies; `RenderSceneStats::MirroredProxies`, `PosedProxies`)
   and gives each a dense index; a bucket's draw slots are its arena's LOD records among the meshes the CPU's marks found

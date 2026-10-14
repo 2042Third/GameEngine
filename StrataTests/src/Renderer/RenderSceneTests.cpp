@@ -867,6 +867,80 @@ TEST_SUITE("Renderer.RenderScene")
 		CheckProxies(renderScene);
 	}
 
+	TEST_CASE("A material's users are found by their override and through the layouts of their meshes, and follow edits")
+	{
+		Scene scene("Users");
+		constexpr AssetHandle c_Override(0xC1);
+		constexpr AssetHandle c_Parted(0xC2);
+		Entity overridden = AddCube(scene, glm::vec3(0.0f), c_Override);
+		Entity plain = AddCube(scene, glm::vec3(2.0f));
+		Entity parted = AddCube(scene, glm::vec3(4.0f), UUID::Null(), c_Parted);
+		Entity partedOverridden = AddCube(scene, glm::vec3(6.0f), c_Override, c_Parted);
+		RenderScene& renderScene = RenderScene::Get(scene);
+		renderScene.Sync(nullptr);
+		// The layouts give the meshes their submesh materials: the cube's default material, the parted cube's 0xA1-0xA3.
+		const uint32_t cubeSlot = renderScene.FindMeshSlot(BuiltinAssets::CubeMesh);
+		const uint32_t partedSlot = renderScene.FindMeshSlot(c_Parted);
+		REQUIRE(cubeSlot != RenderScene::c_InvalidIndex);
+		REQUIRE(partedSlot != RenderScene::c_InvalidIndex);
+		renderScene.SetMeshLayout(cubeSlot, *MeshFactory::CreateCube(), 1);
+		renderScene.SetMeshLayout(partedSlot, *CreatePartedCube(1.0f, 3), 1);
+		CheckProxies(renderScene);
+
+		const auto users = [&](std::initializer_list<AssetHandle> materials)
+		{
+			std::vector<uint32_t> slots;
+			for (const AssetHandle material : materials)
+			{
+				const uint32_t slot = renderScene.FindMaterialSlot(material);
+				REQUIRE(slot != RenderScene::c_InvalidIndex);
+				slots.push_back(slot);
+			}
+			std::vector<uint32_t> proxies;
+			renderScene.CollectMaterialUsers(slots, proxies);
+			std::vector<entt::entity> entities;
+			for (const uint32_t proxy : proxies)
+				entities.push_back(renderScene.GetEntity(proxy));
+			std::sort(entities.begin(), entities.end());
+			return entities;
+		};
+		const auto sorted = [](std::vector<Entity> entities)
+		{
+			std::vector<entt::entity> handles;
+			for (const Entity entity : entities)
+				handles.push_back(entity.GetHandle());
+			std::sort(handles.begin(), handles.end());
+			return handles;
+		};
+		CHECK(users({ c_Override }) == sorted({ overridden, partedOverridden }));
+		CHECK(users({ BuiltinAssets::DefaultMaterial }) == sorted({ plain }));
+		CHECK(users({ AssetHandle(0xA2) }) == sorted({ parted }));
+		// A mesh using several of the slots names its users once per slot.
+		CHECK(users({ AssetHandle(0xA1), AssetHandle(0xA3) }) == sorted({ parted, parted }));
+
+		// Without its override the parted cube's other user draws the parted materials; destroyed, the plain one draws none.
+		partedOverridden.GetComponent<MeshRendererComponent>().Material = UUID::Null();
+		partedOverridden.MarkModified<MeshRendererComponent>();
+		scene.DestroyEntity(plain);
+		renderScene.Sync(nullptr);
+		CheckProxies(renderScene);
+		CHECK(users({ c_Override }) == sorted({ overridden }));
+		CHECK(users({ AssetHandle(0xA2) }) == sorted({ parted, partedOverridden }));
+		CHECK(users({ BuiltinAssets::DefaultMaterial }).empty());
+
+		// A new layout links the mesh to its new materials only.
+		renderScene.SetMeshLayout(partedSlot, *CreatePartedCube(1.0f, 2, 0xB1), 2);
+		CheckProxies(renderScene);
+		CHECK(renderScene.FindMaterialSlot(AssetHandle(0xA2)) == RenderScene::c_InvalidIndex);
+		CHECK(users({ AssetHandle(0xB2) }) == sorted({ parted, partedOverridden }));
+		scene.DestroyEntity(parted);
+		scene.DestroyEntity(partedOverridden);
+		renderScene.Sync(nullptr);
+		CheckProxies(renderScene);
+		CHECK(renderScene.FindMaterialSlot(AssetHandle(0xB2)) == RenderScene::c_InvalidIndex);
+		CHECK(users({ c_Override }) == sorted({ overridden }));
+	}
+
 	TEST_CASE("Renderers that fall behind the bounded change log upload everything")
 	{
 		Scene scene("Changes");

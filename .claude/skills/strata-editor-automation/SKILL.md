@@ -386,7 +386,9 @@ cheaper to draw), `"cpu"` (the CPU's frame time does: look at `stages`), `"cappe
 pace: neither is the limit) or `"unknown"` (no GPU times: `--no-gpu`, or a driver without timestamps). Its `renderStats`
 (and every `viewport.capture` result's, for the captured frame) says what a frame drew: `gpuDriven` (the GPU culled it
 and built its draws: its counts are the GPU's, of a frame 2-3 frames older in `editor.perf` and of the captured frame in
-captures, once `gpuCounts` is true), `drawCommands` (draw calls the CPU recorded: a few per pass however large the scene
+captures, once `gpuCounts` is true), `feedbackRequests` (its asset requests came from the GPU's visibility feedback of a
+frame 2-3 frames older: the CPU walks the view itself only on first frames, camera cuts and frames after assets loaded),
+`drawCommands` (draw calls the CPU recorded: a few per pass however large the scene
 on the GPU-driven path), `draws` (instanced draws of the view), `opaqueDraws`, `shadowDraws`, `instances`,
 `shadowCasters`, `triangles`, `visibleProxies`, `culledProxies`, `sizeCulledProxies` (in view but below half a pixel),
 `occludedProxies`, `instancesPerLod`, `lights`, `droppedLights`, `materials`, `pendingAssets`, `extractMs`, `sortMs`,

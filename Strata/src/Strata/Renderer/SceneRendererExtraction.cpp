@@ -257,6 +257,27 @@ namespace Strata
 		const SpatialIndex& index = renderScene.GetSpatialIndex();
 		m_VisibleProxies.clear();
 		index.QueryFrustum(frustum, m_VisibleProxies);
+		MarkVisibleProxies(renderScene, camera);
+		MarkMeshesWithoutBounds(renderScene);
+
+		// Prefetch what is near the camera but outside the view.
+		if (!(m_Specification.PrefetchDistance > 0.0f))
+			return;
+		m_QueryScratch.clear();
+		index.QuerySphere(camera.Position, m_Specification.PrefetchDistance, m_QueryScratch);
+		for (const uint32_t proxy : m_QueryScratch)
+		{
+			if (m_ProxyStamps[proxy] == m_FrameStamp)
+				continue;
+			const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(proxy);
+			MarkMesh(renderScene.GetMeshSlot(proxy), c_UsePrefetch | (overrideSlot == RenderScene::c_InvalidIndex ? c_UsePrefetch << c_SubmeshMaterialsShift : 0u));
+			if (overrideSlot != RenderScene::c_InvalidIndex)
+				MarkMaterial(overrideSlot, c_UsePrefetch);
+		}
+	}
+
+	void SceneRenderer::MarkVisibleProxies(RenderScene& renderScene, const SceneCamera& camera)
+	{
 		const uint32_t visible = static_cast<uint32_t>(m_VisibleProxies.size());
 		m_Stats.VisibleProxies = visible;
 		m_Stats.CulledInstances = renderScene.GetStats().IndexedProxies - visible;
@@ -308,7 +329,10 @@ namespace Strata
 			m_VisibleAnimators.insert(m_VisibleAnimators.end(), m_Chunks[chunk].Animators.begin(), m_Chunks[chunk].Animators.end());
 			m_VisibleReceivers.Expand(m_Chunks[chunk].Receivers);
 		}
+	}
 
+	void SceneRenderer::MarkMeshesWithoutBounds(RenderScene& renderScene)
+	{
 		// A mesh whose bounds are unknown (never loaded, none recorded) may be anywhere, in view too, whatever the
 		// placeholder bounds of its proxies say: it is requested as if in view while any of them is active, until it loads
 		// and its layout gives them real bounds.
@@ -319,21 +343,50 @@ namespace Strata
 			MarkMesh(slot, c_UseView);
 			m_Stats.MeshesWithoutBounds++;
 		}
+	}
 
-		// Prefetch what is near the camera but outside the view.
-		if (!(m_Specification.PrefetchDistance > 0.0f))
-			return;
-		m_QueryScratch.clear();
-		index.QuerySphere(camera.Position, m_Specification.PrefetchDistance, m_QueryScratch);
-		for (const uint32_t proxy : m_QueryScratch)
+	void SceneRenderer::ApplyFeedback(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum)
+	{
+		ST_PROFILE_FUNCTION();
+		ST_PROFILE_STAGE("Render.Extract");
+		// The slots the feedback's frame touched, as it used them (its culling ran with the mesh and material tables the scene's
+		// GPU copy holds now: UsesFeedback).
+		const uint32_t meshSlots = renderScene.GetMeshSlotCapacity();
+		const uint32_t materialSlots = renderScene.GetMaterialSlotCapacity();
+		for (const RenderData::FeedbackRecord& record : m_Feedback.Meshes)
 		{
-			if (m_ProxyStamps[proxy] == m_FrameStamp)
+			if (record.Slot >= meshSlots || !renderScene.GetMeshHandle(record.Slot).IsValid() || (record.Use & c_UseMask) == 0)
 				continue;
-			const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(proxy);
-			MarkMesh(renderScene.GetMeshSlot(proxy), c_UsePrefetch | (overrideSlot == RenderScene::c_InvalidIndex ? c_UsePrefetch << c_SubmeshMaterialsShift : 0u));
-			if (overrideSlot != RenderScene::c_InvalidIndex)
-				MarkMaterial(overrideSlot, c_UsePrefetch);
+			MarkMesh(record.Slot, record.Use & c_UseMask);
 		}
+		for (const RenderData::FeedbackRecord& record : m_Feedback.Materials)
+		{
+			if (record.Slot >= materialSlots || !renderScene.GetMaterialHandle(record.Slot).IsValid() || (record.Use & c_UseMask) == 0)
+				continue;
+			MarkMaterial(record.Slot, record.Use & c_UseMask);
+			// Sizes as GatherDraws records them for drawn instances (the GPU's are of its drawn instances).
+			if (std::isfinite(record.Pixels) && record.Pixels > 0.0f)
+				m_MaterialPixelSizes[record.Slot] = std::max(m_MaterialPixelSizes[record.Slot], record.Pixels);
+			if (record.UVPixels > 0.0f && !std::isnan(record.UVPixels))
+				m_MaterialUVPixels[record.Slot] = std::max(m_MaterialUVPixels[record.Slot], record.UVPixels);
+		}
+
+		// What the CPU still draws or tells in the view: the users of transparent materials (drawn sorted), and skinned
+		// proxies (their animators learn that they are seen). The spatial index's test, proxy by proxy.
+		m_UserScratch.clear();
+		renderScene.CollectMaterialUsers(m_SceneGPU->GetTransparentMaterialSlots(), m_UserScratch);
+		for (uint32_t index = 0; index < renderScene.GetSkinProxyCount(); index++)
+			m_UserScratch.push_back(renderScene.GetSkinProxy(index));
+		std::sort(m_UserScratch.begin(), m_UserScratch.end());
+		m_UserScratch.erase(std::unique(m_UserScratch.begin(), m_UserScratch.end()), m_UserScratch.end());
+		m_VisibleProxies.clear();
+		for (const uint32_t proxy : m_UserScratch)
+		{
+			if ((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Indexed) != 0 && frustum.IsAABBVisible(renderScene.GetWorldBounds(proxy)))
+				m_VisibleProxies.push_back(proxy);
+		}
+		MarkVisibleProxies(renderScene, camera);
+		MarkMeshesWithoutBounds(renderScene);
 	}
 
 	void SceneRenderer::FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, RenderData::FrameConstants& frame)
@@ -456,7 +509,9 @@ namespace Strata
 		std::array<glm::vec4, 7> viewPlanes = {};
 		if (skins)
 		{
-			receivers = m_VisibleReceivers;
+			// A feedback frame looked at some of the visible proxies only: the shadowed part of the view stands in for the
+			// receivers (conservative).
+			receivers = m_FeedbackFrame ? shadowedView : m_VisibleReceivers;
 			receivers.Min = glm::max(receivers.Min, shadowedView.Min);
 			receivers.Max = glm::min(receivers.Max, shadowedView.Max);
 			for (size_t plane = 0; plane < 6; plane++)

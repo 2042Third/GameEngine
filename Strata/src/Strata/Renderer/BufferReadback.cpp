@@ -57,14 +57,14 @@ namespace Strata
 			m_Device->waitEventQuery(m_Query);
 	}
 
-	bool BufferReadback::Read(void* destination, uint64_t bytes) const
+	bool BufferReadback::Read(void* destination, uint64_t bytes, uint64_t offset) const
 	{
-		if (!IsReady())
+		if (!IsReady() || offset > m_RecordedBytes)
 			return false;
 		const void* mapped = m_Device->mapBuffer(m_Staging, nvrhi::CpuAccessMode::Read);
 		if (!mapped)
 			return false;
-		std::memcpy(destination, mapped, static_cast<size_t>(std::min(bytes, m_RecordedBytes)));
+		std::memcpy(destination, static_cast<const uint8_t*>(mapped) + offset, static_cast<size_t>(std::min(bytes, m_RecordedBytes - offset)));
 		m_Device->unmapBuffer(m_Staging);
 		return true;
 	}
