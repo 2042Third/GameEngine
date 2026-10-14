@@ -49,6 +49,12 @@ namespace Strata
 		// Appends a copy of a component of the type (as ComponentInfo::Get returns it; tag components may pass null) and
 		// returns the copy's address (a shared instance for tag components, which carry no data).
 		virtual const void* Append(const void* component) = 0;
+		// Appends a value as the type constructs it by default, for readers that fill values in place (At), and returns its
+		// index. The addresses of the values may change with later appends beyond the room Reserve made: readers take them
+		// once every value is appended.
+		virtual size_t AppendDefault() = 0;
+		// The value at `index` (the shared instance for tag components).
+		virtual void* At(size_t index) = 0;
 		// The bytes the values occupy (not what they own on the heap).
 		virtual uint64_t GetMemoryUsage() const = 0;
 	};
@@ -69,14 +75,30 @@ namespace Strata
 			const void* Append([[maybe_unused]] const void* component) override
 			{
 				if constexpr (std::is_empty_v<T>)
+					return &GetTagInstance();
+				else
+					return &m_Values.emplace_back(*static_cast<const T*>(component));
+			}
+
+			size_t AppendDefault() override
+			{
+				if constexpr (std::is_empty_v<T>)
 				{
-					static T s_Instance;
-					return &s_Instance;
+					return 0;
 				}
 				else
 				{
-					return &m_Values.emplace_back(*static_cast<const T*>(component));
+					m_Values.emplace_back();
+					return m_Values.size() - 1;
 				}
+			}
+
+			void* At([[maybe_unused]] size_t index) override
+			{
+				if constexpr (std::is_empty_v<T>)
+					return &GetTagInstance();
+				else
+					return &m_Values[index];
 			}
 
 			uint64_t GetMemoryUsage() const override
@@ -85,6 +107,12 @@ namespace Strata
 					return 0;
 				else
 					return m_Values.capacity() * sizeof(T);
+			}
+		private:
+			static T& GetTagInstance()
+			{
+				static T s_Instance;
+				return s_Instance;
 			}
 		private:
 			// Unused for tag components.

@@ -44,8 +44,9 @@ namespace Strata
 
 		// Compiles the entities of a scene (a copy: the scene can go afterwards). Any thread, while nothing changes the scene.
 		static Ref<EntityPrototype> Compile(const Scene& scene);
-		// Reads a snapshot ({"Entities": [...]}, SceneSerializer::SerializeEntities) and compiles it. Null, with the error,
-		// when the entity data is invalid; what it could not read as written goes to outWarnings.
+		// Reads a snapshot ({"Entities": [...]}, SceneSerializer::SerializeEntities) into a prototype (EntityPrototypeBuilder,
+		// no scene). Null, with the error, when the entity data is invalid; what it could not read as written goes to
+		// outWarnings.
 		static Ref<EntityPrototype> FromSnapshot(const nlohmann::json& snapshot, std::string* outError = nullptr,
 			std::vector<std::string>* outWarnings = nullptr);
 
@@ -76,6 +77,11 @@ namespace Strata
 		uint64_t GetMemoryUsage() const { return m_MemoryUsage; }
 	private:
 		friend class Scene;
+		friend class EntityPrototypeBuilder;
+
+		// Once the entities, their components and values are in place: the references between the entities, and the memory.
+		void FindReferences();
+		void ComputeMemoryUsage();
 
 		// An entity-typed property of a component (or a script field of entity type) whose value names an entity of the
 		// prototype: a copy with fresh IDs points it at the copy of that entity.

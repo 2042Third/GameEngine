@@ -10,8 +10,10 @@
 #include "Strata/Core/Hash.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/PropertyJson.h"
+#include "Strata/Scene/ComponentAccess.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/EntityPrototype.h"
 #include "Strata/Scene/EntitySink.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
@@ -769,5 +771,185 @@ TEST_SUITE("Scene.Documents")
 		CHECK_FALSE(read.Success);
 		CHECK(read.Result.Cancelled);
 		CHECK(read.Loaded->GetEntityCount() == 0);
+	}
+}
+
+namespace
+{
+
+	// The scene's document with each entity's ID replaced by its place in hierarchy order: scenes instantiated from equal
+	// prototypes with fresh IDs compare equal, references between their entities (properties and script fields) included.
+	std::string DescribeByPlace(const Scene& scene)
+	{
+		std::string text = JsonUtils::Dump(SceneSerializer::Serialize(scene));
+		size_t place = 0;
+		for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
+		{
+			const std::string id = entity.GetUUID().ToString();
+			const std::string name = fmt::format("Entity#{}", place++);
+			for (size_t found = text.find(id); found != std::string::npos; found = text.find(id, found + name.size()))
+				text.replace(found, id.size(), name);
+		}
+		return text;
+	}
+
+	std::string InstantiateAndDescribe(const Ref<EntityPrototype>& prototype)
+	{
+		Scene scene("Instances");
+		std::string error;
+		INFO(error);
+		REQUIRE_FALSE(scene.Instantiate(prototype, InstantiationOptions {}, &error).empty());
+		return DescribeByPlace(scene);
+	}
+
+	// Two prototypes hold the same entities in the same order: IDs, parents, components and their values, unknown components,
+	// and the references between their entities (which instances point at the copies).
+	void CheckSamePrototype(const Ref<EntityPrototype>& built, const Ref<EntityPrototype>& compiled)
+	{
+		REQUIRE(built);
+		REQUIRE(compiled);
+		REQUIRE(built->GetEntityCount() == compiled->GetEntityCount());
+		CHECK(std::ranges::equal(built->GetParentIndices(), compiled->GetParentIndices()));
+		CHECK(std::ranges::equal(built->GetTopLevelIndices(), compiled->GetTopLevelIndices()));
+		for (size_t index = 0; index < built->GetEntityCount(); index++)
+		{
+			CAPTURE(index);
+			CHECK(built->GetEntityID(index) == compiled->GetEntityID(index));
+			CHECK(built->FindEntity(built->GetEntityID(index)) == index);
+			const std::span<const ComponentInfo* const> builtInfos = built->GetComponents(index);
+			REQUIRE(std::ranges::equal(builtInfos, compiled->GetComponents(index)));
+			for (size_t slot = 0; slot < builtInfos.size(); slot++)
+			{
+				CAPTURE(builtInfos[slot]->Name);
+				CHECK(ComponentAccess::Serialize(*builtInfos[slot], built->GetComponentValues(index)[slot])
+					== ComponentAccess::Serialize(*builtInfos[slot], compiled->GetComponentValues(index)[slot]));
+			}
+			const nlohmann::json* builtUnknown = built->GetUnknownComponents(index);
+			const nlohmann::json* compiledUnknown = compiled->GetUnknownComponents(index);
+			REQUIRE((builtUnknown == nullptr) == (compiledUnknown == nullptr));
+			if (builtUnknown)
+				CHECK(*builtUnknown == *compiledUnknown);
+		}
+		CHECK(built->Serialize() == compiled->Serialize());
+		CHECK(InstantiateAndDescribe(built) == InstantiateAndDescribe(compiled));
+	}
+
+	// What EntityPrototype::Compile makes of a snapshot read into a scene (the way prototypes were made before
+	// EntityPrototypeBuilder), with the warnings of that read.
+	Ref<EntityPrototype> CompileThroughScene(const nlohmann::json& snapshot, std::vector<std::string>& outWarnings, std::string& outError)
+	{
+		Scene scene("Prototype");
+		EntityInstantiationOptions options;
+		options.GenerateNewUUIDs = false;
+		SceneSerializer::DeserializeEntities(scene, snapshot, options, &outError, &outWarnings);
+		return outError.empty() ? EntityPrototype::Compile(scene) : nullptr;
+	}
+
+	std::span<const uint8_t> AsBytes(const std::string& text)
+	{
+		return std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+	}
+
+}
+
+TEST_SUITE("Scene.Documents")
+{
+	TEST_CASE("EntityPrototypeBuilder makes what EntityPrototype::Compile makes of the document read into a scene, with the same reports")
+	{
+		const Ref<Scene> feature = LoadFeatureScene();
+		AddUnknownComponents(*feature, feature->GetEntityByUUID(feature->GetRootEntities().front()));
+		std::vector<Entity> roots;
+		for (const UUID root : feature->GetRootEntities())
+			roots.push_back(feature->GetEntityByUUID(root));
+		nlohmann::json snapshot = SceneSerializer::SerializeEntities(*feature, roots);
+		REQUIRE(snapshot["Entities"].size() == feature->GetEntityCount());
+
+		std::vector<std::string> builtWarnings;
+		std::vector<std::string> compiledWarnings;
+		std::string builtError;
+		std::string compiledError;
+		CheckSamePrototype(EntityPrototype::FromSnapshot(snapshot, &builtError, &builtWarnings), CompileThroughScene(snapshot, compiledWarnings, compiledError));
+		CHECK(builtWarnings == compiledWarnings);
+
+		// Children before their parents: the prototype lists them in hierarchy order all the same.
+		std::reverse(snapshot["Entities"].begin(), snapshot["Entities"].end());
+		builtWarnings.clear();
+		compiledWarnings.clear();
+		CheckSamePrototype(EntityPrototype::FromSnapshot(snapshot, &builtError, &builtWarnings), CompileThroughScene(snapshot, compiledWarnings, compiledError));
+		CHECK(builtWarnings == compiledWarnings);
+
+		// Everything a read reports, in the same order.
+		const nlohmann::json problems = { { "Entities", MakeProblemScene()["Scene"]["Entities"] } };
+		builtWarnings.clear();
+		compiledWarnings.clear();
+		CheckSamePrototype(EntityPrototype::FromSnapshot(problems, &builtError, &builtWarnings), CompileThroughScene(problems, compiledWarnings, compiledError));
+		CHECK_FALSE(builtWarnings.empty());
+		CHECK(builtWarnings == compiledWarnings);
+
+		// Invalid entity data fails with the same errors.
+		for (const char* text : { R"({"Entities": {}})", R"({"Entities": [3]})", R"({"Entities": [{"ID": "zz"}]})",
+			R"({"Entities": [{"ID": "0000000000000001"}, {"ID": "0000000000000001"}]})" })
+		{
+			INFO(text);
+			const nlohmann::json invalid = nlohmann::json::parse(text);
+			builtError.clear();
+			compiledError.clear();
+			CHECK_FALSE(EntityPrototype::FromSnapshot(invalid, &builtError));
+			CHECK_FALSE(CompileThroughScene(invalid, compiledWarnings, compiledError));
+			CHECK(builtError == compiledError);
+		}
+	}
+
+	TEST_CASE("Prefab and model documents round trip through the streamed writer and reader, in old layouts too")
+	{
+		const Ref<Scene> feature = LoadFeatureScene();
+		std::vector<UUID> roots(feature->GetRootEntities().begin(), feature->GetRootEntities().end());
+		std::vector<Entity> rootEntities;
+		for (const UUID root : roots)
+			rootEntities.push_back(feature->GetEntityByUUID(root));
+		const Ref<Prefab> source = Prefab::CreateFromEntities(*feature, rootEntities);
+		REQUIRE(source);
+
+		for (const SceneDocumentKind kind : { SceneDocumentKind::Prefab, SceneDocumentKind::Model })
+		{
+			const std::string format = SceneDocumentKindToString(kind);
+			CAPTURE(format);
+			SceneWriteOptions options;
+			options.Kind = kind;
+			options.Roots = roots;
+			// The writer's layout, and the DOM's (keys sorted: the header after the entities), read to the same prototype.
+			const std::string streamed = WriteDocument(*feature, options).Text;
+			const nlohmann::json document = { { "Strata", { { "Format", format }, { "Version", 1 } } }, { format, source->GetSnapshot() } };
+			for (const std::string& text : { streamed, JsonUtils::Dump(document, 1, '\t') })
+			{
+				std::string error;
+				const Ref<EntityTemplate> read = kind == SceneDocumentKind::Prefab ? Ref<EntityTemplate>(Prefab::Deserialize(AsBytes(text), &error))
+					: Ref<EntityTemplate>(Model::Deserialize(AsBytes(text), &error));
+				INFO(error);
+				REQUIRE(read);
+				CheckSamePrototype(read->GetPrototype(), source->GetPrototype());
+			}
+
+			// Documents that are not of the kind, or whose entities are invalid, fail with the DOM readers' errors.
+			const std::string header = Header(format);
+			const std::vector<std::pair<std::string, std::string>> invalid = {
+				{ "{\"" + format + "\":{\"Entities\":[]}}", "Not a Strata " + format + " document" },
+				{ "{" + Header("Scene") + ",\"" + format + "\":{\"Entities\":[]}}", "Not a Strata " + format + " document" },
+				{ "{" + Header(format, 9) + ",\"" + format + "\":{\"Entities\":[]}}", "Unsupported " + format + " version 9" },
+				{ "{" + header + "}", format + " document has no entity list" },
+				{ "{" + header + ",\"" + format + "\":{}}", format + " document has no entity list" },
+				{ "{" + header + ",\"" + format + "\":{\"Entities\":[{\"ID\":\"0000000000000001\"},{\"ID\":\"0000000000000001\"}]}}",
+					fmt::format("Invalid {} entities: Duplicate entity ID 0000000000000001 in entity data", kind == SceneDocumentKind::Prefab ? "prefab" : "model") },
+			};
+			for (const auto& [text, expected] : invalid)
+			{
+				INFO(text);
+				std::string error;
+				const bool loaded = kind == SceneDocumentKind::Prefab ? Prefab::Deserialize(AsBytes(text), &error) != nullptr
+					: Model::Deserialize(AsBytes(text), &error) != nullptr;
+				CHECK_FALSE(loaded);
+				CHECK(error == expected);
+			}
+		}
 	}
 }

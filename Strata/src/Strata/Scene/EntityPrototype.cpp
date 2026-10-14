@@ -1,9 +1,11 @@
 #include "stpch.h"
 #include "Strata/Scene/EntityPrototype.h"
 
+#include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Scene/ComponentAccess.h"
 #include "Strata/Scene/Components.h"
+#include "Strata/Scene/EntitySink.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/UnknownComponents.h"
@@ -117,12 +119,20 @@ namespace Strata
 			}
 		}
 
+		compiled.FindReferences();
+		compiled.ComputeMemoryUsage();
+		return prototype;
+	}
+
+	void EntityPrototype::FindReferences()
+	{
 		// References between the prototype's entities: entity-typed properties and script fields whose value names one.
+		m_References.clear();
 		const entt::id_type scriptType = entt::type_id<ScriptComponent>().hash();
-		for (size_t index = 0; index < count; index++)
+		for (size_t index = 0; index < m_IDs.size(); index++)
 		{
-			const std::span<const ComponentInfo* const> components = prototype->GetComponents(index);
-			const std::span<const void* const> values = prototype->GetComponentValues(index);
+			const std::span<const ComponentInfo* const> components = GetComponents(index);
+			const std::span<const void* const> values = GetComponentValues(index);
 			for (size_t slot = 0; slot < components.size(); slot++)
 			{
 				const ComponentInfo& info = *components[slot];
@@ -131,8 +141,8 @@ namespace Strata
 					if (info.Properties[property].Type != PropertyType::Entity)
 						continue;
 					const UUID target = std::get<UUID>(info.Properties[property].GetValue(values[slot]));
-					if (const size_t targetIndex = prototype->FindEntity(target); targetIndex != c_NotFound)
-						compiled.m_References.push_back({ static_cast<uint32_t>(index), &info, property, 0, static_cast<uint32_t>(targetIndex) });
+					if (const size_t targetIndex = FindEntity(target); targetIndex != c_NotFound)
+						m_References.push_back({ static_cast<uint32_t>(index), &info, property, 0, static_cast<uint32_t>(targetIndex) });
 				}
 				if (info.TypeId != scriptType)
 					continue;
@@ -144,41 +154,54 @@ namespace Strata
 					{
 						if (fields[field].Type != PropertyType::Entity || !std::holds_alternative<UUID>(fields[field].Value))
 							continue;
-						if (const size_t targetIndex = prototype->FindEntity(std::get<UUID>(fields[field].Value)); targetIndex != c_NotFound)
-							compiled.m_References.push_back({ static_cast<uint32_t>(index), nullptr, script, field, static_cast<uint32_t>(targetIndex) });
+						if (const size_t targetIndex = FindEntity(std::get<UUID>(fields[field].Value)); targetIndex != c_NotFound)
+							m_References.push_back({ static_cast<uint32_t>(index), nullptr, script, field, static_cast<uint32_t>(targetIndex) });
 					}
 				}
 			}
 		}
+	}
 
-		uint64_t memory = sizeof(EntityPrototype) + compiled.m_Parents.capacity() * sizeof(uint32_t) + compiled.m_TopLevel.capacity() * sizeof(uint32_t)
-			+ compiled.m_IDs.capacity() * sizeof(UUID)
-			+ compiled.m_IndexByID.size() * (sizeof(std::pair<const UUID, uint32_t>) + 2 * sizeof(void*)) + compiled.m_IndexByID.bucket_count() * 2 * sizeof(void*)
-			+ compiled.m_ComponentOffsets.capacity() * sizeof(uint32_t) + compiled.m_Components.capacity() * sizeof(const ComponentInfo*)
-			+ compiled.m_Values.capacity() * sizeof(const void*) + compiled.m_UnknownIndex.capacity() * sizeof(uint32_t)
-			+ compiled.m_References.capacity() * sizeof(EntityReference);
-		for (const Scope<ComponentValueArray>& values : compiled.m_Arrays)
+	void EntityPrototype::ComputeMemoryUsage()
+	{
+		uint64_t memory = sizeof(EntityPrototype) + m_Parents.capacity() * sizeof(uint32_t) + m_TopLevel.capacity() * sizeof(uint32_t)
+			+ m_IDs.capacity() * sizeof(UUID)
+			+ m_IndexByID.size() * (sizeof(std::pair<const UUID, uint32_t>) + 2 * sizeof(void*)) + m_IndexByID.bucket_count() * 2 * sizeof(void*)
+			+ m_ComponentOffsets.capacity() * sizeof(uint32_t) + m_Components.capacity() * sizeof(const ComponentInfo*)
+			+ m_Values.capacity() * sizeof(const void*) + m_UnknownIndex.capacity() * sizeof(uint32_t)
+			+ m_References.capacity() * sizeof(EntityReference);
+		for (const Scope<ComponentValueArray>& values : m_Arrays)
 			memory += values->GetMemoryUsage();
-		compiled.m_MemoryUsage = memory;
-		return prototype;
+		m_MemoryUsage = memory;
 	}
 
 	Ref<EntityPrototype> EntityPrototype::FromSnapshot(const nlohmann::json& snapshot, std::string* outError, std::vector<std::string>* outWarnings)
 	{
-		// Read into a scene of its own (which validates the data) and compiled from it, with the snapshot's own IDs, which
-		// instances link to (PrefabInstanceComponent::PrefabEntityID).
-		Scene scene("Prototype");
-		EntityInstantiationOptions options;
-		options.GenerateNewUUIDs = false;
-		std::string error;
-		SceneSerializer::DeserializeEntities(scene, snapshot, options, &error, outWarnings);
-		if (!error.empty())
+		ST_PROFILE_FUNCTION();
+		auto fail = [outError](std::string message) -> Ref<EntityPrototype>
 		{
 			if (outError)
-				*outError = std::move(error);
+				*outError = std::move(message);
 			return nullptr;
+		};
+		const nlohmann::json* entities = snapshot.is_object() ? JsonUtils::Find(snapshot, "Entities") : nullptr;
+		if (!entities || !entities->is_array())
+			return fail("Entity data must be an object with an 'Entities' array");
+		if (entities->size() > Scene::c_MaxEntities)
+			return fail(fmt::format("Cannot add {} entities to a scene with 0: a scene holds at most {} entities", entities->size(), Scene::c_MaxEntities));
+
+		// The snapshot's own IDs, which instances link to (PrefabInstanceComponent::PrefabEntityID).
+		EntityPrototypeBuilder builder(outWarnings);
+		builder.ReserveEntities(entities->size());
+		std::string error;
+		for (const nlohmann::json& entity : *entities)
+		{
+			if (!builder.ReadEntity(entity, &error))
+				return fail(std::move(error));
 		}
-		return Compile(scene);
+		if (!builder.Finish(&error))
+			return fail(std::move(error));
+		return builder.TakePrototype();
 	}
 
 	size_t EntityPrototype::FindEntity(UUID id) const

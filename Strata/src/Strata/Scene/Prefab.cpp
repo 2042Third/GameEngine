@@ -4,6 +4,8 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Components.h"
+#include "Strata/Scene/EntitySink.h"
+#include "Strata/Scene/SceneDocumentReader.h"
 #include "Strata/Scene/SceneSerializer.h"
 
 #include <algorithm>
@@ -48,11 +50,6 @@ namespace Strata
 				return nullptr;
 			}
 			return payload;
-		}
-
-		std::optional<nlohmann::json> ParseBytes(std::span<const uint8_t> data, std::string* outError)
-		{
-			return JsonUtils::Parse(std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), outError);
 		}
 
 		// A value of an instance's property as its prototype entity would have it: a reference to an entity of the instance
@@ -247,6 +244,26 @@ namespace Strata
 		return false;
 	}
 
+	bool EntityTemplate::Read(std::span<const uint8_t> data, const std::function<bool()>& isCancelled, std::string* outError)
+	{
+		const bool model = GetType() == AssetType::Model;
+		m_Warnings.clear();
+		EntityPrototypeBuilder builder(&m_Warnings);
+		SceneReadOptions options;
+		options.IsCancelled = isCancelled;
+		SceneReadResult result;
+		std::string error;
+		if (!SceneDocumentReader::Read(std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), model ? SceneDocumentKind::Model : SceneDocumentKind::Prefab,
+			builder, options, &result, &error))
+		{
+			if (outError)
+				*outError = result.EntityError ? fmt::format("Invalid {} entities: {}", model ? "model" : "prefab", error) : std::move(error);
+			return false;
+		}
+		m_Prototype = builder.TakePrototype();
+		return true;
+	}
+
 	void EntityTemplate::LogWarnings() const
 	{
 		if (m_WarningsLogged)
@@ -278,10 +295,10 @@ namespace Strata
 		return payload ? CreateFromSnapshot(*payload, outError) : nullptr;
 	}
 
-	Ref<Prefab> Prefab::Deserialize(std::span<const uint8_t> data, std::string* outError)
+	Ref<Prefab> Prefab::Deserialize(std::span<const uint8_t> data, std::string* outError, const std::function<bool()>& isCancelled)
 	{
-		std::optional<nlohmann::json> json = ParseBytes(data, outError);
-		return json ? FromJson(*json, outError) : nullptr;
+		Ref<Prefab> prefab = CreateRef<Prefab>();
+		return prefab->Read(data, isCancelled, outError) ? prefab : nullptr;
 	}
 
 	Ref<Model> Model::CreateFromSnapshot(const nlohmann::json& snapshot, std::string* outError)
@@ -295,13 +312,10 @@ namespace Strata
 		return nlohmann::json { { "Strata", { { "Format", "Model" }, { "Version", c_FormatVersion } } }, { "Model", GetSnapshot() } };
 	}
 
-	Ref<Model> Model::Deserialize(std::span<const uint8_t> data, std::string* outError)
+	Ref<Model> Model::Deserialize(std::span<const uint8_t> data, std::string* outError, const std::function<bool()>& isCancelled)
 	{
-		std::optional<nlohmann::json> json = ParseBytes(data, outError);
-		if (!json)
-			return nullptr;
-		const nlohmann::json* payload = ReadDocument(*json, "Model", "Model", c_FormatVersion, outError);
-		return payload ? CreateFromSnapshot(*payload, outError) : nullptr;
+		Ref<Model> model = CreateRef<Model>();
+		return model->Read(data, isCancelled, outError) ? model : nullptr;
 	}
 
 	Ref<SceneAsset> SceneAsset::Deserialize(std::span<const uint8_t> data, std::string* outError, const std::function<void(float share)>& progress,
