@@ -938,7 +938,7 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
  AssetImporter (by extension) -- ReadImportDependency --> other files under Assets/
    | stored bytes; sub-assets with DeriveSubAssetHandle
    v
- .strata/Cache/<handle>.bin + <handle>.import  -- PlanAssetPack + WriteAssetPack -->  <Game>.stpak (+ patch packs)
+ .strata/Cache/<handle>.bin + ImportRecords.log -- PlanAssetPack + WriteAssetPack -->  <Game>.stpak (+ patch packs)
  (JSON assets and fonts: the source file itself)                         | RuntimeAssetManager (mounted packs)
    |                                                                     |
    +-------------------------- ReadAssetData (I/O thread) ---------------+
@@ -959,9 +959,21 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   error); its sub-assets are registered once the import is. Afterwards the file watcher
   reports changes; `Update` re-registers files and queues re-imports as background jobs, and applies finished imports
   through `ReloadAsset`: loaded assets load again, and every reloaded asset gets a new source revision
-  (`GetSourceRevisions`), announced as a content change at once when no object of it is loaded. The cache record
-  (`<handle>.import`) remembers the source state, settings, importer version and dependencies, so a current import is
-  reused. Editor commands take the same background path: `SetImportSettingsInBackground` saves the `.meta` and queues
+  (`GetSourceRevisions`), announced as a content change at once when no object of it is loaded. The import record remembers the source state,
+  settings, importer version and dependencies, so a current import is reused.
+- **Import records** (`Asset/ImportRecordStore.h`). Every asset's record (and, for assets stored as their source, what
+  they reference) and the path of every handle (which resolves duplicated `.meta` files the same way on every scan) live
+  in one append-only file, `.strata/Cache/ImportRecords.log`: a header line, then one entry per line, the CRC-32C of
+  its JSON and the JSON (`{"Handle", "Record"}`, `{"Handle", "Path"}` or `{"Handle", "Removed": true}`), the latest of a
+  handle winning. The scan reads it once into memory, and imports, reference searches and saves read and set records
+  there; one writer at a time (an I/O job; callers only queue) appends whole lines, flushed per batch. A crash can tear
+  only the last line, which the next load skips and cuts off, and cache files are renamed into place before their record
+  is set (under the exclusive file lock, so a cancelled import never brings a removed record back): a record never names
+  a missing cache file, and a lost one only means an import or a search again. When dead entries outnumber live ones and
+  the file passes 1 MiB, the writer rewrites it from memory (`AtomicFileWriter`). The earlier layout (a
+  `<handle>.import` file per asset and `AssetIndex.json`) is taken over by the first load and removed once written, so an
+  upgraded project imports nothing again. Trashed assets keep their records as files in the trash folder, and a restore
+  sets them again; the scan drops records and paths of handles no asset has any more. Editor commands take the same background path: `SetImportSettingsInBackground` saves the `.meta` and queues
   the import, `ReimportAssetInBackground` queues one even when the cached import is current (`ImportRequest::Force`;
   assets stored as-is reload at once and their references are searched again), and `IsImportPending` tells a deferred
   command (`asset.setImportSettings`, `asset.reimport`) when `Update` applied it; `SetImportSettings` and

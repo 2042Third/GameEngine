@@ -371,6 +371,13 @@ namespace Strata
 		// on the main thread (no document is read). Sorted by handle.
 		std::vector<AssetHandle> GetReferencers(AssetHandle handle) const;
 
+		// The import record of a source asset as the project's records store holds it (what the manager knows of its last
+		// import, or what an asset stored as its source references, ImportRecordStore); nothing when it has none. Tools and tests.
+		std::optional<nlohmann::json> GetImportRecord(AssetHandle handle) const;
+		// Waits until every import record set so far is in the records file (tools, tests; the destructor does it). False, with
+		// the reason, when a write failed.
+		bool FlushImportRecords(std::string* outError = nullptr);
+
 		// Whether background imports (hot reload), or searches of what changed engine-native assets reference, are queued,
 		// running, or finished and not applied yet (Update applies them).
 		bool HasPendingImports() const;
@@ -492,7 +499,6 @@ namespace Strata
 		std::filesystem::path ToAbsolute(std::string_view relativePath) const;
 		std::string ToRelative(const std::filesystem::path& absolutePath) const; // Empty when outside
 		std::filesystem::path GetCachePath(AssetHandle handle) const;
-		std::filesystem::path GetImportRecordPath(AssetHandle handle) const;
 
 		// Reads or creates the .meta sidecar and registers the file. Returns null if the file has no importer, lies in a
 		// hidden directory, or has an invalid .meta (which is never overwritten: it may hold a merge conflict). With
@@ -525,11 +531,9 @@ namespace Strata
 		// A folder the file watcher saw come or go: the folder index follows (and assets whose files went with a folder leave).
 		void ProcessFolderChange(const std::filesystem::path& path, FileChangeType type);
 		void ProcessCompletedImports();
-		// Handle -> path of every source asset, persisted in the cache so duplicated .meta files resolve the same way
-		// on every scan (the original keeps its handle).
-		std::unordered_map<uint64_t, std::string> LoadAssetIndex() const;
-		void SaveAssetIndex();
-		// Deletes cached data of assets that no longer exist and leftovers of interrupted writes (during Scan).
+		// Deletes cached data and import records of assets that no longer exist and leftovers of interrupted writes (during
+		// Scan). The records store keeps every handle's path, so that duplicated .meta files resolve the same way on every scan
+		// (the original keeps its handle).
 		void RemoveUnusedCacheFiles();
 
 		// Records what an engine-native asset references (BackgroundWork::FindNativeReferences) with the base (main thread).
@@ -580,7 +584,6 @@ namespace Strata
 		std::unordered_map<AssetHandle, SourceAsset> m_Sources;      // Top-level assets
 		std::unordered_map<std::string, AssetHandle> m_SourcesByPath; // Relative path -> handle
 		std::unordered_map<std::string, std::vector<AssetHandle>> m_DependentsByPath; // Dependency key -> importing sources
-		bool m_AssetIndexDirty = false;                               // Guarded by m_SourceMutex
 		uint32_t m_SourcesImporting = 0;                              // Sources with an ImportJob; guarded by m_SourceMutex
 
 		// The file lock, the background jobs and their results, shared with the jobs. Lock order: m_SourceMutex before the

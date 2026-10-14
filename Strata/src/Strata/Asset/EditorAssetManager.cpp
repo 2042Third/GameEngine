@@ -1,6 +1,8 @@
 #include "stpch.h"
 #include "Strata/Asset/EditorAssetManager.h"
 
+#include "Strata/Asset/ImportRecordStore.h"
+
 #include "Strata/Asset/AssetDependencies.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/FileReader.h"
@@ -344,6 +346,8 @@ namespace Strata
 		constexpr const char* c_TrashAssetsFolder = "Assets";
 		constexpr const char* c_TrashCacheFolder = "Cache";
 		constexpr const char* c_TrashManifest = "Trashed.json";
+		// A trashed asset's import record, beside its cache files in the trash folder.
+		constexpr std::string_view c_TrashRecordExtension = ".import";
 
 		// How many folders above a file the files it reads (a model's "../Textures") may lie when it is copied into a project.
 		constexpr int c_MaxExternalFileClimb = 2;
@@ -604,11 +608,16 @@ namespace Strata
 	struct EditorAssetManager::BackgroundWork
 	{
 		explicit BackgroundWork(const EditorAssetManagerSpecification& specification)
-			: Specification(specification)
+			: Specification(specification), Records(specification.CacheDirectory)
 		{
 		}
 
 		const EditorAssetManagerSpecification Specification; // The manager's, with absolute directories
+
+		// Every asset's import record and the path of every handle (ImportRecordStore: one append-only file of the cache). A
+		// record is set where its cache files were published, under the exclusive file lock, so that an import cancelled by a
+		// removal never brings its record back.
+		mutable ImportRecordStore Records;
 
 		// Files read on other threads (cache files, engine-native sources, the files imports read) are replaced, moved or
 		// deleted by the main thread, and imports publish their cache files; on Windows a change fails while a reader holds
@@ -671,11 +680,6 @@ namespace Strata
 		std::filesystem::path GetCachePath(AssetHandle handle) const
 		{
 			return Specification.CacheDirectory / (handle.ToString() + ".bin");
-		}
-
-		std::filesystem::path GetImportRecordPath(AssetHandle handle) const
-		{
-			return Specification.CacheDirectory / (handle.ToString() + ".import");
 		}
 
 		void Add(const Ref<BackgroundJob>& job)
@@ -791,7 +795,10 @@ namespace Strata
 		// Background jobs only use m_Work, which they keep alive: nothing to wait for but the loads in flight.
 		Close();
 		WaitForInFlightLoads();
-		SaveAssetIndex();
+		// What was recorded is in the file before a manager of the project opens again.
+		std::string error;
+		if (!m_Work->Records.Flush(&error))
+			ST_CORE_WARN("The import records of '{}' were not all written: {}", FileSystem::ToUTF8(m_Specification.AssetDirectory), error);
 	}
 
 	void EditorAssetManager::Close()
@@ -860,11 +867,6 @@ namespace Strata
 	std::filesystem::path EditorAssetManager::GetCachePath(AssetHandle handle) const
 	{
 		return m_Work->GetCachePath(handle);
-	}
-
-	std::filesystem::path EditorAssetManager::GetImportRecordPath(AssetHandle handle) const
-	{
-		return m_Work->GetImportRecordPath(handle);
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -939,7 +941,7 @@ namespace Strata
 					moved.PathGeneration++;
 					m_SourcesByPath[relativePath] = handle;
 					AddToFolderIndex(handle, relativePath);
-					m_AssetIndexDirty = true;
+					m_Work->Records.SetPath(handle, relativePath);
 					MarkChanged();
 					const std::vector<AssetHandle> subAssets = moved.Import.SubAssets;
 					lock.unlock();
@@ -996,7 +998,7 @@ namespace Strata
 		m_SourcesByPath[relativePath] = handle;
 		m_Sources.emplace(handle, std::move(source));
 		AddToFolderIndex(handle, relativePath);
-		m_AssetIndexDirty = true;
+		m_Work->Records.SetPath(handle, relativePath);
 		MarkChanged();
 		return handle;
 	}
@@ -1016,7 +1018,6 @@ namespace Strata
 			m_SourcesByPath.erase(it->second.Path);
 			RemoveFromFolderIndex(handle, it->second.Path);
 			m_Sources.erase(it);
-			m_AssetIndexDirty = true;
 		}
 		MarkChanged();
 
@@ -1034,7 +1035,7 @@ namespace Strata
 			for (AssetHandle subAsset : subAssets)
 				FileSystem::Remove(GetCachePath(subAsset));
 			FileSystem::Remove(GetCachePath(handle));
-			FileSystem::Remove(GetImportRecordPath(handle));
+			m_Work->Records.Remove(handle);
 		}
 	}
 
@@ -1073,6 +1074,15 @@ namespace Strata
 		ST_PROFILE_FUNCTION();
 		const auto startTime = std::chrono::steady_clock::now();
 
+		// Every import record and handle path, read once (and the cache's earlier layout taken over).
+		const ImportRecordLoadStats records = m_Work->Records.Load();
+		if (records.SkippedLines > 0 || records.Discarded)
+			ST_CORE_WARN("The import records of '{}': {} unreadable entries skipped{} (their assets are imported again when needed)",
+				FileSystem::ToUTF8(m_Specification.AssetDirectory), records.SkippedLines, records.Discarded ? ", an unknown file started anew" : "");
+		if (records.MigratedRecords + records.MigratedPaths > 0)
+			ST_CORE_INFO("Took over {} import records and {} asset paths into '{}'", records.MigratedRecords, records.MigratedPaths,
+				FileSystem::ToUTF8(m_Work->Records.GetPath()));
+
 		std::vector<std::filesystem::path> files;
 		std::vector<std::string> folders;
 		std::error_code error;
@@ -1110,7 +1120,7 @@ namespace Strata
 		// Files copied together with their .meta share a handle. The file the persisted index assigns the handle to
 		// keeps it; without an index (fresh checkout) the shortest path wins, which is the original for the usual
 		// "Name - Copy" / "Name copy" / "Name (1)" naming of file managers. The others get new handles.
-		const std::unordered_map<uint64_t, std::string> index = LoadAssetIndex();
+		const std::unordered_map<AssetHandle, std::string> index = m_Work->Records.GetPaths();
 		std::unordered_map<uint64_t, std::vector<size_t>> filesByHandle;
 		for (size_t fileIndex = 0; fileIndex < files.size(); fileIndex++)
 		{
@@ -1124,7 +1134,7 @@ namespace Strata
 		{
 			if (fileIndices.size() < 2)
 				continue;
-			auto indexed = index.find(handle);
+			auto indexed = index.find(UUID(handle));
 			size_t winner = fileIndices.front();
 			bool winnerFromIndex = false;
 			for (size_t fileIndex : fileIndices)
@@ -1259,7 +1269,6 @@ namespace Strata
 		if (m_Specification.WatchFiles && !m_Watcher.IsRunning() && !m_Watcher.Start(m_Specification.AssetDirectory, watchSettings))
 			ST_CORE_WARN("Asset hot reload is unavailable: cannot watch '{}'", FileSystem::ToUTF8(m_Specification.AssetDirectory));
 
-		SaveAssetIndex();
 		const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startTime);
 		if (backgroundImports.empty())
 			ST_CORE_INFO("Asset scan: {} assets, {} imported, {} failed ({} ms)", files.size(), importedCount.load(), failedCount, elapsed.count());
@@ -1301,55 +1310,29 @@ namespace Strata
 		std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
 		for (const std::filesystem::path& path : unused)
 			FileSystem::Remove(path);
-	}
-
-	std::unordered_map<uint64_t, std::string> EditorAssetManager::LoadAssetIndex() const
-	{
-		std::unordered_map<uint64_t, std::string> index;
-		std::optional<std::string> text = FileSystem::ReadText(m_Specification.CacheDirectory / "AssetIndex.json");
-		std::optional<nlohmann::json> document = text ? JsonUtils::Parse(*text) : std::nullopt;
-		const nlohmann::json* assets = document ? JsonUtils::Find(*document, "Assets") : nullptr;
-		if (!assets || !assets->is_object())
-			return index;
-		for (const auto& [handleText, path] : assets->items())
+		// Records and paths of handles no asset has any more (deleted while the editor was closed, or in an earlier session).
+		std::unordered_set<AssetHandle> recorded;
+		for (const AssetHandle handle : m_Work->Records.GetRecordedHandles())
+			recorded.insert(handle);
+		for (const auto& [handle, path] : m_Work->Records.GetPaths())
+			recorded.insert(handle);
+		for (const AssetHandle handle : recorded)
 		{
-			std::optional<UUID> handle = UUID::FromString(handleText);
-			if (handle && path.is_string())
-				index.emplace(static_cast<uint64_t>(*handle), path.get<std::string>());
+			if (!IsHandleValid(handle))
+				m_Work->Records.Remove(handle);
 		}
-		return index;
-	}
-
-	void EditorAssetManager::SaveAssetIndex()
-	{
-		nlohmann::json assets = nlohmann::json::object();
-		{
-			std::scoped_lock<std::mutex> lock(m_SourceMutex);
-			if (!m_AssetIndexDirty)
-				return;
-			for (const auto& [handle, source] : m_Sources)
-				assets[handle.ToString()] = source.Path;
-			m_AssetIndexDirty = false;
-		}
-		nlohmann::json document = { { "Format", "AssetIndex" }, { "Version", 1 }, { "Assets", std::move(assets) } };
-		if (!FileSystem::WriteText(m_Specification.CacheDirectory / "AssetIndex.json", JsonUtils::Dump(document, 1, '\t')))
-			ST_CORE_WARN("Could not write the asset index in '{}'", FileSystem::ToUTF8(m_Specification.CacheDirectory));
 	}
 
 	bool EditorAssetManager::BackgroundWork::LoadCurrentImport(const ImportRequest& request, ImportOutcome& outOutcome, const std::atomic<bool>* cancel) const
 	{
 		if (IsCancelled(cancel))
 			return false;
-		const std::filesystem::path recordPath = GetImportRecordPath(request.Handle);
+		std::optional<nlohmann::json> record = Records.FindRecord(request.Handle);
+		if (!record || !record->is_object())
+			return false;
 		// The source and its dependencies may be hashed: read under the shared file lock, like every read of project files
 		// off the main thread (a move or delete of a file an open reader holds fails on Windows).
 		std::shared_lock<std::shared_mutex> fileLock(FileMutex);
-		std::optional<std::string> recordText = FileSystem::ReadText(recordPath);
-		if (!recordText)
-			return false;
-		std::optional<nlohmann::json> record = JsonUtils::Parse(*recordText);
-		if (!record || !record->is_object())
-			return false;
 
 		if (JsonUtils::GetUInt(*record, "Version", 0) != c_ImportRecordVersion
 			|| JsonUtils::GetUInt(*record, "ImporterVersion", 0) != request.Importer->GetVersion()
@@ -1431,7 +1414,7 @@ namespace Strata
 			// gone, with the record it had).
 			std::unique_lock<std::shared_mutex> writeLock(FileMutex);
 			if (!IsCancelled(cancel))
-				FileSystem::WriteText(recordPath, JsonUtils::Dump(*record, 1, '\t'));
+				Records.SetRecord(request.Handle, *record);
 		}
 		outOutcome = std::move(outcome);
 		return true;
@@ -1614,8 +1597,8 @@ namespace Strata
 		}
 		record["SubAssets"] = std::move(subAssets);
 		record["Dependencies"] = std::move(dependencies);
-		if (!FileSystem::WriteText(GetImportRecordPath(request.Handle), JsonUtils::Dump(record, 1, '\t')))
-			ST_CORE_WARN("Could not write the import record of '{}'", request.Path);
+		// After the cache files are in place (the record never names one that is missing), still under the exclusive lock.
+		Records.SetRecord(request.Handle, record);
 		return outcome;
 	}
 
@@ -1828,8 +1811,8 @@ namespace Strata
 			if (!current)
 				continue;
 			ApplyNativeReferences(found);
-			if (found.Record && !FileSystem::WriteText(GetImportRecordPath(found.Handle), JsonUtils::Dump(*found.Record, 1, '\t')))
-				ST_CORE_WARN("Could not write the import record of '{}'", JsonUtils::GetString(*found.Record, "Source", ""));
+			if (found.Record)
+				m_Work->Records.SetRecord(found.Handle, *found.Record);
 		}
 
 		for (ImportOutcome& outcome : completed)
@@ -1889,15 +1872,13 @@ namespace Strata
 		}
 
 		const std::filesystem::path sourcePath = ToAbsolute(relativePath);
-		const std::filesystem::path recordPath = GetImportRecordPath(handle);
 		try
 		{
 			// The record, when the file is what it was when the record was written. The file is hashed under the shared file lock:
 			// a save replaces it under the exclusive one, which an open reader would make fail on Windows.
 			if (data.empty())
 			{
-				const std::optional<std::string> text = FileSystem::ReadText(recordPath);
-				std::optional<nlohmann::json> record = text ? JsonUtils::Parse(*text) : std::nullopt;
+				std::optional<nlohmann::json> record = Records.FindRecord(handle);
 				bool recordChanged = false;
 				bool current = false;
 				if (record && record->is_object() && JsonUtils::GetUInt(*record, "Version", 0) == c_ImportRecordVersion && JsonUtils::GetBool(*record, "Native", false))
@@ -1912,7 +1893,7 @@ namespace Strata
 						if (recordChanged && deferRecord)
 							result.Record = std::move(*record);
 						else if (recordChanged)
-							FileSystem::WriteText(recordPath, JsonUtils::Dump(*record, 1, '\t'));
+							Records.SetRecord(handle, *record);
 						result.References = std::move(*recorded);
 						result.Scanned = true;
 						return result;
@@ -1951,8 +1932,8 @@ namespace Strata
 			nlohmann::json record = MakeNativeRecord(relativePath, data.size(), sourceTime, Hash::FNV1a(data), result.References);
 			if (deferRecord)
 				result.Record = std::move(record);
-			else if (!FileSystem::WriteText(recordPath, JsonUtils::Dump(record, 1, '\t')))
-				ST_CORE_WARN("Could not write the import record of '{}'", relativePath);
+			else
+				Records.SetRecord(handle, record);
 		}
 		catch (const std::exception& exception)
 		{
@@ -2038,7 +2019,6 @@ namespace Strata
 		ProcessCompletedImports();
 		if (!m_ExternalImports.empty())
 			UpdateExternalImports();
-		SaveAssetIndex();
 		AssetManagerBase::Update();
 	}
 
@@ -3116,9 +3096,7 @@ namespace Strata
 		outWritten.Size = FileSystem::GetFileSize(m_AbsolutePath).value_or(file.GetBytesWritten());
 		outWritten.Time = FileSystem::GetLastWriteTime(m_AbsolutePath).value_or(0);
 		// The record is a cache: when it cannot be written, the next scan searches the document again.
-		const nlohmann::json record = MakeNativeRecord(m_Path, outWritten.Size, outWritten.Time, contentHash, references);
-		if (!FileSystem::WriteText(m_Work->GetImportRecordPath(m_Asset), JsonUtils::Dump(record, 1, '\t')))
-			ST_CORE_WARN("Could not write the import record of '{}'", m_Path);
+		m_Work->Records.SetRecord(m_Asset, MakeNativeRecord(m_Path, outWritten.Size, outWritten.Time, contentHash, references));
 		outWritten.References = std::move(references);
 		return true;
 	}
@@ -3156,8 +3134,8 @@ namespace Strata
 					if (!folder.empty())
 						AddFolderLocked(FileSystem::ToUTF8(folder));
 					AddToFolderIndex(handle, source.Path);
+					m_Work->Records.SetPath(handle, source.Path);
 					m_Sources.emplace(handle, std::move(source));
-					m_AssetIndexDirty = true;
 					registered = true;
 				}
 			}
@@ -3244,7 +3222,7 @@ namespace Strata
 			it->second.PathGeneration++;
 			m_SourcesByPath[destinationRelative] = handle;
 			AddToFolderIndex(handle, destinationRelative);
-			m_AssetIndexDirty = true;
+			m_Work->Records.SetPath(handle, destinationRelative);
 			MarkChanged();
 			if (!FileSystem::Exists(GetMetaPath(destination)))
 				WriteMetaFile(it->second);
@@ -3272,6 +3250,16 @@ namespace Strata
 			}
 		}
 		return true;
+	}
+
+	std::optional<nlohmann::json> EditorAssetManager::GetImportRecord(AssetHandle handle) const
+	{
+		return m_Work->Records.FindRecord(handle);
+	}
+
+	bool EditorAssetManager::FlushImportRecords(std::string* outError)
+	{
+		return m_Work->Records.Flush(outError);
 	}
 
 	bool EditorAssetManager::HasPendingImports() const
@@ -3833,6 +3821,7 @@ namespace Strata
 					asset.PathGeneration++;
 					m_SourcesByPath[entry.To] = entry.Handle;
 					AddToFolderIndex(entry.Handle, entry.To);
+					m_Work->Records.SetPath(entry.Handle, entry.To);
 				}
 				std::vector<std::string> folders;
 				for (auto it = m_Folders.begin(); it != m_Folders.end();)
@@ -3850,7 +3839,6 @@ namespace Strata
 				for (const std::string& folder : folders)
 					AddFolderLocked(ReplaceFolder(folder, sourceRelative, destinationRelative));
 				AddFolderLocked(destinationRelative);
-				m_AssetIndexDirty = true;
 			}
 		}
 		MarkChanged();
@@ -3987,7 +3975,6 @@ namespace Strata
 				if (Ref<BackgroundJob> job = StopImport(it->second))
 					stopped.emplace_back(handle, job);
 				cacheFiles.push_back(GetCachePath(handle));
-				cacheFiles.push_back(GetImportRecordPath(handle));
 				for (AssetHandle subAsset : it->second.Import.SubAssets)
 					cacheFiles.push_back(GetCachePath(subAsset));
 			}
@@ -4007,11 +3994,18 @@ namespace Strata
 			}
 			else
 			{
-				// Derived data: a cached import that stays behind is imported again on a restore.
+				// Derived data: a cached import that stays behind is imported again on a restore. The records go with them, as a
+				// file each, and leave the store.
 				for (const std::filesystem::path& file : cacheFiles)
 				{
 					if (FileSystem::Exists(file) && !FileSystem::Rename(file, cache / file.filename()))
 						FileSystem::Remove(file);
+				}
+				for (AssetHandle handle : handles)
+				{
+					if (const std::optional<nlohmann::json> record = m_Work->Records.FindRecord(handle))
+						FileSystem::WriteText(cache / FileSystem::FromUTF8(handle.ToString() + std::string(c_TrashRecordExtension)), JsonUtils::Dump(*record));
+					m_Work->Records.Remove(handle);
 				}
 			}
 		}
@@ -4071,13 +4065,23 @@ namespace Strata
 				FileSystem::Rename(destination, stored);
 				return fail(fmt::format("Could not move the .meta file of '{}' back from the trash", trashed.Path));
 			}
-			// The cached imports come back with them, unless an import wrote new ones meanwhile.
+			// The cached imports come back with them, unless an import wrote new ones meanwhile; their records go into the store.
 			std::error_code error;
 			for (std::filesystem::directory_iterator it(trashed.Entry / c_TrashCacheFolder, error), end; !error && it != end; it.increment(error))
 			{
-				const std::filesystem::path target = m_Specification.CacheDirectory / it->path().filename();
+				const std::filesystem::path& file = it->path();
+				if (FileSystem::ToUTF8(file.extension()) == c_TrashRecordExtension)
+				{
+					const std::optional<UUID> handle = UUID::FromString(FileSystem::ToUTF8(file.stem()));
+					const std::optional<std::string> text = FileSystem::ReadText(file);
+					const std::optional<nlohmann::json> record = text ? JsonUtils::Parse(*text) : std::nullopt;
+					if (handle && record && record->is_object() && !m_Work->Records.FindRecord(*handle))
+						m_Work->Records.SetRecord(*handle, *record);
+					continue;
+				}
+				const std::filesystem::path target = m_Specification.CacheDirectory / file.filename();
 				if (!FileSystem::Exists(target))
-					FileSystem::Rename(it->path(), target);
+					FileSystem::Rename(file, target);
 			}
 		}
 

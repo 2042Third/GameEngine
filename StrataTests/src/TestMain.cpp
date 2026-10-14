@@ -1,6 +1,7 @@
 #define DOCTEST_CONFIG_IMPLEMENT
 #include <doctest/doctest.h>
 
+#include "Asset/ImportRecordTestUtils.h"
 #include "Editor/SceneComparison.h"
 #include "Editor/WorldSaveMeasurement.h"
 #include "Engine/ModuleRegistrationHelpers.h"
@@ -778,6 +779,9 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 
 	// write-world-project, write-many-assets-project, write-texture-folder: the world-scale fixtures (Perf/WorldFixture.h).
 	if (const std::optional<int> result = Strata::Tests::RunWorldFixtureHelper(mode, argc, argv))
+		return *result;
+	// append-import-records <cache directory> <first index>: writes import records until it is killed (Asset/ImportRecordTestUtils.h).
+	if (const std::optional<int> result = Strata::Tests::RunImportRecordHelper(mode, argc, argv))
 		return *result;
 	// save-world <project directory> <scene handle> <result file>: a save of a world scene measured in an editor without a
 	// GPU, in a process of its own for its peak memory (Editor/WorldSaveMeasurement.h).

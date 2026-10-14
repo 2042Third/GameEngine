@@ -5,6 +5,7 @@
 #include "Strata/Asset/AssetDependencies.h"
 #include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Asset/EditorAssetManager.h"
+#include "Strata/Asset/ImportRecordStore.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JobSystem.h"
@@ -266,7 +267,6 @@ TEST_SUITE("Asset.Dependencies")
 		project.WriteMaterial("Materials/Plain.stmat", 0x5002);
 		project.WriteScene("Scenes/Main.stscene", 0x5003, { { 0x9101, 0x5001 }, { 0x9101, 0x5002 }, { 0x9102, 0x5001 } });
 
-		std::filesystem::path record;
 		{
 			Ref<EditorAssetManager> manager = project.Open();
 			CHECK(manager->GetDependencies(UUID(0x5001)) == Handles({ 0x9001, 0x9002 }));
@@ -280,8 +280,7 @@ TEST_SUITE("Asset.Dependencies")
 			properties.EmissiveMap = UUID(0x9003);
 			REQUIRE(manager->SaveNativeAsset(UUID(0x5002), ToBytes(Material::Create(properties)->Serialize()), true));
 			CHECK(manager->GetDependencies(UUID(0x5002)) == Handles({ 0x9003 }));
-			record = project.Cache / (UUID(0x5002).ToString() + ".import");
-			REQUIRE(FileSystem::IsRegularFile(record));
+			REQUIRE(manager->GetImportRecord(UUID(0x5002)).has_value());
 
 			// A caller that serialized the document passes what it references, which is recorded as it is: the document is
 			// not parsed again (the editor saving a large scene).
@@ -305,12 +304,14 @@ TEST_SUITE("Asset.Dependencies")
 		}
 
 		// A record of an unchanged file is used as it is: a planted reference shows that the file was not scanned again.
-		std::optional<std::string> text = FileSystem::ReadText(record);
-		REQUIRE(text);
-		std::optional<nlohmann::json> json = JsonUtils::Parse(*text);
-		REQUIRE(json);
-		(*json)["References"] = nlohmann::json::array({ UUIDToJson(UUID(0x7777)) });
-		REQUIRE(FileSystem::WriteText(record, JsonUtils::Dump(*json, 1, '\t')));
+		{
+			ImportRecordStore store(project.Cache);
+			std::optional<nlohmann::json> json = store.FindRecord(UUID(0x5002));
+			REQUIRE(json);
+			(*json)["References"] = nlohmann::json::array({ UUIDToJson(UUID(0x7777)) });
+			store.SetRecord(UUID(0x5002), *json);
+			REQUIRE(store.Flush());
+		}
 		{
 			Ref<EditorAssetManager> manager = project.Open();
 			CHECK(manager->GetDependencies(UUID(0x5002)) == Handles({ 0x7777 }));
@@ -370,8 +371,15 @@ TEST_SUITE("Asset.Dependencies")
 		NativeProject project("NativeReferencesOvertaken");
 		project.WriteMaterial("Materials/Brick.stmat", 0x5011, 0x9011);
 		Ref<EditorAssetManager> manager = project.Open();
-		const std::filesystem::path record = project.Cache / (UUID(0x5011).ToString() + ".import");
-		REQUIRE(FileSystem::IsRegularFile(record));
+		REQUIRE(manager->GetImportRecord(UUID(0x5011)).has_value());
+		// What the records file holds, counted in lines: any record written shows as one more.
+		const std::filesystem::path records = project.Cache / FileSystem::FromUTF8(ImportRecordStore::c_FileName);
+		auto countLines = [&]()
+		{
+			REQUIRE(manager->FlushImportRecords());
+			const std::optional<std::string> text = FileSystem::ReadText(records);
+			return text ? std::count(text->begin(), text->end(), '\n') : 0;
+		};
 
 		// The I/O thread is held: the search a re-import queues waits until after the save.
 		std::atomic<bool> release = false;
@@ -390,21 +398,22 @@ TEST_SUITE("Asset.Dependencies")
 		REQUIRE(manager->SaveNativeAsset(UUID(0x5011), ToBytes(Material::Create(properties)->Serialize()), true));
 		CHECK(manager->GetDependencies(UUID(0x5011)) == Handles({ 0x9012 }));
 
-		// The save wrote the record of what it saved. Without it, a record after the search could only be the search's: a
-		// search the save overtook is applied by nobody, and so writes nothing (it could describe the file before the save).
-		REQUIRE(FileSystem::Remove(record));
+		// The save wrote the record of what it saved. A search the save overtook is applied by nobody, and so writes nothing
+		// (it could describe the file before the save): the file holds no more records afterwards.
+		const auto linesAfterSave = countLines();
 		release = true;
 		while (!hold.IsComplete())
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		manager->WaitForImports();
-		CHECK_FALSE(FileSystem::Exists(record));
+		CHECK(countLines() == linesAfterSave);
 		CHECK(manager->GetDependencies(UUID(0x5011)) == Handles({ 0x9012 }));
 		manager.reset();
 
 		// Missing, the record is made again from the file when the project opens.
+		REQUIRE(FileSystem::Remove(records));
 		manager = project.Open();
 		CHECK(manager->GetDependencies(UUID(0x5011)) == Handles({ 0x9012 }));
-		CHECK(FileSystem::IsRegularFile(record));
+		CHECK(manager->GetImportRecord(UUID(0x5011)).has_value());
 	}
 
 	TEST_CASE("Packs are ordered by first use, and pruning keeps what scenes and AlwaysInclude use")

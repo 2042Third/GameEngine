@@ -2,6 +2,7 @@
 
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/EditorAssetManager.h"
+#include "Strata/Asset/ImportRecordStore.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Audio/AudioClipAsset.h"
 #include "Strata/Core/FileSystem.h"
@@ -451,6 +452,40 @@ TEST_SUITE("Asset.Editor")
 		}, std::chrono::milliseconds(15000)));
 		CHECK_FALSE(manager->HasFolder(".hidden"));
 		CHECK(manager->GetAssetsBelowFolder("").empty());
+	}
+
+	TEST_CASE("A cache written before the records store is taken over: nothing is imported again, and the old files go")
+	{
+		ScopedJobSystem jobs;
+		RegisterTestModelImporter();
+		TestProject project("EditorRecordsMigration");
+		project.Write("Models/Robot.sttestmodel", { 'r' });
+		AssetHandle robot;
+		nlohmann::json record;
+		{
+			Ref<EditorAssetManager> manager = project.Open();
+			robot = manager->FindAssetByPath("Models/Robot.sttestmodel");
+			REQUIRE(robot.IsValid());
+			const std::optional<nlohmann::json> stored = manager->GetImportRecord(robot);
+			REQUIRE(stored.has_value());
+			record = *stored;
+		}
+
+		// The earlier layout: a record file per asset and the asset index, no records file.
+		REQUIRE(FileSystem::Remove(project.Cache / FileSystem::FromUTF8(ImportRecordStore::c_FileName)));
+		REQUIRE(FileSystem::WriteText(project.Cache / (robot.ToString() + ".import"), JsonUtils::Dump(record, 1, '\t')));
+		REQUIRE(FileSystem::WriteText(project.Cache / "AssetIndex.json",
+			JsonUtils::Dump(nlohmann::json { { "Format", "AssetIndex" }, { "Version", 1 }, { "Assets", { { robot.ToString(), "Models/Robot.sttestmodel" } } } })));
+		const uint32_t imports = TestModelImporter::s_ImportCount;
+		Ref<EditorAssetManager> manager = project.Open();
+		CHECK(TestModelImporter::s_ImportCount == imports);
+		CHECK(manager->GetImportInfo(robot).Imported);
+		CHECK(manager->GetImportInfo(robot).SubAssets.size() == 3);
+		CHECK(manager->GetImportRecord(robot) == std::optional<nlohmann::json>(record));
+		REQUIRE(manager->FlushImportRecords());
+		CHECK_FALSE(FileSystem::Exists(project.Cache / (robot.ToString() + ".import")));
+		CHECK_FALSE(FileSystem::Exists(project.Cache / "AssetIndex.json"));
+		CHECK(FileSystem::IsRegularFile(project.Cache / FileSystem::FromUTF8(ImportRecordStore::c_FileName)));
 	}
 
 	TEST_CASE("Assets and folders go to the trash and come back with their handles")
@@ -1197,11 +1232,12 @@ TEST_SUITE("Asset.Editor")
 		REQUIRE(FileSystem::WriteText(project.Cache / (brick.ToString() + ".bin.staged"), "partial"));
 		Ref<EditorAssetManager> manager = project.Open();
 		CHECK(FileSystem::Exists(project.Cache / (brick.ToString() + ".bin")));
-		CHECK(FileSystem::Exists(project.Cache / (brick.ToString() + ".import")));
+		CHECK(manager->GetImportRecord(brick).has_value());
 		CHECK_FALSE(FileSystem::Exists(project.Cache / (brick.ToString() + ".bin.staged")));
 		CHECK_FALSE(FileSystem::Exists(project.Cache / (stone.ToString() + ".bin")));
-		CHECK_FALSE(FileSystem::Exists(project.Cache / (stone.ToString() + ".import")));
-		CHECK(FileSystem::Exists(project.Cache / "AssetIndex.json"));
+		CHECK_FALSE(manager->GetImportRecord(stone).has_value());
+		REQUIRE(manager->FlushImportRecords());
+		CHECK(FileSystem::Exists(project.Cache / FileSystem::FromUTF8(ImportRecordStore::c_FileName)));
 		CHECK(LoadTexture(*manager, brick));
 	}
 
