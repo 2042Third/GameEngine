@@ -25,8 +25,8 @@
 // (Simulate has no audio). So the Scripting and Audio modules use physics and audio through the Scene layer and never
 // include each other's headers (the layers of StrataTests/Architecture/Layers.json).
 //
-// The built-in providers: PhysicsSystem offers ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries and
-// ICharacterControl; AudioSystem offers IAudioPlayback; the Animation module's system offers ISkinningPoses, IAnimatorControl and
+// The built-in providers: PhysicsSystem offers ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries,
+// ICharacterControl and IPhysicsCapacity; AudioSystem offers IAudioPlayback; the Animation module's system offers ISkinningPoses, IAnimatorControl and
 // IAnimationEventSource (the editor's pose preview provides ISkinningPoses for edited scenes, where no system runs). All
 // services are main thread only, like the scene. IAudioOutput, defined here too, is an engine service
 // (Core/EngineServices.h): it belongs to the process, not to a scene.
@@ -360,6 +360,39 @@ namespace Strata
 
 		virtual AnimationEventListenerID AddAnimationEventListener(AnimationEventCallback callback) = 0;
 		virtual bool RemoveAnimationEventListener(AnimationEventListenerID id) = 0;
+	};
+
+	//////////////////////////////////////////////////////////////////////////
+	// Physics capacity
+	//////////////////////////////////////////////////////////////////////////
+
+	// What a running scene's physics world holds and has room for (IPhysicsCapacity). Bodies count the body slots in use:
+	// every body of the world, also those of inactive entities, and character controllers' presence bodies.
+	struct PhysicsCapacityInfo
+	{
+		uint32_t Bodies = 0;
+		uint32_t MaxBodies = 0;          // The capacity now (it grows, see PhysicsWorld); 0 while the scene has no physics world
+		uint32_t WaitingForSlot = 0;     // Entities waiting for a body slot: a world at its growth limit, or before its growth
+		uint32_t PendingOther = 0;       // Entities waiting for a body for other reasons (a mesh loading, a degenerate transform)
+		uint32_t AddedLastUpdate = 0;    // Bodies built (or rebuilt) during the scene's last update
+		uint32_t RemovedLastUpdate = 0;  // Bodies destroyed during it
+		uint32_t GrowthCount = 0;        // Growths of the world since it was created
+		float LastGrowthMs = 0.0f;
+		uint64_t ReservedBytes = 0;      // What the world's capacities reserve (PhysicsWorld::EstimateReservedBytes)
+	};
+
+	// The capacity of a running scene's physics world (PhysicsSystem), for code that may not include the Physics module: the
+	// world streamer reserves room for the cells it is about to load, the editor shows it and games log it. Cheap: no work
+	// grows with the bodies.
+	class IPhysicsCapacity
+	{
+	public:
+		virtual ~IPhysicsCapacity() = default;
+
+		virtual PhysicsCapacityInfo GetCapacityInfo() const = 0;
+		// Asks for room for `bodies` bodies in all: a world with less grows before its next step (see PhysicsWorld::Reserve).
+		// The latest call counts; 0 reserves nothing.
+		virtual void Reserve(uint32_t bodies) = 0;
 	};
 
 	// The engine's audio output (AudioEngine), which outlives every scene: an engine service (Core/EngineServices.h) the

@@ -35,14 +35,14 @@ namespace Strata
 	// and static bodies only follow signaled changes, see PhysicsWorld).
 	//
 	// Other systems reach it through the scene services it registers while it exists (Scene/SceneServices.h):
-	// ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries and ICharacterControl. Collision events are collected during each
+	// ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries, ICharacterControl and IPhysicsCapacity. Collision events are collected during each
 	// step and dispatched afterwards on the main thread to the registered listeners (see ICollisionEventSource, which also
 	// says which contacts are tracked). Listeners may use the whole scene and physics API, including destroying entities;
 	// End events caused by changes made outside a step are dispatched after the next update.
 	//
 	// Main thread only. Functions return false / zero / empty results while there is no simulation.
 	class PhysicsSystem : public SceneSystem, public ICollisionEventSource, public IBodyMotionQuery, public IBodyControl, public IPhysicsQueries,
-		public ICharacterControl
+		public ICharacterControl, public IPhysicsCapacity
 	{
 	public:
 		explicit PhysicsSystem(Scene& scene);
@@ -141,6 +141,14 @@ namespace Strata
 		bool TeleportCharacter(Entity entity, const glm::vec3& position) override;
 		bool AddCharacterMotion(Entity entity, const glm::vec3& displacement) override;
 		std::optional<CharacterState> GetCharacterState(Entity entity) override;
+
+		//////////////////////////////////////////////////////////////////////////
+		// Capacity (IPhysicsCapacity; see PhysicsWorld::GetCapacityInfo and Reserve). A reservation made before the world
+		// exists applies to it once it is created, and ends when the scene stops.
+		//////////////////////////////////////////////////////////////////////////
+
+		PhysicsCapacityInfo GetCapacityInfo() const override;
+		void Reserve(uint32_t bodies) override;
 	private:
 		struct CollisionListener
 		{
@@ -169,6 +177,7 @@ namespace Strata
 		Scope<PhysicsWorld> m_World;
 		bool m_Running = false;
 		bool m_WorldRequested = false;
+		uint32_t m_ReservedBodies = 0; // See Reserve
 		std::vector<entt::scoped_connection> m_CreationConnections; // Watch for the first physics component
 
 		std::vector<Ref<CollisionListener>> m_CollisionListeners;

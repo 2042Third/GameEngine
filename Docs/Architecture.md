@@ -268,10 +268,14 @@ are counted (`PhysicsStats::BodyOverflowCount`, `ContactOverflowSteps`), and wha
 (`Scene::GetLineageID`: the scene asset it was loaded from or saved as, else the scene and its copies; never another
 scene of the same name), so the scene's next world is sized for it. Jolt reserves a world's buffers when it is created
 and does not survive a failed allocation, so the capacities a scene may ask for are limited (`PhysicsCapacitySettings`:
-about 80 bytes per body, 90 per body pair and 830 per contact constraint, about 940 MiB at the limits). Other systems
-use physics through the scene services `PhysicsSystem` offers (`ICollisionEventSource`, `IBodyMotionQuery`,
-`IBodyControl`, `IPhysicsQueries`, `ICharacterControl`, with `CollisionEvent`, `RaycastHit` and `CharacterState`, in
-`Scene/SceneServices.h`); collision events
+about 80 bytes per body, 90 per body pair and 830 per contact constraint, about 940 MiB at the limits;
+`PhysicsWorld::EstimateReservedBytes` estimates what given capacities reserve, fitted to the reference machine's commit
+charge). Other systems use physics through the scene services `PhysicsSystem` offers (`ICollisionEventSource`,
+`IBodyMotionQuery`, `IBodyControl`, `IPhysicsQueries`, `ICharacterControl`, `IPhysicsCapacity`, with `CollisionEvent`,
+`RaycastHit`, `CharacterState` and `PhysicsCapacityInfo`, in `Scene/SceneServices.h`); `IPhysicsCapacity` reports body
+slots in use, the capacity, bodies waiting for a slot or for other reasons, the bodies built and destroyed in the last
+update (counted per `Scene::GetFrameIndex`, so no call per frame is needed), growths and the reserved bytes, all without
+work that grows with the bodies, and reserves room ahead of a load; collision events
 collected during a step are dispatched
 afterwards on the main thread to the listeners. Contacts are tracked only for pairs someone wants (every pair while a
 listener of all entities is registered, otherwise pairs with a watched entity, such as one whose script has contact
@@ -786,6 +790,7 @@ which means the module is not in the build or its system does not run in this mo
 | `IBodyControl`: velocities, forces, impulses, gravity scale, wake-up, teleport | `PhysicsSystem` | script host (`RigidBody`) |
 | `IPhysicsQueries`: raycasts and overlaps | `PhysicsSystem` | script host (`Physics`) |
 | `ICharacterControl`: character controllers' walk velocity, jumps, teleports, root motion and state | `PhysicsSystem` | script host (`CharacterController`), animation's root motion |
+| `IPhysicsCapacity`: bodies against the capacity, waiting bodies, the last update's builds and destructions, growths, reserved bytes; room reserved ahead of a load | `PhysicsSystem` | the world streamer, the editor (Streaming panel, status bar, `physics.stats`), games' perf logs, tests |
 | `IAudioPlayback`: sources and one-shots | `AudioSystem` (an adapter object) | script host (`AudioSource`, `Audio`) |
 | `ISkinningPoses`: each animator's pose (model-space joint matrices with a version), and which animators renderers drew | `AnimationSystem`; the editor's pose preview for edited scenes | `RenderScene` (palettes of skinned meshes), `SceneRenderer` (reports the animators of what it drew) |
 | `IAnimatorControl`: play, cross-fade, parameters, speed, state queries, joint transforms | `AnimationSystem` | script host (`Animator`), tools and tests |

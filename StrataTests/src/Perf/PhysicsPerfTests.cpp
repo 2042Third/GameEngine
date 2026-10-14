@@ -242,14 +242,30 @@ TEST_SUITE("Perf.Physics")
 
 		const PhysicsCapacitySettings largest { PhysicsCapacitySettings::c_MaxBodiesLimit, PhysicsCapacitySettings::c_MaxBodyPairsLimit,
 			PhysicsCapacitySettings::c_MaxContactConstraintsLimit };
+		// PhysicsWorld::EstimateReservedBytes of a world with those capacities (the settings PhysicsSystem gives it).
+		const auto estimateMB = [&](const PhysicsCapacitySettings& capacity)
+		{
+			PhysicsSettings settings = PhysicsSystem::GetDefaultSettings();
+			settings.MaxBodies = capacity.MaxBodies;
+			settings.MaxBodyPairs = capacity.MaxBodyPairs;
+			settings.MaxContactConstraints = capacity.MaxContactConstraints;
+			return static_cast<double>(PhysicsWorld::EstimateReservedBytes(PhysicsWorld::ResolveCapacities(settings, PhysicsWorld::CountBodyCandidates(scene)))) / c_MB;
+		};
 		// What the largest capacities reserve, and the most bodies with the pairs and contacts sized automatically for them:
 		// both budgets are below 1 GiB (1073.7 MB), the physics workstream's acceptance limit.
 		Perf::CheckBudgetsConfirmed({ "Perf.Physics.LargestCapacities.ReservedMemory", "Perf.Physics.MostBodies.ReservedMemory" }, [&]
 		{
 			const uint64_t largestReserved = measureReserved(largest);
 			const uint64_t mostBodiesReserved = measureReserved({ PhysicsCapacitySettings::c_MaxBodiesLimit, 0, 0 });
-			MESSAGE("Reserved for the largest capacities: ", static_cast<double>(largestReserved) / c_MB, " MB; for the most bodies: ",
-				static_cast<double>(mostBodiesReserved) / c_MB, " MB");
+			MESSAGE("Reserved for the largest capacities: ", static_cast<double>(largestReserved) / c_MB, " MB (estimated ", estimateMB(largest),
+				" MB); for the most bodies: ", static_cast<double>(mostBodiesReserved) / c_MB, " MB (estimated ",
+				estimateMB({ PhysicsCapacitySettings::c_MaxBodiesLimit, 0, 0 }), " MB)");
+#if defined(ST_PLATFORM_WINDOWS)
+			// The estimate is of what a world reserves, which is what private bytes count on Windows (the commit charge); other
+			// systems count only the pages touched so far.
+			CHECK(static_cast<double>(largestReserved) / c_MB == doctest::Approx(estimateMB(largest)).epsilon(0.15));
+			CHECK(static_cast<double>(mostBodiesReserved) / c_MB == doctest::Approx(estimateMB({ PhysicsCapacitySettings::c_MaxBodiesLimit, 0, 0 })).epsilon(0.15));
+#endif
 			return Perf::MetricValues { { "Perf.Physics.LargestCapacities.ReservedMemory", static_cast<double>(largestReserved) / c_MB },
 				{ "Perf.Physics.MostBodies.ReservedMemory", static_cast<double>(mostBodiesReserved) / c_MB } };
 		});

@@ -50,11 +50,13 @@ namespace Strata
 		m_Scene.RegisterService<IBodyControl>(*this);
 		m_Scene.RegisterService<IPhysicsQueries>(*this);
 		m_Scene.RegisterService<ICharacterControl>(*this);
+		m_Scene.RegisterService<IPhysicsCapacity>(*this);
 	}
 
 	PhysicsSystem::~PhysicsSystem()
 	{
 		OnRuntimeStop();
+		m_Scene.UnregisterService<IPhysicsCapacity>(*this);
 		m_Scene.UnregisterService<ICharacterControl>(*this);
 		m_Scene.UnregisterService<IPhysicsQueries>(*this);
 		m_Scene.UnregisterService<IBodyControl>(*this);
@@ -113,6 +115,7 @@ namespace Strata
 		m_CreationConnections.clear();
 		m_WorldRequested = false;
 		m_Running = false;
+		m_ReservedBodies = 0;
 		if (m_World)
 		{
 			// What this world lacked, the scene's next world gets.
@@ -146,6 +149,18 @@ namespace Strata
 		SyncLayers();
 		m_World->Simulate(timestep);
 		DispatchCollisionEvents();
+	}
+
+	PhysicsCapacityInfo PhysicsSystem::GetCapacityInfo() const
+	{
+		return m_World ? m_World->GetCapacityInfo() : PhysicsCapacityInfo();
+	}
+
+	void PhysicsSystem::Reserve(uint32_t bodies)
+	{
+		m_ReservedBodies = bodies;
+		if (m_World)
+			m_World->Reserve(bodies);
 	}
 
 	CollisionListenerID PhysicsSystem::AddCollisionListener(CollisionCallback callback, CollisionListenerScope scope)
@@ -471,6 +486,8 @@ namespace Strata
 		m_World = CreateScope<PhysicsWorld>(m_Scene, settings, GetRememberedCapacityDemand(m_Scene.GetLineageID()));
 		m_AppliedGravity = m_Scene.GetSettings().Gravity;
 		m_AppliedLayerMasks = settings.LayerCollisionMasks;
+		if (m_ReservedBodies > 0)
+			m_World->Reserve(m_ReservedBodies);
 		// Contacts are tracked for the listeners and watches registered so far.
 		UpdateContactTracking();
 		for (const auto& [entity, count] : m_CollisionWatches)

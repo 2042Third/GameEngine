@@ -611,6 +611,89 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(differentPoses == 0);
 	}
 
+	TEST_CASE("IPhysicsCapacity reports bodies, waits, the last update's work and what the world reserves, and reserves room")
+	{
+		ScopedCapacityDemands demands;
+		Scene scene("Capacity");
+		scene.GetSettings().Gravity = glm::vec3(0.0f);
+		CHECK(scene.GetService<IPhysicsCapacity>() == nullptr); // Only while the scene runs
+		CreateBoxRow(scene, 10);
+		Entity flat = CreateDynamicBox(scene, "Flat", glm::vec3(0.0f, 20.0f, 0.0f));
+		flat.GetTransform().Scale = glm::vec3(0.0f);
+
+		scene.OnRuntimeStart();
+		IPhysicsCapacity* capacity = scene.GetService<IPhysicsCapacity>();
+		REQUIRE(capacity != nullptr);
+		PhysicsWorld* world = GetPhysics(scene).GetWorld();
+		REQUIRE(world != nullptr);
+		PhysicsCapacityInfo info = capacity->GetCapacityInfo();
+		CHECK(info.Bodies == 10);
+		CHECK(info.MaxBodies == 65536);
+		CHECK(info.WaitingForSlot == 0);
+		CHECK(info.PendingOther == 1); // The box scaled to zero
+		CHECK(info.ReservedBytes == PhysicsWorld::EstimateReservedBytes(world->GetSettings()));
+		CHECK(info.ReservedBytes > 0);
+
+		// The work of each update: bodies built, then destroyed.
+		StepScene(scene, 1);
+		std::vector<Entity> spawned = CreateBoxRow(scene, 50, 5.0f);
+		StepScene(scene, 1);
+		info = capacity->GetCapacityInfo();
+		CHECK(info.AddedLastUpdate == 50);
+		CHECK(info.RemovedLastUpdate == 0);
+		CHECK(GetPhysics(scene).GetStats().BodiesAddedLastUpdate == 50);
+		scene.DestroyEntities(std::vector<Entity>(spawned.begin(), spawned.begin() + 20));
+		StepScene(scene, 1);
+		info = capacity->GetCapacityInfo();
+		CHECK(info.AddedLastUpdate == 0);
+		CHECK(info.RemovedLastUpdate == 20);
+		CHECK(info.Bodies == 40);
+		StepScene(scene, 1);
+		CHECK(capacity->GetCapacityInfo().RemovedLastUpdate == 0);
+
+		// Room asked for grows the world before the next step, and what it reserves grows with it.
+		capacity->Reserve(100'000);
+		CHECK(capacity->GetCapacityInfo().MaxBodies == 65536);
+		StepScene(scene, 1);
+		info = capacity->GetCapacityInfo();
+		CHECK(info.MaxBodies == 131072);
+		CHECK(info.GrowthCount == 1);
+		CHECK(info.ReservedBytes == PhysicsWorld::EstimateReservedBytes(world->GetSettings()));
+		CHECK(GetPhysics(scene).GetStats().ChangeTime >= info.LastGrowthMs);
+		scene.OnRuntimeStop();
+		CHECK(scene.GetService<IPhysicsCapacity>() == nullptr);
+	}
+
+	TEST_CASE("The reserved bytes of a world follow its capacities")
+	{
+		PhysicsSettings small = PhysicsWorld::ResolveCapacities(PhysicsSettings(), 10);
+		PhysicsSettings large = PhysicsWorld::ResolveCapacities(PhysicsSettings(), 100'000);
+		CHECK(PhysicsWorld::EstimateReservedBytes(large) > PhysicsWorld::EstimateReservedBytes(small));
+		// The reference machine's world at the most bodies (Perf.Physics.MostBodies.ReservedMemory) reserved 554.96 MB, and one at
+		// the largest capacities (LargestCapacities.ReservedMemory) 984.2 MB: the estimate is within 15% of both.
+		PhysicsSettings mostBodies;
+		mostBodies.MaxBodies = PhysicsCapacitySettings::c_MaxBodiesLimit;
+		const double mostBodiesMB = static_cast<double>(PhysicsWorld::EstimateReservedBytes(PhysicsWorld::ResolveCapacities(mostBodies, 2))) / 1.0e6;
+		CHECK(mostBodiesMB == doctest::Approx(554.96).epsilon(0.15));
+		PhysicsSettings largest;
+		largest.MaxBodies = PhysicsCapacitySettings::c_MaxBodiesLimit;
+		largest.MaxBodyPairs = PhysicsCapacitySettings::c_MaxBodyPairsLimit;
+		largest.MaxContactConstraints = PhysicsCapacitySettings::c_MaxContactConstraintsLimit;
+		const double largestMB = static_cast<double>(PhysicsWorld::EstimateReservedBytes(PhysicsWorld::ResolveCapacities(largest, 2))) / 1.0e6;
+		CHECK(largestMB == doctest::Approx(984.2).epsilon(0.15));
+	}
+
+	TEST_CASE("The body candidates of a scene count rigid bodies, colliders of their own and character controllers")
+	{
+		Scene scene("Candidates");
+		CreateBoxRow(scene, 3);                                            // Rigid bodies with colliders: 3
+		CreateStaticBox(scene, "Static", glm::vec3(0.0f), glm::vec3(1.0f)); // A collider of its own: 1
+		Entity both = CreateStaticBox(scene, "Both", glm::vec3(5.0f), glm::vec3(1.0f));
+		both.AddComponent<SphereColliderComponent>();                      // Two colliders, one body: 1
+		scene.CreateEntity("Walker").AddComponent<CharacterControllerComponent>(); // A presence body: 1
+		CHECK(PhysicsWorld::CountBodyCandidates(scene) == 6);
+	}
+
 	TEST_CASE("Steps that overflow the contact buffers are counted, warned about once and remembered")
 	{
 		ScopedCapacityDemands demands;

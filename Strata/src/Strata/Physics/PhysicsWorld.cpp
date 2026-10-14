@@ -112,6 +112,13 @@ namespace Strata
 		constexpr uint64_t c_TempBytesPerBody = 32;
 		// Per contact constraint: the constraint itself, its offset, its island links and their validation.
 		constexpr uint64_t c_TempBytesPerContactConstraint = JPH::ContactConstraintManager::cMaxConstraintSize + 4 * sizeof(uint32_t);
+		// What Jolt reserves per capacity besides the scratch memory (see PhysicsWorld::EstimateReservedBytes): fitted to the
+		// reference machine's commit charge of worlds at the most bodies and at the largest capacities (555 and 984 MB), which
+		// cost about 80 bytes per body, 90 per body pair and 835 per contact constraint with their automatic scratch memory.
+		constexpr uint64_t c_ReservedBytesPerBody = 80 - c_TempBytesPerBody;
+		constexpr uint64_t c_ReservedBytesPerBodyPair = 90;
+		static_assert(c_TempBytesPerContactConstraint < 835, "Jolt's contact constraints grew: fit the reserved bytes per contact constraint again");
+		constexpr uint64_t c_ReservedBytesPerContactConstraint = 835 - c_TempBytesPerContactConstraint;
 		static_assert(PhysicsCapacitySettings::c_MaxBodiesLimit <= JPH::PhysicsSystem::cMaxBodiesLimit, "Scene capacities exceed Jolt's body limit");
 		static_assert(PhysicsCapacitySettings::c_MaxBodyPairsLimit <= JPH::PhysicsSystem::cMaxBodyPairsLimit, "Scene capacities exceed Jolt's body pair limit");
 		static_assert(PhysicsCapacitySettings::c_MaxContactConstraintsLimit <= JPH::PhysicsSystem::cMaxContactConstraintsLimit,
@@ -147,7 +154,8 @@ namespace Strata
 			InvalidColliders,    // Every collider has invalid data; waits for a component change
 			DegenerateTransform, // Retried when a transform change is signaled (on the entity or an ancestor)
 			MissingMesh,         // Retried when the mesh provider reports new data or a shape finished cooking
-			WaitingForSlot       // The world is full: queued in PhysicsWorldData::SlotWaiters, retried when a slot frees or the world grows
+			WaitingForSlot,      // The world is full: queued in PhysicsWorldData::SlotWaiters, retried when a slot frees or the world grows
+			Count
 		};
 
 		//////////////////////////////////////////////////////////////////////////
@@ -924,35 +932,6 @@ namespace Strata
 			return result;
 		}
 
-		// The entities that may own a body when the world is created: those with a RigidBody, and collider entities without
-		// one (colliders merged into an ancestor's body count too, so this is an upper bound). Linear, without allocating.
-		uint32_t CountBodyCandidates(const Scene& scene)
-		{
-			const entt::registry& registry = scene.GetRegistry();
-			uint64_t count = 0;
-			if (const auto* rigidBodies = registry.storage<RigidBodyComponent>())
-				count += rigidBodies->size();
-			const auto countColliders = [&]<typename Collider, typename... Earlier>()
-			{
-				const auto* colliders = registry.storage<Collider>();
-				if (!colliders)
-					return;
-				for (const entt::entity handle : static_cast<const entt::sparse_set&>(*colliders))
-				{
-					// Entities with several colliders count once (with the first collider type they have).
-					if (!registry.any_of<RigidBodyComponent, Earlier...>(handle))
-						count++;
-				}
-			};
-			countColliders.template operator()<BoxColliderComponent>();
-			countColliders.template operator()<SphereColliderComponent, BoxColliderComponent>();
-			countColliders.template operator()<CapsuleColliderComponent, BoxColliderComponent, SphereColliderComponent>();
-			countColliders.template operator()<MeshColliderComponent, BoxColliderComponent, SphereColliderComponent, CapsuleColliderComponent>();
-			// Character controllers have presence bodies.
-			count += CharacterControllerSet::CountCandidates(scene);
-			return static_cast<uint32_t>(std::min<uint64_t>(count, UINT32_MAX));
-		}
-
 	}
 
 	struct PhysicsWorldData
@@ -1022,6 +1001,7 @@ namespace Strata
 		bool AutomaticMaxContactConstraints = false;
 		bool AutomaticTempAllocatorSize = false;
 		uint32_t SlotWaiterCount = 0;
+		std::array<uint32_t, static_cast<size_t>(BuildFailure::Count)> FailureCounts {}; // Records per BuildFailure (see SetFailure)
 		entt::entity FirstSlotWaiter = entt::null;
 		ErrorThrottle SlotWaiterErrors { "Physics" };                 // One aggregated error while bodies wait for a slot
 		// The records waiting for a slot, in the order they started waiting, with the ticket each got then: an entry whose
@@ -1032,6 +1012,18 @@ namespace Strata
 		PhysicsCapacityDemand Demand;
 		// Growth (see GrowWorld): the bodies asked to have room for (PhysicsWorld::Reserve), and the growths so far.
 		uint32_t ReservedBodies = 0;
+		uint64_t ReservedBytes = 0;    // EstimateReservedBytes of the settings in effect
+		// What updates of the scene built, destroyed and spent applying changes (see UpdateCounters): those of the update
+		// Scene::GetFrameIndex was CounterFrame in, and of the one before it.
+		struct UpdateCounters
+		{
+			uint32_t BodiesAdded = 0;
+			uint32_t BodiesRemoved = 0;
+			float ChangeTime = 0.0f;
+		};
+		uint64_t CounterFrame = 0;
+		UpdateCounters CurrentUpdate;
+		UpdateCounters PreviousUpdate;
 		uint32_t GrowthCount = 0;
 		float LastGrowthMs = 0.0f;
 		uint32_t LastGrowthFrom = 0;
@@ -1199,12 +1191,41 @@ namespace Strata
 			std::erase_if(data.SlotWaiters, [&](const std::pair<entt::entity, uint64_t>& entry) { return !IsSlotWaiter(data, entry); });
 		}
 
+		// The counters of the scene's current update (Scene::GetFrameIndex, which advances at the end of each update): those of
+		// earlier updates are let go as the frames advance, so no call per frame is needed.
+		PhysicsWorldData::UpdateCounters& GetUpdateCounters(PhysicsWorldData& data)
+		{
+			const uint64_t frame = data.OwnerScene->GetFrameIndex();
+			if (frame != data.CounterFrame)
+			{
+				data.PreviousUpdate = frame == data.CounterFrame + 1 ? data.CurrentUpdate : PhysicsWorldData::UpdateCounters();
+				data.CurrentUpdate = PhysicsWorldData::UpdateCounters();
+				data.CounterFrame = frame;
+			}
+			return data.CurrentUpdate;
+		}
+
+		// The counters of the scene's last update, the one before the current frame index (see GetUpdateCounters).
+		PhysicsWorldData::UpdateCounters GetLastUpdateCounters(const PhysicsWorldData& data)
+		{
+			const uint64_t frame = data.OwnerScene->GetFrameIndex();
+			if (frame == data.CounterFrame)
+				return data.PreviousUpdate;
+			if (frame == data.CounterFrame + 1)
+				return data.CurrentUpdate;
+			return {};
+		}
+
 		// Sets why a record has no body (BuildFailure::None: it has one), counting the records that wait for a free slot and
 		// queuing them in the order they start waiting. A record that fails on a full world again keeps its place.
 		void SetFailure(PhysicsWorldData& data, entt::entity handle, BodyRecord& record, BuildFailure failure)
 		{
 			if (record.Failure == BuildFailure::WaitingForSlot && failure == BuildFailure::WaitingForSlot)
 				return;
+			if (record.Failure != BuildFailure::None)
+				data.FailureCounts[static_cast<size_t>(record.Failure)]--;
+			if (failure != BuildFailure::None)
+				data.FailureCounts[static_cast<size_t>(failure)]++;
 			if (record.Failure == BuildFailure::WaitingForSlot)
 			{
 				data.SlotWaiterCount--;
@@ -1518,6 +1539,7 @@ namespace Strata
 			if (!record.HasBody())
 				return;
 
+			GetUpdateCounters(data).BodiesRemoved++;
 			if (record.InSimulation && !record.AddPending)
 			{
 				// The bodies resting on it must notice, while it can still be found where it is.
@@ -1647,6 +1669,7 @@ namespace Strata
 
 			data.Bodies.clear();
 			data.SlotWaiterCount = 0;
+			data.FailureCounts.fill(0);
 			data.SlotWaiters.clear();
 			data.MergedOwners.clear();
 			data.PolledBodies.clear();
@@ -2235,6 +2258,7 @@ namespace Strata
 
 			// Contacts are tracked per entity pair and carry over to the new body; the next step confirms or ends them.
 			DestroyJoltBody(data, record);
+			GetUpdateCounters(data).BodiesAdded++;
 			record.BodyID = body->GetID();
 			SetFailure(data, handle, record, BuildFailure::None);
 			record.ShapeScale = pose.Scale;
@@ -2811,6 +2835,9 @@ namespace Strata
 			ST_PROFILE_FUNCTION();
 
 			Scene& scene = *data.OwnerScene;
+			// Timed only when there is something to do: physics calls apply pending changes before every query.
+			const bool timed = HasChanges(data);
+			const std::chrono::steady_clock::time_point start = timed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point();
 			bool settled = ApplyChangeRounds(data);
 			// Slots freed by this call go to the records waiting for one, which get their bodies in the same call.
 			if (settled && GiveSlotsToWaiters(data))
@@ -2827,6 +2854,8 @@ namespace Strata
 			FlushBodyBatches(data);
 			ReportBodyLimit(data);
 			ApplyCharacterChanges(data);
+			if (timed)
+				GetUpdateCounters(data).ChangeTime += std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start).count();
 		}
 
 		//////////////////////////////////////////////////////////////////////////
@@ -3065,6 +3094,8 @@ namespace Strata
 			data.LastGrowthFrom = from;
 			data.LastGrowthTo = to;
 			data.LastGrowthMs = std::chrono::duration<float, std::milli>(Clock::now() - start).count();
+			GetUpdateCounters(data).ChangeTime += data.LastGrowthMs;
+			data.ReservedBytes = PhysicsWorld::EstimateReservedBytes(data.Settings);
 			ST_CORE_INFO("Physics: the world of scene '{}' grew from {} to {} bodies in {:.1f} ms; cook the world (world.cook) or raise its physics capacity to "
 				"start at that size", data.OwnerScene->GetName(), from, to, data.LastGrowthMs);
 			if (!data.AutomaticMaxBodies && data.GrowthCount == 1)
@@ -4195,6 +4226,7 @@ namespace Strata
 		data.AutomaticMaxBodyPairs = settings.MaxBodyPairs == 0;
 		data.AutomaticMaxContactConstraints = settings.MaxContactConstraints == 0;
 		data.AutomaticTempAllocatorSize = settings.TempAllocatorSize == 0;
+		data.ReservedBytes = EstimateReservedBytes(data.Settings);
 		data.Allocator = CreateScope<JPH::TempAllocatorImplWithMallocFallback>(data.Settings.TempAllocatorSize);
 		data.Jobs = CreatePhysicsJobSystem(&data.JobCounters);
 		data.JoltSystem = CreateScope<JPH::PhysicsSystem>();
@@ -4254,6 +4286,40 @@ namespace Strata
 			resolved.TempAllocatorSize = static_cast<uint32_t>(std::min<uint64_t>(std::max(scratch, c_MinTempAllocatorSize), UINT32_MAX));
 		}
 		return resolved;
+	}
+
+	uint64_t PhysicsWorld::EstimateReservedBytes(const PhysicsSettings& settings)
+	{
+		const PhysicsSettings resolved = SanitizeSettings(settings);
+		return c_ReservedBytesPerBody * resolved.MaxBodies + c_ReservedBytesPerBodyPair * resolved.MaxBodyPairs
+			+ c_ReservedBytesPerContactConstraint * resolved.MaxContactConstraints + resolved.TempAllocatorSize;
+	}
+
+	uint32_t PhysicsWorld::CountBodyCandidates(const Scene& scene)
+	{
+		const entt::registry& registry = scene.GetRegistry();
+		uint64_t count = 0;
+		if (const auto* rigidBodies = registry.storage<RigidBodyComponent>())
+			count += rigidBodies->size();
+		const auto countColliders = [&]<typename Collider, typename... Earlier>()
+		{
+			const auto* colliders = registry.storage<Collider>();
+			if (!colliders)
+				return;
+			for (const entt::entity handle : static_cast<const entt::sparse_set&>(*colliders))
+			{
+				// Entities with several colliders count once (with the first collider type they have).
+				if (!registry.any_of<RigidBodyComponent, Earlier...>(handle))
+					count++;
+			}
+		};
+		countColliders.template operator()<BoxColliderComponent>();
+		countColliders.template operator()<SphereColliderComponent, BoxColliderComponent>();
+		countColliders.template operator()<CapsuleColliderComponent, BoxColliderComponent, SphereColliderComponent>();
+		countColliders.template operator()<MeshColliderComponent, BoxColliderComponent, SphereColliderComponent, CapsuleColliderComponent>();
+		// Character controllers have presence bodies.
+		count += CharacterControllerSet::CountCandidates(scene);
+		return static_cast<uint32_t>(std::min<uint64_t>(count, UINT32_MAX));
 	}
 
 	PhysicsWorld::~PhysicsWorld()
@@ -4318,6 +4384,23 @@ namespace Strata
 	void PhysicsWorld::ApplyPendingChanges()
 	{
 		ApplyChanges(*m_Data);
+	}
+
+	PhysicsCapacityInfo PhysicsWorld::GetCapacityInfo() const
+	{
+		const PhysicsWorldData& data = *m_Data;
+		PhysicsCapacityInfo info;
+		info.Bodies = GetUsedBodySlots(data);
+		info.MaxBodies = data.Settings.MaxBodies;
+		info.WaitingForSlot = data.SlotWaiterCount;
+		info.PendingOther = data.FailureCounts[static_cast<size_t>(BuildFailure::DegenerateTransform)] + data.FailureCounts[static_cast<size_t>(BuildFailure::MissingMesh)];
+		const PhysicsWorldData::UpdateCounters lastUpdate = GetLastUpdateCounters(data);
+		info.AddedLastUpdate = lastUpdate.BodiesAdded;
+		info.RemovedLastUpdate = lastUpdate.BodiesRemoved;
+		info.GrowthCount = data.GrowthCount;
+		info.LastGrowthMs = data.LastGrowthMs;
+		info.ReservedBytes = data.ReservedBytes;
+		return info;
 	}
 
 	void PhysicsWorld::Reserve(uint32_t bodies)
@@ -4801,6 +4884,10 @@ namespace Strata
 		stats.OrderedSlotCount = data.LastOrderedSlots;
 		stats.BuildCount = data.BuildCount;
 		stats.ParallelBuildCount = data.ParallelBuildCount;
+		const PhysicsWorldData::UpdateCounters lastUpdate = GetLastUpdateCounters(data);
+		stats.BodiesAddedLastUpdate = lastUpdate.BodiesAdded;
+		stats.BodiesRemovedLastUpdate = lastUpdate.BodiesRemoved;
+		stats.ChangeTime = lastUpdate.ChangeTime;
 		stats.AddBatchCount = data.AddBatchCount;
 		stats.SharedShapeCount = static_cast<uint32_t>(data.PrimitiveShapes.size());
 		stats.MeshCheckCount = data.MeshCheckCount;

@@ -139,6 +139,11 @@ namespace Strata
 		uint32_t LastGrowthFrom = 0;
 		uint32_t LastGrowthTo = 0;
 		uint64_t ParallelBuildCount = 0; // Rounds of changes since the world was created that built their bodies on the job threads
+		// The scene's last update (see PhysicsWorld::GetCapacityInfo): bodies built or rebuilt, bodies destroyed, and the
+		// milliseconds spent applying changes (building and destroying bodies, a growth).
+		uint32_t BodiesAddedLastUpdate = 0;
+		uint32_t BodiesRemovedLastUpdate = 0;
+		float ChangeTime = 0.0f;
 	};
 
 	// Triangle data used to build MeshColliderComponent shapes.

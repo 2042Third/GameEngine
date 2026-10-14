@@ -99,6 +99,15 @@ namespace Strata
 		// each at least what `demand` asks for, and an automatic TempAllocatorSize holds a step's scratch data for those
 		// capacities (at least 10 MiB).
 		static PhysicsSettings ResolveCapacities(const PhysicsSettings& settings, uint32_t bodyCount, const PhysicsCapacityDemand& demand = {});
+		// What a world of these resolved capacities (see ResolveCapacities) reserves when it is created, in bytes: Jolt's
+		// buffers (about 48 bytes per body, 90 per body pair and some 300 per contact constraint) and the step's scratch
+		// memory. Fitted to the commit charge the reference machine measures (Perf.Physics.MostBodies.ReservedMemory and
+		// LargestCapacities.ReservedMemory, within 15%); systems that count only touched pages report less.
+		static uint64_t EstimateReservedBytes(const PhysicsSettings& settings);
+		// The entities of a scene that may own a body when a world is created for it: those with a RigidBody, collider entities
+		// without one (colliders merged into an ancestor's body count too, so this is an upper bound) and character
+		// controllers (their presence bodies). Linear, without allocating. Automatic capacities and the world cook count by it.
+		static uint32_t CountBodyCandidates(const Scene& scene);
 
 		PhysicsWorld(const PhysicsWorld&) = delete;
 		PhysicsWorld& operator=(const PhysicsWorld&) = delete;
@@ -122,6 +131,12 @@ namespace Strata
 
 		// Applies the component, hierarchy-activity and destruction changes recorded since the last call.
 		void ApplyPendingChanges();
+
+		// What the world holds and has room for, without work that grows with the bodies (see IPhysicsCapacity). The last
+		// update's counters (also PhysicsStats::BodiesAddedLastUpdate, BodiesRemovedLastUpdate, ChangeTime) are those of the
+		// scene's update before its current frame index (Scene::GetFrameIndex): the update that just ended when read between
+		// updates, the previous one when read during an update.
+		PhysicsCapacityInfo GetCapacityInfo() const;
 
 		// Asks for room for `bodies` bodies in all (character controllers' presence bodies included): a world with less grows
 		// before its next step (see "Capacities"). The world streamer reserves for the cells it is about to load, so their
