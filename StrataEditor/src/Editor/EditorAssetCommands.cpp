@@ -263,6 +263,9 @@ namespace Strata
 				const std::string name = arguments.GetString("name");
 				const std::string templateId = arguments.GetString("template", std::string(ProjectTemplates::c_Empty));
 				const bool force = arguments.GetBool("force", false);
+				// An empty directory would be the editor's working directory, which nobody means.
+				if (arguments.IsValid() && directory.find_first_not_of(" \t") == std::string::npos)
+					arguments.SetError("Parameter 'directory': give the absolute directory to create the project in (it must not be empty)");
 				if (arguments.IsValid() && !ProjectTemplates::Find(templateId))
 					arguments.SetError(fmt::format("Unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
 				if (!arguments.IsValid())

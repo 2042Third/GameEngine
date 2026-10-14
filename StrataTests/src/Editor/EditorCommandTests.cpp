@@ -340,6 +340,21 @@ TEST_SUITE("Editor.Commands")
 		CHECK(critical["messages"].back()["message"] == "status-unread-test two");
 	}
 
+	TEST_CASE("project.create refuses an empty directory as invalid parameters")
+	{
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		for (const char* directory : { "", "  " })
+		{
+			CAPTURE(directory);
+			const EditorCommandResult result = commands.Execute(context, "project.create", { { "directory", directory }, { "name", "Game" } });
+			CHECK_FALSE(result.Success);
+			CHECK(result.ErrorKind == EditorCommandError::InvalidParameters);
+			CHECK(result.Error.find("directory") != std::string::npos);
+			CHECK_FALSE(context.HasProject());
+		}
+	}
+
 	TEST_CASE("editor.quit keeps unsaved changes unless forced")
 	{
 		CommandHarness unchanged;
