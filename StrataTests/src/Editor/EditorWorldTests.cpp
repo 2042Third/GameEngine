@@ -603,3 +603,32 @@ TEST_SUITE("Editor.World")
 		CHECK(project.Context.GetEditScene()->GetEntityCount() == editEntities);
 	}
 }
+
+TEST_SUITE("Editor.World")
+{
+	TEST_CASE("Undoing an edit of a cell that unloaded loads the cell and works once it is in")
+	{
+		WorldProject project("EditorWorldUndoUnloaded", 5);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
+		Settle(project);
+		const UUID boxID = UUID(0x6F0000000000ull); // Cell (0, 0)
+		project.Run("component.set", { { "entity", UUIDToJson(boxID) }, { "component", "Transform" }, { "values", { { "Scale", { 2.0, 2.0, 2.0 } } } } });
+		// Unsaved, the world refuses to close.
+		CHECK_FALSE(project.Try("project.close", nlohmann::json::object()).Success);
+		project.Run("scene.save");
+
+		// Saved, the cell is no longer kept: it unloads when the camera leaves.
+		LookFrom(project, glm::vec3(140.0f, 10.0f, 140.0f));
+		Settle(project);
+		REQUIRE_FALSE(project.Context.GetEditScene()->GetEntityByUUID(boxID));
+		const EditorCommandResult refused = project.Try("edit.undo", nlohmann::json::object());
+		CHECK_FALSE(refused.Success);
+		CHECK(refused.Error.find("the step changes cell Ground (0, 0), which is not loaded; it is loading now") != std::string::npos);
+		Settle(project);
+		REQUIRE(project.Context.GetEditScene()->GetEntityByUUID(boxID));
+		project.Run("edit.undo");
+		CHECK(project.Context.GetEditScene()->GetEntityByUUID(boxID).GetComponent<TransformComponent>().Scale.x == 0.5f);
+		CHECK(project.Context.GetWorld()->IsCellDirty(project.GetCell(0, 0)));
+	}
+}

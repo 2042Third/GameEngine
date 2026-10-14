@@ -269,7 +269,7 @@ namespace
 
 TEST_SUITE("Editor.SceneEdit")
 {
-	TEST_CASE("Entity states record the cell of top-level entities, and undo puts entities back into their cells")
+	TEST_CASE("Entity states record the cell of their top-level entity, and undo puts entities back into their cells")
 	{
 		Scene scene("World");
 		Entity crate = scene.CreateEntity("Crate");
@@ -283,7 +283,7 @@ TEST_SUITE("Editor.SceneEdit")
 		REQUIRE((a != 0 && b != 0));
 
 		CHECK(SceneEdit::CaptureEntity(scene, crate.GetUUID()).Cell == cellA);
-		CHECK(SceneEdit::CaptureEntity(scene, lid.GetUUID()).Cell == UUID::Null()); // Descendants follow their root
+		CHECK(SceneEdit::CaptureEntity(scene, lid.GetUUID()).Cell == cellA); // Descendants follow their root
 		CHECK(SceneEdit::CaptureEntity(scene, tree.GetUUID()).Cell == UUID::Null()); // The persistent scene
 
 		// A move from cell A to cell B is one step; undo and redo move it back and forth.
@@ -341,6 +341,77 @@ TEST_SUITE("Editor.SceneEdit")
 		const SubSceneID again = scene.AdoptSubScene(cellA, {});
 		REQUIRE(undo.Undo(&error));
 		CHECK(scene.GetSubSceneOf(crate) == again);
+		scene.UnregisterService<ISceneCellLoader>(loader);
+	}
+
+	TEST_CASE("Steps on a cell's descendants, creations and deletions wait for the cell too")
+	{
+		Scene scene("World");
+		const AssetHandle cellA = UUID(0xA0);
+		Entity crate = scene.CreateEntity("Crate");
+		Entity lid = scene.CreateChildEntity(crate, "Lid");
+		const UUID crateID = crate.GetUUID();
+		const UUID lidID = lid.GetUUID();
+		const Entity roots[] = { crate };
+		const SubSceneID a = scene.AdoptSubScene(cellA, roots);
+		REQUIRE(a != 0);
+		RecordingCellLoader loader;
+		REQUIRE(scene.RegisterService<ISceneCellLoader>(loader));
+		UndoStack undo;
+
+		// An edit of the lid only: its state names the crate's cell.
+		SceneEditTransaction rename(scene, "Rename 'Lid'", { lidID });
+		lid.GetComponent<NameComponent>().Name = "Top";
+		lid.MarkModified<NameComponent>();
+		REQUIRE(rename.Commit(undo));
+		// A creation in the cell: the state before it (no entity) names the cell it went into.
+		SceneEditTransaction creation(scene, "Create 'Nail'", {});
+		Entity nail = scene.CreateChildEntity(crate, "Nail");
+		const UUID nailID = nail.GetUUID();
+		creation.TrackCreated(nailID);
+		REQUIRE(creation.Commit(undo));
+		const SceneEditAction* created = dynamic_cast<const SceneEditAction*>(undo.GetLatestAction());
+		REQUIRE(created);
+		CHECK_FALSE(created->GetBefore()[0].Exists);
+		CHECK(created->GetBefore()[0].Cell == cellA);
+
+		// The cell unloads with all three. Undoing must not recreate the nail's absence or the lid outside the cell (they would
+		// come back with the cell, twice for the lid): it waits for the cell.
+		REQUIRE(scene.UnloadSubScene(a));
+		scene.FlushSubSceneUnloads();
+		REQUIRE_FALSE(scene.GetEntityByUUID(lidID));
+		std::string error;
+		CHECK_FALSE(undo.Undo(&error));
+		CHECK(loader.Requested == std::vector<AssetHandle> { cellA });
+		CHECK(error.find("cell Props (00000000000000A0)") != std::string::npos);
+		CHECK(scene.GetEntityCount() == 0);
+
+		// The cell is back (as its document holds it, with the nail): both steps undo, and the nail goes again.
+		Entity reloaded = scene.CreateEntityWithUUID(crateID, "Crate");
+		Entity reloadedLid = scene.CreateEntityWithUUID(lidID, "Top");
+		REQUIRE(scene.SetParent(reloadedLid, reloaded));
+		REQUIRE(scene.SetParent(scene.CreateEntityWithUUID(nailID, "Nail"), reloaded));
+		const Entity reloadedRoots[] = { reloaded };
+		REQUIRE(scene.AdoptSubScene(cellA, reloadedRoots) != 0);
+		REQUIRE(undo.Undo(&error));
+		CHECK_FALSE(scene.GetEntityByUUID(nailID));
+		REQUIRE(undo.Undo(&error));
+		CHECK(reloadedLid.GetComponent<NameComponent>().Name == "Lid");
+
+		// Deleting the lid, then losing the cell: redoing the deletion waits for the cell as well.
+		SceneEditTransaction deletion(scene, "Delete 'Lid'", {});
+		deletion.Track(lidID);
+		scene.DestroyEntity(reloadedLid);
+		REQUIRE(deletion.Commit(undo));
+		const SceneEditAction* deleted = dynamic_cast<const SceneEditAction*>(undo.GetLatestAction());
+		REQUIRE(deleted);
+		CHECK(deleted->GetAfter()[0].Cell == cellA);
+		REQUIRE(undo.Undo(&error));
+		REQUIRE(scene.UnloadSubScene(scene.FindSubSceneBySource(cellA)));
+		scene.FlushSubSceneUnloads();
+		loader.Requested.clear();
+		CHECK_FALSE(undo.Redo(&error));
+		CHECK(loader.Requested == std::vector<AssetHandle> { cellA });
 		scene.UnregisterService<ISceneCellLoader>(loader);
 	}
 }

@@ -1,5 +1,6 @@
 #include "Editor/SceneEdit.h"
 
+#include <Strata/Core/Assert.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -91,11 +92,8 @@ namespace Strata
 			state.Parent = entity.GetComponent<RelationshipComponent>().Parent;
 			// Cached by the scene: wide sibling lists are not searched per capture.
 			state.SiblingIndex = scene.GetSiblingIndex(entity);
-			if (!state.Parent.IsValid())
-			{
-				if (const SubSceneStatus* status = scene.GetSubSceneStatus(scene.GetSubSceneOf(entity)))
-					state.Cell = status->Scene;
-			}
+			if (const SubSceneStatus* status = scene.GetSubSceneStatus(scene.GetSubSceneOf(entity)))
+				state.Cell = status->Scene;
 			return state;
 		}
 
@@ -287,7 +285,7 @@ namespace Strata
 			std::vector<AssetHandle> missing;
 			for (const EntityState& state : states)
 			{
-				if (!state.Exists || state.Parent.IsValid() || !state.Cell.IsValid())
+				if (!state.Cell.IsValid())
 					continue;
 				if (!scene.IsSubSceneLoaded(scene.FindSubSceneBySource(state.Cell)) && std::find(missing.begin(), missing.end(), state.Cell) == missing.end())
 					missing.push_back(state.Cell);
@@ -309,12 +307,29 @@ namespace Strata
 			return false;
 		}
 
+		void LinkCells(std::vector<EntityState>& before, std::vector<EntityState>& after)
+		{
+			ST_CORE_ASSERT(before.size() == after.size(), "A step's states list the same entities ({} before, {} after)", before.size(), after.size());
+			for (size_t index = 0; index < before.size() && index < after.size(); index++)
+			{
+				EntityState& from = before[index];
+				EntityState& to = after[index];
+				ST_CORE_ASSERT(from.ID == to.ID, "A step's states list the same entities in the same order");
+				if (!from.Exists && to.Exists)
+					from.Cell = to.Cell;
+				else if (from.Exists && !to.Exists)
+					to.Cell = from.Cell;
+			}
+		}
+
 	}
 
 	SceneEditAction::SceneEditAction(Scene& scene, std::string name, std::vector<EntityState> before, std::vector<EntityState> after, std::string mergeKey)
-		: m_Scene(&scene), m_Name(std::move(name)), m_Before(CreateRef<const std::vector<EntityState>>(std::move(before))),
-		m_After(CreateRef<const std::vector<EntityState>>(std::move(after))), m_MergeKey(std::move(mergeKey))
+		: m_Scene(&scene), m_Name(std::move(name)), m_MergeKey(std::move(mergeKey))
 	{
+		SceneEdit::LinkCells(before, after);
+		m_Before = CreateRef<const std::vector<EntityState>>(std::move(before));
+		m_After = CreateRef<const std::vector<EntityState>>(std::move(after));
 	}
 
 	bool SceneEditAction::Execute(std::string* outError)

@@ -313,23 +313,12 @@ namespace Strata
 
 	void EditorWorld::MarkStates(const std::vector<EntityState>& states)
 	{
+		// A state names the document of its entity (its top-level ancestor's; for an entity that does not exist, the one it
+		// left or goes into).
 		for (const EntityState& state : states)
 		{
-			if (!state.Parent.IsValid())
-			{
-				if (state.Cell.IsValid())
-					MarkCellDirty(state.Cell);
-				else
-					m_PersistentDirty = true;
-				continue;
-			}
-			// A descendant belongs to its top-level ancestor's document: the entity's now, else its parent's.
-			Entity entity = m_Scene.GetEntityByUUID(state.ID);
-			if (!entity)
-				entity = m_Scene.GetEntityByUUID(state.Parent);
-			const SubSceneStatus* status = entity ? m_Scene.GetSubSceneStatus(m_Scene.GetSubSceneOf(entity)) : nullptr;
-			if (status && status->Scene.IsValid())
-				MarkCellDirty(status->Scene);
+			if (state.Cell.IsValid())
+				MarkCellDirty(state.Cell);
 			else
 				m_PersistentDirty = true;
 		}
