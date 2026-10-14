@@ -4,6 +4,7 @@
 #include "Strata/Core/FileSystem.h"
 
 #include <atomic>
+#include <cerrno>
 #include <system_error>
 
 namespace Strata
@@ -14,6 +15,15 @@ namespace Strata
 
 		// Numbers the temporary files of this process, so that two writers of one file never share theirs.
 		std::atomic<uint64_t> s_NextTemporary = 0;
+
+		// Why a file stream failed, as the C library said (`error`: errno right after the failure, which the streams' open,
+		// write and close leave there), for messages that name the file being written; the temporary file is a detail.
+		std::string DescribeFailure(const std::filesystem::path& path, int error)
+		{
+			if (error == 0)
+				return fmt::format("Could not write '{}'", FileSystem::ToUTF8(path));
+			return fmt::format("Could not write '{}': {}", FileSystem::ToUTF8(path), std::generic_category().message(error));
+		}
 
 	}
 
@@ -27,10 +37,11 @@ namespace Strata
 			m_Error = fmt::format("Could not create the folder '{}'", FileSystem::ToUTF8(m_Path.parent_path()));
 			return;
 		}
+		errno = 0;
 		m_Stream.open(m_TemporaryPath, std::ios::binary | std::ios::trunc);
 		if (!m_Stream)
 		{
-			m_Error = fmt::format("Could not create '{}'", FileSystem::ToUTF8(m_TemporaryPath));
+			m_Error = DescribeFailure(m_Path, errno);
 			return;
 		}
 		m_Buffer.reserve(c_BufferSize);
@@ -54,10 +65,11 @@ namespace Strata
 				return false;
 			if (bytes.size() >= c_BufferSize)
 			{
+				errno = 0;
 				m_Stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 				if (!m_Stream)
 				{
-					Fail(fmt::format("Could not write '{}'", FileSystem::ToUTF8(m_TemporaryPath)));
+					Fail(DescribeFailure(m_Path, errno));
 					return false;
 				}
 				return true;
@@ -71,11 +83,12 @@ namespace Strata
 	{
 		if (m_Buffer.empty())
 			return true;
+		errno = 0;
 		m_Stream.write(m_Buffer.data(), static_cast<std::streamsize>(m_Buffer.size()));
 		m_Buffer.clear();
 		if (!m_Stream)
 		{
-			Fail(fmt::format("Could not write '{}'", FileSystem::ToUTF8(m_TemporaryPath)));
+			Fail(DescribeFailure(m_Path, errno));
 			return false;
 		}
 		return true;
@@ -87,10 +100,11 @@ namespace Strata
 		{
 			if (Flush())
 			{
+				errno = 0;
 				m_Stream.flush();
 				m_Stream.close();
 				if (m_Stream.fail())
-					Fail(fmt::format("Could not write '{}'", FileSystem::ToUTF8(m_TemporaryPath)));
+					Fail(DescribeFailure(m_Path, errno));
 				else
 					m_State = State::Finished;
 			}

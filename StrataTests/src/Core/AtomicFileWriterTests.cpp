@@ -4,6 +4,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "TestHelpers.h"
 
+#include <cerrno>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -128,4 +129,29 @@ TEST_SUITE("Core.AtomicFileWriter")
 		CHECK_FALSE(FileSystem::Exists(blocked.GetTemporaryPath()));
 		CHECK(FileSystem::IsDirectory(directory / "Folder" / "Inside"));
 	}
+
+#if !defined(ST_PLATFORM_WINDOWS)
+	TEST_CASE("A writer that may not create its file names the file and the system's reason, not its temporary file")
+	{
+		// A folder only its owner may read and enter (Windows has no such folder permission: POSIX only).
+		const std::filesystem::path directory = CreateTemporaryDirectory("AtomicWriterDenied") / "ReadOnly";
+		REQUIRE(FileSystem::CreateDirectories(directory));
+		std::error_code permissionError;
+		std::filesystem::permissions(directory, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec, std::filesystem::perm_options::replace,
+			permissionError);
+		REQUIRE_FALSE(permissionError);
+		// A user the system lets write anyway (root) cannot show the failure.
+		const bool denied = !FileSystem::WriteText(directory / "Probe.txt", "probe");
+		if (denied)
+		{
+			AtomicFileWriter writer(directory / "Document.txt");
+			CHECK_FALSE(writer.IsOpen());
+			const std::string error = writer.GetError();
+			CHECK(error.find("Document.txt'") != std::string::npos);
+			CHECK(error.find(".tmp") == std::string::npos);
+			CHECK(error.find(std::generic_category().message(EACCES)) != std::string::npos);
+		}
+		std::filesystem::permissions(directory, std::filesystem::perms::owner_all, std::filesystem::perm_options::replace, permissionError);
+	}
+#endif
 }
