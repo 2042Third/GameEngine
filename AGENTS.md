@@ -42,7 +42,7 @@ the work: checklist item 5.
 | `StrataTests/` | doctest unit tests, test helpers, the feature test project, and the layer table (`Architecture/Layers.json`, `LayeringAllowlist.txt`). |
 | `Samples/` | Games an AI agent made through the editor (`Tetris`), offered as copies by the launcher; open one in place only to change it ([details](Docs/DeveloperGuide.md#repository-layout)). |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest, the build's git commit). |
-| `Tools/` | Standard-library Python tools: generators whose outputs are committed, and `PerfStability.py` ([details](Docs/DeveloperGuide.md#repository-layout)). |
+| `Tools/` | Standard-library Python tools: generators whose outputs are committed, `PerfStability.py`, `PerfLock.py`, `CompatLint.py` and `CIStatus.py` ([details](Docs/DeveloperGuide.md#repository-layout)). |
 | `Docs/` | `README.md` (index), `DeveloperGuide.md` (this file's details), `Architecture.md`, `Roadmap.md` (update its Status when a wave lands), `Manual/`, `Releases/` ([details](Docs/DeveloperGuide.md#repository-layout)). |
 | `.claude/skills/` | Skills for agents: build and test, components, scripting, editor automation, making a game (`strata-make-a-game`). |
 
@@ -74,11 +74,12 @@ Requirements (CMake 3.25+, a C++20 compiler, a Vulkan 1.2+ driver, packages on L
 **Parallel agents:** each concurrently working agent must use its own build directory, e.g.
 `cmake --preset windows -B build/agent-<name>`, because two builds in one directory corrupt each other.
 
-**CI before main:** CI (`.github/workflows/ci.yml`: Windows with MSVC, Linux with GCC 14, macOS with Apple Clang 15)
-runs on pushes to `main`, on pull requests and on pushes to branches named `ci/<name>`. Older compilers and other
-standard libraries reject code that the local ones accept (Apple Clang 15's libc++ has no floating-point
-`std::from_chars`; `size_t` and `uint64_t` are different types on macOS; GCC 14 warns where newer GCCs do not), so push a
-branch that lands many changes (a wave's integration) as `ci/<name>` and wait for green CI before it moves `main`.
+**CI before main:** CI (`.github/workflows/ci.yml`: Windows with MSVC, Linux with GCC 14, macOS with Apple Clang 15,
+each building and testing Release, and a Dist build of every target on Windows) runs on pushes to `main`, on pull
+requests and on pushes to branches named `ci/<name>`. Older compilers and other standard libraries reject code that the
+local ones accept (Apple Clang 15's libc++ has no floating-point `std::from_chars`; `size_t` and `uint64_t` are
+different types on macOS; GCC 14 warns where newer GCCs do not), so push a branch that lands many changes (a wave's
+integration) as `ci/<name>` and wait for green CI before it moves `main`.
 
 **Windows subsystem:** `StrataEditor` and `StrataRuntime` (and exported games) are GUI-subsystem programs on Windows;
 output, headless and scripted runs are *Console* runs (`GetProgramRun`), and fatal startup failures go through
@@ -111,17 +112,19 @@ Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
   `SetPartialLoads(false)`; text tests render until no glyph is pending.
 - **Perf tests** (`Perf.*`, `PerfGPU.*`, label `perf`, Release and Dist; CI skips them, so run `-L perf` on the
   reference machine before merging a change that can affect performance): limits live only in
-  `StrataTests/Perf/Budgets.json`; **budgets only go down** (at most 1.5 times the measurement, lower is better;
-  commits that add or lower one state the measured values; a metric over budget is a regression to fix); failures are
-  confirmed by measuring again; check medians, maxima only for maxima by nature, saying why; peak memory is measured
-  in a helper process; run `Tools/PerfStability.py --runs 5` there before merging changes to budgets or perf tests
-  ([Perf tests](Docs/DeveloperGuide.md#perf-tests)).
+  `StrataTests/Perf/Budgets.json`, measured on the reference machine (a metric it has not measured yet is `Provisional`:
+  recorded, never checked); **budgets only go down** (at most 1.5 times the measurement, lower is better; commits that
+  add or lower one state the measured values; a metric over budget is a regression to fix); failures are confirmed by
+  measuring again; check medians, maxima only for maxima by nature, saying why; peak memory is measured in a helper
+  process; run `Tools/PerfStability.py --runs 5` there before merging changes to budgets or perf tests ([Perf
+  tests](Docs/DeveloperGuide.md#perf-tests)).
 - `EndToEnd*` suites start the built executables (no GPU) with private session directories, free ports and timeouts,
   and terminate what they started when they fail.
 - Tests follow the transform contract, use `Tests::CreateTemporaryDirectory()` for files (never the source tree), never
   open samples in place (`Tests::CopySampleProject`) or change their process's environment for a child, and depend on
   no program outside the build: stand-ins are the test binary's helper modes (`--strata-test-helper=<mode>`). Check
-  that a new regression test fails without its fix.
+  that a new regression test fails without its fix. Tests hold on CI's slowest machines (3 hardware threads): they wait
+  by the clock or a condition, never by a count of frames, and size their own job pools.
 - Expectations that differ in Dist (asserts compiled out, host calls not counted) say so with `#if defined(ST_DIST)`:
   CI tests Release, and only the release steps run the tests in Dist.
 - The **feature test** (golden rule 6, `StrataTests/FeatureTest/`) fails when a registered component is missing from

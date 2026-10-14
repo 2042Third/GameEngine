@@ -37,7 +37,7 @@ jobs:
       publish: ${{ steps.version.outputs.publish }}
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ inputs.tag && format('refs/tags/{0}', inputs.tag) || github.ref }}
           persist-credentials: false
@@ -121,7 +121,7 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.version.outputs.ref }}
           submodules: recursive
@@ -226,7 +226,7 @@ jobs:
           cat "$PACKAGE.${{ matrix.archive }}.sha256"
 
       - name: Upload the archive
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ env.PACKAGE }}
           path: dist/*
@@ -250,13 +250,13 @@ jobs:
       contents: write # gh release create
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.version.outputs.ref }}
           persist-credentials: false
 
       - name: Download the archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: dist
           pattern: Strata-*

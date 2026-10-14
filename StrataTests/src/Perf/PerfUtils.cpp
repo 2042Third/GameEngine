@@ -73,11 +73,13 @@ namespace Strata::Tests::Perf
 			return number;
 		}
 
-		// "<value> <unit> (budget <budget> <unit>, <percent>%[; target <target> <unit>])", the way checks print a value.
+		// "<value> <unit> (budget <budget> <unit>, <percent>%[; target <target> <unit>])", the way checks print a value;
+		// "<value> <unit> (provisional, no budget[; target <target> <unit>])" for a provisional metric.
 		std::string DescribeValue(double value, const BudgetEntry& entry)
 		{
-			std::string text = fmt::format("{:.4f} {} (budget {:.4f} {}, {:.0f}%", value, entry.Unit, entry.Budget, entry.Unit,
-				entry.Budget > 0.0 ? value / entry.Budget * 100.0 : 0.0);
+			std::string text = entry.Provisional ? fmt::format("{:.4f} {} (provisional, no budget until the reference machine measures it", value, entry.Unit)
+				: fmt::format("{:.4f} {} (budget {:.4f} {}, {:.0f}%", value, entry.Unit, entry.Budget, entry.Unit,
+					entry.Budget > 0.0 ? value / entry.Budget * 100.0 : 0.0);
 			if (entry.Target)
 				text += fmt::format("; target {:.4f} {}", *entry.Target, entry.Unit);
 			return text + ")";
@@ -169,15 +171,37 @@ namespace Strata::Tests::Perf
 			}
 			for (const auto& member : value.items())
 			{
-				if (member.key() != "Measured" && member.key() != "Budget" && member.key() != "Unit" && member.key() != "Target")
+				if (member.key() != "Measured" && member.key() != "Budget" && member.key() != "Unit" && member.key() != "Target"
+					&& member.key() != "Provisional")
 				{
-					error = fmt::format("'{}' has an unknown member '{}' (Measured, Budget, Unit and Target are known)", key, member.key());
+					error = fmt::format("'{}' has an unknown member '{}' (Measured, Budget, Unit, Target and Provisional are known)", key,
+						member.key());
 					return std::nullopt;
 				}
 			}
 
-			const std::optional<double> measured = ReadBudgetValue(value, "Measured", key, error);
-			const std::optional<double> budget = measured ? ReadBudgetValue(value, "Budget", key, error) : std::nullopt;
+			// A provisional entry names its unit (and a target, if the metric has one): its values come from the reference
+			// machine, so it has none to be compared with until then.
+			bool provisional = false;
+			if (const auto marker = value.find("Provisional"); marker != value.end())
+			{
+				if (!marker->is_boolean() || !marker->get<bool>())
+				{
+					error = fmt::format("'{}' has a 'Provisional' that is not true (leave it out of entries that are not provisional)", key);
+					return std::nullopt;
+				}
+				if (value.contains("Measured") || value.contains("Budget"))
+				{
+					error = fmt::format("the provisional '{}' has a 'Measured' or 'Budget': the reference machine measures them, then the "
+						"entry is no longer provisional", key);
+					return std::nullopt;
+				}
+				provisional = true;
+			}
+
+			const std::optional<double> measured = provisional ? std::optional<double>(0.0) : ReadBudgetValue(value, "Measured", key, error);
+			const std::optional<double> budget = provisional ? std::optional<double>(0.0)
+				: measured ? ReadBudgetValue(value, "Budget", key, error) : std::nullopt;
 			if (!measured || !budget)
 				return std::nullopt;
 			const auto unit = value.find("Unit");
@@ -202,7 +226,7 @@ namespace Strata::Tests::Perf
 					return std::nullopt;
 				// The budget enforces a target it does not exceed: such a target says nothing and is removed with the budget
 				// change that reaches it.
-				if (*target >= *budget)
+				if (!provisional && *target >= *budget)
 				{
 					error = fmt::format("the target of '{}' ({}) is not below its budget ({}), which enforces it: remove the target", key, *target,
 						*budget);
@@ -215,6 +239,7 @@ namespace Strata::Tests::Perf
 			entry.Budget = *budget;
 			entry.Unit = unit->get<std::string>();
 			entry.Target = target;
+			entry.Provisional = provisional;
 		}
 		return table;
 	}
@@ -236,6 +261,16 @@ namespace Strata::Tests::Perf
 		return &entry->second;
 	}
 
+	double BudgetChecker::GetBudget(std::string_view key) const
+	{
+		std::string error;
+		const BudgetEntry* entry = Find(key, error);
+		REQUIRE_MESSAGE(entry != nullptr, error);
+		REQUIRE_MESSAGE(!entry->Provisional, fmt::format("metric '{}' is provisional: it has no budget until the reference machine measures it "
+			"(check it with CheckBudgetConfirmed, which records it)", key));
+		return entry->Budget;
+	}
+
 	void BudgetChecker::Record(std::string_view key, double value)
 	{
 		std::string error;
@@ -248,6 +283,7 @@ namespace Strata::Tests::Perf
 		result.Unit = entry->Unit;
 		result.Budget = entry->Budget;
 		result.Target = entry->Target;
+		result.Provisional = entry->Provisional;
 		Store(key, std::move(result));
 	}
 
@@ -301,7 +337,7 @@ namespace Strata::Tests::Perf
 				const double value = values.find(metric.Key)->second;
 				REQUIRE_MESSAGE(std::isfinite(value), fmt::format("'{}' measured a value that is not finite", metric.Key));
 				metric.Attempts.push_back(value);
-				metric.Passed = value <= metric.Entry.Budget;
+				metric.Passed = metric.Entry.Provisional || value <= metric.Entry.Budget;
 
 				std::string line = fmt::format("{}: {}", metric.Key, DescribeValue(value, metric.Entry));
 				if (metric.Passed && attempt > 1)
@@ -325,6 +361,7 @@ namespace Strata::Tests::Perf
 			result.Budget = metric.Entry.Budget;
 			result.Target = metric.Entry.Target;
 			result.Attempts = metric.Attempts;
+			result.Provisional = metric.Entry.Provisional;
 			Store(metric.Key, std::move(result));
 			CHECK_MESSAGE(metric.Passed, fmt::format("'{}' measured {} in {} attempts, each over its budget of {} {}", metric.Key,
 				JoinValues(metric.Attempts, metric.Entry.Unit), metric.Attempts.size(), metric.Entry.Budget, metric.Entry.Unit));
@@ -354,10 +391,7 @@ namespace Strata::Tests::Perf
 
 	double Budget(std::string_view key)
 	{
-		std::string error;
-		const BudgetEntry* entry = GetBudgetChecker().Find(key, error);
-		REQUIRE_MESSAGE(entry != nullptr, error);
-		return entry->Budget;
+		return GetBudgetChecker().GetBudget(key);
 	}
 
 	BudgetChecker& GetBudgetChecker()
@@ -403,7 +437,10 @@ namespace Strata::Tests::Perf
 			nlohmann::json entry = nlohmann::json::object();
 			entry["Value"] = result.Value;
 			entry["Unit"] = result.Unit;
-			entry["Budget"] = result.Budget;
+			if (result.Provisional)
+				entry["Provisional"] = true;
+			else
+				entry["Budget"] = result.Budget;
 			if (result.Target)
 				entry["Target"] = *result.Target;
 			if (!result.Attempts.empty())

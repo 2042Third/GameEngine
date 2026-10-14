@@ -31,7 +31,7 @@ jobs:
 
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           submodules: recursive
 
@@ -88,3 +88,35 @@ jobs:
         run: |
           python=$(command -v python3 || command -v python)
           "$python" .github/scripts/annotate_failures.py configure.log build.log test.log
+
+  # Releases ship Dist builds (asserts compiled out, ST_DIST code paths), which only the release workflow built: a change
+  # that compiled with asserts on alone broke Dist in wave 3 unnoticed. Every target is built in Dist on Windows here.
+  windows-dist:
+    name: Windows (Dist build)
+    runs-on: windows-2022
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Configure
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --preset windows-vs2022 2>&1 | tee configure.log
+
+      - name: Build (Dist)
+        shell: bash
+        run: |
+          set -o pipefail
+          cmake --build --preset windows-vs2022-dist --parallel 2>&1 | tee build.log
+
+      - name: Annotate failures
+        if: failure() || cancelled()
+        shell: bash
+        run: |
+          python=$(command -v python3 || command -v python)
+          "$python" .github/scripts/annotate_failures.py configure.log build.log

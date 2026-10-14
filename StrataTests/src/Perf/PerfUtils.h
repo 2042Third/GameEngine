@@ -38,6 +38,9 @@ namespace Strata::Tests::Perf
 		std::string Unit;      // One of c_BudgetUnits
 		// A roadmap target below the budget, for information: the budget is the gate. nullopt if the metric has none.
 		std::optional<double> Target;
+		// Not measured on the reference machine yet (while it is away, Docs/Roadmap.md): the metric is measured and recorded,
+		// never checked, and has no Measured or Budget until the reference machine measures it.
+		bool Provisional = false;
 	};
 	using BudgetTable = std::map<std::string, BudgetEntry, std::less<>>;
 
@@ -50,6 +53,7 @@ namespace Strata::Tests::Perf
 		std::optional<double> Target;
 		// The value of every attempt of a confirmed check, in order; empty for a metric that was checked or recorded once.
 		std::vector<double> Attempts;
+		bool Provisional = false; // BudgetEntry::Provisional: the file says so, and has no budget
 	};
 	using ResultTable = std::map<std::string, Result, std::less<>>;
 
@@ -83,7 +87,8 @@ namespace Strata::Tests::Perf
 
 	// Parses a budget file (format in its "_comment"; keys starting with '_' are comments). nullopt with the reason in
 	// error if it is malformed or breaks a rule: units from c_BudgetUnits, finite values that are not negative, a budget
-	// of at most c_BudgetHeadroom times the measured value, and a target below the budget (the budget enforces any other).
+	// of at most c_BudgetHeadroom times the measured value, a target below the budget (the budget enforces any other), and
+	// provisional entries without Measured or Budget.
 	std::optional<BudgetTable> ParseBudgets(std::string_view json, std::string& error);
 
 	// Checks metrics against a budget table and records them in a results file. The perf tests share the process's
@@ -100,6 +105,8 @@ namespace Strata::Tests::Perf
 
 		// The budget entry of `key`; nullptr with the reason in error if it has none.
 		const BudgetEntry* Find(std::string_view key, std::string& error) const;
+		// The budget of `key`; fails the test if it has none or is provisional (Perf::Budget).
+		double GetBudget(std::string_view key) const;
 
 		// Records the value of metric `key` in the results file with the unit, budget and target of its entry; fails the
 		// test if it has none or the file cannot be written.
@@ -109,7 +116,8 @@ namespace Strata::Tests::Perf
 		// metric of `keys` afresh (its own warm-up, its counters relative to its own start), until each metric has been
 		// within its budget in one call, at most `attempts` times. A metric fails the test only when it is over its
 		// budget in every attempt. Prints every attempt, records each metric with all its attempts and returns what it
-		// found per metric, in the order of `keys`. Before measuring it fails the test (REQUIRE) if attempts is zero, or
+		// found per metric, in the order of `keys`. A provisional metric is decided by its first attempt and never fails.
+		// Before measuring it fails the test (REQUIRE) if attempts is zero, or
 		// keys is empty, holds a key twice or a key without a budget; after a measurement that does not report exactly
 		// the metrics of keys, or a value that is not finite.
 		std::vector<ConfirmedMetric> CheckConfirmed(const std::vector<std::string>& keys, const std::function<MetricValues()>& measure,
@@ -130,7 +138,8 @@ namespace Strata::Tests::Perf
 	// The budget of `key` in StrataTests/Perf/Budgets.json; nullopt if it has none or the file is unreadable. Never fails
 	// the test: for tools, and to test the harness itself.
 	std::optional<BudgetEntry> FindBudget(std::string_view key);
-	// The budget of `key`; fails the test if the budget file has none (every metric needs a budget).
+	// The budget of `key`; fails the test if the budget file has none (every metric needs a budget) or the metric is
+	// provisional (check it with CheckBudgetConfirmed, which records it instead).
 	double Budget(std::string_view key);
 
 	// The checker of the perf tests: the budgets of StrataTests/Perf/Budgets.json, results in GetResultsFile(). Fails the
@@ -153,7 +162,8 @@ namespace Strata::Tests::Perf
 	// stay; the given metrics replace their previous entries; a file that is not a JSON object is replaced. The file
 	// holds one entry per metric with its value, unit and budget, its target if it has one and the values of its
 	// attempts if it was confirmed, keys sorted and nothing else run-specific such as times, so the results of two runs
-	// can be compared with a diff. False with the reason in error if it cannot be written.
+	// can be compared with a diff. A provisional metric's entry says "Provisional": true instead of a budget. False with the
+	// reason in error if it cannot be written.
 	bool MergeResults(const std::filesystem::path& path, const ResultTable& results, std::string& error);
 
 	// Release and Dist. Perf numbers of other builds mean nothing; the perf CTests exist only in these configurations.
