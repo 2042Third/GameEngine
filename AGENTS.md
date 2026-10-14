@@ -67,7 +67,7 @@ Binaries land in `build/<preset>/bin/<Config>/`.
 Options: `STRATA_PRECOMPILED_HEADERS` (default ON), `STRATA_COMPILER_CACHE` (ccache or sccache, as CI builds; precompiled
 headers then default to off; `windows-ninja` preset on Windows) and `STRATA_WITH_PHYSICS`, `_AUDIO`, `_ANIMATION` (games
 without a module; only with `STRATA_BUILD_EDITOR=OFF`). `#if ST_WITH_<MODULE>` appears only in the composition root, the
-importers, the runtime and tests ([Optional modules](Docs/DeveloperGuide.md#optional-modules)).
+asset pipeline, the runtime and tests ([Optional modules](Docs/DeveloperGuide.md#optional-modules)).
 
 Sources are collected with `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)`. **After adding or removing source
 files, re-run the configure step** (`cmake --preset <preset>`): the Visual Studio generator re-globs during

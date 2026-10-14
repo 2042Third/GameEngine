@@ -114,7 +114,8 @@ namespace Strata::Engine
 		ST_CORE_VERIFY(state != RegistrationState::Registering, "Engine::RegisterBuiltinModules() is called while the engine's modules are being registered");
 		if (state == RegistrationState::Registered)
 		{
-			// E.g. a program that registers with options after constructing its Application, which registered without them.
+			// E.g. a program whose CreateApplication registered by itself before EntryPoint.h's main registers
+			// launch->Registration, or a test helper that registers again in a process whose main already did.
 			if (options.AssetPipeline)
 				ST_CORE_ERROR("Engine::RegisterBuiltinModules() is called again with the asset pipeline, which is ignored: the modules are registered already");
 			if (!options.Extra.empty())

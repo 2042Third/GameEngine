@@ -32,8 +32,10 @@ namespace Strata::Engine
 	// The engine's composition root: opens the registries (components, asset loaders, built-in assets, scene systems), lets
 	// every engine module register into them in dependency order, runs options.AssetPipeline and options.Extra and freezes
 	// the component registry. Every program that uses the engine calls it once at startup, before anything touches a
-	// registry (the Application constructor does, without options; a program that needs options calls it earlier, e.g. in
-	// CreateApplication). A second call is a no-op. Main thread.
+	// registry: programs built on Strata/Engine/EntryPoint.h get this from its main, which calls it with the
+	// ApplicationLaunch::Registration that CreateApplication returns, before it creates the Application; tests and tools
+	// without that entry point call it first in their own main (StrataTests' does). Application never calls it. A second
+	// call is a no-op: options passed to it are ignored, with an error. Main thread.
 	void RegisterBuiltinModules(const ModuleRegistrationOptions& options = {});
 	bool AreBuiltinModulesRegistered();
 
