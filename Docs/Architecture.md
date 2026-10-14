@@ -2101,16 +2101,21 @@ is the `strata-scripting` skill. The layers:
   `project.exportStatus`, `project.cancelExport` and `project.setExportSettings`),
   `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects`, `editor.removeRecentProject` and `editor.perf`,
   log, selection), `Commands/PlayCommands.cpp` (play), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
-  `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`) and
-  `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel` and `editor.showDialog` (the
+  `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`),
+  `Commands/BatchCommands.cpp` (`editor.batch`) and `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel` and `editor.showDialog` (the
   export, project, recovery, script and about dialogs), the commands about its window. Conventions:
   DeveloperGuide.md, "Command conventions".
   Every command has a kind (`EditorCommandKind`: Edit, the default, Query or Session), which `editor.commands` lists and
   replays use (`Editor.Journal` lists every built-in command's kind, so a new one is a decision), and queries whose
   results follow the editor's session rather than the project's content (the selection, `editor.status`, the journal,
-  what is loaded or running) say so (`EditorCommandResults::Session`): replays never bind the IDs those show.
+  what is loaded or running) say so (`EditorCommandResults::Session`): replays never bind the IDs those show. Commands
+  whose handlers may answer later are registered with `MayDefer` (Debug builds assert in `Execute` when another one
+  defers). `editor.batch` runs a command script's steps in its frame through `Execute` (its children in the journal),
+  refusing `MayDefer` commands first, and makes their undo steps one (`UndoStack::BeginGroup`/`EndGroup`, an
+  `EditorActionGroup`; an atomic batch whose step fails reverts them with `CancelGroup`); replays repeat its steps.
 - **Command line** (`EditorApplication.cpp`). `CreateApplication` answers `--help` and `--version` and refuses arguments
-  outside its table (`c_Arguments`; exit code 3 with the usage) before it starts the log, the modules or a window:
+  outside its table (`c_Arguments`, checked and printed through `Core/CommandLineOptions`, which the runtime uses the
+  same way; exit code 3 with the usage) before it starts the log, the modules or a window:
   `Application::SetStartupExitCode` is what `main` returns when no application was made. Options that take numbers
   (`--frames`, `--automation-port`, `--idle-timeout`, `--ui-scale`) are checked there too (`CheckValues`): a value they
   do not take exits 3 as well, so a typo never leaves a scripted run without its frame limit. With
