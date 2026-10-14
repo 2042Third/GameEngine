@@ -395,6 +395,28 @@ namespace Strata
 		virtual void Reserve(uint32_t bodies) = 0;
 	};
 
+	//////////////////////////////////////////////////////////////////////////
+	// World streaming
+	//////////////////////////////////////////////////////////////////////////
+
+	// What a world's streaming does (WorldStreamer::GetStats, IWorldStreaming): cells by state, the loads and unloads it
+	// started, and the entities the cells' slices created and destroyed in the scene's last update.
+	struct WorldStreamingStats
+	{
+		uint32_t CellsWanted = 0;    // Cells within a source's radius (or pinned)
+		uint32_t CellsLoading = 0;   // Cells whose scene loads or whose entities are being created
+		uint32_t CellsLoaded = 0;
+		uint32_t CellsUnloading = 0;
+		uint32_t CellsPinned = 0;
+		uint32_t CellsFailed = 0;    // Cells whose load failed, not retried until their scene changes
+		uint64_t LoadsStarted = 0;   // Since streaming started
+		uint64_t UnloadsStarted = 0;
+		uint32_t EntitiesCreatedLastUpdate = 0;
+		uint32_t EntitiesDestroyedLastUpdate = 0;
+		uint32_t EvaluatedCells = 0; // Cells the last update looked at: 0 while nothing moved or changed
+		uint64_t StateVersion = 0;   // Changes whenever a cell's state does (a cell map rebuilds when it changed)
+	};
+
 	// The engine's audio output (AudioEngine), which outlives every scene: an engine service (Core/EngineServices.h) the
 	// Audio module registers, not a scene service, so it works whether or not a scene plays audio.
 	class IAudioOutput

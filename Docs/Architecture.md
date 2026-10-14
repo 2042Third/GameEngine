@@ -351,7 +351,7 @@ keyframe reduction) and `AnimationController` (the `.stanimator` document: param
 
 **World** (`World/`). World partition: the World asset (`WorldAsset`, the `.stworld` document: a persistent scene,
 layers of square cells and the cells that have content, with the cook's index), the grid math (`WorldGrid`,
-`WorldCellKey`). See [World partition](#world-partition).
+`WorldCellKey`) and the streaming core (`WorldStreamer`). See [World partition](#world-partition).
 
 **Scripting** (`Scripting/`). `ScriptEngine` (the loaded module, hot reload, faults, optional watchdog),
 `ScriptModule` (loading, validation and guarded calls), `ScriptSystem` (the "Scripting" scene system: instances and
@@ -1948,6 +1948,40 @@ scene (see Additive scenes) when a source comes near and unload when it leaves.
 (`Pack`, for hash maps and the streamer's total order of cells); `WorldGrid::CellAt` finds a position's cell
 (squares include their lower edges; Y is unbounded), `CellBounds` a cell's square and `Distance` the distance from a
 point to a square on the ground plane (0 inside), in double precision.
+
+**Streaming** (`World/WorldStreamer.h`). `WorldStreamer` streams a world's cells into a scene as sub-scenes; the World
+scene system drives it in Play and Simulate, the editor in Edit. Its inputs each update: the World asset (requested from
+the scene's asset manager every update, never held), the sources (`WorldStreamingSource`: position, facing, radius, layer
+mask, priority and view bias), the enabled layers (by name, from `EnabledByDefault`) and the pinned cells (counted pins
+of the owner's: dirty or selected cells, requests).
+
+- **Wanted cells.** Per source and enabled layer of its mask, the existing cells whose squares lie within the source's
+  radius (`Radius`, else the layer's `StreamingDistance` times the world's `DistanceScale`); pinned cells always. The
+  grid squares within the radius are visited through the asset's hash map (or the layer's cell list when that is
+  shorter), never the whole cell table.
+- **Hysteresis.** A loaded cell stays while it lies within the radius plus `H = max(CellSize / 2, 0.1 * radius)`, so a
+  source swinging across a border starts nothing; beyond it the cell unloads (sliced, `Scene::UnloadSubScene`), and a
+  loading one is cancelled.
+- **Loads** start in a total order (priority descending, view-biased distance ascending, packed key ascending: cells
+  ahead of a source rank as if `ViewBias` of its radius nearer), through `Scene::LoadSubScene` at `High` priority within
+  half a source's radius and `Normal` beyond, at most `c_MaxConcurrentCellLoads` (4) at once. A cell unloading is loaded
+  again once its unload finished.
+- **Reserving physics room.** With a cooked index, before starting loads the streamer asks `IPhysicsCapacity::Reserve`
+  for the persistent scene's bodies plus those of the cells loaded, loading, unloading and starting, so a world grows once,
+  before the cells' bodies arrive, instead of at each slice.
+- **Determinism and idling.** Decisions depend only on the inputs and the cells' states, in a total order, so drives that
+  see the same states decide alike whatever the thread count (`GetLastDecisions`). An update polls only the cells in
+  flight; it evaluates (`WorldStreamingStats::EvaluatedCells`) only when a source moved more than `c_SourceEpsilon` (1 cm)
+  since the last evaluation, a pin, layer, world or scale changed, or a load or unload finished.
+- **Failures.** A cell whose load fails stays `Failed` with its error, and is tried again only once its scene's source
+  revision changes (`AssetManagerBase::GetSourceRevisions`, after a reimport).
+- **Adoption.** `AdoptLoadedCells` takes over the scene's sub-scenes whose sources are the world's cells (a prepared
+  start's, the cells the editor adopted into a play copy). `Scene::FindSubScene` finds a sub-scene by binary search: the
+  list is in the order of the IDs.
+- **What it tells.** `GetStats` (cells wanted, loading, loaded, unloading, pinned and failed, loads and unloads started,
+  the entities the cells' slices created and destroyed since its last update, the cells evaluated, and a state version
+  for caches such as the cell map), `GetCellStates` (every cell's state, sub-scene, entities and error) and
+  `IsLoadedAround` (every existing cell of every enabled layer within a radius is loaded).
 
 ## Scripting
 

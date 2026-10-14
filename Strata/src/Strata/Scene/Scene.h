@@ -725,7 +725,7 @@ namespace Strata
 		std::optional<int32_t> m_QuitRequest;
 		std::optional<UUID> m_SceneLoadRequest;
 		std::optional<float> m_SceneLoadProgress;
-		// Sub-scenes in the order of their loads (Scene/SceneSubScenes.cpp).
+		// Sub-scenes in the order of their loads, which is the order of their IDs (Scene/SceneSubScenes.cpp, FindSubScene).
 		std::vector<Scope<SubSceneLoad>> m_SubScenes;
 		SubSceneID m_NextSubSceneID = 1;
 		bool m_AdvancingSubScenes = false;               // UpdateSubScenes runs: unloads wait for its end

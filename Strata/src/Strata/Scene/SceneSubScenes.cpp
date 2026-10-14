@@ -591,12 +591,10 @@ namespace Strata
 
 	SubSceneLoad* Scene::FindSubScene(SubSceneID id) const
 	{
-		for (const Scope<SubSceneLoad>& load : m_SubScenes)
-		{
-			if (load->Status.ID == id)
-				return load.get();
-		}
-		return nullptr;
+		// IDs grow with every load and are appended as they are given, and erasing keeps the order: the list is sorted by ID,
+		// so that a world's hundreds of cells are found in logarithmic time.
+		const auto it = std::lower_bound(m_SubScenes.begin(), m_SubScenes.end(), id, [](const Scope<SubSceneLoad>& load, SubSceneID value) { return load->Status.ID < value; });
+		return it != m_SubScenes.end() && (*it)->Status.ID == id ? it->get() : nullptr;
 	}
 
 }
