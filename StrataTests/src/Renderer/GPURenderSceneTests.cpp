@@ -137,7 +137,10 @@ TEST_SUITE("GPU.RenderScene")
 		AddCubeGrid(scene, 1000, materials);
 		const SceneCamera camera = ViewFrom(glm::vec3(0.0f, 80.0f, 70.0f), glm::vec3(0.0f), 500.0f);
 
-		SceneRenderer batched;
+		// The CPU path's batches.
+		SceneRendererSpecification cpuSpecification;
+		cpuSpecification.GPUDriven = GPUDrivenMode::Off;
+		SceneRenderer batched(cpuSpecification);
 		batched.SetViewportSize(c_Size, c_Size);
 		const ReadbackImage instanced = RenderToImage(batched, scene, camera);
 		const ReadbackImage instancedIDs = ReadEntityIDs(batched);
@@ -151,7 +154,20 @@ TEST_SUITE("GPU.RenderScene")
 		for (const SceneDrawBatch& batch : batched.GetShadowBatches())
 			CHECK(cascades.insert(batch.Cascade).second);
 
-		SceneRendererSpecification specification;
+		// The GPU's draws: one in the view, one per cascade, with the same pixels.
+		SceneRenderer gpuDriven;
+		gpuDriven.SetViewportSize(c_Size, c_Size);
+		CHECK(MaxDifference(RenderToImage(gpuDriven, scene, camera), instanced) <= 1);
+		CHECK(ReadEntityIDs(gpuDriven).Pixels == instancedIDs.Pixels);
+		if (gpuDriven.GetStats().GPUDriven)
+		{
+			const DrawnCounts drawn = GetDrawnCounts(gpuDriven);
+			CHECK(drawn.Instances == 1000);
+			CHECK(drawn.Draws == 1);
+			CHECK(drawn.ShadowDraws == cascades.size());
+		}
+
+		SceneRendererSpecification specification = cpuSpecification;
 		specification.BatchAcrossMaterials = false;
 		SceneRenderer split(specification);
 		split.SetViewportSize(c_Size, c_Size);
@@ -183,9 +199,9 @@ TEST_SUITE("GPU.RenderScene")
 		SceneRenderer renderer;
 		renderer.SetViewportSize(c_Size, c_Size);
 		REQUIRE(renderer.Render(scene, ViewFrom(glm::vec3(0.0f, 230.0f, 180.0f), glm::vec3(0.0f), 1000.0f)));
-		CHECK(renderer.GetStats().Instances == 10'000);
+		CHECK(GetDrawnCounts(renderer).Instances == 10'000);
 		CHECK(renderer.GetStats().Materials == 10'000);
-		CHECK(renderer.GetStats().OpaqueDrawCalls <= 4);
+		CHECK(GetDrawnCounts(renderer).Draws <= 4);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -261,7 +277,10 @@ TEST_SUITE("GPU.RenderScene")
 		}
 		const SceneCamera camera = ViewFrom(glm::vec3(10.0f, 60.0f, 90.0f), glm::vec3(0.0f), 1000.0f);
 
-		SceneRenderer reference;
+		// The CPU path's extraction (the GPU path builds its draws on the GPU).
+		SceneRendererSpecification specification;
+		specification.GPUDriven = GPUDrivenMode::Off;
+		SceneRenderer reference(specification);
 		reference.SetViewportSize(c_Size, c_Size);
 		REQUIRE(reference.Render(scene, camera));
 		REQUIRE(reference.Render(scene, camera));
@@ -271,7 +290,7 @@ TEST_SUITE("GPU.RenderScene")
 		REQUIRE(!single.Shadow.empty());
 
 		ScopedJobSystem jobs(8, 2);
-		SceneRenderer parallel;
+		SceneRenderer parallel(specification);
 		parallel.SetViewportSize(c_Size, c_Size);
 		for (int repetition = 0; repetition < 20; repetition++)
 		{
@@ -313,7 +332,7 @@ TEST_SUITE("GPU.RenderScene")
 		REQUIRE(renderer.Render(scene, camera));
 		const uint64_t calls = assets.Manager->GetStats().GetAssetCalls - callsBefore;
 		const SceneRendererStats& stats = renderer.GetStats();
-		CHECK(stats.Instances == 2000);
+		CHECK(GetDrawnCounts(renderer).Instances == 2000);
 		const uint32_t distinct = 1 + static_cast<uint32_t>(materials.size() + textures.size()); // The cube mesh, materials, textures
 		CHECK(stats.RequestsByVisibility == distinct);
 		CHECK(calls <= distinct);
@@ -537,9 +556,9 @@ TEST_SUITE("GPU.RenderScene")
 			AddMesh(scene, mesh, material, glm::vec3(0.0f), "Cube");
 
 			// Frames until the cube shows with its texture, as a capture renders them; then the renderer idles.
-			for (int frame = 0; frame < 120 && (frame < 2 || renderer.GetStats().Instances == 0 || renderer.GetStats().PendingAssets > 0); frame++)
+			for (int frame = 0; frame < 120 && (frame < 2 || GetDrawnCounts(renderer).Instances == 0 || renderer.GetStats().PendingAssets > 0); frame++)
 				RunFrame(gpu, *manager, renderer, scene, camera);
-			REQUIRE(renderer.GetStats().Instances == 1);
+			REQUIRE(GetDrawnCounts(renderer).Instances == 1);
 			REQUIRE(manager->GetAssetState(texture) == AssetState::Ready);
 
 			// The manager's frames go on without the renderer: what it drew goes like anything else no longer used.
@@ -582,9 +601,9 @@ TEST_SUITE("GPU.RenderScene")
 		CHECK(renderer.GetStats().MeshesWithoutBounds == 1);
 		CHECK(renderer.GetStats().RequestsByVisibility == 1);
 		CHECK(manager->GetAssetState(ground) != AssetState::Unloaded);
-		for (int frame = 0; frame < 120 && renderer.GetStats().Instances == 0; frame++)
+		for (int frame = 0; frame < 120 && GetDrawnCounts(renderer).Instances == 0; frame++)
 			RunFrame(gpu, *manager, renderer, scene, camera);
-		CHECK(renderer.GetStats().Instances == 1);
+		CHECK(GetDrawnCounts(renderer).Instances == 1);
 		CHECK(renderer.GetStats().MeshesWithoutBounds == 0);
 		CHECK(renderer.GetEntityAt(scene, c_Size / 2, c_Size - 4) == entity);
 		gpu.GetDevice().WaitForIdle();
@@ -624,9 +643,9 @@ TEST_SUITE("GPU.RenderScene")
 		CHECK(renderer.GetStats().VisibleProxies == 1);
 		CHECK(manager->GetAssetState(ground) != AssetState::Unloaded);
 		CHECK(manager->GetAssetState(box) == AssetState::Unloaded);
-		for (int frame = 0; frame < 120 && renderer.GetStats().Instances == 0; frame++)
+		for (int frame = 0; frame < 120 && GetDrawnCounts(renderer).Instances == 0; frame++)
 			RunFrame(gpu, *manager, renderer, scene, camera);
-		CHECK(renderer.GetStats().Instances == 1);
+		CHECK(GetDrawnCounts(renderer).Instances == 1);
 		CHECK(renderer.GetEntityAt(scene, c_Size / 2, c_Size - 4) == groundEntity);
 		CHECK(manager->GetAssetState(box) == AssetState::Unloaded);
 		REQUIRE(manager->WaitForPendingLoads());
@@ -684,14 +703,14 @@ TEST_SUITE("GPU.RenderScene")
 			RunFrame(gpu, *manager, renderer, scene, camera);
 		REQUIRE(renderScene.GetMeshesWithoutBounds().empty());
 		REQUIRE(manager->GetAssetState(mesh) == AssetState::Ready);
-		CHECK(renderer.GetStats().Instances == 0);
+		CHECK(GetDrawnCounts(renderer).Instances == 0);
 
 		// Reimported 300 times larger: it fills the view now, though its old bounds never entered it.
 		manager->SetStoredData(mesh, MeshFactory::CreateCube(30.0f)->Serialize());
 		manager->ReloadAsset(mesh);
-		for (int frame = 0; frame < 60 && renderer.GetStats().Instances == 0; frame++)
+		for (int frame = 0; frame < 60 && GetDrawnCounts(renderer).Instances == 0; frame++)
 			RunFrame(gpu, *manager, renderer, scene, camera);
-		CHECK(renderer.GetStats().Instances == 1);
+		CHECK(GetDrawnCounts(renderer).Instances == 1);
 		CHECK(renderScene.GetWorldBounds(renderScene.FindProxy(entity.GetHandle())).Max.x == doctest::Approx(15.0f));
 		gpu.GetDevice().WaitForIdle();
 		AssetManager::SetActive(nullptr);
@@ -732,9 +751,9 @@ TEST_SUITE("GPU.RenderScene")
 		// Reimported 300 times larger while it is not loaded: it fills the view now, though its old bounds never entered it.
 		manager->SetStoredData(mesh, MeshFactory::CreateCube(30.0f)->Serialize());
 		manager->ReloadAsset(mesh);
-		for (int frame = 0; frame < 60 && renderer.GetStats().Instances == 0; frame++)
+		for (int frame = 0; frame < 60 && GetDrawnCounts(renderer).Instances == 0; frame++)
 			RunFrame(gpu, *manager, renderer, scene, camera);
-		CHECK(renderer.GetStats().Instances == 1);
+		CHECK(GetDrawnCounts(renderer).Instances == 1);
 		CHECK(renderScene.GetWorldBounds(renderScene.FindProxy(entity.GetHandle())).Max.x == doctest::Approx(15.0f));
 		CHECK(renderer.GetEntityAt(scene, c_Size / 2, c_Size / 2) == entity);
 		gpu.GetDevice().WaitForIdle();
@@ -758,9 +777,9 @@ TEST_SUITE("GPU.RenderScene")
 		SceneRenderer renderer;
 		renderer.SetViewportSize(c_Size, c_Size);
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 2.0f, 6.0f), glm::vec3(0.0f));
-		for (int frame = 0; frame < 60 && renderer.GetStats().Instances == 0; frame++)
+		for (int frame = 0; frame < 60 && GetDrawnCounts(renderer).Instances == 0; frame++)
 			RunFrame(gpu, *manager, renderer, edited, camera);
-		REQUIRE(renderer.GetStats().Instances == 1);
+		REQUIRE(GetDrawnCounts(renderer).Instances == 1);
 
 		manager->SetStoredData(mesh, CreatePartedCube(2.0f, 2)->Serialize());
 		manager->ReloadAsset(mesh);
@@ -769,7 +788,7 @@ TEST_SUITE("GPU.RenderScene")
 		REQUIRE(manager->GetAssetState(mesh) == AssetState::Ready);
 
 		RunFrame(gpu, *manager, renderer, edited, camera);
-		CHECK(renderer.GetStats().Instances == 2);
+		CHECK(GetDrawnCounts(renderer).Instances == 2);
 		gpu.GetDevice().WaitForIdle();
 		AssetManager::SetActive(nullptr);
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -925,7 +944,7 @@ TEST_SUITE("GPU.RenderScene")
 		CHECK(terrainBounds.Min.x == doctest::Approx(-c_StressWorldSize * 0.5f));
 		CHECK(terrainBounds.Max.z == doctest::Approx(c_StressWorldSize * 0.5f));
 		CHECK(SpatialIndex::IntersectsSphere(terrainBounds, outward.Position, specification.PrefetchDistance));
-		CHECK(renderer.GetStats().Instances == (frustum.IsAABBVisible(terrainBounds) ? 1u : 0u));
+		CHECK(GetDrawnCounts(renderer).Instances == (frustum.IsAABBVisible(terrainBounds) ? 1u : 0u));
 		// The other districts' materials are out of view and beyond the prefetch distance.
 		for (const AssetHandle material : project->Materials)
 		{
@@ -938,7 +957,7 @@ TEST_SUITE("GPU.RenderScene")
 		const AssetHandle seen = project->Materials[0];
 		for (int frame = 0; frame < 600 && (frame < 30 || manager->GetAssetState(seen) != AssetState::Ready); frame++)
 			RunFrame(gpu, *manager, renderer, *scene, inward);
-		CHECK(renderer.GetStats().Instances > 0);
+		CHECK(GetDrawnCounts(renderer).Instances > 0);
 		REQUIRE(manager->GetAssetState(seen) == AssetState::Ready);
 		const SceneCamera away = ViewFrom(glm::vec3(-5000.0f, 20.0f, -5000.0f), glm::vec3(-6000.0f, 0.0f, -6000.0f), 5000.0f, 160.0f / 90.0f);
 		const uint32_t grace = manager->GetEvictionGraceFrames();

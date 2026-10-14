@@ -6,9 +6,11 @@
 #include "Strata/Core/RadixSort.h"
 #include "Strata/Math/Frustum.h"
 #include "Strata/Renderer/AssetResolveCache.h"
+#include "Strata/Renderer/BufferReadback.h"
 #include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/GeometryPool.h"
 #include "Strata/Renderer/GPUProfiler.h"
+#include "Strata/Renderer/GPUSceneData.h"
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Renderer/TextureReadback.h"
 #include "Strata/Scene/Components.h"
@@ -65,7 +67,14 @@ namespace Strata
 	{
 		Auto = 0, // What the device allows
 		NoCount,  // Indirect draws without a draw count the GPU writes
-		PerDraw   // A draw call per batch
+		PerDraw   // A draw call per batch (the GPU-driven path: an indirect draw per draw slot)
+	};
+
+	// Whether the GPU culls and builds the draws (SceneRendererSpecification::GPUDriven).
+	enum class GPUDrivenMode : uint8_t
+	{
+		Auto = 0, // Where the device can (indirect draws that set their first instance)
+		Off       // The CPU path: culling, batching and draw lists on the CPU
 	};
 
 	struct SceneRendererSpecification
@@ -82,10 +91,23 @@ namespace Strata
 		// reach it. A 1x1x1 grid shades every pixel with every visible light.
 		glm::uvec3 LightClusterGrid = { 16, 9, 24 };
 		uint32_t MaxLightsPerCluster = 256;
-		// How batches are drawn: Auto draws each bucket of batches (one pipeline state and vertex arena) with one indirect call
-		// where the device has multiDrawIndirect and drawIndirectFirstInstance, else with a direct draw per batch; PerDraw always
-		// draws per batch (tests compare the paths). NoCount is the GPU-driven path's: draws without a GPU-written count.
+		// The GPU-driven path (Auto, where the device has drawIndirectFirstInstance): compute shaders cull the proxies of the
+		// render scene's GPU copy against the view and the shadow cascades, choose their levels of detail and build the draws
+		// (Scene/Cull.comp, CullBuild.comp); the CPU draws a fixed number of indirect draws per pass and bucket, and only
+		// transparent surfaces itself (sorted back to front). Off: the CPU path (culling, batching and draw lists on the CPU),
+		// the reference the GPU path's pixels are compared with.
+		GPUDrivenMode GPUDriven = GPUDrivenMode::Auto;
+		// How batches are drawn. CPU path: Auto draws each bucket of batches (one pipeline state and vertex arena) with one
+		// indirect call where the device has multiDrawIndirect and drawIndirectFirstInstance, else with a direct draw per
+		// batch; PerDraw always draws per batch. GPU path: Auto draws each bucket with one drawIndexedIndirectCount where the
+		// device has drawIndirectCount, NoCount with one drawIndexedIndirect over the bucket's draw slots (those the GPU did not
+		// fill have no instances), PerDraw with one drawIndexedIndirect per slot (also without multiDrawIndirect). Tests force
+		// each to compare them.
 		IndirectDrawMode IndirectMode = IndirectDrawMode::Auto;
+		// Mesh renderers whose projected size (bounding sphere diameter) is below this many pixels of the viewport height are
+		// not drawn in the view, by either path: they add moire and GPU time, not information. 0 draws them all. Shadow
+		// cascades leave out casters below a texel (SceneRendererStats::SubTexelCasters).
+		float MinProjectedPixels = 0.5f;
 		uint32_t ShadowMapSize = 2048; // Resolution of each directional shadow cascade
 		uint32_t ShadowCascades = 4;   // 1-4
 		// The depth prepass writes the entity-ID buffer (a 32-bit render target of the viewport's size): picking (GetEntityAt,
@@ -102,8 +124,9 @@ namespace Strata
 		// the view and this distance are drawn into the shadow cascades only while their assets are resident.
 		float PrefetchDistance = 100.0f;
 		// Instances of a mesh share draw calls whatever their materials (shaders read the material of each instance):
-		// batches are split only by pipeline state, mesh, submesh and level of detail. Off, batches are also split by
-		// material, as renderers without per-instance materials draw; for comparisons and debugging.
+		// batches are split only by pipeline state, mesh, submesh and level of detail. Off, the CPU path's batches are also
+		// split by material, as renderers without per-instance materials draw; for comparisons and debugging (the GPU-driven
+		// path always draws across materials).
 		bool BatchAcrossMaterials = true;
 		// Textures stream at the mip levels the screen needs (TextureStreamer): the renderer reports what it drew after each
 		// frame (VisibleMaterialUse), and a texture whose mip tail is resident is drawn with what it has. Off, every texture
@@ -200,12 +223,19 @@ namespace Strata
 		static constexpr size_t c_LODStatCount = 8;
 
 		bool Rendered = false; // False when the last Render call drew nothing (see Render)
+		// The GPU culled and drew the opaque and alpha-masked instances and the shadows (SceneRendererSpecification::GPUDriven):
+		// their counts arrive frames later in SceneRendererGPUStats, and Instances, Triangles, DrawCalls, OpaqueDrawCalls,
+		// InstancesPerLOD, SkinnedInstances, ShadowCasters and ShadowDrawCalls count only what the CPU drew (transparent
+		// surfaces). DrawCommands counts every draw call the CPU recorded.
+		bool GPUDriven = false;
 		uint32_t DrawCalls = 0;       // Draw calls of the forward passes (opaque and transparent)
 		uint32_t OpaqueDrawCalls = 0; // Of those, opaque batches: also the draw calls of the depth prepass
 		uint32_t ShadowDrawCalls = 0; // Draw calls into the shadow cascades
 		uint32_t DrawCommands = 0;    // Draw commands the CPU recorded for the scene's meshes in every pass (shadows, prepass, forward)
 		uint32_t Instances = 0;       // Drawn submesh instances
 		uint32_t CulledInstances = 0; // Mesh renderers outside the view frustum
+		// CPU path: mesh renderers in the view smaller than SceneRendererSpecification::MinProjectedPixels (not drawn).
+		uint32_t SizeCulledProxies = 0;
 		uint64_t Triangles = 0;
 		// Drawn submesh instances per selected level of detail; the last entry also counts all higher levels.
 		std::array<uint32_t, c_LODStatCount> InstancesPerLOD = {};
@@ -269,7 +299,29 @@ namespace Strata
 		uint64_t Frame = 0;    // The frame profiler's frame the times belong to (FrameSample::Index)
 		float BusyMs = 0.0f;   // The renderer's GPU stages added up
 		std::vector<GPUStageTime> StageMs; // Per GPU stage the renderer timed (FrameProfiler::Get()'s stage ids)
+
+		// The GPU-driven path's counts (SceneRendererStats::GPUDriven) of the latest frame whose culling completed, and which
+		// of the renderer's frames that was (its RenderCount).
+		bool HasCounters = false;
+		uint64_t CountersRender = 0;
+		uint32_t Instances = 0;        // Opaque and alpha-masked instances drawn in the view
+		uint32_t ShadowInstances = 0;  // Instances drawn into cascades (summed over cascades)
+		uint32_t Draws = 0;            // Indirect draws with instances in the view
+		uint32_t ShadowDraws = 0;
+		uint32_t VisibleProxies = 0;   // Mesh renderers that passed the view's frustum and size tests
+		uint32_t SizeCulledProxies = 0; // In the frustum, below SceneRendererSpecification::MinProjectedPixels
+		uint32_t SubTexelCasters = 0;
+		uint32_t SkinnedInstances = 0;
+		uint64_t Triangles = 0;        // Of the view's instances
+		uint32_t DrawListEntries = 0;  // Instances in the draw list (view and cascades)
+		uint32_t Overflow = 0;         // Instances there was no room for (not drawn): 0 unless the buffers could not grow
+		std::array<uint32_t, 8> InstancesPerLOD = {};
 	};
+
+	// A frame's statistics with what the GPU drew added (for SceneRendererStats::GPUDriven frames, as far as the GPU's counts
+	// are known: those of frame `gpu.CountersRender`, usually two or three frames older): instances, draws, triangles,
+	// levels of detail, shadow casters and visible proxies as the CPU path counts them. Other frames' statistics unchanged.
+	SceneRendererStats AddGPUCounts(const SceneRendererStats& stats, const SceneRendererGPUStats& gpu);
 
 	// One instanced draw of a frame: instances of a submesh at one level of detail with one pipeline state.
 	struct SceneDrawBatch
@@ -371,6 +423,10 @@ namespace Strata
 		// Resolves the GPU stats of the frames rendered so far; with `wait`, waits for the GPU first so the last frame's are
 		// known (tests and tools).
 		void ResolveGPUStats(bool wait);
+		// Frames rendered (Render calls that returned true) since the renderer was created.
+		uint64_t GetRenderCount() const { return m_RenderCount; }
+		// Whether frames are culled and drawn by the GPU (SceneRendererSpecification::GPUDriven and the device).
+		bool IsGPUDriven() const;
 
 		// The materials the last frame drew, with the largest size on screen of what they cover (for mip streaming).
 		std::span<const VisibleMaterialUse> GetVisibleMaterials() const { return m_VisibleMaterials; }
@@ -378,7 +434,8 @@ namespace Strata
 		std::span<const VisibleTextureUse> GetVisibleTextures() const { return m_VisibleTextures; }
 		// What the last frame drew: its batches and draw lists, which hold the index of every drawn instance
 		// (RenderScene::GetInstances) in batch order: opaque batches, then transparent ones back to front; shadow batches
-		// cascade by cascade.
+		// cascade by cascade. The GPU-driven path builds its draws on the GPU: there the opaque and shadow batches are empty,
+		// and the transparent batches and the draw list are the CPU's transparent draws.
 		std::span<const SceneDrawBatch> GetOpaqueBatches() const { return m_OpaqueBatches; }
 		std::span<const SceneDrawBatch> GetTransparentBatches() const { return m_TransparentBatches; }
 		std::span<const SceneDrawBatch> GetShadowBatches() const { return m_ShadowBatches; }
@@ -507,6 +564,7 @@ namespace Strata
 			std::vector<entt::entity> Animators; // Animators of the chunk's visible Skin proxies (WhenVisible culling), or of its casters
 			std::vector<ShadowCaster> Casters;   // The chunk's shadow casters (FindShadowCasters)
 			uint32_t SubTexelCasters = 0;
+			uint32_t SizeCulled = 0;             // Visible proxies below SceneRendererSpecification::MinProjectedPixels
 			AABB Receivers; // The world bounds of the chunk's visible proxies (scenes with Skin proxies only)
 			uint32_t SkinnedInstances = 0;
 		};
@@ -588,7 +646,9 @@ namespace Strata
 		{
 			Structured = 0,
 			Vertex,
-			IndirectArguments
+			IndirectArguments,
+			StructuredUAV,       // Written by compute shaders too
+			IndirectArgumentsUAV // Indirect arguments compute shaders write (a structured buffer of words)
 		};
 		bool EnsureBufferCapacity(nvrhi::BufferHandle& buffer, size_t elementCount, size_t elementSize, const char* name, bool& outRecreated,
 			BufferKind kind = BufferKind::Structured);
@@ -623,10 +683,11 @@ namespace Strata
 		// Takes the materials' data over from m_MaterialResolution when the frame uses the same material slots the same ways
 		// and nothing it depends on changed (see MaterialResolution). Returns false, having resolved nothing, otherwise.
 		bool ReuseResolvedMaterials(const RenderScene& renderScene);
-		// The view's draws in batches: opaque ones sorted by pipeline state and mesh, transparent ones back to front.
-		void GatherDraws(RenderScene& renderScene, const SceneCamera& camera);
-		// The shadow casters' draws per cascade, and the cascades' projections fitted to the casters.
-		void GatherShadowDraws(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame);
+		// The view's draws in batches: opaque ones sorted by pipeline state and mesh (only with `opaqueDraws`: the GPU-driven
+		// path draws them itself), transparent ones back to front; and what the drawn materials need of their textures.
+		void GatherDraws(RenderScene& renderScene, const SceneCamera& camera, bool opaqueDraws);
+		// The cascades' projections fitted to the drawn casters, and with `casterDraws` the casters' draws per cascade.
+		void GatherShadowDraws(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame, bool casterDraws);
 		void MarkMesh(uint32_t slot, uint32_t usage);
 		void MarkMaterial(uint32_t slot, uint32_t usage);
 		// Sizes the per-material-slot state for `count` slots.
@@ -665,6 +726,41 @@ namespace Strata
 			const std::function<PipelineKey(const SceneDrawBatch&)>& getKey, const std::function<void(const SceneDrawBatch&, nvrhi::GraphicsState&)>& prepareState,
 			const std::function<void(const SceneDrawBatch&)>& afterState);
 		void BuildLightClusters(nvrhi::ICommandList* commandList);
+
+		// The GPU-driven path (SceneRendererGPUDriven.cpp; SceneRendererSpecification::GPUDriven).
+		enum class GPUIndirectPath : uint8_t
+		{
+			Count = 0, // drawIndexedIndirectCount per bucket
+			NoCount,   // drawIndexedIndirect over a bucket's draw slots
+			PerDraw    // drawIndexedIndirect per draw slot
+		};
+		GPUIndirectPath GetGPUIndirectPath() const;
+		// The culling pipelines and the buffers of fixed size; leaves the path unavailable (logged) when they fail.
+		void CreateCullResources();
+		// The frame's culling inputs: the mesh and material tables, the buckets the frame can have and their draw slots, and
+		// the constants (after the extraction resolved the frame's assets and the cascades).
+		void PrepareGPUCulling(const RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum);
+		// Sizes the culling buffers for the frame; `outRecreated` when one was replaced (the binding sets follow).
+		bool EnsureCullBuffers(bool& outRecreated);
+		bool CreateCullBindingSet();
+		// Uploads the tables and constants that changed, and the geometry pool's tables.
+		bool UploadCullTables(nvrhi::ICommandList* commandList);
+		// Counts, builds the draws and writes the draw list (Scene/Cull.comp, CullBuild.comp), and copies the counters for
+		// the statistics.
+		void RunGPUCulling(nvrhi::ICommandList* commandList, bool shadows);
+		// After the command list with RunGPUCulling was executed: the counters' copy is under way.
+		void SubmitCullReadback();
+		void DrawGPUView(nvrhi::ICommandList* commandList, Pass pass);
+		void DrawGPUShadows(nvrhi::ICommandList* commandList);
+		// The indirect draws of a dense bucket, as GetGPUIndirectPath says: its `slots` (without a GPU-written count), or as many
+		// as the GPU counted.
+		void DrawGPUBucket(nvrhi::ICommandList* commandList, uint32_t dense, uint32_t slots);
+		// The draw slots of a bucket (m_CullViewSlots, m_CullShadowSlots).
+		uint32_t GetBucketSlots(uint32_t bucket) const;
+		// Whether the frame draws the mesh slot in its view (requested at Normal or High priority).
+		bool IsMeshInView(uint32_t slot) const;
+		// Reads the culling counters of completed frames into m_GPUStats (with `wait`, the latest frame's).
+		void ResolveCullCounters(bool wait);
 		void CreateOverlayResources();
 		static bool HasOverlays(const SceneRenderOptions& options);
 		// Draws the overlays into the output texture (which must hold the finished image); false when GPU resources failed.
@@ -899,6 +995,56 @@ namespace Strata
 		nvrhi::BufferHandle m_DrawArgumentBuffer;      // The batches' indirect arguments (BuildDrawArguments), uploaded where they changed
 		std::vector<nvrhi::DrawIndexedIndirectArguments> m_DrawArguments;      // What the buffer holds
 		std::vector<nvrhi::DrawIndexedIndirectArguments> m_DrawArgumentsBuild; // This frame's
+
+		// The GPU-driven path (SceneRendererGPUDriven.cpp).
+		uint64_t m_RenderCount = 0;
+		bool m_GPUDrivenFrame = false;  // The frame being rendered culls on the GPU
+		nvrhi::BindingLayoutHandle m_CullBindingLayout;
+		nvrhi::ComputePipelineHandle m_CullViewPipeline;
+		nvrhi::ComputePipelineHandle m_CullShadowPipeline;
+		nvrhi::ComputePipelineHandle m_CullBuildPipeline;
+		nvrhi::BufferHandle m_CullConstantBuffer;
+		nvrhi::BufferHandle m_MeshTableBuffer;       // Per mesh slot: the GeometryHandle of a mesh the frame draws
+		nvrhi::BufferHandle m_MaterialFlagBuffer;    // Per material slot: RenderData::c_CullMaterial* flags
+		nvrhi::BufferHandle m_BucketTableBuffer;     // Per bucket: its dense index (RenderData::c_CullNoBucket)
+		nvrhi::BufferHandle m_CullCountBuffer;       // Per (dense bucket, LOD record): instances
+		nvrhi::BufferHandle m_CullOffsetBuffer;      // Per (dense bucket, LOD record): its range of the draw list
+		nvrhi::BufferHandle m_CullArgumentBuffer;    // Per dense bucket: ArgumentsPerBucket indirect draws
+		nvrhi::BufferHandle m_CullBucketCountBuffer; // Per dense bucket: its draws (the count of drawIndexedIndirectCount)
+		nvrhi::BufferHandle m_CullCounterBuffer;     // RenderData::CullCounters
+		nvrhi::BufferHandle m_GPUDrawListBuffer;     // The draw list culling writes (view and cascades)
+		nvrhi::BindingSetHandle m_CullBindingSet;
+		nvrhi::BindingSetHandle m_GPUSceneBindingSet;  // The scene bindings with the GPU's draw list
+		nvrhi::BindingSetHandle m_GPUShadowBindingSet;
+		uint64_t m_CullBoundSceneVersion = 0;        // What m_CullBindingSet was made for
+		uint64_t m_CullBoundTableVersion = 0;
+		RenderData::CullConstants m_CullConstants;
+		std::vector<uint32_t> m_CullMeshTable;
+		std::vector<uint32_t> m_CullMeshTableUploaded;
+		std::vector<uint32_t> m_CullMaterialFlags;
+		std::vector<uint32_t> m_CullMaterialFlagsUploaded;
+		// Per bucket its dense index (RenderData::c_CullBuckets entries), then per dense bucket its draw slots.
+		std::vector<uint32_t> m_CullBucketTable;
+		std::vector<uint32_t> m_CullBucketTableUploaded;
+		bool m_CullTablesUploaded = false;               // The table buffers hold their vectors' previous contents
+		std::vector<uint32_t> m_CullBuckets;             // Per dense index: its bucket (view buckets first)
+		// The draw slots of the buckets (all of which a path without a GPU-written count draws): the LOD records of the meshes
+		// the frame can draw there, by arena (0: Static, 1: Skinned): the meshes in view for the view's buckets, each
+		// cascade's casters' meshes for its buckets. The argument storage per bucket holds the records of all the frame's
+		// meshes of an arena (m_CullArenaRecords).
+		std::array<uint32_t, 2> m_CullViewSlots = {};
+		std::array<std::array<uint32_t, 2>, RenderData::c_CullMaxCascades> m_CullShadowSlots = {};
+		std::array<uint32_t, 2> m_CullArenaRecords = {};
+		std::vector<uint32_t> m_CullMeshRecords;   // Per mesh slot: the LOD records of the frame's mesh (0: not drawn)
+		std::array<std::vector<uint32_t>, RenderData::c_CullMaxCascades> m_CullCasterStamps; // Per mesh slot: counted for the cascade
+		uint32_t m_CullCasterStamp = 0;
+		struct CounterReadback
+		{
+			Scope<BufferReadback> Readback;
+			uint64_t Render = 0; // The renderer's frame whose counters it holds (GetRenderCount)
+		};
+		std::array<CounterReadback, c_GPURecordCount> m_CounterReadbacks;
+		uint32_t m_CounterReadbackIndex = 0;
 	};
 
 }

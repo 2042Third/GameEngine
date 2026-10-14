@@ -126,7 +126,7 @@ TEST_SUITE("GPU.Animation")
 		SceneRenderer skinnedRenderer;
 		skinnedRenderer.SetViewportSize(size, size);
 		const ReadbackImage skinnedImage = RenderToImage(skinnedRenderer, skinnedScene.SceneData, camera);
-		CHECK(skinnedRenderer.GetStats().SkinnedInstances == 1);
+		CHECK(GetDrawnCounts(skinnedRenderer).SkinnedInstances == 1);
 		CHECK(skinnedRenderer.GetStats().PaletteBytesUploaded == 3 * sizeof(RenderData::AffineTransform));
 		CHECK(RenderScene::Get(skinnedScene.SceneData).GetStats().PosedProxies == 1);
 		const std::vector<uint8_t> skinnedMask = EntityMask(skinnedRenderer, skinnedScene.Arm);
@@ -136,7 +136,7 @@ TEST_SUITE("GPU.Animation")
 		SceneRenderer referenceRenderer;
 		referenceRenderer.SetViewportSize(size, size);
 		const ReadbackImage referenceImage = RenderToImage(referenceRenderer, referenceScene.SceneData, camera);
-		CHECK(referenceRenderer.GetStats().SkinnedInstances == 0);
+		CHECK(GetDrawnCounts(referenceRenderer).SkinnedInstances == 0);
 		const std::vector<uint8_t> referenceMask = EntityMask(referenceRenderer, referenceScene.Arm);
 
 		// Forward pass (and the floor's shadow, from the shadow pass): the same colors everywhere.
@@ -199,7 +199,7 @@ TEST_SUITE("GPU.Animation")
 		ReadbackImage image = RenderToImage(renderer, scene, camera);
 		const glm::uvec2 limb = ProjectToPixel(camera, glm::vec3(-3.0f, 1.0f, 0.0f), size);
 		CHECK(renderer.GetStats().VisibleProxies == 2);
-		CHECK(renderer.GetStats().SkinnedInstances == 1);
+		CHECK(GetDrawnCounts(renderer).SkinnedInstances == 1);
 		CHECK(Red(image, limb) > 240);
 		const std::vector<uint8_t> mask = EntityMask(renderer, arm);
 		CHECK(mask[static_cast<size_t>(limb.y) * size + limb.x] == 1);
@@ -214,7 +214,7 @@ TEST_SUITE("GPU.Animation")
 		image = RenderToImage(renderer, scene, floorCamera);
 		const glm::uvec2 shadowed = ProjectToPixel(floorCamera, glm::vec3(-3.0f, 0.0f, 0.0f), size);
 		const glm::uvec2 lit = ProjectToPixel(floorCamera, glm::vec3(-3.0f, 0.0f, 0.9f), size);
-		CHECK(renderer.GetStats().ShadowCasters > 0);
+		CHECK(GetDrawnCounts(renderer).ShadowCasters > 0);
 		CHECK(Red(image, shadowed) < Red(image, lit) / 3);
 		CHECK(gpu.GetNewErrorCount() == 0);
 		scene.UnregisterService<ISkinningPoses>(poses);
@@ -281,15 +281,15 @@ TEST_SUITE("GPU.Animation")
 			poses.Poses[other.GetHandle()] = pose;
 		}
 		REQUIRE(renderer.Render(skinnedScene, camera));
-		CHECK(renderer.GetStats().SkinnedInstances == 10);
-		CHECK(renderer.GetStats().OpaqueDrawCalls == 1);
+		CHECK(GetDrawnCounts(renderer).SkinnedInstances == 10);
+		CHECK(GetDrawnCounts(renderer).Draws == 1);
 		CHECK(RenderScene::Get(skinnedScene).GetStats().PaletteJoints == 30);
 
 		// Without a pose the mesh shows its bind pose through the ordinary pipelines.
 		poses.Poses.clear();
 		poses.Version++;
 		REQUIRE(renderer.Render(skinnedScene, camera));
-		CHECK(renderer.GetStats().SkinnedInstances == 0);
+		CHECK(GetDrawnCounts(renderer).SkinnedInstances == 0);
 		CHECK(RenderScene::Get(skinnedScene).GetStats().PosedProxies == 0);
 		CHECK(RenderScene::Get(skinnedScene).GetStats().SkinProxies == 10);
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -336,7 +336,7 @@ TEST_SUITE("GPU.Animation")
 		renderer.SetViewportSize(size, size);
 		const ReadbackImage image = RenderToImage(renderer, scene, camera);
 		CHECK(renderer.GetStats().VisibleProxies == 1); // The floor
-		const uint32_t castInstances = renderer.GetStats().ShadowCasters;
+		const uint32_t castInstances = GetDrawnCounts(renderer).ShadowCasters;
 		auto reported = [&](Entity entity)
 		{
 			return std::find(poses.Reported.begin(), poses.Reported.end(), entity.GetHandle()) != poses.Reported.end();
@@ -354,7 +354,7 @@ TEST_SUITE("GPU.Animation")
 		{
 			unseen.SetActive(false);
 			REQUIRE(renderer.Render(scene, camera));
-			CHECK(renderer.GetStats().ShadowCasters < castInstances);
+			CHECK(GetDrawnCounts(renderer).ShadowCasters < castInstances);
 			unseen.SetActive(true);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -445,7 +445,7 @@ TEST_SUITE("GPU.Animation")
 			SceneRenderer renderer;
 			renderer.SetViewportSize(size, size);
 			REQUIRE(renderer.Render(scene, camera));
-			CHECK(renderer.GetStats().SkinnedInstances == (skinned ? 1u : 0u));
+			CHECK(GetDrawnCounts(renderer).SkinnedInstances == (skinned ? 1u : 0u));
 			const std::span<const VisibleTextureUse> textures = renderer.GetVisibleTextures();
 			REQUIRE(textures.size() == 1);
 			const VisibleTextureUse use = textures[0];

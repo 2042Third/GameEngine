@@ -19,6 +19,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -160,6 +161,51 @@ namespace Strata::Tests
 		REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), image));
 		REQUIRE(image.Width == renderer.GetViewportSize().x);
 		return image;
+	}
+
+	// What a renderer's latest frame drew, whichever path drew it (SceneRendererStats::GPUDriven): the CPU path's
+	// statistics, or the GPU's counts of that frame (waited for) with what the CPU drew itself (transparent surfaces) added.
+	struct DrawnCounts
+	{
+		uint32_t Instances = 0;     // View instances
+		uint32_t Draws = 0;         // Instanced draws of the view (batches, or the GPU's draws with instances)
+		uint64_t Triangles = 0;
+		std::array<uint32_t, SceneRendererStats::c_LODStatCount> InstancesPerLOD = {};
+		uint32_t SkinnedInstances = 0;
+		uint32_t ShadowCasters = 0; // Instances drawn into cascades, summed over cascades
+		uint32_t ShadowDraws = 0;
+		uint32_t SubTexelCasters = 0;
+	};
+
+	inline DrawnCounts GetDrawnCounts(SceneRenderer& renderer)
+	{
+		const SceneRendererStats stats = renderer.GetStats();
+		DrawnCounts counts;
+		counts.Instances = stats.Instances;
+		counts.Draws = stats.DrawCalls;
+		counts.Triangles = stats.Triangles;
+		counts.InstancesPerLOD = stats.InstancesPerLOD;
+		counts.SkinnedInstances = stats.SkinnedInstances;
+		counts.ShadowCasters = stats.ShadowCasters;
+		counts.ShadowDraws = stats.ShadowDrawCalls;
+		counts.SubTexelCasters = stats.SubTexelCasters;
+		if (!stats.GPUDriven)
+			return counts;
+		renderer.ResolveGPUStats(true);
+		const SceneRendererGPUStats& gpu = renderer.GetGPUStats();
+		REQUIRE(gpu.HasCounters);
+		REQUIRE(gpu.CountersRender == renderer.GetRenderCount());
+		CHECK(gpu.Overflow == 0);
+		counts.Instances += gpu.Instances;
+		counts.Draws += gpu.Draws;
+		counts.Triangles += gpu.Triangles;
+		for (size_t lod = 0; lod < counts.InstancesPerLOD.size(); lod++)
+			counts.InstancesPerLOD[lod] += gpu.InstancesPerLOD[lod];
+		counts.SkinnedInstances += gpu.SkinnedInstances;
+		counts.ShadowCasters = gpu.ShadowInstances;
+		counts.ShadowDraws = gpu.ShadowDraws;
+		counts.SubTexelCasters = gpu.SubTexelCasters;
+		return counts;
 	}
 
 	inline MaterialProperties UnlitColor(const glm::vec4& color)

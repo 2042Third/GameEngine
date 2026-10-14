@@ -384,11 +384,14 @@ time), with `stageSum` (at most the frame), `untimed` (the rest of each frame) a
 (the GPU's median busy time takes at least 90% of the frame interval and exceeds the CPU's frame time: make the scene
 cheaper to draw), `"cpu"` (the CPU's frame time does: look at `stages`), `"capped"` (vsync or a frame-rate cap sets the
 pace: neither is the limit) or `"unknown"` (no GPU times: `--no-gpu`, or a driver without timestamps). Its `renderStats`
-(and every `viewport.capture` result's, for the captured frame) says what a frame drew: `drawCommands` (draws the CPU
-recorded), `draws`, `opaqueDraws`, `shadowDraws`, `instances`, `shadowCasters`, `triangles`, `visibleProxies`,
-`culledProxies`, `occludedProxies`, `instancesPerLod`, `lights`, `droppedLights`, `materials`, `pendingAssets`,
-`extractMs`, `sortMs`, `proxyUpdates`, `instanceBytesUploaded`, `deferredInstanceBytes` and `gpuMs` (the GPU's ms per stage of
-frame `gpuStatsFrame`). Gate it like the stages: `{"expect": {"/gpu/stages/GPU.Shadows/p50Ms": {"max": 2}}}`. On macOS a
+(and every `viewport.capture` result's, for the captured frame) says what a frame drew: `gpuDriven` (the GPU culled it
+and built its draws: its counts are the GPU's, of a frame 2-3 frames older in `editor.perf` and of the captured frame in
+captures, once `gpuCounts` is true), `drawCommands` (draw calls the CPU recorded: a few per pass however large the scene
+on the GPU-driven path), `draws` (instanced draws of the view), `opaqueDraws`, `shadowDraws`, `instances`,
+`shadowCasters`, `triangles`, `visibleProxies`, `culledProxies`, `sizeCulledProxies` (in view but below half a pixel),
+`occludedProxies`, `instancesPerLod`, `lights`, `droppedLights`, `materials`, `pendingAssets`, `extractMs`, `sortMs`,
+`proxyUpdates`, `instanceBytesUploaded`, `deferredInstanceBytes` (new mesh renderers still waiting for their upload to
+the GPU: drawn in a frame or two) and `gpuMs` (the GPU's ms per stage of frame `gpuStatsFrame`). Gate it like the stages: `{"expect": {"/gpu/stages/GPU.Shadows/p50Ms": {"max": 2}}}`. On macOS a
 stage that begins inside a render pass shows its time in the stage before it (`GPU.Transparent` in `GPU.Opaque`). The
 person at the editor sees the same in the Performance panel (click the frame pill) and the streaming numbers of
 `asset.stats` in the Streaming panel (click the assets pill); `editor.showPanel {"panel": "Streaming"}` (or

@@ -501,6 +501,8 @@ namespace Strata
 
 		m_ProxyByEntityIndex[static_cast<size_t>(entt::to_entity(m_Entities[proxy]))] = c_InvalidIndex;
 		m_Entities[proxy] = entt::null;
+		if ((m_Flags[proxy] & RenderProxyFlags::Mirrored) != 0)
+			m_Stats.MirroredProxies--;
 		m_Flags[proxy] = 0;
 		m_FreeProxies.push_back(proxy);
 		m_Stats.Proxies--;
@@ -579,6 +581,13 @@ namespace Strata
 		{
 			m_Index.Remove(proxy);
 			m_Stats.IndexedProxies--;
+		}
+		if (((m_Flags[proxy] ^ flags) & RenderProxyFlags::Mirrored) != 0)
+		{
+			if ((flags & RenderProxyFlags::Mirrored) != 0)
+				m_Stats.MirroredProxies++;
+			else
+				m_Stats.MirroredProxies--;
 		}
 		m_Flags[proxy] = flags;
 	}
@@ -1267,6 +1276,7 @@ namespace Strata
 		uint32_t indexed = 0;
 		uint32_t skins = 0;
 		uint32_t posed = 0;
+		uint32_t mirrored = 0;
 		std::vector<uint32_t> indexedUsers(m_Meshes.size(), 0);
 		std::vector<RenderData::AffineTransform> palette;
 		for (const auto [entity, renderer, world] : registry.view<MeshRendererComponent, WorldTransformComponent>().each())
@@ -1331,6 +1341,7 @@ namespace Strata
 				return fail(fmt::format("the bounds of entity {} are stale", static_cast<uint32_t>(entity)));
 			if (((m_Flags[proxy] & RenderProxyFlags::Mirrored) != 0) != (determinant < 0.0f))
 				return fail(fmt::format("the mirroring of entity {} is stale", static_cast<uint32_t>(entity)));
+			mirrored += determinant < 0.0f ? 1u : 0u;
 			if (((m_Flags[proxy] & RenderProxyFlags::MeshBounds) != 0) != boundsKnown)
 				return fail(fmt::format("entity {} has a stale MeshBounds flag", static_cast<uint32_t>(entity)));
 			indexed += shouldBeIndexed ? 1u : 0u;
@@ -1356,6 +1367,8 @@ namespace Strata
 			return fail(fmt::format("the spatial index holds {} proxies instead of {}", m_Index.GetCount(), indexed));
 		if (skins != m_Skins.size() || skins != m_Stats.SkinProxies || posed != m_Stats.PosedProxies)
 			return fail(fmt::format("{} skin proxies and {} posed ones are counted instead of {} and {}", m_Skins.size(), m_Stats.PosedProxies, skins, posed));
+		if (mirrored != m_Stats.MirroredProxies)
+			return fail(fmt::format("{} mirrored proxies are counted instead of {}", m_Stats.MirroredProxies, mirrored));
 
 		size_t withoutBounds = 0;
 		for (uint32_t slot = 0; slot < m_Meshes.size(); slot++)

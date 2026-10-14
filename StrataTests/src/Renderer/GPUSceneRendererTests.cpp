@@ -92,12 +92,12 @@ TEST_SUITE("GPU.SceneRenderer")
 		CHECK_FALSE(renderer.GetEntityAt(scene, 1, 1));
 		CHECK_FALSE(renderer.GetEntityAt(scene, c_Size, 0)); // Outside the viewport
 
-		const SceneRendererStats& stats = renderer.GetStats();
-		CHECK(stats.Instances == 1);
-		CHECK(stats.DrawCalls == 1);
-		CHECK(stats.Triangles == 12);
-		CHECK(stats.Lights == 1);
-		CHECK(stats.InstancesPerLOD[0] == 1);
+		CHECK(renderer.GetStats().Lights == 1);
+		const DrawnCounts drawn = GetDrawnCounts(renderer);
+		CHECK(drawn.Instances == 1);
+		CHECK(drawn.Draws == 1);
+		CHECK(drawn.Triangles == 12);
+		CHECK(drawn.InstancesPerLOD[0] == 1);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -167,7 +167,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		Entity mirroredQuad = AddMesh(scene, BuiltinAssets::QuadMesh, red, glm::vec3(0.0f, 0.0f, 1.5f), "MirroredQuad");
 		mirroredQuad.GetComponent<TransformComponent>().Scale = glm::vec3(0.2f, -0.2f, 0.2f); // Still faces +Z
 		CHECK(renderer.Render(scene, camera));
-		CHECK(renderer.GetStats().DrawCalls == 3);
+		CHECK(GetDrawnCounts(renderer).Draws == 3);
 		const glm::uvec2 quadPixel = ProjectToPixel(camera, glm::vec3(0.0f, 0.0f, 1.5f), c_Size);
 		CHECK(renderer.GetEntityAt(scene, quadPixel.x, quadPixel.y) == mirroredQuad);
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -261,9 +261,10 @@ TEST_SUITE("GPU.SceneRenderer")
 		renderer.SetViewportSize(c_Size, c_Size);
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 7.0f), glm::vec3(0.0f));
 		const ReadbackImage image = RenderToImage(renderer, scene, camera);
-		CHECK(renderer.GetStats().DrawCalls == 1);
-		CHECK(renderer.GetStats().Instances == 5);
-		CHECK(renderer.GetStats().Triangles == 60);
+		const DrawnCounts drawn = GetDrawnCounts(renderer);
+		CHECK(drawn.Draws == 1);
+		CHECK(drawn.Instances == 5);
+		CHECK(drawn.Triangles == 60);
 		for (size_t index = 0; index < cubes.size(); index++)
 		{
 			const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(static_cast<float>(index) * 1.5f - 3.0f, 0.0f, 0.4f), c_Size);
@@ -275,16 +276,18 @@ TEST_SUITE("GPU.SceneRenderer")
 		cubes[4].GetComponent<MeshRendererComponent>().Material = green;
 		cubes[4].MarkModified<MeshRendererComponent>();
 		const ReadbackImage mixed = RenderToImage(renderer, scene, camera);
-		CHECK(renderer.GetStats().DrawCalls == 1);
-		CHECK(renderer.GetStats().Instances == 5);
+		const DrawnCounts mixedDrawn = GetDrawnCounts(renderer);
+		CHECK(mixedDrawn.Draws == 1);
+		CHECK(mixedDrawn.Instances == 5);
 		for (size_t index = 0; index < cubes.size(); index++)
 		{
 			const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(static_cast<float>(index) * 1.5f - 3.0f, 0.0f, 0.4f), c_Size);
 			CHECK(GetPixelRGBA8(mixed, pixel.x, pixel.y) == (index == 4 ? glm::u8vec4(0, 255, 0, 255) : glm::u8vec4(255, 0, 0, 255)));
 		}
 
-		// Split by material on request, with the same image.
+		// Split by material on request (a CPU path option), with the same image.
 		SceneRendererSpecification specification;
+		specification.GPUDriven = GPUDrivenMode::Off;
 		specification.BatchAcrossMaterials = false;
 		SceneRenderer split(specification);
 		split.SetViewportSize(c_Size, c_Size);
@@ -320,11 +323,14 @@ TEST_SUITE("GPU.SceneRenderer")
 		}
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 5.0f, 7.0f), glm::vec3(0.0f));
 
-		SceneRenderer buckets;
+		// The CPU path's batches (GPU.SceneRenderer.GPUDriven compares the GPU path's draws with them).
+		SceneRendererSpecification bucketSpecification;
+		bucketSpecification.GPUDriven = GPUDrivenMode::Off;
+		SceneRenderer buckets(bucketSpecification);
 		buckets.SetViewportSize(c_Size, c_Size);
 		const ReadbackImage bucketImage = RenderToImage(buckets, scene, camera);
 		const SceneRendererStats bucketStats = buckets.GetStats();
-		SceneRendererSpecification perDrawSpecification;
+		SceneRendererSpecification perDrawSpecification = bucketSpecification;
 		perDrawSpecification.IndirectMode = IndirectDrawMode::PerDraw;
 		SceneRenderer perDraw(perDrawSpecification);
 		perDraw.SetViewportSize(c_Size, c_Size);
@@ -376,10 +382,10 @@ TEST_SUITE("GPU.SceneRenderer")
 		{
 			CAPTURE(distance);
 			const ReadbackImage image = RenderToImage(renderer, scene, LookAt(glm::vec3(0.0f, 0.0f, distance), glm::vec3(0.0f)));
-			const SceneRendererStats& stats = renderer.GetStats();
-			CHECK(stats.InstancesPerLOD[lod] == 1);
-			CHECK(stats.Instances == 1);
-			CHECK(stats.Triangles == triangles[lod]);
+			const DrawnCounts drawn = GetDrawnCounts(renderer);
+			CHECK(drawn.InstancesPerLOD[lod] == 1);
+			CHECK(drawn.Instances == 1);
+			CHECK(drawn.Triangles == triangles[lod]);
 			CHECK(GetPixelRGBA8(image, c_Size / 2, c_Size / 2) == glm::u8vec4(255, 255, 255, 255));
 		}
 
@@ -389,7 +395,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		SceneRenderer eager(specification);
 		eager.SetViewportSize(c_Size, c_Size);
 		eager.Render(scene, LookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f)));
-		CHECK(eager.GetStats().InstancesPerLOD[2] == 1);
+		CHECK(GetDrawnCounts(eager).InstancesPerLOD[2] == 1);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -414,7 +420,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		renderer.SetViewportSize(c_Size, c_Size);
 		CHECK(renderer.Render(scene, LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f))));
 		const SceneRendererStats& stats = renderer.GetStats();
-		CHECK(stats.Instances == 1);
+		CHECK(GetDrawnCounts(renderer).Instances == 1);
 		CHECK(stats.CulledInstances == 1);
 		CHECK(stats.PendingAssets == 0); // Unknown handles are not "loading"
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -486,7 +492,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		// texture to a neutral one.
 		ReadbackImage image = RenderToImage(renderer, scene, camera);
 		CHECK(renderer.GetStats().PendingAssets == 3);
-		CHECK(renderer.GetStats().Instances == 2);
+		CHECK(GetDrawnCounts(renderer).Instances == 2);
 		CHECK(pixelAt(image, -1.5f) == glm::u8vec4(0, 0, 0, 255));
 		const glm::u8vec4 defaultMaterial = pixelAt(image, 0.0f);
 		CHECK(defaultMaterial.r > 0);
@@ -496,7 +502,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		REQUIRE(manager->WaitForPendingLoads());
 		image = RenderToImage(renderer, scene, camera);
 		CHECK(renderer.GetStats().PendingAssets == 0);
-		CHECK(renderer.GetStats().Instances == 3);
+		CHECK(GetDrawnCounts(renderer).Instances == 3);
 		CHECK(pixelAt(image, -1.5f) == glm::u8vec4(255, 255, 255, 255));
 		CHECK(pixelAt(image, 0.0f) == glm::u8vec4(255, 0, 0, 255));
 		CHECK(pixelAt(image, 1.5f) == glm::u8vec4(0, 255, 0, 255));

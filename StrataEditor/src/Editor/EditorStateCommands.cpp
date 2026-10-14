@@ -249,8 +249,10 @@ namespace Strata
 			return "unknown";
 		}
 
-		nlohmann::json DescribeRenderStats(const SceneRendererStats& stats, const SceneRendererGPUStats& gpu)
+		nlohmann::json DescribeRenderStats(const SceneRendererStats& frameStats, const SceneRendererGPUStats& gpu)
 		{
+			// The GPU-driven path's counts come from the GPU, frames later.
+			const SceneRendererStats stats = AddGPUCounts(frameStats, gpu);
 			nlohmann::json lods = nlohmann::json::array();
 			for (const uint32_t count : stats.InstancesPerLOD)
 				lods.push_back(count);
@@ -258,9 +260,10 @@ namespace Strata
 			for (const GPUStageTime& stage : gpu.StageMs)
 				gpuMs[FrameProfiler::Get().GetStageName(stage.Stage)] = stage.Milliseconds;
 			return {
-				{ "gpuDriven", false },
+				{ "gpuDriven", stats.GPUDriven },
+				{ "gpuCounts", stats.GPUDriven && gpu.HasCounters },
 				{ "drawCommands", stats.DrawCommands },
-				{ "draws", stats.DrawCommands },
+				{ "draws", stats.DrawCalls },
 				{ "opaqueDraws", stats.OpaqueDrawCalls },
 				{ "shadowDraws", stats.ShadowDrawCalls },
 				{ "instances", stats.Instances },
@@ -279,6 +282,7 @@ namespace Strata
 				{ "proxyUpdates", stats.ProxyUpdates },
 				{ "instanceBytesUploaded", stats.InstanceBytesUploaded },
 				{ "deferredInstanceBytes", stats.DeferredInstanceBytes },
+				{ "sizeCulledProxies", stats.SizeCulledProxies },
 				{ "geometryPool", DescribeGeometryPool() },
 				{ "gpuMs", std::move(gpuMs) },
 				{ "gpuStatsFrame", gpu.HasTimes ? nlohmann::json(gpu.Frame) : nlohmann::json(nullptr) } };
@@ -804,9 +808,12 @@ namespace Strata
 			"stage: GPU.Uploads, GPU.Setup, GPU.Cull, GPU.Shadows, GPU.Prepass, GPU.AO, GPU.Opaque (with the sky), GPU.Transparent, GPU.Post, "
 			"GPU.Overlays, GPU.ImGui) and boundBy: gpu when the GPU's median busy time takes at least 90% of the median frame interval and exceeds "
 			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
-			"times. renderStats is the viewport's latest frame (null while it renders none): gpuDriven, drawCommands (draws the CPU recorded), "
-			"draws, opaqueDraws, shadowDraws, instances, shadowCasters, triangles, visibleProxies, occludedProxies, culledProxies, instancesPerLod, "
-			"lights, droppedLights, materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes, geometryPool "
+			"times. renderStats is the viewport's latest frame (null while it renders none): gpuDriven (the GPU culled the frame and built its draws: "
+			"its counts are the GPU's, of a frame 2-3 frames older, once gpuCounts is true; transparent surfaces are the CPU's), drawCommands (draw "
+			"calls the CPU recorded), draws (instanced draws of the view), opaqueDraws, shadowDraws, instances, shadowCasters, triangles, "
+			"visibleProxies, occludedProxies, culledProxies, sizeCulledProxies (in view but below a pixel), instancesPerLod, lights, droppedLights, "
+			"materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes (new mesh renderers waiting for "
+			"their upload to the GPU), geometryPool "
 			"(the meshes' GPU geometry: usedMB, capacityMB, allocations, fragmentation, moves, growths), gpuMs "
 			"(per GPU stage of the frame gpuStatsFrame names). Times are milliseconds as avgMs, p50Ms and p95Ms (nearest rank) and maxMs.",
 			ObjectSchema({ { "frames", IntegerSchema("How many of the latest frames to summarize (default 120)", 1, FrameProfiler::c_DefaultCapacity) } }),

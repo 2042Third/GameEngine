@@ -262,9 +262,10 @@ TEST_SUITE("PerfGPU.Renderer")
 			}
 			const Perf::Measurement measurement = Perf::Summarize(samples);
 			const SceneRendererStats& stats = renderer.GetStats();
-			MESSAGE("1000 skinned characters: ", measurement.MedianMs, " ms median (", stats.SkinnedInstances, " skinned instances, ", stats.PaletteBytesUploaded,
+			const uint32_t skinnedInstances = GetDrawnCounts(renderer).SkinnedInstances;
+			MESSAGE("1000 skinned characters: ", measurement.MedianMs, " ms median (", skinnedInstances, " skinned instances, ", stats.PaletteBytesUploaded,
 				" palette bytes uploaded, extract ", stats.ExtractMs, " ms)");
-			CHECK(stats.SkinnedInstances == c_Characters);
+			CHECK(skinnedInstances == c_Characters);
 			CHECK(stats.PaletteBytesUploaded > 0);
 			return measurement.MedianMs;
 		});

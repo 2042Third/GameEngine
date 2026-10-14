@@ -160,7 +160,7 @@ TEST_SUITE("GPU.Renderer.Timers")
 		// Assets load and upload in the first frames.
 		for (int frame = 0; frame < 10; frame++)
 			RunFrame(gpu.GetDevice(), profiler, renderer, timed);
-		REQUIRE(renderer.GetStats().Instances == 25);
+		REQUIRE(Tests::GetDrawnCounts(renderer).Instances == 25);
 
 		std::vector<uint64_t> heardFrames;
 		std::vector<bool> heardWithGPU;

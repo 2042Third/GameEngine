@@ -298,7 +298,7 @@ TEST_SUITE("GPU.ProceduralSky")
 		CHECK(renderer.GetStats().PreviewLighting);
 		CHECK(renderer.GetStats().EnvironmentLighting);
 		CHECK(renderer.GetStats().Lights == 1);
-		CHECK(renderer.GetStats().ShadowCasters > 0);
+		CHECK(GetDrawnCounts(renderer).ShadowCasters > 0);
 		CHECK(MaxDifference(unlit, lit) > 40);
 		// Each visible face gets another amount of sunlight.
 		const float top = faceLuminance(lit, glm::vec3(0.0f, 0.5f, 0.0f));

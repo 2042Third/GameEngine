@@ -57,6 +57,8 @@ TEST_SUITE("GPU.FeatureTest")
 		const SceneRendererStats& stats = renderer.GetStats();
 		CHECK(stats.Rendered);
 		CHECK(stats.PendingAssets == 0);
+		// The GPU culls the scene and builds its draws wherever the device can (the default).
+		CHECK(stats.GPUDriven == gpu.GetDevice().GetInfo().SupportsDrawIndirectFirstInstance);
 
 		// The checker texture (64x64) loads its resident tail first and its finest level streams in as the platform needs it
 		// (TextureStreamer); the other textures are no larger than the tail.
@@ -74,7 +76,7 @@ TEST_SUITE("GPU.FeatureTest")
 		CHECK(stats.PendingAssets == 0);
 		CHECK(stats.EnvironmentLighting); // The sky light's HDR environment map
 		CHECK(stats.Lights >= 2);         // The sun, plus the point and spot lights in view
-		CHECK(stats.Instances >= 8);
+		CHECK(GetDrawnCounts(renderer).Instances >= 8);
 		CHECK(stats.Texts == 2); // The HUD (with the project's font) and the world-space sign
 		CHECK(stats.TextGlyphs > 0);
 
@@ -205,7 +207,7 @@ TEST_SUITE("GPU.FeatureTest")
 		render();
 		CHECK(renderer.GetEntityAt(*scene, bent.x, bent.y) == arm);
 		CHECK(renderer.GetEntityAt(*scene, upright.x, upright.y) != arm);
-		CHECK(renderer.GetStats().SkinnedInstances >= 1);
+		CHECK(GetDrawnCounts(renderer).SkinnedInstances >= 1);
 		// The attachment follows the wrist in the preview too (where it is drawn; the scene keeps its transform).
 		CHECK(renderer.GetEntityAt(*scene, bentTip.x, bentTip.y) == tipMarker);
 		CHECK(renderer.GetEntityAt(*scene, uprightTip.x, uprightTip.y) != tipMarker);

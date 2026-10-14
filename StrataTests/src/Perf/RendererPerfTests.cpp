@@ -47,9 +47,10 @@ namespace
 	{
 		const Perf::FrameMeasurement measurement = Perf::MeasureFrames(gpu, c_WarmupFrames, c_MeasuredFrames, [&] { REQUIRE(renderer.Render(scene, camera)); });
 		const SceneRendererStats& stats = renderer.GetStats();
-		MESSAGE(name, ": ", measurement.CPU.MedianMs, " ms median, GPU ", measurement.GPU ? measurement.GPU->MedianMs : 0.0, " ms busy (", stats.Instances, " instances, ",
-			stats.DrawCommands, " draw commands, ", stats.Triangles, " triangles, extract ", stats.ExtractMs, " ms, sort ", stats.SortMs, " ms; GPU timer ",
-			measurement.TimerCostMs, " ms per frame)");
+		const DrawnCounts drawn = GetDrawnCounts(renderer);
+		MESSAGE(name, ": ", measurement.CPU.MedianMs, " ms median, GPU ", measurement.GPU ? measurement.GPU->MedianMs : 0.0, " ms busy (",
+			std::string(stats.GPUDriven ? "GPU-driven, " : ""), drawn.Instances, " instances, ", drawn.Draws, " draws, ", stats.DrawCommands, " draw commands, ", drawn.Triangles,
+			" triangles, extract ", stats.ExtractMs, " ms, sort ", stats.SortMs, " ms; GPU timer ", measurement.TimerCostMs, " ms per frame)");
 		return measurement;
 	}
 
@@ -79,7 +80,7 @@ TEST_SUITE("PerfGPU.Renderer")
 				Perf::CheckBudgetsConfirmed({ "PerfGPU.Renderer.Render100kCubes", "PerfGPU.Renderer.Render100kCubesGPU", "PerfGPU.Renderer.GPUTimerCost" }, [&]
 				{
 					const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(count), "100k cubes");
-					CHECK(renderer.GetStats().Instances == count);
+					CHECK(GetDrawnCounts(renderer).Instances == count);
 					CHECK(renderer.GetStats().InstanceBytesUploaded == 0); // A still frame uploads nothing
 					return Perf::MetricValues { { "PerfGPU.Renderer.Render100kCubes", measurement.CPU.MedianMs },
 						{ "PerfGPU.Renderer.Render100kCubesGPU", Perf::MeasureGPU(measurement) }, { "PerfGPU.Renderer.GPUTimerCost", measurement.TimerCostMs } };
@@ -89,7 +90,7 @@ TEST_SUITE("PerfGPU.Renderer")
 			Perf::CheckBudgetConfirmed("PerfGPU.Renderer.Render300kCubes", [&]
 			{
 				const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(count), "300k cubes");
-				CHECK(renderer.GetStats().Instances == count);
+				CHECK(GetDrawnCounts(renderer).Instances == count);
 				CHECK(renderer.GetStats().InstanceBytesUploaded == 0); // A still frame uploads nothing
 				return measurement.CPU.MedianMs;
 			});
@@ -107,14 +108,14 @@ TEST_SUITE("PerfGPU.Renderer")
 		Perf::CreateCubeGrid(scene, materials.size(), materials);
 		SceneRenderer renderer;
 		renderer.SetViewportSize(c_Width, c_Height);
-		// The median frame, and the opaque draw calls of the last one: batching is material-free, so the 10,000 materials
-		// share the draws of the cube's pipeline state (a count, the same in every frame).
+		// The median frame, and the opaque draws of the last one (the GPU's on the GPU-driven path): batching is material-free,
+		// so the 10,000 materials share the draws of the cube's pipeline state (a count, the same in every frame).
 		Perf::CheckBudgetsConfirmed({ "PerfGPU.Renderer.Render10kMaterials", "PerfGPU.Renderer.Render10kMaterials.OpaqueDrawCalls" }, [&]
 		{
 			const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(materials.size()), "10k materials");
 			CHECK(renderer.GetStats().Materials == materials.size());
 			return Perf::MetricValues { { "PerfGPU.Renderer.Render10kMaterials", measurement.CPU.MedianMs },
-				{ "PerfGPU.Renderer.Render10kMaterials.OpaqueDrawCalls", static_cast<double>(renderer.GetStats().OpaqueDrawCalls) } };
+				{ "PerfGPU.Renderer.Render10kMaterials.OpaqueDrawCalls", static_cast<double>(GetDrawnCounts(renderer).Draws) } };
 		});
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
@@ -137,8 +138,9 @@ TEST_SUITE("PerfGPU.Renderer")
 		{
 			const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(c_Count), "10k unique meshes");
 			const SceneRendererStats& stats = renderer.GetStats();
-			CHECK(stats.Instances == c_Count);
-			MESSAGE("10k unique meshes: ", stats.OpaqueDrawCalls, " batches, ", stats.ShadowDrawCalls, " shadow batches, ", stats.DrawCommands, " draw commands");
+			const DrawnCounts drawn = GetDrawnCounts(renderer);
+			CHECK(drawn.Instances == c_Count);
+			MESSAGE("10k unique meshes: ", drawn.Draws, " draws, ", drawn.ShadowDraws, " shadow draws, ", stats.DrawCommands, " draw commands");
 			return Perf::MetricValues { { "PerfGPU.Renderer.Render10kUniqueMeshes", measurement.CPU.MedianMs },
 				{ "PerfGPU.Renderer.Render10kUniqueMeshes.DrawCommands", static_cast<double>(stats.DrawCommands) } };
 		});
@@ -168,13 +170,13 @@ TEST_SUITE("PerfGPU.Renderer")
 			{
 				const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(count), count == 100'000 ? "100k shadowed cubes"
 					: "300k shadowed cubes");
-				const SceneRendererStats& stats = renderer.GetStats();
-				CHECK(stats.Instances == count);
+				const DrawnCounts drawn = GetDrawnCounts(renderer);
+				CHECK(drawn.Instances == count);
 				// Every cube is a caster: drawn into the cascades where it spans a texel, left out of those where it does not (the
 				// far cascades' texels are wider than a cube: SubTexelCasters). Both are summed over the cascades.
-				CHECK(stats.ShadowCasters + stats.SubTexelCasters >= count * 9 / 10);
-				CHECK(stats.ShadowCasters >= count / 10);
-				MESSAGE("shadow casters ", stats.ShadowCasters, ", left out below a texel ", stats.SubTexelCasters, ", shadow draws ", stats.ShadowDrawCalls);
+				CHECK(drawn.ShadowCasters + drawn.SubTexelCasters >= count * 9 / 10);
+				CHECK(drawn.ShadowCasters >= count / 10);
+				MESSAGE("shadow casters ", drawn.ShadowCasters, ", left out below a texel ", drawn.SubTexelCasters, ", shadow draws ", drawn.ShadowDraws);
 				return measurement.CPU.MedianMs;
 			});
 		}

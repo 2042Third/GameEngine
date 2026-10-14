@@ -60,7 +60,7 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		const auto [shadowed, lit] = render();
 		CHECK(lit > 150);
 		CHECK(shadowed < lit / 3);
-		CHECK(renderer.GetStats().ShadowCasters > 0);
+		CHECK(GetDrawnCounts(renderer).ShadowCasters > 0);
 
 		// The cube's top is lit: it is the closest caster to the light.
 		ReadbackImage image;
@@ -77,7 +77,7 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		shadowScene.Sun.GetComponent<DirectionalLightComponent>().CastShadows = false;
 		const auto [noShadows, litNoShadows] = render();
 		CHECK(noShadows == litNoShadows);
-		CHECK(renderer.GetStats().ShadowCasters == 0);
+		CHECK(GetDrawnCounts(renderer).ShadowCasters == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -161,7 +161,7 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 
 			light.CastShadows = true;
 			const ReadbackImage shadowed = RenderToImage(renderer, scene, camera);
-			CHECK(renderer.GetStats().ShadowCasters > 0);
+			CHECK(GetDrawnCounts(renderer).ShadowCasters > 0);
 			sun.GetComponent<DirectionalLightComponent>().CastShadows = false;
 			const ReadbackImage reference = RenderToImage(renderer, scene, camera);
 
@@ -281,17 +281,18 @@ TEST_SUITE("GPU.SceneRenderer.Shadows")
 		camera.Far = 2000.0f;
 		camera.Projection = Math::PerspectiveReverseZ(glm::radians(60.0f), 1.0f, 0.1f, 2000.0f);
 		REQUIRE(renderer.Render(scene, camera));
-		const uint32_t withGrain = renderer.GetStats().ShadowCasters;
-		const uint32_t subTexel = renderer.GetStats().SubTexelCasters;
+		const DrawnCounts withGrain = GetDrawnCounts(renderer);
+		const uint32_t subTexel = withGrain.SubTexelCasters;
 		CHECK(subTexel >= 1);
-		CHECK(withGrain > 0); // The floor and the cube
+		CHECK(withGrain.ShadowCasters > 0); // The floor and the cube
 
 		// Grown to a metre, it casts into every cascade it overlaps, and nothing is left out.
 		grain.GetComponent<TransformComponent>().Scale = glm::vec3(1.0f);
 		grain.MarkModified<TransformComponent>();
 		REQUIRE(renderer.Render(scene, camera));
-		CHECK(renderer.GetStats().SubTexelCasters == 0);
-		CHECK(renderer.GetStats().ShadowCasters == withGrain + subTexel);
+		const DrawnCounts grown = GetDrawnCounts(renderer);
+		CHECK(grown.SubTexelCasters == 0);
+		CHECK(grown.ShadowCasters == withGrain.ShadowCasters + subTexel);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

@@ -254,6 +254,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the test. Run them under the Khronos validation layer
   locally by pointing `VK_ADD_LAYER_PATH` at its build (on macOS with Homebrew, at the manifest copy
   [Building](#building) describes). Rendering features are tested on pixels read back with `Renderer::ReadTexture`.
+  Renderers cull and draw on the GPU by default (the GPU-driven path, [GPU-driven path](#gpu-driven-path)), whose counts
+  arrive frames later: tests count what a frame drew with `Tests::GetDrawnCounts` (it waits for them), and tests of the
+  CPU path's own batches, draw lists or options (`GetOpaqueBatches`, `BatchAcrossMaterials`) set
+  `SceneRendererSpecification::GPUDriven` to `Off`.
   `GPU.Startup` needs a desktop rather than the device, like the label's other windowed tests: it starts the editor in a
   window with a Vulkan loader that finds no driver and reads what its error dialog says.
 
@@ -1763,6 +1767,31 @@ and `AudioSystem`, the built-in "Audio" scene system.
   by one `drawIndexedIndirect` per bucket where the device has `multiDrawIndirect` and `drawIndirectFirstInstance`, else
   by a direct draw per batch without state changes (`SceneRendererSpecification::IndirectMode`, `PerDraw` to force it).
   `SceneRendererStats::DrawCommands` counts the draw calls recorded: submission follows buckets, not distinct meshes.
+
+### GPU-driven path
+
+- Renderers cull and build their opaque and shadow draws on the GPU where the device has `drawIndirectFirstInstance`
+  (`SceneRendererSpecification::GPUDriven`, Docs/Architecture.md, "Render scene"): `Scene/Cull.comp` (the view, and
+  `ST_CULL_SHADOW` for the cascades) and `CullBuild.comp` over the render scene's GPU copy, the geometry pool's tables and
+  the frame's mesh and material tables; the passes draw each bucket indirectly (`IndirectMode`: Auto uses
+  `drawIndexedIndirectCount` where the device has `drawIndirectCount`, else `NoCount`; `PerDraw` draws slot by slot).
+  The CPU path is the reference and the fallback (`GPUDriven` Off, devices without `drawIndirectFirstInstance`).
+- The rules that decide what is drawn exist twice: on the CPU (`SceneRendererExtraction.cpp`: frustum, screen size
+  `MinProjectedPixels`, cascades and sub-texel casters, materials, levels of detail through `LODSelection`) and in
+  `Cull.comp` (`Include/LODSelection.glsl`, `Include/Culling.glsl`). Change both together; `GPU.SceneRenderer.GPUDriven`
+  and `IndirectFallback` compare the paths' pixels (within 1/255), entity IDs and counts scene by scene. Shading must not
+  depend on the order of draws or of a draw's instances: no screen-space derivatives in what both paths must agree on
+  (some GPUs group pixels of adjacent triangles into quads by draw), and opaque results never on draw order.
+- The GPU's counts (instances, draws, triangles, levels, shadow casters, visible and size-culled proxies, overflow) come
+  back 2-3 frames late (`SceneRendererGPUStats`, `HasCounters`, `CountersRender`; `ResolveGPUStats(true)` waits);
+  `AddGPUCounts` adds them to a frame's `SceneRendererStats` for display (`renderStats`, the viewport's statistics).
+  `SceneRendererStats` of a GPU-driven frame (`GPUDriven`) counts only what the CPU drew (transparent surfaces), and
+  `GetOpaqueBatches`, `GetShadowBatches` and the shadow draw list are empty.
+- Buckets the frame cannot have get no storage: the CPU lists the present ones (mirrored proxies, double-sided and
+  alpha-masked materials, the arenas of its meshes, posed proxies; `RenderSceneStats::MirroredProxies`, `PosedProxies`)
+  and gives each a dense index; a bucket's draw slots are its arena's LOD records among the frame's meshes. Buffers grow
+  with the scene (`EnsureCullBuffers`); `SceneRendererGPUStats::Overflow` counts instances there was no room for (0
+  unless a buffer could not grow).
 
 ### Skinned meshes
 

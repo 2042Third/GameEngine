@@ -121,8 +121,8 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		REQUIRE(second.Render(scene, camera));
 		CHECK(second.GetStats().InstanceUploadRanges == 0);
 		CHECK(second.GetStats().ProxyBytesUploaded == 0);
-		CHECK(first.GetStats().Instances > 0);
-		CHECK(second.GetStats().Instances == first.GetStats().Instances);
+		CHECK(GetDrawnCounts(first).Instances > 0);
+		CHECK(GetDrawnCounts(second).Instances == GetDrawnCounts(first).Instances);
 		CHECK(Renderer::GetRenderSceneGPUs().GetMirrorCount() == mirrorsBefore + 1);
 		RenderSceneGPU* mirror = Renderer::GetRenderSceneGPUs().Find(RenderScene::Get(scene).GetId());
 		REQUIRE(mirror);
@@ -236,8 +236,8 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 			CHECK(renderer.GetStats().ProxyBytesUploaded == 300 * sizeof(RenderData::GPUProxy));
 			CHECK(renderer.GetStats().DeferredProxies == 700);
 			CHECK(renderer.GetStats().DeferredInstanceBytes == 700 * c_ProxyBytes);
-			CHECK(renderer.GetStats().Instances > 0);
-			CHECK(renderer.GetStats().Instances <= 300);
+			CHECK(GetDrawnCounts(renderer).Instances > 0);
+			CHECK(GetDrawnCounts(renderer).Instances <= 300);
 			// Another render in the same frame finds the budget spent.
 			REQUIRE(renderer.Render(scene, camera));
 			CHECK(renderer.GetStats().DeferredProxies == 700);
@@ -252,7 +252,7 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 			Frame(gpu, [&]() { REQUIRE(renderer.Render(scene, camera)); });
 		}
 		CHECK(frames == 4);
-		CHECK(renderer.GetStats().VisibleProxies == renderer.GetStats().Instances);
+		CHECK(renderer.GetStats().VisibleProxies == GetDrawnCounts(renderer).Instances);
 		CheckMirror(gpu, RenderScene::Get(scene), *mirror);
 
 		// Destroyed: its record holds zeros in the same frame.
@@ -331,7 +331,7 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		REQUIRE(renderer.Render(scene, camera));
 		CHECK(renderer.GetStats().ProxyBytesUploaded == 0);
 		CHECK(renderer.GetStats().InstanceUploadRanges == 0);
-		CHECK(renderer.GetStats().Instances > 0);
+		CHECK(GetDrawnCounts(renderer).Instances > 0);
 		CheckMirror(gpu, RenderScene::Get(scene), *mirror);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

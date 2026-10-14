@@ -1,0 +1,69 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "Include/Culling.glsl"
+
+// After the counting pass of Cull.comp: one thread per (dense bucket, LOD record). A record with instances gets its range
+// of the draw list and an indirect draw in its bucket (DrawIndexedIndirectArguments: the level's indices at the mesh's
+// place in the geometry pool, firstInstance the range's start, which the vertex shaders read the draw list from), and
+// its bucket's draw count (u_BucketCounts) grows by one. Records the draw list or the arguments have no room for are
+// counted as overflow and not drawn.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void WriteArguments(uint dense, uint slot, uint indexCount, uint instanceCount, uint firstIndex, uint baseVertex, uint firstInstance)
+{
+	uint argument = (dense * u_Cull.ArgumentsPerBucket + slot) * 5u;
+	u_Arguments[argument + 0u] = indexCount;
+	u_Arguments[argument + 1u] = instanceCount;
+	u_Arguments[argument + 2u] = firstIndex;
+	u_Arguments[argument + 3u] = baseVertex;
+	u_Arguments[argument + 4u] = firstInstance;
+}
+
+void main()
+{
+	uint key = gl_GlobalInvocationID.x;
+	if (key >= u_Cull.BucketCount * u_Cull.LODCapacity)
+		return;
+	uint count = u_Counts[key];
+	if (count == 0u)
+		return;
+	uint dense = key / u_Cull.LODCapacity;
+	uint record = key - dense * u_Cull.LODCapacity;
+	uint offset = atomicAdd(u_Counters[ST_COUNTER_DRAW_LIST_USED], count);
+	uint slot = atomicAdd(u_BucketCounts[dense], 1u);
+	bool listRoom = count <= u_Cull.DrawListCapacity && offset <= u_Cull.DrawListCapacity - count;
+	if (!listRoom || slot >= u_Cull.ArgumentsPerBucket)
+	{
+		u_Offsets[key] = ST_CULL_NONE;
+		atomicAdd(u_Counters[ST_COUNTER_OVERFLOW], count);
+		if (slot < u_Cull.ArgumentsPerBucket)
+			WriteArguments(dense, slot, 0u, 0u, 0u, 0u, 0u);
+		return;
+	}
+	u_Offsets[key] = offset;
+	// Beyond the slots the draws read without a GPU-written count: written, but not drawn (the CPU's bound missed it).
+	if (u_Cull.DrawsBounded != 0u && slot >= u_BucketTable[ST_CULL_BUCKETS + dense])
+		atomicAdd(u_Counters[ST_COUNTER_OVERFLOW], count);
+	GeometryLOD lod = u_GeometryLODs[record];
+	GeometryEntry entry = u_GeometryEntries[lod.Mesh];
+	WriteArguments(dense, slot, lod.IndexCount, count, entry.FirstIndex + lod.IndexOffset, entry.FirstVertex + lod.BaseVertex, offset);
+	if (dense < u_Cull.ViewBucketCount)
+	{
+		atomicAdd(u_Counters[ST_COUNTER_VIEW_DRAWS], 1u);
+		// Triangles, 64 bits: the product's high word, plus the carry of the low word's addition.
+		uint high;
+		uint low;
+		umulExtended(count, lod.IndexCount / 3u, high, low);
+		uint previous = atomicAdd(u_Counters[ST_COUNTER_TRIANGLES_LOW], low);
+		if (previous + low < previous)
+			high++;
+		if (high != 0u)
+			atomicAdd(u_Counters[ST_COUNTER_TRIANGLES_HIGH], high);
+	}
+	else
+	{
+		atomicAdd(u_Counters[ST_COUNTER_SHADOW_DRAWS], 1u);
+	}
+}

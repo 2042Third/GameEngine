@@ -752,7 +752,7 @@ TEST_SUITE("PerfGPU.Editor")
 		// the new texture afterwards are the metric above's).
 		drawCubes = true;
 		frame();
-		CHECK(cubesRenderer.GetStats().Instances == c_Cubes);
+		CHECK(GetDrawnCounts(cubesRenderer).Instances == c_Cubes);
 		Perf::CheckBudgetConfirmed("PerfGPU.Editor.ImportSettings4kMaxFrame10kCubes", [&]
 		{
 			reimport({ { "Compression", "Uncompressed" } });

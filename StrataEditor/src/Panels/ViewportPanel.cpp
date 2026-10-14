@@ -898,10 +898,11 @@ namespace Strata
 
 	void ViewportPanel::DrawStatsOverlay(ImDrawList* drawList, const ImVec2& position, const ViewportRenderer& renderer, const ViewportView& view, const EditorFrameStats& frame)
 	{
-		const SceneRendererStats& stats = renderer.GetStats();
 		const glm::uvec2 size = renderer.GetSize();
 		// The GPU's time of the latest frame it is known for (2-3 frames late): the total and the three largest stages.
 		const SceneRendererGPUStats& gpu = renderer.GetGPUStats();
+		// The GPU-driven path's counts are the GPU's, as late as its times.
+		const SceneRendererStats stats = AddGPUCounts(renderer.GetStats(), gpu);
 		std::string gpuLine = "GPU: no times (yet)";
 		if (gpu.HasTimes)
 		{
@@ -925,7 +926,7 @@ namespace Strata
 			fmt::format("{} x {} pixels", size.x, size.y),
 			gpuLine,
 			fmt::format("{} draw calls ({} opaque, {} shadow), {} instances", stats.DrawCalls, stats.OpaqueDrawCalls, stats.ShadowDrawCalls, stats.Instances),
-			fmt::format("{} draw commands, {} drawn by the GPU, 0 occluded", stats.DrawCommands, stats.DrawCommands),
+			fmt::format("{} draw commands{}, 0 occluded", stats.DrawCommands, stats.GPUDriven ? " (culled by the GPU)" : ""),
 			fmt::format("{} triangles, {} lights, {} materials", stats.Triangles, stats.Lights, stats.Materials),
 			fmt::format("{} visible of {} proxies, {} updated", stats.VisibleProxies, stats.VisibleProxies + stats.CulledInstances, stats.ProxyUpdates),
 			fmt::format("extract {:.2f} ms, sort {:.2f} ms", stats.ExtractMs, stats.SortMs),

@@ -259,7 +259,7 @@ TEST_SUITE("GPU.Scene.Streaming")
 			stats = stage.Render();
 		});
 		CHECK(stats.PendingAssets == 0);
-		CHECK(stats.Instances >= 1);
+		CHECK(GetDrawnCounts(stage.Renderer).Instances >= 1);
 		CHECK(stats.Materials >= 1);
 		// Releasing the request leaves the closure to the residency budgets again.
 		CHECK(scripts.ReleaseAsset(UUID(c_Prefab)));

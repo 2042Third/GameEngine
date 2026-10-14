@@ -337,6 +337,8 @@ TEST_SUITE("GPU.Editor.Viewport")
 		const std::optional<ViewportView> view = ResolveViewportView(harness.Context, ViewportCameraSource::Editor, 4.0f / 3.0f);
 		REQUIRE(view);
 		REQUIRE(viewport->Render(harness.Context, glm::uvec2(64, 48), *view, harness.Context.GetViewport().GetSettings(), true));
+		// The GPU-driven path's counts are known once the GPU ran the frame's culling.
+		viewport->GetSceneRenderer().ResolveGPUStats(true);
 		const nlohmann::json perf = harness.Run("editor.perf");
 		REQUIRE(perf["renderStats"].is_object());
 		CHECK(perf["renderStats"]["instances"] == 1);

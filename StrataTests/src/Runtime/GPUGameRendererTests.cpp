@@ -103,7 +103,7 @@ TEST_SUITE("GPU.Runtime.GameRenderer")
 		CHECK(GetPixelRGBA8(image, c_Size / 2, c_Size / 2).r > 150); // The lit cube
 		CHECK(GetPixelRGBA8(image, 1, c_Size - 2) == glm::u8vec4(0, 0, 0, 255));
 		CHECK(renderer.GetStats().Texts == 1);
-		CHECK(renderer.GetStats().Instances == 1);
+		CHECK(GetDrawnCounts(renderer.GetSceneRenderer()).Instances == 1);
 
 		// A deactivated camera no longer counts.
 		camera.SetActive(false);

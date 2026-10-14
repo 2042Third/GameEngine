@@ -41,6 +41,7 @@ namespace Strata
 		const SceneRendererStats& GetStats() const { return m_Renderer->GetStats(); }
 		// The scene renderer it draws with: no entity-ID buffer, and no output texture unless text is composed.
 		const SceneRenderer& GetSceneRenderer() const { return *m_Renderer; }
+		SceneRenderer& GetSceneRenderer() { return *m_Renderer; }
 	private:
 		void UpdateMessage(const Scene& scene, const glm::uvec2& size);
 	private:

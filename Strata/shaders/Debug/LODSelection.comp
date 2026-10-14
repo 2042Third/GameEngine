@@ -1,0 +1,34 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "Include/Common.glsl"
+#include "Include/LODSelection.glsl"
+
+// Diagnostic shader used by GPU tests: the level of detail of each fraction, as GPU culling chooses it, for comparison
+// with the CPU's LODSelection::SelectLOD.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(0), std430) readonly buffer FractionBuffer
+{
+	float u_Fractions[];
+};
+layout(set = 0, binding = ST_UAV(0), std430) writeonly buffer LevelBuffer
+{
+	uint o_Levels[];
+};
+
+layout(push_constant) uniform LODSelectionParameters
+{
+	uint Count;
+	float Threshold;
+	uint LODCount;
+	uint Padding;
+} u_Parameters;
+
+void main()
+{
+	uint index = gl_GlobalInvocationID.x;
+	if (index < u_Parameters.Count)
+		o_Levels[index] = SelectLOD(u_Fractions[index], u_Parameters.Threshold, u_Parameters.LODCount);
+}

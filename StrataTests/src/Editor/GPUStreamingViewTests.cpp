@@ -372,7 +372,7 @@ TEST_SUITE("GPU.Editor.StreamingView")
 		renderer.SetViewportSize(c_Size, c_Size);
 		const SceneCamera camera = LookAt(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f));
 		const ReadbackImage plain = RenderToImage(renderer, scene, camera);
-		const std::array<uint32_t, SceneRendererStats::c_LODStatCount> rendererLODs = renderer.GetStats().InstancesPerLOD;
+		const std::array<uint32_t, SceneRendererStats::c_LODStatCount> rendererLODs = GetDrawnCounts(renderer).InstancesPerLOD;
 		ReadbackImage ids;
 		REQUIRE(Renderer::ReadTexture(renderer.GetEntityIDTexture(), ids));
 

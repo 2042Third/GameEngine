@@ -52,6 +52,9 @@ namespace Strata
 		// It has loaded texture maps, which stream at the level the screen needs: only its draws work out how finely their
 		// texture coordinates show (VisibleMaterialUse::UVPixels).
 		constexpr uint32_t c_MaterialTextured = 1u << 4;
+		// The GPU's culling reads these flags from the material table (Include/Culling.glsl).
+		static_assert(c_MaterialAvailable == RenderData::c_CullMaterialAvailable && c_MaterialDoubleSided == RenderData::c_CullMaterialDoubleSided
+			&& c_MaterialAlphaMask == RenderData::c_CullMaterialAlphaMask && c_MaterialTransparent == RenderData::c_CullMaterialTransparent);
 
 		// Shadow casters further than this toward the light than a cascade's bounding sphere are flattened onto the cascade's
 		// near plane (ShadowMesh.vert) instead of extending its depth range.
@@ -253,6 +256,11 @@ namespace Strata
 		if (m_MeshUsage[slot] == 0)
 			m_UsedMeshSlots.push_back(slot);
 		m_MeshUsage[slot] |= usage;
+	}
+
+	bool SceneRenderer::IsMeshInView(uint32_t slot) const
+	{
+		return (m_MeshUsage[slot] & (c_UseView | c_UseHigh)) != 0;
 	}
 
 	void SceneRenderer::MarkMaterial(uint32_t slot, uint32_t usage)
@@ -827,7 +835,7 @@ namespace Strata
 		}
 	}
 
-	void SceneRenderer::GatherDraws(RenderScene& renderScene, const SceneCamera& camera)
+	void SceneRenderer::GatherDraws(RenderScene& renderScene, const SceneCamera& camera, bool opaqueDraws)
 	{
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Extract");
@@ -838,12 +846,15 @@ namespace Strata
 		const bool batchAcrossMaterials = m_Specification.BatchAcrossMaterials;
 		const TextureStreamingPolicy::ViewScale viewScale = TextureStreamingPolicy::GetViewScale(camera, viewportHeight);
 		const bool skins = renderScene.HasSkinProxies(); // Scenes without skinned meshes skip the per-proxy checks
+		// Mesh renderers smaller than this many pixels on screen are not drawn (the GPU's culling leaves out the same ones).
+		const float minPixels = m_Specification.MinProjectedPixels;
 		ForEachChunk(chunks, [&](uint32_t chunk)
 		{
 			ExtractionChunk& output = m_Chunks[chunk];
 			output.Draws.clear();
 			output.Transparent.clear();
 			output.MaterialScreenUses.clear();
+			output.SizeCulled = 0;
 			// Counted in locals and stored once: a store per instance into the chunk, whose neighbours other threads write,
 			// cost 100,000 instances about 0.1 ms.
 			std::array<uint32_t, SceneRendererStats::c_LODStatCount> instancesPerLOD = {};
@@ -862,6 +873,11 @@ namespace Strata
 
 				const AABB& bounds = renderScene.GetWorldBounds(proxy);
 				const float fraction = m_VisibleFractions[item];
+				if (minPixels > 0.0f && fraction * viewportHeight < minPixels)
+				{
+					output.SizeCulled++;
+					continue;
+				}
 				const float viewDepth = -(camera.View * glm::vec4(bounds.GetCenter(), 1.0f)).z;
 				const bool mirrored = (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Mirrored) != 0;
 				const bool skinned = skins && IsDrawnSkinned(renderScene, proxy, *mesh);
@@ -885,7 +901,10 @@ namespace Strata
 						skipped++;
 						continue;
 					}
-					instancesPerLOD[std::min<size_t>(lod, SceneRendererStats::c_LODStatCount - 1)]++;
+					const bool transparent = (materialFlags & c_MaterialTransparent) != 0;
+					// Counted where drawn: the GPU-driven path counts its own instances (SceneRendererGPUStats).
+					if (opaqueDraws || transparent)
+						instancesPerLOD[std::min<size_t>(lod, SceneRendererStats::c_LODStatCount - 1)]++;
 					float uvPixels = 0.0f;
 					if ((materialFlags & c_MaterialTextured) != 0)
 					{
@@ -899,14 +918,18 @@ namespace Strata
 					}
 					AppendScreenUse(output.MaterialScreenUses, materialSlot, fraction * viewportHeight, uvPixels);
 					const bool doubleSided = (materialFlags & c_MaterialDoubleSided) != 0;
-					skinnedInstances += skinned ? 1u : 0u;
-					if ((materialFlags & c_MaterialTransparent) != 0)
+					if (opaqueDraws || transparent)
+						skinnedInstances += skinned ? 1u : 0u;
+					if (transparent)
 					{
 						output.Transparent.push_back(TransparentDraw { viewDepth, renderScene.GetEntityID(proxy), submeshIndex, instance, meshSlot, lod, doubleSided, mirrored, skinned });
 						continue;
 					}
-					output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod, batchAcrossMaterials ? 0u : materialSlot),
-						instance, 0 });
+					if (opaqueDraws)
+					{
+						output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod, batchAcrossMaterials ? 0u : materialSlot),
+							instance, 0 });
+					}
 				}
 			}
 			output.InstancesPerLOD = instancesPerLOD;
@@ -931,6 +954,7 @@ namespace Strata
 			}
 			skipped += output.Skipped;
 			m_Stats.SkinnedInstances += output.SkinnedInstances;
+			m_Stats.SizeCulledProxies += output.SizeCulled;
 		}
 		if (skipped > 0)
 			m_Errors.Report(fmt::format("{} submesh instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, c_MaxKeySubmeshes, c_MaxKeyLODs));
@@ -980,7 +1004,7 @@ namespace Strata
 		}
 	}
 
-	void SceneRenderer::GatherShadowDraws(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame)
+	void SceneRenderer::GatherShadowDraws(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame, bool casterDraws)
 	{
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Extract");
@@ -1022,6 +1046,8 @@ namespace Strata
 					if ((caster.CascadeMask & (1u << cascade)) != 0)
 						casterNearZ[cascade] = std::max(casterNearZ[cascade], caster.LightNearZ);
 				}
+				if (!casterDraws)
+					continue; // The GPU's culling draws them
 
 				const AABB& bounds = renderScene.GetWorldBounds(caster.Proxy);
 				const float fraction = GetScreenFraction(camera, bounds.GetCenter(), glm::length(bounds.GetExtents()));
@@ -1198,5 +1224,8 @@ namespace Strata
 		m_Stats.InstanceBytesUploaded += UploadChangedRange(commandList, m_DrawArgumentBuffer, m_DrawArgumentsBuild, m_DrawArguments, fullLists);
 		m_FullUpload = false;
 	}
+
+	// The GPU-driven path's tables upload through it too (SceneRendererGPUDriven.cpp).
+	template uint64_t SceneRenderer::UploadChangedRange<uint32_t>(nvrhi::ICommandList*, nvrhi::IBuffer*, std::vector<uint32_t>&, std::vector<uint32_t>&, bool);
 
 }

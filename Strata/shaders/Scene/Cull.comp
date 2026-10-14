@@ -1,0 +1,173 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "Include/Culling.glsl"
+
+// GPU culling, one thread per render proxy: the view's frustum and screen-size tests, or with ST_CULL_SHADOW
+// (registered as Scene/CullShadow.comp) the shadow cascades' boxes and sub-texel test, then per instance its material
+// (transparent ones are the CPU's), its level of detail (Include/LODSelection.glsl) and its bucket. The decisions are the
+// CPU path's (SceneRendererExtraction.cpp: CullView, FindShadowCasters, GatherDraws, GatherShadowDraws) on the same data.
+//
+// Mode 0 counts the instances of each (bucket, LOD record) and the frame's statistics; CullBuild.comp then places each
+// record's range in the draw list; mode 1 runs the same decisions again and writes each instance into its record's range
+// (counting the record down to zero). The order of instances within a record follows GPU scheduling, which opaque
+// pixels do not depend on.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform CullParameters
+{
+	uint Mode; // 0: count, 1: write the draw list
+} u_Parameters;
+
+#define ST_CULL_MODE_COUNT 0u
+#define ST_CULL_MODE_WRITE 1u
+#define ST_SHARED_COUNTERS (ST_COUNTER_INSTANCES_PER_LOD + ST_LOD_STAT_COUNT)
+
+// The workgroup's statistics, added to the frame's counters once per workgroup.
+shared uint s_Counters[ST_SHARED_COUNTERS];
+
+void Count(int counter)
+{
+	if (u_Parameters.Mode == ST_CULL_MODE_COUNT)
+		atomicAdd(s_Counters[counter], 1u);
+}
+
+void Emit(uint instance, uint bucket, uint lodRecord)
+{
+	uint dense = u_BucketTable[bucket];
+	if (dense == ST_CULL_NONE)
+	{
+		// A bucket the CPU did not expect: never drawn (the counters say so).
+		if (u_Parameters.Mode == ST_CULL_MODE_COUNT)
+			atomicAdd(u_Counters[ST_COUNTER_OVERFLOW], 1u);
+		return;
+	}
+	uint key = dense * u_Cull.LODCapacity + lodRecord;
+	if (u_Parameters.Mode == ST_CULL_MODE_COUNT)
+	{
+		atomicAdd(u_Counts[key], 1u);
+		return;
+	}
+	uint offset = u_Offsets[key];
+	if (offset == ST_CULL_NONE)
+		return; // No room in the draw list (counted by CullBuild)
+	uint slot = atomicAdd(u_Counts[key], 0xFFFFFFFFu) - 1u;
+	u_CullDrawList[offset + slot] = instance;
+}
+
+void CullProxy(uint proxyIndex)
+{
+	GPUProxy proxy = u_Proxies[proxyIndex];
+	const uint drawable = ST_PROXY_ACTIVE | ST_PROXY_INDEXED;
+	if (proxy.InstanceCount == 0u || (proxy.Flags & drawable) != drawable || proxy.MeshSlot >= u_Cull.MeshSlotCount)
+		return;
+	uint mesh = u_MeshTable[proxy.MeshSlot];
+	if (mesh == 0u)
+		return; // Not drawn this frame: not loaded, or not uploaded yet
+	GeometryEntry entry = u_GeometryEntries[mesh & ~ST_CULL_MESH_SKINNED_ARENA];
+	if (entry.SubmeshCount != proxy.InstanceCount)
+		return; // Instances of another layout of the mesh
+	bool skinnedArena = (mesh & ST_CULL_MESH_SKINNED_ARENA) != 0u;
+	uint geometry = skinnedArena ? ((proxy.Flags & ST_PROXY_SKINNED) != 0u ? ST_CULL_GEOMETRY_SKINNED : ST_CULL_GEOMETRY_SKINNED_ARENA) : ST_CULL_GEOMETRY_STATIC;
+	uint mirrored = (proxy.Flags & ST_PROXY_MIRRORED) != 0u ? 1u : 0u;
+	vec3 center = (proxy.WorldMin + proxy.WorldMax) * 0.5;
+	vec3 extents = (proxy.WorldMax - proxy.WorldMin) * 0.5;
+	float fraction = GetScreenFraction(center, length(extents));
+
+#ifndef ST_CULL_SHADOW
+	if (!IsBoxInFrustum(proxy.WorldMin, proxy.WorldMax))
+		return;
+	if (u_Cull.LODParameters.w > 0.0 && fraction * u_Cull.ViewParameters.x < u_Cull.LODParameters.w)
+	{
+		Count(ST_COUNTER_SIZE_CULLED);
+		return;
+	}
+	Count(ST_COUNTER_VISIBLE_PROXIES);
+	for (uint submesh = 0u; submesh < proxy.InstanceCount; submesh++)
+	{
+		uint instance = proxy.FirstInstance + submesh;
+		uint materialSlot = u_CullInstances[instance].MaterialIndex;
+		uint material = materialSlot < u_Cull.MaterialSlotCount ? u_MaterialFlags[materialSlot] : 0u;
+		if ((material & ST_CULL_MATERIAL_AVAILABLE) == 0u || (material & ST_CULL_MATERIAL_TRANSPARENT) != 0u)
+			continue;
+		GeometrySubmesh geometrySubmesh = u_GeometrySubmeshes[entry.FirstSubmesh + submesh];
+		uint lod = SelectLOD(fraction, u_Cull.LODParameters.x, geometrySubmesh.LODCount);
+		uint doubleSided = (material & ST_CULL_MATERIAL_DOUBLE_SIDED) != 0u ? 2u : 0u;
+		Emit(instance, mirrored | doubleSided | (geometry << 2), geometrySubmesh.FirstLOD + lod);
+		Count(ST_COUNTER_VIEW_INSTANCES);
+		Count(ST_COUNTER_INSTANCES_PER_LOD + int(min(lod, uint(ST_LOD_STAT_COUNT - 1))));
+		if (geometry == ST_CULL_GEOMETRY_SKINNED)
+			Count(ST_COUNTER_SKINNED_INSTANCES);
+	}
+#else
+	if ((proxy.Flags & ST_PROXY_CAST_SHADOWS) == 0u || (proxy.Flags & ST_PROXY_MESH_BOUNDS) == 0u)
+		return;
+	// The local bounds in light space (AABB::Transformed of the light view times the world transform).
+	CullInstance first = u_CullInstances[proxy.FirstInstance];
+	mat4 world = transpose(mat4(first.WorldRows[0], first.WorldRows[1], first.WorldRows[2], vec4(0.0, 0.0, 0.0, 1.0)));
+	mat4 lightWorld = u_Cull.LightView * world;
+	vec3 localCenter = (proxy.LocalMin + proxy.LocalMax) * 0.5;
+	vec3 localExtents = (proxy.LocalMax - proxy.LocalMin) * 0.5;
+	vec3 lightCenter = (lightWorld * vec4(localCenter, 1.0)).xyz;
+	mat3 basis = mat3(lightWorld);
+	vec3 lightExtents = vec3(abs(basis[0][0]) * localExtents.x + abs(basis[1][0]) * localExtents.y + abs(basis[2][0]) * localExtents.z,
+		abs(basis[0][1]) * localExtents.x + abs(basis[1][1]) * localExtents.y + abs(basis[2][1]) * localExtents.z,
+		abs(basis[0][2]) * localExtents.x + abs(basis[1][2]) * localExtents.y + abs(basis[2][2]) * localExtents.z);
+	vec3 lightMin = lightCenter - lightExtents;
+	vec3 lightMax = lightCenter + lightExtents;
+	float extent = max(lightMax.x - lightMin.x, lightMax.y - lightMin.y);
+	uint cascadeMask = 0u;
+	for (uint cascade = 0u; cascade < u_Cull.CascadeCount; cascade++)
+	{
+		vec4 box = u_Cull.CascadeBoxes[cascade];
+		vec4 parameters = u_Cull.CascadeParameters[cascade];
+		if (lightMax.x < box.x || lightMin.x > box.z || lightMax.y < box.y || lightMin.y > box.w || lightMax.z < parameters.x)
+			continue;
+		if (extent < parameters.y)
+		{
+			Count(ST_COUNTER_SUB_TEXEL_CASTERS);
+			continue;
+		}
+		cascadeMask |= 1u << cascade;
+	}
+	if (cascadeMask == 0u)
+		return;
+	for (uint submesh = 0u; submesh < proxy.InstanceCount; submesh++)
+	{
+		uint instance = proxy.FirstInstance + submesh;
+		uint materialSlot = u_CullInstances[instance].MaterialIndex;
+		uint material = materialSlot < u_Cull.MaterialSlotCount ? u_MaterialFlags[materialSlot] : 0u;
+		// Transparent surfaces cast no shadows.
+		if ((material & ST_CULL_MATERIAL_AVAILABLE) == 0u || (material & ST_CULL_MATERIAL_TRANSPARENT) != 0u)
+			continue;
+		GeometrySubmesh geometrySubmesh = u_GeometrySubmeshes[entry.FirstSubmesh + submesh];
+		uint lod = SelectLOD(fraction, u_Cull.LODParameters.x, geometrySubmesh.LODCount);
+		uint bucket = mirrored | ((material & ST_CULL_MATERIAL_DOUBLE_SIDED) != 0u ? 2u : 0u) | (geometry << 2)
+			| ((material & ST_CULL_MATERIAL_ALPHA_MASK) != 0u ? 16u : 0u);
+		for (uint cascade = 0u; cascade < u_Cull.CascadeCount; cascade++)
+		{
+			if ((cascadeMask & (1u << cascade)) == 0u)
+				continue;
+			Emit(instance, ST_CULL_VIEW_BUCKETS + cascade * ST_CULL_SHADOW_BUCKETS + bucket, geometrySubmesh.FirstLOD + lod);
+			Count(ST_COUNTER_SHADOW_INSTANCES);
+		}
+	}
+#endif
+}
+
+void main()
+{
+	uint lane = gl_LocalInvocationIndex;
+	if (lane < uint(ST_SHARED_COUNTERS))
+		s_Counters[lane] = 0u;
+	barrier();
+
+	uint proxyIndex = gl_GlobalInvocationID.x;
+	if (proxyIndex < u_Cull.ProxyCount)
+		CullProxy(proxyIndex);
+
+	barrier();
+	if (u_Parameters.Mode == ST_CULL_MODE_COUNT && lane < uint(ST_SHARED_COUNTERS) && s_Counters[lane] != 0u)
+		atomicAdd(u_Counters[lane], s_Counters[lane]);
+}

@@ -52,6 +52,9 @@ strata_add_shaders(Strata
 		Scene/ShadowMesh.vert
 		Scene/ShadowMask.frag
 		Scene/LightClusters.comp
+		Scene/Cull.comp
+		Scene/CullBuild.comp
+		Debug/LODSelection.comp
 		IBL/EquirectToCube.comp
 		IBL/ProceduralSky.comp
 		IBL/CubeDownsample.comp
@@ -79,6 +82,7 @@ strata_add_shaders(Strata
 		"Scene/DepthPrepass.frag|Scene/DepthPrepassNoEntityIDs.frag|ST_NO_ENTITY_IDS"
 		"Scene/Mesh.vert|Scene/MeshSkinned.vert|ST_SKINNED"
 		"Scene/ShadowMesh.vert|Scene/ShadowMeshSkinned.vert|ST_SKINNED"
+		"Scene/Cull.comp|Scene/CullShadow.comp|ST_CULL_SHADOW"
 		"Effects/GTAO.comp|Effects/GTAOHalf.comp|ST_AO_HALF"
 		"Effects/AOBlur.comp|Effects/AOBlurHalf.comp|ST_AO_HALF")
 

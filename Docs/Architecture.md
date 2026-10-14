@@ -1618,9 +1618,13 @@ FindShadowCasters                cascade boxes; QueryPlanes per cascade (a job e
                                  left out of it), animator reports and the assets casters need merged in chunk order
 ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident; materials used
                                  as in the frame before: its data, their assets looked up in one call (below)
-GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches
+GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches (the
+                                 GPU-driven path: transparent draws, the materials' screen sizes and the cascades only)
 BuildDrawArguments               the batches' indirect arguments at their meshes' places in the geometry pool
-UploadSceneData                  changed materials, the changed range of each draw list
+PrepareGPUCulling                (GPU-driven) the frame's mesh and material tables, its buckets and their draw slots
+UploadSceneData                  changed materials, the changed range of each draw list (and the culling tables)
+RunGPUCulling                    (GPU-driven) Cull.comp counts, CullBuild.comp places the draws, Cull.comp writes the
+                                 draw list; the passes then draw each bucket indirectly
 ReleaseFrameAssets               (when Render returns, however it ends) every reference the frame took, and the manager
 ```
 
@@ -1764,6 +1768,30 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   need no comparison. The camera takes no part: views that move over the same materials reuse them too. Still frames of
   3,000 streamed textures went from 1.01-1.06 ms to 0.61 ms, of 10,000 materials from 1.33 to 0.61 ms, and the editor's
   frames of 10,000 materials from 1.82 to 0.99 ms.
+- **The GPU-driven path** (`SceneRendererSpecification::GPUDriven`, Auto where the device has
+  `drawIndirectFirstInstance`; `SceneRendererGPUDriven.cpp`, `Scene/Cull.comp`, `CullBuild.comp`, `Include/Culling.glsl`).
+  The GPU culls the render scene's GPU copy and builds the opaque and shadow draws; the CPU path (Off) stays as the
+  reference and the fallback. The CPU still resolves the frame's assets (the request marks of `CullView` and
+  `FindShadowCasters`), fits the cascades to the casters and gathers transparent draws, sorted; it then uploads the
+  frame's mesh table (per mesh slot the `GeometryHandle` of a mesh it resolved, with its arena) and material table (per
+  material slot the flags: available, double-sided, alpha-masked, transparent), the bucket table and the constants
+  (`RenderData::CullConstants`). `Cull.comp` runs one thread per proxy, for the view and (variant `ST_CULL_SHADOW`) for
+  the cascades: the decisions are the CPU path's on the same data (active and indexed, the frustum, the screen size of
+  `MinProjectedPixels` for the view, the light-space box and the sub-texel rule for cascades, per instance the material
+  and the level of detail, `Include/LODSelection.glsl`), and each instance counts on its (bucket, LOD record). Buckets are
+  pipeline states and vertex arenas: mirrored, double-sided and geometry (Static arena, Skinned arena in its bind pose,
+  posed) for the view, alpha-masked and cascade too for shadows; only the buckets the frame can have get dense indices
+  and storage. `CullBuild.comp` gives each record with instances a range of the draw list and an indirect draw in its
+  bucket, then `Cull.comp` runs again and writes each instance into its record's range (the same decisions, counting
+  the record down). The passes then draw each bucket with one `drawIndexedIndirectCount` (devices with
+  `drawIndirectCount`), one `drawIndexedIndirect` over the bucket's draw slots (`NoCount`: as many slots as the frame's
+  meshes have LOD records in that arena, those without instances zeroed), or one per slot (`PerDraw`), through the
+  vertex shaders' `u_DrawList[gl_InstanceIndex]` as before. MoltenVK has no `drawIndirectCount`: there the `NoCount`
+  path runs. The counts (instances, draws, triangles, levels, shadow casters, visible and size-culled proxies) come back
+  2-3 frames late through a readback (`BufferReadback`, `SceneRendererGPUStats`, `AddGPUCounts`). The opaque pixels do not
+  depend on the order of a record's instances; shadows' receiver plane bias follows the receiver's normal, not
+  screen-space derivatives, which on some GPUs depend on how draws group pixels into quads (`Include/Shadows.glsl`), so
+  both paths agree to the pixel (`GPU.SceneRenderer.GPUDriven`, `IndirectFallback`).
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same
   result on any number of threads), then sorted with a stable radix sort (`Core/RadixSort.h`) of 64-bit keys: cascade,
   alpha mask, winding, culling, mesh slot, submesh and level of detail. The sort reads the keys once to find the bytes

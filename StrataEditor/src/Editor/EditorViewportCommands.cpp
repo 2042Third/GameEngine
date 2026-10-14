@@ -229,6 +229,7 @@ namespace Strata
 			uint32_t StalePoses = 0;
 			SceneRendererStats Stats;     // The captured frame's
 			uint64_t RenderFrame = 0;     // The frame profiler's frame that rendered it
+			uint64_t RenderCount = 0;     // The capture renderer's frame (SceneRenderer::GetRenderCount), whose GPU counts it waits for
 			uint32_t GPUStatsPolls = 0;   // Polls that waited for its GPU times
 			nlohmann::json RenderStats;   // renderStats, once its GPU times are known
 			std::chrono::steady_clock::time_point Submitted;
@@ -293,6 +294,7 @@ namespace Strata
 			const SceneRendererStats& stats = renderer->GetStats();
 			progress.Stats = stats;
 			progress.RenderFrame = FrameProfiler::Get().GetTotalFrameCount();
+			progress.RenderCount = renderer->GetSceneRenderer().GetRenderCount();
 			progress.DebugViewStats = renderer->GetDebugViewStats();
 			progress.TintedEntities = stats.TintedEntities;
 			progress.PendingAssets = stats.PendingAssets;
@@ -343,10 +345,21 @@ namespace Strata
 					SceneRenderer& sceneRenderer = renderer->GetSceneRenderer();
 					sceneRenderer.ResolveGPUStats(false);
 					const SceneRendererGPUStats& gpu = sceneRenderer.GetGPUStats();
-					const bool known = gpu.HasTimes && gpu.Frame >= progress.RenderFrame;
-					if (!known && Renderer::GetGPUProfiler().IsEnabled() && progress.GPUStatsPolls++ < c_MaxCaptureGPUStatsPolls)
+					// The GPU-driven path's counts come back with the frame's culling counters: the capture waits for those too.
+					const bool timesKnown = !Renderer::GetGPUProfiler().IsEnabled() || (gpu.HasTimes && gpu.Frame >= progress.RenderFrame);
+					const bool countsKnown = !progress.Stats.GPUDriven || (gpu.HasCounters && gpu.CountersRender >= progress.RenderCount);
+					if (!(timesKnown && countsKnown) && progress.GPUStatsPolls++ < c_MaxCaptureGPUStatsPolls)
 						return std::nullopt;
-					progress.RenderStats = DescribeRenderStats(progress.Stats, known ? gpu : SceneRendererGPUStats());
+					SceneRendererGPUStats known = gpu;
+					if (!(gpu.HasTimes && gpu.Frame >= progress.RenderFrame))
+					{
+						known.HasTimes = false;
+						known.StageMs.clear();
+						known.BusyMs = 0.0f;
+					}
+					if (!(gpu.HasCounters && gpu.CountersRender >= progress.RenderCount))
+						known.HasCounters = false;
+					progress.RenderStats = DescribeRenderStats(progress.Stats, known);
 				}
 				Ref<EncodedCapture> encoded = CreateRef<EncodedCapture>();
 				if (!progress.Readback->GetResult(encoded->Image))

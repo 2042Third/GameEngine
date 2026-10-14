@@ -109,7 +109,8 @@ Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
 - `GPU*` suites (label `gpu`) share one device through `Tests::GPUContext` (never create devices in tests) and end with
   `CHECK(gpu.GetNewErrorCount() == 0)`: validation errors fail them. Exact-pixel tests set
   `SceneRendererSpecification::TextureStreaming = false` and `AddNeutralPostProcess`, tests of whole-asset residency
-  `SetPartialLoads(false)`; text tests render until no glyph is pending.
+  `SetPartialLoads(false)`; text tests render until no glyph is pending. Count what a frame drew with
+  `Tests::GetDrawnCounts` (the GPU-driven path counts on the GPU, frames later).
 - **Perf tests** (`Perf.*`, `PerfGPU.*`, label `perf`, Release and Dist; CI skips them, so run `-L perf` on the
   reference machine before merging a change that can affect performance): limits live only in
   `StrataTests/Perf/Budgets.json`, measured on the reference machine (a metric it has not measured yet is `Provisional`:
@@ -394,6 +395,9 @@ lights, overlays and text: [Rendering](Docs/DeveloperGuide.md#rendering).
   ([GPU timing](Docs/DeveloperGuide.md#gpu-timing)).
 - Read mesh geometry only through the geometry pool, every frame (`Mesh::GetGeometry`: compaction moves it)
   ([Batching](Docs/DeveloperGuide.md#batching)).
+- What is drawn is decided twice, by the CPU path (`SceneRendererExtraction.cpp`) and the GPU's culling (`Cull.comp`):
+  change both, keep shading independent of draw order (no screen-space derivatives there), and keep
+  `GPU.SceneRenderer.GPUDriven` passing ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
 
 ## Automation (editor RPC + MCP)
 

@@ -416,6 +416,7 @@ namespace Strata
 		m_GTAOPipeline = createComputePipeline(halfAO ? "Effects/GTAOHalf.comp" : "Effects/GTAO.comp", m_AOBindingLayout);
 		m_AOBlurPipeline = createComputePipeline(halfAO ? "Effects/AOBlurHalf.comp" : "Effects/AOBlur.comp", m_AOBindingLayout);
 		m_ClusterPipeline = createComputePipeline("Scene/LightClusters.comp", m_ClusterBindingLayout);
+		CreateCullResources();
 
 		nvrhi::BindingLayoutDesc exposureLayout;
 		exposureLayout.visibility = nvrhi::ShaderType::Compute;
@@ -843,6 +844,10 @@ namespace Strata
 		};
 		m_SceneBindingSet = create(m_DrawListBuffer, shadowMap);
 		m_ShadowBindingSet = create(m_ShadowDrawListBuffer, m_DummyShadowMap);
+		// The GPU-driven path's passes read the draw list its culling writes.
+		const bool gpuSets = m_GPUDrawListBuffer != nullptr;
+		m_GPUSceneBindingSet = gpuSets ? create(m_GPUDrawListBuffer, shadowMap) : nullptr;
+		m_GPUShadowBindingSet = gpuSets ? create(m_GPUDrawListBuffer, m_DummyShadowMap) : nullptr;
 
 		nvrhi::BindingSetDesc clusterSet;
 		clusterSet.bindings = {
@@ -855,7 +860,7 @@ namespace Strata
 		m_BoundEnvironment = environmentCube;
 		m_BoundShadowMap = shadowMap;
 		m_BoundSceneGPUVersion = m_SceneGPU->GetBufferVersion();
-		if (!m_SceneBindingSet || !m_ShadowBindingSet || !m_ClusterBindingSet)
+		if (!m_SceneBindingSet || !m_ShadowBindingSet || !m_ClusterBindingSet || (gpuSets && (!m_GPUSceneBindingSet || !m_GPUShadowBindingSet)))
 		{
 			m_SceneBindingSet = nullptr; // Recreated next frame
 			return false;
@@ -1145,6 +1150,17 @@ namespace Strata
 			case BufferKind::Structured:
 				desc.structStride = static_cast<uint32_t>(elementSize);
 				desc.initialState = nvrhi::ResourceStates::ShaderResource;
+				break;
+			case BufferKind::StructuredUAV:
+				desc.structStride = static_cast<uint32_t>(elementSize);
+				desc.canHaveUAVs = true;
+				desc.initialState = nvrhi::ResourceStates::ShaderResource;
+				break;
+			case BufferKind::IndirectArgumentsUAV:
+				desc.structStride = static_cast<uint32_t>(elementSize);
+				desc.canHaveUAVs = true;
+				desc.isDrawIndirectArgs = true;
+				desc.initialState = nvrhi::ResourceStates::IndirectArgument;
 				break;
 		}
 		desc.keepInitialState = true;
@@ -1704,7 +1720,10 @@ namespace Strata
 		ST_PROFILE_STAGE("Render.Submit"); // Extraction (Render.Extract) nests in it
 		const bool rendered = RenderFrame(scene, camera, target, options);
 		if (rendered)
+		{
+			m_RenderCount++;
 			ReportTextureUse(camera);
+		}
 		// The references the frame resolved end with it, so a renderer that stops rendering (a capture renderer between
 		// captures, a hidden view) keeps none of the meshes, materials and textures it drew resident (the environment
 		// cache keeps the sky light's map) and no asset manager alive.
@@ -1751,6 +1770,7 @@ namespace Strata
 	{
 		if (!Renderer::IsInitialized())
 			return;
+		ResolveCullCounters(wait);
 		GPUProfiler& profiler = Renderer::GetGPUProfiler();
 		if (!profiler.IsEnabled())
 			return;
@@ -1844,14 +1864,20 @@ namespace Strata
 		m_Stats.PreviewLighting = preview;
 		CollectLights(scene, camera, preview, frame);
 
+		// The GPU-driven path culls and builds the opaque and shadow draws on the GPU; the CPU still resolves the frame's assets
+		// and fits the cascades, and draws transparent surfaces.
+		m_GPUDrivenFrame = IsGPUDriven();
+		m_Stats.GPUDriven = m_GPUDrivenFrame;
 		const auto extractionStart = std::chrono::steady_clock::now();
 		const Frustum frustum(frame.ViewProjection);
 		CullView(renderScene, camera, frustum);
 		FindShadowCasters(renderScene, camera, frustum, frame);
 		ResolveAssets(renderScene);
-		GatherDraws(renderScene, camera);
-		GatherShadowDraws(renderScene, camera, frame);
+		GatherDraws(renderScene, camera, !m_GPUDrivenFrame);
+		GatherShadowDraws(renderScene, camera, frame, !m_GPUDrivenFrame);
 		BuildDrawArguments();
+		if (m_GPUDrivenFrame)
+			PrepareGPUCulling(renderScene, camera, frustum);
 		ReportVisibleAnimators(scene);
 		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
 		bool degraded = false; // Rendered with a reported limitation: keep the error so it is not logged every frame
@@ -1868,14 +1894,22 @@ namespace Strata
 			|| m_BoundSceneGPUVersion != m_SceneGPU->GetBufferVersion();
 		bool materialsRecreated = false;
 		bool drawListsRecreated = false;
-		const bool buffersReady = EnsureBufferCapacity(m_MaterialBuffer, m_MaterialData.size(), sizeof(RenderData::MaterialData), "Materials", materialsRecreated)
+		bool cullRecreated = false;
+		const bool buffersReady = (!m_GPUDrivenFrame || EnsureCullBuffers(cullRecreated))
+			&& EnsureBufferCapacity(m_MaterialBuffer, m_MaterialData.size(), sizeof(RenderData::MaterialData), "Materials", materialsRecreated)
 			&& EnsureBufferCapacity(m_DrawListBuffer, m_DrawInstancesBuild.size(), sizeof(uint32_t), "DrawList", drawListsRecreated)
 			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, m_ShadowDrawInstancesBuild.size(), sizeof(uint32_t), "ShadowDrawList", drawListsRecreated)
 			&& EnsureBufferCapacity(m_LightBuffer, m_Lights.size(), sizeof(RenderData::LightData), "Lights", buffersRecreated)
 			&& EnsureBufferCapacity(m_LightBoundsBuffer, m_LightBounds.size(), sizeof(RenderData::LightBounds), "LightBounds", buffersRecreated)
 			&& EnsureBufferCapacity(m_DrawArgumentBuffer, m_DrawArgumentsBuild.size(), sizeof(nvrhi::DrawIndexedIndirectArguments), "DrawArguments", drawListsRecreated,
 				BufferKind::IndirectArguments);
-		buffersRecreated = buffersRecreated || materialsRecreated || drawListsRecreated;
+		buffersRecreated = buffersRecreated || materialsRecreated || drawListsRecreated || cullRecreated;
+		if (cullRecreated)
+		{
+			// The culling tables start again in their new buffers, and the binding set names the new ones.
+			m_CullBindingSet = nullptr;
+			m_CullTablesUploaded = false;
+		}
 		if (!buffersReady)
 		{
 			// A replaced buffer holds nothing yet: upload everything to the next one.
@@ -1913,6 +1947,24 @@ namespace Strata
 			commandList->writeBuffer(m_LightBoundsBuffer, m_LightBounds.data(), m_LightBounds.size() * sizeof(RenderData::LightBounds));
 		}
 
+		if (m_GPUDrivenFrame)
+		{
+			if (!UploadCullTables(commandList))
+			{
+				gpuTimer.End();
+				commandList->endMarker();
+				commandList->close();
+				m_Device->executeCommandList(commandList); // Keeps the uploads that were recorded
+				m_Errors.Report("the GPU's culling tables could not be uploaded (see the previous error)");
+				m_Stats = {};
+				return false;
+			}
+			gpuTimer.Next(gpuStages.Cull);
+			commandList->beginMarker("Cull");
+			RunGPUCulling(commandList, frame.ShadowParams.w > 0.0f);
+			commandList->endMarker();
+		}
+
 		if (!m_Lights.empty())
 		{
 			commandList->beginMarker("LightClusters");
@@ -1924,7 +1976,10 @@ namespace Strata
 		{
 			gpuTimer.Next(gpuStages.Shadows);
 			commandList->beginMarker("Shadows");
-			DrawShadows(commandList, static_cast<uint32_t>(frame.ShadowParams.w));
+			if (m_GPUDrivenFrame)
+				DrawGPUShadows(commandList);
+			else
+				DrawShadows(commandList, static_cast<uint32_t>(frame.ShadowParams.w));
 			commandList->endMarker();
 		}
 
@@ -1937,7 +1992,10 @@ namespace Strata
 		commandList->clearTextureFloat(m_HDRTexture, nvrhi::AllSubresources, nvrhi::Color(SRGBToLinear(clear.r), SRGBToLinear(clear.g), SRGBToLinear(clear.b), 1.0f));
 
 		commandList->beginMarker("Prepass");
-		DrawBatches(commandList, Pass::Prepass, false);
+		if (m_GPUDrivenFrame)
+			DrawGPUView(commandList, Pass::Prepass);
+		else
+			DrawBatches(commandList, Pass::Prepass, false);
 		commandList->endMarker();
 
 		if (postProcess.AmbientOcclusion)
@@ -1949,7 +2007,10 @@ namespace Strata
 		}
 		gpuTimer.Next(gpuStages.Opaque);
 		commandList->beginMarker("Opaque");
-		DrawBatches(commandList, Pass::Opaque, false);
+		if (m_GPUDrivenFrame)
+			DrawGPUView(commandList, Pass::Opaque);
+		else
+			DrawBatches(commandList, Pass::Opaque, false);
 		commandList->endMarker();
 
 		if (frame.EnvironmentParams.w > 0.0f && frame.SkyParams.y > 0.0f)
@@ -2028,6 +2089,8 @@ namespace Strata
 			commandList->endMarker();
 			commandList->close();
 			m_Device->executeCommandList(commandList); // Keeps the uploads that were recorded
+			if (m_GPUDrivenFrame)
+				SubmitCullReadback();
 			m_Stats = {};
 			return false;
 		}
@@ -2078,6 +2141,8 @@ namespace Strata
 		commandList->endMarker();
 		commandList->close();
 		m_Device->executeCommandList(commandList);
+		if (m_GPUDrivenFrame)
+			SubmitCullReadback();
 
 		m_Stats.Rendered = true;
 		m_HasRenderedFrame = true;

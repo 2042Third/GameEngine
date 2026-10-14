@@ -59,6 +59,7 @@ namespace Strata
 		// ones, or all of them after the manager changed (or forgot the changes); none in a sync after which nothing loaded,
 		// reloaded, was dropped or got other recorded bounds.
 		uint32_t LastSyncMeshChecks = 0;
+		uint32_t MirroredProxies = 0;   // Proxies whose world transform mirrors (RenderProxyFlags::Mirrored)
 		uint32_t SkinProxies = 0;       // Proxies with a SkinComponent
 		uint32_t PosedProxies = 0;      // Of those, posed (RenderProxyFlags::Skinned)
 		uint32_t PaletteJoints = 0;     // Joint matrices of the posed proxies' palettes
