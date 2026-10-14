@@ -6,7 +6,10 @@
 #include "Strata/Core/Platform.h"
 #include "Strata/Renderer/GPUUploadQueue.h"
 
+#include <algorithm>
+#include <cmath>
 #include <iterator>
+#include <unordered_set>
 
 namespace Strata
 {
@@ -39,7 +42,25 @@ namespace Strata
 
 	}
 
-	Scope<FramePerfLog> FramePerfLog::Create(const std::filesystem::path& path, const FrameProfiler& profiler, std::string* outError)
+	void FramePerfRow::Add(double value, int decimals)
+	{
+		m_Count++;
+		if (!std::isfinite(value))
+		{
+			m_Line += ',';
+			return;
+		}
+		fmt::format_to(std::back_inserter(m_Line), ",{:.{}f}", value, std::clamp(decimals, 0, 9));
+	}
+
+	void FramePerfRow::AddEmpty()
+	{
+		m_Count++;
+		m_Line += ',';
+	}
+
+	Scope<FramePerfLog> FramePerfLog::Create(const std::filesystem::path& path, const FrameProfiler& profiler, const FramePerfLogSpecification& specification,
+		std::string* outError)
 	{
 		const auto fail = [&](std::string message) -> Scope<FramePerfLog>
 		{
@@ -47,6 +68,18 @@ namespace Strata
 				*outError = std::move(message);
 			return nullptr;
 		};
+
+		std::unordered_set<std::string> groupColumns;
+		for (const FramePerfColumnGroup& group : specification.Columns)
+		{
+			if (group.Names.empty())
+				return fail("a column group of the perf log names no column");
+			for (const std::string& name : group.Names)
+			{
+				if (name.empty() || !groupColumns.insert(name).second)
+					return fail(fmt::format("the perf log's column '{}' is empty or named twice", name));
+			}
+		}
 
 		if (path.has_parent_path() && !FileSystem::CreateDirectories(path.parent_path()))
 			return fail(fmt::format("cannot create the folder of '{}'", FileSystem::ToUTF8(path)));
@@ -67,6 +100,9 @@ namespace Strata
 		{
 			log->m_Columns.push_back(column);
 		}
+		log->m_Groups = specification.Columns;
+		for (const FramePerfColumnGroup& group : log->m_Groups)
+			log->m_Columns.insert(log->m_Columns.end(), group.Names.begin(), group.Names.end());
 
 		std::string header;
 		for (size_t index = 0; index < log->m_Columns.size(); index++)
@@ -127,6 +163,27 @@ namespace Strata
 			fmt::format_to(out, ",{:.3f},{:.3f}", ToMB(memory->PrivateBytes), ToMB(memory->PeakPrivateBytes));
 		else
 			m_Line += ",,";
+		// The program's columns, each group checked for writing what it names.
+		for (const FramePerfColumnGroup& group : m_Groups)
+		{
+			FramePerfRow row(m_Line);
+			if (group.Write)
+			{
+				group.Write(row);
+			}
+			else
+			{
+				for (size_t column = 0; column < group.Names.size(); column++)
+					row.AddEmpty();
+			}
+			if (row.GetCount() != group.Names.size())
+			{
+				m_Failed = true;
+				ST_CORE_ERROR("The perf log '{}' stopped: a column group wrote {} values for its {} columns ({}...)", FileSystem::ToUTF8(m_Path), row.GetCount(),
+					group.Names.size(), group.Names.front());
+				return false;
+			}
+		}
 		m_Line += '\n';
 
 		m_File.write(m_Line.data(), static_cast<std::streamsize>(m_Line.size()));

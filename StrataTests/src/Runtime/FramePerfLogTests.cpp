@@ -4,6 +4,7 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/FrameProfiler.h"
+#include "Strata/Core/Log.h"
 #include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Runtime/FramePerfLog.h"
 #include "TestHelpers.h"
@@ -30,7 +31,7 @@ TEST_SUITE("Runtime.PerfLog")
 
 		const std::filesystem::path path = CreateTemporaryDirectory("PerfLog") / "Logs" / "Frames.csv";
 		std::string error;
-		Scope<FramePerfLog> log = FramePerfLog::Create(path, profiler, &error);
+		Scope<FramePerfLog> log = FramePerfLog::Create(path, profiler, {}, &error);
 		REQUIRE_MESSAGE(log, error);
 		CHECK(log->GetColumns().front() == "Frame");
 
@@ -159,7 +160,7 @@ TEST_SUITE("Runtime.PerfLog")
 		const std::filesystem::path directory = CreateTemporaryDirectory("PerfLogFolder");
 		std::string error;
 		// A folder is no file.
-		CHECK_FALSE(FramePerfLog::Create(directory, profiler, &error));
+		CHECK_FALSE(FramePerfLog::Create(directory, profiler, {}, &error));
 		CHECK(error.find("cannot create") != std::string::npos);
 	}
 
@@ -181,5 +182,90 @@ TEST_SUITE("Runtime.PerfLog")
 		// Without the frame columns and stages it is no perf log.
 		CHECK_FALSE(ValidatePerfLog(*table, 2, error));
 		CHECK(error.find("no column") != std::string::npos);
+	}
+}
+
+TEST_SUITE("Runtime.FramePerfLog")
+{
+	TEST_CASE("Column groups follow the built-in columns, and a group that writes another count of values stops the log")
+	{
+		FrameProfiler profiler(FrameProfilerSpecification { 4, nullptr, false });
+		const std::filesystem::path path = CreateTemporaryDirectory("PerfLogGroups") / "Frames.csv";
+		uint32_t frames = 0;
+		bool miscount = false;
+		FramePerfLogSpecification specification;
+		specification.Columns.push_back(FramePerfColumnGroup { { "WorldCellsLoaded", "WorldCellsWanted" }, [&](FramePerfRow& row)
+		{
+			row.Add(static_cast<double>(frames), 0);
+			if (frames % 2 == 0)
+				row.Add(1.0 / 3.0, 3);
+			else
+				row.AddEmpty();
+		} });
+		specification.Columns.push_back(FramePerfColumnGroup { { "Unwritten" }, nullptr });
+		specification.Columns.push_back(FramePerfColumnGroup { { "Pressure" }, [&](FramePerfRow& row)
+		{
+			row.Add(std::nan(""), 2); // Not a number: an empty field
+			if (miscount)
+				row.Add(1.0, 0);
+		} });
+		std::string error;
+		Scope<FramePerfLog> log = FramePerfLog::Create(path, profiler, specification, &error);
+		REQUIRE_MESSAGE(log, error);
+		const std::vector<std::string>& columns = log->GetColumns();
+		REQUIRE(columns.size() >= 4);
+		CHECK(columns[columns.size() - 4] == "WorldCellsLoaded");
+		CHECK(columns[columns.size() - 3] == "WorldCellsWanted");
+		CHECK(columns[columns.size() - 2] == "Unwritten");
+		CHECK(columns.back() == "Pressure");
+		CHECK(columns[columns.size() - 5] == "PeakPrivateMB"); // After every built-in column
+
+		for (; frames < 3; frames++)
+		{
+			profiler.BeginFrame();
+			profiler.EndFrame(0.0);
+			CHECK(log->WriteFrame(profiler.GetFrame(0), nullptr));
+		}
+		// A group that writes a value more than it names stops the log: no row then, nor after.
+		const uint64_t before = Log::GetBuffer().GetLatestSequence();
+		miscount = true;
+		profiler.BeginFrame();
+		profiler.EndFrame(0.0);
+		CHECK_FALSE(log->WriteFrame(profiler.GetFrame(0), nullptr));
+		bool reported = false;
+		for (const LogEntry& entry : Log::GetBuffer().GetEntries(before))
+			reported = reported || entry.Message.find("wrote 2 values for its 1 columns (Pressure...)") != std::string::npos;
+		CHECK(reported);
+		miscount = false;
+		CHECK_FALSE(log->WriteFrame(profiler.GetFrame(0), nullptr));
+		CHECK(log->GetRowCount() == 3);
+		CHECK_FALSE(log->Close(&error));
+
+		const std::optional<PerfLogTable> table = ReadPerfLog(path, error);
+		REQUIRE_MESSAGE(table, error);
+		REQUIRE(table->Rows.size() == 3);
+		const size_t loaded = *table->FindColumn("WorldCellsLoaded");
+		const size_t wanted = *table->FindColumn("WorldCellsWanted");
+		for (size_t row = 0; row < 3; row++)
+		{
+			CAPTURE(row);
+			CHECK(table->Rows[row][loaded] == static_cast<double>(row));
+			if (row % 2 == 0)
+				CHECK(table->Rows[row][wanted] == doctest::Approx(0.333));
+			else
+				CHECK(std::isnan(table->Rows[row][wanted]));
+			CHECK(std::isnan(table->Rows[row][*table->FindColumn("Unwritten")]));
+			CHECK(std::isnan(table->Rows[row][*table->FindColumn("Pressure")]));
+		}
+
+		// Groups without columns, and columns named twice, are refused.
+		FramePerfLogSpecification empty;
+		empty.Columns.push_back(FramePerfColumnGroup {});
+		CHECK_FALSE(FramePerfLog::Create(path, profiler, empty, &error));
+		CHECK(error.find("names no column") != std::string::npos);
+		FramePerfLogSpecification twice;
+		twice.Columns.push_back(FramePerfColumnGroup { { "Cells", "Cells" }, nullptr });
+		CHECK_FALSE(FramePerfLog::Create(path, profiler, twice, &error));
+		CHECK(error.find("named twice") != std::string::npos);
 	}
 }

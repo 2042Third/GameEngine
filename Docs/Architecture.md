@@ -2863,7 +2863,11 @@ resident MB per pool, evictions), the texture streamer's (`StreamedMB`: bytes re
 `AssetManagerStats::Detail`), the frame's steps through the upload queue (`UploadQueueMB`, `UploadQueueMs`,
 `UploadQueueSteps`), the graphics device's memory in use and the upload staging of it (`DeviceMB`, `StagingMB`: with
 the resident pools they tell what render targets and the swapchain take) and the process's private memory with its peak
-so far (`PrivateMB`, `PeakPrivateMB`). A log that cannot be written fails the run (exit code 1).
+so far (`PrivateMB`, `PeakPrivateMB`). Programs add columns of their own after every built-in one through column
+groups (`FramePerfLogSpecification::Columns`: each `FramePerfColumnGroup` names its columns and writes a row's values
+through `FramePerfRow::Add(value, decimals)` and `AddEmpty`, read when the row is written; a group that writes another
+number of values than it names fails the log like a write error). A log that cannot be written fails the run (exit
+code 1).
 `GameRuntime::Create` loads the manifest, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
 `PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module

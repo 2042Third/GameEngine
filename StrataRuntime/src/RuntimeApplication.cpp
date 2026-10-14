@@ -153,7 +153,7 @@ namespace Strata
 		void StartPerfLog()
 		{
 			std::string error;
-			m_PerfLog = FramePerfLog::Create(m_Options.PerfLogPath, FrameProfiler::Get(), &error);
+			m_PerfLog = FramePerfLog::Create(m_Options.PerfLogPath, FrameProfiler::Get(), {}, &error);
 			if (!m_PerfLog)
 			{
 				ST_CRITICAL("Cannot write the perf log: {}", error);

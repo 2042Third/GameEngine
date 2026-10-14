@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,41 @@ namespace Strata
 	{
 		uint64_t DeviceBytes = 0;
 		uint64_t StagingBytes = 0;
+	};
+
+	// The values a column group writes into a row (FramePerfColumnGroup::Write): one call of Add or AddEmpty per column it
+	// names, in their order.
+	class FramePerfRow
+	{
+	public:
+		explicit FramePerfRow(std::string& line)
+			: m_Line(line)
+		{
+		}
+
+		// A number with `decimals` digits after the point (0-9); an empty field for a value that is no finite number.
+		void Add(double value, int decimals);
+		// An empty field: nothing to report this frame (no world streams, say).
+		void AddEmpty();
+		uint32_t GetCount() const { return m_Count; }
+	private:
+		std::string& m_Line;
+		uint32_t m_Count = 0;
+	};
+
+	// Columns a program adds after the built-in ones (FramePerfLogSpecification): their names, and a function that writes
+	// their values for each row, read when the row is written (after the frame).
+	struct FramePerfColumnGroup
+	{
+		std::vector<std::string> Names;
+		std::function<void(FramePerfRow&)> Write; // Null: the group's fields stay empty
+	};
+
+	struct FramePerfLogSpecification
+	{
+		// Groups of columns that follow every built-in column, in this order. A group that writes another number of values
+		// than it names fails the log like a write error.
+		std::vector<FramePerfColumnGroup> Columns;
 	};
 
 	// A CSV file with one row per frame (StrataRuntime --perf-log): what the frame profiler recorded and where the frame left
@@ -45,12 +81,15 @@ namespace Strata
 	//                                            above they tell what render targets and the swapchain take
 	//   PrivateMB, PeakPrivateMB                 the process's private memory after the frame and its peak so far
 	//                                            (Platform::GetProcessMemory; empty where the system does not report it)
+	//   <group columns>...                       the columns of the specification's groups, in their order
 	// Rows are written as frames end; the file is complete once the log is closed.
 	class FramePerfLog
 	{
 	public:
-		// Creates (or replaces) the file and writes the header. Null with the reason in outError when it cannot be written.
-		static Scope<FramePerfLog> Create(const std::filesystem::path& path, const FrameProfiler& profiler, std::string* outError = nullptr);
+		// Creates (or replaces) the file and writes the header. Null with the reason in outError when it cannot be written, or
+		// when a group names no column or names one twice.
+		static Scope<FramePerfLog> Create(const std::filesystem::path& path, const FrameProfiler& profiler,
+			const FramePerfLogSpecification& specification = {}, std::string* outError = nullptr);
 		~FramePerfLog();
 
 		FramePerfLog(const FramePerfLog&) = delete;
@@ -74,6 +113,7 @@ namespace Strata
 		std::ofstream m_File;
 		std::vector<std::string> m_Columns;
 		uint32_t m_StageCount = 0; // Stage columns: the stages registered when the log was created
+		std::vector<FramePerfColumnGroup> m_Groups;
 		uint64_t m_Rows = 0;
 		bool m_Failed = false;
 		bool m_Closed = false;
