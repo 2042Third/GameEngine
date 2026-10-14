@@ -5,7 +5,6 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Input/Input.h"
-#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/RendererComponents.h"
@@ -16,6 +15,10 @@
 #include "TestHelpers.h"
 
 #include "StrataScript/ScriptABI.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+#endif
 
 #include <cstddef>
 #include <cstring>
@@ -153,6 +156,7 @@ TEST_SUITE("Scripting.API")
 		scene.OnRuntimeStop();
 	}
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("Generic component access")
 	{
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
@@ -173,6 +177,7 @@ TEST_SUITE("Scripting.API")
 		CHECK(entity.GetComponent<PointLightComponent>().Color == glm::vec3(1.0f, 0.5f, 0.25f));
 		scene.OnRuntimeStop();
 	}
+#endif
 
 	TEST_CASE("Every registered component property is reachable from scripts")
 	{
@@ -206,9 +211,15 @@ TEST_SUITE("Scripting.API")
 			}
 		}
 		// The loop proves nothing over a (nearly) empty registry: every built-in component with data must have been probed.
-		for (const char* name : { "Transform", "Camera", "MeshRenderer", "DirectionalLight", "PointLight", "SpotLight", "SkyLight",
-				 "PostProcess", "Text", "RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "CharacterController", "AudioSource",
-				 "AudioListener", "PrefabInstance" })
+		std::vector<const char*> expected = { "Transform", "Camera", "MeshRenderer", "DirectionalLight", "PointLight", "SpotLight", "SkyLight",
+			"PostProcess", "Text", "PrefabInstance" };
+#if ST_WITH_PHYSICS
+		expected.insert(expected.end(), { "RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "CharacterController" });
+#endif
+#if ST_WITH_AUDIO
+		expected.insert(expected.end(), { "AudioSource", "AudioListener" });
+#endif
+		for (const char* name : expected)
 		{
 			INFO("Component ", name);
 			CHECK(probedComponents.contains(name));

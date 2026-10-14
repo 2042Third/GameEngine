@@ -15,6 +15,12 @@
 #include <utility>
 #include <vector>
 
+// Test cases that need an optional engine module are guarded with its ST_WITH_<MODULE> (a definition of every target that
+// links the engine); those that need the engine's full set of systems or components (their order, their count, a scene
+// with all of them) with ST_TESTS_HAVE_EVERY_MODULE. CMake leaves out the files that test little else
+// (StrataTests/CMakeLists.txt).
+#define ST_TESTS_HAVE_EVERY_MODULE (ST_WITH_PHYSICS && ST_WITH_AUDIO && ST_WITH_ANIMATION)
+
 namespace Strata::Tests
 {
 
@@ -26,6 +32,16 @@ namespace Strata::Tests
 	// directory and returns the copy's directory, or an empty path when the copy failed (outError says why). Tests never
 	// open the samples in place.
 	std::filesystem::path CopySampleProject(const std::string& name, std::string* outError = nullptr);
+
+	// Log entries (of every logger) written since construction; REQUIREs that the log buffer dropped none of them.
+	class LogCapture
+	{
+	public:
+		LogCapture();
+		std::vector<LogEntry> GetEntries() const;
+	private:
+		uint64_t m_Start = 0;
+	};
 
 	// Describes a JSON file a process failed to load, for the failure message: its path and size, and whether it is valid
 	// JSON or else the parser's error with the last 64 bytes it read, up to the one it stopped at (non-printable bytes as

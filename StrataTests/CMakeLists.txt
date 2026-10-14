@@ -68,6 +68,32 @@ if(NOT TARGET StrataEditorUI)
 	list(REMOVE_ITEM STRATA_TEST_SOURCES ${STRATA_EDITOR_TEST_SOURCES})
 endif()
 
+# Tests of the optional modules (STRATA_WITH_*): a build without one leaves out its test folder, the other files that test
+# little else (below), and the feature test (src/FeatureTest: the feature scene holds every component). Test cases elsewhere
+# that need a module are guarded with #if ST_WITH_<MODULE>.
+set(STRATA_TESTS_OF_PHYSICS "src/Physics/" "src/Perf/PhysicsPerfTests.cpp" "src/Scripting/ScriptPhysicsTests.cpp"
+	"src/Scripting/ScriptCollisionTests.cpp")
+set(STRATA_TESTS_OF_AUDIO "src/Audio/" "src/Core/ApplicationAudioTests.cpp" "src/Scripting/ScriptAudioTests.cpp")
+set(STRATA_TESTS_OF_ANIMATION "src/Animation/" "src/Asset/GltfSkinImportTests.cpp" "src/Perf/AnimationPerfTests.cpp"
+	"src/Renderer/GPUAnimationTests.cpp" "src/Renderer/RenderSceneSkinTests.cpp" "src/Scripting/ScriptAnimationTests.cpp")
+set(STRATA_TESTS_HAVE_EVERY_MODULE ON)
+foreach(module IN ITEMS PHYSICS AUDIO ANIMATION)
+	if(NOT STRATA_WITH_${module})
+		set(STRATA_TESTS_HAVE_EVERY_MODULE OFF)
+		list(APPEND STRATA_TESTS_LEFT_OUT ${STRATA_TESTS_OF_${module}})
+	endif()
+endforeach()
+if(NOT STRATA_TESTS_HAVE_EVERY_MODULE)
+	list(APPEND STRATA_TESTS_LEFT_OUT "src/FeatureTest/")
+endif()
+foreach(leftOut IN LISTS STRATA_TESTS_LEFT_OUT)
+	if(leftOut MATCHES "/$")
+		list(FILTER STRATA_TEST_SOURCES EXCLUDE REGEX "^${CMAKE_CURRENT_SOURCE_DIR}/${leftOut}")
+	else()
+		list(REMOVE_ITEM STRATA_TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${leftOut}")
+	endif()
+endforeach()
+
 # The perf tests (src/Perf, see Docs/DeveloperGuide.md, "Perf tests") write their results here, one file per
 # configuration.
 set(STRATA_PERF_RESULTS_DIR "${CMAKE_BINARY_DIR}/PerfResults")
@@ -235,10 +261,12 @@ add_test(NAME StrataTests.Package
 	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
 set_tests_properties(StrataTests.Package PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
 
-add_test(NAME StrataTests.FeatureTest
-	COMMAND StrataTests "--test-suite=${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
-	WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
-set_tests_properties(StrataTests.FeatureTest PROPERTIES LABELS "feature")
+if(STRATA_TESTS_HAVE_EVERY_MODULE)
+	add_test(NAME StrataTests.FeatureTest
+		COMMAND StrataTests "--test-suite=${STRATA_FEATURE_TEST_SUITES}" --no-intro=true
+		WORKING_DIRECTORY "$<TARGET_FILE_DIR:StrataTests>")
+	set_tests_properties(StrataTests.FeatureTest PROPERTIES LABELS "feature")
+endif()
 
 add_test(NAME StrataTests.GPU
 	COMMAND StrataTests --test-suite=GPU* --no-intro=true

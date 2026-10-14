@@ -1,4 +1,3 @@
-#include <Strata/Audio/AudioModule.h>
 #include <Strata/Core/Application.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/FrameProfiler.h>
@@ -20,6 +19,10 @@
 #include <Strata/Runtime/GameRenderer.h>
 #include <Strata/Runtime/GameRuntime.h>
 #include <Strata/Runtime/GameWindowService.h>
+
+#if ST_WITH_AUDIO
+	#include <Strata/Audio/AudioModule.h>
+#endif
 
 namespace Strata
 {
@@ -351,7 +354,9 @@ namespace Strata
 		{
 			specification.Modules.push_back(GraphicsModule::Factory());
 		}
+#if ST_WITH_AUDIO
 		specification.Modules.push_back(AudioModule::Factory({ .NullDevice = specification.Headless }));
+#endif
 		specification.Modules.push_back(ProjectModule::Factory());
 		specification.Jobs.BackgroundThreadCount = c_BackgroundThreadCount;
 		specification.Window.Title = name;

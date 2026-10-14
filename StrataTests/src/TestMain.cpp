@@ -5,7 +5,6 @@
 #include "Engine/ModuleRegistrationHelpers.h"
 #include "Network/FakeEditorProcess.h"
 #include "Perf/StressProject.h"
-#include "Physics/PhysicsTestUtils.h"
 #include "Reflection/ComponentSchema.h"
 #include "Renderer/GPUTestUtils.h"
 #include "Runtime/PerfLogReader.h"
@@ -30,6 +29,10 @@
 #include "Strata/Scripting/ScriptModule.h"
 #include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
+
+#if ST_WITH_PHYSICS
+	#include "Physics/PhysicsTestUtils.h"
+#endif
 
 #include <stb_image.h>
 
@@ -656,8 +659,10 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		}
 		return 0;
 	}
+#if ST_WITH_PHYSICS
 	if (mode == "broad-phase-churn")
 		return Strata::Tests::RunBroadPhaseChurnProcess();
+#endif
 	if (mode == "streaming-sweep")
 	{
 		// <settings file> <result file>: runs a camera sweep over a stress project's pack (Perf/StressProject.h) and writes

@@ -1,10 +1,6 @@
 #include <doctest/doctest.h>
 
-#include "Audio/AudioTestUtils.h"
 #include "Scripting/ScriptTestUtils.h"
-#include "Strata/Audio/AudioComponents.h"
-#include "Strata/Audio/AudioSource.h"
-#include "Strata/Audio/AudioSystem.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Physics/PhysicsSystem.h"
@@ -12,6 +8,13 @@
 #include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneSystem.h"
 #include "TestHelpers.h"
+
+#if ST_WITH_AUDIO
+	#include "Audio/AudioTestUtils.h"
+	#include "Strata/Audio/AudioComponents.h"
+	#include "Strata/Audio/AudioSource.h"
+	#include "Strata/Audio/AudioSystem.h"
+#endif
 
 #include <glm/glm.hpp>
 #include <glm/gtc/epsilon.hpp>
@@ -228,6 +231,7 @@ TEST_SUITE("Scripting.Physics")
 		scene.OnRuntimeStop();
 	}
 
+#if ST_WITH_AUDIO
 	TEST_CASE("Scenes play without the physics system: scripts, contact watches and Doppler do without its services")
 	{
 		ScopedAudioEngine audioEngine;
@@ -291,6 +295,7 @@ TEST_SUITE("Scripting.Physics")
 		CHECK(scene.GetService<ICollisionEventSource>() != nullptr);
 		scene.OnRuntimeStop();
 	}
+#endif
 
 	TEST_CASE("Physics functions find nothing in scenes without physics, until a physics component appears")
 	{

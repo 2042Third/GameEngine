@@ -22,7 +22,8 @@ namespace Strata::Engine
 		std::vector<std::string> Exclude;
 	};
 
-	// The engine's modules, in registration order: Scene, Renderer, Physics, Audio, Animation, Scripting.
+	// The engine modules this build contains, in registration order: Scene, Renderer, Physics, Audio, Animation, Scripting,
+	// without the optional ones the build leaves out (STRATA_WITH_PHYSICS, _AUDIO, _ANIMATION).
 	std::vector<std::string> GetBuiltinModuleNames();
 	// The engine modules RegisterBuiltinModules registered, in order: GetBuiltinModuleNames without the excluded ones.
 	// Empty before it ran. Main thread.

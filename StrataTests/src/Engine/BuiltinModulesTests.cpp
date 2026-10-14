@@ -67,22 +67,27 @@ TEST_SUITE("Engine.Modules")
 		CHECK(ComponentRegistry::IsFrozen());
 		CHECK_FALSE(ComponentRegistry::IsRegistrationOpen());
 
-		// Every module registered: components (scene), loaders (scene, renderer, audio), importers (pipeline), systems.
+		// Every module of the build registered: components (scene), loaders (scene, renderer, audio, animation), importers
+		// (pipeline), systems.
 		CHECK(ComponentRegistry::Find("Transform") != nullptr);
 		CHECK(ComponentRegistry::Find("Script") != nullptr);
-		for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Texture, AssetType::Mesh, AssetType::Material, AssetType::Font, AssetType::AudioClip,
-			AssetType::Skeleton, AssetType::AnimationClip, AssetType::AnimationController })
+		CHECK((ComponentRegistry::Find("RigidBody") != nullptr) == ST_WITH_PHYSICS);
+		CHECK((ComponentRegistry::Find("AudioSource") != nullptr) == ST_WITH_AUDIO);
+		CHECK((ComponentRegistry::Find("Animator") != nullptr) == ST_WITH_ANIMATION);
+		for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Texture, AssetType::Mesh, AssetType::Material, AssetType::Font })
 		{
 			CAPTURE(AssetTypeToString(type));
 			CHECK(AssetLoaderRegistry::Find(type) != nullptr);
 		}
+		CHECK((AssetLoaderRegistry::Find(AssetType::AudioClip) != nullptr) == ST_WITH_AUDIO);
+		CHECK((AssetLoaderRegistry::Find(AssetType::AnimationClip) != nullptr) == ST_WITH_ANIMATION);
 		CHECK(AssetImporterRegistry::FindByExtension(".gltf") != nullptr);
 		const std::vector<std::string> systems = GetSystemNames();
-		for (const char* name : { "Scripting", "Physics", "Audio", "Animation" })
-		{
-			CAPTURE(name);
-			CHECK(std::find(systems.begin(), systems.end(), name) != systems.end());
-		}
+		const auto hasSystem = [&systems](const char* name) { return std::find(systems.begin(), systems.end(), name) != systems.end(); };
+		CHECK(hasSystem("Scripting"));
+		CHECK(hasSystem("Physics") == ST_WITH_PHYSICS);
+		CHECK(hasSystem("Audio") == ST_WITH_AUDIO);
+		CHECK(hasSystem("Animation") == ST_WITH_ANIMATION);
 
 		// A second call is a no-op; registrations it carries are reported, not run.
 		const size_t components = ComponentRegistry::GetAll().size();
@@ -184,18 +189,35 @@ TEST_SUITE("Engine.Modules")
 		INFO("Output: ", result.Output);
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
-		CHECK(result.Output.find("loaders: 11, systems: Scripting Animation Physics Audio") != std::string::npos);
+		// The loaders and systems of the modules the build has: 11 and four in a full build.
+		const int loaders = 7 + (ST_WITH_AUDIO ? 1 : 0) + (ST_WITH_ANIMATION ? 3 : 0);
+		std::string systems = " Scripting";
+		systems += ST_WITH_ANIMATION ? " Animation" : "";
+		systems += ST_WITH_PHYSICS ? " Physics" : "";
+		systems += ST_WITH_AUDIO ? " Audio" : "";
+		CHECK(result.Output.find("loaders: " + std::to_string(loaders) + ", systems:" + systems + "\n") != std::string::npos);
 		CHECK(result.ExitCode == c_VerifyExitCode);
 		CHECK(result.Output.find("verify failed: The asset importer registry is used before Engine::RegisterBuiltinModules() registered the asset pipeline") != std::string::npos);
 	}
 
 	TEST_CASE("The composition root registers the engine's modules in its table's order")
 	{
-		const std::vector<std::string> expected = { "Scene", "Renderer", "Physics", "Audio", "Animation", "Scripting" };
+		std::vector<std::string> expected = { "Scene", "Renderer" };
+#if ST_WITH_PHYSICS
+		expected.push_back("Physics");
+#endif
+#if ST_WITH_AUDIO
+		expected.push_back("Audio");
+#endif
+#if ST_WITH_ANIMATION
+		expected.push_back("Animation");
+#endif
+		expected.push_back("Scripting");
 		CHECK(Engine::GetBuiltinModuleNames() == expected);
 		CHECK(Engine::GetRegisteredModules() == expected);
 	}
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("Without the physics module the others register, its components stay unknown and scripts are told")
 	{
 		// In a child process: registration happens once per process.
@@ -231,7 +253,9 @@ TEST_SUITE("Engine.Modules")
 		CHECK(result.Output.find("reported: 0") == std::string::npos);
 		CHECK(result.Output.find("reported: ") != std::string::npos);
 	}
+#endif
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("Excluding the scene, the renderer or a module that does not exist is refused")
 	{
 		const std::filesystem::path scene = FileSystem::FromUTF8(STRATA_FEATURE_TEST_DIR) / "Assets" / "Scenes" / "FeatureSub.stscene";
@@ -246,6 +270,7 @@ TEST_SUITE("Engine.Modules")
 		CHECK(result.Output.find("modules: Scene Renderer Physics Animation Scripting\n") != std::string::npos);
 		CHECK(result.Output.find("systems: Scripting Animation Physics\n") != std::string::npos);
 	}
+#endif
 
 	TEST_CASE("Built-in asset factories are accepted only for built-in handles")
 	{

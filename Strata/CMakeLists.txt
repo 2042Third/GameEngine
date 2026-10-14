@@ -5,14 +5,17 @@
 # Code generation every engine object shares, whichever layer compiles it: Jolt's public compile options and definitions
 # (the CPU features it requires, /arch:AVX2 on MSVC x64 and -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c on x86 GCC and Clang, its
 # JPH_* definitions), which every engine object was compiled with while the engine was one library that linked Jolt.
+# Builds without the physics module have no Jolt and compile for the baseline CPU of their toolchain.
 add_library(StrataEngineCodegen INTERFACE)
-get_target_property(STRATA_JOLT_OPTIONS Jolt INTERFACE_COMPILE_OPTIONS)
-get_target_property(STRATA_JOLT_DEFINITIONS Jolt INTERFACE_COMPILE_DEFINITIONS)
-if(STRATA_JOLT_OPTIONS)
-	target_compile_options(StrataEngineCodegen INTERFACE ${STRATA_JOLT_OPTIONS})
-endif()
-if(STRATA_JOLT_DEFINITIONS)
-	target_compile_definitions(StrataEngineCodegen INTERFACE ${STRATA_JOLT_DEFINITIONS})
+if(TARGET Jolt)
+	get_target_property(STRATA_JOLT_OPTIONS Jolt INTERFACE_COMPILE_OPTIONS)
+	get_target_property(STRATA_JOLT_DEFINITIONS Jolt INTERFACE_COMPILE_DEFINITIONS)
+	if(STRATA_JOLT_OPTIONS)
+		target_compile_options(StrataEngineCodegen INTERFACE ${STRATA_JOLT_OPTIONS})
+	endif()
+	if(STRATA_JOLT_DEFINITIONS)
+		target_compile_definitions(StrataEngineCodegen INTERFACE ${STRATA_JOLT_DEFINITIONS})
+	endif()
 endif()
 
 strata_add_layer_libraries(
@@ -24,6 +27,12 @@ strata_add_layer_libraries(
 target_include_directories(Strata_Core PUBLIC
 	"${CMAKE_CURRENT_SOURCE_DIR}/src"
 	"${CMAKE_CURRENT_BINARY_DIR}/Generated")
+# Which optional modules the engine has (STRATA_WITH_*), 1 or 0, for every target that links the engine: definitions rather
+# than a generated header, so that no file can read one as 0 for want of an include.
+target_compile_definitions(Strata_Core PUBLIC
+	"ST_WITH_PHYSICS=$<BOOL:${STRATA_WITH_PHYSICS}>"
+	"ST_WITH_AUDIO=$<BOOL:${STRATA_WITH_AUDIO}>"
+	"ST_WITH_ANIMATION=$<BOOL:${STRATA_WITH_ANIMATION}>")
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/Strata/Core/Version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/Generated/Strata/Core/Version.h" @ONLY)
 # The commit the engine is built from (c_EngineCommit: editor.status, About), read from git at every build: the header is

@@ -1,13 +1,16 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Math/Math.h"
-#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/SceneGizmos.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+#endif
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -173,6 +176,7 @@ TEST_SUITE("Renderer.DebugDraw")
 		CHECK(debugDraw.IsEmpty());
 	}
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("Scene gizmos show lights, cameras and colliders")
 	{
 		Scene scene;
@@ -238,7 +242,9 @@ TEST_SUITE("Renderer.DebugDraw")
 			farthest = std::max(farthest, -vertex.Position.z);
 		CHECK(farthest == doctest::Approx(settings.MaxCameraFrustumLength));
 	}
+#endif
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("Character controllers show an upright capsule standing on their origin")
 	{
 		Scene scene;
@@ -284,6 +290,7 @@ TEST_SUITE("Renderer.DebugDraw")
 		DrawSceneGizmos(debugDraw, scene, settings);
 		CHECK(debugDraw.GetLineCount() == lineCount);
 	}
+#endif
 
 	TEST_CASE("Circles close exactly on points from the unit circle tables")
 	{
@@ -301,6 +308,7 @@ TEST_SUITE("Renderer.DebugDraw")
 		}
 	}
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("Gizmos for a view leave out what is out of view or too far, draw small lights and cameras as icons, and colliders of the selection")
 	{
 		Scene scene;
@@ -373,4 +381,5 @@ TEST_SUITE("Renderer.DebugDraw")
 		DrawSceneGizmos(debugDraw, scene, settings);
 		CHECK(debugDraw.GetLineCount() == 4 * 96 + 12 + 96);
 	}
+#endif
 }

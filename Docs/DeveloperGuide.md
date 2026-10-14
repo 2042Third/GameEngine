@@ -15,6 +15,7 @@ characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together
 - [Repository layout](#repository-layout)
 - [Building](#building)
   - [Precompiled headers](#precompiled-headers)
+  - [Optional modules](#optional-modules)
   - [macOS and MoltenVK](#macos-and-moltenvk)
   - [Windows subsystem](#windows-subsystem)
   - [Packages](#packages)
@@ -143,7 +144,9 @@ full path, `$(brew --prefix)/lib/libVkLayer_khronos_validation.dylib` (the build
 Useful CMake options: `-DSTRATA_BUILD_EDITOR=OFF`, `-DSTRATA_BUILD_RUNTIME=OFF`,
 `-DSTRATA_BUILD_CLI=OFF`, `-DSTRATA_BUILD_TESTS=OFF`, `-DSTRATA_ENABLE_TRACY=ON`,
 `-DSTRATA_WARNINGS_AS_ERRORS=OFF` (local experiments only — CI always builds with warnings as errors),
-`-DSTRATA_PRECOMPILED_HEADERS=OFF` (builds without precompiled headers, below), `-DSTRATA_COMPILER_CACHE=ON` (below).
+`-DSTRATA_PRECOMPILED_HEADERS=OFF` (builds without precompiled headers, below), `-DSTRATA_COMPILER_CACHE=ON` (below),
+`-DSTRATA_WITH_PHYSICS=OFF`, `-DSTRATA_WITH_AUDIO=OFF`, `-DSTRATA_WITH_ANIMATION=OFF` (games without a module:
+[Optional modules](#optional-modules)).
 
 **Compiler cache.** `-DSTRATA_COMPILER_CACHE=ON` compiles every C and C++ source, the vendor libraries' too, through
 `ccache` or `sccache` (found on `PATH`, or named by `STRATA_COMPILER_CACHE_PROGRAM`), as CI does. It turns precompiled
@@ -187,6 +190,32 @@ compile time of the editor's and the tests' objects by about 40%.
   only its own users. `EditorContext.h`, included by about a hundred editor and test objects, does so for the command
   journal, the external editor, game exports, thumbnails and scene recovery (an edit of `SceneRecovery.h` rebuilds 8
   objects instead of 100), and `Architecture.HeaderWeight` keeps those includes out.
+
+### Optional modules
+
+`-DSTRATA_WITH_PHYSICS=OFF`, `-DSTRATA_WITH_AUDIO=OFF` and `-DSTRATA_WITH_ANIMATION=OFF` build the engine without a module,
+for games that do not need it: its layer's library (the layer's `"Option"` in `Layers.json`) and its vendor library (Jolt,
+miniaudio) are not built, and nothing links them. The editor is a tool with every module: leaving one out needs
+`-DSTRATA_BUILD_EDITOR=OFF`, or the configure fails saying so. Scripting is always built.
+
+- **Code** reads the build's modules from `ST_WITH_PHYSICS`, `ST_WITH_AUDIO` and `ST_WITH_ANIMATION` (1 or 0), definitions
+  every target that links the engine gets from `Strata_Core`: never from a header, so that no file reads one as 0 for want
+  of an include. `#if ST_WITH_<MODULE>` appears only in the composition root (`Engine/BuiltinModules.cpp`, the module
+  table), the asset pipeline (`AssetImporters.cpp`: the audio importer and animation controllers; `GltfImporter.cpp`:
+  without animation, skins and animations are not imported and the import says so; `AssetDependencies.cpp`: controller
+  clips), the runtime program's engine modules (`StrataRuntime`) and tests. Other modules reach an optional one only
+  through scene and engine services, which are absent without it: they need no guard.
+- **What a game without a module does:** scenes keep its components as unknown components and save them back unchanged;
+  the other modules' soft constraints ignore its system; scripts calling into its services are told that "the scene
+  plays without physics (the engine has no physics module)" (and so on) and get their calls' failure values.
+- **Tests** of a module live in `StrataTests/src/<Module>/`, which a build without it leaves out with the files listed in
+  `StrataTests/CMakeLists.txt` (`STRATA_TESTS_OF_<MODULE>`: files that test little else) and the feature test (its scene
+  holds every component). Test cases elsewhere that need a module are guarded with `#if ST_WITH_<MODULE>`, those that need
+  every system or component (their order, their count) with `ST_TESTS_HAVE_EVERY_MODULE` (`TestHelpers.h`). In a full
+  build, `ModuleRegistrationOptions::Exclude` registers the engine without some of its modules (the
+  `--strata-test-helper=register-without` mode).
+- **CI** builds and tests a game configuration without audio and physics ("Linux (no Audio, no Physics)":
+  `ctest -LE "gpu|perf|package"`).
 
 ### macOS and MoltenVK
 

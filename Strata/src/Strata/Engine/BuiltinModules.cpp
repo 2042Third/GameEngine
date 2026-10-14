@@ -1,18 +1,26 @@
 #include "stpch.h"
 #include "Strata/Engine/BuiltinModules.h"
 
-#include "Strata/Animation/AnimationRegistration.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/MeshGeometry.h"
-#include "Strata/Audio/AudioRegistration.h"
 #include "Strata/Core/Log.h"
-#include "Strata/Physics/PhysicsRegistration.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/RendererRegistration.h"
 #include "Strata/Scene/SceneRegistration.h"
 #include "Strata/Scene/SceneSystem.h"
 #include "Strata/Scripting/ScriptingRegistration.h"
+
+// The optional modules this build has (STRATA_WITH_*, Docs/DeveloperGuide.md, "Optional modules").
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsRegistration.h"
+#endif
+#if ST_WITH_AUDIO
+	#include "Strata/Audio/AudioRegistration.h"
+#endif
+#if ST_WITH_ANIMATION
+	#include "Strata/Animation/AnimationRegistration.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -42,16 +50,22 @@ namespace Strata::Engine
 			void (*Register)();
 		};
 
-		// The engine's modules, lower layers first. The order is also the order of the modules' components in
-		// ComponentRegistry::GetAll (the Inspector, Add Component, component.list). Scene systems order themselves against
-		// other modules' systems with soft constraints (SceneSystemDescriptor::AfterIfPresent, BeforeIfPresent), which apply
-		// whatever the registration order and whichever modules are present.
+		// The engine's modules, lower layers first, those of the optional modules the build has. The order is also the order
+		// of the modules' components in ComponentRegistry::GetAll (the Inspector, Add Component, component.list). Scene systems
+		// order themselves against other modules' systems with soft constraints (SceneSystemDescriptor::AfterIfPresent,
+		// BeforeIfPresent), which apply whatever the registration order and whichever modules are present.
 		constexpr BuiltinModule c_BuiltinModules[] = {
 			{ "Scene", RegisterSceneModule },
 			{ "Renderer", RegisterRendererModule },
+#if ST_WITH_PHYSICS
 			{ "Physics", RegisterPhysicsModule },
+#endif
+#if ST_WITH_AUDIO
 			{ "Audio", RegisterAudioModule },
+#endif
+#if ST_WITH_ANIMATION
 			{ "Animation", RegisterAnimationModule },
+#endif
 			{ "Scripting", RegisterScriptingModule },
 		};
 

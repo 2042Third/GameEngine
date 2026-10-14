@@ -1,10 +1,8 @@
 #include <doctest/doctest.h>
 
 #include "Scene/SceneTestUtils.h"
-#include "Strata/Audio/AudioComponents.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
-#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/ComponentAccess.h"
@@ -13,6 +11,13 @@
 #include "Strata/Scene/UnknownComponents.h"
 #include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+#endif
+#if ST_WITH_AUDIO
+	#include "Strata/Audio/AudioComponents.h"
+#endif
 
 #include <algorithm>
 
@@ -42,11 +47,13 @@ namespace
 
 		Entity mesh = scene->CreateChildEntity(root, "Mesh");
 		mesh.AddComponent<MeshRendererComponent>(UUID(11), UUID(12), false);
+#if ST_WITH_PHYSICS
 		mesh.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
 		mesh.AddComponent<BoxColliderComponent>().HalfExtents = { 1.0f, 2.0f, 3.0f };
 		mesh.AddComponent<SphereColliderComponent>().Radius = 2.0f;
 		mesh.AddComponent<CapsuleColliderComponent>().HalfHeight = 1.5f;
 		mesh.AddComponent<MeshColliderComponent>().Convex = false;
+#endif
 		mesh.SetActive(false);
 
 		Entity lights = scene->CreateEntity("Lights");
@@ -62,8 +69,10 @@ namespace
 		TextComponent& text = ui.AddComponent<TextComponent>();
 		text.Text = "Score: 0\nLine two \xE2\x9C\x93";
 		text.Alignment = TextAlignment::Right;
+#if ST_WITH_AUDIO
 		ui.AddComponent<AudioSourceComponent>().Loop = true;
 		ui.AddComponent<AudioListenerComponent>();
+#endif
 		ui.AddComponent<PrefabInstanceComponent>(UUID(7), UUID(8));
 
 		ScriptComponent& scripts = ui.AddComponent<ScriptComponent>();
@@ -127,6 +136,7 @@ namespace
 
 TEST_SUITE("Scene.Serialization")
 {
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("Committed scenes load with every component registered and without warnings, and save back the same")
 	{
 		// Every module's components are registered in this build, wherever they are declared: none of these scenes keeps one
@@ -139,6 +149,7 @@ TEST_SUITE("Scene.Serialization")
 		REQUIRE_MESSAGE(!tetris.empty(), error);
 		Tests::CheckSceneFileLoadsCleanly(tetris / "Assets" / "Scenes" / "Main.stscene");
 	}
+#endif
 
 	TEST_CASE("Scenes round trip through JSON without changes")
 	{
@@ -168,7 +179,9 @@ TEST_SUITE("Scene.Serialization")
 		Entity mesh = loaded.FindEntityByName("Mesh");
 		CHECK_FALSE(mesh.IsActive());
 		CHECK(mesh.GetComponent<MeshRendererComponent>().Material == UUID(12));
+#if ST_WITH_PHYSICS
 		CHECK(mesh.GetComponent<RigidBodyComponent>().Type == RigidBodyType::Kinematic);
+#endif
 
 		Entity ui = loaded.FindEntityByName("UI");
 		CHECK(ui.GetComponent<TextComponent>().Text == "Score: 0\nLine two \xE2\x9C\x93");
@@ -319,6 +332,7 @@ TEST_SUITE("Scene.Serialization")
 		CHECK(anchor.GetChildren().size() == 2);
 	}
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("ComponentAccess validates edits")
 	{
 		Scene scene;
@@ -354,6 +368,7 @@ TEST_SUITE("Scene.Serialization")
 		CHECK_FALSE(components.contains("ID"));
 		CHECK_FALSE(components.contains("Relationship"));
 	}
+#endif
 
 	TEST_CASE("Components no module of this build registers load with one warning each and save unchanged")
 	{

@@ -4,6 +4,7 @@
 #include "Strata/Core/Process.h"
 #include "Strata/Core/UUID.h"
 
+#include <doctest/doctest.h>
 #include <nlohmann/json.hpp>
 #include <spdlog/fmt/fmt.h>
 #include <stb_image_write.h>
@@ -90,6 +91,18 @@ namespace Strata::Tests
 			return {};
 		}
 		return copy;
+	}
+
+	LogCapture::LogCapture()
+		: m_Start(Log::GetBuffer().GetLatestSequence())
+	{
+	}
+
+	std::vector<LogEntry> LogCapture::GetEntries() const
+	{
+		std::vector<LogEntry> entries = Log::GetBuffer().GetEntries(m_Start);
+		REQUIRE_MESSAGE((entries.empty() || entries.front().Sequence == m_Start + 1), "The log buffer dropped entries; raise its capacity");
+		return entries;
 	}
 
 	std::string DescribeJsonFile(const std::filesystem::path& file)

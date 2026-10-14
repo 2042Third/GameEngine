@@ -36,7 +36,9 @@ exactly the built layers of its `MayInclude`: a library can only link what its l
 gets `strata_configure_target`, the precompiled header `stpch.h` and `StrataEngineCodegen` (`PRIVATE`: Jolt's public
 compile options and definitions, the code generation every engine object had while the engine was one library that
 linked Jolt). Layers the table marks `"Tooling": true` (AssetPipeline, Network, ImGui) are `EXCLUDE_FROM_ALL`; a layer
-with `"Option"` is built only when that CMake option is on. `Strata` is an `INTERFACE` library of every built layer a
+with `"Option"` is built only when that CMake option is on: Physics, Audio and Animation (`STRATA_WITH_PHYSICS`, `_AUDIO`,
+`_ANIMATION`, with their vendor libraries; `ST_WITH_*` definitions tell code which it has, Docs/DeveloperGuide.md,
+"Optional modules"). `Strata` is an `INTERFACE` library of every built layer a
 game contains, `StrataTooling` one of the tooling layers. CMake writes `<build>/Strata/LayerLibraries.json` (each layer's
 target, whether it is built, its sources and the layers it links), which `Architecture.Libraries` checks against the
 table. A new layer is a `Layers.json` entry only.
@@ -515,8 +517,10 @@ ComponentRegistry::Freeze
 log the registered modules, the scene systems' update order and the soft constraints naming absent systems
 ```
 
-- **Leaving modules out.** `ModuleRegistrationOptions::Exclude` registers the engine without some of its modules, as a
-  game without them would run (tests: `--strata-test-helper=register-without`). Scene and Renderer are part of every
+- **Leaving modules out.** A build without an optional module has no row for it in the table (`#if ST_WITH_<MODULE>`, the
+  only place outside the asset pipeline, the runtime program and tests that tests one). In a full build,
+  `ModuleRegistrationOptions::Exclude` registers the engine without some of its modules, as a game without them would run
+  (tests: `--strata-test-helper=register-without`). Scene and Renderer are part of every
   engine: excluding them is refused with an error, as is a name the table does not hold. Nothing else changes for the
   absent modules: their components load as unknown components and save back unchanged, the other modules' soft
   constraints ignore their systems, and scripts calling into their services are told that the scene plays without them

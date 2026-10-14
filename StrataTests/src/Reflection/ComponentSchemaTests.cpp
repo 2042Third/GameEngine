@@ -3,6 +3,7 @@
 #include "Reflection/ComponentSchema.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
+#include "TestHelpers.h"
 
 #include <map>
 #include <optional>
@@ -10,6 +11,8 @@
 
 using namespace Strata;
 
+// The snapshot holds the components of every module: a build without some registers fewer.
+#if ST_TESTS_HAVE_EVERY_MODULE
 TEST_SUITE("Reflection.ComponentSchema")
 {
 	TEST_CASE("Every component of the snapshot keeps its name, metadata and properties, in the same order")
@@ -47,3 +50,4 @@ TEST_SUITE("Reflection.ComponentSchema")
 		}
 	}
 }
+#endif

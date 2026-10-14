@@ -1,7 +1,5 @@
 #include <doctest/doctest.h>
 
-#include "Animation/SkinnedGltf.h"
-
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/GltfImporter.h"
@@ -18,6 +16,10 @@
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
 #include "TestHelpers.h"
+
+#if ST_WITH_ANIMATION
+	#include "Animation/SkinnedGltf.h"
+#endif
 
 #include <glm/gtc/constants.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -489,6 +491,7 @@ namespace
 		return glm::normalize(glm::cross(positions[indices[corner + 1]] - positions[indices[corner]], positions[indices[corner + 2]] - positions[indices[corner]]));
 	}
 
+#if ST_WITH_ANIMATION
 	// The bytes of a document's only buffer, taken out of its data URI (the buffer then has none).
 	std::vector<uint8_t> TakeEmbeddedBuffer(nlohmann::json& document)
 	{
@@ -576,7 +579,9 @@ namespace
 		document["extensionsRequired"] = { "EXT_meshopt_compression" };
 		return MakeGlb(document, binary);
 	}
+#endif
 
+#if ST_WITH_ANIMATION
 	// Two imports made the same assets: the model and every sub-asset, key, type and stored bytes.
 	void CheckSameImport(const ImportOutput& expected, const ImportOutput& actual)
 	{
@@ -592,6 +597,7 @@ namespace
 			CHECK(found.Data == wanted.Data);
 		}
 	}
+#endif
 
 }
 
@@ -1282,6 +1288,7 @@ TEST_SUITE("Asset.Gltf")
 		CHECK(forbidden.Error.find("does not allow") != std::string::npos);
 	}
 
+#if ST_WITH_ANIMATION
 	TEST_CASE("Skinned, animated models import alike from an external buffer and compressed with EXT_meshopt_compression")
 	{
 		// Each form in a project of its own under the same name: the model's root entity is named after the file.
@@ -1327,6 +1334,7 @@ TEST_SUITE("Asset.Gltf")
 		CHECK(decoded.Result.Dependencies.empty());
 		CheckSameImport(embedded, decoded);
 	}
+#endif
 
 	TEST_CASE("Models name the files they read besides themselves")
 	{

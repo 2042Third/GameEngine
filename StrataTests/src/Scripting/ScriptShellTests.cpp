@@ -1,6 +1,5 @@
 #include <doctest/doctest.h>
 
-#include "FeatureTest/FeatureTestUtils.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Core/EngineServices.h"
 #include "Strata/Core/FileSystem.h"

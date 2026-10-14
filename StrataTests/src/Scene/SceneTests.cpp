@@ -1,10 +1,13 @@
 #include <doctest/doctest.h>
 
 #include "Scene/SceneLoaderTestUtils.h"
-#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scripting/ScriptingComponents.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsSystem.h"
+#endif
 
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -547,9 +550,11 @@ TEST_SUITE("Scene")
 			scene.OnUpdateRuntime(4.0f / 64.0f + 1.0f / 256.0f);
 			CHECK(SlowSystem::FixedUpdates == 1);
 			CHECK(scene.GetDroppedFixedStepCount() == 3);
+#if ST_WITH_PHYSICS
 			PhysicsSystem* physics = scene.GetSystem<PhysicsSystem>();
 			REQUIRE(physics != nullptr);
 			CHECK(physics->GetStats().DroppedSteps == 3);
+#endif
 			// One step due: it runs, nothing is dropped.
 			scene.OnUpdateRuntime(1.0f / 64.0f);
 			CHECK(SlowSystem::FixedUpdates == 2);

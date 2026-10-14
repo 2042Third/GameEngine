@@ -48,17 +48,20 @@
 		},
 		{
 			"Name": "Physics",
+			"Option": "STRATA_WITH_PHYSICS",
 			"Paths": [ "Strata/Physics/**" ],
 			"MayInclude": [ "Core", "Asset", "Reflection", "Scene" ]
 		},
 		{
 			"Name": "Audio",
+			"Option": "STRATA_WITH_AUDIO",
 			"Notes": "App is a proven downward dependency: the Audio module implements its EngineModule (Core/EngineModule.h), the interface App defines for the services a program runs; App includes no Audio header.",
 			"Paths": [ "Strata/Audio/**" ],
 			"MayInclude": [ "Core", "App", "Asset", "Reflection", "Scene" ]
 		},
 		{
 			"Name": "Animation",
+			"Option": "STRATA_WITH_ANIMATION",
 			"Notes": "Skeletons, clips, animation controllers and the Animation scene system. The renderer never includes it: poses reach it through the scene service ISkinningPoses (Scene/SceneServices.h), and scripts reach animators through IAnimatorControl.",
 			"Paths": [ "Strata/Animation/**" ],
 			"MayInclude": [ "Core", "Asset", "Reflection", "Scene" ]

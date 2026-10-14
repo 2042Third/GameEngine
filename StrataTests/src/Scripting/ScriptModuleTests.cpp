@@ -9,13 +9,16 @@
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Process.h"
 #include "Strata/Core/StringUtils.h"
-#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
 #include "Strata/Scripting/ScriptModule.h"
 #include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include "StrataScript/ScriptABI.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -452,6 +455,7 @@ TEST_SUITE("Scripting.Module")
 		CHECK_FALSE(engine->IsFaulted());
 	}
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("Contact callbacks are read only from class descriptors large enough to hold them")
 	{
 		// Both classes have contact callbacks, but "First" has the descriptor size of an SDK that predates them.
@@ -485,6 +489,7 @@ TEST_SUITE("Scripting.Module")
 		scene.OnRuntimeStop();
 		CHECK_FALSE(engine->IsFaulted());
 	}
+#endif
 	TEST_CASE("A failed load keeps the previous module")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("ScriptFailedLoad");

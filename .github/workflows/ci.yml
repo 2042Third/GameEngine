@@ -26,22 +26,36 @@ jobs:
             preset: windows-ninja
             config: release
             cache: sccache
+            key: windows-release
           # Debug builds keep the asserts and checks Release drops; no other job builds them.
           - name: Windows (Debug)
             os: windows-2022
             preset: windows-ninja
             config: debug
             cache: sccache
+            key: windows-debug
           - name: Linux
             os: ubuntu-24.04
             preset: linux
             config: release
             cache: ccache
+            key: linux-release
           - name: macOS
             os: macos-14
             preset: macos
             config: release
             cache: ccache
+            key: macos-release
+          # A game without the audio and physics modules (Docs/DeveloperGuide.md, "Optional modules"): no editor, and no
+          # package tests (they build games of every module).
+          - name: Linux (no Audio, no Physics)
+            os: ubuntu-24.04
+            preset: linux
+            config: release
+            cache: ccache
+            key: linux-release-without-modules
+            options: -DSTRATA_WITH_AUDIO=OFF -DSTRATA_WITH_PHYSICS=OFF -DSTRATA_BUILD_EDITOR=OFF
+            exclude: package
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
     env:
@@ -102,14 +116,14 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/compiler-cache
-          key: ${{ matrix.cache }}-${{ matrix.os }}-${{ matrix.config }}-${{ github.sha }}
-          restore-keys: ${{ matrix.cache }}-${{ matrix.os }}-${{ matrix.config }}-
+          key: ${{ matrix.cache }}-${{ matrix.key }}-${{ github.sha }}
+          restore-keys: ${{ matrix.cache }}-${{ matrix.key }}-
 
       - name: Configure
         shell: bash
         run: |
           set -o pipefail
-          cmake --preset ${{ matrix.preset }} -DSTRATA_COMPILER_CACHE=ON 2>&1 | tee configure.log
+          cmake --preset ${{ matrix.preset }} -DSTRATA_COMPILER_CACHE=ON ${{ matrix.options }} 2>&1 | tee configure.log
 
       - name: Build
         shell: bash
@@ -130,7 +144,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/compiler-cache
-          key: ${{ matrix.cache }}-${{ matrix.os }}-${{ matrix.config }}-${{ github.sha }}
+          key: ${{ matrix.cache }}-${{ matrix.key }}-${{ github.sha }}
 
       # Hosted runners have no GPU: suites that need one carry the "gpu" label. Perf budgets (label "perf") hold for the
       # reference machine (StrataTests/Perf/Budgets.json); shared runners of other speeds would fail or pass them at
@@ -148,7 +162,9 @@ jobs:
             ulimit -v 10000000 # KiB of address space per process
             ulimit -f 2097152  # KiB per file
           fi
-          ctest --preset ${{ matrix.preset }}-${{ matrix.config }} -LE "gpu|perf" -j 4 --output-on-failure --timeout 900 2>&1 | tee test.log
+          exclude="gpu|perf"
+          if [ -n "${{ matrix.exclude }}" ]; then exclude="$exclude|${{ matrix.exclude }}"; fi
+          ctest --preset ${{ matrix.preset }}-${{ matrix.config }} -LE "$exclude" -j 4 --output-on-failure --timeout 900 2>&1 | tee test.log
 
       # Job logs need repository admin rights to download; annotations are public, so failures are readable from the
       # checks API and the pull request UI.

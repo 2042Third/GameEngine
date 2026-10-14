@@ -251,18 +251,6 @@ namespace Strata::Tests
 	// Logs
 	////////////////////////////////////////////////////////////////////////////////
 
-	LogCapture::LogCapture()
-		: m_Start(Log::GetBuffer().GetLatestSequence())
-	{
-	}
-
-	std::vector<LogEntry> LogCapture::GetEntries() const
-	{
-		std::vector<LogEntry> entries = Log::GetBuffer().GetEntries(m_Start);
-		REQUIRE_MESSAGE((entries.empty() || entries.front().Sequence == m_Start + 1), "The log buffer dropped entries; raise its capacity");
-		return entries;
-	}
-
 	ScopedScriptLogLevel::ScopedScriptLogLevel()
 		: m_Previous(Log::GetScriptLogger()->level())
 	{
