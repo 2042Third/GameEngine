@@ -645,7 +645,7 @@ TEST_SUITE("CLI.McpToolsets")
 {
 	TEST_CASE("Commands map to toolsets by exact name, then by group")
 	{
-		CHECK(McpToolsets::GetCoreCommands().size() == 26);
+		CHECK(McpToolsets::GetCoreCommands().size() == 27);
 		CHECK(McpToolsets::IsCore("entity.create"));
 		CHECK_FALSE(McpToolsets::IsCore("entity.rename"));
 		CHECK(McpToolsets::GetToolsets("entity.create") == std::vector<std::string> { "core", "scene" });

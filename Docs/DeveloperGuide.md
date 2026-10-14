@@ -1257,6 +1257,14 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `DescribeEntities`), which `edit.history` and the Activity panel show. The inspector edits a
   multi-selection through `PropertyEdit` (`GetSharedProperty`, multi-entity `SetPropertyWithUndo`, `RotationAnglesEdit`
   for rotations edited as Euler angles, `GetDefaultComponentValues` for Reset).
+- **Batches** (`editor.batch {steps, atomic?}`, `Commands/BatchCommands.cpp`): the steps, parsed as a command script
+  (`EditorCommandScript::FromJson`: `bind`, `{"$ref"}`, `expect`; an outer script leaves a batch's own references to it),
+  run in the frame the batch arrives through `EditorCommandRegistry::Execute` (`EditorCommandScript::RunStepNow`), so
+  the journal records them as the batch's children; commands with `MayDefer`, unknown ones and nested batches are refused
+  before anything runs (at most 1,000 steps). Their undo steps become one: `UndoStack::BeginGroup`/`EndGroup` collect what
+  is recorded into an `EditorActionGroup` (applied as it comes, counted once recorded; undo and redo refused meanwhile),
+  and an atomic batch whose step fails reverts them with `CancelGroup` and fails naming the step's index. Replays
+  (`BuildReplayScript`) repeat a batch's steps, with the values its references stood for, never the batch.
 
 ### Exporting games
 

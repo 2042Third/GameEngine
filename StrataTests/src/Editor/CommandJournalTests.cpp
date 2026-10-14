@@ -105,6 +105,7 @@ namespace
 		"asset.setImportSettings",
 		"component.add", "component.remove", "component.set",
 		"edit.redo", "edit.undo",
+		"editor.batch",
 		"entity.create", "entity.delete", "entity.dropToGround", "entity.duplicate", "entity.paste", "entity.rename", "entity.setActive",
 		"entity.setParent",
 		"material.create", "material.set",
@@ -313,6 +314,38 @@ TEST_SUITE("Editor.Journal")
 		CHECK(inner.Parent == outer[0]->Id);
 		CHECK(inner.Source == CommandSource::Internal);
 		CHECK(outer[0]->Status == CommandStatus::Succeeded);
+	}
+
+	TEST_CASE("A batch is one entry with its steps as children, and replays as its steps")
+	{
+		JournalHarness harness;
+		const nlohmann::json steps = nlohmann::json::array({
+			{ { "command", "entity.create" }, { "parameters", { { "name", "Root" } } }, { "bind", { { "root", "/id" } } } },
+			{ { "command", "entity.create" }, { "parameters", { { "name", "Child" }, { "parent", { { "$ref", "root" } } } } } } });
+		REQUIRE(harness.Commands.Execute(harness.Context, "editor.batch", { { "steps", steps } }, CommandOrigin { CommandSource::Automation, "agent" }).Success);
+		const std::vector<const CommandJournalEntry*> batches = harness.Entries("editor.batch");
+		REQUIRE(batches.size() == 1);
+		CHECK(batches[0]->Source == CommandSource::Automation);
+		CHECK(batches[0]->UndoStep == "Batch of 2 commands");
+		const std::vector<const CommandJournalEntry*> creates = harness.Entries("entity.create");
+		REQUIRE(creates.size() == 2);
+		for (const CommandJournalEntry* create : creates)
+		{
+			CHECK(create->Parent == batches[0]->Id);
+			CHECK(create->Source == CommandSource::Internal);
+		}
+		// The second step ran with the root's ID in place of its reference.
+		CHECK(creates[1]->Parameters["parent"] == UUIDToJson(creates[0]->ResultIds.front().second));
+
+		// The replay repeats the two steps (binding the root for the child), not the batch.
+		std::string error;
+		const std::optional<ReplayScript> script = harness.Journal().BuildReplayScript(0, &error);
+		REQUIRE_MESSAGE(script, error);
+		REQUIRE(script->Steps.size() == 2);
+		CHECK(script->Steps[0]["command"] == "entity.create");
+		CHECK(script->Steps[1]["command"] == "entity.create");
+		CHECK(script->Steps[1]["parameters"]["parent"].contains("$ref"));
+		CHECK(script->Edits == 2);
 	}
 
 	TEST_CASE("Failures carry their kind and message")

@@ -15,7 +15,7 @@ namespace Strata::CLI::McpToolsets
 		constexpr std::string_view c_DetailsNote = " (details: strata_describe)";
 
 		constexpr std::string_view c_CoreCommands[] = {
-			"editor.status", "log.read",
+			"editor.status", "editor.batch", "log.read",
 			"project.create", "project.open",
 			"scene.open", "scene.save", "scene.info", "scene.hierarchy",
 			"entity.create", "entity.get", "entity.find", "entity.delete",

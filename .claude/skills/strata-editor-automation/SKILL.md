@@ -74,7 +74,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
   editor, or reconnects to the empty one it started before), `strata_describe`, `strata_toolsets` and `strata_call`
   (`method`, `params`: any command, listed or not) are always there.
 - While an editor is connected, the commands of the enabled **toolsets** are tools, with the first sentence of their
-  description and their schema as `inputSchema`. `core` is enabled by default: `editor.status`, `log.read`, projects,
+  description and their schema as `inputSchema`. `core` is enabled by default: `editor.status`, `editor.batch`, `log.read`, projects,
   `scene.open`/`save`/`info`/`hierarchy`, `entity.create`/`get`/`find`/`delete`, `component.add`/`set`,
   `prefab.instantiate`, `asset.list`/`info`/`import`, `material.create`, `script.build`/`status`, `play.start`/`stop`/
   `step`, `input.sequence` and `viewport.capture`. The others are in `scene`, `assets`, `play`, `scripts`, `animation`,
@@ -307,6 +307,11 @@ now or the delete would be refused now; the error says why.
 change parent go last) in one undo step; `entity.duplicate {"entities": [...]}` puts each copy right after its original;
 `entity.copy {"entities": [...]}` returns `data` that `entity.paste {"data", "parent"?, "index"?}` turns into new
 entities (fresh IDs, references among them remapped, also in another scene);
+Many edits in one call and one undo step: `editor.batch {"steps": [{"command": "entity.create", "parameters": {"name": "Wall"},
+"bind": {"wall": "/id"}}, {"command": "component.add", "parameters": {"entity": {"$ref": "wall"}, "component": "BoxCollider"}}]}`
+(steps as a command script writes them, at most 1,000; it answers `{steps: [{command, result | error}], bindings}`; a
+failed step undoes the ones before it unless `"atomic": false`; commands that take frames, such as `scene.open`,
+`play.step` or `viewport.capture`, are refused: run them on their own).
 `prefab.create {"entities": ["<id>"], "path": "Prefabs/Block.stprefab"}` (the entities become an instance of it; `"link":
 false` leaves them alone), then
 `prefab.instantiate {"prefab": "Prefabs/Block.stprefab", "components": {"Transform": {"Translation": [2, 0, 0]}}}`

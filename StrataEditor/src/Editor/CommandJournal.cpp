@@ -710,11 +710,18 @@ namespace Strata
 				since + 1, m_Entries.front().Id - 1));
 		}
 
-		// The commands of the session that succeeded, at the top level (what commands ran inside them repeats with them).
+		// The commands of the session that succeeded, at the top level (what commands ran inside them repeats with them). A
+		// batch (editor.batch) repeats as its steps, which ran with the values its references stood for: never the batch and
+		// its steps both.
 		std::vector<const CommandJournalEntry*> entries;
+		std::unordered_set<uint64_t> batches;
 		for (const CommandJournalEntry& entry : m_Entries)
 		{
-			if (entry.Id > since && entry.Parent == 0 && entry.Status == CommandStatus::Succeeded)
+			if (entry.Id <= since || entry.Status != CommandStatus::Succeeded)
+				continue;
+			if (entry.Parent == 0 && entry.Command == "editor.batch")
+				batches.insert(entry.Id);
+			else if (entry.Parent == 0 || batches.contains(entry.Parent))
 				entries.push_back(&entry);
 		}
 		std::vector<uint64_t> entryIds;

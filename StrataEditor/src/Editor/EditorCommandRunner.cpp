@@ -184,6 +184,12 @@ namespace Strata
 
 		// Checks the references of a step's parameters against the names earlier steps bind; an error message for a malformed
 		// reference or an unknown name. Sets `found` when there is a reference.
+		// editor.batch's steps are a script of their own: their references name what its steps bind, not the outer script's.
+		bool KeepsOwnReferences(std::string_view command)
+		{
+			return command == "editor.batch";
+		}
+
 		std::optional<std::string> CheckReferences(const nlohmann::json& value, const std::unordered_set<std::string>& bound, bool& found)
 		{
 			if (EditorCommandScript::IsReference(value))
@@ -389,11 +395,15 @@ namespace Strata
 				if (const std::optional<std::string> error = ParseExpectations(*expect, expectations))
 					return fail(fmt::format("Step {} ({}): {}", index + 1, command->get<std::string>(), *error));
 			}
-			// References are checked before anything runs: each must name a binding of an earlier step.
+			// References are checked before anything runs: each must name a binding of an earlier step. A batch's steps keep
+			// theirs, which its own steps bind (KeepsOwnReferences).
 			bool usesBindings = false;
 			if (parameters)
 			{
-				if (const std::optional<std::string> error = CheckReferences(*parameters, bound, usesBindings))
+				nlohmann::json checked = *parameters;
+				if (KeepsOwnReferences(command->get<std::string>()))
+					checked.erase("steps");
+				if (const std::optional<std::string> error = CheckReferences(checked, bound, usesBindings))
 					return fail(fmt::format("Step {} ({}): {}", index + 1, command->get<std::string>(), *error));
 			}
 			std::vector<Binding> bindings;
@@ -419,6 +429,19 @@ namespace Strata
 			return false;
 		const auto pointer = value.find("pointer");
 		return value.size() == 1 || (pointer != value.end() && pointer->is_string());
+	}
+
+	std::optional<nlohmann::json> EditorCommandScript::SubstituteStep(const Step& step, std::string& outError) const
+	{
+		if (!KeepsOwnReferences(step.Command) || !step.Parameters.contains("steps"))
+			return Substitute(step.Parameters, outError);
+		nlohmann::json parameters = step.Parameters;
+		nlohmann::json steps = std::move(parameters["steps"]);
+		parameters.erase("steps");
+		std::optional<nlohmann::json> substituted = Substitute(parameters, outError);
+		if (substituted)
+			(*substituted)["steps"] = std::move(steps);
+		return substituted;
 	}
 
 	std::optional<nlohmann::json> EditorCommandScript::Substitute(const nlohmann::json& value, std::string& outError) const
@@ -499,6 +522,51 @@ namespace Strata
 	{
 	}
 
+	EditorCommandResult EditorCommandScript::RunStepNow(size_t index, EditorContext& context, const EditorCommandRegistry& commands)
+	{
+		const Step& step = m_Steps[index];
+		nlohmann::json substituted;
+		if (step.UsesBindings)
+		{
+			std::string error;
+			std::optional<nlohmann::json> parameters = SubstituteStep(step, error);
+			if (!parameters)
+			{
+				for (const Binding& binding : step.Bindings)
+					m_Bindings.erase(binding.Name);
+				return EditorCommandResult::InvalidParameters(error);
+			}
+			substituted = std::move(*parameters);
+		}
+		EditorCommandResult result = commands.Execute(context, step.Command, step.UsesBindings ? substituted : step.Parameters);
+		if (result.IsPending())
+			result = EditorCommandResult::Fail(fmt::format("{} answers later, which a batch cannot wait for", step.Command));
+		if (!result.Success)
+		{
+			// Later steps that use its bindings fail instead of running with values of an earlier step.
+			for (const Binding& binding : step.Bindings)
+				m_Bindings.erase(binding.Name);
+			return result;
+		}
+		if (const std::string unmet = CheckExpectations(result.Value, step.Expectations); !unmet.empty())
+		{
+			for (const Binding& binding : step.Bindings)
+				m_Bindings.erase(binding.Name);
+			return EditorCommandResult::Fail(unmet);
+		}
+		for (const Binding& binding : step.Bindings)
+		{
+			const nlohmann::json* value = ResolveJsonPath(result.Value, binding.Path);
+			if (!value)
+			{
+				m_Bindings.erase(binding.Name);
+				return EditorCommandResult::Fail(fmt::format("The result has no value at '{}' to bind as '{}'", binding.Pointer, binding.Name));
+			}
+			m_Bindings.insert_or_assign(binding.Name, *value);
+		}
+		return result;
+	}
+
 	bool EditorCommandScript::Update(EditorCommandRunner& runner, EditorContext& context, const EditorCommandRegistry& commands)
 	{
 		while (!m_Waiting && m_Next < m_Steps.size())
@@ -510,7 +578,7 @@ namespace Strata
 			{
 				// A step whose references have no value cannot be run as written: it fails as invalid parameters.
 				std::string error;
-				std::optional<nlohmann::json> substituted = Substitute(step.Parameters, error);
+				std::optional<nlohmann::json> substituted = SubstituteStep(step, error);
 				if (!substituted)
 				{
 					ST_ERROR("{} failed (invalid parameters): {}", step.Command, error);

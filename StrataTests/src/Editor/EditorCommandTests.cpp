@@ -5,6 +5,7 @@
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/UndoStack.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "TestHelpers.h"
 
@@ -338,6 +339,83 @@ TEST_SUITE("Editor.Commands")
 		} while (page["more"] == true);
 		CHECK(harness.Run("editor.status")["errors"]["unread"] == 0);
 		CHECK(critical["messages"].back()["message"] == "status-unread-test two");
+	}
+
+	TEST_CASE("editor.batch runs its steps with their bindings as one undo step")
+	{
+		CommandHarness harness;
+		const nlohmann::json before = harness.SceneSnapshot();
+		const size_t position = harness.Context.GetUndoStack().GetPosition();
+		const nlohmann::json steps = nlohmann::json::array({
+			{ { "command", "entity.create" }, { "parameters", { { "name", "Root" } } }, { "bind", { { "root", "/id" } } } },
+			{ { "command", "entity.create" }, { "parameters", { { "name", "Child" }, { "parent", { { "$ref", "root" } } } } }, { "bind", { { "child", "/id" } } } },
+			{ { "command", "entity.create" }, { "parameters", { { "name", "Grandchild" }, { "parent", { { "$ref", "child" } } } } } },
+			{ { "command", "entity.get" }, { "parameters", { { "entity", { { "$ref", "child" } } } } }, { "expect", { { "/name", { { "equals", "Child" } } } } } } });
+		const nlohmann::json result = harness.Run("editor.batch", { { "steps", steps } });
+		REQUIRE(result["steps"].size() == 4);
+		CHECK(result["steps"][0]["command"] == "entity.create");
+		const std::string root = result["bindings"]["root"].get<std::string>();
+		const std::string child = result["bindings"]["child"].get<std::string>();
+		CHECK(result["steps"][1]["result"]["id"] == child);
+		CHECK(harness.Run("entity.get", { { "entity", child } })["parent"] == root);
+		const std::string grandchild = result["steps"][2]["result"]["id"].get<std::string>();
+		CHECK(harness.Run("entity.get", { { "entity", grandchild } })["parent"] == child);
+
+		// One undo step for the three, which undo and redo together.
+		const UndoStack& undo = harness.Context.GetUndoStack();
+		CHECK(undo.GetPosition() == position + 1);
+		CHECK(undo.GetUndoName() == "Batch of 4 commands");
+		harness.Run("edit.undo");
+		CHECK(harness.SceneSnapshot() == before);
+		harness.Run("edit.redo");
+		CHECK(harness.Run("entity.get", { { "entity", grandchild } })["parent"] == child);
+	}
+
+	TEST_CASE("editor.batch undoes the steps before a failing one when atomic, and refuses what takes frames before anything runs")
+	{
+		CommandHarness harness;
+		const nlohmann::json before = harness.SceneSnapshot();
+		const size_t position = harness.Context.GetUndoStack().GetPosition();
+		const nlohmann::json failing = nlohmann::json::array({
+			{ { "command", "entity.create" }, { "parameters", { { "name", "First" } } } },
+			{ { "command", "entity.create" }, { "parameters", { { "name", "Second" } } } },
+			{ { "command", "entity.rename" }, { "parameters", { { "entity", "00000000000BAD00" }, { "name", "Nobody" } } } },
+			{ { "command", "entity.create" }, { "parameters", { { "name", "Never" } } } } });
+		EditorCommandResult result = harness.Commands.Execute(harness.Context, "editor.batch", { { "steps", failing } });
+		CHECK_FALSE(result.Success);
+		CHECK(result.Error.starts_with("Step 2 (entity.rename) failed: "));
+		CHECK(harness.SceneSnapshot() == before);
+		CHECK(harness.Context.GetUndoStack().GetPosition() == position);
+		CHECK_FALSE(harness.Context.GetEditScene()->FindEntityByName("Never"));
+
+		// Not atomic: what succeeded stays, as one step, and the failure is listed with its error.
+		const nlohmann::json kept = harness.Run("editor.batch", { { "steps", failing }, { "atomic", false } });
+		REQUIRE(kept["steps"].size() == 4);
+		CHECK(kept["steps"][2].contains("error"));
+		CHECK(kept["steps"][3].contains("result"));
+		CHECK(harness.Context.GetEditScene()->FindEntityByName("Never"));
+		CHECK(harness.Context.GetUndoStack().GetPosition() == position + 1);
+
+		// Commands that take frames, unknown commands, a batch in a batch and references nothing binds are refused first.
+		const size_t entities = harness.Context.GetEditScene()->GetEntityCount();
+		for (const nlohmann::json& refused : {
+			nlohmann::json::array({ { { "command", "entity.create" } }, { { "command", "viewport.capture" } } }),
+			nlohmann::json::array({ { { "command", "entity.create" } }, { { "command", "play.step" } } }),
+			nlohmann::json::array({ { { "command", "entity.create" } }, { { "command", "no.such" } } }),
+			nlohmann::json::array({ { { "command", "entity.create" } }, { { "command", "editor.batch" }, { "parameters", { { "steps", nlohmann::json::array() } } } } }),
+			nlohmann::json::array({ { { "command", "entity.create" }, { "parameters", { { "parent", { { "$ref", "missing" } } } } } } }) })
+		{
+			CAPTURE(refused.dump());
+			result = harness.Commands.Execute(harness.Context, "editor.batch", { { "steps", refused } });
+			CHECK_FALSE(result.Success);
+			CHECK(result.ErrorKind == EditorCommandError::InvalidParameters);
+			CHECK(harness.Context.GetEditScene()->GetEntityCount() == entities);
+		}
+		CHECK(harness.Commands.Execute(harness.Context, "editor.batch", { { "steps", nlohmann::json::array() } }).ErrorKind == EditorCommandError::InvalidParameters);
+		nlohmann::json tooMany = nlohmann::json::array();
+		for (int index = 0; index < 1001; index++)
+			tooMany.push_back({ { "command", "scene.info" } });
+		CHECK(harness.Commands.Execute(harness.Context, "editor.batch", { { "steps", tooMany } }).ErrorKind == EditorCommandError::InvalidParameters);
 	}
 
 	TEST_CASE("project.create refuses an empty directory as invalid parameters")

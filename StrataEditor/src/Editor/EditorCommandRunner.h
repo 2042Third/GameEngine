@@ -83,7 +83,8 @@ namespace Strata
 	// "/entities/0"} (a pointer into the bound value), which the value replaces. So a script can change entities it created,
 	// whose IDs are new every run. A reference to a name no earlier step binds fails the script before anything runs
 	// (FromJson); a step whose binding has no value (the step that binds it failed, or its result had nothing there) fails
-	// without running, as invalid parameters.
+	// without running, as invalid parameters. The steps of an editor.batch step are a script of their own: their references
+	// name what the batch's steps bind.
 	class EditorCommandScript
 	{
 	public:
@@ -133,9 +134,18 @@ namespace Strata
 		size_t GetCompletedCount() const { return m_Waiting ? m_Next - 1 : m_Next; }
 		// The values bound so far (name -> value).
 		const std::unordered_map<std::string, nlohmann::json>& GetBindings() const { return m_Bindings; }
+		const Step& GetStep(size_t index) const { return m_Steps[index]; }
+
+		// Runs one step now through `commands` (EditorCommandRegistry::Execute, without a runner: editor.batch's steps, which
+		// never defer; inside a running command they are its children in the journal) and takes its bindings. A step whose
+		// references have no value fails as invalid parameters without running; a result that misses an expectation or a
+		// value to bind, or that would answer later, fails the step.
+		EditorCommandResult RunStepNow(size_t index, EditorContext& context, const EditorCommandRegistry& commands);
 	private:
 		// The parameters with every reference replaced by its value; an error when a binding has none.
 		std::optional<nlohmann::json> Substitute(const nlohmann::json& value, std::string& outError) const;
+		// A step's parameters substituted; those of an editor.batch step keep its steps' own references.
+		std::optional<nlohmann::json> SubstituteStep(const Step& step, std::string& outError) const;
 	private:
 		std::vector<Step> m_Steps;
 		std::unordered_map<std::string, nlohmann::json> m_Bindings;

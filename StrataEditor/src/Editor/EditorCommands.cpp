@@ -50,6 +50,7 @@ namespace Strata
 		RegisterStreamingCommands(*this);
 		RegisterAnimationCommands(*this);
 		RegisterAudioCommands(*this);
+		RegisterBatchCommands(*this);
 
 		Register({ "editor.commands",
 			"Every editor command with its description, the JSON Schema of its parameters and its kind: \"Edit\" (changes the scene, its assets or "
