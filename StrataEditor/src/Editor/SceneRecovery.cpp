@@ -95,11 +95,11 @@ namespace Strata
 				out += state.Parent.IsValid() ? JsonUtils::Dump(UUIDToJson(state.Parent)) : std::string("null");
 				out += ",\"SiblingIndex\":";
 				out += std::to_string(state.SiblingIndex);
-				if (state.Cell.IsValid())
-				{
-					out += ",\"Cell\":";
-					out += JsonUtils::Dump(UUIDToJson(state.Cell));
-				}
+			}
+			if (state.Cell.IsValid())
+			{
+				out += ",\"Cell\":";
+				out += JsonUtils::Dump(UUIDToJson(state.Cell));
 			}
 			out += '}';
 		}
@@ -122,6 +122,17 @@ namespace Strata
 			}
 			state.ID = *uuid;
 			state.Exists = exists->get<bool>();
+			// Journals of a world's edits name the cells of their entities (also of those that do not exist: the cell they left).
+			if (const nlohmann::json* cell = JsonUtils::Find(json, "Cell"))
+			{
+				const std::optional<UUID> cellId = UUIDFromJson(*cell);
+				if (!cellId)
+				{
+					outError = fmt::format("the state of entity {} has an invalid 'Cell'", state.ID.ToString());
+					return std::nullopt;
+				}
+				state.Cell = *cellId;
+			}
 			if (!state.Exists)
 				return state;
 			const auto components = json.find("Components");
@@ -136,17 +147,6 @@ namespace Strata
 			state.Components = std::move(*components);
 			state.Parent = *parentId;
 			state.SiblingIndex = static_cast<size_t>(sibling->get<uint64_t>());
-			// Journals of steps that moved entities between a world's cells name their cells.
-			if (const nlohmann::json* cell = JsonUtils::Find(json, "Cell"))
-			{
-				const std::optional<UUID> cellId = UUIDFromJson(*cell);
-				if (!cellId)
-				{
-					outError = fmt::format("the state of entity {} has an invalid 'Cell'", state.ID.ToString());
-					return std::nullopt;
-				}
-				state.Cell = *cellId;
-			}
 			return state;
 		}
 
@@ -313,9 +313,11 @@ namespace Strata
 
 	SceneRecoveryAction::SceneRecoveryAction(Scene& scene, std::vector<EntityState> before, std::vector<EntityState> after,
 		const SceneSettings& settingsBefore, const SceneSettings& settingsAfter)
-		: m_Scene(scene), m_Before(CreateRef<const std::vector<EntityState>>(std::move(before))),
-		m_After(CreateRef<const std::vector<EntityState>>(std::move(after))), m_SettingsBefore(settingsBefore), m_SettingsAfter(settingsAfter)
+		: m_Scene(scene), m_SettingsBefore(settingsBefore), m_SettingsAfter(settingsAfter)
 	{
+		SceneEdit::LinkCells(before, after);
+		m_Before = CreateRef<const std::vector<EntityState>>(std::move(before));
+		m_After = CreateRef<const std::vector<EntityState>>(std::move(after));
 	}
 
 	const std::string& SceneRecoveryAction::GetName() const
@@ -324,15 +326,19 @@ namespace Strata
 		return s_Name;
 	}
 
-	bool SceneRecoveryAction::Execute(std::string*)
+	bool SceneRecoveryAction::Execute(std::string* outError)
 	{
+		if (!SceneEdit::CheckCells(m_Scene, *m_After, outError))
+			return false;
 		SceneEdit::ApplyEntities(m_Scene, *m_After);
 		m_Scene.GetSettings() = m_SettingsAfter;
 		return true;
 	}
 
-	bool SceneRecoveryAction::Undo(std::string*)
+	bool SceneRecoveryAction::Undo(std::string* outError)
 	{
+		if (!SceneEdit::CheckCells(m_Scene, *m_Before, outError))
+			return false;
 		SceneEdit::ApplyEntities(m_Scene, *m_Before);
 		m_Scene.GetSettings() = m_SettingsBefore;
 		return true;

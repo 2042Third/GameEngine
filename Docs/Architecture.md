@@ -2046,11 +2046,19 @@ visible layers only, cells read as their files are now (`SubSceneOptions::Reload
 needs (pins: those `world.loadCells` pins, those holding selected entities, those undo steps asked for through the
 scene's `ISceneCellLoader` service, until the next save, and dirty ones). As an `UndoStackObserver` it marks the documents
 every step touches dirty: the cells and the persistent scene of the states before and after (an entity moved between
-cells dirties both; descendants count for their top-level ancestor's document), the persistent scene for a settings
-step, everything loaded for a step only a snapshot describes. Undo steps carry membership: `EntityState::Cell` is the
-scene asset of a top-level entity's sub-scene, restored through `Scene::SetSubSceneOf`, and `SceneEdit::CheckCells`
-fails a step whose cell is not loaded before anything changes ("it is loading now, undo again once it is in"); the
-recovery journal records `Cell` too. Saves write only dirty documents (`EditorWorld::Save`, from
+cells dirties both), the persistent scene for any step that leaves its settings different from the saved ones,
+everything loaded for a step only a snapshot describes. Undo steps carry membership: `EntityState::Cell` is the scene
+asset of the sub-scene of the entity's top-level ancestor (restored for top-level entities through
+`Scene::SetSubSceneOf`), and the state of an entity a step creates or deletes names the cell of the other side
+(`SceneEdit::LinkCells`). `SceneEdit::CheckCells` fails a step naming a cell that is not loaded before anything changes
+("it is loading now, undo again once it is in"): done without the cell, an edited child would be recreated outside it,
+an undone creation or a redone deletion would come back with it. The recovery journal records `Cell` in every state,
+also of deleted entities, and `scene.recover` of a world waits before applying until the cells its states name are
+loaded (`EditorWorld::PrepareRecoveredCells`, pinned until the next save; a cell made after the last save, which no
+document holds, is made again from the position its states record; a cell that fails to load fails the recovery, which
+stays on offer). A snapshot journal removes only the entities of the persistent scene and of the cells it holds: cells
+loaded now that it never saw keep theirs (one emptied of all its entities before the snapshot gets them back). Saves
+write only dirty documents (`EditorWorld::Save`, from
 `EditorContext::SaveScene`): the persistent scene's entities without the cells' (and with the scene's settings), each
 dirty cell's top-level entities and their descendants (without settings: cells use their host's), and the World
 document when the saved cells' index entries (refreshed from what was written) changed; one `UndoStack::MarkSaved`, and

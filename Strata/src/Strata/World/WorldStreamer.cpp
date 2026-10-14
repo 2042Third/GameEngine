@@ -745,4 +745,16 @@ namespace Strata
 		return it != m_Cells.end() && it->second.Status != WorldCellStatus::Failed ? it->second.SubScene : 0;
 	}
 
+	WorldCellStatus WorldStreamer::GetCellStatus(const WorldCellKey& key, std::string* outError) const
+	{
+		if (std::abs(key.X) > WorldCellKey::c_MaxCoordinate || std::abs(key.Z) > WorldCellKey::c_MaxCoordinate)
+			return WorldCellStatus::Unloaded;
+		const auto it = m_Cells.find(key.Pack());
+		if (it == m_Cells.end())
+			return WorldCellStatus::Unloaded;
+		if (outError && it->second.Status == WorldCellStatus::Failed)
+			*outError = it->second.Error;
+		return it->second.Status;
+	}
+
 }

@@ -5,12 +5,14 @@
 
 #include <Strata/Asset/AssetTypes.h>
 #include <Strata/Core/Base.h>
+#include <Strata/Scene/Scene.h>
 #include <Strata/World/WorldStreamer.h>
 
 #include <glm/glm.hpp>
 
 #include <optional>
 #include <set>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -20,7 +22,6 @@ namespace Strata
 {
 
 	class EditorAssetManager;
-	class Scene;
 	class WorldAsset;
 
 	// A document an EditorWorld save wrote (scene.save's documents).
@@ -106,6 +107,24 @@ namespace Strata
 		// game's World system keeps loaded for the session (WorldStreamingSystem::PinCell).
 		std::vector<WorldCellKey> PrepareRuntimeCopy(Scene& copy) const;
 
+		// How the cells that recovered changes name stand (PrepareRecoveredCells).
+		enum class RecoveredCells : uint8_t
+		{
+			Ready,   // Every cell the changes name is loaded (or made in memory)
+			Loading, // Some still load: ask again next frame
+			Failed   // The World asset or a cell cannot be loaded
+		};
+		// The cells entity states name, each once, in the order they first appear.
+		static std::vector<AssetHandle> CollectCells(std::span<const std::vector<EntityState>> steps);
+		// scene.recover of a world, every frame until it is Ready before its changes apply: loads and keeps (until the next
+		// save) the cells the recovered states name (`cells`, CollectCells of `steps`), so that the changes go into the cells
+		// and meet the entities the cells hold, and makes in memory the cells the world does not have (made after the last
+		// save), finding each from the position the states record for one of its top-level entities. A cell no recorded
+		// position finds stays out, and its entities are recovered into the persistent scene (ApplyEntities warns). Takes
+		// the cells it is done with out of `cells` (Ready when none is left), so that waiting allocates nothing.
+		RecoveredCells PrepareRecoveredCells(std::vector<AssetHandle>& cells, std::span<const std::vector<EntityState>> steps,
+			std::string* outError = nullptr);
+
 		// Saves the documents changed since the last save: the persistent scene's entities without the cells' (with the scene's
 		// settings), each dirty cell's top-level entities and their descendants (without settings), and the World document
 		// with the saved cells' index entries refreshed from memory (written when it changed). Clears the dirty marks. False,
@@ -141,6 +160,10 @@ namespace Strata
 		SubSceneID EnsureCellSubScene(const WorldCellKey& key);
 		// The cell of a layer at an entity's world position.
 		WorldCellKey GetCellAt(const WorldLayer& layer, const Entity& entity) const;
+		// The scene asset a cell that does not exist yet gets (derived from the world's handle: the same on every machine).
+		AssetHandle DeriveCellScene(const WorldCellKey& key) const;
+		// The key of a cell the world does not have, from the position `steps` record for a top-level entity of it.
+		std::optional<WorldCellKey> FindRecordedCell(AssetHandle cell, std::span<const std::vector<EntityState>> steps) const;
 
 		Scene& m_Scene;
 		UndoStack& m_Undo;
@@ -160,6 +183,7 @@ namespace Strata
 		std::unordered_set<AssetHandle> m_DirtyCells; // Pinned too
 		std::set<WorldCellKey> m_StreamerPins;        // What the streamer has pinned now
 		bool m_PersistentDirty = false;
+		SceneSettings m_SavedSettings;                // The persistent scene's settings as saved: any step that changes them marks it
 		std::vector<WorldStreamingSource> m_Sources;  // Scratch
 	};
 

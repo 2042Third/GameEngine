@@ -1217,7 +1217,7 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `SceneRecovery::c_MaxOfferedDiscards` discards on offer and move older ones to `Recovery/Discarded` (never what a crash
   left). Opening a project offers what a crashed or discarding editor left (the Recover Unsaved Changes dialog,
   `scene.recoveryStatus`, `scene.recover {scene, action: "apply" | "discard", force}`: one undo step back to the saved
-  scene). Entries find their scene by its handle, so a moved or renamed scene keeps its changes recoverable, and the
+  scene; a world's changes apply once the cells they name are loaded, and go back into them). Entries find their scene by its handle, so a moved or renamed scene keeps its changes recoverable, and the
   journal follows the edited scene when it moves (`EditorContext::FollowSceneMoves`); the merges of a drag replace the
   states its step left waiting for the next write (`UndoStackObserver::OnApplied`'s `merged`). An undo action that
   changes the scene describes its effect as entity states (`GetSceneChange`,

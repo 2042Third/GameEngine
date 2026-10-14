@@ -181,6 +181,48 @@ namespace
 		}, std::chrono::seconds(60)));
 	}
 
+	// A step that changes the scene in a way only a snapshot captures (no entity states): it renames one entity.
+	class RenameAction final : public EditorAction
+	{
+	public:
+		RenameAction(Scene& scene, UUID entity, std::string name)
+			: m_Scene(scene), m_Entity(entity), m_Name(std::move(name))
+		{
+		}
+
+		const std::string& GetName() const override
+		{
+			static const std::string s_Name = "Rename";
+			return s_Name;
+		}
+
+		bool Execute(std::string*) override
+		{
+			Entity entity = m_Scene.GetEntityByUUID(m_Entity);
+			if (!entity)
+				return false;
+			m_Old = entity.GetName();
+			entity.GetComponent<NameComponent>().Name = m_Name;
+			entity.MarkModified<NameComponent>();
+			return true;
+		}
+
+		bool Undo(std::string*) override
+		{
+			Entity entity = m_Scene.GetEntityByUUID(m_Entity);
+			if (!entity)
+				return false;
+			entity.GetComponent<NameComponent>().Name = m_Old;
+			entity.MarkModified<NameComponent>();
+			return true;
+		}
+	private:
+		Scene& m_Scene;
+		UUID m_Entity;
+		std::string m_Name;
+		std::string m_Old;
+	};
+
 	void LookFrom(WorldProject& project, const glm::vec3& position)
 	{
 		project.Run("camera.set", { { "position", { position.x, position.y, position.z } }, { "target", { position.x, 0.0f, position.z - 10.0f } } });
@@ -630,5 +672,138 @@ TEST_SUITE("Editor.World")
 		project.Run("edit.undo");
 		CHECK(project.Context.GetEditScene()->GetEntityByUUID(boxID).GetComponent<TransformComponent>().Scale.x == 0.5f);
 		CHECK(project.Context.GetWorld()->IsCellDirty(project.GetCell(0, 0)));
+	}
+
+	TEST_CASE("A world's discarded edits are recovered into their cells, which load first")
+	{
+		WorldProject project("EditorWorldRecovery", 5);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
+		Settle(project);
+		// Cell (0, 0): one box scaled, one moved across the border into cell (1, 0). Cell (1, 1): a box deleted, nothing else.
+		// The persistent scene: its settings only.
+		const UUID scaled = UUID(0x6F0000000000ull);
+		const UUID moved = UUID(0x6F0000000003ull);
+		const UUID deleted = UUID(0x6F0000000000ull + (static_cast<uint64_t>(1 * 5 + 1) << 8) + 2);
+		project.Run("component.set", { { "entity", UUIDToJson(scaled) }, { "component", "Transform" }, { "values", { { "Scale", { 2.0, 2.0, 2.0 } } } } });
+		project.Run("component.set", { { "entity", UUIDToJson(moved) }, { "component", "Transform" }, { "values", { { "Translation", { 40.0, 3.5, 3.0 } } } } });
+		project.Run("entity.delete", { { "entities", { UUIDToJson(deleted) } } });
+		project.Run("scene.setSettings", { { "gravity", { 0.0, -5.0, 0.0 } } });
+
+		// Away from them, the dirty cells stay; closing without force is refused, with force the changes become recovery data.
+		LookFrom(project, glm::vec3(140.0f, 10.0f, 140.0f));
+		Settle(project);
+		CHECK(project.Context.GetEditScene()->GetEntityByUUID(scaled));
+		CHECK_FALSE(project.Try("project.close", nlohmann::json::object()).Success);
+		const std::filesystem::path projectFile = project.Context.GetProject()->GetProjectFile();
+		CHECK(project.Run("project.close", { { "force", true } })["discardedChanges"] == true);
+
+		project.Run("project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+		const nlohmann::json entries = project.Run("scene.recoveryStatus")["entries"];
+		REQUIRE(entries.size() == 1);
+		CHECK(entries[0]["applicable"] == true);
+		// The journal names the cells, also of the deleted box.
+		const std::string journal = FileSystem::ReadText(project.Directory / ".strata" / "Recovery" / (entries[0]["id"].get<std::string>() + ".strecovery")).value_or("");
+		CHECK(journal.find(fmt::format("\"Cell\":\"{}\"", project.GetCell(0, 0).ToString())) != std::string::npos);
+		CHECK(journal.find(fmt::format("\"Cell\":\"{}\"", project.GetCell(1, 0).ToString())) != std::string::npos);
+		CHECK(journal.find(fmt::format("\"Cell\":\"{}\"", project.GetCell(1, 1).ToString())) != std::string::npos);
+
+		// The editor camera is far from both cells: the recovery loads them before it applies.
+		LookFrom(project, glm::vec3(140.0f, 10.0f, 140.0f));
+		project.Run("scene.recover", { { "scene", entries[0]["id"] }, { "action", "apply" } });
+		Scene& scene = *project.Context.GetEditScene();
+		auto cellOf = [&scene](UUID id)
+		{
+			const Entity entity = scene.GetEntityByUUID(id);
+			const SubSceneStatus* status = entity ? scene.GetSubSceneStatus(scene.GetSubSceneOf(entity)) : nullptr;
+			return status ? status->Scene : UUID::Null();
+		};
+		REQUIRE(scene.GetEntityByUUID(scaled));
+		CHECK(scene.GetEntityByUUID(scaled).GetComponent<TransformComponent>().Scale.x == 2.0f);
+		CHECK(cellOf(scaled) == project.GetCell(0, 0));
+		CHECK(cellOf(moved) == project.GetCell(1, 0));
+		CHECK(scene.IsSubSceneLoaded(scene.FindSubSceneBySource(project.GetCell(1, 1))));
+		CHECK_FALSE(scene.GetEntityByUUID(deleted));
+		CHECK(scene.GetSettings().Gravity.y == -5.0f);
+		// One copy of each entity of the cells: what the cell documents hold met the recovered states.
+		std::set<UUID> boxes;
+		size_t boxCount = 0;
+		for (const auto [handle, name] : scene.GetRegistry().view<const NameComponent>().each())
+		{
+			if (name.Name.starts_with("Box "))
+			{
+				boxes.insert(scene.GetRegistry().get<IDComponent>(handle).ID);
+				boxCount++;
+			}
+		}
+		CHECK(boxCount == boxes.size());
+		CHECK(boxes.contains(moved));
+
+		// The save writes the three cells, the persistent scene (its settings) and the world's index of the cells.
+		const nlohmann::json saved = project.Run("scene.save");
+		std::set<std::string> paths;
+		for (const nlohmann::json& document : saved["documents"])
+			paths.insert(document["path"].get<std::string>());
+		CHECK(paths == std::set<std::string> { "Scenes/GenPersistent.stscene", "Worlds/Gen.stworld", "Worlds/Gen/Ground/0_0.stscene", "Worlds/Gen/Ground/1_0.stscene",
+			"Worlds/Gen/Ground/1_1.stscene" });
+		const std::optional<nlohmann::json> persistent = JsonUtils::Parse(FileSystem::ReadText(project.Directory / "Assets" / "Scenes" / "GenPersistent.stscene").value_or(""));
+		REQUIRE(persistent.has_value());
+		CHECK((*persistent)["Scene"]["Settings"]["Gravity"][1] == -5.0);
+		CHECK(FileSystem::ReadText(project.Directory / "Assets" / "Worlds" / "Gen" / "Ground" / "1_1.stscene").value_or("").find(deleted.ToString()) == std::string::npos);
+		const std::string cell00 = FileSystem::ReadText(project.Directory / "Assets" / "Worlds" / "Gen" / "Ground" / "0_0.stscene").value_or("");
+		CHECK(cell00.find(moved.ToString()) == std::string::npos);
+		const std::string cell10 = FileSystem::ReadText(project.Directory / "Assets" / "Worlds" / "Gen" / "Ground" / "1_0.stscene").value_or("");
+		CHECK(cell10.find(moved.ToString()) != std::string::npos);
+	}
+
+	TEST_CASE("Recovering a world makes its unsaved new cells again, and a snapshot leaves the cells it did not hold")
+	{
+		WorldProject project("EditorWorldRecoverySnapshot", 5);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
+		Settle(project);
+		// A tower in a Ground cell no document holds yet, then a step only a snapshot captures (a rename of a box of cell
+		// (0, 0)): the journal becomes a snapshot of what is loaded.
+		project.Run("world.edit", { { "editLayer", "Ground" } });
+		const UUID tower = WorldProject::ToUUID(project.Run("entity.create", { { "name", "Tower" },
+			{ "components", { { "Transform", { { "Translation", { 200.0, 0.0, 10.0 } } } } } } })["id"]);
+		const AssetHandle towerCell = DeriveSubAssetHandle(project.World, "Cell/1/6/0");
+		REQUIRE(project.Context.GetWorld()->IsCellDirty(towerCell));
+		const UUID renamed = UUID(0x6F0000000000ull);
+		REQUIRE(project.Context.GetUndoStack().Execute(CreateScope<RenameAction>(*project.Context.GetEditScene(), renamed, "Renamed")));
+		const std::filesystem::path projectFile = project.Context.GetProject()->GetProjectFile();
+		CHECK(project.Run("project.close", { { "force", true } })["discardedChanges"] == true);
+
+		project.Run("project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+		const nlohmann::json entries = project.Run("scene.recoveryStatus")["entries"];
+		REQUIRE(entries.size() == 1);
+		CHECK(entries[0]["complete"] == true);
+		// Recovered far away: cells (3, 3) to (4, 4) are loaded around the camera, which the snapshot never held.
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(140.0f, 10.0f, 140.0f));
+		Settle(project);
+		Scene& scene = *project.Context.GetEditScene();
+		const SubSceneID far = scene.FindSubSceneBySource(project.GetCell(4, 4));
+		REQUIRE(scene.IsSubSceneLoaded(far));
+		project.Run("scene.recover", { { "scene", entries[0]["id"] }, { "action", "apply" } });
+		REQUIRE(&scene == project.Context.GetEditScene().get());
+		const Entity recoveredTower = scene.GetEntityByUUID(tower);
+		REQUIRE(recoveredTower);
+		const SubSceneStatus* status = scene.GetSubSceneStatus(scene.GetSubSceneOf(recoveredTower));
+		REQUIRE(status);
+		CHECK(status->Scene == towerCell);
+		CHECK(project.Context.GetWorld()->IsCellDirty(towerCell));
+		REQUIRE(scene.GetEntityByUUID(renamed));
+		CHECK(scene.GetEntityByUUID(renamed).GetName() == "Renamed");
+		CHECK(scene.GetSubSceneRoots(far).size() == 7 + 4);
+
+		// The save writes the new cell with its .meta and lists it in the world.
+		const nlohmann::json saved = project.Run("scene.save");
+		bool wroteTower = false;
+		for (const nlohmann::json& document : saved["documents"])
+			wroteTower |= document["path"] == "Worlds/Gen/Ground/6_0.stscene";
+		CHECK(wroteTower);
+		CHECK(FileSystem::Exists(project.Directory / "Assets" / "Worlds" / "Gen" / "Ground" / "6_0.stscene.meta"));
+		CHECK(project.ReadWorld()->FindCell(WorldCellKey { 1, 6, 0 }) >= 0);
 	}
 }

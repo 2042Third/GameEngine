@@ -1228,8 +1228,21 @@ namespace Strata
 		std::vector<EntityState> removals;
 		if (entry.Complete)
 		{
+			// A world's snapshot holds the cells that were loaded then: the entities of other cells (loaded now) stay.
+			std::unordered_set<AssetHandle> recordedCells;
+			if (m_World)
+			{
+				for (const AssetHandle cell : EditorWorld::CollectCells(data.Steps))
+					recordedCells.insert(cell);
+			}
 			for (const Entity entity : scene.GetEntitiesInHierarchyOrder())
 			{
+				if (m_World)
+				{
+					const SubSceneStatus* status = scene.GetSubSceneStatus(scene.GetSubSceneOf(entity));
+					if (status && status->Scene.IsValid() && !recordedCells.contains(status->Scene))
+						continue;
+				}
 				if (listed.insert(entity.GetUUID()).second)
 				{
 					ids.push_back(entity.GetUUID());

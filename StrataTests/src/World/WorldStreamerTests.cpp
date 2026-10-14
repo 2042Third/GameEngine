@@ -422,6 +422,11 @@ TEST_SUITE("World.Streaming")
 		CHECK_FALSE(states[0].Error.empty());
 		CHECK(states[0].SubScene == 0);
 		CHECK(states[0].Wanted);
+		std::string error;
+		CHECK(drive.Streamer.GetCellStatus(states[0].Key, &error) == WorldCellStatus::Failed);
+		CHECK(error == states[0].Error);
+		CHECK(drive.Streamer.GetCellStatus(states[1].Key) == WorldCellStatus::Loaded);
+		CHECK(drive.Streamer.GetCellStatus(WorldCellKey { 1, 40, 40 }) == WorldCellStatus::Unloaded);
 		CHECK(drive.Streamer.IsLoadedAround(source.Position, 1.0f) == false);
 		for (uint32_t frame = 0; frame < 30; frame++)
 			drive.Frame(SourceAt(32.0f + static_cast<float>(frame), 32.0f));

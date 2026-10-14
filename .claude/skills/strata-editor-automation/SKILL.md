@@ -215,7 +215,7 @@ editor started with `--no-gpu` (use `--headless`):
   left always stays). When a project opens with changes an editor left behind, `scene.recoveryStatus` lists them;
   `scene.recover {"scene": "<id>", "action": "apply"}` reopens the scene (in the background, like `scene.open`; it fails
   while another scene is being opened) with them as one undo step (the scene stays unsaved: save
-  it), `"discard"` drops them. Entries follow their scene by its handle, so moving or renaming a scene (`asset.move`)
+  it; a world's changes wait for the cells they name to load and go back into them), `"discard"` drops them. Entries follow their scene by its handle, so moving or renaming a scene (`asset.move`)
   keeps its changes recoverable (`scenePath` is where the scene is now). Ask the person before recovering or discarding their changes, or show them the choice:
   `editor.showDialog {"dialog": "recovery"}`.
 - **Play mode**: `play.start` runs a copy of the scene, after building the scripts when their sources changed or they

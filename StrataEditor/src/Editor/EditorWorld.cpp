@@ -37,6 +37,24 @@ namespace Strata
 			return found;
 		}
 
+		// The translation an entity state records (that of a top-level entity is its world position).
+		std::optional<glm::vec3> ReadTranslation(const nlohmann::json& components)
+		{
+			const nlohmann::json* transform = JsonUtils::Find(components, "Transform");
+			const nlohmann::json* translation = transform ? JsonUtils::Find(*transform, "Translation") : nullptr;
+			if (!translation || !translation->is_array() || translation->size() != 3)
+				return std::nullopt;
+			glm::vec3 position(0.0f);
+			for (int axis = 0; axis < 3; axis++)
+			{
+				const nlohmann::json& value = (*translation)[static_cast<size_t>(axis)];
+				if (!value.is_number() || !std::isfinite(value.get<double>()))
+					return std::nullopt;
+				position[axis] = value.get<float>();
+			}
+			return position;
+		}
+
 	}
 
 	Scope<EditorWorld> EditorWorld::Attach(EditorAssetManager& assets, Scene& scene, UndoStack& undo)
@@ -64,6 +82,7 @@ namespace Strata
 		m_Streamer.SetReloadCells(true);
 		m_Undo.AddObserver(this);
 		m_Scene.RegisterService<ISceneCellLoader>(*this);
+		m_SavedSettings = m_Scene.GetSettings();
 	}
 
 	EditorWorld::~EditorWorld()
@@ -155,6 +174,102 @@ namespace Strata
 		return WorldGrid::CellAt(layer, world ? world->GetData().GridOrigin : glm::dvec2(0.0), glm::dvec3(position));
 	}
 
+	AssetHandle EditorWorld::DeriveCellScene(const WorldCellKey& key) const
+	{
+		return DeriveSubAssetHandle(m_World, fmt::format("Cell/{}/{}/{}", key.Layer, key.X, key.Z));
+	}
+
+	std::optional<WorldCellKey> EditorWorld::FindRecordedCell(AssetHandle cell, std::span<const std::vector<EntityState>> steps) const
+	{
+		const Ref<WorldAsset> world = GetWorldAsset();
+		if (!world)
+			return std::nullopt;
+		for (const std::vector<EntityState>& step : steps)
+		{
+			for (const EntityState& state : step)
+			{
+				if (state.Cell != cell || !state.Exists || state.Parent.IsValid())
+					continue;
+				const std::optional<glm::vec3> position = ReadTranslation(state.Components);
+				if (!position)
+					continue;
+				for (const WorldLayer& layer : world->GetData().Layers)
+				{
+					const WorldCellKey key = WorldGrid::CellAt(layer, world->GetData().GridOrigin, glm::dvec3(*position));
+					if (DeriveCellScene(key) == cell)
+						return key;
+				}
+			}
+		}
+		return std::nullopt;
+	}
+
+	std::vector<AssetHandle> EditorWorld::CollectCells(std::span<const std::vector<EntityState>> steps)
+	{
+		std::vector<AssetHandle> cells;
+		std::unordered_set<AssetHandle> seen;
+		for (const std::vector<EntityState>& step : steps)
+		{
+			for (const EntityState& state : step)
+			{
+				if (state.Cell.IsValid() && seen.insert(state.Cell).second)
+					cells.push_back(state.Cell);
+			}
+		}
+		return cells;
+	}
+
+	EditorWorld::RecoveredCells EditorWorld::PrepareRecoveredCells(std::vector<AssetHandle>& cells, std::span<const std::vector<EntityState>> steps,
+		std::string* outError)
+	{
+		const Ref<WorldAsset> world = GetWorldAsset();
+		if (!world)
+		{
+			const AssetManagerBase* assets = m_Scene.GetAssetManager();
+			if (assets && assets->GetAssetState(m_World) == AssetState::Failed)
+			{
+				if (outError)
+					*outError = fmt::format("The world {} cannot be loaded, so the changes cannot go back into its cells", m_World.ToString());
+				return RecoveredCells::Failed;
+			}
+			return RecoveredCells::Loading;
+		}
+		RefreshCellTable();
+		bool pinned = false;
+		for (size_t index = cells.size(); index-- > 0;)
+		{
+			const AssetHandle cell = cells[index];
+			const std::optional<WorldCellKey> key = FindCellKey(cell);
+			// Kept from now on, also when it is loaded already: the camera may move away before the others are in.
+			if (key)
+				pinned |= m_RequestedPins.insert(*key).second;
+			bool done = m_Scene.IsSubSceneLoaded(m_Scene.FindSubSceneBySource(cell));
+			if (!done && !key)
+			{
+				// A cell made after the last save: no document holds it, so it is made again.
+				if (const std::optional<WorldCellKey> recorded = FindRecordedCell(cell, steps))
+					EnsureCellSubScene(*recorded);
+				done = true;
+			}
+			if (done)
+			{
+				cells.erase(cells.begin() + static_cast<std::ptrdiff_t>(index));
+				continue;
+			}
+			std::string error;
+			if (m_Streamer.GetCellStatus(*key, &error) == WorldCellStatus::Failed)
+			{
+				if (outError)
+					*outError = fmt::format("The cell {} cannot be loaded ({}), so the changes to it cannot be recovered; fix it and run scene.recover again",
+						DescribeKey(*key), error);
+				return RecoveredCells::Failed;
+			}
+		}
+		if (pinned)
+			SyncPins();
+		return cells.empty() ? RecoveredCells::Ready : RecoveredCells::Loading;
+	}
+
 	SubSceneID EditorWorld::EnsureCellSubScene(const WorldCellKey& key)
 	{
 		const Ref<WorldAsset> world = GetWorldAsset();
@@ -184,7 +299,7 @@ namespace Strata
 		const WorldCellSquare square = WorldGrid::CellBounds(*layer, world->GetData().GridOrigin, key.X, key.Z);
 		if (std::max({ std::abs(square.Min.x), std::abs(square.Min.y), std::abs(square.Max.x), std::abs(square.Max.y) }) > WorldData::c_MaxExtent)
 			return 0;
-		cell = DeriveSubAssetHandle(m_World, fmt::format("Cell/{}/{}/{}", key.Layer, key.X, key.Z));
+		cell = DeriveCellScene(key);
 		const SubSceneID id = m_Scene.AdoptSubScene(cell, {});
 		if (id == 0)
 			return 0;
@@ -326,6 +441,10 @@ namespace Strata
 
 	void EditorWorld::OnApplied(const EditorAction& action, bool undone, bool)
 	{
+		// Settings belong to the persistent scene, whatever kind of step changed them (a recovery's changes them with its
+		// entities).
+		if (!(m_Scene.GetSettings() == m_SavedSettings))
+			m_PersistentDirty = true;
 		switch (action.GetSceneChange())
 		{
 			case SceneChangeKind::None:
@@ -444,6 +563,7 @@ namespace Strata
 				return fail(fmt::format("The persistent scene cannot be saved: {}", error));
 			outResult.Documents.push_back({ persistentMetadata->Path, "persistent", *bytes, persistentDocument["Scene"]["Entities"].size() });
 			m_PersistentDirty = false;
+			m_SavedSettings = m_Scene.GetSettings();
 		}
 		else
 		{

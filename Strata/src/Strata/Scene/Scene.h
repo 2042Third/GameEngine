@@ -74,6 +74,8 @@ namespace Strata
 		// c_MaxEntitiesDestroyedLimit.
 		uint32_t MaxEntitiesDestroyedPerFrame = 5000;
 		static constexpr uint32_t c_MaxEntitiesDestroyedLimit = 1u << 20;
+
+		bool operator==(const SceneSettings& other) const = default;
 	};
 
 	// A world of entities. Owns the EnTT registry, the hierarchy, and (while playing) the runtime systems.

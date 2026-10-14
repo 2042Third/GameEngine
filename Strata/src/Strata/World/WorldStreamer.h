@@ -144,6 +144,8 @@ namespace Strata
 		void GetCellStates(std::vector<WorldCellState>& outStates) const;
 		// The sub-scene of a cell, 0 when it has none (unloaded, failed).
 		SubSceneID GetCellSubScene(const WorldCellKey& key) const;
+		// A cell's state (Unloaded for a key the streamer does not hold), and the reason of a failed load.
+		WorldCellStatus GetCellStatus(const WorldCellKey& key, std::string* outError = nullptr) const;
 
 		// Unloads (sliced) or cancels every cell the streamer loaded or adopted, and forgets them.
 		void UnloadAll();
