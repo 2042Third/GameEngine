@@ -309,9 +309,16 @@ namespace Strata::Tests
 	};
 
 	// Whether the statistics' counts of assets per state and of pinned assets are those of the assets themselves, recounted
-	// from GetResidencyInfo (which lists every asset that is not unloaded, and every pinned one).
+	// from GetResidencyInfo (which lists every asset that is not unloaded, and every pinned one), and the listed entries are
+	// those a look at every entry finds (AssetManagerBase::ValidateResidencyIndex).
 	inline bool StateCountsMatch(const AssetManagerBase& manager)
 	{
+		std::string error;
+		if (!manager.ValidateResidencyIndex(&error))
+		{
+			MESSAGE(error);
+			return false;
+		}
 		uint32_t ready = 0;
 		uint32_t loading = 0;
 		uint32_t failed = 0;

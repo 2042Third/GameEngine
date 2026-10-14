@@ -115,7 +115,10 @@ namespace Strata
 			if (it == m_Entries.end())
 				return {};
 			if (it->second.PinCount++ == 0)
+			{
 				m_PinnedAssets++;
+				UpdateListedLocked(it->second);
+			}
 			registration = it->second.Registration;
 		}
 		RequestLoad(handle, priority);
@@ -128,7 +131,10 @@ namespace Strata
 		auto it = m_Entries.find(handle);
 		// A pin of an asset that was unregistered (and maybe registered again since) counts for nothing any more.
 		if (it != m_Entries.end() && it->second.Registration == registration && it->second.PinCount > 0 && --it->second.PinCount == 0)
+		{
 			m_PinnedAssets--;
+			UpdateListedLocked(it->second);
+		}
 	}
 
 	uint32_t AssetManagerBase::GetPinCount(AssetHandle handle) const
@@ -188,10 +194,15 @@ namespace Strata
 	{
 		std::scoped_lock<std::mutex> lock(m_Mutex);
 		std::vector<AssetResidencyInfo> assets;
-		for (const auto& [handle, entry] : m_Entries)
+		assets.reserve(m_Listed.size());
+		// What is listed, not what is registered: tens of thousands of registered assets cost nothing here.
+		for (const AssetHandle handle : m_Listed)
 		{
-			if (entry.State == AssetState::Unloaded && !entry.Loaded && entry.PinCount == 0)
+			m_ResidencyVisits++;
+			const auto found = m_Entries.find(handle);
+			if (found == m_Entries.end())
 				continue;
+			const AssetEntry& entry = found->second;
 			assets.push_back(AssetResidencyInfo { handle, entry.Metadata.Type, entry.Metadata.Path, entry.Metadata.Name, entry.State, entry.Usage,
 				entry.LastRequestedFrame, entry.PinCount, entry.IsMemoryAsset });
 			AssetDetailLevels detail;
@@ -205,11 +216,14 @@ namespace Strata
 	{
 		outAssets.clear();
 		std::scoped_lock<std::mutex> lock(m_Mutex);
-		for (const auto& [handle, entry] : m_Entries)
+		// The same assets as GetResidencyInfo.
+		for (const AssetHandle handle : m_Listed)
 		{
-			// The same assets as GetResidencyInfo.
-			if (entry.State == AssetState::Unloaded && !entry.Loaded && entry.PinCount == 0)
+			m_ResidencyVisits++;
+			const auto found = m_Entries.find(handle);
+			if (found == m_Entries.end())
 				continue;
+			const AssetEntry& entry = found->second;
 			outAssets.push_back(AssetResidencySample { handle, entry.Metadata.Type, entry.State, entry.Usage, entry.LastRequestedFrame, entry.PinCount,
 				entry.IsMemoryAsset });
 			AssetDetailLevels detail;
@@ -226,6 +240,46 @@ namespace Strata
 		m_StateCounts[static_cast<size_t>(state)]++;
 		if (state != AssetState::Loading)
 			entry.AwaitingImport = false;
+		UpdateListedLocked(entry);
+	}
+
+	uint64_t AssetManagerBase::GetResidencyVisitCount() const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		return m_ResidencyVisits;
+	}
+
+	void AssetManagerBase::UpdateListedLocked(const AssetEntry& entry)
+	{
+		if (entry.State != AssetState::Unloaded || entry.Loaded || entry.PinCount > 0)
+			m_Listed.insert(entry.Handle);
+		else
+			m_Listed.erase(entry.Handle);
+	}
+
+	bool AssetManagerBase::ValidateResidencyIndex(std::string* outError) const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		size_t listed = 0;
+		for (const auto& [handle, entry] : m_Entries)
+		{
+			const bool shouldBe = entry.State != AssetState::Unloaded || entry.Loaded || entry.PinCount > 0;
+			if (shouldBe != m_Listed.contains(handle))
+			{
+				if (outError)
+					*outError = fmt::format("Asset {} ({}) is {}listed but should{} be (state {}, {}, {} pins)", handle.ToString(), entry.Metadata.Path,
+						shouldBe ? "not " : "", shouldBe ? "" : " not", static_cast<int>(entry.State), entry.Loaded ? "loaded" : "not loaded", entry.PinCount);
+				return false;
+			}
+			listed += shouldBe ? 1 : 0;
+		}
+		if (listed != m_Listed.size())
+		{
+			if (outError)
+				*outError = fmt::format("{} assets are listed, {} of them registered", m_Listed.size(), listed);
+			return false;
+		}
+		return true;
 	}
 
 	AssetManagerBase::AssetEntry& AssetManagerBase::AddEntryLocked(AssetHandle handle, bool& outInserted)
@@ -233,7 +287,10 @@ namespace Strata
 		auto [it, inserted] = m_Entries.try_emplace(handle);
 		outInserted = inserted;
 		if (inserted)
+		{
+			it->second.Handle = handle;
 			m_StateCounts[static_cast<size_t>(it->second.State)]++;
+		}
 		return it->second;
 	}
 
@@ -242,6 +299,7 @@ namespace Strata
 		m_StateCounts[static_cast<size_t>(it->second.State)]--;
 		if (it->second.PinCount > 0)
 			m_PinnedAssets--;
+		m_Listed.erase(it->first);
 		m_Entries.erase(it);
 	}
 
@@ -324,6 +382,7 @@ namespace Strata
 		entry.Usage = {};
 		entry.Loaded = std::move(asset);
 		entry.LoadedRevision = entry.Loaded ? entry.SourceRevision : 0;
+		UpdateListedLocked(entry);
 		if (entry.Loaded)
 		{
 			entry.Usage = entry.Loaded->GetMemoryUsage();

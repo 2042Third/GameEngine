@@ -1572,7 +1572,10 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   wanted, count, resident bytes). `GetStats` costs the same with any number of assets: the
   counts of assets per state and of pinned assets change with the entries (`SetStateLocked`, `AddEntryLocked`,
   `RemoveEntryLocked`, `Pin`, `Unpin`; every change of an entry's state goes through them), so the editor reads them
-  every frame. `GetResidencySamples` gives the per-asset part without names into a vector the caller reuses, and
+  every frame. `GetResidencySamples` (like `GetResidencyInfo`) costs what is listed, not what is registered: the base keeps
+  the listed entries (not unloaded, loaded or pinned) with every change of state, loaded object or pin
+  (`UpdateListedLocked`; tests check it against a look at every entry, `ValidateResidencyIndex`), gives the per-asset
+  part without names into a vector the caller reuses, and
   `GetMetadataVersion` changes with every registration and metadata change, so a view of tens of thousands of assets
   reads names only when they change.
   The editor reports them, apart from the `GetAsset` calls, through `asset.stats` (`mipStreaming`; the rows of streaming
