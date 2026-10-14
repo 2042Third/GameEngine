@@ -190,13 +190,12 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
-				size_t count = 0;
-				for (const Entity root : RemoveNested(entities))
-					count += SceneEdit::CollectSubtree(scene, root.GetUUID()).size();
 				nlohmann::json deleted = ToJson(RemoveDuplicates(entities));
 				SceneEditTransaction transaction(scene, fmt::format("Delete {}", SceneEdit::DescribeEntities(entities)), {});
 				for (Entity entity : entities)
 					transaction.TrackSubtree(entity.GetUUID());
+				// Every entity that goes, each once (descendants and entities listed below another listed one included).
+				const size_t count = transaction.GetBefore().size();
 				// One batch: each sibling list is compacted once (entities nested in another listed one go with it).
 				scene.DestroyEntities(entities);
 				context.PruneSelection(); // Deleted descendants too
