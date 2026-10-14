@@ -24,7 +24,8 @@ namespace Strata
 		// - animation controllers: the clips of their states.
 		// Other types reference nothing in their stored form: importers that know more (a glTF mesh's materials) record it
 		// themselves (ImportResult::References). Appends each handle once, in the order it first appears, without null
-		// handles. False, with the reason, when the document cannot be read.
+		// handles. False, with the reason, when the document cannot be read. Scenes, prefabs and models are read as streams
+		// (SceneDocumentReader: one entity's DOM at a time, whatever the document's size) and must be documents of their kind.
 		bool Scan(AssetType type, std::span<const uint8_t> storedForm, std::vector<AssetHandle>& outReferences, std::string* outError = nullptr);
 		// Scan of a document that is parsed already (what a serializer produced, before it is written): no parsing again.
 		bool ScanDocument(AssetType type, const nlohmann::json& document, std::vector<AssetHandle>& outReferences, std::string* outError = nullptr);

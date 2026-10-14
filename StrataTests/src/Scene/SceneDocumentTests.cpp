@@ -277,6 +277,19 @@ TEST_SUITE("Scene.Documents")
 		// Without the extra-data scanner only asset properties count.
 		const WrittenText plain = WriteDocument(*feature);
 		CHECK(std::find(plain.Result.References.begin(), plain.Result.References.end(), UUID(0xF7A0000000000005ull)) == plain.Result.References.end());
+
+		// The scan reads the document as a stream: the old layout (the header after the entities) finds the same references,
+		// and so does a scan of the parsed document; a document of another kind is no scene.
+		const std::string old = JsonUtils::Dump(SceneSerializer::Serialize(*feature));
+		std::vector<AssetHandle> oldScanned;
+		REQUIRE(AssetDependencies::Scan(AssetType::Scene, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(old.data()), old.size()), oldScanned, &error));
+		CHECK(oldScanned == scanned);
+		std::vector<AssetHandle> parsedScanned;
+		REQUIRE(AssetDependencies::ScanDocument(AssetType::Scene, SceneSerializer::Serialize(*feature), parsedScanned, &error));
+		CHECK(parsedScanned == scanned);
+		std::vector<AssetHandle> wrongKind;
+		CHECK_FALSE(AssetDependencies::Scan(AssetType::Prefab, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(old.data()), old.size()), wrongKind, &error));
+		CHECK(error == "Not a Strata Prefab document");
 	}
 
 	TEST_CASE("Entity subsets write their roots with their descendants and parents only within the subset")

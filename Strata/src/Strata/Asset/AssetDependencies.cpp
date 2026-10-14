@@ -7,7 +7,10 @@
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Scene/Components.h"
+#include "Strata/Scene/EntitySink.h"
+#include "Strata/Scene/SceneDocumentReader.h"
 
+#include <optional>
 #include <string_view>
 #include <unordered_set>
 
@@ -66,6 +69,37 @@ namespace Strata
 			}
 		}
 
+		// The references of one entity object of a document.
+		void ScanEntityInto(const nlohmann::json& entity, const ComponentInfo* scriptInfo, ReferenceList& references)
+		{
+			const nlohmann::json* components = JsonUtils::Find(entity, "Components");
+			if (!components || !components->is_object())
+				return;
+			for (const auto& [name, component] : components->items())
+			{
+				// Components this build does not register are kept, but what they reference is unknown.
+				const ComponentInfo* info = ComponentRegistry::Find(name);
+				if (!info || !component.is_object())
+					continue;
+				ScanProperties(info->Properties, component, references);
+				// Script fields are data the properties cannot express: read them with the component's own reader.
+				if (info == scriptInfo && info->DeserializeExtra)
+				{
+					ScriptComponent scripts;
+					if (!info->DeserializeExtra(&scripts, component, nullptr))
+						continue;
+					for (const ScriptEntry& script : scripts.Scripts)
+					{
+						for (const ScriptFieldValue& field : script.Fields)
+						{
+							if (field.Type == PropertyType::Asset && std::holds_alternative<UUID>(field.Value))
+								references.Add(std::get<UUID>(field.Value));
+						}
+					}
+				}
+			}
+		}
+
 		void ScanEntitiesInto(const nlohmann::json& snapshot, ReferenceList& references)
 		{
 			const nlohmann::json* entities = JsonUtils::Find(snapshot, "Entities");
@@ -73,33 +107,40 @@ namespace Strata
 				return;
 			const ComponentInfo* scriptInfo = ComponentRegistry::Find<ScriptComponent>();
 			for (const nlohmann::json& entity : *entities)
+				ScanEntityInto(entity, scriptInfo, references);
+		}
+
+		// Collects the references of a document's entities as SceneDocumentReader hands them over, one entity's DOM at a time:
+		// a scan of a scene of a million entities holds its text and its references, never a DOM of it. A scan refuses no
+		// entity data: it finds what it can.
+		class ReferenceSink final : public EntitySink
+		{
+		public:
+			explicit ReferenceSink(ReferenceList& references)
+				: m_References(references), m_ScriptInfo(ComponentRegistry::Find<ScriptComponent>())
 			{
-				const nlohmann::json* components = JsonUtils::Find(entity, "Components");
-				if (!components || !components->is_object())
-					continue;
-				for (const auto& [name, component] : components->items())
-				{
-					// Components this build does not register are kept, but what they reference is unknown.
-					const ComponentInfo* info = ComponentRegistry::Find(name);
-					if (!info || !component.is_object())
-						continue;
-					ScanProperties(info->Properties, component, references);
-					// Script fields are data the properties cannot express: read them with the component's own reader.
-					if (info == scriptInfo && info->DeserializeExtra)
-					{
-						ScriptComponent scripts;
-						if (!info->DeserializeExtra(&scripts, component, nullptr))
-							continue;
-						for (const ScriptEntry& script : scripts.Scripts)
-						{
-							for (const ScriptFieldValue& field : script.Fields)
-							{
-								if (field.Type == PropertyType::Asset && std::holds_alternative<UUID>(field.Value))
-									references.Add(std::get<UUID>(field.Value));
-							}
-						}
-					}
-				}
+			}
+
+			bool ReadEntity(const nlohmann::json& entity, std::string*) override
+			{
+				ScanEntityInto(entity, m_ScriptInfo, m_References);
+				return true;
+			}
+
+			bool Finish(std::string*) override { return true; }
+		private:
+			ReferenceList& m_References;
+			const ComponentInfo* m_ScriptInfo = nullptr;
+		};
+
+		std::optional<SceneDocumentKind> GetEntityDocumentKind(AssetType type)
+		{
+			switch (type)
+			{
+				case AssetType::Scene:  return SceneDocumentKind::Scene;
+				case AssetType::Prefab: return SceneDocumentKind::Prefab;
+				case AssetType::Model:  return SceneDocumentKind::Model;
+				default:                return std::nullopt;
 			}
 		}
 
@@ -123,8 +164,16 @@ namespace Strata
 		if (key.empty())
 			return true;
 
+		const std::string_view text(reinterpret_cast<const char*>(storedForm.data()), storedForm.size());
+		// Documents of entities are read as streams (their references found entity by entity), others whole.
+		if (const std::optional<SceneDocumentKind> kind = GetEntityDocumentKind(type))
+		{
+			ReferenceList references(outReferences);
+			ReferenceSink sink(references);
+			return SceneDocumentReader::Read(text, *kind, sink, {}, nullptr, outError);
+		}
 		std::string error;
-		const std::optional<nlohmann::json> document = JsonUtils::Parse(std::string_view(reinterpret_cast<const char*>(storedForm.data()), storedForm.size()), &error);
+		const std::optional<nlohmann::json> document = JsonUtils::Parse(text, &error);
 		if (!document)
 		{
 			if (outError)
