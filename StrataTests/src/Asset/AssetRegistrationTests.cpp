@@ -9,6 +9,10 @@
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
+#include <Strata/Core/JsonUtils.h>
+#include <Strata/Renderer/Material.h>
+
+#include <spdlog/fmt/fmt.h>
 
 #include <atomic>
 #include <chrono>
@@ -139,6 +143,50 @@ TEST_SUITE("Asset.Registration")
 		// What the scene references was found: every material, and the built-in cube.
 		CHECK(manager.GetDependencies(project->Scene).size() == 10'001);
 		CHECK_FALSE(manager.GetScanProgress().has_value());
+		CHECK(StateCountsMatch(manager));
+	}
+
+	TEST_CASE("No file is touched on the main thread while a folder of 600 assets is copied in, registered and imported")
+	{
+		ScopedJobSystem jobs(4, 2);
+		const std::filesystem::path root = CreateTemporaryDirectory("RegistrationFolder600");
+		// 580 materials (registered, their references found) and 20 small textures (imported too): imports of 600 textures
+		// would take a Debug build long, and the perf gate imports them (Perf.Editor.ImportFolder600MaxFrame).
+		std::string error;
+		const std::optional<std::vector<std::filesystem::path>> textures = WriteTextureFolder(root / "Outside" / "Assets", 20, 8, 7, error);
+		REQUIRE_MESSAGE(textures.has_value(), error);
+		const std::string material = JsonUtils::Dump(Material::Create(MaterialProperties())->Serialize(), 1, '\t');
+		for (int index = 0; index < 580; index++)
+			REQUIRE(FileSystem::WriteText(root / "Outside" / "Assets" / FileSystem::FromUTF8(fmt::format("Material_{:03}.stmat", index)), material));
+		REQUIRE(FileSystem::CreateDirectories(root / "Project" / "Assets"));
+		EditorAssetManager manager(MakeSpecification(root / "Project"));
+		manager.Scan();
+
+		ExternalImportRequest request;
+		request.Directories = { root / "Outside" / "Assets" };
+		const Ref<ExternalImport> import = manager.ImportExternal(request, &error);
+		REQUIRE_MESSAGE(import, error);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(5);
+		uint64_t updates = 0;
+		while (!import->IsFinished() || manager.HasPendingImports())
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			const uint64_t operations = FileSystem::GetThreadOperationCount();
+			manager.Update();
+			CHECK(FileSystem::GetThreadOperationCount() == operations);
+			updates++;
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		CHECK(updates > 1);
+		CHECK_FALSE(import->HasFailures());
+		REQUIRE(import->GetItems().size() == 1);
+		CHECK(import->GetItems().front().Assets.size() == 600);
+		for (const AssetHandle handle : import->GetItems().front().Assets)
+		{
+			const AssetImportInfo info = manager.GetImportInfo(handle);
+			CHECK(info.Imported);
+			CHECK(info.Error.empty());
+		}
 		CHECK(StateCountsMatch(manager));
 	}
 

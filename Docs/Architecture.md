@@ -989,9 +989,10 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   command (`asset.setImportSettings`, `asset.reimport`) when `Update` applied it; `SetImportSettings` and
   `ReimportAsset` import on the calling thread (tools, tests).
 - **Importing external files** (`EditorAssetManager::ImportExternal`, `asset.import`). Nothing of it runs in a frame: an
-  I/O job copies the files (`ExternalCopy`, which uses no manager state) and `Update` registers what it copied
-  (`RegisterAddedFile`, with the copied `.meta` files' handles where they are free) and queues their imports as
-  background jobs like re-imports; the import is `Finished` once every asset it brought is imported, and the command,
+  I/O job copies the files (`ExternalCopy`, which uses no manager state) and prepares what it copied for registration
+  as a scan does (`PrepareAddedFiles`: the copied `.meta` files' handles where they are free, new ones written by the
+  job, cached imports checked, documents' references found), `Update` only inserts it (`InsertPrepared`, touching no
+  file) and queues the imports as background jobs like re-imports; the import is `Finished` once every asset it brought is imported, and the command,
   deferred, answers then. Copies run one at a time in the order of the calls (`StartNextExternalCopy`), so two never pick
   the same free name, and a copy never writes over a file (`std::filesystem::copy_options::none`; what a failed copy left
   is removed). The file watcher leaves the files of a copy alone until `Update` registers them complete: the copy names

@@ -187,6 +187,8 @@ namespace Strata
 	// fails because an import has it open.
 	class EditorAssetManager final : public AssetManagerBase
 	{
+		// A copy's job prepares the files it copied for registration (PreparedSource).
+		friend struct ExternalImport::CopyTask;
 	public:
 		explicit EditorAssetManager(const EditorAssetManagerSpecification& specification);
 		// Close, then waits for the loads in flight (reads of single files).
@@ -560,6 +562,13 @@ namespace Strata
 		struct ScanShared;
 		struct ScanState;
 		static void PrepareScan(BackgroundWork& work, ScanShared& shared, uint32_t batch, JobPriority priority);
+		// Prepares files the editor put into the asset directory (a copy's job): handles of the project or taken twice are given
+		// anew (written into the .meta), cached imports are checked and documents' references found. Any thread.
+		static void PrepareAddedFiles(BackgroundWork& work, std::vector<PreparedSource>& sources, const std::atomic<bool>* cancel);
+		// Registers prepared sources from `next` on, in batches, until `slice` runs out: applies their current imports and
+		// references, and lists the imported ones whose cache is stale. Returns the next index. Touches no file. Main thread.
+		size_t InsertPrepared(std::vector<PreparedSource>& sources, size_t next, RegistrationSlice& slice, std::vector<ImportRequest>& outStale,
+			uint32_t& outFailed);
 		// Inserts what the scan's job prepared (once it finished), within a slice of time unless `unlimited`, and finishes the
 		// scan once everything is in.
 		void AdvanceScan(bool unlimited);
