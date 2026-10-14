@@ -64,6 +64,8 @@
 	"Perf.Editor.SaveMaxFrame1M": { "Unit": "ms", "Provisional": true, "Target": 60 },
 	"Perf.Editor.SaveSeconds1M": { "Unit": "ms", "Provisional": true, "Target": 3000 },
 	"Perf.Editor.SavePeakPrivateIncrease1M": { "Unit": "MB", "Provisional": true, "Target": 600 },
+	"Perf.Asset.FirstScan10k": { "Unit": "ms", "Provisional": true, "Target": 5000 },
+	"Perf.Asset.WarmScan10k": { "Unit": "ms", "Provisional": true, "Target": 1000 },
 	"Perf.Editor.JournalPerCommand": { "Measured": 1.461, "Budget": 2.191, "Unit": "us" },
 	"Perf.Editor.RecoveryWriteMaxFrame100k": { "Measured": 0.0407, "Budget": 0.057, "Unit": "ms" },
 	"Perf.Editor.RecoveryWriteIOTime100k": { "Measured": 5.51, "Budget": 8.26, "Unit": "ms" },
