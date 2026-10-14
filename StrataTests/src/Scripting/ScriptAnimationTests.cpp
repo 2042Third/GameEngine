@@ -66,13 +66,17 @@ namespace
 			m_Descriptor = *animation;
 			for (const SceneSystemDescriptor& descriptor : descriptors)
 				m_Order.push_back(descriptor.Name);
+			// The systems after it, registered again after it when it comes back: a registration counts as the latest.
+			m_Following.assign(animation + 1, descriptors.end());
 			REQUIRE(SceneSystemRegistry::Unregister("Animation"));
 		}
 
 		~ScopedWithoutAnimationSystem()
 		{
-			// No system names Animation, and it was registered last: registering it again restores the order.
+			// No system names Animation: registering it again, then the systems that followed it, restores the order.
 			CHECK(SceneSystemRegistry::Register(m_Descriptor));
+			for (const SceneSystemDescriptor& descriptor : m_Following)
+				CHECK(SceneSystemRegistry::Register(descriptor));
 			std::vector<std::string> order;
 			for (const SceneSystemDescriptor& descriptor : SceneSystemRegistry::GetAll())
 				order.push_back(descriptor.Name);
@@ -83,6 +87,7 @@ namespace
 		ScopedWithoutAnimationSystem& operator=(const ScopedWithoutAnimationSystem&) = delete;
 	private:
 		SceneSystemDescriptor m_Descriptor;
+		std::vector<SceneSystemDescriptor> m_Following;
 		std::vector<std::string> m_Order;
 	};
 

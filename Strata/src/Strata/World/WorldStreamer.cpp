@@ -96,6 +96,7 @@ namespace Strata
 			m_SeenWorld.reset();
 			m_LayerCells.clear();
 			m_LayerEnabled.clear();
+			m_HasEvaluated = false;
 			m_Dirty = true;
 		}
 		if (scale != m_DistanceScale)
@@ -420,6 +421,7 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 		const WorldData& data = world.GetData();
+		m_HasEvaluated = true;
 		m_EvaluatedSources = m_Sources;
 		m_Candidates.clear();
 		m_CandidateIndex.clear();

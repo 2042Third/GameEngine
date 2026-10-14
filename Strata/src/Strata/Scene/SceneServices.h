@@ -26,9 +26,10 @@
 // include each other's headers (the layers of StrataTests/Architecture/Layers.json).
 //
 // The built-in providers: PhysicsSystem offers ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries,
-// ICharacterControl and IPhysicsCapacity; AudioSystem offers IAudioPlayback; the Animation module's system offers ISkinningPoses, IAnimatorControl and
-// IAnimationEventSource (the editor's pose preview provides ISkinningPoses for edited scenes, where no system runs). All
-// services are main thread only, like the scene. IAudioOutput, defined here too, is an engine service
+// ICharacterControl and IPhysicsCapacity; AudioSystem offers IAudioPlayback; the World module's system offers
+// IWorldStreaming; the Animation module's system offers ISkinningPoses, IAnimatorControl and IAnimationEventSource (the
+// editor's pose preview provides ISkinningPoses for edited scenes, where no system runs). All services are main thread
+// only, like the scene. IAudioOutput, defined here too, is an engine service
 // (Core/EngineServices.h): it belongs to the process, not to a scene.
 namespace Strata
 {
@@ -415,6 +416,28 @@ namespace Strata
 		uint32_t EntitiesDestroyedLastUpdate = 0;
 		uint32_t EvaluatedCells = 0; // Cells the last update looked at: 0 while nothing moved or changed
 		uint64_t StateVersion = 0;   // Changes whenever a cell's state does (a cell map rebuilds when it changed)
+	};
+
+	// The streaming of the world a running scene is the persistent scene of (the World module's system), for code that may
+	// not include the World module: scripts prefetch cells before a teleport, games toggle layers, the editor and the perf
+	// log show the streaming. Main thread.
+	class IWorldStreaming
+	{
+	public:
+		virtual ~IWorldStreaming() = default;
+
+		// Streams the cells within `radius` of `position` on every enabled layer, at priority 100 (before the sources'), until
+		// released or the scene stops: a request ID, 0 when the position or radius is no finite number (radius >= 0).
+		virtual uint64_t RequestCellsAround(const glm::vec3& position, float radius) = 0;
+		// False for an unknown or released request.
+		virtual bool ReleaseCells(uint64_t request) = 0;
+		// Whether every existing cell of every enabled layer within `radius` of `position` is loaded.
+		virtual bool IsLoadedAround(const glm::vec3& position, float radius) const = 0;
+		// Layers by name (WorldLayer::Name), starting from their EnabledByDefault: a disabled layer's cells unload. False, and
+		// nullopt, for a name the world does not have.
+		virtual bool SetLayerEnabled(std::string_view layer, bool enabled) = 0;
+		virtual std::optional<bool> IsLayerEnabled(std::string_view layer) const = 0;
+		virtual WorldStreamingStats GetStats() const = 0;
 	};
 
 	// The engine's audio output (AudioEngine), which outlives every scene: an engine service (Core/EngineServices.h) the

@@ -131,6 +131,8 @@ namespace Strata
 		// Whether every existing cell of every enabled layer within `radius` of `position` is loaded (true for a region
 		// without cells; false before the world is loaded).
 		bool IsLoadedAround(const glm::vec3& position, float radius) const;
+		// Whether an update evaluated the sources since the world was set (and loaded): before, no cell is wanted yet.
+		bool HasEvaluated() const { return m_HasEvaluated; }
 		// The loads, unloads and cancellations the last update started, in the order it started them.
 		const std::vector<WorldStreamingDecision>& GetLastDecisions() const { return m_Decisions; }
 		WorldStreamingStats GetStats() const;
@@ -189,6 +191,7 @@ namespace Strata
 		std::vector<uint64_t> m_InFlight;                 // Keys of the Loading and Unloading cells
 		std::unordered_set<uint64_t> m_Wanted;            // The last evaluation's wanted cells
 		bool m_Dirty = true;
+		bool m_HasEvaluated = false;
 		bool m_AdoptPending = false;   // AdoptLoadedCells was called before the world was loaded
 		uint32_t m_FailedCells = 0;    // Records in state Failed
 		uint64_t m_FailureVersion = 0; // The asset manager's content version when failures were last checked

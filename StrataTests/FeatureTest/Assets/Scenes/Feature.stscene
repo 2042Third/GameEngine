@@ -2622,6 +2622,102 @@
 					}
 				},
 				"ID": "F7E0000000000050"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "World"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							0,
+							0,
+							0
+						]
+					},
+					"World": {
+						"DistanceScale": 1.5,
+						"World": "F7A000000000000E"
+					}
+				},
+				"ID": "F7E0000000000067"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Streamer"
+					},
+					"StreamingSource": {
+						"Enabled": true,
+						"Layers": "Ground, Props",
+						"Priority": 5,
+						"Radius": 30,
+						"ViewBias": 0.5
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							216,
+							1,
+							216
+						]
+					}
+				},
+				"ID": "F7E0000000000068"
+			},
+			{
+				"Components": {
+					"Name": {
+						"Name": "Idle Source"
+					},
+					"StreamingSource": {
+						"Enabled": false,
+						"Layers": "",
+						"Priority": 0,
+						"Radius": 0,
+						"ViewBias": 0.25
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							-200,
+							1,
+							-200
+						]
+					}
+				},
+				"ID": "F7E0000000000069"
 			}
 		],
 		"Name": "Feature",

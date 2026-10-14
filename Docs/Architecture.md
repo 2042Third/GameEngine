@@ -351,7 +351,9 @@ keyframe reduction) and `AnimationController` (the `.stanimator` document: param
 
 **World** (`World/`). World partition: the World asset (`WorldAsset`, the `.stworld` document: a persistent scene,
 layers of square cells and the cells that have content, with the cook's index), the grid math (`WorldGrid`,
-`WorldCellKey`) and the streaming core (`WorldStreamer`). See [World partition](#world-partition).
+`WorldCellKey`), the streaming core (`WorldStreamer`), the components `WorldComponent` and `StreamingSourceComponent`
+(`WorldComponents.h`, registered by the module, category "World") and `WorldStreamingSystem`, the "World" scene system
+(Play and Simulate), which offers the scene service `IWorldStreaming`. See [World partition](#world-partition).
 
 **Scripting** (`Scripting/`). `ScriptEngine` (the loaded module, hot reload, faults, optional watchdog),
 `ScriptModule` (loading, validation and guarded calls), `ScriptSystem` (the "Scripting" scene system: instances and
@@ -461,7 +463,7 @@ RegisterScriptingModule    Scripting/ScriptingRegistration.cpp "Scripting" syste
 RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     "Physics" system
 RegisterAudioModule        Audio/AudioRegistration.cpp         AudioClip loader, "Audio" system
 RegisterAnimationModule    Animation/AnimationRegistration.cpp Skeleton, AnimationClip, AnimationController loaders, "Animation" system
-RegisterWorldModule        World/WorldRegistration.cpp         World loader
+RegisterWorldModule        World/WorldRegistration.cpp         World loader; World and StreamingSource components; "World" system
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
 ComponentRegistry::Freeze
@@ -583,7 +585,7 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
 | `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (the systems' `PrepareLoadedScene`: physics' bodies; `SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
-| `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays) |
+| `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation` and `World.Streaming`, the animation and World systems', are registered when a scene first plays) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
@@ -610,6 +612,7 @@ are, in update order:
 | --- | --- | --- | --- | --- |
 | Scripting | `ScriptSystem` | Play | | Script instances of the active `ScriptEngine` (null engine: no scripts). |
 | Animation | `AnimationSystem` | Play | After Scripting, Before Physics | Animators in `OnUpdate`: poses, root motion, attachments, events (see [Animation](#animation)). |
+| World | `WorldStreamingSystem` | Play, Simulate | After Scripting, Before Physics | Streams the cells of the scene's world in `OnUpdate` (see [World partition](#world-partition)). |
 | Physics | `PhysicsSystem` | Play, Simulate | After Scripting | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
 | Audio | `AudioSystem` | Play | After Physics | Sources and listener, in `OnLateUpdate` after scripts and physics. |
 
@@ -631,15 +634,14 @@ are, in update order:
 - **Per-frame calls.** A frame calls `OnUpdate`, `OnFixedUpdate` and `OnLateUpdate` only on the systems whose descriptor
   asks for them (`SceneSystemDescriptor::CallsUpdate`, `CallsFixedUpdate`, `CallsLateUpdate`; all three for a descriptor
   built by hand). `MakeSceneSystemDescriptor<T>` sets them from the callbacks `T` overrides, told apart at compile time by
-  the type of `&T::OnUpdate`, so the built-ins cost an idle play frame seven calls (Scripting all three, Animation
-  `OnUpdate`, Physics `OnUpdate` and `OnFixedUpdate`, Audio `OnLateUpdate`) and a new system adds only the phases it uses
+  the type of `&T::OnUpdate`, so the built-ins cost an idle play frame eight calls (Scripting all three, Animation and
+  World `OnUpdate`, Physics `OnUpdate` and `OnFixedUpdate`, Audio `OnLateUpdate`) and a new system adds only the phases it uses
   (`Perf.Scene.IdlePlayFrame1M`). `OnUpdateRuntime` walks one list of systems per phase, built when the scene starts. A
   paused frame (no step due) calls `OnPausedUpdate` instead (`CallsPausedUpdate`; of the built-ins only Animation's), for
   work the paused frame shows that advances no time.
 - **Profiling.** A system's start and update callbacks run in the frame profiler stage its descriptor names
-  (`SceneSystemDescriptor::ProfileStage`: `Scene.Scripts`, `Scene.Animation`, `Scene.Physics`, `Scene.Audio`; empty: not
-  timed on its own),
-  resolved when the scene starts; scenes updated outside a profiled frame (tests) skip the stages altogether.
+  (`SceneSystemDescriptor::ProfileStage`: `Scene.Scripts`, `Scene.Animation`, `World.Streaming`, `Scene.Physics`,
+  `Scene.Audio`; empty: not timed on its own), resolved when the scene starts; scenes updated outside a profiled frame (tests) skip the stages altogether.
 
 ```text
 OnRuntimeStart(mode)   reset time, pause, steps and requests; create the systems the mode runs;
@@ -737,7 +739,8 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   the owner, until every step returned true: with `SceneLoadOptions::PrepareSystems`, which the owners of scenes that
   will run set (`GameRuntime` for every scene it loads, `EditorContext::SwitchRuntimeScene`; never `scene.open`, whose
   scene is edited), first the scene systems' hooks (`SceneSystemDescriptor::PrepareLoadedScene`), in update order and
-  one after the other (physics builds the bodies, `PhysicsSystem::PrepareLoadedScene`, a slice of 8,192 owners at a time
+  one after the other (the World system loads a world's start cells, `WorldStreamingSystem::PrepareLoadedScene`, see
+  World partition; physics then builds the bodies, `PhysicsSystem::PrepareLoadedScene`, a slice of 8,192 owners at a time
   in parallel, into a world it keeps as the scene's prepared state, `Scene::SetPreparedState`, and adopts when the scene
   starts, so the frame the scene starts in builds no body); then `SceneLoadOptions::Prepare`: owners that render the
   scenes they load, the editor with a GPU and `StrataRuntime` with a window (`GameRuntimeOptions::PrepareRenderScenes`),
@@ -835,6 +838,7 @@ which means the module is not in the build or its system does not run in this mo
 | `IPhysicsQueries`: raycasts and overlaps | `PhysicsSystem` | script host (`Physics`) |
 | `ICharacterControl`: character controllers' walk velocity, jumps, teleports, root motion and state | `PhysicsSystem` | script host (`CharacterController`), animation's root motion |
 | `IPhysicsCapacity`: bodies against the capacity, waiting bodies, the last update's builds and destructions, growths, reserved bytes; room reserved ahead of a load | `PhysicsSystem` | the world streamer, the editor (Streaming panel, status bar, `physics.stats`), games' perf logs, tests |
+| `IWorldStreaming`: cell requests around a point, whether a region is loaded, layers on and off, streaming statistics | `WorldStreamingSystem` | games' scripts (prefetching before a teleport), the editor, games' perf logs, tests |
 | `IAudioPlayback`: sources and one-shots | `AudioSystem` (an adapter object) | script host (`AudioSource`, `Audio`) |
 | `ISkinningPoses`: each animator's pose (model-space joint matrices with a version), and which animators renderers drew | `AnimationSystem`; the editor's pose preview for edited scenes | `RenderScene` (palettes of skinned meshes), `SceneRenderer` (reports the animators of what it drew) |
 | `IAnimatorControl`: play, cross-fade, parameters, speed, state queries, joint transforms | `AnimationSystem` | script host (`Animator`), tools and tests |
@@ -1982,6 +1986,30 @@ of the owner's: dirty or selected cells, requests).
   the entities the cells' slices created and destroyed since its last update, the cells evaluated, and a state version
   for caches such as the cell map), `GetCellStates` (every cell's state, sub-scene, entities and error) and
   `IsLoadedAround` (every existing cell of every enabled layer within a radius is loaded).
+
+**Components** (`World/WorldComponents.h`). `WorldComponent` (`World`: the World asset; `DistanceScale`, 0.1-10: a
+quality knob multiplying every layer's streaming distance) makes a scene a world's persistent scene; the first active
+one in hierarchy order counts. `StreamingSourceComponent` (`Enabled`, `Radius`: 0 for each layer's distance, `Layers`:
+comma-separated names, empty for every enabled layer, unknown names warned about once, `Priority` -100 to 100, `ViewBias`
+0-1) marks the points cells stream around, facing their -Z axis; without an active one, the primary camera is the source.
+Cell membership needs no component of its own: a loaded cell is a sub-scene whose source is the cell's scene, its
+top-level entities carry the runtime-only `SubSceneComponent`.
+
+**The World system** (`World/WorldStreamingSystem.h`, "World", After Scripting, Before Physics, Play and Simulate, stage
+`World.Streaming`). Each update it checks the `WorldComponent` storage (a scene without one costs nothing more), gathers
+the active sources through their world transforms (else the primary camera) and the requests, and runs a
+`WorldStreamer`. `OnRuntimeStart` adopts the cells already loaded (a prepared start's, a play copy's). It offers
+`IWorldStreaming`: `RequestCellsAround(position, radius)` (a temporary source of priority 100 until `ReleaseCells` or the
+end of play; radius 0 asks for the cells at the position), `IsLoadedAround`, `SetLayerEnabled`/`IsLayerEnabled` by name
+and `GetStats`. A scene that stops naming a world unloads its cells.
+
+**A world's start.** The system's preparation hook (`WorldStreamingSystem::PrepareLoadedScene`, run while a scene loaded
+with `SceneLoadOptions::PrepareSystems` is `Preparing`) loads, around the scene's sources, the cells of the layers flagged
+`LoadBeforeStart`, advancing them with `Scene::UpdateSubScenes` within the frame's budget, and returns once they are
+loaded or failed; physics' hook then builds their bodies and the renderer's preparation their proxies. The game thus
+swaps in a world whose ground exists and has collision, while its loading scene plays. A world started without
+preparation (tools and tests calling `OnRuntimeStart`) streams its start cells over its first frames;
+`WorldStreamingSystem::WaitForStartCells` waits for them.
 
 ## Scripting
 

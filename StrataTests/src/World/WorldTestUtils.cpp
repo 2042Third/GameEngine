@@ -165,6 +165,9 @@ namespace Strata::Tests
 		if (specification.Index)
 			data.Index = std::move(index);
 		addScene(world.Persistent, "Scenes/Persistent.stscene", ToBytes(SceneSerializer::Serialize(persistent)));
+		// Its WorldComponent references the world, as a pack's table records it.
+		if (specification.BuildPersistent)
+			sources.back().Dependencies.push_back(world.World);
 
 		std::string error;
 		REQUIRE_MESSAGE(data.Validate(&error), error);
