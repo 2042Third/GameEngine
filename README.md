@@ -17,50 +17,67 @@ message with what to install and where its log is); [Docs/Releases/](Docs/Releas
 ## Features
 
 - **Engine core:** an entity-component system (EnTT) with reflection-driven components, hierarchy and
-  prefabs, a job system, and UTF-8 file handling.
-- **Assets:** stable handles stored in `.meta` sidecars, cached imports that are redone when sources change,
-  hot reload, asynchronous streaming with GPU upload budgets, and asset packs for shipped games.
-  Importers cover glTF 2.0 models, textures (PNG, JPEG, TGA, BMP, PSD, GIF, Radiance HDR), audio
-  (WAV, MP3, FLAC, Ogg Vorbis) and TrueType fonts (validated before use).
-- **Rendering:** physically based shading with image-based lighting from HDR environment maps,
+  prefabs, a job system, and UTF-8 file handling. Scenes hold up to 1,048,575 entities and a frame costs what changed
+  (transforms, activity and lookups are cached); an always-on frame profiler times the stages of every frame.
+- **Assets:** stable handles stored in `.meta` sidecars, cached imports that run in the background and are redone when
+  sources change, hot reload, and asynchronous streaming within memory budgets. Textures are block-compressed on import
+  (BC7, BC1, BC4, BC5) and stream mip by mip, from their smallest levels up to the resolution the screen needs. Shipped
+  games read compressed, checksummed asset packs by byte range, optionally pruned to what their scenes use. Importers
+  cover glTF 2.0 models (also meshopt-compressed, with skins and animations), textures (PNG, JPEG, TGA, BMP, PSD, GIF,
+  Radiance HDR), audio (WAV, MP3, FLAC, Ogg Vorbis) and TrueType fonts (validated before use).
+- **Scenes:** scenes load in the background, in the editor and in games. Additive sub-scenes stream in slices of
+  entities per frame and unload in one step, prefabs compile into prototypes that spawn many instances in one call, and
+  placed instances stay linked to their prefab (apply, revert, unpack).
+- **Rendering:** physically based shading with image-based lighting from HDR environment maps or a procedural sky,
   clustered point and spot lights, cascaded soft shadows (PCSS), ground-truth ambient occlusion, HDR with
-  automatic exposure, bloom, tone mapping and FXAA, signed-distance-field text, and editor overlays (grid,
-  selection outlines, debug shapes).
+  automatic exposure, bloom, tone mapping, color grading and FXAA, GPU skinning, signed-distance-field text, and editor
+  overlays (grid, selection outlines, debug shapes). A persistent render scene with a spatial index culls what is out
+  of view and uploads only what changed, and instancing works across materials.
 - **Physics:** Jolt rigid bodies with box, sphere, capsule and mesh colliders, triggers, collision events,
-  raycasts and overlap queries.
+  raycasts and overlap queries, named collision layers, and character controllers that climb steps and slopes, ride
+  moving ground and push bodies. When the fixed steps cannot keep up with real time, the game slows down instead of
+  falling further behind.
 - **Audio:** miniaudio playback with spatial sources, a listener that follows the camera or a listener
   component, and one-shot sounds.
-- **Scripting:** game logic in C++ script modules built against a small SDK and a C ABI, so they never link
-  the engine. Scripts create, change and destroy entities and components, spawn prefabs, read input, drive
-  physics (forces, velocities, raycasts, collision and trigger callbacks), play audio, and load scenes or
-  quit the game. Script crashes (access violations, exceptions, and on Windows aborts) disable the script
-  instead of taking down the editor or the game, and modules hot reload while the game plays, keeping their
-  fields.
-- **Editor:** dockable panels (viewport with gizmos, hierarchy, inspector, content browser, console) in its own
-  "Bedrock" look (Inter and JetBrains Mono type, Lucide icons, sharp at any display scale),
-  undo/redo for every edit, play and simulate modes, building and hot reloading game scripts, and game
-  export. Every operation is an editor command with a JSON Schema, so scripts, tests and AI agents use the
-  same API as the UI.
-- **Automation:** the editor serves its commands over a local, token-authenticated JSON-RPC connection.
-  `StrataCLI` drives it from the command line and is also an MCP server, so AI agents can build a game
-  from scratch without anyone touching the editor.
+- **Animation:** skeletons, clips and skinned meshes from glTF, and animation controllers (`.stanimator`) with states,
+  parameters, cross-fades, events, root motion and joints that other entities attach to, evaluated on the job threads
+  with the same results on any number of them.
+- **Scripting:** game logic in C++ script modules built against a small SDK and a C ABI, so they never link the engine.
+  Scripts create, change and destroy entities and components, spawn prefabs, load sub-scenes, read input (keyboard,
+  mouse, gamepads, cursor modes), drive physics (forces, velocities, raycasts, collision and trigger callbacks,
+  character controllers) and animators, play audio, set the game's window mode, keep save files, and load scenes or quit
+  the game. Script crashes (access violations, exceptions, and on Windows aborts) disable the script instead of taking
+  down the editor or the game, and modules hot reload while the game plays, keeping their fields.
+- **Editor:** a launcher (templates, samples, recent projects) and dockable panels (viewport with gizmos, hierarchy,
+  inspector that edits many entities at once, asset tab, content browser with thumbnails, console, problems, activity,
+  streaming and performance) in its own "Bedrock" look (Inter and JetBrains Mono type, Lucide icons, sharp at any
+  display scale), undo/redo for every edit, autosave and crash recovery, deletes that go to the project's trash, play
+  and simulate modes, game scripts made, built and hot reloaded from the editor (opened in your code editor, with CMake
+  presets for IDEs), and game export in the background. Every operation is an editor command with a JSON Schema, so
+  scripts, tests and AI agents use the same API as the UI.
+- **Automation:** the editor serves its commands over a local, token-authenticated JSON-RPC connection. `StrataCLI`
+  drives it from the command line and is also an MCP server, so AI agents can build a game from scratch without anyone
+  touching the editor. Agents play-test with simulated input and viewport captures, and the Activity panel lists every
+  command with who ran it and exports a session as a command script that repeats it.
 - **Runtime:** plays exported games (`<Game>` executable, `.stgame` manifest, `.stpak` asset pack and the
-  game's script module). With `--headless` it runs the simulation without a window or GPU, at 60 frames per second.
+  game's script module), which can play a loading scene while the start scene loads. With `--headless` it runs the
+  simulation without a window or GPU, at 60 frames per second.
 
 ## Building
 
 ```sh
 git clone --recursive https://github.com/2042Third/GameEngine.git
 cd GameEngine
-cmake --preset windows          # or windows-vs2022, linux, macos
-cmake --build --preset windows-release
-ctest --preset windows-release  # add -LE gpu on machines without a GPU
+cmake --preset <platform>                   # windows, windows-vs2022, linux or macos
+cmake --build --preset <platform>-release
+ctest --preset <platform>-release -LE perf  # -LE "gpu|perf" on machines without a GPU
 ```
 
+The `perf` tests compare timings with budgets measured on one reference machine, so other machines leave them out.
 Requirements: CMake 3.25+, a C++20 compiler (MSVC 19.40+, GCC 13+, Clang 17+ or Apple Clang 15+) and a
-Vulkan 1.2+ driver. The Vulkan SDK is optional (it provides the validation layers used by Debug
-builds). Linux also needs the X11, Wayland and GTK 3 development packages. `Docs/DeveloperGuide.md` lists them
-("Building").
+Vulkan 1.2+ driver; macOS runs Vulkan on Metal through MoltenVK (the Vulkan SDK, or Homebrew's `molten-vk` and
+`vulkan-loader`). The Vulkan SDK is optional elsewhere (it provides the validation layers used by Debug builds). Linux
+also needs the X11, Wayland and GTK 3 development packages. `Docs/DeveloperGuide.md` lists them ("Building").
 
 Binaries land in `build/<preset>/bin/<Config>/`:
 
@@ -77,13 +94,13 @@ Binaries land in `build/<preset>/bin/<Config>/`:
    template (Basic 3D starts lit, with a camera, a sun, a sky and a ground), a name and a location. The project gets a
    `Scripts/` folder with a CMake project for its C++ scripts. Drop models, textures and sounds onto the window to
    import them.
-2. Build scenes in the viewport, hierarchy and inspector. Write scripts in `Scripts/`, build them with
-   **Scripts > Build Scripts** (Ctrl+B), attach them in the inspector, and try the scene with **Play**. Rebuilding
-   while the game plays hot reloads the scripts.
-3. Choose the start scene (**File > Set as Start Scene**) and export with the `project.export` command. The output
-   folder contains everything the game needs. Run it with `<Game> --headless --frames 600` (in PowerShell add
-   `| Write-Output` to wait for it) to check that it plays without errors, or with
-   `--windowed --frames 120 --screenshot shot.png` to see it.
+2. Build scenes in the viewport, hierarchy and inspector. Write scripts in `Scripts/` (**Scripts > New Script...**
+   starts one), build them with **Scripts > Build Scripts** (Ctrl+B), attach them in the inspector, and try the scene
+   with **Play**, which builds changed scripts first. Rebuilding while the game plays hot reloads the scripts.
+3. Choose the start scene (**File > Set as Start Scene**) and export with **File > Export Game...** (or the
+   `project.export` command). The output folder contains everything the game needs. Run it with
+   `<Game> --headless --frames 600` (in PowerShell add `| Write-Output` to wait for it) to check that it plays without
+   errors, or with `--windowed --frames 120 --screenshot shot.png` to see it.
 
 Games can be play-tested without a person: while a game runs in the editor, the `input.key`, `input.mouseButton`,
 `input.mouseMove` and `input.scroll` commands press keys and buttons the way a player would, and `viewport.capture`
