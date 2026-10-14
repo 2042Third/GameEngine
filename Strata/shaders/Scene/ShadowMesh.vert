@@ -34,7 +34,7 @@ void main()
 #else
 	vec3 localPosition = a_Position;
 #endif
-	vec4 position = u_Cascades[u_Shadow.Cascade].ViewProjection * vec4(TransformPosition(instance, localPosition), 1.0);
+	vec4 position = u_Cascades[u_Shadow.Cascade].ViewProjection * vec4(TransformPositionRelative(instance, localPosition), 1.0);
 	// Pancaking: casters between the light and the cascade's near plane are flattened onto it (reversed-Z: the near
 	// plane is depth 1) instead of being clipped, so they still shadow the cascade. The projection is orthographic.
 	position.z = min(position.z, position.w);

@@ -25,6 +25,9 @@
 // one-channel textures that stand for gray (sampled as (r, r, r, 1)).
 #define ST_TEXTURE_SLOT_GRAYSCALE 0x80000000u
 
+// Scene shaders work in camera-relative world space: world space with the camera at the origin (TransformPositionRelative),
+// so what is near the camera keeps full precision however far from the world's origin it is. View, ViewProjection and their
+// inverses are rotation-only (the view's translation is zero); CameraPosition is the camera's world position.
 struct FrameConstants
 {
 	mat4 View;
@@ -129,10 +132,12 @@ vec3 SkinNormal(JointMatrix skin, vec3 normal)
 }
 #endif
 
-vec3 TransformPosition(InstanceData instance, vec3 position)
+// A point of the instance in camera-relative world space: the instance's translation minus the camera's position is taken
+// before anything is added to it, so vertices near the camera keep full precision far from the world's origin.
+vec3 TransformPositionRelative(InstanceData instance, vec3 position)
 {
-	vec4 point = vec4(position, 1.0);
-	return vec3(dot(instance.WorldRows[0], point), dot(instance.WorldRows[1], point), dot(instance.WorldRows[2], point));
+	vec3 translation = vec3(instance.WorldRows[0].w, instance.WorldRows[1].w, instance.WorldRows[2].w) - u_Frame.CameraPosition.xyz;
+	return vec3(dot(instance.WorldRows[0].xyz, position), dot(instance.WorldRows[1].xyz, position), dot(instance.WorldRows[2].xyz, position)) + translation;
 }
 
 vec3 TransformDirection(InstanceData instance, vec3 direction)
@@ -178,7 +183,7 @@ layout(set = 0, binding = ST_SRV(1), std430) readonly buffer MaterialBuffer
 
 struct LightData
 {
-	vec4 PositionRange;  // xyz: world position, w: range
+	vec4 PositionRange;  // xyz: camera-relative world position, w: range
 	vec4 Color;          // rgb: color * intensity, w: 1 / range^2
 	vec4 DirectionType;  // xyz: direction the light travels, w: type (ST_LIGHT_*)
 	vec4 SpotAngles;     // x: cos(inner cone), y: cos(outer cone)
@@ -204,11 +209,11 @@ layout(set = 0, binding = ST_SRV(11)) uniform texture2D u_AmbientOcclusion;
 
 // Direction from a surface point toward the viewer. Orthographic projections view every pixel along the same
 // direction, perspective ones from the camera position.
-vec3 GetViewVector(vec3 worldPosition)
+vec3 GetViewVector(vec3 relativePosition)
 {
 	if (u_Frame.CameraForward.w > 0.5)
 		return -u_Frame.CameraForward.xyz;
-	return normalize(u_Frame.CameraPosition.xyz - worldPosition);
+	return normalize(-relativePosition);
 }
 
 // Environment rotation around +Y (EnvironmentParams.y radians).

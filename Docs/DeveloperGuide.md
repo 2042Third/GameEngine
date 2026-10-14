@@ -1814,6 +1814,19 @@ and `AudioSystem`, the built-in "Audio" scene system.
   with the scene (`EnsureCullBuffers`); `SceneRendererGPUStats::Overflow` counts instances there was no room for (0
   unless a buffer could not grow).
 
+### Camera-relative space
+
+- Scene shaders work in camera-relative world space: world space with the camera at the origin (Docs/Architecture.md,
+  "Render scene"). `FrameConstants::View`, `ViewProjection` and their inverses are rotation-only
+  (`SceneRenderer::GetRelativeView`); `CameraPosition` stays the camera's world position for the few shaders that need
+  it (the grid). Vertex shaders place points with `TransformPositionRelative` (the instance's translation minus the camera
+  first), and everything else positioned is uploaded relative to the camera, the subtraction done in double on the CPU:
+  light positions (`LightData::PositionRange`), the clusters' light bounds, debug lines, world-space text, the cascades'
+  boxes (placed and texel-snapped in absolute light space in double, `CascadeBox::Relative*`). A new shader or upload of
+  positions follows the same rule; `InstanceData` stays world space and 64 bytes. The GPU's culling tests relative bounds
+  against relative planes; the CPU's (`SpatialIndex`) and the screen-size and LOD measures stay in world space, the same
+  on both paths. `GPU.SceneRenderer.CameraRelative` renders a scene 20 and 100 km from the origin against the origin's.
+
 ### Skinned meshes
 
 - **Skinned meshes** (Docs/Architecture.md, "Render scene"): a mesh renderer with a `SkinComponent` is posed by the

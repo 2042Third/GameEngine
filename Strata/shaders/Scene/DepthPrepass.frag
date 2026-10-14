@@ -7,7 +7,7 @@
 // materials are tested here; the forward pass then shades only the visible surface. With ST_NO_ENTITY_IDS (registered as
 // Scene/DepthPrepassNoEntityIDs.frag) it writes no entity ids, for renderers without an entity-ID buffer.
 
-layout(location = 0) in vec3 v_WorldPosition;
+layout(location = 0) in vec3 v_RelativePosition;
 layout(location = 1) in vec3 v_Normal;
 layout(location = 2) in vec4 v_Tangent;
 layout(location = 3) in vec2 v_TexCoord;

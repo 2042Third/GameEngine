@@ -117,7 +117,7 @@ namespace Strata::RenderData
 	// What a frame's culling tests and sizes (a constant buffer, std140).
 	struct CullConstants
 	{
-		glm::vec4 Planes[6] = {};                    // The view frustum, inward (Frustum::GetPlanes)
+		glm::vec4 Planes[6] = {};                    // The view frustum in camera-relative space, inward (Frustum::GetPlanes)
 		glm::vec4 CameraPosition = glm::vec4(0.0f);  // xyz; w: 1 for orthographic cameras
 		// x: LODThreshold, y: tan(vertical FOV / 2) (perspective) or the vertical extent (orthographic), z: the near plane,
 		// w: the smallest projected size drawn in pixels (0: no screen-size culling)
@@ -126,12 +126,13 @@ namespace Strata::RenderData
 		// ViewScale::Near), z: the prefetch distance (0: none), w: SceneRendererSpecification::HighPriorityScreenFraction
 		glm::vec4 ViewParameters = glm::vec4(0.0f);
 		glm::mat4 LightView = glm::mat4(1.0f);
-		glm::mat4 ViewProjection = glm::mat4(1.0f);  // The view's, for the occlusion test's screen rectangles
+		glm::mat4 ViewProjection = glm::mat4(1.0f);  // The view's (camera-relative), for the occlusion test's screen rectangles
 		// x, y: the depth buffer's size in pixels (the depth pyramid's level 0 is half of it), z: the pyramid's levels,
 		// w: 1 when the view is occlusion culled
 		glm::vec4 OcclusionParameters = glm::vec4(0.0f);
-		glm::vec4 CascadeBoxes[c_CullMaxCascades] = {};      // Light view space: min.xy, max.xy
-		glm::vec4 CascadeParameters[c_CullMaxCascades] = {}; // x: the far side's z, y: the smallest light-space extent drawn
+		// Light view space relative to the camera's position in it (as the culling's positions are): min.xy, max.xy
+		glm::vec4 CascadeBoxes[c_CullMaxCascades] = {};
+		glm::vec4 CascadeParameters[c_CullMaxCascades] = {}; // x: the far side's z (relative), y: the smallest light-space extent drawn
 		uint32_t ProxyCount = 0;
 		uint32_t CascadeCount = 0;
 		uint32_t LODCapacity = 0;        // LOD records (GeometryPool::GetLODCapacity): records per bucket in the count arrays

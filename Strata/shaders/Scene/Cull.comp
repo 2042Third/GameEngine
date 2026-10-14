@@ -141,7 +141,7 @@ void MarkProxyMaterials(GPUProxy proxy, uint use, bool sized, float pixels, Geom
 	}
 }
 
-// Whether everything in the screen rectangle of the box lies in front of it in the first phase's depth (the depth pyramid's
+// Whether everything in the screen rectangle of the (camera-relative) box lies in front of it in the first phase's depth (the depth pyramid's
 // farthest depth there is nearer than the box's nearest point, reversed-Z). Boxes that reach the camera's plane are never.
 bool IsOccluded(vec3 boxMin, vec3 boxMax)
 {
@@ -239,7 +239,10 @@ void CullProxy(uint proxyIndex)
 			MarkProxyMaterials(proxy, ST_FEEDBACK_PREFETCH, false, 0.0, entry);
 		}
 	}
-	if (!IsBoxInFrustum(proxy.WorldMin, proxy.WorldMax))
+	// Camera-relative: the frustum's planes and the box, so precision does not depend on the distance from the origin.
+	vec3 relativeMin = proxy.WorldMin - u_Cull.CameraPosition.xyz;
+	vec3 relativeMax = proxy.WorldMax - u_Cull.CameraPosition.xyz;
+	if (!IsBoxInFrustum(relativeMin, relativeMax))
 		return;
 	float pixels = fraction * u_Cull.ViewParameters.x;
 	if (u_Cull.LODParameters.w > 0.0 && pixels < u_Cull.LODParameters.w)
@@ -268,7 +271,9 @@ void CullProxy(uint proxyIndex)
 		return;
 	// The local bounds in light space (AABB::Transformed of the light view times the world transform).
 	CullInstance first = u_CullInstances[proxy.FirstInstance];
+	// Camera-relative, as the cascades are (their boxes are relative to the camera's light-space position).
 	mat4 world = transpose(mat4(first.WorldRows[0], first.WorldRows[1], first.WorldRows[2], vec4(0.0, 0.0, 0.0, 1.0)));
+	world[3].xyz -= u_Cull.CameraPosition.xyz;
 	mat4 lightWorld = u_Cull.LightView * world;
 	vec3 localCenter = (proxy.LocalMin + proxy.LocalMax) * 0.5;
 	vec3 localExtents = (proxy.LocalMax - proxy.LocalMin) * 0.5;
@@ -353,10 +358,12 @@ void CullSecondPhase(uint proxyIndex)
 	vec3 center = (proxy.WorldMin + proxy.WorldMax) * 0.5;
 	vec3 extents = (proxy.WorldMax - proxy.WorldMin) * 0.5;
 	float fraction = GetScreenFraction(center, length(extents));
-	if (tested && IsBoxInFrustum(proxy.WorldMin, proxy.WorldMax)
+	vec3 relativeMin = proxy.WorldMin - u_Cull.CameraPosition.xyz;
+	vec3 relativeMax = proxy.WorldMax - u_Cull.CameraPosition.xyz;
+	if (tested && IsBoxInFrustum(relativeMin, relativeMax)
 		&& !(u_Cull.LODParameters.w > 0.0 && fraction * u_Cull.ViewParameters.x < u_Cull.LODParameters.w))
 	{
-		visible = !IsOccluded(proxy.WorldMin, proxy.WorldMax);
+		visible = !IsOccluded(relativeMin, relativeMax);
 		if (!visible)
 			Count(ST_COUNTER_OCCLUDED);
 	}

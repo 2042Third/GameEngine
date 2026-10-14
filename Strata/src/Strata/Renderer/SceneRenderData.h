@@ -74,9 +74,10 @@ namespace Strata
 		struct CascadeFitConstants
 		{
 			glm::mat4 LightView = glm::mat4(1.0f);
-			glm::vec4 Boxes[c_MaxCascades] = {};     // Light view space: min.xy, max.xy
+			// Light view space relative to the camera's position in it (the shaders' positions are camera-relative): min.xy, max.xy
+			glm::vec4 Boxes[c_MaxCascades] = {};
 			glm::vec4 Depths[c_MaxCascades] = {};    // x: the far side's z, y: the sphere's near side's z, z: world units per texel, w: the sphere's radius
-			glm::vec4 CasterNearZ = glm::vec4(0.0f); // Per cascade: the nearest drawn caster's z, as the CPU found it
+			glm::vec4 CasterNearZ = glm::vec4(0.0f); // Per cascade: the nearest drawn caster's (relative) z, as the CPU found it
 			uint32_t CascadeCount = 0;
 			uint32_t CasterDepthsFromGPU = 0;        // 1: the nearest casters come from the GPU's culling instead of CasterNearZ
 			float MaxCasterDistance = 0.0f;          // How far beyond its sphere a cascade's depth range may reach toward the light
@@ -148,7 +149,7 @@ namespace Strata
 
 		struct LightData
 		{
-			glm::vec4 PositionRange; // xyz: world position, w: range
+			glm::vec4 PositionRange; // xyz: camera-relative world position (as uploaded), w: range
 			glm::vec4 Color;         // rgb: color * intensity, w: 1 / range^2
 			glm::vec4 DirectionType; // xyz: direction the light travels, w: type
 			glm::vec4 SpotAngles;    // x: cos(inner), y: cos(outer)

@@ -17,7 +17,7 @@
 layout(early_fragment_tests) in;
 #endif
 
-layout(location = 0) in vec3 v_WorldPosition;
+layout(location = 0) in vec3 v_RelativePosition;
 layout(location = 1) in vec3 v_Normal;
 layout(location = 2) in vec4 v_Tangent; // w: bitangent sign (already flipped for mirrored instances)
 layout(location = 3) in vec2 v_TexCoord;
@@ -69,9 +69,9 @@ void main()
 
 	vec4 metallicRoughness = SampleMaterialTexture(material.MetallicRoughnessMap, uv);
 	SurfaceData surface;
-	surface.Position = v_WorldPosition;
+	surface.Position = v_RelativePosition;
 	surface.Normal = GetShadingNormal(material, uv);
-	surface.View = GetViewVector(v_WorldPosition);
+	surface.View = GetViewVector(v_RelativePosition);
 	surface.Albedo = baseColor.rgb;
 	surface.Alpha = baseColor.a;
 	surface.Metallic = clamp(material.Metallic * metallicRoughness.b, 0.0, 1.0);
@@ -79,7 +79,7 @@ void main()
 	surface.Occlusion = mix(1.0, SampleMaterialTexture(material.OcclusionMap, uv).r, material.OcclusionStrength);
 	surface.Emissive = emissive;
 
-	float viewDepth = -(u_Frame.View * vec4(v_WorldPosition, 1.0)).z;
+	float viewDepth = -(u_Frame.View * vec4(v_RelativePosition, 1.0)).z;
 	vec3 color = vec3(0.0);
 	if (u_Frame.DirectionalLightDirection.w > 0.0)
 	{
@@ -87,7 +87,7 @@ void main()
 		if (u_Frame.ShadowParams.w > 0.0)
 		{
 			vec3 geometricNormal = normalize(v_Normal) * (gl_FrontFacing ? 1.0 : -1.0);
-			shadow = SampleDirectionalShadow(v_WorldPosition, geometricNormal, viewDepth, gl_FragCoord.xy);
+			shadow = SampleDirectionalShadow(v_RelativePosition, geometricNormal, viewDepth, gl_FragCoord.xy);
 		}
 		color += EvaluateLight(surface, -u_Frame.DirectionalLightDirection.xyz, u_Frame.DirectionalLightColor.rgb) * shadow;
 	}

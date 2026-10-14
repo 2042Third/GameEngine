@@ -517,6 +517,8 @@ namespace Strata
 
 		// A cascade: a box in light view space (looking along the light: -Z points away from it). Its square covers the
 		// bounding sphere of a view frustum slice; its depth range is fitted to the casters.
+		// A cascade's square and depth in light view space: absolute (the CPU's caster queries and tests), and relative to the
+		// camera's light-space position (what the GPU culls and fits with, Docs/Architecture.md, "Camera-relative rendering").
 		struct CascadeBox
 		{
 			glm::vec2 Min = glm::vec2(0.0f);
@@ -525,6 +527,10 @@ namespace Strata
 			float SphereNearZ = 0.0f; // Near side (toward the light)
 			float WorldPerTexel = 0.0f;
 			float Radius = 0.0f;
+			glm::vec2 RelativeMin = glm::vec2(0.0f);
+			glm::vec2 RelativeMax = glm::vec2(0.0f);
+			float RelativeFarZ = 0.0f;
+			float RelativeSphereNearZ = 0.0f;
 		};
 
 		// How large a material slot's draws are on screen (VisibleMaterialUse): the largest projected size, and the most
@@ -783,7 +789,9 @@ namespace Strata
 		void CreateCullResources();
 		// The frame's culling inputs: the mesh and material tables, the buckets the frame can have and their draw slots, and
 		// the constants (after the extraction resolved the frame's assets and the cascades).
-		void PrepareGPUCulling(const RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum);
+		void PrepareGPUCulling(const RenderScene& renderScene, const SceneCamera& camera);
+		// The camera's view without its translation: what scene shaders transform camera-relative positions with.
+		static glm::mat4 GetRelativeView(const SceneCamera& camera);
 		// Sizes the culling buffers for the frame; `outRecreated` when one was replaced (the binding sets follow).
 		bool EnsureCullBuffers(bool& outRecreated);
 		bool CreateCullBindingSet();
@@ -823,7 +831,7 @@ namespace Strata
 		void CreateOverlayResources();
 		static bool HasOverlays(const SceneRenderOptions& options);
 		// Draws the overlays into the output texture (which must hold the finished image); false when GPU resources failed.
-		bool RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneRenderOptions& options, bool drawText);
+		bool RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, bool drawText);
 		void DrawDebugLines(nvrhi::ICommandList* commandList, DebugDrawDepth depth, uint32_t firstVertex, uint32_t vertexCount);
 		// The tints of SceneRenderOptions::EntityTints (StatusTint.frag); false when GPU resources failed.
 		bool DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport);
@@ -929,6 +937,8 @@ namespace Strata
 		nvrhi::BindingSetHandle m_CascadeFitBindingSet;
 		nvrhi::ComputePipelineHandle m_CascadeFitPipeline;
 		RenderData::CascadeFitConstants m_CascadeFit;
+		glm::dvec3 m_CameraLightPosition = glm::dvec3(0.0); // The camera's position in light view space (FindShadowCasters)
+		std::vector<DebugLineVertex> m_DebugLineScratch; // The frame's debug lines, camera-relative
 
 		nvrhi::TextureHandle m_DepthTexture;
 		nvrhi::TextureHandle m_NormalTexture;

@@ -59,7 +59,7 @@ vec2 ReceiverDepthGradient(mat4 cascadeViewProjection, vec3 normal)
 }
 
 // Fraction of light reaching the surface (1 = fully lit); `normal` is the receiver's geometric normal (facing the viewer).
-float SampleDirectionalShadow(vec3 worldPosition, vec3 normal, float viewDepth, vec2 pixel)
+float SampleDirectionalShadow(vec3 relativePosition, vec3 normal, float viewDepth, vec2 pixel)
 {
 	int cascade = SelectCascade(viewDepth);
 	if (cascade < 0)
@@ -68,7 +68,7 @@ float SampleDirectionalShadow(vec3 worldPosition, vec3 normal, float viewDepth, 
 	// Normal offset: push the lookup position off the surface by about a shadow texel to avoid acne.
 	vec4 cascadeData = u_Cascades[cascade].Parameters; // x: world units per texel, y: depth range, z: search distance (world units)
 	mat4 cascadeViewProjection = u_Cascades[cascade].ViewProjection;
-	vec3 offsetPosition = worldPosition + normal * cascadeData.x * u_Frame.ShadowBias.y;
+	vec3 offsetPosition = relativePosition + normal * cascadeData.x * u_Frame.ShadowBias.y;
 	vec4 lightClip = cascadeViewProjection * vec4(offsetPosition, 1.0);
 	vec3 lightPosition = lightClip.xyz / lightClip.w;
 	vec2 uv = NDCToUV(lightPosition.xy);

@@ -107,12 +107,12 @@ struct CullInstance
 
 struct CullConstants
 {
-	vec4 Planes[6];
-	vec4 CameraPosition;     // xyz; w: 1 for orthographic cameras
+	vec4 Planes[6];          // The view frustum in camera-relative space
+	vec4 CameraPosition;     // xyz: world position; w: 1 for orthographic cameras
 	vec4 LODParameters;      // x: LOD threshold, y: tan(fov / 2) or the vertical extent, z: near plane, w: smallest projected pixels
 	vec4 ViewParameters;     // x: viewport height in pixels, y: texture streaming's near distance, z: prefetch distance, w: high priority fraction
 	mat4 LightView;
-	mat4 ViewProjection;     // The view's, for the occlusion test's screen rectangles
+	mat4 ViewProjection;     // The view's (camera-relative), for the occlusion test's screen rectangles
 	vec4 OcclusionParameters; // xy: depth buffer size in pixels, z: depth pyramid levels, w: 1 when occlusion culled
 	vec4 CascadeBoxes[4];    // Light view space: min.xy, max.xy
 	vec4 CascadeParameters[4]; // x: far side z, y: smallest light-space extent drawn

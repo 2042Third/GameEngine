@@ -1688,13 +1688,19 @@ namespace Strata
 			}
 		}
 
+		// Uploaded camera-relative (the shaders' positions are), the subtraction in double so lights near a camera far from
+		// the origin keep their precision; the clusters' bounds are in view space.
 		m_Lights.clear();
 		m_LightBounds.clear();
+		const glm::mat3 viewRotation(camera.View);
+		const glm::dvec3 cameraPosition(camera.Position);
 		for (const LightCandidate& candidate : m_LightCandidates)
 		{
-			m_Lights.push_back(candidate.Data);
-			const glm::vec3 viewCenter = glm::vec3(camera.View * glm::vec4(glm::vec3(candidate.Bounds), 1.0f));
-			m_LightBounds.push_back(RenderData::LightBounds { glm::vec4(viewCenter, candidate.Bounds.w) });
+			RenderData::LightData light = candidate.Data;
+			light.PositionRange = glm::vec4(glm::vec3(glm::dvec3(glm::vec3(light.PositionRange)) - cameraPosition), light.PositionRange.w);
+			m_Lights.push_back(light);
+			const glm::vec3 relativeCenter(glm::dvec3(glm::vec3(candidate.Bounds)) - cameraPosition);
+			m_LightBounds.push_back(RenderData::LightBounds { glm::vec4(viewRotation * relativeCenter, candidate.Bounds.w) });
 		}
 		frame.LightCounts = glm::uvec4(static_cast<uint32_t>(m_Lights.size()), 0, 0, 0);
 
@@ -1795,6 +1801,11 @@ namespace Strata
 	bool SceneRenderer::IsCameraCut(const SceneCamera& camera) const
 	{
 		return !m_HasPreviousCamera || TextureStreamingPolicy::IsCameraCut(m_PreviousCameraPosition, m_PreviousCameraForward, camera.Position, GetViewDirection(camera));
+	}
+
+	glm::mat4 SceneRenderer::GetRelativeView(const SceneCamera& camera)
+	{
+		return glm::mat4(glm::mat3(camera.View));
 	}
 
 	void SceneRenderer::ReportTextureUse(const SceneCamera& camera)
@@ -1912,11 +1923,12 @@ namespace Strata
 		m_Stats.DeferredInstanceBytes = m_SceneGPU->GetDeferredBytes();
 		m_Stats.DeferredProxies = m_SceneGPU->GetDeferredProxies();
 
+		// Scene shaders work camera-relative (Include/Scene.glsl): the view's translation is left out of its matrices.
 		RenderData::FrameConstants frame = {};
-		frame.View = camera.View;
+		frame.View = GetRelativeView(camera);
 		frame.Projection = camera.Projection;
-		frame.ViewProjection = camera.Projection * camera.View;
-		frame.InverseView = glm::inverse(camera.View);
+		frame.ViewProjection = camera.Projection * frame.View;
+		frame.InverseView = glm::inverse(frame.View);
 		frame.InverseProjection = glm::inverse(camera.Projection);
 		frame.InverseViewProjection = glm::inverse(frame.ViewProjection);
 		frame.CameraPosition = glm::vec4(camera.Position, camera.Near);
@@ -1934,7 +1946,8 @@ namespace Strata
 		m_GPUDrivenFrame = IsGPUDriven();
 		m_Stats.GPUDriven = m_GPUDrivenFrame;
 		const auto extractionStart = std::chrono::steady_clock::now();
-		const Frustum frustum(frame.ViewProjection);
+		// The CPU's culling works in world space (the spatial index holds world bounds).
+		const Frustum frustum(camera.Projection * camera.View);
 		// What the frame requests: the GPU's visibility feedback where it can tell (SceneRendererSpecification::
 		// VisibilityFeedback), else the CPU's walk of the view.
 		if (IsCameraCut(camera))
@@ -1959,7 +1972,7 @@ namespace Strata
 		GatherShadowDraws(renderScene, camera, frame, !m_GPUDrivenFrame);
 		BuildDrawArguments();
 		if (m_GPUDrivenFrame)
-			PrepareGPUCulling(renderScene, camera, frustum);
+			PrepareGPUCulling(renderScene, camera);
 		ReportVisibleAnimators(scene);
 		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
 		bool degraded = false; // Rendered with a reported limitation: keep the error so it is not logged every frame
@@ -2161,7 +2174,7 @@ namespace Strata
 		tonemap.BloomAdditive = postProcess.BloomThreshold > 0.0f ? 1u : 0u;
 
 		TextRenderStats textStats;
-		const bool text = m_TextRenderer->Prepare(scene, m_ViewportSize, options.DrawScreenSpaceText, commandList, textStats);
+		const bool text = m_TextRenderer->Prepare(scene, m_ViewportSize, options.DrawScreenSpaceText, camera.Position, commandList, textStats);
 		m_Stats.Texts = textStats.Texts;
 		m_Stats.ScreenSpaceTexts = textStats.ScreenSpaceTexts;
 		m_Stats.HiddenScreenSpaceTexts = textStats.HiddenScreenSpaceTexts;
@@ -2220,7 +2233,7 @@ namespace Strata
 		{
 			gpuTimer.Next(gpuStages.Overlays);
 			commandList->beginMarker("Overlays");
-			const bool overlaysDrawn = RenderOverlays(commandList, scene, options, text);
+			const bool overlaysDrawn = RenderOverlays(commandList, scene, camera, options, text);
 			commandList->endMarker();
 			if (!overlaysDrawn)
 				degraded = true; // The image is complete without them; RenderOverlays reported why
@@ -2375,7 +2388,7 @@ namespace Strata
 		commandList->draw(nvrhi::DrawArguments().setVertexCount(vertexCount).setStartVertexLocation(firstVertex));
 	}
 
-	bool SceneRenderer::RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneRenderOptions& options, bool drawText)
+	bool SceneRenderer::RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, bool drawText)
 	{
 		if (!m_GridPipeline)
 		{
@@ -2463,10 +2476,14 @@ namespace Strata
 			bool recreated = false;
 			if (!EnsureBufferCapacity(m_DebugLineBuffer, tested.size() + onTop.size(), sizeof(DebugLineVertex), "DebugLines", recreated, BufferKind::Vertex))
 				return false;
-			if (!tested.empty())
-				commandList->writeBuffer(m_DebugLineBuffer, tested.data(), tested.size_bytes(), 0);
-			if (!onTop.empty())
-				commandList->writeBuffer(m_DebugLineBuffer, onTop.data(), onTop.size_bytes(), tested.size_bytes());
+			// Camera-relative, as the scene's shaders draw (the subtraction in double for lines far from the origin).
+			m_DebugLineScratch.assign(tested.begin(), tested.end());
+			m_DebugLineScratch.insert(m_DebugLineScratch.end(), onTop.begin(), onTop.end());
+			const glm::dvec3 cameraPosition(camera.Position);
+			for (DebugLineVertex& vertex : m_DebugLineScratch)
+				vertex.Position = glm::vec3(glm::dvec3(vertex.Position) - cameraPosition);
+			if (!m_DebugLineScratch.empty())
+				commandList->writeBuffer(m_DebugLineBuffer, m_DebugLineScratch.data(), m_DebugLineScratch.size() * sizeof(DebugLineVertex), 0);
 			testedVertices = static_cast<uint32_t>(tested.size());
 			onTopVertices = static_cast<uint32_t>(onTop.size());
 			m_Stats.DebugLines = (testedVertices + onTopVertices) / 2;

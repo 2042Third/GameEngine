@@ -1857,6 +1857,13 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   everything against an empty pyramid. Orthographic views work alike. Shadow cascades are not occlusion culled, and the
   CPU path does none; `SceneRendererGPUStats::OccludedProxies` (`renderStats.occludedProxies`) counts what the second
   phase found hidden. Visibility feedback still marks occluded proxies' assets as in view, so requests do not depend on it.
+- **Camera-relative rendering** (Docs/DeveloperGuide.md, "Camera-relative space"). Scene shaders work with the camera at
+  the origin: the frame's view matrices are rotation-only, vertex shaders subtract the camera's position from the
+  instance's translation before anything is added to it (`TransformPositionRelative`), and lights, the clusters' bounds,
+  debug lines, world-space text and the cascades are uploaded relative to the camera (subtracted in double; the cascades
+  texel-snapped in absolute light space in double first, so their edges stay still). Vertices near the camera keep full
+  precision however far from the origin it is, and the sky is drawn from a rotation-only ray. What remains is the scene's
+  own float32 transforms: entity origins quantize to 7.8 mm at 100 km (`InstanceData` stays world space, 64 bytes).
 - **Cascades fitted on the GPU** (`Scene/CascadeFit.comp`, `RenderData::CascadeFitConstants`, `CascadeData`). Each
   cascade's projection reaches from the far side of its view slice's bounding sphere to the nearest drawn caster toward
   the light (at most `c_MaxShadowCasterDistance` beyond the sphere; `ShadowMesh.vert` pancakes the casters beyond). One

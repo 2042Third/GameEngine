@@ -411,9 +411,14 @@ namespace Strata
 		const float aspect = static_cast<float>(m_ViewportSize.x) / static_cast<float>(m_ViewportSize.y);
 		const float tanHalfFOV = camera.Orthographic ? 0.0f : std::tan(camera.VerticalFOV * 0.5f);
 		const glm::mat4 inverseView = glm::inverse(camera.View);
+		// The slices are laid out around the camera (camera-relative), and placed in absolute light space in double, so the
+		// texel snapping stays stable however far the camera is from the origin.
+		const glm::mat3 cameraRotation(inverseView);
 		const glm::vec3 lightDirection = m_ShadowLight.Direction;
 		const glm::vec3 up = std::abs(lightDirection.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
 		m_LightView = glm::lookAt(glm::vec3(0.0f), lightDirection, up);
+		const glm::dmat3 lightRotation = glm::dmat3(glm::mat3(m_LightView));
+		m_CameraLightPosition = lightRotation * glm::dvec3(camera.Position);
 		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
 
 		// Each cascade's square covers the bounding sphere of a view frustum slice; its depth range is fitted to the casters
@@ -430,6 +435,7 @@ namespace Strata
 
 			// Bounding sphere of the view frustum slice: its size does not change when the camera rotates, which keeps the
 			// shadow texel footprint (and thus the edges) stable.
+			// The slice's corners relative to the camera.
 			std::array<glm::vec3, 8> corners;
 			size_t cornerIndex = 0;
 			for (float distance : { sliceNear, sliceFar })
@@ -439,14 +445,14 @@ namespace Strata
 				for (float x : { -1.0f, 1.0f })
 				{
 					for (float y : { -1.0f, 1.0f })
-						corners[cornerIndex++] = glm::vec3(inverseView * glm::vec4(x * halfWidth, y * halfHeight, -distance, 1.0f));
+						corners[cornerIndex++] = cameraRotation * glm::vec3(x * halfWidth, y * halfHeight, -distance);
 				}
 			}
 			glm::vec3 center(0.0f);
 			for (const glm::vec3& corner : corners)
 			{
 				center += corner;
-				shadowedView.Expand(corner);
+				shadowedView.Expand(camera.Position + corner);
 			}
 			center /= 8.0f;
 			float radius = 0.0f;
@@ -454,18 +460,24 @@ namespace Strata
 				radius = std::max(radius, glm::length(corner - center));
 			radius = std::ceil(radius * 16.0f) / 16.0f;
 
-			// Snap the cascade origin to whole texels so edges do not shimmer while the camera moves.
-			const float worldPerTexel = 2.0f * radius / mapSize;
-			glm::vec3 lightCenter = glm::vec3(m_LightView * glm::vec4(center, 1.0f));
+			// Snap the cascade origin to whole texels of absolute light space so edges do not shimmer while the camera moves.
+			const double worldPerTexel = 2.0 * static_cast<double>(radius) / static_cast<double>(mapSize);
+			glm::dvec3 lightCenter = m_CameraLightPosition + lightRotation * glm::dvec3(center);
 			lightCenter.x = std::floor(lightCenter.x / worldPerTexel) * worldPerTexel;
 			lightCenter.y = std::floor(lightCenter.y / worldPerTexel) * worldPerTexel;
+			const glm::vec3 relativeCenter(lightCenter - m_CameraLightPosition);
+			const glm::vec3 absoluteCenter(lightCenter);
 
 			CascadeBox& box = m_Cascades[cascade];
-			box.Min = glm::vec2(lightCenter) - radius;
-			box.Max = glm::vec2(lightCenter) + radius;
-			box.FarZ = lightCenter.z - radius;
-			box.SphereNearZ = lightCenter.z + radius;
-			box.WorldPerTexel = worldPerTexel;
+			box.Min = glm::vec2(absoluteCenter) - radius;
+			box.Max = glm::vec2(absoluteCenter) + radius;
+			box.FarZ = absoluteCenter.z - radius;
+			box.SphereNearZ = absoluteCenter.z + radius;
+			box.RelativeMin = glm::vec2(relativeCenter) - radius;
+			box.RelativeMax = glm::vec2(relativeCenter) + radius;
+			box.RelativeFarZ = relativeCenter.z - radius;
+			box.RelativeSphereNearZ = relativeCenter.z + radius;
+			box.WorldPerTexel = static_cast<float>(worldPerTexel);
 			box.Radius = radius;
 			frame.CascadeSplits[cascade] = sliceFar;
 			sliceNear = sliceFar;
@@ -1042,10 +1054,11 @@ namespace Strata
 		fit.MaxCasterDistance = c_MaxShadowCasterDistance;
 		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
 		{
+			// Camera-relative: the shaders' positions are.
 			const CascadeBox& box = m_Cascades[cascade];
-			fit.Boxes[cascade] = glm::vec4(box.Min, box.Max);
-			fit.Depths[cascade] = glm::vec4(box.FarZ, box.SphereNearZ, box.WorldPerTexel, box.Radius);
-			fit.CasterNearZ[cascade] = box.SphereNearZ;
+			fit.Boxes[cascade] = glm::vec4(box.RelativeMin, box.RelativeMax);
+			fit.Depths[cascade] = glm::vec4(box.RelativeFarZ, box.RelativeSphereNearZ, box.WorldPerTexel, box.Radius);
+			fit.CasterNearZ[cascade] = box.RelativeSphereNearZ;
 		}
 		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
 		const float halfAngle = glm::radians(std::clamp(m_ShadowLight.Softness, 0.0f, 10.0f)) * 0.5f;
@@ -1137,9 +1150,10 @@ namespace Strata
 		if (skipped > 0)
 			m_Errors.Report(fmt::format("{} shadow caster instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, c_MaxKeySubmeshes, c_MaxKeyLODs));
 
-		// The depth range reaches from the far side of the slice's sphere to the nearest caster (CascadeFit.comp clamps it).
+		// The depth range reaches from the far side of the slice's sphere to the nearest caster (CascadeFit.comp clamps it),
+		// found in absolute light space.
 		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-			fit.CasterNearZ[cascade] = casterNearZ[cascade];
+			fit.CasterNearZ[cascade] = static_cast<float>(static_cast<double>(casterNearZ[cascade]) - m_CameraLightPosition.z);
 
 		const auto sortStart = std::chrono::steady_clock::now();
 		RadixSort(m_ShadowDraws, m_SortScratch);

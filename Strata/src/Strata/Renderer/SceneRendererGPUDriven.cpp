@@ -243,7 +243,7 @@ namespace Strata
 		return parts.Shadow ? m_CullShadowSlots[parts.Cascade][arena] : m_CullViewSlots[arena];
 	}
 
-	void SceneRenderer::PrepareGPUCulling(const RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum)
+	void SceneRenderer::PrepareGPUCulling(const RenderScene& renderScene, const SceneCamera& camera)
 	{
 		ST_PROFILE_FUNCTION();
 		// The GPU draws the meshes and materials of the scene's GPU copy's tables (RenderSceneGPU): whatever is loaded. The LOD
@@ -364,8 +364,12 @@ namespace Strata
 
 		RenderData::CullConstants& constants = m_CullConstants;
 		constants = RenderData::CullConstants {};
+		// The view in camera-relative space (the shaders' and the culling's: precision does not depend on the distance from the
+		// origin).
+		const glm::mat4 relativeViewProjection = camera.Projection * GetRelativeView(camera);
+		const Frustum relativeFrustum(relativeViewProjection);
 		for (size_t plane = 0; plane < 6; plane++)
-			constants.Planes[plane] = frustum.GetPlanes()[plane];
+			constants.Planes[plane] = relativeFrustum.GetPlanes()[plane];
 		constants.CameraPosition = glm::vec4(camera.Position, camera.Orthographic ? 1.0f : 0.0f);
 		// As LODSelection::GetScreenFraction computes them.
 		const float viewExtent = camera.Orthographic ? std::max(camera.VerticalFOV, 1e-4f) : std::tan(std::max(camera.VerticalFOV, 1e-3f) * 0.5f);
@@ -373,14 +377,14 @@ namespace Strata
 		constants.ViewParameters = glm::vec4(static_cast<float>(m_ViewportSize.y), std::max(camera.Near, 1e-4f), std::max(m_Specification.PrefetchDistance, 0.0f),
 			m_Specification.HighPriorityScreenFraction);
 		constants.LightView = m_LightView;
-		constants.ViewProjection = camera.Projection * camera.View;
+		constants.ViewProjection = relativeViewProjection;
 		constants.OcclusionParameters = glm::vec4(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y),
 			static_cast<float>(m_DepthPyramidLevels), occlusion ? 1.0f : 0.0f);
 		for (uint32_t cascade = 0; cascade < m_CascadeCount; cascade++)
 		{
 			const CascadeBox& box = m_Cascades[cascade];
-			constants.CascadeBoxes[cascade] = glm::vec4(box.Min, box.Max);
-			constants.CascadeParameters[cascade] = glm::vec4(box.FarZ, c_MinCasterTexels * box.WorldPerTexel, 0.0f, 0.0f);
+			constants.CascadeBoxes[cascade] = glm::vec4(box.RelativeMin, box.RelativeMax);
+			constants.CascadeParameters[cascade] = glm::vec4(box.RelativeFarZ, c_MinCasterTexels * box.WorldPerTexel, 0.0f, 0.0f);
 		}
 		constants.ProxyCount = renderScene.GetProxyCapacity();
 		constants.CascadeCount = m_CascadeCount;
