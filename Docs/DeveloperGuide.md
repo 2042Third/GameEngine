@@ -211,9 +211,9 @@ miniaudio) are not built, and nothing links them. The editor is a tool with ever
 - **Tests** of a module live in `StrataTests/src/<Module>/`, which a build without it leaves out with the files listed in
   `StrataTests/CMakeLists.txt` (`STRATA_TESTS_OF_<MODULE>`: files that test little else) and the feature test (its scene
   holds every component). Test cases elsewhere that need a module are guarded with `#if ST_WITH_<MODULE>`, those that need
-  every system or component (their order, their count) with `ST_TESTS_HAVE_EVERY_MODULE` (`TestHelpers.h`). In a full
-  build, `ModuleRegistrationOptions::Exclude` registers the engine without some of its modules (the
-  `--strata-test-helper=register-without` mode).
+  every system or component (their order, their count) with `ST_TESTS_HAVE_EVERY_MODULE` (a definition of `StrataTests`,
+  never a header's, for the same reason). In a full build, `ModuleRegistrationOptions::Exclude` registers the engine
+  without some of its modules (the `--strata-test-helper=register-without` mode).
 - **CI** builds and tests a game configuration without audio and physics ("Linux (no Audio, no Physics)":
   `ctest -LE "gpu|perf|package"`).
 

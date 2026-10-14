@@ -4,7 +4,6 @@
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSystem.h"
 #include "Strata/Scripting/ScriptSystem.h"
-#include "TestHelpers.h"
 
 #if ST_WITH_PHYSICS
 	#include "Strata/Physics/PhysicsSystem.h"

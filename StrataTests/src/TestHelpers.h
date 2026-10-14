@@ -15,12 +15,6 @@
 #include <utility>
 #include <vector>
 
-// Test cases that need an optional engine module are guarded with its ST_WITH_<MODULE> (a definition of every target that
-// links the engine); those that need the engine's full set of systems or components (their order, their count, a scene
-// with all of them) with ST_TESTS_HAVE_EVERY_MODULE. CMake leaves out the files that test little else
-// (StrataTests/CMakeLists.txt).
-#define ST_TESTS_HAVE_EVERY_MODULE (ST_WITH_PHYSICS && ST_WITH_AUDIO && ST_WITH_ANIMATION)
-
 namespace Strata::Tests
 {
 

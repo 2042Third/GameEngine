@@ -130,6 +130,10 @@ target_compile_definitions(StrataTests PRIVATE
 	"STRATA_FEATURE_TEST_DIR=\"${STRATA_FEATURE_TEST_DIR}\""
 	"STRATA_LAYER_LIBRARIES_FILE=\"${PROJECT_BINARY_DIR}/Strata/LayerLibraries.json\""
 	"STRATA_PERF_RESULTS_FILE=\"${STRATA_PERF_RESULTS_DIR}/$<CONFIG>.json\"")
+# Test cases that need the engine's full set of systems or components (their order, their count, a scene with all of
+# them) are guarded with #if ST_TESTS_HAVE_EVERY_MODULE, 1 or 0: a definition, like ST_WITH_*, so that a file that misses
+# an include can never read it as 0 and compile its cases out of every build.
+target_compile_definitions(StrataTests PRIVATE "ST_TESTS_HAVE_EVERY_MODULE=$<BOOL:${STRATA_TESTS_HAVE_EVERY_MODULE}>")
 foreach(module IN LISTS STRATA_TEST_SCRIPT_MODULES)
 	string(REPLACE "StrataTestScripts" "" moduleKind "${module}")
 	string(TOUPPER "${moduleKind}" moduleKind)
