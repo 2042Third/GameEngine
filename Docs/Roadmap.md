@@ -537,6 +537,11 @@ Open items and deferrals later waves own:
     `drawIndirectCount`, a transfer queue and min/max samplers, which MoltenVK lacks).
   - Windows Debug builds and the visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds Release
     everywhere and Dist on Windows, never Debug).
+  - Game UI (wave 4, `game-ui`): its four metrics are provisional, measured on the Mac only (Release medians):
+    `Perf.GameUI.Layout10k` 0.31-0.36 ms, `Perf.GameUI.IdleFrame10k` 0.0003 ms, `PerfGPU.GameUI.Render10k` 0.21-0.58 ms
+    (target 1 ms) and `PerfGPU.GameUI.RenderIdle10k` 0.015-0.051 ms; the reference machine sets their `Measured` and
+    `Budget`. Mac A/Bs against the step-0 base: `Perf.Scene.IdlePlayFrame1M` 1.023 (one more scene system's call, 1.2 ns),
+    `PerfGPU.Renderer.Render100kCubes`, `Render300kCubes` and `Render10kMaterials` 0.90, 0.90 and 1.01.
 
 ## Waves
 
