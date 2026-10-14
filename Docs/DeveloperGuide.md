@@ -1835,7 +1835,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   colors into the output texture (then copied into an external target): the infinite ground grid, the
   selection outline (from the entity-ID buffer, so alpha-blended surfaces get none) and `DebugDraw` line
   lists, depth-tested against the scene or always on top. Fill a `DebugDraw` each frame (gameplay
-  debugging, or `DrawSceneGizmos` for light, camera and collider shapes) and pass it to `Render`. Give
+  debugging, or `DrawSceneGizmos` for light, camera and collider shapes) and pass it to `Render`. Collider shapes come
+  from the components' registrations (`ComponentInfoBuilder::Gizmo`, `Reflection/ComponentGizmo.h`: a function of the
+  component's module fills a box, sphere, capsule or mesh-bounds shape), so the renderer draws physics' colliders and a
+  game's components without naming their types. Give
   `DrawSceneGizmos` the view (`SceneGizmoSettings::View`): it then leaves out shapes outside it or beyond `MaxDistance`
   and draws lights and cameras whose shapes would be smaller than `MinShapePixels` on screen as icons of `IconPixels`,
   so thousands of lights cost what is near and in view; colliders can be limited to a list (the editor: the selection,

@@ -5,6 +5,8 @@
 #include "Strata/Core/Assert.h"
 #include "Strata/Math/Frustum.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Reflection/ComponentGizmo.h"
+#include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
@@ -14,7 +16,8 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
-#include <type_traits>
+#include <span>
+#include <vector>
 
 namespace Strata
 {
@@ -34,13 +37,6 @@ namespace Strata
 		bool Decompose(const glm::mat4& matrix, GizmoTransform& outTransform)
 		{
 			return Math::DecomposeTransform(matrix, outTransform.Translation, outTransform.Rotation, outTransform.Scale);
-		}
-
-		// Rotation and translation of the entity, without its scale, moved by a local offset (scaled like the entity).
-		glm::mat4 RigidTransform(const GizmoTransform& transform, const glm::vec3& offset)
-		{
-			const glm::vec3 center = transform.Translation + transform.Rotation * (offset * transform.Scale);
-			return glm::translate(glm::mat4(1.0f), center) * glm::mat4_cast(transform.Rotation);
 		}
 
 		glm::vec4 LightColor(const glm::vec3& color)
@@ -120,111 +116,96 @@ namespace Strata
 			float m_TanHalfFOV = 0.0f;
 		};
 
-		// The shapes of colliders, culled by the view (one function per collider type).
-		void DrawCollider(DebugDraw& debugDraw, const BoxColliderComponent& collider, const glm::mat4& world, const SceneGizmoSettings& settings, const GizmoView& view)
+		// A component's gizmo shape (ComponentInfoBuilder::Gizmo), culled by the view, in the collider color. Mesh bounds
+		// show only for a mesh that is loaded: gizmos never request assets.
+		void DrawShape(DebugDraw& debugDraw, const ComponentGizmoShape& shape, const AssetManagerBase* assets, const SceneGizmoSettings& settings, const GizmoView& view)
 		{
-			GizmoTransform transform;
-			if (!Decompose(world, transform))
-				return;
-			const glm::mat4 rigid = RigidTransform(transform, collider.Offset);
-			const glm::vec3 halfExtents = collider.HalfExtents * glm::abs(transform.Scale);
-			if (view.IsVisible(glm::vec3(rigid[3]), glm::length(halfExtents)))
-				debugDraw.Box(rigid, halfExtents, settings.ColliderColor, settings.Depth);
-		}
-
-		void DrawCollider(DebugDraw& debugDraw, const SphereColliderComponent& collider, const glm::mat4& world, const SceneGizmoSettings& settings, const GizmoView& view)
-		{
-			GizmoTransform transform;
-			if (!Decompose(world, transform))
-				return;
-			const glm::vec3 scale = glm::abs(transform.Scale);
-			const glm::vec3 center(RigidTransform(transform, collider.Offset)[3]);
-			const float radius = collider.Radius * std::max({ scale.x, scale.y, scale.z });
-			if (view.IsVisible(center, radius))
-				debugDraw.Sphere(center, radius, settings.ColliderColor, settings.Depth);
-		}
-
-		void DrawCollider(DebugDraw& debugDraw, const CapsuleColliderComponent& collider, const glm::mat4& world, const SceneGizmoSettings& settings, const GizmoView& view)
-		{
-			GizmoTransform transform;
-			if (!Decompose(world, transform))
-				return;
-			const glm::vec3 scale = glm::abs(transform.Scale);
-			const glm::mat4 rigid = RigidTransform(transform, collider.Offset);
-			const float radius = collider.Radius * std::max(scale.x, scale.z);
-			const float halfHeight = collider.HalfHeight * scale.y;
-			if (view.IsVisible(glm::vec3(rigid[3]), radius + halfHeight))
-				debugDraw.Capsule(rigid, radius, halfHeight, settings.ColliderColor, settings.Depth);
-		}
-
-		// A character controller's capsule stands upright on the entity's origin, whatever the entity's rotation and scale.
-		void DrawCollider(DebugDraw& debugDraw, const CharacterControllerComponent& controller, const glm::mat4& world, const SceneGizmoSettings& settings, const GizmoView& view)
-		{
-			const float height = std::abs(controller.Height);
-			const float radius = std::min(std::abs(controller.Radius), height * 0.5f);
-			if (!std::isfinite(height) || !std::isfinite(radius))
-				return;
-			const glm::vec3 center = glm::vec3(world[3]) + glm::vec3(0.0f, height * 0.5f, 0.0f);
-			if (view.IsVisible(center, height * 0.5f))
-				debugDraw.Capsule(glm::translate(glm::mat4(1.0f), center), radius, height * 0.5f - radius, settings.ColliderColor, settings.Depth);
-		}
-
-		void DrawMeshCollider(DebugDraw& debugDraw, const entt::registry& registry, entt::entity entity, const MeshColliderComponent& collider, const glm::mat4& world,
-			const SceneGizmoSettings& settings, const GizmoView& view)
-		{
-			AssetHandle meshHandle = collider.Mesh;
-			if (!meshHandle.IsValid())
+			switch (shape.Type)
 			{
-				const MeshRendererComponent* renderer = registry.try_get<MeshRendererComponent>(entity);
-				meshHandle = renderer ? renderer->Mesh : UUID::Null();
+				case ComponentGizmoShape::Kind::Box:
+				{
+					if (view.IsVisible(glm::vec3(shape.Transform[3]), glm::length(shape.HalfExtents)))
+						debugDraw.Box(shape.Transform, shape.HalfExtents, settings.ColliderColor, settings.Depth);
+					return;
+				}
+				case ComponentGizmoShape::Kind::Sphere:
+				{
+					const glm::vec3 center(shape.Transform[3]);
+					if (view.IsVisible(center, shape.Radius))
+						debugDraw.Sphere(center, shape.Radius, settings.ColliderColor, settings.Depth);
+					return;
+				}
+				case ComponentGizmoShape::Kind::Capsule:
+				{
+					if (view.IsVisible(glm::vec3(shape.Transform[3]), shape.Radius + shape.HalfHeight))
+						debugDraw.Capsule(shape.Transform, shape.Radius, shape.HalfHeight, settings.ColliderColor, settings.Depth);
+					return;
+				}
+				case ComponentGizmoShape::Kind::MeshBounds:
+				{
+					const Ref<Mesh> mesh = assets && assets->GetAssetState(shape.Mesh) == AssetState::Ready ? assets->PeekLoadedAsset<Mesh>(shape.Mesh) : nullptr;
+					if (!mesh || !mesh->GetBounds().IsValid())
+						return;
+					const AABB& bounds = mesh->GetBounds();
+					const AABB worldBounds = bounds.Transformed(shape.Transform);
+					if (view.IsVisible(worldBounds.GetCenter(), glm::length(worldBounds.GetExtents())))
+						debugDraw.Box(shape.Transform * glm::translate(glm::mat4(1.0f), bounds.GetCenter()), bounds.GetExtents(), settings.ColliderColor, settings.Depth);
+					return;
+				}
 			}
-			// Gizmos never trigger loads: a mesh that is not loaded yet shows nothing.
-			Ref<Mesh> mesh = AssetManager::HasActive() && AssetManager::GetAssetState(meshHandle) == AssetState::Ready ? AssetManager::GetAsset<Mesh>(meshHandle) : nullptr;
-			if (!mesh || !mesh->GetBounds().IsValid())
-				return;
-			const AABB& bounds = mesh->GetBounds();
-			const AABB worldBounds = bounds.Transformed(world);
-			if (view.IsVisible(worldBounds.GetCenter(), glm::length(worldBounds.GetExtents())))
-				debugDraw.Box(world * glm::translate(glm::mat4(1.0f), bounds.GetCenter()), bounds.GetExtents(), settings.ColliderColor, settings.Depth);
+		}
+
+		// The components whose gizmos are drawn with the colliders, in registration order.
+		std::vector<const ComponentInfo*> GetColliderGizmoComponents()
+		{
+			std::vector<const ComponentInfo*> components;
+			for (const ComponentInfo* info : ComponentRegistry::GetAll())
+			{
+				if (info->Gizmo && info->GizmoGroup == ComponentGizmoGroup::Collider)
+					components.push_back(info);
+			}
+			return components;
+		}
+
+		// The gizmo of one component of an entity of the scene, when it has one.
+		void DrawComponentGizmo(DebugDraw& debugDraw, const entt::registry& registry, entt::entity entity, const ComponentInfo& info, const void* component,
+			const glm::mat4& world, const AssetManagerBase* assets, const SceneGizmoSettings& settings, const GizmoView& view)
+		{
+			ComponentGizmoShape shape;
+			if (info.Gizmo(registry, entity, component, world, shape))
+				DrawShape(debugDraw, shape, assets, settings, view);
 		}
 
 		// Every collider of one entity (an entity of the settings' list).
-		void DrawEntityColliders(DebugDraw& debugDraw, const entt::registry& registry, entt::entity entity, const SceneGizmoSettings& settings, const GizmoView& view)
+		void DrawEntityColliders(DebugDraw& debugDraw, const entt::registry& registry, entt::entity entity, std::span<const ComponentInfo* const> components,
+			const AssetManagerBase* assets, const SceneGizmoSettings& settings, const GizmoView& view)
 		{
 			const WorldTransformComponent* world = registry.try_get<WorldTransformComponent>(entity);
 			if (!world || !world->ActiveInHierarchy)
 				return;
-			if (const BoxColliderComponent* collider = registry.try_get<BoxColliderComponent>(entity))
-				DrawCollider(debugDraw, *collider, world->Matrix, settings, view);
-			if (const SphereColliderComponent* collider = registry.try_get<SphereColliderComponent>(entity))
-				DrawCollider(debugDraw, *collider, world->Matrix, settings, view);
-			if (const CapsuleColliderComponent* collider = registry.try_get<CapsuleColliderComponent>(entity))
-				DrawCollider(debugDraw, *collider, world->Matrix, settings, view);
-			if (const MeshColliderComponent* collider = registry.try_get<MeshColliderComponent>(entity))
-				DrawMeshCollider(debugDraw, registry, entity, *collider, world->Matrix, settings, view);
-			if (const CharacterControllerComponent* controller = registry.try_get<CharacterControllerComponent>(entity))
-				DrawCollider(debugDraw, *controller, world->Matrix, settings, view);
-		}
-
-		template<typename Component>
-		size_t CountComponents(const entt::registry& registry)
-		{
-			const auto* storage = registry.storage<Component>();
-			return storage ? storage->size() : 0;
-		}
-
-		// The colliders of one type of every active entity that `include` accepts.
-		template<typename Collider, typename Include>
-		void DrawAllColliders(DebugDraw& debugDraw, const entt::registry& registry, const SceneGizmoSettings& settings, const GizmoView& view, const Include& include)
-		{
-			for (auto [entity, collider, world] : registry.view<Collider, WorldTransformComponent>().each())
+			for (const ComponentInfo* info : components)
 			{
-				if (!world.ActiveInHierarchy || !include(entity))
+				const entt::sparse_set* storage = registry.storage(info->TypeId);
+				if (storage && storage->contains(entity))
+					DrawComponentGizmo(debugDraw, registry, entity, *info, storage->value(entity), world->Matrix, assets, settings, view);
+			}
+		}
+
+		// The colliders of one component type of every active entity that `include` accepts.
+		template<typename Include>
+		void DrawAllColliders(DebugDraw& debugDraw, const entt::registry& registry, const ComponentInfo& info, const AssetManagerBase* assets,
+			const SceneGizmoSettings& settings, const GizmoView& view, const Include& include)
+		{
+			const entt::sparse_set* storage = registry.storage(info.TypeId);
+			const auto* worlds = registry.storage<WorldTransformComponent>();
+			if (!storage || !worlds)
+				return;
+			for (const entt::entity entity : *storage)
+			{
+				const WorldTransformComponent* world = worlds->contains(entity) ? &worlds->get(entity) : nullptr;
+				if (!world || !world->ActiveInHierarchy || !include(entity))
 					continue;
-				if constexpr (std::is_same_v<Collider, MeshColliderComponent>)
-					DrawMeshCollider(debugDraw, registry, entity, collider, world.Matrix, settings, view);
-				else
-					DrawCollider(debugDraw, collider, world.Matrix, settings, view);
+				DrawComponentGizmo(debugDraw, registry, entity, info, storage->value(entity), world->Matrix, assets, settings, view);
 			}
 		}
 
@@ -365,13 +346,14 @@ namespace Strata
 
 		if (!settings.Colliders)
 			return;
+		// The modules' collider components (physics' colliders and character controller), drawn type by type in
+		// registration order.
+		const std::vector<const ComponentInfo*> colliderComponents = GetColliderGizmoComponents();
+		const AssetManagerBase* assets = scene.GetAssetManager();
 		auto drawColliders = [&](const auto& include)
 		{
-			DrawAllColliders<BoxColliderComponent>(debugDraw, registry, settings, view, include);
-			DrawAllColliders<SphereColliderComponent>(debugDraw, registry, settings, view, include);
-			DrawAllColliders<CapsuleColliderComponent>(debugDraw, registry, settings, view, include);
-			DrawAllColliders<MeshColliderComponent>(debugDraw, registry, settings, view, include);
-			DrawAllColliders<CharacterControllerComponent>(debugDraw, registry, settings, view, include);
+			for (const ComponentInfo* info : colliderComponents)
+				DrawAllColliders(debugDraw, registry, *info, assets, settings, view, include);
 		};
 		if (settings.AllColliders)
 		{
@@ -384,9 +366,12 @@ namespace Strata
 		const std::span<const Entity> listed = settings.ColliderEntities;
 		ST_CORE_ASSERT(std::is_sorted(listed.begin(), listed.end(), [](const Entity& a, const Entity& b) { return a.GetHandle() < b.GetHandle(); }),
 			"SceneGizmoSettings::ColliderEntities must be sorted by entity handle");
-		const size_t colliders = CountComponents<BoxColliderComponent>(registry) + CountComponents<SphereColliderComponent>(registry)
-			+ CountComponents<CapsuleColliderComponent>(registry) + CountComponents<MeshColliderComponent>(registry)
-			+ CountComponents<CharacterControllerComponent>(registry);
+		size_t colliders = 0;
+		for (const ComponentInfo* info : colliderComponents)
+		{
+			const entt::sparse_set* storage = registry.storage(info->TypeId);
+			colliders += storage ? storage->size() : 0;
+		}
 		if (colliders < listed.size())
 		{
 			drawColliders([&](entt::entity entity)
@@ -399,7 +384,7 @@ namespace Strata
 		for (const Entity& entity : listed)
 		{
 			if (entity.GetScene() == &scene && entity.IsValid())
-				DrawEntityColliders(debugDraw, registry, entity.GetHandle(), settings, view);
+				DrawEntityColliders(debugDraw, registry, entity.GetHandle(), colliderComponents, assets, settings, view);
 		}
 	}
 

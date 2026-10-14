@@ -2,6 +2,7 @@
 
 #include "Strata/Core/Base.h"
 #include "Strata/Core/UUID.h"
+#include "Strata/Reflection/ComponentGizmo.h"
 #include "Strata/Reflection/Property.h"
 #include "Strata/Reflection/PropertyBuilder.h"
 
@@ -158,6 +159,10 @@ namespace Strata
 		// The entity and asset references of that data (empty for components without extra data or without references in it).
 		ComponentExtraReferences ExtraReferences;
 
+		// The editor gizmo the component is drawn as (null: none), and with which gizmos (Renderer/SceneGizmos.h).
+		ComponentGizmoGroup GizmoGroup = ComponentGizmoGroup::None;
+		ComponentGizmoFunction Gizmo = nullptr;
+
 		bool IsHidden() const { return HasFlag(Flags, ComponentFlags::Hidden); }
 		bool IsRemovable() const { return !HasFlag(Flags, ComponentFlags::NotRemovable); }
 		bool IsAddable() const { return !IsHidden() && !HasFlag(Flags, ComponentFlags::EngineAdded) && !HasFlag(Flags, ComponentFlags::NoSerialize); }
@@ -270,6 +275,15 @@ namespace Strata
 			ComponentInfo& info = GetTarget();
 			info.SerializeExtra = [serialize](const void* component, nlohmann::json& out) { serialize(*static_cast<const T*>(component), out); };
 			info.DeserializeExtra = [deserialize](void* component, const nlohmann::json& in, std::string* outError) { return deserialize(*static_cast<T*>(component), in, outError); };
+			return *this;
+		}
+
+		// The editor gizmo of the component: `gizmo` fills its shape (see ComponentGizmoFunction), drawn with `group`.
+		ComponentInfoBuilder& Gizmo(ComponentGizmoGroup group, ComponentGizmoFunction gizmo)
+		{
+			ComponentInfo& info = GetTarget();
+			info.GizmoGroup = group;
+			info.Gizmo = gizmo;
 			return *this;
 		}
 

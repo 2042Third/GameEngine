@@ -9,7 +9,10 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Engine/BuiltinModules.h"
+#include "Strata/Reflection/ComponentGizmo.h"
 #include "Strata/Reflection/ComponentRegistry.h"
+#include "Strata/Renderer/DebugDraw.h"
+#include "Strata/Renderer/SceneGizmos.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
@@ -108,6 +111,17 @@ namespace Strata::Tests
 			VisitVehicleReferences(vehicle, [&visitor](uint32_t, uint32_t, PropertyType type, UUID value) { visitor(type, value); });
 		}
 
+		// The editor draws a vehicle as a box around its origin, with the colliders (ComponentInfoBuilder::Gizmo).
+		constexpr glm::vec3 c_VehicleHalfExtents(1.0f, 0.5f, 2.0f);
+
+		bool VehicleGizmo(const entt::registry&, entt::entity, const void*, const glm::mat4& world, ComponentGizmoShape& outShape)
+		{
+			outShape.Type = ComponentGizmoShape::Kind::Box;
+			outShape.Transform = world;
+			outShape.HalfExtents = c_VehicleHalfExtents;
+			return true;
+		}
+
 		// A vehicle (with Speed, Label and a cargo) whose driver, its child, rides in it.
 		Entity CreateVehicleWithDriver(Scene& scene, const std::string& name)
 		{
@@ -170,7 +184,8 @@ namespace Strata::Tests
 					.Property("Speed", &TestVehicleComponent::Speed)
 					.Property("Label", &TestVehicleComponent::Label)
 					.Extra(SerializeVehicle, DeserializeVehicle)
-					.ExtraReferences(VisitVehicleReferences, SetVehicleReference, VehiclesEqual, VisitVehicleReferencesJson);
+					.ExtraReferences(VisitVehicleReferences, SetVehicleReference, VehiclesEqual, VisitVehicleReferencesJson)
+					.Gizmo(ComponentGizmoGroup::Collider, VehicleGizmo);
 				// The type is registered and the name is taken (ignoring case): both are refused, without aborting.
 				duplicateTypeRefused = !ComponentRegistry::Register<TestVehicleComponent>("TestVehicleAgain").Property("Speed", &TestVehicleComponent::Speed);
 				duplicateNameRefused = !ComponentRegistry::Register<LateComponent>("testvehicle");
@@ -244,6 +259,27 @@ namespace Strata::Tests
 			if (std::find(references.begin(), references.end(), AssetHandle(0xCA460)) == references.end())
 				return Fail("the vehicle's cargo is not among the assets its snapshot references");
 			std::printf("extra references: remapped, compared, scanned\n");
+
+			// The renderer draws the game's component with the colliders, without knowing its type: a box per vehicle.
+			garage.UpdateWorldTransforms();
+			size_t vehicles = 0;
+			for ([[maybe_unused]] const auto entity : garage.GetRegistry().view<TestVehicleComponent>())
+				vehicles++;
+			DebugDraw boxLines;
+			boxLines.Box(glm::mat4(1.0f), c_VehicleHalfExtents, glm::vec4(1.0f));
+			DebugDraw gizmos;
+			SceneGizmoSettings settings;
+			settings.Lights = false;
+			settings.Cameras = false;
+			DrawSceneGizmos(gizmos, garage, settings);
+			if (vehicles != 3 || gizmos.GetLineCount() != vehicles * boxLines.GetLineCount())
+				return Fail(fmt::format("{} vehicles drew {} gizmo lines, not {} boxes", vehicles, gizmos.GetLineCount(), vehicles));
+			settings.Colliders = false;
+			DebugDraw hidden;
+			DrawSceneGizmos(hidden, garage, settings);
+			if (hidden.GetLineCount() != 0)
+				return Fail("the vehicles' gizmos show without the colliders");
+			std::printf("gizmos: a box per vehicle\n");
 
 			// The registry is frozen now: a registration is refused with an error, and the process goes on.
 			const uint64_t before = Log::GetBuffer().GetLatestSequence();
