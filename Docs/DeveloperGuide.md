@@ -14,6 +14,7 @@ characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together
 
 - [Repository layout](#repository-layout)
 - [Building](#building)
+  - [macOS and MoltenVK](#macos-and-moltenvk)
   - [Windows subsystem](#windows-subsystem)
   - [Packages](#packages)
   - [Releases](#releases)
@@ -140,6 +141,31 @@ full path, `$(brew --prefix)/lib/libVkLayer_khronos_validation.dylib` (the build
 Useful CMake options: `-DSTRATA_BUILD_EDITOR=OFF`, `-DSTRATA_BUILD_RUNTIME=OFF`,
 `-DSTRATA_BUILD_CLI=OFF`, `-DSTRATA_BUILD_TESTS=OFF`, `-DSTRATA_ENABLE_TRACY=ON`,
 `-DSTRATA_WARNINGS_AS_ERRORS=OFF` (local experiments only — CI always builds with warnings as errors).
+
+### macOS and MoltenVK
+
+On macOS the renderer runs as everywhere else, through NVRHI and Vulkan; MoltenVK translates Vulkan to Metal. Measured
+on an Apple M2 Max with MoltenVK 1.4.2 (Homebrew), where every test of the `gpu` label passes:
+
+- **Missing features**, which renderer code must gate on the device's features, never on the OS: `drawIndirectCount`,
+  `samplerFilterMinmax`, geometry shaders, mesh shaders, pipeline statistics queries, 64-bit buffer atomics and a
+  dedicated transfer queue (uploads run on the graphics queue). GPU-driven rendering (wave 4) must work without the first
+  two: indirect draws without a count from the GPU (culled draws get no instances), depth pyramids reduced without
+  min/max samplers.
+- **Tight limits**: 31 storage buffers per shader stage and 32 KiB of compute shared memory.
+- **Bindless tables**: the descriptor set support query rejects any set beyond `maxPerSetDescriptors` (1,212), also
+  update-after-bind sets within the update-after-bind limits (a million sampled images), and MoltenVK samples every slot
+  of far larger tables. The table takes its size from those limits, at most `GraphicsDevice::c_MaxBindlessTextures`
+  (32,768: `GraphicsDeviceInfo::MaxBindlessTextures`); on MoltenVK alone the validation layer's report of the rejected
+  query is traced instead of counted, while other drivers' queries decide the size (`ChooseBindlessTableSize`,
+  `ClassifyVulkanMessage`).
+- **Warnings that do not apply**: MoltenVK reports the R32_UINT entity-ID target of every prepass pipeline as "Blending
+  is enabled", although no pipeline blends it; `ClassifyVulkanMessage` traces the message.
+- **Debug builds**: Apple's C++ library destroys a `std::vector<uint8_t>` byte by byte without optimization (about 3 ms
+  per MB), so frees of large CPU copies take frames the time budgets then spread; tests that count frames or loads lift
+  the time budgets when their counts must not follow the machine's speed.
+- **Perf**: `Budgets.json` holds the Windows reference machine's measurements; on a Mac `-L perf` informs, it is not the
+  gate (Docs/Roadmap.md, the open items, lists what waits for the reference machine).
 
 ### Windows subsystem
 

@@ -519,12 +519,24 @@ Open items and deferrals later waves own:
     (0.215, then 0.078 ms).
   - Unchanged: `EntityCreate100kRoots` at 85-90% of its budget and the Streaming panel's refresh frames at up to 93%;
     `SceneSwitch100kMaxFrame` (0.31-0.37 ms in 2 of 10 first attempts against 0.2002) and `Mips.MaxFrameRatio` (1.28 in
-    1 against 1.19), which need a confirmation now and then; `ContentBrowser10kThumbnailsP95` once at 0.053 ms in 10 runs
-    (0.036-0.042 otherwise) against 0.057; and `PerfGPU.Editor.ImportSettings4kMaxFrame`, whose first attempt measures
-    6.9-7.6 ms when run alone in a fresh process (main's build 2.9-3.6 ms; 2.1 ms in the perf label's runs, where the
-    cases before it warmed the process): its view draws the texture whole, as main did, and its windows end once the
-    texture is whole (later attempts 2.97-5.23 ms), so the first attempt's hold is not the upload's. Platform code only
-    CI compiles: the POSIX `Platform::FindProgram` and symbolizer (function names only on Linux and macOS).
+    1 against 1.19), which need a confirmation now and then; `ContentBrowser10kThumbnailsP95` once at 0.053 ms in 10
+    runs (0.036-0.042 otherwise) against 0.057; and `PerfGPU.Editor.ImportSettings4kMaxFrame`, whose first attempt
+    measures 6.9-7.6 ms when run alone in a fresh process (main's build 2.9-3.6 ms; 2.1 ms in the perf label's runs,
+    where the cases before it warmed the process): its view draws the texture whole, as main did, and its windows end
+    once the texture is whole (later attempts 2.97-5.23 ms), so the first attempt's hold is not the upload's. Platform
+    code only CI compiles: the POSIX `Platform::FindProgram` and symbolizer (function names only on Linux and macOS).
+- Waiting for the Windows reference machine (i7-13700K, RTX 5090), away since 2026-10-13 while work goes on on a Mac
+  (Apple M2 Max, MoltenVK): nothing here may be decided from the Mac's numbers.
+  - Budgets: every `Budgets.json` entry stays the reference machine's; a change on the Mac that makes a metric cheaper
+    lists it here, measured A/B on the Mac, until the reference machine confirms it. Wave 3's finishing round left three
+    perf findings for it: `RuntimeMaxFinalizeStage` (its budget lies below the engine's designed frame-0 cost),
+    `ThumbnailsMaxFrame` (redefined with a cold first attempt, its `Measured` not taken again) and
+    `SceneOpenOver1MMaxFrame` (still over its budget in some runs).
+  - GPU tests on Windows and NVIDIA: CI runs no test of the `gpu` label, so renderer changes are validated on the Mac
+    alone until `ctest --preset windows-debug` runs under the validation layer there again (drivers differ: NVIDIA has
+    `drawIndirectCount`, a transfer queue and min/max samplers, which MoltenVK lacks).
+  - Windows Debug builds and the visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds Release
+    only).
 
 ## Waves
 
