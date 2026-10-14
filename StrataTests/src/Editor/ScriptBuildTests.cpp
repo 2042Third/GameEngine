@@ -688,9 +688,16 @@ TEST_SUITE("Editor.ScriptBuild")
 		CHECK(FileSystem::IsRegularFile(objects));
 		CHECK_FALSE(build(settings));
 
-		// A listing that was cut short cannot tell: every such build configures again.
+		// A listing that was cut short (too many files, or a walk that ended on an error) cannot tell: every such build
+		// configures again.
 		CHECK(build(settings, true));
-		CHECK(builder.GetLastResult().LogTail.find("too large to tell") != std::string::npos);
+		CHECK(builder.GetLastResult().LogTail.find("could not be listed completely") != std::string::npos);
+		const ScriptSourceListing unknown = StampScriptSources(scripts / "Spinner.cpp"); // A walk that fails at once
+		REQUIRE(unknown.Truncated);
+		REQUIRE_MESSAGE(builder.Start(*project, settings, unknown, &error), error);
+		RunBuild(builder);
+		REQUIRE_MESSAGE(builder.GetLastResult().Success, builder.GetLastResult().Error);
+		CHECK(builder.GetLastResult().Configured);
 		CHECK(build(settings, true));
 		CHECK(FileSystem::IsRegularFile(objects));
 		CHECK_FALSE(build(settings));

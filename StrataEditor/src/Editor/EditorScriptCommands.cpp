@@ -260,7 +260,7 @@ namespace Strata
 			"(folders starting with '.' and build trees left out), sorted by path, each with the script classes it registers "
 			"(ST_SCRIPT_CLASS) and its size. Use it to find the file that holds a class before changing it (script.open opens one in the "
 			"person's code editor). Returns sourceDirectory, files [{path (relative to the script directory), projectPath (relative to the "
-			"project), classes, bytes}] and truncated (more files than listed).",
+			"project), classes, bytes}] and truncated (more files than listed, or the folder could not be listed completely).",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{

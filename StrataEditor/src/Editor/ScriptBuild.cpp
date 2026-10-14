@@ -1055,8 +1055,9 @@ namespace Strata
 			std::string reason;
 			if (m_SourcesTruncated)
 			{
-				reason = fmt::format("The script directory is too large to tell whether files were added or removed (over {} code and CMake files, or {} "
-					"entries): configuring again", c_MaxListedScriptSources, c_MaxScannedScriptEntries);
+				reason = fmt::format("The script directory could not be listed completely (over {} code and CMake files or {} entries, or an error "
+					"while listing it), so whether files were added or removed is unknown: configuring again", c_MaxListedScriptSources,
+					c_MaxScannedScriptEntries);
 			}
 			else if (!previousSources.is_array())
 			{
