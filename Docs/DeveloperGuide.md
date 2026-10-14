@@ -1077,7 +1077,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
     get a token. Rows of lists with a selection draw through `UI::PushSelectionColors`, so hovering stays neutral and a
     selected row keeps the accent under the mouse.
   - Sizes are relative to the font (multiples of `ImGui::GetFontSize()` or `GetFrameHeight()`, or the style's sizes),
-    never fixed pixels above 16, so the UI follows the UI scale (the window's content scale, or `--ui-scale`). The scan
+    never fixed pixels above 16, so the UI follows the UI scale (the window's content scale less what window coordinates
+    in points apply already, `ImGuiLayer::ToUIScale`, or `--ui-scale`). The default layout gives the side panels at least
+    16 (Hierarchy) and 18 (Inspector) text heights at large UI scales, each at most 30% of the width. The scan
     judges every value passed to size-taking calls by the product it is part of, and follows names that hold sizes
     (`const float width = 200.0f` used later is found too). `UI::ApplyTheme` sets every size ImGui scales to an even
     base (hairlines stay one pixel), so 150% and 200% give exact multiples.

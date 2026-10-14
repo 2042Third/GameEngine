@@ -347,9 +347,13 @@ runtime does not use it. Protocol and security model: DeveloperGuide.md, "Automa
 
 **ImGui** (`ImGui/`). `ImGuiLayer` owns the Dear ImGui context; `Application` pushes it as an overlay when ImGui is
 enabled and a window and graphics device exist, and calls `Begin`/`End` around the layers' `OnImGuiRender`. It styles
-the UI for the window's content scale, on attach and on every `WindowContentScaleEvent`: the style is rebuilt from
-ImGui's dark defaults by the application's style callback (`SetStyleCallback`; the editor installs its Bedrock theme) and
-the fonts' DPI scale (`ImGuiStyle::FontScaleDpi`) follows; `SetContentScaleOverride` fixes the scale (`--ui-scale`).
+the UI for the window's content scale, on attach, on every `WindowContentScaleEvent` and when the window's pixels per
+unit change: the UI scale is the content scale less what window coordinates in points apply already (`ToUIScale`: a
+Retina window of 1600 x 900 points has 3200 x 1800 pixels and content scale 2, and ImGui lays out in points and
+rasterizes its fonts at the framebuffer's density, so its UI scale is 1; where windows are measured in pixels, Windows
+and X11, it is the content scale). The style is rebuilt from ImGui's dark defaults by the application's style callback
+(`SetStyleCallback`; the editor installs its Bedrock theme) and the fonts' DPI scale (`ImGuiStyle::FontScaleDpi`)
+follows; `SetContentScaleOverride` fixes the scale (`--ui-scale`).
 `ImGuiPlatform` is the platform backend, written for the engine (the vendored GLFW backend is not built): ImGui's input
 comes from the window's events (keys by what they type in the keyboard layout, `Window::GetLayoutKey`, with their
 modifiers; typed text, also from input methods; the mouse, its wheel and `MouseLeaveEvent`; focus), its clipboard and

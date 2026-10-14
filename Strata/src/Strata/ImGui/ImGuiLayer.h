@@ -4,6 +4,8 @@
 #include "Strata/ImGui/ImGuiPlatform.h"
 #include "Strata/ImGui/ImGuiRenderer.h"
 
+#include <glm/glm.hpp>
+
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -13,6 +15,8 @@ struct ImGuiStyle;
 namespace Strata
 {
 
+	class Window;
+
 	// Styles ImGui for a UI scale: colors and sizes (paddings, spacings, roundings) multiplied by the scale. It receives
 	// ImGui's dark style at its unscaled defaults; fonts are scaled separately (ImGuiStyle::FontScaleDpi).
 	using ImGuiStyleCallback = std::function<void(ImGuiStyle& style, float scale)>;
@@ -21,8 +25,10 @@ namespace Strata
 	// (ImGuiPlatform, fed with the window's events), rendering through NVRHI (ImGuiRenderer). The application calls Begin()
 	// before and End() after the layers' OnImGuiRender().
 	//
-	// The UI follows the window's content scale (DPI): on attach and on every WindowContentScaleEvent the style is rebuilt
-	// for the scale (ImGui's dark style, or the application's style callback) and the fonts' DPI scale is set to it.
+	// The UI follows the window's content scale (DPI): on attach, on every WindowContentScaleEvent and when the window's
+	// pixels per unit change, the style is rebuilt for the UI scale (ToUIScale: the content scale less what window
+	// coordinates in points apply already; ImGui's dark style, or the application's style callback) and the fonts' DPI
+	// scale is set to it.
 	// Style changes apply to the current ImGui context: the one OnAttach creates, or one a test created.
 	class ImGuiLayer : public Layer
 	{
@@ -56,6 +62,11 @@ namespace Strata
 		void SetContentScaleOverride(float scale);
 		// The scale the UI is styled for.
 		float GetUIScale() const { return m_ContentScaleOverride > 0.0f ? m_ContentScaleOverride : m_ContentScale; }
+		// The UI scale of a window's content scale: what the window system does not apply to window coordinates already.
+		// Where windows are measured in points (macOS, Wayland: a Retina window's framebuffer has twice its size in pixels),
+		// ImGui lays out in points and draws its fonts at the framebuffer's density, so the content scale of 2 is there
+		// once without scaling the sizes; where windows are measured in pixels (Windows, X11) it is the content scale.
+		static float ToUIScale(float contentScale, const glm::uvec2& windowSize, const glm::uvec2& framebufferSize);
 
 		static constexpr float c_MinScale = 0.5f;
 		static constexpr float c_MaxScale = 4.0f;
@@ -69,6 +80,7 @@ namespace Strata
 		std::filesystem::path m_LayoutFile;
 		std::string m_LayoutFileUTF8;
 		ImGuiStyleCallback m_StyleCallback;
+		Window* m_Window = nullptr; // While attached
 		float m_ContentScale = 1.0f;
 		float m_ContentScaleOverride = 0.0f;
 		bool m_BlockEvents = true;

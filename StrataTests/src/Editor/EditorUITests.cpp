@@ -353,6 +353,40 @@ TEST_SUITE("Editor.UI")
 		CHECK(editor.Host->ExitCode == 0);
 	}
 
+	TEST_CASE("At 1600 x 900 the Hierarchy is wide enough for its names, also at 200%")
+	{
+		const ImVec2 display(1600.0f, 900.0f);
+		for (const float scale : { 1.0f, 2.0f })
+		{
+			CAPTURE(scale);
+			HarnessEditor editor({ display, scale }, WithFeatureProject("EditorUIHierarchyWidth"));
+			editor.Frames(3);
+			ImGuiWindow* hierarchy = editor.FindPanelWindow(EditorPanels::c_Hierarchy);
+			ImGuiWindow* inspector = editor.FindPanelWindow(EditorPanels::c_Inspector);
+			ImGuiWindow* scene = editor.FindPanelWindow(EditorPanels::c_Viewport);
+			REQUIRE(hierarchy);
+			REQUIRE(inspector);
+			REQUIRE(scene);
+			float fontSize = 0.0f;
+			float nameWidth = 0.0f;
+			editor.Harness.Frame([&]()
+			{
+				fontSize = ImGui::GetFontSize();
+				nameWidth = ImGui::CalcTextSize("Environment Light").x;
+			});
+			// A row holds its arrow, icon and visibility toggle (about six text heights with paddings) beside the name:
+			// names of seventeen characters show whole. (The dock's splitters take a few pixels of each node.)
+			const float splitter = 0.25f * fontSize;
+			CHECK(hierarchy->Size.x >= 16.0f * fontSize - splitter);
+			CHECK(hierarchy->Size.x - 6.0f * fontSize >= nameWidth);
+			CHECK(inspector->Size.x >= std::min(18.0f * fontSize, 0.3f * display.x) - splitter);
+			// At 100% the shares stay as they were; the Scene view keeps the most of the width at either scale.
+			if (scale == 1.0f)
+				CHECK(GetWindowFraction(hierarchy, display, true) == doctest::Approx(0.15).epsilon(0.05));
+			CHECK(GetWindowFraction(scene, display, true) >= 0.39f);
+		}
+	}
+
 	TEST_CASE("The default layout is viewport first, with the Content Browser showing")
 	{
 		// The editor's window on this project's reference machine: 3840 x 2054 at 150%.

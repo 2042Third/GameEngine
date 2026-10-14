@@ -51,6 +51,11 @@ namespace Strata
 		constexpr float c_HierarchyWidth = 0.15f;
 		constexpr float c_InspectorWidth = 0.20f;
 		constexpr float c_BottomHeight = 0.22f;
+		// At large UI scales (a 1600 x 900 window at 200%) the side panels keep room for their rows: at least this many text
+		// heights wide (a Hierarchy row's name about eighteen characters), each at most c_MaxSideWidth of the width.
+		constexpr float c_MinHierarchyFontSizes = 16.0f;
+		constexpr float c_MinInspectorFontSizes = 18.0f;
+		constexpr float c_MaxSideWidth = 0.3f;
 		// The status bar's pills grow back from their compact texts once the full ones fit with this margin, in font sizes, so
 		// that a frame time's digits cannot make them flicker between the two.
 		constexpr float c_StatusBarMarginFontSizes = 2.0f;
@@ -1043,11 +1048,18 @@ namespace Strata
 		ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
 		ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetContentRegionAvail());
 
-		// The viewport first: the side panels take a fixed share of the width, the bottom area a share of the height under
-		// the viewport only.
+		// The viewport first: the side panels take a fixed share of the width (more at large UI scales, for their text), the
+		// bottom area a share of the height under the viewport only.
+		const float width = std::max(ImGui::GetContentRegionAvail().x, 1.0f);
+		const auto sideShare = [width](float share, float minimumFontSizes)
+		{
+			return std::min(std::max(share, minimumFontSizes * ImGui::GetFontSize() / width), c_MaxSideWidth);
+		};
+		const float hierarchyWidth = sideShare(c_HierarchyWidth, c_MinHierarchyFontSizes);
+		const float inspectorWidth = sideShare(c_InspectorWidth, c_MinInspectorFontSizes);
 		ImGuiID center = dockspaceId;
-		const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, c_HierarchyWidth, nullptr, &center);
-		const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, c_InspectorWidth / (1.0f - c_HierarchyWidth), nullptr, &center);
+		const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, hierarchyWidth, nullptr, &center);
+		const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, inspectorWidth / (1.0f - hierarchyWidth), nullptr, &center);
 		const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, c_BottomHeight, nullptr, &center);
 
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Hierarchy).c_str(), left);
