@@ -511,6 +511,15 @@ log the scene systems' update order and the soft constraints naming absent syste
   registry: a program that forgot the composition root stops at its first lookup instead of running without
   components or loaders. The importer registry stays closed in programs without the asset pipeline, so a game that
   reached for an importer stops there too.
+- **Extra data and its references.** A component may keep data its properties cannot express (the Script component's
+  scripts and field values), which it serializes itself (`ComponentInfoBuilder::Extra`), and describes the entity and
+  asset references in it (`ComponentInfoBuilder::ExtraReferences`, `ComponentExtraReferences`: `Visit` reports each with
+  a slot and subslot the component chooses, `Set` writes one, `Equals` compares two components' extra data with the
+  first one's entity references mapped, `VisitJson` reads them from the serialized form). Code that works on every
+  component uses these and never names the type: `SceneSerializer`'s entity remapping (copies, duplicates, pastes),
+  `EntityPrototype`'s reference list and the instantiation that writes the copies' references, `EntityTemplate::CompareInstance`
+  (prefab status) and `AssetDependencies::ScanEntities` (the assets a document references). The `custom-component` helper
+  mode checks them with a game's component.
 - **Component lifecycle.** `ComponentRegistry` is closed, then open (`BeginRegistration`: `Register<T>` is valid from
   any registering code), then frozen (`Freeze`): the set of components never changes afterwards, so reads take no lock
   and are safe from any thread (asset loads deserialize scenes on workers). `Register<T>` after `Freeze`, for a type
@@ -805,8 +814,8 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   the loading worker), into an `EntityPrototype` (`Scene/EntityPrototype.h`): the entities in hierarchy order, with
   each entity's ID and parent index, its registered components (real objects of their types, kept in one compact array
   per type, `ComponentValueArray`: an EnTT storage allocates a page of 1,024 elements at a time, which made a small
-  prefab's private registry cost about 400 KiB) and the entity references among them (entity properties and script
-  fields). The JSON is not kept (`GetSnapshot` and `Serialize`
+  prefab's private registry cost about 400 KiB) and the entity references among them (entity properties, and entity
+  references in components' extra data: script fields, through `ComponentInfo::ExtraReferences`). The JSON is not kept (`GetSnapshot` and `Serialize`
   write it from the prototype). Instantiating copies the prototype (`Scene::BeginInstantiation`,
   `ContinueInstantiation`, `Instantiate`; `Scene/SceneInstantiation.cpp`): the scene's capacity is checked first, the
   components are copied with `ComponentInfo::EmplaceCopy` (on_construct), the entities are linked parents first, references

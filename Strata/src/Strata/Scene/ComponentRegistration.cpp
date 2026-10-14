@@ -150,6 +150,62 @@ namespace Strata
 			return true;
 		}
 
+		// The entity and asset references of script fields: slot is the script, subslot the field.
+		void VisitScriptReferences(const ScriptComponent& component, const ComponentExtraReferences::Visitor& visitor)
+		{
+			for (uint32_t script = 0; script < component.Scripts.size(); script++)
+			{
+				const std::vector<ScriptFieldValue>& fields = component.Scripts[script].Fields;
+				for (uint32_t field = 0; field < fields.size(); field++)
+				{
+					const ScriptFieldValue& value = fields[field];
+					if ((value.Type == PropertyType::Entity || value.Type == PropertyType::Asset) && std::holds_alternative<UUID>(value.Value))
+						visitor(script, field, value.Type, std::get<UUID>(value.Value));
+				}
+			}
+		}
+
+		void SetScriptReference(ScriptComponent& component, uint32_t script, uint32_t field, UUID value)
+		{
+			if (script < component.Scripts.size() && field < component.Scripts[script].Fields.size())
+				component.Scripts[script].Fields[field].Value = value;
+		}
+
+		// The same scripts with the same field overrides, entity fields of `a` mapped through `remap`.
+		bool ScriptsEqual(const ScriptComponent& a, const ScriptComponent& b, const ComponentExtraReferences::Remap& remap)
+		{
+			if (a.Scripts.size() != b.Scripts.size())
+				return false;
+			for (size_t script = 0; script < a.Scripts.size(); script++)
+			{
+				const ScriptEntry& x = a.Scripts[script];
+				const ScriptEntry& y = b.Scripts[script];
+				if (x.ClassName != y.ClassName || x.Fields.size() != y.Fields.size())
+					return false;
+				for (size_t field = 0; field < x.Fields.size(); field++)
+				{
+					const ScriptFieldValue& first = x.Fields[field];
+					const ScriptFieldValue& second = y.Fields[field];
+					if (first.Name != second.Name || first.Type != second.Type)
+						return false;
+					PropertyValue value = first.Value;
+					if (const UUID* entity = std::get_if<UUID>(&value); entity && first.Type == PropertyType::Entity)
+						value = remap(*entity);
+					if (value != second.Value)
+						return false;
+				}
+			}
+			return true;
+		}
+
+		void VisitScriptReferencesJson(const nlohmann::json& extra, const ComponentExtraReferences::JsonVisitor& visitor)
+		{
+			ScriptComponent scripts;
+			if (!DeserializeScriptComponent(scripts, extra, nullptr))
+				return;
+			VisitScriptReferences(scripts, [&visitor](uint32_t, uint32_t, PropertyType type, UUID value) { visitor(type, value); });
+		}
+
 	}
 
 	void RegisterSceneComponents()
@@ -448,7 +504,8 @@ namespace Strata
 		ComponentRegistry::Register<ScriptComponent>("Script")
 			.Category("Scripting")
 			.Description("C++ behaviours from the project's script module")
-			.Extra(SerializeScriptComponent, DeserializeScriptComponent);
+			.Extra(SerializeScriptComponent, DeserializeScriptComponent)
+			.ExtraReferences(VisitScriptReferences, SetScriptReference, ScriptsEqual, VisitScriptReferencesJson);
 	}
 
 }

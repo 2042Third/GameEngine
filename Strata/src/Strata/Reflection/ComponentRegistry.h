@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Core/Base.h"
+#include "Strata/Core/UUID.h"
 #include "Strata/Reflection/Property.h"
 #include "Strata/Reflection/PropertyBuilder.h"
 
@@ -93,6 +94,30 @@ namespace Strata
 
 	}
 
+	// Entity and asset references in what a component holds beyond its properties: its extra data (a script's field
+	// values, which SerializeExtra writes). Code that works on any component - remapping entity references, linking a
+	// prefab's copies to each other, comparing prefab instances with their prefab, finding the assets a document
+	// references - reaches them through these and never names the component's type. A reference is addressed by two indices
+	// the component chooses (for scripts: the script and its field).
+	struct ComponentExtraReferences
+	{
+		using Visitor = std::function<void(uint32_t slot, uint32_t subslot, PropertyType type, UUID value)>;
+		using JsonVisitor = std::function<void(PropertyType type, UUID value)>;
+		using Remap = std::function<UUID(UUID)>;
+
+		// Calls the visitor for every entity or asset reference the component holds (PropertyType::Entity or Asset).
+		std::function<void(const void* component, const Visitor& visitor)> Visit;
+		// Replaces the reference Visit reported at (slot, subslot).
+		std::function<void(void* component, uint32_t slot, uint32_t subslot, UUID value)> Set;
+		// Whether the extra data of `a`, its entity references mapped through `remap` (instance to prefab), equals that of `b`.
+		std::function<bool(const void* a, const void* b, const Remap& remap)> Equals;
+		// The references the component's serialized extra data holds (the JSON object SerializeExtra writes into), as Visit
+		// reports them, without making a component: the assets of documents that are not loaded.
+		std::function<void(const nlohmann::json& extra, const JsonVisitor& visitor)> VisitJson;
+
+		explicit operator bool() const { return Visit != nullptr; }
+	};
+
 	// Reflection metadata and type-erased ECS operations for one component type.
 	struct ComponentInfo
 	{
@@ -130,6 +155,8 @@ namespace Strata
 		// Optional serialization of data that is not expressed as properties (e.g. script fields).
 		std::function<void(const void* component, nlohmann::json& out)> SerializeExtra;
 		std::function<bool(void* component, const nlohmann::json& in, std::string* outError)> DeserializeExtra;
+		// The entity and asset references of that data (empty for components without extra data or without references in it).
+		ComponentExtraReferences ExtraReferences;
 
 		bool IsHidden() const { return HasFlag(Flags, ComponentFlags::Hidden); }
 		bool IsRemovable() const { return !HasFlag(Flags, ComponentFlags::NotRemovable); }
@@ -243,6 +270,23 @@ namespace Strata
 			ComponentInfo& info = GetTarget();
 			info.SerializeExtra = [serialize](const void* component, nlohmann::json& out) { serialize(*static_cast<const T*>(component), out); };
 			info.DeserializeExtra = [deserialize](void* component, const nlohmann::json& in, std::string* outError) { return deserialize(*static_cast<T*>(component), in, outError); };
+			return *this;
+		}
+
+		// The entity and asset references of the extra data (see ComponentExtraReferences): all four functions.
+		ComponentInfoBuilder& ExtraReferences(std::function<void(const T&, const ComponentExtraReferences::Visitor&)> visit,
+			std::function<void(T&, uint32_t slot, uint32_t subslot, UUID value)> set,
+			std::function<bool(const T&, const T&, const ComponentExtraReferences::Remap&)> equals,
+			std::function<void(const nlohmann::json&, const ComponentExtraReferences::JsonVisitor&)> visitJson)
+		{
+			ComponentExtraReferences& references = GetTarget().ExtraReferences;
+			references.Visit = [visit](const void* component, const ComponentExtraReferences::Visitor& visitor) { visit(*static_cast<const T*>(component), visitor); };
+			references.Set = [set](void* component, uint32_t slot, uint32_t subslot, UUID value) { set(*static_cast<T*>(component), slot, subslot, value); };
+			references.Equals = [equals](const void* a, const void* b, const ComponentExtraReferences::Remap& remap)
+			{
+				return equals(*static_cast<const T*>(a), *static_cast<const T*>(b), remap);
+			};
+			references.VisitJson = std::move(visitJson);
 			return *this;
 		}
 	};

@@ -45,16 +45,22 @@ ComponentRegistry::Register<WindZoneComponent>("WindZone")
   the property for people and AI agents (the tooltip text is part of `component.list`).
 - Flags: `NotRemovable` for components every entity has, `Hidden` for internal ones, `NoSerialize` only
   for data the serializer writes itself.
+- Data properties cannot express (lists, per-instance tables such as the Script component's fields) is written by the
+  component itself: `.Extra(serialize, deserialize)`. When it holds entity or asset references, also describe them with
+  `.ExtraReferences(visit, set, equals, visitJson)` (`ComponentExtraReferences`): copies and prefab instances remap
+  them, prefab status compares them and asset scans find them only through these.
 
 ## 3. Add behaviour (if the component does something at runtime)
 
 Implement a `SceneSystem` (`Scene/SceneSystem.h`) and register its descriptor in the registration function of
 the module it belongs to (e.g. `RegisterPhysicsModule` in `Physics/PhysicsRegistration.cpp`), which
 `Engine::RegisterBuiltinModules` calls. Build the descriptor with `MakeSceneSystemDescriptor<T>` (so
-`Scene::GetSystem<T>` finds the running system), declare its update order with `After`/`Before` (names of systems
-registered before it, e.g. `After = { "Physics" }`; registration order decides the rest as far as the constraints
-allow, so a system without constraints runs after the ones registered before it), and check the result of
-`SceneSystemRegistry::Register`: a cycle or an unknown name is refused. Set
+`Scene::GetSystem<T>` finds the running system), declare its update order (registration order decides the rest as far
+as the constraints allow, so a system without constraints runs after the ones registered before it): toward another
+module's system with soft constraints, `AfterIfPresent`/`BeforeIfPresent` (e.g. `AfterIfPresent = { "Physics" }`,
+ignored in builds without that system), and with hard `After`/`Before` only toward systems of the same module or of a
+module it cannot work without. Check the result of `SceneSystemRegistry::Register`: a cycle, or a hard constraint naming
+an unregistered system, is refused. Set
 `RunsInSimulateMode` only for systems that belong in the editor's physics-only simulate mode. React to
 edits through EnTT signals (`on_construct`, `on_update`, `on_destroy`). Edits notify through `patch`, which
 `ComponentAccess` and `Entity::MarkModified<T>()` emit, so the system must not poll every component each

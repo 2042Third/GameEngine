@@ -1,5 +1,6 @@
 #include "Engine/ModuleRegistrationHelpers.h"
 
+#include "Strata/Asset/AssetDependencies.h"
 #include "Strata/Asset/AssetImporter.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"
@@ -10,15 +11,18 @@
 #include "Strata/Engine/BuiltinModules.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/SceneSystem.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace Strata::Tests
 {
@@ -26,12 +30,101 @@ namespace Strata::Tests
 	namespace
 	{
 
-		// A component of a game module: registered through ModuleRegistrationOptions::Extra.
+		// A component of a game module: registered through ModuleRegistrationOptions::Extra. What it carries is extra data the
+		// properties do not express: the entities riding in it and the asset it transports, with their references described
+		// (ComponentInfoBuilder::ExtraReferences), so that generic code remaps, compares and scans them.
 		struct TestVehicleComponent
 		{
 			float Speed = 0.0f;
 			std::string Label;
+			std::vector<UUID> Passengers;
+			AssetHandle Cargo = AssetHandle::Null();
 		};
+
+		constexpr uint32_t c_PassengerSlot = 0;
+		constexpr uint32_t c_CargoSlot = 1;
+
+		void SerializeVehicle(const TestVehicleComponent& vehicle, nlohmann::json& out)
+		{
+			nlohmann::json passengers = nlohmann::json::array();
+			for (const UUID passenger : vehicle.Passengers)
+				passengers.push_back(static_cast<uint64_t>(passenger));
+			out["Passengers"] = passengers;
+			out["Cargo"] = static_cast<uint64_t>(vehicle.Cargo);
+		}
+
+		bool DeserializeVehicle(TestVehicleComponent& vehicle, const nlohmann::json& in, std::string* outError)
+		{
+			const auto passengers = in.find("Passengers");
+			const auto cargo = in.find("Cargo");
+			if (passengers == in.end() || !passengers->is_array() || cargo == in.end() || !cargo->is_number_unsigned())
+			{
+				if (outError)
+					*outError = "a vehicle needs its Passengers and its Cargo";
+				return false;
+			}
+			vehicle.Passengers.clear();
+			for (const nlohmann::json& passenger : *passengers)
+			{
+				if (passenger.is_number_unsigned())
+					vehicle.Passengers.push_back(UUID(passenger.get<uint64_t>()));
+			}
+			vehicle.Cargo = AssetHandle(cargo->get<uint64_t>());
+			return true;
+		}
+
+		void VisitVehicleReferences(const TestVehicleComponent& vehicle, const ComponentExtraReferences::Visitor& visitor)
+		{
+			for (uint32_t index = 0; index < vehicle.Passengers.size(); index++)
+				visitor(c_PassengerSlot, index, PropertyType::Entity, vehicle.Passengers[index]);
+			visitor(c_CargoSlot, 0, PropertyType::Asset, vehicle.Cargo);
+		}
+
+		void SetVehicleReference(TestVehicleComponent& vehicle, uint32_t slot, uint32_t subslot, UUID value)
+		{
+			if (slot == c_PassengerSlot && subslot < vehicle.Passengers.size())
+				vehicle.Passengers[subslot] = value;
+			else if (slot == c_CargoSlot)
+				vehicle.Cargo = value;
+		}
+
+		bool VehiclesEqual(const TestVehicleComponent& a, const TestVehicleComponent& b, const ComponentExtraReferences::Remap& remap)
+		{
+			if (a.Passengers.size() != b.Passengers.size() || a.Cargo != b.Cargo)
+				return false;
+			for (size_t index = 0; index < a.Passengers.size(); index++)
+			{
+				if (remap(a.Passengers[index]) != b.Passengers[index])
+					return false;
+			}
+			return true;
+		}
+
+		void VisitVehicleReferencesJson(const nlohmann::json& extra, const ComponentExtraReferences::JsonVisitor& visitor)
+		{
+			TestVehicleComponent vehicle;
+			if (!DeserializeVehicle(vehicle, extra, nullptr))
+				return;
+			VisitVehicleReferences(vehicle, [&visitor](uint32_t, uint32_t, PropertyType type, UUID value) { visitor(type, value); });
+		}
+
+		// A vehicle (with Speed, Label and a cargo) whose driver, its child, rides in it.
+		Entity CreateVehicleWithDriver(Scene& scene, const std::string& name)
+		{
+			Entity vehicle = scene.CreateEntity(name);
+			Entity driver = scene.CreateEntity(name + " Driver");
+			scene.SetParent(driver, vehicle);
+			vehicle.AddComponent<TestVehicleComponent>(TestVehicleComponent { 12.5f, "Rover One", { driver.GetUUID() }, AssetHandle(0xCA460) });
+			return vehicle;
+		}
+
+		// Whether the vehicle's only passenger is its first child (its driver).
+		bool RidesWithItsChild(const Entity& vehicle)
+		{
+			const TestVehicleComponent* component = vehicle.TryGetComponent<TestVehicleComponent>();
+			const std::vector<Entity> children = vehicle.GetChildren();
+			return component && component->Passengers.size() == 1 && !children.empty() && component->Passengers[0] == children.front().GetUUID();
+		}
 
 		struct LateComponent
 		{
@@ -75,7 +168,9 @@ namespace Strata::Tests
 				ComponentRegistry::Register<TestVehicleComponent>("TestVehicle")
 					.Category("Tests")
 					.Property("Speed", &TestVehicleComponent::Speed)
-					.Property("Label", &TestVehicleComponent::Label);
+					.Property("Label", &TestVehicleComponent::Label)
+					.Extra(SerializeVehicle, DeserializeVehicle)
+					.ExtraReferences(VisitVehicleReferences, SetVehicleReference, VehiclesEqual, VisitVehicleReferencesJson);
 				// The type is registered and the name is taken (ignoring case): both are refused, without aborting.
 				duplicateTypeRefused = !ComponentRegistry::Register<TestVehicleComponent>("TestVehicleAgain").Property("Speed", &TestVehicleComponent::Speed);
 				duplicateNameRefused = !ComponentRegistry::Register<LateComponent>("testvehicle");
@@ -98,8 +193,7 @@ namespace Strata::Tests
 			const std::filesystem::path path = directory / "Garage.stscene";
 			{
 				Scene scene("Garage");
-				Entity rover = scene.CreateEntity("Rover");
-				rover.AddComponent<TestVehicleComponent>(TestVehicleComponent { 12.5f, "Rover One" });
+				CreateVehicleWithDriver(scene, "Rover");
 				std::string error;
 				if (!SceneSerializer::SaveToFile(scene, path, &error))
 					return Fail("saving the scene: " + error);
@@ -113,8 +207,43 @@ namespace Strata::Tests
 			if (!vehicle)
 				return Fail("the reloaded scene has no TestVehicle");
 			std::printf("reloaded: Speed %.2f, Label %s\n", static_cast<double>(vehicle->Speed), vehicle->Label.c_str());
-			if (vehicle->Speed != 12.5f || vehicle->Label != "Rover One")
+			if (vehicle->Speed != 12.5f || vehicle->Label != "Rover One" || vehicle->Cargo != AssetHandle(0xCA460) || !RidesWithItsChild(rover))
 				return Fail("the reloaded TestVehicle has other values");
+
+			// The extra data's references, through ComponentInfo::ExtraReferences: copies ride with their own drivers...
+			Scene& garage = *loaded;
+			const Entity duplicate = garage.DuplicateEntity(rover);
+			if (!duplicate || !RidesWithItsChild(duplicate) || duplicate.GetChildren().front() == rover.GetChildren().front())
+				return Fail("the duplicate's passenger is not its own driver");
+			const Ref<Prefab> prefab = Prefab::CreateFromEntities(garage, { rover });
+			if (!prefab)
+				return Fail("no prefab of the vehicle");
+			prefab->Handle = AssetHandle(0x50FE);
+			const std::vector<Entity> instances = prefab->Instantiate(garage);
+			if (instances.empty() || !RidesWithItsChild(instances.front()))
+				return Fail("the prefab instance's passenger is not its own driver");
+			// ...instances compare equal to the prefab with their references mapped, and differ once a passenger changes...
+			const auto vehicleDiffers = [&](const Entity& instance)
+			{
+				for (const PrefabInstanceEntity& entity : prefab->CompareInstance(garage, instance))
+				{
+					if (entity.Instance == instance)
+						return std::find(entity.Differences.begin(), entity.Differences.end(), vehicleInfo) != entity.Differences.end();
+				}
+				return true;
+			};
+			if (vehicleDiffers(instances.front()))
+				return Fail("the untouched prefab instance differs from its prefab");
+			Entity instance = instances.front();
+			instance.GetComponent<TestVehicleComponent>().Passengers[0] = instance.GetUUID();
+			if (!vehicleDiffers(instance))
+				return Fail("an instance whose passenger changed does not differ from its prefab");
+			// ...and documents name the cargo among their assets.
+			std::vector<AssetHandle> references;
+			AssetDependencies::ScanEntities(SceneSerializer::SerializeEntities(garage, { rover }), references);
+			if (std::find(references.begin(), references.end(), AssetHandle(0xCA460)) == references.end())
+				return Fail("the vehicle's cargo is not among the assets its snapshot references");
+			std::printf("extra references: remapped, compared, scanned\n");
 
 			// The registry is frozen now: a registration is refused with an error, and the process goes on.
 			const uint64_t before = Log::GetBuffer().GetLatestSequence();

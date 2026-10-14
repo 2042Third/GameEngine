@@ -127,6 +127,8 @@ TEST_SUITE("Engine.Modules")
 		CHECK(result.ExitCode == 0);
 		CHECK(result.Output.find("registered: TestVehicle") != std::string::npos);
 		CHECK(result.Output.find("reloaded: Speed 12.50, Label Rover One") != std::string::npos);
+		// Its extra data's references are remapped in copies, compared with prefabs and scanned (ComponentInfo::ExtraReferences).
+		CHECK(result.Output.find("extra references: remapped, compared, scanned") != std::string::npos);
 		CHECK(result.Output.find("late registration refused: Component 'Late' is not registered: the component registry is frozen") != std::string::npos);
 
 		// This process lacks the game's component: its scene still loads, keeps the component and saves it unchanged.
@@ -141,9 +143,16 @@ TEST_SUITE("Engine.Modules")
 		REQUIRE(vehicle.is_object());
 		CHECK(vehicle["Speed"] == 12.5);
 		CHECK(vehicle["Label"] == "Rover One");
+		CHECK(vehicle["Passengers"].is_array());
 		const nlohmann::json saved = SceneSerializer::Serialize(*scene)["Scene"]["Entities"];
-		REQUIRE(saved.size() == 1);
-		CHECK(saved[0]["Components"]["TestVehicle"] == vehicle);
+		REQUIRE(saved.size() == 2); // The rover and its driver
+		nlohmann::json savedVehicle;
+		for (const nlohmann::json& entity : saved)
+		{
+			if (entity["Components"].contains("TestVehicle"))
+				savedVehicle = entity["Components"]["TestVehicle"];
+		}
+		CHECK(savedVehicle == vehicle);
 	}
 
 	TEST_CASE("Using a registry before the modules are registered fails a verify naming Engine::RegisterBuiltinModules")
