@@ -139,7 +139,7 @@ namespace Strata
 
 		// The renderable bounds of an entity's subtree (or of the entity alone), or its placeholder boxes when nothing in
 		// it renders. Uses the cached world transforms (call Scene::UpdateWorldTransforms first).
-		AABB GetContentBounds(const Scene& scene, Entity entity, bool includeDescendants)
+		AABB GetContentBounds(const Scene& scene, Entity entity, bool includeDescendants, std::vector<AssetHandle>* outPending)
 		{
 			std::vector<UUID> members;
 			if (includeDescendants)
@@ -156,7 +156,7 @@ namespace Strata
 				if (!member)
 					continue;
 				const glm::mat4 world = GetCachedWorldTransform(scene, member);
-				const AABB local = GetRenderableLocalBounds(member, nullptr);
+				const AABB local = GetRenderableLocalBounds(member, outPending);
 				if (local.IsValid())
 				{
 					renderable.Expand(local.Transformed(world));
@@ -224,10 +224,28 @@ namespace Strata
 
 		AABB GetEntityBounds(Scene& scene, Entity entity, bool includeDescendants)
 		{
+			return GetEntityBounds(scene, entity, includeDescendants, nullptr);
+		}
+
+		AABB GetEntityBounds(Scene& scene, Entity entity, bool includeDescendants, std::vector<AssetHandle>* outPending)
+		{
 			if (!entity || entity.GetScene() != &scene)
 				return {};
 			scene.UpdateWorldTransforms();
-			return GetContentBounds(scene, entity, includeDescendants);
+			return GetContentBounds(scene, entity, includeDescendants, outPending);
+		}
+
+		AABB GetOwnBounds(const Scene& scene, Entity entity)
+		{
+			if (!entity || entity.GetScene() != &scene)
+				return {};
+			const glm::mat4 world = GetCachedWorldTransform(scene, entity);
+			if (const AABB local = GetRenderableLocalBounds(entity, nullptr); local.IsValid())
+				return local.Transformed(world);
+			if (const AABB shape = GetShapeBounds(entity, world); shape.IsValid())
+				return shape;
+			const glm::vec3 origin(world[3]);
+			return AABB(origin, origin);
 		}
 
 		AABB GetEntitiesBounds(Scene& scene, std::span<const Entity> entities)
@@ -238,7 +256,7 @@ namespace Strata
 			for (Entity entity : entities)
 			{
 				if (entity && entity.GetScene() == &scene)
-					bounds.Expand(GetContentBounds(scene, entity, true));
+					bounds.Expand(GetContentBounds(scene, entity, true, nullptr));
 			}
 			return bounds;
 		}

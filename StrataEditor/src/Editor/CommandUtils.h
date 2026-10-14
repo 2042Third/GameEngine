@@ -3,7 +3,10 @@
 #include "Editor/EditorCommands.h"
 
 #include <Strata/Asset/AssetTypes.h>
+#include <Strata/Math/AABB.h>
 #include <Strata/Scene/Entity.h>
+
+#include <glm/glm.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -59,6 +62,13 @@ namespace Strata
 
 		// {"id", "name", "parent", "children": [...], "components": {...}}
 		nlohmann::json DescribeEntity(Entity entity);
+		// A world transform as commands report it: {position, rotation: {euler (degrees, as the Inspector shows them),
+		// quaternion [x, y, z, w]}, scale}.
+		nlohmann::json DescribeWorldTransform(const glm::mat4& world);
+		// Bounds as commands report them: {min, max, size, center, pending}; null for invalid bounds.
+		nlohmann::json DescribeBounds(const AABB& bounds, bool pending);
+		// Three finite numbers ([x, y, z]); nullopt for anything else.
+		std::optional<glm::vec3> ReadVec3(const nlohmann::json& value);
 
 		// {"open": false} without a project, else {"open": true, "name", "directory", "assetDirectory", "startScene"}.
 		nlohmann::json DescribeProject(const EditorContext& context);

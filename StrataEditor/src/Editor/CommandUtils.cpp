@@ -8,6 +8,7 @@
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/StringUtils.h>
+#include <Strata/Math/Math.h>
 #include <Strata/Project/Project.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -16,6 +17,7 @@
 #include <Strata/Scene/Scene.h>
 
 #include <algorithm>
+#include <cmath>
 #include <system_error>
 
 namespace Strata
@@ -146,6 +148,49 @@ namespace Strata
 				{ "children", std::move(children) },
 				{ "components", ComponentAccess::SerializeEntityComponents(entity) }
 			};
+		}
+
+		nlohmann::json DescribeWorldTransform(const glm::mat4& world)
+		{
+			glm::vec3 position(0.0f);
+			glm::quat rotation(1.0f, 0.0f, 0.0f, 0.0f);
+			glm::vec3 scale(1.0f);
+			Math::DecomposeTransform(world, position, rotation, scale);
+			const glm::vec3 euler = Math::QuatToEulerDegrees(rotation);
+			return {
+				{ "position", { position.x, position.y, position.z } },
+				{ "rotation", { { "euler", { euler.x, euler.y, euler.z } }, { "quaternion", { rotation.x, rotation.y, rotation.z, rotation.w } } } },
+				{ "scale", { scale.x, scale.y, scale.z } } };
+		}
+
+		nlohmann::json DescribeBounds(const AABB& bounds, bool pending)
+		{
+			if (!bounds.IsValid())
+				return nullptr;
+			const glm::vec3 size = bounds.Max - bounds.Min;
+			const glm::vec3 center = bounds.GetCenter();
+			return {
+				{ "min", { bounds.Min.x, bounds.Min.y, bounds.Min.z } },
+				{ "max", { bounds.Max.x, bounds.Max.y, bounds.Max.z } },
+				{ "size", { size.x, size.y, size.z } },
+				{ "center", { center.x, center.y, center.z } },
+				{ "pending", pending } };
+		}
+
+		std::optional<glm::vec3> ReadVec3(const nlohmann::json& value)
+		{
+			if (!value.is_array() || value.size() != 3)
+				return std::nullopt;
+			glm::vec3 result(0.0f);
+			for (int axis = 0; axis < 3; axis++)
+			{
+				if (!value[axis].is_number())
+					return std::nullopt;
+				result[axis] = value[axis].get<float>();
+				if (!std::isfinite(result[axis]))
+					return std::nullopt;
+			}
+			return result;
 		}
 
 		nlohmann::json DescribeProject(const EditorContext& context)

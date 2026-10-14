@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Editor/AssetBounds.h"
 #include "Editor/CommandJournal.h"
 #include "Editor/EditorNotifications.h"
 #include "Editor/EditorGameWindow.h"
@@ -215,6 +216,8 @@ namespace Strata
 		// scene starts without requests); Update advances it.
 		AnimationPreview& GetAnimationPreview();
 		AnimationPreview* FindAnimationPreview() const { return m_AnimationPreview.get(); }
+		// What assets draw around their origin (asset.info's bounds), cached per content stamp.
+		AssetBounds& GetAssetBounds() { return m_AssetBounds; }
 		// The scene edits apply to: the running copy while playing, otherwise the edited scene.
 		const Ref<Scene>& GetActiveScene() const { return m_RuntimeScene ? m_RuntimeScene : m_EditScene; }
 
@@ -584,6 +587,7 @@ namespace Strata
 
 		Ref<Scene> m_EditScene;
 		Scope<AnimationPreview> m_AnimationPreview; // Of m_EditScene: declared after it, so it goes first
+		AssetBounds m_AssetBounds;
 		uint64_t m_PlaySession = 0;
 		uint64_t m_ReplacedFixedSteps = 0; // Fixed steps of the scenes a game switch replaced in this play session
 		uint64_t m_FixedStepsAtResume = 0;

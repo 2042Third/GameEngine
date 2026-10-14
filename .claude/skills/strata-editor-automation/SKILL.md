@@ -92,11 +92,12 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Did the game ask for fullscreen or a resolution, lock the cursor, where do its saves go? | `editor.status` (`game`: `windowRequests`, recorded but not applied in play mode; `cursor`; `saveDirectory`, the project's `.strata/Saves`) |
 | Which commands and parameters exist? | `editor.commands` (or `list --json`) |
 | Which components and properties (types, ranges, enum values)? | `component.list` |
-| Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` |
+| Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` (meshes, models, prefabs: `bounds`, their size as placed) |
 | What uses an asset (before deleting it)? | `asset.findReferences` (`asset.delete` refuses while anything does) |
 | What does a material hold, which properties exist? | `material.get` (values, and each property's type, range, options) |
 | What state do the scripts hold (a score, a timer)? | `script.get` (live field values while playing) |
-| What is in the scene? | `scene.hierarchy`, `entity.find` (`name`, `tag`, `component`), `entity.get` |
+| What is in the scene? | `scene.hierarchy`, `entity.find` (`name`, `tag`, `component`, `box: {min, max}`, `limit`), `entity.get` |
+| Where is it, how big? | `entity.get {"entity", "world": true}`: `world` (position, rotation as `euler` degrees and `quaternion`, scale) and `bounds` (`min`, `max`, `size`, `center`; `pending` while a mesh loads) |
 | What does the person have selected, what does the inspector show? | `selection.get` (`entities`, the last is the primary one; `inspectedAsset` while the inspector shows an asset); `selection.set {entities?, asset?}` changes them |
 | What happened (errors, script output)? | `log.read` (`after` = the previous `latest` to page; `minLevel`) |
 | How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`); `asset.setBudget` changes the open project's budgets (MB of memory, staging and uploads per frame; ms of finalization and of upload steps per frame) |

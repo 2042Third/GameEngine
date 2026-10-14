@@ -327,19 +327,43 @@ namespace Strata
 				return FinishEdit(context, transaction, { { "entities", ToJson(roots) }, { "warnings", warnings } });
 			} });
 
-		registry.Register({ "entity.get", "An entity's name, parent, children and all component values.",
-			ObjectSchema({ { "entity", EntitySchema("Entity") } }, { "entity" }),
+		registry.Register({ "entity.get",
+			"An entity's name, parent, children and all component values. With world: true also where it is in the world, decomposed from its "
+			"world transform: world: {position, rotation: {euler (degrees, as the Inspector shows them), quaternion [x, y, z, w]}, scale}, and what "
+			"it and its descendants take up: bounds: {min, max, size, center, pending} (what renders, skinned meshes in their pose; else physical "
+			"shapes; else boxes around the entities; pending: a mesh still loading stood in as a box: ask again).",
+			ObjectSchema({ { "entity", EntitySchema("Entity") }, { "world", BoolSchema("Add world (the world transform) and bounds (default false)") } },
+				{ "entity" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
+				Scene& scene = *context.GetActiveScene();
 				CommandArguments arguments(parameters);
-				Entity entity = arguments.GetEntity(*context.GetActiveScene(), "entity");
+				Entity entity = arguments.GetEntity(scene, "entity");
+				const bool world = arguments.GetBool("world", false);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				return EditorCommandResult::Ok(DescribeEntity(entity));
+				nlohmann::json value = DescribeEntity(entity);
+				if (world)
+				{
+					std::vector<AssetHandle> pending;
+					const AABB bounds = SceneBounds::GetEntityBounds(scene, entity, true, &pending);
+					value["world"] = DescribeWorldTransform(scene.GetWorldTransform(entity));
+					value["bounds"] = DescribeBounds(bounds, !pending.empty());
+				}
+				return EditorCommandResult::Ok(std::move(value));
 			}, EditorCommandKind::Query });
 
-		registry.Register({ "entity.find", "IDs of the entities matching all given filters: exact name, tag, component type.",
-			ObjectSchema({ { "name", StringSchema("Exact entity name") }, { "tag", StringSchema("Tag") }, { "component", StringSchema("Component type, e.g. \"PointLight\"") } }),
+		registry.Register({ "entity.find",
+			"IDs of the entities matching all given filters, in hierarchy order: exact name, tag, component type, and box: entities whose own "
+			"world bounds (what they render, else their physical shape, else their origin) intersect the box. limit returns at most that many.",
+			ObjectSchema({
+				{ "name", StringSchema("Exact entity name") },
+				{ "tag", StringSchema("Tag") },
+				{ "component", StringSchema("Component type, e.g. \"PointLight\"") },
+				{ "box", { { "type", "object" }, { "description", "A world-space box {min: [x, y, z], max: [x, y, z]}" },
+					{ "properties", { { "min", Vec3Schema("Lowest corner") }, { "max", Vec3Schema("Highest corner") } } },
+					{ "required", nlohmann::json::array({ "min", "max" }) }, { "additionalProperties", false } } },
+				{ "limit", IntegerSchema("Most entities returned (default: all)", 1, Scene::c_MaxEntities) } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				Scene& scene = *context.GetActiveScene();
@@ -347,9 +371,24 @@ namespace Strata
 				const std::optional<std::string> name = arguments.Has("name") ? std::optional(arguments.GetString("name")) : std::nullopt;
 				const std::optional<std::string> tag = arguments.Has("tag") ? std::optional(arguments.GetString("tag")) : std::nullopt;
 				const ComponentInfo* component = arguments.Has("component") ? GetComponentInfo(arguments, "component", false) : nullptr;
+				const int64_t limit = arguments.GetInt("limit", Scene::c_MaxEntities, 1, Scene::c_MaxEntities);
+				std::optional<AABB> box;
+				if (const nlohmann::json* boxJson = arguments.FindObject("box"))
+				{
+					const std::optional<glm::vec3> min = ReadVec3(boxJson->value("min", nlohmann::json()));
+					const std::optional<glm::vec3> max = ReadVec3(boxJson->value("max", nlohmann::json()));
+					if (!min || !max || boxJson->size() != 2)
+						arguments.SetError("Parameter 'box' must be {\"min\": [x, y, z], \"max\": [x, y, z]} with finite numbers");
+					else if (min->x > max->x || min->y > max->y || min->z > max->z)
+						arguments.SetError("Parameter 'box': min must not lie above max on any axis");
+					else
+						box = AABB(*min, *max);
+				}
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
+				if (box)
+					scene.UpdateWorldTransforms();
 				nlohmann::json ids = nlohmann::json::array();
 				for (Entity entity : scene.GetEntitiesInHierarchyOrder())
 				{
@@ -359,7 +398,15 @@ namespace Strata
 						continue;
 					if (component && !component->Has(scene.GetRegistry(), entity.GetHandle()))
 						continue;
+					if (box)
+					{
+						const AABB bounds = SceneBounds::GetOwnBounds(scene, entity);
+						if (!bounds.IsValid() || !bounds.Intersects(*box))
+							continue;
+					}
 					ids.push_back(UUIDToJson(entity.GetUUID()));
+					if (ids.size() >= static_cast<size_t>(limit))
+						break;
 				}
 				return EditorCommandResult::Ok({ { "entities", std::move(ids) } });
 			}, EditorCommandKind::Query });

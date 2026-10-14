@@ -1,3 +1,4 @@
+#include "Editor/AssetBounds.h"
 #include "Editor/AssetEdit.h"
 #include "Editor/AssetFileAction.h"
 #include "Editor/AssetReferences.h"
@@ -30,6 +31,9 @@ namespace Strata
 
 	namespace
 	{
+
+		// Frames asset.info waits for what an asset draws to load before it answers with boundsPending: about five seconds.
+		constexpr int c_MaxBoundsFrames = 300;
 
 		EditorAssetManager* RequireAssets(EditorContext& context, std::string* outError)
 		{
@@ -618,19 +622,25 @@ namespace Strata
 
 		registry.Register({ "asset.info",
 			"An asset's metadata, load state, import errors and warnings, sub-assets, import settings with the description of every setting "
-			"(importSettingsProperties: type, range, options; what asset.setImportSettings accepts) and whether an import is running.",
-			ObjectSchema({ { "asset", AssetSchema("Asset") } }, { "asset" }),
+			"(importSettingsProperties: type, range, options; what asset.setImportSettings accepts) and whether an import is running. Meshes, models "
+			"and prefabs add bounds: {min, max, size}, what they draw around their origin as an instance placed there (skinned characters in their "
+			"rest pose): use it to check a model's size before placing it. When meshes or skeletons it needs are not loaded, asset.info loads them "
+			"and answers once they are in (at most about 300 frames; then boundsPending: true); bounds: false answers at once without bounds.",
+			ObjectSchema({ { "asset", AssetSchema("Asset") }, { "bounds", BoolSchema("Add the bounds of meshes, models and prefabs (default true)") } },
+				{ "asset" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const AssetHandle handle = ResolveAsset(context, arguments, "asset", AssetType::None);
+				const bool bounds = arguments.GetBool("bounds", true);
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
 				nlohmann::json result = DescribeAsset(*manager->GetMetadata(handle));
 				result["state"] = AssetStateToString(manager->GetAssetState(handle));
 				result["loadError"] = manager->GetAssetError(handle);
-				if (EditorAssetManager* assets = context.GetAssetManager())
+				EditorAssetManager* assets = context.GetAssetManager();
+				if (assets)
 				{
 					const AssetImportInfo info = assets->GetImportInfo(handle);
 					nlohmann::json subAssets = nlohmann::json::array();
@@ -655,7 +665,44 @@ namespace Strata
 					result["importSettingsProperties"] = std::move(settingsProperties);
 					result["importing"] = assets->IsImportPending(handle);
 				}
-				return EditorCommandResult::Ok(std::move(result));
+				const AssetType type = manager->GetAssetType(handle);
+				if (!bounds || !assets || (type != AssetType::Mesh && type != AssetType::Model && type != AssetType::Prefab))
+					return EditorCommandResult::Ok(std::move(result));
+				auto addBounds = [](nlohmann::json& value, const AssetBounds::Result& measured, bool givenUp)
+				{
+					if (measured.Bounds.IsValid())
+					{
+						const glm::vec3 size = measured.Bounds.Max - measured.Bounds.Min;
+						const glm::vec3& min = measured.Bounds.Min;
+						const glm::vec3& max = measured.Bounds.Max;
+						value["bounds"] = { { "min", { min.x, min.y, min.z } }, { "max", { max.x, max.y, max.z } }, { "size", { size.x, size.y, size.z } } };
+					}
+					else
+					{
+						value["bounds"] = nullptr;
+					}
+					if (givenUp)
+						value["boundsPending"] = true;
+				};
+				const AssetBounds::Result measured = context.GetAssetBounds().Measure(*assets, handle);
+				if (!measured.Pending)
+				{
+					addBounds(result, measured, false);
+					return EditorCommandResult::Ok(std::move(result));
+				}
+				// What it draws loads over the next frames (Measure requested it).
+				return EditorCommandResult::Defer([result = std::move(result), handle, addBounds, frames = 0](EditorContext& context) mutable
+					-> std::optional<EditorCommandResult>
+				{
+					EditorAssetManager* assets = context.GetAssetManager();
+					if (!assets)
+						return EditorCommandResult::Fail("The project was closed before the asset's bounds were known", EditorCommandError::Cancelled);
+					const AssetBounds::Result measured = context.GetAssetBounds().Measure(*assets, handle);
+					if (measured.Pending && ++frames < c_MaxBoundsFrames)
+						return std::nullopt;
+					addBounds(result, measured, measured.Pending);
+					return EditorCommandResult::Ok(std::move(result));
+				});
 			}, EditorCommandKind::Query });
 
 		registry.Register({ "asset.import",

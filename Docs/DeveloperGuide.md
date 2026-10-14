@@ -1585,6 +1585,14 @@ and `AudioSystem`, the built-in "Audio" scene system.
 
 ### View commands
 
+- **World queries:** `entity.get {world: true}` adds the entity's world transform decomposed (`world: {position, rotation:
+  {euler, quaternion}, scale}`) and `bounds: {min, max, size, center, pending}` of it with its descendants
+  (`SceneBounds::GetEntityBounds`, skinned meshes in their pose; `pending` when a placeholder box stood in for a loading
+  mesh); `entity.find {box: {min, max}, limit}` keeps the entities whose own bounds (`SceneBounds::GetOwnBounds`: what
+  they render, else their physical shape, else their origin) intersect the box, in hierarchy order; `asset.info` adds the
+  bounds of meshes, models and prefabs around their origin (`Editor/AssetBounds`: a template instantiated into a scene of
+  its own with rest poses, cached per content stamp), deferring (at most 300 frames, then `boundsPending`) while what they
+  draw loads; `bounds: false` answers at once.
 - **View commands** change no scene data and record no undo: `camera.get`, `camera.set {position, target, yaw, pitch,
   distance, fov, near, far, flySpeed}` (position + target looks from one at the other) and `camera.focus {entities?}`
   (frames them, or the whole scene). `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?,

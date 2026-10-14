@@ -31,6 +31,13 @@ namespace Strata
 		// still loading stands as the placeholder box). Updates the scene's world transforms. Invalid for an invalid
 		// entity.
 		AABB GetEntityBounds(Scene& scene, Entity entity, bool includeDescendants = true);
+		// The same, with the meshes that were still loading (their placeholder boxes stood in) and the skeletons of skinned
+		// meshes whose pose was not there yet in `outPending`.
+		AABB GetEntityBounds(Scene& scene, Entity entity, bool includeDescendants, std::vector<AssetHandle>* outPending);
+		// The entity's own world bounds, without its descendants: what it renders, else its physical shape, else its origin (an
+		// empty box there). Uses the cached world transforms (call Scene::UpdateWorldTransforms first). Invalid for an invalid
+		// entity.
+		AABB GetOwnBounds(const Scene& scene, Entity entity);
 		// Bounds of several entities, each with its descendants, by the same rule.
 		AABB GetEntitiesBounds(Scene& scene, std::span<const Entity> entities);
 		// Bounds of the renderable content of every entity that is active in the hierarchy, or of the placeholder boxes

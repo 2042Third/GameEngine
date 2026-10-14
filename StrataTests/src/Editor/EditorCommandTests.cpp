@@ -1,5 +1,7 @@
 #include <doctest/doctest.h>
 
+#include "Animation/SkinnedGltf.h"
+
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -65,6 +67,51 @@ namespace
 
 TEST_SUITE("Editor.Commands")
 {
+	TEST_CASE("asset.info gives the bounds of meshes, models (at their import scale, standing) and prefabs")
+	{
+		CommandHarness harness;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("EditorAssetBounds") / "Game";
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		const nlohmann::json cube = harness.Run("asset.info", { { "asset", UUIDToJson(BuiltinAssets::CubeMesh) } });
+		CHECK(cube["bounds"]["min"] == nlohmann::json { -0.5, -0.5, -0.5 });
+		CHECK(cube["bounds"]["size"] == nlohmann::json { 1.0, 1.0, 1.0 });
+		CHECK_FALSE(cube.contains("boundsPending"));
+		CHECK_FALSE(harness.Run("asset.info", { { "asset", UUIDToJson(BuiltinAssets::CubeMesh) }, { "bounds", false } }).contains("bounds"));
+
+		// The Z-up arm at Scale 1 and 0.01: standing along +Y in its rest pose, two units and two centimeters tall.
+		REQUIRE(FileSystem::CreateDirectories(directory / "Assets" / "Models"));
+		REQUIRE(FileSystem::WriteBytes(directory / "Assets" / "Models" / "Arm.gltf", Tests::CreateSkinnedArmGltf(Tests::ZUpArmOptions())));
+		REQUIRE(FileSystem::WriteBytes(directory / "Assets" / "Models" / "SmallArm.gltf", Tests::CreateSkinnedArmGltf(Tests::ZUpArmOptions())));
+		harness.Context.GetAssetManager()->Scan();
+		harness.Run("asset.setImportSettings", { { "asset", "Models/SmallArm.gltf" }, { "settings", { { "Scale", 0.01 } } } });
+		const nlohmann::json arm = harness.Run("asset.info", { { "asset", "Models/Arm.gltf" } });
+		const nlohmann::json small = harness.Run("asset.info", { { "asset", "Models/SmallArm.gltf" } });
+		REQUIRE(arm["bounds"].is_object());
+		REQUIRE(small["bounds"].is_object());
+		for (int axis = 0; axis < 3; axis++)
+		{
+			CAPTURE(axis);
+			CHECK(small["bounds"]["min"][axis].get<double>() == doctest::Approx(arm["bounds"]["min"][axis].get<double>() * 0.01));
+			CHECK(small["bounds"]["max"][axis].get<double>() == doctest::Approx(arm["bounds"]["max"][axis].get<double>() * 0.01));
+		}
+		CHECK(arm["bounds"]["min"][1].get<double>() == doctest::Approx(0.0).epsilon(1e-4));
+		CHECK(arm["bounds"]["max"][1].get<double>() == doctest::Approx(2.0).epsilon(1e-4));
+		CHECK(arm["bounds"]["size"][2].get<double>() == doctest::Approx(0.2).epsilon(1e-4));
+		// Answered from the cache the second time.
+		const uint64_t measured = harness.Context.GetAssetBounds().GetMeasureCount();
+		CHECK(harness.Run("asset.info", { { "asset", "Models/Arm.gltf" } })["bounds"] == arm["bounds"]);
+		CHECK(harness.Context.GetAssetBounds().GetMeasureCount() == measured);
+
+		// A prefab of a cube, around its root's origin wherever the root stood.
+		const std::string crate = harness.Run("entity.create", { { "name", "Crate" }, { "components", {
+			{ "Transform", { { "Translation", { 5, 0, 0 } }, { "Scale", { 2, 1, 1 } } } },
+			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } })["id"].get<std::string>();
+		harness.Run("prefab.create", { { "entities", { crate } }, { "path", "Prefabs/Crate.stprefab" } });
+		const nlohmann::json prefab = harness.Run("asset.info", { { "asset", "Prefabs/Crate.stprefab" } });
+		CHECK(prefab["bounds"]["min"] == nlohmann::json { -1.0, -0.5, -0.5 });
+		CHECK(prefab["bounds"]["max"] == nlohmann::json { 1.0, 0.5, 0.5 });
+	}
+
 	TEST_CASE("Materials warn about textures imported for another use than their slot reads, with the command that fixes it")
 	{
 		CommandHarness harness;
