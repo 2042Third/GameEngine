@@ -206,8 +206,14 @@ TEST_SUITE("Asset.PartialResidency")
 			manager->CancelRange(read);
 		}
 		manager->OpenGate();
-		for (int attempt = 0; attempt < 1000 && (manager->GetStats().InFlightBytes > 0 || manager->GetStats().RangeReads > 0); attempt++)
+		// Until the I/O thread, which may wake from the gate late (a busy machine: 1,000 updates took a few milliseconds),
+		// has let go of the reads, for ten seconds at most.
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		while ((manager->GetStats().InFlightBytes > 0 || manager->GetStats().RangeReads > 0) && std::chrono::steady_clock::now() < deadline)
+		{
 			manager->Update();
+			std::this_thread::yield();
+		}
 		CHECK(manager->GetStats().InFlightBytes == 0);
 		CHECK(manager->GetStats().RangeReads == 0);
 		CHECK(manager->GetStats().RangeReadsCompleted == 0);
