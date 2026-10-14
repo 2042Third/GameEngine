@@ -88,8 +88,23 @@ namespace Strata
 		bool Truncated = false; // Lines or glyphs were left out (Truncate, Ellipsis)
 	};
 
-	// Decodes UTF-8; malformed sequences, overlong encodings and surrogates become U+FFFD.
+	// Decodes UTF-8; malformed sequences, overlong encodings and surrogates become U+FFFD. With `outOffsets`, also the byte
+	// each code point starts at.
 	void DecodeUTF8(std::string_view text, std::vector<uint32_t>& outCodepoints);
+	void DecodeUTF8(std::string_view text, std::vector<uint32_t>& outCodepoints, std::vector<uint32_t>* outOffsets);
+
+	// A place between the characters of a line of text (MeasureCaretStops): the byte it is at in the UTF-8 text, and the pen
+	// there, in em from the line's start.
+	struct TextCaretStop
+	{
+		uint32_t Byte = 0;
+		float X = 0.0f;
+	};
+
+	// Where a caret can stand in one unwrapped line of UTF-8 text, as ShapeText lays the line out from x = 0 (kerning, tabs,
+	// control characters taking no room): one stop before each character and one after the last (at text.size()). Returns
+	// the line's width in em (ShapedText::Width of the same line).
+	float MeasureCaretStops(const FontFace& face, std::string_view text, std::vector<TextCaretStop>& outStops);
 
 	// Lays out UTF-8 text from the font's glyph metrics alone, rasterizing nothing (so layout can measure text without a
 	// GPU, e.g. to fit a UI rect to it). Lines break at '\n' and, with a wrap width, between words; tabs advance by four

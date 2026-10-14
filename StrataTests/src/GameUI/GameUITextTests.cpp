@@ -272,4 +272,35 @@ TEST_SUITE("GameUI.Text")
 		shaped = Shape("abc   ", options);
 		CHECK_FALSE(shaped.Truncated);
 	}
+
+	TEST_CASE("Caret stops stand before each character and after the last, where the shaped line puts them")
+	{
+		const std::string text = "AV b\xC3\xA9\tx";
+		std::vector<TextCaretStop> stops;
+		const float width = MeasureCaretStops(GetDefaultFace(), text, stops);
+		// A, V, space, b, é (two bytes), tab, x, and the end.
+		REQUIRE(stops.size() == 8);
+		const uint32_t bytes[] = { 0, 1, 2, 3, 4, 6, 7, 8 };
+		for (size_t index = 0; index < stops.size(); index++)
+		{
+			CAPTURE(index);
+			CHECK(stops[index].Byte == bytes[index]);
+			if (index > 0)
+				CHECK(stops[index].X >= stops[index - 1].X);
+		}
+		CHECK(stops.front().X == 0.0f);
+		CHECK(stops.back().X == doctest::Approx(width));
+		// The same width the shaper gives the line, and each stop where the line up to it ends.
+		CHECK(width == doctest::Approx(Measure(text)));
+		CHECK(stops[2].X == doctest::Approx(Measure("AV")));
+		CHECK(stops[5].X == doctest::Approx(Measure("AV b\xC3\xA9")));
+		// The tab is four spaces.
+		const float space = GetDefaultFace().GetGlyphMetrics(Glyph(' ')).Advance;
+		CHECK(stops[6].X - stops[5].X == doctest::Approx(4.0f * space));
+
+		// An empty text has one stop.
+		CHECK(MeasureCaretStops(GetDefaultFace(), "", stops) == 0.0f);
+		REQUIRE(stops.size() == 1);
+		CHECK(stops[0].Byte == 0);
+	}
 }

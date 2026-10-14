@@ -413,10 +413,19 @@ namespace Strata
 
 	void DecodeUTF8(std::string_view text, std::vector<uint32_t>& outCodepoints)
 	{
+		DecodeUTF8(text, outCodepoints, nullptr);
+	}
+
+	void DecodeUTF8(std::string_view text, std::vector<uint32_t>& outCodepoints, std::vector<uint32_t>* outOffsets)
+	{
 		outCodepoints.clear();
+		if (outOffsets)
+			outOffsets->clear();
 		size_t index = 0;
 		while (index < text.size())
 		{
+			if (outOffsets)
+				outOffsets->push_back(static_cast<uint32_t>(index));
 			const uint8_t lead = static_cast<uint8_t>(text[index]);
 			uint32_t length = 0;
 			uint32_t codepoint = 0;
@@ -469,6 +478,42 @@ namespace Strata
 			outCodepoints.push_back(codepoint);
 			index += consumed;
 		}
+	}
+
+	float MeasureCaretStops(const FontFace& face, std::string_view text, std::vector<TextCaretStop>& outStops)
+	{
+		// The pen as ShapeText moves it along an unwrapped line: kerning between neighbours, tabs of four spaces (without
+		// kerning around them), control characters and line breaks taking no room.
+		ShapeScratch& scratch = GetScratch();
+		std::vector<uint32_t> offsets;
+		DecodeUTF8(text, scratch.Codepoints, &offsets);
+		outStops.clear();
+		outStops.reserve(scratch.Codepoints.size() + 1);
+		const float spaceAdvance = face.GetGlyphMetrics(face.GetGlyphIndex(' ')).Advance;
+		float pen = 0.0f;
+		bool hasPrevious = false;
+		uint32_t previous = 0;
+		for (size_t index = 0; index < scratch.Codepoints.size(); index++)
+		{
+			outStops.push_back(TextCaretStop { offsets[index], pen });
+			const uint32_t codepoint = scratch.Codepoints[index];
+			if (codepoint == '\t')
+			{
+				pen += spaceAdvance * static_cast<float>(c_TabWidth);
+				hasPrevious = false;
+				continue;
+			}
+			if (codepoint < 0x20 || codepoint == 0x7F)
+				continue;
+			const uint32_t glyph = face.GetGlyphIndex(codepoint);
+			if (hasPrevious)
+				pen += face.GetKerning(previous, glyph);
+			pen += face.GetGlyphMetrics(glyph).Advance;
+			hasPrevious = true;
+			previous = glyph;
+		}
+		outStops.push_back(TextCaretStop { static_cast<uint32_t>(text.size()), pen });
+		return pen;
 	}
 
 	void ShapeText(const FontFace& face, std::string_view text, const TextShapeOptions& options, ShapedText& outText)
