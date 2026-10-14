@@ -260,6 +260,8 @@ namespace Strata
 		// The I/O job reads from the asset manager this export keeps: it ends first.
 		if (m_Shared)
 			m_Shared->Cancel = true;
+		if (m_DocumentScanJob.IsValid())
+			m_DocumentScanJob.Wait();
 		if (m_Job.IsValid())
 			m_Job.Wait();
 	}
@@ -284,6 +286,39 @@ namespace Strata
 			// Finished imports are applied by the asset manager's update, which runs every frame.
 			if (m_Assets->HasPendingImports() || (m_Saver && m_Saver->IsBusy()))
 				return;
+			// Searches of what documents reference are no imports: those that have not run yet are done here, by a job.
+			if (!m_DocumentsScanned && !m_DocumentScan)
+			{
+				std::vector<AssetHandle> documents = m_Assets->GetPendingReferenceSearches();
+				if (documents.empty())
+				{
+					m_DocumentsScanned = true;
+				}
+				else
+				{
+					m_DocumentScan = CreateRef<DocumentScan>();
+					m_DocumentScan->Documents = std::move(documents);
+					m_DocumentScanJob = JobSystem::SubmitIO([scan = m_DocumentScan, assets = m_Assets, shared = m_Shared]()
+					{
+						scan->References.resize(scan->Documents.size());
+						for (size_t index = 0; index < scan->Documents.size() && !shared->Cancel; index++)
+							scan->References[index] = assets->FindDocumentReferences(scan->Documents[index]);
+						scan->Done.store(true, std::memory_order_release);
+					});
+				}
+			}
+			if (m_DocumentScan)
+			{
+				if (!m_DocumentScan->Done.load(std::memory_order_acquire))
+					return;
+				for (size_t index = 0; index < m_DocumentScan->Documents.size(); index++)
+				{
+					if (m_DocumentScan->References[index])
+						m_Assets->RecordScannedReferences(m_DocumentScan->Documents[index], *m_DocumentScan->References[index]);
+				}
+				m_DocumentScan.reset();
+				m_DocumentsScanned = true;
+			}
 			Begin();
 		}
 		Collect();
@@ -474,6 +509,9 @@ namespace Strata
 	{
 		if (m_Collected)
 			return;
+		// A scan of documents stops at its next document once cancelled.
+		if (m_DocumentScanJob.IsValid())
+			m_DocumentScanJob.Wait();
 		if (m_Job.IsValid())
 			m_Job.Wait();
 		else if (m_Shared->State == GameExportState::WaitingForImports && m_Shared->Cancel)

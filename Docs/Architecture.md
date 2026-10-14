@@ -991,6 +991,14 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   assets stored as-is reload at once and their references are searched again), and `IsImportPending` tells a deferred
   command (`asset.setImportSettings`, `asset.reimport`) when `Update` applied it; `SetImportSettings` and
   `ReimportAsset` import on the calling thread (tools, tests).
+- **Searches of what documents reference** (`EditorAssetManager::QueueNativeReferences`). A document changed on disk
+  (the watcher's report, `asset.reimport`) is searched on an I/O job once it has not changed for
+  `c_ReferenceSearchDelay` (500 ms: a file written over seconds is searched once), and a newer search cancels the one
+  before (one per document at a time; a save records its references itself and cancels the search). Searches are no
+  imports: `HasPendingImports` counts imports only, `HasPendingReferenceSearches` and `GetPendingReferenceSearches` the
+  searches (`editor.status`'s `assets.referenceSearches`). An export waits for imports and saves only; the documents
+  whose search has not run yet it scans itself on a job before it plans (`FindDocumentReferences`,
+  `RecordScannedReferences`), so its plan holds what they use now.
 - **Importing external files** (`EditorAssetManager::ImportExternal`, `asset.import`). Nothing of it runs in a frame: an
   I/O job copies the files (`ExternalCopy`, which uses no manager state) and prepares what it copied for registration
   as a scan does (`PrepareAddedFiles`: the copied `.meta` files' handles where they are free, new ones written by the

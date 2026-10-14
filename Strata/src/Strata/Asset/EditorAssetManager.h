@@ -397,9 +397,24 @@ namespace Strata
 		// the reason, when a write failed.
 		bool FlushImportRecords(std::string* outError = nullptr);
 
-		// Whether background imports (hot reload), or searches of what changed engine-native assets reference, are queued,
-		// running, or finished and not applied yet (Update applies them).
+		// Whether background imports (hot reload, a scan's) are queued, running, or finished and not applied yet (Update
+		// applies them), or a scan runs. Searches of what documents reference are no imports: HasPendingReferenceSearches.
 		bool HasPendingImports() const;
+		// Whether searches of what changed engine-native documents reference wait, run, or finished and are not applied yet. A
+		// document's search starts once it has not changed for c_ReferenceSearchDelay (a file written over seconds is searched
+		// once), and a newer one cancels it: one search per document at a time.
+		bool HasPendingReferenceSearches() const;
+		// The documents of those searches, sorted.
+		std::vector<AssetHandle> GetPendingReferenceSearches() const;
+		// How many searches started so far (tests).
+		uint64_t GetReferenceSearchCount() const { return m_ReferenceSearches.load(std::memory_order_relaxed); }
+		// What an engine-native document references now: its record when the file is unchanged, else found in the file (read
+		// under the shared file lock). Nothing for other assets or an unreadable document. Any thread (an export's job scans
+		// documents whose search has not run yet).
+		std::optional<std::vector<AssetHandle>> FindDocumentReferences(AssetHandle document) const;
+		// Records what FindDocumentReferences found (main thread).
+		void RecordScannedReferences(AssetHandle document, std::span<const AssetHandle> references);
+		static constexpr std::chrono::milliseconds c_ReferenceSearchDelay { 500 };
 
 		// The assets a pack built now would hold (every project asset, not the built-in ones, or with Prune what the scenes
 		// and AlwaysInclude need), in pack order, with their dependencies and bounds: a snapshot, which WriteAssetPack can
@@ -444,6 +459,8 @@ namespace Strata
 			std::atomic<bool> Cancel = false;
 			std::atomic<bool> Started = false; // It began to run (Close logs how many it stopped while they ran)
 			bool Force = false;                // An import that runs even when the cached one is current (main thread)
+			bool Search = false;               // A search of what a document references, not an import
+			AssetHandle Asset = UUID::Null();  // Of a search: the document
 		};
 
 		// What background jobs share with the manager: the directories, the file lock, the wanted jobs and their results
@@ -471,6 +488,8 @@ namespace Strata
 			// Of assets stored as-is: incremented whenever a search of what it references starts, so that only the latest
 			// search's result is recorded (see QueueNativeReferences).
 			uint64_t ReferencesGeneration = 0;
+			// The search of what it references that runs (or ran last); a newer one cancels it: one per document at a time.
+			Ref<BackgroundJob> SearchJob;
 		};
 
 		// Everything an import needs, copied so imports can run on any thread.
@@ -585,6 +604,10 @@ namespace Strata
 		// file, and parsing it unless its record is current, takes long for large scenes); Update records them unless a later
 		// search started meanwhile. Does nothing for imported assets. Main thread.
 		void QueueNativeReferences(AssetHandle handle);
+		// Cancels the source's search of what it references (and makes a result of it out of date). Requires m_SourceMutex.
+		void StopReferenceSearch(SourceAsset& source);
+		// Starts the searches whose documents have not changed for c_ReferenceSearchDelay (all: every one that waits).
+		void StartDueReferenceSearches(bool all);
 		// The stored form's file of an asset (the cache file, or the source of assets stored as-is): calls `read` with it under
 		// the shared file lock, again at its new place when it moved meanwhile. False when the asset is unknown, its import
 		// failed or `read` fails (outError says which).
@@ -648,6 +671,11 @@ namespace Strata
 		std::unordered_map<AssetHandle, std::unordered_set<AssetHandle>> m_Referencers;
 
 		std::vector<Ref<ExternalImport>> m_ExternalImports; // Not finished (main thread)
+
+		// Searches of what documents reference that wait for their document to settle, by when they start (main thread), and
+		// how many started.
+		std::unordered_map<AssetHandle, std::chrono::steady_clock::time_point> m_SearchesDue;
+		std::atomic<uint64_t> m_ReferenceSearches = 0;
 
 		// The scan in progress (BeginScan), and whether one ran (main thread).
 		Scope<ScanState> m_Scan;

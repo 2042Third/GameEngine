@@ -2,6 +2,7 @@
 
 #include "Asset/AssetTestUtils.h"
 #include "Editor/CommandTestUtils.h"
+#include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/GameExport.h"
@@ -19,6 +20,8 @@
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
+
+#include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 #include <atomic>
@@ -289,6 +292,62 @@ TEST_SUITE("Editor.Export")
 		const Ref<RuntimeAssetManager> runtime = RuntimeAssetManager::Create(FileSystem::FromUTF8(value["assetPack"].get<std::string>()), &error);
 		REQUIRE_MESSAGE(runtime, error);
 		CHECK(runtime->FindAssetByPath("Materials/Late.stmat").IsValid());
+	}
+
+	TEST_CASE("An export plans once its imports are done: a document rewritten on disk meanwhile is scanned by the export, not waited for")
+	{
+		ScopedJobSystem jobs(2, 2);
+		ExportHarness harness("EditorExportRewritten");
+		std::vector<AssetHandle> materials;
+		for (int index = 0; index < 10; index++)
+		{
+			const std::string material = harness.Run("material.create", { { "path", fmt::format("Materials/Rewrite{}.stmat", index) } })["asset"].get<std::string>();
+			materials.push_back(*UUIDFromJson(material));
+		}
+		harness.Run("scene.new", { { "force", true } });
+		harness.Run("scene.saveAs", { { "path", "Scenes/Level2.stscene" } });
+		harness.Run("scene.open", { { "scene", "Scenes/Main.stscene" } });
+		EditorAssetManager& assets = *harness.Context.GetAssetManager();
+		const AssetHandle level = assets.FindAssetByPath("Scenes/Level2.stscene");
+		const std::filesystem::path file = assets.GetAbsolutePath(level);
+
+		// Rewritten ten times by another program, each reported (as the file watcher reports it): one search waits for the file
+		// to settle.
+		const uint64_t searches = assets.GetReferenceSearchCount();
+		for (const AssetHandle material : materials)
+		{
+			Scene rewritten("Level2");
+			MeshRendererComponent& renderer = rewritten.CreateEntity("Drawn").AddComponent<MeshRendererComponent>();
+			renderer.Mesh = UUID(1);
+			renderer.Material = material;
+			REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(SceneSerializer::Serialize(rewritten))));
+			std::string error;
+			REQUIRE_MESSAGE(assets.ReimportAssetInBackground(level, &error), error);
+		}
+		REQUIRE(assets.HasPendingReferenceSearches());
+		CHECK_FALSE(assets.HasPendingImports());
+
+		// The export plans without waiting for the search: it scans the document itself, and ships what it uses now.
+		EditorCommandResult result = harness.Start({ { "directory", FileSystem::ToUTF8(harness.Directory / "Build") }, { "includeRuntime", false }, { "prune", true } });
+		REQUIRE(result.IsPending());
+		REQUIRE(WaitUntil([&]()
+		{
+			harness.Context.Update(Timestep(1.0f / 60.0f));
+			PollCommandResult(result, harness.Context);
+			return harness.Context.GetGameExport()->GetState() != GameExportState::WaitingForImports;
+		}, std::chrono::seconds(30)));
+		CHECK(assets.GetReferenceSearchCount() == searches); // Planned before the search started
+		result = CompleteCommand(harness.Context, std::move(result));
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		const std::set<std::string> excluded = ExcludedPaths(result.Value);
+		CHECK_FALSE(excluded.contains("Materials/Rewrite9.stmat"));
+		for (int index = 0; index < 9; index++)
+			CHECK(excluded.contains(fmt::format("Materials/Rewrite{}.stmat", index)));
+
+		// The ten reports made one search, of the latest contents.
+		assets.WaitForImports();
+		CHECK(assets.GetReferenceSearchCount() == searches + 1);
+		CHECK(assets.GetDependencies(level) == std::vector<AssetHandle> { UUID(1), materials.back() });
 	}
 
 	TEST_CASE("Scenes and prefabs whose scripts reference themselves export")

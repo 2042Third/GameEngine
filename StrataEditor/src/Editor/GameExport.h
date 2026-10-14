@@ -55,7 +55,8 @@ namespace Strata
 
 	enum class GameExportState : uint8_t
 	{
-		WaitingForImports = 0, // Background imports and saves finish first, so that the pack holds their results
+		WaitingForImports = 0, // Background imports and saves finish first, so that the pack holds their results (and documents
+		                       // whose reference search has not run are scanned)
 		Packing,               // Writing the asset pack
 		Copying,               // Writing the script module, the manifest and the runtime
 		Succeeded,
@@ -144,6 +145,18 @@ namespace Strata
 
 		Ref<Shared> m_Shared;
 		JobHandle m_Job;
+		// Documents whose search of what they reference had not run when the imports were done (changed on disk meanwhile):
+		// scanned by a job of the export before it plans, rather than waiting for searches that wait for their documents to
+		// settle.
+		struct DocumentScan
+		{
+			std::vector<AssetHandle> Documents;
+			std::vector<std::optional<std::vector<AssetHandle>>> References; // Per document, once Done
+			std::atomic<bool> Done = false;
+		};
+		Ref<DocumentScan> m_DocumentScan;
+		JobHandle m_DocumentScanJob;
+		bool m_DocumentsScanned = false;
 		uint32_t m_AssetCount = 0; // Planned
 		bool m_Collected = false;
 		GameExportResult m_Result;

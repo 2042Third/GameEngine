@@ -179,6 +179,8 @@ namespace Strata
 			const std::optional<AssetScanProgress> scan = GetAssetScanProgress();
 			description["scanning"] = scan ? nlohmann::json { { "phase", AssetScanPhaseToString(scan->Phase) }, { "done", scan->Done }, { "total", scan->Total } }
 				: nlohmann::json(nullptr);
+			// Documents changed on disk whose search of what they reference waits or runs (no import: exports do not wait for it).
+			description["referenceSearches"] = m_AssetManager && manager == m_AssetManager ? m_AssetManager->GetPendingReferenceSearches().size() : size_t(0);
 			return description;
 		});
 	}

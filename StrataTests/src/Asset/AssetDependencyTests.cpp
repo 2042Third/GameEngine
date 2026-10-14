@@ -292,11 +292,16 @@ TEST_SUITE("Asset.Dependencies")
 			// update; when it changes again meanwhile, the latest search wins.
 			project.WriteMaterial("Materials/Brick.stmat", 0x5001, 0x9006);
 			REQUIRE(manager->ReimportAsset(UUID(0x5001)));
-			CHECK(manager->HasPendingImports());
+			CHECK(manager->HasPendingReferenceSearches());
+			CHECK_FALSE(manager->HasPendingImports()); // A search is no import
+			CHECK(manager->GetPendingReferenceSearches() == Handles({ 0x5001 }));
 			project.WriteMaterial("Materials/Brick.stmat", 0x5001, 0x9007);
 			REQUIRE(manager->ReimportAsset(UUID(0x5001)));
+			// The document changed again before its search started: one search, of the latest contents.
+			const uint64_t searches = manager->GetReferenceSearchCount();
 			manager->WaitForImports();
-			CHECK_FALSE(manager->HasPendingImports());
+			CHECK(manager->GetReferenceSearchCount() == searches + 1);
+			CHECK_FALSE(manager->HasPendingReferenceSearches());
 			CHECK(manager->GetDependencies(UUID(0x5001)) == Handles({ 0x9007 }));
 			project.WriteMaterial("Materials/Brick.stmat", 0x5001, 0x9001, 0x9002);
 			REQUIRE(manager->ReimportAsset(UUID(0x5001)));

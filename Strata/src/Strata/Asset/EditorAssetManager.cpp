@@ -865,6 +865,7 @@ namespace Strata
 			return;
 		m_Closed = true;
 		m_Watcher.Stop();
+		m_SearchesDue.clear();
 		// A scan in progress ends: its job stops at its next check, and nothing it prepared is inserted.
 		if (m_Scan)
 		{
@@ -2228,6 +2229,8 @@ namespace Strata
 				std::scoped_lock<std::mutex> lock(m_SourceMutex);
 				auto it = m_Sources.find(found.Handle);
 				current = it != m_Sources.end() && it->second.ReferencesGeneration == found.Generation;
+				if (current)
+					it->second.SearchJob.reset();
 			}
 			if (!current)
 				continue;
@@ -2254,12 +2257,14 @@ namespace Strata
 
 	void EditorAssetManager::WaitForImports()
 	{
-		// A scan in progress first: it queues imports once it is applied.
+		// A scan in progress first: it queues imports once it is applied. Searches that wait for their document to settle start
+		// now.
 		if (m_Scan)
 		{
 			JobSystem::Wait(m_Scan->Job);
 			AdvanceScan(true);
 		}
+		StartDueReferenceSearches(true);
 		while (true)
 		{
 			{
@@ -2387,8 +2392,10 @@ namespace Strata
 				return;
 			type = it->second.Type;
 			path = it->second.Path;
-			it->second.ReferencesGeneration++; // A search queued before finds the previous contents
+			// A search queued before would find the previous contents: it is no longer wanted.
+			StopReferenceSearch(it->second);
 		}
+		m_SearchesDue.erase(handle);
 		ApplyNativeReferences(m_Work->FindNativeReferences(handle, type, path, data, references));
 	}
 
@@ -2396,42 +2403,136 @@ namespace Strata
 	{
 		if (m_Closed)
 			return;
-		AssetType type = AssetType::None;
-		std::string path;
-		uint64_t generation = 0;
 		{
 			std::scoped_lock<std::mutex> lock(m_SourceMutex);
 			auto it = m_Sources.find(handle);
 			if (it == m_Sources.end() || !it->second.Importer->StoresSourceDirectly() || !AssetDependencies::CanReference(it->second.Type))
 				return;
+			// A search of the previous contents is no longer wanted: one search per document at a time.
+			StopReferenceSearch(it->second);
+		}
+		// It starts once the document has not changed for a while (a file written over seconds is searched once).
+		m_SearchesDue[handle] = std::chrono::steady_clock::now() + c_ReferenceSearchDelay;
+	}
+
+	void EditorAssetManager::StopReferenceSearch(SourceAsset& source)
+	{
+		source.ReferencesGeneration++;
+		if (source.SearchJob)
+		{
+			m_Work->Cancel(source.SearchJob);
+			source.SearchJob.reset();
+		}
+	}
+
+	void EditorAssetManager::StartDueReferenceSearches(bool all)
+	{
+		if (m_SearchesDue.empty())
+			return;
+		const auto now = std::chrono::steady_clock::now();
+		for (auto due = m_SearchesDue.begin(); due != m_SearchesDue.end();)
+		{
+			if (!all && due->second > now)
+			{
+				++due;
+				continue;
+			}
+			const AssetHandle handle = due->first;
+			due = m_SearchesDue.erase(due);
+			AssetType type = AssetType::None;
+			std::string path;
+			uint64_t generation = 0;
+			const Ref<BackgroundJob> job = CreateRef<BackgroundJob>();
+			job->Search = true;
+			job->Asset = handle;
+			{
+				std::scoped_lock<std::mutex> lock(m_SourceMutex);
+				auto it = m_Sources.find(handle);
+				if (it == m_Sources.end())
+					continue;
+				type = it->second.Type;
+				path = it->second.Path;
+				generation = ++it->second.ReferencesGeneration;
+				it->second.SearchJob = job;
+			}
+
+			// A job like an import: WaitForImports counts it, Close cancels it.
+			m_Work->Add(job);
+			m_ReferenceSearches.fetch_add(1, std::memory_order_relaxed);
+			auto search = [work = m_Work, job, handle, type, path, generation]()
+			{
+				if (job->Cancel.load())
+					return;
+				job->Started.store(true);
+				// Its record is written by Update, and only while this is the latest search (FindNativeReferences catches what
+				// it may throw).
+				NativeReferences references = work->FindNativeReferences(handle, type, path, {}, nullptr, true);
+				references.Generation = generation;
+				work->Finish(job, std::move(references));
+			};
+			try
+			{
+				JobSystem::SubmitIO(std::move(search), JobPriority::Normal);
+			}
+			catch (const std::exception& exception)
+			{
+				ST_CORE_ERROR("Could not queue the search of what '{}' references: {}", path, exception.what());
+				m_Work->Cancel(job);
+			}
+		}
+	}
+
+	bool EditorAssetManager::HasPendingReferenceSearches() const
+	{
+		if (!m_SearchesDue.empty())
+			return true;
+		std::scoped_lock<std::mutex> lock(m_Work->Mutex);
+		return !m_Work->CompletedReferences.empty()
+			|| std::any_of(m_Work->Jobs.begin(), m_Work->Jobs.end(), [](const Ref<BackgroundJob>& job) { return job->Search; });
+	}
+
+	std::vector<AssetHandle> EditorAssetManager::GetPendingReferenceSearches() const
+	{
+		std::unordered_set<AssetHandle> pending;
+		for (const auto& [handle, due] : m_SearchesDue)
+			pending.insert(handle);
+		{
+			std::scoped_lock<std::mutex> lock(m_Work->Mutex);
+			for (const Ref<BackgroundJob>& job : m_Work->Jobs)
+			{
+				if (job->Search)
+					pending.insert(job->Asset);
+			}
+			for (const NativeReferences& references : m_Work->CompletedReferences)
+				pending.insert(references.Handle);
+		}
+		std::vector<AssetHandle> handles(pending.begin(), pending.end());
+		std::sort(handles.begin(), handles.end());
+		return handles;
+	}
+
+	std::optional<std::vector<AssetHandle>> EditorAssetManager::FindDocumentReferences(AssetHandle document) const
+	{
+		AssetType type = AssetType::None;
+		std::string path;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			auto it = m_Sources.find(document);
+			if (it == m_Sources.end() || !it->second.Importer->StoresSourceDirectly())
+				return std::nullopt;
 			type = it->second.Type;
 			path = it->second.Path;
-			generation = ++it->second.ReferencesGeneration;
 		}
+		NativeReferences references = m_Work->FindNativeReferences(document, type, path, {}, nullptr, true);
+		if (!references.Scanned)
+			return std::nullopt;
+		return std::move(references.References);
+	}
 
-		// A job like an import: WaitForImports and HasPendingImports count it, Close cancels it.
-		const Ref<BackgroundJob> job = CreateRef<BackgroundJob>();
-		m_Work->Add(job);
-		auto search = [work = m_Work, job, handle, type, path, generation]()
-		{
-			if (job->Cancel.load())
-				return;
-			job->Started.store(true);
-			// Its record is written by Update, and only while this is the latest search (FindNativeReferences catches what it
-			// may throw).
-			NativeReferences references = work->FindNativeReferences(handle, type, path, {}, nullptr, true);
-			references.Generation = generation;
-			work->Finish(job, std::move(references));
-		};
-		try
-		{
-			JobSystem::SubmitIO(std::move(search), JobPriority::Normal);
-		}
-		catch (const std::exception& exception)
-		{
-			ST_CORE_ERROR("Could not queue the search of what '{}' references: {}", path, exception.what());
-			m_Work->Cancel(job);
-		}
+	void EditorAssetManager::RecordScannedReferences(AssetHandle document, std::span<const AssetHandle> references)
+	{
+		if (IsHandleValid(document))
+			RecordReferences(document, references, std::nullopt);
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -2445,6 +2546,7 @@ namespace Strata
 		AdvanceScan(false);
 		ST_PROFILE_STAGE("Assets.Update");
 		ProcessFileChanges();
+		StartDueReferenceSearches(false);
 		ProcessCompletedImports();
 		if (!m_ExternalImports.empty())
 			UpdateExternalImports();
@@ -3732,11 +3834,13 @@ namespace Strata
 
 	bool EditorAssetManager::HasPendingImports() const
 	{
-		// A scan queues the imports of what it finds once it is applied.
+		// A scan queues the imports of what it finds once it is applied. Searches of what documents reference are not imports
+		// (HasPendingReferenceSearches).
 		if (m_Scan)
 			return true;
 		std::scoped_lock<std::mutex> lock(m_Work->Mutex);
-		return !m_Work->Jobs.empty() || !m_Work->CompletedImports.empty() || !m_Work->CompletedReferences.empty();
+		return !m_Work->CompletedImports.empty()
+			|| std::any_of(m_Work->Jobs.begin(), m_Work->Jobs.end(), [](const Ref<BackgroundJob>& job) { return !job->Search; });
 	}
 
 	bool EditorAssetManager::PlanAssetPack(const AssetPackBuildOptions& options, AssetPackBuildPlan& outPlan, std::string* outError) const
