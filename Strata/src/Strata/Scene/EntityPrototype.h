@@ -78,6 +78,7 @@ namespace Strata
 	private:
 		friend class Scene;
 		friend class EntityPrototypeBuilder;
+		friend class CookedSceneReader;
 
 		// Once the entities, their components and values are in place: the references between the entities, and the memory.
 		void FindReferences();

@@ -70,7 +70,7 @@ namespace Strata
 		// data is invalid.
 		bool Compile(const nlohmann::json& snapshot, std::string* outError);
 		// Reads a document's text into the prototype as a stream (SceneDocumentReader, EntityPrototypeBuilder): never a DOM of
-		// the whole document. `isCancelled` (when given) stops the read (AssetLoadData::IsCancelled). False, with the error,
+		// the whole document; a cooked document (CookedScene::IsCooked: exported packs hold them) with CookedSceneReader. `isCancelled` (when given) stops the read (AssetLoadData::IsCancelled). False, with the error,
 		// when the text is no such document or its entity data is invalid.
 		bool Read(std::span<const uint8_t> data, const std::function<bool()>& isCancelled, std::string* outError);
 	private:
@@ -130,7 +130,8 @@ namespace Strata
 		static AssetType GetStaticType() { return AssetType::Scene; }
 		AssetType GetType() const override { return GetStaticType(); }
 
-		// Reads the document into the prepared scene, as a stream (SceneSerializer::DeserializeText). `progress` (when given)
+		// Reads the document into the prepared scene, as a stream (SceneSerializer::DeserializeText), or a cooked scene
+		// (CookedScene::IsCooked: exported packs hold them) with CookedSceneReader. `progress` (when given)
 		// receives the share of the read done so far, in [0, 1], as it goes: about every megabyte parsed and every few thousand
 		// entities linked, and 1 at the end (the asset loader passes it on to SceneReadProgress, which scene loads show).
 		// `isCancelled` (when given) is asked every few hundred entities: once it is true the read stops and fails

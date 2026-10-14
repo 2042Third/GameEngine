@@ -4,6 +4,7 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Components.h"
+#include "Strata/Scene/CookedScene.h"
 #include "Strata/Scene/EntitySink.h"
 #include "Strata/Scene/SceneDocumentReader.h"
 #include "Strata/Scene/SceneDocumentWriter.h"
@@ -249,6 +250,24 @@ namespace Strata
 	{
 		const bool model = GetType() == AssetType::Model;
 		m_Warnings.clear();
+		// Exports cook documents into packs: those are read without parsing JSON.
+		if (CookedScene::IsCooked(data))
+		{
+			CookedSceneReadOptions options;
+			options.IsCancelled = isCancelled;
+			std::optional<CookedSceneContents> contents = CookedSceneReader::Read(data, options, outError);
+			if (!contents)
+				return false;
+			if (contents->Kind != (model ? SceneDocumentKind::Model : SceneDocumentKind::Prefab))
+			{
+				if (outError)
+					*outError = fmt::format("The cooked document is a {}, not a {}", SceneDocumentKindToString(contents->Kind), model ? "model" : "prefab");
+				return false;
+			}
+			m_Prototype = std::move(contents->Prototype);
+			m_Warnings = std::move(contents->Warnings);
+			return true;
+		}
 		EntityPrototypeBuilder builder(&m_Warnings);
 		SceneReadOptions options;
 		options.IsCancelled = isCancelled;
@@ -349,11 +368,25 @@ namespace Strata
 				options.Progress = [&progress](float share) { progress(c_SceneReadStreamShare * share); };
 				linkProgress = [&progress](float share) { progress(c_SceneReadStreamShare + c_SceneReadLinkShare * share); };
 			}
-			Ref<Scene> scene = CreateRef<Scene>();
-			if (!SceneSerializer::DeserializeText(*scene, std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), options, outError,
-				&asset->m_Warnings, linkProgress))
-				return nullptr;
-			asset->m_Prepared = std::move(scene);
+			if (CookedScene::IsCooked(data))
+			{
+				// Exports cook scenes into packs: those are read without parsing JSON.
+				CookedSceneReadOptions cookedOptions;
+				cookedOptions.IsCancelled = isCancelled;
+				if (progress)
+					cookedOptions.Progress = [&progress](float share) { progress((c_SceneReadStreamShare + c_SceneReadLinkShare) * share); };
+				asset->m_Prepared = CookedSceneReader::ReadScene(data, cookedOptions, &asset->m_Warnings, outError);
+				if (!asset->m_Prepared)
+					return nullptr;
+			}
+			else
+			{
+				Ref<Scene> scene = CreateRef<Scene>();
+				if (!SceneSerializer::DeserializeText(*scene, std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), options, outError,
+					&asset->m_Warnings, linkProgress))
+					return nullptr;
+				asset->m_Prepared = std::move(scene);
+			}
 		}
 		// The world transforms too are computed here rather than in the frame that starts the scene.
 		asset->m_Prepared->UpdateWorldTransforms();
