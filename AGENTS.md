@@ -247,7 +247,9 @@ The threading model, frame loop and pipelines these rules protect are described 
   `Engine::RegisterBuiltinModules`, in dependency order, before anything reads a registry. Shipped games link the root,
   so tooling is handed in (`ModuleRegistrationOptions::AssetPipeline`), and games and tests pass their components in
   `ModuleRegistrationOptions::Extra` (the registry freezes when the root returns). Scene systems declare their order
-  (`SceneSystemDescriptor::After`/`Before`) and are made with `MakeSceneSystemDescriptor<T>` (overrides public). Scenes
+  (`SceneSystemDescriptor::After`/`Before` for a system of their module or one it cannot work without,
+  `AfterIfPresent`/`BeforeIfPresent` toward other modules) and are made with `MakeSceneSystemDescriptor<T>` (overrides
+  public). Scenes
   keep the components of modules a build lacks (`UnknownComponentsComponent`), also through play mode, prefab snapshots,
   duplication and undo.
 - **Engine modules:** a service a program runs for its whole life (device, audio, UI, project) is an `EngineModule`

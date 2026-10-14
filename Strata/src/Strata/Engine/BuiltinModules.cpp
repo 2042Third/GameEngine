@@ -6,6 +6,7 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/MeshGeometry.h"
 #include "Strata/Audio/AudioRegistration.h"
+#include "Strata/Core/Log.h"
 #include "Strata/Physics/PhysicsRegistration.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/RendererRegistration.h"
@@ -14,6 +15,7 @@
 #include "Strata/Scripting/ScriptingRegistration.h"
 
 #include <atomic>
+#include <string>
 
 namespace Strata::Engine
 {
@@ -54,9 +56,8 @@ namespace Strata::Engine
 		MeshGeometryRegistry::BeginRegistration();
 		SceneSystemRegistry::BeginRegistration();
 
-		// Lower layers first. A scene system can only name registered systems in its update order: Physics runs after
-		// Scripting and Audio after Physics, so Scripting registers before Physics and Physics before Audio; Animation runs
-		// between Scripting and Physics, so it registers after both.
+		// Lower layers first. Scene systems order themselves against other modules' systems with soft constraints
+		// (SceneSystemDescriptor::AfterIfPresent, BeforeIfPresent), which apply whatever the registration order.
 		RegisterSceneModule();
 		RegisterRendererModule();
 		RegisterScriptingModule();
@@ -75,6 +76,15 @@ namespace Strata::Engine
 
 		ComponentRegistry::Freeze();
 		s_State.store(RegistrationState::Registered, std::memory_order_release);
+
+		std::string order;
+		for (const SceneSystemDescriptor& descriptor : SceneSystemRegistry::GetAll())
+			order += (order.empty() ? "" : ", ") + descriptor.Name;
+		std::string absent;
+		for (const std::string& constraint : SceneSystemRegistry::GetAbsentSoftConstraints())
+			absent += (absent.empty() ? "" : ", ") + constraint;
+		ST_CORE_INFO("Scene systems update in the order {}{}", order.empty() ? std::string("(none)") : order,
+			absent.empty() ? std::string() : fmt::format("; soft constraints naming absent systems: {}", absent));
 	}
 
 	bool AreBuiltinModulesRegistered()

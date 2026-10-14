@@ -586,8 +586,12 @@ short. Their full wording:
   programs that import assets (`ModuleRegistrationOptions::AssetPipeline`: the editor's `ApplicationLaunch::Registration`,
   `StrataTests`' `main`), so the importers are not linked into StrataRuntime. Components can only be registered while the composition root runs (the
   registry freezes at its end): games and tests pass theirs in `ModuleRegistrationOptions::Extra`. Scene systems
-  declare their update order (`SceneSystemDescriptor::After`/`Before`) instead of relying on registration order, and
-  are made with `MakeSceneSystemDescriptor<T>` so that `Scene::GetSystem<T>` finds them and frames call only the
+  declare their update order instead of relying on registration order: hard constraints
+  (`SceneSystemDescriptor::After`/`Before`, refused when they name an unregistered system) toward systems of the same
+  module or of a module it cannot work without, soft ones (`AfterIfPresent`/`BeforeIfPresent`: ignored while the named
+  system is absent, applied once it registers, cycles refused, never blocking `Unregister`) toward other modules'
+  systems, so that a build without that module still runs (`Scene/SceneSystem.h` states the policy; the composition root
+  logs the update order and the soft constraints that named absent systems). They are made with `MakeSceneSystemDescriptor<T>` so that `Scene::GetSystem<T>` finds them and frames call only the
   per-frame callbacks `T` overrides (`SceneSystemDescriptor::CallsUpdate` and the others; declare overrides public).
   Scenes keep the components of modules a build lacks: they load with one warning per component name into
   `UnknownComponentsComponent` and are saved back unchanged (also through play mode, prefab snapshots, duplication and

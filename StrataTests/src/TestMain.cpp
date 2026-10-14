@@ -1024,6 +1024,12 @@ int main(int argc, char** argv)
 	// A console program, also in its helper modes: what goes wrong is printed, never shown in a dialog (applications the
 	// tests make in the process report failures with Application::ReportFatalError, which nobody would dismiss).
 	Strata::Platform::ConnectStandardStreams(Strata::ProgramRun::Console);
+	// Only warnings and errors are logged, by the tests and by the helper processes, whose output their tests read (the
+	// composition root's line about the scene systems' order would run into it); helper modes that log more initialize the
+	// log themselves.
+	Strata::LogSpecification logSpecification;
+	logSpecification.Level = Strata::LogLevel::Warn;
+	Strata::Log::Init(logSpecification);
 
 	constexpr std::string_view helperPrefix = "--strata-test-helper=";
 	const bool isHelper = argc > 1 && std::string_view(argv[1]).substr(0, helperPrefix.size()) == helperPrefix;
@@ -1047,10 +1053,6 @@ int main(int argc, char** argv)
 	// Launched as an editor by the CLI launch tests (see Network/FakeEditorProcess.h).
 	if (Strata::Tests::IsFakeEditorLaunch(argc, argv))
 		return Strata::Tests::RunFakeEditor(argc, argv);
-
-	Strata::LogSpecification logSpecification;
-	logSpecification.Level = Strata::LogLevel::Warn;
-	Strata::Log::Init(logSpecification);
 
 	// The perf suites measure the engine as applications run it, and applications opt out of execution-speed throttling
 	// (Application): so does the test process, whose console is rarely the window in the foreground.

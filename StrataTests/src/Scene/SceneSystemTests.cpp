@@ -82,6 +82,15 @@ namespace
 		return descriptor;
 	}
 
+	// A recording system with soft constraints only.
+	SceneSystemDescriptor MakeSoftRecording(const std::string& name, std::vector<std::string> afterIfPresent, std::vector<std::string> beforeIfPresent = {})
+	{
+		SceneSystemDescriptor descriptor = MakeRecording(name);
+		descriptor.AfterIfPresent = std::move(afterIfPresent);
+		descriptor.BeforeIfPresent = std::move(beforeIfPresent);
+		return descriptor;
+	}
+
 	std::vector<std::string> GetSystemNames()
 	{
 		std::vector<std::string> names;
@@ -135,11 +144,19 @@ TEST_SUITE("Scene.Systems")
 
 		const std::vector<SceneSystemDescriptor>& descriptors = SceneSystemRegistry::GetAll();
 		REQUIRE(descriptors.size() == 4);
-		CHECK(descriptors[0].After.empty());
-		CHECK(descriptors[1].After == std::vector<std::string> { "Scripting" });
-		CHECK(descriptors[1].Before == std::vector<std::string> { "Physics" });
-		CHECK(descriptors[2].After == std::vector<std::string> { "Scripting" });
-		CHECK(descriptors[3].After == std::vector<std::string> { "Physics" });
+		// Each names another module's system: soft constraints, so that the engine runs without that module.
+		for (const SceneSystemDescriptor& descriptor : descriptors)
+		{
+			CAPTURE(descriptor.Name);
+			CHECK(descriptor.After.empty());
+			CHECK(descriptor.Before.empty());
+		}
+		CHECK(descriptors[0].AfterIfPresent.empty());
+		CHECK(descriptors[1].AfterIfPresent == std::vector<std::string> { "Scripting" });
+		CHECK(descriptors[1].BeforeIfPresent == std::vector<std::string> { "Physics" });
+		CHECK(descriptors[2].AfterIfPresent == std::vector<std::string> { "Scripting" });
+		CHECK(descriptors[3].AfterIfPresent == std::vector<std::string> { "Physics" });
+		CHECK(SceneSystemRegistry::GetAbsentSoftConstraints().empty());
 		CHECK(descriptors[0].Type == entt::type_id<ScriptSystem>().hash());
 		CHECK(descriptors[1].Type == entt::type_id<AnimationSystem>().hash());
 		CHECK(descriptors[2].Type == entt::type_id<PhysicsSystem>().hash());
@@ -242,6 +259,39 @@ TEST_SUITE("Scene.Systems")
 		CHECK_FALSE(SceneSystemRegistry::Unregister("TestA"));
 		CHECK(FindError(before, "Scene system 'TestA' is not unregistered: the update order of 'TestB' names it") != "");
 		CHECK_FALSE(SceneSystemRegistry::Unregister("NoSuchSystem"));
+	}
+
+	TEST_CASE("Soft constraints order the systems that are registered and ignore the others")
+	{
+		ScopedSystems systems;
+		// Neither TestLate nor TestEarly is registered yet: TestSoft runs where registration order puts it.
+		REQUIRE(systems.Register(MakeSoftRecording("TestSoft", { "TestLate" }, { "TestEarly" })));
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "Audio", "TestSoft" });
+		const std::vector<std::string> absent = SceneSystemRegistry::GetAbsentSoftConstraints();
+		CHECK(absent == std::vector<std::string> { "TestSoft after TestLate", "TestSoft before TestEarly" });
+
+		// Systems registered later pick up the constraints that name them: TestSoft moves after TestLate...
+		REQUIRE(systems.Register(MakeRecording("TestLate")));
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "Audio", "TestLate", "TestSoft" });
+		// ...and before TestEarly, wherever that was registered.
+		REQUIRE(systems.Register(MakeRecording("TestEarly", {}, { "Physics" })));
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "TestLate", "TestSoft", "TestEarly", "Physics", "Audio" });
+		CHECK(SceneSystemRegistry::GetAbsentSoftConstraints().empty());
+
+		// Soft constraints that close a cycle are refused like hard ones, and the registry stays unchanged.
+		const std::vector<std::string> names = GetSystemNames();
+		const uint64_t before = Log::GetBuffer().GetLatestSequence();
+		CHECK_FALSE(SceneSystemRegistry::Register(MakeSoftRecording("TestLate", { "TestEarly" })));
+		CHECK(FindError(before, "Scene system 'TestLate' is not registered: the update order of the scene systems has a cycle") != "");
+		CHECK_FALSE(SceneSystemRegistry::Register(MakeSoftRecording("TestSelf", { "TestSelf" })));
+		CHECK(FindError(before, "scene system 'TestSelf' names itself in its update order") != "");
+		CHECK(GetSystemNames() == names);
+
+		// Soft references never keep a system from going: TestSoft goes on without the systems it names.
+		CHECK(SceneSystemRegistry::Unregister("TestLate"));
+		std::erase(systems.Names, "TestLate");
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "TestSoft", "TestEarly", "Physics", "Audio" });
+		CHECK(SceneSystemRegistry::GetAbsentSoftConstraints() == std::vector<std::string> { "TestSoft after TestLate" });
 	}
 
 	TEST_CASE("The registry refuses changes while a scene runs")

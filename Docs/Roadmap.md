@@ -359,8 +359,6 @@ interleaved A/Bs against wave 2's build; the quiet campaign that decided the bud
 
 Open items and deferrals later waves own:
 
-- Ordering constraints that name systems a build may lack need a policy once subsystems become optional
-  (`engine-modules`).
 - Physics: what an overflowing world needed is remembered per scene for the process, not saved with the scene;
   automatic capacities reserve Jolt's buffers generously (70,000 bodies reserve about a million body pairs), and a world
   at the largest capacities still reserves about 940 MiB at play start; dynamic bodies below other dynamic bodies are

@@ -496,6 +496,7 @@ RegisterAnimationModule    Animation/AnimationRegistration.cpp Skeleton, Animati
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
 ComponentRegistry::Freeze
+log the scene systems' update order and the soft constraints naming absent systems
 ```
 
 - **Callers.** The entry point calls it (`Engine/EntryPoint.h`), after the program's `CreateApplication` returned its
@@ -703,9 +704,9 @@ are, in update order:
 | System | Class | Modes | Order | Role |
 | --- | --- | --- | --- | --- |
 | Scripting | `ScriptSystem` | Play | | Script instances of the active `ScriptEngine` (null engine: no scripts). |
-| Animation | `AnimationSystem` | Play | After Scripting, Before Physics | Animators in `OnUpdate`: poses, root motion, attachments, events (see [Animation](#animation)). |
-| Physics | `PhysicsSystem` | Play, Simulate | After Scripting | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
-| Audio | `AudioSystem` | Play | After Physics | Sources and listener, in `OnLateUpdate` after scripts and physics. |
+| Animation | `AnimationSystem` | Play | After Scripting, Before Physics (soft) | Animators in `OnUpdate`: poses, root motion, attachments, events (see [Animation](#animation)). |
+| Physics | `PhysicsSystem` | Play, Simulate | After Scripting (soft) | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
+| Audio | `AudioSystem` | Play | After Physics (soft) | Sources and listener, in `OnLateUpdate` after scripts and physics. |
 
 - **Update order.** A `SceneSystemDescriptor` names the systems it runs `After` and `Before`. The registry keeps the
   order of these constraints that follows registration order as far as they allow: the first registered system runs as
@@ -714,9 +715,15 @@ are, in update order:
   system that runs ahead of them, and a system no constraint involves runs after every system registered before it: a
   later "Wind" that runs `Before` Physics does not pull an unconstrained "CameraFollow" registered between them ahead of
   Physics. The order is recomputed on every `Register` and `Unregister` (`Scene/SceneSystem.cpp`).
-  A constraint that names an unregistered system or the system itself, or that closes a cycle, makes `Register` return
-  false with an error naming the systems (e.g. `TestA -> TestB -> TestA`) and leaves the registry unchanged; so does
-  unregistering a system others name. Changes are refused while any scene runs (`Scene::GetRunningSceneCount`): the
+  Constraints are hard (`After`, `Before`: the named system must be registered) or soft (`AfterIfPresent`,
+  `BeforeIfPresent`: they order the system against the named one when it is registered, are ignored while it is not, and
+  apply as soon as it registers, the order being recomputed over every registered system). Constraints toward another
+  module's system are soft, so that a build without that module runs (the built-ins' are); hard ones are for systems of
+  one module or of a module it cannot work without. A hard constraint that names an unregistered system, a constraint
+  that names the system itself, or one (hard or soft) that closes a cycle makes `Register` return false with an error
+  naming the systems (e.g. `TestA -> TestB -> TestA`) and leaves the registry unchanged; so does unregistering a system
+  others name in a hard constraint (soft ones never keep a system from going). `GetAbsentSoftConstraints` lists the soft
+  constraints that name absent systems, which the composition root logs with the update order. Changes are refused while any scene runs (`Scene::GetRunningSceneCount`): the
   running scenes created their systems from the registry.
 - **Lookup.** `MakeSceneSystemDescriptor<T>` records the class (`SceneSystemDescriptor::Type`); `OnRuntimeStart` maps
   it to the created system, so `Scene::GetSystem<T>` is a hash lookup of the exact class (null for a class that is not

@@ -29,10 +29,11 @@ namespace Strata
 		});
 
 		// After the scripts, which set parameters and play states in their OnUpdate; before physics, so that root motion moves
-		// bodies and characters before the step. Like scripts and audio, it does not run in simulate mode.
+		// bodies and characters before the step. Both are other modules' systems: soft constraints, so that animation runs in
+		// builds without them. Like scripts and audio, it does not run in simulate mode.
 		SceneSystemDescriptor descriptor = MakeSceneSystemDescriptor<AnimationSystem>("Animation", false, [](Scene& scene) { return CreateScope<AnimationSystem>(scene); });
-		descriptor.After = { "Scripting" };
-		descriptor.Before = { "Physics" };
+		descriptor.AfterIfPresent = { "Scripting" };
+		descriptor.BeforeIfPresent = { "Physics" };
 		descriptor.ProfileStage = "Scene.Animation";
 		const bool registered = SceneSystemRegistry::Register(std::move(descriptor));
 		ST_CORE_VERIFY(registered, "The animation module could not register its scene system");
