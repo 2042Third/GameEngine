@@ -424,8 +424,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   drivers for `GPU.Startup`) and, on Windows, `console-output [--interrupt-when <text>] <program>` runs a program as a
   terminal does, pressing Ctrl+C once the console shows the text (`Tests::RunInConsole`). With
   `STRATA_TEST_FAKE_CMAKE=succeed` it also stands in for CMake in script
-  builds (`ScriptBuildSettings::CMake`), building nothing; with `fail` it fails the build with an MSVC error and a warning
-  in its output (diagnostics, the Problems panel).
+  builds (`ScriptBuildSettings::CMake`), building nothing and printing the step it ran (`-- Fake CMake: -S` or
+  `--build`); with `fail` it fails the build with an MSVC error and a warning in its output (diagnostics, the Problems
+  panel), with `fail-configure` the configure step with a CMake error.
 
 ### Feature test
 

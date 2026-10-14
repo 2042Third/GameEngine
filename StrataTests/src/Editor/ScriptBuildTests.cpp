@@ -656,6 +656,26 @@ TEST_SUITE("Editor.ScriptBuild")
 		CHECK(FileSystem::IsRegularFile(objects));
 		CHECK_FALSE(build(settings));
 
+		// So does a configure step that fails (an error in the scripts' CMake code, say): the next build configures again,
+		// still in the same tree.
+		REQUIRE(FileSystem::WriteText(scripts / "Jumper.cpp", "// Another class\n"));
+		{
+			Tests::ScopedEnvironmentVariable failingConfigure("STRATA_TEST_FAKE_CMAKE", "fail-configure");
+			REQUIRE_MESSAGE(builder.Start(*project, settings, StampScriptSources(scripts), &error), error);
+			RunBuild(builder);
+		}
+		const ScriptBuildResult& failed = builder.GetLastResult();
+		CHECK_FALSE(failed.Success);
+		CHECK(failed.Configured);
+		CHECK(failed.Error.find("Configuring the scripts with CMake failed") != std::string::npos);
+		CHECK(failed.Error.find("Fake configure error") != std::string::npos);
+		CHECK(failed.LogTail.find("Fake CMake: --build") == std::string::npos);
+		CHECK(FileSystem::IsRegularFile(objects));
+		CHECK(build(settings));
+		checkReason(unrecorded, changed);
+		CHECK(FileSystem::IsRegularFile(objects));
+		CHECK_FALSE(build(settings));
+
 		// A stamp an earlier version wrote, which does not record the files, configures again once, and says why.
 		const std::filesystem::path stampFile = tree / "StrataScriptBuild.json";
 		std::optional<nlohmann::json> stamp = JsonUtils::Parse(FileSystem::ReadText(stampFile).value_or(""));
