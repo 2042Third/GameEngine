@@ -126,6 +126,9 @@ namespace Strata
 		Scope<EditorAction> TakeAction();
 		// Restores the tracked entities to their state before the edit (a failed edit) and ends the transaction.
 		void Rollback();
+		// The tracked entities' states before the edit, in the order they were tracked (created ones: not existing).
+		const std::vector<EntityState>& GetBefore() const { return m_Before; }
+		Scene& GetScene() const { return m_Scene; }
 	private:
 		Scene& m_Scene;
 		std::string m_Name;

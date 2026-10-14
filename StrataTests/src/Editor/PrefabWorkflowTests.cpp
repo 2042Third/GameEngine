@@ -803,20 +803,85 @@ TEST_SUITE("Editor.Prefab")
 			sync.IsModified(harness.Context, first);
 			sync.IsModified(harness.Context, second);
 		}
-		// The first edit after the pause is looked at at once (each instance compared, the links walked); the rest of the run
-		// is not.
-		CHECK(sync.GetCompareCount() - compares == 2);
+		// The first edit after the pause is looked at at once (the links walked; the edited instance's override list says it is
+		// modified, the other is compared); the rest of the run is not.
+		CHECK(sync.GetCompareCount() - compares == 1);
 		CHECK(sync.GetWatchScanCount() - scans == 1);
 
 		// Once the edits pause, the marks follow them.
 		harness.Frames(static_cast<int>(PrefabSync::c_SettleFrames));
 		CHECK(sync.IsModified(harness.Context, first));
 		CHECK_FALSE(sync.IsModified(harness.Context, second));
-		CHECK(sync.GetCompareCount() - compares == 4);
+		CHECK(sync.GetCompareCount() - compares == 2);
 		CHECK(sync.GetWatchScanCount() - scans == 2);
 		// Links that come or go are found at once, also during a run.
 		harness.Run("prefab.unpack", { { "entity", setup.Second } });
 		harness.Frames(1);
 		CHECK(sync.GetWatchScanCount() - scans == 3);
+	}
+
+	TEST_CASE("Edits keep the instance's override list on its root; undo restores it and scenes store it")
+	{
+		PrefabHarness harness("PrefabOverrideList");
+		LampSetup setup(harness);
+		Scene& scene = *harness.Context.GetEditScene();
+		const Entity first = scene.GetEntityByUUID(*UUIDFromJson(setup.First));
+		const auto overrides = [&]() { return first.GetComponent<PrefabInstanceComponent>().Overrides; };
+		CHECK(overrides().empty());
+		CHECK(harness.Status(setup.First)["overrides"].empty());
+
+		// The root's transform and name are its own; a value below it is an override, reported with the scene's entity.
+		harness.Run("component.set", { { "entity", setup.First }, { "component", "Transform" }, { "values", { { "Translation", { 9, 0, 0 } } } } });
+		harness.Run("entity.rename", { { "entity", setup.First }, { "name", "Front Lamp" } });
+		CHECK(overrides().empty());
+		const std::string bulb = harness.ChildOf(setup.First);
+		harness.SetIntensity(bulb, 6.0f);
+		const UUID bulbTemplate = scene.GetEntityByUUID(*UUIDFromJson(bulb)).GetComponent<PrefabInstanceComponent>().PrefabEntityID;
+		CHECK(overrides() == std::vector<PrefabOverride> { { bulbTemplate, "PointLight", "Intensity", PrefabOverrideKind::Property } });
+		nlohmann::json status = harness.Status(bulb);
+		REQUIRE(status["overrides"].size() == 1);
+		CHECK(status["overrides"][0] == nlohmann::json { { "entity", bulb }, { "prefabEntity", bulbTemplate.ToString() }, { "component", "PointLight" },
+			{ "property", "Intensity" }, { "kind", "Property" } });
+
+		// A component added, then the entity removed: the list follows; undo and redo restore it with the entities.
+		harness.Run("component.add", { { "entity", bulb }, { "component", "SpotLight" } });
+		CHECK(overrides().size() == 2);
+		harness.Run("entity.delete", { { "entities", { bulb } } });
+		CHECK(overrides() == std::vector<PrefabOverride> { { bulbTemplate, "", "", PrefabOverrideKind::RemovedEntity } });
+		CHECK(harness.Status(setup.First)["overrides"][0]["entity"].is_null());
+		harness.Run("edit.undo");
+		CHECK(overrides().size() == 2);
+		harness.Run("edit.undo");
+		harness.Run("edit.undo");
+		CHECK(overrides().empty());
+		harness.Run("edit.redo");
+		CHECK(overrides().size() == 1);
+		// The other instance is untouched; the marks read the list.
+		const Entity second = scene.GetEntityByUUID(*UUIDFromJson(setup.Second));
+		CHECK(second.GetComponent<PrefabInstanceComponent>().Overrides.empty());
+		PrefabSync& sync = harness.Context.GetPrefabSync();
+		const uint64_t compares = sync.GetCompareCount();
+		CHECK(sync.IsModified(harness.Context, first));
+		CHECK(sync.GetCompareCount() == compares);
+
+		// Saved with the scene, only where there are overrides.
+		harness.Run("scene.saveAs", { { "path", "Scenes/Lamps.stscene" } });
+		const std::optional<std::string> text = FileSystem::ReadText(harness.Directory / "Assets" / "Scenes" / "Lamps.stscene");
+		REQUIRE(text);
+		CHECK(text->find("\"Overrides\"") != std::string::npos);
+		CHECK(text->find("\"Overrides\"") == text->rfind("\"Overrides\""));
+		harness.Run("scene.new");
+		harness.Run("scene.open", { { "scene", "Scenes/Lamps.stscene" } });
+		const Entity reopened = harness.Context.GetEditScene()->GetEntityByUUID(*UUIDFromJson(setup.First));
+		REQUIRE(reopened);
+		CHECK(reopened.GetComponent<PrefabInstanceComponent>().Overrides == std::vector<PrefabOverride> { { bulbTemplate, "PointLight", "Intensity",
+			PrefabOverrideKind::Property } });
+
+		// Edits while playing record nothing.
+		harness.Run("play.start", { { "build", false } });
+		const Entity running = harness.Context.GetActiveScene()->GetEntityByUUID(*UUIDFromJson(setup.First));
+		harness.Run("component.set", { { "entity", harness.ChildOf(setup.First) }, { "component", "PointLight" }, { "values", { { "Range", 3 } } } });
+		CHECK(running.GetComponent<PrefabInstanceComponent>().Overrides.size() == 1);
+		harness.Run("play.stop");
 	}
 }

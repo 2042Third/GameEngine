@@ -21,10 +21,13 @@
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
+#include <Strata/Scene/PrefabInstances.h>
+#include <Strata/Scene/PrefabOverrides.h>
 #include <Strata/Scene/SceneLoader.h>
 #include <Strata/Scene/SceneSerializer.h>
 
 #include <algorithm>
+#include <unordered_set>
 #include <limits>
 #include <string_view>
 #include <utility>
@@ -1145,7 +1148,47 @@ namespace Strata
 			transaction.Rollback();
 			return false;
 		}
+		UpdatePrefabOverrides(transaction);
 		return transaction.Commit(m_UndoStack);
+	}
+
+	void EditorContext::UpdatePrefabOverrides(SceneEditTransaction& transaction)
+	{
+		Scene& scene = transaction.GetScene();
+		if (!m_AssetManager || &scene != m_EditScene.get())
+			return;
+		// The instances the edit touched: of the entities it changed or made, and of the parents of those it destroyed or
+		// moved (their states before it name them).
+		std::vector<Entity> roots;
+		std::unordered_set<UUID> seen;
+		auto addRoot = [&](Entity entity)
+		{
+			const Entity root = entity ? PrefabInstances::FindInstanceRoot(entity) : Entity();
+			if (root && seen.insert(root.GetUUID()).second)
+				roots.push_back(root);
+		};
+		std::vector<std::pair<UUID, UUID>> touched; // The entity and its parent before the edit
+		for (const EntityState& state : transaction.GetBefore())
+			touched.emplace_back(state.ID, state.Parent);
+		for (const auto& [id, parent] : touched)
+		{
+			addRoot(scene.GetEntityByUUID(id));
+			if (parent.IsValid())
+				addRoot(scene.GetEntityByUUID(parent));
+		}
+		// Each against its part of the prefab as the sync knows it; the list changes with the edit (and undo restores it).
+		for (Entity root : roots)
+		{
+			const PrefabInstanceComponent& link = root.GetComponent<PrefabInstanceComponent>();
+			const nlohmann::json* baseline = m_PrefabSync.GetBaseline(*this, link.Prefab);
+			if (!baseline)
+				continue;
+			std::vector<PrefabOverride> overrides = PrefabOverrides::ComputeOverrides(scene, root, PrefabInstances::ExtractTemplate(*baseline, link.PrefabEntityID));
+			if (overrides == root.GetComponent<PrefabInstanceComponent>().Overrides)
+				continue;
+			transaction.Track(root.GetUUID());
+			root.GetComponent<PrefabInstanceComponent>().Overrides = std::move(overrides);
+		}
 	}
 
 	bool EditorContext::Undo(std::string* outError)

@@ -1,0 +1,283 @@
+#include <doctest/doctest.h>
+
+#include "Scene/SceneTestUtils.h"
+
+#include <Strata/Reflection/ComponentRegistry.h>
+#include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Scene/ComponentAccess.h>
+#include <Strata/Scene/Components.h>
+#include <Strata/Scene/PrefabInstances.h>
+#include <Strata/Scene/PrefabOverrides.h>
+#include <Strata/Scene/Scene.h>
+#include <Strata/Scene/SceneSerializer.h>
+
+#include <algorithm>
+#include <string>
+#include <vector>
+
+using namespace Strata;
+
+namespace
+{
+
+	const AssetHandle c_Prefab = AssetHandle(0x4321);
+
+	// A crate with a lid (a point light) and a handle on the lid, linked to c_Prefab as its own template (ids = UUIDs), and
+	// the crate's part of the prefab.
+	struct Crate
+	{
+		Ref<Scene> World = CreateRef<Scene>();
+		Entity Root, Lid, Handle;
+		nlohmann::json Part;
+
+		Crate()
+		{
+			Root = World->CreateEntity("Crate");
+			Lid = World->CreateChildEntity(Root, "Lid");
+			Handle = World->CreateChildEntity(Lid, "Handle");
+			Lid.AddComponent<PointLightComponent>().Intensity = 2.0f;
+			const nlohmann::json snapshot = SceneSerializer::SerializeEntities(*World, { Root });
+			PrefabInstances::Link(*World, { Root }, c_Prefab);
+			Part = PrefabInstances::ExtractTemplate(snapshot, Root.GetUUID());
+			World->UpdateWorldTransforms();
+		}
+
+		std::vector<PrefabOverride> Compute() const { return PrefabOverrides::ComputeOverrides(*World, Root, Part); }
+
+		// The part with one value of an entity changed (what the prefab's file would hold after an edit).
+		nlohmann::json PartWith(Entity entity, const std::string& component, const std::string& property, const nlohmann::json& value) const
+		{
+			nlohmann::json part = Part;
+			for (nlohmann::json& candidate : part["Entities"])
+			{
+				if (candidate["ID"] == UUIDToJson(entity.GetUUID()))
+					candidate["Components"][component][property] = value;
+			}
+			return part;
+		}
+	};
+
+	void SetIntensity(Entity entity, float value)
+	{
+		const ComponentInfo* info = ComponentRegistry::Find("PointLight");
+		REQUIRE(info);
+		REQUIRE(ComponentAccess::SetProperty(entity, *info, *info->FindProperty("Intensity"), PropertyValue(value)));
+	}
+
+}
+
+TEST_SUITE("Scene.PrefabOverrides")
+{
+	TEST_CASE("An unchanged instance has no overrides; the root's transform and name never count")
+	{
+		Crate crate;
+		CHECK(crate.Compute().empty());
+		crate.Root.GetTransform().Translation = glm::vec3(5.0f, 0.0f, 0.0f);
+		crate.Root.MarkModified<TransformComponent>();
+		crate.Root.GetComponent<NameComponent>().Name = "Crate (1)";
+		crate.Root.MarkModified<NameComponent>();
+		CHECK(crate.Compute().empty());
+		// Below the root they do.
+		crate.Lid.GetTransform().Translation = glm::vec3(0.0f, 1.0f, 0.0f);
+		crate.Lid.MarkModified<TransformComponent>();
+		const std::vector<PrefabOverride> overrides = crate.Compute();
+		REQUIRE(overrides.size() == 1);
+		CHECK(overrides[0] == PrefabOverride { crate.Lid.GetUUID(), "Transform", "Translation", PrefabOverrideKind::Property });
+	}
+
+	TEST_CASE("Overrides name changed properties, added and removed components and removed entities")
+	{
+		Crate crate;
+		SetIntensity(crate.Lid, 4.0f);
+		crate.Handle.AddComponent<SpotLightComponent>();
+		crate.Lid.RemoveComponent<PointLightComponent>();
+		std::vector<PrefabOverride> overrides = crate.Compute();
+		CHECK(std::find(overrides.begin(), overrides.end(), PrefabOverride { crate.Lid.GetUUID(), "PointLight", "", PrefabOverrideKind::RemovedComponent }) != overrides.end());
+		CHECK(std::find(overrides.begin(), overrides.end(), PrefabOverride { crate.Handle.GetUUID(), "SpotLight", "", PrefabOverrideKind::AddedComponent }) != overrides.end());
+		CHECK(overrides.size() == 2);
+
+		// An entity the instance added is its own: no override. One it removed is.
+		crate.World->CreateChildEntity(crate.Root, "Sticker");
+		const UUID handle = crate.Handle.GetUUID();
+		crate.World->DestroyEntities(std::vector<Entity> { crate.Handle });
+		overrides = crate.Compute();
+		CHECK(std::find(overrides.begin(), overrides.end(), PrefabOverride { handle, "", "", PrefabOverrideKind::RemovedEntity }) != overrides.end());
+		CHECK(overrides.size() == 2);
+		CHECK(PrefabOverrides::IsOverridden(overrides, handle, "Transform", "Translation"));
+		CHECK(PrefabOverrides::IsOverridden(overrides, crate.Lid.GetUUID(), "PointLight", "Intensity"));
+		CHECK_FALSE(PrefabOverrides::IsOverridden(overrides, crate.Lid.GetUUID(), "Transform", "Translation"));
+	}
+
+	TEST_CASE("Scripts are overridden field by field, and added or removed as classes")
+	{
+		Crate crate;
+		ScriptComponent& scripts = crate.Lid.AddComponent<ScriptComponent>();
+		scripts.Scripts.push_back(ScriptEntry { "Spinner", { ScriptFieldValue { "Speed", PropertyType::Float, PropertyValue(1.0f) } } });
+		scripts.Scripts.push_back(ScriptEntry { "Blinker", {} });
+		nlohmann::json snapshot = SceneSerializer::SerializeEntities(*crate.World, { crate.Root });
+		PrefabInstances::StripLinks(snapshot);
+		crate.Part = PrefabInstances::ExtractTemplate(snapshot, crate.Root.GetUUID());
+		CHECK(crate.Compute().empty());
+
+		ScriptComponent& changed = crate.Lid.GetComponent<ScriptComponent>();
+		std::get<float>(changed.Scripts[0].Fields[0].Value) = 3.0f;
+		changed.Scripts.erase(changed.Scripts.begin() + 1);
+		changed.Scripts.push_back(ScriptEntry { "Wobbler", {} });
+		std::vector<PrefabOverride> overrides = crate.Compute();
+		const UUID lid = crate.Lid.GetUUID();
+		CHECK(std::find(overrides.begin(), overrides.end(), PrefabOverride { lid, "Script", "Spinner.Speed", PrefabOverrideKind::Property }) != overrides.end());
+		CHECK(std::find(overrides.begin(), overrides.end(), PrefabOverride { lid, "Script", "Blinker", PrefabOverrideKind::RemovedComponent }) != overrides.end());
+		CHECK(std::find(overrides.begin(), overrides.end(), PrefabOverride { lid, "Script", "Wobbler", PrefabOverrideKind::AddedComponent }) != overrides.end());
+		CHECK(overrides.size() == 3);
+		CHECK(PrefabOverrides::IsOverridden(overrides, lid, "Script", "Blinker.Rate"));
+		CHECK_FALSE(PrefabOverrides::IsOverridden(overrides, lid, "Script", "Spinner.Range"));
+	}
+
+	TEST_CASE("The list is stored on the root only when it has entries, and malformed entries are dropped on load")
+	{
+		Crate crate;
+		const std::string without = SceneSerializer::SerializeEntities(*crate.World, { crate.Root }).dump();
+		CHECK(without.find("Overrides") == std::string::npos);
+
+		const std::vector<PrefabOverride> overrides = { { crate.Lid.GetUUID(), "PointLight", "Intensity", PrefabOverrideKind::Property },
+			{ crate.Handle.GetUUID(), "", "", PrefabOverrideKind::RemovedEntity } };
+		crate.Root.GetComponent<PrefabInstanceComponent>().Overrides = overrides;
+		const nlohmann::json written = SceneSerializer::SerializeEntities(*crate.World, { crate.Root });
+		const nlohmann::json& stored = written["Entities"][0]["Components"]["PrefabInstance"]["Overrides"];
+		REQUIRE(stored.size() == 2);
+		CHECK(stored[1]["Kind"] == "RemovedEntity");
+		// Read back into another scene, the list is the same; templates and content hashes leave it out.
+		Ref<Scene> copy = CreateRef<Scene>();
+		EntityInstantiationOptions options;
+		options.GenerateNewUUIDs = false;
+		const std::vector<Entity> roots = SceneSerializer::DeserializeEntities(*copy, written, options);
+		REQUIRE(roots.size() == 1);
+		CHECK(roots[0].GetComponent<PrefabInstanceComponent>().Overrides == overrides);
+		std::unordered_map<UUID, UUID> ids;
+		CHECK(PrefabInstances::MakeTemplate(*crate.World, crate.Root, nullptr, nullptr, ids).dump().find("Overrides") == std::string::npos);
+		const uint64_t hash = PrefabInstances::GetContentHash(*crate.World, crate.Root);
+		crate.Root.GetComponent<PrefabInstanceComponent>().Overrides.clear();
+		CHECK(PrefabInstances::GetContentHash(*crate.World, crate.Root) == hash);
+
+		std::vector<std::string> warnings;
+		const nlohmann::json list = { { { "Entity", "0000000000000005" }, { "Component", "Light" }, { "Property", "Color" }, { "Kind", "Property" } },
+			{ { "Entity", "zz" }, { "Component", "Light" }, { "Property", "Color" }, { "Kind", "Property" } },
+			{ { "Entity", "0000000000000005" }, { "Component", "Light" }, { "Property", "Color" }, { "Kind", "Renamed" } },
+			"not an entry" };
+		const std::vector<PrefabOverride> read = PrefabOverrides::FromJson(list, &warnings);
+		CHECK(read.size() == 1);
+		CHECK(warnings.size() == 3);
+		CHECK(PrefabOverrides::FromJson(PrefabOverrides::ToJson(overrides)) == overrides);
+	}
+
+	TEST_CASE("Propagate gives every instance the prefab's changes except what it overrides")
+	{
+		Crate crate;
+		// The instance overrides the lid's color; the prefab changes the lid's intensity and color, and the handle's name.
+		const ComponentInfo* light = ComponentRegistry::Find("PointLight");
+		REQUIRE(ComponentAccess::SetProperty(crate.Lid, *light, *light->FindProperty("Color"), PropertyValue(glm::vec3(1.0f, 0.0f, 0.0f))));
+		crate.Root.GetComponent<PrefabInstanceComponent>().Overrides = crate.Compute();
+		REQUIRE(crate.Root.GetComponent<PrefabInstanceComponent>().Overrides.size() == 1);
+		nlohmann::json next = crate.PartWith(crate.Lid, "PointLight", "Intensity", 7.0);
+		for (nlohmann::json& entity : next["Entities"])
+		{
+			if (entity["ID"] == UUIDToJson(crate.Lid.GetUUID()))
+				entity["Components"]["PointLight"]["Color"] = { 0.0, 0.0, 1.0 };
+			if (entity["ID"] == UUIDToJson(crate.Handle.GetUUID()))
+				entity["Components"]["Name"]["Name"] = "Grip";
+		}
+		std::vector<UUID> changed;
+		std::vector<UUID> touched;
+		std::string error;
+		REQUIRE_MESSAGE(PrefabOverrides::Propagate(*crate.World, crate.Root, crate.Part, next, &changed, nullptr, [&](UUID id) { touched.push_back(id); }, &error), error);
+		CHECK(crate.Lid.GetComponent<PointLightComponent>().Intensity == 7.0f);
+		CHECK(crate.Lid.GetComponent<PointLightComponent>().Color == glm::vec3(1.0f, 0.0f, 0.0f)); // Overridden
+		CHECK(crate.Handle.GetName() == "Grip");
+		CHECK(std::find(changed.begin(), changed.end(), crate.Lid.GetUUID()) != changed.end());
+		CHECK(std::find(changed.begin(), changed.end(), crate.Handle.GetUUID()) != changed.end());
+		CHECK(std::find(changed.begin(), changed.end(), crate.Root.GetUUID()) == changed.end()); // Its list stayed the same
+		CHECK(touched.size() == changed.size());
+		// Still one override, against the new part.
+		CHECK(crate.Root.GetComponent<PrefabInstanceComponent>().Overrides
+			== std::vector<PrefabOverride> { { crate.Lid.GetUUID(), "PointLight", "Color", PrefabOverrideKind::Property } });
+	}
+
+	TEST_CASE("Propagate adds and removes what the prefab added and removed, except where the instance overrides it")
+	{
+		Crate crate;
+		// The instance removed the handle; the prefab adds a sticker below the lid, a spot light on the lid, and removes the
+		// lid's point light.
+		const UUID handle = crate.Handle.GetUUID();
+		crate.World->DestroyEntities(std::vector<Entity> { crate.Handle });
+		crate.Root.GetComponent<PrefabInstanceComponent>().Overrides = crate.Compute();
+		nlohmann::json next = crate.Part;
+		const UUID sticker = UUID(0x5717);
+		SpotLightComponent spot;
+		spot.Intensity = 3.0f;
+		const nlohmann::json spotValues = ComponentAccess::Serialize(*ComponentRegistry::Find("SpotLight"), &spot);
+		for (nlohmann::json& entity : next["Entities"])
+		{
+			if (entity["ID"] == UUIDToJson(crate.Lid.GetUUID()))
+			{
+				entity["Components"].erase("PointLight");
+				entity["Components"]["SpotLight"] = spotValues;
+			}
+			if (entity["ID"] == UUIDToJson(handle))
+				entity["Components"]["Name"]["Name"] = "Grip";
+		}
+		// The sticker as the prefab's file would hold it: written by the serializer.
+		Scene scratch;
+		nlohmann::json stickerEntity = SceneSerializer::SerializeEntities(scratch, { scratch.CreateEntity("Sticker") })["Entities"][0];
+		stickerEntity["ID"] = UUIDToJson(sticker);
+		stickerEntity["Parent"] = UUIDToJson(crate.Lid.GetUUID());
+		next["Entities"].push_back(stickerEntity);
+		std::vector<UUID> created;
+		std::string error;
+		REQUIRE_MESSAGE(PrefabOverrides::Propagate(*crate.World, crate.Root, crate.Part, next, nullptr, &created, {}, &error), error);
+		CHECK_FALSE(crate.Lid.HasComponent<PointLightComponent>());
+		REQUIRE(crate.Lid.HasComponent<SpotLightComponent>());
+		CHECK(crate.Lid.GetComponent<SpotLightComponent>().Intensity == 3.0f);
+		// The removed handle stays removed; the sticker is made, linked to its prefab entity.
+		CHECK_FALSE(crate.World->GetEntityByUUID(handle));
+		REQUIRE(created.size() == 1);
+		const Entity made = crate.World->GetEntityByUUID(created[0]);
+		REQUIRE(made);
+		CHECK(made.GetName() == "Sticker");
+		CHECK(made.GetParent() == crate.Lid);
+		CHECK(made.GetComponent<PrefabInstanceComponent>().PrefabEntityID == sticker);
+		CHECK(crate.Root.GetComponent<PrefabInstanceComponent>().Overrides
+			== std::vector<PrefabOverride> { { handle, "", "", PrefabOverrideKind::RemovedEntity } });
+		// A part without the instance's root is refused.
+		CHECK_FALSE(PrefabOverrides::Propagate(*crate.World, crate.Root, crate.Part, nlohmann::json { { "Entities", nlohmann::json::array() } }, nullptr, nullptr, {}, &error));
+	}
+
+	TEST_CASE("Revert and ApplyToPart work one component or property at a time")
+	{
+		Crate crate;
+		SetIntensity(crate.Lid, 9.0f);
+		crate.Lid.GetTransform().Translation = glm::vec3(0.0f, 2.0f, 0.0f);
+		crate.Lid.MarkModified<TransformComponent>();
+		REQUIRE(crate.Compute().size() == 2);
+		std::string error;
+		REQUIRE_MESSAGE(PrefabOverrides::Revert(*crate.World, crate.Lid, crate.Part, "PointLight", "Intensity", &error), error);
+		CHECK(crate.Lid.GetComponent<PointLightComponent>().Intensity == 2.0f);
+		CHECK(crate.Compute() == std::vector<PrefabOverride> { { crate.Lid.GetUUID(), "Transform", "Translation", PrefabOverrideKind::Property } });
+
+		// Applying the translation writes only it into the part.
+		std::unordered_map<UUID, UUID> ids;
+		const nlohmann::json instance = PrefabInstances::MakeTemplate(*crate.World, crate.Root, nullptr, nullptr, ids);
+		const nlohmann::json applied = PrefabOverrides::ApplyToPart(crate.Part, instance, crate.Lid.GetUUID(), "Transform", "Translation");
+		crate.Part = applied;
+		CHECK(crate.Compute().empty());
+
+		// Reverting a whole component it lacks adds it back; one the prefab lacks goes.
+		crate.Lid.RemoveComponent<PointLightComponent>();
+		REQUIRE(PrefabOverrides::Revert(*crate.World, crate.Lid, crate.Part, "PointLight", "", &error));
+		CHECK(crate.Lid.GetComponent<PointLightComponent>().Intensity == 2.0f);
+		crate.Handle.AddComponent<SpotLightComponent>();
+		REQUIRE(PrefabOverrides::Revert(*crate.World, crate.Handle, crate.Part, "SpotLight", "", &error));
+		CHECK_FALSE(crate.Handle.HasComponent<SpotLightComponent>());
+		CHECK(crate.Compute().empty());
+		CHECK_FALSE(PrefabOverrides::Revert(*crate.World, crate.Handle, crate.Part, "PointLight", "Intensity", &error));
+	}
+}

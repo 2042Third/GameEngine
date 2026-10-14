@@ -2460,6 +2460,16 @@ is the `strata-scripting` skill. The layers:
   walks every link, so a run of edits that records a step every frame (a gizmo drag) does neither per frame: an edit
   after a pause is looked at at once, and during a run (edits less than `PrefabSync::c_SettleFrames` frames apart) the
   marks and the watched prefabs stay until it pauses; links that come or go are found at once.
+  **Overrides** (`Scene/PrefabOverrides.h`): an instance root keeps how its instance differs from its prefab
+  (`PrefabInstanceComponent::Overrides`, `PrefabOverride {Entity, Component, Property, Kind}`: a property, a component
+  added or removed, an entity removed; script fields as `Script` / `<Class>.<Field>`, scripts as `<Class>`).
+  `ComputeOverrides` diffs the instance in the prefab's form (`MakeTemplate`) with its part, entity by prefab id, component
+  and property, as JSON. `EditorContext::CommitEdit` works the lists of the instances an edit touched out again against
+  `PrefabSync::GetBaseline` before it captures the after-states (`UpdatePrefabOverrides`, tracking the roots), so every
+  edit path keeps them and undo restores them with the entities; edits while playing record nothing. The list is
+  serialized through the component's extra data (`Overrides`, only when not empty: scenes without overrides are as they
+  were) and checked on load; templates, comparisons and content hashes leave it out. A non-empty list marks the instance
+  modified in the Hierarchy without comparing it; `prefab.status` lists the overrides.
 - **Authoring panels** (`Panels/SceneHierarchyPanel`, `InspectorPanel`, `AssetInspectorPanel`, `UI/PropertyWidgets`,
   `UI/MaterialEditor`, `UI/EditorActions`). They draw state and run commands, and their cost follows what is on screen:
   - The **Hierarchy** draws `HierarchyView`'s rows through `ImGuiListClipper` inside one `ImGui::BeginMultiSelect` scope

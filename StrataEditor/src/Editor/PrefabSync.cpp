@@ -388,9 +388,17 @@ namespace Strata
 		ModifiedMark& mark = it->second;
 		if (!added && mark.BaselineVersion == m_BaselineVersion && (mark.Changes == changes || AreEditsContinuing(changes)))
 			return mark.Modified;
-		m_CompareCount++;
 		Baseline* baseline = FindBaseline(context, PrefabInstances::GetPrefab(root));
-		mark.Modified = baseline && !PrefabInstances::Compare(*root.GetScene(), root, baseline->Snapshot).IsEmpty();
+		// The instance's override list says so; only instances without one (scenes from before, unmodified ones) are compared.
+		if (!root.GetComponent<PrefabInstanceComponent>().Overrides.empty())
+		{
+			mark.Modified = true;
+		}
+		else
+		{
+			m_CompareCount++;
+			mark.Modified = baseline && !PrefabInstances::Compare(*root.GetScene(), root, baseline->Snapshot).IsEmpty();
+		}
 		mark.Outdated = baseline && PrefabInstances::IsOutdated(root, baseline->Snapshot, baseline->PartVersions);
 		mark.Changes = changes;
 		mark.BaselineVersion = m_BaselineVersion;

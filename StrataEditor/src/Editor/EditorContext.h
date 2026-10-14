@@ -341,6 +341,10 @@ namespace Strata
 		// discarded with it. Returns true when an undo step was recorded. While a scene is being opened (IsSceneLoading) the
 		// edited scene is read-only: the edit is rolled back and nothing is recorded.
 		bool CommitEdit(SceneEditTransaction& transaction);
+		// Before an edit is recorded: the override lists (PrefabInstanceComponent::Overrides) of the prefab instances it
+		// touched, worked out again against their prefabs as the sync knows them (PrefabSync::GetBaseline). CommitEdit calls
+		// it; steps recorded otherwise (prefab.apply) call it for their transaction.
+		void UpdatePrefabOverrides(SceneEditTransaction& transaction);
 		// Undo and redo of the history (UndoStack::Undo, Redo): false while playing, with nothing to do, or when the step
 		// fails (the reason in outError).
 		bool Undo(std::string* outError = nullptr);

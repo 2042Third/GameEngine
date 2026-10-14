@@ -12,6 +12,7 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/PrefabInstances.h>
+#include <Strata/Scene/PrefabOverrides.h>
 #include <Strata/Scene/Scene.h>
 
 #include <unordered_map>
@@ -82,6 +83,36 @@ namespace Strata
 			const EditorAssetManager* assets = context.GetAssetManager();
 			const std::optional<AssetMetadata> metadata = assets ? assets->GetMetadata(asset) : std::nullopt;
 			return metadata ? metadata->Path : asset.ToString();
+		}
+
+		// The instance's entities linked to its prefab, by their prefab entity ids.
+		std::unordered_map<UUID, UUID> MapInstanceEntities(Scene& scene, Entity root)
+		{
+			std::unordered_map<UUID, UUID> entities;
+			const AssetHandle prefab = PrefabInstances::GetPrefab(root);
+			for (const UUID id : SceneEdit::CollectSubtree(scene, root.GetUUID()))
+			{
+				const PrefabInstanceComponent* link = scene.GetEntityByUUID(id).TryGetComponent<PrefabInstanceComponent>();
+				if (link && link->Prefab == prefab)
+					entities.emplace(link->PrefabEntityID, id);
+			}
+			return entities;
+		}
+
+		// An instance's overrides as commands report them: the scene's entity (null for an entity the instance removed), the
+		// prefab's entity id, the component, the property and the kind.
+		nlohmann::json DescribeOverrides(Scene& scene, Entity root, const std::vector<PrefabOverride>& overrides)
+		{
+			const std::unordered_map<UUID, UUID> entities = MapInstanceEntities(scene, root);
+			nlohmann::json list = nlohmann::json::array();
+			for (const PrefabOverride& entry : overrides)
+			{
+				const auto entity = entities.find(entry.Entity);
+				list.push_back({ { "entity", entity != entities.end() ? UUIDToJson(entity->second) : nlohmann::json(nullptr) },
+					{ "prefabEntity", entry.Entity.ToString() }, { "component", entry.Component }, { "property", entry.Property },
+					{ "kind", PrefabOverrides::KindToString(entry.Kind) } });
+			}
+			return list;
 		}
 
 		nlohmann::json ToJson(const std::vector<UUID>& ids)
@@ -171,8 +202,10 @@ namespace Strata
 		registry.Register({ "prefab.status",
 			"Whether an entity belongs to a prefab instance and how the instance differs from its prefab as stored now (the root's transform and name "
 			"are the instance's own and never count): {linked, root, prefab, path, modified, outdated, changed: [entity ids whose values differ], added: "
-			"[entities the prefab lacks], removed: [ids of prefab entities the instance lacks]}; {linked: false} for entities of no instance. outdated: the "
-			"instance was made from an older version of the prefab and did not take its later changes (it was modified meanwhile), so prefab.apply "
+			"[entities the prefab lacks], removed: [ids of prefab entities the instance lacks], overrides: [{entity (the scene's; null for an entity the "
+			"instance removed), prefabEntity, component, property (script fields: <Class>.<Field>), kind: Property | AddedComponent | RemovedComponent | "
+			"RemovedEntity}]}; {linked: false} for entities of no instance. Prefab changes reach every instance except where it overrides them. outdated: "
+			"the instance was made from an older version of the prefab and did not take its later changes (it was modified meanwhile), so prefab.apply "
 			"would write its older values back.",
 			ObjectSchema({ { "entity", EntitySchema("An entity of the active scene") } }, { "entity" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
@@ -192,6 +225,8 @@ namespace Strata
 				if (!snapshot)
 					return EditorCommandResult::Fail(fmt::format("The prefab {} cannot be read: {}", prefab.ToString(), assets ? error : std::string("no project is open")));
 				const PrefabInstanceDifference difference = PrefabInstances::Compare(scene, root, *snapshot);
+				const std::vector<PrefabOverride> overrides = PrefabOverrides::ComputeOverrides(scene, root,
+					PrefabInstances::ExtractTemplate(*snapshot, root.GetComponent<PrefabInstanceComponent>().PrefabEntityID));
 				return EditorCommandResult::Ok({
 					{ "linked", true },
 					{ "root", UUIDToJson(root.GetUUID()) },
@@ -201,7 +236,8 @@ namespace Strata
 					{ "outdated", PrefabInstances::IsOutdated(root, *snapshot) },
 					{ "changed", ToJson(difference.Changed) },
 					{ "added", ToJson(difference.Added) },
-					{ "removed", ToJson(difference.Removed) } });
+					{ "removed", ToJson(difference.Removed) },
+					{ "overrides", DescribeOverrides(scene, root, overrides) } });
 			}, EditorCommandKind::Query });
 
 		registry.Register({ "prefab.apply",
@@ -291,8 +327,11 @@ namespace Strata
 						linked++;
 					}
 				}
-				// The instance is the prefab's new version now.
+				// The instance is the prefab's new version now: synced, and without overrides.
 				PrefabInstances::MarkSynced(scene, root, newSnapshot);
+				Entity applied = root;
+				applied.GetComponent<PrefabInstanceComponent>().Overrides = PrefabOverrides::ComputeOverrides(scene, root,
+					PrefabInstances::ExtractTemplate(newSnapshot, templateRoot));
 				for (const UUID other : others)
 				{
 					std::vector<UUID> created;

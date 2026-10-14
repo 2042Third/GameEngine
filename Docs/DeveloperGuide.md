@@ -1182,6 +1182,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `PrefabInstances::MarkSynced` (`Replace` does), so a prefab changed while a scene was closed updates the scene's
   unmodified instances when it opens (`PrefabSync::CatchUp`), and modified ones are outdated (`prefab.status`;
   `prefab.apply` refuses them unless `force`). Several actions that form one step go into an `EditorActionGroup`.
+  Instance roots keep their override list (`PrefabInstanceComponent::Overrides`, `Scene/PrefabOverrides`): edits that go
+  through `CommitEdit` keep it; code that records a scene step otherwise and changes instances calls
+  `EditorContext::UpdatePrefabOverrides` for its transaction (or sets the list itself, as `prefab.apply` does).
 
 ### Command conventions
 

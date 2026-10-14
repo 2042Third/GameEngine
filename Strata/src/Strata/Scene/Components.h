@@ -78,6 +78,26 @@ namespace Strata
 	};
 
 	// Marks entities created from a prefab asset (links each instance entity to its prefab source entity).
+	// How a prefab instance differs from its prefab (PrefabOverrides): a value of an entity of the instance, a component it
+	// added or removed, an entity of the prefab it removed.
+	enum class PrefabOverrideKind : uint8_t
+	{
+		Property = 0,     // The component's property differs (script fields: Component "Script", Property "<Class>.<Field>")
+		AddedComponent,   // The instance's entity has a component its prefab entity lacks (a script: Property "<Class>")
+		RemovedComponent, // The instance's entity lacks a component its prefab entity has (a script: Property "<Class>")
+		RemovedEntity     // The instance lacks the prefab's entity (Component and Property empty)
+	};
+
+	struct PrefabOverride
+	{
+		UUID Entity = UUID::Null(); // The prefab's entity id (PrefabInstanceComponent::PrefabEntityID)
+		std::string Component;      // Its registered name
+		std::string Property;
+		PrefabOverrideKind Kind = PrefabOverrideKind::Property;
+
+		bool operator==(const PrefabOverride& other) const = default;
+	};
+
 	struct PrefabInstanceComponent
 	{
 		AssetHandle Prefab = UUID::Null();
@@ -88,6 +108,10 @@ namespace Strata
 		// when its values still have that hash.
 		uint64_t PrefabVersion = 0;
 		uint64_t SyncedHash = 0;
+		// On an instance root: how the instance differs from its prefab as the editor last saw it (PrefabOverrides), kept by
+		// the editor's edits; empty when it does not differ or nothing was recorded (scenes from before). Not part of
+		// templates, comparisons or content hashes.
+		std::vector<PrefabOverride> Overrides;
 	};
 
 	////////////////////////////////////////////////////////////////////////////////
