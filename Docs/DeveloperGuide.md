@@ -161,6 +161,12 @@ compile time of the editor's and the tests' objects by about 40%.
 - Sources and headers still include what they use. The lint (`Tools/CompatLint.py`) compiles without precompiled headers,
   and so does a build configured with `-DSTRATA_PRECOMPILED_HEADERS=OFF`: a missing include that the precompiled header
   hides fails there.
+- Headers stay light, because every file that includes a header parses what it includes (all of it without precompiled
+  headers: the lint, and CI's builds with a compiler cache). An engine header that only declares JSON parameters and
+  returns includes `<nlohmann/json_fwd.hpp>`; the files that read or build the values include `<nlohmann/json.hpp>`.
+  Headers that need the complete type (JSON members, default arguments, inline code) are listed with the reason in
+  `StrataTests/src/Architecture/HeaderWeightTests.cpp`, and `Architecture.HeaderWeight` fails on any other engine
+  header including the complete one.
 
 ### macOS and MoltenVK
 

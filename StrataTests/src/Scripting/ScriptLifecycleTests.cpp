@@ -4,6 +4,8 @@
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scripting/ScriptingComponents.h"
 
+#include <nlohmann/json.hpp>
+
 #include <string>
 
 using namespace Strata;

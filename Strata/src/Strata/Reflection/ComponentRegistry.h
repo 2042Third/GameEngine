@@ -7,7 +7,7 @@
 #include "Strata/Reflection/PropertyBuilder.h"
 
 #include <entt/entt.hpp>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include <functional>
 #include <string>
