@@ -602,6 +602,14 @@ short. Their full wording:
   editor deletes through `MoveToTrash`/`RestoreFromTrash`. Code that lists folders or asks what uses an asset reads the
   manager's indexes (`GetFolders`, `GetAssetsInFolder`, `GetReferencers`), rebuilt views only when `GetChangeVersion`
   changed; never walk the disk or parse documents per frame.
+- Scene, prefab and model documents stream (Architecture.md, "Scene documents"): code that writes one goes through
+  `SceneDocumentWriter` (`Write` for scenes, `WritePrototype` for prototypes, `WriteJson` to lay out a document edited as
+  JSON), and code that reads one goes through `SceneDocumentReader` with an `EntitySink`: `SceneBuilder` into a scene
+  (`SceneSerializer::DeserializeText`), `EntityPrototypeBuilder` into a prototype, or a sink of its own that keeps what
+  it needs of each entity. Never parse a whole document into a DOM (a million entities' DOM takes gigabytes and blocks
+  cancellation); `SceneSerializer::Serialize`/`Deserialize` and snapshots are for small documents (undo, the clipboard,
+  commands). A sink that can take entities prepared in parallel implements `ReadPrepared`; the reader's results must not
+  depend on the path, which `Scene.Documents` checks for every sink.
 
 ### Importers
 

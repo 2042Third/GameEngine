@@ -853,8 +853,45 @@ of whole scenes never become one:
   `SceneWriteOptions::ExtraReferences`: exactly what `AssetDependencies::Scan` finds in the bytes), counts entities and
   bytes and hashes them (SHA-256 for the recovery journal, FNV-1a for the import records). Options: the document kind,
   entity subsets by root ID (`Roots`: each root with its descendants, parents written only within the subset; world
-  cells), `WriteSettings`, `Name`, `Cancel` (checked between chunks) and `Progress`. `SceneSerializer::SaveToFile` writes
-  through it.
+  cells), `WriteSettings`, `Name`, `Cancel` (checked between chunks), `Progress` and `LeaveOut` (components not written).
+  `SceneSerializer::SaveToFile` writes through it. `WritePrototype` writes an `EntityPrototype`'s entities in the same
+  layout, line for line what `Write` writes of a scene holding them (`Prefab::WriteDocument`, without the prefab links:
+  `prefab.create`), and `WriteJson` lays a parsed prefab or model document out the same way (`prefab.apply`, which edits
+  the document as JSON).
+- **Reader** (`Scene/SceneDocumentReader`): runs nlohmann's event parser (`Core/JsonEvents.h`: `ParseJsonEvents`, the
+  handler called directly, over the progress input `JsonUtils::Parse` uses too) and hands the content to an
+  **`EntitySink`** (`Scene/EntitySink.h`) one value at a time: the header and the content's small fields (`"Name"`,
+  `"Settings"`) as DOMs of their own, each value of the entity list as the DOM of that entity only; unknown keys are
+  skipped without building anything. Any key order and whitespace read: the header of old files (keys sorted, so it
+  follows the entities) is checked when it arrives, and a document without a valid one fails after its entities. Errors
+  are the DOM readers' before it (`SceneSerializer::Deserialize`, `Prefab`, `Model`). `SceneReadOptions`: `IsCancelled`
+  (asked every `CancelCheckEntities`, 256), `MaxEntities` (a declared `EntityCount` above it is refused before the first
+  entity, an undeclared document at the first entity beyond it), `Progress` (the share of the text parsed). Sinks:
+  - `SceneBuilder` creates each entity and its components in the scene's registry as it arrives
+    (`ComponentAccess::Deserialize`, as `DeserializeEntities` does) and keeps only its entity and parent ID; `Finish`
+    links the hierarchy (union-find over document indices refuses cycles; invalid and missing parents attach at the top
+    level), signals every component and reports what it could not read in the DOM reader's order (settings, entities,
+    unknown components with one warning per name, parents). `SceneSerializer::DeserializeText` reads a scene's text
+    with it (`SceneAsset::Deserialize`, `LoadFromFile`).
+  - `EntityPrototypeBuilder` reads entities into `EntityColumns` (per entity its ID, parent and components, each value
+    appended to a `ComponentValueArray` of its type and filled in place) and builds an `EntityPrototype` without a scene:
+    the entities in hierarchy order as `EntityPrototype::Compile` orders a scene's, the value arrays moved over whole.
+    `Prefab::Deserialize`, `Model::Deserialize` and `EntityPrototype::FromSnapshot` use it.
+  - `AssetDependencies`' reference sink scans each entity's references as it arrives: the reference search of a large
+    scene holds its text and its references, never its DOM.
+- **Parallel read.** A sink that takes prepared entities (`EntitySink::ReadPrepared`: `SceneBuilder`) gets documents of
+  at least `ParallelMinEntities` (16,384) entities read on the job system: the entities are found by the document's lines
+  when it is in the writer's layout, else by a structure scan that matches brackets and skips strings without building
+  values (any layout: compact files of tools, indented old files); every entity and the document without them (the
+  skeleton) are checked to parse alone (in parallel, before the sink hears of anything: a document they do not split is
+  read as a stream), the skeleton goes through the stream handler, and then jobs parse chunks of
+  `ParallelChunkEntities` (2,048) into `EntityColumns` while the reading thread hands the finished chunks to the sink in
+  order, at most twice the worker count of chunks in memory. The scene and its reports do not depend on the path. A
+  cancel is noticed after every chunk; an over-limit document is refused before any check.
+- **Cancellation.** `AssetLoadData::IsCancelled` turns true once a load is given up (cancelled, superseded, or the
+  manager closing: `WaitForInFlightLoads` sets its load state's `Closing` before it waits); the scene, prefab and model
+  loaders pass it to the reader, so a cancelled `SceneLoadRequest`, another scene opened or the editor quitting ends a
+  read within milliseconds (`Perf.Scene.CancelLoad1M`).
 - **Snapshots.** A background save writes a copy of the edited scene that nothing changes:
   `Scene::Copy(scene, SceneCopyOptions { .SerializedOnly = true })` copies, storage by storage on the job system like a
   play copy, the IDs, the hierarchy, the kept unknown components and every serializable registered component (also those

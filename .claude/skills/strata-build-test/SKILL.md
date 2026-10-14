@@ -80,12 +80,15 @@ ctest --preset macos-debug -LE perf
   instances (`SceneOpen10kPrefabInstancesMaxFrame`), and saving the realistic worlds in a helper process (the longest frame
   from the save's start to its publication, `SaveMaxFrame250k` and `SaveMaxFrame1M`; the 1M save's `SaveSeconds1M` and
   `SavePeakPrivateIncrease1M`; `--strata-test-helper=save-world <project> <scene> <result file>` runs one by hand);
+  `Perf.Scene.CancelLoad1M` cancels loads of the realistic 1M world at 25, 50 and 75% of the read and
+  `RefuseOverCap1M` loads a 1,100,445-entity document (both through `SceneLoader`);
   `Perf.EditorPanels` and `PerfGPU.Editor` time the Content Browser
   with 10,001 assets (icons; thumbnails); and `PerfGPU.Editor` the longest frames of `scene.open` of the 100,000- and
   1,000,000-entity scenes (and of the 100,000 over the million, and of 100,000 cubes over the 100,000, whose render
   proxies the load builds before the swap: `SceneOpen100kCubesMaxFrame`), of starting play of the million, of
   `asset.import` of a 4096x4096 texture and of making a stress project's thumbnails, and the editor's working set with
-  the million open; world-scale gates write their projects with `Perf/WorldFixture.h`: realistic 250k and 1M worlds,
+  the million open; `PerfGPU.Editor.WorldOpen1M*` opens the realistic 1M world in a headless editor through `StrataCLI`
+  (its time, longest frame and peak memory; `WorldOpen1MSaved*` once the editor saved it); world-scale gates write their projects with `Perf/WorldFixture.h`: realistic 250k and 1M worlds,
   many-asset projects, texture folders, exported world games; to look at one, `StrataTests
   --strata-test-helper=write-world-project <new dir> World1M:1000000:colliders`, `write-many-assets-project <new dir>
   30000` or `write-texture-folder <new dir> 24 4096`),
