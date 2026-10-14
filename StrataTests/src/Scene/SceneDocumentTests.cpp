@@ -22,6 +22,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -381,7 +382,9 @@ TEST_SUITE("Scene.Documents")
 			CHECK(document.Result.Sha256 == Sha256::Hash(document.Text));
 			CHECK(document.Result.ContentHash == Hash::FNV1a(std::string_view(document.Text)));
 			REQUIRE_FALSE(progress.empty());
-			CHECK(std::is_sorted(progress.begin(), progress.end()));
+			// One call at a time, each larger than the last: after every chunk serialized and every batch written.
+			CHECK(std::adjacent_find(progress.begin(), progress.end(), std::greater_equal<float>()) == progress.end());
+			CHECK(progress.size() >= (world.GetEntityCount() + chunk - 1) / chunk);
 			CHECK(progress.back() == 1.0f);
 		}
 	}

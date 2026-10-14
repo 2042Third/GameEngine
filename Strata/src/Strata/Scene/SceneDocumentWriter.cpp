@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <mutex>
 #include <unordered_set>
 
 namespace Strata
@@ -415,6 +416,23 @@ namespace Strata
 		JobHandle writing;
 		std::atomic<bool> writeFailed = false;
 		std::atomic<size_t> entitiesWritten = 0;
+		// Progress counts serializing and writing alike (each about half of the work), so that it moves with every chunk: a
+		// batch of a million-entity scene takes long enough to show. Reported one call at a time, and only when it grew.
+		std::atomic<size_t> entitiesSerialized = 0;
+		std::mutex progressMutex;
+		float reportedProgress = 0.0f;
+		const auto reportProgress = [&]()
+		{
+			if (!options.Progress)
+				return;
+			const double done = static_cast<double>(entitiesSerialized.load(std::memory_order_relaxed) + entitiesWritten.load(std::memory_order_relaxed));
+			const float share = static_cast<float>(std::min(1.0, done / (2.0 * static_cast<double>(entities.size()))));
+			std::lock_guard lock(progressMutex);
+			if (share <= reportedProgress)
+				return;
+			reportedProgress = share;
+			options.Progress(share);
+		};
 		std::unordered_set<AssetHandle> seen;
 		for (size_t firstChunk = 0, batchIndex = 0; firstChunk < chunkCount; firstChunk += batchChunks, batchIndex++)
 		{
@@ -439,6 +457,8 @@ namespace Strata
 						chunk.Text += entity == 0 ? "\n" : ",\n";
 						AppendEntity(chunk.Text, context, entities[entity], chunk.References);
 					}
+					entitiesSerialized.fetch_add(lastEntity - firstEntity, std::memory_order_relaxed);
+					reportProgress();
 				}
 			}, options.Priority);
 
@@ -455,7 +475,7 @@ namespace Strata
 				}
 			}
 			const size_t batchEnd = std::min(entities.size(), (firstChunk + count) * chunkEntities);
-			writing = JobSystem::Submit([&hashed, &batch, &writeFailed, &entitiesWritten, &options, batchEnd, total = entities.size()]()
+			writing = JobSystem::Submit([&hashed, &batch, &writeFailed, &entitiesWritten, &reportProgress, batchEnd]()
 			{
 				for (const Chunk& chunk : batch)
 				{
@@ -466,8 +486,7 @@ namespace Strata
 					}
 				}
 				entitiesWritten.store(batchEnd, std::memory_order_relaxed);
-				if (options.Progress)
-					options.Progress(static_cast<float>(static_cast<double>(batchEnd) / static_cast<double>(total)));
+				reportProgress();
 			}, options.Priority);
 		}
 		JobSystem::Wait(writing);

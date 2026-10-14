@@ -45,7 +45,8 @@ namespace Strata
 		std::optional<std::string> Name;
 		// Asked between chunks of entities: true ends the write (it fails as cancelled).
 		std::function<bool()> Cancel;
-		// The share of the entities written so far, in [0, 1], on the writing thread after each batch of chunks.
+		// The share of the work done so far, in [0, 1] (serializing and writing the entities, each about half), after every chunk
+		// serialized and every batch written: from the job threads, one call at a time, each with a larger share than the last.
 		std::function<void(float share)> Progress;
 		// Entities serialized by one job, in parallel on the job system; chunks are written in order, so the bytes never
 		// depend on the thread count.
