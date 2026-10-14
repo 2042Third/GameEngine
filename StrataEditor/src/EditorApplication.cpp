@@ -1,5 +1,6 @@
 #include <Strata.h>
 #include <Strata/Asset/AssetImporter.h>
+#include <Strata/Core/CommandLineOptions.h>
 #include <Strata/Core/EntryPoint.h>
 #include <Strata/ImGui/ImGuiLayer.h>
 
@@ -24,20 +25,12 @@ namespace Strata
 
 	constexpr uint32_t c_HeadlessFrameRate = 60;
 	constexpr int64_t c_MaxIdleTimeoutSeconds = 7 * 24 * 60 * 60; // A week
-	// The exit code of a command line the editor does not understand (like StrataCLI's usage errors).
-	constexpr int c_UsageExitCode = 3;
 
 	namespace
 	{
 
-		struct EditorArgument
-		{
-			const char* Name;
-			const char* Value; // What follows it ("--frames 120" or "--frames=120"); null for flags
-			const char* Description;
-		};
-
-		constexpr EditorArgument c_Arguments[] = {
+		// Every option the editor understands (its usage, and what CommandLineOptions::FindUnknownArgument accepts).
+		constexpr CommandLineOption c_Arguments[] = {
 			{ "--project", "<directory or .stproj>", "Open this project" },
 			{ "--commands", "<script.json>", "Run a command script at startup (a JSON array of {command, parameters, expect, bind})" },
 			{ "--quit-after-commands", nullptr, "Close once the command script finished" },
@@ -57,41 +50,7 @@ namespace Strata
 
 		std::string GetUsage()
 		{
-			std::string usage = "Usage: StrataEditor [options]\n\nOptions:\n";
-			for (const EditorArgument& argument : c_Arguments)
-			{
-				const std::string name = argument.Value ? fmt::format("{} {}", argument.Name, argument.Value) : std::string(argument.Name);
-				usage += fmt::format("  {:<36} {}\n", name, argument.Description);
-			}
-			return usage;
-		}
-
-		// What is wrong with the command line: an argument the editor does not know, or an option without its value.
-		std::optional<std::string> CheckArguments(const CommandLine& commandLine)
-		{
-			for (size_t index = 1; index < commandLine.GetCount(); index++)
-			{
-				const std::string& text = commandLine[index];
-				const size_t equals = text.find('=');
-				const std::string_view name = std::string_view(text).substr(0, equals);
-				const EditorArgument* argument = nullptr;
-				for (const EditorArgument& candidate : c_Arguments)
-				{
-					if (name == candidate.Name)
-						argument = &candidate;
-				}
-				if (!argument)
-					return fmt::format("Unknown argument '{}'", text);
-				if (!argument->Value && equals != std::string::npos)
-					return fmt::format("{} takes no value", argument->Name);
-				if (argument->Value && equals == std::string::npos)
-				{
-					if (index + 1 >= commandLine.GetCount())
-						return fmt::format("{} needs a value: {} {}", argument->Name, argument->Name, argument->Value);
-					index++; // Its value
-				}
-			}
-			return std::nullopt;
+			return CommandLineOptions::FormatUsage("StrataEditor", c_Arguments);
 		}
 
 		// The --ui-scale factor, parsed as a JSON number (independent of the C locale, unlike strtof); nullopt when it is not a
@@ -105,7 +64,7 @@ namespace Strata
 			return static_cast<float>(scale);
 		}
 
-		// What is wrong with the values of the options that take numbers (CheckArguments made sure they have values).
+		// What is wrong with the values of the options that take numbers (FindUnknownArgument made sure they have values).
 		std::optional<std::string> CheckValues(const CommandLine& commandLine)
 		{
 			if (commandLine.HasFlag("--frames"))
@@ -226,7 +185,7 @@ namespace Strata
 		// (they end by themselves or through automation). A person's window leaves the terminal it was started from alone.
 		if (commandLine.HasFlag("--help") || commandLine.HasFlag("-h") || commandLine.HasFlag("--version"))
 			return ProgramRun::Console;
-		if (CheckArguments(commandLine) || CheckValues(commandLine))
+		if (CommandLineOptions::FindUnknownArgument(commandLine, c_Arguments) || CheckValues(commandLine))
 			return ProgramRun::Console;
 		for (const char* scripted : { "--headless", "--no-gpu", "--frames", "--commands", "--quit-after-commands" })
 		{
@@ -251,13 +210,13 @@ namespace Strata
 			Application::SetStartupExitCode(0);
 			return nullptr;
 		}
-		std::optional<std::string> problem = CheckArguments(commandLine);
+		std::optional<std::string> problem = CommandLineOptions::FindUnknownArgument(commandLine, c_Arguments);
 		if (!problem)
 			problem = CheckValues(commandLine);
 		if (problem)
 		{
 			std::fprintf(stderr, "%s\n\n%s", problem->c_str(), GetUsage().c_str());
-			Application::SetStartupExitCode(c_UsageExitCode);
+			Application::SetStartupExitCode(CommandLineOptions::c_UsageExitCode);
 			return nullptr;
 		}
 

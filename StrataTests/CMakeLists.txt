@@ -310,6 +310,17 @@ if(TARGET StrataEditor AND TARGET StrataCLI)
 	set_tests_properties(StrataEditor.Automation PROPERTIES ENVIRONMENT "${STRATA_END_TO_END_ENVIRONMENT}" TIMEOUT 600)
 endif()
 
+# The runtime's command line, before any game is looked for: --help prints the usage and exits 0, an argument it does not
+# understand prints the problem with the usage and exits 3 (CommandLineOptions::c_UsageExitCode), like the editor.
+if(TARGET StrataRuntime)
+	add_test(NAME StrataRuntime.Arguments.Help
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataRuntime>" "-DARGUMENTS=--help" "-DEXPECT=Usage: StrataRuntime [options]|--save-directory <folder>"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	add_test(NAME StrataRuntime.Arguments.Unknown
+		COMMAND "${CMAKE_COMMAND}" "-DCOMMAND=$<TARGET_FILE:StrataRuntime>;--bogus" "-DEXPECTED_OUTPUT=Unknown argument '--bogus'.*Usage: StrataRuntime"
+			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+endif()
+
 # Editor export to a playable game, then the exported runtime: headless without a GPU (--no-gpu, --headless), then in a
 # window with rendering (label gpu).
 if(TARGET StrataEditor AND TARGET StrataRuntime)
@@ -350,7 +361,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		COMMAND "${CMAKE_COMMAND}"
 			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--headless;--frames;5;--asset-budget-mb;0"
 			"-DEXPECTED_OUTPUT=asset-budget-mb needs a whole number of megabytes"
-			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidAssetBudget PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 	# --perf-log writes a CSV row per frame (FramePerfLog), also headless; the check reads it back (Runtime/PerfLogReader.h).
 	add_test(NAME StrataRuntime.PerfLog
@@ -363,13 +374,13 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		COMMAND "${CMAKE_COMMAND}"
 			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--headless;--frames;5;--perf-log"
 			"-DEXPECTED_OUTPUT=--perf-log needs the path of the CSV file to write"
-			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidPerfLog PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 	add_test(NAME StrataRuntime.InvalidSaveDirectory
 		COMMAND "${CMAKE_COMMAND}"
 			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--headless;--frames;5;--save-directory"
 			"-DEXPECTED_OUTPUT=--save-directory needs the folder to keep the game's save files in"
-			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidSaveDirectory PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 
 	# The exported game in a window renders a few frames from its camera and saves the last one, which must show the scene:
@@ -393,7 +404,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		COMMAND "${CMAKE_COMMAND}"
 			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--frames;5;--resolution;400x0"
 			"-DEXPECTED_OUTPUT=--resolution needs the pixels of the window"
-			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidResolution PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 	# In a window the perf log also times rendering and presenting.
 	add_test(NAME StrataRuntime.PerfLogWindowed
