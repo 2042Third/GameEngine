@@ -94,7 +94,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | --- | --- |
 | What is open, is it playing, unsaved changes? | `editor.status` |
 | Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress` and whether it is the project's `startScene`, `lastOpen` with how it ended, `play` for a switch a running game asked for, `subScenes` of the running game; `{"wait": true}` answers once nothing is opening); also `editor.status {"sections": ["sceneLoad"]}` |
-| What did the person, other agents or I just do? | `editor.activity {since, limit, source, command}` (every command run: source UI / Automation with the client's name / CommandScript / Internal, parameters, result or error, undo step, entities touched); page with `since` = the returned `latest` |
+| What did the person, other agents or I just do? | `editor.activity {since, limit, source, command}` (every command run: source UI / Automation with the client's name / CommandScript / Internal, parameters, result or error, undo step, entities touched); page with `since` = the returned `latest`, or the latest first with `{"newest": true}` and `before` = the returned `oldest` |
 | Are there unsaved changes a crashed (or discarding) editor left? | `scene.recoveryStatus` (entries with `id`, `sceneName`, `applicable`; the edited scene's `journal`), then `scene.recover {scene: <id or scene>, action: "apply" \| "discard"}` |
 | Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`; editors run with `--commands` or `--frames` list what they opened without saving it); `editor.removeRecentProject {path}` takes one off |
 | What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
@@ -112,7 +112,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | Where is it, how big? | `entity.get {"entity", "world": true}`: `world` (position, rotation as `euler` degrees and `quaternion`, scale) and `bounds` (`min`, `max`, `size`, `center`; `pending` while a mesh loads) |
 | What does the person have selected, what does the inspector show? | `selection.get` (`entities`, the last is the primary one; `inspectedAsset` while the inspector shows an asset); `selection.set {entities?, asset?}` changes them |
 | What does the game play (sound)? | `audio.state` (play mode): `voices` (entity or null for one-shots, clip, playing, looping, position...), `oneShots` (`playing`, `played`, `dropped`), `listener`, `masterVolume` |
-| What happened (errors, script output)? | `log.read` (`after` = the previous `latest` to page; `minLevel`) |
+| What happened (errors, script output)? | `log.read` (`{"newest": true, "limit": 20}` for the latest first, paging with `before` = the returned `oldest`; oldest first with `after` = the previous `latest`; `minLevel`; `logger`: `Strata` engine, `App` editor, `Script` scripts) |
 | How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`); `asset.setBudget` changes the open project's budgets (MB of memory, staging and uploads per frame; ms of finalization and of upload steps per frame) |
 | Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %) |
 

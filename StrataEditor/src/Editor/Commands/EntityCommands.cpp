@@ -114,6 +114,19 @@ namespace Strata
 			return result;
 		}
 
+		// The entities in the order given, each once.
+		std::vector<Entity> RemoveDuplicates(const std::vector<Entity>& entities)
+		{
+			std::unordered_set<UUID> seen;
+			std::vector<Entity> result;
+			for (const Entity entity : entities)
+			{
+				if (seen.insert(entity.GetUUID()).second)
+					result.push_back(entity);
+			}
+			return result;
+		}
+
 		nlohmann::json ToJson(const std::vector<Entity>& entities)
 		{
 			nlohmann::json ids = nlohmann::json::array();
@@ -165,7 +178,9 @@ namespace Strata
 				return FinishEdit(context, transaction, { { "id", UUIDToJson(entity.GetUUID()) } });
 			} });
 
-		registry.Register({ "entity.delete", "Deletes entities and all their descendants (undoable; while playing it changes the running copy only).",
+		registry.Register({ "entity.delete",
+			"Deletes entities and all their descendants (undoable; while playing it changes the running copy only). Returns deleted (the IDs "
+			"given) and count (the entities deleted, descendants included).",
 			ObjectSchema({ { "entities", EntityArraySchema("Entities to delete") } }, { "entities" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -175,13 +190,17 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
+				size_t count = 0;
+				for (const Entity root : RemoveNested(entities))
+					count += SceneEdit::CollectSubtree(scene, root.GetUUID()).size();
+				nlohmann::json deleted = ToJson(RemoveDuplicates(entities));
 				SceneEditTransaction transaction(scene, fmt::format("Delete {}", SceneEdit::DescribeEntities(entities)), {});
 				for (Entity entity : entities)
 					transaction.TrackSubtree(entity.GetUUID());
 				// One batch: each sibling list is compacted once (entities nested in another listed one go with it).
 				scene.DestroyEntities(entities);
 				context.PruneSelection(); // Deleted descendants too
-				return FinishEdit(context, transaction);
+				return FinishEdit(context, transaction, { { "deleted", std::move(deleted) }, { "count", count } });
 			} });
 
 		registry.Register({ "entity.duplicate",
@@ -466,7 +485,7 @@ namespace Strata
 				return FinishEdit(context, transaction, { { "entities", ToJson(entities) } });
 			} });
 
-		registry.Register({ "entity.rename", "Renames an entity (undoable; while playing it changes the running copy only).",
+		registry.Register({ "entity.rename", "Renames an entity (undoable; while playing it changes the running copy only). Returns {entity, name}.",
 			ObjectSchema({ { "entity", EntitySchema("Entity") }, { "name", StringSchema("New name") } }, { "entity", "name" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -479,7 +498,7 @@ namespace Strata
 				SceneEditTransaction transaction(scene, fmt::format("Rename {} to {}", SceneEdit::QuoteName(entity.GetName()), SceneEdit::QuoteName(name)), { entity.GetUUID() });
 				entity.GetComponent<NameComponent>().Name = name;
 				entity.MarkModified<NameComponent>();
-				return FinishEdit(context, transaction);
+				return FinishEdit(context, transaction, { { "entity", UUIDToJson(entity.GetUUID()) }, { "name", name } });
 			} });
 
 		registry.Register({ "entity.setActive",

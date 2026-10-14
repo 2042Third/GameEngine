@@ -452,4 +452,50 @@ TEST_SUITE("Editor.Journal")
 		const EditorCommandResult invalid = harness.Commands.Execute(harness.Context, "editor.activity", { { "source", "Robot" } });
 		CHECK(invalid.ErrorKind == EditorCommandError::InvalidParameters);
 	}
+
+	TEST_CASE("editor.activity pages newest first with before")
+	{
+		JournalHarness harness;
+		const uint64_t since = harness.Journal().GetLatestId();
+		for (int index = 0; index < 7; index++)
+			harness.Commands.Execute(harness.Context, "entity.create", { { "name", fmt::format("Entity {}", index) } });
+		harness.Commands.Execute(harness.Context, "scene.info");
+
+		// The latest first: scene.info, then the creations from the last back, three at a time.
+		nlohmann::json page = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "editor.activity",
+			{ { "since", since }, { "newest", true }, { "limit", 3 } });
+		REQUIRE(page["entries"].size() == 3);
+		CHECK(page["entries"][0]["command"] == "scene.info");
+		CHECK(page["more"] == true);
+		std::vector<std::string> names;
+		std::vector<uint64_t> ids;
+		while (true)
+		{
+			for (const nlohmann::json& entry : page["entries"])
+			{
+				ids.push_back(entry["id"].get<uint64_t>());
+				if (entry["command"] == "entity.create")
+					names.push_back(entry["parameters"]["name"].get<std::string>());
+			}
+			if (page["more"] == false)
+				break;
+			CHECK(page["oldest"] == ids.back());
+			page = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "editor.activity",
+				{ { "since", since }, { "newest", true }, { "limit", 3 }, { "before", page["oldest"] }, { "command", "entity.create" } });
+		}
+		CHECK(names == std::vector<std::string> { "Entity 6", "Entity 5", "Entity 4", "Entity 3", "Entity 2", "Entity 1", "Entity 0" });
+		CHECK(std::is_sorted(ids.rbegin(), ids.rend()));
+		CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
+
+		// before bounds the oldest-first listing too; nothing below the first entry leaves oldest null.
+		const nlohmann::json first = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "editor.activity",
+			{ { "since", since }, { "before", ids[ids.size() - 2] } });
+		REQUIRE(first["entries"].size() == 1);
+		CHECK(first["entries"][0]["parameters"]["name"] == "Entity 0");
+		const nlohmann::json none = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "editor.activity",
+			{ { "since", since }, { "newest", true }, { "before", ids.back() } });
+		CHECK(none["entries"].empty());
+		CHECK(none["oldest"].is_null());
+		CHECK(none["more"] == false);
+	}
 }

@@ -267,6 +267,49 @@ TEST_SUITE("Editor.Validation")
 		CHECK_FALSE(harness.Error("log.read", { { "minLevel", "Loud" } }).empty());
 	}
 
+	TEST_CASE("The log is paged newest first, by logger, with limit")
+	{
+		Harness harness;
+		const uint64_t start = Log::GetBuffer().GetLatestSequence();
+		for (int message = 0; message < 7; message++)
+		{
+			ST_WARN("Newest paging message {}", message);
+			ST_CORE_WARN("Core paging message {}", message);
+		}
+
+		// The client logger's messages, newest first, three at a time.
+		std::vector<std::string> seen;
+		nlohmann::json parameters = { { "after", start }, { "newest", true }, { "logger", "App" }, { "limit", 3 }, { "minLevel", "Warn" } };
+		while (true)
+		{
+			const nlohmann::json page = harness.Run("log.read", parameters);
+			CHECK(page["messages"].size() <= 3);
+			for (const nlohmann::json& message : page["messages"])
+			{
+				CHECK(message["logger"] == "App");
+				seen.push_back(message["message"].get<std::string>());
+			}
+			if (page["more"] == false)
+				break;
+			parameters["before"] = page["oldest"];
+		}
+		std::vector<std::string> expected;
+		for (int message = 6; message >= 0; message--)
+			expected.push_back(fmt::format("Newest paging message {}", message));
+		CHECK(seen == expected);
+
+		// maxCount stays a name of limit; giving both with different values is a mistake.
+		CHECK(harness.Run("log.read", { { "after", start }, { "maxCount", 2 } })["messages"].size() == 2);
+		CHECK(harness.Run("log.read", { { "after", start }, { "limit", 2 }, { "maxCount", 2 } })["messages"].size() == 2);
+		CHECK(harness.Error("log.read", { { "limit", 2 }, { "maxCount", 3 } }).find("not both") != std::string::npos);
+		// before bounds the oldest-first listing too.
+		const nlohmann::json first = harness.Run("log.read", { { "after", start }, { "before", start + 3 } });
+		REQUIRE(first["messages"].size() == 2);
+		CHECK(first["messages"][0]["message"] == "Newest paging message 0");
+		CHECK(first["messages"][1]["message"] == "Core paging message 0");
+		CHECK(harness.Run("log.read", { { "after", start }, { "logger", "Nobody" } })["messages"].empty());
+	}
+
 	TEST_CASE("Undo restores positions after duplicating, reparenting and failed instantiation")
 	{
 		Harness harness;

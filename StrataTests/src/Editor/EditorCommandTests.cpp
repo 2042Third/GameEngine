@@ -381,12 +381,13 @@ TEST_SUITE("Editor.Commands")
 		CHECK(lamp["components"]["Transform"]["Translation"] == nlohmann::json({ 1.0, 2.0, 3.0 }));
 
 		harness.Run("component.set", { { "entity", child }, { "component", "PointLight" }, { "values", { { "Range", 4.5 } } } });
-		harness.Run("entity.rename", { { "entity", child }, { "name", "Bulb" } });
+		CHECK(harness.Run("entity.rename", { { "entity", child }, { "name", "Bulb" } }) == nlohmann::json { { "entity", child }, { "name", "Bulb" } });
 		CHECK(harness.Run("entity.find", { { "name", "Bulb" } })["entities"] == nlohmann::json::array({ child }));
 		CHECK(harness.Run("entity.find", { { "component", "PointLight" } })["entities"].size() == 1);
 		const nlohmann::json edited = harness.SceneSnapshot();
 
-		harness.Run("entity.delete", { { "entities", { parent } } });
+		// The IDs given (each once; the child goes with its parent) and how many went.
+		CHECK(harness.Run("entity.delete", { { "entities", { parent, child, parent } } }) == nlohmann::json { { "deleted", { parent, child } }, { "count", 2 } });
 		CHECK(harness.Run("scene.info")["entityCount"] == 0);
 		CHECK(harness.Context.IsSceneModified());
 

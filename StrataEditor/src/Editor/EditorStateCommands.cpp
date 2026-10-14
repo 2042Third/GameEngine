@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <deque>
 #include <filesystem>
 #include <limits>
 #include <optional>
@@ -253,10 +254,12 @@ namespace Strata
 			"Automation, CommandScript or Internal), client (an automation client's name), command, mutating, playing (ran while the scene played), "
 			"runningCopy (changed the playing scene's running copy, which play.stop discarded), parameters (parametersTruncated when too large to keep), status (Pending, Succeeded, Failed), result (a summary) or error {kind, "
 			"message}, warning, durationMs, frames (of a command that took several), entities (that its undo step touched, at most 256) and "
-			"entityCount, undoStep}. Page with since = the returned latest while more is true; editor.activity.export turns entries into a "
-			"command script.",
+			"entityCount, undoStep}. Page with since = the returned latest while more is true, or with newest: true (the latest first) with "
+			"before = the returned oldest; editor.activity.export turns entries into a command script.",
 			ObjectSchema({
 				{ "since", IntegerSchema("Return entries with an id above this (default 0: from the oldest kept)", 0, std::numeric_limits<int64_t>::max()) },
+				{ "before", IntegerSchema("Return entries with an id below this (default: none)", 1, std::numeric_limits<int64_t>::max()) },
+				{ "newest", BoolSchema("Newest first: the latest entries (default false: oldest first)") },
 				{ "limit", IntegerSchema("Most entries to return (default 100)", 1, static_cast<int64_t>(CommandJournal::c_MaxEntries)) },
 				{ "source", { { "type", "string" }, { "enum", { "UI", "Automation", "CommandScript", "Internal" } },
 					{ "description", "Only entries of this source" } } },
@@ -265,6 +268,9 @@ namespace Strata
 			{
 				CommandArguments arguments(parameters);
 				const int64_t since = arguments.GetInt("since", 0, 0, std::numeric_limits<int64_t>::max());
+				constexpr int64_t c_NoBound = std::numeric_limits<int64_t>::max();
+				const uint64_t before = static_cast<uint64_t>(arguments.GetInt("before", c_NoBound, 1, c_NoBound));
+				const bool newest = arguments.GetBool("newest", false);
 				const int64_t limit = arguments.GetInt("limit", 100, 1, static_cast<int64_t>(CommandJournal::c_MaxEntries));
 				const std::string sourceName = arguments.GetString("source", "");
 				const std::string command = arguments.GetString("command", "");
@@ -282,27 +288,55 @@ namespace Strata
 				// This call's own entry is still running: it is not part of the answer.
 				const uint64_t self = journal.GetRunningId();
 				const bool group = !command.empty() && command.back() == '.';
-				nlohmann::json entries = nlohmann::json::array();
-				uint64_t latest = static_cast<uint64_t>(since);
-				bool more = false;
-				for (const CommandJournalEntry& entry : journal.GetEntries())
+				const auto matches = [&](const CommandJournalEntry& entry)
 				{
-					if (entry.Id <= static_cast<uint64_t>(since) || entry.Id == self)
-						continue;
-					if (source && entry.Source != *source)
-						continue;
-					if (!command.empty() && (group ? !entry.Command.starts_with(command) : entry.Command != command))
-						continue;
-					if (entries.size() == static_cast<size_t>(limit))
+					return entry.Id > static_cast<uint64_t>(since) && entry.Id < before && entry.Id != self && (!source || entry.Source == *source)
+						&& (command.empty() || (group ? entry.Command.starts_with(command) : entry.Command == command));
+				};
+				nlohmann::json entries = nlohmann::json::array();
+				bool more = false;
+				nlohmann::json result;
+				if (newest)
+				{
+					// Newest first, so paging with before = oldest never skips any.
+					uint64_t oldest = 0;
+					const std::deque<CommandJournalEntry>& journalEntries = journal.GetEntries();
+					for (auto entry = journalEntries.rbegin(); entry != journalEntries.rend() && entry->Id > static_cast<uint64_t>(since); ++entry)
 					{
-						more = true;
-						break;
+						if (!matches(*entry))
+							continue;
+						if (entries.size() == static_cast<size_t>(limit))
+						{
+							more = true;
+							break;
+						}
+						oldest = entry->Id;
+						entries.push_back(CommandJournal::Describe(*entry));
 					}
-					latest = entry.Id;
-					entries.push_back(CommandJournal::Describe(entry));
+					result = { { "entries", std::move(entries) }, { "oldest", oldest != 0 ? nlohmann::json(oldest) : nlohmann::json(nullptr) },
+						{ "more", more } };
 				}
-				return EditorCommandResult::Ok({ { "entries", std::move(entries) }, { "latest", latest }, { "more", more },
-					{ "journal", { { "entries", journal.GetEntries().size() }, { "bytes", journal.GetBytes() }, { "latest", journal.GetLatestId() } } } });
+				else
+				{
+					uint64_t latest = static_cast<uint64_t>(since);
+					for (const CommandJournalEntry& entry : journal.GetEntries())
+					{
+						if (entry.Id >= before)
+							break;
+						if (!matches(entry))
+							continue;
+						if (entries.size() == static_cast<size_t>(limit))
+						{
+							more = true;
+							break;
+						}
+						latest = entry.Id;
+						entries.push_back(CommandJournal::Describe(entry));
+					}
+					result = { { "entries", std::move(entries) }, { "latest", latest }, { "more", more } };
+				}
+				result["journal"] = { { "entries", journal.GetEntries().size() }, { "bytes", journal.GetBytes() }, { "latest", journal.GetLatestId() } };
+				return EditorCommandResult::Ok(std::move(result));
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "editor.activity.export",
@@ -724,16 +758,28 @@ namespace Strata
 		// Log
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "log.read", "Log messages (engine, editor and scripts) after a sequence number, oldest first. Page with after = the returned latest while more is true.",
+		registry.Register({ "log.read",
+			"Log messages (engine, editor and scripts), oldest first after a sequence number, or with newest: true the latest first. Page "
+			"oldest first with after = the returned latest, newest first with before = the returned oldest, while more is true. Reading from "
+			"level Error or below without a logger marks the errors read for editor.status (errors.unread).",
 			ObjectSchema({
-				{ "after", IntegerSchema("Return messages with a sequence number above this (default 0)", 0, std::numeric_limits<int64_t>::max()) },
-				{ "maxCount", IntegerSchema("Maximum number of messages (default 200)", 1, 10000) },
+				{ "after", IntegerSchema("Only messages with a sequence number above this (default 0)", 0, std::numeric_limits<int64_t>::max()) },
+				{ "before", IntegerSchema("Only messages with a sequence number below this (default: none)", 1, std::numeric_limits<int64_t>::max()) },
+				{ "newest", BoolSchema("Newest first: the latest messages (default false: oldest first)") },
+				{ "logger", StringSchema("Only messages of this logger (exact name, e.g. Strata, App, Script)") },
+				{ "limit", IntegerSchema("Maximum number of messages (default 200)", 1, 10000) },
+				{ "maxCount", IntegerSchema("The former name of limit", 1, 10000) },
 				{ "minLevel", { { "type", "string" }, { "enum", { "Trace", "Info", "Warn", "Error", "Critical" } }, { "description", "Lowest level returned (default Info)" } } } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
-				const int64_t after = arguments.GetInt("after", 0, 0, std::numeric_limits<int64_t>::max());
+				const uint64_t after = static_cast<uint64_t>(arguments.GetInt("after", 0, 0, std::numeric_limits<int64_t>::max()));
+				constexpr int64_t c_NoBound = std::numeric_limits<int64_t>::max();
+				const uint64_t before = static_cast<uint64_t>(arguments.GetInt("before", c_NoBound, 1, c_NoBound));
+				const bool newest = arguments.GetBool("newest", false);
+				const std::string logger = arguments.GetString("logger", "");
 				const int64_t maxCount = arguments.GetInt("maxCount", 200, 1, 10000);
+				const size_t limit = static_cast<size_t>(arguments.GetInt("limit", maxCount, 1, 10000));
 				const std::string levelName = arguments.GetString("minLevel", "Info");
 				LogLevel minLevel = LogLevel::Info;
 				bool levelFound = false;
@@ -747,35 +793,78 @@ namespace Strata
 				}
 				if (!levelFound)
 					arguments.SetError(fmt::format("Unknown log level '{}'", levelName));
+				if (arguments.Has("limit") && arguments.Has("maxCount") && parameters.at("limit") != parameters.at("maxCount"))
+					arguments.SetError("Give limit or maxCount (its former name), not both");
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
-				// The oldest messages after `after` come first, so paging with after = latest never skips any.
-				nlohmann::json messages = nlohmann::json::array();
-				uint64_t latest = static_cast<uint64_t>(after);
-				bool more = false;
-				for (const LogEntry& entry : Log::GetBuffer().GetEntries(static_cast<uint64_t>(after)))
+				const auto describe = [](const LogEntry& entry)
 				{
-					if (entry.Level < minLevel)
+					return nlohmann::json {
+						{ "sequence", entry.Sequence },
+						{ "level", LogLevelToString(entry.Level) },
+						{ "logger", entry.Logger },
+						{ "message", entry.Message },
+						{ "time", entry.Timestamp } };
+				};
+				const auto matches = [&](const LogEntry& entry) { return entry.Level >= minLevel && (logger.empty() || entry.Logger == logger); };
+				const std::vector<LogEntry> entries = Log::GetBuffer().GetEntries(after);
+				nlohmann::json messages = nlohmann::json::array();
+				bool more = false;
+				// Errors up to the newest message looked at were returned (or skipped below a higher minLevel or for another
+				// logger, which leaves them unread).
+				const bool marksRead = minLevel <= LogLevel::Error && logger.empty();
+				if (newest)
+				{
+					// Newest first, so paging with before = oldest never skips any.
+					uint64_t oldest = before;
+					uint64_t newestSeen = 0;
+					for (auto entry = entries.rbegin(); entry != entries.rend(); ++entry)
+					{
+						if (entry->Sequence >= before)
+							continue;
+						if (!matches(*entry))
+						{
+							oldest = entry->Sequence;
+							newestSeen = std::max(newestSeen, entry->Sequence);
+							continue;
+						}
+						if (messages.size() == limit)
+						{
+							more = true;
+							break;
+						}
+						oldest = entry->Sequence;
+						newestSeen = std::max(newestSeen, entry->Sequence);
+						messages.push_back(describe(*entry));
+					}
+					if (marksRead)
+						context.MarkLogRead(newestSeen);
+					nlohmann::json result = { { "messages", std::move(messages) }, { "more", more } };
+					result["oldest"] = oldest == static_cast<uint64_t>(c_NoBound) ? nlohmann::json(nullptr) : nlohmann::json(oldest);
+					return EditorCommandResult::Ok(std::move(result));
+				}
+
+				// The oldest messages after `after` come first, so paging with after = latest never skips any.
+				uint64_t latest = after;
+				for (const LogEntry& entry : entries)
+				{
+					if (entry.Sequence >= before)
+						break;
+					if (!matches(entry))
 					{
 						latest = entry.Sequence;
 						continue;
 					}
-					if (messages.size() == static_cast<size_t>(maxCount))
+					if (messages.size() == limit)
 					{
 						more = true;
 						break;
 					}
 					latest = entry.Sequence;
-					messages.push_back({
-						{ "sequence", entry.Sequence },
-						{ "level", LogLevelToString(entry.Level) },
-						{ "logger", entry.Logger },
-						{ "message", entry.Message },
-						{ "time", entry.Timestamp } });
+					messages.push_back(describe(entry));
 				}
-				// Errors up to `latest` were returned (or skipped below a higher minLevel, which leaves them unread).
-				if (minLevel <= LogLevel::Error)
+				if (marksRead)
 					context.MarkLogRead(latest);
 				return EditorCommandResult::Ok({ { "messages", std::move(messages) }, { "latest", latest }, { "more", more } });
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
