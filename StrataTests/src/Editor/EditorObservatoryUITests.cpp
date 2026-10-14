@@ -198,7 +198,10 @@ TEST_SUITE("Editor.UI")
 		nlohmann::json command;
 		editor.FrameWith([&]() { command = editor.Run("asset.stats"); });
 		REQUIRE(panel->GetStats());
-		CHECK(CommandUtils::DescribeAssetStats(*panel->GetStats()) == command);
+		// asset.stats adds the renderer's geometry pool (null here: no renderer) to the asset manager's statistics.
+		nlohmann::json expected = CommandUtils::DescribeAssetStats(*panel->GetStats());
+		expected["geometryPool"] = CommandUtils::DescribeGeometryPool();
+		CHECK(expected == command);
 		CHECK(command["registered"].get<uint32_t>() > 10);
 
 		// Nothing was uploaded (no renderer): the sparkline says so instead of showing an empty box.
