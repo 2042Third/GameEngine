@@ -950,9 +950,19 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
                                          pools over budget
 ```
 
-- **Importing** (`Asset/EditorAssetManager.h`). `Scan` registers every file with a known importer, creates missing
-  `.meta` files, takes current imports from the cache and imports stale assets: in parallel before it returns
-  (`ScanImports::Wait`: tools, tests, scripted editor runs), or as background jobs that `Update` applies
+- **Importing** (`Asset/EditorAssetManager.h`). A scan registers every file with a known importer, creates missing
+  `.meta` files, takes current imports from the cache and imports stale assets. `BeginScan` returns at once: a job
+  loads the import records, walks the asset directory and prepares every file on the background threads in batches of
+  256 (`Asset/AssetRegistration.h`: its `.meta`, read once; its importer and settings; handles several files claim,
+  resolved as before, and new ones written into the `.meta` by the job; its cached import checked against its record, or
+  what a document references), then removes cached data nothing uses. `Update` inserts what the job prepared, a slice of
+  about a millisecond per call (`AssetRegistrationOptions`: the clock is read every 64 entries;
+  `AssetManagerBase::RegisterAssets` takes a batch under one lock), and applies the current imports, whose outcomes carry
+  their cache files' sizes: no file is touched on the main thread (`FileSystem::GetThreadOperationCount` lets tests
+  check). `GetScanProgress` reports the phase (`Walking`, `Registering`, `Applying`) with done and total; the file watcher
+  starts before the walk, so a file added meanwhile is reported once the scan is applied. `Scan` begins and waits
+  (tools, tests, scripted editor runs); called again later, it registers the files added since. Stale assets import in
+  parallel once the scan is applied (`ScanImports::Wait`), or as background jobs that `Update` applies
   (`ScanImports::InBackground`: the editor, so a project with textures to compress opens at once and its frames go on).
   Until an asset's first import is applied, a load of it waits, `Loading`, instead of failing (the manager does not
   dispatch it while `IsAwaitingImport` says so, and `ResumeLoadsAwaitingImport` starts it with the import's data or

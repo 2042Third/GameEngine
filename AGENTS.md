@@ -276,7 +276,8 @@ Details: [Asset pipeline](Docs/DeveloperGuide.md#asset-pipeline).
   `GetSettingsProperties` and derive sub-asset handles with `DeriveSubAssetHandle` (stable across re-imports and
   machines) ([Importers](Docs/DeveloperGuide.md#importers)).
 - Nothing in the editor waits for a background import: imports are cancelled instead, and editor code re-imports in
-  the background (the blocking forms are for tools and tests).
+  the background (the blocking forms are for tools and tests). Registering and applying touch no file on the main
+  thread: jobs prepare (`BeginScan`, outcomes carry cache sizes), `Update` inserts in time slices.
 - A new document type, or a stored form that references assets, records its references (`AssetDependencies::Scan` or
   `ImportResult::References`; each valid handle once, never itself: `NormalizeReferences`): pruned exports, delete
   checks and prefetches follow them ([References and bounds](Docs/DeveloperGuide.md#references-and-bounds)).

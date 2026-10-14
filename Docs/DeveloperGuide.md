@@ -636,6 +636,14 @@ short. Their full wording:
   failed items, logs a failure once); an importer whose files name others (a glTF's buffers and images) lists them in
   `FindExternalFiles` (with `ReadsExternalFiles`), so the copy brings them along, and messages that can quote file bytes
   are made valid UTF-8 (`StringUtils::MakeValidUTF8`).
+  **Registering and applying touch no file on the main thread.** A scan prepares every file on jobs
+  (`EditorAssetManager::BeginScan`: `.meta` files read once and written by the job when missing or given a new handle,
+  cached imports checked against the records store, documents' references found, unused cache files removed), and
+  `Update` only inserts what was prepared, in slices of about a millisecond (`AssetRegistrationOptions`). Import outcomes
+  carry what applying them needs (`ImportOutcome::StoredSize`, `SubAssetStoredSizes`), and cache files that become unused
+  are removed by an I/O job (`RemoveCacheFilesLater`). New code on these paths keeps it so: the main thread reads no
+  `.meta`, stats no cache file and writes no record (records go through `ImportRecordStore`, whose writer is an I/O job);
+  tests check with `FileSystem::GetThreadOperationCount`.
 
 ### Engine-native assets, sub-assets and built-in assets
 

@@ -591,6 +591,8 @@ namespace Strata
 
 		// Registers an asset (or updates the metadata of a registered one, keeping its loaded state).
 		void RegisterAsset(const AssetMetadata& metadata);
+		// RegisterAsset of many, under one lock (a scan inserts thousands of assets in slices).
+		void RegisterAssets(std::span<const AssetMetadata> metadata);
 		void UnregisterAsset(AssetHandle handle);
 		void UpdateAssetMetadata(const AssetMetadata& metadata);
 		// Records how many bytes loading the asset reads (AssetMetadata::StoredSize).
@@ -736,6 +738,8 @@ namespace Strata
 		// entries.
 		void SetStateLocked(AssetEntry& entry, AssetState state);
 		AssetEntry& AddEntryLocked(AssetHandle handle, bool& outInserted);
+		// RegisterAsset's work for one asset (requires m_Mutex; the caller bumps the metadata version).
+		void RegisterAssetLocked(const AssetMetadata& metadata);
 		void RemoveEntryLocked(std::unordered_map<AssetHandle, AssetEntry>::iterator it);
 		// Replaces the loaded object (null drops it), keeping the pool totals and the recency orders. Returns the previous
 		// object, to be released after the lock (destroying assets may be slow).

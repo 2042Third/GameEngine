@@ -861,7 +861,21 @@ namespace Strata
 
 	void AssetManagerBase::RegisterAsset(const AssetMetadata& metadata)
 	{
+		RegisterAssets(std::span<const AssetMetadata>(&metadata, 1));
+	}
+
+	void AssetManagerBase::RegisterAssets(std::span<const AssetMetadata> assets)
+	{
+		if (assets.empty())
+			return;
 		std::scoped_lock<std::mutex> lock(m_Mutex);
+		for (const AssetMetadata& metadata : assets)
+			RegisterAssetLocked(metadata);
+		m_MetadataVersion.fetch_add(1, std::memory_order_release);
+	}
+
+	void AssetManagerBase::RegisterAssetLocked(const AssetMetadata& metadata)
+	{
 		bool inserted = false;
 		AssetEntry& entry = AddEntryLocked(metadata.Handle, inserted);
 		if (inserted)
@@ -877,7 +891,6 @@ namespace Strata
 		entry.Metadata = metadata;
 		if (!metadata.Path.empty() && !metadata.IsSubAsset())
 			m_PathIndex[metadata.Path] = metadata.Handle;
-		m_MetadataVersion.fetch_add(1, std::memory_order_release);
 	}
 
 	void AssetManagerBase::UnregisterAsset(AssetHandle handle)

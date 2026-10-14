@@ -773,6 +773,54 @@ namespace Strata
 		// to the caller in NativeReferences::Record.
 		NativeReferences FindNativeReferences(AssetHandle handle, AssetType type, const std::string& relativePath, std::span<const uint8_t> data = {},
 			const std::vector<AssetHandle>* references = nullptr, bool deferRecord = false) const;
+		// Deletes cached data and import records of assets that are not `valid` and leftovers of interrupted writes (a scan's
+		// job, before any import of the manager runs).
+		void RemoveUnusedCacheFiles(const std::unordered_set<AssetHandle>& valid);
+	};
+
+	// A source file as a scan job prepared it: everything its registration needs, read from the disk off the main thread.
+	struct EditorAssetManager::PreparedSource
+	{
+		std::filesystem::path Absolute;
+		std::string Path; // Relative, '/' separators
+		const AssetImporter* Importer = nullptr;
+		AssetHandle Handle = UUID::Null();
+		nlohmann::json Settings = nlohmann::json::object();
+		uint64_t SourceSize = 0;
+		int64_t SourceTime = 0;
+		bool Skip = false; // No importer, or an invalid .meta (never overwritten: it may hold a merge conflict)
+		bool NewHandle = false; // Its .meta was missing, or holds a handle another file keeps
+		// Of an imported asset: its cached import, when it is current.
+		std::optional<ImportOutcome> Current;
+		// Of an asset stored as its source: what it references (from its record, or scanned).
+		std::optional<NativeReferences> References;
+	};
+
+	// What the scan job shares with the manager, which never waits for it: the job writes its results, then sets Finished.
+	struct EditorAssetManager::ScanShared
+	{
+		std::atomic<bool> Cancel = false;
+		std::atomic<uint8_t> Phase = static_cast<uint8_t>(AssetScanPhase::Walking);
+		std::atomic<uint64_t> Done = 0;
+		std::atomic<uint64_t> Total = 0;
+		std::atomic<bool> Finished = false;
+
+		std::vector<PreparedSource> Prepared;
+		std::vector<std::string> Folders;
+		ImportRecordLoadStats Records;
+		std::string WalkError;
+	};
+
+	struct EditorAssetManager::ScanState
+	{
+		ScanImports Imports = ScanImports::Wait;
+		Ref<ScanShared> Shared;
+		JobHandle Job;
+		std::chrono::steady_clock::time_point Started;
+		bool Received = false; // The job's results were taken over (folders added)
+		size_t Next = 0;       // The next prepared source to insert
+		std::vector<ImportRequest> Stale; // Imported assets whose cached import is not current
+		uint32_t Failed = 0;
 	};
 
 	EditorAssetManager::EditorAssetManager(const EditorAssetManagerSpecification& specification)
@@ -807,6 +855,12 @@ namespace Strata
 			return;
 		m_Closed = true;
 		m_Watcher.Stop();
+		// A scan in progress ends: its job stops at its next check, and nothing it prepared is inserted.
+		if (m_Scan)
+		{
+			m_Scan->Shared->Cancel.store(true);
+			m_Scan.reset();
+		}
 
 		// Imports of external files end here: a copy still running takes back what it copied, and imports of what was copied
 		// run again when the project next opens (the files are its assets now).
@@ -1069,212 +1123,474 @@ namespace Strata
 		return it != m_DependentsByPath.end() ? it->second : std::vector<AssetHandle>();
 	}
 
-	void EditorAssetManager::Scan(ScanImports imports)
+	////////////////////////////////////////////////////////////////////////////////
+	// Scanning: the asset directory registered by background jobs and inserted in slices
+	////////////////////////////////////////////////////////////////////////////////
+
+	// The scan's preparation of every file (on its job): reads .meta files, resolves handles, writes the .meta files that are
+	// missing or need a new handle, checks cached imports, finds what documents reference, and removes cached data nothing
+	// uses. Uses only what it is given.
+	void EditorAssetManager::PrepareScan(BackgroundWork& work, ScanShared& shared, uint32_t batch, JobPriority priority)
 	{
-		ST_PROFILE_FUNCTION();
-		const auto startTime = std::chrono::steady_clock::now();
+		std::vector<PreparedSource>& prepared = shared.Prepared;
+		const auto cancelled = [&shared]() { return shared.Cancel.load(std::memory_order_relaxed); };
 
-		// Every import record and handle path, read once (and the cache's earlier layout taken over).
-		const ImportRecordLoadStats records = m_Work->Records.Load();
-		if (records.SkippedLines > 0 || records.Discarded)
-			ST_CORE_WARN("The import records of '{}': {} unreadable entries skipped{} (their assets are imported again when needed)",
-				FileSystem::ToUTF8(m_Specification.AssetDirectory), records.SkippedLines, records.Discarded ? ", an unknown file started anew" : "");
-		if (records.MigratedRecords + records.MigratedPaths > 0)
-			ST_CORE_INFO("Took over {} import records and {} asset paths into '{}'", records.MigratedRecords, records.MigratedPaths,
-				FileSystem::ToUTF8(m_Work->Records.GetPath()));
-
-		std::vector<std::filesystem::path> files;
-		std::vector<std::string> folders;
-		std::error_code error;
-		std::filesystem::recursive_directory_iterator iterator(m_Specification.AssetDirectory, std::filesystem::directory_options::skip_permission_denied, error);
-		const std::filesystem::recursive_directory_iterator end;
-		while (!error && iterator != end)
+		// What each file is: its importer, .meta and state.
+		JobSystem::ParallelFor(static_cast<uint32_t>(prepared.size()), std::max<uint32_t>(batch, 1), [&](uint32_t begin, uint32_t end)
 		{
-			const std::filesystem::directory_entry& entry = *iterator;
-			if (IsHiddenName(entry.path().filename()))
+			for (uint32_t index = begin; index < end && !cancelled(); index++)
 			{
-				if (entry.is_directory(error))
-					iterator.disable_recursion_pending();
+				PreparedSource& source = prepared[index];
+				source.Path = work.ToRelative(source.Absolute);
+				source.Importer = AssetImporterRegistry::FindByExtension(GetExtension(source.Absolute));
+				if (source.Path.empty() || !source.Importer)
+				{
+					source.Skip = true;
+					continue;
+				}
+				const std::filesystem::path metaPath = GetMetaPath(source.Absolute);
+				const AssetMeta meta = ReadAssetMeta(metaPath);
+				if (meta.Status == AssetMetaStatus::Invalid)
+				{
+					ST_CORE_ERROR("'{}' is not a valid asset .meta file ({}); '{}' is ignored until the .meta is fixed or deleted",
+						FileSystem::ToUTF8(metaPath), meta.Error, source.Path);
+					source.Skip = true;
+					continue;
+				}
+				source.Settings = source.Importer->GetDefaultSettings(source.Absolute);
+				MergeSettings(source.Settings, meta.Settings);
+				source.Handle = meta.Status == AssetMetaStatus::Valid ? meta.Handle : UUID::Null();
+				source.NewHandle = meta.Status == AssetMetaStatus::Missing;
+				source.SourceSize = FileSystem::GetFileSize(source.Absolute).value_or(0);
+				source.SourceTime = FileSystem::GetLastWriteTime(source.Absolute).value_or(0);
 			}
-			else if (entry.is_directory(error))
-			{
-				folders.push_back(ToRelative(entry.path()));
-			}
-			else if (entry.is_regular_file(error) && GetExtension(entry.path()) != c_MetaExtension)
-			{
-				files.push_back(entry.path());
-			}
-			iterator.increment(error);
-		}
-		if (error)
-			ST_CORE_ERROR("Asset scan of '{}' incomplete: {}", FileSystem::ToUTF8(m_Specification.AssetDirectory), error.message());
-		{
-			std::scoped_lock<std::mutex> lock(m_SourceMutex);
-			for (const std::string& folder : folders)
-				AddFolderLocked(folder);
-		}
-		MarkChanged();
+		}, priority);
+		if (cancelled())
+			return;
 
-		std::sort(files.begin(), files.end());
-
-		// Files copied together with their .meta share a handle. The file the persisted index assigns the handle to
-		// keeps it; without an index (fresh checkout) the shortest path wins, which is the original for the usual
-		// "Name - Copy" / "Name copy" / "Name (1)" naming of file managers. The others get new handles.
-		const std::unordered_map<AssetHandle, std::string> index = m_Work->Records.GetPaths();
-		std::unordered_map<uint64_t, std::vector<size_t>> filesByHandle;
-		for (size_t fileIndex = 0; fileIndex < files.size(); fileIndex++)
+		// Handles that several files claim, and built-in ones, are given anew (the file the records say keeps its own).
+		std::vector<AssetHandle> handles(prepared.size(), UUID::Null());
+		std::vector<std::string> paths(prepared.size());
+		std::unordered_set<AssetHandle> taken;
+		for (size_t index = 0; index < prepared.size(); index++)
 		{
-			const MetaContents meta = ReadMetaFile(GetMetaPath(files[fileIndex]));
-			if (meta.Status == MetaStatus::Valid)
-				filesByHandle[static_cast<uint64_t>(meta.Handle)].push_back(fileIndex);
-		}
-
-		std::vector<bool> needsNewHandle(files.size(), false);
-		for (const auto& [handle, fileIndices] : filesByHandle)
-		{
-			if (fileIndices.size() < 2)
+			if (prepared[index].Skip)
 				continue;
-			auto indexed = index.find(UUID(handle));
-			size_t winner = fileIndices.front();
-			bool winnerFromIndex = false;
-			for (size_t fileIndex : fileIndices)
+			handles[index] = prepared[index].Handle;
+			paths[index] = prepared[index].Path;
+			taken.insert(prepared[index].Handle);
+		}
+		for (const DuplicateHandle& duplicate : FindDuplicateHandles(handles, paths, work.Records.GetPaths()))
+		{
+			ST_CORE_WARN("'{}' has the asset handle of '{}' (copied .meta file?); assigning a new handle", paths[duplicate.File], paths[duplicate.Keeper]);
+			prepared[duplicate.File].NewHandle = true;
+		}
+		for (PreparedSource& source : prepared)
+		{
+			if (source.Skip)
+				continue;
+			if (!source.NewHandle && BuiltinAssets::IsBuiltin(source.Handle))
 			{
-				if (indexed != index.end() && ToRelative(files[fileIndex]) == indexed->second)
-				{
-					winner = fileIndex;
-					winnerFromIndex = true;
-					break;
-				}
+				ST_CORE_WARN("'{}' has the asset handle of a built-in asset (copied .meta file?); assigning a new handle", source.Path);
+				source.NewHandle = true;
 			}
-			if (!winnerFromIndex)
-			{
-				for (size_t fileIndex : fileIndices)
-				{
-					if (ToRelative(files[fileIndex]).size() < ToRelative(files[winner]).size())
-						winner = fileIndex;
-				}
-			}
-			for (size_t fileIndex : fileIndices)
-			{
-				if (fileIndex != winner)
-				{
-					needsNewHandle[fileIndex] = true;
-					ST_CORE_WARN("'{}' has the asset handle of '{}' (copied .meta file?); assigning a new handle", ToRelative(files[fileIndex]), ToRelative(files[winner]));
-				}
-			}
+			if (!source.NewHandle)
+				continue;
+			AssetHandle handle;
+			do
+				handle = UUID();
+			while (BuiltinAssets::IsBuiltin(handle) || !handle.IsValid() || taken.contains(handle));
+			taken.insert(handle);
+			source.Handle = handle;
 		}
 
-		for (size_t fileIndex = 0; fileIndex < files.size(); fileIndex++)
+		// The .meta files that change, and every file's cached state, in parallel.
+		shared.Phase.store(static_cast<uint8_t>(AssetScanPhase::Registering));
+		JobSystem::ParallelFor(static_cast<uint32_t>(prepared.size()), std::max<uint32_t>(batch, 1), [&](uint32_t begin, uint32_t end)
 		{
-			if (!needsNewHandle[fileIndex])
-				RegisterSourceFile(files[fileIndex]);
-		}
-		for (size_t fileIndex = 0; fileIndex < files.size(); fileIndex++)
-		{
-			if (needsNewHandle[fileIndex])
-				RegisterSourceFile(files[fileIndex], true);
-		}
-
-		std::vector<ImportRequest> requests;
-		{
-			std::scoped_lock<std::mutex> lock(m_SourceMutex);
-			for (auto& [handle, source] : m_Sources)
+			for (uint32_t index = begin; index < end && !cancelled(); index++)
 			{
-				if (source.Importer->StoresSourceDirectly())
-					source.Import.Imported = true;
-				else if (!source.Import.Imported)
-					requests.push_back(MakeImportRequest(source));
-			}
-		}
-
-		// Current imports are taken from the cache at once. The others import here (in parallel, on the background threads), or
-		// in the background after the scan: then the scan only checks the cache, on the workers like other work the frame
-		// waits for.
-		const bool wait = imports == ScanImports::Wait;
-		std::vector<ImportOutcome> outcomes(requests.size());
-		std::vector<uint8_t> done(requests.size(), 0); // Not a vector<bool>: batches write their elements concurrently
-		std::atomic<uint32_t> importedCount = 0;
-		JobSystem::ParallelFor(static_cast<uint32_t>(requests.size()), 1, [&](uint32_t begin, uint32_t endIndex)
-		{
-			for (uint32_t requestIndex = begin; requestIndex < endIndex; requestIndex++)
-			{
+				PreparedSource& source = prepared[index];
+				shared.Done.fetch_add(1, std::memory_order_relaxed);
+				if (source.Skip)
+					continue;
+				if (source.NewHandle && !WriteAssetMeta(GetMetaPath(source.Absolute), source.Handle, source.Importer->GetType(), source.Settings))
+					ST_CORE_ERROR("Could not write '{}{}'; the asset's handle will change on the next scan", source.Path, EditorAssetManager::c_MetaExtension);
 				try
 				{
-					if (m_Work->LoadCurrentImport(requests[requestIndex], outcomes[requestIndex]))
+					if (source.Importer->StoresSourceDirectly())
 					{
-						done[requestIndex] = 1;
+						source.References = work.FindNativeReferences(source.Handle, source.Importer->GetType(), source.Path);
 					}
-					else if (wait)
+					else
 					{
-						outcomes[requestIndex] = m_Work->RunImport(requests[requestIndex]);
-						importedCount++;
-						done[requestIndex] = 1;
+						ImportOutcome outcome;
+						if (work.LoadCurrentImport(ImportRequest { source.Handle, source.Path, source.Importer, source.Settings }, outcome))
+							source.Current = std::move(outcome);
 					}
 				}
 				catch (const std::exception& exception)
 				{
-					outcomes[requestIndex] = ImportOutcome();
-					outcomes[requestIndex].Handle = requests[requestIndex].Handle;
-					outcomes[requestIndex].Error = fmt::format("Import failed: {}", exception.what());
-					done[requestIndex] = 1;
+					ST_CORE_ERROR("Checking the cached state of '{}' failed: {}", source.Path, exception.what());
 				}
 			}
-		}, wait ? JobPriority::Background : JobPriority::High);
+		}, priority);
+		if (cancelled())
+			return;
 
-		uint32_t failedCount = 0;
-		std::vector<AssetHandle> backgroundImports;
-		for (size_t requestIndex = 0; requestIndex < requests.size(); requestIndex++)
+		// Cached data and records of what no asset has any more (deleted while the editor was closed, or leftovers of
+		// interrupted writes). No import of this manager runs yet: its imports are queued once the scan is applied.
+		std::unordered_set<AssetHandle> valid;
+		for (const PreparedSource& source : prepared)
 		{
-			if (!done[requestIndex])
-			{
-				backgroundImports.push_back(requests[requestIndex].Handle);
+			if (source.Skip)
 				continue;
-			}
-			failedCount += outcomes[requestIndex].Success ? 0 : 1;
-			ApplyImportOutcome(std::move(outcomes[requestIndex]), false);
-		}
-
-		// What the engine-native assets reference: from their records where the files did not change, else scanned.
-		struct NativeSource
-		{
-			AssetHandle Handle;
-			AssetType Type = AssetType::None;
-			std::string Path;
-		};
-		std::vector<NativeSource> natives;
-		{
-			std::scoped_lock<std::mutex> lock(m_SourceMutex);
-			for (const auto& [handle, source] : m_Sources)
+			valid.insert(source.Handle);
+			if (source.Current)
 			{
-				if (source.Importer->StoresSourceDirectly() && AssetDependencies::CanReference(source.Type))
-					natives.push_back(NativeSource { handle, source.Type, source.Path });
+				for (const ImportedSubAsset& subAsset : source.Current->SubAssets)
+					valid.insert(DeriveSubAssetHandle(source.Handle, subAsset.Key));
 			}
 		}
-		std::vector<NativeReferences> nativeReferences(natives.size());
-		JobSystem::ParallelFor(static_cast<uint32_t>(natives.size()), 4, [&](uint32_t begin, uint32_t endIndex)
-		{
-			for (uint32_t index = begin; index < endIndex; index++)
-				nativeReferences[index] = m_Work->FindNativeReferences(natives[index].Handle, natives[index].Type, natives[index].Path);
-		});
-		for (const NativeReferences& references : nativeReferences)
-			ApplyNativeReferences(references);
-		RemoveUnusedCacheFiles();
-		// After the cleanup, which takes the temporary files of interrupted imports for leftovers.
-		for (const AssetHandle handle : backgroundImports)
-			QueueImport(handle);
+		work.RemoveUnusedCacheFiles(valid);
+	}
 
-		// Folders too: one made or removed outside the editor shows in (or leaves) the folder index without a file in it.
+	void EditorAssetManager::BackgroundWork::RemoveUnusedCacheFiles(const std::unordered_set<AssetHandle>& valid)
+	{
+		// Cache files are named "<handle>.<kind>[.<temporary suffix>]". No import of this manager runs during a scan, so
+		// temporary files are leftovers of interrupted writes, or of a cancelled import of an earlier manager of the project
+		// that is still running: that one never publishes them (and removes them itself where this removal fails).
+		std::vector<std::filesystem::path> unused;
+		std::error_code error;
+		for (std::filesystem::directory_iterator it(Specification.CacheDirectory, error), end; !error && it != end; it.increment(error))
+		{
+			const std::string name = FileSystem::ToUTF8(it->path().filename());
+			const size_t dot = name.find('.');
+			const std::optional<UUID> handle = dot != std::string::npos ? UUID::FromString(std::string_view(name).substr(0, dot)) : std::nullopt;
+			std::error_code typeError;
+			if (!handle || !it->is_regular_file(typeError))
+				continue;
+			const std::string_view kind = std::string_view(name).substr(dot);
+			if (kind != ".bin" || !valid.contains(*handle))
+				unused.push_back(it->path());
+		}
+		{
+			std::unique_lock<std::shared_mutex> fileLock(FileMutex);
+			for (const std::filesystem::path& path : unused)
+				FileSystem::Remove(path);
+		}
+		// Records and paths of handles no asset has any more.
+		std::unordered_set<AssetHandle> recorded;
+		for (const AssetHandle handle : Records.GetRecordedHandles())
+			recorded.insert(handle);
+		for (const auto& [handle, path] : Records.GetPaths())
+			recorded.insert(handle);
+		for (const AssetHandle handle : recorded)
+		{
+			if (!valid.contains(handle))
+				Records.Remove(handle);
+		}
+	}
+
+	void EditorAssetManager::BeginScan(ScanImports imports)
+	{
+		ST_PROFILE_FUNCTION();
+		ST_CORE_ASSERT(!m_Scan && !m_Scanned, "EditorAssetManager scans once, after construction");
+		if (m_Scan || m_Scanned || m_Closed)
+			return;
+		m_Scan = CreateScope<ScanState>();
+		m_Scan->Imports = imports;
+		m_Scan->Shared = CreateRef<ScanShared>();
+		m_Scan->Started = std::chrono::steady_clock::now();
+		// Watched from before the walk, so that a file added while the scan runs is never missed: its report waits until the
+		// scan is applied (ProcessFileChanges), and finds the file registered when the walk saw it. Folders too: one made or
+		// removed outside the editor shows in (or leaves) the folder index without a file in it.
 		FileWatcherSettings watchSettings;
 		watchSettings.ReportDirectories = true;
 		if (m_Specification.WatchFiles && !m_Watcher.IsRunning() && !m_Watcher.Start(m_Specification.AssetDirectory, watchSettings))
 			ST_CORE_WARN("Asset hot reload is unavailable: cannot watch '{}'", FileSystem::ToUTF8(m_Specification.AssetDirectory));
+		// The editor's scan is work no frame waits for; a blocking one (tools, tests) is waited for.
+		const JobPriority priority = imports == ScanImports::InBackground ? JobPriority::Background : JobPriority::Normal;
+		auto job = [work = m_Work, shared = m_Scan->Shared, batch = m_RegistrationOptions.PrepareBatch, priority]()
+		{
+			try
+			{
+				shared->Records = work->Records.Load();
+				AssetDirectoryListing listing = WalkAssetDirectory(work->Specification.AssetDirectory, &shared->Cancel, &shared->Done);
+				shared->WalkError = std::move(listing.Error);
+				shared->Folders = std::move(listing.Folders);
+				shared->Prepared.resize(listing.Files.size());
+				for (size_t index = 0; index < listing.Files.size(); index++)
+					shared->Prepared[index].Absolute = std::move(listing.Files[index]);
+				shared->Done.store(0);
+				shared->Total.store(shared->Prepared.size());
+				shared->Phase.store(static_cast<uint8_t>(AssetScanPhase::Registering));
+				PrepareScan(*work, *shared, batch, priority);
+			}
+			catch (const std::exception& exception)
+			{
+				ST_CORE_ERROR("The scan of '{}' failed: {}", FileSystem::ToUTF8(work->Specification.AssetDirectory), exception.what());
+				shared->Prepared.clear();
+			}
+			shared->Done.store(0);
+			shared->Total.store(shared->Prepared.size());
+			shared->Phase.store(static_cast<uint8_t>(AssetScanPhase::Applying));
+			shared->Finished.store(true, std::memory_order_release);
+		};
+		try
+		{
+			m_Scan->Job = JobSystem::Submit(std::move(job), priority);
+		}
+		catch (const std::exception& exception)
+		{
+			ST_CORE_ERROR("Could not start the scan of '{}': {}", FileSystem::ToUTF8(m_Specification.AssetDirectory), exception.what());
+			m_Scan.reset();
+			m_Scanned = true;
+		}
+	}
 
-		const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - startTime);
-		if (backgroundImports.empty())
-			ST_CORE_INFO("Asset scan: {} assets, {} imported, {} failed ({} ms)", files.size(), importedCount.load(), failedCount, elapsed.count());
+	void EditorAssetManager::Scan(ScanImports imports)
+	{
+		ST_PROFILE_FUNCTION();
+		if (m_Scanned && !m_Scan)
+		{
+			RegisterNewFiles(imports);
+			return;
+		}
+		if (!m_Scan)
+			BeginScan(imports);
+		if (!m_Scan)
+			return;
+		JobSystem::Wait(m_Scan->Job);
+		AdvanceScan(true);
+	}
+
+	void EditorAssetManager::RegisterNewFiles(ScanImports imports)
+	{
+		if (m_Closed)
+			return;
+		const AssetDirectoryListing listing = WalkAssetDirectory(m_Specification.AssetDirectory);
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			for (const std::string& folder : listing.Folders)
+				AddFolderLocked(folder);
+		}
+		std::vector<AssetHandle> added;
+		for (const std::filesystem::path& file : listing.Files)
+		{
+			{
+				std::scoped_lock<std::mutex> lock(m_SourceMutex);
+				if (m_SourcesByPath.contains(ToRelative(file)))
+					continue;
+			}
+			const AssetHandle handle = RegisterSourceFile(file);
+			if (handle.IsValid())
+				added.push_back(handle);
+		}
+		MarkChanged();
+
+		std::vector<ImportRequest> requests;
+		for (const AssetHandle handle : added)
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			auto it = m_Sources.find(handle);
+			if (it != m_Sources.end() && !it->second.Importer->StoresSourceDirectly() && !it->second.ImportJob)
+				requests.push_back(MakeImportRequest(it->second));
+		}
+		if (imports == ScanImports::Wait)
+		{
+			std::vector<ImportOutcome> outcomes(requests.size());
+			JobSystem::ParallelFor(static_cast<uint32_t>(requests.size()), 1, [&](uint32_t begin, uint32_t end)
+			{
+				for (uint32_t index = begin; index < end; index++)
+				{
+					if (!m_Work->LoadCurrentImport(requests[index], outcomes[index]))
+						outcomes[index] = m_Work->RunImport(requests[index]);
+				}
+			}, JobPriority::Background);
+			for (ImportOutcome& outcome : outcomes)
+				ApplyImportOutcome(std::move(outcome), false);
+		}
 		else
-			ST_CORE_INFO("Asset scan: {} assets, {} importing in the background, {} failed ({} ms)", files.size(), backgroundImports.size(), failedCount,
-				elapsed.count());
+		{
+			for (const ImportRequest& request : requests)
+				QueueImport(request.Handle);
+		}
+		for (const AssetHandle handle : added)
+			RefreshNativeReferences(handle, {}, nullptr);
+	}
+
+	std::optional<AssetScanProgress> EditorAssetManager::GetScanProgress() const
+	{
+		if (!m_Scan)
+			return std::nullopt;
+		const ScanShared& shared = *m_Scan->Shared;
+		AssetScanProgress progress;
+		progress.Phase = static_cast<AssetScanPhase>(shared.Phase.load());
+		progress.Done = shared.Done.load(std::memory_order_relaxed);
+		progress.Total = shared.Total.load(std::memory_order_relaxed);
+		return progress;
+	}
+
+	void EditorAssetManager::SetRegistrationOptions(AssetRegistrationOptions options)
+	{
+		m_RegistrationOptions = std::move(options);
+	}
+
+	void EditorAssetManager::AdvanceScan(bool unlimited)
+	{
+		if (!m_Scan || !m_Scan->Shared->Finished.load(std::memory_order_acquire))
+			return;
+		ST_PROFILE_FUNCTION();
+		ScanState& scan = *m_Scan;
+		ScanShared& shared = *scan.Shared;
+		if (!scan.Received)
+		{
+			scan.Received = true;
+			const ImportRecordLoadStats& records = shared.Records;
+			if (records.SkippedLines > 0 || records.Discarded)
+				ST_CORE_WARN("The import records of '{}': {} unreadable entries skipped{} (their assets are imported again when needed)",
+					FileSystem::ToUTF8(m_Specification.AssetDirectory), records.SkippedLines, records.Discarded ? ", an unknown file started anew" : "");
+			if (records.MigratedRecords + records.MigratedPaths > 0)
+				ST_CORE_INFO("Took over {} import records and {} asset paths into '{}'", records.MigratedRecords, records.MigratedPaths,
+					FileSystem::ToUTF8(m_Work->Records.GetPath()));
+			if (!shared.WalkError.empty())
+				ST_CORE_ERROR("Asset scan of '{}' incomplete: {}", FileSystem::ToUTF8(m_Specification.AssetDirectory), shared.WalkError);
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			for (const std::string& folder : shared.Folders)
+				AddFolderLocked(folder);
+			MarkChanged();
+		}
+
+		// Inserted in batches (one registry lock each), then their cached state is applied, until the slice's time is up.
+		RegistrationSlice slice(m_RegistrationOptions, unlimited);
+		std::vector<AssetMetadata> batch;
+		std::vector<size_t> batchSources;
+		const size_t batchSize = std::max<uint32_t>(m_RegistrationOptions.EntriesPerCheck, 1);
+		bool more = true;
+		while (more && scan.Next < shared.Prepared.size())
+		{
+			batch.clear();
+			batchSources.clear();
+			{
+				std::scoped_lock<std::mutex> lock(m_SourceMutex);
+				while (scan.Next < shared.Prepared.size() && batchSources.size() < batchSize)
+				{
+					const size_t index = scan.Next++;
+					PreparedSource& prepared = shared.Prepared[index];
+					if (prepared.Skip || m_SourcesByPath.contains(prepared.Path))
+						continue;
+					if (m_Sources.contains(prepared.Handle) || BuiltinAssets::IsBuiltin(prepared.Handle))
+					{
+						// Taken meanwhile (a background save published one): a new handle, written by an I/O job.
+						ST_CORE_WARN("'{}' has the asset handle of another asset; assigning a new handle", prepared.Path);
+						do
+							prepared.Handle = UUID();
+						while (BuiltinAssets::IsBuiltin(prepared.Handle) || m_Sources.contains(prepared.Handle));
+						prepared.Current.reset();
+						JobSystem::SubmitIO([path = GetMetaPath(prepared.Absolute), handle = prepared.Handle, type = prepared.Importer->GetType(), settings = prepared.Settings]()
+						{
+							if (!WriteAssetMeta(path, handle, type, settings))
+								ST_CORE_ERROR("Could not write '{}'", FileSystem::ToUTF8(path));
+						});
+					}
+					SourceAsset source;
+					source.Handle = prepared.Handle;
+					source.Path = prepared.Path;
+					source.Importer = prepared.Importer;
+					source.Type = prepared.Importer->GetType();
+					source.Settings = prepared.Settings;
+					source.SourceSize = prepared.SourceSize;
+					source.SourceTime = prepared.SourceTime;
+					source.Import.Imported = prepared.Importer->StoresSourceDirectly(); // Read as-is: nothing to import
+
+					AssetMetadata metadata;
+					metadata.Handle = source.Handle;
+					metadata.Type = source.Type;
+					metadata.Path = source.Path;
+					metadata.Name = FileSystem::ToUTF8(prepared.Absolute.stem());
+					// Imported assets are read from the cache: its size comes with the cached import (or the import, later).
+					metadata.StoredSize = source.Import.Imported ? source.SourceSize : (prepared.Current ? prepared.Current->StoredSize : 0);
+					batch.push_back(std::move(metadata));
+					batchSources.push_back(index);
+
+					m_SourcesByPath[source.Path] = source.Handle;
+					AddToFolderIndex(source.Handle, source.Path);
+					m_Work->Records.SetPath(source.Handle, source.Path);
+					m_Sources.emplace(source.Handle, std::move(source));
+				}
+			}
+			RegisterAssets(batch);
+			for (const size_t index : batchSources)
+			{
+				PreparedSource& prepared = shared.Prepared[index];
+				if (prepared.References)
+					ApplyNativeReferences(*prepared.References);
+				if (prepared.Current)
+				{
+					scan.Failed += prepared.Current->Success ? 0 : 1;
+					ApplyImportOutcome(std::move(*prepared.Current), false);
+				}
+				else if (!prepared.Importer->StoresSourceDirectly())
+				{
+					scan.Stale.push_back(ImportRequest { prepared.Handle, prepared.Path, prepared.Importer, prepared.Settings });
+				}
+				more = slice.HasTime();
+			}
+			shared.Done.store(scan.Next, std::memory_order_relaxed);
+			MarkChanged();
+		}
+		if (scan.Next < shared.Prepared.size())
+			return;
+		FinishScan();
+	}
+
+	void EditorAssetManager::FinishScan()
+	{
+		ScanState& scan = *m_Scan;
+		const size_t assets = m_Sources.size();
+		uint32_t importedCount = 0;
+		if (scan.Imports == ScanImports::Wait)
+		{
+			// Imported here, in parallel on the background threads, before the scan returns.
+			std::vector<ImportOutcome> outcomes(scan.Stale.size());
+			JobSystem::ParallelFor(static_cast<uint32_t>(scan.Stale.size()), 1, [&](uint32_t begin, uint32_t end)
+			{
+				for (uint32_t index = begin; index < end; index++)
+				{
+					try
+					{
+						outcomes[index] = m_Work->RunImport(scan.Stale[index]);
+					}
+					catch (const std::exception& exception)
+					{
+						outcomes[index] = ImportOutcome();
+						outcomes[index].Handle = scan.Stale[index].Handle;
+						outcomes[index].Error = fmt::format("Import failed: {}", exception.what());
+					}
+				}
+			}, JobPriority::Background);
+			for (ImportOutcome& outcome : outcomes)
+			{
+				importedCount++;
+				scan.Failed += outcome.Success ? 0 : 1;
+				ApplyImportOutcome(std::move(outcome), false);
+			}
+		}
+		else
+		{
+			for (const ImportRequest& request : scan.Stale)
+				QueueImport(request.Handle);
+		}
+
+		const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - scan.Started);
+		if (scan.Imports == ScanImports::Wait || scan.Stale.empty())
+			ST_CORE_INFO("Asset scan: {} assets, {} imported, {} failed ({} ms)", assets, importedCount, scan.Failed, elapsed.count());
+		else
+			ST_CORE_INFO("Asset scan: {} assets, {} importing in the background, {} failed ({} ms)", assets, scan.Stale.size(), scan.Failed, elapsed.count());
+		m_Scan.reset();
+		m_Scanned = true;
+		MarkChanged();
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -1284,43 +1600,6 @@ namespace Strata
 	EditorAssetManager::ImportRequest EditorAssetManager::MakeImportRequest(const SourceAsset& source) const
 	{
 		return ImportRequest { source.Handle, source.Path, source.Importer, source.Settings };
-	}
-
-	void EditorAssetManager::RemoveUnusedCacheFiles()
-	{
-		ST_CORE_ASSERT(!m_Watcher.IsRunning(), "Cache files are cleaned up during the scan, before background imports can start");
-		// Cache files are named "<handle>.<kind>[.<temporary suffix>]". No import of this manager runs during a scan, so
-		// temporary files are leftovers of interrupted writes, or of a cancelled import of an earlier manager of the project
-		// that is still running: that one never publishes them (and removes them itself where this removal fails).
-		std::vector<std::filesystem::path> unused;
-		std::error_code error;
-		for (std::filesystem::directory_iterator it(m_Specification.CacheDirectory, error), end; !error && it != end; it.increment(error))
-		{
-			const std::string name = FileSystem::ToUTF8(it->path().filename());
-			const size_t dot = name.find('.');
-			const std::optional<UUID> handle = dot != std::string::npos ? UUID::FromString(std::string_view(name).substr(0, dot)) : std::nullopt;
-			std::error_code typeError;
-			if (!handle || !it->is_regular_file(typeError))
-				continue;
-			const std::string_view kind = std::string_view(name).substr(dot);
-			if ((kind != ".bin" && kind != ".import") || !IsHandleValid(*handle))
-				unused.push_back(it->path());
-		}
-
-		std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
-		for (const std::filesystem::path& path : unused)
-			FileSystem::Remove(path);
-		// Records and paths of handles no asset has any more (deleted while the editor was closed, or in an earlier session).
-		std::unordered_set<AssetHandle> recorded;
-		for (const AssetHandle handle : m_Work->Records.GetRecordedHandles())
-			recorded.insert(handle);
-		for (const auto& [handle, path] : m_Work->Records.GetPaths())
-			recorded.insert(handle);
-		for (const AssetHandle handle : recorded)
-		{
-			if (!IsHandleValid(handle))
-				m_Work->Records.Remove(handle);
-		}
 	}
 
 	bool EditorAssetManager::BackgroundWork::LoadCurrentImport(const ImportRequest& request, ImportOutcome& outOutcome, const std::atomic<bool>* cancel) const
@@ -1380,8 +1659,11 @@ namespace Strata
 			}
 		}
 
-		if (!FileSystem::IsRegularFile(GetCachePath(request.Handle)))
+		const std::optional<uint64_t> storedSize = FileSystem::IsRegularFile(GetCachePath(request.Handle)) ? FileSystem::GetFileSize(GetCachePath(request.Handle))
+			: std::nullopt;
+		if (!storedSize)
 			return false;
+		outcome.StoredSize = *storedSize;
 		std::optional<std::vector<AssetHandle>> references = ReferencesFromJson(*record);
 		if (!references || !BoundsFromJson(*record, outcome.Bounds))
 			return false;
@@ -1400,9 +1682,12 @@ namespace Strata
 				if (!subReferences || !BoundsFromJson(subAsset, entry.Bounds))
 					return false;
 				entry.References = std::move(*subReferences);
-				if (!FileSystem::IsRegularFile(GetCachePath(DeriveSubAssetHandle(request.Handle, entry.Key))))
+				const std::filesystem::path cachePath = GetCachePath(DeriveSubAssetHandle(request.Handle, entry.Key));
+				const std::optional<uint64_t> subAssetSize = FileSystem::IsRegularFile(cachePath) ? FileSystem::GetFileSize(cachePath) : std::nullopt;
+				if (!subAssetSize)
 					return false;
 				outcome.SubAssets.push_back(std::move(entry));
+				outcome.SubAssetStoredSizes.push_back(*subAssetSize);
 			}
 		}
 
@@ -1535,8 +1820,9 @@ namespace Strata
 		else
 		{
 			const uint64_t stagingNumber = NextStagingNumber.fetch_add(1);
-			auto stage = [&](AssetHandle handle, std::vector<uint8_t>& data)
+			auto stage = [&](AssetHandle handle, std::vector<uint8_t>& data, uint64_t& outSize)
 			{
+				outSize = data.size();
 				// Nothing more is written once the import is cancelled.
 				bool written = false;
 				if (!IsCancelled(cancel))
@@ -1549,9 +1835,14 @@ namespace Strata
 				std::vector<uint8_t>().swap(data); // Free the memory now: imports can be large
 				return written;
 			};
-			staged = stage(request.Handle, result.Data);
-			for (ImportedSubAsset& subAsset : result.SubAssets)
-				staged = stage(DeriveSubAssetHandle(request.Handle, subAsset.Key), subAsset.Data) && staged; // Frees every sub-asset's data
+			staged = stage(request.Handle, result.Data, outcome.StoredSize);
+			outcome.SubAssetStoredSizes.resize(result.SubAssets.size());
+			for (size_t index = 0; index < result.SubAssets.size(); index++)
+			{
+				ImportedSubAsset& subAsset = result.SubAssets[index];
+				// Frees every sub-asset's data
+				staged = stage(DeriveSubAssetHandle(request.Handle, subAsset.Key), subAsset.Data, outcome.SubAssetStoredSizes[index]) && staged;
+			}
 			outcome.SubAssets = std::move(result.SubAssets);
 		}
 
@@ -1656,7 +1947,7 @@ namespace Strata
 		}
 		awaited.insert(awaited.end(), subAssetHandles.begin(), subAssetHandles.end());
 
-		SetStoredSize(outcome.Handle, FileSystem::GetFileSize(GetCachePath(outcome.Handle)).value_or(0));
+		SetStoredSize(outcome.Handle, outcome.StoredSize);
 		RecordReferences(outcome.Handle, outcome.References, outcome.Bounds);
 		for (size_t index = 0; index < outcome.SubAssets.size(); index++)
 		{
@@ -1668,21 +1959,23 @@ namespace Strata
 			metadata.Parent = outcome.Handle;
 			metadata.SubAssetKey = subAsset.Key;
 			metadata.Name = subAsset.Name.empty() ? subAsset.Key : subAsset.Name;
-			metadata.StoredSize = FileSystem::GetFileSize(GetCachePath(metadata.Handle)).value_or(0);
+			metadata.StoredSize = index < outcome.SubAssetStoredSizes.size() ? outcome.SubAssetStoredSizes[index] : 0;
 			RegisterAsset(metadata);
 			RecordReferences(metadata.Handle, subAsset.References, subAsset.Bounds);
 		}
 
-		// Sub-assets the new import no longer produces disappear.
+		// Sub-assets the new import no longer produces disappear, their cached data on an I/O job.
+		std::vector<AssetHandle> dropped;
 		for (AssetHandle previous : previousSubAssets)
 		{
 			if (std::find(subAssetHandles.begin(), subAssetHandles.end(), previous) != subAssetHandles.end())
 				continue;
 			ForgetReferences(previous);
 			UnregisterAsset(previous);
-			std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
-			FileSystem::Remove(GetCachePath(previous));
+			dropped.push_back(previous);
 		}
+		if (!dropped.empty())
+			RemoveCacheFilesLater(std::move(dropped));
 
 		if (reload && !outcome.FromCache)
 		{
@@ -1692,6 +1985,31 @@ namespace Strata
 		}
 		// Reloads restart waiting loads themselves; these are the others (an import found current, or applied without reload).
 		ResumeLoadsAwaitingImport(awaited);
+	}
+
+	void EditorAssetManager::RemoveCacheFilesLater(std::vector<AssetHandle> handles)
+	{
+		auto remove = [work = m_Work, handles = std::move(handles)]()
+		{
+			// A handle registered again meanwhile (an import that brought the sub-asset back) keeps its file. Lock order: the
+			// owner before the file lock.
+			std::scoped_lock<std::mutex> ownerLock(work->OwnerMutex);
+			std::unique_lock<std::shared_mutex> fileLock(work->FileMutex);
+			for (const AssetHandle handle : handles)
+			{
+				if (!work->Owner || !work->Owner->IsHandleValid(handle))
+					FileSystem::Remove(work->GetCachePath(handle));
+			}
+		};
+		try
+		{
+			JobSystem::SubmitIO(std::move(remove), JobPriority::Background);
+		}
+		catch (const std::exception& exception)
+		{
+			// The next scan removes what nothing uses.
+			ST_CORE_WARN("Could not queue the removal of cached data: {}", exception.what());
+		}
 	}
 
 	void EditorAssetManager::QueueImport(AssetHandle handle, bool force, bool replacing)
@@ -1833,6 +2151,12 @@ namespace Strata
 
 	void EditorAssetManager::WaitForImports()
 	{
+		// A scan in progress first: it queues imports once it is applied.
+		if (m_Scan)
+		{
+			JobSystem::Wait(m_Scan->Job);
+			AdvanceScan(true);
+		}
 		while (true)
 		{
 			{
@@ -2014,6 +2338,8 @@ namespace Strata
 	void EditorAssetManager::Update()
 	{
 		ST_PROFILE_FUNCTION();
+		// A scan inserts what its jobs prepared, a slice per update.
+		AdvanceScan(false);
 		ST_PROFILE_STAGE("Assets.Update");
 		ProcessFileChanges();
 		ProcessCompletedImports();
@@ -2024,7 +2350,8 @@ namespace Strata
 
 	void EditorAssetManager::ProcessFileChanges()
 	{
-		if (!m_Watcher.IsRunning())
+		// What changed while a scan runs waits for it (the watcher keeps the reports).
+		if (!m_Watcher.IsRunning() || m_Scan)
 			return;
 
 		// Removals last: a move arrives as a removal plus an addition, and the addition must find the asset at its old
@@ -3264,6 +3591,9 @@ namespace Strata
 
 	bool EditorAssetManager::HasPendingImports() const
 	{
+		// A scan queues the imports of what it finds once it is applied.
+		if (m_Scan)
+			return true;
 		std::scoped_lock<std::mutex> lock(m_Work->Mutex);
 		return !m_Work->Jobs.empty() || !m_Work->CompletedImports.empty() || !m_Work->CompletedReferences.empty();
 	}

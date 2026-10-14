@@ -63,6 +63,13 @@ namespace Strata
 
 		// Returns a path that does not exist yet by appending " (n)" before the extension if needed.
 		static std::filesystem::path GetUniquePath(const std::filesystem::path& desiredPath);
+
+		// How many file system operations (the functions above that touch the disk, and AtomicFileWriter's opening, writes and
+		// commit) the calling thread has made: tests check with it that work meant for other threads never touches files on
+		// the main thread.
+		static uint64_t GetThreadOperationCount();
+		// Counts an operation on the calling thread, for engine file code that does not go through these functions.
+		static void CountThreadOperation();
 	};
 
 }

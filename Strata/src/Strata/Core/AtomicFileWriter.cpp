@@ -30,6 +30,7 @@ namespace Strata
 	AtomicFileWriter::AtomicFileWriter(std::filesystem::path path)
 		: m_Path(std::move(path))
 	{
+		FileSystem::CountThreadOperation();
 		m_TemporaryPath = m_Path;
 		m_TemporaryPath += ".tmp" + std::to_string(s_NextTemporary.fetch_add(1, std::memory_order_relaxed));
 		if (m_Path.has_parent_path() && !FileSystem::CreateDirectories(m_Path.parent_path()))
@@ -65,6 +66,7 @@ namespace Strata
 				return false;
 			if (bytes.size() >= c_BufferSize)
 			{
+				FileSystem::CountThreadOperation();
 				errno = 0;
 				m_Stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 				if (!m_Stream)
@@ -83,6 +85,7 @@ namespace Strata
 	{
 		if (m_Buffer.empty())
 			return true;
+		FileSystem::CountThreadOperation();
 		errno = 0;
 		m_Stream.write(m_Buffer.data(), static_cast<std::streamsize>(m_Buffer.size()));
 		m_Buffer.clear();
@@ -122,6 +125,7 @@ namespace Strata
 			return true;
 		if (!Finish(outError))
 			return false;
+		FileSystem::CountThreadOperation();
 		std::error_code error;
 		std::filesystem::rename(m_TemporaryPath, m_Path, error);
 		if (error)

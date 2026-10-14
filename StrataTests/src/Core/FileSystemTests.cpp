@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Core/AtomicFileWriter.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
 #include "TestHelpers.h"
@@ -9,6 +10,7 @@
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 using namespace Strata;
@@ -45,6 +47,38 @@ TEST_SUITE("Core.FileSystem")
 				fileCount++;
 		}
 		CHECK(fileCount == 2);
+	}
+
+	TEST_CASE("File operations are counted per thread")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("FileOperationCount");
+		const uint64_t before = FileSystem::GetThreadOperationCount();
+		REQUIRE(FileSystem::WriteText(directory / "A.txt", "a"));
+		CHECK(FileSystem::Exists(directory / "A.txt"));
+		CHECK(FileSystem::ReadText(directory / "A.txt").has_value());
+		CHECK(FileSystem::GetThreadOperationCount() >= before + 3);
+		{
+			AtomicFileWriter writer(directory / "B.txt");
+			CHECK(writer.Write("b"));
+			CHECK(writer.Commit());
+		}
+		const uint64_t here = FileSystem::GetThreadOperationCount();
+		CHECK(here >= before + 5);
+		// Another thread's operations count there, not here.
+		uint64_t there = 0;
+		std::thread other([&]()
+		{
+			const uint64_t start = FileSystem::GetThreadOperationCount();
+			FileSystem::Exists(directory / "A.txt");
+			there = FileSystem::GetThreadOperationCount() - start;
+		});
+		other.join();
+		CHECK(there == 1);
+		CHECK(FileSystem::GetThreadOperationCount() == here);
+		// Pure path work touches no file.
+		CHECK(FileSystem::GetRelativePath(directory / "A.txt", directory) == "A.txt");
+		CHECK(FileSystem::ToUTF8(FileSystem::FromUTF8("x/y")) == "x/y");
+		CHECK(FileSystem::GetThreadOperationCount() == here);
 	}
 
 	TEST_CASE("Reading a missing file fails gracefully")

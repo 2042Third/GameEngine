@@ -3,8 +3,10 @@
 #include "Strata/Asset/AssetImporter.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/AssetPackWriter.h"
+#include "Strata/Asset/AssetRegistration.h"
 #include "Strata/Core/AtomicFileWriter.h"
 #include "Strata/Core/FileWatcher.h"
+#include "Strata/Core/JobSystem.h"
 
 #include <atomic>
 #include <chrono>
@@ -191,10 +193,25 @@ namespace Strata
 		~EditorAssetManager() override;
 
 		// Registers every asset, imports those whose cached data is missing or stale and starts watching the directory. Call
-		// once after construction. With ScanImports::InBackground the imports run as background jobs (like re-imports after
-		// file changes) that Update applies; meanwhile a load of such an asset waits for its import instead of failing
-		// (AssetManagerBase::IsAwaitingImport), its sub-assets appear once it is applied, and HasPendingImports is true.
+		// once after construction (BeginScan or Scan). Returns at once: a job walks the asset directory, reads every .meta
+		// (writing those that are missing or need a new handle), checks every cached import against its record and finds what
+		// documents reference, on the background threads, and removes cached data nothing uses; Update then inserts what it
+		// prepared into the registry, a slice of about a millisecond per call (AssetRegistrationOptions), and applies the
+		// current imports. No file is touched on the main thread. Imports whose cached data is stale run, with
+		// ScanImports::InBackground, as background jobs (like re-imports after file changes) that Update applies; meanwhile a
+		// load of such an asset waits for its import instead of failing (AssetManagerBase::IsAwaitingImport), its sub-assets
+		// appear once it is applied, and HasPendingImports is true (also while the scan runs). With ScanImports::Wait they
+		// import in parallel once the scan is applied, before the call of Update that finishes it returns.
+		void BeginScan(ScanImports imports = ScanImports::InBackground);
+		// BeginScan, then waits for the scan and inserts everything at once (tools, tests and scripted editor runs, which stay
+		// deterministic). Called again once a scan ended, it registers the files added since that are not registered yet
+		// (tools and tests that write files without a file watcher), on the calling thread.
 		void Scan(ScanImports imports = ScanImports::Wait);
+		bool IsScanning() const { return m_Scan != nullptr; }
+		// Where the scan is; nothing when none runs.
+		std::optional<AssetScanProgress> GetScanProgress() const;
+		// How scans prepare and insert (tests pass a clock of their own). Before BeginScan.
+		void SetRegistrationOptions(AssetRegistrationOptions options);
 		// Ends the manager's background work for good and returns at once, without waiting for any of it: stops the file
 		// watcher and cancels every import and search of references (queued ones never start; running ones stop at their next
 		// cancellation check on their own and store nothing). Nothing is imported in the background afterwards and results
@@ -482,6 +499,10 @@ namespace Strata
 			uint64_t SourceSize = 0;
 			int64_t SourceTime = 0;
 			bool FromCache = false; // The cached import was current: loaded assets already hold this data
+			// The sizes of the cache files (the asset's and each sub-asset's, in order), known to the job that wrote or checked
+			// them: applying an outcome touches no file.
+			uint64_t StoredSize = 0;
+			std::vector<uint64_t> SubAssetStoredSizes;
 		};
 
 		// What an engine-native asset (stored as its source, never imported) references, from its cached record or a scan.
@@ -510,6 +531,9 @@ namespace Strata
 		bool WriteMetaFile(const SourceAsset& source) const;
 		ImportRequest MakeImportRequest(const SourceAsset& source) const;
 		void ApplyImportOutcome(ImportOutcome outcome, bool reload);
+		// Removes the cache files of sub-assets an import no longer produces, on an I/O job (no file is touched on the main
+		// thread when an import is applied).
+		void RemoveCacheFilesLater(std::vector<AssetHandle> handles);
 		// Queues an import as a background job (JobPriority::Background; hot reload); with force, also when the cached import is
 		// current. An import of the source that is queued or running read an earlier state: it is cancelled (StopImport) and
 		// this one replaces it, forced if either is. `replacing`: the caller stopped the source's import itself (see
@@ -531,10 +555,17 @@ namespace Strata
 		// A folder the file watcher saw come or go: the folder index follows (and assets whose files went with a folder leave).
 		void ProcessFolderChange(const std::filesystem::path& path, FileChangeType type);
 		void ProcessCompletedImports();
-		// Deletes cached data and import records of assets that no longer exist and leftovers of interrupted writes (during
-		// Scan). The records store keeps every handle's path, so that duplicated .meta files resolve the same way on every scan
-		// (the original keeps its handle).
-		void RemoveUnusedCacheFiles();
+		// A file of the asset directory as a scan's job prepared it, the scan's state shared with its job, and the main thread's.
+		struct PreparedSource;
+		struct ScanShared;
+		struct ScanState;
+		static void PrepareScan(BackgroundWork& work, ScanShared& shared, uint32_t batch, JobPriority priority);
+		// Inserts what the scan's job prepared (once it finished), within a slice of time unless `unlimited`, and finishes the
+		// scan once everything is in.
+		void AdvanceScan(bool unlimited);
+		void FinishScan();
+		// Scan once a scan ended: the files that are not registered yet.
+		void RegisterNewFiles(ScanImports imports);
 
 		// Records what an engine-native asset references (BackgroundWork::FindNativeReferences) with the base (main thread).
 		void ApplyNativeReferences(const NativeReferences& references);
@@ -608,6 +639,11 @@ namespace Strata
 		std::unordered_map<AssetHandle, std::unordered_set<AssetHandle>> m_Referencers;
 
 		std::vector<Ref<ExternalImport>> m_ExternalImports; // Not finished (main thread)
+
+		// The scan in progress (BeginScan), and whether one ran (main thread).
+		Scope<ScanState> m_Scan;
+		bool m_Scanned = false;
+		AssetRegistrationOptions m_RegistrationOptions;
 
 		// New native assets reserved for background saves (ReserveNativeAsset); guarded by m_SourceMutex.
 		struct Reservation
