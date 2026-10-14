@@ -5,6 +5,7 @@
 #include "Engine/ModuleRegistrationHelpers.h"
 #include "Network/FakeEditorProcess.h"
 #include "Perf/StressProject.h"
+#include "Perf/WorldFixture.h"
 #include "Physics/PhysicsTestUtils.h"
 #include "Renderer/GPUTestUtils.h"
 #include "Runtime/PerfLogReader.h"
@@ -774,6 +775,9 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		return 0;
 	}
 
+	// write-world-project, write-many-assets-project, write-texture-folder: the world-scale fixtures (Perf/WorldFixture.h).
+	if (const std::optional<int> result = Strata::Tests::RunWorldFixtureHelper(mode, argc, argv))
+		return *result;
 	if (mode == "write-stress-project")
 	{
 		// <directory>: writes the streaming stress project (Perf/StressProject.h: 111.8 MB of block-compressed textures, the

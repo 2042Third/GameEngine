@@ -82,7 +82,10 @@ ctest --preset macos-debug -LE perf
   1,000,000-entity scenes (and of the 100,000 over the million, and of 100,000 cubes over the 100,000, whose render
   proxies the load builds before the swap: `SceneOpen100kCubesMaxFrame`), of starting play of the million, of
   `asset.import` of a 4096x4096 texture and of making a stress project's thumbnails, and the editor's working set with
-  the million open),
+  the million open; world-scale gates write their projects with `Perf/WorldFixture.h`: realistic 250k and 1M worlds,
+  many-asset projects, texture folders, exported world games; to look at one, `StrataTests
+  --strata-test-helper=write-world-project <new dir> World1M:1000000:colliders`, `write-many-assets-project <new dir>
+  30000` or `write-texture-folder <new dir> 24 4096`),
   `StrataEditor.Smoke`
   (the real editor in a window with `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label
   `gpu`; it creates a project in `build/<preset>/StrataTests/SmokeProject` (emptied first by `StrataEditor.SmokeClean`),
