@@ -25,9 +25,9 @@ The old machine's scratch tools are gone; these replace them.
 
 - **CI-compiler lint** (replaces `gcc_lint.sh` and `compat_check.py`): `python3 Tools/CompatLint.py --changed-since
   <base>`, after a Debug build. It compiles the changed files with GCC 14 (CI's Linux compiler) and LLVM 16 with its
-  libc++ (the closest to CI's Apple Clang 15), with warnings as errors, and must come back clean. Platform code
-  (`src/Platform`) is compiled by LLVM 16 only; its Linux paths compile in CI. A changed header: pass the files that
-  include it, or `--all`.
+  libc++ (the closest to CI's Apple Clang 15), with warnings as errors, and must come back clean. Both compile the macOS
+  branches of `src/Platform`; the Linux and Windows ones compile in CI, and changed files the Mac does not build are
+  left to it. A changed header: pass the files that include it, or `--all`.
 - **Brace check:** none; `.clang-format` states the style, and the review reads it.
 - **Perf lock:** `python3 Tools/PerfLock.py --label <key> -- <command> [arguments...]`. It waits up to 30 minutes for
   the lock (then exits 75), ends a command after 25 minutes (exit 124), and `--status` names the holder.

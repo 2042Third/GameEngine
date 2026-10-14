@@ -6,8 +6,8 @@ compilers and standard libraries reject is found before a push (AGENTS.md, "CI b
     python3 Tools/CompatLint.py Strata/src/Strata/Scene/Scene.cpp StrataTests/src/Scene/SceneTests.cpp
     python3 Tools/CompatLint.py --all                     # every translation unit of the build
 
-- GCC 14 stands in for CI's Linux compiler (and its libstdc++), with CI's warnings as errors. It skips `src/Platform`,
-  whose macOS code GCC cannot compile; CI builds the Linux code there.
+- GCC 14 stands in for CI's Linux compiler (and its libstdc++), with CI's warnings as errors. On macOS it compiles the
+  macOS branches of `src/Platform`; CI builds the Linux and Windows ones.
 - LLVM 16 with its own libc++ stands in for CI's Apple Clang 15 and its libc++ (which, for one, has no floating-point
   `std::from_chars`).
 
@@ -93,13 +93,11 @@ def adapt(command, build, compiler, options):
 
 def lint(source, command, compiler, options):
     relative = os.path.relpath(source, c_Root)
-    if compiler == 'gcc' and sys.platform == 'darwin' and '/src/Platform/' in source:
-        return relative, compiler, None, True
     result = run(adapt(command, options.build, compiler, options), cwd=options.build)
     messages = [line for line in result.stderr.split('\n') if re.search(r'\b(error|warning)\b', line)]
     if result.returncode != 0 or messages:
-        return relative, compiler, '\n'.join(messages[:20]) or result.stderr[:2000], False
-    return relative, compiler, None, False
+        return relative, compiler, '\n'.join(messages[:20]) or result.stderr[:2000]
+    return relative, compiler, None
 
 
 def main():
@@ -125,30 +123,41 @@ def main():
         print('CompatLint: %s' % error, file=sys.stderr)
         return 2
 
+    def absolute(paths):
+        return {os.path.normpath(os.path.join(c_Root, path)) for path in paths if path.endswith('.cpp')}
+
+    notBuilt = []
     if options.all:
         sources = sorted(source for source in commands if source.startswith(c_Root + os.sep) and '/vendor/' not in source)
     else:
-        files = list(options.files) + (changed_sources(options.changed_since) if options.changed_since else [])
-        sources = sorted({os.path.normpath(os.path.join(c_Root, path)) for path in files if path.endswith('.cpp')})
+        named = absolute(options.files)
+        changed = absolute(changed_sources(options.changed_since)) if options.changed_since else set()
+        # Changed files that no file of this platform's build shares a folder with are another platform's (Windows code,
+        # sample and test project scripts): CI compiles them. A new file beside built ones means the build is stale.
+        builtFolders = {os.path.dirname(source) for source in commands}
+        notBuilt = sorted(source for source in changed - named if source not in commands and os.path.dirname(source) not in builtFolders)
+        sources = sorted((named | changed) - set(notBuilt))
+    if notBuilt:
+        print('CompatLint: not built on this platform, left to CI: %s' % ', '.join(os.path.relpath(source, c_Root) for source in notBuilt),
+              file=sys.stderr)
     if not sources:
+        if notBuilt:
+            return 0
         print('CompatLint: no source files to compile', file=sys.stderr)
         return 2
     missing = [os.path.relpath(source, c_Root) for source in sources if source not in commands]
     if missing:
-        print('CompatLint: not in the build (configure again?): %s' % ', '.join(missing), file=sys.stderr)
+        print('CompatLint: not in the build (a new file: configure again): %s' % ', '.join(missing), file=sys.stderr)
         return 2
 
     jobs = [(source, commands[source], compiler) for source in sources for compiler in ('gcc', 'clang')]
     failures = 0
-    skipped = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as pool:
-        for relative, compiler, problem, skip in pool.map(lambda job: lint(*job, options), jobs):
-            if skip:
-                skipped += 1
-            elif problem:
+        for relative, compiler, problem in pool.map(lambda job: lint(*job, options), jobs):
+            if problem:
                 failures += 1
                 print('FAIL %s [%s]\n%s' % (relative, compiler, problem))
-    print('CompatLint: %d files, %d compilations failed, %d skipped (platform code with GCC on macOS)' % (len(sources), failures, skipped))
+    print('CompatLint: %d files, %d compilations failed' % (len(sources), failures))
     return 1 if failures else 0
 
 
