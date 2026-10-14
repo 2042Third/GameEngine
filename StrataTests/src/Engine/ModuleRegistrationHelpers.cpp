@@ -37,6 +37,12 @@ namespace Strata::Tests
 			int32_t Value = 0;
 		};
 
+		// Saved with the scene but left out of the copies play mode runs (ComponentFlags::NoCopy), like an editor-only cache.
+		struct TestCacheComponent
+		{
+			int32_t Value = 0;
+		};
+
 		int Fail(const std::string& message)
 		{
 			std::printf("FAILED: %s\n", message.c_str());
@@ -78,6 +84,10 @@ namespace Strata::Tests
 				// The type is registered and the name is taken (ignoring case): both are refused, without aborting.
 				duplicateTypeRefused = !ComponentRegistry::Register<TestVehicleComponent>("TestVehicleAgain").Property("Speed", &TestVehicleComponent::Speed);
 				duplicateNameRefused = !ComponentRegistry::Register<LateComponent>("testvehicle");
+				ComponentRegistry::Register<TestCacheComponent>("TestCache")
+					.Category("Tests")
+					.Flags(ComponentFlags::NoCopy)
+					.Property("Value", &TestCacheComponent::Value);
 			});
 			Engine::RegisterBuiltinModules(options);
 
@@ -114,6 +124,24 @@ namespace Strata::Tests
 			std::printf("reloaded: Speed %.2f, Label %s\n", static_cast<double>(vehicle->Speed), vehicle->Label.c_str());
 			if (vehicle->Speed != 12.5f || vehicle->Label != "Rover One")
 				return Fail("the reloaded TestVehicle has other values");
+
+			// A play copy leaves the NoCopy component out; the snapshot a save writes keeps every serialized component.
+			{
+				const Ref<Scene> source = CreateRef<Scene>("Snapshot");
+				Entity cached = source->CreateEntity("Cached");
+				cached.AddComponent<TestCacheComponent>(TestCacheComponent { 7 });
+				cached.AddComponent<TestVehicleComponent>(TestVehicleComponent { 3.0f, "Kept" });
+				const Ref<Scene> play = Scene::Copy(source);
+				const Ref<Scene> snapshot = Scene::Copy(source, SceneCopyOptions { true });
+				if (play->FindEntityByName("Cached").HasComponent<TestCacheComponent>())
+					return Fail("a play copy has the NoCopy component");
+				const TestCacheComponent* kept = snapshot->FindEntityByName("Cached").TryGetComponent<TestCacheComponent>();
+				if (!kept || kept->Value != 7)
+					return Fail("the snapshot to save lacks the NoCopy component");
+				if (SceneSerializer::Serialize(*snapshot) != SceneSerializer::Serialize(*source))
+					return Fail("the snapshot to save serializes differently from its scene");
+				std::printf("snapshot keeps: TestCache\n");
+			}
 
 			// The registry is frozen now: a registration is refused with an error, and the process goes on.
 			const uint64_t before = Log::GetBuffer().GetLatestSequence();

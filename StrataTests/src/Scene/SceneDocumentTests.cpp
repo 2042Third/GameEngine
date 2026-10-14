@@ -25,6 +25,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
@@ -52,16 +53,16 @@ namespace
 		scene.GetRegistry().emplace<UnknownComponentsComponent>(entity.GetHandle(), std::move(unknown));
 	}
 
-	struct WrittenDocument
+	struct WrittenText
 	{
 		std::string Text;
 		SceneWriteResult Result;
 	};
 
-	WrittenDocument WriteDocument(const Scene& scene, const SceneWriteOptions& options = {})
+	WrittenText WriteDocument(const Scene& scene, const SceneWriteOptions& options = {})
 	{
 		StringDocumentOutput output;
-		WrittenDocument document;
+		WrittenText document;
 		std::string error;
 		INFO(error);
 		REQUIRE(SceneDocumentWriter::Write(scene, output, options, &document.Result, &error));
@@ -216,7 +217,7 @@ TEST_SUITE("Scene.Documents")
 			CAPTURE(scene->GetName());
 			SceneWriteOptions options;
 			options.ChunkEntities = 97; // Many chunks, also for the feature scene
-			const WrittenDocument document = WriteDocument(*scene, options);
+			const WrittenText document = WriteDocument(*scene, options);
 			const nlohmann::json expected = SceneSerializer::Serialize(*scene);
 			const nlohmann::json& entities = expected["Scene"]["Entities"];
 
@@ -258,7 +259,7 @@ TEST_SUITE("Scene.Documents")
 		SceneWriteOptions options;
 		options.ExtraReferences = ScanExtraReferences;
 		options.ChunkEntities = 5;
-		const WrittenDocument document = WriteDocument(*feature, options);
+		const WrittenText document = WriteDocument(*feature, options);
 		std::vector<AssetHandle> scanned;
 		std::string error;
 		REQUIRE(AssetDependencies::Scan(AssetType::Scene, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(document.Text.data()),
@@ -268,7 +269,7 @@ TEST_SUITE("Scene.Documents")
 		CHECK(std::find(scanned.begin(), scanned.end(), UUID(0xF7A0000000000005ull)) != scanned.end());
 
 		// Without the extra-data scanner only asset properties count.
-		const WrittenDocument plain = WriteDocument(*feature);
+		const WrittenText plain = WriteDocument(*feature);
 		CHECK(std::find(plain.Result.References.begin(), plain.Result.References.end(), UUID(0xF7A0000000000005ull)) == plain.Result.References.end());
 	}
 
@@ -288,7 +289,7 @@ TEST_SUITE("Scene.Documents")
 		options.Roots = { a1.GetUUID(), b.GetUUID(), a11.GetUUID(), UUID(12345) };
 		options.WriteSettings = false;
 		options.Name = "Cell";
-		const WrittenDocument document = WriteDocument(scene, options);
+		const WrittenText document = WriteDocument(scene, options);
 		const std::optional<nlohmann::json> parsed = JsonUtils::Parse(document.Text);
 		REQUIRE(parsed.has_value());
 		const nlohmann::json& content = (*parsed)["Scene"];
@@ -317,7 +318,7 @@ TEST_SUITE("Scene.Documents")
 
 		// No root of the scene: an empty document.
 		options.Roots = { UUID(999) };
-		const WrittenDocument empty = WriteDocument(scene, options);
+		const WrittenText empty = WriteDocument(scene, options);
 		CHECK(empty.Text.ends_with("\"EntityCount\":0,\"Entities\":[]}}\n"));
 		CHECK(JsonUtils::Parse(empty.Text).has_value());
 	}
@@ -333,7 +334,7 @@ TEST_SUITE("Scene.Documents")
 			SceneWriteOptions options;
 			options.Kind = kind;
 			options.Roots = { root.GetUUID() };
-			const WrittenDocument document = WriteDocument(scene, options);
+			const WrittenText document = WriteDocument(scene, options);
 			const std::string format = SceneDocumentKindToString(kind);
 			CHECK(document.Text.starts_with("{\"Strata\":{\"Format\":\"" + format + "\",\"Version\":1},\"" + format + "\":{\"EntityCount\":2,\"Entities\":["));
 			const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(document.Text.data()), document.Text.size());
@@ -374,7 +375,7 @@ TEST_SUITE("Scene.Documents")
 			options.ChunkEntities = chunk;
 			std::vector<float> progress;
 			options.Progress = [&progress](float share) { progress.push_back(share); };
-			const WrittenDocument document = WriteDocument(world, options);
+			const WrittenText document = WriteDocument(world, options);
 			CAPTURE(chunk);
 			CHECK(document.Text == serial);
 			CHECK(document.Result.Sha256 == Sha256::Hash(document.Text));
@@ -449,4 +450,27 @@ TEST_SUITE("Scene.Documents")
 		REQUIRE(loaded);
 		CHECK(SceneSerializer::Serialize(*loaded) == SceneSerializer::Serialize(*feature));
 	}
+
+	TEST_CASE("A snapshot to save holds what the scene's document holds and writes the same bytes, without world transforms")
+	{
+		ScopedJobSystem jobs(4, 1);
+		const Ref<Scene> feature = LoadFeatureScene();
+		AddUnknownComponents(*feature, feature->GetEntityByUUID(feature->GetRootEntities().front()));
+		feature->UpdateWorldTransforms();
+		const Ref<Scene> snapshot = Scene::Copy(feature, SceneCopyOptions { true });
+		CHECK(snapshot->GetEntityCount() == feature->GetEntityCount());
+		CHECK(snapshot->GetRootEntities() == feature->GetRootEntities());
+		CHECK(SceneSerializer::Serialize(*snapshot) == SceneSerializer::Serialize(*feature));
+		CHECK(WriteDocument(*snapshot).Text == WriteDocument(*feature).Text);
+		// The cached world transforms stay behind; a play copy has them.
+		const auto* transforms = std::as_const(snapshot->GetRegistry()).storage<WorldTransformComponent>();
+		CHECK((!transforms || transforms->empty()));
+		const Ref<Scene> play = Scene::Copy(feature);
+		const auto* playTransforms = std::as_const(play->GetRegistry()).storage<WorldTransformComponent>();
+		REQUIRE(playTransforms);
+		CHECK(playTransforms->size() == feature->GetEntityCount());
+		// The snapshot keeps the scene's source and lineage, like every copy.
+		CHECK(snapshot->GetLineageID() == feature->GetLineageID());
+	}
 }
+

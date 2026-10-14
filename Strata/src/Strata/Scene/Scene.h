@@ -70,6 +70,16 @@ namespace Strata
 		PhysicsLayerSettings PhysicsLayers; // Layer names and which layers collide
 	};
 
+	// What Scene::Copy copies.
+	struct SceneCopyOptions
+	{
+		// Only what a document of the scene holds, for a save that writes it in the background (a snapshot): the IDs, the
+		// hierarchy, the kept unknown components and every serializable registered component, also those play copies leave
+		// out (ComponentFlags::NoCopy); not the cached world transforms. The copy's world transforms are never computed, so it
+		// is only read (written, as SceneDocumentWriter does), never updated or played.
+		bool SerializedOnly = false;
+	};
+
 	// A world of entities. Owns the EnTT registry, the hierarchy, and (while playing) the runtime systems.
 	// All Scene functions must be called on the main thread.
 	//
@@ -95,6 +105,8 @@ namespace Strata
 		// are, and every component storage is copied whole (ComponentInfo::CopyStorage), the storages in parallel on the job
 		// system. Copies keep the source asset and the lineage (GetSourceAsset, GetLineageID).
 		static Ref<Scene> Copy(const Ref<Scene>& source);
+		// The same with options (SceneCopyOptions::SerializedOnly: the snapshot a background save writes).
+		static Ref<Scene> Copy(const Ref<Scene>& source, const SceneCopyOptions& options);
 		// Lets go of a scene that is no longer used (one a scene switch or an opened scene replaced) without spending the
 		// frame on destroying it, which takes tens of milliseconds for a million entities: what must end on the main thread
 		// ends here (a running scene stops: its systems, scripts, bodies and voices; sub-scene loads and their asset requests

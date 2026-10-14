@@ -855,6 +855,10 @@ of whole scenes never become one:
   entity subsets by root ID (`Roots`: each root with its descendants, parents written only within the subset; world
   cells), `WriteSettings`, `Name`, `Cancel` (checked between chunks) and `Progress`. `SceneSerializer::SaveToFile` writes
   through it.
+- **Snapshots.** A background save writes a copy of the edited scene that nothing changes:
+  `Scene::Copy(scene, SceneCopyOptions { .SerializedOnly = true })` copies, storage by storage on the job system like a
+  play copy, the IDs, the hierarchy, the kept unknown components and every serializable registered component (also those
+  play copies leave out, `NoCopy`), and none of the cached world transforms; it is only ever read.
 
 ## Threading model
 

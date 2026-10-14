@@ -151,6 +151,11 @@ namespace Strata
 
 	Ref<Scene> Scene::Copy(const Ref<Scene>& source)
 	{
+		return Copy(source, SceneCopyOptions {});
+	}
+
+	Ref<Scene> Scene::Copy(const Ref<Scene>& source, const SceneCopyOptions& options)
+	{
 		ST_PROFILE_FUNCTION();
 		// Filled before its signal handlers are connected: the caches they keep are copied with the scene, and nothing else
 		// listens to a new registry, so the storages can be filled in parallel.
@@ -196,9 +201,19 @@ namespace Strata
 			const size_t firstFree = static_cast<size_t>(std::find(used.begin(), used.end(), uint8_t(0)) - used.begin());
 			to.storage<entt::entity>().start_from(entt::entity(static_cast<entt::id_type>(firstFree)));
 		});
+		// A snapshot to save copies what a document holds: the serialized components whatever NoCopy says, and the ID and
+		// relationship components, which the document holds as the entity's "ID" and "Parent".
+		const ComponentInfo* idInfo = ComponentRegistry::Find<IDComponent>();
+		const ComponentInfo* relationshipInfo = ComponentRegistry::Find<RelationshipComponent>();
+		const auto isCopied = [&](const ComponentInfo* info)
+		{
+			if (!options.SerializedOnly)
+				return info->IsCopyable();
+			return !HasFlag(info->Flags, ComponentFlags::NoSerialize) || info == idInfo || info == relationshipInfo;
+		};
 		for (const ComponentInfo* info : ComponentRegistry::GetAll())
 		{
-			const entt::sparse_set* storage = info->IsCopyable() ? from.storage(info->TypeId) : nullptr;
+			const entt::sparse_set* storage = isCopied(info) ? from.storage(info->TypeId) : nullptr;
 			if (!storage || storage->empty())
 				continue;
 			info->AssureStorage(to);
@@ -219,7 +234,8 @@ namespace Strata
 			});
 		};
 		addInternalCopy(std::type_identity<HierarchyComponent>());
-		addInternalCopy(std::type_identity<WorldTransformComponent>());
+		if (!options.SerializedOnly)
+			addInternalCopy(std::type_identity<WorldTransformComponent>());
 		addInternalCopy(std::type_identity<UnknownComponentsComponent>());
 		addCopy(count, [&destination, &source]() { destination->m_EntityMap = source->m_EntityMap; });
 		std::stable_sort(copies.begin(), copies.end(), [](const StorageCopy& a, const StorageCopy& b) { return a.Size > b.Size; });
@@ -235,9 +251,12 @@ namespace Strata
 		destination->m_LastRoot = source->m_LastRoot;
 		destination->m_RootIndicesValid = source->m_RootIndicesValid;
 		// What is stale in the source is stale in the copy (the nodes' dirty flags came with them), and the nodes' memo of the
-		// transform pass is the source's, so the copy's passes continue its numbering.
-		destination->m_DirtyTransforms = source->m_DirtyTransforms;
-		destination->m_TransformPass = source->m_TransformPass;
+		// transform pass is the source's, so the copy's passes continue its numbering. A snapshot has no world transforms.
+		if (!options.SerializedOnly)
+		{
+			destination->m_DirtyTransforms = source->m_DirtyTransforms;
+			destination->m_TransformPass = source->m_TransformPass;
+		}
 		destination->m_HierarchyVersion++;
 		destination->ConnectSignals();
 		return destination;
