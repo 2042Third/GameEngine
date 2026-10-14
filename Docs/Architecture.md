@@ -902,7 +902,9 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
 ### Scene services
 
 Systems of different modules use each other through interfaces in the Scene layer (`Scene/SceneServices.h`), so that
-Scripting and Audio never include Physics or Audio headers (the layers above). A system registers each interface it offers
+Scripting and Audio never include Physics or Audio headers (the layers above) and never read another module's components:
+the services answer what the consumer would have read (which body moves an entity, whether a body is dynamic, whether
+an entity has an audio source or an animator). A system registers each interface it offers
 with its scene for as long as it exists (`Scene::RegisterService<T>` in its constructor, `UnregisterService` in its
 destructor; one provider per interface, a second one is refused with an error), so a service is available from the first
 `OnRuntimeStart` of any system to the last `OnRuntimeStop`; consumers look it up (`Scene::GetService<T>`) and handle null,
@@ -911,13 +913,13 @@ which means the module is not in the build or its system does not run in this mo
 | Service | Provider | Consumers |
 | --- | --- | --- |
 | `ICollisionEventSource`: collision listeners (all entities, or only watched ones) and watched entities | `PhysicsSystem` | `ScriptSystem` (contact callbacks), tools and tests |
-| `IBodyMotionQuery`: bodies, velocities, the velocity of a point moving with a body | `PhysicsSystem` | script host (`RigidBody`), `AudioSystem` (Doppler) |
+| `IBodyMotionQuery`: bodies, velocities, the velocity of a point moving with a body, the body that moves an entity (`GetSimulatingBody`: its own or its nearest ancestor's), whether a body is dynamic | `PhysicsSystem` | script host (`RigidBody`), `AudioSystem` (Doppler) |
 | `IBodyControl`: velocities, forces, impulses, gravity scale, wake-up, teleport | `PhysicsSystem` | script host (`RigidBody`) |
 | `IPhysicsQueries`: raycasts and overlaps | `PhysicsSystem` | script host (`Physics`) |
 | `ICharacterControl`: character controllers' walk velocity, jumps, teleports, root motion and state | `PhysicsSystem` | script host (`CharacterController`), animation's root motion |
-| `IAudioPlayback`: sources and one-shots | `AudioSystem` (an adapter object) | script host (`AudioSource`, `Audio`) |
+| `IAudioPlayback`: sources (and whether an entity has one, `HasSource`) and one-shots | `AudioSystem` (an adapter object) | script host (`AudioSource`, `Audio`) |
 | `ISkinningPoses`: each animator's pose (model-space joint matrices with a version), and which animators renderers drew | `AnimationSystem`; the editor's pose preview for edited scenes | `RenderScene` (palettes of skinned meshes), `SceneRenderer` (reports the animators of what it drew) |
-| `IAnimatorControl`: play, cross-fade, parameters, speed, state queries, joint transforms | `AnimationSystem` | script host (`Animator`), tools and tests |
+| `IAnimatorControl`: play, cross-fade, parameters, speed, state queries, joint transforms, whether an entity has an animator (`HasAnimator`) | `AnimationSystem` | script host (`Animator`), tools and tests |
 | `IAnimationEventSource`: listeners of the events controller states fire | `AnimationSystem` | `ScriptSystem` (`OnAnimationEvent`), tools and tests |
 
 What outlives scenes is an engine service (`Core/EngineServices.h`): a module registers it in its registration function

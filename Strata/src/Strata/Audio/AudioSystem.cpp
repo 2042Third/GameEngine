@@ -127,6 +127,7 @@ namespace Strata
 		float GetPlaybackPosition(Entity entity) override { return m_System.GetPlaybackPosition(entity); }
 		bool PlayOneShot(AssetHandle clip, float volume, float pitch) override { return m_System.PlayOneShot(clip, volume, pitch); }
 		bool PlayOneShotAt(AssetHandle clip, const glm::vec3& position, float volume, float pitch) override { return m_System.PlayOneShotAt(clip, position, volume, pitch); }
+		bool HasSource(Entity entity) override { return entity.IsValid() && entity.HasComponent<AudioSourceComponent>(); }
 	private:
 		AudioSystem& m_System;
 	};
@@ -645,18 +646,15 @@ namespace Strata
 	{
 		if (!m_Motion)
 			return false;
-		for (Entity current = entity; current.IsValid(); current = current.GetParent())
-		{
-			if (!current.HasComponent<RigidBodyComponent>())
-				continue;
-			// Entities below a body move with it, rotation included.
-			const std::optional<glm::vec3> velocity = m_Motion->GetPointVelocity(current, position);
-			if (!velocity)
-				return false;
-			outVelocity = *velocity;
-			return true;
-		}
-		return false;
+		// The body that moves the entity: its own, or its nearest ancestor's (entities below a body move with it).
+		const Entity body = m_Motion->GetSimulatingBody(entity);
+		if (!body)
+			return false;
+		const std::optional<glm::vec3> velocity = m_Motion->GetPointVelocity(body, position);
+		if (!velocity)
+			return false;
+		outVelocity = *velocity;
+		return true;
 	}
 
 	void AudioSystem::UpdateSources(float timestep)

@@ -1066,6 +1066,11 @@ namespace Strata
 		return controller->GetStates()[state].Name;
 	}
 
+	bool AnimationSystem::HasAnimator(Entity entity)
+	{
+		return entity.IsValid() && entity.HasComponent<AnimatorComponent>();
+	}
+
 	std::optional<glm::mat4> AnimationSystem::GetJointTransform(Entity animator, std::string_view joint)
 	{
 		const AnimatorRecord* record = animator.GetScene() == &m_Scene ? FindRecord(animator.GetHandle()) : nullptr;

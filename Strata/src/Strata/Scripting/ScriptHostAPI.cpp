@@ -1192,8 +1192,7 @@ namespace Strata
 				return {};
 			}
 			// Colliders without a RigidBody component are static bodies of their own.
-			const RigidBodyComponent* rigidBody = entity.TryGetComponent<RigidBodyComponent>();
-			if (dynamicOnly && (!rigidBody || rigidBody->Type != RigidBodyType::Dynamic))
+			if (dynamicOnly && !motion->IsDynamicBody(entity))
 			{
 				system.ReportProblem(function, fmt::format("'{}' is not a dynamic body (only dynamic bodies have velocities, forces and impulses "
 					"applied to them)", entity.GetName()));
@@ -1586,12 +1585,12 @@ namespace Strata
 		}
 
 		// The entity whose AudioSource a function acts on, reporting why there is none.
-		Entity RequireAudioSource(ScriptSystem& system, StrataScriptEntityID id, const char* function)
+		Entity RequireAudioSource(ScriptSystem& system, IAudioPlayback& audio, StrataScriptEntityID id, const char* function)
 		{
 			const Entity entity = RequireEntity(system, id, function);
 			if (!entity)
 				return {};
-			if (!entity.HasComponent<AudioSourceComponent>())
+			if (!audio.HasSource(entity))
 			{
 				system.ReportProblem(function, fmt::format("'{}' has no AudioSource component", entity.GetName()));
 				return {};
@@ -1611,7 +1610,7 @@ namespace Strata
 			{
 				ScriptSystem* system = ResolveContext(context, function);
 				IAudioPlayback* audio = system ? RequireAudio(*system, function) : nullptr;
-				const Entity source = audio ? RequireAudioSource(*system, entity, function) : Entity();
+				const Entity source = audio ? RequireAudioSource(*system, *audio, entity, function) : Entity();
 				return source ? action(*system, *audio, source) : failure;
 			});
 		}
@@ -1956,10 +1955,10 @@ namespace Strata
 		}
 
 		// The entity whose Animator a function acts on, reporting why there is none.
-		Entity RequireAnimator(ScriptSystem& system, StrataScriptEntityID id, const char* function)
+		Entity RequireAnimator(ScriptSystem& system, IAnimatorControl& animation, StrataScriptEntityID id, const char* function)
 		{
 			const Entity entity = RequireEntity(system, id, function);
-			if (entity && !entity.HasComponent<AnimatorComponent>())
+			if (entity && !animation.HasAnimator(entity))
 			{
 				system.ReportProblem(function, fmt::format("'{}' has no Animator component", entity.GetName()));
 				return {};
@@ -1974,7 +1973,7 @@ namespace Strata
 			{
 				ScriptSystem* system = ResolveContext(context, function);
 				IAnimatorControl* animation = system ? RequireAnimation(*system, function) : nullptr;
-				const Entity animator = animation ? RequireAnimator(*system, entity, function) : Entity();
+				const Entity animator = animation ? RequireAnimator(*system, *animation, entity, function) : Entity();
 				return animator ? action(*system, *animation, animator) : failure;
 			});
 		}

@@ -124,6 +124,7 @@ namespace Strata
 		// cross-fade runs: the Inspector shows "<from> -> <to>".
 		std::optional<std::string> GetBlendSource(Entity animator) const;
 		std::optional<glm::mat4> GetJointTransform(Entity animator, std::string_view joint) override;
+		bool HasAnimator(Entity entity) override;
 
 		//////////////////////////////////////////////////////////////////////////
 		// IAnimationEventSource

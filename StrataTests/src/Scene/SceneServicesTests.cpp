@@ -29,6 +29,7 @@ namespace
 		float GetPlaybackPosition(Entity) override { return 0.0f; }
 		bool PlayOneShot(AssetHandle, float, float) override { return true; }
 		bool PlayOneShotAt(AssetHandle, const glm::vec3&, float, float) override { return true; }
+		bool HasSource(Entity) override { return false; }
 	};
 
 	Entity CreateBox(Scene& scene, const char* name, const glm::vec3& position, bool dynamic)
@@ -92,6 +93,45 @@ TEST_SUITE("Scene.Services")
 		CHECK(scene.GetService<IAudioPlayback>() == nullptr);
 		scene.OnRuntimeStop();
 		CHECK(scene.GetService<IPhysicsQueries>() == nullptr);
+	}
+
+	TEST_CASE("Modules learn from the services what moves an entity and what it plays, without reading other modules' components")
+	{
+		Scene scene;
+		Entity ground = CreateBox(scene, "Ground", glm::vec3(0.0f, -0.5f, 0.0f), false);
+		Entity box = CreateBox(scene, "Box", glm::vec3(0.0f, 2.0f, 0.0f), true);
+		Entity rider = scene.CreateEntity("Rider");
+		scene.SetParent(rider, box);
+		Entity lift = CreateBox(scene, "Lift", glm::vec3(4.0f, 2.0f, 0.0f), true);
+		lift.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		Entity speaker = scene.CreateEntity("Speaker");
+		speaker.AddComponent<AudioSourceComponent>();
+		Entity dancer = scene.CreateEntity("Dancer");
+		dancer.AddComponent<AnimatorComponent>();
+		scene.OnRuntimeStart(SceneRuntimeMode::Play);
+
+		// Physics: the body that moves an entity is its own or its nearest ancestor's; colliders alone are static bodies.
+		IBodyMotionQuery* motion = scene.GetService<IBodyMotionQuery>();
+		REQUIRE(motion != nullptr);
+		CHECK(motion->GetSimulatingBody(box) == box);
+		CHECK(motion->GetSimulatingBody(rider) == box);
+		CHECK_FALSE(motion->GetSimulatingBody(ground));
+		CHECK_FALSE(motion->GetSimulatingBody(speaker));
+		CHECK(motion->IsDynamicBody(box));
+		CHECK_FALSE(motion->IsDynamicBody(lift));
+		CHECK_FALSE(motion->IsDynamicBody(ground));
+		CHECK_FALSE(motion->IsDynamicBody(rider));
+
+		// Audio and animation: what has a source and what has an animator.
+		IAudioPlayback* audio = scene.GetService<IAudioPlayback>();
+		REQUIRE(audio != nullptr);
+		CHECK(audio->HasSource(speaker));
+		CHECK_FALSE(audio->HasSource(box));
+		IAnimatorControl* animation = scene.GetService<IAnimatorControl>();
+		REQUIRE(animation != nullptr);
+		CHECK(animation->HasAnimator(dancer));
+		CHECK_FALSE(animation->HasAnimator(speaker));
+		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("The audio module offers the engine's audio output to the whole process")
