@@ -4,6 +4,7 @@
 #include "Asset/ImportRecordTestUtils.h"
 #include "Editor/SceneComparison.h"
 #include "Editor/WorldSaveMeasurement.h"
+#include "Perf/WorldGameMeasurement.h"
 #include "Engine/ModuleRegistrationHelpers.h"
 #include "Network/FakeEditorProcess.h"
 #include "Perf/StressProject.h"
@@ -786,6 +787,10 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	// save-world <project directory> <scene handle> <result file>: a save of a world scene measured in an editor without a
 	// GPU, in a process of its own for its peak memory (Editor/WorldSaveMeasurement.h).
 	if (const std::optional<int> result = Strata::Tests::RunWorldSaveHelper(mode, argc, argv))
+		return *result;
+	// start-world-game <manifest> <result file>: an exported world game's start measured in a process of its own, for its peak
+	// memory (Perf/WorldGameMeasurement.h).
+	if (const std::optional<int> result = Strata::Tests::RunWorldGameHelper(mode, argc, argv))
 		return *result;
 	if (mode == "write-stress-project")
 	{
