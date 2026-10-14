@@ -127,6 +127,21 @@ namespace Strata
 			return result;
 		}
 
+		// The properties of the entity's component that have no effect in its current state, with why ({Property: reason};
+		// empty when none): PropertyInfo::InactiveReason.
+		nlohmann::json DescribeInactiveProperties(Entity entity, const ComponentInfo& info)
+		{
+			nlohmann::json inactive = nlohmann::json::object();
+			for (const PropertyInfo& property : info.Properties)
+			{
+				if (property.IsHidden())
+					continue;
+				if (std::string reason = ComponentAccess::GetInactiveReason(entity, info, property); !reason.empty())
+					inactive[property.Name] = std::move(reason);
+			}
+			return inactive;
+		}
+
 		nlohmann::json ToJson(const std::vector<Entity>& entities)
 		{
 			nlohmann::json ids = nlohmann::json::array();
@@ -346,7 +361,9 @@ namespace Strata
 			} });
 
 		registry.Register({ "entity.get",
-			"An entity's name, parent, children and all component values. With world: true also where it is in the world, decomposed from its "
+			"An entity's name, parent, children and all component values, and inactive: {Component: {Property: reason}} for properties that have no "
+			"effect in their component's state (e.g. a bloom threshold while Bloom is off; left out when none). With world: true also where it is "
+			"in the world, decomposed from its "
 			"world transform: world: {position, rotation: {euler (degrees, as the Inspector shows them), quaternion [x, y, z, w]}, scale}, and what "
 			"it and its descendants take up: bounds: {min, max, size, center, pending} (what renders, skinned meshes in their pose; else physical "
 			"shapes; else boxes around the entities; pending: a mesh still loading stood in as a box: ask again).",
@@ -361,6 +378,16 @@ namespace Strata
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				nlohmann::json value = DescribeEntity(entity);
+				nlohmann::json inactive = nlohmann::json::object();
+				for (const ComponentInfo* info : ComponentRegistry::GetAll())
+				{
+					if (!info->Has(scene.GetRegistry(), entity.GetHandle()))
+						continue;
+					if (nlohmann::json properties = DescribeInactiveProperties(entity, *info); !properties.empty())
+						inactive[info->Name] = std::move(properties);
+				}
+				if (!inactive.empty())
+					value["inactive"] = std::move(inactive);
 				if (world)
 				{
 					std::vector<AssetHandle> pending;
@@ -670,7 +697,9 @@ namespace Strata
 				return FinishEdit(context, transaction);
 			} });
 
-		registry.Register({ "component.get", "The property values of one component of an entity.",
+		registry.Register({ "component.get",
+			"The property values of one component of an entity: {values}, and inactive: {Property: reason} for properties that have no effect in "
+			"the component's state (e.g. the procedural sky's colors while Source is EnvironmentMap; left out when none).",
 			ObjectSchema({ { "entity", EntitySchema("Entity") }, { "component", StringSchema("Component type") } }, { "entity", "component" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -683,7 +712,10 @@ namespace Strata
 				const void* component = info->Get(scene.GetRegistry(), entity.GetHandle());
 				if (!component)
 					return EditorCommandResult::Fail(fmt::format("The entity has no {} component", info->Name));
-				return EditorCommandResult::Ok({ { "values", ComponentAccess::Serialize(*info, component) } });
+				nlohmann::json result = { { "values", ComponentAccess::Serialize(*info, component) } };
+				if (nlohmann::json inactive = DescribeInactiveProperties(entity, *info); !inactive.empty())
+					result["inactive"] = std::move(inactive);
+				return EditorCommandResult::Ok(std::move(result));
 			}, EditorCommandKind::Query });
 
 		registry.Register({ "component.set",

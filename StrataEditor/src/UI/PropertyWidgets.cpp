@@ -1113,7 +1113,12 @@ namespace Strata
 			if (!text.empty() && ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
 				ImGui::SetTooltip("%s", text.c_str());
 			if (!probeKey.empty())
-				ItemProbe::Record(ProbeKey(probeKey, "Label"), true, options.Overridden ? ImGui::GetColorU32(colors.Accent) : 0, shown);
+			{
+				// Disabled while inactive, with the reason under "<probeKey>.Inactive".
+				ItemProbe::Record(ProbeKey(probeKey, "Label"), options.InactiveReason.empty(), options.Overridden ? ImGui::GetColorU32(colors.Accent) : 0, shown);
+				if (!options.InactiveReason.empty())
+					ItemProbe::Record(ProbeKey(probeKey, "Inactive"), false, 0, options.InactiveReason);
+			}
 			ImGui::TableSetColumnIndex(1);
 		}
 

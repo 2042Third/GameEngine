@@ -9,5 +9,8 @@ namespace Strata
 
 	// Registers the built-in components (ComponentRegistration.cpp); part of RegisterSceneModule.
 	void RegisterSceneComponents();
+	// Gives the built-in components' properties that depend on others their inactive reasons (ComponentInactiveReasons.cpp,
+	// PropertyInfo::InactiveReason); part of RegisterSceneModule, after the components.
+	void RegisterComponentInactiveReasons();
 
 }

@@ -365,6 +365,9 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - Tools count game time in fixed steps (`Scene::GetFixedStepCount`), never in frames: `play.step` answers once its steps
   ran, resuming drops steps not run, and input durations (`input.*`, `input.sequence`) are fixed steps
   ([Stepping a paused game](Docs/DeveloperGuide.md#stepping-a-paused-game)).
+- A component property that has no effect in some states of its component (another property turns it off) gets an
+  `InactiveReason` (`ComponentRegistry::SetInactiveReason`): the Inspector draws it disabled with the reason
+  ([Inspectors](Docs/DeveloperGuide.md#inspectors)).
 - UI code takes colors only from theme tokens, sizes relative to the font (no fixed pixels above 16), panels through
   `EditorPanelRegistry` (never `ImGui::Begin`), the editor's fonts and the widget kit (`UI/Widgets.h`);
   `Editor.UI.Source` enforces the first three ([Editor UI rules](Docs/DeveloperGuide.md#editor-ui-rules)). Selection

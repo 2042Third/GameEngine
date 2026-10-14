@@ -83,7 +83,8 @@ namespace Strata
 		};
 		// Starts a row: the label (with its tooltip) in the first column, then moves to the second for the widget. A label
 		// wider than its column ends in an ellipsis and its tooltip names it whole. With a probe key, the probe records the
-		// label and the text it shows under "<probeKey>.Label" (its color: the accent while overridden).
+		// label and the text it shows under "<probeKey>.Label" (its color: the accent while overridden; disabled while
+		// inactive, the reason then under "<probeKey>.Inactive").
 		void PropertyLabel(std::string_view label, std::string_view tooltip = {}, std::string_view probeKey = {}, const PropertyLabelOptions& options = {});
 
 		// The type icon of an asset type (UI/Icons.h), as lists and pickers show assets.

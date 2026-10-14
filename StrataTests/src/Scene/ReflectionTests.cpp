@@ -174,3 +174,81 @@ TEST_SUITE("Reflection")
 		CHECK(ComponentAccess::RemoveComponent(entity, prefabInstance, &error));
 	}
 }
+
+TEST_SUITE("Scene.InactiveProperties")
+{
+	TEST_CASE("Properties another property turns off name why, and only while it does")
+	{
+		Scene scene;
+		Entity entity = scene.CreateEntity("Settings");
+		auto reason = [&entity](const char* component, const char* property)
+		{
+			const ComponentInfo* info = ComponentRegistry::Find(component);
+			REQUIRE(info);
+			const PropertyInfo* found = info->FindProperty(property);
+			REQUIRE(found);
+			return ComponentAccess::GetInactiveReason(entity, *info, *found);
+		};
+
+		// The sky: the map's properties with the procedural sky, the procedural sky's with a map, the ambient color with either.
+		SkyLightComponent& sky = entity.AddComponent<SkyLightComponent>();
+		sky.Source = SkyLightSource::Procedural;
+		CHECK_FALSE(reason("SkyLight", "EnvironmentMap").empty());
+		CHECK_FALSE(reason("SkyLight", "Rotation").empty());
+		CHECK(reason("SkyLight", "ZenithColor").empty());
+		CHECK(reason("SkyLight", "SunIntensity").empty());
+		CHECK_FALSE(reason("SkyLight", "AmbientColor").empty());
+		CHECK(reason("SkyLight", "Intensity").empty()); // Always active
+		sky.Source = SkyLightSource::EnvironmentMap;
+		CHECK(reason("SkyLight", "EnvironmentMap").empty());
+		CHECK_FALSE(reason("SkyLight", "HorizonColor").empty());
+		CHECK(reason("SkyLight", "AmbientColor").empty()); // No map set: the ambient color lights the scene
+		sky.EnvironmentMap = AssetHandle(0x5C7);
+		CHECK_FALSE(reason("SkyLight", "AmbientColor").empty());
+
+		// Post-processing: each effect's settings while it is off; Exposure always.
+		PostProcessComponent& post = entity.AddComponent<PostProcessComponent>();
+		post.AutoExposure = false;
+		post.Bloom = false;
+		post.AmbientOcclusion = false;
+		CHECK(reason("PostProcess", "AutoExposureMinEV") == "Auto Exposure is off");
+		CHECK_FALSE(reason("PostProcess", "AutoExposureSpeed").empty());
+		CHECK(reason("PostProcess", "BloomThreshold") == "Bloom is off");
+		CHECK(reason("PostProcess", "AmbientOcclusionRadius") == "Ambient Occlusion is off");
+		CHECK(reason("PostProcess", "Exposure").empty());
+		post.AutoExposure = true;
+		post.Bloom = true;
+		post.AmbientOcclusion = true;
+		for (const char* property : { "AutoExposureMinEV", "AutoExposureMaxEV", "AutoExposureSpeed", "BloomIntensity", "BloomThreshold",
+			"AmbientOcclusionRadius", "AmbientOcclusionIntensity" })
+			CHECK_MESSAGE(reason("PostProcess", property).empty(), property);
+
+		// The camera's other projection; the animator's clip under a controller.
+		CameraComponent& camera = entity.AddComponent<CameraComponent>();
+		CHECK(reason("Camera", "PerspectiveFOV").empty());
+		CHECK_FALSE(reason("Camera", "OrthographicSize").empty());
+		camera.Projection = ProjectionType::Orthographic;
+		CHECK_FALSE(reason("Camera", "PerspectiveNear").empty());
+		CHECK(reason("Camera", "OrthographicFar").empty());
+		AnimatorComponent& animator = entity.AddComponent<AnimatorComponent>();
+		CHECK(reason("Animator", "Clip").empty());
+		animator.Controller = AssetHandle(0xC0);
+		CHECK_FALSE(reason("Animator", "Clip").empty());
+
+		// An entity without the component has nothing inactive.
+		Entity plain = scene.CreateEntity("Plain");
+		const ComponentInfo* info = ComponentRegistry::Find("PostProcess");
+		CHECK(ComponentAccess::GetInactiveReason(plain, *info, *info->FindProperty("BloomThreshold")).empty());
+	}
+
+	TEST_CASE("Inactive reasons are set only while the registry is open, on properties it has")
+	{
+		// The registry is frozen once the engine's modules registered.
+		REQUIRE(ComponentRegistry::IsFrozen());
+		CHECK_FALSE(ComponentRegistry::SetInactiveReason<PostProcessComponent>("Bloom", [](const PostProcessComponent&) { return std::string("never"); }));
+		const PropertyInfo* bloom = ComponentRegistry::Find("PostProcess")->FindProperty("Bloom");
+		REQUIRE(bloom);
+		CHECK_FALSE(bloom->InactiveReason);
+	}
+}
+

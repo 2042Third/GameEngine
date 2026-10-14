@@ -45,6 +45,11 @@ ComponentRegistry::Register<WindZoneComponent>("WindZone")
   the property for people and AI agents (the tooltip text is part of `component.list`).
 - Flags: `NotRemovable` for components every entity has, `Hidden` for internal ones, `NoSerialize` only
   for data the serializer writes itself.
+- A property that has no effect in some states (a radius while its effect is off, the other projection's fields) gets
+  an inactive reason after the registration, while the registry is open:
+  `ComponentRegistry::SetInactiveReason<WindZoneComponent>("Radius", [](const WindZoneComponent& zone) { return zone.Mode
+  == WindZoneMode::Directional ? std::string("Directional zones have no radius") : std::string(); });`. The Inspector
+  draws it disabled with the reason; `component.get` lists it under `inactive`.
 
 ## 3. Add behaviour (if the component does something at runtime)
 

@@ -75,6 +75,34 @@ namespace Strata
 		return GetData().State.load(std::memory_order_acquire) == RegistryState::Frozen;
 	}
 
+	bool ComponentRegistry::SetInactiveReason(entt::id_type typeId, std::string_view property, std::function<std::string(const void* component)> reason)
+	{
+		RegistryData& data = GetData();
+		std::scoped_lock<std::mutex> lock(data.Mutex);
+		if (data.State.load(std::memory_order_acquire) != RegistryState::Open)
+		{
+			ST_CORE_ERROR("The inactive reason of '{}' is not set: the component registry is not open", property);
+			return false;
+		}
+		for (Scope<ComponentInfo>& info : data.Storage)
+		{
+			if (info->TypeId != typeId)
+				continue;
+			for (PropertyInfo& candidate : info->Properties)
+			{
+				if (candidate.Name == property)
+				{
+					candidate.InactiveReason = std::move(reason);
+					return true;
+				}
+			}
+			ST_CORE_ERROR("The inactive reason of '{}' is not set: component '{}' has no such property", property, info->Name);
+			return false;
+		}
+		ST_CORE_ERROR("The inactive reason of '{}' is not set: its component is not registered", property);
+		return false;
+	}
+
 	ComponentInfo* ComponentRegistry::CreateInfo(std::string name, entt::id_type typeId)
 	{
 		RegistryData& data = GetData();

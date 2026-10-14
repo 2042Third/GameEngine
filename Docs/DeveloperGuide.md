@@ -1450,7 +1450,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
   the link's fields (`InspectorPanel::DrawPrefabBar`: the prefab, Select, Open, an Overrides menu with Apply All, Revert
   All and each override) and marks overrides: the property's label in SemiBold with an accent bar
   (`UI::PropertyLabelOptions::Overridden`; right-click: Apply to Prefab, Revert) and the component's header, whose menu
-  gets Apply to Prefab and Revert to Prefab (models: Revert only). It shows the scene's settings (gravity, the fixed step, the physics
+  gets Apply to Prefab and Revert to Prefab (models: Revert only). Properties that have no effect in their component's
+  state (another property turns them off) draw disabled with the reason as their label's tooltip; with several entities
+  selected, only when that holds on every one (`GetSharedInactiveReason`). A component property that can be inactive
+  gets a `PropertyInfo::InactiveReason`, set with `ComponentRegistry::SetInactiveReason<T>(property, reason)` while
+  registration is open (the built-in components' in `Scene/ComponentInactiveReasons.cpp`, each row following the code
+  that reads the property); `component.get` and `entity.get` list them as `inactive`. It shows the scene's settings (gravity, the fixed step, the physics
   world's capacities and the collision layers: names and a compact matrix, long names elided; bodies and controllers
   choose their layer among layer 0 and the named ones; how many entities sub-scenes create per frame) and sky with
   nothing selected, in sections that start closed with a summary on their headers

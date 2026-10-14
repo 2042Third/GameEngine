@@ -627,6 +627,14 @@ TEST_SUITE("Editor.Commands")
 
 		harness.Run("component.add", { { "entity", c }, { "component", "SpotLight" }, { "values", { { "OuterConeAngle", 40.0 } } } });
 		CHECK(harness.Run("component.get", { { "entity", c }, { "component", "SpotLight" } })["values"]["OuterConeAngle"] == 40.0);
+		// Properties another one turns off are listed with why; none: no inactive key.
+		CHECK_FALSE(harness.Run("component.get", { { "entity", c }, { "component", "SpotLight" } }).contains("inactive"));
+		harness.Run("component.add", { { "entity", c }, { "component", "PostProcess" }, { "values", { { "Bloom", false } } } });
+		const nlohmann::json post = harness.Run("component.get", { { "entity", c }, { "component", "PostProcess" } });
+		CHECK(post["inactive"] == nlohmann::json { { "BloomIntensity", "Bloom is off" }, { "BloomThreshold", "Bloom is off" } });
+		CHECK(harness.Run("entity.get", { { "entity", c } })["inactive"] == nlohmann::json { { "PostProcess", post["inactive"] } });
+		harness.Run("component.remove", { { "entity", c }, { "component", "PostProcess" } });
+		CHECK_FALSE(harness.Run("entity.get", { { "entity", c } }).contains("inactive"));
 		harness.Run("component.remove", { { "entity", c }, { "component", "SpotLight" } });
 		CHECK_FALSE(harness.Error("component.get", { { "entity", c }, { "component", "SpotLight" } }).empty());
 

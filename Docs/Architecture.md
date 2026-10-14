@@ -2504,7 +2504,9 @@ is the `strata-scripting` skill. The layers:
     make ImGui clear the selection. With 100,000 roots the panel costs about 0.012 ms per frame (it drew every root
     before: 12.9 ms; `Perf.Editor`).
   - The **Inspector** shows the components every selected entity has. `GetSharedProperty` gives each widget its value and
-    which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as mixed; an edit goes through the
+    which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as mixed; `GetSharedInactiveReason`
+    whether the property has no effect on every entity (`PropertyInfo::InactiveReason`, the built-in rows in
+    `Scene/ComponentInactiveReasons.cpp`), which draws its row disabled with the reason; an edit goes through the
     multi-entity `SetPropertyComponentsWithUndo` with the components the widget changed (one step; each entity keeps its
     other components), or `SetPropertyWithUndo` for other types. Rotations of several entities go through a
     `RotationAnglesEdit` with the Euler angles the widget edited, kept by the Inspector until the widget reports the edit

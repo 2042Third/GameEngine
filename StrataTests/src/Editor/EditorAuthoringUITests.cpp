@@ -815,6 +815,41 @@ TEST_SUITE("Editor.UI.Hierarchy")
 
 TEST_SUITE("Editor.UI.Inspector")
 {
+	TEST_CASE("Properties another property turns off are drawn disabled with the reason, on every selected entity only")
+	{
+		// Tall enough for the sky's and the post-processing's rows.
+		AuthoringEditor editor({ ImVec2(1600.0f, 1400.0f), 1.0f });
+		const UUID settings = editor.Create("Settings", { { "components", { { "SkyLight", { { "Source", "Procedural" } } },
+			{ "PostProcess", { { "AutoExposure", false } } } } } });
+		editor.Context().Select(settings);
+		editor.Frames(3);
+		auto label = [](const std::string& probe)
+		{
+			const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(probe + ".Label");
+			REQUIRE_MESSAGE(item.has_value(), probe);
+			return *item;
+		};
+		// The procedural sky leaves the map unused; automatic exposure off leaves its range unused.
+		CHECK_FALSE(label("Inspector.SkyLight.EnvironmentMap").Enabled);
+		REQUIRE(UI::ItemProbe::Find("Inspector.SkyLight.EnvironmentMap.Inactive").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.SkyLight.EnvironmentMap.Inactive")->Text == "Only an environment map uses it (Source is Procedural)");
+		CHECK(label("Inspector.SkyLight.ZenithColor").Enabled);
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.SkyLight.ZenithColor.Inactive").has_value());
+		CHECK_FALSE(label("Inspector.PostProcess.AutoExposureMinEV").Enabled);
+		CHECK(UI::ItemProbe::Find("Inspector.PostProcess.AutoExposureMinEV.Inactive")->Text == "Auto Exposure is off");
+		CHECK(label("Inspector.PostProcess.Exposure").Enabled);
+
+		// With another entity whose sky uses a map: the map's row is active on one of them, so it is active.
+		const UUID other = editor.Create("Other", { { "components", { { "SkyLight", { { "Source", "EnvironmentMap" } } },
+			{ "PostProcess", { { "AutoExposure", false } } } } } });
+		editor.Context().Select(settings);
+		editor.Context().Select(other, true);
+		editor.Frames(3);
+		CHECK(label("Inspector.SkyLight.EnvironmentMap").Enabled);
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.SkyLight.EnvironmentMap.Inactive").has_value());
+		CHECK_FALSE(label("Inspector.PostProcess.AutoExposureMinEV").Enabled);
+	}
+
 	TEST_CASE("Clicking the X-axis label resets only X")
 	{
 		AuthoringEditor editor;

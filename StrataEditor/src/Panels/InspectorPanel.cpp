@@ -756,8 +756,10 @@ namespace Strata
 				continue;
 
 			const std::string probe = fmt::format("Inspector.{}.{}", info.Name, property.Name);
+			const std::string inactive = GetSharedInactiveReason(entities, info, property);
 			UI::PropertyLabelOptions labelOptions;
 			labelOptions.Overridden = prefab && prefab->IsOverridden(info.Name, property.Name);
+			labelOptions.InactiveReason = inactive;
 			UI::PropertyLabel(property.DisplayName, property.Tooltip, probe, labelOptions);
 			// An override's label offers Apply to Prefab and Revert on a right-click.
 			if (labelOptions.Overridden)
@@ -782,7 +784,8 @@ namespace Strata
 			options.DefaultValue = index < defaults.size() && defaults[index] ? &*defaults[index] : nullptr;
 			options.ProbeKey = probe;
 			PropertyValue value = shared->Value;
-			ImGui::BeginDisabled(property.IsReadOnly());
+			// An inactive property shows its value disabled: changing it would change nothing (its label says why).
+			ImGui::BeginDisabled(property.IsReadOnly() || !inactive.empty());
 			const PropertyEditResult result = DrawPropertyWidget(property, value, scene, options);
 			ImGui::EndDisabled();
 			if (result.Changed)
