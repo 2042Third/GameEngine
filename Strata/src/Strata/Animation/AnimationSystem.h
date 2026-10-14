@@ -27,6 +27,7 @@ namespace Strata
 
 	class Scene;
 	class Skeleton;
+	struct AnimatorComponent;
 
 	// A parameter of an animator's controller and its value (bools and triggers: 0 or 1).
 	struct AnimatorParameterValue

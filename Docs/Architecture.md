@@ -234,10 +234,18 @@ go through it, mostly via `Scene/ComponentAccess`.
 
 **Scene** (`Scene/`). `Scene` owns the EnTT registry, the UUID map, the hierarchy and the cached world transforms,
 and while it runs its scene systems (see [Scene runtime lifecycle](#scene-runtime-lifecycle)). `Entity` is a
-non-owning handle. Components are plain structs in `Components.h`, registered with stable names in
-`ComponentRegistration.cpp` (ID, Name, Transform, Relationship, Tag, Inactive, PrefabInstance, Camera, MeshRenderer,
-DirectionalLight, PointLight, SpotLight, SkyLight, PostProcess, Text, RigidBody, BoxCollider, SphereCollider,
-CapsuleCollider, MeshCollider, CharacterController, AudioSource, AudioListener, Skin, Animator, AttachToJoint, Script).
+non-owning handle. Components are plain structs, each declared and registered with a stable name by the module that
+owns it (`<Module>/<Module>Components.h`, registered from `Register<Module>Module`): Scene's `Components.h` holds ID,
+Name, Transform, Relationship, Tag, Inactive, PrefabInstance and Camera (registered in `ComponentRegistration.cpp`) and
+the types of two components other modules register because sibling layers read them (`MeshRendererComponent`, registered
+by the renderer: physics' mesh colliders and animation read it; `SkinComponent`, registered by animation: the renderer,
+which may not include Animation, makes skinned proxies from it); `Renderer/RendererComponents.h` the lights, SkyLight,
+PostProcess and Text; `Physics/PhysicsComponents.h` RigidBody, the colliders and CharacterController;
+`Audio/AudioComponents.h` AudioSource and AudioListener; `Animation/AnimationComponents.h` Animator and AttachToJoint;
+`Scripting/ScriptingComponents.h` Script. The composition root's module order keeps `ComponentRegistry::GetAll` in one
+order (Scene's, the renderer's, physics', audio's, animation's, then Script), so the Inspector, Add Component and
+`component.list` list them as before (`Reflection.ComponentSchema` checks names, metadata and order against
+`StrataTests/Architecture/ComponentSchema.json`).
 `ComponentAccess`
 reads and writes them with validation and change signals, `SceneSerializer` writes versioned JSON (keeping components
 it cannot read, see
@@ -485,14 +493,20 @@ them:
 
 ```text
 open the registries (BeginRegistration; not the importers')
-RegisterSceneModule        Scene/SceneRegistration.cpp         components (ComponentRegistration.cpp); Scene, Prefab, Model loaders
-RegisterRendererModule     Renderer/RendererRegistration.cpp   Texture (with its prefix), Mesh, Material, Font loaders; built-in
-                                                               meshes and material; the texture streamer of every manager;
-                                                               the Mesh geometry reader
-RegisterScriptingModule    Scripting/ScriptingRegistration.cpp "Scripting" system
-RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     "Physics" system
-RegisterAudioModule        Audio/AudioRegistration.cpp         AudioClip loader, "Audio" system
-RegisterAnimationModule    Animation/AnimationRegistration.cpp Skeleton, AnimationClip, AnimationController loaders, "Animation" system
+RegisterSceneModule        Scene/SceneRegistration.cpp         its components (ComponentRegistration.cpp); Scene, Prefab, Model
+                                                               loaders
+RegisterRendererModule     Renderer/RendererRegistration.cpp   its components (RendererComponents.cpp: MeshRenderer, lights, sky,
+                                                               post-processing, text); Texture (with its prefix), Mesh, Material,
+                                                               Font loaders; built-in meshes and material; the texture streamer
+                                                               of every manager; the Mesh geometry reader
+RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     its components (PhysicsComponents.cpp, with collider gizmos);
+                                                               "Physics" system
+RegisterAudioModule        Audio/AudioRegistration.cpp         its components (AudioComponents.cpp); AudioClip loader, "Audio"
+                                                               system
+RegisterAnimationModule    Animation/AnimationRegistration.cpp its components (AnimationComponents.cpp: Skin, Animator,
+                                                               AttachToJoint); Skeleton, AnimationClip, AnimationController loaders,
+                                                               "Animation" system
+RegisterScriptingModule    Scripting/ScriptingRegistration.cpp the Script component (ScriptingComponents.cpp); "Scripting" system
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
 ComponentRegistry::Freeze
@@ -1894,7 +1908,7 @@ system, not to entities: a character's joints add no entities and no transform c
   clip). Skinned mesh entities sit under it with a `SkinComponent` naming it. Joints are no entities, except joints with
   content (a rigid mesh, an imported camera or light, or a child outside the skeleton), which become entities under the
   root with an `AttachToJointComponent` at the joint's rest pose, so rigid parts and node animation follow the pose.
-- **Components** (`Scene/Components.h`, category Animation). `AnimatorComponent`: `Skeleton`, `Controller` (none: the
+- **Components** (`Animation/AnimationComponents.h`; `SkinComponent`'s type in `Scene/Components.h`; category Animation). `AnimatorComponent`: `Skeleton`, `Controller` (none: the
   simple mode, which plays `Clip`), `Clip`, `Speed` (negative plays backwards), `Loop` (the clip without a controller,
   and clips scripts play directly), `PlayOnStart`, `ApplyRootMotion` and `CullingMode` (`AlwaysAnimate`, `WhenVisible`).
   `SkinComponent {Animator}` makes a mesh renderer skinned by an animator's pose; the skeleton belongs to the animator,

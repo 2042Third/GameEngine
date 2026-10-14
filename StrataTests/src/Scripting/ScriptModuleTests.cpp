@@ -9,8 +9,10 @@
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Process.h"
 #include "Strata/Core/StringUtils.h"
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
 #include "Strata/Scripting/ScriptModule.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include "StrataScript/ScriptABI.h"

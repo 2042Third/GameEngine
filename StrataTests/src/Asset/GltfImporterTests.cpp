@@ -11,6 +11,7 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"

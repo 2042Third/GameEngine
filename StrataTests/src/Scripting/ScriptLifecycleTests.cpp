@@ -2,6 +2,7 @@
 
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 
 #include <string>
 

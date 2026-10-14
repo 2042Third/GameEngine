@@ -27,6 +27,8 @@ namespace Strata
 
 	void RegisterAudioModule()
 	{
+		RegisterAudioComponents();
+
 		static AudioOutputService s_AudioOutput;
 		EngineServices::Register<IAudioOutput>(s_AudioOutput);
 

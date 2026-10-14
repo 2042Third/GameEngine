@@ -1,7 +1,10 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Animation/AnimationComponents.h"
+#include "Strata/Audio/AudioComponents.h"
 #include "Strata/Core/EngineServices.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"

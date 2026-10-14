@@ -12,7 +12,12 @@ of its own.
 
 ## 1. Declare the data
 
-Add the struct to `Strata/src/Strata/Scene/Components.h` in the right section. Rules:
+Add the struct to the components header of the module that owns it: `Strata/src/Strata/<Module>/<Module>Components.h`
+(`Renderer/RendererComponents.h`, `Physics/PhysicsComponents.h`, `Audio/AudioComponents.h`,
+`Animation/AnimationComponents.h`, `Scripting/ScriptingComponents.h`; a new module gets its own pair). `Scene/Components.h`
+holds only the scene's own components (ID, Name, Transform, Relationship, Tag, Inactive, PrefabInstance, Camera) and the
+types of components another module registers because a sibling layer must read them (`MeshRendererComponent`,
+`SkinComponent`): put a type there only for that reason. Rules:
 
 - Only reflectable member types: `bool`, `int32_t`, `uint32_t`, `float`, `glm::vec2/3/4`, `glm::quat`,
   `std::string`, enums (registered with `EnumProperty`), asset handles (`AssetHandle`, with
@@ -23,8 +28,8 @@ Add the struct to `Strata/src/Strata/Scene/Components.h` in the right section. R
 
 ## 2. Register it
 
-In `Strata/src/Strata/Scene/ComponentRegistration.cpp` (`RegisterSceneComponents`, part of the scene module's
-registration), register the type with a stable name. The name is written to files and used by tools; never rename
+In the module's `<Module>Components.cpp` (`Register<Module>Components`, declared in `<Module>Registration.h` and called
+from the module's `Register<Module>Module`), register the type with a stable name and a `Category` for Add Component. The name is written to files and used by tools; never rename
 it later. Components register only while `Engine::RegisterBuiltinModules` runs (the registry freezes at its end);
 a game or test registers its own components through `ModuleRegistrationOptions::Extra`.
 

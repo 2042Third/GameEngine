@@ -4,6 +4,7 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Audio/AudioClip.h"
 #include "Strata/Audio/AudioClipAsset.h"
+#include "Strata/Audio/AudioComponents.h"
 #include "Strata/Audio/AudioEngine.h"
 #include "Strata/Audio/AudioSource.h"
 #include "Strata/Audio/AudioVoice.h"

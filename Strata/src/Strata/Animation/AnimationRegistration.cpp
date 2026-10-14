@@ -14,6 +14,8 @@ namespace Strata
 
 	void RegisterAnimationModule()
 	{
+		RegisterAnimationComponents();
+
 		// Skeletons and clips are stored in their cooked binary forms, controllers as their JSON source.
 		AssetLoaderRegistry::Register(AssetType::Skeleton, [](const AssetMetadata&, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
 		{

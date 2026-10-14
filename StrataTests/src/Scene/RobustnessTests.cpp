@@ -3,11 +3,13 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Reflection/PropertyJson.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/ComponentAccess.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include <clocale>

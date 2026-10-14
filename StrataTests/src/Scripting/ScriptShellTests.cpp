@@ -9,6 +9,7 @@
 #include "Strata/Input/Input.h"
 #include "Strata/Input/InputWindow.h"
 #include "Strata/Runtime/GameWindowService.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include <algorithm>

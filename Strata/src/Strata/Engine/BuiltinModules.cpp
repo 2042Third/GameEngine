@@ -56,14 +56,15 @@ namespace Strata::Engine
 		MeshGeometryRegistry::BeginRegistration();
 		SceneSystemRegistry::BeginRegistration();
 
-		// Lower layers first. Scene systems order themselves against other modules' systems with soft constraints
-		// (SceneSystemDescriptor::AfterIfPresent, BeforeIfPresent), which apply whatever the registration order.
+		// Lower layers first; the order is also the order of the modules' components in ComponentRegistry::GetAll (the
+		// Inspector, Add Component, component.list). Scene systems order themselves against other modules' systems with soft
+		// constraints (SceneSystemDescriptor::AfterIfPresent, BeforeIfPresent), which apply whatever the registration order.
 		RegisterSceneModule();
 		RegisterRendererModule();
-		RegisterScriptingModule();
 		RegisterPhysicsModule();
 		RegisterAudioModule();
 		RegisterAnimationModule();
+		RegisterScriptingModule();
 		// Tooling, handed in by the program (see ModuleRegistrationOptions::AssetPipeline).
 		if (options.AssetPipeline)
 			options.AssetPipeline();

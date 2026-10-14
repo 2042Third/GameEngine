@@ -4,6 +4,7 @@
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 

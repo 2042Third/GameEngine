@@ -242,7 +242,9 @@ The threading model, frame loop and pipelines these rules protect are described 
   the build: each layer is a library (`Strata_<Layer>`) linking its `MayInclude`; a new layer is a table entry, its vendor
   libraries a `strata_layer_link` row, and games link no `Tooling` layer (`StrataRuntime.NoTooling`).
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers, scene
-  systems...), never through lower layers calling functions of higher ones. Each module has one registration function
+  systems...), never through lower layers calling functions of higher ones. A component lives in its module
+  (`<Module>/<Module>Components.h`, registered by its `Register<Module>Module`); `Scene/Components.h` only holds Scene's and
+  the types sibling layers must read. Each module has one registration function
   (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`), called only by the composition root,
   `Engine::RegisterBuiltinModules`, in dependency order, before anything reads a registry. Shipped games link the root,
   so tooling is handed in (`ModuleRegistrationOptions::AssetPipeline`), and games and tests pass their components in

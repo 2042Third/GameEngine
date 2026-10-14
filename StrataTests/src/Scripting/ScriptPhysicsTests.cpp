@@ -2,9 +2,11 @@
 
 #include "Audio/AudioTestUtils.h"
 #include "Scripting/ScriptTestUtils.h"
+#include "Strata/Audio/AudioComponents.h"
 #include "Strata/Audio/AudioSource.h"
 #include "Strata/Audio/AudioSystem.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/SceneServices.h"

@@ -8,6 +8,7 @@
 #include "Strata/Reflection/ComponentGizmo.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/Mesh.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 

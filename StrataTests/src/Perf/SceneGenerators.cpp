@@ -2,7 +2,10 @@
 
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/JobSystem.h"
+#include "Strata/Physics/PhysicsComponents.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 
 #include <doctest/doctest.h>
 #include <glm/gtc/quaternion.hpp>

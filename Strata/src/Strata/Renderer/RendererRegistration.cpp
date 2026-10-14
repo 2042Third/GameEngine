@@ -60,6 +60,8 @@ namespace Strata
 
 	void RegisterRendererModule()
 	{
+		RegisterRendererComponents();
+
 		// The asset layer finalizes GPU assets through this service: the running renderer's upload context, frames in flight
 		// and memory budget (Asset/AssetUploadContext.h).
 		EngineServices::Register<IAssetGraphics>(RendererAssetGraphics::Get());

@@ -4,12 +4,14 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Physics/PhysicsSystem.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scripting/ScriptSystem.h"
 #include "Strata/Scripting/ScriptTypes.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include <algorithm>

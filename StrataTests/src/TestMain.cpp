@@ -28,6 +28,7 @@
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scripting/ScriptEngine.h"
 #include "Strata/Scripting/ScriptModule.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include <stb_image.h>

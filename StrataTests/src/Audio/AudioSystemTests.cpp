@@ -3,6 +3,7 @@
 #include "Audio/AudioTestUtils.h"
 #include "Physics/PhysicsTestUtils.h"
 #include "Strata/Audio/AudioClip.h"
+#include "Strata/Audio/AudioComponents.h"
 #include "Strata/Audio/AudioEngine.h"
 #include "Strata/Audio/AudioSource.h"
 #include "Strata/Audio/AudioSystem.h"

@@ -1,12 +1,17 @@
 #include <doctest/doctest.h>
 
+#include "Scene/SceneTestUtils.h"
+#include "Strata/Audio/AudioComponents.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Reflection/ComponentRegistry.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/ComponentAccess.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/UnknownComponents.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include <algorithm>
@@ -122,6 +127,19 @@ namespace
 
 TEST_SUITE("Scene.Serialization")
 {
+	TEST_CASE("Committed scenes load with every component registered and without warnings, and save back the same")
+	{
+		// Every module's components are registered in this build, wherever they are declared: none of these scenes keeps one
+		// as unknown (the components moved into their modules without changing their names or what files hold).
+		const std::filesystem::path scenes = FileSystem::FromUTF8(STRATA_FEATURE_TEST_DIR) / "Assets" / "Scenes";
+		Tests::CheckSceneFileLoadsCleanly(scenes / "Feature.stscene");
+		Tests::CheckSceneFileLoadsCleanly(scenes / "FeatureSub.stscene");
+		std::string error;
+		const std::filesystem::path tetris = Tests::CopySampleProject("Tetris", &error);
+		REQUIRE_MESSAGE(!tetris.empty(), error);
+		Tests::CheckSceneFileLoadsCleanly(tetris / "Assets" / "Scenes" / "Main.stscene");
+	}
+
 	TEST_CASE("Scenes round trip through JSON without changes")
 	{
 		Ref<Scene> original = CreateFullScene();

@@ -6,6 +6,7 @@
 #include "Strata/Asset/EditorAssetManager.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include <filesystem>

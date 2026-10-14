@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Animation/AnimationSystem.h"
 
+#include "Strata/Animation/AnimationComponents.h"
 #include "Strata/Animation/AnimationController.h"
 #include "Strata/Animation/Skeleton.h"
 #include "Strata/Asset/AssetManager.h"

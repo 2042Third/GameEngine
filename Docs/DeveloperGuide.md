@@ -577,7 +577,13 @@ short. Their full wording:
   layer or library, and `StrataRuntime.NoTooling` reads its linker map. Details: Docs/Architecture.md, "Targets and
   dependencies" and "Layers".
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers,
-  built-in asset objects, scene systems), never through lower layers calling functions of higher ones. Each module
+  built-in asset objects, scene systems), never through lower layers calling functions of higher ones. A component lives in
+  the module that owns it: declared in `<Module>/<Module>Components.h` and registered by `<Module>Components.cpp`, which its
+  `Register<Module>Module` calls (with a `Category` for Add Component). `Scene/Components.h` holds only the scene's own
+  components (ID, Name, Transform, Relationship, Tag, Inactive, PrefabInstance, Camera) and the types of components
+  another module registers because a sibling layer reads them (`MeshRendererComponent`, `SkinComponent`); never add a
+  component there otherwise. Generic Scene code reaches a component's extra data only through its `ComponentInfo` hooks
+  (`ExtraReferences`), and other modules' components through scene services. Each module
   has one registration function in its own folder (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`);
   only `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`, the composition root) calls them, once per
   process, before anything reads a registry (the entry point, `Engine/EntryPoint.h`, before it makes the application;

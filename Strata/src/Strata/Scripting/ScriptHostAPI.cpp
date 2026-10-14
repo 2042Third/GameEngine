@@ -18,6 +18,7 @@
 #include "Strata/Scripting/ScriptModule.h"
 #include "Strata/Scripting/ScriptSystem.h"
 #include "Strata/Scripting/ScriptValue.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 
 #include <glm/gtc/type_ptr.hpp>
 

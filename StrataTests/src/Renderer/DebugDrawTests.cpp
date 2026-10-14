@@ -1,7 +1,9 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Math/Math.h"
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Renderer/DebugDraw.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/SceneGizmos.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"

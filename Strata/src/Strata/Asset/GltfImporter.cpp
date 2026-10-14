@@ -2,6 +2,7 @@
 #include "Strata/Asset/GltfImporter.h"
 
 #include "Strata/Animation/AnimationClip.h"
+#include "Strata/Animation/AnimationComponents.h"
 #include "Strata/Animation/Skeleton.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/TextureImporter.h"
@@ -10,6 +11,7 @@
 #include "Strata/Math/Math.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"

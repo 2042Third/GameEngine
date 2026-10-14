@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Physics/PhysicsSystem.h"
 
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 

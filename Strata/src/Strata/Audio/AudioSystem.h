@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Asset/AssetTypes.h"
+#include "Strata/Audio/AudioComponents.h"
 #include "Strata/Core/Base.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Scene/Components.h"

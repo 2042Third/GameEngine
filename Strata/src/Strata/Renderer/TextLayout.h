@@ -1,7 +1,5 @@
 #pragma once
 
-#include "Strata/Scene/Components.h"
-
 #include <glm/glm.hpp>
 
 #include <cstdint>
@@ -12,6 +10,7 @@ namespace Strata
 {
 
 	class FontAtlas;
+	enum class TextAlignment : uint8_t; // Renderer/RendererComponents.h
 
 	struct TextGlyphQuad
 	{
