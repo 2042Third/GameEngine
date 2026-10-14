@@ -517,7 +517,8 @@ What to do:
     - at least 3 pairs of the same command;
     - single test cases (`StrataTests.exe --test-case=...`) or single editor and runtime runs;
     - judged by the ratio of the medians.
-  - Run every measurement through the machine-wide perf lock:
+  - Run every measurement through the perf lock (on the Mac `Tools/PerfLock.py`, see `mac.md`; the agents run as one
+    user):
     `/c/msys64/mingw64/bin/python.exe -I <scratch>/perf_lock.py --label <your key> -- <command> [args...]`
     - It waits up to 30 minutes for the lock, then exits 75. Do other work meanwhile.
     - It kills a command after 25 minutes (exit 124).
