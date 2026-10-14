@@ -3,6 +3,7 @@
 #include "Strata/Asset/AssetImporter.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/AssetPackWriter.h"
+#include "Strata/Core/AtomicFileWriter.h"
 #include "Strata/Core/FileWatcher.h"
 
 #include <atomic>
@@ -23,6 +24,8 @@
 
 namespace Strata
 {
+
+	struct WrittenDocument;
 
 	// How EditorAssetManager::Scan imports the assets whose cached import is missing or stale.
 	enum class ScanImports : uint8_t
@@ -278,6 +281,34 @@ namespace Strata
 		// `references` as for CreateNativeAsset.
 		bool SaveNativeAsset(AssetHandle handle, std::span<const uint8_t> data, bool reload, std::string* outError = nullptr,
 			const std::vector<AssetHandle>* references = nullptr);
+
+		//////////////////////////////////////////////////////////////////////////
+		// Documents written in the background (the editor's DocumentSaver)
+		//////////////////////////////////////////////////////////////////////////
+
+		// The file of a native asset a background job writes (ClaimDocumentWrite). While the claim lives the file watcher
+		// leaves its path alone, so a save never triggers its own reference search or reload; it keeps what background jobs
+		// share with the manager alive, so a write never depends on the manager (which may close meanwhile).
+		class DocumentWriteClaim;
+		// Reserves a path (relative to the asset directory) for a new engine-native asset (".stscene", ".stprefab", ".stmat")
+		// that a background save writes, with `handle` (e.g. a world cell's derived handle) or, for the null handle, a new
+		// one, which it returns. Until the save publishes the asset (PublishWrittenDocument) or the reservation is released,
+		// nothing else may take the path or the handle. Null, with the reason, for a path outside the asset directory or in a
+		// hidden folder, of another type, where a file or an asset is or that is reserved already, and for a handle that is
+		// built in, taken or reserved.
+		AssetHandle ReserveNativeAsset(const std::string& relativePath, AssetHandle handle = UUID::Null(), std::string* outError = nullptr);
+		// Gives up a reservation whose save failed: the path and the handle are free again.
+		void ReleaseNativeAssetReservation(AssetHandle handle);
+		// The reserved path of a handle (empty when it is not reserved).
+		std::string GetReservedPath(AssetHandle handle) const;
+		// Claims the file of an engine-native asset of the project, or of a reserved one, for a background write. Null, with
+		// the reason, for any other handle. Main thread.
+		Ref<DocumentWriteClaim> ClaimDocumentWrite(AssetHandle handle, std::string* outError = nullptr);
+		// Makes what a background write wrote (DocumentWriteClaim::Commit) the asset's state, without reading the disk: a
+		// new asset is registered with its reserved handle; an existing one takes the file's size and time (so the file
+		// watcher's report of the write is no news); both record the references the writer collected and get their stored
+		// size. Loaded copies are reloaded when asked (WrittenDocument::Reload). Releases the claim. Main thread.
+		void PublishWrittenDocument(const WrittenDocument& written);
 		// Moves or renames an asset (and its .meta) within the asset directory; the handle does not change. Never waits for
 		// an import: an import of the asset that is queued or running is cancelled before the file moves and runs again at
 		// the new place; other imports go on (the file watcher re-imports those that read the file as a dependency). Its own
@@ -574,6 +605,65 @@ namespace Strata
 		std::unordered_map<AssetHandle, std::unordered_set<AssetHandle>> m_Referencers;
 
 		std::vector<Ref<ExternalImport>> m_ExternalImports; // Not finished (main thread)
+
+		// New native assets reserved for background saves (ReserveNativeAsset); guarded by m_SourceMutex.
+		struct Reservation
+		{
+			std::string Path;
+			AssetType Type = AssetType::None;
+		};
+		std::unordered_map<AssetHandle, Reservation> m_Reservations;
+		std::unordered_map<std::string, AssetHandle> m_ReservedPaths;
+	};
+
+	class EditorAssetManager::DocumentWriteClaim
+	{
+	public:
+		~DocumentWriteClaim();
+
+		DocumentWriteClaim(const DocumentWriteClaim&) = delete;
+		DocumentWriteClaim& operator=(const DocumentWriteClaim&) = delete;
+
+		AssetHandle GetAsset() const { return m_Asset; }
+		AssetType GetType() const { return m_Type; }
+		const std::string& GetPath() const { return m_Path; } // Relative to the asset directory
+		const std::filesystem::path& GetAbsolutePath() const { return m_AbsolutePath; }
+		// A reserved asset that the write creates (with its .meta).
+		bool IsNewAsset() const { return m_New; }
+
+		// On the writing job, once the document's bytes are written: replaces the asset's file with the finished temporary file
+		// (a new asset gets its .meta first, and is refused when a file is at its place by now: nothing is overwritten) under
+		// the manager's exclusive file lock, then writes its import record (the file's size and time, `contentHash`: FNV-1a
+		// of its bytes, and `references`). Fills outWritten for PublishWrittenDocument, but for its Claim, which is the
+		// caller's to set. False, with the reason, when the file could not be replaced (the asset is then as it was).
+		bool Commit(AtomicFileWriter& file, uint64_t contentHash, std::vector<AssetHandle> references, WrittenDocument& outWritten,
+			std::string* outError = nullptr);
+		// The watcher sees the path again (the claim's destructor does it too).
+		void Release();
+	private:
+		friend class EditorAssetManager;
+		DocumentWriteClaim() = default;
+
+		Ref<BackgroundWork> m_Work;
+		AssetHandle m_Asset = UUID::Null();
+		AssetType m_Type = AssetType::None;
+		std::string m_Path;
+		std::filesystem::path m_AbsolutePath;
+		bool m_New = false;
+		std::string m_MetaText; // New assets: the .meta to write
+		bool m_Released = false;
+	};
+
+	using DocumentWriteClaim = EditorAssetManager::DocumentWriteClaim;
+
+	// What a background write of a native asset wrote (DocumentWriteClaim::Commit), for EditorAssetManager::PublishWrittenDocument.
+	struct WrittenDocument
+	{
+		Ref<DocumentWriteClaim> Claim;
+		uint64_t Size = 0;
+		int64_t Time = 0;
+		std::vector<AssetHandle> References;
+		bool Reload = false; // Loaded copies take the written version
 	};
 
 }

@@ -2217,6 +2217,23 @@ is the `strata-scripting` skill. The layers:
   windowed sessions that are not scripted; scripted runs, headless editors and tests wait in `OpenProject`, so their first
   command finds the scene). With a 1,000,000-entity start scene the window's first frame comes after 1.0 s instead of 6.8 s
   (Release; the scene follows about 7 s later, while frames go on).
+- **Background saves** (`Editor/DocumentSaver.h`). The one path that saves engine-native documents without holding a
+  frame: the main thread takes a snapshot (`Scene::Copy` with `SerializedOnly`) and submits a `DocumentSaveRequest` (the
+  snapshot, its undo `SavePoint`, a label and its items); a background job writes each item through `SceneDocumentWriter`
+  (a `SceneWriteOptions` per item: kind, entity subset, settings) or, for an item with ready `Document` bytes (a small
+  document made on the main thread), checks them with the type's loader and writes them as they are; `Update` publishes
+  the request on the main thread in one step and calls its completion. Each item goes through `AtomicFileWriter` next to
+  its target and replaces it under the asset manager's exclusive file lock (`EditorAssetManager::ClaimDocumentWrite`,
+  `DocumentWriteClaim::Commit`, which also writes a new asset's `.meta` and the import record with the references and
+  the hash the writer collected); `PublishWrittenDocument` then makes the result the asset's state without reading the
+  disk or parsing the document again (new assets are registered with the handle `ReserveNativeAsset` reserved for their
+  path, given or new; existing ones take the file's size and time, so the watcher's report of the write is no news, and
+  their recorded references). While the claim lives the file watcher leaves the path alone, so a save never triggers its
+  own reference search or reload; the claim keeps the manager's background work alive. Items fail independently (each file
+  is atomic, a failed new item gives its reservation back) and the request fails naming them. One request writes at a time;
+  a queued request for the same documents is replaced by a newer one, whose snapshot is written for both (repeated saves
+  never hold two snapshots), and both completions get its status (`WrittenID`, `SavePoint`). Replaced snapshots and the
+  written one are destroyed on background threads.
 - **Undo** (`SceneEdit.h`, `UndoStack.h`). A `SceneEditTransaction` snapshots the entities an edit touches as
   `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
   `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs

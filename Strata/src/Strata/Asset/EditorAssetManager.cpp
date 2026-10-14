@@ -195,6 +195,23 @@ namespace Strata
 			return array;
 		}
 
+		// The import record of an asset stored as its source: it only caches what the asset references, for as long as the
+		// file has this size, time and content hash.
+		nlohmann::json MakeNativeRecord(const std::string& relativePath, uint64_t size, int64_t time, uint64_t contentHash,
+			const std::vector<AssetHandle>& references)
+		{
+			nlohmann::json record = nlohmann::json::object();
+			record["Format"] = "ImportRecord";
+			record["Version"] = c_ImportRecordVersion;
+			record["Native"] = true;
+			record["Source"] = relativePath;
+			record["SourceSize"] = size;
+			record["SourceTime"] = GetRecordableTime(time);
+			record["SourceHash"] = HashToString(contentHash);
+			record["References"] = ReferencesToJson(references);
+			return record;
+		}
+
 		// nullopt when the record's list is missing or invalid (the record is then stale).
 		std::optional<std::vector<AssetHandle>> ReferencesFromJson(const nlohmann::json& record)
 		{
@@ -614,6 +631,31 @@ namespace Strata
 		// Numbers the files imports write before they publish them, so that two imports of an asset never write the same file:
 		// a cancelled import may still run beside the one that replaced it.
 		mutable std::atomic<uint64_t> NextStagingNumber = 0;
+
+		// Documents written in the background (DocumentWriteClaim), by relative path, counted: the file watcher leaves them
+		// alone until their writes are published.
+		mutable std::mutex ClaimMutex;
+		std::unordered_map<std::string, uint32_t> ClaimedPaths;
+
+		void Claim(const std::string& relativePath)
+		{
+			std::scoped_lock<std::mutex> lock(ClaimMutex);
+			ClaimedPaths[relativePath]++;
+		}
+
+		void Unclaim(const std::string& relativePath)
+		{
+			std::scoped_lock<std::mutex> lock(ClaimMutex);
+			auto it = ClaimedPaths.find(relativePath);
+			if (it != ClaimedPaths.end() && --it->second == 0)
+				ClaimedPaths.erase(it);
+		}
+
+		bool IsClaimed(const std::string& relativePath) const
+		{
+			std::scoped_lock<std::mutex> lock(ClaimMutex);
+			return ClaimedPaths.contains(relativePath);
+		}
 
 		std::filesystem::path ToAbsolute(std::string_view relativePath) const
 		{
@@ -1906,15 +1948,7 @@ namespace Strata
 			}
 			result.Scanned = true;
 
-			nlohmann::json record = nlohmann::json::object();
-			record["Format"] = "ImportRecord";
-			record["Version"] = c_ImportRecordVersion;
-			record["Native"] = true; // Stored as its source: the record only caches what it references
-			record["Source"] = relativePath;
-			record["SourceSize"] = data.size();
-			record["SourceTime"] = GetRecordableTime(sourceTime);
-			record["SourceHash"] = HashToString(Hash::FNV1a(data));
-			record["References"] = ReferencesToJson(result.References);
+			nlohmann::json record = MakeNativeRecord(relativePath, data.size(), sourceTime, Hash::FNV1a(data), result.References);
 			if (deferRecord)
 				result.Record = std::move(record);
 			else if (!FileSystem::WriteText(recordPath, JsonUtils::Dump(record, 1, '\t')))
@@ -2036,6 +2070,16 @@ namespace Strata
 			const std::filesystem::path path = change.Path.lexically_normal();
 			if (!copying.empty() && copying.contains(ToRelative(path)))
 				continue;
+			// Documents written in the background (and the .meta of a new one) are published by their writer, which records
+			// their state: what the watcher saw of the write is no news then.
+			if (!change.Directory)
+			{
+				std::filesystem::path claimed = path;
+				if (GetExtension(path) == c_MetaExtension)
+					claimed.replace_extension();
+				if (m_Work->IsClaimed(ToRelative(claimed)))
+					continue;
+			}
 			if (change.Directory)
 			{
 				ProcessFolderChange(path, change.Type);
@@ -2841,6 +2885,11 @@ namespace Strata
 			return fail(fmt::format("'{}' is not an engine asset file (.stscene, .stprefab, .stmat)", relativePath));
 		if (FileSystem::Exists(path))
 			return fail(fmt::format("'{}' already exists", relativePath));
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			if (m_ReservedPaths.contains(ToRelative(path)))
+				return fail(fmt::format("'{}' is being written", relativePath));
+		}
 
 		const AssetLoadFunction* loader = AssetLoaderRegistry::Find(importer->GetType());
 		std::string error;
@@ -2914,6 +2963,231 @@ namespace Strata
 		if (reload)
 			ReloadAsset(handle);
 		return true;
+	}
+
+	AssetHandle EditorAssetManager::ReserveNativeAsset(const std::string& relativePath, AssetHandle handle, std::string* outError)
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return UUID::Null();
+		};
+
+		const std::filesystem::path path = ToAbsolute(relativePath);
+		const std::string relative = ToRelative(path);
+		if (relative.empty())
+			return fail(fmt::format("'{}' is outside the asset directory", relativePath));
+		if (IsHiddenRelativePath(FileSystem::FromUTF8(relative)))
+			return fail(fmt::format("'{}' is in a hidden folder", relative));
+		const AssetImporter* importer = AssetImporterRegistry::FindByExtension(GetExtension(path));
+		if (!importer || !importer->StoresSourceDirectly() || GetNativeAssetExtension(importer->GetType()).empty())
+			return fail(fmt::format("'{}' is not an engine asset file (.stscene, .stprefab, .stmat)", relative));
+		if (FileSystem::Exists(path))
+			return fail(fmt::format("'{}' already exists", relative));
+		if (handle.IsValid() && BuiltinAssets::IsBuiltin(handle))
+			return fail(fmt::format("{} is the handle of a built-in asset", handle.ToString()));
+		// The registry of handles is asked before the source lock is taken (its own lock comes first elsewhere).
+		if (handle.IsValid() && IsHandleValid(handle))
+			return fail(fmt::format("The handle {} is taken", handle.ToString()));
+		if (!handle.IsValid())
+		{
+			do
+				handle = UUID();
+			while (BuiltinAssets::IsBuiltin(handle) || IsHandleValid(handle));
+		}
+
+		std::scoped_lock<std::mutex> lock(m_SourceMutex);
+		if (m_SourcesByPath.contains(relative))
+			return fail(fmt::format("'{}' is an asset already", relative));
+		if (m_ReservedPaths.contains(relative))
+			return fail(fmt::format("'{}' is being written already", relative));
+		if (m_Sources.contains(handle) || m_Reservations.contains(handle))
+			return fail(fmt::format("The handle {} is taken", handle.ToString()));
+		m_Reservations.emplace(handle, Reservation { relative, importer->GetType() });
+		m_ReservedPaths.emplace(relative, handle);
+		return handle;
+	}
+
+	void EditorAssetManager::ReleaseNativeAssetReservation(AssetHandle handle)
+	{
+		std::scoped_lock<std::mutex> lock(m_SourceMutex);
+		auto it = m_Reservations.find(handle);
+		if (it == m_Reservations.end())
+			return;
+		m_ReservedPaths.erase(it->second.Path);
+		m_Reservations.erase(it);
+	}
+
+	std::string EditorAssetManager::GetReservedPath(AssetHandle handle) const
+	{
+		std::scoped_lock<std::mutex> lock(m_SourceMutex);
+		auto it = m_Reservations.find(handle);
+		return it != m_Reservations.end() ? it->second.Path : std::string();
+	}
+
+	Ref<EditorAssetManager::DocumentWriteClaim> EditorAssetManager::ClaimDocumentWrite(AssetHandle handle, std::string* outError)
+	{
+		Ref<DocumentWriteClaim> claim(new DocumentWriteClaim());
+		claim->m_Work = m_Work;
+		claim->m_Asset = handle;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			if (auto source = m_Sources.find(handle); source != m_Sources.end() && source->second.Importer->StoresSourceDirectly())
+			{
+				claim->m_Type = source->second.Type;
+				claim->m_Path = source->second.Path;
+			}
+			else if (auto reservation = m_Reservations.find(handle); reservation != m_Reservations.end())
+			{
+				claim->m_Type = reservation->second.Type;
+				claim->m_Path = reservation->second.Path;
+				claim->m_New = true;
+			}
+			else
+			{
+				if (outError)
+					*outError = fmt::format("{} is no engine asset of the project", handle.ToString());
+				return nullptr;
+			}
+		}
+		claim->m_AbsolutePath = ToAbsolute(claim->m_Path);
+		if (claim->m_New)
+		{
+			// The sidecar the asset would get when the editor registered its file (WriteMetaFile).
+			const AssetImporter* importer = AssetImporterRegistry::FindByExtension(GetExtension(claim->m_AbsolutePath));
+			nlohmann::json meta = nlohmann::json::object();
+			meta["Strata"] = { { "Format", "AssetMeta" }, { "Version", c_MetaVersion } };
+			meta["Handle"] = UUIDToJson(handle);
+			meta["Type"] = AssetTypeToString(claim->m_Type);
+			meta["ImportSettings"] = importer ? importer->GetDefaultSettings(claim->m_AbsolutePath) : nlohmann::json::object();
+			claim->m_MetaText = JsonUtils::Dump(meta, 1, '\t') + "\n";
+		}
+		m_Work->Claim(claim->m_Path);
+		return claim;
+	}
+
+	EditorAssetManager::DocumentWriteClaim::~DocumentWriteClaim()
+	{
+		Release();
+	}
+
+	void EditorAssetManager::DocumentWriteClaim::Release()
+	{
+		if (m_Released || !m_Work)
+			return;
+		m_Released = true;
+		m_Work->Unclaim(m_Path);
+	}
+
+	bool EditorAssetManager::DocumentWriteClaim::Commit(AtomicFileWriter& file, uint64_t contentHash, std::vector<AssetHandle> references,
+		WrittenDocument& outWritten, std::string* outError)
+	{
+		auto fail = [&](std::string message)
+		{
+			file.Abort();
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+
+		std::string error;
+		if (!file.Finish(&error))
+			return fail(error);
+		{
+			// Readers of project files hold the shared lock: none has the file open while it is replaced.
+			std::unique_lock<std::shared_mutex> fileLock(m_Work->FileMutex);
+			if (m_New)
+			{
+				// Something appeared at the reserved place meanwhile: it is never overwritten.
+				if (FileSystem::Exists(m_AbsolutePath))
+					return fail(fmt::format("'{}' exists already: the new asset was not written", m_Path));
+				if (!FileSystem::WriteText(GetMetaPath(m_AbsolutePath), m_MetaText))
+					return fail(fmt::format("Could not write '{}{}'", m_Path, c_MetaExtension));
+			}
+			if (!file.Commit(&error))
+			{
+				if (m_New)
+					FileSystem::Remove(GetMetaPath(m_AbsolutePath));
+				return fail(error);
+			}
+		}
+
+		outWritten.Size = FileSystem::GetFileSize(m_AbsolutePath).value_or(file.GetBytesWritten());
+		outWritten.Time = FileSystem::GetLastWriteTime(m_AbsolutePath).value_or(0);
+		// The record is a cache: when it cannot be written, the next scan searches the document again.
+		const nlohmann::json record = MakeNativeRecord(m_Path, outWritten.Size, outWritten.Time, contentHash, references);
+		if (!FileSystem::WriteText(m_Work->GetImportRecordPath(m_Asset), JsonUtils::Dump(record, 1, '\t')))
+			ST_CORE_WARN("Could not write the import record of '{}'", m_Path);
+		outWritten.References = std::move(references);
+		return true;
+	}
+
+	void EditorAssetManager::PublishWrittenDocument(const WrittenDocument& written)
+	{
+		if (!written.Claim)
+			return;
+		const DocumentWriteClaim& claim = *written.Claim;
+		const AssetHandle handle = claim.GetAsset();
+		bool registered = false;
+		{
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			if (claim.IsNewAsset())
+			{
+				auto reservation = m_Reservations.find(handle);
+				if (reservation != m_Reservations.end())
+				{
+					m_ReservedPaths.erase(reservation->second.Path);
+					m_Reservations.erase(reservation);
+				}
+				if (!m_Sources.contains(handle) && !m_SourcesByPath.contains(claim.GetPath()))
+				{
+					SourceAsset source;
+					source.Handle = handle;
+					source.Path = claim.GetPath();
+					source.Importer = AssetImporterRegistry::FindByExtension(GetExtension(claim.GetAbsolutePath()));
+					source.Type = claim.GetType();
+					source.Settings = source.Importer ? source.Importer->GetDefaultSettings(claim.GetAbsolutePath()) : nlohmann::json::object();
+					source.Import.Imported = true; // Read as-is: nothing to import
+					source.SourceSize = written.Size;
+					source.SourceTime = written.Time;
+					m_SourcesByPath[source.Path] = handle;
+					const std::filesystem::path folder = FileSystem::FromUTF8(source.Path).parent_path();
+					if (!folder.empty())
+						AddFolderLocked(FileSystem::ToUTF8(folder));
+					AddToFolderIndex(handle, source.Path);
+					m_Sources.emplace(handle, std::move(source));
+					m_AssetIndexDirty = true;
+					registered = true;
+				}
+			}
+			else if (auto it = m_Sources.find(handle); it != m_Sources.end())
+			{
+				it->second.SourceSize = written.Size;
+				it->second.SourceTime = written.Time;
+				it->second.Import.Error.clear();
+				it->second.ReferencesGeneration++; // A search queued before found the previous contents
+			}
+		}
+		if (registered)
+		{
+			AssetMetadata metadata;
+			metadata.Handle = handle;
+			metadata.Type = claim.GetType();
+			metadata.Path = claim.GetPath();
+			metadata.Name = FileSystem::ToUTF8(claim.GetAbsolutePath().stem());
+			metadata.StoredSize = written.Size;
+			RegisterAsset(metadata);
+		}
+		else
+		{
+			SetStoredSize(handle, written.Size);
+		}
+		MarkChanged();
+		RecordReferences(handle, written.References, std::nullopt);
+		if (written.Reload && !registered)
+			ReloadAsset(handle);
+		written.Claim->Release();
 	}
 
 	bool EditorAssetManager::MoveAsset(AssetHandle handle, const std::string& newRelativePath, std::string* outError)
