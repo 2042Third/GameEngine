@@ -1,7 +1,9 @@
 #include "Editor/EditorPlacement.h"
 
 #include "Editor/EditorCamera.h"
+#include "Editor/SceneBounds.h"
 
+#include <Strata/Animation/AnimationPreview.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Renderer/Mesh.h>
 #include <Strata/Scene/Components.h>
@@ -46,7 +48,10 @@ namespace Strata
 				pending.pop_back();
 				if (const MeshRendererComponent* renderer = current.TryGetComponent<MeshRendererComponent>())
 				{
-					const AABB mesh = EditorPlacement::GetMeshBounds(renderer->Mesh);
+					// A skinned mesh in its animator's pose (the rest pose GetTemplateBounds gives the scene), as it is drawn.
+					const Ref<Mesh> loaded = current.HasComponent<SkinComponent>() ? AssetManager::GetAsset<Mesh>(renderer->Mesh) : nullptr;
+					const AABB posed = loaded ? SceneBounds::GetPosedMeshBounds(scene, current, *loaded) : AABB();
+					const AABB mesh = posed.IsValid() ? posed : EditorPlacement::GetMeshBounds(renderer->Mesh);
 					if (mesh.IsValid())
 						bounds.Expand(mesh.Transformed(scene.GetWorldTransform(current)));
 				}
@@ -116,11 +121,21 @@ namespace Strata
 			const Ref<EntityTemplate> asset = std::static_pointer_cast<EntityTemplate>(AssetManager::GetActive()->LoadAssetSync(prefab));
 			if (!asset)
 				return AABB();
-			// Made as prefab.instantiate makes it, in a scene of its own: its transforms as they will be, around the origin.
+			// Made as prefab.instantiate makes it, in a scene of its own: its transforms as they will be, around the origin, and
+			// its skinned meshes in their skeleton's rest pose, as the edited scene shows them.
 			Scene scene;
 			const std::vector<Entity> roots = asset->Instantiate(scene);
 			if (roots.empty())
 				return AABB();
+			for (const auto [handle, animator] : scene.GetRegistry().view<AnimatorComponent>().each())
+			{
+				if (animator.Skeleton.IsValid())
+					AssetManager::GetActive()->LoadAssetSync(animator.Skeleton);
+			}
+			AnimationPreviewSpecification specification;
+			specification.RestPoses = true;
+			AnimationPreview poses(scene, specification);
+			poses.Update();
 			scene.UpdateWorldTransforms();
 			AABB bounds;
 			AddSubtreeBounds(scene, roots.front(), bounds);

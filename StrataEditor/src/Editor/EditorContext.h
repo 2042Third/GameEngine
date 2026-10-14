@@ -210,8 +210,9 @@ namespace Strata
 		bool IsSceneModified() const { return m_UndoStack.IsModified(); }
 
 		const Ref<Scene>& GetEditScene() const { return m_EditScene; }
-		// The animation preview of the edited scene (animation.preview): poses its animators show while it does not play,
-		// without changing the scene. Made on first use; another edited scene starts without one. Update advances it.
+		// The animation preview of the edited scene: its animators show their skeleton's rest pose, or what animation.preview
+		// asked of them, while it does not play, without changing the scene. Made with every edited scene (another edited
+		// scene starts without requests); Update advances it.
 		AnimationPreview& GetAnimationPreview();
 		AnimationPreview* FindAnimationPreview() const { return m_AnimationPreview.get(); }
 		// The scene edits apply to: the running copy while playing, otherwise the edited scene.
@@ -521,6 +522,8 @@ namespace Strata
 		TemplateAssets GetTemplateAssets(std::string_view templateId);
 		// Frames the scene again once the meshes that were loading when it was first framed have loaded (OpenScene).
 		void UpdatePendingFrame();
+		// The edited scene's animation preview, with rest poses (m_EditScene must be the scene it serves).
+		void CreateAnimationPreview();
 		// Scenes moved (asset.move, renames): the recovery journal follows the edited scene to its new place, and recovery
 		// entries of a scene that moved are read again. Looks only when the asset manager's metadata changed.
 		void FollowSceneMoves();

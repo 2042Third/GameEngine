@@ -6,6 +6,7 @@
 #include <Strata/Renderer/Mesh.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/Scene/SceneServices.h>
 
 #include <algorithm>
 #include <cmath>
@@ -56,7 +57,8 @@ namespace Strata
 		}
 
 		// Local-space bounds of what the entity renders: its mesh (the placeholder box while the mesh loads, which is then
-		// reported in outPendingMeshes) and its world-space text. Invalid when it renders nothing.
+		// reported in outPendingMeshes; a skinned mesh in its animator's pose, its bind pose while the pose's skeleton loads,
+		// which is then reported) and its world-space text. Invalid when it renders nothing.
 		AABB GetRenderableLocalBounds(Entity entity, std::vector<AssetHandle>* outPendingMeshes)
 		{
 			AABB bounds;
@@ -64,9 +66,17 @@ namespace Strata
 			{
 				// GetAsset never blocks: it requests the load, so a later call may know the mesh.
 				Ref<Mesh> mesh = AssetManager::GetAsset<Mesh>(renderer->Mesh);
-				if (mesh && mesh->GetBounds().IsValid())
+				AssetHandle waitingSkeleton = UUID::Null();
+				const AABB posed = mesh && mesh->IsSkinned() ? SceneBounds::GetPosedMeshBounds(*entity.GetScene(), entity, *mesh, &waitingSkeleton) : AABB();
+				if (posed.IsValid())
+				{
+					bounds.Expand(posed);
+				}
+				else if (mesh && mesh->GetBounds().IsValid())
 				{
 					bounds.Expand(mesh->GetBounds());
+					if (outPendingMeshes && waitingSkeleton.IsValid())
+						outPendingMeshes->push_back(waitingSkeleton);
 				}
 				else
 				{
@@ -166,6 +176,51 @@ namespace Strata
 
 	namespace SceneBounds
 	{
+
+		AABB GetPosedMeshBounds(const Scene& scene, Entity entity, const Mesh& mesh, AssetHandle* outWaitingSkeleton)
+		{
+			const SkinComponent* skin = entity.TryGetComponent<SkinComponent>();
+			const Ref<const MeshSkinBinding>& binding = mesh.GetSkinBinding();
+			const ISkinningPoses* poses = scene.GetService<ISkinningPoses>();
+			if (!skin || !binding || !poses || !skin->Animator.IsValid())
+				return {};
+			const Entity animator = scene.GetEntityByUUID(skin->Animator);
+			if (!animator)
+				return {};
+			SkeletonPose pose;
+			if (!poses->GetPose(animator.GetHandle(), pose))
+			{
+				// The pose comes once its skeleton is in: ask for it, so that whoever measures again knows when.
+				const AnimatorComponent* component = animator.TryGetComponent<AnimatorComponent>();
+				if (component && component->Skeleton.IsValid() && outWaitingSkeleton)
+				{
+					if (AssetManagerBase* manager = scene.GetAssetManager())
+					{
+						manager->GetAsset(component->Skeleton);
+						if (manager->GetAssetState(component->Skeleton) == AssetState::Loading)
+							*outWaitingSkeleton = component->Skeleton;
+					}
+				}
+				return {};
+			}
+			if (binding->Joints.size() != binding->InverseBindMatrices.size() || binding->Joints.size() != binding->JointBounds.size())
+				return {};
+			const glm::mat4 meshWorld = GetCachedWorldTransform(scene, entity);
+			const glm::mat4 animatorWorld = GetCachedWorldTransform(scene, animator);
+			const float determinant = glm::determinant(glm::mat3(meshWorld));
+			if (!std::isfinite(determinant) || std::abs(determinant) < Scene::c_MinInvertibleDeterminant)
+				return {};
+			const glm::mat4 animatorToMesh = glm::inverse(meshWorld) * animatorWorld;
+			AABB bounds;
+			for (size_t joint = 0; joint < binding->Joints.size(); joint++)
+			{
+				const uint16_t skeletonJoint = binding->Joints[joint];
+				if (skeletonJoint >= pose.Joints.size())
+					return {};
+				bounds.Expand(binding->JointBounds[joint].Transformed(animatorToMesh * pose.Joints[skeletonJoint] * binding->InverseBindMatrices[joint]));
+			}
+			return bounds;
+		}
 
 		AABB GetEntityBounds(Scene& scene, Entity entity, bool includeDescendants)
 		{

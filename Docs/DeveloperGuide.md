@@ -1412,7 +1412,7 @@ and `AudioSystem`, the built-in "Audio" scene system.
   thumbnail every frame it is on screen (`Request`) and draw the type's icon until it is ready. Textures come from their
   mip tail by byte range (never a load), materials, meshes, models and prefabs are rendered one at a time offscreen and
   read back without stalling, once the textures they draw streamed in the levels the render needs (a bounded wait,
-  `MaxMipWaitFrames`); PNG files in `<project>/.strata/Thumbnails`, keyed by the content stamps of the asset and
+  `MaxMipWaitFrames`) and their skinned meshes stand in their skeleton's rest pose (the scene's own `AnimationPreview`); PNG files in `<project>/.strata/Thumbnails`, keyed by the content stamps of the asset and
   its dependencies (`EditorAssetManager::GetContentStamp`), carry them across sessions. Bump `ThumbnailCache::c_Version`
   when thumbnails would look different. The Asset tab shows a preview rendered at the pixels it covers
   (`RequestPreview`; the thumbnail stands in until it is ready), a model's summary and an audio clip's waveform with Play and Stop on a
@@ -1623,7 +1623,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   | entity}` (a model's skeleton and clips, a skeleton's joints, a clip's channels, a controller's graph; an animator's
   assets and, while playing, its state and parameters) and `animation.preview {entity, state?, clip?, time?, stop?}`:
   poses of the edited scene's animators through the `EditorContext`'s `AnimationPreview` (the edited scene's
-  `ISkinningPoses` while it does not play; attachments are drawn at their joints through render transforms), which change
+  `ISkinningPoses` while it does not play, made with every edited scene: animators no request poses show their skeleton's
+  rest pose, so skinned characters stand as in play before their first animation; attachments are drawn at their joints
+  through render transforms), which change
   no scene data and are dropped with the scene; the command answers once its own request's pose shows, and the viewport
   names the previews in a chip whose click stops them (`ViewportPanel::DrawPreviewChip`), so a pose is never taken for
   scene data. The Asset tab

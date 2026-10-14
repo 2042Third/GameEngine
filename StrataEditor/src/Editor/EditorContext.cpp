@@ -135,6 +135,7 @@ namespace Strata
 		// still has, which scans find by their handles wherever they moved.
 		m_UndoStack.SetObserver(&m_Recovery);
 		m_Recovery.BeginScene(*m_EditScene, UUID::Null(), {}, {});
+		CreateAnimationPreview();
 		m_Recovery.SetEntryValidator([this](const RecoveryEntry& entry) -> std::string
 		{
 			if (!entry.Scene.IsValid())
@@ -403,6 +404,7 @@ namespace Strata
 		m_PendingFrame.reset();
 		m_AnimationPreview.reset(); // Of the scene that goes, which it refers to: before the scene is released
 		Ref<Scene> previous = std::exchange(m_EditScene, std::move(scene));
+		CreateAnimationPreview();
 		m_SceneHandle = handle;
 		ClearSelection();
 		m_UndoStack.Clear();
@@ -1758,10 +1760,18 @@ namespace Strata
 		}
 	}
 
+	void EditorContext::CreateAnimationPreview()
+	{
+		// Skinned characters stand in their rest pose while the scene is edited, as they do in play before their first
+		// animation; the scene's animators are found through their component's signals from here on.
+		AnimationPreviewSpecification specification;
+		specification.RestPoses = true;
+		m_AnimationPreview = CreateScope<AnimationPreview>(*m_EditScene, specification);
+	}
+
 	AnimationPreview& EditorContext::GetAnimationPreview()
 	{
-		if (!m_AnimationPreview)
-			m_AnimationPreview = CreateScope<AnimationPreview>(*m_EditScene);
+		ST_CORE_ASSERT(m_AnimationPreview, "The edited scene has its animation preview from the start");
 		return *m_AnimationPreview;
 	}
 

@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Animation/SkinnedArmModel.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
@@ -13,6 +14,7 @@
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Math/Math.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/RenderScene.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneSerializer.h>
 
@@ -793,5 +795,56 @@ TEST_SUITE("Editor.Viewport")
 		// Seen from where the game's camera looks: straight along -Z.
 		CHECK(camera.GetYaw() == doctest::Approx(0.0f));
 		CHECK(camera.GetPitch() == doctest::Approx(0.0f));
+	}
+
+	TEST_CASE("Skinned models are measured standing in their rest pose: bounds, dropping to the ground and framing")
+	{
+		ViewportHarness harness;
+		// The Z-up arm: in its bind pose it lies along +Z; its skeleton stands it up along +Y from 0 to 2.
+		AssetManagerBase& manager = *AssetManager::GetActive();
+		const Tests::ImportedArm arm = Tests::ImportSkinnedArm(manager, Tests::ZUpArmOptions(), 0xB0B0'0001ull);
+		AssetMetadata metadata;
+		metadata.Handle = arm.Handle;
+		metadata.Name = "Arm";
+		manager.AddMemoryAsset(arm.ArmModel, metadata);
+		const std::string id = harness.Run("prefab.instantiate", { { "prefab", UUIDToJson(arm.Handle) } })["id"].get<std::string>();
+		// The edited scene's preview poses the new animator in the next frame.
+		harness.Context.Update(Timestep(1.0f / 60.0f));
+		Scene& scene = *harness.Context.GetEditScene();
+		const Entity root = scene.GetEntityByUUID(*UUIDFromJson(nlohmann::json(id)));
+		REQUIRE(root);
+		Entity mesh;
+		for (Entity child : root.GetChildren())
+		{
+			if (child.HasComponent<SkinComponent>())
+				mesh = child;
+		}
+		REQUIRE(mesh);
+
+		const AABB bounds = SceneBounds::GetEntityBounds(scene, root);
+		REQUIRE(bounds.IsValid());
+		CHECK(Near(bounds.Min, glm::vec3(-0.1f, 0.0f, -0.1f), 1e-4f));
+		CHECK(Near(bounds.Max, glm::vec3(0.1f, 2.0f, 0.1f), 1e-4f));
+		// The renderer bounds the posed proxy the same way.
+		RenderScene& renderScene = RenderScene::Get(scene);
+		renderScene.Sync(AssetManager::GetActive());
+		const uint32_t proxy = renderScene.FindProxy(mesh.GetHandle());
+		REQUIRE(proxy != RenderScene::c_InvalidIndex);
+		CHECK((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0);
+		CHECK(Near(renderScene.GetWorldBounds(proxy).Min, bounds.Min, 1e-4f));
+		CHECK(Near(renderScene.GetWorldBounds(proxy).Max, bounds.Max, 1e-4f));
+
+		// Lifted above a floor whose top is y = 0, it drops onto its lowest point.
+		harness.Run("entity.create", { { "name", "Floor" }, { "components", {
+			{ "Transform", { { "Translation", { 0, -0.5, 0 } }, { "Scale", { 20, 1, 20 } } } },
+			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } });
+		harness.Run("component.set", { { "entity", id }, { "component", "Transform" }, { "values", { { "Translation", { 0, 3, 0 } } } } });
+		harness.Run("entity.dropToGround", { { "entities", { id } } });
+		CHECK(root.GetComponent<TransformComponent>().Translation.y == doctest::Approx(0.0f).epsilon(1e-4));
+		CHECK(SceneBounds::GetEntityBounds(scene, root).Min.y == doctest::Approx(0.0f).epsilon(1e-4));
+
+		// Framed upright: the view's target is the arm's middle, a unit above the floor.
+		const nlohmann::json camera = harness.Run("camera.focus", { { "entities", { id } } });
+		CHECK(Near(ToVec3(camera["target"]), glm::vec3(0.0f, 1.0f, 0.0f), 1e-3f));
 	}
 }

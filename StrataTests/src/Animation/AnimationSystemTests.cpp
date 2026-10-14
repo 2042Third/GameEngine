@@ -1,11 +1,13 @@
 #include <doctest/doctest.h>
 
 #include "Animation/AnimationTestUtils.h"
+#include "Animation/SkinnedArmModel.h"
 #include "Animation/SkinnedMeshTestUtils.h"
 #include "Asset/AssetTestUtils.h"
 #include "Scene/SceneTestUtils.h"
 #include "Strata/Animation/AnimationPreview.h"
 #include "Strata/Animation/AnimationSystem.h"
+#include "Strata/Animation/RestPose.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Reflection/PropertyJson.h"
@@ -1353,6 +1355,175 @@ TEST_SUITE("Animation.Preview")
 			CHECK(preview.GetStatus(rig) == AnimationPreview::Status::Waiting);
 			preview.Update();
 			CHECK(preview.GetStatus(rig) == AnimationPreview::Status::Posed);
+		}
+		AssetManager::SetActive(nullptr);
+	}
+
+	TEST_CASE("Rest poses are what animators evaluate with nothing playing, whatever orients the skeleton")
+	{
+		const struct
+		{
+			const char* Name;
+			SkinnedArmOptions Options;
+		} arms[] = { { "Y-up", SkinnedArmOptions() }, { "Z-up", ZUpArmOptions() }, { "Mixamo-like", MixamoArmOptions() } };
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		AssetManager::SetActive(manager);
+		uint64_t handle = 0xA2A2A2A2'0000ull;
+		for (const auto& arm : arms)
+		{
+			CAPTURE(arm.Name);
+			const ImportedArm imported = ImportSkinnedArm(*manager, arm.Options, ++handle);
+			Scene scene("Rest");
+			const std::vector<Entity> roots = imported.ArmModel->Instantiate(scene);
+			REQUIRE(roots.size() == 1);
+			REQUIRE(roots[0].HasComponent<AnimatorComponent>());
+			AnimationPreviewSpecification specification;
+			specification.RestPoses = true;
+			AnimationPreview preview(scene, specification);
+			preview.Update();
+			SkeletonPose pose;
+			REQUIRE(preview.GetPose(roots[0].GetHandle(), pose));
+
+			// Bit for bit what play mode shows before an animation plays.
+			const Ref<Skeleton> skeleton = manager->GetAsset<Skeleton>(imported.Skeleton);
+			REQUIRE(skeleton);
+			AnimatorInstance instance;
+			AnimatorAssets assets;
+			assets.SkeletonAsset = skeleton.get();
+			std::vector<JointPose> scratch;
+			std::vector<glm::mat4> evaluated;
+			REQUIRE(instance.Evaluate(assets, AnimatorSettings(), scratch, evaluated));
+			REQUIRE(evaluated.size() == pose.Joints.size());
+			CHECK(std::memcmp(evaluated.data(), pose.Joints.data(), evaluated.size() * sizeof(glm::mat4)) == 0);
+
+			// The joints above the skin orient it: the wrist stands 2 units up the animator's +Y, whatever the armature does.
+			const glm::vec3 wrist = glm::vec3(pose.Joints[skeleton->FindJoint("Wrist")][3]);
+			CHECK(wrist.x == doctest::Approx(0.0f).epsilon(1e-5));
+			CHECK(wrist.y == doctest::Approx(2.0f).epsilon(1e-5));
+			CHECK(wrist.z == doctest::Approx(0.0f).epsilon(1e-5));
+		}
+		AssetManager::SetActive(nullptr);
+	}
+
+	TEST_CASE("Rest poses are computed once per skeleton and again only for a reimport, looking at changed animators only")
+	{
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		AssetManager::SetActive(manager);
+		AddAnimationTestAssets(*manager, true);
+		{
+			Scene scene("Rest");
+			std::vector<Entity> animators;
+			for (int index = 0; index < 1000; index++)
+			{
+				Entity entity = scene.CreateEntity(fmt::format("Rig {}", index));
+				entity.AddComponent<AnimatorComponent>().Skeleton = UUID(c_SkeletonHandle);
+				animators.push_back(entity);
+			}
+			AnimationPreviewSpecification specification;
+			specification.RestPoses = true;
+			AnimationPreview preview(scene, specification);
+			preview.Update();
+			// A thousand animators of one skeleton: one rest pose, one request, shared by all.
+			CHECK(preview.GetStats().RestPosesComputed == 1);
+			CHECK(preview.GetStats().AssetRequests == 1);
+			CHECK(preview.GetStats().AnimatorsExamined == 1000);
+			CHECK_FALSE(preview.HasWaitingRestPoses());
+			SkeletonPose first;
+			SkeletonPose last;
+			REQUIRE(preview.GetPose(animators.front().GetHandle(), first));
+			REQUIRE(preview.GetPose(animators.back().GetHandle(), last));
+			CHECK(first.Joints.data() == last.Joints.data());
+			CHECK(glm::vec3(first.Joints[2][3]) == glm::vec3(0.0f, 2.0f, 0.0f));
+
+			// Nothing changed: no pose computed, no asset requested, no animator looked at, the poses' version kept.
+			const AnimationPreviewStats before = preview.GetStats();
+			const uint64_t posesVersion = preview.GetPosesVersion();
+			for (int update = 0; update < 3; update++)
+				preview.Update();
+			CHECK(preview.GetStats().RestPosesComputed == before.RestPosesComputed);
+			CHECK(preview.GetStats().AssetRequests == before.AssetRequests);
+			CHECK(preview.GetStats().AnimatorsExamined == before.AnimatorsExamined);
+			CHECK(preview.GetPosesVersion() == posesVersion);
+
+			// An eviction keeps the matrices: they are data, not the asset.
+			manager->UnloadAsset(UUID(c_SkeletonHandle));
+			preview.Update();
+			CHECK(preview.GetStats().RestPosesComputed == before.RestPosesComputed);
+			CHECK(preview.GetStats().AssetRequests == before.AssetRequests);
+			REQUIRE(preview.GetPose(animators.front().GetHandle(), first));
+			CHECK(preview.GetPosesVersion() == posesVersion);
+
+			// Adding, changing and removing one animator looks at that animator only.
+			Entity added = scene.CreateEntity("Added");
+			added.AddComponent<AnimatorComponent>().Skeleton = UUID(c_SkeletonHandle);
+			preview.Update();
+			CHECK(preview.GetStats().AnimatorsExamined == before.AnimatorsExamined + 1);
+			SkeletonPose addedPose;
+			REQUIRE(preview.GetPose(added.GetHandle(), addedPose));
+			CHECK(addedPose.Version == first.Version);
+			added.GetComponent<AnimatorComponent>().Speed = 2.0f;
+			added.MarkModified<AnimatorComponent>();
+			preview.Update();
+			CHECK(preview.GetStats().AnimatorsExamined == before.AnimatorsExamined + 2);
+			CHECK(preview.GetStats().RestPosesComputed == before.RestPosesComputed);
+			added.RemoveComponent<AnimatorComponent>();
+			preview.Update();
+			CHECK(preview.GetStats().AnimatorsExamined == before.AnimatorsExamined + 3);
+			CHECK_FALSE(preview.GetPose(added.GetHandle(), addedPose));
+
+			// A reimport (the skeleton's source changed: a longer elbow) poses its animators again, once.
+			std::vector<JointPose> rest(3);
+			rest[1].Translation = glm::vec3(0.0f, 1.5f, 0.0f);
+			rest[2].Translation = glm::vec3(0.0f, 1.0f, 0.0f);
+			std::string error;
+			const Ref<Skeleton> longer = Skeleton::Create({ "Shoulder", "Elbow", "Wrist" }, { c_NoJoint, 0, 1 }, rest, c_NoJoint, &error);
+			REQUIRE_MESSAGE(longer, error);
+			manager->SetStoredData(UUID(c_SkeletonHandle), longer->Serialize());
+			manager->ReloadAsset(UUID(c_SkeletonHandle));
+			preview.Update();
+			REQUIRE(manager->WaitForPendingLoads());
+			for (int update = 0; update < 3; update++)
+				preview.Update();
+			CHECK(preview.GetStats().RestPosesComputed == before.RestPosesComputed + 1);
+			REQUIRE(preview.GetPose(animators.back().GetHandle(), last));
+			CHECK(glm::vec3(last.Joints[2][3]) == glm::vec3(0.0f, 2.5f, 0.0f));
+			CHECK(last.Version != first.Version);
+			CHECK(preview.GetPosesVersion() != posesVersion);
+		}
+		AssetManager::SetActive(nullptr);
+	}
+
+	TEST_CASE("A preview request wins over the rest pose, which shows again once the request is cleared")
+	{
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		AssetManager::SetActive(manager);
+		AddAnimationTestAssets(*manager, true);
+		{
+			Scene scene("Rest");
+			Entity rig = scene.CreateEntity("Rig");
+			AnimatorComponent& animator = rig.AddComponent<AnimatorComponent>();
+			animator.Skeleton = UUID(c_SkeletonHandle);
+			animator.Clip = UUID(c_WaveHandle);
+			AnimationPreviewSpecification specification;
+			specification.RestPoses = true;
+			AnimationPreview preview(scene, specification);
+			preview.Update();
+			SkeletonPose pose;
+			REQUIRE(preview.GetPose(rig.GetHandle(), pose));
+			const uint64_t rest = pose.Version;
+			CHECK(ElbowDegrees(pose.Joints[1]) == doctest::Approx(0.0f).epsilon(1e-3));
+
+			AnimationPreview::Request request;
+			request.Time = 0.5f;
+			REQUIRE(preview.Set(rig, request));
+			preview.Update();
+			REQUIRE(preview.GetPose(rig.GetHandle(), pose));
+			CHECK(pose.Version != rest);
+			CHECK(ElbowDegrees(pose.Joints[1]) == doctest::Approx(90.0f).epsilon(1e-3));
+
+			REQUIRE(preview.Clear(rig));
+			REQUIRE(preview.GetPose(rig.GetHandle(), pose));
+			CHECK(pose.Version == rest);
 		}
 		AssetManager::SetActive(nullptr);
 	}

@@ -3,6 +3,7 @@
 
 #include "Strata/Animation/AnimationClip.h"
 #include "Strata/Animation/AnimationController.h"
+#include "Strata/Animation/RestPose.h"
 #include "Strata/Animation/Skeleton.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Scene/Components.h"
@@ -36,16 +37,42 @@ namespace Strata
 
 	}
 
-	AnimationPreview::AnimationPreview(Scene& scene)
-		: m_Scene(scene)
+	AnimationPreview::AnimationPreview(Scene& scene, const AnimationPreviewSpecification& specification)
+		: m_Scene(scene), m_Specification(specification)
 	{
 		m_Registered = m_Scene.RegisterService<ISkinningPoses>(*this);
+		entt::registry& registry = m_Scene.GetRegistry();
+		m_Connections.push_back(registry.on_construct<AttachToJointComponent>().connect<&AnimationPreview::OnAttachmentsChanged>(*this));
+		m_Connections.push_back(registry.on_update<AttachToJointComponent>().connect<&AnimationPreview::OnAttachmentsChanged>(*this));
+		m_Connections.push_back(registry.on_destroy<AttachToJointComponent>().connect<&AnimationPreview::OnAttachmentsChanged>(*this));
+		m_Connections.push_back(registry.on_construct<MeshRendererComponent>().connect<&AnimationPreview::OnAttachmentsChanged>(*this));
+		m_Connections.push_back(registry.on_destroy<MeshRendererComponent>().connect<&AnimationPreview::OnAttachmentsChanged>(*this));
+		if (!m_Specification.RestPoses)
+			return;
+		m_Connections.push_back(registry.on_construct<AnimatorComponent>().connect<&AnimationPreview::OnAnimatorChanged>(*this));
+		m_Connections.push_back(registry.on_update<AnimatorComponent>().connect<&AnimationPreview::OnAnimatorChanged>(*this));
+		m_Connections.push_back(registry.on_destroy<AnimatorComponent>().connect<&AnimationPreview::OnAnimatorChanged>(*this));
+		// The animators the scene has already; later ones arrive through the signals.
+		for (const entt::entity handle : registry.view<AnimatorComponent>())
+			m_DirtyAnimators.push_back(handle);
 	}
 
 	AnimationPreview::~AnimationPreview()
 	{
+		for (entt::connection& connection : m_Connections)
+			connection.release();
 		if (m_Registered)
 			m_Scene.UnregisterService<ISkinningPoses>(*this);
+	}
+
+	void AnimationPreview::OnAnimatorChanged(entt::registry&, entt::entity entity)
+	{
+		m_DirtyAnimators.push_back(entity);
+	}
+
+	void AnimationPreview::OnAttachmentsChanged(entt::registry&, entt::entity)
+	{
+		m_AttachmentsRevision++;
 	}
 
 	bool AnimationPreview::Set(Entity animator, const Request& request, std::string* outError)
@@ -61,6 +88,7 @@ namespace Strata
 		if (!std::isfinite(request.Time) || request.Time < 0.0f)
 			return fail("the time must be finite and not negative");
 		Entry& entry = m_Entries[animator.GetHandle()];
+		m_RequestsRevision++;
 		entry.Asked = request;
 		entry.Dirty = true;
 		// Posed only once this request's pose is computed; an earlier pose keeps showing meanwhile (Version and Pose stay).
@@ -77,6 +105,7 @@ namespace Strata
 		if (it->second.Version != 0)
 			m_PosesVersion++;
 		m_Entries.erase(it);
+		m_RequestsRevision++;
 		UpdateRenderTransforms();
 		return true;
 	}
@@ -84,7 +113,10 @@ namespace Strata
 	void AnimationPreview::ClearAll()
 	{
 		if (!m_Entries.empty())
+		{
 			m_PosesVersion++;
+			m_RequestsRevision++;
+		}
 		m_Entries.clear();
 		UpdateRenderTransforms();
 	}
@@ -127,9 +159,134 @@ namespace Strata
 
 	void AnimationPreview::Update()
 	{
+		AssetManagerBase* manager = m_Scene.GetAssetManager();
+		if (m_Specification.RestPoses && manager)
+			UpdateRestPoses(*manager);
 		for (auto& [handle, entry] : m_Entries)
-			UpdateEntry(handle, entry);
+			UpdateEntry(manager, handle, entry);
 		UpdateRenderTransforms();
+	}
+
+	void AnimationPreview::SetRestPoseState(RestPose& pose, RestPose::State state)
+	{
+		if (pose.Status == RestPose::State::Waiting && state != RestPose::State::Waiting)
+			m_WaitingRestPoses--;
+		else if (pose.Status != RestPose::State::Waiting && state == RestPose::State::Waiting)
+			m_WaitingRestPoses++;
+		pose.Status = state;
+	}
+
+	void AnimationPreview::ReleaseRestPose(AssetHandle skeleton)
+	{
+		auto it = m_RestPoses.find(skeleton);
+		if (it == m_RestPoses.end() || --it->second.Animators > 0)
+			return;
+		SetRestPoseState(it->second, RestPose::State::Ready); // Counts as waiting no more
+		m_RestPoses.erase(it);
+	}
+
+	void AnimationPreview::ExamineAnimator(entt::entity handle)
+	{
+		m_Stats.AnimatorsExamined++;
+		const entt::registry& registry = m_Scene.GetRegistry();
+		const AnimatorComponent* component = registry.valid(handle) ? registry.try_get<AnimatorComponent>(handle) : nullptr;
+		const AssetHandle skeleton = component ? component->Skeleton : AssetHandle(UUID::Null());
+		auto it = m_RestAnimators.find(handle);
+		const AssetHandle previous = it != m_RestAnimators.end() ? it->second : AssetHandle(UUID::Null());
+		if (previous == skeleton)
+			return;
+		// What the animator shows changes (a request still wins over it).
+		m_PosesVersion++;
+		if (previous.IsValid())
+		{
+			m_RestAnimators.erase(it);
+			ReleaseRestPose(previous);
+		}
+		if (!skeleton.IsValid())
+			return;
+		m_RestAnimators.emplace(handle, skeleton);
+		auto [pose, added] = m_RestPoses.try_emplace(skeleton);
+		pose->second.Animators++;
+		if (added)
+			m_WaitingRestPoses++; // A new entry starts out waiting for its skeleton
+	}
+
+	void AnimationPreview::UpdateRestPoses(AssetManagerBase& manager)
+	{
+		// Animators that were added, removed or changed since the last update; each once.
+		if (!m_DirtyAnimators.empty())
+		{
+			std::sort(m_DirtyAnimators.begin(), m_DirtyAnimators.end());
+			m_DirtyAnimators.erase(std::unique(m_DirtyAnimators.begin(), m_DirtyAnimators.end()), m_DirtyAnimators.end());
+			for (const entt::entity handle : m_DirtyAnimators)
+				ExamineAnimator(handle);
+			m_DirtyAnimators.clear();
+		}
+
+		// Skeletons whose source changed (a reimport) are posed again; loads and evictions change nothing.
+		const uint64_t contentVersion = manager.GetContentVersion();
+		if (contentVersion != m_ContentVersion && !m_RestPoses.empty())
+		{
+			m_ContentChanges.clear();
+			const bool known = manager.GetContentChanges(m_ContentVersion, m_ContentChanges);
+			auto check = [this, &manager](AssetHandle handle, RestPose& pose)
+			{
+				if (pose.Status == RestPose::State::Waiting || manager.GetSourceRevisions(handle).Current == pose.SourceRevision)
+					return;
+				SetRestPoseState(pose, RestPose::State::Waiting);
+			};
+			if (known)
+			{
+				for (const AssetHandle handle : m_ContentChanges)
+				{
+					if (auto it = m_RestPoses.find(handle); it != m_RestPoses.end())
+						check(handle, it->second);
+				}
+			}
+			else
+			{
+				for (auto& [handle, pose] : m_RestPoses)
+					check(handle, pose);
+			}
+		}
+		m_ContentVersion = contentVersion;
+
+		if (m_WaitingRestPoses == 0)
+			return;
+		for (auto& [handle, pose] : m_RestPoses)
+		{
+			if (pose.Status != RestPose::State::Waiting)
+				continue;
+			m_Stats.AssetRequests++;
+			const Ref<Asset> asset = manager.GetAsset(handle);
+			const AssetSourceRevisions revisions = manager.GetSourceRevisions(handle);
+			if (!asset || revisions.Loaded != revisions.Current)
+			{
+				// Still loading, or the previous version is loaded while the reimported one loads.
+				if (!asset && manager.GetAssetState(handle) != AssetState::Loading)
+				{
+					SetRestPoseState(pose, RestPose::State::Failed);
+					if (pose.Version != 0)
+					{
+						pose.Model.clear();
+						pose.Version = 0;
+						m_PosesVersion++;
+					}
+				}
+				continue;
+			}
+			if (asset->GetType() != AssetType::Skeleton)
+			{
+				SetRestPoseState(pose, RestPose::State::Failed);
+				continue;
+			}
+			ComputeRestPose(static_cast<const Skeleton&>(*asset), pose.Model);
+			pose.Version = m_NextVersion++;
+			pose.SourceRevision = revisions.Loaded;
+			SetRestPoseState(pose, RestPose::State::Ready);
+			m_Stats.RestPosesComputed++;
+			m_PosesVersion++;
+		}
 	}
 
 	std::optional<glm::mat4> AnimationPreview::GetAttachmentWorld(Entity entity, const AttachToJointComponent& attachment) const
@@ -153,6 +310,13 @@ namespace Strata
 
 	void AnimationPreview::UpdateRenderTransforms()
 	{
+		// Attachments are placed by requests only (the importer put them at the rest pose already), so nothing to do unless
+		// the requests, their poses or what the attachments hang from changed.
+		const RenderInputs inputs { m_PosesVersion, m_Scene.GetTransformsVersion(), m_Scene.GetHierarchyVersion(), m_RequestsRevision,
+			m_AttachmentsRevision };
+		if (inputs == m_RenderInputs)
+			return;
+		m_RenderInputs = inputs;
 		std::vector<RenderTransform> transforms;
 		bool posed = false;
 		for (const auto& [handle, entry] : m_Entries)
@@ -206,7 +370,7 @@ namespace Strata
 		m_RenderTransformsVersion++;
 	}
 
-	void AnimationPreview::UpdateEntry(entt::entity handle, Entry& entry)
+	void AnimationPreview::UpdateEntry(AssetManagerBase* manager, entt::entity handle, Entry& entry)
 	{
 		const Entity entity(handle, &m_Scene);
 		const AnimatorComponent* component = entity.IsValid() ? entity.TryGetComponent<AnimatorComponent>() : nullptr;
@@ -229,7 +393,6 @@ namespace Strata
 		if (entry.State == Status::Failed && !entry.Dirty)
 			return;
 
-		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
 		if (!manager)
 		{
 			Fail(entry, "no asset manager is active");
@@ -380,11 +543,21 @@ namespace Strata
 
 	bool AnimationPreview::GetPose(entt::entity animator, SkeletonPose& outPose) const
 	{
-		auto it = m_Entries.find(animator);
-		if (it == m_Entries.end() || it->second.Version == 0)
+		// A request's pose wins; without one (or before its first pose), the skeleton's rest pose.
+		if (auto it = m_Entries.find(animator); it != m_Entries.end() && it->second.Version != 0)
+		{
+			outPose.Joints = it->second.Pose;
+			outPose.Version = it->second.Version;
+			return true;
+		}
+		const auto animatorIt = m_RestAnimators.find(animator);
+		if (animatorIt == m_RestAnimators.end())
 			return false;
-		outPose.Joints = it->second.Pose;
-		outPose.Version = it->second.Version;
+		const auto pose = m_RestPoses.find(animatorIt->second);
+		if (pose == m_RestPoses.end() || pose->second.Version == 0)
+			return false;
+		outPose.Joints = pose->second.Model;
+		outPose.Version = pose->second.Version;
 		return true;
 	}
 

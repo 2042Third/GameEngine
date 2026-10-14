@@ -10,10 +10,12 @@
 namespace Strata
 {
 
+	class Mesh;
 	class Scene;
 
 	// World-space bounds of scene content for framing the editor camera. Bounds cover what renders: mesh renderers and
-	// world-space text. Content that renders nothing (cameras, lights, empty entities, screen-space text) only counts
+	// world-space text. Skinned meshes are measured in their animator's pose where the scene has one (its ISkinningPoses:
+	// the editor's rest poses and previews, the animation system while it plays), as the renderer bounds them. Content that renders nothing (cameras, lights, empty entities, screen-space text) only counts
 	// when nothing in the measured set renders, as a placeholder box around each entity's origin, so a selected light
 	// can still be framed; entities and selections (not the whole scene) that render nothing but have a physical shape (a
 	// character controller's capsule, colliders) are framed by that shape first.
@@ -33,8 +35,17 @@ namespace Strata
 		AABB GetEntitiesBounds(Scene& scene, std::span<const Entity> entities);
 		// Bounds of the renderable content of every entity that is active in the hierarchy, or of the placeholder boxes
 		// of all of them when nothing renders; invalid for a scene without active entities. outPendingMeshes receives the
-		// meshes that were still loading (their placeholder boxes stood in for them).
+		// meshes that were still loading (their placeholder boxes stood in for them) and the skeletons of skinned meshes whose
+		// pose was not there yet (their bind pose stood in): measure again once none of them is loading.
 		AABB GetSceneBounds(Scene& scene, std::vector<AssetHandle>* outPendingMeshes = nullptr);
+
+		// The bounds of a skinned mesh renderer's mesh in its animator's pose, in the entity's local space: each skin joint's
+		// bounds through its pose (MeshSkinBinding::JointBounds[j] transformed by animatorToMesh * pose[Joints[j]] *
+		// InverseBindMatrices[j], the expression RenderScene::ComputePalette bounds proxies with). Uses the cached world
+		// transforms. Invalid when it is not posed: no SkinComponent, a mesh without a skin, no animator or no pose for it
+		// in the scene's ISkinningPoses. outWaitingSkeleton receives the animator's skeleton when the scene has poses but none
+		// for it yet (the skeleton loads; it is requested).
+		AABB GetPosedMeshBounds(const Scene& scene, Entity entity, const Mesh& mesh, AssetHandle* outWaitingSkeleton = nullptr);
 
 	}
 

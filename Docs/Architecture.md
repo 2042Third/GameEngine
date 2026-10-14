@@ -1646,8 +1646,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   like every draw, and draw with the skinned variants of the mesh and shadow vertex shaders (`Scene/MeshSkinned.vert`,
   `ShadowMeshSkinned.vert`: `ST_SKINNED`), which blend the palette entries of a vertex's four influences (the mesh's
   skin stream, vertex buffer 2) before the instance's world transform, in the prepass (entity IDs and normals), the
-  forward passes and the shadow cascades. Without a pose (no animator, nothing playing) a Skin proxy shows its bind pose
-  through the ordinary pipelines. Every influence names a joint of the skin, also those without weight (the shaders read
+  forward passes and the shadow cascades. Without a pose (no animator, no provider) a Skin proxy shows its bind pose
+  through the ordinary pipelines; the editor's scenes always have one (their rest poses, see Animation, "Previews"). Every influence names a joint of the skin, also those without weight (the shaders read
   all four palette entries; `Mesh::CreateSkinned` refuses others). Renderers report the animators of the Skin proxies in
   their view (`ISkinningPoses::ReportVisible`), which animators that animate only while seen read, and of the shadow
   casters out of view whose shadows can fall on what the view shows (`SceneRenderer::CanShadowView`: the caster's box
@@ -1824,14 +1824,30 @@ system, not to entities: a character's joints add no entities and no transform c
   the last one, of an entity nobody moved since, writes nothing.
 - **Skinning** is the renderer's: `RenderScene` turns the poses of `ISkinningPoses` into palettes and posed bounds, and
   the vertex shaders blend them (see [Render scene](#render-scene), "Skinned proxies").
-- **Previews** (`AnimationPreview`): a scene that does not play has no animation system, so its skinned meshes show
-  their bind pose. A preview offers `ISkinningPoses` for such a scene and poses the animators asked for (a state, a clip
-  or what they play on start, at a time; `AnimatorSettings::Transitions` off, so the state machine holds it) once their
-  assets arrive, again when the request, the component's assets or an asset object (a reload) change; a request is
-  `Posed` only once its own pose is computed (an earlier pose shows meanwhile). Nothing in the scene changes: the
-  attachments of posed animators, and the mesh renderers under them, are drawn at their joints through render transforms
-  (`ISkinningPoses::GetRenderTransforms`, see [Render scene](#render-scene)), computed each update from the scene's
-  transforms. The editor keeps one for its edited scene (`EditorContext::GetAnimationPreview`, `animation.preview`).
+- **Previews** (`AnimationPreview`): a scene that does not play has no animation system, so without a provider its
+  skinned meshes would show their bind pose: the mesh's vertices as stored, without the skeleton's rest pose and the
+  joints above the skin that orient it (a glTF file's `Z_UP` node, a Mixamo `Armature` rotated and scaled), lying along
+  an axis of the ground. A preview offers `ISkinningPoses` for such a scene and poses the animators asked for (a state, a
+  clip or what they play on start, at a time; `AnimatorSettings::Transitions` off, so the state machine holds it) once
+  their assets arrive, again when the request, the component's assets or an asset object (a reload) change; a request is
+  `Posed` only once its own pose is computed (an earlier pose shows meanwhile). With
+  `AnimationPreviewSpecification::RestPoses` every other animator shows its skeleton's rest pose (`Animation/RestPose.h`,
+  `ComputeRestPose`, which `AnimatorInstance::Evaluate` gives with nothing playing too, so edit and play mode cannot
+  drift apart): one per skeleton handle, shared by its animators, computed again only when the skeleton's source revision
+  changes (a reimport, learned from the asset manager's content changes; an eviction keeps the matrices, which are data,
+  not a held asset). Animators are found through their component's signals, so an update looks only at animators that
+  were added, removed or changed, requests only skeletons that are loading, and an idle update does nothing at all
+  (`GetPosesVersion` unchanged, so `RenderScene::UpdateSkinnedPoses` returns at its version check; `GetStats` counts the
+  work for tests). Nothing in the scene changes: the attachments of posed animators (requests only: the importer placed
+  attachments at the rest pose already), and the mesh renderers under them, are drawn at their joints through render
+  transforms (`ISkinningPoses::GetRenderTransforms`, see [Render scene](#render-scene)), computed again only when the
+  requests, the poses, the scene's transforms or hierarchy, or an attachment changed. The editor makes one with rest
+  poses for every edited scene (`EditorContext::GetAnimationPreview`, `animation.preview`), and the thumbnail cache one
+  per scene it renders, so characters stand in edit mode, in thumbnails and in the Asset tab's preview as they do in
+  play before their first animation. `SceneBounds` measures skinned meshes in the scene's pose
+  (`SceneBounds::GetPosedMeshBounds`, the expression `RenderScene::ComputePalette` bounds proxies with), so framing,
+  `camera.focus`, `entity.dropToGround` and placement (`EditorPlacement::GetTemplateBounds` gives the template's scene
+  rest poses) see them standing.
 - **Editor.** `animation.createController`, `animation.setController`, `animation.info` and `animation.preview` give
   agents the whole workflow without hand-written JSON (DeveloperGuide.md, "Animation commands"); the Asset tab edits
   controllers as tables (`UI/AnimationAssetViews`; each field has a least width in font sizes, which is also its share
@@ -2318,7 +2334,9 @@ is the `strata-scripting` skill. The layers:
   first, then assets by name, an expanded model's sub-assets (meshes, materials, textures, a skinned model's skeleton and
   clips) right after it as drag sources of their own, which the Inspector's asset fields take when the type fits (an
   Animator's Skeleton, Clip and Controller). Skeletons, clips and controllers show their type's icon; models and meshes
-  render, skinned ones in their bind pose (no animator poses a thumbnail's scene). The view rebuilds only when
+  render, skinned models in their skeleton's rest pose (the thumbnail scene's own `AnimationPreview`; a thumbnail waits
+  for its skeletons like for its meshes; `ThumbnailCache::c_Version` 2 made the older ones again), skinned meshes alone in
+  their bind pose. The view rebuilds only when
   `EditorAssetManager::GetChangeVersion` (or the folder, search, filter or an expansion) changed, from one look at the
   manager's index (`ListAssets`), and counts its rebuilds: an idle editor rebuilds nothing (the browser used to copy
   every asset's metadata twice a second). Labels are made at rebuild time; tiles cut their names once per tile width. Every

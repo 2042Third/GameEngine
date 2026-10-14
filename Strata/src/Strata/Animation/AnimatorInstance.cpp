@@ -1,6 +1,8 @@
 #include "stpch.h"
 #include "Strata/Animation/AnimatorInstance.h"
 
+#include "Strata/Animation/RestPose.h"
+
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
@@ -766,6 +768,12 @@ namespace Strata
 		if (!assets.SkeletonAsset)
 			return false;
 		const Skeleton& skeleton = *assets.SkeletonAsset;
+		// Nothing plays: the rest pose, computed the way the editor computes it for scenes that do not play.
+		if (m_Count == 0)
+		{
+			ComputeRestPose(skeleton, outModel);
+			return true;
+		}
 		const uint32_t joints = skeleton.GetJointCount();
 		const std::vector<JointPose>& rest = skeleton.GetRestPose();
 		scratch.resize(static_cast<size_t>(joints) * 2);
@@ -773,15 +781,12 @@ namespace Strata
 		const std::span<JointPose> sample(scratch.data() + joints, joints);
 		outModel.resize(joints);
 
-		if (m_Count <= 1)
+		if (m_Count == 1)
 		{
 			std::copy(rest.begin(), rest.end(), blended.begin());
-			if (m_Count == 1)
-			{
-				const AnimatorClip clip = GetClip(assets, m_Entries[0].State);
-				if (clip.Clip && clip.Binding)
-					clip.Clip->Sample(*clip.Binding, m_Entries[0].Time, blended);
-			}
+			const AnimatorClip clip = GetClip(assets, m_Entries[0].State);
+			if (clip.Clip && clip.Binding)
+				clip.Clip->Sample(*clip.Binding, m_Entries[0].Time, blended);
 		}
 		else
 		{
@@ -819,7 +824,7 @@ namespace Strata
 		skeleton.ComputeModelTransforms(blended, outModel);
 
 		const bool rootMotion = settings.ApplyRootMotion && assets.RootMotion && assets.RootMotion->InSubtree.size() == joints;
-		if (!rootMotion || m_Count == 0)
+		if (!rootMotion)
 			return true;
 		// Root motion moves the entity; the pose keeps the root where (and facing how) each clip started: the root's subtree
 		// is moved back by its weighted offset from the clips' starts.
