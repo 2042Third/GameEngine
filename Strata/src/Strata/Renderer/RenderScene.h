@@ -99,6 +99,10 @@ namespace Strata
 	// changes, in parallel chunks. Posed proxies carry RenderProxyFlags::Skinned and their instances c_InstanceSkinned with
 	// the palette's first joint (InstanceData::SkinPalette); the skinned pipelines blend it in the vertex shader.
 	//
+	// Readers follow the scene through three bounded change logs, by version: the instances (GetInstanceChanges), the
+	// palettes (GetPaletteChanges) and the proxies themselves (GetProxyChanges: placement, flags, mesh slot, instance range,
+	// creation and destruction), which the GPU's culling mirrors.
+	//
 	// One per scene, created on first use (Get) in the scene's registry context and shared by every renderer of the scene
 	// (the viewport and capture renderers). Main thread only.
 	class RenderScene
@@ -208,6 +212,15 @@ namespace Strata
 		bool GetInstanceChanges(uint64_t sinceVersion, std::vector<uint32_t>& outInstances) const;
 
 		const RenderSceneStats& GetStats() const { return m_Stats; }
+
+		// Changes with every change of a proxy's placement (transform, bounds, flags, mesh slot) or instance range, creation
+		// and destruction.
+		uint64_t GetProxyVersion() const { return m_ProxyVersion; }
+		// Appends the proxies that changed after proxy version `sinceVersion` (a proxy may appear more than once; a destroyed
+		// proxy too, with a null entity). Returns false, appending nothing, when more than c_MaxProxyChanges changes happened
+		// since: then any proxy may have changed. The GPU mirror of the scene follows the proxies through it.
+		bool GetProxyChanges(uint64_t sinceVersion, std::vector<uint32_t>& outProxies) const;
+		static constexpr size_t c_MaxProxyChanges = 65536;
 
 		//////////////////////////////////////////////////////////////////////////
 		// Skinned proxies (palettes of joint matrices, see the class comment)
@@ -349,6 +362,8 @@ namespace Strata
 		uint32_t AllocateInstances(uint32_t count);
 		void FreeInstances(uint32_t first, uint32_t count);
 		void RecordInstanceChanges(uint32_t first, uint32_t count);
+		// Logs a change of the proxy (GetProxyChanges); a proxy logged since the latest read of the log is logged once.
+		void RecordProxyChange(uint32_t proxy);
 
 		// Skinned proxies (see the class comment). Adds or removes the proxy's skin entry as its Skin flag says.
 		void SetSkinAnimator(uint32_t proxy, UUID animator);
@@ -409,6 +424,14 @@ namespace Strata
 		uint64_t m_InstanceChangesFloor = 0; // Changes up to this version may be missing from m_InstanceChanges
 		std::vector<InstanceChange> m_InstanceChanges;
 		size_t m_InstanceChangesStart = 0;   // Entries before this are dropped (compacted when they make up half the list)
+
+		// The proxy change log (GetProxyChanges), kept like the instance changes.
+		uint64_t m_ProxyVersion = 0;
+		uint64_t m_ProxyChangesFloor = 0;
+		std::vector<InstanceChange> m_ProxyChanges; // Instance: the proxy
+		size_t m_ProxyChangesStart = 0;
+		std::vector<uint64_t> m_ProxyLoggedVersions; // Per proxy: the version of its newest entry in the log
+		mutable uint64_t m_ProxyChangesRead = 0;    // The newest version a reader has read: entries after it are not read yet
 
 		// Skinned proxies: per proxy its entry in m_Skins (c_InvalidIndex without a SkinComponent)
 		std::vector<uint32_t> m_SkinIndices;

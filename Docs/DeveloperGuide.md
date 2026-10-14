@@ -1745,6 +1745,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   progress never moves. Uploads into the pool run on the graphics queue. A mesh counts its ranges (rounded to
   `c_VertexGranularity` and `c_IndexGranularity`) as `GpuBuffers`; the pool's free space is the renderer's
   (`GeometryPoolStats`, `asset.stats`' and `renderStats`' `geometryPool`).
+- The pool also keeps GPU culling's tables (`RenderData::GeometryEntry`, `GeometrySubmesh`, `GeometryLOD` in
+  `Renderer/GPUSceneData.h`): per handle its offsets and submeshes, per submesh its levels, each level a draw record.
+  A mesh sets its layout when it allocates (`GeometryPool::SetLayout`); frees and compaction rewrite the entries, and
+  `RecordTableUploads` writes the changed records before work that reads them.
 - Draws are bucketed by pipeline state: consecutive batches of one `PipelineKey` (pass, double-sided, mirrored, skinned;
   shadows also alpha-masked and cascade) and vertex arena share one `setGraphicsState` binding the pool's buffers, and their
   `DrawIndexedIndirectArguments` (written by the CPU into a per-renderer buffer, uploaded where they changed) are drawn

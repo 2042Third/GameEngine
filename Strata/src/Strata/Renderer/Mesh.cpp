@@ -333,6 +333,21 @@ namespace Strata
 			m_Pool = pool;
 			m_Geometry = allocation.Handle;
 			m_UploadOffset = 0;
+			// Its submeshes and levels of detail for GPU culling: each level a draw record.
+			std::vector<RenderData::GeometrySubmesh> submeshes;
+			std::vector<RenderData::GeometryLOD> lods;
+			submeshes.reserve(m_Submeshes.size());
+			for (const Submesh& submesh : m_Submeshes)
+			{
+				submeshes.push_back(RenderData::GeometrySubmesh { submesh.BaseVertex, static_cast<uint32_t>(lods.size()), static_cast<uint32_t>(submesh.LODs.size()), 0 });
+				for (const MeshLOD& lod : submesh.LODs)
+					lods.push_back(RenderData::GeometryLOD { lod.IndexOffset, lod.IndexCount, submesh.BaseVertex, 0 });
+			}
+			if (!pool->SetLayout(m_Geometry, submeshes, lods))
+			{
+				ST_CORE_ERROR("Mesh: its {} submeshes do not fit the geometry pool's tables", m_Submeshes.size());
+				return AssetFinalizeResult::Failed;
+			}
 		}
 		const GeometryAllocation* geometry = pool ? pool->Find(m_Geometry) : nullptr;
 		if (!geometry)

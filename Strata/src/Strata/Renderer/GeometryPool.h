@@ -3,14 +3,17 @@
 #include "Strata/Core/Base.h"
 #include "Strata/Core/RangeAllocator.h"
 #include "Strata/Renderer/GPUProfiler.h"
+#include "Strata/Renderer/GPUSceneData.h"
 
 #include <nvrhi/nvrhi.h>
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <deque>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <unordered_map>
 #include <vector>
 
@@ -123,6 +126,22 @@ namespace Strata
 		void SetUploading(GeometryHandle handle, bool uploading);
 		// The handle's current ranges (null for an invalid or freed handle). Valid until the next BeginFrame or Allocate.
 		const GeometryAllocation* Find(GeometryHandle handle) const;
+		// The handle's submeshes and their levels of detail for GPU culling: the submeshes' FirstLOD index into `lods` (the
+		// mesh's own levels, in order); the pool places them in its tables. Replaces an earlier layout of the handle.
+		bool SetLayout(GeometryHandle handle, std::span<const RenderData::GeometrySubmesh> submeshes, std::span<const RenderData::GeometryLOD> lods);
+
+		// The GPU tables of GPU culling: per handle its GeometryEntry (index 0 unused), the submeshes and the levels of detail
+		// (each level a draw record). RecordTableUploads brings the buffers up to date (only what changed); main thread.
+		nvrhi::IBuffer* GetEntryBuffer() const { return m_EntryTable.Buffer; }
+		nvrhi::IBuffer* GetSubmeshBuffer() const { return m_SubmeshTable.Buffer; }
+		nvrhi::IBuffer* GetLODBuffer() const { return m_LODTable.Buffer; }
+		// The LOD records (draw records) the table has room for: GPU culling's per-record arrays have this many entries.
+		uint32_t GetLODCapacity() const { return static_cast<uint32_t>(m_LODTable.Records.size()); }
+		// Changes whenever a table buffer is replaced.
+		uint64_t GetTableVersion() const { return m_TableVersion; }
+		// Writes the table entries that changed (and replaced buffers whole) into the command list, and the bytes written into
+		// `outBytes` when given. Run before work that reads the tables; false when a buffer could not be created (logged).
+		bool RecordTableUploads(nvrhi::ICommandList* commandList, uint64_t* outBytes = nullptr);
 
 		nvrhi::IBuffer* GetPositionBuffer(GeometryArena arena) const { return m_Arenas[static_cast<size_t>(arena)].Positions; }
 		nvrhi::IBuffer* GetAttributeBuffer(GeometryArena arena) const { return m_Arenas[static_cast<size_t>(arena)].Attributes; }
@@ -167,6 +186,41 @@ namespace Strata
 			GeometryAllocation Allocation;
 			bool Live = false;
 			bool Uploading = false;
+			uint32_t FirstSubmesh = RangeAllocator::c_InvalidOffset; // Its layout in the tables (SetLayout)
+			uint32_t SubmeshCount = 0;
+			uint32_t FirstLOD = RangeAllocator::c_InvalidOffset;
+			uint32_t LODCount = 0;
+		};
+
+		// A GPU table kept on the CPU and uploaded where it changed.
+		template<typename Record>
+		struct Table
+		{
+			std::vector<Record> Records;
+			std::vector<uint8_t> Dirty;       // Per record
+			std::vector<uint32_t> DirtyList;
+			nvrhi::BufferHandle Buffer;
+			bool Recreate = true;             // The buffer must be made (larger) and written whole
+
+			void MarkDirty(uint32_t index)
+			{
+				if (!Dirty[index])
+				{
+					Dirty[index] = 1;
+					DirtyList.push_back(index);
+				}
+			}
+			void EnsureSize(size_t count)
+			{
+				if (Records.size() >= count)
+					return;
+				size_t size = std::max<size_t>(Records.size(), 64);
+				while (size < count)
+					size *= 2;
+				Records.resize(size);
+				Dirty.resize(size, 0);
+				Recreate = true;
+			}
 		};
 
 		struct PendingFree
@@ -181,6 +235,11 @@ namespace Strata
 		nvrhi::BufferHandle CreateBuffer(uint64_t bytes, const char* name, bool vertex) const;
 		static uint32_t GetVertexBytes(const VertexArena& arena);
 		void ReleaseHandle(GeometryHandle handle);
+		void ReleaseLayout(Entry& entry);
+		// The handle's GeometryEntry from its allocation and layout.
+		void WriteEntry(GeometryHandle handle);
+		template<typename Record>
+		bool UploadTable(nvrhi::ICommandList* commandList, Table<Record>& table, const char* name, uint64_t& bytes);
 		// Copies [from, from + bytes) to [to, to + bytes) of a buffer through the scratch buffer (the ranges may overlap).
 		void RecordMove(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, uint64_t from, uint64_t to, uint64_t bytes);
 		bool EnsureScratch(uint64_t bytes);
@@ -209,6 +268,12 @@ namespace Strata
 		nvrhi::BufferHandle m_Scratch;
 		uint64_t m_BufferVersion = 1;
 		uint64_t m_LastWriteBatch = 0; // The upload batch that last wrote into the buffers (NoteUploadWrite)
+		Table<RenderData::GeometryEntry> m_EntryTable;
+		Table<RenderData::GeometrySubmesh> m_SubmeshTable;
+		Table<RenderData::GeometryLOD> m_LODTable;
+		RangeAllocator m_SubmeshAllocator;
+		RangeAllocator m_LODAllocator;
+		uint64_t m_TableVersion = 1;
 		uint32_t m_Growths = 0;
 		uint64_t m_MovedBytes = 0;
 		uint32_t m_Moves = 0;

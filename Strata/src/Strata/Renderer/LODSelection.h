@@ -16,7 +16,9 @@ namespace Strata::LODSelection
 	float GetScreenFraction(const SceneCamera& camera, const glm::vec3& center, float radius);
 
 	// The level of detail drawn for a screen fraction (SceneRendererSpecification::LODThreshold): 0 at or above the
-	// threshold, then one level more each time the fraction halves, at most lodCount - 1 (0 for a mesh without levels).
+	// threshold, else 1 plus the number of times the fraction can be doubled while staying below the threshold, at most
+	// lodCount - 1 (0 for a mesh without levels, or a fraction that is not positive). Only comparisons and exact doublings: the
+	// GPU's culling (Include/LODSelection.glsl) chooses the same level for the same fraction.
 	uint32_t SelectLOD(float screenFraction, float lodThreshold, uint32_t lodCount);
 
 }

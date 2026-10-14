@@ -204,11 +204,13 @@ namespace Strata
 			handle = static_cast<GeometryHandle>(m_Entries.size());
 		}
 		Entry& entry = m_Entries[handle - 1];
+		entry = Entry();
 		entry.Allocation = GeometryAllocation { arena, firstVertex, vertexUnits, firstIndex, indexUnits };
 		entry.Live = true;
 		entry.Uploading = true;
 		vertexArena.Owners[firstVertex] = handle;
 		m_Indices.Owners[firstIndex] = handle;
+		WriteEntry(handle);
 		return AllocateResult { handle, false };
 	}
 
@@ -243,8 +245,153 @@ namespace Strata
 		arena.Owners.erase(entry.Allocation.FirstVertex);
 		m_Indices.Allocator.Free(entry.Allocation.FirstIndex);
 		m_Indices.Owners.erase(entry.Allocation.FirstIndex);
+		ReleaseLayout(entry);
 		entry = Entry();
+		WriteEntry(handle);
 		m_FreeHandles.push_back(handle);
+	}
+
+	void GeometryPool::WriteEntry(GeometryHandle handle)
+	{
+		m_EntryTable.EnsureSize(handle + 1);
+		const Entry& entry = m_Entries[handle - 1];
+		RenderData::GeometryEntry& record = m_EntryTable.Records[handle];
+		record = RenderData::GeometryEntry {};
+		if (entry.Live)
+		{
+			record.FirstVertex = entry.Allocation.FirstVertex;
+			record.FirstIndex = entry.Allocation.FirstIndex;
+			record.FirstSubmesh = entry.SubmeshCount > 0 ? entry.FirstSubmesh : 0;
+			record.SubmeshCount = entry.SubmeshCount;
+		}
+		m_EntryTable.MarkDirty(handle);
+	}
+
+	void GeometryPool::ReleaseLayout(Entry& entry)
+	{
+		if (entry.SubmeshCount > 0)
+			m_SubmeshAllocator.Free(entry.FirstSubmesh);
+		if (entry.LODCount > 0)
+			m_LODAllocator.Free(entry.FirstLOD);
+		entry.FirstSubmesh = RangeAllocator::c_InvalidOffset;
+		entry.SubmeshCount = 0;
+		entry.FirstLOD = RangeAllocator::c_InvalidOffset;
+		entry.LODCount = 0;
+	}
+
+	bool GeometryPool::SetLayout(GeometryHandle handle, std::span<const RenderData::GeometrySubmesh> submeshes, std::span<const RenderData::GeometryLOD> lods)
+	{
+		if (handle == c_InvalidGeometry || handle > m_Entries.size() || !m_Entries[handle - 1].Live)
+			return false;
+		Entry& entry = m_Entries[handle - 1];
+		ReleaseLayout(entry);
+		const uint32_t submeshCount = static_cast<uint32_t>(submeshes.size());
+		const uint32_t lodCount = static_cast<uint32_t>(lods.size());
+		const auto allocate = [](RangeAllocator& allocator, uint32_t count)
+		{
+			if (count == 0)
+				return RangeAllocator::c_InvalidOffset;
+			uint32_t offset = allocator.Allocate(count);
+			if (offset == RangeAllocator::c_InvalidOffset)
+			{
+				// Tables grow by at least twice their size: they are small, and uploaded whole when they grow.
+				allocator.Grow(std::max(allocator.GetCapacity() * 2, allocator.GetCapacity() + count + 64));
+				offset = allocator.Allocate(count);
+			}
+			return offset;
+		};
+		const uint32_t firstSubmesh = allocate(m_SubmeshAllocator, submeshCount);
+		const uint32_t firstLOD = allocate(m_LODAllocator, lodCount);
+		if ((submeshCount > 0 && firstSubmesh == RangeAllocator::c_InvalidOffset) || (lodCount > 0 && firstLOD == RangeAllocator::c_InvalidOffset))
+		{
+			if (firstSubmesh != RangeAllocator::c_InvalidOffset)
+				m_SubmeshAllocator.Free(firstSubmesh);
+			if (firstLOD != RangeAllocator::c_InvalidOffset)
+				m_LODAllocator.Free(firstLOD);
+			return false;
+		}
+		entry.FirstSubmesh = firstSubmesh;
+		entry.SubmeshCount = submeshCount;
+		entry.FirstLOD = firstLOD;
+		entry.LODCount = lodCount;
+		m_SubmeshTable.EnsureSize(m_SubmeshAllocator.GetCapacity());
+		m_LODTable.EnsureSize(m_LODAllocator.GetCapacity());
+		for (uint32_t index = 0; index < submeshCount; index++)
+		{
+			RenderData::GeometrySubmesh submesh = submeshes[index];
+			submesh.FirstLOD += firstLOD;
+			m_SubmeshTable.Records[firstSubmesh + index] = submesh;
+			m_SubmeshTable.MarkDirty(firstSubmesh + index);
+		}
+		for (uint32_t index = 0; index < lodCount; index++)
+		{
+			RenderData::GeometryLOD lod = lods[index];
+			lod.Mesh = handle;
+			m_LODTable.Records[firstLOD + index] = lod;
+			m_LODTable.MarkDirty(firstLOD + index);
+		}
+		WriteEntry(handle);
+		return true;
+	}
+
+	template<typename Record>
+	bool GeometryPool::UploadTable(nvrhi::ICommandList* commandList, Table<Record>& table, const char* name, uint64_t& bytes)
+	{
+		if (table.Records.empty())
+			table.EnsureSize(1);
+		if (table.Recreate)
+		{
+			nvrhi::BufferDesc desc;
+			desc.byteSize = table.Records.size() * sizeof(Record);
+			desc.structStride = sizeof(Record);
+			desc.debugName = name;
+			desc.initialState = nvrhi::ResourceStates::ShaderResource;
+			desc.keepInitialState = true;
+			nvrhi::BufferHandle buffer = m_Device->createBuffer(desc);
+			if (!buffer)
+			{
+				ST_CORE_ERROR("GeometryPool: failed to create its {} table ({} entries)", name, table.Records.size());
+				return false;
+			}
+			// Frames in flight may still read the replaced table.
+			if (table.Buffer)
+				Renderer::ReleaseDeferred({ nvrhi::ResourceHandle(table.Buffer.Get()) });
+			table.Buffer = std::move(buffer);
+			commandList->writeBuffer(table.Buffer, table.Records.data(), table.Records.size() * sizeof(Record));
+			bytes += table.Records.size() * sizeof(Record);
+			table.Recreate = false;
+			m_TableVersion++;
+		}
+		else if (!table.DirtyList.empty())
+		{
+			// Runs of consecutive dirty records, one write each.
+			std::sort(table.DirtyList.begin(), table.DirtyList.end());
+			size_t start = 0;
+			for (size_t index = 1; index <= table.DirtyList.size(); index++)
+			{
+				if (index < table.DirtyList.size() && table.DirtyList[index] == table.DirtyList[index - 1] + 1)
+					continue;
+				const uint32_t first = table.DirtyList[start];
+				const uint32_t end = table.DirtyList[index - 1] + 1;
+				commandList->writeBuffer(table.Buffer, table.Records.data() + first, (end - first) * sizeof(Record), first * sizeof(Record));
+				bytes += (end - first) * sizeof(Record);
+				start = index;
+			}
+		}
+		for (const uint32_t index : table.DirtyList)
+			table.Dirty[index] = 0;
+		table.DirtyList.clear();
+		return true;
+	}
+
+	bool GeometryPool::RecordTableUploads(nvrhi::ICommandList* commandList, uint64_t* outBytes)
+	{
+		uint64_t bytes = 0;
+		const bool uploaded = UploadTable(commandList, m_EntryTable, "GeometryPool.Entries", bytes) && UploadTable(commandList, m_SubmeshTable, "GeometryPool.Submeshes", bytes)
+			&& UploadTable(commandList, m_LODTable, "GeometryPool.LODs", bytes);
+		if (outBytes)
+			*outBytes = bytes;
+		return uploaded;
 	}
 
 	bool GeometryPool::EnsureScratch(uint64_t bytes)
@@ -307,6 +454,7 @@ namespace Strata
 				arena.Owners.erase(move.From);
 				arena.Owners[move.To] = handle;
 				m_Entries[handle - 1].Allocation.FirstVertex = move.To;
+				WriteEntry(handle);
 				const uint64_t bytes = static_cast<uint64_t>(move.Size) * vertexBytes;
 				budget -= std::min(budget, bytes);
 				m_MovedBytes += bytes;
@@ -332,6 +480,7 @@ namespace Strata
 				m_Indices.Owners.erase(move.From);
 				m_Indices.Owners[move.To] = handle;
 				m_Entries[handle - 1].Allocation.FirstIndex = move.To;
+				WriteEntry(handle);
 				m_MovedBytes += bytes;
 				m_Moves++;
 				moved = true;

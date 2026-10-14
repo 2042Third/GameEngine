@@ -466,6 +466,7 @@ namespace Strata
 
 	void RenderScene::DestroyProxy(uint32_t proxy)
 	{
+		RecordProxyChange(proxy);
 		if (m_Index.Contains(proxy))
 		{
 			m_Index.Remove(proxy);
@@ -511,6 +512,7 @@ namespace Strata
 
 	void RenderScene::UpdateProxyPlacement(uint32_t proxy)
 	{
+		RecordProxyChange(proxy);
 		const glm::mat4 world = m_Transforms[proxy].ToMatrix();
 		const float determinant = glm::determinant(glm::mat3(world));
 		const bool active = (m_Flags[proxy] & RenderProxyFlags::Active) != 0;
@@ -846,6 +848,7 @@ namespace Strata
 
 	void RenderScene::RebuildInstances(uint32_t proxy)
 	{
+		RecordProxyChange(proxy);
 		const uint32_t meshSlot = m_MeshSlots[proxy];
 		const uint32_t count = meshSlot != c_InvalidIndex && m_Meshes[meshSlot].LayoutKnown ? static_cast<uint32_t>(m_Meshes[meshSlot].SubmeshMaterialSlots.size()) : 0;
 		if (count != m_InstanceCounts[proxy])
@@ -938,6 +941,42 @@ namespace Strata
 			m_InstanceChanges.erase(m_InstanceChanges.begin(), m_InstanceChanges.begin() + static_cast<ptrdiff_t>(m_InstanceChangesStart));
 			m_InstanceChangesStart = 0;
 		}
+	}
+
+	void RenderScene::RecordProxyChange(uint32_t proxy)
+	{
+		if (m_ProxyLoggedVersions.size() <= proxy)
+			m_ProxyLoggedVersions.resize(proxy + 1, 0);
+		// Logged and not read by anyone since: the entry already tells its readers.
+		if (m_ProxyLoggedVersions[proxy] > m_ProxyChangesRead)
+			return;
+		m_ProxyVersion++;
+		m_ProxyLoggedVersions[proxy] = m_ProxyVersion;
+		const size_t live = m_ProxyChanges.size() - m_ProxyChangesStart;
+		if (live + 1 > c_MaxProxyChanges)
+		{
+			// Readers further behind than the oldest change kept read everything.
+			m_ProxyChangesStart += live + 1 - c_MaxProxyChanges;
+			m_ProxyChangesFloor = m_ProxyChanges[m_ProxyChangesStart - 1].Version;
+		}
+		m_ProxyChanges.push_back(InstanceChange { m_ProxyVersion, proxy });
+		if (m_ProxyChangesStart >= c_MaxProxyChanges)
+		{
+			m_ProxyChanges.erase(m_ProxyChanges.begin(), m_ProxyChanges.begin() + static_cast<ptrdiff_t>(m_ProxyChangesStart));
+			m_ProxyChangesStart = 0;
+		}
+	}
+
+	bool RenderScene::GetProxyChanges(uint64_t sinceVersion, std::vector<uint32_t>& outProxies) const
+	{
+		m_ProxyChangesRead = std::max(m_ProxyChangesRead, m_ProxyVersion);
+		if (sinceVersion >= m_ProxyVersion)
+			return true;
+		if (sinceVersion < m_ProxyChangesFloor)
+			return false;
+		for (size_t index = m_ProxyChanges.size(); index > m_ProxyChangesStart && m_ProxyChanges[index - 1].Version > sinceVersion; index--)
+			outProxies.push_back(m_ProxyChanges[index - 1].Instance);
+		return true;
 	}
 
 	bool RenderScene::GetInstanceChanges(uint64_t sinceVersion, std::vector<uint32_t>& outInstances) const

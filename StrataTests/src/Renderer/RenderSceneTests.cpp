@@ -41,6 +41,76 @@ namespace
 		return RenderScene::c_InvalidIndex;
 	}
 
+	// What a reader of the proxy change log (the GPU mirror of a render scene) keeps of each proxy. Brought up to date from
+	// the log alone, it must match the render scene: every change that matters to the GPU's culling is logged.
+	struct ProxyRecord
+	{
+		entt::entity Entity = entt::null;
+		uint32_t Flags = 0;
+		glm::vec3 LocalMin = glm::vec3(0.0f);
+		glm::vec3 LocalMax = glm::vec3(0.0f);
+		glm::vec3 WorldMin = glm::vec3(0.0f);
+		glm::vec3 WorldMax = glm::vec3(0.0f);
+		uint32_t MeshSlot = RenderScene::c_InvalidIndex;
+		uint32_t FirstInstance = 0;
+		uint32_t InstanceCount = 0;
+
+		bool operator==(const ProxyRecord&) const = default;
+	};
+
+	struct ProxyLogReader
+	{
+		uint64_t Version = 0;
+		std::vector<ProxyRecord> Records;
+		uint32_t FullReads = 0;
+		uint32_t LoggedReads = 0;
+
+		static ProxyRecord Read(const RenderScene& renderScene, uint32_t proxy)
+		{
+			ProxyRecord record;
+			record.Entity = renderScene.GetEntity(proxy);
+			record.Flags = renderScene.GetProxyFlags(proxy);
+			record.LocalMin = renderScene.GetLocalBounds(proxy).Min;
+			record.LocalMax = renderScene.GetLocalBounds(proxy).Max;
+			record.WorldMin = renderScene.GetWorldBounds(proxy).Min;
+			record.WorldMax = renderScene.GetWorldBounds(proxy).Max;
+			record.MeshSlot = renderScene.GetMeshSlot(proxy);
+			record.FirstInstance = renderScene.GetFirstInstance(proxy);
+			record.InstanceCount = renderScene.GetInstanceCount(proxy);
+			return record;
+		}
+
+		void Update(const RenderScene& renderScene)
+		{
+			std::vector<uint32_t> changed;
+			const bool logged = renderScene.GetProxyChanges(Version, changed);
+			Records.resize(renderScene.GetProxyCapacity());
+			if (logged)
+			{
+				for (const uint32_t proxy : changed)
+					Records[proxy] = Read(renderScene, proxy);
+				LoggedReads++;
+			}
+			else
+			{
+				for (uint32_t proxy = 0; proxy < renderScene.GetProxyCapacity(); proxy++)
+					Records[proxy] = Read(renderScene, proxy);
+				FullReads++;
+			}
+			Version = renderScene.GetProxyVersion();
+		}
+
+		void Check(const RenderScene& renderScene) const
+		{
+			REQUIRE(Records.size() == renderScene.GetProxyCapacity());
+			for (uint32_t proxy = 0; proxy < renderScene.GetProxyCapacity(); proxy++)
+			{
+				CAPTURE(proxy);
+				CHECK(Records[proxy] == Read(renderScene, proxy));
+			}
+		}
+	};
+
 	Entity AddCube(Scene& scene, const glm::vec3& position, AssetHandle material = UUID::Null(), AssetHandle mesh = BuiltinAssets::CubeMesh)
 	{
 		Entity entity = scene.CreateEntity("Cube");
@@ -78,6 +148,9 @@ TEST_SUITE("Renderer.RenderScene")
 		uint32_t mostPosed = 0;
 
 		std::vector<Entity> entities;
+		// A reader of the proxy change log, as the GPU mirror reads it; a second one reads only now and then.
+		ProxyLogReader reader;
+		ProxyLogReader slowReader;
 		auto pick = [&](size_t count) { return std::uniform_int_distribution<size_t>(0, count - 1)(random); };
 		auto addRenderer = [&](Entity entity)
 		{
@@ -221,9 +294,18 @@ TEST_SUITE("Renderer.RenderScene")
 					manager->Update();
 				renderScene.Sync(manager);
 				CheckProxies(renderScene);
+				reader.Update(renderScene);
+				reader.Check(renderScene);
+				if (edit % 500 == 499)
+				{
+					slowReader.Update(renderScene);
+					slowReader.Check(renderScene);
+				}
 				mostPosed = std::max(mostPosed, renderScene.GetStats().PosedProxies);
 			}
 		}
+		CHECK(reader.LoggedReads > 0);
+		CHECK(reader.FullReads == 0); // The log holds far more changes than 500 edits make
 		manager->RequestLoad(reloaded);
 		manager->RequestLoad(failing);
 		manager->RequestLoad(skinned);
@@ -814,6 +896,91 @@ TEST_SUITE("Renderer.RenderScene")
 		CHECK(changes.empty());
 		CHECK(renderScene.GetInstanceChanges(recent, changes));
 		CHECK(changes.size() == cubes.size());
+	}
+
+	TEST_CASE("The proxy change log names the proxies that changed since a reader's version, each once, until it overflows")
+	{
+		Scene scene("ProxyChanges");
+		std::vector<Entity> cubes;
+		for (int index = 0; index < 100; index++)
+			cubes.push_back(AddCube(scene, glm::vec3(static_cast<float>(index) * 2.0f, 0.0f, 0.0f)));
+		RenderScene& renderScene = RenderScene::Get(scene);
+		renderScene.Sync(nullptr);
+		renderScene.SetMeshLayout(renderScene.GetMeshesWithoutBounds()[0], *MeshFactory::CreateCube());
+		ProxyLogReader reader;
+		reader.Update(renderScene);
+		CHECK(reader.FullReads == 0); // From version 0: everything since the scene began is in the log
+		reader.Check(renderScene);
+
+		// Nothing changed: nothing to read.
+		const uint64_t quiet = renderScene.GetProxyVersion();
+		std::vector<uint32_t> changes;
+		CHECK(renderScene.Sync(nullptr) == 0);
+		CHECK(renderScene.GetProxyVersion() == quiet);
+		CHECK(renderScene.GetProxyChanges(quiet, changes));
+		CHECK(changes.empty());
+
+		// A cube moved twice before anyone read the log is named once.
+		const uint32_t moved = renderScene.FindProxy(cubes[7].GetHandle());
+		for (int step = 0; step < 2; step++)
+		{
+			cubes[7].GetComponent<TransformComponent>().Translation.y += 1.0f;
+			cubes[7].MarkModified<TransformComponent>();
+			CHECK(renderScene.Sync(nullptr) == 1);
+		}
+		REQUIRE(renderScene.GetProxyChanges(quiet, changes));
+		CHECK(changes == std::vector<uint32_t> { moved });
+		// Read: the next change is logged again, for readers that read before it.
+		const uint64_t afterMove = renderScene.GetProxyVersion();
+		cubes[7].GetComponent<MeshRendererComponent>().CastShadows = false;
+		cubes[7].MarkModified<MeshRendererComponent>();
+		renderScene.Sync(nullptr);
+		changes.clear();
+		REQUIRE(renderScene.GetProxyChanges(afterMove, changes));
+		CHECK(changes == std::vector<uint32_t> { moved });
+
+		// A destroyed proxy is named (with no entity), and so is the proxy that takes its index.
+		const uint32_t destroyed = renderScene.FindProxy(cubes[20].GetHandle());
+		scene.DestroyEntity(cubes[20]);
+		renderScene.Sync(nullptr);
+		reader.Update(renderScene);
+		reader.Check(renderScene);
+		CHECK((reader.Records[destroyed].Entity == entt::null));
+		CHECK(reader.Records[destroyed].InstanceCount == 0);
+		Entity replacement = AddCube(scene, glm::vec3(0.0f, 10.0f, 0.0f));
+		renderScene.Sync(nullptr);
+		CHECK(renderScene.FindProxy(replacement.GetHandle()) == destroyed);
+		reader.Update(renderScene);
+		reader.Check(renderScene);
+		CHECK(reader.Records[destroyed].Entity == replacement.GetHandle());
+
+		// More changes than the log keeps since a reader's version: it reads everything.
+		const uint64_t behind = renderScene.GetProxyVersion();
+		ProxyLogReader late;
+		late.Update(renderScene);
+		late.Version = behind;
+		uint64_t logged = 0;
+		while (logged <= RenderScene::c_MaxProxyChanges)
+		{
+			for (Entity cube : cubes)
+			{
+				if (!cube.IsValid())
+					continue;
+				cube.GetComponent<TransformComponent>().Translation.z += 1.0f;
+				cube.MarkModified<TransformComponent>();
+			}
+			const uint32_t updated = renderScene.Sync(nullptr);
+			// Every sync's changes are read, so each one logs its proxies again.
+			changes.clear();
+			renderScene.GetProxyChanges(renderScene.GetProxyVersion(), changes);
+			logged += updated;
+		}
+		changes.clear();
+		CHECK_FALSE(renderScene.GetProxyChanges(behind, changes));
+		CHECK(changes.empty());
+		late.Update(renderScene);
+		CHECK(late.FullReads == 1);
+		late.Check(renderScene);
 	}
 
 	TEST_CASE("Entities without a mesh, inactive or with a flat transform are not indexed")

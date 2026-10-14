@@ -5,6 +5,7 @@
 #include "Strata/Renderer/MeshFactory.h"
 
 #include <cstring>
+#include <initializer_list>
 #include <map>
 #include <vector>
 
@@ -63,6 +64,78 @@ namespace
 		const std::vector<uint8_t> indices = ReadBufferRange(gpu, pool.GetIndexBuffer(), uint64_t(allocation->FirstIndex) * GeometryPool::c_IndexStride,
 			filled.Indices.size());
 		return positions == filled.Positions && indices == filled.Indices;
+	}
+
+	// A layout of submeshes and levels for SetLayout: per submesh its base vertex and its levels' (index offset, count).
+	struct TestLayout
+	{
+		std::vector<RenderData::GeometrySubmesh> Submeshes;
+		std::vector<RenderData::GeometryLOD> LODs;
+
+		void AddSubmesh(uint32_t baseVertex, std::initializer_list<std::pair<uint32_t, uint32_t>> levels)
+		{
+			Submeshes.push_back(RenderData::GeometrySubmesh { baseVertex, static_cast<uint32_t>(LODs.size()), static_cast<uint32_t>(levels.size()), 0 });
+			for (const auto& [offset, count] : levels)
+				LODs.push_back(RenderData::GeometryLOD { offset, count, baseVertex, 0 });
+		}
+	};
+
+	template<typename Record>
+	std::vector<Record> ReadTable(GPUContext& gpu, nvrhi::IBuffer* buffer)
+	{
+		REQUIRE(buffer);
+		const std::vector<uint8_t> bytes = ReadBufferRange(gpu, buffer, 0, buffer->getDesc().byteSize);
+		std::vector<Record> records(bytes.size() / sizeof(Record));
+		std::memcpy(records.data(), bytes.data(), records.size() * sizeof(Record));
+		return records;
+	}
+
+	// Uploads the pool's tables and checks that the GPU's copies give each handle its place and layout.
+	void CheckTables(GPUContext& gpu, GeometryPool& pool, const std::map<GeometryHandle, TestLayout>& layouts)
+	{
+		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
+		commandList->open();
+		REQUIRE(pool.RecordTableUploads(commandList));
+		commandList->close();
+		REQUIRE(gpu.ExecuteAndWait(commandList));
+		const std::vector<RenderData::GeometryEntry> entries = ReadTable<RenderData::GeometryEntry>(gpu, pool.GetEntryBuffer());
+		const std::vector<RenderData::GeometrySubmesh> submeshes = ReadTable<RenderData::GeometrySubmesh>(gpu, pool.GetSubmeshBuffer());
+		const std::vector<RenderData::GeometryLOD> lods = ReadTable<RenderData::GeometryLOD>(gpu, pool.GetLODBuffer());
+		CHECK(lods.size() >= pool.GetLODCapacity());
+		for (const auto& [handle, layout] : layouts)
+		{
+			CAPTURE(handle);
+			REQUIRE(handle < entries.size());
+			const RenderData::GeometryEntry& entry = entries[handle];
+			const GeometryAllocation* allocation = pool.Find(handle);
+			if (!allocation)
+			{
+				// Freed: nothing to draw.
+				CHECK(entry.SubmeshCount == 0);
+				continue;
+			}
+			CHECK(entry.FirstVertex == allocation->FirstVertex);
+			CHECK(entry.FirstIndex == allocation->FirstIndex);
+			REQUIRE(entry.SubmeshCount == layout.Submeshes.size());
+			for (uint32_t index = 0; index < entry.SubmeshCount; index++)
+			{
+				REQUIRE(entry.FirstSubmesh + index < submeshes.size());
+				const RenderData::GeometrySubmesh& submesh = submeshes[entry.FirstSubmesh + index];
+				const RenderData::GeometrySubmesh& expected = layout.Submeshes[index];
+				CHECK(submesh.BaseVertex == expected.BaseVertex);
+				REQUIRE(submesh.LODCount == expected.LODCount);
+				for (uint32_t level = 0; level < submesh.LODCount; level++)
+				{
+					REQUIRE(submesh.FirstLOD + level < lods.size());
+					const RenderData::GeometryLOD& lod = lods[submesh.FirstLOD + level];
+					const RenderData::GeometryLOD& expectedLOD = layout.LODs[expected.FirstLOD + level];
+					CHECK(lod.IndexOffset == expectedLOD.IndexOffset);
+					CHECK(lod.IndexCount == expectedLOD.IndexCount);
+					CHECK(lod.BaseVertex == expectedLOD.BaseVertex);
+					CHECK(lod.Mesh == handle);
+				}
+			}
+		}
 	}
 
 	GeometryPool::Specification SmallPool()
@@ -209,6 +282,61 @@ TEST_SUITE("GPU.Renderer.GeometryPool")
 		}
 		CHECK(anyMoved);
 		CHECK(*pool->Find(kept.back().Handle) == pinned);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Culling's tables give each handle its place, submeshes and levels, and follow frees and compaction")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		GeometryPool::Specification specification = SmallPool();
+		specification.StaticVertices = 1024;
+		specification.Indices = 4096;
+		const Ref<GeometryPool> pool = GeometryPool::Create(gpu.GetNvrhiDevice(), specification);
+		REQUIRE(pool);
+
+		std::map<GeometryHandle, TestLayout> layouts;
+		std::vector<Filled> filled;
+		for (uint32_t index = 0; index < 6; index++)
+		{
+			filled.push_back(AllocateFilled(gpu, *pool, index, 64 + index * 8, 192 + index * 24));
+			TestLayout layout;
+			layout.AddSubmesh(0, { { 0, 96 }, { 96, 48 }, { 144, 24 } });
+			if (index % 2 == 1)
+				layout.AddSubmesh(40, { { 168, 24 } });
+			REQUIRE(pool->SetLayout(filled.back().Handle, layout.Submeshes, layout.LODs));
+			layouts[filled.back().Handle] = layout;
+		}
+		CHECK(pool->GetLODCapacity() >= 3 * 6 + 3);
+		CheckTables(gpu, *pool, layouts);
+		// A handle that does not exist has no layout to set.
+		TestLayout unused;
+		unused.AddSubmesh(0, { { 0, 3 } });
+		CHECK_FALSE(pool->SetLayout(c_InvalidGeometry, unused.Submeshes, unused.LODs));
+		CHECK_FALSE(pool->SetLayout(1000, unused.Submeshes, unused.LODs));
+
+		// A new layout replaces the handle's earlier one.
+		TestLayout replaced;
+		replaced.AddSubmesh(8, { { 0, 30 }, { 30, 12 } });
+		REQUIRE(pool->SetLayout(filled[2].Handle, replaced.Submeshes, replaced.LODs));
+		layouts[filled[2].Handle] = replaced;
+		CheckTables(gpu, *pool, layouts);
+
+		// Every other allocation is freed: once the GPU is done, their entries hold nothing to draw, and compaction moves the
+		// others, whose entries follow.
+		for (uint32_t index = 0; index < filled.size(); index += 2)
+			pool->Free(filled[index].Handle);
+		gpu.GetDevice().WaitForIdle();
+		pool->BeginFrame();
+		pool->BeginFrame();
+		while (pool->Compact(256))
+		{
+		}
+		CHECK(pool->GetStats().Moves > 0);
+		gpu.GetDevice().WaitForIdle();
+		CheckTables(gpu, *pool, layouts);
+		for (uint32_t index = 1; index < filled.size(); index += 2)
+			CHECK(HoldsPattern(gpu, *pool, filled[index]));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
