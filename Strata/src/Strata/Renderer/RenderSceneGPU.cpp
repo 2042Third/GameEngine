@@ -91,12 +91,23 @@ namespace Strata
 			ST_CORE_ERROR("RenderSceneGPU: failed to create its {} buffer ({} bytes)", name, desc.byteSize);
 			return false;
 		}
+		// The clear, the copy and the update's uploads write the buffer one after the other: NVRHI places no barrier between
+		// transfers into a buffer that stays a copy destination, so each step ends with a transition of its own.
+		const auto barrier = [this, &created]()
+		{
+			m_CommandList->setBufferState(created, nvrhi::ResourceStates::ShaderResource);
+			m_CommandList->commitBarriers();
+		};
 		if (clear)
+		{
 			m_CommandList->clearBufferUInt(created, 0);
+			barrier();
+		}
 		if (buffer.Buffer)
 		{
 			// What it holds moves over on the GPU; frames in flight may still read the old buffer.
 			m_CommandList->copyBuffer(created, 0, buffer.Buffer, 0, buffer.ElementCount * elementSize);
+			barrier();
 			Renderer::ReleaseDeferred({ nvrhi::ResourceHandle(buffer.Buffer.Get()) });
 		}
 		buffer.Buffer = std::move(created);
