@@ -636,6 +636,36 @@ TEST_SUITE("Editor.ScriptWorkflow")
 		CHECK(reason().empty()); // Its removal leaves nothing newer than the module
 	}
 
+	TEST_CASE("The build after script.create, or after a file is added by hand, configures the scripts first")
+	{
+		// The stand-in for CMake builds nothing; whether a build ran the configure step is what is checked. A Visual Studio
+		// build of a tree configured before the class existed would leave the class out of the module.
+		ScopedEnvironmentVariable fakeCMake("STRATA_TEST_FAKE_CMAKE", "succeed");
+		WorkflowHarness harness(MakeFakeBuildSpecification());
+		const std::filesystem::path scripts = harness.GetProject().GetScriptSourceDirectory();
+		WriteOutdatedModule(harness.GetProject().GetScriptModulePath());
+		// Builds through the command, as the UI and agents do; true when the build configured its tree.
+		const auto build = [&harness]()
+		{
+			const EditorCommandResult built = harness.Complete("script.build", { { "wait", true } });
+			REQUIRE_MESSAGE(built.Success, built.Error);
+			return built.Value["configured"].get<bool>();
+		};
+
+		CHECK(build());
+		// CMake's configure step leaves its cache in the tree.
+		REQUIRE(FileSystem::WriteText(harness.Context.GetScriptBuilder().GetLastResult().BuildDirectory / "CMakeCache.txt", "# configured\n"));
+		CHECK_FALSE(build());
+
+		harness.Run("script.create", { { "class", "Mover" } });
+		CHECK(build());
+		CHECK_FALSE(build());
+
+		REQUIRE(FileSystem::WriteText(scripts / "Gameplay" / "Jumper.cpp", MakeScriptSource("Jumper", ScriptTemplate::Behaviour, {})));
+		CHECK(build());
+		CHECK_FALSE(build());
+	}
+
 	TEST_CASE("A play whose build fails fails with the build's errors and asks for the Problems panel")
 	{
 		ScopedEnvironmentVariable fakeCMake("STRATA_TEST_FAKE_CMAKE", "fail");

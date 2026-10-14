@@ -494,13 +494,13 @@ every step below is a command, and source files are written with your own file t
    picked up by the next build. `script.list` names every source file with the classes it registers (find the file of
    a class before changing it). `script.open {"file": "Scripts/Player.cpp", "line": 12}` shows a file to the person at
    the editor in their code editor.
-3. **Build.** `script.build` (waits by default) configures CMake on the first run (a few seconds) and builds with the
-   editor's configuration and a C++ toolchain (`script.status` -> `toolchain`) into `.strata/Scripts/Bin`, then loads
-   the module. In a source checkout that is the engine's toolchain; a downloaded Strata finds one on the machine
-   (Windows: Visual Studio 2022 17.10 or later or 2026 with the C++ workload, or its Build Tools, and CMake; Linux: g++
-   or clang++, Ninja or Make, and CMake 3.25 or later; macOS: the Xcode Command Line Tools and CMake), and without one
-   the build fails naming what to install. On failure the command fails with the first errors
-   (`File(Line,Column): error C2065: ...`, undefined references or symbols of the linker, CMake
+3. **Build.** `script.build` (waits by default) configures CMake on the first run and after files were added or removed
+   (a few seconds) and builds with the editor's configuration and a C++ toolchain (`script.status` -> `toolchain`) into
+   `.strata/Scripts/Bin`, then loads the module. In a source checkout that is the engine's toolchain; a downloaded
+   Strata finds one on the machine (Windows: Visual Studio 2022 17.10 or later or 2026 with the C++ workload, or its
+   Build Tools, and CMake; Linux: g++ or clang++, Ninja or Make, and CMake 3.25 or later; macOS: the Xcode Command Line
+   Tools and CMake), and without one the build fails naming what to install. On failure the command fails with the first
+   errors (`File(Line,Column): error C2065: ...`, undefined references or symbols of the linker, CMake
    errors), followed by the end of the build log when only summaries such as `ld returned 1 exit status` were found;
    `script.status` -> `build.last` lists every diagnostic (`file`, `line`, `column`, `severity`, `code`, `message`)
    and the end of the build log (`log`). Fix and build again. One build runs at a time (a second request fails while

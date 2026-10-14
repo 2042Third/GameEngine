@@ -1602,12 +1602,14 @@ namespace Strata
 				*outError = "No project is open (project.open or project.create)";
 			return false;
 		}
+		// What this build compiles: the sources as they are now, before the compiler reads them (a file saved later counts as
+		// changed after the build). The build configures its tree again when their set changed since it was configured, and
+		// GetPlayBuildReason compares them with the files once the build succeeded.
+		ScriptSourceListing sources = StampScriptSources(m_Project->GetScriptSourceDirectory());
 		// A refused request (e.g. while a build runs) leaves the file watcher alone: a running build has paused it.
-		if (!m_ScriptBuilder.Start(*m_Project, m_Specification.ScriptBuild, outError))
+		if (!m_ScriptBuilder.Start(*m_Project, m_Specification.ScriptBuild, sources, outError))
 			return false;
-		// What this build compiles, for GetPlayBuildReason once it succeeded: the sources as they are now, before the
-		// compiler reads them (a file saved later counts as changed after the build).
-		m_BuildingScriptSources = StampScriptSources(m_Project->GetScriptSourceDirectory());
+		m_BuildingScriptSources = std::move(sources);
 		m_BuildingScriptSourcesID = m_ScriptBuilder.GetCurrentID();
 		// The build reloads the module itself once it finished; the file watcher would reload it a second time when the
 		// linker writes it.

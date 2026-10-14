@@ -18,6 +18,7 @@ namespace Strata
 	class Process;
 	class Project;
 	class ScriptToolchainEnvironment;
+	struct ScriptSourceListing;
 
 	// The toolchain a game's scripts are built with. The defaults are the ones the engine itself was configured with (baked
 	// in at its configure time, see StrataEditor/CMakeLists.txt), so modules match the engine's configuration; modules only
@@ -160,7 +161,9 @@ namespace Strata
 		std::string Error;    // Why the build failed (with the first errors), empty on success
 		std::vector<ScriptDiagnostic> Diagnostics;
 		std::string LogTail;  // The end of the CMake output
-		bool Configured = false; // The CMake configure step ran (first build, or the toolchain changed)
+		// The CMake configure step ran: the first build, another toolchain, or files added to or removed from the script
+		// directory since the tree was configured.
+		bool Configured = false;
 		std::filesystem::path BuildDirectory; // The build tree (see ResolveScriptBuildLocation)
 		double Seconds = 0.0;
 		std::filesystem::path Module; // The built module file
@@ -181,8 +184,9 @@ namespace Strata
 	const char* ScriptBuildPhaseToString(ScriptBuildPhase phase);
 
 	// Builds a project's scripts in the background: configures the project's script directory with CMake (when the build
-	// tree does not exist yet or the toolchain changed) and builds it, in child processes that never block the caller.
-	// Output is streamed to the log line by line. One build runs at a time. Main thread only; call Update once per frame.
+	// tree does not exist yet, the toolchain changed or the script directory's set of files changed) and builds it, in
+	// child processes that never block the caller. Output is streamed to the log line by line. One build runs at a time.
+	// Main thread only; call Update once per frame.
 	class ScriptBuilder
 	{
 	public:
@@ -201,7 +205,12 @@ namespace Strata
 		// (ScriptBuildPhase::FindingToolchain, ResolveScriptToolchain), unless the toolchain found for the same settings
 		// before is still there; the checks that need the toolchain then happen when it is found, and a failure there (no
 		// toolchain: the error says what to install) finishes the build as failed.
-		bool Start(const Project& project, const ScriptBuildSettings& settings, std::string* outError = nullptr);
+		// `sources` lists the project's script directory (StampScriptSources), taken just before the build starts. The tree
+		// is configured again, where it is, when its files are not the ones it was last configured with (a file was added,
+		// removed or renamed: a Visual Studio build compiles the projects as they were configured, even when the module's
+		// CONFIGURE_DEPENDS globs find new files during it), or when the listing was cut short (its Truncated flag: its
+		// files are unknown). A file added after the listing was taken configures the next build.
+		bool Start(const Project& project, const ScriptBuildSettings& settings, const ScriptSourceListing& sources, std::string* outError = nullptr);
 		// Advances a running build. Returns true in the call in which the build finished (see GetLastResult).
 		bool Update();
 		// Terminates a running build; it finishes without success, as cancelled (ScriptBuildResult::Cancelled).
@@ -251,6 +260,9 @@ namespace Strata
 		std::string m_Log;
 		OutputLineSplitter m_OutputLines;
 		std::string m_PendingStamp; // Written once the configure step succeeded
+		// The script directory's files when the build started (ScriptSourceFile::Path, sorted), for the stamp.
+		std::vector<std::string> m_SourcePaths;
+		bool m_SourcesTruncated = false;
 
 		uint64_t m_NextID = 1;
 		ScriptBuildResult m_LastResult;

@@ -879,14 +879,20 @@ Building and loading scripts:
   system compiler, Ninja or Make and CMake 3.25+ on Linux and macOS (modules only
   cross the C ABI, so another compiler of the platform builds them as well). Without one the build fails with what to
   install (its first diagnostic, which the Problems panel and the notification show; `script.status` -> `toolchain` says
-  what the next build uses). The configure step only runs when the build tree is new or the toolchain changed, and
-  generators that can (Ninja, Makefiles) write `compile_commands.json`. With a Visual Studio generator a project whose
-  build tree would be too deep builds in the per-user build directory instead (`ResolveScriptBuildLocation`:
-  `<user data>/Strata/Builds/<hash of the project directory>`, created private; `STRATA_SCRIPT_BUILDS_DIR` overrides the
-  root, tests set it), and the build's log says why: MSBuild's file tracker cannot create its logs at paths over 259
-  characters, which lie up to 104 characters below the build tree (more for module names over about 40 characters), and
-  fails with errors that do not name the cause (`CheckScriptBuildPathLength`). Only a project too deep for both is
-  refused before anything runs, naming a shorter folder by its real path.
+  what the next build uses). The configure step only runs when the build tree is new, the toolchain changed (the tree is
+  then removed and made again) or files were added to, removed from or renamed in the script directory (configured again
+  where it is: the tree's stamp, `StrataScriptBuild.json`, holds the sorted list of the files it was configured with,
+  taken from the `StampScriptSources` listing `EditorContext` passes to `ScriptBuilder::Start`; a listing cut short
+  configures every build). A Visual Studio build compiles the projects as they were configured, even when the module's
+  `CONFIGURE_DEPENDS` globs find new files during it, so a class New Script added would otherwise be missing from the
+  module after one build. Generators that can (Ninja, Makefiles) write `compile_commands.json`. With a Visual Studio
+  generator a project whose build tree would be too deep builds in the per-user build directory instead
+  (`ResolveScriptBuildLocation`: `<user data>/Strata/Builds/<hash of the project directory>`, created private;
+  `STRATA_SCRIPT_BUILDS_DIR` overrides the root, tests set it), and the build's log says why: MSBuild's file tracker
+  cannot create its logs at paths over 259 characters, which lie up to 104 characters below the build tree (more for
+  module names over about 40 characters), and fails with errors that do not name the cause
+  (`CheckScriptBuildPathLength`). Only a project too deep for both is refused before anything runs, naming a shorter
+  folder by its real path.
   Output is streamed to the log; errors are parsed into file/line/message diagnostics (MSVC, GCC, Clang, the GNU, Apple
   and MSVC linkers, CMake; failures with only summary lines report the end of the log). One build runs at a time: a
   second request fails until the running one finished. Cancelling a build (also by closing the project or the editor)

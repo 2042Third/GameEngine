@@ -2,6 +2,7 @@
 
 #include "Editor/ScriptBuild.h"
 #include "Editor/ScriptProject.h"
+#include "Editor/ScriptSources.h"
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
@@ -79,6 +80,17 @@ namespace
 		REQUIRE_MESSAGE(CreateScriptProjectFiles(*project, true, nullptr, &error), error);
 		REQUIRE(CheckScriptBuildPathLength(settings, project->GetScriptBuildDirectory(), "DeepScripts").has_value());
 		return project;
+	}
+
+	void RunBuild(ScriptBuilder& builder)
+	{
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (builder.IsRunning() && std::chrono::steady_clock::now() < deadline)
+		{
+			builder.Update();
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+		}
+		REQUIRE_FALSE(builder.IsRunning());
 	}
 
 }
@@ -455,7 +467,7 @@ TEST_SUITE("Editor.ScriptBuild")
 		REQUIRE_MESSAGE(project, error);
 
 		ScriptBuilder builder;
-		CHECK_FALSE(builder.Start(*project, ScriptBuildSettings::GetEngineDefaults(), &error));
+		CHECK_FALSE(builder.Start(*project, ScriptBuildSettings::GetEngineDefaults(), StampScriptSources(project->GetScriptSourceDirectory()), &error));
 		CHECK(error.find("CMakeLists.txt") != std::string::npos);
 		CHECK(error.find("script.init") != std::string::npos);
 		CHECK_FALSE(builder.IsRunning());
@@ -529,7 +541,7 @@ TEST_SUITE("Editor.ScriptBuild")
 		CHECK_FALSE(CheckScriptBuildPathLength(settings, location->BuildDirectory, project->GetScriptModuleName()));
 
 		ScriptBuilder builder;
-		REQUIRE_MESSAGE(builder.Start(*project, settings, &error), error);
+		REQUIRE_MESSAGE(builder.Start(*project, settings, StampScriptSources(project->GetScriptSourceDirectory()), &error), error);
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
 		while (builder.IsRunning() && std::chrono::steady_clock::now() < deadline)
 		{
@@ -553,6 +565,100 @@ TEST_SUITE("Editor.ScriptBuild")
 		CHECK((*presets)["configurePresets"][0]["binaryDir"] == FileSystem::ToUTF8(perUser / "IDE"));
 	}
 
+	TEST_CASE("A script build configures its tree again, where it is, when files are added to or removed from the script directory")
+	{
+		// The test executable stands in for CMake (see TestMain.cpp) and says what it was asked to do: "Fake CMake: -S" when it
+		// configures. A Visual Studio build compiles the projects as they were configured, even when CONFIGURE_DEPENDS globs
+		// find new files during it: a class added since the tree was configured would be missing from the module.
+		Tests::ScopedEnvironmentVariable fakeCMake("STRATA_TEST_FAKE_CMAKE", "succeed");
+		ScriptBuildSettings settings = MakeNinjaSettings();
+		settings.CMake = Tests::GetTestExecutablePath();
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("ScriptBuildSources") / "Game";
+		std::string error;
+		Ref<Project> project = Project::Create(directory, "Game", &error);
+		REQUIRE_MESSAGE(project, error);
+		REQUIRE_MESSAGE(CreateScriptProjectFiles(*project, true, nullptr, &error), error);
+		const std::filesystem::path scripts = project->GetScriptSourceDirectory();
+		const std::filesystem::path module = project->GetScriptModulePath();
+		REQUIRE(FileSystem::CreateDirectories(module.parent_path()));
+		REQUIRE(FileSystem::WriteText(module, "not a real module")); // The fake CMake builds nothing
+
+		ScriptBuilder builder;
+		// Builds the scripts as they are now (with the listing the editor takes); true when the build configured its tree.
+		auto build = [&](const ScriptBuildSettings& buildSettings, bool truncated = false)
+		{
+			ScriptSourceListing sources = StampScriptSources(scripts);
+			sources.Truncated = truncated;
+			REQUIRE_MESSAGE(builder.Start(*project, buildSettings, sources, &error), error);
+			RunBuild(builder);
+			const ScriptBuildResult& result = builder.GetLastResult();
+			REQUIRE_MESSAGE(result.Success, result.Error);
+			// A configure step is a run of CMake with -S, and every build that reports one ran it.
+			CHECK(result.Configured == (result.LogTail.find("Fake CMake: -S") != std::string::npos));
+			CHECK(result.LogTail.find("Fake CMake: --build") != std::string::npos);
+			return result.Configured;
+		};
+
+		// The first build configures a new tree. CMake leaves its cache there, and the objects it built.
+		CHECK(build(settings));
+		const std::filesystem::path tree = builder.GetLastResult().BuildDirectory;
+		REQUIRE(FileSystem::WriteText(tree / "CMakeCache.txt", "# configured\n"));
+		const std::filesystem::path objects = tree / "Spinner.cpp.o";
+		REQUIRE(FileSystem::WriteText(objects, "built"));
+		CHECK_FALSE(build(settings));
+
+		// Changed code is only built: CMake's dependencies find it.
+		REQUIRE(FileSystem::WriteText(scripts / "Spinner.cpp", FileSystem::ReadText(scripts / "Spinner.cpp").value_or("") + "\n// Edited\n"));
+		CHECK_FALSE(build(settings));
+
+		// A new class (what script.create writes, or a file someone adds) configures first, in the tree it has: what was
+		// built stays. Then the tree is current again.
+		REQUIRE(FileSystem::WriteText(scripts / "Mover.cpp", "// A new class\n"));
+		CHECK(build(settings));
+		CHECK(builder.GetLastResult().LogTail.find("Files were added to or removed from the script directory") != std::string::npos);
+		CHECK(FileSystem::IsRegularFile(objects));
+		CHECK_FALSE(build(settings));
+
+		// So do files in folders, renamed files (as many files as before) and removed ones.
+		REQUIRE(FileSystem::CreateDirectories(scripts / "Gameplay"));
+		REQUIRE(FileSystem::WriteText(scripts / "Gameplay" / "Health.h", "#pragma once\n"));
+		CHECK(build(settings));
+		REQUIRE(FileSystem::Rename(scripts / "Mover.cpp", scripts / "Walker.cpp"));
+		CHECK(build(settings));
+		CHECK_FALSE(build(settings));
+		REQUIRE(FileSystem::Remove(scripts / "Walker.cpp"));
+		CHECK(build(settings));
+		CHECK(FileSystem::IsRegularFile(objects));
+
+		// Files that are not the build's sources change nothing.
+		REQUIRE(FileSystem::WriteText(scripts / "Notes.txt", "Ideas\n"));
+		CHECK_FALSE(build(settings));
+
+		// A configure step that did not finish (cancelled here) leaves a stamp without the files: the next build configures
+		// again, still in the same tree.
+		REQUIRE(FileSystem::WriteText(scripts / "Mover.cpp", "// A new class\n"));
+		REQUIRE_MESSAGE(builder.Start(*project, settings, StampScriptSources(scripts), &error), error);
+		REQUIRE(builder.GetPhase() == ScriptBuildPhase::Configuring);
+		builder.Cancel();
+		REQUIRE(builder.GetLastResult().Cancelled);
+		CHECK(build(settings));
+		CHECK(FileSystem::IsRegularFile(objects));
+		CHECK_FALSE(build(settings));
+
+		// A listing that was cut short cannot tell: every such build configures again.
+		CHECK(build(settings, true));
+		CHECK(builder.GetLastResult().LogTail.find("too large to tell") != std::string::npos);
+		CHECK(build(settings, true));
+		CHECK(FileSystem::IsRegularFile(objects));
+		CHECK_FALSE(build(settings));
+
+		// Another toolchain still needs a new tree: the old one is removed first.
+		ScriptBuildSettings release = settings;
+		release.Configuration = "Release";
+		CHECK(build(release));
+		CHECK_FALSE(FileSystem::IsRegularFile(objects));
+	}
+
 	TEST_CASE("A project too deep even for the per-user build directory is refused with the real path to move it to")
 	{
 		Ref<Project> project = MakeDeepProject("ScriptBuildRefused", MakeVisualStudioSettings());
@@ -561,7 +667,7 @@ TEST_SUITE("Editor.ScriptBuild")
 		std::string error;
 		CHECK_FALSE(ResolveScriptBuildLocation(*project, MakeVisualStudioSettings(), &error));
 		ScriptBuilder builder;
-		CHECK_FALSE(builder.Start(*project, MakeVisualStudioSettings(), &error));
+		CHECK_FALSE(builder.Start(*project, MakeVisualStudioSettings(), StampScriptSources(project->GetScriptSourceDirectory()), &error));
 		CHECK(error.find("too long") != std::string::npos);
 		CHECK(error.find(FileSystem::ToUTF8(project->GetScriptBuildDirectory())) != std::string::npos);
 		// The suggestion names a real folder, not a placeholder.

@@ -1,6 +1,7 @@
 #include "Editor/ScriptBuild.h"
 
 #include "Editor/ScriptBuildConfig.h"
+#include "Editor/ScriptSources.h"
 #include "Editor/ScriptToolchain.h"
 
 #include <Strata/Core/FileSystem.h>
@@ -28,6 +29,8 @@ namespace Strata
 	{
 
 		constexpr const char* c_StampFile = "StrataScriptBuild.json";
+		// The stamp's list of the script directory's files the tree was configured with (see MakeStamp).
+		constexpr const char* c_StampSourcesKey = "Sources";
 		// The process output is kept for diagnostics up to this size (older output is dropped).
 		constexpr size_t c_MaxLogSize = 8 * 1024 * 1024;
 		// Longer diagnostic messages (deeply nested template types) are cut; the log keeps them whole.
@@ -95,7 +98,9 @@ namespace Strata
 			return text;
 		}
 
-		// What the configured build tree depends on; a different stamp means the tree must be configured again.
+		// What the configured build tree depends on: a different stamp means the tree must be made again (removed and
+		// configured). The stamp written once a configure step succeeded adds the files it was configured with
+		// (c_StampSourcesKey), which only ask for the configure step again.
 		nlohmann::json MakeStamp(const ScriptBuildSettings& settings, const std::filesystem::path& sourceDirectory, const std::filesystem::path& binaryDirectory)
 		{
 			nlohmann::json stamp = {
@@ -898,7 +903,7 @@ namespace Strata
 		return std::chrono::duration<double>(std::chrono::steady_clock::now() - m_StartTime).count();
 	}
 
-	bool ScriptBuilder::Start(const Project& project, const ScriptBuildSettings& settings, std::string* outError)
+	bool ScriptBuilder::Start(const Project& project, const ScriptBuildSettings& settings, const ScriptSourceListing& sources, std::string* outError)
 	{
 		auto fail = [outError](std::string message)
 		{
@@ -914,6 +919,13 @@ namespace Strata
 		const std::filesystem::path sourceDirectory = project.GetScriptSourceDirectory();
 		if (!FileSystem::IsRegularFile(sourceDirectory / "CMakeLists.txt"))
 			return fail(fmt::format("The project has no script build: '{}' is missing (script.init creates it)", FileSystem::ToUTF8(sourceDirectory / "CMakeLists.txt")));
+		// Kept for Begin, which may run once a toolchain was found; sorted, so that only another set of files changes the stamp.
+		m_SourcePaths.clear();
+		m_SourcePaths.reserve(sources.Files.size());
+		for (const ScriptSourceFile& file : sources.Files)
+			m_SourcePaths.push_back(file.Path);
+		std::sort(m_SourcePaths.begin(), m_SourcePaths.end());
+		m_SourcesTruncated = sources.Truncated;
 		if (!settings.FindToolchain)
 			return Begin(project, settings, false, outError);
 		// The toolchain found for these settings before serves while it is there: only the first build looks (and one after
@@ -1006,14 +1018,23 @@ namespace Strata
 		}
 		const uint64_t id = m_NextID - 1;
 
-		// The configure step runs when the build tree is new or was configured differently. A tree configured with another
-		// generator cannot be reused, so it is removed first.
+		// The configure step runs when the build tree is new, was configured differently or for other files. A tree
+		// configured with another toolchain or elsewhere cannot be reused, so it is removed first; one configured for other
+		// files is configured again where it is, keeping what it built.
 		const std::filesystem::path binaryDirectory = project.GetScriptBinaryDirectory();
-		const nlohmann::json stamp = MakeStamp(settings, sourceDirectory, binaryDirectory);
+		const nlohmann::json treeStamp = MakeStamp(settings, sourceDirectory, binaryDirectory);
+		const nlohmann::json sourcesStamp = m_SourcePaths;
 		const std::optional<std::string> stampText = FileSystem::ReadText(m_BuildDirectory / c_StampFile);
-		const std::optional<nlohmann::json> previousStamp = stampText ? JsonUtils::Parse(*stampText) : std::nullopt;
-		const bool configured = FileSystem::IsRegularFile(m_BuildDirectory / "CMakeCache.txt") && previousStamp && *previousStamp == stamp;
-		if (!configured && FileSystem::Exists(m_BuildDirectory) && !FileSystem::Remove(m_BuildDirectory))
+		std::optional<nlohmann::json> previousStamp = stampText ? JsonUtils::Parse(*stampText) : std::nullopt;
+		nlohmann::json previousSources;
+		if (previousStamp && previousStamp->is_object() && previousStamp->contains(c_StampSourcesKey))
+		{
+			previousSources = std::move((*previousStamp)[c_StampSourcesKey]);
+			previousStamp->erase(c_StampSourcesKey);
+		}
+		const bool reusable = FileSystem::IsRegularFile(m_BuildDirectory / "CMakeCache.txt") && previousStamp && *previousStamp == treeStamp;
+		const bool configured = reusable && !m_SourcesTruncated && previousSources == sourcesStamp;
+		if (!reusable && FileSystem::Exists(m_BuildDirectory) && !FileSystem::Remove(m_BuildDirectory))
 			return fail(fmt::format("Cannot remove the outdated script build directory '{}'", FileSystem::ToUTF8(m_BuildDirectory)));
 		if (!FileSystem::CreateDirectories(m_BuildDirectory) || !FileSystem::CreateDirectories(binaryDirectory))
 			return fail(fmt::format("Cannot create the script build directories in '{}'", FileSystem::ToUTF8(project.GetIntermediateDirectory())));
@@ -1029,13 +1050,25 @@ namespace Strata
 			m_Log += location->MovedReason + "\n";
 			ST_INFO("[Scripts] {}", location->MovedReason);
 		}
-		if (!configured && !FileSystem::WriteText(m_BuildDirectory / c_StampFile, ""))
+		if (reusable && !configured)
+		{
+			const std::string reason = m_SourcesTruncated
+				? fmt::format("The script directory is too large to tell whether files were added or removed (over {} code and CMake files, or {} "
+					"entries): configuring again", c_MaxListedScriptSources, c_MaxScannedScriptEntries)
+				: std::string("Files were added to or removed from the script directory since it was configured: configuring again");
+			m_Log += reason + "\n";
+			ST_INFO("[Scripts] {}", reason);
+		}
+		// Until the configure step succeeded, the stamp says that the tree needs one: empty for a new tree (removed and made
+		// again when its configure step fails), without its files for a tree configured again where it is.
+		if (!configured && !FileSystem::WriteText(m_BuildDirectory / c_StampFile, reusable ? JsonUtils::Dump(treeStamp, 1, '\t') + "\n" : std::string()))
 			return finishFailed(fmt::format("Cannot write to the script build directory '{}'", FileSystem::ToUTF8(m_BuildDirectory)));
 		if (!StartProcess(arguments, &error))
 			return finishFailed(error);
 		if (!configured)
 		{
-			// Written once the configure step succeeds; an empty stamp never matches, so a failed configure runs again.
+			nlohmann::json stamp = treeStamp;
+			stamp[c_StampSourcesKey] = sourcesStamp;
 			m_PendingStamp = JsonUtils::Dump(stamp, 1, '\t') + "\n";
 		}
 		return true;

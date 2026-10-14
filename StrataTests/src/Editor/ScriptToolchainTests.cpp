@@ -3,6 +3,7 @@
 #include "Asset/AssetTestUtils.h"
 #include "Editor/ScriptBuild.h"
 #include "Editor/ScriptProject.h"
+#include "Editor/ScriptSources.h"
 #include "Editor/ScriptToolchain.h"
 #include "TestHelpers.h"
 
@@ -668,7 +669,7 @@ TEST_SUITE("Editor.ScriptToolchain")
 		});
 		CHECK_FALSE(builder.GetFoundToolchain(preferences));
 
-		REQUIRE_MESSAGE(builder.Start(*project, preferences, &error), error);
+		REQUIRE_MESSAGE(builder.Start(*project, preferences, StampScriptSources(project->GetScriptSourceDirectory()), &error), error);
 		CHECK(builder.IsRunning());
 		CHECK(builder.GetCurrentID() == 1);
 		RunBuild(builder);
@@ -708,7 +709,7 @@ TEST_SUITE("Editor.ScriptToolchain")
 		// test does, as CMake's configure step would).
 		REQUIRE(searches.load() == 1);
 		REQUIRE(FileSystem::WriteText(result.BuildDirectory / "CMakeCache.txt", "# configured\n"));
-		REQUIRE_MESSAGE(builder.Start(*project, preferences, &error), error);
+		REQUIRE_MESSAGE(builder.Start(*project, preferences, StampScriptSources(project->GetScriptSourceDirectory()), &error), error);
 		CHECK(builder.GetPhase() != ScriptBuildPhase::FindingToolchain);
 		RunBuild(builder);
 		REQUIRE_MESSAGE(builder.GetLastResult().Success, builder.GetLastResult().Error);
@@ -734,7 +735,7 @@ TEST_SUITE("Editor.ScriptToolchain")
 			AddSDK(*machine, preferences.EngineDirectory);
 			return Scope<ScriptToolchainEnvironment>(std::move(machine));
 		});
-		REQUIRE_MESSAGE(builder.Start(*project, preferences, &error), error);
+		REQUIRE_MESSAGE(builder.Start(*project, preferences, StampScriptSources(project->GetScriptSourceDirectory()), &error), error);
 		RunBuild(builder);
 		const ScriptBuildResult& result = builder.GetLastResult();
 		CHECK(result.ID == 1);
@@ -762,7 +763,7 @@ TEST_SUITE("Editor.ScriptToolchain")
 				std::this_thread::sleep_for(std::chrono::milliseconds(1));
 			return Scope<ScriptToolchainEnvironment>(CreateScope<FakeMachine>());
 		});
-		REQUIRE_MESSAGE(builder.Start(*project, preferences, &error), error);
+		REQUIRE_MESSAGE(builder.Start(*project, preferences, StampScriptSources(project->GetScriptSourceDirectory()), &error), error);
 		CHECK(builder.GetPhase() == ScriptBuildPhase::FindingToolchain);
 		CHECK(std::string(ScriptBuildPhaseToString(builder.GetPhase())) == "FindingToolchain");
 		builder.Cancel();
