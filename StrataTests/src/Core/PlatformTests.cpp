@@ -196,10 +196,13 @@ TEST_SUITE("Core.Platform")
 		REQUIRE(before.has_value());
 		std::optional<ProcessMemoryInfo> during;
 		{
-			std::unique_ptr<uint8_t[]> block(new uint8_t[c_AllocationSize]);
+			// Pages from the system: the allocator may hand out memory it already holds (freed by earlier tests and kept for
+			// reuse), which touching would not grow.
+			Tests::FreshPages block(c_AllocationSize);
+			REQUIRE(block.GetData());
 			// Writes a nonzero byte to every page, through a volatile pointer so the stores cannot be optimized away:
 			// untouched pages need no physical memory.
-			volatile uint8_t* bytes = block.get();
+			volatile uint8_t* bytes = block.GetData();
 			for (size_t offset = 0; offset < c_AllocationSize; offset += 4096)
 				bytes[offset] = static_cast<uint8_t>((offset >> 12) | 1);
 			during = Platform::GetProcessMemory();

@@ -4,6 +4,7 @@
 #include "Strata/Core/Platform.h"
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -118,6 +119,25 @@ namespace Strata::Tests
 	std::optional<ConsoleRun> RunInConsole(const std::filesystem::path& program, const std::vector<std::string>& arguments, std::string* outError = nullptr,
 		std::string_view interruptWhenShown = {});
 #endif
+
+	// Pages straight from the system (VirtualAlloc, mmap), not from the process's allocator, which may hand out memory it
+	// already holds (freed earlier and kept for reuse), so touching them always grows the process's memory. Released when
+	// the object is destroyed.
+	class FreshPages
+	{
+	public:
+		explicit FreshPages(size_t size);
+		~FreshPages();
+
+		FreshPages(const FreshPages&) = delete;
+		FreshPages& operator=(const FreshPages&) = delete;
+
+		uint8_t* GetData() const { return m_Data; } // Null when the system had no pages to give
+		size_t GetSize() const { return m_Size; }
+	private:
+		uint8_t* m_Data = nullptr;
+		size_t m_Size = 0;
+	};
 
 	inline std::filesystem::path GetTestExecutablePath()
 	{

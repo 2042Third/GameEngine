@@ -21,6 +21,8 @@
 
 	#include <cstring>
 	#include <string>
+#else
+	#include <sys/mman.h>
 #endif
 
 namespace Strata::Tests
@@ -437,6 +439,34 @@ namespace Strata::Tests
 			std::filesystem::remove_all(directory, error);
 		}
 		s_TemporaryDirectories.clear();
+	}
+
+	FreshPages::FreshPages(size_t size)
+	{
+		if (size == 0)
+			return;
+#if defined(ST_PLATFORM_WINDOWS)
+		void* pages = VirtualAlloc(nullptr, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+		if (!pages)
+			return;
+#else
+		void* pages = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+		if (pages == MAP_FAILED)
+			return;
+#endif
+		m_Data = static_cast<uint8_t*>(pages);
+		m_Size = size;
+	}
+
+	FreshPages::~FreshPages()
+	{
+		if (!m_Data)
+			return;
+#if defined(ST_PLATFORM_WINDOWS)
+		VirtualFree(m_Data, 0, MEM_RELEASE);
+#else
+		munmap(m_Data, m_Size);
+#endif
 	}
 
 }
