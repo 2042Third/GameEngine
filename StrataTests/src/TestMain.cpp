@@ -20,6 +20,7 @@
 #include "Strata/Core/Process.h"
 #include "Strata/Engine/BuiltinModules.h"
 #include "Strata/Project/GameManifest.h"
+#include "Strata/Renderer/GraphicsDevice.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
@@ -281,6 +282,22 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 			return 99;
 		}
 		return process.Wait().value_or(99);
+	}
+	if (mode == "create-graphics-device")
+	{
+		// [--validation]: creates a headless graphics device as the GPU tests' does, with or without validation, and says
+		// whether it could and with how many errors.
+		Strata::GraphicsDeviceSpecification specification;
+		specification.ApplicationName = "StrataTests.Helper";
+		specification.Headless = true;
+		specification.EnableValidation = argc > 2 && std::string_view(argv[2]) == "--validation";
+		const Strata::Scope<Strata::GraphicsDevice> device = Strata::GraphicsDevice::Create(specification);
+		if (device)
+			std::printf("Graphics device created (errors: %u)\n", device->GetErrorCount());
+		else
+			std::printf("No graphics device\n");
+		std::fflush(stdout);
+		return device ? 0 : 1;
 	}
 	if (mode == "echo")
 	{

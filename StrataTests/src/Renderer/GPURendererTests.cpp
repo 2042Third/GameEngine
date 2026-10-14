@@ -1,10 +1,15 @@
 #include <doctest/doctest.h>
 
 #include "Renderer/GPUTestUtils.h"
+#include "Strata/Core/FileSystem.h"
+#include "Strata/Core/Process.h"
 #include "Strata/ImGui/ImGuiRenderer.h"
+#include "TestHelpers.h"
 
 #include <imgui.h>
 
+#include <chrono>
+#include <filesystem>
 #include <string>
 #include <vector>
 
@@ -78,6 +83,41 @@ TEST_SUITE("GPU.Renderer")
 		CHECK(device->GetErrorCount() == 0);
 		device.reset();
 		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A validation layer the loader lists but cannot load leaves the device without it")
+	{
+		// A manifest of the validation layer naming a library that does not exist, the only layer the loader looks for: the
+		// loader lists the layer and fails to load it, as with a manifest whose library lies outside its search path.
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("BrokenValidationLayer");
+		REQUIRE(FileSystem::WriteText(directory / "VkLayer_khronos_validation.json", R"({
+	"file_format_version": "1.2.0",
+	"layer": {
+		"name": "VK_LAYER_KHRONOS_validation",
+		"type": "GLOBAL",
+		"library_path": "./Missing/VkLayer_khronos_validation_missing",
+		"api_version": "1.3.0",
+		"implementation_version": "1",
+		"description": "A validation layer whose library is missing"
+	}
+})"));
+
+		// The child's environment only (a helper sets it), never this process's, whose device uses the real layer.
+		ProcessSpecification specification;
+		specification.Executable = Tests::GetTestExecutablePath();
+		specification.Arguments = { "--strata-test-helper=run-with-environment", "VK_LAYER_PATH=" + FileSystem::ToUTF8(directory), "VK_ADD_LAYER_PATH=",
+			"--", FileSystem::ToUTF8(Tests::GetTestExecutablePath()), "--strata-test-helper=create-graphics-device", "--validation" };
+		specification.Output = ProcessOutputMode::CaptureSeparate;
+		const Process::RunResult result = Process::Run(specification, std::chrono::seconds(60));
+		REQUIRE_MESSAGE(result.Started, result.Error);
+		REQUIRE_FALSE(result.TimedOut);
+		INFO(result.Output);
+		INFO(result.ErrorOutput);
+		CHECK(result.ExitCode == 0);
+		// The loader's reports of the layer it could not load are no errors of the device.
+		CHECK(result.Output.find("Graphics device created (errors: 0)") != std::string::npos);
+		const std::string log = result.Output + result.ErrorOutput;
+		CHECK(log.find("VK_LAYER_KHRONOS_validation could not be loaded") != std::string::npos);
 	}
 
 	TEST_CASE("Triangle rendering follows the engine's clip-space conventions")

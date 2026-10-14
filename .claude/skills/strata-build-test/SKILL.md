@@ -35,6 +35,16 @@ build\windows\bin\Debug\StrataTests.exe --test-suite="Asset.*"        # one modu
 build\windows\bin\Debug\StrataTests.exe --test-case="*export*"       # wildcard test names
 ```
 
+On macOS with Homebrew's layers (`brew install molten-vk vulkan-loader vulkan-validationlayers`), the layer's manifest
+names its library without a directory, which the loader does not find: give it a copy that names the full path.
+
+```sh
+mkdir -p build/_tools/vulkan-layers
+python3 -c "import json; p='$(brew --prefix)'; d=json.load(open(p+'/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json')); d['layer']['library_path']=p+'/lib/libVkLayer_khronos_validation.dylib'; json.dump(d, open('build/_tools/vulkan-layers/VkLayer_khronos_validation.json', 'w'), indent=4)"
+export VK_ADD_LAYER_PATH="$PWD/build/_tools/vulkan-layers"
+ctest --preset macos-debug -LE perf
+```
+
 - doctest filters split on commas. A test name containing a comma must be matched with `?`/`*`, e.g.
   `--test-case="Hierarchy?*"`.
 - CTest runs: `StrataTests.Core` (everything but the GPU, EndToEnd, `Package*`, perf and feature test suites; it

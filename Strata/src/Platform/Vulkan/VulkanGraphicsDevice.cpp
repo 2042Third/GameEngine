@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Renderer/GraphicsDevice.h"
 
+#include "Platform/Vulkan/VulkanDebugMessages.h"
 #include "Platform/Vulkan/VulkanLoader.h"
 #include "Strata/Core/Window.h"
 
@@ -27,6 +28,14 @@ namespace Strata
 
 		constexpr uint32_t c_MinimumVulkanVersion = VK_API_VERSION_1_2;
 		constexpr const char* c_ValidationLayerName = "VK_LAYER_KHRONOS_validation";
+
+		// What the debug messenger's callback knows of its device.
+		struct DebugMessengerState
+		{
+			std::atomic<uint32_t> ErrorCount = 0;
+			// VulkanMessageContext's members.
+			std::atomic<bool> CreatingInstanceWithLayers = false;
+		};
 
 		std::string FormatVulkanVersion(uint32_t version)
 		{
@@ -82,23 +91,26 @@ namespace Strata
 			const VkDebugUtilsMessengerCallbackDataEXT* callbackData, void* userData)
 		{
 			const char* message = callbackData && callbackData->pMessage ? callbackData->pMessage : "(no message)";
-			// The loader reports its search (e.g. missing registry keys for layer manifests) as warnings; keep them out
-			// of the way unless tracing.
-			const bool loaderMessage = callbackData && callbackData->pMessageIdName && std::strcmp(callbackData->pMessageIdName, "Loader Message") == 0;
-			if (loaderMessage && !(severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT))
+			auto* state = static_cast<DebugMessengerState*>(userData);
+			VulkanMessage classified;
+			classified.Error = (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0;
+			classified.Warning = (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) != 0;
+			classified.IdName = callbackData ? callbackData->pMessageIdName : nullptr;
+			classified.Text = message;
+			VulkanMessageContext context;
+			context.CreatingInstanceWithLayers = state->CreatingInstanceWithLayers.load();
+			switch (ClassifyVulkanMessage(classified, context))
 			{
-				ST_CORE_TRACE("Vulkan loader: {}", message);
-				return VK_FALSE;
-			}
-
-			if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
-			{
-				ST_CORE_ERROR("Vulkan: {}", message);
-				static_cast<std::atomic<uint32_t>*>(userData)->fetch_add(1);
-			}
-			else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
-			{
-				ST_CORE_WARN("Vulkan: {}", message);
+				case VulkanMessageDisposition::Error:
+					ST_CORE_ERROR("Vulkan: {}", message);
+					state->ErrorCount.fetch_add(1);
+					break;
+				case VulkanMessageDisposition::Warning:
+					ST_CORE_WARN("Vulkan: {}", message);
+					break;
+				case VulkanMessageDisposition::Trace:
+					ST_CORE_TRACE("Vulkan: {}", message);
+					break;
 			}
 			return VK_FALSE;
 		}
@@ -216,7 +228,7 @@ namespace Strata
 
 		uint32_t GetErrorCount() const override
 		{
-			return m_MessageCallback.ErrorCount.load() + m_VulkanErrorCount.load();
+			return m_MessageCallback.ErrorCount.load() + m_DebugMessengerState.ErrorCount.load();
 		}
 
 		bool IsDeviceLost() const override { return m_DeviceLost; }
@@ -239,7 +251,7 @@ namespace Strata
 		GraphicsDeviceSpecification m_Specification;
 		GraphicsDeviceInfo m_Info;
 		NvrhiMessageCallback m_MessageCallback;
-		std::atomic<uint32_t> m_VulkanErrorCount = 0;
+		DebugMessengerState m_DebugMessengerState;
 
 		VkInstance m_Instance = VK_NULL_HANDLE;
 		VkDebugUtilsMessengerEXT m_DebugMessenger = VK_NULL_HANDLE;
@@ -392,7 +404,7 @@ namespace Strata
 		messengerInfo.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
 		messengerInfo.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
 		messengerInfo.pfnUserCallback = DebugUtilsCallback;
-		messengerInfo.pUserData = &m_VulkanErrorCount;
+		messengerInfo.pUserData = &m_DebugMessengerState;
 
 		VkInstanceCreateInfo instanceInfo = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO };
 		instanceInfo.flags = createFlags;
@@ -405,7 +417,21 @@ namespace Strata
 		if (m_HasDebugUtils && !layers.empty())
 			instanceInfo.pNext = &messengerInfo;
 
-		const VkResult result = dispatch.vkCreateInstance(&instanceInfo, nullptr, &m_Instance);
+		m_DebugMessengerState.CreatingInstanceWithLayers = !layers.empty();
+		VkResult result = dispatch.vkCreateInstance(&instanceInfo, nullptr, &m_Instance);
+		m_DebugMessengerState.CreatingInstanceWithLayers = false;
+		if (result == VK_ERROR_LAYER_NOT_PRESENT && !layers.empty())
+		{
+			// The loader lists the layer but cannot load its library: its manifest names a library outside the loader's
+			// search path (Homebrew's on macOS names it without its directory). Run without it rather than not at all.
+			ST_CORE_WARN("Vulkan validation requested but {} could not be loaded (the Vulkan loader found its manifest, not its library); "
+				"using NVRHI validation only", c_ValidationLayerName);
+			layers.clear();
+			instanceInfo.enabledLayerCount = 0;
+			instanceInfo.ppEnabledLayerNames = nullptr;
+			instanceInfo.pNext = nullptr;
+			result = dispatch.vkCreateInstance(&instanceInfo, nullptr, &m_Instance);
+		}
 		if (result != VK_SUCCESS)
 		{
 			// VK_ERROR_INCOMPATIBLE_DRIVER: a loader without a driver (e.g. without MoltenVK on macOS).

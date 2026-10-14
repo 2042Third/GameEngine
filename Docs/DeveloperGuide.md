@@ -130,6 +130,13 @@ are vendored), but installing it enables the Khronos validation layers used by D
 Linux also needs: `libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libwayland-dev
 libxkbcommon-dev libgtk-3-dev` (window system + native file dialogs).
 
+macOS runs Vulkan on Metal through MoltenVK: the LunarG Vulkan SDK, or Homebrew's `molten-vk` and `vulkan-loader` (with
+`vulkan-validationlayers` for the validation layer). Homebrew's layer manifest names its library without a directory,
+which the macOS loader does not look for in Homebrew's `lib`: Debug builds then warn that the layer could not be loaded
+and run without it. To validate, point `VK_ADD_LAYER_PATH` at a directory holding a copy of
+`$(brew --prefix)/share/vulkan/explicit_layer.d/VkLayer_khronos_validation.json` whose `library_path` is the library's
+full path, `$(brew --prefix)/lib/libVkLayer_khronos_validation.dylib` (the build-test skill has the commands).
+
 Useful CMake options: `-DSTRATA_BUILD_EDITOR=OFF`, `-DSTRATA_BUILD_RUNTIME=OFF`,
 `-DSTRATA_BUILD_CLI=OFF`, `-DSTRATA_BUILD_TESTS=OFF`, `-DSTRATA_ENABLE_TRACY=ON`,
 `-DSTRATA_WARNINGS_AS_ERRORS=OFF` (local experiments only — CI always builds with warnings as errors).
@@ -216,13 +223,13 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 
 ### GPU tests
 
-- Suites whose names start with `GPU` need a Vulkan device and are registered separately under the
-  CTest label `gpu`. They share one device per process through `Tests::GPUContext` (never create
-  devices in tests) and end with `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the
-  test. Run them under the Khronos validation layer locally by pointing `VK_ADD_LAYER_PATH` at its
-  build. Rendering features are tested on pixels read back with `Renderer::ReadTexture`. `GPU.Startup` needs a desktop
-  rather than the device, like the label's other windowed tests: it starts the editor in a window with a Vulkan loader
-  that finds no driver and reads what its error dialog says.
+- Suites whose names start with `GPU` need a Vulkan device and are registered separately under the CTest label `gpu`.
+  They share one device per process through `Tests::GPUContext` (never create devices in tests) and end with
+  `CHECK(gpu.GetNewErrorCount() == 0)`, so validation errors fail the test. Run them under the Khronos validation layer
+  locally by pointing `VK_ADD_LAYER_PATH` at its build (on macOS with Homebrew, at the manifest copy
+  [Building](#building) describes). Rendering features are tested on pixels read back with `Renderer::ReadTexture`.
+  `GPU.Startup` needs a desktop rather than the device, like the label's other windowed tests: it starts the editor in a
+  window with a Vulkan loader that finds no driver and reads what its error dialog says.
 
 ### Perf tests
 
