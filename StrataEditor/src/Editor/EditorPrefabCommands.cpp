@@ -355,9 +355,10 @@ namespace Strata
 					Entity instance = scene.GetEntityByUUID(other);
 					if (!instance)
 						continue; // Inside an instance an update before removed
-					const PrefabOverrides::PartChangeCache::Parts& part = parts.Get(instance.GetComponent<PrefabInstanceComponent>().PrefabEntityID);
+					const PrefabOverrides::PartChangeCache::Parts& otherPart = parts.Get(instance.GetComponent<PrefabInstanceComponent>().PrefabEntityID);
 					PrefabOverrides::PropagateResult result;
-					if (!PrefabOverrides::Propagate(scene, instance, part.Previous, part.Next, result, [&transaction](UUID id) { transaction.Track(id); }, &error))
+					if (!PrefabOverrides::Propagate(scene, instance, otherPart.Previous, otherPart.Next, result, [&transaction](UUID id) { transaction.Track(id); },
+						&error))
 					{
 						transaction.Rollback();
 						return EditorCommandResult::Fail(fmt::format("Updating another instance failed: {}", error));
@@ -365,7 +366,7 @@ namespace Strata
 					for (const UUID entity : result.Created)
 						transaction.TrackCreated(entity);
 					transaction.Track(other);
-					PrefabInstances::MarkSynced(instance, part.NextVersion, result.ContentHash);
+					PrefabInstances::MarkSynced(instance, otherPart.NextVersion, result.ContentHash);
 					updated += !result.Changed.empty() || !result.Created.empty() ? 1 : 0;
 				}
 

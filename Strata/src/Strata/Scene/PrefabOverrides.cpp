@@ -89,6 +89,15 @@ namespace Strata
 			return nullptr;
 		}
 
+		// The entry of a class in a list of scripts (GetScripts), to change or remove it; end() when the list lacks it. (A
+		// function rather than lambdas at the call sites: those would capture structured bindings, which Apple Clang 15
+		// refuses.)
+		std::vector<std::pair<std::string, nlohmann::json>>::iterator FindScriptEntry(std::vector<std::pair<std::string, nlohmann::json>>& scripts,
+			std::string_view name)
+		{
+			return std::find_if(scripts.begin(), scripts.end(), [name](const auto& script) { return script.first == name; });
+		}
+
 		nlohmann::json MakeScriptComponent(const std::vector<std::pair<std::string, nlohmann::json>>& scripts)
 		{
 			nlohmann::json list = nlohmann::json::array();
@@ -565,7 +574,7 @@ namespace Strata
 						for (const auto& [className, fields] : GetScripts(nextValue))
 						{
 							const nlohmann::json* previousFields = FindScript(previousScripts, className);
-							auto current = std::find_if(scripts.begin(), scripts.end(), [&](const auto& script) { return script.first == className; });
+							auto current = FindScriptEntry(scripts, className);
 							if (current == scripts.end())
 							{
 								if (!previousFields && !IsOverridden(overrides, id, name, className))
@@ -595,7 +604,7 @@ namespace Strata
 						{
 							if (FindScript(GetScripts(nextValue), className) || IsOverridden(overrides, id, name, className))
 								continue;
-							const auto current = std::find_if(scripts.begin(), scripts.end(), [&](const auto& script) { return script.first == className; });
+							const auto current = FindScriptEntry(scripts, className);
 							if (current != scripts.end())
 							{
 								scripts.erase(current);
@@ -656,9 +665,11 @@ namespace Strata
 						// The prefab's scripts go; those the instance added stay.
 						auto scripts = GetScripts(ComponentAccess::Serialize(*info, info->Get(scene.GetRegistry(), entity.GetHandle())));
 						const size_t count = scripts.size();
-						std::erase_if(scripts, [&](const auto& script)
+						const std::vector<std::pair<std::string, nlohmann::json>> removedScripts = GetScripts(previousValue);
+						const std::string_view component = name;
+						std::erase_if(scripts, [&removedScripts, &overrides, id, component](const auto& script)
 						{
-							return FindScript(GetScripts(previousValue), script.first) && !IsOverridden(overrides, id, name, script.first);
+							return FindScript(removedScripts, script.first) && !IsOverridden(overrides, id, component, script.first);
 						});
 						if (scripts.size() == count)
 							continue;
@@ -743,7 +754,7 @@ namespace Strata
 					: std::vector<std::pair<std::string, nlohmann::json>>();
 				const auto templateScripts = templateValue ? GetScripts(*templateValue) : std::vector<std::pair<std::string, nlohmann::json>>();
 				const nlohmann::json* templateFields = FindScript(templateScripts, className);
-				auto current = std::find_if(scripts.begin(), scripts.end(), [&](const auto& script) { return script.first == className; });
+				auto current = FindScriptEntry(scripts, className);
 				if (field.empty())
 				{
 					if (!templateFields)
@@ -837,7 +848,7 @@ namespace Strata
 				auto scripts = components.contains(name) ? GetScripts(components[name]) : std::vector<std::pair<std::string, nlohmann::json>>();
 				const auto instanceScripts = value ? GetScripts(*value) : std::vector<std::pair<std::string, nlohmann::json>>();
 				const nlohmann::json* instanceFields = FindScript(instanceScripts, className);
-				auto current = std::find_if(scripts.begin(), scripts.end(), [&](const auto& script) { return script.first == className; });
+				auto current = FindScriptEntry(scripts, className);
 				if (field.empty())
 				{
 					if (!instanceFields && current != scripts.end())
