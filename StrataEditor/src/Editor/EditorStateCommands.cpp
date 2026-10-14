@@ -271,7 +271,7 @@ namespace Strata
 				{ "shadowCasters", stats.ShadowCasters },
 				{ "triangles", stats.Triangles },
 				{ "visibleProxies", stats.VisibleProxies },
-				{ "occludedProxies", 0 },
+				{ "occludedProxies", stats.OccludedProxies },
 				{ "culledProxies", stats.CulledInstances },
 				{ "instancesPerLod", std::move(lods) },
 				{ "lights", stats.Lights },
@@ -813,7 +813,8 @@ namespace Strata
 			"its counts are the GPU's, of a frame 2-3 frames older, once gpuCounts is true; transparent surfaces are the CPU's), feedbackRequests (its "
 			"asset requests came from the GPU's visibility feedback of an earlier frame, not from the CPU walking the view), drawCommands (draw "
 			"calls the CPU recorded), draws (instanced draws of the view), opaqueDraws, shadowDraws, instances, shadowCasters, triangles, "
-			"visibleProxies, occludedProxies, culledProxies, sizeCulledProxies (in view but below a pixel), instancesPerLod, lights, droppedLights, "
+			"visibleProxies, occludedProxies (in the frustum but hidden behind what the view draws: left out on the GPU-driven path), culledProxies, "
+			"sizeCulledProxies (in view but below a pixel), instancesPerLod, lights, droppedLights, "
 			"materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes (new mesh renderers waiting for "
 			"their upload to the GPU), geometryPool "
 			"(the meshes' GPU geometry: usedMB, capacityMB, allocations, fragmentation, moves, growths), gpuMs "

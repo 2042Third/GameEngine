@@ -145,6 +145,12 @@ namespace Strata
 		// meshes of unknown bounds, transparent surfaces and skinned proxies are always the CPU's. Off: the CPU's marks every
 		// frame.
 		bool VisibilityFeedback = true;
+		// GPU-driven frames leave out of the view what lies behind what the view draws, in two phases: the first draws what
+		// was visible in the previous frame into the depth prepass, a depth pyramid of that (Scene/HZBBuild.comp) tests every
+		// other proxy in the frustum, and the second phase draws those found visible (in the same frame: nothing appears a
+		// frame late). Camera cuts and a renderer's first frame start without history (the first phase draws nothing).
+		// Shadow cascades are not occlusion culled.
+		bool OcclusionCulling = true;
 	};
 
 	// A material the last frame drew, for streaming its textures at the resolution the screen needs.
@@ -247,6 +253,9 @@ namespace Strata
 		uint32_t CulledInstances = 0; // Mesh renderers outside the view frustum
 		// CPU path: mesh renderers in the view smaller than SceneRendererSpecification::MinProjectedPixels (not drawn).
 		uint32_t SizeCulledProxies = 0;
+		// GPU-driven frames: mesh renderers in the frustum hidden behind what the view draws (OcclusionCulling; with
+		// AddGPUCounts).
+		uint32_t OccludedProxies = 0;
 		uint64_t Triangles = 0;
 		// Drawn submesh instances per selected level of detail; the last entry also counts all higher levels.
 		std::array<uint32_t, c_LODStatCount> InstancesPerLOD = {};
@@ -323,6 +332,7 @@ namespace Strata
 		uint32_t ShadowDraws = 0;
 		uint32_t VisibleProxies = 0;   // Mesh renderers that passed the view's frustum and size tests
 		uint32_t SizeCulledProxies = 0; // In the frustum, below SceneRendererSpecification::MinProjectedPixels
+		uint32_t OccludedProxies = 0;  // In the frustum, hidden behind what the view draws (SceneRendererSpecification::OcclusionCulling)
 		uint32_t SubTexelCasters = 0;
 		uint32_t SkinnedInstances = 0;
 		uint64_t Triangles = 0;        // Of the view's instances
@@ -779,12 +789,25 @@ namespace Strata
 		bool CreateCullBindingSet();
 		// Uploads the tables and constants that changed, and the geometry pool's tables.
 		bool UploadCullTables(nvrhi::ICommandList* commandList);
-		// Counts, builds the draws and writes the draw list (Scene/Cull.comp, CullBuild.comp), and copies the counters for
-		// the statistics.
+		// Counts, builds the draws and writes the draw list (Scene/Cull.comp, CullBuild.comp) of the cascades and of the view's
+		// first phase (all of the view without occlusion culling).
 		void RunGPUCulling(nvrhi::ICommandList* commandList, bool shadows);
-		// After the command list with RunGPUCulling was executed: the counters' copy is under way.
+		// After the first phase's prepass: the depth pyramid, the view's second phase (what the first did not draw that is
+		// visible against it) and its prepass draws; then copies the counters for the statistics.
+		void RunOcclusionPhase(nvrhi::ICommandList* commandList);
+		// The counters' (and the feedback's) copy into the frame's readback.
+		void RecordCullReadback(nvrhi::ICommandList* commandList);
+		// Makes each culling pass see the previous one's writes.
+		void CullBarrier(nvrhi::ICommandList* commandList);
+		// Sizes the visibility buffer for the proxies; a new one starts without history.
+		bool EnsureVisibilityBuffer(bool& outRecreated);
+		// After the command list with the culling was executed: the counters' copy is under way.
 		void SubmitCullReadback();
-		void DrawGPUView(nvrhi::ICommandList* commandList, Pass pass);
+		// The view's dense buckets [first, end) in the pass.
+		void DrawGPUView(nvrhi::ICommandList* commandList, Pass pass, uint32_t firstDense, uint32_t endDense);
+		// Whether the frame's view is occlusion culled (SceneRendererSpecification::OcclusionCulling, with a depth pyramid).
+		bool IsOcclusionCulled() const;
+		bool CreateDepthPyramid();
 		void DrawGPUShadows(nvrhi::ICommandList* commandList);
 		// The indirect draws of a dense bucket, as GetGPUIndirectPath says: its `slots` (without a GPU-written count), or as many
 		// as the GPU counted.
@@ -1092,6 +1115,18 @@ namespace Strata
 		nvrhi::BufferHandle m_FeedbackMaterialBuffer; // Per material slot: pixels, UV pixels, use, unused
 		nvrhi::BufferHandle m_FeedbackListBuffer;     // The touched slots (RenderData::c_FeedbackListHeader, then the lists)
 		nvrhi::BufferHandle m_FeedbackRecordBuffer;   // The packed records the readback copies
+		// Occlusion culling: per proxy two bits of visibility, alternating frame by frame (VisibilityParity: the previous
+		// frame's), cleared when the view has no history; and the depth pyramid with a binding set per level.
+		nvrhi::BufferHandle m_VisibilityBuffer;
+		uint32_t m_VisibilityParity = 0;
+		bool m_ResetVisibility = true;
+		nvrhi::TextureHandle m_DepthPyramid;
+		glm::uvec2 m_DepthPyramidSize = glm::uvec2(0); // Level 0
+		uint32_t m_DepthPyramidLevels = 0;
+		std::vector<nvrhi::BindingSetHandle> m_DepthPyramidSets;
+		nvrhi::BindingLayoutHandle m_DepthPyramidLayout;
+		nvrhi::ComputePipelineHandle m_DepthPyramidPipeline;
+		nvrhi::SamplerHandle m_DepthPyramidSampler; // A minimum filter where the device has one (samplerFilterMinmax)
 		// The newest visibility feedback read back (ResolveCullCounters), which frames apply until a newer one arrives.
 		struct VisibilityFeedback
 		{

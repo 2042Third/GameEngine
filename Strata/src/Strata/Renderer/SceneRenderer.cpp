@@ -1289,6 +1289,12 @@ namespace Strata
 		release(m_CopyBindingSet);
 		release(m_OutlineBindingSet); // References the entity-ID texture
 		release(m_StatusTintBindingSet); // Likewise
+		release(m_DepthPyramid);
+		for (nvrhi::BindingSetHandle& set : m_DepthPyramidSets)
+			release(set);
+		m_DepthPyramidSets.clear();
+		m_DepthPyramidLevels = 0;
+		release(m_CullBindingSet); // References the depth pyramid
 		Renderer::ReleaseDeferred(std::move(released));
 	}
 
@@ -1359,6 +1365,8 @@ namespace Strata
 		m_LDRFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(m_LDRTexture));
 		if (!m_GTAOBindingSet || !m_AOBlurBindingSet || !m_PrepassFramebuffer || !m_ForwardFramebuffer || !m_LDRFramebuffer)
 			return fail("framebuffers");
+		if (!CreateDepthPyramid())
+			return fail("depth pyramid");
 
 		// Automatic exposure meters the HDR image.
 		nvrhi::BindingSetDesc exposureSet;
@@ -1930,7 +1938,10 @@ namespace Strata
 		// What the frame requests: the GPU's visibility feedback where it can tell (SceneRendererSpecification::
 		// VisibilityFeedback), else the CPU's walk of the view.
 		if (IsCameraCut(camera))
+		{
 			m_CutRender = m_RenderCount + 1;
+			m_ResetVisibility = true; // Occlusion culling starts without history
+		}
 		m_FeedbackFrame = UsesFeedback(renderScene);
 		m_Stats.FeedbackRequests = m_FeedbackFrame;
 		if (m_FeedbackFrame)
@@ -2068,7 +2079,16 @@ namespace Strata
 
 		commandList->beginMarker("Prepass");
 		if (m_GPUDrivenFrame)
-			DrawGPUView(commandList, Pass::Prepass);
+		{
+			DrawGPUView(commandList, Pass::Prepass, 0, m_CullConstants.FirstPhaseViewBuckets);
+			if (IsOcclusionCulled())
+			{
+				// What the first phase did not draw, found visible against its depth, in the same frame.
+				RunOcclusionPhase(commandList);
+				DrawGPUView(commandList, Pass::Prepass, m_CullConstants.FirstPhaseViewBuckets, m_CullConstants.ViewBucketCount);
+			}
+			RecordCullReadback(commandList);
+		}
 		else
 			DrawBatches(commandList, Pass::Prepass, false);
 		commandList->endMarker();
@@ -2083,7 +2103,7 @@ namespace Strata
 		gpuTimer.Next(gpuStages.Opaque);
 		commandList->beginMarker("Opaque");
 		if (m_GPUDrivenFrame)
-			DrawGPUView(commandList, Pass::Opaque);
+			DrawGPUView(commandList, Pass::Opaque, 0, m_CullConstants.ViewBucketCount);
 		else
 			DrawBatches(commandList, Pass::Opaque, false);
 		commandList->endMarker();

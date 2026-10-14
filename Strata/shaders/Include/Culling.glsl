@@ -36,9 +36,10 @@
 #define ST_CULL_GEOMETRY_STATIC        0u
 #define ST_CULL_GEOMETRY_SKINNED_ARENA 1u
 #define ST_CULL_GEOMETRY_SKINNED       2u
-#define ST_CULL_VIEW_BUCKETS           16u
+#define ST_CULL_VIEW_BUCKETS           32u
+#define ST_CULL_SECOND_PHASE_BUCKET    16u  // MakeViewBucket's second-phase bit
 #define ST_CULL_SHADOW_BUCKETS         32u
-#define ST_CULL_BUCKETS                144u // c_CullBuckets: the bucket table's bucket -> dense index part
+#define ST_CULL_BUCKETS                160u // c_CullBuckets: the bucket table's bucket -> dense index part
 #define ST_CULL_NONE                   0xFFFFFFFFu
 
 // CullCounters, by index
@@ -56,6 +57,7 @@
 #define ST_COUNTER_SIZE_CULLED        11
 #define ST_COUNTER_INSTANCES_PER_LOD  12
 #define ST_LOD_STAT_COUNT             8
+#define ST_COUNTER_OCCLUDED           20
 
 struct GPUProxy
 {
@@ -110,6 +112,8 @@ struct CullConstants
 	vec4 LODParameters;      // x: LOD threshold, y: tan(fov / 2) or the vertical extent, z: near plane, w: smallest projected pixels
 	vec4 ViewParameters;     // x: viewport height in pixels, y: texture streaming's near distance, z: prefetch distance, w: high priority fraction
 	mat4 LightView;
+	mat4 ViewProjection;     // The view's, for the occlusion test's screen rectangles
+	vec4 OcclusionParameters; // xy: depth buffer size in pixels, z: depth pyramid levels, w: 1 when occlusion culled
 	vec4 CascadeBoxes[4];    // Light view space: min.xy, max.xy
 	vec4 CascadeParameters[4]; // x: far side z, y: smallest light-space extent drawn
 	uint ProxyCount;
@@ -123,7 +127,11 @@ struct CullConstants
 	uint ViewBucketCount;    // Dense buckets of the view (they come first)
 	uint DrawsBounded;       // 1: the draws read only a bucket's first slots (u_BucketTable[ST_CULL_BUCKETS + dense])
 	uint Feedback;           // 1: the counting passes write visibility feedback
-	uint Reserved;
+	uint FirstPhaseViewBuckets; // Of the view's dense buckets, the first phase's (they come first)
+	uint VisibilityParity;   // The bit of u_Visibility holding the previous frame's visibility (0 or 1)
+	uint Reserved0;
+	uint Reserved1;
+	uint Reserved2;
 };
 
 layout(set = 0, binding = ST_CBV(0), std140) uniform CullBuffer
@@ -158,6 +166,12 @@ layout(set = 0, binding = ST_UAV(8), std430) buffer FeedbackListBuffer { uint u_
 layout(set = 0, binding = ST_UAV(9), std430) buffer FeedbackRecordBuffer { uvec4 u_FeedbackRecords[]; };
 // Per cascade the nearest drawn caster's light view z (EncodeOrderedFloat; 0: none), for Scene/CascadeFit.comp.
 layout(set = 0, binding = ST_UAV(10), std430) buffer CasterDepthBuffer { uint u_CasterDepths[]; };
+// Per proxy whether the view saw it, in two bits that alternate frame by frame: the previous frame's
+// (u_Cull.VisibilityParity) and this frame's, written by the second phase.
+layout(set = 0, binding = ST_UAV(11), std430) buffer VisibilityBuffer { uint u_Visibility[]; };
+// The depth pyramid of the first phase's depth (Scene/HZBBuild.comp): each texel the farthest (smallest, reversed-Z)
+// depth of the pixels it covers; level m's texel covers pixels p with p >> (m + 1) equal to it.
+layout(set = 0, binding = ST_SRV(8)) uniform texture2D u_DepthPyramid;
 
 // The projected diameter of a bounding sphere as a fraction of the viewport height, as LODSelection::GetScreenFraction
 // computes it.

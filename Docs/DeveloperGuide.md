@@ -1801,6 +1801,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (`TextureStreamingPolicy`) changes `Cull.comp` and `Include/TextureStreaming.glsl` with it. Tests that check a frame's
   requests in the frame its scene changed either wait for the feedback to see the change or set `VisibilityFeedback`
   off; the CPU still walks transparent users (`RenderScene::CollectMaterialUsers`) and skinned proxies itself.
+- The view is occlusion culled in two phases (`SceneRendererSpecification::OcclusionCulling`; Docs/Architecture.md,
+  "Render scene"): what the previous frame saw first, the rest against a depth pyramid of that, both in the same frame.
+  A mesh can therefore take two draws (one per phase) in the frame its new instances appear, and something hidden is
+  left out only from the frame after the one that found it hidden; tests that count draws or instances render a frame
+  more first, or turn occlusion culling off. Anything new that reads the view's depth runs after the second phase's
+  prepass.
 - Buckets the frame cannot have get no storage: the CPU lists the present ones (mirrored proxies, double-sided and
   alpha-masked materials, the arenas of its meshes, posed proxies; `RenderSceneStats::MirroredProxies`, `PosedProxies`)
   and gives each a dense index; a bucket's draw slots are its arena's LOD records among the meshes the CPU's marks found

@@ -162,6 +162,7 @@ namespace Strata
 		{
 			// Another scene: its slots mean something else, and the GPU copies hold the previous scene's data.
 			m_RenderSceneId = renderScene.GetId();
+			m_ResetVisibility = true; // Its proxies are not those the visibility bits are of
 			m_MeshUsage.clear();
 			m_FrameMeshes.clear();
 			m_MaterialUsage.clear();

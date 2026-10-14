@@ -7,9 +7,15 @@
 // of the draw list and an indirect draw in its bucket (DrawIndexedIndirectArguments: the level's indices at the mesh's
 // place in the geometry pool, firstInstance the range's start, which the vertex shaders read the draw list from), and
 // its bucket's draw count (u_BucketCounts) grows by one. Records the draw list or the arguments have no room for are
-// counted as overflow and not drawn.
+// counted as overflow and not drawn. With occlusion culling it runs once per phase, each time over that phase's buckets
+// (the second phase's view buckets, or all others).
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+layout(push_constant) uniform BuildParameters
+{
+	uint Mode; // Bit 1: the view's second phase (Cull.comp's modes)
+} u_Parameters;
 
 void WriteArguments(uint dense, uint slot, uint indexCount, uint instanceCount, uint firstIndex, uint baseVertex, uint firstInstance)
 {
@@ -31,6 +37,9 @@ void main()
 		return;
 	uint dense = key / u_Cull.LODCapacity;
 	uint record = key - dense * u_Cull.LODCapacity;
+	bool secondPhaseBucket = dense >= u_Cull.FirstPhaseViewBuckets && dense < u_Cull.ViewBucketCount;
+	if (secondPhaseBucket != ((u_Parameters.Mode & 2u) != 0u))
+		return;
 	uint offset = atomicAdd(u_Counters[ST_COUNTER_DRAW_LIST_USED], count);
 	uint slot = atomicAdd(u_BucketCounts[dense], 1u);
 	bool listRoom = count <= u_Cull.DrawListCapacity && offset <= u_Cull.DrawListCapacity - count;

@@ -69,6 +69,7 @@ namespace
 	{
 		SceneRenderer CPU;
 		SceneRenderer GPU;
+		DrawnCounts LastReference; // The CPU path's counts of the latest Check
 
 		static SceneRendererSpecification Specification(GPUDrivenMode mode, IndirectDrawMode indirect)
 		{
@@ -105,11 +106,23 @@ namespace
 			CHECK_FALSE(reference.GPUDriven);
 			CHECK(MaxDifference(reference.Color, frame.Color) <= 1);
 			CHECK(CountDifferentIDs(reference.IDs, frame.IDs) == 0);
-			CHECK(frame.Counts.Instances == reference.Counts.Instances);
-			CHECK(frame.Counts.Draws == reference.Counts.Draws);
-			CHECK(frame.Counts.Triangles == reference.Counts.Triangles);
-			CHECK(frame.Counts.InstancesPerLOD == reference.Counts.InstancesPerLOD);
-			CHECK(frame.Counts.SkinnedInstances == reference.Counts.SkinnedInstances);
+			if (GPU.GetGPUStats().OccludedProxies == 0)
+			{
+				CHECK(frame.Counts.Instances == reference.Counts.Instances);
+				CHECK(frame.Counts.Draws == reference.Counts.Draws);
+				CHECK(frame.Counts.Triangles == reference.Counts.Triangles);
+				CHECK(frame.Counts.InstancesPerLOD == reference.Counts.InstancesPerLOD);
+				CHECK(frame.Counts.SkinnedInstances == reference.Counts.SkinnedInstances);
+			}
+			else
+			{
+				// Occlusion culling leaves out what the CPU path draws behind other things (from the frame after it found them
+				// hidden): the same pixels, at most as many instances.
+				CHECK(frame.Counts.Instances <= reference.Counts.Instances);
+				CHECK(frame.Counts.Triangles <= reference.Counts.Triangles);
+				CHECK(frame.Counts.SkinnedInstances <= reference.Counts.SkinnedInstances);
+			}
+			LastReference = reference.Counts;
 			CHECK(frame.Counts.ShadowCasters == reference.Counts.ShadowCasters);
 			CHECK(frame.Counts.ShadowDraws == reference.Counts.ShadowDraws);
 			return frame;
@@ -296,6 +309,25 @@ namespace
 		return camera;
 	}
 
+	SceneCamera BuildOccluded(Scene& scene, SceneTestAssets& assets, TestSkinningPoses&)
+	{
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::normalize(glm::vec3(-0.3f, -1.0f, -0.4f)), 3.0f);
+		const AssetHandle wallMaterial = LitMaterial(assets, glm::vec4(0.7f, 0.65f, 0.6f, 1.0f));
+		const AssetHandle shapeMaterial = LitMaterial(assets, glm::vec4(0.2f, 0.5f, 0.8f, 1.0f));
+		// A wall, shapes in front of it, shapes hidden behind it and shapes rising above it (partly seen).
+		AddMesh(scene, BuiltinAssets::CubeMesh, wallMaterial, glm::vec3(0.0f, 1.0f, -4.0f), "Wall").GetComponent<TransformComponent>().Scale = glm::vec3(14.0f, 4.0f, 0.4f);
+		for (uint32_t index = 0; index < 24; index++)
+		{
+			const float height = index % 4 == 3 ? 3.4f : 0.5f;
+			AddMesh(scene, index % 2 == 0 ? BuiltinAssets::SphereMesh : BuiltinAssets::CubeMesh, shapeMaterial,
+				glm::vec3(static_cast<float>(index % 6) * 2.0f - 5.0f, height, -6.0f - static_cast<float>(index / 6) * 2.0f), "Behind");
+		}
+		for (uint32_t index = 0; index < 4; index++)
+			AddMesh(scene, BuiltinAssets::TorusMesh, shapeMaterial, glm::vec3(static_cast<float>(index) * 2.5f - 3.75f, 0.0f, -1.5f), "Front");
+		return View(glm::vec3(0.0f, 1.5f, 6.0f), glm::vec3(0.0f, 1.0f, -6.0f));
+	}
+
 	const TestScene c_Scenes[] = {
 		{ "Many meshes", BuildManyMeshes },
 		{ "Alpha-masked", BuildAlphaMasked },
@@ -304,10 +336,12 @@ namespace
 		{ "Shadowed", BuildShadowed },
 		{ "Transparent", BuildTransparent },
 		{ "LODs", BuildLODs },
+		{ "Occluded", BuildOccluded },
 	};
 
 	void CompareScenes(GPUContext& gpu, IndirectDrawMode indirect)
 	{
+		uint32_t occludedScenes = 0; // Scenes whose third frame occlusion culling took something from
 		for (const TestScene& testScene : c_Scenes)
 		{
 			const std::string name = testScene.Name;
@@ -327,6 +361,13 @@ namespace
 			CHECK_FALSE(comparison.GPU.GetStats().FeedbackRequests);
 			comparison.Check(scene, camera);
 			CHECK(comparison.GPU.GetStats().FeedbackRequests);
+			// The third frame draws first what the second saw, and leaves out what that hides (occlusion culling).
+			const PathFrame third = comparison.Check(scene, camera);
+			if (comparison.GPU.GetGPUStats().OccludedProxies > 0)
+			{
+				CHECK(third.Counts.Instances < comparison.LastReference.Instances);
+				occludedScenes++;
+			}
 			if (scene.GetService<ISkinningPoses>())
 			{
 				CHECK(frame.Counts.SkinnedInstances == 3);
@@ -334,6 +375,7 @@ namespace
 			}
 			gpu.GetDevice().WaitForIdle();
 		}
+		CHECK(occludedScenes > 0);
 	}
 
 }

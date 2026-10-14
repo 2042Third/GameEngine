@@ -1,0 +1,45 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_samplerless_texture_functions : require
+
+#include "Include/Common.glsl"
+
+// One level of the depth pyramid occlusion culling tests against (Cull.comp's second phase): each texel the farthest
+// (smallest, reversed-Z) of the 2x2 texels of the level below it (the depth buffer for level 0), those past an odd edge
+// left out, so a texel covers exactly the depth pixels p with p >> (level + 1) equal to it. Where the device filters
+// with a minimum (samplerFilterMinmax) one sample of the 2x2 does it; otherwise four loads.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(0)) uniform texture2D u_Source;
+layout(set = 0, binding = ST_SAMPLER(0)) uniform sampler u_MinimumSampler;
+layout(set = 0, binding = ST_UAV(0), r32f) uniform writeonly image2D o_Destination;
+
+layout(push_constant) uniform PyramidParameters
+{
+	uvec2 SourceSize;
+	uvec2 DestinationSize;
+	uint UseMinimumSampler;
+} u_Pyramid;
+
+void main()
+{
+	uvec2 texel = gl_GlobalInvocationID.xy;
+	if (any(greaterThanEqual(texel, u_Pyramid.DestinationSize)))
+		return;
+	float farthest;
+	if (u_Pyramid.UseMinimumSampler != 0u)
+	{
+		// The 2x2 footprint's center; clamping repeats an odd edge's texel, which leaves the minimum as it is.
+		vec2 uv = (vec2(texel) * 2.0 + 1.0) / vec2(u_Pyramid.SourceSize);
+		farthest = textureLod(sampler2D(u_Source, u_MinimumSampler), uv, 0.0).r;
+	}
+	else
+	{
+		ivec2 base = ivec2(texel) * 2;
+		ivec2 last = ivec2(u_Pyramid.SourceSize) - 1;
+		farthest = min(min(texelFetch(u_Source, base, 0).r, texelFetch(u_Source, min(base + ivec2(1, 0), last), 0).r),
+			min(texelFetch(u_Source, min(base + ivec2(0, 1), last), 0).r, texelFetch(u_Source, min(base + ivec2(1, 1), last), 0).r));
+	}
+	imageStore(o_Destination, ivec2(texel), vec4(farthest));
+}

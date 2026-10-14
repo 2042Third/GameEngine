@@ -1630,6 +1630,8 @@ UploadSceneData                  the changed range of each draw list (and the bu
 RunGPUCulling                    (GPU-driven) Cull.comp counts (and writes visibility feedback), CullBuild.comp places
                                  the draws, CullFeedback.comp packs the feedback, Cull.comp writes the draw list; the
                                  passes then draw each bucket indirectly
+RunOcclusionPhase                (GPU-driven, after the first phase's prepass) HZBBuild.comp's depth pyramid, Cull.comp's
+                                 second phase and its prepass draws
 ReleaseFrameAssets               (when Render returns, however it ends) every reference the frame took, and the manager
 ```
 
@@ -1839,6 +1841,22 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   cascades and tests the skinned proxies out of view for their animators (with the shadowed part of the view as their
   receivers: it may report more animators than the CPU's walk, never fewer), the shadow buckets' slots follow the meshes
   the feedback saw cast, and the cascades' depth ranges are fitted on the GPU the same frame.
+- **Occlusion culling** (`SceneRendererSpecification::OcclusionCulling`, on by default; `Cull.comp`'s second phase,
+  `Scene/HZBBuild.comp`, `RunOcclusionPhase`). The view is culled in two phases. The first draws, of the proxies that pass
+  the frustum and size tests, those the view saw in the previous frame into the depth prepass. A depth pyramid of that
+  depth follows: level 0 is half the depth buffer, each texel the farthest (smallest, reversed-Z) depth of the 2x2 below
+  it, odd edges left out, so a texel of level m covers exactly the pixels p with p >> (m + 1) equal to it; one sample of a
+  minimum-filtering sampler where the device has `samplerFilterMinmax`, four loads otherwise (MoltenVK). The second phase
+  tests every proxy in the frustum against the pyramid (its box's screen rectangle at the finest level it spans in at most
+  2x2 texels, against the box's nearest depth; boxes reaching the camera's plane are visible), records whether it is
+  visible, and draws into the prepass those visible now that the first did not draw: something that comes into view is
+  drawn in that frame, never a frame late. The forward pass draws both phases' buckets (the second phase has view buckets
+  of its own) with the `EQUAL` depth test, and ambient occlusion, entity IDs, outlines and tints read the final depth. The
+  per-proxy visibility is two bits that alternate frame by frame (the previous frame's, this frame's), cleared on a camera
+  cut, a renderer's first frame or another render scene: the first phase then draws nothing and the second tests
+  everything against an empty pyramid. Orthographic views work alike. Shadow cascades are not occlusion culled, and the
+  CPU path does none; `SceneRendererGPUStats::OccludedProxies` (`renderStats.occludedProxies`) counts what the second
+  phase found hidden. Visibility feedback still marks occluded proxies' assets as in view, so requests do not depend on it.
 - **Cascades fitted on the GPU** (`Scene/CascadeFit.comp`, `RenderData::CascadeFitConstants`, `CascadeData`). Each
   cascade's projection reaches from the far side of its view slice's bounding sphere to the nearest drawn caster toward
   the light (at most `c_MaxShadowCasterDistance` beyond the sphere; `ShadowMesh.vert` pancakes the casters beyond). One

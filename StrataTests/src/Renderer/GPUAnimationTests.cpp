@@ -282,6 +282,10 @@ TEST_SUITE("GPU.Animation")
 		}
 		REQUIRE(renderer.Render(skinnedScene, camera));
 		CHECK(GetDrawnCounts(renderer).SkinnedInstances == 10);
+		// The GPU-driven path's occlusion culling draws what the view saw in the previous frame first and the new copies in
+		// a second phase (a draw each); from the next frame on all of them come first.
+		REQUIRE(renderer.Render(skinnedScene, camera));
+		CHECK(GetDrawnCounts(renderer).SkinnedInstances == 10);
 		CHECK(GetDrawnCounts(renderer).Draws == 1);
 		CHECK(RenderScene::Get(skinnedScene).GetStats().PaletteJoints == 30);
 
