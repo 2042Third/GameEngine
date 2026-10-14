@@ -76,10 +76,10 @@ namespace Strata
 
 		// The CPU times of the frames that run while a deferred command waits (editor.wait, scene.open, project.export),
 		// recorded by its poll function, which runs in the frames it measures. The storage is reserved when the command
-		// starts (past that it grows by doubling), so recording does not allocate in those frames: an allocation there can
-		// wait for the heap while background threads free a scene (the play copy play.stop lets go of), 0.6-2.7 ms in 7 of
-		// 10 runs of PerfGPU.Editor's scene opened over a million entities, when the frames take 0.6. Copies of the poll
-		// function share the storage.
+		// starts, so recording does not allocate in those frames: an allocation there can wait for the heap while background
+		// threads free a scene (the play copy play.stop lets go of), 0.6-2.7 ms in 7 of 10 runs of PerfGPU.Editor's scene
+		// opened over a million entities, when the frames take 0.6. A command that outlasts its reserve grows the storage as
+		// vectors grow, which allocates in that frame. Copies of the poll function share the storage.
 		class FrameTimeRecorder
 		{
 		public:
@@ -99,8 +99,9 @@ namespace Strata
 			uint64_t m_FirstMeasured = 0;
 			uint64_t m_LastRecorded = 0;
 		};
-		// Room for the frames of a scene.open or project.export: a few seconds at the rate of an editor with pending commands.
-		constexpr size_t c_FrameTimeReserve = 8192;
+		// Room for the frames of a scene.open or project.export (256 KiB): the longest opens PerfGPU.Editor measures, of its
+		// million-entity scenes, record 10,000-13,000 frames at the rate of an editor with pending commands.
+		constexpr size_t c_FrameTimeReserve = 32768;
 
 		// A frame profile as editor.perf reports it (EditorStateCommands.cpp): {"frames", "frame", "framesPerSecond", "stageSum",
 		// "untimed", "jobs", "stages": {"<name>": {"avgMs", "p50Ms", "p95Ms", "maxMs", "inFrameTime"}}}, statistics in

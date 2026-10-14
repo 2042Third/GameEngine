@@ -282,6 +282,12 @@ TEST_SUITE("Editor.CommandRunner")
 		CHECK(described["count"] == 16);
 		CHECK(described["medianMs"] == 8.5);
 		CHECK(described["maxMs"] == 16.0);
+
+		// The commands' reserve holds the frames of the longest open the perf tests measure (PerfGPU.Editor's scene.open of a
+		// million entities records up to 12,992), which would otherwise grow the storage in one of the frames it measures.
+		CHECK(CommandUtils::c_FrameTimeReserve >= 13000);
+		const CommandUtils::FrameTimeRecorder commandRecorder(harness.Context.GetRecordedFrameCount() + 1, CommandUtils::c_FrameTimeReserve);
+		CHECK(commandRecorder.GetCapacity() >= CommandUtils::c_FrameTimeReserve);
 	}
 }
 
