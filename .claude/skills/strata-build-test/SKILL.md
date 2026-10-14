@@ -27,6 +27,12 @@ cmake --build --preset windows-debug --target StrataTests   # just the tests
   "StrataRuntime links tooling that games must not contain" names the path through which a runtime layer reached a
   tooling one: invert that dependency.
 - Warnings are errors (`/W4 /WX`, `-Wall -Wextra -Werror`). Fix them; never silence them locally.
+- Targets build with precompiled headers (`stpch.h`, `StrataEditor/src/EditorPch.h`, `StrataTests/src/TestsPch.h`),
+  which hide a missing include: `python3 Tools/CompatLint.py --changed-since <base>` compiles without them, and so does a
+  build configured with `-DSTRATA_PRECOMPILED_HEADERS=OFF`. Never put an engine, editor or test header that changes into
+  them (`Architecture.PrecompiledHeaders`).
+- `-DSTRATA_COMPILER_CACHE=ON` builds through ccache or sccache as CI does (precompiled headers off by default). On
+  Windows it needs the `windows-ninja` preset, configured and built from a Developer PowerShell.
 - Cached options survive a re-configure. If a target you expect is missing, check `build/<preset>/CMakeCache.txt`
   (for example `STRATA_BUILD_RUNTIME`) and pass `-D<OPTION>=ON`.
 

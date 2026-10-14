@@ -22,7 +22,15 @@ option(STRATA_BUILD_CLI "Build StrataCLI (editor automation client and MCP serve
 option(STRATA_BUILD_TESTS "Build the Strata test suites" ON)
 option(STRATA_ENABLE_TRACY "Instrument the engine for the Tracy profiler" OFF)
 option(STRATA_WARNINGS_AS_ERRORS "Treat compiler warnings as errors in first-party targets" ON)
-option(STRATA_PRECOMPILED_HEADERS "Build the engine, editor and test targets with precompiled headers" ON)
+# A compiler cache (ccache, or sccache) for every C and C++ compile, as CI builds: debug information goes into the objects
+# on MSVC, and precompiled headers are off by default, because the caches do not cache MSVC's precompiled header builds.
+option(STRATA_COMPILER_CACHE "Compile through ccache or sccache (STRATA_COMPILER_CACHE_PROGRAM)" OFF)
+if(STRATA_COMPILER_CACHE)
+	set(strataPrecompiledHeadersDefault OFF)
+else()
+	set(strataPrecompiledHeadersDefault ON)
+endif()
+option(STRATA_PRECOMPILED_HEADERS "Build the engine, editor and test targets with precompiled headers" ${strataPrecompiledHeadersDefault})
 
 include(StrataConfigurations)
 include(StrataCompilerOptions)

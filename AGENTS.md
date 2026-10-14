@@ -64,6 +64,9 @@ git submodule update --init --recursive --depth 1
 Configurations: `Debug`, `Release` (optimized, asserts on), `Dist` (shipping; asserts compiled out).
 Binaries land in `build/<preset>/bin/<Config>/`.
 
+Options: `STRATA_PRECOMPILED_HEADERS` (default ON) and `STRATA_COMPILER_CACHE` (ccache or sccache, as CI builds; it turns
+precompiled headers off by default and needs the `windows-ninja` preset on Windows) ([Building](Docs/DeveloperGuide.md#building)).
+
 Sources are collected with `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)`. **After adding or removing source
 files, re-run the configure step** (`cmake --preset <preset>`): the Visual Studio generator re-globs during
 the build but compiles that build with the stale project, so new files would only appear in the next build.
@@ -75,7 +78,8 @@ Requirements (CMake 3.25+, a C++20 compiler, a Vulkan 1.2+ driver, packages on L
 `cmake --preset windows -B build/agent-<name>`, because two builds in one directory corrupt each other.
 
 **CI before main:** CI (`.github/workflows/ci.yml`: Windows with MSVC, Linux with GCC 14, macOS with Apple Clang 15,
-each building and testing Release, and a Dist build of every target on Windows) runs on pushes to `main`, on pull
+each building and testing Release through a compiler cache, Windows also Debug, and a Dist build of every target on
+Windows with the Visual Studio generator and its package tests) runs on pushes to `main`, on pull
 requests and on pushes to branches named `ci/<name>`. Older compilers and other standard libraries reject code that the
 local ones accept (Apple Clang 15's libc++ has no floating-point `std::from_chars`; `size_t` and `uint64_t` are
 different types on macOS; GCC 14 warns where newer GCCs do not), so push a branch that lands many changes (a wave's

@@ -143,7 +143,22 @@ full path, `$(brew --prefix)/lib/libVkLayer_khronos_validation.dylib` (the build
 Useful CMake options: `-DSTRATA_BUILD_EDITOR=OFF`, `-DSTRATA_BUILD_RUNTIME=OFF`,
 `-DSTRATA_BUILD_CLI=OFF`, `-DSTRATA_BUILD_TESTS=OFF`, `-DSTRATA_ENABLE_TRACY=ON`,
 `-DSTRATA_WARNINGS_AS_ERRORS=OFF` (local experiments only — CI always builds with warnings as errors),
-`-DSTRATA_PRECOMPILED_HEADERS=OFF` (builds without precompiled headers, below).
+`-DSTRATA_PRECOMPILED_HEADERS=OFF` (builds without precompiled headers, below), `-DSTRATA_COMPILER_CACHE=ON` (below).
+
+**Compiler cache.** `-DSTRATA_COMPILER_CACHE=ON` compiles every C and C++ source, the vendor libraries' too, through
+`ccache` or `sccache` (found on `PATH`, or named by `STRATA_COMPILER_CACHE_PROGRAM`), as CI does. It turns precompiled
+headers off by default (the caches do not cache MSVC's precompiled header builds; `-DSTRATA_PRECOMPILED_HEADERS=ON` still
+wins) and puts MSVC's debug information into the objects (`/Z7`), which the caches need. The Visual Studio generators
+ignore compiler launchers, so the configure refuses them: on Windows, configure the `windows-ninja` preset (Ninja
+Multi-Config with `cl`) from a developer environment (the Developer PowerShell, or `vcvars64.bat`), which brings `cl`,
+the Windows SDK and Ninja.
+
+**CI** (`.github/workflows/ci.yml`): Windows (`windows-ninja` with sccache), Linux (GCC 14 with ccache) and macOS (Apple
+Clang 15 with ccache) build and test Release, and Windows also Debug (`ctest -LE "gpu|perf" -j 4`, the only Debug
+build CI makes). Each job keeps its compiler cache in the GitHub Actions cache (keyed per job and commit, restored from
+the newest of its branch or main, saved even when tests fail; at most 1 GB for ccache and 2 GB for sccache per job). A
+Dist build of every target on Windows uses the Visual Studio generator people build with, without a cache, and runs the
+`package` tests, so that the Visual Studio generator's script builds stay tested.
 
 ### Precompiled headers
 

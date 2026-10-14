@@ -1,4 +1,21 @@
-# Shared compiler settings for first-party Strata targets.
+# Shared compiler settings for first-party Strata targets, and the compiler cache of every target.
+
+# STRATA_COMPILER_CACHE: every C and C++ compile of the build (the vendor libraries' too) goes through the cache program,
+# ccache or sccache (found on PATH, or named by STRATA_COMPILER_CACHE_PROGRAM). The Makefile and Ninja generators honor
+# the launcher; the Visual Studio generators do not, so cached Windows builds use the windows-ninja preset.
+if(STRATA_COMPILER_CACHE)
+	find_program(STRATA_COMPILER_CACHE_PROGRAM NAMES ccache sccache DOC "The compiler cache STRATA_COMPILER_CACHE uses")
+	if(NOT STRATA_COMPILER_CACHE_PROGRAM)
+		message(FATAL_ERROR "STRATA_COMPILER_CACHE needs ccache or sccache on PATH, or STRATA_COMPILER_CACHE_PROGRAM naming one.")
+	endif()
+	if(CMAKE_GENERATOR MATCHES "Visual Studio")
+		message(FATAL_ERROR "STRATA_COMPILER_CACHE needs a Makefile or Ninja generator (the Visual Studio generators ignore compiler "
+			"launchers): on Windows, configure the windows-ninja preset in a Visual Studio developer environment.")
+	endif()
+	set(CMAKE_C_COMPILER_LAUNCHER "${STRATA_COMPILER_CACHE_PROGRAM}")
+	set(CMAKE_CXX_COMPILER_LAUNCHER "${STRATA_COMPILER_CACHE_PROGRAM}")
+	message(STATUS "Compiler cache: ${STRATA_COMPILER_CACHE_PROGRAM} (precompiled headers: ${STRATA_PRECOMPILED_HEADERS})")
+endif()
 
 # strata_configure_target(<target>)
 #   Applies the Strata language standard, configuration defines, and warning policy to <target>.
