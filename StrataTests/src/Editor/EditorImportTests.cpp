@@ -880,7 +880,7 @@ TEST_SUITE("Editor.Import")
 		CHECK(item["assets"][0]["type"] == "Model");
 		CHECK(item["assets"][1]["path"] == "Models/Quad/QuadColor.png");
 
-		nlohmann::json info = harness.Run("asset.info", { { "asset", "Models/Quad/Quad.gltf" } });
+		nlohmann::json info = harness.Run("asset.info", { { "asset", "Models/Quad/Quad.gltf" }, { "bounds", false } });
 		CHECK(info["importError"] == "");
 		for (const nlohmann::json& warning : info["importWarnings"])
 			CHECK(warning.get<std::string>().find("skipped") == std::string::npos);
@@ -906,7 +906,7 @@ TEST_SUITE("Editor.Import")
 		REQUIRE(result.Success);
 		CHECK(result.Value["path"] == "Props/Crate/Models/Crate.gltf");
 		CHECK(FileSystem::IsRegularFile(harness.Assets / "Props" / "Crate" / "Textures" / "Wood.png"));
-		nlohmann::json info = harness.Run("asset.info", { { "asset", "Props/Crate/Models/Crate.gltf" } });
+		nlohmann::json info = harness.Run("asset.info", { { "asset", "Props/Crate/Models/Crate.gltf" }, { "bounds", false } });
 		CHECK(info["importError"] == "");
 		for (const nlohmann::json& warning : info["importWarnings"])
 			CHECK(warning.get<std::string>().find("skipped") == std::string::npos);
@@ -952,7 +952,7 @@ TEST_SUITE("Editor.Import")
 		CHECK(stone["asset"] == "5A5A5A5A5A5A5A5A");
 		CHECK(stone["importSettings"]["MaxSize"] == 2);
 		CHECK(harness.Context.GetAssetManager()->HasFolder("Imported/Pack/Sounds"));
-		CHECK(harness.Run("asset.info", { { "asset", "Imported/Pack/Models/Quad.gltf" } })["importError"] == "");
+		CHECK(harness.Run("asset.info", { { "asset", "Imported/Pack/Models/Quad.gltf" }, { "bounds", false } })["importError"] == "");
 	}
 
 	TEST_CASE("A failed import is a failure that leaves no file behind and is logged once")
