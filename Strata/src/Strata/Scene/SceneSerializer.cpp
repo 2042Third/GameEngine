@@ -6,6 +6,7 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Scene/ComponentAccess.h"
+#include "Strata/Scene/EntitySink.h"
 #include "Strata/Scene/SceneDocumentWriter.h"
 #include "Strata/Scene/UnknownComponents.h"
 
@@ -269,6 +270,35 @@ namespace Strata
 		return settings;
 	}
 
+	void SceneSerializer::DeserializeSettings(const nlohmann::json& settings, SceneSettings& outSettings, std::vector<std::string>* outWarnings)
+	{
+		if (!settings.is_object())
+			return;
+		if (const nlohmann::json* gravity = JsonUtils::Find(settings, "Gravity"))
+		{
+			PropertyInfo gravityProperty;
+			gravityProperty.Name = "Gravity";
+			gravityProperty.Type = PropertyType::Vec3;
+			if (std::optional<PropertyValue> value = PropertyValueFromJson(gravityProperty, *gravity))
+				outSettings.Gravity = std::get<glm::vec3>(*value);
+			else if (outWarnings)
+				outWarnings->push_back("Scene settings: invalid 'Gravity' ignored");
+		}
+		const float fixedTimestep = JsonUtils::GetFloat(settings, "FixedTimestep", outSettings.FixedTimestep);
+		if (fixedTimestep > 0.0f && fixedTimestep <= 1.0f)
+			outSettings.FixedTimestep = fixedTimestep;
+		outSettings.MaxFixedStepsPerFrame = static_cast<uint32_t>(std::clamp<uint64_t>(JsonUtils::GetUInt(settings, "MaxFixedStepsPerFrame", outSettings.MaxFixedStepsPerFrame), 1, 64));
+		outSettings.MaxEntitiesInstantiatedPerFrame = static_cast<uint32_t>(std::clamp<uint64_t>(JsonUtils::GetUInt(settings, "MaxEntitiesInstantiatedPerFrame",
+			outSettings.MaxEntitiesInstantiatedPerFrame), 1, SceneSettings::c_MaxEntitiesInstantiatedLimit));
+		// Scenes saved before capacities existed have none: every capacity is automatic.
+		if (const nlohmann::json* capacity = JsonUtils::Find(settings, "PhysicsCapacity"))
+			ReadPhysicsCapacity(*capacity, outSettings.PhysicsCapacity, outWarnings);
+		// Scenes saved before layer settings existed have none: no names, every layer collides. (Older readers skip the
+		// key: they misread nothing, so the format version stays.)
+		if (const nlohmann::json* layers = JsonUtils::Find(settings, "PhysicsLayers"))
+			ReadPhysicsLayers(*layers, outSettings.PhysicsLayers, outWarnings);
+	}
+
 	nlohmann::json SceneSerializer::Serialize(const Scene& scene)
 	{
 		const nlohmann::json settings = SerializeSettings(scene.GetSettings());
@@ -316,32 +346,7 @@ namespace Strata
 
 		scene.SetName(JsonUtils::GetString(sceneJson, "Name", "Untitled"));
 		if (const nlohmann::json* settings = JsonUtils::Find(sceneJson, "Settings"); settings && settings->is_object())
-		{
-			SceneSettings& sceneSettings = scene.GetSettings();
-			if (const nlohmann::json* gravity = JsonUtils::Find(*settings, "Gravity"))
-			{
-				PropertyInfo gravityProperty;
-				gravityProperty.Name = "Gravity";
-				gravityProperty.Type = PropertyType::Vec3;
-				if (std::optional<PropertyValue> value = PropertyValueFromJson(gravityProperty, *gravity))
-					sceneSettings.Gravity = std::get<glm::vec3>(*value);
-				else if (outWarnings)
-					outWarnings->push_back("Scene settings: invalid 'Gravity' ignored");
-			}
-			const float fixedTimestep = JsonUtils::GetFloat(*settings, "FixedTimestep", sceneSettings.FixedTimestep);
-			if (fixedTimestep > 0.0f && fixedTimestep <= 1.0f)
-				sceneSettings.FixedTimestep = fixedTimestep;
-			sceneSettings.MaxFixedStepsPerFrame = static_cast<uint32_t>(std::clamp<uint64_t>(JsonUtils::GetUInt(*settings, "MaxFixedStepsPerFrame", sceneSettings.MaxFixedStepsPerFrame), 1, 64));
-			sceneSettings.MaxEntitiesInstantiatedPerFrame = static_cast<uint32_t>(std::clamp<uint64_t>(JsonUtils::GetUInt(*settings, "MaxEntitiesInstantiatedPerFrame",
-				sceneSettings.MaxEntitiesInstantiatedPerFrame), 1, SceneSettings::c_MaxEntitiesInstantiatedLimit));
-			// Scenes saved before capacities existed have none: every capacity is automatic.
-			if (const nlohmann::json* capacity = JsonUtils::Find(*settings, "PhysicsCapacity"))
-				ReadPhysicsCapacity(*capacity, sceneSettings.PhysicsCapacity, outWarnings);
-			// Scenes saved before layer settings existed have none: no names, every layer collides. (Older readers skip the
-			// key: they misread nothing, so the format version stays.)
-			if (const nlohmann::json* layers = JsonUtils::Find(*settings, "PhysicsLayers"))
-				ReadPhysicsLayers(*layers, sceneSettings.PhysicsLayers, outWarnings);
-		}
+			DeserializeSettings(*settings, scene.GetSettings(), outWarnings);
 
 		// A scene without an entity list is simply empty.
 		if (!sceneJson.contains("Entities"))
@@ -354,6 +359,22 @@ namespace Strata
 		if (!error.empty())
 			return fail(error);
 		return true;
+	}
+
+	bool SceneSerializer::DeserializeText(Scene& scene, std::string_view text, const SceneReadOptions& options, std::string* outError,
+		std::vector<std::string>* outWarnings, const EntityReadProgress& linkProgress, SceneReadResult* outResult)
+	{
+		s_DeserializeCount.fetch_add(1, std::memory_order_relaxed);
+		if (scene.GetEntityCount() != 0)
+		{
+			if (outError)
+				*outError = "Scenes can only be deserialized into an empty scene";
+			return false;
+		}
+		SceneBuilder builder(scene, outWarnings, linkProgress);
+		SceneReadOptions readOptions = options;
+		readOptions.MaxEntities = std::min<uint64_t>(options.MaxEntities, Scene::c_MaxEntities - std::min(scene.GetRegistryEntityCount(), Scene::c_MaxEntities));
+		return SceneDocumentReader::Read(text, SceneDocumentKind::Scene, builder, readOptions, outResult, outError);
 	}
 
 	bool SceneSerializer::SaveToFile(const Scene& scene, const std::filesystem::path& path, std::string* outError)
@@ -382,18 +403,16 @@ namespace Strata
 			return nullptr;
 		}
 
-		std::optional<nlohmann::json> json = JsonUtils::Parse(*text);
-		if (!json)
-		{
-			if (outError)
-				*outError = fmt::format("Scene file '{}' is not valid JSON", FileSystem::ToUTF8(path));
-			return nullptr;
-		}
-
 		Ref<Scene> scene = CreateRef<Scene>();
 		std::vector<std::string> warnings;
-		if (!Deserialize(*scene, *json, outError, &warnings))
+		std::string error;
+		SceneReadResult result;
+		if (!DeserializeText(*scene, *text, {}, &error, &warnings, {}, &result))
+		{
+			if (outError)
+				*outError = result.SyntaxError ? fmt::format("Scene file '{}' is not valid JSON: {}", FileSystem::ToUTF8(path), error) : error;
 			return nullptr;
+		}
 
 		for (const std::string& warning : warnings)
 			ST_CORE_WARN("Scene '{}': {}", FileSystem::ToUTF8(path), warning);

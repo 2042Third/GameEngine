@@ -275,9 +275,9 @@ TEST_SUITE("Scene.Loader")
 		CHECK(SceneLoader::LoadAsync(fixture.SceneHandle).GetState() == SceneLoadState::Failed);
 	}
 
-	TEST_CASE("Reading a scene document reports its progress as it parses the text and creates the entities")
+	TEST_CASE("Reading a scene document reports its progress as it parses the text, creating the entities, and as it links them")
 	{
-		// About 4 MB of text and five passes over 30,000 entities: several reports in each step.
+		// About 4 MB of text and three passes over 30,000 entities to link them: several reports in each step.
 		const std::vector<uint8_t> document = MakeSceneDocument(30'000);
 		REQUIRE(document.size() > (size_t(3) << 20));
 		std::vector<float> shares;
@@ -291,18 +291,18 @@ TEST_SUITE("Scene.Loader")
 			CHECK(shares[index] >= shares[index - 1]);
 		CHECK(shares.front() > 0.0f);
 		CHECK(shares.back() == 1.0f);
-		// Shares while the text is parsed, while the entities are created, and between the two steps' ends.
+		// Shares while the text is parsed (the entities created as it goes), and while the entities are linked.
 		size_t parsing = 0;
-		size_t creating = 0;
+		size_t linking = 0;
 		for (const float share : shares)
 		{
-			if (share < 0.4f)
+			if (share < 0.79f)
 				parsing++;
-			else if (share > 0.45f && share < 0.8f)
-				creating++;
+			else if (share > 0.8f && share < 0.92f)
+				linking++;
 		}
 		CHECK(parsing >= 3);
-		CHECK(creating >= 6);
+		CHECK(linking >= 6);
 	}
 
 	TEST_CASE("The reads of scene documents under way are found by scene asset, the furthest one counting")

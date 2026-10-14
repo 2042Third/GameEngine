@@ -17,10 +17,10 @@ namespace Strata
 	{
 
 		// The shares of reading a scene document (SceneAsset::Deserialize) its steps take, as measured on a scene of a million
-		// entities (5.7 s in all, Release): parsing the JSON, then creating the entities; the rest goes to freeing the
-		// document (0.8 s of the 1 s left) and computing the world transforms.
-		constexpr float c_SceneReadParseShare = 0.41f;
-		constexpr float c_SceneReadEntityShare = 0.42f;
+		// entities (Release): parsing the text while the entities are created, then linking them; the rest goes to computing the
+		// world transforms.
+		constexpr float c_SceneReadStreamShare = 0.80f;
+		constexpr float c_SceneReadLinkShare = 0.12f;
 
 		// Validates a {"Strata": {"Format": format, "Version": n}, key: {...}} document and returns the payload.
 		const nlohmann::json* ReadDocument(const nlohmann::json& json, std::string_view format, std::string_view key, uint32_t maxVersion, std::string* outError)
@@ -308,26 +308,18 @@ namespace Strata
 	{
 		Ref<SceneAsset> asset = CreateRef<SceneAsset>();
 		{
-			// The document lives only while it is read: the asset keeps the scene it describes, which validates it too (a
-			// broken scene fails here, at load time).
-			JsonParseProgress parseProgress;
-			EntityReadProgress entityProgress;
+			// The document is read as a stream into the scene the asset keeps, which validates it too (a broken scene fails here,
+			// at load time): the text and one entity's DOM at a time, never a DOM of the whole document.
+			SceneReadOptions options;
+			EntityReadProgress linkProgress;
 			if (progress)
 			{
-				parseProgress.Callback = [&progress, size = std::max<size_t>(data.size(), 1)](size_t parsedBytes)
-				{
-					progress(c_SceneReadParseShare * static_cast<float>(static_cast<double>(parsedBytes) / static_cast<double>(size)));
-				};
-				entityProgress = [&progress](float share)
-				{
-					progress(c_SceneReadParseShare + c_SceneReadEntityShare * share);
-				};
+				options.Progress = [&progress](float share) { progress(c_SceneReadStreamShare * share); };
+				linkProgress = [&progress](float share) { progress(c_SceneReadStreamShare + c_SceneReadLinkShare * share); };
 			}
-			std::optional<nlohmann::json> json = JsonUtils::Parse(std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), parseProgress, outError);
-			if (!json)
-				return nullptr;
 			Ref<Scene> scene = CreateRef<Scene>();
-			if (!SceneSerializer::Deserialize(*scene, *json, outError, &asset->m_Warnings, entityProgress))
+			if (!SceneSerializer::DeserializeText(*scene, std::string_view(reinterpret_cast<const char*>(data.data()), data.size()), options, outError,
+				&asset->m_Warnings, linkProgress))
 				return nullptr;
 			asset->m_Prepared = std::move(scene);
 		}

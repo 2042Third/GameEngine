@@ -661,6 +661,7 @@ namespace Strata
 
 		friend class Entity;
 		friend class SceneSerializer;
+		friend class SceneBuilder;
 	};
 
 }

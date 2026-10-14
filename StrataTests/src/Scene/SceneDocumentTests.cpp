@@ -12,8 +12,10 @@
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/EntitySink.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneDocumentReader.h"
 #include "Strata/Scene/SceneDocumentWriter.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/UnknownComponents.h"
@@ -24,6 +26,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -477,3 +480,294 @@ TEST_SUITE("Scene.Documents")
 	}
 }
 
+
+namespace
+{
+
+	// Counts what a reader hands it, refusing nothing; `OnEntity` hears of each entity's number (from 1).
+	class CountingSink final : public EntitySink
+	{
+	public:
+		void ReserveEntities(uint64_t count) override { Reserved = count; }
+		void ReadField(std::string_view key, const nlohmann::json&) override { Fields.emplace_back(key); }
+		bool ReadEntity(const nlohmann::json&, std::string*) override
+		{
+			Entities++;
+			if (OnEntity)
+				OnEntity(Entities);
+			return true;
+		}
+		bool Finish(std::string*) override
+		{
+			Finished = true;
+			return true;
+		}
+
+		std::function<void(uint64_t)> OnEntity;
+		uint64_t Reserved = 0;
+		uint64_t Entities = 0;
+		std::vector<std::string> Fields;
+		bool Finished = false;
+	};
+
+	struct SceneRead
+	{
+		bool Success = false;
+		std::string Error;
+		std::vector<std::string> Warnings;
+		Ref<Scene> Loaded = CreateRef<Scene>();
+		SceneReadResult Result;
+	};
+
+	// The DOM reader's load of a document's text (SceneSerializer::Deserialize), as scenes were read before the streamed
+	// reader.
+	SceneRead ReadWithDom(const std::string& text)
+	{
+		SceneRead read;
+		const std::optional<nlohmann::json> document = JsonUtils::Parse(text, &read.Error);
+		if (document)
+			read.Success = SceneSerializer::Deserialize(*read.Loaded, *document, &read.Error, &read.Warnings);
+		return read;
+	}
+
+	SceneRead ReadStreamed(const std::string& text, const SceneReadOptions& options = {})
+	{
+		SceneRead read;
+		read.Success = SceneSerializer::DeserializeText(*read.Loaded, text, options, &read.Error, &read.Warnings, {}, &read.Result);
+		return read;
+	}
+
+	// Both readers load the text to the same scene, with the same warnings in the same order.
+	void CheckSameRead(const std::string& text)
+	{
+		const SceneRead dom = ReadWithDom(text);
+		const SceneRead streamed = ReadStreamed(text);
+		INFO(dom.Error);
+		INFO(streamed.Error);
+		REQUIRE(dom.Success);
+		REQUIRE(streamed.Success);
+		CHECK(SceneSerializer::Serialize(*streamed.Loaded) == SceneSerializer::Serialize(*dom.Loaded));
+		CHECK(streamed.Loaded->GetName() == dom.Loaded->GetName());
+		CHECK(streamed.Warnings == dom.Warnings);
+		CHECK(streamed.Loaded->GetRootEntities() == dom.Loaded->GetRootEntities());
+	}
+
+	std::string Header(std::string_view format = "Scene", int version = 1)
+	{
+		return fmt::format("\"Strata\":{{\"Format\":\"{}\",\"Version\":{}}}", format, version);
+	}
+
+	// A document of `count` entities (IDs 1 to count, each the child of the one before every tenth), written as the writer
+	// lays them out: the header first, EntityCount when `declare`.
+	std::string MakeEntityListText(size_t count, bool declare)
+	{
+		std::string text = "{" + Header() + ",\"Scene\":{\"Name\":\"Many\",";
+		if (declare)
+			text += fmt::format("\"EntityCount\":{},", count);
+		text += "\"Entities\":[\n";
+		for (size_t index = 0; index < count; index++)
+		{
+			nlohmann::json entity = { { "ID", UUIDToJson(UUID(index + 1)) }, { "Components", { { "Name", { { "Name", fmt::format("E{}", index) } } } } } };
+			if (index % 10 != 0)
+				entity["Parent"] = UUIDToJson(UUID(index));
+			text += JsonUtils::Dump(entity);
+			text += index + 1 < count ? ",\n" : "\n";
+		}
+		text += "]}}";
+		return text;
+	}
+
+	// Entities and settings with everything a load reports: invalid and unknown properties, components this build does not
+	// register (on two entities), a component that is not read from entity data, a 'Components' that is no object, an
+	// invalid parent, a missing one and a cycle.
+	nlohmann::json MakeProblemScene()
+	{
+		nlohmann::json entities = nlohmann::json::array();
+		entities.push_back({ { "ID", UUIDToJson(UUID(1)) },
+			{ "Components", { { "Transform", { { "Translation", "up" }, { "Wobble", 1 } } }, { "Turret", { { "Barrels", 2 } } } } } });
+		entities.push_back({ { "ID", UUIDToJson(UUID(2)) }, { "Parent", UUIDToJson(UUID(1)) },
+			{ "Components", { { "Turret", nlohmann::json::object() }, { "ID", { { "ID", UUIDToJson(UUID(77)) } } } } } });
+		entities.push_back({ { "ID", UUIDToJson(UUID(3)) }, { "Parent", "not an ID" } });
+		entities.push_back({ { "ID", UUIDToJson(UUID(4)) }, { "Parent", UUIDToJson(UUID(999)) } });
+		entities.push_back({ { "ID", UUIDToJson(UUID(5)) }, { "Parent", UUIDToJson(UUID(6)) } });
+		entities.push_back({ { "ID", UUIDToJson(UUID(6)) }, { "Parent", UUIDToJson(UUID(5)) } });
+		entities.push_back({ { "ID", UUIDToJson(UUID(7)) }, { "Components", nlohmann::json::array() } });
+		const nlohmann::json settings = { { "Gravity", "down" }, { "PhysicsCapacity", { { "MaxBodies", -1 } } }, { "FixedTimestep", 0.02 } };
+		return { { "Strata", { { "Format", "Scene" }, { "Version", 1 } } },
+			{ "Scene", { { "Name", "Problems" }, { "Settings", settings }, { "Entities", entities } } } };
+	}
+
+	// The document with the header and the settings first and an entity per line, as the writer orders them.
+	std::string WriteInWriterOrder(const nlohmann::json& document)
+	{
+		const nlohmann::json& content = document["Scene"];
+		std::string text = "{\"Strata\":" + JsonUtils::Dump(document["Strata"]) + ",\"Scene\":{\"Name\":" + JsonUtils::Dump(content["Name"])
+			+ ",\"Settings\":" + JsonUtils::Dump(content["Settings"]) + fmt::format(",\"EntityCount\":{},\"Entities\":[\n", content["Entities"].size());
+		for (size_t index = 0; index < content["Entities"].size(); index++)
+			text += JsonUtils::Dump(content["Entities"][index]) + (index + 1 < content["Entities"].size() ? ",\n" : "\n");
+		return text + "]}}";
+	}
+
+}
+
+TEST_SUITE("Scene.Documents")
+{
+	TEST_CASE("Old layouts and the streamed one load to the scene the DOM reader makes, children before parents too")
+	{
+		const Ref<Scene> feature = LoadFeatureScene();
+		AddUnknownComponents(*feature, feature->GetEntityByUUID(feature->GetRootEntities().front()));
+		const nlohmann::json document = SceneSerializer::Serialize(*feature);
+		// Tab-indented and compact: nlohmann sorts the keys, so the header comes after the entities, the settings after them too.
+		CheckSameRead(JsonUtils::Dump(document, 1, '\t'));
+		CheckSameRead(JsonUtils::Dump(document));
+		CheckSameRead(WriteDocument(*feature).Text);
+		// Children listed before their parents.
+		nlohmann::json reversed = document;
+		nlohmann::json& entities = reversed["Scene"]["Entities"];
+		std::reverse(entities.begin(), entities.end());
+		CheckSameRead(JsonUtils::Dump(reversed));
+		// Keys a reader does not know, anywhere, with nested values.
+		nlohmann::json extra = document;
+		extra["Editor"] = { { "Camera", { 1, 2, { { "x", nullptr } } } } };
+		extra["Scene"]["Notes"] = { { "List", nlohmann::json::array({ nlohmann::json::object(), 2.5, "text" }) } };
+		CheckSameRead(JsonUtils::Dump(extra));
+		// A scene without entities, and one without an entity list.
+		CheckSameRead("{" + Header() + ",\"Scene\":{\"Name\":\"Empty\",\"Entities\":[]}}");
+		CheckSameRead("{\"Scene\":{}," + Header() + "}");
+	}
+
+	TEST_CASE("The streamed reader reports what the DOM reader reports, in its order, also when the settings follow the entities")
+	{
+		const nlohmann::json document = MakeProblemScene();
+		const SceneRead dom = ReadWithDom(JsonUtils::Dump(document));
+		REQUIRE(dom.Success);
+		// Every kind of report is there.
+		const auto has = [&dom](std::string_view text)
+		{
+			return std::any_of(dom.Warnings.begin(), dom.Warnings.end(), [text](const std::string& warning) { return warning.find(text) != std::string::npos; });
+		};
+		CHECK(has("invalid 'Gravity'"));
+		CHECK(has("Wobble"));
+		CHECK(has("Unknown component 'Turret' (2 entities)"));
+		CHECK(has("component 'ID' is not read from entity data"));
+		CHECK(has("'Components' must be an object"));
+		CHECK(has("invalid 'Parent'"));
+		CHECK(has("not found"));
+		CHECK(has("would create a cycle"));
+		// Settings after the entities (sorted keys), and before them (the writer's order): the same reports in the same order.
+		CheckSameRead(JsonUtils::Dump(document));
+		CheckSameRead(WriteInWriterOrder(document));
+	}
+
+	TEST_CASE("Invalid documents fail with the DOM reader's errors")
+	{
+		const std::string header = Header();
+		const std::vector<std::string> documents = {
+			"[]",
+			"{\"Scene\":{}}",
+			"{" + header + "}",
+			"{" + Header("Prefab") + ",\"Scene\":{}}",
+			"{" + Header("Scene", 7) + ",\"Scene\":{}}",
+			"{\"Strata\":\"Scene\",\"Scene\":{}}",
+			"{" + header + ",\"Scene\":[]}",
+			"{" + header + ",\"Scene\":{\"Entities\":{}}}",
+			"{" + header + ",\"Scene\":{\"Entities\":null}}",
+			"{" + header + ",\"Scene\":{\"Entities\":[1]}}",
+			"{" + header + ",\"Scene\":{\"Entities\":[{\"ID\":\"zz\"}]}}",
+			"{" + header + ",\"Scene\":{\"Entities\":[{\"ID\":\"0000000000000001\"},{\"ID\":\"0000000000000001\"}]}}",
+			// The header after the entities: they are read before it fails.
+			"{\"Scene\":{\"Entities\":[{\"ID\":\"0000000000000001\"}]}," + Header("Model") + "}",
+		};
+		for (const std::string& text : documents)
+		{
+			INFO(text);
+			const SceneRead dom = ReadWithDom(text);
+			const SceneRead streamed = ReadStreamed(text);
+			REQUIRE_FALSE(dom.Success);
+			CHECK_FALSE(streamed.Success);
+			CHECK(streamed.Error == dom.Error);
+			CHECK_FALSE(streamed.Result.SyntaxError);
+		}
+
+		const SceneRead broken = ReadStreamed("{" + header + ",\"Scene\":{\"Entities\":[{\"ID\":");
+		CHECK_FALSE(broken.Success);
+		CHECK(broken.Result.SyntaxError);
+		CHECK(broken.Error.rfind("Invalid JSON", 0) == 0);
+		CHECK_FALSE(ReadStreamed("{" + header + ",\"Scene\":{}} trailing").Success);
+	}
+
+	TEST_CASE("A document over the entity limit is refused before its first entity when it declares its count, else at the first entity beyond it")
+	{
+		SceneReadOptions options;
+		options.MaxEntities = 100;
+		std::string error;
+		SceneReadResult result;
+
+		CountingSink declared;
+		CHECK_FALSE(SceneDocumentReader::Read(MakeEntityListText(1000, true), SceneDocumentKind::Scene, declared, options, &result, &error));
+		CHECK(declared.Entities == 0);
+		CHECK(result.Entities == 0);
+		CHECK(error.find("1000 entities") != std::string::npos);
+		CHECK_FALSE(declared.Finished);
+
+		CountingSink undeclared;
+		CHECK_FALSE(SceneDocumentReader::Read(MakeEntityListText(1000, false), SceneDocumentKind::Scene, undeclared, options, &result, &error));
+		CHECK(undeclared.Entities == 100);
+		CHECK(error.find("more than the 100") != std::string::npos);
+
+		// At the limit the document loads, its declared count reserved.
+		CountingSink fits;
+		CHECK(SceneDocumentReader::Read(MakeEntityListText(100, true), SceneDocumentKind::Scene, fits, options, &result, &error));
+		CHECK(fits.Entities == 100);
+		CHECK(fits.Reserved == 100);
+		CHECK(fits.Finished);
+		CHECK(fits.Fields == std::vector<std::string> { "Name" });
+		// A count the text cannot hold reserves only what it could.
+		CountingSink claims;
+		const std::string text = "{" + Header() + ",\"Scene\":{\"EntityCount\":1000000,\"Entities\":[{}]}}";
+		CHECK(SceneDocumentReader::Read(text, SceneDocumentKind::Scene, claims, {}, &result, &error));
+		CHECK(claims.Reserved <= text.size() / 3);
+
+		// Scene loads take the limit from the scene.
+		options.MaxEntities = 99;
+		CHECK_FALSE(ReadStreamed(MakeEntityListText(100, true), options).Success);
+		options.MaxEntities = 100;
+		const SceneRead loaded = ReadStreamed(MakeEntityListText(100, true), options);
+		REQUIRE(loaded.Success);
+		CHECK(loaded.Loaded->GetEntityCount() == 100);
+	}
+
+	TEST_CASE("A cancelled read stops within one check of entities after the cancel, as cancelled, and finishes nothing")
+	{
+		constexpr size_t c_Count = 5000;
+		const std::string text = MakeEntityListText(c_Count, true);
+		for (const size_t percent : { 10, 50, 90 })
+		{
+			const uint64_t cancelAt = c_Count * percent / 100;
+			CAPTURE(cancelAt);
+			bool cancelled = false;
+			CountingSink sink;
+			sink.OnEntity = [&](uint64_t entity) { cancelled = cancelled || entity == cancelAt; };
+			SceneReadOptions options;
+			options.IsCancelled = [&cancelled]() { return cancelled; };
+			SceneReadResult result;
+			std::string error;
+			CHECK_FALSE(SceneDocumentReader::Read(text, SceneDocumentKind::Scene, sink, options, &result, &error));
+			CHECK(result.Cancelled);
+			CHECK_FALSE(result.EntityError);
+			// The reader asks every CancelCheckEntities entities: it stops at the first check after the cancel.
+			const uint64_t interval = options.CancelCheckEntities;
+			CHECK(sink.Entities == (cancelAt + interval - 1) / interval * interval);
+			CHECK(sink.Entities - cancelAt < interval);
+			CHECK_FALSE(sink.Finished);
+		}
+
+		// A read cancelled before it starts reads nothing.
+		SceneReadOptions options;
+		options.IsCancelled = []() { return true; };
+		const SceneRead read = ReadStreamed(text, options);
+		CHECK_FALSE(read.Success);
+		CHECK(read.Result.Cancelled);
+		CHECK(read.Loaded->GetEntityCount() == 0);
+	}
+}

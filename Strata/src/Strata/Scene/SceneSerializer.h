@@ -3,12 +3,14 @@
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneDocumentReader.h"
 
 #include <nlohmann/json.hpp>
 
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Strata
@@ -48,13 +50,22 @@ namespace Strata
 		static constexpr uint32_t c_FormatVersion = 1;
 
 		static nlohmann::json Serialize(const Scene& scene);
-		// The scene settings as a scene document stores them ({"Gravity", "FixedTimestep", ...}).
+		// The scene settings as a scene document stores them ({"Gravity", "FixedTimestep", ...}), and read back: what the
+		// object holds that is not a valid setting is reported and leaves the setting as it was.
 		static nlohmann::json SerializeSettings(const SceneSettings& settings);
+		static void DeserializeSettings(const nlohmann::json& settings, SceneSettings& outSettings, std::vector<std::string>* outWarnings = nullptr);
 		// Loads into an empty scene. Returns false (with an error) for structurally invalid documents.
 		static bool Deserialize(Scene& scene, const nlohmann::json& json, std::string* outError = nullptr, std::vector<std::string>* outWarnings = nullptr,
 			const EntityReadProgress& progress = {});
-		// How many scene documents Deserialize has read in this process (any thread): loading a scene asset reads its document
-		// once, whoever takes the scene (SceneAsset::TakePreparedScene), and tests check it with the difference of two calls.
+		// Loads a document's text into an empty scene as Deserialize loads its DOM, streamed (SceneDocumentReader with a
+		// SceneBuilder): never a DOM of the whole document, and the read stops at once when it is cancelled or the document
+		// holds more entities than fit. `options.Progress` hears of the text parsed (creating the entities as it goes),
+		// `linkProgress` of the linking that follows. The scene holds part of the document when the read fails.
+		static bool DeserializeText(Scene& scene, std::string_view text, const SceneReadOptions& options = {}, std::string* outError = nullptr,
+			std::vector<std::string>* outWarnings = nullptr, const EntityReadProgress& linkProgress = {}, SceneReadResult* outResult = nullptr);
+		// How many scene documents Deserialize and DeserializeText have read in this process (any thread): loading a scene
+		// asset reads its document once, whoever takes the scene (SceneAsset::TakePreparedScene), and tests check it with the
+		// difference of two calls.
 		static uint64_t GetDeserializeCount();
 
 		// Writes the scene's document through SceneDocumentWriter (an entity per line), replacing the file only once all of it
