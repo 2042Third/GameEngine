@@ -159,7 +159,9 @@ the Windows SDK and Ninja.
 **CI** (`.github/workflows/ci.yml`): Windows (`windows-ninja` with sccache), Linux (GCC 14 with ccache) and macOS (Apple
 Clang 15 with ccache) build and test Release, and Windows also Debug (`ctest -LE "gpu|perf" -j 4`, the only Debug
 build CI makes). Each job keeps its compiler cache in the GitHub Actions cache (keyed per job and commit, restored from
-the newest of its branch or main, saved even when tests fail; at most 1 GB for ccache and 2 GB for sccache per job). A
+the newest of its branch or main, saved even when tests fail; at most 250 MB for ccache and 1 GB for sccache per job).
+Each ref keeps one entry per job: after the save, the job deletes its ref's older entries, so that main's set and the
+active branches' stay below GitHub's 10 GB, beyond which GitHub evicts the least recently used (main's first). A
 Dist build of every target on Windows uses the Visual Studio generator people build with, without a cache, and runs the
 `package` tests, so that the Visual Studio generator's script builds stay tested.
 

@@ -14,7 +14,8 @@ jobs:
   # Built through a compiler cache (STRATA_COMPILER_CACHE: ccache on Linux and macOS, sccache on Windows, where the
   # Visual Studio generators ignore compiler launchers and the windows-ninja preset builds in a developer environment).
   # Each job keeps its cache in the GitHub Actions cache, keyed per job and commit and restored from the newest of its
-  # branch or main.
+  # branch or main; each ref keeps one entry per job, so that main's set and the active branches' stay below GitHub's
+  # 10 GB (beyond it GitHub evicts the least recently used entries, main's first, and branches then build cold).
   build-and-test:
     name: ${{ matrix.name }}
     strategy:
@@ -53,14 +54,20 @@ jobs:
             preset: linux
             config: release
             cache: ccache
-            key: linux-release-without-modules
+            # Not prefixed by the Linux job's key: restoring by prefix must not cross between the two configurations.
+            key: linux-without-modules-release
             options: -DSTRATA_WITH_AUDIO=OFF -DSTRATA_WITH_PHYSICS=OFF -DSTRATA_BUILD_EDITOR=OFF
             exclude: package
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
+    # Deleting this ref's superseded cache entries needs actions: write; checking out needs contents: read.
+    permissions:
+      contents: read
+      actions: write
+    # A full set measured 33-71 MiB with ccache and 470-582 MiB with sccache: one run's five entries stay under 2.75 GB.
     env:
-      CCACHE_MAXSIZE: 1G
-      SCCACHE_CACHE_SIZE: 2G
+      CCACHE_MAXSIZE: 250M
+      SCCACHE_CACHE_SIZE: 1G
 
     steps:
       - name: Check out
@@ -145,6 +152,25 @@ jobs:
         with:
           path: ${{ runner.temp }}/compiler-cache
           key: ${{ matrix.cache }}-${{ matrix.key }}-${{ github.sha }}
+
+      # Each run saves a new entry. GitHub evicts by last access, and a superseded entry of this ref was restored more
+      # recently than main's, so it would outlive main's set: this ref's older entries of this job go. The key must match
+      # exactly (a commit hash after the prefix), so that no other job's entries are taken for this one's.
+      - name: Remove superseded compiler caches
+        if: ${{ !cancelled() }}
+        continue-on-error: true # A pull request from a fork has a read-only token: a failed cleanup must not fail the build.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prefix="${{ matrix.cache }}-${{ matrix.key }}-"
+          current="${prefix}${{ github.sha }}"
+          gh cache list --repo "${{ github.repository }}" --ref "${{ github.ref }}" --key "$prefix" --limit 100 --json id,key \
+            --jq ".[] | select((.key | test(\"^${prefix}[0-9a-f]{40}\$\")) and .key != \"${current}\") | .id" |
+            while read -r id; do
+              echo "Deleting the superseded cache entry $id"
+              gh cache delete "$id" --repo "${{ github.repository }}"
+            done
 
       # Hosted runners have no GPU: suites that need one carry the "gpu" label. Perf budgets (label "perf") hold for the
       # reference machine (StrataTests/Perf/Budgets.json); shared runners of other speeds would fail or pass them at
