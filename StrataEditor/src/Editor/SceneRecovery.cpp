@@ -63,8 +63,8 @@ namespace Strata
 			return std::chrono::duration<double>(to - from).count();
 		}
 
-		// Whether applying `states` over `prior` creates, removes or moves an entity. Steps that do not can be folded into
-		// the step before them in a journal: positions recorded there stay what they were.
+		// Whether applying `states` over `prior` creates, removes or moves an entity (also into another cell of a world). Steps
+		// that do not can be folded into the step before them in a journal: positions recorded there stay what they were.
 		bool IsStructural(const std::vector<EntityState>& states, const std::vector<EntityState>* prior)
 		{
 			if (!prior || prior->size() != states.size())
@@ -75,7 +75,7 @@ namespace Strata
 				const EntityState& before = (*prior)[index];
 				if (after.ID != before.ID || after.Exists != before.Exists)
 					return true;
-				if (after.Exists && (after.Parent != before.Parent || after.SiblingIndex != before.SiblingIndex))
+				if (after.Exists && (after.Parent != before.Parent || after.SiblingIndex != before.SiblingIndex || after.Cell != before.Cell))
 					return true;
 			}
 			return false;
@@ -95,6 +95,11 @@ namespace Strata
 				out += state.Parent.IsValid() ? JsonUtils::Dump(UUIDToJson(state.Parent)) : std::string("null");
 				out += ",\"SiblingIndex\":";
 				out += std::to_string(state.SiblingIndex);
+				if (state.Cell.IsValid())
+				{
+					out += ",\"Cell\":";
+					out += JsonUtils::Dump(UUIDToJson(state.Cell));
+				}
 			}
 			out += '}';
 		}
@@ -131,6 +136,17 @@ namespace Strata
 			state.Components = std::move(*components);
 			state.Parent = *parentId;
 			state.SiblingIndex = static_cast<size_t>(sibling->get<uint64_t>());
+			// Journals of steps that moved entities between a world's cells name their cells.
+			if (const nlohmann::json* cell = JsonUtils::Find(json, "Cell"))
+			{
+				const std::optional<UUID> cellId = UUIDFromJson(*cell);
+				if (!cellId)
+				{
+					outError = fmt::format("the state of entity {} has an invalid 'Cell'", state.ID.ToString());
+					return std::nullopt;
+				}
+				state.Cell = *cellId;
+			}
 			return state;
 		}
 

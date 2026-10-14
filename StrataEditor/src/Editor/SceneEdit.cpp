@@ -91,6 +91,11 @@ namespace Strata
 			state.Parent = entity.GetComponent<RelationshipComponent>().Parent;
 			// Cached by the scene: wide sibling lists are not searched per capture.
 			state.SiblingIndex = scene.GetSiblingIndex(entity);
+			if (!state.Parent.IsValid())
+			{
+				if (const SubSceneStatus* status = scene.GetSubSceneStatus(scene.GetSubSceneOf(entity)))
+					state.Cell = status->Scene;
+			}
 			return state;
 		}
 
@@ -257,6 +262,51 @@ namespace Strata
 			}
 			if (!scene.PlaceEntities(placements))
 				ST_WARN("Restoring the hierarchy: some entities could not be placed under their recorded parent and stay at the top level");
+
+			// Membership: top-level entities go back into the cells they belonged to (CheckCells made sure they are loaded).
+			for (const EntityState& state : states)
+			{
+				if (!state.Exists || state.Parent.IsValid())
+					continue;
+				const Entity entity = scene.GetEntityByUUID(state.ID);
+				if (!entity)
+					continue;
+				const SubSceneStatus* current = scene.GetSubSceneStatus(scene.GetSubSceneOf(entity));
+				if ((current ? current->Scene : UUID::Null()) == state.Cell)
+					continue;
+				const SubSceneID target = state.Cell.IsValid() ? scene.FindSubSceneBySource(state.Cell) : 0;
+				if (state.Cell.IsValid() && !scene.IsSubSceneLoaded(target))
+					ST_WARN("Restoring '{}': its cell {} is not loaded; it stays where it is", entity.GetName(), state.Cell.ToString());
+				else
+					scene.SetSubSceneOf(entity, target);
+			}
+		}
+
+		bool CheckCells(Scene& scene, const std::vector<EntityState>& states, std::string* outError)
+		{
+			std::vector<AssetHandle> missing;
+			for (const EntityState& state : states)
+			{
+				if (!state.Exists || state.Parent.IsValid() || !state.Cell.IsValid())
+					continue;
+				if (!scene.IsSubSceneLoaded(scene.FindSubSceneBySource(state.Cell)) && std::find(missing.begin(), missing.end(), state.Cell) == missing.end())
+					missing.push_back(state.Cell);
+			}
+			if (missing.empty())
+				return true;
+			ISceneCellLoader* loader = scene.GetService<ISceneCellLoader>();
+			for (const AssetHandle cell : missing)
+			{
+				if (loader)
+					loader->RequestCell(cell);
+			}
+			if (outError)
+			{
+				const std::string name = loader ? loader->DescribeCell(missing.front()) : missing.front().ToString();
+				*outError = loader ? fmt::format("the step changes cell {}, which is not loaded; it is loading now, undo again once it is in", name)
+					: fmt::format("the step changes the sub-scene of scene asset {}, which is not loaded", name);
+			}
+			return false;
 		}
 
 	}
@@ -267,14 +317,18 @@ namespace Strata
 	{
 	}
 
-	bool SceneEditAction::Execute(std::string*)
+	bool SceneEditAction::Execute(std::string* outError)
 	{
+		if (!SceneEdit::CheckCells(*m_Scene, *m_After, outError))
+			return false;
 		SceneEdit::ApplyEntities(*m_Scene, *m_After);
 		return true;
 	}
 
-	bool SceneEditAction::Undo(std::string*)
+	bool SceneEditAction::Undo(std::string* outError)
 	{
+		if (!SceneEdit::CheckCells(*m_Scene, *m_Before, outError))
+			return false;
 		SceneEdit::ApplyEntities(*m_Scene, *m_Before);
 		return true;
 	}

@@ -251,3 +251,96 @@ TEST_SUITE("Editor.SceneEdit")
 		CHECK_FALSE(hierarchy.First.HasComponent<UnknownComponentsComponent>());
 	}
 }
+
+namespace
+{
+
+	// The cell loader an open world offers: records what undo steps asked it to load.
+	class RecordingCellLoader final : public ISceneCellLoader
+	{
+	public:
+		std::string DescribeCell(AssetHandle cell) const override { return "Props (" + cell.ToString() + ")"; }
+		void RequestCell(AssetHandle cell) override { Requested.push_back(cell); }
+
+		std::vector<AssetHandle> Requested;
+	};
+
+}
+
+TEST_SUITE("Editor.SceneEdit")
+{
+	TEST_CASE("Entity states record the cell of top-level entities, and undo puts entities back into their cells")
+	{
+		Scene scene("World");
+		Entity crate = scene.CreateEntity("Crate");
+		Entity lid = scene.CreateChildEntity(crate, "Lid");
+		Entity tree = scene.CreateEntity("Tree");
+		const AssetHandle cellA = UUID(0xA0);
+		const AssetHandle cellB = UUID(0xB0);
+		const Entity rootsA[] = { crate };
+		const SubSceneID a = scene.AdoptSubScene(cellA, rootsA);
+		const SubSceneID b = scene.AdoptSubScene(cellB, {});
+		REQUIRE((a != 0 && b != 0));
+
+		CHECK(SceneEdit::CaptureEntity(scene, crate.GetUUID()).Cell == cellA);
+		CHECK(SceneEdit::CaptureEntity(scene, lid.GetUUID()).Cell == UUID::Null()); // Descendants follow their root
+		CHECK(SceneEdit::CaptureEntity(scene, tree.GetUUID()).Cell == UUID::Null()); // The persistent scene
+
+		// A move from cell A to cell B is one step; undo and redo move it back and forth.
+		UndoStack undo;
+		SceneEditTransaction transaction(scene, "Move 'Crate'", { crate.GetUUID() });
+		REQUIRE(scene.SetSubSceneOf(crate, b));
+		REQUIRE(transaction.Commit(undo));
+		CHECK(scene.GetSubSceneOf(lid) == b);
+		REQUIRE(undo.Undo());
+		CHECK(scene.GetSubSceneOf(crate) == a);
+		CHECK(scene.GetSubSceneOf(lid) == a);
+		REQUIRE(undo.Redo());
+		CHECK(scene.GetSubSceneOf(crate) == b);
+
+		// A deleted entity comes back into its cell.
+		const SubSceneID treeCell = scene.AdoptSubScene(UUID(0xC0), {});
+		REQUIRE(scene.SetSubSceneOf(tree, treeCell));
+		const UUID treeID = tree.GetUUID();
+		SceneEditTransaction deletion(scene, "Delete", {});
+		deletion.Track(treeID);
+		scene.DestroyEntity(tree);
+		REQUIRE(deletion.Commit(undo));
+		REQUIRE(undo.Undo());
+		const Entity restored = scene.GetEntityByUUID(treeID);
+		REQUIRE(restored);
+		CHECK(scene.GetSubSceneOf(restored) == treeCell);
+		CHECK(scene.ValidateHierarchy());
+	}
+
+	TEST_CASE("A step whose cell is not loaded fails, asks the world to load it and stays where it is")
+	{
+		Scene scene("World");
+		Entity crate = scene.CreateEntity("Crate");
+		const AssetHandle cellA = UUID(0xA0);
+		const Entity roots[] = { crate };
+		const SubSceneID a = scene.AdoptSubScene(cellA, roots);
+		UndoStack undo;
+		SceneEditTransaction transaction(scene, "Move 'Crate'", { crate.GetUUID() });
+		REQUIRE(scene.SetSubSceneOf(crate, 0));
+		REQUIRE(transaction.Commit(undo));
+
+		// Cell A unloads (its entities go with it, but the crate left it): undoing needs A again.
+		REQUIRE(scene.UnloadSubScene(a));
+		scene.FlushSubSceneUnloads();
+		RecordingCellLoader loader;
+		REQUIRE(scene.RegisterService<ISceneCellLoader>(loader));
+		std::string error;
+		CHECK_FALSE(undo.Undo(&error));
+		CHECK(error.find("the step changes cell Props (00000000000000A0), which is not loaded; it is loading now") != std::string::npos);
+		CHECK(loader.Requested == std::vector<AssetHandle> { cellA });
+		CHECK(undo.CanUndo()); // The step stays applied
+		CHECK(scene.GetSubSceneOf(crate) == 0);
+
+		// Once the cell is in again, the undo goes through.
+		const SubSceneID again = scene.AdoptSubScene(cellA, {});
+		REQUIRE(undo.Undo(&error));
+		CHECK(scene.GetSubSceneOf(crate) == again);
+		scene.UnregisterService<ISceneCellLoader>(loader);
+	}
+}

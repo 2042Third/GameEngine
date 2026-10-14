@@ -27,8 +27,24 @@ namespace Strata
 		nlohmann::json Components; // ComponentAccess::SerializeEntityComponents plus the UnknownComponentsComponent's entries
 		UUID Parent = UUID::Null();
 		size_t SiblingIndex = 0;
+		// The scene asset of the sub-scene the entity belongs to when it is top-level (a world's cell; null: none, the
+		// persistent scene); descendants follow their top-level ancestor and record null.
+		AssetHandle Cell = UUID::Null();
 
 		bool operator==(const EntityState& other) const = default;
+	};
+
+	// Offered by an open world (EditorWorld) as a scene service of the edited scene: undo steps that need a cell which is not
+	// loaded ask it to load (and keep) the cell, and name the cell in their error.
+	class ISceneCellLoader
+	{
+	public:
+		virtual ~ISceneCellLoader() = default;
+
+		// How the cell of a scene asset reads in errors ("Props (3, -1)").
+		virtual std::string DescribeCell(AssetHandle cell) const = 0;
+		// Loads and pins the cell, so that the step can be done once it is in.
+		virtual void RequestCell(AssetHandle cell) = 0;
 	};
 
 	namespace SceneEdit
@@ -57,6 +73,9 @@ namespace Strata
 		// UUIDs), replaces the components that differ and restores parents and sibling order. States must be
 		// consistent: an entity that is removed has all its descendants in the set.
 		void ApplyEntities(Scene& scene, const std::vector<EntityState>& states);
+		// Whether every cell the states name is loaded, so that ApplyEntities can put the entities back into them. False
+		// with the reason otherwise (changing nothing), after asking the scene's ISceneCellLoader to load the missing cells.
+		bool CheckCells(Scene& scene, const std::vector<EntityState>& states, std::string* outError = nullptr);
 
 	}
 
