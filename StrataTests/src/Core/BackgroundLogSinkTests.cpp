@@ -317,11 +317,11 @@ TEST_SUITE("Core.Log")
 		// its bound again, and the call after that waits for room: at most twice the bound of calls return.
 		inner->Close();
 		constexpr size_t c_Bound = BackgroundLogSink::c_MaxQueuedMessages;
-		const size_t count = 2 * c_Bound + 1;
+		constexpr size_t c_Count = 2 * c_Bound + 1;
 		std::atomic<size_t> returned = 0;
-		std::future<void> logged = std::async(std::launch::async, [&logger, &returned, count]()
+		std::future<void> logged = std::async(std::launch::async, [&logger, &returned]()
 		{
-			for (size_t index = 0; index < count; index++)
+			for (size_t index = 0; index < c_Count; index++)
 			{
 				logger.trace("bulk {}", index);
 				returned++;
@@ -340,7 +340,7 @@ TEST_SUITE("Core.Log")
 				settled = now;
 				settledSince = std::chrono::steady_clock::now();
 			}
-			if (settled == count || (settled > c_Bound && std::chrono::steady_clock::now() - settledSince > std::chrono::milliseconds(250)))
+			if (settled == c_Count || (settled > c_Bound && std::chrono::steady_clock::now() - settledSince > std::chrono::milliseconds(250)))
 				break;
 		}
 		// Opened before anything can end the test: the future's destructor waits for the calls.
@@ -351,8 +351,8 @@ TEST_SUITE("Core.Log")
 		REQUIRE(logged.wait_for(c_Timeout) == std::future_status::ready);
 		logger.flush();
 		const std::vector<std::string> written = inner->GetWritten();
-		REQUIRE(written.size() == count);
-		CHECK(written.back() == "bulk " + std::to_string(count - 1));
+		REQUIRE(written.size() == c_Count);
+		CHECK(written.back() == "bulk " + std::to_string(c_Count - 1));
 	}
 
 	TEST_CASE("A bounded flush waits at most its time for a blocked console, and writes everything once it can")
