@@ -42,7 +42,7 @@ the work: checklist item 5.
 | `StrataTests/` | doctest unit tests, test helpers, the feature test project, and the layer table (`Architecture/Layers.json`, `LayeringAllowlist.txt`). |
 | `Samples/` | Games an AI agent made through the editor (`Tetris`), offered as copies by the launcher; open one in place only to change it ([details](Docs/DeveloperGuide.md#repository-layout)). |
 | `CMake/` | CMake modules (configurations, compiler options, shader compilation, manifest, the build's git commit). |
-| `Tools/` | Standard-library Python tools: generators whose outputs are committed, and `PerfStability.py` ([details](Docs/DeveloperGuide.md#repository-layout)). |
+| `Tools/` | Standard-library Python tools: generators whose outputs are committed, `PerfStability.py`, `PerfLock.py` and `CompatLint.py` ([details](Docs/DeveloperGuide.md#repository-layout)). |
 | `Docs/` | `README.md` (index), `DeveloperGuide.md` (this file's details), `Architecture.md`, `Roadmap.md` (update its Status when a wave lands), `Manual/`, `Releases/` ([details](Docs/DeveloperGuide.md#repository-layout)). |
 | `.claude/skills/` | Skills for agents: build and test, components, scripting, editor automation, making a game (`strata-make-a-game`). |
 
