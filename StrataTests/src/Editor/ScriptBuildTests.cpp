@@ -634,6 +634,16 @@ TEST_SUITE("Editor.ScriptBuild")
 		REQUIRE(FileSystem::WriteText(scripts / "Notes.txt", "Ideas\n"));
 		CHECK_FALSE(build(settings));
 
+		// Why a build configures again where it is: the tree's stamp records no files.
+		constexpr std::string_view unrecorded = "The build tree does not record the files it was configured with";
+		constexpr std::string_view changed = "Files were added to or removed from the script directory";
+		auto checkReason = [&](std::string_view expected, std::string_view unexpected)
+		{
+			const std::string& log = builder.GetLastResult().LogTail;
+			CHECK(log.find(expected) != std::string::npos);
+			CHECK(log.find(unexpected) == std::string::npos);
+		};
+
 		// A configure step that did not finish (cancelled here) leaves a stamp without the files: the next build configures
 		// again, still in the same tree.
 		REQUIRE(FileSystem::WriteText(scripts / "Mover.cpp", "// A new class\n"));
@@ -642,6 +652,19 @@ TEST_SUITE("Editor.ScriptBuild")
 		builder.Cancel();
 		REQUIRE(builder.GetLastResult().Cancelled);
 		CHECK(build(settings));
+		checkReason(unrecorded, changed);
+		CHECK(FileSystem::IsRegularFile(objects));
+		CHECK_FALSE(build(settings));
+
+		// A stamp an earlier version wrote, which does not record the files, configures again once, and says why.
+		const std::filesystem::path stampFile = tree / "StrataScriptBuild.json";
+		std::optional<nlohmann::json> stamp = JsonUtils::Parse(FileSystem::ReadText(stampFile).value_or(""));
+		REQUIRE(stamp);
+		REQUIRE(stamp->contains("Sources"));
+		stamp->erase("Sources");
+		REQUIRE(FileSystem::WriteText(stampFile, JsonUtils::Dump(*stamp, 1, '\t') + "\n"));
+		CHECK(build(settings));
+		checkReason(unrecorded, changed);
 		CHECK(FileSystem::IsRegularFile(objects));
 		CHECK_FALSE(build(settings));
 

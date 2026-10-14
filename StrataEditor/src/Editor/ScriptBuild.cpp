@@ -1052,10 +1052,21 @@ namespace Strata
 		}
 		if (reusable && !configured)
 		{
-			const std::string reason = m_SourcesTruncated
-				? fmt::format("The script directory is too large to tell whether files were added or removed (over {} code and CMake files, or {} "
-					"entries): configuring again", c_MaxListedScriptSources, c_MaxScannedScriptEntries)
-				: std::string("Files were added to or removed from the script directory since it was configured: configuring again");
+			std::string reason;
+			if (m_SourcesTruncated)
+			{
+				reason = fmt::format("The script directory is too large to tell whether files were added or removed (over {} code and CMake files, or {} "
+					"entries): configuring again", c_MaxListedScriptSources, c_MaxScannedScriptEntries);
+			}
+			else if (!previousSources.is_array())
+			{
+				reason = "The build tree does not record the files it was configured with (configured by an earlier version, or its last configure step "
+					"did not finish): configuring again";
+			}
+			else
+			{
+				reason = "Files were added to or removed from the script directory since it was configured: configuring again";
+			}
 			m_Log += reason + "\n";
 			ST_INFO("[Scripts] {}", reason);
 		}
