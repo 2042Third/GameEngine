@@ -454,6 +454,30 @@ TEST_SUITE("GameUI.Scale")
 
 TEST_SUITE("GameUI.Dirty")
 {
+	TEST_CASE("A rect replaced in place (removed and added again, as undo restores it) is laid out again")
+	{
+		UITestScene ui;
+		Entity panel = ui.Add(ui.Canvas, "Panel", PointRect({ 0.0f, 0.0f }, { 0.0f, 0.0f }, { 10.0f, 10.0f }, { 100.0f, 50.0f }));
+		Entity label = ui.Add(panel, "Label", StretchRect({ 0.0f, 0.0f }, { 1.0f, 1.0f }));
+		CheckBox(ui.Box(label), { 10.0f, 10.0f }, { 100.0f, 50.0f });
+
+		// The same entity, the same place in the hierarchy, new values: nothing moved, but the rect changed.
+		panel.RemoveComponent<UIRectComponent>();
+		panel.AddComponent<UIRectComponent>(PointRect({ 0.0f, 0.0f }, { 0.0f, 0.0f }, { 30.0f, 40.0f }, { 200.0f, 80.0f }));
+		CheckBox(ui.Box(panel), { 30.0f, 40.0f }, { 200.0f, 80.0f });
+		CheckBox(ui.Box(label), { 30.0f, 40.0f }, { 200.0f, 80.0f });
+		std::string error;
+		CHECK_MESSAGE(ui.GetUI().Validate(&error), error);
+
+		// A change marked before another one rebuilds the canvas stays marked.
+		panel.GetComponent<UIRectComponent>().Position = { 5.0f, 6.0f };
+		panel.MarkModified<UIRectComponent>();
+		Entity extra = ui.Add(ui.Canvas, "Extra", PointRect({ 1.0f, 1.0f }, { 1.0f, 1.0f }, { 0.0f, 0.0f }, { 10.0f, 10.0f }));
+		CheckBox(ui.Box(panel), { 5.0f, 6.0f }, { 200.0f, 80.0f });
+		CheckBox(ui.Box(extra), { 1910.0f, 1070.0f }, { 10.0f, 10.0f });
+		CHECK_MESSAGE(ui.GetUI().Validate(&error), error);
+	}
+
 	TEST_CASE("An idle frame lays out, shapes and builds nothing; a change costs its element")
 	{
 		Scene scene("Widgets");

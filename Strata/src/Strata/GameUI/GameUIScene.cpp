@@ -169,11 +169,18 @@ namespace Strata
 	void GameUIScene::OnStructureChanged(entt::registry&, entt::entity entity)
 	{
 		// An element added or removed. Where an added one belongs is found once the hierarchy is complete (instantiation
-		// links entities after adding their components): the next update looks for its canvas.
+		// links entities after adding their components): the next update looks for its canvas. An element whose rect was
+		// replaced (removed and added again, as undo restores components) stays where it is but has new values: it is laid
+		// out again, and the rebuild keeps that mark.
 		if (const ElementRef* ref = FindRef(entity))
+		{
 			m_Canvases[ref->Canvas].StructureDirty = true;
+			MarkElementLayoutDirty(ref->Canvas, ref->Element);
+		}
 		else
+		{
 			m_PendingStructure.push_back(entity);
+		}
 	}
 
 	void GameUIScene::OnLayoutChanged(entt::registry&, entt::entity entity)
@@ -513,6 +520,16 @@ namespace Strata
 			if (found != oldIndices.end())
 				mapping[index] = found->second;
 		}
+		// Changes marked before the rebuild stay marked (their element indices change with it).
+		std::vector<entt::entity> markedBefore;
+		for (const Layout& layout : canvas.Layouts)
+		{
+			for (const uint32_t index : layout.Dirty)
+			{
+				if (index < old.size())
+					markedBefore.push_back(old[index].Entity);
+			}
+		}
 		for (Layout& layout : canvas.Layouts)
 		{
 			std::vector<UIBox> boxes(count);
@@ -572,6 +589,12 @@ namespace Strata
 			const ElementRef* parent = FindRef(old[old[index].Parent].Entity);
 			if (parent && parent->Canvas == canvasIndex)
 				MarkElementLayoutDirty(canvasIndex, parent->Element);
+		}
+		for (const entt::entity entity : markedBefore)
+		{
+			const ElementRef* ref = FindRef(entity);
+			if (ref && ref->Canvas == canvasIndex)
+				MarkElementLayoutDirty(canvasIndex, ref->Element);
 		}
 	}
 
