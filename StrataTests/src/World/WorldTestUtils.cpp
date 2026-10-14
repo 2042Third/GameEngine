@@ -163,6 +163,10 @@ namespace Strata::Tests
 		if (specification.BuildPersistent)
 			specification.BuildPersistent(persistent, world.World);
 		index.PersistentBodies = PhysicsWorld::CountBodyCandidates(persistent);
+		// Every cell at once: more than any radius holds, which is what world.cook would bound it by.
+		index.MaxBodiesInRadius = index.PersistentBodies;
+		for (const WorldCellSummary& summary : index.Cells)
+			index.MaxBodiesInRadius += summary.Bodies;
 		if (specification.Index)
 			data.Index = std::move(index);
 		addScene(world.Persistent, "Scenes/Persistent.stscene", ToBytes(SceneSerializer::Serialize(persistent)));

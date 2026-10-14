@@ -308,6 +308,13 @@ namespace Strata
 					streamer.SetLayerEnabled(layer.Name, false);
 			}
 			prepared->LayersChosen = true;
+			// A game never starts with less physics room than its world's cook found it needs: the world physics' hook
+			// creates next is sized for it (as an export of the cooked capacity would have saved it).
+			if (const std::optional<WorldIndex>& index = asset->GetData().Index)
+			{
+				PhysicsCapacitySettings& capacity = scene.GetSettings().PhysicsCapacity;
+				capacity.MaxBodies = std::max(capacity.MaxBodies, index->GetRecommendedMaxBodies());
+			}
 			streamer.Update();
 		}
 		// A slice of the cells' entities within the frame's budget (their loads advance with the asset manager).

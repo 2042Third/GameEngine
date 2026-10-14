@@ -228,10 +228,16 @@ TEST_SUITE("World.Streaming")
 		}
 		CHECK(groundCells == 4); // Within 48 m of the origin: (0, 0), (1, 0), (0, 1) and (1, 1)
 
+		// The physics room the cooked index asks for was given before physics' preparation created its world.
+		const uint32_t recommended = mounted.World.Data.Index->GetRecommendedMaxBodies();
+		REQUIRE(recommended > 0);
+		CHECK(scene->GetSettings().PhysicsCapacity.MaxBodies == recommended);
+
 		scene->OnRuntimeStart();
 		PhysicsSystem* physics = scene->GetSystem<PhysicsSystem>();
 		REQUIRE(physics);
 		CHECK(physics->GetStats().PreparedSlices >= 1);
+		CHECK(physics->GetStats().MaxBodies >= recommended);
 		const uint64_t bodies = physics->GetStats().BodyCount;
 		CHECK(bodies == 1 + 4 * mounted.World.BodiesPerGroundCell);
 		WorldStreamingSystem* system = scene->GetSystem<WorldStreamingSystem>();
