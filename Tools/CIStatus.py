@@ -2,9 +2,9 @@
 """Reads the GitHub Actions results of a commit of this repository: the state of its runs and jobs, and the annotations
 the jobs left (.github/scripts/annotate_failures.py writes the failures there, readable without a job log).
 
-    python3 Tools/CIStatus.py status <sha>             # one line per run and job, with failed steps
-    python3 Tools/CIStatus.py annotations <sha>        # the failure annotations of the jobs that did not succeed
-    python3 Tools/CIStatus.py annotations <sha> --all  # every annotation of every check run (notices too)
+    python3 Tools/CIStatus.py status <commit>          # one line per run and job, with failed steps (a hash or a branch)
+    python3 Tools/CIStatus.py annotations <commit>        # the failure annotations of the jobs that did not succeed
+    python3 Tools/CIStatus.py annotations <commit> --all  # every annotation of every check run (notices too)
 
 The repository is origin's (GitHub). The API allows 60 requests an hour without a token: the tool uses GH_TOKEN or
 GITHUB_TOKEN, else `gh auth token` when the GitHub CLI is signed in, and never prints it.
@@ -31,6 +31,16 @@ def find_repository():
     if not match:
         raise RuntimeError("origin is not a GitHub repository: '%s'" % url)
     return 'https://api.github.com/repos/%s/%s' % (match.group(1), match.group(2))
+
+
+def resolve_commit(revision):
+    """The full hash of a revision (a short hash, a branch): the API knows commits by their full hashes only."""
+    result = subprocess.run(['git', 'rev-parse', '--verify', '--quiet', revision + '^{commit}'], capture_output=True, text=True,
+                            cwd=os.path.dirname(os.path.abspath(__file__)))
+    sha = result.stdout.strip()
+    if result.returncode != 0 or not re.fullmatch(r'[0-9a-f]{40}', sha):
+        raise RuntimeError("'%s' does not name a commit of this repository (fetch it first?)" % revision)
+    return sha
 
 
 def find_token():
@@ -101,15 +111,16 @@ def annotations(github, sha, every, limit):
 def main():
     parser = argparse.ArgumentParser(description='Reads the GitHub Actions results of a commit.')
     parser.add_argument('command', choices=['status', 'annotations'])
-    parser.add_argument('sha', help='the commit (full hash)')
+    parser.add_argument('sha', help='the commit (a hash, short or full, or a branch)')
     parser.add_argument('--all', action='store_true', help='annotations: every annotation of every check run')
     parser.add_argument('--limit', type=int, default=20000, help='annotations: characters per annotation (default 20000)')
     options = parser.parse_args()
     try:
+        sha = resolve_commit(options.sha)
         github = GitHub()
         if options.command == 'status':
-            return status(github, options.sha)
-        return annotations(github, options.sha, options.all, options.limit)
+            return status(github, sha)
+        return annotations(github, sha, options.all, options.limit)
     except (urllib.error.URLError, RuntimeError, ValueError) as error:
         print('api error:', error)
         return 2
