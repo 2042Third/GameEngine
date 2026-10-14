@@ -156,6 +156,10 @@ namespace
 				textures.push_back(manager->Add(0x10000 + index, cooked));
 			AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
 			budgets.GpuTextures = textureBudget.value_or(AssetResidencyBudgets::c_Unlimited);
+			// Only the byte budgets and the release wait limit how fast textures arrive, however slow the machine: what the
+			// run counts must not follow the main thread's speed.
+			budgets.FinalizeMsPerFrame = 1000.0f;
+			budgets.UploadMsPerFrame = 1000.0f;
 			manager->SetResidencyBudgets(budgets);
 
 			for (uint32_t frame = 0; frame < c_Frames; frame++)
@@ -175,8 +179,8 @@ namespace
 						manager->GetAsset(textures[(frame + offset) % c_TextureCount], AssetPriority::High);
 				});
 			}
-			// Everything requested last arrives: finalization takes 4 ms per frame, and an arrival that made room waits for
-			// the frames in flight first.
+			// Everything requested last arrives: the byte budgets limit each frame's finalization, and an arrival that made
+			// room waits for the frames in flight first.
 			uint32_t settleFrames = 0;
 			for (; settleFrames < 120 && manager->HasPendingLoads(); settleFrames++)
 				RunDeviceFrame(gpu, [&]() { manager->Update(); });
@@ -433,6 +437,10 @@ TEST_SUITE("GPU.Assets.Residency")
 		const AssetHandle arrival = manager->Add(0x40001, cooked);
 		AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
 		budgets.GpuTextures = textureBytes + textureBytes / 2; // One of them fits
+		// Only the release wait holds the arrival back: its upload, and the free of its CPU copy, finish in the frame they
+		// start in, however slow the machine (the time budgets have tests of their own, GPU.Assets.Uploads).
+		budgets.FinalizeMsPerFrame = 1000.0f;
+		budgets.UploadMsPerFrame = 1000.0f;
 		manager->SetResidencyBudgets(budgets);
 
 		// The old texture is used for a while, then not any more.
