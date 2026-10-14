@@ -126,6 +126,7 @@ TEST_SUITE("Engine.Modules")
 		CHECK_FALSE(result.TimedOut);
 		CHECK(result.ExitCode == 0);
 		CHECK(result.Output.find("registered: TestVehicle") != std::string::npos);
+		CHECK(result.Output.find("requirements: TestVehicle") != std::string::npos);
 		CHECK(result.Output.find("reloaded: Speed 12.50, Label Rover One") != std::string::npos);
 		CHECK(result.Output.find("late registration refused: Component 'Late' is not registered: the component registry is frozen") != std::string::npos);
 

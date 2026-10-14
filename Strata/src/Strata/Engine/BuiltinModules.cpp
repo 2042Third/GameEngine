@@ -5,6 +5,7 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Audio/AudioRegistration.h"
+#include "Strata/GameUI/GameUIRegistration.h"
 #include "Strata/Physics/PhysicsRegistration.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/RendererRegistration.h"
@@ -61,6 +62,7 @@ namespace Strata::Engine
 		RegisterPhysicsModule();
 		RegisterAudioModule();
 		RegisterAnimationModule();
+		RegisterGameUIModule();
 		// Tooling, handed in by the program (see ModuleRegistrationOptions::AssetPipeline).
 		if (options.AssetPipeline)
 			options.AssetPipeline();

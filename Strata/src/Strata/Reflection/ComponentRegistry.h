@@ -130,6 +130,10 @@ namespace Strata
 		// Optional serialization of data that is not expressed as properties (e.g. script fields).
 		std::function<void(const void* component, nlohmann::json& out)> SerializeExtra;
 		std::function<bool(void* component, const nlohmann::json& in, std::string* outError)> DeserializeExtra;
+		// Names of the components this one needs on its entity (a UI image needs its UIRect). The paths that add components by
+		// name (ComponentAccess::AddComponent: component.add, entity.create, the inspector's Add Component, scripts) add the
+		// missing ones first, in the same edit. Removing a required component is allowed: the dependent one then has no effect.
+		std::vector<std::string> Requires;
 
 		bool IsHidden() const { return HasFlag(Flags, ComponentFlags::Hidden); }
 		bool IsRemovable() const { return !HasFlag(Flags, ComponentFlags::NotRemovable); }
@@ -234,6 +238,13 @@ namespace Strata
 		ComponentInfoBuilder& Flags(ComponentFlags flags)
 		{
 			GetTarget().Flags = flags;
+			return *this;
+		}
+
+		// A component the entity needs for this one to work (see ComponentInfo::Requires), by its registered name.
+		ComponentInfoBuilder& Requires(std::string componentName)
+		{
+			GetTarget().Requires.push_back(std::move(componentName));
 			return *this;
 		}
 

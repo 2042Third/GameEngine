@@ -385,6 +385,7 @@ layer and of the layers it lists, which are always lower ones:
 | Renderer | `Renderer/**`, `Platform/Vulkan/**` | Core, Input, App, Asset, Reflection, Scene |
 | Physics, Audio | `Physics/**`, `Audio/**` | Core, Asset, Reflection, Scene |
 | Animation | `Animation/**` | Core, Asset, Reflection, Scene |
+| GameUI | `GameUI/**` | Core, Input, Asset, Reflection, Scene, Renderer (only Engine includes it; see [Game UI](#game-ui)) |
 | Scripting | `Scripting/**` | Core, Input, Asset, Reflection, Scene |
 | Project | `Project/**` | Core, Asset, Reflection |
 | Runtime | `Runtime/**` | Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Scripting, Project |
@@ -428,6 +429,7 @@ RegisterScriptingModule    Scripting/ScriptingRegistration.cpp "Scripting" syste
 RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     "Physics" system
 RegisterAudioModule        Audio/AudioRegistration.cpp         AudioClip loader, "Audio" system
 RegisterAnimationModule    Animation/AnimationRegistration.cpp Skeleton, AnimationClip, AnimationController loaders, "Animation" system
+RegisterGameUIModule       GameUI/GameUIRegistration.cpp       the UI components (category "UI")
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
 ComponentRegistry::Freeze
@@ -449,7 +451,12 @@ ComponentRegistry::Freeze
   and are safe from any thread (asset loads deserialize scenes on workers). `Register<T>` after `Freeze`, for a type
   that is registered already or under a name that is taken (ignoring case), logs an error and returns a builder that
   converts to false and discards what it is given; nothing aborts. A game registers its components through
-  `ModuleRegistrationOptions::Extra`.
+  `ModuleRegistrationOptions::Extra`. A component may name components it needs (`ComponentInfo::Requires`, set with
+  `ComponentInfoBuilder::Requires`): `ComponentAccess::AddComponent`, which every path that adds components by name goes
+  through (`component.add`, `entity.create`, the inspector, scripts), adds the missing ones first, so an editor or agent
+  that adds a UI image to a plain entity gets its rect in the same undo step. `Freeze` drops, with an error, a
+  requirement that names no registered component or the component itself. New components live in the module that owns
+  them (`<Module>/<Module>Components.h`, registered by its registration function), not in `Scene/Components.h`.
 - The loader, importer, built-in asset, manager extension and scene system registries stay open: tools and tests register
   more later (a later loader or importer replaces or overrides the built-in one; an extension applies to managers made
   afterwards).
@@ -1838,6 +1845,33 @@ system, not to entities: a character's joints add no entities and no transform c
   of a wider table, and a tab narrower than a table's least width scrolls it sideways instead of squeezing names and
   numbers into ellipses) and shows skeletons and clips, and the Inspector shows a playing animator's state and
   parameters.
+
+## Game UI
+
+The GameUI module (`Strata/src/Strata/GameUI/`, the `GameUI` layer) is the game's own user interface: menus, HUDs,
+pause screens, health bars and buttons, laid out for any screen size and drawn over the scene. Only the composition root
+includes it: the renderer reaches it through the overlay registry and scripts through scene services, so a build without
+it renders and plays scenes as before.
+
+**Components** (`GameUI/GameUIComponents.h`, registered by `RegisterGameUIModule`, category "UI"). Coordinates are canvas
+units with +Y down and (0, 0) at the top left; colors are display (sRGB) colors.
+
+| Component | What it is |
+| --- | --- |
+| `UICanvas` | A screen of UI: its scale mode (`ConstantPixelSize`, `ScaleWithScreen` with a reference resolution and a width/height match, `ConstantPhysicalSize`), safe-area padding, sort order, pixel snapping, whether it takes input, and the selectable navigation starts at |
+| `UIRect` | The element's rect in its parent's: anchors, pivot, position, size, fit to content, and whether a layout group places it |
+| `UIImage` | A texture or solid color, simple, nine-sliced or filled, with rounded corners and a border; a raycast target by default |
+| `UIText` | Text in the rect: font, size in canvas units per em, alignment, wrapping, truncation with or without an ellipsis, line spacing, outline |
+| `UISelectable` | The interaction states shared by every widget (normal, hover, pressed, focused, disabled; color tints or image swaps over a fade time) and keyboard and gamepad navigation (automatic, explicit neighbours, none) |
+| `UIButton`, `UIToggle`, `UISlider` | Widgets: a click, an on/off switch with a checkmark and exclusive groups, a value with a fill and a handle; each may name an event target besides its own entity |
+| `UILayout` | Places the children: horizontal, vertical or grid, with padding, spacing, the alignment of the block and stretching |
+
+An entity is a UI element when it has a `UIRect` and a root canvas (a canvas without a canvas among its ancestors) is the
+entity itself or an ancestor; a canvas under another canvas is an element of the outer one. Every UI component but the
+rect requires the rect (`ComponentInfo::Requires`), so adding an image by name adds its rect too. Entity references
+(`FirstSelected`, `TargetImage`, the navigation neighbours, a toggle's checkmark and group, a slider's fill and handle,
+event targets) are reflected entity properties: duplicates, pastes and prefab instances remap them, play mode's copy
+keeps them.
 
 ## Scripting
 

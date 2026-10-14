@@ -12,7 +12,9 @@ of its own.
 
 ## 1. Declare the data
 
-Add the struct to `Strata/src/Strata/Scene/Components.h` in the right section. Rules:
+A component lives in the module that owns it: declare the struct in `Strata/src/Strata/<Module>/<Module>Components.h`
+(e.g. `GameUI/GameUIComponents.h`) and never add new ones to `Scene/Components.h`, which holds the components of the
+scene layer itself and those other modules have not taken over yet. Rules:
 
 - Only reflectable member types: `bool`, `int32_t`, `uint32_t`, `float`, `glm::vec2/3/4`, `glm::quat`,
   `std::string`, enums (registered with `EnumProperty`), asset handles (`AssetHandle`, with
@@ -23,8 +25,9 @@ Add the struct to `Strata/src/Strata/Scene/Components.h` in the right section. R
 
 ## 2. Register it
 
-In `Strata/src/Strata/Scene/ComponentRegistration.cpp` (`RegisterSceneComponents`, part of the scene module's
-registration), register the type with a stable name. The name is written to files and used by tools; never rename
+In the owning module's registration function (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`, which
+may call a `Register<Module>Components` of its components file, as `GameUI/GameUIComponents.cpp` does), register the
+type with a stable name, and give it a `Category` for the Add Component menu. The name is written to files and used by tools; never rename
 it later. Components register only while `Engine::RegisterBuiltinModules` runs (the registry freezes at its end);
 a game or test registers its own components through `ModuleRegistrationOptions::Extra`.
 
@@ -45,6 +48,10 @@ ComponentRegistry::Register<WindZoneComponent>("WindZone")
   the property for people and AI agents (the tooltip text is part of `component.list`).
 - Flags: `NotRemovable` for components every entity has, `Hidden` for internal ones, `NoSerialize` only
   for data the serializer writes itself.
+- `Requires("UIRect")` names a component the entity needs for this one to work (every UI component but the rect needs
+  the rect). The paths that add components by name (`ComponentAccess::AddComponent`: `component.add`, `entity.create`,
+  the inspector's Add Component, scripts' `AddComponent`) add the missing ones first, in the same undo step; the registry
+  drops (with an error) a requirement that names no registered component.
 
 ## 3. Add behaviour (if the component does something at runtime)
 

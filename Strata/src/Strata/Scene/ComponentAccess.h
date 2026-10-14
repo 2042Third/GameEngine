@@ -32,7 +32,8 @@ namespace Strata
 		// Validates and assigns the value, then notifies systems of the change. Read-only properties are rejected.
 		static bool SetProperty(Entity entity, const ComponentInfo& info, const PropertyInfo& property, const PropertyValue& value, std::string* outError = nullptr);
 
-		// Adds the component if missing (no-op when present). Returns false for unknown/hidden components.
+		// Adds the component if missing (no-op when present), after the components it requires (ComponentInfo::Requires) that
+		// the entity lacks. Returns false for hidden components and those only the engine adds.
 		static bool AddComponent(Entity entity, const ComponentInfo& info, std::string* outError = nullptr);
 		static bool RemoveComponent(Entity entity, const ComponentInfo& info, std::string* outError = nullptr);
 
