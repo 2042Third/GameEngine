@@ -4,6 +4,10 @@
 	{ "command": "play.stop", "expect": { "/state": { "equals": "Edit" } } },
 	{ "command": "script.setField", "parameters": { "entity": "72E590A9EEB83AFC", "class": "TetrisBoard", "field": "LinesPerLevel", "value": 1 } },
 	{ "command": "script.setField", "parameters": { "entity": "72E590A9EEB83AFC", "class": "TetrisBoard", "field": "StartInterval", "value": 100 } },
+	{ "command": "ui.layout", "parameters": { "entity": "893AE784EA121440", "screen": [1280, 720] },
+		"expect": { "/elements/0/rect": { "equals": [70, 70, 131.677734375, 42.1875] } } },
+	{ "command": "ui.layout", "parameters": { "entity": "893AE784EA121440", "screen": [2560, 1440] },
+		"expect": { "/elements/0/rect": { "equals": [140, 140, 263.35546875, 84.375] } } },
 	{ "command": "play.start", "expect": { "/state": { "equals": "Play" } } },
 	{ "command": "component.get", "parameters": { "entity": "893AE784EA121440", "component": "UIText" }, "expect": { "/values/Text": { "equals": "Score: 0" } } },
 

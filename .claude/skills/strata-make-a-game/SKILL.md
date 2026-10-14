@@ -92,7 +92,11 @@ first run and after files were added or removed; answers with compiler diagnosti
   `entity.GetUI().SetText(...)` when the value changes. A panel that shows only sometimes (a pause or game-over message):
   `panel.SetActive(...)`. Menus: buttons whose `EventTarget` is the entity of a menu script, which gets
   `OnUIClick(widget)`; keyboard and gamepad navigation work by themselves, and `UI::IsActionPressed(UIAction::Cancel)`
-  closes a menu (the scripting skill's "Game UI").
+  closes a menu (the scripting skill's "Game UI"). Build them with `ui.create` (the editor automation skill's "Build the
+  game UI") and test them with `input.click`.
+- A main menu: a scene without a camera whose canvas holds the title and the buttons (the game shows its UI over black);
+  the Play button's script calls `Game::LoadScene(level)`. A pause screen: a panel set active with `Time::SetTimeScale(0)`;
+  the UI keeps working (it runs on unscaled time) and `Time::GetUnscaledDeltaTime()` animates what the script fades.
 - Input: `Input::IsKeyPressed` for one-shot actions, `KeyRepeat` for held movement (construct it from fields in
   `OnCreate`), and update both keys of a pair every frame (`a.Update(dt) || b.Update(dt)` would skip `b`).
 - Sounds: `Assets::RequestLoad` in `OnCreate`, `Audio::PlayOneShot(clip)` later.

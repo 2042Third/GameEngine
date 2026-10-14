@@ -401,6 +401,8 @@ input.gamepadButton {"button": "A"}                       # gamepad 0 unless "ga
 input.gamepadAxis {"axis": "LeftY", "value": 1}           # stick up, held until replaced, "value": null or play.stop
 input.gamepadAxis {"axis": "RightTrigger", "value": 1, "frames": 30} # half a second, then back to rest
 input.state       {}                                      # what simulated input holds; input.releaseAll lets go of it
+input.click       {"entity": "<button id>"}               # a UI element where the player sees it: clicked, events
+input.type        {"text": "Player 1"}                    # typed text (Input::GetTypedText), UTF-8, at most 1,024 bytes
 ```
 
 Keys are named like the SDK's `Key::` constants (`Left`, `Up`, `Space`, `Enter`, `Escape`, `A`, `D1`, `F5`, `LeftShift`;
@@ -419,6 +421,40 @@ and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
   lists them in a pill that releases them when a person clicks it.
 - A tap of 1 frame is one key press for games that act on `IsKeyPressed` or `KeyRepeat`; use `frames` (or press/release) to
   hold a key for repeats.
+- Menus: `input.click {"entity": ...}` moves the pointer to the center of a UI element's rect at the game view's size and taps
+  the button there. It fails, changing nothing, when the element is hidden, on a canvas that does not receive input, or
+  covered (the error names what a click would hit, `errorData.cover`); the answer says whether the button clicked or the
+  toggle or slider changed (`clicked`) and lists the UI events (`click`, `valueChanged`, `focusChanged`). The UI's own
+  keyboard and gamepad navigation answers `input.key` (arrows, `Enter`, `Escape`) and `input.gamepadButton` (`DPadUp`, `A`,
+  `B`) like a player's.
+
+**Build the game UI** (menus, HUDs, health bars): UI elements are entities with a `UIRect` under an entity with a
+`UICanvas`; `ui.create` makes them ready to use in one undo step and lays them out at once:
+
+```text
+ui.create {"type": "canvas"}                                            # ScaleWithScreen, reference 1920x1080
+ui.create {"type": "panel", "parent": "<canvas>", "anchor": "topLeft", "position": [24, 24], "size": [360, 120]}
+ui.create {"type": "verticalLayout", "parent": "<panel>", "anchor": "stretch"}   # stacks its children
+ui.create {"type": "text", "parent": "<layout>", "text": "Score: 0"}            # -> entity, canvas, created, parts, rect
+ui.create {"type": "button", "parent": "<menu>", "text": "Play"}                # parts.label: its text
+ui.create {"type": "toggle", "parent": "<menu>", "text": "Sound"}               # parts: background, checkmark, label
+ui.create {"type": "slider", "parent": "<menu>"}                                # parts: background, fill, handle
+ui.layout {"screen": [1280, 720]}                                        # rects in pixels at a screen, without rendering
+ui.hitTest {"position": [960, 540]}                                      # what a click there would hit ("all": everything)
+```
+
+- Types: `canvas`, `panel`, `image`, `text`, `button`, `toggle`, `slider`, `horizontalLayout`, `verticalLayout`,
+  `gridLayout`. An element whose parent is outside every canvas gets a new top-level canvas first.
+- `anchor` is one of `topLeft`, `topCenter`, `topRight`, `topStretch`, `middleLeft`, `middleCenter`, `middleRight`,
+  `middleStretch`, `bottomLeft`, ..., `stretchLeft`, `stretchCenter`, `stretchRight`, `stretch`; it sets the pivot too.
+  `position` is the pivot's offset in canvas units (+y down); along a stretched axis `size` is added to the parent's span
+  (`[-40, 60]` on `bottomStretch`: a 60-high bar with 20 units of margin each side).
+- Tune with `component.set` on `UIRect`, `UIImage` (`Color`, `CornerRadius`, `BorderWidth`, `Texture`), `UIText` (`Text`,
+  `FontSize`, `Alignment`), `UICanvas` (`ScaleMode`, `ReferenceResolution`, `MatchWidthOrHeight`, `SortOrder`,
+  `ReceivesInput`: false for HUDs that never block clicks), `UIButton`/`UIToggle`/`UISlider` (`EventTarget`: the entity whose
+  scripts get `OnUIClick`/`OnUIValueChanged`), `UISelectable` (colors, `Navigation`).
+- Check proportions without rendering: `ui.layout` at two screens of the same aspect gives the same fractions under
+  `ScaleWithScreen`. `ui.layout {"entity": ...}` lists one subtree (state, focused, text and value too).
 
 **Look at it** (needs rendering, not `--no-gpu`): `camera.focus` or `camera.set`, then
 `StrataCLI call viewport.capture '{"camera": "scene"}' --save-image shot.png` and open `shot.png`; with MCP the

@@ -948,6 +948,11 @@ namespace Strata
 		return IsVisible(m_Canvases[view.CanvasIndex], element);
 	}
 
+	uint32_t GameUIScene::GetElementSubtreeEnd(const UICanvasView& view, uint32_t element) const
+	{
+		return m_Canvases[view.CanvasIndex].Elements[element].SubtreeEnd;
+	}
+
 	bool GameUIScene::IsRaycastTarget(const UICanvasView& view, uint32_t element) const
 	{
 		return m_Canvases[view.CanvasIndex].Elements[element].RaycastTarget;

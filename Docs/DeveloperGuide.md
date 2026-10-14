@@ -80,6 +80,7 @@ characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together
   - [Materials](#materials)
   - [Animation commands](#animation-commands)
   - [Simulated input](#simulated-input)
+  - [Game UI commands](#game-ui-commands)
   - [Output paths](#output-paths)
 - [Rendering](#rendering)
   - [Scene renderer and lighting](#scene-renderer-and-lighting)
@@ -1746,6 +1747,23 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   default while paused, where waiting would block a client that has to step the game), at once. Holds outlive the client
   that made them (no attempt is made to tie them to connections): the status bar lists them in a pill that releases them
   when clicked (`input.releaseAll`), and starting or stopping play drops them (`Input::ClearSimulated`).
+- **UI input** (`RegisterUIInputCommands`, same file): `input.click {entity, button, frames, wait}` lays the canvases out
+  for the UI's input screen, hit tests the center of the element's rect like the UI system does and fails, changing
+  nothing, unless the hit is the element or one of its descendants (the error and `errorData.cover` name what covers
+  it); then it moves the simulated pointer there (input coordinates: pixels divided by the input-to-pixel factor) and taps
+  the button, listening to `IUIEvents` until the game has seen the release (`clicked`: the selectable it pressed raised a
+  click or a value change). `input.type {text, wait}` queues typed text (`Input::SimulateText`, 1 to 1,024 bytes).
+
+### Game UI commands
+
+- `ui.create`, `ui.layout` and `ui.hitTest` (`Editor/EditorUICommands.cpp`) build and inspect the game UI. `ui.create`
+  makes a preset (`Editor/GameUIPresets`: the hierarchy of a canvas, panel, image, text, button, toggle, slider or layout
+  group, with a look of its own and no texture assets) in one `SceneEditTransaction`, under a new top-level canvas when
+  its parent is outside every canvas, and places it with an anchor preset (`Editor/UIRectEdit`, shared with the
+  Inspector: the 16 presets, keeping a rect in place while its anchors change, margins along stretched axes).
+- Their screen is the game's: while playing the UI's input screen, in edit mode the viewport's image size, headless
+  1920x1080; `screen` overrides it. Rects are reported in screen pixels (canvas units times the canvas's scale), after
+  `GameUIScene::EnsureLayout` for that screen (code that reads boxes after changes lays out first).
 
 ### Output paths
 

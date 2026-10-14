@@ -142,6 +142,8 @@ namespace Strata
 		uint32_t GetElementCount(const UICanvasView& view) const;
 		entt::entity GetElementEntity(const UICanvasView& view, uint32_t element) const;
 		UIBox GetElementBox(const UICanvasView& view, uint32_t element) const; // Canvas units
+		// One past the element's last descendant: its subtree is [element, GetElementSubtreeEnd).
+		uint32_t GetElementSubtreeEnd(const UICanvasView& view, uint32_t element) const;
 		// Active in the hierarchy and not the checkmark of a toggle that is off (with its descendants).
 		bool IsElementVisible(const UICanvasView& view, uint32_t element) const;
 		// Whether the pointer can hit the element: it has a UIImage or UIText that is a raycast target, or a UISelectable.
