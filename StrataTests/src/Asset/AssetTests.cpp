@@ -512,4 +512,44 @@ TEST_SUITE("Asset")
 		AssetManager::SetActive(nullptr);
 		CHECK_FALSE(AssetManager::HasActive());
 	}
+
+	TEST_CASE("An asset manager serves typed requests: the asset as its type, null for another type or an invalid handle")
+	{
+		const AssetHandle handle = UUID(0x7100);
+		const std::filesystem::path path = WritePack("TypedRequests", { { MakeMetadata(0x7100, AssetType::Material, "M.stmat"), CreateMaterialBytes(0.25f) } });
+		const Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(path);
+		REQUIRE(manager);
+
+		// Nothing to peek at before it loaded.
+		CHECK(manager->PeekLoadedAsset<Material>(handle) == nullptr);
+		const Ref<Material> material = manager->LoadAssetSync<Material>(handle);
+		REQUIRE(material);
+		CHECK(material->GetProperties().Roughness == doctest::Approx(0.25f));
+		CHECK(manager->GetAsset<Material>(handle) == material);
+		CHECK(manager->PeekLoadedAsset<Material>(handle) == material);
+
+		// Another type: nothing, although the asset is there.
+		CHECK(manager->GetAsset(handle) == material);
+		CHECK(manager->GetAsset<Mesh>(handle) == nullptr);
+		CHECK(manager->PeekLoadedAsset<Mesh>(handle) == nullptr);
+		CHECK(manager->LoadAssetSync<Mesh>(handle) == nullptr);
+
+		// The null handle and a handle the manager does not know.
+		CHECK(manager->GetAsset<Material>(UUID::Null()) == nullptr);
+		CHECK(manager->PeekLoadedAsset<Material>(UUID::Null()) == nullptr);
+		CHECK(manager->LoadAssetSync<Material>(UUID::Null()) == nullptr);
+		CHECK(manager->GetAsset<Material>(UUID(0x7101)) == nullptr);
+		CHECK(manager->PeekLoadedAsset<Material>(UUID(0x7101)) == nullptr);
+
+		// The static helpers of the active manager answer the same.
+		AssetManager::SetActive(manager);
+		CHECK(AssetManager::GetAsset<Material>(handle) == material);
+		CHECK(AssetManager::PeekLoadedAsset<Material>(handle) == material);
+		CHECK(AssetManager::LoadAssetSync<Material>(handle) == material);
+		CHECK(AssetManager::GetAsset<Mesh>(handle) == nullptr);
+		CHECK(AssetManager::PeekLoadedAsset<Mesh>(handle) == nullptr);
+		CHECK(AssetManager::LoadAssetSync<Mesh>(handle) == nullptr);
+		AssetManager::SetActive(nullptr);
+		CHECK(AssetManager::GetAsset<Material>(handle) == nullptr);
+	}
 }

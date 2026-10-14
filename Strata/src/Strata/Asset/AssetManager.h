@@ -22,6 +22,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace Strata
@@ -323,6 +324,23 @@ namespace Strata
 		// not for per-frame game code. Returns null if the asset fails to load. Must not be called from
 		// Asset::FinalizeOnMainThread.
 		Ref<Asset> LoadAssetSync(AssetHandle handle);
+		// GetAsset, PeekLoadedAsset and LoadAssetSync of an asset of type T: null for an invalid handle, an asset that is not
+		// loaded, and an asset of another type. The static helpers of AssetManager forward to these.
+		template<typename T>
+		Ref<T> GetAsset(AssetHandle handle, AssetPriority priority = AssetPriority::Normal)
+		{
+			return handle.IsValid() ? CastAsset<T>(GetAsset(handle, priority)) : nullptr;
+		}
+		template<typename T>
+		Ref<T> PeekLoadedAsset(AssetHandle handle) const
+		{
+			return handle.IsValid() ? CastAsset<T>(PeekLoadedAsset(handle)) : nullptr;
+		}
+		template<typename T>
+		Ref<T> LoadAssetSync(AssetHandle handle)
+		{
+			return handle.IsValid() ? CastAsset<T>(LoadAssetSync(handle)) : nullptr;
+		}
 		AssetState GetAssetState(AssetHandle handle) const;
 		std::string GetAssetError(AssetHandle handle) const;
 		// Starts loading an unloaded asset, or raises the queued load of a loading one (a higher priority, or the same
@@ -544,6 +562,14 @@ namespace Strata
 		// unknown assets.
 		void SetAssetReferences(AssetHandle handle, std::span<const AssetHandle> dependencies, std::optional<AABB> bounds);
 	private:
+		// The asset as a T, or null when there is none or it is of another type: the type check of the typed accessors.
+		template<typename T>
+		static Ref<T> CastAsset(Ref<Asset> asset)
+		{
+			if (!asset || asset->GetType() != T::GetStaticType())
+				return nullptr;
+			return std::static_pointer_cast<T>(std::move(asset));
+		}
 		// Requests the direct dependencies of an asset whose read completed (see GetDependencies). Any thread.
 		void PrefetchDependencies(AssetHandle handle, AssetPriority priority);
 		// The closure of GetDependencyClosure. Requires m_Mutex.
@@ -821,7 +847,9 @@ namespace Strata
 		std::vector<Scope<AssetManagerExtension>> m_Extensions;
 	};
 
-	// Process-wide access to the active asset manager (set by the project).
+	// Process-wide access to the active asset manager (set by the project). Every function here uses that one manager, so
+	// new code that works for a scene uses none of them: it reaches the scene's manager (Scene::GetAssetManager) and its
+	// typed accessors instead.
 	class AssetManager
 	{
 	public:
@@ -829,41 +857,28 @@ namespace Strata
 		static const Ref<AssetManagerBase>& GetActive();
 		static bool HasActive() { return GetActive() != nullptr; }
 
+		// AssetManagerBase::GetAsset<T> of the active manager (null without one).
 		template<typename T>
 		static Ref<T> GetAsset(AssetHandle handle, AssetPriority priority = AssetPriority::Normal)
 		{
 			const Ref<AssetManagerBase>& manager = GetActive();
-			if (!manager || !handle.IsValid())
-				return nullptr;
-			Ref<Asset> asset = manager->GetAsset(handle, priority);
-			if (!asset || asset->GetType() != T::GetStaticType())
-				return nullptr;
-			return std::static_pointer_cast<T>(asset);
+			return manager ? manager->GetAsset<T>(handle, priority) : nullptr;
 		}
 
-		// AssetManagerBase::PeekLoadedAsset of the active manager, of type T.
+		// AssetManagerBase::PeekLoadedAsset<T> of the active manager (null without one).
 		template<typename T>
 		static Ref<T> PeekLoadedAsset(AssetHandle handle)
 		{
 			const Ref<AssetManagerBase>& manager = GetActive();
-			if (!manager || !handle.IsValid())
-				return nullptr;
-			Ref<Asset> asset = manager->PeekLoadedAsset(handle);
-			if (!asset || asset->GetType() != T::GetStaticType())
-				return nullptr;
-			return std::static_pointer_cast<T>(asset);
+			return manager ? manager->PeekLoadedAsset<T>(handle) : nullptr;
 		}
 
+		// AssetManagerBase::LoadAssetSync<T> of the active manager (null without one).
 		template<typename T>
 		static Ref<T> LoadAssetSync(AssetHandle handle)
 		{
 			const Ref<AssetManagerBase>& manager = GetActive();
-			if (!manager || !handle.IsValid())
-				return nullptr;
-			Ref<Asset> asset = manager->LoadAssetSync(handle);
-			if (!asset || asset->GetType() != T::GetStaticType())
-				return nullptr;
-			return std::static_pointer_cast<T>(asset);
+			return manager ? manager->LoadAssetSync<T>(handle) : nullptr;
 		}
 
 		static AssetState GetAssetState(AssetHandle handle);

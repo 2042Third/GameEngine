@@ -206,11 +206,12 @@ games and the editor's game view both are the same size, so one layout serves dr
     `Include/SDFText.glsl`) and an optional outline. Blending in display space, like every overlay. List both shaders in
     `strata_add_shaders`.
 - **Textures and residency.** The pass requests each distinct UI texture and font once per frame through
-  `scene.GetAssetManager()` (never per element, never `AssetManager::GetActive()` in new code), at High priority; a texture
-  still loading draws as its fallback, a font as the default font. Its texture slots go into a small slot table (UI texture
-  index to bindless slot), rewritten when a slot changes (mip streaming replaces slots), so quads never change for it. Each
-  drawn texture is reported to the texture streamer through the frame's visible-texture list (`VisibleTextureUse`, with the
-  pixels one UV unit spans on screen), so UI images stream to the level they are drawn at.
+  `scene.GetAssetManager()` and its `GetAsset<T>` (never per element, never `AssetManager`'s static functions in new
+  code), at High priority; a texture still loading draws as its fallback, a font as the default font. Its texture slots
+  go into a small slot table (UI texture index to bindless slot), rewritten when a slot changes (mip streaming replaces
+  slots), so quads never change for it. Each drawn texture is reported to the texture streamer through the frame's
+  visible-texture list (`VisibleTextureUse`, with the pixels one UV unit spans on screen), so UI images stream to the
+  level they are drawn at.
 - **Frame stages.** `Render.UI` (`ST_PROFILE_STAGE`, the pass's CPU time, nested in `Render.Submit`) and `Scene.UI` (the
   system). `GPU.UI` is this stream's, added in its rebase onto gpu-driven-rendering (which merges before it): register
   the stage (`FrameStageKind::GPU`) in `RegisterGameUIModule`, give `SceneOverlayFrame` the frame's `GPUPassTimer`, and

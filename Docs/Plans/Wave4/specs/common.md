@@ -244,8 +244,10 @@ What to do:
 - **Scenes keep unknown components.** Scenes keep the components of modules a build lacks (`UnknownComponentsComponent`)
   through copies, prefabs and undo.
 - **The asset manager.** New code reaches it through the scene where it has one (`Scene::GetAssetManager()`, the
-  step-0 seam that returns the active manager until wave 5's scene contexts), never through new
-  `AssetManager::GetActive()` calls in scene systems, loaders or the renderer.
+  step-0 seam that returns the active manager until wave 5's scene contexts; typed access through
+  `AssetManagerBase::GetAsset<T>` and `PeekLoadedAsset<T>`). New code in scene systems, loaders or the renderer uses
+  none of `AssetManager`'s static functions (`GetActive`, `GetAsset<T>`, `PeekLoadedAsset<T>`, `LoadAssetSync<T>`,
+  `GetAssetState`, `GetAssetType`, `IsHandleValid`, `HasActive`): they all use the process's active manager.
 
 ## 3. Scene contracts
 

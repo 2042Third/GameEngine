@@ -411,8 +411,10 @@ namespace Strata
 
 		// The asset manager the scene's assets come from, or null when there is none: for now the process's active manager
 		// (AssetManager::GetActive), the same for every scene. New code that works for a scene (scene systems, code that loads
-		// assets into it, the renderer that draws it) reaches the manager through the scene instead of calling
-		// AssetManager::GetActive, so that per-scene asset managers (wave 5's scene contexts) change this function rather
+		// assets into it, the renderer that draws it) reaches the manager through the scene, with its typed accessors
+		// (AssetManagerBase::GetAsset<T>, PeekLoadedAsset<T>), and uses none of AssetManager's static functions (GetActive,
+		// GetAsset<T>, PeekLoadedAsset<T>, LoadAssetSync<T>, GetAssetState, GetAssetType, IsHandleValid, HasActive), which
+		// all use the active manager: per-scene asset managers (wave 5's scene contexts) then change this function rather
 		// than that code. Hold asset handles across frames, not the pointer.
 		AssetManagerBase* GetAssetManager() const;
 
