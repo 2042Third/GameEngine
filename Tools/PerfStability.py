@@ -19,7 +19,8 @@ Each run executes `ctest --preset <preset> -L perf` from the repository and keep
   (with the attempts);
 - per metric: its unit, budget and target, in how many runs it was recorded, the minimum, median and maximum of its
   value (the deciding value of a confirmed check), the largest value as a share of the budget, the pass rate, and how
-  many runs confirmed it with more than one attempt;
+  many runs confirmed it with more than one attempt (a provisional metric, which has no budget until the reference
+  machine measures it, shows "provisional" and always passes);
 - how many runs passed, the longest series of passing runs and the last one.
 
 Load or regression: a confirmed check's attempts follow each other within about a minute, so other work that lasts
@@ -192,13 +193,19 @@ def run_ctest(arguments, run, output_directory, results_file):
             "log": log_path}
 
 
+def over_budget(entry):
+    """Whether a results entry is over its budget. Provisional metrics (no budget until the reference machine measures
+    them) never are."""
+    return isinstance(entry, dict) and not entry.get("Provisional") and entry.get("Value", 0) > entry.get("Budget", 0)
+
+
 def load_result_files(paths):
     runs = []
     for path in paths:
         results = load_json(path)
         if not isinstance(results, dict):
             fail(f"'{path}' is not a results file")
-        within = all(entry.get("Value", 0) <= entry.get("Budget", 0) for entry in results.values() if isinstance(entry, dict))
+        within = not any(over_budget(entry) for entry in results.values())
         runs.append({"name": os.path.basename(path), "passed": within, "seconds": None, "load": None, "failed_tests": [], "results": results,
                      "log": None})
     return runs
@@ -241,7 +248,7 @@ def report(runs, budgets):
             speed += f" ({canary / canary_reference:.2f}x its reference)"
         entries = [entry for entry in results.values() if isinstance(entry, dict)]
         confirmed = sum(1 for entry in entries if len(entry.get("Attempts", [])) > 1)
-        over = sum(1 for entry in entries if entry.get("Value", 0) > entry.get("Budget", 0))
+        over = sum(1 for entry in entries if over_budget(entry))
         # The tally does not tell load from a regression (load has failed single metrics): the run's load and a rerun on a
         # quiet machine do, see the module's description.
         tally = f"; {confirmed} of {len(entries)} metrics needed confirmation, {over} failed" if entries else ""
@@ -251,8 +258,8 @@ def report(runs, budgets):
         for key in sorted(results):
             entry = results[key]
             attempts = entry.get("Attempts", []) if isinstance(entry, dict) else []
-            if len(attempts) > 1 or (isinstance(entry, dict) and entry.get("Value", 0) > entry.get("Budget", 0)):
-                verdict = "within" if entry["Value"] <= entry["Budget"] else "OVER"
+            if isinstance(entry, dict) and not entry.get("Provisional") and (len(attempts) > 1 or over_budget(entry)):
+                verdict = "OVER" if over_budget(entry) else "within"
                 values = ", ".join(format_number(value) for value in attempts) if attempts else format_number(entry["Value"])
                 print(f"    {key}: attempts {values} {entry['Unit']} -> {verdict} the budget of {format_number(entry['Budget'])}")
         if not results:
@@ -263,12 +270,15 @@ def report(runs, budgets):
     for key in keys:
         entries = [run["results"][key] for run in runs if isinstance(run["results"].get(key), dict)]
         values = [entry["Value"] for entry in entries]
-        budget = entries[-1]["Budget"]
+        budget = entries[-1].get("Budget")
         target = entries[-1].get("Target")
-        passes = sum(1 for entry in entries if entry["Value"] <= entry["Budget"])
+        passes = sum(1 for entry in entries if not over_budget(entry))
         confirmations = sum(1 for entry in entries if len(entry.get("Attempts", [])) > 1)
         worst = max(values)
-        share = f"{worst / budget * 100:.0f}%" if budget > 0 else ("ok" if worst <= 0 else "over")
+        if entries[-1].get("Provisional"):
+            share = "provisional"
+        else:
+            share = f"{worst / budget * 100:.0f}%" if budget > 0 else ("ok" if worst <= 0 else "over")
         rows.append([key, entries[-1]["Unit"], format_number(budget), format_number(target), len(entries), format_number(min(values)),
                      format_number(statistics.median(values)), format_number(worst), share, f"{passes}/{len(entries)}", confirmations])
     print("\nMetrics (value: the deciding attempt of a confirmed check)")

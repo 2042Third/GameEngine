@@ -15,7 +15,11 @@
 		"Limits that tests check belong here, never in the test's code.",
 		"Ratchet: budgets only go down. A change that makes a metric cheaper measures it again and lowers Measured and",
 		"Budget in the same commit; a metric over its budget is a regression to fix, never a reason to raise the budget.",
-		"A commit that adds or lowers a budget states the measured values in its message."
+		"A commit that adds or lowers a budget states the measured values in its message.",
+		"Provisional: a metric the reference machine has not measured yet (while it is away, Docs/Roadmap.md) has the entry",
+		"  \"<Suite>.<Metric>\": { \"Unit\": <unit>, \"Provisional\": true, \"Target\": <number> }   (Target optional)",
+		"and is measured and recorded, never checked, until the reference machine measures it and the entry gets its",
+		"Measured and Budget. Numbers of other machines never go into an entry."
 	],
 	"Perf.Harness.Sort200k": { "Measured": 10.0, "Budget": 15.0, "Unit": "ms" },
 	"Perf.Scene.CleanTransformUpdate1M": { "Measured": 0.001321, "Budget": 0.00198, "Unit": "us" },

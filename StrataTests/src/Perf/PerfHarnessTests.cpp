@@ -178,6 +178,13 @@ TEST_SUITE("PerfLab")
 			// A target the budget meets is enforced by it; the change that lowers the budget that far removes the target.
 			{ R"({ "A": { "Measured": 1, "Budget": 1.5, "Unit": "ms", "Target": 1.5 } })", "is not below its budget" },
 			{ R"({ "A": { "Measured": 1, "Budget": 1.5, "Unit": "ms", "Target": 2 } })", "is not below its budget" },
+			// Provisional entries have no values the reference machine has not measured, and say so only with true.
+			{ R"({ "A": { "Measured": 1, "Budget": 1.5, "Unit": "ms", "Provisional": true } })", "has a 'Measured' or 'Budget'" },
+			{ R"({ "A": { "Budget": 1.5, "Unit": "ms", "Provisional": true } })", "has a 'Measured' or 'Budget'" },
+			{ R"({ "A": { "Unit": "ms", "Provisional": false } })", "'Provisional' that is not true" },
+			{ R"({ "A": { "Unit": "ms", "Provisional": "yes" } })", "'Provisional' that is not true" },
+			{ R"({ "A": { "Provisional": true } })", "needs a 'Unit'" },
+			{ R"({ "A": { "Unit": "ms", "Provisional": true, "Target": -1 } })", "negative" },
 		};
 		for (const InvalidFile& invalidFile : invalidFiles)
 		{
@@ -188,19 +195,24 @@ TEST_SUITE("PerfLab")
 		}
 
 		// Comments are skipped, a budget may be exactly 1.5 times the measurement, a zero count is a budget too, a target
-		// lies below the budget (even below the measurement, when the reference machine meets it), and a ratio of two
-		// measurements is a unit.
+		// lies below the budget (even below the measurement, when the reference machine meets it), a ratio of two
+		// measurements is a unit, and a provisional metric names its unit and maybe a target.
 		const char* validFile = R"({
 			"_comment": ["About this file"],
 			"A": { "Measured": 3.21, "Budget": 4.815, "Unit": "ms" },
 			"B": { "Measured": 0, "Budget": 0, "Unit": "count" },
 			"C": { "Measured": 720, "Budget": 974.1, "Unit": "MB", "Target": 750 },
-			"D": { "Measured": 1.02, "Budget": 1.1, "Unit": "ratio" }
+			"D": { "Measured": 1.02, "Budget": 1.1, "Unit": "ratio" },
+			"E": { "Unit": "ms", "Provisional": true, "Target": 5 }
 		})";
 		std::string error;
 		const std::optional<Tests::Perf::BudgetTable> table = Tests::Perf::ParseBudgets(validFile, error);
 		REQUIRE_MESSAGE(table.has_value(), error);
-		REQUIRE(table->size() == 4);
+		REQUIRE(table->size() == 5);
+		CHECK_FALSE(table->at("A").Provisional);
+		CHECK(table->at("E").Provisional);
+		CHECK(table->at("E").Unit == "ms");
+		CHECK(table->at("E").Target == 5.0);
 		CHECK(table->at("D").Unit == "ratio");
 		CHECK(table->at("A").Measured == 3.21);
 		CHECK(table->at("A").Budget == 4.815);
@@ -315,6 +327,56 @@ TEST_SUITE("PerfLab")
 		ScriptedMeasurement atBudget { "A", { 10.0 } };
 		CHECK(test.Checker.CheckConfirmed({ "A" }, std::ref(atBudget))[0].Passed);
 		CHECK(atBudget.Calls == 1);
+	}
+
+	TEST_CASE("A provisional metric is measured once and recorded without a budget, whatever it measures")
+	{
+		const std::filesystem::path resultsFile = Tests::CreateTemporaryDirectory("PerfLab") / "PerfResults" / "Release.json";
+		Tests::Perf::BudgetEntry provisional;
+		provisional.Unit = "ms";
+		provisional.Provisional = true;
+		Tests::Perf::BudgetChecker checker(Tests::Perf::BudgetTable { { "A", { 8.0, 10.0, "ms", std::nullopt } }, { "P", provisional } },
+			"TestBudgets.json", resultsFile);
+
+		ScriptedMeasurement measurement { "P", { 1000.0 } };
+		const std::vector<Tests::Perf::ConfirmedMetric> metrics = checker.CheckConfirmed({ "P" }, std::ref(measurement));
+		CHECK(measurement.Calls == 1);
+		REQUIRE(metrics.size() == 1);
+		CHECK(metrics[0].Passed);
+		CHECK(metrics[0].Value == 1000.0);
+		const std::optional<nlohmann::json> recorded = ReadResultEntry(resultsFile, "P");
+		REQUIRE(recorded.has_value());
+		CHECK(*recorded == nlohmann::json { { "Value", 1000.0 }, { "Unit", "ms" }, { "Provisional", true }, { "Attempts", { 1000.0 } } });
+
+		// Measured with a metric that has a budget, it is decided by the first attempt: only the other one is confirmed.
+		int calls = 0;
+		const std::vector<Tests::Perf::ConfirmedMetric> together = checker.CheckConfirmed({ "A", "P" }, [&calls]()
+		{
+			calls++;
+			return calls == 1 ? Tests::Perf::MetricValues { { "A", 12.0 }, { "P", 50.0 } } : Tests::Perf::MetricValues { { "A", 9.0 }, { "P", 60.0 } };
+		});
+		CHECK(calls == 2);
+		REQUIRE(together.size() == 2);
+		CHECK(together[0].Attempts == std::vector<double> { 12.0, 9.0 });
+		CHECK(together[1].Attempts == std::vector<double> { 50.0 });
+		CHECK(together[1].Value == 50.0);
+
+		// A value without a check is recorded the same way.
+		checker.Record("P", 3.0);
+		const std::optional<nlohmann::json> recordedOnce = ReadResultEntry(resultsFile, "P");
+		REQUIRE(recordedOnce.has_value());
+		CHECK(*recordedOnce == nlohmann::json { { "Value", 3.0 }, { "Unit", "ms" }, { "Provisional", true } });
+	}
+
+	TEST_CASE("Asking for the budget of a provisional metric fails the test" * doctest::expected_failures(1))
+	{
+		Tests::Perf::BudgetEntry provisional;
+		provisional.Unit = "ms";
+		provisional.Provisional = true;
+		const Tests::Perf::BudgetChecker checker(Tests::Perf::BudgetTable { { "A", { 8.0, 10.0, "ms", std::nullopt } }, { "P", provisional } },
+			"TestBudgets.json", Tests::CreateTemporaryDirectory("PerfLab") / "Results.json");
+		CHECK(checker.GetBudget("A") == 10.0);
+		checker.GetBudget("P");
 	}
 
 	TEST_CASE("A confirmed check measures a metric over its budget again until an attempt is within it")

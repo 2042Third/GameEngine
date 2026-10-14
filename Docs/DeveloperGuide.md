@@ -282,7 +282,11 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   An entry holds the value `Measured` on the reference machine (i7-13700K, RTX 5090, Windows 11, Release, a quiet
   machine), a `Budget` of at most 1.5 times that (the parser enforces it) and optionally a `Target`: a roadmap goal
   below the budget that the metric does not reach on every run, printed with every check (the budget is the gate; the
-  parser rejects a target the budget already enforces). **Budgets only go down:** a change that makes a metric cheaper
+  parser rejects a target the budget already enforces). A metric the reference machine has not measured yet (while it
+  is away, Docs/Roadmap.md lists them) gets a provisional entry, `{ "Unit": ..., "Provisional": true }` with an optional
+  `Target`: its checks measure it once, print and record it, and never fail, until the reference machine measures it
+  and the entry gets its `Measured` and `Budget`; numbers of other machines never go into an entry. **Budgets only go
+  down:** a change that makes a metric cheaper
   lowers its entry in the same commit, a metric over budget is a regression to fix rather than a budget to raise, and
   commits that add or lower budgets state the measured values. Lower must be better (time per item, not items per
   second). **Stability:** `Tools/PerfStability.py --runs 5` runs `-L perf` five times and reports per metric the

@@ -112,11 +112,12 @@ Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
   `SetPartialLoads(false)`; text tests render until no glyph is pending.
 - **Perf tests** (`Perf.*`, `PerfGPU.*`, label `perf`, Release and Dist; CI skips them, so run `-L perf` on the
   reference machine before merging a change that can affect performance): limits live only in
-  `StrataTests/Perf/Budgets.json`; **budgets only go down** (at most 1.5 times the measurement, lower is better;
-  commits that add or lower one state the measured values; a metric over budget is a regression to fix); failures are
-  confirmed by measuring again; check medians, maxima only for maxima by nature, saying why; peak memory is measured
-  in a helper process; run `Tools/PerfStability.py --runs 5` there before merging changes to budgets or perf tests
-  ([Perf tests](Docs/DeveloperGuide.md#perf-tests)).
+  `StrataTests/Perf/Budgets.json`, measured on the reference machine (a metric it has not measured yet is `Provisional`:
+  recorded, never checked); **budgets only go down** (at most 1.5 times the measurement, lower is better; commits that
+  add or lower one state the measured values; a metric over budget is a regression to fix); failures are confirmed by
+  measuring again; check medians, maxima only for maxima by nature, saying why; peak memory is measured in a helper
+  process; run `Tools/PerfStability.py --runs 5` there before merging changes to budgets or perf tests ([Perf
+  tests](Docs/DeveloperGuide.md#perf-tests)).
 - `EndToEnd*` suites start the built executables (no GPU) with private session directories, free ports and timeouts,
   and terminate what they started when they fail.
 - Tests follow the transform contract, use `Tests::CreateTemporaryDirectory()` for files (never the source tree), never
