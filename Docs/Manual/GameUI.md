@@ -36,6 +36,11 @@ Select an element: the Inspector's **UI Rect** section shows where it is.
 Turn on **Game UI** in the viewport's toolbar to see the UI over the scene while you edit; a click on an element then
 selects it.
 
+The viewport's **2D** chip shows the canvas of the selection on its own, at its reference aspect ratio, as the game lays
+it out: every element is outlined, the selected one has handles. Drag inside it to move it and drag a handle to resize
+it (with **Snap** on, edges land on whole canvas units; Ctrl does the opposite of Snap). A click selects what is on top
+there.
+
 ## Make it look right
 
 - **UI Image**: a texture or a solid **Color**, with **Corner Radius** and a **Border**; **Sliced** images keep their

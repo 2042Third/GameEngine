@@ -1772,6 +1772,12 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   the margins along stretched axes (`SetMarginWithUndo`, a drag merging into one step) and the rect in pixels at the
   game's screen. With Game UI shown, a click in the viewport (edit mode) selects the topmost UI element that draws
   something there (`UIRectEdit::PickElement`) before the scene's ID-buffer pick.
+- The 2D canvas mode (`ViewportSettings::CanvasMode`, the viewport's "2D" chip, `viewport.setSettings {canvasMode}`, saved
+  per project) is `Panels/CanvasModeView`, called from `ViewportPanel` in one place: the image is letterboxed to the shown
+  canvas's reference aspect (`CanvasEdit::FindShownCanvas`, `GetCanvasAspect`) and rendered through the scene's camera with
+  the game UI and no editor overlays; the view draws outlines, the selection's handles and pivot, and turns presses into
+  `CanvasEdit::CanvasRectDrag`s (one merge key per drag, snapping with the viewport's Snap, Ctrl inverting it). The gizmo
+  and camera controls are off meanwhile. Zooming and panning the canvas are not there yet.
 
 ### Output paths
 

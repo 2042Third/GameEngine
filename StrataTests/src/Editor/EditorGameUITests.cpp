@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/CanvasEdit.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -246,5 +247,97 @@ TEST_SUITE("Editor.UI.Inspector")
 		editor.Context().Select(*UUIDFromJson(plain));
 		editor.Frames(3);
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIRect.AnchorButton").has_value());
+	}
+}
+
+TEST_SUITE("Editor.CanvasEdit")
+{
+	TEST_CASE("Dragging a handle moves those sides, never past the others, and snaps to whole units")
+	{
+		const UIBox box { { 10.0f, 20.0f }, { 100.0f, 50.0f } };
+		auto check = [](const UIBox& actual, const glm::vec2& min, const glm::vec2& size)
+		{
+			CHECK(actual.Min == min);
+			CHECK(actual.Size == size);
+		};
+		check(CanvasEdit::DragBox(box, CanvasHandle::Move, { 5.5f, -3.0f }, false), { 15.5f, 17.0f }, { 100.0f, 50.0f });
+		check(CanvasEdit::DragBox(box, CanvasHandle::Move, { 5.5f, -3.25f }, true), { 16.0f, 17.0f }, { 100.0f, 50.0f });
+		check(CanvasEdit::DragBox(box, CanvasHandle::Right, { 20.0f, 99.0f }, false), { 10.0f, 20.0f }, { 120.0f, 50.0f });
+		check(CanvasEdit::DragBox(box, CanvasHandle::Left, { 20.0f, 0.0f }, false), { 30.0f, 20.0f }, { 80.0f, 50.0f });
+		check(CanvasEdit::DragBox(box, CanvasHandle::Left, { 500.0f, 0.0f }, false), { 110.0f, 20.0f }, { 0.0f, 50.0f });
+		check(CanvasEdit::DragBox(box, CanvasHandle::TopLeft, { -10.0f, -10.0f }, false), { 0.0f, 10.0f }, { 110.0f, 60.0f });
+		check(CanvasEdit::DragBox(box, CanvasHandle::BottomRight, { 0.4f, 0.6f }, true), { 10.0f, 20.0f }, { 100.0f, 51.0f });
+		CHECK(CanvasEdit::GetHandles(box).size() == 8);
+
+		// The rect values that put a rect there keep its anchors and pivot.
+		const UIBox parent { { 0.0f, 0.0f }, { 400.0f, 300.0f } };
+		UIRectComponent stretched;
+		stretched.AnchorMin = { 0.0f, 0.5f };
+		stretched.AnchorMax = { 1.0f, 0.5f };
+		const UIRectComponent placed = CanvasEdit::PlaceRect(stretched, box, parent);
+		CHECK(placed.AnchorMin == stretched.AnchorMin);
+		CHECK(placed.Size == glm::vec2(-300.0f, 50.0f));
+		CHECK(placed.Position == glm::vec2(-140.0f, -105.0f)); // Pivot (60, 45) from the anchors' (200, 150)
+	}
+}
+
+TEST_SUITE("Editor.UI.CanvasMode")
+{
+	TEST_CASE("Canvas mode shows handles; dragging one resizes by the canvas units dragged in one undo step; a click selects")
+	{
+		for (const float scale : { 1.0f, 1.5f })
+		{
+			CAPTURE(scale);
+			ImGuiHarness::Specification specification;
+			specification.ContentScale = scale;
+			GameUIEditor editor(specification);
+			const nlohmann::json canvas = editor.Run("ui.create", { { "type", "canvas" } });
+			const nlohmann::json panel = editor.Run("ui.create", { { "type", "panel" }, { "parent", canvas["entity"] } });
+			const nlohmann::json button = editor.Run("ui.create", { { "type", "button" }, { "parent", panel["entity"] } });
+			const Entity element = editor.Find(panel["entity"]);
+			editor.Context().Select(element.GetUUID());
+			editor.Run("viewport.setSettings", { { "canvasMode", true } });
+			CHECK(editor.Run("viewport.getSettings")["canvasMode"] == true);
+			editor.Frames(3);
+
+			const std::optional<UI::ItemProbe::Item> selection = UI::ItemProbe::Find("Canvas.Selection");
+			const std::optional<UI::ItemProbe::Item> right = UI::ItemProbe::Find("Canvas.Handle.Right");
+			REQUIRE(selection.has_value());
+			REQUIRE(right.has_value());
+			CHECK(UI::ItemProbe::Find("Canvas.Handle.TopLeft").has_value());
+			// The panel is 400 units wide: canvas units per ImGui unit on screen.
+			const float unitsPerScreen = 400.0f / (selection->Max.x - selection->Min.x);
+			const size_t position = editor.Context().GetUndoStack().GetPosition();
+
+			const ImVec2 start = right->GetCenter();
+			const float dragged = 40.0f;
+			editor.Harness.MoveMouse(start);
+			editor.Frames(1);
+			editor.Harness.SetMouseButton(ImGuiMouseButton_Left, true);
+			editor.Frames(1);
+			editor.Harness.MoveMouse(ImVec2(start.x + dragged * 0.5f, start.y));
+			editor.Frames(1);
+			editor.Harness.MoveMouse(ImVec2(start.x + dragged, start.y));
+			editor.Frames(1);
+			editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
+			editor.Frames(2);
+			const UIRectComponent& rect = element.GetComponent<UIRectComponent>();
+			CHECK(rect.Size.x == doctest::Approx(400.0f + dragged * unitsPerScreen).epsilon(0.01));
+			CHECK(rect.Size.y == doctest::Approx(300.0f));
+			CHECK(editor.Context().GetUndoStack().GetPosition() == position + 1);
+			editor.Run("edit.undo");
+			CHECK(element.GetComponent<UIRectComponent>().Size.x == doctest::Approx(400.0f));
+			editor.Frames(2);
+
+			// A click on the panel's center (where the button and its label are) selects what is on top: the label.
+			const std::optional<UI::ItemProbe::Item> moved = UI::ItemProbe::Find("Canvas.Selection");
+			REQUIRE(moved.has_value());
+			editor.ClickAt(moved->GetCenter());
+			editor.Frames(1);
+			const Entity picked = editor.Context().GetPrimarySelection();
+			REQUIRE(picked);
+			CHECK(picked == editor.Find(button["parts"]["label"]));
+			CHECK(editor.Context().GetUndoStack().GetPosition() == position); // A click moves nothing
+		}
 	}
 }

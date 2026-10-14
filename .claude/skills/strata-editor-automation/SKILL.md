@@ -455,6 +455,8 @@ ui.hitTest {"position": [960, 540]}                                      # what 
   scripts get `OnUIClick`/`OnUIValueChanged`), `UISelectable` (colors, `Navigation`).
 - Check proportions without rendering: `ui.layout` at two screens of the same aspect gives the same fractions under
   `ScaleWithScreen`. `ui.layout {"entity": ...}` lists one subtree (state, focused, text and value too).
+- For the person: `viewport.setSettings {"canvasMode": true}` shows the selection's canvas in 2D at its reference aspect
+  with handles (the "2D" chip); `{"gameUI": true}` draws the UI over the editor view, where a click selects an element.
 
 **Look at it** (needs rendering, not `--no-gpu`): `camera.focus` or `camera.set`, then
 `StrataCLI call viewport.capture '{"camera": "scene"}' --save-image shot.png` and open `shot.png`; with MCP the

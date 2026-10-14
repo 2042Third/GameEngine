@@ -40,6 +40,7 @@ namespace Strata
 			{ "ShowStats", ShowStats },
 			{ "PreviewLighting", PreviewLighting },
 			{ "ShowGameUI", ShowGameUI },
+			{ "CanvasMode", CanvasMode },
 			{ "Gizmo", GizmoOperationToString(Gizmo) },
 			{ "Space", GizmoSpaceToString(Space) },
 			{ "Snap", Snap },
@@ -65,7 +66,7 @@ namespace Strata
 		for (const auto& [key, flag] : { std::pair<const char*, bool*> { "ShowGrid", &result.ShowGrid }, { "ShowSelectionOutline", &result.ShowSelectionOutline },
 			{ "ShowSceneGizmos", &result.ShowSceneGizmos }, { "AllColliders", &result.AllColliders }, { "ShowStats", &result.ShowStats },
 			{ "PreviewLighting", &result.PreviewLighting },
-			{ "ShowGameUI", &result.ShowGameUI }, { "Snap", &result.Snap } })
+			{ "ShowGameUI", &result.ShowGameUI }, { "CanvasMode", &result.CanvasMode }, { "Snap", &result.Snap } })
 		{
 			if (const auto it = json.find(key); it != json.end())
 			{

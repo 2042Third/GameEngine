@@ -49,6 +49,9 @@ namespace Strata
 		bool PreviewLighting = true;
 		// Editor views draw the game's screen-space text (its HUD); off, it does not cover the scene being edited.
 		bool ShowGameUI = false;
+		// The 2D canvas mode (edit mode): the viewport shows a game UI canvas at its reference aspect ratio, through the
+		// scene's camera with its UI, to place and size UI elements with handles (Panels/CanvasModeView).
+		bool CanvasMode = false;
 		GizmoOperation Gizmo = GizmoOperation::Translate;
 		GizmoSpace Space = GizmoSpace::World;
 		// Gizmo drags snap to the steps below while this is on; holding Ctrl inverts it for a drag.

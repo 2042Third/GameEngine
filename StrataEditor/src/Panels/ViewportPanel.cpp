@@ -163,6 +163,10 @@ namespace Strata
 		m_Image.Min = glm::vec2(imageMin.x, imageMin.y);
 		m_Image.Size = glm::max(glm::vec2(available.x, available.y), glm::vec2(0.0f));
 		m_Image.PixelScale = ViewportImageArea::ChoosePixelScale(glm::vec2(viewportScale.x, viewportScale.y), glm::vec2(displayScale.x, displayScale.y));
+		// The 2D canvas mode shows the canvas at its reference aspect ratio: the image is letterboxed in the panel.
+		const bool canvasMode = CanvasModeView::IsActive(context) && m_CanvasMode.Layout(context, m_Image);
+		if (!canvasMode)
+			m_CanvasMode.Reset(context);
 		const glm::uvec2 size = m_Image.GetPixelSize();
 		viewport.SetSize(size);
 		if (size.x == 0 || size.y == 0)
@@ -188,7 +192,16 @@ namespace Strata
 		const float aspectRatio = static_cast<float>(size.x) / static_cast<float>(size.y);
 		std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, aspectRatio);
 		m_GameView = view && view->FromScene;
-		if (!m_GameView)
+		if (canvasMode)
+		{
+			// The canvas over the scene as the game shows it: through the scene's camera, else the editor camera's view.
+			view = ResolveViewportView(context, ViewportCameraSource::Scene, aspectRatio);
+			if (!view)
+				view = ResolveViewportView(context, ViewportCameraSource::Editor, aspectRatio);
+			EndCameraDrag();
+			EndGizmoDrag(context);
+		}
+		else if (!m_GameView)
 		{
 			HandleShortcuts(panelContext);
 			UpdateCamera(context, m_Hovered);
@@ -225,10 +238,16 @@ namespace Strata
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		const ImVec2 imageMax(imageMin.x + available.x, imageMin.y + available.y);
 		ViewportRenderer* renderer = viewport.GetRenderer();
-		const bool rendered = renderer && view && renderer->Render(context, size, *view, viewport.GetSettings(), view->EditorOverlays);
+		// The canvas mode draws the game UI, without the editor's overlays, in the letterboxed area.
+		ViewportSettings renderSettings = viewport.GetSettings();
+		renderSettings.ShowGameUI = renderSettings.ShowGameUI || canvasMode;
+		const bool rendered = renderer && view && renderer->Render(context, size, *view, renderSettings, view->EditorOverlays && !canvasMode);
 		if (rendered)
 		{
-			drawList->AddImage(ToTextureID(renderer->GetOutputTexture()), imageMin, imageMax);
+			if (canvasMode)
+				drawList->AddRectFilled(imageMin, imageMax, ImGui::GetColorU32(colors.Chrome));
+			drawList->AddImage(ToTextureID(renderer->GetOutputTexture()), ImVec2(m_Image.Min.x, m_Image.Min.y),
+				ImVec2(m_Image.Min.x + m_Image.Size.x, m_Image.Min.y + m_Image.Size.y));
 		}
 		else
 		{
@@ -237,6 +256,9 @@ namespace Strata
 			drawList->AddText(ImVec2(imageMin.x + padding.x, imageMax.y - padding.y - ImGui::GetFontSize()), ImGui::GetColorU32(colors.TextSecondary),
 				renderer ? "The scene could not be rendered (see the Console)" : "No GPU: the viewport cannot render");
 		}
+		// The canvas's outlines and handles, also without an image (a headless editor still edits the layout).
+		if (canvasMode)
+			m_CanvasMode.Update(context, m_Image, m_Hovered);
 
 		// A strip in the play state's color while the scene runs: changes made now are discarded when it stops.
 		if (context.IsPlaying())
@@ -247,7 +269,7 @@ namespace Strata
 
 		if (view)
 			DrawAgentFlash(context, *view);
-		if (view && !m_GameView)
+		if (view && !m_GameView && !canvasMode)
 			UpdateGizmo(context, *view);
 
 		// The chips go over the image's top left. The game view keeps only the stats toggle, and only while the game does not
@@ -295,7 +317,7 @@ namespace Strata
 
 	bool ViewportPanel::IsAnimating() const
 	{
-		return m_CameraDrag != CameraDrag::None || m_GizmoDrag.has_value() || (!m_FlashBounds.empty() && IsFlashing(Now()));
+		return m_CameraDrag != CameraDrag::None || m_GizmoDrag.has_value() || m_CanvasMode.IsDragging() || (!m_FlashBounds.empty() && IsFlashing(Now()));
 	}
 
 	bool ViewportPanel::IsFlashing(std::chrono::steady_clock::time_point now) const
@@ -312,6 +334,7 @@ namespace Strata
 		m_FlashBounds.clear();
 		EndCameraDrag();
 		EndGizmoDrag(context);
+		m_CanvasMode.Reset(context);
 		UpdateGameInput(context, false);
 		context.GetViewport().SetSize(glm::uvec2(0, 0));
 	}
@@ -382,6 +405,9 @@ namespace Strata
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.GameUI", Icons::Gamepad2, "Game UI", &settings.ShowGameUI,
 			"Show the game's screen-space text (its HUD) in the editor view; the game and the scene camera always show it");
+		ImGui::SameLine();
+		UI::ToggleChip("Viewport.CanvasMode", Icons::Frame, "2D", &settings.CanvasMode,
+			"Show the selection's UI canvas in 2D at its reference aspect ratio, to place and size its elements with handles");
 		ImGui::SameLine();
 		DrawDebugViewChip(settings);
 	}

@@ -2,6 +2,7 @@
 
 #include "Editor/EditorViewport.h"
 #include "Editor/TransformEdit.h"
+#include "Panels/CanvasModeView.h"
 #include "UI/EditorPanelRegistry.h"
 
 #include <Strata/Math/AABB.h>
@@ -117,6 +118,7 @@ namespace Strata
 		bool m_GameView = false;   // Playing through the scene's camera
 		bool m_OverGizmo = false;  // The mouse was over the gizmo in the last frame (asked before the window begins)
 		ViewportImageArea m_Image;
+		CanvasModeView m_CanvasMode; // The 2D canvas mode (ViewportSettings::CanvasMode)
 		CameraDrag m_CameraDrag = CameraDrag::None;
 		bool m_CursorLocked = false; // By fly mode
 		bool m_GameInputEnabled = false;
