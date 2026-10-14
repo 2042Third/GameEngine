@@ -122,7 +122,8 @@ namespace Strata
 		// The toolbar while the Scripts root shows: back to the assets, its name, its actions and its search.
 		void DrawScriptsToolbar(EditorPanelContext& context);
 		void DrawBreadcrumbs(EditorPanelContext& context);
-		void DrawFilters();
+		// The type chips, leaving `reservedWidth` at the row's end: with their labels while they fit, else their icons only.
+		void DrawFilters(float reservedWidth);
 		void DrawFolderTree(EditorPanelContext& context);
 		// The tree's Scripts root, below the asset folders (which scroll above it, so that it stays in view).
 		void DrawScriptsRoot(const EditorContext& context);

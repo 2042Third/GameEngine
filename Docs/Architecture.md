@@ -18,9 +18,10 @@ means `Strata/src/Strata/Scene/Scene.h`.
 7. [Streaming and residency](#streaming-and-residency)
 8. [Render scene](#render-scene)
 9. [Animation](#animation)
-10. [Scripting](#scripting)
-11. [Editor](#editor)
-12. [Export and the runtime](#export-and-the-runtime)
+10. [World partition](#world-partition)
+11. [Scripting](#scripting)
+12. [Editor](#editor)
+13. [Export and the runtime](#export-and-the-runtime)
 
 ## Targets and dependencies
 
@@ -198,8 +199,9 @@ mounted `AssetPack`s), `AssetPackWriter` and `AssetDependencies` (tooling: writi
 reference), `AssetImporter` with the built-in importers
 (`AssetImporters.cpp`, `GltfImporter`, `TextureImporter`), `AssetLoaderRegistry` (the loaders, registered by the
 modules that own the types) and `BuiltinAssets` (fixed handles; the owning module provides each object through a
-factory). The asset types are Scene, Prefab, Model, Mesh, Material, Texture, AudioClip, Font, Skeleton, AnimationClip and
-AnimationController (`AssetTypes.h`; the animation types belong to the Animation module). See
+factory). The asset types are Scene, Prefab, Model, Mesh, Material, Texture, AudioClip, Font, Skeleton, AnimationClip,
+AnimationController and World (`AssetTypes.h`; the animation types belong to the Animation module, World to the World
+module). See
 [Asset pipeline](#asset-pipeline) and [Streaming and residency](#streaming-and-residency).
 
 **Renderer** (`Renderer/`). `GraphicsDevice` is the device interface (NVRHI on Vulkan, implemented in
@@ -347,6 +349,10 @@ keyframe reduction) and `AnimationController` (the `.stanimator` document: param
 `IAnimatorControl` and `IAnimationEventSource`. `AnimationTypes.h` has the joint pose and its math. See
 [Animation](#animation).
 
+**World** (`World/`). World partition: the World asset (`WorldAsset`, the `.stworld` document: a persistent scene,
+layers of square cells and the cells that have content, with the cook's index), the grid math (`WorldGrid`,
+`WorldCellKey`). See [World partition](#world-partition).
+
 **Scripting** (`Scripting/`). `ScriptEngine` (the loaded module, hot reload, faults, optional watchdog),
 `ScriptModule` (loading, validation and guarded calls), `ScriptSystem` (the "Scripting" scene system: instances and
 callbacks), `ScriptHostAPI` (the host function table), `ScriptValue` (ABI value conversions), `ScriptTypes`
@@ -411,12 +417,13 @@ layer and of the layers it lists, which are always lower ones:
 | Renderer | `Renderer/**`, `Platform/Vulkan/**` | Core, Input, App, Asset, Reflection, Scene |
 | Physics, Audio | `Physics/**`, `Audio/**` | Core, Asset, Reflection, Scene |
 | Animation | `Animation/**` | Core, Asset, Reflection, Scene |
+| World | `World/**` | Core, Asset, Reflection, Scene |
 | Scripting | `Scripting/**` | Core, Input, Asset, Reflection, Scene |
 | Project | `Project/**` | Core, Asset, Reflection |
 | Runtime | `Runtime/**` | Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Scripting, Project |
 | Network | `Network/**`, `Platform/*/*Socket.cpp` | Core |
 | ImGui | `ImGui/**` | Core, Input, App, Renderer |
-| AssetPipeline | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `TextureCooker.*`, `BC7Encoder.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio, Animation (the glTF importer writes skeletons and clips) |
+| AssetPipeline | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `TextureCooker.*`, `BC7Encoder.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio, Animation (the glTF importer writes skeletons and clips), World (the dependency scanner reads world documents) |
 | Engine | `Engine/**`, `Strata.h` | everything but AssetPipeline (shipped games link the composition root too; see below) |
 
 `Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in `StrataTests.Core`) reads every C, C++ and
@@ -454,6 +461,7 @@ RegisterScriptingModule    Scripting/ScriptingRegistration.cpp "Scripting" syste
 RegisterPhysicsModule      Physics/PhysicsRegistration.cpp     "Physics" system
 RegisterAudioModule        Audio/AudioRegistration.cpp         AudioClip loader, "Audio" system
 RegisterAnimationModule    Animation/AnimationRegistration.cpp Skeleton, AnimationClip, AnimationController loaders, "Animation" system
+RegisterWorldModule        World/WorldRegistration.cpp         World loader
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
 ComponentRegistry::Freeze
@@ -1895,6 +1903,51 @@ system, not to entities: a character's joints add no entities and no transform c
   of a wider table, and a tab narrower than a table's least width scrolls it sideways instead of squeezing names and
   numbers into ellipses) and shows skeletons and clips, and the Inspector shows a playing animator's state and
   parameters.
+
+## World partition
+
+A world is a large level split into cells that stream around their sources. Its persistent scene holds what is always
+loaded (the player, the sky, game logic); everything else lives in cell scenes, which load as sub-scenes of the running
+scene (see Additive scenes) when a source comes near and unload when it leaves.
+
+**The World asset** (`World/WorldAsset.h`, `AssetType::World`, the native `.stworld` document of `WorldData`):
+
+```json
+{ "Strata": { "Format": "World", "Version": 1 },
+  "World": {
+    "Name": "Island", "PersistentScene": "<scene handle>", "GridOrigin": [0, 0],
+    "Layers": [ { "ID": 1, "Name": "Terrain", "CellSize": 256, "StreamingDistance": 1024,
+                  "EnabledByDefault": true, "LoadBeforeStart": true } ],
+    "Cells": [ { "Layer": 1, "X": 0, "Z": -1, "Scene": "<scene handle>" } ],
+    "Index": { "Version": 1, "MaxBodiesInRadius": 41210, "PersistentBodies": 12,
+               "Cells": [ { "Layer": 1, "X": 0, "Z": -1, "Stamp": "<content stamp>", "Entities": 2502, "Bodies": 501,
+                            "Bounds": { "Min": [0, -1, -256], "Max": [256, 30, 0] }, "ClosureBytes": 1048576 } ] } } }
+```
+
+- **Layers** are grids of square cells of one size (`CellSize`, 1 to 65,536 m) from the world's `GridOrigin`, streamed
+  within one distance of a source (`StreamingDistance`, 0 to 1,000 km): terrain in large cells far out, props in small
+  ones near. A world has 1 to 32. Cells and `WorldCellKey` name layers by `ID` (1-255, unique), so renaming one is cheap;
+  names are unique and free of control characters and commas (sources list layers by name, separated by commas).
+  `EnabledByDefault` says whether the layer streams until a game disables it, `LoadBeforeStart` whether a game's loads
+  wait for its cells around the sources.
+- **Cells** that have content list their scene. Each is unique per (layer, X, Z), lies within `WorldData::c_MaxExtent`
+  (1,000 km) of the origin and has a scene of its own, never the persistent one. Their documents live in
+  `<world folder>/<WorldName>/<LayerName>/<X>_<Z>.stscene`, and their handles are derived from the world's,
+  `DeriveSubAssetHandle(world, "Cell/<layerID>/<X>/<Z>")`, so that an undo step can name a cell before its file exists.
+- **The index**, written by the cook, holds each cell's content stamp, entity and body counts, bounds and the stored
+  bytes of its dependency closure, and the most bodies the sources can keep loaded anywhere: what reserving physics room,
+  the cell map and `world.info` read without loading cells.
+- **Validation.** `WorldData::FromJson` checks the types of every field and `WorldData::Validate` every rule above (both
+  with the reason, naming the layer or cell); `WorldAsset::Create` validates data built in code too, and keeps a hash map
+  from packed keys to cells (`FindCell`, `FindSummary`). Unknown keys are ignored, for documents of later versions.
+- **References.** `AssetDependencies::Scan` lists the persistent scene and every cell's scene. Scenes stop load
+  closures (`AssetClosureScope::Load`), so loading a world, or the persistent scene that names it, loads no cell; an
+  export's closure (`All`) ships them all.
+
+**Grid math** (`World/WorldGrid.h`): `WorldCellKey { Layer, X, Z }` packs into 64 bits in the order of (layer, X, Z)
+(`Pack`, for hash maps and the streamer's total order of cells); `WorldGrid::CellAt` finds a position's cell
+(squares include their lower edges; Y is unbounded), `CellBounds` a cell's square and `Distance` the distance from a
+point to a square on the ground plane (0 inside), in double precision.
 
 ## Scripting
 

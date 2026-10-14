@@ -69,7 +69,7 @@ TEST_SUITE("Engine.Modules")
 		CHECK(ComponentRegistry::Find("Transform") != nullptr);
 		CHECK(ComponentRegistry::Find("Script") != nullptr);
 		for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Texture, AssetType::Mesh, AssetType::Material, AssetType::Font, AssetType::AudioClip,
-			AssetType::Skeleton, AssetType::AnimationClip, AssetType::AnimationController })
+			AssetType::Skeleton, AssetType::AnimationClip, AssetType::AnimationController, AssetType::World })
 		{
 			CAPTURE(AssetTypeToString(type));
 			CHECK(AssetLoaderRegistry::Find(type) != nullptr);
@@ -171,7 +171,7 @@ TEST_SUITE("Engine.Modules")
 		INFO("Output: ", result.Output);
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
-		CHECK(result.Output.find("loaders: 11, systems: Scripting Animation Physics Audio") != std::string::npos);
+		CHECK(result.Output.find("loaders: 12, systems: Scripting Animation Physics Audio") != std::string::npos);
 		CHECK(result.ExitCode == c_VerifyExitCode);
 		CHECK(result.Output.find("verify failed: The asset importer registry is used before Engine::RegisterBuiltinModules() registered the asset pipeline") != std::string::npos);
 	}

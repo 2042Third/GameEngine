@@ -626,7 +626,7 @@ short. Their full wording:
 
 ### Engine-native assets, sub-assets and built-in assets
 
-- Engine-native assets (`.stscene`, `.stprefab`, `.stmat`, `.stanimator`) are JSON documents with a
+- Engine-native assets (`.stscene`, `.stprefab`, `.stmat`, `.stanimator`, `.stworld`) are JSON documents with a
   `{ "Strata": { "Format": ..., "Version": ... } }` header, stored as-is. Their loaders validate fully;
   JSON entry points are named `FromJson`, byte entry points `Deserialize`.
 - Importers may produce sub-assets (e.g. meshes of a model); their handles are derived from the parent

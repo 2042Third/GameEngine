@@ -1,0 +1,116 @@
+{
+	"Scene": {
+		"Entities": [
+			{
+				"Components": {
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "F7A0000000000003",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Prop 0_1"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							205.0,
+							0.5,
+							224.0
+						]
+					}
+				},
+				"ID": "F7E6000000010201"
+			},
+			{
+				"Components": {
+					"BoxCollider": {
+						"HalfExtents": [
+							0.5,
+							0.5,
+							0.5
+						],
+						"Offset": [
+							0,
+							0,
+							0
+						]
+					},
+					"MeshRenderer": {
+						"CastShadows": true,
+						"Material": "F7A0000000000003",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Prop Crate 0_1"
+					},
+					"RigidBody": {
+						"AngularDamping": 0.05,
+						"ContinuousCollision": false,
+						"Friction": 0.6,
+						"GravityScale": 1,
+						"IsTrigger": false,
+						"Layer": 0,
+						"LinearDamping": 0.05,
+						"LockRotationX": false,
+						"LockRotationY": false,
+						"LockRotationZ": false,
+						"Mass": 1,
+						"Restitution": 0,
+						"Type": "Dynamic"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							1,
+							1,
+							1
+						],
+						"Translation": [
+							211.0,
+							0.5,
+							224.0
+						]
+					}
+				},
+				"ID": "F7E6000000020201"
+			}
+		],
+		"Name": "FeatureWorld Props 0_1",
+		"Settings": {
+			"FixedTimestep": 0.016666668,
+			"Gravity": [
+				0,
+				-9.81,
+				0
+			],
+			"MaxEntitiesDestroyedPerFrame": 5000,
+			"MaxEntitiesInstantiatedPerFrame": 5000,
+			"MaxFixedStepsPerFrame": 8,
+			"PhysicsCapacity": {
+				"MaxBodies": 0,
+				"MaxBodyPairs": 0,
+				"MaxContactConstraints": 0
+			}
+		}
+	},
+	"Strata": {
+		"Format": "Scene",
+		"Version": 1
+	}
+}

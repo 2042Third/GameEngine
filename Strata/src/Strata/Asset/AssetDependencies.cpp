@@ -7,6 +7,7 @@
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Scene/Components.h"
+#include "Strata/World/WorldAsset.h"
 
 #include <string_view>
 #include <unordered_set>
@@ -62,6 +63,7 @@ namespace Strata
 				case AssetType::Model:               return "Model";
 				case AssetType::Material:            return "Material";
 				case AssetType::AnimationController: return "AnimationController";
+				case AssetType::World:               return "World";
 				default:                             return {};
 			}
 		}
@@ -160,6 +162,17 @@ namespace Strata
 				return false;
 			for (const AnimationState& state : controller->States)
 				references.Add(state.Clip);
+		}
+		else if (type == AssetType::World)
+		{
+			// The persistent scene and every cell's scene. Scenes stop load closures (AssetClosureScope::Load), so loading the
+			// persistent scene, which references the world, never pins its cells.
+			const std::optional<WorldData> world = WorldData::FromJson(*content, outError);
+			if (!world)
+				return false;
+			references.Add(world->PersistentScene);
+			for (const WorldCell& cell : world->Cells)
+				references.Add(cell.Scene);
 		}
 		else
 		{

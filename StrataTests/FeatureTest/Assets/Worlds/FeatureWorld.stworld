@@ -1,0 +1,82 @@
+{
+	"Strata": {
+		"Format": "World",
+		"Version": 1
+	},
+	"World": {
+		"Cells": [
+			{
+				"Layer": 1,
+				"Scene": "4A40C67FD9D2330A",
+				"X": 0,
+				"Z": 0
+			},
+			{
+				"Layer": 1,
+				"Scene": "4A40813FD9D23870",
+				"X": 0,
+				"Z": 1
+			},
+			{
+				"Layer": 1,
+				"Scene": "62E14B30ED7EB99E",
+				"X": 1,
+				"Z": 0
+			},
+			{
+				"Layer": 1,
+				"Scene": "62E10C70ED7E023C",
+				"X": 1,
+				"Z": 1
+			},
+			{
+				"Layer": 2,
+				"Scene": "7FA127436F9CC699",
+				"X": 0,
+				"Z": 0
+			},
+			{
+				"Layer": 2,
+				"Scene": "7FA165836F9C573E",
+				"X": 0,
+				"Z": 1
+			},
+			{
+				"Layer": 2,
+				"Scene": "AF951382548A2970",
+				"X": 1,
+				"Z": 0
+			},
+			{
+				"Layer": 2,
+				"Scene": "AF8AD142548AB69F",
+				"X": 1,
+				"Z": 1
+			}
+		],
+		"GridOrigin": [
+			200.0,
+			200.0
+		],
+		"Layers": [
+			{
+				"CellSize": 32.0,
+				"EnabledByDefault": true,
+				"ID": 1,
+				"LoadBeforeStart": true,
+				"Name": "Ground",
+				"StreamingDistance": 40.0
+			},
+			{
+				"CellSize": 16.0,
+				"EnabledByDefault": true,
+				"ID": 2,
+				"LoadBeforeStart": false,
+				"Name": "Props",
+				"StreamingDistance": 20.0
+			}
+		],
+		"Name": "FeatureWorld",
+		"PersistentScene": "F7A0000000000001"
+	}
+}

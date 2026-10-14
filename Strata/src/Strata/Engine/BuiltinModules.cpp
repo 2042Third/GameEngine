@@ -11,6 +11,7 @@
 #include "Strata/Scene/SceneRegistration.h"
 #include "Strata/Scene/SceneSystem.h"
 #include "Strata/Scripting/ScriptingRegistration.h"
+#include "Strata/World/WorldRegistration.h"
 
 #include <atomic>
 
@@ -61,6 +62,7 @@ namespace Strata::Engine
 		RegisterPhysicsModule();
 		RegisterAudioModule();
 		RegisterAnimationModule();
+		RegisterWorldModule();
 		// Tooling, handed in by the program (see ModuleRegistrationOptions::AssetPipeline).
 		if (options.AssetPipeline)
 			options.AssetPipeline();

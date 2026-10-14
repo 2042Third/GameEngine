@@ -68,6 +68,12 @@
 			"MayInclude": [ "Core", "Input", "Asset", "Reflection", "Scene" ]
 		},
 		{
+			"Name": "World",
+			"Notes": "World partition: the World asset, its grid, the streaming core and the World scene system. Physics, the renderer and scripting never include it: they reach a world's streaming through the scene services IWorldStreaming and IPhysicsCapacity.",
+			"Paths": [ "Strata/World/**" ],
+			"MayInclude": [ "Core", "Asset", "Reflection", "Scene" ]
+		},
+		{
 			"Name": "Project",
 			"Paths": [ "Strata/Project/**" ],
 			"MayInclude": [ "Core", "Asset", "Reflection" ]
@@ -91,15 +97,15 @@
 		},
 		{
 			"Name": "AssetPipeline",
-			"Notes": "Importers, the texture cooker and its BC7 encoder, the editor's asset database, the dependency scanner and the pack writer (tooling, never in shipped games: games only read packs, so they link no compressor). Animation is a proven downward dependency: the glTF importer writes the stored forms of skeletons and clips, and the dependency scanner reads the clips an animation controller plays.",
+			"Notes": "Importers, the texture cooker and its BC7 encoder, the editor's asset database, the dependency scanner and the pack writer (tooling, never in shipped games: games only read packs, so they link no compressor). Animation is a proven downward dependency: the glTF importer writes the stored forms of skeletons and clips, and the dependency scanner reads the clips an animation controller plays. World is one too: the dependency scanner reads the persistent scene and the cells of world documents.",
 			"Paths": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*", "Strata/Asset/TextureCooker.*", "Strata/Asset/BC7Encoder.*", "Strata/Asset/AssetPackWriter.*", "Strata/Asset/AssetDependencies.*" ],
-			"MayInclude": [ "Core", "Asset", "Reflection", "Scene", "Renderer", "Audio", "Animation" ]
+			"MayInclude": [ "Core", "Asset", "Reflection", "Scene", "Renderer", "Audio", "Animation", "World" ]
 		},
 		{
 			"Name": "Engine",
 			"Notes": "The composition root (Engine/BuiltinModules) and the umbrella header applications include. Both are part of every program, shipped games included, so they never name the asset pipeline: tools hand its registration in (ModuleRegistrationOptions::AssetPipeline), and the importers stay out of games.",
 			"Paths": [ "Strata/Engine/**", "Strata.h" ],
-			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Animation", "Scripting", "Project", "Runtime", "Network", "ImGui" ]
+			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Animation", "Scripting", "Project", "Runtime", "Network", "ImGui", "World" ]
 		}
 	]
 }

@@ -168,7 +168,7 @@ namespace Strata::Tests
 
 			uint32_t loaders = 0;
 			for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Texture, AssetType::Mesh, AssetType::Material, AssetType::Font, AssetType::AudioClip,
-				AssetType::Skeleton, AssetType::AnimationClip, AssetType::AnimationController })
+				AssetType::Skeleton, AssetType::AnimationClip, AssetType::AnimationController, AssetType::World })
 				loaders += AssetLoaderRegistry::Find(type) ? 1 : 0;
 			std::string systems;
 			for (const SceneSystemDescriptor& descriptor : SceneSystemRegistry::GetAll())

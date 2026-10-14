@@ -1,0 +1,70 @@
+{
+	"Scene": {
+		"Entities": [
+			{
+				"Components": {
+					"BoxCollider": {
+						"HalfExtents": [
+							0.5,
+							0.5,
+							0.5
+						],
+						"Offset": [
+							0,
+							0,
+							0
+						]
+					},
+					"MeshRenderer": {
+						"CastShadows": false,
+						"Material": "F7A0000000000003",
+						"Mesh": "0000000000000001"
+					},
+					"Name": {
+						"Name": "Ground 0_1"
+					},
+					"Transform": {
+						"Rotation": [
+							0,
+							0,
+							0,
+							1
+						],
+						"Scale": [
+							32.0,
+							1,
+							32.0
+						],
+						"Translation": [
+							216.0,
+							-0.5,
+							248.0
+						]
+					}
+				},
+				"ID": "F7E6000000000101"
+			}
+		],
+		"Name": "FeatureWorld Ground 0_1",
+		"Settings": {
+			"FixedTimestep": 0.016666668,
+			"Gravity": [
+				0,
+				-9.81,
+				0
+			],
+			"MaxEntitiesDestroyedPerFrame": 5000,
+			"MaxEntitiesInstantiatedPerFrame": 5000,
+			"MaxFixedStepsPerFrame": 8,
+			"PhysicsCapacity": {
+				"MaxBodies": 0,
+				"MaxBodyPairs": 0,
+				"MaxContactConstraints": 0
+			}
+		}
+	},
+	"Strata": {
+		"Format": "Scene",
+		"Version": 1
+	}
+}
