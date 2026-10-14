@@ -204,8 +204,29 @@ namespace Strata
 		const SubSceneStatus* GetSubSceneStatus(SubSceneID id) const;
 		// Every sub-scene that was not unloaded, in the order of their loads.
 		std::vector<SubSceneStatus> GetSubScenes() const;
-		// The top-level entities the sub-scene created that still exist (with its SubSceneComponent), in order.
+		// The top-level entities of the sub-scene (those with its SubSceneComponent: created by its load or given to it), in
+		// order.
 		std::vector<Entity> GetSubSceneRoots(SubSceneID id) const;
+
+		// Membership. A sub-scene's entities are its top-level entities (each with a SubSceneComponent naming it) and their
+		// descendants: an entity reparented below another sub-scene's entity belongs to that one through its new top-level
+		// ancestor, and a top-level entity that becomes a child loses its SubSceneComponent (SetParent and PlaceEntities keep
+		// that consistent; ValidateHierarchy checks it). The world module and the editor treat a world's cells as sub-scenes
+		// this way in every mode.
+		//
+		// Registers existing top-level entities as a sub-scene that is Loaded at once (a play copy's cells, a new cell the
+		// editor makes; no roots is allowed), with `source` as its scene asset (null for none). Roots of other sub-scenes move
+		// into it. 0, with an error and nothing changed, when an entity is not a valid top-level entity of this scene.
+		SubSceneID AdoptSubScene(AssetHandle source, std::span<const Entity> roots, std::string* outError = nullptr);
+		// Moves a top-level entity into a Loaded sub-scene, or out of every sub-scene with 0. A top-level entity that leaves a
+		// sub-scene being unloaded is active again if the unload made it inactive. False, changing nothing, for an entity that
+		// is not a valid top-level entity of this scene or a sub-scene that is unknown or not Loaded.
+		bool SetSubSceneOf(Entity root, SubSceneID id);
+		// The sub-scene an entity belongs to: that of its top-level ancestor (or itself), 0 for none. Costs its depth.
+		SubSceneID GetSubSceneOf(Entity entity) const;
+		// The sub-scene loaded from (or adopted for) a scene asset: the latest one not being unloaded, else the latest one
+		// being unloaded, else 0.
+		SubSceneID FindSubSceneBySource(AssetHandle source) const;
 		// Whether a sub-scene still loads, creates entities or is being unloaded.
 		bool HasPendingSubScenes() const;
 		// Advances the sub-scenes: their loads (after the asset manager's update), compilations, a slice of the entities of
@@ -542,6 +563,9 @@ namespace Strata
 		size_t CollectUnloadSlice(SubSceneLoad& load, size_t limit, std::vector<Entity>& outTops);
 		// Erases sub-scenes whose unload finished (their IDs become unknown).
 		void RemoveUnloadedSubScenes();
+		// Takes a top-level entity out of the sub-scene it belongs to (its SubSceneComponent and that load's list of roots); one
+		// leaving a sub-scene being unloaded is active again if the unload made it inactive.
+		void LeaveSubScene(entt::entity root);
 		SubSceneLoad* FindSubScene(SubSceneID id) const;
 		// Whether the entity an instantiation created for its prototype entity `index` still exists.
 		bool IsInstantiatedEntityAlive(const PrototypeInstantiation& instantiation, size_t index) const;

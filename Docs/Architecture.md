@@ -782,6 +782,13 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   known until its last entity is gone (`SubSceneStatus::DestroyedEntities`); a second unload changes nothing; the same
   scene loaded again meanwhile waits in `Loading` until it is gone (its entities keep the IDs the new ones take);
   `FlushSubSceneUnloads` finishes every unload at once (tools, tests, and `OnRuntimeStop` before the systems stop).
+  Membership: a sub-scene's entities are its top-level entities (each with its `SubSceneComponent`) and their
+  descendants. `AdoptSubScene(source, roots)` registers existing top-level entities as a `Loaded` sub-scene (a play
+  copy's cells, a cell the editor makes; no roots is allowed), `SetSubSceneOf(root, id)` moves a top-level entity into a
+  `Loaded` sub-scene or out of every one (one leaving a sub-scene being unloaded is active again when the unload made it
+  inactive), `GetSubSceneOf(entity)` answers through its top-level ancestor (its depth) and `FindSubSceneBySource(asset)`
+  finds a scene asset's sub-scene; a top-level entity that becomes a child (`SetParent`, `PlaceEntities`) loses its
+  `SubSceneComponent` and belongs to its new top-level ancestor's sub-scene, which `ValidateHierarchy` checks.
   `GetSubSceneStatus` reports the state (`Loading`, `Instantiating`, `Loaded`, `Failed` with the error, `Unloading`), the
   progress (half the closure's bytes, half the entities), the entities created and the slices; failed sub-scenes stay until
   unloaded. A sub-scene's own

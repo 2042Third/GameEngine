@@ -213,4 +213,96 @@ TEST_SUITE("Scene.SubScenes")
 		CHECK(scene.GetEntityByUUID(kept));
 		CheckSceneCaches(scene);
 	}
+
+	TEST_CASE("Membership follows adoption, moves and reparenting both ways")
+	{
+		Scene scene("World");
+		Entity a = scene.CreateEntity("A");
+		Entity aChild = scene.CreateChildEntity(a, "A Child");
+		Entity b = scene.CreateEntity("B");
+		Entity c = scene.CreateEntity("C");
+		const AssetHandle cell = UUID(0xCE11);
+
+		// Adopted top-level entities become a Loaded sub-scene; their descendants belong to it through them.
+		std::string error;
+		const Entity notTopLevel[] = { aChild };
+		CHECK(scene.AdoptSubScene(cell, notTopLevel, &error) == 0);
+		CHECK(error.find("not a top-level entity") != std::string::npos);
+		const Entity adopted[] = { a, b };
+		const SubSceneID id = scene.AdoptSubScene(cell, adopted);
+		REQUIRE(id != 0);
+		CHECK(scene.IsSubSceneLoaded(id));
+		CHECK(scene.GetSubSceneStatus(id)->CreatedEntities == 3);
+		CHECK(scene.GetSubSceneRoots(id) == std::vector<Entity> { a, b });
+		CHECK(scene.GetSubSceneOf(a) == id);
+		CHECK(scene.GetSubSceneOf(aChild) == id);
+		CHECK(scene.GetSubSceneOf(c) == 0);
+		CHECK(scene.FindSubSceneBySource(cell) == id);
+		CHECK(scene.FindSubSceneBySource(UUID(0xBAD)) == 0);
+		const SubSceneID empty = scene.AdoptSubScene(UUID(0xCE12), {});
+		CHECK(scene.IsSubSceneLoaded(empty));
+		CHECK(scene.GetSubSceneRoots(empty).empty());
+		CheckSceneCaches(scene);
+
+		// Moved in and out by hand.
+		CHECK(scene.SetSubSceneOf(c, id));
+		CHECK(scene.GetSubSceneOf(c) == id);
+		CHECK(scene.SetSubSceneOf(c, empty));
+		CHECK(scene.GetSubSceneRoots(id) == std::vector<Entity> { a, b });
+		CHECK(scene.GetSubSceneRoots(empty) == std::vector<Entity> { c });
+		CHECK(scene.SetSubSceneOf(c, 0));
+		CHECK(scene.GetSubSceneOf(c) == 0);
+		CHECK_FALSE(scene.SetSubSceneOf(aChild, id)); // Not top-level
+		CHECK_FALSE(scene.SetSubSceneOf(c, 12345));   // Unknown
+		CheckSceneCaches(scene);
+
+		// A top-level entity that becomes a child belongs to its new top-level ancestor's sub-scene, both ways.
+		CHECK(scene.SetParent(b, c));
+		CHECK(scene.GetSubSceneOf(b) == 0);
+		CHECK(scene.GetSubSceneRoots(id) == std::vector<Entity> { a });
+		CheckSceneCaches(scene);
+		CHECK(scene.SetParent(c, a));
+		CHECK(scene.GetSubSceneOf(c) == id);
+		CHECK(scene.GetSubSceneOf(b) == id);
+		CheckSceneCaches(scene);
+		CHECK(scene.SetParent(c, Entity()));
+		CHECK(scene.GetSubSceneOf(c) == 0); // A new top-level entity belongs to no sub-scene until given one
+		const Scene::EntityPlacement placement { a.GetUUID(), c.GetUUID(), 0 };
+		CHECK(scene.PlaceEntities(std::span<const Scene::EntityPlacement>(&placement, 1)));
+		CHECK(scene.GetSubSceneOf(a) == 0);
+		CHECK(scene.GetSubSceneRoots(id).empty());
+		CheckSceneCaches(scene);
+	}
+
+	TEST_CASE("A top-level entity taken out of a sub-scene being unloaded is active again and survives it")
+	{
+		Scene scene("World");
+		Entity kept = scene.CreateEntity("Kept");
+		Entity gone = scene.CreateEntity("Gone");
+		const UUID goneID = gone.GetUUID();
+		Entity wasInactive = scene.CreateEntity("Was Inactive");
+		wasInactive.AddComponent<InactiveComponent>();
+		const Entity roots[] = { kept, gone, wasInactive };
+		const SubSceneID id = scene.AdoptSubScene(UUID(0xCE11), roots);
+		REQUIRE(id != 0);
+
+		REQUIRE(scene.UnloadSubScene(id));
+		CHECK_FALSE(scene.IsActiveInHierarchy(kept));
+		// A source being unloaded is still found until a sub-scene of it that is not being unloaded exists.
+		CHECK(scene.FindSubSceneBySource(UUID(0xCE11)) == id);
+		const SubSceneID again = scene.AdoptSubScene(UUID(0xCE11), {});
+		CHECK(scene.FindSubSceneBySource(UUID(0xCE11)) == again);
+		CHECK_FALSE(scene.SetSubSceneOf(kept, id)); // Not Loaded any more
+		CHECK(scene.SetSubSceneOf(kept, 0));
+		CHECK(scene.IsActiveInHierarchy(kept));
+		CHECK(scene.SetSubSceneOf(wasInactive, 0));
+		CHECK_FALSE(scene.IsActiveInHierarchy(wasInactive)); // Inactive before the unload: it stays so
+
+		scene.FlushSubSceneUnloads();
+		CHECK(scene.GetSubSceneStatus(id) == nullptr);
+		CHECK(scene.GetEntityByUUID(kept.GetUUID()));
+		CHECK(scene.GetEntityByUUID(wasInactive.GetUUID()));
+		CHECK_FALSE(scene.GetEntityByUUID(goneID));
+		CheckSceneCaches(scene);
+	}
 }

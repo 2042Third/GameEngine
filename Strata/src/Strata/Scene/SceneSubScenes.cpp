@@ -133,10 +133,13 @@ namespace Strata
 			if (tag && tag->SubScene == status.ID)
 				roots.push_back(root);
 		}
+		load.DeactivatedRoots.clear();
 		for (Entity root : roots)
 		{
-			if (!root.HasComponent<InactiveComponent>())
-				root.AddComponent<InactiveComponent>();
+			if (root.HasComponent<InactiveComponent>())
+				continue;
+			root.AddComponent<InactiveComponent>();
+			load.DeactivatedRoots.push_back(root);
 		}
 		load.Roots = std::move(roots);
 		status.State = SubSceneState::Unloading;
@@ -399,11 +402,12 @@ namespace Strata
 			created += count;
 			// The new top-level entities name their sub-scene, so that unloading finds them wherever the game moved them.
 			const std::vector<Entity>& roots = instantiation.GetRoots();
-			for (size_t index = load.Roots.size(); index < roots.size(); index++)
+			for (size_t index = load.TaggedRoots; index < roots.size(); index++)
 			{
 				m_Registry.emplace_or_replace<SubSceneComponent>(roots[index].GetHandle(), SubSceneComponent { status.ID, status.Scene });
 				load.Roots.push_back(roots[index]);
 			}
+			load.TaggedRoots = roots.size();
 		}
 		if (created > 0)
 			status.Slices++;
@@ -482,6 +486,107 @@ namespace Strata
 		}
 		load.Roots.clear();
 		DestroyEntities(roots);
+	}
+
+	SubSceneID Scene::AdoptSubScene(AssetHandle source, std::span<const Entity> roots, std::string* outError)
+	{
+		for (const Entity root : roots)
+		{
+			if (!root.IsValid() || root.GetScene() != this || GetHierarchy(root.GetHandle()).Parent != entt::null)
+			{
+				if (outError)
+					*outError = root.IsValid() && root.GetScene() == this ? fmt::format("'{}' is not a top-level entity", root.GetName()) : "An entity is not of this scene";
+				return 0;
+			}
+		}
+
+		Scope<SubSceneLoad> load = CreateScope<SubSceneLoad>();
+		SubSceneStatus& status = load->Status;
+		status.ID = m_NextSubSceneID++;
+		status.Scene = source;
+		status.State = SubSceneState::Loaded;
+		status.Progress = 1.0f;
+		for (const Entity root : roots)
+		{
+			LeaveSubScene(root.GetHandle());
+			m_Registry.emplace<SubSceneComponent>(root.GetHandle(), SubSceneComponent { status.ID, source });
+			if (std::find(load->Roots.begin(), load->Roots.end(), root) == load->Roots.end())
+			{
+				load->Roots.push_back(root);
+				status.CreatedEntities += CountSubtree(root);
+			}
+		}
+		status.TotalEntities = status.CreatedEntities;
+		const SubSceneID id = status.ID;
+		m_SubScenes.push_back(std::move(load));
+		return id;
+	}
+
+	bool Scene::SetSubSceneOf(Entity root, SubSceneID id)
+	{
+		if (!root.IsValid() || root.GetScene() != this || GetHierarchy(root.GetHandle()).Parent != entt::null)
+			return false;
+		SubSceneLoad* load = id != 0 ? FindSubScene(id) : nullptr;
+		if (id != 0 && (!load || load->Status.State != SubSceneState::Loaded))
+			return false;
+		if (GetSubSceneOf(root) == id)
+			return true;
+		LeaveSubScene(root.GetHandle());
+		if (load)
+		{
+			m_Registry.emplace<SubSceneComponent>(root.GetHandle(), SubSceneComponent { id, load->Status.Scene });
+			load->Roots.push_back(root);
+		}
+		return true;
+	}
+
+	SubSceneID Scene::GetSubSceneOf(Entity entity) const
+	{
+		if (!entity.IsValid() || entity.GetScene() != this)
+			return 0;
+		entt::entity top = entity.GetHandle();
+		for (entt::entity parent = GetHierarchy(top).Parent; parent != entt::null; parent = GetHierarchy(parent).Parent)
+			top = parent;
+		const SubSceneComponent* tag = m_Registry.try_get<SubSceneComponent>(top);
+		return tag ? tag->SubScene : 0;
+	}
+
+	SubSceneID Scene::FindSubSceneBySource(AssetHandle source) const
+	{
+		if (!source.IsValid())
+			return 0;
+		SubSceneID unloading = 0;
+		for (auto it = m_SubScenes.rbegin(); it != m_SubScenes.rend(); ++it)
+		{
+			const SubSceneStatus& status = (*it)->Status;
+			if (status.Scene != source)
+				continue;
+			if (status.State != SubSceneState::Unloading)
+				return status.ID;
+			if (unloading == 0)
+				unloading = status.ID;
+		}
+		return unloading;
+	}
+
+	void Scene::LeaveSubScene(entt::entity root)
+	{
+		const SubSceneComponent* tag = m_Registry.try_get<SubSceneComponent>(root);
+		if (!tag)
+			return;
+		if (SubSceneLoad* load = FindSubScene(tag->SubScene))
+		{
+			const Entity entity(root, this);
+			std::erase(load->Roots, entity);
+			// The unload made it inactive: leaving the sub-scene, it is active again.
+			if (auto deactivated = std::find(load->DeactivatedRoots.begin(), load->DeactivatedRoots.end(), entity); deactivated != load->DeactivatedRoots.end())
+			{
+				load->DeactivatedRoots.erase(deactivated);
+				if (m_Registry.all_of<InactiveComponent>(root))
+					m_Registry.remove<InactiveComponent>(root);
+			}
+		}
+		m_Registry.remove<SubSceneComponent>(root);
 	}
 
 	SubSceneLoad* Scene::FindSubScene(SubSceneID id) const

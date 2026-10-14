@@ -1094,6 +1094,9 @@ namespace Strata
 			return true;
 
 		const glm::mat4 worldTransform = keepWorldTransform ? GetWorldTransform(child) : glm::mat4(1.0f);
+		// A top-level entity of a sub-scene that becomes a child belongs to its new top-level ancestor's.
+		if (parentHandle != entt::null)
+			LeaveSubScene(childHandle);
 		Unlink(childHandle);
 		LinkLast(childHandle, parentHandle);
 		m_HierarchyVersion++;
@@ -1228,6 +1231,9 @@ namespace Strata
 		RecordHierarchyMoves(moved);
 		for (const Move& move : moves)
 		{
+			// A top-level entity of a sub-scene that becomes a child belongs to its new top-level ancestor's.
+			if (move.Parent != entt::null)
+				LeaveSubScene(move.Target);
 			RefreshSubtreeDepth(move.Target, true);
 			RefreshSubtreeActivity(move.Target, true);
 			MarkTransformDirty(move.Target);
@@ -1729,6 +1735,15 @@ namespace Strata
 		}
 		if (visited != m_EntityMap.size())
 			return fail(fmt::format("{} entities are reachable from the roots, but the scene has {}", visited, m_EntityMap.size()));
+		// Sub-scenes name their top-level entities only: their descendants belong to them through them.
+		if (const auto* tags = m_Registry.storage<SubSceneComponent>())
+		{
+			for (const entt::entity tagged : static_cast<const entt::sparse_set&>(*tags))
+			{
+				if (GetHierarchy(tagged).Parent != entt::null)
+					return fail(fmt::format("{} names sub-scene {} but is not a top-level entity", describe(tagged), m_Registry.get<SubSceneComponent>(tagged).SubScene));
+			}
+		}
 
 		auto checkIndex = [&](const LookupIndex& index, auto view, auto value, std::string_view kind) -> bool
 		{
