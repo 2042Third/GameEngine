@@ -9,6 +9,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/PrefabInstances.h>
+#include <Strata/Scene/PrefabOverrides.h>
 #include <Strata/Scene/Scene.h>
 
 #include <algorithm>
@@ -244,12 +245,10 @@ namespace Strata
 		// a document someone wrote): every instance root's Scale is multiplied by b / a per axis, so that instances keep the
 		// size the model gives them now instead of taking the scale twice.
 		const bool model = context.GetAssetManager()->GetAssetType(prefab) == AssetType::Model;
-		std::vector<Entity> unchanged;
+		const std::vector<Entity> roots = PrefabInstances::FindInstanceRoots(scene, prefab);
 		std::vector<RootRescale> rescaled;
-		for (const Entity root : PrefabInstances::FindInstanceRoots(scene, prefab))
+		for (const Entity root : roots)
 		{
-			if (PrefabInstances::Compare(scene, root, previous).IsEmpty())
-				unchanged.push_back(root);
 			if (!model)
 				continue;
 			const UUID templateRoot = root.GetComponent<PrefabInstanceComponent>().PrefabEntityID;
@@ -259,7 +258,75 @@ namespace Strata
 				continue;
 			rescaled.push_back(RootRescale { root, root.GetComponent<TransformComponent>().Scale * (*after / *before) });
 		}
-		UpdateInstances(context, prefab, unchanged, snapshot, rescaled);
+		// Every instance takes what changed, except where it overrides it.
+		UpdateInstances(context, prefab, {}, roots, &previous, snapshot, rescaled);
+	}
+
+	void PrefabSync::UpdateInstances(EditorContext& context, AssetHandle prefab, const std::vector<Entity>& replaced, const std::vector<Entity>& propagated,
+		const nlohmann::json* previous, const nlohmann::json& snapshot, const std::vector<RootRescale>& rescaled)
+	{
+		if (replaced.empty() && propagated.empty() && rescaled.empty())
+			return;
+		Scene& scene = *context.GetEditScene();
+		const std::optional<AssetMetadata> metadata = context.GetAssetManager()->GetMetadata(prefab);
+		SceneEditTransaction transaction(scene, fmt::format("Update Instances of {}", metadata ? metadata->Name : prefab.ToString()), {});
+		for (const Entity root : replaced)
+			transaction.TrackSubtree(root.GetUUID());
+		// The roots' Scale first: Replace keeps a root's transform.
+		for (const RootRescale& rescale : rescaled)
+		{
+			Entity root = scene.GetEntityByUUID(rescale.Root.GetUUID());
+			if (!root)
+				continue;
+			transaction.Track(root.GetUUID());
+			root.GetComponent<TransformComponent>().Scale = rescale.Scale;
+			root.MarkModified<TransformComponent>();
+		}
+		for (const Entity root : replaced)
+		{
+			const UUID id = root.GetUUID();
+			std::vector<UUID> created;
+			std::string error;
+			const Entity current = scene.GetEntityByUUID(id);
+			if (!current || !PrefabInstances::Replace(scene, current, snapshot, &created, &error))
+			{
+				ST_WARN("An instance of {} could not take its new values: {}", metadata ? metadata->Path : prefab.ToString(), error);
+				continue;
+			}
+			for (const UUID entity : created)
+				transaction.TrackCreated(entity);
+			m_PropagationCount++;
+		}
+		for (const Entity instance : propagated)
+		{
+			const Entity root = scene.GetEntityByUUID(instance.GetUUID());
+			if (!root)
+				continue;
+			const UUID templateRoot = root.GetComponent<PrefabInstanceComponent>().PrefabEntityID;
+			// Without the previous snapshot (a catch-up), the instance as it is stands for it: what differs from the new part
+			// and is not overridden takes the new values.
+			std::unordered_map<UUID, UUID> ids;
+			const nlohmann::json previousPart = previous ? PrefabInstances::ExtractTemplate(*previous, templateRoot)
+				: PrefabInstances::MakeTemplate(scene, root, nullptr, nullptr, ids);
+			std::vector<UUID> changed;
+			std::vector<UUID> created;
+			std::string error;
+			if (!PrefabOverrides::Propagate(scene, root, previousPart, PrefabInstances::ExtractTemplate(snapshot, templateRoot), &changed, &created,
+				[&transaction](UUID id) { transaction.Track(id); }, &error))
+			{
+				ST_WARN("An instance of {} could not take its new values: {}", metadata ? metadata->Path : prefab.ToString(), error);
+				continue;
+			}
+			for (const UUID entity : created)
+				transaction.TrackCreated(entity);
+			// It took this version of the prefab (its overrides aside): not outdated.
+			transaction.Track(root.GetUUID());
+			PrefabInstances::MarkSynced(scene, root, snapshot);
+			if (!changed.empty() || !created.empty())
+				m_PropagationCount++;
+		}
+		context.CommitEdit(transaction);
+		context.PruneSelection();
 	}
 
 	void PrefabSync::CatchUp(EditorContext& context, AssetHandle prefab, Baseline& baseline, const std::vector<Entity>& roots)
@@ -282,13 +349,18 @@ namespace Strata
 				importScale = scale->get<float>();
 		}
 		std::vector<Entity> missed;
+		std::vector<Entity> overridden;
 		std::vector<RootRescale> rescaled;
 		for (const Entity root : roots)
 		{
 			m_CatchUpCheckCount++;
 			if (!PrefabInstances::IsOutdated(root, baseline.Snapshot, baseline.PartVersions))
 				continue;
-			if (PrefabInstances::IsUnchangedSinceSync(scene, root))
+			// An instance whose overrides are known takes the new version except them; one without a list takes it only
+			// when unmodified since it last synced.
+			if (!root.GetComponent<PrefabInstanceComponent>().Overrides.empty())
+				overridden.push_back(root);
+			else if (PrefabInstances::IsUnchangedSinceSync(scene, root))
 				missed.push_back(root);
 			if (!importScale)
 				continue;
@@ -303,47 +375,7 @@ namespace Strata
 			ST_INFO("{} instance{} of {} kept {} size: the import scale is now part of the model", rescaled.size(), rescaled.size() == 1 ? "" : "s",
 				metadata ? metadata->Name : prefab.ToString(), rescaled.size() == 1 ? "its" : "their");
 		}
-		UpdateInstances(context, prefab, missed, baseline.Snapshot, rescaled);
-	}
-
-	void PrefabSync::UpdateInstances(EditorContext& context, AssetHandle prefab, const std::vector<Entity>& roots, const nlohmann::json& snapshot,
-		const std::vector<RootRescale>& rescaled)
-	{
-		if (roots.empty() && rescaled.empty())
-			return;
-		Scene& scene = *context.GetEditScene();
-		const std::optional<AssetMetadata> metadata = context.GetAssetManager()->GetMetadata(prefab);
-		SceneEditTransaction transaction(scene, fmt::format("Update Instances of {}", metadata ? metadata->Name : prefab.ToString()), {});
-		for (const Entity root : roots)
-			transaction.TrackSubtree(root.GetUUID());
-		for (const RootRescale& rescale : rescaled)
-			transaction.Track(rescale.Root.GetUUID());
-		// The roots' Scale first: Replace keeps a root's transform.
-		for (const RootRescale& rescale : rescaled)
-		{
-			Entity root = scene.GetEntityByUUID(rescale.Root.GetUUID());
-			if (!root)
-				continue;
-			root.GetComponent<TransformComponent>().Scale = rescale.Scale;
-			root.MarkModified<TransformComponent>();
-		}
-		for (const Entity root : roots)
-		{
-			const UUID id = root.GetUUID();
-			std::vector<UUID> created;
-			std::string error;
-			const Entity current = scene.GetEntityByUUID(id);
-			if (!current || !PrefabInstances::Replace(scene, current, snapshot, &created, &error))
-			{
-				ST_WARN("An instance of {} could not take its new values: {}", metadata ? metadata->Path : prefab.ToString(), error);
-				continue;
-			}
-			for (const UUID entity : created)
-				transaction.TrackCreated(entity);
-			m_PropagationCount++;
-		}
-		context.CommitEdit(transaction);
-		context.PruneSelection();
+		UpdateInstances(context, prefab, missed, overridden, nullptr, baseline.Snapshot, rescaled);
 	}
 
 	PrefabSync::Baseline* PrefabSync::FindBaseline(EditorContext& context, AssetHandle prefab)

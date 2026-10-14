@@ -311,14 +311,17 @@ entities (fresh IDs, references among them remapped, also in another scene);
 false` leaves them alone), then
 `prefab.instantiate {"prefab": "Prefabs/Block.stprefab", "components": {"Transform": {"Translation": [2, 0, 0]}}}`
 (returns `id`, the instance's root). Instances stay linked: change one instance (any of its entities) and
-`prefab.apply {"entity": "<id>"}` writes it into the prefab, and every instance that still had the prefab's values takes
-the new ones (one undo step for the file and the scene). Instances in other scenes follow when their scene opens next
-(also after the prefab changed on disk; done by the time `scene.open` answers): those still as they were take the new
-values (an undo step per prefab, "Update Instances of ..."; save the scene), modified ones keep theirs and are
-`outdated`; `prefab.apply` refuses an
-outdated instance (it would write its older values over the newer ones) unless `"force": true`: `prefab.revert` it
-and make its change again instead. `prefab.status {"entity"}` says whether an instance differs
-(`modified`, `outdated`, `changed`, `added`, `removed`), `prefab.revert {"entity"}` gives it the prefab's values again (IDs kept),
+`prefab.apply {"entity": "<id>"}` writes it into the prefab (or only one override: `{"entity": "<the entity>", "component":
+"PointLight", "property": "Intensity"}`), and every other instance takes the new values except what it overrides itself
+(one undo step for the file and the scene). An instance's overrides are its own values: `prefab.status {"entity"}` lists
+them (`overrides: [{entity, prefabEntity, component, property, kind}]`, kind `Property`, `AddedComponent`,
+`RemovedComponent` or `RemovedEntity`; script fields as `Script` / `<Class>.<Field>`). Instances in other scenes follow
+when their scene opens next (also after the prefab changed on disk; done by the time `scene.open` answers), again except
+their overrides (an undo step per prefab, "Update Instances of ..."; save the scene). Instances of scenes saved before
+override lists keep their values when modified and are `outdated`; `prefab.apply` refuses an outdated instance (it would
+write its older values over the newer ones) unless `"force": true`: `prefab.revert` it and make its change again instead.
+`prefab.status` also says whether an instance differs (`modified`, `outdated`, `changed`, `added`, `removed`),
+`prefab.revert {"entity"}` gives it the prefab's values again (IDs kept; with `component` and `property`, one override),
 `prefab.unpack {"entity"}` makes its entities plain ones, `prefab.select {"entity", "asset"?}` selects the root or shows
 the prefab. While playing, revert and unpack change the running copy (their answers carry a `warning`) and apply is
 refused; while a scene is being opened, apply, revert, unpack and a linking `prefab.create` are refused like every edit. The root's transform and name always stay the instance's own. Imported models are instantiated the same way

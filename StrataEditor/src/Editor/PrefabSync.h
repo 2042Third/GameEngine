@@ -32,9 +32,8 @@ namespace Strata
 	}
 
 	// Keeps the prefab instances of the edited scene in step with their prefabs (EditorContext::Update, in edit mode): when a
-	// prefab's file changes (a reimport, a change on disk, an undo of prefab.apply goes with its own instances), instances
-	// whose values equalled the prefab's before (PrefabInstances::Compare, the root's transform and name left out) take its
-	// new values, in one undo step; modified instances keep theirs. prefab.apply updates the other instances itself and tells
+	// prefab's file changes (a reimport, a change on disk, an undo of prefab.apply goes with its own instances), every
+	// instance takes what changed except where it overrides it (PrefabOverrides::Propagate), in one undo step. prefab.apply updates the other instances itself and tells
 	// the sync the new snapshot (SetBaseline), so they are not updated twice. A prefab that changed while the scene was
 	// closed (applied from another scene, changed on disk) is caught up with once the scene is open, the first time the sync
 	// looks at the prefab: instances whose recorded version of their part (PrefabInstances::MarkSynced) differs from the
@@ -110,9 +109,11 @@ namespace Strata
 			Entity Root;
 			glm::vec3 Scale = glm::vec3(1.0f); // The root's new Scale
 		};
-		// Gives instance roots the snapshot's values and the rescaled roots their new Scale, in one undo step.
-		void UpdateInstances(EditorContext& context, AssetHandle prefab, const std::vector<Entity>& roots, const nlohmann::json& snapshot,
-			const std::vector<RootRescale>& rescaled = {});
+		// In one undo step: the rescaled roots their new Scale, `replaced` roots the snapshot's values (Replace), and
+		// `propagated` roots what changed from `previous` to `snapshot` except where they override it
+		// (PrefabOverrides::Propagate; without `previous`, the instance as it is stands for it), tracking only what changed.
+		void UpdateInstances(EditorContext& context, AssetHandle prefab, const std::vector<Entity>& replaced, const std::vector<Entity>& propagated,
+			const nlohmann::json* previous, const nlohmann::json& snapshot, const std::vector<RootRescale>& rescaled);
 		void Watch(EditorContext& context);
 		// Whether the history's change count (`changes`) is part of a run of edits that has not paused yet.
 		bool AreEditsContinuing(uint64_t changes) const;

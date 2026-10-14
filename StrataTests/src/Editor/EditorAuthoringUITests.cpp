@@ -666,8 +666,8 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		settle();
 		CHECK(editor.Hierarchy().FindPrefabBadge(lamp) == Badge::Modified);
 
-		// Apply to Prefab writes it into the prefab: no longer modified. The other instance keeps its edit and missed the new
-		// version: outdated.
+		// Apply to Prefab writes it into the prefab: no longer modified. The other instance keeps its edit (an override) and takes
+		// the rest of the new version: modified, not outdated.
 		openMenu(lamp);
 		REQUIRE(editor.Click("Hierarchy.Prefab.Apply"));
 		editor.Frames(2);
@@ -675,10 +675,10 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		CHECK(editor.Run("prefab.status", { { "entity", UUIDToJson(lamp) } })["modified"] == false);
 		settle();
 		CHECK(editor.Hierarchy().FindPrefabBadge(lamp) == Badge::Linked);
-		CHECK(editor.Hierarchy().FindPrefabBadge(other) == Badge::Outdated);
+		CHECK(editor.Hierarchy().FindPrefabBadge(other) == Badge::Modified);
 		CHECK(intensity(other) == 3.0f);
 
-		// The outdated instance's Apply says that it writes over the newer version, and does (prefab.apply's force).
+		// Its Apply writes its value into the prefab.
 		openMenu(other);
 		REQUIRE(editor.Click("Hierarchy.Prefab.Apply"));
 		editor.Frames(2);

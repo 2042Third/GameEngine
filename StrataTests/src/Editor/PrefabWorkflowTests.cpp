@@ -524,7 +524,7 @@ TEST_SUITE("Editor.Prefab")
 		CHECK_FALSE(harness.Run("prefab.unpack", { { "entity", setup.Second } }).contains("warning"));
 	}
 
-	TEST_CASE("When a prefab's file changes, unmodified instances take its values and modified ones keep theirs")
+	TEST_CASE("When a prefab's file changes, every instance takes its values except what it overrides")
 	{
 		PrefabHarness harness("PrefabPropagate");
 		LampSetup setup(harness);
@@ -543,7 +543,10 @@ TEST_SUITE("Editor.Prefab")
 		for (nlohmann::json& entity : (*document)["Prefab"]["Entities"])
 		{
 			if (entity["Components"]["Name"]["Name"] == "Bulb")
+			{
 				entity["Components"]["PointLight"]["Intensity"] = 6.0;
+				entity["Components"]["PointLight"]["Range"] = 4.0;
+			}
 		}
 		REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(*document, 1, '\t') + "\n"));
 		const AssetHandle prefab = *UUIDFromJson(setup.Prefab);
@@ -552,8 +555,11 @@ TEST_SUITE("Editor.Prefab")
 
 		CHECK(harness.Intensity(harness.ChildOf(setup.First)) == 6.0);
 		CHECK(harness.Intensity(setup.Bulb) == 6.0);
+		// The modified instance keeps its intensity (an override) and takes the range.
 		CHECK(harness.Intensity(modifiedBulb) == 8.0);
-		CHECK(harness.Context.GetPrefabSync().GetPropagationCount() == propagated + 2);
+		CHECK(harness.Get(modifiedBulb)["components"]["PointLight"]["Range"] == 4.0);
+		CHECK(harness.Status(setup.Second)["overrides"].size() == 1);
+		CHECK(harness.Context.GetPrefabSync().GetPropagationCount() == propagated + 3);
 		std::vector<std::string> expected = before;
 		expected.push_back("Update Instances of Lamp");
 		CHECK(harness.History() == expected);
@@ -568,7 +574,7 @@ TEST_SUITE("Editor.Prefab")
 		CHECK(harness.Intensity(setup.Bulb) == 3.0);
 	}
 
-	TEST_CASE("A prefab applied in another scene reaches unmodified instances when their scene opens; modified ones are outdated")
+	TEST_CASE("A prefab applied in another scene reaches its instances when their scene opens, except their overrides; ones without a list are outdated")
 	{
 		PrefabHarness harness("PrefabClosedScene");
 		const std::string lamp = harness.Create("Lamp", nullptr, 2.0f);
@@ -577,27 +583,42 @@ TEST_SUITE("Editor.Prefab")
 		harness.Run("scene.new");
 		const std::string plain = harness.Run("prefab.instantiate", { { "prefab", prefab } })["id"].get<std::string>();
 		const std::string edited = harness.Run("prefab.instantiate", { { "prefab", prefab } })["id"].get<std::string>();
+		const std::string legacy = harness.Run("prefab.instantiate", { { "prefab", prefab } })["id"].get<std::string>();
 		harness.SetIntensity(edited, 4.0f);
+		harness.SetIntensity(legacy, 5.0f);
 		CHECK(harness.Status(plain)["outdated"] == false);
 		CHECK_FALSE(harness.Get(plain)["components"]["PrefabInstance"]["PrefabVersion"].get<std::string>().empty());
 		harness.Run("scene.saveAs", { { "path", "Scenes/B.stscene" } });
+		// The legacy instance as a scene from before override lists stores it: without its list.
+		{
+			const std::filesystem::path file = harness.Directory / "Assets" / "Scenes" / "B.stscene";
+			std::optional<nlohmann::json> document = JsonUtils::Parse(*FileSystem::ReadText(file));
+			REQUIRE(document);
+			for (nlohmann::json& entity : (*document)["Scene"]["Entities"])
+			{
+				if (entity["ID"] == legacy)
+					entity["Components"]["PrefabInstance"].erase("Overrides");
+			}
+			REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(*document, 1, '\t') + "\n"));
+		}
 
-		// Changed and applied in scene A, while B is closed.
+		// Changed (the color and the intensity) and applied in scene A, while B is closed.
 		harness.Run("scene.open", { { "scene", "Scenes/A.stscene" } });
 		harness.Frames(2);
 		harness.SetIntensity(lamp, 9.0f);
+		harness.Run("component.set", { { "entity", lamp }, { "component", "PointLight" }, { "values", { { "Color", { 0, 1, 0 } } } } });
 		CHECK(harness.Run("prefab.apply", { { "entity", lamp } })["updatedInstances"] == 0);
 		harness.Run("scene.save");
 
-		// B opens: by the time scene.open answers, its unmodified instance took the change in one undo step, and the modified
-		// one keeps its values and is outdated.
+		// B opens: by the time scene.open answers, in one undo step, its unmodified instance took the change, the one with an
+		// override took all but it, and the one without a list keeps its values and is outdated.
 		const uint64_t checks = harness.Context.GetPrefabSync().GetCatchUpCheckCount();
 		const uint64_t outsideCommands = harness.Context.GetJournal().GetEditsOutsideCommands();
 		harness.Run("scene.open", { { "scene", "Scenes/B.stscene" } });
 		const uint64_t openEntry = harness.Context.GetJournal().GetLatestId();
-		CHECK(harness.Context.GetPrefabSync().GetCatchUpCheckCount() == checks + 2);
+		CHECK(harness.Context.GetPrefabSync().GetCatchUpCheckCount() == checks + 3);
 		harness.Frames(2);
-		CHECK(harness.Context.GetPrefabSync().GetCatchUpCheckCount() == checks + 2);
+		CHECK(harness.Context.GetPrefabSync().GetCatchUpCheckCount() == checks + 3);
 		// The catch-up happened between frames, while scene.open waited: it is the open's work (its undo step), which a replay
 		// of the open repeats, not an edit outside commands.
 		const CommandJournalEntry* opened = harness.Context.GetJournal().Find(openEntry);
@@ -609,21 +630,26 @@ TEST_SUITE("Editor.Prefab")
 		CHECK(harness.Status(plain)["modified"] == false);
 		CHECK(harness.Status(plain)["outdated"] == false);
 		CHECK(harness.Intensity(edited) == 4.0);
+		CHECK(harness.Get(edited)["components"]["PointLight"]["Color"] == nlohmann::json::array({ 0.0, 1.0, 0.0 }));
 		CHECK(harness.Status(edited)["modified"] == true);
-		CHECK(harness.Status(edited)["outdated"] == true);
+		CHECK(harness.Status(edited)["outdated"] == false);
+		CHECK(harness.Status(edited)["overrides"].size() == 1);
+		CHECK(harness.Intensity(legacy) == 5.0);
+		CHECK(harness.Get(legacy)["components"]["PointLight"]["Color"] == nlohmann::json::array({ 1.0, 1.0, 1.0 }));
+		CHECK(harness.Status(legacy)["outdated"] == true);
 		CHECK(harness.History() == std::vector<std::string> { "Update Instances of Lamp" });
 		CHECK(harness.Run("scene.info")["modified"] == true);
 		harness.Frames(4); // Once per scene: nothing more happens
 		CHECK(harness.History().size() == 1);
 
 		// The outdated instance would write its older values over the prefab's: refused, unless forced.
-		const EditorCommandResult refused = harness.Fail("prefab.apply", { { "entity", edited } });
+		const EditorCommandResult refused = harness.Fail("prefab.apply", { { "entity", legacy } });
 		CHECK(refused.Error.find("older version") != std::string::npos);
 		CHECK(harness.ReadPrefabEntity("Prefabs/Lamp.stprefab", "Lamp")["Components"]["PointLight"]["Intensity"] == 9.0);
 		// Reverting brings it up to date.
-		harness.Run("prefab.revert", { { "entity", edited } });
-		CHECK(harness.Intensity(edited) == 9.0);
-		CHECK(harness.Status(edited)["outdated"] == false);
+		harness.Run("prefab.revert", { { "entity", legacy } });
+		CHECK(harness.Intensity(legacy) == 9.0);
+		CHECK(harness.Status(legacy)["outdated"] == false);
 
 		// The catch-up is an undo step like any edit.
 		harness.Run("edit.undo");
@@ -883,5 +909,69 @@ TEST_SUITE("Editor.Prefab")
 		harness.Run("component.set", { { "entity", harness.ChildOf(setup.First) }, { "component", "PointLight" }, { "values", { { "Range", 3 } } } });
 		CHECK(running.GetComponent<PrefabInstanceComponent>().Overrides.size() == 1);
 		harness.Run("play.stop");
+	}
+
+	TEST_CASE("prefab.apply can write one override into the prefab; every other instance takes it unless it overrides it")
+	{
+		PrefabHarness harness("PrefabApplyOne");
+		LampSetup setup(harness);
+		const std::string firstBulb = harness.ChildOf(setup.First);
+		const std::string secondBulb = harness.ChildOf(setup.Second);
+		harness.SetIntensity(firstBulb, 6.0f);
+		harness.Run("component.set", { { "entity", firstBulb }, { "component", "PointLight" }, { "values", { { "Range", 3 } } } });
+		harness.SetIntensity(secondBulb, 7.0f);
+		CHECK(harness.Status(setup.First)["overrides"].size() == 2);
+
+		// Only the first bulb's range goes into the prefab: the original lamp and the second instance take it, the first keeps
+		// its intensity override.
+		const size_t steps = harness.History().size();
+		const nlohmann::json applied = harness.Run("prefab.apply", { { "entity", firstBulb }, { "component", "PointLight" }, { "property", "Range" } });
+		CHECK(applied["updatedInstances"] == 2);
+		CHECK(harness.ReadPrefabEntity("Prefabs/Lamp.stprefab", "Bulb")["Components"]["PointLight"]["Range"] == 3.0);
+		CHECK(harness.ReadPrefabEntity("Prefabs/Lamp.stprefab", "Bulb")["Components"]["PointLight"]["Intensity"] == 3.0);
+		CHECK(harness.Get(secondBulb)["components"]["PointLight"]["Range"] == 3.0);
+		CHECK(harness.Intensity(secondBulb) == 7.0);
+		CHECK(harness.Get(setup.Bulb)["components"]["PointLight"]["Range"] == 3.0);
+		const nlohmann::json overrides = harness.Status(setup.First)["overrides"];
+		REQUIRE(overrides.size() == 1);
+		CHECK(overrides[0]["property"] == "Intensity");
+		CHECK(harness.Status(setup.First)["outdated"] == false);
+		// One step for the file and every instance.
+		CHECK(harness.History().size() == steps + 1);
+		harness.Run("edit.undo");
+		CHECK(harness.Get(secondBulb)["components"]["PointLight"]["Range"] != 3.0);
+		CHECK(harness.ReadPrefabEntity("Prefabs/Lamp.stprefab", "Bulb")["Components"]["PointLight"].value("Range", 0.0) != 3.0);
+		CHECK(harness.Status(setup.First)["overrides"].size() == 2);
+
+		// An entity added to the instance cannot apply one override: it is not in the prefab.
+		const std::string sticker = harness.Create("Sticker", setup.First);
+		CHECK(harness.Fail("prefab.apply", { { "entity", sticker }, { "component", "PointLight" } }).ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(harness.Fail("prefab.apply", { { "entity", firstBulb }, { "property", "Range" } }).ErrorKind == EditorCommandError::InvalidParameters);
+	}
+
+	TEST_CASE("prefab.revert can revert one property or one component of an entity")
+	{
+		PrefabHarness harness("PrefabRevertOne");
+		LampSetup setup(harness);
+		const std::string bulb = harness.ChildOf(setup.First);
+		harness.SetIntensity(bulb, 6.0f);
+		harness.Run("component.set", { { "entity", bulb }, { "component", "PointLight" }, { "values", { { "Range", 3 } } } });
+		harness.Run("component.add", { { "entity", bulb }, { "component", "SpotLight" } });
+		REQUIRE(harness.Status(setup.First)["overrides"].size() == 3);
+
+		harness.Run("prefab.revert", { { "entity", bulb }, { "component", "PointLight" }, { "property", "Intensity" } });
+		CHECK(harness.Intensity(bulb) == 3.0);
+		CHECK(harness.Get(bulb)["components"]["PointLight"]["Range"] == 3.0);
+		CHECK(harness.Status(setup.First)["overrides"].size() == 2);
+		CHECK(harness.Run("edit.history")["undo"] == "Revert PointLight.Intensity of Bulb");
+		// A component the prefab lacks goes.
+		harness.Run("prefab.revert", { { "entity", bulb }, { "component", "SpotLight" } });
+		CHECK_FALSE(harness.Get(bulb)["components"].contains("SpotLight"));
+		CHECK(harness.Status(setup.First)["overrides"].size() == 1);
+		harness.Run("edit.undo");
+		CHECK(harness.Get(bulb)["components"].contains("SpotLight"));
+		CHECK(harness.Status(setup.First)["overrides"].size() == 2);
+		CHECK(harness.Fail("prefab.revert", { { "entity", bulb }, { "component", "SpotLight" }, { "property", "Intensity" } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
 	}
 }

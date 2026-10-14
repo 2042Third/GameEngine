@@ -239,9 +239,9 @@ the scene has unsaved changes (pass `"force": true` only to throw away edits you
 
 - Things that appear many times (blocks, enemies, pickups): build one, `prefab.create` it and `prefab.instantiate` the
   rest. Instances stay linked, so a change to one instance followed by `prefab.apply {"entity"}` updates the prefab and
-  every unmodified instance at once (those of other scenes when the scene opens next: save it then); `prefab.status`
-  shows which instances differ, and which are `outdated` (modified while the prefab changed elsewhere: `prefab.revert`
-  them before changing them again, as `prefab.apply` refuses them without `force`).
+  every instance at once, except values an instance overrides (those of other scenes when the scene opens next: save it
+  then). `prefab.status` lists an instance's overrides; `prefab.apply` and `prefab.revert` take `component` and `property`
+  to apply or revert one of them.
 
 - Collision layers keep groups apart (bullets that pass through their shooter, debris the player walks through): name
   them and set which pairs collide with `scene.setSettings {"layerNames": {"1": "Player", "2": "Debris"},
