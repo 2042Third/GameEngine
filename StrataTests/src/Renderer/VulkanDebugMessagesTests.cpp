@@ -40,6 +40,8 @@ namespace
 	}
 
 	constexpr const char* c_LayoutSupport = "VUID-vkCreateDescriptorSetLayout-support-09582";
+	constexpr const char* c_MoltenVKBlending = "VK_ERROR_FEATURE_NOT_PRESENT: Blending is enabled for attachment with format VK_FORMAT_R32_UINT, "
+		"which does not support it.";
 
 }
 
@@ -68,6 +70,17 @@ TEST_SUITE("Renderer.VulkanMessages")
 		CHECK(ClassifyVulkanMessage(Error("Loader Message"), {}) == VulkanMessageDisposition::Error);
 		// The layer's own errors still count.
 		CHECK(ClassifyVulkanMessage(Error("VUID-VkInstanceCreateInfo-pNext-04925"), CreatingInstanceWithLayers()) == VulkanMessageDisposition::Error);
+	}
+
+	TEST_CASE("MoltenVK's blending report of attachments that do not blend is traced, other warnings are warnings")
+	{
+		CHECK(ClassifyVulkanMessage(Warning("mvk-warn", c_MoltenVKBlending), {}) == VulkanMessageDisposition::Trace);
+		CHECK(ClassifyVulkanMessage(Warning("mvk-warn", "VK_ERROR_FEATURE_NOT_PRESENT: Another feature is missing."), {})
+			== VulkanMessageDisposition::Warning);
+		CHECK(ClassifyVulkanMessage(Warning("BestPractices-Something", c_MoltenVKBlending), {}) == VulkanMessageDisposition::Warning);
+		CHECK(ClassifyVulkanMessage(Warning(nullptr, nullptr), {}) == VulkanMessageDisposition::Warning);
+		// Blending an attachment that cannot blend is invalid usage: the validation layer's error still counts.
+		CHECK(ClassifyVulkanMessage(Error("mvk-warn", c_MoltenVKBlending), {}) == VulkanMessageDisposition::Error);
 	}
 
 	TEST_CASE("The loader's warnings about its search are traced")

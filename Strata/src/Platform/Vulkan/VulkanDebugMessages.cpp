@@ -14,6 +14,11 @@ namespace Strata
 			return text && std::strcmp(text, expected) == 0;
 		}
 
+		bool Contains(const char* text, const char* part)
+		{
+			return text && std::strstr(text, part) != nullptr;
+		}
+
 	}
 
 	VulkanMessageDisposition ClassifyVulkanMessage(const VulkanMessage& message, const VulkanMessageContext& context)
@@ -36,6 +41,12 @@ namespace Strata
 
 		// The loader reports its search (e.g. missing registry keys for layer manifests) as warnings.
 		if (Equals(message.IdName, "Loader Message"))
+			return VulkanMessageDisposition::Trace;
+		// MoltenVK reports every color attachment whose format Metal cannot blend (the prepass's R32_UINT entity IDs) as
+		// "Blending is enabled ...", whether or not the pipeline blends it, and creates the pipeline without blending. The
+		// engine never blends such a target; doing so would be invalid usage, which the validation layer reports as an error
+		// (VUID-VkGraphicsPipelineCreateInfo-renderPass-06062, -06041 with render passes) where it is loaded.
+		if (Equals(message.IdName, "mvk-warn") && Contains(message.Text, "Blending is enabled for attachment with format"))
 			return VulkanMessageDisposition::Trace;
 		return VulkanMessageDisposition::Warning;
 	}
