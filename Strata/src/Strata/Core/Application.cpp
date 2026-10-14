@@ -130,8 +130,11 @@ namespace Strata
 			}
 			ST_CORE_CRITICAL("Engine module '{}' could not start; the application cannot run", module->GetName());
 			// The person learns what the module describes once nothing of the program is left on the screen: the modules that
-			// started end in their usual order (no layer exists yet), then the window, which would never show anything, closes.
+			// started end in their usual order, then the window, which would never show anything, closes. The layers those
+			// modules pushed (ImGui's overlay) go first, as in ~Application, so that no layer outlives what it uses; the
+			// program's own layers do not exist yet.
 			const EngineModuleStartFailure failure = module->GetStartFailure();
+			m_LayerStack.Clear();
 			ShutDownModules();
 			Input::SetWindow(nullptr);
 			m_Window.reset();

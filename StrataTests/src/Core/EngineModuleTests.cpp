@@ -41,6 +41,23 @@ namespace
 		// Waits this long in OnBeginFrame and reports the wait (EngineFrame::WaitSeconds).
 		std::chrono::milliseconds Wait { 0 };
 		bool HandleEvents = false;
+		// Pushes a layer in OnInit, as ImGui pushes its overlay, which journals "Detach <name> layer".
+		bool PushLayer = false;
+	};
+
+	// The layer a module pushes (ModuleBehavior::PushLayer).
+	class ModuleLayer : public Layer
+	{
+	public:
+		ModuleLayer(std::string_view moduleName, Journal& journal)
+			: Layer("Module"), m_ModuleName(moduleName), m_Journal(journal)
+		{
+		}
+
+		void OnDetach() override { m_Journal.push_back(fmt::format("Detach {} layer", m_ModuleName)); }
+	private:
+		std::string m_ModuleName;
+		Journal& m_Journal;
 	};
 
 	// Writes "<hook> <name>" into the journal for every hook: "Init A", "Begin A", "Update A", "UI A", "End A", "Event A",
@@ -61,6 +78,8 @@ namespace
 		{
 			Add("Init");
 			m_InitWithModules = &context.Modules == &context.App.GetModules();
+			if (m_Behavior.PushLayer)
+				context.App.PushLayer(new ModuleLayer(m_Name, m_Journal));
 			return !m_Behavior.FailInit;
 		}
 
@@ -340,20 +359,22 @@ TEST_SUITE("Core.EngineModules")
 	{
 		Journal journal;
 		const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+		const Journal ended { "Init A", "Init B", "Detach A layer", "Release A jobs", "Shutdown A no jobs" };
 		{
+			// A pushes a layer, as ImGui pushes its overlay: it goes before A ends, as layers go before modules at exit.
 			JournalApplication application(MakeSpecification({
-				MakeModule("A", journal),
+				MakeModule("A", journal, { .PushLayer = true }),
 				MakeModule("B", journal, { .FailInit = true, .StartFailureProblem = "B has no device to work with." }),
 				MakeModule("C", journal) }), journal);
 			CHECK_FALSE(application.IsRunning());
 			CHECK(application.GetExitCode() == 1);
 			// The modules that started ended at once, before the program reported why it cannot run.
-			CHECK(journal == Journal { "Init A", "Init B", "Release A jobs", "Shutdown A no jobs" });
+			CHECK(journal == ended);
 			application.Run();
 			CHECK(application.GetFrameCount() == 0);
 			CHECK(application.GetExitCode() == 1);
 		}
-		CHECK(journal == Journal { "Init A", "Init B", "Release A jobs", "Shutdown A no jobs" });
+		CHECK(journal == ended);
 		CHECK(Tests::CountLogMessages(logStart, "Engine module 'B' could not start; the application cannot run") == 1);
 		CHECK(Tests::CountLogMessages(logStart, "B has no device to work with.") == 1);
 	}

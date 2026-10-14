@@ -617,9 +617,9 @@ covered at a lower quality of service, on hybrid processors on the efficiency co
 1.9 times as long; the test runner does the same, so perf suites measure what applications get), set the working
 directory, `JobSystem::Init`, create the window unless headless, `Input::Reset`, then make, order and start the modules
 (`OnInit` in dependency order). A module whose `OnInit` fails is logged as "Engine module '<name>' could not start; the
-application cannot run"; the modules that started get `OnRelease`, the job system stops, they get `OnShutdown`, the
-window closes, then `Application::ReportFatalError` tells the person what the module described (`GetStartFailure`), and
-the application does not run (exit code 1). The program's constructor then pushes its layer (`EditorLayer`,
+application cannot run"; the layers the modules that started pushed (ImGui's overlay) detach, those modules get
+`OnRelease`, the job system stops, they get `OnShutdown`, the window closes, then `Application::ReportFatalError` tells
+the person what the module described (`GetStartFailure`), and the application does not run (exit code 1). The program's constructor then pushes its layer (`EditorLayer`,
 `RuntimeLayer`) when `IsRunning()`.
 
 The hooks, in the order of the program's frame:
