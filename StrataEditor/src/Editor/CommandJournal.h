@@ -204,8 +204,12 @@ namespace Strata
 		bool IsEnabled() const { return m_Enabled; }
 		void Clear();
 
-		// An entry as editor.activity reports it.
+		// An entry as editor.activity reports it, with its Summarize as "summary".
 		static nlohmann::json Describe(const CommandJournalEntry& entry);
+		// The entry in a few words, as the Activity panel lists it: the undo step it recorded (with the entities' names:
+		// "Rename 'Crate' to 'Box'"), else the first line of its error, its warning, "discarded changes" for a command that
+		// replaced the edited scene with force, "running" or "done".
+		static std::string Summarize(const CommandJournalEntry& entry);
 
 		// A command script that repeats the successful edits (EditorCommandKind::Edit, top level; made while playing only when
 		// they outlast play mode, i.e. did not change the running copy) after entry `since`, for a project as it was then: IDs

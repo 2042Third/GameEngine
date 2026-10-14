@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Editor/CommandJournal.h"
 #include "UI/EditorPanelRegistry.h"
 
 #include <nlohmann/json.hpp>
@@ -9,16 +10,17 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace Strata
 {
 
-	class CommandJournal;
-	struct CommandJournalEntry;
-
 	// The activity journal (CommandJournal): every command the person, agents, command scripts and the editor ran, newest at
-	// the bottom, filtered by text, source and whether it changed anything, with a JSON details pane for the selected one and
+	// the bottom, each with its summary (CommandJournal::Summarize: "Rename 'Crate' to 'Box'") and an arrow that shows its raw
+	// parameters and result below it, filtered by text, source and whether it changed anything, with a JSON details pane for
+	// the selected one and
 	// its actions: Copy as command script, Re-run (a command that replaces the edited scene asks about its unsaved changes
 	// first, as the menus do), and Undo to here (undoes every step after the entry's own). The rows are built again only when
 	// the journal or the filters change, and drawn clipped.
@@ -32,6 +34,9 @@ namespace Strata
 		uint64_t GetSelected() const { return m_Selected; }
 		// The ids of the entries the list shows, oldest first (after the filters), as of the last draw.
 		const std::vector<uint64_t>& GetShownEntries() const { return m_Rows; }
+		// Shows (or hides) an entry's raw parameters and result in lines below its row, as its arrow does.
+		void SetExpanded(uint64_t id, bool expanded);
+		bool IsExpanded(uint64_t id) const { return m_Expanded.contains(id); }
 
 		// A command script of one step that runs the entry's command again with its parameters; nullopt when the journal
 		// shortened them (the step would not be the same). The "force" of a command the person ran is left out: it was their
@@ -63,20 +68,33 @@ namespace Strata
 		// The undo position "Undo to here" goes back to (the entry's step is the latest applied), when it can.
 		static std::optional<size_t> GetUndoTarget(EditorContext& context, const CommandJournalEntry& entry);
 		const std::string& GetParameterPreview(const CommandJournalEntry& entry);
-		// The width of the entry's Result text at the current font (measured once for a finished command).
-		float GetResultWidth(const CommandJournalEntry& entry);
+		// The entry's result as compact JSON (its error for a failure), cut to a line's worth: made once per status.
+		const std::string& GetResultPreview(const CommandJournalEntry& entry);
 	private:
+		// A line of the list: an entry's row, or one of the two below an expanded entry.
+		enum class LineKind : uint8_t
+		{
+			Entry = 0,
+			Parameters,
+			Result
+		};
+		struct Line
+		{
+			uint64_t Entry = 0;
+			LineKind Kind = LineKind::Entry;
+		};
+
 		std::vector<uint64_t> m_Rows;        // Entries passing the filters, oldest first
+		std::vector<Line> m_Lines;           // What the list draws: m_Rows with the detail lines of expanded entries
 		uint64_t m_RowsVersion = UINT64_MAX; // The journal version m_Rows was built from
-		std::string m_RowsKey;               // The filters m_Rows was built with
+		std::string m_RowsKey;               // The filters (and the expansions' version) m_Rows was built with
+		std::unordered_set<uint64_t> m_Expanded; // Entries whose parameters and result show below them
+		uint64_t m_ExpandedVersion = 0;
+		uint64_t m_ScrollToExpanded = 0; // An entry just expanded, whose detail lines scroll into view at the next draw
 		// Compact parameters of entries, by id, made once (parameters never change); pruned with the journal's ring.
 		std::unordered_map<uint64_t, std::string> m_ParameterPreviews;
-		// Widths of finished entries' Result texts, by id, at m_ResultWidthsFontSize with the glyphs of
-		// m_ResultWidthsGlyphs (EditorFonts::GetGlyphGeneration); pruned with the journal's ring.
-		std::unordered_map<uint64_t, float> m_ResultWidths;
-		float m_ResultWidthsFontSize = 0.0f;
-		uint64_t m_ResultWidthsGlyphs = 0;
-		float m_ResultContentWidth = 0.0f; // The widest Result text of m_Rows
+		// Compact results of expanded entries, by id, with the status they were made for.
+		std::unordered_map<uint64_t, std::pair<CommandStatus, std::string>> m_ResultPreviews;
 		uint64_t m_Selected = 0;
 		bool m_ScrollToSelected = false;
 		std::string m_Details;        // The selected entry described as JSON

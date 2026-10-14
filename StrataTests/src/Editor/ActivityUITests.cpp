@@ -225,11 +225,11 @@ TEST_SUITE("Editor.UI.Activity")
 		// The list says which run threw changes away (in the warning color); the first discarded nothing.
 		panel->Select(rerunId);
 		editor.Frames(2);
-		const std::optional<UI::ItemProbe::Item> discarded = UI::ItemProbe::Find(fmt::format("Activity.Result.{}", rerunId));
+		const std::optional<UI::ItemProbe::Item> discarded = UI::ItemProbe::Find(fmt::format("Activity.Summary.{}", rerunId));
 		REQUIRE(discarded.has_value());
 		CHECK(discarded->Text == "discarded changes");
 		CHECK(discarded->Color == UI::ToColorU32(UI::GetThemeColors().Warning));
-		const std::optional<UI::ItemProbe::Item> kept = UI::ItemProbe::Find(fmt::format("Activity.Result.{}", entry));
+		const std::optional<UI::ItemProbe::Item> kept = UI::ItemProbe::Find(fmt::format("Activity.Summary.{}", entry));
 		REQUIRE(kept.has_value());
 		CHECK(kept->Text == "done");
 	}
@@ -305,19 +305,17 @@ TEST_SUITE("Editor.UI.Activity")
 		CHECK_FALSE(activity->Hidden);
 	}
 
-	TEST_CASE("The Activity panel shows results whole in the default layout, and gives parameters what results leave")
+	TEST_CASE("The Activity panel lists each entry's summary whole, and its raw parameters and result below it on demand")
 	{
-		// A maximized window on a 4K display at 150% and at 100%, and a 1600x900 window at 150%, with nothing selected and with
-		// the details pane of the selected entry beside the list: a fixed Result column, and then one of two fifths of the width
-		// parameters and results share, cut "Rename 'Wall' to 'East Wall'" or the error of a failed command, while parameters,
-		// cut in the list anyway, took the rest.
+		// A maximized window on a 4K display at 150% and at 100%, and a 2400x1350 window at 150%, with nothing selected and with
+		// the details pane of the selected entry beside the list.
 		const ImGuiHarness::Specification windows[] = { { ImVec2(3840.0f, 2054.0f), 1.5f }, { ImVec2(3840.0f, 2054.0f), 1.0f },
 			{ ImVec2(2400.0f, 1350.0f), 1.5f } };
 		for (const ImGuiHarness::Specification& window : windows)
 		{
 			CAPTURE(window.DisplaySize.x);
 			CAPTURE(window.ContentScale);
-			HarnessEditor editor(window, WithFeatureProject("ActivityResultWidth"));
+			HarnessEditor editor(window, WithFeatureProject("ActivitySummaries"));
 			editor.Frames(2);
 			REQUIRE(editor.Context().HasProject());
 			editor.Run("editor.showPanel", { { "panel", "Activity" } });
@@ -325,12 +323,6 @@ TEST_SUITE("Editor.UI.Activity")
 			ActivityPanel* panel = editor.Layer->GetPanels().Get<ActivityPanel>(EditorPanels::c_Activity);
 			REQUIRE(panel);
 			const CommandJournal& journal = editor.Context().GetJournal();
-			auto findTable = [&editor]() { return FindTable(editor.FindPanelWindow(EditorPanels::c_Activity), 5); };
-
-			// Only short results ("done"): parameters take most of the shared width.
-			ImGuiTable* table = findTable();
-			REQUIRE(table);
-			CHECK(table->Columns[2].WidthGiven > 2.0f * table->Columns[3].WidthGiven);
 
 			editor.Run("entity.create", { { "name", "Wall" } });
 			const UUID wall = editor.Context().GetEditScene()->FindEntityByName("Wall").GetUUID();
@@ -347,30 +339,48 @@ TEST_SUITE("Editor.UI.Activity")
 				CAPTURE(selected);
 				panel->Select(selected);
 				editor.Frames(3);
-				table = findTable();
+				ImGuiTable* table = FindTable(editor.FindPanelWindow(EditorPanels::c_Activity), 4);
 				REQUIRE(table);
-				const std::optional<UI::ItemProbe::Item> result = UI::ItemProbe::Find(fmt::format("Activity.Result.{}", rename));
-				const std::optional<UI::ItemProbe::Item> error = UI::ItemProbe::Find(fmt::format("Activity.Result.{}", failure));
-				REQUIRE(result);
+				const std::optional<UI::ItemProbe::Item> summary = UI::ItemProbe::Find(fmt::format("Activity.Summary.{}", rename));
+				const std::optional<UI::ItemProbe::Item> error = UI::ItemProbe::Find(fmt::format("Activity.Summary.{}", failure));
+				REQUIRE(summary);
 				REQUIRE(error);
-				CHECK(result->Text == "Rename 'Wall' to 'East Wall'");
-				CHECK_FALSE(error->Text.empty());
-				// The texts end within their column (an item's rectangle is the whole text, whatever the column clips), and the
-				// parameters keep a share of the width.
-				CHECK(result->Max.x <= table->Columns[3].ClipRect.Max.x);
-				// The error is longer: whole wherever the list leaves parameters their least (here, all but the narrowest
-				// window with the details pane beside the list).
-				if (selected == 0 || window.DisplaySize.x > 3000.0f)
-					CHECK(error->Max.x <= table->Columns[3].ClipRect.Max.x);
-				CHECK(table->Columns[2].WidthGiven >= 7.5f * ImGui::GetFontSize());
+				// The undo step with the entity's names, whole in its column; the failure's error, in the error color.
+				CHECK(summary->Text == "Rename 'Wall' to 'East Wall'");
+				CHECK(summary->Max.x <= table->Columns[2].ClipRect.Max.x);
+				CHECK(error->Text == journal.Find(failure)->Error.substr(0, journal.Find(failure)->Error.find('\n')));
+				CHECK(error->Color == UI::ToColorU32(UI::GetThemeColors().Error));
+				// No raw JSON in the list until asked for.
+				CHECK_FALSE(UI::ItemProbe::Find(fmt::format("Activity.Parameters.{}", rename)).has_value());
 			}
+
+			// The arrow shows the parameters and the result below the row; again, hides them.
+			panel->Select(0);
+			editor.Frames(2);
+			REQUIRE(editor.Click(fmt::format("Activity.Expand.{}", rename)));
+			editor.Frames(2);
+			CHECK(panel->IsExpanded(rename));
+			const std::optional<UI::ItemProbe::Item> parameters = UI::ItemProbe::Find(fmt::format("Activity.Parameters.{}", rename));
+			const std::optional<UI::ItemProbe::Item> result = UI::ItemProbe::Find(fmt::format("Activity.ResultJson.{}", rename));
+			REQUIRE(parameters);
+			REQUIRE(result);
+			CHECK(parameters->Text.find("\"East Wall\"") != std::string::npos);
+			CHECK(result->Text.find(wall.ToString()) != std::string::npos);
+			const std::optional<UI::ItemProbe::Item> row = UI::ItemProbe::Find(fmt::format("Activity.Summary.{}", rename));
+			REQUIRE(row);
+			CHECK(parameters->Min.y >= row->Max.y);
+			CHECK(result->Min.y >= parameters->Max.y);
+			REQUIRE(editor.Click(fmt::format("Activity.Expand.{}", rename)));
+			editor.Frames(2);
+			CHECK_FALSE(panel->IsExpanded(rename));
+			CHECK_FALSE(UI::ItemProbe::Find(fmt::format("Activity.Parameters.{}", rename)).has_value());
 		}
 	}
 
-	TEST_CASE("Results in Chinese, Japanese and Korean are measured again once the system's fonts for them are merged")
+	TEST_CASE("Summaries in Chinese, Japanese and Korean show whole once the system's fonts for them are merged")
 	{
-		// An undo step naming an entity in Han characters, listed before the system's fonts were read: measured then, each of
-		// them was ImGui's fallback character, half as wide. The Result column kept that width and cut the text.
+		// An undo step naming an entity in Han characters, listed before the system's fonts were read: each of them was ImGui's
+		// fallback character, half as wide. Once they are merged, the summary is as wide as the name, and whole.
 		HarnessEditor editor({ ImVec2(3840.0f, 2054.0f), 1.0f }, WithFeatureProject("ActivityFallbackFonts"));
 		editor.Frames(2);
 		REQUIRE(editor.Context().HasProject());
@@ -384,7 +394,7 @@ TEST_SUITE("Editor.UI.Activity")
 		editor.Run("editor.showPanel", { { "panel", "Activity" } });
 		editor.Frames(3);
 		const uint64_t rename = FindLatest(editor.Context().GetJournal(), "entity.rename");
-		const std::string resultKey = fmt::format("Activity.Result.{}", rename);
+		const std::string resultKey = fmt::format("Activity.Summary.{}", rename);
 		std::optional<UI::ItemProbe::Item> result = UI::ItemProbe::Find(resultKey);
 		REQUIRE(result);
 		const float widthBefore = result->Max.x - result->Min.x;
@@ -408,7 +418,7 @@ TEST_SUITE("Editor.UI.Activity")
 		REQUIRE(UI::EditorFonts::HasFallback());
 		result = UI::ItemProbe::Find(resultKey);
 		REQUIRE(result);
-		ImGuiTable* table = FindTable(editor.FindPanelWindow(EditorPanels::c_Activity), 5);
+		ImGuiTable* table = FindTable(editor.FindPanelWindow(EditorPanels::c_Activity), 4);
 		REQUIRE(table);
 		// Wider now by what the merged glyphs add to the name (as much as the system's font makes them wider than ImGui's
 		// fallback character), and still whole in its column.
@@ -416,7 +426,7 @@ TEST_SUITE("Editor.UI.Activity")
 		CHECK(growth > 0.0f);
 		// Item rectangles are whole pixels: within one of the measured growth.
 		CHECK(std::abs(result->Max.x - result->Min.x - (widthBefore + growth)) <= 1.0f);
-		CHECK(result->Max.x <= table->Columns[3].ClipRect.Max.x);
+		CHECK(result->Max.x <= table->Columns[2].ClipRect.Max.x);
 	}
 
 	TEST_CASE("A panel asked for while a dialog waits for the person opens behind it, and comes forward after")

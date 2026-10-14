@@ -249,7 +249,8 @@ namespace Strata
 		registry.Register({ "editor.activity",
 			"What people, agents and scripts did in this editor: the activity journal of every command run (the latest 2,000, within 8 MB), oldest "
 			"first after since. Each entry: {id, parent (the command that ran it), time (milliseconds since 1970-01-01 UTC), source (UI, "
-			"Automation, CommandScript or Internal), client (an automation client's name), command, mutating, playing (ran while the scene played), "
+			"Automation, CommandScript or Internal), client (an automation client's name), command, summary (in a few words, as the Activity panel "
+			"lists it: the undo step with the entities' names, the error's first line, the warning, or done), mutating, playing (ran while the scene played), "
 			"runningCopy (changed the playing scene's running copy, which play.stop discarded), parameters (parametersTruncated when too large to keep), status (Pending, Succeeded, Failed), result (a summary) or error {kind, "
 			"message}, warning, durationMs, frames (of a command that took several), entities (that its undo step touched, at most 256) and "
 			"entityCount, undoStep}. Page with since = the returned latest while more is true, or with newest: true (the latest first) with "

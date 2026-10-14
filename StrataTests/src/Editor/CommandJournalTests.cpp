@@ -312,6 +312,10 @@ TEST_SUITE("Editor.Journal")
 		const nlohmann::json described = CommandJournal::Describe(harness.Latest());
 		CHECK(described["status"] == "Failed");
 		CHECK(described["error"]["kind"] == "Failed");
+		// The summary is the error's first line; a query that succeeded is "done".
+		CHECK(described["summary"] == harness.Latest().Error.substr(0, harness.Latest().Error.find('\n')));
+		REQUIRE(harness.Commands.Execute(harness.Context, "scene.info").Success);
+		CHECK(CommandJournal::Describe(harness.Latest())["summary"] == "done");
 	}
 
 	TEST_CASE("Entries name the undo step and the entities a command changed, and commands that run commands")
@@ -319,6 +323,9 @@ TEST_SUITE("Editor.Journal")
 		JournalHarness harness;
 		const std::string a = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "entity.create", { { "name", "A" } })["id"].get<std::string>();
 		CHECK(harness.Latest().UndoStep.find("Create") != std::string::npos);
+		// Summarized by its undo step, with the entity's name.
+		CHECK(CommandJournal::Describe(harness.Latest())["summary"] == harness.Latest().UndoStep);
+		CHECK(harness.Latest().UndoStep.find("'A'") != std::string::npos);
 		REQUIRE(harness.Latest().Entities.size() == 1);
 		CHECK(UUIDToJson(harness.Latest().Entities[0]) == a);
 		CHECK(harness.Latest().Kind == EditorCommandKind::Edit);

@@ -1958,8 +1958,10 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
 
 ### Activity journal
 
-- **Activity journal** (`Editor/CommandJournal`, shown by the Activity panel, `Panels/ActivityPanel`: filters, the selected
-  entry's JSON, Copy as script, Re-run, Undo to here): every command `EditorCommandRegistry::Execute` runs is recorded once
+- **Activity journal** (`Editor/CommandJournal`, shown by the Activity panel, `Panels/ActivityPanel`: a row per entry with
+  its summary, `CommandJournal::Summarize`, the undo step with the entities' names or the error's first line, and an
+  arrow that shows its raw parameters and result in lines below it; filters, the selected entry's JSON, Copy as script,
+  Re-run, Undo to here): every command `EditorCommandRegistry::Execute` runs is recorded once
   with its origin (`CommandOrigin`), parameters, outcome, duration and undo step; a deferred one when its result becomes
   final. Pass `CommandOrigin { CommandSource::UI }` when UI code runs a command (`RunEditorCommand` and the panels do);
   automation passes the client's name, command scripts their source, and code that passes nothing counts as the editor

@@ -626,6 +626,26 @@ namespace Strata
 		return id;
 	}
 
+	std::string CommandJournal::Summarize(const CommandJournalEntry& entry)
+	{
+		if (entry.Status == CommandStatus::Pending)
+			return "running";
+		if (entry.Status == CommandStatus::Failed)
+		{
+			const std::string_view error = entry.Error;
+			return std::string(error.substr(0, error.find('\n')));
+		}
+		if (!entry.Warning.empty())
+			return entry.Warning;
+		// A command that replaced the edited scene with force threw away unsaved changes (kept as recovery data). The result
+		// summary is compact JSON this journal wrote, so the member reads exactly so.
+		if (entry.ResultSummary.find("\"discardedChanges\":true") != std::string::npos)
+			return "discarded changes";
+		if (!entry.UndoStep.empty())
+			return entry.UndoStep;
+		return "done";
+	}
+
 	nlohmann::json CommandJournal::Describe(const CommandJournalEntry& entry)
 	{
 		nlohmann::json entities = nlohmann::json::array();
@@ -637,6 +657,7 @@ namespace Strata
 			{ "source", CommandSourceToString(entry.Source) },
 			{ "command", entry.Command },
 			{ "kind", EditorCommandKindToString(entry.Kind) },
+			{ "summary", Summarize(entry) },
 			{ "mutating", entry.Kind == EditorCommandKind::Edit || entry.RunningCopy },
 			{ "parameters", entry.Parameters },
 			{ "status", CommandStatusToString(entry.Status) },
