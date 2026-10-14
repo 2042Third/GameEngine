@@ -115,6 +115,39 @@ TEST_SUITE("GPU.FeatureTest")
 		}
 		CHECK(hudPixels > 100);
 		CHECK_FALSE(IsHudPixel(GetPixelRGBA8(image, c_Width - 2, c_Height - 2)));
+
+		// The GPU's time per stage of the scene's frames resolves, frames as an application runs them (where the device writes
+		// timestamps).
+		if (Renderer::GetGPUProfiler().IsEnabled())
+		{
+			for (int32_t frame = 0; frame < 2; frame++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				REQUIRE(renderer.Render(*scene, camera));
+				gpu.GetDevice().EndFrame();
+			}
+			renderer.ResolveGPUStats(true);
+			const SceneRendererGPUStats& gpuStats = renderer.GetGPUStats();
+			REQUIRE(gpuStats.HasTimes);
+			CHECK(gpuStats.BusyMs > 0.0f);
+			const RendererGPUStages& stages = RendererGPUStages::Get();
+			const auto stageMs = [&gpuStats](FrameStageID stage)
+			{
+				for (const GPUStageTime& time : gpuStats.StageMs)
+				{
+					if (time.Stage == stage)
+						return time.Milliseconds;
+				}
+				return -1.0f;
+			};
+			CHECK(stageMs(stages.Setup) >= 0.0f);
+			CHECK(stageMs(stages.Shadows) > 0.0f);
+			CHECK(stageMs(stages.Prepass) > 0.0f);
+			CHECK(stageMs(stages.Opaque) > 0.0f);
+			CHECK(stageMs(stages.Post) > 0.0f);
+			CHECK(stageMs(stages.Overlays) >= 0.0f); // The HUD text
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

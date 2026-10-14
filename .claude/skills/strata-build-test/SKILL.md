@@ -74,7 +74,10 @@ ctest --preset macos-debug -LE perf
   `GameRuntime` to a 100,000-entity scene and away again (the longest frame); `Perf.Animation` evaluates 1,000
   cross-fading animators of 60 joints and steps 10,000 `WhenVisible` ones nobody sees; `Perf.Physics.Characters1000Step`
   steps 1,000 character controllers; `PerfGPU.Renderer.Skinned1000` renders 1,000 skinned characters posed every frame
-  and `IdleFrame3kStreamedTextures` times an idle frame of 3,000 settled streamed textures in view;
+  and `IdleFrame3kStreamedTextures` times an idle frame of 3,000 settled streamed textures in view; the renderer's GPU
+  side comes from `Perf/RendererPerfUtils.h` (`Perf::MeasureFrames` runs frames as an application does and collects the
+  GPU's busy time of each, `Perf::MeasureGPU` its median): `Render100kCubesGPU` is the GPU's median busy time of the 100,000
+  cubes and `GPUTimerCost` the GPU profiler's own CPU time per frame (target 0.05 ms);
   `Perf.Editor` adds `FindReferences10k`, `JournalPerCommand`, the recovery journal's write (the frames and the I/O
   threads' time, `RecoveryWriteIOTime100k`) and snapshot, and the longest frame while `scene.open` opens 10,000 prefab
   instances (`SceneOpen10kPrefabInstancesMaxFrame`); `Perf.EditorPanels` and `PerfGPU.Editor` time the Content Browser
