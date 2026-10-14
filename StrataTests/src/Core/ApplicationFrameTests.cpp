@@ -62,8 +62,6 @@ TEST_SUITE("Core.Application")
 		ApplicationSpecification specification;
 		specification.Name = "FrameWorkTest";
 		specification.Headless = true;
-		specification.EnableRenderer = false;
-		specification.EnableAudio = false;
 		specification.Jobs.WorkerThreadCount = 1;
 		specification.Jobs.IOThreadCount = 1;
 		// Frames start 100 ms apart, twenty times their work: the pacer's wait must not count.
@@ -96,8 +94,6 @@ TEST_SUITE("Core.Application")
 		ApplicationSpecification specification;
 		specification.Name = "FrameProfileTest";
 		specification.Headless = true;
-		specification.EnableRenderer = false;
-		specification.EnableAudio = false;
 		specification.Jobs.WorkerThreadCount = 1;
 		specification.Jobs.IOThreadCount = 1;
 		specification.MaxFrameRate = 50;

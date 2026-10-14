@@ -1021,6 +1021,10 @@ static std::optional<int> RunAsFakeCMake(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
+	// A console program, also in its helper modes: what goes wrong is printed, never shown in a dialog (applications the
+	// tests make in the process report failures with Application::ReportFatalError, which nobody would dismiss).
+	Strata::Platform::ConnectStandardStreams(Strata::ProgramRun::Console);
+
 	constexpr std::string_view helperPrefix = "--strata-test-helper=";
 	const bool isHelper = argc > 1 && std::string_view(argv[1]).substr(0, helperPrefix.size()) == helperPrefix;
 	const std::string_view helperMode = isHelper ? std::string_view(argv[1]).substr(helperPrefix.size()) : std::string_view();

@@ -246,6 +246,10 @@ The threading model, frame loop and pipelines these rules protect are described 
   (`SceneSystemDescriptor::After`/`Before`) and are made with `MakeSceneSystemDescriptor<T>` (overrides public). Scenes
   keep the components of modules a build lacks (`UnknownComponentsComponent`), also through play mode, prefab snapshots,
   duplication and undo.
+- **Engine modules:** a service a program runs for its whole life (device, audio, UI, project) is an `EngineModule`
+  (`Core/EngineModule.h`) in its module's folder, listed by the programs that run it (`ApplicationSpecification::Modules`);
+  `Application` never calls module code, and other code finds a module with `GetModules().Find<T>()` (null when absent)
+  ([details](Docs/DeveloperGuide.md#architecture-rules)).
 - **Scene caches and the transform contract:** `Scene` caches world transforms, the hierarchy, activity and the name and
   tag indexes, recomputing only what changed. So **code that writes `TransformComponent` fields directly must signal the
   change**: `Entity::MarkModified<TransformComponent>()` or `registry.patch` (`ComponentAccess`,
@@ -259,7 +263,7 @@ The threading model, frame loop and pipelines these rules protect are described 
   `Scene::GetSiblingIndex`, remove many entities with one `DestroyEntities` call, and stay within `Scene::c_MaxEntities`
   (1,048,575) live entities.
 
-The threading, NVRHI, layer, registration and transform rules in full:
+The threading, NVRHI, layer, registration, engine module and transform rules in full:
 [Architecture rules](Docs/DeveloperGuide.md#architecture-rules).
 
 ## Asset pipeline

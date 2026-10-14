@@ -93,8 +93,11 @@ What may depend on what:
   `Core/CrashGuard.h`, `Core/Process.h`, `Core/DynamicLibrary.h`, `Core/FileChangeNotifier.h` and
   `Renderer/GraphicsDevice.h`. Engine code outside `src/Platform/` includes no OS headers.
 
-Applications built on `Application` (editor, runtime) get `main` from `Core/EntryPoint.h`, which calls the client's
-`CreateApplication`, runs it and returns its exit code. `StrataCLI` has its own `main` and no `Application`. On Windows
+Applications built on `Application` (editor, runtime) get `main` from `Engine/EntryPoint.h`, which calls the program's
+`CreateApplication` (`Engine/ApplicationLaunch.h`), runs the composition root with the options it returned
+(`ApplicationLaunch::Registration`), makes the application (`ApplicationLaunch::Create`), runs it and returns its exit
+code (see [Composition root and registries](#composition-root-and-registries)). `StrataCLI` has its own `main` and no
+`Application`. On Windows
 the editor and the runtime (and so every exported game) are GUI-subsystem programs, so that no console window opens with
 them; they keep `main` (`/ENTRY:mainCRTStartup`, `StrataEditor/CMakeLists.txt`, `StrataRuntime/CMakeLists.txt`). Before
 anything prints or the log opens its console sink, `main` asks the client what kind of run the command line is
@@ -113,8 +116,9 @@ process. Failures that end a program before it could do anything go through `App
 critical and, where nobody would read that (`Platform::ShouldShowErrorDialogs`: an Interactive run whose stderr is no
 terminal, pipe or file), shown in a native dialog with the advice and the log's path (`Platform::ShowErrorDialog`:
 MessageBoxW on Windows, osascript on macOS, zenity or kdialog on Linux, without new dependencies; nothing else is left
-when none can show). The Application constructor reports a missing graphics device this way (after closing its window),
-with the driver advice of `GraphicsDevice::GetDriverInstallAdvice`; the runtime reports a missing manifest and a game
+when none can show). The Application constructor reports an engine module that could not start this way, once the
+modules that started ended and its window closed (`EngineModule::GetStartFailure`): the Graphics module says that no
+usable graphics device was found, with the driver advice of `GraphicsDevice::GetDriverInstallAdvice`; the runtime reports a missing manifest and a game
 that cannot start. Console runs never show dialogs, so tools and servers are never stopped by one;
 `STRATA_ERROR_DIALOG_FILE` makes `ReportFatalError` write the dialog's title and text to that file instead (tests).
 `EndToEnd.StandardStreams` checks pipes, the terminal (through a helper with a hidden console, `Tests::RunInConsole`,
@@ -124,8 +128,10 @@ subsystems.
 
 ## Engine modules
 
-**Core** (`Core/`). `Application` owns the window, the graphics device, the layer stack and the main-thread queue and
-runs the frame loop; `Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
+**Core** (`Core/`). `Application` owns the window, the layer stack, the program's engine modules
+(`Core/EngineModule.h`: the graphics device, audio, ImGui, the project; see
+[Application and frame loop](#application-and-frame-loop)) and the main-thread queue and runs the frame loop;
+`Layer`/`LayerStack` hold the client's behavior; `Window` is implemented by
 `Platform/GLFW/GLFWWindow` (`SetIcon` takes RGBA images of several sizes; macOS and Wayland windows have no icon of
 their own and ignore it). Services: `Log` (spdlog; `LogBuffer` backs the editor console and `log.read`; the console and
 the log file are written by the `BackgroundLogSink`'s thread, so a log call waits for them only for warnings and errors,
@@ -378,20 +384,21 @@ layer and of the layers it lists, which are always lower ones:
 | --- | --- | --- |
 | Core | `Core/**` except the application shell, `Math/**`, `stpch.h`, `Platform/Windows`, `Platform/Posix` (not the sockets) | nothing |
 | Input | `Events/**`, `Input/**` | Core |
-| App | `Core/Application.*`, `Layer.*`, `LayerStack.*`, `Window.h`, `EntryPoint.h`, `Platform/GLFW/**`, `Platform/Vulkan/VulkanLoader.*` | Core, Input |
+| App | `Core/Application.*`, `EngineModule.*`, `Layer.*`, `LayerStack.*`, `Window.h`, `Platform/GLFW/**`, `Platform/Vulkan/VulkanLoader.*` | Core, Input |
 | Asset | `Asset/**` except the pipeline files | Core (and no NVRHI or Vulkan header) |
 | Reflection | `Reflection/**` | Core, Asset |
 | Scene | `Scene/**` | Core, Asset, Reflection |
 | Renderer | `Renderer/**`, `Platform/Vulkan/**` | Core, Input, App, Asset, Reflection, Scene |
-| Physics, Audio | `Physics/**`, `Audio/**` | Core, Asset, Reflection, Scene |
+| Physics | `Physics/**` | Core, Asset, Reflection, Scene |
+| Audio | `Audio/**` | Core, App (its engine module), Asset, Reflection, Scene |
 | Animation | `Animation/**` | Core, Asset, Reflection, Scene |
 | Scripting | `Scripting/**` | Core, Input, Asset, Reflection, Scene |
-| Project | `Project/**` | Core, Asset, Reflection |
+| Project | `Project/**` | Core, App (its engine module), Asset, Reflection |
 | Runtime | `Runtime/**` | Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Scripting, Project |
 | Network | `Network/**`, `Platform/*/*Socket.cpp` | Core |
 | ImGui | `ImGui/**` | Core, Input, App, Renderer |
 | AssetPipeline | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `TextureCooker.*`, `BC7Encoder.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio, Animation (the glTF importer writes skeletons and clips) |
-| Engine | `Engine/**`, `Strata.h` | everything but AssetPipeline (shipped games link the composition root too; see below) |
+| Engine | `Engine/**` | the layers a game contains: Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Animation, Scripting (shipped games link the composition root and the entry point too; see below) |
 
 `Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in `StrataTests.Core`) reads every C, C++ and
 Objective-C(++) source and header under `Strata/src` (`STRATA_SOURCE_DIR`; `.h`, `.hpp`, `.inl`, `.c`, `.cpp`, `.m`, `.mm`,
@@ -403,7 +410,9 @@ and third-party headers match no layer and are checked only against the prefixes
 layers and fails on every file that is in no layer or in several, on every forbidden include that is not in
 `StrataTests/Architecture/LayeringAllowlist.txt`, and on every allowlist line that matches nothing. Each allowlist line
 names the include, the roadmap workstream that removes it and the reason; the list holds exactly `MaxAllowlistEntries`
-lines (8: the application shell wiring services and physics reading renderer meshes), so it can only shrink. Scripting
+lines (1: physics reading renderer meshes), so it can only shrink. The application shell, which used to start the
+renderer, audio and ImGui and release the project itself, runs engine modules instead (`Core/EngineModule.h`, in App:
+Audio and Project implement it, a downward dependency their `Notes` record). Scripting
 and Audio, which used to include the physics and audio systems, reach them through scene services (see
 [Scene services](#scene-services)); the asset layer, which used to record uploads on the renderer's command list, records
 them into the `AssetUploadContext` the renderer provides through the engine service `IAssetGraphics`
@@ -433,13 +442,14 @@ options.Extra              registrations of games, tools and tests
 ComponentRegistry::Freeze
 ```
 
-- **Callers.** The `Application` constructor calls it first thing, without options, so every application is covered;
-  a client that needs options calls it earlier. The editor does, in `CreateApplication`, to hand in the asset pipeline
-  (`ModuleRegistrationOptions::AssetPipeline = RegisterAssetPipeline`); `StrataTests` does in `main`, before doctest
-  runs and the helper modes start. StrataRuntime keeps the constructor's call: games read cooked packs, and since the
-  composition root never names the importers (the Engine layer may not include AssetPipeline), the linker leaves them
-  out of the runtime. A second call is a no-op (with an error when it carries an asset pipeline or `Extra`
-  registrations, which would be lost).
+- **Callers.** The entry point calls it (`Engine/EntryPoint.h`), after the program's `CreateApplication` returned its
+  `ApplicationLaunch` and before `ApplicationLaunch::Create` makes the application, with the options the program put in
+  `ApplicationLaunch::Registration`: the editor hands in the asset pipeline
+  (`ModuleRegistrationOptions::AssetPipeline = RegisterAssetPipeline`), StrataRuntime nothing (games read cooked packs,
+  and since the composition root never names the importers, the Engine layer may not include AssetPipeline, the linker
+  leaves them out of the runtime). `StrataTests` calls it in `main`, before doctest runs and the helper modes start.
+  `Application` never calls it: a program that forgot it stops at the first registry it uses (below). A second call is
+  a no-op (with an error when it carries an asset pipeline or `Extra` registrations, which would be lost).
 - **Use before registration** fails `ST_CORE_VERIFY` with a message naming `Engine::RegisterBuiltinModules`, in every
   registry: a program that forgot the composition root stops at its first lookup instead of running without
   components or loaders. The importer registry stays closed in programs without the asset pipeline, so a game that
@@ -464,37 +474,97 @@ ComponentRegistry::Freeze
 
 ## Application and frame loop
 
-Startup (`Application::Application`, `Core/Application.cpp`): `Engine::RegisterBuiltinModules` (a no-op when the client
-registered the modules already), opt the process out of execution-speed power throttling
+`Application` (`Core/Application.cpp`) creates the window and runs the loop; every engine service a program uses runs
+as an **engine module** (`Core/EngineModule.h`, App layer) that the program lists in
+`ApplicationSpecification::Modules` (factories). `Application` includes no module's header and calls no module's code:
+it calls the modules' hooks.
+
+- **The interface.** `EngineModule`: `GetName`, `GetDependencies` (`EngineModuleDependency { Name, Required }`; a
+  dependency that is not required only orders, if the module is there), `OnInit(EngineContext&)` (the application, its
+  window or null, the modules), `GetStartFailure` (what a person is told when `OnInit` failed), `OnBeginFrame`
+  (returns `EngineFrameAction::Continue`, `Skip` or `Close`), `OnUpdate`, `OnRenderUI`, `OnEndFrame`, `OnEvent`,
+  `OnStop`, `OnRelease`, `OnShutdown`. The frame hooks get an `EngineFrame` (the timestep, `WaitSeconds`, the layer
+  stack).
+- **The registry.** `EngineModuleRegistry` (same files; `Application::GetModules`) makes the modules and sorts them
+  topologically, keeping the program's listing order where the dependencies leave a choice (Kahn's algorithm taking the
+  first ready module). It refuses to start a program, naming the modules, for a factory that makes none, two modules of
+  one name, a missing required dependency or a cycle (the message leaves out modules that only wait for the cycle).
+  `Find<T>()` finds a module by `T::c_Name` (no RTTI); `GetAll()` lists them in order.
+- **The built-in modules**, each in its own module's folder:
+
+  | Module | `c_Name`, specification | What it does |
+  | --- | --- | --- |
+  | `Renderer/GraphicsModule` | `"Graphics"`, `GraphicsModuleSpecification { Validation, TransferQueueUploads }` | The device (a swapchain only with a window), `Renderer::Init`/`Shutdown`, the frame's begin and present, back-buffer captures (`RequestBackBufferCapture`), `GetDevice` |
+  | `Audio/AudioModule` | `"Audio"`, `AudioModuleSpecification { NullDevice }` | `AudioEngine::Init` (a failure is logged, "Audio is unavailable; continuing without sound", and the program runs on), the null device's mix, `AudioEngine::Update`, `Shutdown` |
+  | `ImGui/ImGuiModule` | `"ImGui"`, requires Graphics, `ImGuiModuleSpecification { LayoutFile }` | Pushes the `ImGuiLayer` overlay (`GetLayer`: theme, fonts, UI scale) and draws the UI; fails without a window |
+  | `Project/ProjectModule` | `"Project"` | Lets the active asset manager and project go (`AssetManager::SetActive(nullptr)`, `Project::SetActive(nullptr)`) |
+
+- **The programs' lists:**
+
+  | Program | Modules |
+  | --- | --- |
+  | StrataEditor, windowed | Graphics, Audio, ImGui (`--layout` or the user's layout file), Project |
+  | StrataEditor `--headless` | Graphics (offscreen), Audio (null device), Project |
+  | StrataEditor `--no-gpu` | Audio (null device), Project |
+  | StrataRuntime, windowed | Graphics, Audio, Project: no ImGui |
+  | StrataRuntime `--headless` | Audio (null device), Project: no window, no Graphics |
+  | `Core.Application` tests | none, or Audio (null device) |
+
+  Code that needs a module finds it: the editor's `ApplicationEditorHost` reaches the device, the UI scale and
+  screenshots through `GetModules().Find<GraphicsModule>()` and `Find<ImGuiModule>()`; without the Graphics module a
+  screenshot is answered with an empty image on the next frame (`SubmitToMainThread`).
+- **Job threads per program.** Each program sets its `JobSystemSpecification`: StrataRuntime runs the default workers,
+  2 I/O and 2 background threads (a game's only background work is `Scene::ReleaseInBackground`); the editor and the
+  tests keep the defaults, whose background pool imports and compresses.
+
+Startup (`Application::Application`): opt the process out of execution-speed power throttling
 (`Platform::DisableExecutionSpeedThrottling`: Windows 11 otherwise runs processes whose windows are in the background or
 covered at a lower quality of service, on hybrid processors on the efficiency cores, where an editor frame takes 1.3 to
 1.9 times as long; the test runner does the same, so perf suites measure what applications get), set the working
-directory, `JobSystem::Init`, create
-the window unless headless, `Input::Reset`, create the graphics device, swapchain and `Renderer` when
-`EnableRenderer` is set (no usable device: exit code 1), `AudioEngine::Init` (the null device when headless), and push
-the `ImGuiLayer` overlay. The client's constructor then pushes its layer (`EditorLayer`, `RuntimeLayer`).
+directory, `JobSystem::Init`, create the window unless headless, `Input::Reset`, then make, order and start the modules
+(`OnInit` in dependency order). A module whose `OnInit` fails is logged as "Engine module '<name>' could not start; the
+application cannot run"; the modules that started get `OnRelease`, the job system stops, they get `OnShutdown`, the
+window closes, then `Application::ReportFatalError` tells the person what the module described (`GetStartFailure`), and
+the application does not run (exit code 1). The program's constructor then pushes its layer (`EditorLayer`,
+`RuntimeLayer`) when `IsRunning()`.
 
-One frame (`Application::Run` and `RunFrame`):
+The hooks, in the order of the program's frame:
+
+| Hook | Order | When, and what the built-in modules do there |
+| --- | --- | --- |
+| `OnInit` | dependency | Application constructor, after `JobSystem::Init`, the window and `Input` |
+| `OnEvent` | dependency | Each event, after the application's own bookkeeping (minimized), **before** the layers. A handled event stops there. |
+| `OnBeginFrame` | dependency | After the Input stage. Graphics: vsync, `GraphicsDevice::BeginFrame` (its wait added to `frame.WaitSeconds`), `Renderer::BeginFrame`. `Skip`: the frame is not counted and the loop waits 16 ms; `Close`: device lost. The modules after one that skipped or closed get no `OnBeginFrame`, and no module the frame's other hooks. |
+| `OnUpdate` | dependency | After the layers' `OnUpdate`. Audio: `AdvanceNullDevice` on the null device, `AudioEngine::Update`. |
+| `OnRenderUI` | dependency | ImGui: the `Editor.UI` stage, `ImGuiLayer::Begin`, every layer's `OnImGuiRender`, `Renderer::PrepareBackBuffer`, `End(backBuffer)`. The frame's work time ends after this hook. |
+| `OnEndFrame` | **reverse** | Rendered frames only. Graphics, last because everything depends on it: `PrepareBackBuffer`, back-buffer captures, the `Present` stage, `EndFrame`. |
+| `OnStop` | reverse | Once, when `Run`'s loop ends. Graphics answers outstanding captures with an empty image and waits for the device to idle. |
+| `OnRelease` | reverse | In `~Application`, after the layers are cleared. Project: `AssetManager::SetActive(nullptr)`, `Project::SetActive(nullptr)`. |
+| `OnShutdown` | reverse | After the main-thread queue, `JobSystem::Shutdown` and the queue again. Audio: `AudioEngine::Shutdown`; Graphics: `Renderer::Shutdown`, then the device. |
+
+Modules that never started get no hook after `OnInit`. One frame (`Application::Run` and `RunFrame`) with the editor's
+and the runtime's modules:
 
 ```text
  1  ExecuteMainThreadQueue           functions queued with Application::SubmitToMainThread
  2  Input::BeginFrame                new input frame; queued simulated input applies
- 3  Window::ProcessEvents            glfwPollEvents: Input::Process*, events through the layers
+ 3  Window::ProcessEvents            glfwPollEvents: Input::Process*, events through the modules and the layers
                                      window minimized: sleep 16 ms, frame skipped (not counted)
- 4  GraphicsDevice::BeginFrame       cannot begin (e.g. mid-resize): sleep 16 ms, skipped; device lost: close
-    Renderer::BeginFrame
+ 4  EngineModule::OnBeginFrame       Graphics: vsync, GraphicsDevice::BeginFrame (cannot begin, e.g. mid-resize: Skip,
+                                     sleep 16 ms; device lost: Close), Renderer::BeginFrame
  5  Layer::OnUpdate(timestep)        every layer in stack order: the editor's or the game's work, below
- 6  AudioEngine::AdvanceNullDevice   only while mixing without an output device
-    AudioEngine::Update              reclaims finished one-shots
- 7  RenderImGui                      ImGuiLayer::Begin, every Layer::OnImGuiRender, Renderer::PrepareBackBuffer (the GPU
-                                     waits for the swapchain image from here on), ImGuiLayer::End
- 8  Renderer::PrepareBackBuffer (frames without UI), back-buffer captures, GraphicsDevice::EndFrame (present)
+ 6  EngineModule::OnUpdate           Audio: AudioEngine::AdvanceNullDevice (only while mixing without an output device),
+                                     AudioEngine::Update (reclaims finished one-shots)
+ 7  EngineModule::OnRenderUI         ImGui: ImGuiLayer::Begin, every Layer::OnImGuiRender, Renderer::PrepareBackBuffer (the
+                                     GPU waits for the swapchain image from here on), ImGuiLayer::End
+ 8  EngineModule::OnEndFrame         reverse; Graphics: Renderer::PrepareBackBuffer (frames without UI), back-buffer
+                                     captures, GraphicsDevice::EndFrame (present)
     frame counted; MaxFrames (--frames) closes the application; the frame pacer waits (frame rate cap)
 ```
 
-`Application::GetLastFrameWorkTime` is the CPU time of the last frame: steps 1 to 7 without the wait inside
-`GraphicsDevice::BeginFrame` (for the GPU's earlier frames and the swapchain image), so it measures what a frame costs
-whatever the display's refresh rate. The editor records it every frame (`EditorContext::RecordFrameTime`) and
+`Application::GetLastFrameWorkTime` is the CPU time of the last frame: steps 1 to 7 without what the modules report
+waiting for (`EngineFrame::WaitSeconds`: the wait inside `GraphicsDevice::BeginFrame` for the GPU's earlier frames and
+the swapchain image), so it measures what a frame costs whatever the display's refresh rate. The editor records it every frame (`EditorContext::RecordFrameTime`) and
 `editor.wait` reports statistics of the frames it waited through (`frameTimes`), which is how command scripts and the
 `PerfGPU.Editor` perf test measure editor frames.
 
@@ -526,11 +596,13 @@ there through `ViewportRenderer`. Last, idle throttling picks the frame rate cap
 The runtime's layer update (`RuntimeLayer::OnUpdate`, `StrataRuntime/src/RuntimeApplication.cpp`):
 `GameRuntime::Update` (asset finalization and eviction, `Scene::OnUpdateRuntime`, script-fault check, scene requests),
 then the headless script-crash and quit checks, then `GameRenderer::Render` into the back buffer (windowed only) and the
-`--screenshot` request on the last frame. The runtime has no ImGui.
+`--screenshot` request on the last frame. The runtime runs no ImGui: its programs list no ImGui module.
 
-Shutdown (`Application::~Application`): layers detach and are deleted top-down, the active asset manager and project
-are released, the main-thread queue drains, `JobSystem::Shutdown` runs the queued jobs and joins the threads, then
-audio, the renderer, the device and the window go.
+Shutdown: when `Run`'s loop ends, the program's `OnShutdown` and the modules' `OnStop` run (reverse). In
+`Application::~Application` the layers detach and are deleted top-down, the modules get `OnRelease` (reverse: the
+Project module releases the active asset manager and project), the main-thread queue drains, `JobSystem::Shutdown` runs
+the queued jobs and joins the threads, the queue drains again, the modules get `OnShutdown` (reverse: audio, then the
+renderer and the device) and are destroyed, and the window goes.
 
 ### Frame profiler
 
@@ -553,8 +625,8 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
-| `Editor.UI` | `Application::RenderImGui`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
-| `Present` | `GraphicsDevice::EndFrame`, after the work time is measured (outside the frame time) |
+| `Editor.UI` | `ImGuiModule::OnRenderUI`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
+| `Present` | `GraphicsDevice::EndFrame` (`GraphicsModule::OnEndFrame`), after the work time is measured (outside the frame time) |
 
 Modules and games register more (`RegisterStage`, up to 64); a scene system names its stage in its descriptor. Each frame
 also records how busy the job system's worker, I/O and background threads were since the previous frame

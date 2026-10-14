@@ -171,8 +171,8 @@ on an Apple M2 Max with MoltenVK 1.4.2 (Homebrew), where every test of the `gpu`
 
 **Windows subsystem:** `StrataEditor` and `StrataRuntime` (and so every exported game) are GUI-subsystem programs on
 Windows, so that no console window opens with them; `StrataCLI` and `StrataTests` are console programs. Their `main`
-(`Core/EntryPoint.h`) first asks the client what kind of run its command line is (`GetProgramRun`, next to
-`CreateApplication`: `ProgramRun` in `Core/Platform.h`) and calls `Platform::ConnectStandardStreams` with it: pipes and
+(`Engine/EntryPoint.h`) first asks the program what kind of run its command line is (`GetProgramRun`, next to
+`CreateApplication` in `Engine/ApplicationLaunch.h`: `ProgramRun` in `Core/Platform.h`) and calls `Platform::ConnectStandardStreams` with it: pipes and
 files their callers pass are kept, so tests and tools read their output and exit codes as before. A *Console* run
 (output is the point: `--version`, `--help`, usage errors, headless and scripted runs: the editor's `--headless`,
 `--no-gpu`, `--frames`, `--commands`, `--quit-after-commands`, the runtime's `--headless`, `--frames` and option
@@ -510,7 +510,7 @@ exercised by it.
 
 ## Architecture rules
 
-AGENTS.md, [Architecture rules](../AGENTS.md#architecture-rules), states every architecture rule, five of them in
+AGENTS.md, [Architecture rules](../AGENTS.md#architecture-rules), states every architecture rule, six of them in
 short. Their full wording:
 
 - **Threading:** the main thread owns the scene, input, scripts and rendering submission. Background work goes through
@@ -547,11 +547,11 @@ short. Their full wording:
   built-in asset objects, scene systems), never through lower layers calling functions of higher ones. Each module
   has one registration function in its own folder (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`);
   only `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`, the composition root) calls them, once per
-  process, before anything reads a registry (the `Application` constructor; `StrataTests`' `main`). A new module adds
-  its function there, in dependency order. Tooling stays out of the composition root, which shipped games link too: the
-  asset pipeline's `RegisterAssetPipeline` is handed in by the programs that import assets
-  (`ModuleRegistrationOptions::AssetPipeline`: the editor's `CreateApplication`, `StrataTests`' `main`), so the
-  importers are not linked into StrataRuntime. Components can only be registered while the composition root runs (the
+  process, before anything reads a registry (the entry point, `Engine/EntryPoint.h`, before it makes the application;
+  `StrataTests`' `main`). A new module adds its function there, in dependency order. Tooling stays out of the
+  composition root, which shipped games link too: the asset pipeline's `RegisterAssetPipeline` is handed in by the
+  programs that import assets (`ModuleRegistrationOptions::AssetPipeline`: the editor's `ApplicationLaunch::Registration`,
+  `StrataTests`' `main`), so the importers are not linked into StrataRuntime. Components can only be registered while the composition root runs (the
   registry freezes at its end): games and tests pass theirs in `ModuleRegistrationOptions::Extra`. Scene systems
   declare their update order (`SceneSystemDescriptor::After`/`Before`) instead of relying on registration order, and
   are made with `MakeSceneSystemDescriptor<T>` so that `Scene::GetSystem<T>` finds them and frames call only the
@@ -559,6 +559,14 @@ short. Their full wording:
   Scenes keep the components of modules a build lacks: they load with one warning per component name into
   `UnknownComponentsComponent` and are saved back unchanged (also through play mode, prefab snapshots, duplication and
   undo). Details: Docs/Architecture.md, "Composition root and registries" and "Scene runtime lifecycle".
+- **Engine modules:** a service a program runs for its whole life (a device, audio, a UI, the project) is an
+  `EngineModule` (`Core/EngineModule.h`) in its own module's folder (`<Module>/<Module>Module.{h,cpp}`, with
+  `static constexpr std::string_view c_Name`, a specification struct and a `Factory`), listed by the programs that run
+  it (`ApplicationSpecification::Modules`). `Application` never names or calls module code: it only runs the hooks
+  (Docs/Architecture.md, "Application and frame loop"). A module declares what it starts after (`GetDependencies`;
+  `Required = false` only orders), cleans up its own failed `OnInit` and describes the failure for a person
+  (`GetStartFailure`), reports what it waits for in `EngineFrame::WaitSeconds`, and is reached by other code through
+  `Application::GetModules().Find<T>()`, which is null when the program does not run it.
 - **Scene caches and the transform contract:** per-frame scene cost follows what changed. `Scene` mirrors the hierarchy
   as EnTT handle links (`HierarchyComponent`, `Scene/SceneHierarchy.h`), recomputes cached world transforms
   (`WorldTransformComponent`) only below entities whose transform changed, keeps `ActiveInHierarchy` exact as activity
@@ -1002,11 +1010,12 @@ Building and loading scripts:
 decoded or streamed; `AudioClipAsset` is its asset), `AudioSource` (a voice with volume, pitch, looping and 3D settings)
 and `AudioSystem`, the built-in "Audio" scene system.
 
-- **Initialization:** `Application` initializes the `AudioEngine` (`ApplicationSpecification::EnableAudio`, on by default)
-  and shuts it down after the layers, so editor play mode and exported games produce sound without further setup.
-  Headless runs (`--headless`, the editor's `--no-gpu`) and machines without an output device mix without a device (the
-  null device); the application advances it by the frame time (`AudioEngine::AdvanceNullDevice`), so sounds still
-  progress and end. Tests initialize the null device themselves and pull the mix with `AudioEngine::ReadFrames` to
+- **Initialization:** the Audio engine module (`Audio/AudioModule`, which the editor and the runtime list) initializes
+  the `AudioEngine` and shuts it down after the layers and the job system, so editor play mode and exported games
+  produce sound without further setup. Headless runs (`--headless`, the editor's `--no-gpu`) pass
+  `AudioModuleSpecification::NullDevice`, and machines without an output device fall back to it: they mix without a
+  device, which the module advances by the frame time (`AudioEngine::AdvanceNullDevice`), so sounds still progress and
+  end. Tests initialize the null device themselves and pull the mix with `AudioEngine::ReadFrames` to
   measure levels (`StrataTests/src/Audio/AudioTestUtils.h`).
 - **Scenes:** `AudioSystem` runs in Play mode only (not in Simulate mode) and updates in `OnLateUpdate`, after scripts and
   physics. Every active entity with an `AudioSourceComponent` owns an `AudioSource`, released when the component, the

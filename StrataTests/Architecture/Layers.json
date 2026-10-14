@@ -1,13 +1,13 @@
 {
 	"Description": "The engine's layers, bottom up. Every file under SourceRoot belongs to exactly one layer (Paths minus Exclude, globs relative to SourceRoot) and may include only files of its own layer and of the layers in MayInclude, which must be listed below it, and none of the third-party headers whose path starts with a prefix of its MayNotIncludeExternal. Architecture.Layering (StrataTests/src/Architecture/LayeringTests.cpp) enforces it; LayeringAllowlist.txt lists the known exceptions, each with the workstream that removes it, and holds exactly MaxAllowlistEntries lines (lower it when you remove one). Widen a MayInclude only for a proven downward dependency, with the reason in the layer's Notes; never to legalize a sideways or upward include. The paths stand in for the planned moves of files between libraries (wave 4, engine-modules).",
 	"SourceRoot": "Strata/src",
-	"MaxAllowlistEntries": 8,
+	"MaxAllowlistEntries": 1,
 	"Layers": [
 		{
 			"Name": "Core",
 			"Notes": "Platform services, logging, jobs, files, processes and math. The OS implementations of Core interfaces live in Platform/<OS>; the socket implementations belong to Network.",
 			"Paths": [ "stpch.h", "Strata/Core/**", "Strata/Math/**", "Platform/Windows/**", "Platform/Posix/**", "Platform/MacOS/**" ],
-			"Exclude": [ "Strata/Core/Application.*", "Strata/Core/Layer.*", "Strata/Core/LayerStack.*", "Strata/Core/Window.h", "Strata/Core/EntryPoint.h", "Platform/*/*Socket.cpp" ],
+			"Exclude": [ "Strata/Core/Application.*", "Strata/Core/EngineModule.*", "Strata/Core/Layer.*", "Strata/Core/LayerStack.*", "Strata/Core/Window.h", "Platform/*/*Socket.cpp" ],
 			"MayInclude": []
 		},
 		{
@@ -18,8 +18,8 @@
 		},
 		{
 			"Name": "App",
-			"Notes": "The application shell: Application, layers, the window and its GLFW implementation. VulkanLoader belongs here, not to Renderer: it loads the system's Vulkan loader for the window system (GLFW must create surfaces through the same loader as the graphics device) and depends only on Core.",
-			"Paths": [ "Strata/Core/Application.*", "Strata/Core/Layer.*", "Strata/Core/LayerStack.*", "Strata/Core/Window.h", "Strata/Core/EntryPoint.h", "Platform/GLFW/**", "Platform/Vulkan/VulkanLoader.*" ],
+			"Notes": "The application shell: Application, layers, the EngineModule interface the modules implement (Application runs their hooks and names none of them), the window and its GLFW implementation. VulkanLoader belongs here, not to Renderer: it loads the system's Vulkan loader for the window system (GLFW must create surfaces through the same loader as the graphics device) and depends only on Core.",
+			"Paths": [ "Strata/Core/Application.*", "Strata/Core/EngineModule.*", "Strata/Core/Layer.*", "Strata/Core/LayerStack.*", "Strata/Core/Window.h", "Platform/GLFW/**", "Platform/Vulkan/VulkanLoader.*" ],
 			"MayInclude": [ "Core", "Input" ]
 		},
 		{
@@ -53,8 +53,9 @@
 		},
 		{
 			"Name": "Audio",
+			"Notes": "App is a proven downward dependency: the Audio module implements its EngineModule (Core/EngineModule.h), the interface App defines for the services a program runs; App includes no Audio header.",
 			"Paths": [ "Strata/Audio/**" ],
-			"MayInclude": [ "Core", "Asset", "Reflection", "Scene" ]
+			"MayInclude": [ "Core", "App", "Asset", "Reflection", "Scene" ]
 		},
 		{
 			"Name": "Animation",
@@ -69,8 +70,9 @@
 		},
 		{
 			"Name": "Project",
+			"Notes": "App is a proven downward dependency: the Project module implements its EngineModule (Core/EngineModule.h), the interface App defines for the services a program runs; App includes no Project header.",
 			"Paths": [ "Strata/Project/**" ],
-			"MayInclude": [ "Core", "Asset", "Reflection" ]
+			"MayInclude": [ "Core", "App", "Asset", "Reflection" ]
 		},
 		{
 			"Name": "Runtime",
@@ -97,9 +99,9 @@
 		},
 		{
 			"Name": "Engine",
-			"Notes": "The composition root (Engine/BuiltinModules) and the umbrella header applications include. Both are part of every program, shipped games included, so they never name the asset pipeline: tools hand its registration in (ModuleRegistrationOptions::AssetPipeline), and the importers stay out of games.",
-			"Paths": [ "Strata/Engine/**", "Strata.h" ],
-			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Animation", "Scripting", "Project", "Runtime", "Network", "ImGui" ]
+			"Notes": "The composition root (Engine/BuiltinModules) and the entry point that calls it (Engine/EntryPoint.h, ApplicationLaunch.h). Both are part of every program, shipped games included, so they name only the modules a game contains: tools hand the asset pipeline in (ModuleRegistrationOptions::AssetPipeline), and programs list their engine modules (ApplicationSpecification::Modules), so the importers, the network and ImGui stay out of games.",
+			"Paths": [ "Strata/Engine/**" ],
+			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Animation", "Scripting" ]
 		}
 	]
 }

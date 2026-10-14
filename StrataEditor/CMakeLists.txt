@@ -65,7 +65,7 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_EDITOR_SOURCE
 target_link_libraries(StrataEditor PRIVATE StrataEditorUI)
 
 if(WIN32)
-	# A windowed program: no console window opens with it. It keeps main (Core/EntryPoint.h), and prints to the pipes its
+	# A windowed program: no console window opens with it. It keeps main (Engine/EntryPoint.h), and prints to the pipes its
 	# callers pass or the terminal that started it (Platform::ConnectStandardStreams).
 	set_target_properties(StrataEditor PROPERTIES WIN32_EXECUTABLE TRUE)
 	if(MSVC)

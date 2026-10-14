@@ -5,16 +5,6 @@
 # forbidden include without a line (fix the dependency instead of adding one), and when the number of lines differs from
 # MaxAllowlistEntries in Layers.json (lower that number when you remove a line).
 
-# The application shell still wires the engine's services itself; the EngineModule lifecycle gives modules their own
-# startup and shutdown, and the composition root's caller moves to the program's entry point.
-Strata/Core/Application.cpp:Strata/Asset/AssetManager.h | engine-modules | Application releases the active asset manager at shutdown, while the job system and the renderer still exist.
-Strata/Core/Application.cpp:Strata/Audio/AudioEngine.h | engine-modules | Application initializes and shuts down the audio engine.
-Strata/Core/Application.cpp:Strata/Engine/BuiltinModules.h | engine-modules | Application calls the composition root, so that every application registers the modules before it uses a registry.
-Strata/Core/Application.cpp:Strata/ImGui/ImGuiLayer.h | engine-modules | Application creates and pushes the ImGui overlay.
-Strata/Core/Application.cpp:Strata/Project/Project.h | engine-modules | Application releases the active project at shutdown.
-Strata/Core/Application.cpp:Strata/Renderer/GraphicsDevice.h | engine-modules | Application creates the graphics device and the swapchain.
-Strata/Core/Application.cpp:Strata/Renderer/Renderer.h | engine-modules | Application initializes the renderer and drives its frames.
-
 # Physics takes collision geometry from the renderer's mesh asset; a renderer-independent MeshGeometry asset replaces it
 # (Mesh v2, on the roadmap's deferred list).
 Strata/Physics/AssetMeshProvider.cpp:Strata/Renderer/Mesh.h | mesh-v2 | Mesh collider shapes read the vertices and indices of the renderer's Mesh.

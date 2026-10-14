@@ -25,6 +25,12 @@
 #include "UI/Theme.h"
 #include "UI/Widgets.h"
 
+#include <Strata/Core/FileSystem.h>
+#include <Strata/Core/Log.h>
+#include <Strata/Core/Platform.h>
+#include <Strata/Events/ApplicationEvent.h>
+#include <Strata/Events/KeyEvent.h>
+#include <Strata/Events/MouseEvent.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/ImageWriter.h>
 
