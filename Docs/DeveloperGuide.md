@@ -1348,7 +1348,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `DrawActions` offers New Script... and Open in IDE (`CalcActionsWidth` to place them). The **Problems panel**
   (`Panels/ProblemsPanel`, docked with the Console) lists the last build's diagnostics and the crash with its stack
   frames (without the SDK's internal `Strata::Detail` thunks, which `script.status` keeps); a double click opens one
-  (`EditorContext::OpenScriptSource`); the status bar's "Build failed" and "Scripts crashed" pills open it, the
+  (`EditorContext::OpenScriptSource`); the status bar's "Build failed · 2 errors" (its errors counted as Problems counts
+  them, `CountScriptBuildErrors`; the error the failed build logs, `ScriptBuildResult::LoggedError`, is left out of the
+  unread-errors pill, `EditorContext::IsAnnouncedLogEntry`) and "Scripts crashed" pills open it, the
   "Building to play" pill cancels the build (`EditorContext::CancelScriptBuild`), and a project whose scenes use no
   script shows "Scripts unused" instead of asking for a build. The Console opens the
   source of messages that name one (`FindSourceReference`). People's guide: Docs/Manual/Scripting.md.

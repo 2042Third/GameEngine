@@ -95,9 +95,7 @@ namespace Strata
 		nlohmann::json DescribeErrors(const EditorContext& context)
 		{
 			const ScriptBuildResult& build = context.GetScriptBuilder().GetLastResult();
-			size_t buildErrors = 0;
-			for (const ScriptDiagnostic& diagnostic : build.Diagnostics)
-				buildErrors += diagnostic.Severity == "error" ? 1 : 0;
+			const size_t buildErrors = CountScriptBuildErrors(build);
 			const Ref<ScriptEngine>& engine = context.GetScriptEngine();
 			const std::optional<ScriptFault> fault = engine ? engine->GetFault() : std::nullopt;
 			nlohmann::json scriptFault = nullptr;

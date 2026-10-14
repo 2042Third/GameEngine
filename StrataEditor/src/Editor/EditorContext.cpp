@@ -1756,9 +1756,23 @@ namespace Strata
 		return m_Project && FileSystem::IsRegularFile(m_Project->GetScriptSourceDirectory() / "CMakeLists.txt");
 	}
 
+	bool EditorContext::IsAnnouncedLogEntry(uint64_t sequence) const
+	{
+		return sequence != 0 && std::find(m_AnnouncedLogEntries.begin(), m_AnnouncedLogEntries.end(), sequence) != m_AnnouncedLogEntries.end();
+	}
+
 	void EditorContext::OnScriptBuildFinished()
 	{
 		const ScriptBuildResult& result = m_ScriptBuilder.GetLastResult();
+		// The failure's error is the build pill's and the build toast's news: not an unread error besides.
+		if (result.LoggedError != 0)
+		{
+			m_AnnouncedLogEntries.push_back(result.LoggedError);
+			// A few suffice: the Console reads new entries every frame.
+			constexpr size_t c_MaxAnnouncedLogEntries = 16;
+			while (m_AnnouncedLogEntries.size() > c_MaxAnnouncedLogEntries)
+				m_AnnouncedLogEntries.pop_front();
+		}
 		m_LastScriptBuildLoad = {};
 		m_LastScriptBuildLoad.BuildID = result.ID;
 		// The watcher comes back before the built module loads: with hot reload the module loads from a private copy, so

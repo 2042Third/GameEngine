@@ -37,6 +37,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -522,6 +523,9 @@ namespace Strata
 		// unread.
 		uint64_t GetLogReadSequence() const { return m_LogReadSequence; }
 		void MarkLogRead(uint64_t sequence) { m_LogReadSequence = std::max(m_LogReadSequence, sequence); }
+		// Whether a log entry (its sequence number) is an error a pill or toast of its own reports already, such as the one a
+		// failed script build logs: the Console's unread errors leave those out.
+		bool IsAnnouncedLogEntry(uint64_t sequence) const;
 		const std::map<std::string, StatusSection>& GetStatusProviders() const { return m_StatusProviders; }
 	private:
 		bool OpenProjectInternal(const std::filesystem::path& path, bool created, std::string* outError);
@@ -733,6 +737,7 @@ namespace Strata
 		std::map<std::string, StatusSection> m_StatusProviders;
 		uint64_t m_ImportFailureCount = 0;
 		uint64_t m_LogReadSequence = 0;
+		std::deque<uint64_t> m_AnnouncedLogEntries; // The latest c_MaxAnnouncedLogEntries (IsAnnouncedLogEntry)
 	};
 
 }

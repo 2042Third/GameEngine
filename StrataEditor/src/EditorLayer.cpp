@@ -977,6 +977,8 @@ namespace Strata
 			// A build the person cancelled (the "Building to play" pill) is no error.
 			if (result.ErrorKind == EditorCommandError::Cancelled)
 				ST_INFO("Play: {}", result.Error);
+			else if (!result.Success && result.Announced)
+				ST_WARN("Play: {}", result.Error); // The failed build's error, which its pill and toast report already
 			else if (!result.Success)
 				ST_ERROR("Play: {}", result.Error);
 			// The game shows in the Game view: an open one docked behind another tab comes forward (and takes the keyboard, so
@@ -1852,7 +1854,11 @@ namespace Strata
 		// A build someone cancelled failed at nothing: the pill goes back to what the module is.
 		if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success && !builder.GetLastResult().Cancelled)
 		{
-			if (UI::Pill("Status.Scripts", Icons::CircleAlert, StatusPillText(Icons::CircleAlert, "Build failed"), colors.Error,
+			// Its errors as the Problems panel counts them.
+			const size_t errors = CountScriptBuildErrors(builder.GetLastResult());
+			const std::string text = errors == 0 ? std::string("Build failed")
+				: fmt::format("Build failed{}{} {}", c_Separator, errors, errors == 1 ? "error" : "errors");
+			if (UI::Pill("Status.Scripts", Icons::CircleAlert, StatusPillText(Icons::CircleAlert, text, "Build failed"), colors.Error,
 				"The last script build failed. Click to see its errors (the Problems panel)."))
 				m_Panels.Focus(EditorPanels::c_Problems);
 			return false;
