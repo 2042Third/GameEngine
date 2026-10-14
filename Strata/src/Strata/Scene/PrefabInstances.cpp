@@ -242,17 +242,29 @@ namespace Strata
 			return HashPart(MakeTemplate(scene, root, nullptr, nullptr, ids));
 		}
 
+		uint64_t GetTemplateHash(const nlohmann::json& part)
+		{
+			return HashPart(part);
+		}
+
 		void MarkSynced(Scene& scene, Entity root, const nlohmann::json& snapshot)
+		{
+			const PrefabInstanceComponent* link = root ? root.TryGetComponent<PrefabInstanceComponent>() : nullptr;
+			if (!link)
+				return;
+			const uint64_t version = GetPartVersion(snapshot, link->PrefabEntityID);
+			// The link is looked up again afterwards: MakeTemplate serializes the entities, which may grow the registry's pools
+			// under the component.
+			MarkSynced(root, version, GetContentHash(scene, root));
+		}
+
+		void MarkSynced(Entity root, uint64_t partVersion, uint64_t contentHash)
 		{
 			PrefabInstanceComponent* link = root ? root.TryGetComponent<PrefabInstanceComponent>() : nullptr;
 			if (!link)
 				return;
-			const uint64_t version = GetPartVersion(snapshot, link->PrefabEntityID);
-			const uint64_t content = GetContentHash(scene, root);
-			// Taken again: MakeTemplate serializes the entities, which may grow the registry's pools under the component.
-			link = &root.GetComponent<PrefabInstanceComponent>();
-			link->PrefabVersion = version;
-			link->SyncedHash = content;
+			link->PrefabVersion = partVersion;
+			link->SyncedHash = contentHash;
 		}
 
 		bool IsOutdated(Entity root, const nlohmann::json& snapshot)

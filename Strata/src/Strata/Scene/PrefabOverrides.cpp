@@ -11,6 +11,7 @@
 #include "Strata/Scene/SceneSerializer.h"
 
 #include <algorithm>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -146,10 +147,19 @@ namespace Strata
 			}
 		}
 
-		void CompareComponents(UUID entity, const nlohmann::json& templateComponents, const nlohmann::json& instanceComponents, std::vector<PrefabOverride>& result)
+		// The instance root's transform and name are its own, never overrides.
+		bool IsRootOwn(bool root, std::string_view component)
+		{
+			return root && (component == "Transform" || component == "Name");
+		}
+
+		void CompareComponents(UUID entity, bool root, const nlohmann::json& templateComponents, const nlohmann::json& instanceComponents,
+			std::vector<PrefabOverride>& result)
 		{
 			for (const auto& [name, value] : templateComponents.items())
 			{
+				if (IsRootOwn(root, name))
+					continue;
 				const nlohmann::json* instance = JsonUtils::Find(instanceComponents, name);
 				if (IsScript(name))
 				{
@@ -181,7 +191,7 @@ namespace Strata
 			}
 			for (const auto& [name, value] : instanceComponents.items())
 			{
-				if (templateComponents.contains(name))
+				if (templateComponents.contains(name) || IsRootOwn(root, name))
 					continue;
 				if (IsScript(name))
 					CompareScripts(entity, nlohmann::json::object(), value, result);
@@ -345,27 +355,30 @@ namespace Strata
 
 		std::vector<PrefabOverride> ComputeOverrides(const Scene& scene, Entity root, const nlohmann::json& part)
 		{
-			std::vector<PrefabOverride> result;
 			const nlohmann::json* entities = JsonUtils::Find(part, "Entities");
 			if (!root || !entities || !entities->is_array() || entities->empty())
-				return result;
-			// The instance as a template with the prefab's own root transform and name: those are the instance's own.
-			const nlohmann::json& rootComponents = GetComponents((*entities)[0]);
-			const nlohmann::json* rootTransform = JsonUtils::Find(rootComponents, "Transform");
-			const nlohmann::json* rootName = JsonUtils::Find(rootComponents, "Name");
+				return {};
 			std::unordered_map<UUID, UUID> ids;
-			const nlohmann::json instance = PrefabInstances::MakeTemplate(scene, root, rootTransform, rootName, ids);
-			const std::unordered_map<UUID, const nlohmann::json*> instanceEntities = MapEntities(instance);
+			return ComputeOverrides(PrefabInstances::MakeTemplate(scene, root, nullptr, nullptr, ids), part);
+		}
+
+		std::vector<PrefabOverride> ComputeOverrides(const nlohmann::json& instancePart, const nlohmann::json& part)
+		{
+			std::vector<PrefabOverride> result;
+			const nlohmann::json* entities = JsonUtils::Find(part, "Entities");
+			if (!entities || !entities->is_array() || entities->empty())
+				return result;
+			const std::unordered_map<UUID, const nlohmann::json*> instanceEntities = MapEntities(instancePart);
+			bool root = true;
 			for (const nlohmann::json& entity : *entities)
 			{
 				const UUID id = GetId(entity);
 				const auto found = instanceEntities.find(id);
 				if (found == instanceEntities.end())
-				{
 					result.push_back({ id, {}, {}, PrefabOverrideKind::RemovedEntity });
-					continue;
-				}
-				CompareComponents(id, GetComponents(entity), GetComponents(*found->second), result);
+				else
+					CompareComponents(id, root, GetComponents(entity), GetComponents(*found->second), result);
+				root = false;
 			}
 			return result;
 		}
@@ -394,9 +407,28 @@ namespace Strata
 			return false;
 		}
 
-		bool Propagate(Scene& scene, Entity root, const nlohmann::json& previousPart, const nlohmann::json& nextPart, std::vector<UUID>* outChanged,
-			std::vector<UUID>* outCreated, const std::function<void(UUID)>& beforeChange, std::string* outError)
+		PartChangeCache::PartChangeCache(const nlohmann::json* previous, const nlohmann::json& next)
+			: m_Previous(previous), m_Next(next)
 		{
+		}
+
+		const PartChangeCache::Parts& PartChangeCache::Get(UUID templateRoot)
+		{
+			const auto [it, added] = m_Parts.try_emplace(templateRoot);
+			if (added)
+			{
+				if (m_Previous)
+					it->second.Previous = PrefabInstances::ExtractTemplate(*m_Previous, templateRoot);
+				it->second.Next = PrefabInstances::ExtractTemplate(m_Next, templateRoot);
+				it->second.NextVersion = PrefabInstances::GetTemplateHash(it->second.Next);
+			}
+			return it->second;
+		}
+
+		bool Propagate(Scene& scene, Entity root, const nlohmann::json& previousPart, const nlohmann::json& nextPart, PropagateResult& outResult,
+			const std::function<void(UUID)>& beforeChange, std::string* outError)
+		{
+			outResult = {};
 			const nlohmann::json* nextEntities = JsonUtils::Find(nextPart, "Entities");
 			const UUID templateRoot = root ? root.GetComponent<PrefabInstanceComponent>().PrefabEntityID : UUID::Null();
 			if (!nextEntities || !nextEntities->is_array() || nextEntities->empty() || GetId((*nextEntities)[0]) != templateRoot)
@@ -410,8 +442,14 @@ namespace Strata
 					beforeChange(id);
 			};
 
+			// Without a recorded list, the instance's template as it is now: what it overrides, and (when nothing changes below)
+			// what it still is afterwards.
+			std::unordered_map<UUID, UUID> templateIds;
 			const std::vector<PrefabOverride> recorded = root.GetComponent<PrefabInstanceComponent>().Overrides;
-			const std::vector<PrefabOverride> overrides = !recorded.empty() ? recorded : ComputeOverrides(scene, root, previousPart);
+			std::optional<nlohmann::json> instanceBefore;
+			if (recorded.empty())
+				instanceBefore = PrefabInstances::MakeTemplate(scene, root, nullptr, nullptr, templateIds);
+			const std::vector<PrefabOverride> overrides = !recorded.empty() ? recorded : ComputeOverrides(*instanceBefore, previousPart);
 			const std::unordered_map<UUID, const nlohmann::json*> previous = MapEntities(previousPart);
 			const std::unordered_map<UUID, const nlohmann::json*> next = MapEntities(nextPart);
 			std::unordered_map<UUID, Entity> linked = MapLinked(root);
@@ -487,8 +525,7 @@ namespace Strata
 						if (const Entity entity = scene.GetEntityByUUID(newIds.at(id)))
 						{
 							linked.emplace(id, entity);
-							if (outCreated)
-								outCreated->push_back(entity.GetUUID());
+							outResult.Created.push_back(entity.GetUUID());
 						}
 					}
 				}
@@ -662,20 +699,21 @@ namespace Strata
 			if (!removed.empty())
 				scene.DestroyEntities(removed);
 
-			// The list against the new part.
-			std::vector<PrefabOverride> updated = ComputeOverrides(scene, root, nextPart);
+			// The list against the new part, from the instance's template: the one taken before when nothing changed.
+			const bool unchanged = changed.empty() && outResult.Created.empty() && instanceBefore;
+			templateIds.clear();
+			const nlohmann::json instanceAfter = unchanged ? std::move(*instanceBefore) : PrefabInstances::MakeTemplate(scene, root, nullptr, nullptr, templateIds);
+			outResult.ContentHash = PrefabInstances::GetTemplateHash(instanceAfter);
+			std::vector<PrefabOverride> updated = ComputeOverrides(instanceAfter, nextPart);
 			if (updated != root.GetComponent<PrefabInstanceComponent>().Overrides)
 			{
 				change(root);
 				root.GetComponent<PrefabInstanceComponent>().Overrides = std::move(updated);
 			}
-			if (outChanged)
+			for (const UUID id : changed)
 			{
-				for (const UUID id : changed)
-				{
-					if (scene.GetEntityByUUID(id))
-						outChanged->push_back(id);
-				}
+				if (scene.GetEntityByUUID(id))
+					outResult.Changed.push_back(id);
 			}
 			return true;
 		}

@@ -1157,6 +1157,10 @@ namespace Strata
 		Scene& scene = transaction.GetScene();
 		if (!m_AssetManager || &scene != m_EditScene.get())
 			return;
+		// A scene without prefab links has no instances to look for (edits of large scenes without prefabs pay nothing).
+		const auto* links = std::as_const(scene.GetRegistry()).storage<PrefabInstanceComponent>();
+		if (!links || links->empty())
+			return;
 		// The instances the edit touched: of the entities it changed or made, and of the parents of those it destroyed or
 		// moved (their states before it name them).
 		std::vector<Entity> roots;

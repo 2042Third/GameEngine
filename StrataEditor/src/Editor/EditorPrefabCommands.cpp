@@ -349,25 +349,24 @@ namespace Strata
 				applied.GetComponent<PrefabInstanceComponent>().Overrides = PrefabOverrides::ComputeOverrides(scene, root,
 					PrefabInstances::ExtractTemplate(newSnapshot, templateRoot));
 				size_t updated = 0;
+				PrefabOverrides::PartChangeCache parts(&snapshot, newSnapshot);
 				for (const UUID other : others)
 				{
 					Entity instance = scene.GetEntityByUUID(other);
 					if (!instance)
 						continue; // Inside an instance an update before removed
-					const UUID otherTemplate = instance.GetComponent<PrefabInstanceComponent>().PrefabEntityID;
-					std::vector<UUID> changed;
-					std::vector<UUID> created;
-					if (!PrefabOverrides::Propagate(scene, instance, PrefabInstances::ExtractTemplate(snapshot, otherTemplate),
-						PrefabInstances::ExtractTemplate(newSnapshot, otherTemplate), &changed, &created, [&transaction](UUID id) { transaction.Track(id); }, &error))
+					const PrefabOverrides::PartChangeCache::Parts& part = parts.Get(instance.GetComponent<PrefabInstanceComponent>().PrefabEntityID);
+					PrefabOverrides::PropagateResult result;
+					if (!PrefabOverrides::Propagate(scene, instance, part.Previous, part.Next, result, [&transaction](UUID id) { transaction.Track(id); }, &error))
 					{
 						transaction.Rollback();
 						return EditorCommandResult::Fail(fmt::format("Updating another instance failed: {}", error));
 					}
-					for (const UUID entity : created)
+					for (const UUID entity : result.Created)
 						transaction.TrackCreated(entity);
 					transaction.Track(other);
-					PrefabInstances::MarkSynced(scene, instance, newSnapshot);
-					updated += !changed.empty() || !created.empty() ? 1 : 0;
+					PrefabInstances::MarkSynced(instance, part.NextVersion, result.ContentHash);
+					updated += !result.Changed.empty() || !result.Created.empty() ? 1 : 0;
 				}
 
 				// The file, then one undo step for both.

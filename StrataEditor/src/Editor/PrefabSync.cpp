@@ -297,32 +297,33 @@ namespace Strata
 				transaction.TrackCreated(entity);
 			m_PropagationCount++;
 		}
+		// Instances of one prefab mostly share a few parts: each is extracted and hashed once.
+		PrefabOverrides::PartChangeCache parts(previous, snapshot);
 		for (const Entity instance : propagated)
 		{
 			const Entity root = scene.GetEntityByUUID(instance.GetUUID());
 			if (!root)
 				continue;
 			const UUID templateRoot = root.GetComponent<PrefabInstanceComponent>().PrefabEntityID;
+			const PrefabOverrides::PartChangeCache::Parts& part = parts.Get(templateRoot);
 			// Without the previous snapshot (a catch-up), the instance as it is stands for it: what differs from the new part
 			// and is not overridden takes the new values.
 			std::unordered_map<UUID, UUID> ids;
-			const nlohmann::json previousPart = previous ? PrefabInstances::ExtractTemplate(*previous, templateRoot)
-				: PrefabInstances::MakeTemplate(scene, root, nullptr, nullptr, ids);
-			std::vector<UUID> changed;
-			std::vector<UUID> created;
+			const nlohmann::json instancePart = previous ? nlohmann::json() : PrefabInstances::MakeTemplate(scene, root, nullptr, nullptr, ids);
+			PrefabOverrides::PropagateResult result;
 			std::string error;
-			if (!PrefabOverrides::Propagate(scene, root, previousPart, PrefabInstances::ExtractTemplate(snapshot, templateRoot), &changed, &created,
+			if (!PrefabOverrides::Propagate(scene, root, previous ? part.Previous : instancePart, part.Next, result,
 				[&transaction](UUID id) { transaction.Track(id); }, &error))
 			{
 				ST_WARN("An instance of {} could not take its new values: {}", metadata ? metadata->Path : prefab.ToString(), error);
 				continue;
 			}
-			for (const UUID entity : created)
+			for (const UUID entity : result.Created)
 				transaction.TrackCreated(entity);
 			// It took this version of the prefab (its overrides aside): not outdated.
 			transaction.Track(root.GetUUID());
-			PrefabInstances::MarkSynced(scene, root, snapshot);
-			if (!changed.empty() || !created.empty())
+			PrefabInstances::MarkSynced(root, part.NextVersion, result.ContentHash);
+			if (!result.Changed.empty() || !result.Created.empty())
 				m_PropagationCount++;
 		}
 		context.CommitEdit(transaction);
