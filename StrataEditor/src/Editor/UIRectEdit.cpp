@@ -2,6 +2,7 @@
 
 #include "Editor/EditorContext.h"
 #include "Editor/SceneEdit.h"
+#include "Editor/SceneRaycast.h"
 
 #include <Strata/Core/Log.h>
 #include <Strata/GameUI/GameUIHitTest.h>
@@ -246,9 +247,15 @@ namespace Strata::UIRectEdit
 			if (const std::optional<std::pair<glm::vec2, float>> crossing = GameUIPointer::IntersectCanvas(ui.GetCanvasWorldMatrix(views[index]), *ray))
 				crossings.push_back({ crossing->second, { index, crossing->first } });
 		}
+		if (crossings.empty())
+			return {};
 		std::stable_sort(crossings.begin(), crossings.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+		// What the scene draws in front of a canvas hides it, so a click there picks that instead (the ID buffer's pick).
+		const std::optional<SceneRayHit> sceneHit = SceneRaycast::Cast(scene, Ray(ray->Origin, ray->Direction));
 		for (const auto& [distance, crossing] : crossings)
 		{
+			if (sceneHit && sceneHit->Distance < distance)
+				break;
 			if (const Entity picked = pick(views[crossing.first], crossing.second))
 				return picked;
 		}

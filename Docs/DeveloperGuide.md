@@ -1160,7 +1160,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   pointer on it intersects the ray (`GameUISystem::GetPointerOn`), never dividing pixels by the canvas's scale.
   Automatic navigation never leaves a world-space canvas, and the first move focuses a screen-space canvas's selectable
   before one in the scene. The editor picks them with its view's camera (`UIRectEdit::PickElement`), also with the
-  Game UI setting off; the 2D canvas mode shows screen-space canvases only.
+  Game UI setting off, where no mesh is in front of them (`SceneRaycast`: a click there is the mesh's); the 2D canvas
+  mode shows screen-space canvases only.
 - Tests drive the UI with simulated input (`Input::SimulateMouseMove`/`SimulateMouseButton`/`SimulateKey`) and an input
   frame (`Input::BeginFrame`) before each `OnUpdateRuntime` (`GameUIInputTests.cpp`); `GameUIHitTester` alone checks hit
   tests against a layout.

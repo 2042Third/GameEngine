@@ -9,6 +9,7 @@
 #include "Panels/CanvasModeView.h"
 #include "UI/ItemProbe.h"
 
+#include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/GameUI/GameUIComponents.h>
 #include <Strata/GameUI/GameUIScene.h>
 #include <Strata/Math/Math.h>
@@ -253,6 +254,17 @@ TEST_SUITE("Editor.UIRectEdit")
 		auto [nearSign, nearImage] = addSign("Near Sign", { 0.0f, 0.0f, 2.0f });
 		CHECK(UIRectEdit::PickElement(active, screen, center, true, &viewProjection) == nearImage);
 		nearSign.SetActive(false);
+
+		// A cube in front of the sign hides it there: the click is the cube's (the viewport's ID-buffer pick).
+		Entity cube = active.CreateEntity("Cube");
+		cube.GetComponent<TransformComponent>().Translation = { 0.0f, 0.0f, 2.5f };
+		cube.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+		CHECK_FALSE(UIRectEdit::PickElement(active, screen, center, true, &viewProjection));
+		CHECK(UIRectEdit::PickElement(active, screen, { 640.0f, 540.0f }, true, &viewProjection) == image); // Left of the cube
+		cube.GetComponent<TransformComponent>().Translation = { 0.0f, 0.0f, -2.0f }; // Behind it
+		cube.MarkModified<TransformComponent>();
+		CHECK(UIRectEdit::PickElement(active, screen, center, true, &viewProjection) == image);
+		active.DestroyEntity(cube);
 
 		// Grown over the whole view, the sign is behind the screen's panel, and in front where the game UI is hidden.
 		sign.GetComponent<UICanvasComponent>().WorldUnitsPerUnit = 0.1f;
