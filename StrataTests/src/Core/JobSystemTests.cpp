@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <numeric>
 #include <stdexcept>
 #include <thread>
@@ -417,6 +418,47 @@ TEST_SUITE("Core.JobSystem")
 		std::atomic<bool> ran = false;
 		JobSystem::Submit([&]() { ran = true; }).Wait();
 		CHECK(ran.load());
+	}
+
+	TEST_CASE("Nothing of a submitted job stays behind in Submit: what it captured is released where it runs")
+	{
+		// Scene::ReleaseInBackground relies on it: the job's capture is the scene's last reference, so the scene is destroyed
+		// on the thread that runs the job. libc++ copies a callable that fits std::function's own storage (a capture of one
+		// shared pointer does) when it moves it, and a copy left in Submit's parameter would hold a reference until Submit
+		// returned. A pool that has stopped runs a job inside Submit, where such a copy would still exist: a worker job submits
+		// background jobs until the background pool, which Shutdown stops first, runs one in place. The jobs reach what they
+		// observe through a static, so that each captures nothing but the pointer it counts.
+		struct Observation
+		{
+			std::thread::id Submitter;
+			std::atomic<bool> InsideSubmit = false;
+			std::atomic<long> UseCount = -1; // Of the capture, seen by a job run inside Submit
+		};
+		static Observation s_Observation;
+		s_Observation.InsideSubmit = false;
+		s_Observation.UseCount = -1;
+		{
+			ScopedJobSystem jobSystem(1, 0);
+			JobSystem::Submit([]()
+			{
+				s_Observation.Submitter = std::this_thread::get_id();
+				const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+				while (s_Observation.UseCount.load() < 0 && std::chrono::steady_clock::now() < deadline)
+				{
+					auto capture = std::make_shared<int>(0);
+					s_Observation.InsideSubmit = true;
+					const JobHandle handle = JobSystem::Submit([capture = std::move(capture)]()
+					{
+						if (s_Observation.InsideSubmit.load() && std::this_thread::get_id() == s_Observation.Submitter)
+							s_Observation.UseCount = capture.use_count();
+					}, JobPriority::Background);
+					s_Observation.InsideSubmit = false;
+					// Run by the background pool, or here if it never started it (the pool stopping meanwhile).
+					JobSystem::Wait(handle);
+				}
+			});
+		}
+		CHECK(s_Observation.UseCount.load() == 1);
 	}
 
 	TEST_CASE("Shutdown runs every queued job")

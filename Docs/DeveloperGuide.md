@@ -596,7 +596,9 @@ short. Their full wording:
   below the normal thread priority, which leave four hardware threads to the frame but keep at least half of them
   (`JobSystem::GetDefaultBackgroundThreadCount`), so it never takes the processors from the frame, whose own work runs
   on the normal-priority workers). A thread that waits for a job runs that job itself if it has not started, and never
-  other jobs. Results return to the main thread through `Application::SubmitToMainThread` or polled queues — never
+  other jobs. What a job captures is released on the thread that runs it (`Submit` keeps no copy of the function: libc++
+  copies a small one when it moves it), so a job may hold the last reference to what it destroys off the frame
+  (`Scene::ReleaseInBackground`). Results return to the main thread through `Application::SubmitToMainThread` or polled queues — never
   callbacks that touch engine state from worker threads.
 - **NVRHI pitfalls:** never take the address of a handle (`&m_Pipeline`): `RefCountPtr::operator&`
   releases the reference and returns the raw pointer's address, so assigning through it leaves a
