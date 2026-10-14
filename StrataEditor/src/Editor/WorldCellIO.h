@@ -44,6 +44,11 @@ namespace Strata
 		// reload: loaded copies take the saved version). The bytes written, or nullopt with the reason.
 		std::optional<size_t> WriteDocument(EditorAssetManager& assets, AssetHandle asset, AssetType type, const nlohmann::json& document, bool reload,
 			std::string* outError = nullptr);
+		// Writes a new scene document at a path relative to the asset directory (which must not exist) with the given handle:
+		// its .meta first, so that the asset registers with it (a world's new cell, whose handle is derived from the world's).
+		// The handle the asset got (null with the reason when it could not be written).
+		AssetHandle CreateDocument(EditorAssetManager& assets, const std::string& path, AssetHandle handle, const nlohmann::json& document,
+			std::string* outError = nullptr);
 
 	}
 

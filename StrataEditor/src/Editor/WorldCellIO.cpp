@@ -3,6 +3,7 @@
 #include <Strata/Asset/AssetDependencies.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Math/AABB.h>
 #include <Strata/Physics/PhysicsWorld.h>
@@ -113,6 +114,34 @@ namespace Strata
 			if (!assets.SaveNativeAsset(asset, bytes, reload, outError, scanned ? &references : nullptr))
 				return std::nullopt;
 			return text.size();
+		}
+
+		AssetHandle CreateDocument(EditorAssetManager& assets, const std::string& path, AssetHandle handle, const nlohmann::json& document, std::string* outError)
+		{
+			const std::filesystem::path file = assets.GetAssetDirectory() / FileSystem::FromUTF8(path);
+			if (FileSystem::Exists(file))
+			{
+				if (outError)
+					*outError = fmt::format("'{}' exists already", path);
+				return UUID::Null();
+			}
+			const std::filesystem::path metaFile = FileSystem::FromUTF8(FileSystem::ToUTF8(file) + std::string(EditorAssetManager::c_MetaExtension));
+			const nlohmann::json meta = { { "Handle", handle.ToString() }, { "ImportSettings", nlohmann::json::object() },
+				{ "Strata", { { "Format", "AssetMeta" }, { "Version", 1 } } }, { "Type", AssetTypeToString(AssetType::Scene) } };
+			if (!FileSystem::CreateDirectories(file.parent_path()) || !FileSystem::WriteText(metaFile, JsonUtils::Dump(meta, 1, '\t') + "\n"))
+			{
+				if (outError)
+					*outError = fmt::format("'{}' cannot be written", FileSystem::ToUTF8(metaFile));
+				return UUID::Null();
+			}
+			std::vector<AssetHandle> references;
+			const bool scanned = AssetDependencies::ScanDocument(AssetType::Scene, document, references);
+			const std::string text = JsonUtils::Dump(document, 1, '\t') + "\n";
+			const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(text.data()), text.size());
+			const AssetHandle created = assets.CreateNativeAsset(path, bytes, outError, scanned ? &references : nullptr);
+			if (!created.IsValid())
+				FileSystem::Remove(metaFile);
+			return created;
 		}
 
 		std::optional<CellSummary> ReadCellSummary(AssetManagerBase& assets, AssetHandle scene, std::string* outError)

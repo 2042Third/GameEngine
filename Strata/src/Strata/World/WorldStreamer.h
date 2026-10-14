@@ -126,7 +126,8 @@ namespace Strata
 		bool IsPinned(const WorldCellKey& key) const;
 
 		// Takes over the sub-scenes of the scene whose sources are cells of the world (a prepared start's, the cells the
-		// editor adopted into a play copy), so that they are streamed like the ones it loads.
+		// editor adopted into a play copy), so that they are streamed like the ones it loads. A World asset that changes (a
+		// reload) adopts those of its cells too.
 		void AdoptLoadedCells();
 
 		void Update();

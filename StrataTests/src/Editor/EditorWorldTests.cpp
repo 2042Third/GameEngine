@@ -376,3 +376,94 @@ TEST_SUITE("Editor.World")
 		CHECK_FALSE(project.Try("scene.saveAs", { { "path", "Scenes/Copy.stscene" } }).Success);
 	}
 }
+
+namespace
+{
+
+	AssetHandle CellOf(EditorContext& context, UUID id)
+	{
+		Scene& scene = *context.GetEditScene();
+		const Entity entity = scene.GetEntityByUUID(id);
+		REQUIRE(entity);
+		const SubSceneStatus* status = scene.GetSubSceneStatus(scene.GetSubSceneOf(entity));
+		return status ? status->Scene : UUID::Null();
+	}
+
+}
+
+TEST_SUITE("Editor.World")
+{
+	TEST_CASE("A move across a cell border is one undo step, and the save writes both cells")
+	{
+		WorldProject project("EditorWorldBorder", 3);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(30.0f, 10.0f, 14.0f));
+		Settle(project);
+		const Entity box = project.Context.GetEditScene()->FindEntityByName("Box 0");
+		REQUIRE(box);
+		const UUID id = box.GetUUID();
+		const glm::vec3 before = box.GetComponent<TransformComponent>().Translation;
+		REQUIRE(CellOf(project.Context, id) == project.GetCell(0, 0));
+
+		// Into cell (1, 0).
+		project.Run("component.set", { { "entity", UUIDToJson(id) }, { "component", "Transform" }, { "values", { { "Translation", { 40.0, 0.5, 4.0 } } } } });
+		CHECK(CellOf(project.Context, id) == project.GetCell(1, 0));
+		CHECK(project.Context.GetWorld()->IsCellDirty(project.GetCell(0, 0)));
+		CHECK(project.Context.GetWorld()->IsCellDirty(project.GetCell(1, 0)));
+		CHECK(project.Context.GetUndoStack().GetPosition() == 1);
+		project.Run("edit.undo");
+		CHECK(CellOf(project.Context, id) == project.GetCell(0, 0));
+		CHECK(project.Context.GetEditScene()->GetEntityByUUID(id).GetComponent<TransformComponent>().Translation == before);
+		project.Run("edit.redo");
+		CHECK(CellOf(project.Context, id) == project.GetCell(1, 0));
+
+		const nlohmann::json saved = project.Run("scene.save");
+		std::set<std::string> paths;
+		for (const nlohmann::json& document : saved["documents"])
+			paths.insert(document["path"].get<std::string>());
+		CHECK(paths.contains("Worlds/Gen/Ground/0_0.stscene"));
+		CHECK(paths.contains("Worlds/Gen/Ground/1_0.stscene"));
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) }, { "force", true } });
+		Settle(project);
+		CHECK(CellOf(project.Context, id) == project.GetCell(1, 0));
+	}
+
+	TEST_CASE("New entities go into the edit layer's cell, new cells are written at the save, and entities move between layers")
+	{
+		WorldProject project("EditorWorldNewCells", 3);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
+		Settle(project);
+
+		// The default edit layer is the persistent scene.
+		const UUID lamp = WorldProject::ToUUID(project.Run("entity.create", { { "name", "Lamp" } })["id"]);
+		CHECK(CellOf(project.Context, lamp) == UUID::Null());
+		CHECK(project.Context.GetWorld()->GetDirtyCells().empty());
+
+		// With the Ground as the edit layer, an entity placed where no cell exists makes one.
+		project.Run("world.edit", { { "editLayer", "Ground" } });
+		const UUID rock = WorldProject::ToUUID(project.Run("entity.create", { { "name", "Rock" }, { "components", { { "Transform", { { "Translation", { 112.0, 0.0, 16.0 } } } } } } })["id"]);
+		const AssetHandle newCell = DeriveSubAssetHandle(project.World, "Cell/1/3/0");
+		CHECK(CellOf(project.Context, rock) == newCell);
+		const nlohmann::json saved = project.Run("scene.save");
+		bool wroteCell = false;
+		for (const nlohmann::json& document : saved["documents"])
+			wroteCell = wroteCell || document["path"] == "Worlds/Gen/Ground/3_0.stscene";
+		CHECK(wroteCell);
+		CHECK(project.Context.GetAssetManager()->GetAssetType(newCell) == AssetType::Scene);
+		CHECK(FileSystem::Exists(project.Directory / "Assets" / "Worlds" / "Gen" / "Ground" / "3_0.stscene.meta"));
+		const Ref<WorldAsset> world = project.ReadWorld();
+		CHECK(world->FindCell(WorldCellKey { 1, 3, 0 }) >= 0);
+		CHECK(world->GetData().Cells.size() == 10);
+
+		// world.moveEntities: the rock to the persistent scene and back; a child is refused.
+		project.Run("world.moveEntities", { { "entities", { UUIDToJson(rock) } }, { "layer", "Persistent" } });
+		CHECK(CellOf(project.Context, rock) == UUID::Null());
+		project.Run("world.moveEntities", { { "entities", { UUIDToJson(rock) } }, { "layer", "Ground" } });
+		CHECK(CellOf(project.Context, rock) == newCell);
+		const UUID pebble = WorldProject::ToUUID(project.Run("entity.create", { { "name", "Pebble" }, { "parent", UUIDToJson(rock) } })["id"]);
+		CHECK_FALSE(project.Try("world.moveEntities", { { "entities", { UUIDToJson(pebble) } }, { "layer", "Persistent" } }).Success);
+		CHECK_FALSE(project.Try("world.moveEntities", { { "entities", { UUIDToJson(rock) } }, { "layer", "Rivers" } }).Success);
+		CHECK(CellOf(project.Context, rock) == newCell);
+	}
+}

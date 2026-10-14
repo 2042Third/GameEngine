@@ -1484,7 +1484,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   its layers and how many cells its index misses.
 - **`world.status`**, **`world.edit`** and **`world.loadCells`** (`Editor/EditorWorldCommands.cpp`) drive the world the editor
   edits (`Editor/EditorWorld.h`): its cells by state and dirty documents; the session's edit layer, visible layers and
-  radius scale; cells loaded by key or region and kept (pinned) until let go.
+  radius scale; cells loaded by key or region and kept (pinned) until let go. **`world.moveEntities`** moves top-level
+  entities into a layer's cell at their positions (made when missing) or into the persistent scene, one undo step.
 - **`physics.stats`** (`Editor/EditorWorldCommands.cpp`, a query whose results follow the session) reports the running
   game's physics (`PhysicsSystem::GetStats` and `IPhysicsCapacity`): bodies by type, awake ones, character controllers and
   the body slots in use; capacities and the megabytes they reserve; bodies waiting for a slot (a world at its growth limit)

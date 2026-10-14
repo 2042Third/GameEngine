@@ -4,6 +4,7 @@
 
 #include <Strata/Asset/AssetImporter.h>
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Scene/Scene.h>
@@ -140,7 +141,135 @@ namespace Strata
 		m_CellKeys.clear();
 		for (const WorldCell& cell : world->GetData().Cells)
 			m_CellKeys.emplace(cell.Scene, cell.GetKey());
+		// Cells made in memory stay new until the world lists them.
+		std::erase_if(m_NewCells, [&](const auto& item) { return m_CellKeys.contains(item.first); });
+		for (const auto& [cell, key] : m_NewCells)
+			m_CellKeys.emplace(cell, key);
 		ApplyVisibleLayers();
+	}
+
+	WorldCellKey EditorWorld::GetCellAt(const WorldLayer& layer, const Entity& entity) const
+	{
+		const Ref<WorldAsset> world = GetWorldAsset();
+		const glm::vec3 position(m_Scene.GetWorldTransform(entity)[3]);
+		return WorldGrid::CellAt(layer, world ? world->GetData().GridOrigin : glm::dvec2(0.0), glm::dvec3(position));
+	}
+
+	SubSceneID EditorWorld::EnsureCellSubScene(const WorldCellKey& key)
+	{
+		const Ref<WorldAsset> world = GetWorldAsset();
+		if (!world)
+			return 0;
+		AssetHandle cell = FindCellScene(key);
+		const bool known = cell.IsValid();
+		for (const auto& [handle, newKey] : m_NewCells)
+		{
+			if (newKey == key)
+				cell = handle;
+		}
+		if (cell.IsValid())
+		{
+			const SubSceneID id = m_Scene.FindSubSceneBySource(cell);
+			if (m_Scene.IsSubSceneLoaded(id))
+				return id;
+			if (known)
+			{
+				// It exists but is not here: it loads (and stays) for the edit to come.
+				m_RequestedPins.insert(key);
+				return 0;
+			}
+		}
+		// A cell that does not exist yet: made in memory with its derived handle, written at the next save.
+		const WorldLayer* layer = world->GetData().FindLayer(key.Layer);
+		const WorldCellSquare square = WorldGrid::CellBounds(*layer, world->GetData().GridOrigin, key.X, key.Z);
+		if (std::max({ std::abs(square.Min.x), std::abs(square.Min.y), std::abs(square.Max.x), std::abs(square.Max.y) }) > WorldData::c_MaxExtent)
+			return 0;
+		cell = DeriveSubAssetHandle(m_World, fmt::format("Cell/{}/{}/{}", key.Layer, key.X, key.Z));
+		const SubSceneID id = m_Scene.AdoptSubScene(cell, {});
+		if (id == 0)
+			return 0;
+		m_NewCells[cell] = key;
+		m_CellKeys[cell] = key;
+		MarkCellDirty(cell);
+		return id;
+	}
+
+	void EditorWorld::Recell(const SceneEditTransaction& transaction)
+	{
+		const Ref<WorldAsset> world = GetWorldAsset();
+		if (!world)
+			return;
+		RefreshCellTable();
+		const WorldData& data = world->GetData();
+		const WorldLayer* editLayer = m_EditLayer == c_PersistentLayer ? nullptr : data.FindLayer(m_EditLayer);
+		const std::vector<UUID>& entities = transaction.GetEntities();
+		for (size_t index = 0; index < entities.size(); index++)
+		{
+			const Entity entity = m_Scene.GetEntityByUUID(entities[index]);
+			if (!entity || entity.GetComponent<RelationshipComponent>().Parent.IsValid())
+				continue;
+			const SubSceneID current = m_Scene.GetSubSceneOf(entity);
+			const SubSceneStatus* status = m_Scene.GetSubSceneStatus(current);
+			const std::optional<WorldCellKey> currentKey = status ? FindCellKey(status->Scene) : std::nullopt;
+			const WorldLayer* layer = nullptr;
+			if (currentKey)
+				layer = data.FindLayer(currentKey->Layer);
+			else if (transaction.WasCreated(index) && current == 0)
+				layer = editLayer;
+			if (!layer)
+				continue;
+			const WorldCellKey target = GetCellAt(*layer, entity);
+			if (currentKey && target == *currentKey)
+				continue;
+			if (const SubSceneID id = EnsureCellSubScene(target))
+				m_Scene.SetSubSceneOf(entity, id);
+		}
+	}
+
+	bool EditorWorld::MoveEntities(const std::vector<Entity>& entities, const std::string& layerName, std::string* outError)
+	{
+		auto fail = [outError](std::string message)
+		{
+			if (outError)
+				*outError = std::move(message);
+			return false;
+		};
+		const Ref<WorldAsset> world = GetWorldAsset();
+		if (!world)
+			return fail("The world is still loading; try again in a moment");
+		RefreshCellTable();
+		const WorldLayer* layer = layerName == c_PersistentLayer ? nullptr : world->GetData().FindLayer(layerName);
+		if (layerName != c_PersistentLayer && !layer)
+			return fail(fmt::format("The world has no layer '{}'", layerName));
+		for (const Entity& entity : entities)
+		{
+			if (entity.GetComponent<RelationshipComponent>().Parent.IsValid())
+				return fail(fmt::format("'{}' is not a top-level entity: entities belong to their top-level ancestor's cell", entity.GetName()));
+		}
+		// Every target cell first, so that nothing moves when one is not there yet.
+		std::vector<WorldCellKey> targets;
+		if (layer)
+		{
+			for (const Entity& entity : entities)
+			{
+				const WorldCellKey key = GetCellAt(*layer, entity);
+				const AssetHandle cell = FindCellScene(key);
+				if (cell.IsValid() && !m_Scene.IsSubSceneLoaded(m_Scene.FindSubSceneBySource(cell)))
+				{
+					m_RequestedPins.insert(key);
+					return fail(fmt::format("The cell {} is not loaded; it is loading now, try again once it is in", DescribeKey(key)));
+				}
+				targets.push_back(key);
+			}
+		}
+		for (size_t index = 0; index < entities.size(); index++)
+		{
+			const SubSceneID id = layer ? EnsureCellSubScene(targets[index]) : 0;
+			if (layer && id == 0)
+				return fail(fmt::format("'{}' lies outside the world", entities[index].GetName()));
+			m_Scene.SetSubSceneOf(entities[index], id);
+		}
+		return true;
 	}
 
 	std::optional<WorldCellKey> EditorWorld::FindCellKey(AssetHandle cell) const
@@ -345,18 +474,46 @@ namespace Strata
 		WorldData data = world->GetData();
 		if (!data.Index)
 			data.Index = WorldIndex();
+		const std::optional<AssetMetadata> worldMetadata = assets.GetMetadata(m_World);
+		if (!worldMetadata)
+			return fail("The world has no asset of the project");
 		for (const auto& [key, cell] : dirty)
 		{
-			const std::optional<AssetMetadata> metadata = assets.GetMetadata(cell);
-			if (!metadata)
-				return fail(fmt::format("The cell {} has no asset of the project", DescribeKey(key)));
 			const auto roots = cellRoots.find(cell);
-			const nlohmann::json document = WorldCellIO::SerializeDocument(m_Scene, metadata->Name, roots != cellRoots.end() ? roots->second : std::vector<Entity>(), false);
+			const std::vector<Entity> cellEntities = roots != cellRoots.end() ? roots->second : std::vector<Entity>();
 			std::string error;
-			const std::optional<size_t> bytes = WorldCellIO::WriteDocument(assets, cell, AssetType::Scene, document, false, &error);
-			if (!bytes)
-				return fail(fmt::format("The cell {} cannot be saved: {}", DescribeKey(key), error));
-			outResult.Documents.push_back({ metadata->Path, "cell", *bytes, document["Scene"]["Entities"].size() });
+			std::string path;
+			nlohmann::json document;
+			std::optional<size_t> bytes;
+			if (const auto created = m_NewCells.find(cell); created != m_NewCells.end())
+			{
+				// A cell made in memory: its document lies at <world folder>/<world name>/<layer>/<X>_<Z>.stscene, with a .meta
+				// holding its derived handle, and the world lists it.
+				const WorldLayer* layer = data.FindLayer(key.Layer);
+				const std::filesystem::path worldPath = FileSystem::FromUTF8(worldMetadata->Path);
+				// Asset paths use '/' on every system.
+				const std::string folder = FileSystem::ToUTF8(worldPath.parent_path());
+				path = fmt::format("{}{}{}/{}/{}_{}.stscene", folder, folder.empty() ? "" : "/", FileSystem::ToUTF8(worldPath.stem()), layer->Name, key.X, key.Z);
+				std::replace(path.begin(), path.end(), '\\', '/');
+				document = WorldCellIO::SerializeDocument(m_Scene, fmt::format("{}_{}", key.X, key.Z), cellEntities, false);
+				const AssetHandle createdHandle = WorldCellIO::CreateDocument(assets, path, cell, document, &error);
+				if (createdHandle != cell)
+					return fail(fmt::format("The new cell {} cannot be saved: {}", DescribeKey(key), error.empty() ? std::string("its file took another handle") : error));
+				bytes = FileSystem::GetFileSize(assets.GetAssetDirectory() / FileSystem::FromUTF8(path)).value_or(0);
+				data.Cells.push_back(WorldCell { key.Layer, key.X, key.Z, cell });
+			}
+			else
+			{
+				const std::optional<AssetMetadata> metadata = assets.GetMetadata(cell);
+				if (!metadata)
+					return fail(fmt::format("The cell {} has no asset of the project", DescribeKey(key)));
+				path = metadata->Path;
+				document = WorldCellIO::SerializeDocument(m_Scene, metadata->Name, cellEntities, false);
+				bytes = WorldCellIO::WriteDocument(assets, cell, AssetType::Scene, document, false, &error);
+				if (!bytes)
+					return fail(fmt::format("The cell {} cannot be saved: {}", DescribeKey(key), error));
+			}
+			outResult.Documents.push_back({ path, "cell", *bytes, document["Scene"]["Entities"].size() });
 			m_DirtyCells.erase(cell);
 
 			// Its index entry, from what was just written.
@@ -377,10 +534,12 @@ namespace Strata
 					entries.push_back(summary.Summary);
 			}
 		}
-		// The World document, when the index changed.
+		// The World document, when its cells or index changed.
 		if (!dirty.empty() && WorldAsset::ToDocument(data) != WorldAsset::ToDocument(world->GetData()))
 		{
 			std::string error;
+			if (!data.Validate(&error))
+				return fail(fmt::format("The world's document would be invalid: {}", error));
 			const std::optional<AssetMetadata> metadata = assets.GetMetadata(m_World);
 			const std::optional<size_t> bytes = WorldCellIO::WriteDocument(assets, m_World, AssetType::World, WorldAsset::ToDocument(data), true, &error);
 			if (!bytes)

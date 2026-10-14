@@ -2057,7 +2057,15 @@ document when the saved cells' index entries (refreshed from what was written) c
 the persistent scene's document as the recovery journal's new base. `scene.save` lists the documents written
 (`documents: [{path, kind, bytes, entities}]`); `scene.saveAs` refuses worlds. Documents go through
 `Editor/WorldCellIO.h` (`SerializeDocument`, `WriteDocument`), the seam world-io's entity-subset writer and background
-save replace. `world.status` describes it (cells by state, dirty documents, edit settings, the
+save replace. Edits re-cell by position: `EditorContext::CommitEdit` calls `EditorWorld::Recell` before recording, so
+a tracked top-level entity of a cell whose world position now lies in another cell of its layer moves into it
+(`Scene::SetSubSceneOf`) within the same undo step (a gizmo drag across a border, a translation, a paste), and an entity
+the edit created that belongs to no sub-scene goes into the edit layer's cell at its position (`world.edit {editLayer}`;
+the default, "Persistent", keeps new entities in the persistent scene, so cameras, lights and game managers never stream
+out with a cell). A target cell that does not exist is made in memory (`Scene::AdoptSubScene` with its derived handle)
+and written at the next save, with its `.meta` and an entry in the World document's `Cells`; one that exists but is not
+loaded is loaded and pinned, and the entity moves with its next edit. `world.moveEntities` moves top-level entities into
+a layer's cell at their positions, or into the persistent scene. `world.status` describes it (cells by state, dirty documents, edit settings, the
 cell list), `world.edit` sets the edit layer, visible layers and radius scale for the session, and `world.loadCells`
 loads cells by key or region, pinned until let go (`wait` answers once they are in).
 

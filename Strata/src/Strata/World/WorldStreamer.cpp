@@ -278,8 +278,9 @@ namespace Strata
 				m_LayerCells[static_cast<size_t>(layer - data.Layers.begin())].push_back(static_cast<int32_t>(index));
 		}
 		m_Stats.StateVersion++;
-		if (m_AdoptPending)
-			AdoptCells(*world);
+		// Sub-scenes of the world's cells that the streamer does not know yet (a prepared start's, the cells an editor saved
+		// into the world) are streamed like the ones it loads.
+		AdoptCells(*world);
 		return true;
 	}
 

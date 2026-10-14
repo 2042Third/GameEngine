@@ -1100,6 +1100,9 @@ namespace Strata
 			transaction.Rollback();
 			return false;
 		}
+		// In a world, entities move into the cells their positions lie in, within the same step.
+		if (m_World)
+			m_World->Recell(transaction);
 		return transaction.Commit(m_UndoStack);
 	}
 

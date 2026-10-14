@@ -138,6 +138,9 @@ namespace Strata
 
 		// Names the step after all, once what it made is known (e.g. the names of pasted entities).
 		void SetName(std::string name) { m_Name = std::move(name); }
+		// The entities the edit tracks, in the order tracked, and whether the edit created the one at an index.
+		const std::vector<UUID>& GetEntities() const { return m_Entities; }
+		bool WasCreated(size_t index) const { return !m_Before[index].Exists; }
 		// Records the edit on the stack. Returns false when nothing changed.
 		bool Commit(UndoStack& undoStack);
 		// The edit as an action, for a step that holds more (EditorActionGroup); null when nothing changed. Ends the

@@ -89,6 +89,17 @@ namespace Strata
 		const std::unordered_set<AssetHandle>& GetDirtyCells() const { return m_DirtyCells; }
 		bool IsCellDirty(AssetHandle cell) const { return m_DirtyCells.contains(cell); }
 
+		// Puts the top-level entities an edit tracks into the cells their positions lie in, within the edit (so one undo step
+		// reverses it): an entity of a cell moves to the cell of its layer at its world position (a gizmo drag or a translation
+		// across a border, a paste); an entity the edit created that belongs to no sub-scene goes into the edit layer's cell at
+		// its position (the persistent scene for c_PersistentLayer). A target cell that does not exist is made in memory
+		// (written at the next save); one that is not loaded is loaded and pinned, and the entity moves with its next edit.
+		void Recell(const SceneEditTransaction& transaction);
+		// Moves top-level entities into the cell of a layer at their positions, or into the persistent scene for
+		// c_PersistentLayer (world.moveEntities). False with the reason, changing nothing, for an unknown layer, an entity that
+		// is not top-level or a target cell that is not loaded yet (it is loading then).
+		bool MoveEntities(const std::vector<Entity>& entities, const std::string& layer, std::string* outError = nullptr);
+
 		// Saves the documents changed since the last save: the persistent scene's entities without the cells' (with the scene's
 		// settings), each dirty cell's top-level entities and their descendants (without settings), and the World document
 		// with the saved cells' index entries refreshed from memory (written when it changed). Clears the dirty marks. False,
@@ -119,13 +130,19 @@ namespace Strata
 		// Pins in the streamer exactly the cells some reason keeps (world.loadCells, selection, undo, dirty).
 		void SyncPins();
 		void RefreshCellTable();
+		// The loaded sub-scene of a cell, made in memory when the cell does not exist yet (with its derived handle); 0 when it
+		// exists but is not loaded (it is loading then).
+		SubSceneID EnsureCellSubScene(const WorldCellKey& key);
+		// The cell of a layer at an entity's world position.
+		WorldCellKey GetCellAt(const WorldLayer& layer, const Entity& entity) const;
 
 		Scene& m_Scene;
 		UndoStack& m_Undo;
 		AssetHandle m_World;
 		WorldStreamer m_Streamer;
 		std::weak_ptr<WorldAsset> m_TableWorld; // The World asset object the cell table was built from
-		std::unordered_map<AssetHandle, WorldCellKey> m_CellKeys; // Cell scene -> key
+		std::unordered_map<AssetHandle, WorldCellKey> m_CellKeys; // Cell scene -> key (the world's cells and the new ones)
+		std::unordered_map<AssetHandle, WorldCellKey> m_NewCells; // Cells made in memory, written into the world at the next save
 
 		std::string m_EditLayer = c_PersistentLayer;
 		std::vector<std::string> m_VisibleLayers;

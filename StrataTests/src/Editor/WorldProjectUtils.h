@@ -133,6 +133,13 @@ namespace Strata::Tests
 			return DeriveSubAssetHandle(World, fmt::format("Cell/1/{}/{}", x, z));
 		}
 
+		static UUID ToUUID(const nlohmann::json& json)
+		{
+			const std::optional<UUID> uuid = UUIDFromJson(json);
+			REQUIRE(uuid.has_value());
+			return *uuid;
+		}
+
 		Ref<WorldAsset> ReadWorld()
 		{
 			std::vector<uint8_t> bytes;

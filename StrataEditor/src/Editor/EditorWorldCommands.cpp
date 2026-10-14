@@ -524,6 +524,43 @@ namespace Strata
 				});
 			}, EditorCommandKind::Session });
 
+		registry.Register({ "world.moveEntities",
+			"Moves top-level entities of the open world into the cell of a layer at their positions (made when it does not exist yet, "
+			"written at the next save), or into the persistent scene with layer \"Persistent\". Their descendants go with them. One undo "
+			"step. Fails, changing nothing, for a child entity, an unknown layer or a target cell that is not loaded yet (it is loading then: "
+			"try again once it is in).",
+			ObjectSchema({ { "entities", EntityArraySchema("Top-level entities to move") },
+				{ "layer", StringSchema("A layer's name, or \"Persistent\"") } }, { "entities", "layer" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				EditorWorld* world = context.GetWorld();
+				if (!world)
+					return EditorCommandResult::Fail("The edited scene is no world's persistent scene (scene.open one, or world.create)");
+				std::string error;
+				if (!context.CheckSceneEditable(&error))
+					return EditorCommandResult::Fail(error);
+				CommandArguments arguments(parameters);
+				Scene& scene = *context.GetEditScene();
+				const std::vector<Entity> entities = arguments.GetEntities(scene, "entities");
+				const std::string layer = arguments.GetString("layer");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				std::vector<UUID> ids;
+				for (const Entity& entity : entities)
+					ids.push_back(entity.GetUUID());
+				SceneEditTransaction transaction(scene, fmt::format("Move {} to {}", SceneEdit::DescribeEntities(entities), layer), ids);
+				if (!world->MoveEntities(entities, layer, &error))
+				{
+					transaction.Rollback();
+					return EditorCommandResult::InvalidParameters(error);
+				}
+				context.CommitEdit(transaction);
+				nlohmann::json moved = nlohmann::json::array();
+				for (const Entity& entity : entities)
+					moved.push_back(UUIDToJson(entity.GetUUID()));
+				return EditorCommandResult::Ok({ { "entities", std::move(moved) }, { "layer", layer } });
+			} });
+
 		registry.Register({ "world.info",
 			"Describes a world: its name, persistent scene and grid origin, its layers (id, name, cell size and streaming distance in meters, "
 			"whether they stream by default and load before a game starts, their cells), its cells, and its index (cooked: whether it has one; "
