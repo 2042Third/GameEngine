@@ -3,9 +3,11 @@
 
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/Assert.h"
+#include "Strata/Core/EngineServices.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Profiling.h"
 #include "Strata/GameUI/GameUISceneData.h"
+#include "Strata/Input/Input.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
@@ -114,13 +116,13 @@ namespace Strata
 		registry.on_destroy<UILayoutComponent>().connect<&GameUIScene::OnLayoutChanged>(*this);
 		registry.on_construct<UIImageComponent>().connect<&GameUIScene::OnVisualChanged>(*this);
 		registry.on_update<UIImageComponent>().connect<&GameUIScene::OnVisualChanged>(*this);
-		registry.on_destroy<UIImageComponent>().connect<&GameUIScene::OnVisualChanged>(*this);
+		registry.on_destroy<UIImageComponent>().connect<&GameUIScene::OnImageDestroyed>(*this);
 		registry.on_construct<UITextComponent>().connect<&GameUIScene::OnTextChanged>(*this);
 		registry.on_update<UITextComponent>().connect<&GameUIScene::OnTextChanged>(*this);
-		registry.on_destroy<UITextComponent>().connect<&GameUIScene::OnTextChanged>(*this);
+		registry.on_destroy<UITextComponent>().connect<&GameUIScene::OnTextDestroyed>(*this);
 		registry.on_construct<UISelectableComponent>().connect<&GameUIScene::OnVisualChanged>(*this);
 		registry.on_update<UISelectableComponent>().connect<&GameUIScene::OnVisualChanged>(*this);
-		registry.on_destroy<UISelectableComponent>().connect<&GameUIScene::OnVisualChanged>(*this);
+		registry.on_destroy<UISelectableComponent>().connect<&GameUIScene::OnSelectableDestroyed>(*this);
 		registry.on_construct<UIToggleComponent>().connect<&GameUIScene::OnToggleChanged>(*this);
 		registry.on_update<UIToggleComponent>().connect<&GameUIScene::OnToggleChanged>(*this);
 		registry.on_destroy<UIToggleComponent>().connect<&GameUIScene::OnToggleChanged>(*this);
@@ -190,6 +192,7 @@ namespace Strata
 			return;
 		Canvas& canvas = m_Canvases[ref->Canvas];
 		MarkElementQuadsDirty(ref->Canvas, ref->Element);
+		UpdateRaycastTarget(entity);
 		// A selectable tints its target image: the target's quads follow, and a new target is found again.
 		const Element& element = canvas.Elements[ref->Element];
 		const UISelectableComponent* selectable = m_Registry->try_get<UISelectableComponent>(entity);
@@ -212,10 +215,53 @@ namespace Strata
 				layout.Texts[ref->Element].Valid = false;
 		}
 		MarkElementQuadsDirty(ref->Canvas, ref->Element);
+		UpdateRaycastTarget(entity);
 		// Only a rect that fits its text measures it.
 		const UIRectComponent* rect = m_Registry->try_get<UIRectComponent>(entity);
 		if (rect && rect->FitContent != UIFitContent::None)
 			MarkElementLayoutDirty(ref->Canvas, ref->Element);
+	}
+
+	void GameUIScene::OnImageDestroyed(entt::registry& registry, entt::entity entity)
+	{
+		OnVisualChanged(registry, entity);
+		UpdateRaycastTarget(entity, true, false, false);
+	}
+
+	void GameUIScene::OnTextDestroyed(entt::registry& registry, entt::entity entity)
+	{
+		OnTextChanged(registry, entity);
+		UpdateRaycastTarget(entity, false, true, false);
+	}
+
+	void GameUIScene::OnSelectableDestroyed(entt::registry& registry, entt::entity entity)
+	{
+		OnVisualChanged(registry, entity);
+		UpdateRaycastTarget(entity, false, false, true);
+	}
+
+	void GameUIScene::UpdateRaycastTarget(entt::entity entity, bool ignoreImage, bool ignoreText, bool ignoreSelectable)
+	{
+		const ElementRef* ref = FindRef(entity);
+		if (!ref)
+			return;
+		Element& element = m_Canvases[ref->Canvas].Elements[ref->Element];
+		const bool target = ComputeRaycastTarget(entity, ignoreImage, ignoreText, ignoreSelectable);
+		if (target == element.RaycastTarget)
+			return;
+		element.RaycastTarget = target;
+		TouchHits(ref->Canvas);
+	}
+
+	bool GameUIScene::ComputeRaycastTarget(entt::entity entity, bool ignoreImage, bool ignoreText, bool ignoreSelectable) const
+	{
+		if (!m_Registry->valid(entity))
+			return false;
+		if (!ignoreSelectable && m_Registry->all_of<UISelectableComponent>(entity))
+			return true;
+		const UIImageComponent* image = ignoreImage ? nullptr : m_Registry->try_get<UIImageComponent>(entity);
+		const UITextComponent* text = ignoreText ? nullptr : m_Registry->try_get<UITextComponent>(entity);
+		return (image && image->RaycastTarget) || (text && text->RaycastTarget);
 	}
 
 	void GameUIScene::OnSliderChanged(entt::registry&, entt::entity entity)
@@ -264,6 +310,7 @@ namespace Strata
 			if (canvas.Elements[part].CheckmarkOf == ref->Element)
 				MarkSubtreeQuadsDirty(ref->Canvas, part);
 		}
+		TouchHits(ref->Canvas);
 	}
 
 	void GameUIScene::MarkElementLayoutDirty(uint32_t canvasIndex, uint32_t element)
@@ -302,6 +349,13 @@ namespace Strata
 			layout.AllDirty = true;
 			layout.QuadsRepack = true;
 		}
+		TouchHits(canvasIndex);
+	}
+
+	void GameUIScene::TouchHits(uint32_t canvasIndex)
+	{
+		for (Layout& layout : m_Canvases[canvasIndex].Layouts)
+			layout.HitStamp = ++m_HitStamp;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -407,6 +461,7 @@ namespace Strata
 				Element& element = canvas.Elements.emplace_back();
 				element.Entity = frame.Entity;
 				element.Parent = frame.ParentElement;
+				element.RaycastTarget = ComputeRaycastTarget(frame.Entity);
 				const WorldTransformComponent* world = m_Registry->try_get<WorldTransformComponent>(frame.Entity);
 				element.Active = !world || world->ActiveInHierarchy;
 				parentElement = index;
@@ -476,6 +531,7 @@ namespace Strata
 			layout.Dirty.clear();
 			layout.DirtyMarks.assign(count, 0);
 			layout.QuadsRepack = true;
+			layout.HitStamp = ++m_HitStamp;
 		}
 		// An element moved when its parent or the sibling before it changed: each list's previous siblings in one pass.
 		auto previousSiblings = [](const std::vector<Element>& elements, std::vector<entt::entity>& outPrevious)
@@ -654,6 +710,7 @@ namespace Strata
 				return;
 			element.Active = active;
 			MarkElementQuadsDirty(canvasIndex, elementIndex);
+			TouchHits(canvasIndex);
 			if (element.Parent != c_NoElement && DependsOnChildren(element.Parent, canvas))
 				MarkElementLayoutDirty(canvasIndex, element.Parent);
 		};
@@ -806,6 +863,8 @@ namespace Strata
 		layout.AllDirty = true;
 		layout.QuadsRepack = true;
 		layout.QuadArrayId = m_NextQuadArrayId++;
+		layout.Id = m_NextLayoutId++;
+		layout.HitStamp = ++m_HitStamp;
 		outIndex = index;
 		m_ViewsValid = false;
 		return layout;
@@ -836,6 +895,38 @@ namespace Strata
 		return m_RootCanvasCount;
 	}
 
+	uint64_t GameUIScene::GetLayoutId(const UICanvasView& view) const
+	{
+		return m_Canvases[view.CanvasIndex].Layouts[view.LayoutIndex].Id;
+	}
+
+	uint64_t GameUIScene::GetHitStamp(const UICanvasView& view) const
+	{
+		return m_Canvases[view.CanvasIndex].Layouts[view.LayoutIndex].HitStamp;
+	}
+
+	UIInputScreen GameUIScene::GetInputScreen()
+	{
+		UIInputScreen input;
+		const glm::vec2 viewport = Input::GetViewportSize();
+		glm::vec2 pixels = viewport;
+		float contentScale = 1.0f;
+		if (IGameWindow* window = EngineServices::Get<IGameWindow>())
+		{
+			const GameWindowState state = window->GetState();
+			if (state.Width > 0 && state.Height > 0)
+				pixels = glm::vec2(static_cast<float>(state.Width), static_cast<float>(state.Height));
+			if (std::isfinite(state.ContentScale) && state.ContentScale > 0.0f)
+				contentScale = state.ContentScale;
+		}
+		if (!(pixels.x > 0.0f && pixels.y > 0.0f))
+			return input; // c_DefaultScreen
+		input.Screen = UIScreen { pixels, contentScale };
+		if (viewport.x > 0.0f && viewport.y > 0.0f)
+			input.InputToPixels = pixels / viewport;
+		return input;
+	}
+
 	uint32_t GameUIScene::GetElementCount(const UICanvasView& view) const
 	{
 		return view.CanvasIndex < m_Canvases.size() ? static_cast<uint32_t>(m_Canvases[view.CanvasIndex].Elements.size()) : 0;
@@ -855,6 +946,11 @@ namespace Strata
 	bool GameUIScene::IsElementVisible(const UICanvasView& view, uint32_t element) const
 	{
 		return IsVisible(m_Canvases[view.CanvasIndex], element);
+	}
+
+	bool GameUIScene::IsRaycastTarget(const UICanvasView& view, uint32_t element) const
+	{
+		return m_Canvases[view.CanvasIndex].Elements[element].RaycastTarget;
 	}
 
 	bool GameUIScene::IsVisible(const Canvas& canvas, uint32_t element) const
@@ -900,6 +996,18 @@ namespace Strata
 			return;
 		current.State = state;
 		current.Tint = tint;
+		if (const ElementRef* ref = FindRef(selectable))
+		{
+			const uint32_t target = m_Canvases[ref->Canvas].Elements[ref->Element].TintTarget;
+			if (target != c_NoElement)
+				MarkElementQuadsDirty(ref->Canvas, target);
+		}
+	}
+
+	void GameUIScene::ClearSelectableState(entt::entity selectable)
+	{
+		if (m_SelectableStates.erase(selectable) == 0)
+			return;
 		if (const ElementRef* ref = FindRef(selectable))
 		{
 			const uint32_t target = m_Canvases[ref->Canvas].Elements[ref->Element].TintTarget;
@@ -981,6 +1089,8 @@ namespace Strata
 				const WorldTransformComponent* world = m_Registry->try_get<WorldTransformComponent>(element.Entity);
 				if (element.Active != (!world || world->ActiveInHierarchy))
 					valid = fail(element.Entity, "its activity changed unnoticed");
+				else if (element.RaycastTarget != ComputeRaycastTarget(element.Entity))
+					valid = fail(element.Entity, "whether it is a raycast target changed unnoticed");
 			}
 			for (Layout& layout : canvas.Layouts)
 			{

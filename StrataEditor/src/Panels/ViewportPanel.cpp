@@ -736,11 +736,16 @@ namespace Strata
 			if (gameOwnsMouse)
 				m_MouseHintUntil = ImGui::GetTime() + c_MouseHintSeconds;
 		}
-		if (enabled)
+		// The input viewport follows the game view every frame it shows the game, also while it does not have the input, so
+		// the game UI hit tests the layout that is drawn (simulated clicks land where they are aimed); the game's window size
+		// is the image's pixels.
+		const bool playing = gameView && context.GetSceneState() == SceneState::Play;
+		if (playing)
 		{
 			const ImVec2 origin = ImGui::GetMainViewport()->Pos;
 			Input::SetViewport(glm::vec2(m_Image.Min.x - origin.x, m_Image.Min.y - origin.y), m_Image.Size);
 		}
+		context.GetGameWindow().SetViewSize(playing ? m_Image.GetPixelSize() : glm::uvec2(0));
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

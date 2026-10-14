@@ -27,9 +27,9 @@
 //
 // The built-in providers: PhysicsSystem offers ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries and
 // ICharacterControl; AudioSystem offers IAudioPlayback; the Animation module's system offers ISkinningPoses, IAnimatorControl and
-// IAnimationEventSource (the editor's pose preview provides ISkinningPoses for edited scenes, where no system runs). All
-// services are main thread only, like the scene. IAudioOutput, defined here too, is an engine service
-// (Core/EngineServices.h): it belongs to the process, not to a scene.
+// IAnimationEventSource (the editor's pose preview provides ISkinningPoses for edited scenes, where no system runs); the
+// GameUI module's system offers IUIEvents. All services are main thread only, like the scene. IAudioOutput, defined here
+// too, is an engine service (Core/EngineServices.h): it belongs to the process, not to a scene.
 namespace Strata
 {
 
@@ -360,6 +360,45 @@ namespace Strata
 
 		virtual AnimationEventListenerID AddAnimationEventListener(AnimationEventCallback callback) = 0;
 		virtual bool RemoveAnimationEventListener(AnimationEventListenerID id) = 0;
+	};
+
+	//////////////////////////////////////////////////////////////////////////
+	// Game UI
+	//////////////////////////////////////////////////////////////////////////
+
+	enum class UIEventType : uint8_t
+	{
+		Click = 0,    // A button was clicked (released over it after a press on it, or Submit while it has the focus)
+		ValueChanged, // A slider's value or a toggle's state changed through input (not through code)
+		FocusChanged  // A selectable gained or lost the focus
+	};
+
+	// An event of a widget of the game UI (the GameUI module's system).
+	struct UIEventInfo
+	{
+		UIEventType Type = UIEventType::Click;
+		Entity Widget;
+		UUID WidgetID = UUID::Null();
+		Entity Target;        // The widget's EventTarget: invalid without one, or when it is the widget itself
+		float Value = 0.0f;   // ValueChanged: the slider's value, or a toggle's 0 or 1
+		bool Focused = false; // FocusChanged: whether the widget gained the focus
+	};
+
+	using UIEventCallback = std::function<void(const UIEventInfo&)>;
+	using UIEventListenerID = uint64_t;
+
+	// The events of the game UI's widgets while the scene plays (the GameUI module's "UI" system, which runs before the
+	// scripts). Events are dispatched on the main thread during the system's update, so they arrive before the scripts'
+	// OnUpdate of that frame, in the order their inputs happened: pointer, then navigation, then submit. Listeners added
+	// while events are dispatched receive the next ones; a removed one is not called again. Listeners may use the whole
+	// scene and the other services.
+	class IUIEvents
+	{
+	public:
+		virtual ~IUIEvents() = default;
+
+		virtual UIEventListenerID AddUIEventListener(UIEventCallback callback) = 0;
+		virtual bool RemoveUIEventListener(UIEventListenerID id) = 0;
 	};
 
 	// The engine's audio output (AudioEngine), which outlives every scene: an engine service (Core/EngineServices.h) the

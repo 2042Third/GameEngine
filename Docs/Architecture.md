@@ -561,10 +561,11 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
 | `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (`SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
-| `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays) |
+| `Scene.UI`, `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays; `Scene.UI` is the game UI's input) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
+| `Render.UI` | the game UI pass (`GameUIRenderer`): its `Prepare` (layout, quads, uploads, glyphs) and `Draw` recording, nested in `Render.Submit` |
 | `Editor.UI` | `Application::RenderImGui`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
 | `Present` | `GraphicsDevice::EndFrame`, after the work time is measured (outside the frame time) |
 
@@ -615,7 +616,7 @@ are, in update order:
   paused frame (no step due) calls `OnPausedUpdate` instead (`CallsPausedUpdate`; of the built-ins only Animation's), for
   work the paused frame shows that advances no time.
 - **Profiling.** A system's start and update callbacks run in the frame profiler stage its descriptor names
-  (`SceneSystemDescriptor::ProfileStage`: `Scene.Scripts`, `Scene.Animation`, `Scene.Physics`, `Scene.Audio`; empty: not
+  (`SceneSystemDescriptor::ProfileStage`: `Scene.UI`, `Scene.Scripts`, `Scene.Animation`, `Scene.Physics`, `Scene.Audio`; empty: not
   timed on its own),
   resolved when the scene starts; scenes updated outside a profiled frame (tests) skip the stages altogether.
 
@@ -787,6 +788,7 @@ which means the module is not in the build or its system does not run in this mo
 | `ISkinningPoses`: each animator's pose (model-space joint matrices with a version), and which animators renderers drew | `AnimationSystem`; the editor's pose preview for edited scenes | `RenderScene` (palettes of skinned meshes), `SceneRenderer` (reports the animators of what it drew) |
 | `IAnimatorControl`: play, cross-fade, parameters, speed, state queries, joint transforms | `AnimationSystem` | script host (`Animator`), tools and tests |
 | `IAnimationEventSource`: listeners of the events controller states fire | `AnimationSystem` | `ScriptSystem` (`OnAnimationEvent`), tools and tests |
+| `IUIEvents`: listeners of the game UI's widget events (clicks, value changes, focus changes) | `GameUISystem` | tools and tests |
 
 What outlives scenes is an engine service (`Core/EngineServices.h`): a module registers it in its registration function
 while the composition root runs, e.g. the Audio module's `IAudioOutput` (the master volume, which scripts change in any
@@ -1946,6 +1948,25 @@ streaming. Canvases draw by sort order, instanced, six vertices per quad and no 
 bound, so a canvas with up to four fonts is one draw; push constants carry the canvas's scale and pixel snapping (rect
 edges and glyph baselines on whole pixels). `GameRenderer` shows a scene without a primary camera that has screen-space
 UI (a main menu) as that UI over black instead of its missing-camera message (`SceneRenderOptions::OverlayScene`).
+
+**Input** (`GameUISystem`, `GameUIHitTest`, `Input/UIActions`). The "UI" scene system runs in Play mode before the
+scripts (stage `Scene.UI`), so a click the UI takes is hidden from the scripts' `OnUpdate` of the same frame and widget
+events reach them first. Each update it lays the canvases out for the game's input screen (the pixels `IGameWindow`
+renders, input coordinates scaled to them) and keeps a uniform grid of raycast-target rects per canvas
+(`GameUIHitTester`, rebuilt when the layout or what hit tests see changes: `GameUIScene::GetHitStamp`), so a query
+compares the targets of one cell: the topmost by canvas sort order, then the last drawn, rect edges half-open. The
+pointer is the UI's while a press that started over a target is held and while it rests over the UI; then
+`Input::SetPointerCapture` hides mouse buttons and scrolling from gameplay (`Input::GetPointerState` reads them for the
+UI), and a press that started elsewhere stays the game's until its release. Buttons click on a release over the button
+the press started on; toggles flip (one on per group); sliders follow the pointer while dragged and snap to whole
+numbers. Values change through `registry.patch` (the running scene, without undo). The fixed action set
+(`c_UIActionMap`: Submit, Cancel and four directions on keys, the d-pad and the left stick with hysteresis, repeating after
+0.4 s every 0.1 s) moves the focus: explicit neighbours, or automatically the selectable ahead with the lowest along + 2 x
+across distance between centers. Selectable states (disabled, pressed, hovered, focused, normal) fade their tints over
+unscaled time (`Scene::GetUnscaledDeltaTime`, which time scale 0 does not stop), and only selectables showing a state
+keep a record, so an idle frame does no work. Events (`IUIEvents`: click, value changed, focus changed) are dispatched
+at the end of the update in input order. Typed text arrives per input frame as UTF-8 (`Input::GetTypedText`, from the
+window's character events and `Input::SimulateText`, at most 1,024 bytes).
 
 ## Scripting
 

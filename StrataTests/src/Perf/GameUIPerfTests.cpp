@@ -6,14 +6,16 @@
 #include <Strata/Core/FrameProfiler.h>
 #include <Strata/GameUI/GameUIComponents.h>
 #include <Strata/GameUI/GameUIScene.h>
+#include <Strata/GameUI/GameUISystem.h>
+#include <Strata/Input/Input.h>
 
 #include <chrono>
 #include <string>
 #include <vector>
 
 // The game UI's costs on its scaling scene (Perf::CreateUIWidgets: one canvas of 400 vertical layout panels of 12 buttons
-// with labels, 10,001 elements): a full layout (Perf.GameUI, CPU), and the UI pass's own CPU time with 200 elements
-// changing per frame and with nothing changing (PerfGPU.GameUI: Release and Dist, with a GPU).
+// with labels, 10,001 elements): a full layout and an idle frame of the UI system (Perf.GameUI, CPU), and the UI pass's own
+// CPU time with 200 elements changing per frame and with nothing changing (PerfGPU.GameUI: Release and Dist, with a GPU).
 
 using namespace Strata;
 using namespace Strata::Tests;
@@ -22,6 +24,8 @@ namespace
 {
 
 	constexpr int c_Relayouts = 30;
+	constexpr uint32_t c_IdleBatches = 300;
+	constexpr uint32_t c_FramesPerBatch = 10; // An idle frame is below the clock's resolution
 	constexpr int c_WarmupFrames = 20;
 	constexpr int c_MeasuredFrames = 300;
 	constexpr uint32_t c_Width = 1920;
@@ -82,6 +86,49 @@ TEST_SUITE("Perf.GameUI")
 			CHECK(stats.ElementsLaidOut == 10'001ull * (2 + c_Relayouts));
 			return measurement.MedianMs;
 		});
+	}
+
+	TEST_CASE("An idle frame of the UI system on 10,000 elements")
+	{
+		Input::Reset();
+		Ref<Scene> scene = CreateRef<Scene>("Widgets");
+		const Perf::UIWidgets widgets = Perf::CreateUIWidgets(*scene);
+		scene->OnRuntimeStart();
+		GameUISystem* system = scene->GetSystem<GameUISystem>();
+		REQUIRE(system);
+		// The pointer rests on a button (hovered, its fade over): what a player looking at a menu costs per frame.
+		GameUIScene& ui = GameUIScene::Get(*scene);
+		UICanvasView view;
+		uint32_t element = 0;
+		REQUIRE(ui.FindElement(widgets.Buttons[40].GetHandle(), GameUIScene::GetInputScreen().Screen, view, element));
+		Input::SimulateMouseMove(ui.GetElementBox(view, element).GetCenter() * view.Scale);
+		for (int frame = 0; frame < 30; frame++)
+		{
+			Input::BeginFrame();
+			scene->OnUpdateRuntime(1.0f / 60.0f);
+		}
+		REQUIRE(system->GetHovered() == widgets.Buttons[40]);
+		ui.TakeStats();
+
+		// The UI system's update alone (with its EnsureLayout), the other systems of the frame not included.
+		Perf::CheckBudgetConfirmed("Perf.GameUI.IdleFrame10k", [&]
+		{
+			const Perf::Measurement batches = Perf::Measure("IdleFrame10k (10 frames)", 2, c_IdleBatches, [&]
+			{
+				for (uint32_t frame = 0; frame < c_FramesPerBatch; frame++)
+				{
+					Input::BeginFrame();
+					system->OnUpdate(1.0f / 60.0f);
+				}
+			});
+			const GameUISceneStats stats = ui.TakeStats();
+			CHECK(stats.ElementsLaidOut == 0);
+			CHECK(stats.TextsShaped == 0);
+			CHECK(stats.QuadsBuilt == 0);
+			return batches.MedianMs / c_FramesPerBatch;
+		});
+		scene->OnRuntimeStop();
+		Input::Reset();
 	}
 }
 

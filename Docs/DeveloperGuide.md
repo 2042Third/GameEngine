@@ -51,6 +51,7 @@ characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together
 - [Game UI](#game-ui)
   - [The UI contract](#the-ui-contract)
   - [The UI pass](#the-ui-pass)
+  - [UI input](#ui-input)
 - [Editor](#editor)
   - [Editor UI rules](#editor-ui-rules)
   - [Changes go through commands](#changes-go-through-commands)
@@ -1096,6 +1097,37 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   `shaders/GameUI/UIQuad.glsl`: change both together. Images blend in display values (sRGB textures sample linear values
   and are converted back), corners and borders come from the rect's signed distance, glyphs share `Include/SDFText.glsl`
   with the text renderer.
+
+### UI input
+
+- The "UI" scene system (`GameUISystem`, Play mode, before "Scripting", stage `Scene.UI`) is the only code that reads the
+  pointer for the UI: it hit tests against the layout of the game's input screen (`GameUIScene::GetInputScreen`: the
+  pixels `IGameWindow` renders, so the editor's game view sets its view size and Retina input points become pixels).
+  Code that runs a game in-process provides `IGameWindow` with the rendered size, or hit tests use the input viewport.
+- Gameplay reads mouse buttons and scrolling through `Input` as before; while the UI owns a gesture (a press that started
+  over a raycast target, until every button is released) or the pointer rests over the UI, `Input::SetPointerCapture`
+  hides them from `IsMouseButtonDown/Pressed/Released` and `GetScrollDelta`. A press that started elsewhere stays the
+  game's. UI code reads the unfiltered pointer with `Input::GetPointerState`; nothing else sets capture.
+- Widgets change `UIToggle::IsOn` and `UISlider::Value` with `registry.patch` (the running scene, no undo) and raise
+  `IUIEvents` events (`Click`, `ValueChanged`, `FocusChanged`) at the end of the system's update, before the scripts'
+  `OnUpdate`. A button clicks on a release over the button the press started on, or on Submit while focused; disabled
+  selectables (`Interactable` off, or inactive) never hover, press, focus or raise events, but still block what is under
+  them.
+- Keyboard and gamepad navigation reads the fixed action set `Input/UIActions.h` (`c_UIActionMap`: Submit, Cancel and the
+  four directions on keys, the d-pad and the left stick, with repeat after `c_RepeatDelay` then every `c_RepeatInterval`
+  and stick hysteresis). `Automatic` navigation picks the selectable ahead with the lowest `along + 2 x |across|` between
+  centers (screen pixels; ties keep draw order); `Explicit` uses the neighbours; `None` is never navigated to or from.
+  The first Submit or direction without a focus focuses the topmost input canvas's `FirstSelected`, else its top-left
+  selectable. A focused slider steps along its direction by `KeyboardStep` (0: a tenth of the range).
+- Tints fade over the scene's unscaled time (`Scene::GetUnscaledDeltaTime`), so menus work at time scale 0; only
+  selectables that show a state of the system's (hovered, pressed, focused) or still fade keep a record in
+  `GameUIScene::SetSelectableState`, and an idle frame costs a pointer comparison.
+- Typed text: `Input::GetTypedText()` returns the UTF-8 typed during the input frame (the window's character events through
+  `Input::ProcessText`, while input is enabled, then simulated text from `Input::SimulateText`), at most
+  `Input::c_MaxTypedTextBytes`, whole characters, the first typed kept.
+- Tests drive the UI with simulated input (`Input::SimulateMouseMove`/`SimulateMouseButton`/`SimulateKey`) and an input
+  frame (`Input::BeginFrame`) before each `OnUpdateRuntime` (`GameUIInputTests.cpp`); `GameUIHitTester` alone checks hit
+  tests against a layout.
 
 ## Editor
 

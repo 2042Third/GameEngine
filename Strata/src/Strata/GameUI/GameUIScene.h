@@ -77,6 +77,15 @@ namespace Strata
 		Disabled
 	};
 
+	// The screen the game shows its UI on (the pixels of the image it renders: the game's window, the editor's game view;
+	// c_DefaultScreen without one), and the factor from input coordinates (Input::GetMousePosition, in the input viewport)
+	// to its pixels.
+	struct UIInputScreen
+	{
+		UIScreen Screen;
+		glm::vec2 InputToPixels = glm::vec2(1.0f);
+	};
+
 	// A changed range of a canvas's quads (GameUIScene::GetQuadChanges).
 	struct UIQuadRange
 	{
@@ -115,6 +124,9 @@ namespace Strata
 
 		// A root canvas's scale (pixels per unit) on a screen.
 		static float ComputeScale(const UICanvasComponent& canvas, const UIScreen& screen);
+		// The screen of the game's UI input: what the game renders (IGameWindow's size and content scale), else the input
+		// viewport, else c_DefaultScreen (headless editors and games, tests), so hit tests use the layout that is drawn.
+		static UIInputScreen GetInputScreen();
 
 		~GameUIScene();
 		GameUIScene(const GameUIScene&) = delete;
@@ -132,9 +144,16 @@ namespace Strata
 		UIBox GetElementBox(const UICanvasView& view, uint32_t element) const; // Canvas units
 		// Active in the hierarchy and not the checkmark of a toggle that is off (with its descendants).
 		bool IsElementVisible(const UICanvasView& view, uint32_t element) const;
+		// Whether the pointer can hit the element: it has a UIImage or UIText that is a raycast target, or a UISelectable.
+		bool IsRaycastTarget(const UICanvasView& view, uint32_t element) const;
 		// The view and element of an entity in the canvases of the latest EnsureLayout of `screen`; false for entities that
 		// are not laid-out UI elements.
 		bool FindElement(entt::entity entity, const UIScreen& screen, UICanvasView& outView, uint32_t& outElement);
+
+		// Identifies a canvas view's layout and what hit tests see of it (boxes, visibility, raycast targets): a hit test
+		// grid built for the same id and stamp is current.
+		uint64_t GetLayoutId(const UICanvasView& view) const;
+		uint64_t GetHitStamp(const UICanvasView& view) const;
 
 		// The quads of a canvas view, built for what changed since they were last built.
 		const std::vector<RenderData::UIQuad>& EnsureQuads(const UICanvasView& view);
@@ -162,6 +181,7 @@ namespace Strata
 		// through); the quads of the image it targets follow. Without one, a selectable shows its rest state: Disabled when not
 		// Interactable, else Normal, with that state's color.
 		void SetSelectableState(entt::entity selectable, UIVisualState state, const glm::vec4& tint);
+		void ClearSelectableState(entt::entity selectable);
 		void ClearSelectableStates();
 		UIVisualState GetVisualState(entt::entity selectable, const UISelectableComponent& component) const;
 		glm::vec4 GetTintColor(entt::entity selectable, const UISelectableComponent& component, UIVisualState state) const;
@@ -195,6 +215,14 @@ namespace Strata
 		void OnLayoutChanged(entt::registry& registry, entt::entity entity);
 		void OnVisualChanged(entt::registry& registry, entt::entity entity);
 		void OnTextChanged(entt::registry& registry, entt::entity entity);
+		// The components that make raycast targets, before they are removed (they are still there during the signal).
+		void OnImageDestroyed(entt::registry& registry, entt::entity entity);
+		void OnTextDestroyed(entt::registry& registry, entt::entity entity);
+		void OnSelectableDestroyed(entt::registry& registry, entt::entity entity);
+		// What hit tests see of an element changed when it became or stopped being a raycast target, which an element's
+		// flag remembers: other changes of its image, text or selectable (colors, texts) leave hit test grids alone.
+		void UpdateRaycastTarget(entt::entity entity, bool ignoreImage = false, bool ignoreText = false, bool ignoreSelectable = false);
+		bool ComputeRaycastTarget(entt::entity entity, bool ignoreImage = false, bool ignoreText = false, bool ignoreSelectable = false) const;
 		void OnSliderChanged(entt::registry& registry, entt::entity entity);
 		void OnToggleChanged(entt::registry& registry, entt::entity entity);
 
@@ -215,6 +243,8 @@ namespace Strata
 		void MarkElementQuadsDirty(uint32_t canvasIndex, uint32_t element);
 		void MarkSubtreeQuadsDirty(uint32_t canvasIndex, uint32_t element);
 		void MarkCanvasDirty(uint32_t canvasIndex);
+		// What hit tests see of the canvas changed (in every layout).
+		void TouchHits(uint32_t canvasIndex);
 
 		// Layout (GameUILayout.cpp).
 		Layout& GetLayout(Canvas& canvas, const glm::vec2& unitSize, uint32_t& outIndex);
@@ -272,6 +302,8 @@ namespace Strata
 		uint64_t m_CanvasSetStamp = 1;           // Canvases added or removed
 		uint64_t m_RootCanvasCountStamp = 0;
 		uint64_t m_NextQuadArrayId = 1;
+		uint64_t m_NextLayoutId = 1;
+		uint64_t m_HitStamp = 1;
 		std::vector<entt::entity> m_ChangeScratch;
 		std::vector<AssetHandle> m_AssetScratch;
 		struct WalkFrame

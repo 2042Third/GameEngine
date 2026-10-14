@@ -137,5 +137,6 @@
 	"PerfGPU.Renderer.Skinned1000": { "Measured": 0.6378, "Budget": 0.9567, "Unit": "ms" },
 	"Perf.GameUI.Layout10k": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.GameUI.Render10k": { "Unit": "ms", "Provisional": true, "Target": 1.0 },
-	"PerfGPU.GameUI.RenderIdle10k": { "Unit": "ms", "Provisional": true }
+	"PerfGPU.GameUI.RenderIdle10k": { "Unit": "ms", "Provisional": true },
+	"Perf.GameUI.IdleFrame10k": { "Unit": "ms", "Provisional": true }
 }

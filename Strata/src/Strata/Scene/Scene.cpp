@@ -1815,6 +1815,8 @@ namespace Strata
 		m_FixedTimeAccumulator = 0.0f;
 		m_DroppedFixedSteps = 0;
 		m_Time = 0.0;
+		m_UnscaledTime = 0.0;
+		m_UnscaledDeltaTime = 0.0f;
 		m_FrameIndex = 0;
 		m_QuitRequest.reset();
 		m_SceneLoadRequest.reset();
@@ -1942,6 +1944,10 @@ namespace Strata
 
 		const float fixedTimestep = m_Settings.FixedTimestep > 0.0f ? m_Settings.FixedTimestep : 1.0f / 60.0f;
 		const float deltaTime = stepping ? fixedTimestep : static_cast<float>(timestep) * m_TimeScale;
+		// Unscaled time goes on at time scale 0 (a pause menu's fades): the frame's timestep before the time scale, the fixed
+		// step while stepping.
+		m_UnscaledDeltaTime = stepping ? fixedTimestep : std::max(static_cast<float>(timestep), 0.0f);
+		m_UnscaledTime += m_UnscaledDeltaTime;
 
 		m_IsUpdating = true;
 		UpdateWorldTransforms();

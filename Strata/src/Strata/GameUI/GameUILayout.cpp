@@ -111,6 +111,7 @@ namespace Strata
 			layout.Dirty.clear();
 			std::fill(layout.DirtyMarks.begin(), layout.DirtyMarks.end(), 0);
 			layout.QuadsRepack = true;
+			layout.HitStamp = ++m_HitStamp;
 			return;
 		}
 		if (layout.Dirty.empty())
@@ -143,10 +144,14 @@ namespace Strata
 				const UIBox& before = m_BoxScratch[element - root];
 				const UIBox& after = layout.Boxes[element];
 				if (before.Min != after.Min || before.Size != after.Size)
+				{
 					markQuads(element);
+					layout.HitStamp = m_HitStamp + 1;
+				}
 			}
 		}
 		roots.clear();
+		m_HitStamp = std::max(m_HitStamp, layout.HitStamp);
 	}
 
 	void GameUIScene::LayOutSubtree(const Canvas& canvas, Layout& layout, uint32_t root, std::vector<UIBox>& boxes)

@@ -22,6 +22,7 @@ namespace Strata
 		uint32_t Parent = c_NoElement; // The nearest ancestor that is an element
 		uint32_t SubtreeEnd = 0;       // One past its last descendant: its subtree is [index, SubtreeEnd)
 		bool Active = true;            // WorldTransformComponent::ActiveInHierarchy as last seen
+		bool RaycastTarget = false;    // Whether hit tests see it (GameUIScene::IsRaycastTarget) as last seen
 		// Widget parts placed or shown by another element: a slider's fill or handle (its anchors follow the value) and a
 		// toggle's checkmark (drawn while the toggle is on).
 		uint32_t SliderOf = c_NoElement;
@@ -51,6 +52,8 @@ namespace Strata
 	{
 		glm::vec2 UnitSize = glm::vec2(0.0f);
 		uint64_t LastUsed = 0;
+		uint64_t Id = 0;       // Unique in the scene's UI
+		uint64_t HitStamp = 0; // Changes with what hit tests see (boxes, visibility, raycast targets)
 		std::vector<UIBox> Boxes;           // Per element
 		std::vector<ElementText> Texts;     // Per element (used by elements with text)
 		std::vector<uint32_t> Dirty;        // Elements marked since the last update
