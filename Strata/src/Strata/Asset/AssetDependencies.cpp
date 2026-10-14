@@ -20,24 +20,7 @@ namespace Strata
 	namespace
 	{
 
-		// Appends handles once each, in the order they first appear.
-		class ReferenceList
-		{
-		public:
-			explicit ReferenceList(std::vector<AssetHandle>& references)
-				: m_References(references), m_Seen(references.begin(), references.end())
-			{
-			}
-
-			void Add(AssetHandle handle)
-			{
-				if (handle.IsValid() && m_Seen.insert(handle).second)
-					m_References.push_back(handle);
-			}
-		private:
-			std::vector<AssetHandle>& m_References;
-			std::unordered_set<AssetHandle> m_Seen;
-		};
+		using ReferenceList = AssetDependencies::ReferenceList;
 
 		// The asset properties of a reflected object's JSON (a component, a material).
 		void ScanProperties(const std::vector<PropertyInfo>& properties, const nlohmann::json& object, ReferenceList& references)
@@ -144,6 +127,22 @@ namespace Strata
 			}
 		}
 
+	}
+
+	AssetDependencies::ReferenceList::ReferenceList(std::vector<AssetHandle>& references)
+		: m_References(references), m_Seen(references.begin(), references.end())
+	{
+	}
+
+	void AssetDependencies::ReferenceList::Add(AssetHandle handle)
+	{
+		if (handle.IsValid() && m_Seen.insert(handle).second)
+			m_References.push_back(handle);
+	}
+
+	void AssetDependencies::ScanEntity(const nlohmann::json& entity, ReferenceList& references)
+	{
+		ScanEntityInto(entity, ComponentRegistry::Find<ScriptComponent>(), references);
 	}
 
 	void AssetDependencies::ScanEntities(const nlohmann::json& snapshot, std::vector<AssetHandle>& outReferences)

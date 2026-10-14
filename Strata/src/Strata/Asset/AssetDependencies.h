@@ -6,6 +6,7 @@
 
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace Strata
@@ -34,6 +35,21 @@ namespace Strata
 
 		// The references of the entities of a snapshot ({"Entities": [...]}, SceneSerializer's format), appended like Scan's.
 		void ScanEntities(const nlohmann::json& snapshot, std::vector<AssetHandle>& outReferences);
+
+		// References as Scan appends them: each valid handle once, in the order it first appears (the handles the vector holds
+		// already count as seen).
+		class ReferenceList
+		{
+		public:
+			explicit ReferenceList(std::vector<AssetHandle>& references);
+			void Add(AssetHandle handle);
+		private:
+			std::vector<AssetHandle>& m_References;
+			std::unordered_set<AssetHandle> m_Seen;
+		};
+		// The references of one entity object of a document of entities, by Scan's rules: for readers that see the entities
+		// one at a time (AssetPackCook).
+		void ScanEntity(const nlohmann::json& entity, ReferenceList& references);
 
 	}
 

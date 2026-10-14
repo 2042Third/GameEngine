@@ -428,7 +428,9 @@ namespace Strata
 				{ "width", IntegerSchema("Window width (default 1280)", 1, 16384) },
 				{ "height", IntegerSchema("Window height (default 720)", 1, 16384) },
 				{ "fullscreen", BoolSchema("Start in fullscreen (default false)") },
-				{ "prune", BoolSchema("Leave out assets no scene uses and Export.AlwaysInclude does not name (default false: scripts may load assets by path)") } },
+				{ "prune", BoolSchema("Leave out assets no scene uses and Export.AlwaysInclude does not name (default false: scripts may load assets by path)") },
+				{ "cookDocuments", BoolSchema("Put scenes, prefabs and models into the pack in their binary cooked form, which loads without parsing JSON (default "
+					"true; false keeps their JSON)") } },
 				{ "directory" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -442,6 +444,7 @@ namespace Strata
 				options.WindowHeight = static_cast<uint32_t>(arguments.GetInt("height", options.WindowHeight, 1, 16384));
 				options.Fullscreen = arguments.GetBool("fullscreen", false);
 				options.Prune = arguments.GetBool("prune", false);
+				options.CookDocuments = arguments.GetBool("cookDocuments", true);
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				std::string error;

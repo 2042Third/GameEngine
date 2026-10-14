@@ -130,6 +130,7 @@ namespace Strata::Tests
 	{
 		AssetHandle StartScene = UUID::Null(); // The scene the game starts with; null: the project's start scene
 		bool IncludeRuntime = false;           // Copy the runtime executable (tests run the build's own with --game)
+		bool CookDocuments = true;             // Cooked scenes in the pack, as exports write them (false: their JSON)
 	};
 
 	// What WriteWorldGame exported.

@@ -62,7 +62,7 @@ namespace Strata::Tests
 		if (options.StartScene.IsValid() && !RunCommand(context, commands, "project.setStartScene", { { "scene", options.StartScene.ToString() } }, error))
 			return std::nullopt;
 		const std::optional<nlohmann::json> exported = RunCommand(context, commands, "project.export",
-			{ { "directory", FileSystem::ToUTF8(outputDirectory) }, { "includeRuntime", options.IncludeRuntime } }, error);
+			{ { "directory", FileSystem::ToUTF8(outputDirectory) }, { "includeRuntime", options.IncludeRuntime }, { "cookDocuments", options.CookDocuments } }, error);
 		if (!exported)
 			return std::nullopt;
 

@@ -4,6 +4,7 @@
 #include "Strata/Asset/ImportRecordStore.h"
 
 #include "Strata/Asset/AssetDependencies.h"
+#include "Strata/Asset/AssetPackCook.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/FileReader.h"
 #include "Strata/Core/FileSystem.h"
@@ -3953,7 +3954,11 @@ namespace Strata
 			const std::optional<AssetMetadata> metadata = GetMetadata(handle);
 			return metadata && !metadata->Path.empty() ? fmt::format("'{}'", metadata->Path) : fmt::format("asset {}", handle.ToString());
 		};
-		return AssetPackWriter::Write(packPath, plan.Assets, [this, &planned, &describe](const AssetMetadata& metadata, std::vector<uint8_t>& outData,
+		// Documents of entities are cooked (and scenes adjusted) by the same read that finds their references.
+		AssetPackCookOptions cook;
+		cook.Cook = options.CookDocuments;
+		cook.AdjustSceneSettings = options.AdjustSceneSettings;
+		return AssetPackWriter::Write(packPath, plan.Assets, [this, &planned, &describe, &cook](const AssetMetadata& metadata, std::vector<uint8_t>& outData,
 			std::string* outReadError)
 		{
 			if (!ReadAssetData(metadata, outData, outReadError))
@@ -3965,13 +3970,18 @@ namespace Strata
 				return false;
 			};
 			const auto source = planned.find(metadata.Handle);
-			if (!AssetDependencies::CanReference(metadata.Type) || source == planned.end())
+			const bool entityDocument = metadata.Type == AssetType::Scene || metadata.Type == AssetType::Prefab || metadata.Type == AssetType::Model;
+			const bool rewrite = entityDocument && (cook.Cook || (metadata.Type == AssetType::Scene && cook.AdjustSceneSettings));
+			if (!rewrite && (!AssetDependencies::CanReference(metadata.Type) || source == planned.end()))
 				return true;
 
 			std::vector<AssetHandle> references;
 			std::string scanError;
-			if (!AssetDependencies::Scan(metadata.Type, outData, references, &scanError))
+			const bool read = rewrite ? CookForPack(metadata, outData, cook, references, &scanError) : AssetDependencies::Scan(metadata.Type, outData, references, &scanError);
+			if (!read)
 				return fail(fmt::format("it cannot be read as a document ({}); fix it and export again", scanError));
+			if (source == planned.end())
+				return true;
 			// Compared as recorded references are made: a document that names itself (a scene whose script loads it again)
 			// depends on nothing for that.
 			const std::unordered_set<AssetHandle> recorded(source->second->Dependencies.begin(), source->second->Dependencies.end());

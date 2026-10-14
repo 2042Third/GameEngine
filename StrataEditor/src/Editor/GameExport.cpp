@@ -392,6 +392,7 @@ namespace Strata
 				GameExportResult result;
 				result.AssetPack = options.Directory / FileSystem::FromUTF8(data->Manifest.AssetPack);
 				AssetPackWriteOptions writeOptions;
+				writeOptions.CookDocuments = options.CookDocuments;
 				writeOptions.Cancel = &shared->Cancel;
 				writeOptions.Progress = [&shared](uint64_t done, uint64_t) { shared->DoneBytes = done; };
 				std::string error;

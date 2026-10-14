@@ -39,6 +39,9 @@ namespace Strata
 		// Pack only what the scenes use and what the project's Export.AlwaysInclude names, with what that uses
 		// (AssetPackBuildOptions::Prune). Off by default: scripts can find assets by path, which no scene shows.
 		bool Prune = false;
+		// Put scenes, prefabs and models into the pack cooked (CookedScene: loads read them without parsing JSON); false keeps
+		// their JSON.
+		bool CookDocuments = true;
 	};
 
 	struct GameExportResult
