@@ -27,7 +27,9 @@ namespace Strata
 	struct ScriptSourceListing
 	{
 		std::vector<ScriptSourceFile> Files; // Sorted by path, ignoring case
-		bool Truncated = false;              // The directory holds more than c_MaxListedScriptSources files (or a huge tree)
+		// The listing is incomplete: the directory holds more than c_MaxListedScriptSources files (or a huge tree), or it
+		// could not be listed completely (it is no directory, or the walk ended on an error).
+		bool Truncated = false;
 
 		bool operator==(const ScriptSourceListing&) const = default;
 	};
@@ -53,7 +55,8 @@ namespace Strata
 	// control) and build trees (folders with a CMakeCache.txt, e.g. an IDE's build inside the scripts) are left out. Code
 	// files are read for their ST_SCRIPT_CLASS registrations; `previous` (an earlier listing of the same directory) lends
 	// the classes of files whose size and write time did not change, so listing again reads only what changed. A missing
-	// directory lists nothing. The limits are c_MaxListedScriptSources and c_MaxScannedScriptEntries unless given.
+	// directory lists nothing; a path that is no directory lists nothing either, but Truncated (its files are unknown). The
+	// limits are c_MaxListedScriptSources and c_MaxScannedScriptEntries unless given.
 	ScriptSourceListing ListScriptSources(const std::filesystem::path& directory, const ScriptSourceListing* previous = nullptr,
 		size_t maxFiles = c_MaxListedScriptSources, size_t maxEntries = c_MaxScannedScriptEntries);
 	// The same files with their sizes and write times, read from the directory alone (Classes stay empty): what a script

@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Scene/Scene.h"
 
+#include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/Entity.h"
@@ -1880,6 +1881,11 @@ namespace Strata
 	uint32_t Scene::GetRunningSceneCount()
 	{
 		return s_RunningSceneCount.load();
+	}
+
+	AssetManagerBase* Scene::GetAssetManager() const
+	{
+		return AssetManager::GetActive().get();
 	}
 
 	bool Scene::RegisterServiceProvider(entt::id_type type, std::string_view typeName, void* provider)

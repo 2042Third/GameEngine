@@ -4,6 +4,7 @@
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/ScriptProject.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
 
@@ -20,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 // Script builds with the real toolchain (CMake and the engine's compiler): the suites whose names start with "Package"
 // run as the CTest StrataTests.Package (label "package"), like StrataScriptCore.Package.
@@ -352,6 +354,67 @@ ST_SCRIPT_CLASS(Mover)
 		Ref<Scene> running = harness.Context.GetActiveScene();
 		const Entity host = running->GetEntityByUUID(*UUIDFromJson(id));
 		CHECK(GetField<int32_t>(GetScriptSystem(*running), host, "Mover", "Ticks") >= 3);
+	}
+
+	TEST_CASE("A class added after the scripts were built is in the module after one build")
+	{
+		// The build tree was configured before the class existed. A build configures it again first: a Visual Studio build
+		// would otherwise compile the projects as they were configured and leave the new class out of the module.
+		BuildHarness harness;
+		const nlohmann::json first = harness.Run("script.build");
+		CHECK(first["configured"] == true);
+		const Ref<ScriptEngine> engine = harness.Context.GetScriptEngine();
+		REQUIRE(engine->FindClass("Spinner"));
+		CHECK_FALSE(engine->FindClass("Mover"));
+
+		// New Script (script.create).
+		harness.Run("script.create", { { "class", "Mover" }, { "fields", { { "Speed", "float" } } } });
+		const nlohmann::json created = harness.Run("script.build");
+		CHECK(created["configured"] == true);
+		CHECK(created["moduleChanged"] == true);
+		const ScriptClassInfo* mover = engine->FindClass("Mover");
+		REQUIRE(mover);
+		CHECK(mover->FindField("Speed"));
+		CHECK(engine->FindClass("Spinner"));
+
+		// A file written directly, in a folder of its own.
+		const std::filesystem::path scripts = harness.Context.GetProject()->GetScriptSourceDirectory();
+		REQUIRE(FileSystem::WriteText(scripts / "Gameplay" / "Jumper.cpp", MakeScriptSource("Jumper", ScriptTemplate::Behaviour, {})));
+		const nlohmann::json written = harness.Run("script.build");
+		CHECK(written["configured"] == true);
+		CHECK(engine->FindClass("Jumper"));
+		CHECK(engine->FindClass("Mover"));
+
+		// Nothing was added since: the next build only builds.
+		const nlohmann::json again = harness.Run("script.build");
+		CHECK(again["configured"] == false);
+		CHECK(engine->FindClass("Jumper"));
+	}
+
+	TEST_CASE("The module compiles the files the editor lists: not those in hidden folders or build trees")
+	{
+		// The code there does not compile, so a build that took it in would fail. A file whose own name starts with '.' is
+		// a source like any other.
+		BuildHarness harness;
+		const std::filesystem::path scripts = harness.Context.GetProject()->GetScriptSourceDirectory();
+		REQUIRE(FileSystem::WriteText(scripts / ".hidden" / "Broken.cpp", c_BrokenScript));
+		REQUIRE(FileSystem::WriteText(scripts / "out" / "CMakeCache.txt", "# An IDE's build tree\n"));
+		REQUIRE(FileSystem::WriteText(scripts / "out" / "Broken.cpp", c_BrokenScript));
+		REQUIRE(FileSystem::WriteText(scripts / "out" / "CMakeFiles" / "Broken.cpp", c_BrokenScript));
+		REQUIRE(FileSystem::WriteText(scripts / ".Dotted.cpp", MakeScriptSource("Dotted", ScriptTemplate::Empty, {})));
+
+		const nlohmann::json built = harness.Run("script.build");
+		CHECK(built["success"] == true);
+		const Ref<ScriptEngine> engine = harness.Context.GetScriptEngine();
+		CHECK(engine->FindClass("Spinner"));
+		CHECK(engine->FindClass("Dotted"));
+
+		// The editor lists the same files.
+		const nlohmann::json files = harness.Run("script.list")["files"];
+		std::vector<std::string> listed;
+		for (const nlohmann::json& file : files)
+			listed.push_back(file["path"].get<std::string>());
+		CHECK(listed == std::vector<std::string> { ".Dotted.cpp", "CMakeLists.txt", "Spinner.cpp" });
 	}
 
 	TEST_CASE("Scripts build in the Dist configuration")

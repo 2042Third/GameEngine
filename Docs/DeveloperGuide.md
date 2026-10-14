@@ -434,8 +434,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   drivers for `GPU.Startup`) and, on Windows, `console-output [--interrupt-when <text>] <program>` runs a program as a
   terminal does, pressing Ctrl+C once the console shows the text (`Tests::RunInConsole`). With
   `STRATA_TEST_FAKE_CMAKE=succeed` it also stands in for CMake in script
-  builds (`ScriptBuildSettings::CMake`), building nothing; with `fail` it fails the build with an MSVC error and a warning
-  in its output (diagnostics, the Problems panel).
+  builds (`ScriptBuildSettings::CMake`), building nothing and printing the step it ran (`-- Fake CMake: -S` or
+  `--build`); with `fail` it fails the build with an MSVC error and a warning in its output (diagnostics, the Problems
+  panel), with `fail-configure` the configure step with a CMake error.
 
 ### Feature test
 
@@ -867,13 +868,16 @@ Building and loading scripts:
 - **Project scripts.** A project's scripts live in its script directory (`ProjectScriptSettings::SourceDirectory`,
   "Scripts"), whose `CMakeLists.txt` builds every `.cpp`/`.h` below it into the module `ModuleName` (stored in the
   `.stproj`, version 2: `"Scripts": {"SourceDirectory", "ModuleName"}`; version 1 files derive the name from the project
-  name, `Project::MakeScriptModuleName`). `project.create` writes that `CMakeLists.txt`, an example script and
-  `CMakePresets.json` for IDEs (`Editor/ScriptProject.cpp`; `script.init` adds them to older projects; the presets carry
-  the toolchain below and `STRATA_ENGINE_DIR`, are rewritten when Strata wrote them and the toolchain changed, and a
-  `.gitignore` beside them keeps them out of version control: `UpdateScriptCMakePresets`); project text only goes into
-  comments, and projects reject names and directories with control characters on load and save. `script.create` writes a
-  new class (`MakeScriptSource`: only the validated class and field names go into the code, `ValidateNewScriptClass`
-  refuses names the project's scripts or the SDK declare). The editor builds the scripts with
+  name, `Project::MakeScriptModuleName`). Folders whose names start with '.' and build trees (folders holding a
+  `CMakeCache.txt`) below it are neither compiled (`strata_add_script_module` leaves them out of its glob) nor watched
+  (`ListScriptSources` and `StampScriptSources` skip them), so the module and the editor agree on its files.
+  `project.create` writes that `CMakeLists.txt`, an example script and `CMakePresets.json` for IDEs
+  (`Editor/ScriptProject.cpp`; `script.init` adds them to older projects; the presets carry the toolchain below and
+  `STRATA_ENGINE_DIR`, are rewritten when Strata wrote them and the toolchain changed, and a `.gitignore` beside them
+  keeps them out of version control: `UpdateScriptCMakePresets`); project text only goes into comments, and projects
+  reject names and directories with control characters on load and save. `script.create` writes a new class
+  (`MakeScriptSource`: only the validated class and field names go into the code, `ValidateNewScriptClass` refuses names
+  the project's scripts or the SDK declare). The editor builds the scripts with
   `script.build` (`ScriptBuilder`, `Editor/ScriptBuild.cpp`): CMake configures `<project>/.strata/Scripts/Build` with the
   toolchain the engine was configured with (generator, platform, toolset, compiler, configuration and this checkout as
   `STRATA_ENGINE_DIR`, baked into `Editor/ScriptBuildConfig.h` at configure time; CMake is the engine's, else `cmake` on
@@ -889,14 +893,20 @@ Building and loading scripts:
   system compiler, Ninja or Make and CMake 3.25+ on Linux and macOS (modules only
   cross the C ABI, so another compiler of the platform builds them as well). Without one the build fails with what to
   install (its first diagnostic, which the Problems panel and the notification show; `script.status` -> `toolchain` says
-  what the next build uses). The configure step only runs when the build tree is new or the toolchain changed, and
-  generators that can (Ninja, Makefiles) write `compile_commands.json`. With a Visual Studio generator a project whose
-  build tree would be too deep builds in the per-user build directory instead (`ResolveScriptBuildLocation`:
-  `<user data>/Strata/Builds/<hash of the project directory>`, created private; `STRATA_SCRIPT_BUILDS_DIR` overrides the
-  root, tests set it), and the build's log says why: MSBuild's file tracker cannot create its logs at paths over 259
-  characters, which lie up to 104 characters below the build tree (more for module names over about 40 characters), and
-  fails with errors that do not name the cause (`CheckScriptBuildPathLength`). Only a project too deep for both is
-  refused before anything runs, naming a shorter folder by its real path.
+  what the next build uses). The configure step only runs when the build tree is new, the toolchain changed (the tree is
+  then removed and made again) or files were added to, removed from or renamed in the script directory (configured again
+  where it is: the tree's stamp, `StrataScriptBuild.json`, holds the sorted list of the files it was configured with,
+  taken from the `StampScriptSources` listing `EditorContext` passes to `ScriptBuilder::Start`; a listing cut short
+  configures every build). A Visual Studio build compiles the projects as they were configured, even when the module's
+  `CONFIGURE_DEPENDS` globs find new files during it, so a class New Script added would otherwise be missing from the
+  module after one build. Generators that can (Ninja, Makefiles) write `compile_commands.json`. With a Visual Studio
+  generator a project whose build tree would be too deep builds in the per-user build directory instead
+  (`ResolveScriptBuildLocation`: `<user data>/Strata/Builds/<hash of the project directory>`, created private;
+  `STRATA_SCRIPT_BUILDS_DIR` overrides the root, tests set it), and the build's log says why: MSBuild's file tracker
+  cannot create its logs at paths over 259 characters, which lie up to 104 characters below the build tree (more for
+  module names over about 40 characters), and fails with errors that do not name the cause
+  (`CheckScriptBuildPathLength`). Only a project too deep for both is refused before anything runs, naming a shorter
+  folder by its real path.
   Output is streamed to the log; errors are parsed into file/line/message diagnostics (MSVC, GCC, Clang, the GNU, Apple
   and MSVC linkers, CMake; failures with only summary lines report the end of the log). One build runs at a time: a
   second request fails until the running one finished. Cancelling a build (also by closing the project or the editor)

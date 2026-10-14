@@ -972,7 +972,8 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 
 // With STRATA_TEST_FAKE_CMAKE=succeed, the test executable run with CMake's arguments ("-S ..." to configure,
 // "--build ..." to build) stands in for CMake in script builds (ScriptBuildSettings::CMake): it succeeds without building
-// anything, so the module file stays as the test left it.
+// anything, so the module file stays as the test left it, and prints which step it ran ("-- Fake CMake: -S" or
+// "-- Fake CMake: --build"), which tests read in the build's log. Other modes fail a step (below).
 static std::optional<int> RunAsFakeCMake(int argc, char** argv)
 {
 	const std::optional<std::string> mode = Strata::Platform::GetEnvVar("STRATA_TEST_FAKE_CMAKE");
@@ -1000,6 +1001,20 @@ static std::optional<int> RunAsFakeCMake(int argc, char** argv)
 			"'#if/#elif'\n");
 		std::fflush(stdout);
 		return 1;
+	}
+	// "fail-configure": configuring reports a CMake error in the scripts' CMakeLists.txt and fails; building succeeds.
+	if (*mode == "fail-configure")
+	{
+		if (std::string_view(argv[1]) == "-S")
+		{
+			std::printf("CMake Error at CMakeLists.txt:3 (message):\n  Fake configure error\n\n");
+			std::printf("-- Configuring incomplete, errors occurred!\n");
+			std::fflush(stdout);
+			return 1;
+		}
+		std::printf("-- Fake CMake: %s\n", argv[1]);
+		std::fflush(stdout);
+		return 0;
 	}
 	return std::nullopt;
 }

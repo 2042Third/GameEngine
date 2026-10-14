@@ -2559,15 +2559,18 @@ is the `strata-scripting` skill. The layers:
   goes to the mesh under the cursor (`component.set`, one undo step). `entity.dropToGround` (End, and Edit > Drop to Ground) moves each
   entity straight down by the nearest hit of rays from the bottom of its bounds (with its children; the center and four
   inset corners), in one undo step.
-- **Script builds** (`ScriptBuild.h`). `ScriptBuilder` runs CMake configure and build as child processes (one build at
-  a time, ended as a process tree when cancelled), polled once per frame; its output streams to the log and is parsed
-  into diagnostics. When a build finishes, `EditorContext` loads or hot reloads the module. With a Visual Studio
-  generator it first checks the build tree's depth (`CheckScriptBuildPathLength`): MSBuild's file tracker cannot create
-  logs at paths over 259 characters, even where Windows allows long paths, and the build would fail without naming the
-  cause, so a project in too deep a folder builds in a per-user directory instead (`ResolveScriptBuildLocation`:
-  `<user data>/Strata/Builds/<hash>`, said in the build's log), and only one too deep even for that is refused, naming a
-  shorter folder. Every build brings `Scripts/CMakePresets.json` up to date for IDEs (`UpdateScriptCMakePresets`: the
-  same toolchain and `STRATA_ENGINE_DIR`, an IDE build tree of its own, the module's output where the editor loads it).
+- **Script builds** (`ScriptBuild.h`). `ScriptBuilder` runs CMake configure and build as child processes (one build at a
+  time, ended as a process tree when cancelled), polled once per frame; its output streams to the log and is parsed into
+  diagnostics. It configures a new build tree, one made with another toolchain (removed first) and one whose script
+  directory gained, lost or renamed files since it was configured (the stamp in the tree lists them): Visual Studio
+  builds compile the projects as they were configured. When a build finishes, `EditorContext` loads or hot reloads the
+  module. With a Visual Studio generator it first checks the build tree's depth (`CheckScriptBuildPathLength`):
+  MSBuild's file tracker cannot create logs at paths over 259 characters, even where Windows allows long paths, and the
+  build would fail without naming the cause, so a project in too deep a folder builds in a per-user directory instead
+  (`ResolveScriptBuildLocation`: `<user data>/Strata/Builds/<hash>`, said in the build's log), and only one too deep
+  even for that is refused, naming a shorter folder. Every build brings `Scripts/CMakePresets.json` up to date for IDEs
+  (`UpdateScriptCMakePresets`: the same toolchain and `STRATA_ENGINE_DIR`, an IDE build tree of its own, the module's
+  output where the editor loads it).
 - **The toolchain of script builds** (`ScriptToolchain.h`). The editor's settings come from
   `ScriptBuildSettings::Detect`: in a build tree the toolchain and checkout the engine was configured with
   (`Editor/ScriptBuildConfig.h`); in an installed Strata (`StrataInstall.json` beside the executables,

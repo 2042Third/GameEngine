@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Scene/SceneLoaderTestUtils.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
@@ -371,6 +372,28 @@ TEST_SUITE("Scene")
 		scene.OnRuntimeStop();
 		CHECK(scene.GetQuitRequest() == 1);
 	}
+
+	TEST_CASE("A scene reaches the asset manager through GetAssetManager: the active one, until scenes have their own")
+	{
+		Tests::ScopedActiveManager none(nullptr); // None is active (until the test ends: then the previous one is again)
+		Scene scene("Assets");
+		CHECK(scene.GetAssetManager() == nullptr);
+
+		const Ref<Tests::FakeAssetManager> manager = CreateRef<Tests::FakeAssetManager>();
+		{
+			Tests::ScopedActiveManager active(manager);
+			CHECK(scene.GetAssetManager() == manager.get());
+			// Every scene answers the same manager.
+			const Scene other("Other");
+			CHECK(other.GetAssetManager() == manager.get());
+
+			const Ref<Tests::FakeAssetManager> next = CreateRef<Tests::FakeAssetManager>();
+			Tests::ScopedActiveManager replaced(next);
+			CHECK(scene.GetAssetManager() == next.get());
+		}
+		CHECK(scene.GetAssetManager() == nullptr);
+	}
+
 	TEST_CASE("Find by name and tag")
 	{
 		Scene scene;

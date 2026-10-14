@@ -164,8 +164,23 @@ ST_SCRIPT_CLASS(Unclosed
 		CHECK(FindFile(again, "Gameplay/AI/Brain.cpp")->Classes == std::vector<std::string> { "Brain", "Planner" });
 
 		// No directory, no files.
-		CHECK(ListScriptSources(directory / "Missing").Files.empty());
-		CHECK(ListScriptSources(directory / "Player.cpp").Files.empty());
+		const ScriptSourceListing missing = ListScriptSources(directory / "Missing");
+		CHECK(missing.Files.empty());
+		CHECK_FALSE(missing.Truncated);
+	}
+
+	TEST_CASE("A listing whose walk ends on an error says that it is incomplete")
+	{
+		// A file where the directory should be: the walk fails at once (as one does on a folder removed or replaced while it
+		// walks), so the files are unknown rather than none.
+		const std::filesystem::path directory = CreateTemporaryDirectory("ScriptSourcesError") / "Scripts";
+		REQUIRE(FileSystem::WriteText(directory, "Not a folder\n"));
+		const ScriptSourceListing listed = ListScriptSources(directory);
+		CHECK(listed.Files.empty());
+		CHECK(listed.Truncated);
+		const ScriptSourceListing stamped = StampScriptSources(directory);
+		CHECK(stamped.Files.empty());
+		CHECK(stamped.Truncated);
 	}
 
 	TEST_CASE("A script directory with more files or entries than a listing looks at is listed in part, and says so")

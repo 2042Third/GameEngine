@@ -202,7 +202,7 @@ namespace Strata
 				OpenFile(context, listing.Files[*open].Path);
 		}
 		if (listing.Truncated)
-			ImGui::TextDisabled("Showing the first %zu files of the Scripts folder", listing.Files.size());
+			ImGui::TextDisabled("Showing %zu files: the Scripts folder holds more, or could not be listed completely", listing.Files.size());
 	}
 
 	void ScriptBrowser::DrawFileMenu(EditorPanelContext& context, const ScriptSourceFile& file)

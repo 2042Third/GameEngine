@@ -199,7 +199,9 @@ namespace Strata
 			size_t maxEntries, bool readClasses)
 		{
 			ScriptSourceListing listing;
-			if (!FileSystem::IsDirectory(directory))
+			// A missing directory holds no files. Anything else the walk cannot finish (a file in its place, an error while it
+			// walks) leaves the files unknown: Truncated.
+			if (!FileSystem::Exists(directory))
 				return listing;
 
 			// The classes of the previous listing, lent to files whose size and write time are unchanged.
@@ -257,6 +259,10 @@ namespace Strata
 				}
 				listing.Files.push_back(std::move(file));
 			}
+			// The walk ended on an error (the path is no directory, a folder was removed or replaced while it walked): the files
+			// after it are unknown. Folders that may not be read are skipped without one (skip_permission_denied).
+			if (error)
+				listing.Truncated = true;
 
 			// By path ignoring case (each lowered once), and by the exact path where only case differs.
 			std::vector<std::pair<std::string, size_t>> order;
