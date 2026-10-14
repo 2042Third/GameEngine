@@ -120,8 +120,60 @@ namespace
 
 }
 
+namespace
+{
+
+	// Writes each notification it gets into a shared log, as "<name>:<step>:<applied|undone>".
+	class LoggingObserver final : public UndoStackObserver
+	{
+	public:
+		LoggingObserver(std::string name, std::vector<std::string>& log)
+			: m_Name(std::move(name)), m_Log(log)
+		{
+		}
+
+		void OnApplied(const EditorAction& action, bool undone, bool) override
+		{
+			m_Log.push_back(m_Name + ":" + action.GetName() + ":" + (undone ? "undone" : "applied"));
+		}
+	private:
+		std::string m_Name;
+		std::vector<std::string>& m_Log;
+	};
+
+}
+
 TEST_SUITE("Editor.Undo")
 {
+	TEST_CASE("Every observer hears every applied and undone step, in the order they were added")
+	{
+		int value = 0;
+		std::vector<std::string> log;
+		LoggingObserver recovery("recovery", log);
+		LoggingObserver world("world", log);
+		UndoStack stack;
+		stack.AddObserver(&recovery);
+		stack.AddObserver(&world);
+		stack.AddObserver(&recovery); // Once is enough
+		stack.AddObserver(nullptr);
+		CHECK(stack.Execute(CreateScope<AddAction>(value, 1)));
+		CHECK(stack.Undo());
+		CHECK(stack.Redo());
+		CHECK(log == std::vector<std::string> { "recovery:Add 1:applied", "world:Add 1:applied", "recovery:Add 1:undone", "world:Add 1:undone",
+			"recovery:Add 1:applied", "world:Add 1:applied" });
+
+		// A removed observer hears nothing more; removing one twice changes nothing.
+		log.clear();
+		stack.RemoveObserver(&recovery);
+		stack.RemoveObserver(&recovery);
+		CHECK(stack.Execute(CreateScope<AddAction>(value, 2)));
+		CHECK(log == std::vector<std::string> { "world:Add 2:applied" });
+		stack.RemoveObserver(&world);
+		CHECK(stack.Undo());
+		CHECK(log.size() == 1);
+		CHECK(value == 1);
+	}
+
 	TEST_CASE("Actions are undone and redone in order")
 	{
 		int value = 0;

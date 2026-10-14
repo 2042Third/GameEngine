@@ -456,14 +456,14 @@ TEST_SUITE("Editor.Recovery")
 		CHECK(recovery.GetStatus().Skipped.find("never saved") != std::string::npos);
 
 		UndoStack undo;
-		undo.SetObserver(&recovery);
+		undo.AddObserver(&recovery);
 		SceneEditTransaction transaction(scene, "Create Entity", {});
 		transaction.TrackCreated(scene.CreateEntity("Edit").GetUUID());
 		REQUIRE(transaction.Commit(undo));
 		CHECK_FALSE(recovery.Flush(scene, true));
 		recovery.Wait();
 		CHECK(ListRecoveryFiles(directory / "Recovery").empty());
-		undo.SetObserver(nullptr);
+		undo.RemoveObserver(&recovery);
 	}
 
 	TEST_CASE("A step only a snapshot captures turns the journal into a snapshot of the scene")
@@ -657,7 +657,7 @@ TEST_SUITE("Editor.Recovery")
 		recovery.OnSceneMoved(movedFile, "Levels/Level.stscene");
 
 		UndoStack undo;
-		undo.SetObserver(&recovery);
+		undo.AddObserver(&recovery);
 		SceneEditTransaction transaction(scene, "Create 'Edit'", {});
 		transaction.TrackCreated(scene.CreateEntity("Edit").GetUUID());
 		REQUIRE(transaction.Commit(undo));
@@ -668,7 +668,7 @@ TEST_SUITE("Editor.Recovery")
 		const nlohmann::json header = ReadRecoveryHeader(files[0]);
 		CHECK(header["ScenePath"] == "Levels/Level.stscene");
 		CHECK(header["BaseHash"].is_string());
-		undo.SetObserver(nullptr);
+		undo.RemoveObserver(&recovery);
 	}
 
 	TEST_CASE("The editor offers recovery data when the project opens, and Recover applies it")

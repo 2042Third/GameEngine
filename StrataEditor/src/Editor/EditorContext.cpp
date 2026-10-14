@@ -135,7 +135,7 @@ namespace Strata
 		});
 		// The recovery journal follows every step the undo stack applies; recovery files apply only to scenes the project
 		// still has, which scans find by their handles wherever they moved.
-		m_UndoStack.SetObserver(&m_Recovery);
+		m_UndoStack.AddObserver(&m_Recovery);
 		m_Recovery.BeginScene(*m_EditScene, UUID::Null(), {}, {});
 		m_Recovery.SetEntryValidator([this](const RecoveryEntry& entry) -> std::string
 		{

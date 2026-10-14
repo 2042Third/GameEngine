@@ -28,10 +28,21 @@ namespace Strata
 			Push(std::move(action));
 	}
 
+	void UndoStack::AddObserver(UndoStackObserver* observer)
+	{
+		if (observer && std::find(m_Observers.begin(), m_Observers.end(), observer) == m_Observers.end())
+			m_Observers.push_back(observer);
+	}
+
+	void UndoStack::RemoveObserver(UndoStackObserver* observer)
+	{
+		std::erase(m_Observers, observer);
+	}
+
 	void UndoStack::NotifyApplied(const EditorAction& action, bool undone, bool merged)
 	{
-		if (m_Observer)
-			m_Observer->OnApplied(action, undone, merged);
+		for (UndoStackObserver* observer : m_Observers)
+			observer->OnApplied(action, undone, merged);
 	}
 
 	void UndoStack::Push(Scope<EditorAction> action)
