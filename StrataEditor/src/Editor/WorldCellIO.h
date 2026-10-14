@@ -1,0 +1,38 @@
+#pragma once
+
+#include <Strata/Asset/AssetTypes.h>
+#include <Strata/World/WorldAsset.h>
+
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace Strata
+{
+
+	class AssetManagerBase;
+	class Scene;
+
+	// The editor's reads and writes of a world's cell documents (the cook's summaries now; EditorWorld's saves later). The
+	// seam behind which world-io's cancellable reader and request-based saver replace these plain file reads once they land.
+	namespace WorldCellIO
+	{
+
+		// What the cook measures of a cell.
+		struct CellSummary
+		{
+			WorldCellSummary Summary; // Key and Stamp are the caller's
+			std::vector<UUID> EntityIDs; // Sorted
+		};
+
+		// Reads a cell's scene document (its stored form) and measures it. Any thread (an I/O job); blocks. Nullopt with the
+		// reason for a document that cannot be read or is no scene.
+		std::optional<CellSummary> ReadCellSummary(AssetManagerBase& assets, AssetHandle scene, std::string* outError = nullptr);
+		// Measures a scene in memory (the persistent scene, a loaded cell): entities, physics bodies, bounds (entities'
+		// positions, renderers' recorded mesh bounds, colliders) and entity IDs; ClosureBytes is the stored size of `asset`'s
+		// dependency closure without other scenes (0 for a null asset).
+		CellSummary SummarizeScene(const Scene& scene, const AssetManagerBase& assets, AssetHandle asset);
+
+	}
+
+}

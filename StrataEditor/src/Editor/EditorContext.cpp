@@ -3,6 +3,7 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/ProjectSamples.h"
 #include "Editor/ScriptProject.h"
+#include "Editor/WorldCook.h"
 
 #include <Strata/Asset/AssetDependencies.h>
 #include <Strata/Asset/AssetManager.h>
@@ -1959,6 +1960,17 @@ namespace Strata
 			m_StatusProviders.insert_or_assign(section, std::move(provider));
 		else
 			m_StatusProviders.erase(section);
+	}
+
+	WorldCookCache& EditorContext::GetWorldCookCache()
+	{
+		// The cells another project's cooks read mean nothing for this one.
+		if (!m_WorldCookCache || m_WorldCookCacheOwner != m_AssetManager.get())
+		{
+			m_WorldCookCache = CreateScope<WorldCookCache>();
+			m_WorldCookCacheOwner = m_AssetManager.get();
+		}
+		return *m_WorldCookCache;
 	}
 
 }

@@ -48,6 +48,7 @@ namespace Strata
 {
 
 	struct SceneWorkBudget;
+	struct WorldCookCache;
 
 	enum class SceneState : uint8_t
 	{
@@ -303,6 +304,8 @@ namespace Strata
 		UndoStack& GetUndoStack() { return m_UndoStack; }
 		// The prefab instances of the edited scene and their prefabs (updates after prefab changes, modified marks).
 		PrefabSync& GetPrefabSync() { return m_PrefabSync; }
+		// What the world cook read this session (world.cook, exports), for the open project.
+		WorldCookCache& GetWorldCookCache();
 		// Thumbnails of the open project's assets (Content Browser, Asset tab); null without a project or a GPU.
 		ThumbnailCache* GetThumbnails() const { return m_Thumbnails.get(); }
 		// The project's picture for the launcher, made after each scene save.
@@ -673,6 +676,8 @@ namespace Strata
 		uint64_t m_RecordedFrameCount = 0;
 		double m_LastFrameTime = 0.0;
 		std::map<std::string, StatusProvider> m_StatusProviders;
+		Scope<WorldCookCache> m_WorldCookCache;
+		const EditorAssetManager* m_WorldCookCacheOwner = nullptr; // The project the cache belongs to
 	};
 
 }

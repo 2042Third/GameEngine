@@ -64,6 +64,10 @@ namespace Strata
 		uint64_t MaxBodiesInRadius = 0; // The most bodies the sources can keep loaded anywhere, plus the persistent scene's
 		uint64_t PersistentBodies = 0;
 		std::vector<WorldCellSummary> Cells;
+
+		// The physics capacity a world's persistent scene needs: ceil(1.25 * MaxBodiesInRadius), room for spawns, within the
+		// engine's limit (PhysicsCapacitySettings::c_MaxBodiesLimit); 0 for a world without bodies.
+		uint32_t GetRecommendedMaxBodies() const;
 	};
 
 	// The content of a World document (".stworld"): the persistent scene that holds the world's always-loaded entities, its

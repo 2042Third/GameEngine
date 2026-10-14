@@ -176,6 +176,6 @@ namespace Strata
 	void RegisterInputCommands(EditorCommandRegistry& registry);
 	void RegisterStreamingCommands(EditorCommandRegistry& registry);
 	void RegisterAnimationCommands(EditorCommandRegistry& registry);
-	void RegisterWorldCommands(EditorCommandRegistry& registry); // physics.stats (EditorWorldCommands.cpp)
+	void RegisterWorldCommands(EditorCommandRegistry& registry); // world.cook, world.info, physics.stats (EditorWorldCommands.cpp)
 
 }

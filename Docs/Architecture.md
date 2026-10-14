@@ -2013,6 +2013,23 @@ swaps in a world whose ground exists and has collision, while its loading scene 
 preparation (tools and tests calling `OnRuntimeStart`) streams its start cells over its first frames;
 `WorldStreamingSystem::WaitForStartCells` waits for them.
 
+**The cook** (`world.cook`, `StrataEditor/src/Editor/WorldCook.h`). It measures a world's cells for its index, off the
+frame: the cells whose content stamp (`EditorAssetManager::GetContentStamp`) differs from their index entry's, and from
+what the session's `WorldCookCache` holds (`EditorContext::GetWorldCookCache`), are read on I/O jobs through
+`WorldCellIO::ReadCellSummary` (the seam world-io's cancellable reader replaces), the others reused. Per cell: its
+entities, its physics bodies (`PhysicsWorld::CountBodyCandidates`, the rule physics sizes by), its bounds (entities'
+positions, renderers' recorded mesh bounds, colliders) and the stored bytes of its dependency closure without other
+scenes. Then the most bodies the sources can keep loaded (`MaxBodiesInRadius`): per layer the largest radius a source of
+the persistent scene uses (else the layer's distance times `DistanceScale`) plus its hysteresis; per cell the bodies of
+the cells whose squares lie within that of any point of it; the largest sum per layer, summed over the layers, times the
+sources (at least one), plus the persistent scene's bodies. `WorldIndex::GetRecommendedMaxBodies` is 1.25 times that, for
+spawns. Entity IDs a cell shares with another or with the persistent scene fail the cook, naming them (a cell loads only
+when its IDs are new to the scene; IDs of cells unchanged since a cook of an earlier session were checked then); cells
+beyond the 20 km worlds are supported within, and empty ones, are warnings. The fresh index is written into the world
+document (an `AssetDocumentAction`), and with `apply` the recommended capacity into the persistent scene's
+`PhysicsCapacity.MaxBodies` (a `SceneSettingsAction`), one undo step. `world.info` describes a world with its layers and
+how many cells changed since its index was made.
+
 ## Scripting
 
 Rules for the ABI, host functions and the SDK are in AGENTS.md and DeveloperGuide.md, "Scripting"; writing scripts

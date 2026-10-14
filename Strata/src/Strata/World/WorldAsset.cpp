@@ -3,6 +3,7 @@
 
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/PropertyJson.h"
+#include "Strata/Scene/Scene.h"
 
 #include <spdlog/fmt/fmt.h>
 
@@ -500,6 +501,12 @@ namespace Strata
 				{ "Cells", std::move(summaries) } };
 		}
 		return world;
+	}
+
+	uint32_t WorldIndex::GetRecommendedMaxBodies() const
+	{
+		const uint64_t withSpawns = MaxBodiesInRadius / 4 * 5 + (MaxBodiesInRadius % 4 * 5 + 3) / 4;
+		return static_cast<uint32_t>(std::min<uint64_t>(withSpawns, PhysicsCapacitySettings::c_MaxBodiesLimit));
 	}
 
 	const WorldLayer* WorldData::FindLayer(uint8_t id) const
