@@ -858,13 +858,16 @@ Building and loading scripts:
 - **Project scripts.** A project's scripts live in its script directory (`ProjectScriptSettings::SourceDirectory`,
   "Scripts"), whose `CMakeLists.txt` builds every `.cpp`/`.h` below it into the module `ModuleName` (stored in the
   `.stproj`, version 2: `"Scripts": {"SourceDirectory", "ModuleName"}`; version 1 files derive the name from the project
-  name, `Project::MakeScriptModuleName`). `project.create` writes that `CMakeLists.txt`, an example script and
-  `CMakePresets.json` for IDEs (`Editor/ScriptProject.cpp`; `script.init` adds them to older projects; the presets carry
-  the toolchain below and `STRATA_ENGINE_DIR`, are rewritten when Strata wrote them and the toolchain changed, and a
-  `.gitignore` beside them keeps them out of version control: `UpdateScriptCMakePresets`); project text only goes into
-  comments, and projects reject names and directories with control characters on load and save. `script.create` writes a
-  new class (`MakeScriptSource`: only the validated class and field names go into the code, `ValidateNewScriptClass`
-  refuses names the project's scripts or the SDK declare). The editor builds the scripts with
+  name, `Project::MakeScriptModuleName`). Folders whose names start with '.' and build trees (folders holding a
+  `CMakeCache.txt`) below it are neither compiled (`strata_add_script_module` leaves them out of its glob) nor watched
+  (`ListScriptSources` and `StampScriptSources` skip them), so the module and the editor agree on its files.
+  `project.create` writes that `CMakeLists.txt`, an example script and `CMakePresets.json` for IDEs
+  (`Editor/ScriptProject.cpp`; `script.init` adds them to older projects; the presets carry the toolchain below and
+  `STRATA_ENGINE_DIR`, are rewritten when Strata wrote them and the toolchain changed, and a `.gitignore` beside them
+  keeps them out of version control: `UpdateScriptCMakePresets`); project text only goes into comments, and projects
+  reject names and directories with control characters on load and save. `script.create` writes a new class
+  (`MakeScriptSource`: only the validated class and field names go into the code, `ValidateNewScriptClass` refuses names
+  the project's scripts or the SDK declare). The editor builds the scripts with
   `script.build` (`ScriptBuilder`, `Editor/ScriptBuild.cpp`): CMake configures `<project>/.strata/Scripts/Build` with the
   toolchain the engine was configured with (generator, platform, toolset, compiler, configuration and this checkout as
   `STRATA_ENGINE_DIR`, baked into `Editor/ScriptBuildConfig.h` at configure time; CMake is the engine's, else `cmake` on

@@ -210,7 +210,9 @@ namespace Strata
 		std::string module = project.GetScriptModuleName();
 		if (!Project::IsValidScriptModuleName(module))
 			module = Project::MakeScriptModuleName(project.GetConfig().Name);
-		return fmt::format(R"CMAKE(# Game scripts of "{0}": every .cpp and .h file in this directory (and below) belongs to the script module {1}.
+		return fmt::format(R"CMAKE(# Game scripts of "{0}": every .cpp and .h file in this directory (and below) belongs to the script module {1},
+# except in folders whose names start with '.' and in build trees (folders holding a CMakeCache.txt): those are neither
+# compiled nor watched by the editor.
 # The editor builds it (script.build) with the engine's compiler and configuration and loads it from .strata/Scripts/Bin.
 # Keep the module's name and output directory; to build by hand:
 #   cmake -S {2} -B <build directory> -DSTRATA_ENGINE_DIR=<Strata folder> && cmake --build <build directory>

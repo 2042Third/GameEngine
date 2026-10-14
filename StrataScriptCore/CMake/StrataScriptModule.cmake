@@ -1,5 +1,8 @@
 # strata_add_script_module(<target>
-#     [SOURCE_DIR <dir>]          every .cpp/.h/.hpp file below <dir> (recursive) belongs to the module
+#     [SOURCE_DIR <dir>]          every .cpp/.h/.hpp file below <dir> (recursive) belongs to the module, except those in
+#                                 folders whose names start with '.' (an IDE's settings, version control) and in build
+#                                 trees (folders holding a CMakeCache.txt, e.g. an IDE's build inside the scripts):
+#                                 those are neither compiled nor watched by the editor (Editor/ScriptSources)
 #     [SOURCES <file>...]         additional source files
 #     [OUTPUT_NAME <name>]        file name without extension (default: <target>)
 #     [OUTPUT_DIRECTORY <dir>]    output directory (multi-config generators append the configuration)
@@ -31,7 +34,36 @@ function(strata_add_script_module target)
 			message(FATAL_ERROR "strata_add_script_module(${target}): SOURCE_DIR '${sourceDir}' is not a directory")
 		endif()
 		file(GLOB_RECURSE globbedSources CONFIGURE_DEPENDS "${sourceDir}/*.cpp" "${sourceDir}/*.h" "${sourceDir}/*.hpp")
-		list(APPEND sources ${globbedSources})
+		# The module compiles what the editor lists as its sources, whose set decides when the editor configures again: not
+		# what lies in folders whose names start with '.' or in build trees below the directory. Paths are compared
+		# relative to it, as its own path may hold such folders (a checkout in .worktrees, say).
+		file(GLOB_RECURSE buildTreeCaches CONFIGURE_DEPENDS LIST_DIRECTORIES false "${sourceDir}/CMakeCache.txt")
+		set(buildTrees "")
+		foreach(cache IN LISTS buildTreeCaches)
+			get_filename_component(tree "${cache}" DIRECTORY)
+			file(RELATIVE_PATH tree "${sourceDir}" "${tree}")
+			# A cache in the directory itself (an in-source build) does not make the directory a build tree of its own.
+			if(NOT tree STREQUAL "")
+				list(APPEND buildTrees "${tree}/")
+			endif()
+		endforeach()
+		foreach(source IN LISTS globbedSources)
+			file(RELATIVE_PATH relative "${sourceDir}" "${source}")
+			if(relative MATCHES "(^|/)\\.[^/]*/")
+				continue()
+			endif()
+			set(inBuildTree FALSE)
+			foreach(tree IN LISTS buildTrees)
+				string(FIND "${relative}" "${tree}" position)
+				if(position EQUAL 0)
+					set(inBuildTree TRUE)
+					break()
+				endif()
+			endforeach()
+			if(NOT inBuildTree)
+				list(APPEND sources "${source}")
+			endif()
+		endforeach()
 	endif()
 	if(NOT sources)
 		message(FATAL_ERROR "strata_add_script_module(${target}): no sources (pass SOURCE_DIR or SOURCES)")

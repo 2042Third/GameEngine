@@ -491,9 +491,10 @@ every step below is a command, and source files are written with your own file t
    `Scripts/Player.cpp` with the class, `OnCreate`/`OnUpdate` and the fields (`"template": "empty"` for the bare class;
    `"path": "Gameplay/Player.cpp"` for another place; it refuses names the project or the SDK declare); or put
    `.cpp`/`.h` files anywhere under `Scripts/` yourself (one `ST_SCRIPT_CLASS` per class, see above). New files are
-   picked up by the next build. `script.list` names every source file with the classes it registers (find the file of
-   a class before changing it). `script.open {"file": "Scripts/Player.cpp", "line": 12}` shows a file to the person at
-   the editor in their code editor.
+   picked up by the next build. Folders whose names start with `.` and build trees (folders holding a `CMakeCache.txt`)
+   are neither compiled nor watched. `script.list` names every source file with the classes it registers (find the file
+   of a class before changing it). `script.open {"file": "Scripts/Player.cpp", "line": 12}` shows a file to the person
+   at the editor in their code editor.
 3. **Build.** `script.build` (waits by default) configures CMake on the first run and after files were added or removed
    (a few seconds) and builds with the editor's configuration and a C++ toolchain (`script.status` -> `toolchain`) into
    `.strata/Scripts/Bin`, then loads the module. In a source checkout that is the engine's toolchain; a downloaded

@@ -21,6 +21,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 // Script builds with the real toolchain (CMake and the engine's compiler): the suites whose names start with "Package"
 // run as the CTest StrataTests.Package (label "package"), like StrataScriptCore.Package.
@@ -388,6 +389,32 @@ ST_SCRIPT_CLASS(Mover)
 		const nlohmann::json again = harness.Run("script.build");
 		CHECK(again["configured"] == false);
 		CHECK(engine->FindClass("Jumper"));
+	}
+
+	TEST_CASE("The module compiles the files the editor lists: not those in hidden folders or build trees")
+	{
+		// The code there does not compile, so a build that took it in would fail. A file whose own name starts with '.' is
+		// a source like any other.
+		BuildHarness harness;
+		const std::filesystem::path scripts = harness.Context.GetProject()->GetScriptSourceDirectory();
+		REQUIRE(FileSystem::WriteText(scripts / ".hidden" / "Broken.cpp", c_BrokenScript));
+		REQUIRE(FileSystem::WriteText(scripts / "out" / "CMakeCache.txt", "# An IDE's build tree\n"));
+		REQUIRE(FileSystem::WriteText(scripts / "out" / "Broken.cpp", c_BrokenScript));
+		REQUIRE(FileSystem::WriteText(scripts / "out" / "CMakeFiles" / "Broken.cpp", c_BrokenScript));
+		REQUIRE(FileSystem::WriteText(scripts / ".Dotted.cpp", MakeScriptSource("Dotted", ScriptTemplate::Empty, {})));
+
+		const nlohmann::json built = harness.Run("script.build");
+		CHECK(built["success"] == true);
+		const Ref<ScriptEngine> engine = harness.Context.GetScriptEngine();
+		CHECK(engine->FindClass("Spinner"));
+		CHECK(engine->FindClass("Dotted"));
+
+		// The editor lists the same files.
+		const nlohmann::json files = harness.Run("script.list")["files"];
+		std::vector<std::string> listed;
+		for (const nlohmann::json& file : files)
+			listed.push_back(file["path"].get<std::string>());
+		CHECK(listed == std::vector<std::string> { ".Dotted.cpp", "CMakeLists.txt", "Spinner.cpp" });
 	}
 
 	TEST_CASE("Scripts build in the Dist configuration")
