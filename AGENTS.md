@@ -223,7 +223,9 @@ The threading model, frame loop and pipelines these rules protect are described 
 - **Scripting isolation:** game scripts only see `StrataScriptCore`. Every call into script code goes
   through `CrashGuard`; anything crossing the ABI is plain data (no STL types, no exceptions).
 - **Assets:** referenced by `AssetHandle` (UUID), never by path at runtime. Loading is asynchronous;
-  code must handle "not loaded yet" every frame instead of blocking. See [Asset pipeline](#asset-pipeline).
+  code must handle "not loaded yet" every frame instead of blocking. See [Asset pipeline](#asset-pipeline). New code
+  that works for a scene (scene systems, loading into it, rendering it) reaches the asset manager through
+  `Scene::GetAssetManager()`, never through new `AssetManager::GetActive()` calls (per-scene managers replace it later).
 - **Layers:** every file under `Strata/src` belongs to one layer of `StrataTests/Architecture/Layers.json`, and an
   include that crosses layers must be allowed there; `Architecture.Layering` fails on any other include, on files in no
   layer and on stale lines of `LayeringAllowlist.txt`. Never add a line or widen `MayInclude` to make a sideways or

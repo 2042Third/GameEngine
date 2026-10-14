@@ -28,6 +28,7 @@
 namespace Strata
 {
 
+	class AssetManagerBase;
 	class Entity;
 	class EntityPrototype;
 	class PrototypeInstantiation;
@@ -403,6 +404,17 @@ namespace Strata
 			auto it = m_Services.find(entt::type_id<T>().hash());
 			return it != m_Services.end() ? static_cast<T*>(it->second) : nullptr;
 		}
+
+		//////////////////////////////////////////////////////////////////////////
+		// Assets
+		//////////////////////////////////////////////////////////////////////////
+
+		// The asset manager the scene's assets come from, or null when there is none: for now the process's active manager
+		// (AssetManager::GetActive), the same for every scene. New code that works for a scene (scene systems, code that loads
+		// assets into it, the renderer that draws it) reaches the manager through the scene instead of calling
+		// AssetManager::GetActive, so that per-scene asset managers (wave 5's scene contexts) change this function rather
+		// than that code. Hold asset handles across frames, not the pointer.
+		AssetManagerBase* GetAssetManager() const;
 
 		//////////////////////////////////////////////////////////////////////////
 		// Requests to the scene's owner
