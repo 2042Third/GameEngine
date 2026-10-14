@@ -2,7 +2,9 @@
 # library of tooling: Dear ImGui and the engine's ImGui layer, ImGuizmo, the asset pipeline, the network layer or zstd's
 # compressor. The proof, beside the configure-time check of what StrataRuntime links (strata_check_link_closure), that no
 # game contains them. Map formats differ (MSVC /MAP, GNU ld -Map, Apple ld -map), so names are matched as object and
-# library basenames wherever they appear.
+# library basenames wherever they appear. The map must first name the objects every runtime contains (its own
+# RuntimeApplication and the engine's Application): a map that does not, empty, truncated or in a format these patterns
+# do not read, proves nothing by naming no tooling.
 #
 #   cmake -DMAP=<file.map> -P CheckNoTooling.cmake
 
@@ -30,11 +32,31 @@ set(forbiddenObjects
 set(forbiddenLibraries imgui ImGuizmo nfd cgltf zstd_compress Strata_ImGui Strata_AssetPipeline Strata_Network
 	StrataEditorCore StrataEditorUI StrataCLILib)
 
+# Objects every runtime contains: the program's own and the engine's Application (Strata_App).
+set(requiredObjects RuntimeApplication Application)
+
 # One pass per kind over the map's lines (maps reach hundreds of megabytes: the lines are filtered as they are read).
+string(REPLACE ";" "|" requiredNames "${requiredObjects}")
 string(REPLACE ";" "|" objectNames "${forbiddenObjects}")
 string(REPLACE ";" "|" libraryNames "${forbiddenLibraries}")
 # "dir/Name.cpp.o", "lib.a(Name.cpp.o)", "Name.obj", "lib:Name.obj"
-file(STRINGS "${MAP}" objectLines REGEX "(^|[/\\\\(: \t])(${objectNames})(\\.(c|cpp|m|mm))?\\.(o|obj)([^A-Za-z0-9_]|$)")
+set(objectPrefix "(^|[/\\\\(: \t])")
+set(objectSuffix "(\\.(c|cpp|m|mm))?\\.(o|obj)([^A-Za-z0-9_]|$)")
+file(STRINGS "${MAP}" requiredLines REGEX "${objectPrefix}(${requiredNames})${objectSuffix}")
+foreach(required IN LISTS requiredObjects)
+	set(seen FALSE)
+	foreach(line IN LISTS requiredLines)
+		if(line MATCHES "${objectPrefix}${required}${objectSuffix}")
+			set(seen TRUE)
+			break()
+		endif()
+	endforeach()
+	if(NOT seen)
+		message(FATAL_ERROR "CheckNoTooling: the linker map '${MAP}' names no ${required} object, which every runtime contains: "
+			"it is empty, truncated or in a format this check does not read, so it proves nothing about tooling")
+	endif()
+endforeach()
+file(STRINGS "${MAP}" objectLines REGEX "${objectPrefix}(${objectNames})${objectSuffix}")
 # "dir/libName.a", "Name.lib"
 file(STRINGS "${MAP}" libraryLines REGEX "(^|[/\\\\(: \t])(lib)?(${libraryNames})\\.(a|lib)([^A-Za-z0-9_]|$)")
 
