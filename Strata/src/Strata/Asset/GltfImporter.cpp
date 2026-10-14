@@ -899,6 +899,7 @@ namespace Strata
 				}
 			}
 
+			// A joint's rest transform, its translation in the model's units (the import scale is baked into the content).
 			JointPose GetNodePose(const cgltf_node& node, cgltf_size nodeIndex)
 			{
 				JointPose pose;
@@ -909,10 +910,11 @@ namespace Strata
 						Warn(fmt::format("Node {} has a transform matrix that cannot be decomposed; its joint uses identity", nodeIndex));
 						return JointPose();
 					}
+					pose.Translation *= m_Settings.Scale;
 					return pose;
 				}
 				if (node.has_translation)
-					pose.Translation = glm::make_vec3(node.translation);
+					pose.Translation = glm::make_vec3(node.translation) * m_Settings.Scale;
 				if (node.has_rotation)
 					pose.Rotation = AnimationMath::Normalize(glm::quat(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]));
 				if (node.has_scale)
@@ -1090,6 +1092,8 @@ namespace Strata
 					matrix[1][3] = 0.0f;
 					matrix[2][3] = 0.0f;
 					matrix[3][3] = 1.0f;
+					// The import scale S baked into the vertices and the joints: S * IBM * S^-1, whose translation scales.
+					matrix[3] = glm::vec4(glm::vec3(matrix[3]) * m_Settings.Scale, 1.0f);
 				}
 				binding.Joints.reserve(skin.joints_count);
 				for (cgltf_size joint = 0; joint < skin.joints_count; joint++)
@@ -1335,6 +1339,13 @@ namespace Strata
 					{
 						Warn(fmt::format("Primitive '{}' has non-finite positions; skipped", primitiveName));
 						continue;
+					}
+					// The import scale is part of the mesh, before LODs and bounds are made from it: simplification errors and
+					// recorded bounds are in the model's final units.
+					if (m_Settings.Scale != 1.0f)
+					{
+						for (glm::vec3& position : primitivePositions)
+							position *= m_Settings.Scale;
 					}
 
 					std::vector<uint32_t> primitiveIndices;
@@ -1630,6 +1641,12 @@ namespace Strata
 					Warn(fmt::format("Animation '{}': the {} channel of '{}' has non-finite values; skipped", animationName, AnimationPathToString(channel.Path), channel.Target));
 					return std::nullopt;
 				}
+				// Translations (and a cubic spline's tangents of them) in the model's units; rotations and scales keep theirs.
+				if (channel.Path == AnimationPath::Translation && m_Settings.Scale != 1.0f)
+				{
+					for (float& value : channel.Values)
+						value *= m_Settings.Scale;
+				}
 				return channel;
 			}
 
@@ -1662,7 +1679,7 @@ namespace Strata
 					glm::vec3 scale;
 					if (Math::DecomposeTransform(glm::make_mat4(node.matrix), translation, rotation, scale))
 					{
-						transform.Translation = translation;
+						transform.Translation = translation * m_Settings.Scale;
 						transform.Rotation = rotation;
 						transform.Scale = scale;
 					}
@@ -1673,8 +1690,9 @@ namespace Strata
 				}
 				else
 				{
+					// Translations in the model's units: the import scale is baked into the content, the root keeps scale 1.
 					if (node.has_translation)
-						transform.Translation = glm::make_vec3(node.translation);
+						transform.Translation = glm::make_vec3(node.translation) * m_Settings.Scale;
 					if (node.has_rotation)
 						transform.Rotation = glm::normalize(glm::quat(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]));
 					if (node.has_scale)
@@ -1863,8 +1881,9 @@ namespace Strata
 			{
 				Scene scene;
 				const std::string modelName = FileSystem::ToUTF8(m_Context.SourcePath.stem());
+				// The root keeps scale 1: the import scale is part of the content (vertices, translations, joints, clips), so
+				// instances placed before a change of the setting follow it, and their root transforms stay theirs.
 				Entity root = scene.CreateEntityWithUUID(DeriveSubAssetHandle(m_Context.Handle, "Node/Root"), modelName);
-				root.GetComponent<TransformComponent>().Scale = glm::vec3(m_Settings.Scale);
 
 				// Without a scene every root node is part of the model.
 				const std::vector<const cgltf_node*> roots = GetRootNodes();
@@ -1952,7 +1971,8 @@ namespace Strata
 		std::vector<PropertyInfo> properties;
 		ImportSettingsBuilder(properties)
 			.Float("Scale", defaults.Scale, c_MinImportScale, c_MaxImportScale).Speed(0.01f)
-				.Tooltip("Uniform scale of the model's root (glTF uses meters, like Strata); also scales imported cameras' and lights' ranges")
+				.Tooltip("Uniform scale baked into the model (glTF uses meters, like Strata): its meshes, node positions, skeleton and "
+					"animations, imported cameras' and lights' ranges. The model's root keeps scale 1, so instances already placed follow a change")
 			.Bool("GenerateLODs", defaults.GenerateLODs).DisplayName("Generate LODs")
 				.Tooltip("Generate simplified versions of every mesh, drawn when it covers less of the screen")
 			.UInt("LODCount", defaults.LODCount, c_MaxLODCount).DisplayName("LOD Count")

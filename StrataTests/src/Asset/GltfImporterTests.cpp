@@ -735,9 +735,19 @@ TEST_SUITE("Asset.Gltf")
 		CHECK(quad->GetSubmeshes()[0].LODs.size() == 1);
 		CHECK(quad->GetSubmeshes()[0].Material == BuiltinAssets::DefaultMaterial);
 
+		// The scale is baked into the content: the root keeps scale 1, the quad is a hundredth of its size at Scale 1.
 		Entity root;
 		Ref<Scene> scene = InstantiateModel(output, root);
-		CHECK(root.GetComponent<TransformComponent>().Scale == glm::vec3(0.01f));
+		CHECK(root.GetComponent<TransformComponent>().Scale == glm::vec3(1.0f));
+		const ImportOutput unscaled = RunImport(assets, "Sample.gltf", CreateGltf({}), { { "GenerateLODs", false } });
+		REQUIRE_MESSAGE(unscaled.Success, unscaled.Error);
+		Ref<Mesh> unscaledQuad = Mesh::Deserialize(unscaled.Find("Mesh/0")->Data);
+		REQUIRE(unscaledQuad);
+		for (int axis = 0; axis < 3; axis++)
+		{
+			CHECK(quad->GetBounds().Min[axis] == doctest::Approx(unscaledQuad->GetBounds().Min[axis] * 0.01f));
+			CHECK(quad->GetBounds().Max[axis] == doctest::Approx(unscaledQuad->GetBounds().Max[axis] * 0.01f));
+		}
 		CHECK_FALSE(FindChild(root, "Cam").HasComponent<CameraComponent>());
 		CHECK_FALSE(FindChild(FindChild(root, "Body"), "Lamp").HasComponent<PointLightComponent>());
 

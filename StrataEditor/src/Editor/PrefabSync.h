@@ -5,6 +5,7 @@
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/PrefabInstances.h>
 
+#include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
@@ -103,8 +104,15 @@ namespace Strata
 		void CatchUp(EditorContext& context, AssetHandle prefab, Baseline& baseline, const std::vector<Entity>& roots);
 		// The baseline of a prefab, its template read on first use; null when it cannot be read.
 		Baseline* FindBaseline(EditorContext& context, AssetHandle prefab);
-		// Gives instance roots the snapshot's values, in one undo step.
-		void UpdateInstances(EditorContext& context, AssetHandle prefab, const std::vector<Entity>& roots, const nlohmann::json& snapshot);
+		// An instance root whose Scale changes with an update (a model's import scale moving into its content).
+		struct RootRescale
+		{
+			Entity Root;
+			glm::vec3 Scale = glm::vec3(1.0f); // The root's new Scale
+		};
+		// Gives instance roots the snapshot's values and the rescaled roots their new Scale, in one undo step.
+		void UpdateInstances(EditorContext& context, AssetHandle prefab, const std::vector<Entity>& roots, const nlohmann::json& snapshot,
+			const std::vector<RootRescale>& rescaled = {});
 		void Watch(EditorContext& context);
 		// Whether the history's change count (`changes`) is part of a run of edits that has not paused yet.
 		bool AreEditsContinuing(uint64_t changes) const;

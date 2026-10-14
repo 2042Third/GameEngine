@@ -1,11 +1,13 @@
 #include <doctest/doctest.h>
 
+#include "Animation/SkinnedGltf.h"
 #include "Editor/CommandJournal.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/PrefabSync.h"
+#include "Editor/SceneBounds.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/EditorAssetManager.h>
@@ -18,6 +20,7 @@
 #include <Strata/Scene/PrefabInstances.h>
 #include <Strata/Scene/Scene.h>
 
+#include <chrono>
 #include <filesystem>
 #include <span>
 #include <string>
@@ -120,10 +123,151 @@ namespace
 		}
 	};
 
+	// The skinned arm (2 units tall at Scale 1) as Models/Arm.gltf of the harness's project, imported with `scale`.
+	AssetHandle AddArmModel(PrefabHarness& harness, float scale)
+	{
+		REQUIRE(FileSystem::CreateDirectories(harness.Directory / "Assets" / "Models"));
+		REQUIRE(FileSystem::WriteBytes(harness.Directory / "Assets" / "Models" / "Arm.gltf", Tests::CreateSkinnedArmGltf()));
+		harness.Context.GetAssetManager()->Scan();
+		const AssetHandle model = harness.Context.GetAssetManager()->FindAssetByPath("Models/Arm.gltf");
+		REQUIRE(model.IsValid());
+		harness.Run("asset.setImportSettings", { { "asset", UUIDToJson(model) }, { "settings", { { "Scale", scale } } } });
+		return model;
+	}
+
+	// Editor frames until nothing loads, imports or waits for a rest pose (by the clock: CI's machines are slow).
+	void SettleFrames(PrefabHarness& harness)
+	{
+		EditorAssetManager& assets = *harness.Context.GetAssetManager();
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		do
+			harness.Frames(1);
+		while ((assets.HasPendingLoads() || assets.HasPendingImports() || harness.Context.GetAnimationPreview().HasWaitingRestPoses())
+			&& std::chrono::steady_clock::now() < deadline);
+		harness.Frames(PrefabSync::c_SettleFrames + 1);
+	}
+
+	// An entity's bounds once the meshes they need are in (measuring requests them).
+	AABB GetBounds(PrefabHarness& harness, const std::string& entity)
+	{
+		Scene& scene = *harness.Context.GetEditScene();
+		const Entity measured = scene.GetEntityByUUID(*UUIDFromJson(nlohmann::json(entity)));
+		SceneBounds::GetEntityBounds(scene, measured);
+		SettleFrames(harness);
+		return SceneBounds::GetEntityBounds(scene, measured);
+	}
+
+	void CheckSameBounds(const AABB& a, const AABB& b)
+	{
+		for (int axis = 0; axis < 3; axis++)
+		{
+			CAPTURE(axis);
+			CHECK(a.Min[axis] == doctest::Approx(b.Min[axis]).epsilon(1e-4));
+			CHECK(a.Max[axis] == doctest::Approx(b.Max[axis]).epsilon(1e-4));
+		}
+	}
+
 }
 
 TEST_SUITE("Editor.Prefab")
 {
+	TEST_CASE("A model's import scale reaches its placed instances, whose root transforms stay theirs")
+	{
+		PrefabHarness harness("PrefabImportScale");
+		const AssetHandle model = AddArmModel(harness, 0.01f);
+		const nlohmann::json placement = { { "Transform", { { "Translation", { 3, 0, 1 } }, { "Rotation", { 0, 30, 0 } } } } };
+		const std::string instance = harness.Run("prefab.instantiate", { { "prefab", UUIDToJson(model) }, { "components", placement } })["id"].get<std::string>();
+		SettleFrames(harness);
+		const nlohmann::json transform = harness.Get(instance)["components"]["Transform"];
+		CHECK(transform["Scale"] == nlohmann::json::array({ 1, 1, 1 }));
+		const AABB before = GetBounds(harness, instance);
+		REQUIRE(before.IsValid());
+		CHECK(before.GetExtents().y * 2.0f == doctest::Approx(0.02f).epsilon(1e-3));
+
+		harness.Run("asset.setImportSettings", { { "asset", UUIDToJson(model) }, { "settings", { { "Scale", 0.02 } } } });
+		SettleFrames(harness);
+		const AABB after = GetBounds(harness, instance);
+		// Twice the size around the instance's origin, which stayed where it was placed.
+		const glm::vec3 origin(3.0f, 0.0f, 1.0f);
+		for (int axis = 0; axis < 3; axis++)
+		{
+			CAPTURE(axis);
+			CHECK(after.Min[axis] - origin[axis] == doctest::Approx((before.Min[axis] - origin[axis]) * 2.0f).epsilon(1e-4));
+			CHECK(after.Max[axis] - origin[axis] == doctest::Approx((before.Max[axis] - origin[axis]) * 2.0f).epsilon(1e-4));
+		}
+		CHECK(harness.Get(instance)["components"]["Transform"] == transform);
+		CHECK(harness.Status(instance)["modified"] == false);
+	}
+
+	TEST_CASE("Instances placed before the import scale was baked keep their size through a prefab change and a scene open")
+	{
+		PrefabHarness harness("PrefabImportScaleMigration");
+		const AssetHandle model = AddArmModel(harness, 0.01f);
+		const nlohmann::json placement = { { "Transform", { { "Translation", { 2, 0, 0 } } } } };
+		const std::string reference = harness.Run("prefab.instantiate", { { "prefab", UUIDToJson(model) }, { "components", placement } })["id"].get<std::string>();
+		const std::string old = harness.Run("prefab.instantiate", { { "prefab", UUIDToJson(model) }, { "components", placement } })["id"].get<std::string>();
+		SettleFrames(harness);
+		const AABB expected = GetBounds(harness, reference);
+		REQUIRE(expected.IsValid());
+
+		// The previous importer put the import scale on the model's root, and instances took it: a root Scale of 0.01.
+		const nlohmann::json* current = harness.Context.GetPrefabSync().GetBaseline(harness.Context, model);
+		REQUIRE(current);
+		nlohmann::json previous = *current;
+		const UUID templateRoot = harness.Context.GetEditScene()->GetEntityByUUID(*UUIDFromJson(nlohmann::json(old))).GetComponent<PrefabInstanceComponent>().PrefabEntityID;
+		bool found = false;
+		for (nlohmann::json& entity : previous["Entities"])
+		{
+			if (UUIDFromJson(entity["ID"]) == std::optional<UUID>(templateRoot))
+			{
+				entity["Components"]["Transform"]["Scale"] = { 0.01, 0.01, 0.01 };
+				found = true;
+			}
+		}
+		REQUIRE(found);
+		harness.Run("component.set", { { "entity", old }, { "component", "Transform" }, { "values", { { "Scale", { 0.01, 0.01, 0.01 } } } } });
+
+		SUBCASE("Propagate: the model's document changes while the scene is open")
+		{
+			harness.Context.GetPrefabSync().SetBaseline(harness.Context, model, previous);
+			const size_t steps = harness.History().size();
+			REQUIRE(harness.Context.GetAssetManager()->ReimportAsset(model));
+			SettleFrames(harness);
+			CHECK(harness.Get(old)["components"]["Transform"]["Scale"] == nlohmann::json::array({ 1, 1, 1 }));
+			CheckSameBounds(GetBounds(harness, old), expected);
+			// One step: the update of the instances.
+			REQUIRE(harness.History().size() == steps + 1);
+			CHECK(harness.History().back() == "Update Instances of Arm");
+		}
+		SUBCASE("CatchUp: the scene opens after the model changed")
+		{
+			// Saved with a part version of the old document, so the instance is outdated once the scene opens.
+			harness.Run("scene.saveAs", { { "path", "Scenes/Old.stscene" } });
+			const std::filesystem::path file = harness.Directory / "Assets" / "Scenes" / "Old.stscene";
+			std::optional<std::string> text = FileSystem::ReadText(file);
+			REQUIRE(text);
+			std::optional<nlohmann::json> document = JsonUtils::Parse(*text);
+			REQUIRE(document);
+			for (nlohmann::json& entity : (*document)["Scene"]["Entities"])
+			{
+				if (entity["ID"] == old)
+				{
+					std::string version = entity["Components"]["PrefabInstance"]["PrefabVersion"].get<std::string>();
+					REQUIRE_FALSE(version.empty());
+					version.back() = version.back() == '1' ? '2' : '1';
+					entity["Components"]["PrefabInstance"]["PrefabVersion"] = version;
+				}
+			}
+			REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(*document, 1, '\t') + "\n"));
+			harness.Run("scene.new", { { "force", true } });
+			harness.Run("scene.open", { { "scene", "Scenes/Old.stscene" }, { "force", true } });
+			SettleFrames(harness);
+			CHECK(harness.Get(old)["components"]["Transform"]["Scale"] == nlohmann::json::array({ 1, 1, 1 }));
+			CheckSameBounds(GetBounds(harness, old), expected);
+			CHECK(harness.Get(reference)["components"]["Transform"]["Scale"] == nlohmann::json::array({ 1, 1, 1 }));
+		}
+	}
+
 	TEST_CASE("prefab.create links the entities in one undo step with the file, and undo unlinks them and trashes the file")
 	{
 		PrefabHarness harness("PrefabCreateLink");

@@ -1037,6 +1037,16 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   | AudioClip | `.wav .mp3 .flac .ogg` | `AudioClipImporter` | `STAU` header + the encoded file |
   | Font | `.ttf .otf` | `FontImporter` | the source, validated on import |
 
+  A model's import `Scale` is baked into its content: mesh positions (before LODs and bounds are made from them, so
+  simplification errors and recorded bounds are in final units), node translations below the root, the skeleton's rest
+  translations, the inverse bind matrices' translations (`S * IBM * S^-1`) and clips' translation keys (with a cubic
+  spline's tangents; rotations and scales keep theirs), imported cameras' clip planes and lights' ranges; the model's root
+  keeps scale 1. The root's transform belongs to each placed instance (`PrefabInstances`), so instances follow a change
+  of the setting. Instances placed while the importer still put the scale on the root (version 7) are migrated by
+  `PrefabSync`: a reimport while their scene is open multiplies their root's Scale by the template root's new over its
+  old Scale (in the "Update Instances" step); a scene opened later gives an outdated instance whose root Scale is the
+  model's import Scale, while the template root's is 1, Scale 1 (logged once per model and scene).
+
 - **Loading** (`Asset/AssetManager.h`). `GetAsset` never blocks: it returns null until the asset is Ready and requests
   the load. `RequestLoad` queues the load in the streaming queue, which reads on the I/O pool (`ReadAssetData` of the
   subclass); decoding runs on the worker pool and queues a completion. The loader (`AssetLoadFunction`) gets the read
@@ -1741,7 +1751,7 @@ system, not to entities: a character's joints add no entities and no transform c
   (`AnimationClipBinding`; targets the skeleton lacks are skipped). An `AnimationController` (`.stanimator`) holds
   parameters (float, bool, trigger), states (a clip or none, a speed, looping, events) and transitions. Their loaders
   validate everything (truncated and garbage bytes are rejected).
-- **Import.** `GltfImporter` (version 7) makes one skeleton per model (sub-asset "Skeleton": the joints of every skin,
+- **Import.** `GltfImporter` (version 8) makes one skeleton per model (sub-asset "Skeleton": the joints of every skin,
   the animated nodes and their ancestors, parents first; the root motion joint is the topmost joint of a skin), a clip
   per animation ("Animation/<name>", or its index; keyframes reduced) and skinned meshes (see Asset pipeline,
   `MeshSkinBinding`). The model's root entity is its animator (`AnimatorComponent` with the skeleton and the first

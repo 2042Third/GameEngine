@@ -252,7 +252,8 @@ to two folders above it, such as `../Textures`, keep their layout), so it import
 command** (the message names the file; the error's data has `items` with each `error`) and its copied files are removed
 again, unless `"keepOnFailure": true`; the result lists `items` with their `assets`. `asset.info` reports import errors and warnings, the import
 settings and what each accepts (`importSettingsProperties`: textures `Usage`, `Compression`, `Quality`, `MaxSize`,
-`Filter`, `Wrap`, `GenerateMips`, `FlipVertically`; models `Scale`, `GenerateLODs`, `LODCount`, `MaxTextureSize`,
+`Filter`, `Wrap`, `GenerateMips`, `FlipVertically`; models `Scale` (baked into the model's meshes, skeleton and clips: the
+root keeps scale 1 and placed instances follow a change), `GenerateLODs`, `LODCount`, `MaxTextureSize`,
 `TextureCompression`, `TextureQuality`, `OptimizeMeshes`, `Import*`; audio `LoadMode`; fonts and the engine's own files
 have none). `asset.setImportSettings {"asset", "settings":
 {"MaxSize": 1024}}` changes them and `asset.reimport` imports again; both import in the background (the editor keeps
