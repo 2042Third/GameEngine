@@ -5,6 +5,7 @@
 #include "Strata/Reflection/ComponentGizmo.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Reflection/PropertyJson.h"
+#include "Strata/Reflection/PropertyOptions.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/PhysicsLayerSettings.h"
 
@@ -21,37 +22,6 @@ namespace Strata
 
 	namespace
 	{
-
-		constexpr float c_Unbounded = 1.0e6f;
-
-		PropertyOptions Range(float min, float max, float speed = 0.0f)
-		{
-			PropertyOptions options;
-			options.Min = min;
-			options.Max = max;
-			options.Speed = speed;
-			return options;
-		}
-
-		PropertyOptions Slider(float min, float max)
-		{
-			PropertyOptions options = Range(min, max);
-			options.Flags = PropertyFlags::Slider;
-			return options;
-		}
-
-		PropertyOptions Color()
-		{
-			PropertyOptions options;
-			options.Color = true;
-			return options;
-		}
-
-		PropertyOptions WithTooltip(PropertyOptions options, std::string tooltip)
-		{
-			options.Tooltip = std::move(tooltip);
-			return options;
-		}
 
 		// A 64-bit hash as 16 hex digits, and back; 0 (not known) is the empty string, and so is text that is no hash.
 		std::string FormatHash(uint64_t hash)

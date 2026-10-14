@@ -40,7 +40,8 @@ ComponentRegistry::Register<WindZoneComponent>("WindZone")
 ```
 
 - Ranges are enforced everywhere (inspector, files, commands, scripts): choose them so invalid states are
-  impossible (no negative radii, no zero divisors).
+  impossible (no negative radii, no zero divisors). `Range`, `Slider`, `Color`, `WithTooltip` and `c_Unbounded` come
+  from `Strata/Reflection/PropertyOptions.h`.
 - `Color()` marks vec3/vec4 members as colors; `Slider(min, max)` uses a slider; `WithTooltip` documents
   the property for people and AI agents (the tooltip text is part of `component.list`).
 - Flags: `NotRemovable` for components every entity has, `Hidden` for internal ones, `NoSerialize` only
