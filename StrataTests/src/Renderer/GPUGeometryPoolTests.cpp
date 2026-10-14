@@ -366,6 +366,15 @@ TEST_SUITE("GPU.Renderer.GeometryPool")
 		const Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(pack);
 		REQUIRE(manager);
 		AssetManager::SetActive(manager);
+		// Earlier tests left the renderer's pool as they left it: compacted first, its free space is one range at its end, so
+		// the meshes load one after the other and the first two leave a gap below the others when they go.
+		const Ref<GeometryPool> pool = Renderer::GetGeometryPool();
+		gpu.GetDevice().WaitForIdle();
+		pool->BeginFrame();
+		while (pool->Compact(GeometryPool::c_MaxDefragBytesPerFrame))
+		{
+		}
+		gpu.GetDevice().WaitForIdle();
 		for (const AssetMetadata& entry : metadata)
 			REQUIRE(manager->LoadAssetSync(entry.Handle));
 
@@ -380,20 +389,21 @@ TEST_SUITE("GPU.Renderer.GeometryPool")
 		SceneRenderer renderer;
 		renderer.SetViewportSize(c_SceneTestSize, c_SceneTestSize);
 		RenderToImage(renderer, scene, camera);
-		// The sphere and the torus go: their geometry is freed once the GPU is done with the frames that drew them.
+		// The sphere and the torus go: their geometry is freed once the GPU is done with the frames that drew them. The image
+		// of what stays is taken before their ranges return, so nothing has moved yet.
 		scene.DestroyEntity(entities[0]);
 		scene.DestroyEntity(entities[1]);
 		manager->UnloadAsset(metadata[0].Handle);
 		manager->UnloadAsset(metadata[1].Handle);
-		const Ref<GeometryPool> pool = Renderer::GetGeometryPool();
+		const ReadbackImage before = RenderToImage(renderer, scene, camera);
+		const uint32_t movesBefore = pool->GetStats().Moves;
+		// Frames return the ranges (and may compact within their budget); Compact finishes the job.
 		for (int frame = 0; frame < 4; frame++)
 		{
 			REQUIRE(renderer.Render(scene, camera));
 			gpu.GetDevice().WaitForIdle();
 			pool->BeginFrame();
 		}
-		const ReadbackImage before = RenderToImage(renderer, scene, camera);
-		const uint32_t movesBefore = pool->GetStats().Moves;
 		while (pool->Compact(GeometryPool::c_MaxDefragBytesPerFrame))
 		{
 		}
