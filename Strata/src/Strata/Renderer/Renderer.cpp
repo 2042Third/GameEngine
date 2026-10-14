@@ -95,8 +95,7 @@ namespace Strata
 			return false;
 		}
 
-		constexpr uint32_t maxBindlessTextures = 32768;
-		s_Data->BindlessTextures = CreateScope<BindlessTextureTable>(nvrhiDevice, maxBindlessTextures, device.GetMaxFramesInFlight());
+		s_Data->BindlessTextures = CreateScope<BindlessTextureTable>(nvrhiDevice, device.GetInfo().MaxBindlessTextures, device.GetMaxFramesInFlight());
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_WhiteSlot, s_Data->WhiteTexture);
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_BlackSlot, s_Data->BlackTexture);
 		s_Data->BindlessTextures->SetReservedTexture(BindlessTextureTable::c_FlatNormalSlot, s_Data->FlatNormalTexture);

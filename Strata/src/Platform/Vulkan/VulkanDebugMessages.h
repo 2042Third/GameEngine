@@ -24,6 +24,9 @@ namespace Strata
 	// What the device knows when the message arrives.
 	struct VulkanMessageContext
 	{
+		// The driver's descriptor set support query rejects the bindless table although the driver samples every slot of it
+		// (BindlessTableSize::SupportQueryUnderReports).
+		bool SupportQueryUnderReportsBindlessTable = false;
 		// vkCreateInstance is trying the validation layer; when the loader cannot load it, the instance is created again
 		// without it (VulkanGraphicsDevice::CreateInstance).
 		bool CreatingInstanceWithLayers = false;

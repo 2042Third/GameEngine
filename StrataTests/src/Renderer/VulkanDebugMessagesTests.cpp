@@ -25,6 +25,13 @@ namespace
 		return message;
 	}
 
+	VulkanMessageContext UnderReportedBindlessTable()
+	{
+		VulkanMessageContext context;
+		context.SupportQueryUnderReportsBindlessTable = true;
+		return context;
+	}
+
 	VulkanMessageContext CreatingInstanceWithLayers()
 	{
 		VulkanMessageContext context;
@@ -32,6 +39,7 @@ namespace
 		return context;
 	}
 
+	constexpr const char* c_LayoutSupport = "VUID-vkCreateDescriptorSetLayout-support-09582";
 
 }
 
@@ -42,6 +50,15 @@ TEST_SUITE("Renderer.VulkanMessages")
 		CHECK(ClassifyVulkanMessage(Error("VUID-VkGraphicsPipelineCreateInfo-renderPass-06062"), {}) == VulkanMessageDisposition::Error);
 		CHECK(ClassifyVulkanMessage(Error(nullptr, nullptr), {}) == VulkanMessageDisposition::Error);
 		CHECK(ClassifyVulkanMessage(Error("Loader Message"), {}) == VulkanMessageDisposition::Error);
+	}
+
+	TEST_CASE("The layout support report counts unless the driver's query under-reports the bindless table")
+	{
+		CHECK(ClassifyVulkanMessage(Error(c_LayoutSupport), {}) == VulkanMessageDisposition::Error);
+		CHECK(ClassifyVulkanMessage(Error(c_LayoutSupport), UnderReportedBindlessTable()) == VulkanMessageDisposition::Trace);
+		// Other errors count whatever the driver's query says.
+		CHECK(ClassifyVulkanMessage(Error("VUID-VkPipelineLayoutCreateInfo-descriptorType-03022"), UnderReportedBindlessTable())
+			== VulkanMessageDisposition::Error);
 	}
 
 	TEST_CASE("The loader's errors about a validation layer it cannot load are warnings while the instance tries the layer")

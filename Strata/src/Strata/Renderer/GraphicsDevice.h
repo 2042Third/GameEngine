@@ -40,6 +40,10 @@ namespace Strata
 		bool SupportsExtendedStorageFormats = false;
 		bool ValidationEnabled = false;
 		uint32_t MaxTextureDimension2D = 4096; // Largest width or height of a 2D texture or render target
+		// Slots of the renderer's bindless texture table: GraphicsDevice::c_MaxBindlessTextures, or fewer on a device whose
+		// update-after-bind limits allow fewer sampled images (bindless tables are update-after-bind descriptor sets) or
+		// whose descriptor set support query rejects larger tables (halved down to 1,024: ChooseBindlessTableSize).
+		uint32_t MaxBindlessTextures = 0;
 	};
 
 	struct GraphicsMemoryBudget
@@ -77,6 +81,9 @@ namespace Strata
 	{
 	public:
 		virtual ~GraphicsDevice() = default;
+
+		// The bindless texture table's size where the device allows it: every texture resident at once takes a slot.
+		static constexpr uint32_t c_MaxBindlessTextures = 32768;
 
 		// Creates the device for the platform's graphics API. Returns nullptr (after logging the reason) when
 		// no suitable GPU or driver is available.

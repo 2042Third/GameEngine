@@ -59,7 +59,9 @@ namespace Strata
 		nvrhi::IBindingLayout* GetLayout() const { return m_Layout; }
 		nvrhi::IDescriptorTable* GetTable() const { return m_Table; }
 		uint32_t GetAllocatedCount() const;
+		// Slots the table has now (it grows as slots are allocated) and at most.
 		uint32_t GetCapacity() const;
+		uint32_t GetMaxCapacity() const { return m_MaxCapacity; }
 	private:
 		void GrowLocked(uint32_t minimumCapacity);
 	private:

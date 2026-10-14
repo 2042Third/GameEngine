@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Renderer/GraphicsDevice.h"
 
+#include "Platform/Vulkan/VulkanBindlessSupport.h"
 #include "Platform/Vulkan/VulkanDebugMessages.h"
 #include "Platform/Vulkan/VulkanLoader.h"
 #include "Strata/Core/Window.h"
@@ -34,6 +35,7 @@ namespace Strata
 		{
 			std::atomic<uint32_t> ErrorCount = 0;
 			// VulkanMessageContext's members.
+			std::atomic<bool> SupportQueryUnderReportsBindlessTable = false;
 			std::atomic<bool> CreatingInstanceWithLayers = false;
 		};
 
@@ -98,6 +100,7 @@ namespace Strata
 			classified.IdName = callbackData ? callbackData->pMessageIdName : nullptr;
 			classified.Text = message;
 			VulkanMessageContext context;
+			context.SupportQueryUnderReportsBindlessTable = state->SupportQueryUnderReportsBindlessTable.load();
 			context.CreatingInstanceWithLayers = state->CreatingInstanceWithLayers.load();
 			switch (ClassifyVulkanMessage(classified, context))
 			{
@@ -237,6 +240,7 @@ namespace Strata
 		bool CreateInstance();
 		bool SelectPhysicalDevice();
 		bool CreateLogicalDevice();
+		void CheckBindlessTableSupport();
 		bool CreateSurface();
 		void DestroySurface();
 		bool CreateSwapchainResources();
@@ -269,6 +273,7 @@ namespace Strata
 		std::vector<std::string> m_DeviceExtensions;
 		bool m_HasDebugUtils = false;
 		bool m_HasMemoryBudget = false;
+		VkDriverId m_DriverID = {};
 
 		nvrhi::vulkan::DeviceHandle m_NvrhiVulkanDevice;
 		nvrhi::DeviceHandle m_NvrhiDevice; // Validation-wrapped when validation is enabled
@@ -591,6 +596,15 @@ namespace Strata
 			m_Info.SupportsWireframe = features.features.fillModeNonSolid == VK_TRUE;
 			m_Info.SupportsExtendedStorageFormats = features.features.shaderStorageImageExtendedFormats == VK_TRUE;
 			m_Info.MaxTextureDimension2D = properties.limits.maxImageDimension2D;
+			// Bindless tables are update-after-bind sets of sampled images, visible to every stage: they count against
+			// these limits rather than the plain per-set ones.
+			VkPhysicalDeviceVulkan12Properties properties12 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES };
+			VkPhysicalDeviceProperties2 properties2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2 };
+			properties2.pNext = &properties12;
+			dispatch.vkGetPhysicalDeviceProperties2(physicalDevice, &properties2);
+			m_Info.MaxBindlessTextures = std::min({ GraphicsDevice::c_MaxBindlessTextures, properties12.maxDescriptorSetUpdateAfterBindSampledImages,
+				properties12.maxPerStageDescriptorUpdateAfterBindSampledImages });
+			m_DriverID = properties12.driverID;
 			m_ApiVersion = deviceApiVersion;
 
 			// Dedicated async compute and transfer families, when the GPU has them.
@@ -742,6 +756,7 @@ namespace Strata
 			return false;
 		}
 		VULKAN_HPP_DEFAULT_DISPATCHER.init(vk::Device(m_Device));
+		CheckBindlessTableSupport();
 
 		dispatch.vkGetDeviceQueue(m_Device, static_cast<uint32_t>(m_GraphicsFamily), 0, &m_GraphicsQueue);
 		if (m_ComputeFamily >= 0)
@@ -788,6 +803,46 @@ namespace Strata
 
 		m_NvrhiDevice = m_Specification.EnableValidation ? nvrhi::validation::createValidationLayer(m_NvrhiVulkanDevice) : nvrhi::DeviceHandle(m_NvrhiVulkanDevice);
 		return true;
+	}
+
+	void VulkanGraphicsDevice::CheckBindlessTableSupport()
+	{
+		// A table as the renderer creates it (BindlessTextureTable, through NVRHI's bindless layouts).
+		VkDescriptorSetLayoutBinding binding = {};
+		binding.binding = 0;
+		binding.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+		binding.descriptorCount = m_Info.MaxBindlessTextures;
+		binding.stageFlags = VK_SHADER_STAGE_ALL;
+		const VkDescriptorBindingFlags bindingFlags = VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT
+			| VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT;
+		VkDescriptorSetLayoutBindingFlagsCreateInfo flagsInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO };
+		flagsInfo.bindingCount = 1;
+		flagsInfo.pBindingFlags = &bindingFlags;
+		VkDescriptorSetLayoutCreateInfo layoutInfo = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO };
+		layoutInfo.pNext = &flagsInfo;
+		layoutInfo.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT;
+		layoutInfo.bindingCount = 1;
+		layoutInfo.pBindings = &binding;
+		const auto isSupported = [this, &binding, &layoutInfo](uint32_t slots)
+		{
+			binding.descriptorCount = slots;
+			VkDescriptorSetLayoutSupport support = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_SUPPORT };
+			VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDescriptorSetLayoutSupport(m_Device, &layoutInfo, &support);
+			return support.supported == VK_TRUE;
+		};
+
+		// MoltenVK's query counts every set against maxPerSetDescriptors (1,212 descriptors), update-after-bind or not, while
+		// its update-after-bind limits allow a million sampled images, and it samples every slot of tables far larger than the
+		// query allows (GPU test "A material texture in the last slot of the bindless table samples its own texels"). Other
+		// drivers' queries decide.
+		const uint32_t wanted = m_Info.MaxBindlessTextures;
+		const BindlessTableSize size = ChooseBindlessTableSize(wanted, m_DriverID == VK_DRIVER_ID_MOLTENVK, isSupported);
+		m_Info.MaxBindlessTextures = size.Slots;
+		m_DebugMessengerState.SupportQueryUnderReportsBindlessTable = size.SupportQueryUnderReports;
+		if (size.SupportQueryUnderReports)
+			ST_CORE_INFO("Graphics device: the driver's support query rejects the bindless texture table of {} slots, which the driver samples", size.Slots);
+		else if (size.Slots < wanted)
+			ST_CORE_WARN("Graphics device: the driver supports a bindless texture table of {} slots, not the {} its limits allow", size.Slots, wanted);
 	}
 
 	bool VulkanGraphicsDevice::CreateSwapchain(Window& window, bool vsync)

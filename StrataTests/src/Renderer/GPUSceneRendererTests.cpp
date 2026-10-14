@@ -1,6 +1,8 @@
 #include "Renderer/SceneRendererTestUtils.h"
 
+#include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/AssetPackWriter.h"
+#include "Strata/Renderer/BindlessTextureTable.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
 
@@ -753,6 +755,83 @@ TEST_SUITE("GPU.SceneRenderer")
 		shiny.MetallicRoughnessMap = assets.AddSolidTexture({ 0, 40, 0, 255 }, TextureFormat::RGBA8);
 		const int smooth = renderCenter(shiny).r;
 		CHECK(smooth > rough + 50);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A material texture in the last slot of the bindless table samples its own texels")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		// The table has the slots the device's update-after-bind limits allow, also where the driver's support query allows
+		// fewer (MoltenVK's: about 1,200 descriptors per set), so its last slot must sample like any other.
+		BindlessTextureTable& table = Renderer::GetBindlessTextures();
+		CHECK(table.GetMaxCapacity() == gpu.GetDevice().GetInfo().MaxBindlessTextures);
+		const uint32_t lastSlot = table.GetMaxCapacity() - 1;
+		REQUIRE(lastSlot > BindlessTextureTable::c_ReservedSlots);
+
+		nvrhi::TextureDesc fillerDescription;
+		fillerDescription.width = 1;
+		fillerDescription.height = 1;
+		fillerDescription.format = nvrhi::Format::RGBA8_UNORM;
+		fillerDescription.debugName = "BindlessFiller";
+		fillerDescription.initialState = nvrhi::ResourceStates::ShaderResource;
+		fillerDescription.keepInitialState = true;
+		nvrhi::TextureHandle filler = gpu.GetNvrhiDevice()->createTexture(fillerDescription);
+		REQUIRE(filler);
+		// Releases the fillers and lets frames recycle their slots however the test ends: every GPU test of the run shares the
+		// table, and a full one would fail their textures.
+		struct ReleaseFillers
+		{
+			BindlessTextureTable& Table;
+			GraphicsDevice& Device;
+			std::vector<uint32_t> Slots;
+
+			~ReleaseFillers()
+			{
+				for (const uint32_t slot : Slots)
+					Table.Release(slot);
+				for (uint32_t frame = 0; frame <= Device.GetMaxFramesInFlight() + 1; frame++)
+				{
+					if (!Device.BeginFrame())
+						break;
+					Renderer::BeginFrame();
+					Device.EndFrame();
+				}
+			}
+		};
+
+		{
+			// Only frames recycle released slots (Renderer::BeginFrame), and none runs until the texture has its slot: the
+			// table hands out its free slots and then its fresh ones in order, so once a filler took the slot before the last,
+			// the texture takes the last.
+			ReleaseFillers fillers { table, gpu.GetDevice(), {} };
+			while (fillers.Slots.empty() || fillers.Slots.back() != lastSlot - 1)
+			{
+				const uint32_t slot = table.Allocate(filler);
+				REQUIRE(slot != BindlessTextureTable::c_InvalidSlot);
+				fillers.Slots.push_back(slot);
+				REQUIRE(slot < lastSlot);
+			}
+
+			SceneTestAssets assets;
+			Scene scene;
+			AddNeutralPostProcess(scene);
+			Entity quad = AddMesh(scene, BuiltinAssets::QuadMesh, UUID::Null(), glm::vec3(0.0f), "Quad");
+			quad.GetComponent<TransformComponent>().Scale = glm::vec3(4.0f);
+			MaterialProperties textured = UnlitColor({ 1.0f, 1.0f, 1.0f, 1.0f });
+			const AssetHandle texture = assets.AddSolidTexture({ 30, 200, 90, 255 }, TextureFormat::RGBA8SRGB);
+			textured.BaseColorMap = texture;
+			quad.GetComponent<MeshRendererComponent>().Material = assets.AddMaterial(textured);
+
+			SceneRenderer renderer;
+			renderer.SetViewportSize(c_Size, c_Size);
+			const glm::ivec4 sampled = glm::ivec4(GetPixelRGBA8(RenderToImage(renderer, scene, LookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f))),
+				c_Size / 2, c_Size / 2));
+			const Ref<Texture> loaded = AssetManager::GetAsset<Texture>(texture);
+			REQUIRE(loaded);
+			CHECK(loaded->GetBindlessSlot() == lastSlot);
+			CHECK(glm::all(glm::lessThanEqual(glm::abs(sampled - glm::ivec4(30, 200, 90, 255)), glm::ivec4(1))));
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
