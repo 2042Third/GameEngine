@@ -17,6 +17,13 @@ namespace Strata::Tests
 	//   no-asset-pipeline               registers the modules without options, like a shipped game: prints the loaders and
 	//                                   systems it finds, then uses the importer registry, which fails a verify (the
 	//                                   message is printed, the exit code is c_VerifyExitCode)
+	//   register-without <modules> <scene file>
+	//                                   registers the modules but <modules> (comma-separated, ModuleRegistrationOptions::
+	//                                   Exclude): prints the registered modules and the systems' update order, the
+	//                                   components of <scene file> that stayed unknown and how many saved back unchanged,
+	//                                   then plays a scene whose script calls physics (the API test module's
+	//                                   PhysicsWithoutSystem) and prints how it went and how often the absent module was
+	//                                   reported; exits with 0 unless something could not run
 	// Returns nothing for other modes.
 	std::optional<int> RunModuleRegistrationHelper(std::string_view mode, int argc, char** argv);
 

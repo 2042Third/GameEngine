@@ -155,7 +155,7 @@ TEST_SUITE("Scene.Systems")
 		CHECK(descriptors[1].AfterIfPresent == std::vector<std::string> { "Scripting" });
 		CHECK(descriptors[1].BeforeIfPresent == std::vector<std::string> { "Physics" });
 		CHECK(descriptors[2].AfterIfPresent == std::vector<std::string> { "Scripting" });
-		CHECK(descriptors[3].AfterIfPresent == std::vector<std::string> { "Physics" });
+		CHECK(descriptors[3].AfterIfPresent == std::vector<std::string> { "Scripting", "Animation", "Physics" });
 		CHECK(SceneSystemRegistry::GetAbsentSoftConstraints().empty());
 		CHECK(descriptors[0].Type == entt::type_id<ScriptSystem>().hash());
 		CHECK(descriptors[1].Type == entt::type_id<AnimationSystem>().hash());

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <functional>
+#include <string>
 #include <vector>
 
 namespace Strata::Engine
@@ -15,7 +16,17 @@ namespace Strata::Engine
 		// Registrations of games, tools and tests, run after the engine's modules and the asset pipeline while the
 		// registries are open: the place to register components (ComponentRegistry::Register), which is frozen afterwards.
 		std::vector<std::function<void()>> Extra;
+		// Engine modules of this build not to register, by name (GetBuiltinModuleNames): a test of what a game without them
+		// does, in a full build. Their components stay unknown components, their systems and services are absent. Scene and
+		// Renderer are part of every engine and are refused (an error is logged; they register anyway), as are unknown names.
+		std::vector<std::string> Exclude;
 	};
+
+	// The engine's modules, in registration order: Scene, Renderer, Physics, Audio, Animation, Scripting.
+	std::vector<std::string> GetBuiltinModuleNames();
+	// The engine modules RegisterBuiltinModules registered, in order: GetBuiltinModuleNames without the excluded ones.
+	// Empty before it ran. Main thread.
+	std::vector<std::string> GetRegisteredModules();
 
 	// The engine's composition root: opens the registries (components, asset loaders, built-in assets, scene systems), lets
 	// every engine module register into them in dependency order, runs options.AssetPipeline and options.Extra and freezes

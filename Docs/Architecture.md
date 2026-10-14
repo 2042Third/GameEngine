@@ -489,7 +489,9 @@ The engine is extended through registries rather than through code that knows it
 manager: the texture streamer), `BuiltinAssets` (objects of the built-in assets), `MeshGeometryRegistry` (the triangles of
 mesh assets for modules that do not draw them: physics) and `SceneSystemRegistry` (runtime systems of playing scenes).
 `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`) fills them, once per process, before anything reads
-them:
+them. Its modules are a table (`c_BuiltinModules`: a name and a registration function each, lower layers first), run in
+order but for those `ModuleRegistrationOptions::Exclude` names; `Engine::GetBuiltinModuleNames` lists the table and
+`Engine::GetRegisteredModules` what registered:
 
 ```text
 open the registries (BeginRegistration; not the importers')
@@ -510,8 +512,15 @@ RegisterScriptingModule    Scripting/ScriptingRegistration.cpp the Script compon
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
 ComponentRegistry::Freeze
-log the scene systems' update order and the soft constraints naming absent systems
+log the registered modules, the scene systems' update order and the soft constraints naming absent systems
 ```
+
+- **Leaving modules out.** `ModuleRegistrationOptions::Exclude` registers the engine without some of its modules, as a
+  game without them would run (tests: `--strata-test-helper=register-without`). Scene and Renderer are part of every
+  engine: excluding them is refused with an error, as is a name the table does not hold. Nothing else changes for the
+  absent modules: their components load as unknown components and save back unchanged, the other modules' soft
+  constraints ignore their systems, and scripts calling into their services are told that the scene plays without them
+  ("the scene plays without physics (the engine has no physics module)") and get their calls' failure values.
 
 - **Callers.** The entry point calls it (`Engine/EntryPoint.h`), after the program's `CreateApplication` returned its
   `ApplicationLaunch` and before `ApplicationLaunch::Create` makes the application, with the options the program put in
@@ -729,7 +738,7 @@ are, in update order:
 | Scripting | `ScriptSystem` | Play | | Script instances of the active `ScriptEngine` (null engine: no scripts). |
 | Animation | `AnimationSystem` | Play | After Scripting, Before Physics (soft) | Animators in `OnUpdate`: poses, root motion, attachments, events (see [Animation](#animation)). |
 | Physics | `PhysicsSystem` | Play, Simulate | After Scripting (soft) | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
-| Audio | `AudioSystem` | Play | After Physics (soft) | Sources and listener, in `OnLateUpdate` after scripts and physics. |
+| Audio | `AudioSystem` | Play | After Scripting, Animation, Physics (soft) | Sources and listener, in `OnLateUpdate` after everything that moves them. |
 
 - **Update order.** A `SceneSystemDescriptor` names the systems it runs `After` and `Before`. The registry keeps the
   order of these constraints that follows registration order as far as they allow: the first registered system runs as

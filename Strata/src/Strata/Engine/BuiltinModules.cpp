@@ -14,8 +14,11 @@
 #include "Strata/Scene/SceneSystem.h"
 #include "Strata/Scripting/ScriptingRegistration.h"
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <string>
+#include <string_view>
 
 namespace Strata::Engine
 {
@@ -31,7 +34,64 @@ namespace Strata::Engine
 		};
 
 		std::atomic<RegistrationState> s_State = RegistrationState::NotRegistered;
+		std::vector<std::string> s_RegisteredModules;
 
+		struct BuiltinModule
+		{
+			std::string_view Name;
+			void (*Register)();
+		};
+
+		// The engine's modules, lower layers first. The order is also the order of the modules' components in
+		// ComponentRegistry::GetAll (the Inspector, Add Component, component.list). Scene systems order themselves against
+		// other modules' systems with soft constraints (SceneSystemDescriptor::AfterIfPresent, BeforeIfPresent), which apply
+		// whatever the registration order and whichever modules are present.
+		constexpr BuiltinModule c_BuiltinModules[] = {
+			{ "Scene", RegisterSceneModule },
+			{ "Renderer", RegisterRendererModule },
+			{ "Physics", RegisterPhysicsModule },
+			{ "Audio", RegisterAudioModule },
+			{ "Animation", RegisterAnimationModule },
+			{ "Scripting", RegisterScriptingModule },
+		};
+
+		// Every engine has these: the others reach the scene and the renderer directly.
+		constexpr std::array<std::string_view, 2> c_RequiredModules = { "Scene", "Renderer" };
+
+		bool IsBuiltinModule(std::string_view name)
+		{
+			return std::any_of(std::begin(c_BuiltinModules), std::end(c_BuiltinModules), [name](const BuiltinModule& module) { return module.Name == name; });
+		}
+
+		// The modules options.Exclude leaves out, after refusing the required and unknown names.
+		std::vector<std::string_view> GetExcludedModules(const ModuleRegistrationOptions& options)
+		{
+			std::vector<std::string_view> excluded;
+			for (const std::string& name : options.Exclude)
+			{
+				if (std::find(c_RequiredModules.begin(), c_RequiredModules.end(), name) != c_RequiredModules.end())
+					ST_CORE_ERROR("Engine::RegisterBuiltinModules(): the {} module cannot be excluded (every engine has it); it is registered", name);
+				else if (!IsBuiltinModule(name))
+					ST_CORE_ERROR("Engine::RegisterBuiltinModules(): '{}' is no engine module of this build and cannot be excluded", name);
+				else
+					excluded.push_back(name);
+			}
+			return excluded;
+		}
+
+	}
+
+	std::vector<std::string> GetBuiltinModuleNames()
+	{
+		std::vector<std::string> names;
+		for (const BuiltinModule& module : c_BuiltinModules)
+			names.emplace_back(module.Name);
+		return names;
+	}
+
+	std::vector<std::string> GetRegisteredModules()
+	{
+		return s_RegisteredModules;
 	}
 
 	void RegisterBuiltinModules(const ModuleRegistrationOptions& options)
@@ -56,15 +116,14 @@ namespace Strata::Engine
 		MeshGeometryRegistry::BeginRegistration();
 		SceneSystemRegistry::BeginRegistration();
 
-		// Lower layers first; the order is also the order of the modules' components in ComponentRegistry::GetAll (the
-		// Inspector, Add Component, component.list). Scene systems order themselves against other modules' systems with soft
-		// constraints (SceneSystemDescriptor::AfterIfPresent, BeforeIfPresent), which apply whatever the registration order.
-		RegisterSceneModule();
-		RegisterRendererModule();
-		RegisterPhysicsModule();
-		RegisterAudioModule();
-		RegisterAnimationModule();
-		RegisterScriptingModule();
+		const std::vector<std::string_view> excluded = GetExcludedModules(options);
+		for (const BuiltinModule& module : c_BuiltinModules)
+		{
+			if (std::find(excluded.begin(), excluded.end(), module.Name) != excluded.end())
+				continue;
+			module.Register();
+			s_RegisteredModules.emplace_back(module.Name);
+		}
 		// Tooling, handed in by the program (see ModuleRegistrationOptions::AssetPipeline).
 		if (options.AssetPipeline)
 			options.AssetPipeline();
@@ -84,7 +143,10 @@ namespace Strata::Engine
 		std::string absent;
 		for (const std::string& constraint : SceneSystemRegistry::GetAbsentSoftConstraints())
 			absent += (absent.empty() ? "" : ", ") + constraint;
-		ST_CORE_INFO("Scene systems update in the order {}{}", order.empty() ? std::string("(none)") : order,
+		std::string modules;
+		for (const std::string& name : s_RegisteredModules)
+			modules += (modules.empty() ? "" : ", ") + name;
+		ST_CORE_INFO("Engine modules: {}. Scene systems update in the order {}{}", modules, order.empty() ? std::string("(none)") : order,
 			absent.empty() ? std::string() : fmt::format("; soft constraints naming absent systems: {}", absent));
 	}
 

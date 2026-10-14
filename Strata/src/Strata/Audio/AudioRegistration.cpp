@@ -38,11 +38,11 @@ namespace Strata
 			return AudioClipAsset::Deserialize(data, metadata.Path.empty() ? metadata.Name : metadata.Path, outError);
 		});
 
-		// Audio updates last (in OnLateUpdate), so sources and the listener follow the transforms scripts and physics produced
-		// this frame; physics is another module (a soft constraint: audio runs in builds without it). Like scripts, it does not
-		// run in simulate mode.
+		// Audio updates last (in OnLateUpdate), so sources and the listener follow the transforms scripts, animation (root
+		// motion) and physics produced this frame: after each of them, whichever an engine has (soft constraints: they are
+		// other modules, and audio runs without them). Like scripts, it does not run in simulate mode.
 		SceneSystemDescriptor descriptor = MakeSceneSystemDescriptor<AudioSystem>("Audio", false, [](Scene& scene) { return CreateScope<AudioSystem>(scene); });
-		descriptor.AfterIfPresent = { "Physics" };
+		descriptor.AfterIfPresent = { "Scripting", "Animation", "Physics" };
 		descriptor.ProfileStage = "Scene.Audio";
 		const bool registered = SceneSystemRegistry::Register(std::move(descriptor));
 		ST_CORE_VERIFY(registered, "The audio module could not register its scene system");

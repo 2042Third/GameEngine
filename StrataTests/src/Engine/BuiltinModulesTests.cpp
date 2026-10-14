@@ -16,6 +16,8 @@
 #include "TestHelpers.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -185,6 +187,64 @@ TEST_SUITE("Engine.Modules")
 		CHECK(result.Output.find("loaders: 11, systems: Scripting Animation Physics Audio") != std::string::npos);
 		CHECK(result.ExitCode == c_VerifyExitCode);
 		CHECK(result.Output.find("verify failed: The asset importer registry is used before Engine::RegisterBuiltinModules() registered the asset pipeline") != std::string::npos);
+	}
+
+	TEST_CASE("The composition root registers the engine's modules in its table's order")
+	{
+		const std::vector<std::string> expected = { "Scene", "Renderer", "Physics", "Audio", "Animation", "Scripting" };
+		CHECK(Engine::GetBuiltinModuleNames() == expected);
+		CHECK(Engine::GetRegisteredModules() == expected);
+	}
+
+	TEST_CASE("Without the physics module the others register, its components stay unknown and scripts are told")
+	{
+		// In a child process: registration happens once per process.
+		const std::filesystem::path scene = FileSystem::FromUTF8(STRATA_FEATURE_TEST_DIR) / "Assets" / "Scenes" / "Feature.stscene";
+		const Process::RunResult result = RunHelper({ "--strata-test-helper=register-without", "Physics", FileSystem::ToUTF8(scene) });
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
+		CHECK(result.Output.find("modules: Scene Renderer Audio Animation Scripting\n") != std::string::npos);
+		// The others' soft constraints order them as in a full engine.
+		CHECK(result.Output.find("systems: Scripting Animation Audio\n") != std::string::npos);
+		// The feature scene's physics components stay unknown components and save back unchanged.
+		const size_t unknown = result.Output.find("unknown components: ");
+		REQUIRE(unknown != std::string::npos);
+		const std::string names = result.Output.substr(unknown, result.Output.find('\n', unknown) - unknown);
+		for (const char* name : { "RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "CharacterController" })
+		{
+			CAPTURE(name);
+			CHECK(names.find(name) != std::string::npos);
+		}
+		CHECK(names.find("Transform") == std::string::npos);
+		CHECK(names.find("AudioSource") == std::string::npos);
+		const size_t saved = result.Output.find("saved unchanged: ");
+		REQUIRE(saved != std::string::npos);
+		size_t unchanged = 0;
+		size_t total = 0;
+		REQUIRE(std::sscanf(result.Output.c_str() + saved, "saved unchanged: %zu of %zu", &unchanged, &total) == 2);
+		CHECK(total >= 6);
+		CHECK(unchanged == total);
+		// The API test module's physics calls fail and report that the engine has no physics module; nothing crashes.
+		CHECK(result.Output.find("scripts ran: yes, failed check: (none), faulted: no") != std::string::npos);
+		CHECK(result.Output.find("reported: 0") == std::string::npos);
+		CHECK(result.Output.find("reported: ") != std::string::npos);
+	}
+
+	TEST_CASE("Excluding the scene, the renderer or a module that does not exist is refused")
+	{
+		const std::filesystem::path scene = FileSystem::FromUTF8(STRATA_FEATURE_TEST_DIR) / "Assets" / "Scenes" / "FeatureSub.stscene";
+		const Process::RunResult result = RunHelper({ "--strata-test-helper=register-without", "Scene,Renderer,Teleportation,Audio", FileSystem::ToUTF8(scene) });
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
+		CHECK(result.Output.find("the Scene module cannot be excluded (every engine has it); it is registered") != std::string::npos);
+		CHECK(result.Output.find("the Renderer module cannot be excluded (every engine has it); it is registered") != std::string::npos);
+		CHECK(result.Output.find("'Teleportation' is no engine module of this build and cannot be excluded") != std::string::npos);
+		CHECK(result.Output.find("modules: Scene Renderer Physics Animation Scripting\n") != std::string::npos);
+		CHECK(result.Output.find("systems: Scripting Animation Physics\n") != std::string::npos);
 	}
 
 	TEST_CASE("Built-in asset factories are accepted only for built-in handles")

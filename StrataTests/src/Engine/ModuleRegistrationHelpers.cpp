@@ -8,19 +8,29 @@
 #include "Strata/Core/Assert.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Core/Timestep.h"
 #include "Strata/Engine/BuiltinModules.h"
 #include "Strata/Reflection/ComponentGizmo.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/SceneGizmos.h"
+#include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/SceneSystem.h"
+#include "Strata/Scene/UnknownComponents.h"
+#include "Strata/Scripting/ScriptEngine.h"
+#include "Strata/Scripting/ScriptSystem.h"
+#include "Strata/Scripting/ScriptingComponents.h"
+#include "Strata/Core/Platform.h"
+#include "Strata/Core/JsonUtils.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <map>
+#include <set>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -350,6 +360,116 @@ namespace Strata::Tests
 			return 1;
 		}
 
+		std::string Join(const std::vector<std::string>& names)
+		{
+			std::string text;
+			for (const std::string& name : names)
+				text += (text.empty() ? "" : " ") + name;
+			return text;
+		}
+
+		std::vector<std::string> Split(std::string_view text, char separator)
+		{
+			std::vector<std::string> parts;
+			size_t start = 0;
+			while (start <= text.size())
+			{
+				const size_t end = std::min(text.find(separator, start), text.size());
+				if (end > start)
+					parts.emplace_back(text.substr(start, end - start));
+				start = end + 1;
+			}
+			return parts;
+		}
+
+		size_t CountLogEntries(uint64_t after, std::string_view text)
+		{
+			size_t count = 0;
+			for (const LogEntry& entry : Log::GetBuffer().GetEntries(after))
+				count += entry.Message.find(text) != std::string::npos ? 1 : 0;
+			return count;
+		}
+
+		// An engine without some of its modules (ModuleRegistrationOptions::Exclude): what registers, how the systems order,
+		// what becomes of a scene's components of the absent modules, and what scripts are told when they call them.
+		int RunWithoutModules(int argc, char** argv)
+		{
+			if (argc < 4)
+				return Fail("usage: register-without <module>[,<module>...] <scene file>");
+			Engine::ModuleRegistrationOptions options;
+			options.Exclude = Split(argv[2], ',');
+			Engine::RegisterBuiltinModules(options);
+			std::vector<std::string> systems;
+			for (const SceneSystemDescriptor& descriptor : SceneSystemRegistry::GetAll())
+				systems.push_back(descriptor.Name);
+			std::printf("modules: %s\nsystems: %s\n", Join(Engine::GetRegisteredModules()).c_str(), Join(systems).c_str());
+
+			// The scene's components of the absent modules stay as unknown components and save back unchanged.
+			const std::filesystem::path scenePath = FileSystem::FromUTF8(argv[3]);
+			const std::optional<std::string> text = FileSystem::ReadText(scenePath);
+			const std::optional<nlohmann::json> file = text ? JsonUtils::Parse(*text) : std::nullopt;
+			std::string error;
+			const Ref<Scene> loaded = SceneSerializer::LoadFromFile(scenePath, &error);
+			if (!file || !loaded)
+				return Fail("the scene does not load: " + error);
+			std::map<std::string, nlohmann::json> fileComponents; // "<entity id>/<component>" -> its JSON in the file
+			for (const nlohmann::json& entity : (*file)["Scene"]["Entities"])
+			{
+				for (const auto& [name, component] : entity["Components"].items())
+				{
+					if (!ComponentRegistry::Find(name))
+						fileComponents[entity["ID"].dump() + "/" + name] = component;
+				}
+			}
+			std::set<std::string> unknownNames;
+			size_t unchanged = 0;
+			const nlohmann::json saved = SceneSerializer::Serialize(*loaded);
+			for (const nlohmann::json& entity : saved["Scene"]["Entities"])
+			{
+				for (const auto& [name, component] : entity["Components"].items())
+				{
+					const auto it = fileComponents.find(entity["ID"].dump() + "/" + name);
+					if (it == fileComponents.end())
+						continue;
+					unknownNames.insert(name);
+					unchanged += it->second == component ? 1 : 0;
+				}
+			}
+			std::printf("unknown components: %s\nsaved unchanged: %zu of %zu\n", Join({ unknownNames.begin(), unknownNames.end() }).c_str(), unchanged,
+				fileComponents.size());
+
+			// A scene plays without them; the API test module's physics calls report the absent module and fail.
+			const Ref<ScriptEngine> engine = CreateRef<ScriptEngine>();
+			if (!engine->LoadModule(Platform::GetExecutableDirectory() / STRATA_TEST_SCRIPTS_API, &error))
+				return Fail("the API test module does not load: " + error);
+			ScriptEngine::SetActive(engine);
+			const uint64_t logStart = Log::GetBuffer().GetLatestSequence();
+			{
+				Scene scene;
+				Entity crate = scene.CreateEntity("Crate");
+				crate.GetTransform().Translation = glm::vec3(0.0f, 5.0f, 0.0f);
+				Entity tester = scene.CreateEntity("Tester");
+				ScriptEntry probe;
+				probe.ClassName = "PhysicsWithoutSystem";
+				tester.AddComponent<ScriptComponent>().Scripts.push_back(std::move(probe));
+				scene.OnRuntimeStart();
+				for (int frame = 0; frame < 10; frame++)
+					scene.OnUpdateRuntime(Timestep(1.0f / 60.0f));
+				const ScriptSystem* scripts = scene.GetSystem<ScriptSystem>();
+				const std::optional<PropertyValue> done = scripts ? scripts->GetFieldValue(tester, "PhysicsWithoutSystem", "Done") : std::nullopt;
+				const std::optional<PropertyValue> failure = scripts ? scripts->GetFieldValue(tester, "PhysicsWithoutSystem", "Failure") : std::nullopt;
+				const bool ran = done && std::holds_alternative<bool>(*done) && std::get<bool>(*done);
+				const std::string failed = failure && std::holds_alternative<std::string>(*failure) ? std::get<std::string>(*failure) : std::string("(none)");
+				std::printf("scripts ran: %s, failed check: %s, faulted: %s\n", ran ? "yes" : "no", failed.empty() ? "(none)" : failed.c_str(),
+					engine->IsFaulted() ? "yes" : "no");
+				scene.OnRuntimeStop();
+			}
+			std::printf("reported: %zu\n", CountLogEntries(logStart, "the scene plays without physics (the engine has no physics module)"));
+			ScriptEngine::SetActive(nullptr);
+			std::fflush(stdout);
+			return 0;
+		}
+
 	}
 
 	std::optional<int> RunModuleRegistrationHelper(std::string_view mode, int argc, char** argv)
@@ -367,6 +487,15 @@ namespace Strata::Tests
 			return UseUnregisteredRegistry(argc, argv);
 		if (mode == "no-asset-pipeline")
 			return RunWithoutAssetPipeline();
+		if (mode == "register-without")
+		{
+			LogSpecification logSpecification;
+			logSpecification.Level = LogLevel::Warn;
+			Log::Init(logSpecification);
+			const int result = RunWithoutModules(argc, argv);
+			Log::Shutdown();
+			return result;
+		}
 		return std::nullopt;
 	}
 

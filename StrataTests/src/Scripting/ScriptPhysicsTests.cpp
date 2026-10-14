@@ -270,7 +270,7 @@ TEST_SUITE("Scripting.Physics")
 			CHECK(GetField<bool>(system, tester, "PhysicsWithoutSystem", "Done"));
 			CheckScriptChecks(system, tester, "PhysicsWithoutSystem", 10);
 			CHECK(GetField<int32_t>(system, crate, "ContactRecorder", "CollisionEnters") == 0);
-			CHECK(CountLogMessages(logStart, "'Crate' has no body in the physics simulation") > 0);
+			CHECK(CountLogMessages(logStart, "the scene plays without physics (the engine has no physics module)") > 0);
 			CHECK_FALSE(engine->IsFaulted());
 
 			AudioSystem* audio = scene.GetSystem<AudioSystem>();
