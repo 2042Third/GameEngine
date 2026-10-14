@@ -1,8 +1,9 @@
 // Scripts of the Scripting.UI tests (StrataTests/src/Scripting/ScriptUITests.cpp). The scene (CreateUIScene there): a canvas
 // "Menu" with one unit per pixel holding "Title" (a white UIText "Hello"), "Logo" (a UIImage colored (0.2, 0.4, 0.6, 1)),
 // "Play" (a button at (100, 100), 200 x 50, whose event target is "Controller"), "Sound" and "Music" (toggles of the
-// group "Options", Sound on), "Volume" (a slider from 0 to 10 with whole numbers at 4) and "Locked" (a button that is not
-// interactable); "Plain" has no UI components.
+// group "Options", Sound on), "Volume" (a slider from 0 to 10 with whole numbers at 4), "Locked" (a button that is not
+// interactable) and "Name" (an input field at (100, 400), 300 x 40, of at most 8 characters, whose event target is
+// "Controller"); "Plain" has no UI components.
 
 #include "TestScripts.h"
 
@@ -73,6 +74,12 @@ public:
 		Expect(sound.GetValue() == 1.0f && music.GetValue() == 0.0f, "toggles' values");
 		Expect(music.SetValue(1.0f) && music.GetValue() == 1.0f && sound.GetValue() == 0.0f, "one toggle of a group is on");
 		Expect(music.SetValue(0.0f) && music.GetValue() == 0.0f, "a toggle switched off");
+
+		UIElement name = Find("Name");
+		Expect(name.GetText().empty(), "an empty input field");
+		Expect(name.SetText("Ann") && name.GetText() == "Ann", "SetText of an input field");
+		Expect(name.SetText("Ann\nLee Smith") && name.GetText() == "AnnLee S", "a field's text is one line within its limit");
+		Expect(name.SetText("") && name.GetText().empty(), "a field cleared");
 
 		Expect(!UI::IsPointerOverUI(), "IsPointerOverUI without a pointer over the UI");
 		Expect(!UI::IsActionPressed(UIAction::Submit) && !UI::IsActionDown(UIAction::Cancel), "actions without input");
@@ -212,6 +219,11 @@ public:
 	void OnUIFocusChanged(Entity widget, bool focused) override
 	{
 		Record("focus:" + widget.GetName() + (focused ? "+" : "-"));
+	}
+
+	void OnUISubmit(Entity widget) override
+	{
+		Record("submit:" + widget.GetName() + "=" + widget.GetUI().GetText());
 	}
 private:
 	void Record(const std::string& event)

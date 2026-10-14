@@ -76,6 +76,14 @@ namespace
 			slider.Value = 4.0f;
 			slider.WholeNumbers = true;
 			AddButton("Locked", { 400.0f, 100.0f }, { 100.0f, 50.0f }).GetComponent<UISelectableComponent>().Interactable = false;
+			Entity name = AddSelectable("Name", { 100.0f, 400.0f }, { 300.0f, 40.0f });
+			Entity nameText = Target.CreateChildEntity(name, "Name Text");
+			nameText.AddComponent<UIRectComponent>(BoxRect({ 8.0f, 8.0f }, { 284.0f, 24.0f }));
+			nameText.AddComponent<UITextComponent>().FontSize = 20.0f;
+			UIInputFieldComponent& field = name.AddComponent<UIInputFieldComponent>();
+			field.TextElement = nameText.GetUUID();
+			field.CharacterLimit = 8;
+			field.EventTarget = Controller.GetUUID();
 			Target.CreateEntity("Plain");
 		}
 
@@ -187,7 +195,7 @@ TEST_SUITE("Scripting.UI")
 {
 	TEST_CASE("Scripts read and change texts, images, colors, interactability, values and the focus")
 	{
-		RunUIScript("UIControlAPI", 26);
+		RunUIScript("UIControlAPI", 30);
 	}
 
 	TEST_CASE("UI functions refuse misuse harmlessly")
@@ -248,6 +256,31 @@ TEST_SUITE("Scripting.UI")
 		CHECK_FALSE(engine->IsFaulted());
 	}
 
+	TEST_CASE("An input field's submit reaches OnUISubmit of the field's and its target's scripts; typing is hidden from the game")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		UIScriptScene scene;
+		Entity name = scene.Target.FindEntityByName("Name");
+		AddScriptEntry(name, "UIEventRecorder");
+		AddScriptEntry(scene.Controller, "UIEventRecorder");
+		AddScriptEntry(scene.Controller, "UIFrameProbe");
+		scene.Target.OnRuntimeStart();
+		scene.Frame();
+		const ScriptSystem& system = GetScriptSystem(scene.Target);
+
+		scene.Click({ 200.0f, 420.0f });
+		Input::SimulateText("Ada");
+		scene.Frame();
+		Input::SimulateKey(Key::Enter, true);
+		scene.Frame();
+		Input::SimulateKey(Key::Enter, false);
+		scene.Frame();
+		CHECK(GetField<std::string>(system, name, "UIEventRecorder", "Events") == "focus:Name+;submit:Name=Ada;");
+		CHECK(GetField<std::string>(system, scene.Controller, "UIEventRecorder", "Events") == "focus:Name+;submit:Name=Ada;");
+		CHECK(GetField<std::string>(system, scene.Controller, "UIFrameProbe", "Typed").empty()); // The field had the keyboard
+		CHECK_FALSE(engine->IsFaulted());
+	}
+
 	TEST_CASE("Unscaled time goes on at time scale 0, and typed text reaches scripts")
 	{
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
@@ -278,7 +311,7 @@ TEST_SUITE("Scripting.UI")
 		const ScriptClassInfo* second = engine->FindClass("Second");
 		REQUIRE(first);
 		REQUIRE(second);
-		for (ScriptCallback callback : { ScriptCallback::OnUIClick, ScriptCallback::OnUIValueChanged, ScriptCallback::OnUIFocusChanged })
+		for (ScriptCallback callback : { ScriptCallback::OnUIClick, ScriptCallback::OnUIValueChanged, ScriptCallback::OnUIFocusChanged, ScriptCallback::OnUISubmit })
 		{
 			INFO("Callback ", ScriptCallbackToString(callback));
 			CHECK_FALSE(first->Implements(callback));
@@ -293,6 +326,21 @@ TEST_SUITE("Scripting.UI")
 		scene.Frame();
 		scene.Click({ 150.0f, 120.0f });
 		CHECK(GetField<int32_t>(GetScriptSystem(scene.Target), scene.Play, "Second", "B") == 2);
+		CHECK_FALSE(engine->IsFaulted());
+	}
+
+	TEST_CASE("OnUISubmit is read only from class descriptors large enough to hold it")
+	{
+		// "First" has the descriptor size of an SDK that has the other UI callbacks but predates OnUISubmit.
+		ScopedEnvironmentVariable scopedCase("STRATA_TEST_MALFORMED_CASE", "OlderSubmitClass");
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_MALFORMED));
+		const ScriptClassInfo* first = engine->FindClass("First");
+		const ScriptClassInfo* second = engine->FindClass("Second");
+		REQUIRE(first);
+		REQUIRE(second);
+		CHECK(first->Implements(ScriptCallback::OnUIFocusChanged));
+		CHECK_FALSE(first->Implements(ScriptCallback::OnUISubmit));
+		CHECK(second->Implements(ScriptCallback::OnUISubmit));
 		CHECK_FALSE(engine->IsFaulted());
 	}
 }

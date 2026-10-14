@@ -174,9 +174,19 @@ TEST_SUITE("Editor.UICommands")
 		const nlohmann::json image = harness.Run("ui.create", { { "type", "image" }, { "parent", plain } });
 		CHECK(image["canvas"] != button["canvas"]);
 		CHECK_FALSE(harness.Find(image["canvas"]).GetParent());
+		// An input field shows its text through its label, and its placeholder (the text given) while the text is empty.
+		const nlohmann::json name = harness.Run("ui.create", { { "type", "inputField" }, { "parent", button["canvas"] }, { "text", "Your name" } });
+		const Entity nameField = harness.Find(name["entity"]);
+		CHECK(nameField.GetComponent<UIInputFieldComponent>().TextElement == harness.Find(name["parts"]["label"]).GetUUID());
+		CHECK(nameField.GetComponent<UIInputFieldComponent>().Placeholder == harness.Find(name["parts"]["placeholder"]).GetUUID());
+		CHECK(harness.Find(name["parts"]["placeholder"]).GetComponent<UITextComponent>().Text == "Your name");
+		CHECK((nameField.HasComponent<UISelectableComponent>() && nameField.HasComponent<UIMaskComponent>()));
+		const nlohmann::json nameLayout = harness.Run("ui.layout", { { "entity", name["entity"] } });
+		CHECK(nameLayout["elements"][0]["text"] == "");
+		CHECK(nameLayout["elements"][0]["editing"] == false);
 
 		// Every type, each one undo step.
-		for (const char* type : { "canvas", "panel", "image", "text", "button", "toggle", "slider", "horizontalLayout", "verticalLayout", "gridLayout" })
+		for (const char* type : { "canvas", "panel", "image", "text", "button", "toggle", "slider", "inputField", "horizontalLayout", "verticalLayout", "gridLayout" })
 		{
 			CAPTURE(type);
 			const nlohmann::json before = harness.SceneSnapshot();
@@ -344,5 +354,31 @@ TEST_SUITE("Editor.UICommands")
 		CHECK(Input::GetTypedText() == "Name \xC3\xA9");
 		harness.Frame();
 		CHECK(Input::GetTypedText().empty());
+	}
+
+	TEST_CASE("An agent edits an input field: input.click focuses it, input.type types into it, ui.layout reads it")
+	{
+		PlayingUIHarness harness;
+		const nlohmann::json canvas = harness.Run("ui.create", { { "type", "canvas" } });
+		const nlohmann::json field = harness.Run("ui.create", { { "type", "inputField" }, { "parent", canvas["entity"] } });
+		harness.Run("play.start");
+		harness.Frame();
+		const EditorCommandResult clicked = harness.RunFrames("input.click", { { "entity", field["entity"] } });
+		INFO(clicked.Error);
+		REQUIRE(clicked.Success);
+		bool focused = false;
+		for (const nlohmann::json& event : clicked.Value["events"])
+			focused |= event["type"] == "focusChanged" && event["widget"] == field["entity"] && event["focused"] == true;
+		CHECK(focused);
+
+		const EditorCommandResult typed = harness.RunFrames("input.type", { { "text", "Ada" } });
+		REQUIRE(typed.Success);
+		CHECK(Input::GetTypedText().empty()); // The field has the keyboard
+		harness.Frame();
+		const nlohmann::json layout = harness.Run("ui.layout", { { "entity", field["entity"] } });
+		CHECK(layout["elements"][0]["text"] == "Ada");
+		CHECK(layout["elements"][0]["editing"] == true);
+		CHECK(layout["elements"][1]["text"] == "Ada"); // Its text element shows it
+		CHECK(layout["elements"][2]["visible"] == false); // The placeholder hides
 	}
 }

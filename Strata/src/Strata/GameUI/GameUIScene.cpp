@@ -8,6 +8,7 @@
 #include "Strata/Core/Profiling.h"
 #include "Strata/GameUI/GameUISceneData.h"
 #include "Strata/Input/Input.h"
+#include "Strata/Renderer/FontFace.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
@@ -16,6 +17,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <limits>
 
 namespace Strata
 {
@@ -133,6 +135,9 @@ namespace Strata
 		registry.on_construct<UIMaskComponent>().connect<&GameUIScene::OnStructureChanged>(*this);
 		registry.on_update<UIMaskComponent>().connect<&GameUIScene::OnMaskChanged>(*this);
 		registry.on_destroy<UIMaskComponent>().connect<&GameUIScene::OnStructureChanged>(*this);
+		registry.on_construct<UIInputFieldComponent>().connect<&GameUIScene::OnInputFieldAddedOrRemoved>(*this);
+		registry.on_update<UIInputFieldComponent>().connect<&GameUIScene::OnInputFieldChanged>(*this);
+		registry.on_destroy<UIInputFieldComponent>().connect<&GameUIScene::OnInputFieldAddedOrRemoved>(*this);
 		if (const AssetManagerBase* assets = scene.GetAssetManager())
 			m_AssetContentVersion = assets->GetContentVersion();
 		// Index 0 is the default font (texts without a font, or whose font loads).
@@ -331,6 +336,52 @@ namespace Strata
 		{
 			for (Layout& layout : m_Canvases[ref->Canvas].Layouts)
 				layout.ClipsDirty = true;
+		}
+	}
+
+	void GameUIScene::OnInputFieldAddedOrRemoved(entt::registry&, entt::entity entity)
+	{
+		// Its parts change: found again with the canvas.
+		if (const ElementRef* ref = FindRef(entity))
+			m_Canvases[ref->Canvas].StructureDirty = true;
+		m_FieldStates.erase(entity);
+	}
+
+	void GameUIScene::OnInputFieldChanged(entt::registry&, entt::entity entity)
+	{
+		const ElementRef* ref = FindRef(entity);
+		const UIInputFieldComponent* field = m_Registry->try_get<UIInputFieldComponent>(entity);
+		if (!ref || !field)
+			return;
+		Canvas& canvas = m_Canvases[ref->Canvas];
+		Element& element = canvas.Elements[ref->Element];
+		if (field->TextElement != element.TextElementID || field->Placeholder != element.PlaceholderID)
+		{
+			canvas.StructureDirty = true;
+			return;
+		}
+		// Its text element shows the text (and the caret and selection colors) anew, laid out again when it fits its text.
+		const uint32_t textPart = element.FieldTextPart;
+		if (textPart != c_NoElement)
+		{
+			for (Layout& layout : canvas.Layouts)
+			{
+				if (textPart < layout.Texts.size())
+					layout.Texts[textPart].Valid = false;
+			}
+			MarkElementQuadsDirty(ref->Canvas, textPart);
+			const UIRectComponent* rect = m_Registry->try_get<UIRectComponent>(canvas.Elements[textPart].Entity);
+			if (rect && rect->FitContent != UIFitContent::None)
+				MarkElementLayoutDirty(ref->Canvas, textPart);
+		}
+		// The placeholder shows while the text is empty.
+		const bool empty = field->Text.empty();
+		if (empty != element.FieldEmpty)
+		{
+			element.FieldEmpty = empty;
+			if (element.PlaceholderPart != c_NoElement)
+				MarkSubtreeQuadsDirty(ref->Canvas, element.PlaceholderPart);
+			TouchHits(ref->Canvas);
 		}
 	}
 
@@ -654,6 +705,13 @@ namespace Strata
 			element.HandleID = UUID::Null();
 			element.CheckmarkID = UUID::Null();
 			element.TargetImageID = UUID::Null();
+			element.FieldTextOf = c_NoElement;
+			element.PlaceholderOf = c_NoElement;
+			element.FieldTextPart = c_NoElement;
+			element.PlaceholderPart = c_NoElement;
+			element.TextElementID = UUID::Null();
+			element.PlaceholderID = UUID::Null();
+			element.FieldEmpty = true;
 		}
 		for (uint32_t index = 0; index < canvas.Elements.size(); index++)
 		{
@@ -679,6 +737,24 @@ namespace Strata
 				const uint32_t checkmark = resolve(toggle->Checkmark);
 				if (checkmark != c_NoElement && checkmark != index)
 					canvas.Elements[checkmark].CheckmarkOf = index;
+			}
+			if (const UIInputFieldComponent* field = m_Registry->try_get<UIInputFieldComponent>(element.Entity))
+			{
+				element.TextElementID = field->TextElement;
+				element.PlaceholderID = field->Placeholder;
+				element.FieldEmpty = field->Text.empty();
+				const uint32_t text = resolve(field->TextElement);
+				if (text != c_NoElement && text != index)
+				{
+					canvas.Elements[text].FieldTextOf = index;
+					element.FieldTextPart = text;
+				}
+				const uint32_t placeholder = resolve(field->Placeholder);
+				if (placeholder != c_NoElement && placeholder != index)
+				{
+					canvas.Elements[placeholder].PlaceholderOf = index;
+					element.PlaceholderPart = placeholder;
+				}
 			}
 			if (const UISelectableComponent* selectable = m_Registry->try_get<UISelectableComponent>(element.Entity))
 			{
@@ -1052,9 +1128,12 @@ namespace Strata
 	{
 		if (!canvas.Elements[element].Active)
 			return false;
-		// The checkmark of a toggle that is off hides with its descendants.
+		// The checkmark of a toggle that is off, and the placeholder of a field with text, hide with their descendants.
 		for (uint32_t current = element; current != c_NoElement; current = canvas.Elements[current].Parent)
 		{
+			const uint32_t field = canvas.Elements[current].PlaceholderOf;
+			if (field != c_NoElement && !canvas.Elements[field].FieldEmpty)
+				return false;
 			const uint32_t toggle = canvas.Elements[current].CheckmarkOf;
 			if (toggle == c_NoElement)
 				continue;
@@ -1147,6 +1226,77 @@ namespace Strata
 		return component.NormalColor;
 	}
 
+	void GameUIScene::SetInputFieldState(entt::entity field, const UIInputFieldState& state)
+	{
+		FieldRecord& record = m_FieldStates[field];
+		if (record.State == state)
+			return;
+		record.State = state;
+		if (const ElementRef* ref = FindRef(field))
+		{
+			const uint32_t text = m_Canvases[ref->Canvas].Elements[ref->Element].FieldTextPart;
+			if (text != c_NoElement)
+				MarkElementQuadsDirty(ref->Canvas, text);
+		}
+	}
+
+	void GameUIScene::ClearInputFieldState(entt::entity field)
+	{
+		if (m_FieldStates.erase(field) == 0)
+			return;
+		if (const ElementRef* ref = FindRef(field))
+		{
+			const uint32_t text = m_Canvases[ref->Canvas].Elements[ref->Element].FieldTextPart;
+			if (text != c_NoElement)
+				MarkElementQuadsDirty(ref->Canvas, text);
+		}
+	}
+
+	std::optional<uint32_t> GameUIScene::FindInputFieldCaret(entt::entity field, const UIScreen& screen, const glm::vec2& pixel)
+	{
+		UICanvasView view;
+		uint32_t fieldElement = 0;
+		const UIInputFieldComponent* component = m_Registry->try_get<UIInputFieldComponent>(field);
+		if (!component || !FindElement(field, screen, view, fieldElement))
+			return std::nullopt;
+		Canvas& canvas = m_Canvases[view.CanvasIndex];
+		const uint32_t textPart = canvas.Elements[fieldElement].FieldTextPart;
+		const UITextComponent* text = textPart != c_NoElement ? m_Registry->try_get<UITextComponent>(canvas.Elements[textPart].Entity) : nullptr;
+		if (!text)
+			return std::nullopt;
+		Layout& layout = canvas.Layouts[view.LayoutIndex];
+		const UIBox box = layout.Boxes[textPart];
+		const float size = std::clamp(text->FontSize, 1.0f, 1024.0f);
+		AssetHandle shapedFont;
+		const FontFace* face = GetTextFace(*text, shapedFont);
+		const ShapedText& shaped = ShapeElementText(layout, textPart, *text, component->Text,
+			GetElementShapeOptions(canvas, textPart, *text, m_Registry->try_get<UIRectComponent>(canvas.Elements[textPart].Entity), box));
+		MeasureCaretStops(*face, component->Text, m_CaretScratch);
+		auto found = m_FieldStates.find(field);
+		const glm::vec2 line = PlaceFieldLine(*text, shaped, box, size, found != m_FieldStates.end() ? &found->second : nullptr, m_CaretScratch);
+		// The stop nearest the point along the line.
+		const float x = pixel.x / view.Scale;
+		uint32_t best = 0;
+		float bestDistance = std::numeric_limits<float>::max();
+		for (const TextCaretStop& stop : m_CaretScratch)
+		{
+			const float distance = std::abs(line.x + stop.X * size - x);
+			if (distance < bestDistance)
+			{
+				bestDistance = distance;
+				best = stop.Byte;
+			}
+		}
+		return best;
+	}
+
+	std::string_view GameUIScene::GetElementText(const UICanvasView& view, uint32_t element) const
+	{
+		const Canvas& canvas = m_Canvases[view.CanvasIndex];
+		const UITextComponent* text = element < canvas.Elements.size() ? m_Registry->try_get<UITextComponent>(canvas.Elements[element].Entity) : nullptr;
+		return text ? GetShownText(canvas, element, *text) : std::string_view();
+	}
+
 	GameUISceneStats GameUIScene::TakeStats()
 	{
 		const GameUISceneStats stats = m_Stats;
@@ -1186,6 +1336,9 @@ namespace Strata
 					valid = fail(element.Entity, "its activity changed unnoticed");
 				else if (element.RaycastTarget != ComputeRaycastTarget(element.Entity))
 					valid = fail(element.Entity, "whether it is a raycast target changed unnoticed");
+				else if (const UIInputFieldComponent* field = m_Registry->try_get<UIInputFieldComponent>(element.Entity);
+					field && field->Text.empty() != element.FieldEmpty)
+					valid = fail(element.Entity, "its input field's text changed unnoticed");
 			}
 			for (Layout& layout : canvas.Layouts)
 			{

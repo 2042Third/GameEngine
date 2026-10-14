@@ -1,5 +1,5 @@
 // The game UI's script API (UIElement, UI, the widget callbacks, unscaled time, typed text) and Motion, on "UI Features":
-// the event target of the "Feature UI" canvas's Play Button, Sound Toggle and Volume Slider.
+// the event target of the "Feature UI" canvas's Play Button, Sound Toggle, Volume Slider and Name Field.
 //
 // The runner simulates the player around ClickFrame (a field, so the scene decides when; after InputFeatures' input, whose
 // Space, gamepad A and stick already focus and click the canvas's first selectable through the UI actions):
@@ -16,6 +16,13 @@
 //   ClickFrame + 9   gamepad 1 connects with B down (Cancel)
 //   ClickFrame + 10  B goes up, Enter goes down: Submit switches the focused toggle on again
 //   ClickFrame + 11  Enter goes up
+//   ClickFrame + 12  the pointer moves to the Name Field's center and the button goes down: the field is edited
+//   ClickFrame + 13  the button goes up, End goes down: the caret goes to the end (the game sees no key)
+//   ClickFrame + 14  End goes up, Backspace goes down: "Strata" becomes "Strat"
+//   ClickFrame + 15  Backspace goes up; "um" is typed: "Stratum"
+//   ClickFrame + 16  Enter goes down: the field's text is submitted
+//   ClickFrame + 17  Enter goes up, Escape goes down: editing stops (the game sees no Escape)
+//   ClickFrame + 18  Escape goes up
 
 #include "FeatureScript.h"
 
@@ -33,6 +40,7 @@ public:
 	int32_t ValueChanges = 0;
 	int32_t FocusGains = 0;
 	int32_t FocusLosses = 0;
+	int32_t Submits = 0;
 	// The counts when the scenario starts (ClickFrame - 1).
 	int32_t BaseClicks = 0;
 	int32_t BaseValueChanges = 0;
@@ -44,6 +52,7 @@ public:
 	bool JournaledClick = false;
 	bool JournaledValue = false;
 	bool JournaledFocus = false;
+	bool JournaledSubmit = false;
 	bool CheckedControl = false;
 	float Damped = 0.0f;
 	float DampedVelocity = 0.0f;
@@ -117,6 +126,27 @@ public:
 			Expect(ValueChanges == BaseValueChanges + 4 && LastValue == 1.0f && LastWidget == "Sound Toggle", "Submit switched the focused toggle on");
 			Expect(Time::GetUnscaledDeltaTime() > 0.0f && Time::GetRealTime() > 0.0, "unscaled time");
 			Expect(Damped > 0.9f && Damped <= 1.0f, "Motion::SmoothDamp");
+		}
+		else if (frame == ClickFrame + 12)
+		{
+			Expect(UI::GetFocused() == Scene::FindEntityByName("Name Field") && LastWidget == "Name Field", "a click edits an input field");
+		}
+		else if (frame == ClickFrame + 13)
+		{
+			Expect(!Input::IsKeyDown(Key::End) && !Input::IsKeyPressed(Key::End), "keys are the field's while it is edited");
+		}
+		else if (frame == ClickFrame + 15)
+		{
+			Expect(Scene::FindEntityByName("Name Field").GetUI().GetText() == "Stratum", "editing an input field's text");
+			Expect(Typed == "OK", "typing into a field is hidden from Input::GetTypedText");
+		}
+		else if (frame == ClickFrame + 16)
+		{
+			Expect(Submits == 1 && LastWidget == "Name Field", "OnUISubmit on Enter");
+		}
+		else if (frame == ClickFrame + 17)
+		{
+			Expect(!UI::GetFocused(), "Escape stops editing");
 			Completed = true;
 		}
 	}
@@ -141,6 +171,17 @@ public:
 		{
 			JournaledValue = true;
 			Journal(*this, "UIFeatures", "OnUIValueChanged");
+		}
+	}
+
+	void OnUISubmit(Entity widget) override
+	{
+		Submits++;
+		LastWidget = widget.GetName();
+		if (!JournaledSubmit)
+		{
+			JournaledSubmit = true;
+			Journal(*this, "UIFeatures", "OnUISubmit");
 		}
 	}
 
@@ -207,6 +248,8 @@ ST_SCRIPT_CLASS(UIFeatures)
 	ST_SCRIPT_FIELD(JournaledClick);
 	ST_SCRIPT_FIELD(JournaledValue);
 	ST_SCRIPT_FIELD(JournaledFocus);
+	ST_SCRIPT_FIELD(JournaledSubmit);
+	ST_SCRIPT_FIELD(Submits);
 	ST_SCRIPT_FIELD(CheckedControl);
 	ST_SCRIPT_FIELD(Damped);
 	ST_SCRIPT_FIELD(DampedVelocity);

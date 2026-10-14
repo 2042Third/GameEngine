@@ -87,6 +87,17 @@ namespace Strata
 		glm::vec2 InputToPixels = glm::vec2(1.0f);
 	};
 
+	// How an input field is being edited (GameUIScene::SetInputFieldState): the caret and the other end of the selection
+	// (bytes of the field's text, at character boundaries; equal without a selection) and whether the caret shows (it blinks).
+	struct UIInputFieldState
+	{
+		uint32_t Caret = 0;
+		uint32_t Anchor = 0;
+		bool CaretVisible = true;
+
+		bool operator==(const UIInputFieldState& other) const = default;
+	};
+
 	// A changed range of a canvas's quads (GameUIScene::GetQuadChanges).
 	struct UIQuadRange
 	{
@@ -196,6 +207,17 @@ namespace Strata
 		UIVisualState GetVisualState(entt::entity selectable, const UISelectableComponent& component) const;
 		glm::vec4 GetTintColor(entt::entity selectable, const UISelectableComponent& component, UIVisualState state) const;
 
+		// The editing state of the input field being edited, which the UI system sets while the scene plays: the field's text
+		// element draws the selection and the caret, its line scrolled to keep the caret in view when it is wider than the
+		// element. Without a state a field shows its text from its start.
+		void SetInputFieldState(entt::entity field, const UIInputFieldState& state);
+		void ClearInputFieldState(entt::entity field);
+		// The caret stop of the field's text nearest a pixel of a screen, where its text element shows the text there (bytes;
+		// nullopt when the field's text element is not laid out on that screen).
+		std::optional<uint32_t> FindInputFieldCaret(entt::entity field, const UIScreen& screen, const glm::vec2& pixel);
+		// The text an element with a UIText shows: its own, or its input field's when it is one's text element.
+		std::string_view GetElementText(const UICanvasView& view, uint32_t element) const;
+
 		// Compares every cached layout and visibility with a full recomputation (within 1e-4 canvas units). False with the
 		// first difference, naming the entity (whose write was not signaled). Debug builds check it after every
 		// EnsureLayout.
@@ -208,6 +230,12 @@ namespace Strata
 		struct Canvas;
 		struct Layout;
 		struct ElementText;
+		// An input field being edited: its state, and how far its text element's line is scrolled (canvas units).
+		struct FieldRecord
+		{
+			UIInputFieldState State;
+			float Scroll = 0.0f;
+		};
 		struct ElementRef
 		{
 			entt::entity Entity = entt::null;
@@ -236,6 +264,8 @@ namespace Strata
 		void OnSliderChanged(entt::registry& registry, entt::entity entity);
 		void OnToggleChanged(entt::registry& registry, entt::entity entity);
 		void OnMaskChanged(entt::registry& registry, entt::entity entity);
+		void OnInputFieldChanged(entt::registry& registry, entt::entity entity);
+		void OnInputFieldAddedOrRemoved(entt::registry& registry, entt::entity entity);
 
 		// Changes since the last update: structure, hierarchy moves, activity, assets.
 		void ProcessChanges();
@@ -286,7 +316,17 @@ namespace Strata
 		const FontFace* GetTextFace(const UITextComponent& text, AssetHandle& outShapedFont);
 		TextShapeOptions GetShapeOptions(const UITextComponent& text, const UIRectComponent* rect, const UIBox& box) const;
 		TextShapeOptions GetMeasureOptions(const UITextComponent& text, float wrapWidth) const;
-		const ShapedText& ShapeElementText(Layout& layout, uint32_t element, const UITextComponent& text, const TextShapeOptions& options);
+		// What an element's text shows (its input field's text for a field's text element), and how: a field's text is one
+		// line, never wrapped or cut.
+		std::string_view GetShownText(const Canvas& canvas, uint32_t element, const UITextComponent& text) const;
+		TextShapeOptions GetElementShapeOptions(const Canvas& canvas, uint32_t element, const UITextComponent& text, const UIRectComponent* rect,
+			const UIBox& box) const;
+		const ShapedText& ShapeElementText(Layout& layout, uint32_t element, const UITextComponent& text, std::string_view shown,
+			const TextShapeOptions& options);
+		// Where a field's text element puts its line (canvas units): the x of the line's start and its top. A line wider than the
+		// element starts at its left edge, scrolled (with an editing `record`) so that the caret stays in view.
+		glm::vec2 PlaceFieldLine(const UITextComponent& text, const ShapedText& shaped, const UIBox& box, float size, FieldRecord* record,
+			std::span<const TextCaretStop> stops) const;
 
 		// Quads (GameUIQuads.cpp).
 		void BuildQuads(Canvas& canvas, Layout& layout);
@@ -353,6 +393,8 @@ namespace Strata
 			glm::vec4 Tint = glm::vec4(1.0f);
 		};
 		std::unordered_map<entt::entity, SelectableState> m_SelectableStates;
+		std::unordered_map<entt::entity, FieldRecord> m_FieldStates;
+		std::vector<TextCaretStop> m_CaretScratch;
 		ShapedText m_ValidateShaped;
 
 		GameUISceneStats m_Stats;

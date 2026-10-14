@@ -345,8 +345,9 @@ includes the module ([Game UI](Docs/DeveloperGuide.md#game-ui)).
   the UI only through `SceneOverlayRegistry`; the UI pass requests each distinct UI texture and font once per frame through
   `Scene::GetAssetManager()`, never per element.
 - UI input belongs to the "UI" scene system: gameplay keeps reading `Input` (pointer capture hides the UI's clicks and
-  scrolling from it), UI code reads `Input::GetPointerState`, and widgets write their values with `registry.patch` and
-  report them through `IUIEvents` ([UI input](Docs/DeveloperGuide.md#ui-input)).
+  scrolling from it, keyboard capture an edited input field's keys and text), UI code reads `Input::GetPointerState` and
+  `GetKeyState`, and widgets write their values with `registry.patch` and report them through `IUIEvents`
+  ([UI input](Docs/DeveloperGuide.md#ui-input)).
 
 ## Editor
 

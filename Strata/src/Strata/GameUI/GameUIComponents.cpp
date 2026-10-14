@@ -202,6 +202,19 @@ namespace Strata
 			.Property("CellSize", &UILayoutComponent::CellSize, WithTooltip(Range(1.0f, c_Unbounded, 1.0f), "Grid: the size of a cell, in canvas units"))
 			.Property("Columns", &UILayoutComponent::Columns, WithTooltip(Range(0.0f, 4096.0f), "Grid: 0 fits as many columns as the width holds"));
 
+		ComponentRegistry::Register<UIInputFieldComponent>("UIInputField")
+			.DisplayName("UI Input Field")
+			.Category(c_Category)
+			.Description("A line of text the player types while the field has the focus; Enter submits it (OnUISubmit)")
+			.Requires(c_RectName)
+			.Property("Text", &UIInputFieldComponent::Text)
+			.EntityProperty("TextElement", &UIInputFieldComponent::TextElement, { .Tooltip = "An element with a UI Text that shows the text, the caret and the selection" })
+			.EntityProperty("Placeholder", &UIInputFieldComponent::Placeholder, { .Tooltip = "An element shown while the text is empty" })
+			.Property("CharacterLimit", &UIInputFieldComponent::CharacterLimit, WithTooltip(Range(0.0f, 1.0e6f), "Characters at most; 0: no limit"))
+			.Property("CaretColor", &UIInputFieldComponent::CaretColor, Color())
+			.Property("SelectionColor", &UIInputFieldComponent::SelectionColor, Color())
+			.EntityProperty("EventTarget", &UIInputFieldComponent::EventTarget, { .Tooltip = "Its scripts get the field's events too" });
+
 		ComponentRegistry::Register<UIMaskComponent>("UIMask")
 			.DisplayName("UI Mask")
 			.Category(c_Category)

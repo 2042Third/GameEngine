@@ -6,6 +6,7 @@
 #include "Strata/Core/UUID.h"
 #include "Strata/GameUI/GameUIScene.h"
 
+#include <algorithm>
 #include <deque>
 #include <unordered_map>
 #include <vector>
@@ -14,6 +15,12 @@ namespace Strata
 {
 
 	constexpr uint32_t c_NoElement = ~0u;
+
+	// The width of an input field's caret for a font size (canvas units).
+	inline float GetCaretWidth(float fontSize)
+	{
+		return std::max(1.0f, fontSize * 0.06f);
+	}
 
 	// A UI element of a root canvas, in depth-first hierarchy order (the canvas is element 0).
 	struct GameUIScene::Element
@@ -34,6 +41,15 @@ namespace Strata
 		// Masks: 1 + the clip rect of the nearest mask above the element (0: none), and its own mask's (c_NoElement: none).
 		uint32_t Clip = 0;
 		uint32_t MaskSlot = c_NoElement;
+		// An input field's parts: the element that shows its text (with the caret and the selection) and its placeholder
+		// (shown while the text is empty), both ways; on the field the parts it named and whether its text was empty.
+		uint32_t FieldTextOf = c_NoElement;
+		uint32_t PlaceholderOf = c_NoElement;
+		uint32_t FieldTextPart = c_NoElement;
+		uint32_t PlaceholderPart = c_NoElement;
+		UUID TextElementID = UUID::Null();
+		UUID PlaceholderID = UUID::Null();
+		bool FieldEmpty = true;
 		// Of a slider, toggle or selectable: the parts it named when they were resolved (a change of them rebuilds the canvas).
 		UUID FillID = UUID::Null();
 		UUID HandleID = UUID::Null();

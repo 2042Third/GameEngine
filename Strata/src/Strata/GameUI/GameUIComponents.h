@@ -238,6 +238,23 @@ namespace Strata
 		uint32_t Columns = 0;                    // Grid: 0 fits as many cells as the width holds
 	};
 
+	// A line of text the player types while the field has the focus (it needs a UISelectable to be focused): typed
+	// characters go in at the caret, Backspace and Delete remove, Left, Right, Home and End move the caret (with Shift they
+	// select), Ctrl+A (Cmd+A) selects everything, Enter submits (OnUISubmit) and Escape stops editing. While it is edited the
+	// keyboard is the UI's (Input's keyboard capture). Its TextElement, an element with a UIText, shows the text in its font,
+	// size, color and alignment on one line (scrolled to keep the caret in view; give the field a UIMask to clip what does not
+	// fit); its Placeholder shows while the text is empty.
+	struct UIInputFieldComponent
+	{
+		std::string Text;
+		UUID TextElement = UUID::Null(); // An element with a UIText: shows the text, the caret and the selection
+		UUID Placeholder = UUID::Null(); // An element shown while the text is empty
+		uint32_t CharacterLimit = 0;     // Characters (code points) at most; 0: no limit
+		glm::vec4 CaretColor = { 1.0f, 1.0f, 1.0f, 1.0f };
+		glm::vec4 SelectionColor = { 0.3f, 0.55f, 1.0f, 0.45f };
+		UUID EventTarget = UUID::Null(); // Also receives the submit (its scripts' OnUISubmit), besides the field's own entity
+	};
+
 	// Clips the element's descendants to its rect inset by Padding: what lies outside is neither drawn nor hit by the
 	// pointer (scrolling lists, cards whose content must not spill). Masks nest: a descendant of two shows only where both
 	// rects overlap. The element's own image and text are clipped only by the masks above it.

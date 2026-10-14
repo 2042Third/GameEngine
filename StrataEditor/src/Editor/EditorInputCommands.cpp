@@ -557,6 +557,7 @@ namespace Strata
 				case UIEventType::Click: return "click";
 				case UIEventType::ValueChanged: return "valueChanged";
 				case UIEventType::FocusChanged: return "focusChanged";
+				case UIEventType::Submit: return "submit";
 			}
 			return "click";
 		}

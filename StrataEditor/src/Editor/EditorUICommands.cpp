@@ -140,8 +140,14 @@ namespace Strata
 				described["state"] = GetStateName(ui.GetVisualState(entity.GetHandle(), *selectable));
 				described["focused"] = focused && focused == entity;
 			}
-			if (const UITextComponent* text = entity.TryGetComponent<UITextComponent>())
-				described["text"] = text->Text;
+			// What a text shows (an input field's text element shows the field's), and an input field's own text.
+			if (entity.HasComponent<UITextComponent>())
+				described["text"] = std::string(ui.GetElementText(view, element));
+			if (const UIInputFieldComponent* field = entity.TryGetComponent<UIInputFieldComponent>())
+			{
+				described["text"] = field->Text;
+				described["editing"] = focused && focused == entity;
+			}
 			if (const UISliderComponent* slider = entity.TryGetComponent<UISliderComponent>())
 				described["value"] = slider->Value;
 			else if (const UIToggleComponent* toggle = entity.TryGetComponent<UIToggleComponent>())
@@ -196,16 +202,18 @@ namespace Strata
 		registry.Register({ "ui.create",
 			"Creates a game UI element ready to use, in one undo step (while playing it changes the running copy only): a canvas, a panel (a "
 			"rounded, framed background), an image, a text, a button (with its label), a toggle (with box, checkmark and label), a slider (with "
-			"track, fill and handle) or a horizontal, vertical or grid layout group. An element whose parent is outside every canvas (or that has "
-			"none) gets a new top-level canvas first. anchor places it on its parent (and sets the pivot to match); position and size are in "
-			"canvas units (along a stretched axis size is added to the parent's span: 0 fills it). Returns entity, canvas, created (every new "
-			"entity), parts (label, background, fill, handle, checkmark, as the type has them) and rect ([x, y, width, height] in pixels at the "
-			"game's screen).",
+			"track, fill and handle), an input field (a line the player types into, with its text and placeholder; Enter calls OnUISubmit) or "
+			"a horizontal, vertical or grid layout group. An element whose parent is outside every canvas (or that has none) gets a new top-level "
+			"canvas first. anchor places it on its parent (and sets the pivot to match); position and size are in canvas units (along a "
+			"stretched axis size is added to the parent's span: 0 fills it). Returns entity, canvas, created (every new entity), parts (label, "
+			"background, fill, handle, checkmark, placeholder, as the type has them) and rect ([x, y, width, height] in pixels at the game's "
+			"screen).",
 			ObjectSchema({
 				{ "type", StringSchema(fmt::format("What to create: {}", JoinTypeNames())) },
 				{ "parent", OptionalEntitySchema("The parent (a canvas or an element of one; outside a canvas a new canvas is made)") },
 				{ "name", StringSchema("The element's name (default: the type's, e.g. \"Button\")") },
-				{ "text", StringSchema("The text of a text, button or toggle (default \"New Text\", \"Button\", \"Toggle\")") },
+				{ "text", StringSchema("The text of a text, button or toggle, or an input field's placeholder (default \"New Text\", \"Button\", "
+					"\"Toggle\", \"Enter text...\")") },
 				{ "anchor", StringSchema(fmt::format("Where it sits on its parent: {} (default middleCenter)", JoinAnchorNames())) },
 				{ "position", PairSchema("[x, y]: the pivot's offset from the anchors in canvas units, +y down (default [0, 0])") },
 				{ "size", PairSchema("[width, height] in canvas units (default: the type's; along stretched axes 0)") } }, { "type" }),
@@ -282,8 +290,8 @@ namespace Strata
 				for (const Entity entity : parts->Created)
 					created.push_back(UUIDToJson(entity.GetUUID()));
 				nlohmann::json described = nlohmann::json::object();
-				const std::array<std::pair<const char*, Entity>, 5> namedParts = { { { "label", parts->Label }, { "background", parts->Background },
-					{ "fill", parts->Fill }, { "handle", parts->Handle }, { "checkmark", parts->Checkmark } } };
+				const std::array<std::pair<const char*, Entity>, 6> namedParts = { { { "label", parts->Label }, { "background", parts->Background },
+					{ "fill", parts->Fill }, { "handle", parts->Handle }, { "checkmark", parts->Checkmark }, { "placeholder", parts->Placeholder } } };
 				for (const auto& [key, part] : namedParts)
 				{
 					if (part)
@@ -305,7 +313,8 @@ namespace Strata
 			"unit, unitSize, sortOrder, receivesInput) and the elements of an entity's subtree (all canvases without one), in draw order: "
 			"entity, name, rect ([x, y, width, height] in screen pixels), visible, visibleRect for elements under a UI Mask (what its clip rect "
 			"leaves of the rect: where it is drawn and clicked), and for selectables interactable, state (normal, hover, pressed, focused, "
-			"disabled) and focused, for texts text, for sliders and toggles value. At most 1,000 elements (truncated tells). "
+			"disabled) and focused, for texts and input fields text (and editing for a field the player types into), for sliders and toggles "
+			"value. At most 1,000 elements (truncated tells). "
 			"Check that a HUD keeps its proportions by comparing rects at several screens.",
 			ObjectSchema({
 				{ "entity", OptionalEntitySchema("A canvas or element whose subtree to list (default: every canvas)") },

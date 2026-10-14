@@ -417,6 +417,67 @@ TEST_SUITE("GPU.GameUI")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("An edited input field draws its selection and caret, its long line scrolled to the caret and clipped by its mask")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		UIScene ui;
+		Entity field = ui.AddImage(ui.Canvas, "Field", { 100.0f, 100.0f }, { 300.0f, 40.0f }, { 0.0f, 0.0f, 0.0f, 0.0f });
+		field.AddComponent<UIMaskComponent>();
+		Entity shown = ui.Target.CreateChildEntity(field, "Shown");
+		UIRectComponent inset;
+		inset.AnchorMin = glm::vec2(0.0f);
+		inset.AnchorMax = glm::vec2(1.0f);
+		inset.Size = glm::vec2(-16.0f); // (108, 108) to (392, 132)
+		shown.AddComponent<UIRectComponent>(inset);
+		UITextComponent& text = shown.AddComponent<UITextComponent>();
+		text.Alignment = TextAlignment::Left;
+		text.FontSize = 20.0f;
+		text.Color = { 1.0f, 1.0f, 1.0f, 1.0f };
+		UIInputFieldComponent& component = field.AddComponent<UIInputFieldComponent>();
+		component.TextElement = shown.GetUUID();
+		component.Text = "    "; // Spaces: the selection shows without glyphs over it
+		component.CaretColor = { 1.0f, 0.0f, 0.0f, 1.0f };
+		component.SelectionColor = { 0.0f, 1.0f, 0.0f, 1.0f };
+		GameUIScene& scene = GameUIScene::Get(ui.Target);
+		scene.SetInputFieldState(field.GetHandle(), UIInputFieldState { 2, 0, true }); // The first two spaces selected
+
+		SceneRenderer renderer(ExactSpecification());
+		const ReadbackImage selected = RenderUI(renderer, ui.Target, { 640, 360 });
+		const auto [selectionMin, selectionMax] = FindPixels(selected, [](const glm::u8vec4& pixel) { return pixel == c_Green; });
+		const auto [caretMin, caretMax] = FindPixels(selected, [](const glm::u8vec4& pixel) { return pixel == c_Red; });
+		REQUIRE(selectionMin.x < selectionMax.x);
+		REQUIRE(caretMin.x < caretMax.x);
+		CHECK(selectionMin.x == 108); // From the line's start
+		CHECK(std::abs(caretMin.x - selectionMax.x) <= 1); // The caret at the selection's end
+		CHECK(caretMax.x - caretMin.x <= 2);
+		CHECK(caretMin.y >= 108);
+		CHECK(caretMax.y <= 132);
+
+		// A line longer than the field: scrolled so that the caret at its end shows at the right edge; nothing spills.
+		field.GetComponent<UIInputFieldComponent>().Text = std::string(60, 'W');
+		field.MarkModified<UIInputFieldComponent>();
+		scene.SetInputFieldState(field.GetHandle(), UIInputFieldState { 60, 60, true });
+		const ReadbackImage scrolled = RenderUI(renderer, ui.Target, { 640, 360 });
+		const auto [endMin, endMax] = FindPixels(scrolled, [](const glm::u8vec4& pixel) { return pixel == c_Red; });
+		REQUIRE(endMin.x < endMax.x);
+		CHECK(endMax.x <= 392);
+		CHECK(endMin.x >= 385);
+		const auto [glyphsMin, glyphsMax] = FindPixels(scrolled, [](const glm::u8vec4& pixel) { return pixel.g > 128 && pixel.r > 128; });
+		CHECK(glyphsMin.x >= 100); // Clipped at the field's edges by its mask
+		CHECK(glyphsMax.x <= 400);
+		CHECK(glyphsMin.x <= 102); // The scrolled line runs past the left edge
+
+		// Not edited: the line shows from its start.
+		scene.ClearInputFieldState(field.GetHandle());
+		const ReadbackImage unedited = RenderUI(renderer, ui.Target, { 640, 360 });
+		const auto [startMin, startMax] = FindPixels(unedited, [](const glm::u8vec4& pixel) { return pixel.g > 128 && pixel.r > 128; });
+		CHECK(startMin.x >= 108);
+		CHECK(startMin.x <= 112);
+		CHECK(FindPixels(unedited, [](const glm::u8vec4& pixel) { return pixel == c_Red; }).first.x > 640); // No caret
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A screen view zooms and pans the canvases and the HUD text without laying them out again")
 	{
 		GPUContext gpu;

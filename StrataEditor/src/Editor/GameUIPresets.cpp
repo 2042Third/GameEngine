@@ -25,6 +25,7 @@ namespace Strata::GameUIPresets
 			{ "button", "Button" },
 			{ "toggle", "Toggle" },
 			{ "slider", "Slider" },
+			{ "inputField", "Input Field" },
 			{ "horizontalLayout", "Horizontal Layout" },
 			{ "verticalLayout", "Vertical Layout" },
 			{ "gridLayout", "Grid Layout" },
@@ -37,6 +38,7 @@ namespace Strata::GameUIPresets
 		constexpr glm::vec4 c_TrackColor = { 0.15f, 0.17f, 0.24f, 1.0f };
 		constexpr glm::vec4 c_CheckColor = { 0.40f, 0.68f, 1.0f, 1.0f };
 		constexpr glm::vec4 c_TextColor = { 0.95f, 0.96f, 1.0f, 1.0f };
+		constexpr glm::vec4 c_HintColor = { 0.55f, 0.58f, 0.68f, 1.0f };
 
 		UIRectComponent PointRect(const glm::vec2& size)
 		{
@@ -174,6 +176,34 @@ namespace Strata::GameUIPresets
 					slider.Handle = parts.Handle.GetUUID();
 					return true;
 				}
+				case UIPresetType::InputField:
+				{
+					UIImageComponent& background = AddImage(element, c_TrackColor, 6.0f);
+					background.BorderWidth = 1.0f;
+					background.BorderColor = c_PanelBorder;
+					element.AddComponent<UISelectableComponent>();
+					// Text longer than the field scrolls inside it: the mask keeps it there.
+					element.AddComponent<UIMaskComponent>();
+					parts.Label = CreateElement(scene, element, "Text", FillRect({ 12.0f, 6.0f }), parts);
+					if (!parts.Label)
+						return false;
+					UITextComponent& shown = AddText(parts.Label, std::string(), 24.0f);
+					shown.Alignment = TextAlignment::Left;
+					shown.Wrap = false;
+					parts.Placeholder = CreateElement(scene, element, "Placeholder", FillRect({ 12.0f, 6.0f }), parts);
+					if (!parts.Placeholder)
+						return false;
+					UITextComponent& hint = AddText(parts.Placeholder, text.value_or("Enter text..."), 24.0f);
+					hint.Alignment = TextAlignment::Left;
+					hint.Wrap = false;
+					hint.Color = c_HintColor;
+					UIInputFieldComponent& field = element.AddComponent<UIInputFieldComponent>();
+					field.TextElement = parts.Label.GetUUID();
+					field.Placeholder = parts.Placeholder.GetUUID();
+					field.CaretColor = c_TextColor;
+					field.SelectionColor = glm::vec4(c_AccentColor.r, c_AccentColor.g, c_AccentColor.b, 0.45f);
+					return true;
+				}
 				case UIPresetType::HorizontalLayout:
 				case UIPresetType::VerticalLayout:
 				case UIPresetType::GridLayout:
@@ -214,6 +244,7 @@ namespace Strata::GameUIPresets
 				case UIPresetType::Button: return { 220.0f, 56.0f };
 				case UIPresetType::Toggle: return { 220.0f, 40.0f };
 				case UIPresetType::Slider: return { 260.0f, 24.0f };
+				case UIPresetType::InputField: return { 360.0f, 48.0f };
 				case UIPresetType::HorizontalLayout:
 				case UIPresetType::VerticalLayout:
 				case UIPresetType::GridLayout: return { 400.0f, 300.0f };

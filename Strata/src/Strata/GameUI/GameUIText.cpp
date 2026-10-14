@@ -8,6 +8,8 @@
 #include "Strata/Scene/Scene.h"
 
 #include <algorithm>
+#include <span>
+#include <string_view>
 
 // Texts of UI elements: shaped from their font's glyph metrics (FontFace, never rasterizing), once per change of the text,
 // its font or the options its rect gives it, per layout.
@@ -85,20 +87,74 @@ namespace Strata
 		return options;
 	}
 
-	const ShapedText& GameUIScene::ShapeElementText(Layout& layout, uint32_t element, const UITextComponent& text, const TextShapeOptions& options)
+	std::string_view GameUIScene::GetShownText(const Canvas& canvas, uint32_t element, const UITextComponent& text) const
+	{
+		const uint32_t field = canvas.Elements[element].FieldTextOf;
+		if (field == c_NoElement)
+			return text.Text;
+		const UIInputFieldComponent* component = m_Registry->try_get<UIInputFieldComponent>(canvas.Elements[field].Entity);
+		return component ? std::string_view(component->Text) : std::string_view();
+	}
+
+	TextShapeOptions GameUIScene::GetElementShapeOptions(const Canvas& canvas, uint32_t element, const UITextComponent& text, const UIRectComponent* rect,
+		const UIBox& box) const
+	{
+		if (canvas.Elements[element].FieldTextOf == c_NoElement)
+			return GetShapeOptions(text, rect, box);
+		// A field's text is one line, never wrapped or cut: it scrolls instead.
+		TextShapeOptions options = GetMeasureOptions(text, 0.0f);
+		options.Overflow = TextOverflowMode::Overflow;
+		return options;
+	}
+
+	glm::vec2 GameUIScene::PlaceFieldLine(const UITextComponent& text, const ShapedText& shaped, const UIBox& box, float size, FieldRecord* record,
+		std::span<const TextCaretStop> stops) const
+	{
+		const float place = text.VerticalAlignment == UITextVerticalAlignment::Top ? 0.0f : (text.VerticalAlignment == UITextVerticalAlignment::Middle ? 0.5f : 1.0f);
+		const float top = box.Min.y + (box.Size.y - shaped.Height * size) * place;
+		const float width = shaped.Width * size;
+		const float caretWidth = GetCaretWidth(size);
+		if (width + caretWidth <= box.Size.x)
+		{
+			// It fits: placed by its alignment, like any text.
+			if (record)
+				record->Scroll = 0.0f;
+			const float origin = text.Alignment == TextAlignment::Left ? box.Min.x : (text.Alignment == TextAlignment::Center ? box.GetCenter().x : box.GetMax().x);
+			return glm::vec2(origin + shaped.Min.x * size, top);
+		}
+		// Wider than the element: from its left edge, scrolled so that the caret stays inside.
+		float scroll = record ? record->Scroll : 0.0f;
+		if (record)
+		{
+			float caret = 0.0f;
+			for (const TextCaretStop& stop : stops)
+			{
+				if (stop.Byte == record->State.Caret)
+					caret = stop.X * size;
+			}
+			scroll = std::min(scroll, caret);
+			scroll = std::max(scroll, caret + caretWidth - box.Size.x);
+			scroll = std::clamp(scroll, 0.0f, width + caretWidth - box.Size.x);
+			record->Scroll = scroll;
+		}
+		return glm::vec2(box.Min.x - scroll, top);
+	}
+
+	const ShapedText& GameUIScene::ShapeElementText(Layout& layout, uint32_t element, const UITextComponent& text, std::string_view shown,
+		const TextShapeOptions& options)
 	{
 		AssetHandle shapedFont;
 		const FontFace* face = GetTextFace(text, shapedFont);
 		if (m_Validating)
 		{
 			// A fresh shaping, so that a text written without a signal shows as a difference.
-			ShapeText(*face, text.Text, options, m_ValidateShaped);
+			ShapeText(*face, shown, options, m_ValidateShaped);
 			return m_ValidateShaped;
 		}
 		ElementText& cached = layout.Texts[element];
 		if (cached.Valid && cached.ShapedFont == shapedFont && SameOptions(cached.Options, options))
 			return cached.Shaped;
-		ShapeText(*face, text.Text, options, cached.Shaped);
+		ShapeText(*face, shown, options, cached.Shaped);
 		cached.Valid = true;
 		cached.Options = options;
 		cached.ShapedFont = shapedFont;

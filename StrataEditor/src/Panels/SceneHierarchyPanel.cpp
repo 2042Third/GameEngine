@@ -120,6 +120,7 @@ namespace Strata
 				case UIPresetType::Button: return Icons::RectangleHorizontal;
 				case UIPresetType::Toggle: return Icons::ToggleRight;
 				case UIPresetType::Slider: return Icons::SlidersHorizontal;
+				case UIPresetType::InputField: return Icons::TextCursorInput;
 				case UIPresetType::HorizontalLayout: return Icons::Columns3;
 				case UIPresetType::VerticalLayout: return Icons::Rows3;
 				case UIPresetType::GridLayout: return Icons::LayoutGrid;

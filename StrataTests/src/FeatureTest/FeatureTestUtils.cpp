@@ -154,6 +154,33 @@ namespace Strata::Tests
 				case 11:
 					Input::ProcessKey(Key::Enter, false);
 					break;
+				case 12:
+					Input::ProcessMouseMove(FindUIElement(scene, "Name Field").GetCenter());
+					Input::ProcessMouseButton(Mouse::ButtonLeft, true);
+					break;
+				case 13:
+					Input::ProcessMouseButton(Mouse::ButtonLeft, false);
+					Input::ProcessKey(Key::End, true);
+					break;
+				case 14:
+					Input::ProcessKey(Key::End, false);
+					Input::ProcessKey(Key::Backspace, true);
+					break;
+				case 15:
+					Input::ProcessKey(Key::Backspace, false);
+					Input::ProcessText('u');
+					Input::ProcessText('m');
+					break;
+				case 16:
+					Input::ProcessKey(Key::Enter, true);
+					break;
+				case 17:
+					Input::ProcessKey(Key::Enter, false);
+					Input::ProcessKey(Key::Escape, true);
+					break;
+				case 18:
+					Input::ProcessKey(Key::Escape, false);
+					break;
 				default:
 					break;
 			}

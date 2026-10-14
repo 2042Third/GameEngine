@@ -658,6 +658,12 @@ extern "C"
 		uint32_t (*OnUIValueChanged)(StrataScriptInstance instance, StrataScriptEntityID widget, float value);
 		uint32_t (*OnUIFocusChanged)(StrataScriptInstance instance, StrataScriptEntityID widget, bool focused);
 
+		/*
+		 * An input field's text was submitted (Enter, or a gamepad's Submit, while it was being edited); added after
+		 * OnUIFocusChanged and read only when StructSize covers it. It reaches the scripts like the widget events above.
+		 */
+		uint32_t (*OnUISubmit)(StrataScriptInstance instance, StrataScriptEntityID widget);
+
 		/* New callbacks are appended here. */
 	} StrataScriptClassDesc;
 

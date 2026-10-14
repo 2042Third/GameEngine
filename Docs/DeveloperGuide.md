@@ -798,18 +798,19 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
   `GetGamepadStick` with dead zones) and the cursor (`Input::SetCursorMode`: Normal, Hidden, Locked for mouse look, which
   `Input::SetGameCursorMode` applies while the game has the input; play mode stopping gives it back). `Input::GetTypedText`
   (host function `GetTypedText`) reads the frame's typed text.
-- Game UI (host functions `UIGetText` to `UIIsActionDown`, then `GetUnscaledDeltaTime`, `GetRealTime` and `GetTypedText`,
-  appended to ABI version 1 after `PhysicsGetLayerIndex`): `UIElement` (`Entity::GetUI`: text, image, color,
-  interactability, a slider's or toggle's value, the focus) and `UI` (the focus, `IsPointerOverUI`, the UI actions) go
-  through the scene's `IUIControl` (the GameUI module's `GameUISystem`); without it the calls fail. Values set this way
-  raise no events. The widgets' events reach the scripts as `OnUIClick(widget)`, `OnUIValueChanged(widget, value)` and
-  `OnUIFocusChanged(widget, focused)` (class descriptor callbacks after `OnAnimationEvent`, taking the widget's id):
-  `ScriptSystem` listens to the scene's `IUIEvents` while it runs and calls the scripts of the widget's entity, then those
-  of its event target when that names another entity, skipping removed, disabled and not yet started instances. The UI
-  system updates before the scripts, so the events of a frame arrive before its `OnUpdate`. `Time::GetUnscaledDeltaTime`
-  and `GetRealTime` (`Scene::GetUnscaledDeltaTime`, `GetUnscaledTime`) go on at time scale 0. The SDK's class `UI` and
-  helpers named like engine classes are checked only inside script modules: no engine, editor or test translation unit
-  includes the SDK's C++ headers (`Architecture.ScriptSDK`).
+- Game UI (host functions `UIGetText` to `UIIsActionDown`, then `GetUnscaledDeltaTime`, `GetRealTime` and
+  `GetTypedText`, appended to ABI version 1 after `PhysicsGetLayerIndex`): `UIElement` (`Entity::GetUI`: text, image,
+  color, interactability, a slider's or toggle's value, the focus) and `UI` (the focus, `IsPointerOverUI`, the UI
+  actions) go through the scene's `IUIControl` (the GameUI module's `GameUISystem`); without it the calls fail. Values
+  set this way raise no events. The widgets' events reach the scripts as `OnUIClick(widget)`, `OnUIValueChanged(widget,
+  value)`, `OnUIFocusChanged(widget, focused)` and `OnUISubmit(widget)` (an input field's Enter; class descriptor
+  callbacks after `OnAnimationEvent`, `OnUISubmit` last, each read only when the descriptor's `StructSize` covers it,
+  taking the widget's id): `ScriptSystem` listens to the scene's `IUIEvents` while it runs and calls the scripts of the
+  widget's entity, then those of its event target when that names another entity, skipping removed, disabled and not yet
+  started instances. The UI system updates before the scripts, so the events of a frame arrive before its `OnUpdate`.
+  `Time::GetUnscaledDeltaTime` and `GetRealTime` (`Scene::GetUnscaledDeltaTime`, `GetUnscaledTime`) go on at time scale
+  0. The SDK's class `UI` and helpers named like engine classes are checked only inside script modules: no engine,
+  editor or test translation unit includes the SDK's C++ headers (`Architecture.ScriptSDK`).
 - The game's shell belongs to the program running it, through engine services (`Core/EngineServices.h`, provided while it
   runs the game with `EngineServices::ScopedProvider`): `Game::SetWindowMode`, `SetResolution`, `SetVSync` and
   `GetWindowSize` go to `IGameWindow` (StrataRuntime's `GameWindowService` applies them after the frame; the editor's
@@ -1141,6 +1142,10 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - Tints fade over the scene's unscaled time (`Scene::GetUnscaledDeltaTime`), so menus work at time scale 0; only
   selectables that show a state of the system's (hovered, pressed, focused) or still fade keep a record in
   `GameUIScene::SetSelectableState`, and an idle frame costs a pointer comparison.
+- Input fields own the keyboard while they are edited: only the UI system sets `Input::SetKeyboardCapture` (and clears it
+  when the field loses the focus, when play stops and in `Input::Reset`); UI code reads keys with `Input::GetKeyState` and
+  text with `GetUncapturedTypedText`, gameplay keeps the filtered queries. A field's text element draws the field's text
+  (`GameUIScene::GetShownText`), so a field's text change reshapes that element alone.
 - Typed text: `Input::GetTypedText()` returns the UTF-8 typed during the input frame (the window's character events through
   `Input::ProcessText`, while input is enabled, then simulated text from `Input::SimulateText`), at most
   `Input::c_MaxTypedTextBytes`, whole characters, the first typed kept.

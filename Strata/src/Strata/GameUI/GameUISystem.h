@@ -11,8 +11,10 @@
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 
+#include <array>
 #include <optional>
 #include <span>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -23,7 +25,8 @@ namespace Strata
 	// the game's input screen (GameUIScene::GetInputScreen), hit tests the pointer, owns the presses that start over the UI
 	// (Input's pointer capture hides them from the game until their release; a press elsewhere stays the game's), clicks
 	// buttons, flips toggles, drags sliders, moves the focus with the UI actions (keyboard and gamepad) and shows each
-	// selectable's state with tints that fade over unscaled time. Widget events go to IUIEvents listeners at the end of its
+	// selectable's state with tints that fade over unscaled time, and edits the focused input field (typed text, the editing
+	// keys with repeat, the caret's blink; the keyboard is captured meanwhile). Widget events go to IUIEvents listeners at the end of its
 	// update, before the scripts' OnUpdate of the frame, in the order their inputs happened: pointer, navigation, submit.
 	// Toggle and slider values are written with registry.patch (the running scene, without undo). A frame without UI under
 	// the pointer and without a focus changes nothing the game sees. It also offers IUIControl, the UI's elements for the
@@ -92,7 +95,28 @@ namespace Strata
 			Game // A press that started elsewhere: the game's until every button is released
 		};
 
+		// The keys that edit a field's text, each repeating while held (c_EditKeys).
+		static constexpr uint32_t c_EditKeyCount = 6;
+		// The caret shows and hides for this long each (unscaled seconds).
+		static constexpr float c_CaretBlinkInterval = 0.53f;
+
+		struct EditKeyRepeat
+		{
+			float HeldTime = 0.0f;
+			float NextRepeat = 0.0f;
+		};
+
 		void UpdatePointer(GameUIScene& ui, const UIInputScreen& screen, bool layoutChanged);
+		// Typed text and the editing keys of the input field being edited.
+		void UpdateEditing(float deltaTime);
+		bool IsEditKeyRepeated(uint32_t index, float deltaTime);
+		// Starts editing a focused input field (the caret at its end, the keyboard captured), or stops (EndEditing).
+		void BeginEditing(entt::entity field);
+		void EndEditing();
+		// Moves the caret of the field being edited one character (or to an end) and shows it; with `select` the selection's
+		// other end stays.
+		void MoveCaret(const std::string& text, int direction, bool toEnd, bool select);
+		void ShowFieldState();
 		void UpdateNavigation(GameUIScene& ui, std::span<const UICanvasView> views);
 		void UpdateVisualStates(GameUIScene& ui, float deltaTime);
 		void DispatchEvents();
@@ -139,6 +163,12 @@ namespace Strata
 		entt::entity m_Pressed = entt::null;  // The selectable a UI press started on
 		entt::entity m_Dragging = entt::null; // A slider following the pointer
 		entt::entity m_Focused = entt::null;
+		entt::entity m_Editing = entt::null; // The input field being edited: the focused one, while it is interactable
+		UIInputFieldState m_FieldState;
+		float m_CaretBlink = 0.0f;
+		std::array<EditKeyRepeat, c_EditKeyCount> m_EditKeys = {};
+		// Escape ended editing: the keyboard stays captured until the next update, so the game never sees that press.
+		bool m_KeepCaptureThisFrame = false;
 
 		std::unordered_map<entt::entity, Fade> m_Fades;
 		std::vector<UIEventInfo> m_PendingEvents;

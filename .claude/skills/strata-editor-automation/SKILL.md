@@ -439,12 +439,15 @@ ui.create {"type": "text", "parent": "<layout>", "text": "Score: 0"}            
 ui.create {"type": "button", "parent": "<menu>", "text": "Play"}                # parts.label: its text
 ui.create {"type": "toggle", "parent": "<menu>", "text": "Sound"}               # parts: background, checkmark, label
 ui.create {"type": "slider", "parent": "<menu>"}                                # parts: background, fill, handle
+ui.create {"type": "inputField", "parent": "<menu>", "text": "Your name"}       # parts: label, placeholder
 ui.layout {"screen": [1280, 720]}                                        # rects in pixels at a screen, without rendering
 ui.hitTest {"position": [960, 540]}                                      # what a click there would hit ("all": everything)
 ```
 
-- Types: `canvas`, `panel`, `image`, `text`, `button`, `toggle`, `slider`, `horizontalLayout`, `verticalLayout`,
-  `gridLayout`. An element whose parent is outside every canvas gets a new top-level canvas first.
+- Types: `canvas`, `panel`, `image`, `text`, `button`, `toggle`, `slider`, `inputField`, `horizontalLayout`,
+  `verticalLayout`, `gridLayout`. Type into an input field while playing: `input.click` it (it takes the focus and the
+  keyboard), `input.type` the text, `input.key {"key": "Enter"}` submits (`OnUISubmit`); `ui.layout` reports its `text`
+  and whether it is `editing`. An element whose parent is outside every canvas gets a new top-level canvas first.
 - `anchor` is one of `topLeft`, `topCenter`, `topRight`, `topStretch`, `middleLeft`, `middleCenter`, `middleRight`,
   `middleStretch`, `bottomLeft`, ..., `stretchLeft`, `stretchCenter`, `stretchRight`, `stretch`; it sets the pivot too.
   `position` is the pivot's offset in canvas units (+y down); along a stretched axis `size` is added to the parent's span

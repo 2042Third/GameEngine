@@ -105,7 +105,7 @@ namespace Strata
 		ScriptCallResult InvokeContactCallback(const ScriptCallSite& site, StrataScriptInstance instance, ScriptCallback callback, const StrataScriptCollision& contact);
 		// OnAnimationEvent with the event's name (engine memory the module reads during the call).
 		ScriptCallResult InvokeAnimationEventCallback(const ScriptCallSite& site, StrataScriptInstance instance, std::string_view name);
-		// The game UI's callbacks (OnUIClick, OnUIValueChanged, OnUIFocusChanged) with the widget's id, the value
+		// The game UI's callbacks (OnUIClick, OnUIValueChanged, OnUIFocusChanged, OnUISubmit) with the widget's id, the value
 		// (OnUIValueChanged) and whether it gained the focus (OnUIFocusChanged).
 		ScriptCallResult InvokeUIEventCallback(const ScriptCallSite& site, StrataScriptInstance instance, ScriptCallback callback, uint64_t widget,
 			float value, bool focused);
@@ -144,6 +144,7 @@ namespace Strata
 			decltype(StrataScriptClassDesc::OnUIClick) OnUIClick = nullptr;
 			decltype(StrataScriptClassDesc::OnUIValueChanged) OnUIValueChanged = nullptr;
 			decltype(StrataScriptClassDesc::OnUIFocusChanged) OnUIFocusChanged = nullptr;
+			decltype(StrataScriptClassDesc::OnUISubmit) OnUISubmit = nullptr;
 		};
 
 		template<typename Function>

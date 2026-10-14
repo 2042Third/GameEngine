@@ -5,6 +5,7 @@
 #include "Strata/Core/Log.h"
 #include "Strata/GameUI/GameUIComponents.h"
 #include "Strata/Input/Input.h"
+#include "Strata/Input/KeyCodes.h"
 #include "Strata/Input/MouseCodes.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
@@ -12,8 +13,11 @@
 #include "Strata/Scene/SceneHierarchy.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
+#include <string>
+#include <string_view>
 
 namespace Strata
 {
@@ -51,6 +55,86 @@ namespace Strata
 			return selectable.NormalColor;
 		}
 
+		// The keys that edit an input field's text (GameUISystem::c_EditKeyCount), by index.
+		constexpr std::array<KeyCode, 6> c_EditKeys = { Key::Backspace, Key::Delete, Key::Left, Key::Right, Key::Home, Key::End };
+		constexpr uint32_t c_EditBackspace = 0;
+		constexpr uint32_t c_EditDelete = 1;
+		constexpr uint32_t c_EditLeft = 2;
+		constexpr uint32_t c_EditRight = 3;
+		constexpr uint32_t c_EditHome = 4;
+		constexpr uint32_t c_EditEnd = 5;
+
+		bool IsContinuationByte(char byte)
+		{
+			return (static_cast<uint8_t>(byte) & 0xC0) == 0x80;
+		}
+
+		// Character boundaries of UTF-8 text around a byte.
+		uint32_t PreviousBoundary(const std::string& text, uint32_t position)
+		{
+			uint32_t index = std::min(position, static_cast<uint32_t>(text.size()));
+			if (index == 0)
+				return 0;
+			index--;
+			while (index > 0 && IsContinuationByte(text[index]))
+				index--;
+			return index;
+		}
+
+		uint32_t NextBoundary(const std::string& text, uint32_t position)
+		{
+			const uint32_t size = static_cast<uint32_t>(text.size());
+			if (position >= size)
+				return size;
+			uint32_t index = position + 1;
+			while (index < size && IsContinuationByte(text[index]))
+				index++;
+			return index;
+		}
+
+		// A byte made a character boundary (moved back to the start of its character, and into the text).
+		uint32_t ToBoundary(const std::string& text, uint32_t position)
+		{
+			uint32_t index = std::min(position, static_cast<uint32_t>(text.size()));
+			while (index > 0 && index < text.size() && IsContinuationByte(text[index]))
+				index--;
+			return index;
+		}
+
+		size_t CountCharacters(std::string_view text)
+		{
+			return static_cast<size_t>(std::count_if(text.begin(), text.end(), [](char byte) { return !IsContinuationByte(byte); }));
+		}
+
+		// Typed text a line holds: control characters (line breaks, tabs) dropped.
+		std::string FilterTypedText(std::string_view text)
+		{
+			std::string kept;
+			kept.reserve(text.size());
+			for (const char byte : text)
+			{
+				const uint8_t value = static_cast<uint8_t>(byte);
+				if (value >= 0x20 && value != 0x7F)
+					kept.push_back(byte);
+			}
+			return kept;
+		}
+
+		// The longest start of `text` with at most `count` whole characters.
+		std::string_view TakeCharacters(std::string_view text, size_t count)
+		{
+			size_t characters = 0;
+			for (size_t index = 0; index < text.size(); index++)
+			{
+				if (IsContinuationByte(text[index]))
+					continue;
+				if (characters == count)
+					return text.substr(0, index);
+				characters++;
+			}
+			return text;
+		}
+
 		// Snaps and clamps a slider value to its range (either way round).
 		float ClampSliderValue(const UISliderComponent& slider, float value)
 		{
@@ -81,7 +165,10 @@ namespace Strata
 
 	void GameUISystem::OnRuntimeStop()
 	{
-		// Clicks belong to the game again, and selectables show their rest states.
+		// Clicks and keys belong to the game again, and selectables show their rest states.
+		m_KeepCaptureThisFrame = false;
+		EndEditing();
+		Input::SetKeyboardCapture(false);
 		Input::SetPointerCapture(false);
 		if (GameUIScene* ui = GameUIScene::Find(m_Scene))
 			ui->ClearSelectableStates();
@@ -97,14 +184,25 @@ namespace Strata
 		if (m_CanvasStorage->empty())
 		{
 			// No UI: the game gets every click (one storage-size check per frame).
-			if (m_Gesture != Gesture::None || m_PointerOverUI || m_Focused != entt::null || Input::IsPointerCaptured())
+			if (m_Gesture != Gesture::None || m_PointerOverUI || m_Focused != entt::null || Input::IsPointerCaptured() || m_KeepCaptureThisFrame)
 			{
+				m_KeepCaptureThisFrame = false;
+				EndEditing();
+				Input::SetKeyboardCapture(false);
 				Input::SetPointerCapture(false);
 				m_Gesture = Gesture::None;
 				m_PointerOverUI = false;
 				m_Pressed = m_Dragging = m_Hovered = m_HoveredTarget = m_Focused = entt::null;
 			}
 			return;
+		}
+
+		// The key that ended editing last update was the UI's: the keyboard is the game's again from this update on.
+		if (m_KeepCaptureThisFrame)
+		{
+			m_KeepCaptureThisFrame = false;
+			if (m_Editing == entt::null)
+				Input::SetKeyboardCapture(false);
 		}
 
 		// Menus work at time scale 0: everything here runs on unscaled time.
@@ -124,6 +222,7 @@ namespace Strata
 		}
 
 		UpdatePointer(ui, screen, layoutChanged);
+		UpdateEditing(deltaTime);
 		UpdateNavigation(ui, m_Views);
 		UpdateVisualStates(ui, deltaTime);
 		DispatchEvents();
@@ -132,6 +231,8 @@ namespace Strata
 	void GameUISystem::OnEntityDestroying(const Entity& entity)
 	{
 		const entt::entity handle = entity.GetHandle();
+		if (handle == m_Editing)
+			EndEditing();
 		for (entt::entity* reference : { &m_HoveredTarget, &m_Hovered, &m_Pressed, &m_Dragging, &m_Focused })
 		{
 			if (*reference == handle)
@@ -178,6 +279,17 @@ namespace Strata
 				Focus(m_Pressed); // A click on a selectable focuses it
 				if (m_Scene.GetRegistry().all_of<UISliderComponent>(m_Pressed))
 					m_Dragging = m_Pressed;
+				// A click on an input field puts its caret at the character nearest the pointer.
+				if (m_Editing != entt::null && m_Editing == m_Pressed)
+				{
+					if (const std::optional<uint32_t> caret = ui.FindInputFieldCaret(m_Editing, screen.Screen, pixel))
+					{
+						m_FieldState.Caret = *caret;
+						m_FieldState.Anchor = *caret;
+						m_CaretBlink = 0.0f;
+						ShowFieldState();
+					}
+				}
 			}
 		}
 		// A slider follows the pointer while it is dragged, also outside its rect.
@@ -353,6 +465,10 @@ namespace Strata
 			return;
 		const entt::entity previous = m_Focused;
 		m_Focused = selectable;
+		// The focused input field is the one edited.
+		EndEditing();
+		if (selectable != entt::null && m_Scene.GetRegistry().all_of<UIInputFieldComponent>(selectable))
+			BeginEditing(selectable);
 		if (previous != entt::null && m_Scene.GetRegistry().valid(previous))
 			QueueEvent(UIEventType::FocusChanged, previous, 0.0f, false);
 		if (selectable != entt::null)
@@ -361,10 +477,21 @@ namespace Strata
 
 	void GameUISystem::UpdateNavigation(GameUIScene& ui, std::span<const UICanvasView> views)
 	{
+		const bool editing = m_Editing != entt::null && m_Editing == m_Focused;
 		for (const UIAction direction : c_Directions)
 		{
 			if (!m_Actions.IsRepeated(direction))
 				continue;
+			// An edited field's caret moves left and right (a gamepad's: the keyboard is the field's meanwhile).
+			if (editing && (direction == UIAction::Left || direction == UIAction::Right))
+			{
+				if (const UIInputFieldComponent* field = m_Scene.GetRegistry().try_get<UIInputFieldComponent>(m_Editing))
+				{
+					MoveCaret(field->Text, direction == UIAction::Left ? -1 : 1, false, false);
+					ShowFieldState();
+				}
+				continue;
+			}
 			// Navigating without a focus starts it.
 			if (m_Focused == entt::null)
 			{
@@ -382,8 +509,209 @@ namespace Strata
 		{
 			if (m_Focused == entt::null)
 				Focus(FindStartSelectable(ui, views));
+			else if (m_Editing != entt::null && m_Focused == m_Editing)
+				QueueEvent(UIEventType::Submit, m_Editing);
 			else
 				Click(m_Focused);
+		}
+		// Cancel stops editing a field (a gamepad's: Escape is the field's while it is edited).
+		if (m_Editing != entt::null && m_Actions.IsPressed(UIAction::Cancel))
+			Focus(entt::null);
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Input fields
+	////////////////////////////////////////////////////////////////////////////////
+
+	void GameUISystem::BeginEditing(entt::entity field)
+	{
+		const UIInputFieldComponent& component = m_Scene.GetRegistry().get<UIInputFieldComponent>(field);
+		m_Editing = field;
+		const uint32_t end = static_cast<uint32_t>(component.Text.size());
+		m_FieldState = UIInputFieldState { end, end, true };
+		m_CaretBlink = 0.0f;
+		m_EditKeys = {};
+		// The keyboard is the field's: typing a name never moves the player.
+		Input::SetKeyboardCapture(true);
+		ShowFieldState();
+	}
+
+	void GameUISystem::EndEditing()
+	{
+		if (m_Editing == entt::null)
+			return;
+		if (GameUIScene* ui = GameUIScene::Find(m_Scene))
+			ui->ClearInputFieldState(m_Editing);
+		m_Editing = entt::null;
+		if (!m_KeepCaptureThisFrame)
+			Input::SetKeyboardCapture(false);
+	}
+
+	void GameUISystem::ShowFieldState()
+	{
+		if (m_Editing == entt::null)
+			return;
+		if (GameUIScene* ui = GameUIScene::Find(m_Scene))
+			ui->SetInputFieldState(m_Editing, m_FieldState);
+	}
+
+	bool GameUISystem::IsEditKeyRepeated(uint32_t index, float deltaTime)
+	{
+		// Like the UI actions: on the press, then after c_RepeatDelay held and every c_RepeatInterval after that.
+		const KeyState key = Input::GetKeyState(c_EditKeys[index]);
+		EditKeyRepeat& repeat = m_EditKeys[index];
+		if (key.Pressed)
+		{
+			repeat.HeldTime = 0.0f;
+			repeat.NextRepeat = UIActionState::c_RepeatDelay;
+			return true;
+		}
+		if (!key.Down)
+		{
+			repeat = {};
+			return false;
+		}
+		repeat.HeldTime += deltaTime;
+		if (repeat.HeldTime < repeat.NextRepeat)
+			return false;
+		while (repeat.NextRepeat <= repeat.HeldTime)
+			repeat.NextRepeat += UIActionState::c_RepeatInterval;
+		return true;
+	}
+
+	void GameUISystem::MoveCaret(const std::string& text, int direction, bool toEnd, bool select)
+	{
+		UIInputFieldState& state = m_FieldState;
+		const uint32_t selectionStart = std::min(state.Caret, state.Anchor);
+		const uint32_t selectionEnd = std::max(state.Caret, state.Anchor);
+		if (toEnd)
+			state.Caret = direction < 0 ? 0 : static_cast<uint32_t>(text.size());
+		else if (!select && selectionStart != selectionEnd)
+			state.Caret = direction < 0 ? selectionStart : selectionEnd; // A selection collapses to the side moved to
+		else
+			state.Caret = direction < 0 ? PreviousBoundary(text, state.Caret) : NextBoundary(text, state.Caret);
+		if (!select)
+			state.Anchor = state.Caret;
+		m_CaretBlink = 0.0f;
+		state.CaretVisible = true;
+	}
+
+	void GameUISystem::UpdateEditing(float deltaTime)
+	{
+		if (m_Editing == entt::null)
+			return;
+		entt::registry& registry = m_Scene.GetRegistry();
+		const UIInputFieldComponent* field = registry.try_get<UIInputFieldComponent>(m_Editing);
+		if (!field)
+		{
+			EndEditing();
+			return;
+		}
+		// Every key's repeat follows the frame, used or not.
+		std::array<bool, c_EditKeyCount> repeated = {};
+		for (uint32_t index = 0; index < c_EditKeyCount; index++)
+			repeated[index] = IsEditKeyRepeated(index, deltaTime);
+		const bool shift = Input::GetKeyState(Key::LeftShift).Down || Input::GetKeyState(Key::RightShift).Down;
+		const bool command = Input::GetKeyState(Key::LeftControl).Down || Input::GetKeyState(Key::RightControl).Down
+			|| Input::GetKeyState(Key::LeftSuper).Down || Input::GetKeyState(Key::RightSuper).Down;
+
+		// Code may have changed the text since: the caret and the selection stay on its characters.
+		std::string text = field->Text;
+		UIInputFieldState& state = m_FieldState;
+		state.Caret = ToBoundary(text, state.Caret);
+		state.Anchor = ToBoundary(text, state.Anchor);
+		const UIInputFieldState before = state;
+		bool edited = false;
+		auto eraseSelection = [&]()
+		{
+			const uint32_t start = std::min(state.Caret, state.Anchor);
+			const uint32_t end = std::max(state.Caret, state.Anchor);
+			if (start == end)
+				return false;
+			text.erase(start, end - start);
+			state.Caret = state.Anchor = start;
+			return true;
+		};
+
+		if (command && Input::GetKeyState(Key::A).Pressed)
+		{
+			state.Anchor = 0;
+			state.Caret = static_cast<uint32_t>(text.size());
+		}
+		// Backspace and Delete remove the selection, else the character before or after the caret.
+		if (repeated[c_EditBackspace])
+		{
+			if (eraseSelection())
+			{
+				edited = true;
+			}
+			else if (state.Caret > 0)
+			{
+				const uint32_t start = PreviousBoundary(text, state.Caret);
+				text.erase(start, state.Caret - start);
+				state.Caret = state.Anchor = start;
+				edited = true;
+			}
+		}
+		if (repeated[c_EditDelete])
+		{
+			if (eraseSelection())
+			{
+				edited = true;
+			}
+			else if (state.Caret < text.size())
+			{
+				text.erase(state.Caret, NextBoundary(text, state.Caret) - state.Caret);
+				edited = true;
+			}
+		}
+		if (repeated[c_EditLeft])
+			MoveCaret(text, -1, false, shift);
+		if (repeated[c_EditRight])
+			MoveCaret(text, 1, false, shift);
+		if (repeated[c_EditHome])
+			MoveCaret(text, -1, true, shift);
+		if (repeated[c_EditEnd])
+			MoveCaret(text, 1, true, shift);
+
+		// Typed characters replace the selection, as many as the character limit leaves room for.
+		const std::string typed = FilterTypedText(Input::GetUncapturedTypedText());
+		if (!typed.empty())
+		{
+			edited = eraseSelection() || edited;
+			std::string_view inserted = typed;
+			if (field->CharacterLimit > 0)
+			{
+				const size_t count = CountCharacters(text);
+				inserted = TakeCharacters(inserted, count < field->CharacterLimit ? field->CharacterLimit - count : 0);
+			}
+			if (!inserted.empty())
+			{
+				text.insert(state.Caret, inserted);
+				state.Caret += static_cast<uint32_t>(inserted.size());
+				state.Anchor = state.Caret;
+				edited = true;
+			}
+		}
+
+		const entt::entity editedField = m_Editing;
+		if (edited && text != field->Text)
+			registry.patch<UIInputFieldComponent>(editedField, [&text](UIInputFieldComponent& value) { value.Text = text; });
+		// The caret blinks, and shows at once where it moved to.
+		if (!(state == before) || edited)
+			m_CaretBlink = 0.0f;
+		else
+			m_CaretBlink += deltaTime;
+		state.CaretVisible = std::fmod(m_CaretBlink, 2.0f * c_CaretBlinkInterval) < c_CaretBlinkInterval;
+		ShowFieldState();
+
+		// Enter submits, Escape stops editing.
+		if (Input::GetKeyState(Key::Enter).Pressed || Input::GetKeyState(Key::KPEnter).Pressed)
+			QueueEvent(UIEventType::Submit, editedField);
+		if (Input::GetKeyState(Key::Escape).Pressed)
+		{
+			m_KeepCaptureThisFrame = true;
+			Focus(entt::null);
 		}
 	}
 
@@ -589,6 +917,15 @@ namespace Strata
 
 	bool GameUISystem::GetText(Entity element, std::string& outText, std::string* outError)
 	{
+		// An input field's text first.
+		if (element && element.GetScene() == &m_Scene && m_Scene.GetRegistry().valid(element.GetHandle()))
+		{
+			if (const UIInputFieldComponent* field = m_Scene.GetRegistry().try_get<UIInputFieldComponent>(element.GetHandle()))
+			{
+				outText = field->Text;
+				return true;
+			}
+		}
 		const UITextComponent* text = FindElementComponent<UITextComponent>(element, "UIText", outError);
 		if (!text)
 			return false;
@@ -598,6 +935,19 @@ namespace Strata
 
 	bool GameUISystem::SetText(Entity element, std::string_view text, std::string* outError)
 	{
+		if (element && element.GetScene() == &m_Scene && m_Scene.GetRegistry().valid(element.GetHandle()))
+		{
+			if (const UIInputFieldComponent* field = m_Scene.GetRegistry().try_get<UIInputFieldComponent>(element.GetHandle()))
+			{
+				// A field holds one line within its character limit.
+				std::string line = FilterTypedText(text);
+				if (field->CharacterLimit > 0)
+					line = std::string(TakeCharacters(line, field->CharacterLimit));
+				if (field->Text != line)
+					m_Scene.GetRegistry().patch<UIInputFieldComponent>(element.GetHandle(), [&line](UIInputFieldComponent& value) { value.Text = line; });
+				return true;
+			}
+		}
 		const UITextComponent* component = FindElementComponent<UITextComponent>(element, "UIText", outError);
 		if (!component)
 			return false;
@@ -801,6 +1151,8 @@ namespace Strata
 			target = toggle->EventTarget;
 		else if (const UISliderComponent* slider = registry.try_get<UISliderComponent>(widget))
 			target = slider->EventTarget;
+		else if (const UIInputFieldComponent* field = registry.try_get<UIInputFieldComponent>(widget))
+			target = field->EventTarget;
 		const Entity targetEntity = m_Scene.GetEntityByUUID(target);
 		if (targetEntity && targetEntity.GetHandle() != widget)
 			event.Target = targetEntity;

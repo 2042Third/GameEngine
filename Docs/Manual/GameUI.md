@@ -89,6 +89,13 @@ public:
 Scripts change what elements show with `entity.GetUI()`: `SetText`, `SetColor`, `SetImage`, `SetValue`,
 `SetInteractable` and `Focus`. A HUD sets its texts every frame (setting the same text again costs nothing).
 
+**Input Field** (Hierarchy > + > UI > Input Field) is a line the player types into: a name, a chat message, a code. A
+click puts the caret there; typing, Backspace, Delete, the arrows, Home and End edit as in any text box (Shift selects,
+Ctrl+A or Cmd+A selects everything), and Enter calls the scripts' `OnUISubmit` (on the field and its **Event Target**),
+where `widget.GetUI().GetText()` reads what was typed. Escape stops editing. While the player types, the game's own key
+input sees nothing, so typing a name never moves the character. **Character Limit** caps the length; the **Placeholder**
+shows while the field is empty; text longer than the field scrolls to keep the caret in view.
+
 - **Mouse**: a click on a button clicks it; the game's own mouse input never sees clicks that land on the UI
   (`UI::IsPointerOverUI` tells a script the pointer is over it).
 - **Keyboard and gamepad**: the arrow keys, the d-pad and the left stick move the focus between selectables (the nearest

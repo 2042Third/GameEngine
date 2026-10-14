@@ -750,4 +750,39 @@ TEST_SUITE("GameUI.Dirty")
 		CHECK_FALSE(scene.Validate(&error));
 		CHECK(error.find("Masked Panel") != std::string::npos);
 	}
+
+	TEST_CASE("An input field's text reshapes its text element alone, and an unsignaled write fails validation")
+	{
+		UITestScene ui;
+		const glm::vec2 topLeft(0.0f);
+		Entity field = ui.Add(ui.Canvas, "Name Field", PointRect(topLeft, topLeft, { 100.0f, 100.0f }, { 300.0f, 40.0f }));
+		Entity text = ui.Add(field, "Shown", StretchRect({ 0.0f, 0.0f }, { 1.0f, 1.0f }, { -16.0f, -8.0f }));
+		text.AddComponent<UITextComponent>().Text = "never shown";
+		Entity hint = ui.Add(field, "Hint", StretchRect({ 0.0f, 0.0f }, { 1.0f, 1.0f }));
+		hint.AddComponent<UITextComponent>().Text = "Your name";
+		UIInputFieldComponent& component = field.AddComponent<UIInputFieldComponent>();
+		component.TextElement = text.GetUUID();
+		component.Placeholder = hint.GetUUID();
+		GameUIScene& scene = ui.GetUI();
+		Frame(scene);
+		scene.TakeStats();
+		CHECK(ui.Visible(hint));
+		const UICanvasView view = scene.EnsureLayout(GameUIScene::c_DefaultScreen)[0];
+		CHECK(scene.GetElementText(view, 2).empty()); // The field's (empty) text, not the element's own
+
+		field.GetComponent<UIInputFieldComponent>().Text = "Ada";
+		field.MarkModified<UIInputFieldComponent>();
+		Frame(scene);
+		const GameUISceneStats stats = scene.TakeStats();
+		CHECK(stats.TextsShaped == 1);
+		CHECK(stats.ElementsLaidOut == 0);
+		CHECK(scene.GetElementText(view, 2) == "Ada");
+		CHECK_FALSE(ui.Visible(hint));
+
+		std::string error;
+		CHECK_MESSAGE(scene.Validate(&error), error);
+		field.GetComponent<UIInputFieldComponent>().Text.clear(); // No MarkModified
+		CHECK_FALSE(scene.Validate(&error));
+		CHECK(error.find("Name Field") != std::string::npos);
+	}
 }

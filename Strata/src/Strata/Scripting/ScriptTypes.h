@@ -32,7 +32,8 @@ namespace Strata
 		// Events of the game UI's widgets on the entity or naming it as their event target.
 		OnUIClick,
 		OnUIValueChanged,
-		OnUIFocusChanged
+		OnUIFocusChanged,
+		OnUISubmit
 	};
 
 	const char* ScriptCallbackToString(ScriptCallback callback);

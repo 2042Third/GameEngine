@@ -244,6 +244,9 @@ namespace Strata
 				for (const RenderData::UIQuad& quad : scratch)
 					glyphs += (quad.Flags & RenderData::c_UIQuadKindMask) == RenderData::c_UIQuadGlyph ? 1 : 0;
 				capacity = written - glyphs + GetTextCapacity(glyphs);
+				// An input field's text keeps room for its selection and caret, which come and go while it is edited.
+				if (canvas.Elements[element].FieldTextOf != c_NoElement)
+					capacity += 2;
 			}
 			layout.QuadFirst[element] = static_cast<uint32_t>(layout.Quads.size());
 			layout.QuadCapacity[element] = capacity;
@@ -405,21 +408,63 @@ namespace Strata
 
 		if (const UITextComponent* text = m_Registry->try_get<UITextComponent>(entity))
 		{
+			// An input field's text element shows the field's text, and while the field is edited its selection and caret.
+			const std::string_view shown = GetShownText(canvas, element, *text);
+			const uint32_t field = canvas.Elements[element].FieldTextOf;
+			const UIInputFieldComponent* fieldComponent = field != c_NoElement ? m_Registry->try_get<UIInputFieldComponent>(canvas.Elements[field].Entity) : nullptr;
+			FieldRecord* record = nullptr;
+			if (fieldComponent)
+			{
+				auto found = m_FieldStates.find(canvas.Elements[field].Entity);
+				record = found != m_FieldStates.end() ? &found->second : nullptr;
+			}
 			const bool outline = text->OutlineWidth > 0.0f && text->OutlineColor.a > 0.0f;
-			if (!text->Text.empty() && (text->Color.a > 0.0f || outline))
+			const bool drawsGlyphs = !shown.empty() && (text->Color.a > 0.0f || outline);
+			if (drawsGlyphs || record)
 			{
 				const UIRectComponent* rect = m_Registry->try_get<UIRectComponent>(entity);
-				const ShapedText& shaped = ShapeElementText(layout, element, *text, GetShapeOptions(*text, rect, box));
+				const ShapedText& shaped = ShapeElementText(layout, element, *text, shown, GetElementShapeOptions(canvas, element, *text, rect, box));
 				AssetHandle shapedFont;
 				const FontFace* face = GetTextFace(*text, shapedFont);
 				const uint32_t font = GetFontIndex(shapedFont);
-				if (font < RenderData::c_MaxUIFonts && shapedFont == layout.Texts[element].ShapedFont)
+				const float size = std::clamp(text->FontSize, 1.0f, 1024.0f);
+				const float originX = text->Alignment == TextAlignment::Left ? box.Min.x : (text->Alignment == TextAlignment::Center ? box.GetCenter().x : box.GetMax().x);
+				const float blockHeight = shaped.Height * size;
+				const float place = text->VerticalAlignment == UITextVerticalAlignment::Top ? 0.0f : (text->VerticalAlignment == UITextVerticalAlignment::Middle ? 0.5f : 1.0f);
+				const float top = box.Min.y + (box.Size.y - blockHeight) * place;
+				float penOffset = 0.0f;
+				glm::vec2 line(0.0f);
+				auto stopX = [&](uint32_t byte)
 				{
-					const float size = std::clamp(text->FontSize, 1.0f, 1024.0f);
-					const float originX = text->Alignment == TextAlignment::Left ? box.Min.x : (text->Alignment == TextAlignment::Center ? box.GetCenter().x : box.GetMax().x);
-					const float blockHeight = shaped.Height * size;
-					const float place = text->VerticalAlignment == UITextVerticalAlignment::Top ? 0.0f : (text->VerticalAlignment == UITextVerticalAlignment::Middle ? 0.5f : 1.0f);
-					const float top = box.Min.y + (box.Size.y - blockHeight) * place;
+					for (const TextCaretStop& stop : m_CaretScratch)
+					{
+						if (stop.Byte == byte)
+							return line.x + stop.X * size;
+					}
+					return line.x;
+				};
+				auto solidQuad = [&](float x0, float x1, const glm::vec4& color)
+				{
+					RenderData::UIQuad quad;
+					quad.Flags = RenderData::c_UIQuadImage;
+					quad.Color = PackColor(color);
+					quad.Rect = glm::vec4(std::min(x0, x1), line.y, std::max(x0, x1), line.y + blockHeight);
+					out.push_back(quad);
+				};
+				if (fieldComponent)
+				{
+					// One line, scrolled to keep the caret in view when it is wider than the element.
+					if (record)
+						MeasureCaretStops(*face, shown, m_CaretScratch);
+					else
+						m_CaretScratch.clear();
+					line = PlaceFieldLine(*text, shaped, box, size, record, m_CaretScratch);
+					penOffset = line.x - (originX + shaped.Min.x * size);
+					if (record && record->State.Anchor != record->State.Caret && fieldComponent->SelectionColor.a > 0.0f)
+						solidQuad(stopX(record->State.Anchor), stopX(record->State.Caret), fieldComponent->SelectionColor);
+				}
+				if (drawsGlyphs && font < RenderData::c_MaxUIFonts && shapedFont == layout.Texts[element].ShapedFont)
+				{
 					RenderData::UIQuad quad;
 					quad.Flags = RenderData::c_UIQuadGlyph | (font << RenderData::c_UIQuadFontShift);
 					quad.Color = PackColor(text->Color);
@@ -428,13 +473,18 @@ namespace Strata
 					for (const ShapedGlyph& glyph : shaped.Glyphs)
 					{
 						const FontGlyphMetrics& metrics = face->GetGlyphMetrics(glyph.GlyphIndex);
-						const glm::vec2 pen(originX + glyph.Pen.x * size, top - glyph.Pen.y * size);
+						const glm::vec2 pen(originX + penOffset + glyph.Pen.x * size, top - glyph.Pen.y * size);
 						quad.Rect = glm::vec4(pen.x + metrics.PlaneMin.x * size, pen.y - metrics.PlaneMax.y * size, pen.x + metrics.PlaneMax.x * size,
 							pen.y - metrics.PlaneMin.y * size);
 						quad.UV = glm::vec4(pen, 0.0f, 0.0f);
 						quad.Resource = glyph.GlyphIndex;
 						out.push_back(quad);
 					}
+				}
+				if (record && record->State.CaretVisible && fieldComponent->CaretColor.a > 0.0f)
+				{
+					const float x = stopX(record->State.Caret);
+					solidQuad(x, x + GetCaretWidth(size), fieldComponent->CaretColor);
 				}
 			}
 		}

@@ -22,6 +22,7 @@ namespace Strata
 			case ScriptCallback::OnUIClick:        return "OnUIClick";
 			case ScriptCallback::OnUIValueChanged: return "OnUIValueChanged";
 			case ScriptCallback::OnUIFocusChanged: return "OnUIFocusChanged";
+			case ScriptCallback::OnUISubmit:       return "OnUISubmit";
 		}
 		return "Unknown";
 	}

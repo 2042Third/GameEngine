@@ -16,6 +16,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace Strata;
@@ -947,5 +948,248 @@ TEST_SUITE("GameUI.Navigation")
 		scene.Frame();
 		CHECK(scene.Events.size() == count);
 		CHECK(scene.Focused() == "Toggle");
+	}
+}
+
+namespace
+{
+
+	// An input field "<name>" at (100, 100), 300 x 40: an image, a selectable, the field, its text element "<name> Text"
+	// (left-aligned, 20 units per em, inset by 8) and its placeholder "<name> Hint".
+	Entity AddField(UIInputScene& scene, const std::string& name, uint32_t limit = 0)
+	{
+		Entity field = scene.AddImage(scene.Canvas, name, { 100.0f, 100.0f }, { 300.0f, 40.0f });
+		field.AddComponent<UISelectableComponent>();
+		Entity text = scene.Target.CreateChildEntity(field, name + " Text");
+		UIRectComponent rect;
+		rect.AnchorMin = glm::vec2(0.0f);
+		rect.AnchorMax = glm::vec2(1.0f);
+		rect.Size = glm::vec2(-16.0f);
+		text.AddComponent<UIRectComponent>(rect);
+		UITextComponent& label = text.AddComponent<UITextComponent>();
+		label.Alignment = TextAlignment::Left;
+		label.FontSize = 20.0f;
+		label.Text = "ignored: the field's text shows";
+		Entity hint = scene.Target.CreateChildEntity(field, name + " Hint");
+		hint.AddComponent<UIRectComponent>(rect);
+		hint.AddComponent<UITextComponent>().Text = "Your name";
+		UIInputFieldComponent& component = field.AddComponent<UIInputFieldComponent>();
+		component.TextElement = text.GetUUID();
+		component.Placeholder = hint.GetUUID();
+		component.CharacterLimit = limit;
+		return field;
+	}
+
+	std::string FieldText(Entity field)
+	{
+		return field.GetComponent<UIInputFieldComponent>().Text;
+	}
+
+	void Type(UIInputScene& scene, std::string_view text)
+	{
+		Input::SimulateText(text);
+		scene.Frame();
+	}
+
+	// A key pressed and released with modifiers held around it.
+	void KeyWith(UIInputScene& scene, KeyCode modifier, KeyCode key)
+	{
+		Input::SimulateKey(modifier, true);
+		scene.Frame();
+		scene.Key(key);
+		Input::SimulateKey(modifier, false);
+		scene.Frame();
+	}
+
+}
+
+TEST_SUITE("GameUI.InputField")
+{
+	TEST_CASE("A focused field takes typed text at its caret and keeps the keyboard from the game")
+	{
+		UIInputScene scene;
+		Entity field = AddField(scene, "Name");
+		scene.Play();
+		scene.Frame();
+		CHECK_FALSE(Input::IsKeyboardCaptured());
+		scene.Click({ 200.0f, 120.0f });
+		CHECK(scene.Focused() == "Name");
+		CHECK(Input::IsKeyboardCaptured());
+
+		Input::SimulateText("Hi there");
+		Input::SimulateKey(Key::W, true);
+		scene.Frame();
+		CHECK(FieldText(field) == "Hi there");
+		CHECK_FALSE(Input::IsKeyDown(Key::W)); // The game does not walk while a name is typed
+		CHECK(Input::GetTypedText().empty());
+		Input::SimulateKey(Key::W, false);
+		// Multi-byte characters go in whole.
+		Type(scene, "\xC3\xA9!");
+		CHECK(FieldText(field) == "Hi there\xC3\xA9!");
+		CHECK(scene.Count(UIEventType::Submit) == 0);
+
+		// Losing the focus gives the keyboard back.
+		CHECK(scene.System().SetFocus(Entity()));
+		scene.Frame();
+		CHECK_FALSE(Input::IsKeyboardCaptured());
+		Type(scene, "x");
+		CHECK(FieldText(field) == "Hi there\xC3\xA9!");
+		std::string error;
+		CHECK_MESSAGE(GameUIScene::Get(scene.Target).Validate(&error), error);
+	}
+
+	TEST_CASE("Backspace, Delete, the arrows, Home and End edit at the caret; Shift selects and typing replaces the selection")
+	{
+		UIInputScene scene;
+		Entity field = AddField(scene, "Name");
+		field.GetComponent<UIInputFieldComponent>().Text = "abc\xC3\xA9";
+		scene.Play();
+		scene.Frame();
+		REQUIRE(scene.System().SetFocus(field)); // The caret goes to the end
+		scene.Frame();
+		scene.Key(Key::Backspace); // A two-byte character goes whole
+		CHECK(FieldText(field) == "abc");
+		scene.Key(Key::Left);
+		scene.Key(Key::Left);
+		Type(scene, "X");
+		CHECK(FieldText(field) == "aXbc");
+		scene.Key(Key::Delete);
+		CHECK(FieldText(field) == "aXc");
+		scene.Key(Key::Home);
+		Type(scene, "<");
+		scene.Key(Key::End);
+		Type(scene, ">");
+		CHECK(FieldText(field) == "<aXc>");
+		// Shift+Left twice selects "c>", which typing replaces.
+		KeyWith(scene, Key::LeftShift, Key::Left);
+		KeyWith(scene, Key::LeftShift, Key::Left);
+		Type(scene, "Z");
+		CHECK(FieldText(field) == "<aXZ");
+		// Ctrl+A selects everything; Backspace clears it, and the placeholder shows again.
+		KeyWith(scene, Key::LeftControl, Key::A);
+		scene.Key(Key::Backspace);
+		CHECK(FieldText(field).empty());
+		std::string error;
+		CHECK_MESSAGE(GameUIScene::Get(scene.Target).Validate(&error), error);
+	}
+
+	TEST_CASE("The character limit cuts typed and set text, and line breaks never enter a field")
+	{
+		UIInputScene scene;
+		Entity field = AddField(scene, "Code", 4);
+		scene.Play();
+		scene.Frame();
+		REQUIRE(scene.System().SetFocus(field));
+		scene.Frame();
+		Type(scene, "ab\ncd\tef");
+		CHECK(FieldText(field) == "abcd");
+		Type(scene, "g");
+		CHECK(FieldText(field) == "abcd");
+		std::string error;
+		CHECK(scene.System().SetText(field, "\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC", &error)); // Five euro signs
+		CHECK(FieldText(field) == "\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC");
+		std::string read;
+		CHECK(scene.System().GetText(field, read));
+		CHECK(read == FieldText(field));
+		// The caret follows text set by code: typing after it goes at a character boundary.
+		scene.Key(Key::Backspace);
+		CHECK(FieldText(field) == "\xE2\x82\xAC\xE2\x82\xAC\xE2\x82\xAC");
+	}
+
+	TEST_CASE("Enter submits, Escape and a gamepad's Cancel stop editing; a held key repeats like the UI actions")
+	{
+		UIInputScene scene;
+		Entity field = AddField(scene, "Chat");
+		field.GetComponent<UIInputFieldComponent>().Text = "0123456789";
+		scene.Play();
+		scene.Frame();
+		REQUIRE(scene.System().SetFocus(field));
+		scene.Frame();
+
+		// Backspace held: once on the press, then after 0.4 s and every 0.1 s, with fixed steps of 0.1 s.
+		Input::SimulateKey(Key::Backspace, true);
+		scene.Frame(0.1f);
+		CHECK(FieldText(field) == "012345678");
+		for (int step = 0; step < 5; step++) // 0.5 s held: repeats at 0.4 and 0.5
+			scene.Frame(0.1f);
+		CHECK(FieldText(field) == "0123456");
+		Input::SimulateKey(Key::Backspace, false);
+		scene.Frame(0.1f);
+
+		scene.Key(Key::Enter);
+		REQUIRE(scene.Count(UIEventType::Submit) == 1);
+		CHECK(std::find_if(scene.Events.begin(), scene.Events.end(), [](const UIEventInfo& event) { return event.Type == UIEventType::Submit; })->Widget == field);
+		CHECK(scene.Focused() == "Chat"); // Submitting keeps editing
+		scene.Key(Key::Space);
+		CHECK(FieldText(field) == "0123456"); // Space is no Submit while the field has the keyboard: only typed text goes in
+		CHECK(scene.Count(UIEventType::Click) == 0);
+
+		scene.Key(Key::Escape);
+		CHECK(scene.Focused().empty());
+		CHECK_FALSE(Input::IsKeyboardCaptured());
+
+		// A gamepad: Submit focuses and submits, Cancel stops editing.
+		REQUIRE(scene.System().SetFocus(field));
+		scene.Frame();
+		Input::SimulateGamepadButton(0, GamepadButton::A, true);
+		scene.Frame();
+		Input::SimulateGamepadButton(0, GamepadButton::A, false);
+		scene.Frame();
+		CHECK(scene.Count(UIEventType::Submit) == 2);
+		Input::SimulateGamepadButton(0, GamepadButton::B, true);
+		scene.Frame();
+		Input::SimulateGamepadButton(0, GamepadButton::B, false);
+		scene.Frame();
+		CHECK(scene.Focused().empty());
+	}
+
+	TEST_CASE("A click puts the caret at the nearest character; the caret blinks; the placeholder shows only while the text is empty")
+	{
+		UIInputScene scene;
+		Entity field = AddField(scene, "Name");
+		const Entity hint = scene.Target.FindEntityByName("Name Hint");
+		GameUIScene& ui = GameUIScene::Get(scene.Target);
+		scene.Play();
+		scene.Frame();
+		UICanvasView view;
+		uint32_t hintElement = 0;
+		REQUIRE(ui.FindElement(hint.GetHandle(), GameUIScene::c_DefaultScreen, view, hintElement));
+		CHECK(ui.IsElementVisible(view, hintElement));
+
+		field.GetComponent<UIInputFieldComponent>().Text = "abcdef";
+		field.MarkModified<UIInputFieldComponent>();
+		scene.Frame();
+		REQUIRE(ui.FindElement(hint.GetHandle(), GameUIScene::c_DefaultScreen, view, hintElement));
+		CHECK_FALSE(ui.IsElementVisible(view, hintElement));
+
+		// The text starts at x = 108 (the field's left edge inset by 8): a click left of it puts the caret first, one far right last.
+		scene.Click({ 101.0f, 120.0f });
+		Type(scene, "<");
+		scene.Click({ 395.0f, 120.0f });
+		Type(scene, ">");
+		CHECK(FieldText(field) == "<abcdef>");
+		const std::optional<uint32_t> middle = ui.FindInputFieldCaret(field.GetHandle(), GameUIScene::c_DefaultScreen, { 108.0f + 3.0f * 9.0f, 120.0f });
+		REQUIRE(middle.has_value());
+		CHECK(*middle > 0);
+		CHECK(*middle < 8);
+
+		// The caret's quad comes and goes every 0.53 s of unscaled time (also at time scale 0).
+		scene.Target.SetTimeScale(0.0f);
+		auto caretShown = [&]()
+		{
+			uint32_t textElement = 0;
+			REQUIRE(ui.FindElement(scene.Target.FindEntityByName("Name Text").GetHandle(), GameUIScene::c_DefaultScreen, view, textElement));
+			// The caret is the one solid quad narrower than 3 units (1.2 at 20 units per em).
+			const std::vector<RenderData::UIQuad>& quads = ui.EnsureQuads(view);
+			return std::count_if(quads.begin(), quads.end(), [](const RenderData::UIQuad& quad)
+				{ return (quad.Flags & RenderData::c_UIQuadKindMask) == RenderData::c_UIQuadImage && quad.Rect.z - quad.Rect.x < 3.0f; }) == 1;
+		};
+		CHECK(caretShown());
+		scene.Frame(0.6f);
+		CHECK_FALSE(caretShown());
+		scene.Frame(0.5f);
+		CHECK(caretShown());
+		std::string error;
+		CHECK_MESSAGE(ui.Validate(&error), error);
 	}
 }

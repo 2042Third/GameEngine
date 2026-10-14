@@ -788,7 +788,7 @@ which means the module is not in the build or its system does not run in this mo
 | `ISkinningPoses`: each animator's pose (model-space joint matrices with a version), and which animators renderers drew | `AnimationSystem`; the editor's pose preview for edited scenes | `RenderScene` (palettes of skinned meshes), `SceneRenderer` (reports the animators of what it drew) |
 | `IAnimatorControl`: play, cross-fade, parameters, speed, state queries, joint transforms | `AnimationSystem` | script host (`Animator`), tools and tests |
 | `IAnimationEventSource`: listeners of the events controller states fire | `AnimationSystem` | `ScriptSystem` (`OnAnimationEvent`), tools and tests |
-| `IUIEvents`: listeners of the game UI's widget events (clicks, value changes, focus changes) | `GameUISystem` | `ScriptSystem` (`OnUIClick`, `OnUIValueChanged`, `OnUIFocusChanged`), tools and tests |
+| `IUIEvents`: listeners of the game UI's widget events (clicks, value changes, focus changes, input field submits) | `GameUISystem` | `ScriptSystem` (`OnUIClick`, `OnUIValueChanged`, `OnUIFocusChanged`, `OnUISubmit`), tools and tests |
 | `IUIControl`: the game UI's elements (texts, images, colors, interactability, values), the focus, the pointer and the UI actions | `GameUISystem` | script host (`UIElement`, `UI`) |
 
 What outlives scenes is an engine service (`Core/EngineServices.h`): a module registers it in its registration function
@@ -1873,6 +1873,7 @@ units with +Y down and (0, 0) at the top left; colors are display (sRGB) colors.
 | `UISelectable` | The interaction states shared by every widget (normal, hover, pressed, focused, disabled; color tints or image swaps over a fade time) and keyboard and gamepad navigation (automatic, explicit neighbours, none) |
 | `UIButton`, `UIToggle`, `UISlider` | Widgets: a click, an on/off switch with a checkmark and exclusive groups, a value with a fill and a handle; each may name an event target besides its own entity |
 | `UILayout` | Places the children: horizontal, vertical or grid, with padding, spacing, the alignment of the block and stretching |
+| `UIInputField` | A line the player types into while it has the focus: its text, the element that shows it, a placeholder, a character limit, the caret and selection colors, an event target |
 | `UIMask` | Clips the element's descendants to its rect inset by padding, with an optional soft edge; masks nest |
 
 An entity is a UI element when it has a `UIRect` and a root canvas (a canvas without a canvas among its ancestors) is the
@@ -1979,6 +1980,17 @@ unscaled time (`Scene::GetUnscaledDeltaTime`, which time scale 0 does not stop),
 keep a record, so an idle frame does no work. Events (`IUIEvents`: click, value changed, focus changed) are dispatched
 at the end of the update in input order. Typed text arrives per input frame as UTF-8 (`Input::GetTypedText`, from the
 window's character events and `Input::SimulateText`, at most 1,024 bytes).
+
+**Input fields.** The focused `UIInputField` is edited: the system captures the keyboard (`Input::SetKeyboardCapture`:
+the game's key queries and `GetTypedText` see nothing, the UI reads `GetKeyState` and `GetUncapturedTypedText`), puts
+typed characters at the caret (within the character limit; control characters dropped), repeats Backspace, Delete, the
+arrows, Home and End like the UI actions, writes the text with `registry.patch` and raises `Submit` on Enter; Escape (or
+a gamepad's Cancel) stops editing, keeping the keyboard captured to the end of that frame so the game never sees the
+key. The field's text element shows the field's text (`GameUIScene::GetShownText`: one line, never wrapped), and the
+editing state (`SetInputFieldState`: caret, selection, blink) adds a selection quad behind the glyphs and a caret quad
+after them, the line scrolled to keep the caret inside the element (`MeasureCaretStops` gives the pen before each
+character, as the shaper places it); the field's placeholder shows while the text is empty, like a toggle's checkmark
+while it is on.
 
 ## Scripting
 

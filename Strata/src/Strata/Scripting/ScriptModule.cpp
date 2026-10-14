@@ -847,6 +847,7 @@ namespace Strata
 			case ScriptCallback::OnUIClick:
 			case ScriptCallback::OnUIValueChanged:
 			case ScriptCallback::OnUIFocusChanged:
+			case ScriptCallback::OnUISubmit:
 				return ScriptCallResult::Rejected; // They take the widget (InvokeUIEventCallback)
 		}
 		return ScriptCallResult::Rejected;
@@ -876,6 +877,7 @@ namespace Strata
 			case ScriptCallback::OnUIClick:
 			case ScriptCallback::OnUIValueChanged:
 			case ScriptCallback::OnUIFocusChanged:
+			case ScriptCallback::OnUISubmit:
 				return ScriptCallResult::Rejected; // Not contact callbacks (InvokeCallback, InvokeAnimationEventCallback, InvokeUIEventCallback)
 		}
 		return function ? Call(site, [&]() { return function(instance, &contact); }) : ScriptCallResult::Unavailable;
@@ -915,6 +917,11 @@ namespace Strata
 			{
 				const auto function = functions->OnUIFocusChanged;
 				return function ? Call(site, [&]() { return function(instance, widget, focused); }) : ScriptCallResult::Unavailable;
+			}
+			case ScriptCallback::OnUISubmit:
+			{
+				const auto function = functions->OnUISubmit;
+				return function ? Call(site, [&]() { return function(instance, widget); }) : ScriptCallResult::Unavailable;
 			}
 			case ScriptCallback::OnCreate:
 			case ScriptCallback::OnUpdate:
@@ -1005,6 +1012,8 @@ namespace Strata
 				functions.OnUIValueChanged = descriptor->OnUIValueChanged;
 			if (ST_SCRIPT_HAS_MEMBER(StrataScriptClassDesc, descriptor, OnUIFocusChanged))
 				functions.OnUIFocusChanged = descriptor->OnUIFocusChanged;
+			if (ST_SCRIPT_HAS_MEMBER(StrataScriptClassDesc, descriptor, OnUISubmit))
+				functions.OnUISubmit = descriptor->OnUISubmit;
 			if (!functions.Create || !functions.Destroy || !functions.GetField || !functions.SetField)
 			{
 				outError = fmt::format("class '{}' lacks its lifetime or field functions", info.Name);
@@ -1025,7 +1034,8 @@ namespace Strata
 				{ ScriptCallback::OnAnimationEvent, functions.OnAnimationEvent != nullptr },
 				{ ScriptCallback::OnUIClick, functions.OnUIClick != nullptr },
 				{ ScriptCallback::OnUIValueChanged, functions.OnUIValueChanged != nullptr },
-				{ ScriptCallback::OnUIFocusChanged, functions.OnUIFocusChanged != nullptr }
+				{ ScriptCallback::OnUIFocusChanged, functions.OnUIFocusChanged != nullptr },
+				{ ScriptCallback::OnUISubmit, functions.OnUISubmit != nullptr }
 			};
 			for (const auto& [callback, implemented] : callbacks)
 			{

@@ -394,8 +394,12 @@ namespace Strata
 			const float fontSize = std::clamp(text->FontSize, 1.0f, 1024.0f);
 			const UIRectComponent* rect = m_Registry->try_get<UIRectComponent>(entity);
 			const bool fitsWidth = rect && FitsAxis(rect->FitContent, 0);
-			const float wrapWidth = axis == 1 && text->Wrap && !fitsWidth ? boxes[element].Size.x / fontSize : 0.0f;
-			const ShapedText& shaped = ShapeElementText(layout, element, *text, GetMeasureOptions(*text, wrapWidth));
+			const bool fieldText = canvas.Elements[element].FieldTextOf != c_NoElement;
+			const float wrapWidth = axis == 1 && text->Wrap && !fitsWidth && !fieldText ? boxes[element].Size.x / fontSize : 0.0f;
+			TextShapeOptions options = GetMeasureOptions(*text, wrapWidth);
+			if (fieldText)
+				options.Overflow = TextOverflowMode::Overflow; // As GetElementShapeOptions shapes a field's line
+			const ShapedText& shaped = ShapeElementText(layout, element, *text, GetShownText(canvas, element, *text), options);
 			return (axis == 0 ? shaped.Width : shaped.Height) * fontSize;
 		}
 		const UIRectComponent* rect = m_Registry->try_get<UIRectComponent>(entity);

@@ -370,7 +370,8 @@ namespace Strata
 	{
 		Click = 0,    // A button was clicked (released over it after a press on it, or Submit while it has the focus)
 		ValueChanged, // A slider's value or a toggle's state changed through input (not through code)
-		FocusChanged  // A selectable gained or lost the focus
+		FocusChanged, // A selectable gained or lost the focus
+		Submit        // An input field's text was submitted (Enter, or a gamepad's Submit, while it was being edited)
 	};
 
 	// An event of a widget of the game UI (the GameUI module's system).
@@ -403,7 +404,7 @@ namespace Strata
 
 	// The game UI's elements for gameplay code (the script host), offered by the GameUI module's system while the scene plays.
 	// Element functions fail (false, with the reason in outError when given) for an invalid entity or one without the
-	// component they need: text needs a UIText, the image a UIImage, the color either (the image's tint first), interactable
+	// component they need: text needs a UIInputField (its text, cut to its character limit) or a UIText, the image a UIImage, the color either (the image's tint first), interactable
 	// a UISelectable, the value a UISlider (its value, clamped and snapped like input) or a UIToggle (0 or 1; switching one on
 	// switches the others of its group off). Values set here raise no UI events: events report the player's input.
 	class IUIControl

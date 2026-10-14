@@ -410,6 +410,7 @@ namespace Strata
 			case UIEventType::Click: callback = ScriptCallback::OnUIClick; break;
 			case UIEventType::ValueChanged: callback = ScriptCallback::OnUIValueChanged; break;
 			case UIEventType::FocusChanged: callback = ScriptCallback::OnUIFocusChanged; break;
+			case UIEventType::Submit: callback = ScriptCallback::OnUISubmit; break;
 		}
 
 		// The widget's scripts, then its target's: a copy of each list, since the callbacks may add or remove scripts

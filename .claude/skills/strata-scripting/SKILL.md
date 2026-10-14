@@ -93,6 +93,7 @@ ST_SCRIPT_CLASS(Turret)
 | `OnUIClick(widget)` | The player clicked a UI button on the entity, or one whose `EventTarget` is the entity (before `OnUpdate`). |
 | `OnUIValueChanged(widget, value)` | The player changed a slider (its value) or a toggle (1 on, 0 off) on the entity or targeting it. |
 | `OnUIFocusChanged(widget, focused)` | A selectable on the entity or targeting it gained or lost the keyboard/gamepad focus. |
+| `OnUISubmit(widget)` | The player pressed Enter (or gamepad A) in a UI input field on the entity or targeting it; read `widget.GetUI().GetText()`. |
 
 - Inactive entities (or children of inactive entities) get no update callbacks.
 - Entities destroyed during a frame stay valid and keep updating until the frame ends.
@@ -304,11 +305,18 @@ void OnUIValueChanged(Entity widget, float value) override // Sliders and toggle
 	if (widget.GetName() == "Volume")
 		Audio::SetMasterVolume(value / 10.0f);
 }
+
+void OnUISubmit(Entity widget) override             // Enter in an input field (the player's name, a chat line)
+{
+	PlayerName = widget.GetUI().GetText();
+	UI::ClearFocus();                                // Stop editing: the keyboard is the game's again
+}
 ```
 
-- `UIElement`: `GetText/SetText` (UIText), `GetImage/SetImage` (UIImage texture), `GetColor/SetColor` (image tint, else
-  text color), `IsInteractable/SetInteractable`, `GetValue/SetValue` (slider value, toggle 0/1; switching a toggle on
-  switches the others of its group off), `Focus`, `IsFocused`, `GetEntity`. Values set by scripts raise no callbacks.
+- `UIElement`: `GetText/SetText` (an input field's text, cut to its character limit, else the UIText's),
+  `GetImage/SetImage` (UIImage texture), `GetColor/SetColor` (image tint, else text color),
+  `IsInteractable/SetInteractable`, `GetValue/SetValue` (slider value, toggle 0/1; switching a toggle on switches the
+  others of its group off), `Focus`, `IsFocused`, `GetEntity`. Values set by scripts raise no callbacks.
 - `UI`: `GetFocused`, `ClearFocus`, `IsPointerOverUI` (ignore gameplay mouse aiming while it is true),
   `IsActionPressed/IsActionDown(UIAction::Submit/Cancel/Up/Down/Left/Right)`.
 - The UI takes the clicks and scrolling that start over it: `Input`'s mouse buttons report nothing for them. Keyboard and
