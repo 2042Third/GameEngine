@@ -6,6 +6,7 @@
 #include "Network/FakeEditorProcess.h"
 #include "Perf/StressProject.h"
 #include "Physics/PhysicsTestUtils.h"
+#include "Reflection/ComponentSchema.h"
 #include "Renderer/GPUTestUtils.h"
 #include "Runtime/PerfLogReader.h"
 #include "Strata/Asset/AssetImporter.h"
@@ -15,6 +16,7 @@
 #include "Strata/Core/FileLock.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JobSystem.h"
+#include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Process.h"
@@ -208,6 +210,13 @@ static std::string CheckOwnModuleCopy(const Strata::ScriptEngine& engine, const 
 
 static int RunHelperMode(std::string_view mode, int argc, char** argv)
 {
+	if (mode == "write-component-schema" && argc > 2)
+	{
+		// Writes the registry's component metadata (Tests::DescribeComponentSchema) to the file named: how
+		// StrataTests/Architecture/ComponentSchema.json was made.
+		const std::string text = Strata::JsonUtils::Dump(Strata::Tests::DescribeComponentSchema(), 1, '\t') + "\n";
+		return Strata::FileSystem::WriteText(Strata::FileSystem::FromUTF8(argv[2]), text) ? 0 : 1;
+	}
 	if (mode == "record-arguments" && argc > 2)
 	{
 		// Stands in for a program the editor starts (an external code editor): writes its other arguments, one per line, to

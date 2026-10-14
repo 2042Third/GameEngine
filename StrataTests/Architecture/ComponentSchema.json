@@ -1,0 +1,1863 @@
+{
+	"Components": [
+		{
+			"Category": "Core",
+			"Description": "",
+			"DisplayName": "ID",
+			"Extra": false,
+			"Flags": 11,
+			"Name": "ID",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "ID",
+					"EnumValues": [],
+					"Flags": 1,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ID",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Entity"
+				}
+			]
+		},
+		{
+			"Category": "Core",
+			"Description": "",
+			"DisplayName": "Name",
+			"Extra": false,
+			"Flags": 2,
+			"Name": "Name",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Name",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Name",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "String"
+				}
+			]
+		},
+		{
+			"Category": "Core",
+			"Description": "Position, rotation and scale relative to the parent entity",
+			"DisplayName": "Transform",
+			"Extra": false,
+			"Flags": 2,
+			"Name": "Transform",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Translation",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Translation",
+					"Speed": 0.05000000074505806,
+					"Tooltip": "",
+					"Type": "Vec3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Rotation",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Rotation",
+					"Speed": 0.0,
+					"Tooltip": "Edited as Euler angles in degrees",
+					"Type": "Quat"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Scale",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Scale",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Vec3"
+				}
+			]
+		},
+		{
+			"Category": "Core",
+			"Description": "",
+			"DisplayName": "Relationship",
+			"Extra": false,
+			"Flags": 11,
+			"Name": "Relationship",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Parent",
+					"EnumValues": [],
+					"Flags": 1,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Parent",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Entity"
+				}
+			]
+		},
+		{
+			"Category": "Core",
+			"Description": "Gameplay label used to find groups of entities",
+			"DisplayName": "Tag",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "Tag",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Tag",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Tag",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "String"
+				}
+			]
+		},
+		{
+			"Category": "Core",
+			"Description": "Deactivates the entity and its descendants",
+			"DisplayName": "Inactive",
+			"Extra": false,
+			"Flags": 1,
+			"Name": "Inactive",
+			"Properties": []
+		},
+		{
+			"Category": "Core",
+			"Description": "Links this entity to the prefab it was created from",
+			"DisplayName": "Prefab Instance",
+			"Extra": false,
+			"Flags": 16,
+			"Name": "PrefabInstance",
+			"Properties": [
+				{
+					"AssetFilter": 2,
+					"DisplayName": "Prefab",
+					"EnumValues": [],
+					"Flags": 1,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Prefab",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Prefab Entity ID",
+					"EnumValues": [],
+					"Flags": 1,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "PrefabEntityID",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "String"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Prefab Version",
+					"EnumValues": [],
+					"Flags": 3,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "PrefabVersion",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "String"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Synced Hash",
+					"EnumValues": [],
+					"Flags": 3,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "SyncedHash",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "String"
+				}
+			]
+		},
+		{
+			"Category": "Rendering",
+			"Description": "",
+			"DisplayName": "Camera",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "Camera",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Projection",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "Perspective",
+							"Value": 0
+						},
+						{
+							"DisplayName": "",
+							"Name": "Orthographic",
+							"Value": 1
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Projection",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Perspective FOV",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 179.0,
+					"Min": 1.0,
+					"Name": "PerspectiveFOV",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "Vertical field of view in degrees",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Perspective Near",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0010000000474974513,
+					"Name": "PerspectiveNear",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Perspective Far",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.009999999776482582,
+					"Name": "PerspectiveFar",
+					"Speed": 1.0,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Orthographic Size",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0010000000474974513,
+					"Name": "OrthographicSize",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "Vertical extent in world units",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Orthographic Near",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": -1000000.0,
+					"Name": "OrthographicNear",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Orthographic Far",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": -1000000.0,
+					"Name": "OrthographicFar",
+					"Speed": 1.0,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Primary",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Primary",
+					"Speed": 0.0,
+					"Tooltip": "The first active primary camera renders the game view",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Clear Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ClearColor",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color4"
+				}
+			]
+		},
+		{
+			"Category": "Rendering",
+			"Description": "",
+			"DisplayName": "Mesh Renderer",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "MeshRenderer",
+			"Properties": [
+				{
+					"AssetFilter": 4,
+					"DisplayName": "Mesh",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Mesh",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 5,
+					"DisplayName": "Material",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Material",
+					"Speed": 0.0,
+					"Tooltip": "Overrides every submesh material when set",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Cast Shadows",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "CastShadows",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				}
+			]
+		},
+		{
+			"Category": "Lighting",
+			"Description": "Sun-like light shining along the entity's forward (-Z) direction",
+			"DisplayName": "Directional Light",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "DirectionalLight",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Color",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Intensity",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "Intensity",
+					"Speed": 0.05000000074505806,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Cast Shadows",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "CastShadows",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Shadow Distance",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10000.0,
+					"Min": 1.0,
+					"Name": "ShadowDistance",
+					"Speed": 1.0,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Shadow Softness",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10.0,
+					"Min": 0.0,
+					"Name": "ShadowSoftness",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Shadow Bias",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10.0,
+					"Min": 0.0,
+					"Name": "ShadowBias",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Shadow Normal Bias",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10.0,
+					"Min": 0.0,
+					"Name": "ShadowNormalBias",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				}
+			]
+		},
+		{
+			"Category": "Lighting",
+			"Description": "Light shining in every direction from the entity's position (casts no shadows)",
+			"DisplayName": "Point Light",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "PointLight",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Color",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Intensity",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "Intensity",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Range",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.009999999776482582,
+					"Name": "Range",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "Light fades to zero at this distance",
+					"Type": "Float"
+				}
+			]
+		},
+		{
+			"Category": "Lighting",
+			"Description": "Cone light shining along the entity's forward (-Z) direction (casts no shadows)",
+			"DisplayName": "Spot Light",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "SpotLight",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Color",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Intensity",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "Intensity",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Range",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.009999999776482582,
+					"Name": "Range",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Inner Cone Angle",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 89.0,
+					"Min": 0.0,
+					"Name": "InnerConeAngle",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "Half angle in degrees",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Outer Cone Angle",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 89.9000015258789,
+					"Min": 0.10000000149011612,
+					"Name": "OuterConeAngle",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "Half angle in degrees",
+					"Type": "Float"
+				}
+			]
+		},
+		{
+			"Category": "Lighting",
+			"Description": "Image-based lighting and sky background from an HDR environment map or a procedural sky",
+			"DisplayName": "Sky Light",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "SkyLight",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Source",
+					"EnumValues": [
+						{
+							"DisplayName": "Environment Map",
+							"Name": "EnvironmentMap",
+							"Value": 0
+						},
+						{
+							"DisplayName": "",
+							"Name": "Procedural",
+							"Value": 1
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Source",
+					"Speed": 0.0,
+					"Tooltip": "EnvironmentMap: an HDR texture; Procedural: a sky computed from the colors below and the directional light",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 6,
+					"DisplayName": "Environment Map",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "EnvironmentMap",
+					"Speed": 0.0,
+					"Tooltip": "Equirectangular HDR texture",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Intensity",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "Intensity",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Rotation",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 360.0,
+					"Min": -360.0,
+					"Name": "Rotation",
+					"Speed": 0.5,
+					"Tooltip": "Degrees around +Y (environment maps only)",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Show Background",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ShowBackground",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Background Blur",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "BackgroundBlur",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Ambient Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "AmbientColor",
+					"Speed": 0.0,
+					"Tooltip": "Ambient light while there is no environment (no map set)",
+					"Type": "Color3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Zenith Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ZenithColor",
+					"Speed": 0.0,
+					"Tooltip": "Procedural sky: color straight up (linear radiance)",
+					"Type": "Color3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Horizon Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "HorizonColor",
+					"Speed": 0.0,
+					"Tooltip": "Procedural sky: color at the horizon (linear radiance)",
+					"Type": "Color3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Ground Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "GroundColor",
+					"Speed": 0.0,
+					"Tooltip": "Procedural sky: color below the horizon (linear radiance)",
+					"Type": "Color3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Sun Size",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 20.0,
+					"Min": 0.0,
+					"Name": "SunSize",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Procedural sky: angular diameter of the sun's disk in degrees (0 hides it)",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Sun Intensity",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 60000.0,
+					"Min": 0.0,
+					"Name": "SunIntensity",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "Procedural sky: radiance of the sun's disk, times the directional light's color",
+					"Type": "Float"
+				}
+			]
+		},
+		{
+			"Category": "Rendering",
+			"Description": "Tonemapping, exposure, bloom, ambient occlusion and anti-aliasing settings",
+			"DisplayName": "Post Process",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "PostProcess",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Tonemapper",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "None",
+							"Value": 0
+						},
+						{
+							"DisplayName": "",
+							"Name": "Reinhard",
+							"Value": 1
+						},
+						{
+							"DisplayName": "",
+							"Name": "ACES",
+							"Value": 2
+						},
+						{
+							"DisplayName": "",
+							"Name": "AgX",
+							"Value": 3
+						},
+						{
+							"DisplayName": "Khronos Neutral",
+							"Name": "KhronosNeutral",
+							"Value": 4
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Tonemapper",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Exposure",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 16.0,
+					"Min": -16.0,
+					"Name": "Exposure",
+					"Speed": 0.05000000074505806,
+					"Tooltip": "Exposure compensation in EV",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Auto Exposure",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "AutoExposure",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Auto Exposure Min EV",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 16.0,
+					"Min": -12.0,
+					"Name": "AutoExposureMinEV",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "Darkest average scene luminance (log2) automatic exposure brightens up to",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Auto Exposure Max EV",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 16.0,
+					"Min": -12.0,
+					"Name": "AutoExposureMaxEV",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "Brightest average scene luminance (log2) automatic exposure darkens down to",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Auto Exposure Speed",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 20.0,
+					"Min": 0.0,
+					"Name": "AutoExposureSpeed",
+					"Speed": 0.05000000074505806,
+					"Tooltip": "Adaptation rate per second; 0 = instant",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Bloom",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Bloom",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Bloom Intensity",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "BloomIntensity",
+					"Speed": 0.0,
+					"Tooltip": "Fraction of the light scattered into the glow",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Bloom Threshold",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 20.0,
+					"Min": 0.0,
+					"Name": "BloomThreshold",
+					"Speed": 0.05000000074505806,
+					"Tooltip": "Only light brighter than this (after exposure) blooms; 0 = all light, physically based",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Ambient Occlusion",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "AmbientOcclusion",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Ambient Occlusion Radius",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10.0,
+					"Min": 0.009999999776482582,
+					"Name": "AmbientOcclusionRadius",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "World units",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Ambient Occlusion Intensity",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 4.0,
+					"Min": 0.0,
+					"Name": "AmbientOcclusionIntensity",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Anti Aliasing",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "AntiAliasing",
+					"Speed": 0.0,
+					"Tooltip": "Fast approximate anti-aliasing (FXAA)",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Vignette",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "Vignette",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Saturation",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 2.0,
+					"Min": 0.0,
+					"Name": "Saturation",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Contrast",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 2.0,
+					"Min": 0.5,
+					"Name": "Contrast",
+					"Speed": 0.0,
+					"Tooltip": "Around middle gray; 1 = unchanged",
+					"Type": "Float"
+				}
+			]
+		},
+		{
+			"Category": "UI",
+			"Description": "Text drawn in screen space (HUD) or in the world",
+			"DisplayName": "Text",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "Text",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Text",
+					"EnumValues": [],
+					"Flags": 8,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Text",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "String"
+				},
+				{
+					"AssetFilter": 8,
+					"DisplayName": "Font",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Font",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Color",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Color",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Color4"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Font Size",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1024.0,
+					"Min": 1.0,
+					"Name": "FontSize",
+					"Speed": 0.5,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Screen Space",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ScreenSpace",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Screen Anchor",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "ScreenAnchor",
+					"Speed": 0.004999999888241291,
+					"Tooltip": "Normalized viewport position; (0,0) is the top-left corner",
+					"Type": "Vec2"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Screen Offset",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ScreenOffset",
+					"Speed": 0.0,
+					"Tooltip": "Pixel offset from the anchor (+Y down)",
+					"Type": "Vec2"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Alignment",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "Left",
+							"Value": 0
+						},
+						{
+							"DisplayName": "",
+							"Name": "Center",
+							"Value": 1
+						},
+						{
+							"DisplayName": "",
+							"Name": "Right",
+							"Value": 2
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Alignment",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Enum"
+				}
+			]
+		},
+		{
+			"Category": "Physics",
+			"Description": "",
+			"DisplayName": "Rigid Body",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "RigidBody",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Type",
+					"EnumValues": [
+						{
+							"DisplayName": "",
+							"Name": "Static",
+							"Value": 0
+						},
+						{
+							"DisplayName": "",
+							"Name": "Dynamic",
+							"Value": 1
+						},
+						{
+							"DisplayName": "",
+							"Name": "Kinematic",
+							"Value": 2
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Type",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Enum"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Mass",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0010000000474974513,
+					"Name": "Mass",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Linear Damping",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 100.0,
+					"Min": 0.0,
+					"Name": "LinearDamping",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Angular Damping",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 100.0,
+					"Min": 0.0,
+					"Name": "AngularDamping",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Gravity Scale",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 100.0,
+					"Min": -100.0,
+					"Name": "GravityScale",
+					"Speed": 0.05000000074505806,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Friction",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 10.0,
+					"Min": 0.0,
+					"Name": "Friction",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Restitution",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 1.0,
+					"Min": 0.0,
+					"Name": "Restitution",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Is Trigger",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "IsTrigger",
+					"Speed": 0.0,
+					"Tooltip": "Reports overlaps without colliding",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Continuous Collision",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ContinuousCollision",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Lock Rotation X",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "LockRotationX",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Lock Rotation Y",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "LockRotationY",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Lock Rotation Z",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "LockRotationZ",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Layer",
+					"EnumValues": [],
+					"Flags": 64,
+					"Max": 31.0,
+					"Min": 0.0,
+					"Name": "Layer",
+					"Speed": 0.0,
+					"Tooltip": "Collision layer: it collides with the layers the scene's layer matrix lets it",
+					"Type": "UInt"
+				}
+			]
+		},
+		{
+			"Category": "Physics",
+			"Description": "",
+			"DisplayName": "Box Collider",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "BoxCollider",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Half Extents",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "HalfExtents",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Vec3"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Offset",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Offset",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Vec3"
+				}
+			]
+		},
+		{
+			"Category": "Physics",
+			"Description": "",
+			"DisplayName": "Sphere Collider",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "SphereCollider",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Radius",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0010000000474974513,
+					"Name": "Radius",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Offset",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Offset",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Vec3"
+				}
+			]
+		},
+		{
+			"Category": "Physics",
+			"Description": "",
+			"DisplayName": "Capsule Collider",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "CapsuleCollider",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Radius",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0010000000474974513,
+					"Name": "Radius",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Half Height",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "HalfHeight",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Offset",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Offset",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Vec3"
+				}
+			]
+		},
+		{
+			"Category": "Physics",
+			"Description": "",
+			"DisplayName": "Mesh Collider",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "MeshCollider",
+			"Properties": [
+				{
+					"AssetFilter": 4,
+					"DisplayName": "Mesh",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Mesh",
+					"Speed": 0.0,
+					"Tooltip": "Uses the Mesh Renderer's mesh when unset",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Convex",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Convex",
+					"Speed": 0.0,
+					"Tooltip": "Non-convex meshes are only supported on static bodies",
+					"Type": "Bool"
+				}
+			]
+		},
+		{
+			"Category": "Physics",
+			"Description": "An upright capsule that scripts walk, jump and teleport: it slides along walls, walks up steps and walkable slopes and pushes dynamic bodies; its bottom is the entity's origin",
+			"DisplayName": "Character Controller",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "CharacterController",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Height",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000.0,
+					"Min": 0.009999999776482582,
+					"Name": "Height",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Total height of the capsule in world units; its bottom is the entity's origin",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Radius",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 500.0,
+					"Min": 0.004999999888241291,
+					"Name": "Radius",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "World units",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Step Height",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 100.0,
+					"Min": 0.0,
+					"Name": "StepHeight",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Highest step it walks up, and how far it follows the ground down (world units)",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Max Slope Degrees",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 89.0,
+					"Min": 0.0,
+					"Name": "MaxSlopeDegrees",
+					"Speed": 0.5,
+					"Tooltip": "Steepest slope it walks up, in degrees from the horizontal",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Layer",
+					"EnumValues": [],
+					"Flags": 64,
+					"Max": 31.0,
+					"Min": 0.0,
+					"Name": "Layer",
+					"Speed": 0.0,
+					"Tooltip": "Collision layer: it collides with the layers the scene's layer matrix lets it",
+					"Type": "UInt"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Gravity Scale",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 100.0,
+					"Min": -100.0,
+					"Name": "GravityScale",
+					"Speed": 0.05000000074505806,
+					"Tooltip": "Times the scene's gravity",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Push Strength",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "PushStrength",
+					"Speed": 1.0,
+					"Tooltip": "Largest force with which it pushes dynamic bodies, in newtons",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Enabled",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Enabled",
+					"Speed": 0.0,
+					"Tooltip": "A disabled controller neither moves nor collides",
+					"Type": "Bool"
+				}
+			]
+		},
+		{
+			"Category": "Audio",
+			"Description": "",
+			"DisplayName": "Audio Source",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "AudioSource",
+			"Properties": [
+				{
+					"AssetFilter": 7,
+					"DisplayName": "Clip",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Clip",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Volume",
+					"EnumValues": [],
+					"Flags": 16,
+					"Max": 4.0,
+					"Min": 0.0,
+					"Name": "Volume",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Pitch",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 8.0,
+					"Min": 0.009999999776482582,
+					"Name": "Pitch",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Loop",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Loop",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Play On Start",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "PlayOnStart",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Spatial",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Spatial",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Min Distance",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "MinDistance",
+					"Speed": 0.10000000149011612,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Max Distance",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 1000000.0,
+					"Min": 0.0,
+					"Name": "MaxDistance",
+					"Speed": 0.5,
+					"Tooltip": "",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Rolloff",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 100.0,
+					"Min": 0.0,
+					"Name": "Rolloff",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "",
+					"Type": "Float"
+				}
+			]
+		},
+		{
+			"Category": "Audio",
+			"Description": "",
+			"DisplayName": "Audio Listener",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "AudioListener",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Active",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Active",
+					"Speed": 0.0,
+					"Tooltip": "",
+					"Type": "Bool"
+				}
+			]
+		},
+		{
+			"Category": "Animation",
+			"Description": "Poses the entity's skinned mesh with an animator's joints",
+			"DisplayName": "Skin",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "Skin",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Animator",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Animator",
+					"Speed": 0.0,
+					"Tooltip": "The entity with the Animator whose pose moves this mesh",
+					"Type": "Entity"
+				}
+			]
+		},
+		{
+			"Category": "Animation",
+			"Description": "Plays a skeleton's animations: an animation controller's states, or one clip",
+			"DisplayName": "Animator",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "Animator",
+			"Properties": [
+				{
+					"AssetFilter": 9,
+					"DisplayName": "Skeleton",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Skeleton",
+					"Speed": 0.0,
+					"Tooltip": "The joints the animations move (a model's Skeleton)",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 11,
+					"DisplayName": "Controller",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Controller",
+					"Speed": 0.0,
+					"Tooltip": "States, transitions and parameters; without one the animator plays Clip",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 10,
+					"DisplayName": "Clip",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Clip",
+					"Speed": 0.0,
+					"Tooltip": "The clip played without a controller",
+					"Type": "Asset"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Speed",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 100.0,
+					"Min": -100.0,
+					"Name": "Speed",
+					"Speed": 0.009999999776482582,
+					"Tooltip": "Playback rate; negative plays backwards",
+					"Type": "Float"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Loop",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Loop",
+					"Speed": 0.0,
+					"Tooltip": "Whether the clip (without a controller) repeats",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Play On Start",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "PlayOnStart",
+					"Speed": 0.0,
+					"Tooltip": "Starts playing when the scene starts",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Apply Root Motion",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "ApplyRootMotion",
+					"Speed": 0.0,
+					"Tooltip": "Moves the entity by the root joint's horizontal motion and turn",
+					"Type": "Bool"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Culling Mode",
+					"EnumValues": [
+						{
+							"DisplayName": "Always Animate",
+							"Name": "AlwaysAnimate",
+							"Value": 0
+						},
+						{
+							"DisplayName": "When Visible",
+							"Name": "WhenVisible",
+							"Value": 1
+						}
+					],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "CullingMode",
+					"Speed": 0.0,
+					"Tooltip": "When Visible poses the skeleton only while a renderer draws a mesh it skins or its shadow; one that skins no mesh but moves attached parts poses always",
+					"Type": "Enum"
+				}
+			]
+		},
+		{
+			"Category": "Animation",
+			"Description": "Places the entity at a joint of an animator's pose (a sword in a hand)",
+			"DisplayName": "Attach To Joint",
+			"Extra": false,
+			"Flags": 0,
+			"Name": "AttachToJoint",
+			"Properties": [
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Animator",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Animator",
+					"Speed": 0.0,
+					"Tooltip": "The entity with the Animator",
+					"Type": "Entity"
+				},
+				{
+					"AssetFilter": 0,
+					"DisplayName": "Joint",
+					"EnumValues": [],
+					"Flags": 0,
+					"Max": 0.0,
+					"Min": 0.0,
+					"Name": "Joint",
+					"Speed": 0.0,
+					"Tooltip": "The joint's name in the animator's skeleton",
+					"Type": "String"
+				}
+			]
+		},
+		{
+			"Category": "Scripting",
+			"Description": "C++ behaviours from the project's script module",
+			"DisplayName": "Script",
+			"Extra": true,
+			"Flags": 0,
+			"Name": "Script",
+			"Properties": []
+		}
+	]
+}
