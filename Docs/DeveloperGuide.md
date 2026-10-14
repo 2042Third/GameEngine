@@ -272,8 +272,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   in all, and fails only when every attempt is over budget; a metric within its budget once is decided, because noise
   only adds to a measurement (the machine's other work, memory the driver keeps). Every attempt is printed, and the
   check records each metric in `build/<preset>/PerfResults/<config>.json`: one entry per metric with its value (the
-  passing attempt's, else the smallest), unit, budget, target and the values of all its attempts, and nothing else
-  run-specific, so two runs compare with a diff (CTest clears the file first); acceptance limits of workstreams are
+  passing attempt's, else the smallest), unit, budget (`"Provisional": true` instead for a provisional metric), target
+  and the values of all its attempts, and nothing else run-specific, so two runs compare with a diff (CTest clears the
+  file first); acceptance limits of workstreams are
   budgets too (the budget is the limit when it lies below 1.5 times the measurement). **Statistics:** check
   medians of enough samples (a measurement the machine slowed down that much is what confirmation is for), maxima only
   for metrics that are maxima by nature (peak memory, the worst frame of a sweep), and give the reason for each metric's
