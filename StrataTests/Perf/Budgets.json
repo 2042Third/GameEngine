@@ -134,5 +134,8 @@
 	"PerfGPU.Streaming.Mips.MaxFrameRatio": { "Measured": 0.7936, "Budget": 1.19, "Unit": "ratio" },
 	"Perf.Animation.Evaluate1000": { "Measured": 0.3684, "Budget": 0.5526, "Unit": "ms" },
 	"Perf.Animation.CulledAnimators10k": { "Measured": 0.1388, "Budget": 0.2082, "Unit": "ms" },
-	"PerfGPU.Renderer.Skinned1000": { "Measured": 0.6378, "Budget": 0.9567, "Unit": "ms" }
+	"PerfGPU.Renderer.Skinned1000": { "Measured": 0.6378, "Budget": 0.9567, "Unit": "ms" },
+	"Perf.GameUI.Layout10k": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.GameUI.Render10k": { "Unit": "ms", "Provisional": true, "Target": 1.0 },
+	"PerfGPU.GameUI.RenderIdle10k": { "Unit": "ms", "Provisional": true }
 }
