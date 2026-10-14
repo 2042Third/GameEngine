@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -137,6 +138,14 @@ namespace Strata
 		// The ImGui window name of a panel: its icon and title, then "###" and its id, so the window keeps its identity
 		// (docking, settings) whatever its title. Empty for an unknown id.
 		std::string GetWindowName(std::string_view id) const;
+		// The screen rectangle of a panel's window (its tab bar included) as it was last drawn, while it shows: nullopt when
+		// its tab is hidden behind another, the panel is closed or the launcher shows instead.
+		struct WindowRect
+		{
+			ImVec2 Min;
+			ImVec2 Max;
+		};
+		std::optional<WindowRect> GetShownWindowRect(std::string_view id) const;
 
 		// Each frame: OnUpdate of every panel, then (within an ImGui frame) either the windows of the open docked panels or
 		// the launcher (DrawLauncher). The panels that are not drawn get OnHidden.
@@ -174,6 +183,7 @@ namespace Strata
 			bool FocusRequested = false;
 			uint32_t FocusAttempts = 0; // Frames the focus was asked for without the panel's tab showing
 			bool ShowTabRequested = false;
+			std::optional<WindowRect> ShownRect; // GetShownWindowRect
 		};
 		// Frames a focus request is repeated while its docked tab does not show (see OnImGuiRender).
 		static constexpr uint32_t c_MaxFocusAttempts = 4;

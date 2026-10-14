@@ -2140,9 +2140,10 @@ is the `strata-scripting` skill. The layers:
   way: who did it, that Undo restores them, a warning when `force` left references missing, the command's entry for Show
   in Activity; the person's own deletes post nothing, as they asked and saw them go), `EditorLayer` when the
   recovery dialog closes with changes still on offer, and `RecoveryDialog` once per opened project that offers changes
-  discarded on purpose before. `UI::DrawNotifications` draws them as toasts in one window at the
-  bottom right of the work area, above the status bar, kept in front without being focused (`BringWindowToDisplayFront`,
-  `NoFocusOnAppearing`); it returns at once while there are none. A title too long for its line wraps before the close
+  discarded on purpose before. `UI::DrawNotifications` draws them as toasts in one window at the bottom right of the
+  Scene or Game view (the window rectangle of the one that shows, `EditorPanelRegistry::GetShownWindowRect`, so they
+  cover neither the Inspector nor the Hierarchy; without either, of the work area above the status bar), kept in front
+  without being focused (`BringWindowToDisplayFront`, `NoFocusOnAppearing`); it returns at once while there are none. A title too long for its line wraps before the close
   button, and its count then leads the message. Their actions go through the `EditorShell`: Show in Activity, Show Asset
   (`ShowAsset`: the Asset tab inspects it and the Content Browser reveals it), Show Problems (the Problems panel: a
   failed build's diagnostics, a crash's place and stack), Show in Console and Recover.

@@ -628,11 +628,21 @@ namespace Strata
 		}
 		m_RecoveryDialogWasOpen = recoveryOpen;
 		DrawUnsavedChangesModal();
-		// Toasts last, over everything, above the status bar.
+		// Toasts last, over everything: at the bottom right of the Scene or Game view (their dock node), where they cover
+		// neither the Inspector nor the Hierarchy; above the status bar in the window's corner without either view.
 		const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
 		const float statusBar = IsLauncherShown() ? 0.0f : m_StatusBarHeight;
-		UI::DrawNotifications(m_Context.GetNotifications(), *this, EditorPanels::c_Console, EditorPanels::c_Problems, mainViewport->WorkPos,
-			ImVec2(mainViewport->WorkPos.x + mainViewport->WorkSize.x, mainViewport->WorkPos.y + mainViewport->WorkSize.y - statusBar));
+		ImVec2 toastsMin = mainViewport->WorkPos;
+		ImVec2 toastsMax(mainViewport->WorkPos.x + mainViewport->WorkSize.x, mainViewport->WorkPos.y + mainViewport->WorkSize.y - statusBar);
+		std::optional<EditorPanelRegistry::WindowRect> view = m_Panels.GetShownWindowRect(EditorPanels::c_Viewport);
+		if (!view)
+			view = m_Panels.GetShownWindowRect(EditorPanels::c_Game);
+		if (view)
+		{
+			toastsMin = view->Min;
+			toastsMax = view->Max;
+		}
+		UI::DrawNotifications(m_Context.GetNotifications(), *this, EditorPanels::c_Console, EditorPanels::c_Problems, toastsMin, toastsMax);
 		if (m_ShowImGuiDemo)
 			ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
 		UpdateFrameRate();
