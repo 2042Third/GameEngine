@@ -15,10 +15,8 @@ release work landed. Wave 4 has not started.
 
 Since they were written:
 
-- **Step 0's branches in flight** land through `agent/integration` (see HANDOFF.md):
-  - `agent/release` landed as 0.3.0.
-  - `agent/wave3-finish` is in `agent/integration`.
-- **The work moved to a Mac.** Read `windows-*` presets as `macos-*`. `<scratch>` and `<repo>` name folders of the old
-  machine. The perf budgets wait for the reference machine (HANDOFF.md, "Perf on the Mac").
+- **Step 0's branches in flight** landed: `agent/release` as 0.3.0, `agent/wave3-finish` through `agent/integration`.
+- **The work moved to a Mac** on 2026-10-13: `mac.md` says what changes (presets, tools, perf without the reference
+  machine, MoltenVK). `<scratch>` and `<repo>` name folders of the old machine.
 - **AGENTS.md was split** into the rules (AGENTS.md) and the details (Docs/DeveloperGuide.md). Where a spec says to
   document something in AGENTS.md, rules go there and details into the guide.
