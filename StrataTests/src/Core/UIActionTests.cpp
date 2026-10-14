@@ -29,7 +29,7 @@ TEST_SUITE("Core.UIActions")
 		for (uint32_t action = 0; action < c_UIActionCount; action++)
 		{
 			const UIActionBinding& entry = c_UIActionMap[action];
-			CHECK(entry.Action == GetUIActionName(static_cast<UIAction>(action)));
+			CHECK(std::string(entry.Action) == GetUIActionName(static_cast<UIAction>(action))); // Strings: MSVC's doctest prints no string_view
 			uint32_t sticks = 0;
 			for (const std::string_view binding : entry.Bindings)
 			{
