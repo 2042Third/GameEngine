@@ -130,6 +130,105 @@ namespace Strata
 			}
 		}
 
+		// A timestamp query pool. Results are read with their availability, as 64-bit values (32-bit reads may saturate).
+		class VulkanTimestampPool final : public GPUTimestampPool
+		{
+		public:
+			VulkanTimestampPool(VkDevice device, nvrhi::IDevice* nvrhiDevice, VkQueryPool pool, uint32_t count, bool hostReset, uint32_t validBits)
+				: m_Device(device), m_NvrhiDevice(nvrhiDevice), m_Pool(pool), m_Count(count), m_HostReset(hostReset)
+				, m_ValueMask(validBits >= 64 ? ~uint64_t(0) : (uint64_t(1) << validBits) - 1)
+			{
+				m_Results.resize(static_cast<size_t>(count) * 2);
+			}
+
+			~VulkanTimestampPool() override
+			{
+				// Its resets may still run: the pool goes once the GPU is idle. Pools live as long as the renderer, so this
+				// waits at shutdown only (and in tests).
+				if (m_ResetList)
+					m_NvrhiDevice->waitForIdle();
+				VULKAN_HPP_DEFAULT_DISPATCHER.vkDestroyQueryPool(m_Device, m_Pool, nullptr);
+			}
+
+			uint32_t GetCount() const override { return m_Count; }
+			uint64_t GetValueMask() const override { return m_ValueMask; }
+
+			// The whole pool, before its first use: on the host where the device resets queries there.
+			void ResetAll()
+			{
+				const auto& dispatch = VULKAN_HPP_DEFAULT_DISPATCHER;
+				if (m_HostReset && dispatch.vkResetQueryPool)
+					dispatch.vkResetQueryPool(m_Device, m_Pool, 0, m_Count);
+				else
+					Reset(0, m_Count);
+			}
+
+			void Reset(uint32_t first, uint32_t count) override
+			{
+				if (first >= m_Count || count == 0)
+					return;
+				count = std::min(count, m_Count - first);
+				const auto& dispatch = VULKAN_HPP_DEFAULT_DISPATCHER;
+				// Recorded, in a command list of its own executed at once: query commands of one queue run in submission order,
+				// so the reset follows the earlier writes and precedes every later one without waiting for the GPU. A host reset
+				// would have to know the writes' command buffers completed, which the validation layer may learn later than the
+				// frame's event queries do.
+				if (!m_ResetList)
+					m_ResetList = m_NvrhiDevice->createCommandList();
+				if (!m_ResetList)
+					return;
+				m_ResetList->open();
+				VkCommandBuffer commandBuffer = static_cast<VkCommandBuffer>(m_ResetList->getNativeObject(nvrhi::ObjectTypes::VK_CommandBuffer).pointer);
+				if (commandBuffer != VK_NULL_HANDLE)
+					dispatch.vkCmdResetQueryPool(commandBuffer, m_Pool, first, count);
+				m_ResetList->close();
+				m_NvrhiDevice->executeCommandList(m_ResetList);
+			}
+
+			void Write(nvrhi::ICommandList* commandList, uint32_t index) override
+			{
+				if (!commandList || index >= m_Count)
+					return;
+				VkCommandBuffer commandBuffer = static_cast<VkCommandBuffer>(commandList->getNativeObject(nvrhi::ObjectTypes::VK_CommandBuffer).pointer);
+				if (commandBuffer == VK_NULL_HANDLE)
+					return;
+				// synchronization2 is required of every device (core in Vulkan 1.3, else its extension, which vulkan.hpp's
+				// dispatcher aliases): the write happens once every earlier command of the queue completed.
+				VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdWriteTimestamp2(commandBuffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, m_Pool, index);
+			}
+
+			bool Read(uint32_t first, uint32_t count, std::span<uint64_t> outTicks) override
+			{
+				if (count == 0)
+					return true;
+				if (first >= m_Count || count > m_Count - first || outTicks.size() < count)
+					return false;
+				// Value and availability per timestamp; VK_NOT_READY when any is not available, which the availability shows too.
+				constexpr VkDeviceSize stride = sizeof(uint64_t) * 2;
+				const VkResult result = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetQueryPoolResults(m_Device, m_Pool, first, count, static_cast<size_t>(count) * stride,
+					m_Results.data(), stride, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WITH_AVAILABILITY_BIT);
+				if (result != VK_SUCCESS && result != VK_NOT_READY)
+					return false;
+				for (uint32_t index = 0; index < count; index++)
+				{
+					if (m_Results[static_cast<size_t>(index) * 2 + 1] == 0)
+						return false;
+				}
+				for (uint32_t index = 0; index < count; index++)
+					outTicks[index] = m_Results[static_cast<size_t>(index) * 2] & m_ValueMask;
+				return true;
+			}
+		private:
+			VkDevice m_Device = VK_NULL_HANDLE;
+			nvrhi::IDevice* m_NvrhiDevice = nullptr;
+			VkQueryPool m_Pool = VK_NULL_HANDLE;
+			uint32_t m_Count = 0;
+			bool m_HostReset = false;
+			uint64_t m_ValueMask = 0;
+			nvrhi::CommandListHandle m_ResetList; // Without host resets
+			std::vector<uint64_t> m_Results;      // Read's scratch: value and availability per timestamp
+		};
+
 	}
 
 	class VulkanGraphicsDevice final : public GraphicsDevice
@@ -228,6 +327,7 @@ namespace Strata
 		bool HasTransferQueue() const override { return m_TransferQueue != VK_NULL_HANDLE; }
 		void RecordQueueTransfer(nvrhi::ICommandList* commandList, const GPUQueueTransfer& transfer, bool acquire) override;
 		void RecordBufferToTextureCopies(nvrhi::ICommandList* commandList, std::span<const GPUBufferTextureCopy> copies) override;
+		Scope<GPUTimestampPool> CreateTimestampPool(uint32_t count) override;
 
 		uint32_t GetErrorCount() const override
 		{
@@ -273,6 +373,8 @@ namespace Strata
 		std::vector<std::string> m_DeviceExtensions;
 		bool m_HasDebugUtils = false;
 		bool m_HasMemoryBudget = false;
+		bool m_HostQueryReset = false;          // Queries are reset on the host (vkResetQueryPool)
+		uint32_t m_TimestampValidBits = 0;      // Of the graphics queue's timestamps
 		VkDriverId m_DriverID = {};
 
 		nvrhi::vulkan::DeviceHandle m_NvrhiVulkanDevice;
@@ -606,6 +708,9 @@ namespace Strata
 				properties12.maxPerStageDescriptorUpdateAfterBindSampledImages });
 			m_DriverID = properties12.driverID;
 			m_ApiVersion = deviceApiVersion;
+			m_TimestampValidBits = families[static_cast<uint32_t>(graphicsFamily)].timestampValidBits;
+			m_Info.SupportsTimestamps = m_TimestampValidBits > 0 && properties.limits.timestampPeriod > 0.0f;
+			m_Info.TimestampPeriodNs = static_cast<double>(properties.limits.timestampPeriod);
 
 			// Dedicated async compute and transfer families, when the GPU has them.
 			m_ComputeFamily = -1;
@@ -706,6 +811,11 @@ namespace Strata
 		enabled12.drawIndirectCount = supported12.drawIndirectCount;
 		enabled12.separateDepthStencilLayouts = supported12.separateDepthStencilLayouts;
 		enabled.pNext = &enabled12;
+		m_HostQueryReset = enabled12.hostQueryReset == VK_TRUE;
+		m_Info.SupportsMultiDrawIndirect = enabled.features.multiDrawIndirect == VK_TRUE;
+		m_Info.SupportsDrawIndirectFirstInstance = enabled.features.drawIndirectFirstInstance == VK_TRUE;
+		m_Info.SupportsDrawIndirectCount = enabled12.drawIndirectCount == VK_TRUE;
+		m_Info.SupportsSamplerMinMax = enabled12.samplerFilterMinmax == VK_TRUE;
 
 		VkPhysicalDeviceVulkan13Features enabled13 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES };
 		VkPhysicalDeviceDynamicRenderingFeaturesKHR dynamicRendering = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_FEATURES_KHR };
@@ -1209,6 +1319,26 @@ namespace Strata
 			const VkImage image = static_cast<VkImage>(copy.Destination->getNativeObject(nvrhi::ObjectTypes::VK_Image).pointer);
 			VULKAN_HPP_DEFAULT_DISPATCHER.vkCmdCopyBufferToImage(commandBuffer, buffer, image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 		}
+	}
+
+	Scope<GPUTimestampPool> VulkanGraphicsDevice::CreateTimestampPool(uint32_t count)
+	{
+		if (!m_Info.SupportsTimestamps || count == 0 || m_Device == VK_NULL_HANDLE)
+			return nullptr;
+		VkQueryPoolCreateInfo info = { VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
+		info.queryType = VK_QUERY_TYPE_TIMESTAMP;
+		info.queryCount = count;
+		VkQueryPool pool = VK_NULL_HANDLE;
+		const VkResult result = VULKAN_HPP_DEFAULT_DISPATCHER.vkCreateQueryPool(m_Device, &info, nullptr, &pool);
+		if (result != VK_SUCCESS)
+		{
+			ST_CORE_ERROR("vkCreateQueryPool failed: {}", nvrhi::vulkan::resultToString(result));
+			return nullptr;
+		}
+		auto timestamps = CreateScope<VulkanTimestampPool>(m_Device, m_NvrhiDevice.Get(), pool, count, m_HostQueryReset, m_TimestampValidBits);
+		// New queries are in an undefined state: every one is reset before its first write or read.
+		timestamps->ResetAll();
+		return timestamps;
 	}
 
 	void VulkanGraphicsDevice::OnDeviceLost(const char* operation)

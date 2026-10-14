@@ -21,6 +21,40 @@ namespace Strata
 	using FrameStageID = uint32_t;
 	constexpr FrameStageID c_InvalidFrameStage = ~FrameStageID(0);
 
+	// Where a stage's time is spent. CPU stages are timed on the frame thread (ST_PROFILE_STAGE); GPU stages are the GPU's
+	// time for passes of the frame, measured by the renderer (GPUProfiler) and attached to the frame frames later
+	// (FrameProfiler::RecordGPUFrame). GPU stages are never part of the frame's work time.
+	enum class FrameStageKind : uint8_t
+	{
+		CPU = 0,
+		GPU
+	};
+
+	// A GPU stage's time in a frame (FrameProfiler::RecordGPUFrame).
+	struct GPUStageTime
+	{
+		FrameStageID Stage = c_InvalidFrameStage;
+		float Milliseconds = 0.0f;
+	};
+
+	// When a frame listener hears of a frame (FrameProfiler::AddFrameListener).
+	enum class FrameListenerTiming : uint8_t
+	{
+		Immediate = 0, // When the frame ends, before its GPU times can be known
+		// Once the frame's GPU times are attached (or known not to come), in frame order: after FrameProfiler::c_MaxGPULatencyFrames
+		// later frames without them at the latest. Right away while no GPU times are expected (SetGPUTimesExpected).
+		WithGPU
+	};
+
+	// What paces the frames (FrameGPUSummary::BoundBy).
+	enum class FrameBound : uint8_t
+	{
+		Unknown = 0, // No GPU times
+		CPU,         // The median work time takes at least 90% of the median frame interval
+		GPU,         // The median GPU busy time takes at least 90% of the median interval and exceeds the median work time
+		Capped       // Neither: vsync, a frame-rate cap or idle throttling sets the pace
+	};
+
 	// A stage every FrameProfiler registers first, in this order (so their ids are their positions).
 	struct BuiltinFrameStage
 	{
@@ -64,14 +98,30 @@ namespace Strata
 		float WorkerBusyPercent = 0.0f;  // How busy the job system's worker threads were since the previous frame ended
 		float IOBusyPercent = 0.0f;      // Its I/O threads, likewise (0 without I/O threads)
 		float BackgroundBusyPercent = 0.0f; // Its background threads, likewise
-		std::span<const float> StageMs;  // Self time per stage id (nested stages excluded), one entry per registered stage
+		std::span<const float> StageMs;  // Self time per stage id (nested stages excluded), one entry per registered stage (0 for GPU stages)
+		// The GPU's time (FrameProfiler::RecordGPUFrame): whether it was attached, the GPU stages added up, and per stage id
+		// (one entry per registered stage, 0 for CPU stages and while HasGPU is false).
+		bool HasGPU = false;
+		float GPUBusyMs = 0.0f;
+		std::span<const float> GPUStageMs;
+		uint32_t GPULatencyFrames = 0; // Frames recorded after this one by the time its GPU times arrived
 	};
 
 	struct FrameStageSummary
 	{
 		std::string Name;
 		bool InWorkTime = true;
-		FrameTimeStats Time;
+		FrameStageKind Kind = FrameStageKind::CPU;
+		FrameTimeStats Time; // GPU stages: over the frames with GPU times only
+	};
+
+	// The GPU's share of the summarized frames (FrameProfileSummary::GPU).
+	struct FrameGPUSummary
+	{
+		uint32_t Frames = 0;          // Frames with GPU times
+		FrameTimeStats Busy;          // Their GPU stages added up per frame
+		float LatencyFrames = 0.0f;   // Average frames between a frame and the arrival of its GPU times
+		FrameBound BoundBy = FrameBound::Unknown;
 	};
 
 	// Statistics of the latest frames (FrameProfiler::Summarize).
@@ -81,6 +131,7 @@ namespace Strata
 		FrameTimeStats Work;        // The frames' work time
 		FrameTimeStats StageSum;    // Per frame, the stages inside the work time added up (at most the work time)
 		FrameTimeStats Untimed;     // Per frame, the work time no stage accounts for (the work time minus StageSum)
+		FrameTimeStats Interval;    // The time from each frame's start to the next one's (frames that have a previous frame)
 		float FramesPerSecond = 0.0f; // Frames per second of the intervals between them (0 with fewer than two frames)
 		float WorkerBusyPercent = 0.0f;
 		float IOBusyPercent = 0.0f;
@@ -89,6 +140,7 @@ namespace Strata
 		uint32_t IOThreads = 0;
 		uint32_t BackgroundThreads = 0;
 		std::vector<FrameStageSummary> Stages; // Every registered stage, in id order
+		FrameGPUSummary GPU;
 	};
 
 	struct FrameProfilerSpecification
@@ -115,6 +167,8 @@ namespace Strata
 		static constexpr uint32_t c_MaxStages = 64;
 		// Stages nested deeper are not timed (their time counts for the stage around them).
 		static constexpr uint32_t c_MaxDepth = 32;
+		// WithGPU listeners hear of a frame without GPU times once this many later frames were recorded.
+		static constexpr uint32_t c_MaxGPULatencyFrames = 8;
 
 		explicit FrameProfiler(const FrameProfilerSpecification& specification = {});
 
@@ -125,14 +179,16 @@ namespace Strata
 		static FrameProfiler& Get();
 
 		// The id of the stage with this name, registered now if it is new. c_InvalidFrameStage (with a warning, once) when
-		// c_MaxStages stages are registered already: that stage is then not timed. Any thread.
-		FrameStageID RegisterStage(std::string_view name, bool inWorkTime = true);
+		// c_MaxStages stages are registered already: that stage is then not timed. GPU stages are never in the work time. A
+		// name registered before keeps its kind (asserted). Any thread.
+		FrameStageID RegisterStage(std::string_view name, bool inWorkTime = true, FrameStageKind kind = FrameStageKind::CPU);
 		// c_InvalidFrameStage when no stage has the name. Any thread.
 		FrameStageID FindStage(std::string_view name) const;
 		uint32_t GetStageCount() const { return m_StageCount.load(std::memory_order_acquire); }
 		// The name of a registered stage (empty for any other id). The reference stays valid as long as the profiler.
 		const std::string& GetStageName(FrameStageID stage) const;
 		bool IsStageInWorkTime(FrameStageID stage) const;
+		FrameStageKind GetStageKind(FrameStageID stage) const;
 
 		// Starts a frame on the calling thread, which becomes the frame thread. A frame that was begun but not ended (the
 		// application skipped it) is discarded.
@@ -146,7 +202,7 @@ namespace Strata
 		bool IsTimingThisThread() const { return IsInFrame() && IsFrameThread(); }
 
 		// Used by FrameStageScope. Begin returns whether the stage was entered (the frame thread, inside a frame, a registered
-		// stage, within c_MaxDepth); only then does End have to follow. End leaves the innermost stage.
+		// CPU stage, within c_MaxDepth); only then does End have to follow. End leaves the innermost stage.
 		bool BeginStage(FrameStageID stage);
 		void EndStage();
 
@@ -161,13 +217,31 @@ namespace Strata
 		FrameProfileSummary Summarize(uint32_t frames) const;
 		// Statistics of samples in milliseconds, in any order (exact: the percentiles are samples).
 		static FrameTimeStats ComputeStats(std::span<const float> samples);
+		// What paces frames of these median work, GPU busy and interval times (FrameBound); Unknown without an interval.
+		static FrameBound ClassifyFrameBound(float workMs, float gpuBusyMs, float intervalMs);
+		// The share of the frame interval a bound takes (FrameBound).
+		static constexpr float c_BoundShare = 0.9f;
 
-		// Called on the frame thread after each recorded frame. Listeners must not add or remove listeners while called.
-		uint32_t AddFrameListener(std::function<void(const FrameSample&)> listener);
+		// Attaches GPU times to a recorded frame (`frameIndex`: FrameSample::Index) while it is still in the ring: its GPU stages'
+		// times (a stage listed twice adds up), or none for a frame that had no GPU work timed. False when the frame is not in
+		// the ring any more (or not recorded yet). The frame thread.
+		bool RecordGPUFrame(uint64_t frameIndex, std::span<const GPUStageTime> stages);
+		// Whether GPU times are expected for the frames (a GPUProfiler measures them): WithGPU listeners wait for them only
+		// then. Off by default. The frame thread.
+		void SetGPUTimesExpected(bool expected);
+		bool AreGPUTimesExpected() const { return m_GPUTimesExpected; }
+		// Calls the WithGPU listeners for every recorded frame they have not heard of yet, GPU times or not (the end of a run).
+		void FlushGPUListeners();
+
+		// Called on the frame thread after each recorded frame (Immediate) or once its GPU times are known (WithGPU, see
+		// FrameListenerTiming). Listeners must not add or remove listeners while called.
+		uint32_t AddFrameListener(std::function<void(const FrameSample&)> listener, FrameListenerTiming timing = FrameListenerTiming::Immediate);
 		void RemoveFrameListener(uint32_t id);
 
-		// Forgets the recorded frames (stages and listeners stay).
+		// Forgets the recorded frames (stages and listeners stay). GPU times recorded for frames before the reset are refused.
 		void Reset();
+		// How often Reset was called: GPU times are attached only to frames of the same reset count as their recording.
+		uint32_t GetResetCount() const { return m_ResetCount; }
 	private:
 		struct OpenStage
 		{
@@ -184,6 +258,18 @@ namespace Strata
 			float IOBusyPercent = 0.0f;
 			float BackgroundBusyPercent = 0.0f;
 			std::array<float, c_MaxStages> StageMs = {};
+			bool GPUResolved = false; // GPU times arrived (or are known not to come: RecordGPUFrame without stages)
+			bool HasGPU = false;
+			float GPUBusyMs = 0.0f;
+			uint32_t GPULatencyFrames = 0;
+			std::array<float, c_MaxStages> GPUStageMs = {};
+		};
+
+		struct Listener
+		{
+			uint32_t ID = 0;
+			FrameListenerTiming Timing = FrameListenerTiming::Immediate;
+			std::function<void(const FrameSample&)> Callback;
 		};
 
 		struct JobSample
@@ -202,6 +288,12 @@ namespace Strata
 		bool IsFrameThread() const { return std::this_thread::get_id() == m_FrameThread.load(std::memory_order_relaxed); }
 		JobSample SampleJobs() const;
 		FrameSample ToSample(const FrameRecord& record) const;
+		// The record of a frame still in the ring, or null.
+		FrameRecord* FindRecord(uint64_t frameIndex);
+		// Calls the WithGPU listeners for the frames they have not heard of, in order, while each one's GPU times are known,
+		// not expected, or late by c_MaxGPULatencyFrames frames, and in any case for the frames before `forcedEnd`.
+		void DeliverGPUListeners(uint64_t forcedEnd);
+		bool HasGPUListeners() const;
 	private:
 		FrameProfilerSpecification m_Specification;
 		uint32_t m_Capacity = c_DefaultCapacity;
@@ -210,6 +302,7 @@ namespace Strata
 		mutable std::mutex m_StageMutex;
 		std::array<std::string, c_MaxStages> m_StageNames;
 		std::array<bool, c_MaxStages> m_StageInWorkTime = {};
+		std::array<FrameStageKind, c_MaxStages> m_StageKinds = {};
 		std::atomic<uint32_t> m_StageCount = 0;
 		bool m_WarnedStageLimit = false; // Guarded by m_StageMutex
 
@@ -231,8 +324,11 @@ namespace Strata
 		uint32_t m_RecordedFrames = 0;
 		uint64_t m_TotalFrames = 0;
 
-		std::vector<std::pair<uint32_t, std::function<void(const FrameSample&)>>> m_Listeners;
+		std::vector<Listener> m_Listeners;
 		uint32_t m_NextListenerID = 1;
+		uint64_t m_NextGPUListenerFrame = 0; // The first frame the WithGPU listeners have not heard of
+		bool m_GPUTimesExpected = false;
+		uint32_t m_ResetCount = 0;
 	};
 
 	// Times a stage of the frame for as long as it lives (see FrameProfiler; ST_PROFILE_STAGE makes one).

@@ -46,14 +46,17 @@ namespace Strata
 		return s_Instance;
 	}
 
-	FrameStageID FrameProfiler::RegisterStage(std::string_view name, bool inWorkTime)
+	FrameStageID FrameProfiler::RegisterStage(std::string_view name, bool inWorkTime, FrameStageKind kind)
 	{
 		std::scoped_lock<std::mutex> lock(m_StageMutex);
 		const uint32_t count = m_StageCount.load(std::memory_order_relaxed);
 		for (uint32_t index = 0; index < count; index++)
 		{
 			if (m_StageNames[index] == name)
+			{
+				ST_CORE_ASSERT(m_StageKinds[index] == kind, "FrameProfiler: stage '{}' registered again as another kind", name);
 				return index;
+			}
 		}
 		if (count == c_MaxStages)
 		{
@@ -65,7 +68,8 @@ namespace Strata
 			return c_InvalidFrameStage;
 		}
 		m_StageNames[count] = std::string(name);
-		m_StageInWorkTime[count] = inWorkTime;
+		m_StageInWorkTime[count] = inWorkTime && kind == FrameStageKind::CPU;
+		m_StageKinds[count] = kind;
 		// Readers that see the new count see the name written before it.
 		m_StageCount.store(count + 1, std::memory_order_release);
 		return count;
@@ -92,6 +96,11 @@ namespace Strata
 	bool FrameProfiler::IsStageInWorkTime(FrameStageID stage) const
 	{
 		return stage < GetStageCount() && m_StageInWorkTime[stage];
+	}
+
+	FrameStageKind FrameProfiler::GetStageKind(FrameStageID stage) const
+	{
+		return stage < GetStageCount() ? m_StageKinds[stage] : FrameStageKind::CPU;
 	}
 
 	int64_t FrameProfiler::Now() const
@@ -142,6 +151,10 @@ namespace Strata
 		if (!IsTimingThisThread())
 			return;
 
+		// A frame about to be overwritten is heard of by the WithGPU listeners first, GPU times or not.
+		if (m_RecordedFrames == m_Capacity && m_NextGPUListenerFrame <= m_TotalFrames - m_Capacity && HasGPUListeners())
+			DeliverGPUListeners(m_TotalFrames - m_Capacity + 1);
+
 		// Stages still open count up to now here, and from now on in the next frame.
 		const int64_t now = Now();
 		for (uint32_t index = 0; index < m_Depth; index++)
@@ -160,6 +173,11 @@ namespace Strata
 		const uint32_t stageCount = GetStageCount();
 		for (uint32_t stage = 0; stage < c_MaxStages; stage++)
 			record.StageMs[stage] = stage < stageCount ? ToMilliseconds(m_Accumulated[stage]) : 0.0f;
+		record.GPUResolved = false;
+		record.HasGPU = false;
+		record.GPUBusyMs = 0.0f;
+		record.GPULatencyFrames = 0;
+		record.GPUStageMs.fill(0.0f);
 		if (m_Specification.SampleJobs)
 		{
 			const JobSample sample = SampleJobs();
@@ -183,14 +201,91 @@ namespace Strata
 		if (!m_Listeners.empty())
 		{
 			const FrameSample sample = ToSample(record);
-			for (const auto& [id, listener] : m_Listeners)
-				listener(sample);
+			for (const Listener& listener : m_Listeners)
+			{
+				if (listener.Timing == FrameListenerTiming::Immediate)
+					listener.Callback(sample);
+			}
+			if (HasGPUListeners())
+				DeliverGPUListeners(0);
 		}
+	}
+
+	FrameProfiler::FrameRecord* FrameProfiler::FindRecord(uint64_t frameIndex)
+	{
+		if (frameIndex >= m_TotalFrames || m_TotalFrames - frameIndex > m_RecordedFrames)
+			return nullptr;
+		const uint32_t age = static_cast<uint32_t>(m_TotalFrames - 1 - frameIndex);
+		FrameRecord& record = m_Records[(m_NextRecord + m_Capacity - 1 - age) % m_Capacity];
+		return record.Index == frameIndex ? &record : nullptr;
+	}
+
+	bool FrameProfiler::RecordGPUFrame(uint64_t frameIndex, std::span<const GPUStageTime> stages)
+	{
+		FrameRecord* record = FindRecord(frameIndex);
+		if (!record)
+			return false;
+		record->GPUStageMs.fill(0.0f);
+		double busy = 0.0;
+		const uint32_t stageCount = GetStageCount();
+		for (const GPUStageTime& time : stages)
+		{
+			if (time.Stage >= stageCount || m_StageKinds[time.Stage] != FrameStageKind::GPU)
+				continue;
+			const float milliseconds = std::max(time.Milliseconds, 0.0f);
+			record->GPUStageMs[time.Stage] += milliseconds;
+			busy += milliseconds;
+		}
+		record->GPUResolved = true;
+		record->HasGPU = !stages.empty();
+		record->GPUBusyMs = static_cast<float>(busy);
+		// Recorded during the frame after the latest one at the earliest: that frame counts.
+		record->GPULatencyFrames = static_cast<uint32_t>(m_TotalFrames - frameIndex);
+		return true;
+	}
+
+	void FrameProfiler::SetGPUTimesExpected(bool expected)
+	{
+		m_GPUTimesExpected = expected;
+	}
+
+	bool FrameProfiler::HasGPUListeners() const
+	{
+		return std::any_of(m_Listeners.begin(), m_Listeners.end(), [](const Listener& listener) { return listener.Timing == FrameListenerTiming::WithGPU; });
+	}
+
+	void FrameProfiler::DeliverGPUListeners(uint64_t forcedEnd)
+	{
+		// Frames that left the ring unheard (a capacity smaller than the latency) are skipped.
+		const uint64_t oldest = m_TotalFrames - m_RecordedFrames;
+		m_NextGPUListenerFrame = std::max(m_NextGPUListenerFrame, oldest);
+		while (m_NextGPUListenerFrame < m_TotalFrames)
+		{
+			const FrameRecord* record = FindRecord(m_NextGPUListenerFrame);
+			if (!record)
+				break;
+			const uint64_t laterFrames = m_TotalFrames - 1 - m_NextGPUListenerFrame;
+			if (m_NextGPUListenerFrame >= forcedEnd && m_GPUTimesExpected && !record->GPUResolved && laterFrames < c_MaxGPULatencyFrames)
+				break;
+			const FrameSample sample = ToSample(*record);
+			for (const Listener& listener : m_Listeners)
+			{
+				if (listener.Timing == FrameListenerTiming::WithGPU)
+					listener.Callback(sample);
+			}
+			m_NextGPUListenerFrame++;
+		}
+	}
+
+	void FrameProfiler::FlushGPUListeners()
+	{
+		if (HasGPUListeners())
+			DeliverGPUListeners(m_TotalFrames);
 	}
 
 	bool FrameProfiler::BeginStage(FrameStageID stage)
 	{
-		if (!IsTimingThisThread() || stage >= GetStageCount() || m_Depth == c_MaxDepth)
+		if (!IsTimingThisThread() || stage >= GetStageCount() || m_Depth == c_MaxDepth || m_StageKinds[stage] != FrameStageKind::CPU)
 			return false;
 		const int64_t now = Now();
 		// The stage around this one pauses: its self time excludes this one's.
@@ -225,6 +320,10 @@ namespace Strata
 		sample.IOBusyPercent = record.IOBusyPercent;
 		sample.BackgroundBusyPercent = record.BackgroundBusyPercent;
 		sample.StageMs = std::span<const float>(record.StageMs.data(), GetStageCount());
+		sample.HasGPU = record.HasGPU;
+		sample.GPUBusyMs = record.GPUBusyMs;
+		sample.GPUStageMs = std::span<const float>(record.GPUStageMs.data(), GetStageCount());
+		sample.GPULatencyFrames = record.GPULatencyFrames;
 		return sample;
 	}
 
@@ -274,11 +373,15 @@ namespace Strata
 		std::vector<float> work;
 		std::vector<float> stageSums;
 		std::vector<float> untimed;
+		std::vector<float> intervalSamples;
+		std::vector<float> gpuBusy;
 		work.reserve(count);
 		stageSums.reserve(count);
 		untimed.reserve(count);
+		intervalSamples.reserve(count);
 		double intervals = 0.0;
 		uint32_t intervalCount = 0;
+		double gpuLatency = 0.0;
 		double workerBusy = 0.0;
 		double ioBusy = 0.0;
 		double backgroundBusy = 0.0;
@@ -289,9 +392,21 @@ namespace Strata
 			double sum = 0.0;
 			for (uint32_t stage = 0; stage < stageCount; stage++)
 			{
+				if (m_StageKinds[stage] == FrameStageKind::GPU)
+				{
+					// GPU stages over the frames whose GPU times arrived.
+					if (frame.HasGPU)
+						stageSamples[stage].push_back(frame.GPUStageMs[stage]);
+					continue;
+				}
 				stageSamples[stage].push_back(frame.StageMs[stage]);
 				if (m_StageInWorkTime[stage])
 					sum += frame.StageMs[stage];
+			}
+			if (frame.HasGPU)
+			{
+				gpuBusy.push_back(frame.GPUBusyMs);
+				gpuLatency += frame.GPULatencyFrames;
 			}
 			stageSums.push_back(static_cast<float>(sum));
 			untimed.push_back(std::max(frame.WorkMs - static_cast<float>(sum), 0.0f));
@@ -299,6 +414,7 @@ namespace Strata
 			{
 				intervals += frame.IntervalMs;
 				intervalCount++;
+				intervalSamples.push_back(frame.IntervalMs);
 			}
 			workerBusy += frame.WorkerBusyPercent;
 			ioBusy += frame.IOBusyPercent;
@@ -308,6 +424,7 @@ namespace Strata
 		summary.Work = ComputeStats(work);
 		summary.StageSum = ComputeStats(stageSums);
 		summary.Untimed = ComputeStats(untimed);
+		summary.Interval = ComputeStats(intervalSamples);
 		summary.FramesPerSecond = intervals > 0.0 ? static_cast<float>(static_cast<double>(intervalCount) * 1000.0 / intervals) : 0.0f;
 		if (count > 0)
 		{
@@ -317,20 +434,43 @@ namespace Strata
 		}
 		summary.Stages.reserve(stageCount);
 		for (uint32_t stage = 0; stage < stageCount; stage++)
-			summary.Stages.push_back(FrameStageSummary { m_StageNames[stage], m_StageInWorkTime[stage], ComputeStats(stageSamples[stage]) });
+			summary.Stages.push_back(FrameStageSummary { m_StageNames[stage], m_StageInWorkTime[stage], m_StageKinds[stage], ComputeStats(stageSamples[stage]) });
+
+		FrameGPUSummary& gpu = summary.GPU;
+		gpu.Frames = static_cast<uint32_t>(gpuBusy.size());
+		gpu.Busy = ComputeStats(gpuBusy);
+		if (gpu.Frames > 0)
+		{
+			gpu.LatencyFrames = static_cast<float>(gpuLatency / static_cast<double>(gpu.Frames));
+			gpu.BoundBy = ClassifyFrameBound(summary.Work.P50, gpu.Busy.P50, summary.Interval.P50);
+		}
 		return summary;
 	}
 
-	uint32_t FrameProfiler::AddFrameListener(std::function<void(const FrameSample&)> listener)
+	FrameBound FrameProfiler::ClassifyFrameBound(float workMs, float gpuBusyMs, float intervalMs)
 	{
+		if (intervalMs <= 0.0f)
+			return FrameBound::Unknown;
+		if (gpuBusyMs >= c_BoundShare * intervalMs && gpuBusyMs > workMs)
+			return FrameBound::GPU;
+		if (workMs >= c_BoundShare * intervalMs)
+			return FrameBound::CPU;
+		return FrameBound::Capped;
+	}
+
+	uint32_t FrameProfiler::AddFrameListener(std::function<void(const FrameSample&)> listener, FrameListenerTiming timing)
+	{
+		// A WithGPU listener hears of the frames recorded from now on.
+		if (timing == FrameListenerTiming::WithGPU && !HasGPUListeners())
+			m_NextGPUListenerFrame = m_TotalFrames;
 		const uint32_t id = m_NextListenerID++;
-		m_Listeners.emplace_back(id, std::move(listener));
+		m_Listeners.push_back(Listener { id, timing, std::move(listener) });
 		return id;
 	}
 
 	void FrameProfiler::RemoveFrameListener(uint32_t id)
 	{
-		std::erase_if(m_Listeners, [id](const auto& entry) { return entry.first == id; });
+		std::erase_if(m_Listeners, [id](const Listener& listener) { return listener.ID == id; });
 	}
 
 	void FrameProfiler::Reset()
@@ -342,6 +482,8 @@ namespace Strata
 		m_InFrame.store(false, std::memory_order_relaxed);
 		m_Depth = 0;
 		m_LastJobSample = {};
+		m_NextGPUListenerFrame = 0;
+		m_ResetCount++;
 	}
 
 }

@@ -341,6 +341,8 @@ namespace Strata
 		for (FrameStageID stage = 0; stage < summary.Stages.size(); stage++)
 		{
 			const FrameStageSummary& entry = summary.Stages[stage];
+			if (entry.Kind != FrameStageKind::CPU)
+				continue; // The GPU's stages are not the main thread's
 			const bool ran = entry.Time.Max > 0.0f;
 			row(GetStageColor(stage), entry.InWorkTime ? entry.Name : entry.Name + " (after the frame)", entry.Time, ran ? colors.Text : colors.TextSecondary);
 		}

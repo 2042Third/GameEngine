@@ -2,6 +2,7 @@
 
 #include "Strata/Asset/Asset.h"
 #include "Strata/Core/Base.h"
+#include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/GraphicsDevice.h"
 #include "Strata/Renderer/TextureFormat.h"
 
@@ -9,6 +10,7 @@
 
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -220,6 +222,7 @@ namespace Strata
 		nvrhi::CommandListHandle m_TransferList;
 		bool m_BatchOpen = false;
 		bool m_GraphicsOpen = false; // The open batch opened the graphics queue's list (it recorded something)
+		std::optional<GPUPassTimer> m_GraphicsTimer; // The GPU's time for the open batch's graphics list (GPU.Uploads)
 		bool m_TransferOpen = false; // The open batch opened the transfer queue's list
 		// What the open batch's transfer list wrote: their states are given back to NVRHI's tracking before it closes, so that
 		// it records no transitions into shader states, which the transfer queue cannot make.

@@ -7,6 +7,7 @@
 #include "Strata/Math/Frustum.h"
 #include "Strata/Renderer/AssetResolveCache.h"
 #include "Strata/Renderer/DebugDraw.h"
+#include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Renderer/TextureReadback.h"
 #include "Strata/Scene/Components.h"
@@ -235,6 +236,15 @@ namespace Strata
 		uint32_t RasterizedTextGlyphs = 0; // Glyphs added to font atlases this frame (see TextRenderer::c_FrameRasterBudget)
 	};
 
+	// What the GPU did for a frame of a renderer, known frames later (SceneRenderer::GetGPUStats).
+	struct SceneRendererGPUStats
+	{
+		bool HasTimes = false;
+		uint64_t Frame = 0;    // The frame profiler's frame the times belong to (FrameSample::Index)
+		float BusyMs = 0.0f;   // The renderer's GPU stages added up
+		std::vector<GPUStageTime> StageMs; // Per GPU stage the renderer timed (FrameProfiler::Get()'s stage ids)
+	};
+
 	// One instanced draw of a frame: instances of a submesh at one level of detail with one pipeline state.
 	struct SceneDrawBatch
 	{
@@ -330,6 +340,11 @@ namespace Strata
 
 		const SceneRendererSpecification& GetSpecification() const { return m_Specification; }
 		const SceneRendererStats& GetStats() const { return m_Stats; }
+		// The GPU's side of the latest frame whose GPU work completed (2-3 frames late; Render resolves them without waiting).
+		const SceneRendererGPUStats& GetGPUStats() const { return m_GPUStats; }
+		// Resolves the GPU stats of the frames rendered so far; with `wait`, waits for the GPU first so the last frame's are
+		// known (tests and tools).
+		void ResolveGPUStats(bool wait);
 
 		// The materials the last frame drew, with the largest size on screen of what they cover (for mip streaming).
 		std::span<const VisibleMaterialUse> GetVisibleMaterials() const { return m_VisibleMaterials; }
@@ -546,6 +561,8 @@ namespace Strata
 		// The directional light (the preview sun with `preview`), ambient light and the visible point and spot lights.
 		void CollectLights(Scene& scene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame);
 
+		// The GPU timer record of this frame (see m_GPURecords).
+		GPUTimerRecord& BeginGPURecord();
 		// Render without letting go of the frame's assets (Render does that, whatever way the frame ends).
 		bool RenderFrame(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options);
 
@@ -621,6 +638,14 @@ namespace Strata
 		ErrorThrottle m_Errors; // Rendering failures, logged once until a frame renders successfully again
 		bool m_WarnedLightOverflow = false;
 		SceneRendererStats m_Stats;
+		SceneRendererGPUStats m_GPUStats;
+		// The GPU passes this renderer timed in its latest frames (one record per GPUProfiler frame slot), newest at
+		// m_GPURecordIndex, read once their timestamps are written (ResolveGPUStats).
+		static constexpr uint32_t c_GPURecordCount = 6;
+		std::array<GPUTimerRecord, c_GPURecordCount> m_GPURecords;
+		uint32_t m_GPURecordIndex = 0;
+		uint64_t m_ResolvedGPURecord = 0; // The slot of the record m_GPUStats came from
+		std::vector<GPUStageTime> m_GPUStageScratch;
 
 		nvrhi::ShaderHandle m_MeshVertexShader;
 		nvrhi::ShaderHandle m_SkinnedMeshVertexShader;

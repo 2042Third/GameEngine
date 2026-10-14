@@ -1674,8 +1674,52 @@ namespace Strata
 		streamer->ReportView(view, m_VisibleTextures);
 	}
 
+	GPUTimerRecord& SceneRenderer::BeginGPURecord()
+	{
+		// A record per profiler frame slot: a frame of a slot the newest record does not belong to starts the next record.
+		GPUTimerRecord& newest = m_GPURecords[m_GPURecordIndex];
+		if (newest.Slot != 0 && Renderer::IsInitialized() && newest.Slot != Renderer::GetGPUProfiler().GetOpenSlot())
+		{
+			m_GPURecordIndex = (m_GPURecordIndex + 1) % c_GPURecordCount;
+			m_GPURecords[m_GPURecordIndex].Clear();
+		}
+		return m_GPURecords[m_GPURecordIndex];
+	}
+
+	void SceneRenderer::ResolveGPUStats(bool wait)
+	{
+		if (!Renderer::IsInitialized())
+			return;
+		GPUProfiler& profiler = Renderer::GetGPUProfiler();
+		if (!profiler.IsEnabled())
+			return;
+		profiler.Resolve(wait);
+		// The newest record whose timestamps are all written; older ones are then of no use.
+		for (uint32_t age = 0; age < c_GPURecordCount; age++)
+		{
+			GPUTimerRecord& record = m_GPURecords[(m_GPURecordIndex + c_GPURecordCount - age) % c_GPURecordCount];
+			if (record.Slot != 0 && record.Slot == m_ResolvedGPURecord)
+				return; // Known already, as everything older
+			if (record.Slot == 0)
+				continue;
+			if (!profiler.ReadRecord(record, m_GPUStageScratch))
+				continue;
+			m_GPUStats.HasTimes = true;
+			m_GPUStats.Frame = record.ProfilerFrame;
+			m_GPUStats.StageMs = m_GPUStageScratch;
+			m_GPUStats.BusyMs = 0.0f;
+			for (const GPUStageTime& stage : m_GPUStats.StageMs)
+				m_GPUStats.BusyMs += stage.Milliseconds;
+			m_ResolvedGPURecord = record.Slot;
+			for (uint32_t older = age + 1; older < c_GPURecordCount; older++)
+				m_GPURecords[(m_GPURecordIndex + c_GPURecordCount - older) % c_GPURecordCount].Clear();
+			return;
+		}
+	}
+
 	bool SceneRenderer::RenderFrame(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options)
 	{
+		ResolveGPUStats(false);
 		m_Stats = {};
 		if (m_ViewportSize.x == 0 || m_ViewportSize.y == 0)
 			return false; // Nothing to show (e.g. a minimized window); not an error
@@ -1767,9 +1811,13 @@ namespace Strata
 		nvrhi::ICommandList* commandList = m_CommandList;
 		commandList->open();
 		commandList->beginMarker(m_Specification.DebugName.c_str());
+		// The GPU's time per pass: each stage runs from its first command to the next stage's.
+		const RendererGPUStages& gpuStages = RendererGPUStages::Get();
+		GPUPassTimer gpuTimer(commandList, gpuStages.Setup, &BeginGPURecord());
 		UpdateEnvironment(scene, preview, frame, commandList);
 		if ((buffersRecreated || m_BoundEnvironment != GetEnvironmentCube()) && !CreateSceneBindingSets())
 		{
+			gpuTimer.End();
 			commandList->endMarker();
 			commandList->close();
 			m_Device->executeCommandList(commandList); // Keeps the environment processing that was recorded
@@ -1796,11 +1844,13 @@ namespace Strata
 
 		if (frame.ShadowParams.w > 0.0f)
 		{
+			gpuTimer.Next(gpuStages.Shadows);
 			commandList->beginMarker("Shadows");
 			DrawShadows(commandList, static_cast<uint32_t>(frame.ShadowParams.w));
 			commandList->endMarker();
 		}
 
+		gpuTimer.Next(gpuStages.Prepass);
 		const glm::vec4 clear = camera.ClearColor;
 		commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 0.0f, false, 0);
 		commandList->clearTextureFloat(m_NormalTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f));
@@ -1814,10 +1864,12 @@ namespace Strata
 
 		if (postProcess.AmbientOcclusion)
 		{
+			gpuTimer.Next(gpuStages.AO);
 			commandList->beginMarker("AmbientOcclusion");
 			RenderAmbientOcclusion(commandList, postProcess);
 			commandList->endMarker();
 		}
+		gpuTimer.Next(gpuStages.Opaque);
 		commandList->beginMarker("Opaque");
 		DrawBatches(commandList, Pass::Opaque, false);
 		commandList->endMarker();
@@ -1847,10 +1899,12 @@ namespace Strata
 			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
 			commandList->endMarker();
 		}
+		gpuTimer.Next(gpuStages.Transparent);
 		commandList->beginMarker("Transparent");
 		DrawBatches(commandList, Pass::Transparent, true);
 		commandList->endMarker();
 
+		gpuTimer.Next(gpuStages.Post);
 		commandList->beginMarker("Exposure");
 		UpdateExposure(commandList, postProcess);
 		commandList->endMarker();
@@ -1892,6 +1946,7 @@ namespace Strata
 		const bool overlays = HasOverlays(options) || text;
 		if ((!target || overlays) && !EnsureOutputTarget())
 		{
+			gpuTimer.End();
 			commandList->endMarker();
 			commandList->close();
 			m_Device->executeCommandList(commandList); // Keeps the uploads that were recorded
@@ -1927,6 +1982,7 @@ namespace Strata
 
 		if (overlays)
 		{
+			gpuTimer.Next(gpuStages.Overlays);
 			commandList->beginMarker("Overlays");
 			const bool overlaysDrawn = RenderOverlays(commandList, scene, options, text);
 			commandList->endMarker();
@@ -1940,6 +1996,7 @@ namespace Strata
 			}
 		}
 
+		gpuTimer.End();
 		commandList->endMarker();
 		commandList->close();
 		m_Device->executeCommandList(commandList);

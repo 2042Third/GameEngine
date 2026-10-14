@@ -549,7 +549,7 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
 | `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (`SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
-| `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays) |
+| `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays, or by `FramePerfLog::Create`) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
@@ -565,6 +565,43 @@ read without stopping it).
 the status bar's frame pill (see [Editor](#editor));
 `StrataRuntime --perf-log` writes it as CSV (`Runtime/FramePerfLog`, see
 [Export and the runtime](#export-and-the-runtime)).
+
+**GPU stages.** Stages of `FrameStageKind::GPU` are the GPU's time for passes of the frame. They are never entered on the
+CPU (`BeginStage` refuses them), never part of the work time, `StageSum` or `Untimed`, and their times arrive frames late:
+`RecordGPUFrame(frameIndex, times)` attaches them to the frame's record while it is still in the ring (`FrameSample::HasGPU`,
+`GPUBusyMs`, `GPUStageMs`, `GPULatencyFrames`). Listeners choose their timing: `Immediate` (when the frame ends) or `WithGPU`,
+called in frame order once a frame's GPU times arrived (or are known not to come), after `c_MaxGPULatencyFrames` (8) later
+frames without them at the latest, at once while no GPU times are expected (`SetGPUTimesExpected`), and for every frame left
+by `FlushGPUListeners`. `Summarize` takes GPU stages' statistics over the frames with GPU times and adds `GPU`: those frames,
+their busy time, the observed latency and `BoundBy` (`ClassifyFrameBound` of the medians: `GPU` when the GPU's busy time is
+at least 90% of the frame interval and above the work time, `CPU` when the work time is at least 90% of it, `Capped` when
+neither is: vsync, a frame-rate cap or idle throttling sets the pace; `Unknown` without GPU times).
+
+The renderer measures them (`Renderer/GPUProfiler`, `Renderer::GetGPUProfiler`) with the device's own 64-bit timestamps
+(`GraphicsDevice::CreateTimestampPool`, read with their availability and never waited for; NVRHI's timer queries read 32-bit
+values and end render passes). A ring of `MaxFramesInFlight + 2` frame slots of 256 timestamps: `Renderer::BeginFrame` closes
+the frame's slot (an event query marks the end of its submissions), hands the oldest slots the GPU completed to the frame
+profiler (every renderer's intervals added up per stage, like CPU stages) and opens the next one, whose timestamps are reset
+by a command list executed at once (query commands of a queue run in submission order). A slot still in use when its turn
+comes is dropped (`GPUProfilerStats::DroppedFrames`), as is a frame whose timestamps were recorded into a command list that
+was never executed; nothing waits for the GPU. `GPUPassTimer` times consecutive passes of a command list with one timestamp
+per boundary, so stages tile it without gaps; a `GPUTimerRecord` keeps a user's own intervals (`SceneRenderer::GetGPUStats`).
+The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStages`):
+
+| Stage | Where |
+| --- | --- |
+| `GPU.Uploads` | the upload queue's graphics batches (`GPUUploadQueue::SubmitBatch`) |
+| `GPU.Setup` | a scene renderer's environment maps, scene data uploads and light clusters |
+| `GPU.Cull` | culling dispatches and depth pyramids |
+| `GPU.Shadows`, `GPU.Prepass`, `GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent` | the scene passes |
+| `GPU.Post` | exposure, bloom, tone mapping and FXAA |
+| `GPU.Overlays` | grid, tints, outline, debug lines, text and the copy into a target |
+| `GPU.ImGui` | the editor's UI (registered by `ImGuiLayer` on first use, so games have no such column) |
+
+Drivers of tile-based GPUs may write a timestamp recorded inside a render pass instance when the pass ends: MoltenVK samples
+Metal's GPU counters at encoder boundaries, so on macOS a stage that begins inside a pass that continues (`GPU.Transparent`
+after `GPU.Opaque` in the forward pass) shows its time in the stage before it. Stages that begin where a pass ends (shadows,
+prepass, opaque, post-processing) are exact everywhere.
 
 ## Scene runtime lifecycle
 
@@ -2689,8 +2726,13 @@ resident MB per pool, evictions), the texture streamer's (`StreamedMB`: bytes re
 `MipLevelsRaised` and `MipLevelsDropped` so far, `MipsBelowWanted`: textures below the level their views need, from
 `AssetManagerStats::Detail`), the frame's steps through the upload queue (`UploadQueueMB`, `UploadQueueMs`,
 `UploadQueueSteps`), the graphics device's memory in use and the upload staging of it (`DeviceMB`, `StagingMB`: with
-the resident pools they tell what render targets and the swapchain take) and the process's private memory with its peak
-so far (`PrivateMB`, `PeakPrivateMB`). A log that cannot be written fails the run (exit code 1).
+the resident pools they tell what render targets and the swapchain take), the process's private memory with its peak
+so far (`PrivateMB`, `PeakPrivateMB`) and the GPU: each GPU stage's column (`GPU.Shadows`...), `GPUFrame` (1 when the frame's GPU
+times arrived) and `GPUBusyMs`. A row describes one frame: what the frame left is captured when it ends
+(`FramePerfLog::CaptureFrame`) and the row is written by a `WithGPU` listener once its GPU times are known, so its CPU and GPU
+columns belong together. `Create` registers every scene system's stage first, so `Scene.Animation` and every module's system
+get columns; a stage registered after the header gets none and is warned about once, by name. A log that cannot be written
+fails the run (exit code 1).
 `GameRuntime::Create` loads the manifest, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
 `PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module

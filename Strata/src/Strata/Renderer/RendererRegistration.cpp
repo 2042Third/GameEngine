@@ -5,6 +5,7 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/EngineServices.h"
 #include "Strata/Renderer/Font.h"
+#include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
@@ -31,6 +32,8 @@ namespace Strata
 		// The asset layer finalizes GPU assets through this service: the running renderer's upload context, frames in flight
 		// and memory budget (Asset/AssetUploadContext.h).
 		EngineServices::Register<IAssetGraphics>(RendererAssetGraphics::Get());
+		// The GPU stages, before anything reads the frame profiler's stages (a perf log's columns).
+		RendererGPUStages::Get();
 
 		// Textures and meshes are stored in their cooked binary form, materials and fonts as their source. Textures and
 		// fonts keep their bytes: they take them over instead of copying them. Block-compressed textures are decoded here,

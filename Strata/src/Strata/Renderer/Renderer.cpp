@@ -19,6 +19,7 @@ namespace Strata
 			Scope<GPUUploadQueue> UploadQueue;          // Records into the staging pool: destroyed before it
 			Scope<RendererUploadContext> UploadContext; // Records into the upload queue: destroyed before it
 			Scope<DeferredReleaseQueue> DeferredReleases;
+			Scope<GPUProfiler> Profiler;
 
 			nvrhi::SamplerHandle LinearClamp;
 			nvrhi::SamplerHandle LinearWrap;
@@ -105,6 +106,9 @@ namespace Strata
 		if (specification.TransferQueueUploads && !s_Data->UploadQueue->SetTransferQueue(true))
 			ST_CORE_INFO("Renderer: the device has no dedicated transfer queue; uploads run on the graphics queue");
 		s_Data->DeferredReleases = CreateScope<DeferredReleaseQueue>(nvrhiDevice);
+		s_Data->Profiler = CreateScope<GPUProfiler>(device);
+		if (!s_Data->Profiler->IsEnabled())
+			ST_CORE_INFO("Renderer: the device writes no GPU timestamps; GPU stages are not measured");
 		// Texture loaders decode block-compressed data on their workers for devices that cannot sample it.
 		Texture::SetBlockCompressionSupported(device.GetInfo().SupportsBCCompression);
 		return true;
@@ -167,6 +171,17 @@ namespace Strata
 		return *s_Data->UploadQueue;
 	}
 
+	GPUProfiler& Renderer::GetGPUProfiler()
+	{
+		ST_CORE_ASSERT(s_Data, "Renderer is not initialized");
+		return *s_Data->Profiler;
+	}
+
+	GPUProfiler* Renderer::FindGPUProfiler()
+	{
+		return s_Data ? s_Data->Profiler.get() : nullptr;
+	}
+
 	DeferredReleaseQueue& Renderer::GetDeferredReleases()
 	{
 		ST_CORE_ASSERT(s_Data, "Renderer is not initialized");
@@ -184,6 +199,7 @@ namespace Strata
 		if (!s_Data)
 			return;
 
+		s_Data->Profiler->BeginFrame();
 		s_Data->BindlessTextures->BeginFrame(s_Data->Device->GetFrameIndex());
 		s_Data->Staging->BeginFrame(s_Data->Device->GetFrameIndex());
 		s_Data->UploadQueue->BeginFrame();

@@ -175,6 +175,8 @@ namespace Strata
 			nlohmann::json stages = nlohmann::json::object();
 			for (const FrameStageSummary& stage : summary.Stages)
 			{
+				if (stage.Kind != FrameStageKind::CPU)
+					continue; // The main thread's stages only
 				nlohmann::json entry = DescribeFrameTimeStats(stage.Time);
 				entry["inFrameTime"] = stage.InWorkTime;
 				stages[stage.Name] = std::move(entry);

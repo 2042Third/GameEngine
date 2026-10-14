@@ -105,6 +105,7 @@ namespace Strata
 				m_GraphicsList = m_Device->createCommandList();
 			m_GraphicsList->open();
 			m_GraphicsOpen = true;
+			m_GraphicsTimer.emplace(m_GraphicsList.Get(), RendererGPUStages::Get().Uploads);
 		}
 		if (queue == GPUUploadQueueKind::Graphics)
 			return m_GraphicsList;
@@ -176,6 +177,11 @@ namespace Strata
 		}
 
 		// Executed also when only the transfer list recorded: the batch's completion is tracked on both queues.
+		if (m_GraphicsTimer)
+		{
+			m_GraphicsTimer->End();
+			m_GraphicsTimer.reset();
+		}
 		m_GraphicsList->close();
 		m_Device->executeCommandList(m_GraphicsList);
 		// The staging these uploads copy from becomes reusable as soon as the GPU has run them, usually by the next frame's

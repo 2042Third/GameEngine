@@ -3,6 +3,7 @@
 #include "Strata/Core/Base.h"
 #include "Strata/Renderer/BindlessTextureTable.h"
 #include "Strata/Renderer/DeferredReleaseQueue.h"
+#include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Renderer/GraphicsDevice.h"
 #include "Strata/Renderer/RendererUploadContext.h"
@@ -54,6 +55,10 @@ namespace Strata
 		static RendererUploadContext& GetUploadContext();
 		// The budgeted queue every asset upload goes through (the upload context's batches are its batches).
 		static GPUUploadQueue& GetUploadQueue();
+		// GPU time per stage of the frame (timestamps; a no-op without timestamp support): passes are timed with GPUPassTimer.
+		static GPUProfiler& GetGPUProfiler();
+		// The profiler, or null without a renderer (any time, also while the renderer initializes).
+		static GPUProfiler* FindGPUProfiler();
 		// Resources dropped while the GPU may still use them (see ReleaseDeferred).
 		static DeferredReleaseQueue& GetDeferredReleases();
 		// Drops the references once the GPU has finished every command list executed so far, without waiting for it. Use
@@ -61,8 +66,9 @@ namespace Strata
 		// textures of clears alive for the GPU (DeferredReleaseQueue). Ignored without a renderer (nothing renders).
 		static void ReleaseDeferred(std::vector<nvrhi::ResourceHandle> resources);
 
-		// Called by the application after the graphics device began a frame: recycles bindless slots and staging memory,
-		// rolls the upload queue's frame and drops deferred releases the GPU is done with.
+		// Called by the application after the graphics device began a frame: hands the GPU times of completed frames to the
+		// frame profiler (GPUProfiler::BeginFrame), recycles bindless slots and staging memory, rolls the upload queue's frame
+		// and drops deferred releases the GPU is done with.
 		static void BeginFrame();
 		// Before the first command list of a frame that renders into the back buffer: the GPU waits for the display to hand
 		// the image over only from here on (GraphicsDevice::PrepareBackBuffer), so the frame's earlier work - asset uploads,
