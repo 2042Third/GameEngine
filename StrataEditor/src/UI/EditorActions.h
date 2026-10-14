@@ -39,6 +39,8 @@ namespace Strata
 	// edited scene is read-only: draws a banner naming the scene that opens and returns true, so that the panel draws its
 	// contents disabled. Draws nothing and returns false otherwise.
 	bool DrawSceneLoadBanner(const char* id, const EditorContext& context);
+	// The scene being opened as people read it: its path, or "the start scene" while it waits for the asset scan.
+	std::string DescribeOpeningScene(const EditorContext& context);
 	// The background scan of the project's assets as the status bar and the Content Browser show it: "Scanning 12,345 /
 	// 30,000" (while the directory is walked, the files found so far: "Scanning 1,234 files found").
 	std::string FormatAssetScan(const AssetScanProgress& progress);

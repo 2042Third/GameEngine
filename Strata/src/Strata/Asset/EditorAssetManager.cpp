@@ -811,8 +811,11 @@ namespace Strata
 	{
 		std::atomic<bool> Cancel = false;
 		std::atomic<uint8_t> Phase = static_cast<uint8_t>(AssetScanPhase::Walking);
-		std::atomic<uint64_t> Done = 0;
+		std::atomic<uint64_t> Done = 0;  // Walking: files found; Applying: files inserted
 		std::atomic<uint64_t> Total = 0;
+		// Registering: files whose .meta was read, and whose cached state was checked (each half of the step's work).
+		std::atomic<uint64_t> Read = 0;
+		std::atomic<uint64_t> Checked = 0;
 		std::atomic<bool> Finished = false;
 
 		std::vector<PreparedSource> Prepared;
@@ -1152,6 +1155,7 @@ namespace Strata
 			for (uint32_t index = begin; index < end && !cancelled(); index++)
 			{
 				PreparedSource& source = prepared[index];
+				shared.Read.fetch_add(1, std::memory_order_relaxed);
 				source.Path = work.ToRelative(source.Absolute);
 				source.Importer = AssetImporterRegistry::FindByExtension(GetExtension(source.Absolute));
 				if (source.Path.empty() || !source.Importer)
@@ -1222,7 +1226,7 @@ namespace Strata
 			for (uint32_t index = begin; index < end && !cancelled(); index++)
 			{
 				PreparedSource& source = prepared[index];
-				shared.Done.fetch_add(1, std::memory_order_relaxed);
+				shared.Checked.fetch_add(1, std::memory_order_relaxed);
 				if (source.Skip)
 					continue;
 				if (source.NewHandle && !WriteAssetMeta(GetMetaPath(source.Absolute), source.Handle, source.Importer->GetType(), source.Settings))
@@ -1501,7 +1505,8 @@ namespace Strata
 		const ScanShared& shared = *m_Scan->Shared;
 		AssetScanProgress progress;
 		progress.Phase = static_cast<AssetScanPhase>(shared.Phase.load());
-		progress.Done = shared.Done.load(std::memory_order_relaxed);
+		progress.Done = progress.Phase == AssetScanPhase::Registering
+			? (shared.Read.load(std::memory_order_relaxed) + shared.Checked.load(std::memory_order_relaxed)) / 2 : shared.Done.load(std::memory_order_relaxed);
 		progress.Total = shared.Total.load(std::memory_order_relaxed);
 		return progress;
 	}

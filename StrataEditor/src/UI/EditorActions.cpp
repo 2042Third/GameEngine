@@ -97,17 +97,23 @@ namespace Strata
 		return fmt::format("Scanning {} / {}", StringUtils::FormatThousands(progress.Done), StringUtils::FormatThousands(progress.Total));
 	}
 
+	std::string DescribeOpeningScene(const EditorContext& context)
+	{
+		const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+		if (const EditorAssetManager* assets = context.GetAssetManager())
+		{
+			if (const std::optional<AssetMetadata> metadata = assets->GetMetadata(status.Scene))
+				return metadata->Path.empty() ? metadata->Name : metadata->Path;
+		}
+		// Not registered yet: the project's start scene waits for the asset scan.
+		return status.StartScene ? std::string("the start scene") : status.Scene.ToString();
+	}
+
 	bool DrawSceneLoadBanner(const char* id, const EditorContext& context)
 	{
 		if (!context.IsSceneLoading() || context.IsPlaying())
 			return false;
-		const AssetHandle scene = context.GetSceneLoadStatus().Scene;
-		std::string name = scene.ToString();
-		if (const EditorAssetManager* assets = context.GetAssetManager())
-		{
-			if (const std::optional<AssetMetadata> metadata = assets->GetMetadata(scene))
-				name = metadata->Path.empty() ? metadata->Name : metadata->Path;
-		}
+		const std::string name = DescribeOpeningScene(context);
 		UI::Banner(id, Icons::LoaderCircle, fmt::format("Opening {}: the scene shown is read-only until it replaces it", name), UI::GetThemeColors().Info);
 		ImGui::Spacing();
 		return true;

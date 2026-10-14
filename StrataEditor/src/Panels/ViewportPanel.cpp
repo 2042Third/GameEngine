@@ -20,6 +20,7 @@
 #include <Strata/Animation/AnimationPreview.h>
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/SceneRenderer.h>
@@ -845,17 +846,25 @@ namespace Strata
 		const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const UI::ThemeColors& colors = UI::GetThemeColors();
-		std::string name = status.Scene.ToString();
-		if (const Ref<AssetManagerBase>& assets = AssetManager::GetActive())
-		{
-			if (const std::optional<AssetMetadata> metadata = assets->GetMetadata(status.Scene))
-				name = metadata->Path.empty() ? metadata->Name : metadata->Path;
-		}
+		const std::string name = DescribeOpeningScene(context);
 		// The load's progress counts the scene's document as it is read (SceneReadProgress), then what the scene uses by bytes:
 		// the bar moves on in both steps, and the step says what the time goes to (last, the view's render proxies are built).
-		const char* step = status.State == SceneLoadState::LoadingScene ? "Reading the scene"
-			: status.State == SceneLoadState::Preparing ? "Preparing the view" : "Loading what it uses";
-		const std::string stage = fmt::format("{} {:.0f}%", step, std::floor(status.Progress * 100.0f));
+		// Before it, a project's start scene waits for the scan of the project's assets, whose progress shows then.
+		float progress = status.Progress;
+		std::string stage;
+		if (const std::optional<AssetScanProgress> scan = context.GetAssetScanProgress())
+		{
+			const bool walking = scan->Phase == AssetScanPhase::Walking || scan->Total == 0;
+			progress = walking ? 0.0f : static_cast<float>(scan->Done) / static_cast<float>(scan->Total);
+			stage = walking ? fmt::format("Listing the project's files: {}", StringUtils::FormatThousands(scan->Done))
+				: fmt::format("Registering the project's assets: {} / {}", StringUtils::FormatThousands(scan->Done), StringUtils::FormatThousands(scan->Total));
+		}
+		else
+		{
+			const char* step = status.State == SceneLoadState::LoadingScene ? "Reading the scene"
+				: status.State == SceneLoadState::Preparing ? "Preparing the view" : "Loading what it uses";
+			stage = fmt::format("{} {:.0f}%", step, std::floor(status.Progress * 100.0f));
+		}
 
 		// A card in the middle of the image: the scene's name over the progress bar (no item takes the image's clicks but the
 		// bar, which takes none either).
@@ -872,7 +881,7 @@ namespace Strata
 		drawList->AddText(contentMin, ImGui::GetColorU32(colors.Text), title.c_str());
 		ImGui::PopFont();
 		ImGui::SetCursorScreenPos(ImVec2(contentMin.x, contentMin.y + ImGui::GetTextLineHeightWithSpacing()));
-		UI::StrataProgressBar("Viewport.SceneLoad", status.Progress, stage, contentWidth);
+		UI::StrataProgressBar("Viewport.SceneLoad", progress, stage, contentWidth);
 	}
 
 	void ViewportPanel::DrawGameWindowNotice(EditorContext& context, const ViewportView& view, ImDrawList* drawList)
