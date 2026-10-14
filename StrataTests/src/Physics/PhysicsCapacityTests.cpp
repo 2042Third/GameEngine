@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Perf/SceneGenerators.h"
 #include "Physics/PhysicsTestUtils.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Process.h"
@@ -17,6 +18,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <span>
 #include <string>
 #include <vector>
@@ -494,6 +496,119 @@ TEST_SUITE("Physics.Capacity")
 		CHECK(given == 100);
 		CHECK_FALSE(physics.HasBody(boxes[1124]));
 		scene.OnRuntimeStop();
+	}
+
+	TEST_CASE("Bodies built on the job threads get the same IDs and simulate the same, whatever the number of threads")
+	{
+		// A mix of static, dynamic and kinematic bodies, capsules and compound bodies of collider children, built in one round
+		// (the parallel path) with one worker and with the application's workers. Scaled down in Debug builds.
+#if defined(ST_DEBUG)
+		constexpr uint32_t c_Count = 4000;
+		constexpr uint32_t c_Steps = 60;
+#else
+		constexpr uint32_t c_Count = 20'000;
+		constexpr uint32_t c_Steps = 120;
+#endif
+		struct Run
+		{
+			std::vector<uint32_t> BodyIDs;
+			std::vector<glm::mat4> Poses;
+			uint64_t ParallelBuilds = 0;
+		};
+		const auto run = [&]() -> Run
+		{
+			Scene scene("Mixed");
+			Entity ground = scene.CreateEntityWithUUID(UUID(0x10), "Ground");
+			ground.GetTransform().Translation = glm::vec3(125.0f, -0.5f, 125.0f);
+			ground.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(200.0f, 0.5f, 200.0f);
+			std::vector<Entity> entities;
+			for (uint32_t index = 0; index < c_Count; index++)
+			{
+				Entity entity = scene.CreateEntityWithUUID(UUID(0x1000 + static_cast<uint64_t>(index)), "Body");
+				const glm::vec3 cell(static_cast<float>(index % 100) * 2.5f, 0.0f, static_cast<float>(index / 100) * 2.5f);
+				switch (index % 10)
+				{
+					case 5:
+						entity.AddComponent<RigidBodyComponent>();
+						entity.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(0.4f);
+						entity.GetTransform().Translation = cell + glm::vec3(0.0f, 3.0f + static_cast<float>(index % 3), 0.0f);
+						entity.GetTransform().Rotation = glm::angleAxis(0.1f * static_cast<float>(index % 7), glm::normalize(glm::vec3(1.0f, 1.0f, 0.0f)));
+						break;
+					case 6:
+						entity.AddComponent<RigidBodyComponent>();
+						entity.AddComponent<SphereColliderComponent>().Radius = 0.4f;
+						entity.GetTransform().Translation = cell + glm::vec3(0.1f, 4.0f, 0.0f);
+						break;
+					case 7:
+						entity.AddComponent<RigidBodyComponent>();
+						entity.AddComponent<CapsuleColliderComponent>();
+						entity.GetTransform().Translation = cell + glm::vec3(0.0f, 5.0f, 0.1f);
+						break;
+					case 8:
+						entity.AddComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+						entity.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(0.3f, 0.1f, 0.3f);
+						entity.GetTransform().Translation = cell + glm::vec3(0.0f, 7.0f, 0.0f);
+						break;
+					case 9:
+					{
+						entity.AddComponent<RigidBodyComponent>();
+						entity.GetTransform().Translation = cell + glm::vec3(0.0f, 8.0f, 0.0f);
+						for (const float offset : { -0.4f, 0.4f })
+						{
+							Entity child = scene.CreateChildEntity(entity, "Part");
+							child.GetTransform().Translation = glm::vec3(offset, 0.0f, 0.0f);
+							child.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(0.3f);
+						}
+						break;
+					}
+					default:
+						entity.AddComponent<BoxColliderComponent>().HalfExtents = glm::vec3(0.5f, 0.25f + 0.05f * static_cast<float>(index % 5), 0.5f);
+						entity.GetTransform().Translation = cell + glm::vec3(0.0f, 0.25f, 0.0f);
+						break;
+				}
+				entities.push_back(entity);
+			}
+
+			scene.OnRuntimeStart();
+			PhysicsSystem& physics = GetPhysics(scene);
+			Run result;
+			const PhysicsWorld* world = physics.GetWorld();
+			REQUIRE(world != nullptr);
+			for (const Entity entity : entities)
+				result.BodyIDs.push_back(world->GetBodyID(entity));
+			result.ParallelBuilds = physics.GetStats().ParallelBuildCount;
+			StepScene(scene, c_Steps);
+			for (const Entity entity : entities)
+				result.Poses.push_back(scene.GetWorldTransform(entity));
+			scene.OnRuntimeStop();
+			return result;
+		};
+
+		Run single;
+		{
+			ScopedJobSystem jobs(1);
+			single = run();
+		}
+		Run many;
+		{
+			Perf::ScopedApplicationJobSystem jobs;
+			many = run();
+		}
+		CHECK(single.ParallelBuilds >= 1);
+		CHECK(many.ParallelBuilds == single.ParallelBuilds);
+		REQUIRE(single.BodyIDs.size() == many.BodyIDs.size());
+		uint32_t differentIDs = 0;
+		uint32_t differentPoses = 0;
+		uint32_t withoutBody = 0;
+		for (size_t index = 0; index < single.BodyIDs.size(); index++)
+		{
+			differentIDs += single.BodyIDs[index] != many.BodyIDs[index] ? 1u : 0u;
+			withoutBody += single.BodyIDs[index] == PhysicsWorld::c_NoBodyID ? 1u : 0u;
+			differentPoses += std::memcmp(&single.Poses[index], &many.Poses[index], sizeof(glm::mat4)) != 0 ? 1u : 0u;
+		}
+		CHECK(withoutBody == 0);
+		CHECK(differentIDs == 0);
+		CHECK(differentPoses == 0);
 	}
 
 	TEST_CASE("Steps that overflow the contact buffers are counted, warned about once and remembered")

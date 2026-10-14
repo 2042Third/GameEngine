@@ -50,6 +50,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <shared_mutex>
 #include <span>
 #include <utility>
 
@@ -974,6 +975,7 @@ namespace Strata
 		Scope<JPH::JobSystem> Jobs;
 		std::unordered_map<MeshShapeKey, RestoredMeshShape, MeshShapeKeyHash> MeshShapes; // See PhysicsMeshShapes
 		std::unordered_map<PrimitiveShapeKey, JPH::RefConst<JPH::Shape>, PrimitiveShapeKeyHash> PrimitiveShapes; // See GetPrimitiveShape
+		std::shared_mutex PrimitiveShapesMutex;
 		Scope<JPH::PhysicsSystem> JoltSystem; // Destroyed before the listeners, filters and allocators it references
 		Scope<CharacterControllerSet> Characters; // Destroyed (with its presence bodies) before the Jolt system it uses
 		std::vector<CharacterBodyChange> CharacterChanges;            // Scratch of ApplyCharacterChanges
@@ -994,6 +996,7 @@ namespace Strata
 		std::vector<JPH::BodyID> PendingRemovals;
 		std::vector<JPH::BodyID> PendingDestructions;
 		uint64_t AddBatchCount = 0;                                   // Batches of new bodies added since the world was created
+		std::vector<JPH::BodyInterface::AddState> AddStates;          // Scratch of FlushBodyBatches
 		std::unordered_map<PairKey, TouchingPair, PairKeyHash> TouchingPairs;
 		std::unordered_map<UUID, std::vector<PairKey>> EntityPairs;   // Touching pairs of each entity (see AddTouchingPair)
 		uint64_t PairIndexOperations = 0;                             // Entries of EntityPairs written since the world was created
@@ -1047,6 +1050,7 @@ namespace Strata
 		uint32_t LastWrittenBodies = 0;
 		uint32_t LastOrderedSlots = 0;
 		uint64_t BuildCount = 0;
+		uint64_t ParallelBuildCount = 0;                              // Rounds of changes that built their bodies on the job threads
 		uint64_t MeshCheckCount = 0;
 		// The start of the simulation waits for meshes (see HoldForMeshes).
 		bool HasStarted = false;
@@ -1554,6 +1558,9 @@ namespace Strata
 				bodyInterface.InvalidateContactCache(body);
 		}
 
+		// New bodies per broad phase batch (see FlushBodyBatches).
+		constexpr uint32_t c_AddChunk = 4096;
+
 		// Adds the bodies created since the last flush to the simulation, in one batch per activation mode, after the queued
 		// removals and destructions. Bodies destroyed or taken out of the simulation since they were queued are skipped.
 		void FlushBodyBatches(PhysicsWorldData& data)
@@ -1573,10 +1580,30 @@ namespace Strata
 				});
 				if (batch.empty())
 					return;
-				// AddBodiesPrepare may reorder the batch; Finalize takes it as it left it.
-				const JPH::BodyInterface::AddState state = bodies.AddBodiesPrepare(batch.data(), static_cast<int>(batch.size()));
-				bodies.AddBodiesFinalize(batch.data(), static_cast<int>(batch.size()), state, activation);
-				data.AddBatchCount++;
+				// AddBodiesPrepare may reorder the batch; Finalize takes it as it left it. Large batches go in chunks of fixed size
+				// (the broad phase does not depend on the number of threads), prepared on the job threads and added in order.
+				const uint32_t count = static_cast<uint32_t>(batch.size());
+				const uint32_t chunkCount = (count + c_AddChunk - 1) / c_AddChunk;
+				std::vector<JPH::BodyInterface::AddState>& states = data.AddStates;
+				states.assign(chunkCount, nullptr);
+				const auto prepare = [&](uint32_t firstChunk, uint32_t lastChunk)
+				{
+					for (uint32_t chunk = firstChunk; chunk < lastChunk; chunk++)
+					{
+						const uint32_t begin = chunk * c_AddChunk;
+						states[chunk] = bodies.AddBodiesPrepare(batch.data() + begin, static_cast<int>(std::min(count, begin + c_AddChunk) - begin));
+					}
+				};
+				if (chunkCount > 1 && JobSystem::IsInitialized())
+					JobSystem::ParallelFor(chunkCount, 1, prepare);
+				else
+					prepare(0, chunkCount);
+				for (uint32_t chunk = 0; chunk < chunkCount; chunk++)
+				{
+					const uint32_t begin = chunk * c_AddChunk;
+					bodies.AddBodiesFinalize(batch.data() + begin, static_cast<int>(std::min(count, begin + c_AddChunk) - begin), states[chunk], activation);
+				}
+				data.AddBatchCount += chunkCount;
 				InvalidateReusedIDs(data, batch);
 				batch.clear();
 			};
@@ -1637,9 +1664,36 @@ namespace Strata
 		// Shapes
 		//////////////////////////////////////////////////////////////////////////
 
-		JPH::RefConst<JPH::Shape> CreateShape(PhysicsWorldData& data, const JPH::ShapeSettings& settings, const Entity& entity, std::string_view what, PhysicsWarning warning)
+		struct ShapePart
+		{
+			JPH::RefConst<JPH::Shape> Shape;
+			JPH::Vec3 Position = JPH::Vec3::sZero(); // Body space
+			JPH::Quat Rotation = JPH::Quat::sIdentity();
+		};
+
+		// What building a body's shape found. Shapes are built on the main thread, which warns about what it cannot use, or
+		// on a job thread (OffThread, see RefreshOwnersInParallel), which stops at the first problem or mesh collider and
+		// leaves the body to the main thread (NeedsMainThread), so that warnings and mesh data stay on the main thread.
+		struct ShapeBuild
+		{
+			std::vector<ShapePart> Parts;
+			std::vector<ShapeMember> ShapeMembers;   // Entities that contributed colliders
+			std::vector<MeshSource> MeshSources;     // Meshes of the mesh colliders considered
+			bool WaitsForMesh = false;               // A mesh collider was left out until its data arrives or is cooked
+			uint32_t ColliderCount = 0;              // Collider components considered, usable or not
+			bool OffThread = false;
+			bool NeedsMainThread = false;
+		};
+
+		JPH::RefConst<JPH::Shape> CreateShape(PhysicsWorldData& data, ShapeBuild& build, const JPH::ShapeSettings& settings, const Entity& entity, std::string_view what,
+			PhysicsWarning warning)
 		{
 			JPH::ShapeSettings::ShapeResult result = settings.Create();
+			if (result.HasError() && build.OffThread)
+			{
+				build.NeedsMainThread = true;
+				return nullptr;
+			}
 			if (result.HasError())
 			{
 				if (ShouldWarn(data, entity.GetUUID(), warning))
@@ -1682,24 +1736,13 @@ namespace Strata
 			bool m_PastEnd = false;
 		};
 
-		struct ShapePart
+		void WarnNonFiniteCollider(PhysicsWorldData& data, ShapeBuild& build, const Entity& entity, std::string_view collider)
 		{
-			JPH::RefConst<JPH::Shape> Shape;
-			JPH::Vec3 Position = JPH::Vec3::sZero(); // Body space
-			JPH::Quat Rotation = JPH::Quat::sIdentity();
-		};
-
-		struct ShapeBuild
-		{
-			std::vector<ShapePart> Parts;
-			std::vector<ShapeMember> ShapeMembers;   // Entities that contributed colliders
-			std::vector<MeshSource> MeshSources;     // Meshes of the mesh colliders considered
-			bool WaitsForMesh = false;               // A mesh collider was left out until its data arrives or is cooked
-			uint32_t ColliderCount = 0;              // Collider components considered, usable or not
-		};
-
-		void WarnNonFiniteCollider(PhysicsWorldData& data, const Entity& entity, std::string_view collider)
-		{
+			if (build.OffThread)
+			{
+				build.NeedsMainThread = true;
+				return;
+			}
 			if (ShouldWarn(data, entity.GetUUID(), PhysicsWarning::InvalidCollider))
 				ST_CORE_WARN("Physics: the {} of '{}' has non-finite dimensions and is ignored", collider, entity.GetName());
 		}
@@ -1762,15 +1805,27 @@ namespace Strata
 		// The shape of a box or sphere collider of these (scaled) dimensions. Shapes are immutable, so bodies of the same size
 		// share one: a scene of thousands of identical boxes builds one shape (up to c_MaxSharedPrimitiveShapes sizes per
 		// world). Null, with a warning about the entity, for dimensions the shape rejects.
-		JPH::RefConst<JPH::Shape> GetPrimitiveShape(PhysicsWorldData& data, const Entity& entity, const PrimitiveShapeKey& key, const JPH::ShapeSettings& settings,
-			std::string_view what)
+		// Job threads share the shapes through PrimitiveShapesMutex (read on a hit, exclusive to insert); the main thread builds
+		// none while they run.
+		JPH::RefConst<JPH::Shape> GetPrimitiveShape(PhysicsWorldData& data, ShapeBuild& build, const Entity& entity, const PrimitiveShapeKey& key,
+			const JPH::ShapeSettings& settings, std::string_view what)
 		{
-			auto it = data.PrimitiveShapes.find(key);
-			if (it != data.PrimitiveShapes.end())
-				return it->second;
-			JPH::RefConst<JPH::Shape> shape = CreateShape(data, settings, entity, what, PhysicsWarning::InvalidCollider);
-			if (shape && data.PrimitiveShapes.size() < c_MaxSharedPrimitiveShapes)
-				data.PrimitiveShapes.emplace(key, shape);
+			{
+				std::shared_lock<std::shared_mutex> lock(data.PrimitiveShapesMutex, std::defer_lock);
+				if (build.OffThread)
+					lock.lock();
+				auto it = data.PrimitiveShapes.find(key);
+				if (it != data.PrimitiveShapes.end())
+					return it->second;
+			}
+			JPH::RefConst<JPH::Shape> shape = CreateShape(data, build, settings, entity, what, PhysicsWarning::InvalidCollider);
+			if (!shape)
+				return nullptr;
+			std::unique_lock<std::shared_mutex> lock(data.PrimitiveShapesMutex, std::defer_lock);
+			if (build.OffThread)
+				lock.lock();
+			if (data.PrimitiveShapes.size() < c_MaxSharedPrimitiveShapes)
+				return data.PrimitiveShapes.emplace(key, shape).first->second; // Another thread's shape of that size, if it was first
 			return shape;
 		}
 
@@ -1791,12 +1846,12 @@ namespace Strata
 					const glm::vec3 halfExtents = glm::max(glm::abs(box->HalfExtents) * absoluteScale, glm::vec3(c_MinColliderExtent));
 					const PrimitiveShapeKey key { PrimitiveShapeKey::ShapeKind::Box,
 						{ std::bit_cast<uint32_t>(halfExtents.x), std::bit_cast<uint32_t>(halfExtents.y), std::bit_cast<uint32_t>(halfExtents.z) } };
-					if (JPH::RefConst<JPH::Shape> shape = GetPrimitiveShape(data, entity, key, JPH::BoxShapeSettings(ToJolt(halfExtents)), "box collider"))
+					if (JPH::RefConst<JPH::Shape> shape = GetPrimitiveShape(data, build, entity, key, JPH::BoxShapeSettings(ToJolt(halfExtents)), "box collider"))
 						build.Parts.push_back({ shape, placeAt(box->Offset), partRotation });
 				}
 				else
 				{
-					WarnNonFiniteCollider(data, entity, "box collider");
+					WarnNonFiniteCollider(data, build, entity, "box collider");
 				}
 			}
 
@@ -1807,12 +1862,12 @@ namespace Strata
 				{
 					const float radius = std::max(std::abs(sphere->Radius) * maxScale, c_MinColliderExtent);
 					const PrimitiveShapeKey key { PrimitiveShapeKey::ShapeKind::Sphere, { std::bit_cast<uint32_t>(radius), 0, 0 } };
-					if (JPH::RefConst<JPH::Shape> shape = GetPrimitiveShape(data, entity, key, JPH::SphereShapeSettings(radius), "sphere collider"))
+					if (JPH::RefConst<JPH::Shape> shape = GetPrimitiveShape(data, build, entity, key, JPH::SphereShapeSettings(radius), "sphere collider"))
 						build.Parts.push_back({ shape, placeAt(sphere->Offset), partRotation });
 				}
 				else
 				{
-					WarnNonFiniteCollider(data, entity, "sphere collider");
+					WarnNonFiniteCollider(data, build, entity, "sphere collider");
 				}
 			}
 
@@ -1825,20 +1880,25 @@ namespace Strata
 					const float halfHeight = std::abs(capsule->HalfHeight) * absoluteScale.y;
 					JPH::RefConst<JPH::Shape> shape;
 					if (halfHeight < c_MinColliderExtent)
-						shape = CreateShape(data, JPH::SphereShapeSettings(radius), entity, "capsule collider", PhysicsWarning::InvalidCollider); // No cylindrical part
+						shape = CreateShape(data, build, JPH::SphereShapeSettings(radius), entity, "capsule collider", PhysicsWarning::InvalidCollider); // No cylindrical part
 					else
-						shape = CreateShape(data, JPH::CapsuleShapeSettings(halfHeight, radius), entity, "capsule collider", PhysicsWarning::InvalidCollider);
+						shape = CreateShape(data, build, JPH::CapsuleShapeSettings(halfHeight, radius), entity, "capsule collider", PhysicsWarning::InvalidCollider);
 					if (shape)
 						build.Parts.push_back({ shape, placeAt(capsule->Offset), partRotation });
 				}
 				else
 				{
-					WarnNonFiniteCollider(data, entity, "capsule collider");
+					WarnNonFiniteCollider(data, build, entity, "capsule collider");
 				}
 			}
 
 			if (const MeshColliderComponent* meshCollider = entity.TryGetComponent<MeshColliderComponent>())
 			{
+				if (build.OffThread)
+				{
+					build.NeedsMainThread = true; // Mesh data comes from the main thread's provider
+					return;
+				}
 				build.ColliderCount++;
 				AssetHandle mesh = meshCollider->Mesh;
 				if (!mesh.IsValid())
@@ -1866,7 +1926,7 @@ namespace Strata
 					else
 					{
 						// Convex hulls and triangle meshes support any non-zero scale, including mirroring.
-						if (JPH::RefConst<JPH::Shape> shape = CreateShape(data, JPH::ScaledShapeSettings(meshShape.GetPtr(), ToJolt(scale)), entity, "mesh collider", PhysicsWarning::InvalidMesh))
+						if (JPH::RefConst<JPH::Shape> shape = CreateShape(data, build, JPH::ScaledShapeSettings(meshShape.GetPtr(), ToJolt(scale)), entity, "mesh collider", PhysicsWarning::InvalidMesh))
 							build.Parts.push_back({ shape, ToJolt(translation), partRotation });
 					}
 				}
@@ -1876,7 +1936,7 @@ namespace Strata
 				build.ShapeMembers.push_back({ entity.GetHandle(), poseInBody });
 		}
 
-		JPH::RefConst<JPH::Shape> CombineParts(PhysicsWorldData& data, const Entity& owner, const std::vector<ShapePart>& parts)
+		JPH::RefConst<JPH::Shape> CombineParts(PhysicsWorldData& data, ShapeBuild& build, const Entity& owner, const std::vector<ShapePart>& parts)
 		{
 			if (parts.empty())
 				return nullptr;
@@ -1888,13 +1948,13 @@ namespace Strata
 					return part.Shape;
 
 				const JPH::RotatedTranslatedShapeSettings settings(part.Position, part.Rotation, part.Shape.GetPtr());
-				return CreateShape(data, settings, owner, "collider placement", PhysicsWarning::InvalidCollider);
+				return CreateShape(data, build, settings, owner, "collider placement", PhysicsWarning::InvalidCollider);
 			}
 
 			JPH::StaticCompoundShapeSettings compound;
 			for (const ShapePart& part : parts)
 				compound.AddShape(part.Position, part.Rotation, part.Shape.GetPtr());
-			return CreateShape(data, compound, owner, "compound collider", PhysicsWarning::InvalidCollider);
+			return CreateShape(data, build, compound, owner, "compound collider", PhysicsWarning::InvalidCollider);
 		}
 
 		float SanitizeNonNegative(float value, float fallback)
@@ -2072,37 +2132,156 @@ namespace Strata
 			UpdatePolling(data, handle, record);
 		}
 
-		// (Re)builds the body of an owner entity from its components, its collider descendants and its world transform.
-		void BuildBody(PhysicsWorldData& data, Entity entity)
+		// The first part of a body's (re)build, which only the main thread may do, in record order: the record, the body type
+		// and the collider entities merged into it (see UpdateMergedEntities).
+		struct BodyBuildStart
 		{
-			ST_PROFILE_FUNCTION();
+			Entity Owner;
+			BodyRecord* Record = nullptr;
+			const RigidBodyComponent* RigidBody = nullptr;
+			RigidBodyType Type = RigidBodyType::Static;
+		};
+
+		BodyBuildStart BeginBodyBuild(PhysicsWorldData& data, Entity entity)
+		{
 			data.BuildCount++;
-
-			Scene& scene = *data.OwnerScene;
+			BodyBuildStart start;
+			start.Owner = entity;
+			start.RigidBody = entity.TryGetComponent<RigidBodyComponent>();
 			const entt::entity handle = entity.GetHandle();
-			const RigidBodyComponent* rigidBody = entity.TryGetComponent<RigidBodyComponent>();
-
 			auto [recordIt, created] = data.Bodies.try_emplace(handle);
-			BodyRecord& record = recordIt->second;
+			start.Record = &recordIt->second;
 			if (created)
-				record.EntityID = entity.GetUUID();
+				start.Record->EntityID = entity.GetUUID();
 
-			RigidBodyType type = rigidBody ? rigidBody->Type : RigidBodyType::Static;
-			if (type != RigidBodyType::Static && type != RigidBodyType::Dynamic && type != RigidBodyType::Kinematic)
+			start.Type = start.RigidBody ? start.RigidBody->Type : RigidBodyType::Static;
+			if (start.Type != RigidBodyType::Static && start.Type != RigidBodyType::Dynamic && start.Type != RigidBodyType::Kinematic)
 			{
-				if (ShouldWarn(data, record.EntityID, PhysicsWarning::InvalidType))
-					ST_CORE_WARN("Physics: '{}' has an invalid rigid body type {}; it is treated as static", entity.GetName(), static_cast<int>(type));
-				type = RigidBodyType::Static;
+				if (ShouldWarn(data, start.Record->EntityID, PhysicsWarning::InvalidType))
+					ST_CORE_WARN("Physics: '{}' has an invalid rigid body type {}; it is treated as static", entity.GetName(), static_cast<int>(start.Type));
+				start.Type = RigidBodyType::Static;
 			}
 
 			// Collider descendants only merge into rigid bodies; collider entities without one are static bodies of their own.
-			UpdateMergedEntities(data, handle, record, rigidBody ? CollectMergedEntities(scene, entity, data.VisitStack) : std::vector<entt::entity>());
+			UpdateMergedEntities(data, handle, *start.Record, start.RigidBody ? CollectMergedEntities(*data.OwnerScene, entity, data.VisitStack) : std::vector<entt::entity>());
+			return start;
+		}
 
-			const glm::mat4 worldTransform = scene.GetWorldTransform(entity);
-			glm::vec3 position;
-			glm::quat rotation;
-			glm::vec3 scale;
-			const bool decomposed = Math::DecomposeTransform(worldTransform, position, rotation, scale);
+		// The motion a dynamic body (re)built now starts with: a body rebuilt because a property changed keeps moving as before;
+		// one that was out of the simulation (or had no body after a failed build) resumes the motion it had.
+		void GetBuildVelocities(PhysicsWorldData& data, const BodyRecord& record, RigidBodyType type, glm::vec3& outLinear, glm::vec3& outAngular)
+		{
+			outLinear = glm::vec3(0.0f);
+			outAngular = glm::vec3(0.0f);
+			if (type != RigidBodyType::Dynamic)
+				return;
+			if (record.HasBody() && record.InSimulation)
+			{
+				JPH::Vec3 currentLinear;
+				JPH::Vec3 currentAngular;
+				data.JoltSystem->GetBodyInterface().GetLinearAndAngularVelocity(record.BodyID, currentLinear, currentAngular);
+				outLinear = ToGlm(currentLinear);
+				outAngular = ToGlm(currentAngular);
+				return;
+			}
+			outLinear = record.SavedLinearVelocity;
+			outAngular = record.SavedAngularVelocity;
+		}
+
+		// Where a body is built: its entity's world transform and that transform's parts.
+		struct BodyPose
+		{
+			glm::mat4 WorldTransform = glm::mat4(1.0f);
+			glm::vec3 Position = glm::vec3(0.0f);
+			glm::quat Rotation = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+			glm::vec3 Scale = glm::vec3(1.0f);
+		};
+
+		// Gives a body built for a record (created without an ID, on any thread) its ID, the next free one as CreateBody would
+		// give it, and makes it the record's body. A full world frees the old body's slot for its replacement instead of losing
+		// the body (its motion was read before, and its contacts carry over like in any rebuild), and the slots of the bodies
+		// destroyed in this round of changes. Without a slot the body is destroyed and the record waits for one (reported for
+		// all such records at once, see ReportBodyLimit).
+		void InstallBody(PhysicsWorldData& data, const BodyBuildStart& start, JPH::Body* body, const BodyPose& pose, std::vector<ShapeMember> shapeMembers,
+			const glm::vec3& linearVelocity, const glm::vec3& angularVelocity)
+		{
+			BodyRecord& record = *start.Record;
+			const entt::entity handle = start.Owner.GetHandle();
+			const RigidBodyType type = start.Type;
+			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
+			// Bodies destroyed in this round of changes keep their slots until the batch: they do not count.
+			if (!record.HasBody() && GetUsedBodySlots(data) - data.PendingDestructions.size() >= data.Settings.MaxBodies)
+			{
+				bodies.DestroyBodyWithoutID(body);
+				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, pose.WorldTransform);
+				return;
+			}
+
+			bool assigned = bodies.AssignBodyID(body);
+			if (!assigned && (record.HasBody() || !data.PendingDestructions.empty()))
+			{
+				DestroyJoltBody(data, record);
+				FlushBodyDestructions(data);
+				assigned = bodies.AssignBodyID(body);
+			}
+			if (!assigned)
+			{
+				bodies.DestroyBodyWithoutID(body);
+				record.SavedLinearVelocity = linearVelocity;
+				record.SavedAngularVelocity = angularVelocity;
+				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, pose.WorldTransform);
+				return;
+			}
+
+			// Contacts are tracked per entity pair and carry over to the new body; the next step confirms or ends them.
+			DestroyJoltBody(data, record);
+			record.BodyID = body->GetID();
+			SetFailure(data, handle, record, BuildFailure::None);
+			record.ShapeScale = pose.Scale;
+			record.WorldScale = pose.Scale;
+			record.LastWorldTransform = pose.WorldTransform;
+			record.KinematicTargetPosition = pose.Position;
+			record.KinematicTargetRotation = pose.Rotation;
+			record.ShapeMembers = std::move(shapeMembers);
+			data.BodySlots[record.BodyID.GetIndex()] = BodySlot { record.BodyID.GetIndexAndSequenceNumber(), handle, &record };
+			data.Contacts.SetBodyInterest(record.BodyID, data.ContactInterest.contains(record.EntityID));
+			ClearWarnings(data, record.EntityID, c_TransientWarnings);
+
+			if (!IsSimulated(*data.OwnerScene, start.Owner))
+			{
+				// Its motion applies when it joins the simulation (AddToSimulation).
+				record.SavedLinearVelocity = type == RigidBodyType::Dynamic ? linearVelocity : glm::vec3(0.0f);
+				record.SavedAngularVelocity = type == RigidBodyType::Dynamic ? angularVelocity : glm::vec3(0.0f);
+				EndContactsOf(data, record.EntityID);
+			}
+			else
+			{
+				// Joins the simulation with the batch of this round (created where its entity is, with its motion).
+				(type == RigidBodyType::Static ? data.PendingAdds : data.PendingActivatedAdds).push_back(record.BodyID);
+				record.AddPending = true;
+				record.InSimulation = true;
+				record.TransformDirty = false;
+				record.SavedLinearVelocity = glm::vec3(0.0f);
+				record.SavedAngularVelocity = glm::vec3(0.0f);
+				if (data.EntityPairs.find(record.EntityID) != data.EntityPairs.end())
+					data.RecheckedEntities.push_back(record.EntityID); // Its contacts carried over: the next step confirms or ends them
+			}
+			UpdatePolling(data, handle, record);
+		}
+
+		// The rest of a body's (re)build on the main thread, after BeginBodyBuild: its shape from the owner's colliders and those
+		// merged into it, placed at the owner's world transform; failures and what cannot be used are warned about.
+		void CompleteBodyBuild(PhysicsWorldData& data, const BodyBuildStart& start)
+		{
+			Scene& scene = *data.OwnerScene;
+			const Entity& entity = start.Owner;
+			const entt::entity handle = entity.GetHandle();
+			BodyRecord& record = *start.Record;
+			const RigidBodyType type = start.Type;
+
+			BodyPose pose;
+			pose.WorldTransform = scene.GetWorldTransform(entity);
+			const bool decomposed = Math::DecomposeTransform(pose.WorldTransform, pose.Position, pose.Rotation, pose.Scale);
 			if (!decomposed || (type == RigidBodyType::Dynamic && !HasInvertibleParent(scene, entity)))
 			{
 				if (ShouldWarn(data, record.EntityID, PhysicsWarning::DegenerateTransform))
@@ -2113,18 +2292,17 @@ namespace Strata
 						ST_CORE_WARN("Physics: the parent of '{}' is scaled to (nearly) zero, so its simulated pose cannot be written back; it gets its body once the parent's transform is valid", entity.GetName());
 				}
 				record.Type = type;
-				SetBuildFailure(data, handle, record, BuildFailure::DegenerateTransform, worldTransform);
+				SetBuildFailure(data, handle, record, BuildFailure::DegenerateTransform, pose.WorldTransform);
 				record.WaitsForParent = decomposed; // The world transform may stay the same when the parent is fixed
 				return;
 			}
 			record.WaitsForParent = false;
 
 			ShapeBuild build;
-			AddColliderParts(data, entity, glm::mat4(1.0f), glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), scale, type, build);
+			AddColliderParts(data, entity, glm::mat4(1.0f), glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), pose.Scale, type, build);
 
 			// Merged colliders are placed with their transform relative to the body (position and rotation, without scale).
-			const glm::mat4 bodyToWorld = Math::ComposeTransform(position, rotation, glm::vec3(1.0f));
-			const glm::mat4 worldToBody = glm::inverse(bodyToWorld);
+			const glm::mat4 worldToBody = glm::inverse(Math::ComposeTransform(pose.Position, pose.Rotation, glm::vec3(1.0f)));
 			for (entt::entity mergedHandle : record.MergedEntities)
 			{
 				const Entity merged(mergedHandle, &scene);
@@ -2147,7 +2325,7 @@ namespace Strata
 			record.Type = type;
 			SetMeshSources(data, handle, record, std::move(build.MeshSources));
 
-			const JPH::RefConst<JPH::Shape> shape = CombineParts(data, entity, build.Parts);
+			const JPH::RefConst<JPH::Shape> shape = CombineParts(data, build, entity, build.Parts);
 			if (!shape)
 			{
 				BuildFailure failure = BuildFailure::InvalidColliders;
@@ -2158,103 +2336,47 @@ namespace Strata
 				else if (build.ColliderCount == 0)
 				{
 					failure = BuildFailure::NoCollider;
-					if (rigidBody && ShouldWarn(data, record.EntityID, PhysicsWarning::MissingCollider))
+					if (start.RigidBody && ShouldWarn(data, record.EntityID, PhysicsWarning::MissingCollider))
 						ST_CORE_WARN("Physics: '{}' has a Rigid Body but no collider; it is not simulated", entity.GetName());
 				}
 				else if (ShouldWarn(data, record.EntityID, PhysicsWarning::NoUsableCollider))
 				{
 					ST_CORE_WARN("Physics: '{}' has no usable collider; it is not simulated", entity.GetName());
 				}
-				SetBuildFailure(data, handle, record, failure, worldTransform);
+				SetBuildFailure(data, handle, record, failure, pose.WorldTransform);
 				return;
 			}
 
-			JPH::BodyInterface& bodies = data.JoltSystem->GetBodyInterface();
-			// Bodies destroyed in this round of changes keep their slots until the batch: they do not count.
+			// A record without a body in a full world waits without making one.
 			if (!record.HasBody() && GetUsedBodySlots(data) - data.PendingDestructions.size() >= data.Settings.MaxBodies)
 			{
-				// Reported for all such entities at once (ReportBodyLimit).
-				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, worldTransform);
+				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, pose.WorldTransform);
 				return;
 			}
 
-			// A dynamic body rebuilt because a property changed keeps moving as before; one that was out of the simulation (or
-			// had no body after a failed build) resumes the motion it had.
-			glm::vec3 linearVelocity(0.0f);
-			glm::vec3 angularVelocity(0.0f);
-			if (type == RigidBodyType::Dynamic)
-			{
-				if (record.HasBody() && record.InSimulation)
-				{
-					JPH::Vec3 currentLinear;
-					JPH::Vec3 currentAngular;
-					bodies.GetLinearAndAngularVelocity(record.BodyID, currentLinear, currentAngular);
-					linearVelocity = ToGlm(currentLinear);
-					angularVelocity = ToGlm(currentAngular);
-				}
-				else
-				{
-					linearVelocity = record.SavedLinearVelocity;
-					angularVelocity = record.SavedAngularVelocity;
-				}
-			}
-
-			JPH::BodyCreationSettings settings = MakeBodySettings(data, entity, rigidBody, type, shape.GetPtr(), position, rotation);
+			glm::vec3 linearVelocity;
+			glm::vec3 angularVelocity;
+			GetBuildVelocities(data, record, type, linearVelocity, angularVelocity);
+			JPH::BodyCreationSettings settings = MakeBodySettings(data, entity, start.RigidBody, type, shape.GetPtr(), pose.Position, pose.Rotation);
 			// A body that joins the simulation now starts with that motion (one that does not gets it when it is added).
 			settings.mLinearVelocity = ToJolt(linearVelocity);
 			settings.mAngularVelocity = ToJolt(angularVelocity);
-			JPH::Body* body = bodies.CreateBody(settings);
-			if (!body && (record.HasBody() || !data.PendingDestructions.empty()))
-			{
-				// The world is full: free the old body's slot for its replacement instead of losing the body (its motion
-				// was read above, and its contacts carry over like in any rebuild), and the slots of the bodies destroyed in
-				// this round of changes.
-				DestroyJoltBody(data, record);
-				FlushBodyDestructions(data);
-				body = bodies.CreateBody(settings);
-			}
+			JPH::Body* body = data.JoltSystem->GetBodyInterface().CreateBodyWithoutID(settings);
 			if (!body)
 			{
 				record.SavedLinearVelocity = linearVelocity;
 				record.SavedAngularVelocity = angularVelocity;
-				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, worldTransform);
+				SetBuildFailure(data, handle, record, BuildFailure::WaitingForSlot, pose.WorldTransform);
 				return;
 			}
+			InstallBody(data, start, body, pose, std::move(build.ShapeMembers), linearVelocity, angularVelocity);
+		}
 
-			// Contacts are tracked per entity pair and carry over to the new body; the next step confirms or ends them.
-			DestroyJoltBody(data, record);
-			record.BodyID = body->GetID();
-			SetFailure(data, handle, record, BuildFailure::None);
-			record.ShapeScale = scale;
-			record.WorldScale = scale;
-			record.LastWorldTransform = worldTransform;
-			record.KinematicTargetPosition = position;
-			record.KinematicTargetRotation = rotation;
-			record.ShapeMembers = std::move(build.ShapeMembers);
-			data.BodySlots[record.BodyID.GetIndex()] = BodySlot { record.BodyID.GetIndexAndSequenceNumber(), handle, &record };
-			data.Contacts.SetBodyInterest(record.BodyID, data.ContactInterest.contains(record.EntityID));
-			ClearWarnings(data, record.EntityID, c_TransientWarnings);
-
-			if (!IsSimulated(scene, entity))
-			{
-				// Its motion applies when it joins the simulation (AddToSimulation).
-				record.SavedLinearVelocity = type == RigidBodyType::Dynamic ? linearVelocity : glm::vec3(0.0f);
-				record.SavedAngularVelocity = type == RigidBodyType::Dynamic ? angularVelocity : glm::vec3(0.0f);
-				EndContactsOf(data, record.EntityID);
-			}
-			else
-			{
-				// Joins the simulation with the batch of this round (created where its entity is, with its motion).
-				(type == RigidBodyType::Static ? data.PendingAdds : data.PendingActivatedAdds).push_back(record.BodyID);
-				record.AddPending = true;
-				record.InSimulation = true;
-				record.TransformDirty = false;
-				record.SavedLinearVelocity = glm::vec3(0.0f);
-				record.SavedAngularVelocity = glm::vec3(0.0f);
-				if (data.EntityPairs.find(record.EntityID) != data.EntityPairs.end())
-					data.RecheckedEntities.push_back(record.EntityID); // Its contacts carried over: the next step confirms or ends them
-			}
-			UpdatePolling(data, handle, record);
+		// (Re)builds the body of an owner entity from its components, its collider descendants and its world transform.
+		void BuildBody(PhysicsWorldData& data, Entity entity)
+		{
+			ST_PROFILE_FUNCTION();
+			CompleteBodyBuild(data, BeginBodyBuild(data, entity));
 		}
 
 		// Re-evaluates an entity that may own a body: builds or rebuilds the body, or removes the record if the entity no
@@ -2272,6 +2394,151 @@ namespace Strata
 			DestroyRecord(data, handle);
 			if (owner.IsValid())
 				data.OwnerRefreshes.Add(owner.GetHandle()); // Its colliders are part of the ancestor's body now
+		}
+
+		// Rounds of changes with at least this many owners to refresh build their bodies on the job threads.
+		constexpr uint32_t c_ParallelBuildThreshold = 256;
+		// Owners per job of a parallel build (fixed, so that the result does not depend on the number of threads).
+		constexpr uint32_t c_ParallelBuildChunk = 512;
+
+		// A body built on the job threads (see RefreshOwnersInParallel).
+		struct ParallelBodyBuild
+		{
+			BodyBuildStart Start;
+			// Read on the main thread before the jobs: the world transforms of the owner and of the merged entities that are part
+			// of its shape (the scene computes stale ones on demand), the motion the body starts with, and whether its parent
+			// can be inverted (dynamic bodies).
+			glm::mat4 WorldTransform = glm::mat4(1.0f);
+			std::vector<std::pair<entt::entity, glm::mat4>> Parts;
+			glm::vec3 LinearVelocity = glm::vec3(0.0f);
+			glm::vec3 AngularVelocity = glm::vec3(0.0f);
+			bool Eligible = false;
+			// Results of the jobs: the body (created without an ID) and its pose, or NeedsMainThread for anything a warning, a
+			// failure or mesh data may come from: such owners are built the serial way, in their place.
+			JPH::Body* Body = nullptr;
+			BodyPose Pose;
+			std::vector<ShapeMember> ShapeMembers;
+			bool NeedsMainThread = true;
+		};
+
+		// Builds what the jobs may for one owner: its shape from box, sphere and capsule colliders (shared shapes behind their
+		// mutex), its settings and its Jolt body. Reads only components, the transforms read before and the world's settings.
+		void BuildBodyOffThread(PhysicsWorldData& data, ParallelBodyBuild& item)
+		{
+			const Entity& entity = item.Start.Owner;
+			BodyPose& pose = item.Pose;
+			pose.WorldTransform = item.WorldTransform;
+			if (!Math::DecomposeTransform(pose.WorldTransform, pose.Position, pose.Rotation, pose.Scale))
+				return;
+
+			ShapeBuild build;
+			build.OffThread = true;
+			AddColliderParts(data, entity, glm::mat4(1.0f), glm::vec3(0.0f), glm::quat(1.0f, 0.0f, 0.0f, 0.0f), pose.Scale, item.Start.Type, build);
+			const glm::mat4 worldToBody = glm::inverse(Math::ComposeTransform(pose.Position, pose.Rotation, glm::vec3(1.0f)));
+			for (const auto& [mergedHandle, mergedWorld] : item.Parts)
+			{
+				if (build.NeedsMainThread)
+					return;
+				const glm::mat4 poseInBody = worldToBody * mergedWorld; // As in HasShapePartChanged
+				glm::vec3 partTranslation;
+				glm::quat partRotation;
+				glm::vec3 partScale;
+				if (!Math::DecomposeTransform(poseInBody, partTranslation, partRotation, partScale))
+					return;
+				AddColliderParts(data, Entity(mergedHandle, data.OwnerScene), poseInBody, partTranslation, partRotation, partScale, item.Start.Type, build);
+			}
+			if (build.NeedsMainThread || build.Parts.empty())
+				return;
+			const JPH::RefConst<JPH::Shape> shape = CombineParts(data, build, entity, build.Parts);
+			if (!shape)
+				return;
+
+			// MakeBodySettings warns only about invalid layers, which the main thread checked before.
+			JPH::BodyCreationSettings settings = MakeBodySettings(data, entity, item.Start.RigidBody, item.Start.Type, shape.GetPtr(), pose.Position, pose.Rotation);
+			settings.mLinearVelocity = ToJolt(item.LinearVelocity);
+			settings.mAngularVelocity = ToJolt(item.AngularVelocity);
+			item.Body = data.JoltSystem->GetBodyInterfaceNoLock().CreateBodyWithoutID(settings);
+			if (!item.Body)
+				return;
+			item.ShapeMembers = std::move(build.ShapeMembers);
+			item.NeedsMainThread = false;
+		}
+
+		// Refreshes many owners at once, with the results of the serial path (RefreshOwner, in record order): the same body IDs,
+		// shapes and settings, so the simulation does not depend on the number of threads. The main thread starts each build in
+		// record order (records, merged colliders, transforms, velocities), the job threads build shapes and bodies in fixed
+		// chunks, and the main thread installs them in record order, building the serial way the owners the jobs left to it.
+		void RefreshOwnersInParallel(PhysicsWorldData& data, std::span<const entt::entity> handles)
+		{
+			ST_PROFILE_FUNCTION();
+			data.ParallelBuildCount++;
+			Scene& scene = *data.OwnerScene;
+			std::vector<ParallelBodyBuild> items;
+			items.reserve(handles.size());
+			for (const entt::entity handle : handles)
+			{
+				const Entity entity(handle, &scene);
+				const Entity owner = FindBodyOwner(entity);
+				if (owner != entity || !entity.IsValid())
+				{
+					RefreshOwner(data, handle);
+					continue;
+				}
+
+				ParallelBodyBuild& item = items.emplace_back();
+				item.Start = BeginBodyBuild(data, entity);
+				const BodyRecord& record = *item.Start.Record;
+				const RigidBodyComponent* rigidBody = item.Start.RigidBody;
+				item.Eligible = !entity.HasComponent<MeshColliderComponent>() && (!rigidBody || rigidBody->Layer < c_PhysicsLayerCount)
+					&& (item.Start.Type != RigidBodyType::Dynamic || HasInvertibleParent(scene, entity));
+				if (!item.Eligible)
+					continue;
+				item.WorldTransform = scene.GetWorldTransform(entity);
+				for (const entt::entity mergedHandle : record.MergedEntities)
+				{
+					const Entity merged(mergedHandle, &scene);
+					if (!IsPartOfOwnerShape(scene, merged, entity))
+						continue;
+					if (merged.HasComponent<MeshColliderComponent>())
+					{
+						item.Eligible = false;
+						break;
+					}
+					item.Parts.emplace_back(mergedHandle, scene.GetWorldTransform(merged));
+				}
+				GetBuildVelocities(data, record, item.Start.Type, item.LinearVelocity, item.AngularVelocity);
+			}
+
+			const uint32_t itemCount = static_cast<uint32_t>(items.size());
+			const uint32_t chunkCount = (itemCount + c_ParallelBuildChunk - 1) / c_ParallelBuildChunk;
+			const auto build = [&](uint32_t firstChunk, uint32_t lastChunk)
+			{
+				for (uint32_t index = firstChunk * c_ParallelBuildChunk; index < std::min(itemCount, lastChunk * c_ParallelBuildChunk); index++)
+				{
+					if (items[index].Eligible)
+						BuildBodyOffThread(data, items[index]);
+				}
+			};
+			if (chunkCount > 1 && JobSystem::IsInitialized())
+				JobSystem::ParallelFor(chunkCount, 1, build);
+			else
+				build(0, chunkCount);
+
+			for (ParallelBodyBuild& item : items)
+			{
+				if (item.NeedsMainThread)
+				{
+					if (item.Body)
+						data.JoltSystem->GetBodyInterface().DestroyBodyWithoutID(item.Body);
+					CompleteBodyBuild(data, item.Start);
+					continue;
+				}
+				BodyRecord& record = *item.Start.Record;
+				record.Type = item.Start.Type;
+				record.WaitsForParent = false;
+				SetMeshSources(data, item.Start.Owner.GetHandle(), record, {});
+				InstallBody(data, item.Start, item.Body, item.Pose, std::move(item.ShapeMembers), item.LinearVelocity, item.AngularVelocity);
+			}
 		}
 
 		void RefreshActivity(PhysicsWorldData& data, entt::entity handle, BodyRecord& record)
@@ -2525,8 +2792,16 @@ namespace Strata
 						data.OwnerRefreshes.Add(owner.GetHandle());
 				}
 
-				for (entt::entity handle : data.OwnerRefreshes.TakeInto(data.ChangeScratch))
-					RefreshOwner(data, handle);
+				const std::vector<entt::entity>& owners = data.OwnerRefreshes.TakeInto(data.ChangeScratch);
+				if (owners.size() >= c_ParallelBuildThreshold)
+				{
+					RefreshOwnersInParallel(data, owners);
+				}
+				else
+				{
+					for (entt::entity handle : owners)
+						RefreshOwner(data, handle);
+				}
 			}
 			return !HasChanges(data);
 		}
@@ -4070,6 +4345,14 @@ namespace Strata
 		return FindSimulatedRecord(*m_Data, entity) != nullptr;
 	}
 
+	uint32_t PhysicsWorld::GetBodyID(Entity entity) const
+	{
+		if (!entity.IsValid() || entity.GetScene() != m_Data->OwnerScene)
+			return c_NoBodyID;
+		const BodyRecord* record = FindRecord(*m_Data, entity.GetHandle());
+		return record && record->HasBody() ? record->BodyID.GetIndexAndSequenceNumber() : c_NoBodyID;
+	}
+
 	Entity PhysicsWorld::GetBodyEntity(Entity entity) const
 	{
 		return GetBodyEntityOf(*m_Data, entity);
@@ -4517,6 +4800,7 @@ namespace Strata
 		stats.WrittenBodyCount = data.LastWrittenBodies;
 		stats.OrderedSlotCount = data.LastOrderedSlots;
 		stats.BuildCount = data.BuildCount;
+		stats.ParallelBuildCount = data.ParallelBuildCount;
 		stats.AddBatchCount = data.AddBatchCount;
 		stats.SharedShapeCount = static_cast<uint32_t>(data.PrimitiveShapes.size());
 		stats.MeshCheckCount = data.MeshCheckCount;

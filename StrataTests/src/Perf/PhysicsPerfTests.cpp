@@ -354,6 +354,55 @@ TEST_SUITE("Perf.Physics")
 		});
 	}
 
+	TEST_CASE("Creating 100,000 static bodies in one update")
+	{
+		// The play start of the scale audit's 1M world built 100,000 static bodies in one frame on the main thread. Here a
+		// running scene gets 100,000 static boxes at once (a world's ground, a streamed region) and the next physics call
+		// builds their bodies, on the job threads (PhysicsWorld, parallel creation). Only that call is timed; the boxes go
+		// again before the next round. The median of 5 rounds.
+		Perf::ScopedApplicationJobSystem jobs;
+		constexpr uint32_t c_Bodies = 100'000;
+		Scene scene("Create100k");
+		scene.GetSettings().PhysicsCapacity.MaxBodies = 262'144; // Room for all of them: the build, not a growth, is measured
+		CreateGround(scene);
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		scene.OnUpdateRuntime(c_FrameTimestep);
+
+		Perf::CheckBudgetConfirmed("Perf.Physics.Create100kStaticBodies", [&]
+		{
+			constexpr uint32_t c_Warmup = 1;
+			constexpr uint32_t c_Rounds = 5;
+			std::vector<double> samples;
+			for (uint32_t round = 0; round < c_Warmup + c_Rounds; round++)
+			{
+				std::vector<Entity> boxes;
+				boxes.reserve(c_Bodies);
+				for (uint32_t index = 0; index < c_Bodies; index++)
+				{
+					const glm::vec3 position(static_cast<float>(index % 316) * 2.0f, 0.5f, static_cast<float>(index / 316) * 2.0f);
+					boxes.push_back(CreateStaticBox(scene, "Static", position, glm::vec3(0.5f)));
+				}
+
+				const Clock::time_point start = Clock::now();
+				const bool built = physics.HasBody(boxes.back());
+				const double elapsed = MillisecondsSince(start);
+				CHECK(built);
+				CHECK(physics.GetStats().StaticBodyCount == c_Bodies + 1);
+				if (round >= c_Warmup)
+					samples.push_back(elapsed);
+
+				scene.DestroyEntities(boxes);
+				scene.OnUpdateRuntime(c_FrameTimestep);
+				CHECK(physics.GetStats().StaticBodyCount == 1);
+			}
+			const Perf::Measurement creation = Perf::Summarize(samples);
+			MESSAGE("Creating 100,000 static bodies: median ", creation.MedianMs, " ms, max ", creation.MaxMs, " ms");
+			return creation.MedianMs;
+		});
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("Creating 10,000 bodies in one frame")
 	{
 		Perf::ScopedApplicationJobSystem jobs;
