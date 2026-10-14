@@ -7,6 +7,7 @@
 #include "Editor/EditorViewport.h"
 #include "Editor/SceneBounds.h"
 #include "Editor/ViewportRenderer.h"
+#include "Panels/ViewportToolbar.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/EditorShell.h"
@@ -47,19 +48,11 @@ namespace Strata
 
 		// Widths of the camera popup's fields, in text heights.
 		constexpr float c_CameraFieldWidthInFontSizes = 11.0f;
-		// The toolbar's bottom border, in the play state's color while the scene runs, in text heights (2 pixels at the base text
-		// size).
-		constexpr float c_ToolbarBorderInFontSizes = 1.0f / 7.0f;
 		// The scene load card's width, in text heights.
 		constexpr float c_SceneLoadCardInFontSizes = 22.0f;
 		// The agent flash's outline, in text heights (2 pixels at the base text size), and how many entities it outlines.
 		constexpr float c_AgentFlashThicknessInFontSizes = 1.0f / 7.0f;
 		constexpr size_t c_MaxAgentFlashEntities = 64;
-
-		ImTextureID ToTextureID(nvrhi::ITexture* texture)
-		{
-			return static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(texture));
-		}
 
 		ImGuizmo::OPERATION ToImGuizmo(GizmoOperation operation)
 		{
@@ -71,22 +64,6 @@ namespace Strata
 				case GizmoOperation::None:   break;
 			}
 			return ImGuizmo::TRANSLATE;
-		}
-
-		// Lines of text over the image, on a dark box so they stay readable on any scene.
-		void DrawTextBox(ImDrawList* drawList, const ImVec2& position, const std::vector<std::string>& lines, const ImVec4& color)
-		{
-			const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
-			const ImVec2 padding = ImGui::GetStyle().FramePadding;
-			float width = 0.0f;
-			for (const std::string& line : lines)
-				width = std::max(width, ImGui::CalcTextSize(line.c_str()).x);
-			const ImVec2 size(width + padding.x * 2.0f, lineHeight * static_cast<float>(lines.size()) + padding.y * 2.0f);
-			drawList->AddRectFilled(position, ImVec2(position.x + size.x, position.y + size.y), ImGui::GetColorU32(UI::GetThemeColors().Overlay),
-				ImGui::GetStyle().FrameRounding);
-			for (size_t index = 0; index < lines.size(); index++)
-				drawList->AddText(ImVec2(position.x + padding.x, position.y + padding.y + lineHeight * static_cast<float>(index)), ImGui::GetColorU32(color),
-					lines[index].c_str());
 		}
 
 		// The transform gizmo in the theme's axis colors, its lines as thick (relative to the text) at every UI scale.
@@ -113,23 +90,9 @@ namespace Strata
 			style.Colors[ImGuizmo::SELECTION] = UI::WithAlpha(colors.AccentHover, defaults.Colors[ImGuizmo::SELECTION].w);
 		}
 
-		const ImVec4& GetPlayStateColor(const EditorContext& context)
-		{
-			const UI::ThemeColors::PlayStateColors& colors = UI::GetThemeColors().PlayState;
-			if (context.IsPaused())
-				return colors.Paused;
-			switch (context.GetSceneState())
-			{
-				case SceneState::Play:     return colors.Play;
-				case SceneState::Simulate: return colors.Simulate;
-				case SceneState::Edit:     break;
-			}
-			return colors.Edit;
-		}
-
 	}
 
-	EditorPanelWindowOptions ViewportPanel::GetWindowOptions(EditorPanelContext& context)
+	EditorPanelWindowOptions ViewportPanel::GetWindowOptions(EditorPanelContext&)
 	{
 		ImGuizmo::BeginFrame();
 
@@ -141,9 +104,6 @@ namespace Strata
 		options.Flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 		if (m_OverGizmo)
 			options.Flags |= ImGuiWindowFlags_NoMove;
-		// While the game has the input, arrows, Space and Enter belong to it, not to keyboard navigation of the chips.
-		if (context.Context.IsGameInputActive())
-			options.Flags |= ImGuiWindowFlags_NoNavInputs;
 		return options;
 	}
 
@@ -151,21 +111,17 @@ namespace Strata
 	{
 		EditorContext& context = panelContext.Context;
 		EditorViewport& viewport = context.GetViewport();
+		ViewportSettings& settings = viewport.GetSettings();
 		m_Focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
-		// A toolbar strip at the top holds the chips, so none of them ever covers the image (the game's HUD, its canvases).
-		// The image fills the rest of the panel, rendered in framebuffer pixels (Retina displays have more than one per
-		// unit). Viewports only get a framebuffer scale of their own with multi-viewport support; like ImGui's renderer data,
-		// the panel falls back to the display's otherwise.
+		// The toolbar strip at the top holds the chips (ViewportToolbar), so none of them ever covers the image. The image
+		// fills the rest of the panel, rendered in framebuffer pixels (Retina displays have more than one per unit). Viewports
+		// only get a framebuffer scale of their own with multi-viewport support; like ImGui's renderer data, the panel falls
+		// back to the display's otherwise.
 		const ImGuiStyle& style = ImGui::GetStyle();
-		const ImVec2 panelMin = ImGui::GetCursorScreenPos();
-		const ImVec2 panelSize = ImGui::GetContentRegionAvail();
-		// The chips' row with half the item spacing above and below: the toolbar takes little of the image's height.
-		const float toolbarHeight = ImGui::GetFrameHeight() + style.ItemSpacing.y;
-		const float toolbarBorder = std::max(1.0f, std::floor(ImGui::GetFontSize() * c_ToolbarBorderInFontSizes));
-		const ImVec2 toolbarMax(panelMin.x + panelSize.x, panelMin.y + toolbarHeight);
-		const ImVec2 imageMin(panelMin.x, toolbarMax.y + toolbarBorder);
-		const ImVec2 available(std::max(panelSize.x, 0.0f), std::max(panelSize.y - toolbarHeight - toolbarBorder, 0.0f));
+		const ViewportToolbar::Layout layout = ViewportToolbar::Compute();
+		const ImVec2 imageMin = layout.ImageMin;
+		const ImVec2 available = layout.ImageSize;
 		ImGui::SetCursorScreenPos(imageMin);
 		const ImVec2 viewportScale = ImGui::GetWindowViewport()->FramebufferScale;
 		const ImVec2 displayScale = ImGui::GetIO().DisplayFramebufferScale;
@@ -181,7 +137,6 @@ namespace Strata
 		}
 
 		// Elsewhere an item covering the image takes the clicks, so dragging in the viewport never moves a floating window.
-		// The chips drawn over it later take precedence where they are.
 		if (m_OverGizmo)
 		{
 			ImGui::Dummy(available);
@@ -195,40 +150,53 @@ namespace Strata
 		UI::ItemProbe::RecordRect("Viewport.Image", imageMin, ImVec2(imageMin.x + available.x, imageMin.y + available.y));
 		AcceptAssetDrops(context, panelContext.Commands);
 
+		// The editor camera, on the edited scene and on the running game alike (the Game view shows the game as it is); or,
+		// with "Game camera", the scene's primary camera with the editor's overlays, which the editor camera's controls
+		// leave alone.
 		const float aspectRatio = static_cast<float>(size.x) / static_cast<float>(size.y);
-		std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, aspectRatio);
-		m_GameView = view && view->FromScene;
-		if (!m_GameView)
+		const auto resolveView = [&context, &settings, aspectRatio]()
 		{
-			HandleShortcuts(panelContext);
-			UpdateCamera(context, m_Hovered);
-
-			// A plain click picks what is under the cursor in the image that is shown; clicks on the gizmo are its own.
-			const ImGuiIO& io = ImGui::GetIO();
-			if (m_Hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !ImGuizmo::IsOver() && !ImGuizmo::IsUsing())
+			if (settings.PilotGameCamera)
 			{
-				const ViewportPickMode mode = io.KeyCtrl ? ViewportPickMode::Toggle : (io.KeyShift ? ViewportPickMode::Add : ViewportPickMode::Replace);
-				if (const std::optional<glm::uvec2> pixel = m_Image.ToPixel(glm::vec2(io.MousePos.x, io.MousePos.y)))
-					viewport.RequestPick(*pixel, size, mode);
+				if (std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Scene, aspectRatio))
+				{
+					view->EditorOverlays = true;
+					view->EditorView = true;
+					return view;
+				}
 			}
-			// The camera may have moved this frame.
-			view = ResolveViewportView(context, ViewportCameraSource::Automatic, aspectRatio);
-		}
+			std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Editor, aspectRatio);
+			if (view && settings.PilotGameCamera)
+				view->Notice = "The scene has no primary camera: showing the editor camera";
+			return view;
+		};
+		std::optional<ViewportView> view = resolveView();
+		m_Piloting = view && view->FromScene;
+		HandleShortcuts(panelContext);
+		if (!m_Piloting)
+			UpdateCamera(context, m_Hovered);
 		else
-		{
 			EndCameraDrag();
-			EndGizmoDrag(context);
+		// A plain click picks what is under the cursor in the image that is shown (the running scene's entities while the
+		// game plays); clicks on the gizmo are its own.
+		const ImGuiIO& io = ImGui::GetIO();
+		if (m_Hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !ImGuizmo::IsOver() && !ImGuizmo::IsUsing())
+		{
+			const ViewportPickMode mode = io.KeyCtrl ? ViewportPickMode::Toggle : (io.KeyShift ? ViewportPickMode::Add : ViewportPickMode::Replace);
+			if (const std::optional<glm::uvec2> pixel = m_Image.ToPixel(glm::vec2(io.MousePos.x, io.MousePos.y)))
+				viewport.RequestPick(*pixel, size, mode);
 		}
-		UpdateGameInput(context, m_GameView);
+		// The camera may have moved this frame.
+		view = resolveView();
 
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		const ImVec2 imageMax(imageMin.x + available.x, imageMin.y + available.y);
 		ViewportRenderer* renderer = viewport.GetRenderer();
-		const bool rendered = renderer && view && renderer->Render(context, size, *view, viewport.GetSettings(), view->EditorOverlays);
+		const bool rendered = renderer && view && renderer->Render(context, size, *view, settings, view->EditorOverlays);
 		if (rendered)
 		{
-			drawList->AddImage(ToTextureID(renderer->GetOutputTexture()), imageMin, imageMax);
+			drawList->AddImage(ViewportToolbar::ToTextureID(renderer->GetOutputTexture()), imageMin, imageMax);
 		}
 		else
 		{
@@ -237,41 +205,23 @@ namespace Strata
 			drawList->AddText(ImVec2(imageMin.x + padding.x, imageMax.y - padding.y - ImGui::GetFontSize()), ImGui::GetColorU32(colors.TextSecondary),
 				renderer ? "The scene could not be rendered (see the Console)" : "No GPU: the viewport cannot render");
 		}
-
-		// The toolbar: a chrome band whose bottom border takes the play state's color while the scene runs (changes made now
-		// are discarded when it stops).
-		drawList->AddRectFilled(panelMin, toolbarMax, ImGui::GetColorU32(colors.Chrome));
-		drawList->AddRectFilled(ImVec2(panelMin.x, toolbarMax.y), ImVec2(toolbarMax.x, imageMin.y),
-			ImGui::GetColorU32(context.IsPlaying() ? GetPlayStateColor(context) : colors.Border));
+		ViewportToolbar::DrawBackground(drawList, layout, context);
 
 		if (view)
+		{
 			DrawAgentFlash(context, *view);
-		if (view && !m_GameView)
 			UpdateGizmo(context, *view);
+		}
 
-		// The chips, in the toolbar from its left; the agent's at its right. The game view keeps the stats and debug view
-		// toggles (debug views apply to it too: streaming while playing is what they are for). Clicks on them never reach the
-		// game, whose input is the image's.
-		const ImVec2 chipsMin(panelMin.x + style.ItemSpacing.x, panelMin.y + style.ItemSpacing.y * 0.5f);
-		ImGui::PushClipRect(panelMin, toolbarMax, true);
-		ImGui::SetCursorScreenPos(chipsMin);
-		if (!m_GameView)
-		{
-			DrawChips(context);
-			DrawPreviewChip(panelContext);
-		}
-		else
-		{
-			DrawStatsChip(viewport.GetSettings());
-			ImGui::SameLine();
-			DrawDebugViewChip(viewport.GetSettings());
-		}
-		DrawAgentChip(panelContext, toolbarMax.x - style.ItemSpacing.x, chipsMin.y);
+		// The chips, in the toolbar from its left; the agent's at its right.
+		ImGui::PushClipRect(layout.Min, layout.Max, true);
+		ImGui::SetCursorScreenPos(layout.ChipsMin);
+		DrawChips(context);
+		DrawPreviewChip(panelContext);
+		DrawAgentChip(panelContext, layout.Max.x - style.ItemSpacing.x, layout.ChipsMin.y);
 		ImGui::PopClipRect();
-		if (rendered && viewport.GetSettings().DebugView != ViewportDebugView::None)
+		if (rendered && settings.DebugView != ViewportDebugView::None)
 			DrawDebugViewLegend(context);
-		m_GameWindowNoticeShown = false;
-		m_MouseHintShown = false;
 		if (view)
 			DrawOverlays(context, *view, panelContext.Frame);
 		if (context.IsSceneLoading())
@@ -282,8 +232,6 @@ namespace Strata
 	{
 		// Hidden behind another tab, collapsed or closed: nothing is rendered and held interactions end.
 		Reset(context.Context);
-		m_GameWindowNoticeShown = false;
-		m_MouseHintShown = false;
 	}
 
 	void ViewportPanel::OnDetach(EditorPanelContext& context)
@@ -310,7 +258,6 @@ namespace Strata
 		m_FlashBounds.clear();
 		EndCameraDrag();
 		EndGizmoDrag(context);
-		UpdateGameInput(context, false);
 		context.GetViewport().SetSize(glm::uvec2(0, 0));
 	}
 
@@ -367,7 +314,7 @@ namespace Strata
 		UI::ToggleChip("Viewport.Gizmos", Icons::Shapes, "Gizmos", &settings.ShowSceneGizmos, "Light, camera and collider shapes");
 		ImGui::SameLine();
 		DrawStatsChip(settings);
-		// View settings of the editor camera outside play mode only: the game always looks the way it will ship.
+		// View settings of the Scene view's editor camera: the Game view always looks the way the game will ship.
 		ImGui::SameLine();
 		const Ref<Scene>& scene = context.GetActiveScene();
 		const bool previewNeeded = scene && SceneRenderer::NeedsPreviewLighting(*scene);
@@ -382,6 +329,9 @@ namespace Strata
 			"Show the game's screen-space text (its HUD) in the editor view; the game and the scene camera always show it");
 		ImGui::SameLine();
 		DrawDebugViewChip(settings);
+		ImGui::SameLine();
+		UI::ToggleChip("Viewport.GameCamera", Icons::Camera, "Game camera", &settings.PilotGameCamera,
+			"Look through the scene's primary camera with the editor's overlays (F8); the editor camera stays where it was");
 	}
 
 	void ViewportPanel::DrawPreviewChip(EditorPanelContext& panelContext)
@@ -645,6 +595,8 @@ namespace Strata
 		}
 		if (ImGui::IsKeyPressed(ImGuiKey_Home, false))
 			context.GetViewport().Focus(context, {});
+		if (ImGui::IsKeyPressed(ImGuiKey_F8, false))
+			settings.PilotGameCamera = !settings.PilotGameCamera;
 	}
 
 	void ViewportPanel::UpdateCamera(EditorContext& context, bool hovered)
@@ -709,46 +661,6 @@ namespace Strata
 		{
 			Input::SetCursorMode(CursorMode::Normal);
 			m_CursorLocked = false;
-		}
-	}
-
-	void ViewportPanel::UpdateGameInput(EditorContext& context, bool gameView)
-	{
-		// Shift+F1 leaves the game view (and frees a cursor the game locked or hid) without stopping the game. Only asked
-		// while the game view is shown: Reset runs this without an ImGui frame (when the editor detaches).
-		if (gameView && m_Focused && ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_F1, false))
-		{
-			ImGui::SetWindowFocus(nullptr);
-			m_Focused = false;
-		}
-
-		// Scripts read Input: only the focused game view feeds it, with coordinates relative to the image. A game that hid or
-		// locked the cursor gives it back when it loses the input and takes it again when it gets the input back
-		// (Input::SetGameCursorMode applies only while input is enabled).
-		const bool enabled = gameView && m_Focused && context.GetSceneState() == SceneState::Play;
-		m_GameInputEnabled = enabled;
-		context.SetGameInputActive(enabled);
-		Input::SetEnabled(enabled);
-		// A locked cursor stays inside the game view: the editor's UI ignores the mouse meanwhile, so no click lands on another
-		// panel (Shift+F1 leaves the game view).
-		const bool gameOwnsMouse = enabled && Input::GetGameCursorMode() == CursorMode::Locked;
-		// Detaching runs this after the ImGui context is gone.
-		if (gameOwnsMouse != m_GameOwnsMouse && ImGui::GetCurrentContext())
-		{
-			m_GameOwnsMouse = gameOwnsMouse;
-			ImGuiIO& io = ImGui::GetIO();
-			if (gameOwnsMouse)
-				io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
-			else
-				io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
-			// Without a pointer nothing on screen leads out: the game view says how, for a while after each time it took it.
-			if (gameOwnsMouse)
-				m_MouseHintUntil = ImGui::GetTime() + c_MouseHintSeconds;
-		}
-		if (enabled)
-		{
-			const ImVec2 origin = ImGui::GetMainViewport()->Pos;
-			Input::SetViewport(glm::vec2(m_Image.Min.x - origin.x, m_Image.Min.y - origin.y), m_Image.Size);
 		}
 	}
 
@@ -831,21 +743,13 @@ namespace Strata
 		if (!view.Notice.empty())
 		{
 			const float width = ImGui::CalcTextSize(view.Notice.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-			DrawTextBox(drawList, ImVec2(std::max(imageMin.x + (m_Image.Size.x - width) * 0.5f, imageMin.x), top), { view.Notice }, colors.Warning);
+			ViewportToolbar::DrawTextBox(drawList, ImVec2(std::max(imageMin.x + (m_Image.Size.x - width) * 0.5f, imageMin.x), top), { view.Notice }, colors.Warning);
 		}
-		// The game locked the cursor: the way out, at the top of the game view.
-		m_MouseHintShown = m_GameOwnsMouse && ImGui::GetTime() < m_MouseHintUntil;
-		if (m_MouseHintShown)
-		{
-			const float width = ImGui::CalcTextSize(c_MouseHint).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-			DrawTextBox(drawList, ImVec2(std::max(imageMin.x + (m_Image.Size.x - width) * 0.5f, imageMin.x), top), { c_MouseHint }, colors.Text);
-		}
-		DrawGameWindowNotice(context, view, drawList);
 
 		EditorViewport& viewport = context.GetViewport();
 		ViewportRenderer* renderer = viewport.GetRenderer();
 		if (viewport.GetSettings().ShowStats && renderer)
-			DrawStatsOverlay(drawList, ImVec2(imageMin.x + margin, top), *renderer, view, frame);
+			ViewportToolbar::DrawStatsOverlay(drawList, ImVec2(imageMin.x + margin, top), *renderer, view, frame);
 	}
 
 	void ViewportPanel::DrawSceneLoadOverlay(EditorContext& context)
@@ -883,50 +787,6 @@ namespace Strata
 		UI::StrataProgressBar("Viewport.SceneLoad", status.Progress, stage, contentWidth);
 	}
 
-	void ViewportPanel::DrawGameWindowNotice(EditorContext& context, const ViewportView& view, ImDrawList* drawList)
-	{
-		// What the game asked of its window shows over the game view, at the image's bottom (the editor's window stays).
-		const EditorGameWindow& gameWindow = context.GetGameWindow();
-		m_GameWindowNoticeShown = view.FromScene && gameWindow.HasRequests();
-		if (!m_GameWindowNoticeShown)
-			return;
-		if (gameWindow.GetVersion() != m_GameWindowNoticeVersion)
-		{
-			m_GameWindowNotice = gameWindow.DescribeForPeople();
-			m_GameWindowNoticeVersion = gameWindow.GetVersion();
-		}
-		const ImVec2 padding = ImGui::GetStyle().FramePadding;
-		const float margin = ImGui::GetStyle().ItemSpacing.x;
-		const ImVec2 textSize = ImGui::CalcTextSize(m_GameWindowNotice.c_str());
-		const float x = std::max(m_Image.Min.x + (m_Image.Size.x - textSize.x - padding.x * 2.0f) * 0.5f, m_Image.Min.x);
-		const float y = m_Image.Min.y + m_Image.Size.y - textSize.y - padding.y * 2.0f - margin;
-		DrawTextBox(drawList, ImVec2(x, y), { m_GameWindowNotice }, UI::GetThemeColors().TextSecondary);
-	}
-
-	void ViewportPanel::DrawStatsOverlay(ImDrawList* drawList, const ImVec2& position, const ViewportRenderer& renderer, const ViewportView& view, const EditorFrameStats& frame)
-	{
-		const SceneRendererStats& stats = renderer.GetStats();
-		const glm::uvec2 size = renderer.GetSize();
-		// The frame's own time: while the editor idles, its frame rate is capped, which says nothing about what frames cost.
-		const std::vector<std::string> lines = {
-			fmt::format("{:.2f} ms ({:.0f} FPS{})", frame.WorkMilliseconds, frame.FramesPerSecond, frame.Idle ? ", idle" : ""),
-			fmt::format("{} x {} pixels", size.x, size.y),
-			fmt::format("{} draw calls ({} opaque, {} shadow), {} instances", stats.DrawCalls, stats.OpaqueDrawCalls, stats.ShadowDrawCalls, stats.Instances),
-			fmt::format("{} triangles, {} lights, {} materials", stats.Triangles, stats.Lights, stats.Materials),
-			fmt::format("{} visible of {} proxies, {} updated", stats.VisibleProxies, stats.VisibleProxies + stats.CulledInstances, stats.ProxyUpdates),
-			fmt::format("extract {:.2f} ms, sort {:.2f} ms", stats.ExtractMs, stats.SortMs),
-			fmt::format("{:.1f} KB instances, {:.1f} KB materials uploaded", static_cast<double>(stats.InstanceBytesUploaded) / 1024.0,
-				static_cast<double>(stats.MaterialBytesUploaded) / 1024.0),
-			fmt::format("{} assets requested, {} prefetched, {} loading", stats.RequestsByVisibility, stats.PrefetchRequests, stats.PendingAssets),
-			view.FromScene ? std::string("Scene camera") : std::string("Editor camera")
-		};
-		// Numbers read best in the monospaced font.
-		const UI::ThemeColors& colors = UI::GetThemeColors();
-		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
-		DrawTextBox(drawList, position, lines, colors.Text);
-		ImGui::PopFont();
-	}
-
 	void ViewportPanel::AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands)
 	{
 		if (!ImGui::BeginDragDropTarget())
@@ -945,9 +805,9 @@ namespace Strata
 			const EditorCamera& camera = context.GetViewport().GetCamera();
 			if (type == AssetType::Prefab || type == AssetType::Model)
 			{
-				// Resting on the surface under the cursor, else on the one under the view's pivot (the game view shows another
-				// camera: the editor camera's pivot there).
-				if (m_GameView)
+				// Resting on the surface under the cursor, else on the one under the view's pivot (the game's camera when
+				// piloting it: the editor camera's pivot there).
+				if (m_Piloting)
 				{
 					EditorActions::InstantiatePrefab(context, commands, asset);
 				}
@@ -960,7 +820,7 @@ namespace Strata
 			else if (type == AssetType::Material)
 			{
 				// Onto the mesh under the cursor: its renderer's material (one undo step).
-				const std::optional<SceneRayHit> hit = m_GameView ? std::nullopt : EditorPlacement::CastAt(scene, camera, ndc, aspect);
+				const std::optional<SceneRayHit> hit = m_Piloting ? std::nullopt : EditorPlacement::CastAt(scene, camera, ndc, aspect);
 				if (hit && hit->HitEntity.HasComponent<MeshRendererComponent>())
 				{
 					RunEditorCommand(context, commands, "component.set", { { "entity", UUIDToJson(hit->HitEntity.GetUUID()) }, { "component", "MeshRenderer" },

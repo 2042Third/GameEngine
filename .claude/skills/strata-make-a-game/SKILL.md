@@ -156,7 +156,7 @@ first run and after files were added or removed; answers with compiler diagnosti
 
   Register the fields with `ST_SCRIPT_FIELD`. Test it with `input.key {"key": "W", "steps": 60}` (or `input.gamepadAxis
   {"axis": "LeftY", "value": 1, "steps": 60}`) and read the player's `Translation` with `component.get`: it walks on the
-  template's ground and stops at walls. In the editor the cursor stays locked only while the game view has the focus
+  template's ground and stops at walls. In the editor the cursor stays locked only while the Game view has the focus
   (Shift+F1 frees it); `input.mouseMove` moves the simulated pointer, so mouse look works from commands too.
 - A third-person player and a follow camera: the player entity has a `CharacterController` and the model (the root of
   a model instance, or a child holding it); the primary camera is a separate entity (not a child) with the second

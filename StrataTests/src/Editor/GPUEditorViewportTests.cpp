@@ -802,6 +802,90 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("While the game plays, the Scene view's editor camera picks the running scene's entities")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		EditorContext& context = harness.Context;
+		EditorViewport& viewport = context.GetViewport();
+		ViewportRenderer* renderer = viewport.GetRenderer();
+		REQUIRE(renderer);
+		const glm::uvec2 size(64, 64);
+		const UUID cube = context.GetActiveScene()->FindEntityByName("Cube").GetUUID();
+		REQUIRE(context.Play());
+		const Ref<Scene> running = context.GetActiveScene();
+		REQUIRE(running != context.GetEditScene());
+
+		// The Scene view asks for the editor camera by name: its view of the running scene, with the editor's overlays.
+		const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Editor, 1.0f);
+		REQUIRE(view);
+		CHECK_FALSE(view->FromScene);
+		CHECK(view->EditorView);
+		REQUIRE(renderer->Render(context, size, *view, viewport.GetSettings(), view->EditorOverlays));
+		CHECK(renderer->GetRenderedScene().lock() == running);
+		REQUIRE(viewport.RequestPick(glm::uvec2(32, 32), size, ViewportPickMode::Replace));
+		for (int frame = 0; frame < 5000 && viewport.IsPickPending(); frame++)
+		{
+			viewport.UpdatePicking(context);
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		CHECK_FALSE(viewport.IsPickPending());
+		CHECK(context.GetSelection() == std::vector<UUID> { cube });
+		CHECK(context.GetPrimarySelection().GetScene() == running.get());
+		context.Stop();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The Game view renders through a renderer of its own at its resolution, and captures of the scene camera take it")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", { { "Primary", true } } },
+			{ "Transform", { { "Translation", { 0, 0, 5 } } } } } } });
+		EditorContext& context = harness.Context;
+		EditorViewport& viewport = context.GetViewport();
+		CHECK_FALSE(viewport.HasGameRenderer());
+
+		// A fixed 1280 x 720 Game view renders exactly that, whatever the panel's size.
+		harness.Run("viewport.setSettings", { { "gameView", { { "mode", "1280x720" } } } });
+		const GameViewFrame frame = ComputeGameViewFrame(viewport.GetSettings().GameView, glm::vec2(500.0f, 400.0f), glm::vec2(1.0f), std::nullopt);
+		REQUIRE(frame.RenderSize == glm::uvec2(1280, 720));
+		const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Scene, 1280.0f / 720.0f);
+		REQUIRE(view);
+		ViewportRenderer* game = viewport.GetGameRenderer();
+		REQUIRE(game);
+		CHECK(game != viewport.GetRenderer());
+		CHECK(game != viewport.GetCaptureRenderer());
+		REQUIRE(game->Render(context, frame.RenderSize, *view, viewport.GetSettings(), false));
+		CHECK(game->GetSize() == glm::uvec2(1280, 720));
+		REQUIRE(game->GetOutputTexture());
+		CHECK(game->GetOutputTexture()->getDesc().width == 1280);
+		CHECK(game->GetOutputTexture()->getDesc().height == 720);
+		viewport.SetGameViewSize(frame.RenderSize);
+
+		// Captures of the scene's camera take the Game view's resolution; the editor camera keeps the viewport's.
+		nlohmann::json result;
+		DecodedImage image = harness.Capture({ { "camera", "scene" }, { "waitForAssets", false } }, &result);
+		CHECK(image.Width == 1280);
+		CHECK(image.Height == 720);
+		harness.Run("viewport.setSettings", { { "gameView", { { "mode", "4:3" } } } });
+		viewport.SetGameViewSize(glm::uvec2(400, 300));
+		image = harness.Capture({ { "camera", "scene" }, { "waitForAssets", false } });
+		CHECK(image.Width == 400);
+		CHECK(image.Height == 300);
+		image = harness.Capture({ { "camera", "scene" }, { "width", 200 }, { "waitForAssets", false } });
+		CHECK(image.Height == 150);
+
+		// A closed or hidden Game view keeps no render targets (the panel frees them: ReleaseTargets).
+		game->ReleaseTargets();
+		CHECK(game->GetSize() == glm::uvec2(0));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A new project made from the basic3d template captures lit")
 	{
 		Tests::GPUContext gpu;

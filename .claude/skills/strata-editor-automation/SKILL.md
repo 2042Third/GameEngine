@@ -130,7 +130,12 @@ editor started with `--no-gpu` (use `--headless`):
   takes it at once; `pendingAssets` says what was still loading, `texturesBelowWanted` what was still blurrier than
   wanted, e.g. under a texture budget, `stalePoses` the animators drawn in an older pose). `position` +
   `target` (and `fov`) look from your own camera: the
-  person's view (`camera.get`) does not move, and the result's `camera` is `"custom"`.
+  person's view (`camera.get`) does not move, and the result's `camera` is `"custom"`. `camera: "scene"` without a size
+  takes the Game view's resolution when it has one (`viewport.setSettings {"gameView": {"mode": "1280x720"}}`, or
+  `"16:9"`, `"4:3"`, `"custom"` with `width` and `height`; `"free"` follows the panel).
+- The editor shows two views as tabs: the Scene view (the editor camera, also on the running game while playing: what
+  you select and move there changes the running copy) and the Game view (the game through its primary camera, as it
+  ships). `editor.showPanel {"panel": "Game"}` shows the person the game; `{"panel": "Scene"}` the Scene view.
 - **Debug views** show what streaming and level-of-detail selection do: `debugView: "streaming"` tints entities whose
   mesh, material or textures are still loading (yellow, Sulfur) or failed (red, Cinnabar) and draws a box where a mesh
   is not loaded yet; `"lod"` tints entities by the level of detail they are drawn at (green 0, blue 1, yellow 2, red 3+);
@@ -138,7 +143,7 @@ editor started with `--no-gpu` (use `--headless`):
   (green: as needed, blue 1 level short, yellow 2, red 3+ or still loading; textures stream their mip levels to what
   the screen shows, so a picture taken right after the camera moved may be blurry where it is red); `"none"` is the
   plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
-  `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the game view). The result's
+  `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the Game view). The result's
   `debugView` counts what it found among the entities in view: `{view, tintedEntities, pendingEntities, failedEntities,
   placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], entitiesPerMipShortfall: [as needed, 1, 2, 3+]}`, so
   you need not read colors: e.g. capture with `"streaming"` until `pendingEntities` and `placeholderBoxes` are 0, or with
@@ -419,7 +424,7 @@ input.key         {"key": "Space", "steps": 30}           # held for 30 fixed st
 input.key         {"key": "W", "seconds": 0.5}            # game time, rounded up to whole fixed steps
 input.key         {"key": "Right", "action": "press"}     # held across commands ... until
 input.key         {"key": "Right", "action": "release"}
-input.mouseMove   {"position": [640, 360]}                # pixels from the game view's top-left corner
+input.mouseMove   {"position": [640, 360]}                # pixels from the Game view's top-left corner
 input.mouseButton {"button": "Left"}                      # Left, Right, Middle, Button3..7; same actions as keys
 input.scroll      {"delta": [0, 1]}
 input.gamepadButton {"button": "A"}                       # gamepad 0 unless "gamepad": 0..3; same actions as keys

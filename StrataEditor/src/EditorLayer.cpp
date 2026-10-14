@@ -8,6 +8,7 @@
 #include "Panels/AssetInspectorPanel.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/ContentBrowserPanel.h"
+#include "Panels/GameViewPanel.h"
 #include "Panels/InspectorPanel.h"
 #include "Panels/PerformancePanel.h"
 #include "Panels/ProblemsPanel.h"
@@ -116,12 +117,14 @@ namespace Strata
 			if (m_Panels.GetDescriptor(index).Placement == EditorPanelPlacement::Docked)
 				panels.push_back(m_Panels.GetDescriptor(index).Id);
 		}
+		panels.push_back("Scene");
 		m_Commands.Register({ "editor.showPanel",
 			"Opens a panel of the editor's window and brings it to the front, e.g. to show the person at the editor what you are looking at: "
 			"Streaming (asset memory per pool against its budget, loads, uploads, the assets), Performance (where the frames go, stage by "
 			"stage), Problems (the last script build's errors and warnings, the scripts' crash with where it happened), Activity (every "
 			"command the person, agents and scripts ran: editor.activity), Console, ContentBrowser, Hierarchy, Inspector, AssetInspector (the "
-			"Asset tab: the inspected asset, its settings and preview) or Viewport; for the ContentBrowser, scripts: true shows its Scripts root "
+			"Asset tab: the inspected asset, its settings and preview), Viewport (the Scene view; \"Scene\" works too) or Game (the Game view: the "
+			"game through its camera); for the ContentBrowser, scripts: true shows its Scripts root "
 			"(the project's script files with their classes, as script.list lists them) and false its asset folders. Changes no scene data and "
 			"records no undo; fails in an editor without a window (--no-gpu or headless) and while the launcher shows (no project is open).",
 			CommandUtils::ObjectSchema({ { "panel", { { "type", "string" }, { "enum", panels }, { "description", "The panel to show" } } },
@@ -130,8 +133,11 @@ namespace Strata
 			[this](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
 			{
 				CommandArguments arguments(parameters);
-				const std::string panel = arguments.GetString("panel");
+				std::string panel = arguments.GetString("panel");
 				const std::optional<bool> scripts = arguments.Has("scripts") ? std::optional<bool>(arguments.GetBool("scripts", false)) : std::nullopt;
+				// The Scene view keeps the id it had as the viewport.
+				if (panel == "Scene")
+					panel = EditorPanels::c_Viewport;
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				const EditorPanelDescriptor* descriptor = m_Panels.FindDescriptor(panel);
@@ -255,7 +261,8 @@ namespace Strata
 				ST_ERROR("Could not register the panel '{}': {}", id, error);
 		};
 		// Drawn in this order; the Content Browser comes after the Console, which shares its dock node.
-		add(EditorPanels::c_Viewport, "Viewport", Icons::Box, []() { return CreateScope<ViewportPanel>(); });
+		add(EditorPanels::c_Viewport, "Scene", Icons::Box, []() { return CreateScope<ViewportPanel>(); });
+		add(EditorPanels::c_Game, "Game", Icons::Gamepad2, []() { return CreateScope<GameViewPanel>(); });
 		add(EditorPanels::c_Hierarchy, "Hierarchy", Icons::ListTree, []() { return CreateScope<SceneHierarchyPanel>(); });
 		add(EditorPanels::c_Inspector, "Inspector", Icons::SlidersHorizontal, []() { return CreateScope<InspectorPanel>(); });
 		add(EditorPanels::c_AssetInspector, "Asset", Icons::FileBox, []() { return CreateScope<AssetInspectorPanel>(); });
@@ -774,7 +781,7 @@ namespace Strata
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, global))
 		{
 			if (m_Context.IsPlaying())
-				RunEditorCommand(m_Context, m_Commands, "play.stop");
+				StopPlay();
 			else
 				StartPlay();
 		}
@@ -960,14 +967,31 @@ namespace Strata
 		// One play at a time: while the scripts build to play, Play waits with them.
 		if (m_Context.GetPlayBuildID() != 0 || m_Context.IsPlaying())
 			return;
-		m_CommandRunner.Run(m_Context, m_Commands, "play.start", nlohmann::json::object(), [](const EditorCommandResult& result)
+		m_CommandRunner.Run(m_Context, m_Commands, "play.start", nlohmann::json::object(), [this](const EditorCommandResult& result)
 		{
 			// A build the person cancelled (the "Building to play" pill) is no error.
 			if (result.ErrorKind == EditorCommandError::Cancelled)
 				ST_INFO("Play: {}", result.Error);
 			else if (!result.Success)
 				ST_ERROR("Play: {}", result.Error);
+			// The game shows in the Game view: an open one docked behind another tab comes forward (and takes the keyboard, so
+			// the game gets its input).
+			const GameViewPanel* game = m_Panels.Get<GameViewPanel>(EditorPanels::c_Game);
+			if (result.Success && game && m_Panels.IsOpen(EditorPanels::c_Game) && !game->IsShown())
+			{
+				m_Panels.Focus(EditorPanels::c_Game);
+				m_PlayShowedGame = true;
+			}
 		}, CommandOrigin { CommandSource::UI });
+	}
+
+	void EditorLayer::StopPlay()
+	{
+		RunEditorCommand(m_Context, m_Commands, "play.stop");
+		// Back to the Scene view when Play had brought the Game view forward.
+		if (m_PlayShowedGame && !m_Context.IsPlaying() && m_Panels.IsOpen(EditorPanels::c_Viewport))
+			m_Panels.Focus(EditorPanels::c_Viewport);
+		m_PlayShowedGame = false;
 	}
 
 	void EditorLayer::ShowPanel(std::string_view panel)
@@ -1036,11 +1060,14 @@ namespace Strata
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Performance).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Activity).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Viewport).c_str(), center);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Game).c_str(), center);
 		ImGui::DockBuilderFinish(dockspaceId);
 		// On first run the Content Browser is the bottom area's visible tab, and the Inspector the right one's (the Asset tab
 		// comes forward when an asset is inspected).
 		m_Panels.SelectTab(EditorPanels::c_ContentBrowser, bottom);
 		m_Panels.SelectTab(EditorPanels::c_Inspector, right);
+		// The Scene view in front of the Game view (Play brings the Game view forward).
+		m_Panels.SelectTab(EditorPanels::c_Viewport, center);
 	}
 
 	void EditorLayer::DrawLauncher(EditorPanelContext& panelContext)
@@ -1469,7 +1496,7 @@ namespace Strata
 		UI::ButtonStyle stop;
 		stop.Enabled = playing;
 		if (UI::ToolbarButton("Toolbar.Stop", Icons::Square, nullptr, "Stop and return to the edited scene (Ctrl+P)", stop))
-			RunEditorCommand(m_Context, m_Commands, "play.stop");
+			StopPlay();
 	}
 
 	void EditorLayer::DrawBuildControls()

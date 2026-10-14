@@ -797,7 +797,7 @@ Gameplay API (host functions appended to ABI version 1 and wrapped by the SDK; t
 - The game's shell belongs to the program running it, through engine services (`Core/EngineServices.h`, provided while it
   runs the game with `EngineServices::ScopedProvider`): `Game::SetWindowMode`, `SetResolution`, `SetVSync` and
   `GetWindowSize` go to `IGameWindow` (StrataRuntime's `GameWindowService` applies them after the frame; the editor's
-  `EditorGameWindow` only records them for `editor.status` and the game view's notice), save files (`Game::WriteSaveFile`,
+  `EditorGameWindow` only records them for `editor.status` and the Game view's notice), save files (`Game::WriteSaveFile`,
   `ReadSaveFile`/`ReadSaveText`, `DeleteSaveFile`, `ListSaveFiles`) to `IGameSaves` (`<user data>/<Game>/Saves` in a
   shipped game, `<project>/.strata/Saves` in the editor). Save names are checked in the engine before any path is formed
   (`SaveFiles::ValidateName`: no separators, no "..", no device names) and writes are atomic. Code that runs a game
@@ -1578,7 +1578,17 @@ and `AudioSystem`, the built-in "Audio" scene system.
 
 ### Viewport panel
 
-- **Viewport panel** (`Panels/ViewportPanel`): renders into a texture of the panel's pixel size and takes input only
+- **Scene and Game views:** the Scene view (`Panels/ViewportPanel`, panel id `Viewport`, titled "Scene"; `editor.showPanel`
+  takes `Scene` too) is the editor camera's view, also while the game plays (it then edits the running copy); the Game
+  view (`Panels/GameViewPanel`, id `Game`, a tab beside it) is the primary camera as the game shows it, with its HUD and
+  without overlays, picking or gizmos, rendered by `EditorViewport::GetGameRenderer` (its targets freed while it is
+  hidden). Its resolution menu (`ViewportSettings::GameView`: free, 16:9, 16:10, 4:3, 21:9, 1920 x 1080, 1280 x 720,
+  custom, the game's request; `viewport.setSettings {gameView: {mode, width, height}}`) letterboxes aspect ratios in the
+  panel and renders fixed sizes at their pixels, scaled to fit; `viewport.capture {camera: "scene"}` takes that size.
+  Play from the UI brings the Game view's tab forward (and the keyboard: the game gets its input), Stop the Scene view's
+  back. Without a primary camera the Game view says so as an exported game does. Both share
+  `Panels/ViewportToolbar` (the toolbar strip, the play state's border, text boxes, the stats overlay).
+- **Scene view** (`Panels/ViewportPanel`): renders into a texture of the panel's pixel size and takes input only
   while hovered or focused: Alt + left drag orbits, middle drag pans, the wheel dollies, right drag flies (WASD, Q/E
   down/up, Shift faster, wheel = speed), F frames the selection, Home everything, W/E/R/Q pick the gizmo (as do the main
   toolbar's tool buttons, next to the gizmo space and the snap toggle, `ViewportSettings::Snap`; holding Ctrl inverts
@@ -1586,8 +1596,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   canvases): the camera settings, the overlay toggles (grid, outline, gizmos, stats), the editor-view settings (preview
   lighting, game UI) and the debug view (named after the view, "Lit" without one, and lit while one colors the image; a
   click offers Lit, Streaming, LOD and Mip) from its left, the agent chip at its right; clicking a chip does not focus the
-  panel. The toolbar's bottom border takes the play state's color while the scene runs. In the game view only the stats
-  and debug view chips remain; once the view is clicked, every click on the image is the game's. A debug view shows a legend at the image's bottom left (`UI::Legend`: its colors with the number
+  panel; "Game camera" (F8, `ViewportSettings::PilotGameCamera`) looks through the scene's primary camera with the
+  editor's overlays, leaving the editor camera where it was. The toolbar's bottom border takes the play state's color
+  while the scene runs. A debug view shows a legend at the image's bottom left (`UI::Legend`: its colors with the number
   of entities in view per color, counts aligned in a column, and the placeholder boxes). The
   selection outline is the theme's accent and the debug views use its meanings (`ViewportSettings::SelectionColor` and
   `DebugColors`, set by the UI, not saved).
@@ -1595,11 +1606,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
   Shift adds, empty space clears) and never when they hit the gizmo. Gizmo drags go through `TransformDrag`
   (`Editor/TransformEdit.h`): selected entities without a selected ancestor follow the primary one, local transforms
   are recomputed under their parent (`TransformEdit::WorldToLocal`), writes emit the transform's update signal so
-  physics follows, and a drag is one undo step (while playing: the running scene, no undo). Playing through the scene's
-  camera makes the panel the game view: editor tools are off and `Input` is enabled only while it is focused (Shift+F1
-  leaves it and frees a cursor the game locked; while the game holds a locked cursor the editor's UI ignores the mouse,
-  and the view says so for a few seconds after each time the game took it: `c_MouseHint`). ImGuizmo only starts a drag
+  physics follows, and a drag is one undo step (while playing: the running scene, no undo). ImGuizmo only starts a drag
   while no ImGui item is hovered, so the image is a plain `Dummy` while the mouse is over the gizmo.
+- **Game input:** `Input` is enabled only while the Game view is focused in play mode (`GameViewPanel::UpdateGameInput`,
+  with `Input::SetViewport(origin, size, renderResolution)`); Shift+F1 leaves it and frees a cursor the game locked; while
+  the game holds a locked cursor the editor's UI ignores the mouse, and the view says so for a few seconds after each time
+  the game took it (`c_MouseHint`).
 
 ### View commands
 
@@ -1683,7 +1695,7 @@ and `AudioSystem`, the built-in "Audio" scene system.
 
 - **Simulated input** (`Editor/EditorInputCommands.cpp`) lets tools play a running game (play mode only) as a person
   would: `input.key {key, action: tap|press|release, steps | seconds, wait}`, `input.mouseButton {button, action, steps |
-  seconds, wait}`, `input.mouseMove {position, wait}` (pixels from the game view's top-left corner), `input.scroll {delta,
+  seconds, wait}`, `input.mouseMove {position, wait}` (pixels from the Game view's top-left corner), `input.scroll {delta,
   wait}`, `input.gamepadButton {gamepad, button, action, steps | seconds, wait}`, `input.gamepadAxis {gamepad, axis, value,
   steps | seconds, wait}` (a value holds until replaced, `null` or for its duration; clamped to the axis' range),
   `input.releaseAll {wait}` and `input.state` (also every hold with the fixed steps it covers). Keys, buttons and gamepad

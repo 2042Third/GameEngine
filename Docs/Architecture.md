@@ -156,11 +156,12 @@ to; out-of-range and non-finite values are clamped or read at rest). `GLFWWindow
 Input reaches the window only through `InputWindow` (size, cursor mode), which `Window` implements, so the input layer
 stays below the application shell. It also has a virtual device for tools (`SimulateKey`, `SimulateGamepadButton`,
 `SimulateGamepadAxis` and friends) merged with the real devices (a gamepad simulated input used counts as connected; an
-axis it holds wins over the device's until released), `SetEnabled` (device input off, e.g. while the editor's game view
-has no focus; sticks and triggers then read at rest) and `SetSuspended` (input frames follow the game's updates). The
+axis it holds wins over the device's until released), `SetEnabled` (device input off, e.g. while the editor's Game view
+has no focus; sticks and triggers then read at rest), `SetViewport(origin, size, resolution)` (where the game's image is
+and the pixels it renders at: device positions and movements reach the game in those pixels) and `SetSuspended` (input frames follow the game's updates). The
 cursor mode a game asks for (`SetGameCursorMode`, scripts' `Input::SetCursorMode`) applies to the window only while input
 is enabled: disabling input gives the cursor back, enabling it applies the game's mode again, so a locked cursor in the
-editor stays in the focused game view (the editor's UI ignores the mouse meanwhile, and the game view says that Shift+F1
+editor stays in the focused Game view (the editor's UI ignores the mouse meanwhile, and the Game view says that Shift+F1
 frees it and Ctrl+P stops the game) and Shift+F1 frees it. `InputNames` maps key, button and gamepad control names for
 the `input.*` commands.
 
@@ -783,7 +784,7 @@ the game (`EngineServices::ScopedProvider`, which restores the provider it repla
 
 | Service | Provider | Consumers |
 | --- | --- | --- |
-| `IGameWindow`: window mode, resolution, vsync, the size the game renders at | StrataRuntime's `GameWindowService` (applied after the frame, `ApplyRequests`; headless: accepted and reported back), the editor's `EditorGameWindow` (recorded and reported, never applied: `editor.status` and a notice over the game view) | script host (`Game::SetWindowMode` and friends) |
+| `IGameWindow`: window mode, resolution, vsync, the size the game renders at | StrataRuntime's `GameWindowService` (applied after the frame, `ApplyRequests`; headless: accepted and reported back), the editor's `EditorGameWindow` (recorded and reported, never applied: `editor.status`, a notice over the Game view and its "Game's request" resolution) | script host (`Game::SetWindowMode` and friends) |
 | `IGameSaves`: the save directory | `GameRuntime` (`<user data>/<game>/Saves`, `GameRuntimeOptions::SaveFilesDirectory`), `EditorContext` (`<project>/.strata/Saves`) | script host (`Game::WriteSaveFile` and friends, through `SaveFiles`) |
 
 ### Scene caches
@@ -2546,11 +2547,21 @@ is the `strata-scripting` skill. The layers:
   the command finished). While nothing of this shows the panel does no work for it, and only the fade keeps the editor at
   its full frame rate (`IsAnimating`, from the clock, so a viewport hidden mid-fade does not keep it there).
 - **Viewport** (`EditorViewport.h`, `ViewportRenderer.h`). `EditorViewport` holds the editor camera (and the cameras of
-  the project's other scenes), the settings and two `ViewportRenderer`s (panel and captures). The panel renders during
-  `OnImGuiRender`; `ResolveViewportView` picks the scene's primary camera while playing and the editor camera otherwise,
-  and `GetViewportRenderOptions` gives editor views (the editor camera outside play mode) preview lighting and a hidden
-  HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). The settings' debug view
-  (`ViewportDebugView`: `none`, `streaming`, `lod`, `mip`) colors every view of the viewport, the game view too: before each
+  the project's other scenes), the settings and three `ViewportRenderer`s, each with render targets of its own size: the
+  Scene view's, the Game view's (created on first use; about 72 MB of targets at 1920 x 1080, freed while the Game view is
+  hidden or closed) and the captures'. Two panels show them, tabs of one dock node: the Scene view (`ViewportPanel`, id
+  `Viewport`) passes `ViewportCameraSource::Editor`, the editor camera on the edited scene or the running one (picking,
+  gizmos and overlays work on the running copy while playing), or `Scene` with "Game camera" (F8); the Game view
+  (`GameViewPanel`) passes `Scene`, the primary camera as the game shows it, at the size of `ViewportSettings::GameView`
+  (`ComputeGameViewFrame`: the panel's, an aspect ratio letterboxed, a fixed size rendered at its pixels and scaled to fit,
+  or what the game asked for), and feeds `Input` while it is focused in play mode (`Input::SetViewport` with its render
+  resolution, so positions reach scripts in the game's pixels; `EditorGameWindow::GetState` reports that resolution).
+  Play from the UI brings the Game view's tab forward and Stop the Scene view's back. `ResolveViewportView`'s `Automatic`
+  source (captures) picks the scene's primary camera while playing and the editor camera otherwise, and
+  `GetViewportRenderOptions` gives editor views (the editor camera, except `Automatic`'s fallback while playing) preview
+  lighting and a hidden HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). Both views hold their
+  chips in a toolbar strip above the image (`Panels/ViewportToolbar`), never over it. The settings' debug view
+  (`ViewportDebugView`: `none`, `streaming`, `lod`, `mip`) colors every view of the viewport, the Game view too: before each
   render `StreamingView` (`Editor/StreamingView.h`) takes the render proxies the scene's `RenderScene` finds in the view
   (its spatial index, culled with the bounds the renderer culls with: a mesh's own, else those the asset pipeline
   recorded) and lists tints for the renderer (`SceneRenderOptions::EntityTints`). It observes streaming without changing

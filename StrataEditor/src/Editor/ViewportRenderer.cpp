@@ -39,7 +39,9 @@ namespace Strata
 		}
 		view.Camera = context.GetViewport().GetCamera().GetSceneCamera(aspectRatio);
 		view.EditorOverlays = true;
-		view.EditorView = context.GetSceneState() != SceneState::Play;
+		// The editor camera asked for by name is always a view for working on the scene (the Scene view while the game
+		// plays); the automatic choice's fallback while playing shows the running game as it is.
+		view.EditorView = source == ViewportCameraSource::Editor || context.GetSceneState() != SceneState::Play;
 		return view;
 	}
 

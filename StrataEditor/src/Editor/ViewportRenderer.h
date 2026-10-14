@@ -38,12 +38,13 @@ namespace Strata
 	enum class ViewportCameraSource : uint8_t
 	{
 		Automatic = 0, // The scene's primary camera in play mode (the editor camera when there is none), else the editor camera
-		Editor,
-		Scene          // The scene's primary camera; fails without one
+		Editor,        // The editor camera, as an editor view also while playing (the Scene view)
+		Scene          // The scene's primary camera; fails without one (the Game view)
 	};
 
-	// Chooses the camera for the editor's active scene: play mode looks through the scene's primary camera, editing and
-	// simulating use the editor camera. Nullopt (with an error) only for ViewportCameraSource::Scene without a camera.
+	// Chooses the camera for the editor's active scene: Automatic (captures) looks through the scene's primary camera in
+	// play mode and uses the editor camera while editing and simulating; the panels pass Editor (the Scene view) or Scene
+	// (the Game view). Nullopt (with an error) only for ViewportCameraSource::Scene without a camera.
 	std::optional<ViewportView> ResolveViewportView(EditorContext& context, ViewportCameraSource source, float aspectRatio, std::string* outError = nullptr);
 
 	// How a view shows the scene beyond the overlays: preview lighting and the game's screen-space text, from the viewport

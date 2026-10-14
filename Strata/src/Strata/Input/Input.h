@@ -76,8 +76,12 @@ namespace Strata
 		static void SetEnabled(bool enabled);
 		static bool IsEnabled();
 		static void SetWindow(InputWindow* window);
-		// Region of the window that receives game input, in window pixels.
-		static void SetViewport(const glm::vec2& origin, const glm::vec2& size);
+		// Region of the window that receives game input, in window pixels, and the resolution the game renders it at (zero:
+		// the region's size). Mouse positions and movements reach the game in pixels of that resolution (an editor's Game view
+		// that shows a 1920 x 1080 image in a smaller panel).
+		static void SetViewport(const glm::vec2& origin, const glm::vec2& size, const glm::vec2& resolution = glm::vec2(0.0f));
+		// The resolution of SetViewport (its size when none was given).
+		static glm::vec2 GetViewportResolution();
 
 		static void ProcessKey(KeyCode key, bool down);
 		static void ProcessMouseButton(MouseCode button, bool down);

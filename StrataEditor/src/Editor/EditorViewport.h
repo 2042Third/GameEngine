@@ -22,6 +22,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace Strata
@@ -29,6 +30,53 @@ namespace Strata
 
 	class EditorContext;
 	class Scene;
+
+	// The image size of the Game view (GameViewPanel): the panel's, an aspect ratio, a fixed size, or what the game asked
+	// for (IGameWindow::SetResolution).
+	enum class GameViewMode : uint8_t
+	{
+		Free = 0,       // Fills the panel
+		Aspect16x9,     // The largest image of that aspect inside the panel, letterboxed
+		Aspect16x10,
+		Aspect4x3,
+		Aspect21x9,
+		Fixed1920x1080, // Renders at exactly those pixels, scaled to fit the panel
+		Fixed1280x720,  // The export's default window
+		Custom,         // GameViewSettings::Width x Height, scaled to fit
+		GameRequest     // The resolution the running game asked for (Free while it asked for none)
+	};
+	// "free", "16:9", "16:10", "4:3", "21:9", "1920x1080", "1280x720", "custom", "game".
+	const char* GameViewModeToString(GameViewMode mode);
+	std::optional<GameViewMode> GameViewModeFromString(std::string_view text);
+
+	struct GameViewSettings
+	{
+		static constexpr uint32_t c_MinSize = 16;
+		static constexpr uint32_t c_MaxSize = 8192;
+
+		GameViewMode Mode = GameViewMode::Free;
+		uint32_t Width = 1280;  // GameViewMode::Custom
+		uint32_t Height = 720;
+	};
+
+	// Where the Game view shows its image inside its area (UI units, relative to the area) and the pixels it renders.
+	// An empty RenderSize: nothing to render (an empty area).
+	struct GameViewFrame
+	{
+		glm::vec2 Offset = { 0.0f, 0.0f };
+		glm::vec2 Size = { 0.0f, 0.0f };
+		glm::uvec2 RenderSize = { 0, 0 };
+	};
+
+	// The Game view's image in an area of `areaSize` UI units with `pixelScale` framebuffer pixels per unit: the whole area
+	// (Free, or GameRequest without a request), the largest rectangle of the mode's aspect ratio centered in it (rendered at
+	// its pixels), or a fixed size rendered at exactly its pixels and scaled to fit (centered).
+	GameViewFrame ComputeGameViewFrame(const GameViewSettings& settings, const glm::vec2& areaSize, const glm::vec2& pixelScale,
+		const std::optional<glm::uvec2>& gameRequest);
+	// The aspect ratio the mode keeps (width / height), or nothing for Free and GameRequest without a request.
+	std::optional<float> GetGameViewAspectRatio(const GameViewSettings& settings, const std::optional<glm::uvec2>& gameRequest);
+	// The fixed pixel size of the mode (fixed sizes, Custom, GameRequest with a request), or nothing.
+	std::optional<glm::uvec2> GetGameViewFixedSize(const GameViewSettings& settings, const std::optional<glm::uvec2>& gameRequest);
 
 	// Viewport options saved with the project's editor state.
 	struct ViewportSettings
@@ -64,6 +112,11 @@ namespace Strata
 		ViewportDebugView DebugView = ViewportDebugView::None;
 		// The debug views' colors. Not saved: the editor's theme sets them.
 		ViewportDebugColors DebugColors;
+		// The Game view's image size.
+		GameViewSettings GameView;
+		// The Scene view looks through the scene's primary camera (with the editor's overlays) instead of the editor camera
+		// ("Game camera", F8).
+		bool PilotGameCamera = false;
 
 		nlohmann::json ToJson() const;
 		// Applies a ToJson document; absent values keep their current value. Fails (changing nothing) on invalid values.
@@ -124,10 +177,17 @@ namespace Strata
 		// The panel's aspect ratio, or the default capture size's while the panel has no size.
 		float GetAspectRatio() const;
 
-		// Renderer of the viewport panel, and a separate one for captures (any size, any camera). Created on first use;
-		// null without an initialized renderer (headless editors).
+		// Renderer of the viewport panel (the Scene view), of the Game view, and a separate one for captures (any size, any
+		// camera): each keeps render targets of its own size. Created on first use; null without an initialized renderer
+		// (headless editors). HasGameRenderer says whether the Game view's exists, without creating it.
 		ViewportRenderer* GetRenderer();
+		ViewportRenderer* GetGameRenderer();
+		bool HasGameRenderer() const { return m_GameRenderer != nullptr; }
 		ViewportRenderer* GetCaptureRenderer();
+		// Pixel size of the image the Game view renders (zero while it is hidden or closed). Captures of the scene's camera
+		// default to it when the Game view keeps an aspect ratio.
+		void SetGameViewSize(const glm::uvec2& size) { m_GameViewSize = size; }
+		const glm::uvec2& GetGameViewSize() const { return m_GameViewSize; }
 
 		// Frames the entities (with their descendants) in the editor camera, or the whole scene when the span is empty.
 		// False (camera unchanged) when there is nothing to frame.
@@ -184,7 +244,9 @@ namespace Strata
 		std::optional<EditorCamera> m_UnassignedCamera;
 		ViewportSettings m_Settings;
 		glm::uvec2 m_Size = { 0, 0 };
+		glm::uvec2 m_GameViewSize = { 0, 0 };
 		Scope<ViewportRenderer> m_Renderer;
+		Scope<ViewportRenderer> m_GameRenderer;
 		Scope<ViewportRenderer> m_CaptureRenderer;
 		Scope<PendingPick> m_Pick;
 	};

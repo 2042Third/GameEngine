@@ -104,12 +104,23 @@ namespace Strata
 			bool Enabled = true;
 			glm::vec2 ViewportOrigin = { 0.0f, 0.0f };
 			glm::vec2 ViewportSize = { 0.0f, 0.0f };
+			glm::vec2 ViewportResolution = { 0.0f, 0.0f }; // Zero: ViewportSize
 			CursorMode Cursor = CursorMode::Normal;     // Last set on the window
 			CursorMode GameCursor = CursorMode::Normal; // What the game asks for (SetGameCursorMode)
 			InputWindow* TargetWindow = nullptr;
 		};
 
 		InputState s_State;
+
+		// Game pixels per window pixel of the viewport (1 without a resolution of its own).
+		glm::vec2 GetViewportPixelScale()
+		{
+			const glm::vec2 size = s_State.ViewportSize;
+			const glm::vec2 resolution = s_State.ViewportResolution;
+			if (!(size.x > 0.0f && size.y > 0.0f && resolution.x > 0.0f && resolution.y > 0.0f))
+				return glm::vec2(1.0f);
+			return resolution / size;
+		}
 
 		// Whether a source held a button through the whole input frame (down, without a transition).
 		template<size_t Count>
@@ -228,12 +239,13 @@ namespace Strata
 	{
 		if (s_State.Simulated.MousePosition)
 			return *s_State.Simulated.MousePosition;
-		return s_State.MousePosition - s_State.ViewportOrigin;
+		return (s_State.MousePosition - s_State.ViewportOrigin) * GetViewportPixelScale();
 	}
 
 	glm::vec2 Input::GetMouseDelta()
 	{
-		return (s_State.Enabled ? s_State.MouseDelta : glm::vec2(0.0f)) + s_State.Simulated.MouseDelta;
+		// Simulated movements are given in the game's pixels already.
+		return (s_State.Enabled ? s_State.MouseDelta * GetViewportPixelScale() : glm::vec2(0.0f)) + s_State.Simulated.MouseDelta;
 	}
 
 	glm::vec2 Input::GetScrollDelta()
@@ -300,6 +312,13 @@ namespace Strata
 	CursorMode Input::GetGameCursorMode()
 	{
 		return s_State.GameCursor;
+	}
+
+	glm::vec2 Input::GetViewportResolution()
+	{
+		if (s_State.ViewportResolution.x > 0.0f && s_State.ViewportResolution.y > 0.0f)
+			return s_State.ViewportResolution;
+		return GetViewportSize();
 	}
 
 	glm::vec2 Input::GetViewportSize()
@@ -386,10 +405,11 @@ namespace Strata
 		s_State.TargetWindow = window;
 	}
 
-	void Input::SetViewport(const glm::vec2& origin, const glm::vec2& size)
+	void Input::SetViewport(const glm::vec2& origin, const glm::vec2& size, const glm::vec2& resolution)
 	{
 		s_State.ViewportOrigin = origin;
 		s_State.ViewportSize = size;
+		s_State.ViewportResolution = resolution;
 	}
 
 	void Input::ProcessKey(KeyCode key, bool down)

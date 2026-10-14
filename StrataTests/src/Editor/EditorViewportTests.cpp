@@ -604,6 +604,11 @@ TEST_SUITE("Editor.Viewport")
 		CHECK_FALSE(fallback.EditorView);
 		CHECK_FALSE(fallbackOptions.PreviewEnvironment);
 		CHECK(fallbackOptions.DrawScreenSpaceText);
+		// The Scene view asks for the editor camera: an editor view also while the game plays.
+		auto [sceneWhilePlaying, sceneWhilePlayingOptions] = optionsFor(ViewportCameraSource::Editor);
+		CHECK(sceneWhilePlaying.EditorView);
+		CHECK(sceneWhilePlayingOptions.PreviewEnvironment);
+		CHECK_FALSE(sceneWhilePlayingOptions.DrawScreenSpaceText);
 		context.Stop();
 
 		// Simulating is still working on the scene in the editor camera.
@@ -629,12 +634,14 @@ TEST_SUITE("Editor.Viewport")
 			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
 			nlohmann::json settings = harness.Run("viewport.getSettings");
 			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "allColliders", "stats", "previewLighting", "gameUI", "gizmo", "space",
-				"snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView" })
+				"snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView", "gameView", "pilotGameCamera" })
 			{
 				CAPTURE(key);
 				CHECK(settings.contains(key));
 			}
-			CHECK(settings.size() == 14);
+			CHECK(settings.size() == 16);
+			CHECK(settings["gameView"] == nlohmann::json { { "mode", "free" }, { "width", 1280 }, { "height", 720 } });
+			CHECK(settings["pilotGameCamera"] == false);
 			CHECK(settings["allColliders"] == false);
 			CHECK(settings["previewLighting"] == true);
 			CHECK(settings["gameUI"] == false);
@@ -656,6 +663,21 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(harness.Context.GetViewport().GetSettings().DebugView == ViewportDebugView::Streaming);
 			CHECK(harness.Run("viewport.getSettings") == settings);
 
+			// The Game view's size and the Scene view's game camera.
+			settings = harness.Run("viewport.setSettings", { { "gameView", { { "mode", "custom" }, { "width", 800 }, { "height", 600 } } },
+				{ "pilotGameCamera", true } });
+			CHECK(settings["gameView"] == nlohmann::json { { "mode", "custom" }, { "width", 800 }, { "height", 600 } });
+			CHECK(settings["pilotGameCamera"] == true);
+			CHECK(harness.Context.GetViewport().GetSettings().GameView.Mode == GameViewMode::Custom);
+			// Only the parts given change.
+			settings = harness.Run("viewport.setSettings", { { "gameView", { { "mode", "16:9" } } }, { "pilotGameCamera", false } });
+			CHECK(settings["gameView"] == nlohmann::json { { "mode", "16:9" }, { "width", 800 }, { "height", 600 } });
+			CHECK(harness.Error("viewport.setSettings", { { "gameView", { { "mode", "16:7" } } } }).find("'gameView.mode'") != std::string::npos);
+			CHECK(harness.Error("viewport.setSettings", { { "gameView", { { "width", 8 } } } }).find("'gameView.width'") != std::string::npos);
+			CHECK(harness.Error("viewport.setSettings", { { "gameView", { { "depth", 8 } } } }).find("'depth'") != std::string::npos);
+			CHECK(harness.Error("viewport.setSettings", { { "gameView", "16:9" } }).find("'gameView'") != std::string::npos);
+			CHECK(harness.Run("viewport.getSettings") == settings);
+
 			// An invalid value names the parameter and changes nothing, not even the valid values next to it.
 			const std::string error = harness.Error("viewport.setSettings", { { "grid", true }, { "scaleSnap", 0 } });
 			CHECK(error.find("'scaleSnap'") != std::string::npos);
@@ -674,6 +696,67 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(harness.Context.GetViewport().GetSettings().ShowGameUI);
 		CHECK_FALSE(harness.Context.GetViewport().GetSettings().ShowGrid);
 		CHECK(harness.Context.GetViewport().GetSettings().AllColliders);
+		CHECK(harness.Context.GetViewport().GetSettings().GameView.Mode == GameViewMode::Aspect16x9);
+		CHECK(harness.Context.GetViewport().GetSettings().GameView.Width == 800);
+	}
+
+	TEST_CASE("The Game view's image: the panel, the largest rectangle of an aspect ratio, or a fixed size scaled to fit")
+	{
+		GameViewSettings settings;
+		// Free fills the area at its pixels.
+		GameViewFrame frame = ComputeGameViewFrame(settings, glm::vec2(400.0f, 300.0f), glm::vec2(2.0f), std::nullopt);
+		CHECK(frame.Offset == glm::vec2(0.0f));
+		CHECK(frame.Size == glm::vec2(400.0f, 300.0f));
+		CHECK(frame.RenderSize == glm::uvec2(800, 600));
+
+		// 16:9 in a 4:3 area: the full width, bars above and below, an image of 16:9 within a pixel.
+		settings.Mode = GameViewMode::Aspect16x9;
+		frame = ComputeGameViewFrame(settings, glm::vec2(400.0f, 300.0f), glm::vec2(2.0f), std::nullopt);
+		CHECK(frame.Size.x == 400.0f);
+		CHECK(std::abs(frame.Size.y - 225.0f) <= 1.0f);
+		CHECK(frame.Offset.x == 0.0f);
+		CHECK(std::abs(frame.Offset.y - 37.0f) <= 1.0f);
+		CHECK(std::abs(static_cast<float>(frame.RenderSize.x) / (16.0f / 9.0f) - static_cast<float>(frame.RenderSize.y)) <= 1.0f);
+		CHECK(frame.RenderSize.x == 800);
+		// 4:3 in a 16:9 area: the full height, bars left and right.
+		settings.Mode = GameViewMode::Aspect4x3;
+		frame = ComputeGameViewFrame(settings, glm::vec2(640.0f, 360.0f), glm::vec2(1.0f), std::nullopt);
+		CHECK(frame.Size.y == 360.0f);
+		CHECK(frame.Size.x == 480.0f);
+		CHECK(frame.Offset == glm::vec2(80.0f, 0.0f));
+		CHECK(frame.RenderSize == glm::uvec2(480, 360));
+		// 4:3 in a 4:3 area fills it.
+		frame = ComputeGameViewFrame(settings, glm::vec2(400.0f, 300.0f), glm::vec2(1.0f), std::nullopt);
+		CHECK(frame.Size == glm::vec2(400.0f, 300.0f));
+
+		// Fixed sizes render at their pixels, shown scaled to fit (down or up).
+		settings.Mode = GameViewMode::Fixed1920x1080;
+		frame = ComputeGameViewFrame(settings, glm::vec2(400.0f, 300.0f), glm::vec2(1.0f), std::nullopt);
+		CHECK(frame.RenderSize == glm::uvec2(1920, 1080));
+		CHECK(frame.Size.x == 400.0f);
+		settings.Mode = GameViewMode::Custom;
+		settings.Width = 100;
+		settings.Height = 100;
+		frame = ComputeGameViewFrame(settings, glm::vec2(400.0f, 300.0f), glm::vec2(1.0f), std::nullopt);
+		CHECK(frame.RenderSize == glm::uvec2(100, 100));
+		CHECK(frame.Size == glm::vec2(300.0f, 300.0f));
+		CHECK(frame.Offset == glm::vec2(50.0f, 0.0f));
+
+		// The game's request, or the whole area without one.
+		settings.Mode = GameViewMode::GameRequest;
+		CHECK(ComputeGameViewFrame(settings, glm::vec2(400.0f, 300.0f), glm::vec2(1.0f), glm::uvec2(1280, 720)).RenderSize == glm::uvec2(1280, 720));
+		CHECK(ComputeGameViewFrame(settings, glm::vec2(400.0f, 300.0f), glm::vec2(1.0f), std::nullopt).RenderSize == glm::uvec2(400, 300));
+		// An empty area renders nothing.
+		CHECK(ComputeGameViewFrame(settings, glm::vec2(0.0f, 300.0f), glm::vec2(1.0f), std::nullopt).RenderSize == glm::uvec2(0));
+
+		for (const char* name : { "free", "16:9", "16:10", "4:3", "21:9", "1920x1080", "1280x720", "custom", "game" })
+		{
+			CAPTURE(name);
+			const std::optional<GameViewMode> mode = GameViewModeFromString(name);
+			REQUIRE(mode);
+			CHECK(std::string(GameViewModeToString(*mode)) == name);
+		}
+		CHECK_FALSE(GameViewModeFromString("16:7"));
 	}
 
 	TEST_CASE("Every scene keeps its own editor camera, and a scene seen for the first time is framed")

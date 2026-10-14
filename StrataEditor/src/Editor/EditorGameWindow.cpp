@@ -58,7 +58,7 @@ namespace Strata
 		m_Width = width;
 		m_Height = height;
 		m_Version++;
-		ST_INFO("The game asked for a resolution of {} x {}; play mode renders at the game view's size", width, height);
+		ST_INFO("The game asked for a resolution of {} x {}; the Game view renders at it in its \"Game's request\" mode", width, height);
 		return true;
 	}
 
@@ -77,8 +77,8 @@ namespace Strata
 		GameWindowState state;
 		state.Mode = m_Mode.value_or(GameWindowMode::Windowed);
 		state.VSync = m_VSync.value_or(true);
-		// The game renders into the game view: its size is the game's window size.
-		const glm::vec2 size = Input::GetViewportSize();
+		// The game renders into the Game view: the resolution it renders at is the game's window size.
+		const glm::vec2 size = Input::GetViewportResolution();
 		state.Width = static_cast<uint32_t>(std::max(size.x, 0.0f));
 		state.Height = static_cast<uint32_t>(std::max(size.y, 0.0f));
 		return state;

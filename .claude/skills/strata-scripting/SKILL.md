@@ -116,8 +116,8 @@ ST_SCRIPT_CLASS(Turret)
   stopping play releases everything the scripts requested.
 - `Input`: `IsKeyDown/Pressed/Released(Key::W)`, `IsMouseButtonDown/Pressed/Released(Mouse::ButtonLeft)`,
   `GetMousePosition` (viewport pixels), `GetMouseDelta`, `GetScrollDelta`. In the editor, scripts receive device input only
-  while the viewport is the focused game view (playing through the scene's primary camera); positions are relative to
-  the image. Tools play the game with the `input.*` editor commands (simulated input, see the editor automation skill),
+  while the Game view (the tab beside the Scene view) is focused in play mode; positions are in the image's pixels (its
+  render resolution). Tools play the game with the `input.*` editor commands (simulated input, see the editor automation skill),
   which reach the scripts whether or not the viewport has the focus. Gamepads and the cursor: see
   [Gamepads and the cursor](#gamepads-and-the-cursor).
 - Input timing: `Pressed`/`Released` are transitions since the previous frame, so read them in `OnUpdate` (once per
@@ -337,7 +337,7 @@ Input::SetCursorMode(CursorMode::Normal);  // Menus (Hidden hides it over the ga
 ```
 
 `GetGamepadAxis(axis, gamepad, deadZone)` takes a dead zone (pass 0 for the raw value). The cursor mode applies while the
-game has the input: in the editor while the game view is focused (Shift+F1 frees the cursor, clicking the game view
+game has the input: in the editor while the Game view is focused (Shift+F1 frees the cursor, clicking the game view
 takes it again, stopping play gives it back). Tools press buttons and move sticks with `input.gamepadButton` and
 `input.gamepadAxis`.
 
@@ -356,7 +356,7 @@ Game::DeleteSaveFile("Slot 1");
 ```
 
 Window requests apply after the frame in an exported game; the editor's play mode only records them (`editor.status
-{"sections": ["game"]}`, a notice over the game view), its own window stays. Saves go to `<user data>/<Game>/Saves` in an exported
+{"sections": ["game"]}`, a notice over the Game view, whose "Game's request" resolution renders at it), its own window stays. Saves go to `<user data>/<Game>/Saves` in an exported
 game and to `<project>/.strata/Saves` in the editor. Names are 1 to 64 ASCII letters, digits, spaces, `-`, `_` and `.`
 (not first or last), without `..` (no paths); the calls read and write the disk before they return, so save at quiet
 moments (checkpoints, menus) and keep saves small.

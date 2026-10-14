@@ -74,7 +74,8 @@ namespace Strata
 	// Built-in panel ids (EditorPanelRegistry).
 	namespace EditorPanels
 	{
-		constexpr const char* c_Viewport = "Viewport";
+		constexpr const char* c_Viewport = "Viewport"; // The Scene view (ViewportPanel; "Scene" is an alias in editor.showPanel)
+		constexpr const char* c_Game = "Game";         // The Game view (GameViewPanel), a tab beside the Scene view
 		constexpr const char* c_Hierarchy = "Hierarchy";
 		constexpr const char* c_Inspector = "Inspector";
 		constexpr const char* c_AssetInspector = "AssetInspector";
@@ -109,9 +110,9 @@ namespace Strata
 		static constexpr double c_InputActivitySeconds = 0.5;
 		static constexpr double c_AutomationActivitySeconds = 1.0;
 		// Version of the default layout: a saved layout of another version is replaced by the default one. Bump it when the
-		// default layout gains a docked panel that is open by default (4: the Problems panel, and Activity beside it), which
-		// an older layout would show floating over the viewport.
-		static constexpr int c_LayoutVersion = 4;
+		// default layout gains a docked panel that is open by default (4: the Problems panel, and Activity beside it; 5: the
+		// Game view beside the Scene view, a wider Hierarchy), which an older layout would show floating over the viewport.
+		static constexpr int c_LayoutVersion = 5;
 
 		EditorLayer(const EditorOptions& options, Scope<EditorHost> host);
 		~EditorLayer() override = default;
@@ -232,6 +233,8 @@ namespace Strata
 		void BuildScripts();
 		// Play (the toolbar, Ctrl+P): play.start through the command runner, which builds the scripts first when they need it.
 		void StartPlay();
+		// play.stop from the UI (the toolbar, Ctrl+P): brings the Scene view back when Play brought the Game view forward.
+		void StopPlay();
 		// File > Export Game... and the toolbar's Export button: the Export dialog, showing a running export.
 		void ShowExportDialog();
 		// Scripts > External Editor... and editor.showDialog: the program that opens script files, and the editors found.
@@ -273,6 +276,8 @@ namespace Strata
 		int m_UnsavedChangesModalFrame = -1; // ImGui's frame the question was drawn in last
 		bool m_ShowImGuiDemo = false;
 		bool m_ResetLayout = false;
+		// Play (the toolbar, Ctrl+P) brought the Game view forward: Stop brings the Scene view back.
+		bool m_PlayShowedGame = false;
 		bool m_LayoutChecked = false;
 		bool m_UIDrawn = false; // OnImGuiRender ran at least once
 		// The inspection target the inspector tabs show (EditorContext::GetInspectionVersion): a new one brings its tab forward.

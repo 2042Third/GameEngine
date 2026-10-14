@@ -97,7 +97,8 @@ namespace Strata
 			{ "translateSnap", "TranslateSnap" },
 			{ "rotateSnap", "RotateSnap" },
 			{ "scaleSnap", "ScaleSnap" },
-			{ "debugView", "DebugView" }
+			{ "debugView", "DebugView" },
+			{ "pilotGameCamera", "PilotGameCamera" }
 		};
 
 		nlohmann::json DebugViewSchema(std::string description)
@@ -124,6 +125,8 @@ namespace Strata
 			nlohmann::json result = nlohmann::json::object();
 			for (const auto& [parameter, key] : c_ViewportSettingNames)
 				result[parameter] = values[key];
+			result["gameView"] = { { "mode", GameViewModeToString(settings.GameView.Mode) }, { "width", settings.GameView.Width },
+				{ "height", settings.GameView.Height } };
 			return result;
 		}
 
@@ -497,8 +500,9 @@ namespace Strata
 		registry.Register({ "viewport.getSettings",
 			"The viewport's view settings (saved with the project's editor state): which editor overlays are drawn (grid, selectionOutline, sceneGizmos, "
 			"stats; allColliders: collider shapes of every entity instead of only the selection's), previewLighting (editor views light scenes without any light of their own with a preview sun and sky), gameUI (editor views draw the "
-			"game's screen-space text), the gizmo mode and space, whether gizmo drags snap, the snap steps, and debugView (\"none\", or \"streaming\" / "
-			"\"lod\" / \"mip\": the image colored by streaming state, level of detail or the mip levels textures lack).",
+			"game's screen-space text), the gizmo mode and space, whether gizmo drags snap, the snap steps, debugView (\"none\", or \"streaming\" / "
+			"\"lod\" / \"mip\": the image colored by streaming state, level of detail or the mip levels textures lack), gameView (the Game view's image: "
+			"{mode, width, height}, width and height for mode \"custom\") and pilotGameCamera (the Scene view looks through the scene's primary camera).",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
@@ -507,7 +511,8 @@ namespace Strata
 
 		registry.Register({ "viewport.setSettings",
 			"Changes view settings of the viewport (a view change: no undo step, the scene is unchanged) and returns all of them like viewport.getSettings. "
-			"Editor views are the editor camera while the game is not playing; the scene's camera and the playing game always show the scene as the game does.",
+			"Editor views are the Scene view's editor camera (also while the game plays); the Game view and the scene's camera always show the scene as "
+			"the game does.",
 			ObjectSchema({
 				{ "grid", BoolSchema("Draw the ground grid") },
 				{ "selectionOutline", BoolSchema("Outline the selected entities") },
@@ -526,7 +531,15 @@ namespace Strata
 				{ "debugView", DebugViewSchema("Color every view of the viewport: \"streaming\" tints entities whose mesh, material or textures are still "
 					"loading (Sulfur; failed ones Cinnabar; entities whose mesh is not there are drawn as boxes), \"lod\" tints entities by the level of "
 					"detail they are drawn at (0 to 3+), \"mip\" tints entities with textures by the mip levels their worst texture lacks against what "
-					"their view needs (none Malachite, 1 Azurite, 2 Sulfur, 3 or more or still loading Cinnabar), \"none\" shows the image as rendered") } }),
+					"their view needs (none Malachite, 1 Azurite, 2 Sulfur, 3 or more or still loading Cinnabar), \"none\" shows the image as rendered") },
+				{ "gameView", ObjectSchema({
+					{ "mode", { { "type", "string" }, { "enum", { "free", "16:9", "16:10", "4:3", "21:9", "1920x1080", "1280x720", "custom", "game" } },
+						{ "description", "The Game view's image: free fills the panel, an aspect ratio is the largest image of it inside the panel "
+							"(letterboxed), a size renders at exactly those pixels scaled to fit, custom uses width and height, game the resolution the "
+							"running game asked for (free without a request)" } } },
+					{ "width", IntegerSchema("Width of the custom size", GameViewSettings::c_MinSize, GameViewSettings::c_MaxSize) },
+					{ "height", IntegerSchema("Height of the custom size", GameViewSettings::c_MinSize, GameViewSettings::c_MaxSize) } }) },
+				{ "pilotGameCamera", BoolSchema("The Scene view looks through the scene's primary camera, with the editor's overlays (F8)") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				nlohmann::json changes = nlohmann::json::object();
@@ -534,6 +547,19 @@ namespace Strata
 				{
 					if (const auto it = parameters.find(parameter); it != parameters.end())
 						changes[key] = *it;
+				}
+				if (const auto gameView = parameters.find("gameView"); gameView != parameters.end())
+				{
+					if (!gameView->is_object())
+						return EditorCommandResult::InvalidParameters("Parameter 'gameView' must be an object {mode, width, height}");
+					nlohmann::json values = nlohmann::json::object();
+					for (const auto& [name, value] : gameView->items())
+					{
+						if (name != "mode" && name != "width" && name != "height")
+							return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'gameView' has no '{}' (mode, width, height)", name));
+						values[name == "mode" ? "Mode" : (name == "width" ? "Width" : "Height")] = value;
+					}
+					changes["GameView"] = std::move(values);
 				}
 				// Applied to a copy, so an invalid value changes nothing.
 				ViewportSettings settings = context.GetViewport().GetSettings();
@@ -546,6 +572,12 @@ namespace Strata
 						const std::string quoted = fmt::format("'{}'", key);
 						if (const size_t position = error.find(quoted); position != std::string::npos)
 							error.replace(position, quoted.size(), fmt::format("Parameter '{}'", parameter));
+					}
+					for (const auto& [saved, parameter] : { std::pair<const char*, const char*> { "'GameView.Mode'", "Parameter 'gameView.mode'" },
+						{ "'GameView.Width'", "Parameter 'gameView.width'" }, { "'GameView.Height'", "Parameter 'gameView.height'" } })
+					{
+						if (const size_t position = error.find(saved); position != std::string::npos)
+							error.replace(position, std::string_view(saved).size(), parameter);
 					}
 					return EditorCommandResult::InvalidParameters(error);
 				}
@@ -560,7 +592,8 @@ namespace Strata
 		registry.Register({ "viewport.capture",
 			"Renders the scene on the next frame and returns the picture as a PNG image, with its width and height. By default it looks like the viewport: "
 			"its size (1280x720 while the viewport is hidden), the scene's primary camera while playing (the editor camera otherwise) and the editor overlays "
-			"(grid, selection outline, light/camera/collider shapes) for the editor camera. position, target and fov look through a camera of the "
+			"(grid, selection outline, light/camera/collider shapes) for the editor camera; camera \"scene\" takes the Game view's size when it keeps an "
+			"aspect ratio or a fixed size (viewport.setSettings gameView). position, target and fov look through a camera of the "
 			"capture's own (the editor camera with those changes; camera.get stays as it was): position + target looks from one at the other, either "
 			"alone moves the editor camera's view keeping its direction; the result's camera is then \"custom\", and view has the position, forward "
 			"direction and fov used. With the editor camera outside play mode, a scene without any light "
@@ -643,9 +676,24 @@ namespace Strata
 				if (!Renderer::IsInitialized())
 					return EditorCommandResult::Fail("viewport.capture needs a GPU, but this editor runs without a graphics device (--no-gpu or no usable GPU)");
 
-				// The size: as given, the missing side from the viewport's aspect ratio, or the viewport's own size.
-				const float aspectRatio = context.GetViewport().GetAspectRatio();
-				const glm::uvec2 viewportSize = context.GetViewport().GetSize();
+				// The size: as given, the missing side from the viewport's aspect ratio, or the viewport's own size. The scene's
+				// camera takes the Game view's when it keeps an aspect ratio or a size: its fixed size, else its image's (or the
+				// default width at its aspect ratio while it is hidden).
+				float aspectRatio = context.GetViewport().GetAspectRatio();
+				glm::uvec2 viewportSize = context.GetViewport().GetSize();
+				if (request.Camera == ViewportCameraSource::Scene)
+				{
+					const GameViewSettings& gameView = context.GetViewport().GetSettings().GameView;
+					const std::optional<glm::uvec2> gameRequest = context.GetGameWindow().GetRequestedResolution();
+					if (const std::optional<float> gameAspect = GetGameViewAspectRatio(gameView, gameRequest))
+					{
+						aspectRatio = *gameAspect;
+						const glm::uvec2 shown = context.GetViewport().GetGameViewSize();
+						const std::optional<glm::uvec2> fixed = GetGameViewFixedSize(gameView, gameRequest);
+						viewportSize = fixed ? *fixed : (shown.x > 0 && shown.y > 0 ? shown
+							: glm::uvec2(EditorViewport::c_DefaultWidth, static_cast<uint32_t>(std::lround(EditorViewport::c_DefaultWidth / *gameAspect))));
+					}
+				}
 				int64_t captureWidth = width;
 				int64_t captureHeight = height;
 				if (width == 0 && height == 0)
