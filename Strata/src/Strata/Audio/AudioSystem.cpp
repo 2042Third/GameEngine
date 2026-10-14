@@ -382,8 +382,65 @@ namespace Strata
 				stats.WaitingSourceCount++;
 		}
 		stats.OneShotCount = static_cast<uint32_t>(m_OneShots.size());
+		stats.OneShotsPlayed = m_OneShotsPlayed;
+		stats.OneShotsDropped = m_OneShotsDropped;
 		stats.ListenerSearchCount = m_ListenerSearchCount;
 		return stats;
+	}
+
+	std::vector<AudioVoiceInfo> AudioSystem::GetVoices() const
+	{
+		std::vector<AudioVoiceInfo> voices;
+		voices.reserve(m_Sources.size() + m_OneShots.size());
+		const entt::registry& registry = m_Scene.GetRegistry();
+		for (const auto& [handle, record] : m_Sources)
+		{
+			const AudioSource& source = *record.Source;
+			AudioVoiceInfo voice;
+			if (const IDComponent* id = registry.try_get<IDComponent>(handle))
+				voice.Entity = id->ID;
+			voice.Clip = record.Applied.Clip;
+			voice.Volume = source.GetVolume();
+			voice.Pitch = source.GetPitch();
+			voice.Playing = source.IsPlaying() || record.PlayRequested || record.PausedByScene;
+			voice.Paused = source.IsPaused() || record.PausedByScene;
+			voice.Waiting = record.State == ClipState::Waiting;
+			voice.Looping = source.IsLooping();
+			voice.Spatial = source.IsSpatial();
+			voice.Position = source.GetPosition();
+			voice.Seconds = source.GetPlaybackPosition();
+			voices.push_back(voice);
+		}
+		for (const OneShot& oneShot : m_OneShots)
+		{
+			const AudioSource& source = *oneShot.Source;
+			AudioVoiceInfo voice;
+			voice.Clip = oneShot.Clip;
+			voice.Volume = source.GetVolume();
+			voice.Pitch = source.GetPitch();
+			voice.Playing = true; // Reclaimed once it ends
+			voice.Paused = oneShot.PausedByScene;
+			voice.Waiting = !oneShot.Started;
+			voice.Looping = false;
+			voice.Spatial = source.IsSpatial();
+			voice.Position = source.GetPosition();
+			voice.Seconds = source.GetPlaybackPosition();
+			voices.push_back(voice);
+		}
+		return voices;
+	}
+
+	void AudioSystem::DropOneShot(AssetHandle clip, std::string_view reason)
+	{
+		m_OneShotsDropped++;
+		const auto now = std::chrono::steady_clock::now();
+		auto [it, added] = m_DropWarnings.try_emplace(clip, now);
+		if (!added && now - it->second < std::chrono::seconds(1))
+			return;
+		it->second = now;
+		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+		const std::optional<AssetMetadata> metadata = manager ? manager->GetMetadata(clip) : std::nullopt;
+		ST_CORE_WARN("Audio: dropped a one-shot of '{}': {}", metadata && !metadata->Path.empty() ? metadata->Path : clip.ToString(), reason);
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -830,20 +887,27 @@ namespace Strata
 		settings.Spatial = spatial;
 		settings.Position = position;
 		oneShot.Source->SetSettings(settings);
-		if (!TryStartOneShot(oneShot))
+		std::string reason;
+		if (!TryStartOneShot(oneShot, reason))
+		{
+			DropOneShot(clip, reason);
 			return false;
+		}
 
 		// Voice stealing: cut off the oldest one-shot so the newest sound always plays.
 		if (m_OneShots.size() >= c_MaxOneShots)
+		{
+			DropOneShot(m_OneShots.front().Clip, fmt::format("more than {} one-shots played at once, so the oldest was cut off", c_MaxOneShots));
 			m_OneShots.erase(m_OneShots.begin());
+		}
 		m_OneShots.push_back(std::move(oneShot));
+		m_OneShotsPlayed++;
 		return true;
 	}
 
-	bool AudioSystem::TryStartOneShot(OneShot& oneShot)
+	bool AudioSystem::TryStartOneShot(OneShot& oneShot, std::string& reason)
 	{
 		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
-		std::string reason;
 		if (!manager)
 		{
 			reason = "no asset manager is active";
@@ -853,7 +917,10 @@ namespace Strata
 			if (Ref<AudioClip> clip = GetClip(asset, reason))
 			{
 				if (!oneShot.Source->SetClip(clip))
-					return false; // Logged by the mixer
+				{
+					reason = "the mixer refused its clip";
+					return false;
+				}
 				oneShot.Started = true;
 				if (m_Paused)
 					oneShot.PausedByScene = true; // Starts when the scene resumes
@@ -870,8 +937,7 @@ namespace Strata
 		{
 			reason = manager->IsHandleValid(oneShot.Clip) ? manager->GetAssetError(oneShot.Clip) : std::string("it is not a known asset");
 		}
-
-		ST_CORE_WARN("Audio: cannot play the one-shot clip {}: {}", oneShot.Clip.ToString(), reason);
+		reason = fmt::format("the clip cannot be played ({})", reason);
 		return false;
 	}
 
@@ -882,10 +948,19 @@ namespace Strata
 			if (!oneShot.Started)
 			{
 				oneShot.WaitedTime += timestep;
-				// Too late: a sound effect that comes long after its cause is worse than none.
-				if (!TryStartOneShot(oneShot))
+				std::string reason;
+				if (!TryStartOneShot(oneShot, reason))
+				{
+					DropOneShot(oneShot.Clip, reason);
 					return true;
-				return !oneShot.Started && oneShot.WaitedTime > c_MaxOneShotClipWait;
+				}
+				// Too late: a sound effect that comes long after its cause is worse than none.
+				if (!oneShot.Started && oneShot.WaitedTime > c_MaxOneShotClipWait)
+				{
+					DropOneShot(oneShot.Clip, fmt::format("its clip took longer than {} s to load", c_MaxOneShotClipWait));
+					return true;
+				}
+				return false;
 			}
 			// Finished (or never got a voice) one-shots are reclaimed.
 			return !oneShot.PausedByScene && !oneShot.Source->IsPlaying();

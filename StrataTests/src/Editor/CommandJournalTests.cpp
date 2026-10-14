@@ -116,6 +116,7 @@ namespace
 	constexpr std::string_view c_QueryCommands[] = {
 		"animation.info",
 		"asset.findReferences", "asset.info", "asset.list", "asset.stats",
+		"audio.state",
 		"camera.get",
 		"component.get", "component.list",
 		"edit.history",
@@ -149,7 +150,7 @@ namespace
 	// Queries whose results show what the editor's session holds (EditorCommandResults::Session): replays never bind IDs
 	// from them.
 	constexpr std::string_view c_SessionResultCommands[] = {
-		"asset.stats", "camera.get", "edit.history", "editor.activity", "editor.perf", "editor.recentProjects", "editor.status", "input.state",
+		"asset.stats", "audio.state", "camera.get", "edit.history", "editor.activity", "editor.perf", "editor.recentProjects", "editor.status", "input.state",
 		"log.read", "play.state", "project.exportStatus", "scene.loadStatus", "scene.recoveryStatus", "script.status", "selection.get",
 		"viewport.getSettings",
 	};

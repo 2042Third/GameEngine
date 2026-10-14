@@ -99,6 +99,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What is in the scene? | `scene.hierarchy`, `entity.find` (`name`, `tag`, `component`, `box: {min, max}`, `limit`), `entity.get` |
 | Where is it, how big? | `entity.get {"entity", "world": true}`: `world` (position, rotation as `euler` degrees and `quaternion`, scale) and `bounds` (`min`, `max`, `size`, `center`; `pending` while a mesh loads) |
 | What does the person have selected, what does the inspector show? | `selection.get` (`entities`, the last is the primary one; `inspectedAsset` while the inspector shows an asset); `selection.set {entities?, asset?}` changes them |
+| What does the game play (sound)? | `audio.state` (play mode): `voices` (entity or null for one-shots, clip, playing, looping, position...), `oneShots` (`playing`, `played`, `dropped`), `listener`, `masterVolume` |
 | What happened (errors, script output)? | `log.read` (`after` = the previous `latest` to page; `minLevel`) |
 | How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`); `asset.setBudget` changes the open project's budgets (MB of memory, staging and uploads per frame; ms of finalization and of upload steps per frame) |
 | Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %) |

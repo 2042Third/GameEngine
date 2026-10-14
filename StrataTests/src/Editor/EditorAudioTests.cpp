@@ -7,6 +7,8 @@
 
 #include <Strata/Audio/AudioEngine.h>
 #include <Strata/Audio/AudioSystem.h>
+#include <Strata/Core/Log.h>
+#include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 
@@ -70,6 +72,70 @@ TEST_SUITE("Editor.Audio")
 		context.Update(Timestep(1.0f / 60.0f));
 		CHECK(context.GetActiveScene()->GetSystem<AudioSystem>() == nullptr);
 		CHECK(AudioEngine::GetStats().SourceCount == 0);
+		run("play.stop");
+	}
+
+	TEST_CASE("audio.state lists the running game's voices and counts the one-shots it dropped, warning about them")
+	{
+		ScopedAudioEngine engine;
+		REQUIRE(engine.Initialized);
+		EditorContext context(EditorContextSpecification { false });
+		AudioProject project;
+		EditorCommandRegistry commands;
+		const auto run = [&](std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
+		{
+			const EditorCommandResult result = commands.Execute(context, name, parameters);
+			INFO(name, ": ", result.Error);
+			REQUIRE(result.Success);
+			return result.Value;
+		};
+		CHECK_FALSE(commands.Execute(context, "audio.state").Success); // Play mode only
+
+		Entity music = context.GetEditScene()->CreateEntity("Music");
+		AudioSourceComponent& source = music.AddComponent<AudioSourceComponent>();
+		const AssetHandle loop = project.AddClip(2.0f);
+		source.Clip = loop;
+		source.Loop = true;
+		source.Spatial = false;
+		const AssetHandle blip = project.AddClip(0.5f);
+		run("play.start");
+		context.Update(Timestep(1.0f / 60.0f));
+		AudioSystem* audio = context.GetActiveScene()->GetSystem<AudioSystem>();
+		REQUIRE(audio);
+		REQUIRE(audio->PlayOneShot(blip));
+		REQUIRE(audio->PlayOneShotAt(blip, glm::vec3(1.0f, 2.0f, 3.0f), 0.5f));
+
+		const nlohmann::json state = run("audio.state");
+		REQUIRE(state["voices"].size() == 3);
+		const nlohmann::json& first = state["voices"][0];
+		CHECK(first["entity"] == UUIDToJson(music.GetUUID()));
+		CHECK(first["clip"]["handle"] == UUIDToJson(loop));
+		CHECK(first["looping"] == true);
+		CHECK(first["playing"] == true);
+		CHECK(state["voices"][1]["entity"].is_null());
+		CHECK(state["voices"][2]["spatial"] == true);
+		CHECK(state["voices"][2]["position"] == nlohmann::json { 1.0, 2.0, 3.0 });
+		CHECK(state["voices"][2]["volume"] == 0.5);
+		CHECK(state["oneShots"]["playing"] == 2);
+		CHECK(state["oneShots"]["played"] == 2);
+		CHECK(state["oneShots"]["dropped"] == 0);
+
+		// 65 one-shots in one frame: the oldest is cut off, counted and named in a warning.
+		const uint64_t logged = Log::GetBuffer().GetLatestSequence();
+		for (int index = 0; index < 63; index++)
+			REQUIRE(audio->PlayOneShot(blip));
+		const nlohmann::json crowded = run("audio.state");
+		CHECK(crowded["oneShots"]["playing"] == AudioSystem::c_MaxOneShots);
+		CHECK(crowded["oneShots"]["played"] == 65);
+		CHECK(crowded["oneShots"]["dropped"] == 1);
+		size_t warnings = 0;
+		for (const LogEntry& entry : Log::GetBuffer().GetEntries(logged))
+		{
+			if (entry.Level == LogLevel::Warn && entry.Message.find("dropped a one-shot") != std::string::npos
+				&& entry.Message.find("more than 64 one-shots") != std::string::npos)
+				warnings++;
+		}
+		CHECK(warnings == 1);
 		run("play.stop");
 	}
 

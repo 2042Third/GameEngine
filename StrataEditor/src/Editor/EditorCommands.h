@@ -178,5 +178,6 @@ namespace Strata
 	void RegisterInputCommands(EditorCommandRegistry& registry);
 	void RegisterStreamingCommands(EditorCommandRegistry& registry);
 	void RegisterAnimationCommands(EditorCommandRegistry& registry);
+	void RegisterAudioCommands(EditorCommandRegistry& registry); // audio.* (Commands/AudioCommands.cpp)
 
 }

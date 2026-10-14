@@ -1020,6 +1020,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `PlayOneShot`/`PlayOneShotAt` by clip handle and the engine-wide master volume. Game code goes through the system rather
   than `AudioEngine` directly, so that its sounds pause and stop with the scene. Scripts reach the same API through the SDK's
   `AudioSource` (`Entity::GetAudioSource`) and `Audio` (`StrataScript/Audio.h`).
+- **Observing sound:** `AudioSystem::GetVoices` lists every source and one-shot (entity, clip, volume, pitch, playing,
+  paused, waiting, looping, spatial, position, seconds), and `AudioSystemStats` counts the one-shots played and dropped
+  (beyond `c_MaxOneShots`, the oldest is cut off; a clip that waited longer than `c_MaxOneShotClipWait`; a clip that cannot
+  play): each drop logs a warning naming the clip and the reason, at most once per clip per second. The editor's
+  `audio.state` (play mode only, `Editor/Commands/AudioCommands.cpp`) reports them with the listener and the master volume,
+  so tools hear a game without a sound card.
 
 ## Animation
 

@@ -11,8 +11,11 @@
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>
 
+#include <chrono>
 #include <memory>
 #include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -30,9 +33,30 @@ namespace Strata
 		uint32_t PlayingSourceCount = 0; // Sources playing, or about to (clip still loading, or the scene paused)
 		uint32_t WaitingSourceCount = 0; // Sources whose clip is still loading
 		uint32_t OneShotCount = 0;       // One-shots playing or waiting for their clip
+		uint64_t OneShotsPlayed = 0;     // One-shots accepted since the scene started (PlayOneShot, PlayOneShotAt)
+		// One-shots that never played or were cut off: beyond c_MaxOneShots (the oldest goes), a clip that waited longer than
+		// c_MaxOneShotClipWait, or a clip that cannot be played. Each logs a warning naming the clip and why (at most once per
+		// clip per second).
+		uint64_t OneShotsDropped = 0;
 		// Times the listener was chosen among several candidates by hierarchy order (the choice is kept while the candidates
 		// and the hierarchy stay the same).
 		uint64_t ListenerSearchCount = 0;
+	};
+
+	// A voice of a running scene (AudioSystem::GetVoices): an entity's source or a one-shot.
+	struct AudioVoiceInfo
+	{
+		UUID Entity = UUID::Null();   // The source's entity; null for one-shots
+		AssetHandle Clip = UUID::Null();
+		float Volume = 1.0f;
+		float Pitch = 1.0f;
+		bool Playing = false;         // Heard now, or about to be (its clip loads, the scene is paused)
+		bool Paused = false;          // Paused by the game or with the scene
+		bool Waiting = false;         // Its clip is loading
+		bool Looping = false;
+		bool Spatial = false;
+		glm::vec3 Position = glm::vec3(0.0f); // Of spatial voices
+		float Seconds = 0.0f;         // Into the clip
 	};
 
 	// Plays a running scene's audio: the built-in "Audio" scene system. It runs in Play mode only (like scripts, it is
@@ -136,6 +160,9 @@ namespace Strata
 		// The AudioSource playing an entity's AudioSourceComponent; nullptr if it has none.
 		const AudioSource* GetAudioSource(Entity entity) const;
 		AudioSystemStats GetStats() const;
+		// Every source (of active entities with an AudioSourceComponent) and one-shot, sources first in no particular order,
+		// then one-shots oldest first: what audio.state reports, so tools can hear a game without a sound card.
+		std::vector<AudioVoiceInfo> GetVoices() const;
 	private:
 		enum class ClipState : uint8_t
 		{
@@ -198,8 +225,10 @@ namespace Strata
 		Entity SelectListener();
 		void UpdateOneShots(float timestep);
 		bool StartOneShot(AssetHandle clip, bool spatial, const glm::vec3& position, float volume, float pitch);
-		// Starts a waiting one-shot whose clip is ready; returns false if it should be dropped.
-		bool TryStartOneShot(OneShot& oneShot);
+		// Starts a waiting one-shot whose clip is ready; returns false if it should be dropped (`outReason` says why).
+		bool TryStartOneShot(OneShot& oneShot, std::string& outReason);
+		// Counts a one-shot that will not play and warns, naming the clip and the reason, at most once per clip per second.
+		void DropOneShot(AssetHandle clip, std::string_view reason);
 	private:
 		Scene& m_Scene;
 		class PlaybackService;
@@ -210,6 +239,10 @@ namespace Strata
 		uint64_t m_UpdateIndex = 0;
 		std::unordered_map<entt::entity, SourceRecord> m_Sources;
 		std::vector<OneShot> m_OneShots; // Oldest first
+		uint64_t m_OneShotsPlayed = 0;
+		uint64_t m_OneShotsDropped = 0;
+		// When a dropped one-shot of each clip was last reported (warnings at most once per clip per second).
+		std::unordered_map<AssetHandle, std::chrono::steady_clock::time_point> m_DropWarnings;
 
 		// Asset changes (loads, reloads) of the active asset manager seen so far.
 		std::weak_ptr<AssetManagerBase> m_AssetManager;
