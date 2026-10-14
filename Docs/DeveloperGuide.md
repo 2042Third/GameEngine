@@ -75,6 +75,7 @@ characters (the test `Docs.AgentGuide` fails beyond). How the parts fit together
   - [View commands](#view-commands)
   - [Materials](#materials)
   - [Animation commands](#animation-commands)
+  - [Stepping a paused game](#stepping-a-paused-game)
   - [Simulated input](#simulated-input)
   - [Output paths](#output-paths)
 - [Rendering](#rendering)
@@ -1633,6 +1634,21 @@ and `AudioSystem`, the built-in "Audio" scene system.
   edit, whose fields never get narrower than their content needs: a narrow tab scrolls the table sideways); the
   Inspector shows a playing animator's state (a cross-fade as the state it comes from and the state it goes to,
   `AnimationSystem::GetBlendSource`) and, under a heading of their own, its parameters.
+
+### Stepping a paused game
+
+- `play.step {steps, wait}` runs fixed steps of a paused game, one per frame, and answers once its last step ran (a
+  deferred command: `{state, paused, stepsRun, frameIndex, time, fixedSteps}`), so clients read the state right after it
+  without waiting frames. It counts in the game's own time base, `Scene::GetFixedStepCount` (fixed steps since the scene
+  started, stepped or due on the clock; `EditorContext::GetFixedStepCount` adds the scenes a game switch replaced). A
+  second `play.step` while one waits adds its steps after them and answers when its own last step ran. Resuming drops the
+  steps that did not run (`Scene::SetPaused(false)`, also `OnRuntimeStop`): it hands the game to real time, and a count
+  asked for while paused must not leak into a later pause; a waiting `play.step` then fails with `stepsRun`
+  (`EditorContext::GetFixedStepCountAtResume`), as it does when play mode stops (a quit or a crash too). A scene switch the
+  game asks for carries pending steps over. While steps are pending the editor lifts its frame-rate cap (headless editors'
+  60 frames per second and the idle throttling: `EditorLayer::UpdateSteppingFrameRate`), so 600 steps take the frames'
+  work rather than ten seconds; each frame still runs exactly one step. `wait: false` answers at once with
+  `pendingSteps`; `frames` is an accepted older name of `steps`.
 
 ### Simulated input
 

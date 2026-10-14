@@ -285,13 +285,14 @@ TEST_SUITE("Editor.Input")
 			harness.Frame();
 		CHECK_FALSE(harness.ProbeField("WDown")); // The probe has not run since the press
 
-		// The first stepped frame sees the press as a press, not just a held key.
-		harness.Run("play.step", { { "frames", 1 } });
+		// The first stepped frame sees the press as a press, not just a held key (play.step answers at once with wait: false, so
+		// the test runs the frames itself).
+		harness.Run("play.step", { { "frames", 1 }, { "wait", false } });
 		harness.Frame();
 		CHECK(harness.ProbeField("WDown"));
 		CHECK(harness.ProbeField("WPressed"));
 		harness.Frame();
-		harness.Run("play.step", { { "frames", 1 } });
+		harness.Run("play.step", { { "frames", 1 }, { "wait", false } });
 		harness.Frame();
 		CHECK(harness.ProbeField("WDown"));
 		CHECK_FALSE(harness.ProbeField("WPressed"));
@@ -299,14 +300,14 @@ TEST_SUITE("Editor.Input")
 		// A one-frame tap while paused: down in the next stepped frame, up in the one after.
 		harness.Run("input.key", { { "key", "W" }, { "action", "release" } });
 		harness.Run("input.mouseButton", { { "button", "Left" } });
-		harness.Run("play.step", { { "frames", 1 } });
+		harness.Run("play.step", { { "frames", 1 }, { "wait", false } });
 		harness.Frame();
 		CHECK(harness.ProbeField("WReleased"));
 		CHECK(harness.ProbeField("LeftPressed"));
 		CHECK(harness.ProbeField("LeftDown"));
 		for (int frame = 0; frame < 3; frame++)
 			harness.Frame();
-		harness.Run("play.step", { { "frames", 1 } });
+		harness.Run("play.step", { { "frames", 1 }, { "wait", false } });
 		harness.Frame();
 		CHECK_FALSE(harness.ProbeField("LeftDown"));
 		CHECK(harness.ProbeField("LeftReleased"));
@@ -317,7 +318,7 @@ TEST_SUITE("Editor.Input")
 		for (int frame = 0; frame < 3; frame++)
 			harness.Frame();
 		CHECK_FALSE(tap);
-		harness.Run("play.step", { { "frames", 2 } });
+		harness.Run("play.step", { { "frames", 2 }, { "wait", false } });
 		harness.Frame();
 		CHECK(harness.ProbeField("WPressed"));
 		CHECK_FALSE(tap);

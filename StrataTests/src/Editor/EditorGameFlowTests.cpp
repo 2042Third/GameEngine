@@ -212,6 +212,83 @@ TEST_SUITE("Editor.GameFlow")
 		CHECK(context.IsPaused());
 		project.Run("play.stop");
 	}
+	TEST_CASE("play.step answers once its steps ran, and steps a resume dropped never run at a later pause")
+	{
+		GameFlowProject project(CreateTemporaryDirectory("EditorGameFlowStep") / "Flow");
+		EditorContext& context = project.Context;
+		project.Run("play.start");
+		project.Run("play.pause", { { "paused", true } });
+		const float fixedStep = context.GetActiveScene()->GetSettings().FixedTimestep;
+
+		// It answers after its 120 steps, one per frame: the game's time is exactly 120 fixed steps then.
+		const nlohmann::json stepped = RunCommandToCompletion(context, project.Commands, "play.step", { { "steps", 120 } });
+		CHECK(stepped["stepsRun"] == 120);
+		CHECK(stepped["fixedSteps"] == 120);
+		CHECK(stepped["paused"] == true);
+		CHECK(stepped["time"].get<double>() == doctest::Approx(120.0 * fixedStep));
+		CHECK(context.GetFixedStepCount() == 120);
+		CHECK(context.GetActiveScene()->GetTime() == doctest::Approx(120.0 * fixedStep));
+		CHECK_FALSE(context.HasPendingSteps());
+
+		// wait: false answers at once; resuming drops the steps that did not run, so none runs at the next pause.
+		const nlohmann::json queued = project.Run("play.step", { { "steps", 100 }, { "wait", false } });
+		CHECK(queued["pendingSteps"] == 100);
+		project.Run("play.pause", { { "paused", false } });
+		project.Run("play.pause", { { "paused", true } });
+		CHECK_FALSE(context.HasPendingSteps());
+		const uint64_t paused = context.GetFixedStepCount();
+		for (int frame = 0; frame < 10; frame++)
+			project.Update();
+		CHECK(context.GetFixedStepCount() == paused);
+
+		// Resumed while it waits, play.step fails with the steps that ran.
+		EditorCommandResult waiting = project.Commands.Execute(context, "play.step", { { "steps", 50 } });
+		REQUIRE(waiting.IsPending());
+		for (int frame = 0; frame < 5; frame++)
+		{
+			project.Update();
+			PollCommandResult(waiting, context);
+		}
+		REQUIRE(waiting.IsPending());
+		project.Run("play.pause", { { "paused", false } });
+		REQUIRE(PollCommandResult(waiting, context));
+		CHECK_FALSE(waiting.Success);
+		CHECK(waiting.Error.find("resumed after 5 of 50 steps") != std::string::npos);
+		CHECK(waiting.ErrorData["stepsRun"] == 5);
+
+		// Two waiting play.steps: the second's steps run after the first's, and each answers when its own last step ran.
+		project.Run("play.pause", { { "paused", true } });
+		const uint64_t start = context.GetFixedStepCount();
+		EditorCommandResult first = project.Commands.Execute(context, "play.step", { { "steps", 3 } });
+		EditorCommandResult second = project.Commands.Execute(context, "play.step", { { "frames", 2 } });
+		for (int frame = 0; frame < 3; frame++)
+		{
+			project.Update();
+			PollCommandResult(first, context);
+			PollCommandResult(second, context);
+		}
+		REQUIRE_FALSE(first.IsPending());
+		CHECK(first.Value["fixedSteps"] == start + 3);
+		CHECK(second.IsPending());
+		for (int frame = 0; frame < 2; frame++)
+		{
+			project.Update();
+			PollCommandResult(second, context);
+		}
+		REQUIRE_FALSE(second.IsPending());
+		CHECK(second.Value["stepsRun"] == 2);
+		CHECK(second.Value["fixedSteps"] == start + 5);
+
+		// Stopped while it waits: it fails, naming the steps that ran.
+		EditorCommandResult stopped = project.Commands.Execute(context, "play.step", { { "steps", 10 } });
+		project.Update();
+		PollCommandResult(stopped, context);
+		project.Run("play.stop");
+		REQUIRE(PollCommandResult(stopped, context));
+		CHECK_FALSE(stopped.Success);
+		CHECK(stopped.ErrorData["stepsRun"] == 1);
+	}
+
 	TEST_CASE("Exported games quit with an exit code and switch scenes when their scene asks")
 	{
 		const std::filesystem::path directory = CreateTemporaryDirectory("GameRuntimeFlow");

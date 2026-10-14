@@ -241,8 +241,26 @@ namespace Strata
 		bool IsRuntimeSceneLoading() const { return m_RuntimeSceneLoad != nullptr; }
 		AssetHandle GetRuntimeSceneLoadTarget() const { return m_RuntimeSceneLoad ? m_RuntimeSceneLoad->Scene : UUID::Null(); }
 		float GetRuntimeSceneLoadProgress() const { return m_RuntimeSceneLoad ? m_RuntimeSceneLoad->Request.GetProgress() : 1.0f; }
-		// While paused, advances the simulation by `frames` fixed steps over the next updates.
+		// While paused, advances the simulation by `frames` fixed steps over the next updates, one per frame. Resuming
+		// (SetPaused(false)) and stopping drop the steps that have not run; a scene switch the game asks for carries them over.
 		void Step(uint32_t frames = 1);
+		// Steps asked for with Step that have not run yet (0 unless paused).
+		uint32_t GetPendingSteps() const;
+		bool HasPendingSteps() const { return GetPendingSteps() > 0; }
+		// Fixed steps the game ran since play mode started, across the scene switches it asked for (the running scene's
+		// Scene::GetFixedStepCount, plus those of the scenes it replaced): what play.step and simulated input count in.
+		uint64_t GetFixedStepCount() const;
+		// Changes with every start of play or simulate mode: a command that waits across frames tells a new session from its own.
+		uint64_t GetPlaySession() const { return m_PlaySession; }
+		// GetFixedStepCount when the game was last resumed (SetPaused(false) of a paused game), which dropped the pending
+		// steps: how many of them had run.
+		uint64_t GetFixedStepCountAtResume() const { return m_FixedStepsAtResume; }
+		// GetFixedStepCount when play session `session` stopped (Stop, also for a quit or a crash); nullopt while it runs or
+		// when a later session stopped since.
+		std::optional<uint64_t> GetFixedStepCountAtStop(uint64_t session) const
+		{
+			return m_StoppedSession == session ? std::optional<uint64_t>(m_FixedStepsAtStop) : std::nullopt;
+		}
 		// Whether the viewport's game view feeds keyboard and mouse input to the running game (play mode through the
 		// scene's camera with the viewport focused). Editor shortcuts that edit the scene stay off meanwhile, so keys meant
 		// for the game never change it. Only play mode can have game input; stopping ends it.
@@ -564,6 +582,11 @@ namespace Strata
 
 		Ref<Scene> m_EditScene;
 		Scope<AnimationPreview> m_AnimationPreview; // Of m_EditScene: declared after it, so it goes first
+		uint64_t m_PlaySession = 0;
+		uint64_t m_ReplacedFixedSteps = 0; // Fixed steps of the scenes a game switch replaced in this play session
+		uint64_t m_FixedStepsAtResume = 0;
+		uint64_t m_FixedStepsAtStop = 0;
+		uint64_t m_StoppedSession = 0;
 		Ref<Scene> m_RuntimeScene;
 		AssetHandle m_RuntimeSceneAsset = UUID::Null(); // The scene asset playing after a switch; null while a copy of the edited scene runs
 		// The scene a play-mode switch loads while the running scene goes on.

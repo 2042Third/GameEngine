@@ -9,8 +9,7 @@
 		"expect": { "/values/Translation": { "equals": [ -4, 4, 0 ] } } },
 	{ "command": "play.start" },
 	{ "command": "play.pause", "parameters": { "paused": true } },
-	{ "command": "play.step", "parameters": { "frames": 150 } },
-	{ "command": "editor.wait", "parameters": { "frames": 160 } },
+	{ "command": "play.step", "parameters": { "steps": 150 }, "expect": { "/stepsRun": { "equals": 150 } } },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "Transform" },
 		"expect": {
 			"/values/Translation/0": { "min": -4.05, "max": -3.95 },

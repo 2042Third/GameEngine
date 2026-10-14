@@ -210,6 +210,9 @@ namespace Strata
 		void TrackInput();
 		// Chooses the frame rate for the next frames (idle throttling) and records frame times.
 		void UpdateFrameRate();
+		// While play.step's steps are pending, frames run unthrottled (each runs one step), headless editors included; the
+		// cap in effect before comes back once they ran.
+		void UpdateSteppingFrameRate();
 		bool IsBusy(double now) const;
 		// Fills m_FrameStats for this frame's status bar and panels.
 		void UpdateFrameStats();
@@ -298,6 +301,7 @@ namespace Strata
 		double m_LastInputTime = 0.0;
 		double m_LastAutomationTime = 0.0;
 		uint64_t m_LastAutomationRequests = 0;
+		std::optional<uint32_t> m_CapBeforeSteps; // The frame rate cap that pending steps lifted (UpdateSteppingFrameRate)
 		bool m_Idle = false;
 		std::deque<double> m_FrameTimes; // Within the last c_FrameRateWindowSeconds
 

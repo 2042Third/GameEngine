@@ -368,8 +368,11 @@ of every loop). Previews change nothing in the scene and need no undo; play mode
 Asset tab edits controllers as tables (one undo step per edit) and shows skeletons and clips.
 
 **Play and inspect**: `play.start` -> `editor.wait {"frames": 120}` (about two seconds) -> `entity.get` /
-`component.get` / `log.read` -> `play.stop`. `play.pause {"paused": true}` and `play.step {"frames": n}` advance
-a paused scene by fixed steps. `play.simulate` runs physics only.
+`component.get` / `log.read` -> `play.stop`. `play.pause {"paused": true}` and `play.step {"steps": n}` advance
+a paused scene by exactly n fixed steps, one per frame (unthrottled), and **answer once the steps ran** (`stepsRun`,
+`fixedSteps`, `time`): read the state right after, no `editor.wait` needed. Resuming (`play.pause {"paused": false}`)
+drops steps not run yet (a waiting `play.step` then fails with `stepsRun`); `"wait": false` answers at once with
+`pendingSteps`. `frames` is an older name of `steps`. `play.simulate` runs physics only.
 
 **Frame cost**: every `editor.wait` result of a running editor has `frameTimes` (`count`, `medianMs`, `meanMs`, `p95Ms`,
 `maxMs`): the CPU time of the frames that ran entirely during the wait, without the waits for the GPU and vsync (measure
@@ -415,7 +418,7 @@ and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
 
 - Input only reaches play mode (not edit or simulate); `play.stop` drops held keys.
 - Frames are game frames. While the game is paused (`play.pause`), input waits for the next frame `play.step` runs (or for
-  `play.pause {"paused": false}`) and arrives with its press: `input.key {"key": "Space"}` then `play.step {"frames": 1}` makes the
+  `play.pause {"paused": false}`) and arrives with its press: `input.key {"key": "Space"}` then `play.step {"steps": 1}` makes the
   game see Space pressed in that step, and released in the following one. Commands answer at once while paused
   (`"seen": false`), because waiting would block you from stepping; pass `"wait": true` to wait anyway.
 - Each command ends only its own hold: overlapping taps of a key keep it down until the last ends; `"action": "release"` ends

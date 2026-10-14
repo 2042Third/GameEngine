@@ -199,8 +199,9 @@ play.stop
 - Editor-camera captures in edit mode leave the HUD out (`hiddenScreenSpaceTexts`); the scene's camera and play mode show
   it.
 - Gravity and other timers keep running between your calls (a call takes about 0.1 s): plan sequences and send them in
-  one go, set slow timings with `script.setField` while exploring, or `play.pause` the game and advance it with `play.step`:
-  input given while paused arrives in the next stepped frame.
+  one go, set slow timings with `script.setField` while exploring, or `play.pause` the game and advance it with `play.step
+  {"steps": n}`, which answers once its n fixed steps ran (exact whatever the frame rate): input given while paused arrives
+  in the next stepped frame.
 - Check every feature you built: movement, rotation, repeats, scoring, level changes, game over, restart, pause.
 
 ## 7. Leave a regression test

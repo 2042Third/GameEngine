@@ -781,6 +781,8 @@ namespace Strata
 		m_MasterVolumeBeforePlay = AudioEngine::GetMasterVolume();
 		m_RuntimeScene = Scene::Copy(m_EditScene);
 		m_RuntimeSceneAsset = UUID::Null();
+		m_PlaySession++;
+		m_ReplacedFixedSteps = 0;
 		// Keys a tool held down in an earlier session (input.* commands) must not leak into this one.
 		ResetSimulatedInput();
 		ResetGameShell();
@@ -800,6 +802,8 @@ namespace Strata
 			m_RuntimeSceneLoad->Request.Cancel();
 			m_RuntimeSceneLoad.reset();
 		}
+		m_FixedStepsAtStop = GetFixedStepCount();
+		m_StoppedSession = m_PlaySession;
 		// Stopped here and destroyed off the frame, like a replaced scene (ReplaceRuntimeScene).
 		Scene::ReleaseInBackground(std::move(m_RuntimeScene));
 		m_RuntimeSceneAsset = UUID::Null();
@@ -895,6 +899,7 @@ namespace Strata
 		const SceneRuntimeMode mode = m_RuntimeScene->GetRuntimeMode();
 		const bool paused = m_RuntimeScene->IsPaused();
 		const uint32_t steps = m_RuntimeScene->GetStepFrames();
+		m_ReplacedFixedSteps += m_RuntimeScene->GetFixedStepCount();
 		// The scene that goes stops here and is destroyed off the frame (a million entities take tens of milliseconds).
 		Scene::ReleaseInBackground(std::move(m_RuntimeScene));
 		m_RuntimeScene = std::move(next);
@@ -921,6 +926,8 @@ namespace Strata
 
 	void EditorContext::SetPaused(bool paused)
 	{
+		if (!paused && IsPaused())
+			m_FixedStepsAtResume = GetFixedStepCount();
 		if (m_RuntimeScene)
 			m_RuntimeScene->SetPaused(paused);
 		UpdateInputSuspension();
@@ -936,6 +943,16 @@ namespace Strata
 		if (m_RuntimeScene && m_RuntimeScene->IsPaused())
 			m_RuntimeScene->Step(frames);
 		UpdateInputSuspension();
+	}
+
+	uint32_t EditorContext::GetPendingSteps() const
+	{
+		return m_RuntimeScene && m_RuntimeScene->IsPaused() ? m_RuntimeScene->GetStepFrames() : 0;
+	}
+
+	uint64_t EditorContext::GetFixedStepCount() const
+	{
+		return m_RuntimeScene ? m_ReplacedFixedSteps + m_RuntimeScene->GetFixedStepCount() : 0;
 	}
 
 	void EditorContext::UpdateInputSuspension()

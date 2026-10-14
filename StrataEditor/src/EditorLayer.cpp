@@ -493,6 +493,7 @@ namespace Strata
 		m_Automation.Update();
 		UpdateCommandScript();
 		UpdateWindowTitle();
+		UpdateSteppingFrameRate();
 
 		const double now = m_Host->GetTime();
 		// An automation request was answered or is pending: an agent drives the editor.
@@ -700,6 +701,21 @@ namespace Strata
 			return true;
 		return m_CommandRunner.GetPendingCount() > 0 || m_Automation.GetPendingRequestCount() > 0 || m_Context.GetScriptBuilder().IsRunning()
 			|| m_Context.GetViewport().IsPickPending();
+	}
+
+	void EditorLayer::UpdateSteppingFrameRate()
+	{
+		const bool stepping = m_Context.HasPendingSteps();
+		if (stepping && !m_CapBeforeSteps)
+		{
+			m_CapBeforeSteps = m_Host->GetMaxFrameRate();
+			m_Host->SetMaxFrameRate(0);
+		}
+		else if (!stepping && m_CapBeforeSteps)
+		{
+			m_Host->SetMaxFrameRate(*m_CapBeforeSteps);
+			m_CapBeforeSteps.reset();
+		}
 	}
 
 	void EditorLayer::UpdateFrameRate()
@@ -1446,7 +1462,8 @@ namespace Strata
 		UI::ButtonStyle step;
 		step.Enabled = paused;
 		if (UI::ToolbarButton("Toolbar.Step", Icons::StepForward, nullptr, "Step one fixed update while paused", step))
-			RunEditorCommand(m_Context, m_Commands, "play.step");
+			// One step over the next frame: the button need not wait for it.
+			RunEditorCommand(m_Context, m_Commands, "play.step", { { "wait", false } });
 		ImGui::SameLine();
 
 		UI::ButtonStyle stop;

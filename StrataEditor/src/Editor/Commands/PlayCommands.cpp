@@ -3,7 +3,9 @@
 #include "Editor/EditorContext.h"
 
 #include <Strata/Core/Log.h>
+#include <Strata/Scene/Scene.h>
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <utility>
@@ -17,6 +19,9 @@ namespace Strata
 
 	namespace
 	{
+
+		// The most steps play.step runs in one call: about half an hour of a 60 Hz game.
+		constexpr int64_t c_MaxSteps = 100'000;
 
 		// Where play.start is while the scripts build first.
 		struct PlayBuildState
@@ -167,18 +172,68 @@ namespace Strata
 				return EditorCommandResult::Ok(DescribePlayState(context));
 			}, EditorCommandKind::Session });
 
-		registry.Register({ "play.step", "While paused, advances the simulation by a number of fixed steps over the next frames.",
-			ObjectSchema({ { "frames", IntegerSchema("Fixed steps (default 1)", 1, 10000) } }),
+		registry.Register({ "play.step",
+			"While paused, runs fixed steps of the game, one per frame (frames run unthrottled meanwhile, so 600 steps take the frames' work, not "
+			"ten seconds), and answers once its last step ran: {state, paused, stepsRun, frameIndex, time, fixedSteps (run since play started)}. "
+			"Results are exact: the same steps give the same state whatever the frame rate. A play.step while another waits adds its steps after "
+			"them and answers when its own last step ran. If the game is resumed (play.pause {paused: false} drops steps not run yet), stopped, "
+			"crashes or quits first, it fails with stepsRun so far. wait: false answers at once with pendingSteps (the steps run over the next "
+			"frames).",
+			ObjectSchema({
+				{ "steps", IntegerSchema("Fixed steps to run (default 1)", 1, c_MaxSteps) },
+				{ "frames", IntegerSchema("Same as steps (an older name: each step runs in a frame of its own)", 1, c_MaxSteps) },
+				{ "wait", BoolSchema("Answer once the steps ran (default true); false answers at once") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
-				const int64_t frames = arguments.GetInt("frames", 1, 1, 10000);
+				if (arguments.Has("steps") && arguments.Has("frames"))
+					arguments.SetError("Pass either 'steps' or 'frames' (an older name of steps), not both");
+				const int64_t steps = arguments.Has("frames") ? arguments.GetInt("frames", 1, 1, c_MaxSteps) : arguments.GetInt("steps", 1, 1, c_MaxSteps);
+				const bool wait = arguments.GetBool("wait", true);
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				if (!context.IsPaused())
 					return EditorCommandResult::Fail("Stepping needs a paused running scene (play.pause)");
-				context.Step(static_cast<uint32_t>(frames));
-				return EditorCommandResult::Ok(DescribePlayState(context));
+				// This request's last step runs after the steps already pending.
+				const uint64_t first = context.GetFixedStepCount() + context.GetPendingSteps();
+				const uint64_t target = first + static_cast<uint64_t>(steps);
+				context.Step(static_cast<uint32_t>(steps));
+				if (!wait)
+				{
+					nlohmann::json value = DescribePlayState(context);
+					value["pendingSteps"] = context.GetPendingSteps();
+					return EditorCommandResult::Ok(std::move(value));
+				}
+				return EditorCommandResult::Defer([first, target, steps, session = context.GetPlaySession(), lastSeen = context.GetFixedStepCount()](
+					EditorContext& context) mutable -> std::optional<EditorCommandResult>
+				{
+					const auto ran = [&first, &steps](uint64_t count) { return std::clamp<int64_t>(static_cast<int64_t>(count) - static_cast<int64_t>(first), 0, steps); };
+					if (!context.IsPlaying() || context.GetPlaySession() != session)
+					{
+						const uint64_t atStop = context.GetFixedStepCountAtStop(session).value_or(lastSeen);
+						return EditorCommandResult::Fail(fmt::format("Play mode stopped (play.stop, or the game quit or crashed) after {} of {} steps", ran(atStop),
+							steps), { { "stepsRun", ran(atStop) } });
+					}
+					// Resumed: the steps that ran before the resume count; the rest were dropped with it.
+					const bool resumed = !context.IsPaused();
+					lastSeen = resumed ? context.GetFixedStepCountAtResume() : context.GetFixedStepCount();
+					if (lastSeen >= target)
+					{
+						const Scene& scene = *context.GetActiveScene();
+						nlohmann::json value = DescribePlayState(context);
+						value["stepsRun"] = steps;
+						value["frameIndex"] = scene.GetFrameIndex();
+						value["time"] = scene.GetTime();
+						value["fixedSteps"] = lastSeen;
+						return EditorCommandResult::Ok(std::move(value));
+					}
+					if (resumed)
+					{
+						return EditorCommandResult::Fail(fmt::format("Play mode was resumed after {} of {} steps; the rest were dropped", ran(lastSeen), steps),
+							{ { "stepsRun", ran(lastSeen) } });
+					}
+					return std::nullopt;
+				});
 			}, EditorCommandKind::Session });
 
 		registry.Register({ "play.state", "Whether the scene is being edited, played or simulated, and whether it is paused.", ObjectSchema({}),

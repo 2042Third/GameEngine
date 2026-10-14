@@ -1812,6 +1812,7 @@ namespace Strata
 		m_RuntimeMode = mode;
 		m_IsPaused = false;
 		m_StepFrames = 0;
+		m_FixedSteps = 0;
 		m_FixedTimeAccumulator = 0.0f;
 		m_DroppedFixedSteps = 0;
 		m_Time = 0.0;
@@ -1855,6 +1856,7 @@ namespace Strata
 	{
 		if (!m_IsRunning)
 			return;
+		m_StepFrames = 0;
 
 		m_IsUpdating = true;
 		for (auto it = m_Systems.rbegin(); it != m_Systems.rend(); ++it)
@@ -1952,6 +1954,7 @@ namespace Strata
 		{
 			ForEachSystemCall(m_FixedUpdateCalls, [fixedTimestep](SceneSystem& system) { system.OnFixedUpdate(fixedTimestep); });
 			m_StepFrames--;
+			m_FixedSteps++;
 		}
 		else
 		{
@@ -1981,6 +1984,7 @@ namespace Strata
 				ForEachSystemCall(m_FixedUpdateCalls, [fixedTimestep](SceneSystem& system) { system.OnFixedUpdate(fixedTimestep); });
 				m_FixedTimeAccumulator -= fixedTimestep;
 				steps++;
+				m_FixedSteps++;
 			}
 
 			if (dilated)
@@ -2018,6 +2022,8 @@ namespace Strata
 			return;
 
 		m_IsPaused = paused;
+		if (!paused)
+			m_StepFrames = 0;
 		if (!m_IsRunning)
 			return;
 		for (const Scope<SceneSystem>& system : m_Systems)

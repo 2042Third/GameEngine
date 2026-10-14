@@ -341,13 +341,17 @@ namespace Strata
 		SceneRuntimeMode GetRuntimeMode() const { return m_RuntimeMode; }
 		bool IsUpdating() const { return m_IsUpdating; }
 		// Pausing stops the updates of the running systems and tells them (SceneSystem::OnPausedChanged). Starting the scene
-		// resets it to unpaused.
+		// resets it to unpaused. Resuming drops the steps that have not run (Step): it hands the scene to real time, and a
+		// count asked for while paused must not leak into a later pause.
 		void SetPaused(bool paused);
 		bool IsPaused() const { return m_IsPaused; }
 		// While paused, lets the next `frames` updates each advance the simulation by exactly one fixed step.
 		void Step(uint32_t frames = 1) { m_StepFrames += frames; }
-		// Steps requested with Step that have not run yet.
+		// Steps requested with Step that have not run yet (dropped by resuming and by OnRuntimeStop).
 		uint32_t GetStepFrames() const { return m_StepFrames; }
+		// Fixed steps run since OnRuntimeStart, stepped (Step) or due on the clock: the game's own time base, which tools
+		// that must be exact (play.step, simulated input) count in instead of frames.
+		uint64_t GetFixedStepCount() const { return m_FixedSteps; }
 
 		// Simulation time since OnRuntimeStart (seconds) and number of runtime updates.
 		double GetTime() const { return m_Time; }
@@ -629,6 +633,7 @@ namespace Strata
 		bool m_IsUpdating = false;
 		bool m_IsPaused = false;
 		uint32_t m_StepFrames = 0;
+		uint64_t m_FixedSteps = 0;
 		float m_FixedTimeAccumulator = 0.0f;
 		float m_TimeScale = 1.0f;
 		bool m_TimeDilation = false;
