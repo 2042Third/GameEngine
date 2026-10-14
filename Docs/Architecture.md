@@ -539,7 +539,9 @@ Windowed applications are paced by vsync when it is on (`WindowSpecification::VS
 headless ones by the cap alone, which the editor and the runtime set to 60 (`MaxFrameRate`,
 `StrataEditor/src/EditorApplication.cpp`, `RuntimeApplication.cpp`). The cap is the application's `FramePacer`
 (`Core/Timer.h`) and can change while it runs (`Application::SetMaxFrameRate`; setting the current rate keeps the frame
-schedule): the editor lowers it while it is idle (see [Editor](#editor)). The pacer's wait comes after step 8, so
+schedule): the editor lowers it while it is idle (see [Editor](#editor)), and a windowed runtime caps itself at 60 while
+no scene plays (`GameRuntime::GetFrameRateCap`: the cleared frames of a game loading its start scene left the loading
+threads no CPU at 900 a second) and goes back to the game's pacing once one does. The pacer's wait comes after step 8, so
 `Application::GetLastFrameWorkTime` leaves it out as well: a capped frame rate changes the rate, not the cost of a
 frame. An exception escaping a frame (e.g. a lost device inside NVRHI) is logged and ends the loop.
 
@@ -585,7 +587,7 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
 | `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (the systems' `PrepareLoadedScene`: physics' bodies; `SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
-| `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation` and `World.Streaming`, the animation and World systems', are registered when a scene first plays) |
+| `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays; `World.Streaming`, the World system's, when the World module registers, so that perf logs created before a scene plays have its column) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
@@ -2866,8 +2868,11 @@ the resident pools they tell what render targets and the swapchain take) and the
 so far (`PrivateMB`, `PeakPrivateMB`). Programs add columns of their own after every built-in one through column
 groups (`FramePerfLogSpecification::Columns`: each `FramePerfColumnGroup` names its columns and writes a row's values
 through `FramePerfRow::Add(value, decimals)` and `AddEmpty`, read when the row is written; a group that writes another
-number of values than it names fails the log like a write error). A log that cannot be written fails the run (exit
-code 1).
+number of values than it names fails the log like a write error). StrataRuntime adds the running scene's world
+streaming and physics capacity (`GameRuntime::MakePerfLogColumns`: `WorldCellsWanted`, `WorldCellsLoading`,
+`WorldCellsLoaded`, `WorldCellsUnloading` from `IWorldStreaming`, `PhysicsBodies`, `PhysicsBodiesWaiting` and
+`PhysicsMaxBodies` from `IPhysicsCapacity`; empty while no scene plays), and the `World.Streaming` stage has its column
+with the other stages. A log that cannot be written fails the run (exit code 1).
 `GameRuntime::Create` loads the manifest, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
 `PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module

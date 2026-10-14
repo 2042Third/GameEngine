@@ -74,6 +74,8 @@ namespace Strata
 			}
 			if (renders)
 				m_Renderer = CreateScope<GameRenderer>();
+			// The game's pacing (vsync, uncapped), which loading caps (GameRuntime::GetFrameRateCap).
+			m_GamePacing = Application::Get().GetMaxFrameRate();
 			if (!m_Options.PerfLogPath.empty())
 				StartPerfLog();
 		}
@@ -136,7 +138,9 @@ namespace Strata
 				// for only from here on (after the frame's asset uploads, which the update above submitted).
 				GraphicsDevice& device = Renderer::GetGraphicsDevice();
 				Renderer::PrepareBackBuffer();
-				// Until the first scene (or the loading scene) plays, the frame is cleared.
+				// Until the first scene (or the loading scene) plays, the frame is cleared, at most 60 times a second: the
+				// loading threads get the CPU instead of hundreds of cleared frames.
+				Application::Get().SetMaxFrameRate(m_Runtime->GetFrameRateCap(m_GamePacing));
 				if (nvrhi::IFramebuffer* backBuffer = device.GetBackBufferFramebuffer())
 				{
 					if (m_Runtime->GetScene())
@@ -153,7 +157,22 @@ namespace Strata
 		void StartPerfLog()
 		{
 			std::string error;
-			m_PerfLog = FramePerfLog::Create(m_Options.PerfLogPath, FrameProfiler::Get(), {}, &error);
+			// The running scene's world streaming and physics capacity follow the built-in columns; empty once the runtime is
+			// gone (a game that failed or crashed ends with a frame or two still recorded).
+			FramePerfColumnGroup columns = m_Runtime->MakePerfLogColumns();
+			columns.Write = [this, write = std::move(columns.Write), count = columns.Names.size()](FramePerfRow& row)
+			{
+				if (m_Runtime)
+				{
+					write(row);
+					return;
+				}
+				for (size_t column = 0; column < count; column++)
+					row.AddEmpty();
+			};
+			FramePerfLogSpecification specification;
+			specification.Columns.push_back(std::move(columns));
+			m_PerfLog = FramePerfLog::Create(m_Options.PerfLogPath, FrameProfiler::Get(), specification, &error);
 			if (!m_PerfLog)
 			{
 				ST_CRITICAL("Cannot write the perf log: {}", error);
@@ -236,6 +255,7 @@ namespace Strata
 		Scope<GameRenderer> m_Renderer;
 		Scope<FramePerfLog> m_PerfLog;
 		uint32_t m_PerfLogListener = 0;
+		uint32_t m_GamePacing = 0;
 	};
 
 	class RuntimeApplication : public Application

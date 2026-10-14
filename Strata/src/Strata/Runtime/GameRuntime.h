@@ -6,6 +6,7 @@
 #include "Strata/Core/SaveFiles.h"
 #include "Strata/Core/Timestep.h"
 #include "Strata/Project/GameManifest.h"
+#include "Strata/Runtime/FramePerfLog.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneLoader.h"
 #include "Strata/Scripting/ScriptEngine.h"
@@ -106,6 +107,18 @@ namespace Strata
 		bool WaitForStart(std::chrono::milliseconds timeout = std::chrono::minutes(2));
 		// The exit code the game ended with, once its scene asked to quit.
 		std::optional<int32_t> GetQuitRequest() const { return m_QuitRequest; }
+
+		// The frames per second an application that renders the game caps itself at (Application::SetMaxFrameRate):
+		// c_LoadingFrameRate while no scene plays (renderers clear the frame), so that loading leaves the CPU to the loading
+		// threads instead of clearing hundreds of frames a second; `pacing`, the game's own (0: uncapped), once one plays.
+		static constexpr uint32_t c_LoadingFrameRate = 60;
+		uint32_t GetFrameRateCap(uint32_t pacing) const { return m_Scene ? pacing : c_LoadingFrameRate; }
+
+		// The perf log's columns of the running scene's world streaming and physics capacity (FramePerfLog column groups):
+		// WorldCellsWanted, WorldCellsLoading, WorldCellsLoaded, WorldCellsUnloading (IWorldStreaming), PhysicsBodies,
+		// PhysicsBodiesWaiting and PhysicsMaxBodies (IPhysicsCapacity); empty while no scene plays or its systems offer no such
+		// service. The group reads this runtime: it must not outlive it.
+		FramePerfColumnGroup MakePerfLogColumns() const;
 	private:
 		GameRuntime() = default;
 

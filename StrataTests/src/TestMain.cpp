@@ -835,9 +835,10 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 	}
 	if (mode == "check-perf-log")
 	{
-		// <csv> <rows> [--nonzero <column>...]: succeeds if the file is a perf log of StrataRuntime --perf-log with exactly
-		// <rows> rows of consecutive frames and every built-in stage among its columns (Runtime/PerfLogReader.h), and each
-		// --nonzero column is above 0 in at least one row (e.g. a stage that must have run).
+		// <csv> <rows> [--nonzero <column>... --column <column>...]: succeeds if the file is a perf log of StrataRuntime
+		// --perf-log with exactly <rows> rows of consecutive frames and every built-in stage among its columns
+		// (Runtime/PerfLogReader.h), each --nonzero column is above 0 in at least one row (e.g. a stage that must have run)
+		// and each --column is there (a column group's).
 		if (argc < 4)
 			return 2;
 		const std::string_view rowsText(argv[3]);
@@ -854,10 +855,20 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		}
 		for (int index = 4; index < argc; index++)
 		{
-			if (std::string_view(argv[index]) != "--nonzero" || index + 1 >= argc)
+			const std::string_view option(argv[index]);
+			if ((option != "--nonzero" && option != "--column") || index + 1 >= argc)
 				return 2;
 			const char* columnName = argv[++index];
 			const std::optional<size_t> column = table->FindColumn(columnName);
+			if (option == "--column")
+			{
+				if (!column)
+				{
+					std::fprintf(stderr, "'%s': no column '%s'\n", argv[2], columnName);
+					return 1;
+				}
+				continue;
+			}
 			const bool nonzero = column && std::any_of(table->Rows.begin(), table->Rows.end(), [&](const std::vector<double>& row) { return row[*column] > 0.0; });
 			if (!nonzero)
 			{

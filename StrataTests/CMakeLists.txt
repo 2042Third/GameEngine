@@ -357,7 +357,8 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		COMMAND "${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX}" --headless --frames 30 --perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLog.csv")
 	set_tests_properties(StrataRuntime.PerfLog PROPERTIES FIXTURES_REQUIRED StrataExportedGame FIXTURES_SETUP StrataRuntimePerfLog)
 	add_test(NAME StrataRuntime.PerfLogCheck
-		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLog.csv" 30 --nonzero Assets.Update)
+		COMMAND StrataTests --strata-test-helper=check-perf-log "${STRATA_EXPORT_TEST_DIR}/PerfLog.csv" 30 --nonzero Assets.Update --column WorldCellsLoaded
+			--column PhysicsBodiesWaiting --column PhysicsMaxBodies --column World.Streaming)
 	set_tests_properties(StrataRuntime.PerfLogCheck PROPERTIES FIXTURES_REQUIRED StrataRuntimePerfLog)
 	add_test(NAME StrataRuntime.InvalidPerfLog
 		COMMAND "${CMAKE_COMMAND}"

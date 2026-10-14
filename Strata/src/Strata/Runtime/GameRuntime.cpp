@@ -5,6 +5,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Profiling.h"
 #include "Strata/Renderer/RenderScene.h"
+#include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneWorkBudget.h"
 
 #include <algorithm>
@@ -300,6 +301,44 @@ namespace Strata
 		if (!LoadScene(scene, &error))
 			ST_CORE_ERROR("'{}' cannot switch scenes: {}", m_Manifest.Name, error);
 		// While the start scene loads, the loading scene may ask for another scene: that one is then the game's start.
+	}
+
+	FramePerfColumnGroup GameRuntime::MakePerfLogColumns() const
+	{
+		FramePerfColumnGroup group;
+		group.Names = { "WorldCellsWanted", "WorldCellsLoading", "WorldCellsLoaded", "WorldCellsUnloading", "PhysicsBodies", "PhysicsBodiesWaiting",
+			"PhysicsMaxBodies" };
+		group.Write = [this](FramePerfRow& row)
+		{
+			const IWorldStreaming* streaming = m_Scene ? m_Scene->GetService<IWorldStreaming>() : nullptr;
+			if (streaming)
+			{
+				const WorldStreamingStats stats = streaming->GetStats();
+				row.Add(stats.CellsWanted, 0);
+				row.Add(stats.CellsLoading, 0);
+				row.Add(stats.CellsLoaded, 0);
+				row.Add(stats.CellsUnloading, 0);
+			}
+			else
+			{
+				for (int column = 0; column < 4; column++)
+					row.AddEmpty();
+			}
+			const IPhysicsCapacity* capacity = m_Scene ? m_Scene->GetService<IPhysicsCapacity>() : nullptr;
+			if (capacity)
+			{
+				const PhysicsCapacityInfo info = capacity->GetCapacityInfo();
+				row.Add(info.Bodies, 0);
+				row.Add(info.WaitingForSlot, 0);
+				row.Add(info.MaxBodies, 0);
+			}
+			else
+			{
+				for (int column = 0; column < 3; column++)
+					row.AddEmpty();
+			}
+		};
+		return group;
 	}
 
 }

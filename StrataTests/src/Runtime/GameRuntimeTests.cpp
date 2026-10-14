@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
+#include "Runtime/PerfLogReader.h"
 #include "Scene/SceneTestUtils.h"
 #include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Asset/BuiltinAssets.h"
@@ -14,7 +15,9 @@
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/World/WorldComponents.h"
 #include "TestHelpers.h"
+#include "World/WorldTestUtils.h"
 
 #include <chrono>
 #include <filesystem>
@@ -289,6 +292,54 @@ TEST_SUITE("Runtime.Game")
 		REQUIRE(next);
 		CHECK(next->GetStats().BodyCount == 20);
 		CHECK(next->GetStats().PreparedSlices >= 1);
+	}
+
+	TEST_CASE("A world game starts with its start cells in, paces the frames that show nothing and logs its streaming")
+	{
+		ScopedJobSystem jobs(2, 1);
+		GeneratedWorldSpecification specification;
+		specification.GridX = 3;
+		specification.GridZ = 3;
+		specification.EntitiesPerCell = 10;
+		specification.BodiesPerCell = 3;
+		specification.Floors = true;
+		specification.BuildPersistent = [](Scene& persistent, AssetHandle world) { persistent.CreateEntity("World").AddComponent<WorldComponent>().World = world; };
+		GeneratedWorld world;
+		const std::filesystem::path manifest = WriteGeneratedWorldGame(CreateTemporaryDirectory("RuntimeWorldGame"), specification, &world);
+		std::string error;
+		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error);
+		REQUIRE_MESSAGE(game, error);
+		// Nothing plays yet: a renderer would clear the frame, at most 60 times a second.
+		CHECK(game->GetFrameRateCap(0) == GameRuntime::c_LoadingFrameRate);
+		REQUIRE(game->WaitForStart());
+		CHECK(game->GetFrameRateCap(0) == 0);
+		CHECK(game->GetFrameRateCap(144) == 144);
+
+		// The Ground's cells around the camera at the origin came with the start (prepared, then adopted), bodies and all.
+		const IWorldStreaming* streaming = game->GetScene()->GetService<IWorldStreaming>();
+		REQUIRE(streaming);
+		CHECK(streaming->GetStats().CellsLoaded == 4);
+		CHECK(streaming->GetStats().LoadsStarted == 0);
+		for (uint32_t frame = 0; frame < 3; frame++)
+			game->Update(c_Frame);
+
+		// The perf log's columns read the running scene's streaming and physics.
+		const FramePerfColumnGroup columns = game->MakePerfLogColumns();
+		REQUIRE(columns.Names.size() == 7);
+		CHECK(columns.Names[2] == "WorldCellsLoaded");
+		CHECK(columns.Names[5] == "PhysicsBodiesWaiting");
+		std::string line;
+		FramePerfRow row(line);
+		columns.Write(row);
+		REQUIRE(row.GetCount() == 7);
+		const std::optional<PerfLogTable> table = ParsePerfLog("A,B,C,D,E,F,G\n" + line.substr(1) + "\n", error);
+		REQUIRE_MESSAGE(table, error);
+		const std::vector<double>& values = table->Rows[0];
+		CHECK(values[0] >= 4.0); // Wanted
+		CHECK(values[2] >= 4.0); // Loaded
+		CHECK(values[4] >= static_cast<double>(4 * world.BodiesPerGroundCell)); // Bodies
+		CHECK(values[5] == 0.0); // Waiting
+		CHECK(values[6] >= values[4]); // Capacity
 	}
 
 	TEST_CASE("A scene the running scene asks for in every update loads once and replaces it")

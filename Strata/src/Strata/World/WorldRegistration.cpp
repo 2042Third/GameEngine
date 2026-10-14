@@ -3,6 +3,7 @@
 
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/Assert.h"
+#include "Strata/Core/FrameProfiler.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Scene/SceneSystem.h"
 #include "Strata/World/WorldAsset.h"
@@ -59,6 +60,9 @@ namespace Strata
 		descriptor.After = { "Scripting" };
 		descriptor.Before = { "Physics" };
 		descriptor.ProfileStage = "World.Streaming";
+		// Registered now rather than when a scene first plays, so that perf logs created before (StrataRuntime's) have its
+		// column.
+		FrameProfiler::Get().RegisterStage(descriptor.ProfileStage);
 		// A loaded world's start cells load while its load prepares it, before physics builds their bodies.
 		descriptor.PrepareLoadedScene = &WorldStreamingSystem::PrepareLoadedScene;
 		const bool registered = SceneSystemRegistry::Register(std::move(descriptor));

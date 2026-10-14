@@ -59,6 +59,10 @@ namespace Strata::Tests
 
 	// Writes the world into `directory`/World.stpak.
 	GeneratedWorld WriteGeneratedWorld(const std::filesystem::path& directory, const GeneratedWorldSpecification& specification);
+	// Writes the world and a game manifest (`directory`/World.stgame) whose start scene is its persistent scene; the
+	// manifest's path.
+	std::filesystem::path WriteGeneratedWorldGame(const std::filesystem::path& directory, const GeneratedWorldSpecification& specification,
+		GeneratedWorld* outWorld = nullptr);
 
 	// A generated world's pack mounted in a runtime asset manager, active while it lives.
 	struct MountedWorld

@@ -4,6 +4,7 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Physics/PhysicsWorld.h"
+#include "Strata/Project/GameManifest.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/SceneSerializer.h"
@@ -188,6 +189,21 @@ namespace Strata::Tests
 			return true;
 		}, {}, nullptr, &error), error);
 		return world;
+	}
+
+	std::filesystem::path WriteGeneratedWorldGame(const std::filesystem::path& directory, const GeneratedWorldSpecification& specification, GeneratedWorld* outWorld)
+	{
+		GeneratedWorld world = WriteGeneratedWorld(directory, specification);
+		GameManifest manifest;
+		manifest.Name = specification.Name;
+		manifest.AssetPack = "World.stpak";
+		manifest.StartScene = world.Persistent;
+		std::string error;
+		const std::filesystem::path path = directory / "World.stgame";
+		REQUIRE_MESSAGE(manifest.Save(path, &error), error);
+		if (outWorld)
+			*outWorld = std::move(world);
+		return path;
 	}
 
 	MountedWorld::MountedWorld(const std::string& name, const GeneratedWorldSpecification& specification)
