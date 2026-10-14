@@ -293,6 +293,68 @@ TEST_SUITE("GPU.SceneRenderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Batches of different meshes share a draw call per pipeline state, drawing what a draw per batch draws")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle orange = assets.AddMaterial(UnlitColor({ 1.0f, 0.5f, 0.0f, 1.0f }));
+		MaterialProperties doubleSidedProperties = UnlitColor({ 0.0f, 0.6f, 1.0f, 1.0f });
+		doubleSidedProperties.DoubleSided = true;
+		const AssetHandle doubleSided = assets.AddMaterial(doubleSidedProperties);
+		// Six distinct meshes in the geometry pool, some mirrored, one double-sided, under a sun's shadows.
+		const std::vector<AssetHandle> meshes = { BuiltinAssets::CubeMesh, BuiltinAssets::SphereMesh, BuiltinAssets::CylinderMesh, BuiltinAssets::ConeMesh,
+			BuiltinAssets::TorusMesh, BuiltinAssets::CapsuleMesh };
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddMesh(scene, BuiltinAssets::PlaneMesh, orange, glm::vec3(0.0f, -0.6f, 0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(12.0f);
+		AddSun(scene, glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f)), 3.0f);
+		for (size_t index = 0; index < 18; index++)
+		{
+			const glm::vec3 position(static_cast<float>(index % 6) * 1.4f - 3.5f, 0.0f, static_cast<float>(index / 6) * 1.4f - 1.4f);
+			Entity entity = AddMesh(scene, meshes[index % meshes.size()], index == 7 ? doubleSided : orange, position, "Shape");
+			if (index % 5 == 0)
+				entity.GetComponent<TransformComponent>().Scale = glm::vec3(-0.8f, 0.8f, 0.8f);
+			else
+				entity.GetComponent<TransformComponent>().Scale = glm::vec3(0.8f);
+		}
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 5.0f, 7.0f), glm::vec3(0.0f));
+
+		SceneRenderer buckets;
+		buckets.SetViewportSize(c_Size, c_Size);
+		const ReadbackImage bucketImage = RenderToImage(buckets, scene, camera);
+		const SceneRendererStats bucketStats = buckets.GetStats();
+		SceneRendererSpecification perDrawSpecification;
+		perDrawSpecification.IndirectMode = IndirectDrawMode::PerDraw;
+		SceneRenderer perDraw(perDrawSpecification);
+		perDraw.SetViewportSize(c_Size, c_Size);
+		const ReadbackImage perDrawImage = RenderToImage(perDraw, scene, camera);
+		const SceneRendererStats perDrawStats = perDraw.GetStats();
+
+		CHECK(MaxDifference(bucketImage, perDrawImage) == 0);
+		for (uint32_t y = 0; y < c_Size; y += 3)
+		{
+			for (uint32_t x = 0; x < c_Size; x += 3)
+				REQUIRE(buckets.GetEntityAt(scene, x, y) == perDraw.GetEntityAt(scene, x, y));
+		}
+		// The same batches; a draw per batch, or (where the device draws indirect) one call per bucket of the passes' states.
+		CHECK(bucketStats.OpaqueDrawCalls == perDrawStats.OpaqueDrawCalls);
+		CHECK(bucketStats.ShadowDrawCalls == perDrawStats.ShadowDrawCalls);
+		CHECK(perDrawStats.DrawCommands == 2 * perDrawStats.OpaqueDrawCalls + perDrawStats.ShadowDrawCalls);
+		const GraphicsDeviceInfo& info = gpu.GetDevice().GetInfo();
+		if (info.SupportsMultiDrawIndirect && info.SupportsDrawIndirectFirstInstance)
+		{
+			// Front-facing, mirrored and double-sided buckets in the prepass and the opaque pass, and the cascades' buckets.
+			CHECK(bucketStats.DrawCommands < perDrawStats.DrawCommands);
+			CHECK(bucketStats.DrawCommands <= 2 * 3 + 4 * 3);
+		}
+		else
+		{
+			CHECK(bucketStats.DrawCommands == perDrawStats.DrawCommands);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The level of detail follows the projected size")
 	{
 		GPUContext gpu;

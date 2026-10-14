@@ -95,7 +95,7 @@ namespace Strata
 		// Whether a proxy's instances are drawn skinned: posed, with a mesh that has its skin stream on the GPU.
 		bool IsDrawnSkinned(const RenderScene& renderScene, uint32_t proxy, const Mesh& mesh)
 		{
-			return (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0 && mesh.GetSkinBuffer() != nullptr;
+			return (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0 && mesh.IsSkinned();
 		}
 
 		uint32_t PackTextureSlot(uint32_t slot, uint32_t samplerIndex, bool grayscale = false)
@@ -189,6 +189,7 @@ namespace Strata
 			m_CasterStamps.clear();
 			m_DrawInstances.clear();
 			m_ShadowDrawInstances.clear();
+			m_DrawArguments.clear();
 			m_FullUpload = true;
 		}
 		else
@@ -208,6 +209,7 @@ namespace Strata
 		m_UsedMaterialSlots.clear();
 		m_MeshUsage.resize(renderScene.GetMeshSlotCapacity(), 0);
 		m_FrameMeshes.resize(renderScene.GetMeshSlotCapacity(), nullptr);
+		m_FrameGeometry.resize(renderScene.GetMeshSlotCapacity());
 		EnsureMaterialSlots(renderScene.GetMaterialSlotCapacity());
 
 		const uint32_t proxies = renderScene.GetProxyCapacity();
@@ -650,8 +652,12 @@ namespace Strata
 				if ((usage & c_UseShadow) != 0)
 					mesh = m_Assets.FindResident<Mesh>(handle);
 			}
-			// Held by the resolve cache until the frame ends; RenderScene::Sync keeps the mesh's layout current.
-			m_FrameMeshes[slot] = mesh && mesh->GetIndexBuffer() ? mesh.get() : nullptr;
+			// Held by the resolve cache until the frame ends; RenderScene::Sync keeps the mesh's layout current. Its place in the
+			// geometry pool is read once per frame (compaction moves it between frames).
+			const GeometryAllocation* geometry = mesh ? mesh->GetGeometry() : nullptr;
+			m_FrameMeshes[slot] = geometry ? mesh.get() : nullptr;
+			if (geometry)
+				m_FrameGeometry[slot] = *geometry;
 
 			const uint32_t submeshUsage = (usage >> c_SubmeshMaterialsShift) & c_UseMask;
 			if (submeshUsage != 0 && renderScene.IsMeshLayoutKnown(slot))
@@ -1097,19 +1103,26 @@ namespace Strata
 
 	uint64_t SceneRenderer::UploadDrawList(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, std::vector<uint32_t>& list, std::vector<uint32_t>& uploaded, bool full)
 	{
+		return UploadChangedRange(commandList, buffer, list, uploaded, full);
+	}
+
+	template<typename T>
+	uint64_t SceneRenderer::UploadChangedRange(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, std::vector<T>& list, std::vector<T>& uploaded, bool full)
+	{
+		const auto equal = [](const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; };
 		size_t first = 0;
 		size_t last = list.size();
 		if (!full)
 		{
 			// The range from the first to the last entry that differs from what the buffer holds.
 			const size_t common = std::min(list.size(), uploaded.size());
-			first = static_cast<size_t>(std::mismatch(list.begin(), list.begin() + static_cast<ptrdiff_t>(common), uploaded.begin()).first - list.begin());
+			first = static_cast<size_t>(std::mismatch(list.begin(), list.begin() + static_cast<ptrdiff_t>(common), uploaded.begin(), equal).first - list.begin());
 			if (list.size() <= uploaded.size())
 			{
 				last = first;
 				for (size_t index = common; index > first; index--)
 				{
-					if (list[index - 1] != uploaded[index - 1])
+					if (!equal(list[index - 1], uploaded[index - 1]))
 					{
 						last = index;
 						break;
@@ -1120,8 +1133,8 @@ namespace Strata
 		uint64_t bytes = 0;
 		if (last > first)
 		{
-			bytes = (last - first) * sizeof(uint32_t);
-			commandList->writeBuffer(buffer, list.data() + first, bytes, first * sizeof(uint32_t));
+			bytes = (last - first) * sizeof(T);
+			commandList->writeBuffer(buffer, list.data() + first, bytes, first * sizeof(T));
 		}
 		// The buffer now holds the new list; the old one is the scratch of the next frame's list.
 		uploaded.swap(list);
@@ -1251,6 +1264,7 @@ namespace Strata
 		const bool fullLists = drawListsRecreated || m_FullUpload;
 		m_Stats.InstanceBytesUploaded += UploadDrawList(commandList, m_DrawListBuffer, m_DrawInstancesBuild, m_DrawInstances, fullLists);
 		m_Stats.InstanceBytesUploaded += UploadDrawList(commandList, m_ShadowDrawListBuffer, m_ShadowDrawInstancesBuild, m_ShadowDrawInstances, fullLists);
+		m_Stats.InstanceBytesUploaded += UploadChangedRange(commandList, m_DrawArgumentBuffer, m_DrawArgumentsBuild, m_DrawArguments, fullLists);
 		m_FullUpload = false;
 	}
 

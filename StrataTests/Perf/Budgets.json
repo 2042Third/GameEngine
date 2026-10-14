@@ -138,5 +138,7 @@
 	"PerfGPU.Renderer.Render100kCubesGPU": { "Unit": "ms", "Provisional": true },
 	"PerfGPU.Renderer.GPUTimerCost": { "Unit": "ms", "Provisional": true, "Target": 0.05 },
 	"PerfGPU.Renderer.Render100kCubesShadowed": { "Unit": "ms", "Provisional": true, "Target": 1.5 },
-	"PerfGPU.Renderer.Render300kCubesShadowed": { "Unit": "ms", "Provisional": true, "Target": 3.0 }
+	"PerfGPU.Renderer.Render300kCubesShadowed": { "Unit": "ms", "Provisional": true, "Target": 3.0 },
+	"PerfGPU.Renderer.Render10kUniqueMeshes": { "Unit": "ms", "Provisional": true, "Target": 2.0 },
+	"PerfGPU.Renderer.Render10kUniqueMeshes.DrawCommands": { "Unit": "count", "Provisional": true }
 }

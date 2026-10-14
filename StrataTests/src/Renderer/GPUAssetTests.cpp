@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <random>
 #include <span>
@@ -372,34 +373,51 @@ TEST_SUITE("GPU.Assets")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Meshes upload vertex and index buffers")
+	TEST_CASE("Meshes upload their geometry into the geometry pool")
 	{
 		Tests::GPUContext gpu;
 		REQUIRE(gpu.IsValid());
 		Ref<Mesh> mesh = MeshFactory::CreateTorus();
 		REQUIRE(mesh);
+		const std::vector<MeshVertexAttributes> attributes = mesh->GetAttributes();
 		const AssetMemoryUsage cpuOnly = mesh->GetMemoryUsage();
 		CHECK(cpuOnly.GetGpu() == 0);
+		CHECK(mesh->GetGeometry() == nullptr);
 		REQUIRE(Upload(*mesh));
 
-		REQUIRE(mesh->GetPositionBuffer());
-		REQUIRE(mesh->GetAttributeBuffer());
-		REQUIRE(mesh->GetIndexBuffer());
-		const uint64_t attributeBytes = mesh->GetPositions().size() * sizeof(MeshVertexAttributes);
-		CHECK(mesh->GetPositionBuffer()->getDesc().byteSize == mesh->GetPositions().size() * sizeof(glm::vec3));
-		CHECK(mesh->GetAttributeBuffer()->getDesc().byteSize == attributeBytes);
-		CHECK(mesh->GetIndexBuffer()->getDesc().byteSize == mesh->GetIndices().size() * sizeof(uint32_t));
-		CHECK(mesh->GetIndexBuffer()->getDesc().isIndexBuffer);
+		// Its ranges hold all of its vertices and indices, rounded to the pool's granularity.
+		const GeometryAllocation* geometry = mesh->GetGeometry();
+		REQUIRE(geometry);
+		CHECK(mesh->GetGeometryHandle() != c_InvalidGeometry);
+		CHECK(geometry->Arena == GeometryArena::Static);
+		CHECK(geometry->VertexCount >= mesh->GetPositions().size());
+		CHECK(geometry->VertexCount % GeometryPool::c_VertexGranularity == 0);
+		CHECK(geometry->IndexCount >= mesh->GetIndices().size());
+		CHECK(geometry->IndexCount % GeometryPool::c_IndexGranularity == 0);
 		// Each copy counts once, in its own pool: the CPU keeps the positions and indices physics reads, the vertex attributes
-		// went with the upload, and the buffers are added on the GPU.
+		// went with the upload, and the pool's ranges are added on the GPU.
+		const uint64_t attributeBytes = mesh->GetPositions().size() * sizeof(MeshVertexAttributes);
 		const AssetMemoryUsage uploaded = mesh->GetMemoryUsage();
 		CHECK(uploaded.Cpu == cpuOnly.Cpu - attributeBytes);
-		CHECK(uploaded.GpuBuffers == mesh->GetPositionBuffer()->getDesc().byteSize + mesh->GetAttributeBuffer()->getDesc().byteSize
-			+ mesh->GetIndexBuffer()->getDesc().byteSize);
+		CHECK(uploaded.GpuBuffers == GeometryPool::GetAllocationBytes(GeometryArena::Static, static_cast<uint32_t>(mesh->GetPositions().size()),
+			static_cast<uint32_t>(mesh->GetIndices().size())));
+		CHECK(uploaded.GpuBuffers == static_cast<uint64_t>(geometry->VertexCount) * (GeometryPool::c_PositionStride + GeometryPool::c_AttributeStride)
+			+ static_cast<uint64_t>(geometry->IndexCount) * GeometryPool::c_IndexStride);
 		CHECK(uploaded.GpuTextures == 0);
 		CHECK_FALSE(mesh->GetPositions().empty());
 		CHECK_FALSE(mesh->GetIndices().empty());
 		CHECK(mesh->GetAttributes().empty());
+
+		// The pool holds every stream at the mesh's offsets.
+		const std::optional<Tests::MeshGeometryBytes> bytes = Tests::ReadMeshGeometry(gpu, *mesh);
+		REQUIRE(bytes);
+		REQUIRE(bytes->Positions.size() == mesh->GetPositions().size() * sizeof(glm::vec3));
+		CHECK(std::memcmp(bytes->Positions.data(), mesh->GetPositions().data(), bytes->Positions.size()) == 0);
+		REQUIRE(bytes->Attributes.size() == attributeBytes);
+		CHECK(std::memcmp(bytes->Attributes.data(), attributes.data(), attributeBytes) == 0);
+		REQUIRE(bytes->Indices.size() == mesh->GetIndices().size() * sizeof(uint32_t));
+		CHECK(std::memcmp(bytes->Indices.data(), mesh->GetIndices().data(), bytes->Indices.size()) == 0);
+		CHECK(bytes->Skin.empty());
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -436,7 +454,7 @@ TEST_SUITE("GPU.Assets")
 		// Built-in assets are uploaded as soon as they are registered.
 		Ref<Mesh> cube = std::static_pointer_cast<Mesh>(manager->GetAsset(BuiltinAssets::CubeMesh));
 		REQUIRE(cube);
-		CHECK(cube->GetIndexBuffer() != nullptr);
+		CHECK(cube->GetGeometry() != nullptr);
 
 		Ref<Asset> loadedTexture = manager->LoadAssetSync(UUID(0x9000));
 		REQUIRE(loadedTexture);
@@ -448,7 +466,7 @@ TEST_SUITE("GPU.Assets")
 
 		Ref<Asset> loadedMesh = manager->LoadAssetSync(UUID(0x9001));
 		REQUIRE(loadedMesh);
-		CHECK(std::static_pointer_cast<Mesh>(loadedMesh)->GetIndexBuffer() != nullptr);
+		CHECK(std::static_pointer_cast<Mesh>(loadedMesh)->GetGeometry() != nullptr);
 
 		// A tiny upload budget spreads finalization over several updates: each takes its first step only, one of the smallest
 		// size at most.

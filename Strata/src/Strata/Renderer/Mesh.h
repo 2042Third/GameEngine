@@ -2,18 +2,18 @@
 
 #include "Strata/Asset/Asset.h"
 #include "Strata/Math/AABB.h"
+#include "Strata/Renderer/GeometryPool.h"
 
 #include <glm/glm.hpp>
 #include <nvrhi/nvrhi.h>
 
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
 
 namespace Strata
 {
-
-	enum class GPUUploadQueueKind : uint8_t;
 
 	// Per-vertex shading data (stream 1). Positions live in their own stream (stream 0) so depth-only passes such as
 	// shadow maps fetch the minimum. Tangent.w holds the bitangent sign (MikkTSpace convention).
@@ -57,7 +57,7 @@ namespace Strata
 
 	struct MeshLOD
 	{
-		uint32_t IndexOffset = 0; // Into the mesh index buffer
+		uint32_t IndexOffset = 0; // Into the mesh's indices (GeometryAllocation::FirstIndex adds to it on the GPU)
 		uint32_t IndexCount = 0;
 	};
 
@@ -76,10 +76,12 @@ namespace Strata
 	};
 
 	// Indexed triangle mesh asset with one or more submeshes (one per material) and optional LOD levels. Front faces
-	// are counter-clockwise. Positions and indices stay on the CPU after upload (physics colliders read them); the vertex
-	// attributes, which only shading reads, live on the GPU alone once uploaded. Skinned meshes (CreateSkinned) also have
-	// a skin stream (a MeshSkinVertex per vertex, also GPU-only once uploaded) and a skin binding; their positions are the
-	// bind pose, which physics' mesh colliders use.
+	// are counter-clockwise. Its GPU geometry lives in the renderer's geometry pool (GeometryPool: the Static arena, or the
+	// Skinned one for skinned meshes, and the index arena), at offsets the pool may change (GetGeometry). Positions and
+	// indices stay on the CPU after upload (physics colliders read them); the vertex attributes, which only shading reads,
+	// live on the GPU alone once uploaded. Skinned meshes (CreateSkinned) also have a skin stream (a MeshSkinVertex per
+	// vertex, also GPU-only once uploaded) and a skin binding; their positions are the bind pose, which physics' mesh
+	// colliders use. Destroying a mesh frees its geometry (once the GPU is done with it).
 	class Mesh : public Asset
 	{
 	public:
@@ -102,16 +104,19 @@ namespace Strata
 		std::vector<uint8_t> Serialize() const;
 		static Ref<Mesh> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
 
-		// Creates the GPU vertex and index buffers and uploads the geometry into them through the renderer's upload queue
-		// (GPUUploadQueue), in steps the queue sizes to what is left of the context's upload bytes, upload time and deadline
-		// (Pending: the next call continues). Steps go through staging buffers of the renderer's pool (StagingPool) and wait for
-		// staging room within the context's StagingBytes like texture steps. On the transfer queue
-		// the buffers are handed over to the graphics queue once the copies completed (AwaitingGPU meanwhile, when the context
-		// allows it). Once uploaded, the CPU copy of the vertex attributes is released; positions and indices stay for physics.
+		~Mesh() override;
+
+		// Allocates the geometry's ranges in the renderer's geometry pool and uploads the streams into them through the
+		// renderer's upload queue (GPUUploadQueue), on the graphics queue (the pool's buffers are shared by every mesh, so they
+		// are never handed between queues), in steps the queue sizes to what is left of the context's upload bytes, upload time
+		// and deadline (Pending: the next call continues). Steps go through staging buffers of the renderer's pool
+		// (StagingPool) and wait for staging room within the context's StagingBytes like texture steps. A pool too full for the
+		// mesh grows at the next frame (Pending until then). Once uploaded, the CPU copy of the vertex attributes is released;
+		// positions and indices stay for physics.
 		AssetFinalizeResult FinalizeOnMainThread(const AssetFinalizeContext& context) override;
-		// The CPU geometry and, once uploaded, the GPU buffers (each counted once, in its own pool).
+		// The CPU geometry and, once allocated, the pool ranges it holds (GeometryPool::GetAllocationBytes) as GPU buffers.
 		AssetMemoryUsage GetMemoryUsage() const override;
-		// The CPU geometry and, with a renderer, the GPU buffers it will create, without the vertex attributes the upload
+		// The CPU geometry and, with a renderer, the pool ranges it will hold, without the vertex attributes the upload
 		// releases.
 		AssetMemoryUsage GetFinalizedMemoryUsage() const override;
 
@@ -130,10 +135,13 @@ namespace Strata
 		// Empty once the mesh is uploaded, like the vertex attributes.
 		const std::vector<MeshSkinVertex>& GetSkinVertices() const { return m_SkinVertices; }
 
-		nvrhi::IBuffer* GetPositionBuffer() const { return m_PositionBuffer; }
-		nvrhi::IBuffer* GetAttributeBuffer() const { return m_AttributeBuffer; }
-		nvrhi::IBuffer* GetSkinBuffer() const { return m_SkinBuffer; } // Null for meshes without a skin
-		nvrhi::IBuffer* GetIndexBuffer() const { return m_IndexBuffer; }
+		// The arena its vertices live in: Skinned for skinned meshes (they have the skin stream).
+		GeometryArena GetArena() const { return IsSkinned() ? GeometryArena::Skinned : GeometryArena::Static; }
+		// Its place in the geometry pool, stable for the mesh's life (c_InvalidGeometry before the upload starts).
+		GeometryHandle GetGeometryHandle() const { return m_Geometry; }
+		// Where its geometry is now, once uploaded (null before): read it every frame, compaction moves geometry. Main thread.
+		const GeometryAllocation* GetGeometry() const;
+		bool IsUploaded() const { return m_Uploaded; }
 	private:
 		Mesh() = default;
 		// Validates and assembles a mesh; the skin vertices are empty and the binding null for unskinned meshes.
@@ -148,14 +156,11 @@ namespace Strata
 		std::vector<MeshSkinVertex> m_SkinVertices;
 		Ref<const MeshSkinBinding> m_SkinBinding;
 
-		nvrhi::BufferHandle m_PositionBuffer;
-		nvrhi::BufferHandle m_AttributeBuffer;
-		nvrhi::BufferHandle m_SkinBuffer;
-		nvrhi::BufferHandle m_IndexBuffer;
-		// Bytes of the geometry uploaded so far, counting positions, attributes and indices one after the other.
+		// The pool its geometry was allocated in (it may go before the mesh: the renderer shuts down) and its handle there.
+		std::weak_ptr<GeometryPool> m_Pool;
+		GeometryHandle m_Geometry = c_InvalidGeometry;
+		// Bytes of the geometry uploaded so far, counting positions, attributes, the skin stream and indices one after the other.
 		uint64_t m_UploadOffset = 0;
-		GPUUploadQueueKind m_UploadQueue {}; // The queue the upload's copies run on (the graphics queue until one is chosen)
-		uint64_t m_TransferTicket = 0; // While the transfer queue's copies complete: the ticket of the release (GPUUploadTicket)
 		bool m_Uploaded = false;
 	};
 

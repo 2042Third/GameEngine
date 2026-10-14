@@ -59,30 +59,11 @@ namespace Strata
 			glm::vec3 BoundsMax;
 		};
 
-		// Never empty: buffers of empty streams hold 4 bytes.
-		size_t GetStaticBufferSize(size_t dataSize)
-		{
-			return std::max<size_t>(dataSize, 4);
-		}
-
-		nvrhi::BufferHandle CreateStaticBuffer(size_t size, const char* name, bool vertex)
-		{
-			nvrhi::BufferDesc desc;
-			desc.byteSize = GetStaticBufferSize(size);
-			desc.debugName = name;
-			desc.isVertexBuffer = vertex;
-			desc.isIndexBuffer = !vertex;
-			// Also readable from shaders (e.g. GPU culling or ray tracing later).
-			desc.canHaveRawViews = true;
-			desc.initialState = vertex ? nvrhi::ResourceStates::VertexBuffer : nvrhi::ResourceStates::IndexBuffer;
-			desc.keepInitialState = true;
-			return Renderer::GetDevice()->createBuffer(desc);
-		}
-
-		// A stream of the geometry and the buffer it uploads into.
+		// A stream of the geometry and where in the pool's buffer it uploads to.
 		struct UploadRange
 		{
 			nvrhi::IBuffer* Buffer = nullptr;
+			uint64_t Offset = 0; // In the buffer
 			const uint8_t* Data = nullptr;
 			uint64_t Size = 0;
 		};
@@ -303,6 +284,24 @@ namespace Strata
 		return CreateSkinned(std::move(positions), std::move(attributes), std::move(indices), std::move(submeshes), std::move(skinVertices), std::move(binding), outError);
 	}
 
+	Mesh::~Mesh()
+	{
+		// The pool returns the ranges once the GPU finished the frames that may still draw them.
+		if (m_Geometry != c_InvalidGeometry)
+		{
+			if (const Ref<GeometryPool> pool = m_Pool.lock())
+				pool->Free(m_Geometry);
+		}
+	}
+
+	const GeometryAllocation* Mesh::GetGeometry() const
+	{
+		if (!m_Uploaded)
+			return nullptr;
+		const Ref<GeometryPool> pool = m_Pool.lock();
+		return pool ? pool->Find(m_Geometry) : nullptr;
+	}
+
 	AssetFinalizeResult Mesh::FinalizeOnMainThread(const AssetFinalizeContext& context)
 	{
 		RendererUploadContext* upload = RendererUploadContext::From(context.Upload);
@@ -314,43 +313,47 @@ namespace Strata
 		if (!context.FirstOfFrame && std::chrono::steady_clock::now() >= context.Deadline)
 			return AssetFinalizeResult::Pending;
 
-		const size_t positionBytes = m_Positions.size() * sizeof(glm::vec3);
-		const size_t attributeBytes = m_Attributes.size() * sizeof(MeshVertexAttributes);
-		const size_t skinBytes = m_SkinVertices.size() * sizeof(MeshSkinVertex);
-		const size_t indexBytes = m_Indices.size() * sizeof(uint32_t);
-		auto releaseBuffers = [this]()
+		const uint32_t vertexCount = static_cast<uint32_t>(m_Positions.size());
+		const uint32_t indexCount = static_cast<uint32_t>(m_Indices.size());
+		Ref<GeometryPool> pool = m_Pool.lock();
+		if (m_Geometry == c_InvalidGeometry)
 		{
-			m_PositionBuffer = nullptr;
-			m_AttributeBuffer = nullptr;
-			m_SkinBuffer = nullptr;
-			m_IndexBuffer = nullptr;
-		};
-		if (!m_IndexBuffer)
-		{
-			m_PositionBuffer = CreateStaticBuffer(positionBytes, "MeshPositions", true);
-			m_AttributeBuffer = CreateStaticBuffer(attributeBytes, "MeshAttributes", true);
-			// Only skinned meshes have a skin stream: other meshes hold nothing more than before skinning existed.
-			m_SkinBuffer = m_SkinBinding ? CreateStaticBuffer(skinBytes, "MeshSkin", true) : nullptr;
-			m_IndexBuffer = CreateStaticBuffer(indexBytes, "MeshIndices", false);
-			if (!m_PositionBuffer || !m_AttributeBuffer || !m_IndexBuffer || (m_SkinBinding && !m_SkinBuffer))
+			pool = Renderer::GetGeometryPool();
+			if (!pool)
+				return AssetFinalizeResult::Failed;
+			const GeometryPool::AllocateResult allocation = pool->Allocate(GetArena(), vertexCount, indexCount, queue.GetOpenBatch());
+			if (allocation.Handle == c_InvalidGeometry)
 			{
-				releaseBuffers();
+				// The pool grows at the next frame, between upload batches: the mesh uploads then.
+				if (allocation.Retry)
+					return AssetFinalizeResult::Pending;
+				ST_CORE_ERROR("Mesh: its {} vertices and {} indices do not fit the geometry pool", vertexCount, indexCount);
 				return AssetFinalizeResult::Failed;
 			}
+			m_Pool = pool;
+			m_Geometry = allocation.Handle;
 			m_UploadOffset = 0;
-			m_UploadQueue = queue.ChooseQueue(context);
 		}
+		const GeometryAllocation* geometry = pool ? pool->Find(m_Geometry) : nullptr;
+		if (!geometry)
+			return AssetFinalizeResult::Failed; // The renderer that held the pool went
 
 		// The streams (the skin stream only of skinned meshes) upload one after the other, as one run of bytes cut into steps
 		// through the renderer's upload queue, which sizes them to what is left of the frame's upload bytes and time (powers of
 		// two from GPUUploadQueue::c_MinStepBytes, like the staging buffers they go through; the frame's first step goes
 		// whatever). Steps wait for staging room like texture steps, so a mesh's upload never holds more staging than the budget
-		// allows.
+		// allows. The pool's buffers are looked up at every call: it may have grown into new ones since the last.
+		const GeometryArena arena = GetArena();
+		const size_t positionBytes = m_Positions.size() * sizeof(glm::vec3);
+		const size_t attributeBytes = m_Attributes.size() * sizeof(MeshVertexAttributes);
+		const size_t skinBytes = m_SkinVertices.size() * sizeof(MeshSkinVertex);
+		const size_t indexBytes = m_Indices.size() * sizeof(uint32_t);
+		const uint64_t firstVertex = geometry->FirstVertex;
 		const std::array<UploadRange, 4> ranges = { {
-			{ m_PositionBuffer, reinterpret_cast<const uint8_t*>(m_Positions.data()), positionBytes },
-			{ m_AttributeBuffer, reinterpret_cast<const uint8_t*>(m_Attributes.data()), attributeBytes },
-			{ m_SkinBuffer, reinterpret_cast<const uint8_t*>(m_SkinVertices.data()), skinBytes }, // Empty for meshes without a skin
-			{ m_IndexBuffer, reinterpret_cast<const uint8_t*>(m_Indices.data()), indexBytes }
+			{ pool->GetPositionBuffer(arena), firstVertex * GeometryPool::c_PositionStride, reinterpret_cast<const uint8_t*>(m_Positions.data()), positionBytes },
+			{ pool->GetAttributeBuffer(arena), firstVertex * GeometryPool::c_AttributeStride, reinterpret_cast<const uint8_t*>(m_Attributes.data()), attributeBytes },
+			{ pool->GetSkinBuffer(), firstVertex * GeometryPool::c_SkinStride, reinterpret_cast<const uint8_t*>(m_SkinVertices.data()), skinBytes }, // Empty without a skin
+			{ pool->GetIndexBuffer(), uint64_t(geometry->FirstIndex) * GeometryPool::c_IndexStride, reinterpret_cast<const uint8_t*>(m_Indices.data()), indexBytes }
 		} };
 		const uint64_t totalBytes = positionBytes + attributeBytes + skinBytes + indexBytes;
 		uint64_t callBytes = 0;
@@ -377,14 +380,17 @@ namespace Strata
 				const uint64_t writeBegin = std::max(m_UploadOffset, rangeStart);
 				const uint64_t writeEnd = std::min(stepEnd, rangeEnd);
 				if (writeBegin < writeEnd)
-					regions[regionCount++] = GPUBufferRegion { range.Buffer, writeBegin - rangeStart, range.Data + (writeBegin - rangeStart), writeEnd - writeBegin };
+				{
+					regions[regionCount++] = GPUBufferRegion { range.Buffer, range.Offset + (writeBegin - rangeStart), range.Data + (writeBegin - rangeStart),
+						writeEnd - writeBegin };
+				}
 				rangeStart = rangeEnd;
 			}
-			const GPUUploadStep step = queue.UploadBuffer(context, std::span<const GPUBufferRegion>(regions.data(), regionCount), m_UploadQueue);
+			pool->NoteUploadWrite(queue.GetOpenBatch());
+			const GPUUploadStep step = queue.UploadBuffer(context, std::span<const GPUBufferRegion>(regions.data(), regionCount), GPUUploadQueueKind::Graphics);
 			if (!step.Recorded)
 			{
 				ST_CORE_ERROR("Mesh: no staging memory for its upload");
-				releaseBuffers();
 				return AssetFinalizeResult::Failed;
 			}
 			m_UploadOffset = stepEnd;
@@ -394,34 +400,6 @@ namespace Strata
 		if (m_UploadOffset < totalBytes)
 			return AssetFinalizeResult::Pending;
 
-		// Every range was copied on the transfer queue: the graphics queue takes the buffers over once the copies completed.
-		if (m_UploadQueue == GPUUploadQueueKind::Transfer)
-		{
-			// The skin buffer is null for meshes without a skin: it has nothing to hand over.
-			const std::array<nvrhi::IBuffer*, 4> buffers = { m_PositionBuffer.Get(), m_AttributeBuffer.Get(), m_SkinBuffer.Get(), m_IndexBuffer.Get() };
-			if (m_TransferTicket == 0)
-			{
-				for (nvrhi::IBuffer* buffer : buffers)
-				{
-					if (buffer)
-						m_TransferTicket = queue.ReleaseToGraphics(GPUQueueTransfer { nullptr, 0, 0, buffer });
-				}
-			}
-			if (!queue.IsComplete(m_TransferTicket))
-			{
-				if (context.MayWait)
-					return AssetFinalizeResult::AwaitingGPU;
-				queue.WaitForTicket(m_TransferTicket);
-			}
-			for (nvrhi::IBuffer* buffer : buffers)
-			{
-				if (buffer)
-					queue.AcquireOnGraphics(GPUQueueTransfer { nullptr, 0, 0, buffer });
-			}
-			m_TransferTicket = 0;
-			m_UploadQueue = GPUUploadQueueKind::Graphics; // Handed over: nothing is left on the transfer queue
-		}
-
 		// Only shading reads the vertex attributes and the skin stream, from the GPU: their CPU copies go (the terrain of the
 		// stress world held 9.4 MB of attributes). Physics keeps reading positions and indices (AssetMeshProvider). Freeing a
 		// large copy hands its pages back to the system, which takes a while: when the steps above ran past the deadline, it is
@@ -430,6 +408,8 @@ namespace Strata
 			return AssetFinalizeResult::Pending;
 		std::vector<MeshVertexAttributes>().swap(m_Attributes);
 		std::vector<MeshSkinVertex>().swap(m_SkinVertices);
+		// From now on compaction may move the geometry: the batch with its last copies is submitted before the next BeginFrame.
+		pool->SetUploading(m_Geometry, false);
 		m_Uploaded = true;
 		return AssetFinalizeResult::Done;
 	}
@@ -445,11 +425,9 @@ namespace Strata
 		{
 			usage.Cpu += sizeof(MeshSkinBinding) + m_SkinBinding->Joints.size() * (sizeof(uint16_t) + sizeof(glm::mat4) + sizeof(AABB));
 		}
-		for (nvrhi::IBuffer* buffer : { m_PositionBuffer.Get(), m_AttributeBuffer.Get(), m_SkinBuffer.Get(), m_IndexBuffer.Get() })
-		{
-			if (buffer)
-				usage.GpuBuffers += buffer->getDesc().byteSize;
-		}
+		// The pool's ranges it holds, from their allocation on (the pool's free space is the renderer's: GeometryPoolStats).
+		if (m_Geometry != c_InvalidGeometry)
+			usage.GpuBuffers += GeometryPool::GetAllocationBytes(GetArena(), static_cast<uint32_t>(m_Positions.size()), static_cast<uint32_t>(m_Indices.size()));
 		return usage;
 	}
 
@@ -458,19 +436,9 @@ namespace Strata
 		AssetMemoryUsage usage = GetMemoryUsage();
 		if (Renderer::IsInitialized())
 		{
-			const uint64_t attributeBytes = m_Attributes.size() * sizeof(MeshVertexAttributes);
-			const uint64_t skinBytes = m_SkinVertices.size() * sizeof(MeshSkinVertex);
-			if (!m_IndexBuffer)
-			{
-				// One element type for the list: size_t and uint64_t are different types on macOS.
-				const uint64_t positionBytes = m_Positions.size() * sizeof(glm::vec3);
-				const uint64_t indexBytes = m_Indices.size() * sizeof(uint32_t);
-				for (const uint64_t bytes : { positionBytes, attributeBytes, indexBytes })
-					usage.GpuBuffers += GetStaticBufferSize(bytes);
-				if (m_SkinBinding)
-					usage.GpuBuffers += GetStaticBufferSize(skinBytes);
-			}
-			usage.Cpu -= attributeBytes + skinBytes; // The upload releases them
+			if (m_Geometry == c_InvalidGeometry)
+				usage.GpuBuffers += GeometryPool::GetAllocationBytes(GetArena(), static_cast<uint32_t>(m_Positions.size()), static_cast<uint32_t>(m_Indices.size()));
+			usage.Cpu -= m_Attributes.size() * sizeof(MeshVertexAttributes) + m_SkinVertices.size() * sizeof(MeshSkinVertex); // The upload releases them
 		}
 		return usage;
 	}

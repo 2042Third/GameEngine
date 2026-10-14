@@ -302,7 +302,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		INFO(stats.dump(1));
 		for (const char* key : { "gpuDriven", "drawCommands", "draws", "opaqueDraws", "shadowDraws", "instances", "shadowCasters", "triangles", "visibleProxies",
 			"occludedProxies", "culledProxies", "instancesPerLod", "lights", "droppedLights", "materials", "pendingAssets", "extractMs", "sortMs", "proxyUpdates",
-			"instanceBytesUploaded", "deferredInstanceBytes", "gpuMs", "gpuStatsFrame" })
+			"instanceBytesUploaded", "deferredInstanceBytes", "geometryPool", "gpuMs", "gpuStatsFrame" })
 		{
 			CAPTURE(key);
 			CHECK(stats.contains(key));
@@ -314,6 +314,11 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(stats["triangles"] == 12);
 		CHECK(stats["lights"] == 1);
 		CHECK(stats["instancesPerLod"].size() == SceneRendererStats::c_LODStatCount);
+		// The meshes' geometry lives in the renderer's pool.
+		REQUIRE(stats["geometryPool"].is_object());
+		CHECK(stats["geometryPool"]["usedMB"].get<double>() > 0.0);
+		CHECK(stats["geometryPool"]["capacityMB"].get<double>() >= stats["geometryPool"]["usedMB"].get<double>());
+		CHECK(stats["geometryPool"]["allocations"].get<uint32_t>() >= 1);
 		if (Renderer::GetGPUProfiler().IsEnabled())
 		{
 			// The captured frame's own GPU time.

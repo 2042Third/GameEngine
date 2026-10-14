@@ -1617,6 +1617,7 @@ FindShadowCasters                cascade boxes; QueryPlanes per cascade (a job e
 ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident; materials used
                                  as in the frame before: its data, their assets looked up in one call (below)
 GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches
+BuildDrawArguments               the batches' indirect arguments at their meshes' places in the geometry pool
 UploadSceneData                  changed instances, changed materials, the changed range of each draw list
 ReleaseFrameAssets               (when Render returns, however it ends) every reference the frame took, and the manager
 ```

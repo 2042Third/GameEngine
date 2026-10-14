@@ -114,6 +114,9 @@ namespace Strata
 		// frame drew, culled and uploaded (SceneRendererStats), and the GPU's side of the latest frame whose GPU work is known
 		// (SceneRendererGPUStats: gpuMs per GPU stage, gpuStatsFrame its frame profiler frame, null without GPU times).
 		nlohmann::json DescribeRenderStats(const SceneRendererStats& stats, const SceneRendererGPUStats& gpu);
+		// The renderer's geometry pool (renderStats.geometryPool, asset.stats' geometryPool): usedMB, capacityMB, allocations,
+		// fragmentation (of the static arena's free space), moves and growths so far; null without a renderer.
+		nlohmann::json DescribeGeometryPool();
 		// The name editor.perf and renderStats give a FrameBound ("gpu", "cpu", "capped", "unknown").
 		const char* GetFrameBoundName(FrameBound bound);
 

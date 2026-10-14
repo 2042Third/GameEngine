@@ -1733,6 +1733,24 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (`u_DrawList[gl_InstanceIndex]`); only changed instances, materials and draw list ranges are uploaded, so a still
   frame uploads nothing (`SceneRendererStats::InstanceBytesUploaded`, `ProxyUpdates`). Shaders derive the normal
   matrix from the 3x4 rows (`TransformNormal` in `Include/Scene.glsl`).
+- Every mesh's GPU geometry lives in the renderer's geometry pool (`Renderer/GeometryPool`, `Renderer::GetGeometryPool`):
+  the Static vertex arena (positions 12 B and attributes 36 B per vertex, in two buffers), the Skinned one (the same plus
+  the 16-byte skin stream) and the index arena (32-bit indices, relative to a submesh's base vertex). Offsets come from
+  `Core/RangeAllocator` (first-fit size classes, coalescing frees, bounded deterministic compaction plans). A mesh keeps
+  a stable `GeometryHandle`; `Mesh::GetGeometry` (main thread) says where its geometry is now. Read mesh geometry only
+  through the pool, and every frame: compaction moves it (`GeometryPool::BeginFrame`, within `c_MaxDefragBytesPerFrame`
+  when an arena's scattered free space exceeds a quarter of it), and growth recreates the buffers (by a GPU copy; at
+  once when an allocation does not fit and the open upload batch has not written into them, else at the next frame).
+  Freed ranges return once the GPU finished the work submitted before they were freed; geometry whose upload is in
+  progress never moves. Uploads into the pool run on the graphics queue. A mesh counts its ranges (rounded to
+  `c_VertexGranularity` and `c_IndexGranularity`) as `GpuBuffers`; the pool's free space is the renderer's
+  (`GeometryPoolStats`, `asset.stats`' and `renderStats`' `geometryPool`).
+- Draws are bucketed by pipeline state: consecutive batches of one `PipelineKey` (pass, double-sided, mirrored, skinned;
+  shadows also alpha-masked and cascade) and vertex arena share one `setGraphicsState` binding the pool's buffers, and their
+  `DrawIndexedIndirectArguments` (written by the CPU into a per-renderer buffer, uploaded where they changed) are drawn
+  by one `drawIndexedIndirect` per bucket where the device has `multiDrawIndirect` and `drawIndirectFirstInstance`, else
+  by a direct draw per batch without state changes (`SceneRendererSpecification::IndirectMode`, `PerDraw` to force it).
+  `SceneRendererStats::DrawCommands` counts the draw calls recorded: submission follows buckets, not distinct meshes.
 
 ### Skinned meshes
 

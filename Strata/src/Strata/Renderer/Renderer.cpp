@@ -20,6 +20,7 @@ namespace Strata
 			Scope<RendererUploadContext> UploadContext; // Records into the upload queue: destroyed before it
 			Scope<DeferredReleaseQueue> DeferredReleases;
 			Scope<GPUProfiler> Profiler;
+			Ref<GeometryPool> Geometry;
 
 			nvrhi::SamplerHandle LinearClamp;
 			nvrhi::SamplerHandle LinearWrap;
@@ -106,6 +107,13 @@ namespace Strata
 		if (specification.TransferQueueUploads && !s_Data->UploadQueue->SetTransferQueue(true))
 			ST_CORE_INFO("Renderer: the device has no dedicated transfer queue; uploads run on the graphics queue");
 		s_Data->DeferredReleases = CreateScope<DeferredReleaseQueue>(nvrhiDevice);
+		s_Data->Geometry = GeometryPool::Create(nvrhiDevice);
+		if (!s_Data->Geometry)
+		{
+			ST_CORE_ERROR("Renderer: failed to create the geometry pool");
+			Shutdown();
+			return false;
+		}
 		s_Data->Profiler = CreateScope<GPUProfiler>(device);
 		if (!s_Data->Profiler->IsEnabled())
 			ST_CORE_INFO("Renderer: the device writes no GPU timestamps; GPU stages are not measured");
@@ -177,6 +185,11 @@ namespace Strata
 		return *s_Data->Profiler;
 	}
 
+	Ref<GeometryPool> Renderer::GetGeometryPool()
+	{
+		return s_Data ? s_Data->Geometry : nullptr;
+	}
+
 	GPUProfiler* Renderer::FindGPUProfiler()
 	{
 		return s_Data ? s_Data->Profiler.get() : nullptr;
@@ -200,6 +213,7 @@ namespace Strata
 			return;
 
 		s_Data->Profiler->BeginFrame();
+		s_Data->Geometry->BeginFrame();
 		s_Data->BindlessTextures->BeginFrame(s_Data->Device->GetFrameIndex());
 		s_Data->Staging->BeginFrame(s_Data->Device->GetFrameIndex());
 		s_Data->UploadQueue->BeginFrame();

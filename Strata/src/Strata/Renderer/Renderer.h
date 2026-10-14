@@ -3,6 +3,7 @@
 #include "Strata/Core/Base.h"
 #include "Strata/Renderer/BindlessTextureTable.h"
 #include "Strata/Renderer/DeferredReleaseQueue.h"
+#include "Strata/Renderer/GeometryPool.h"
 #include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Renderer/GraphicsDevice.h"
@@ -55,6 +56,8 @@ namespace Strata
 		static RendererUploadContext& GetUploadContext();
 		// The budgeted queue every asset upload goes through (the upload context's batches are its batches).
 		static GPUUploadQueue& GetUploadQueue();
+		// Every mesh's GPU geometry (null without a renderer). Meshes keep a weak reference: the pool goes with the renderer.
+		static Ref<GeometryPool> GetGeometryPool();
 		// GPU time per stage of the frame (timestamps; a no-op without timestamp support): passes are timed with GPUPassTimer.
 		static GPUProfiler& GetGPUProfiler();
 		// The profiler, or null without a renderer (any time, also while the renderer initializes).
@@ -67,8 +70,9 @@ namespace Strata
 		static void ReleaseDeferred(std::vector<nvrhi::ResourceHandle> resources);
 
 		// Called by the application after the graphics device began a frame: hands the GPU times of completed frames to the
-		// frame profiler (GPUProfiler::BeginFrame), recycles bindless slots and staging memory, rolls the upload queue's frame
-		// and drops deferred releases the GPU is done with.
+		// frame profiler (GPUProfiler::BeginFrame), returns the geometry pool's freed ranges and grows or compacts it
+		// (GeometryPool::BeginFrame), recycles bindless slots and staging memory, rolls the upload queue's frame and drops
+		// deferred releases the GPU is done with.
 		static void BeginFrame();
 		// Before the first command list of a frame that renders into the back buffer: the GPU waits for the display to hand
 		// the image over only from here on (GraphicsDevice::PrepareBackBuffer), so the frame's earlier work - asset uploads,

@@ -175,6 +175,9 @@ namespace Strata
 
 		// The ticket of what was recorded so far (complete once the GPU has run it): the open batch's, or the latest one's.
 		GPUUploadTicket GetTicket() const;
+		// The open batch's ticket, also before it recorded anything: no two batches that record something share it (0 without an
+		// open batch).
+		GPUUploadTicket GetOpenBatch() const { return m_BatchOpen ? m_BatchTicket : 0; }
 		// Whether the GPU has run everything recorded before the ticket was taken (polled, never waiting). A ticket of the
 		// batch that is still open is not complete.
 		bool IsComplete(GPUUploadTicket ticket);

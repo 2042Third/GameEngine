@@ -119,6 +119,32 @@ TEST_SUITE("PerfGPU.Renderer")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Render cost of 10,000 distinct meshes")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		constexpr size_t c_Count = 10'000;
+		Scene scene("UniqueMeshes");
+		Perf::AddCameraAndLight(scene);
+		Perf::CreateUniqueMeshGrid(scene, assets, c_Count);
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Width, c_Height);
+		// The median Render (extraction, recording and submitting) and the draws the CPU recorded: the meshes share the
+		// geometry pool's buffers, so draws follow pipeline states (buckets), not meshes.
+		Perf::CheckBudgetsConfirmed({ "PerfGPU.Renderer.Render10kUniqueMeshes", "PerfGPU.Renderer.Render10kUniqueMeshes.DrawCommands" }, [&]
+		{
+			const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(c_Count), "10k unique meshes");
+			const SceneRendererStats& stats = renderer.GetStats();
+			CHECK(stats.Instances == c_Count);
+			MESSAGE("10k unique meshes: ", stats.OpaqueDrawCalls, " batches, ", stats.ShadowDrawCalls, " shadow batches, ", stats.DrawCommands, " draw commands");
+			return Perf::MetricValues { { "PerfGPU.Renderer.Render10kUniqueMeshes", measurement.CPU.MedianMs },
+				{ "PerfGPU.Renderer.Render10kUniqueMeshes.DrawCommands", static_cast<double>(stats.DrawCommands) } };
+		});
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Render cost of 100,000 and 300,000 cubes whose shadows cover the view")
 	{
 		GPUContext gpu;

@@ -1,10 +1,13 @@
 #pragma once
 
 #include "Perf/PerfUtils.h"
+#include "Perf/SceneGenerators.h"
 #include "Renderer/GPUTestUtils.h"
+#include "Renderer/SceneRendererTestUtils.h"
 
 #include <Strata/Core/FrameProfiler.h>
 #include <Strata/Renderer/GPUProfiler.h>
+#include <Strata/Renderer/MeshFactory.h>
 #include <Strata/Renderer/Renderer.h>
 
 #include <doctest/doctest.h>
@@ -79,6 +82,21 @@ namespace Strata::Tests::Perf
 		if (!busy.empty())
 			result.GPU = Summarize(busy);
 		return result;
+	}
+
+	// `count` distinct meshes on the cube grid (CreateCubeGrid): boxes of slightly different sizes, each a memory asset of
+	// `assets` (the scale audit's Unique10k scene: every proxy its own mesh, so draws cannot share a mesh).
+	inline std::vector<Entity> CreateUniqueMeshGrid(Scene& scene, SceneTestAssets& assets, size_t count)
+	{
+		std::vector<Entity> entities = CreateCubeGrid(scene, count);
+		for (size_t index = 0; index < entities.size(); index++)
+		{
+			const float size = 0.8f + 0.4f * static_cast<float>(index) / static_cast<float>(count);
+			const AssetHandle mesh = assets.Add(MeshFactory::CreateCube(size), "UniqueBox");
+			entities[index].GetComponent<MeshRendererComponent>().Mesh = mesh;
+			entities[index].MarkModified<MeshRendererComponent>();
+		}
+		return entities;
 	}
 
 	// The median GPU busy time of the frames MeasureFrames measured; 0 (with a message) on a device without timestamps.

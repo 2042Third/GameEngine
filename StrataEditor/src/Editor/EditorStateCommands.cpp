@@ -4,6 +4,8 @@
 #include "Editor/RecentProjects.h"
 #include "Editor/ViewportRenderer.h"
 
+#include <Strata/Renderer/Renderer.h>
+
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/FrameProfiler.h>
 #include <Strata/Core/JobSystem.h>
@@ -219,6 +221,22 @@ namespace Strata
 				{ "gpu", DescribeGPUProfile(summary) } };
 		}
 
+		nlohmann::json DescribeGeometryPool()
+		{
+			const Ref<GeometryPool> pool = Renderer::GetGeometryPool();
+			if (!pool)
+				return nullptr;
+			const GeometryPoolStats stats = pool->GetStats();
+			constexpr double c_BytesPerMB = 1024.0 * 1024.0;
+			return {
+				{ "usedMB", static_cast<double>(stats.UsedBytes) / c_BytesPerMB },
+				{ "capacityMB", static_cast<double>(stats.CapacityBytes) / c_BytesPerMB },
+				{ "allocations", stats.Allocations },
+				{ "fragmentation", stats.VertexFragmentation },
+				{ "moves", stats.Moves },
+				{ "growths", stats.Growths } };
+		}
+
 		const char* GetFrameBoundName(FrameBound bound)
 		{
 			switch (bound)
@@ -261,6 +279,7 @@ namespace Strata
 				{ "proxyUpdates", stats.ProxyUpdates },
 				{ "instanceBytesUploaded", stats.InstanceBytesUploaded },
 				{ "deferredInstanceBytes", 0 },
+				{ "geometryPool", DescribeGeometryPool() },
 				{ "gpuMs", std::move(gpuMs) },
 				{ "gpuStatsFrame", gpu.HasTimes ? nlohmann::json(gpu.Frame) : nlohmann::json(nullptr) } };
 		}
@@ -787,7 +806,8 @@ namespace Strata
 			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
 			"times. renderStats is the viewport's latest frame (null while it renders none): gpuDriven, drawCommands (draws the CPU recorded), "
 			"draws, opaqueDraws, shadowDraws, instances, shadowCasters, triangles, visibleProxies, occludedProxies, culledProxies, instancesPerLod, "
-			"lights, droppedLights, materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes, gpuMs "
+			"lights, droppedLights, materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes, geometryPool "
+			"(the meshes' GPU geometry: usedMB, capacityMB, allocations, fragmentation, moves, growths), gpuMs "
 			"(per GPU stage of the frame gpuStatsFrame names). Times are milliseconds as avgMs, p50Ms and p95Ms (nearest rank) and maxMs.",
 			ObjectSchema({ { "frames", IntegerSchema("How many of the latest frames to summarize (default 120)", 1, FrameProfiler::c_DefaultCapacity) } }),
 			[](EditorContext& context, const nlohmann::json& parameters)

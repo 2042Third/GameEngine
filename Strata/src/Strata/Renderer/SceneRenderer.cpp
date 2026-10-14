@@ -1006,46 +1006,120 @@ namespace Strata
 		return LODSelection::GetScreenFraction(camera, center, radius);
 	}
 
+	bool SceneRenderer::UsesIndirectDraws() const
+	{
+		// One indirect call per bucket needs several draws per call and draws that set their first instance (the draw list
+		// offset of their batch); without them, each batch is a direct draw (the bucket's state is still set once).
+		const GraphicsDeviceInfo& info = Renderer::GetGraphicsDevice().GetInfo();
+		return m_Specification.IndirectMode != IndirectDrawMode::PerDraw && info.SupportsMultiDrawIndirect && info.SupportsDrawIndirectFirstInstance;
+	}
+
+	void SceneRenderer::BuildDrawArguments()
+	{
+		m_DrawArgumentsBuild.clear();
+		const auto append = [this](const SceneDrawBatch& batch)
+		{
+			const GeometryAllocation& geometry = m_FrameGeometry[batch.MeshSlot];
+			const Submesh& submesh = m_FrameMeshes[batch.MeshSlot]->GetSubmeshes()[batch.SubmeshIndex];
+			const MeshLOD& lod = submesh.LODs[batch.LOD];
+			nvrhi::DrawIndexedIndirectArguments arguments;
+			arguments.indexCount = lod.IndexCount;
+			arguments.instanceCount = batch.InstanceCount;
+			arguments.startIndexLocation = geometry.FirstIndex + lod.IndexOffset;
+			arguments.baseVertexLocation = static_cast<int32_t>(geometry.FirstVertex + submesh.BaseVertex);
+			arguments.startInstanceLocation = batch.FirstInstance;
+			m_DrawArgumentsBuild.push_back(arguments);
+		};
+		// Opaque batches (the prepass and the opaque pass draw them alike), transparent ones, then the shadow batches.
+		for (const SceneDrawBatch& batch : m_OpaqueBatches)
+			append(batch);
+		for (const SceneDrawBatch& batch : m_TransparentBatches)
+			append(batch);
+		for (const SceneDrawBatch& batch : m_ShadowBatches)
+			append(batch);
+	}
+
+	void SceneRenderer::DrawBuckets(nvrhi::ICommandList* commandList, nvrhi::GraphicsState& state, std::span<const SceneDrawBatch> batches, uint32_t firstArgument,
+		const std::function<PipelineKey(const SceneDrawBatch&)>& getKey, const std::function<void(const SceneDrawBatch&, nvrhi::GraphicsState&)>& prepareState,
+		const std::function<void(const SceneDrawBatch&)>& afterState)
+	{
+		const GeometryPool& pool = *Renderer::GetGeometryPool();
+		const bool indirect = UsesIndirectDraws();
+		state.indexBuffer = nvrhi::IndexBufferBinding { pool.GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
+		state.indirectParams = indirect ? m_DrawArgumentBuffer.Get() : nullptr;
+		size_t first = 0;
+		while (first < batches.size())
+		{
+			// A bucket: the batches up to the next change of pipeline state or vertex arena (and, for shadows, of cascade).
+			const SceneDrawBatch& head = batches[first];
+			const PipelineKey key = getKey(head);
+			const GeometryArena arena = m_FrameGeometry[head.MeshSlot].Arena;
+			size_t end = first + 1;
+			while (end < batches.size() && getKey(batches[end]) == key && m_FrameGeometry[batches[end].MeshSlot].Arena == arena && batches[end].Cascade == head.Cascade)
+				end++;
+
+			state.pipeline = GetScenePipeline(key);
+			state.vertexBuffers = {
+				nvrhi::VertexBufferBinding { pool.GetPositionBuffer(arena), 0, 0 },
+				nvrhi::VertexBufferBinding { pool.GetAttributeBuffer(arena), 1, 0 }
+			};
+			if (key.Skinned)
+				state.vertexBuffers.push_back(nvrhi::VertexBufferBinding { pool.GetSkinBuffer(), 2, 0 });
+			if (prepareState)
+				prepareState(head, state);
+			commandList->setGraphicsState(state);
+			if (afterState)
+				afterState(head);
+			if (indirect)
+			{
+				commandList->drawIndexedIndirect(static_cast<uint32_t>((firstArgument + first) * sizeof(nvrhi::DrawIndexedIndirectArguments)),
+					static_cast<uint32_t>(end - first));
+				m_Stats.DrawCommands++;
+			}
+			else
+			{
+				for (size_t index = first; index < end; index++)
+				{
+					// The frame's arguments: the upload made them what the argument buffer holds (m_DrawArguments).
+					const nvrhi::DrawIndexedIndirectArguments& arguments = m_DrawArguments[firstArgument + index];
+					nvrhi::DrawArguments draw;
+					draw.vertexCount = arguments.indexCount;
+					draw.instanceCount = arguments.instanceCount;
+					draw.startIndexLocation = arguments.startIndexLocation;
+					draw.startVertexLocation = static_cast<uint32_t>(arguments.baseVertexLocation);
+					draw.startInstanceLocation = arguments.startInstanceLocation;
+					commandList->drawIndexed(draw);
+					m_Stats.DrawCommands++;
+				}
+			}
+			first = end;
+		}
+	}
+
 	void SceneRenderer::DrawShadows(nvrhi::ICommandList* commandList, uint32_t cascadeCount)
 	{
 		commandList->clearDepthStencilTexture(m_ShadowMap, nvrhi::AllSubresources, true, 0.0f, false, 0);
 		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
-		for (const SceneDrawBatch& batch : m_ShadowBatches)
-		{
-			if (batch.Cascade >= cascadeCount)
-				continue;
-			const Mesh* mesh = m_FrameMeshes[batch.MeshSlot];
-			const Submesh& submesh = mesh->GetSubmeshes()[batch.SubmeshIndex];
-			const MeshLOD& lod = submesh.LODs[batch.LOD];
-
-			nvrhi::GraphicsState state;
-			state.pipeline = GetScenePipeline(PipelineKey { batch.AlphaMask ? Pass::ShadowMasked : Pass::Shadow, batch.DoubleSided, batch.Mirrored, batch.Skinned });
-			state.framebuffer = m_ShadowFramebuffers[batch.Cascade];
-			state.viewport.addViewportAndScissorRect(nvrhi::Viewport(mapSize, mapSize));
-			state.bindings = { m_ShadowBindingSet, Renderer::GetBindlessTextures().GetTable(), m_ShadowPushBindingSet };
-			state.vertexBuffers = {
-				nvrhi::VertexBufferBinding { mesh->GetPositionBuffer(), 0, 0 },
-				nvrhi::VertexBufferBinding { mesh->GetAttributeBuffer(), 1, 0 }
-			};
-			if (batch.Skinned)
-				state.vertexBuffers.push_back(nvrhi::VertexBufferBinding { mesh->GetSkinBuffer(), 2, 0 });
-			state.indexBuffer = nvrhi::IndexBufferBinding { mesh->GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
-			commandList->setGraphicsState(state);
-			const uint32_t cascade = batch.Cascade;
-			commandList->setPushConstants(&cascade, sizeof(cascade));
-
-			nvrhi::DrawArguments arguments;
-			arguments.vertexCount = lod.IndexCount;
-			arguments.instanceCount = batch.InstanceCount;
-			arguments.startIndexLocation = lod.IndexOffset;
-			arguments.startVertexLocation = submesh.BaseVertex;
-			arguments.startInstanceLocation = batch.FirstInstance;
-			commandList->drawIndexed(arguments);
-			m_Stats.DrawCommands++;
-		}
+		// Batches are sorted by cascade first: the ones of cascades beyond the count (none) end the list.
+		size_t count = 0;
+		while (count < m_ShadowBatches.size() && m_ShadowBatches[count].Cascade < cascadeCount)
+			count++;
+		nvrhi::GraphicsState state;
+		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(mapSize, mapSize));
+		state.bindings = { m_ShadowBindingSet, Renderer::GetBindlessTextures().GetTable(), m_ShadowPushBindingSet };
+		const uint32_t firstArgument = static_cast<uint32_t>(m_OpaqueBatches.size() + m_TransparentBatches.size());
+		// Each bucket draws into its cascade's layer, which the vertex shader also learns (a push constant after the state).
+		DrawBuckets(commandList, state, std::span<const SceneDrawBatch>(m_ShadowBatches.data(), count), firstArgument,
+			[](const SceneDrawBatch& batch) { return PipelineKey { batch.AlphaMask ? Pass::ShadowMasked : Pass::Shadow, batch.DoubleSided, batch.Mirrored, batch.Skinned }; },
+			[this](const SceneDrawBatch& batch, nvrhi::GraphicsState& bucketState) { bucketState.framebuffer = m_ShadowFramebuffers[batch.Cascade]; },
+			[commandList](const SceneDrawBatch& batch)
+			{
+				const uint32_t cascade = batch.Cascade;
+				commandList->setPushConstants(&cascade, sizeof(cascade));
+			});
 	}
 
-	bool SceneRenderer::EnsureBufferCapacity(nvrhi::BufferHandle& buffer, size_t elementCount, size_t elementSize, const char* name, bool& outRecreated, bool vertexBuffer)
+	bool SceneRenderer::EnsureBufferCapacity(nvrhi::BufferHandle& buffer, size_t elementCount, size_t elementSize, const char* name, bool& outRecreated, BufferKind kind)
 	{
 		const uint64_t required = std::max<uint64_t>(elementCount, 1) * elementSize;
 		if (buffer && buffer->getDesc().byteSize >= required)
@@ -1059,15 +1133,20 @@ namespace Strata
 		nvrhi::BufferDesc desc;
 		desc.byteSize = capacity;
 		desc.debugName = m_Specification.DebugName + "." + name;
-		if (vertexBuffer)
+		switch (kind)
 		{
-			desc.isVertexBuffer = true;
-			desc.initialState = nvrhi::ResourceStates::VertexBuffer;
-		}
-		else
-		{
-			desc.structStride = static_cast<uint32_t>(elementSize);
-			desc.initialState = nvrhi::ResourceStates::ShaderResource;
+			case BufferKind::Vertex:
+				desc.isVertexBuffer = true;
+				desc.initialState = nvrhi::ResourceStates::VertexBuffer;
+				break;
+			case BufferKind::IndirectArguments:
+				desc.isDrawIndirectArgs = true;
+				desc.initialState = nvrhi::ResourceStates::IndirectArgument;
+				break;
+			case BufferKind::Structured:
+				desc.structStride = static_cast<uint32_t>(elementSize);
+				desc.initialState = nvrhi::ResourceStates::ShaderResource;
+				break;
 		}
 		desc.keepInitialState = true;
 		nvrhi::BufferHandle created = m_Device->createBuffer(desc);
@@ -1571,36 +1650,16 @@ namespace Strata
 		state.framebuffer = pass == Pass::Prepass ? m_PrepassFramebuffer.Get() : m_ForwardFramebuffer.Get();
 		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y)));
 		state.bindings = { m_SceneBindingSet, Renderer::GetBindlessTextures().GetTable() };
-
+		const uint32_t firstArgument = transparent ? static_cast<uint32_t>(m_OpaqueBatches.size()) : 0u;
+		DrawBuckets(commandList, state, batches, firstArgument,
+			[pass](const SceneDrawBatch& batch) { return PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned }; }, nullptr, nullptr);
+		if (pass == Pass::Prepass)
+			return;
 		for (const SceneDrawBatch& batch : batches)
 		{
-			const Mesh* mesh = m_FrameMeshes[batch.MeshSlot];
-			const Submesh& submesh = mesh->GetSubmeshes()[batch.SubmeshIndex];
-			const MeshLOD& lod = submesh.LODs[batch.LOD];
-			state.pipeline = GetScenePipeline(PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned });
-			state.vertexBuffers = {
-				nvrhi::VertexBufferBinding { mesh->GetPositionBuffer(), 0, 0 },
-				nvrhi::VertexBufferBinding { mesh->GetAttributeBuffer(), 1, 0 }
-			};
-			if (batch.Skinned)
-				state.vertexBuffers.push_back(nvrhi::VertexBufferBinding { mesh->GetSkinBuffer(), 2, 0 });
-			state.indexBuffer = nvrhi::IndexBufferBinding { mesh->GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
-			commandList->setGraphicsState(state);
-
-			nvrhi::DrawArguments arguments;
-			arguments.vertexCount = lod.IndexCount;
-			arguments.instanceCount = batch.InstanceCount;
-			arguments.startIndexLocation = lod.IndexOffset;
-			arguments.startVertexLocation = submesh.BaseVertex;
-			arguments.startInstanceLocation = batch.FirstInstance;
-			commandList->drawIndexed(arguments);
-			m_Stats.DrawCommands++;
-
-			if (pass != Pass::Prepass)
-			{
-				m_Stats.DrawCalls++;
-				m_Stats.Triangles += static_cast<uint64_t>(lod.IndexCount / 3) * batch.InstanceCount;
-			}
+			const MeshLOD& lod = m_FrameMeshes[batch.MeshSlot]->GetSubmeshes()[batch.SubmeshIndex].LODs[batch.LOD];
+			m_Stats.DrawCalls++;
+			m_Stats.Triangles += static_cast<uint64_t>(lod.IndexCount / 3) * batch.InstanceCount;
 		}
 	}
 
@@ -1775,6 +1834,7 @@ namespace Strata
 		ResolveAssets(renderScene);
 		GatherDraws(renderScene, camera);
 		GatherShadowDraws(renderScene, camera, frame);
+		BuildDrawArguments();
 		ReportVisibleAnimators(scene);
 		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
 		bool degraded = false; // Rendered with a reported limitation: keep the error so it is not logged every frame
@@ -1798,7 +1858,9 @@ namespace Strata
 			&& EnsureBufferCapacity(m_DrawListBuffer, m_DrawInstancesBuild.size(), sizeof(uint32_t), "DrawList", drawListsRecreated)
 			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, m_ShadowDrawInstancesBuild.size(), sizeof(uint32_t), "ShadowDrawList", drawListsRecreated)
 			&& EnsureBufferCapacity(m_LightBuffer, m_Lights.size(), sizeof(RenderData::LightData), "Lights", buffersRecreated)
-			&& EnsureBufferCapacity(m_LightBoundsBuffer, m_LightBounds.size(), sizeof(RenderData::LightBounds), "LightBounds", buffersRecreated);
+			&& EnsureBufferCapacity(m_LightBoundsBuffer, m_LightBounds.size(), sizeof(RenderData::LightBounds), "LightBounds", buffersRecreated)
+			&& EnsureBufferCapacity(m_DrawArgumentBuffer, m_DrawArgumentsBuild.size(), sizeof(nvrhi::DrawIndexedIndirectArguments), "DrawArguments", drawListsRecreated,
+				BufferKind::IndirectArguments);
 		buffersRecreated = buffersRecreated || instancesRecreated || materialsRecreated || drawListsRecreated || jointsRecreated;
 		if (!buffersReady)
 		{
@@ -2067,7 +2129,7 @@ namespace Strata
 		bool recreated = false;
 		const bool buffersCreated = EnsureBufferCapacity(m_SelectionBuffer, 64, sizeof(uint32_t), "Selection", recreated)
 			&& EnsureBufferCapacity(m_TintBuffer, 64, sizeof(glm::uvec2), "EntityTints", recreated)
-			&& EnsureBufferCapacity(m_DebugLineBuffer, 1024, sizeof(DebugLineVertex), "DebugLines", recreated, true);
+			&& EnsureBufferCapacity(m_DebugLineBuffer, 1024, sizeof(DebugLineVertex), "DebugLines", recreated, BufferKind::Vertex);
 		ST_CORE_VERIFY(buffersCreated && m_GridBindingLayout && m_GridBindingSet && m_OutlineBindingLayout && m_StatusTintBindingLayout && m_DebugLineBindingLayout
 			&& m_DebugLineBindingSet && m_DebugLineInputLayout, "SceneRenderer: failed to create overlay resources");
 	}
@@ -2225,7 +2287,7 @@ namespace Strata
 			const std::span<const DebugLineVertex> tested = options.DebugShapes->GetLines(DebugDrawDepth::Tested);
 			const std::span<const DebugLineVertex> onTop = options.DebugShapes->GetLines(DebugDrawDepth::OnTop);
 			bool recreated = false;
-			if (!EnsureBufferCapacity(m_DebugLineBuffer, tested.size() + onTop.size(), sizeof(DebugLineVertex), "DebugLines", recreated, true))
+			if (!EnsureBufferCapacity(m_DebugLineBuffer, tested.size() + onTop.size(), sizeof(DebugLineVertex), "DebugLines", recreated, BufferKind::Vertex))
 				return false;
 			if (!tested.empty())
 				commandList->writeBuffer(m_DebugLineBuffer, tested.data(), tested.size_bytes(), 0);

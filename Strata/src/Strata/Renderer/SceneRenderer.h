@@ -7,6 +7,7 @@
 #include "Strata/Math/Frustum.h"
 #include "Strata/Renderer/AssetResolveCache.h"
 #include "Strata/Renderer/DebugDraw.h"
+#include "Strata/Renderer/GeometryPool.h"
 #include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Renderer/TextureReadback.h"
@@ -18,6 +19,7 @@
 
 #include <array>
 #include <chrono>
+#include <functional>
 #include <optional>
 #include <span>
 #include <string>
@@ -57,6 +59,14 @@ namespace Strata
 		static SceneCamera FromEntity(const Scene& scene, Entity entity, float aspectRatio);
 	};
 
+	// How a renderer issues its draws (SceneRendererSpecification::IndirectMode).
+	enum class IndirectDrawMode : uint8_t
+	{
+		Auto = 0, // What the device allows
+		NoCount,  // Indirect draws without a draw count the GPU writes
+		PerDraw   // A draw call per batch
+	};
+
 	struct SceneRendererSpecification
 	{
 		std::string DebugName = "SceneRenderer";
@@ -71,6 +81,10 @@ namespace Strata
 		// reach it. A 1x1x1 grid shades every pixel with every visible light.
 		glm::uvec3 LightClusterGrid = { 16, 9, 24 };
 		uint32_t MaxLightsPerCluster = 256;
+		// How batches are drawn: Auto draws each bucket of batches (one pipeline state and vertex arena) with one indirect call
+		// where the device has multiDrawIndirect and drawIndirectFirstInstance, else with a direct draw per batch; PerDraw always
+		// draws per batch (tests compare the paths). NoCount is the GPU-driven path's: draws without a GPU-written count.
+		IndirectDrawMode IndirectMode = IndirectDrawMode::Auto;
 		uint32_t ShadowMapSize = 2048; // Resolution of each directional shadow cascade
 		uint32_t ShadowCascades = 4;   // 1-4
 		// The depth prepass writes the entity-ID buffer (a 32-bit render target of the viewport's size): picking (GetEntityAt,
@@ -561,7 +575,14 @@ namespace Strata
 			nvrhi::IBindingLayout* layout, const nvrhi::FramebufferInfo& framebufferInfo);
 		// Grows a structured (or vertex) buffer to hold elementCount elements (the replaced buffer is released once the GPU
 		// is done with it); false when the allocation failed.
-		bool EnsureBufferCapacity(nvrhi::BufferHandle& buffer, size_t elementCount, size_t elementSize, const char* name, bool& outRecreated, bool vertexBuffer = false);
+		enum class BufferKind : uint8_t
+		{
+			Structured = 0,
+			Vertex,
+			IndirectArguments
+		};
+		bool EnsureBufferCapacity(nvrhi::BufferHandle& buffer, size_t elementCount, size_t elementSize, const char* name, bool& outRecreated,
+			BufferKind kind = BufferKind::Structured);
 
 		// The directional light (the preview sun with `preview`), ambient light and the visible point and spot lights.
 		void CollectLights(Scene& scene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame);
@@ -615,12 +636,26 @@ namespace Strata
 		void ReportVisibleAnimators(Scene& scene);
 		// Uploads the range of a draw list that differs from the list the buffer holds (`uploaded`), which then holds the new one.
 		uint64_t UploadDrawList(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, std::vector<uint32_t>& list, std::vector<uint32_t>& uploaded, bool full);
+		// The same for any list of plain records (compared bytewise).
+		template<typename T>
+		uint64_t UploadChangedRange(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, std::vector<T>& list, std::vector<T>& uploaded, bool full);
 
 		bool EnsureShadowMap();
 		uint32_t SelectLOD(const Submesh& submesh, float screenFraction) const;
 		static float GetScreenFraction(const SceneCamera& camera, const glm::vec3& center, float radius);
 		void DrawBatches(nvrhi::ICommandList* commandList, Pass pass, bool transparent);
 		void DrawShadows(nvrhi::ICommandList* commandList, uint32_t cascadeCount);
+		// Whether batches are drawn by one indirect call per bucket (SceneRendererSpecification::IndirectMode and the device).
+		bool UsesIndirectDraws() const;
+		// The indirect arguments of the frame's batches (m_DrawArgumentsBuild): opaque, transparent, then shadow batches.
+		void BuildDrawArguments();
+		// Draws batches in buckets: runs of batches with one pipeline state, vertex arena and cascade share one state (the
+		// geometry pool's buffers) and one indirect call (or a direct draw per batch). `firstArgument` is the first batch's
+		// entry in the argument buffer. `prepareState` completes a bucket's state (its framebuffer), `afterState` follows it
+		// (push constants).
+		void DrawBuckets(nvrhi::ICommandList* commandList, nvrhi::GraphicsState& state, std::span<const SceneDrawBatch> batches, uint32_t firstArgument,
+			const std::function<PipelineKey(const SceneDrawBatch&)>& getKey, const std::function<void(const SceneDrawBatch&, nvrhi::GraphicsState&)>& prepareState,
+			const std::function<void(const SceneDrawBatch&)>& afterState);
 		void BuildLightClusters(nvrhi::ICommandList* commandList);
 		void CreateOverlayResources();
 		static bool HasOverlays(const SceneRenderOptions& options);
@@ -825,7 +860,8 @@ namespace Strata
 		std::vector<ShadowCaster> m_ShadowCasters;
 		std::vector<uint32_t> m_MeshUsage;          // Per mesh slot: how the frame uses it (usage bits)
 		std::vector<uint32_t> m_UsedMeshSlots;
-		std::vector<const Mesh*> m_FrameMeshes;     // Per mesh slot: the loaded mesh with GPU buffers, while the frame holds it
+		std::vector<const Mesh*> m_FrameMeshes;     // Per mesh slot: the loaded mesh uploaded to the geometry pool, while the frame holds it
+		std::vector<GeometryAllocation> m_FrameGeometry; // Per mesh slot: where m_FrameMeshes' geometry is this frame
 		std::vector<uint32_t> m_MaterialUsage;      // Per material slot
 		std::vector<uint32_t> m_UsedMaterialSlots;
 		std::vector<uint32_t> m_MaterialFlags;      // Per material slot: how the frame draws it (material flags)
@@ -854,6 +890,9 @@ namespace Strata
 		std::vector<uint32_t> m_DrawInstancesBuild;     // The draw list being built
 		std::vector<uint32_t> m_ShadowDrawInstances;
 		std::vector<uint32_t> m_ShadowDrawInstancesBuild;
+		nvrhi::BufferHandle m_DrawArgumentBuffer;      // The batches' indirect arguments (BuildDrawArguments), uploaded where they changed
+		std::vector<nvrhi::DrawIndexedIndirectArguments> m_DrawArguments;      // What the buffer holds
+		std::vector<nvrhi::DrawIndexedIndirectArguments> m_DrawArgumentsBuild; // This frame's
 	};
 
 }

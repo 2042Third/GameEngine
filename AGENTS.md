@@ -392,6 +392,8 @@ lights, overlays and text: [Rendering](Docs/DeveloperGuide.md#rendering).
 - Read GPU data back with `TextureReadback`, polled per frame; `Renderer::ReadTexture` blocks (tests and tools only).
 - Wrap every new pass in a GPU stage (`GPUPassTimer`) and register stages when the module registers
   ([GPU timing](Docs/DeveloperGuide.md#gpu-timing)).
+- Read mesh geometry only through the geometry pool, every frame (`Mesh::GetGeometry`: compaction moves it)
+  ([Batching](Docs/DeveloperGuide.md#batching)).
 
 ## Automation (editor RPC + MCP)
 

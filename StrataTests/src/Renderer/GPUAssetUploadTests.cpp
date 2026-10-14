@@ -111,30 +111,6 @@ namespace
 		return blocks;
 	}
 
-	// Copies a GPU buffer into CPU memory.
-	std::vector<uint8_t> ReadBuffer(GPUContext& gpu, nvrhi::IBuffer* buffer, size_t size)
-	{
-		nvrhi::BufferDesc desc;
-		desc.byteSize = size;
-		desc.cpuAccess = nvrhi::CpuAccessMode::Read;
-		desc.initialState = nvrhi::ResourceStates::CopyDest;
-		desc.keepInitialState = true;
-		desc.debugName = "ReadbackBuffer";
-		nvrhi::BufferHandle readback = gpu.GetNvrhiDevice()->createBuffer(desc);
-		REQUIRE(readback);
-		nvrhi::CommandListHandle commandList = gpu.GetNvrhiDevice()->createCommandList();
-		commandList->open();
-		commandList->copyBuffer(readback, 0, buffer, 0, size);
-		commandList->close();
-		REQUIRE(gpu.ExecuteAndWait(commandList));
-		const void* mapped = gpu.GetNvrhiDevice()->mapBuffer(readback, nvrhi::CpuAccessMode::Read);
-		REQUIRE(mapped);
-		std::vector<uint8_t> bytes(size);
-		std::memcpy(bytes.data(), mapped, size);
-		gpu.GetNvrhiDevice()->unmapBuffer(readback);
-		return bytes;
-	}
-
 }
 
 TEST_SUITE("GPU.Assets.Uploads")
@@ -804,7 +780,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(texture->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
 		CHECK(texture->GetGPUTexture() == nullptr);
 		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Pending);
-		CHECK(mesh->GetIndexBuffer() == nullptr);
+		CHECK(mesh->GetGeometryHandle() == c_InvalidGeometry);
 		CHECK(uploaded == 0);
 		// The frame's first finalization takes its first step whatever the time: one step of the smallest size.
 		context.FirstOfFrame = true;
@@ -815,7 +791,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		uint64_t meshUploaded = 0;
 		context.UploadedBytes = &meshUploaded;
 		CHECK(mesh->FinalizeOnMainThread(context) == AssetFinalizeResult::Done);
-		CHECK(mesh->GetIndexBuffer() != nullptr);
+		CHECK(mesh->GetGeometry() != nullptr);
 		CHECK(meshUploaded > 0);
 		upload.Submit();
 		gpu.GetDevice().WaitForIdle();
@@ -852,7 +828,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		const uint64_t positionBytes = c_Vertices * sizeof(glm::vec3);
 		const uint64_t attributeBytes = c_Vertices * sizeof(MeshVertexAttributes);
 		const uint64_t indexBytes = c_Vertices * sizeof(uint32_t);
-		CHECK(mesh->GetFinalizedMemoryUsage().GpuBuffers == positionBytes + attributeBytes + indexBytes);
+		CHECK(mesh->GetFinalizedMemoryUsage().GpuBuffers == GeometryPool::GetAllocationBytes(GeometryArena::Static, c_Vertices, c_Vertices));
 
 		constexpr uint64_t c_Budget = 2ull << 20;
 		uint64_t uploaded = 0;
@@ -869,14 +845,17 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(result == AssetFinalizeResult::Done);
 		CHECK(calls == 4);
 		CHECK(total == positionBytes + attributeBytes + indexBytes);
-		CHECK(mesh->GetMemoryUsage().GpuBuffers == positionBytes + attributeBytes + indexBytes);
+		CHECK(mesh->GetMemoryUsage().GpuBuffers == GeometryPool::GetAllocationBytes(GeometryArena::Static, static_cast<uint32_t>(positions.size()),
+			static_cast<uint32_t>(indices.size())));
 
-		const std::vector<uint8_t> gpuPositions = ReadBuffer(gpu, mesh->GetPositionBuffer(), positionBytes);
-		CHECK(std::memcmp(gpuPositions.data(), positions.data(), positionBytes) == 0);
-		const std::vector<uint8_t> gpuAttributes = ReadBuffer(gpu, mesh->GetAttributeBuffer(), attributeBytes);
-		CHECK(std::memcmp(gpuAttributes.data(), attributes.data(), attributeBytes) == 0);
-		const std::vector<uint8_t> gpuIndices = ReadBuffer(gpu, mesh->GetIndexBuffer(), indexBytes);
-		CHECK(std::memcmp(gpuIndices.data(), indices.data(), indexBytes) == 0);
+		const std::optional<MeshGeometryBytes> gpuGeometry = ReadMeshGeometry(gpu, *mesh);
+		REQUIRE(gpuGeometry);
+		REQUIRE(gpuGeometry->Positions.size() == positionBytes);
+		CHECK(std::memcmp(gpuGeometry->Positions.data(), positions.data(), positionBytes) == 0);
+		REQUIRE(gpuGeometry->Attributes.size() == attributeBytes);
+		CHECK(std::memcmp(gpuGeometry->Attributes.data(), attributes.data(), attributeBytes) == 0);
+		REQUIRE(gpuGeometry->Indices.size() == indexBytes);
+		CHECK(std::memcmp(gpuGeometry->Indices.data(), indices.data(), indexBytes) == 0);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -917,7 +896,9 @@ TEST_SUITE("GPU.Assets.Uploads")
 		const uint64_t skinBytes = c_Vertices * sizeof(MeshSkinVertex);
 		const uint64_t indexBytes = c_Vertices * sizeof(uint32_t);
 		const uint64_t geometryBytes = positionBytes + attributeBytes + skinBytes + indexBytes;
-		CHECK(mesh->GetFinalizedMemoryUsage().GpuBuffers == geometryBytes);
+		// It will hold its ranges of the pool's Skinned arena (rounded to the pool's granularity).
+		const uint64_t allocationBytes = GeometryPool::GetAllocationBytes(GeometryArena::Skinned, c_Vertices, c_Vertices);
+		CHECK(mesh->GetFinalizedMemoryUsage().GpuBuffers == allocationBytes);
 
 		constexpr uint64_t c_Budget = 2ull << 20;
 		uint64_t uploaded = 0;
@@ -935,7 +916,7 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(result == AssetFinalizeResult::Done);
 		CHECK(calls == 5); // Every call but the last fills its budget
 		CHECK(total == geometryBytes);
-		CHECK(mesh->GetMemoryUsage().GpuBuffers == geometryBytes);
+		CHECK(mesh->GetMemoryUsage().GpuBuffers == allocationBytes);
 		// Every byte of the four streams, the skin stream's included, was copied by the upload queue's buffer steps (through
 		// its staging, in steps PlanStep sized), at least one step per call; nothing went around it.
 		const GPUUploadQueueStats& queueAfter = Renderer::GetUploadQueue().GetStats();
@@ -945,12 +926,15 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(queueAfter.TextureBytes == queueBefore.TextureBytes);
 
 		// Every stream arrived where it belongs; the CPU keeps what physics reads, not the skin stream or the attributes.
-		const std::vector<uint8_t> gpuSkin = ReadBuffer(gpu, mesh->GetSkinBuffer(), skinBytes);
-		CHECK(std::memcmp(gpuSkin.data(), skin.data(), skinBytes) == 0);
-		const std::vector<uint8_t> gpuAttributes = ReadBuffer(gpu, mesh->GetAttributeBuffer(), attributeBytes);
-		CHECK(std::memcmp(gpuAttributes.data(), attributes.data(), attributeBytes) == 0);
-		const std::vector<uint8_t> gpuIndices = ReadBuffer(gpu, mesh->GetIndexBuffer(), indexBytes);
-		CHECK(std::memcmp(gpuIndices.data(), indices.data(), indexBytes) == 0);
+		const std::optional<MeshGeometryBytes> gpuGeometry = ReadMeshGeometry(gpu, *mesh);
+		REQUIRE(gpuGeometry);
+		CHECK(mesh->GetGeometry()->Arena == GeometryArena::Skinned);
+		REQUIRE(gpuGeometry->Skin.size() == skinBytes);
+		CHECK(std::memcmp(gpuGeometry->Skin.data(), skin.data(), skinBytes) == 0);
+		REQUIRE(gpuGeometry->Attributes.size() == attributeBytes);
+		CHECK(std::memcmp(gpuGeometry->Attributes.data(), attributes.data(), attributeBytes) == 0);
+		REQUIRE(gpuGeometry->Indices.size() == indexBytes);
+		CHECK(std::memcmp(gpuGeometry->Indices.data(), indices.data(), indexBytes) == 0);
 		CHECK(mesh->GetSkinVertices().empty());
 		CHECK(mesh->GetAttributes().empty());
 		CHECK(mesh->GetPositions() == positions);
@@ -1008,7 +992,10 @@ TEST_SUITE("GPU.Assets.Uploads")
 		uint64_t total = 0;
 		for (const auto& [callResult, uploaded] : calls)
 			total += uploaded;
-		CHECK(total == finalized.GpuBuffers);
+		// Every stream's bytes went up; the mesh holds its ranges of the pool (rounded to the pool's granularity).
+		CHECK(total == mesh->GetPositions().size() * sizeof(glm::vec3) + attributeBytes + mesh->GetIndices().size() * sizeof(uint32_t));
+		CHECK(finalized.GpuBuffers == GeometryPool::GetAllocationBytes(GeometryArena::Static, static_cast<uint32_t>(mesh->GetPositions().size()),
+			static_cast<uint32_t>(mesh->GetIndices().size())));
 		CHECK(calls[calls.size() - 2].second > 0);
 		CHECK(calls.back().second == 0);
 
@@ -1017,8 +1004,10 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(mesh->GetPositions() == positions);
 		CHECK(mesh->GetIndices() == indices);
 		CHECK(mesh->GetMemoryUsage() == finalized);
-		const std::vector<uint8_t> gpuAttributes = ReadBuffer(gpu, mesh->GetAttributeBuffer(), attributeBytes);
-		CHECK(std::memcmp(gpuAttributes.data(), attributes.data(), attributeBytes) == 0);
+		const std::optional<MeshGeometryBytes> gpuGeometry = ReadMeshGeometry(gpu, *mesh);
+		REQUIRE(gpuGeometry);
+		REQUIRE(gpuGeometry->Attributes.size() == attributeBytes);
+		CHECK(std::memcmp(gpuGeometry->Attributes.data(), attributes.data(), attributeBytes) == 0);
 		uint64_t uploaded = 0;
 		CHECK(FinalizeOnce(gpu, *mesh, std::numeric_limits<uint64_t>::max(), uploaded) == AssetFinalizeResult::Done); // Finalized: nothing more to do
 		CHECK(uploaded == 0);
@@ -1088,12 +1077,14 @@ TEST_SUITE("GPU.Assets.Uploads")
 		CHECK(uploaded == positionBytes + attributeBytes + indexBytes);
 		for (const Ref<Mesh>& mesh : { first, second })
 		{
-			const std::vector<uint8_t> gpuPositions = ReadBuffer(gpu, mesh->GetPositionBuffer(), positionBytes);
-			CHECK(std::memcmp(gpuPositions.data(), positions.data(), positionBytes) == 0);
-			const std::vector<uint8_t> gpuAttributes = ReadBuffer(gpu, mesh->GetAttributeBuffer(), attributeBytes);
-			CHECK(std::memcmp(gpuAttributes.data(), attributes.data(), attributeBytes) == 0);
-			const std::vector<uint8_t> gpuIndices = ReadBuffer(gpu, mesh->GetIndexBuffer(), indexBytes);
-			CHECK(std::memcmp(gpuIndices.data(), indices.data(), indexBytes) == 0);
+			const std::optional<MeshGeometryBytes> gpuGeometry = ReadMeshGeometry(gpu, *mesh);
+			REQUIRE(gpuGeometry);
+			REQUIRE(gpuGeometry->Positions.size() == positionBytes);
+			CHECK(std::memcmp(gpuGeometry->Positions.data(), positions.data(), positionBytes) == 0);
+			REQUIRE(gpuGeometry->Attributes.size() == attributeBytes);
+			CHECK(std::memcmp(gpuGeometry->Attributes.data(), attributes.data(), attributeBytes) == 0);
+			REQUIRE(gpuGeometry->Indices.size() == indexBytes);
+			CHECK(std::memcmp(gpuGeometry->Indices.data(), indices.data(), indexBytes) == 0);
 		}
 		SettleDevice(gpu);
 		CHECK(pool.GetPendingBytes() == 0);

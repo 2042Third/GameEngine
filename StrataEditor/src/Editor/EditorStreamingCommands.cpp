@@ -165,7 +165,9 @@ namespace Strata
 			"levels raised and dropped (and of those dropped, the levels a budget took: its pressure, or room for detail a view needs more), bytes read for them in all and in the last frame, textures below the level their views need, and "
 			"textures reading or changing levels now). With assets: true it also lists the assets that are resident, loading, failed or "
 			"pinned, with their memory, state, last use and pins; streaming textures add residentMip (the finest mip level resident, 0 "
-			"the full resolution), wantedMip (the finest level their views need), mipCount and residentBytes (what the resident levels hold).",
+			"the full resolution), wantedMip (the finest level their views need), mipCount and residentBytes (what the resident levels hold). "
+			"geometryPool is the renderer's pool of every mesh's GPU geometry (usedMB, capacityMB, allocations, fragmentation of its free space, "
+			"moves and growths so far; null without a GPU): meshes count their ranges of it as gpuBuffers.",
 			ObjectSchema({
 				{ "assets", BoolSchema("Also list the assets (default false)") },
 				{ "limit", IntegerSchema("At most this many assets in the list (default 100)", 1, c_MaxAssetRows) },
@@ -186,6 +188,7 @@ namespace Strata
 				if (!manager)
 					return EditorCommandResult::Fail("No asset manager is active");
 				nlohmann::json result = DescribeAssetStats(manager->GetStats());
+				result["geometryPool"] = DescribeGeometryPool();
 				if (!listAssets)
 					return EditorCommandResult::Ok(std::move(result));
 
