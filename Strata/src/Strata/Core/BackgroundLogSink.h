@@ -26,8 +26,9 @@ namespace Strata
 	// them returns.
 	//
 	// Stop (also called by the destructor and, for the logs of the process, when the process exits) writes the messages
-	// logged before it and those still queued, then ends the thread; messages logged afterwards are written right away by
-	// the thread that logs them. A process that ends without its exit handlers (a crash, a second Ctrl+C) loses the info and
+	// logged before it, then ends the thread; messages logged afterwards are written by the thread that logs them, once the
+	// writer has written those before them (until then that thread waits), so Stop never waits for what other threads go
+	// on logging. A process that ends without its exit handlers (a crash, a second Ctrl+C) loses the info and
 	// trace lines still queued (warnings and errors are written before their call returns): FlushFor writes them where the
 	// platform gives the process a moment before it ends it.
 	class BackgroundLogSink final : public spdlog::sinks::sink
@@ -56,6 +57,8 @@ namespace Strata
 		// Writes what is queued and ends the writer thread (idempotent).
 		void Stop();
 		bool IsRunning() const;
+		// Stop was called: nothing is queued any more (the writer may still be writing what was logged before it).
+		bool IsStopping() const;
 	private:
 		void Run();
 		void WriteToSinks(const spdlog::details::log_msg& message);
@@ -77,7 +80,7 @@ namespace Strata
 		uint64_t m_FlushRequested = 0;  // A flush is due once this many messages are written
 		uint64_t m_Flushed = 0;         // The inner sinks were flushed after this many messages
 		uint64_t m_StopTarget = 0;      // Stop ends the thread once this many messages are written
-		bool m_Stopping = false;
+		bool m_Stopping = false;        // Stop was called: nothing more is queued
 		bool m_Running = false;         // Messages go to the queue (else the threads that log write them)
 		bool m_Finished = false;        // The writer wrote and flushed everything queued and ended
 		std::thread::id m_WriterId;     // The writer thread's (guarded by m_Mutex)

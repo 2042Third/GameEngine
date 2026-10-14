@@ -22,6 +22,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
@@ -116,6 +117,59 @@ namespace
 	private:
 		const std::chrono::microseconds m_WriteTime;
 		mutable std::mutex m_RecordMutex;
+		std::vector<std::string> m_Written;
+	};
+
+	// A sink that holds the thread writing one given message until it is released.
+	class HoldingSink final : public spdlog::sinks::base_sink<std::mutex>
+	{
+	public:
+		explicit HoldingSink(std::string held)
+			: m_Held(std::move(held))
+		{
+		}
+
+		void Release()
+		{
+			{
+				std::scoped_lock<std::mutex> lock(m_HoldMutex);
+				m_Released = true;
+			}
+			m_Hold.notify_all();
+		}
+
+		bool IsHolding() const
+		{
+			std::scoped_lock<std::mutex> lock(m_HoldMutex);
+			return m_Holding;
+		}
+
+		std::vector<std::string> GetWritten() const
+		{
+			std::scoped_lock<std::mutex> lock(m_HoldMutex);
+			return m_Written;
+		}
+	protected:
+		void sink_it_(const spdlog::details::log_msg& message) override
+		{
+			std::string text(message.payload.data(), message.payload.size());
+			std::unique_lock<std::mutex> lock(m_HoldMutex);
+			if (text == m_Held)
+			{
+				m_Holding = true;
+				m_Hold.wait(lock, [this]() { return m_Released; });
+				m_Holding = false;
+			}
+			m_Written.push_back(std::move(text));
+		}
+
+		void flush_() override {}
+	private:
+		const std::string m_Held;
+		mutable std::mutex m_HoldMutex;
+		std::condition_variable m_Hold;
+		bool m_Holding = false;
+		bool m_Released = false;
 		std::vector<std::string> m_Written;
 	};
 
@@ -225,6 +279,30 @@ TEST_SUITE("Core.Log")
 		written = inner->GetWritten();
 		REQUIRE(written.size() == 3);
 		CHECK(written[2] == "error");
+	}
+
+	TEST_CASE("Nothing is queued after Stop: a message logged meanwhile is written by its thread, after those before Stop")
+	{
+		// The writer is held writing "early" while Stop is called. Had "late" been queued, Stop would have waited for it too
+		// (and for whatever else other threads logged before the writer got to the end of the queue).
+		const auto inner = std::make_shared<HoldingSink>("early");
+		const auto sink = std::make_shared<BackgroundLogSink>(std::vector<spdlog::sink_ptr> { inner });
+		spdlog::logger logger = MakeLogger(sink);
+		logger.info("early");
+		REQUIRE(Tests::WaitUntil([&inner]() { return inner->IsHolding(); }, c_Timeout));
+
+		std::future<void> stopped = std::async(std::launch::async, [&sink]() { sink->Stop(); });
+		REQUIRE(Tests::WaitUntil([&sink]() { return sink->IsStopping(); }, c_Timeout));
+		std::future<void> late = std::async(std::launch::async, [&logger]() { logger.info("late"); });
+		// Its thread waits for the writer to write what was logged before Stop (a queued message would return at once).
+		CHECK(late.wait_for(std::chrono::milliseconds(100)) == std::future_status::timeout);
+		CHECK(stopped.wait_for(std::chrono::milliseconds(0)) == std::future_status::timeout);
+
+		inner->Release();
+		REQUIRE(stopped.wait_for(c_Timeout) == std::future_status::ready);
+		REQUIRE(late.wait_for(c_Timeout) == std::future_status::ready);
+		CHECK_FALSE(sink->IsRunning());
+		CHECK(inner->GetWritten() == std::vector<std::string> { "early", "late" });
 	}
 
 	TEST_CASE("A warning and Stop wait for what was logged before them, not for what another thread keeps logging")

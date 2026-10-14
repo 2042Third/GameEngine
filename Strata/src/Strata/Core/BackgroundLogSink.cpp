@@ -39,7 +39,11 @@ namespace Strata
 			std::unique_lock<std::mutex> lock(m_Mutex);
 			if (m_Running && std::this_thread::get_id() != m_WriterId)
 			{
-				m_ProgressMade.wait(lock, [this]() { return m_Queue.size() < c_MaxQueuedMessages || !m_Running; });
+				m_ProgressMade.wait(lock, [this]() { return m_Queue.size() < c_MaxQueuedMessages || m_Stopping || !m_Running; });
+				// Once Stop was called nothing is queued: what it waits for stays what was logged before it, however fast other
+				// threads log. This message is written by this thread once the writer has written those before it.
+				if (m_Stopping)
+					m_ProgressMade.wait(lock, [this]() { return !m_Running; });
 				if (m_Running)
 				{
 					m_Queue.emplace_back(message);
@@ -115,6 +119,7 @@ namespace Strata
 			}
 		}
 		m_WriterWake.notify_one();
+		m_ProgressMade.notify_all(); // Threads waiting for room no longer queue
 		m_Thread.join();
 	}
 
@@ -122,6 +127,12 @@ namespace Strata
 	{
 		std::scoped_lock<std::mutex> lock(m_Mutex);
 		return m_Running;
+	}
+
+	bool BackgroundLogSink::IsStopping() const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		return m_Stopping;
 	}
 
 	void BackgroundLogSink::Run()
@@ -145,9 +156,10 @@ namespace Strata
 				continue;
 			}
 
-			// Stopping, and what was logged before Stop is written: what was queued since is written here, holding the write
-			// lock before the threads that log can take it, so that the messages they write themselves from now on come after.
-			// The write lock is taken under m_Mutex only here; log and flush take it with m_Mutex released.
+			// Stopping, and what was logged before Stop is written: nothing is queued after Stop, so whatever is left is written
+			// here (nothing, normally), holding the write lock before the threads that log can take it, so that the messages
+			// they write themselves from now on come after. The write lock is taken under m_Mutex only here; log and flush take
+			// it with m_Mutex released.
 			if (m_Stopping && m_Written >= m_StopTarget)
 			{
 				std::unique_lock<std::recursive_mutex> writeLock(m_WriteMutex);
