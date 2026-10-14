@@ -1031,7 +1031,7 @@ namespace
 
 TEST_SUITE("Scene.Documents")
 {
-	TEST_CASE("Documents in the writer's layout read in parallel to the scene a stream read makes, with the same reports")
+	TEST_CASE("Documents read in parallel to the scene a stream read makes, with the same reports, in the writer's layout and others")
 	{
 		ScopedJobSystem jobs(4, 1);
 		const Ref<Scene> feature = LoadFeatureScene();
@@ -1047,13 +1047,18 @@ TEST_SUITE("Scene.Documents")
 			crlf += character == '\n' ? std::string("\r\n") : std::string(1, character);
 		CheckSameParallelRead(crlf, 4);
 		CheckSameParallelRead(MakeEntityListText(5000, true), 256);
+		// Other layouts, found by their structure: compact and indented, the header after the entities.
+		const nlohmann::json document = SceneSerializer::Serialize(*feature);
+		CheckSameParallelRead(JsonUtils::Dump(document), 2);
+		CheckSameParallelRead(JsonUtils::Dump(document, 1, '\t'), 5);
+		CheckSameParallelRead(JsonUtils::Dump(MakeProblemScene(), 2), 3);
 
 		// Large documents take the parallel path by default; small ones are read as a stream.
 		CHECK(ReadStreamed(MakeEntityListText(SceneReadOptions().ParallelMinEntities, true)).Result.Parallel);
 		CHECK_FALSE(ReadStreamed(written).Result.Parallel);
 	}
 
-	TEST_CASE("A parallel read fails as the stream read does, falls back to it for lines that do not parse alone, and is refused or cancelled by the chunk")
+	TEST_CASE("A parallel read fails as the stream read does, falls back to it for documents it cannot split, and is refused or cancelled by the chunk")
 	{
 		ScopedJobSystem jobs(4, 1);
 		// Invalid entities in a later chunk: the stream read's errors.
@@ -1074,13 +1079,20 @@ TEST_SUITE("Scene.Documents")
 			CHECK(parallel.Result.EntityError);
 		}
 
-		// Two entities on one line: valid JSON, read as a stream.
+		// Two entities on one line: not the writer's layout, found by the document's structure.
 		std::string shared = MakeEntityListText(40, false);
 		const size_t lineEnd = shared.find(",\n{", shared.find("\"Entities\":[\n") + 14);
 		REQUIRE(lineEnd != std::string::npos);
 		shared.replace(lineEnd, 2, ",");
-		const SceneRead fallback = ReadStreamed(shared, ParallelOptions(8));
-		REQUIRE(fallback.Success);
+		const SceneRead structured = ReadStreamed(shared, ParallelOptions(8));
+		REQUIRE(structured.Success);
+		CHECK(structured.Result.Parallel);
+		CHECK(structured.Loaded->GetEntityCount() == 40);
+		// An entity list the structure scan does not know (its key written with an escape): valid JSON, read as a stream.
+		std::string escaped = MakeEntityListText(40, false);
+		escaped.replace(escaped.find("\"Entities\""), 10, "\"Entit\\u0069es\"");
+		const SceneRead fallback = ReadStreamed(escaped, ParallelOptions(8));
+		REQUIRE_MESSAGE(fallback.Success, fallback.Error);
 		CHECK_FALSE(fallback.Result.Parallel);
 		CHECK(fallback.Loaded->GetEntityCount() == 40);
 		// Not even valid JSON: the stream read's error.

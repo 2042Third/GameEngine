@@ -492,14 +492,13 @@ namespace Strata
 			std::string m_Error;
 		};
 
-		// The entity lines of a document in the writer's layout (SceneDocumentWriter): its first line holds the header and the
-		// content's fields up to the entity list's opening bracket, each entity follows on a line of its own (each but the last
-		// with a comma), and the last line closes the list and the document. A line may end with a carriage return as well (a
-		// file checked out with Windows line ends).
-		struct EntityLines
+		// Where a document's entities are: the text of each value of the content object's entity list, and the document without
+		// them (its skeleton: the text before the list's values, an empty list, and the text after it), which holds the header
+		// and the content's fields.
+		struct EntitySpans
 		{
-			std::string_view Head;               // The first line
-			std::vector<std::string_view> Lines; // Each entity's object, without its comma
+			std::string Skeleton;
+			std::vector<std::string_view> Entities;
 		};
 
 		std::string_view TrimLineEnd(std::string_view line)
@@ -509,15 +508,19 @@ namespace Strata
 			return line;
 		}
 
-		std::optional<EntityLines> FindEntityLines(std::string_view text)
+		// The writer's layout (SceneDocumentWriter), found by its lines: the first line holds the header and the content's
+		// fields up to the entity list's opening bracket, each entity follows on a line of its own (each but the last with a
+		// comma), and the last line closes the list and the document. A line may end with a carriage return as well (a file
+		// checked out with Windows line ends).
+		std::optional<EntitySpans> FindEntityLines(std::string_view text)
 		{
 			const size_t headEnd = text.find('\n');
 			if (headEnd == std::string_view::npos)
 				return std::nullopt;
-			EntityLines lines;
-			lines.Head = TrimLineEnd(text.substr(0, headEnd));
-			if (!lines.Head.starts_with('{') || !lines.Head.ends_with("\"Entities\":["))
+			const std::string_view head = TrimLineEnd(text.substr(0, headEnd));
+			if (!head.starts_with('{') || !head.ends_with("\"Entities\":["))
 				return std::nullopt;
+			EntitySpans spans;
 			size_t start = headEnd + 1;
 			while (start < text.size())
 			{
@@ -528,10 +531,10 @@ namespace Strata
 					// Nothing but the line's end may follow.
 					if (end != std::string_view::npos && end + 1 != text.size())
 						return std::nullopt;
-					for (size_t index = 0; index < lines.Lines.size(); index++)
+					for (size_t index = 0; index < spans.Entities.size(); index++)
 					{
-						std::string_view& entity = lines.Lines[index];
-						const bool last = index + 1 == lines.Lines.size();
+						std::string_view& entity = spans.Entities[index];
+						const bool last = index + 1 == spans.Entities.size();
 						if (last == entity.ends_with(','))
 							return std::nullopt;
 						if (!last)
@@ -539,33 +542,207 @@ namespace Strata
 						if (!entity.starts_with('{') || !entity.ends_with('}'))
 							return std::nullopt;
 					}
-					return lines;
+					spans.Skeleton = std::string(head) + "]}}";
+					return spans;
 				}
 				if (end == std::string_view::npos)
 					return std::nullopt;
-				lines.Lines.push_back(line);
+				spans.Entities.push_back(line);
 				start = end + 1;
 			}
 			return std::nullopt;
 		}
 
-		// Whether the head and every entity line parse alone, checked on the job system's threads before anything is handed to
-		// the sink: a document whose entities span lines or share one is read as a stream instead.
-		bool LinesParseAlone(const EntityLines& lines, uint32_t chunkEntities, JobPriority priority)
+		// A scan of a document's structure that finds the entity list of its content object (`contentKey`) in any layout
+		// (compact, indented, keys in any order), without building values: strings, numbers and literals are skipped, objects
+		// and arrays matched by their brackets. It does not validate the values it skips: each entity and the skeleton are
+		// parsed alone before they are used (SpansParseAlone), which, together with the separators the scan checks, makes the
+		// document valid JSON. nullopt when the structure is not that of a document of entities.
+		class StructureScanner
 		{
-			const std::string head = std::string(lines.Head) + "]}}";
-			if (!nlohmann::json::accept(head.begin(), head.end()))
+		public:
+			explicit StructureScanner(std::string_view text)
+				: m_Text(text)
+			{
+			}
+
+			std::optional<EntitySpans> Find(std::string_view contentKey)
+			{
+				SkipSpace();
+				if (!Take('{'))
+					return std::nullopt;
+				size_t listStart = std::string_view::npos;
+				size_t listEnd = std::string_view::npos;
+				EntitySpans spans;
+				if (!ReadMembers([&](std::string_view key)
+				{
+					if (key != contentKey || Peek() != '{')
+						return SkipValue();
+					m_Position++;
+					return ReadMembers([&](std::string_view field)
+					{
+						if (field != "Entities" || Peek() != '[' || listStart != std::string_view::npos)
+							return SkipValue();
+						listStart = ++m_Position;
+						SkipSpace();
+						if (Take(']'))
+						{
+							listEnd = m_Position - 1;
+							return true;
+						}
+						while (true)
+						{
+							const size_t entityStart = m_Position;
+							if (!SkipValue())
+								return false;
+							spans.Entities.push_back(m_Text.substr(entityStart, m_Position - entityStart));
+							SkipSpace();
+							if (Take(','))
+							{
+								SkipSpace();
+								continue;
+							}
+							if (Peek() != ']')
+								return false;
+							listEnd = m_Position++;
+							return true;
+						}
+					});
+				}))
+					return std::nullopt;
+				SkipSpace();
+				if (m_Position != m_Text.size() || listStart == std::string_view::npos)
+					return std::nullopt;
+				spans.Skeleton.reserve(listStart + (m_Text.size() - listEnd));
+				spans.Skeleton.append(m_Text.substr(0, listStart));
+				spans.Skeleton.append(m_Text.substr(listEnd));
+				return spans;
+			}
+		private:
+			char Peek() const { return m_Position < m_Text.size() ? m_Text[m_Position] : '\0'; }
+
+			bool Take(char character)
+			{
+				if (Peek() != character)
+					return false;
+				m_Position++;
+				return true;
+			}
+
+			void SkipSpace()
+			{
+				while (m_Position < m_Text.size() && (m_Text[m_Position] == ' ' || m_Text[m_Position] == '\t' || m_Text[m_Position] == '\n' || m_Text[m_Position] == '\r'))
+					m_Position++;
+			}
+
+			// The members of the object whose '{' was taken: `member(key)` reads each value; the closing '}' is taken.
+			template<typename Member>
+			bool ReadMembers(Member&& member)
+			{
+				SkipSpace();
+				if (Take('}'))
+					return true;
+				while (true)
+				{
+					SkipSpace();
+					const size_t keyStart = m_Position + 1;
+					if (Peek() != '"' || !SkipString())
+						return false;
+					const std::string_view key = m_Text.substr(keyStart, m_Position - 1 - keyStart);
+					SkipSpace();
+					if (!Take(':'))
+						return false;
+					SkipSpace();
+					if (!member(key))
+						return false;
+					SkipSpace();
+					if (Take(','))
+						continue;
+					return Take('}');
+				}
+			}
+
+			// The string at the position (its quote): past its closing quote.
+			bool SkipString()
+			{
+				size_t position = m_Position + 1;
+				while (true)
+				{
+					const size_t quote = m_Text.find('"', position);
+					if (quote == std::string_view::npos)
+						return false;
+					size_t backslashes = 0;
+					while (quote - backslashes > m_Position + 1 && m_Text[quote - backslashes - 1] == '\\')
+						backslashes++;
+					position = quote + 1;
+					if (backslashes % 2 == 0)
+						break;
+				}
+				m_Position = position;
+				return true;
+			}
+
+			bool SkipValue()
+			{
+				const char first = Peek();
+				if (first == '"')
+					return SkipString();
+				if (first != '{' && first != '[')
+				{
+					// A number or a literal: up to the next separator.
+					const size_t start = m_Position;
+					while (m_Position < m_Text.size() && std::string_view(",}] \t\r\n").find(m_Text[m_Position]) == std::string_view::npos)
+						m_Position++;
+					return m_Position > start;
+				}
+				uint64_t depth = 0;
+				while (m_Position < m_Text.size())
+				{
+					const char character = m_Text[m_Position];
+					if (character == '"')
+					{
+						if (!SkipString())
+							return false;
+						continue;
+					}
+					if (character == '{' || character == '[')
+					{
+						depth++;
+					}
+					else if (character == '}' || character == ']')
+					{
+						if (--depth == 0)
+						{
+							m_Position++;
+							return true;
+						}
+					}
+					m_Position++;
+				}
+				return false;
+			}
+		private:
+			std::string_view m_Text;
+			size_t m_Position = 0;
+		};
+
+		// Whether the skeleton and every entity parse alone, checked on the job system's threads before anything is handed to
+		// the sink: a document whose entities do not (in the writer's layout: entities that span lines or share one) is read as
+		// a stream instead.
+		bool SpansParseAlone(const EntitySpans& spans, uint32_t chunkEntities, JobPriority priority)
+		{
+			if (!nlohmann::json::accept(spans.Skeleton.begin(), spans.Skeleton.end()))
 				return false;
 			std::atomic<bool> failed = false;
-			const uint32_t chunks = static_cast<uint32_t>((lines.Lines.size() + chunkEntities - 1) / chunkEntities);
+			const uint32_t chunks = static_cast<uint32_t>((spans.Entities.size() + chunkEntities - 1) / chunkEntities);
 			JobSystem::ParallelFor(chunks, 1, [&](uint32_t begin, uint32_t end)
 			{
 				for (uint32_t chunk = begin; chunk < end && !failed.load(std::memory_order_relaxed); chunk++)
 				{
-					const size_t last = std::min<size_t>(lines.Lines.size(), static_cast<size_t>(chunk + 1) * chunkEntities);
+					const size_t last = std::min<size_t>(spans.Entities.size(), static_cast<size_t>(chunk + 1) * chunkEntities);
 					for (size_t index = static_cast<size_t>(chunk) * chunkEntities; index < last; index++)
 					{
-						if (!nlohmann::json::accept(lines.Lines[index].begin(), lines.Lines[index].end()))
+						if (!nlohmann::json::accept(spans.Entities[index].begin(), spans.Entities[index].end()))
 						{
 							failed.store(true, std::memory_order_relaxed);
 							return;
@@ -576,7 +753,7 @@ namespace Strata
 			return !failed.load();
 		}
 
-		// One chunk of entity lines on its way to the sink: prepared by a job, handed over in order by the reading thread.
+		// One chunk of entities on its way to the sink: prepared by a job, handed over in order by the reading thread.
 		struct ChunkSlot
 		{
 			PreparedEntities Entities;
@@ -586,7 +763,7 @@ namespace Strata
 			JobHandle Job;
 		};
 
-		void PrepareChunk(const EntityLines& lines, size_t first, size_t count, ChunkSlot& slot, const std::atomic<bool>& stop)
+		void PrepareChunk(const EntitySpans& spans, size_t first, size_t count, ChunkSlot& slot, const std::atomic<bool>& stop)
 		{
 			slot.Entities = PreparedEntities {};
 			slot.Entities.Columns.Reserve(count);
@@ -594,8 +771,8 @@ namespace Strata
 			{
 				if (stop.load(std::memory_order_relaxed))
 					return;
-				// Every line parsed alone when the read began (LinesParseAlone).
-				const std::optional<nlohmann::json> entity = JsonUtils::Parse(lines.Lines[index], &slot.Error);
+				// Every entity parsed alone when the read began (SpansParseAlone).
+				const std::optional<nlohmann::json> entity = JsonUtils::Parse(spans.Entities[index], &slot.Error);
 				if (!entity || !slot.Entities.Columns.Add(*entity, &slot.Entities.Warnings, slot.Entities.Unknown, &slot.Error))
 				{
 					slot.Failed = true;
@@ -629,28 +806,57 @@ namespace Strata
 		const DocumentRules rules = GetRules(kind);
 		DocumentHandler handler(rules, sink, options, text.size());
 
-		// Large documents in the writer's layout: the entities parsed on the job system's threads, chunk by chunk, handed over
-		// in order.
+		// Large documents: the entities parsed on the job system's threads, chunk by chunk, handed over in order.
 		const uint32_t chunkEntities = std::max<uint32_t>(options.ParallelChunkEntities, 1);
 		if (options.Parallel && sink.TakesPreparedEntities() && JobSystem::IsInitialized())
 		{
-			std::optional<EntityLines> lines = FindEntityLines(text);
-			if (lines && lines->Lines.size() >= options.ParallelMinEntities && LinesParseAlone(*lines, chunkEntities, options.Priority))
+			// The entities found by the document's lines when it is in the writer's layout (the faster scan), else (or when its
+			// lines hold no single entities) by its structure.
+			std::optional<EntitySpans> spans = FindEntityLines(text);
+			const bool byLines = spans.has_value();
+			if (!spans)
+				spans = StructureScanner(text).Find(rules.Format);
+			// A document over the limit is refused at once, before its entities are checked: by the count it declares, else by the
+			// entities found.
+			const auto overLimit = [&](const EntitySpans& found) -> std::optional<std::string>
+			{
+				const std::optional<nlohmann::json> skeleton = JsonUtils::Parse(found.Skeleton);
+				const nlohmann::json* content = skeleton ? JsonUtils::Find(*skeleton, rules.Format) : nullptr;
+				const nlohmann::json* declared = content ? JsonUtils::Find(*content, "EntityCount") : nullptr;
+				if (declared && declared->is_number_unsigned() && declared->get<uint64_t>() > options.MaxEntities)
+					return fmt::format("The document holds {} entities, more than the {} that fit (a scene holds at most {})", declared->get<uint64_t>(),
+						options.MaxEntities, Scene::c_MaxEntities);
+				if (found.Entities.size() > options.MaxEntities)
+					return fmt::format("The document holds more than the {} entities that fit (a scene holds at most {})", options.MaxEntities, Scene::c_MaxEntities);
+				return std::nullopt;
+			};
+			const auto large = [&]() { return spans && spans->Entities.size() >= options.ParallelMinEntities; };
+			if (large())
+			{
+				if (std::optional<std::string> refused = overLimit(*spans))
+					return finish(false, std::move(*refused));
+			}
+			bool split = large() && SpansParseAlone(*spans, chunkEntities, options.Priority);
+			if (!split && byLines && large())
+			{
+				spans = StructureScanner(text).Find(rules.Format);
+				if (large())
+				{
+					if (std::optional<std::string> refused = overLimit(*spans))
+						return finish(false, std::move(*refused));
+				}
+				split = large() && SpansParseAlone(*spans, chunkEntities, options.Priority);
+			}
+			if (split)
 			{
 				result.Parallel = true;
-				// The head with an empty list is the document without its entities: its header and fields reach the sink as a
-				// stream's would (and a declared count over the limit is refused there).
-				const std::string head = std::string(lines->Head) + "]}}";
-				if (!ParseJsonEvents(head, handler))
+				// The skeleton is the document without its entities: its header and fields reach the sink as a stream's would.
+				if (!ParseJsonEvents(spans->Skeleton, handler))
 				{
 					result.SyntaxError = handler.IsSyntaxError();
 					return finish(false, handler.GetError());
 				}
-				const size_t total = lines->Lines.size();
-				if (total > options.MaxEntities)
-					return finish(false, fmt::format("The document holds more than the {} entities that fit (a scene holds at most {})", options.MaxEntities,
-						Scene::c_MaxEntities));
-
+				const size_t total = spans->Entities.size();
 				const size_t chunks = (total + chunkEntities - 1) / chunkEntities;
 				// Enough chunks under way to keep the threads busy while the reading thread hands them over, and no more: what is
 				// prepared waits in memory.
@@ -665,9 +871,9 @@ namespace Strata
 					slot.Failed = false;
 					slot.Complete = false;
 					slot.Error.clear();
-					slot.Job = JobSystem::Submit([&lines, &slot, &stop, first, count]() { PrepareChunk(*lines, first, count, slot, stop); }, options.Priority);
+					slot.Job = JobSystem::Submit([&spans, &slot, &stop, first, count]() { PrepareChunk(*spans, first, count, slot, stop); }, options.Priority);
 				};
-				// Ends the jobs under way (they stop at their next entity) before the lines and slots they use go.
+				// Ends the jobs under way (they stop at their next entity) before the spans and slots they use go.
 				auto abandon = [&](std::string error)
 				{
 					stop.store(true);
@@ -707,7 +913,7 @@ namespace Strata
 					if (options.Progress)
 					{
 						const size_t next = std::min(total, (chunk + 1) * chunkEntities);
-						const size_t parsed = next < total ? static_cast<size_t>(lines->Lines[next].data() - text.data()) : text.size();
+						const size_t parsed = next < total ? static_cast<size_t>(spans->Entities[next].data() - text.data()) : text.size();
 						options.Progress(static_cast<float>(static_cast<double>(parsed) / static_cast<double>(std::max<size_t>(text.size(), 1))));
 					}
 					if (options.IsCancelled && options.IsCancelled())
