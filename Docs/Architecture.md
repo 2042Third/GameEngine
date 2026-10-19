@@ -2516,7 +2516,9 @@ is the `strata-scripting` skill. The layers:
   disk or parsing the document again (new assets are registered with the handle `ReserveNativeAsset` reserved for their
   path, given or new; existing ones take the file's size and time, so the watcher's report of the write is no news, and
   their recorded references). While the claim lives the file watcher leaves the path alone, so a save never triggers its
-  own reference search or reload; the claim keeps the manager's background work alive. Items fail independently (each file
+  own reference search or reload; the claim keeps the manager's background work alive, and `MoveAsset`, `MoveFolder` and
+  `MoveToTrash` refuse, with the reason, to move a claimed or reserved path or a folder holding one, which the save would
+  write at its old place (`FindDocumentWriteLocked`). Items fail independently (each file
   is atomic, a failed new item gives its reservation back) and the request fails naming them. One request writes at a time;
   a queued request for the same documents is replaced by a newer one, whose snapshot is written for both (repeated saves
   never hold two snapshots), and both completions get its status (`WrittenID`, `SavePoint`). Replaced snapshots and the

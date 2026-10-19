@@ -354,7 +354,8 @@ namespace Strata
 		// an import: an import of the asset that is queued or running is cancelled before the file moves and runs again at
 		// the new place; other imports go on (the file watcher re-imports those that read the file as a dependency). Its own
 		// path does nothing; a name that differs only in case renames it where the file system ignores case. Fails when
-		// another file is at the destination.
+		// another file is at the destination, and while a background save writes the asset or a new one at the destination
+		// (ClaimDocumentWrite, ReserveNativeAsset).
 		bool MoveAsset(AssetHandle handle, const std::string& newRelativePath, std::string* outError = nullptr);
 		// Deletes the source file, its .meta and cached data, and unregisters the asset and its sub-assets. Never waits for
 		// an import: the asset's own import is cancelled before the files go and stores nothing; other imports go on. Tools;
@@ -364,8 +365,8 @@ namespace Strata
 		// Moves an asset's file (with its .meta and its cached import), or a folder with everything in it, from the asset
 		// directory into a new folder of the trash directory, and unregisters the assets it held, so that RestoreFromTrash can
 		// bring them back with the same handles. Imports of those assets are cancelled first (never waited for). Fails,
-		// moving nothing, without a trash directory, for paths outside the asset directory, the asset directory itself and
-		// what is neither an asset file nor a folder.
+		// moving nothing, without a trash directory, for paths outside the asset directory, the asset directory itself, what
+		// is neither an asset file nor a folder, and while a background save writes a document there.
 		bool MoveToTrash(const std::string& relativePath, TrashedAssets& outTrashed, std::string* outError = nullptr);
 		// Puts what MoveToTrash moved back where it was and registers its assets with their handles (imports cached with them
 		// are current again, so nothing is imported anew), then removes the trash folder. Fails, restoring nothing, when
@@ -383,7 +384,8 @@ namespace Strata
 		// every handle: the assets in it are registered at their new paths like MoveAsset does, imports of them that run are
 		// cancelled and run again there, and models in it whose files moved with them are imported again. Its own path does
 		// nothing, and a name that differs only in case renames it where the file system ignores case. Fails, moving nothing,
-		// when something else is at the destination or it lies inside the folder or outside the asset directory.
+		// when something else is at the destination, it lies inside the folder or outside the asset directory, or a
+		// background save writes a document in either folder.
 		bool MoveFolder(const std::string& from, const std::string& to, std::string* outError = nullptr);
 
 		//////////////////////////////////////////////////////////////////////////
@@ -585,6 +587,9 @@ namespace Strata
 		// Cancels the source's background import, without waiting for it, and forgets it: a queued one never starts, a running
 		// one stops at its next cancellation check and stores nothing. Returns it (null without one). Requires m_SourceMutex.
 		Ref<BackgroundJob> StopImport(SourceAsset& source);
+		// Why a document a background save writes (claimed or reserved) at `relativePath`, or below it when it is a folder,
+		// cannot move or go to the trash now; empty when nothing there is being written. Requires m_SourceMutex.
+		std::string FindDocumentWriteLocked(const std::string& relativePath) const;
 		// Merges settings into the asset's and saves its .meta (an invalid .meta is never overwritten).
 		bool WriteImportSettings(AssetHandle handle, const nlohmann::json& settings, std::string* outError);
 		// Engine documents are read from their source: a re-import only takes the file's current state and reloads it.

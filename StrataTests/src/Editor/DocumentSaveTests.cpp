@@ -713,6 +713,69 @@ TEST_SUITE("Editor.Saves")
 		CHECK(editor.Context.GetSceneHandle() == previous);
 	}
 
+	TEST_CASE("Documents a save writes, and places it reserved, do not move or go to the trash until it is written")
+	{
+		GatedJobSystem jobs;
+		EditorSaves editor("SaveMove");
+		EditorAssetManager& assets = *editor.Context.GetAssetManager();
+		const AssetHandle scene = editor.Context.GetSceneHandle();
+		const std::string otherText = JsonUtils::Dump(SceneSerializer::Serialize(Scene("Other")));
+		std::string error;
+		const AssetHandle other = assets.CreateNativeAsset("Others/Other.stscene",
+			std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(otherText.data()), otherText.size()), &error);
+		REQUIRE_MESSAGE(other.IsValid(), error);
+		editor.Run("entity.create", { { "name", "Second" } });
+		EditorCommandResult save;
+		EditorCommandResult saveAs;
+		{
+			BackgroundGate gate;
+			save = editor.Commands.Execute(editor.Context, "scene.save");
+			REQUIRE(save.IsPending());
+			// The scene's file is claimed by the save that writes it.
+			const auto refused = [&](bool moved)
+			{
+				CHECK_FALSE(moved);
+				CHECK_MESSAGE(error.find("is being saved") != std::string::npos, error);
+				error.clear();
+			};
+			refused(assets.MoveAsset(scene, "Scenes/Renamed.stscene", &error));
+			refused(assets.MoveAsset(scene, "Elsewhere/Main.stscene", &error));
+			refused(assets.MoveFolder("Scenes", "Levels", &error));
+			TrashedAssets trashed;
+			refused(assets.MoveToTrash("Scenes/Main.stscene", trashed, &error));
+			refused(assets.MoveToTrash("Scenes", trashed, &error));
+			CHECK_FALSE(editor.Commands.Execute(editor.Context, "asset.move",
+				{ { "asset", UUIDToJson(scene) }, { "path", "Scenes/Renamed.stscene" } }).Success);
+			// A save as a new asset, queued behind the first, holds its place: nothing moves there or into its folder.
+			saveAs = editor.Commands.Execute(editor.Context, "scene.saveAs", { { "path", "Copies/Copy.stscene" } });
+			REQUIRE(saveAs.IsPending());
+			refused(assets.MoveAsset(other, "Copies/Copy.stscene", &error));
+			refused(assets.MoveFolder("Others", "Copies", &error));
+			// Unrelated assets move.
+			CHECK(assets.MoveAsset(other, "Others/Moved.stscene", &error));
+		}
+		CHECK(CompleteCommand(editor.Context, std::move(save)).Success);
+		CHECK(CompleteCommand(editor.Context, std::move(saveAs)).Success);
+		CHECK_FALSE(editor.Context.IsSceneModified());
+
+		// Once written, the documents move, and their files hold what was saved.
+		const AssetHandle copy = editor.Context.GetSceneHandle();
+		REQUIRE(copy != scene);
+		CHECK_MESSAGE(assets.MoveAsset(scene, "Scenes/Renamed.stscene", &error), error);
+		CHECK_MESSAGE(assets.MoveAsset(copy, "Scenes/Copy.stscene", &error), error);
+		const std::filesystem::path directory = editor.Context.GetProject()->GetAssetDirectory();
+		CHECK_FALSE(FileSystem::Exists(directory / "Scenes" / "Main.stscene"));
+		CHECK_FALSE(FileSystem::Exists(directory / "Copies" / "Copy.stscene"));
+		CHECK(editor.ReadSavedNames() == std::set<std::string> { "First", "Second" });
+		for (const char* path : { "Scenes/Renamed.stscene", "Scenes/Copy.stscene" })
+		{
+			std::string loadError;
+			const Ref<Scene> saved = SceneSerializer::LoadFromFile(directory / FileSystem::FromUTF8(path), &loadError);
+			REQUIRE_MESSAGE(saved, loadError);
+			CHECK(saved->GetRegistry().view<NameComponent>().size() == 2);
+		}
+	}
+
 	TEST_CASE("The perf gates' save of a world, measured in a helper process, reports what it wrote and the frames meanwhile")
 	{
 		const WorldSceneSpec world { "Small", 3000, true };

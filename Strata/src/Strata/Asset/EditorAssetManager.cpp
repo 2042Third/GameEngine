@@ -656,6 +656,18 @@ namespace Strata
 			return ClaimedPaths.contains(relativePath);
 		}
 
+		// A claimed path at `relativePath` or, when it is a folder, below it; empty without one.
+		std::string FindClaimed(const std::string& relativePath) const
+		{
+			std::scoped_lock<std::mutex> lock(ClaimMutex);
+			for (const auto& [path, count] : ClaimedPaths)
+			{
+				if (IsInFolder(path, relativePath))
+					return path;
+			}
+			return std::string();
+		}
+
 		std::filesystem::path ToAbsolute(std::string_view relativePath) const
 		{
 			return (Specification.AssetDirectory / FileSystem::FromUTF8(relativePath)).lexically_normal();
@@ -3991,6 +4003,23 @@ namespace Strata
 		written.Claim->Release();
 	}
 
+	std::string EditorAssetManager::FindDocumentWriteLocked(const std::string& relativePath) const
+	{
+		std::string written = m_Work->FindClaimed(relativePath);
+		if (written.empty())
+		{
+			for (const auto& [path, handle] : m_ReservedPaths)
+			{
+				if (IsInFolder(path, relativePath))
+				{
+					written = path;
+					break;
+				}
+			}
+		}
+		return written.empty() ? std::string() : fmt::format("'{}' is being saved: try again once the save is written", written);
+	}
+
 	bool EditorAssetManager::MoveAsset(AssetHandle handle, const std::string& newRelativePath, std::string* outError)
 	{
 		auto fail = [outError](std::string message)
@@ -4013,6 +4042,12 @@ namespace Strata
 			return fail("Not a source asset of the project");
 		if (destinationRelative == it->second.Path)
 			return true; // Where it is already
+		// A background save writes the file at the place it claimed (or reserved), which a move would leave behind.
+		for (const std::string& path : { it->second.Path, destinationRelative })
+		{
+			if (std::string writing = FindDocumentWriteLocked(path); !writing.empty())
+				return fail(std::move(writing));
+		}
 		const std::filesystem::path source = ToAbsolute(it->second.Path);
 		// A name that differs only in case names the asset's own file where the file system ignores case: renamed in place.
 		if (FileSystem::Exists(destination) && !FileSystem::IsSameFile(source, destination))
@@ -4629,6 +4664,12 @@ namespace Strata
 		std::string failure;
 		{
 			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			// A background save writes its files at the places it claimed (or reserved), which a move would leave behind.
+			for (const std::string& folder : { sourceRelative, destinationRelative })
+			{
+				if (std::string writing = FindDocumentWriteLocked(folder); !writing.empty())
+					return fail(std::move(writing));
+			}
 			for (auto& [handle, asset] : m_Sources)
 			{
 				if (IsInFolder(asset.Path, sourceRelative))
@@ -4774,6 +4815,12 @@ namespace Strata
 		if (relative.empty() || relative == ".")
 			return fail(fmt::format("'{}' is no asset or folder inside the asset directory", relativePath));
 		const bool folder = FileSystem::IsDirectory(absolute);
+		{
+			// A background save would write the file again after it went to the trash.
+			std::scoped_lock<std::mutex> lock(m_SourceMutex);
+			if (std::string writing = FindDocumentWriteLocked(relative); !writing.empty())
+				return fail(std::move(writing));
+		}
 		std::vector<AssetHandle> handles;
 		if (folder)
 		{
