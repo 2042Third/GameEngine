@@ -965,9 +965,10 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   `SceneSettings::MaxEntitiesInstantiatedPerFrame` entities per update for all sub-scenes together (default 5,000; saved with
   the scene, `scene.setSettings`, the Inspector's Streaming section), cut in chunks and stopped once
   `Scene::c_MaxSubSceneMillisecondsPerFrame` (2 ms, for creation and destruction together; `SceneWorkBudget::SubSceneMilliseconds`)
-  went by. A chunk holds what fits in the time left at the cost per entity the scene measured lately, from 32 to 512
-  entities, so that a slice ends close to its limit: entities untouched for a while (an unloading cell's) cost several
-  times what warm ones do. Each slice's entities are complete
+  went by. An update's first chunk holds 512 entities (where they cost more than the frame allows, in Debug builds and on
+  slow machines, loads still progress that fast); later ones hold what fits in the time left at the cost per entity the
+  scene measured lately (`SceneWorkBudget::FitChunk`), from 32 to 512, so that a slice ends close to its limit: entities
+  untouched for a while (an unloading cell's) cost several times what warm ones do. Each slice's entities are complete
   when it returns (`ContinueInstantiation`), so systems treat them like any other: their component signals give scripts
   `OnCreate` at the next sync point, physics its bodies in its batches, audio its voices and the render scene its proxies.
   An entity whose parent an earlier slice created and gameplay or the editor destroyed since is not created, nor are its

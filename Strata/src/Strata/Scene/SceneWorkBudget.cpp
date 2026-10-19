@@ -39,4 +39,23 @@ namespace Strata
 		return budget;
 	}
 
+	size_t SceneWorkBudget::FitChunk(std::chrono::nanoseconds remaining, double nanosecondsPerEntity, size_t smallest, size_t largest)
+	{
+		smallest = std::min(smallest, largest);
+		if (remaining.count() <= 0)
+			return smallest;
+		const double fitting = static_cast<double>(remaining.count()) / std::max(nanosecondsPerEntity, 1.0);
+		if (fitting >= static_cast<double>(largest))
+			return largest;
+		return std::max(smallest, static_cast<size_t>(fitting));
+	}
+
+	void SceneWorkBudget::RecordChunkCost(double& nanosecondsPerEntity, std::chrono::nanoseconds elapsed, size_t entities)
+	{
+		if (entities == 0)
+			return;
+		const double measured = static_cast<double>(elapsed.count()) / static_cast<double>(entities);
+		nanosecondsPerEntity = std::max(measured, 0.5 * (nanosecondsPerEntity + measured));
+	}
+
 }

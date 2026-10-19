@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 
 namespace Strata
@@ -35,6 +36,14 @@ namespace Strata
 		// The budget of a frame that starts now: `milliseconds` of work, and the entities the scene's settings let sub-scenes
 		// create and destroy per frame (SceneSettings::MaxEntitiesInstantiatedPerFrame, MaxEntitiesDestroyedPerFrame).
 		static SceneWorkBudget ForFrame(const SceneSettings& settings, double milliseconds = c_DefaultLoadWorkMilliseconds);
+
+		// Work done in chunks between looks at the clock (sub-scenes' entities): the entities of the next chunk, those that fit
+		// in the `remaining` time at the estimated cost per entity, from `smallest` to `largest` (`smallest` at most
+		// `largest`; `smallest` once no time is left).
+		static size_t FitChunk(std::chrono::nanoseconds remaining, double nanosecondsPerEntity, size_t smallest, size_t largest);
+		// Folds a chunk's cost into an estimate of the cost per entity: a dearer chunk raises it at once (the next chunk must
+		// not overrun), a cheaper one lowers it halfway. A chunk of no entities changes nothing.
+		static void RecordChunkCost(double& nanosecondsPerEntity, std::chrono::nanoseconds elapsed, size_t entities);
 	};
 
 }

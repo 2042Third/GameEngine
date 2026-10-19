@@ -160,10 +160,10 @@ TEST_SUITE("Scene.SubScenes")
 		CheckSceneCaches(scene);
 	}
 
-	TEST_CASE("Slices cut their chunks to the time left, so that they end close to the time limit")
+	TEST_CASE("Each update's first chunk is whole, so that loads progress however little time an update has")
 	{
-		// A twentieth of a millisecond per update: a chunk of 512 entities would overrun it many times over. Chunks hold what
-		// fits in the time left at the cost measured so far, and at least 32 entities.
+		// A twentieth of a millisecond: one chunk of 512 entities overruns it. Where entities cost more than the frame allows
+		// (Debug builds, slow machines), each update still creates and destroys a whole chunk.
 		ScopedJobSystem jobs(2, 1);
 		Scene scene("Level");
 		const SubSceneID id = scene.BeginAdditiveLoad(MakeNestedScene(3000));
@@ -188,9 +188,7 @@ TEST_SUITE("Scene.SubScenes")
 			return status->State == SubSceneState::Loaded;
 		}, std::chrono::seconds(60)));
 		REQUIRE(created.size() > 1);
-		CHECK(*std::max_element(created.begin(), created.end()) < 512);
-		// The last slice creates what was left.
-		CHECK(*std::min_element(created.begin(), created.end() - 1) >= 32);
+		CHECK(*std::min_element(created.begin(), created.end() - 1) >= 512);
 
 		REQUIRE(scene.UnloadSubScene(id));
 		std::vector<size_t> destroyed;
@@ -204,9 +202,35 @@ TEST_SUITE("Scene.SubScenes")
 			return scene.GetSubSceneStatus(id) == nullptr;
 		}, std::chrono::seconds(60)));
 		REQUIRE(destroyed.size() > 1);
-		CHECK(*std::max_element(destroyed.begin(), destroyed.end()) < 512);
-		CHECK(*std::min_element(destroyed.begin(), destroyed.end() - 1) >= 32);
+		CHECK(*std::min_element(destroyed.begin(), destroyed.end() - 1) >= 512);
 		CHECK(scene.GetEntityCount() == 0);
+	}
+
+	TEST_CASE("Later chunks hold what fits in the time left at the cost measured lately")
+	{
+		using std::chrono::microseconds;
+		using std::chrono::nanoseconds;
+		// 2,000 fit in 2 ms at 1 microsecond each: a whole chunk. 100 microseconds hold 100; less than the smallest, the
+		// smallest; no time left, the smallest too.
+		CHECK(SceneWorkBudget::FitChunk(microseconds(2'000), 1'000.0, 32, 512) == 512);
+		CHECK(SceneWorkBudget::FitChunk(microseconds(100), 1'000.0, 32, 512) == 100);
+		CHECK(SceneWorkBudget::FitChunk(microseconds(10), 1'000.0, 32, 512) == 32);
+		CHECK(SceneWorkBudget::FitChunk(nanoseconds(0), 1'000.0, 32, 512) == 32);
+		CHECK(SceneWorkBudget::FitChunk(microseconds(-5), 1'000.0, 32, 512) == 32);
+		// The smallest never exceeds the largest (a budget's last entities), and no estimate divides by zero.
+		CHECK(SceneWorkBudget::FitChunk(microseconds(10), 1'000.0, 32, 20) == 20);
+		CHECK(SceneWorkBudget::FitChunk(microseconds(100), 0.0, 32, 512) == 512);
+
+		// A cheaper chunk lowers the estimate halfway, a dearer one raises it to its own cost at once.
+		double estimate = 2'000.0;
+		SceneWorkBudget::RecordChunkCost(estimate, microseconds(512), 512);
+		CHECK(estimate == doctest::Approx(1'500.0));
+		SceneWorkBudget::RecordChunkCost(estimate, microseconds(512), 512);
+		CHECK(estimate == doctest::Approx(1'250.0));
+		SceneWorkBudget::RecordChunkCost(estimate, microseconds(1'536), 512);
+		CHECK(estimate == doctest::Approx(3'000.0));
+		SceneWorkBudget::RecordChunkCost(estimate, microseconds(100), 0);
+		CHECK(estimate == doctest::Approx(3'000.0));
 	}
 
 	TEST_CASE("Creating and destroying share one update's budget")

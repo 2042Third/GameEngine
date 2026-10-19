@@ -736,11 +736,12 @@ namespace Strata
 		SubSceneID m_NextSubSceneID = 1;
 		bool m_AdvancingSubScenes = false;               // UpdateSubScenes runs: unloads wait for its end
 		std::vector<SubSceneID> m_DeferredSubSceneUnloads; // Unloads requested meanwhile
-		// What creating and destroying a sub-scene's entity has cost lately, which sizes the next chunk of a slice to the time
-		// left (Scene/SceneSubScenes.cpp, GetChunkWithin). It starts high: a first chunk that is cheaper than estimated only
-		// leaves time unused.
+		// What creating and destroying a sub-scene's entity has cost lately, which sizes the later chunks of a slice to the time
+		// left (Scene/SceneSubScenes.cpp, GetChunkWithin). It starts high: a chunk that is cheaper than estimated only leaves
+		// time unused.
 		double m_CreateNanosecondsPerEntity = 2'000.0;
 		double m_DestroyNanosecondsPerEntity = 2'000.0;
+		size_t m_SlicedThisPass = 0; // Entities UpdateSubScenes created and destroyed so far in its pass
 		std::vector<std::pair<entt::entity, entt::entity>> m_UnloadWalk; // Scratch of CollectUnloadSlice: entity, next child
 
 		// Prepared states (GetPreparedState), by type. Declared after the registry: what they hold (a physics world listening to
