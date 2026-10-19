@@ -155,8 +155,10 @@ namespace Strata
 		uint32_t GetChangeLevel() const;
 		// Starts making levels [firstLevel, GetResidentLevel()) resident, from `data`: the cooked bytes of the range
 		// GetCookedLayout().GetLevelsByteRange(firstLevel, GetResidentLevel()). False (nothing changes) when the levels
-		// cannot change, firstLevel is not finer than the resident level, or the data does not have the range's size.
-		bool RaiseLevels(uint32_t firstLevel, std::vector<uint8_t> data);
+		// cannot change, firstLevel is not finer than the resident level, or the data does not have the range's size. With
+		// `fadeIn` the new levels fade in once swapped in (TextureTable::SetFadeIn); views that need the texture whole
+		// (exact pixels) raise without.
+		bool RaiseLevels(uint32_t firstLevel, std::vector<uint8_t> data, bool fadeIn = true);
 		// Starts keeping only levels [firstLevel, GetMipCount()), at most down to the tail (GetTailLevel). False when the
 		// levels cannot change or firstLevel is not coarser than the resident level.
 		bool DropLevels(uint32_t firstLevel);
@@ -210,7 +212,7 @@ namespace Strata
 		nvrhi::TextureHandle CreateGPUTexture(uint32_t firstLevel) const;
 		// Makes `texture` (levels [firstLevel, m_MipCount)) the resident one: a new bindless slot, the old one released once
 		// no frame in flight samples it. False when the table is full (nothing changes).
-		bool SwapResidentTexture(nvrhi::TextureHandle texture, uint32_t firstLevel);
+		bool SwapResidentTexture(nvrhi::TextureHandle texture, uint32_t firstLevel, bool fadeIn);
 
 		// A change of the resident levels under way (RaiseLevels, DropLevels).
 		struct LevelChange
@@ -221,6 +223,7 @@ namespace Strata
 			UploadPosition Position;      // The raised levels left to upload
 			std::vector<uint8_t> Data;    // The raised levels' cooked bytes
 			uint64_t DataOffset = 0;      // Where Data starts in the cooked form
+			bool FadeIn = false;          // The raised levels fade in (RaiseLevels)
 		};
 	private:
 		TextureSpecification m_Specification;

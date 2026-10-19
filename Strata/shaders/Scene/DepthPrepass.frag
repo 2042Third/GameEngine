@@ -2,6 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "Include/Scene.glsl"
+#include "Include/MaterialTextures.glsl"
 
 // Depth prepass: writes depth, view-space normals (screen-space effects) and entity ids (picking). Alpha-masked
 // materials are tested here; the forward pass then shades only the visible surface. With ST_NO_ENTITY_IDS (registered as

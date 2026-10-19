@@ -135,6 +135,10 @@ namespace Strata
 		// it draws is made resident at full resolution and counts as pending until it is (SceneRendererStats::PendingAssets):
 		// exact-pixel tests and the baseline streaming is measured against.
 		bool TextureStreaming = true;
+		// Texture levels the streamer raises fade in over TextureTable::c_FadeInSeconds instead of popping in. Renderers of
+		// single images that wait for the levels they need (the editor's captures, thumbnails) turn it off: they show the
+		// finest resident levels at once.
+		bool FadeTextureLevels = true;
 		// The render scene's GPU copy (RenderSceneGPU, shared by the scene's renderers) uploads new proxies' records and
 		// instances within this many bytes per frame, at least one proxy per frame; the others wait, undrawn
 		// (SceneRendererStats::DeferredInstanceBytes). Changes of proxies already on the GPU always upload at once.

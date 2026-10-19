@@ -58,7 +58,9 @@ namespace Strata
 	class ViewportRenderer
 	{
 	public:
-		explicit ViewportRenderer(const std::string& debugName);
+		// `fadeTextureLevels`: SceneRendererSpecification::FadeTextureLevels (off for the capture renderer, whose images wait
+		// for the levels they need).
+		explicit ViewportRenderer(const std::string& debugName, bool fadeTextureLevels = true);
 
 		ViewportRenderer(const ViewportRenderer&) = delete;
 		ViewportRenderer& operator=(const ViewportRenderer&) = delete;

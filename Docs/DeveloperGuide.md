@@ -879,10 +879,14 @@ short. Their full wording:
   (`LevelsDroppedForBudget`), and what does not fit gets the finest level that does. A texture's GPU texture and
   bindless slot change when its levels do: resolve the slot every frame (`Texture::GetBindlessSlot`), never cache it;
   material data names a texture by its texture table index instead (`Texture::GetTableIndex`, stable for the texture's
-  life; its entry follows the slot).
+  life; its entry follows the slot, with the minimum level of detail of levels fading in). Levels nothing needs drop
+  after 30 s (`TextureStreamer::SetIdleDropSeconds`) or under budget pressure, and raised levels fade in over
+  `TextureTable::c_FadeInSeconds`; material textures are sampled only through `SampleMaterialTexture`
+  (`Include/MaterialTextures.glsl`), which applies the fade.
   Renderers and tests that compare exact pixels set `SceneRendererSpecification::TextureStreaming = false` (every level,
   pending until resident); tests of whole-asset residency turn the manager's partial loads off
-  (`AssetManagerBase::SetPartialLoads(false)`).
+  (`AssetManagerBase::SetPartialLoads(false)`). Tests that watch levels drop shorten the idle drop time and wait by the
+  clock; tests that compare a streamed texture's pixels wait until `TextureTable::GetFadeCount()` is 0.
 
 ## Scripting
 

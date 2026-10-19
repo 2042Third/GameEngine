@@ -1629,8 +1629,19 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     needs the levels its near part shows, and a texture tiled over it the finer ones its tiling asks for; a surface seen at
     a grazing angle spans as many texels across the view as facing it, which is what the 16x anisotropic samplers sample
     by. Per texture the streamer takes `floor(log2(size * tiling / UVPixels))` (`ComputeWantedLevel`, clamped to its
-    levels), the finest over every use and view; shadow passes report nothing. Detail rises at once and falls only after
-    120 frames without a need of it (`c_DropDelayFrames`); a texture nobody needs falls to its tail. A still frame costs the
+    levels), the finest over every use and view; shadow passes report nothing. Detail rises at once and falls only under
+    GPU texture pressure (`ReleaseMemory`, `MakeRoom`) or once nothing needed it for 30 s (`c_IdleDropSeconds`, by a
+    steady clock rather than frames; `TextureStreamer::SetIdleDropSeconds`), least recently needed first, a few textures
+    per frame: levels the budget has room for stay while the view looks elsewhere instead of being read again when it
+    looks back (before, they dropped after 120 frames, 2 s, with gigabytes of headroom). A texture nobody needs falls to its
+    tail and is forgotten at twice that time. Raised levels fade in: the swap points the texture's table entry at the new
+    texture with a minimum level of detail of the levels it gained (`TextureTable::SetFadeIn`), which falls linearly to 0
+    over `TextureTable::c_FadeInSeconds` (0.25 s); `SampleMaterialTexture` (`Include/MaterialTextures.glsl`, fragment
+    shaders) scales both sampling gradients until the anisotropic level of detail reaches it (`textureGrad`), so the new
+    detail blends in from what the old texture showed, and filtering keeps its footprint's shape. Material data does not
+    change, only the table entries of the fading textures, once per frame. Raises for a view that needs the texture whole
+    (no streaming: exact pixels) do not fade, and renderers of single images that wait for their levels (the editor's
+    capture renderer, thumbnails) ignore fades (`SceneRendererSpecification::FadeTextureLevels`). A still frame costs the
     streamer nothing per texture: a frame's needs are kept in the targets they update (no allocation for a texture needed
     before), and `OnUpdate` looks only at textures whose target changed in a way that can call for another level
     (`TextureStreamingPolicy::GetChanged`: new or forgotten, another level, needed now and not before or the other way
@@ -1644,7 +1655,7 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     frame for as long as its owner keeps the `TextureHold`, whether or not anything draws it: a renderer holds the sky
     light's environment map until it has computed the environment from its whole chain (only the cube is sampled
     afterwards, and the map drops back to its tail), so a renderer that draws only now and then - the capture renderer of a
-    headless editor, whose captures lie seconds apart, longer than the drop delay - finds the map whole at its next frame
+    headless editor, whose captures may lie further apart than the idle drop time - finds the map whole at its next frame
     instead of raising it for one frame and losing it again before the next. Renderers share the environment computed
     from a map while any of them lights with it, so one that starts drawing the scene later, such as the editor's capture
     renderer beside the viewport's, takes it over in its first frame instead of waiting for the map's levels.

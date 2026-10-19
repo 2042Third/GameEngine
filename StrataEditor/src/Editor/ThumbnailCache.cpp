@@ -853,6 +853,8 @@ namespace Strata
 			specification.ShadowMapSize = 1024;
 			specification.ShadowCascades = 1;
 			specification.PrefetchDistance = 0.0f;
+			// Thumbnails wait for their textures' levels and show them at once.
+			specification.FadeTextureLevels = false;
 			m_Renderer = CreateScope<SceneRenderer>(specification);
 		}
 		// Thumbnails and the preview share the renderer: its targets follow the image's size (they change only when a preview

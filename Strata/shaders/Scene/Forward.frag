@@ -3,6 +3,7 @@
 #extension GL_EXT_samplerless_texture_functions : require
 
 #include "Include/Scene.glsl"
+#include "Include/MaterialTextures.glsl"
 #include "Include/PBR.glsl"
 #include "Include/Shadows.glsl"
 #include "Include/Clusters.glsl"

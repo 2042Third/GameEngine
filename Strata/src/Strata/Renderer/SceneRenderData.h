@@ -56,8 +56,9 @@ namespace Strata
 			glm::vec4 ShadowParams;              // x: 2 tan(light angular radius), y: 1 / map size, w: cascade count
 			glm::vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 			glm::vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
+			glm::vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
 		};
-		static_assert(sizeof(FrameConstants) == 6 * 64 + 16 * 16);
+		static_assert(sizeof(FrameConstants) == 6 * 64 + 17 * 16);
 
 		// A directional shadow cascade as shaders read it (u_Cascades, Include/Scene.glsl): written on the GPU by
 		// Scene/CascadeFit.comp, which fits its depth range to the casters (CascadeFitConstants).

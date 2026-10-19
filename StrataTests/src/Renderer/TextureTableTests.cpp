@@ -53,4 +53,51 @@ TEST_SUITE("Renderer.TextureTable")
 		CHECK(table.Allocate(TextureTable::PackEntry(36, 1, false)) == index);
 		CHECK(table.GetEntry(index) == TextureTable::PackEntry(36, 1, false));
 	}
+
+	TEST_CASE("A texture that gained levels fades them in over the fade-in time")
+	{
+		TextureTable table(nullptr, 2);
+		CHECK(table.GetFadeInSeconds() == TextureTable::c_FadeInSeconds);
+		const uint32_t index = table.Allocate(TextureTable::PackEntry(20, 1, false));
+		CHECK(table.GetMinLod(index) == 0.0f);
+
+		// Raised by 3 levels: sampled no finer than the level the old texture's finest matches, then linearly finer.
+		const double start = TextureTable::GetClockSeconds();
+		table.SetFadeIn(index, TextureTable::PackEntry(21, 1, false), 3);
+		CHECK(table.GetEntry(index) == TextureTable::PackEntry(21, 1, false));
+		CHECK(table.GetMinLod(index) == 3.0f);
+		CHECK(table.GetFadeCount() == 1);
+		table.UpdateFades(start + 0.5 * TextureTable::c_FadeInSeconds);
+		CHECK(table.GetMinLod(index) >= 1.5f);
+		CHECK(table.GetMinLod(index) < 1.75f);
+		table.UpdateFades(start + 1.5 * TextureTable::c_FadeInSeconds);
+		CHECK(table.GetMinLod(index) == 0.0f);
+		CHECK(table.GetFadeCount() == 0);
+
+		// A drop (nothing gained) and a plain Set end a fade at once, as does freeing the index.
+		table.SetFadeIn(index, TextureTable::PackEntry(22, 1, false), 2);
+		CHECK(table.GetMinLod(index) == 2.0f);
+		table.SetFadeIn(index, TextureTable::PackEntry(23, 1, false), 0);
+		CHECK(table.GetMinLod(index) == 0.0f);
+		CHECK(table.GetFadeCount() == 0);
+		table.SetFadeIn(index, TextureTable::PackEntry(24, 1, false), 2);
+		table.Set(index, TextureTable::PackEntry(25, 1, false));
+		CHECK(table.GetMinLod(index) == 0.0f);
+		CHECK(table.GetFadeCount() == 0);
+		table.SetFadeIn(index, TextureTable::PackEntry(26, 1, false), 2);
+		table.Free(index);
+		CHECK(table.GetMinLod(index) == 0.0f);
+		CHECK(table.GetFadeCount() == 0);
+
+		// Fades turned off: the new levels show at once. Reserved indices never fade.
+		const uint32_t other = table.Allocate(TextureTable::PackEntry(30, 1, false));
+		table.SetFadeInSeconds(0.0f);
+		table.SetFadeIn(other, TextureTable::PackEntry(31, 1, false), 4);
+		CHECK(table.GetEntry(other) == TextureTable::PackEntry(31, 1, false));
+		CHECK(table.GetMinLod(other) == 0.0f);
+		table.SetFadeInSeconds(TextureTable::c_FadeInSeconds);
+		table.SetFadeIn(TextureTable::c_White, TextureTable::PackEntry(32, 1, false), 4);
+		CHECK(table.GetMinLod(TextureTable::c_White) == 0.0f);
+		CHECK(table.GetFadeCount() == 0);
+	}
 }

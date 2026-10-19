@@ -52,6 +52,7 @@ struct FrameConstants
 	vec4 ShadowParams;              // x: 2 tan(light angular radius), y: 1 / shadow map size, w: cascade count (0 = none)
 	vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 	vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
+	vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
 };
 
 layout(set = 0, binding = ST_CBV(0), std140) uniform FrameBuffer
@@ -227,11 +228,13 @@ vec3 RotateEnvironmentDirection(vec3 direction)
 // Bindless texture table (descriptor set 1, see BindlessTextureTable).
 layout(set = 1, binding = 0) uniform texture2D u_Textures[];
 
-// The texture table (Strata/Renderer/TextureTable.h): per texture index of material data, its bindless slot (bits 0-23),
-// sampler index (bits 24-30) and ST_TEXTURE_SLOT_GRAYSCALE. Textures keep their index while their levels stream.
+// The texture table (Strata/Renderer/TextureTable.h, GPUEntry): per texture index of material data, x its bindless slot
+// (bits 0-23), sampler index (bits 24-30) and ST_TEXTURE_SLOT_GRAYSCALE, y the float bits of the finest level of detail it
+// is sampled with (levels fading in; 0 otherwise). Textures keep their index while their levels stream. Fragment shaders
+// sample it through SampleMaterialTexture (Include/MaterialTextures.glsl).
 layout(set = 0, binding = ST_SRV(16), std430) readonly buffer TextureTableBuffer
 {
-	uint u_TextureTable[];
+	uvec2 u_TextureTable[];
 };
 
 // The directional shadow cascades (RenderData::CascadeData), fitted on the GPU (Scene/CascadeFit.comp).
@@ -245,15 +248,6 @@ layout(set = 0, binding = ST_SRV(17), std430) readonly buffer CascadeBuffer
 {
 	CascadeData u_Cascades[];
 };
-
-vec4 SampleMaterialTexture(uint textureIndex, vec2 uv)
-{
-	uint packedSlot = u_TextureTable[textureIndex];
-	uint slot = packedSlot & 0xFFFFFFu;
-	uint samplerIndex = min((packedSlot >> 24) & 0x7Fu, uint(ST_SAMPLER_COUNT - 1));
-	vec4 value = texture(sampler2D(u_Textures[nonuniformEXT(slot)], u_Samplers[nonuniformEXT(samplerIndex)]), uv);
-	return (packedSlot & ST_TEXTURE_SLOT_GRAYSCALE) != 0u ? vec4(value.rrr, 1.0) : value;
-}
 
 vec2 TransformUV(MaterialData material, vec2 uv)
 {

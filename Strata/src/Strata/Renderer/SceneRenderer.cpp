@@ -1987,6 +1987,7 @@ namespace Strata
 		}
 		const PostProcessComponent postProcess = GetPostProcessSettings(scene);
 		frame.AOParams = glm::vec4(postProcess.AmbientOcclusion ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 
 		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
 			|| m_BoundSceneGPUVersion != m_SceneGPU->GetBufferVersion();

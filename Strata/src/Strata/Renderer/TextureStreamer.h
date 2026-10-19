@@ -8,6 +8,7 @@
 
 #include <glm/glm.hpp>
 
+#include <chrono>
 #include <cstdint>
 #include <limits>
 #include <memory>
@@ -40,10 +41,11 @@ namespace Strata
 	public:
 		// No need recorded: a texture keeps its tail (TextureStreamer drops it to the tail).
 		static constexpr uint32_t c_NoLevel = std::numeric_limits<uint32_t>::max();
-		// Detail rises at once and falls only after this many frames without a need of it.
-		static constexpr uint32_t c_DropDelayFrames = 120;
-		// A texture nobody needed for this many frames is forgotten (its tail stays).
-		static constexpr uint32_t c_ForgetFrames = 2 * c_DropDelayFrames;
+		// Detail rises at once and falls only once it was not needed for this long (SetIdleDropSeconds), or for a budget:
+		// levels memory has room for stay while the view looks elsewhere, instead of being read again when it looks back.
+		static constexpr double c_IdleDropSeconds = 30.0;
+		// A texture nobody needed for twice the idle drop time is forgotten (its tail stays).
+		static constexpr double c_ForgetFactor = 2.0;
 
 		// The level a texture with `mipCount` levels of `size` texels (its larger side) needs where one unit of its
 		// coordinates spans `pixels` on screen with the coordinates tiled `uvScale` times (MaterialProperties::UVTiling):
@@ -98,11 +100,17 @@ namespace Strata
 		// coverage, whether any view jumped, and whether any needs it whole (a view without streaming, which waits for every
 		// level: such a texture keeps them also under memory pressure).
 		void AddNeed(AssetHandle texture, uint32_t level, float coverage, bool cameraCut, bool whole = false);
-		// Ends the frame: each texture's target follows the frame's needs, finer at once, coarser only once the finer level
-		// was not needed for c_DropDelayFrames frames (c_NoLevel when nothing needed it that long). Needs start anew. The
-		// textures whose target changed in a way that can call for another level (new or forgotten, another Level, needed in
-		// this frame but not in the one before or the other way round) are listed in GetChanged until the next Update.
-		void Update(uint64_t frame);
+		// Ends the frame `frame`, at `seconds` on a steady clock: each texture's target follows the frame's needs, finer at
+		// once, coarser only once the finer level was not needed for GetIdleDropSeconds (c_NoLevel when nothing needed it that
+		// long). Needs start anew. The textures whose target changed in a way that can call for another level (new or
+		// forgotten, another Level, needed in this frame but not in the one before or the other way round) are listed in
+		// GetChanged until the next Update.
+		void Update(uint64_t frame, double seconds);
+
+		// How long a level nobody needs stays (c_IdleDropSeconds by default; at least 0). Memory-bound programs shorten it,
+		// tests that watch levels drop too.
+		void SetIdleDropSeconds(double seconds);
+		double GetIdleDropSeconds() const { return m_IdleDropSeconds; }
 
 		// What a frame needs of a texture (AddNeed): of several uses and views, combined.
 		struct Need
@@ -118,14 +126,21 @@ namespace Strata
 			float Coverage = 0.0f;        // The frame's largest coverage (0 when the frame did not need it)
 			bool CameraCut = false;       // A view that needed it in the frame had just jumped
 			bool Whole = false;           // A view of the frame needs every level (TextureStreamingView::Streaming false)
-			uint64_t HeldFrame = 0;       // The latest frame that needed Level or finer
-			uint64_t LastNeededFrame = 0; // The latest frame that needed it at all
+			double HeldSeconds = 0.0;      // When a frame last needed Level or finer
+			uint64_t LastNeededFrame = 0;  // The latest frame that needed it at all
+			double LastNeededSeconds = 0.0; // When that frame ended
 			// What the frame being recorded needs of it so far (AddNeed), which Update turns into the members above: kept here,
 			// so that a frame that needs what the one before needed allocates nothing.
 			Need Pending;
 			bool HasPending = false;
 		};
 		const Target* Find(AssetHandle texture) const;
+		// The order in which levels nothing needs go (a few textures per frame): the least recently needed first (when a frame
+		// last needed the level each holds), then by handle, the same in every run.
+		static bool DropsBefore(double heldSecondsA, AssetHandle a, double heldSecondsB, AssetHandle b)
+		{
+			return heldSecondsA != heldSecondsB ? heldSecondsA < heldSecondsB : a < b;
+		}
 		const std::unordered_map<AssetHandle, Target>& GetTargets() const { return m_Targets; }
 		// See Update.
 		const std::vector<AssetHandle>& GetChanged() const { return m_Changed; }
@@ -136,6 +151,7 @@ namespace Strata
 		std::unordered_map<AssetHandle, Need> m_NewNeeds; // The frame's needs of textures without a target
 		std::vector<AssetHandle> m_Changed;
 		uint64_t m_LastFrame = 0; // The frame of the latest Update
+		double m_IdleDropSeconds = c_IdleDropSeconds;
 	};
 
 	// A texture a TextureStreamer keeps whole for as long as its owner keeps the hold (TextureStreamer::Hold).
@@ -154,15 +170,20 @@ namespace Strata
 	// budgets (Texture::RaiseLevels: a new GPU texture, its resident levels copied on the GPU, the new ones uploaded, the
 	// bindless slot swapped). The GPU texture budget's room (less what the reads under way will add) goes to the textures
 	// below their level in rank order: one whose level does not fit takes the finest levels of textures needed less
-	// (MakeRoom), else gets the finest level the room holds. Levels no longer needed for c_DropDelayFrames frames are
-	// dropped, down to the tail, and under GPU texture pressure (ReleaseMemory) the least needed textures lose their finest
-	// levels, as many as the budget takes, before the manager evicts whole assets; a texture in view keeps its tail, so
-	// nothing that was drawn shows the loading fallback again. Main thread.
+	// (MakeRoom), else gets the finest level the room holds. Levels nothing needed for the idle drop time (30 s,
+	// SetIdleDropSeconds) are dropped, down to the tail, least recently needed first; under GPU texture pressure
+	// (ReleaseMemory) the least needed textures lose their finest levels at once, as many as the budget takes, before the
+	// manager evicts whole assets; a texture in view keeps its tail, so nothing that was drawn shows the loading fallback
+	// again. Raised levels fade in (TextureTable's minimum level of detail, over TextureTable::c_FadeInSeconds). Main thread.
 	class TextureStreamer : public AssetManagerExtension
 	{
 	public:
 		// At most this many textures drop levels per frame because they are no longer needed (each is a GPU copy).
 		static constexpr uint32_t c_MaxDropsPerFrame = 8;
+
+		// See TextureStreamingPolicy::SetIdleDropSeconds.
+		void SetIdleDropSeconds(double seconds) { m_Policy.SetIdleDropSeconds(seconds); }
+		double GetIdleDropSeconds() const { return m_Policy.GetIdleDropSeconds(); }
 		// After a read fails, the texture's levels are read again this many frames later at the earliest.
 		static constexpr uint32_t c_RetryFrames = 60;
 
@@ -271,6 +292,7 @@ namespace Strata
 		uint32_t m_LookedAt = 0;
 		std::vector<std::weak_ptr<TextureHold>> m_Holds;      // Owned by their holders (Hold): gone once they release them
 		uint64_t m_Frame = 0;
+		std::chrono::steady_clock::time_point m_Start = std::chrono::steady_clock::now(); // The policy's clock starts here
 		// What the frame had used of the budgets when the streamer's update began (MakeCallContext).
 		uint64_t m_StartUploadedBytes = 0;
 		float m_StartUploadMs = 0.0f;
