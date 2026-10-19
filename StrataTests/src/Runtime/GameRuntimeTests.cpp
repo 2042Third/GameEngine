@@ -13,6 +13,7 @@
 #include "Strata/Runtime/GameRuntime.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
+#include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/World/WorldComponents.h"
 #include "TestHelpers.h"

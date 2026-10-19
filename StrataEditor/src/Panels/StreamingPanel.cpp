@@ -331,11 +331,11 @@ namespace Strata
 			if (m_RevealWorld)
 				ImGui::SetNextItemOpen(true);
 			// Formatted into a buffer: an open world's frames allocate nothing for it.
-			const WorldStreamingStats stats = streamer->GetStats();
+			const WorldStreamingStats worldStats = streamer->GetStats();
 			const Ref<WorldAsset> asset = streamer->GetWorldAsset();
 			std::array<char, 160> summary {};
 			std::snprintf(summary.data(), summary.size(), "%s \xC2\xB7 %u loaded \xC2\xB7 %u loading%s", asset ? asset->GetData().Name.c_str() : "World",
-				stats.CellsLoaded, stats.CellsLoading, stats.CellsFailed > 0 ? " \xC2\xB7 failures" : "");
+				worldStats.CellsLoaded, worldStats.CellsLoading, worldStats.CellsFailed > 0 ? " \xC2\xB7 failures" : "");
 			if (UI::SectionHeader("Streaming.World", "World", ImGuiTreeNodeFlags_DefaultOpen, summary.data()))
 				DrawWorld(context, *streamer, editable);
 		}
