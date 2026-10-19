@@ -2232,7 +2232,8 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   strata_describe)" when cut) and property descriptions cut to their first sentence (100 characters); types, enums,
   ranges and `required` stay (`McpToolsets::MakeCompactToolDefinition`). So the first sentence of a command's
   description says what it does, and a property's first sentence what it is. The default list stays at most 32 tools
-  and 30 KiB of `tools/list` JSON (`CLI.McpToolsets`; 31 tools in about 17 KB, every command in about 70 KB).
+  and 30 KiB of `tools/list` JSON (`CLI.McpToolsets`). It is at the tool limit: 27 core commands and 5 generic tools, about 18.6 KB; every command
+  (124 tools) is about 73 KB. A command added to `core` takes the place of another.
 
 ### Other methods and tests
 
