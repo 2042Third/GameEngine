@@ -16,6 +16,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Physics/PhysicsSystem.h>
+#include <Strata/Renderer/RenderScene.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
@@ -27,6 +28,7 @@
 #include <chrono>
 #include <filesystem>
 #include <thread>
+#include <utility>
 #include <cmath>
 #include <optional>
 #include <set>
@@ -646,6 +648,40 @@ TEST_SUITE("Editor.World")
 		CHECK((*saved)["Components"]["Transform"]["Scale"] == nlohmann::json { 3.0, 3.0, 3.0 });
 		CHECK(project.ReadWorld()->FindSummary(WorldCellKey { 1, 0, 0 })->Stamp
 			== fmt::format("{:016X}", project.Context.GetAssetManager()->GetContentStamp(project.GetCell(0, 0))));
+	}
+
+	TEST_CASE("Playing a world clones the edited scene's render scene, and the cells the copy leaves out leave the clone")
+	{
+		GridWorldProject project("EditorWorldPlayClone", 5);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
+		Settle(project);
+		// The editor's view keeps a render scene of the edited world (no GPU here: its proxies alone).
+		Scene& edited = *project.Context.GetEditScene();
+		RenderScene& renderScene = RenderScene::Get(edited);
+		renderScene.Sync(nullptr);
+		const uint32_t editedProxies = renderScene.GetStats().Proxies;
+		REQUIRE(editedProxies > 0);
+		// A cell starts loading as play starts: the copy leaves its entities out, and the game loads it whole.
+		project.Run("world.loadCells", { { "cells", { { { "layer", "Ground" }, { "x", 4 }, { "z", 4 } } } } });
+		project.Context.Update(Timestep(1.0f / 60.0f));
+
+		project.Run("play.start");
+		const Ref<Scene>& running = project.Context.GetActiveScene();
+		REQUIRE(running.get() != &edited);
+		// The play copy went through Scene::Copy, whose context copiers cloned the render scene.
+		RenderScene* clone = RenderScene::Find(*running);
+		REQUIRE(clone != nullptr);
+		CHECK(clone->GetCloneSource() == renderScene.GetId());
+		clone->Sync(nullptr);
+		std::string error;
+		CHECK_MESSAGE(clone->Validate(&error), error);
+		// One proxy per renderer the copy holds: those of cells it left out went with their entities.
+		const auto renderers = std::as_const(running->GetRegistry()).storage<MeshRendererComponent>();
+		REQUIRE(renderers);
+		CHECK(clone->GetStats().Proxies == renderers->size());
+		CHECK(clone->GetStats().Proxies <= editedProxies);
+		project.Run("play.stop");
 	}
 
 	TEST_CASE("A move across a cell border is one undo step, and the save writes both cells")
