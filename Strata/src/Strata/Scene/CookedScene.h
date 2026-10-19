@@ -152,6 +152,9 @@ namespace Strata
 		// instantiated: Scene::Instantiate with InstantiationOptions::KeepIDs).
 		static Ref<Scene> ReadScene(std::span<const uint8_t> bytes, const CookedSceneReadOptions& options = {}, std::vector<std::string>* outWarnings = nullptr,
 			std::string* outError = nullptr);
+		// The cooked documents read since the process started (Read, also through ReadScene), as
+		// SceneSerializer::GetDeserializeCount counts JSON ones: tests check that a load reads its document once.
+		static uint64_t GetReadCount();
 	};
 
 }

@@ -12,6 +12,7 @@
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Runtime/GameRuntime.h>
 #include <Strata/Scene/Entity.h>
+#include <Strata/Scene/CookedScene.h>
 #include <Strata/Scene/SceneSerializer.h>
 
 #include <nlohmann/json.hpp>
@@ -276,40 +277,44 @@ TEST_SUITE("Editor.GameFlow")
 		const std::filesystem::path directory = CreateTemporaryDirectory("SceneLoadReads");
 		GameFlowProject project(directory / "Flow");
 		EditorContext& context = project.Context;
+		// Scene documents read in either form: JSON in the editor, cooked in exported games (whose packs cook scenes).
+		const auto documentReads = []() { return SceneSerializer::GetDeserializeCount() + CookedSceneReader::GetReadCount(); };
 
 		// Opening a scene for editing.
-		uint64_t reads = SceneSerializer::GetDeserializeCount();
+		uint64_t reads = documentReads();
 		Tests::RunCommandToCompletion(context, project.Commands, "scene.open", { { "scene", UUIDToJson(project.LevelTwo) } });
-		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		CHECK(documentReads() - reads == 1);
 		REQUIRE(context.GetEditScene()->FindEntityByName("Boss").IsValid());
 		// Opening it again reads the file again (once), not a copy kept from before.
-		reads = SceneSerializer::GetDeserializeCount();
+		reads = documentReads();
 		Tests::RunCommandToCompletion(context, project.Commands, "scene.open", { { "scene", UUIDToJson(project.LevelOne) } });
-		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		CHECK(documentReads() - reads == 1);
 
 		// A switch the game asks for in play mode.
 		project.Run("play.start");
-		reads = SceneSerializer::GetDeserializeCount();
+		reads = documentReads();
 		context.GetActiveScene()->RequestSceneLoad(project.LevelTwo);
 		UpdateUntil([&] { project.Update(); }, [&] { return context.GetActiveScene()->FindEntityByName("Boss").IsValid(); });
-		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		CHECK(documentReads() - reads == 1);
 		project.Run("play.stop");
 
 		// The exported game's start scene, and a switch.
 		project.Run("project.setStartScene", { { "scene", UUIDToJson(project.LevelOne) } });
 		const nlohmann::json exported = Tests::RunCommandToCompletion(context, project.Commands, "project.export",
 			{ { "directory", FileSystem::ToUTF8(directory / "Build") }, { "includeRuntime", false } });
-		reads = SceneSerializer::GetDeserializeCount();
+		reads = documentReads();
+		const uint64_t cookedReads = CookedSceneReader::GetReadCount();
 		std::string error;
 		Scope<GameRuntime> game = GameRuntime::Create(FileSystem::FromUTF8(exported["manifest"].get<std::string>()), &error);
 		REQUIRE_MESSAGE(game, error);
 		const Timestep frame(1.0f / 60.0f);
 		UpdateUntil([&] { game->Update(frame); }, [&] { return game->GetScene() && game->GetSceneHandle() == project.LevelOne; });
-		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
-		reads = SceneSerializer::GetDeserializeCount();
+		CHECK(documentReads() - reads == 1);
+		CHECK(CookedSceneReader::GetReadCount() - cookedReads == 1);
+		reads = documentReads();
 		game->GetScene()->RequestSceneLoad(project.LevelTwo);
 		UpdateUntil([&] { game->Update(frame); }, [&] { return game->GetSceneHandle() == project.LevelTwo; });
-		CHECK(SceneSerializer::GetDeserializeCount() - reads == 1);
+		CHECK(documentReads() - reads == 1);
 		CHECK(game->GetScene()->FindEntityByName("Boss").IsValid());
 	}
 

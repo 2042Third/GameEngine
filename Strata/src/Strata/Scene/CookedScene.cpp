@@ -29,6 +29,8 @@ namespace Strata
 		// Values a column decodes between two asks whether the read is cancelled.
 		constexpr uint32_t c_CancelCheckValues = 4096;
 
+		std::atomic<uint64_t> s_ReadCount = 0;
+
 		bool Fail(std::string* outError, std::string message)
 		{
 			if (outError)
@@ -557,9 +559,15 @@ namespace Strata
 
 	}
 
+	uint64_t CookedSceneReader::GetReadCount()
+	{
+		return s_ReadCount.load(std::memory_order_relaxed);
+	}
+
 	std::optional<CookedSceneContents> CookedSceneReader::Read(std::span<const uint8_t> bytes, const CookedSceneReadOptions& options, std::string* outError)
 	{
 		ST_PROFILE_FUNCTION();
+		s_ReadCount.fetch_add(1, std::memory_order_relaxed);
 		auto fail = [outError](std::string message) -> std::optional<CookedSceneContents>
 		{
 			if (outError)
