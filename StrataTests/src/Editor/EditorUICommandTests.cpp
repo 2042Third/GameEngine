@@ -233,11 +233,11 @@ TEST_SUITE("Editor.UICommands")
 			{ "position", { -40, 30 } }, { "size", { 300, 60 } }, { "text", "Score: 0" } });
 		const nlohmann::json button = harness.Run("ui.create", { { "type", "button" }, { "parent", canvas["entity"] } });
 
-		const nlohmann::json small = harness.Run("ui.layout", { { "screen", { 1280, 720 } } });
-		const nlohmann::json large = harness.Run("ui.layout", { { "screen", { 2560, 1440 } } });
-		REQUIRE(small["canvases"].size() == 1);
-		CHECK(small["canvases"][0]["scale"].get<float>() == doctest::Approx(1280.0f / 1920.0f));
-		CHECK(large["canvases"][0]["scale"].get<float>() == doctest::Approx(2560.0f / 1920.0f));
+		const nlohmann::json at720 = harness.Run("ui.layout", { { "screen", { 1280, 720 } } });
+		const nlohmann::json at1440 = harness.Run("ui.layout", { { "screen", { 2560, 1440 } } });
+		REQUIRE(at720["canvases"].size() == 1);
+		CHECK(at720["canvases"][0]["scale"].get<float>() == doctest::Approx(1280.0f / 1920.0f));
+		CHECK(at1440["canvases"][0]["scale"].get<float>() == doctest::Approx(2560.0f / 1920.0f));
 		auto findRect = [](const nlohmann::json& layout, const nlohmann::json& id)
 		{
 			for (const nlohmann::json& element : layout["elements"])
@@ -248,10 +248,10 @@ TEST_SUITE("Editor.UICommands")
 			FAIL("The element is not listed");
 			return glm::vec4(0.0f);
 		};
-		const glm::vec4 smallRect = findRect(small, score["entity"]) / glm::vec4(1280.0f, 720.0f, 1280.0f, 720.0f);
-		const glm::vec4 largeRect = findRect(large, score["entity"]) / glm::vec4(2560.0f, 1440.0f, 2560.0f, 1440.0f);
+		const glm::vec4 rect720 = findRect(at720, score["entity"]) / glm::vec4(1280.0f, 720.0f, 1280.0f, 720.0f);
+		const glm::vec4 rect1440 = findRect(at1440, score["entity"]) / glm::vec4(2560.0f, 1440.0f, 2560.0f, 1440.0f);
 		for (int index = 0; index < 4; index++)
-			CHECK(smallRect[index] == doctest::Approx(largeRect[index]).epsilon(1e-5));
+			CHECK(rect720[index] == doctest::Approx(rect1440[index]).epsilon(1e-5));
 
 		// What each element is: texts, selectables and their states.
 		const nlohmann::json subtree = harness.Run("ui.layout", { { "entity", button["entity"] } });
