@@ -359,6 +359,12 @@ interleaved A/Bs against wave 2's build; the quiet campaign that decided the bud
 
 Open items and deferrals later waves own:
 
+- Play-testing (wave 4's `authoring-and-playtest`): an `input.sequence` step whose command event fails a check only the
+  command can make (a key name, `input.click`'s hit test) releases its holds and resumes the game, but the step's
+  earlier events have already reached the game's input (checking every value up front needs a dry run of each
+  `input.*` command); the Game view at a fixed resolution reports the editor's UI scale as the game's content scale.
+- Flaky tests seen once, not reproduced since: Windows `CrashGuard`'s "repeated faults on other threads" and the
+  Mac's `GPU.AssetResidency` "Arrivals that need room...".
 - Game UI (wave 4's `game-ui`): world-space canvases draw unlit, after post-processing, and the game's hit tests on
   them ignore scene geometry in front (the editor's picks check meshes); UI action bindings use the engine's input
   names (`Key/KPEnter`, `Gamepad/A`) until an input-actions asset names actions (wave 5).
@@ -548,6 +554,10 @@ Open items and deferrals later waves own:
     `PerfGPU.Streaming.Mips.MaxUploadStageMs` measured 1.98-2.28 ms against the step-0 base's 1.59-1.66 ms, with
     engine-modules and game-ui merged and no UI in its scene, on a machine other streams were building on: to be
     measured again quietly.
+  - Wave 4's `authoring-and-playtest`: `Perf.Editor.PrefabApply10kInstances` (Mac median 701.7 ms) and the prefab drag
+    metrics (`DragInPrefabInstance5kMedian`, `DragPrefabInstanceRoot5kMedian`, `Drag100PrefabInstancesMedian`) are
+    provisional, and the idle editor frame's criterion (`PerfGPU.Editor`) cannot be shown on the Mac, where frames wait
+    for the display (8.3 ms).
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
 
