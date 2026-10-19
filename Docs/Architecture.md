@@ -2216,8 +2216,8 @@ sources (at least one), plus the persistent scene's bodies. `WorldIndex::GetReco
 spawns. Entity IDs a cell shares with another or with the persistent scene fail the cook, naming them (a cell loads only
 when its IDs are new to the scene; IDs of cells unchanged since a cook of an earlier session were checked then); cells
 beyond the 20 km worlds are supported within, and empty ones, are warnings. The fresh index is written into the world
-document (an `AssetDocumentAction`), and with `apply` (default true, when the persistent scene is the edited one) the
-recommended capacity into the persistent scene's
+document (an `AssetDocumentAction`), and with `apply` (default true, when the persistent scene is the edited one in edit
+mode, checked as the cook starts and again as it ends) the recommended capacity into the persistent scene's
 `PhysicsCapacity.MaxBodies` (a `SceneSettingsAction`), one undo step. `world.info` describes a world with its layers and
 how many cells changed since its index was made. An export cooks every world of the project first (`GameExport`'s
 `CookingWorlds` state, between `WaitingForImports` and `Packing`), writing the fresh indexes into the world documents

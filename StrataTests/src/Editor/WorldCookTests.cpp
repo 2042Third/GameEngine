@@ -190,6 +190,41 @@ TEST_SUITE("Editor.WorldCook")
 		CHECK(project.ReadWorld()->GetData().Index.has_value());
 	}
 
+	TEST_CASE("A cook sets the capacity only when the persistent scene is still edited as it ends")
+	{
+		WorldProject project("WorldCookSwitch", 3);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+
+		// An explicit apply fails, writing nothing, when another scene was opened during the cook.
+		EditorCommandResult pending = project.Commands.Execute(project.Context, "world.cook", { { "world", UUIDToJson(project.World) }, { "apply", true } });
+		REQUIRE(pending.IsPending());
+		project.Run("scene.new", { { "force", true } });
+		const size_t undos = project.Context.GetUndoStack().GetPosition();
+		const EditorCommandResult refused = CompleteCommand(project.Context, std::move(pending));
+		REQUIRE_FALSE(refused.Success);
+		CHECK(refused.Error.find("persistent scene") != std::string::npos);
+		CHECK(project.Context.GetEditScene()->GetSettings().PhysicsCapacity.MaxBodies == 0);
+		CHECK_FALSE(project.ReadWorld()->GetData().Index.has_value());
+		CHECK(project.Context.GetUndoStack().GetPosition() == undos);
+
+		// Without apply, the index is written and the other scene keeps its capacity, with a warning saying why.
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) }, { "force", true } });
+		pending = project.Commands.Execute(project.Context, "world.cook", { { "world", UUIDToJson(project.World) } });
+		REQUIRE(pending.IsPending());
+		project.Run("scene.new", { { "force", true } });
+		const size_t before = project.Context.GetUndoStack().GetPosition();
+		const EditorCommandResult result = CompleteCommand(project.Context, std::move(pending));
+		REQUIRE_MESSAGE(result.Success, result.Error);
+		CHECK(result.Value["applied"] == false);
+		CHECK(result.Value["warnings"].dump().find("not set") != std::string::npos);
+		CHECK(project.Context.GetEditScene()->GetSettings().PhysicsCapacity.MaxBodies == 0);
+		CHECK(project.ReadWorld()->GetData().Index.has_value());
+		CHECK(project.Context.GetUndoStack().GetPosition() == before + 1); // The world document's step
+		project.Run("edit.undo");
+		CHECK(project.Context.GetEditScene()->GetSettings().PhysicsCapacity.MaxBodies == 0);
+		CHECK_FALSE(project.ReadWorld()->GetData().Index.has_value());
+	}
+
 	TEST_CASE("A cook its project's close interrupts keeps what it reads alive, fails and writes nothing")
 	{
 		WorldProject project("WorldCookClose", 4);

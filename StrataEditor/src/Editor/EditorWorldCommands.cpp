@@ -261,6 +261,13 @@ namespace Strata
 			return true;
 		}
 
+		// Whether world.cook may set the capacity of the world's persistent scene: it is the edited scene, in edit mode, and not
+		// being opened. Checked when the cook starts and again when it ends, as the edited scene may have changed meanwhile.
+		bool CanApplyCapacity(const EditorContext& context, AssetHandle persistent)
+		{
+			return !context.IsPlaying() && context.GetSceneHandle() == persistent && context.CheckSceneEditable();
+		}
+
 		nlohmann::json DescribeLayers(const WorldData& data)
 		{
 			nlohmann::json layers = nlohmann::json::array();
@@ -368,8 +375,8 @@ namespace Strata
 			"document. Only cells whose files changed since the last cook are read again (cellsRead; cellsReused). Fails, writing nothing, when "
 			"cells share entity IDs with each other or with the persistent scene (the error names them) or a cell cannot be read. apply (default "
 			"true): also sets the persistent scene's physics capacity (Physics Capacity > Max Bodies) to the recommended one, 1.25 times "
-			"maxBodiesInRadius for spawns, when the persistent scene is the edited scene in edit mode (otherwise a warning says it was not set; an "
-			"explicit apply: true then fails). One undo step. Returns staleBefore (cells measured again), maxBodies (the recommended capacity), "
+			"maxBodiesInRadius for spawns, when the persistent scene is the edited scene in edit mode when the cook starts and when it ends "
+			"(otherwise a warning says it was not set; an explicit apply: true then fails, writing nothing). One undo step. Returns staleBefore (cells measured again), maxBodies (the recommended capacity), "
 			"seconds, and warnings: cells beyond the 20 km worlds are supported within, empty cells.",
 			ObjectSchema({ { "world", AssetSchema("The world (.stworld): handle or path") },
 				{ "apply", BoolSchema("Also set the persistent scene's physics capacity (default true)") } }, { "world" }),
@@ -392,7 +399,7 @@ namespace Strata
 				if (!cook)
 					return EditorCommandResult::Fail(error);
 				const uint64_t project = context.GetProjectGeneration();
-				const bool persistentOpen = !context.IsPlaying() && context.GetSceneHandle() == cook->GetCookedData().PersistentScene;
+				const bool persistentOpen = CanApplyCapacity(context, cook->GetCookedData().PersistentScene);
 				if (apply && !persistentOpen)
 				{
 					if (explicitApply)
@@ -400,8 +407,7 @@ namespace Strata
 							"in edit mode, first");
 					apply = false;
 				}
-				const bool skippedApply = !explicitApply && !persistentOpen;
-				return EditorCommandResult::Defer([cook, project, apply, skippedApply, started](EditorContext& pollContext) -> std::optional<EditorCommandResult>
+				return EditorCommandResult::Defer([cook, project, apply, explicitApply, started](EditorContext& pollContext) -> std::optional<EditorCommandResult>
 				{
 					// Another project (or the same one opened again) is not the one the cook read: it stops, writing nothing.
 					EditorAssetManager* assets = pollContext.GetAssetManager();
@@ -417,6 +423,12 @@ namespace Strata
 					const std::optional<AssetMetadata> metadata = assets->GetMetadata(cook->GetWorld());
 					if (!metadata)
 						return EditorCommandResult::Fail("The world was deleted during the cook");
+					// The capacity goes only into the persistent scene, edited in edit mode now: another scene may be open, or a
+					// game may run, since the cook started.
+					const bool applyNow = apply && CanApplyCapacity(pollContext, cook->GetCookedData().PersistentScene);
+					if (explicitApply && apply && !applyNow)
+						return EditorCommandResult::Fail("The world's persistent scene is no longer edited in edit mode, so its capacity cannot be set: "
+							"nothing was written (open it and cook again)");
 
 					// The fresh index, and with apply the capacity: one undo step.
 					std::string writeError;
@@ -436,7 +448,7 @@ namespace Strata
 					}
 					const WorldCookReport& report = cook->GetReport();
 					bool applied = false;
-					if (apply)
+					if (applyNow)
 					{
 						Scene& scene = *pollContext.GetEditScene();
 						const SceneSettings previous = scene.GetSettings();
@@ -453,8 +465,8 @@ namespace Strata
 					if (recorded)
 						pollContext.GetUndoStack().Record(std::move(group));
 					std::vector<std::string> warnings = report.Warnings;
-					if (skippedApply)
-						warnings.push_back("The persistent scene is not the edited scene: its physics capacity was not set (open it and cook again)");
+					if (!explicitApply && !applyNow)
+						warnings.push_back("The persistent scene is not the edited scene in edit mode: its physics capacity was not set (open it and cook again)");
 					return EditorCommandResult::Ok({
 						{ "world", UUIDToJson(cook->GetWorld()) },
 						{ "cells", cook->GetCookedData().Cells.size() },
