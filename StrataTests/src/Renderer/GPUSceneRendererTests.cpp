@@ -361,6 +361,27 @@ TEST_SUITE("GPU.SceneRenderer")
 		{
 			CHECK(bucketStats.DrawCommands == perDrawStats.DrawCommands);
 		}
+
+		// Buckets with more draws than one indirect call may issue are split into several calls (the device's
+		// maxDrawIndirectCount, or a lower MaxDrawsPerIndirectCall): one draw per call issues what a draw per batch issues,
+		// two per call fewer calls, and both draw the same.
+		for (const uint32_t maxDraws : { 1u, 2u })
+		{
+			CAPTURE(maxDraws);
+			SceneRendererSpecification splitSpecification = bucketSpecification;
+			splitSpecification.MaxDrawsPerIndirectCall = maxDraws;
+			SceneRenderer split(splitSpecification);
+			split.SetViewportSize(c_Size, c_Size);
+			const ReadbackImage splitImage = RenderToImage(split, scene, camera);
+			const SceneRendererStats splitStats = split.GetStats();
+			CHECK(MaxDifference(bucketImage, splitImage) == 0);
+			CHECK(splitStats.OpaqueDrawCalls == bucketStats.OpaqueDrawCalls);
+			if (maxDraws == 1)
+				CHECK(splitStats.DrawCommands == perDrawStats.DrawCommands);
+			else if (info.SupportsMultiDrawIndirect && info.SupportsDrawIndirectFirstInstance)
+				CHECK(splitStats.DrawCommands > bucketStats.DrawCommands);
+			CHECK(splitStats.DrawCommands <= perDrawStats.DrawCommands);
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

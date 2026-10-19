@@ -2048,8 +2048,9 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   `drawIndirectCount`), one `drawIndexedIndirect` over the bucket's draw slots (`NoCount`: as many slots as the meshes the
   CPU's marks found have LOD records in that arena, those without instances zeroed; storage for every loaded mesh's
   records), or one per slot (`PerDraw`), through the
-  vertex shaders' `u_DrawList[gl_InstanceIndex]` as before. MoltenVK has no `drawIndirectCount`: there the `NoCount`
-  path runs. The counts (instances, draws, triangles, levels, shadow casters, visible and size-culled proxies) come back
+  vertex shaders' `u_DrawList[gl_InstanceIndex]` as before. No call issues more draws than the device's
+  `maxDrawIndirectCount`: buckets with more slots draw without a GPU-written count (whose value must stay within it), in
+  several `NoCount` calls. MoltenVK has no `drawIndirectCount`: there the `NoCount` path runs. The counts (instances, draws, triangles, levels, shadow casters, visible and size-culled proxies) come back
   2-3 frames late through a readback (`BufferReadback`, `SceneRendererGPUStats`, `AddGPUCounts`). The opaque pixels do not
   depend on the order of a record's instances; shadows' receiver plane bias follows the receiver's normal, not
   screen-space derivatives, which on some GPUs depend on how draws group pixels into quads (`Include/Shadows.glsl`), so

@@ -1109,9 +1109,16 @@ namespace Strata
 				afterState(head);
 			if (indirect)
 			{
-				commandList->drawIndexedIndirect(static_cast<uint32_t>((firstArgument + first) * sizeof(nvrhi::DrawIndexedIndirectArguments)),
-					static_cast<uint32_t>(end - first));
-				m_Stats.DrawCommands++;
+				// Calls of at most the device's (or the specification's) draws each.
+				const size_t maxDraws = GetMaxDrawsPerIndirectCall();
+				for (size_t call = first; call < end;)
+				{
+					const size_t draws = std::min(maxDraws, end - call);
+					commandList->drawIndexedIndirect(static_cast<uint32_t>((firstArgument + call) * sizeof(nvrhi::DrawIndexedIndirectArguments)),
+						static_cast<uint32_t>(draws));
+					m_Stats.DrawCommands++;
+					call += draws;
+				}
 			}
 			else
 			{

@@ -54,6 +54,9 @@ namespace Strata
 		bool SupportsMultiDrawIndirect = false;
 		bool SupportsDrawIndirectFirstInstance = false;
 		bool SupportsDrawIndirectCount = false;
+		// The most draws one indirect call may issue, and the largest draw count a count buffer may hold
+		// (maxDrawIndirectCount; 1 without multiDrawIndirect). Vulkan guarantees 65,535 with multiDrawIndirect.
+		uint32_t MaxDrawIndirectCount = 1;
 		// Samplers that return the minimum or maximum of the texels they filter (samplerFilterMinmax).
 		bool SupportsSamplerMinMax = false;
 	};

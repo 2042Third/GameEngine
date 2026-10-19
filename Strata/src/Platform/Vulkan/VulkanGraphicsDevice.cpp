@@ -700,6 +700,7 @@ namespace Strata
 			m_Info.SupportsWireframe = features.features.fillModeNonSolid == VK_TRUE;
 			m_Info.SupportsExtendedStorageFormats = features.features.shaderStorageImageExtendedFormats == VK_TRUE;
 			m_Info.MaxTextureDimension2D = properties.limits.maxImageDimension2D;
+			m_Info.MaxDrawIndirectCount = std::max(properties.limits.maxDrawIndirectCount, 1u);
 			// Bindless tables are update-after-bind sets of sampled images, visible to every stage: they count against
 			// these limits rather than the plain per-set ones.
 			VkPhysicalDeviceVulkan12Properties properties12 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_PROPERTIES };
@@ -815,6 +816,8 @@ namespace Strata
 		enabled.pNext = &enabled12;
 		m_HostQueryReset = enabled12.hostQueryReset == VK_TRUE;
 		m_Info.SupportsMultiDrawIndirect = enabled.features.multiDrawIndirect == VK_TRUE;
+		if (!m_Info.SupportsMultiDrawIndirect)
+			m_Info.MaxDrawIndirectCount = 1; // What the limit means without the feature, whatever the device reports
 		m_Info.SupportsDrawIndirectFirstInstance = enabled.features.drawIndirectFirstInstance == VK_TRUE;
 		m_Info.SupportsDrawIndirectCount = enabled12.drawIndirectCount == VK_TRUE;
 		m_Info.SupportsSamplerMinMax = enabled12.samplerFilterMinmax == VK_TRUE;

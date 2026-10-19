@@ -77,18 +77,20 @@ namespace
 		SceneRenderer GPU;
 		DrawnCounts LastReference; // The CPU path's counts of the latest Check
 
-		static SceneRendererSpecification Specification(GPUDrivenMode mode, IndirectDrawMode indirect, float lodErrorPixels)
+		static SceneRendererSpecification Specification(GPUDrivenMode mode, IndirectDrawMode indirect, float lodErrorPixels, uint32_t maxDrawsPerCall = 0)
 		{
 			SceneRendererSpecification specification;
 			specification.GPUDriven = mode;
 			specification.IndirectMode = indirect;
 			specification.LODErrorPixels = lodErrorPixels;
+			specification.MaxDrawsPerIndirectCall = maxDrawsPerCall;
 			specification.TextureStreaming = false; // Every level of every texture, on both paths
 			return specification;
 		}
 
-		explicit Comparison(IndirectDrawMode indirect, float lodErrorPixels = 1.0f)
-			: CPU(Specification(GPUDrivenMode::Off, IndirectDrawMode::Auto, lodErrorPixels)), GPU(Specification(GPUDrivenMode::Auto, indirect, lodErrorPixels))
+		explicit Comparison(IndirectDrawMode indirect, float lodErrorPixels = 1.0f, uint32_t maxDrawsPerCall = 0)
+			: CPU(Specification(GPUDrivenMode::Off, IndirectDrawMode::Auto, lodErrorPixels)),
+			GPU(Specification(GPUDrivenMode::Auto, indirect, lodErrorPixels, maxDrawsPerCall))
 		{
 			CPU.SetViewportSize(c_Size, c_Size);
 			GPU.SetViewportSize(c_Size, c_Size);
@@ -386,7 +388,7 @@ namespace
 		{ "Occluded", BuildOccluded },
 	};
 
-	void CompareScenes(GPUContext& gpu, IndirectDrawMode indirect)
+	void CompareScenes(GPUContext& gpu, IndirectDrawMode indirect, uint32_t maxDrawsPerCall = 0)
 	{
 		uint32_t occludedScenes = 0; // Scenes whose third frame occlusion culling took something from
 		for (const TestScene& testScene : c_Scenes)
@@ -400,7 +402,7 @@ namespace
 			TestSkinningPoses poses;
 			Scene scene;
 			const SceneCamera camera = testScene.Build(scene, assets, poses);
-			Comparison comparison(indirect, testScene.LODErrorPixels);
+			Comparison comparison(indirect, testScene.LODErrorPixels, maxDrawsPerCall);
 			const PathFrame frame = comparison.Check(scene, camera);
 			CHECK(frame.Counts.Instances > 0);
 			if (name == "LODs by error")
@@ -587,6 +589,57 @@ TEST_SUITE("GPU.SceneRenderer.IndirectFallback")
 		{
 			CAPTURE(static_cast<int>(mode));
 			CompareScenes(gpu, mode);
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Buckets with more draws than one indirect call may issue are drawn by several calls, also where the GPU writes the counts")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		if (!DeviceDrawsGPUDriven())
+			return;
+		// Every scene, with Auto (a GPU-written count where the device has one: its buckets' slots exceed one draw, so the
+		// frame draws without it) and NoCount, split into calls of one and of two draws.
+		for (const IndirectDrawMode mode : { IndirectDrawMode::Auto, IndirectDrawMode::NoCount })
+		{
+			for (const uint32_t maxDraws : { 1u, 2u })
+			{
+				CAPTURE(static_cast<int>(mode));
+				CAPTURE(maxDraws);
+				CompareScenes(gpu, mode, maxDraws);
+			}
+		}
+
+		// Six meshes in one bucket: one draw per call issues what a draw per slot issues, two per call fewer, one call fewest.
+		SceneTestAssets assets;
+		const std::vector<AssetHandle> meshes = { BuiltinAssets::CubeMesh, BuiltinAssets::SphereMesh, BuiltinAssets::CylinderMesh, BuiltinAssets::ConeMesh,
+			BuiltinAssets::TorusMesh, BuiltinAssets::CapsuleMesh };
+		for (const AssetHandle mesh : meshes)
+			REQUIRE(assets.Manager->LoadAssetSync(mesh));
+		REQUIRE(assets.Manager->LoadAssetSync(BuiltinAssets::DefaultMaterial));
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		const AssetHandle material = LitMaterial(assets, glm::vec4(0.6f, 0.4f, 0.3f, 1.0f));
+		for (size_t index = 0; index < meshes.size(); index++)
+			AddMesh(scene, meshes[index], material, glm::vec3(static_cast<float>(index) * 1.5f - 3.75f, 0.0f, 0.0f), "Shape");
+		const SceneCamera camera = View(glm::vec3(0.0f, 4.0f, 9.0f), glm::vec3(0.0f));
+		const auto drawCommands = [&](IndirectDrawMode mode, uint32_t maxDraws)
+		{
+			SceneRenderer renderer(Comparison::Specification(GPUDrivenMode::Auto, mode, 1.0f, maxDraws));
+			renderer.SetViewportSize(c_Size, c_Size);
+			RenderToImage(renderer, scene, camera);
+			REQUIRE(renderer.GetStats().GPUDriven);
+			return renderer.GetStats().DrawCommands;
+		};
+		const uint32_t perDraw = drawCommands(IndirectDrawMode::PerDraw, 0);
+		CHECK(drawCommands(IndirectDrawMode::NoCount, 1) == perDraw);
+		CHECK(drawCommands(IndirectDrawMode::Auto, 1) == perDraw);
+		if (Renderer::GetGraphicsDevice().GetInfo().SupportsMultiDrawIndirect)
+		{
+			const uint32_t pairs = drawCommands(IndirectDrawMode::NoCount, 2);
+			CHECK(pairs < perDraw);
+			CHECK(drawCommands(IndirectDrawMode::NoCount, 0) < pairs);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

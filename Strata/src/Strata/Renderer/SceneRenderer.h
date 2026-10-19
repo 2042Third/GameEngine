@@ -123,6 +123,11 @@ namespace Strata
 		// fill have no instances), PerDraw with one drawIndexedIndirect per slot (also without multiDrawIndirect). Tests force
 		// each to compare them.
 		IndirectDrawMode IndirectMode = IndirectDrawMode::Auto;
+		// The most draws one indirect call issues; 0 (or more) means the device's limit (GraphicsDeviceInfo::
+		// MaxDrawIndirectCount), which always bounds it. A bucket with more draws is drawn by several calls, and a GPU-driven
+		// frame whose buckets could hold more draws than the limit draws without a GPU-written count (NoCount, split alike).
+		// Tests set it low to check the splits.
+		uint32_t MaxDrawsPerIndirectCall = 0;
 		// Mesh renderers whose projected size (bounding sphere diameter) is below this many pixels of the viewport height are
 		// not drawn in the view, by either path: they add moire and GPU time, not information. 0 draws them all. Shadow
 		// cascades leave out casters below a texel (SceneRendererStats::SubTexelCasters).
@@ -839,7 +844,12 @@ namespace Strata
 			NoCount,   // drawIndexedIndirect over a bucket's draw slots
 			PerDraw    // drawIndexedIndirect per draw slot
 		};
-		GPUIndirectPath GetGPUIndirectPath() const;
+		// How the frame's GPU draws are issued, for buckets of `argumentsPerBucket` draw slots: a count the GPU writes only while
+		// no bucket can hold more draws than one call may issue.
+		GPUIndirectPath GetGPUIndirectPath(uint32_t argumentsPerBucket) const;
+		GPUIndirectPath GetGPUIndirectPath() const { return GetGPUIndirectPath(m_CullConstants.ArgumentsPerBucket); }
+		// The most draws one indirect call issues (SceneRendererSpecification::MaxDrawsPerIndirectCall and the device).
+		uint32_t GetMaxDrawsPerIndirectCall() const;
 		// The culling pipelines and the buffers of fixed size; leaves the path unavailable (logged) when they fail.
 		void CreateCullResources();
 		// Lets go of everything CreateCullResources made (the path is unavailable then).

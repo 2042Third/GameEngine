@@ -1933,6 +1933,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `DrawIndexedIndirectArguments` (written by the CPU into a per-renderer buffer, uploaded where they changed) are drawn
   by one `drawIndexedIndirect` per bucket where the device has `multiDrawIndirect` and `drawIndirectFirstInstance`, else
   by a direct draw per batch without state changes (`SceneRendererSpecification::IndirectMode`, `PerDraw` to force it).
+  No indirect call issues more draws than the device's `maxDrawIndirectCount` (`GraphicsDeviceInfo::MaxDrawIndirectCount`,
+  65,535 at Vulkan's minimum, or a lower `MaxDrawsPerIndirectCall`, which tests set): larger buckets take several calls.
   `SceneRendererStats::DrawCommands` counts the draw calls recorded: submission follows buckets, not distinct meshes.
 
 ### GPU-driven path
@@ -1941,7 +1943,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (`SceneRendererSpecification::GPUDriven`, Docs/Architecture.md, "Render scene"): `Scene/Cull.comp` (the view, and
   `ST_CULL_SHADOW` for the cascades) and `CullBuild.comp` over the render scene's GPU copy (with its mesh and material
   tables) and the geometry pool's tables; the passes draw each bucket indirectly (`IndirectMode`: Auto uses
-  `drawIndexedIndirectCount` where the device has `drawIndirectCount`, else `NoCount`; `PerDraw` draws slot by slot).
+  `drawIndexedIndirectCount` where the device has `drawIndirectCount` and no bucket's slots exceed the draws one call may
+  issue, else `NoCount`, split into calls of at most that many; `PerDraw` draws slot by slot).
   The CPU path is the reference and the fallback (`GPUDriven` Off, devices without `drawIndirectFirstInstance`, and
   renderers whose path cannot be set up: `ReleaseCullResources` keeps none of it, so nothing sized with the viewport or
   the shadow map follows; `GPU.SceneRenderer.GPUDrivenFallback` takes shaders away with `ShaderLibrary::SetUnavailable`).

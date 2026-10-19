@@ -143,7 +143,14 @@ namespace Strata
 			&& Renderer::GetGraphicsDevice().GetInfo().SupportsDrawIndirectFirstInstance;
 	}
 
-	SceneRenderer::GPUIndirectPath SceneRenderer::GetGPUIndirectPath() const
+	uint32_t SceneRenderer::GetMaxDrawsPerIndirectCall() const
+	{
+		const uint32_t device = Renderer::GetGraphicsDevice().GetInfo().MaxDrawIndirectCount;
+		const uint32_t limit = m_Specification.MaxDrawsPerIndirectCall > 0 ? std::min(m_Specification.MaxDrawsPerIndirectCall, device) : device;
+		return std::max(limit, 1u);
+	}
+
+	SceneRenderer::GPUIndirectPath SceneRenderer::GetGPUIndirectPath(uint32_t argumentsPerBucket) const
 	{
 		const GraphicsDeviceInfo& info = Renderer::GetGraphicsDevice().GetInfo();
 		switch (m_Specification.IndirectMode)
@@ -155,7 +162,9 @@ namespace Strata
 			case IndirectDrawMode::Auto:
 				break;
 		}
-		if (info.SupportsDrawIndirectCount)
+		// A bucket's GPU-written count is at most its slots (its draws are records of its arena), and the count must stay
+		// within the limit: buckets of more slots are drawn without it, by calls of at most the limit.
+		if (info.SupportsDrawIndirectCount && argumentsPerBucket <= GetMaxDrawsPerIndirectCall())
 			return GPUIndirectPath::Count;
 		return info.SupportsMultiDrawIndirect ? GPUIndirectPath::NoCount : GPUIndirectPath::PerDraw;
 	}
@@ -595,7 +604,7 @@ namespace Strata
 		constants.ArgumentsPerBucket = std::max({ mirror.GetArenaRecords(0), mirror.GetArenaRecords(1), 1u });
 		constants.BucketCount = static_cast<uint32_t>(m_CullBuckets.size());
 		constants.ViewBucketCount = viewBuckets;
-		constants.DrawsBounded = GetGPUIndirectPath() != GPUIndirectPath::Count ? 1u : 0u;
+		constants.DrawsBounded = GetGPUIndirectPath(constants.ArgumentsPerBucket) != GPUIndirectPath::Count ? 1u : 0u;
 		constants.Feedback = m_Specification.VisibilityFeedback ? 1u : 0u;
 		constants.FirstPhaseViewBuckets = firstPhaseViewBuckets;
 		constants.VisibilityParity = m_VisibilityParity;
@@ -1030,11 +1039,18 @@ namespace Strata
 				m_Stats.DrawCommands++;
 				break;
 			case GPUIndirectPath::NoCount:
-				if (slots == 0)
-					break;
-				commandList->drawIndexedIndirect(offset, slots);
-				m_Stats.DrawCommands++;
+			{
+				// Calls of at most the device's (or the specification's) draws each.
+				const uint32_t maxDraws = GetMaxDrawsPerIndirectCall();
+				for (uint32_t first = 0; first < slots;)
+				{
+					const uint32_t draws = std::min(maxDraws, slots - first);
+					commandList->drawIndexedIndirect(offset + first * static_cast<uint32_t>(sizeof(nvrhi::DrawIndexedIndirectArguments)), draws);
+					m_Stats.DrawCommands++;
+					first += draws;
+				}
 				break;
+			}
 			case GPUIndirectPath::PerDraw:
 				for (uint32_t slot = 0; slot < slots; slot++)
 					commandList->drawIndexedIndirect(offset + slot * static_cast<uint32_t>(sizeof(nvrhi::DrawIndexedIndirectArguments)), 1);
