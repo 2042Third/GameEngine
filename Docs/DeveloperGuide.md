@@ -2411,10 +2411,11 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
   `StrataCLI mcp` lists only the commands of its enabled toolsets (`CLI/McpToolsets`): `core` by default, the commands
   a game is made and tested with (`McpToolsets::GetCoreCommands`), plus one toolset per command group: `scene`
   (`scene.`, `entity.`, `component.`, `prefab.`, `selection.`, `edit.`), `assets` (`asset.`, `material.`, `project.`),
-  `play` (`play.`, `input.`, `audio.`), `scripts`, `animation`, `viewport` (`viewport.`, `camera.`), `streaming`
-  (`asset.stats`, `asset.setBudget`), `perf` (`editor.perf`), `editor` (`editor.`, `log.`), `ui` and `world` (`world.`,
-  `physics.`). Exact names win over prefixes; a group the table does not know gets a toolset named after it, but a new
-  built-in group goes into the table (`CLI.McpToolsets` checks that every command maps to a toolset it names).
+  `play` (`play.`, `input.`, `audio.`: game-ui's `input.click` and `input.type` too), `scripts`, `animation`, `viewport`
+  (`viewport.`, `camera.`), `streaming` (`asset.stats`, `asset.setBudget`), `perf` (`editor.perf`), `editor` (`editor.`,
+  `log.`), `ui` (`ui.create`, `ui.layout`, `ui.hitTest`) and `world` (`world.`, `physics.`). Exact names win over
+  prefixes; a group the table does not know gets a toolset named after it, but a new built-in group goes into the table
+  (`CLI.McpToolsets` checks that every command maps to a toolset it names, and what the `ui` and `play` toolsets hold).
   `--toolsets <a,b>|all` picks them at start, the generic tool `strata_toolsets {enable, disable}` while it runs (the
   client hears `notifications/tools/list_changed`), `strata_describe` lists the toolsets, a toolset's commands (one line
   each) or one command's full description and schema, and `strata_call` runs any command. Tools of commands outside the

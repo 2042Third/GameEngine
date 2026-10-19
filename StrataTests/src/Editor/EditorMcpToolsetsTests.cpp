@@ -8,6 +8,7 @@
 #include "CLI/McpTestClient.h"
 #include "CLI/McpToolsets.h"
 #include "Editor/EditorCommands.h"
+#include "Strata/Core/JsonUtils.h"
 #include "Strata/Network/RpcServer.h"
 #include "TestHelpers.h"
 
@@ -80,6 +81,23 @@ TEST_SUITE("CLI.McpToolsets")
 		const nlohmann::json scene = client.CallTool("strata_describe", nlohmann::json { { "toolset", "scene" } })["structuredContent"];
 		CHECK(scene["toolset"] == "scene");
 		CHECK(scene["commands"].size() > 10);
+		// The game UI's commands: ui.* make up the ui toolset, and its input commands go with the others into play.
+		const auto toolsetCommands = [&client](const char* toolset)
+		{
+			const nlohmann::json described = client.CallTool("strata_describe", nlohmann::json { { "toolset", toolset } });
+			std::set<std::string> commands;
+			const nlohmann::json content = described.value("structuredContent", nlohmann::json::object());
+			if (const nlohmann::json* listed = JsonUtils::Find(content, "commands"); listed && listed->is_array())
+			{
+				for (const nlohmann::json& command : *listed)
+					commands.insert(command.value("command", std::string()));
+			}
+			return commands;
+		};
+		CHECK(toolsetCommands("ui") == std::set<std::string> { "ui.create", "ui.hitTest", "ui.layout" });
+		const std::set<std::string> playCommands = toolsetCommands("play");
+		CHECK(playCommands.contains("input.click"));
+		CHECK(playCommands.contains("input.type"));
 		const EditorCommand* entityGet = registry.Find("entity.get");
 		REQUIRE(entityGet);
 		const nlohmann::json described = client.CallTool("strata_describe", nlohmann::json { { "command", "entity.get" } })["structuredContent"];
