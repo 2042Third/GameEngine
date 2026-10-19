@@ -40,8 +40,10 @@ namespace Strata::CLI
 			"play, scripts, animation, viewport, streaming, perf, editor, ui, world), a toolset's commands, or one command's full "
 			"description and parameters; strata_toolsets enables more toolsets as tools; strata_call runs any command by name. "
 			"editor_status gives an overview of the editor. Entities and assets are referenced by 16-digit hexadecimal IDs (assets "
-			"also by path). Commands that take frames (play_step, input_sequence, captures) answer when they finish. Changes made "
-			"while playing are discarded by play_stop. Save with scene_save or scene_saveAs before editor_quit.";
+			"also by path). Commands that take frames (play_step, input_sequence, captures) answer when they finish. scene_save and "
+			"scene_saveAs write in the background and answer once the file is written (wait: false answers at once with a saveId); "
+			"commands that replace the scene, close the project or quit wait for saves in flight, and editor_batch refuses saves. "
+			"Changes made while playing are discarded by play_stop. Save with scene_save or scene_saveAs before editor_quit.";
 
 		std::string PrettyPrint(const nlohmann::json& value)
 		{

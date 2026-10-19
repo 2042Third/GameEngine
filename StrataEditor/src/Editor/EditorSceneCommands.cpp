@@ -553,9 +553,10 @@ namespace Strata
 			} });
 
 		registry.Register(MayDefer({ "scene.save",
-			"Saves the edited scene to its asset in the background: the frame only takes a snapshot of the scene, the document is written on a "
-			"background thread, and edits made meanwhile stay unsaved (the save holds the scene as it was when the command ran). With wait "
-			"(default true) the command answers once the file is written and published: {scene, path, bytes, entities, seconds, frames, "
+			"Saves the edited scene to its asset in the background and answers once the file is written (wait false: at once). The frame "
+			"only takes a snapshot of the scene, the document is written on a background thread, and edits made meanwhile stay unsaved (the "
+			"save holds the scene as it was when the command ran). With wait (default true) the answer comes once the file is written and "
+			"published: {scene, path, bytes, entities, seconds, frames, "
 			"frameTimes (the editor's frames meanwhile: count, medianMs, meanMs, p95Ms, maxMs), memory {privateMBBefore, peakPrivateMBDuring}}. "
 			"With wait false it answers at once with {scene, path, saveId, state: Writing | Queued}; editor.status's saving lists the saves "
 			"in flight. A save queues behind one that writes. New scenes need scene.saveAs first.",

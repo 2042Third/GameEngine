@@ -54,7 +54,11 @@ TEST_SUITE("CLI.Mcp")
 		CHECK(result["serverInfo"]["name"] == "strata");
 		CHECK(result["serverInfo"]["version"] == c_EngineVersion);
 		CHECK(result["capabilities"]["tools"]["listChanged"] == true);
-		CHECK(result["instructions"].is_string());
+		REQUIRE(result["instructions"].is_string());
+		// Saves answer later: agents must not expect the file at once, nor batch them.
+		const std::string instructions = result["instructions"].get<std::string>();
+		CHECK(instructions.find("scene_save and scene_saveAs write in the background and answer once the file is written") != std::string::npos);
+		CHECK(instructions.find("editor_batch refuses saves") != std::string::npos);
 
 		CHECK_FALSE(client.GetServer().IsInitialized());
 		const size_t outputBefore = client.GetOutput().size();
