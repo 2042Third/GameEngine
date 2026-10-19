@@ -575,7 +575,8 @@ exercised by it.
     entities in the ID buffer, text and stats;
   - `StrataEditor.FeatureTest` and `StrataRuntime.FeatureTest` (label `feature`): the real executables open a copy of
     the project, load the feature scripts (`script.load`), lay out and hit-test the menu (`ui.layout`, `ui.hitTest`),
-    step the physics, click the Play Button and type into the Name Field while playing (`input.click`, `input.type`;
+    step the physics, click the Play Button and type into the Name Field while playing (`input.click`, `input.type`, and
+    `input.click` again as an event of `input.sequence`;
     `expect` conditions on the rects, the ball, the clicks, the field's text and `script.status`), export it with the
     module and run it headless; they must exit cleanly and print what the scripts log
     (`StrataTests/Editor/RunAndExpect.cmake`). A new editor command a game relies on gets a step there.
@@ -2048,12 +2049,15 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (`EditorCommandRegistry::CheckParameters`, with `wait: false` added only where the command declares `wait`); what only
   the command can check (a key's name, `input.click`'s hit test) fails the sequence at its step, which releases its holds
   and resumes a game that ran before it, like every failure of a sequence.
-- **UI input** (`RegisterUIInputCommands`, same file): `input.click {entity, button, frames, wait}` lays the canvases out
+- **UI input** (`RegisterUIInputCommands`, same file): `input.click {entity, button, steps | seconds, wait}` lays the canvases out
   for the UI's input screen, hit tests the center of the element's rect like the UI system does and fails, changing
   nothing, unless the hit is the element or one of its descendants (the error and `errorData.cover` name what covers
   it); then it moves the simulated pointer there (input coordinates: pixels divided by the input-to-pixel factor) and taps
-  the button, listening to `IUIEvents` until the game has seen the release (`clicked`: the selectable it pressed raised a
-  click or a value change). `input.type {text, wait}` queues typed text (`Input::SimulateText`, 1 to 1,024 bytes).
+  the button for its fixed steps like `input.mouseButton` (`frames` the older name), listening to `IUIEvents` until the
+  game has seen the release (`clicked`: the selectable it pressed raised a click or a value change). As a `command` event
+  of `input.sequence` (with `wait: false`) the click lands in the event's step: `Editor.UICommands` flips a toggle that
+  way and the feature run presses the Play Button in a sequence. `input.type {text, wait}` queues typed text
+  (`Input::SimulateText`, 1 to 1,024 bytes).
 
 ### Game UI commands
 

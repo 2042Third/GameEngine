@@ -994,24 +994,24 @@ namespace Strata
 	{
 		registry.Register(MayDefer({ "input.click",
 			"Clicks a game UI element of the running game (play mode) as a player would: moves the simulated pointer to the center of its "
-			"rect (at the game view's size) and taps a mouse button there. Fails, changing nothing, when the element is not shown on a canvas "
+			"rect (at the Game view's size) and taps a mouse button there for 'steps' fixed steps of the game (default 1; or 'seconds'), like "
+			"input.mouseButton. Fails, changing nothing, when the element is not shown on a canvas "
 			"that receives input, or when something else is on top of its center (the error names what a click would hit: the menu is "
-			"covered). Answers once the game has seen the release, with entity, position (in the game view, as input.mouseMove takes it), "
+			"covered). Answers once the game has seen the release, with entity, position (in the Game view, as input.mouseMove takes it), steps, "
 			"clicked (a button clicked or a toggle or slider changed: the selectable the click pressed raised its event) and events (every UI "
 			"event of the click: type click, valueChanged or focusChanged, widget, name, value, focused); with wait false at once, without "
-			"clicked and events.",
-			ObjectSchema({
+			"clicked and events. In input.sequence it is a command event (run with wait false): the click lands in its step.",
+			WithDurations(ObjectSchema({
 				{ "entity", EntitySchema("The UI element to click (a button, toggle, slider, or any element whose center is a raycast target)") },
 				{ "button", StringSchema("The mouse button (default Left; case does not matter)") },
-				{ "frames", IntegerSchema("Fixed steps of the game the button stays down (default 1)", 1, c_MaxHoldSteps) },
-				{ "wait", WaitSchema() } }, { "entity" }),
+				{ "wait", WaitSchema() } }, { "entity" }), "the click's press", true),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				Scene& scene = *context.GetActiveScene();
 				CommandArguments arguments(parameters);
 				const Entity target = arguments.GetEntity(scene, "entity");
 				const std::string buttonName = arguments.GetString("button", "Left");
-				const int64_t frames = arguments.GetInt("frames", 1, 1, c_MaxHoldSteps);
+				const int64_t steps = ReadDuration(parameters, arguments, context).value_or(1);
 				const bool wait = ReadWait(arguments);
 				const std::optional<MouseCode> button = InputNames::FindMouseButton(buttonName);
 				if (arguments.IsValid() && !button)
@@ -1073,11 +1073,11 @@ namespace Strata
 				const glm::vec2 position = pixel / screen.InputToPixels;
 				const Entity pressed = FindSelectable(hitEntity);
 				nlohmann::json result = { { "entity", UUIDToJson(target.GetUUID()) }, { "position", { position.x, position.y } },
-					{ "button", InputNames::GetMouseButtonName(*button) } };
+					{ "button", InputNames::GetMouseButtonName(*button) }, { "steps", steps } };
 				Input::SimulateMouseMove(position);
 				if (!wait)
 				{
-					context.GetSimulatedInput().Press(SimulatedControlType::MouseButton, *button, static_cast<uint32_t>(frames), context.GetFixedStepCount());
+					context.GetSimulatedInput().Press(SimulatedControlType::MouseButton, *button, static_cast<uint32_t>(steps), context.GetFixedStepCount());
 					return AnswerNow(context, std::move(result));
 				}
 
@@ -1086,7 +1086,7 @@ namespace Strata
 				IUIEvents* source = scene.GetService<IUIEvents>();
 				const UIEventListenerID listener = source ? source->AddUIEventListener([events](const UIEventInfo& event) { events->push_back(event); }) : 0;
 				const std::weak_ptr<Scene> playing = context.GetActiveScene();
-				Ref<const SimulatedHold> hold = context.GetSimulatedInput().Press(SimulatedControlType::MouseButton, *button, static_cast<uint32_t>(frames), context.GetFixedStepCount());
+				Ref<const SimulatedHold> hold = context.GetSimulatedInput().Press(SimulatedControlType::MouseButton, *button, static_cast<uint32_t>(steps), context.GetFixedStepCount());
 				const UUID pressedID = pressed ? pressed.GetUUID() : UUID::Null();
 				return EditorCommandResult::Defer([hold, events, listener, playing, pressedID, result = std::move(result)](EditorContext& pollContext)
 					-> std::optional<EditorCommandResult>

@@ -468,17 +468,18 @@ and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
   `{"events": [{"step": 0, "key": "W", "action": "tap", "steps": 60}, {"step": 20, "key": "Space"}], "steps": 90,
   "observe": [{"entity": "<hero>", "world": true, "every": 10}, {"entity": "<hero>", "script": "Player", "field": "Score"}]}`.
   It pauses the game, runs one step per frame with each step's events (also `mouseButton`, `gamepadButton`, `gamepadAxis`,
-  `mouseMove`, `scroll`, and `command` for any `input.*` command), and answers `{stepsRun, seen, samples: [{step, values}]}`
+  `mouseMove`, `scroll`, and `command` for any `input.*` command, such as `{"step": 30, "command": "input.click",
+  "parameters": {"entity": "<button>"}}` to press a menu button in step 30), and answers `{stepsRun, seen, samples: [{step, values}]}`
   once done (the same answer at any frame rate), resuming the game if it ran and releasing its holds (`keepHeld` keeps
   them). A failing event (a `command` whose command refuses its parameters) ends it with the error, also releasing its
   holds and resuming the game. Prefer it to loops of `input.key` + `play.step`.
 - Each command ends only its own hold: overlapping taps of a key keep it down until the last ends; `"action": "release"` ends
   every hold of the key and `input.releaseAll` every hold of every button. Holds outlive your connection; the editor's status bar
   lists them in a pill that releases them when a person clicks it.
-- A tap of 1 frame is one key press for games that act on `IsKeyPressed` or `KeyRepeat`; use `frames` (or press/release) to
+- A tap of 1 step is one key press for games that act on `IsKeyPressed` or `KeyRepeat`; use `steps` (or press/release) to
   hold a key for repeats.
-- Menus: `input.click {"entity": ...}` moves the pointer to the center of a UI element's rect at the game view's size and taps
-  the button there. It fails, changing nothing, when the element is hidden, on a canvas that does not receive input, or
+- Menus: `input.click {"entity": ...}` moves the pointer to the center of a UI element's rect at the Game view's size and taps
+  the button there (for `steps`, default 1, like `input.mouseButton`). It fails, changing nothing, when the element is hidden, on a canvas that does not receive input, or
   covered (the error names what a click would hit, `errorData.cover`); the answer says whether the button clicked or the
   toggle or slider changed (`clicked`) and lists the UI events (`click`, `valueChanged`, `focusChanged`). The UI's own
   keyboard and gamepad navigation answers `input.key` (arrows, `Enter`, `Escape`) and `input.gamepadButton` (`DPadUp`, `A`,

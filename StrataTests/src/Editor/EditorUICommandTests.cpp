@@ -342,6 +342,65 @@ TEST_SUITE("Editor.UICommands")
 		CHECK(covered.ErrorData["cover"] == cover["entity"]);
 	}
 
+	TEST_CASE("input.click holds its button for fixed steps of the game, also as an event of input.sequence")
+	{
+		PlayingUIHarness harness;
+		const nlohmann::json canvas = harness.Run("ui.create", { { "type", "canvas" } });
+		const nlohmann::json toggle = harness.Run("ui.create", { { "type", "toggle" }, { "parent", canvas["entity"] }, { "anchor", "topLeft" },
+			{ "position", { 100, 100 } } });
+		harness.Run("play.start");
+		harness.Frame();
+		const Entity toggleEntity = harness.Find(toggle["entity"]);
+		REQUIRE(toggleEntity.GetComponent<UIToggleComponent>().IsOn);
+
+		// Steps like the other input commands: frames is their older name, seconds round up to whole steps; one of them only.
+		const EditorCommandResult clicked = harness.RunFrames("input.click", { { "entity", toggle["entity"] }, { "steps", 3 } });
+		INFO(clicked.Error);
+		REQUIRE(clicked.Success);
+		CHECK(clicked.Value["steps"] == 3);
+		CHECK(clicked.Value["clicked"] == true);
+		CHECK_FALSE(toggleEntity.GetComponent<UIToggleComponent>().IsOn);
+		const EditorCommandResult older = harness.RunFrames("input.click", { { "entity", toggle["entity"] }, { "frames", 2 } });
+		REQUIRE(older.Success);
+		CHECK(older.Value["steps"] == 2);
+		CHECK(toggleEntity.GetComponent<UIToggleComponent>().IsOn);
+		const float fixedStep = harness.Context.GetActiveScene()->GetSettings().FixedTimestep;
+		const EditorCommandResult timed = harness.RunFrames("input.click", { { "entity", toggle["entity"] }, { "seconds", fixedStep * 2.5f } });
+		REQUIRE(timed.Success);
+		CHECK(timed.Value["steps"] == 3);
+		CHECK(harness.Commands.Execute(harness.Context, "input.click", { { "entity", toggle["entity"] }, { "steps", 2 }, { "frames", 2 } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+		CHECK(harness.Commands.Execute(harness.Context, "input.click", { { "entity", toggle["entity"] }, { "steps", 0 } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
+
+		// In a sequence the click is a command event: it lands in its step, whatever the frame rate.
+		const bool before = toggleEntity.GetComponent<UIToggleComponent>().IsOn;
+		const EditorCommandResult sequence = harness.RunFrames("input.sequence", { { "steps", 6 },
+			{ "events", { { { "step", 2 }, { "command", "input.click" }, { "parameters", { { "entity", toggle["entity"] }, { "steps", 2 } } } } } },
+			{ "observe", { { { "entity", toggle["entity"] }, { "component", "UIToggle" }, { "property", "IsOn" }, { "every", 1 } } } } });
+		INFO(sequence.Error);
+		REQUIRE(sequence.Success);
+		CHECK(sequence.Value["stepsRun"] == 6);
+		CHECK(sequence.Value["seen"] == nlohmann::json::array({ { { "step", 2 }, { "event", 0 } } }));
+		// Samples follow each step: the button is down in steps 2 and 3 and up in step 4, whose update flips the toggle.
+		const nlohmann::json& samples = sequence.Value["samples"];
+		REQUIRE(samples.size() == 6);
+		for (size_t index = 0; index < samples.size(); index++)
+		{
+			CAPTURE(index);
+			CHECK(samples[index]["step"] == index + 1);
+			CHECK(samples[index]["values"][0]["value"] == (index >= 4 ? !before : before));
+		}
+		CHECK(toggleEntity.GetComponent<UIToggleComponent>().IsOn == !before);
+
+		// What only the click can check fails the sequence at its step: a toggle under a cover is not clicked.
+		harness.Run("ui.create", { { "type", "panel" }, { "parent", canvas["entity"] }, { "anchor", "stretch" } });
+		const EditorCommandResult covered = harness.RunFrames("input.sequence", { { "steps", 4 },
+			{ "events", { { { "step", 1 }, { "command", "input.click" }, { "parameters", { { "entity", toggle["entity"] } } } } } } });
+		CHECK_FALSE(covered.Success);
+		CHECK(covered.Error.find("covered") != std::string::npos);
+	}
+
 	TEST_CASE("A canvas in the scene: ui.layout reports where the game camera shows it, ui.hitTest and input.click reach it through it")
 	{
 		PlayingUIHarness harness;
