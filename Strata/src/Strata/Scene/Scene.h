@@ -65,7 +65,8 @@ namespace Strata
 		uint32_t MaxFixedStepsPerFrame = 8; // Prevents a spiral of death after long frames
 		PhysicsCapacitySettings PhysicsCapacity;
 		// Entities additive loads (sub-scenes) may create per update of the scene, all of them together; each update also
-		// stops creating once Scene::c_MaxInstantiationMillisecondsPerFrame went by. From 1 to c_MaxEntitiesInstantiatedLimit.
+		// stops creating once Scene::c_MaxSubSceneMillisecondsPerFrame went by (shared with destruction). From 1 to
+		// c_MaxEntitiesInstantiatedLimit.
 		uint32_t MaxEntitiesInstantiatedPerFrame = 5000;
 		static constexpr uint32_t c_MaxEntitiesInstantiatedLimit = 1u << 20;
 		PhysicsLayerSettings PhysicsLayers; // Layer names and which layers collide
@@ -178,11 +179,12 @@ namespace Strata
 		// the asset and everything it uses load in the background (SceneLoader, pinned at the options' priority), its
 		// prepared scene is compiled on the job system (EntityPrototype), and its entities are then created over the following
 		// updates (UpdateSubScenes), at most SceneSettings::MaxEntitiesInstantiatedPerFrame per update and for about
-		// c_MaxInstantiationMillisecondsPerFrame. They keep the IDs they have in the asset, so a sub-scene whose IDs the scene
-		// has already (the same sub-scene twice) fails, adding nothing; its settings (gravity...) are not applied. Each of its
-		// top-level entities gets a SubSceneComponent. Created entities are like any other: systems hear their components'
-		// signals (scripts get OnCreate, physics adds bodies, audio starts voices, renderers add proxies). Returns the
-		// sub-scene's ID, or 0 with an error when no load can start (no active asset manager, not a scene asset).
+		// c_MaxSubSceneMillisecondsPerFrame (shared with the slices that destroy unloading sub-scenes). They keep the IDs they
+		// have in the asset, so a sub-scene whose IDs the scene has already (the same sub-scene twice) fails, adding nothing;
+		// its settings (gravity...) are not applied. Each of its top-level entities gets a SubSceneComponent. Created entities
+		// are like any other: systems hear their components' signals (scripts get OnCreate, physics adds bodies, audio starts
+		// voices, renderers add proxies). Returns the sub-scene's ID, or 0 with an error when no load can start (no active
+		// asset manager, not a scene asset).
 		SubSceneID LoadSubScene(AssetHandle scene, const SubSceneOptions& options = {}, std::string* outError = nullptr);
 		// Adds the entities of a prepared scene the same way, without loading anything (the scene is compiled on the job
 		// system: nothing may use or change it afterwards; its systems must not run). 0 with an error for a null scene.
