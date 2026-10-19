@@ -443,15 +443,15 @@ namespace Strata
 			ImGui::TextColored(colors.Error, "%u bodies without collision: the world is at its growth limit", physics.WaitingForSlot);
 			UI::ItemProbe::Record("Streaming.PhysicsWaiting");
 		}
-		ImGui::Text("Last frame: +%u built Â· -%u destroyed", physics.AddedLastUpdate, physics.RemovedLastUpdate);
+		ImGui::Text("Last frame: +%u built \xC2\xB7 -%u destroyed", physics.AddedLastUpdate, physics.RemovedLastUpdate);
 		ImGui::SameLine();
-		ImGui::TextColored(physics.PendingOther > 0 ? colors.Warning : colors.TextSecondary, "Â· %u waiting for meshes or valid transforms", physics.PendingOther);
+		ImGui::TextColored(physics.PendingOther > 0 ? colors.Warning : colors.TextSecondary, "\xC2\xB7 %u waiting for meshes or valid transforms", physics.PendingOther);
 		if (physics.GrowthCount > 0)
 			ImGui::Text("Grew %u %s, the last in %.1f ms", physics.GrowthCount, physics.GrowthCount == 1 ? "time" : "times", physics.LastGrowthMs);
 		else
 			ImGui::TextColored(colors.TextSecondary, "Never grew");
 		ImGui::SameLine();
-		ImGui::TextColored(colors.TextSecondary, "Â· reserves %.1f MB", ToMB(physics.ReservedBytes));
+		ImGui::TextColored(colors.TextSecondary, "\xC2\xB7 reserves %.1f MB", ToMB(physics.ReservedBytes));
 	}
 
 	void StreamingPanel::DrawUploads(const AssetManagerStats& stats)

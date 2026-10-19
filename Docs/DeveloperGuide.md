@@ -1284,6 +1284,8 @@ works: Docs/Architecture.md, "World partition"; for people: Docs/Manual/Worlds.m
     font by `StrataEditor/Tools/GenerateIconHeader.py`). ImGui's built-in font is never added. Chinese, Japanese and
     Korean text comes from the system's fonts (`Platform::FindFallbackFontFiles`), read on an I/O thread at startup and
     merged behind the editor's own glyphs between frames (`EditorFonts::BeginLoadingFallback`, `UpdateFallback`).
+    Characters beyond ASCII in the sources are their `\x` escapes or plain UTF-8, never UTF-8 encoded twice (a middle dot
+    pasted through a Latin-1 tool shows as "A circumflex, dot"): `Editor.UI.Source` scans every editor source for it.
   - Controls come from the widget kit (`UI/Widgets.h`: toolbar, icon and action buttons, links, chips, status pills,
     section headers, headings, cards and entry cards, text fields, copyable code, the brand mark, modal dialogs); every kit
     widget records its rectangle in `UI::ItemProbe` under its id.
