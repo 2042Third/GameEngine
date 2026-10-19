@@ -1783,8 +1783,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   running and queued jobs); `stages` lists the main thread's stages only. `gpu` is the GPU's side of the same frames
   (frames with GPU times, the latency, busy time, per GPU stage, and `boundBy`: `FrameBound` by the 90% rules), and
   `renderStats` the viewport panel's latest frame (`CommandUtils::DescribeRenderStats` of its `SceneRendererStats` and
-  `SceneRendererGPUStats`; null while the panel renders none). `viewport.capture` returns the captured frame's
-  `renderStats`, waiting up to 8 frames for its GPU times once the GPU finished it.
+  `SceneRendererGPUStats`; null while the panel renders none), `gameRenderStats` the Game view's alike (null while it is
+  hidden or closed): every view a feature adds describes its frame through `DescribeRenderStats`. `viewport.capture`
+  returns the captured frame's `renderStats`, waiting up to 8 frames for its GPU times once the GPU finished it.
 - `StrataEditor --commands script.json` runs a JSON array of `{"command", "parameters", "expect", "bind"}` at startup
   (`EditorCommandScript`); a pending command holds the script until it completes. `expect` (optional) maps JSON
   pointers into the command's result to conditions, e.g. `{"/values/Translation/1": {"min": 1.6, "max": 1.7}}` or

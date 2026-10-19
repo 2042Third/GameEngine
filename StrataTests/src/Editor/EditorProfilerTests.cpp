@@ -50,7 +50,8 @@ namespace
 	// The result's shape, which tools and command scripts rely on.
 	void CheckProfileSchema(const nlohmann::json& profile)
 	{
-		CHECK(GetKeys(profile) == std::set<std::string> { "frames", "frame", "framesPerSecond", "stageSum", "untimed", "jobs", "stages", "gpu", "renderStats" });
+		CHECK(GetKeys(profile) == std::set<std::string> { "frames", "frame", "framesPerSecond", "stageSum", "untimed", "jobs", "stages", "gpu", "renderStats",
+			"gameRenderStats" });
 		CHECK(profile["frames"].is_number_unsigned());
 		CHECK(profile["framesPerSecond"].is_number());
 		CHECK(GetKeys(profile["frame"]) == c_TimeKeys);
@@ -143,10 +144,11 @@ TEST_SUITE("Editor.Perf")
 		CHECK(stages["Editor.UI"]["maxMs"] == 0.0f);
 		CHECK(profile["frame"]["avgMs"].get<float>() > 0.0f);
 		CHECK(profile["framesPerSecond"].get<float>() > 0.0f);
-		// Without a GPU: no GPU times, nothing bounds the frames known, and no viewport frame.
+		// Without a GPU: no GPU times, nothing bounds the frames known, and no viewport or Game view frame.
 		CHECK(profile["gpu"]["frames"] == 0);
 		CHECK(profile["gpu"]["boundBy"] == "unknown");
 		CHECK(profile["renderStats"].is_null());
+		CHECK(profile["gameRenderStats"].is_null());
 
 		// In every frame the stages add up to at most the frame's time, and so do their statistics.
 		for (uint32_t age = 0; age < c_ProfiledFrames; age++)

@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Editor/CommandTestUtils.h"
+#include "Editor/CommandUtils.h"
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -992,6 +993,14 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(game->GetOutputTexture()->getDesc().height == 720);
 		viewport.SetGameViewSize(frame.RenderSize);
 
+		// editor.perf reports the Game view's frame beside the viewport's, as viewport.capture and the viewport describe theirs.
+		game->GetSceneRenderer().ResolveGPUStats(true); // The GPU-driven path's counts are known once the GPU culled the frame
+		nlohmann::json perf = harness.Run("editor.perf");
+		CHECK(perf["renderStats"].is_null()); // The viewport panel rendered nothing
+		REQUIRE(perf["gameRenderStats"].is_object());
+		CHECK(perf["gameRenderStats"] == CommandUtils::DescribeRenderStats(game->GetStats(), game->GetGPUStats()));
+		CHECK(perf["gameRenderStats"].contains("gpuMs"));
+
 		// Captures of the scene's camera take the Game view's resolution; the editor camera keeps the viewport's.
 		nlohmann::json result;
 		DecodedImage image = harness.Capture({ { "camera", "scene" }, { "waitForAssets", false } }, &result);
@@ -1013,6 +1022,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		panel.OnHidden(panelContext);
 		CHECK(game->GetSize() == glm::uvec2(0));
 		CHECK(viewport.GetGameViewSize() == glm::uvec2(0));
+		CHECK(harness.Run("editor.perf")["gameRenderStats"].is_null());
 		REQUIRE(game->Render(context, frame.RenderSize, *view, viewport.GetSettings(), false));
 		REQUIRE(game->GetSize() == glm::uvec2(1280, 720));
 		panel.OnDetach(panelContext);

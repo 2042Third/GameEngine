@@ -122,7 +122,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What does the game play (sound)? | `audio.state` (play mode): `voices` (entity or null for one-shots, clip, playing, looping, position...), `oneShots` (`playing`, `played`, `dropped`), `listener`, `masterVolume` |
 | What happened (errors, script output)? | `log.read` (`{"newest": true, "limit": 20}` for the latest first, paging with `before` = the returned `oldest`; oldest first with `after` = the previous `latest`; `minLevel`; `logger`: `Strata` engine, `App` editor, `Script` scripts) |
 | How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`; `importMemoryMB`: the imports' memory estimates against their budget); `asset.setBudget` changes the open project's budgets (MB of memory, staging and uploads per frame; ms of finalization and of upload steps per frame; `importMB`, the memory imports may take together: imports beyond it wait their turn) |
-| Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %; `gpu`: the GPU's stages and `boundBy`; `renderStats`: what the viewport's frame drew) |
+| Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %; `gpu`: the GPU's stages and `boundBy`; `renderStats`: what the viewport's frame drew; `gameRenderStats`: the Game view's) |
 
 Commands added at run time (for example `script.*`, `viewport.*`, `camera.*` when those features are present)
 appear in `editor.commands` and as tools automatically. The viewport commands need rendering: they fail in an
@@ -453,7 +453,8 @@ time: presenting, and the wait for the display's image at the back buffer's firs
 (the GPU's median busy time takes at least 90% of the frame interval and exceeds the CPU's frame time: make the scene
 cheaper to draw), `"cpu"` (the CPU's frame time does: look at `stages`), `"capped"` (vsync or a frame-rate cap sets the
 pace: neither is the limit) or `"unknown"` (no GPU times: `--no-gpu`, or a driver without timestamps). Its `renderStats`
-(and every `viewport.capture` result's, for the captured frame) says what a frame drew: `gpuDriven` (the GPU culled it
+(`gameRenderStats` for the Game view's frame, null while it is hidden; and every `viewport.capture` result's, for the
+captured frame) says what a frame drew: `gpuDriven` (the GPU culled it
 and built its draws: its counts are the GPU's, of a frame 2-3 frames older in `editor.perf` and of the captured frame in
 captures, once `gpuCounts` is true), `feedbackRequests` (its asset requests came from the GPU's visibility feedback of a
 frame 2-3 frames older: the CPU walks the view itself only on first frames, camera cuts and frames after assets loaded),

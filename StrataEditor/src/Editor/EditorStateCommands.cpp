@@ -858,7 +858,8 @@ namespace Strata
 			"their upload to the GPU), geometryPool "
 			"(the meshes' GPU geometry: usedMB, capacityMB, allocations, fragmentation, moves, growths), sceneMirrorMB (the GPU memory of the scenes' "
 			"GPU copies: a playing scene's doubles its scene's), gpuMs "
-			"(per GPU stage of the frame gpuStatsFrame names). Times are milliseconds as avgMs, p50Ms and p95Ms (nearest rank) and maxMs.",
+			"(per GPU stage of the frame gpuStatsFrame names). gameRenderStats is the same for the Game view's latest frame (null while it is "
+			"hidden or closed); both views' GPU work adds up in gpu's stages. Times are milliseconds as avgMs, p50Ms and p95Ms (nearest rank) and maxMs.",
 			ObjectSchema({ { "frames", IntegerSchema("How many of the latest frames to summarize (default 120)", 1, FrameProfiler::c_DefaultCapacity) } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -872,6 +873,10 @@ namespace Strata
 				const ViewportRenderer* viewport = context.GetViewport().FindRenderer();
 				result["renderStats"] = viewport && viewport->GetStats().Rendered
 					? DescribeRenderStats(viewport->GetStats(), viewport->GetGPUStats()) : nlohmann::json(nullptr);
+				// The Game view's, while it renders (a hidden or closed Game view keeps no targets: its size is zero).
+				const ViewportRenderer* game = context.GetViewport().FindGameRenderer();
+				result["gameRenderStats"] = game && game->GetSize().x > 0 && game->GetStats().Rendered
+					? DescribeRenderStats(game->GetStats(), game->GetGPUStats()) : nlohmann::json(nullptr);
 				return EditorCommandResult::Ok(std::move(result));
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
