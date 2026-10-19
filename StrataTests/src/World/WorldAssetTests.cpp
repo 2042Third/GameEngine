@@ -277,6 +277,8 @@ TEST_SUITE("World.Asset")
 		CHECK(WorldCellKey { 1, 0, -2 }.Pack() < WorldCellKey { 1, 0, -1 }.Pack());
 	}
 
+	// The feature project (src/FeatureTest) is built only with every module.
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("The feature world lists its persistent scene and cells as references, and survives a pack round trip")
 	{
 		FeatureProject project;
@@ -321,4 +323,5 @@ TEST_SUITE("World.Asset")
 		REQUIRE(unpacked);
 		CHECK(ToBytes(unpacked->Serialize()) == ToBytes(world->Serialize()));
 	}
+#endif
 }
