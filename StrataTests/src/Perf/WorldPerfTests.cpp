@@ -3,6 +3,7 @@
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
 #include "Strata/Asset/AssetManager.h"
+#include "Strata/Core/FrameProfiler.h"
 #include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Components.h"
@@ -30,18 +31,24 @@ namespace
 		return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 	}
 
-	// One frame of a running scene that streams: the asset manager, the sub-scenes' slices within the frame's budget (timed:
-	// Scene.Load), the streamer and `streaming`, work done in its place (timed: World.Streaming), and the scene's update with
-	// physics (whose ChangeTime counts). Returns the frame's loading work: the two timed parts plus physics' change time.
+	// One frame of a running scene that streams, in a game frame's order: the asset manager, the sub-scenes' slices within the
+	// frame's budget, the streamer and `streaming`, work done in its place (timed: World.Streaming; the World system runs
+	// after the slices and before physics), and the scene's update with physics (whose ChangeTime counts). A game frame makes
+	// one pass over the sub-scenes, at the start of the scene's update: here the update's own pass gets a spent budget, so
+	// that it slices nothing a second time, and the frame profiler's Scene.Load stage times both passes. Returns the frame's
+	// loading work: Scene.Load, World.Streaming and physics' change time.
 	double StreamFrame(AssetManagerBase* assets, Scene& scene, WorldStreamer* streamer, std::span<const WorldStreamingSource> sources,
 		const std::function<void()>& streaming = {})
 	{
+		FrameProfiler& profiler = FrameProfiler::Get();
+		const FrameStageID sceneLoad = profiler.FindStage("Scene.Load");
+		REQUIRE(sceneLoad != c_InvalidFrameStage);
+		profiler.BeginFrame();
 		if (assets)
 			assets->Update();
 		SceneWorkBudget budget = SceneWorkBudget::ForFrame(scene.GetSettings());
-		const auto loadStart = std::chrono::steady_clock::now();
 		scene.UpdateSubScenes(budget);
-		double work = MillisecondsSince(loadStart);
+		double work = 0.0;
 		if (streamer || streaming)
 		{
 			const auto streamStart = std::chrono::steady_clock::now();
@@ -54,7 +61,13 @@ namespace
 				streaming();
 			work += MillisecondsSince(streamStart);
 		}
-		scene.OnUpdateRuntime(Timestep(1.0f / 60.0f), &budget);
+		SceneWorkBudget spent = budget;
+		spent.EntitiesToCreate = 0;
+		spent.EntitiesToDestroy = 0;
+		spent.Deadline = std::chrono::steady_clock::now();
+		scene.OnUpdateRuntime(Timestep(1.0f / 60.0f), &spent);
+		profiler.EndFrame(0.0);
+		work += profiler.GetFrame(0).StageMs[sceneLoad];
 		const PhysicsSystem* physics = scene.GetSystem<PhysicsSystem>();
 		return work + (physics ? physics->GetStats().ChangeTime : 0.0);
 	}
