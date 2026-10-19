@@ -218,11 +218,11 @@ TEST_SUITE("Core.RangeAllocator")
 
 		// A gap smaller than the alignment of the allocation above it cannot close.
 		RangeAllocator padded(64);
-		const uint32_t small = padded.Allocate(2);  // [0, 2)
+		const uint32_t unaligned = padded.Allocate(2); // [0, 2)
 		const uint32_t aligned = padded.Allocate(4, 4); // [4, 8)
-		REQUIRE(small == 0);
+		REQUIRE(unaligned == 0);
 		REQUIRE(aligned == 4);
-		padded.Free(small);
+		padded.Free(unaligned);
 		while (!padded.PlanCompaction(100).empty())
 			REQUIRE(padded.Validate());
 		CHECK(padded.GetSize(0) == 4); // Moved to 0, the gap closed

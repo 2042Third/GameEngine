@@ -744,13 +744,13 @@ TEST_SUITE("GPU.GameUI")
 			return image;
 		};
 		const ReadbackImage origin = renderAt(glm::vec3(0.0f));
-		const ReadbackImage far = renderAt(glm::vec3(100'000.0f, 0.0f, 100'000.0f));
+		const ReadbackImage distant = renderAt(glm::vec3(100'000.0f, 0.0f, 100'000.0f));
 		size_t differing = 0;
 		for (size_t index = 0; index < origin.Pixels.size(); index += 4)
 		{
 			for (size_t channel = 0; channel < 3; channel++)
 			{
-				if (std::abs(int(origin.Pixels[index + channel]) - int(far.Pixels[index + channel])) > 2)
+				if (std::abs(int(origin.Pixels[index + channel]) - int(distant.Pixels[index + channel])) > 2)
 				{
 					differing++;
 					break;

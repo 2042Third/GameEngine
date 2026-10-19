@@ -549,14 +549,14 @@ TEST_SUITE("Core.FrameProfiler")
 
 		// A frame about to leave the ring is heard of first.
 		profiler.RemoveFrameListener(listener);
-		ManualProfiler small(2);
+		ManualProfiler twoFrames(2);
 		std::vector<uint64_t> heard;
-		small.Profiler.AddFrameListener([&](const FrameSample& frame) { heard.push_back(frame.Index); }, FrameListenerTiming::WithGPU);
-		small.Profiler.SetGPUTimesExpected(true);
+		twoFrames.Profiler.AddFrameListener([&](const FrameSample& frame) { heard.push_back(frame.Index); }, FrameListenerTiming::WithGPU);
+		twoFrames.Profiler.SetGPUTimesExpected(true);
 		for (int frame = 0; frame < 4; frame++)
 		{
-			small.Profiler.BeginFrame();
-			small.Profiler.EndFrame(0.001);
+			twoFrames.Profiler.BeginFrame();
+			twoFrames.Profiler.EndFrame(0.001);
 		}
 		CHECK(heard == std::vector<uint64_t> { 0, 1 });
 	}
