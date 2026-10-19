@@ -2353,7 +2353,9 @@ is the `strata-scripting` skill. The layers:
   and starts with `ResolveContext`, which rejects calls from other threads, outside callbacks or from a crashed module.
   The table is built from `ST_SCRIPT_HOST_FUNCTIONS`, which counts calls for the feature test.
 - **Crash guard** (`Core/CrashGuard.h`). Windows: structured exception handling around the call
-  (`Platform/Windows/WindowsCrashGuard.cpp`, `__try`/`__except`, with `_resetstkoflw` after a stack overflow); SDK
+  (`Platform/Windows/WindowsCrashGuard.cpp`, `__try`/`__except`, with `_resetstkoflw` after a stack overflow; a thread's
+  first guarded call raises its stack guarantee to 32 KiB, because dispatching the overflow stores the processor's whole
+  register state on what is left of the stack, which with AVX-512 can take more than Windows leaves by default); SDK
   modules turn `abort()` into a structured exception from a SIGABRT handler in their static C runtime. POSIX: handlers
   for SIGSEGV, SIGBUS, SIGFPE, SIGILL and SIGTRAP on an alternate signal stack, leaving through `siglongjmp` (Linux) or
   by returning into a recovery routine (macOS); SIGABRT is reported, not contained

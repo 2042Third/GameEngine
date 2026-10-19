@@ -31,6 +31,8 @@
 	#include <pthread.h>
 	#include <sys/stat.h>
 	#include <unistd.h>
+#elif defined(ST_PLATFORM_WINDOWS)
+	#include <Windows.h>
 #endif
 
 using namespace Strata;
@@ -779,6 +781,27 @@ TEST_SUITE("Core.Platform")
 			CHECK(faults.OnAlternateStackAfterwards == 0);
 		}
 	}
+
+#if defined(ST_PLATFORM_WINDOWS)
+	TEST_CASE("CrashGuard keeps every guarded thread the stack that containing an overflow takes")
+	{
+		// Without the guarantee, dispatching a stack overflow on a processor with AVX-512 overflows again and ends the process.
+		// The test framework raises it on the thread that runs the tests only, so the check runs on a thread of its own.
+		ULONG before = 0;
+		ULONG after = 0;
+		bool flag = false;
+		std::thread thread([&]()
+		{
+			SetThreadStackGuarantee(&before); // 0 queries without changing it
+			CrashGuard::Invoke(SetFlag, &flag);
+			SetThreadStackGuarantee(&after);
+		});
+		thread.join();
+		INFO("Guarantee before the first guarded call: ", before, " bytes");
+		CHECK(flag);
+		CHECK(after >= c_CrashGuardStackGuaranteeBytes);
+	}
+#endif
 
 	TEST_CASE("CrashGuard supports nesting")
 	{
