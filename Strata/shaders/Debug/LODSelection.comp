@@ -2,10 +2,9 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "Include/Common.glsl"
-#include "Include/LODSelection.glsl"
 
 // Diagnostic shader used by GPU tests: the level of detail of each fraction, as GPU culling chooses it, for comparison
-// with the CPU's LODSelection::SelectLOD.
+// with the CPU's LODSelection::SelectLOD (halving, Mode 0) and SelectLODByError (Mode 1, with the levels' relative errors).
 
 layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
 
@@ -13,22 +12,33 @@ layout(set = 0, binding = ST_SRV(0), std430) readonly buffer FractionBuffer
 {
 	float u_Fractions[];
 };
+layout(set = 0, binding = ST_SRV(1), std430) readonly buffer ErrorBuffer
+{
+	float u_RelativeErrors[]; // Per level (entry 0, full detail, is not read)
+};
 layout(set = 0, binding = ST_UAV(0), std430) writeonly buffer LevelBuffer
 {
 	uint o_Levels[];
 };
 
+#define ST_LOD_RELATIVE_ERROR(record) u_RelativeErrors[record]
+#include "Include/LODSelection.glsl"
+
 layout(push_constant) uniform LODSelectionParameters
 {
 	uint Count;
-	float Threshold;
+	float Threshold; // Mode 0: the LOD threshold; mode 1: the error threshold
 	uint LODCount;
-	uint Padding;
+	uint Mode;
 } u_Parameters;
 
 void main()
 {
 	uint index = gl_GlobalInvocationID.x;
-	if (index < u_Parameters.Count)
+	if (index >= u_Parameters.Count)
+		return;
+	if (u_Parameters.Mode == 0u)
 		o_Levels[index] = SelectLOD(u_Fractions[index], u_Parameters.Threshold, u_Parameters.LODCount);
+	else
+		o_Levels[index] = SelectLODByError(u_Fractions[index], 0u, u_Parameters.LODCount, u_Parameters.Threshold);
 }

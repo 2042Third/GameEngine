@@ -119,6 +119,7 @@ namespace Strata
 				{ "failedEntities", stats.FailedEntities },
 				{ "placeholderBoxes", stats.PlaceholderBoxes },
 				{ "entitiesPerLOD", stats.EntitiesPerLOD },
+				{ "lodErrorPixels", stats.MaxErrorPixelsPerLOD },
 				{ "entitiesPerMipShortfall", stats.EntitiesPerMipShortfall } };
 		}
 
@@ -610,6 +611,7 @@ namespace Strata
 			"drawn with an older pose (stalePoses) and glyphs that could not be prepared in time (pendingTextGlyphs). debugView colors the picture "
 			"by streaming state, level of detail or mip levels (default: the viewport's, viewport.setSettings) and the result's debugView says what it "
 			"found: {view, tintedEntities, pendingEntities, failedEntities, placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], "
+			"lodErrorPixels: [the largest error drawn at each of those, in pixels, where levels are chosen by their errors; else 0], "
 			"entitiesPerMipShortfall: [at the wanted level, 1 level coarser, 2, 3+ or loading]} among the entities in view. renderStats is what the "
 			"captured frame drew, as editor.perf's renderStats (draws, instances, shadow casters, triangles, proxies, lights, timings), with gpuMs: "
 			"the GPU's milliseconds per stage of the captured frame (empty, with gpuStatsFrame null, where the GPU writes no timestamps). "

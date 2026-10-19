@@ -1,14 +1,17 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Renderer/LODSelection.h"
+#include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/SceneRenderer.h"
 
 #include <glm/glm.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <limits>
 #include <random>
+#include <vector>
 
 using namespace Strata;
 
@@ -106,5 +109,107 @@ TEST_SUITE("Renderer.LODSelection")
 			compared++;
 		}
 		CHECK(compared > 99'000);
+	}
+
+	TEST_CASE("Levels with errors: the coarsest one whose error spans at most LODErrorPixels on screen")
+	{
+		// 1 pixel of a 1000-pixel viewport is 1/500 of its half height: the fraction (of the height) times the relative error
+		// (of the radius, half the diameter the fraction measures) may reach that.
+		CHECK(LODSelection::GetErrorThreshold(1.0f, 1000.0f) == 1.0f / 500.0f);
+		CHECK(LODSelection::GetErrorThreshold(0.0f, 1000.0f) == 0.0f);
+		CHECK(LODSelection::GetErrorThreshold(1.0f, 0.0f) == 0.0f);
+		CHECK(LODSelection::GetErrorThreshold(std::nanf(""), 1000.0f) == 0.0f);
+		CHECK(LODSelection::GetErrorPixels(0.5f, 0.01f, 1000.0f) == doctest::Approx(2.5f));
+
+		const std::array<float, 4> errors = { 0.0f, 0.001f, 0.004f, 0.016f };
+		const float threshold = LODSelection::GetErrorThreshold(1.0f, 1000.0f); // 0.002
+		CHECK(LODSelection::SelectLODByError(4.0f, errors, threshold) == 0);   // Level 1 would span 2 pixels
+		CHECK(LODSelection::SelectLODByError(2.0f, errors, threshold) == 1);   // 1 pixel: within
+		CHECK(LODSelection::SelectLODByError(0.4f, errors, threshold) == 2);   // 0.8 pixels; level 3 would be 3.2
+		CHECK(LODSelection::SelectLODByError(0.1f, errors, threshold) == 3);
+		CHECK(LODSelection::SelectLODByError(1.0e-30f, errors, threshold) == 3);
+		// Fractions that are not positive or not finite, a threshold of 0 and meshes without levels draw full detail.
+		CHECK(LODSelection::SelectLODByError(0.0f, errors, threshold) == 0);
+		CHECK(LODSelection::SelectLODByError(-1.0f, errors, threshold) == 0);
+		CHECK(LODSelection::SelectLODByError(std::nanf(""), errors, threshold) == 0);
+		CHECK(LODSelection::SelectLODByError(std::numeric_limits<float>::infinity(), errors, threshold) == 0);
+		CHECK(LODSelection::SelectLODByError(0.1f, errors, 0.0f) == 0);
+		CHECK(LODSelection::SelectLODByError(0.1f, std::span<const float>(errors.data(), 1), threshold) == 0);
+		// A coarser level with a smaller error (simplification is not monotonic) wins: it is both cheaper and closer.
+		const std::array<float, 3> uneven = { 0.0f, 0.004f, 0.001f };
+		CHECK(LODSelection::SelectLODByError(2.0f, uneven, threshold) == 2);
+	}
+
+	TEST_CASE("The error rule is the projected error in pixels against LODErrorPixels, away from rounding at the boundaries")
+	{
+		std::mt19937 random(17);
+		std::uniform_real_distribution<float> exponent(-20.0f, 2.0f);
+		std::uniform_real_distribution<float> errorExponent(-12.0f, 0.0f);
+		uint32_t compared = 0;
+		for (int sample = 0; sample < 50'000; sample++)
+		{
+			const float fraction = std::exp2(exponent(random));
+			const float viewportHeight = sample % 2 == 0 ? 1080.0f : 333.0f;
+			const float pixels = sample % 3 == 0 ? 1.0f : 0.37f;
+			std::vector<float> errors = { 0.0f };
+			const uint32_t levels = 1 + static_cast<uint32_t>(sample % 6);
+			for (uint32_t level = 0; level < levels; level++)
+				errors.push_back(std::exp2(errorExponent(random)));
+			std::sort(errors.begin() + 1, errors.end());
+			// The reference in double: the coarsest level whose error spans at most `pixels`.
+			uint32_t expected = 0;
+			bool nearBoundary = false;
+			for (uint32_t level = 1; level < errors.size(); level++)
+			{
+				const double projected = static_cast<double>(fraction) * errors[level] * viewportHeight * 0.5;
+				nearBoundary = nearBoundary || std::abs(projected - pixels) <= pixels * 1e-5;
+				if (projected <= pixels)
+					expected = level;
+			}
+			if (nearBoundary)
+				continue;
+			CAPTURE(fraction);
+			REQUIRE(LODSelection::SelectLODByError(fraction, errors, LODSelection::GetErrorThreshold(pixels, viewportHeight)) == expected);
+			compared++;
+		}
+		CHECK(compared > 49'000);
+	}
+
+	TEST_CASE("A submesh chooses by its levels' errors only when every simplified level has one")
+	{
+		Submesh submesh;
+		submesh.LODs = { MeshLOD { 0, 3, 0.0f }, MeshLOD { 3, 3, 0.01f }, MeshLOD { 6, 3, 0.04f } };
+		const AABB bounds(glm::vec3(-1.0f), glm::vec3(1.0f)); // Radius sqrt(3)
+		CHECK(MeshUtils::HasLODErrors(submesh));
+		CHECK(MeshUtils::GetRelativeLODError(0.01f, bounds) == 0.01f / std::sqrt(3.0f));
+		CHECK(MeshUtils::GetRelativeLODError(0.0f, bounds) == 0.0f);
+		CHECK(MeshUtils::GetRelativeLODError(0.01f, AABB()) == 0.0f);
+		CHECK(MeshUtils::GetRelativeLODError(0.01f, AABB(glm::vec3(1.0f), glm::vec3(1.0f))) == 0.0f);
+
+		LODCriteria criteria;
+		criteria.LODThreshold = 0.5f;
+		criteria.ErrorThreshold = LODSelection::GetErrorThreshold(1.0f, 1000.0f);
+		// By error: the same levels as the relative errors give.
+		const std::array<float, 3> relative = { 0.0f, MeshUtils::GetRelativeLODError(0.01f, bounds), MeshUtils::GetRelativeLODError(0.04f, bounds) };
+		for (const float fraction : { 1.0f, 0.3f, 0.2f, 0.05f, 0.01f, 0.4f })
+		{
+			CAPTURE(fraction);
+			CHECK(LODSelection::SelectLOD(submesh, bounds, fraction, criteria) == LODSelection::SelectLODByError(fraction, relative, criteria.ErrorThreshold));
+		}
+		CHECK(LODSelection::SelectLOD(submesh, bounds, 1.0f, criteria) == 0);
+		CHECK(LODSelection::SelectLOD(submesh, bounds, 0.01f, criteria) == 2);
+
+		// A level without an error (a version 2 mesh's): halving, by LODThreshold.
+		submesh.LODs[2].Error = 0.0f;
+		CHECK_FALSE(MeshUtils::HasLODErrors(submesh));
+		for (const float fraction : { 1.0f, 0.3f, 0.2f, 0.05f, 0.01f })
+		{
+			CAPTURE(fraction);
+			CHECK(LODSelection::SelectLOD(submesh, bounds, fraction, criteria) == LODSelection::SelectLOD(fraction, 0.5f, 3));
+		}
+		Submesh single;
+		single.LODs = { MeshLOD { 0, 3, 0.0f } };
+		CHECK_FALSE(MeshUtils::HasLODErrors(single));
+		CHECK(LODSelection::SelectLOD(single, bounds, 0.01f, criteria) == 0);
 	}
 }

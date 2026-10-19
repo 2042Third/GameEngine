@@ -10,10 +10,13 @@
 #include <Strata/Asset/RuntimeAssetManager.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Math/Frustum.h>
+#include <Strata/Renderer/LODSelection.h>
 #include <Strata/Renderer/Mesh.h>
 #include <Strata/Renderer/MeshFactory.h>
 #include <Strata/Renderer/Texture.h>
 #include <Strata/Reflection/PropertyJson.h>
+
+#include <spdlog/fmt/fmt.h>
 
 #include <array>
 #include <chrono>
@@ -140,7 +143,7 @@ TEST_SUITE("GPU.Editor.StreamingView")
 		const auto render = [&](ViewportDebugView debugView, ReadbackImage& outImage, ReadbackImage& outIDs)
 		{
 			placeholders.Clear();
-			view.Build(scene, debugView, camera, renderer.GetSpecification().LODThreshold, colors, placeholders);
+			view.Build(scene, debugView, camera, renderer.GetLODCriteria(), colors, placeholders);
 			SceneRenderOptions options;
 			options.EntityTints = view.GetTints();
 			options.DebugShapes = &placeholders;
@@ -263,7 +266,7 @@ TEST_SUITE("GPU.Editor.StreamingView")
 		ViewportDebugColors colors;
 		StreamingView view;
 		DebugDraw placeholders;
-		view.Build(scene, ViewportDebugView::Streaming, camera, 1.0f, colors, placeholders);
+		view.Build(scene, ViewportDebugView::Streaming, camera, LODCriteria {}, colors, placeholders);
 		CHECK(view.GetStats().PendingEntities == 1);
 		CHECK(view.GetStats().PlaceholderBoxes == 1);
 		// The box is the recorded one: its 12 edges span 20 units along x around the entity's origin.
@@ -322,7 +325,7 @@ TEST_SUITE("GPU.Editor.StreamingView")
 		DebugDraw placeholders;
 		for (const ViewportDebugView debugView : { ViewportDebugView::Streaming, ViewportDebugView::LOD })
 		{
-			view.Build(scene, debugView, camera, renderer.GetSpecification().LODThreshold, colors, placeholders);
+			view.Build(scene, debugView, camera, renderer.GetLODCriteria(), colors, placeholders);
 			manager->Update();
 		}
 		CHECK(view.GetStats().EntitiesPerLOD[0] == 1); // The LOD view saw the loaded mesh in view, and only that entity
@@ -334,7 +337,7 @@ TEST_SUITE("GPU.Editor.StreamingView")
 		// since its previous frame.
 		inView.GetComponent<TransformComponent>().Translation.x = 0.5f;
 		inView.MarkModified<TransformComponent>();
-		view.Build(scene, ViewportDebugView::Streaming, camera, renderer.GetSpecification().LODThreshold, colors, placeholders);
+		view.Build(scene, ViewportDebugView::Streaming, camera, renderer.GetLODCriteria(), colors, placeholders);
 		RenderToImage(renderer, scene, camera);
 		CHECK(renderer.GetStats().ProxyUpdates == 1);
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -379,7 +382,7 @@ TEST_SUITE("GPU.Editor.StreamingView")
 		ViewportDebugColors colors;
 		StreamingView view;
 		DebugDraw placeholders;
-		view.Build(scene, ViewportDebugView::LOD, camera, renderer.GetSpecification().LODThreshold, colors, placeholders);
+		view.Build(scene, ViewportDebugView::LOD, camera, renderer.GetLODCriteria(), colors, placeholders);
 		CHECK(placeholders.IsEmpty());
 		// The view's levels are the renderer's: level 0 twice (the near cube and the single-level one), level 2 once.
 		const std::array<uint32_t, 4>& perLOD = view.GetStats().EntitiesPerLOD;
@@ -408,6 +411,72 @@ TEST_SUITE("GPU.Editor.StreamingView")
 		CHECK(nearCheck.Tinted == nearCheck.Pixels);
 		CHECK(farCheck.Pixels > 20);
 		CHECK(farCheck.Tinted == farCheck.Pixels);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The LOD view names the largest error in pixels drawn at each level chosen by errors")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		// A cube whose levels (the same triangles) have errors that put cubes 2, 6 and 20 units away at levels 1, 2 and 3.
+		const Ref<Mesh> cube = MeshFactory::CreateCube();
+		std::vector<Submesh> submeshes = cube->GetSubmeshes();
+		const MeshLOD full = submeshes[0].LODs[0];
+		submeshes[0].LODs = { full, MeshLOD { full.IndexOffset, full.IndexCount, 0.02f }, MeshLOD { full.IndexOffset, full.IndexCount, 0.07f },
+			MeshLOD { full.IndexOffset, full.IndexCount, 0.2f } };
+		std::string error;
+		const Ref<Mesh> lodCube = Mesh::Create(cube->GetPositions(), cube->GetAttributes(), cube->GetIndices(), submeshes, &error);
+		REQUIRE_MESSAGE(lodCube, error);
+		const AssetHandle mesh = assets.Add(lodCube, "ErrorCube");
+
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		const AssetHandle material = assets.AddMaterial(MaterialProperties());
+		const std::array<float, 3> distances = { 2.0f, 6.0f, 20.0f };
+		for (const float distance : distances)
+			AddMesh(scene, mesh, material, glm::vec3(0.0f, 0.0f, -distance), "Cube");
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.4f, 0.0f), glm::vec3(0.0f, 0.0f, -1.0f));
+		RenderToImage(renderer, scene, camera);
+		const std::array<uint32_t, SceneRendererStats::c_LODStatCount> rendererLODs = GetDrawnCounts(renderer).InstancesPerLOD;
+
+		ViewportDebugColors colors;
+		StreamingView view;
+		DebugDraw placeholders;
+		const LODCriteria criteria = renderer.GetLODCriteria();
+		CHECK(criteria.ViewportHeight == static_cast<float>(c_Size));
+		view.Build(scene, ViewportDebugView::LOD, camera, criteria, colors, placeholders);
+		const StreamingViewStats& stats = view.GetStats();
+		// What the renderer drew, level by level, and per level the error of its nearest cube there.
+		std::array<float, 4> expected = {};
+		for (const float distance : distances)
+		{
+			const glm::vec3 center(0.0f, 0.0f, -distance);
+			const float fraction = LODSelection::GetScreenFraction(camera, center, glm::length(lodCube->GetBounds().GetExtents()));
+			const uint32_t level = LODSelection::SelectLOD(submeshes[0], lodCube->GetBounds(), fraction, criteria);
+			const float relative = MeshUtils::GetRelativeLODError(submeshes[0].LODs[level].Error, lodCube->GetBounds());
+			expected[level] = std::max(expected[level], LODSelection::GetErrorPixels(fraction, relative, criteria.ViewportHeight));
+		}
+		uint32_t levelsUsed = 0;
+		for (size_t level = 0; level < 4; level++)
+		{
+			CAPTURE(level);
+			CHECK(stats.EntitiesPerLOD[level] == rendererLODs[level]);
+			CHECK(stats.MaxErrorPixelsPerLOD[level] == doctest::Approx(expected[level]));
+			CHECK(stats.MaxErrorPixelsPerLOD[level] <= renderer.GetSpecification().LODErrorPixels);
+			levelsUsed += stats.EntitiesPerLOD[level] > 0 ? 1 : 0;
+		}
+		// The cubes are at three levels, the simplified ones with an error to show.
+		CHECK(levelsUsed == 3);
+		CHECK(stats.EntitiesPerLOD[0] == 0);
+		// The legend names each simplified level with its error.
+		CHECK(GetLODLegendName(1, false, stats.MaxErrorPixelsPerLOD[1]) == fmt::format("LOD 1 ({:.2f} px)", stats.MaxErrorPixelsPerLOD[1]));
+		CHECK(GetLODLegendName(2, false, 0.8449f) == "LOD 2 (0.84 px)");
+		CHECK(GetLODLegendName(3, true, 0.5f) == "LOD 3+ (0.50 px)");
+		CHECK(GetLODLegendName(0, false, 0.0f) == "LOD 0");
+		CHECK(stats.MaxErrorPixelsPerLOD[0] == 0.0f);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -445,7 +514,7 @@ TEST_SUITE("GPU.Editor.StreamingView")
 			Renderer::BeginFrame();
 			manager->Update();
 			placeholders.Clear();
-			view.Build(scene, ViewportDebugView::Mip, camera, renderer.GetSpecification().LODThreshold, colors, placeholders);
+			view.Build(scene, ViewportDebugView::Mip, camera, renderer.GetLODCriteria(), colors, placeholders);
 			SceneRenderOptions options;
 			options.EntityTints = view.GetTints();
 			REQUIRE(renderer.Render(scene, camera, nullptr, options));

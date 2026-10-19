@@ -7,7 +7,7 @@
 
 // GPU culling, one thread per render proxy: the view's frustum and screen-size tests, or with ST_CULL_SHADOW
 // (registered as Scene/CullShadow.comp) the shadow cascades' boxes and sub-texel test, then per instance its material
-// (transparent ones are the CPU's), its level of detail (Include/LODSelection.glsl) and its bucket. The decisions are the
+// (transparent ones are the CPU's), its level of detail (ChooseLOD, Include/LODSelection.glsl) and its bucket. The decisions are the
 // CPU path's (SceneRendererExtraction.cpp: CullView, FindShadowCasters, GatherDraws, GatherShadowDraws) on the same data.
 //
 // Mode 0 counts the instances of each (bucket, LOD record) and the frame's statistics; CullBuild.comp then places each
@@ -189,7 +189,7 @@ void EmitViewInstances(GPUProxy proxy, GeometryEntry entry, float fraction, uint
 		if ((material & ST_CULL_MATERIAL_AVAILABLE) == 0u || (material & ST_CULL_MATERIAL_TRANSPARENT) != 0u)
 			continue;
 		GeometrySubmesh geometrySubmesh = u_GeometrySubmeshes[entry.FirstSubmesh + submesh];
-		uint lod = SelectLOD(fraction, u_Cull.LODParameters.x, geometrySubmesh.LODCount);
+		uint lod = ChooseLOD(geometrySubmesh, fraction);
 		uint doubleSided = (material & ST_CULL_MATERIAL_DOUBLE_SIDED) != 0u ? 2u : 0u;
 		Emit(instance, mirrored | doubleSided | (geometry << 2) | phaseBit, geometrySubmesh.FirstLOD + lod);
 		Count(ST_COUNTER_VIEW_INSTANCES);
@@ -328,7 +328,7 @@ void CullProxy(uint proxyIndex)
 		if ((material & ST_CULL_MATERIAL_AVAILABLE) == 0u || (material & ST_CULL_MATERIAL_TRANSPARENT) != 0u)
 			continue;
 		GeometrySubmesh geometrySubmesh = u_GeometrySubmeshes[entry.FirstSubmesh + submesh];
-		uint lod = SelectLOD(fraction, u_Cull.LODParameters.x, geometrySubmesh.LODCount);
+		uint lod = ChooseLOD(geometrySubmesh, fraction);
 		uint bucket = mirrored | ((material & ST_CULL_MATERIAL_DOUBLE_SIDED) != 0u ? 2u : 0u) | (geometry << 2)
 			| ((material & ST_CULL_MATERIAL_ALPHA_MASK) != 0u ? 16u : 0u);
 		for (uint cascade = 0u; cascade < u_Cull.CascadeCount; cascade++)

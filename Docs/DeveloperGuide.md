@@ -2060,7 +2060,13 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `LightRangeEntities`; the editor shows the selection's only, the others as icons). Entity tints (`EntityTints`, `Overlay/StatusTint.frag`) come first: listed
   entities' pixels in the entity-ID buffer are blended with their color and no other pixel changes (debug views such as
   the editor's streaming, LOD and mip views). Code that needs the level of detail the renderer draws uses `LODSelection`
-  (`Renderer/LODSelection.h`), the functions `SceneRenderer` calls.
+  (`Renderer/LODSelection.h`), the functions `SceneRenderer` calls, with the renderer's `GetLODCriteria()`.
+- Levels of detail: generated levels (`MeshUtils::GenerateLODs`) carry their error (`MeshLOD::Error`, in the mesh's
+  units) and are chosen by it (`SceneRendererSpecification::LODErrorPixels`); levels without one (cooked meshes before
+  version 3, meshes made in code) by halving the screen fraction (`LODThreshold`). A change to either rule changes
+  `LODSelection.cpp` and `Include/LODSelection.glsl` together: `GPU.Renderer.LODSelection` compares them on 10,000
+  fractions, and the CPU form multiplies once and compares, as the shader's `precise` product does. Meshes made in code
+  that want error-based selection give every simplified level a positive `Error`.
 
 ### Text and fonts
 

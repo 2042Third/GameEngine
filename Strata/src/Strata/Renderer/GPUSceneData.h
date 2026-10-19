@@ -45,10 +45,12 @@ namespace Strata::RenderData
 		uint32_t BaseVertex = 0; // Relative to the mesh's first vertex
 		uint32_t FirstLOD = 0;   // In the LOD table: the draw record of each level (GPU culling counts per record)
 		uint32_t LODCount = 0;
-		uint32_t Reserved = 0;
+		uint32_t Flags = 0;                    // c_GeometrySubmesh* bits
 		glm::vec4 UVDensity = glm::vec4(0.0f); // xyz: Submesh::UVDensity (texture streaming's UV pixels, from feedback)
 	};
 	static_assert(sizeof(GeometrySubmesh) == 32);
+	// The submesh's levels are chosen by their errors (MeshUtils::HasLODErrors; else by halving the screen fraction).
+	constexpr uint32_t c_GeometrySubmeshLODErrors = 1u << 0;
 
 	// A level of detail of a submesh: the draw record GPU culling counts instances per.
 	struct GeometryLOD
@@ -57,8 +59,12 @@ namespace Strata::RenderData
 		uint32_t IndexCount = 0;
 		uint32_t BaseVertex = 0;  // Its submesh's, relative to the mesh's first vertex
 		uint32_t Mesh = 0;        // The GeometryHandle the level belongs to (CullBuild reads the mesh's offsets from it)
+		float RelativeError = 0.0f; // MeshUtils::GetRelativeLODError of the level's MeshLOD::Error (LODSelection::SelectLODByError)
+		uint32_t Reserved0 = 0;
+		uint32_t Reserved1 = 0;
+		uint32_t Reserved2 = 0;
 	};
-	static_assert(sizeof(GeometryLOD) == 16);
+	static_assert(sizeof(GeometryLOD) == 32);
 
 	// GPU culling (Scene/Cull.comp, CullShadow, CullBuild.comp; Include/Culling.glsl mirrors these layouts).
 	//
@@ -149,7 +155,7 @@ namespace Strata::RenderData
 		uint32_t Feedback = 0;               // 1: the counting passes write visibility feedback
 		uint32_t FirstPhaseViewBuckets = 0;  // Of the view's dense buckets, the first phase's (they come first)
 		uint32_t VisibilityParity = 0;       // Which bit of the visibility buffer holds the previous frame's (0 or 1)
-		uint32_t Reserved0 = 0;
+		float LODErrorThreshold = 0.0f;      // LODSelection::GetErrorThreshold of the view (LODCriteria::ErrorThreshold)
 		uint32_t Reserved1 = 0;
 		uint32_t Reserved2 = 0;
 	};

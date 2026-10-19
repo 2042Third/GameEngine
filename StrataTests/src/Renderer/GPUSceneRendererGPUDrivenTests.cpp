@@ -8,9 +8,13 @@
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
 
+#include <algorithm>
+#include <bit>
+#include <cmath>
 #include <cstring>
 #include <functional>
 #include <random>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -71,17 +75,18 @@ namespace
 		SceneRenderer GPU;
 		DrawnCounts LastReference; // The CPU path's counts of the latest Check
 
-		static SceneRendererSpecification Specification(GPUDrivenMode mode, IndirectDrawMode indirect)
+		static SceneRendererSpecification Specification(GPUDrivenMode mode, IndirectDrawMode indirect, float lodErrorPixels)
 		{
 			SceneRendererSpecification specification;
 			specification.GPUDriven = mode;
 			specification.IndirectMode = indirect;
+			specification.LODErrorPixels = lodErrorPixels;
 			specification.TextureStreaming = false; // Every level of every texture, on both paths
 			return specification;
 		}
 
-		explicit Comparison(IndirectDrawMode indirect)
-			: CPU(Specification(GPUDrivenMode::Off, IndirectDrawMode::Auto)), GPU(Specification(GPUDrivenMode::Auto, indirect))
+		explicit Comparison(IndirectDrawMode indirect, float lodErrorPixels = 1.0f)
+			: CPU(Specification(GPUDrivenMode::Off, IndirectDrawMode::Auto, lodErrorPixels)), GPU(Specification(GPUDrivenMode::Auto, indirect, lodErrorPixels))
 		{
 			CPU.SetViewportSize(c_Size, c_Size);
 			GPU.SetViewportSize(c_Size, c_Size);
@@ -134,8 +139,8 @@ namespace
 		return Renderer::GetGraphicsDevice().GetInfo().SupportsDrawIndirectFirstInstance;
 	}
 
-	// A sphere with three levels of detail.
-	Ref<Mesh> CreateLODSphere()
+	// A sphere with three levels of detail, chosen by their errors or (without them) by halving the screen fraction.
+	Ref<Mesh> CreateLODSphere(bool withErrors = false)
 	{
 		Ref<Mesh> source = MeshFactory::CreateSphere(0.5f, 48, 24);
 		REQUIRE(source);
@@ -146,9 +151,8 @@ namespace
 		submesh.LODs = { MeshLOD { 0, static_cast<uint32_t>(indices.size()) } };
 		for (const MeshUtils::GeneratedLOD& generated : levels)
 		{
-			// Without the errors: these levels are chosen by halving the screen fraction.
 			const std::vector<uint32_t>& level = generated.Indices;
-			submesh.LODs.push_back(MeshLOD { static_cast<uint32_t>(indices.size()), static_cast<uint32_t>(level.size()) });
+			submesh.LODs.push_back(MeshLOD { static_cast<uint32_t>(indices.size()), static_cast<uint32_t>(level.size()), withErrors ? generated.Error : 0.0f });
 			indices.insert(indices.end(), level.begin(), level.end());
 		}
 		std::string error;
@@ -163,7 +167,12 @@ namespace
 	{
 		const char* Name;
 		std::function<SceneCamera(Scene&, SceneTestAssets&, TestSkinningPoses&)> Build;
+		float LODErrorPixels = 1.0f; // SceneRendererSpecification::LODErrorPixels of both paths
 	};
+
+	// The error-based levels' scene draws them with errors of at most this many pixels: small enough that the sphere's
+	// nearly lossless first level waits until it is a few units away at c_Size pixels.
+	constexpr float c_LODSceneErrorPixels = 0.05f;
 
 	AssetHandle LitMaterial(SceneTestAssets& assets, const glm::vec4& color, float roughness = 0.6f)
 	{
@@ -311,6 +320,29 @@ namespace
 		return camera;
 	}
 
+	SceneCamera BuildLODsByError(Scene& scene, SceneTestAssets& assets, TestSkinningPoses&)
+	{
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::normalize(glm::vec3(-0.4f, -1.0f, -0.5f)), 3.0f);
+		const Ref<Mesh> mesh = CreateLODSphere(true);
+		const std::vector<MeshLOD>& lods = mesh->GetSubmeshes()[0].LODs;
+		const AssetHandle sphere = assets.Add(mesh, "LODSphereByError");
+		const AssetHandle material = LitMaterial(assets, glm::vec4(0.9f, 0.9f, 0.9f, 1.0f));
+		SceneCamera camera = View(glm::vec3(0.0f, 0.5f, 0.0f), glm::vec3(0.0f, 0.0f, -10.0f));
+		// Level L is drawn from the distance where its error spans the threshold (the fraction's radius and the relative
+		// error's cancel: the mesh is not scaled): spheres well inside each level's range of distances.
+		const float threshold = LODSelection::GetErrorThreshold(c_LODSceneErrorPixels, static_cast<float>(c_Size));
+		const float tangent = std::tan(camera.VerticalFOV * 0.5f);
+		const float first = lods[1].Error / (threshold * tangent);
+		const float second = lods[2].Error / (threshold * tangent);
+		REQUIRE(first > 3.0f);
+		REQUIRE(second > first * 1.5f);
+		const float distances[] = { first * 0.6f, std::sqrt(first * second), second * 1.6f, second * 3.0f };
+		for (uint32_t index = 0; index < std::size(distances); index++)
+			AddMesh(scene, sphere, material, glm::vec3(static_cast<float>(index % 2) * 1.2f - 0.6f, 0.0f, -distances[index]), "Sphere");
+		return camera;
+	}
+
 	SceneCamera BuildOccluded(Scene& scene, SceneTestAssets& assets, TestSkinningPoses&)
 	{
 		AddNeutralPostProcess(scene);
@@ -338,6 +370,7 @@ namespace
 		{ "Shadowed", BuildShadowed },
 		{ "Transparent", BuildTransparent },
 		{ "LODs", BuildLODs },
+		{ "LODs by error", BuildLODsByError, c_LODSceneErrorPixels },
 		{ "Occluded", BuildOccluded },
 	};
 
@@ -355,9 +388,16 @@ namespace
 			TestSkinningPoses poses;
 			Scene scene;
 			const SceneCamera camera = testScene.Build(scene, assets, poses);
-			Comparison comparison(indirect);
+			Comparison comparison(indirect, testScene.LODErrorPixels);
 			const PathFrame frame = comparison.Check(scene, camera);
 			CHECK(frame.Counts.Instances > 0);
+			if (name == "LODs by error")
+			{
+				// Each sphere at the level its distance calls for: one at full detail, one at the first level, two at the second.
+				CHECK(frame.Counts.InstancesPerLOD[0] == 1);
+				CHECK(frame.Counts.InstancesPerLOD[1] == 1);
+				CHECK(frame.Counts.InstancesPerLOD[2] == 2);
+			}
 			// The GPU path's second frame takes its requests from the first one's visibility feedback, and looks at only
 			// the transparent and skinned proxies of the view itself: it draws the same.
 			CHECK_FALSE(comparison.GPU.GetStats().FeedbackRequests);
@@ -460,7 +500,7 @@ TEST_SUITE("GPU.SceneRenderer.GPUDriven")
 		CHECK(sizeCulled > 0);
 		CHECK(comparison.CPU.GetStats().SizeCulledProxies == sizeCulled);
 
-		SceneRendererSpecification everything = Comparison::Specification(GPUDrivenMode::Auto, IndirectDrawMode::Auto);
+		SceneRendererSpecification everything = Comparison::Specification(GPUDrivenMode::Auto, IndirectDrawMode::Auto, 1.0f);
 		everything.MinProjectedPixels = 0.0f;
 		SceneRenderer all(everything);
 		all.SetViewportSize(c_Size, c_Size);
@@ -496,17 +536,23 @@ TEST_SUITE("GPU.Renderer.LODSelection")
 		REQUIRE(gpu.IsValid());
 		nvrhi::IDevice* device = gpu.GetNvrhiDevice();
 		constexpr uint32_t c_Count = 10'000;
+		constexpr uint32_t c_MaxLevels = 32;
 		std::mt19937 random(5);
 		// Fractions from 2^-24 to 4 (no denormals, which GPUs may flush), with every exact doubling onto the threshold among them.
 		std::uniform_real_distribution<float> exponent(-24.0f, 2.0f);
 		std::vector<float> fractions(c_Count);
 		for (uint32_t index = 0; index < c_Count; index++)
 			fractions[index] = index % 100 == 0 ? std::ldexp(0.5f, -static_cast<int>(index / 100 % 20)) : std::exp2(exponent(random));
+		// Levels' relative errors growing from 2^-12 to about 1 (a level per entry; entry 0, full detail, is not read).
+		std::vector<float> errors(c_MaxLevels, 0.0f);
+		for (uint32_t level = 1; level < c_MaxLevels; level++)
+			errors[level] = std::exp2(-12.0f + 12.0f * static_cast<float>(level) / c_MaxLevels) * (1.0f + 0.01f * static_cast<float>(random() % 7));
+		std::sort(errors.begin() + 1, errors.end());
 
 		nvrhi::BindingLayoutDesc layoutDesc;
 		layoutDesc.visibility = nvrhi::ShaderType::Compute;
-		layoutDesc.bindings = { nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0), nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0),
-			nvrhi::BindingLayoutItem::PushConstants(0, 4 * sizeof(uint32_t)) };
+		layoutDesc.bindings = { nvrhi::BindingLayoutItem::StructuredBuffer_SRV(0), nvrhi::BindingLayoutItem::StructuredBuffer_SRV(1),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0), nvrhi::BindingLayoutItem::PushConstants(0, 4 * sizeof(uint32_t)) };
 		const nvrhi::BindingLayoutHandle layout = device->createBindingLayout(layoutDesc);
 		nvrhi::ComputePipelineDesc pipelineDesc;
 		pipelineDesc.CS = Renderer::GetShaderLibrary().Get("Debug/LODSelection.comp");
@@ -515,16 +561,47 @@ TEST_SUITE("GPU.Renderer.LODSelection")
 		REQUIRE(pipeline);
 		const nvrhi::BufferHandle input = device->createBuffer(nvrhi::BufferDesc().setByteSize(c_Count * sizeof(float)).setStructStride(sizeof(float))
 			.setInitialState(nvrhi::ResourceStates::ShaderResource).setKeepInitialState(true).setDebugName("LODFractions"));
+		const nvrhi::BufferHandle errorBuffer = device->createBuffer(nvrhi::BufferDesc().setByteSize(c_MaxLevels * sizeof(float)).setStructStride(sizeof(float))
+			.setInitialState(nvrhi::ResourceStates::ShaderResource).setKeepInitialState(true).setDebugName("LODErrors"));
 		const nvrhi::BufferHandle output = device->createBuffer(nvrhi::BufferDesc().setByteSize(c_Count * sizeof(uint32_t)).setStructStride(sizeof(uint32_t))
 			.setCanHaveUAVs(true).setInitialState(nvrhi::ResourceStates::UnorderedAccess).setKeepInitialState(true).setDebugName("LODLevels"));
 		REQUIRE(input);
+		REQUIRE(errorBuffer);
 		REQUIRE(output);
 		nvrhi::BindingSetDesc setDesc;
-		setDesc.bindings = { nvrhi::BindingSetItem::StructuredBuffer_SRV(0, input), nvrhi::BindingSetItem::StructuredBuffer_UAV(0, output),
-			nvrhi::BindingSetItem::PushConstants(0, 4 * sizeof(uint32_t)) };
+		setDesc.bindings = { nvrhi::BindingSetItem::StructuredBuffer_SRV(0, input), nvrhi::BindingSetItem::StructuredBuffer_SRV(1, errorBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(0, output), nvrhi::BindingSetItem::PushConstants(0, 4 * sizeof(uint32_t)) };
 		const nvrhi::BindingSetHandle set = device->createBindingSet(setDesc, layout);
 		REQUIRE(set);
 
+		const auto run = [&](uint32_t mode, float threshold, uint32_t lodCount)
+		{
+			nvrhi::CommandListHandle commandList = device->createCommandList();
+			commandList->open();
+			commandList->writeBuffer(input, fractions.data(), fractions.size() * sizeof(float));
+			commandList->writeBuffer(errorBuffer, errors.data(), errors.size() * sizeof(float));
+			nvrhi::ComputeState state;
+			state.pipeline = pipeline;
+			state.bindings = { set };
+			commandList->setComputeState(state);
+			struct Parameters
+			{
+				uint32_t Count;
+				float Threshold;
+				uint32_t LODCount;
+				uint32_t Mode;
+			} parameters { c_Count, threshold, lodCount, mode };
+			commandList->setPushConstants(&parameters, sizeof(parameters));
+			commandList->dispatch((c_Count + 63) / 64);
+			commandList->close();
+			REQUIRE(gpu.ExecuteAndWait(commandList));
+			const std::vector<uint8_t> bytes = ReadBufferRange(gpu, output, 0, c_Count * sizeof(uint32_t));
+			std::vector<uint32_t> levels(c_Count);
+			std::memcpy(levels.data(), bytes.data(), bytes.size());
+			return levels;
+		};
+
+		// Halving the fraction, for levels without errors.
 		const float thresholds[] = { 0.5f, 0.3f, 2.0f };
 		const uint32_t lodCounts[] = { 1, 2, 4, 8, 32 };
 		uint32_t compared = 0;
@@ -534,27 +611,7 @@ TEST_SUITE("GPU.Renderer.LODSelection")
 			{
 				CAPTURE(threshold);
 				CAPTURE(lodCount);
-				nvrhi::CommandListHandle commandList = device->createCommandList();
-				commandList->open();
-				commandList->writeBuffer(input, fractions.data(), fractions.size() * sizeof(float));
-				nvrhi::ComputeState state;
-				state.pipeline = pipeline;
-				state.bindings = { set };
-				commandList->setComputeState(state);
-				struct Parameters
-				{
-					uint32_t Count;
-					float Threshold;
-					uint32_t LODCount;
-					uint32_t Padding;
-				} parameters { c_Count, threshold, lodCount, 0 };
-				commandList->setPushConstants(&parameters, sizeof(parameters));
-				commandList->dispatch((c_Count + 63) / 64);
-				commandList->close();
-				REQUIRE(gpu.ExecuteAndWait(commandList));
-				const std::vector<uint8_t> bytes = ReadBufferRange(gpu, output, 0, c_Count * sizeof(uint32_t));
-				std::vector<uint32_t> levels(c_Count);
-				std::memcpy(levels.data(), bytes.data(), bytes.size());
+				const std::vector<uint32_t> levels = run(0, threshold, lodCount);
 				for (uint32_t index = 0; index < c_Count; index++)
 				{
 					CAPTURE(fractions[index]);
@@ -564,6 +621,37 @@ TEST_SUITE("GPU.Renderer.LODSelection")
 			}
 		}
 		CHECK(compared == c_Count * std::size(thresholds) * std::size(lodCounts));
+
+		// By the levels' errors: thresholds of 0.5, 1 and 4 pixels at 1080 and 720 pixels high, with fractions whose products with
+		// a level's error lie on or next to a threshold among them.
+		for (uint32_t index = 0; index < c_Count; index += 97)
+			fractions[index] = std::ldexp(1.0f, -static_cast<int>(index % 13)) * LODSelection::GetErrorThreshold(1.0f, 1080.0f) / errors[1 + index % (c_MaxLevels - 1)];
+		uint32_t usedLevels = 0;
+		compared = 0;
+		for (const float viewportHeight : { 1080.0f, 720.0f })
+		{
+			for (const float pixels : { 0.5f, 1.0f, 4.0f })
+			{
+				const float errorThreshold = LODSelection::GetErrorThreshold(pixels, viewportHeight);
+				for (const uint32_t lodCount : lodCounts)
+				{
+					CAPTURE(errorThreshold);
+					CAPTURE(lodCount);
+					const std::vector<uint32_t> levels = run(1, errorThreshold, lodCount);
+					for (uint32_t index = 0; index < c_Count; index++)
+					{
+						CAPTURE(fractions[index]);
+						const uint32_t expected = LODSelection::SelectLODByError(fractions[index], std::span<const float>(errors.data(), lodCount), errorThreshold);
+						REQUIRE(levels[index] == expected);
+						usedLevels |= 1u << expected;
+						compared++;
+					}
+				}
+			}
+		}
+		CHECK(compared == c_Count * 6 * std::size(lodCounts));
+		// The fractions reach every level, full detail included.
+		CHECK(std::popcount(usedLevels) == static_cast<int>(c_MaxLevels));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

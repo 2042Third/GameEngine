@@ -126,7 +126,9 @@ editor started with `--no-gpu` (use `--headless`):
   plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
   `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the game view). The result's
   `debugView` counts what it found among the entities in view: `{view, tintedEntities, pendingEntities, failedEntities,
-  placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], entitiesPerMipShortfall: [as needed, 1, 2, 3+]}`, so
+  placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], lodErrorPixels: [the largest error in pixels drawn at each of
+  those levels, for meshes whose levels have errors (imported models' generated levels; at most 1 pixel by default)],
+  entitiesPerMipShortfall: [as needed, 1, 2, 3+]}`, so
   you need not read colors: e.g. capture with `"streaming"` until `pendingEntities` and `placeholderBoxes` are 0, or with
   `"mip"` until only the first entry of `entitiesPerMipShortfall` counts entities (every texture as sharp as the view
   needs).

@@ -297,7 +297,11 @@ views can ask for preview lighting, leave out screen-space text and tint entitie
 first overlay, `Overlay/StatusTint.frag`, blends the listed entities' colors over exactly their pixels of the entity-ID
 buffer, found by binary search in a sorted (id, color) buffer like the selection outline's). How a mesh's level of
 detail is chosen is a pure function (`LODSelection::GetScreenFraction`, `SelectLOD`), so tools show the level the
-renderer draws.
+renderer draws: a submesh whose simplified levels all have errors (`MeshLOD::Error`, `MeshUtils::HasLODErrors`) draws
+the coarsest level whose error, projected, spans at most `SceneRendererSpecification::LODErrorPixels` (1) pixels of the
+viewport height (`SelectLODByError`: the screen fraction times the error relative to the mesh's bounding radius,
+`MeshUtils::GetRelativeLODError`, against `GetErrorThreshold`, one multiplication the GPU's culling repeats bit for bit);
+levels without errors halve the screen fraction against `LODThreshold` as before.
 Assets: `Mesh` (skinned meshes also have a skin stream, four joint influences per vertex, and a `MeshSkinBinding`: the
 skin's joints in the skeleton, their inverse bind matrices and the bind-pose extent of what each joint moves; each
 level of detail its `MeshLOD::Error`, how far its surface departs from full detail; cooked mesh format version 3,
@@ -2024,7 +2028,9 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   frame requested it or not), and the CPU uploads the bucket table and the constants (`RenderData::CullConstants`). `Cull.comp` runs one thread per proxy, for the view and (variant `ST_CULL_SHADOW`) for
   the cascades: the decisions are the CPU path's on the same data (active and indexed, the frustum, the screen size of
   `MinProjectedPixels` for the view, the light-space box and the sub-texel rule for cascades, per instance the material
-  and the level of detail, `Include/LODSelection.glsl`), and each instance counts on its (bucket, LOD record). Buckets are
+  and the level of detail, `ChooseLOD` and `Include/LODSelection.glsl`: the pool's `GeometryLOD` records carry each
+  level's relative error and `GeometrySubmesh::Flags` whether the submesh chooses by them), and each instance counts on
+  its (bucket, LOD record). Buckets are
   pipeline states and vertex arenas: mirrored, double-sided and geometry (Static arena, Skinned arena in its bind pose,
   posed) for the view, alpha-masked and cascade too for shadows; only the buckets the frame can have get dense indices
   and storage. `CullBuild.comp` gives each record with instances a range of the draw list and an indirect draw in its
@@ -2911,7 +2917,8 @@ is the `strata-scripting` skill. The layers:
   still loading are tinted in the pending color, failed ones in the failed color, and entities whose mesh is not there
   (nothing is drawn, so nothing can be tinted) get a placeholder box of the mesh's recorded bounds, or a unit box without
   them (at most `c_MaxPlaceholderBoxes`). The LOD view tints each entity by the most simplified level its submeshes are
-  drawn at (`LODSelection`, with the viewport renderer's threshold). The mip view tints each entity drawn with textures by
+  drawn at (`LODSelection`, with the viewport renderer's `GetLODCriteria`), and its legend the largest error in pixels
+drawn at each level chosen by errors (`StreamingViewStats::MaxErrorPixelsPerLOD`). The mip view tints each entity drawn with textures by
   the mip levels its worst texture lacks: the finest level resident against the finest one its views want
   (`Asset::GetDetailLevels`, which the texture streamer sets from what the renderers reported), none (Malachite), 1
   (Azurite), 2 (Sulfur), 3 or more or a material or texture still loading (Cinnabar); entities without textures stay

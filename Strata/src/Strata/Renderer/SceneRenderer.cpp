@@ -1024,9 +1024,15 @@ namespace Strata
 		return true;
 	}
 
-	uint32_t SceneRenderer::SelectLOD(const Submesh& submesh, float screenFraction) const
+	uint32_t SceneRenderer::SelectLOD(const Mesh& mesh, const Submesh& submesh, float screenFraction) const
 	{
-		return LODSelection::SelectLOD(screenFraction, m_Specification.LODThreshold, static_cast<uint32_t>(submesh.LODs.size()));
+		return LODSelection::SelectLOD(submesh, mesh.GetBounds(), screenFraction, m_LODCriteria);
+	}
+
+	LODCriteria SceneRenderer::GetLODCriteria() const
+	{
+		const float height = static_cast<float>(m_ViewportSize.y);
+		return LODCriteria { m_Specification.LODThreshold, LODSelection::GetErrorThreshold(m_Specification.LODErrorPixels, height), height };
 	}
 
 	float SceneRenderer::GetScreenFraction(const SceneCamera& camera, const glm::vec3& center, float radius)
@@ -1745,6 +1751,7 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Submit"); // Extraction (Render.Extract) nests in it
+		m_LODCriteria = GetLODCriteria();
 		const bool rendered = RenderFrame(scene, camera, target, options);
 		if (rendered)
 		{

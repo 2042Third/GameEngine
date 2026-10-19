@@ -205,6 +205,14 @@ namespace Strata
 		std::vector<GeneratedLOD> GenerateLODs(std::span<const glm::vec3> positions, std::span<const MeshVertexAttributes> attributes, std::span<const uint32_t> indices,
 			uint32_t maxLevels);
 		AABB ComputeBounds(std::span<const glm::vec3> positions);
+		// Whether a submesh's levels of detail are chosen by their errors (LODSelection::SelectLOD): more than one level, and
+		// every level past full detail with a known (positive) MeshLOD::Error.
+		bool HasLODErrors(const Submesh& submesh);
+		// A level's error relative to the radius of the mesh's bounds (half their diagonal): a proxy's screen fraction measures
+		// the radius of its world bounds, which scale with the mesh's, so the fraction times this is the error's share of the
+		// viewport height. 0 for an unknown error or bounds without size. The renderer's paths both take it from here (the
+		// GPU's LOD records hold it), so they compare the same values.
+		float GetRelativeLODError(float error, const AABB& meshBounds);
 		// Submesh::UVDensity of indexed triangles (indices relative to the given vertices): per axis, the square root of the
 		// texture coordinate area over the area of the triangles whose normals point along it most. An axis whose triangles
 		// make less than c_MinUVDensityAreaShare of the area gets 0 (slivers would decide alone otherwise), as do triangles

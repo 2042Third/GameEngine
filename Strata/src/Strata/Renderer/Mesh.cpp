@@ -364,10 +364,11 @@ namespace Strata
 			submeshes.reserve(m_Submeshes.size());
 			for (const Submesh& submesh : m_Submeshes)
 			{
-				submeshes.push_back(RenderData::GeometrySubmesh { submesh.BaseVertex, static_cast<uint32_t>(lods.size()), static_cast<uint32_t>(submesh.LODs.size()), 0,
+				const uint32_t flags = MeshUtils::HasLODErrors(submesh) ? RenderData::c_GeometrySubmeshLODErrors : 0u;
+				submeshes.push_back(RenderData::GeometrySubmesh { submesh.BaseVertex, static_cast<uint32_t>(lods.size()), static_cast<uint32_t>(submesh.LODs.size()), flags,
 					glm::vec4(submesh.UVDensity, 0.0f) });
 				for (const MeshLOD& lod : submesh.LODs)
-					lods.push_back(RenderData::GeometryLOD { lod.IndexOffset, lod.IndexCount, submesh.BaseVertex, 0 });
+					lods.push_back(RenderData::GeometryLOD { lod.IndexOffset, lod.IndexCount, submesh.BaseVertex, 0, MeshUtils::GetRelativeLODError(lod.Error, m_Bounds) });
 			}
 			if (!pool->SetLayout(m_Geometry, submeshes, lods))
 			{
@@ -720,6 +721,21 @@ namespace Strata
 			for (const glm::vec3& position : positions)
 				bounds.Expand(position);
 			return bounds;
+		}
+
+		bool HasLODErrors(const Submesh& submesh)
+		{
+			if (submesh.LODs.size() <= 1)
+				return false;
+			return std::all_of(submesh.LODs.begin() + 1, submesh.LODs.end(), [](const MeshLOD& lod) { return lod.Error > 0.0f; });
+		}
+
+		float GetRelativeLODError(float error, const AABB& meshBounds)
+		{
+			const float radius = meshBounds.IsValid() ? glm::length(meshBounds.GetExtents()) : 0.0f;
+			if (!(error > 0.0f) || !(radius > 0.0f) || !std::isfinite(radius))
+				return 0.0f;
+			return error / radius;
 		}
 
 		glm::vec3 ComputeUVDensity(std::span<const glm::vec3> positions, std::span<const MeshVertexAttributes> attributes, std::span<const uint32_t> indices)

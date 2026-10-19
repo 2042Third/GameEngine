@@ -79,11 +79,23 @@ namespace Strata
 		Off       // The CPU path: culling, batching and draw lists on the CPU
 	};
 
+	// What a view chooses levels of detail by (SceneRenderer::GetLODCriteria, LODSelection::SelectLOD).
+	struct LODCriteria
+	{
+		float LODThreshold = 0.5f;   // SceneRendererSpecification::LODThreshold: submeshes whose levels have no errors halve by it
+		float ErrorThreshold = 0.0f; // LODSelection::GetErrorThreshold: the largest screen fraction times relative error drawn
+		float ViewportHeight = 0.0f; // In pixels (LODSelection::GetErrorPixels)
+	};
+
 	struct SceneRendererSpecification
 	{
 		std::string DebugName = "SceneRenderer";
-		// Screen fraction (projected bounding sphere diameter / viewport height) below which each further mesh LOD is
-		// used: LOD n is chosen while the fraction is below LODThreshold / 2^(n-1).
+		// Levels of detail with errors (MeshLOD::Error, which generated levels have): the most simplified level whose error,
+		// projected onto the screen, spans at most this many pixels of the viewport height is drawn. 0 draws full detail.
+		float LODErrorPixels = 1.0f;
+		// Levels without errors (meshes cooked before they had them, levels made by other means): screen fraction (projected
+		// bounding sphere diameter / viewport height) below which each further level is used: LOD n is chosen while the
+		// fraction is below LODThreshold / 2^(n-1).
 		float LODThreshold = 0.5f;
 		// Point and spot lights rendered per frame (after frustum culling). When more are visible, the most relevant ones
 		// are kept: lights whose range contains the camera, then by the projected size of their range.
@@ -449,6 +461,9 @@ namespace Strata
 		void ResetExposureAdaptation() { m_ResetExposure = true; }
 
 		const SceneRendererSpecification& GetSpecification() const { return m_Specification; }
+		// What the renderer chooses levels of detail by at its viewport size (LODSelection::SelectLOD): tools showing the level
+		// it draws use these.
+		LODCriteria GetLODCriteria() const;
 		const SceneRendererStats& GetStats() const { return m_Stats; }
 		// The GPU's side of the latest frame whose GPU work completed (2-3 frames late; Render resolves them without waiting).
 		const SceneRendererGPUStats& GetGPUStats() const { return m_GPUStats; }
@@ -771,7 +786,8 @@ namespace Strata
 		uint64_t UploadChangedRange(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, std::vector<T>& list, std::vector<T>& uploaded, bool full);
 
 		bool EnsureShadowMap();
-		uint32_t SelectLOD(const Submesh& submesh, float screenFraction) const;
+		// The level drawn of a submesh of a mesh at a screen fraction, by the frame's m_LODCriteria (LODSelection::SelectLOD).
+		uint32_t SelectLOD(const Mesh& mesh, const Submesh& submesh, float screenFraction) const;
 		static float GetScreenFraction(const SceneCamera& camera, const glm::vec3& center, float radius);
 		void DrawBatches(nvrhi::ICommandList* commandList, Pass pass, bool transparent);
 		void DrawShadows(nvrhi::ICommandList* commandList, uint32_t cascadeCount);
@@ -856,6 +872,7 @@ namespace Strata
 		nvrhi::IDevice* m_Device = nullptr;
 		nvrhi::CommandListHandle m_CommandList;
 		glm::uvec2 m_ViewportSize = { 0, 0 };
+		LODCriteria m_LODCriteria; // The frame's (GetLODCriteria, set as it starts)
 		bool m_TargetsValid = false;
 		bool m_HasRenderedFrame = false; // Since the render targets were (re)created
 		// The camera of the previous frame, to tell the texture streamer when the view jumped (a camera cut).

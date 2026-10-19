@@ -524,6 +524,7 @@ namespace Strata
 		constants.Feedback = m_Specification.VisibilityFeedback ? 1u : 0u;
 		constants.FirstPhaseViewBuckets = firstPhaseViewBuckets;
 		constants.VisibilityParity = m_VisibilityParity;
+		constants.LODErrorThreshold = m_LODCriteria.ErrorThreshold;
 		// The bucket table's second part: each dense bucket's draw slots.
 		for (const uint32_t bucket : m_CullBuckets)
 			m_CullBucketTable.push_back(GetBucketSlots(bucket));

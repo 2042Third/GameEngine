@@ -5,7 +5,6 @@
 // SceneRenderData.h; keep them in sync.
 
 #include "Include/Common.glsl"
-#include "Include/LODSelection.glsl"
 #include "Include/OrderedFloat.glsl"
 
 // RenderProxyFlags
@@ -84,7 +83,7 @@ struct GeometrySubmesh
 	uint BaseVertex;
 	uint FirstLOD;
 	uint LODCount;
-	uint Reserved;
+	uint Flags;     // ST_GEOMETRY_SUBMESH_* bits
 	vec4 UVDensity; // xyz: Submesh::UVDensity
 };
 
@@ -94,6 +93,10 @@ struct GeometryLOD
 	uint IndexCount;
 	uint BaseVertex;
 	uint Mesh;
+	float RelativeError; // MeshUtils::GetRelativeLODError of the level's error
+	uint Reserved0;
+	uint Reserved1;
+	uint Reserved2;
 };
 
 struct CullInstance
@@ -129,7 +132,7 @@ struct CullConstants
 	uint Feedback;           // 1: the counting passes write visibility feedback
 	uint FirstPhaseViewBuckets; // Of the view's dense buckets, the first phase's (they come first)
 	uint VisibilityParity;   // The bit of u_Visibility holding the previous frame's visibility (0 or 1)
-	uint Reserved0;
+	float LODErrorThreshold; // LODSelection::GetErrorThreshold of the view
 	uint Reserved1;
 	uint Reserved2;
 };
@@ -172,6 +175,20 @@ layout(set = 0, binding = ST_UAV(11), std430) buffer VisibilityBuffer { uint u_V
 // The depth pyramid of the first phase's depth (Scene/HZBBuild.comp): each texel the farthest (smallest, reversed-Z)
 // depth of the pixels it covers; level m's texel covers pixels p with p >> (m + 1) equal to it.
 layout(set = 0, binding = ST_SRV(8)) uniform texture2D u_DepthPyramid;
+
+#define ST_LOD_RELATIVE_ERROR(record) u_GeometryLODs[record].RelativeError
+#include "Include/LODSelection.glsl"
+
+#define ST_GEOMETRY_SUBMESH_LOD_ERRORS 1u // RenderData::c_GeometrySubmeshLODErrors
+
+// The level of detail drawn of a submesh at a screen fraction (LODSelection::SelectLOD): by its levels' errors where they are
+// known, else by halving the fraction.
+uint ChooseLOD(GeometrySubmesh submesh, float screenFraction)
+{
+	if ((submesh.Flags & ST_GEOMETRY_SUBMESH_LOD_ERRORS) != 0u)
+		return SelectLODByError(screenFraction, submesh.FirstLOD, submesh.LODCount, u_Cull.LODErrorThreshold);
+	return SelectLOD(screenFraction, u_Cull.LODParameters.x, submesh.LODCount);
+}
 
 // The projected diameter of a bounding sphere as a fraction of the viewport height, as LODSelection::GetScreenFraction
 // computes it.

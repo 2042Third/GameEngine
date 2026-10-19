@@ -11,6 +11,7 @@
 #include <limits>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -62,12 +63,19 @@ namespace Strata
 		uint32_t PendingEntities = 0;
 		uint32_t FailedEntities = 0;
 		uint32_t PlaceholderBoxes = 0;
-		// LOD view: entities by the level of detail of their mesh (the last entry counts level 3 and higher).
+		// LOD view: entities by the level of detail of their mesh (the last entry counts level 3 and higher), and per entry the
+		// largest error in pixels (of the viewport height) of the levels drawn there, among levels chosen by their errors
+		// (LODSelection::GetErrorPixels; 0 where there are none).
 		std::array<uint32_t, 4> EntitiesPerLOD = {};
+		std::array<float, 4> MaxErrorPixelsPerLOD = {};
 		// Mip view: entities with textures, by the mip levels their worst texture lacks: none (resident at the level the views
 		// need), 1, 2, and 3 or more (or a texture still loading).
 		std::array<uint32_t, 4> EntitiesPerMipShortfall = {};
 	};
+
+	// The LOD view's legend name of a level (`last`: the entry that counts it and the higher ones): "LOD 1", "LOD 3+", with the
+	// largest error drawn at it in pixels where it has one (StreamingViewStats::MaxErrorPixelsPerLOD): "LOD 2 (0.84 px)".
+	std::string GetLODLegendName(size_t level, bool last, float errorPixels);
 
 	// Builds what a debug view draws over the viewport image for one frame: SceneRenderOptions::EntityTints (the drawn
 	// entities' colors) and, in the streaming view, placeholder boxes for entities whose mesh is not there to draw. Works on
@@ -83,7 +91,8 @@ namespace Strata
 
 		// Rebuilds the tints and adds placeholder boxes to `placeholders` (which the caller clears and draws). Entities outside
 		// the camera's view get no tint. ViewportDebugView::None builds nothing.
-		void Build(Scene& scene, ViewportDebugView view, const SceneCamera& camera, float lodThreshold, const ViewportDebugColors& colors,
+		// `lod`: the renderer's (SceneRenderer::GetLODCriteria).
+		void Build(Scene& scene, ViewportDebugView view, const SceneCamera& camera, const LODCriteria& lod, const ViewportDebugColors& colors,
 			DebugDraw& placeholders);
 
 		std::span<const SceneEntityTint> GetTints() const { return m_Tints; }
@@ -102,7 +111,7 @@ namespace Strata
 		// The worst status of a material and the textures it uses.
 		AssetStatus GetMaterialStatus(const RenderScene& renderScene, uint32_t materialSlot);
 		void BuildStreaming(Scene& scene, const RenderScene& renderScene, const ViewportDebugColors& colors, DebugDraw& placeholders);
-		void BuildLOD(Scene& scene, const RenderScene& renderScene, const SceneCamera& camera, float lodThreshold, const ViewportDebugColors& colors);
+		void BuildLOD(Scene& scene, const RenderScene& renderScene, const SceneCamera& camera, const LODCriteria& lod, const ViewportDebugColors& colors);
 		// The mip levels a material's worst texture lacks (Asset::GetDetailLevels: the finest level resident beyond the finest
 		// one wanted): c_Loading while the material or a texture is still loading (or failed to), c_NoTextures for a material
 		// without registered textures (nothing of it streams).

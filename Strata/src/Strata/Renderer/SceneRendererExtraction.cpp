@@ -934,7 +934,7 @@ namespace Strata
 					const uint32_t materialFlags = m_MaterialFlags[materialSlot];
 					if ((materialFlags & c_MaterialAvailable) == 0)
 						continue;
-					const uint32_t lod = SelectLOD(submeshes[submeshIndex], fraction);
+					const uint32_t lod = SelectLOD(*mesh, submeshes[submeshIndex], fraction);
 					if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
 					{
 						skipped++;
@@ -1123,7 +1123,7 @@ namespace Strata
 					// Transparent surfaces cast no shadows.
 					if ((materialFlags & c_MaterialAvailable) == 0 || (materialFlags & c_MaterialTransparent) != 0)
 						continue;
-					const uint32_t lod = SelectLOD(submeshes[submeshIndex], fraction);
+					const uint32_t lod = SelectLOD(*mesh, submeshes[submeshIndex], fraction);
 					if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
 					{
 						skipped++;
