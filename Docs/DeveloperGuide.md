@@ -1680,7 +1680,7 @@ works: Docs/Architecture.md, "World partition"; for people: Docs/Manual/Worlds.m
   types' labels about as short, or the laptop layouts change.
 - **`world.cook`** (`Editor/EditorWorldCommands.cpp`, deferred: it reads cells off the frame) measures a world's cells into
   its index (entities, bodies, bounds, closure bytes, `MaxBodiesInRadius`), re-reading only cells whose files changed; it
-  fails, writing nothing, on entity IDs cells share; `apply` (default true) also sets the persistent scene's capacity
+  fails, writing nothing, on entity IDs cells share and when the project closes before it ends; `apply` (default true) also sets the persistent scene's capacity
   when it is open in edit mode (else a warning; an explicit `apply: true` fails). **`world.info`** describes a world,
   its layers and how many cells its index misses.
 - **`world.create`** makes `<path>.stworld` and its persistent scene `<path>.stscene` (basic3d content and the

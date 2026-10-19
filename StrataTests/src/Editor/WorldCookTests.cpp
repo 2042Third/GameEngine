@@ -30,6 +30,7 @@
 #include <chrono>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -187,6 +188,31 @@ TEST_SUITE("Editor.WorldCook")
 		project.Run("edit.redo");
 		CHECK(project.Context.GetEditScene()->GetSettings().PhysicsCapacity.MaxBodies == recommended);
 		CHECK(project.ReadWorld()->GetData().Index.has_value());
+	}
+
+	TEST_CASE("A cook its project's close interrupts keeps what it reads alive, fails and writes nothing")
+	{
+		WorldProject project("WorldCookClose", 4);
+		const std::filesystem::path projectFile = project.Context.GetProject()->GetProjectFile();
+		const std::weak_ptr<AssetManagerBase> manager = project.Context.GetAssetManager()->shared_from_this();
+		EditorCommandResult pending = project.Commands.Execute(project.Context, "world.cook", { { "world", UUIDToJson(project.World) } });
+		REQUIRE(pending.IsPending());
+
+		// The project closes and opens again before the cook's next poll: the cook still reads through the closed project's
+		// manager, then fails without writing into the project that is open now.
+		project.Run("project.close", { { "force", true } });
+		CHECK_FALSE(manager.expired());
+		project.Run("project.open", { { "path", FileSystem::ToUTF8(projectFile) } });
+		project.Context.GetAssetManager()->WaitForImports();
+		const EditorCommandResult result = CompleteCommand(project.Context, std::move(pending));
+		REQUIRE_FALSE(result.Success);
+		CHECK(result.Error.find("closed") != std::string::npos);
+		CHECK(manager.expired());
+		CHECK_FALSE(project.ReadWorld()->GetData().Index.has_value());
+		CHECK(project.Context.GetUndoStack().GetPosition() == 0);
+
+		// The project opened again starts a cache of its own: its cook reads every cell.
+		CHECK(project.Run("world.cook", { { "world", UUIDToJson(project.World) } })["cellsRead"] == 16);
 	}
 
 	TEST_CASE("Entity IDs shared by cells fail the cook, naming them and the cells")

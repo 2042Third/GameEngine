@@ -138,7 +138,7 @@ namespace Strata
 
 		GameExportOptions m_Options;
 		Ref<EditorAssetManager> m_Assets; // Kept alive while the I/O job reads from it
-		WorldCookCache* m_WorldCookCache = nullptr; // The editor's (EditorContext::GetWorldCookCache), which outlives the export
+		Ref<WorldCookCache> m_WorldCookCache; // The editor's (EditorContext::GetWorldCookCache), shared with the cooks
 		std::vector<Scope<WorldCook>> m_Cooks;
 		AssetPackBuildOptions m_PackOptions;
 		GameManifest m_Manifest;

@@ -3,6 +3,7 @@
 #include "Editor/WorldCellIO.h"
 
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Core/Assert.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Physics/PhysicsSystem.h>
 #include <Strata/Physics/PhysicsWorld.h>
@@ -96,39 +97,43 @@ namespace Strata
 
 	}
 
-	Scope<WorldCook> WorldCook::Start(EditorAssetManager& assets, AssetHandle world, WorldCookCache& cache, std::string* outError)
+	Scope<WorldCook> WorldCook::Start(const Ref<EditorAssetManager>& assets, AssetHandle world, const Ref<WorldCookCache>& cache, std::string* outError)
 	{
+		ST_CORE_ASSERT(assets && cache, "A cook needs the project's asset manager and the session's cache");
 		auto fail = [outError](std::string message) -> Scope<WorldCook>
 		{
 			if (outError)
 				*outError = std::move(message);
 			return nullptr;
 		};
-		const std::optional<AssetMetadata> metadata = assets.GetMetadata(world);
+		const std::optional<AssetMetadata> metadata = assets->GetMetadata(world);
 		if (!metadata || metadata->Type != AssetType::World)
 			return fail(fmt::format("{} is not a world of the project", world.ToString()));
 		std::vector<uint8_t> bytes;
 		std::string error;
-		if (!assets.ReadStoredData(world, bytes, &error))
+		if (!assets->ReadStoredData(world, bytes, &error))
 			return fail(fmt::format("The world '{}' cannot be read: {}", metadata->Path, error));
 		const Ref<WorldAsset> asset = WorldAsset::Deserialize(bytes, &error);
 		if (!asset)
 			return fail(fmt::format("The world '{}' is invalid: {}", metadata->Path, error));
 
 		Scope<WorldCook> cook(new WorldCook());
-		cook->m_Assets = &assets;
-		cook->m_Cache = &cache;
+		cook->m_Assets = assets;
+		cook->m_Cache = cache;
 		cook->m_World = world;
 		cook->m_Data = asset->GetData();
 		const WorldData& data = cook->m_Data;
+		// The jobs read through the cook's reference, never one of their own: the cook waits for them, so that the manager is
+		// released on the main thread.
+		EditorAssetManager* reader = cook->m_Assets.get();
 
 		// Cells whose stamps changed since the index (or the session's cache) was made are read again.
 		for (const WorldCell& cell : data.Cells)
 		{
-			const uint64_t stamp = assets.GetContentStamp(cell.Scene);
+			const uint64_t stamp = assets->GetContentStamp(cell.Scene);
 			const WorldCellSummary* indexed = asset->FindSummary(cell.GetKey());
-			const auto cached = cache.Cells.find(cell.Scene);
-			const bool current = (cached != cache.Cells.end() && cached->second.Stamp == stamp) || (indexed && indexed->Stamp == FormatStamp(stamp));
+			const auto cached = cache->Cells.find(cell.Scene);
+			const bool current = (cached != cache->Cells.end() && cached->second.Stamp == stamp) || (indexed && indexed->Stamp == FormatStamp(stamp));
 			if (current && stamp != 0)
 				continue;
 			Scope<CellJob> job = CreateScope<CellJob>();
@@ -136,12 +141,12 @@ namespace Strata
 			job->Stamp = stamp;
 			CellJob* target = job.get();
 			cook->m_Reads.push_back(std::move(job));
-			cook->m_Jobs.push_back(JobSystem::SubmitIO([target, &assets, cancelled = &cook->m_Cancelled]()
+			cook->m_Jobs.push_back(JobSystem::SubmitIO([target, reader, cancelled = &cook->m_Cancelled]()
 			{
 				if (cancelled->load(std::memory_order_acquire))
 					return;
 				std::string readError;
-				if (std::optional<WorldCellIO::CellSummary> summary = WorldCellIO::ReadCellSummary(assets, target->Cell.Scene, &readError))
+				if (std::optional<WorldCellIO::CellSummary> summary = WorldCellIO::ReadCellSummary(*reader, target->Cell.Scene, &readError))
 				{
 					target->Summary = summary->Summary;
 					target->EntityIDs = std::move(summary->EntityIDs);
@@ -157,9 +162,10 @@ namespace Strata
 		if (data.PersistentScene.IsValid())
 		{
 			Ref<WorldCookPersistentRead> persistent = CreateRef<WorldCookPersistentRead>();
-			cook->m_Jobs.push_back(JobSystem::SubmitIO([persistent, &assets, scene = data.PersistentScene, world]()
+			cook->m_Jobs.push_back(JobSystem::SubmitIO([persistent, reader, scene = data.PersistentScene, world, cancelled = &cook->m_Cancelled]()
 			{
-				ReadPersistent(assets, scene, world, *persistent);
+				if (!cancelled->load(std::memory_order_acquire))
+					ReadPersistent(*reader, scene, world, *persistent);
 			}));
 			// Kept by the job and by the poll, which reads it once every job completed.
 			cook->m_Persistent = persistent;
@@ -167,7 +173,8 @@ namespace Strata
 		return cook;
 	}
 
-	std::optional<WorldCookReport> WorldCook::Run(EditorAssetManager& assets, AssetHandle world, WorldCookCache& cache, std::string* outError)
+	std::optional<WorldCookReport> WorldCook::Run(const Ref<EditorAssetManager>& assets, AssetHandle world, const Ref<WorldCookCache>& cache,
+		std::string* outError)
 	{
 		Scope<WorldCook> cook = Start(assets, world, cache, outError);
 		if (!cook)
@@ -201,9 +208,17 @@ namespace Strata
 				return false;
 		}
 		m_Jobs.clear();
-		Finish();
+		if (m_Cancelled.load(std::memory_order_acquire))
+			m_Error = "The cook was cancelled";
+		else
+			Finish();
 		m_Finished = true;
 		return true;
+	}
+
+	void WorldCook::Cancel()
+	{
+		m_Cancelled.store(true, std::memory_order_release);
 	}
 
 	void WorldCook::Finish()

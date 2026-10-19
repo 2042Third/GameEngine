@@ -238,7 +238,7 @@ namespace Strata
 		Ref<GameExport> exporter(new GameExport());
 		exporter->m_Options = options;
 		exporter->m_Assets = std::static_pointer_cast<EditorAssetManager>(assets->shared_from_this());
-		exporter->m_WorldCookCache = &context.GetWorldCookCache();
+		exporter->m_WorldCookCache = context.GetWorldCookCache();
 		exporter->m_PackOptions = std::move(packOptions);
 		exporter->m_FileName = ToFileName(project.GetConfig().Name);
 		exporter->m_Runtime = runtime;
@@ -326,7 +326,7 @@ namespace Strata
 			if (metadata.Type != AssetType::World || metadata.IsSubAsset())
 				continue;
 			std::string error;
-			Scope<WorldCook> cook = WorldCook::Start(*m_Assets, metadata.Handle, *m_WorldCookCache, &error);
+			Scope<WorldCook> cook = WorldCook::Start(m_Assets, metadata.Handle, m_WorldCookCache, &error);
 			if (!cook)
 			{
 				std::scoped_lock<std::mutex> lock(m_Shared->Mutex);

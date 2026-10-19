@@ -310,8 +310,9 @@ namespace Strata
 		UndoStack& GetUndoStack() { return m_UndoStack; }
 		// The prefab instances of the edited scene and their prefabs (updates after prefab changes, modified marks).
 		PrefabSync& GetPrefabSync() { return m_PrefabSync; }
-		// What the world cook read this session (world.cook, exports), for the open project.
-		WorldCookCache& GetWorldCookCache();
+		// What the world cook read this session (world.cook, exports), for the open project. Cooks share it: one that runs
+		// while its project closes fills the old project's cache, which the next project never sees.
+		const Ref<WorldCookCache>& GetWorldCookCache();
 		// The world the edited scene is the persistent scene of, streamed around the editor camera; null when it is none.
 		EditorWorld* GetWorld() const { return m_World.get(); }
 		// The documents the last save of a world wrote (scene.save's documents).
@@ -686,8 +687,8 @@ namespace Strata
 		uint64_t m_RecordedFrameCount = 0;
 		double m_LastFrameTime = 0.0;
 		std::map<std::string, StatusProvider> m_StatusProviders;
-		Scope<WorldCookCache> m_WorldCookCache;
-		const EditorAssetManager* m_WorldCookCacheOwner = nullptr; // The project the cache belongs to
+		Ref<WorldCookCache> m_WorldCookCache;
+		uint64_t m_WorldCookCacheGeneration = 0; // The project the cache belongs to (GetProjectGeneration)
 		// Declared after the undo stack and the edited scene, which it observes and streams into: it goes first.
 		Scope<EditorWorld> m_World;
 		std::vector<WorldSavedDocument> m_LastWorldSave;

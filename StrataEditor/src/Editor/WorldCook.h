@@ -52,15 +52,19 @@ namespace Strata
 	// (PhysicsWorld::CountBodyCandidates: the rule physics sizes by), the bounds (entities' positions, renderers' recorded mesh
 	// bounds, colliders) and the stored bytes of its dependency closure without other scenes; then the most bodies the
 	// persistent scene's streaming sources can keep loaded anywhere (MaxBodiesInRadius, see ComputeMaxBodiesInRadius). Entity
-	// IDs shared by cells or with the persistent scene fail the cook, naming them. Main thread, except its jobs.
+	// IDs shared by cells or with the persistent scene fail the cook, naming them. The cook shares the asset manager and the
+	// cache with the editor, so that both stay alive while it runs even when the project closes meanwhile. Main thread, except
+	// its jobs.
 	class WorldCook
 	{
 	public:
 		// Starts a cook of a world of the project. Null with the reason for a handle that is not a world of the project or a
 		// world document that cannot be read.
-		static Scope<WorldCook> Start(EditorAssetManager& assets, AssetHandle world, WorldCookCache& cache, std::string* outError = nullptr);
+		static Scope<WorldCook> Start(const Ref<EditorAssetManager>& assets, AssetHandle world, const Ref<WorldCookCache>& cache,
+			std::string* outError = nullptr);
 		// Cooks at once, waiting for the reads (tools and tests). Nullopt with the reason when it fails.
-		static std::optional<WorldCookReport> Run(EditorAssetManager& assets, AssetHandle world, WorldCookCache& cache, std::string* outError = nullptr);
+		static std::optional<WorldCookReport> Run(const Ref<EditorAssetManager>& assets, AssetHandle world, const Ref<WorldCookCache>& cache,
+			std::string* outError = nullptr);
 		~WorldCook();
 
 		WorldCook(const WorldCook&) = delete;
@@ -68,6 +72,9 @@ namespace Strata
 
 		// Once per frame: true once the cook finished (successfully or not). Main thread.
 		bool Poll();
+		// Stops the cook (its project closed): reads that have not started are skipped, and Poll finishes, failed, once the
+		// running ones end, leaving the cache as it was. Main thread.
+		void Cancel();
 		bool Succeeded() const { return m_Finished && m_Error.empty(); }
 		const std::string& GetError() const { return m_Error; }
 		const WorldCookReport& GetReport() const { return m_Report; }
@@ -97,8 +104,8 @@ namespace Strata
 
 		void Finish();
 
-		EditorAssetManager* m_Assets = nullptr;
-		WorldCookCache* m_Cache = nullptr;
+		Ref<EditorAssetManager> m_Assets; // The jobs read through it (the destructor waits for them)
+		Ref<WorldCookCache> m_Cache;
 		AssetHandle m_World = UUID::Null();
 		WorldData m_Data;
 		std::vector<Scope<CellJob>> m_Reads; // The cells read by jobs

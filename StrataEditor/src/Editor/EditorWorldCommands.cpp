@@ -386,9 +386,12 @@ namespace Strata
 					return arguments.Fail();
 				const auto started = std::chrono::steady_clock::now();
 				std::string error;
-				Ref<WorldCook> cook(WorldCook::Start(*assets, world, context.GetWorldCookCache(), &error).release());
+				// The cook keeps the manager and the cache alive: a project closed during the cook ends it below.
+				const Ref<EditorAssetManager> manager = std::static_pointer_cast<EditorAssetManager>(assets->shared_from_this());
+				Ref<WorldCook> cook(WorldCook::Start(manager, world, context.GetWorldCookCache(), &error).release());
 				if (!cook)
 					return EditorCommandResult::Fail(error);
+				const uint64_t project = context.GetProjectGeneration();
 				const bool persistentOpen = !context.IsPlaying() && context.GetSceneHandle() == cook->GetCookedData().PersistentScene;
 				if (apply && !persistentOpen)
 				{
@@ -398,15 +401,19 @@ namespace Strata
 					apply = false;
 				}
 				const bool skippedApply = !explicitApply && !persistentOpen;
-				return EditorCommandResult::Defer([cook, apply, skippedApply, started](EditorContext& pollContext) -> std::optional<EditorCommandResult>
+				return EditorCommandResult::Defer([cook, project, apply, skippedApply, started](EditorContext& pollContext) -> std::optional<EditorCommandResult>
 				{
+					// Another project (or the same one opened again) is not the one the cook read: it stops, writing nothing.
+					EditorAssetManager* assets = pollContext.GetAssetManager();
+					const bool projectClosed = pollContext.GetProjectGeneration() != project || !assets;
+					if (projectClosed)
+						cook->Cancel();
 					if (!cook->Poll())
 						return std::nullopt;
+					if (projectClosed)
+						return EditorCommandResult::Fail("The project was closed during the cook: nothing was written");
 					if (!cook->Succeeded())
 						return EditorCommandResult::Fail(cook->GetError());
-					EditorAssetManager* assets = pollContext.GetAssetManager();
-					if (!assets)
-						return EditorCommandResult::Fail("The project was closed during the cook");
 					const std::optional<AssetMetadata> metadata = assets->GetMetadata(cook->GetWorld());
 					if (!metadata)
 						return EditorCommandResult::Fail("The world was deleted during the cook");

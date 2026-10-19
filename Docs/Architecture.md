@@ -2204,7 +2204,9 @@ preparation (tools and tests calling `OnRuntimeStart`) streams its start cells o
 **The cook** (`world.cook`, `StrataEditor/src/Editor/WorldCook.h`). It measures a world's cells for its index, off the
 frame: the cells whose content stamp (`EditorAssetManager::GetContentStamp`) differs from their index entry's, and from
 what the session's `WorldCookCache` holds (`EditorContext::GetWorldCookCache`), are read on I/O jobs through
-`WorldCellIO::ReadCellSummary` (the seam world-io's cancellable reader replaces), the others reused. Per cell: its
+`WorldCellIO::ReadCellSummary` (the seam world-io's cancellable reader replaces), the others reused. The cook shares the
+project's asset manager and the cache with the editor, so both outlive a project closed while it runs; `world.cook` then
+cancels it and fails, writing nothing (the cache is the open project's: a project opened again starts a new one). Per cell: its
 entities, its physics bodies (`PhysicsWorld::CountBodyCandidates`, the rule physics sizes by), its bounds (entities'
 positions, renderers' recorded mesh bounds, colliders) and the stored bytes of its dependency closure without other
 scenes. Then the most bodies the sources can keep loaded (`MaxBodiesInRadius`): per layer the largest radius a source of

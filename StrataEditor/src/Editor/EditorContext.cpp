@@ -2033,15 +2033,16 @@ namespace Strata
 			m_StatusProviders.erase(section);
 	}
 
-	WorldCookCache& EditorContext::GetWorldCookCache()
+	const Ref<WorldCookCache>& EditorContext::GetWorldCookCache()
 	{
-		// The cells another project's cooks read mean nothing for this one.
-		if (!m_WorldCookCache || m_WorldCookCacheOwner != m_AssetManager.get())
+		// The cells another project's cooks read mean nothing for this one (also when it is the same project opened again: its
+		// files may have changed meanwhile).
+		if (!m_WorldCookCache || m_WorldCookCacheGeneration != m_ProjectGeneration)
 		{
-			m_WorldCookCache = CreateScope<WorldCookCache>();
-			m_WorldCookCacheOwner = m_AssetManager.get();
+			m_WorldCookCache = CreateRef<WorldCookCache>();
+			m_WorldCookCacheGeneration = m_ProjectGeneration;
 		}
-		return *m_WorldCookCache;
+		return m_WorldCookCache;
 	}
 
 }
