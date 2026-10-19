@@ -498,7 +498,7 @@ TEST_SUITE("GPU.Animation")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Skinned models stand in their rest pose in edited scenes as they do in play before their first animation")
+	TEST_CASE("Skinned models stand in their rest pose in edited scenes as they do in play before their first animation, on both paths")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -520,38 +520,48 @@ TEST_SUITE("GPU.Animation")
 			CAPTURE(armFile.Name);
 			const ImportedArm arm = ImportSkinnedArm(*assets.Manager, armFile.Options, ++handle);
 
-			// Edit mode: the editor's preview gives the scene its animators' rest poses.
-			Scene edited("Edited");
-			const Entity editedMesh = BuildModelScene(edited, arm, floorMaterial);
-			AnimationPreviewSpecification specification;
-			specification.RestPoses = true;
-			AnimationPreview preview(edited, specification);
-			preview.Update();
-			REQUIRE_FALSE(preview.HasWaitingRestPoses());
-			SceneRenderer editedRenderer;
-			editedRenderer.SetViewportSize(size, size);
-			const ReadbackImage editedImage = RenderToImage(editedRenderer, edited, camera);
-			CHECK(editedRenderer.GetStats().SkinnedInstances == 1);
-			const std::vector<uint8_t> editedMask = EntityMask(editedRenderer, editedMesh);
-
-			// Play mode, nothing playing: the animation system's pose with no clip.
-			Scene played("Played");
-			BuildModelScene(played, arm, floorMaterial);
-			played.OnRuntimeStart(SceneRuntimeMode::Play);
-			played.OnUpdateRuntime(1.0f / 60.0f);
-			SceneRenderer playedRenderer;
-			playedRenderer.SetViewportSize(size, size);
-			const ReadbackImage playedImage = RenderToImage(playedRenderer, played, camera);
-			CHECK(MaxDifference(editedImage, playedImage) <= 1);
-			played.OnRuntimeStop();
-
-			// The arm stands along +Y over the origin: the column x = 0 from y = 0.1 to 1.9 is the arm (in its bind pose it lies
-			// along an axis of the ground).
-			for (float y = 0.1f; y < 1.95f; y += 0.2f)
+			// Both paths draw the preview's palettes: the GPU's culling and indirect draws (where the device has them), and the
+			// CPU's batches.
+			for (const GPUDrivenMode mode : { GPUDrivenMode::Auto, GPUDrivenMode::Off })
 			{
-				CAPTURE(y);
-				const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(0.0f, y, 0.0f), size);
-				CHECK(editedMask[static_cast<size_t>(pixel.y) * size + pixel.x] == 1);
+				CAPTURE(static_cast<int>(mode));
+				SceneRendererSpecification specification;
+				specification.GPUDriven = mode;
+
+				// Edit mode: the editor's preview gives the scene its animators' rest poses.
+				Scene edited("Edited");
+				const Entity editedMesh = BuildModelScene(edited, arm, floorMaterial);
+				AnimationPreviewSpecification previewSpecification;
+				previewSpecification.RestPoses = true;
+				AnimationPreview preview(edited, previewSpecification);
+				preview.Update();
+				REQUIRE_FALSE(preview.HasWaitingRestPoses());
+				SceneRenderer editedRenderer(specification);
+				editedRenderer.SetViewportSize(size, size);
+				const ReadbackImage editedImage = RenderToImage(editedRenderer, edited, camera);
+				CHECK(editedRenderer.GetStats().GPUDriven == (mode == GPUDrivenMode::Auto && editedRenderer.IsGPUDriven()));
+				CHECK(GetDrawnCounts(editedRenderer).SkinnedInstances == 1);
+				const std::vector<uint8_t> editedMask = EntityMask(editedRenderer, editedMesh);
+
+				// Play mode, nothing playing: the animation system's pose with no clip.
+				Scene played("Played");
+				BuildModelScene(played, arm, floorMaterial);
+				played.OnRuntimeStart(SceneRuntimeMode::Play);
+				played.OnUpdateRuntime(1.0f / 60.0f);
+				SceneRenderer playedRenderer(specification);
+				playedRenderer.SetViewportSize(size, size);
+				const ReadbackImage playedImage = RenderToImage(playedRenderer, played, camera);
+				CHECK(MaxDifference(editedImage, playedImage) <= 1);
+				played.OnRuntimeStop();
+
+				// The arm stands along +Y over the origin: the column x = 0 from y = 0.1 to 1.9 is the arm (in its bind pose it
+				// lies along an axis of the ground).
+				for (float y = 0.1f; y < 1.95f; y += 0.2f)
+				{
+					CAPTURE(y);
+					const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(0.0f, y, 0.0f), size);
+					CHECK(editedMask[static_cast<size_t>(pixel.y) * size + pixel.x] == 1);
+				}
 			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
