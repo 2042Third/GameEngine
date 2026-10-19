@@ -995,13 +995,18 @@ namespace Strata
 		CharacterStepOutput CharacterStep;                            // Scratch of StepCharacters
 		std::vector<ContactReport> CharacterReports;                  // The step's contacts of character controllers (see StepCharacters)
 
-		std::map<entt::entity, BodyRecord> Bodies;                    // Ordered: per-step processing is deterministic
+		// Ordered: per-step processing is deterministic. Records are created only by EmplaceRecord and removed only by
+		// EraseRecord (or cleared together with RecordIndex and RecordOverflow, as Clear does), never through the map itself:
+		// the index below points into its nodes, so a direct erase would leave FindRecord a dangling record, and a direct
+		// insert a record FindRecord does not find. Debug and Release builds check the counts (CheckRecordIndex).
+		std::map<entt::entity, BodyRecord> Bodies;
 		// The records by entity index, for lookups (FindRecord): the map's ordered search costs a cache miss per level, and a
 		// cell that loads or unloads looks up tens of thousands of records in a frame. Its nodes keep their addresses. A new
 		// entity can take the index of a destroyed one whose record the same changes have not removed yet: the newer record
 		// then waits in the overflow (rare, and only until it is removed).
 		std::vector<RecordSlot> RecordIndex;
 		std::unordered_map<entt::entity, BodyRecord*> RecordOverflow;
+		size_t IndexedRecords = 0; // Records RecordIndex holds; the others are in RecordOverflow
 		std::unordered_map<entt::entity, entt::entity> MergedOwners;  // Collider entity -> rigid body entity owning its body
 		// Records that need attention at the next step besides the awake bodies (see NeedsPolling). Entries are dropped
 		// lazily, so the list may hold records that no longer need it (or no longer exist).
@@ -1204,6 +1209,15 @@ namespace Strata
 			return overflow != data.RecordOverflow.end() ? overflow->second : nullptr;
 		}
 
+		// Every record is in the index or the overflow, and nothing else is: a record created or removed through the map
+		// itself breaks the counts. Constant time, so that it runs after every change of the records.
+		void CheckRecordIndex([[maybe_unused]] const PhysicsWorldData& data)
+		{
+			ST_CORE_ASSERT(data.Bodies.size() == data.IndexedRecords + data.RecordOverflow.size(),
+				"Physics: {} body records, but {} indexed and {} in the overflow (a record was created or removed outside EmplaceRecord and EraseRecord)",
+				data.Bodies.size(), data.IndexedRecords, data.RecordOverflow.size());
+		}
+
 		// Creates the record of an entity (or finds the one it has) and indexes it for FindRecord.
 		std::pair<BodyRecord*, bool> EmplaceRecord(PhysicsWorldData& data, entt::entity handle)
 		{
@@ -1216,9 +1230,15 @@ namespace Strata
 					data.RecordIndex.resize(std::max(index + 1, std::min(data.RecordIndex.size() * 2, static_cast<size_t>(entt::to_entity(entt::entity(entt::null))) + 1)));
 				RecordSlot& slot = data.RecordIndex[index];
 				if (slot.Handle == entt::null)
+				{
 					slot = RecordSlot { handle, &it->second };
+					data.IndexedRecords++;
+				}
 				else
+				{
 					data.RecordOverflow.emplace(handle, &it->second);
+				}
+				CheckRecordIndex(data);
 			}
 			return { &it->second, created };
 		}
@@ -1228,10 +1248,16 @@ namespace Strata
 			const entt::entity handle = it->first;
 			const size_t index = static_cast<size_t>(entt::to_entity(handle));
 			if (index < data.RecordIndex.size() && data.RecordIndex[index].Handle == handle)
+			{
 				data.RecordIndex[index] = RecordSlot();
+				data.IndexedRecords--;
+			}
 			else
+			{
 				data.RecordOverflow.erase(handle);
+			}
 			data.Bodies.erase(it);
+			CheckRecordIndex(data);
 		}
 
 		// The record of an entity whose body is part of the simulation, or nullptr.
@@ -1834,6 +1860,7 @@ namespace Strata
 			data.Bodies.clear();
 			data.RecordIndex.clear();
 			data.RecordOverflow.clear();
+			data.IndexedRecords = 0;
 			data.SlotWaiterCount = 0;
 			data.FailureCounts.fill(0);
 			data.SlotWaiters.clear();

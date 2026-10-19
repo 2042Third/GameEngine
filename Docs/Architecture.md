@@ -368,7 +368,8 @@ in constant time (`PhysicsStats::PairIndexOperations` counts the list writes). B
 (`AddBodiesPrepare`/`AddBodiesFinalize`), and destroyed bodies leave it in one batch, when `ApplyPendingChanges` ends;
 each Jolt body index leads to its entity and record in constant time (`BodySlot`), and so does each entity index
 (`RecordSlot`: the records stay in an ordered map for the steps' deterministic order, but a cell that loads or unloads
-looks up tens of thousands of them in a frame). Jolt rebuilds a broad phase tree, and
+looks up tens of thousands of them in a frame; the index points into the map's nodes, so records are created and removed
+only through `EmplaceRecord` and `EraseRecord`, which assert that the counts agree). Jolt rebuilds a broad phase tree, and
 frees the nodes of the bodies removed from it, only while the tree holds bodies, and aborts the process when its fixed
 node pool runs out: so every world keeps one static anchor body in each of its two trees (static and moving bodies), on a
 layer outside the 32 that collides with nothing and that no query accepts, beside its body capacity
