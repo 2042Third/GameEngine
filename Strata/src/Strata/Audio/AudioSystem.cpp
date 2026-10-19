@@ -440,7 +440,7 @@ namespace Strata
 		if (!added && now - it->second < std::chrono::seconds(1))
 			return;
 		it->second = now;
-		const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+		const AssetManagerBase* manager = m_Scene.GetAssetManager();
 		const std::optional<AssetMetadata> metadata = manager ? manager->GetMetadata(clip) : std::nullopt;
 		ST_CORE_WARN("Audio: dropped a one-shot of '{}': {}", metadata && !metadata->Path.empty() ? metadata->Path : clip.ToString(), reason);
 	}
