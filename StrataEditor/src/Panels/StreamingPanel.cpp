@@ -38,6 +38,20 @@ namespace Strata
 		// The upload sparkline's height, in text heights, and the room above its highest value (the budget line stays inside).
 		constexpr float c_SparklineHeightInFontSizes = 2.5f;
 		constexpr float c_SparklineHeadroom = 1.1f;
+
+		// Continues the line with " \xC2\xB7 <fact>" where that fits, else puts the fact on a line of its own (narrow panels).
+		void ContinueLine(const char* fact, const ImVec4& color)
+		{
+			const char* separator = "\xC2\xB7 ";
+			ImGui::SameLine();
+			if (ImGui::CalcTextSize(separator).x + ImGui::CalcTextSize(fact).x <= ImGui::GetContentRegionAvail().x)
+			{
+				ImGui::TextColored(color, "%s%s", separator, fact);
+				return;
+			}
+			ImGui::NewLine();
+			ImGui::TextColored(color, "%s", fact);
+		}
 		// From this width (in text heights) the overview goes beside the asset table, taking this share of the width.
 		constexpr float c_SideBySideWidthInFontSizes = 60.0f;
 		constexpr float c_OverviewShare = 0.42f;
@@ -452,15 +466,19 @@ namespace Strata
 			ImGui::TextColored(colors.Error, "%u bodies without collision: the world is at its growth limit", physics.WaitingForSlot);
 			UI::ItemProbe::Record("Streaming.PhysicsWaiting");
 		}
-		ImGui::Text("Last frame: +%u built \xC2\xB7 -%u destroyed", physics.AddedLastUpdate, physics.RemovedLastUpdate);
-		ImGui::SameLine();
-		ImGui::TextColored(physics.PendingOther > 0 ? colors.Warning : colors.TextSecondary, "\xC2\xB7 %u waiting for meshes or valid transforms", physics.PendingOther);
+		// Formatted into a buffer: the section allocates nothing per frame.
+		std::array<char, 96> fact {};
+		ImGui::Text("Last frame: %u built \xC2\xB7 %u destroyed", physics.AddedLastUpdate, physics.RemovedLastUpdate);
+		std::snprintf(fact.data(), fact.size(), "%u waiting for meshes or valid transforms", physics.PendingOther);
+		ContinueLine(fact.data(), physics.PendingOther > 0 ? colors.Warning : colors.TextSecondary);
+		UI::ItemProbe::Record("Streaming.PhysicsPending");
 		if (physics.GrowthCount > 0)
 			ImGui::Text("Grew %u %s, the last in %.1f ms", physics.GrowthCount, physics.GrowthCount == 1 ? "time" : "times", physics.LastGrowthMs);
 		else
 			ImGui::TextColored(colors.TextSecondary, "Never grew");
-		ImGui::SameLine();
-		ImGui::TextColored(colors.TextSecondary, "\xC2\xB7 reserves %.1f MB", ToMB(physics.ReservedBytes));
+		std::snprintf(fact.data(), fact.size(), "reserves %.1f MB", ToMB(physics.ReservedBytes));
+		ContinueLine(fact.data(), colors.TextSecondary);
+		UI::ItemProbe::Record("Streaming.PhysicsReserved");
 	}
 
 	void StreamingPanel::DrawUploads(const AssetManagerStats& stats)

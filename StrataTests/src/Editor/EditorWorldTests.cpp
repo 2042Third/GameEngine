@@ -40,7 +40,8 @@ namespace
 	// An editor without a project, past the launcher, editing a scene of a floor and `boxes` boxes at rest on it.
 	struct PhysicsEditor : HarnessEditor
 	{
-		explicit PhysicsEditor(uint32_t boxes)
+		explicit PhysicsEditor(uint32_t boxes, const ImGuiHarness::Specification& window = {})
+			: HarnessEditor(window)
 		{
 			Layer->DismissLauncher();
 			Scene& scene = *Context().GetActiveScene();
@@ -48,6 +49,20 @@ namespace
 			for (uint32_t index = 0; index < boxes; index++)
 				CreateDynamicBox(scene, "Box " + std::to_string(index), glm::vec3(static_cast<float>(index) * 2.0f - 10.0f, 0.5f, 0.0f));
 			Frames(2);
+		}
+
+		// The window that scrolls the Streaming panel's sections: the panel, or its overview beside the asset table.
+		ImGuiWindow* FindStreamingSections()
+		{
+			ImGuiWindow* panel = FindPanelWindow(EditorPanels::c_Streaming);
+			REQUIRE(panel);
+			ImGuiWindow* sections = panel;
+			for (ImGuiWindow* window : ImGui::GetCurrentContext()->Windows)
+			{
+				if (window->RootWindow == panel && std::string_view(window->Name).find("/Overview") != std::string_view::npos)
+					sections = window;
+			}
+			return sections;
 		}
 	};
 
@@ -88,6 +103,26 @@ TEST_SUITE("Editor.World")
 		CHECK(editor.Run("physics.stats") == nlohmann::json { { "running", false } });
 	}
 
+	TEST_CASE("The Physics section's facts wrap inside a narrow Streaming panel")
+	{
+		// An 800 x 900 window at 150%: the bottom dock is narrower than a line of the section's facts.
+		PhysicsEditor editor(10, ImGuiHarness::Specification { ImVec2(800.0f, 900.0f), 1.5f });
+		editor.Run("play.start");
+		editor.Frames(3);
+		editor.Run("editor.showPanel", { { "panel", "Streaming" } });
+		editor.Frames(3);
+		const ImGuiWindow* sections = editor.FindStreamingSections();
+		for (const char* key : { "Streaming.PhysicsBodies", "Streaming.PhysicsPending", "Streaming.PhysicsReserved" })
+		{
+			CAPTURE(key);
+			const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(key);
+			REQUIRE(item);
+			CHECK(item->Max.x <= sections->InnerClipRect.Max.x + 1.0f);
+		}
+		editor.Run("play.stop");
+		editor.Frames(2);
+	}
+
 	TEST_CASE("Bodies without collision show in a pill that opens the Streaming panel's Physics section")
 	{
 		// A world held at its growth limit: 6 of the 11 bodies wait for a slot while the game runs.
@@ -116,16 +151,8 @@ TEST_SUITE("Editor.World")
 		REQUIRE(bodies);
 		CHECK(UI::ItemProbe::Find("Streaming.PhysicsWaiting").has_value());
 
-		// Scrolled away from the section, the pill brings it back to the top of the panel's sections (the panel, or its
-		// overview beside the asset table in a wide panel).
-		ImGuiWindow* panel = editor.FindPanelWindow(EditorPanels::c_Streaming);
-		REQUIRE(panel);
-		ImGuiWindow* sections = panel;
-		for (ImGuiWindow* window : ImGui::GetCurrentContext()->Windows)
-		{
-			if (window->RootWindow == panel && std::string_view(window->Name).find("/Overview") != std::string_view::npos)
-				sections = window;
-		}
+		// Scrolled away from the section, the pill brings it back to the top of the panel's sections.
+		ImGuiWindow* sections = editor.FindStreamingSections();
 		REQUIRE(sections->ScrollMax.y > 0.0f);
 		ImGui::SetScrollY(sections, sections->ScrollMax.y);
 		editor.Frames(2);
