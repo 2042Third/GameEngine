@@ -133,6 +133,10 @@ namespace Strata
 		// run commands are recorded as their children.
 		EditorCommandResult Execute(EditorContext& context, std::string_view name, const nlohmann::json& parameters = nlohmann::json::object(),
 			const CommandOrigin& origin = {}) const;
+		// What Run checks before a command's handler sees its parameters (an object, every parameter declared in its schema,
+		// the required ones given): the problem, or nullopt when they pass. For commands that hold parameters to run another
+		// command later (input.sequence) and check them up front.
+		static std::optional<std::string> CheckParameters(const EditorCommand& command, const nlohmann::json& parameters);
 	private:
 		EditorCommandResult Run(EditorContext& context, const EditorCommand* command, std::string_view name, const nlohmann::json& parameters) const;
 		std::map<std::string, EditorCommand, std::less<>> m_Commands;

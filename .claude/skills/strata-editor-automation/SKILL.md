@@ -467,7 +467,8 @@ and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
   It pauses the game, runs one step per frame with each step's events (also `mouseButton`, `gamepadButton`, `gamepadAxis`,
   `mouseMove`, `scroll`, and `command` for any `input.*` command), and answers `{stepsRun, seen, samples: [{step, values}]}`
   once done (the same answer at any frame rate), resuming the game if it ran and releasing its holds (`keepHeld` keeps
-  them). Prefer it to loops of `input.key` + `play.step`.
+  them). A failing event (a `command` whose command refuses its parameters) ends it with the error, also releasing its
+  holds and resuming the game. Prefer it to loops of `input.key` + `play.step`.
 - Each command ends only its own hold: overlapping taps of a key keep it down until the last ends; `"action": "release"` ends
   every hold of the key and `input.releaseAll` every hold of every button. Holds outlive your connection; the editor's status bar
   lists them in a pill that releases them when a person clicks it.

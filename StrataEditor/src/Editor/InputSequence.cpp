@@ -69,9 +69,7 @@ namespace Strata
 					break;
 				case EventType::Command:
 				{
-					nlohmann::json parameters = event.Parameters;
-					parameters["wait"] = false;
-					const EditorCommandResult result = m_Commands.Execute(context, event.Command, parameters);
+					const EditorCommandResult result = m_Commands.Execute(context, event.Command, event.Parameters);
 					if (!result.Success || result.IsPending())
 					{
 						if (outError)
@@ -201,6 +199,9 @@ namespace Strata
 		{
 			for (const Ref<const SimulatedHold>& hold : m_Holds)
 				context.GetSimulatedInput().EndHold(hold);
+			// A game that ran before the sequence paused it runs again, as after a finished sequence.
+			if (m_WasRunning && context.IsPaused())
+				context.SetPaused(false);
 		}
 	}
 

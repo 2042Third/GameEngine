@@ -4,6 +4,7 @@
 #include "Editor/InputSequence.h"
 #include "Editor/SimulatedInput.h"
 
+#include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Input/InputNames.h>
@@ -445,8 +446,9 @@ namespace Strata
 			{
 				allowed.push_back("parameters");
 				const nlohmann::json& command = json["command"];
-				if (!command.is_string() || !command.get<std::string>().starts_with("input.") || command.get<std::string>() == "input.sequence"
-					|| !registry.Find(command.get<std::string>()))
+				const EditorCommand* target = command.is_string() && command.get<std::string>().starts_with("input.")
+					&& command.get<std::string>() != "input.sequence" ? registry.Find(command.get<std::string>()) : nullptr;
+				if (!target)
 					return fail("'command' must name an input.* command (not input.sequence)");
 				const auto parameters = json.find("parameters");
 				if (parameters != json.end() && !parameters->is_object())
@@ -454,6 +456,13 @@ namespace Strata
 				event.Type = InputSequence::EventType::Command;
 				event.Command = command.get<std::string>();
 				event.Parameters = parameters != json.end() ? *parameters : nlohmann::json::object();
+				// It answers at once (commands that wait for the game take wait: false), and its parameters are checked now, as
+				// running it would check them: a misspelled one fails the sequence before anything runs.
+				const nlohmann::json* declared = JsonUtils::Find(target->Parameters, "properties");
+				if (declared && declared->contains("wait"))
+					event.Parameters["wait"] = false;
+				if (std::optional<std::string> problem = EditorCommandRegistry::CheckParameters(*target, event.Parameters))
+					return fail(std::move(*problem));
 			}
 			for (const auto& [key, unused] : json.items())
 			{
@@ -552,7 +561,9 @@ namespace Strata
 			"ran), then every frame runs exactly one step with the events of that step, so the result is the same whatever the frame rate. "
 			"events: [{step (0-based, below steps), then one of: key | mouseButton | gamepadButton (+ gamepad) with action press | release | tap "
 			"(+ steps, a tap's length); gamepadAxis (+ gamepad) with value (null: back to the device); mouseMove [x, y]; scroll [x, y]; command "
-			"(an input.* command, run with wait: false) with parameters}]; events of one step apply in order. steps: fixed steps to run (at "
+			"(an input.* command, run with wait: false; its parameters checked against its schema before anything runs) with parameters}]; "
+			"events of one step apply in order, and one that fails ends the sequence with its error (holds released, the game resumed if it "
+			"ran). steps: fixed steps to run (at "
 			"least the last event's step + 1). observe: [{entity, component, property?}, {entity, script (class), field}, {entity, world: "
 			"true}], each with every (sample after every n steps; default only at the end). The sequence's holds are released at its end unless "
 			"keepHeld. Answers once it ran: {stepsRun, frameIndex, time, seen: [{step, event (index)}], samples: [{step, values: [{observe "

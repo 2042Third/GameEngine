@@ -1915,7 +1915,10 @@ and `AudioSystem`, the built-in "Audio" scene system.
   frames of 1, 16.7 and 50 ms bit for bit; CTest `StrataEditor.InputSequence` headless and windowed). `observe` samples
   component properties, script fields or world transforms every few steps and at the end. Its holds are its own, released
   at its end unless `keepHeld`; a play stop or a resume fails it with `stepsRun`, and `play.step` and another sequence are
-  refused while it runs.
+  refused while it runs. A `command` event's parameters are checked against its command's schema up front
+  (`EditorCommandRegistry::CheckParameters`, with `wait: false` added only where the command declares `wait`); what only
+  the command can check (a key's name, `input.click`'s hit test) fails the sequence at its step, which releases its holds
+  and resumes a game that ran before it, like every failure of a sequence.
 
 ### Output paths
 

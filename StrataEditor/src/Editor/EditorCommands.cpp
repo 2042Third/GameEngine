@@ -129,26 +129,8 @@ namespace Strata
 		try
 		{
 			// The schema is the contract: a misspelled or missing parameter must not silently change the meaning.
-			if (const auto declared = command->Parameters.find("properties"); declared != command->Parameters.end() && declared->is_object())
-			{
-				for (const auto& [key, value] : arguments.items())
-				{
-					if (declared->contains(key))
-						continue;
-					std::string expected;
-					for (const auto& [parameter, schema] : declared->items())
-						expected += (expected.empty() ? "" : ", ") + parameter;
-					return EditorCommandResult::InvalidParameters(fmt::format("Unknown parameter '{}' for {} (parameters: {})", key, command->Name, expected.empty() ? "none" : expected));
-				}
-			}
-			if (const auto required = command->Parameters.find("required"); required != command->Parameters.end() && required->is_array())
-			{
-				for (const nlohmann::json& parameter : *required)
-				{
-					if (parameter.is_string() && !arguments.contains(parameter.get<std::string>()))
-						return EditorCommandResult::InvalidParameters(fmt::format("Missing parameter '{}' for {}", parameter.get<std::string>(), command->Name));
-				}
-			}
+			if (std::optional<std::string> problem = CheckParameters(*command, arguments))
+				return EditorCommandResult::InvalidParameters(std::move(*problem));
 			return command->Handler(context, arguments);
 		}
 		catch (const std::exception& exception)
@@ -156,6 +138,33 @@ namespace Strata
 			// Engine code does not throw; this guards third-party code (JSON access) used by handlers.
 			return EditorCommandResult::Fail(fmt::format("Command '{}' failed: {}", name, exception.what()), EditorCommandError::Internal);
 		}
+	}
+
+	std::optional<std::string> EditorCommandRegistry::CheckParameters(const EditorCommand& command, const nlohmann::json& parameters)
+	{
+		if (!parameters.is_object())
+			return std::string("Command parameters must be a JSON object");
+		if (const auto declared = command.Parameters.find("properties"); declared != command.Parameters.end() && declared->is_object())
+		{
+			for (const auto& [key, value] : parameters.items())
+			{
+				if (declared->contains(key))
+					continue;
+				std::string expected;
+				for (const auto& [parameter, schema] : declared->items())
+					expected += (expected.empty() ? "" : ", ") + parameter;
+				return fmt::format("Unknown parameter '{}' for {} (parameters: {})", key, command.Name, expected.empty() ? "none" : expected);
+			}
+		}
+		if (const auto required = command.Parameters.find("required"); required != command.Parameters.end() && required->is_array())
+		{
+			for (const nlohmann::json& parameter : *required)
+			{
+				if (parameter.is_string() && !parameters.contains(parameter.get<std::string>()))
+					return fmt::format("Missing parameter '{}' for {}", parameter.get<std::string>(), command.Name);
+			}
+		}
+		return std::nullopt;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

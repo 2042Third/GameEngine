@@ -543,6 +543,50 @@ TEST_SUITE("Editor.Input")
 		}
 	}
 
+	TEST_CASE("A command event that fails ends its sequence with the game running as before; misspelled parameters are refused up front")
+	{
+		InputHarness harness;
+		harness.Run("play.start");
+		harness.Frame();
+		REQUIRE_FALSE(harness.Context.IsPaused());
+
+		// A parameter the command does not declare is refused before anything runs, as the command would refuse it.
+		const EditorCommandResult misspelled = harness.Fail("input.sequence", { { "events", {
+			{ { "step", 0 }, { "key", "W" }, { "action", "press" } },
+			{ { "step", 0 }, { "command", "input.key" }, { "parameters", { { "kee", "W" } } } } } }, { "steps", 5 } });
+		CHECK(misspelled.ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(misspelled.Error.find("Unknown parameter 'kee' for input.key") != std::string::npos);
+		CHECK_FALSE(harness.Context.IsPaused());
+		CHECK(harness.Run("input.state")["holds"].empty());
+
+		// A value only the command checks fails the sequence where it runs: in its first step, or later. The sequence's holds
+		// go, and the game, which ran before, runs again.
+		const EditorCommandResult first = harness.Fail("input.sequence", { { "events", {
+			{ { "step", 0 }, { "key", "W" }, { "action", "press" } },
+			{ { "step", 0 }, { "command", "input.key" }, { "parameters", { { "key", "Nope" } } } } } }, { "steps", 5 } });
+		CHECK(first.Error.find("Unknown key 'Nope'") != std::string::npos);
+		CHECK_FALSE(harness.Context.IsPaused());
+		CHECK(harness.Run("input.state")["holds"].empty());
+		std::optional<EditorCommandResult> sequence;
+		harness.Start("input.sequence", { { "events", {
+			{ { "step", 0 }, { "key", "W" }, { "action", "press" } },
+			{ { "step", 2 }, { "command", "input.key" }, { "parameters", { { "key", "Nope" } } } } } }, { "steps", 5 } }, sequence);
+		for (int frame = 0; frame < 6 && !sequence; frame++)
+			harness.Frame();
+		REQUIRE(sequence);
+		CHECK_FALSE(sequence->Success);
+		CHECK(sequence->Error.find("Unknown key 'Nope'") != std::string::npos);
+		CHECK_FALSE(harness.Context.IsPaused());
+		CHECK(harness.Run("input.state")["holds"].empty());
+
+		// A command without a wait parameter (input.state) runs as an event too.
+		harness.Start("input.sequence", { { "events", { { { "step", 0 }, { "command", "input.state" } } } }, { "steps", 2 } }, sequence);
+		for (int frame = 0; frame < 4 && !sequence; frame++)
+			harness.Frame();
+		REQUIRE(sequence);
+		CHECK_MESSAGE(sequence->Success, sequence->Error);
+	}
+
 	TEST_CASE("An input sequence keeps a paused game paused, refuses events beyond its steps and play.step while it runs")
 	{
 		InputHarness harness;
