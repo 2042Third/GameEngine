@@ -3,6 +3,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/EditorViewport.h"
+#include "Editor/WorldProjectUtils.h"
 #include "Editor/ViewportRenderer.h"
 #include "Renderer/GPUTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
@@ -29,6 +30,7 @@
 #include <optional>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 using namespace Strata;
 
@@ -85,6 +87,64 @@ TEST_SUITE("GPU.World")
 		CHECK(pick(glm::uvec2(32, 32)) == std::vector<UUID> { cube });
 		CHECK(pick(glm::uvec2(58, 32)) == std::vector<UUID> { neighbor });
 		CHECK(pick(glm::uvec2(32, 2)).empty());
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The Game view plays a world: it draws the running copy's cells, also those that stream in while it plays")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Tests::GridWorldProject project("GPUWorldGameView", 5);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		// The game's camera, high over the middle of the world, sees all of it.
+		project.Run("entity.create", { { "name", "Game Camera" }, { "components", { { "Camera", { { "Primary", true } } },
+			{ "Transform", { { "Translation", { 80.0, 400.0, 80.0 } }, { "Rotation", { -90.0, 0.0, 0.0 } } } } } } });
+		project.Run("play.start");
+		REQUIRE(project.Context.IsPlaying());
+		EditorViewport& viewport = project.Context.GetViewport();
+		ViewportRenderer* game = viewport.GetGameRenderer();
+		REQUIRE(game);
+		const glm::uvec2 size(320, 180);
+		const Ref<Scene> running = project.Context.GetActiveScene();
+		// Every renderer of the running copy is in view: the GPU's culling counts each (VisibleProxies, size-culled ones too).
+		const auto checkDrawsTheCopy = [&]()
+		{
+			const std::optional<ViewportView> view = ResolveViewportView(project.Context, ViewportCameraSource::Scene, 16.0f / 9.0f);
+			REQUIRE(view);
+			REQUIRE(game->Render(project.Context, size, *view, viewport.GetSettings(), false));
+			game->GetSceneRenderer().ResolveGPUStats(true);
+			const auto renderers = std::as_const(running->GetRegistry()).storage<MeshRendererComponent>();
+			REQUIRE(renderers);
+			CHECK(Tests::GetDrawnCounts(game->GetSceneRenderer()).VisibleProxies == renderers->size());
+			return renderers->size();
+		};
+		// The cells the editor had loaded are in the running copy, and the Game view draws them.
+		project.Context.Update(Timestep(1.0f / 60.0f));
+		const size_t first = checkDrawsTheCopy();
+		CHECK(first > 0);
+
+		// The source moves to the far corner: cells stream into the running copy, and the Game view draws them too.
+		const Entity source = running->FindEntityByName("Source");
+		REQUIRE(source);
+		project.Run("component.set", { { "entity", UUIDToJson(source.GetUUID()) }, { "component", "Transform" },
+			{ "values", { { "Translation", { 150.0, 1.0, 150.0 } } } } });
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		const auto hasFarCell = [&]()
+		{
+			for (const auto [handle, transform, renderer] : std::as_const(running->GetRegistry()).view<const TransformComponent, const MeshRendererComponent>().each())
+			{
+				if (transform.Translation.x > 128.0f && transform.Translation.z > 128.0f)
+					return true;
+			}
+			return false;
+		};
+		while (!hasFarCell())
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			project.Context.Update(Timestep(1.0f / 60.0f));
+		}
+		checkDrawsTheCopy();
+		project.Run("play.stop");
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

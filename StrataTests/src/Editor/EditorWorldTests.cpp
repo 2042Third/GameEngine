@@ -684,6 +684,72 @@ TEST_SUITE("Editor.World")
 		project.Run("play.stop");
 	}
 
+	TEST_CASE("Bounds queries reach cell entities, and a playing world is summed up while play.step and input.sequence run it")
+	{
+		GridWorldProject project("EditorWorldPlaytest", 5);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
+		Settle(project);
+		// A box of cell (0, 0): its world transform and bounds are the scene's, whatever cell it is in.
+		const Entity box = project.Context.GetEditScene()->FindEntityByName("Box 0");
+		REQUIRE(box);
+		REQUIRE(CellOf(project.Context, box.GetUUID()) == project.GetCell(0, 0));
+		const nlohmann::json id = UUIDToJson(box.GetUUID());
+		const glm::vec3 position = box.GetComponent<TransformComponent>().Translation;
+		const nlohmann::json got = project.Run("entity.get", { { "entity", id }, { "world", true } });
+		CHECK(got["world"]["position"][0].get<float>() == doctest::Approx(position.x));
+		CHECK(got["world"]["position"][2].get<float>() == doctest::Approx(position.z));
+		REQUIRE(got["bounds"].is_object());
+		const nlohmann::json found = project.Run("entity.find", { { "box", { { "min", { position.x - 0.1, position.y - 0.1, position.z - 0.1 } },
+			{ "max", { position.x + 0.1, position.y + 0.1, position.z + 0.1 } } } } })["entities"];
+		CHECK(std::find(found.begin(), found.end(), id) != found.end());
+		CHECK(project.Run("asset.info", { { "asset", UUIDToJson(BuiltinAssets::CubeMesh) } })["bounds"].is_object());
+
+		// Playing: the game's cells are summed up under running.world, not listed with the additive loads.
+		project.Run("play.start");
+		project.Run("play.pause", { { "paused", true } });
+		nlohmann::json running = project.Run("play.state")["running"];
+		REQUIRE(running["world"].is_object());
+		CHECK(running["world"]["world"] == UUIDToJson(project.World));
+		CHECK(running["world"]["cellsLoaded"].get<uint32_t>() == GroundCellsWithin(5, glm::vec3(0.0f), 40.0f + 16.0f).size());
+		CHECK(running["subScenes"].empty());
+		CHECK(project.Run("editor.status")["play"]["running"]["world"]["cellsLoaded"] == running["world"]["cellsLoaded"]);
+
+		// The game's source moves across the world: steps and an input sequence run while its cells stream.
+		const Entity source = project.Context.GetActiveScene()->FindEntityByName("Source");
+		REQUIRE(source);
+		project.Run("component.set", { { "entity", UUIDToJson(source.GetUUID()) }, { "component", "Transform" },
+			{ "values", { { "Translation", { 140.0, 1.0, 140.0 } } } } });
+		const nlohmann::json stepped = project.Run("play.step", { { "steps", 30 } });
+		CHECK(stepped["stepsRun"] == 30);
+		const nlohmann::json sequence = project.Run("input.sequence", { { "events", { { { "step", 0 }, { "key", "W" }, { "action", "tap" } } } },
+			{ "steps", 30 } });
+		CHECK(sequence["stepsRun"] == 30);
+		// The game streamed toward the source: entities of a far cell are in, and the bounds queries reach them in the game.
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		Entity far;
+		while (!far)
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			project.Run("play.step", { { "steps", 1 } });
+			for (const Entity entity : project.Context.GetActiveScene()->GetEntitiesInHierarchyOrder())
+			{
+				if (entity.GetComponent<TransformComponent>().Translation.x > 128.0f && entity.GetComponent<TransformComponent>().Translation.z > 128.0f
+					&& entity.HasComponent<MeshRendererComponent>())
+				{
+					far = entity;
+					break;
+				}
+			}
+		}
+		const nlohmann::json inGame = project.Run("entity.get", { { "entity", UUIDToJson(far.GetUUID()) }, { "world", true } });
+		CHECK(inGame["world"]["position"][0].get<float>() > 128.0f);
+		running = project.Run("play.state")["running"];
+		CHECK(running["world"]["cellsLoaded"].get<uint32_t>() > 0);
+		CHECK(running["subScenes"].empty());
+		project.Run("play.stop");
+	}
+
 	TEST_CASE("A move across a cell border is one undo step, and the save writes both cells")
 	{
 		GridWorldProject project("EditorWorldBorder", 3);

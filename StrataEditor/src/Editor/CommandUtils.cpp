@@ -16,10 +16,13 @@
 #include <Strata/Scene/ComponentAccess.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/World/WorldStreamingSystem.h>
 
 #include <algorithm>
 #include <cmath>
 #include <system_error>
+#include <unordered_set>
+#include <vector>
 
 namespace Strata
 {
@@ -301,9 +304,28 @@ namespace Strata
 			Scene& scene = *context.GetActiveScene();
 			const AssetHandle asset = context.GetRuntimeSceneAsset();
 			const std::optional<AssetMetadata> metadata = metadataOf(asset);
+			// A world's cells are sub-scenes too, as many as its sources keep: they are summed up under world, not listed.
+			nlohmann::json world = nullptr;
+			std::unordered_set<SubSceneID> cells;
+			const WorldStreamingSystem* streaming = scene.IsRunning() ? scene.GetSystem<WorldStreamingSystem>() : nullptr;
+			if (const WorldStreamer* streamer = streaming ? streaming->GetStreamer() : nullptr; streamer && streamer->GetWorld().IsValid())
+			{
+				std::vector<WorldActiveCell> active;
+				streamer->GetActiveCells(active);
+				for (const WorldActiveCell& cell : active)
+				{
+					if (const SubSceneID id = streamer->GetCellSubScene(cell.Key); id != 0)
+						cells.insert(id);
+				}
+				const WorldStreamingStats stats = streamer->GetStats();
+				world = { { "world", UUIDToJson(streamer->GetWorld()) }, { "cellsWanted", stats.CellsWanted }, { "cellsLoading", stats.CellsLoading },
+					{ "cellsLoaded", stats.CellsLoaded }, { "cellsUnloading", stats.CellsUnloading }, { "cellsFailed", stats.CellsFailed } };
+			}
 			nlohmann::json subScenes = nlohmann::json::array();
 			for (const SubSceneStatus& subScene : scene.GetSubScenes())
 			{
+				if (cells.contains(subScene.ID))
+					continue;
 				const std::optional<AssetMetadata> subSceneMetadata = metadataOf(subScene.Scene);
 				subScenes.push_back({
 					{ "id", subScene.ID },
@@ -321,6 +343,7 @@ namespace Strata
 				{ "path", metadata ? nlohmann::json(metadata->Path) : nlohmann::json(nullptr) },
 				{ "entityCount", scene.GetEntityCount() },
 				{ "subScenes", std::move(subScenes) },
+				{ "world", std::move(world) },
 				{ "switching", std::move(switching) } };
 		}
 

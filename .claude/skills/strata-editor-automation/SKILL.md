@@ -443,7 +443,8 @@ a paused scene by exactly n fixed steps, one per frame (unthrottled), and **answ
 drops steps not run yet (a waiting `play.step` then fails with `stepsRun`); `"wait": false` answers at once with
 `pendingSteps`. `frames` is an older name of `steps`. `play.simulate` runs physics only. After the game switched scenes
 itself (`Game::LoadScene`), `play.state` (and `scene.info`, `editor.status`) name what runs as `running` (`scene`, `name`,
-`path`, `entityCount`, `subScenes`, `switching`); `scene.info`'s `name` stays the edited scene's.
+`path`, `entityCount`, `subScenes`, `world`: a streaming world's cell counts, its cells left out of `subScenes`,
+`switching`); `scene.info`'s `name` stays the edited scene's.
 
 **Frame cost**: every `editor.wait` result of a running editor has `frameTimes` (`count`, `medianMs`, `meanMs`, `p95Ms`,
 `maxMs`): the CPU time of the frames that ran entirely during the wait, without the waits for the GPU and vsync (measure
