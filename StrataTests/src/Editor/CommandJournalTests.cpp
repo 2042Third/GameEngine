@@ -174,6 +174,13 @@ namespace
 		"viewport.capture",
 	};
 
+	// Commands besides the Edit ones that answer from the whole asset registry (EditorCommand::WaitsForAssets): while the
+	// project's assets are scanned in the background, the registry runs them once the scan ended. A command that moves to
+	// another file keeps its flag.
+	constexpr std::string_view c_AssetScanCommands[] = {
+		"animation.info", "asset.findReferences", "asset.info", "asset.list", "material.get", "prefab.status", "project.export", "scene.recover",
+	};
+
 	template<size_t N>
 	bool Contains(const std::string_view (&names)[N], std::string_view name)
 	{
@@ -206,10 +213,13 @@ TEST_SUITE("Editor.Journal")
 			const bool sessionResults = Contains(c_SessionResultCommands, command->Name);
 			CHECK(command->Results == (sessionResults ? EditorCommandResults::Session : EditorCommandResults::Content));
 			CHECK(command->MayDefer == Contains(c_DeferringCommands, command->Name));
+			CHECK(command->WaitsForAssets == Contains(c_AssetScanCommands, command->Name));
 		}
 		// No list names a command the registry lacks.
 		CHECK(listed == std::size(c_EditCommands) + std::size(c_QueryCommands) + std::size(c_SessionCommands));
 		for (const std::string_view name : c_DeferringCommands)
+			CHECK_MESSAGE(registry.Find(name) != nullptr, name);
+		for (const std::string_view name : c_AssetScanCommands)
 			CHECK_MESSAGE(registry.Find(name) != nullptr, name);
 	}
 

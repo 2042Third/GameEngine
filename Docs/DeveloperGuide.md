@@ -1559,7 +1559,8 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (`EditorAssetManager::BeginScan`), and its start scene opens after the scan. Until both are done
   (`EditorContext::IsWaitingForAssets`), `EditorCommandRegistry::Execute` defers every Edit command and every command
   marked `EditorCommand::WaitsForAssets` before its handler runs: a new command that answers from the whole asset
-  registry (asset, material, prefab and animation queries, the export, recovery) sets the flag. This deferral is the
+  registry (asset, material, prefab and animation queries, the export, recovery) sets the flag, and joins
+  `CommandJournalTests.cpp`'s `c_AssetScanCommands` (checked like the kind lists, so a move keeps it). This deferral is the
   registry's, so it needs no `MayDefer` (and `editor.batch`, an Edit command, is deferred whole). Session queries
   (`editor.status`, `editor.wait`, `editor.perf`, `log.read`, `scene.loadStatus`) answer at once; `editor.status`'s
   `assets.scanning` reports `{phase, done, total}` (null when no scan runs). UI code that runs a command at once
