@@ -433,6 +433,12 @@ TEST_SUITE("PerfGPU.Editor")
 			const double streamingMean = streaming ? GetNumber(*streaming, "/avgMs") : 0.0;
 			CHECK(GetNumber(profiles[1], "/frames") == c_PlayStartFrames);
 			const double playStartMax = GetNumber(profiles[1], "/frame/maxMs");
+			// The play copy's render scene is a clone of the edited scene's (Scene::Copy's context copiers): its first frames
+			// extract what they draw without building the copy's proxies again.
+			const nlohmann::json* playStages = JsonUtils::Find(profiles[1], "stages");
+			const nlohmann::json* extract = playStages ? JsonUtils::Find(*playStages, "Render.Extract") : nullptr;
+			MESSAGE("Starting to play: Render.Extract's longest frame ", extract ? GetNumber(*extract, "/maxMs") : 0.0, " ms of the longest frame's ",
+				playStartMax, " ms");
 			MESSAGE("World of ", c_GridWorldSide * c_GridWorldSide, " cells: ", editCells, " cells loaded around the camera; idle frame median ", idleMedian,
 				" ms (World.Streaming mean ", streamingMean, " ms); the frame starting to play ", playStartMax, " ms (", GetNumber(opens[0], "/seconds"),
 				" s to open the persistent scene)");
