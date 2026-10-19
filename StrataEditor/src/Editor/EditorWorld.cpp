@@ -12,6 +12,7 @@
 #include <Strata/World/WorldAsset.h>
 #include <Strata/World/WorldComponents.h>
 
+#include <nlohmann/json.hpp>
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>

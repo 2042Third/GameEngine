@@ -71,7 +71,7 @@ endif()
 # Tests of the optional modules (STRATA_WITH_*): a build without one leaves out its test folder, the other files that test
 # little else (below), and the feature test (src/FeatureTest: the feature scene holds every component). Test cases elsewhere
 # that need a module are guarded with #if ST_WITH_<MODULE>.
-set(STRATA_TESTS_OF_PHYSICS "src/Physics/" "src/Perf/PhysicsPerfTests.cpp" "src/Scripting/ScriptPhysicsTests.cpp"
+set(STRATA_TESTS_OF_PHYSICS "src/Physics/" "src/Perf/PhysicsPerfTests.cpp" "src/Perf/WorldPerfTests.cpp" "src/Scripting/ScriptPhysicsTests.cpp"
 	"src/Scripting/ScriptCollisionTests.cpp")
 set(STRATA_TESTS_OF_AUDIO "src/Audio/" "src/Core/ApplicationAudioTests.cpp" "src/Scripting/ScriptAudioTests.cpp")
 set(STRATA_TESTS_OF_ANIMATION "src/Animation/" "src/Asset/GltfSkinImportTests.cpp" "src/Perf/AnimationPerfTests.cpp"

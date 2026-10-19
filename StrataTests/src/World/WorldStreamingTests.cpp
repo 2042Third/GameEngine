@@ -1,12 +1,16 @@
 #include <doctest/doctest.h>
 
 #include "Scene/SceneTestUtils.h"
-#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/SceneLoader.h"
 #include "Strata/Scene/SceneWorkBudget.h"
 #include "Strata/World/WorldComponents.h"
 #include "Strata/World/WorldStreamingSystem.h"
 #include "World/WorldTestUtils.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+	#include "Strata/Physics/PhysicsSystem.h"
+#endif
 
 #include <chrono>
 #include <cmath>
@@ -185,6 +189,7 @@ TEST_SUITE("World.Streaming")
 		scene.OnRuntimeStop();
 	}
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("A world loaded to run starts with its LoadBeforeStart cells in place and their bodies built")
 	{
 		ScopedJobSystem jobs(2, 1);
@@ -250,4 +255,5 @@ TEST_SUITE("World.Streaming")
 		CheckSceneCaches(*scene);
 		scene->OnRuntimeStop();
 	}
+#endif
 }

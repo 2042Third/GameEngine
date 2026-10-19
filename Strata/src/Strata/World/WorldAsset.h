@@ -4,7 +4,7 @@
 #include "Strata/World/WorldGrid.h"
 
 #include <glm/glm.hpp>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include <optional>
 #include <span>
@@ -118,7 +118,7 @@ namespace Strata
 		static Ref<WorldAsset> FromJson(const nlohmann::json& document, std::string* outError = nullptr);
 		static Ref<WorldAsset> Deserialize(std::span<const uint8_t> data, std::string* outError = nullptr);
 		static nlohmann::json ToDocument(const WorldData& data);
-		nlohmann::json Serialize() const { return ToDocument(m_Data); }
+		nlohmann::json Serialize() const;
 
 		AssetMemoryUsage GetMemoryUsage() const override;
 

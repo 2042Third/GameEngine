@@ -2,10 +2,14 @@
 
 #include "Scene/SceneTestUtils.h"
 #include "Strata/Core/JobSystem.h"
-#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/SceneWorkBudget.h"
 #include "Strata/World/WorldStreamer.h"
 #include "World/WorldTestUtils.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+	#include "Strata/Physics/PhysicsSystem.h"
+#endif
 
 #include <spdlog/fmt/fmt.h>
 
@@ -357,6 +361,7 @@ TEST_SUITE("World.Streaming")
 		CHECK(one == many);
 	}
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("With a cooked index, physics grows for the cells before their bodies arrive")
 	{
 		ScopedJobSystem jobs(2, 1);
@@ -402,6 +407,7 @@ TEST_SUITE("World.Streaming")
 		CHECK(capacity->GetCapacityInfo().Bodies == 4 * 2500 + 1);
 		scene.OnRuntimeStop();
 	}
+#endif
 
 	TEST_CASE("A cell that fails to load is not retried until its scene changes")
 	{

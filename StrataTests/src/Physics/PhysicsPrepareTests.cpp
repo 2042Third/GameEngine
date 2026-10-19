@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Scene/SceneLoaderTestUtils.h"
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Physics/PhysicsWorld.h"
 #include "Strata/Scene/Components.h"

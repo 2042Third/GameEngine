@@ -8,7 +8,6 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/JsonUtils.h"
-#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Runtime/GameRuntime.h"
@@ -18,6 +17,11 @@
 #include "Strata/World/WorldComponents.h"
 #include "TestHelpers.h"
 #include "World/WorldTestUtils.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+	#include "Strata/Physics/PhysicsSystem.h"
+#endif
 
 #include <chrono>
 #include <filesystem>
@@ -50,6 +54,7 @@ namespace
 		return ToBytes(JsonUtils::Dump(SceneSerializer::Serialize(scene)));
 	}
 
+#if ST_WITH_PHYSICS
 	// A scene document named `name` with a camera and `count` static boxes with colliders.
 	std::vector<uint8_t> MakeColliderScene(const std::string& name, size_t count)
 	{
@@ -63,6 +68,7 @@ namespace
 		}
 		return ToBytes(JsonUtils::Dump(SceneSerializer::Serialize(scene)));
 	}
+#endif
 
 	// A scene document named `name` with a camera and `count` cubes (the built-in mesh, which every asset manager has).
 	std::vector<uint8_t> MakeCubeScene(const std::string& name, size_t count)
@@ -270,6 +276,7 @@ TEST_SUITE("Runtime.Game")
 		CHECK(RenderScene::Find(*headless->GetScene()) == nullptr);
 	}
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("A game starts and switches to scenes whose physics bodies are built already")
 	{
 		ScopedJobSystem jobs(2, 2);
@@ -293,6 +300,7 @@ TEST_SUITE("Runtime.Game")
 		CHECK(next->GetStats().BodyCount == 20);
 		CHECK(next->GetStats().PreparedSlices >= 1);
 	}
+#endif
 
 	TEST_CASE("A world game starts with its start cells in, paces the frames that show nothing and logs its streaming")
 	{

@@ -10,6 +10,8 @@
 #include <Strata/Core/StringUtils.h>
 #include <Strata/World/WorldAsset.h>
 
+#include <nlohmann/json.hpp>
+
 #include <algorithm>
 #include <cctype>
 

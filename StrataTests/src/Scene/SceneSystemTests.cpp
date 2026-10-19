@@ -166,7 +166,7 @@ TEST_SUITE("Scene.Systems")
 		CHECK(descriptors[1].AfterIfPresent == std::vector<std::string> { "Scripting" });
 		CHECK(descriptors[1].BeforeIfPresent == std::vector<std::string> { "Physics" });
 		CHECK(descriptors[2].AfterIfPresent == std::vector<std::string> { "Scripting" });
-		CHECK(descriptors[2].BeforeIfPresent == std::vector<std::string> { "Physics" });
+		CHECK(descriptors[2].BeforeIfPresent == std::vector<std::string> { "Physics", "Audio" });
 		CHECK(descriptors[3].AfterIfPresent == std::vector<std::string> { "Scripting" });
 		CHECK(descriptors[4].AfterIfPresent == std::vector<std::string> { "Scripting", "Animation", "Physics" });
 		CHECK(SceneSystemRegistry::GetAbsentSoftConstraints().empty());
@@ -290,16 +290,16 @@ TEST_SUITE("Scene.Systems")
 		ScopedSystems systems;
 		// Neither TestLate nor TestEarly is registered yet: TestSoft runs where registration order puts it.
 		REQUIRE(systems.Register(MakeSoftRecording("TestSoft", { "TestLate" }, { "TestEarly" })));
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "Audio", "TestSoft" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "World", "Physics", "Audio", "TestSoft" });
 		const std::vector<std::string> absent = SceneSystemRegistry::GetAbsentSoftConstraints();
 		CHECK(absent == std::vector<std::string> { "TestSoft after TestLate", "TestSoft before TestEarly" });
 
 		// Systems registered later pick up the constraints that name them: TestSoft moves after TestLate...
 		REQUIRE(systems.Register(MakeRecording("TestLate")));
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "Physics", "Audio", "TestLate", "TestSoft" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "World", "Physics", "Audio", "TestLate", "TestSoft" });
 		// ...and before TestEarly, wherever that was registered.
 		REQUIRE(systems.Register(MakeRecording("TestEarly", {}, { "Physics" })));
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "TestLate", "TestSoft", "TestEarly", "Physics", "Audio" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "World", "TestLate", "TestSoft", "TestEarly", "Physics", "Audio" });
 		CHECK(SceneSystemRegistry::GetAbsentSoftConstraints().empty());
 
 		// Soft constraints that close a cycle are refused like hard ones, and the registry stays unchanged.
@@ -314,7 +314,7 @@ TEST_SUITE("Scene.Systems")
 		// Soft references never keep a system from going: TestSoft goes on without the systems it names.
 		CHECK(SceneSystemRegistry::Unregister("TestLate"));
 		std::erase(systems.Names, "TestLate");
-		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "TestSoft", "TestEarly", "Physics", "Audio" });
+		CHECK(GetSystemNames() == std::vector<std::string> { "Scripting", "Animation", "World", "TestSoft", "TestEarly", "Physics", "Audio" });
 		CHECK(SceneSystemRegistry::GetAbsentSoftConstraints() == std::vector<std::string> { "TestSoft after TestLate" });
 	}
 #endif

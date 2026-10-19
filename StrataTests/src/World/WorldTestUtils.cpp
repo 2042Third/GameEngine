@@ -3,12 +3,16 @@
 #include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/JsonUtils.h"
-#include "Strata/Physics/PhysicsWorld.h"
 #include "Strata/Project/GameManifest.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "TestHelpers.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+	#include "Strata/Physics/PhysicsWorld.h"
+#endif
 
 #include <spdlog/fmt/fmt.h>
 
@@ -34,6 +38,18 @@ namespace Strata::Tests
 			return std::vector<uint8_t>(text.begin(), text.end());
 		}
 
+		// The bodies a cell's entities make (PhysicsWorld::CountBodyCandidates); none in an engine without physics, whose boxes
+		// get no colliders.
+		uint64_t CountBodies(const Scene& scene)
+		{
+#if ST_WITH_PHYSICS
+			return PhysicsWorld::CountBodyCandidates(scene);
+#else
+			(void)scene;
+			return 0;
+#endif
+		}
+
 		Entity CreateBox(Scene& scene, UUID id, const std::string& name, const glm::vec3& position, const glm::vec3& scale, bool collider)
 		{
 			Entity entity = scene.CreateEntityWithUUID(id, name);
@@ -41,8 +57,12 @@ namespace Strata::Tests
 			transform.Translation = position;
 			transform.Scale = scale;
 			entity.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+#if ST_WITH_PHYSICS
 			if (collider)
 				entity.AddComponent<BoxColliderComponent>();
+#else
+			(void)collider;
+#endif
 			return entity;
 		}
 
@@ -121,7 +141,7 @@ namespace Strata::Tests
 				summary.Z = static_cast<int32_t>(z);
 				summary.Stamp = "generated";
 				summary.Entities = cell.GetEntityCount();
-				summary.Bodies = PhysicsWorld::CountBodyCandidates(cell);
+				summary.Bodies = CountBodies(cell);
 				summary.BoundsMin = minimum + glm::vec3(0.0f, -1.0f, 0.0f);
 				summary.BoundsMax = minimum + glm::vec3(specification.CellSize, 1.0f, specification.CellSize);
 				summary.ClosureBytes = document.size();
@@ -162,7 +182,7 @@ namespace Strata::Tests
 		camera.AddComponent<CameraComponent>().Primary = true;
 		if (specification.BuildPersistent)
 			specification.BuildPersistent(persistent, world.World);
-		index.PersistentBodies = PhysicsWorld::CountBodyCandidates(persistent);
+		index.PersistentBodies = CountBodies(persistent);
 		// Every cell at once: more than any radius holds, which is what world.cook would bound it by.
 		index.MaxBodiesInRadius = index.PersistentBodies;
 		for (const WorldCellSummary& summary : index.Cells)

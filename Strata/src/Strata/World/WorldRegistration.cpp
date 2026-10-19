@@ -54,12 +54,12 @@ namespace Strata
 			.Property("ViewBias", &StreamingSourceComponent::ViewBias,
 				Range(0.0f, 1.0f, 0.01f, "Cells ahead of the source (its -Z axis) load as if this share of the radius nearer"));
 
-		// After the scripts, which move sources and request cells; before physics, so that cells it unloads leave the step.
-		// Both are optional modules, so the constraints are soft. It runs in simulate mode too: a simulated world streams
-		// around its camera.
+		// After the scripts, which move sources and request cells; before physics and audio, so that the cells it loads and
+		// unloads reach the step and the sources in the same frame. They are optional modules, so the constraints are soft.
+		// It runs in simulate mode too: a simulated world streams around its camera.
 		SceneSystemDescriptor descriptor = MakeSceneSystemDescriptor<WorldStreamingSystem>("World", true, [](Scene& scene) { return CreateScope<WorldStreamingSystem>(scene); });
 		descriptor.AfterIfPresent = { "Scripting" };
-		descriptor.BeforeIfPresent = { "Physics" };
+		descriptor.BeforeIfPresent = { "Physics", "Audio" };
 		descriptor.ProfileStage = "World.Streaming";
 		// Registered now rather than when a scene first plays, so that perf logs created before (StrataRuntime's) have its
 		// column.

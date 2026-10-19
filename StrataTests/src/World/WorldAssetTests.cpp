@@ -10,6 +10,7 @@
 #include "Strata/World/WorldGrid.h"
 #include "TestHelpers.h"
 
+#include <nlohmann/json.hpp>
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>

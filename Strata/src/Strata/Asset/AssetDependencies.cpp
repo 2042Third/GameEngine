@@ -12,6 +12,8 @@
 	#include "Strata/Animation/AnimationController.h"
 #endif
 
+#include <nlohmann/json.hpp>
+
 #include <string_view>
 #include <unordered_set>
 

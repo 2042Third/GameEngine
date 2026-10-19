@@ -786,7 +786,7 @@ are, in update order:
 | --- | --- | --- | --- | --- |
 | Scripting | `ScriptSystem` | Play | | Script instances of the active `ScriptEngine` (null engine: no scripts). |
 | Animation | `AnimationSystem` | Play | After Scripting, Before Physics (soft) | Animators in `OnUpdate`: poses, root motion, attachments, events (see [Animation](#animation)). |
-| World | `WorldStreamingSystem` | Play, Simulate | After Scripting, Before Physics (soft) | Streams the cells of the scene's world in `OnUpdate` (see [World partition](#world-partition)). |
+| World | `WorldStreamingSystem` | Play, Simulate | After Scripting, Before Physics and Audio (soft) | Streams the cells of the scene's world in `OnUpdate` (see [World partition](#world-partition)). |
 | Physics | `PhysicsSystem` | Play, Simulate | After Scripting (soft) | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
 | Audio | `AudioSystem` | Play | After Scripting, Animation, Physics (soft) | Sources and listener, in `OnLateUpdate` after everything that moves them. |
 

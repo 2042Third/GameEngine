@@ -6,6 +6,7 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Math/AABB.h>
+#include <Strata/Physics/PhysicsComponents.h>
 #include <Strata/Physics/PhysicsWorld.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>

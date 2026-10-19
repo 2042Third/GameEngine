@@ -5,6 +5,7 @@
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Scene/Scene.h"
 
+#include <nlohmann/json.hpp>
 #include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
@@ -587,6 +588,11 @@ namespace Strata
 		document["Strata"] = { { "Format", c_DocumentKey }, { "Version", WorldData::c_FormatVersion } };
 		document[std::string(c_DocumentKey)] = data.ToJson();
 		return document;
+	}
+
+	nlohmann::json WorldAsset::Serialize() const
+	{
+		return ToDocument(m_Data);
 	}
 
 	AssetMemoryUsage WorldAsset::GetMemoryUsage() const

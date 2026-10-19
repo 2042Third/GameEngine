@@ -3,6 +3,7 @@
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
 #include "Strata/Asset/AssetManager.h"
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
