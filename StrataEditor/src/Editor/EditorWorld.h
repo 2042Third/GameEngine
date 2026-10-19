@@ -140,8 +140,12 @@ namespace Strata
 		std::string DescribeKey(const WorldCellKey& key) const;
 
 		// Once per frame in edit mode, before the scene's update (which advances the sub-scenes): streams around the editor
-		// camera, keeping the cells it must.
-		void Update(const glm::vec3& cameraPosition, const glm::vec3& cameraForward, const std::vector<UUID>& selection);
+		// camera, keeping the cells it must. The selected entities' cells (`selection`, whose version is `selectionVersion`,
+		// EditorContext::GetSelectionVersion) are looked up again only when the selection, the scene's hierarchy or
+		// sub-scene membership, or the cell table changed.
+		void Update(const glm::vec3& cameraPosition, const glm::vec3& cameraForward, const std::vector<UUID>& selection, uint64_t selectionVersion);
+		// How many updates looked up the selected entities' cells (tests: frames that change nothing look nothing up).
+		uint64_t GetSelectionPinLookups() const { return m_SelectionPinLookups; }
 
 		// UndoStackObserver
 		void OnApplied(const EditorAction& action, bool undone, bool merged) override;
@@ -180,7 +184,21 @@ namespace Strata
 		float m_RadiusScale = 1.0f;
 
 		std::set<WorldCellKey> m_Pinned;              // world.loadCells
+		// What the selection's cells were looked up for: the selection, hierarchy, membership and cell table versions.
+		struct SelectionPinsKey
+		{
+			uint64_t Selection = 0;
+			uint64_t Hierarchy = 0;
+			uint64_t Membership = 0;
+			uint64_t CellTable = 0;
+
+			bool operator==(const SelectionPinsKey&) const = default;
+		};
+
 		std::set<WorldCellKey> m_SelectionPins;       // Cells of the selected entities
+		std::optional<SelectionPinsKey> m_SelectionPinsKey; // None before the first lookup
+		uint64_t m_SelectionPinLookups = 0;
+		uint64_t m_CellTableVersion = 0;              // Changes with m_CellKeys
 		std::set<WorldCellKey> m_RequestedPins;       // Undo steps' cells, until the next save
 		std::unordered_set<AssetHandle> m_DirtyCells; // Pinned too
 		uint64_t m_DirtyVersion = 0;

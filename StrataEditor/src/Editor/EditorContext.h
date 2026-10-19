@@ -276,6 +276,8 @@ namespace Strata
 
 		// In selection order (the last one is the primary selection).
 		const std::vector<UUID>& GetSelection() const { return m_Selection; }
+		// Changes whenever the selection does, so that results depending on it can be cached.
+		uint64_t GetSelectionVersion() const { return m_SelectionVersion; }
 		void SetSelection(std::vector<UUID> selection);
 		void Select(UUID entity, bool additive = false);
 		void Deselect(UUID entity);
@@ -624,6 +626,7 @@ namespace Strata
 
 		std::vector<UUID> m_Selection;
 		std::unordered_set<UUID> m_SelectionSet; // The same entities, for IsSelected
+		uint64_t m_SelectionVersion = 0;
 		AssetHandle m_InspectedAsset = UUID::Null();
 		uint64_t m_InspectionVersion = 0;
 		Ref<CommandJournal> m_Journal;

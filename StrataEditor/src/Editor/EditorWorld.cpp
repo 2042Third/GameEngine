@@ -158,6 +158,7 @@ namespace Strata
 		if (!world || m_TableWorld.lock() == world)
 			return;
 		m_TableWorld = world;
+		m_CellTableVersion++;
 		m_CellKeys.clear();
 		for (const WorldCell& cell : world->GetData().Cells)
 			m_CellKeys.emplace(cell.Scene, cell.GetKey());
@@ -306,6 +307,7 @@ namespace Strata
 			return 0;
 		m_NewCells[cell] = key;
 		m_CellKeys[cell] = key;
+		m_CellTableVersion++;
 		MarkCellDirty(cell);
 		return id;
 	}
@@ -497,19 +499,26 @@ namespace Strata
 		m_StreamerPins = std::move(wanted);
 	}
 
-	void EditorWorld::Update(const glm::vec3& cameraPosition, const glm::vec3& cameraForward, const std::vector<UUID>& selection)
+	void EditorWorld::Update(const glm::vec3& cameraPosition, const glm::vec3& cameraForward, const std::vector<UUID>& selection, uint64_t selectionVersion)
 	{
 		RefreshCellTable();
-		// The cells of the selected entities stay while they are selected.
-		m_SelectionPins.clear();
-		for (const UUID id : selection)
+		// The cells of the selected entities stay while they are selected. Looking them up costs a walk to each entity's
+		// top-level ancestor (a select-all of a world selects every loaded entity): only after something they depend on changed.
+		const SelectionPinsKey pinsKey { selectionVersion, m_Scene.GetHierarchyVersion(), m_Scene.GetSubSceneMembershipVersion(), m_CellTableVersion };
+		if (m_SelectionPinsKey != pinsKey)
 		{
-			const Entity entity = m_Scene.GetEntityByUUID(id);
-			const SubSceneStatus* status = entity ? m_Scene.GetSubSceneStatus(m_Scene.GetSubSceneOf(entity)) : nullptr;
-			if (status && status->Scene.IsValid())
+			m_SelectionPinsKey = pinsKey;
+			m_SelectionPinLookups++;
+			m_SelectionPins.clear();
+			for (const UUID id : selection)
 			{
-				if (const std::optional<WorldCellKey> key = FindCellKey(status->Scene))
-					m_SelectionPins.insert(*key);
+				const Entity entity = m_Scene.GetEntityByUUID(id);
+				const SubSceneStatus* status = entity ? m_Scene.GetSubSceneStatus(m_Scene.GetSubSceneOf(entity)) : nullptr;
+				if (status && status->Scene.IsValid())
+				{
+					if (const std::optional<WorldCellKey> key = FindCellKey(status->Scene))
+						m_SelectionPins.insert(*key);
+				}
 			}
 		}
 		SyncPins();

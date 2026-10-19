@@ -1025,7 +1025,10 @@ namespace Strata
 				m_Selection.push_back(entity);
 		}
 		if (!m_Selection.empty())
+		{
+			m_SelectionVersion++;
 			InspectEntities();
+		}
 	}
 
 	void EditorContext::Select(UUID entity, bool additive)
@@ -1038,19 +1041,26 @@ namespace Strata
 		if (!m_SelectionSet.insert(entity).second)
 			std::erase(m_Selection, entity);
 		m_Selection.push_back(entity);
+		m_SelectionVersion++;
 		InspectEntities();
 	}
 
 	void EditorContext::Deselect(UUID entity)
 	{
 		if (m_SelectionSet.erase(entity) > 0)
+		{
 			std::erase(m_Selection, entity);
+			m_SelectionVersion++;
+		}
 	}
 
 	void EditorContext::ClearSelection()
 	{
+		if (m_Selection.empty())
+			return;
 		m_Selection.clear();
 		m_SelectionSet.clear();
+		m_SelectionVersion++;
 	}
 
 	bool EditorContext::IsSelected(UUID entity) const
@@ -1070,13 +1080,14 @@ namespace Strata
 
 	void EditorContext::PruneSelection()
 	{
-		std::erase_if(m_Selection, [this](UUID entity)
+		if (std::erase_if(m_Selection, [this](UUID entity)
 		{
 			if (GetActiveScene()->GetEntityByUUID(entity))
 				return false;
 			m_SelectionSet.erase(entity);
 			return true;
-		});
+		}) > 0)
+			m_SelectionVersion++;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -1889,7 +1900,7 @@ namespace Strata
 			{
 				ST_PROFILE_STAGE("World.Streaming");
 				const EditorCamera& camera = m_Viewport.GetCamera();
-				m_World->Update(camera.GetPosition(), camera.GetForward(), m_Selection);
+				m_World->Update(camera.GetPosition(), camera.GetForward(), m_Selection, m_SelectionVersion);
 			}
 			m_EditScene->OnUpdateEditor(timestep, &budget);
 		}

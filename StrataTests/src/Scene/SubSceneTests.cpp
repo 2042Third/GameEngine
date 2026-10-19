@@ -65,8 +65,10 @@ TEST_SUITE("Scene.SubScenes")
 		Scene scene("Level");
 		Entity resident = scene.CreateEntity("Resident");
 		scene.GetSettings().MaxEntitiesDestroyedPerFrame = 2000;
+		const uint64_t membership = scene.GetSubSceneMembershipVersion();
 		const SubSceneID id = scene.BeginAdditiveLoad(MakeNestedScene(10'001));
 		LoadCompletely(scene, id);
+		CHECK(scene.GetSubSceneMembershipVersion() > membership); // Its top-level entities joined it
 		const size_t loaded = scene.GetEntityCount();
 		REQUIRE(loaded == 10'002);
 		const std::vector<Entity> roots = scene.GetSubSceneRoots(id);
@@ -89,6 +91,7 @@ TEST_SUITE("Scene.SubScenes")
 		CHECK(scene.UnloadSubScene(id)); // Again: nothing changes
 
 		// Each update destroys at most the budget, children before parents, the caches exact after each.
+		const uint64_t unloadMembership = scene.GetSubSceneMembershipVersion();
 		uint32_t updates = 0;
 		size_t previous = scene.GetEntityCount();
 		while (scene.GetSubSceneStatus(id) && updates < 20)
@@ -106,6 +109,7 @@ TEST_SUITE("Scene.SubScenes")
 		}
 		CHECK(updates == 6); // ceil(10,001 / 2,000)
 		CHECK(scene.GetSubSceneStatus(id) == nullptr);
+		CHECK(scene.GetSubSceneMembershipVersion() > unloadMembership); // It went
 		CHECK_FALSE(scene.UnloadSubScene(id));
 		CHECK(scene.GetEntityCount() == 1);
 		CHECK(scene.GetEntityByUUID(resident.GetUUID()));
@@ -344,15 +348,27 @@ TEST_SUITE("Scene.SubScenes")
 		Entity b = scene.CreateEntity("B");
 		Entity c = scene.CreateEntity("C");
 		const AssetHandle cell = UUID(0xCE11);
+		// Whether the membership or hierarchy version changed since the last call: whenever GetSubSceneOf may answer
+		// differently, one of them does (the editor caches the selection's cells by them).
+		uint64_t versions = scene.GetSubSceneMembershipVersion() + scene.GetHierarchyVersion();
+		auto versionsChanged = [&]()
+		{
+			const uint64_t now = scene.GetSubSceneMembershipVersion() + scene.GetHierarchyVersion();
+			const bool changed = now != versions;
+			versions = now;
+			return changed;
+		};
 
 		// Adopted top-level entities become a Loaded sub-scene; their descendants belong to it through them.
 		std::string error;
 		const Entity notTopLevel[] = { aChild };
 		CHECK(scene.AdoptSubScene(cell, notTopLevel, &error) == 0);
 		CHECK(error.find("not a top-level entity") != std::string::npos);
+		CHECK_FALSE(versionsChanged());
 		const Entity adopted[] = { a, b };
 		const SubSceneID id = scene.AdoptSubScene(cell, adopted);
 		REQUIRE(id != 0);
+		CHECK(versionsChanged());
 		CHECK(scene.IsSubSceneLoaded(id));
 		CHECK(scene.GetSubSceneStatus(id)->CreatedEntities == 3);
 		CHECK(scene.GetSubSceneRoots(id) == std::vector<Entity> { a, b });
@@ -367,20 +383,27 @@ TEST_SUITE("Scene.SubScenes")
 		CheckSceneCaches(scene);
 
 		// Moved in and out by hand.
+		versionsChanged();
 		CHECK(scene.SetSubSceneOf(c, id));
 		CHECK(scene.GetSubSceneOf(c) == id);
+		CHECK(versionsChanged());
 		CHECK(scene.SetSubSceneOf(c, empty));
+		CHECK(versionsChanged());
 		CHECK(scene.GetSubSceneRoots(id) == std::vector<Entity> { a, b });
 		CHECK(scene.GetSubSceneRoots(empty) == std::vector<Entity> { c });
 		CHECK(scene.SetSubSceneOf(c, 0));
 		CHECK(scene.GetSubSceneOf(c) == 0);
+		CHECK(versionsChanged());
+		CHECK(scene.SetSubSceneOf(c, 0)); // Where it is already: nothing changes
 		CHECK_FALSE(scene.SetSubSceneOf(aChild, id)); // Not top-level
 		CHECK_FALSE(scene.SetSubSceneOf(c, 12345));   // Unknown
+		CHECK_FALSE(versionsChanged());
 		CheckSceneCaches(scene);
 
 		// A top-level entity that becomes a child belongs to its new top-level ancestor's sub-scene, both ways.
 		CHECK(scene.SetParent(b, c));
 		CHECK(scene.GetSubSceneOf(b) == 0);
+		CHECK(versionsChanged());
 		CHECK(scene.GetSubSceneRoots(id) == std::vector<Entity> { a });
 		CheckSceneCaches(scene);
 		CHECK(scene.SetParent(c, a));
@@ -390,8 +413,10 @@ TEST_SUITE("Scene.SubScenes")
 		CHECK(scene.SetParent(c, Entity()));
 		CHECK(scene.GetSubSceneOf(c) == 0); // A new top-level entity belongs to no sub-scene until given one
 		const Scene::EntityPlacement placement { a.GetUUID(), c.GetUUID(), 0 };
+		versionsChanged();
 		CHECK(scene.PlaceEntities(std::span<const Scene::EntityPlacement>(&placement, 1)));
 		CHECK(scene.GetSubSceneOf(a) == 0);
+		CHECK(versionsChanged());
 		CHECK(scene.GetSubSceneRoots(id).empty());
 		CheckSceneCaches(scene);
 	}

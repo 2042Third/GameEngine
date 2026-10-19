@@ -226,6 +226,10 @@ namespace Strata
 		bool SetSubSceneOf(Entity root, SubSceneID id);
 		// The sub-scene an entity belongs to: that of its top-level ancestor (or itself), 0 for none. Costs its depth.
 		SubSceneID GetSubSceneOf(Entity entity) const;
+		// Changes whenever a top-level entity joins or leaves a sub-scene (a load creating it, adoption, SetSubSceneOf, becoming
+		// a child) or a sub-scene goes. With GetHierarchyVersion (reparenting, destruction), whenever GetSubSceneOf may answer
+		// differently: results depending on it can be cached.
+		uint64_t GetSubSceneMembershipVersion() const { return m_SubSceneMembershipVersion; }
 		// The sub-scene loaded from (or adopted for) a scene asset: the latest one not being unloaded, else the latest one
 		// being unloaded, else 0.
 		SubSceneID FindSubSceneBySource(AssetHandle source) const;
@@ -733,6 +737,7 @@ namespace Strata
 		std::optional<float> m_SceneLoadProgress;
 		// Sub-scenes in the order of their loads, which is the order of their IDs (Scene/SceneSubScenes.cpp, FindSubScene).
 		std::vector<Scope<SubSceneLoad>> m_SubScenes;
+		uint64_t m_SubSceneMembershipVersion = 0;
 		SubSceneID m_NextSubSceneID = 1;
 		bool m_AdvancingSubScenes = false;               // UpdateSubScenes runs: unloads wait for its end
 		std::vector<SubSceneID> m_DeferredSubSceneUnloads; // Unloads requested meanwhile

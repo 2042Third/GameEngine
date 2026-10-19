@@ -2231,7 +2231,9 @@ is edited as a plain one). It streams the cells around the editor camera with a 
 scene's update advances the sub-scenes (stage `World.Streaming`): each layer's distance times the radius scale, the
 visible layers only, cells read as their files are now (`SubSceneOptions::Reload`). It keeps loaded the cells some reason
 needs (pins: those `world.loadCells` pins, those holding selected entities, those undo steps asked for through the
-scene's `ISceneCellLoader` service, until the next save, and dirty ones). As an `UndoStackObserver` it marks the documents
+scene's `ISceneCellLoader` service, until the next save, and dirty ones). The selected entities' cells are looked up
+again only when the selection (`EditorContext::GetSelectionVersion`), the scene's hierarchy or sub-scene membership
+(`Scene::GetSubSceneMembershipVersion`) or the cell table changed, as a select-all selects every loaded entity. As an `UndoStackObserver` it marks the documents
 every step touches dirty: the cells and the persistent scene of the states before and after (an entity moved between
 cells dirties both), the persistent scene for any step that leaves its settings different from the saved ones,
 everything loaded for a step only a snapshot describes. Undo steps carry membership: `EntityState::Cell` is the scene

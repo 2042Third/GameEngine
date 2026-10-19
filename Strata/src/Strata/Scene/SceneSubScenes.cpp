@@ -237,13 +237,14 @@ namespace Strata
 	void Scene::RemoveUnloadedSubScenes()
 	{
 		std::vector<Entity> tops;
-		std::erase_if(m_SubScenes, [&](const Scope<SubSceneLoad>& load)
+		if (std::erase_if(m_SubScenes, [&](const Scope<SubSceneLoad>& load)
 		{
 			if (load->Status.State != SubSceneState::Unloading)
 				return false;
 			CollectUnloadSlice(*load, 0, tops); // Only refreshes the living top-level entities
 			return load->Roots.empty();
-		});
+		}) > 0)
+			m_SubSceneMembershipVersion++;
 	}
 
 	void Scene::FlushSubSceneUnloads()
@@ -429,6 +430,8 @@ namespace Strata
 				m_Registry.emplace_or_replace<SubSceneComponent>(roots[index].GetHandle(), SubSceneComponent { status.ID, status.Scene });
 				load.Roots.push_back(roots[index]);
 			}
+			if (roots.size() > load.TaggedRoots)
+				m_SubSceneMembershipVersion++;
 			load.TaggedRoots = roots.size();
 			SceneWorkBudget::RecordChunkCost(m_CreateNanosecondsPerEntity, Since(chunkStart), count);
 			m_SlicedThisPass += count;
@@ -543,6 +546,7 @@ namespace Strata
 		status.TotalEntities = status.CreatedEntities;
 		const SubSceneID id = status.ID;
 		m_SubScenes.push_back(std::move(load));
+		m_SubSceneMembershipVersion++;
 		return id;
 	}
 
@@ -561,6 +565,7 @@ namespace Strata
 			m_Registry.emplace<SubSceneComponent>(root.GetHandle(), SubSceneComponent { id, load->Status.Scene });
 			load->Roots.push_back(root);
 		}
+		m_SubSceneMembershipVersion++;
 		return true;
 	}
 
@@ -611,6 +616,7 @@ namespace Strata
 			}
 		}
 		m_Registry.remove<SubSceneComponent>(root);
+		m_SubSceneMembershipVersion++;
 	}
 
 	SubSceneLoad* Scene::FindSubScene(SubSceneID id) const

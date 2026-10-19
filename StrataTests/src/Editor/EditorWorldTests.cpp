@@ -432,6 +432,39 @@ TEST_SUITE("Editor.World")
 		CHECK_FALSE(cells.contains({ 1, 0 }));
 		CHECK(project.Context.GetEditScene()->GetEntityByUUID(box.GetUUID()).GetComponent<TransformComponent>().Scale.x == 2.0f);
 	}
+
+	TEST_CASE("A selected entity keeps its cell loaded, and frames that change nothing look the selection's cells up again")
+	{
+		WorldProject project("EditorWorldSelection", 5);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
+		Settle(project);
+		EditorWorld& world = *project.Context.GetWorld();
+		const Entity box = project.Context.GetEditScene()->FindEntityByName("Box 0"); // Of cell (0, 0)
+		REQUIRE(box);
+		const uint64_t before = world.GetSelectionPinLookups();
+		project.Context.Select(box.GetUUID());
+		project.Context.Update(Timestep(1.0f / 60.0f));
+		CHECK(world.GetSelectionPinLookups() == before + 1);
+		// Idle frames: nothing the cells depend on changed.
+		for (int frame = 0; frame < 10; frame++)
+			project.Context.Update(Timestep(1.0f / 60.0f));
+		CHECK(world.GetSelectionPinLookups() == before + 1);
+
+		// Away from it, the selected entity's cell stays and its neighbours go.
+		LookFrom(project, glm::vec3(140.0f, 10.0f, 140.0f));
+		Settle(project);
+		std::set<std::pair<int32_t, int32_t>> cells = LoadedCells(project.Run("world.status", { { "cells", true } }));
+		CHECK(cells.contains({ 0, 0 }));
+		CHECK_FALSE(cells.contains({ 1, 0 }));
+		CHECK_FALSE(project.Context.GetWorld()->IsCellDirty(project.GetCell(0, 0)));
+
+		// Deselected, it goes too.
+		project.Context.ClearSelection();
+		Settle(project);
+		cells = LoadedCells(project.Run("world.status", { { "cells", true } }));
+		CHECK_FALSE(cells.contains({ 0, 0 }));
+	}
 }
 
 namespace
