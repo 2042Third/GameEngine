@@ -213,11 +213,15 @@ namespace Strata
 			UpdateGizmo(context, *view);
 		}
 
-		// The chips, in the toolbar from its left; the agent's at its right.
+		// The chips, in the toolbar from its left; the agent's at its right. The last chips that do not fit with their labels
+		// are drawn as icons (their labels in their tooltips).
 		ImGui::PushClipRect(layout.Min, layout.Max, true);
 		ImGui::SetCursorScreenPos(layout.ChipsMin);
-		DrawChips(context);
-		DrawPreviewChip(panelContext);
+		{
+			UI::ChipStrip strip(m_ChipStrip, layout.Max.x - layout.ChipsMin.x);
+			DrawChips(context);
+			DrawPreviewChip(panelContext);
+		}
 		DrawAgentChip(panelContext, layout.Max.x - style.ItemSpacing.x, layout.ChipsMin.y);
 		ImGui::PopClipRect();
 		if (rendered && settings.DebugView != ViewportDebugView::None)

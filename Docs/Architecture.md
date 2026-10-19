@@ -2778,7 +2778,9 @@ is the `strata-scripting` skill. The layers:
   source (captures) picks the scene's primary camera while playing and the editor camera otherwise, and
   `GetViewportRenderOptions` gives editor views (the editor camera, except `Automatic`'s fallback while playing) preview
   lighting and a hidden HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). Both views hold their
-  chips in a toolbar strip above the image (`Panels/ViewportToolbar`), never over it. The settings' debug view
+  chips in a toolbar strip above the image (`Panels/ViewportToolbar`), never over it; a Scene view too narrow for their
+  labels draws the last ones as icons (`UI::ChipStrip`, decided from the previous frame's chips).
+  The settings' debug view
   (`ViewportDebugView`: `none`, `streaming`, `lod`, `mip`) colors every view of the viewport, the Game view too: before each
   render `StreamingView` (`Editor/StreamingView.h`) takes the render proxies the scene's `RenderScene` finds in the view
   (its spatial index, culled with the bounds the renderer culls with: a mesh's own, else those the asset pipeline

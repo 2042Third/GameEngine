@@ -1010,6 +1010,59 @@ TEST_SUITE("Editor.UI")
 		REQUIRE(editor.Click("Toolbar.Stop"));
 	}
 
+	TEST_CASE("A Scene view too narrow for its chips' labels shows the last ones as icons, every one in reach")
+	{
+		const auto chipsOf = []()
+		{
+			std::vector<UI::ItemProbe::Item> chips;
+			for (const char* key : { "Viewport.Camera", "Viewport.Grid", "Viewport.Outline", "Viewport.Gizmos", "Viewport.Stats",
+				"Viewport.PreviewLighting", "Viewport.GameUI", "Viewport.DebugView", "Viewport.GameCamera" })
+			{
+				const std::string name = key;
+				CAPTURE(name);
+				const std::optional<UI::ItemProbe::Item> chip = UI::ItemProbe::Find(key);
+				REQUIRE(chip.has_value());
+				chips.push_back(*chip);
+			}
+			return chips;
+		};
+		// Every chip ends within the image's width (the strip's clip rectangle would hide what passes it), and keeps its label
+		// for probes and tooltips.
+		const auto checkInReach = [](const std::vector<UI::ItemProbe::Item>& chips)
+		{
+			const std::optional<UI::ItemProbe::Item> image = UI::ItemProbe::Find("Viewport.Image");
+			REQUIRE(image.has_value());
+			for (const UI::ItemProbe::Item& chip : chips)
+			{
+				CAPTURE(chip.Text);
+				CHECK(chip.Max.x <= image->Max.x);
+			}
+			CHECK(chips[1].Text == "Grid");
+			return image->Max.x - image->Min.x;
+		};
+		float fontSize = 0.0f;
+		float wideWidth = 0.0f;
+		{
+			// The default layout of a 1600 x 900 window: the first chips keep their labels.
+			HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIChipsWide"));
+			editor.Harness.Frame([&]() { fontSize = ImGui::GetFontSize(); });
+			editor.Frames(3);
+			const std::vector<UI::ItemProbe::Item> chips = chipsOf();
+			wideWidth = checkInReach(chips);
+			CHECK(chips[0].Max.x - chips[0].Min.x > 2.5f * fontSize);
+		}
+		// A small window leaves the Scene view a few hundred units: more chips are icons, the last one among them.
+		HarnessEditor editor({ ImVec2(900.0f, 700.0f), 1.0f }, WithFeatureProject("EditorUIChipsNarrow"));
+		editor.Frames(3);
+		const std::vector<UI::ItemProbe::Item> chips = chipsOf();
+		CHECK(checkInReach(chips) < wideWidth);
+		CHECK(chips.back().Max.x - chips.back().Min.x <= 2.5f * fontSize);
+		// A click on an icon still toggles its setting.
+		const bool pilot = editor.Context().GetViewport().GetSettings().PilotGameCamera;
+		REQUIRE(editor.Click("Viewport.GameCamera"));
+		CHECK(editor.Context().GetViewport().GetSettings().PilotGameCamera != pilot);
+	}
+
 	TEST_CASE("The toolbar's tools and the viewport's chips change the viewport's settings")
 	{
 		HarnessEditor editor({}, WithFeatureProject("EditorUIToolbar"));

@@ -3,6 +3,7 @@
 #include "Editor/EditorViewport.h"
 #include "Editor/TransformEdit.h"
 #include "UI/EditorPanelRegistry.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Math/AABB.h>
 
@@ -111,6 +112,8 @@ namespace Strata
 		bool m_CursorLocked = false; // By fly mode
 		std::optional<TransformDrag> m_GizmoDrag;
 		// The agent chip's text for the activity and age (in whole seconds) it was made for.
+		// The toolbar's chips across frames: the last ones that do not fit with their labels are drawn as icons.
+		UI::ChipStripState m_ChipStrip;
 		std::string m_AgentChipText;
 		uint64_t m_AgentChipActivity = 0;
 		int64_t m_AgentChipSeconds = -1;
