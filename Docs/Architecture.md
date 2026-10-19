@@ -499,7 +499,8 @@ The engine is extended through registries rather than through code that knows it
 (components), `AssetLoaderRegistry` (stored bytes to asset objects, and the prefixes partial loads read),
 `AssetImporterRegistry` (source files to stored bytes), `AssetManagerExtensionRegistry` (work modules do for every asset
 manager: the texture streamer), `BuiltinAssets` (objects of the built-in assets), `MeshGeometryRegistry` (the triangles of
-mesh assets for modules that do not draw them: physics) and `SceneSystemRegistry` (runtime systems of playing scenes).
+mesh assets for modules that do not draw them: physics), `SceneSystemRegistry` (runtime systems of playing scenes) and
+`SceneOverlayRegistry` (passes every `SceneRenderer` draws over the scene: the game UI's, see [Game UI](#game-ui)).
 `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`) fills them, once per process, before anything reads
 them. Its modules are a table (`c_BuiltinModules`: a name and a registration function each, lower layers first), run in
 order but for those `ModuleRegistrationOptions::Exclude` names; `Engine::GetBuiltinModuleNames` lists the table and
@@ -2237,8 +2238,12 @@ is the `strata-scripting` skill. The layers:
   recognize the pattern by the address of the reading instruction, which made the cost of a frame depend on how
   unrelated code moved the loop (6.6 or 9.8 ms for 300,000 trivial scripts with identical sources). Contacts come from
   the scene's `ICollisionEventSource` (the `PhysicsSystem`), whose listener only hears watched entities: each instance
-  whose class has a contact callback watches its entity. Entity destruction requested by scripts waits until the scene
-  can do it safely (`ScriptSystem::DestroyEntity`), and removed instances are destroyed at the next sync point.
+  whose class has a contact callback watches its entity. Widget events come from the scene's `IUIEvents` (the
+  `GameUISystem`, which updates before the scripts): `OnUIClick`, `OnUIValueChanged`, `OnUIFocusChanged` and `OnUISubmit`
+  run on the scripts of the widget's entity, then on those of its `EventTarget`, and menus that must move while the game
+  is paused read unscaled time (`Time::GetUnscaledDeltaTime`, which time scale 0 does not stop; [Game UI](#game-ui)).
+  Entity destruction requested by scripts waits until the scene can do it safely (`ScriptSystem::DestroyEntity`), and
+  removed instances are destroyed at the next sync point.
 - **Host functions** (`ScriptHostAPI.cpp`). Every function runs in `HostCall` (no exception unwinds into the module)
   and starts with `ResolveContext`, which rejects calls from other threads, outside callbacks or from a crashed module.
   The table is built from `ST_SCRIPT_HOST_FUNCTIONS`, which counts calls for the feature test.
@@ -2781,7 +2786,9 @@ is the `strata-scripting` skill. The layers:
     being the primary selection; clicks select on release so any row can be dragged, a box starts in the empty space;
     while filtering, Ctrl+A, ranges and boxes skip the ancestors shown for context).
     A primary selection that changed elsewhere is revealed (`HierarchyView::Reveal`, then the list scrolls to its row).
-    Rows are tree nodes with the entity's icon (`UI/EntityIcons`), its name, a prefab badge on an instance's root (a
+    Its create menu's UI submenu makes the game UI's presets (`ui.create`: canvas, panel, image, text, button, toggle,
+    slider, input field and layout groups; DeveloperGuide.md, "Game UI commands").
+    Rows are tree nodes with the entity's icon (`UI/EntityIcons`: a UI element by its widget), its name, a prefab badge on an instance's root (a
     click inspects the prefab; in the warning color while the instance differs from its prefab, `PrefabSync::IsModified`,
     and its tooltip, made only while it shows, says when the instance is outdated too)
     and an eye (`entity.setActive`); a drag carries the topmost dragged entities
@@ -2793,7 +2800,9 @@ is the `strata-scripting` skill. The layers:
     The rename field is drawn after the selection's scope and activated by id: a keyboard move out of that scope would
     make ImGui clear the selection. With 100,000 roots the panel costs about 0.012 ms per frame (it drew every root
     before: 12.9 ms; `Perf.Editor`).
-  - The **Inspector** shows the components every selected entity has. `GetSharedProperty` gives each widget its value and
+  - The **Inspector** shows the components every selected entity has, each section drawing first what its component's
+    drawer adds (`UI/ComponentDrawers`, by component type: the UI Rect's anchor presets and margins), and a notice with
+    an Add button where some entities lack a component it requires (`ComponentInfo::Requires`). `GetSharedProperty` gives each widget its value and
     which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as mixed; an edit goes through the
     multi-entity `SetPropertyComponentsWithUndo` with the components the widget changed (one step; each entity keeps its
     other components), or `SetPropertyWithUndo` for other types. Rotations of several entities go through a
@@ -2864,7 +2873,10 @@ is the `strata-scripting` skill. The layers:
   the project's other scenes), the settings and two `ViewportRenderer`s (panel and captures). The panel renders during
   `OnImGuiRender`; `ResolveViewportView` picks the scene's primary camera while playing and the editor camera otherwise,
   and `GetViewportRenderOptions` gives editor views (the editor camera outside play mode) preview lighting and a hidden
-  HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). The settings' debug view
+  HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`; with Game UI shown, a click selects a UI element
+  first). The 2D canvas mode (`Panels/CanvasModeView`, `Editor/CanvasEdit`) shows a screen-space canvas at its reference
+  aspect through the scene's camera, with handles that place rects, zoom and pan that never lay it out again
+  (DeveloperGuide.md, "Game UI commands"). The settings' debug view
   (`ViewportDebugView`: `none`, `streaming`, `lod`, `mip`) colors every view of the viewport, the game view too: before each
   render `StreamingView` (`Editor/StreamingView.h`) takes the render proxies the scene's `RenderScene` finds in the view
   (its spatial index, culled with the bounds the renderer culls with: a mesh's own, else those the asset pipeline
@@ -3056,7 +3068,9 @@ so far (`PrivateMB`, `PeakPrivateMB`). A log that cannot be written fails the ru
 into its own `ScriptEngine` without hot reload and makes it active, and starts loading the start scene (`SceneLoader`) and
 the manifest's loading scene (version 4, `LoadingScene`; version 3 manifests load without one), so it returns at once.
 The loading scene plays while the start scene loads (without one, renderers draw a black frame,
-`GameRenderer::RenderEmpty`); the start scene replaces it once it and everything it uses are in. A start scene that cannot
+`GameRenderer::RenderEmpty`); the start scene replaces it once it and everything it uses are in. A scene without a
+primary camera that has screen-space UI (a main menu) shows that UI over black instead of the missing-camera message
+([Game UI](#game-ui)). A start scene that cannot
 be loaded is `GetStartError` (StrataRuntime exits with code 1); `WaitForStart` waits for it without running frames (tools
 and tests). Each frame it finalizes loads, advances the scene loads (swapping in a scene that is ready), updates the scene
 and honors requests: a quit ends the process with the game's exit code, a scene load (`LoadScene`) loads the next scene
