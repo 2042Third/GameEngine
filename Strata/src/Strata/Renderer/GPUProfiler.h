@@ -75,8 +75,10 @@ namespace Strata
 	// c_MaxTimestampsPerFrame timestamps: BeginFrame (Renderer::BeginFrame) closes the frame's slot, reads the oldest pending
 	// slots that the GPU completed and hands their per-stage sums (every user's intervals added up, as CPU stages add up) to
 	// the frame profiler for the frame that recorded them (FrameProfiler::RecordGPUFrame), then opens the next slot. A slot
-	// still in use when its turn comes is dropped, never waited for. Passes are timed with GPUPassTimer. Without timestamp
-	// support everything is a no-op. Main thread only.
+	// still in use when its turn comes is dropped, never waited for, and so is one whose timestamps are still not readable a
+	// frame after the GPU completed it (a timed command list that was never executed; drivers may make the results readable a
+	// little after the work completed, as MoltenVK does). Passes are timed with GPUPassTimer. Without timestamp support
+	// everything is a no-op. Main thread only.
 	class GPUProfiler
 	{
 	public:
@@ -130,6 +132,9 @@ namespace Strata
 			std::vector<GPUTimedInterval> Intervals;
 			nvrhi::EventQueryHandle Done; // Set when the slot closes: the GPU completed every submission of its frame
 			bool DoneSet = false;
+			// Found completed with timestamps not readable yet, in the frame profiler's frame UnreadableFrame.
+			bool Unreadable = false;
+			uint64_t UnreadableFrame = 0;
 		};
 
 		uint32_t GetBase(uint32_t slot) const { return slot * c_MaxTimestampsPerFrame; }

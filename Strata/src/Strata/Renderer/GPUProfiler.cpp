@@ -174,6 +174,7 @@ namespace Strata
 	{
 		slot.State = SlotState::Free;
 		slot.Count = 0;
+		slot.Unreadable = false;
 		slot.Intervals.clear();
 	}
 
@@ -197,8 +198,18 @@ namespace Strata
 				return;
 			if (ResolveSlot(slot, oldest))
 				continue;
-			// The GPU completed the frame's work, yet not every timestamp was written: a command list with timestamps was
-			// never executed. Its times are incomplete, so the frame goes without them.
+			// The GPU completed the frame's work, yet not every timestamp is readable. MoltenVK makes timestamps readable a
+			// little after the work's completion is signaled: the slot waits for the next frame. Still missing then, a command
+			// list with timestamps was never executed: its times are incomplete, so the frame goes without them.
+			const uint64_t frame = m_Profiler.GetTotalFrameCount();
+			if (!slot.Unreadable)
+			{
+				slot.Unreadable = true;
+				slot.UnreadableFrame = frame;
+				return;
+			}
+			if (frame == slot.UnreadableFrame)
+				return;
 			m_Stats.DroppedFrames++;
 			if (slot.ResetCount == m_Profiler.GetResetCount())
 				m_Profiler.RecordGPUFrame(slot.ProfilerFrame, {});

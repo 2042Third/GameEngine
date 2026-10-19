@@ -763,9 +763,11 @@ values and end render passes). A ring of `MaxFramesInFlight + 2` frame slots of 
 the frame's slot (an event query marks the end of its submissions), hands the oldest slots the GPU completed to the frame
 profiler (every renderer's intervals added up per stage, like CPU stages) and opens the next one, whose timestamps are reset
 by a command list executed at once (query commands of a queue run in submission order). A slot still in use when its turn
-comes is dropped (`GPUProfilerStats::DroppedFrames`), as is a frame whose timestamps were recorded into a command list that
-was never executed; nothing waits for the GPU. `GPUPassTimer` times consecutive passes of a command list with one timestamp
-per boundary, so stages tile it without gaps; a `GPUTimerRecord` keeps a user's own intervals (`SceneRenderer::GetGPUStats`).
+comes is dropped (`GPUProfilerStats::DroppedFrames`), as is a frame whose timestamps are still not readable a frame after the
+GPU completed its work (recorded into a command list that was never executed; MoltenVK makes timestamps readable a little
+after the completion is signaled, so a completed slot waits that one frame); nothing waits for the GPU. `GPUPassTimer` times
+consecutive passes of a command list with one timestamp per boundary, so stages tile it without gaps; a `GPUTimerRecord`
+keeps a user's own intervals (`SceneRenderer::GetGPUStats`).
 The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStages`):
 
 | Stage | Where |

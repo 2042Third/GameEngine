@@ -270,17 +270,25 @@ TEST_SUITE("GPU.Renderer.Timers")
 		frames.EndFrame(0.001);
 		CHECK(heard == 0); // Its GPU times are awaited
 
-		// Once the GPU finished the frame's work, its times can never arrive: the frame is resolved without them, without
-		// waiting for anything, and the listener hears of it.
+		// Once the GPU finished the frame's work, its times are given one more frame (drivers may make timestamps readable a
+		// little after the work completed); still missing then, they can never arrive: the frame is resolved without them,
+		// without waiting for anything, and the listener hears of it.
 		gpu.GetDevice().WaitForIdle();
 		frames.BeginFrame();
-		const auto start = std::chrono::steady_clock::now();
+		auto start = std::chrono::steady_clock::now();
+		gpuProfiler.BeginFrame();
+		CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(100));
+		frames.EndFrame(0.001);
+		CHECK(gpuProfiler.GetStats().DroppedFrames == 0);
+		CHECK(heard == 0);
+		frames.BeginFrame();
+		start = std::chrono::steady_clock::now();
 		gpuProfiler.BeginFrame();
 		CHECK(std::chrono::steady_clock::now() - start < std::chrono::milliseconds(100));
 		frames.EndFrame(0.001);
 		CHECK(gpuProfiler.GetStats().DroppedFrames == 1);
 		CHECK(gpuProfiler.GetStats().ResolvedFrames == 0);
-		const FrameSample first = frames.GetFrame(1);
+		const FrameSample first = frames.GetFrame(2);
 		CHECK(first.Index == 0);
 		CHECK_FALSE(first.HasGPU);
 		CHECK(heard >= 1);
