@@ -2989,12 +2989,18 @@ is the `strata-scripting` skill. The layers:
 ## Export and the runtime
 
 `project.export` (`StrataEditor/src/Editor/GameExport.cpp`) exports without blocking a frame. `GameExport::Start` checks
-at once what it can and fails without side effects: a saved, stopped scene, a start scene (or the open scene), no
+at once what it can and fails without side effects: a saved, stopped scene (a scene whose current state is being saved
+counts as saved: the export keeps that save's ID, `EditorContext::FindSaveOfCurrentState`, and fails with its error if it
+fails), a start scene (or the open scene), no
 running script build, a loaded script module that is still the file that was loaded (scenes or prefabs that use scripts
 need one), what `Export.AlwaysInclude` names (with `prune`; `EditorAssetManager::CheckAlwaysInclude` matches the entries
 without planning), and a usable output directory (`CheckExportDirectory`: absolute, local, outside the project, not a
-file, no reserved device names; each refusal says what to do instead). It then waits for background imports (polling
-`HasPendingImports` once per frame, `WaitingForImports`; the frames go on), plans the pack once on the main thread (`EditorAssetManager::PlanAssetPack`) and writes everything on an I/O thread (failing, with
+file, no reserved device names; each refusal says what to do instead). It then waits, polling once per frame
+(`WaitingForImports`; the frames go on), for background imports (`HasPendingImports`) and the editor's saves
+(`DocumentSaver::IsBusy`), and runs the reference searches of documents that have not had theirs yet
+(`GetPendingReferenceSearches`, searched on an I/O job by `FindDocumentReferences` and recorded with
+`RecordScannedReferences`, since searches are no imports); then it plans the pack once on the main thread
+(`EditorAssetManager::PlanAssetPack`) and writes everything on an I/O thread (failing, with
 the document named, when a document saved meanwhile references what the plan does not hold), reporting its progress in
 bytes and stage (`GetProgress`, `GetStage`; `project.exportStatus`); one export runs at a time
 (`EditorContext::StartGameExport`), `project.cancelExport` stops it between blocks, and closing the project or the
@@ -3011,7 +3017,7 @@ It writes:
 
 | File | Source |
 | --- | --- |
-| `<Game>.stpak` | `EditorAssetManager::WriteAssetPack` of the plan: every project asset, or with `prune` what the scenes and `Export.AlwaysInclude` use, ordered by first use |
+| `<Game>.stpak` | `EditorAssetManager::WriteAssetPack` of the plan: every project asset, or with `prune` what the scenes and `Export.AlwaysInclude` use, ordered by first use; scenes, prefabs and models cooked (`cookDocuments`, default true: `AssetPackCook`, binary documents that load without parsing JSON, [Scene documents](#scene-documents)) |
 | script module (and its PDB) | `EditorContext::ReadRunningScriptModule`: the loaded module, checked by digest |
 | `<Game>.stgame` | `GameManifest` (version 4): name, pack, start scene, loading scene (`Export.LoadingScene`, optional), module, window settings |
 | `<Game>[.exe]`, `ThirdPartyNotices.md` | `StrataRuntime` from the editor's directory, renamed (`includeRuntime`) |
