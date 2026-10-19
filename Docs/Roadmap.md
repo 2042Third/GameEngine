@@ -359,6 +359,15 @@ interleaved A/Bs against wave 2's build; the quiet campaign that decided the bud
 
 Open items and deferrals later waves own:
 
+- World I/O (wave 4's `world-io`): pack version 3 (small entries bundled, a zstd dictionary, shared blocks decoded
+  once; the 10.7x inflation of small assets in `Perf.Asset.Pack30kMaterialsRatio`), cold reads without the system
+  cache with 16 outstanding reads (`PerfGPU.Pack.ColdStreamStressWorld`) and a background-thread cap while loads run
+  are wave 5's. Additive loads have no prototype form yet (`SceneLoadOptions::PrepareAs`,
+  `SceneLoadRequest::TakePrototype`): cells and sub-scenes load through `SceneLoader` or `SceneDocumentReader` with
+  `EntityPrototypeBuilder`. Prefab and asset-editor saves stay synchronous.
+- Tests that start the CLI's fake editor set its environment variables in the test process (`CLI.Discovery`,
+  `CLI.Application`, `CLI.Mcp`), against the testing rule: `ProcessSpecification` has no environment of its own, and
+  the launcher finds the session of the process it started by its ID, so a wrapper process cannot set it.
 - Play-testing (wave 4's `authoring-and-playtest`): an `input.sequence` step whose command event fails a check only the
   command can make (a key name, `input.click`'s hit test) releases its holds and resumes the game, but the step's
   earlier events have already reached the game's input (checking every value up front needs a dry run of each
@@ -388,7 +397,8 @@ Open items and deferrals later waves own:
   one mip level's filtering, meshoptimizer simplifying one primitive); they never hold a frame, but delay when a
   cancelled import frees its thread. Moving or deleting a file that another asset's import reads as a dependency does
   not cancel that import (the file watcher's change event replaces it). A project whose large scenes have no reference
-  records yet spends seconds of its scan in the reference search (4 s for `PerfGPU.Editor`'s 1,000,000-entity scene).
+  records yet spends seconds of its first scan in the reference search: it streams the document, so it holds only the
+  text and the references, but on one thread (about 3 s on the Mac for world-io's realistic 1,000,000-entity world).
 - Scene loads (wave 3): a load's progress weighs a partly loaded texture by its whole stored size, so the bar jumps when
   a large texture's tail arrives; `AssetManagerBase::EstimateFirstLoadBytes` counts a partial load as up to 64 KiB, more
   than a small tail, so a very tight texture budget can leave textures to the view that would have fitted; a sub-scene
@@ -555,6 +565,9 @@ Open items and deferrals later waves own:
     metrics (`DragInPrefabInstance5kMedian`, `DragPrefabInstanceRoot5kMedian`, `Drag100PrefabInstancesMedian`) are
     provisional, and the idle editor frame's criterion (`PerfGPU.Editor`) cannot be shown on the Mac, where frames wait
     for the display (8.3 ms).
+  - Wave 4's `world-io`: its metrics are provisional (`Perf.Editor.ImportFolder24x4kPeakPrivate` measured 571-574 MB
+    on the Mac against a 1,280 MB target), and `PerfGPU.Editor.SceneOpenOver1MMaxFrame` measured 1.08 times the step-0
+    base (8.51-9.21 ms over 10 pairs), on a Mac where that frame mostly waits for the display.
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
 
