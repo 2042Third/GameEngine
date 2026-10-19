@@ -5,7 +5,7 @@
 #include "Engine/ModuleRegistrationHelpers.h"
 #include "Network/FakeEditorProcess.h"
 #include "Perf/StressProject.h"
-#include "Physics/PhysicsTestUtils.h"
+#include "Reflection/ComponentSchema.h"
 #include "Renderer/GPUTestUtils.h"
 #include "Runtime/PerfLogReader.h"
 #include "Strata/Asset/AssetImporter.h"
@@ -15,6 +15,7 @@
 #include "Strata/Core/FileLock.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JobSystem.h"
+#include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Process.h"
@@ -26,7 +27,12 @@
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scripting/ScriptEngine.h"
 #include "Strata/Scripting/ScriptModule.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
+
+#if ST_WITH_PHYSICS
+	#include "Physics/PhysicsTestUtils.h"
+#endif
 
 #include <stb_image.h>
 
@@ -208,6 +214,13 @@ static std::string CheckOwnModuleCopy(const Strata::ScriptEngine& engine, const 
 
 static int RunHelperMode(std::string_view mode, int argc, char** argv)
 {
+	if (mode == "write-component-schema" && argc > 2)
+	{
+		// Writes the registry's component metadata (Tests::DescribeComponentSchema) to the file named: how
+		// StrataTests/Architecture/ComponentSchema.json was made.
+		const std::string text = Strata::JsonUtils::Dump(Strata::Tests::DescribeComponentSchema(), 1, '\t') + "\n";
+		return Strata::FileSystem::WriteText(Strata::FileSystem::FromUTF8(argv[2]), text) ? 0 : 1;
+	}
 	if (mode == "record-arguments" && argc > 2)
 	{
 		// Stands in for a program the editor starts (an external code editor): writes its other arguments, one per line, to
@@ -646,8 +659,10 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		}
 		return 0;
 	}
+#if ST_WITH_PHYSICS
 	if (mode == "broad-phase-churn")
 		return Strata::Tests::RunBroadPhaseChurnProcess();
+#endif
 	if (mode == "streaming-sweep")
 	{
 		// <settings file> <result file>: runs a camera sweep over a stress project's pack (Perf/StressProject.h) and writes
@@ -1032,6 +1047,16 @@ static std::optional<int> RunAsFakeCMake(int argc, char** argv)
 
 int main(int argc, char** argv)
 {
+	// A console program, also in its helper modes: what goes wrong is printed, never shown in a dialog (applications the
+	// tests make in the process report failures with Application::ReportFatalError, which nobody would dismiss).
+	Strata::Platform::ConnectStandardStreams(Strata::ProgramRun::Console);
+	// Only warnings and errors are logged, by the tests and by the helper processes, whose output their tests read (the
+	// composition root's line about the scene systems' order would run into it); helper modes that log more initialize the
+	// log themselves.
+	Strata::LogSpecification logSpecification;
+	logSpecification.Level = Strata::LogLevel::Warn;
+	Strata::Log::Init(logSpecification);
+
 	constexpr std::string_view helperPrefix = "--strata-test-helper=";
 	const bool isHelper = argc > 1 && std::string_view(argv[1]).substr(0, helperPrefix.size()) == helperPrefix;
 	const std::string_view helperMode = isHelper ? std::string_view(argv[1]).substr(helperPrefix.size()) : std::string_view();
@@ -1054,10 +1079,6 @@ int main(int argc, char** argv)
 	// Launched as an editor by the CLI launch tests (see Network/FakeEditorProcess.h).
 	if (Strata::Tests::IsFakeEditorLaunch(argc, argv))
 		return Strata::Tests::RunFakeEditor(argc, argv);
-
-	Strata::LogSpecification logSpecification;
-	logSpecification.Level = Strata::LogLevel::Warn;
-	Strata::Log::Init(logSpecification);
 
 	// The perf suites measure the engine as applications run it, and applications opt out of execution-speed throttling
 	// (Application): so does the test process, whose console is rarely the window in the foreground.

@@ -2,45 +2,13 @@
 #include "Strata/Physics/AssetMeshProvider.h"
 
 #include "Strata/Asset/AssetManager.h"
-#include "Strata/Renderer/Mesh.h"
+#include "Strata/Asset/MeshGeometry.h"
 
 namespace Strata
 {
 
 	namespace
 	{
-
-		// The full-detail triangles of every submesh, with indices into the whole vertex list.
-		Ref<const PhysicsMeshData> CreateMeshData(const Mesh& mesh)
-		{
-			const std::vector<uint32_t>& indices = mesh.GetIndices();
-			const auto isValidRange = [&indices](const MeshLOD& lod)
-			{
-				return static_cast<uint64_t>(lod.IndexOffset) + lod.IndexCount <= indices.size();
-			};
-
-			Ref<PhysicsMeshData> data = CreateRef<PhysicsMeshData>();
-			data->Positions = mesh.GetPositions();
-			size_t indexCount = 0;
-			for (const Submesh& submesh : mesh.GetSubmeshes())
-			{
-				if (!submesh.LODs.empty() && isValidRange(submesh.LODs.front()))
-					indexCount += submesh.LODs.front().IndexCount;
-			}
-			data->Indices.reserve(indexCount);
-
-			// Mesh validates its ranges when it is created; the check only keeps a broken object from being read out of bounds
-			// (vertex indices are validated when the shape is cooked).
-			for (const Submesh& submesh : mesh.GetSubmeshes())
-			{
-				if (submesh.LODs.empty() || !isValidRange(submesh.LODs.front()))
-					continue;
-				const MeshLOD& lod = submesh.LODs.front();
-				for (uint32_t index = lod.IndexOffset; index < lod.IndexOffset + lod.IndexCount; index++)
-					data->Indices.push_back(submesh.BaseVertex + indices[index]);
-			}
-			return data;
-		}
 
 		// Whether a weak and a shared pointer refer to the same object (also when the weak one expired since: owner identity
 		// cannot be confused with a new object at the same address).
@@ -60,15 +28,21 @@ namespace Strata
 
 		// Requests the load if the mesh is not loaded. While a mesh is reloaded, the previous object is still served.
 		const Ref<Asset> asset = manager->GetAsset(mesh);
-		if (!asset || asset->GetType() != AssetType::Mesh)
+		if (!asset)
 			return nullptr;
 
 		auto it = m_Entries.find(mesh);
 		if (it != m_Entries.end() && it->second.Source.lock() == asset)
 			return it->second.Data;
 
-		// First use, or a new object (reloaded): new data, so that physics rebuilds the colliders using it.
-		const Ref<const PhysicsMeshData> data = CreateMeshData(static_cast<const Mesh&>(*asset));
+		// First use, or a new object (reloaded): new data, so that physics rebuilds the colliders using it. The module that
+		// owns the asset's type reads its triangles (the renderer's meshes); other assets have none.
+		MeshGeometry geometry;
+		if (!MeshGeometryRegistry::Read(*asset, geometry))
+			return nullptr;
+		Ref<PhysicsMeshData> data = CreateRef<PhysicsMeshData>();
+		data->Positions = std::move(geometry.Positions);
+		data->Indices = std::move(geometry.Indices);
 		m_Entries[mesh] = Entry { asset, data };
 		return data;
 	}

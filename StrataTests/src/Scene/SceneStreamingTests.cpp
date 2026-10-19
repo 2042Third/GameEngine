@@ -1,14 +1,11 @@
 #include <doctest/doctest.h>
 
-#include "Audio/AudioTestUtils.h"
 #include "Perf/SceneGenerators.h"
 #include "Scene/SceneLoaderTestUtils.h"
 #include "Scene/SceneTestUtils.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Asset/BuiltinAssets.h"
-#include "Strata/Audio/AudioSystem.h"
 #include "Strata/Core/FrameProfiler.h"
-#include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
@@ -16,6 +13,16 @@
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scene/SubScene.h"
 #include "TestHelpers.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+	#include "Strata/Physics/PhysicsSystem.h"
+#endif
+#if ST_WITH_AUDIO
+	#include "Audio/AudioTestUtils.h"
+	#include "Strata/Audio/AudioComponents.h"
+	#include "Strata/Audio/AudioSystem.h"
+#endif
 
 #include <chrono>
 #include <functional>
@@ -60,6 +67,7 @@ namespace
 		return created;
 	}
 
+#if ST_WITH_PHYSICS && ST_WITH_AUDIO
 	uint32_t CountProxies(const RenderScene& renderScene)
 	{
 		uint32_t count = 0;
@@ -70,6 +78,7 @@ namespace
 		}
 		return count;
 	}
+#endif
 
 	size_t CountSubSceneTags(const Scene& scene)
 	{
@@ -95,6 +104,7 @@ namespace
 		void Disconnect() { Connection.release(); }
 	};
 
+#if ST_WITH_PHYSICS && ST_WITH_AUDIO
 	size_t CountOccurrences(const std::string& text, const std::string& part)
 	{
 		size_t count = 0;
@@ -102,6 +112,7 @@ namespace
 			count++;
 		return count;
 	}
+#endif
 
 }
 
@@ -177,6 +188,7 @@ TEST_SUITE("Scene.Streaming")
 		CheckSceneCaches(scene);
 	}
 
+#if ST_WITH_PHYSICS && ST_WITH_AUDIO
 	TEST_CASE("Unloading a sub-scene leaves none of its entities, script instances, bodies, voices or render proxies")
 	{
 		ScopedJobSystem jobs(2, 1);
@@ -258,6 +270,7 @@ TEST_SUITE("Scene.Streaming")
 		CheckSceneCaches(scene);
 		scene.OnRuntimeStop();
 	}
+#endif
 
 	TEST_CASE("A sub-scene whose IDs the scene has fails with an error and changes nothing")
 	{

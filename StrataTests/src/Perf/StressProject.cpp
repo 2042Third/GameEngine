@@ -18,6 +18,7 @@
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"

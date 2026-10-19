@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Physics/PhysicsTestUtils.h"
+#include "Strata/Physics/PhysicsComponents.h"
 
 using namespace Strata;
 using namespace Strata::Tests;

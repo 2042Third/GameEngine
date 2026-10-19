@@ -27,6 +27,7 @@ namespace Strata
 
 	class Scene;
 	class Skeleton;
+	struct AnimatorComponent;
 
 	// A parameter of an animator's controller and its value (bools and triggers: 0 or 1).
 	struct AnimatorParameterValue
@@ -124,6 +125,7 @@ namespace Strata
 		// cross-fade runs: the Inspector shows "<from> -> <to>".
 		std::optional<std::string> GetBlendSource(Entity animator) const;
 		std::optional<glm::mat4> GetJointTransform(Entity animator, std::string_view joint) override;
+		bool HasAnimator(Entity entity) override;
 
 		//////////////////////////////////////////////////////////////////////////
 		// IAnimationEventSource

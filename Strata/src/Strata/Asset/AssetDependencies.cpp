@@ -1,13 +1,16 @@
 #include "stpch.h"
 #include "Strata/Asset/AssetDependencies.h"
 
-#include "Strata/Animation/AnimationController.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/World/WorldAsset.h"
+
+#if ST_WITH_ANIMATION
+	#include "Strata/Animation/AnimationController.h"
+#endif
 
 #include <string_view>
 #include <unordered_set>
@@ -73,7 +76,6 @@ namespace Strata
 			const nlohmann::json* entities = JsonUtils::Find(snapshot, "Entities");
 			if (!entities || !entities->is_array())
 				return;
-			const ComponentInfo* scriptInfo = ComponentRegistry::Find<ScriptComponent>();
 			for (const nlohmann::json& entity : *entities)
 			{
 				const nlohmann::json* components = JsonUtils::Find(entity, "Components");
@@ -86,20 +88,14 @@ namespace Strata
 					if (!info || !component.is_object())
 						continue;
 					ScanProperties(info->Properties, component, references);
-					// Script fields are data the properties cannot express: read them with the component's own reader.
-					if (info == scriptInfo && info->DeserializeExtra)
+					// Data the properties cannot express (script fields): its references, as the component reads them.
+					if (info->ExtraReferences.VisitJson)
 					{
-						ScriptComponent scripts;
-						if (!info->DeserializeExtra(&scripts, component, nullptr))
-							continue;
-						for (const ScriptEntry& script : scripts.Scripts)
+						info->ExtraReferences.VisitJson(component, [&references](PropertyType type, UUID value)
 						{
-							for (const ScriptFieldValue& field : script.Fields)
-							{
-								if (field.Type == PropertyType::Asset && std::holds_alternative<UUID>(field.Value))
-									references.Add(std::get<UUID>(field.Value));
-							}
-						}
+							if (type == PropertyType::Asset)
+								references.Add(value);
+						});
 					}
 				}
 			}
@@ -156,12 +152,18 @@ namespace Strata
 		}
 		else if (type == AssetType::AnimationController)
 		{
+#if ST_WITH_ANIMATION
 			// The clips of its states.
 			const std::optional<AnimationControllerData> controller = AnimationController::DataFromJson(*content, outError);
 			if (!controller)
 				return false;
 			for (const AnimationState& state : controller->States)
 				references.Add(state.Clip);
+#else
+			if (outError)
+				*outError = "animation controllers cannot be read: the engine has no animation module";
+			return false;
+#endif
 		}
 		else if (type == AssetType::World)
 		{

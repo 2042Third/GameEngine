@@ -24,14 +24,17 @@
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/ImGui/ImGuiRenderer.h>
 #include <Strata/Math/Math.h>
+#include <Strata/Physics/PhysicsComponents.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
 #include <Strata/Renderer/Renderer.h>
+#include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Renderer/Texture.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/Scripting/ScriptingComponents.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>

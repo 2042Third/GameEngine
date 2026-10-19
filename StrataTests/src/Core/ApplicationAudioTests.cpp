@@ -2,6 +2,7 @@
 
 #include "Strata/Audio/AudioClip.h"
 #include "Strata/Audio/AudioEngine.h"
+#include "Strata/Audio/AudioModule.h"
 #include "Strata/Audio/AudioSource.h"
 #include "Strata/Core/Application.h"
 #include "Strata/Core/Layer.h"
@@ -77,13 +78,13 @@ namespace
 
 TEST_SUITE("Core.Application")
 {
-	TEST_CASE("Headless applications advance the null audio device with the frame time")
+	TEST_CASE("The Audio module advances the null audio device with the frame time")
 	{
 		REQUIRE_FALSE(AudioEngine::IsInitialized());
 		ApplicationSpecification specification;
 		specification.Name = "AudioPumpTest";
 		specification.Headless = true;
-		specification.EnableRenderer = false;
+		specification.Modules.push_back(AudioModule::Factory({ .NullDevice = true }));
 		specification.Jobs.WorkerThreadCount = 1;
 		specification.Jobs.IOThreadCount = 1;
 		// At 5 ms or more per frame, 400 frames take at least two seconds: far more than the 50 ms clip needs.

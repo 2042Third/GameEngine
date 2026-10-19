@@ -3,6 +3,7 @@
 #include "Editor/EditorContext.h"
 #include "Editor/EditorWorld.h"
 #include "Editor/RecentProjects.h"
+#include "Editor/SceneRecovery.h"
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/FrameProfiler.h>

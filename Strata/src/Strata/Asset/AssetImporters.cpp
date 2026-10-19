@@ -4,10 +4,13 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/GltfImporter.h"
 #include "Strata/Asset/TextureImporter.h"
-#include "Strata/Audio/AudioClipAsset.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Renderer/Font.h"
+
+#if ST_WITH_AUDIO
+	#include "Strata/Audio/AudioClipAsset.h"
+#endif
 
 namespace Strata
 {
@@ -75,6 +78,7 @@ namespace Strata
 			std::string m_Extension;
 		};
 
+#if ST_WITH_AUDIO
 		// WAV, MP3, FLAC and Ogg Vorbis. Settings: { "LoadMode": "Decompressed" | "Streamed" }.
 		class AudioClipImporter final : public AssetImporter
 		{
@@ -130,6 +134,7 @@ namespace Strata
 				return true;
 			}
 		};
+#endif
 
 		// TrueType and OpenType fonts, stored as-is.
 		class FontImporter final : public AssetImporter
@@ -156,11 +161,16 @@ namespace Strata
 		AssetImporterRegistry::Register(CreateScope<NativeAssetImporter>(AssetType::Scene, GetNativeAssetExtension(AssetType::Scene)));
 		AssetImporterRegistry::Register(CreateScope<NativeAssetImporter>(AssetType::Prefab, GetNativeAssetExtension(AssetType::Prefab)));
 		AssetImporterRegistry::Register(CreateScope<NativeAssetImporter>(AssetType::Material, GetNativeAssetExtension(AssetType::Material)));
+#if ST_WITH_ANIMATION
 		AssetImporterRegistry::Register(CreateScope<NativeAssetImporter>(AssetType::AnimationController, GetNativeAssetExtension(AssetType::AnimationController)));
+#endif
 		AssetImporterRegistry::Register(CreateScope<NativeAssetImporter>(AssetType::World, GetNativeAssetExtension(AssetType::World)));
 		AssetImporterRegistry::Register(CreateScope<TextureImporter>());
 		AssetImporterRegistry::Register(CreateScope<GltfImporter>());
+#if ST_WITH_AUDIO
+		// Audio files are sources only for an engine with the audio module.
 		AssetImporterRegistry::Register(CreateScope<AudioClipImporter>());
+#endif
 		AssetImporterRegistry::Register(CreateScope<FontImporter>());
 	}
 

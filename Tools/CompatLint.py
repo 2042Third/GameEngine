@@ -12,7 +12,9 @@ compilers and standard libraries reject is found before a push (AGENTS.md, "CI b
   `std::from_chars`).
 
 Each file is compiled with the exact command of the Debug build (a Ninja Multi-Config build tree: the macos and linux
-presets), its compiler swapped and the precompiled header replaced by the header it wraps. The build must have been
+presets), its compiler swapped and the precompiled header dropped, as in a build configured with
+-DSTRATA_PRECOMPILED_HEADERS=OFF: a file that leans on what the precompiled header (stpch.h, EditorPch.h, TestsPch.h)
+includes instead of including what it uses fails here. Engine sources include stpch.h themselves. The build must have been
 configured (and built once, for generated headers). On macOS the compilers come from Homebrew:
 `brew install gcc@14 llvm@16`; --gcc and --clang name others.
 
@@ -58,7 +60,7 @@ def build_commands(build):
     return commands
 
 
-def adapt(command, build, compiler, options):
+def adapt(command, compiler, options):
     args = shlex.split(command)
     out = []
     index = 1
@@ -71,14 +73,12 @@ def adapt(command, build, compiler, options):
         elif arg == '-Xclang' and index + 1 < len(args) and args[index + 1] == '-include-pch':
             index += 4
         elif arg == '-Xclang' and index + 1 < len(args) and args[index + 1] == '-include':
-            # CMake's wrapper of the precompiled header (a clang pragma and the real header): the header itself, since
-            # compilers use a .pch they find beside a forced include on their own.
-            with open(os.path.join(build, args[index + 3]), encoding='utf-8') as wrapper:
-                for line in wrapper:
-                    match = re.match(r'\s*#\s*include\s+"(.+)"', line)
-                    if match:
-                        out += ['-include', match.group(1)]
+            # CMake's forced include of the precompiled header's wrapper (Clang): dropped, as in a build configured with
+            # -DSTRATA_PRECOMPILED_HEADERS=OFF, so that a missing include the precompiled header hides fails here.
             index += 4
+        elif arg == '-include' and index + 1 < len(args) and re.search(r'(^|[/\\])cmake_pch[^/\\]*$', args[index + 1]):
+            # The same wrapper in GCC's form (a Linux build tree).
+            index += 2
         else:
             out.append(arg)
             index += 1
@@ -93,7 +93,7 @@ def adapt(command, build, compiler, options):
 
 def lint(source, command, compiler, options):
     relative = os.path.relpath(source, c_Root)
-    result = run(adapt(command, options.build, compiler, options), cwd=options.build)
+    result = run(adapt(command, compiler, options), cwd=options.build)
     messages = [line for line in result.stderr.split('\n') if re.search(r'\b(error|warning)\b', line)]
     if result.returncode != 0 or messages:
         return relative, compiler, '\n'.join(messages[:20]) or result.stderr[:2000]

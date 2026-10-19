@@ -10,6 +10,8 @@ namespace Strata
 
 	void RegisterScriptingModule()
 	{
+		RegisterScriptingComponents();
+
 		// Scripts update first, so gameplay code moves entities before they are simulated (Physics runs after Scripting).
 		// They do not run in simulate mode. Scenes use the script engine that is active when they start playing.
 		SceneSystemDescriptor descriptor = MakeSceneSystemDescriptor<ScriptSystem>("Scripting", false, [](Scene& scene)

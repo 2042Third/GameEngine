@@ -5,6 +5,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 
+#include <Strata/Audio/AudioComponents.h>
 #include <Strata/Audio/AudioEngine.h>
 #include <Strata/Audio/AudioSystem.h>
 #include <Strata/Scene/Components.h>

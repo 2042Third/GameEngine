@@ -2,6 +2,7 @@
 #include "Strata/Animation/AnimationPreview.h"
 
 #include "Strata/Animation/AnimationClip.h"
+#include "Strata/Animation/AnimationComponents.h"
 #include "Strata/Animation/AnimationController.h"
 #include "Strata/Animation/Skeleton.h"
 #include "Strata/Asset/AssetManager.h"

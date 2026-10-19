@@ -2,15 +2,21 @@
 
 #include <doctest/doctest.h>
 
+#include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JobSystem.h"
+#include "Strata/Core/JsonUtils.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
+#include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scene/UnknownComponents.h"
 
 #include <glm/gtc/quaternion.hpp>
 
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <memory>
+#include <optional>
 #include <random>
 #include <string>
 #include <thread>
@@ -28,6 +34,33 @@ namespace Strata::Tests
 		CHECK_MESSAGE(scene.ValidateHierarchy(&error), error);
 		error.clear();
 		CHECK_MESSAGE(scene.ValidateWorldTransforms(&error), error);
+	}
+
+	// A committed scene document (a sample's, the feature project's, a template's) loads with every component registered (none
+	// kept as unknown) and without warnings, and serializing what it loaded is a fixed point: saving it again writes the same.
+	inline void CheckSceneFileLoadsCleanly(const std::filesystem::path& path)
+	{
+		CAPTURE(FileSystem::ToUTF8(path));
+		const std::optional<std::string> text = FileSystem::ReadText(path);
+		REQUIRE(text);
+		const std::optional<nlohmann::json> document = JsonUtils::Parse(*text);
+		REQUIRE(document);
+		Scene scene;
+		std::string error;
+		std::vector<std::string> warnings;
+		REQUIRE_MESSAGE(SceneSerializer::Deserialize(scene, *document, &error, &warnings), error);
+		for (const std::string& warning : warnings)
+			FAIL_CHECK("Warning: ", warning);
+		size_t unknown = 0;
+		for ([[maybe_unused]] const auto entity : scene.GetRegistry().view<UnknownComponentsComponent>())
+			unknown++;
+		CHECK(unknown == 0);
+		CHECK(scene.GetEntityCount() > 0);
+
+		const nlohmann::json saved = SceneSerializer::Serialize(scene);
+		Scene reloaded;
+		REQUIRE_MESSAGE(SceneSerializer::Deserialize(reloaded, saved, &error, &warnings), error);
+		CHECK(SceneSerializer::Serialize(reloaded) == saved);
 	}
 
 	// Watches where a scene is destroyed: a variable in its registry's context, destroyed with the registry, records the

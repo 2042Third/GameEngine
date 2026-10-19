@@ -61,8 +61,6 @@ TEST_SUITE("Core.Application")
 		ApplicationSpecification specification;
 		specification.Name = "PacingTest";
 		specification.Headless = true;
-		specification.EnableRenderer = false;
-		specification.EnableAudio = false;
 		specification.MaxFrames = 30;
 		std::vector<PacedFrame> frames;
 		{

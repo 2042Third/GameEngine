@@ -9,9 +9,12 @@ namespace Strata
 
 	void RegisterPhysicsModule()
 	{
-		// Physics simulates what the scripts moved this frame. It also runs in the editor's simulate mode.
+		RegisterPhysicsComponents();
+
+		// Physics simulates what the scripts moved this frame (another module's system: a soft constraint). It also runs in the
+		// editor's simulate mode.
 		SceneSystemDescriptor descriptor = MakeSceneSystemDescriptor<PhysicsSystem>("Physics", true, [](Scene& scene) { return CreateScope<PhysicsSystem>(scene); });
-		descriptor.After = { "Scripting" };
+		descriptor.AfterIfPresent = { "Scripting" };
 		descriptor.ProfileStage = "Scene.Physics";
 		// A loaded scene's bodies are built while its load prepares it, so that the frame it starts in builds none.
 		descriptor.PrepareLoadedScene = &PhysicsSystem::PrepareLoadedScene;

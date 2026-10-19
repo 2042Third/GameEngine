@@ -124,6 +124,12 @@ namespace Strata
 		// about the entity's origin, crossed with the point's offset from it; nothing if the entity owns no body.
 		virtual std::optional<glm::vec3> GetPointVelocity(Entity entity, const glm::vec3& worldPoint) = 0;
 		virtual bool IsSleeping(Entity entity) = 0; // False for static bodies and entities without a body
+		// The entity whose body moves this one: itself or its nearest ancestor with a RigidBody component; an invalid entity
+		// when none has one (what moves it is not simulated).
+		virtual Entity GetSimulatingBody(Entity entity) = 0;
+		// Whether the entity's RigidBody is dynamic: only dynamic bodies have velocities, forces and impulses applied to them
+		// (false without a RigidBody: colliders alone are static bodies).
+		virtual bool IsDynamicBody(Entity entity) = 0;
 	};
 
 	// Changing the motion of the simulated bodies (PhysicsSystem). Velocities, forces and impulses act on dynamic bodies
@@ -251,6 +257,9 @@ namespace Strata
 		// unusable clip, invalid parameters (volume >= 0 and pitch > 0, finite) or without audio output.
 		virtual bool PlayOneShot(AssetHandle clip, float volume, float pitch) = 0;
 		virtual bool PlayOneShotAt(AssetHandle clip, const glm::vec3& position, float volume, float pitch) = 0;
+
+		// Whether the entity has an AudioSourceComponent (whether or not it is active).
+		virtual bool HasSource(Entity entity) = 0;
 	};
 
 	//////////////////////////////////////////////////////////////////////////
@@ -336,6 +345,9 @@ namespace Strata
 		// A joint's world transform in the animator's current pose (attach things to a hand); nothing without a pose or for a
 		// joint the skeleton does not have.
 		virtual std::optional<glm::mat4> GetJointTransform(Entity animator, std::string_view joint) = 0;
+
+		// Whether the entity has an AnimatorComponent.
+		virtual bool HasAnimator(Entity entity) = 0;
 	};
 
 	// An event of an animation controller's state that the playhead passed (AnimationEvent): dispatched on the main thread

@@ -5,6 +5,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/EditorViewport.h"
+#include "Editor/ProjectThumbnail.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Renderer/GPUTestUtils.h"
 #include "TestHelpers.h"

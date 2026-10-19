@@ -131,7 +131,12 @@ TEST_SUITE("Asset")
 		CHECK(png->GetType() == AssetType::Texture);
 		REQUIRE(AssetImporterRegistry::FindByExtension(".stmat"));
 		CHECK(AssetImporterRegistry::FindByExtension(".stmat")->StoresSourceDirectly());
+#if ST_WITH_AUDIO
 		CHECK(AssetImporterRegistry::FindByExtension(".wav")->GetType() == AssetType::AudioClip);
+#else
+		// Without the audio module, audio files are no sources.
+		CHECK(AssetImporterRegistry::FindByExtension(".wav") == nullptr);
+#endif
 		CHECK(AssetImporterRegistry::FindByExtension(".ttf")->GetType() == AssetType::Font);
 		CHECK(AssetImporterRegistry::FindByExtension(".unknown") == nullptr);
 		CHECK(AssetImporterRegistry::FindByExtension("") == nullptr);
@@ -141,16 +146,23 @@ TEST_SUITE("Asset")
 		const AssetImporter* custom = AssetImporterRegistry::FindByExtension(".STTESTFONT");
 		REQUIRE(custom);
 		CHECK(custom->GetVersion() == 2);
-		CHECK(AssetImporterRegistry::GetAll().size() >= 8);
+		CHECK(AssetImporterRegistry::GetAll().size() >= 6);
 	}
 
 	TEST_CASE("Every asset type has a loader")
 	{
+		// The loaders of a module's types come with the module.
 		for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Mesh, AssetType::Material, AssetType::Texture,
-			AssetType::AudioClip, AssetType::Font })
+			AssetType::Font })
 		{
 			CAPTURE(AssetTypeToString(type));
 			CHECK(AssetLoaderRegistry::Find(type) != nullptr);
+		}
+		CHECK((AssetLoaderRegistry::Find(AssetType::AudioClip) != nullptr) == ST_WITH_AUDIO);
+		for (AssetType type : { AssetType::Skeleton, AssetType::AnimationClip, AssetType::AnimationController })
+		{
+			CAPTURE(AssetTypeToString(type));
+			CHECK((AssetLoaderRegistry::Find(type) != nullptr) == ST_WITH_ANIMATION);
 		}
 		CHECK(AssetLoaderRegistry::Find(AssetType::None) == nullptr);
 	}

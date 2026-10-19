@@ -2,10 +2,12 @@
 
 #include "Animation/AnimationTestUtils.h"
 #include "Scripting/ScriptTestUtils.h"
+#include "Strata/Animation/AnimationComponents.h"
 #include "Strata/Animation/AnimationSystem.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/SceneSystem.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 
 #include <algorithm>
 #include <optional>

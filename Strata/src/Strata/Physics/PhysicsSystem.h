@@ -131,6 +131,8 @@ namespace Strata
 		bool AddAngularImpulse(Entity entity, const glm::vec3& impulse) override;
 		bool SetGravityScale(Entity entity, float gravityScale) override;
 		bool IsSleeping(Entity entity) override;
+		Entity GetSimulatingBody(Entity entity) override;
+		bool IsDynamicBody(Entity entity) override;
 		bool WakeUp(Entity entity) override;
 		bool Teleport(Entity entity, const glm::vec3& position, const glm::quat& rotation) override;
 
