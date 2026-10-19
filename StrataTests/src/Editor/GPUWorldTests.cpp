@@ -314,7 +314,9 @@ TEST_SUITE("GPU.World")
 			mostPrepared = std::max(mostPrepared, preparedThisFrame);
 			prepared += preparedThisFrame;
 			unloads += unloadsStarted;
-			mostVisible = std::max(mostVisible, stats.VisibleProxies);
+			// The GPU-driven path counts what its culling saw on the GPU (frames later; a frame of feedback requests counts on
+			// the CPU only the proxies it still looked at): the counts as far as they are known.
+			mostVisible = std::max(mostVisible, AddGPUCounts(stats, renderer.GetGPUStats()).VisibleProxies);
 
 			// The loads started so far read and compile their cells before the source moves on, creating nothing outside a
 			// frame: how far the drive streams then depends on its decisions, not on how fast the machine reads.
