@@ -7,6 +7,7 @@
 #include "Editor/EditorViewport.h"
 #include "Editor/ProjectThumbnail.h"
 #include "FeatureTest/FeatureTestUtils.h"
+#include "Panels/GameViewPanel.h"
 #include "Renderer/GPUTestUtils.h"
 #include "TestHelpers.h"
 
@@ -881,8 +882,17 @@ TEST_SUITE("GPU.Editor.Viewport")
 		image = harness.Capture({ { "camera", "scene" }, { "width", 200 }, { "waitForAssets", false } });
 		CHECK(image.Height == 150);
 
-		// A closed or hidden Game view keeps no render targets (the panel frees them: ReleaseTargets).
-		game->ReleaseTargets();
+		// A hidden or closed Game view keeps no render targets: the panel frees them when it is hidden behind another tab or
+		// collapsed (OnHidden) and when it is closed (OnDetach), and stops asking for its size.
+		REQUIRE(game->GetSize() == glm::uvec2(1280, 720));
+		GameViewPanel panel;
+		EditorPanelContext panelContext { context, harness.Commands, harness.Runner };
+		panel.OnHidden(panelContext);
+		CHECK(game->GetSize() == glm::uvec2(0));
+		CHECK(viewport.GetGameViewSize() == glm::uvec2(0));
+		REQUIRE(game->Render(context, frame.RenderSize, *view, viewport.GetSettings(), false));
+		REQUIRE(game->GetSize() == glm::uvec2(1280, 720));
+		panel.OnDetach(panelContext);
 		CHECK(game->GetSize() == glm::uvec2(0));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
