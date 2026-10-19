@@ -369,7 +369,10 @@ namespace Strata
 			if (!views[index].WorldSpace || !frame.HasCamera)
 				continue;
 			m_ViewTransforms[index] = static_cast<uint32_t>(m_Transforms.size());
-			m_Transforms.push_back(frame.ViewProjection * ui.GetCanvasWorldMatrix(views[index]));
+			// Relative to the camera (the subtraction in double), as the scene's depth the canvas is tested against was drawn.
+			glm::mat4 relative = ui.GetCanvasWorldMatrix(views[index]);
+			relative[3] = glm::vec4(glm::vec3(glm::dvec3(glm::vec3(relative[3])) - glm::dvec3(frame.CameraPosition)), relative[3].w);
+			m_Transforms.push_back(frame.ViewProjection * relative);
 		}
 		const bool recreated = EnsureBuffer(m_TransformBuffer, std::max<uint64_t>(m_Transforms.size(), 1) * sizeof(glm::mat4), sizeof(glm::mat4), "UITransforms");
 		if (!m_TransformBuffer)

@@ -702,6 +702,66 @@ TEST_SUITE("GPU.GameUI")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A world-space canvas 100 km from the origin draws as it does at the origin, behind the same geometry")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle red = assets.AddMaterial(UnlitColor({ 1.0f, 0.0f, 0.0f, 1.0f }));
+		// A 2 x 1 m sign with a checker of 10 cm squares, a cube turned through it (the sign's depth test against the scene
+		// decides the line where they meet), seen from a meter and a half: a pixel spans about 7 mm there, what 32-bit world
+		// positions resolve 100 km from the origin. Everything at `offset` (exact as floats far from the origin too).
+		const auto renderAt = [&](const glm::vec3& offset)
+		{
+			UIScene ui;
+			Entity sign = ui.Target.CreateEntity("Sign");
+			sign.GetComponent<TransformComponent>().Translation = offset;
+			sign.AddComponent<UIRectComponent>();
+			UICanvasComponent& canvas = sign.AddComponent<UICanvasComponent>();
+			canvas.RenderMode = UICanvasRenderMode::WorldSpace;
+			canvas.ReferenceResolution = { 200.0f, 100.0f };
+			canvas.WorldUnitsPerUnit = 0.01f;
+			ui.AddImage(sign, "Panel", { 0.0f, 0.0f }, { 200.0f, 100.0f }, { 0.0f, 1.0f, 0.0f, 1.0f });
+			for (int y = 0; y < 10; y++)
+			{
+				for (int x = (y % 2); x < 20; x += 2)
+					ui.AddImage(sign, "Square", { static_cast<float>(x) * 10.0f, static_cast<float>(y) * 10.0f }, { 10.0f, 10.0f }, { 0.0f, 0.0f, 1.0f, 1.0f });
+			}
+			Entity cube = AddMesh(ui.Target, BuiltinAssets::CubeMesh, red, offset + glm::vec3(0.25f, 0.0f, 0.0f), "Cube");
+			cube.GetComponent<TransformComponent>().Rotation = glm::quat(glm::vec3(0.3f, 0.7f, 0.0f));
+			cube.GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
+
+			const glm::uvec2 size(256, 256);
+			SceneCamera camera = LookAt(offset + glm::vec3(0.125f, 0.25f, 1.5f), offset + glm::vec3(0.0f, 0.0f, 0.0f));
+			camera.Projection = Math::PerspectiveReverseZ(glm::radians(60.0f), 1.0f, 0.1f, 500.0f);
+			camera.ClearColor = { 0.0f, 0.0f, 0.0f, 1.0f };
+			SceneRenderer renderer(ExactSpecification());
+			renderer.SetViewportSize(size.x, size.y);
+			ReadbackImage image;
+			for (int frame = 0; frame < 3; frame++)
+				image = RenderToImage(renderer, ui.Target, camera);
+			CHECK(renderer.GetStats().Overlays.Canvases == 2); // The sign, and UIScene's empty screen canvas
+			return image;
+		};
+		const ReadbackImage origin = renderAt(glm::vec3(0.0f));
+		const ReadbackImage far = renderAt(glm::vec3(100'000.0f, 0.0f, 100'000.0f));
+		size_t differing = 0;
+		for (size_t index = 0; index < origin.Pixels.size(); index += 4)
+		{
+			for (size_t channel = 0; channel < 3; channel++)
+			{
+				if (std::abs(int(origin.Pixels[index + channel]) - int(far.Pixels[index + channel])) > 2)
+				{
+					differing++;
+					break;
+				}
+			}
+		}
+		MESSAGE(differing, " of ", origin.Pixels.size() / 4, " pixels differ 100 km away");
+		CHECK(static_cast<double>(differing) <= 0.001 * static_cast<double>(origin.Pixels.size() / 4));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A screen view zooms and pans the canvases and the HUD text without laying them out again")
 	{
 		GPUContext gpu;

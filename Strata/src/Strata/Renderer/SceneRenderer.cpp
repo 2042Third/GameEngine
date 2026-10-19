@@ -2410,7 +2410,9 @@ namespace Strata
 	{
 		SceneOverlayFrame frame;
 		frame.OverlayScene = options.OverlayScene ? options.OverlayScene : &scene;
-		frame.ViewProjection = camera.Projection * camera.View;
+		// Camera-relative, as the scene's depth was drawn: world-space overlays keep their precision far from the origin.
+		frame.ViewProjection = camera.Projection * GetRelativeView(camera);
+		frame.CameraPosition = camera.Position;
 		frame.HasCamera = frame.OverlayScene == &scene;
 		frame.ViewportSize = m_ViewportSize;
 		frame.ScreenView = options.ScreenView;

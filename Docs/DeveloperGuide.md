@@ -2423,11 +2423,13 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   (`SceneRenderer::GetRelativeView`); `CameraPosition` stays the camera's world position for the few shaders that need
   it (the grid). Vertex shaders place points with `TransformPositionRelative` (the instance's translation minus the camera
   first), and everything else positioned is uploaded relative to the camera, the subtraction done in double on the CPU:
-  light positions (`LightData::PositionRange`), the clusters' light bounds, debug lines, world-space text, the cascades'
+  light positions (`LightData::PositionRange`), the clusters' light bounds, debug lines, world-space text, world-space
+  canvases (overlay passes get the relative `SceneOverlayFrame::ViewProjection` and `CameraPosition`), the cascades'
   boxes (placed and texel-snapped in absolute light space in double, `CascadeBox::Relative*`). A new shader or upload of
   positions follows the same rule; `InstanceData` stays world space and 64 bytes. The GPU's culling tests relative bounds
   against relative planes; the CPU's (`SpatialIndex`) and the screen-size and LOD measures stay in world space, the same
-  on both paths. `GPU.SceneRenderer.CameraRelative` renders a scene 20 and 100 km from the origin against the origin's.
+  on both paths. `GPU.SceneRenderer.CameraRelative` renders a scene 20 and 100 km from the origin against the origin's,
+  and `GPU.GameUI` a world-space canvas 100 km out.
 
 ### Skinned meshes
 
