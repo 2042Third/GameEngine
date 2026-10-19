@@ -9,6 +9,7 @@
 
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -57,12 +58,17 @@ namespace Strata::Tests
 		AssetHandle GetCellScene(uint8_t layer, int32_t x, int32_t z) const;
 	};
 
-	// Writes the world into `directory`/World.stpak.
+	// Writes the world into `directory`/World.stpak. The Try forms return nullopt with the reason instead of failing the test
+	// (for helper processes, which run no test).
 	GeneratedWorld WriteGeneratedWorld(const std::filesystem::path& directory, const GeneratedWorldSpecification& specification);
+	std::optional<GeneratedWorld> TryWriteGeneratedWorld(const std::filesystem::path& directory, const GeneratedWorldSpecification& specification,
+		std::string* outError);
 	// Writes the world and a game manifest (`directory`/World.stgame) whose start scene is its persistent scene; the
 	// manifest's path.
 	std::filesystem::path WriteGeneratedWorldGame(const std::filesystem::path& directory, const GeneratedWorldSpecification& specification,
 		GeneratedWorld* outWorld = nullptr);
+	std::optional<std::filesystem::path> TryWriteGeneratedWorldGame(const std::filesystem::path& directory, const GeneratedWorldSpecification& specification,
+		GeneratedWorld* outWorld, std::string* outError);
 
 	// A generated world's pack mounted in a runtime asset manager, active while it lives.
 	struct MountedWorld

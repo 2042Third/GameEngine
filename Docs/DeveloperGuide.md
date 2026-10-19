@@ -1230,6 +1230,11 @@ works: Docs/Architecture.md, "World partition"; for people: Docs/Manual/Worlds.m
   sleep state and contact), before streamed cells arrive (`IPhysicsCapacity::Reserve` with the cooked counts), up to
   `PhysicsSettings::GrowthLimit`; only a world at that limit leaves bodies waiting, and the editor shows it (`physics.stats`,
   the Streaming panel's Physics section, a status pill).
+- **Tests.** `World.*` (asset, streamer, system, coordinates), `Scripting.World`, `Editor.World`, `Editor.WorldCook` and
+  `Editor.UI.World` run in the Core shards on worlds scaled down for Debug (`World/WorldTestUtils.h` generates and packs
+  them, `Editor/WorldProjectUtils.h` writes them into projects); `StrataRuntime.World` (label `feature`) drives a
+  generated 6 x 6 world of 2,500-entity cells headless through `StrataTests/Scripts/World` and fails on any cell without
+  collision or any perf-log row with a body waiting; the full-size cases are `Perf.World.*` and `Perf.Physics.*`.
 - **Idle cost.** A scene without a `WorldComponent` costs the World system one storage-size check per update, an editor
   without a world nothing, and a still world an update of O(sources); UI that shows cells (the cell map, the cell bounds)
   works them out again only when `WorldStreamingStats::StateVersion` changed.

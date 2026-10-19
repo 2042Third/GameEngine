@@ -80,6 +80,14 @@ namespace Strata::Tests
 
 	GeneratedWorld WriteGeneratedWorld(const std::filesystem::path& directory, const GeneratedWorldSpecification& specification)
 	{
+		std::string error;
+		std::optional<GeneratedWorld> world = TryWriteGeneratedWorld(directory, specification, &error);
+		REQUIRE_MESSAGE(world, error);
+		return std::move(*world);
+	}
+
+	std::optional<GeneratedWorld> TryWriteGeneratedWorld(const std::filesystem::path& directory, const GeneratedWorldSpecification& specification, std::string* outError)
+	{
 		GeneratedWorld world;
 		world.World = UUID(c_WorldHandle);
 		world.Persistent = UUID(c_PersistentHandle);
@@ -194,8 +202,8 @@ namespace Strata::Tests
 		if (specification.BuildPersistent)
 			sources.back().Dependencies.push_back(world.World);
 
-		std::string error;
-		REQUIRE_MESSAGE(data.Validate(&error), error);
+		if (!data.Validate(outError))
+			return std::nullopt;
 		AssetPackSource worldSource;
 		worldSource.Metadata.Handle = world.World;
 		worldSource.Metadata.Type = AssetType::World;
@@ -207,26 +215,38 @@ namespace Strata::Tests
 		sources.push_back(std::move(worldSource));
 		documents[c_WorldHandle] = ToBytes(WorldAsset::ToDocument(data));
 
-		REQUIRE_MESSAGE(AssetPackWriter::Write(world.PackPath, sources, [&](const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string*)
-		{
-			outData = documents.at(static_cast<uint64_t>(metadata.Handle));
-			return true;
-		}, {}, nullptr, &error), error);
+		if (!AssetPackWriter::Write(world.PackPath, sources, [&](const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string*)
+			{
+				outData = documents.at(static_cast<uint64_t>(metadata.Handle));
+				return true;
+			}, {}, nullptr, outError))
+			return std::nullopt;
 		return world;
 	}
 
 	std::filesystem::path WriteGeneratedWorldGame(const std::filesystem::path& directory, const GeneratedWorldSpecification& specification, GeneratedWorld* outWorld)
 	{
-		GeneratedWorld world = WriteGeneratedWorld(directory, specification);
+		std::string error;
+		const std::optional<std::filesystem::path> path = TryWriteGeneratedWorldGame(directory, specification, outWorld, &error);
+		REQUIRE_MESSAGE(path, error);
+		return *path;
+	}
+
+	std::optional<std::filesystem::path> TryWriteGeneratedWorldGame(const std::filesystem::path& directory, const GeneratedWorldSpecification& specification,
+		GeneratedWorld* outWorld, std::string* outError)
+	{
+		std::optional<GeneratedWorld> world = TryWriteGeneratedWorld(directory, specification, outError);
+		if (!world)
+			return std::nullopt;
 		GameManifest manifest;
 		manifest.Name = specification.Name;
 		manifest.AssetPack = "World.stpak";
-		manifest.StartScene = world.Persistent;
-		std::string error;
+		manifest.StartScene = world->Persistent;
 		const std::filesystem::path path = directory / "World.stgame";
-		REQUIRE_MESSAGE(manifest.Save(path, &error), error);
+		if (!manifest.Save(path, outError))
+			return std::nullopt;
 		if (outWorld)
-			*outWorld = std::move(world);
+			*outWorld = std::move(*world);
 		return path;
 	}
 
