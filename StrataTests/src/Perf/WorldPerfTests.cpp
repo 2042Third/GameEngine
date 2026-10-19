@@ -2,10 +2,15 @@
 
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
+#include "Renderer/GPUTestUtils.h"
+#include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/FrameProfiler.h"
 #include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Physics/PhysicsSystem.h"
+#include "Strata/Math/Math.h"
+#include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/SceneServices.h"
@@ -218,6 +223,90 @@ TEST_SUITE("Perf.World")
 			streamer.UnloadAll();
 			scene.FlushSubSceneUnloads();
 			scene.OnRuntimeStop();
+			return longest;
+		});
+	}
+}
+
+TEST_SUITE("PerfGPU.World")
+{
+	TEST_CASE("Driving across a 16x16-cell world at 40 m/s while a GPU-driven renderer draws keeps each frame's work small")
+	{
+		// Perf.World.CellDriveMaxFrame's drive with a renderer (GPUDrivenMode::Auto) drawing every frame from above the source:
+		// a frame's work is its loading work and the renderer's (its new proxies upload within NewInstanceBytesPerFrame, and
+		// what waits drains). Maximum by nature: the hitch of a frame that a cell's arrival or departure lands in.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		GeneratedWorldSpecification specification;
+		specification.GridX = 16;
+		specification.GridZ = 16;
+		specification.CellSize = 64.0f;
+		specification.StreamingDistance = 128.0f;
+		specification.EntitiesPerCell = 2'502;
+		specification.BodiesPerCell = 501;
+		MountedWorld mounted("PerfGPUWorldDrive", specification);
+
+		Perf::CheckBudgetConfirmed("PerfGPU.World.CellDriveMaxFrame", [&]
+		{
+			Scene scene("Drive");
+			Tests::AddNeutralPostProcess(scene);
+			scene.CreateEntity("Floor").AddComponent<BoxColliderComponent>();
+			scene.OnRuntimeStart();
+			WorldStreamer streamer(scene);
+			streamer.SetWorld(mounted.World.World);
+			WorldStreamingSource source;
+			source.Position = glm::vec3(32.0f, 1.0f, 512.0f);
+			source.Forward = glm::vec3(1.0f, 0.0f, 0.0f);
+			SceneRendererSpecification rendererSpecification;
+			rendererSpecification.GPUDriven = GPUDrivenMode::Auto;
+			SceneRenderer renderer(rendererSpecification);
+			renderer.SetViewportSize(640, 360);
+			const auto frame = [&]()
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				const double loading = StreamFrame(mounted.Manager.get(), scene, &streamer, std::span<const WorldStreamingSource>(&source, 1));
+				SceneCamera camera = Tests::LookAt(source.Position + glm::vec3(-40.0f, 60.0f, 0.0f), source.Position + glm::vec3(60.0f, 0.0f, 0.0f));
+				camera.Projection = Math::PerspectiveReverseZ(glm::radians(60.0f), 640.0f / 360.0f, 0.1f, 1000.0f);
+				camera.Far = 1000.0f;
+				const auto renderStart = std::chrono::steady_clock::now();
+				REQUIRE(renderer.Render(scene, camera));
+				const double rendering = MillisecondsSince(renderStart);
+				gpu.GetDevice().EndFrame();
+				return loading + rendering;
+			};
+			// The start: everything around the source loaded, as a prepared start leaves it, and drawn.
+			const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(5);
+			while (!streamer.IsLoadedAround(source.Position, 128.0f) || streamer.GetStats().CellsLoading > 0 || renderer.GetStats().DeferredInstanceBytes > 0)
+			{
+				REQUIRE(std::chrono::steady_clock::now() < deadline);
+				frame();
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			double longest = 0.0;
+			uint64_t mostDeferred = 0;
+			for (uint32_t index = 0; index < 900; index++)
+			{
+				const auto frameStart = std::chrono::steady_clock::now();
+				source.Position.x += 40.0f / 60.0f;
+				longest = std::max(longest, frame());
+				mostDeferred = std::max(mostDeferred, renderer.GetStats().DeferredInstanceBytes);
+				std::this_thread::sleep_until(frameStart + std::chrono::microseconds(16'667));
+			}
+			// What waited to upload drains once the source stops.
+			while (renderer.GetStats().DeferredInstanceBytes > 0 || streamer.GetStats().CellsLoading > 0)
+			{
+				REQUIRE(std::chrono::steady_clock::now() < deadline + std::chrono::minutes(1));
+				frame();
+			}
+			MESSAGE("Driving 600 m across the grid while drawing: ", streamer.GetStats().LoadsStarted, " loads, the longest frame's work ", longest,
+				" ms, at most ", mostDeferred, " bytes of new proxies waiting (GPU-driven: ", renderer.GetStats().GPUDriven, ")");
+			CHECK(renderer.GetStats().DeferredInstanceBytes == 0);
+			streamer.UnloadAll();
+			scene.FlushSubSceneUnloads();
+			scene.OnRuntimeStop();
+			CHECK(gpu.GetNewErrorCount() == 0);
 			return longest;
 		});
 	}

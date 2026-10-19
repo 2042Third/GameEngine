@@ -1368,8 +1368,11 @@ works: Docs/Architecture.md, "World partition"; for people: Docs/Manual/Worlds.m
   generated 6 x 6 world of 2,500-entity cells headless through `StrataTests/Scripts/World` and fails on any cell without
   collision or any perf-log row with a body waiting; `GPU.World` picks entities 20 km out through the entity-ID buffer
   and checks that a streaming world's render proxies prepared per frame (`SceneRendererStats::ProxyUpdates`, less the
-  proxies of cells that left rendering that frame) stay within the scene's entity budget; the full-size cases are
-  `Perf.World.*`, `Perf.Physics.*` and the real editor's `PerfGPU.Editor.EditFrameWorldIdle` and `PlayStartWorldMaxFrame`
+  proxies of cells that left rendering that frame) stay within the scene's entity budget, and that a cell of 25,000
+  renderers uploads its proxies within `SceneRendererSpecification::NewInstanceBytesPerFrame` (what waits drains) and
+  deactivates them in one frame within the default budget; the full-size cases are `Perf.World.*`,
+  `PerfGPU.World.CellDriveMaxFrame` (the drive with a GPU-driven renderer drawing), `Perf.Physics.*` and the real
+  editor's `PerfGPU.Editor.EditFrameWorldIdle` and `PlayStartWorldMaxFrame`
   (a 32 x 32-cell world of 2.56 million entities, the 25 cells around the camera loaded).
 - **Idle cost.** A scene without a `WorldComponent` costs the World system one storage-size check per update, an editor
   without a world nothing, and a still world an update of O(sources); UI that shows cells (the cell map, the cell bounds)

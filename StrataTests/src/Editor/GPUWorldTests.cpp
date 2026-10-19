@@ -88,6 +88,102 @@ TEST_SUITE("GPU.World")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A cell of 25,000 renderers loads and unloads within the instance upload budget, deferred uploads draining")
+	{
+		// One cell of 25,000 cubes streamed in and out while a GPU-driven renderer (Auto) draws every frame, its new proxies'
+		// upload budget smaller than the cell, so that the load spreads over frames: each frame uploads within the budget (the
+		// last proxy that starts within it may pass it), what waits drains, and the frame the sliced unload deactivates all
+		// 25,000 proxies stays within the default budget.
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Tests::ScopedJobSystem jobs(2, 1);
+		Tests::GeneratedWorldSpecification specification;
+		specification.GridX = 1;
+		specification.GridZ = 1;
+		specification.CellSize = 64.0f;
+		specification.EntitiesPerCell = 25'000;
+		specification.BodiesPerCell = 0;
+		Tests::MountedWorld mounted("GPUWorldUploadBudget", specification);
+
+		Scene scene("Persistent");
+		Tests::AddNeutralPostProcess(scene);
+		scene.GetSettings().MaxEntitiesInstantiatedPerFrame = 25'000;
+		scene.CreateEntity("World").AddComponent<WorldComponent>().World = mounted.World.World;
+		Entity source = scene.CreateEntity("Source");
+		source.GetComponent<TransformComponent>().Translation = glm::vec3(32.0f, 1.0f, 32.0f);
+		source.AddComponent<StreamingSourceComponent>().Radius = 40.0f;
+		scene.OnRuntimeStart();
+		const WorldStreamingSystem* world = scene.GetSystem<WorldStreamingSystem>();
+		REQUIRE(world);
+
+		SceneRendererSpecification rendererSpecification;
+		rendererSpecification.GPUDriven = GPUDrivenMode::Auto;
+		// The cell's entities arrive over frames (sub-scene slices): a budget below one frame's share of them makes uploads wait.
+		constexpr uint64_t c_Budget = 16ull << 10;
+		rendererSpecification.NewInstanceBytesPerFrame = c_Budget;
+		SceneRenderer renderer(rendererSpecification);
+		renderer.SetViewportSize(64, 64);
+		SceneCamera camera = Tests::LookAt(glm::vec3(32.0f, 120.0f, 33.0f), glm::vec3(32.0f, 0.0f, 32.0f));
+		camera.Projection = Math::PerspectiveReverseZ(glm::radians(60.0f), 1.0f, 0.1f, 1000.0f);
+		camera.Far = 1000.0f;
+		const auto frame = [&]()
+		{
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			mounted.Manager->Update();
+			SceneWorkBudget budget = SceneWorkBudget::ForFrame(scene.GetSettings());
+			scene.OnUpdateRuntime(Timestep(1.0f / 60.0f), &budget);
+			REQUIRE(renderer.Render(scene, camera));
+			gpu.GetDevice().EndFrame();
+			return renderer.GetStats();
+		};
+
+		// In: the cell's proxies upload over frames, each within the budget.
+		uint64_t mostUploaded = 0;
+		uint64_t mostDeferred = 0;
+		uint32_t framesDeferred = 0;
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes(2);
+		bool settled = false;
+		while (!settled)
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			const SceneRendererStats stats = frame();
+			const uint64_t uploaded = stats.InstanceBytesUploaded + stats.ProxyBytesUploaded;
+			mostUploaded = std::max(mostUploaded, uploaded);
+			mostDeferred = std::max(mostDeferred, stats.DeferredInstanceBytes);
+			framesDeferred += stats.DeferredInstanceBytes > 0 ? 1 : 0;
+			settled = world->GetStreamer()->GetStats().CellsLoaded == 1 && world->GetStreamer()->GetStats().CellsLoading == 0 && stats.DeferredInstanceBytes == 0
+				&& stats.DeferredProxies == 0;
+			if (!settled)
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		MESSAGE("Loading 25,000 proxies: at most ", mostUploaded, " bytes uploaded in a frame (budget ", c_Budget, "), at most ", mostDeferred,
+			" deferred, deferred for ", framesDeferred, " frames");
+		CHECK(renderer.GetStats().GPUDriven);
+		CHECK(framesDeferred > 0);           // The cell was larger than a frame's budget
+		CHECK(mostUploaded <= c_Budget + 4096); // One proxy that starts within the budget may pass it
+		// Every proxy reached the GPU's copy: its culling sees all 25,000 in view (at 64 x 64 pixels, below the size to draw).
+		frame();
+		CHECK(Tests::GetDrawnCounts(renderer).VisibleProxies == specification.EntitiesPerCell);
+
+		// Out: the sliced unload deactivates all 25,000 proxies in the frame it starts, within the default budget.
+		source.GetComponent<TransformComponent>().Translation = glm::vec3(5000.0f, 1.0f, 5000.0f);
+		source.MarkModified<TransformComponent>();
+		uint64_t unloadFrameBytes = 0;
+		while (world->GetStreamer()->GetStats().CellsLoaded + world->GetStreamer()->GetStats().CellsUnloading > 0)
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			const SceneRendererStats stats = frame();
+			unloadFrameBytes = std::max(unloadFrameBytes, stats.InstanceBytesUploaded + stats.ProxyBytesUploaded);
+		}
+		MESSAGE("Unloading them: at most ", unloadFrameBytes, " bytes uploaded in a frame");
+		CHECK(unloadFrameBytes <= SceneRendererSpecification().NewInstanceBytesPerFrame);
+		CHECK(renderer.GetStats().DeferredInstanceBytes == 0);
+		Tests::CheckSceneCaches(scene);
+		scene.OnRuntimeStop();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A streaming world prepares no more render proxies per frame than the frame's entity budget")
 	{
 		// A 6 x 6 world of 60 cubes per cell, streamed by a source driven across it and back while a renderer draws every
