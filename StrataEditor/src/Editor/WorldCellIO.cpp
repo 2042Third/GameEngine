@@ -7,7 +7,6 @@
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Math/AABB.h>
 #include <Strata/Physics/PhysicsComponents.h>
-#include <Strata/Physics/PhysicsWorld.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
@@ -34,87 +33,104 @@ namespace Strata
 			}
 		}
 
-	}
-
-	namespace WorldCellIO
-	{
-
-		CellSummary SummarizeScene(const Scene& scene, const AssetManagerBase& assets, AssetHandle asset)
+		// Adds an entity to a summary: its ID, its bounds (position, mesh, colliders) and whether it may own a body (as
+		// PhysicsWorld::CountBodyCandidates counts: a rigid body or a collider, and a character controller's presence body).
+		void AddEntity(const Scene& scene, entt::entity handle, const AssetManagerBase& assets, WorldCellIO::CellSummary& result, AABB& bounds, uint64_t& bodies)
 		{
-			CellSummary result;
-			AABB bounds;
 			const entt::registry& registry = scene.GetRegistry();
-			for (const entt::entity handle : registry.view<const IDComponent>())
+			const Entity entity(handle, const_cast<Scene*>(&scene));
+			result.EntityIDs.push_back(registry.get<IDComponent>(handle).ID);
+			const glm::mat4 transform = scene.GetWorldTransform(entity);
+			const glm::vec3 position(transform[3]);
+			bounds.Min = glm::min(bounds.Min, position);
+			bounds.Max = glm::max(bounds.Max, position);
+			if (const MeshRendererComponent* renderer = registry.try_get<MeshRendererComponent>(handle))
 			{
-				const Entity entity(handle, const_cast<Scene*>(&scene));
-				result.EntityIDs.push_back(registry.get<IDComponent>(handle).ID);
-				const glm::mat4 transform = scene.GetWorldTransform(entity);
-				const glm::vec3 position(transform[3]);
-				bounds.Min = glm::min(bounds.Min, position);
-				bounds.Max = glm::max(bounds.Max, position);
-				if (const MeshRendererComponent* renderer = registry.try_get<MeshRendererComponent>(handle))
-				{
-					if (const std::optional<AABB> mesh = assets.GetBounds(renderer->Mesh))
-						AddBox(bounds, transform, mesh->Min, mesh->Max);
-				}
-				if (const BoxColliderComponent* box = registry.try_get<BoxColliderComponent>(handle))
-					AddBox(bounds, transform, box->Offset - box->HalfExtents, box->Offset + box->HalfExtents);
-				if (const SphereColliderComponent* sphere = registry.try_get<SphereColliderComponent>(handle))
-					AddBox(bounds, transform, sphere->Offset - glm::vec3(sphere->Radius), sphere->Offset + glm::vec3(sphere->Radius));
-				if (const CapsuleColliderComponent* capsule = registry.try_get<CapsuleColliderComponent>(handle))
-				{
-					const glm::vec3 extent(capsule->Radius, capsule->HalfHeight + capsule->Radius, capsule->Radius);
-					AddBox(bounds, transform, capsule->Offset - extent, capsule->Offset + extent);
-				}
-				if (const MeshColliderComponent* collider = registry.try_get<MeshColliderComponent>(handle))
-				{
-					const MeshRendererComponent* renderer = registry.try_get<MeshRendererComponent>(handle);
-					const AssetHandle mesh = collider->Mesh.IsValid() ? collider->Mesh : (renderer ? renderer->Mesh : UUID::Null());
-					if (const std::optional<AABB> meshBounds = assets.GetBounds(mesh))
-						AddBox(bounds, transform, meshBounds->Min, meshBounds->Max);
-				}
+				if (const std::optional<AABB> mesh = assets.GetBounds(renderer->Mesh))
+					AddBox(bounds, transform, mesh->Min, mesh->Max);
 			}
+			if (const BoxColliderComponent* box = registry.try_get<BoxColliderComponent>(handle))
+				AddBox(bounds, transform, box->Offset - box->HalfExtents, box->Offset + box->HalfExtents);
+			if (const SphereColliderComponent* sphere = registry.try_get<SphereColliderComponent>(handle))
+				AddBox(bounds, transform, sphere->Offset - glm::vec3(sphere->Radius), sphere->Offset + glm::vec3(sphere->Radius));
+			if (const CapsuleColliderComponent* capsule = registry.try_get<CapsuleColliderComponent>(handle))
+			{
+				const glm::vec3 extent(capsule->Radius, capsule->HalfHeight + capsule->Radius, capsule->Radius);
+				AddBox(bounds, transform, capsule->Offset - extent, capsule->Offset + extent);
+			}
+			if (const MeshColliderComponent* collider = registry.try_get<MeshColliderComponent>(handle))
+			{
+				const MeshRendererComponent* renderer = registry.try_get<MeshRendererComponent>(handle);
+				const AssetHandle mesh = collider->Mesh.IsValid() ? collider->Mesh : (renderer ? renderer->Mesh : UUID::Null());
+				if (const std::optional<AABB> meshBounds = assets.GetBounds(mesh))
+					AddBox(bounds, transform, meshBounds->Min, meshBounds->Max);
+			}
+			if (registry.any_of<RigidBodyComponent, BoxColliderComponent, SphereColliderComponent, CapsuleColliderComponent, MeshColliderComponent>(handle))
+				bodies++;
+			if (registry.all_of<CharacterControllerComponent>(handle))
+				bodies++;
+		}
+
+		void FinishSummary(WorldCellIO::CellSummary& result, const AABB& bounds, uint64_t bodies, const AssetManagerBase& assets, AssetHandle asset)
+		{
 			std::sort(result.EntityIDs.begin(), result.EntityIDs.end());
 			result.Summary.Entities = result.EntityIDs.size();
-			result.Summary.Bodies = PhysicsWorld::CountBodyCandidates(scene);
+			result.Summary.Bodies = static_cast<uint32_t>(std::min<uint64_t>(bodies, UINT32_MAX));
 			if (bounds.IsValid())
 			{
 				result.Summary.BoundsMin = bounds.Min;
 				result.Summary.BoundsMax = bounds.Max;
 			}
-			if (asset.IsValid())
+			result.Summary.ClosureBytes = WorldCellIO::GetClosureBytes(assets, asset);
+		}
+
+	}
+
+	namespace WorldCellIO
+	{
+
+		uint64_t GetClosureBytes(const AssetManagerBase& assets, AssetHandle asset)
+		{
+			uint64_t bytes = 0;
+			if (!asset.IsValid())
+				return bytes;
+			for (const AssetHandle member : assets.GetDependencyClosure(asset, AssetClosureScope::Load))
 			{
-				for (const AssetHandle member : assets.GetDependencyClosure(asset, AssetClosureScope::Load))
-				{
-					if (const std::optional<AssetMetadata> metadata = assets.GetMetadata(member))
-						result.Summary.ClosureBytes += metadata->StoredSize;
-				}
+				if (const std::optional<AssetMetadata> metadata = assets.GetMetadata(member))
+					bytes += metadata->StoredSize;
 			}
+			return bytes;
+		}
+
+		CellSummary SummarizeScene(const Scene& scene, const AssetManagerBase& assets, AssetHandle asset)
+		{
+			CellSummary result;
+			AABB bounds;
+			uint64_t bodies = 0;
+			for (const entt::entity handle : scene.GetRegistry().view<const IDComponent>())
+				AddEntity(scene, handle, assets, result, bounds, bodies);
+			FinishSummary(result, bounds, bodies, assets, asset);
 			return result;
 		}
 
-		nlohmann::json SerializeDocument(const Scene& scene, const std::string& name, const std::vector<Entity>& roots, bool withSettings)
+		CellSummary SummarizeEntities(const Scene& scene, std::span<const Entity> roots, const AssetManagerBase& assets, AssetHandle asset)
 		{
-			// A scene of no entities with the settings gives the document's frame.
-			Scene shell(name);
-			shell.GetSettings() = scene.GetSettings();
-			nlohmann::json document = SceneSerializer::Serialize(shell);
-			document["Scene"]["Entities"] = SceneSerializer::SerializeEntities(scene, roots)["Entities"];
-			if (!withSettings)
-				document["Scene"].erase("Settings");
-			return document;
-		}
-
-		std::optional<size_t> WriteDocument(EditorAssetManager& assets, AssetHandle asset, AssetType type, const nlohmann::json& document, bool reload,
-			std::string* outError)
-		{
-			std::vector<AssetHandle> references;
-			const bool scanned = AssetDependencies::ScanDocument(type, document, references);
-			const std::string text = JsonUtils::Dump(document, 1, '\t') + "\n";
-			const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(text.data()), text.size());
-			if (!assets.SaveNativeAsset(asset, bytes, reload, outError, scanned ? &references : nullptr))
-				return std::nullopt;
-			return text.size();
+			CellSummary result;
+			AABB bounds;
+			uint64_t bodies = 0;
+			std::vector<Entity> stack(roots.begin(), roots.end());
+			while (!stack.empty())
+			{
+				const Entity entity = stack.back();
+				stack.pop_back();
+				if (!entity)
+					continue;
+				AddEntity(scene, entity.GetHandle(), assets, result, bounds, bodies);
+				const std::vector<Entity> children = entity.GetChildren();
+				stack.insert(stack.end(), children.begin(), children.end());
+			}
+			FinishSummary(result, bounds, bodies, assets, asset);
+			return result;
 		}
 
 		AssetHandle CreateDocument(EditorAssetManager& assets, const std::string& path, AssetType type, AssetHandle handle, const nlohmann::json& document,
@@ -146,27 +162,38 @@ namespace Strata
 			return created;
 		}
 
-		std::optional<CellSummary> ReadCellSummary(AssetManagerBase& assets, AssetHandle scene, std::string* outError)
+		bool ReadScene(AssetManagerBase& assets, AssetHandle asset, Scene& outScene, const std::function<bool()>& isCancelled, std::string* outError)
 		{
 			std::vector<uint8_t> bytes;
 			std::string error;
-			if (!assets.ReadStoredData(scene, bytes, &error))
+			if (!assets.ReadStoredData(asset, bytes, &error))
 			{
 				if (outError)
 					*outError = fmt::format("cannot read it: {}", error);
-				return std::nullopt;
+				return false;
 			}
-			const std::optional<nlohmann::json> document = JsonUtils::Parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), &error);
-			Scene cell("Cell");
-			if (!document || !SceneSerializer::Deserialize(cell, *document, &error))
+			SceneReadOptions options;
+			options.IsCancelled = isCancelled;
+			// Read on an I/O job already: its entities are parsed there, not on the job system's threads.
+			options.Parallel = false;
+			if (!SceneSerializer::DeserializeText(outScene, std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), options, &error))
 			{
 				if (outError)
 					*outError = fmt::format("it is no scene: {}", error);
-				return std::nullopt;
+				return false;
 			}
-			cell.UpdateWorldTransforms();
+			outScene.UpdateWorldTransforms();
+			return true;
+		}
+
+		std::optional<CellSummary> ReadCellSummary(AssetManagerBase& assets, AssetHandle scene, const std::function<bool()>& isCancelled, std::string* outError)
+		{
+			Scene cell("Cell");
+			if (!ReadScene(assets, scene, cell, isCancelled, outError))
+				return std::nullopt;
 			return SummarizeScene(cell, assets, scene);
 		}
+
 
 	}
 

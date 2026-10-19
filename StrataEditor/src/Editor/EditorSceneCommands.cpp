@@ -275,6 +275,10 @@ namespace Strata
 					failed.Announced = true;
 					return failed;
 				}
+				// A world's save ends with its World document: what it wrote is listed then.
+				if (context.IsWorldSaveWriting(id))
+					return std::nullopt;
+				const std::optional<std::vector<WorldSavedDocument>> documents = context.GetWorldSaveDocuments(id);
 				constexpr double c_Megabyte = 1024.0 * 1024.0;
 				const DocumentSaveItemResult* written = status->Items.empty() ? nullptr : &status->Items.front();
 				nlohmann::json value = {
@@ -288,6 +292,22 @@ namespace Strata
 						{ "peakPrivateMBDuring", static_cast<double>(peakPrivate) / c_Megabyte } } } };
 				if (!frameTimes.IsEmpty())
 					value["frameTimes"] = frameTimes.Describe();
+				if (documents)
+				{
+					nlohmann::json list = nlohmann::json::array();
+					uint64_t bytes = 0;
+					uint64_t entities = 0;
+					for (const WorldSavedDocument& document : *documents)
+					{
+						list.push_back({ { "path", document.Path }, { "kind", document.Kind }, { "bytes", document.Bytes }, { "entities", document.Entities } });
+						bytes += document.Bytes;
+						entities += document.Entities;
+					}
+					value["path"] = path;
+					value["bytes"] = bytes;
+					value["entities"] = entities;
+					value["documents"] = std::move(list);
+				}
 				return EditorCommandResult::Ok(std::move(value));
 			});
 		}
@@ -576,8 +596,9 @@ namespace Strata
 			"frameTimes (the editor's frames meanwhile: count, medianMs, meanMs, p95Ms, maxMs), memory {privateMBBefore, peakPrivateMBDuring}}. "
 			"With wait false it answers at once with {scene, path, saveId, state: Writing | Queued}; editor.status's saving lists the saves "
 			"in flight. A save queues behind one that writes. New scenes need scene.saveAs first. A world's persistent scene saves "
-			"the documents changed since the last save: the persistent scene (without the cells' entities), each dirty cell and the world's "
-			"document with those cells' index entries; documents lists them ({path, kind: persistent, cell or world, bytes, entities}).",
+			"the documents changed since the last save, in the background too: the persistent scene (without the cells' entities), each dirty "
+			"cell and then the world's document with those cells' index entries; documents lists them ({path, kind: persistent, cell or world, "
+			"bytes, entities}; bytes and entities are their sums), and a world's save waits for its previous one.",
 			ObjectSchema({ { "wait", BoolSchema("Answer once the document is written (default true); false answers at once with the save's saveId") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -585,17 +606,14 @@ namespace Strata
 				const bool wait = arguments.GetBool("wait", true);
 				if (!arguments.IsValid())
 					return arguments.Fail();
-				if (context.GetWorld())
+				const auto start = [wait](EditorContext& context, const nlohmann::json&)
 				{
-					std::string error;
-					if (!context.SaveScene(&error))
-						return EditorCommandResult::Fail(error);
-					nlohmann::json documents = nlohmann::json::array();
-					for (const WorldSavedDocument& document : context.GetLastWorldSave())
-						documents.push_back({ { "path", document.Path }, { "kind", document.Kind }, { "bytes", document.Bytes }, { "entities", document.Entities } });
-					return EditorCommandResult::Ok({ { "scene", UUIDToJson(context.GetSceneHandle()) }, { "documents", std::move(documents) } });
-				}
-				return StartSceneSave(context, wait, [](EditorContext& context, std::string* outError) { return context.BeginSaveScene(outError); });
+					return StartSceneSave(context, wait, [](EditorContext& context, std::string* outError) { return context.BeginSaveScene(outError); });
+				};
+				// A world saves once its previous save ended (its documents and its index are written by one save at a time).
+				if (context.GetWorld() && context.GetWorld()->IsSaving())
+					return AfterSaves(start)(context, parameters);
+				return start(context, parameters);
 			} }));
 
 		registry.Register(MayDefer({ "scene.saveAs",

@@ -60,6 +60,7 @@ namespace Strata
 	struct SceneWorkBudget;
 	struct WorldCookCache;
 	struct WorldSavedDocument;
+	struct WorldSavePlan;
 	class EditorWorld;
 
 	enum class SceneState : uint8_t
@@ -383,8 +384,11 @@ namespace Strata
 		const Ref<WorldCookCache>& GetWorldCookCache();
 		// The world the edited scene is the persistent scene of, streamed around the editor camera; null when it is none.
 		EditorWorld* GetWorld() const { return m_World.get(); }
-		// The documents the last save of a world wrote (scene.save's documents).
-		const std::vector<WorldSavedDocument>& GetLastWorldSave() const { return m_LastWorldSave; }
+		// Whether the save whose first request has this ID (BeginSaveScene) is the world's latest save, still writing (its World
+		// document follows its cells).
+		bool IsWorldSaveWriting(uint64_t save) const { return save != 0 && m_WorldSave.Request == save && !m_WorldSave.Ended; }
+		// The documents that save wrote (scene.save's documents) once it ended; nullopt for another save.
+		std::optional<std::vector<WorldSavedDocument>> GetWorldSaveDocuments(uint64_t save) const;
 		// Thumbnails of the open project's assets (Content Browser, Asset tab); null without a project or a GPU.
 		ThumbnailCache* GetThumbnails() const { return m_Thumbnails.get(); }
 		// The project's picture for the launcher, made after each scene save.
@@ -665,6 +669,14 @@ namespace Strata
 		// A save of the edited scene ended (DocumentSaver's completion).
 		void OnSceneSaveEnded(const DocumentSaveStatus& status, AssetHandle handle, const RecoverySaveToken& token,
 			const std::optional<SceneSaveRestore>& restore);
+		// Takes the snapshot and submits the save of the edited world's changed documents (EditorWorld::BeginSave).
+		uint64_t SubmitWorldSave(std::string* outError);
+		// The world save's first request ended: marks, the recovery journal, then the World document's request.
+		void OnWorldSaveEnded(const DocumentSaveStatus& status, AssetHandle handle, const RecoverySaveToken& token, const WorldSavePlan& plan);
+		// The world save's World document was written (or failed): the save ended.
+		void OnWorldIndexSaved(const DocumentSaveStatus& status);
+		// Tells the person that a save failed (a notification naming the asset, the console shown).
+		void NotifySaveFailed(const std::string& label, const std::string& error, AssetHandle asset);
 		// Blocks until the save ended (SaveScene, SaveSceneAs): false with the reason when it failed.
 		bool WaitForSave(uint64_t id, std::string* outError);
 		void CloseScriptEngine();
@@ -836,7 +848,14 @@ namespace Strata
 		uint64_t m_WorldCookCacheGeneration = 0; // The project the cache belongs to (GetProjectGeneration)
 		// Declared after the undo stack and the edited scene, which it observes and streams into: it goes first.
 		Scope<EditorWorld> m_World;
-		std::vector<WorldSavedDocument> m_LastWorldSave;
+		// The latest save of the world: its first request, whether it ended (with its World document) and what it wrote.
+		struct WorldSaveState
+		{
+			uint64_t Request = 0;
+			bool Ended = true;
+			std::vector<WorldSavedDocument> Documents;
+		};
+		WorldSaveState m_WorldSave;
 	};
 
 }

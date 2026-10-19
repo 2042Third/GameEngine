@@ -1341,8 +1341,11 @@ works: Docs/Architecture.md, "World partition"; for people: Docs/Manual/Worlds.m
 - **Membership.** A loaded cell is a sub-scene whose top-level entities carry its `SubSceneComponent` (runtime only:
   never serialized, never registered). It changes only through `Scene::SetSubSceneOf` (`AdoptSubScene` for a new cell)
   and, in the editor, `EditorWorld` (`Recell`, `MoveEntities`), so undo steps record it (`EntityState::Cell`) and
-  `SceneEdit::CheckCells` can refuse a step whose cell is not loaded. Only `EditorWorld::Save` writes cell documents,
-  through the `Editor/WorldCellIO` seam (world-io's writer replaces it); a cell's scene handle is derived from the
+  `SceneEdit::CheckCells` can refuse a step whose cell is not loaded. Only `EditorWorld` writes cell documents, through
+  one `DocumentSaver` request per save from a `SerializedOnly` snapshot (`EditorWorld::BeginSave`, items with the UUIDs of
+  each document's top-level entities as `SceneWriteOptions::Roots`), then the World document with the cells' index
+  entries in a second request once their stamps exist (`FinishSave`); cells and the persistent scene are read with the
+  streamed reader (`Editor/WorldCellIO`, `SceneSerializer::DeserializeText`); a cell's scene handle is derived from the
   world's (`DeriveSubAssetHandle(world, "Cell/<layer>/<x>/<z>")`), so steps name cells before their files exist.
 - **Precision.** Scenes and physics are float32: worlds stay within `WorldData::c_SupportedExtent` (20 km) of the
   origin, where positions resolve to about 2 mm; `world.cook` warns about cells beyond it and `World.Coordinates` tests

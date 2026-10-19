@@ -808,13 +808,9 @@ namespace Strata
 				*outError = "The scene has not been saved yet; save it under a path first";
 			return 0;
 		}
-		// A world saves its documents at once (SaveScene).
+		// A world saves the documents it changed: the persistent scene, the dirty cells, its index.
 		if (m_World)
-		{
-			if (outError)
-				*outError = "A world's documents are saved with scene.save";
-			return 0;
-		}
+			return SubmitWorldSave(outError);
 		return SubmitSceneSave(m_SceneHandle, {}, std::nullopt, outError);
 	}
 
@@ -906,14 +902,7 @@ namespace Strata
 		if (status.State != DocumentSaveState::Done)
 		{
 			m_Recovery->ReleaseSave(token);
-			EditorNotification notification;
-			notification.Level = NotificationLevel::Error;
-			notification.Title = fmt::format("Saving '{}' failed", status.Label);
-			notification.Message = status.Error;
-			notification.ShowConsole = true;
-			if (m_AssetManager && m_AssetManager->IsHandleValid(handle))
-				notification.Asset = handle;
-			m_Notifications.Post(std::move(notification));
+			NotifySaveFailed(status.Label, status.Error, handle);
 			return;
 		}
 		if (!sameScene)
@@ -926,6 +915,144 @@ namespace Strata
 		const auto [sceneFile, scenePath] = GetSceneFile(handle);
 		const std::string baseHash = status.Items.empty() ? std::string() : Crypto::ToHex(status.Items.front().Sha256);
 		m_Recovery->OnSaved(handle, sceneFile, scenePath, baseHash, token, *m_EditScene, IsSceneModified());
+	}
+
+	void EditorContext::NotifySaveFailed(const std::string& label, const std::string& error, AssetHandle asset)
+	{
+		EditorNotification notification;
+		notification.Level = NotificationLevel::Error;
+		notification.Title = fmt::format("Saving '{}' failed", label);
+		notification.Message = error;
+		notification.ShowConsole = true;
+		if (m_AssetManager && m_AssetManager->IsHandleValid(asset))
+			notification.Asset = asset;
+		m_Notifications.Post(std::move(notification));
+	}
+
+	uint64_t EditorContext::SubmitWorldSave(std::string* outError)
+	{
+		// The snapshot holds the history's state from here on: a drag that goes on makes a step of its own.
+		m_UndoStack.BreakMerge();
+		Ref<WorldSavePlan> plan = CreateRef<WorldSavePlan>();
+		if (!m_World->BeginSave(*m_AssetManager, m_SceneHandle, *plan, outError))
+			return 0;
+		DocumentSaveRequest request;
+		request.SavePoint = m_UndoStack.GetSavePoint();
+		request.Snapshot = Scene::Copy(m_EditScene, SceneCopyOptions { true });
+		request.Label = m_EditScene->GetName();
+		request.Items = plan->Items;
+		const SceneRecovery::SaveToken token = m_Recovery->BeginSave();
+		const AssetHandle handle = m_SceneHandle;
+		const uint64_t id = m_DocumentSaver.Submit(std::move(request), [this, handle, token, plan](const DocumentSaveStatus& status)
+		{
+			OnWorldSaveEnded(status, handle, token, *plan);
+		}, outError);
+		if (id == 0)
+		{
+			m_Recovery->ReleaseSave(token);
+			m_World->CancelSave(*m_AssetManager, *plan);
+			return 0;
+		}
+		m_WorldSave = WorldSaveState { id, false, {} };
+		return id;
+	}
+
+	void EditorContext::OnWorldSaveEnded(const DocumentSaveStatus& status, AssetHandle handle, const RecoverySaveToken& token, const WorldSavePlan& plan)
+	{
+		std::vector<WorldSavedDocument> documents;
+		for (size_t index = 0; index < plan.Documents.size() && index < status.Items.size(); index++)
+		{
+			const DocumentSaveItemResult& item = status.Items[index];
+			if (item.Error.empty())
+				documents.push_back({ item.Path.empty() ? plan.Documents[index].Path : item.Path, plan.Documents[index].Kind, item.Bytes, item.Entities });
+		}
+		const bool current = m_WorldSave.Request == status.ID;
+		if (current)
+			m_WorldSave.Documents = documents;
+		// The world was replaced meanwhile (another scene or project): the files are written, but nothing of what is edited
+		// now is marked, and its journal hears nothing.
+		const bool sameWorld = m_World && m_SceneHandle == handle && status.SavePoint.Generation == m_UndoStack.GetSavePoint().Generation;
+		if (!sameWorld || !m_AssetManager)
+		{
+			m_Recovery->ReleaseSave(token);
+			if (current)
+				m_WorldSave.Ended = true;
+			return;
+		}
+		std::string indexError;
+		const std::optional<std::string> index = m_World->FinishSave(*m_AssetManager, plan, status, &indexError);
+		if (status.State == DocumentSaveState::Done)
+		{
+			m_UndoStack.MarkSaved(status.SavePoint);
+			OnSceneSaved();
+			// The journal follows the persistent scene's document: the one written now, or the file as it is.
+			std::string baseHash;
+			const auto persistent = std::find_if(plan.Documents.begin(), plan.Documents.end(), [](const WorldSavePlan::Document& document) { return document.Kind == "persistent"; });
+			if (persistent != plan.Documents.end())
+			{
+				baseHash = Crypto::ToHex(status.Items[static_cast<size_t>(persistent - plan.Documents.begin())].Sha256);
+			}
+			else
+			{
+				std::vector<uint8_t> bytes;
+				if (m_AssetManager->ReadStoredData(handle, bytes))
+					baseHash = Crypto::ToHex(Sha256::Hash(std::span<const uint8_t>(bytes)));
+			}
+			const auto [sceneFile, scenePath] = GetSceneFile(handle);
+			m_Recovery->OnSaved(handle, sceneFile, scenePath, std::move(baseHash), token, *m_EditScene, IsSceneModified());
+		}
+		else
+		{
+			m_Recovery->ReleaseSave(token);
+			NotifySaveFailed(status.Label, status.Error, handle);
+		}
+		if (!indexError.empty())
+			NotifySaveFailed(status.Label, indexError, m_World->GetWorld());
+		if (!index)
+		{
+			if (current)
+				m_WorldSave.Ended = true;
+			return;
+		}
+		// The World document with the saved cells' index entries, written once their files are (their stamps are known now).
+		DocumentSaveRequest request;
+		DocumentSaveItem item;
+		item.Asset = m_World->GetWorld();
+		item.Document = *index;
+		item.Reload = true;
+		request.Items.push_back(std::move(item));
+		request.SavePoint = status.SavePoint;
+		request.Label = fmt::format("{} (index)", status.Label);
+		std::string error;
+		if (m_DocumentSaver.Submit(std::move(request), [this, id = status.ID](const DocumentSaveStatus& written)
+		{
+			if (m_WorldSave.Request == id)
+				OnWorldIndexSaved(written);
+		}, &error) == 0)
+		{
+			m_World->FinishIndexSave();
+			NotifySaveFailed(status.Label, error, m_World->GetWorld());
+			if (current)
+				m_WorldSave.Ended = true;
+		}
+	}
+
+	void EditorContext::OnWorldIndexSaved(const DocumentSaveStatus& status)
+	{
+		if (m_World)
+			m_World->FinishIndexSave();
+		if (status.State == DocumentSaveState::Done && !status.Items.empty())
+			m_WorldSave.Documents.push_back({ status.Items.front().Path, "world", status.Items.front().Bytes, 0 });
+		else
+			NotifySaveFailed(status.Label, status.Error, status.Items.empty() ? UUID::Null() : status.Items.front().Asset);
+		m_WorldSave.Ended = true;
+	}
+
+	std::optional<std::vector<WorldSavedDocument>> EditorContext::GetWorldSaveDocuments(uint64_t save) const
+	{
+		if (save == 0 || m_WorldSave.Request != save || !m_WorldSave.Ended)
+			return std::nullopt;
+		return m_WorldSave.Documents;
 	}
 
 	bool EditorContext::WaitForSave(uint64_t id, std::string* outError)
@@ -954,23 +1081,6 @@ namespace Strata
 
 	bool EditorContext::SaveScene(std::string* outError)
 	{
-		// A world saves its changed documents: the persistent scene without the cells' entities, the dirty cells, its index.
-		if (m_World && m_AssetManager && m_SceneHandle.IsValid())
-		{
-			WorldSaveResult saved;
-			const SceneRecovery::SaveToken token = m_Recovery->BeginSave();
-			if (!m_World->Save(*m_AssetManager, m_SceneHandle, saved, outError))
-			{
-				m_Recovery->ReleaseSave(token);
-				return false;
-			}
-			m_LastWorldSave = std::move(saved.Documents);
-			m_UndoStack.MarkSaved();
-			OnSceneSaved();
-			const auto [sceneFile, scenePath] = GetSceneFile(m_SceneHandle);
-			m_Recovery->OnSaved(m_SceneHandle, sceneFile, scenePath, Crypto::ToHex(Sha256::Hash(saved.PersistentDocument)), token, *m_EditScene, false);
-			return true;
-		}
 		const uint64_t id = BeginSaveScene(outError);
 		return id != 0 && WaitForSave(id, outError);
 	}

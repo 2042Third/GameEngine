@@ -4,11 +4,9 @@
 
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/Assert.h>
-#include <Strata/Core/JsonUtils.h>
 #include <Strata/Physics/PhysicsSystem.h>
 #include <Strata/Physics/PhysicsWorld.h>
 #include <Strata/Scene/Scene.h>
-#include <Strata/Scene/SceneSerializer.h>
 #include <Strata/World/WorldComponents.h>
 
 #include <spdlog/fmt/fmt.h>
@@ -16,6 +14,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <functional>
 #include <thread>
 
 namespace Strata
@@ -60,23 +59,16 @@ namespace Strata
 	namespace
 	{
 
-		void ReadPersistent(AssetManagerBase& assets, AssetHandle persistent, AssetHandle world, WorldCookPersistentRead& out)
+		void ReadPersistent(AssetManagerBase& assets, AssetHandle persistent, AssetHandle world, const std::function<bool()>& isCancelled,
+			WorldCookPersistentRead& out)
 		{
-			std::vector<uint8_t> bytes;
 			std::string error;
-			if (!assets.ReadStoredData(persistent, bytes, &error))
-			{
-				out.Error = fmt::format("The persistent scene cannot be read: {}", error);
-				return;
-			}
-			const std::optional<nlohmann::json> document = JsonUtils::Parse(std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()), &error);
 			Scene scene("Persistent");
-			if (!document || !SceneSerializer::Deserialize(scene, *document, &error))
+			if (!WorldCellIO::ReadScene(assets, persistent, scene, isCancelled, &error))
 			{
-				out.Error = fmt::format("The persistent scene is no scene: {}", error);
+				out.Error = fmt::format("The persistent scene {}", error);
 				return;
 			}
-			scene.UpdateWorldTransforms();
 			WorldCellIO::CellSummary summary = WorldCellIO::SummarizeScene(scene, assets, UUID::Null());
 			out.Bodies = summary.Summary.Bodies;
 			out.EntityIDs = std::move(summary.EntityIDs);
@@ -146,7 +138,8 @@ namespace Strata
 				if (cancelled->load(std::memory_order_acquire))
 					return;
 				std::string readError;
-				if (std::optional<WorldCellIO::CellSummary> summary = WorldCellIO::ReadCellSummary(*reader, target->Cell.Scene, &readError))
+				const auto isCancelled = [cancelled]() { return cancelled->load(std::memory_order_acquire); };
+				if (std::optional<WorldCellIO::CellSummary> summary = WorldCellIO::ReadCellSummary(*reader, target->Cell.Scene, isCancelled, &readError))
 				{
 					target->Summary = summary->Summary;
 					target->EntityIDs = std::move(summary->EntityIDs);
@@ -164,8 +157,9 @@ namespace Strata
 			Ref<WorldCookPersistentRead> persistent = CreateRef<WorldCookPersistentRead>();
 			cook->m_Jobs.push_back(JobSystem::SubmitIO([persistent, reader, scene = data.PersistentScene, world, cancelled = &cook->m_Cancelled]()
 			{
-				if (!cancelled->load(std::memory_order_acquire))
-					ReadPersistent(*reader, scene, world, *persistent);
+				const auto isCancelled = [cancelled]() { return cancelled->load(std::memory_order_acquire); };
+				if (!isCancelled())
+					ReadPersistent(*reader, scene, world, isCancelled, *persistent);
 			}));
 			// Kept by the job and by the poll, which reads it once every job completed.
 			cook->m_Persistent = persistent;

@@ -335,7 +335,7 @@ A world is a persistent scene whose `WorldComponent` names a World asset; its ce
 
 - Never `Scene::Copy` a whole world: the edited scene is the persistent scene plus the loaded cells, which play copies.
 - Cell membership changes only through `Scene::SetSubSceneOf` and `EditorWorld`; only `EditorWorld` writes cell
-  documents, through `Editor/WorldCellIO`. Worlds stay within 20 km of the origin (`WorldData::c_SupportedExtent`).
+  documents, through the `DocumentSaver`. Worlds stay within 20 km of the origin (`WorldData::c_SupportedExtent`).
 - Scenes that will run load with `SceneLoadOptions::PrepareSystems`; loading work draws from the frame's `SceneWorkBudget`.
 - Physics never leaves a body without collision below its growth limit: bodies wait for a slot, never polled, and the
   world grows between steps.

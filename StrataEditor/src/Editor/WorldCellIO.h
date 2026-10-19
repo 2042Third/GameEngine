@@ -5,7 +5,9 @@
 
 #include <nlohmann/json.hpp>
 
+#include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -17,8 +19,9 @@ namespace Strata
 	class Entity;
 	class Scene;
 
-	// The editor's reads and writes of a world's cell documents (the cook's summaries now; EditorWorld's saves later). The
-	// seam behind which world-io's cancellable reader and request-based saver replace these plain file reads once they land.
+	// The editor's reads and measures of a world's documents: cells and the persistent scene are read with the streamed,
+	// cancellable reader (SceneSerializer::DeserializeText); EditorWorld saves them through the DocumentSaver, and world.create
+	// writes a new world's two small documents here.
 	namespace WorldCellIO
 	{
 
@@ -29,21 +32,23 @@ namespace Strata
 			std::vector<UUID> EntityIDs; // Sorted
 		};
 
-		// Reads a cell's scene document (its stored form) and measures it. Any thread (an I/O job); blocks. Nullopt with the
-		// reason for a document that cannot be read or is no scene.
-		std::optional<CellSummary> ReadCellSummary(AssetManagerBase& assets, AssetHandle scene, std::string* outError = nullptr);
+		// Reads a scene document (its stored form) into an empty scene, with its world transforms, through the streamed reader:
+		// `isCancelled` (may be null) is asked as it reads, and true ends the read, which fails. Any thread (an I/O job); blocks.
+		// False with the reason for a document that cannot be read or is no scene.
+		bool ReadScene(AssetManagerBase& assets, AssetHandle asset, Scene& outScene, const std::function<bool()>& isCancelled, std::string* outError = nullptr);
+		// Reads a cell's scene document and measures it (ReadScene). Nullopt with the reason when it cannot be read.
+		std::optional<CellSummary> ReadCellSummary(AssetManagerBase& assets, AssetHandle scene, const std::function<bool()>& isCancelled = {},
+			std::string* outError = nullptr);
 		// Measures a scene in memory (the persistent scene, a loaded cell): entities, physics bodies, bounds (entities'
 		// positions, renderers' recorded mesh bounds, colliders) and entity IDs; ClosureBytes is the stored size of `asset`'s
 		// dependency closure without other scenes (0 for a null asset).
 		CellSummary SummarizeScene(const Scene& scene, const AssetManagerBase& assets, AssetHandle asset);
-
-		// The scene document of some top-level entities of a scene with their descendants, in hierarchy order: a cell's
-		// (withSettings false: cells use their host scene's settings) or the persistent scene's.
-		nlohmann::json SerializeDocument(const Scene& scene, const std::string& name, const std::vector<Entity>& roots, bool withSettings);
-		// Writes a document over an engine-native asset's file (EditorAssetManager::SaveNativeAsset, with its references;
-		// reload: loaded copies take the saved version). The bytes written, or nullopt with the reason.
-		std::optional<size_t> WriteDocument(EditorAssetManager& assets, AssetHandle asset, AssetType type, const nlohmann::json& document, bool reload,
-			std::string* outError = nullptr);
+		// The same of some top-level entities of a scene with their descendants (a loaded cell of the edited world, as its save
+		// begins): what its document will hold.
+		CellSummary SummarizeEntities(const Scene& scene, std::span<const Entity> roots, const AssetManagerBase& assets, AssetHandle asset);
+		// The stored bytes of an asset's dependency closure without other scenes (AssetClosureScope::Load): a cell's
+		// WorldCellSummary::ClosureBytes.
+		uint64_t GetClosureBytes(const AssetManagerBase& assets, AssetHandle asset);
 		// Writes a new document of an engine-native type at a path relative to the asset directory (which must not exist) with
 		// the given handle: its .meta first, so that the asset registers with it (a world's new cell, whose handle is derived
 		// from the world's; a new world and its persistent scene, which name each other). The handle the asset got (null with

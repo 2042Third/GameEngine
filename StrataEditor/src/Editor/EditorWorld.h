@@ -1,11 +1,13 @@
 #pragma once
 
+#include "Editor/DocumentSaver.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/UndoStack.h"
 
 #include <Strata/Asset/AssetTypes.h>
 #include <Strata/Core/Base.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/World/WorldAsset.h>
 #include <Strata/World/WorldStreamer.h>
 
 #include <glm/glm.hpp>
@@ -33,11 +35,23 @@ namespace Strata
 		uint64_t Entities = 0;
 	};
 
-	struct WorldSaveResult
+	// What one save of a world writes (EditorWorld::BeginSave): the items of its DocumentSaver request, in the order of its
+	// documents, and what the completions need of each.
+	struct WorldSavePlan
 	{
-		std::vector<WorldSavedDocument> Documents;
-		// The persistent scene's document as it is on disk now (written or not): the recovery journal's new base.
-		std::string PersistentDocument;
+		struct Document
+		{
+			std::string Kind; // "persistent" or "cell"
+			AssetHandle Asset = UUID::Null();
+			std::string Path;
+			WorldCellKey Key;  // Cells
+			bool New = false;  // A cell made in memory, reserved at Path with its derived handle
+			// Cells: measured from memory as the save began; its stamp and closure bytes are taken once it is written.
+			WorldCellSummary Summary;
+		};
+		std::vector<DocumentSaveItem> Items;
+		std::vector<Document> Documents;
+		bool PersistentDirty = false; // The persistent scene was dirty (it is written whenever it is, or when nothing else is)
 	};
 
 	// The world the editor edits: the edited scene is a world's persistent scene (its first active WorldComponent names a
@@ -127,11 +141,25 @@ namespace Strata
 		RecoveredCells PrepareRecoveredCells(std::vector<AssetHandle>& cells, std::span<const std::vector<EntityState>> steps,
 			std::string* outError = nullptr);
 
-		// Saves the documents changed since the last save: the persistent scene's entities without the cells' (with the scene's
-		// settings), each dirty cell's top-level entities and their descendants (without settings), and the World document
-		// with the saved cells' index entries refreshed from memory (written when it changed). Clears the dirty marks. False,
-		// with the reason and the marks kept, when a document cannot be written (those written before stay written).
-		bool Save(EditorAssetManager& assets, AssetHandle persistent, WorldSaveResult& outResult, std::string* outError = nullptr);
+		// A save of the documents changed since the last save, in two DocumentSaver requests (EditorContext::BeginSaveScene):
+		// - BeginSave plans the first, written from a snapshot of the edited scene: the persistent scene's entities without the
+		//   cells' (with the scene's settings; written when it is dirty, or when nothing is), and each dirty cell's top-level
+		//   entities with their descendants (no settings), new cells reserved with their derived handles. The cells' index
+		//   entries are measured from memory then. The dirty marks clear at once, edits made meanwhile mark again, and the
+		//   saved cells stay loaded until the save ended. False, with the reason and nothing changed, while the World asset
+		//   loads, a previous save still writes or a new cell's path cannot be reserved.
+		// - FinishSave takes the first request's outcome: documents that failed are dirty again; for the cells written it
+		//   refreshes their index entries (stamps, closure bytes) and lists the new ones, and returns the World document to
+		//   write next (Document bytes), nullopt when it is unchanged (the save is done then) or invalid (outError).
+		// - FinishIndexSave ends the save once that document's write ended.
+		// CancelSave undoes BeginSave when the request could not be submitted.
+		bool BeginSave(EditorAssetManager& assets, AssetHandle persistent, WorldSavePlan& outPlan, std::string* outError = nullptr);
+		void CancelSave(EditorAssetManager& assets, const WorldSavePlan& plan);
+		std::optional<std::string> FinishSave(EditorAssetManager& assets, const WorldSavePlan& plan, const DocumentSaveStatus& status,
+			std::string* outError = nullptr);
+		void FinishIndexSave();
+		// A save began and has not ended (BeginSave until FinishSave without a document, or FinishIndexSave).
+		bool IsSaving() const { return m_Saving; }
 
 		// The cell of a cell scene (the world's, or a new one's), and the reverse; nullopt / null when unknown.
 		std::optional<WorldCellKey> FindCellKey(AssetHandle cell) const;
@@ -204,6 +232,8 @@ namespace Strata
 		uint64_t m_DirtyVersion = 0;
 		std::set<WorldCellKey> m_StreamerPins;        // What the streamer has pinned now
 		bool m_PersistentDirty = false;
+		bool m_Saving = false;
+		std::unordered_set<AssetHandle> m_SavingCells; // Cells a save writes: pinned until it ended
 		SceneSettings m_SavedSettings;                // The persistent scene's settings as saved: any step that changes them marks it
 		std::vector<WorldStreamingSource> m_Sources;  // Scratch
 	};

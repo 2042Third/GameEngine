@@ -2686,7 +2686,8 @@ preparation (tools and tests calling `OnRuntimeStart`) streams its start cells o
 **The cook** (`world.cook`, `StrataEditor/src/Editor/WorldCook.h`). It measures a world's cells for its index, off the
 frame: the cells whose content stamp (`EditorAssetManager::GetContentStamp`) differs from their index entry's, and from
 what the session's `WorldCookCache` holds (`EditorContext::GetWorldCookCache`), are read on I/O jobs through
-`WorldCellIO::ReadCellSummary` (the seam world-io's cancellable reader replaces), the others reused. The cook shares the
+`WorldCellIO::ReadCellSummary` (the streamed reader, `SceneSerializer::DeserializeText`, asked to stop when the cook is
+cancelled), the others reused. The cook shares the
 project's asset manager and the cache with the editor, so both outlive a project closed while it runs; `world.cook` then
 cancels it and fails, writing nothing (the cache is the open project's: a project opened again starts a new one). Per cell: its
 entities, its physics bodies (`PhysicsWorld::CountBodyCandidates`, the rule physics sizes by), its bounds (entities'
@@ -2729,14 +2730,21 @@ loaded (`EditorWorld::PrepareRecoveredCells`, pinned until the next save; a cell
 document holds, is made again from the position its states record; a cell that fails to load fails the recovery, which
 stays on offer). A snapshot journal removes only the entities of the persistent scene and of the cells it holds: cells
 loaded now that it never saw keep theirs (one emptied of all its entities before the snapshot gets them back). Saves
-write only dirty documents (`EditorWorld::Save`, from
-`EditorContext::SaveScene`): the persistent scene's entities without the cells' (and with the scene's settings), each
-dirty cell's top-level entities and their descendants (without settings: cells use their host's), and the World
-document when the saved cells' index entries (refreshed from what was written) changed; one `UndoStack::MarkSaved`, and
-the persistent scene's document as the recovery journal's new base. `scene.save` lists the documents written
-(`documents: [{path, kind, bytes, entities}]`); `scene.saveAs` refuses worlds. Documents go through
-`Editor/WorldCellIO.h` (`SerializeDocument`, `WriteDocument`), the seam world-io's entity-subset writer and background
-save replace. Playing a world copies the edited scene as any play start does, which is the persistent scene plus the
+write only dirty documents, in the background like any scene's (`EditorContext::SubmitWorldSave`, from
+`BeginSaveScene`), in two `DocumentSaver` requests. `EditorWorld::BeginSave` plans the first, written from one
+`SerializedOnly` snapshot of the edited scene: an item per document whose `SceneWriteOptions::Roots` are the UUIDs of its
+top-level entities, listed on the main thread (the snapshot keeps IDs, not the runtime-only `SubSceneComponent`): the
+persistent scene's without the cells' (with the scene's settings; written when dirty, or when nothing else is), each dirty
+cell's (no settings: cells use their host's), new cells reserved with their derived handles
+(`EditorAssetManager::ReserveNativeAsset`). The saved cells' index entries are measured from memory then
+(`WorldCellIO::SummarizeEntities`). The dirty marks clear at once (edits made meanwhile mark again) and the saved cells stay
+pinned until the save ended. The first request's completion (`EditorWorld::FinishSave`) marks what failed dirty again,
+takes the written cells' stamps and closure bytes, lists the new cells and returns the World document, which a second
+request writes (ready `Document` bytes, `Reload`) when it changed: stamps exist only once files are written. One
+`UndoStack::MarkSaved(SavePoint)` per save, and the persistent scene's document hash as the recovery journal's new base.
+A world saves once at a time: `scene.save` waits for the previous save (`AfterSaves`), `BeginSaveScene` refuses while one
+writes. `scene.save` answers once the World document is written, listing the documents (`documents: [{path, kind,
+bytes, entities}]`); `scene.saveAs` refuses worlds. Playing a world copies the edited scene as any play start does, which is the persistent scene plus the
 cells the editor has loaded (its edit radius), never the whole world; `EditorWorld::PrepareRuntimeCopy` then makes the
 fully loaded cells the copy's sub-scenes (adopted by their roots' IDs, so the game's World system adopts them and loads
 nothing twice), removes the entities of cells still loading or unloading (the game loads those whole), and the game's

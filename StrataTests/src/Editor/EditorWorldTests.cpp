@@ -19,6 +19,7 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/Scene/SceneDocumentWriter.h>
 
 #include <nlohmann/json.hpp>
 
@@ -533,7 +534,12 @@ TEST_SUITE("Editor.World")
 		REQUIRE(cell.has_value());
 		CHECK((*cell)["Scene"]["Entities"].size() == 7);
 		CHECK_FALSE((*cell)["Scene"].contains("Settings"));
-		CHECK(ReadFileState(cellA).Text.find("\"Scale\": [\n\t\t\t\t\t\t\t2") != std::string::npos);
+		// Written by the streamed writer (an entity per line), from the save's snapshot.
+		const auto scaled = std::find_if((*cell)["Scene"]["Entities"].begin(), (*cell)["Scene"]["Entities"].end(),
+			[&](const nlohmann::json& entity) { return entity["ID"] == UUIDToJson(boxID); });
+		REQUIRE(scaled != (*cell)["Scene"]["Entities"].end());
+		CHECK((*scaled)["Components"]["Transform"]["Scale"] == nlohmann::json { 2.0, 2.0, 2.0 });
+		CHECK(ReadFileState(cellA).Text.find("\n{\"Components\":") != std::string::npos);
 		// The world's index has the cell's entry, current.
 		const Ref<WorldAsset> world = project.ReadWorld();
 		REQUIRE(world->GetData().Index.has_value());
@@ -579,6 +585,69 @@ namespace
 
 TEST_SUITE("Editor.World")
 {
+	TEST_CASE("A world's save writes its cells off the frame, edits made meanwhile stay unsaved, and the next save waits for it")
+	{
+		GatedJobSystem jobs;
+		GridWorldProject project("EditorWorldBackgroundSave", 3);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
+		Settle(project);
+		const Entity box = project.Context.GetEditScene()->FindEntityByName("Box 0");
+		REQUIRE(box);
+		const UUID boxID = box.GetUUID();
+		const auto scale = [&](double value)
+		{
+			project.Run("component.set", { { "entity", UUIDToJson(boxID) }, { "component", "Transform" }, { "values", { { "Scale", { value, value, value } } } } });
+		};
+		scale(2.0);
+		const uint64_t serializedBefore = SceneDocumentWriter::GetThreadEntityCount();
+		EditorCommandResult second;
+		{
+			BackgroundGate gate;
+			const EditorCommandResult first = project.Commands.Execute(project.Context, "scene.save", { { "wait", false } });
+			INFO(first.Error);
+			REQUIRE(first.Success);
+			CHECK(first.Value["saveId"].get<uint64_t>() != 0);
+			CHECK(project.Context.HasSavesInFlight());
+			CHECK(project.Context.GetWorld()->IsSaving());
+			CHECK(project.Context.GetWorld()->GetDirtyCells().empty());
+			// An edit while it writes marks the cell again; the save writes the scene as it was.
+			scale(3.0);
+			CHECK(project.Context.GetWorld()->IsCellDirty(project.GetCell(0, 0)));
+			// The next save waits for this one.
+			second = project.Commands.Execute(project.Context, "scene.save");
+			REQUIRE(second.IsPending());
+			project.Context.Update(Timestep(1.0f / 60.0f));
+			REQUIRE_FALSE(PollCommandResult(second, project.Context));
+			gate.Open();
+		}
+		second = CompleteCommand(project.Context, std::move(second));
+		INFO(second.Error);
+		REQUIRE(second.Success);
+		// No entity was serialized on the main thread: the frame took snapshots only.
+		CHECK(SceneDocumentWriter::GetThreadEntityCount() == serializedBefore);
+		CHECK_FALSE(project.Context.HasSavesInFlight());
+		CHECK_FALSE(project.Context.GetWorld()->IsSaving());
+		CHECK_FALSE(project.Context.IsSceneModified());
+		CHECK(project.Context.GetWorld()->GetDirtyCells().empty());
+		// The second save wrote the later edit, and the index followed.
+		bool wroteWorld = false;
+		for (const nlohmann::json& document : second.Value["documents"])
+			wroteWorld = wroteWorld || document["kind"] == "world";
+		CHECK(wroteWorld);
+		const std::filesystem::path cellFile = project.Directory / "Assets" / "Worlds" / "Gen" / "Ground" / "0_0.stscene";
+		const std::optional<std::string> text = FileSystem::ReadText(cellFile);
+		REQUIRE(text.has_value());
+		const std::optional<nlohmann::json> cell = JsonUtils::Parse(*text);
+		REQUIRE(cell.has_value());
+		const auto saved = std::find_if((*cell)["Scene"]["Entities"].begin(), (*cell)["Scene"]["Entities"].end(),
+			[&](const nlohmann::json& entity) { return entity["ID"] == UUIDToJson(boxID); });
+		REQUIRE(saved != (*cell)["Scene"]["Entities"].end());
+		CHECK((*saved)["Components"]["Transform"]["Scale"] == nlohmann::json { 3.0, 3.0, 3.0 });
+		CHECK(project.ReadWorld()->FindSummary(WorldCellKey { 1, 0, 0 })->Stamp
+			== fmt::format("{:016X}", project.Context.GetAssetManager()->GetContentStamp(project.GetCell(0, 0))));
+	}
+
 	TEST_CASE("A move across a cell border is one undo step, and the save writes both cells")
 	{
 		GridWorldProject project("EditorWorldBorder", 3);
