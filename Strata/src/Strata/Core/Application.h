@@ -88,8 +88,9 @@ namespace Strata
 		Timestep GetLastTimestep() const { return m_LastTimestep; }
 		// CPU time of the last frame that ran, in seconds: its layers' updates, the modules' updates, the UI and recording and
 		// submitting its GPU work. What modules wait for (EngineFrame::WaitSeconds: the GPU and the display), what they do
-		// after the frame's work (OnEndFrame: presenting, back buffer captures) and the frame-rate cap are not counted, so it
-		// measures what a frame costs whatever the display's refresh rate.
+		// after the frame's work (OnEndFrame: presenting, back buffer captures), the frame's stages outside the work time
+		// (FrameProfiler::GetOutOfWorkSeconds: the wait for the display's image at the back buffer's first use) and the
+		// frame-rate cap are not counted, so it measures what a frame costs whatever the display's refresh rate.
 		double GetLastFrameWorkTime() const { return m_LastFrameWorkTime; }
 
 		// Frames per second the main loop does not exceed from the next frame on (0: unlimited), on top of vsync. Starts at
