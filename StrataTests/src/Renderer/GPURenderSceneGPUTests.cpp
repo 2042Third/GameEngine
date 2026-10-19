@@ -539,4 +539,54 @@ TEST_SUITE("GPU.Renderer.RenderSceneGPU")
 		AssetManager::SetActive(nullptr);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
+
+	TEST_CASE("A copied scene's GPU copy is cloned from its source's: the copy's first frame uploads nothing and draws the same")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		LoadBuiltinAssets(assets);
+		Ref<Scene> source = CreateRef<Scene>("Source");
+		AddNeutralPostProcess(*source);
+		const std::vector<Entity> cubes = AddCubeRow(*source, 500);
+		const SceneCamera camera = ViewOfRows();
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Size, c_Size);
+		RenderSceneGPUCache& cache = Renderer::GetRenderSceneGPUs();
+		Frame(gpu, [&]() { REQUIRE(renderer.Render(*source, camera)); });
+		const ReadbackImage before = RenderToImage(renderer, *source, camera);
+		CHECK(GetDrawnCounts(renderer).Instances == 500);
+		const RenderSceneGPU* sourceMirror = cache.Find(RenderScene::Get(*source).GetId());
+		REQUIRE(sourceMirror);
+		const uint64_t sourceBytes = sourceMirror->GetBufferBytes();
+		const uint64_t bytesBefore = cache.GetBufferBytes();
+
+		// The play start: the copy's render scene is a clone, its GPU copy is copied on the GPU, and the renderer keeps what
+		// it knew (its next frame takes its requests from the feedback of the source's).
+		Ref<Scene> copy = Scene::Copy(source);
+		const ReadbackImage after = RenderToImage(renderer, *copy, camera);
+		const SceneRendererStats& stats = renderer.GetStats();
+		CHECK(stats.ProxyBytesUploaded == 0);
+		CHECK(stats.MaterialBytesUploaded == 0);
+		CHECK(stats.DeferredProxies == 0);
+		CHECK(stats.FeedbackRequests == stats.GPUDriven);
+		CHECK(MaxDifference(before, after) == 0);
+		CHECK(GetDrawnCounts(renderer).Instances == 500);
+		const RenderSceneGPU* cloneMirror = cache.Find(RenderScene::Get(*copy).GetId());
+		REQUIRE(cloneMirror);
+		CHECK(cloneMirror->GetBufferVersion() != sourceMirror->GetBufferVersion());
+		CHECK(cache.GetBufferBytes() == bytesBefore + sourceBytes);
+		CheckMirror(gpu, RenderScene::Get(*copy), *cloneMirror);
+		CheckTables(gpu, *cloneMirror);
+
+		// They diverge: what changes in the copy uploads to its own mirror only.
+		Entity moved = copy->GetEntityByUUID(cubes[3].GetUUID());
+		moved.GetComponent<TransformComponent>().Translation.y += 1.0f;
+		moved.MarkModified<TransformComponent>();
+		REQUIRE(renderer.Render(*copy, camera));
+		CHECK(renderer.GetStats().ProxyBytesUploaded == sizeof(RenderData::GPUProxy));
+		CheckMirror(gpu, RenderScene::Get(*copy), *cloneMirror);
+		CheckMirror(gpu, RenderScene::Get(*source), *sourceMirror);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
 }

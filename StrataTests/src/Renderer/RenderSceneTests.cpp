@@ -948,6 +948,78 @@ TEST_SUITE("Renderer.RenderScene")
 		CHECK(users({ c_Override }) == sorted({ overridden }));
 	}
 
+	TEST_CASE("A copied scene gets a clone of its render scene with the same indices, and each diverges on its own")
+	{
+		Ref<Scene> source = CreateRef<Scene>("Source");
+		std::vector<Entity> cubes;
+		for (uint32_t index = 0; index < 50; index++)
+			cubes.push_back(AddCube(*source, glm::vec3(static_cast<float>(index) * 2.0f, 0.0f, 0.0f), index % 3 == 0 ? UUID(0xD1) : UUID::Null()));
+		RenderScene& renderScene = RenderScene::Get(*source);
+		renderScene.Sync(nullptr);
+		renderScene.SetMeshLayout(renderScene.FindMeshSlot(BuiltinAssets::CubeMesh), *MeshFactory::CreateCube(), 1);
+		// A change the source's render scene has not read yet is read by the clone too.
+		cubes[7].GetComponent<TransformComponent>().Translation.y = 5.0f;
+		cubes[7].MarkModified<TransformComponent>();
+		source->UpdateWorldTransforms();
+
+		// A scene without a render scene is copied without one.
+		Ref<Scene> plain = CreateRef<Scene>("Plain");
+		AddCube(*plain, glm::vec3(0.0f));
+		CHECK(RenderScene::Find(*Scene::Copy(plain)) == nullptr);
+
+		Ref<Scene> copy = Scene::Copy(source);
+		RenderScene* clone = RenderScene::Find(*copy);
+		REQUIRE(clone != nullptr);
+		CHECK(clone->GetId() != renderScene.GetId());
+		CHECK(clone->GetCloneSource() == renderScene.GetId());
+		CHECK(clone->GetCloneVersions().Proxy == renderScene.GetProxyVersion());
+		CHECK(clone->GetProxyCapacity() == renderScene.GetProxyCapacity());
+		CHECK(clone->GetStats().Proxies == renderScene.GetStats().Proxies);
+		CHECK(clone->GetStats().Materials == renderScene.GetStats().Materials);
+		CHECK(clone->GetStats().CloneMs >= 0.0f);
+		for (const Entity& cube : cubes)
+		{
+			const uint32_t proxy = renderScene.FindProxy(cube.GetHandle());
+			REQUIRE(proxy != RenderScene::c_InvalidIndex);
+			CHECK(clone->FindProxy(cube.GetHandle()) == proxy);
+			CHECK(clone->GetFirstInstance(proxy) == renderScene.GetFirstInstance(proxy));
+			CHECK(clone->GetMeshSlot(proxy) == renderScene.GetMeshSlot(proxy));
+		}
+		// Its first sync builds no proxy, reads the change the source had not, and leaves it valid for the copy.
+		CHECK(clone->Sync(nullptr) <= 1);
+		CheckProxies(*clone);
+		CHECK(clone->GetWorldBounds(clone->FindProxy(cubes[7].GetHandle())).Min.y == doctest::Approx(4.5f));
+
+		// Each changes on its own: an entity moved in the copy, another destroyed in the source, one created in each.
+		Entity copied = copy->GetEntityByUUID(cubes[3].GetUUID());
+		copied.GetComponent<TransformComponent>().Translation.z = -10.0f;
+		copied.MarkModified<TransformComponent>();
+		const UUID destroyed = cubes[4].GetUUID();
+		source->DestroyEntity(cubes[4]);
+		AddCube(*copy, glm::vec3(0.0f, 20.0f, 0.0f), UUID(0xD2));
+		AddCube(*source, glm::vec3(0.0f, -20.0f, 0.0f));
+		renderScene.Sync(nullptr);
+		clone->Sync(nullptr);
+		CheckProxies(renderScene);
+		CheckProxies(*clone);
+		CHECK(renderScene.GetWorldBounds(renderScene.FindProxy(cubes[3].GetHandle())).Min.z == doctest::Approx(-0.5f));
+		CHECK(clone->GetWorldBounds(clone->FindProxy(copied.GetHandle())).Min.z == doctest::Approx(-10.5f));
+		CHECK(clone->FindProxy(copy->GetEntityByUUID(destroyed).GetHandle()) != RenderScene::c_InvalidIndex);
+		CHECK(renderScene.GetStats().Proxies == 50);
+		CHECK(clone->GetStats().Proxies == 51);
+		CHECK(clone->GetStats().Materials == renderScene.GetStats().Materials + 1);
+
+		// A copy of the copy clones the clone: copied from a synced render scene, it is valid at once and its sync updates no
+		// proxy.
+		Ref<Scene> second = Scene::Copy(copy);
+		RenderScene* secondClone = RenderScene::Find(*second);
+		REQUIRE(secondClone != nullptr);
+		CHECK(secondClone->GetCloneSource() == clone->GetId());
+		CheckProxies(*secondClone);
+		CHECK(secondClone->Sync(nullptr) == 0);
+		CheckProxies(*secondClone);
+	}
+
 	TEST_CASE("Renderers that fall behind the bounded change log upload everything")
 	{
 		Scene scene("Changes");

@@ -5,6 +5,7 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/Assert.h"
 #include "Strata/Core/JobSystem.h"
+#include "Strata/Core/ParallelClone.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Renderer.h"
@@ -108,10 +109,24 @@ namespace Strata
 		return context ? context->Instance.get() : nullptr;
 	}
 
+	const RenderScene* RenderScene::Find(const Scene& scene)
+	{
+		const RenderSceneContext* context = scene.GetRegistry().ctx().find<RenderSceneContext>();
+		return context ? context->Instance.get() : nullptr;
+	}
+
 	RenderScene::RenderScene(Scene& scene)
 		: m_Id(s_NextRenderSceneId.fetch_add(1, std::memory_order_relaxed)), m_Scene(&scene), m_TransformsVersion(scene.GetTransformsVersion())
 	{
 		entt::registry& registry = scene.GetRegistry();
+		ConnectListeners(registry);
+		// Every mesh renderer the scene already has gets its proxy at the first sync.
+		for (const entt::entity entity : registry.view<MeshRendererComponent>())
+			QueuePending(entity);
+	}
+
+	void RenderScene::ConnectListeners(entt::registry& registry)
+	{
 		// The connections are never released (see RenderSceneContext): this object lives exactly as long as the storages.
 		registry.on_construct<MeshRendererComponent>().connect<&RenderScene::OnMeshRendererChanged>(*this);
 		registry.on_update<MeshRendererComponent>().connect<&RenderScene::OnMeshRendererChanged>(*this);
@@ -119,9 +134,41 @@ namespace Strata
 		registry.on_construct<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
 		registry.on_update<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
 		registry.on_destroy<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
-		// Every mesh renderer the scene already has gets its proxy at the first sync.
-		for (const entt::entity entity : registry.view<MeshRendererComponent>())
-			QueuePending(entity);
+	}
+
+	void RenderScene::CopyIntoScene(const Scene& source, Scene& destination)
+	{
+		const RenderScene* from = Find(source);
+		if (!from)
+			return; // Nothing rendered the source: the copy builds its proxies when it is rendered
+		ST_PROFILE_FUNCTION();
+		const auto start = std::chrono::steady_clock::now();
+		entt::registry& registry = destination.GetRegistry();
+		ST_CORE_ASSERT(!registry.ctx().find<RenderSceneContext>(), "RenderScene::CopyIntoScene: the copy has a render scene already");
+		// Member-wise, the per-proxy arrays and the instances copied in parallel: they are most of a large scene's bytes. The
+		// source lends them for the copy (main thread: nothing else reads it meanwhile) and has them back afterwards.
+		RenderScene& lender = const_cast<RenderScene&>(*from);
+		Scope<RenderScene> clone = CloneWithParallelMembers(lender, [&lender]() { return Scope<RenderScene>(new RenderScene(lender)); },
+			&RenderScene::m_Entities, &RenderScene::m_EntityIDs, &RenderScene::m_Flags, &RenderScene::m_Transforms, &RenderScene::m_UpdateStamps,
+			&RenderScene::m_LocalBounds, &RenderScene::m_WorldBounds, &RenderScene::m_MeshHandles, &RenderScene::m_MeshSlots,
+			&RenderScene::m_MeshUserPositions, &RenderScene::m_MaterialOverrides, &RenderScene::m_OverrideSlots, &RenderScene::m_OverrideUserPositions,
+			&RenderScene::m_FirstInstances, &RenderScene::m_InstanceCounts, &RenderScene::m_ProxyByEntityIndex, &RenderScene::m_PendingPositions,
+			&RenderScene::m_Index, &RenderScene::m_Instances, &RenderScene::m_ProxyLoggedVersions, &RenderScene::m_SkinIndices);
+		clone->m_Id = s_NextRenderSceneId.fetch_add(1, std::memory_order_relaxed);
+		clone->m_Scene = &destination;
+		clone->m_CloneSource = from->m_Id;
+		clone->m_CloneVersions = ChangeVersions { from->m_ProxyVersion, from->m_InstanceVersion, from->m_PaletteVersion };
+		// The copy's transform log starts afresh: changes the source had not read yet are read by comparing every proxy.
+		clone->m_RefreshTransforms = from->m_RefreshTransforms || from->m_TransformsVersion != source.GetTransformsVersion();
+		clone->m_TransformsVersion = destination.GetTransformsVersion();
+		// The copy's services are its own: the next sync asks them again (entities drawn elsewhere go back otherwise).
+		clone->m_RenderTransformsProvider = nullptr;
+		clone->m_RenderTransformsVersion = ~0ull;
+		clone->m_PosesProvider = nullptr;
+		clone->m_SkinDirty = true;
+		clone->ConnectListeners(registry);
+		clone->m_Stats.CloneMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start).count();
+		registry.ctx().emplace<RenderSceneContext>().Instance = std::move(clone);
 	}
 
 	RenderScene::~RenderScene()
@@ -274,7 +321,7 @@ namespace Strata
 			UpdateProxyFromEntity(entity);
 
 		m_ChangeScratch.clear();
-		if (m_Scene->GetWorldTransformChanges(m_TransformsVersion, m_ChangeScratch))
+		if (!m_RefreshTransforms && m_Scene->GetWorldTransformChanges(m_TransformsVersion, m_ChangeScratch))
 		{
 			for (const entt::entity entity : m_ChangeScratch)
 			{
@@ -288,6 +335,7 @@ namespace Strata
 		else
 		{
 			FullRefresh();
+			m_RefreshTransforms = false;
 		}
 		m_TransformsVersion = m_Scene->GetTransformsVersion();
 		UpdateMeshLayouts(assets);

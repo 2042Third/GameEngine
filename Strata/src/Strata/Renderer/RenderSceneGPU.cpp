@@ -4,6 +4,7 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/Assert.h"
+#include "Strata/Core/ParallelClone.h"
 #include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/GeometryPool.h"
 #include "Strata/Renderer/Material.h"
@@ -51,6 +52,60 @@ namespace Strata
 	}
 
 	RenderSceneGPU::~RenderSceneGPU() = default;
+
+	Scope<RenderSceneGPU> RenderSceneGPU::CreateClone(RenderSceneGPU& source, uint64_t renderSceneId)
+	{
+		ST_PROFILE_FUNCTION();
+		// Member-wise, the per-proxy records and states copied in parallel (a large scene's bytes).
+		Scope<RenderSceneGPU> clone = CloneWithParallelMembers(source, [&source]() { return Scope<RenderSceneGPU>(new RenderSceneGPU(source)); },
+			&RenderSceneGPU::m_Records, &RenderSceneGPU::m_Resident, &RenderSceneGPU::m_Queued, &RenderSceneGPU::m_Seen, &RenderSceneGPU::m_InstanceOwners);
+		clone->m_RenderSceneId = renderSceneId;
+		clone->m_CommandList = clone->m_Device->createCommandList();
+		if (!clone->m_CommandList)
+			return nullptr;
+		clone->m_CommandList->open();
+		bool created = true;
+		for (GrowingBuffer* buffer : { &clone->m_Instances, &clone->m_Proxies, &clone->m_Palette, &clone->m_MeshTableBuffer, &clone->m_MaterialBuffer,
+			&clone->m_MaterialFlagBuffer })
+		{
+			if (!buffer->Buffer)
+				continue;
+			// The source's buffer, copied on the GPU (frames in flight only read it).
+			nvrhi::BufferDesc desc = buffer->Buffer->getDesc();
+			desc.debugName += ".Clone";
+			nvrhi::BufferHandle copy = clone->m_Device->createBuffer(desc);
+			if (!copy)
+			{
+				ST_CORE_ERROR("RenderSceneGPU: failed to create the clone of {} ({} bytes)", buffer->Buffer->getDesc().debugName, desc.byteSize);
+				created = false;
+				break;
+			}
+			clone->m_CommandList->copyBuffer(copy, 0, buffer->Buffer, 0, desc.byteSize);
+			clone->m_CommandList->setBufferState(copy, nvrhi::ResourceStates::ShaderResource);
+			buffer->Buffer = std::move(copy);
+		}
+		clone->m_CommandList->commitBarriers();
+		clone->m_CommandList->close();
+		clone->m_Device->executeCommandList(clone->m_CommandList);
+		if (!created)
+			return nullptr;
+		clone->m_BufferVersion = ++s_LastBufferVersion;
+		return clone;
+	}
+
+	bool RenderSceneGPU::HoldsVersions(const RenderScene::ChangeVersions& versions) const
+	{
+		return m_Initialized && !m_UploadAllTables && m_ProxyVersion == versions.Proxy && m_InstanceVersion == versions.Instance
+			&& m_PaletteVersion == versions.Palette;
+	}
+
+	uint64_t RenderSceneGPU::GetBufferBytes() const
+	{
+		uint64_t bytes = 0;
+		for (const GrowingBuffer* buffer : { &m_Instances, &m_Proxies, &m_Palette, &m_MeshTableBuffer, &m_MaterialBuffer, &m_MaterialFlagBuffer })
+			bytes += buffer->Buffer ? buffer->Buffer->getDesc().byteSize : 0;
+		return bytes;
+	}
 
 	void RenderSceneGPU::BeginFrame(uint64_t frame)
 	{
@@ -702,10 +757,25 @@ namespace Strata
 				std::lock_guard lock(s_Mutex);
 				s_Mirrored.insert(id);
 			}
-			found = m_Mirrors.emplace(id, CreateScope<RenderSceneGPU>(m_Device, id)).first;
+			// A clone's mirror is copied from its source's on the GPU when that holds exactly what the clone started with.
+			Scope<RenderSceneGPU> mirror;
+			RenderSceneGPU* source = renderScene.GetCloneSource() != 0 ? Find(renderScene.GetCloneSource()) : nullptr;
+			if (source && source->HoldsVersions(renderScene.GetCloneVersions()))
+				mirror = RenderSceneGPU::CreateClone(*source, id);
+			if (!mirror)
+				mirror = CreateScope<RenderSceneGPU>(m_Device, id);
+			found = m_Mirrors.emplace(id, std::move(mirror)).first;
 			found->second->BeginFrame(m_Frame);
 		}
 		return *found->second;
+	}
+
+	uint64_t RenderSceneGPUCache::GetBufferBytes() const
+	{
+		uint64_t bytes = 0;
+		for (const auto& [id, mirror] : m_Mirrors)
+			bytes += mirror->GetBufferBytes();
+		return bytes;
 	}
 
 	RenderSceneGPU* RenderSceneGPUCache::Find(uint64_t renderSceneId) const

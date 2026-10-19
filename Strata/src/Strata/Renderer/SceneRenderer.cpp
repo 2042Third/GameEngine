@@ -1898,7 +1898,9 @@ namespace Strata
 			// stat counts the updates since this renderer's previous frame.
 			renderScene.Sync(assets);
 			const uint64_t totalUpdates = renderScene.GetStats().TotalUpdates;
-			m_Stats.ProxyUpdates = static_cast<uint32_t>(totalUpdates - (m_ProxyUpdatesScene == renderScene.GetId() ? m_ProxyUpdatesSeen : 0));
+			// A clone of the render scene the renderer saw counts on from the source's updates (it copied their count).
+			const bool seenBefore = m_ProxyUpdatesScene == renderScene.GetId() || (m_ProxyUpdatesScene != 0 && m_ProxyUpdatesScene == renderScene.GetCloneSource());
+			m_Stats.ProxyUpdates = static_cast<uint32_t>(totalUpdates - (seenBefore ? m_ProxyUpdatesSeen : 0));
 			m_ProxyUpdatesScene = renderScene.GetId();
 			m_ProxyUpdatesSeen = totalUpdates;
 			m_Assets.BeginFrame(assets);

@@ -102,6 +102,29 @@ namespace Strata
 
 	static std::atomic<uint32_t> s_RunningSceneCount = 0;
 
+	namespace
+	{
+
+		// Read by every Copy after the composition root registered them (ComponentRegistry's registration window).
+		std::vector<Scene::SceneContextCopier>& GetContextCopiers()
+		{
+			static std::vector<Scene::SceneContextCopier> s_Copiers;
+			return s_Copiers;
+		}
+
+	}
+
+	bool Scene::RegisterContextCopier(SceneContextCopier copier)
+	{
+		if (!copier || !ComponentRegistry::IsRegistrationOpen())
+		{
+			ST_CORE_ERROR("Scene::RegisterContextCopier is called outside the composition root's registration (or without a copier)");
+			return false;
+		}
+		GetContextCopiers().push_back(copier);
+		return true;
+	}
+
 	Scene::Scene(std::string name)
 		: Scene(std::move(name), true)
 	{
@@ -240,6 +263,9 @@ namespace Strata
 		destination->m_TransformPass = source->m_TransformPass;
 		destination->m_HierarchyVersion++;
 		destination->ConnectSignals();
+		// The modules' context data of the complete copy (a render scene's clone).
+		for (const SceneContextCopier copier : GetContextCopiers())
+			copier(*source, *destination);
 		return destination;
 	}
 

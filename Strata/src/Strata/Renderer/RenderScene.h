@@ -64,6 +64,7 @@ namespace Strata
 		uint32_t PosedProxies = 0;      // Of those, posed (RenderProxyFlags::Skinned)
 		uint32_t PaletteJoints = 0;     // Joint matrices of the posed proxies' palettes
 		uint32_t LastSyncPoses = 0;     // Palettes the latest Sync computed (poses or placements that changed)
+		float CloneMs = 0.0f;           // A clone (CopyIntoScene): how long making it took
 	};
 
 	// The renderer's persistent view of a scene's mesh renderers: one render proxy per entity with a MeshRendererComponent,
@@ -117,10 +118,27 @@ namespace Strata
 		static RenderScene& Get(Scene& scene);
 		// The scene's render scene if one was created.
 		static RenderScene* Find(Scene& scene);
+		static const RenderScene* Find(const Scene& scene);
+		// The copy hook of Scene::Copy (registered by the Renderer module): gives the copy a clone of the source's render scene,
+		// if it has one, so that the copy's first frame builds no proxy. The copy's entities have the source's identifiers, so
+		// every proxy, instance, slot and palette index is the same; the clone listens to the copy's registry, reads the
+		// copy's transform changes from then on (all of them once, if the source had changes it had not read) and the copy's
+		// scene services. Its GPU copy is made from the source's by GPU copies when the source's holds exactly what the clone
+		// does (RenderSceneGPUCache), and a renderer whose last render scene was the source keeps its state for the clone.
+		static void CopyIntoScene(const Scene& source, Scene& destination);
+		// The render scene this one is a clone of (CopyIntoScene), or 0.
+		uint64_t GetCloneSource() const { return m_CloneSource; }
+		// What the source's change logs stood at when the clone was made (the clone's logs start there).
+		struct ChangeVersions
+		{
+			uint64_t Proxy = 0;
+			uint64_t Instance = 0;
+			uint64_t Palette = 0;
+		};
+		const ChangeVersions& GetCloneVersions() const { return m_CloneVersions; }
 
 		~RenderScene();
 
-		RenderScene(const RenderScene&) = delete;
 		RenderScene& operator=(const RenderScene&) = delete;
 
 		// Unique in the process, so renderers can tell render scenes apart (a new scene may reuse an address).
@@ -341,6 +359,10 @@ namespace Strata
 		};
 
 		explicit RenderScene(Scene& scene);
+		// Every member as the source has it (CopyIntoScene then makes it the copy's): new members are cloned by being members.
+		RenderScene(const RenderScene& source) = default;
+		// Connects the listeners of the scene's mesh renderers and skins.
+		void ConnectListeners(entt::registry& registry);
 
 		void OnMeshRendererChanged(entt::registry& registry, entt::entity entity);
 		void OnMeshRendererDestroyed(entt::registry& registry, entt::entity entity);
@@ -500,6 +522,11 @@ namespace Strata
 		uint32_t m_SyncUpdates = 0;
 		std::vector<entt::entity> m_ChangeScratch;
 		std::vector<entt::entity> m_PendingScratch;
+
+		// Clones (CopyIntoScene): the source, its change logs' versions then, and whether the next sync reads every transform.
+		uint64_t m_CloneSource = 0;
+		ChangeVersions m_CloneVersions;
+		bool m_RefreshTransforms = false;
 
 		friend struct RenderSceneContext;
 	};

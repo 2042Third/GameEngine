@@ -2,6 +2,7 @@
 
 #include "Strata/Core/Base.h"
 #include "Strata/Renderer/GPUSceneData.h"
+#include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Renderer/SceneRenderData.h"
 
@@ -21,7 +22,6 @@ namespace Strata
 {
 
 	class AssetManagerBase;
-	class RenderScene;
 
 	// What one RenderSceneGPU::Update uploaded.
 	struct RenderSceneGPUUpdate
@@ -63,8 +63,17 @@ namespace Strata
 		RenderSceneGPU(nvrhi::IDevice* device, uint64_t renderSceneId);
 		~RenderSceneGPU();
 
-		RenderSceneGPU(const RenderSceneGPU&) = delete;
 		RenderSceneGPU& operator=(const RenderSceneGPU&) = delete;
+
+		// The mirror of a clone of the source's render scene (RenderScene::CopyIntoScene): the source's state with its buffers
+		// copied on the GPU (recorded and executed at once), so the clone's first frame uploads nothing. Null when a buffer
+		// could not be made (logged): the clone's mirror is then filled by uploads.
+		static Scope<RenderSceneGPU> CreateClone(RenderSceneGPU& source, uint64_t renderSceneId);
+		// Whether the mirror holds what its render scene's change logs stood at at `versions`, and nothing later: a clone made
+		// then can take it over.
+		bool HoldsVersions(const RenderScene::ChangeVersions& versions) const;
+		// The bytes of its buffers (the GPU memory the mirror holds).
+		uint64_t GetBufferBytes() const;
 
 		uint64_t GetRenderSceneId() const { return m_RenderSceneId; }
 
@@ -142,6 +151,8 @@ namespace Strata
 		void BuildMaterial(uint32_t slot, AssetHandle material, const AssetManagerBase* assets);
 		void SetMaterialFlags(uint32_t slot, uint32_t flags);
 		void RemoveTextureUsers(uint32_t slot);
+		// Every member as the source has it (CreateClone then gives the clone buffers and a command list of its own).
+		RenderSceneGPU(const RenderSceneGPU& source) = default;
 	private:
 		nvrhi::IDevice* m_Device;
 		uint64_t m_RenderSceneId;
@@ -238,6 +249,8 @@ namespace Strata
 		RenderSceneGPU& Get(const RenderScene& renderScene);
 		RenderSceneGPU* Find(uint64_t renderSceneId) const;
 		size_t GetMirrorCount() const { return m_Mirrors.size(); }
+		// The GPU memory every mirror's buffers hold (a clone's mirror doubles a scene's while it plays).
+		uint64_t GetBufferBytes() const;
 
 		// Once per device frame (Renderer::BeginFrame): releases the mirrors of destroyed render scenes and those unused for
 		// c_UnusedFrames frames (their buffers once the GPU is done with them), and starts the mirrors' budgets for new proxies.

@@ -693,7 +693,10 @@ short. Their full wording:
   per-frame callbacks `T` overrides (`SceneSystemDescriptor::CallsUpdate` and the others; declare overrides public).
   Scenes keep the components of modules a build lacks: they load with one warning per component name into
   `UnknownComponentsComponent` and are saved back unchanged (also through play mode, prefab snapshots, duplication and
-  undo). Details: Docs/Architecture.md, "Composition root and registries" and "Scene runtime lifecycle".
+  undo). Data a module keeps in a scene's registry context that a copy should keep (the render scene) is copied by a
+  `Scene::SceneContextCopier` the module registers there too (`Scene::RegisterContextCopier`, refused outside the
+  composition root); `Scene::Copy` runs the copiers once the copy is complete. Details: Docs/Architecture.md,
+  "Composition root and registries" and "Scene runtime lifecycle".
 - **Engine modules:** a service a program runs for its whole life (a device, audio, a UI, the project) is an
   `EngineModule` (`Core/EngineModule.h`) in its own module's folder (`<Module>/<Module>Module.{h,cpp}`, with
   `static constexpr std::string_view c_Name`, a specification struct and a `Factory`), listed by the programs that run

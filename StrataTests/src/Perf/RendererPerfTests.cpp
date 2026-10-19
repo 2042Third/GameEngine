@@ -7,10 +7,12 @@
 
 #include <Strata/Asset/RuntimeAssetManager.h>
 #include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/TextureStreamer.h>
 
 #include <spdlog/fmt/fmt.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
@@ -130,6 +132,43 @@ TEST_SUITE("PerfGPU.Renderer")
 			CHECK(renderer.GetStats().Materials == materials.size());
 			return Perf::MetricValues { { "PerfGPU.Renderer.Render10kMaterials", measurement.CPU.MedianMs },
 				{ "PerfGPU.Renderer.Render10kMaterials.OpaqueDrawCalls", static_cast<double>(GetDrawnCounts(renderer).Draws) } };
+		});
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Starting play on 1,000,000 rendered cubes clones their render scene and its GPU copy")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		Perf::ScopedApplicationJobSystem jobs;
+		SceneTestAssets assets;
+		constexpr size_t c_Count = 1'000'000;
+		Ref<Scene> source = CreateRef<Scene>("Cubes");
+		Perf::AddCameraAndLight(*source);
+		Perf::CreateCubeGrid(*source, c_Count);
+		SceneRenderer renderer;
+		renderer.SetViewportSize(c_Width, c_Height);
+		const SceneCamera camera = GridView(c_Count);
+		// The copy hook's time in Scene::Copy (the render scene's clone), and what the copy's first Render costs beyond the
+		// source's median Render (its GPU copy cloned on the GPU, no proxy built or uploaded).
+		Perf::CheckBudgetConfirmed("PerfGPU.Renderer.PlayStartRender1MCubes", [&]
+		{
+			const Perf::FrameMeasurement steady = MeasureRender(gpu, renderer, *source, camera, "1M cubes before play");
+			Ref<Scene> copy = Scene::Copy(source);
+			const RenderScene* clone = RenderScene::Find(*copy);
+			REQUIRE(clone != nullptr);
+			const double hookMs = clone->GetStats().CloneMs;
+			REQUIRE(gpu.GetDevice().BeginFrame());
+			Renderer::BeginFrame();
+			const auto start = std::chrono::steady_clock::now();
+			REQUIRE(renderer.Render(*copy, camera));
+			const double firstMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+			gpu.GetDevice().EndFrame();
+			CHECK(renderer.GetStats().ProxyBytesUploaded == 0);
+			CHECK(renderer.GetStats().ProxyUpdates == 0);
+			MESSAGE("Play start of 1M cubes: clone ", hookMs, " ms, first Render ", firstMs, " ms (", steady.CPU.MedianMs, " ms before)");
+			Scene::ReleaseInBackground(std::move(copy));
+			return hookMs + std::max(0.0, firstMs - steady.CPU.MedianMs);
 		});
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

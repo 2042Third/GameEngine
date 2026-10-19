@@ -158,6 +158,16 @@ namespace Strata
 
 	void SceneRenderer::PrepareExtraction(RenderScene& renderScene)
 	{
+		if (renderScene.GetId() != m_RenderSceneId && m_RenderSceneId != 0 && renderScene.GetCloneSource() == m_RenderSceneId)
+		{
+			// A clone of the render scene the renderer drew last (a play start): the same slots, proxies and instances, so the
+			// per-slot state, the uploaded draw lists, the feedback and the visibility history all hold for it.
+			if (m_Feedback.RenderSceneId == m_RenderSceneId)
+				m_Feedback.RenderSceneId = renderScene.GetId();
+			if (m_MaterialResolution.RenderSceneId == m_RenderSceneId)
+				m_MaterialResolution.RenderSceneId = renderScene.GetId();
+			m_RenderSceneId = renderScene.GetId();
+		}
 		if (renderScene.GetId() != m_RenderSceneId)
 		{
 			// Another scene: its slots mean something else, and the GPU copies hold the previous scene's data.

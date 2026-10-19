@@ -854,7 +854,9 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   first, the entities themselves (`registry.create(hint)`) as one more such copy; the UUID map (an `entt::dense_map`, two
   arrays) and the root list are copied as they are, and the dirty list and the transform pass carry over, so the copy
   needs no recomputation. The copy's signals are connected only afterwards: copying emits none, as a deserialized scene's
-  construction emits none before its systems start. Copying is mostly the system handing out fresh memory (page faults),
+  construction emits none before its systems start. Then the modules' context copiers run
+  (`Scene::RegisterContextCopier`): the Renderer module's clones the render scene, so the copy's first frame builds no
+  proxy and uploads nothing (see [Render scene](#render-scene), "Clones"). Copying is mostly the system handing out fresh memory (page faults),
   which the threads share: a 1,000,000-entity scene copies in about 43 ms (`Perf.Scene.Copy1M`; about 0.7 s entity by
   entity before), and the editor's frame that starts playing it takes about 47 ms (`PerfGPU.Editor.PlayStart1MMaxFrame`).
   Systems starting must not walk the hierarchy either: `ScriptSystem` sorts the scripted entities into hierarchy order
@@ -1832,6 +1834,23 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   swaps the scene in then builds no proxy (the longest frame of opening 20,000 prefab instances of five cubes in the
   editor: 51-52 ms before, 15.5-17 ms with it, most of it the first frame's upload of every instance and the
   Hierarchy's rows).
+- **Clones** (`RenderScene::CopyIntoScene`, the Renderer module's `Scene::SceneContextCopier`). `Scene::Copy` of a scene
+  with a render scene (play start) clones it into the copy: the copy's entities keep the source's EnTT identifiers, so
+  every proxy, instance, mesh and material slot and palette index stays the same, and the clone is the source's arrays
+  copied member by member, the large ones on the job system at once (`Core/ParallelClone.h`); it records its source
+  (`GetCloneSource`) and the source's change versions (`GetCloneVersions`), connects its listeners to the copy's
+  registry without queueing an entity, and reads a transform change the source had not read yet with a full comparison
+  at its first `Sync`. A renderer whose render scene was the source adopts the clone (`PrepareExtraction`): its per-slot
+  state, feedback, visibility history and view state carry over, so the copy's first frame is a steady frame. The clone's
+  GPU copy is made from the source's (`RenderSceneGPU::CreateClone`: its CPU state copied the same way, its buffers by
+  GPU copies executed at once) when that holds exactly the versions the clone started from (`HoldsVersions`), so it
+  uploads nothing; otherwise it fills by uploads like a new one. Its buffers double the scene's mirror memory while both
+  live (`renderStats.sceneMirrorMB`; the source's mirror goes once it was unused for `c_UnusedFrames`). Starting play on
+  1,000,000 rendered cubes takes 12-15 ms for the clone and 10-12 ms more for the copy's first `Render`, most of it the
+  GPU copy's CPU state and its buffers (Apple M2 Max under load, `PerfGPU.Renderer.PlayStartRender1MCubes`, 22-27 ms in
+  all; without the clone the first `Render` took 329 ms and the next frames uploaded the mirror for eight more).
+  Copy-on-write pages shared between the two would make the clone near free but add an indirection to every hot loop of
+  the render scene; the deep copy stays until a measurement on the reference machine says the pages cost nothing there.
 - **Mesh layouts**. The bounds, submeshes and submesh materials of a mesh are learned from the loaded mesh
   (`SetMeshLayout`) and kept when it is evicted. `Sync(assets)` keeps them current with the asset manager whatever the
   renderers look at: it reads the manager's content changes since its own content version (all of them when the

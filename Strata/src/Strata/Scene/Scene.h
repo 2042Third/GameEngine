@@ -95,6 +95,12 @@ namespace Strata
 		// are, and every component storage is copied whole (ComponentInfo::CopyStorage), the storages in parallel on the job
 		// system. Copies keep the source asset and the lineage (GetSourceAsset, GetLineageID).
 		static Ref<Scene> Copy(const Ref<Scene>& source);
+		// Copies context data a module keeps for a scene (in its registry's context) into a copy of the scene: Copy calls every
+		// copier, in registration order, once the copy is complete; a copier does nothing for a source without such data (the
+		// Renderer module's clones the render scene: RenderScene::CopyIntoScene). Registered only while the composition root
+		// registers modules (Engine::RegisterBuiltinModules); returns false otherwise.
+		using SceneContextCopier = void (*)(const Scene& source, Scene& destination);
+		static bool RegisterContextCopier(SceneContextCopier copier);
 		// Lets go of a scene that is no longer used (one a scene switch or an opened scene replaced) without spending the
 		// frame on destroying it, which takes tens of milliseconds for a million entities: what must end on the main thread
 		// ends here (a running scene stops: its systems, scripts, bodies and voices; sub-scene loads and their asset requests

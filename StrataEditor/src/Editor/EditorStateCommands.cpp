@@ -5,6 +5,7 @@
 #include "Editor/SceneRecovery.h"
 #include "Editor/ViewportRenderer.h"
 
+#include <Strata/Renderer/RenderSceneGPU.h>
 #include <Strata/Renderer/Renderer.h>
 
 #include <Strata/Core/FileSystem.h>
@@ -286,6 +287,8 @@ namespace Strata
 				{ "deferredInstanceBytes", stats.DeferredInstanceBytes },
 				{ "sizeCulledProxies", stats.SizeCulledProxies },
 				{ "geometryPool", DescribeGeometryPool() },
+				// The scenes' GPU copies (a playing scene's clone doubles its scene's while it plays).
+				{ "sceneMirrorMB", Renderer::IsInitialized() ? static_cast<double>(Renderer::GetRenderSceneGPUs().GetBufferBytes()) / (1024.0 * 1024.0) : 0.0 },
 				{ "gpuMs", std::move(gpuMs) },
 				{ "gpuStatsFrame", gpu.HasTimes ? nlohmann::json(gpu.Frame) : nlohmann::json(nullptr) } };
 		}
@@ -818,7 +821,8 @@ namespace Strata
 			"sizeCulledProxies (in view but below a pixel), instancesPerLod, lights, droppedLights, "
 			"materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes (new mesh renderers waiting for "
 			"their upload to the GPU), geometryPool "
-			"(the meshes' GPU geometry: usedMB, capacityMB, allocations, fragmentation, moves, growths), gpuMs "
+			"(the meshes' GPU geometry: usedMB, capacityMB, allocations, fragmentation, moves, growths), sceneMirrorMB (the GPU memory of the scenes' "
+			"GPU copies: a playing scene's doubles its scene's), gpuMs "
 			"(per GPU stage of the frame gpuStatsFrame names). Times are milliseconds as avgMs, p50Ms and p95Ms (nearest rank) and maxMs.",
 			ObjectSchema({ { "frames", IntegerSchema("How many of the latest frames to summarize (default 120)", 1, FrameProfiler::c_DefaultCapacity) } }),
 			[](EditorContext& context, const nlohmann::json& parameters)

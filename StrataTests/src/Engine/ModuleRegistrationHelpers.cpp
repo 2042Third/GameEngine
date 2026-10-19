@@ -54,6 +54,21 @@ namespace Strata::Tests
 			AssetHandle Cargo = AssetHandle::Null();
 		};
 
+		// Data a game module keeps in a scene's registry context, which copies of the scene keep through its context copier.
+		struct TestGarageContext
+		{
+			int32_t Vehicles = 0;
+		};
+
+		uint32_t s_GarageContextCopies = 0;
+
+		void CopyGarageContext(const Scene& source, Scene& destination)
+		{
+			s_GarageContextCopies++;
+			if (const TestGarageContext* context = source.GetRegistry().ctx().find<TestGarageContext>())
+				destination.GetRegistry().ctx().emplace<TestGarageContext>(*context);
+		}
+
 		constexpr uint32_t c_PassengerSlot = 0;
 		constexpr uint32_t c_CargoSlot = 1;
 
@@ -183,6 +198,7 @@ namespace Strata::Tests
 			bool duplicateTypeRefused = false;
 			bool duplicateNameRefused = false;
 			bool pipelineBeforeExtra = false;
+			bool copierRegistered = false;
 			Engine::ModuleRegistrationOptions options;
 			options.AssetPipeline = RegisterAssetPipeline;
 			options.Extra.push_back([&]()
@@ -199,6 +215,7 @@ namespace Strata::Tests
 				// The type is registered and the name is taken (ignoring case): both are refused, without aborting.
 				duplicateTypeRefused = !ComponentRegistry::Register<TestVehicleComponent>("TestVehicleAgain").Property("Speed", &TestVehicleComponent::Speed);
 				duplicateNameRefused = !ComponentRegistry::Register<LateComponent>("testvehicle");
+				copierRegistered = Scene::RegisterContextCopier(&CopyGarageContext);
 			});
 			Engine::RegisterBuiltinModules(options);
 
@@ -300,6 +317,24 @@ namespace Strata::Tests
 			if (lateError.find("frozen") == std::string::npos)
 				return Fail("the refused registration logged no error");
 			std::printf("late registration refused: %s\n", lateError.c_str());
+
+			// The context copier runs once for each copy, after the copy is complete, and copiers register only while the
+			// composition root runs.
+			if (!copierRegistered)
+				return Fail("the context copier was refused during the composition root's registration");
+			const Ref<Scene> original = CreateRef<Scene>("Depot");
+			original->GetRegistry().ctx().emplace<TestGarageContext>(TestGarageContext { 3 });
+			const Ref<Scene> copy = Scene::Copy(original);
+			const Ref<Scene> copyOfCopy = Scene::Copy(copy);
+			const TestGarageContext* copied = copyOfCopy->GetRegistry().ctx().find<TestGarageContext>();
+			if (s_GarageContextCopies != 2 || !copied || copied->Vehicles != 3)
+				return Fail(fmt::format("the context copier ran {} times for 2 copies", s_GarageContextCopies));
+			const uint64_t beforeCopier = Log::GetBuffer().GetLatestSequence();
+			if (Scene::RegisterContextCopier(&CopyGarageContext))
+				return Fail("a context copier was registered after the composition root");
+			if (FindLoggedError(beforeCopier, "RegisterContextCopier").empty())
+				return Fail("the refused context copier logged no error");
+			std::printf("context copiers: one run per copy, late registration refused\n");
 			std::fflush(stdout);
 			return 0;
 		}

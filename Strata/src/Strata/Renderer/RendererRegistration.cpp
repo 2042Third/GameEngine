@@ -10,9 +10,11 @@
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
+#include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RendererUploadContext.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureStreamer.h"
+#include "Strata/Scene/Scene.h"
 
 namespace Strata
 {
@@ -68,6 +70,8 @@ namespace Strata
 		EngineServices::Register<IAssetGraphics>(RendererAssetGraphics::Get());
 		// The GPU stages, before anything reads the frame profiler's stages (a perf log's columns).
 		RendererGPUStages::Get();
+		// A copied scene (play start) gets a clone of the source's render scene, so its first frame builds no proxy.
+		Scene::RegisterContextCopier(&RenderScene::CopyIntoScene);
 
 		// Textures and meshes are stored in their cooked binary form, materials and fonts as their source. Textures and
 		// fonts keep their bytes: they take them over instead of copying them. Block-compressed textures are decoded here,
