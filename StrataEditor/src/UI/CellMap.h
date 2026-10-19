@@ -27,9 +27,10 @@ namespace Strata
 	// (+X right, -Z up, the way a top view looks down), one layer at a time or all overlaid (a chip row picks), each colored
 	// by its state with the theme's meanings: unloaded (the surface), wanted (secondary text, faint), loading (Sulfur),
 	// loaded (Ochre), unloading (secondary text), failed (Cinnabar); unsaved cells are outlined in the warning color and
-	// pinned ones carry a pin. The streaming sources are dots with their radius circles and facing. Drag pans, the wheel
-	// zooms around the mouse, a double click frames the sources; hovering names a cell (key, state, entities, bodies from
-	// the cook's index), a click selects it and its context menu offers Load and pin, Unpin and Show in Content Browser.
+	// pinned ones carry a pin; a line under the map counts the cells in each state. The streaming sources are dots with their
+	// radius circles and facing. Drag pans, the wheel zooms around the mouse, a double click frames the sources; hovering
+	// names a cell (key, state, entities, bodies from the cook's index), a click selects it and its context menu offers Load
+	// and pin, Unpin and Show in Content Browser.
 	//
 	// Its cells are copied from the streamer only when the streamer's StateVersion, its World asset object or the editor's
 	// dirty marks changed (Update), and only the cells in view are drawn, as draw-list rectangles: no widget per cell. The
@@ -73,7 +74,7 @@ namespace Strata
 		// Brings the cells up to date with `streamer`, and with `world`'s dirty marks when it is the editor's (null for a
 		// game's streamer). Returns true when they were copied again.
 		bool Update(const WorldStreamer& streamer, const EditorWorld* world);
-		// Draws the layer chips, the map (the content region's width, at most `height` high) and its legend. With `editable` (the
+		// Draws the layer chips, the map (the content region's width, at most `height` high) and the legend's line under it. With `editable` (the
 		// editor's world, which world.loadCells pins in) the context menu offers loading and unpinning; otherwise only
 		// showing the cell's scene. Returns what the context menu asked for this frame.
 		std::optional<Request> Draw(const WorldStreamer& streamer, float height, bool editable);
@@ -102,7 +103,7 @@ namespace Strata
 		void DrawSources(ImDrawList* drawList, const WorldStreamer& streamer, const WorldAsset& world, const ImVec2& min, const ImVec2& max) const;
 		void DrawTooltip(const Cell& cell, const WorldAsset& world) const;
 		std::optional<Request> DrawContextMenu(bool editable);
-		void DrawLegend(const ImVec2& bottomLeft);
+		void DrawLegend();
 		ImVec2 ToScreen(const glm::dvec2& point, const ImVec2& min, const ImVec2& max) const;
 		glm::dvec2 ToGround(const ImVec2& point, const ImVec2& min, const ImVec2& max) const;
 	private:
@@ -125,7 +126,6 @@ namespace Strata
 		double m_Scale = 0.0; // 0 until the first Draw frames the sources
 		std::optional<WorldCellKey> m_Selected;
 		std::optional<WorldCellKey> m_ContextCell; // The cell the open context menu is for
-		bool m_ShowLegend = true;
 		size_t m_DrawnCells = 0;
 	};
 

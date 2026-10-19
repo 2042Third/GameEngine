@@ -34,6 +34,8 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <array>
+#include <cstdio>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -352,6 +354,7 @@ namespace Strata
 		// The world's name and its cells, with the map button at the right.
 		const float mapButtonWidth = ImGui::GetFrameHeight();
 		const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+		const float rightScreen = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
 		ImGui::AlignTextToFramePadding();
 		ImGui::TextColored(colors.Accent, "%s", Icons::Globe);
 		ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
@@ -364,18 +367,23 @@ namespace Strata
 			ImGui::SetTooltip("This scene is the persistent scene of a world: the cells around the camera stream in and out as it "
 				"moves, and saving writes only the cells that changed. Search \"l:Props\" or \"cell:3,-1\" to find a cell's entities.");
 		}
-		ImGui::SameLine();
-		ImGui::TextColored(colors.TextSecondary, "%u cells loaded", stats.CellsLoaded);
-		if (stats.CellsLoading > 0)
+		// The counts, as far as they fit before the map button (a narrow panel shows fewer; the cell map has them all).
+		const float countsRight = rightScreen - mapButtonWidth - style.ItemSpacing.x;
+		std::array<char, 64> text {};
+		auto count = [&](float spacing, const ImVec4& color, const char* format, auto value)
 		{
-			ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
-			ImGui::TextColored(colors.Warning, "\xC2\xB7 %u loading", stats.CellsLoading);
-		}
-		if (dirty > 0)
-		{
-			ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
-			ImGui::TextColored(colors.Warning, "\xC2\xB7 %zu unsaved", dirty);
-		}
+			std::snprintf(text.data(), text.size(), format, value);
+			if (ImGui::GetItemRectMax().x + spacing + ImGui::CalcTextSize(text.data()).x > countsRight)
+				return false;
+			ImGui::SameLine(0.0f, spacing);
+			ImGui::TextColored(color, "%s", text.data());
+			return true;
+		};
+		bool shown = count(style.ItemSpacing.x, colors.TextSecondary, "%u cells loaded", stats.CellsLoaded);
+		if (shown && stats.CellsLoading > 0)
+			shown = count(style.ItemInnerSpacing.x, colors.Warning, "\xC2\xB7 %u loading", stats.CellsLoading);
+		if (shown && dirty > 0)
+			count(style.ItemInnerSpacing.x, colors.Warning, "\xC2\xB7 %zu unsaved", dirty);
 		UI::ItemProbe::Record("Hierarchy.WorldCells");
 		ImGui::SameLine(std::max(right - mapButtonWidth, ImGui::GetCursorPosX()));
 		if (UI::IconButton("Hierarchy.CellMap", Icons::Map, "Show the cell map (Streaming panel, World)") && m_ShowCellMap)

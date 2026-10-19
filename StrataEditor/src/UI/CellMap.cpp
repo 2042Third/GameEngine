@@ -189,7 +189,9 @@ namespace Strata
 	{
 		const WorldData& data = world.GetData();
 		const std::vector<WorldStreamingSource>& sources = streamer.GetSources();
-		const double side = std::max(static_cast<double>(std::min(size.x, size.y)), 1.0);
+		// A wide, short map (a bottom dock) frames by the mean of its sides: the circles reach past its top and bottom, but the
+		// cells near the sources stay large enough to read.
+		const double side = std::max(std::sqrt(static_cast<double>(size.x) * static_cast<double>(size.y)), 1.0);
 		if (!sources.empty())
 		{
 			glm::dvec2 center(0.0);
@@ -238,10 +240,12 @@ namespace Strata
 		}
 		DrawChips(*world);
 
-		// As tall as the space left allows, between c_MinHeightInFontSizes and `height`: a short bottom dock still shows it whole.
+		// As tall as the space left allows (with the legend's line under it), between c_MinHeightInFontSizes and `height`: a
+		// short bottom dock still shows it whole.
 		const ImVec2 available = ImGui::GetContentRegionAvail();
 		const float minHeight = ImGui::GetFontSize() * c_MinHeightInFontSizes;
-		const ImVec2 size(std::max(available.x, ImGui::GetFontSize() * 4.0f), std::clamp(available.y, minHeight, std::max(height, minHeight)));
+		const float legendHeight = ImGui::GetTextLineHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+		const ImVec2 size(std::max(available.x, ImGui::GetFontSize() * 4.0f), std::clamp(available.y - legendHeight, minHeight, std::max(height, minHeight)));
 		const ImVec2 min = ImGui::GetCursorScreenPos();
 		const ImVec2 max(min.x + size.x, min.y + size.y);
 		if (m_Scale <= 0.0)
@@ -293,37 +297,37 @@ namespace Strata
 				DrawCells(drawList, *world, min, max, layer);
 		}
 		DrawSources(drawList, streamer, *world, min, max);
-		if (m_ShowLegend)
-		{
-			const float margin = ImGui::GetStyle().ItemSpacing.x;
-			DrawLegend(ImVec2(min.x + margin, max.y - margin));
-		}
 		drawList->PopClipRect();
 		drawList->AddRect(min, max, ImGui::GetColorU32(colors.Border));
 
 		if (hoveredCell && !ImGui::IsPopupOpen("CellMapContext"))
 			DrawTooltip(*hoveredCell, *world);
-		return DrawContextMenu(editable);
+		const std::optional<Request> request = DrawContextMenu(editable);
+		DrawLegend();
+		return request;
 	}
 
 	void CellMap::DrawChips(const WorldAsset& world)
 	{
 		const WorldData& data = world.GetData();
+		const float spacing = ImGui::GetStyle().ItemInnerSpacing.x;
+		const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
 		bool all = !m_ShownLayer;
 		if (UI::ToggleChip("CellMap.Layer.All", Icons::Layers, "All", &all, "Every layer, overlaid (the finer cells on top)"))
 			m_ShownLayer.reset();
 		for (size_t layer = 0; layer < data.Layers.size(); layer++)
 		{
-			ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+			// The chips wrap to the next line rather than run out of a narrow panel.
+			const char* name = data.Layers[layer].Name.c_str();
+			if (ImGui::GetItemRectMax().x + spacing + UI::ChipWidth(Icons::Grid2X2, name) <= right)
+				ImGui::SameLine(0.0f, spacing);
 			bool shown = m_ShownLayer == layer;
 			ImGui::PushID(static_cast<int>(layer));
-			const std::string id = "CellMap.Layer." + data.Layers[layer].Name;
-			if (UI::ToggleChip(id.c_str(), Icons::Grid2X2, data.Layers[layer].Name.c_str(), &shown, "Only this layer's cells"))
+			const std::string id = std::string("CellMap.Layer.") + name;
+			if (UI::ToggleChip(id.c_str(), Icons::Grid2X2, name, &shown, "Only this layer's cells"))
 				m_ShownLayer = layer;
 			ImGui::PopID();
 		}
-		ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
-		UI::ToggleChip("CellMap.Legend", Icons::Info, "Legend", &m_ShowLegend, "What the colors mean, with the number of cells in each state");
 	}
 
 	void CellMap::DrawCells(ImDrawList* drawList, const WorldAsset& world, const ImVec2& min, const ImVec2& max, size_t layerIndex)
@@ -482,9 +486,34 @@ namespace Strata
 		return request;
 	}
 
-	void CellMap::DrawLegend(const ImVec2& bottomLeft)
+	void CellMap::DrawLegend()
 	{
-		UI::Legend("Streaming.CellMap.Legend", bottomLeft, m_Legend, "Outlined: unsaved \xC2\xB7 pin: kept loaded");
+		// One line under the map, wrapping in narrow panels: a swatch, the state and its cells, for each state.
+		const UI::ThemeColors& colors = UI::GetThemeColors();
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const float swatch = ImGui::GetFontSize() * 0.7f;
+		const float right = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x;
+		for (size_t index = 0; index < m_Legend.size(); index++)
+		{
+			const UI::LegendLine& line = m_Legend[index];
+			const float width = swatch + style.ItemInnerSpacing.x + ImGui::CalcTextSize(line.Label.c_str()).x + style.ItemInnerSpacing.x
+				+ ImGui::CalcTextSize(line.Count.c_str()).x;
+			if (index > 0 && ImGui::GetItemRectMax().x + style.ItemSpacing.x * 2.0f + width <= right)
+				ImGui::SameLine(0.0f, style.ItemSpacing.x * 2.0f);
+			ImGui::BeginGroup();
+			const ImVec2 at = ImGui::GetCursorScreenPos();
+			const float top = at.y + (ImGui::GetTextLineHeight() - swatch) * 0.5f;
+			ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(at.x, top), ImVec2(at.x + swatch, top + swatch), ImGui::GetColorU32(line.Color));
+			ImGui::Dummy(ImVec2(swatch, ImGui::GetTextLineHeight()));
+			ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+			ImGui::TextColored(colors.TextSecondary, "%s", line.Label.c_str());
+			ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+			ImGui::TextUnformatted(line.Count.c_str());
+			ImGui::EndGroup();
+			UI::ItemProbe::Record(UI::NumberedProbeKey("Streaming.CellMap.Legend", index), true, 0, line.Count);
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+				ImGui::SetTooltip("Cells %s; unsaved cells are outlined, and pinned ones (kept loaded) carry a pin", line.Label.c_str());
+		}
 	}
 
 }

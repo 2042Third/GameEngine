@@ -2276,14 +2276,14 @@ distance so a game can set its fog or far plane to match.
 running game's `WorldStreamingSystem` streamer while playing, the editor's otherwise). It draws a world's cells as
 squares on the ground plane (+X right, -Z up), one layer or all overlaid (finer cells on top), colored with the theme's
 meanings (unloaded, wanted, loading Sulfur, loaded Ochre, unloading, failed Cinnabar), outlined in the warning color when
-unsaved, with a pin on pinned cells, and the sources as dots with their radius circles and facing; a legend counts the
-cells per state. Drag pans, the wheel zooms around the mouse and a double click frames the sources; hovering names a
+unsaved, with a pin on pinned cells, and the sources as dots with their radius circles and facing; a line under the
+map counts the cells per state. Drag pans, the wheel zooms around the mouse and a double click frames the sources; hovering names a
 cell (state, entities, cooked bodies, error), a click selects it, and its context menu runs `world.loadCells` (Load and
 pin, Unpin) or reveals the cell's scene. Its cells are copied from the streamer only when `WorldStreamingStats::
 StateVersion`, the World asset object or `EditorWorld::GetDirtyVersion` changed, and only while the section is drawn
 (a closed panel copies nothing, `Editor.UI.World`); only the cells in view are drawn, walking the grid squares in view
 or the cells, whichever are fewer, as draw-list rectangles. Its height follows the space left in the panel (4 to 18
-font sizes), so a short bottom dock shows it whole.
+font sizes), so a short bottom dock shows it whole, and a wide, short map frames the sources by the mean of its sides.
 
 **A world in the Hierarchy and the Inspector.** While the edited scene is a world (edit mode), a strip at the top of the
 Hierarchy names the world, counts its loaded, loading and unsaved cells, picks the edit layer (a combo running
