@@ -1027,6 +1027,18 @@ namespace Strata
 		if (prune && rootWorld.ActiveInHierarchy == active)
 			return;
 
+		// A leaf changes alone, without a walk's lists: the top-level entities of a cell that unloads are thousands of leaves
+		// turned inactive at once.
+		if (GetHierarchy(root).FirstChild == entt::null)
+		{
+			if (rootWorld.ActiveInHierarchy != active)
+			{
+				rootWorld.ActiveInHierarchy = active;
+				RecordTransformChanges(++m_TransformsVersion, std::span<const entt::entity>(&root, 1), false);
+			}
+			return;
+		}
+
 		std::vector<entt::entity> changed;
 		if (rootWorld.ActiveInHierarchy != active)
 			changed.push_back(root);
