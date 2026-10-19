@@ -10,6 +10,7 @@
 #include <Strata/Core/BinaryStream.h>
 #include <Strata/Core/Hash.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scripting/ScriptingComponents.h>
@@ -170,6 +171,31 @@ TEST_SUITE("Scene.CookedScene")
 		CHECK(read->GetRootEntities() == feature->GetRootEntities());
 		CHECK(read->GetName() == feature->GetName());
 		CHECK(warnings.empty());
+
+		// The comparison covers what other streams added to the feature scene. The prefab instance's override list is extra
+		// data with no binary form, kept as MessagePack; game-ui's components are registered ones like any other.
+		const ComponentInfo* prefabInstance = ComponentRegistry::Find<PrefabInstanceComponent>();
+		REQUIRE(prefabInstance);
+		CHECK(prefabInstance->SerializeExtra);
+		CHECK_FALSE(prefabInstance->SerializeExtraBinary);
+		auto countOverrides = [](const Scene& scene)
+		{
+			size_t overrides = 0;
+			for (const auto [handle, instance] : scene.GetRegistry().view<PrefabInstanceComponent>().each())
+				overrides += instance.Overrides.size();
+			return overrides;
+		};
+		CHECK(countOverrides(*feature) > 0);
+		CHECK(countOverrides(*read) == countOverrides(*feature));
+		const nlohmann::json readDocument = SceneSerializer::Serialize(*read);
+		for (const char* component : { "UICanvas", "UIRect", "UIImage", "UIText", "UIButton", "UIToggle", "UISlider", "UIInputField", "UIMask", "UILayout" })
+		{
+			CAPTURE(component);
+			size_t entities = 0;
+			for (const nlohmann::json& entity : readDocument["Scene"]["Entities"])
+				entities += entity["Components"].contains(component) ? 1 : 0;
+			CHECK(entities > 0);
+		}
 
 		// Through the scene asset's loader, as packs load it.
 		const Ref<SceneAsset> asset = SceneAsset::Deserialize(bytes, &error);
