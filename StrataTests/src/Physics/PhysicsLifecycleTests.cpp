@@ -221,8 +221,8 @@ TEST_SUITE("Physics.Lifecycle")
 
 	TEST_CASE("Hundreds of entities made in the places of ones destroyed in the same frame get bodies of their own")
 	{
-		// Enough to build on the job threads, whose records exist before the destroyed entities' records go: physics finds
-		// records by entity index, and the new records wait beside the old ones until those are removed.
+		// Enough to build on the job threads. Physics finds records by entity index: each destroyed entity's record goes before
+		// the entity made in its place gets one, so the index is reused within one round of changes.
 		ScopedJobSystem jobs(2);
 		Scene scene;
 		CreateGround(scene);
@@ -261,6 +261,56 @@ TEST_SUITE("Physics.Lifecycle")
 		scene.DestroyEntities(second);
 		StepScene(scene, 1);
 		CHECK(physics.GetStats().BodyCount == 1);
+	}
+
+	TEST_CASE("A body built before the record of the destroyed entity whose index it reuses goes is found, rebuilt and removed")
+	{
+		// C, a body of its own, changes first; then A goes, B takes A's entity index and C becomes B's child. The changes are
+		// applied in the order they were recorded: C's change makes B's body build while A's record still holds the index, so
+		// B's record waits beside it (physics' record overflow) until A's goes.
+		Scene scene;
+		CreateGround(scene);
+		Entity a = CreateStaticBox(scene, "A", glm::vec3(0.0f, 0.5f, 10.0f), glm::vec3(0.5f));
+		Entity c = CreateStaticBox(scene, "C", glm::vec3(5.0f, 0.5f, -10.0f), glm::vec3(0.5f));
+		scene.OnRuntimeStart();
+		PhysicsSystem& physics = GetPhysics(scene);
+		StepScene(scene, 1);
+		REQUIRE(physics.GetStats().BodyCount == 3);
+
+		c.GetComponent<BoxColliderComponent>().HalfExtents = glm::vec3(0.6f);
+		c.MarkModified<BoxColliderComponent>();
+		const entt::entity aHandle = a.GetHandle();
+		scene.DestroyEntity(a);
+		Entity b = CreateDynamicBox(scene, "B", glm::vec3(0.0f, 0.5f, -10.0f));
+		REQUIRE(entt::to_entity(b.GetHandle()) == entt::to_entity(aHandle));
+		REQUIRE(scene.SetParent(c, b));
+		StepScene(scene, 1);
+		CHECK(physics.HasBody(b));
+		CHECK(physics.GetStats().BodyCount == 2); // The ground and B, with C's collider in its shape
+		CHECK(physics.GetStats().DynamicBodyCount == 1);
+		const std::optional<RaycastHit> old = physics.Raycast(glm::vec3(0.0f, 5.0f, 10.0f), glm::vec3(0.0f, -1.0f, 0.0f), 10.0f);
+		REQUIRE(old.has_value());
+		CHECK(old->Distance > 4.5f); // The ground, not A
+
+		// Found where it waits: an edit rebuilds it, and its removal leaves the index free for the next entity.
+		CHECK(physics.SetLinearVelocity(b, glm::vec3(1.0f, 0.0f, 0.0f)));
+		b.GetComponent<RigidBodyComponent>().LinearDamping = 0.5f;
+		b.MarkModified<RigidBodyComponent>();
+		StepScene(scene, 1);
+		CHECK(physics.HasBody(b));
+		CHECK(physics.GetStats().BodyCount == 2);
+		const entt::entity bHandle = b.GetHandle();
+		scene.DestroyEntities(std::vector<Entity> { b }); // With C, its child
+		StepScene(scene, 1);
+		CHECK(physics.GetStats().BodyCount == 1);
+		Entity d = CreateStaticBox(scene, "D", glm::vec3(0.0f, 0.5f, 10.0f), glm::vec3(0.5f));
+		Entity e = CreateStaticBox(scene, "E", glm::vec3(5.0f, 0.5f, 10.0f), glm::vec3(0.5f));
+		CHECK((entt::to_entity(d.GetHandle()) == entt::to_entity(bHandle) || entt::to_entity(e.GetHandle()) == entt::to_entity(bHandle)));
+		StepScene(scene, 1);
+		CHECK(physics.HasBody(d));
+		CHECK(physics.HasBody(e));
+		CHECK(physics.GetStats().BodyCount == 3);
+		scene.OnRuntimeStop();
 	}
 
 	TEST_CASE("Property edits rebuild the body and keep its motion")
