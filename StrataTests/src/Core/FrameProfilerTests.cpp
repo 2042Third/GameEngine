@@ -162,6 +162,37 @@ TEST_SUITE("Core.FrameProfiler")
 		CHECK(summary.Untimed.Max == doctest::Approx(12.5f - 10.25f)); // The rest of the frame
 	}
 
+	TEST_CASE("Stages outside the work time report their time while the frame runs, also nested in other stages")
+	{
+		ManualProfiler manual;
+		FrameProfiler& profiler = manual.Profiler;
+		const FrameStageID ui = Builtin(profiler, "Editor.UI");
+		const FrameStageID present = Builtin(profiler, "Present");
+		CHECK(profiler.GetOutOfWorkSeconds() == 0.0); // Outside a frame
+
+		profiler.BeginFrame();
+		{
+			const FrameStageScope outer(profiler, ui);
+			manual.AdvanceMs(2.0);
+			{
+				// The display's image, waited for at its first use while the UI draws into it.
+				const FrameStageScope wait(profiler, present);
+				manual.AdvanceMs(6.0);
+			}
+			manual.AdvanceMs(1.0);
+		}
+		CHECK(profiler.GetOutOfWorkSeconds() == doctest::Approx(0.006));
+		profiler.EndFrame(0.003);
+		const FrameSample frame = profiler.GetFrame(0);
+		CHECK(StageMs(frame, ui) == doctest::Approx(3.0f));
+		CHECK(StageMs(frame, present) == doctest::Approx(6.0f));
+
+		// Every frame starts from nothing.
+		profiler.BeginFrame();
+		CHECK(profiler.GetOutOfWorkSeconds() == 0.0);
+		profiler.EndFrame(0.0);
+	}
+
 	TEST_CASE("Stages time only the frame thread's frames")
 	{
 		ManualProfiler manual;
@@ -369,6 +400,200 @@ TEST_SUITE("Core.FrameProfiler")
 		CHECK(seen == std::vector<uint64_t> { 0, 1, 2 });
 		REQUIRE(work.size() == 3);
 		CHECK(work[2] == doctest::Approx(6.0f));
+	}
+
+	TEST_CASE("GPU stages stay out of the frame's work, its stage sum and its untimed time")
+	{
+		ManualProfiler manual;
+		FrameProfiler& profiler = manual.Profiler;
+		const FrameStageID gpu = profiler.RegisterStage("GPU.Test", true, FrameStageKind::GPU);
+		REQUIRE(gpu != c_InvalidFrameStage);
+		CHECK(profiler.GetStageKind(gpu) == FrameStageKind::GPU);
+		CHECK_FALSE(profiler.IsStageInWorkTime(gpu)); // Never in the work time, whatever was asked
+		CHECK(profiler.GetStageKind(Builtin(profiler, "Input")) == FrameStageKind::CPU);
+		// Registering the name again returns it.
+		CHECK(profiler.RegisterStage("GPU.Test", false, FrameStageKind::GPU) == gpu);
+		const FrameStageID input = Builtin(profiler, "Input");
+
+		profiler.BeginFrame();
+		{
+			// A GPU stage cannot be entered on the CPU: its scope does nothing, and the time counts for the stage around it.
+			FrameStageScope inputScope(profiler, input);
+			manual.AdvanceMs(1.0);
+			FrameStageScope gpuScope(profiler, gpu);
+			manual.AdvanceMs(2.0);
+		}
+		profiler.EndFrame(0.004);
+		REQUIRE(profiler.RecordGPUFrame(0, std::vector<GPUStageTime> { { gpu, 5.0f } }));
+
+		const FrameSample frame = profiler.GetFrame(0);
+		CHECK(StageMs(frame, input) == doctest::Approx(3.0f));
+		CHECK(StageMs(frame, gpu) == 0.0f);
+		CHECK(frame.HasGPU);
+		CHECK(frame.GPUStageMs[gpu] == doctest::Approx(5.0f));
+		CHECK(frame.GPUStageMs[input] == 0.0f);
+		CHECK(frame.GPUBusyMs == doctest::Approx(5.0f));
+
+		const FrameProfileSummary summary = profiler.Summarize(1);
+		CHECK(summary.Work.P50 == doctest::Approx(4.0f));
+		CHECK(summary.StageSum.P50 == doctest::Approx(3.0f));
+		CHECK(summary.Untimed.P50 == doctest::Approx(1.0f));
+		const FrameStageSummary& gpuSummary = summary.Stages[gpu];
+		CHECK(gpuSummary.Kind == FrameStageKind::GPU);
+		CHECK_FALSE(gpuSummary.InWorkTime);
+		CHECK(gpuSummary.Time.P50 == doctest::Approx(5.0f));
+		CHECK(summary.Stages[input].Kind == FrameStageKind::CPU);
+	}
+
+	TEST_CASE("Late GPU times attach to their frame while it is in the ring")
+	{
+		ManualProfiler manual(4);
+		FrameProfiler& profiler = manual.Profiler;
+		const FrameStageID shadows = profiler.RegisterStage("GPU.Shadows", false, FrameStageKind::GPU);
+		const FrameStageID opaque = profiler.RegisterStage("GPU.Opaque", false, FrameStageKind::GPU);
+		const FrameStageID input = Builtin(profiler, "Input");
+		for (int frame = 0; frame < 3; frame++)
+		{
+			profiler.BeginFrame();
+			profiler.EndFrame(0.001);
+		}
+
+		// Frame 1's times arrive two frames late; a stage listed twice adds up; CPU stages and unknown ids are ignored.
+		const std::vector<GPUStageTime> times = { { shadows, 1.0f }, { opaque, 2.0f }, { opaque, 0.5f }, { input, 9.0f }, { 63, 9.0f } };
+		REQUIRE(profiler.RecordGPUFrame(1, times));
+		const FrameSample frame1 = profiler.GetFrame(1);
+		CHECK(frame1.Index == 1);
+		CHECK(frame1.HasGPU);
+		CHECK(frame1.GPUStageMs[shadows] == doctest::Approx(1.0f));
+		CHECK(frame1.GPUStageMs[opaque] == doctest::Approx(2.5f));
+		CHECK(frame1.GPUStageMs[input] == 0.0f);
+		CHECK(frame1.GPUBusyMs == doctest::Approx(3.5f));
+		CHECK(frame1.GPULatencyFrames == 2);
+		CHECK_FALSE(profiler.GetFrame(0).HasGPU);
+		CHECK_FALSE(profiler.GetFrame(2).HasGPU);
+
+		// Frames not recorded yet, or no longer in the ring, are refused.
+		CHECK_FALSE(profiler.RecordGPUFrame(3, times));
+		for (int frame = 0; frame < 4; frame++)
+		{
+			profiler.BeginFrame();
+			profiler.EndFrame(0.001);
+		}
+		CHECK_FALSE(profiler.RecordGPUFrame(2, times)); // Overwritten by frame 6
+		CHECK(profiler.RecordGPUFrame(3, times));
+
+		// A frame without GPU work is resolved without GPU times.
+		CHECK(profiler.RecordGPUFrame(4, {}));
+		CHECK_FALSE(profiler.GetFrame(2).HasGPU);
+
+		// A reset forgets the frames: times recorded for the frames before it are refused, as their indices start again.
+		const uint32_t resets = profiler.GetResetCount();
+		profiler.Reset();
+		CHECK(profiler.GetResetCount() == resets + 1);
+		CHECK_FALSE(profiler.RecordGPUFrame(0, times));
+	}
+
+	TEST_CASE("WithGPU listeners hear of the frames in order, once their GPU times arrived or after eight frames without")
+	{
+		ManualProfiler manual;
+		FrameProfiler& profiler = manual.Profiler;
+		const FrameStageID gpu = profiler.RegisterStage("GPU.Test", false, FrameStageKind::GPU);
+		std::vector<uint64_t> immediate;
+		std::vector<std::pair<uint64_t, float>> withGPU;
+		profiler.AddFrameListener([&](const FrameSample& frame) { immediate.push_back(frame.Index); });
+		const uint32_t listener = profiler.AddFrameListener([&](const FrameSample& frame) { withGPU.emplace_back(frame.Index, frame.GPUBusyMs); },
+			FrameListenerTiming::WithGPU);
+		const auto runFrame = [&profiler]()
+		{
+			profiler.BeginFrame();
+			profiler.EndFrame(0.001);
+		};
+
+		// Without GPU times expected, WithGPU listeners hear of each frame at once.
+		runFrame();
+		CHECK(withGPU.size() == 1);
+
+		// Expected: frames wait for their times, in order.
+		profiler.SetGPUTimesExpected(true);
+		runFrame(); // 1
+		runFrame(); // 2
+		CHECK(withGPU.size() == 1);
+		const std::vector<GPUStageTime> two = { { gpu, 2.0f } };
+		REQUIRE(profiler.RecordGPUFrame(2, two)); // Frame 2's times before frame 1's: frame 2 waits for frame 1
+		runFrame(); // 3
+		CHECK(withGPU.size() == 1);
+		const std::vector<GPUStageTime> one = { { gpu, 1.0f } };
+		REQUIRE(profiler.RecordGPUFrame(1, one));
+		runFrame(); // 4: frames 1 and 2 are heard of, in order
+		REQUIRE(withGPU.size() == 3);
+		CHECK(withGPU[1] == std::pair<uint64_t, float>(1, 1.0f));
+		CHECK(withGPU[2] == std::pair<uint64_t, float>(2, 2.0f));
+
+		// Frame 3 never gets its times: it is heard of once eight later frames were recorded, and the frames after it follow.
+		for (uint64_t frame = 5; frame < 3 + FrameProfiler::c_MaxGPULatencyFrames; frame++)
+		{
+			runFrame();
+			CHECK(withGPU.size() == 3);
+		}
+		runFrame(); // Frame 11: eight frames after frame 3
+		REQUIRE(withGPU.size() >= 4);
+		CHECK(withGPU[3] == std::pair<uint64_t, float>(3, 0.0f));
+		CHECK(withGPU.size() == 4); // Frame 4 is only seven frames old
+
+		// The end of a run: every frame left is heard of.
+		profiler.FlushGPUListeners();
+		REQUIRE(withGPU.size() == 12);
+		for (uint64_t index = 0; index < withGPU.size(); index++)
+			CHECK(withGPU[index].first == index);
+		CHECK(immediate.size() == 12);
+
+		// A frame about to leave the ring is heard of first.
+		profiler.RemoveFrameListener(listener);
+		ManualProfiler twoFrames(2);
+		std::vector<uint64_t> heard;
+		twoFrames.Profiler.AddFrameListener([&](const FrameSample& frame) { heard.push_back(frame.Index); }, FrameListenerTiming::WithGPU);
+		twoFrames.Profiler.SetGPUTimesExpected(true);
+		for (int frame = 0; frame < 4; frame++)
+		{
+			twoFrames.Profiler.BeginFrame();
+			twoFrames.Profiler.EndFrame(0.001);
+		}
+		CHECK(heard == std::vector<uint64_t> { 0, 1 });
+	}
+
+	TEST_CASE("What bounds the frames follows the 90% rules")
+	{
+		// GPU: busy at least 90% of the interval and above the work time.
+		CHECK(FrameProfiler::ClassifyFrameBound(9.8f, 11.8f, 12.3f) == FrameBound::GPU);
+		CHECK(FrameProfiler::ClassifyFrameBound(5.0f, 9.0f, 10.0f) == FrameBound::GPU);
+		// Busy enough, but the CPU's work is longer: CPU.
+		CHECK(FrameProfiler::ClassifyFrameBound(9.5f, 9.2f, 10.0f) == FrameBound::CPU);
+		// CPU: work at least 90% of the interval.
+		CHECK(FrameProfiler::ClassifyFrameBound(9.0f, 2.0f, 10.0f) == FrameBound::CPU);
+		// Neither: something else paces the frames (vsync, a cap, throttling).
+		CHECK(FrameProfiler::ClassifyFrameBound(3.0f, 4.0f, 16.6f) == FrameBound::Capped);
+		CHECK(FrameProfiler::ClassifyFrameBound(8.9f, 8.9f, 10.0f) == FrameBound::Capped);
+		CHECK(FrameProfiler::ClassifyFrameBound(3.0f, 4.0f, 0.0f) == FrameBound::Unknown);
+
+		// The summary classifies the medians, Unknown without GPU times.
+		ManualProfiler manual;
+		FrameProfiler& profiler = manual.Profiler;
+		const FrameStageID gpu = profiler.RegisterStage("GPU.Test", false, FrameStageKind::GPU);
+		for (int frame = 0; frame < 5; frame++)
+		{
+			profiler.BeginFrame();
+			manual.AdvanceMs(10.0);
+			profiler.EndFrame(0.002);
+		}
+		CHECK(profiler.Summarize(5).GPU.BoundBy == FrameBound::Unknown);
+		CHECK(profiler.Summarize(5).GPU.Frames == 0);
+		CHECK(profiler.Summarize(5).Interval.P50 == doctest::Approx(10.0f));
+		for (uint64_t frame = 0; frame < 5; frame++)
+			REQUIRE(profiler.RecordGPUFrame(frame, std::vector<GPUStageTime> { { gpu, 9.5f } }));
+		const FrameProfileSummary summary = profiler.Summarize(5);
+		CHECK(summary.GPU.Frames == 5);
+		CHECK(summary.GPU.Busy.P50 == doctest::Approx(9.5f));
+		CHECK(summary.GPU.BoundBy == FrameBound::GPU);
 	}
 
 	TEST_CASE("Frames report how busy the job system's threads were")

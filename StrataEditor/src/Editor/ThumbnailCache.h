@@ -99,8 +99,8 @@ namespace Strata
 		static constexpr uint32_t c_MaxPreviewSize = 512;
 		// Part of the cache files' key: bump it when thumbnails would look different (rendering or decoding changed), so that
 		// cached ones are made again.
-		// 2: skinned meshes stand in their skeleton's rest pose.
-		static constexpr uint32_t c_Version = 2;
+		// 2: skinned meshes stand in their skeleton's rest pose; 3: wave 4's renderer (the shadow bias, size culling).
+		static constexpr uint32_t c_Version = 3;
 
 		ThumbnailCache(const Ref<EditorAssetManager>& assets, ThumbnailCacheSpecification specification);
 		~ThumbnailCache();

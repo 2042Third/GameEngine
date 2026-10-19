@@ -3,13 +3,15 @@
 #extension GL_EXT_samplerless_texture_functions : require
 
 #include "Include/Scene.glsl"
+#include "Include/MaterialTextures.glsl"
 #include "Include/PBR.glsl"
 #include "Include/Shadows.glsl"
 #include "Include/Clusters.glsl"
 
 // Forward shading into the HDR target, compiled in two variants (see Strata/CMakeLists.txt):
 // - Scene/Forward.frag shades opaque and alpha-masked surfaces after the depth prepass with an EQUAL depth test. The
-//   prepass already discarded masked texels, so this variant never discards and forces early depth testing.
+//   prepass already discarded masked texels, so this variant forces early depth testing and discards only what the
+//   prepass's level-of-detail cross-fade mask left out (IsLODFadeDrawn, the same test).
 // - Scene/ForwardTransparent.frag (ST_FORWARD_TRANSPARENT) shades alpha-blended surfaces. They are not in the
 //   prepass, so the screen-space ambient occlusion (which belongs to the opaque surface behind them) is not applied.
 
@@ -17,11 +19,12 @@
 layout(early_fragment_tests) in;
 #endif
 
-layout(location = 0) in vec3 v_WorldPosition;
+layout(location = 0) in vec3 v_RelativePosition;
 layout(location = 1) in vec3 v_Normal;
 layout(location = 2) in vec4 v_Tangent; // w: bitangent sign (already flipped for mirrored instances)
 layout(location = 3) in vec2 v_TexCoord;
 layout(location = 4) flat in uint v_InstanceIndex;
+layout(location = 5) flat in uint v_LODFade;
 
 layout(location = 0) out vec4 o_Color;
 
@@ -45,45 +48,22 @@ vec3 GetShadingNormal(MaterialData material, vec2 uv)
 	return (mappedLength > 1e-5 ? mapped / mappedLength : normal) * side;
 }
 
-void main()
+// The lit surface's color: the sun with its shadow, the punctual lights of the pixel's cluster, image-based or constant
+// ambient light and the emission.
+vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicRoughness, vec3 shadingNormal, float occlusion, MaterialData material)
 {
-	// Derivatives need uniform control flow: take them before any branch or discard.
-	vec3 positionDx = dFdx(v_WorldPosition);
-	vec3 positionDy = dFdy(v_WorldPosition);
-
-	InstanceData instance = u_Instances[v_InstanceIndex];
-	MaterialData material = u_Materials[instance.MaterialIndex];
-	vec2 uv = TransformUV(material, v_TexCoord);
-
-	vec4 baseColor = material.BaseColor * SampleMaterialTexture(material.BaseColorMap, uv);
-#ifdef ST_FORWARD_TRANSPARENT
-	if ((material.Flags & ST_MATERIAL_ALPHA_MASK) != 0u && baseColor.a < material.AlphaCutoff)
-		discard;
-	float alpha = (material.Flags & ST_MATERIAL_ALPHA_BLEND) != 0u ? baseColor.a : 1.0;
-#else
-	const float alpha = 1.0;
-#endif
-	vec3 emissive = material.Emissive.rgb * SampleMaterialTexture(material.EmissiveMap, uv).rgb;
-
-	if ((material.Flags & ST_MATERIAL_UNLIT) != 0u)
-	{
-		o_Color = vec4(SanitizeHDR(baseColor.rgb + emissive), alpha);
-		return;
-	}
-
-	vec4 metallicRoughness = SampleMaterialTexture(material.MetallicRoughnessMap, uv);
 	SurfaceData surface;
-	surface.Position = v_WorldPosition;
-	surface.Normal = GetShadingNormal(material, uv);
-	surface.View = GetViewVector(v_WorldPosition);
-	surface.Albedo = baseColor.rgb;
-	surface.Alpha = baseColor.a;
+	surface.Position = v_RelativePosition;
+	surface.Normal = shadingNormal;
+	surface.View = GetViewVector(v_RelativePosition);
+	surface.Albedo = albedo;
+	surface.Alpha = baseAlpha;
 	surface.Metallic = clamp(material.Metallic * metallicRoughness.b, 0.0, 1.0);
 	surface.Roughness = clamp(material.Roughness * metallicRoughness.g, 0.0, 1.0);
-	surface.Occlusion = mix(1.0, SampleMaterialTexture(material.OcclusionMap, uv).r, material.OcclusionStrength);
+	surface.Occlusion = occlusion;
 	surface.Emissive = emissive;
 
-	float viewDepth = -(u_Frame.View * vec4(v_WorldPosition, 1.0)).z;
+	float viewDepth = -(u_Frame.View * vec4(v_RelativePosition, 1.0)).z;
 	vec3 color = vec3(0.0);
 	if (u_Frame.DirectionalLightDirection.w > 0.0)
 	{
@@ -91,7 +71,7 @@ void main()
 		if (u_Frame.ShadowParams.w > 0.0)
 		{
 			vec3 geometricNormal = normalize(v_Normal) * (gl_FrontFacing ? 1.0 : -1.0);
-			shadow = SampleDirectionalShadow(v_WorldPosition, geometricNormal, viewDepth, gl_FragCoord.xy, positionDx, positionDy);
+			shadow = SampleDirectionalShadow(v_RelativePosition, geometricNormal, viewDepth, gl_FragCoord.xy);
 		}
 		color += EvaluateLight(surface, -u_Frame.DirectionalLightDirection.xyz, u_Frame.DirectionalLightColor.rgb) * shadow;
 	}
@@ -148,6 +128,37 @@ void main()
 		color += u_Frame.AmbientColor.rgb * surface.Albedo * (1.0 - surface.Metallic) * diffuseOcclusion;
 	}
 	color += surface.Emissive;
+	return color;
+}
 
+void main()
+{
+	InstanceData instance = u_Instances[v_InstanceIndex];
+	MaterialData material = u_Materials[instance.MaterialIndex];
+	vec2 uv = TransformUV(material, v_TexCoord);
+
+	// The surface is shaded before anything is discarded: a quad whose other pixels discarded has no implicit derivatives
+	// (texture levels of detail, the shadow's filter) left (Architecture.Shaders).
+	vec4 baseColor = material.BaseColor * SampleMaterialTexture(material.BaseColorMap, uv);
+	vec3 emissive = material.Emissive.rgb * SampleMaterialTexture(material.EmissiveMap, uv).rgb;
+	vec3 color = baseColor.rgb + emissive;
+	if ((material.Flags & ST_MATERIAL_UNLIT) == 0u)
+	{
+		vec4 metallicRoughness = SampleMaterialTexture(material.MetallicRoughnessMap, uv);
+		vec3 shadingNormal = GetShadingNormal(material, uv);
+		float occlusion = mix(1.0, SampleMaterialTexture(material.OcclusionMap, uv).r, material.OcclusionStrength);
+		color = ShadeLitSurface(baseColor.rgb, baseColor.a, emissive, metallicRoughness, shadingNormal, occlusion, material);
+	}
+
+	// The prepass's mask: of a fading level, only the pixels whose depth it wrote.
+	if (!IsLODFadeDrawn(v_LODFade, gl_FragCoord.xy))
+		discard;
+#ifdef ST_FORWARD_TRANSPARENT
+	if ((material.Flags & ST_MATERIAL_ALPHA_MASK) != 0u && baseColor.a < material.AlphaCutoff)
+		discard;
+	float alpha = (material.Flags & ST_MATERIAL_ALPHA_BLEND) != 0u ? baseColor.a : 1.0;
+#else
+	const float alpha = 1.0;
+#endif
 	o_Color = vec4(SanitizeHDR(color), alpha);
 }

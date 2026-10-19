@@ -15,6 +15,7 @@ namespace Strata
 {
 
 	class FontAtlasCache;
+	class GPUPassTimer;
 	class Scene;
 	struct VisibleTextureUse;
 
@@ -59,14 +60,20 @@ namespace Strata
 		glm::uvec2 ViewportSize = glm::uvec2(0);  // Pixels
 		SceneScreenView ScreenView;               // SceneRenderOptions::ScreenView: where the game's screen lies in the image
 		bool DrawScreenSpace = true;              // SceneRenderOptions::DrawScreenSpaceText: the game's screen-space UI
-		// The frame's camera (clip space: reversed-Z), for overlays placed in the scene (world-space canvases). HasCamera is false
-		// when the overlay scene is not the rendered one (its camera would be another scene's).
+		// The frame's camera, for overlays placed in the scene (world-space canvases), in the scene shaders' camera-relative
+		// space: ViewProjection (clip space: reversed-Z) takes positions relative to CameraPosition (its view only rotates),
+		// so subtract the camera from what is placed, in double, before multiplying. HasCamera is false when the overlay scene
+		// is not the rendered one (its camera would be another scene's).
 		glm::mat4 ViewProjection = glm::mat4(1.0f);
+		glm::vec3 CameraPosition = glm::vec3(0.0f);
 		bool HasCamera = false;
 		nvrhi::ICommandList* CommandList = nullptr; // Open: uploads are recorded here
 		FontAtlasCache* Atlases = nullptr;        // The renderer's glyph atlases, with what the frame's raster budget has left
 		std::vector<VisibleTextureUse>* VisibleTextures = nullptr; // Textures drawn, appended for mip streaming
 		SceneOverlayStats* Stats = nullptr;       // Added to
+		// The renderer's GPU timer of the frame (GPUProfiler.h), valid until the frame's Draw returns. A pass times its draws
+		// as a GPU stage of its own: Next(its stage) before them, then Next back to the stage the timer had (GPU.Overlays).
+		GPUPassTimer* GPUTimer = nullptr;
 	};
 
 	// A pass a module adds to every SceneRenderer, drawn over the finished image after the screen-space text (the game UI).

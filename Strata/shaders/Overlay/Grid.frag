@@ -45,21 +45,23 @@ vec4 Over(vec4 top, vec4 bottom)
 
 void main()
 {
-	// The pixel's view ray (valid for perspective and orthographic projections) meets the plane at t.
+	// The pixel's view ray (valid for perspective and orthographic projections) meets the plane at t, in camera-relative
+	// space (the plane lies at the camera's height below it); the lines are drawn at world coordinates.
 	vec2 ndc = UVToNDC(v_UV);
 	vec4 nearPoint = u_Frame.InverseViewProjection * vec4(ndc, 1.0, 1.0);
 	vec4 farPoint = u_Frame.InverseViewProjection * vec4(ndc, 0.5, 1.0);
 	vec3 origin = nearPoint.xyz / nearPoint.w;
 	vec3 direction = farPoint.xyz / farPoint.w - origin;
-	float t = -origin.y / direction.y;
-	vec3 position = origin + direction * t;
+	float t = (-u_Frame.CameraPosition.y - origin.y) / direction.y;
+	vec3 relative = origin + direction * t;
+	vec3 position = relative + u_Frame.CameraPosition.xyz;
 
 	// Derivatives need uniform control flow: take them before discarding.
 	vec2 coordinate = position.xz / u_Grid.Spacing;
 	vec2 derivative = fwidth(coordinate);
 	vec2 axisDistance = abs(position.zx) / max(fwidth(position.zx), vec2(1e-6)); // In pixels
 
-	vec4 clip = u_Frame.ViewProjection * vec4(position, 1.0);
+	vec4 clip = u_Frame.ViewProjection * vec4(relative, 1.0);
 	float depth = clip.z / clip.w;
 	// Neighbors whose rays miss the plane give no usable slope (NaN, infinite or the whole depth range).
 	float depthSlope = fwidth(depth);
@@ -74,7 +76,7 @@ void main()
 	color = Over(vec4(u_Grid.AxisZColor.rgb, u_Grid.AxisZColor.a * (1.0 - min(axisDistance.y, 1.0))), color);
 	color = Over(vec4(u_Grid.AxisXColor.rgb, u_Grid.AxisXColor.a * (1.0 - min(axisDistance.x, 1.0))), color);
 
-	float distanceToCamera = length(position - u_Frame.CameraPosition.xyz);
+	float distanceToCamera = length(relative);
 	color.a *= 1.0 - smoothstep(0.5 * u_Grid.FadeDistance, u_Grid.FadeDistance, distanceToCamera);
 	if (color.a <= 0.0)
 		discard;

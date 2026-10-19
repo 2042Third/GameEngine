@@ -1,14 +1,18 @@
 #include <doctest/doctest.h>
 
 #include "Editor/CommandTestUtils.h"
+#include "Editor/CommandUtils.h"
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/ProjectThumbnail.h"
+#include "Editor/ViewportRenderer.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/GameViewPanel.h"
 #include "Renderer/GPUTestUtils.h"
+#include "Renderer/MeshTestUtils.h"
+#include "Renderer/SceneRendererTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetManager.h>
@@ -20,6 +24,7 @@
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/RenderScene.h>
+#include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Components.h>
 
@@ -286,6 +291,65 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture reports what its frame drew, with the GPU's time per stage, and editor.perf the viewport's frame")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu; // The renderer's frames resolve the GPU's times
+		harness.AddScene();
+
+		nlohmann::json result;
+		harness.CaptureLoaded({ { "width", 64 }, { "height", 48 } }, &result);
+		REQUIRE(result.contains("renderStats"));
+		const nlohmann::json& stats = result["renderStats"];
+		INFO(stats.dump(1));
+		for (const char* key : { "gpuDriven", "drawCommands", "draws", "opaqueDraws", "shadowDraws", "instances", "shadowCasters", "triangles", "visibleProxies",
+			"occludedProxies", "occludedCasters", "cachedCascades", "culledProxies", "instancesPerLod", "lights", "droppedLights", "materials", "pendingAssets", "extractMs", "sortMs", "proxyUpdates",
+			"instanceBytesUploaded", "deferredInstanceBytes", "geometryPool", "gpuMs", "gpuStatsFrame" })
+		{
+			CAPTURE(key);
+			CHECK(stats.contains(key));
+		}
+		// The cube, drawn in the prepass and the forward pass, and into the sun's shadow cascades.
+		CHECK(stats["instances"] == 1);
+		CHECK(stats["opaqueDraws"] == 1);
+		CHECK(stats["drawCommands"].get<uint32_t>() >= 2);
+		CHECK(stats["triangles"] == 12);
+		CHECK(stats["lights"] == 1);
+		CHECK(stats["instancesPerLod"].size() == SceneRendererStats::c_LODStatCount);
+		// The meshes' geometry lives in the renderer's pool.
+		REQUIRE(stats["geometryPool"].is_object());
+		CHECK(stats["geometryPool"]["usedMB"].get<double>() > 0.0);
+		CHECK(stats["geometryPool"]["capacityMB"].get<double>() >= stats["geometryPool"]["usedMB"].get<double>());
+		CHECK(stats["geometryPool"]["allocations"].get<uint32_t>() >= 1);
+		if (Renderer::GetGPUProfiler().IsEnabled())
+		{
+			// The captured frame's own GPU time.
+			CHECK(stats["gpuStatsFrame"].is_number_unsigned());
+			const nlohmann::json& gpuMs = stats["gpuMs"];
+			REQUIRE(gpuMs.contains("GPU.Opaque"));
+			CHECK(gpuMs["GPU.Opaque"].get<float>() > 0.0f);
+			CHECK(gpuMs["GPU.Prepass"].get<float>() > 0.0f);
+			CHECK(gpuMs.contains("GPU.Overlays")); // The editor's overlays and the copy
+		}
+
+		// editor.perf: the viewport panel's frame, once it rendered one.
+		CHECK(harness.Run("editor.perf")["renderStats"].is_null());
+		ViewportRenderer* viewport = harness.Context.GetViewport().GetRenderer();
+		REQUIRE(viewport);
+		const std::optional<ViewportView> view = ResolveViewportView(harness.Context, ViewportCameraSource::Editor, 4.0f / 3.0f);
+		REQUIRE(view);
+		REQUIRE(viewport->Render(harness.Context, glm::uvec2(64, 48), *view, harness.Context.GetViewport().GetSettings(), true));
+		// The GPU-driven path's counts are known once the GPU ran the frame's culling.
+		viewport->GetSceneRenderer().ResolveGPUStats(true);
+		const nlohmann::json perf = harness.Run("editor.perf");
+		REQUIRE(perf["renderStats"].is_object());
+		CHECK(perf["renderStats"]["instances"] == 1);
+		CHECK(perf.contains("gpu"));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A capture waits until its text is complete")
 	{
 		Tests::GPUContext gpu;
@@ -309,6 +373,37 @@ TEST_SUITE("GPU.Editor.Viewport")
 		const std::optional<std::vector<uint8_t>> png = Base64::Decode(first.Value["Image"]["Data"].get<std::string>());
 		REQUIRE(png);
 		CHECK(harness.CountDifferences(DecodePNG(*png), complete) == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture waits until mesh renderers new to the scene reached the GPU")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu; // Each render is a frame of its own, with a new upload budget
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(Tests::CreateTemporaryDirectory("ViewportCaptureBacklog") / "Game") }, { "name", "Game" } });
+		harness.Run("entity.create", { { "name", "PostProcess" }, { "components", { { "PostProcess", { { "Tonemapper", "None" }, { "AutoExposure", false },
+			{ "Vignette", 0.0 }, { "Bloom", false }, { "AmbientOcclusion", false }, { "AntiAliasing", false } } } } } });
+		harness.Run("entity.create", { { "name", "Sun" }, { "components", { { "DirectionalLight", { { "Intensity", 3.0 } } } } } });
+		// A scene that just gained a cube in front of the camera and, behind it, more mesh renderers than its GPU copy takes in
+		// two frames, which it takes first (the newest entities are the first the render scene meets).
+		harness.Run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } });
+		constexpr uint32_t c_Parts = 4096;
+		AssetMetadata metadata;
+		metadata.Type = AssetType::Mesh;
+		metadata.Name = "Parts";
+		const AssetHandle parts = harness.Context.GetAssetManager()->AddMemoryAsset(Tests::CreateCubeOfParts(1.0f, c_Parts, BuiltinAssets::DefaultMaterial), metadata);
+		Tests::AddUploadBacklog(*harness.Context.GetActiveScene(), parts, c_Parts, glm::vec3(0.0f, 0.0f, 40.0f));
+		harness.Run("camera.set", { { "position", { 0, 0, 4 } }, { "target", { 0, 0, 0 } } });
+
+		nlohmann::json result;
+		const DecodedImage image = harness.Capture({ { "width", 64 }, { "height", 48 } }, &result);
+		CHECK(result["renderStats"]["deferredInstanceBytes"] == 0);
+		CHECK(result["waitedFrames"].get<uint32_t>() >= 2);
+		// The lit cube fills the center.
+		CHECK(image.At(32, 24).r > 100);
+		CHECK(image.At(1, 1).r < 40);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -898,6 +993,14 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(game->GetOutputTexture()->getDesc().height == 720);
 		viewport.SetGameViewSize(frame.RenderSize);
 
+		// editor.perf reports the Game view's frame beside the viewport's, as viewport.capture and the viewport describe theirs.
+		game->GetSceneRenderer().ResolveGPUStats(true); // The GPU-driven path's counts are known once the GPU culled the frame
+		nlohmann::json perf = harness.Run("editor.perf");
+		CHECK(perf["renderStats"].is_null()); // The viewport panel rendered nothing
+		REQUIRE(perf["gameRenderStats"].is_object());
+		CHECK(perf["gameRenderStats"] == CommandUtils::DescribeRenderStats(game->GetStats(), game->GetGPUStats()));
+		CHECK(perf["gameRenderStats"].contains("gpuMs"));
+
 		// Captures of the scene's camera take the Game view's resolution; the editor camera keeps the viewport's.
 		nlohmann::json result;
 		DecodedImage image = harness.Capture({ { "camera", "scene" }, { "waitForAssets", false } }, &result);
@@ -919,6 +1022,7 @@ TEST_SUITE("GPU.Editor.Viewport")
 		panel.OnHidden(panelContext);
 		CHECK(game->GetSize() == glm::uvec2(0));
 		CHECK(viewport.GetGameViewSize() == glm::uvec2(0));
+		CHECK(harness.Run("editor.perf")["gameRenderStats"].is_null());
 		REQUIRE(game->Render(context, frame.RenderSize, *view, viewport.GetSettings(), false));
 		REQUIRE(game->GetSize() == glm::uvec2(1280, 720));
 		panel.OnDetach(panelContext);

@@ -150,7 +150,7 @@ TEST_SUITE("GPU.Animation")
 		SceneRenderer skinnedRenderer;
 		skinnedRenderer.SetViewportSize(size, size);
 		const ReadbackImage skinnedImage = RenderToImage(skinnedRenderer, skinnedScene.SceneData, camera);
-		CHECK(skinnedRenderer.GetStats().SkinnedInstances == 1);
+		CHECK(GetDrawnCounts(skinnedRenderer).SkinnedInstances == 1);
 		CHECK(skinnedRenderer.GetStats().PaletteBytesUploaded == 3 * sizeof(RenderData::AffineTransform));
 		CHECK(RenderScene::Get(skinnedScene.SceneData).GetStats().PosedProxies == 1);
 		const std::vector<uint8_t> skinnedMask = EntityMask(skinnedRenderer, skinnedScene.Arm);
@@ -160,7 +160,7 @@ TEST_SUITE("GPU.Animation")
 		SceneRenderer referenceRenderer;
 		referenceRenderer.SetViewportSize(size, size);
 		const ReadbackImage referenceImage = RenderToImage(referenceRenderer, referenceScene.SceneData, camera);
-		CHECK(referenceRenderer.GetStats().SkinnedInstances == 0);
+		CHECK(GetDrawnCounts(referenceRenderer).SkinnedInstances == 0);
 		const std::vector<uint8_t> referenceMask = EntityMask(referenceRenderer, referenceScene.Arm);
 
 		// Forward pass (and the floor's shadow, from the shadow pass): the same colors everywhere.
@@ -223,7 +223,7 @@ TEST_SUITE("GPU.Animation")
 		ReadbackImage image = RenderToImage(renderer, scene, camera);
 		const glm::uvec2 limb = ProjectToPixel(camera, glm::vec3(-3.0f, 1.0f, 0.0f), size);
 		CHECK(renderer.GetStats().VisibleProxies == 2);
-		CHECK(renderer.GetStats().SkinnedInstances == 1);
+		CHECK(GetDrawnCounts(renderer).SkinnedInstances == 1);
 		CHECK(Red(image, limb) > 240);
 		const std::vector<uint8_t> mask = EntityMask(renderer, arm);
 		CHECK(mask[static_cast<size_t>(limb.y) * size + limb.x] == 1);
@@ -238,7 +238,7 @@ TEST_SUITE("GPU.Animation")
 		image = RenderToImage(renderer, scene, floorCamera);
 		const glm::uvec2 shadowed = ProjectToPixel(floorCamera, glm::vec3(-3.0f, 0.0f, 0.0f), size);
 		const glm::uvec2 lit = ProjectToPixel(floorCamera, glm::vec3(-3.0f, 0.0f, 0.9f), size);
-		CHECK(renderer.GetStats().ShadowCasters > 0);
+		CHECK(GetDrawnCounts(renderer).ShadowCasters > 0);
 		CHECK(Red(image, shadowed) < Red(image, lit) / 3);
 		CHECK(gpu.GetNewErrorCount() == 0);
 		scene.UnregisterService<ISkinningPoses>(poses);
@@ -305,15 +305,19 @@ TEST_SUITE("GPU.Animation")
 			poses.Poses[other.GetHandle()] = pose;
 		}
 		REQUIRE(renderer.Render(skinnedScene, camera));
-		CHECK(renderer.GetStats().SkinnedInstances == 10);
-		CHECK(renderer.GetStats().OpaqueDrawCalls == 1);
+		CHECK(GetDrawnCounts(renderer).SkinnedInstances == 10);
+		// The GPU-driven path's occlusion culling draws what the view saw in the previous frame first and the new copies in
+		// a second phase (a draw each); from the next frame on all of them come first.
+		REQUIRE(renderer.Render(skinnedScene, camera));
+		CHECK(GetDrawnCounts(renderer).SkinnedInstances == 10);
+		CHECK(GetDrawnCounts(renderer).Draws == 1);
 		CHECK(RenderScene::Get(skinnedScene).GetStats().PaletteJoints == 30);
 
 		// Without a pose the mesh shows its bind pose through the ordinary pipelines.
 		poses.Poses.clear();
 		poses.Version++;
 		REQUIRE(renderer.Render(skinnedScene, camera));
-		CHECK(renderer.GetStats().SkinnedInstances == 0);
+		CHECK(GetDrawnCounts(renderer).SkinnedInstances == 0);
 		CHECK(RenderScene::Get(skinnedScene).GetStats().PosedProxies == 0);
 		CHECK(RenderScene::Get(skinnedScene).GetStats().SkinProxies == 10);
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -360,7 +364,7 @@ TEST_SUITE("GPU.Animation")
 		renderer.SetViewportSize(size, size);
 		const ReadbackImage image = RenderToImage(renderer, scene, camera);
 		CHECK(renderer.GetStats().VisibleProxies == 1); // The floor
-		const uint32_t castInstances = renderer.GetStats().ShadowCasters;
+		const uint32_t castInstances = GetDrawnCounts(renderer).ShadowCasters;
 		auto reported = [&](Entity entity)
 		{
 			return std::find(poses.Reported.begin(), poses.Reported.end(), entity.GetHandle()) != poses.Reported.end();
@@ -372,13 +376,20 @@ TEST_SUITE("GPU.Animation")
 		const glm::uvec2 shaded = ProjectToPixel(camera, glm::vec3(0.0f, 0.0f, -3.0f), size);
 		const glm::uvec2 lit = ProjectToPixel(camera, glm::vec3(1.0f, 0.0f, -3.0f), size);
 		CHECK(Red(image, shaded) < Red(image, lit) / 2);
+		// A frame that takes its requests from the GPU's visibility feedback tests the skinned casters out of view on the CPU
+		// alike (against the shadowed part of the view: it may report more, never fewer), and casts the same shadow.
+		poses.Reported.clear();
+		const ReadbackImage again = RenderToImage(renderer, scene, camera);
+		CHECK(renderer.GetStats().FeedbackRequests == renderer.GetStats().GPUDriven);
+		CHECK(reported(shadowing));
+		CHECK(MaxDifference(image, again) <= 1);
 		// The characters behind and beside are shadow casters of the cascades (each one gone, fewer instances are drawn into
 		// them): only the test of where their shadows can fall keeps their animators unreported.
 		for (Entity unseen : { behind, beside })
 		{
 			unseen.SetActive(false);
 			REQUIRE(renderer.Render(scene, camera));
-			CHECK(renderer.GetStats().ShadowCasters < castInstances);
+			CHECK(GetDrawnCounts(renderer).ShadowCasters < castInstances);
 			unseen.SetActive(true);
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -469,7 +480,7 @@ TEST_SUITE("GPU.Animation")
 			SceneRenderer renderer;
 			renderer.SetViewportSize(size, size);
 			REQUIRE(renderer.Render(scene, camera));
-			CHECK(renderer.GetStats().SkinnedInstances == (skinned ? 1u : 0u));
+			CHECK(GetDrawnCounts(renderer).SkinnedInstances == (skinned ? 1u : 0u));
 			const std::span<const VisibleTextureUse> textures = renderer.GetVisibleTextures();
 			REQUIRE(textures.size() == 1);
 			const VisibleTextureUse use = textures[0];
@@ -487,7 +498,7 @@ TEST_SUITE("GPU.Animation")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
-	TEST_CASE("Skinned models stand in their rest pose in edited scenes as they do in play before their first animation")
+	TEST_CASE("Skinned models stand in their rest pose in edited scenes as they do in play before their first animation, on both paths")
 	{
 		GPUContext gpu;
 		REQUIRE(gpu.IsValid());
@@ -509,38 +520,48 @@ TEST_SUITE("GPU.Animation")
 			CAPTURE(armFile.Name);
 			const ImportedArm arm = ImportSkinnedArm(*assets.Manager, armFile.Options, ++handle);
 
-			// Edit mode: the editor's preview gives the scene its animators' rest poses.
-			Scene edited("Edited");
-			const Entity editedMesh = BuildModelScene(edited, arm, floorMaterial);
-			AnimationPreviewSpecification specification;
-			specification.RestPoses = true;
-			AnimationPreview preview(edited, specification);
-			preview.Update();
-			REQUIRE_FALSE(preview.HasWaitingRestPoses());
-			SceneRenderer editedRenderer;
-			editedRenderer.SetViewportSize(size, size);
-			const ReadbackImage editedImage = RenderToImage(editedRenderer, edited, camera);
-			CHECK(editedRenderer.GetStats().SkinnedInstances == 1);
-			const std::vector<uint8_t> editedMask = EntityMask(editedRenderer, editedMesh);
-
-			// Play mode, nothing playing: the animation system's pose with no clip.
-			Scene played("Played");
-			BuildModelScene(played, arm, floorMaterial);
-			played.OnRuntimeStart(SceneRuntimeMode::Play);
-			played.OnUpdateRuntime(1.0f / 60.0f);
-			SceneRenderer playedRenderer;
-			playedRenderer.SetViewportSize(size, size);
-			const ReadbackImage playedImage = RenderToImage(playedRenderer, played, camera);
-			CHECK(MaxDifference(editedImage, playedImage) <= 1);
-			played.OnRuntimeStop();
-
-			// The arm stands along +Y over the origin: the column x = 0 from y = 0.1 to 1.9 is the arm (in its bind pose it lies
-			// along an axis of the ground).
-			for (float y = 0.1f; y < 1.95f; y += 0.2f)
+			// Both paths draw the preview's palettes: the GPU's culling and indirect draws (where the device has them), and the
+			// CPU's batches.
+			for (const GPUDrivenMode mode : { GPUDrivenMode::Auto, GPUDrivenMode::Off })
 			{
-				CAPTURE(y);
-				const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(0.0f, y, 0.0f), size);
-				CHECK(editedMask[static_cast<size_t>(pixel.y) * size + pixel.x] == 1);
+				CAPTURE(static_cast<int>(mode));
+				SceneRendererSpecification specification;
+				specification.GPUDriven = mode;
+
+				// Edit mode: the editor's preview gives the scene its animators' rest poses.
+				Scene edited("Edited");
+				const Entity editedMesh = BuildModelScene(edited, arm, floorMaterial);
+				AnimationPreviewSpecification previewSpecification;
+				previewSpecification.RestPoses = true;
+				AnimationPreview preview(edited, previewSpecification);
+				preview.Update();
+				REQUIRE_FALSE(preview.HasWaitingRestPoses());
+				SceneRenderer editedRenderer(specification);
+				editedRenderer.SetViewportSize(size, size);
+				const ReadbackImage editedImage = RenderToImage(editedRenderer, edited, camera);
+				CHECK(editedRenderer.GetStats().GPUDriven == (mode == GPUDrivenMode::Auto && editedRenderer.IsGPUDriven()));
+				CHECK(GetDrawnCounts(editedRenderer).SkinnedInstances == 1);
+				const std::vector<uint8_t> editedMask = EntityMask(editedRenderer, editedMesh);
+
+				// Play mode, nothing playing: the animation system's pose with no clip.
+				Scene played("Played");
+				BuildModelScene(played, arm, floorMaterial);
+				played.OnRuntimeStart(SceneRuntimeMode::Play);
+				played.OnUpdateRuntime(1.0f / 60.0f);
+				SceneRenderer playedRenderer(specification);
+				playedRenderer.SetViewportSize(size, size);
+				const ReadbackImage playedImage = RenderToImage(playedRenderer, played, camera);
+				CHECK(MaxDifference(editedImage, playedImage) <= 1);
+				played.OnRuntimeStop();
+
+				// The arm stands along +Y over the origin: the column x = 0 from y = 0.1 to 1.9 is the arm (in its bind pose it
+				// lies along an axis of the ground).
+				for (float y = 0.1f; y < 1.95f; y += 0.2f)
+				{
+					CAPTURE(y);
+					const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(0.0f, y, 0.0f), size);
+					CHECK(editedMask[static_cast<size_t>(pixel.y) * size + pixel.x] == 1);
+				}
 			}
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);

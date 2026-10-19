@@ -137,9 +137,13 @@ namespace Strata
 		if (!framebuffer)
 			return;
 
-		// Drawn over whatever the layers rendered into the framebuffer this frame.
+		// Drawn over whatever the layers rendered into the framebuffer this frame. Its GPU stage is registered here, by the
+		// first program that draws UI, so programs without ImGui (games) get no empty column for it.
+		static const FrameStageID s_GPUStage = FrameProfiler::Get().RegisterStage("GPU.ImGui", false, FrameStageKind::GPU);
 		m_CommandList->open();
+		GPUPassTimer timer(m_CommandList.Get(), s_GPUStage);
 		m_Renderer.Render(m_CommandList, ImGui::GetDrawData(), framebuffer);
+		timer.End();
 		m_CommandList->close();
 		Renderer::GetDevice()->executeCommandList(m_CommandList);
 	}

@@ -127,6 +127,12 @@ namespace Strata
 		// GPU state (main thread, after the asset became Ready).
 		nvrhi::ITexture* GetGPUTexture() const { return m_GPUTexture; }
 		uint32_t GetBindlessSlot() const { return m_BindlessSlot; }
+		// Its index in the renderer's texture table (Renderer::GetTextureTable), which material data names it by: the same for
+		// the texture's life, its entry following the bindless slot as levels stream (TextureTable::c_InvalidIndex before the
+		// texture was uploaded).
+		uint32_t GetTableIndex() const { return m_TableIndex; }
+		// Its texture table entry: the bindless slot with the sampler and grayscale bit (TextureTable::PackEntry).
+		uint32_t GetTableEntry() const;
 
 		// Partial residency (see the class comment; main thread unless noted).
 		//
@@ -149,8 +155,10 @@ namespace Strata
 		uint32_t GetChangeLevel() const;
 		// Starts making levels [firstLevel, GetResidentLevel()) resident, from `data`: the cooked bytes of the range
 		// GetCookedLayout().GetLevelsByteRange(firstLevel, GetResidentLevel()). False (nothing changes) when the levels
-		// cannot change, firstLevel is not finer than the resident level, or the data does not have the range's size.
-		bool RaiseLevels(uint32_t firstLevel, std::vector<uint8_t> data);
+		// cannot change, firstLevel is not finer than the resident level, or the data does not have the range's size. With
+		// `fadeIn` the new levels fade in once swapped in (TextureTable::SetFadeIn); views that need the texture whole
+		// (exact pixels) raise without.
+		bool RaiseLevels(uint32_t firstLevel, std::vector<uint8_t> data, bool fadeIn = true);
 		// Starts keeping only levels [firstLevel, GetMipCount()), at most down to the tail (GetTailLevel). False when the
 		// levels cannot change or firstLevel is not coarser than the resident level.
 		bool DropLevels(uint32_t firstLevel);
@@ -204,7 +212,7 @@ namespace Strata
 		nvrhi::TextureHandle CreateGPUTexture(uint32_t firstLevel) const;
 		// Makes `texture` (levels [firstLevel, m_MipCount)) the resident one: a new bindless slot, the old one released once
 		// no frame in flight samples it. False when the table is full (nothing changes).
-		bool SwapResidentTexture(nvrhi::TextureHandle texture, uint32_t firstLevel);
+		bool SwapResidentTexture(nvrhi::TextureHandle texture, uint32_t firstLevel, bool fadeIn);
 
 		// A change of the resident levels under way (RaiseLevels, DropLevels).
 		struct LevelChange
@@ -215,6 +223,7 @@ namespace Strata
 			UploadPosition Position;      // The raised levels left to upload
 			std::vector<uint8_t> Data;    // The raised levels' cooked bytes
 			uint64_t DataOffset = 0;      // Where Data starts in the cooked form
+			bool FadeIn = false;          // The raised levels fade in (RaiseLevels)
 		};
 	private:
 		TextureSpecification m_Specification;
@@ -229,6 +238,7 @@ namespace Strata
 
 		nvrhi::TextureHandle m_GPUTexture;
 		uint32_t m_BindlessSlot = UINT32_MAX;
+		uint32_t m_TableIndex = UINT32_MAX;
 		// While the texture is finalized over several calls: the GPU texture being filled and how far its upload got.
 		nvrhi::TextureHandle m_UploadTexture;
 		UploadPosition m_UploadPosition;

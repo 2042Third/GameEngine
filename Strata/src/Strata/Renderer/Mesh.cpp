@@ -8,9 +8,11 @@
 #include <meshoptimizer.h>
 #include <mikktspace.h>
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
+#include <limits>
 
 namespace Strata
 {
@@ -59,30 +61,19 @@ namespace Strata
 			glm::vec3 BoundsMax;
 		};
 
-		// Never empty: buffers of empty streams hold 4 bytes.
-		size_t GetStaticBufferSize(size_t dataSize)
+		// A level of detail as versions 1 and 2 wrote it (without MeshLOD::Error).
+		struct CookedLODVersion2
 		{
-			return std::max<size_t>(dataSize, 4);
-		}
+			uint32_t IndexOffset;
+			uint32_t IndexCount;
+		};
+		static_assert(sizeof(CookedLODVersion2) == 8);
 
-		nvrhi::BufferHandle CreateStaticBuffer(size_t size, const char* name, bool vertex)
-		{
-			nvrhi::BufferDesc desc;
-			desc.byteSize = GetStaticBufferSize(size);
-			desc.debugName = name;
-			desc.isVertexBuffer = vertex;
-			desc.isIndexBuffer = !vertex;
-			// Also readable from shaders (e.g. GPU culling or ray tracing later).
-			desc.canHaveRawViews = true;
-			desc.initialState = vertex ? nvrhi::ResourceStates::VertexBuffer : nvrhi::ResourceStates::IndexBuffer;
-			desc.keepInitialState = true;
-			return Renderer::GetDevice()->createBuffer(desc);
-		}
-
-		// A stream of the geometry and the buffer it uploads into.
+		// A stream of the geometry and where in the pool's buffer it uploads to.
 		struct UploadRange
 		{
 			nvrhi::IBuffer* Buffer = nullptr;
+			uint64_t Offset = 0; // In the buffer
 			const uint8_t* Data = nullptr;
 			uint64_t Size = 0;
 		};
@@ -137,6 +128,8 @@ namespace Strata
 
 			for (const MeshLOD& lod : submesh.LODs)
 			{
+				if (!std::isfinite(lod.Error) || lod.Error < 0.0f)
+					return fail(fmt::format("Submesh {} has a level of detail with an invalid error", submeshIndex));
 				if (lod.IndexCount == 0 || lod.IndexCount % 3 != 0 || static_cast<uint64_t>(lod.IndexOffset) + lod.IndexCount > indices.size())
 					return fail(fmt::format("Submesh {} has an invalid index range", submeshIndex));
 				for (uint32_t index = lod.IndexOffset; index < lod.IndexOffset + lod.IndexCount; index++)
@@ -261,8 +254,9 @@ namespace Strata
 		const CookedMeshHeader header = reader.Read<CookedMeshHeader>();
 		if (!reader.IsValid() || header.Magic != c_MeshMagic)
 			return fail("Not a cooked Strata mesh");
-		// Version 1 is version 2 without flags (its reserved word was always 0).
-		if (header.Version != 1 && header.Version != c_CookedVersion)
+		// Version 1 is version 2 without flags (its reserved word was always 0); version 2 is version 3 without the levels'
+		// errors.
+		if (header.Version < 1 || header.Version > c_CookedVersion)
 			return fail(fmt::format("Unsupported cooked mesh version {}", header.Version));
 		if (header.SubmeshCount == 0 || header.SubmeshCount > 65536 || (header.Flags & ~c_CookedMeshSkinned) != 0 || (header.Version == 1 && header.Flags != 0))
 			return fail("Cooked mesh header is corrupt");
@@ -278,7 +272,19 @@ namespace Strata
 		{
 			const CookedSubmesh cooked = reader.Read<CookedSubmesh>();
 			submesh.Name = reader.ReadString(4096);
-			if (!reader.IsValid() || cooked.LODCount == 0 || cooked.LODCount > 16 || !reader.ReadArray(submesh.LODs, 16) || submesh.LODs.size() != cooked.LODCount)
+			bool lodsRead = false;
+			if (header.Version >= 3)
+			{
+				lodsRead = reader.ReadArray(submesh.LODs, 16);
+			}
+			else
+			{
+				std::vector<CookedLODVersion2> lods;
+				lodsRead = reader.ReadArray(lods, 16);
+				for (const CookedLODVersion2& lod : lods)
+					submesh.LODs.push_back(MeshLOD { lod.IndexOffset, lod.IndexCount, 0.0f });
+			}
+			if (!reader.IsValid() || cooked.LODCount == 0 || cooked.LODCount > 16 || !lodsRead || submesh.LODs.size() != cooked.LODCount)
 				return fail("Cooked mesh submesh table is corrupt");
 			submesh.BaseVertex = cooked.BaseVertex;
 			submesh.VertexCount = cooked.VertexCount;
@@ -303,6 +309,24 @@ namespace Strata
 		return CreateSkinned(std::move(positions), std::move(attributes), std::move(indices), std::move(submeshes), std::move(skinVertices), std::move(binding), outError);
 	}
 
+	Mesh::~Mesh()
+	{
+		// The pool returns the ranges once the GPU finished the frames that may still draw them.
+		if (m_Geometry != c_InvalidGeometry)
+		{
+			if (const Ref<GeometryPool> pool = m_Pool.lock())
+				pool->Free(m_Geometry);
+		}
+	}
+
+	const GeometryAllocation* Mesh::GetGeometry() const
+	{
+		if (!m_Uploaded)
+			return nullptr;
+		const Ref<GeometryPool> pool = m_Pool.lock();
+		return pool ? pool->Find(m_Geometry) : nullptr;
+	}
+
 	AssetFinalizeResult Mesh::FinalizeOnMainThread(const AssetFinalizeContext& context)
 	{
 		RendererUploadContext* upload = RendererUploadContext::From(context.Upload);
@@ -314,43 +338,64 @@ namespace Strata
 		if (!context.FirstOfFrame && std::chrono::steady_clock::now() >= context.Deadline)
 			return AssetFinalizeResult::Pending;
 
-		const size_t positionBytes = m_Positions.size() * sizeof(glm::vec3);
-		const size_t attributeBytes = m_Attributes.size() * sizeof(MeshVertexAttributes);
-		const size_t skinBytes = m_SkinVertices.size() * sizeof(MeshSkinVertex);
-		const size_t indexBytes = m_Indices.size() * sizeof(uint32_t);
-		auto releaseBuffers = [this]()
+		const uint32_t vertexCount = static_cast<uint32_t>(m_Positions.size());
+		const uint32_t indexCount = static_cast<uint32_t>(m_Indices.size());
+		Ref<GeometryPool> pool = m_Pool.lock();
+		if (m_Geometry == c_InvalidGeometry)
 		{
-			m_PositionBuffer = nullptr;
-			m_AttributeBuffer = nullptr;
-			m_SkinBuffer = nullptr;
-			m_IndexBuffer = nullptr;
-		};
-		if (!m_IndexBuffer)
-		{
-			m_PositionBuffer = CreateStaticBuffer(positionBytes, "MeshPositions", true);
-			m_AttributeBuffer = CreateStaticBuffer(attributeBytes, "MeshAttributes", true);
-			// Only skinned meshes have a skin stream: other meshes hold nothing more than before skinning existed.
-			m_SkinBuffer = m_SkinBinding ? CreateStaticBuffer(skinBytes, "MeshSkin", true) : nullptr;
-			m_IndexBuffer = CreateStaticBuffer(indexBytes, "MeshIndices", false);
-			if (!m_PositionBuffer || !m_AttributeBuffer || !m_IndexBuffer || (m_SkinBinding && !m_SkinBuffer))
+			pool = Renderer::GetGeometryPool();
+			if (!pool)
+				return AssetFinalizeResult::Failed;
+			const GeometryPool::AllocateResult allocation = pool->Allocate(GetArena(), vertexCount, indexCount, queue.GetOpenBatch());
+			if (allocation.Handle == c_InvalidGeometry)
 			{
-				releaseBuffers();
+				// The pool grows at the next frame, between upload batches: the mesh uploads then.
+				if (allocation.Retry)
+					return AssetFinalizeResult::Pending;
+				ST_CORE_ERROR("Mesh: its {} vertices and {} indices do not fit the geometry pool", vertexCount, indexCount);
 				return AssetFinalizeResult::Failed;
 			}
+			m_Pool = pool;
+			m_Geometry = allocation.Handle;
 			m_UploadOffset = 0;
-			m_UploadQueue = queue.ChooseQueue(context);
+			// Its submeshes and levels of detail for GPU culling: each level a draw record.
+			std::vector<RenderData::GeometrySubmesh> submeshes;
+			std::vector<RenderData::GeometryLOD> lods;
+			submeshes.reserve(m_Submeshes.size());
+			for (const Submesh& submesh : m_Submeshes)
+			{
+				const uint32_t flags = MeshUtils::HasLODErrors(submesh) ? RenderData::c_GeometrySubmeshLODErrors : 0u;
+				submeshes.push_back(RenderData::GeometrySubmesh { submesh.BaseVertex, static_cast<uint32_t>(lods.size()), static_cast<uint32_t>(submesh.LODs.size()), flags,
+					glm::vec4(submesh.UVDensity, 0.0f) });
+				for (const MeshLOD& lod : submesh.LODs)
+					lods.push_back(RenderData::GeometryLOD { lod.IndexOffset, lod.IndexCount, submesh.BaseVertex, 0, MeshUtils::GetRelativeLODError(lod.Error, m_Bounds) });
+			}
+			if (!pool->SetLayout(m_Geometry, submeshes, lods))
+			{
+				ST_CORE_ERROR("Mesh: its {} submeshes do not fit the geometry pool's tables", m_Submeshes.size());
+				return AssetFinalizeResult::Failed;
+			}
 		}
+		const GeometryAllocation* geometry = pool ? pool->Find(m_Geometry) : nullptr;
+		if (!geometry)
+			return AssetFinalizeResult::Failed; // The renderer that held the pool went
 
 		// The streams (the skin stream only of skinned meshes) upload one after the other, as one run of bytes cut into steps
 		// through the renderer's upload queue, which sizes them to what is left of the frame's upload bytes and time (powers of
 		// two from GPUUploadQueue::c_MinStepBytes, like the staging buffers they go through; the frame's first step goes
 		// whatever). Steps wait for staging room like texture steps, so a mesh's upload never holds more staging than the budget
-		// allows.
+		// allows. The pool's buffers are looked up at every call: it may have grown into new ones since the last.
+		const GeometryArena arena = GetArena();
+		const size_t positionBytes = m_Positions.size() * sizeof(glm::vec3);
+		const size_t attributeBytes = m_Attributes.size() * sizeof(MeshVertexAttributes);
+		const size_t skinBytes = m_SkinVertices.size() * sizeof(MeshSkinVertex);
+		const size_t indexBytes = m_Indices.size() * sizeof(uint32_t);
+		const uint64_t firstVertex = geometry->FirstVertex;
 		const std::array<UploadRange, 4> ranges = { {
-			{ m_PositionBuffer, reinterpret_cast<const uint8_t*>(m_Positions.data()), positionBytes },
-			{ m_AttributeBuffer, reinterpret_cast<const uint8_t*>(m_Attributes.data()), attributeBytes },
-			{ m_SkinBuffer, reinterpret_cast<const uint8_t*>(m_SkinVertices.data()), skinBytes }, // Empty for meshes without a skin
-			{ m_IndexBuffer, reinterpret_cast<const uint8_t*>(m_Indices.data()), indexBytes }
+			{ pool->GetPositionBuffer(arena), firstVertex * GeometryPool::c_PositionStride, reinterpret_cast<const uint8_t*>(m_Positions.data()), positionBytes },
+			{ pool->GetAttributeBuffer(arena), firstVertex * GeometryPool::c_AttributeStride, reinterpret_cast<const uint8_t*>(m_Attributes.data()), attributeBytes },
+			{ pool->GetSkinBuffer(), firstVertex * GeometryPool::c_SkinStride, reinterpret_cast<const uint8_t*>(m_SkinVertices.data()), skinBytes }, // Empty without a skin
+			{ pool->GetIndexBuffer(), uint64_t(geometry->FirstIndex) * GeometryPool::c_IndexStride, reinterpret_cast<const uint8_t*>(m_Indices.data()), indexBytes }
 		} };
 		const uint64_t totalBytes = positionBytes + attributeBytes + skinBytes + indexBytes;
 		uint64_t callBytes = 0;
@@ -377,14 +422,17 @@ namespace Strata
 				const uint64_t writeBegin = std::max(m_UploadOffset, rangeStart);
 				const uint64_t writeEnd = std::min(stepEnd, rangeEnd);
 				if (writeBegin < writeEnd)
-					regions[regionCount++] = GPUBufferRegion { range.Buffer, writeBegin - rangeStart, range.Data + (writeBegin - rangeStart), writeEnd - writeBegin };
+				{
+					regions[regionCount++] = GPUBufferRegion { range.Buffer, range.Offset + (writeBegin - rangeStart), range.Data + (writeBegin - rangeStart),
+						writeEnd - writeBegin };
+				}
 				rangeStart = rangeEnd;
 			}
-			const GPUUploadStep step = queue.UploadBuffer(context, std::span<const GPUBufferRegion>(regions.data(), regionCount), m_UploadQueue);
+			pool->NoteUploadWrite(queue.GetOpenBatch());
+			const GPUUploadStep step = queue.UploadBuffer(context, std::span<const GPUBufferRegion>(regions.data(), regionCount), GPUUploadQueueKind::Graphics);
 			if (!step.Recorded)
 			{
 				ST_CORE_ERROR("Mesh: no staging memory for its upload");
-				releaseBuffers();
 				return AssetFinalizeResult::Failed;
 			}
 			m_UploadOffset = stepEnd;
@@ -394,34 +442,6 @@ namespace Strata
 		if (m_UploadOffset < totalBytes)
 			return AssetFinalizeResult::Pending;
 
-		// Every range was copied on the transfer queue: the graphics queue takes the buffers over once the copies completed.
-		if (m_UploadQueue == GPUUploadQueueKind::Transfer)
-		{
-			// The skin buffer is null for meshes without a skin: it has nothing to hand over.
-			const std::array<nvrhi::IBuffer*, 4> buffers = { m_PositionBuffer.Get(), m_AttributeBuffer.Get(), m_SkinBuffer.Get(), m_IndexBuffer.Get() };
-			if (m_TransferTicket == 0)
-			{
-				for (nvrhi::IBuffer* buffer : buffers)
-				{
-					if (buffer)
-						m_TransferTicket = queue.ReleaseToGraphics(GPUQueueTransfer { nullptr, 0, 0, buffer });
-				}
-			}
-			if (!queue.IsComplete(m_TransferTicket))
-			{
-				if (context.MayWait)
-					return AssetFinalizeResult::AwaitingGPU;
-				queue.WaitForTicket(m_TransferTicket);
-			}
-			for (nvrhi::IBuffer* buffer : buffers)
-			{
-				if (buffer)
-					queue.AcquireOnGraphics(GPUQueueTransfer { nullptr, 0, 0, buffer });
-			}
-			m_TransferTicket = 0;
-			m_UploadQueue = GPUUploadQueueKind::Graphics; // Handed over: nothing is left on the transfer queue
-		}
-
 		// Only shading reads the vertex attributes and the skin stream, from the GPU: their CPU copies go (the terrain of the
 		// stress world held 9.4 MB of attributes). Physics keeps reading positions and indices (AssetMeshProvider). Freeing a
 		// large copy hands its pages back to the system, which takes a while: when the steps above ran past the deadline, it is
@@ -430,6 +450,8 @@ namespace Strata
 			return AssetFinalizeResult::Pending;
 		std::vector<MeshVertexAttributes>().swap(m_Attributes);
 		std::vector<MeshSkinVertex>().swap(m_SkinVertices);
+		// From now on compaction may move the geometry: the batch with its last copies is submitted before the next BeginFrame.
+		pool->SetUploading(m_Geometry, false);
 		m_Uploaded = true;
 		return AssetFinalizeResult::Done;
 	}
@@ -445,11 +467,9 @@ namespace Strata
 		{
 			usage.Cpu += sizeof(MeshSkinBinding) + m_SkinBinding->Joints.size() * (sizeof(uint16_t) + sizeof(glm::mat4) + sizeof(AABB));
 		}
-		for (nvrhi::IBuffer* buffer : { m_PositionBuffer.Get(), m_AttributeBuffer.Get(), m_SkinBuffer.Get(), m_IndexBuffer.Get() })
-		{
-			if (buffer)
-				usage.GpuBuffers += buffer->getDesc().byteSize;
-		}
+		// The pool's ranges it holds, from their allocation on (the pool's free space is the renderer's: GeometryPoolStats).
+		if (m_Geometry != c_InvalidGeometry)
+			usage.GpuBuffers += GeometryPool::GetAllocationBytes(GetArena(), static_cast<uint32_t>(m_Positions.size()), static_cast<uint32_t>(m_Indices.size()));
 		return usage;
 	}
 
@@ -458,19 +478,9 @@ namespace Strata
 		AssetMemoryUsage usage = GetMemoryUsage();
 		if (Renderer::IsInitialized())
 		{
-			const uint64_t attributeBytes = m_Attributes.size() * sizeof(MeshVertexAttributes);
-			const uint64_t skinBytes = m_SkinVertices.size() * sizeof(MeshSkinVertex);
-			if (!m_IndexBuffer)
-			{
-				// One element type for the list: size_t and uint64_t are different types on macOS.
-				const uint64_t positionBytes = m_Positions.size() * sizeof(glm::vec3);
-				const uint64_t indexBytes = m_Indices.size() * sizeof(uint32_t);
-				for (const uint64_t bytes : { positionBytes, attributeBytes, indexBytes })
-					usage.GpuBuffers += GetStaticBufferSize(bytes);
-				if (m_SkinBinding)
-					usage.GpuBuffers += GetStaticBufferSize(skinBytes);
-			}
-			usage.Cpu -= attributeBytes + skinBytes; // The upload releases them
+			if (m_Geometry == c_InvalidGeometry)
+				usage.GpuBuffers += GeometryPool::GetAllocationBytes(GetArena(), static_cast<uint32_t>(m_Positions.size()), static_cast<uint32_t>(m_Indices.size()));
+			usage.Cpu -= m_Attributes.size() * sizeof(MeshVertexAttributes) + m_SkinVertices.size() * sizeof(MeshSkinVertex); // The upload releases them
 		}
 		return usage;
 	}
@@ -654,18 +664,32 @@ namespace Strata
 			meshopt_optimizeVertexCache(indices.data(), indices.data(), indices.size(), vertexCount);
 		}
 
-		std::vector<std::vector<uint32_t>> GenerateLODs(std::span<const glm::vec3> positions, std::span<const uint32_t> indices, uint32_t maxLevels)
+		std::vector<GeneratedLOD> GenerateLODs(std::span<const glm::vec3> positions, std::span<const MeshVertexAttributes> attributes, std::span<const uint32_t> indices,
+			uint32_t maxLevels)
 		{
-			std::vector<std::vector<uint32_t>> lods;
-			if (positions.empty() || indices.size() < 3 || indices.size() % 3 != 0)
+			std::vector<GeneratedLOD> lods;
+			if (positions.empty() || attributes.size() != positions.size() || indices.size() < 3 || indices.size() % 3 != 0)
 				return lods;
 			for (uint32_t index : indices)
 			{
 				if (index >= positions.size())
 					return lods;
 			}
+			// The attributes the simplifier weighs, packed: normal, then texture coordinates. Non-finite values would poison its
+			// metric: they weigh as 0.
+			constexpr size_t c_AttributeCount = 5;
+			std::vector<float> packed;
+			packed.reserve(positions.size() * c_AttributeCount);
+			for (const MeshVertexAttributes& attribute : attributes)
+			{
+				for (const float value : { attribute.Normal.x, attribute.Normal.y, attribute.Normal.z, attribute.TexCoord.x, attribute.TexCoord.y })
+					packed.push_back(std::isfinite(value) ? value : 0.0f);
+			}
+			constexpr std::array<float, c_AttributeCount> weights = { c_LODNormalWeight, c_LODNormalWeight, c_LODNormalWeight, c_LODTexCoordWeight, c_LODTexCoordWeight };
+			const float scale = meshopt_simplifyScale(&positions[0].x, positions.size(), sizeof(glm::vec3));
+
 			size_t currentCount = indices.size();
-			constexpr float targetError = 0.02f; // Relative to the mesh extent
+			float previousError = 0.0f;
 			for (uint32_t level = 0; level < maxLevels; level++)
 			{
 				const size_t targetCount = (currentCount / 2) / 3 * 3;
@@ -674,8 +698,9 @@ namespace Strata
 
 				std::vector<uint32_t> simplified(indices.size());
 				float resultError = 0.0f;
-				const size_t count = meshopt_simplify(simplified.data(), indices.data(), indices.size(), &positions[0].x, positions.size(),
-					sizeof(glm::vec3), targetCount, targetError, 0, &resultError);
+				const size_t count = meshopt_simplifyWithAttributes(simplified.data(), indices.data(), indices.size(), &positions[0].x, positions.size(),
+					sizeof(glm::vec3), packed.data(), c_AttributeCount * sizeof(float), weights.data(), c_AttributeCount, nullptr, targetCount, c_MaxLODError,
+					meshopt_SimplifyLockBorder, &resultError);
 				// Stop when simplification no longer makes meaningful progress.
 				if (count == 0 || count > currentCount * 3 / 4)
 					break;
@@ -683,7 +708,9 @@ namespace Strata
 				simplified.resize(count);
 				meshopt_optimizeVertexCache(simplified.data(), simplified.data(), simplified.size(), positions.size());
 				currentCount = count;
-				lods.push_back(std::move(simplified));
+				const float absoluteError = std::isfinite(resultError) && std::isfinite(scale) ? std::max(resultError, 0.0f) * scale : 0.0f;
+				previousError = std::max({ absoluteError, previousError, std::numeric_limits<float>::min() });
+				lods.push_back(GeneratedLOD { std::move(simplified), previousError });
 			}
 			return lods;
 		}
@@ -694,6 +721,21 @@ namespace Strata
 			for (const glm::vec3& position : positions)
 				bounds.Expand(position);
 			return bounds;
+		}
+
+		bool HasLODErrors(const Submesh& submesh)
+		{
+			if (submesh.LODs.size() <= 1)
+				return false;
+			return std::all_of(submesh.LODs.begin() + 1, submesh.LODs.end(), [](const MeshLOD& lod) { return lod.Error > 0.0f; });
+		}
+
+		float GetRelativeLODError(float error, const AABB& meshBounds)
+		{
+			const float radius = meshBounds.IsValid() ? glm::length(meshBounds.GetExtents()) : 0.0f;
+			if (!(error > 0.0f) || !(radius > 0.0f) || !std::isfinite(radius))
+				return 0.0f;
+			return error / radius;
 		}
 
 		glm::vec3 ComputeUVDensity(std::span<const glm::vec3> positions, std::span<const MeshVertexAttributes> attributes, std::span<const uint32_t> indices)

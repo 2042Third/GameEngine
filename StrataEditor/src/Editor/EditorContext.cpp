@@ -326,9 +326,15 @@ namespace Strata
 		m_AssetManager->PurgeTrash(c_TrashKeepTime);
 		OpenThumbnails();
 		ST_INFO("Opened project '{}' ({})", m_Project->GetConfig().Name, FileSystem::ToUTF8(m_Project->GetProjectDirectory()));
-		// Unsaved changes an editor left behind (a crash) or discarded are offered once the scan has read them.
+		// Unsaved changes an editor left behind (a crash) or discarded are offered once the scan has read them. They are judged
+		// against the asset registry (does their scene still exist, where is it now): a scan of the assets in the background
+		// starts the recovery scan once it registered them (FinishAssetScan); until then the recovery counts as scanning, so
+		// that the offer as the project opens waits for its entries.
 		m_Recovery->SetProject(m_Project->GetIntermediateDirectory() / SceneRecovery::c_DirectoryName, m_Project->GetAssetDirectory());
-		m_Recovery->Scan();
+		if (m_AssetManager->IsScanning())
+			m_Recovery->ExpectScan();
+		else
+			m_Recovery->Scan();
 		OpenScriptEngine(created);
 
 		// Continue with the start scene when the project has one: it loads in the background (UpdateSceneLoad warns when it
@@ -383,6 +389,7 @@ namespace Strata
 		if (!m_AfterAssetScan || !m_AssetManager || m_AssetManager->IsScanning())
 			return;
 		m_AfterAssetScan = false;
+		m_Recovery->Scan();
 		StartScriptUsageScan();
 		if (const AssetHandle startScene = std::exchange(m_StartSceneAfterScan, UUID::Null()); startScene.IsValid())
 		{

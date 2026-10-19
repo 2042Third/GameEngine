@@ -169,8 +169,9 @@ namespace Strata
 			RequestScreenshot();
 		}
 	private:
-		// Every frame from the first one on gets a row, written when the frame profiler records it (after the frame's work
-		// time is measured, so writing it costs the frame nothing).
+		// Every frame from the first one on gets a row: what the frame left is captured when the frame profiler records it
+		// (after the frame's work time is measured, so capturing it costs the frame nothing), and the row is written once
+		// the frame's GPU times arrived, a few frames later, so that its CPU and GPU columns describe the same frame.
 		void StartPerfLog()
 		{
 			std::string error;
@@ -192,9 +193,13 @@ namespace Strata
 					const StagingPool& staging = Renderer::GetStagingPool();
 					device = FramePerfDeviceMemory { Renderer::GetGraphicsDevice().GetMemoryBudget().Usage, staging.GetIdleBytes() + staging.GetPendingBytes() };
 				}
-				if (!m_PerfLog->WriteFrame(frame, assets ? &*assets : nullptr, uploads, device ? &*device : nullptr))
-					Application::Get().SetExitCode(1); // A requested log that is incomplete fails the run, so CI notices
+				m_PerfLog->CaptureFrame(frame, assets ? &*assets : nullptr, uploads, device ? &*device : nullptr);
 			});
+			m_PerfLogRowListener = FrameProfiler::Get().AddFrameListener([this](const FrameSample& frame)
+			{
+				if (!m_PerfLog->WriteFrame(frame))
+					Application::Get().SetExitCode(1); // A requested log that is incomplete fails the run, so CI notices
+			}, FrameListenerTiming::WithGPU);
 			ST_INFO("Writing a perf log of every frame to {}", FileSystem::ToUTF8(m_Options.PerfLogPath));
 		}
 
@@ -202,7 +207,10 @@ namespace Strata
 		{
 			if (!m_PerfLog)
 				return;
+			// The last frames' rows, whose GPU times will not come any more.
+			FrameProfiler::Get().FlushGPUListeners();
 			FrameProfiler::Get().RemoveFrameListener(m_PerfLogListener);
+			FrameProfiler::Get().RemoveFrameListener(m_PerfLogRowListener);
 			std::string error;
 			if (m_PerfLog->Close(&error))
 			{
@@ -264,7 +272,8 @@ namespace Strata
 		Scope<GameRuntime> m_Runtime;
 		Scope<GameRenderer> m_Renderer;
 		Scope<FramePerfLog> m_PerfLog;
-		uint32_t m_PerfLogListener = 0;
+		uint32_t m_PerfLogListener = 0;    // Captures each frame's numbers when it ends
+		uint32_t m_PerfLogRowListener = 0; // Writes its row once its GPU times arrived
 	};
 
 	class RuntimeApplication : public Application

@@ -142,9 +142,10 @@ namespace Strata
 		glm::vec2 m_ViewportSize = glm::vec2(1.0f);
 		float m_ScreenZoom = 1.0f;                  // SceneScreenView: the screen's pixels -> the image's
 		glm::vec2 m_ScreenOrigin = glm::vec2(0.0f); // Image pixels
+		GPUPassTimer* m_GPUTimer = nullptr;         // The frame's (SceneOverlayFrame::GPUTimer), set by Prepare for its draws
 	};
 
-	// Registers the pass with SceneOverlayRegistry (RegisterGameUIModule).
+	// Registers the pass with SceneOverlayRegistry and its GPU stage, GPU.UI, with the frame profiler (RegisterGameUIModule).
 	void RegisterGameUIRenderer();
 
 }

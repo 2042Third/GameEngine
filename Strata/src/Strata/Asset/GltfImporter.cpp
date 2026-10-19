@@ -1476,18 +1476,22 @@ namespace Strata
 					if (m_Settings.OptimizeMeshes)
 						MeshUtils::OptimizeIndices(primitiveIndices, primitiveVertexCount);
 					std::vector<std::vector<uint32_t>> levels = { primitiveIndices };
+					std::vector<float> levelErrors = { 0.0f }; // MeshLOD::Error of each level (full detail: none)
 					// Simplifying a large primitive into its levels of detail takes the longest of a mesh.
 					if (m_Context.IsCancelled())
 						return;
 					if (m_Settings.GenerateLODs && m_Settings.LODCount > 0)
 					{
-						for (std::vector<uint32_t>& level : MeshUtils::GenerateLODs(primitivePositions, primitiveIndices, m_Settings.LODCount))
-							levels.push_back(std::move(level));
+						for (MeshUtils::GeneratedLOD& level : MeshUtils::GenerateLODs(primitivePositions, primitiveAttributes, primitiveIndices, m_Settings.LODCount))
+						{
+							levelErrors.push_back(level.Error);
+							levels.push_back(std::move(level.Indices));
+						}
 					}
-					for (const std::vector<uint32_t>& level : levels)
+					for (size_t level = 0; level < levels.size(); level++)
 					{
-						submesh.LODs.push_back(MeshLOD { static_cast<uint32_t>(indices.size()), static_cast<uint32_t>(level.size()) });
-						indices.insert(indices.end(), level.begin(), level.end());
+						submesh.LODs.push_back(MeshLOD { static_cast<uint32_t>(indices.size()), static_cast<uint32_t>(levels[level].size()), levelErrors[level] });
+						indices.insert(indices.end(), levels[level].begin(), levels[level].end());
 					}
 
 					positions.insert(positions.end(), primitivePositions.begin(), primitivePositions.end());

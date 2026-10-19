@@ -34,6 +34,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -783,6 +784,71 @@ TEST_SUITE("Editor.Recovery")
 		const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find("Menu.File.Recover");
 		REQUIRE(item.has_value());
 		CHECK_FALSE(item->Enabled);
+	}
+
+	TEST_CASE("The editor offers recovery data a crash left once its assets, scanned in the background, are registered")
+	{
+		// As in the editor, the project opens at once and its assets are registered in the background; the recovery scan
+		// follows that scan. The offer as the project opens is made once, so it waits for the entries instead of deciding on
+		// the ones not read yet.
+		Tests::GatedJobSystem jobs; // One background thread, which the gate below holds
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryOfferBackground") / "Game";
+		LeaveCrashJournal(project, "Recovered");
+
+		EditorOptions options;
+		options.ProjectPath = project;
+		std::optional<Tests::HarnessEditor> editor;
+		{
+			Tests::BackgroundGate gate; // Holds the scan's job
+			editor.emplace(Tests::ImGuiHarness::Specification {}, options, std::string(), false, true);
+			editor->Frames(10);
+			REQUIRE(editor->Context().IsScanningAssets());
+			CHECK(editor->Context().GetRecovery().IsScanning());
+			CHECK_FALSE(editor->Layer->GetRecoveryDialog().IsOpen());
+		}
+		// The scan and the start scene take more than the usual ten seconds in CI's Windows Debug build.
+		REQUIRE(editor->FramesUntil([&]() { return editor->Layer->GetRecoveryDialog().IsOpen(); }, std::chrono::minutes(2)));
+		const std::vector<RecoveryEntry>& entries = editor->Context().GetRecovery().GetEntries();
+		REQUIRE(entries.size() == 1);
+		CHECK_MESSAGE(entries[0].Applicable, entries[0].Problem);
+	}
+
+	TEST_CASE("Recovery data a crash left is judged once the project's scan, in the background, registered the scene it belongs to")
+	{
+		Tests::GatedJobSystem jobs; // One background thread, which the gate below holds
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryBackgroundScan") / "Game";
+		LeaveCrashJournal(project, "Recovered");
+
+		// The editor opens the project at once and registers its assets in the background (a scan of 30,000 assets takes
+		// seconds): the scene the data belongs to is unknown until the scan registered it.
+		EditorContextSpecification specification = MakeSpecification();
+		specification.ImportInBackground = true;
+		EditorContext context(specification);
+		{
+			Tests::BackgroundGate gate; // Holds the scan's job
+			std::string error;
+			REQUIRE_MESSAGE(context.BeginOpenProject(project, &error), error); // As the editor does: the start scene follows the scan
+			REQUIRE(context.IsScanningAssets());
+			for (int frame = 0; frame < 10; frame++)
+			{
+				context.Update(Timestep(1.0f / 60.0f));
+				context.GetRecovery().Wait();
+			}
+			// Nothing is judged meanwhile: a scene the registry does not know yet is no scene that left the project.
+			for (const RecoveryEntry& entry : context.GetRecovery().GetEntries())
+				CHECK_MESSAGE(entry.Applicable, entry.Problem);
+		}
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			context.Update(Timestep(1.0f / 60.0f));
+			context.GetRecovery().Wait();
+			return !context.IsScanningAssets() && !context.GetRecovery().IsScanning() && !context.GetRecovery().GetEntries().empty();
+		}, std::chrono::seconds(30)));
+		const std::vector<RecoveryEntry>& entries = context.GetRecovery().GetEntries();
+		REQUIRE(entries.size() == 1);
+		CHECK_MESSAGE(entries[0].Applicable, entries[0].Problem);
+		CHECK(entries[0].ScenePath == "Scenes/Main.stscene");
+		context.CloseProject();
 	}
 
 	TEST_CASE("Recovery data of a scene file hashed in several pieces still applies to it")

@@ -7,8 +7,10 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Renderer/GPUSceneData.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/RendererComponents.h"
+#include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Scene/Components.h"
@@ -20,6 +22,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstring>
 #include <string>
@@ -143,6 +146,23 @@ namespace Strata::Tests
 		return entity;
 	}
 
+	// Mesh renderers of `mesh`, a mesh of `parts` submeshes (CreateCubeOfParts), at `position`, `scale` times its size and
+	// casting no shadows: more than a scene's GPU copy takes in two frames (SceneRendererSpecification::NewInstanceBytesPerFrame),
+	// so some of the scene's new mesh renderers reach the GPU only three or more frames later.
+	inline std::vector<Entity> AddUploadBacklog(Scene& scene, AssetHandle mesh, uint32_t parts, const glm::vec3& position, float scale = 1.0f)
+	{
+		const uint64_t proxyBytes = sizeof(RenderData::GPUProxy) + static_cast<uint64_t>(parts) * sizeof(RenderData::InstanceData);
+		const uint64_t count = 2 * SceneRendererSpecification {}.NewInstanceBytesPerFrame / proxyBytes + 1;
+		std::vector<Entity> entities;
+		for (uint64_t index = 0; index < count; index++)
+		{
+			entities.push_back(AddMesh(scene, mesh, UUID::Null(), position, "Backlog"));
+			entities.back().GetComponent<TransformComponent>().Scale = glm::vec3(scale);
+			entities.back().GetComponent<MeshRendererComponent>().CastShadows = false;
+		}
+		return entities;
+	}
+
 	// A directional light travelling along `direction`.
 	inline Entity AddSun(Scene& scene, const glm::vec3& direction, float intensity, bool castShadows = true)
 	{
@@ -161,6 +181,90 @@ namespace Strata::Tests
 		REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), image));
 		REQUIRE(image.Width == renderer.GetViewportSize().x);
 		return image;
+	}
+
+	// What a renderer's latest frame drew, whichever path drew it (SceneRendererStats::GPUDriven): the CPU path's
+	// statistics, or the GPU's counts of that frame (waited for) with what the CPU drew itself (transparent surfaces) added.
+	struct DrawnCounts
+	{
+		uint32_t Instances = 0;     // View instances
+		uint32_t Draws = 0;         // Instanced draws of the view (batches, or the GPU's draws with instances)
+		uint64_t Triangles = 0;
+		std::array<uint32_t, SceneRendererStats::c_LODStatCount> InstancesPerLOD = {};
+		uint32_t SkinnedInstances = 0;
+		uint32_t ShadowCasters = 0; // Instances drawn into cascades, summed over cascades
+		uint32_t ShadowDraws = 0;
+		uint32_t SubTexelCasters = 0;
+		uint32_t VisibleProxies = 0; // Mesh renderers in the view frustum (also those too small to draw)
+	};
+
+	inline DrawnCounts GetDrawnCounts(SceneRenderer& renderer)
+	{
+		const SceneRendererStats stats = renderer.GetStats();
+		DrawnCounts counts;
+		counts.Instances = stats.Instances;
+		counts.Draws = stats.DrawCalls;
+		counts.Triangles = stats.Triangles;
+		counts.InstancesPerLOD = stats.InstancesPerLOD;
+		counts.SkinnedInstances = stats.SkinnedInstances;
+		counts.ShadowCasters = stats.ShadowCasters;
+		counts.ShadowDraws = stats.ShadowDrawCalls;
+		counts.SubTexelCasters = stats.SubTexelCasters;
+		counts.VisibleProxies = stats.VisibleProxies;
+		if (!stats.GPUDriven)
+			return counts;
+		renderer.ResolveGPUStats(true);
+		const SceneRendererGPUStats& gpu = renderer.GetGPUStats();
+		REQUIRE(gpu.HasCounters);
+		REQUIRE(gpu.CountersRender == renderer.GetRenderCount());
+		CHECK(gpu.Overflow == 0);
+		counts.Instances += gpu.Instances;
+		counts.Draws += gpu.Draws;
+		counts.Triangles += gpu.Triangles;
+		for (size_t lod = 0; lod < counts.InstancesPerLOD.size(); lod++)
+			counts.InstancesPerLOD[lod] += gpu.InstancesPerLOD[lod];
+		counts.SkinnedInstances += gpu.SkinnedInstances;
+		counts.ShadowCasters = gpu.ShadowInstances;
+		counts.ShadowDraws = gpu.ShadowDraws;
+		counts.SubTexelCasters = gpu.SubTexelCasters;
+		// The GPU counts every drawable proxy in view (a feedback frame's CPU looked at some of them only).
+		counts.VisibleProxies = gpu.VisibleProxies + gpu.SizeCulledProxies;
+		return counts;
+	}
+
+	// A point light entity at `position`.
+	inline Entity AddPointLight(Scene& scene, const glm::vec3& position, const glm::vec3& color, float intensity, float range)
+	{
+		Entity lamp = scene.CreateEntity("Lamp");
+		lamp.GetComponent<TransformComponent>().Translation = position;
+		PointLightComponent& light = lamp.AddComponent<PointLightComponent>();
+		light.Color = color;
+		light.Intensity = intensity;
+		light.Range = range;
+		return lamp;
+	}
+
+	// The lights the renderer's latest frame drew, culled and dropped (the GPU-driven path counts its point and spot lights on
+	// the GPU, frames later: waits for that frame's counts).
+	struct LightCounts
+	{
+		uint32_t Lights = 0;        // The directional light plus the point and spot lights in view
+		uint32_t CulledLights = 0;  // Point and spot lights outside the view
+		uint32_t DroppedLights = 0; // Beyond SceneRendererSpecification::MaxLights (the CPU path's cap)
+	};
+
+	inline LightCounts GetLightCounts(SceneRenderer& renderer)
+	{
+		SceneRendererStats stats = renderer.GetStats();
+		if (stats.GPUDriven)
+		{
+			renderer.ResolveGPUStats(true);
+			const SceneRendererGPUStats& gpu = renderer.GetGPUStats();
+			REQUIRE(gpu.HasCounters);
+			REQUIRE(gpu.CountersRender == renderer.GetRenderCount());
+			stats = AddGPUCounts(stats, gpu);
+		}
+		return LightCounts { stats.Lights, stats.CulledLights, stats.DroppedLights };
 	}
 
 	inline MaterialProperties UnlitColor(const glm::vec4& color)

@@ -26,7 +26,7 @@ namespace Strata
 
 		constexpr uint32_t c_SamplerCount = 6; // TextureFilter (2) x TextureWrap (3)
 
-		// Material texture slots (MaterialData's maps): the bindless slot in bits 0-23, the sampler index in bits 24-30 and
+		// Texture table entries (TextureTable::PackEntry): the bindless slot in bits 0-23, the sampler index in bits 24-30 and
 		// this bit for one-channel textures that stand for gray (TextureSpecification::Grayscale), sampled as (r, r, r, 1).
 		constexpr uint32_t c_TextureSlotGrayscale = 1u << 31;
 
@@ -52,14 +52,41 @@ namespace Strata
 			glm::vec4 ClusterDepth;              // Depth slice = log(view depth) * x + y; z, w: near and far view depth
 			glm::vec4 TimeParams;                // x: scene time in seconds
 			glm::vec4 SkyParams;                 // x: background mip (blur), y: 1 when the environment is the background
-			glm::mat4 CascadeViewProjection[c_MaxCascades];
-			glm::vec4 CascadeSplits;             // View distance where each cascade ends
-			glm::vec4 CascadeData[c_MaxCascades]; // x: world units per shadow texel, y: depth range in world units, z: penumbra search distance
+			glm::vec4 CascadeSplits;             // View distance where each cascade ends (their projections: CascadeData)
 			glm::vec4 ShadowParams;              // x: 2 tan(light angular radius), y: 1 / map size, w: cascade count
 			glm::vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 			glm::vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
+			glm::vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
 		};
-		static_assert(sizeof(FrameConstants) == 10 * 64 + 20 * 16);
+		static_assert(sizeof(FrameConstants) == 6 * 64 + 17 * 16);
+
+		// A directional shadow cascade as shaders read it (u_Cascades, Include/Scene.glsl): written on the GPU by
+		// Scene/CascadeFit.comp, which fits its depth range to the casters (CascadeFitConstants).
+		struct CascadeData
+		{
+			glm::mat4 ViewProjection;           // Light clip space, reversed-Z
+			// x: world units per shadow texel, y: depth range in world units, z: penumbra search distance, w: the near plane's light
+			// view z (camera-relative: the cascades' occlusion culling places depths with it)
+			glm::vec4 Parameters = glm::vec4(0.0f);
+		};
+		static_assert(sizeof(CascadeData) == 80);
+
+		// What Scene/CascadeFit.comp fits the cascades from (a constant buffer, std140): each cascade's square in light view
+		// space and the bounding sphere of its view slice, and the nearest caster toward the light, which the CPU path finds
+		// and the GPU-driven path's culling does (u_CasterDepths).
+		struct CascadeFitConstants
+		{
+			glm::mat4 LightView = glm::mat4(1.0f);
+			// Light view space relative to the camera's position in it (the shaders' positions are camera-relative): min.xy, max.xy
+			glm::vec4 Boxes[c_MaxCascades] = {};
+			glm::vec4 Depths[c_MaxCascades] = {};    // x: the far side's z, y: the sphere's near side's z, z: world units per texel, w: the sphere's radius
+			glm::vec4 CasterNearZ = glm::vec4(0.0f); // Per cascade: the nearest drawn caster's (relative) z, as the CPU found it
+			uint32_t CascadeCount = 0;
+			uint32_t CasterDepthsFromGPU = 0;        // 1: the nearest casters come from the GPU's culling instead of CasterNearZ
+			float MaxCasterDistance = 0.0f;          // How far beyond its sphere a cascade's depth range may reach toward the light
+			uint32_t Reserved = 0;
+		};
+		static_assert(sizeof(CascadeFitConstants) == 64 + 9 * 16 + 16);
 
 		// The upper three rows of an affine world matrix, whose fourth row is (0, 0, 0, 1). Shaders transform points with
 		// one dot product per row and derive the normal matrix from the rows (no inverse on the CPU).
@@ -89,7 +116,7 @@ namespace Strata
 		static_assert(sizeof(AffineTransform) == 48);
 
 		// One drawn submesh of a render proxy (RenderScene). The buffer of instances persists between frames; draws read
-		// it through the frame's draw list, which holds an instance index per drawn instance.
+		// it through the frame's draw list, which holds an entry (MakeDrawEntry) per drawn instance.
 		struct InstanceData
 		{
 			AffineTransform World;
@@ -102,6 +129,23 @@ namespace Strata
 		};
 		static_assert(sizeof(InstanceData) == 64);
 
+		// A draw list entry (the u_DrawList the scene's vertex shaders read): the instance in the low c_DrawEntryInstanceBits, and
+		// above them the level-of-detail cross-fade code of the draw (LODSelection::UpdateLODFade): 0 draws every pixel, 1 to
+		// c_LODFadeFrames - 1 the level fading in (on the pixels whose LODSelection::GetLODFadeThreshold is below the code), the
+		// same plus c_LODFadeOutgoing the level fading out (on the others). Render scenes hold at most c_MaxRenderInstances
+		// instances.
+		constexpr uint32_t c_DrawEntryInstanceBits = 27;
+		constexpr uint32_t c_DrawEntryInstanceMask = (1u << c_DrawEntryInstanceBits) - 1;
+		constexpr uint32_t c_MaxRenderInstances = 1u << c_DrawEntryInstanceBits;
+		constexpr uint32_t c_LODFadeFrames = 16; // A fade's steps: the 4x4 dither's 16 thresholds
+		constexpr uint32_t c_LODFadeOutgoing = 16;
+		static_assert(c_LODFadeOutgoing + c_LODFadeFrames <= (1u << (32 - c_DrawEntryInstanceBits)));
+
+		constexpr uint32_t MakeDrawEntry(uint32_t instance, uint32_t fadeCode)
+		{
+			return instance | (fadeCode << c_DrawEntryInstanceBits);
+		}
+
 		struct MaterialData
 		{
 			glm::vec4 BaseColor;
@@ -112,7 +156,8 @@ namespace Strata
 			float OcclusionStrength;
 			float AlphaCutoff;
 			uint32_t Flags;
-			uint32_t BaseColorMap; // Bits 0-23: bindless slot, bits 24-31: sampler index
+			// The maps: texture table indices (TextureTable), whose entries hold the bindless slot, the sampler and the grayscale bit.
+		uint32_t BaseColorMap;
 			uint32_t MetallicRoughnessMap;
 			glm::vec4 UVTransform; // xy: tiling, zw: offset
 			uint32_t NormalMap;
@@ -124,12 +169,38 @@ namespace Strata
 
 		struct LightData
 		{
-			glm::vec4 PositionRange; // xyz: world position, w: range
+			glm::vec4 PositionRange; // xyz: camera-relative world position (as uploaded), w: range
 			glm::vec4 Color;         // rgb: color * intensity, w: 1 / range^2
 			glm::vec4 DirectionType; // xyz: direction the light travels, w: type
 			glm::vec4 SpotAngles;    // x: cos(inner), y: cos(outer)
 		};
 		static_assert(sizeof(LightData) == 64);
+
+		// A point or spot light of a scene's render lights (RenderLights; mirrored by RenderSceneGPU), in world space: the GPU
+		// culls the records into the light buffer (Scene/LightCull.comp and LightCompact.comp: LightData, camera-relative,
+		// and LightBounds).
+		struct LightRecord
+		{
+			glm::vec4 PositionRange = glm::vec4(0.0f); // xyz: world position, w: range
+			glm::vec4 Color = glm::vec4(0.0f);         // rgb: color * intensity, w: 1 / range^2
+			glm::vec4 DirectionType = glm::vec4(0.0f); // xyz: direction the light travels, w: type
+			glm::vec4 SpotAngles = glm::vec4(0.0f);    // x: cos(inner), y: cos(outer), z: c_LightRecordDrawn or 0
+			glm::vec4 Bounds = glm::vec4(0.0f);        // xyz: world center, w: radius of the region it reaches
+		};
+		static_assert(sizeof(LightRecord) == 80);
+		// LightRecord::SpotAngles.z of a light that is drawn (active, lit, with a range).
+		constexpr float c_LightRecordDrawn = 1.0f;
+
+		// The push constants of the GPU's light culling passes (Include/Lights.glsl).
+		struct LightCullParameters
+		{
+			glm::vec4 Planes[6] = {};   // The view frustum in camera-relative space, inward (Frustum::GetPlanes)
+			uint32_t RecordCount = 0;   // Light records of the scene's GPU copy
+			uint32_t GroupCount = 0;    // Work groups of c_LightGroupSize records
+			uint32_t Padding[2] = {};
+		};
+		static_assert(sizeof(LightCullParameters) == 112);
+		constexpr uint32_t c_LightGroupSize = 64; // ST_LIGHT_GROUP_SIZE
 
 		// Bounding sphere of a light's influence in view space, input of the light cluster assignment.
 		struct LightBounds

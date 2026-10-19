@@ -339,6 +339,7 @@ namespace Strata
 		m_Directory = recoveryDirectory;
 		m_AssetDirectory = assetDirectory;
 		m_Scan.reset();
+		m_ScanExpected = false;
 		m_RescanDue = false;
 		m_Entries.clear();
 		m_EntriesVersion++;
@@ -650,8 +651,9 @@ namespace Strata
 		PumpOperations();
 		if (m_Scan && m_Scan->Done.load(std::memory_order_acquire))
 			FinishScan();
-		// Changes discarded since the last scan are offered at once: a scan queued now runs after their write.
-		if (m_RescanDue && IsActive() && !m_Scan)
+		// Changes discarded since the last scan are offered at once: a scan queued now runs after their write. A scan expected
+		// (ExpectScan) reads them too, once what it waits for is done.
+		if (m_RescanDue && IsActive() && !IsScanning())
 		{
 			m_RescanDue = false;
 			Scan();
@@ -863,6 +865,7 @@ namespace Strata
 
 	void SceneRecovery::Scan()
 	{
+		m_ScanExpected = false;
 		if (!IsActive())
 		{
 			m_Scan.reset();

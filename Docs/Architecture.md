@@ -302,10 +302,19 @@ views can ask for preview lighting, leave out screen-space text and tint entitie
 first overlay, `Overlay/StatusTint.frag`, blends the listed entities' colors over exactly their pixels of the entity-ID
 buffer, found by binary search in a sorted (id, color) buffer like the selection outline's). How a mesh's level of
 detail is chosen is a pure function (`LODSelection::GetScreenFraction`, `SelectLOD`), so tools show the level the
-renderer draws.
+renderer draws: a submesh whose simplified levels all have errors (`MeshLOD::Error`, `MeshUtils::HasLODErrors`) draws
+the coarsest level whose error, projected, spans at most `SceneRendererSpecification::LODErrorPixels` (1) pixels of the
+viewport height (`SelectLODByError`: the screen fraction times the error relative to the mesh's bounding radius,
+`MeshUtils::GetRelativeLODError`, against `GetErrorThreshold`, one multiplication the GPU's culling repeats bit for bit);
+levels without errors halve the screen fraction against `LODThreshold` as before. A level that changes cross-fades
+(`FadeLevelsOfDetail`): for `RenderData::c_LODFadeFrames` frames both levels are drawn, the new one on step/16 of the
+pixels of a 4x4 ordered dither and the old one on the others, the draw list entry carrying the code
+(`LODSelection::UpdateLODFade`, a state per renderer and instance with its entity, so a reused instance slot or a
+frame without the instance starts over; a camera cut or another scene skips a frame number, so they switch at once).
 Assets: `Mesh` (skinned meshes also have a skin stream, four joint influences per vertex, and a `MeshSkinBinding`: the
-skin's joints in the skeleton, their inverse bind matrices and the bind-pose extent of what each joint moves; cooked mesh
-format version 2, version 1 still loads), `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`;
+skin's joints in the skeleton, their inverse bind matrices and the bind-pose extent of what each joint moves; each
+level of detail its `MeshLOD::Error`, how far its surface departs from full detail; cooked mesh format version 3,
+versions 1 and 2 still load, their levels with error 0, "unknown"), `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`;
 texture formats, the cooked texture format and the block decoders are `TextureFormat`, `CookedTexture` and
 `BlockCompression` (see [Texture cooking](#texture-cooking)). Also `TextRenderer`/`FontAtlas`/`FontAtlasCache` (glyph atlases, one per
 font per renderer) with `FontFace`/`TextLayout` (glyph metrics and text shaping without rasterizing), `DebugDraw`/`SceneGizmos`, `TextureReadback`
@@ -741,13 +750,13 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
 | `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (`SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
-| `Scene.UI`, `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays; `Scene.UI` is the game UI's input) |
+| `Scene.UI`, `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays, or by `FramePerfLog::Create`; `Scene.UI` is the game UI's input) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
-| `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
+| `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView` (or `ApplyFeedback`), `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
 | `Render.UI` | the game UI pass (`GameUIRenderer`): its `Prepare` (layout, quads, uploads, glyphs) and `Draw` recording, nested in `Render.Submit` |
 | `Editor.UI` | `ImGuiModule::OnRenderUI`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
-| `Present` | `GraphicsDevice::EndFrame` (`GraphicsModule::OnEndFrame`), after the work time is measured (outside the frame time) |
+| `Present` | `GraphicsDevice::EndFrame` (`GraphicsModule::OnEndFrame`), after the work time is measured (outside the frame time); and inside the frame, the back buffer's first submission (`Renderer::PrepareBackBuffer`), where a driver that hands the display's image out only at its first use waits for it (MoltenVK waits for its drawable there, within `Editor.UI`): `RunFrame` leaves the time of stages outside the work time out of it (`FrameProfiler::GetOutOfWorkSeconds`), so a frame paced by the display counts as capped, not CPU-bound |
 
 Modules and games register more (`RegisterStage`, up to 64); a scene system names its stage in its descriptor, and the
 editor times its commands as `Editor.Commands` (`EditorCommandRegistry::Execute` and `PollCommandResult`: a `scene.save`
@@ -761,6 +770,46 @@ read without stopping it).
 the status bar's frame pill (see [Editor](#editor));
 `StrataRuntime --perf-log` writes it as CSV (`Runtime/FramePerfLog`, see
 [Export and the runtime](#export-and-the-runtime)).
+
+**GPU stages.** Stages of `FrameStageKind::GPU` are the GPU's time for passes of the frame. They are never entered on the
+CPU (`BeginStage` refuses them), never part of the work time, `StageSum` or `Untimed`, and their times arrive frames late:
+`RecordGPUFrame(frameIndex, times)` attaches them to the frame's record while it is still in the ring (`FrameSample::HasGPU`,
+`GPUBusyMs`, `GPUStageMs`, `GPULatencyFrames`). Listeners choose their timing: `Immediate` (when the frame ends) or `WithGPU`,
+called in frame order once a frame's GPU times arrived (or are known not to come), after `c_MaxGPULatencyFrames` (8) later
+frames without them at the latest, at once while no GPU times are expected (`SetGPUTimesExpected`), and for every frame left
+by `FlushGPUListeners`. `Summarize` takes GPU stages' statistics over the frames with GPU times and adds `GPU`: those frames,
+their busy time, the observed latency and `BoundBy` (`ClassifyFrameBound` of the medians: `GPU` when the GPU's busy time is
+at least 90% of the frame interval and above the work time, `CPU` when the work time is at least 90% of it, `Capped` when
+neither is: vsync, a frame-rate cap or idle throttling sets the pace; `Unknown` without GPU times).
+
+The renderer measures them (`Renderer/GPUProfiler`, `Renderer::GetGPUProfiler`) with the device's own 64-bit timestamps
+(`GraphicsDevice::CreateTimestampPool`, read with their availability and never waited for; NVRHI's timer queries read 32-bit
+values and end render passes). A ring of `MaxFramesInFlight + 2` frame slots of 256 timestamps: `Renderer::BeginFrame` closes
+the frame's slot (an event query marks the end of its submissions), hands the oldest slots the GPU completed to the frame
+profiler (every renderer's intervals added up per stage, like CPU stages) and opens the next one, whose timestamps are reset
+by a command list executed at once (query commands of a queue run in submission order). A slot still in use when its turn
+comes is dropped (`GPUProfilerStats::DroppedFrames`), as is a frame whose timestamps are still not readable a frame after the
+GPU completed its work (recorded into a command list that was never executed; MoltenVK makes timestamps readable a little
+after the completion is signaled, so a completed slot waits that one frame); nothing waits for the GPU. `GPUPassTimer` times
+consecutive passes of a command list with one timestamp per boundary, so stages tile it without gaps; a `GPUTimerRecord`
+keeps a user's own intervals (`SceneRenderer::GetGPUStats`).
+The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStages`):
+
+| Stage | Where |
+| --- | --- |
+| `GPU.Uploads` | the upload queue's graphics batches (`GPUUploadQueue::SubmitBatch`) |
+| `GPU.Setup` | a scene renderer's environment maps, scene data uploads and light clusters |
+| `GPU.Cull` | culling dispatches and depth pyramids |
+| `GPU.Shadows`, `GPU.Prepass`, `GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent` | the scene passes |
+| `GPU.Post` | exposure, bloom, tone mapping and FXAA |
+| `GPU.Overlays` | grid, tints, outline, debug lines, text and the copy into a target |
+| `GPU.UI` | the game UI pass's draws, world-space and screen-space (`GameUIRenderer`, registered by `RegisterGameUIModule`), inside `GPU.Overlays`: the pass times them with the frame's timer (`SceneOverlayFrame::GPUTimer`) and hands it back |
+| `GPU.ImGui` | the editor's UI (registered by `ImGuiLayer` on first use, so games have no such column) |
+
+Drivers of tile-based GPUs may write a timestamp recorded inside a render pass instance when the pass ends: MoltenVK samples
+Metal's GPU counters at encoder boundaries, so on macOS a stage that begins inside a pass that continues (`GPU.Transparent`
+after `GPU.Opaque` in the forward pass) shows its time in the stage before it. Stages that begin where a pass ends (shadows,
+prepass, opaque, post-processing) are exact everywhere.
 
 ## Scene runtime lifecycle
 
@@ -844,7 +893,9 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   first, the entities themselves (`registry.create(hint)`) as one more such copy; the UUID map (an `entt::dense_map`, two
   arrays) and the root list are copied as they are, and the dirty list and the transform pass carry over, so the copy
   needs no recomputation. The copy's signals are connected only afterwards: copying emits none, as a deserialized scene's
-  construction emits none before its systems start. Copying is mostly the system handing out fresh memory (page faults),
+  construction emits none before its systems start. Then the modules' context copiers run
+  (`Scene::RegisterContextCopier`; never for a `SerializedOnly` snapshot, which a save only writes): the Renderer
+  module's clones the render scene, so the copy's first frame builds no proxy and uploads nothing (see [Render scene](#render-scene), "Clones"). Copying is mostly the system handing out fresh memory (page faults),
   which the threads share: a 1,000,000-entity scene copies in about 43 ms (`Perf.Scene.Copy1M`; about 0.7 s entity by
   entity before), and the editor's frame that starts playing it takes about 47 ms (`PerfGPU.Editor.PlayStart1MMaxFrame`).
   Systems starting must not walk the hierarchy either: `ScriptSystem` sorts the scripted entities into hierarchy order
@@ -1777,8 +1828,19 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     needs the levels its near part shows, and a texture tiled over it the finer ones its tiling asks for; a surface seen at
     a grazing angle spans as many texels across the view as facing it, which is what the 16x anisotropic samplers sample
     by. Per texture the streamer takes `floor(log2(size * tiling / UVPixels))` (`ComputeWantedLevel`, clamped to its
-    levels), the finest over every use and view; shadow passes report nothing. Detail rises at once and falls only after
-    120 frames without a need of it (`c_DropDelayFrames`); a texture nobody needs falls to its tail. A still frame costs the
+    levels), the finest over every use and view; shadow passes report nothing. Detail rises at once and falls only under
+    GPU texture pressure (`ReleaseMemory`, `MakeRoom`) or once nothing needed it for 30 s (`c_IdleDropSeconds`, by a
+    steady clock rather than frames; `TextureStreamer::SetIdleDropSeconds`), least recently needed first, a few textures
+    per frame: levels the budget has room for stay while the view looks elsewhere instead of being read again when it
+    looks back (before, they dropped after 120 frames, 2 s, with gigabytes of headroom). A texture nobody needs falls to its
+    tail and is forgotten at twice that time. Raised levels fade in: the swap points the texture's table entry at the new
+    texture with a minimum level of detail of the levels it gained (`TextureTable::SetFadeIn`), which falls linearly to 0
+    over `TextureTable::c_FadeInSeconds` (0.25 s); `SampleMaterialTexture` (`Include/MaterialTextures.glsl`, fragment
+    shaders) scales both sampling gradients until the anisotropic level of detail reaches it (`textureGrad`), so the new
+    detail blends in from what the old texture showed, and filtering keeps its footprint's shape. Material data does not
+    change, only the table entries of the fading textures, once per frame. Raises for a view that needs the texture whole
+    (no streaming: exact pixels) do not fade, and renderers of single images that wait for their levels (the editor's
+    capture renderer, thumbnails) ignore fades (`SceneRendererSpecification::FadeTextureLevels`). A still frame costs the
     streamer nothing per texture: a frame's needs are kept in the targets they update (no allocation for a texture needed
     before), and `OnUpdate` looks only at textures whose target changed in a way that can call for another level
     (`TextureStreamingPolicy::GetChanged`: new or forgotten, another level, needed now and not before or the other way
@@ -1792,7 +1854,7 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     frame for as long as its owner keeps the `TextureHold`, whether or not anything draws it: a renderer holds the sky
     light's environment map until it has computed the environment from its whole chain (only the cube is sampled
     afterwards, and the map drops back to its tail), so a renderer that draws only now and then - the capture renderer of a
-    headless editor, whose captures lie seconds apart, longer than the drop delay - finds the map whole at its next frame
+    headless editor, whose captures may lie further apart than the idle drop time - finds the map whole at its next frame
     instead of raising it for one frame and losing it again before the next. Renderers share the environment computed
     from a map while any of them lights with it, so one that starts drawing the scene later, such as the editor's capture
     renderer beside the viewport's, takes it over in its first frame instead of waiting for the map's levels.
@@ -1943,13 +2005,31 @@ A frame of `SceneRenderer::Render`:
 RenderScene::Get(scene).Sync()   world transforms, then the proxies of signaled mesh renderers and changed transforms,
                                  then the mesh layouts of meshes the asset manager loaded, reloaded or dropped since
 AssetResolveCache::BeginFrame    the frame's asset manager
+RenderSceneGPU::Update           the render scene's GPU copy: what changed since its last update (shared by the
+                                 scene's renderers), new proxies within the frame's budget, the mesh and material
+                                 tables after the asset manager's content changes; executed at once
 CullView                         SpatialIndex::QueryFrustum; screen fractions and request priorities (parallel chunks);
                                  meshes of unknown bounds as if in view; QuerySphere for the prefetch distance
-FindShadowCasters                cascade boxes; QueryPlanes per cascade, then the exact test in light space
+  or ApplyFeedback               (GPU-driven, VisibilityFeedback) the marks and screen sizes of an earlier frame's GPU
+                                 culling; the users of transparent materials and the skinned proxies in view
+FindShadowCasters                cascade boxes; QueryPlanes per cascade (a job each, merged in cascade order), then
+                                 the exact test in light space in parallel chunks (casters below a texel of a cascade
+                                 left out of it), animator reports and the assets casters need merged in chunk order
+                                 (feedback frames: the boxes, and the skinned proxies out of view for their animators)
 ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident; materials used
-                                 as in the frame before: its data, their assets looked up in one call (below)
-GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches
-UploadSceneData                  changed instances, changed materials, the changed range of each draw list
+                                 as in the frame before: their flags, their assets looked up in one call (below)
+GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches (the
+                                 GPU-driven path: transparent draws, the materials' screen sizes and the cascades only)
+BuildDrawArguments               the batches' indirect arguments at their meshes' places in the geometry pool
+PrepareGPUCulling                (GPU-driven) the frame's buckets and their draw slots, the culling constants
+UploadSceneData                  the changed range of each draw list (and the bucket table)
+RunGPUCulling                    (GPU-driven) Cull.comp counts (and writes visibility feedback), CullBuild.comp places
+                                 the draws, CullFeedback.comp packs the feedback, Cull.comp writes the draw list; the
+                                 passes then draw each bucket indirectly
+RunShadowOcclusionPhase          (GPU-driven, after the cascades' first-phase draws) HZBBuildArray.comp's pyramid per
+                                 cascade, CullShadow.comp's second phase and its shadow draws
+RunOcclusionPhase                (GPU-driven, after the first phase's prepass) HZBBuild.comp's depth pyramid, Cull.comp's
+                                 second phase and its prepass draws
 ReleaseFrameAssets               (when Render returns, however it ends) every reference the frame took, and the manager
 ```
 
@@ -1960,7 +2040,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   It listens to the component's signals: created and signaled (`on_update`: `ComponentAccess`, `MarkModified`) mesh
   renderers are read at the next `Sync`, destroyed ones lose their proxy at once; world transforms and activity come
   from `Scene::GetWorldTransformChanges` (every proxy is compared when the scene no longer knows). Writes to
-  `MeshRendererComponent` fields must therefore signal, like transform writes (AGENTS.md, "Architecture rules"); Debug
+  `MeshRendererComponent` (and light component) fields must therefore signal, like transform writes (AGENTS.md,
+  "Architecture rules"); Debug
   builds compare the proxies with the scene after every `Sync` (`RenderScene::Validate`). Signaled entities wait for the
   next `Sync` in a queue that holds each entity once (destroyed ones leave it), so a scene that changes while nothing
   renders it (a hidden view, an agent capturing now and then) queues no more than its entities. A scene's first sync
@@ -1971,6 +2052,35 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   swaps the scene in then builds no proxy (the longest frame of opening 20,000 prefab instances of five cubes in the
   editor: 51-52 ms before, 15.5-17 ms with it, most of it the first frame's upload of every instance and the
   Hierarchy's rows).
+- **Lights** (`Renderer/RenderLights.h`, `RenderScene::GetLights`). Point and spot lights are records too: one per light
+  component (`RenderData::LightRecord`: world position and range, color, direction, cone and the bounding sphere of the
+  region it reaches; inactive or unlit lights keep a record marked not drawn), kept like the proxies from the
+  components' signals and the world transform changes, with a change log the GPU copy follows (`RenderSceneGPU`'s light
+  record buffer, `RenderSceneGPUUpdate::LightBytes`). The GPU-driven path culls them on the GPU in the `GPU.Cull` stage:
+  `Scene/LightCull.comp` tests each record against the camera-relative frustum and counts each work group's lights in
+  view, `Scene/LightCompact.comp` packs those, in record order, into the light buffer (camera-relative, with view-space
+  bounds) and writes their count, which `Scene/LightClusters.comp` reads (`FrameConstants::LightCounts.y`). Nothing caps
+  them (10,000 lights in view draw 10,000; `MaxLights` caps only the CPU path), and a cluster that more lights reach than
+  `MaxLightsPerCluster` keeps the most relevant by finding the relevance of its last kept light bit by bit (the CPU path
+  sorts its lights by relevance instead). The CPU path walks the records instead of the registry. The counts come back
+  with the culling's (`CullCounters::VisibleLights`, `DrawnLights`).
+- **Clones** (`RenderScene::CopyIntoScene`, the Renderer module's `Scene::SceneContextCopier`). `Scene::Copy` of a scene
+  with a render scene (play start; not a background save's `SerializedOnly` snapshot) clones it into the copy: the copy's entities keep the source's EnTT identifiers, so
+  every proxy, instance, mesh and material slot and palette index stays the same, and the clone is the source's arrays
+  copied member by member, the large ones on the job system at once (`Core/ParallelClone.h`); it records its source
+  (`GetCloneSource`) and the source's change versions (`GetCloneVersions`), connects its listeners to the copy's
+  registry without queueing an entity, and reads a transform change the source had not read yet with a full comparison
+  at its first `Sync`. A renderer whose render scene was the source adopts the clone (`PrepareExtraction`): its per-slot
+  state, feedback, visibility history and view state carry over, so the copy's first frame is a steady frame. The clone's
+  GPU copy is made from the source's (`RenderSceneGPU::CreateClone`: its CPU state copied the same way, its buffers by
+  GPU copies executed at once) when that holds exactly the versions the clone started from (`HoldsVersions`), so it
+  uploads nothing; otherwise it fills by uploads like a new one. Its buffers double the scene's mirror memory while both
+  live (`renderStats.sceneMirrorMB`; the source's mirror goes once it was unused for `c_UnusedFrames`). Starting play on
+  1,000,000 rendered cubes takes 12-15 ms for the clone and 10-12 ms more for the copy's first `Render`, most of it the
+  GPU copy's CPU state and its buffers (Apple M2 Max under load, `PerfGPU.Renderer.PlayStartRender1MCubes`, 22-27 ms in
+  all; without the clone the first `Render` took 329 ms and the next frames uploaded the mirror for eight more).
+  Copy-on-write pages shared between the two would make the clone near free but add an indirection to every hot loop of
+  the render scene; the deep copy stays until a measurement on the reference machine says the pages cost nothing there.
 - **Mesh layouts**. The bounds, submeshes and submesh materials of a mesh are learned from the loaded mesh
   (`SetMeshLayout`) and kept when it is evicted. `Sync(assets)` keeps them current with the asset manager whatever the
   renderers look at: it reads the manager's content changes since its own content version (all of them when the
@@ -2034,9 +2144,40 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   back at their entities' transforms; `Validate` expects the same. Scenes without such a provider pay nothing for it.
 - **Slots and instances**. Meshes and materials get dense slots shared by their users. Every submesh of a proxy whose
   mesh layout is known has an `InstanceData` (64 bytes: the 3x4 world matrix, the material slot, the entity ID, flags) in
-  one array that persists between frames. Changes are logged by version (`GetInstanceChanges`, the latest 65,536), so
-  each renderer uploads only the instances that changed since its own last upload, in ranges. Shaders find an instance
-  through the frame's draw list (`u_DrawList[gl_InstanceIndex]`) and derive the normal matrix from the 3x4 rows.
+  one array that persists between frames. Changes are logged by version (`GetInstanceChanges`, the latest 65,536), and
+  so are the proxies themselves (`GetProxyChanges`: placement, flags, mesh slot, instance range, creation, destruction;
+  a proxy changed several times between two reads is logged once, and taking the version, `GetProxyVersion`, counts as
+  a read) and the palettes. Shaders find an instance through the frame's draw list (`u_DrawList[gl_InstanceIndex]`) and
+  derive the normal matrix from the 3x4 rows.
+- **The GPU copy** (`Renderer/RenderSceneGPU.h`). The instances, the palettes and a 64-byte culling record per proxy
+  (`RenderData::GPUProxy`: local and world bounds, instance range, mesh slot, flags) live in buffers of a mirror per
+  render scene, which every renderer of the scene shares (`Renderer::GetRenderSceneGPUs`, keyed by
+  `RenderScene::GetId`, not in the registry context: scenes die on background jobs). `Update` follows the three change
+  logs and uploads what changed through staging (`GPUUploadQueue::RecordSceneUpload`, counted as the frame's
+  `SceneDataBytes` and in `--perf-log`'s `UploadQueue*` columns) in a command list it executes at once, so a second
+  renderer of the scene uploads nothing. A proxy is drawn once it is resident (its record and instances uploaded in one
+  update): changes of resident proxies upload at once; new proxies (a scene's first frame, new entities, a reused proxy
+  index) upload oldest first within `SceneRendererSpecification::NewInstanceBytesPerFrame` (16 MiB) per device frame, at
+  least one a frame, and wait meanwhile with a record of zeros (`SceneRendererStats::DeferredInstanceBytes`,
+  `DeferredProxies`; the editor's single pictures, `viewport.capture`, the project's picture and thumbnails, render again
+  until none waits); a destroyed proxy's record is cleared at once. Buffers grow by a GPU copy into larger ones (the
+  old ones released deferred), so growth uploads nothing again. `PrepareLoadedScene` fills a loaded scene's mirror too,
+  within `c_PrepareUploadBytes` a frame, so the frame that shows the scene uploads no proxy. A render scene's
+  destructor posts its id (any thread) and `Renderer::BeginFrame` releases its mirror; mirrors no renderer updated for
+  `RenderSceneGPUCache::c_UnusedFrames` (300) frames go too, and a later frame of their scene uploads it again.
+  The mirror also holds the scene's asset tables, by slot: the mesh table (per mesh slot the `GeometryHandle` of the
+  loaded mesh, with its arena; 0 while it is not loaded or not in the geometry pool), and per material slot its GPU data
+  (`RenderData::MaterialData`, `MaterialGPU::Build`) and flags (available, double-sided, alpha-masked, transparent), of
+  the loaded material or, while it is not loaded, of the default material. They follow the asset manager's content
+  changes (`AssetManagerBase::GetContentChanges`; another manager, or one that no longer remembers that far back,
+  builds every slot) and the scene's slots (`RenderScene::GetSlotsVersion`, `FindMeshSlot`, `FindMaterialSlot`): a
+  mesh or material is built again when it was loaded, reloaded or dropped, a material also when one of its textures or,
+  for those drawn as the default material, the default material was (a reverse index from textures to the material
+  slots naming them). Textures are named by texture table index, so a texture streaming levels builds nothing. Only
+  the slots built upload (`RenderSceneGPUUpdate::MeshesChecked`, `MaterialsBuilt`, `MaterialBytes`). Both paths read
+  the materials from this buffer, and the GPU-driven path culls with these tables, so it draws whatever is loaded; the
+  mirror requests nothing (the renderers' extraction does) and is updated after the frame's requests, which publish
+  nothing, so the CPU's flags and the tables agree.
 - **Spatial index** (`SpatialIndex`). A loose grid: a proxy lives in the 32-unit cell that holds the center of its
   bounds, cells keep the union of their proxies' bounds and form blocks of 8x8x8 cells, and proxies longer than four
   cells are kept in a list of their own. Queries (frustum, convex planes, sphere) skip blocks and cells outside the
@@ -2046,7 +2187,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   High priority above `HighPriorityScreenFraction` (5%) of the viewport height and at Normal below; proxies within
   `PrefetchDistance` (100 units) of the camera request them at Low (also a mesh another lookup of the frame found not
   loaded); meshes of unknown bounds are requested as if in view (above); shadow casters outside the view and the
-  prefetch distance are drawn only from what is resident. Each distinct mesh, material and texture is looked up once
+  prefetch distance are drawn only from what is resident. GPU-driven frames learn these uses from the GPU's culling of an
+  earlier frame (visibility feedback, below) and walk the view on the CPU only where it cannot tell. Each distinct mesh, material and texture is looked up once
   per frame (one `GetAsset`, which also
   stamps it for the least-recently-used order; `AssetManagerStats::GetAssetCalls` counts them at the manager). The
   references are held only while the frame is rendered (the command lists keep the GPU resources they use, the bindless
@@ -2061,31 +2203,154 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   hold their fonts as long as the fonts are loaded.
   Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what `GetOpaqueBatches` reports after the frame holds no
   pointers.
-- **Material data taken over by still frames** (`SceneRenderer::MaterialResolution`). Resolving a material builds its GPU
-  data from its properties and the bindless slots of its textures, one lookup per material and texture: 0.58 of the
-  1.0 ms a still frame of 3,000 streamed textures took (`PerfGPU.Renderer.IdleFrame3kStreamedTextures`). A frame whose
-  material slots, their uses and their handles are those of the latest frame that resolved them one by one takes that
-  frame's data, flags and texture maps over when nothing they come from changed: the materials and textures are still
+- **Materials taken over by still frames** (`SceneRenderer::MaterialResolution`). Resolving a material requests it and
+  its textures, one lookup per material and texture: 0.58 of the 1.0 ms a still frame of 3,000 streamed textures took
+  (`PerfGPU.Renderer.IdleFrame3kStreamedTextures`). A frame whose material slots, their uses and their handles are those
+  of the latest frame that resolved them one by one takes that frame's flags and texture maps over when nothing they
+  come from changed: the materials and textures are still
   the loaded objects it found (compared by ownership under one lock of the manager, `AssetManagerBase::TouchLoadedAssets`,
-  which also stamps them as used, as the lookups would) and no bindless slot of those textures was released since
-  (`BindlessTextureTable::AreSlotsUnchanged`: a texture that streams levels moves to a new slot and releases its old
-  one, so data naming the old slot would sample a recycled descriptor and can lose the device). The lookups are those
+  which also stamps them as used, as the lookups would). The materials' GPU data is the render scene's GPU copy's
+  (above), built when a material or its textures change, not per frame. It names textures by their index in the texture table
+  (`Renderer/TextureTable.h`, `Renderer::GetTextureTable`), which a texture keeps for its life: a texture that streams
+  levels moves to a new bindless slot and releases its old one, and only its table entry follows (`Texture::
+  SwapResidentTexture`; the renderers upload changed entries before they draw, `TextureTable::RecordUploads`), so
+  material data never names a released slot and a level change rebuilds no material. A freed index draws white and is
+  reused only once frames in flight completed. The lookups are those
   the resolving frame recorded (`AssetResolveCache::BeginRecording`, `EndRecording`), replayed with the statistics they
   counted (`Replay`); frames that drew a material as the default material, found an asset loading or counted one
   pending are not replayed. Loaded materials are not changed in place (edits publish new objects), so their properties
-  need no comparison. The camera takes no part: views that move over the same materials reuse them too. Still frames of
+  need no comparison, and no frame compares material data. The camera takes no part: views that move over the same materials reuse them too. Still frames of
   3,000 streamed textures went from 1.01-1.06 ms to 0.61 ms, of 10,000 materials from 1.33 to 0.61 ms, and the editor's
   frames of 10,000 materials from 1.82 to 0.99 ms.
+- **The GPU-driven path** (`SceneRendererSpecification::GPUDriven`, Auto where the device has
+  `drawIndirectFirstInstance`; `SceneRendererGPUDriven.cpp`, `Scene/Cull.comp`, `CullBuild.comp`, `Include/Culling.glsl`).
+  The GPU culls the render scene's GPU copy and builds the opaque and shadow draws; the CPU path (Off) stays as the
+  reference and the fallback. The CPU requests the frame's assets, places the cascades' squares and gathers transparent
+  draws, sorted; the GPU culls with the mirror's mesh table and material flags (above: whatever is loaded, whether this
+  frame requested it or not), and the CPU uploads the bucket table and the constants (`RenderData::CullConstants`). `Cull.comp` runs one thread per proxy, for the view and (variant `ST_CULL_SHADOW`) for
+  the cascades: the decisions are the CPU path's on the same data (active and indexed, the frustum, the screen size of
+  `MinProjectedPixels` for the view, the light-space box and the sub-texel rule for cascades, per instance the material
+  and the level of detail, `ChooseLOD` and `Include/LODSelection.glsl`: the pool's `GeometryLOD` records carry each
+  level's relative error and `GeometrySubmesh::Flags` whether the submesh chooses by them), and each instance counts on
+  its (bucket, LOD record). Buckets are
+  pipeline states and vertex arenas: mirrored, double-sided and geometry (Static arena, Skinned arena in its bind pose,
+  posed) for the view, alpha-masked and cascade too for shadows; only the buckets the frame can have get dense indices
+  and storage. `CullBuild.comp` gives each record with instances a range of the draw list and an indirect draw in its
+  bucket, then `Cull.comp` runs again and writes each instance into its record's range (the same decisions, counting
+  the record down). The passes then draw each bucket with one `drawIndexedIndirectCount` (devices with
+  `drawIndirectCount`), one `drawIndexedIndirect` over the bucket's draw slots (`NoCount`: as many slots as the meshes the
+  CPU's marks found have LOD records in that arena, those without instances zeroed; storage for every loaded mesh's
+  records), or one per slot (`PerDraw`), through the
+  vertex shaders' `u_DrawList[gl_InstanceIndex]` as before. No call issues more draws than the device's
+  `maxDrawIndirectCount`: buckets with more slots draw without a GPU-written count (whose value must stay within it), in
+  several `NoCount` calls. MoltenVK has no `drawIndirectCount`: there the `NoCount` path runs. The counts (instances, draws, triangles, levels, shadow casters, visible and size-culled proxies) come back
+  2-3 frames late through a readback (`BufferReadback`, `SceneRendererGPUStats`, `AddGPUCounts`). The opaque pixels do not
+  depend on the order of a record's instances; shadows' receiver plane bias follows the receiver's normal, not
+  screen-space derivatives, which on some GPUs depend on how draws group pixels into quads (`Include/Shadows.glsl`), so
+  both paths agree to the pixel (`GPU.SceneRenderer.GPUDriven`, `IndirectFallback`).
+- **Visibility feedback** (`SceneRendererSpecification::VisibilityFeedback`, on by default; `Cull.comp`'s counting
+  passes, `Scene/CullFeedback.comp`, `SceneRenderer::ApplyFeedback`). What a GPU-driven frame requests comes from the GPU's
+  culling of an earlier frame instead of the CPU walking the view's proxies. For every proxy within the prefetch distance,
+  in the view (frustum and screen-size tests) or casting into a cascade, whether its mesh is loaded or not (unloaded ones
+  are placed by their recorded bounds), the counting pass marks its mesh slot and its materials' slots (its instances',
+  or its override material, which the proxy record carries above its flags, while its mesh's layout is unknown) with the
+  use (view, high above `HighPriorityScreenFraction`, prefetch, shadow: the CPU's request marks) and the largest projected
+  size, and for textured materials the UV pixels texture streaming follows (`Include/TextureStreaming.glsl`, the port of
+  `TextureStreamingPolicy::GetWorldPixels` and `GetUVPixels`). The first touch of a slot appends it to a list, so the
+  pack pass and the CPU's read are proportional to the distinct assets in use, not to the proxies; slots are read
+  before their atomics, so a million proxies of one mesh cost one atomic each slot. The records come back with the
+  counters, 2-3 frames late (`BufferReadback` reads at offsets), and a frame applies the newest: it marks the slots,
+  takes the screen sizes for `VisibleMaterialUse`, and walks on the CPU only the users of transparent materials
+  (`RenderScene::CollectMaterialUsers` over `RenderSceneGPU::GetTransparentMaterialSlots`: the CPU draws them, sorted) and
+  the skinned proxies (their animators learn that they are seen; cascades take the shadowed part of the view as their
+  receivers) in the frustum, and the meshes of unknown bounds. The CPU's walk (`CullView`) runs instead on a renderer's
+  first frames, after a camera cut (until feedback of a later frame arrives), whenever the mirror's tables changed since
+  the feedback's frame (an asset loaded, edited or dropped: its users were not seen with it), when the feedback is more
+  than 8 frames old, and once after a frame whose draws overflowed the slots the feedback foresaw (paths without a
+  GPU-written count bound each bucket's draws by the records of the meshes the feedback saw in view, plus a quarter and
+  16, and count what lies beyond as overflow). Feedback is a few frames late by design: a material no longer drawn is
+  requested until the GPU saw it go. The casters are the GPU's too: on feedback frames `FindShadowCasters` only places the
+  cascades and tests the skinned proxies out of view for their animators (with the shadowed part of the view as their
+  receivers: it may report more animators than the CPU's walk, never fewer), the shadow buckets' slots follow the meshes
+  the feedback saw cast, and the cascades' depth ranges are fitted on the GPU the same frame.
+- **Occlusion culling** (`SceneRendererSpecification::OcclusionCulling`, on by default; `Cull.comp`'s second phase,
+  `Scene/HZBBuild.comp`, `RunOcclusionPhase`). The view is culled in two phases. The first draws, of the proxies that pass
+  the frustum and size tests, those the view saw in the previous frame into the depth prepass. A depth pyramid of that
+  depth follows: level 0 is half the depth buffer, each texel the farthest (smallest, reversed-Z) depth of the 2x2 below
+  it, odd edges left out, so a texel of level m covers exactly the pixels p with p >> (m + 1) equal to it; one sample of a
+  minimum-filtering sampler where the device has `samplerFilterMinmax`, four loads otherwise (MoltenVK). The second phase
+  tests every proxy in the frustum against the pyramid (its box's screen rectangle at the finest level it spans in at most
+  2x2 texels, against the box's nearest depth; boxes reaching the camera's plane are visible), records whether it is
+  visible, and draws into the prepass those visible now that the first did not draw: something that comes into view is
+  drawn in that frame, never a frame late. The forward pass draws both phases' buckets (the second phase has view buckets
+  of its own) with the `EQUAL` depth test, and ambient occlusion, entity IDs, outlines and tints read the final depth. The
+  per-proxy visibility is two bits that alternate frame by frame (the previous frame's, this frame's), cleared on a camera
+  cut, a renderer's first frame or another render scene: the first phase then draws nothing and the second tests
+  everything against an empty pyramid. Orthographic views work alike. The CPU path does none;
+  `SceneRendererGPUStats::OccludedProxies` (`renderStats.occludedProxies`) counts what the second phase found hidden.
+  Visibility feedback still marks occluded proxies' assets as in view, so requests do not depend on it.
+- **The cascades' occlusion culling** (the same switch; `CullShadow.comp`'s second phase, `Scene/HZBBuildArray.comp`,
+  `RunShadowOcclusionPhase`). Each cascade is culled in two phases too, around its shadow map: the first draws the casters
+  that were drawn into it in the previous frame (a visibility bit per cascade and parity, beside the view's), a depth
+  pyramid per cascade follows (a layer each of one array texture; level 0 a quarter of the shadow map each way, each
+  texel the farthest of 4x4 texels, about 5.6 MB for four 2048 cascades), and the second phase tests every caster in the
+  cascade's box against it and draws those visible now that the first did not draw. The test is the caster's light view
+  box (the one the box and sub-texel tests use): its texel rectangle from the cascade's square and its nearest depth from
+  the cascade's orthographic depth range, the near plane's z coming from `CascadeFit.comp` (`CascadeData::Parameters.w`).
+  The fit still sees every caster in the box, both phases', since it runs before the first phase draws. Casters reaching
+  past the near plane (flattened onto it) are never hidden, and the shadow bias only moves depth away from the light, so
+  what is left out could not have changed the map: the shadows are the same. The cascades' second phase has shadow buckets
+  of its own (`c_CullShadowSecondPhase`), which `CullBuild.comp` builds in its own pass (mode bit 2), before the view's.
+  A caster that comes out from behind another is drawn in that frame; one that a new occluder hides is left out from the
+  second frame after it appeared (the occluder is drawn by the second phase first, then by the first, which finds the
+  caster hidden). `SceneRendererGPUStats::OccludedCasters` (`renderStats.occludedCasters`) counts the casters found hidden
+  per cascade. The pass costs GPU time of its own (about 1 ms at 100,000 and 300,000 casters on the M2 Max, mostly the
+  pyramids' wait for the first phase's shadow maps and the second pass over the proxies), so it runs while it pays: while
+  the latest frame that ran it with history found at least a sixteenth of the cascades' casters hidden, and otherwise
+  every 16th frame, to look again (`SceneRendererStats::ShadowOcclusionCulled`). Frames without it draw the cascades whole
+  and record what they drew as the next frame's history, so a look sees the whole picture; frames without history
+  (camera cuts, a renderer's first frame) do the same.
+- **Camera-relative rendering** (Docs/DeveloperGuide.md, "Camera-relative space"). Scene shaders work with the camera at
+  the origin: the frame's view matrices are rotation-only, vertex shaders subtract the camera's position from the
+  instance's translation before anything is added to it (`TransformPositionRelative`), and lights, the clusters' bounds,
+  debug lines, world-space text and the cascades are uploaded relative to the camera (subtracted in double; the cascades
+  texel-snapped in absolute light space in double first, so their edges stay still). Vertices near the camera keep full
+  precision however far from the origin it is, and the sky is drawn from a rotation-only ray. What remains is the scene's
+  own float32 transforms: entity origins quantize to 7.8 mm at 100 km (`InstanceData` stays world space, 64 bytes).
+- **Cascades fitted on the GPU** (`Scene/CascadeFit.comp`, `RenderData::CascadeFitConstants`, `CascadeData`). Each
+  cascade's projection reaches from the far side of its view slice's bounding sphere to the nearest drawn caster toward
+  the light (at most `c_MaxShadowCasterDistance` beyond the sphere; `ShadowMesh.vert` pancakes the casters beyond). One
+  compute thread per cascade builds it (`Math::OrthographicReverseZ` times the light view) into `u_Cascades`, which the
+  shadow pass and the receivers read, on both paths: the CPU path hands it the nearest casters it found
+  (`GatherShadowDraws`), the GPU-driven path's shadow culling records them (`u_CasterDepths`, an atomic maximum of
+  order-preserving encoded floats, `Include/OrderedFloat.glsl`) before the fit runs. So no frame waits for the GPU and
+  both paths build the same matrices from the same inputs.
+- **Cascades kept from frame to frame** (`SceneRendererSpecification::CacheShadowCascades`, on by default; the GPU-driven
+  path's `PrepareShadowCache`, `CommitShadowCache`). A cascade's layer of the shadow map is redrawn only when something
+  that reaches it changed since the frame that drew it; otherwise the culling draws nothing into it
+  (`CullConstants::CachedCascades`) and its layer is neither cleared nor drawn (`SceneRendererStats::CachedCascadeMask`,
+  `renderStats.cachedCascades`). A layer is described by its key (the whole camera and viewport, since the slices and
+  their squares follow both; the light's view; the cascade's square and depth range; the map size and the level-of-detail
+  criteria, since casters choose levels by the view) and by what its casters were drawn with (the render scene, the GPU
+  copy's mesh and material tables version, `GeometryPool::GetContentVersion` and, while materials are alpha-masked,
+  `TextureTable::GetUploadVersion`): a change of either redraws it. Casters that changed are read from the render scene's
+  proxy log: the cascades their world bounds reach, before and after the change (light space relative to the camera, with
+  two texels of margin), are redrawn. The bounds before a change are known only for proxies the cache saw change before
+  (up to 65,536; a static proxy's first change redraws every cascade), and a log that overflowed redraws every cascade.
+  The fit still runs every frame over every caster, so a kept cascade's projection is the one it was drawn with. The
+  cache is committed once the frame's command list was executed (a failed frame keeps nothing), and frames of the CPU
+  path redraw every layer. Perf tests that measure what frames cost turn it off (`Perf::MeasuredRendererSpecification`):
+  a still camera over a still scene would otherwise keep every cascade.
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same
   result on any number of threads), then sorted with a stable radix sort (`Core/RadixSort.h`) of 64-bit keys: cascade,
   alpha mask, winding, culling, mesh slot, submesh and level of detail. The sort reads the keys once to find the bytes
   that differ and spends passes and histograms on those only (draws of one mesh share a key: nothing to sort). The
   material is not in the key, so the instances of a mesh share a draw call whatever their materials: shaders read
   `u_Materials[instance.MaterialIndex]` (`SceneRendererSpecification::BatchAcrossMaterials` off splits batches by
-  material, for comparisons). Transparent surfaces stay one draw each, back to front. Material data (by slot) is built
-  for the materials drawn (or taken over, above) and uploaded where it changed.
-- **A still frame** updates no proxy and uploads no instance, material or draw list (`SceneRendererStats::ProxyUpdates`,
-  `InstanceBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
+  material, for comparisons). Transparent surfaces stay one draw each, back to front. Material data (by slot) is the
+  render scene's GPU copy's, built and uploaded where a material or its textures changed.
+- **A still frame** updates no proxy and uploads no instance, proxy record, material or draw list
+  (`SceneRendererStats::ProxyUpdates`, `InstanceBytesUploaded`, `ProxyBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
   on screen and texture tiling (`GetVisibleMaterials`, and their loaded texture maps, `GetVisibleTextures`, for mip
   streaming) and its counts and times (`VisibleProxies`,
   `ProxyUpdates`, `InstanceUploadRanges`, `ExtractMs`, `SortMs`, `RequestsByVisibility`, `PrefetchRequests`,
@@ -2112,7 +2377,7 @@ system, not to entities: a character's joints add no entities and no transform c
   (`AnimationClipBinding`; targets the skeleton lacks are skipped). An `AnimationController` (`.stanimator`) holds
   parameters (float, bool, trigger), states (a clip or none, a speed, looping, events) and transitions. Their loaders
   validate everything (truncated and garbage bytes are rejected).
-- **Import.** `GltfImporter` (version 8) makes one skeleton per model (sub-asset "Skeleton": the joints of every skin,
+- **Import.** `GltfImporter` (version 9) makes one skeleton per model (sub-asset "Skeleton": the joints of every skin,
   the animated nodes and their ancestors, parents first; the root motion joint is the topmost joint of a skin), a clip
   per animation ("Animation/<name>", or its index; keyframes reduced) and skinned meshes (see Asset pipeline,
   `MeshSkinBinding`). The model's root entity is its animator (`AnimatorComponent` with the skeleton and the first
@@ -2209,7 +2474,9 @@ system, not to entities: a character's joints add no entities and no transform c
   not a held asset). Animators are found through their component's signals, so an update looks only at animators that
   were added, removed or changed, requests only skeletons that are loading, and an idle update does nothing at all
   (`GetPosesVersion` unchanged, so `RenderScene::UpdateSkinnedPoses` returns at its version check; `GetStats` counts the
-  work for tests). The edit pose (`AnimationEditPose`, `SetEditPose`; the editor's `ViewportSettings::EditPose`) can
+  work for tests). Pose versions are a provider's own: when the scene's `ISkinningPoses` is another object (the play
+  copy's animation system after the preview's rest poses, which its render scene's clone kept), every palette is
+  computed again whatever the versions say. The edit pose (`AnimationEditPose`, `SetEditPose`; the editor's `ViewportSettings::EditPose`) can
   instead be `ClipStart`: the first frame of what each animator plays on start (its controller's default state's clip,
   else its `Clip`, through `AnimatorInstance` at time 0 as play mode shows it before its first update; without either,
   or while that clip does not load, the rest pose). Those poses are cached the same way, keyed by skeleton, controller,
@@ -2440,7 +2707,9 @@ is the `strata-scripting` skill. The layers:
   and starts with `ResolveContext`, which rejects calls from other threads, outside callbacks or from a crashed module.
   The table is built from `ST_SCRIPT_HOST_FUNCTIONS`, which counts calls for the feature test.
 - **Crash guard** (`Core/CrashGuard.h`). Windows: structured exception handling around the call
-  (`Platform/Windows/WindowsCrashGuard.cpp`, `__try`/`__except`, with `_resetstkoflw` after a stack overflow); SDK
+  (`Platform/Windows/WindowsCrashGuard.cpp`, `__try`/`__except`, with `_resetstkoflw` after a stack overflow; a thread's
+  first guarded call raises its stack guarantee to 32 KiB, because dispatching the overflow stores the processor's whole
+  register state on what is left of the stack, which with AVX-512 can take more than Windows leaves by default); SDK
   modules turn `abort()` into a structured exception from a SIGABRT handler in their static C runtime. POSIX: handlers
   for SIGSEGV, SIGBUS, SIGFPE, SIGILL and SIGTRAP on an alternate signal stack, leaving through `siglongjmp` (Linux) or
   by returning into a recovery routine (macOS); SIGABRT is reported, not contained
@@ -2579,7 +2848,12 @@ is the `strata-scripting` skill. The layers:
   ms), scaled to the 95th percentile frame (taller frames are cut at the top), marks spikes (frames over twice the
   median and a 60 FPS frame), explains the frame under the mouse, lists per-stage statistics under the frame's totals
   (frozen under the header) and copies `editor.perf`'s JSON (Copy as JSON); its statistics are computed four times a
-  second. The timeline takes at most 40% of the panel's height, or sits beside the table in a short, wide dock, so the
+  second. While GPU times arrive (or are expected) a GPU strip under the timeline stacks the GPU stages of the same frames
+  at the same scale (frames without GPU times stay blank), and the table ends with a GPU section: what bounds the frames
+  (`PerformancePanel::DescribeBound`: GPU-bound, CPU-bound, capped or unknown, by `FrameBound`), the GPU's busy time and
+  each GPU stage. The status bar's frame pill keeps its text; its tooltip adds the same bound line (a summary of the last
+  120 frames, made only while the tooltip shows). The viewport's stats overlay adds the GPU's time of the latest frame
+  it is known for with its three largest stages, and the draw commands the CPU recorded beside the draws the GPU made. The timeline takes at most 40% of the panel's height, or sits beside the table in a short, wide dock, so the
   table keeps rows in view. Color swatches are drawn as rectangles: the monospaced font has no icons. **UI tests**
   (`StrataTests/src/Editor/ImGuiHarness.h`) create an ImGui context with the editor's fonts and theme (styled by an
   unattached `ImGuiLayer`), honor ImGui's texture requests without a renderer, inject input (clicks, keys, typed text),
@@ -3170,7 +3444,8 @@ is the `strata-scripting` skill. The layers:
   still loading are tinted in the pending color, failed ones in the failed color, and entities whose mesh is not there
   (nothing is drawn, so nothing can be tinted) get a placeholder box of the mesh's recorded bounds, or a unit box without
   them (at most `c_MaxPlaceholderBoxes`). The LOD view tints each entity by the most simplified level its submeshes are
-  drawn at (`LODSelection`, with the viewport renderer's threshold). The mip view tints each entity drawn with textures by
+  drawn at (`LODSelection`, with the viewport renderer's `GetLODCriteria`), and its legend the largest error in pixels
+drawn at each level chosen by errors (`StreamingViewStats::MaxErrorPixelsPerLOD`). The mip view tints each entity drawn with textures by
   the mip levels its worst texture lacks: the finest level resident against the finest one its views want
   (`Asset::GetDetailLevels`, which the texture streamer sets from what the renderers reported), none (Malachite), 1
   (Azurite), 2 (Sulfur), 3 or more or a material or texture still loading (Cinnabar); entities without textures stay
@@ -3351,8 +3626,13 @@ resident MB per pool, evictions), the texture streamer's (`StreamedMB`: bytes re
 `MipLevelsRaised` and `MipLevelsDropped` so far, `MipsBelowWanted`: textures below the level their views need, from
 `AssetManagerStats::Detail`), the frame's steps through the upload queue (`UploadQueueMB`, `UploadQueueMs`,
 `UploadQueueSteps`), the graphics device's memory in use and the upload staging of it (`DeviceMB`, `StagingMB`: with
-the resident pools they tell what render targets and the swapchain take) and the process's private memory with its peak
-so far (`PrivateMB`, `PeakPrivateMB`). A log that cannot be written fails the run (exit code 1).
+the resident pools they tell what render targets and the swapchain take), the process's private memory with its peak
+so far (`PrivateMB`, `PeakPrivateMB`) and the GPU: each GPU stage's column (`GPU.Shadows`...), `GPUFrame` (1 when the frame's GPU
+times arrived) and `GPUBusyMs`. A row describes one frame: what the frame left is captured when it ends
+(`FramePerfLog::CaptureFrame`) and the row is written by a `WithGPU` listener once its GPU times are known, so its CPU and GPU
+columns belong together. `Create` registers every scene system's stage first, so `Scene.Animation` and every module's system
+get columns; a stage registered after the header gets none and is warned about once, by name. A log that cannot be written
+fails the run (exit code 1).
 `GameRuntime::Create` loads the manifest, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
 `PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module

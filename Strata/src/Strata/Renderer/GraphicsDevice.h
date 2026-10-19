@@ -44,6 +44,47 @@ namespace Strata
 		// update-after-bind limits allow fewer sampled images (bindless tables are update-after-bind descriptor sets) or
 		// whose descriptor set support query rejects larger tables (halved down to 1,024: ChooseBindlessTableSize).
 		uint32_t MaxBindlessTextures = 0;
+
+		// GPU timestamps (GraphicsDevice::CreateTimestampPool): the graphics queue writes them (its timestampValidBits is not
+		// 0), TimestampPeriodNs nanoseconds per tick.
+		bool SupportsTimestamps = false;
+		double TimestampPeriodNs = 0.0;
+		// Indirect draws: several draws per call (multiDrawIndirect), arguments that set the first instance
+		// (drawIndirectFirstInstance) and draw counts the GPU writes (drawIndirectCount). Enabled where supported.
+		bool SupportsMultiDrawIndirect = false;
+		bool SupportsDrawIndirectFirstInstance = false;
+		bool SupportsDrawIndirectCount = false;
+		// The most draws one indirect call may issue, and the largest draw count a count buffer may hold
+		// (maxDrawIndirectCount; 1 without multiDrawIndirect). Vulkan guarantees 65,535 with multiDrawIndirect.
+		uint32_t MaxDrawIndirectCount = 1;
+		// Samplers that return the minimum or maximum of the texels they filter (samplerFilterMinmax).
+		bool SupportsSamplerMinMax = false;
+	};
+
+	// GPU timestamps the graphics queue writes (GraphicsDevice::CreateTimestampPool), read back without waiting. A timestamp
+	// is written once between resets: Reset makes timestamps writable again, Write records a write into a command list,
+	// and Read returns them once the GPU wrote them all. Values are ticks of GraphicsDeviceInfo::TimestampPeriodNs, masked
+	// to the queue's valid bits. Main thread only.
+	class GPUTimestampPool
+	{
+	public:
+		virtual ~GPUTimestampPool() = default;
+
+		virtual uint32_t GetCount() const = 0;
+		// The bits of a value the GPU writes: intervals are (end - begin) & mask, also across a wrap.
+		virtual uint64_t GetValueMask() const = 0;
+		// Makes timestamps [first, first + count) writable again, by a command list executed at once on the graphics queue:
+		// after the writes submitted before it, before those submitted after it. Until the GPU ran it, Read may still return
+		// the earlier values: read a range only once the work that wrote it after the reset completed.
+		virtual void Reset(uint32_t first, uint32_t count) = 0;
+		// Records into the open command list that the GPU writes its time into timestamp `index` once every command recorded
+		// before it on the queue completed. Allowed inside render passes; pending NVRHI barriers are not committed (they run
+		// with the next command, so their time counts toward what follows). The timestamp must have been reset since its last
+		// write, and the command list executed on the graphics queue.
+		virtual void Write(nvrhi::ICommandList* commandList, uint32_t index) = 0;
+		// The ticks of timestamps [first, first + count) into `outTicks` (at least count entries) when the GPU has written
+		// every one of them; false, never waiting, otherwise.
+		virtual bool Read(uint32_t first, uint32_t count, std::span<uint64_t> outTicks) = 0;
 	};
 
 	struct GraphicsMemoryBudget
@@ -137,6 +178,9 @@ namespace Strata
 		// command list's state tracking first; the sources must be copy sources already (staging buffers stay ones). The
 		// command list does not keep the resources alive: the caller does until the GPU has run the copies.
 		virtual void RecordBufferToTextureCopies(nvrhi::ICommandList* commandList, std::span<const GPUBufferTextureCopy> copies) = 0;
+		// A pool of `count` timestamps, all writable (reset). Null without timestamp support (SupportsTimestamps) or when the
+		// pool cannot be created (logged).
+		virtual Scope<GPUTimestampPool> CreateTimestampPool(uint32_t count) = 0;
 
 		// Errors reported by the validation layers or NVRHI so far. Tests require this to stay zero.
 		virtual uint32_t GetErrorCount() const = 0;

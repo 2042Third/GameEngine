@@ -71,7 +71,9 @@ namespace Strata
 	class ViewportRenderer
 	{
 	public:
-		explicit ViewportRenderer(const std::string& debugName);
+		// `fades`: SceneRendererSpecification::FadeTextureLevels and FadeLevelsOfDetail (off for the capture renderer, whose
+		// images wait for the levels they need and show them at once).
+		explicit ViewportRenderer(const std::string& debugName, bool fades = true);
 
 		ViewportRenderer(const ViewportRenderer&) = delete;
 		ViewportRenderer& operator=(const ViewportRenderer&) = delete;
@@ -84,6 +86,8 @@ namespace Strata
 		nvrhi::ITexture* GetOutputTexture() const { return m_Renderer->GetOutputTexture(); }
 		glm::uvec2 GetSize() const { return m_Renderer->GetViewportSize(); }
 		const SceneRendererStats& GetStats() const { return m_Renderer->GetStats(); }
+		// The GPU's side of the latest frame whose GPU work is known (SceneRenderer::GetGPUStats).
+		const SceneRendererGPUStats& GetGPUStats() const { return m_Renderer->GetGPUStats(); }
 		// The textures the last Render drew coarser than its view wants them: the level the texture streamer works out from
 		// the view's report (TextureStreamingPolicy::ComputeWantedLevel), known from the first render on, while the streamer's
 		// own wanted level follows a frame later. A texture counts as loaded with its mip tail, so a picture that must show

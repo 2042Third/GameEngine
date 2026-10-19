@@ -96,7 +96,18 @@ ctest --preset macos-debug -LE perf
   `GameRuntime` to a 100,000-entity scene and away again (the longest frame); `Perf.Animation` evaluates 1,000
   cross-fading animators of 60 joints and steps 10,000 `WhenVisible` ones nobody sees; `Perf.Physics.Characters1000Step`
   steps 1,000 character controllers; `PerfGPU.Renderer.Skinned1000` renders 1,000 skinned characters posed every frame
-  and `IdleFrame3kStreamedTextures` times an idle frame of 3,000 settled streamed textures in view;
+  and `IdleFrame3kStreamedTextures` times an idle frame of 3,000 settled streamed textures in view; the renderer's GPU
+  side comes from `Perf/RendererPerfUtils.h` (`Perf::MeasureFrames` runs frames as an application does and collects the
+  GPU's busy time of each, `Perf::MeasureGPU` its median, which fails when a device that writes timestamps delivered none;
+  without timestamps the GPU metrics are left out, `Perf::MeasuresGPU`): `Render100kCubesGPU` is the GPU's median busy time
+  of the 100,000 cubes, `Render1MCubes` and `Render1MCubesGPU` the CPU's and the GPU's for a million (the GPU-driven path's
+  CPU cost does not grow with instances: target 1.5 ms), `GPUTimerCost` the GPU profiler's own CPU time in the median
+  frame (target 0.05 ms), `Render100kCubesShadowed` and `Render300kCubesShadowed` the CPU's median Render of the 100,000
+  and 300,000 cube grids under the sun's shadows, every cube a caster (targets 1.5 and 3 ms), `Render10kUniqueMeshes` the
+  CPU's median Render (extraction, recording and submitting) of 10,000 distinct meshes (target 2 ms) with
+  `Render10kUniqueMeshes.DrawCommands` the draw calls it recorded, and `PlayStartRender1MCubes` what starting play on a
+  million rendered cubes costs: the render scene's clone in `Scene::Copy` plus the copy's first Render beyond the
+  source's median (target 5 ms);
   `Perf.Editor` adds `FindReferences10k`, `JournalPerCommand`, the recovery journal's write (the frames and the I/O
   threads' time, `RecoveryWriteIOTime100k`) and snapshot, and the longest frame while `scene.open` opens 10,000 prefab
   instances (`SceneOpen10kPrefabInstancesMaxFrame`), and saving the realistic worlds in a helper process (the longest frame

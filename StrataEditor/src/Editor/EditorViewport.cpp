@@ -332,7 +332,8 @@ namespace Strata
 	ViewportRenderer* EditorViewport::GetCaptureRenderer()
 	{
 		if (!m_CaptureRenderer && Renderer::IsInitialized())
-			m_CaptureRenderer = CreateScope<ViewportRenderer>("ViewportCapture");
+			// Captures wait for the levels their textures need and show them at once (no fade).
+			m_CaptureRenderer = CreateScope<ViewportRenderer>("ViewportCapture", false);
 		return m_CaptureRenderer.get();
 	}
 

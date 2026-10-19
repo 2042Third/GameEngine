@@ -763,6 +763,15 @@ TEST_SUITE("Asset.Gltf")
 		CHECK_FALSE(badScale.Result.Warnings.empty());
 	}
 
+	TEST_CASE("Models imported before their levels of detail kept their errors are imported again")
+	{
+		// The editor reuses an import whose record names the importer's current version. Version 8 was published with the
+		// import scale alone: its cooked meshes (version 2) have levels without errors, which choose the old way, by halving
+		// their screen fraction, and simplified without their normals and texture coordinates.
+		CHECK(Mesh::c_CookedVersion == 3);
+		CHECK(GltfImporter().GetVersion() >= 9);
+	}
+
 	TEST_CASE("glTF texture settings reach the model's textures")
 	{
 		// A smooth gradient as base color and metallic-roughness: its color is stored in other formats at High and Fast.

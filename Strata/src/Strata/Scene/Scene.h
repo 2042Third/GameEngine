@@ -107,6 +107,13 @@ namespace Strata
 		static Ref<Scene> Copy(const Ref<Scene>& source);
 		// The same with options (SceneCopyOptions::SerializedOnly: the snapshot a background save writes).
 		static Ref<Scene> Copy(const Ref<Scene>& source, const SceneCopyOptions& options);
+		// Copies context data a module keeps for a scene (in its registry's context) into a copy of the scene: Copy calls every
+		// copier, in registration order, once a full copy is complete (never for SceneCopyOptions::SerializedOnly snapshots,
+		// which need no render scene); a copier does nothing for a source without such data (the Renderer module's clones the
+		// render scene: RenderScene::CopyIntoScene). Registered only while the composition root registers modules
+		// (Engine::RegisterBuiltinModules); returns false otherwise.
+		using SceneContextCopier = void (*)(const Scene& source, Scene& destination);
+		static bool RegisterContextCopier(SceneContextCopier copier);
 		// Lets go of a scene that is no longer used (one a scene switch or an opened scene replaced) without spending the
 		// frame on destroying it, which takes tens of milliseconds for a million entities: what must end on the main thread
 		// ends here (a running scene stops: its systems, scripts, bodies and voices; sub-scene loads and their asset requests

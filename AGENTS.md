@@ -107,7 +107,8 @@ Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
 - `GPU*` suites (label `gpu`) share one device through `Tests::GPUContext` (never create devices in tests) and end with
   `CHECK(gpu.GetNewErrorCount() == 0)`: validation errors fail them. Exact-pixel tests set
   `SceneRendererSpecification::TextureStreaming = false` and `AddNeutralPostProcess`, tests of whole-asset residency
-  `SetPartialLoads(false)`; text tests render until no glyph is pending.
+  `SetPartialLoads(false)`; text tests render until no glyph is pending. Count what a frame drew with
+  `Tests::GetDrawnCounts` (the GPU-driven path counts on the GPU, frames later).
 - **Perf tests** (`Perf.*`, `PerfGPU.*`, label `perf`, Release and Dist; CI skips them, so run `-L perf` on the
   reference machine before merging a change that can affect performance): limits live only in
   `StrataTests/Perf/Budgets.json`, measured on the reference machine (else `Provisional`); **budgets only go down** (at
@@ -243,11 +244,11 @@ The threading model, frame loop and pipelines these rules protect are described 
 - **Scene caches and the transform contract:** `Scene` caches world transforms, the hierarchy, activity and the name and
   tag indexes, so **code that writes `TransformComponent` fields directly must signal the change**:
   `Entity::MarkModified<TransformComponent>()` or `registry.patch`, or `Scene::MarkTransformChanged` where listeners
-  must not hear an `on_update`. Writes to `NameComponent::Name`, `TagComponent::Tag` and `MeshRendererComponent` fields
-  signal the same way (Debug builds assert); values written right after `AddComponent` need none. Hierarchy changes go
-  through `Scene` (`SetParent`, `SetSiblingIndex`, `PlaceEntities`, `DestroyEntities`...), never by editing
-  `RelationshipComponent` or `HierarchyComponent`. Read sibling positions with `Scene::GetSiblingIndex`, remove many
-  entities with one `DestroyEntities` call, and stay within `Scene::c_MaxEntities` live entities.
+  must not hear an `on_update`. Writes to `NameComponent::Name`, `TagComponent::Tag`, `MeshRendererComponent` and light
+  component fields signal the same way (Debug builds assert); values written right after `AddComponent` need none.
+  Hierarchy changes go through `Scene` (`SetParent`, `SetSiblingIndex`, `PlaceEntities`, `DestroyEntities`...), never by
+  editing `RelationshipComponent` or `HierarchyComponent`. Read sibling positions with `Scene::GetSiblingIndex`, remove
+  many entities with one `DestroyEntities` call, and stay within `Scene::c_MaxEntities` live entities.
 
 The threading, NVRHI, asset, layer, registration, engine module and transform rules in full:
 [Architecture rules](Docs/DeveloperGuide.md#architecture-rules).
@@ -282,8 +283,9 @@ Details: [Asset pipeline](Docs/DeveloperGuide.md#asset-pipeline).
   pin what must stay and never block on a load ([Residency](Docs/DeveloperGuide.md#residency)).
 - GPU uploads go in steps of at most `c_AssetUploadStepBytes` within the frame's budget
   ([Adding an asset type](Docs/DeveloperGuide.md#adding-an-asset-type)). Resolve bindless slots every frame
-  (`Texture::GetBindlessSlot`): mip streaming changes them, and a texture only requested keeps its mip tail (more
-  through `RequestLevel` or `TextureStreamer::Hold`: [Mip streaming](Docs/DeveloperGuide.md#mip-streaming)).
+  (`Texture::GetBindlessSlot`): mip streaming changes them; material data names textures by texture table index
+  (`Texture::GetTableIndex`), which stays. A texture only requested keeps its mip tail (more through `RequestLevel` or
+  `TextureStreamer::Hold`: [Mip streaming](Docs/DeveloperGuide.md#mip-streaming)).
 
 ## Scripting
 
@@ -402,13 +404,27 @@ lights, overlays and text: [Rendering](Docs/DeveloperGuide.md#rendering).
   with the frame; loaded materials are never changed in place (`ReplaceLoadedAsset`).
 - Every pass draws skinned instances with the `ST_SKINNED` variants (the prepass and the forward pass agree to the bit)
   and mirrored ones (`c_InstanceMirrored`) with clockwise pipelines and flipped tangents; shaders derive normals with
-  `TransformNormal`.
+  `TransformNormal`. Draw list entries carry a fade code: mask the instance out, and opaque passes test `IsLODFadeDrawn`.
 - Shaders writing HDR targets clamp with `SanitizeHDR`; normal maps are read as X and Y with Z reconstructed.
 - Skinning costs unskinned scenes nothing (`RenderScene::HasSkinProxies`).
 - Font files are untrusted input: extend `Renderer/FontValidation.h`, with crafted-font tests, before calling another
   stb_truetype function. Text is measured with `ShapeText`, never by rasterizing; passes that draw glyphs share the
   renderer's `FontAtlasCache`.
 - Read GPU data back with `TextureReadback`, polled per frame; `Renderer::ReadTexture` blocks (tests and tools only).
+- Wrap every new pass in a GPU stage (`GPUPassTimer`) and register stages when the module registers
+  ([GPU timing](Docs/DeveloperGuide.md#gpu-timing)).
+- Read mesh geometry only through the geometry pool, every frame (`Mesh::GetGeometry`: compaction moves it)
+  ([Batching](Docs/DeveloperGuide.md#batching)).
+- Per-instance additions go to parallel buffers (`InstanceData` stays 64 bytes), and render-scene changes are logged
+  (`RecordInstanceChanges`, `RecordProxyChange`) so its GPU copy follows ([Render scene](Docs/DeveloperGuide.md#render-scene)).
+- Scene shaders work in camera-relative space (`TransformPositionRelative`; rotation-only view matrices): upload anything
+  positioned relative to the camera, subtracting in double ([Camera-relative space](Docs/DeveloperGuide.md#camera-relative-space)).
+- Shadow cascades are kept while nothing reaching them changed (`PrepareShadowCache`): a new input of what casters are
+  drawn with changes a version it compares ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
+- What is drawn and what is requested are decided twice, by the CPU path (`SceneRendererExtraction.cpp`) and the GPU's
+  culling and visibility feedback (`Cull.comp`): change both, keep shading independent of draw order (no screen-space
+  derivatives there), and keep `GPU.SceneRenderer.GPUDriven` and `.Feedback` passing
+  ([GPU-driven path](Docs/DeveloperGuide.md#gpu-driven-path)).
 
 ## Automation (editor RPC + MCP)
 

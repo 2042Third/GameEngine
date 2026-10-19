@@ -448,16 +448,19 @@ TEST_SUITE("PerfGPU.Streaming")
 				" dB against the baseline's, its bottom third ", nearPSNR, " dB. Within ", c_MipsPressureBudget / c_MBDouble, " MB: ", describeStreaming(pressed),
 				". Baseline: ", DescribeSweep(whole), "; upload steps at most ", whole.MaxUploadMs, " ms");
 
-			// Every run streams correctly; streaming raises and drops levels, reaches the finest level of the ground's texture
-			// and holds less than whole textures; its last frame shows the world like the baseline's, near the camera too.
+			// Every run streams correctly; streaming raises levels, reaches the finest level of the ground's texture and holds less
+			// than whole textures; its last frame shows the world like the baseline's, near the camera too.
 			for (const StreamingSweepResult* run : { &streamed, &pressed })
 			{
 				CHECK(run->NewErrors == 0);
 				CHECK(run->FailedAssets == 0);
 				CHECK(std::find(run->FramesToSettle.begin(), run->FramesToSettle.end(), c_StopNeverSettled) == run->FramesToSettle.end());
 				CHECK(run->LevelsRaised > 0);
-				CHECK(run->LevelsDropped > 0);
 			}
+			// Levels nothing needs stay while the budget has room for them (TextureStreamingPolicy::c_IdleDropSeconds, longer than
+			// a sweep): the run with room drops none, so looking back reads nothing again; the run under pressure drops them.
+			CHECK(streamed.LevelsDropped == 0);
+			CHECK(pressed.LevelsDropped > 0);
 			CHECK(whole.NewErrors == 0);
 			CHECK(whole.LevelsRaised == 0);
 			CHECK(streamed.FinestStreamedMip == 0);

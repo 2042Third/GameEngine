@@ -252,4 +252,50 @@ TEST_SUITE("Renderer.RenderScene")
 		CHECK(renderScene.GetLocalBounds(proxy).Max.z == doctest::Approx(narrowBounds.Max.z));
 		scene.UnregisterService<ISkinningPoses>(fixture.Poses);
 	}
+
+	TEST_CASE("Palettes are posed again by another poses provider, whose versions say nothing of the previous one's: a play copy's clone")
+	{
+		// The editor poses an edited scene's skins in their rest pose (AnimationPreview), and the play copy clones its render
+		// scene with those palettes; the copy's animation system numbers its poses from the start again.
+		Ref<Scene> edited = CreateRef<Scene>("Edited");
+		RenderScene& renderScene = RenderScene::Get(*edited);
+		const Ref<Mesh> tube = CreateSkinnedTube({ .Joints = 3, .RingsPerJoint = 2, .Sides = 6, .JointLength = 1.0f, .Radius = 0.25f });
+		const AssetHandle meshHandle = UUID(0x5C1C);
+		Entity arm = edited->CreateEntity("Arm");
+		arm.AddComponent<MeshRendererComponent>().Mesh = meshHandle;
+		arm.AddComponent<SkinComponent>().Animator = arm.GetComponent<IDComponent>().ID;
+		TestSkinningPoses rest;
+		rest.Poses[arm.GetHandle()] = BentChain(3, 3); // Straight: no joint turns
+		REQUIRE(edited->RegisterService<ISkinningPoses>(rest));
+		renderScene.Sync(nullptr);
+		renderScene.SetMeshLayout(renderScene.GetMeshSlot(renderScene.FindProxy(arm.GetHandle())), *tube);
+		renderScene.Sync(nullptr);
+		const uint32_t proxy = renderScene.FindProxy(arm.GetHandle());
+		REQUIRE((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0);
+		CheckProxies(renderScene);
+		const AABB restBounds = renderScene.GetLocalBounds(proxy);
+
+		// Played: the copy's poses, bent, with the same version as the rest pose's.
+		Ref<Scene> played = Scene::Copy(edited);
+		RenderScene* clone = RenderScene::Find(*played);
+		REQUIRE(clone != nullptr);
+		TestSkinningPoses animation;
+		animation.Poses[arm.GetHandle()] = BentChain(3, 1);
+		REQUIRE(animation.Version == rest.Version);
+		REQUIRE(played->RegisterService<ISkinningPoses>(animation));
+		clone->Sync(nullptr);
+		CheckProxies(*clone);
+		CHECK(clone->GetLocalBounds(proxy).Min.x < restBounds.Min.x - 0.5f); // The bent joint leans the arm towards -X
+
+		// The same within a scene: its provider replaced by another.
+		edited->UnregisterService<ISkinningPoses>(rest);
+		TestSkinningPoses replacement;
+		replacement.Poses = animation.Poses;
+		REQUIRE(edited->RegisterService<ISkinningPoses>(replacement));
+		renderScene.Sync(nullptr);
+		CheckProxies(renderScene);
+		CHECK(renderScene.GetLocalBounds(proxy).Min.x < restBounds.Min.x - 0.5f);
+		edited->UnregisterService<ISkinningPoses>(replacement);
+		played->UnregisterService<ISkinningPoses>(animation);
+	}
 }

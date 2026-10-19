@@ -72,7 +72,8 @@ namespace Strata
 
 	float PerformancePanel::GetTimelineScale(const FrameProfileSummary& summary)
 	{
-		return GetNiceScale(summary.Work.P95 * c_ScaleHeadroom);
+		// One scale for the CPU's and the GPU's strips, so their heights compare.
+		return GetNiceScale(std::max(summary.Work.P95, summary.GPU.Busy.P95) * c_ScaleHeadroom);
 	}
 
 	float PerformancePanel::GetSpikeThreshold(const FrameProfileSummary& summary)
@@ -84,7 +85,7 @@ namespace Strata
 	{
 		// The built-in stages in the order of c_BuiltinFrameStages: neighbors in the stack differ, the scene's systems get the
 		// calm hues, and the stages that are usually large (rendering, the UI) stand apart from each other. Scene.Load shares
-		// Present's color, the one stage the stack never shows (it comes after the frame), so no two stages in the stack do.
+		// Present's color, the one stage the stack never shows (it is no work of the frame), so no two stages in the stack do.
 		const UI::ThemePalette& palette = UI::GetThemePalette();
 		const ImVec4* builtin[] = { &palette.Dust, &palette.Umber, &palette.Ochre, &palette.Limestone, &palette.Malachite, &palette.Azurite,
 			&palette.Sandstone, &palette.Rust, &palette.Sulfur, &palette.Cinnabar, &palette.Ash, &palette.Limestone };
@@ -192,7 +193,44 @@ namespace Strata
 		}
 	}
 
+	bool PerformancePanel::ShowsGPU(const FrameProfileSummary& summary)
+	{
+		return summary.GPU.Frames > 0 || FrameProfiler::Get().AreGPUTimesExpected();
+	}
+
+	std::string PerformancePanel::DescribeBound(const FrameProfileSummary& summary)
+	{
+		const FrameGPUSummary& gpu = summary.GPU;
+		switch (gpu.BoundBy)
+		{
+			case FrameBound::GPU:
+				return fmt::format("GPU-bound: GPU {:.1f} ms busy of {:.1f} ms frames (CPU {:.1f} ms)", gpu.Busy.P50, summary.Interval.P50, summary.Work.P50);
+			case FrameBound::CPU:
+				return fmt::format("CPU-bound: CPU {:.1f} ms of {:.1f} ms frames (GPU {:.1f} ms busy)", summary.Work.P50, summary.Interval.P50, gpu.Busy.P50);
+			case FrameBound::Capped:
+				return fmt::format("Capped: {:.1f} ms frames, CPU {:.1f} ms, GPU {:.1f} ms busy (vsync, a frame-rate cap or idle redraws set the pace)",
+					summary.Interval.P50, summary.Work.P50, gpu.Busy.P50);
+			case FrameBound::Unknown:
+				break;
+		}
+		return "Bound by: unknown (no GPU times: the GPU writes no timestamps, or no frame reached it yet)";
+	}
+
 	void PerformancePanel::DrawTimeline(const ImVec2& requestedSize)
+	{
+		const ImVec2 size(std::max(requestedSize.x, ImGui::GetFontSize()), std::max(requestedSize.y, ImGui::GetFrameHeight()));
+		// The GPU's strip under the CPU's: the same frames in the same columns, at the same scale.
+		const bool gpu = ShowsGPU(*m_Summary);
+		const float gap = gpu ? ImGui::GetStyle().ItemSpacing.y : 0.0f;
+		const float stripHeight = gpu ? std::max((size.y - gap) * 0.5f, ImGui::GetFontSize()) : size.y;
+		ImGui::BeginGroup();
+		DrawTimelineStrip(ImVec2(size.x, stripHeight), false);
+		if (gpu)
+			DrawTimelineStrip(ImVec2(size.x, stripHeight), true);
+		ImGui::EndGroup();
+	}
+
+	void PerformancePanel::DrawTimelineStrip(const ImVec2& size, bool gpu)
 	{
 		const FrameProfiler& profiler = FrameProfiler::Get();
 		const UI::ThemeColors& colors = UI::GetThemeColors();
@@ -204,9 +242,8 @@ namespace Strata
 		// the top edge, where their spike markers are.
 		const float scale = GetTimelineScale(*m_Summary);
 		const ImVec2 min = ImGui::GetCursorScreenPos();
-		const ImVec2 size(std::max(requestedSize.x, ImGui::GetFontSize()), std::max(requestedSize.y, ImGui::GetFrameHeight()));
-		ImGui::InvisibleButton("Timeline", size);
-		UI::ItemProbe::Record("Performance.Timeline");
+		ImGui::InvisibleButton(gpu ? "GPUTimeline" : "Timeline", size);
+		UI::ItemProbe::Record(gpu ? "Performance.GPUTimeline" : "Performance.Timeline");
 		const bool hovered = ImGui::IsItemHovered();
 		const ImVec2 max(min.x + size.x, min.y + size.y);
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
@@ -222,14 +259,18 @@ namespace Strata
 		for (uint32_t age = 0; age < frames; age++)
 		{
 			const FrameSample frame = profiler.GetFrame(age);
+			// Frames whose GPU times did not arrive (yet) stay blank in the GPU's strip.
+			if (gpu && !frame.HasGPU)
+				continue;
 			const float right = max.x - columnWidth * static_cast<float>(age);
 			const float left = right - std::max(columnWidth, 1.0f);
 			float y = max.y;
 			float timed = 0.0f;
 			for (FrameStageID stage = 0; stage < stageCount; stage++)
 			{
-				const float ms = frame.StageMs[stage];
-				if (ms <= 0.0f || !profiler.IsStageInWorkTime(stage))
+				const bool gpuStage = profiler.GetStageKind(stage) == FrameStageKind::GPU;
+				const float ms = gpu ? (gpuStage ? frame.GPUStageMs[stage] : 0.0f) : frame.StageMs[stage];
+				if (ms <= 0.0f || (!gpu && !profiler.IsStageInWorkTime(stage)))
 					continue;
 				timed += ms;
 				const float height = ms * pixelsPerMs;
@@ -238,6 +279,8 @@ namespace Strata
 					drawList->AddRectFilled(ImVec2(left, y - height), ImVec2(right, y), UI::ToColorU32(GetStageColor(stage)));
 				y -= height;
 			}
+			if (gpu)
+				continue;
 			const float rest = std::max(frame.WorkMs - timed, 0.0f) * pixelsPerMs;
 			if (rest >= 0.5f)
 				drawList->AddRectFilled(ImVec2(left, y - rest), ImVec2(right, y), untimed);
@@ -263,7 +306,7 @@ namespace Strata
 			drawList->AddText(ImVec2(min.x + ImGui::GetStyle().FramePadding.x, lineY - ImGui::GetFontSize()), UI::ToColorU32(colors.TextSecondary), label.c_str());
 			labelBottom = lineY;
 		}
-		const std::string top = fmt::format("{:g} ms", scale);
+		const std::string top = fmt::format("{}{:g} ms", gpu ? "GPU \xC2\xB7 " : "CPU \xC2\xB7 ", scale);
 		drawList->AddText(ImVec2(max.x - ImGui::CalcTextSize(top.c_str()).x - ImGui::GetStyle().FramePadding.x, min.y), UI::ToColorU32(colors.TextSecondary), top.c_str());
 		drawList->PopClipRect();
 
@@ -278,16 +321,25 @@ namespace Strata
 		drawList->AddRectFilled(ImVec2(right - std::max(columnWidth, 1.0f), min.y), ImVec2(right, max.y), UI::ToColorU32(colors.Text, 0.15f));
 
 		std::vector<std::pair<float, FrameStageID>> stages;
+		std::vector<std::pair<float, FrameStageID>> gpuStages;
 		float timed = 0.0f;
 		for (FrameStageID stage = 0; stage < stageCount; stage++)
 		{
+			if (profiler.GetStageKind(stage) == FrameStageKind::GPU)
+			{
+				if (frame.HasGPU && frame.GPUStageMs[stage] > 0.0f)
+					gpuStages.emplace_back(frame.GPUStageMs[stage], stage);
+				continue;
+			}
 			if (frame.StageMs[stage] <= 0.0f)
 				continue;
 			stages.emplace_back(frame.StageMs[stage], stage);
 			if (profiler.IsStageInWorkTime(stage))
 				timed += frame.StageMs[stage];
 		}
-		std::sort(stages.begin(), stages.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+		const auto byTime = [](const auto& a, const auto& b) { return a.first > b.first; };
+		std::sort(stages.begin(), stages.end(), byTime);
+		std::sort(gpuStages.begin(), gpuStages.end(), byTime);
 		ImGui::BeginTooltip();
 		ImGui::Text("Frame %llu: %.3f ms%s", static_cast<unsigned long long>(frame.Index), frame.WorkMs, frame.WorkMs > spikeMs ? " (spike)" : "");
 		ImGui::TextColored(colors.TextSecondary, "%.2f ms after the previous frame \xC2\xB7 workers %.0f%% \xC2\xB7 I/O %.0f%% \xC2\xB7 background %.0f%% busy",
@@ -296,11 +348,27 @@ namespace Strata
 		{
 			Swatch(GetStageColor(stage));
 			ImGui::SameLine();
-			ImGui::Text("%s  %.3f ms%s", profiler.GetStageName(stage).c_str(), ms, profiler.IsStageInWorkTime(stage) ? "" : " (after the frame)");
+			ImGui::Text("%s  %.3f ms%s", profiler.GetStageName(stage).c_str(), ms, profiler.IsStageInWorkTime(stage) ? "" : " (outside the work time)");
 		}
 		Swatch(GetUntimedColor());
 		ImGui::SameLine();
 		ImGui::Text("Untimed  %.3f ms", std::max(frame.WorkMs - timed, 0.0f));
+		if (frame.HasGPU)
+		{
+			ImGui::Text("GPU %.3f ms busy", frame.GPUBusyMs);
+			ImGui::SameLine();
+			ImGui::TextColored(colors.TextSecondary, "(known %u frames later)", frame.GPULatencyFrames);
+			for (const auto& [ms, stage] : gpuStages)
+			{
+				Swatch(GetStageColor(stage));
+				ImGui::SameLine();
+				ImGui::Text("%s  %.3f ms", profiler.GetStageName(stage).c_str(), ms);
+			}
+		}
+		else if (profiler.AreGPUTimesExpected())
+		{
+			ImGui::TextColored(colors.TextSecondary, "GPU: no times for this frame (yet)");
+		}
 		ImGui::EndTooltip();
 	}
 
@@ -341,8 +409,33 @@ namespace Strata
 		for (FrameStageID stage = 0; stage < summary.Stages.size(); stage++)
 		{
 			const FrameStageSummary& entry = summary.Stages[stage];
+			if (entry.Kind != FrameStageKind::CPU)
+				continue; // The GPU's stages come in their own section
 			const bool ran = entry.Time.Max > 0.0f;
-			row(GetStageColor(stage), entry.InWorkTime ? entry.Name : entry.Name + " (after the frame)", entry.Time, ran ? colors.Text : colors.TextSecondary);
+			row(GetStageColor(stage), entry.InWorkTime ? entry.Name : entry.Name + " (outside the work time)", entry.Time, ran ? colors.Text : colors.TextSecondary);
+		}
+		// The GPU's section: what bounds the frames, the GPU's busy time per frame, and its stages over the frames with GPU
+		// times (they arrive a few frames late).
+		if (ShowsGPU(summary))
+		{
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			ImGui::TextColored(colors.Text, "GPU \xC2\xB7 %u frames, known %.1f frames late", summary.GPU.Frames, summary.GPU.LatencyFrames);
+			UI::ItemProbe::Record("Performance.GPUSection");
+			ImGui::TableNextRow();
+			ImGui::TableSetColumnIndex(0);
+			const std::string bound = DescribeBound(summary);
+			ImGui::TextColored(summary.GPU.BoundBy == FrameBound::Unknown ? colors.TextSecondary : colors.Text, "%s", bound.c_str());
+			UI::ItemProbe::Record("Performance.Bound", true, 0, bound);
+			row(colors.Text, "GPU busy", summary.GPU.Busy, summary.GPU.Frames > 0 ? colors.Text : colors.TextSecondary);
+			for (FrameStageID stage = 0; stage < summary.Stages.size(); stage++)
+			{
+				const FrameStageSummary& entry = summary.Stages[stage];
+				if (entry.Kind != FrameStageKind::GPU)
+					continue;
+				const bool ran = entry.Time.Max > 0.0f;
+				row(GetStageColor(stage), entry.Name, entry.Time, ran ? colors.Text : colors.TextSecondary);
+			}
 		}
 		ImGui::PopFont();
 		ImGui::EndTable();

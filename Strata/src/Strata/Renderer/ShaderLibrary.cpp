@@ -48,6 +48,11 @@ namespace Strata
 	{
 		std::scoped_lock<std::mutex> lock(m_Mutex);
 		const std::string key(name);
+		if (!m_Unavailable.empty() && m_Unavailable.contains(key))
+		{
+			ST_CORE_ERROR("Shader '{}' is unavailable", name);
+			return nullptr;
+		}
 		auto it = m_Shaders.find(key);
 		if (it != m_Shaders.end())
 			return it->second;
@@ -85,6 +90,15 @@ namespace Strata
 	{
 		std::scoped_lock<std::mutex> lock(m_Mutex);
 		m_Shaders.clear();
+	}
+
+	void ShaderLibrary::SetUnavailable(std::string_view name, bool unavailable)
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		if (unavailable)
+			m_Unavailable.emplace(name);
+		else
+			m_Unavailable.erase(std::string(name));
 	}
 
 }

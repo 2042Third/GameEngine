@@ -3,6 +3,10 @@
 #include "Editor/EditorContext.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneRecovery.h"
+#include "Editor/ViewportRenderer.h"
+
+#include <Strata/Renderer/RenderSceneGPU.h>
+#include <Strata/Renderer/Renderer.h>
 
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/FrameProfiler.h>
@@ -17,6 +21,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <deque>
 #include <filesystem>
 #include <limits>
@@ -114,6 +119,24 @@ namespace Strata
 			return { { "avgMs", stats.Average }, { "p50Ms", stats.P50 }, { "p95Ms", stats.P95 }, { "maxMs", stats.Max } };
 		}
 
+		// editor.perf's gpu: the frames with GPU times, their busy time, how late the times came, each GPU stage, and what
+		// bounds the frames.
+		nlohmann::json DescribeGPUProfile(const FrameProfileSummary& summary)
+		{
+			nlohmann::json stages = nlohmann::json::object();
+			for (const FrameStageSummary& stage : summary.Stages)
+			{
+				if (stage.Kind == FrameStageKind::GPU)
+					stages[stage.Name] = DescribeFrameTimeStats(stage.Time);
+			}
+			return {
+				{ "frames", summary.GPU.Frames },
+				{ "latencyFrames", summary.GPU.LatencyFrames },
+				{ "busy", DescribeFrameTimeStats(summary.GPU.Busy) },
+				{ "stages", std::move(stages) },
+				{ "boundBy", CommandUtils::GetFrameBoundName(summary.GPU.BoundBy) } };
+		}
+
 	}
 
 	namespace CommandUtils
@@ -124,6 +147,8 @@ namespace Strata
 			nlohmann::json stages = nlohmann::json::object();
 			for (const FrameStageSummary& stage : summary.Stages)
 			{
+				if (stage.Kind != FrameStageKind::CPU)
+					continue; // The main thread's stages only
 				nlohmann::json entry = DescribeFrameTimeStats(stage.Time);
 				entry["inFrameTime"] = stage.InWorkTime;
 				stages[stage.Name] = std::move(entry);
@@ -143,7 +168,80 @@ namespace Strata
 					{ "backgroundBusyPercent", summary.BackgroundBusyPercent },
 					{ "running", jobs.Workers.RunningJobs + jobs.IO.RunningJobs + jobs.Background.RunningJobs },
 					{ "queued", jobs.Workers.QueuedJobs + jobs.IO.QueuedJobs + jobs.Background.QueuedJobs } } },
-				{ "stages", std::move(stages) } };
+				{ "stages", std::move(stages) },
+				{ "gpu", DescribeGPUProfile(summary) } };
+		}
+
+		nlohmann::json DescribeGeometryPool()
+		{
+			const Ref<GeometryPool> pool = Renderer::GetGeometryPool();
+			if (!pool)
+				return nullptr;
+			const GeometryPoolStats stats = pool->GetStats();
+			constexpr double c_BytesPerMB = 1024.0 * 1024.0;
+			return {
+				{ "usedMB", static_cast<double>(stats.UsedBytes) / c_BytesPerMB },
+				{ "capacityMB", static_cast<double>(stats.CapacityBytes) / c_BytesPerMB },
+				{ "allocations", stats.Allocations },
+				{ "fragmentation", stats.VertexFragmentation },
+				{ "moves", stats.Moves },
+				{ "growths", stats.Growths } };
+		}
+
+		const char* GetFrameBoundName(FrameBound bound)
+		{
+			switch (bound)
+			{
+				case FrameBound::CPU: return "cpu";
+				case FrameBound::GPU: return "gpu";
+				case FrameBound::Capped: return "capped";
+				case FrameBound::Unknown: break;
+			}
+			return "unknown";
+		}
+
+		nlohmann::json DescribeRenderStats(const SceneRendererStats& frameStats, const SceneRendererGPUStats& gpu)
+		{
+			// The GPU-driven path's counts come from the GPU, frames later.
+			const SceneRendererStats stats = AddGPUCounts(frameStats, gpu);
+			nlohmann::json lods = nlohmann::json::array();
+			for (const uint32_t count : stats.InstancesPerLOD)
+				lods.push_back(count);
+			nlohmann::json gpuMs = nlohmann::json::object();
+			for (const GPUStageTime& stage : gpu.StageMs)
+				gpuMs[FrameProfiler::Get().GetStageName(stage.Stage)] = stage.Milliseconds;
+			return {
+				{ "gpuDriven", stats.GPUDriven },
+				{ "gpuCounts", stats.GPUDriven && gpu.HasCounters },
+				{ "feedbackRequests", stats.FeedbackRequests },
+				{ "drawCommands", stats.DrawCommands },
+				{ "draws", stats.DrawCalls },
+				{ "opaqueDraws", stats.OpaqueDrawCalls },
+				{ "shadowDraws", stats.ShadowDrawCalls },
+				{ "instances", stats.Instances },
+				{ "shadowCasters", stats.ShadowCasters },
+				{ "triangles", stats.Triangles },
+				{ "visibleProxies", stats.VisibleProxies },
+				{ "occludedProxies", stats.OccludedProxies },
+				{ "occludedCasters", stats.OccludedCasters },
+				{ "cachedCascades", std::popcount(stats.CachedCascadeMask) },
+				{ "culledProxies", stats.CulledInstances },
+				{ "instancesPerLod", std::move(lods) },
+				{ "lights", stats.Lights },
+				{ "droppedLights", stats.DroppedLights },
+				{ "materials", stats.Materials },
+				{ "pendingAssets", stats.PendingAssets },
+				{ "extractMs", stats.ExtractMs },
+				{ "sortMs", stats.SortMs },
+				{ "proxyUpdates", stats.ProxyUpdates },
+				{ "instanceBytesUploaded", stats.InstanceBytesUploaded },
+				{ "deferredInstanceBytes", stats.DeferredInstanceBytes },
+				{ "sizeCulledProxies", stats.SizeCulledProxies },
+				{ "geometryPool", DescribeGeometryPool() },
+				// The scenes' GPU copies (a playing scene's clone doubles its scene's while it plays).
+				{ "sceneMirrorMB", Renderer::IsInitialized() ? static_cast<double>(Renderer::GetRenderSceneGPUs().GetBufferBytes()) / (1024.0 * 1024.0) : 0.0 },
+				{ "gpuMs", std::move(gpuMs) },
+				{ "gpuStatsFrame", gpu.HasTimes ? nlohmann::json(gpu.Frame) : nlohmann::json(nullptr) } };
 		}
 
 	}
@@ -416,8 +514,9 @@ namespace Strata
 			"(a snapshot of every entity), applicable, problem (why it cannot be applied, e.g. the scene was saved since)}, and the journal of the "
 			"edited scene {active, file, writes, lastWrite, pending (changes not written yet: they are written about 2 s after edits stop), "
 			"pendingSteps (undo steps waiting for that write), busy, "
-			"skipped (why its changes are not journaled)}. Reads the directory again, after the journal writes already asked for. Apply or "
-			"discard an entry with scene.recover. Fails without a project.",
+			"skipped (why its changes are not journaled)}. Reads the directory again, after the journal writes already asked for; while the "
+			"project's assets are scanned it answers once they are (entries are judged against them). Apply or discard an entry with "
+			"scene.recover. Fails without a project.",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
@@ -436,7 +535,7 @@ namespace Strata
 					result["entries"] = std::move(entries);
 					return EditorCommandResult::Ok(std::move(result));
 				});
-			}, EditorCommandKind::Query, EditorCommandResults::Session }));
+			}, EditorCommandKind::Query, EditorCommandResults::Session, true }));
 
 		registry.Register(MayDefer({ "scene.recover",
 			"Applies or discards recovery data (scene.recoveryStatus). apply: opens the scene the changes were made to in the background as "
@@ -740,19 +839,46 @@ namespace Strata
 			"framesPerSecond, stages (per stage of the main thread: Input, Assets.Update, Assets.Finalize, Scene.Load (swapping in a scene that "
 			"finished loading, creating sub-scenes' entities), Scene.UI (the game UI's input), Scene.Scripts, Scene.Animation, Scene.Physics, "
 			"Scene.Audio, Scene.Transforms, Render.Extract, Render.Submit, Render.UI (the game UI pass), Editor.UI and Present, plus stages modules registered; each its self "
-			"time, nested stages excluded, with inFrameTime false for Present, which comes after the frame time is measured), stageSum (the "
+			"time, nested stages excluded, with inFrameTime false for Present: presenting after the frame, and the wait for the display's image at "
+			"the back buffer's first use inside it; neither counts as the frame's work), stageSum (the "
 			"stages inside the frame time added up per frame), untimed (the rest of each frame, work no stage accounts for) and jobs (worker, "
-			"I/O and background threads (imports, exports), how busy they were in percent, running and queued jobs now). Times are milliseconds as avgMs, p50Ms and p95Ms "
-			"(nearest rank) and maxMs.",
+			"I/O and background threads (imports, exports), how busy they were in percent, running and queued jobs now). gpu is the GPU's side of "
+			"the same frames, known 2-3 frames late: frames (with GPU times), latencyFrames, busy (the GPU stages added up per frame), stages (per GPU "
+			"stage: GPU.Uploads, GPU.Setup, GPU.Cull, GPU.Shadows, GPU.Prepass, GPU.AO, GPU.Opaque (with the sky), GPU.Transparent, GPU.Post, "
+			"GPU.Overlays, GPU.UI (the game UI), GPU.ImGui) and boundBy: gpu when the GPU's median busy time takes at least 90% of the median frame interval and exceeds "
+			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
+			"times. renderStats is the viewport's latest frame (null while it renders none): gpuDriven (the GPU culled the frame and built its draws: "
+			"its counts are the GPU's, of a frame 2-3 frames older, once gpuCounts is true; transparent surfaces are the CPU's), feedbackRequests (its "
+			"asset requests came from the GPU's visibility feedback of an earlier frame, not from the CPU walking the view), drawCommands (draw "
+			"calls the CPU recorded), draws (instanced draws of the view), opaqueDraws, shadowDraws, instances, shadowCasters, triangles, "
+			"visibleProxies, occludedProxies (in the frustum but hidden behind what the view draws: left out on the GPU-driven path), occludedCasters "
+			"(shadow casters hidden from the light behind other casters, per cascade: left out of those cascades on the GPU-driven path), cachedCascades "
+			"(shadow cascades kept from the previous frame: nothing reaching them changed), culledProxies, "
+			"sizeCulledProxies (in view but below a pixel), instancesPerLod, lights, droppedLights, "
+			"materials, pendingAssets, extractMs, sortMs, proxyUpdates, instanceBytesUploaded, deferredInstanceBytes (new mesh renderers waiting for "
+			"their upload to the GPU), geometryPool "
+			"(the meshes' GPU geometry: usedMB, capacityMB, allocations, fragmentation, moves, growths), sceneMirrorMB (the GPU memory of the scenes' "
+			"GPU copies: a playing scene's doubles its scene's), gpuMs "
+			"(per GPU stage of the frame gpuStatsFrame names). gameRenderStats is the same for the Game view's latest frame (null while it is "
+			"hidden or closed); both views' GPU work adds up in gpu's stages. Times are milliseconds as avgMs, p50Ms and p95Ms (nearest rank) and maxMs.",
 			ObjectSchema({ { "frames", IntegerSchema("How many of the latest frames to summarize (default 120)", 1, FrameProfiler::c_DefaultCapacity) } }),
-			[](EditorContext&, const nlohmann::json& parameters)
+			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const int64_t frames = arguments.GetInt("frames", c_DefaultPerfFrames, 1, FrameProfiler::c_DefaultCapacity);
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				const FrameProfileSummary summary = FrameProfiler::Get().Summarize(static_cast<uint32_t>(frames));
-				return EditorCommandResult::Ok(DescribeFrameProfile(summary, JobSystem::GetStats()));
+				nlohmann::json result = DescribeFrameProfile(summary, JobSystem::GetStats());
+				// The viewport's latest frame, while the viewport panel renders one.
+				const ViewportRenderer* viewport = context.GetViewport().FindRenderer();
+				result["renderStats"] = viewport && viewport->GetStats().Rendered
+					? DescribeRenderStats(viewport->GetStats(), viewport->GetGPUStats()) : nlohmann::json(nullptr);
+				// The Game view's, while it renders (a hidden or closed Game view keeps no targets: its size is zero).
+				const ViewportRenderer* game = context.GetViewport().FindGameRenderer();
+				result["gameRenderStats"] = game && game->GetSize().x > 0 && game->GetStats().Rendered
+					? DescribeRenderStats(game->GetStats(), game->GetGPUStats()) : nlohmann::json(nullptr);
+				return EditorCommandResult::Ok(std::move(result));
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		////////////////////////////////////////////////////////////////////////////////

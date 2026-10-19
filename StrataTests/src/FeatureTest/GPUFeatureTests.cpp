@@ -4,6 +4,7 @@
 #include "Renderer/GPUTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Animation/AnimationPreview.h"
+#include "Strata/Core/FrameProfiler.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Scene/Entity.h"
@@ -57,6 +58,8 @@ TEST_SUITE("GPU.FeatureTest")
 		const SceneRendererStats& stats = renderer.GetStats();
 		CHECK(stats.Rendered);
 		CHECK(stats.PendingAssets == 0);
+		// The GPU culls the scene and builds its draws wherever the device can (the default).
+		CHECK(stats.GPUDriven == gpu.GetDevice().GetInfo().SupportsDrawIndirectFirstInstance);
 
 		// The checker texture (64x64) loads its resident tail first and its finest level streams in as the platform needs it
 		// (TextureStreamer); the other textures are no larger than the tail.
@@ -73,8 +76,8 @@ TEST_SUITE("GPU.FeatureTest")
 		CHECK(assets->GetStats().Detail.LevelsRaised >= 1);
 		CHECK(stats.PendingAssets == 0);
 		CHECK(stats.EnvironmentLighting); // The sky light's HDR environment map
-		CHECK(stats.Lights >= 2);         // The sun, plus the point and spot lights in view
-		CHECK(stats.Instances >= 8);
+		CHECK(GetLightCounts(renderer).Lights >= 2); // The sun, plus the point and spot lights in view (the GPU's count on its path)
+		CHECK(GetDrawnCounts(renderer).Instances >= 8);
 		CHECK(stats.Texts == 2); // The HUD (with the project's font) and the world-space sign
 		CHECK(stats.TextGlyphs > 0);
 
@@ -134,6 +137,40 @@ TEST_SUITE("GPU.FeatureTest")
 		ReadbackImage withoutUI;
 		REQUIRE(Renderer::ReadTexture(renderer.GetOutputTexture(), withoutUI));
 		CHECK(GetPixelRGBA8(withoutUI, 236, 37) != panel);
+
+		// The GPU's time per stage of the scene's frames resolves, frames as an application runs them (where the device writes
+		// timestamps).
+		if (Renderer::GetGPUProfiler().IsEnabled())
+		{
+			for (int32_t frame = 0; frame < 2; frame++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				REQUIRE(renderer.Render(*scene, camera));
+				gpu.GetDevice().EndFrame();
+			}
+			renderer.ResolveGPUStats(true);
+			const SceneRendererGPUStats& gpuStats = renderer.GetGPUStats();
+			REQUIRE(gpuStats.HasTimes);
+			CHECK(gpuStats.BusyMs > 0.0f);
+			const RendererGPUStages& stages = RendererGPUStages::Get();
+			const auto stageMs = [&gpuStats](FrameStageID stage)
+			{
+				for (const GPUStageTime& time : gpuStats.StageMs)
+				{
+					if (time.Stage == stage)
+						return time.Milliseconds;
+				}
+				return -1.0f;
+			};
+			CHECK(stageMs(stages.Setup) >= 0.0f);
+			CHECK(stageMs(stages.Shadows) > 0.0f);
+			CHECK(stageMs(stages.Prepass) > 0.0f);
+			CHECK(stageMs(stages.Opaque) > 0.0f);
+			CHECK(stageMs(stages.Post) > 0.0f);
+			CHECK(stageMs(stages.Overlays) >= 0.0f); // The HUD text
+			CHECK(stageMs(FrameProfiler::Get().FindStage("GPU.UI")) >= 0.0f); // The menu canvas and the world sign
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -191,7 +228,7 @@ TEST_SUITE("GPU.FeatureTest")
 		render();
 		CHECK(renderer.GetEntityAt(*scene, bent.x, bent.y) == arm);
 		CHECK(renderer.GetEntityAt(*scene, upright.x, upright.y) != arm);
-		CHECK(renderer.GetStats().SkinnedInstances >= 1);
+		CHECK(GetDrawnCounts(renderer).SkinnedInstances >= 1);
 		// The attachment follows the wrist in the preview too (where it is drawn; the scene keeps its transform).
 		CHECK(renderer.GetEntityAt(*scene, bentTip.x, bentTip.y) == tipMarker);
 		CHECK(renderer.GetEntityAt(*scene, uprightTip.x, uprightTip.y) != tipMarker);

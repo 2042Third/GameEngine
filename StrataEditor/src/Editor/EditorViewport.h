@@ -196,6 +196,10 @@ namespace Strata
 		ViewportRenderer* GetGameRenderer();
 		bool HasGameRenderer() const { return m_GameRenderer != nullptr; }
 		ViewportRenderer* GetCaptureRenderer();
+		// The viewport panel's renderer when it exists (never created here).
+		const ViewportRenderer* FindRenderer() const { return m_Renderer.get(); }
+		// The Game view's renderer when it exists (never created here).
+		const ViewportRenderer* FindGameRenderer() const { return m_GameRenderer.get(); }
 		// Pixel size of the image the Game view renders (zero while it is hidden or closed). Captures of the scene's camera
 		// default to it when the Game view keeps an aspect ratio.
 		void SetGameViewSize(const glm::uvec2& size) { m_GameViewSize = size; }

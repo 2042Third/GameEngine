@@ -21,10 +21,13 @@
 
 #define ST_SAMPLER_COUNT 6
 
-// Material texture slots: bindless slot in bits 0-23, sampler index in bits 24-30, and this bit for one-channel textures
-// that stand for gray (sampled as (r, r, r, 1)).
+// Texture table entries (u_TextureTable): bindless slot in bits 0-23, sampler index in bits 24-30, and this bit for
+// one-channel textures that stand for gray (sampled as (r, r, r, 1)).
 #define ST_TEXTURE_SLOT_GRAYSCALE 0x80000000u
 
+// Scene shaders work in camera-relative world space: world space with the camera at the origin (TransformPositionRelative),
+// so what is near the camera keeps full precision however far from the world's origin it is. View, ViewProjection and their
+// inverses are rotation-only (the view's translation is zero); CameraPosition is the camera's world position.
 struct FrameConstants
 {
 	mat4 View;
@@ -45,12 +48,11 @@ struct FrameConstants
 	vec4 ClusterDepth;              // Depth slice = log(view depth) * x + y; z, w: near and far view depth
 	vec4 TimeParams;                // x: scene time in seconds
 	vec4 SkyParams;                 // x: background mip (blur), y: 1 when the environment is the background
-	mat4 CascadeViewProjection[4];  // Directional shadow cascades (light clip space, reversed-Z)
-	vec4 CascadeSplits;             // View distance where each cascade ends
-	vec4 CascadeData[4];            // x: world units per shadow texel, y: depth range in world units, z: penumbra search distance
+	vec4 CascadeSplits;             // View distance where each cascade ends (their projections: u_Cascades)
 	vec4 ShadowParams;              // x: 2 tan(light angular radius), y: 1 / shadow map size, w: cascade count (0 = none)
 	vec4 ShadowBias;                // x: depth bias (texels), y: normal offset (texels)
 	vec4 AOParams;                  // x: 1 when screen-space ambient occlusion is available
+	vec4 MaterialParams;            // x: 1 when raised texture levels fade in (SceneRendererSpecification::FadeTextureLevels)
 };
 
 layout(set = 0, binding = ST_CBV(0), std140) uniform FrameBuffer
@@ -73,11 +75,29 @@ layout(set = 0, binding = ST_SRV(0), std430) readonly buffer InstanceBuffer
 	InstanceData u_Instances[];
 };
 
-// The frame's draw list: the instance of every drawn instance, in batch order (gl_InstanceIndex indexes it).
+// The frame's draw list: an entry per drawn instance, in batch order (gl_InstanceIndex indexes it): the instance in the low
+// ST_DRAW_ENTRY_INSTANCE_BITS bits, its level-of-detail cross-fade code above them (RenderData::MakeDrawEntry).
 layout(set = 0, binding = ST_SRV(14), std430) readonly buffer DrawListBuffer
 {
 	uint u_DrawList[];
 };
+
+#define ST_DRAW_ENTRY_INSTANCE_BITS 27u          // RenderData::c_DrawEntryInstanceBits
+#define ST_DRAW_ENTRY_INSTANCE_MASK 0x07FFFFFFu
+#define ST_LOD_FADE_OUTGOING_CODE   16u          // RenderData::c_LODFadeOutgoing
+
+// Whether a draw with this cross-fade code covers the pixel (LODSelection::IsLODFadeDrawn): the level fading in (codes 1-15)
+// where the 4x4 ordered dither threshold is below the code, the level fading out (the code plus 16) on the other pixels.
+// The depth prepass and the forward pass test the same, so the EQUAL depth test holds.
+bool IsLODFadeDrawn(uint code, vec2 fragCoord)
+{
+	if (code == 0u)
+		return true;
+	const uint bayer[16] = uint[16](0u, 8u, 2u, 10u, 12u, 4u, 14u, 6u, 3u, 11u, 1u, 9u, 15u, 7u, 13u, 5u);
+	uvec2 pixel = uvec2(fragCoord) & 3u;
+	uint threshold = bayer[pixel.y * 4u + pixel.x];
+	return code < ST_LOD_FADE_OUTGOING_CODE ? threshold < code : threshold >= code - ST_LOD_FADE_OUTGOING_CODE;
+}
 
 #ifdef ST_SKINNED
 // The palettes of the posed instances (RenderScene::GetPalette): per joint of a skin the upper three rows of its affine
@@ -131,10 +151,12 @@ vec3 SkinNormal(JointMatrix skin, vec3 normal)
 }
 #endif
 
-vec3 TransformPosition(InstanceData instance, vec3 position)
+// A point of the instance in camera-relative world space: the instance's translation minus the camera's position is taken
+// before anything is added to it, so vertices near the camera keep full precision far from the world's origin.
+vec3 TransformPositionRelative(InstanceData instance, vec3 position)
 {
-	vec4 point = vec4(position, 1.0);
-	return vec3(dot(instance.WorldRows[0], point), dot(instance.WorldRows[1], point), dot(instance.WorldRows[2], point));
+	vec3 translation = vec3(instance.WorldRows[0].w, instance.WorldRows[1].w, instance.WorldRows[2].w) - u_Frame.CameraPosition.xyz;
+	return vec3(dot(instance.WorldRows[0].xyz, position), dot(instance.WorldRows[1].xyz, position), dot(instance.WorldRows[2].xyz, position)) + translation;
 }
 
 vec3 TransformDirection(InstanceData instance, vec3 direction)
@@ -164,7 +186,7 @@ struct MaterialData
 	float OcclusionStrength;
 	float AlphaCutoff;
 	uint Flags;
-	uint BaseColorMap;       // Bits 0-23: bindless texture slot, bits 24-31: sampler index
+	uint BaseColorMap;       // Texture table indices (u_TextureTable) from here on
 	uint MetallicRoughnessMap;
 	vec4 UVTransform;        // xy: tiling, zw: offset
 	uint NormalMap;
@@ -180,7 +202,7 @@ layout(set = 0, binding = ST_SRV(1), std430) readonly buffer MaterialBuffer
 
 struct LightData
 {
-	vec4 PositionRange;  // xyz: world position, w: range
+	vec4 PositionRange;  // xyz: camera-relative world position, w: range
 	vec4 Color;          // rgb: color * intensity, w: 1 / range^2
 	vec4 DirectionType;  // xyz: direction the light travels, w: type (ST_LIGHT_*)
 	vec4 SpotAngles;     // x: cos(inner cone), y: cos(outer cone)
@@ -206,11 +228,11 @@ layout(set = 0, binding = ST_SRV(11)) uniform texture2D u_AmbientOcclusion;
 
 // Direction from a surface point toward the viewer. Orthographic projections view every pixel along the same
 // direction, perspective ones from the camera position.
-vec3 GetViewVector(vec3 worldPosition)
+vec3 GetViewVector(vec3 relativePosition)
 {
 	if (u_Frame.CameraForward.w > 0.5)
 		return -u_Frame.CameraForward.xyz;
-	return normalize(u_Frame.CameraPosition.xyz - worldPosition);
+	return normalize(-relativePosition);
 }
 
 // Environment rotation around +Y (EnvironmentParams.y radians).
@@ -224,13 +246,27 @@ vec3 RotateEnvironmentDirection(vec3 direction)
 // Bindless texture table (descriptor set 1, see BindlessTextureTable).
 layout(set = 1, binding = 0) uniform texture2D u_Textures[];
 
-vec4 SampleMaterialTexture(uint packedSlot, vec2 uv)
+// The texture table (Strata/Renderer/TextureTable.h, GPUEntry): per texture index of material data, x its bindless slot
+// (bits 0-23), sampler index (bits 24-30) and ST_TEXTURE_SLOT_GRAYSCALE, y the float bits of the finest level of detail it
+// is sampled with (levels fading in; 0 otherwise). Textures keep their index while their levels stream. Fragment shaders
+// sample it through SampleMaterialTexture (Include/MaterialTextures.glsl).
+layout(set = 0, binding = ST_SRV(16), std430) readonly buffer TextureTableBuffer
 {
-	uint slot = packedSlot & 0xFFFFFFu;
-	uint samplerIndex = min((packedSlot >> 24) & 0x7Fu, uint(ST_SAMPLER_COUNT - 1));
-	vec4 value = texture(sampler2D(u_Textures[nonuniformEXT(slot)], u_Samplers[nonuniformEXT(samplerIndex)]), uv);
-	return (packedSlot & ST_TEXTURE_SLOT_GRAYSCALE) != 0u ? vec4(value.rrr, 1.0) : value;
-}
+	uvec2 u_TextureTable[];
+};
+
+// The directional shadow cascades (RenderData::CascadeData), fitted on the GPU (Scene/CascadeFit.comp).
+struct CascadeData
+{
+	mat4 ViewProjection; // Light clip space, reversed-Z
+	vec4 Parameters;     // x: world units per shadow texel, y: depth range in world units, z: penumbra search distance,
+	                     // w: the near plane's light view z (camera-relative)
+};
+
+layout(set = 0, binding = ST_SRV(17), std430) readonly buffer CascadeBuffer
+{
+	CascadeData u_Cascades[];
+};
 
 vec2 TransformUV(MaterialData material, vec2 uv)
 {

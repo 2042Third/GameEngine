@@ -72,10 +72,12 @@ namespace Strata
 		return options;
 	}
 
-	ViewportRenderer::ViewportRenderer(const std::string& debugName)
+	ViewportRenderer::ViewportRenderer(const std::string& debugName, bool fades)
 	{
 		SceneRendererSpecification specification;
 		specification.DebugName = debugName;
+		specification.FadeTextureLevels = fades;
+		specification.FadeLevelsOfDetail = fades;
 		m_Renderer = CreateScope<SceneRenderer>(specification);
 	}
 
@@ -173,7 +175,7 @@ namespace Strata
 			}
 		}
 		// The debug view tints what is drawn and boxes what cannot be (meshes that are not there).
-		m_StreamingView.Build(*scene, settings.DebugView, view.Camera, m_Renderer->GetSpecification().LODThreshold, settings.DebugColors, m_DebugDraw);
+		m_StreamingView.Build(*scene, settings.DebugView, view.Camera, m_Renderer->GetLODCriteria(), settings.DebugColors, m_DebugDraw);
 		options.EntityTints = m_StreamingView.GetTints();
 		if (!m_DebugDraw.IsEmpty())
 			options.DebugShapes = &m_DebugDraw;

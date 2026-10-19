@@ -27,6 +27,14 @@ using namespace Strata::Tests;
 namespace
 {
 
+	// The bytes a mesh's upload copies: every stream of its vertices and its indices (the pool's ranges are rounded up).
+	uint64_t GetGeometryBytes(const Ref<Asset>& asset)
+	{
+		const Mesh& mesh = static_cast<const Mesh&>(*asset);
+		const uint64_t vertexBytes = GeometryPool::c_PositionStride + GeometryPool::c_AttributeStride + (mesh.IsSkinned() ? GeometryPool::c_SkinStride : 0);
+		return mesh.GetPositions().size() * vertexBytes + mesh.GetIndices().size() * GeometryPool::c_IndexStride;
+	}
+
 	template<typename Work>
 	void RunDeviceFrame(GPUContext& gpu, Work&& work)
 	{
@@ -215,7 +223,7 @@ TEST_SUITE("GPU.UploadQueue")
 				frames++;
 			}
 			REQUIRE(AllReady(*manager, handles));
-			const uint64_t meshBytes = manager->PeekLoadedAsset(handles.back())->GetMemoryUsage().GpuBuffers;
+			const uint64_t meshBytes = GetGeometryBytes(manager->PeekLoadedAsset(handles.back()));
 			CHECK(total == 6 * GetChainBytes(1024) + 2 * meshBytes);
 			CHECK(frames >= total / budgets.UploadBytesPerFrame);
 			CHECK(manager->GetStats().UploadedBytesWindowMax <= budgets.UploadBytesPerFrame);
@@ -323,7 +331,7 @@ TEST_SUITE("GPU.UploadQueue")
 		CHECK(after.TextureSteps > before.TextureSteps);
 		CHECK(after.BufferSteps > before.BufferSteps);
 		CHECK(after.TextureBytes - before.TextureBytes == GetChainBytes(256));
-		CHECK(after.BufferBytes - before.BufferBytes == manager->PeekLoadedAsset(mesh)->GetMemoryUsage().GpuBuffers);
+		CHECK(after.BufferBytes - before.BufferBytes == GetGeometryBytes(manager->PeekLoadedAsset(mesh)));
 		CHECK(after.Batches > before.Batches);
 
 		manager.reset();

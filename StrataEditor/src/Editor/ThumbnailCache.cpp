@@ -857,6 +857,9 @@ namespace Strata
 			specification.ShadowMapSize = 1024;
 			specification.ShadowCascades = 1;
 			specification.PrefetchDistance = 0.0f;
+			// Thumbnails wait for their textures' levels and show them at once, and draw their levels of detail as they are.
+			specification.FadeTextureLevels = false;
+			specification.FadeLevelsOfDetail = false;
 			m_Renderer = CreateScope<SceneRenderer>(specification);
 		}
 		// Thumbnails and the preview share the renderer: its targets follow the image's size (they change only when a preview
@@ -871,7 +874,9 @@ namespace Strata
 			return;
 		}
 		const SceneRendererStats& stats = m_Renderer->GetStats();
-		if (stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || !loadingMeshes.empty() || (job.Poses && job.Poses->HasWaitingRestPoses()))
+		// Large prefabs and models reach the GPU over several frames (SceneRendererSpecification::NewInstanceBytesPerFrame).
+		if (stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || stats.DeferredProxies > 0 || !loadingMeshes.empty()
+			|| (job.Poses && job.Poses->HasWaitingRestPoses()))
 		{
 			job.QuietFrames = 0;
 			return;

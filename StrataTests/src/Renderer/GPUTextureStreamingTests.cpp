@@ -6,15 +6,18 @@
 #include "Renderer/UploadQueueTestUtils.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
+#include "Strata/Renderer/BindlessTextureTable.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureFormat.h"
 #include "Strata/Renderer/TextureStreamer.h"
+#include "Strata/Renderer/TextureTable.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 #include "TestHelpers.h"
 
+#include <chrono>
 #include <cmath>
 #include <initializer_list>
 #include <limits>
@@ -161,6 +164,35 @@ namespace
 		return texture ? texture->GetResidentLevel() : std::numeric_limits<uint32_t>::max();
 	}
 
+	// Tests that watch unneeded levels drop shorten the streamer's idle drop time (30 s) to this, and wait for drops by the
+	// clock for at most c_DropTimeoutSeconds.
+	constexpr double c_TestIdleDropSeconds = 0.2;
+	constexpr double c_DropTimeoutSeconds = 30.0;
+
+	void ShortenIdleDrops(AssetManagerBase& manager)
+	{
+		TextureStreamer* streamer = TextureStreamer::Find(manager);
+		REQUIRE(streamer);
+		streamer->SetIdleDropSeconds(c_TestIdleDropSeconds);
+	}
+
+	// Runs `frame` for at least `minSeconds` by the clock and then until `done` holds, at most c_DropTimeoutSeconds; returns
+	// whether `done` held.
+	template<typename Frame, typename Done>
+	bool RunFramesUntil(Frame&& frame, Done&& done, double minSeconds)
+	{
+		const auto start = std::chrono::steady_clock::now();
+		while (true)
+		{
+			frame();
+			const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+			if (elapsed >= minSeconds && done())
+				return true;
+			if (elapsed >= c_DropTimeoutSeconds)
+				return false;
+		}
+	}
+
 	// The bytes of a gradient texture's levels [first, end).
 	uint64_t GetGradientBytes(uint32_t first, uint32_t end)
 	{
@@ -241,12 +273,16 @@ TEST_SUITE("GPU.TextureStreaming")
 			std::optional<uint32_t> arrivedLevel;
 			bool groupCompleteOnArrival = false;
 			bool fallbackAfterArrival = false;
-			// A frame in which the texture moved to a new bindless slot (its levels raised) resolves its material again: the
-			// material data of the frame before names the slot it left (SceneRendererStats::ReusedMaterials).
+			// A frame in which the texture moved to a new bindless slot (its levels raised) keeps its material's data: the data
+			// names the texture by its texture table index, the same for the texture's life, whose entry follows the slot
+			// (SceneRendererStats::ReusedMaterials, MaterialBytesUploaded).
 			uint32_t previousSlot = BindlessTextureTable::c_InvalidSlot;
+			uint32_t tableIndex = TextureTable::c_InvalidIndex;
 			uint32_t slotChanges = 0;
-			bool reusedAfterSlotChange = false;
-			for (int attempt = 0; attempt < 100; attempt++)
+			bool reusedAfterSlotChange = true;
+			bool entryFollowsSlot = true;
+			const auto start = std::chrono::steady_clock::now();
+			for (int attempt = 0; std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() < c_DropTimeoutSeconds; attempt++)
 			{
 				image = frame.Run(CameraAt(c_SmallDistance));
 				const Ref<Texture> texture = PeekTexture(*manager);
@@ -255,9 +291,13 @@ TEST_SUITE("GPU.TextureStreaming")
 				if (previousSlot != BindlessTextureTable::c_InvalidSlot && texture->GetBindlessSlot() != previousSlot)
 				{
 					slotChanges++;
-					reusedAfterSlotChange = reusedAfterSlotChange || renderer.GetStats().ReusedMaterials != 0;
+					reusedAfterSlotChange = reusedAfterSlotChange && renderer.GetStats().ReusedMaterials == 1 && renderer.GetStats().MaterialBytesUploaded == 0;
 				}
 				previousSlot = texture->GetBindlessSlot();
+				if (tableIndex == TextureTable::c_InvalidIndex)
+					tableIndex = texture->GetTableIndex();
+				entryFollowsSlot = entryFollowsSlot && texture->GetTableIndex() == tableIndex
+					&& (Renderer::GetTextureTable().GetEntry(tableIndex) & 0xFFFFFFu) == texture->GetBindlessSlot();
 				if (!arrivedLevel)
 				{
 					arrivedLevel = texture->GetResidentLevel();
@@ -268,7 +308,8 @@ TEST_SUITE("GPU.TextureStreaming")
 				{
 					fallbackAfterArrival = fallbackAfterArrival || !ShowsTexture(image);
 				}
-				if (texture->GetResidentLevel() == 5 && streamingDone() && attempt > 10)
+				// Settled once the raised level has faded in too.
+				if (texture->GetResidentLevel() == 5 && streamingDone() && attempt > 10 && Renderer::GetTextureTable().GetFadeCount() == 0)
 					break;
 			}
 			REQUIRE(arrivedLevel);
@@ -278,7 +319,8 @@ TEST_SUITE("GPU.TextureStreaming")
 			CHECK(PeekTexture(*manager)->GetResidentLevel() == 5);
 			CHECK_FALSE(fallbackAfterArrival);
 			CHECK(slotChanges == 1);
-			CHECK_FALSE(reusedAfterSlotChange);
+			CHECK(reusedAfterSlotChange);
+			CHECK(entryFollowsSlot);
 			CHECK(manager->GetStats().PartialLoads == 1);
 			CHECK(manager->GetStats().Detail.LevelsRaised == 1);
 			CHECK(manager->GetStats().Resident.GpuTextures == PeekTexture(*manager)->GetLevelBytes(5, c_TextureMips));
@@ -402,13 +444,15 @@ TEST_SUITE("GPU.TextureStreaming")
 			renderer.SetViewportSize(c_ViewSize, c_ViewSize);
 			StreamingFrame frame { gpu, manager, renderer, *scene };
 			ReadbackImage image;
-			for (int attempt = 0; attempt < 100; attempt++)
+			// Settled once nothing streams and raised levels have faded in too (by the clock: fades take a quarter second).
+			uint32_t frames = 0;
+			const bool settled = RunFramesUntil([&]() { image = frame.Run(camera); frames++; }, [&]()
 			{
-				image = frame.Run(camera);
 				const AssetManagerStats stats = manager->GetStats();
-				if (attempt > 10 && stats.Detail.Reads == 0 && stats.Detail.Changes == 0 && GetResidentLevel(*manager, c_CheckerHandle) < 6)
-					break;
-			}
+				return frames > 10 && stats.Detail.Reads == 0 && stats.Detail.Changes == 0 && GetResidentLevel(*manager, c_CheckerHandle) < 6
+					&& Renderer::GetTextureTable().GetFadeCount() == 0;
+			}, 0.0);
+			CHECK(settled);
 			const uint32_t resident = GetResidentLevel(*manager, c_CheckerHandle);
 			CAPTURE(resident);
 			CHECK(resident <= 1);
@@ -426,6 +470,113 @@ TEST_SUITE("GPU.TextureStreaming")
 			SettleDevice(gpu);
 			CHECK(gpu.GetNewErrorCount() == 0);
 		}
+	}
+
+	TEST_CASE("Raised levels fade in from what the texture showed before, over the fade-in time")
+	{
+		// The checkerboard on a quad filling the view: its tail (level 6) is gray, its finest levels show the squares. The
+		// frame that swaps the raised levels in still shows what the texture showed before (its table entry's minimum level of
+		// detail is the levels it gained), and once the fade-in time has passed the frames show the squares. Without a fade,
+		// the swap's frame shows them at once.
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr AssetHandle c_CheckerHandle = AssetHandle(0xA2100);
+		constexpr AssetHandle c_CheckerMaterialHandle = AssetHandle(0xA2101);
+		MaterialProperties checker = UnlitColor(glm::vec4(1.0f));
+		checker.BaseColorMap = c_CheckerHandle;
+		const std::filesystem::path pack = WriteStreamingPack({ StreamingPackAsset { c_CheckerHandle, AssetType::Texture, "Textures/Checker.png", CookCheckerTexture() },
+			StreamingPackAsset { c_CheckerMaterialHandle, AssetType::Material, "Materials/Checker.stmat", SerializeMaterial(checker) } });
+		Scope<Scene> scene = CreateScope<Scene>("Fade");
+		AddNeutralPostProcess(*scene);
+		AddMesh(*scene, BuiltinAssets::QuadMesh, c_CheckerMaterialHandle, glm::vec3(0.0f), "Quad");
+		const SceneCamera camera = CameraAt(0.15f);
+		// How far the view's middle half strays from its mean red: about 0 for gray, more than 40 for the squares.
+		const auto contrast = [](const ReadbackImage& image)
+		{
+			double sum = 0.0;
+			std::vector<double> values;
+			for (uint32_t y = c_ViewSize / 4; y < 3 * c_ViewSize / 4; y++)
+			{
+				for (uint32_t x = c_ViewSize / 4; x < 3 * c_ViewSize / 4; x++)
+				{
+					values.push_back(static_cast<double>(GetPixelRGBA8(image, x, y).r));
+					sum += values.back();
+				}
+			}
+			const double mean = sum / static_cast<double>(values.size());
+			double deviation = 0.0;
+			for (const double value : values)
+				deviation += std::abs(value - mean);
+			return deviation / static_cast<double>(values.size());
+		};
+
+		TextureTable& table = Renderer::GetTextureTable();
+		const float defaultFade = table.GetFadeInSeconds();
+		CHECK(defaultFade == TextureTable::c_FadeInSeconds);
+		for (const float fade : { TextureTable::c_FadeInSeconds, 0.0f })
+		{
+			CAPTURE(fade);
+			SettleDevice(gpu);
+			table.SetFadeInSeconds(fade);
+			std::string error;
+			Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(pack, &error);
+			REQUIRE_MESSAGE(manager, error);
+			SceneRenderer renderer;
+			renderer.SetViewportSize(c_ViewSize, c_ViewSize);
+			StreamingFrame frame { gpu, manager, renderer, *scene };
+
+			// The tail arrives first, then the raise to level 0 swaps in.
+			std::optional<ReadbackImage> atTail;
+			std::optional<ReadbackImage> swapped;
+			float swapMinLod = -1.0f;
+			for (int attempt = 0; attempt < 200 && !swapped; attempt++)
+			{
+				const ReadbackImage image = frame.Run(camera);
+				const Ref<Texture> texture = PeekTexture(*manager, c_CheckerHandle);
+				if (!texture || texture->GetBindlessSlot() == BindlessTextureTable::c_InvalidSlot || renderer.GetStats().PendingAssets > 0)
+					continue;
+				if (texture->GetResidentLevel() == texture->GetTailLevel())
+					atTail = image;
+				else if (atTail)
+				{
+					swapped = image;
+					swapMinLod = table.GetMinLod(texture->GetTableIndex());
+				}
+			}
+			REQUIRE(atTail);
+			REQUIRE(swapped);
+			CHECK(contrast(*atTail) < 10.0);
+			const Ref<Texture> texture = PeekTexture(*manager, c_CheckerHandle);
+			REQUIRE(texture);
+			CHECK(texture->GetResidentLevel() == 0);
+			if (fade > 0.0f)
+			{
+				// The swap's frame: sampled no finer than level 6 was, so still gray.
+				CHECK(swapMinLod > 5.5f);
+				CHECK(contrast(*swapped) < 10.0);
+			}
+			else
+			{
+				CHECK(swapMinLod == 0.0f);
+				CHECK(contrast(*swapped) > 40.0);
+			}
+
+			// Frames for the fade-in time: then the squares, sampled at the finest level.
+			ReadbackImage settled;
+			const auto start = std::chrono::steady_clock::now();
+			do
+				settled = frame.Run(camera);
+			while (std::chrono::duration<float>(std::chrono::steady_clock::now() - start).count() < 2.0f * TextureTable::c_FadeInSeconds);
+			CHECK(table.GetFadeCount() == 0);
+			CHECK(table.GetMinLod(texture->GetTableIndex()) == 0.0f);
+			CHECK(contrast(settled) > 40.0);
+
+			AssetManager::SetActive(nullptr);
+			manager.reset();
+		}
+		table.SetFadeInSeconds(defaultFade);
+		SettleDevice(gpu);
+		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
 	TEST_CASE("A texture needed more takes the finest levels of one needed less when the budget does not hold both")
@@ -685,15 +836,17 @@ TEST_SUITE("GPU.TextureStreaming")
 		const AssetManagerStats raised = manager->GetStats();
 		CHECK(raised.Detail.LevelsRaised == 4);
 
-		// Nothing needs its levels any more: after the streamer's delay they drop to its tail, once; nothing is read or
-		// pending again and the environment stays.
-		for (uint32_t step = 0; step < 2 * TextureStreamingPolicy::c_DropDelayFrames + 20; step++)
+		// Nothing needs its levels any more: after the streamer's idle drop time they drop to its tail, once; nothing is read
+		// or pending again and the environment stays (also for twice that time, when the map is forgotten).
+		ShortenIdleDrops(*manager);
+		const bool dropped = RunFramesUntil([&]()
 		{
 			RunFrame(gpu, manager, { { &renderer, scene.get() } }, camera);
 			CHECK(renderer.GetStats().PendingAssets == 0);
 			CHECK(renderer.GetStats().EnvironmentUpdates == 0);
 			CHECK(renderer.GetStats().EnvironmentLighting);
-		}
+		}, [&]() { return map->GetResidentLevel() == 4; }, 3.0 * c_TestIdleDropSeconds);
+		CHECK(dropped);
 		const AssetManagerStats after = manager->GetStats();
 		CHECK(after.Detail.LevelsRaised == raised.Detail.LevelsRaised);
 		CHECK(after.Detail.BytesStreamed == raised.Detail.BytesStreamed);
@@ -744,11 +897,11 @@ TEST_SUITE("GPU.TextureStreaming")
 			}
 			REQUIRE(updates == 1);
 			// Nothing samples the map any more: its levels drop to its tail.
-			for (uint32_t step = 0; step < 2 * TextureStreamingPolicy::c_DropDelayFrames + 20; step++)
-				RunFrame(gpu, manager, { { first.get(), scene.get() } }, camera);
+			ShortenIdleDrops(*manager);
 			const Ref<Texture> map = PeekTexture(*manager, c_SkyHandle);
 			REQUIRE(map);
-			REQUIRE(map->GetResidentLevel() == map->GetTailLevel());
+			REQUIRE(RunFramesUntil([&]() { RunFrame(gpu, manager, { { first.get(), scene.get() } }, camera); },
+				[&]() { return map->GetResidentLevel() == map->GetTailLevel(); }, 0.0));
 			REQUIRE(map->GetTailLevel() > 0);
 			const AssetManagerStats before = manager->GetStats();
 
@@ -817,7 +970,6 @@ TEST_SUITE("GPU.TextureStreaming")
 		REQUIRE(gpu.IsValid());
 		constexpr AssetHandle c_SkyHandle = AssetHandle(0xA3002);
 		constexpr uint32_t c_SkyViewSize = 64;
-		constexpr uint32_t c_IdleFrames = 2 * TextureStreamingPolicy::c_DropDelayFrames + 20;
 		const std::filesystem::path pack = WriteStreamingPack({ StreamingPackAsset { c_SkyHandle, AssetType::Texture, "Textures/Sky.hdr", CookEnvironmentMap(512, 256) } });
 		for (const bool transfer : GetQueueModes(gpu))
 		{
@@ -832,15 +984,18 @@ TEST_SUITE("GPU.TextureStreaming")
 			scene->CreateEntity("Sky").AddComponent<SkyLightComponent>().EnvironmentMap = c_SkyHandle;
 			AddMesh(*scene, BuiltinAssets::SphereMesh, BuiltinAssets::DefaultMaterial, glm::vec3(0.0f), "Ball");
 			const SceneCamera camera = CameraAt(3.0f);
-			auto idle = [&]()
-			{
-				for (uint32_t step = 0; step < c_IdleFrames; step++)
-					RunFrame(gpu, manager, {}, camera);
-			};
+			ShortenIdleDrops(*manager);
 			auto atTail = [&]()
 			{
 				const Ref<Texture> map = PeekTexture(*manager, c_SkyHandle);
 				return map && map->GetTailLevel() > 0 && map->GetResidentLevel() == map->GetTailLevel();
+			};
+			// Frames without the renderer, for longer than the streamer's idle drop and forget times, and until the map is at
+			// its tail when `untilTail`.
+			auto idle = [&](bool untilTail)
+			{
+				return RunFramesUntil([&]() { RunFrame(gpu, manager, {}, camera); }, [&]() { return !untilTail || atTail(); },
+					3.0 * c_TestIdleDropSeconds);
 			};
 
 			// Renderers in turn, each gone before the next, so none takes over another's environment: the first draws before
@@ -860,7 +1015,7 @@ TEST_SUITE("GPU.TextureStreaming")
 
 				// Its next frame, long after: the map was raised whole meanwhile and stayed so, and the frame computes the
 				// environment from it.
-				idle();
+				idle(false);
 				CHECK(GetResidentLevel(*manager, c_SkyHandle) == 0);
 				AssetManager::SetActive(manager);
 				REQUIRE(gpu.GetDevice().BeginFrame());
@@ -878,7 +1033,7 @@ TEST_SUITE("GPU.TextureStreaming")
 
 				// Computed: nothing holds the map any more, so it drops to its tail while the renderer idles, and the renderer
 				// keeps lighting with its environment without reading the map again.
-				idle();
+				CHECK(idle(true));
 				CHECK(atTail());
 				const AssetManagerStats before = manager->GetStats();
 				RunFrame(gpu, manager, { { renderer.get(), scene.get() } }, camera);
@@ -897,7 +1052,7 @@ TEST_SUITE("GPU.TextureStreaming")
 				CHECK(renderer->GetStats().PendingAssets == 1);
 			}
 			const AssetManagerStats before = manager->GetStats();
-			idle();
+			CHECK(idle(true));
 			CHECK(manager->GetStats().Detail.LevelsRaised == before.Detail.LevelsRaised);
 			CHECK(manager->GetStats().RangeReads == before.RangeReads);
 			CHECK(atTail());

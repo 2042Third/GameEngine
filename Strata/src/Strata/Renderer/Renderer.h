@@ -3,6 +3,8 @@
 #include "Strata/Core/Base.h"
 #include "Strata/Renderer/BindlessTextureTable.h"
 #include "Strata/Renderer/DeferredReleaseQueue.h"
+#include "Strata/Renderer/GeometryPool.h"
+#include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Renderer/GraphicsDevice.h"
 #include "Strata/Renderer/RendererUploadContext.h"
@@ -15,6 +17,9 @@
 
 namespace Strata
 {
+
+	class RenderSceneGPUCache;
+	class TextureTable;
 
 	struct ReadbackImage
 	{
@@ -48,12 +53,22 @@ namespace Strata
 		static nvrhi::IDevice* GetDevice();
 		static ShaderLibrary& GetShaderLibrary();
 		static BindlessTextureTable& GetBindlessTextures();
+		// Stable indices of textures for material data, following their bindless slots (TextureTable).
+		static TextureTable& GetTextureTable();
 		// Staging memory for uploads (textures and meshes upload through it).
 		static StagingPool& GetStagingPool();
 		// Where the asset managers' finalizations record their uploads (the IAssetGraphics engine service hands it to them).
 		static RendererUploadContext& GetUploadContext();
 		// The budgeted queue every asset upload goes through (the upload context's batches are its batches).
 		static GPUUploadQueue& GetUploadQueue();
+		// Every mesh's GPU geometry (null without a renderer). Meshes keep a weak reference: the pool goes with the renderer.
+		static Ref<GeometryPool> GetGeometryPool();
+		// GPU time per stage of the frame (timestamps; a no-op without timestamp support): passes are timed with GPUPassTimer.
+		static GPUProfiler& GetGPUProfiler();
+		// The profiler, or null without a renderer (any time, also while the renderer initializes).
+		static GPUProfiler* FindGPUProfiler();
+		// The render scenes' GPU copies, shared by each scene's renderers (RenderSceneGPU).
+		static RenderSceneGPUCache& GetRenderSceneGPUs();
 		// Resources dropped while the GPU may still use them (see ReleaseDeferred).
 		static DeferredReleaseQueue& GetDeferredReleases();
 		// Drops the references once the GPU has finished every command list executed so far, without waiting for it. Use
@@ -61,8 +76,11 @@ namespace Strata
 		// textures of clears alive for the GPU (DeferredReleaseQueue). Ignored without a renderer (nothing renders).
 		static void ReleaseDeferred(std::vector<nvrhi::ResourceHandle> resources);
 
-		// Called by the application after the graphics device began a frame: recycles bindless slots and staging memory,
-		// rolls the upload queue's frame and drops deferred releases the GPU is done with.
+		// Called by the application after the graphics device began a frame: hands the GPU times of completed frames to the
+		// frame profiler (GPUProfiler::BeginFrame), returns the geometry pool's freed ranges and grows or compacts it
+		// (GeometryPool::BeginFrame), releases the GPU copies of render scenes that went (RenderSceneGPUCache::BeginFrame),
+		// recycles bindless slots and staging memory, rolls the upload queue's frame and drops deferred releases the GPU is
+		// done with.
 		static void BeginFrame();
 		// Before the first command list of a frame that renders into the back buffer: the GPU waits for the display to hand
 		// the image over only from here on (GraphicsDevice::PrepareBackBuffer), so the frame's earlier work - asset uploads,

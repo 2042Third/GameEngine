@@ -122,7 +122,7 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | What does the game play (sound)? | `audio.state` (play mode): `voices` (entity or null for one-shots, clip, playing, looping, position...), `oneShots` (`playing`, `played`, `dropped`), `listener`, `masterVolume` |
 | What happened (errors, script output)? | `log.read` (`{"newest": true, "limit": 20}` for the latest first, paging with `before` = the returned `oldest`; oldest first with `after` = the previous `latest`; `minLevel`; `logger`: `Strata` engine, `App` editor, `Script` scripts) |
 | How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`; `importMemoryMB`: the imports' memory estimates against their budget); `asset.setBudget` changes the open project's budgets (MB of memory, staging and uploads per frame; ms of finalization and of upload steps per frame; `importMB`, the memory imports may take together: imports beyond it wait their turn) |
-| Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %) |
+| Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %; `gpu`: the GPU's stages and `boundBy`; `renderStats`: what the viewport's frame drew; `gameRenderStats`: the Game view's) |
 
 Commands added at run time (for example `script.*`, `viewport.*`, `camera.*` when those features are present)
 appear in `editor.commands` and as tools automatically. The viewport commands need rendering: they fail in an
@@ -134,8 +134,10 @@ editor started with `--no-gpu` (use `--headless`):
   hiddenScreenSpaceTexts, ui: {canvases, hiddenCanvases, elements, drawCalls, pendingGlyphs}, debugView, notice?, path?}`. Text is complete in the picture, and so are the view's meshes,
   materials and textures: the capture renders again for up to about five seconds of frames while they load, up to about
   two more while textures still lack the finer mip levels the view wants, and a few while animated characters that
-  animate only while seen (`CullingMode: WhenVisible`) still show an older pose, also while paused (`waitForAssets: false`
-  takes it at once; `pendingAssets` says what was still loading, `texturesBelowWanted` what was still blurrier than
+  animate only while seen (`CullingMode: WhenVisible`) still show an older pose, also while paused, and while mesh renderers
+  the scene just gained are still on their way to the GPU (a few frames for a million; `waitForAssets: false` takes it
+  at once, `renderStats.deferredInstanceBytes` says what still waited; `pendingAssets` says what was still loading,
+  `texturesBelowWanted` what was still blurrier than
   wanted, e.g. under a texture budget, `stalePoses` the animators drawn in an older pose). `position` +
   `target` (and `fov`) look from your own camera: the
   person's view (`camera.get`) does not move, and the result's `camera` is `"custom"`. `camera: "scene"` without a size
@@ -153,7 +155,9 @@ editor started with `--no-gpu` (use `--headless`):
   plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
   `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the Game view). The result's
   `debugView` counts what it found among the entities in view: `{view, tintedEntities, pendingEntities, failedEntities,
-  placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], entitiesPerMipShortfall: [as needed, 1, 2, 3+]}`, so
+  placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], lodErrorPixels: [the largest error in pixels drawn at each of
+  those levels, for meshes whose levels have errors (imported models' generated levels; at most 1 pixel by default)],
+  entitiesPerMipShortfall: [as needed, 1, 2, 3+]}`, so
   you need not read colors: e.g. capture with `"streaming"` until `pendingEntities` and `placeholderBoxes` are 0, or with
   `"mip"` until only the first entry of `entitiesPerMipShortfall` counts entities (every texture as sharp as the view
   needs).
@@ -439,8 +443,32 @@ with a window, not `--no-gpu`, to include rendering). A command script can gate 
 finished loading, creating sub-scenes' entities), `Scene.UI` (the game UI's input), `Scene.Scripts`, `Scene.Animation` (animators: poses, root motion,
 attachments, events), `Scene.Physics`, `Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Render.UI` (the game UI pass), `Editor.UI`,
 `Editor.Commands` (the work of the commands that ran in the frame, yours included), and `Present` outside the frame
-time), with `stageSum` (at most the frame), `untimed` (the rest of each frame) and `jobs` (`workerBusyPercent`,
-`ioBusyPercent`, `backgroundBusyPercent` (imports, exports), `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage. The
+time: presenting, and the wait for the display's image at the back buffer's first use), with `stageSum` (at most the frame), `untimed` (the rest of each frame) and `jobs` (`workerBusyPercent`,
+`ioBusyPercent`, `backgroundBusyPercent` (imports, exports), `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage.
+
+**Render statistics and GPU time**: `editor.perf` also has `gpu` (`frames` with GPU times, `latencyFrames`: they arrive
+2-3 frames late, `busy`, `stages` per GPU stage: `GPU.Uploads`, `GPU.Setup`, `GPU.Cull`, `GPU.Shadows`, `GPU.Prepass`,
+`GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent`, `GPU.Post`, `GPU.Overlays`, `GPU.UI` (the game UI),
+`GPU.ImGui`) and `boundBy`: `"gpu"`
+(the GPU's median busy time takes at least 90% of the frame interval and exceeds the CPU's frame time: make the scene
+cheaper to draw), `"cpu"` (the CPU's frame time does: look at `stages`), `"capped"` (vsync or a frame-rate cap sets the
+pace: neither is the limit) or `"unknown"` (no GPU times: `--no-gpu`, or a driver without timestamps). Its `renderStats`
+(`gameRenderStats` for the Game view's frame, null while it is hidden; and every `viewport.capture` result's, for the
+captured frame) says what a frame drew: `gpuDriven` (the GPU culled it
+and built its draws: its counts are the GPU's, of a frame 2-3 frames older in `editor.perf` and of the captured frame in
+captures, once `gpuCounts` is true), `feedbackRequests` (its asset requests came from the GPU's visibility feedback of a
+frame 2-3 frames older: the CPU walks the view itself only on first frames, camera cuts and frames after assets loaded),
+`drawCommands` (draw calls the CPU recorded: a few per pass however large the scene
+on the GPU-driven path), `draws` (instanced draws of the view), `opaqueDraws`, `shadowDraws`, `instances` (an instance
+whose level of detail is cross-fading is drawn twice for 16 frames, at both levels),
+`shadowCasters`, `triangles`, `visibleProxies`, `culledProxies`, `sizeCulledProxies` (in view but below half a pixel),
+`occludedProxies` (in the frustum but hidden behind what the view draws: the GPU-driven path leaves them out),
+`occludedCasters` (shadow casters hidden from the light behind other casters, counted per cascade: left out of those cascades
+alike), `cachedCascades` (shadow cascades kept from the previous frame because nothing reaching them changed: a still view
+draws no shadows), `instancesPerLod`, `lights` (the GPU-driven path counts every point and spot light in view), `droppedLights` (the CPU path's lights beyond its 4,096), `materials`, `pendingAssets`, `extractMs`, `sortMs`,
+`proxyUpdates`, `instanceBytesUploaded`, `deferredInstanceBytes` (new mesh renderers still waiting for their upload to
+the GPU: drawn in a frame or two), `sceneMirrorMB` (GPU memory of the scenes' GPU copies: playing doubles the scene's) and `gpuMs` (the GPU's ms per stage of frame `gpuStatsFrame`). Gate it like the stages: `{"expect": {"/gpu/stages/GPU.Shadows/p50Ms": {"max": 2}}}`. On macOS a
+stage that begins inside a render pass shows its time in the stage before it (`GPU.Transparent` in `GPU.Opaque`). The
 person at the editor sees the same in the Performance panel (click the frame pill) and the streaming numbers of
 `asset.stats` in the Streaming panel (click the assets pill); `editor.showPanel {"panel": "Streaming"}` (or
 `"Performance"`, `"Console"`, `"Activity"`, ...) brings one to the front for them, also as the first command of a script

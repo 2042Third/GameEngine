@@ -1,0 +1,34 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "Include/Culling.glsl"
+
+// After Cull.comp's counting passes: packs the visibility feedback of the touched mesh and material slots into records
+// (RenderData::FeedbackRecord) the CPU reads back (SceneRenderer::ApplyFeedback): the header record (the touched slots'
+// counts), then MeshSlotCount mesh records and MaterialSlotCount material records, the touched ones first in each part.
+// One thread per record place.
+
+layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+void main()
+{
+	uint index = gl_GlobalInvocationID.x;
+	uint meshes = u_FeedbackLists[0];
+	uint materials = u_FeedbackLists[1];
+	if (index == 0u)
+		u_FeedbackRecords[0] = uvec4(meshes, materials, 0u, 0u);
+	if (index < u_Cull.MeshSlotCount)
+	{
+		if (index >= meshes)
+			return;
+		uint slot = u_FeedbackLists[ST_FEEDBACK_LIST_HEADER + index];
+		u_FeedbackRecords[1u + index] = uvec4(slot, u_MeshFeedback[slot * 2u + 1u], u_MeshFeedback[slot * 2u], 0u);
+		return;
+	}
+	uint place = index - u_Cull.MeshSlotCount;
+	if (place >= u_Cull.MaterialSlotCount || place >= materials)
+		return;
+	uint slot = u_FeedbackLists[ST_FEEDBACK_LIST_HEADER + u_Cull.MeshSlotCount + place];
+	uint base = slot * 4u;
+	u_FeedbackRecords[1u + u_Cull.MeshSlotCount + place] = uvec4(slot, u_MaterialFeedback[base + 2u], u_MaterialFeedback[base], u_MaterialFeedback[base + 1u]);
+}

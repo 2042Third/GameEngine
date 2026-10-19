@@ -5,6 +5,7 @@
 #include "Strata/Renderer/BlockCompression.h"
 #include "Strata/Renderer/GPUUploadQueue.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/TextureTable.h"
 
 #include <glm/gtc/packing.hpp>
 
@@ -233,8 +234,18 @@ namespace Strata
 
 	Texture::~Texture()
 	{
-		if (m_BindlessSlot != UINT32_MAX && Renderer::IsInitialized())
+		if (!Renderer::IsInitialized())
+			return;
+		if (m_TableIndex != TextureTable::c_InvalidIndex)
+			Renderer::GetTextureTable().Free(m_TableIndex);
+		if (m_BindlessSlot != UINT32_MAX)
 			Renderer::GetBindlessTextures().Release(m_BindlessSlot);
+	}
+
+	uint32_t Texture::GetTableEntry() const
+	{
+		const uint32_t sampler = static_cast<uint32_t>(m_Specification.Filter) * 3 + static_cast<uint32_t>(m_Specification.Wrap);
+		return TextureTable::PackEntry(m_BindlessSlot, sampler, m_Specification.Grayscale);
 	}
 
 	bool Texture::IsBlockCompressionSupported()
@@ -425,6 +436,7 @@ namespace Strata
 			return AssetFinalizeResult::Failed; // Table full (logged by the table)
 		}
 		m_BindlessSlot = slot;
+		m_TableIndex = Renderer::GetTextureTable().Allocate(GetTableEntry());
 		m_GPUTexture = std::move(m_UploadTexture);
 		m_ResidentLevel.store(m_LoadedLevel, std::memory_order_release);
 		m_ResidentBytes.store(GetLevelBytes(m_LoadedLevel, m_MipCount), std::memory_order_release);
@@ -642,7 +654,7 @@ namespace Strata
 		return m_LevelChange ? m_LevelChange->FirstLevel : GetResidentLevel();
 	}
 
-	bool Texture::RaiseLevels(uint32_t firstLevel, std::vector<uint8_t> data)
+	bool Texture::RaiseLevels(uint32_t firstLevel, std::vector<uint8_t> data, bool fadeIn)
 	{
 		const uint32_t resident = GetResidentLevel();
 		if (!CanChangeLevels() || firstLevel >= resident || firstLevel >= m_MipCount)
@@ -655,6 +667,7 @@ namespace Strata
 		m_LevelChange->Position = UploadPosition { firstLevel, resident - firstLevel, 0 };
 		m_LevelChange->Data = std::move(data);
 		m_LevelChange->DataOffset = range.Offset;
+		m_LevelChange->FadeIn = fadeIn;
 		return true;
 	}
 
@@ -722,11 +735,12 @@ namespace Strata
 
 		nvrhi::TextureHandle texture = std::move(change.Texture);
 		const uint32_t firstLevel = change.FirstLevel;
+		const bool fadeIn = change.FadeIn;
 		m_LevelChange.reset();
-		return SwapResidentTexture(std::move(texture), firstLevel) ? AssetFinalizeResult::Done : AssetFinalizeResult::Failed;
+		return SwapResidentTexture(std::move(texture), firstLevel, fadeIn) ? AssetFinalizeResult::Done : AssetFinalizeResult::Failed;
 	}
 
-	bool Texture::SwapResidentTexture(nvrhi::TextureHandle texture, uint32_t firstLevel)
+	bool Texture::SwapResidentTexture(nvrhi::TextureHandle texture, uint32_t firstLevel, bool fadeIn)
 	{
 		BindlessTextureTable& bindless = Renderer::GetBindlessTextures();
 		const uint32_t slot = bindless.Allocate(texture);
@@ -735,6 +749,10 @@ namespace Strata
 		// The old slot keeps its texture until no frame in flight samples it; frames from now on sample the new one.
 		bindless.Release(m_BindlessSlot);
 		m_BindlessSlot = slot;
+		// Material data names the texture by its table index: only the entry follows the new slot. Levels gained fade in
+		// from the finest one the replaced texture had (unless the raise asked for none); dropped ones go at once.
+		const uint32_t resident = GetResidentLevel();
+		Renderer::GetTextureTable().SetFadeIn(m_TableIndex, GetTableEntry(), fadeIn && resident > firstLevel ? resident - firstLevel : 0);
 		m_GPUTexture = std::move(texture);
 		m_ResidentLevel.store(firstLevel, std::memory_order_release);
 		m_ResidentBytes.store(GetLevelBytes(firstLevel, m_MipCount), std::memory_order_release);

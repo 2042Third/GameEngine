@@ -8,6 +8,7 @@
 #include "Strata/Core/Timer.h"
 #include "Strata/Input/Input.h"
 
+#include <algorithm>
 #include <chrono>
 #include <thread>
 
@@ -318,7 +319,8 @@ namespace Strata
 			module->OnUpdate(frame);
 		for (EngineModule* module : modules)
 			module->OnRenderUI(frame);
-		m_LastFrameWorkTime = Time::GetTime() - frameStart - frame.WaitSeconds;
+		// Waits timed as stages outside the work time (the display's image at its first use) are no work either.
+		m_LastFrameWorkTime = std::max(0.0, Time::GetTime() - frameStart - frame.WaitSeconds - profiler.GetOutOfWorkSeconds());
 
 		for (auto it = modules.rbegin(); it != modules.rend(); ++it)
 			(*it)->OnEndFrame(frame);

@@ -98,8 +98,8 @@ namespace Strata
 			ranges.push_back(DrawRange { &binding, firstVertex, vertexCount });
 	}
 
-	bool TextRenderer::Prepare(Scene& scene, const glm::uvec2& viewportSize, bool drawScreenSpace, nvrhi::ICommandList* commandList, TextRenderStats& outStats,
-		const SceneScreenView& screenView)
+	bool TextRenderer::Prepare(Scene& scene, const glm::uvec2& viewportSize, bool drawScreenSpace, const glm::vec3& cameraPosition, nvrhi::ICommandList* commandList,
+		TextRenderStats& outStats, const SceneScreenView& screenView)
 	{
 		m_Vertices.clear();
 		m_WorldRanges.clear();
@@ -159,8 +159,11 @@ namespace Strata
 			}
 			else
 			{
-				// In the entity's XY plane (facing +Z), vertically centered on its origin, FontSize world units per em.
-				transform = world.Matrix * glm::scale(glm::mat4(1.0f), glm::vec3(size)) * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -m_Layout.Min.y * 0.5f, 0.0f));
+				// In the entity's XY plane (facing +Z), vertically centered on its origin, FontSize world units per em; the camera's
+				// position comes off the translation before anything is added to it.
+				glm::mat4 relative = world.Matrix;
+				relative[3] -= glm::vec4(cameraPosition, 0.0f);
+				transform = relative * glm::scale(glm::mat4(1.0f), glm::vec3(size)) * glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -m_Layout.Min.y * 0.5f, 0.0f));
 			}
 			AppendQuads(GetBinding(*atlas), transform, text.Color, text.ScreenSpace);
 			outStats.Texts++;

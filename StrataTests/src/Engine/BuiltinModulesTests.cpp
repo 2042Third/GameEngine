@@ -144,6 +144,8 @@ TEST_SUITE("Engine.Modules")
 		// The renderer draws its gizmo with the colliders (ComponentInfo::Gizmo).
 		CHECK(result.Output.find("gizmos: a box per vehicle") != std::string::npos);
 		CHECK(result.Output.find("late registration refused: Component 'Late' is not registered: the component registry is frozen") != std::string::npos);
+		// Its context copier (Scene::RegisterContextCopier) runs for every copy of a scene.
+		CHECK(result.Output.find("context copiers: one run per full copy, none for snapshots, late registration refused") != std::string::npos);
 
 		// This process lacks the game's component: its scene still loads, keeps the component and saves it unchanged.
 		REQUIRE(ComponentRegistry::Find("TestVehicle") == nullptr);

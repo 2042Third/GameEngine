@@ -4,6 +4,7 @@
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Renderer/TextureStreamingTestUtils.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
+#include "Strata/Core/FrameProfiler.h"
 #include "Strata/GameUI/GameUIComponents.h"
 #include "Strata/GameUI/GameUIHitTest.h"
 #include "Strata/GameUI/GameUIRenderer.h"
@@ -11,6 +12,8 @@
 #include "Strata/Renderer/Font.h"
 #include "Strata/Renderer/FontAtlas.h"
 #include "Strata/Renderer/FontAtlasCache.h"
+#include "Strata/Renderer/GPUProfiler.h"
+#include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/SceneOverlay.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Renderer/TextureStreamer.h"
@@ -24,6 +27,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <span>
@@ -325,6 +329,82 @@ TEST_SUITE("GPU.GameUI")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("The UI pass is timed on the GPU as GPU.UI, in a scene's frames and in a game's scene without a camera")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		// Registered with the module (RegisterGameUIModule), so a perf log has its column from its first row.
+		const FrameStageID stage = FrameProfiler::Get().FindStage("GPU.UI");
+		REQUIRE(stage != c_InvalidFrameStage);
+		CHECK(FrameProfiler::Get().GetStageKind(stage) == FrameStageKind::GPU);
+		if (!Renderer::GetGPUProfiler().IsEnabled())
+		{
+			MESSAGE("The device writes no timestamps: nothing to time");
+			CHECK(gpu.GetNewErrorCount() == 0);
+			return;
+		}
+		// The stage's time of a renderer's latest timed frame; -1 when the frame has none.
+		const auto stageMs = [stage](const SceneRendererGPUStats& stats)
+		{
+			for (const GPUStageTime& time : stats.StageMs)
+			{
+				if (time.Stage == stage)
+					return time.Milliseconds;
+			}
+			return -1.0f;
+		};
+		// Frames as an application runs them, so the profiler resolves their timestamps.
+		const auto timedFrames = [&gpu](const std::function<void()>& render)
+		{
+			for (int32_t frame = 0; frame < 2; frame++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				render();
+				gpu.GetDevice().EndFrame();
+			}
+		};
+
+		// A scene with a camera: its canvas over the image.
+		UIScene ui;
+		ui.AddImage(ui.Canvas, "Panel", { 8.0f, 8.0f }, { 48.0f, 48.0f }, { 0.0f, 0.0f, 1.0f, 1.0f });
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(64, 64);
+		timedFrames([&]() { REQUIRE(renderer.Render(ui.Target, BlackCamera())); });
+		CHECK(renderer.GetStats().Overlays.DrawCalls == 1);
+		renderer.ResolveGPUStats(true);
+		REQUIRE(renderer.GetGPUStats().HasTimes);
+		CHECK(stageMs(renderer.GetGPUStats()) >= 0.0f);
+		CHECK(stageMs(renderer.GetGPUStats()) <= renderer.GetGPUStats().BusyMs);
+
+		// A game whose scene has no camera draws its menu through the same pass.
+		Ref<Scene> menu = CreateRef<Scene>("Menu");
+		Entity canvas = menu->CreateEntity("Canvas");
+		canvas.AddComponent<UIRectComponent>();
+		canvas.AddComponent<UICanvasComponent>().ScaleMode = UICanvasScaleMode::ConstantPixelSize;
+		Entity panel = menu->CreateChildEntity(canvas, "Panel");
+		panel.AddComponent<UIRectComponent>().Size = { 32.0f, 32.0f };
+		panel.AddComponent<UIImageComponent>().Color = { 0.0f, 1.0f, 0.0f, 1.0f };
+		GameRenderer game;
+		nvrhi::TextureDesc desc;
+		desc.width = 64;
+		desc.height = 64;
+		desc.format = nvrhi::Format::BGRA8_UNORM;
+		desc.isRenderTarget = true;
+		desc.initialState = nvrhi::ResourceStates::RenderTarget;
+		desc.keepInitialState = true;
+		nvrhi::TextureHandle target = Renderer::GetDevice()->createTexture(desc);
+		nvrhi::FramebufferHandle framebuffer = Renderer::GetDevice()->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(target));
+		REQUIRE(framebuffer);
+		timedFrames([&]() { REQUIRE(game.Render(menu, framebuffer, { 64, 64 })); });
+		CHECK_FALSE(game.IsShowingMessage());
+		SceneRenderer& gameRenderer = game.GetSceneRenderer();
+		gameRenderer.ResolveGPUStats(true);
+		REQUIRE(gameRenderer.GetGPUStats().HasTimes);
+		CHECK(stageMs(gameRenderer.GetGPUStats()) >= 0.0f);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Screen-space canvases hide with the HUD, and a scene without a camera shows its UI instead of a message")
 	{
 		GPUContext gpu;
@@ -619,6 +699,66 @@ TEST_SUITE("GPU.GameUI")
 			CHECK(renderer.GetStats().Overlays.Canvases == 1);
 			CHECK(renderer.GetStats().Overlays.HiddenCanvases == 1);
 		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A world-space canvas 100 km from the origin draws as it does at the origin, behind the same geometry")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle red = assets.AddMaterial(UnlitColor({ 1.0f, 0.0f, 0.0f, 1.0f }));
+		// A 2 x 1 m sign with a checker of 10 cm squares, a cube turned through it (the sign's depth test against the scene
+		// decides the line where they meet), seen from a meter and a half: a pixel spans about 7 mm there, what 32-bit world
+		// positions resolve 100 km from the origin. Everything at `offset` (exact as floats far from the origin too).
+		const auto renderAt = [&](const glm::vec3& offset)
+		{
+			UIScene ui;
+			Entity sign = ui.Target.CreateEntity("Sign");
+			sign.GetComponent<TransformComponent>().Translation = offset;
+			sign.AddComponent<UIRectComponent>();
+			UICanvasComponent& canvas = sign.AddComponent<UICanvasComponent>();
+			canvas.RenderMode = UICanvasRenderMode::WorldSpace;
+			canvas.ReferenceResolution = { 200.0f, 100.0f };
+			canvas.WorldUnitsPerUnit = 0.01f;
+			ui.AddImage(sign, "Panel", { 0.0f, 0.0f }, { 200.0f, 100.0f }, { 0.0f, 1.0f, 0.0f, 1.0f });
+			for (int y = 0; y < 10; y++)
+			{
+				for (int x = (y % 2); x < 20; x += 2)
+					ui.AddImage(sign, "Square", { static_cast<float>(x) * 10.0f, static_cast<float>(y) * 10.0f }, { 10.0f, 10.0f }, { 0.0f, 0.0f, 1.0f, 1.0f });
+			}
+			Entity cube = AddMesh(ui.Target, BuiltinAssets::CubeMesh, red, offset + glm::vec3(0.25f, 0.0f, 0.0f), "Cube");
+			cube.GetComponent<TransformComponent>().Rotation = glm::quat(glm::vec3(0.3f, 0.7f, 0.0f));
+			cube.GetComponent<TransformComponent>().Scale = glm::vec3(0.5f);
+
+			const glm::uvec2 size(256, 256);
+			SceneCamera camera = LookAt(offset + glm::vec3(0.125f, 0.25f, 1.5f), offset + glm::vec3(0.0f, 0.0f, 0.0f));
+			camera.Projection = Math::PerspectiveReverseZ(glm::radians(60.0f), 1.0f, 0.1f, 500.0f);
+			camera.ClearColor = { 0.0f, 0.0f, 0.0f, 1.0f };
+			SceneRenderer renderer(ExactSpecification());
+			renderer.SetViewportSize(size.x, size.y);
+			ReadbackImage image;
+			for (int frame = 0; frame < 3; frame++)
+				image = RenderToImage(renderer, ui.Target, camera);
+			CHECK(renderer.GetStats().Overlays.Canvases == 2); // The sign, and UIScene's empty screen canvas
+			return image;
+		};
+		const ReadbackImage origin = renderAt(glm::vec3(0.0f));
+		const ReadbackImage distant = renderAt(glm::vec3(100'000.0f, 0.0f, 100'000.0f));
+		size_t differing = 0;
+		for (size_t index = 0; index < origin.Pixels.size(); index += 4)
+		{
+			for (size_t channel = 0; channel < 3; channel++)
+			{
+				if (std::abs(int(origin.Pixels[index + channel]) - int(distant.Pixels[index + channel])) > 2)
+				{
+					differing++;
+					break;
+				}
+			}
+		}
+		MESSAGE(differing, " of ", origin.Pixels.size() / 4, " pixels differ 100 km away");
+		CHECK(static_cast<double>(differing) <= 0.001 * static_cast<double>(origin.Pixels.size() / 4));
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

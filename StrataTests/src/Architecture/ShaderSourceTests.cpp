@@ -30,11 +30,6 @@ namespace
 		"texture", "textureOffset", "textureProj", "textureProjOffset",
 	};
 
-	// Shaders that still take derivatives after a discard, which their owners fix (the test fails once one no longer does,
-	// so the list only shrinks). Scene/Forward.frag: the transparent variant's alpha-mask discard comes before the
-	// material's other textures are sampled.
-	constexpr std::array<std::string_view, 1> c_KnownDerivativesAfterDiscard = { "Scene/Forward.frag" };
-
 	// Keywords followed by parentheses and a block, which are no function definitions.
 	constexpr std::array<std::string_view, 4> c_Statements = { "if", "for", "while", "switch" };
 
@@ -275,14 +270,7 @@ TEST_SUITE("Architecture.Shaders")
 			REQUIRE(source);
 			const std::string name = FileSystem::ToUTF8(path.lexically_relative(root));
 			CAPTURE(name);
-			const std::vector<std::string> problems = FindDerivativesAfterDiscard(name, *source, functions);
-			const bool known = std::find(c_KnownDerivativesAfterDiscard.begin(), c_KnownDerivativesAfterDiscard.end(), name) != c_KnownDerivativesAfterDiscard.end();
-			if (known)
-			{
-				CHECK_MESSAGE(!problems.empty(), "takes no derivatives after a discard any more: remove it from c_KnownDerivativesAfterDiscard");
-				continue;
-			}
-			for (const std::string& problem : problems)
+			for (const std::string& problem : FindDerivativesAfterDiscard(name, *source, functions))
 				FAIL_CHECK(problem);
 		}
 	}

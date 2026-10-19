@@ -31,6 +31,19 @@ uint GetClusterStride()
 	return u_Frame.ClusterGrid.w + 1u;
 }
 
+// How much a light matters to the view, as SceneRenderer::CollectLights ranks lights (from its view-space bounding sphere):
+// lights whose region contains the camera first, then by the projected size of that region (its radius alone in
+// orthographic views). A full light cluster keeps the most relevant lights.
+float GetLightRelevance(vec4 viewBounds)
+{
+	if (u_Frame.CameraForward.w > 0.5)
+		return viewBounds.w;
+	float distanceToCenter = length(viewBounds.xyz);
+	if (distanceToCenter <= viewBounds.w)
+		return 3.402823466e38;
+	return viewBounds.w / (distanceToCenter - viewBounds.w);
+}
+
 // View depth where depth slice `slice` begins; slice ClusterGrid.z is where the last one ends.
 float GetClusterSliceStart(uint slice)
 {

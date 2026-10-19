@@ -1,9 +1,14 @@
 #pragma once
 
 #include "Strata/Renderer/GraphicsDevice.h"
+#include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/Renderer.h"
 
 #include <glm/glm.hpp>
+
+#include <cstdint>
+#include <optional>
+#include <vector>
 
 namespace Strata::Tests
 {
@@ -41,6 +46,20 @@ namespace Strata::Tests
 		GraphicsDevice* m_Device = nullptr;
 		uint32_t m_InitialErrorCount = 0;
 	};
+
+	// A range of a GPU buffer, copied to the CPU (blocks until the GPU is done); empty when the copy cannot be made.
+	std::vector<uint8_t> ReadBufferRange(GPUContext& gpu, nvrhi::IBuffer* buffer, uint64_t offset, uint64_t size);
+
+	// A mesh's geometry as the geometry pool holds it: the bytes of each of its streams (the skin stream empty for meshes
+	// without one). Nullopt while the mesh is not uploaded.
+	struct MeshGeometryBytes
+	{
+		std::vector<uint8_t> Positions;
+		std::vector<uint8_t> Attributes;
+		std::vector<uint8_t> Skin;
+		std::vector<uint8_t> Indices;
+	};
+	std::optional<MeshGeometryBytes> ReadMeshGeometry(GPUContext& gpu, const Mesh& mesh);
 
 	inline glm::u8vec4 GetPixelRGBA8(const ReadbackImage& image, uint32_t x, uint32_t y)
 	{

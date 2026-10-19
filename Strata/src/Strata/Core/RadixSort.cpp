@@ -3,6 +3,7 @@
 
 #include "Strata/Core/Assert.h"
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <utility>
@@ -63,6 +64,25 @@ namespace Strata
 		}
 		if (source != &items)
 			items.swap(scratch);
+	}
+
+	void SortIndices(std::vector<uint32_t>& values, std::vector<SortItem>& items, std::vector<SortItem>& scratch)
+	{
+		// Below this many values a comparison sort is as fast as the radix sort's passes.
+		constexpr size_t c_RadixSortValues = 256;
+		if (values.size() < c_RadixSortValues)
+		{
+			std::sort(values.begin(), values.end());
+			return;
+		}
+		if (std::is_sorted(values.begin(), values.end()))
+			return;
+		items.resize(values.size());
+		for (size_t index = 0; index < values.size(); index++)
+			items[index] = SortItem { values[index], values[index], 0 };
+		RadixSort(items, scratch);
+		for (size_t index = 0; index < values.size(); index++)
+			values[index] = items[index].Value;
 	}
 
 }

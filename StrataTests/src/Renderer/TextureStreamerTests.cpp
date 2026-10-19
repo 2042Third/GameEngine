@@ -123,7 +123,7 @@ TEST_SUITE("Renderer.TextureStreamer")
 		policy.AddNeed(texture, 3, 0.20f, false);
 		policy.AddNeed(texture, 4, 0.40f, true, true);
 		policy.AddNeed(other, 8, 0.01f, false);
-		policy.Update(1);
+		policy.Update(1, 1.0);
 		const TextureStreamingPolicy::Target* target = policy.Find(texture);
 		REQUIRE(target);
 		CHECK(target->Level == 3);
@@ -138,70 +138,120 @@ TEST_SUITE("Renderer.TextureStreamer")
 
 		// The next frame starts anew: its needs alone count (coverage, camera cut).
 		policy.AddNeed(texture, 5, 0.10f, false);
-		policy.Update(2);
+		policy.Update(2, 2.0);
 		CHECK(policy.Find(texture)->Coverage == doctest::Approx(0.10f));
 		CHECK_FALSE(policy.Find(texture)->CameraCut);
 		CHECK_FALSE(policy.Find(texture)->Whole);
 		CHECK(policy.Find(texture)->Level == 3); // Held: see the hysteresis test
 	}
 
-	TEST_CASE("Detail rises at once and falls only after 120 frames without a need of it")
+	TEST_CASE("Detail rises at once and falls only after 30 seconds without a need of it, however many frames pass")
 	{
 		TextureStreamingPolicy policy;
+		CHECK(policy.GetIdleDropSeconds() == TextureStreamingPolicy::c_IdleDropSeconds);
+		const double idle = TextureStreamingPolicy::c_IdleDropSeconds;
 		const AssetHandle texture(0x9200);
 		uint64_t frame = 1;
+		double seconds = 100.0;
 		policy.AddNeed(texture, 5, 0.1f, false);
-		policy.Update(frame);
+		policy.Update(frame, seconds);
 		CHECK(policy.Find(texture)->Level == 5);
 
 		// Finer: at once.
 		policy.AddNeed(texture, 2, 0.5f, false);
-		policy.Update(++frame);
+		seconds += 0.016;
+		policy.Update(++frame, seconds);
 		CHECK(policy.Find(texture)->Level == 2);
-		const uint64_t heldFrom = frame;
+		const double heldFrom = seconds;
 
-		// Coarser needs: the finer level is held for 120 frames after it was last needed, then follows the need.
-		for (; frame < heldFrom + TextureStreamingPolicy::c_DropDelayFrames - 1;)
+		// Coarser needs: the finer level is held for 30 seconds after it was last needed, whatever the frames (2,000 of them
+		// here, where the old rule dropped it after 120), then follows the need.
+		constexpr uint32_t c_Frames = 2000;
+		for (uint32_t step = 1; step < c_Frames; step++)
 		{
 			policy.AddNeed(texture, 6, 0.05f, false);
-			policy.Update(++frame);
+			policy.Update(++frame, heldFrom + idle * static_cast<double>(step) / c_Frames);
 			REQUIRE(policy.Find(texture)->Level == 2);
 		}
 		policy.AddNeed(texture, 6, 0.05f, false);
-		policy.Update(++frame);
-		CHECK(frame == heldFrom + TextureStreamingPolicy::c_DropDelayFrames);
+		seconds = heldFrom + idle;
+		policy.Update(++frame, seconds);
 		CHECK(policy.Find(texture)->Level == 6);
 
 		// A need of the held level (or finer) restarts the wait.
 		policy.AddNeed(texture, 1, 0.9f, false);
-		policy.Update(++frame);
-		const uint64_t raisedAt = frame;
+		seconds += 1.0;
+		policy.Update(++frame, seconds);
 		policy.AddNeed(texture, 4, 0.2f, false);
-		policy.Update(++frame);
+		seconds += 10.0;
+		policy.Update(++frame, seconds);
 		policy.AddNeed(texture, 1, 0.9f, false);
-		policy.Update(++frame);
-		for (uint32_t step = 0; step < 100; step++)
-		{
-			policy.AddNeed(texture, 4, 0.2f, false);
-			policy.Update(++frame);
-		}
-		CHECK(frame - raisedAt > 100);
+		seconds += 10.0;
+		policy.Update(++frame, seconds);
+		const double raisedAgain = seconds;
+		policy.AddNeed(texture, 4, 0.2f, false);
+		seconds = raisedAgain + idle - 0.5; // More than 30 seconds after the first need of level 1, less after the second
+		policy.Update(++frame, seconds);
 		CHECK(policy.Find(texture)->Level == 1);
 
-		// Needed by nobody: kept for 120 frames, then the tail (no level), then forgotten.
+		// Needed by nobody: kept for 30 seconds, then the tail (no level), then forgotten at twice that.
 		policy.AddNeed(texture, 1, 0.9f, false);
-		policy.Update(++frame);
-		const uint64_t lastNeeded = frame;
-		while (frame < lastNeeded + TextureStreamingPolicy::c_DropDelayFrames - 1)
-			policy.Update(++frame);
+		seconds += 1.0;
+		policy.Update(++frame, seconds);
+		const double lastNeeded = seconds;
+		CHECK(policy.Find(texture)->LastNeededSeconds == lastNeeded);
+		policy.Update(++frame, lastNeeded + idle - 0.1);
 		CHECK(policy.Find(texture)->Level == 1);
 		CHECK(policy.Find(texture)->Coverage == 0.0f);
-		while (frame < lastNeeded + TextureStreamingPolicy::c_DropDelayFrames + 1)
-			policy.Update(++frame);
+		policy.Update(++frame, lastNeeded + idle);
 		CHECK(policy.Find(texture)->Level == TextureStreamingPolicy::c_NoLevel);
-		while (frame < lastNeeded + TextureStreamingPolicy::c_ForgetFrames)
-			policy.Update(++frame);
+		policy.Update(++frame, lastNeeded + TextureStreamingPolicy::c_ForgetFactor * idle - 0.1);
+		REQUIRE(policy.Find(texture) != nullptr);
+		policy.Update(++frame, lastNeeded + TextureStreamingPolicy::c_ForgetFactor * idle);
 		CHECK(policy.Find(texture) == nullptr);
+	}
+
+	TEST_CASE("Levels nothing needs go least recently needed first")
+	{
+		TextureStreamingPolicy policy;
+		const AssetHandle early(0x9220);
+		const AssetHandle late(0x9221);
+		const AssetHandle tie(0x9222);
+		policy.AddNeed(early, 1, 0.5f, false);
+		policy.AddNeed(late, 1, 0.5f, false);
+		policy.AddNeed(tie, 1, 0.5f, false);
+		policy.Update(1, 10.0);
+		policy.AddNeed(late, 1, 0.5f, false);
+		policy.AddNeed(tie, 1, 0.5f, false);
+		policy.Update(2, 20.0);
+		std::vector<AssetHandle> order = { tie, late, early };
+		std::sort(order.begin(), order.end(), [&policy](AssetHandle a, AssetHandle b)
+		{
+			return TextureStreamingPolicy::DropsBefore(policy.Find(a)->HeldSeconds, a, policy.Find(b)->HeldSeconds, b);
+		});
+		// The one needed at 10 s first, then the two needed at 20 s by handle.
+		CHECK(order == std::vector<AssetHandle> { early, late, tie });
+	}
+
+	TEST_CASE("A program sets how long unneeded levels stay")
+	{
+		TextureStreamingPolicy policy;
+		policy.SetIdleDropSeconds(0.5);
+		CHECK(policy.GetIdleDropSeconds() == 0.5);
+		const AssetHandle texture(0x9210);
+		policy.AddNeed(texture, 2, 0.5f, false);
+		policy.Update(1, 10.0);
+		policy.AddNeed(texture, 6, 0.05f, false);
+		policy.Update(2, 10.4);
+		CHECK(policy.Find(texture)->Level == 2);
+		policy.AddNeed(texture, 6, 0.05f, false);
+		policy.Update(3, 10.5);
+		CHECK(policy.Find(texture)->Level == 6);
+		// Forgotten at twice the time; a negative time is no time.
+		policy.Update(4, 11.5);
+		CHECK(policy.Find(texture) == nullptr);
+		policy.SetIdleDropSeconds(-1.0);
+		CHECK(policy.GetIdleDropSeconds() == 0.0);
 	}
 
 	TEST_CASE("Only targets that changed in a way that can call for another level are listed as changed")
@@ -209,7 +259,10 @@ TEST_SUITE("Renderer.TextureStreamer")
 		TextureStreamingPolicy policy;
 		const AssetHandle texture(0x9300);
 		const AssetHandle other(0x9301);
+		// A frame per second here: the idle drop time is 30 frames, the forget time 60.
 		uint64_t frame = 1;
+		const auto update = [&policy, &frame]() { policy.Update(frame, static_cast<double>(frame)); };
+		const uint64_t forgetFrames = static_cast<uint64_t>(TextureStreamingPolicy::c_ForgetFactor * TextureStreamingPolicy::c_IdleDropSeconds);
 		auto changed = [&policy]()
 		{
 			std::vector<AssetHandle> handles(policy.GetChanged().begin(), policy.GetChanged().end());
@@ -220,46 +273,53 @@ TEST_SUITE("Renderer.TextureStreamer")
 		// New targets.
 		policy.AddNeed(texture, 4, 0.2f, false);
 		policy.AddNeed(other, 6, 0.1f, false);
-		policy.Update(frame);
+		update();
 		CHECK(changed() == std::vector<AssetHandle> { texture, other });
 
 		// The same needs, also with another coverage or a camera cut: nothing that calls for another level.
 		policy.AddNeed(texture, 4, 0.3f, true);
 		policy.AddNeed(other, 6, 0.1f, false);
-		policy.Update(++frame);
+		frame++;
+		update();
 		CHECK(changed().empty());
 		// A coarser need while the finer level is held: no change either.
 		policy.AddNeed(texture, 5, 0.1f, false);
 		policy.AddNeed(other, 6, 0.1f, false);
-		policy.Update(++frame);
+		frame++;
+		update();
 		CHECK(changed().empty());
 		CHECK(policy.Find(texture)->Level == 4);
 
 		// A finer level.
 		policy.AddNeed(texture, 2, 0.6f, false);
 		policy.AddNeed(other, 6, 0.1f, false);
-		policy.Update(++frame);
+		frame++;
+		update();
 		CHECK(changed() == std::vector<AssetHandle> { texture });
 
 		// Not needed any more (a texture no longer drawn may give up what it does not need), then needed again.
 		policy.AddNeed(texture, 2, 0.6f, false);
-		policy.Update(++frame);
+		frame++;
+		update();
 		CHECK(changed() == std::vector<AssetHandle> { other });
 		policy.AddNeed(texture, 2, 0.6f, false);
-		policy.Update(++frame);
+		frame++;
+		update();
 		CHECK(changed().empty());
 		policy.AddNeed(texture, 2, 0.6f, false);
 		policy.AddNeed(other, 6, 0.1f, false);
-		policy.Update(++frame);
+		frame++;
+		update();
 		CHECK(changed() == std::vector<AssetHandle> { other });
 
 		// Unneeded long enough: its level goes (once), then it is forgotten (once).
 		const uint64_t lastNeeded = frame;
 		uint32_t levelChanges = 0;
-		while (frame < lastNeeded + TextureStreamingPolicy::c_ForgetFrames - 1)
+		while (frame < lastNeeded + forgetFrames - 1)
 		{
 			policy.AddNeed(other, 6, 0.1f, false);
-			policy.Update(++frame);
+			frame++;
+			update();
 			if (frame == lastNeeded + 1)
 				CHECK(changed() == std::vector<AssetHandle> { texture });
 			else if (!changed().empty())
@@ -272,7 +332,8 @@ TEST_SUITE("Renderer.TextureStreamer")
 		CHECK(levelChanges == 1);
 		REQUIRE(policy.Find(texture));
 		policy.AddNeed(other, 6, 0.1f, false);
-		policy.Update(++frame);
+		frame++;
+		update();
 		CHECK(changed() == std::vector<AssetHandle> { texture });
 		CHECK(policy.Find(texture) == nullptr);
 	}

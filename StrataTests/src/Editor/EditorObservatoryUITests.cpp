@@ -19,6 +19,7 @@
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FrameProfiler.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Renderer/GPUProfiler.h>
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -197,12 +198,14 @@ TEST_SUITE("Editor.UI")
 		nlohmann::json command;
 		editor.FrameWith([&]() { command = editor.Run("asset.stats"); });
 		REQUIRE(panel->GetStats());
-		// asset.stats adds the imports' memory estimates of the project's manager (EditorAssetManager), which the panel's
-		// statistics, those of any asset manager, do not hold.
+		// asset.stats adds the renderer's geometry pool (null here: no renderer) and the imports' memory estimates of the
+		// project's manager (EditorAssetManager), which the panel's statistics, those of any asset manager, do not hold.
 		REQUIRE(command.contains("importMemoryMB"));
 		nlohmann::json managerStats = command;
 		managerStats.erase("importMemoryMB");
-		CHECK(CommandUtils::DescribeAssetStats(*panel->GetStats()) == managerStats);
+		nlohmann::json expected = CommandUtils::DescribeAssetStats(*panel->GetStats());
+		expected["geometryPool"] = CommandUtils::DescribeGeometryPool();
+		CHECK(expected == managerStats);
 		CHECK(command["registered"].get<uint32_t>() > 10);
 
 		// Nothing was uploaded (no renderer): the sparkline says so instead of showing an empty box.
@@ -630,6 +633,85 @@ TEST_SUITE("Editor.UI")
 		CHECK((*copied)["frames"].get<uint32_t>() >= 8);
 		CHECK((*copied)["stages"].size() == perf["stages"].size());
 		CHECK((*copied)["stages"]["Assets.Update"]["avgMs"].get<float>() > 0.0f);
+	}
+
+	TEST_CASE("The Performance panel shows the GPU's frames under the CPU's, and the frame pill what bounds them")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIPerformanceGPU"));
+		FrameProfiler& profiler = FrameProfiler::Get();
+		profiler.Reset();
+		const bool expected = profiler.AreGPUTimesExpected();
+		profiler.SetGPUTimesExpected(true);
+		const RendererGPUStages& stages = RendererGPUStages::Get();
+		// Fake GPU times, a frame late as the renderer delivers them: far longer than the frames, so the GPU bounds them.
+		// Every fourth frame's never come: its GPU column stays blank.
+		const auto profiledFrames = [&](int count)
+		{
+			for (int frame = 0; frame < count; frame++)
+			{
+				profiler.BeginFrame();
+				editor.Frames(1);
+				profiler.EndFrame(0.002);
+				const uint64_t index = profiler.GetTotalFrameCount() - 1;
+				if (index % 4 != 3)
+					REQUIRE(profiler.RecordGPUFrame(index, std::vector<GPUStageTime> { { stages.Opaque, 600.0f }, { stages.Shadows, 400.0f } }));
+			}
+		};
+		profiledFrames(8);
+		REQUIRE(editor.Click("Status.Frame"));
+		profiledFrames(8);
+		ImGuiWindow* window = editor.FindPanelWindow(EditorPanels::c_Performance);
+		REQUIRE(window);
+		const std::optional<UI::ItemProbe::Item> cpu = UI::ItemProbe::Find("Performance.Timeline");
+		const std::optional<UI::ItemProbe::Item> gpu = UI::ItemProbe::Find("Performance.GPUTimeline");
+		REQUIRE(cpu);
+		REQUIRE(gpu);
+		// The same frames in the same columns: the GPU's strip under the CPU's, as wide.
+		CHECK(gpu->Min.y >= cpu->Max.y);
+		CHECK(gpu->Min.x == doctest::Approx(cpu->Min.x));
+		CHECK(gpu->Max.x == doctest::Approx(cpu->Max.x));
+		CHECK(UI::ItemProbe::Find("Performance.GPUSection").has_value());
+		const std::optional<UI::ItemProbe::Item> bound = UI::ItemProbe::Find("Performance.Bound");
+		REQUIRE(bound);
+		CHECK(bound->Text.starts_with("GPU-bound: GPU 1000.0 ms busy"));
+		CHECK(ImGuiHarness::CountFallbackGlyphs(window) == 0);
+
+		// A GPU frame under the mouse explains itself too.
+		editor.Harness.MoveMouse(ImVec2(gpu->Max.x - 2.0f, gpu->GetCenter().y));
+		profiledFrames(2);
+		ImGuiWindow* tooltip = ImGui::FindWindowByName("##Tooltip_00");
+		REQUIRE(tooltip);
+		CHECK(tooltip->Active);
+		CHECK(ImGuiHarness::CountFallbackGlyphs(tooltip) == 0);
+
+		// The frame pill's tooltip names the bound.
+		const std::optional<UI::ItemProbe::Item> pill = UI::ItemProbe::Find("Status.Frame");
+		REQUIRE(pill);
+		editor.Harness.MoveMouse(pill->GetCenter());
+		editor.Frames(8, 0.1f);
+		const std::optional<UI::ItemProbe::Item> pillTooltip = UI::ItemProbe::Find("Status.FrameTooltip");
+		REQUIRE(pillTooltip);
+		CHECK(pillTooltip->Text.find("GPU-bound: GPU") != std::string::npos);
+
+		profiler.SetGPUTimesExpected(expected);
+		profiler.Reset();
+	}
+
+	TEST_CASE("What bounds the frames reads as a line for the panel and the frame pill")
+	{
+		FrameProfileSummary summary;
+		summary.Work.P50 = 9.8f;
+		summary.Interval.P50 = 12.3f;
+		summary.GPU.Frames = 10;
+		summary.GPU.Busy.P50 = 11.8f;
+		summary.GPU.BoundBy = FrameBound::GPU;
+		CHECK(PerformancePanel::DescribeBound(summary) == "GPU-bound: GPU 11.8 ms busy of 12.3 ms frames (CPU 9.8 ms)");
+		summary.GPU.BoundBy = FrameBound::CPU;
+		CHECK(PerformancePanel::DescribeBound(summary).starts_with("CPU-bound: CPU 9.8 ms of 12.3 ms frames"));
+		summary.GPU.BoundBy = FrameBound::Capped;
+		CHECK(PerformancePanel::DescribeBound(summary).starts_with("Capped: 12.3 ms frames"));
+		summary.GPU.BoundBy = FrameBound::Unknown;
+		CHECK(PerformancePanel::DescribeBound(summary).starts_with("Bound by: unknown"));
 	}
 
 	TEST_CASE("The Performance panel opened before any frame was profiled shows the first frames at once")

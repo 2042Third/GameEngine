@@ -3,6 +3,7 @@
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
 #include "Strata/Math/AABB.h"
+#include "Strata/Renderer/RenderLights.h"
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Renderer/SpatialIndex.h"
 
@@ -59,10 +60,12 @@ namespace Strata
 		// ones, or all of them after the manager changed (or forgot the changes); none in a sync after which nothing loaded,
 		// reloaded, was dropped or got other recorded bounds.
 		uint32_t LastSyncMeshChecks = 0;
+		uint32_t MirroredProxies = 0;   // Proxies whose world transform mirrors (RenderProxyFlags::Mirrored)
 		uint32_t SkinProxies = 0;       // Proxies with a SkinComponent
 		uint32_t PosedProxies = 0;      // Of those, posed (RenderProxyFlags::Skinned)
 		uint32_t PaletteJoints = 0;     // Joint matrices of the posed proxies' palettes
 		uint32_t LastSyncPoses = 0;     // Palettes the latest Sync computed (poses or placements that changed)
+		float CloneMs = 0.0f;           // A clone (CopyIntoScene): how long making it took
 	};
 
 	// The renderer's persistent view of a scene's mesh renderers: one render proxy per entity with a MeshRendererComponent,
@@ -99,6 +102,10 @@ namespace Strata
 	// changes, in parallel chunks. Posed proxies carry RenderProxyFlags::Skinned and their instances c_InstanceSkinned with
 	// the palette's first joint (InstanceData::SkinPalette); the skinned pipelines blend it in the vertex shader.
 	//
+	// Readers follow the scene through three bounded change logs, by version: the instances (GetInstanceChanges), the
+	// palettes (GetPaletteChanges) and the proxies themselves (GetProxyChanges: placement, flags, mesh slot, instance range,
+	// creation and destruction), which the GPU's culling mirrors.
+	//
 	// One per scene, created on first use (Get) in the scene's registry context and shared by every renderer of the scene
 	// (the viewport and capture renderers). Main thread only.
 	class RenderScene
@@ -112,10 +119,28 @@ namespace Strata
 		static RenderScene& Get(Scene& scene);
 		// The scene's render scene if one was created.
 		static RenderScene* Find(Scene& scene);
+		static const RenderScene* Find(const Scene& scene);
+		// The copy hook of Scene::Copy (registered by the Renderer module): gives the copy a clone of the source's render scene,
+		// if it has one, so that the copy's first frame builds no proxy. The copy's entities have the source's identifiers, so
+		// every proxy, instance, slot and palette index is the same; the clone listens to the copy's registry, reads the
+		// copy's transform changes from then on (all of them once, if the source had changes it had not read) and the copy's
+		// scene services. Its GPU copy is made from the source's by GPU copies when the source's holds exactly what the clone
+		// does (RenderSceneGPUCache), and a renderer whose last render scene was the source keeps its state for the clone.
+		static void CopyIntoScene(const Scene& source, Scene& destination);
+		// The render scene this one is a clone of (CopyIntoScene), or 0.
+		uint64_t GetCloneSource() const { return m_CloneSource; }
+		// What the source's change logs stood at when the clone was made (the clone's logs start there).
+		struct ChangeVersions
+		{
+			uint64_t Proxy = 0;
+			uint64_t Instance = 0;
+			uint64_t Palette = 0;
+			uint64_t Light = 0;
+		};
+		const ChangeVersions& GetCloneVersions() const { return m_CloneVersions; }
 
 		~RenderScene();
 
-		RenderScene(const RenderScene&) = delete;
 		RenderScene& operator=(const RenderScene&) = delete;
 
 		// Unique in the process, so renderers can tell render scenes apart (a new scene may reuse an address).
@@ -143,8 +168,11 @@ namespace Strata
 		static constexpr uint32_t c_PrepareChunk = 2048;
 		// What a frame spends preparing a loaded scene (PrepareLoadedScene): 100,000 mesh renderers take about ten frames.
 		static constexpr std::chrono::microseconds c_PrepareFrameBudget { 4000 };
+		// What a frame uploads of a loaded scene's GPU copy (PrepareLoadedScene): new proxies' records and instances.
+		static constexpr uint64_t c_PrepareUploadBytes = 16ull << 20;
 		// SceneLoadOptions::Prepare for owners that render the scenes they load (the editor, StrataRuntime with a window):
-		// Prepare with the active asset manager and c_PrepareFrameBudget.
+		// Prepare with the active asset manager and c_PrepareFrameBudget, then, with a renderer, the scene's GPU copy
+		// (RenderSceneGPU) within c_PrepareUploadBytes per call; true once both are complete.
 		static bool PrepareLoadedScene(Scene& scene);
 
 		// Compares every proxy, the spatial index and the instance data with what a rebuild from the scene would produce.
@@ -171,12 +199,25 @@ namespace Strata
 
 		const SpatialIndex& GetSpatialIndex() const { return m_Index; }
 
+		// The scene's point and spot lights (synced with the proxies): what the GPU-driven path culls into the light clusters,
+		// and the CPU path walks.
+		const RenderLights& GetLights() const { return m_Lights; }
+
 		//////////////////////////////////////////////////////////////////////////
 		// Meshes and materials
 		//////////////////////////////////////////////////////////////////////////
 
 		uint32_t GetMeshSlotCapacity() const { return static_cast<uint32_t>(m_Meshes.size()); }
 		AssetHandle GetMeshHandle(uint32_t slot) const { return m_Meshes[slot].Handle; }
+		// The slot of a mesh (or material) the scene uses, or c_InvalidIndex.
+		uint32_t FindMeshSlot(AssetHandle mesh) const;
+		uint32_t FindMaterialSlot(AssetHandle material) const;
+		// Changes whenever a mesh or material slot is taken or let go: caches by slot compare the slots' handles again.
+		uint64_t GetSlotsVersion() const { return m_SlotsVersion; }
+		// The proxies that may draw any of `materialSlots`: those with one as their override material, and those without one
+		// whose mesh has a submesh with one. Appended to `outProxies`; a proxy appears more than once when its mesh uses
+		// several of the slots. How renderers find the users of a few materials (transparent ones) without walking every proxy.
+		void CollectMaterialUsers(std::span<const uint32_t> materialSlots, std::vector<uint32_t>& outProxies) const;
 		bool IsMeshLayoutKnown(uint32_t slot) const { return m_Meshes[slot].LayoutKnown; }
 		// Material slot of each submesh (the default material where the submesh has none).
 		std::span<const uint32_t> GetSubmeshMaterialSlots(uint32_t slot) const { return m_Meshes[slot].SubmeshMaterialSlots; }
@@ -200,6 +241,10 @@ namespace Strata
 		//////////////////////////////////////////////////////////////////////////
 
 		std::span<const RenderData::InstanceData> GetInstances() const { return m_Instances; }
+		// At most this many instances (RenderData::c_MaxRenderInstances, what a draw list entry can name; tests lower it): a
+		// proxy whose instances would not fit gets none and is not drawn (logged once).
+		void SetInstanceLimit(uint32_t limit);
+		uint32_t GetInstanceLimit() const { return m_InstanceLimit; }
 		// Changes with every change of the instance data.
 		uint64_t GetInstanceVersion() const { return m_InstanceVersion; }
 		// Appends the instances whose data changed after instance version `sinceVersion` (an instance may appear more than
@@ -209,6 +254,20 @@ namespace Strata
 
 		const RenderSceneStats& GetStats() const { return m_Stats; }
 
+		// Changes with every change of a proxy's placement (transform, bounds, flags, mesh slot) or instance range, creation
+		// and destruction. A reader takes it to read the changes after it later: from then on every change is logged again
+		// (a proxy changed several times between two reads is logged once).
+		uint64_t GetProxyVersion() const
+		{
+			m_ProxyChangesRead = m_ProxyVersion;
+			return m_ProxyVersion;
+		}
+		// Appends the proxies that changed after proxy version `sinceVersion` (a proxy may appear more than once; a destroyed
+		// proxy too, with a null entity). Returns false, appending nothing, when more than c_MaxProxyChanges changes happened
+		// since: then any proxy may have changed. The GPU mirror of the scene follows the proxies through it.
+		bool GetProxyChanges(uint64_t sinceVersion, std::vector<uint32_t>& outProxies) const;
+		static constexpr size_t c_MaxProxyChanges = 65536;
+
 		//////////////////////////////////////////////////////////////////////////
 		// Skinned proxies (palettes of joint matrices, see the class comment)
 		//////////////////////////////////////////////////////////////////////////
@@ -217,6 +276,9 @@ namespace Strata
 		entt::entity GetSkinAnimator(uint32_t proxy) const { return m_SkinIndices[proxy] != c_InvalidIndex ? m_Skins[m_SkinIndices[proxy]].Animator : entt::null; }
 		// Whether any proxy has a SkinComponent: renderers skip skinning work entirely otherwise.
 		bool HasSkinProxies() const { return !m_Skins.empty(); }
+		// The proxies with a skin entry, by index (in no particular order).
+		uint32_t GetSkinProxyCount() const { return static_cast<uint32_t>(m_Skins.size()); }
+		uint32_t GetSkinProxy(uint32_t index) const { return m_Skins[index].Proxy; }
 		// A posed proxy's palette: GetPaletteCount joint matrices from GetPaletteFirst on in GetPalette.
 		uint32_t GetPaletteFirst(uint32_t proxy) const { return m_SkinIndices[proxy] != c_InvalidIndex ? m_Skins[m_SkinIndices[proxy]].PaletteFirst : 0u; }
 		uint32_t GetPaletteCount(uint32_t proxy) const { return m_SkinIndices[proxy] != c_InvalidIndex ? m_Skins[m_SkinIndices[proxy]].PaletteCount : 0u; }
@@ -252,6 +314,9 @@ namespace Strata
 			uint64_t CheckedSync = 0;                          // The sync that last compared the layout with the loaded mesh
 			Ref<const MeshSkinBinding> Skin;                   // Skinned meshes: their binding (part of the layout)
 			uint32_t SkinJointsNeeded = 0;                     // One past the largest skeleton joint the binding names
+			// The distinct material slots of SubmeshMaterialSlots, and the mesh's place in each one's MaterialEntry::Meshes.
+			std::vector<uint32_t> Materials;
+			std::vector<uint32_t> MaterialPositions;
 		};
 
 		struct PaletteChange
@@ -293,6 +358,8 @@ namespace Strata
 		{
 			AssetHandle Handle = UUID::Null();
 			uint32_t References = 0; // Proxy overrides and mesh layouts naming it
+			std::vector<uint32_t> OverrideUsers; // Proxies with it as their override material
+			std::vector<uint32_t> Meshes;        // Mesh slots with a submesh using it
 		};
 
 		struct InstanceChange
@@ -302,6 +369,10 @@ namespace Strata
 		};
 
 		explicit RenderScene(Scene& scene);
+		// Every member as the source has it (CopyIntoScene then makes it the copy's): new members are cloned by being members.
+		RenderScene(const RenderScene& source) = default;
+		// Connects the listeners of the scene's mesh renderers and skins.
+		void ConnectListeners(entt::registry& registry);
 
 		void OnMeshRendererChanged(entt::registry& registry, entt::entity entity);
 		void OnMeshRendererDestroyed(entt::registry& registry, entt::entity entity);
@@ -332,6 +403,12 @@ namespace Strata
 		void ReleaseMesh(uint32_t slot, uint32_t proxy);
 		uint32_t AcquireMaterial(AssetHandle handle);
 		void ReleaseMaterial(uint32_t slot);
+		// The mesh's place in the user lists of its submeshes' materials (MaterialEntry::Meshes), from its
+		// SubmeshMaterialSlots; unlinked before those slots are released.
+		void LinkMeshMaterials(uint32_t slot);
+		void UnlinkMeshMaterials(uint32_t slot);
+		void AddOverrideUser(uint32_t materialSlot, uint32_t proxy);
+		void RemoveOverrideUser(uint32_t materialSlot, uint32_t proxy);
 
 		// Mesh layouts from the asset manager (see Sync): the meshes whose objects or sources changed and new mesh slots.
 		void UpdateMeshLayouts(const Ref<AssetManagerBase>& assets);
@@ -349,6 +426,8 @@ namespace Strata
 		uint32_t AllocateInstances(uint32_t count);
 		void FreeInstances(uint32_t first, uint32_t count);
 		void RecordInstanceChanges(uint32_t first, uint32_t count);
+		// Logs a change of the proxy (GetProxyChanges); a proxy logged since the latest read of the log is logged once.
+		void RecordProxyChange(uint32_t proxy);
 
 		// Skinned proxies (see the class comment). Adds or removes the proxy's skin entry as its Skin flag says.
 		void SetSkinAnimator(uint32_t proxy, UUID animator);
@@ -383,6 +462,7 @@ namespace Strata
 		std::vector<uint32_t> m_MeshUserPositions;
 		std::vector<AssetHandle> m_MaterialOverrides;
 		std::vector<uint32_t> m_OverrideSlots;
+		std::vector<uint32_t> m_OverrideUserPositions; // The proxy's place in its override material's OverrideUsers
 		std::vector<uint32_t> m_FirstInstances;
 		std::vector<uint32_t> m_InstanceCounts;
 		std::vector<uint32_t> m_FreeProxies;
@@ -401,14 +481,26 @@ namespace Strata
 		std::vector<uint32_t> m_MeshCheckScratch;
 		std::vector<MaterialEntry> m_Materials;
 		std::vector<uint32_t> m_FreeMaterials;
+		uint64_t m_SlotsVersion = 0;
 		std::unordered_map<AssetHandle, uint32_t> m_MaterialSlotsByHandle;
 
 		std::vector<RenderData::InstanceData> m_Instances;
 		std::unordered_map<uint32_t, std::vector<uint32_t>> m_FreeInstanceRanges; // Free first instances, by range length
 		uint64_t m_InstanceVersion = 0;
+		uint32_t m_InstanceLimit = RenderData::c_MaxRenderInstances;
+		bool m_InstanceLimitReported = false;
 		uint64_t m_InstanceChangesFloor = 0; // Changes up to this version may be missing from m_InstanceChanges
 		std::vector<InstanceChange> m_InstanceChanges;
 		size_t m_InstanceChangesStart = 0;   // Entries before this are dropped (compacted when they make up half the list)
+
+		// The proxy change log (GetProxyChanges), kept like the instance changes.
+		uint64_t m_ProxyVersion = 0;
+		uint64_t m_ProxyChangesFloor = 0;
+		std::vector<InstanceChange> m_ProxyChanges; // Instance: the proxy
+		size_t m_ProxyChangesStart = 0;
+		std::vector<uint64_t> m_ProxyLoggedVersions; // Per proxy: the version of its newest entry in the log
+		// The newest version a reader has taken (GetProxyVersion, GetProxyChanges): changes after it are not read yet.
+		mutable uint64_t m_ProxyChangesRead = 0;
 
 		// Skinned proxies: per proxy its entry in m_Skins (c_InvalidIndex without a SkinComponent)
 		std::vector<uint32_t> m_SkinIndices;
@@ -442,6 +534,12 @@ namespace Strata
 		uint32_t m_SyncUpdates = 0;
 		std::vector<entt::entity> m_ChangeScratch;
 		std::vector<entt::entity> m_PendingScratch;
+		RenderLights m_Lights;
+
+		// Clones (CopyIntoScene): the source, its change logs' versions then, and whether the next sync reads every transform.
+		uint64_t m_CloneSource = 0;
+		ChangeVersions m_CloneVersions;
+		bool m_RefreshTransforms = false;
 
 		friend struct RenderSceneContext;
 	};

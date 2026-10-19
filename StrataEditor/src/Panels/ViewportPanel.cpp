@@ -596,7 +596,8 @@ namespace Strata
 			for (size_t level = 0; level < settings.DebugColors.LOD.size(); level++)
 			{
 				const bool last = level + 1 == settings.DebugColors.LOD.size();
-				lines.push_back({ toColor(settings.DebugColors.LOD[level]), fmt::format("LOD {}{}", level, last ? "+" : ""), std::to_string(stats.EntitiesPerLOD[level]) });
+				lines.push_back({ toColor(settings.DebugColors.LOD[level]), GetLODLegendName(level, last, stats.MaxErrorPixelsPerLOD[level]),
+					std::to_string(stats.EntitiesPerLOD[level]) });
 			}
 		}
 		else

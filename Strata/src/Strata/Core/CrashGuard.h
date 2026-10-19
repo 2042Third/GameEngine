@@ -27,6 +27,11 @@ namespace Strata
 	// handler in their own runtime that raises this code (ST_SCRIPT_ABORT_EXCEPTION_CODE).
 	constexpr uint32_t c_CrashGuardAbortExceptionCode = 0xE0535441u;
 
+	// Windows: the stack every thread that makes guarded calls keeps for containing a stack overflow (its stack guarantee,
+	// raised by its first Invoke). Dispatching the exception stores the processor's whole register state on what is left of
+	// the stack, which with AVX-512 can take more than Windows leaves a thread by default.
+	constexpr uint32_t c_CrashGuardStackGuaranteeBytes = 32 * 1024;
+
 	// Contains hardware faults raised by untrusted native code (game scripts) so they cannot take down the
 	// host process. Invoke() runs a function; if it raises an access violation, illegal instruction,
 	// integer division by zero or stack overflow, or a C++ exception escapes it, execution resumes at the
@@ -41,7 +46,8 @@ namespace Strata
 	//
 	// Destructors of objects in the faulting call frames do not run, so the guarded code may leak.
 	// Callers must treat the guarded module as unusable after a fault (e.g. stop play mode and unload it).
-	// Guards may be nested and are per thread.
+	// Guards may be nested and are per thread. On Windows the first guarded call on a thread raises its stack guarantee to
+	// c_CrashGuardStackGuaranteeBytes, which that thread's own code can then no longer use.
 	//
 	// POSIX: the first Invoke installs process-wide handlers for the fault signals (and an alternate signal stack per
 	// thread, on macOS with a small recovery stack: there the handler leaves by returning, the only way that makes the
