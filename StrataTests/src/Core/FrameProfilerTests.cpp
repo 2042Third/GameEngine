@@ -442,13 +442,16 @@ TEST_SUITE("Core.JobSystem")
 		blocking.Wait();
 		for (int job = 0; job < 8; job++)
 			JobSystem::Submit([]() { std::this_thread::sleep_for(std::chrono::milliseconds(2)); });
-		// Completed jobs are counted once their thread finished them.
+		// Completed jobs are counted once their thread finished them. A sample reads the queues before the threads' counters,
+		// so on a loaded machine jobs can leave the queue and finish between the two reads: wait for a sample that saw the
+		// queue empty too.
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
 		do
 		{
 			stats = JobSystem::GetStats();
 			std::this_thread::sleep_for(std::chrono::milliseconds(1));
-		} while ((stats.Workers.CompletedJobs < 8 || stats.IO.CompletedJobs < 1) && std::chrono::steady_clock::now() < deadline);
+		} while ((stats.Workers.CompletedJobs < 8 || stats.IO.CompletedJobs < 1 || stats.Workers.QueuedJobs > 0)
+			&& std::chrono::steady_clock::now() < deadline);
 		CHECK(stats.Workers.CompletedJobs == 8);
 		CHECK(stats.IO.CompletedJobs == 1);
 		CHECK(stats.IO.RunningJobs == 0);
