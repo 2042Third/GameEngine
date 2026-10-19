@@ -1281,8 +1281,12 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 
 - The "UI" scene system (`GameUISystem`, Play mode, before "Scripting", stage `Scene.UI`) is the only code that reads the
   pointer for the UI: it hit tests against the layout of the game's input screen (`GameUIScene::GetInputScreen`: the
-  pixels `IGameWindow` renders, so the editor's game view sets its view size and Retina input points become pixels).
-  Code that runs a game in-process provides `IGameWindow` with the rendered size, or hit tests use the input viewport.
+  pixels `IGameWindow` renders, so Retina input points become pixels). In the editor that is the Game view's rendered
+  resolution, which it gives `Input::SetViewport` in every play frame it shows: `Input::GetViewportSize` and
+  `EditorGameWindow::GetState` report it, input positions arrive in its pixels, and the UI pass lays the canvases out for
+  the same image, so what is hit is what is drawn at the chosen resolution, whatever the panel's size (`Editor.UI`: a
+  1280 x 720 Game view in a smaller panel). Code that runs a game in-process provides `IGameWindow` with the rendered
+  size, or hit tests use the input viewport.
 - Gameplay reads mouse buttons and scrolling through `Input` as before; while the UI owns a gesture (a press that started
   over a raycast target, until every button is released) or the pointer rests over the UI, `Input::SetPointerCapture`
   hides them from `IsMouseButtonDown/Pressed/Released` and `GetScrollDelta`. A press that started elsewhere stays the

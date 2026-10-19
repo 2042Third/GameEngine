@@ -1387,6 +1387,45 @@ TEST_SUITE("Editor.UI")
 		editor.Run("play.stop");
 	}
 
+	TEST_CASE("The game's UI is laid out, drawn and hit at the Game view's resolution, whatever the panel's size")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIGameViewUI"));
+		editor.Frames(2);
+		const GameViewPanel* game = editor.Layer->GetPanels().Get<GameViewPanel>(EditorPanels::c_Game);
+		REQUIRE(game);
+		editor.Run("viewport.setSettings", { { "gameView", { { "mode", "1280x720" } } } });
+		REQUIRE(editor.Click("Toolbar.Play"));
+		editor.Frames(3);
+		REQUIRE(editor.Context().IsPlaying());
+		REQUIRE(game->IsShown());
+		REQUIRE(game->GetRenderSize() == glm::uvec2(1280, 720));
+		// Shown smaller than it renders.
+		REQUIRE(game->GetImageArea().Size.x < 1280.0f);
+
+		// The UI's input screen is the rendered image, which the UI pass lays out for too (GameUIRenderer: the frame's size at
+		// the game window's content scale): what is hit is what is drawn. Input positions are in its pixels.
+		const UIInputScreen input = GameUIScene::GetInputScreen();
+		CHECK(input.Screen.Size == glm::vec2(1280.0f, 720.0f));
+		CHECK(input.Screen.ContentScale == editor.Context().GetGameWindow().GetState().ContentScale);
+		CHECK(input.InputToPixels == glm::vec2(1.0f));
+		// So the feature menu lays out as at 1280 x 720 on any panel (FeatureCommands checks the same rect), and a click at its
+		// Play Button's center lands on it.
+		const nlohmann::json layout = editor.Run("ui.layout", { { "entity", "F7E0000000000072" } });
+		CHECK(layout["elements"][0]["rect"] == nlohmann::json { 952, 40, 288, 48 });
+		const nlohmann::json clicked = editor.Run("input.click", { { "entity", "F7E0000000000072" }, { "wait", false } });
+		CHECK(clicked["position"] == nlohmann::json { 1096, 64 });
+		// The harness runs no input frames of its own: the click is pressed and let go in frames run as the application runs
+		// them, and the press focuses the button the UI system hits at that position.
+		for (int frame = 0; frame < 4; frame++)
+		{
+			Input::BeginFrame();
+			editor.Frames(1);
+		}
+		CHECK(Input::GetMousePosition() == glm::vec2(1096.0f, 64.0f));
+		CHECK(editor.Run("ui.layout", { { "entity", "F7E0000000000072" } })["elements"][0]["focused"] == true);
+		editor.Run("play.stop");
+	}
+
 	TEST_CASE("The Scene view keeps the editor camera while playing, and the Game camera toggle (F8) looks through the scene's")
 	{
 		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIGameCamera"));
