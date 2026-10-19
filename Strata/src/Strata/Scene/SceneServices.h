@@ -27,9 +27,9 @@
 //
 // The built-in providers: PhysicsSystem offers ICollisionEventSource, IBodyMotionQuery, IBodyControl, IPhysicsQueries and
 // ICharacterControl; AudioSystem offers IAudioPlayback; the Animation module's system offers ISkinningPoses, IAnimatorControl and
-// IAnimationEventSource (the editor's pose preview provides ISkinningPoses for edited scenes, where no system runs). All
-// services are main thread only, like the scene. IAudioOutput, defined here too, is an engine service
-// (Core/EngineServices.h): it belongs to the process, not to a scene.
+// IAnimationEventSource (the editor's pose preview provides ISkinningPoses for edited scenes, where no system runs); the
+// GameUI module's system offers IUIEvents and IUIControl. All services are main thread only, like the scene.
+// IAudioOutput, defined here too, is an engine service (Core/EngineServices.h): it belongs to the process, not to a scene.
 namespace Strata
 {
 
@@ -372,6 +372,81 @@ namespace Strata
 
 		virtual AnimationEventListenerID AddAnimationEventListener(AnimationEventCallback callback) = 0;
 		virtual bool RemoveAnimationEventListener(AnimationEventListenerID id) = 0;
+	};
+
+	//////////////////////////////////////////////////////////////////////////
+	// Game UI
+	//////////////////////////////////////////////////////////////////////////
+
+	enum class UIEventType : uint8_t
+	{
+		Click = 0,    // A button was clicked (released over it after a press on it, or Submit while it has the focus)
+		ValueChanged, // A slider's value or a toggle's state changed through input (not through code)
+		FocusChanged, // A selectable gained or lost the focus
+		Submit        // An input field's text was submitted (Enter, or a gamepad's Submit, while it was being edited)
+	};
+
+	// An event of a widget of the game UI (the GameUI module's system).
+	struct UIEventInfo
+	{
+		UIEventType Type = UIEventType::Click;
+		Entity Widget;
+		UUID WidgetID = UUID::Null();
+		Entity Target;        // The widget's EventTarget: invalid without one, or when it is the widget itself
+		float Value = 0.0f;   // ValueChanged: the slider's value, or a toggle's 0 or 1
+		bool Focused = false; // FocusChanged: whether the widget gained the focus
+	};
+
+	using UIEventCallback = std::function<void(const UIEventInfo&)>;
+	using UIEventListenerID = uint64_t;
+
+	// The events of the game UI's widgets while the scene plays (the GameUI module's "UI" system, which runs before the
+	// scripts). Events are dispatched on the main thread during the system's update, so they arrive before the scripts'
+	// OnUpdate of that frame, in the order their inputs happened: pointer, then navigation, then submit. Listeners added
+	// while events are dispatched receive the next ones; a removed one is not called again. Listeners may use the whole
+	// scene and the other services.
+	class IUIEvents
+	{
+	public:
+		virtual ~IUIEvents() = default;
+
+		virtual UIEventListenerID AddUIEventListener(UIEventCallback callback) = 0;
+		virtual bool RemoveUIEventListener(UIEventListenerID id) = 0;
+	};
+
+	// The game UI's elements for gameplay code (the script host), offered by the GameUI module's system while the scene plays.
+	// Element functions fail (false, with the reason in outError when given) for an invalid entity or one without the
+	// component they need: text needs a UIInputField (its text, cut to its character limit) or a UIText, the image a UIImage, the color either (the image's tint first), interactable
+	// a UISelectable, the value a UISlider (its value, clamped and snapped like input) or a UIToggle (0 or 1; switching one on
+	// switches the others of its group off). Values set here raise no UI events: events report the player's input.
+	class IUIControl
+	{
+	public:
+		virtual ~IUIControl() = default;
+
+		virtual bool GetText(Entity element, std::string& outText, std::string* outError = nullptr) = 0;
+		virtual bool SetText(Entity element, std::string_view text, std::string* outError = nullptr) = 0;
+		virtual bool GetImage(Entity element, AssetHandle& outTexture, std::string* outError = nullptr) = 0;
+		// A null handle draws the image's color alone; other handles must be textures.
+		virtual bool SetImage(Entity element, AssetHandle texture, std::string* outError = nullptr) = 0;
+		virtual bool GetColor(Entity element, glm::vec4& outColor, std::string* outError = nullptr) = 0;
+		virtual bool SetColor(Entity element, const glm::vec4& color, std::string* outError = nullptr) = 0;
+		virtual bool IsInteractable(Entity element, bool& outInteractable, std::string* outError = nullptr) = 0;
+		virtual bool SetInteractable(Entity element, bool interactable, std::string* outError = nullptr) = 0;
+		virtual bool GetValue(Entity element, float& outValue, std::string* outError = nullptr) = 0;
+		virtual bool SetValue(Entity element, float value, std::string* outError = nullptr) = 0;
+
+		// The selectable with the keyboard and gamepad focus, or an invalid entity.
+		virtual Entity GetFocus() = 0;
+		// Focuses an interactable selectable shown on a canvas that receives input (FocusChanged events follow), or clears the
+		// focus with an invalid entity.
+		virtual bool SetFocus(Entity selectable, std::string* outError = nullptr) = 0;
+		// Whether the pointer is over a raycast target of a canvas that receives input (as of the UI's latest update).
+		virtual bool IsPointerOverUI() = 0;
+		// The UI actions (Input/UIActions.h, by index: Submit, Cancel, Up, Down, Left, Right) as of the UI's latest update;
+		// false for other indices.
+		virtual bool IsActionPressed(uint32_t action) = 0;
+		virtual bool IsActionDown(uint32_t action) = 0;
 	};
 
 	// The engine's audio output (AudioEngine), which outlives every scene: an engine service (Core/EngineServices.h) the

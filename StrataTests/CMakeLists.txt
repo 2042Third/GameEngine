@@ -543,8 +543,9 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 endif()
 
 # The real executables with the feature test project: the editor opens a copy of it, loads the feature scripts
-# (script.load), steps the feature scene (the command script's "expect" conditions require the ball to come to rest on
-# the platform, the scripts to run without a crash, and play.stop to restore the scene) and exports it with the module;
+# (script.load), lays out and hit-tests its menu (ui.layout, ui.hitTest), steps the feature scene (the command script's
+# "expect" conditions require the ball to come to rest on the platform, input.click to click the Play Button and focus the
+# Name Field, input.type to edit it, the scripts to run without a crash, and play.stop to restore the scene) and exports it;
 # the exported game then runs headless with the scripts. Both must exit cleanly and show that the scripts ran
 # (Editor/RunAndExpect.cmake).
 if(TARGET StrataEditor AND TARGET StrataRuntime)

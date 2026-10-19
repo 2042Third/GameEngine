@@ -5,6 +5,7 @@
 #include <glm/glm.hpp>
 
 #include <cstdint>
+#include <string>
 
 namespace Strata
 {
@@ -350,6 +351,16 @@ namespace Strata
 		{
 			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(GetCursorMode);
 			return host ? static_cast<CursorMode>(host->GetCursorMode(Detail::GetContext())) : CursorMode::Normal;
+		}
+
+		// The text typed during this frame, as UTF-8 (keyboard layouts and input methods applied; at most 1,024 bytes): what
+		// a name entry or a chat box appends. Empty while the game has no input focus.
+		static std::string GetTypedText()
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(GetTypedText);
+			if (!host)
+				return {};
+			return Detail::ReadHostString([&](char* buffer, uint64_t capacity) { return host->GetTypedText(Detail::GetContext(), buffer, capacity); });
 		}
 	};
 

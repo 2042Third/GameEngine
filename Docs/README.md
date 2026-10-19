@@ -25,6 +25,8 @@ Guides for people making games in the editor:
   Apply and Revert), how prefab changes reach instances, and unpacking.
 - [Manual/GameView.md](Manual/GameView.md): playing and testing in the editor: the Scene and Game views, resolutions,
   game input and the mouse, pausing and stepping.
+- [Manual/GameUI.md](Manual/GameUI.md): menus and HUDs: canvases, anchors and scale modes, the look of images, texts and
+  widgets, buttons and sliders in scripts, keyboard and gamepad navigation, testing UI with commands.
 
 ## Releases
 

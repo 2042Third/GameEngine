@@ -105,8 +105,16 @@ first run and after files were added or removed; answers with compiler diagnosti
   `AddComponent("MeshRenderer")`, `SetProperty("MeshRenderer", "Mesh", mesh)`, `GetTransform().SetTranslation(...)`), then
   show and hide them with `SetActive` and recolor them with `SetProperty("MeshRenderer", "Material", handle)`. Remember
   what each one shows and touch only the ones that change.
-- HUD: `Entity` fields that point at `Text` entities; `entity.SetProperty("Text", "Text", std::string(...))` when the
-  value changes.
+- HUD: a UI canvas (below) with `UIText` elements; `Entity` fields that point at them, and
+  `entity.GetUI().SetText(...)` when the value changes. A panel that shows only sometimes (a pause or game-over message):
+  `panel.SetActive(...)`. Menus: buttons whose `EventTarget` is the entity of a menu script, which gets
+  `OnUIClick(widget)`; keyboard and gamepad navigation work by themselves, and `UI::IsActionPressed(UIAction::Cancel)`
+  closes a menu (the scripting skill's "Game UI"). Build them with `ui.create` (the editor automation skill's "Build the
+  game UI") and test them with `input.click`. A name or high-score entry is an `inputField` whose script reads the text in
+  `OnUISubmit`.
+- A main menu: a scene without a camera whose canvas holds the title and the buttons (the game shows its UI over black);
+  the Play button's script calls `Game::LoadScene(level)`. A pause screen: a panel set active with `Time::SetTimeScale(0)`;
+  the UI keeps working (it runs on unscaled time) and `Time::GetUnscaledDeltaTime()` animates what the script fades.
 - Input: `Input::IsKeyPressed` for one-shot actions, `KeyRepeat` for held movement (construct it from fields in
   `OnCreate`), and update both keys of a pair every frame (`a.Update(dt) || b.Update(dt)` would skip `b`).
 - Sounds: `Assets::RequestLoad` in `OnCreate`, `Audio::PlayOneShot(clip)` later.
@@ -258,9 +266,16 @@ the scene has unsaved changes (pass `"force": true` only to throw away edits you
   unlit; judge the look from `{"camera": "scene"}` captures. A scene with only point or spot lights shows as the game
   does: as dark as they leave it.
 - Dark scenes: add a `PostProcess` with `AutoExposure: false` (automatic exposure brightens a dark backdrop to gray).
-- Text: `ScreenSpace: true`, `ScreenAnchor` (0..1, top-left origin), `ScreenOffset` (pixels, +Y down), `FontSize` in
-  pixels, and `Alignment` - it defaults to `Center`, so a left-hand HUD needs `"Alignment": "Left"`. World text
-  (`ScreenSpace: false`) uses `FontSize` world units.
+- HUD and menus: a canvas, so they keep their proportions on every screen. An entity with `UICanvas`
+  (`"ScaleMode": "ScaleWithScreen"`, `"ReferenceResolution": [1280, 720]`, `"MatchWidthOrHeight": 1`, and
+  `"ReceivesInput": false` for a HUD that must never block clicks) and children with `UIRect` (anchors and pivot 0..1 of
+  the parent's rect, top-left origin; `Position` and `Size` in canvas units, which are pixels at the reference
+  resolution) and `UIText`, `UIImage` (`CornerRadius`, `BorderWidth` for rounded, framed panels; a translucent `Color`)
+  or `UILayout` (a vertical or horizontal stack; children with `"FitContent": "Both"` take their text's size).
+  `Samples/Tetris` shows the score on a rounded panel in the top-left corner and its messages on a centered panel. `Text`
+  stays for world text (`ScreenSpace: false`, `FontSize` in world units); screen-space `Text` keeps its pixel size on
+  every screen, so do not build HUDs with it. Panels with buttons in the level (a terminal, a shop sign) are canvases
+  with `"RenderMode": "WorldSpace"`: the player clicks them through the camera.
 - `script.add {"entity", "class", "fields": {...}}`: asset fields take paths (`"Materials/Red.stmat"`, `"Builtin/Cube"`),
   entity fields take IDs from `entity.create`. Fields left out keep the class defaults.
 
@@ -270,7 +285,7 @@ the scene has unsaved changes (pass `"force": true` only to throw away edits you
 play.start
 input.key {"key": "Left"}                 # tap: answers after the game saw the release; issue taps one after another
 input.key {"key": "Down", "steps": 20}    # held for 20 fixed steps (KeyRepeat repeats)
-component.get {"entity": "<HUD id>", "component": "Text"}      # -> {"values": {"Text": "Score: 209", ...}}
+component.get {"entity": "<HUD id>", "component": "UIText"}    # -> {"values": {"Text": "Score: 209", ...}}
 log.read {"minLevel": "Info"}             # the script's Log::Info lines
 viewport.capture {"camera": "scene", "width": 1280, "height": 720}   # CLI: --save-image shot.png, then look at it
 play.stop
@@ -279,8 +294,8 @@ play.stop
 - Look at every capture you take. A capture waits (up to about five seconds) for the meshes, materials and textures it
   shows; `pendingAssets` above 0 means some were still loading: wait (`editor.wait`) and capture again. To look from
   elsewhere without moving the person's view, pass `position` and `target` (`camera.get` stays as it was).
-- Editor-camera captures in edit mode leave the HUD out (`hiddenScreenSpaceTexts`); the scene's camera and play mode show
-  it.
+- Editor-camera captures in edit mode leave the HUD out (`hiddenScreenSpaceTexts`, `ui.hiddenCanvases`); the scene's camera
+  and play mode show it.
 - **Play-test deterministically.** Gravity and other timers keep running between your calls (a call takes about 0.1 s),
   and how many fixed steps run per frame depends on the machine. For exact results:
   - `input.sequence` plays a whole script of input in the game's fixed steps and samples what happened: it pauses the
@@ -311,7 +326,7 @@ StrataEditor --no-gpu --no-automation --quit-after-commands --project <dir> --co
 	{ "command": "script.setField", "parameters": { "entity": "<board id>", "class": "TetrisBoard", "field": "StartInterval", "value": 100 } },
 	{ "command": "play.start" },
 	{ "command": "input.key", "parameters": { "key": "Space" } },
-	{ "command": "component.get", "parameters": { "entity": "<score id>", "component": "Text" }, "expect": { "/values/Text": { "equals": "Score: 36" } } }
+	{ "command": "component.get", "parameters": { "entity": "<score id>", "component": "UIText" }, "expect": { "/values/Text": { "equals": "Score: 36" } } }
 ]
 ```
 
@@ -359,10 +374,10 @@ scripts read the start scene's progress with `Game::GetSceneLoadProgress()` for 
 | --- | --- |
 | `input.key` fails "start it with play.start" | Input only reaches play mode (not edit or `play.simulate`). |
 | A tap does nothing | The game is paused: the tap waits for the next `play.step` (or resuming). Or the game reacts to keys held over time: hold longer with `steps` (fixed steps of the game) or press/release. |
-| HUD text cut off at the left edge | `Text` alignment defaults to `Center`; set `Alignment: Left`. |
+| HUD text cut off at the left edge | `UIText` and `Text` alignment default to `Center`; set `Alignment: Left`. |
 | Everything looks washed out or gray | Automatic exposure; add `PostProcess` with `AutoExposure: false`. |
 | Lit in captures, dark in the game | The capture used preview lighting (`"previewLighting": true`): add a `DirectionalLight` and a `SkyLight`. |
-| The HUD is missing from a capture | Editor views hide screen-space text: capture with `{"camera": "scene"}` or while playing. |
+| The HUD is missing from a capture | Editor views hide screen-space text and canvases: capture with `{"camera": "scene"}` or while playing. |
 | The score differs by a few points between runs | Gravity ticked between commands; play the moves with `input.sequence` (exact in game steps), or slow gravity via a field. |
 | The model is huge, tiny or walks backwards | Check `asset.info` `bounds` and set the import `Scale`; glTF faces +Z while `GetForward()` is -Z (see section 3). |
 | `editor.quit` refuses | Unsaved changes: `scene.save` (or `edit.undo` the test's edits), or `{"force": true}`. |

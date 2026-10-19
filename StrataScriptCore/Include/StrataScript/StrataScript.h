@@ -19,4 +19,5 @@
 #include "StrataScript/Scene.h"
 #include "StrataScript/Script.h"
 #include "StrataScript/Time.h"
+#include "StrataScript/UI.h"
 #include "StrataScript/Value.h"

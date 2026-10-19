@@ -16,9 +16,9 @@ namespace Strata
 	// so what it asks of its window (fullscreen, a resolution, vsync) is recorded and reported instead of applied to the
 	// editor's window (editor.status, a notice over the Game view); the Game view's "Game's request" mode renders at the
 	// resolution it asked for. The game's view of its window is the Game view: GetState reports the resolution it renders
-	// at (Input::GetViewportSize), with the mode and vsync the game asked for. A request equal to the last one of
-	// its kind changes nothing and is not logged again (games that apply their options every frame). Requests are forgotten
-	// when play starts and stops (Clear). Main thread only.
+	// at (Input::GetViewportSize, in pixels) and the display's content scale, with the mode and vsync the game asked for.
+	// A request equal to the last one of its kind changes nothing and is not logged again (games that apply their options
+	// every frame). Requests are forgotten when play starts and stops (Clear). Main thread only.
 	class EditorGameWindow final : public IGameWindow
 	{
 	public:
@@ -34,6 +34,9 @@ namespace Strata
 		{
 			return m_Width && m_Height ? std::optional<glm::uvec2>(glm::uvec2(*m_Width, *m_Height)) : std::nullopt;
 		}
+		// The content scale of the display the editor's window is on, which the game's state reports (the editor's
+		// application sets it every frame; 1 until it does).
+		void SetContentScale(float contentScale) { m_ContentScale = contentScale > 0.0f ? contentScale : 1.0f; }
 		// Changes with every request and Clear, so that what shows them is rebuilt only then.
 		uint64_t GetVersion() const { return m_Version; }
 		// The requests as editor.status reports them ({"mode", "resolution": [w, h], "vsync"}, each only when asked for), or
@@ -48,6 +51,7 @@ namespace Strata
 		std::optional<uint32_t> m_Height;
 		std::optional<bool> m_VSync;
 		uint64_t m_Version = 0;
+		float m_ContentScale = 1.0f;
 	};
 
 }

@@ -4,6 +4,7 @@
 
 #include <Strata/Animation/AnimationComponents.h>
 #include <Strata/Audio/AudioComponents.h>
+#include <Strata/GameUI/GameUIComponents.h>
 #include <Strata/Physics/PhysicsComponents.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Renderer/RendererComponents.h>
@@ -49,7 +50,18 @@ namespace Strata::UI
 			{ "Skin", Icons::PersonStanding },
 			{ "Animator", Icons::Bone },
 			{ "AttachToJoint", Icons::Link },
-			{ "Script", Icons::FileCode }
+			{ "Script", Icons::FileCode },
+			{ "UICanvas", Icons::AppWindow },
+			{ "UIRect", Icons::Frame },
+			{ "UIImage", Icons::Image },
+			{ "UIText", Icons::Type },
+			{ "UISelectable", Icons::MousePointerClick },
+			{ "UIButton", Icons::RectangleHorizontal },
+			{ "UIToggle", Icons::ToggleRight },
+			{ "UISlider", Icons::SlidersHorizontal },
+			{ "UILayout", Icons::LayoutGrid },
+			{ "UIInputField", Icons::TextCursorInput },
+			{ "UIMask", Icons::Crop }
 		};
 
 	}
@@ -79,6 +91,24 @@ namespace Strata::UI
 			return Icons::CloudSun;
 		if (registry.all_of<PostProcessComponent>(entity))
 			return Icons::Aperture;
+		// UI elements by the widget they are (a button with a script or a click sound is still a button), as the Hierarchy's
+		// UI presets show them; a rect alone, a container, falls through to the plain icons.
+		if (registry.all_of<UICanvasComponent>(entity))
+			return Icons::AppWindow;
+		if (registry.all_of<UIInputFieldComponent>(entity))
+			return Icons::TextCursorInput;
+		if (registry.all_of<UISliderComponent>(entity))
+			return Icons::SlidersHorizontal;
+		if (registry.all_of<UIToggleComponent>(entity))
+			return Icons::ToggleRight;
+		if (registry.all_of<UIButtonComponent>(entity))
+			return Icons::RectangleHorizontal;
+		if (registry.all_of<UITextComponent>(entity))
+			return Icons::Type;
+		if (registry.all_of<UILayoutComponent>(entity))
+			return Icons::LayoutGrid;
+		if (registry.all_of<UIImageComponent>(entity))
+			return Icons::Image;
 		// A character with a mesh, a voice or a script is a character.
 		if (registry.all_of<CharacterControllerComponent>(entity))
 			return Icons::PersonStanding;

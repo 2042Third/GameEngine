@@ -4,10 +4,10 @@
 #include "Strata/Core/Assert.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Renderer/Font.h"
-
-#include <stb_truetype.h>
+#include "Strata/Renderer/TextLayout.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstring>
 
@@ -17,23 +17,17 @@ namespace Strata
 	namespace
 	{
 
-		constexpr uint32_t c_GlyphGutter = 1;            // Empty texels between glyphs, so filtering never bleeds
-		constexpr unsigned char c_OnEdgeValue = 128;     // Distance field value on the glyph outline
-		constexpr uint32_t c_MaxCodepoint = 0x10FFFF;
+		constexpr uint32_t c_GlyphGutter = 1; // Empty texels between glyphs, so filtering never bleeds
 		constexpr size_t c_PageBytes = static_cast<size_t>(FontAtlas::c_PageSize) * FontAtlas::c_PageSize;
+		std::atomic<uint64_t> s_NextAtlasId = 1;
 
 	}
-
-	struct FontAtlas::FontInfo
-	{
-		stbtt_fontinfo Info = {};
-	};
 
 	FontAtlas::~FontAtlas() = default;
 
 	Scope<FontAtlas> FontAtlas::Create(const Ref<Font>& font, std::string* outError, const FontAtlasSpecification& specification)
 	{
-		auto fail = [&](const char* message)
+		auto fail = [&](const std::string& message)
 		{
 			if (outError)
 				*outError = message;
@@ -44,69 +38,34 @@ namespace Strata
 		if (specification.MaxPages == 0)
 			return fail("A font atlas needs at least one page");
 
-		// Font::Create validated everything stb_truetype reads below (see ValidateTrueTypeFont).
-		const std::vector<uint8_t>& data = font->GetData();
-		const int offset = static_cast<int>(font->GetFontOffset());
+		std::string error;
+		const FontFace* face = font->GetFace(&error);
+		if (!face)
+			return fail(error);
 
 		Scope<FontAtlas> atlas(new FontAtlas());
+		atlas->m_Id = s_NextAtlasId.fetch_add(1, std::memory_order_relaxed);
 		atlas->m_Specification = specification;
-		atlas->m_Info = std::make_unique<FontInfo>();
-		if (!stbtt_InitFont(&atlas->m_Info->Info, data.data(), offset))
-			return fail("The font's tables cannot be read");
 		atlas->m_Font = font;
-		atlas->m_Scale = stbtt_ScaleForMappingEmToPixels(&atlas->m_Info->Info, c_GlyphEmSize);
-		atlas->m_EmScale = stbtt_ScaleForMappingEmToPixels(&atlas->m_Info->Info, 1.0f);
-		if (!(atlas->m_EmScale > 0.0f) || !std::isfinite(atlas->m_EmScale))
-			return fail("The font has an invalid em size");
-
-		int ascent = 0;
-		int descent = 0;
-		int lineGap = 0;
-		stbtt_GetFontVMetrics(&atlas->m_Info->Info, &ascent, &descent, &lineGap);
-		const float lineHeight = static_cast<float>(ascent - descent + lineGap) * atlas->m_EmScale;
-		if (ascent > descent && lineHeight > 0.0f)
-		{
-			atlas->m_Metrics.Ascent = static_cast<float>(ascent) * atlas->m_EmScale;
-			atlas->m_Metrics.Descent = static_cast<float>(descent) * atlas->m_EmScale;
-			atlas->m_Metrics.LineHeight = lineHeight;
-		}
+		atlas->m_Face = face;
 		return atlas;
 	}
 
 	void FontAtlas::BeginFrame()
 	{
 		m_Frame++;
-		// Caches of glyphs that are not in the atlas are cheap to rebuild: keep them from growing with every glyph and code
-		// point ever asked for.
+		// Entries of glyphs that are not in the atlas are cheap to rebuild from the face: keep them from growing with every
+		// glyph ever asked for.
 		if (m_Glyphs.size() > c_GlyphCacheLimit)
 		{
 			for (auto it = m_Glyphs.begin(); it != m_Glyphs.end();)
 				it = it->second.Info.Visible ? std::next(it) : m_Glyphs.erase(it);
 		}
-		if (m_CodepointGlyphs.size() > c_GlyphCacheLimit)
-			m_CodepointGlyphs.clear();
 	}
 
 	const GlyphInfo& FontAtlas::GetGlyph(uint32_t codepoint)
 	{
-		uint32_t glyphIndex = 0;
-		auto mapped = m_CodepointGlyphs.find(codepoint);
-		if (mapped != m_CodepointGlyphs.end())
-		{
-			glyphIndex = mapped->second;
-		}
-		else
-		{
-			// Glyph 0 is the font's missing-glyph shape.
-			// Character maps may name glyphs the font does not have: those use the missing glyph too.
-			if (codepoint <= c_MaxCodepoint)
-			{
-				const int found = stbtt_FindGlyphIndex(&m_Info->Info, static_cast<int>(codepoint));
-				glyphIndex = found > 0 && static_cast<uint32_t>(found) < m_Font->GetGlyphCount() ? static_cast<uint32_t>(found) : 0u;
-			}
-			m_CodepointGlyphs.emplace(codepoint, glyphIndex);
-		}
-		return GetGlyphByIndex(glyphIndex);
+		return GetGlyphByIndex(m_Face->GetGlyphIndex(codepoint));
 	}
 
 	const GlyphInfo& FontAtlas::GetGlyphByIndex(uint32_t glyphIndex)
@@ -124,65 +83,20 @@ namespace Strata
 		return entry.Info;
 	}
 
-	uint64_t FontAtlas::GetRasterCost(const glm::uvec2& size, const GlyphShapeCost& shape)
-	{
-		// Every texel measures its distance to every vertex (curves cost more), after composite glyphs were assembled.
-		const uint64_t vertexWork = static_cast<uint64_t>(shape.Vertices) + c_CurveCostWeight * static_cast<uint64_t>(shape.Curves);
-		return static_cast<uint64_t>(size.x) * size.y * vertexWork + shape.CompositeCopies;
-	}
-
 	FontAtlas::GlyphEntry FontAtlas::DescribeGlyph(uint32_t glyphIndex) const
 	{
-		const stbtt_fontinfo* info = &m_Info->Info;
+		// The face checked the glyph's size and cost against the rasterizer's limits (FontFace::GetGlyphMetrics).
+		const FontGlyphMetrics& metrics = m_Face->GetGlyphMetrics(glyphIndex);
 		GlyphEntry entry;
 		entry.Info.GlyphIndex = glyphIndex;
-		int advance = 0;
-		int leftSideBearing = 0;
-		stbtt_GetGlyphHMetrics(info, static_cast<int>(glyphIndex), &advance, &leftSideBearing);
-		entry.Info.Advance = static_cast<float>(advance) * m_EmScale;
-
-		// The rasterizer allocates and visits every texel of the glyph's box (from the glyph's header, which a malformed font
-		// can make huge) for every outline vertex: check both before rasterizing. Glyphs too large or costly at the atlas
-		// resolution are rasterized at half or a quarter of it (as sharp at small sizes, softer when shown large); beyond
-		// that they are not drawn.
-		const GlyphShapeCost& shape = m_Font->GetGlyphShape(glyphIndex);
-		if (shape.Vertices == 0)
-			return entry; // Nothing to draw (whitespace)
-		uint64_t width = 0;
-		uint64_t height = 0;
-		uint64_t cost = 0;
-		for (uint32_t reduction = 1; reduction <= c_MaxResolutionReduction; reduction *= 2)
-		{
-			const float scale = m_Scale / static_cast<float>(reduction);
-			int boxX0 = 0;
-			int boxY0 = 0;
-			int boxX1 = 0;
-			int boxY1 = 0;
-			stbtt_GetGlyphBitmapBox(info, static_cast<int>(glyphIndex), scale, scale, &boxX0, &boxY0, &boxX1, &boxY1);
-			if (boxX1 <= boxX0 || boxY1 <= boxY0)
-				return entry; // An empty box: nothing to draw
-			width = static_cast<uint64_t>(static_cast<int64_t>(boxX1) - boxX0) + 2 * c_DistancePadding;
-			height = static_cast<uint64_t>(static_cast<int64_t>(boxY1) - boxY0) + 2 * c_DistancePadding;
-			if (width > c_MaxGlyphTexels || height > c_MaxGlyphTexels)
-				continue;
-			cost = GetRasterCost(glm::uvec2(static_cast<uint32_t>(width), static_cast<uint32_t>(height)), shape);
-			if (cost > c_MaxGlyphRasterCost)
-				continue;
-
-			// The distance field covers the box plus the padding; its offsets are in texels with +Y down from the pen.
-			const float texelsPerEm = c_GlyphEmSize / static_cast<float>(reduction);
-			const float left = static_cast<float>(boxX0 - c_DistancePadding);
-			const float top = static_cast<float>(boxY0 - c_DistancePadding);
-			entry.Info.Pending = true;
-			entry.Info.PlaneMin = glm::vec2(left, -(top + static_cast<float>(height))) / texelsPerEm;
-			entry.Info.PlaneMax = glm::vec2(left + static_cast<float>(width), -top) / texelsPerEm;
-			entry.Size = glm::uvec2(static_cast<uint32_t>(width), static_cast<uint32_t>(height));
-			entry.Scale = scale;
-			entry.Cost = cost;
-			return entry;
-		}
-		ST_CORE_WARN("Font: glyph {} is too large or complex to draw ({} vertices, {} composite copies, {}x{} texels at a quarter of the resolution)",
-			glyphIndex, shape.Vertices, shape.CompositeCopies, width, height);
+		entry.Info.Advance = metrics.Advance;
+		if (!metrics.Drawable)
+			return entry; // Nothing to draw: whitespace, or too large or complex
+		entry.Info.Pending = true;
+		entry.Info.PlaneMin = metrics.PlaneMin;
+		entry.Info.PlaneMax = metrics.PlaneMax;
+		entry.Size = metrics.Size;
+		entry.Cost = metrics.Cost;
 		return entry;
 	}
 
@@ -197,21 +111,13 @@ namespace Strata
 		m_Budget.Glyphs--;
 		m_Budget.Cost = m_Budget.Cost > entry.Cost ? m_Budget.Cost - entry.Cost : 0;
 
-		// The distance rises by c_OnEdgeValue / c_DistancePadding per texel toward the inside: 0 at the padding's edge.
 		const uint32_t glyphIndex = entry.Info.GlyphIndex;
-		int width = 0;
-		int height = 0;
-		int offsetX = 0;
-		int offsetY = 0;
-		unsigned char* distances = stbtt_GetGlyphSDF(&m_Info->Info, entry.Scale, static_cast<int>(glyphIndex), c_DistancePadding, c_OnEdgeValue,
-			static_cast<float>(c_OnEdgeValue) / static_cast<float>(c_DistancePadding), &width, &height, &offsetX, &offsetY);
+		const std::vector<uint8_t> distances = m_Face->RasterizeGlyph(glyphIndex);
 		entry.Info.Pending = false;
-		if (!distances || width != static_cast<int>(entry.Size.x) || height != static_cast<int>(entry.Size.y))
+		if (distances.size() != static_cast<size_t>(entry.Size.x) * entry.Size.y)
 		{
 			// Not drawn; the cells stay free.
 			ST_CORE_WARN("Font: glyph {} could not be rasterized", glyphIndex);
-			if (distances)
-				stbtt_FreeSDF(distances, nullptr);
 			return;
 		}
 
@@ -220,9 +126,8 @@ namespace Strata
 		for (uint32_t row = 0; row < entry.Size.y; row++)
 		{
 			std::memcpy(page.Pixels.data() + (static_cast<size_t>(position.y) + row) * c_PageSize + position.x,
-				distances + static_cast<size_t>(row) * entry.Size.x, entry.Size.x);
+				distances.data() + static_cast<size_t>(row) * entry.Size.x, entry.Size.x);
 		}
-		stbtt_FreeSDF(distances, nullptr);
 		for (uint32_t y = block.Cell.y; y < block.Cell.y + block.Cells.y; y++)
 		{
 			for (uint32_t x = block.Cell.x; x < block.Cell.x + block.Cells.x; x++)
@@ -236,6 +141,7 @@ namespace Strata
 		entry.Info.AtlasPosition = position;
 		entry.Info.AtlasSize = entry.Size;
 		m_Stats.RasterizedGlyphs++;
+		m_PlacementVersion++;
 	}
 
 	bool FontAtlas::Allocate(const glm::uvec2& cells, CellBlock& outBlock)
@@ -367,6 +273,7 @@ namespace Strata
 		MarkDirty(page, entry.Info.AtlasPosition.y, entry.Size.y);
 		m_Glyphs.erase(it);
 		m_Stats.EvictedGlyphs++;
+		m_PlacementVersion++;
 	}
 
 	void FontAtlas::MarkDirty(Page& page, uint32_t firstRow, uint32_t rowCount)
@@ -383,20 +290,47 @@ namespace Strata
 		}
 	}
 
-	float FontAtlas::GetKerning(const GlyphInfo& left, const GlyphInfo& right)
+	float FontAtlas::GetKerning(uint32_t leftGlyph, uint32_t rightGlyph)
 	{
 		if (!m_Font->HasUsableKerning())
 			return 0.0f;
 		// Glyph indices are below 65536 (the font's glyph count is 16-bit).
-		const uint32_t pair = (left.GlyphIndex << 16) | right.GlyphIndex;
+		const uint32_t pair = (leftGlyph << 16) | rightGlyph;
 		auto cached = m_Kerning.find(pair);
 		if (cached != m_Kerning.end())
 			return cached->second;
-		const float kerning = static_cast<float>(stbtt_GetGlyphKernAdvance(&m_Info->Info, static_cast<int>(left.GlyphIndex), static_cast<int>(right.GlyphIndex))) * m_EmScale;
+		const float kerning = m_Face->ComputeKerning(leftGlyph, rightGlyph);
 		if (m_Kerning.size() >= c_GlyphCacheLimit)
 			m_Kerning.clear(); // Bounded: pairs are cheap to look up again
 		m_Kerning.emplace(pair, kerning);
 		return kerning;
+	}
+
+	void FontAtlas::Resolve(const ShapedText& text, TextLayout& outLayout)
+	{
+		outLayout.Quads.clear();
+		outLayout.PendingGlyphs = 0;
+		outLayout.Min = text.Min;
+		outLayout.Max = text.Max;
+		outLayout.LineCount = text.LineCount;
+		for (const ShapedGlyph& shaped : text.Glyphs)
+		{
+			const GlyphInfo& glyph = GetGlyphByIndex(shaped.GlyphIndex);
+			if (glyph.Visible)
+			{
+				TextGlyphQuad quad;
+				quad.Min = shaped.Pen + glyph.PlaneMin;
+				quad.Max = shaped.Pen + glyph.PlaneMax;
+				quad.Page = glyph.Page;
+				quad.AtlasPosition = glyph.AtlasPosition;
+				quad.AtlasSize = glyph.AtlasSize;
+				outLayout.Quads.push_back(quad);
+			}
+			else if (glyph.Pending)
+			{
+				outLayout.PendingGlyphs++;
+			}
+		}
 	}
 
 	const std::vector<uint8_t>& FontAtlas::GetPagePixels(uint32_t page) const

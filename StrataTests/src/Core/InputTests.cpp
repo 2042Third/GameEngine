@@ -545,6 +545,194 @@ TEST_SUITE("Core.Input")
 		CHECK_FALSE(Input::IsKeyDown(Key::S));
 		Input::Reset();
 	}
+
+	TEST_CASE("Typed text is reported for one input frame as UTF-8, the devices' first, then simulated text")
+	{
+		Input::Reset();
+		Input::BeginFrame();
+		Input::ProcessText('h');
+		Input::ProcessText(0xE9);    // e with acute: two bytes
+		Input::ProcessText(0x20AC);  // The euro sign: three bytes
+		Input::ProcessText(0x1F600); // An emoji: four bytes
+		Input::ProcessText('\n');    // Control characters, surrogates and code points beyond Unicode are not text
+		Input::ProcessText(0x7F);
+		Input::ProcessText(0xD800);
+		Input::ProcessText(0x110000);
+		CHECK(Input::GetTypedText() == "h\xC3\xA9\xE2\x82\xAC\xF0\x9F\x98\x80");
+
+		// Simulated text waits for the next input frame, and follows the devices' text there.
+		Input::SimulateText("ok \xC3\xA9");
+		Input::SimulateText("");
+		CHECK(Input::HasQueuedSimulatedInput());
+		Input::BeginFrame();
+		Input::ProcessText('x');
+		CHECK(Input::GetTypedText() == "xok \xC3\xA9");
+		Input::BeginFrame();
+		CHECK(Input::GetTypedText().empty());
+
+		// While input frames are suspended, the devices' text waits for the game's next update.
+		Input::SetSuspended(true);
+		Input::BeginFrame();
+		Input::ProcessText('a');
+		Input::BeginFrame();
+		Input::ProcessText('b');
+		Input::SetSuspended(false);
+		Input::BeginFrame();
+		CHECK(Input::GetTypedText() == "ab");
+		Input::Reset();
+	}
+
+	TEST_CASE("Malformed simulated UTF-8 becomes U+FFFD, and a frame's text stops at c_MaxTypedTextBytes whole characters")
+	{
+		Input::Reset();
+		Input::BeginFrame();
+		// A stray continuation byte, a truncated sequence before ASCII, an overlong encoding and an encoded surrogate.
+		Input::SimulateText("a\x80" "b\xE2\x82" "c\xC0\xAF\xED\xA0\x80");
+		Input::BeginFrame();
+		const std::string replacement = "\xEF\xBF\xBD";
+		CHECK(Input::GetTypedText() == "a" + replacement + "b" + replacement + "c" + replacement + replacement);
+
+		// 1,023 bytes of ASCII leave room for one byte: the next two-byte character is dropped whole, and so is what follows
+		// (the frame keeps what was typed first).
+		Input::SimulateText(std::string(Input::c_MaxTypedTextBytes - 1, 'z') + "\xC3\xA9" "q");
+		Input::BeginFrame();
+		const std::string capped = Input::GetTypedText();
+		CHECK(capped.size() == Input::c_MaxTypedTextBytes - 1);
+		CHECK(capped.find_first_not_of('z') == std::string::npos);
+
+		// The devices' text has the same limit, and simulated text only fills what it leaves.
+		for (size_t index = 0; index < Input::c_MaxTypedTextBytes - 2; index++)
+			Input::ProcessText('d');
+		Input::ProcessText(0x20AC);
+		Input::ProcessText('d');
+		CHECK(Input::GetTypedText() == std::string(Input::c_MaxTypedTextBytes - 2, 'd') + "zz");
+		Input::SimulateText("s");
+		Input::BeginFrame();
+		Input::ProcessText(0x20AC);
+		Input::ProcessText('e');
+		CHECK(Input::GetTypedText() == "\xE2\x82\xAC" "es");
+		Input::Reset();
+	}
+
+	TEST_CASE("Disabled input drops the devices' text, and simulated text still comes through")
+	{
+		Input::Reset();
+		Input::BeginFrame();
+		Input::SetEnabled(false);
+		Input::ProcessText('k');
+		Input::SimulateText("sim");
+		CHECK(Input::GetTypedText().empty());
+		Input::BeginFrame();
+		Input::ProcessText('k');
+		CHECK(Input::GetTypedText() == "sim");
+		Input::SetEnabled(true);
+		CHECK(Input::GetTypedText() == "ksim");
+
+		// Clearing simulated input drops its queued text.
+		Input::SimulateText("gone");
+		Input::ClearSimulated();
+		Input::BeginFrame();
+		CHECK(Input::GetTypedText().empty());
+		Input::Reset();
+	}
+
+	TEST_CASE("Pointer capture hides mouse buttons and scrolling from the game, never from the pointer state")
+	{
+		Input::Reset();
+		Input::BeginFrame();
+		Input::ProcessMouseMove({ 30.0f, 40.0f });
+		Input::ProcessMouseButton(Mouse::ButtonLeft, true);
+		Input::ProcessScroll({ 0.0f, 2.0f });
+		Input::SimulateMouseButton(Mouse::ButtonRight, true);
+		CHECK(Input::IsMouseButtonPressed(Mouse::ButtonLeft));
+
+		Input::SetPointerCapture(true);
+		CHECK(Input::IsPointerCaptured());
+		CHECK_FALSE(Input::IsMouseButtonDown(Mouse::ButtonLeft));
+		CHECK_FALSE(Input::IsMouseButtonPressed(Mouse::ButtonLeft));
+		CHECK(Input::GetScrollDelta() == glm::vec2(0.0f));
+		PointerState pointer = Input::GetPointerState();
+		CHECK(pointer.Position == glm::vec2(30.0f, 40.0f));
+		CHECK(pointer.ScrollDelta == glm::vec2(0.0f, 2.0f));
+		CHECK(pointer.IsDown(Mouse::ButtonLeft));
+		CHECK(pointer.IsPressed(Mouse::ButtonLeft));
+		CHECK_FALSE(pointer.IsDown(Mouse::ButtonRight)); // Simulated presses apply at the next input frame
+		CHECK(Input::GetMousePosition() == glm::vec2(30.0f, 40.0f)); // The position is not hidden
+
+		Input::BeginFrame();
+		Input::ProcessMouseButton(Mouse::ButtonLeft, false);
+		CHECK_FALSE(Input::IsMouseButtonReleased(Mouse::ButtonLeft));
+		CHECK_FALSE(Input::IsMouseButtonDown(Mouse::ButtonRight));
+		pointer = Input::GetPointerState();
+		CHECK(pointer.IsReleased(Mouse::ButtonLeft));
+		CHECK(pointer.IsDown(Mouse::ButtonRight));
+		CHECK(pointer.IsPressed(Mouse::ButtonRight));
+		CHECK_FALSE(pointer.IsDown(static_cast<MouseCode>(40)));
+
+		// Capture lasts until it is cleared: by its owner, or by Reset.
+		Input::SetPointerCapture(false);
+		CHECK(Input::IsMouseButtonReleased(Mouse::ButtonLeft));
+		CHECK(Input::IsMouseButtonDown(Mouse::ButtonRight));
+		Input::SetPointerCapture(true);
+		Input::Reset();
+		CHECK_FALSE(Input::IsPointerCaptured());
+	}
+
+	TEST_CASE("Keyboard capture hides keys and typed text from the game, never from the key state")
+	{
+		Input::Reset();
+		Input::BeginFrame();
+		Input::ProcessKey(Key::A, true);
+		Input::ProcessText('a');
+		Input::SimulateText("b");
+		Input::SimulateKey(Key::Enter, true);
+		Input::SetKeyboardCapture(true);
+		CHECK(Input::IsKeyboardCaptured());
+		CHECK_FALSE(Input::IsKeyDown(Key::A));
+		CHECK_FALSE(Input::IsKeyPressed(Key::A));
+		CHECK(Input::GetTypedText().empty());
+		KeyState a = Input::GetKeyState(Key::A);
+		CHECK(a.Down);
+		CHECK(a.Pressed);
+		CHECK_FALSE(a.Released);
+		CHECK(Input::GetUncapturedTypedText() == "a");
+
+		// Simulated keys and text reach the key state alike, in the next input frame.
+		Input::BeginFrame();
+		CHECK(Input::GetKeyState(Key::Enter).Pressed);
+		CHECK_FALSE(Input::IsKeyPressed(Key::Enter));
+		CHECK(Input::GetUncapturedTypedText() == "b");
+		Input::ProcessKey(Key::A, false);
+		a = Input::GetKeyState(Key::A);
+		CHECK(a.Released);
+		CHECK_FALSE(Input::IsKeyReleased(Key::A));
+		// Out-of-range codes are no key.
+		CHECK_FALSE(Input::GetKeyState(static_cast<KeyCode>(60000)).Down);
+
+		// Capture lasts until it is cleared: by its owner, or by Reset.
+		Input::SetKeyboardCapture(false);
+		CHECK(Input::IsKeyDown(Key::Enter));
+		CHECK(Input::GetTypedText() == "b");
+		Input::SetKeyboardCapture(true);
+		Input::Reset();
+		CHECK_FALSE(Input::IsKeyboardCaptured());
+	}
+
+	TEST_CASE("Disabled input hides the devices' pointer buttons from the pointer state, not simulated ones")
+	{
+		Input::Reset();
+		Input::BeginFrame();
+		Input::SetEnabled(false);
+		Input::ProcessMouseButton(Mouse::ButtonLeft, true);
+		Input::SimulateMouseButton(Mouse::ButtonMiddle, true);
+		Input::BeginFrame();
+		Input::ProcessScroll({ 1.0f, 0.0f });
+		const PointerState pointer = Input::GetPointerState();
+		CHECK_FALSE(pointer.IsDown(Mouse::ButtonLeft));
+		CHECK(pointer.ScrollDelta == glm::vec2(0.0f));
+		CHECK(pointer.IsPressed(Mouse::ButtonMiddle));
+		Input::Reset();
+	}
 }
 
 TEST_SUITE("Core.InputNames")

@@ -214,6 +214,7 @@ namespace Strata
 		glfwSetCharCallback(m_Window, [](GLFWwindow* window, unsigned int codepoint)
 		{
 			WindowData& data = *static_cast<WindowData*>(glfwGetWindowUserPointer(window));
+			Input::ProcessText(codepoint);
 			KeyTypedEvent event(codepoint);
 			if (data.EventCallback)
 				data.EventCallback(event);

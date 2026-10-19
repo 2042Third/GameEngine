@@ -357,6 +357,10 @@ namespace Strata
 		double GetTime() const { return m_Time; }
 		uint64_t GetFrameIndex() const { return m_FrameIndex; }
 		float GetTimeScale() const { return m_TimeScale; }
+		// Time that the time scale does not slow or stop (menus and fades at time scale 0): the latest runtime update's timestep
+		// before the time scale (the fixed timestep of a step while paused), and their sum since OnRuntimeStart, in seconds.
+		float GetUnscaledDeltaTime() const { return m_UnscaledDeltaTime; }
+		double GetUnscaledTime() const { return m_UnscaledTime; }
 		void SetTimeScale(float timeScale) { m_TimeScale = std::max(0.0f, timeScale); }
 
 		// How an update that is behind runs its fixed steps. Without time dilation (the default, so that tests and tools step
@@ -639,6 +643,8 @@ namespace Strata
 		bool m_TimeDilation = false;
 		uint64_t m_DroppedFixedSteps = 0;
 		double m_Time = 0.0;
+		double m_UnscaledTime = 0.0;
+		float m_UnscaledDeltaTime = 0.0f;
 		uint64_t m_FrameIndex = 0;
 		std::optional<int32_t> m_QuitRequest;
 		std::optional<UUID> m_SceneLoadRequest;

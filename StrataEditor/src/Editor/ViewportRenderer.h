@@ -33,6 +33,9 @@ namespace Strata
 		// running game show the scene as the game does.
 		bool EditorView = false;
 		std::string Notice;          // Shown over the image, e.g. when the scene has no camera to play from
+		// Where the game's screen lies in the image (SceneRenderOptions::ScreenView): the whole image, unless the 2D canvas
+		// mode zooms and pans it.
+		SceneScreenView ScreenView;
 	};
 
 	enum class ViewportCameraSource : uint8_t
@@ -47,7 +50,7 @@ namespace Strata
 	// (the Game view). Nullopt (with an error) only for ViewportCameraSource::Scene without a camera.
 	std::optional<ViewportView> ResolveViewportView(EditorContext& context, ViewportCameraSource source, float aspectRatio, std::string* outError = nullptr);
 
-	// How a view shows the scene beyond the overlays: preview lighting and the game's screen-space text, from the viewport
+	// How a view shows the scene beyond the overlays: preview lighting and the game's screen-space UI, from the viewport
 	// settings for editor views (ViewportView::EditorView), as the game shows them otherwise.
 	SceneRenderOptions GetViewportRenderOptions(const ViewportView& view, const ViewportSettings& settings);
 

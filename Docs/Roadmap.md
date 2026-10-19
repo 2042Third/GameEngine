@@ -359,6 +359,12 @@ interleaved A/Bs against wave 2's build; the quiet campaign that decided the bud
 
 Open items and deferrals later waves own:
 
+- Game UI (wave 4's `game-ui`): world-space canvases draw unlit, after post-processing, and the game's hit tests on
+  them ignore scene geometry in front (the editor's picks check meshes); UI action bindings use the engine's input
+  names (`Key/KPEnter`, `Gamepad/A`) until an input-actions asset names actions (wave 5).
+- Shaders: `Scene/Forward.frag`'s transparent variant samples with implicit derivatives after its alpha-mask
+  `discard`, which is undefined on drivers that do not keep helper lanes; `Architecture.Shaders` lists it as its one
+  known exception (`c_KnownDerivativesAfterDiscard`) and fails once it is fixed.
 - Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
   `GameRuntime`, the editor and many tests use the script engine directly; physics, audio and animation can be left
   out (`STRATA_WITH_PHYSICS`, `STRATA_WITH_AUDIO`, `STRATA_WITH_ANIMATION`, wave 4's `engine-modules`).
@@ -538,6 +544,10 @@ Open items and deferrals later waves own:
     `SubmitMany` 0.41 us, `ParallelForOverhead` 95.9 us and `WakeLatency` 19.6 us), and its throughput targets are
     stated in the reference machine's numbers: a clean Debug build 30% below 3,099 CPU-seconds, Debug `ctest -j 8` in
     at most half of 658 s, and at most 28 threads in an editor.
+  - Wave 4's `game-ui`: the `Perf.GameUI.*` and `PerfGPU.GameUI.*` metrics are provisional. On the Mac,
+    `PerfGPU.Streaming.Mips.MaxUploadStageMs` measured 1.98-2.28 ms against the step-0 base's 1.59-1.66 ms, with
+    engine-modules and game-ui merged and no UI in its scene, on a machine other streams were building on: to be
+    measured again quietly.
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
 

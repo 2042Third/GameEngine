@@ -2,6 +2,7 @@
 
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Core/FileSystem.h"
+#include "Strata/GameUI/GameUIScene.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Renderer/RendererComponents.h"
@@ -83,6 +84,110 @@ namespace Strata::Tests
 				const float axes[c_GamepadAxisCount] = {};
 				const bool buttons[c_GamepadButtonCount] = {};
 				Input::ProcessGamepad(0, true, axes, buttons);
+			}
+		}
+
+		// A UI element of the feature canvas where the player sees it: its rect in input coordinates.
+		UIBox FindUIElement(Scene& scene, std::string_view name)
+		{
+			GameUIScene& ui = GameUIScene::Get(scene);
+			const UIInputScreen input = GameUIScene::GetInputScreen();
+			UICanvasView view;
+			uint32_t element = 0;
+			INFO("UI element '", std::string(name), "' of the feature scene");
+			REQUIRE(ui.FindElement(RequireEntity(scene, name).GetHandle(), input.Screen, view, element));
+			const UIBox box = ui.GetElementBox(view, element);
+			return UIBox { box.Min * view.Scale / input.InputToPixels, box.Size * view.Scale / input.InputToPixels };
+		}
+
+		// How many frames after its click frame UIFeatures' scenario gives its last input (Escape goes up; see UIFeatures.cpp).
+		constexpr int32_t c_UIScenarioLastFrame = 18;
+
+		// The player UIFeatures expects around its click frame (see UIFeatures.cpp), as device input.
+		void SimulateUIInput(Scene& scene, int32_t frame, int32_t clickFrame)
+		{
+			switch (frame - clickFrame)
+			{
+				case -1:
+					Input::ProcessMouseMove(FindUIElement(scene, "Play Button").GetCenter());
+					break;
+				case 0:
+					Input::ProcessMouseButton(Mouse::ButtonLeft, true);
+					break;
+				case 2:
+					Input::ProcessMouseMove(FindUIElement(scene, "Sound Toggle").GetCenter());
+					Input::ProcessMouseButton(Mouse::ButtonLeft, true);
+					break;
+				case 4:
+				{
+					const UIBox slider = FindUIElement(scene, "Volume Slider");
+					Input::ProcessMouseMove({ slider.Min.x + 1.0f, slider.GetCenter().y });
+					Input::ProcessMouseButton(Mouse::ButtonLeft, true);
+					break;
+				}
+				case 5:
+				{
+					const UIBox slider = FindUIElement(scene, "Volume Slider");
+					Input::ProcessMouseMove({ slider.GetMax().x + slider.Size.x, slider.GetCenter().y });
+					break;
+				}
+				case 1:
+				case 3:
+				case 6:
+					Input::ProcessMouseButton(Mouse::ButtonLeft, false);
+					break;
+				case 7:
+					Input::ProcessKey(Key::Up, true);
+					break;
+				case 8:
+					Input::ProcessKey(Key::Up, false);
+					Input::ProcessText('O');
+					Input::ProcessText('K');
+					break;
+				case 9:
+				case 10:
+				{
+					// Gamepad 1 (InputFeatures watches gamepad 0): B down, then up.
+					const float axes[c_GamepadAxisCount] = {};
+					bool buttons[c_GamepadButtonCount] = {};
+					buttons[static_cast<size_t>(GamepadButton::B)] = frame - clickFrame == 9;
+					Input::ProcessGamepad(1, true, axes, buttons);
+					if (frame - clickFrame == 10)
+						Input::ProcessKey(Key::Enter, true);
+					break;
+				}
+				case 11:
+					Input::ProcessKey(Key::Enter, false);
+					break;
+				case 12:
+					Input::ProcessMouseMove(FindUIElement(scene, "Name Field").GetCenter());
+					Input::ProcessMouseButton(Mouse::ButtonLeft, true);
+					break;
+				case 13:
+					Input::ProcessMouseButton(Mouse::ButtonLeft, false);
+					Input::ProcessKey(Key::End, true);
+					break;
+				case 14:
+					Input::ProcessKey(Key::End, false);
+					Input::ProcessKey(Key::Backspace, true);
+					break;
+				case 15:
+					Input::ProcessKey(Key::Backspace, false);
+					Input::ProcessText('u');
+					Input::ProcessText('m');
+					break;
+				case 16:
+					Input::ProcessKey(Key::Enter, true);
+					break;
+				case 17:
+					Input::ProcessKey(Key::Enter, false);
+					Input::ProcessKey(Key::Escape, true);
+					break;
+				case c_UIScenarioLastFrame:
+					Input::ProcessKey(Key::Escape, false);
+					break;
+				default:
+					break;
 			}
 		}
 
@@ -273,12 +378,18 @@ namespace Strata::Tests
 		const int32_t pressFrame = GetField<int32_t>(GetScriptSystem(scene), RequireEntity(scene, "Input Features"), "InputFeatures", "PressFrame");
 		REQUIRE(pressFrame > 1);
 		REQUIRE(pressFrame + 2 < c_FeatureReloadFrame);
+		// The player's UI input comes after InputFeatures' (which checks that no mouse button is down before its press).
+		const int32_t clickFrame = GetField<int32_t>(GetScriptSystem(scene), RequireEntity(scene, "UI Features"), "UIFeatures", "ClickFrame");
+		REQUIRE(clickFrame - 1 > pressFrame + 2);
+		// The whole UI scenario ends before the hot reload, which would land in the middle of a field's editing.
+		REQUIRE(clickFrame + c_UIScenarioLastFrame < c_FeatureReloadFrame);
 
 		for (int32_t frame = 0; frame < c_FeatureFrames; frame++)
 		{
 			INFO("Frame ", frame);
 			Input::BeginFrame();
 			SimulateInput(frame, pressFrame);
+			SimulateUIInput(scene, frame, clickFrame);
 			advanceFrame();
 			REQUIRE_FALSE(engine.IsFaulted());
 			// The scene's caches (world transforms, activity, hierarchy links, lookup indices) match a full recomputation after
@@ -286,6 +397,8 @@ namespace Strata::Tests
 			std::string error;
 			REQUIRE_MESSAGE(scene.ValidateWorldTransforms(&error), error);
 			REQUIRE_MESSAGE(scene.ValidateHierarchy(&error), error);
+			if (GameUIScene* ui = GameUIScene::Find(scene))
+				REQUIRE_MESSAGE(ui->Validate(&error), error);
 			if (frame == c_FeatureReloadFrame)
 				REQUIRE_MESSAGE(engine.Reload(&error), error);
 		}

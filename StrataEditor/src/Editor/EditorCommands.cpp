@@ -50,6 +50,8 @@ namespace Strata
 		RegisterStreamingCommands(*this);
 		RegisterAnimationCommands(*this);
 		RegisterAudioCommands(*this);
+		RegisterUICommands(*this);
+		RegisterUIInputCommands(*this);
 		RegisterBatchCommands(*this);
 
 		Register({ "editor.commands",

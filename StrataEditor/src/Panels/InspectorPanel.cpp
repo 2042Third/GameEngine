@@ -5,6 +5,7 @@
 #include "Editor/PropertyEdit.h"
 #include "Editor/SceneEdit.h"
 #include "Editor/ScriptEdit.h"
+#include "UI/ComponentDrawers.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/EditorShell.h"
@@ -733,6 +734,7 @@ namespace Strata
 		// The menu may have removed it too.
 		if (open && HasComponentOnAll(entities, info))
 		{
+			DrawMissingRequirements(context, commands, entities, info);
 			if (info.TypeId == entt::type_id<ScriptComponent>().hash())
 			{
 				if (entities.size() == 1)
@@ -746,7 +748,11 @@ namespace Strata
 			}
 			else
 			{
-				DrawProperties(context, entities, info, prefab);
+				// What the generic rows cannot show (a UIRect's anchor presets and margins), above them; they leave out what
+				// the drawer showed in its own way.
+				UI::ComponentDrawResult drawn;
+				UI::ComponentDrawers::Draw(context, entities, info, drawn);
+				DrawProperties(context, entities, info, prefab, &drawn);
 			}
 			if (info.TypeId == entt::type_id<MeshRendererComponent>().hash())
 				DrawMaterialSection(panelContext, entities);
@@ -755,6 +761,37 @@ namespace Strata
 			ImGui::Spacing();
 		}
 		ImGui::PopID();
+	}
+
+	void InspectorPanel::DrawMissingRequirements(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities,
+		const ComponentInfo& info)
+	{
+		// Removing a component another one requires is allowed (ComponentInfo::Requires), which leaves that one without effect:
+		// a UI Image without its UI Rect draws nothing. The section says so, with a button that adds it to those without it.
+		for (const std::string& requiredName : info.Requires)
+		{
+			const ComponentInfo* required = ComponentRegistry::Find(requiredName);
+			if (!required)
+				continue;
+			std::vector<Entity> missing;
+			for (const Entity entity : entities)
+			{
+				if (!required->Has(entity.GetScene()->GetRegistry(), entity.GetHandle()))
+					missing.push_back(entity);
+			}
+			if (missing.empty())
+				continue;
+			const std::string probe = fmt::format("Inspector.{}.Needs{}", info.Name, required->Name);
+			const std::string text = entities.size() == 1
+				? fmt::format("Needs a {}: without it this component has no effect.", required->DisplayName)
+				: fmt::format("{} of the selected entities have no {}: without it this component has no effect there.", missing.size(), required->DisplayName);
+			UI::Banner(probe.c_str(), Icons::TriangleAlert, text, UI::GetThemeColors().Warning);
+			const std::string label = fmt::format("{}  Add {}", Icons::Plus, required->DisplayName);
+			const bool add = ImGui::Button(label.c_str());
+			UI::ItemProbe::Record(probe + ".Add", true, 0, label);
+			if (add)
+				RunEditorCommand(context, commands, "component.add", { { "entities", ToJson(missing) }, { "component", required->Name } });
+		}
 	}
 
 	void InspectorPanel::DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
@@ -808,8 +845,8 @@ namespace Strata
 		ImGui::EndPopup();
 	}
 
-	void InspectorPanel::DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info,
-		const PrefabView* prefab)
+	void InspectorPanel::DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PrefabView* prefab,
+		const UI::ComponentDrawResult* drawn)
 	{
 		if (!UI::BeginPropertyTable("Properties"))
 			return;
@@ -818,7 +855,7 @@ namespace Strata
 		for (size_t index = 0; index < info.Properties.size(); index++)
 		{
 			const PropertyInfo& property = info.Properties[index];
-			if (property.IsHidden() || property.IsTransient())
+			if (property.IsHidden() || property.IsTransient() || (drawn && drawn->Replaces(property.Name)))
 				continue;
 			const std::optional<SharedPropertyValue> shared = GetSharedProperty(entities, info, property);
 			if (!shared)

@@ -9,6 +9,8 @@
 namespace Strata
 {
 
+	class FontFace;
+
 	// Font file with TrueType outlines (a .ttf, or the first font of a .ttc collection); glyph atlases are built by the
 	// text renderer on demand. Font files are untrusted input: Create validates everything the glyph rasterizer reads (see
 	// ValidateTrueTypeFont) and rejects malformed fonts and fonts with CFF outlines.
@@ -19,6 +21,7 @@ namespace Strata
 		AssetType GetType() const override { return GetStaticType(); }
 
 		static Ref<Font> Create(std::vector<uint8_t> fontData, std::string* outError = nullptr);
+		~Font() override;
 		// The engine's built-in font (Roboto Medium), used by text without a font of its own. Created on first use.
 		static const Ref<Font>& GetDefault();
 
@@ -33,6 +36,9 @@ namespace Strata
 		const GlyphShapeCost& GetGlyphShape(uint32_t glyph) const;
 		// False when the font's kerning data is malformed or too costly to search: text then uses the glyph advances only.
 		bool HasUsableKerning() const { return m_KerningUsable; }
+		// The font's glyph metrics (FontFace), made on first use and kept with the font; null (with the reason) when the font's
+		// tables cannot be read. Its caches are the renderer's and the UI's, not counted in GetMemoryUsage. Main thread only.
+		const FontFace* GetFace(std::string* outError = nullptr) const;
 	private:
 		Font() = default;
 	private:
@@ -40,6 +46,9 @@ namespace Strata
 		uint32_t m_FontOffset = 0;
 		bool m_KerningUsable = false;
 		std::vector<GlyphShapeCost> m_GlyphShapes;
+		mutable Scope<FontFace> m_Face;
+		mutable std::string m_FaceError; // Why the face could not be made (once tried)
+		mutable bool m_FaceTried = false;
 	};
 
 }

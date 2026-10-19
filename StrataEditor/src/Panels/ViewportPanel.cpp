@@ -7,6 +7,7 @@
 #include "Editor/EditorPlacement.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/SceneBounds.h"
+#include "Editor/UIRectEdit.h"
 #include "Editor/ViewportRenderer.h"
 #include "Panels/ViewportToolbar.h"
 #include "UI/EditorActions.h"
@@ -130,8 +131,16 @@ namespace Strata
 		m_Image.Min = glm::vec2(imageMin.x, imageMin.y);
 		m_Image.Size = glm::max(glm::vec2(available.x, available.y), glm::vec2(0.0f));
 		m_Image.PixelScale = ViewportImageArea::ChoosePixelScale(glm::vec2(viewportScale.x, viewportScale.y), glm::vec2(displayScale.x, displayScale.y));
+		// The 2D canvas mode shows the canvas at its reference aspect ratio: the image is letterboxed in the area under the
+		// toolbar (whose chips never cover it).
+		const bool canvasMode = CanvasModeView::IsActive(context) && m_CanvasMode.Layout(context, m_Image, 0.0f);
+		if (!canvasMode)
+			m_CanvasMode.Reset(context);
 		const glm::uvec2 size = m_Image.GetPixelSize();
-		viewport.SetSize(size);
+		// What the view shows of the game is its screen: in canvas mode the canvas at its fit, however it is zoomed (ui.layout,
+		// the Inspector's pixels and captures use it).
+		const glm::uvec2 screenSize = canvasMode ? m_CanvasMode.GetScreenPixels() : size;
+		viewport.SetSize(screenSize);
 		if (size.x == 0 || size.y == 0)
 		{
 			Reset(context);
@@ -155,7 +164,7 @@ namespace Strata
 		// The editor camera, on the edited scene and on the running game alike (the Game view shows the game as it is); or,
 		// with "Game camera", the scene's primary camera with the editor's overlays, which the editor camera's controls
 		// leave alone.
-		const float aspectRatio = static_cast<float>(size.x) / static_cast<float>(size.y);
+		const float aspectRatio = static_cast<float>(screenSize.x) / static_cast<float>(screenSize.y);
 		const auto resolveView = [&context, &settings, aspectRatio]()
 		{
 			if (settings.PilotGameCamera)
@@ -172,33 +181,69 @@ namespace Strata
 				view->Notice = "The scene has no primary camera: showing the editor camera";
 			return view;
 		};
-		std::optional<ViewportView> view = resolveView();
-		m_Piloting = view && view->FromScene;
-		HandleShortcuts(panelContext);
-		if (!m_Piloting)
-			UpdateCamera(context, m_Hovered);
-		else
-			EndCameraDrag();
-		// A plain click picks what is under the cursor in the image that is shown (the running scene's entities while the
-		// game plays); clicks on the gizmo are its own.
-		const ImGuiIO& io = ImGui::GetIO();
-		if (m_Hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !ImGuizmo::IsOver() && !ImGuizmo::IsUsing())
+		std::optional<ViewportView> view;
+		if (canvasMode)
 		{
-			const ViewportPickMode mode = io.KeyCtrl ? ViewportPickMode::Toggle : (io.KeyShift ? ViewportPickMode::Add : ViewportPickMode::Replace);
-			if (const std::optional<glm::uvec2> pixel = m_Image.ToPixel(glm::vec2(io.MousePos.x, io.MousePos.y)))
-				viewport.RequestPick(*pixel, size, mode);
+			// The canvas over the scene as the game shows it: through the scene's camera, else the editor camera's view, of
+			// the part of the screen the zoomed and panned canvas shows.
+			view = ResolveViewportView(context, ViewportCameraSource::Scene, aspectRatio);
+			if (!view)
+				view = ResolveViewportView(context, ViewportCameraSource::Editor, aspectRatio);
+			if (view)
+				m_CanvasMode.ApplyView(*view);
+			m_Piloting = false;
+			EndCameraDrag();
+			EndGizmoDrag(context);
+			if (!m_CanvasMode.IsDragging())
+				HandleSelectionShortcuts(panelContext);
 		}
-		// The camera may have moved this frame.
-		view = resolveView();
+		else
+		{
+			view = resolveView();
+			m_Piloting = view && view->FromScene;
+			HandleShortcuts(panelContext);
+			if (!m_Piloting)
+				UpdateCamera(context, m_Hovered);
+			else
+				EndCameraDrag();
+			// A plain click picks what is under the cursor in the image that is shown (the running scene's entities while the
+			// game plays); clicks on the gizmo are its own.
+			const ImGuiIO& io = ImGui::GetIO();
+			if (m_Hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !ImGuizmo::IsOver() && !ImGuizmo::IsUsing())
+			{
+				const ViewportPickMode mode = io.KeyCtrl ? ViewportPickMode::Toggle : (io.KeyShift ? ViewportPickMode::Add : ViewportPickMode::Replace);
+				if (const std::optional<glm::uvec2> pixel = m_Image.ToPixel(glm::vec2(io.MousePos.x, io.MousePos.y)))
+				{
+					// The game UI the view shows is in front of the scene (its screen-space canvases while Game UI is on, the
+					// canvases in the scene always): a click on one of its elements selects it.
+					const UIScreen screen { glm::vec2(size), context.GetGameWindow().GetState().ContentScale };
+					const glm::mat4 viewProjection = view ? view->Camera.Projection * view->Camera.View : glm::mat4(1.0f);
+					const Entity element = UIRectEdit::PickElement(*context.GetActiveScene(), screen, glm::vec2(*pixel) + glm::vec2(0.5f),
+						settings.ShowGameUI, view ? &viewProjection : nullptr);
+					if (element)
+						EditorViewport::ApplyPick(context, element, mode);
+					else
+						viewport.RequestPick(*pixel, size, mode);
+				}
+			}
+			// The camera may have moved this frame.
+			view = resolveView();
+		}
 
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		const ImVec2 imageMax(imageMin.x + available.x, imageMin.y + available.y);
 		ViewportRenderer* renderer = viewport.GetRenderer();
-		const bool rendered = renderer && view && renderer->Render(context, size, *view, settings, view->EditorOverlays);
+		// The canvas mode draws the game UI, without the editor's overlays, in the letterboxed area.
+		ViewportSettings renderSettings = settings;
+		renderSettings.ShowGameUI = renderSettings.ShowGameUI || canvasMode;
+		const bool rendered = renderer && view && renderer->Render(context, size, *view, renderSettings, view->EditorOverlays && !canvasMode);
 		if (rendered)
 		{
-			drawList->AddImage(ViewportToolbar::ToTextureID(renderer->GetOutputTexture()), imageMin, imageMax);
+			if (canvasMode)
+				drawList->AddRectFilled(imageMin, imageMax, ImGui::GetColorU32(colors.Chrome));
+			drawList->AddImage(ViewportToolbar::ToTextureID(renderer->GetOutputTexture()), ImVec2(m_Image.Min.x, m_Image.Min.y),
+				ImVec2(m_Image.Min.x + m_Image.Size.x, m_Image.Min.y + m_Image.Size.y));
 		}
 		else
 		{
@@ -207,13 +252,15 @@ namespace Strata
 			drawList->AddText(ImVec2(imageMin.x + padding.x, imageMax.y - padding.y - ImGui::GetFontSize()), ImGui::GetColorU32(colors.TextSecondary),
 				renderer ? "The scene could not be rendered (see the Console)" : "No GPU: the viewport cannot render");
 		}
+		// The canvas's outlines and handles, also without an image (a headless editor still edits the layout).
+		if (canvasMode)
+			m_CanvasMode.Update(context, m_Hovered, m_Hovered || m_Focused);
 		ViewportToolbar::DrawBackground(drawList, layout, context);
 
 		if (view)
-		{
 			DrawAgentFlash(context, *view);
+		if (view && !canvasMode)
 			UpdateGizmo(context, *view);
-		}
 
 		// The chips, in the toolbar from its left; the agent's at its right. The last chips that do not fit with their labels
 		// are drawn as icons (their labels in their tooltips).
@@ -247,7 +294,7 @@ namespace Strata
 
 	bool ViewportPanel::IsAnimating() const
 	{
-		return m_CameraDrag != CameraDrag::None || m_GizmoDrag.has_value() || (!m_FlashBounds.empty() && IsFlashing(Now()));
+		return m_CameraDrag != CameraDrag::None || m_GizmoDrag.has_value() || m_CanvasMode.IsDragging() || (!m_FlashBounds.empty() && IsFlashing(Now()));
 	}
 
 	bool ViewportPanel::IsFlashing(std::chrono::steady_clock::time_point now) const
@@ -264,6 +311,7 @@ namespace Strata
 		m_FlashBounds.clear();
 		EndCameraDrag();
 		EndGizmoDrag(context);
+		m_CanvasMode.Reset(context);
 		context.GetViewport().SetSize(glm::uvec2(0, 0));
 	}
 
@@ -343,7 +391,11 @@ namespace Strata
 		UI::ToggleChip("Viewport.PreviewLighting", Icons::SunMedium, "Preview lighting", &settings.PreviewLighting, previewTooltip, previewNeeded);
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.GameUI", Icons::Gamepad2, "Game UI", &settings.ShowGameUI,
-			"Show the game's screen-space text (its HUD) in the editor view; the game and the scene camera always show it");
+			"Show the game's screen-space UI (its HUD text and UI canvases) in the editor view, where a click selects a UI element; "
+			"the game and the scene camera always show it");
+		ImGui::SameLine();
+		UI::ToggleChip("Viewport.CanvasMode", Icons::Frame, "2D", &settings.CanvasMode,
+			"Show the selection's UI canvas in 2D at its reference aspect ratio, to place and size its elements with handles");
 		ImGui::SameLine();
 		DrawDebugViewChip(settings);
 		ImGui::SameLine();
@@ -568,19 +620,22 @@ namespace Strata
 	// Input
 	////////////////////////////////////////////////////////////////////////////////
 
+	void ViewportPanel::HandleSelectionShortcuts(EditorPanelContext& panelContext)
+	{
+		EditorContext& context = panelContext.Context;
+		EditorActions::HandleSelectionShortcuts(context, panelContext.Commands, true);
+		const Entity primary = context.GetPrimarySelection();
+		if (primary && panelContext.Shell && context.AcceptsEditShortcuts() && ImGui::Shortcut(ImGuiKey_F2, ImGuiInputFlags_RouteFocused))
+			panelContext.Shell->RenameEntity(primary.GetUUID());
+	}
+
 	void ViewportPanel::HandleShortcuts(EditorPanelContext& panelContext)
 	{
 		EditorContext& context = panelContext.Context;
 		const ImGuiIO& io = ImGui::GetIO();
-		// The selection's shortcuts (Delete, Ctrl+D, Ctrl+C/X/V, Ctrl+A, F2) while the viewport has the keyboard focus, never
-		// during a camera fly or a gizmo drag.
+		// The selection's shortcuts while the viewport has the keyboard focus, never during a camera fly or a gizmo drag.
 		if (m_CameraDrag != CameraDrag::Fly && !m_GizmoDrag && !ImGuizmo::IsUsing())
-		{
-			EditorActions::HandleSelectionShortcuts(context, panelContext.Commands, true);
-			const Entity primary = context.GetPrimarySelection();
-			if (primary && panelContext.Shell && context.AcceptsEditShortcuts() && ImGui::Shortcut(ImGuiKey_F2, ImGuiInputFlags_RouteFocused))
-				panelContext.Shell->RenameEntity(primary.GetUUID());
-		}
+			HandleSelectionShortcuts(panelContext);
 
 		// Only while the viewport is the target of the keyboard, never while typing or flying (WASD/QE move the camera).
 		// Nor during a gizmo drag, whose operation must not change under it.

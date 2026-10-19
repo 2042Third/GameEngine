@@ -14,7 +14,8 @@ of its own.
 
 Add the struct to the components header of the module that owns it: `Strata/src/Strata/<Module>/<Module>Components.h`
 (`Renderer/RendererComponents.h`, `Physics/PhysicsComponents.h`, `Audio/AudioComponents.h`,
-`Animation/AnimationComponents.h`, `Scripting/ScriptingComponents.h`; a new module gets its own pair). `Scene/Components.h`
+`Animation/AnimationComponents.h`, `Scripting/ScriptingComponents.h`, `GameUI/GameUIComponents.h`; a new module gets its
+own pair). `Scene/Components.h`
 holds only the scene's own components (ID, Name, Transform, Relationship, Tag, Inactive, PrefabInstance, Camera) and the
 types of components another module registers because a sibling layer must read them (`MeshRendererComponent`,
 `SkinComponent`): put a type there only for that reason. Rules:
@@ -51,6 +52,11 @@ ComponentRegistry::Register<WindZoneComponent>("WindZone")
   the property for people and AI agents (the tooltip text is part of `component.list`).
 - Flags: `NotRemovable` for components every entity has, `Hidden` for internal ones, `NoSerialize` only
   for data the serializer writes itself.
+- `Requires("UIRect")` names a component the entity needs for this one to work (every UI component but the rect needs
+  the rect). The paths that add components by name (`ComponentAccess::AddComponent`: `component.add`, `entity.create`,
+  the inspector's Add Component, scripts' `AddComponent`) add the missing ones first, in the same undo step; the registry
+  drops (with an error) a requirement that names no registered component. Removing the required one is allowed: the
+  Inspector then shows a notice and an Add button in the dependent component's section.
 - Data properties cannot express (lists, per-instance tables such as the Script component's fields) is written by the
   component itself: `.Extra(serialize, deserialize)`. When it holds entity or asset references, also describe them with
   `.ExtraReferences(visit, set, equals, visitJson)` (`ComponentExtraReferences`): copies and prefab instances remap

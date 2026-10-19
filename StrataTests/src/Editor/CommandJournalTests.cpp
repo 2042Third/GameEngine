@@ -113,6 +113,7 @@ namespace
 		"project.setExportSettings", "project.setStartScene",
 		"scene.loadAdditive", "scene.new", "scene.open", "scene.save", "scene.saveAs", "scene.setSettings", "scene.unloadAdditive",
 		"script.add", "script.build", "script.create", "script.init", "script.load", "script.reload", "script.remove", "script.setField",
+		"ui.create",
 	};
 	constexpr std::string_view c_QueryCommands[] = {
 		"animation.info",
@@ -132,6 +133,7 @@ namespace
 		"scene.hierarchy", "scene.info", "scene.loadStatus", "scene.recoveryStatus",
 		"script.get", "script.list", "script.status",
 		"selection.get",
+		"ui.hitTest", "ui.layout",
 		"viewport.capture", "viewport.getSettings",
 	};
 	constexpr std::string_view c_SessionCommands[] = {
@@ -139,7 +141,8 @@ namespace
 		"asset.setBudget",
 		"camera.focus", "camera.set",
 		"editor.activity.export", "editor.quit", "editor.removeRecentProject",
-		"input.gamepadAxis", "input.gamepadButton", "input.key", "input.mouseButton", "input.mouseMove", "input.releaseAll", "input.scroll", "input.sequence",
+		"input.click", "input.gamepadAxis", "input.gamepadButton", "input.key", "input.mouseButton", "input.mouseMove", "input.releaseAll",
+		"input.scroll", "input.sequence", "input.type",
 		"play.pause", "play.simulate", "play.start", "play.step", "play.stop",
 		"prefab.select",
 		"project.cancelExport", "project.close", "project.create", "project.export", "project.open", "project.openSample",

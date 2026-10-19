@@ -226,7 +226,11 @@ cursor mode a game asks for (`SetGameCursorMode`, scripts' `Input::SetCursorMode
 is enabled: disabling input gives the cursor back, enabling it applies the game's mode again, so a locked cursor in the
 editor stays in the focused Game view (the editor's UI ignores the mouse meanwhile, and the Game view says that Shift+F1
 frees it and Ctrl+P stops the game) and Shift+F1 frees it. `InputNames` maps key, button and gamepad control names for
-the `input.*` commands.
+the `input.*` commands. Text typed in an input frame (`GetTypedText`: the window's character events, `ProcessText`, and
+`SimulateText`) comes as UTF-8, at most 1,024 bytes a frame. Pointer capture (`SetPointerCapture`, which the game UI's
+system sets while the UI owns the pointer) hides mouse buttons and scrolling from gameplay queries; `GetPointerState`
+reads the pointer regardless. `UIActions.h` maps keys, gamepad buttons and stick directions to the game UI's fixed
+actions (Submit, Cancel, Up, Down, Left, Right) with key repeat and stick hysteresis.
 
 **Math** (`Math/`). Engine conventions in `Math.h`: right-handed, +Y up, -Z forward, reversed-Z projections, Euler
 angles in degrees. `AABB`, `Frustum`, `Ray`, and `Random` (thread-local generators).
@@ -303,7 +307,8 @@ Assets: `Mesh` (skinned meshes also have a skin stream, four joint influences pe
 skin's joints in the skeleton, their inverse bind matrices and the bind-pose extent of what each joint moves; cooked mesh
 format version 2, version 1 still loads), `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`;
 texture formats, the cooked texture format and the block decoders are `TextureFormat`, `CookedTexture` and
-`BlockCompression` (see [Texture cooking](#texture-cooking)). Also `TextRenderer`/`FontAtlas`, `DebugDraw`/`SceneGizmos`, `TextureReadback`
+`BlockCompression` (see [Texture cooking](#texture-cooking)). Also `TextRenderer`/`FontAtlas`/`FontAtlasCache` (glyph atlases, one per
+font per renderer) with `FontFace`/`TextLayout` (glyph metrics and text shaping without rasterizing), `DebugDraw`/`SceneGizmos`, `TextureReadback`
 (non-blocking GPU readback) and `ImageWriter` (PNG). Conventions and rules: AGENTS.md, "Architecture rules", and
 DeveloperGuide.md, "Rendering".
 
@@ -465,13 +470,14 @@ A file may include files of its own layer and of the layers it lists, which are 
 | Physics | `Physics/**` | Core, Asset, Reflection, Scene |
 | Audio | `Audio/**` | Core, App (its engine module), Asset, Reflection, Scene |
 | Animation | `Animation/**` | Core, Asset, Reflection, Scene |
+| GameUI | `GameUI/**` | Core, Input, Asset, Reflection, Scene, Renderer (only Engine includes it; see [Game UI](#game-ui)) |
 | Scripting | `Scripting/**` | Core, Input, Asset, Reflection, Scene |
 | Project | `Project/**` | Core, App (its engine module), Asset, Reflection |
 | Runtime | `Runtime/**` | Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Scripting, Project |
 | Network (tooling) | `Network/**`, `Platform/*/*Socket.cpp` | Core |
 | ImGui (tooling) | `ImGui/**` | Core, Input, App, Renderer |
 | AssetPipeline (tooling) | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `TextureCooker.*`, `BC7Encoder.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio, Animation (the glTF importer writes skeletons and clips) |
-| Engine | `Engine/**` | the layers a game contains: Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Animation, Scripting (shipped games link the composition root and the entry point too; see below) |
+| Engine | `Engine/**` | the layers a game contains: Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Animation, Scripting, GameUI (shipped games link the composition root and the entry point too; see below) |
 
 `Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in the shard `StrataTests.Core.Core`) reads every C, C++ and
 Objective-C(++) source and header under `Strata/src` (`STRATA_SOURCE_DIR`; `.h`, `.hpp`, `.inl`, `.c`, `.cpp`, `.m`, `.mm`,
@@ -498,7 +504,8 @@ The engine is extended through registries rather than through code that knows it
 (components), `AssetLoaderRegistry` (stored bytes to asset objects, and the prefixes partial loads read),
 `AssetImporterRegistry` (source files to stored bytes), `AssetManagerExtensionRegistry` (work modules do for every asset
 manager: the texture streamer), `BuiltinAssets` (objects of the built-in assets), `MeshGeometryRegistry` (the triangles of
-mesh assets for modules that do not draw them: physics) and `SceneSystemRegistry` (runtime systems of playing scenes).
+mesh assets for modules that do not draw them: physics), `SceneSystemRegistry` (runtime systems of playing scenes) and
+`SceneOverlayRegistry` (passes every `SceneRenderer` draws over the scene: the game UI's, see [Game UI](#game-ui)).
 `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`) fills them, once per process, before anything reads
 them. Its modules are a table (`c_BuiltinModules`: a name and a registration function each, lower layers first), run in
 order but for those `ModuleRegistrationOptions::Exclude` names; `Engine::GetBuiltinModuleNames` lists the table and
@@ -520,6 +527,8 @@ RegisterAnimationModule    Animation/AnimationRegistration.cpp its components (A
                                                                AttachToJoint); Skeleton, AnimationClip, AnimationController loaders,
                                                                "Animation" system
 RegisterScriptingModule    Scripting/ScriptingRegistration.cpp the Script component (ScriptingComponents.cpp); "Scripting" system
+RegisterGameUIModule       GameUI/GameUIRegistration.cpp       its components (GameUIComponents.cpp, category "UI"); the UI pass
+                                                               (SceneOverlayRegistry); "UI" system
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
 ComponentRegistry::Freeze
@@ -561,7 +570,14 @@ log the registered modules, the scene systems' update order and the soft constra
   and are safe from any thread (asset loads deserialize scenes on workers). `Register<T>` after `Freeze`, for a type
   that is registered already or under a name that is taken (ignoring case), logs an error and returns a builder that
   converts to false and discards what it is given; nothing aborts. A game registers its components through
-  `ModuleRegistrationOptions::Extra`.
+  `ModuleRegistrationOptions::Extra`. A component may name components it needs (`ComponentInfo::Requires`, set with
+  `ComponentInfoBuilder::Requires`): `ComponentAccess::AddComponent`, which every path that adds components by name goes
+  through (`component.add`, `entity.create`, the inspector, scripts), adds the missing ones first, so an editor or agent
+  that adds a UI image to a plain entity gets its rect in the same undo step. Removing a required component is allowed (the
+  dependent one then has no effect): the Inspector's section of each dependent component says so, with a button that adds
+  it back (`component.add`). `Freeze` drops, with an error, a
+  requirement that names no registered component or the component itself. New components live in the module that owns
+  them (`<Module>/<Module>Components.h`, registered by its registration function), not in `Scene/Components.h`.
 - The loader, importer, built-in asset, manager extension and scene system registries stay open: tools and tests register
   more later (a later loader or importer replaces or overrides the built-in one; an extension applies to managers made
   afterwards).
@@ -725,10 +741,11 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
 | `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (`SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
-| `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays) |
+| `Scene.UI`, `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays; `Scene.UI` is the game UI's input) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
+| `Render.UI` | the game UI pass (`GameUIRenderer`): its `Prepare` (layout, quads, uploads, glyphs) and `Draw` recording, nested in `Render.Submit` |
 | `Editor.UI` | `ImGuiModule::OnRenderUI`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
 | `Present` | `GraphicsDevice::EndFrame` (`GraphicsModule::OnEndFrame`), after the work time is measured (outside the frame time) |
 
@@ -750,6 +767,7 @@ are, in update order:
 
 | System | Class | Modes | Order | Role |
 | --- | --- | --- | --- | --- |
+| UI | `GameUISystem` | Play | Before Scripting (soft) | The game UI's input: hit tests, pointer capture, focus, navigation and widget events (see [Game UI](#game-ui)). |
 | Scripting | `ScriptSystem` | Play | | Script instances of the active `ScriptEngine` (null engine: no scripts). |
 | Animation | `AnimationSystem` | Play | After Scripting, Before Physics (soft) | Animators in `OnUpdate`: poses, root motion, attachments, events (see [Animation](#animation)). |
 | Physics | `PhysicsSystem` | Play, Simulate | After Scripting (soft) | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
@@ -779,13 +797,14 @@ are, in update order:
 - **Per-frame calls.** A frame calls `OnUpdate`, `OnFixedUpdate` and `OnLateUpdate` only on the systems whose descriptor
   asks for them (`SceneSystemDescriptor::CallsUpdate`, `CallsFixedUpdate`, `CallsLateUpdate`; all three for a descriptor
   built by hand). `MakeSceneSystemDescriptor<T>` sets them from the callbacks `T` overrides, told apart at compile time by
-  the type of `&T::OnUpdate`, so the built-ins cost an idle play frame seven calls (Scripting all three, Animation
-  `OnUpdate`, Physics `OnUpdate` and `OnFixedUpdate`, Audio `OnLateUpdate`) and a new system adds only the phases it uses
-  (`Perf.Scene.IdlePlayFrame1M`). `OnUpdateRuntime` walks one list of systems per phase, built when the scene starts. A
+  the type of `&T::OnUpdate`, so the built-ins cost an idle play frame eight calls (UI `OnUpdate`, Scripting all three,
+  Animation `OnUpdate`, Physics `OnUpdate` and `OnFixedUpdate`, Audio `OnLateUpdate`) and a new system adds only the
+  phases it uses (`Perf.Scene.IdlePlayFrame1M`). `OnUpdateRuntime` walks one list of systems per phase, built when the
+  scene starts. A
   paused frame (no step due) calls `OnPausedUpdate` instead (`CallsPausedUpdate`; of the built-ins only Animation's), for
   work the paused frame shows that advances no time.
 - **Profiling.** A system's start and update callbacks run in the frame profiler stage its descriptor names
-  (`SceneSystemDescriptor::ProfileStage`: `Scene.Scripts`, `Scene.Animation`, `Scene.Physics`, `Scene.Audio`; empty: not
+  (`SceneSystemDescriptor::ProfileStage`: `Scene.UI`, `Scene.Scripts`, `Scene.Animation`, `Scene.Physics`, `Scene.Audio`; empty: not
   timed on its own),
   resolved when the scene starts; scenes updated outside a profiled frame (tests) skip the stages altogether.
 
@@ -959,6 +978,8 @@ which means the module is not in the build or its system does not run in this mo
 | `ISkinningPoses`: each animator's pose (model-space joint matrices with a version), and which animators renderers drew | `AnimationSystem`; the editor's pose preview for edited scenes | `RenderScene` (palettes of skinned meshes), `SceneRenderer` (reports the animators of what it drew) |
 | `IAnimatorControl`: play, cross-fade, parameters, speed, state queries, joint transforms, whether an entity has an animator (`HasAnimator`) | `AnimationSystem` | script host (`Animator`), tools and tests |
 | `IAnimationEventSource`: listeners of the events controller states fire | `AnimationSystem` | `ScriptSystem` (`OnAnimationEvent`), tools and tests |
+| `IUIEvents`: listeners of the game UI's widget events (clicks, value changes, focus changes, input field submits) | `GameUISystem` | `ScriptSystem` (`OnUIClick`, `OnUIValueChanged`, `OnUIFocusChanged`, `OnUISubmit`), tools and tests |
+| `IUIControl`: the game UI's elements (texts, images, colors, interactability, values), the focus, the pointer and the UI actions | `GameUISystem` | script host (`UIElement`, `UI`) |
 
 What outlives scenes is an engine service (`Core/EngineServices.h`): a module registers it in its registration function
 while the composition root runs, e.g. the Audio module's `IAudioOutput` (the master volume, which scripts change in any
@@ -1892,8 +1913,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   environment map (the source of its cube maps) until the environment changes, also while the renderer idles or after
   its project closed (the maps computed from a map, and with them the map, are shared by every renderer lighting with it
   and released with the last one; until a renderer has computed them it holds the map whole in the texture streamer,
-  `TextureStreamer::Hold`, also through frames it does not draw), and `TextRenderer`'s glyph atlases hold their fonts as
-  long as the fonts are loaded.
+  `TextureStreamer::Hold`, also through frames it does not draw), and the renderer's glyph atlases (`FontAtlasCache`)
+  hold their fonts as long as the fonts are loaded.
   Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what `GetOpaqueBatches` reports after the frame holds no
   pointers.
 - **Material data taken over by still frames** (`SceneRenderer::MaterialResolution`). Resolving a material builds its GPU
@@ -2066,6 +2087,165 @@ system, not to entities: a character's joints add no entities and no transform c
   numbers into ellipses) and shows skeletons and clips, and the Inspector shows a playing animator's state and
   parameters.
 
+## Game UI
+
+The GameUI module (`Strata/src/Strata/GameUI/`, the `GameUI` layer) is the game's own user interface: menus, HUDs,
+pause screens, health bars and buttons, laid out for any screen size and drawn over the scene. Only the composition root
+includes it: the renderer reaches it through the overlay registry and scripts through scene services, so a build without
+it renders and plays scenes as before.
+
+**Components** (`GameUI/GameUIComponents.h`, registered by `RegisterGameUIModule`, category "UI"). Coordinates are canvas
+units with +Y down and (0, 0) at the top left; colors are display (sRGB) colors.
+
+| Component | What it is |
+| --- | --- |
+| `UICanvas` | A screen of UI: its scale mode (`ConstantPixelSize`, `ScaleWithScreen` with a reference resolution and a width/height match, `ConstantPhysicalSize`), safe-area padding, sort order, pixel snapping, whether it takes input, the selectable navigation starts at, and its render mode: over the scene (`ScreenSpace`) or a plane in it (`WorldSpace`, `WorldUnitsPerUnit`) |
+| `UIRect` | The element's rect in its parent's: anchors, pivot, position, size, fit to content, and whether a layout group places it |
+| `UIImage` | A texture or solid color, simple, nine-sliced or filled, with rounded corners and a border; a raycast target by default |
+| `UIText` | Text in the rect: font, size in canvas units per em, alignment, wrapping, truncation with or without an ellipsis, line spacing, outline |
+| `UISelectable` | The interaction states shared by every widget (normal, hover, pressed, focused, disabled; color tints or image swaps over a fade time) and keyboard and gamepad navigation (automatic, explicit neighbours, none) |
+| `UIButton`, `UIToggle`, `UISlider` | Widgets: a click, an on/off switch with a checkmark and exclusive groups, a value with a fill and a handle; each may name an event target besides its own entity |
+| `UILayout` | Places the children: horizontal, vertical or grid, with padding, spacing, the alignment of the block and stretching |
+| `UIInputField` | A line the player types into while it has the focus: its text, the element that shows it, a placeholder, a character limit, the caret and selection colors, an event target |
+| `UIMask` | Clips the element's descendants to its rect inset by padding, with an optional soft edge; masks nest |
+
+An entity is a UI element when it has a `UIRect` and a root canvas (a canvas without a canvas among its ancestors) is the
+entity itself or an ancestor; a canvas under another canvas is an element of the outer one. Every UI component but the
+rect requires the rect (`ComponentInfo::Requires`), so adding an image by name adds its rect too. Entity references
+(`FirstSelected`, `TargetImage`, the navigation neighbours, a toggle's checkmark and group, a slider's fill and handle,
+event targets) are reflected entity properties: duplicates, pastes and prefab instances remap them, play mode's copy
+keeps them.
+
+**Layout** (`GameUIScene`, `GameUILayout.cpp`). One `GameUIScene` per scene, in its registry's context (`Get`, created on
+first use; it holds handles, never Refs or GPU objects). It keeps the root canvases in hierarchy order and each canvas's
+elements in depth-first order (parents before children: the draw order), and lays a canvas out for a **screen** (`UIScreen`:
+pixel size and content scale) at a scale s and a size of screen / s canvas units:
+
+- `ConstantPixelSize`: s = `ScaleFactor`; `ConstantPhysicalSize`: s = content scale x `ScaleFactor` (content scale 1 is 96
+  DPI); `ScaleWithScreen`: s = 2^lerp(log2(W / Rw), log2(H / Rh), `MatchWidthOrHeight`) for the reference resolution
+  (Rw, Rh). The root rect is the canvas's size in units inset by `SafeAreaPadding`.
+- A `WorldSpace` canvas (a sign, a monitor, a name tag) is laid out at its reference resolution in units whatever the
+  screen (s = 1, no pixel snapping) and placed in the scene by `GetCanvasWorldMatrix`: units of `WorldUnitsPerUnit` world
+  units in the entity's XY plane facing +Z (canvas +Y down becomes the entity's -Y), the point its rect's `Pivot` names at
+  the entity's origin, then the entity's world transform.
+- Rect math, per axis, in the parent's box P: anchors A0 = P.min + `AnchorMin` x P.size, A1 = P.min + `AnchorMax` x P.size;
+  size = max(A1 - A0 + `Size`, 0) (or the content's size on axes the rect fits); pivot point A0 + (A1 - A0) x `Pivot` +
+  `Position`; min = pivot point - size x `Pivot`.
+- Layout groups place their active children that do not `IgnoreLayout`, in sibling order: stacked at their preferred
+  sizes (their `Size`, or their content when they fit it) with `Spacing`, the block aligned in the padded rect by
+  `ChildAlignment`, children filling the cross axis with `StretchChildren`; grids in `CellSize` cells, `Columns` per row
+  or as many as fit. A group's own anchors still place it; the children it places ignore theirs.
+- Fitting content: a rect that fits takes its content's preferred size on those axes: a `UIText`'s shaped text (unwrapped
+  width; the height at the width it has), a `UILayout`'s children block plus padding. Layout runs per axis, widths first,
+  each axis bottom up for preferred sizes and top down for boxes, because a wrapped text's height depends on its width.
+- Masks: each `UIMask` element takes a slot of its canvas (parents first), every element is clipped by the nearest mask
+  above it (`Element::Clip`), and each layout keeps the masks' clip rects (`RenderData::UIClipRect`: the mask's box
+  inset by its padding, met with the clip rect of the masks above it), computed again when a mask's box or values
+  change. Quads name their clip rect, so a padding change rewrites the clip rects alone; hit tests and the editor's
+  picking use what the masks leave of a box (`GameUIScene::GetVisibleBox`).
+- Widget parts: a slider's `Fill` is anchored from the slider's start to its normalized value along `Direction`, its
+  `Handle` at the value; a toggle's `Checkmark` (with its descendants) is drawn only while the toggle is on. They read the
+  widgets' values, never write the scene, so they behave the same in edit mode, play mode and under undo.
+
+Rects are kept in canvas units and turned into pixels as units x s, so a canvas keeps up to `c_MaxLayoutsPerCanvas` (4)
+layouts keyed by its size in units (a game view, a capture of another aspect, the editor's canvas mode; the one used
+longest ago goes first), and a window resized at the same aspect ratio under `ScaleWithScreen` lays nothing out again.
+
+**The UI contract** (as the transform contract): `GameUIScene` listens to the UI components' `on_construct`, `on_update`
+and `on_destroy` signals and reads the scene's hierarchy moves and activity changes (`GetHierarchyMoves`,
+`GetWorldTransformChanges`, each changed entity checked against its element index), so code that writes UI component
+fields directly signals the change (`MarkModified`, `registry.patch`; `ComponentAccess`, the script host and the UI system
+do). A change marks its element in every layout of its canvas: a rect or layout change lays out the element's subtree from
+the highest ancestor whose rect depends on its children (a layout group, or a rect fitting its content), so a leaf moved
+under a plain parent lays out one element; a text change reshapes the text and lays out only when its rect fits it; colors,
+textures and toggles rewrite quads only. Structural changes (elements added, removed, reparented or reordered) rebuild the
+canvas's element list, keep the boxes and shaped texts of the elements that stay, and lay out what moved and the groups it
+left and entered. Only the canvases a move changes rebuild: moving an entity that is no element looks for elements and
+canvases below it, so gameplay reparenting plain entities (an item into a hand, a spawn under a container) costs the UI
+nothing, and a canvas below a moved entity is found as a root again. Layout is lazy: `EnsureLayout(screen)` brings every canvas up to date for a screen when the UI pass or
+the UI system asks. Debug builds compare every cached layout with a full recomputation after each `EnsureLayout`
+(`GameUIScene::Validate`, which names the entity whose write was not signaled); `Tests::CheckSceneCaches` checks it too.
+`GameUISceneStats` (`ElementsLaidOut`, `TextsShaped`, `QuadsBuilt`, `FullRebuilds`) counts the work for tests: an idle
+frame does none.
+
+**Text and quads.** Texts are shaped with `ShapeText` on their font's `FontFace` (never rasterizing: layout measures
+fitted text this way), once per change of the text, its font or the options its rect gives it, per layout; a font that
+loads replaces the default font its texts were shaped with (`GetContentChanges` of the assets the UI watches). The quads
+(`RenderData::UIQuad`, 64 bytes, `GameUI/GameUIRenderData.h`) are built per layout in element order: an image is one quad
+(nine when sliced, one cut quad when filled), a text one quad per glyph. Each element writes into a slot of its own with
+room to spare for texts, so a changed element rewrites its slot alone and a journal of changed ranges
+(`GetQuadChanges`) lets each renderer upload only those; a text that outgrows its slot, or a change of the elements,
+rebuilds the array (`GetQuadArrayId` changes). Quads refer to UI texture indices and scene font indices (`GetTextures`,
+`GetFonts`), never to GPU slots or atlas placements, which each renderer resolves (mip streaming moves slots, atlases are
+per renderer).
+
+**The pass** (`GameUIRenderer`, `shaders/GameUI/UIQuad.*`). The renderer cannot include GameUI: modules add passes to
+every `SceneRenderer` through `SceneOverlayRegistry` (`Renderer/SceneOverlay.h`: `ISceneOverlayPass` with `Prepare`,
+`DrawWorld`, `Draw` and `HasScreenContent`), and the renderer calls them at four places: `Prepare` after the text renderer's (with
+the scene, viewport size, command list, the renderer's `FontAtlasCache` and what the frame's raster budget left, the
+frame's visible-texture list and the stats), the overlay condition, `Draw` after the screen-space text (the UI goes over
+the legacy HUD), and `SceneRendererStats::Overlays`; a fifth, `DrawWorld`, draws world-space canvases right after the
+world-space text (`SceneOverlayFrame` carries the frame's view-projection, and `HasCamera` only when the overlay scene is
+the rendered one). A scene without a `UICanvasComponent` costs one storage-size check; with screen-space UI hidden
+(`DrawScreenSpaceText` off: editor views, thumbnails), a count of root canvases and of the world-space ones among them,
+cached per hierarchy version and change of the canvases, and world-space canvases are still drawn (they are part of the
+scene). Per frame the pass lays the canvases out for the game's screen (`EnsureLayout`, with the content
+scale of the game's window): the viewport, unless `SceneRenderOptions::ScreenView` puts a screen of another size in the
+image (`SceneScreenView`: the editor's canvas mode zooms and pans the fit's layout, drawn magnified through the draws'
+scale and origin, and screen-space text follows the same view). It uploads the quad ranges that changed since its last
+frame (or whole arrays that were rebuilt) into one storage buffer, resolves each texture in use to its bindless slot (a
+small table, so quads never change when mip streaming moves a slot) and each distinct glyph to its place in this
+renderer's atlas (a table per font: asking for the glyph also rasterizes it within the budget and keeps it from eviction
+while shown), and reports drawn textures for mip streaming. Canvases draw by sort order, instanced, six vertices per
+quad and no vertex buffer, with up to four atlases bound, so a canvas with up to four fonts is one draw; push constants
+carry the canvas's scale and pixel snapping (rect edges and glyph baselines on whole pixels) and where the canvas's clip
+rects start in a clip buffer uploaded beside the quads (when they change): a masked quad entirely outside its clip rect
+draws nothing, others are clipped per pixel with the mask's soft edge, so masks break no batch. A world-space canvas
+draws with a depth-tested pipeline (reversed-Z, no depth writes, so what is nearer hides it) from a transform buffer
+(canvas units to clip space, one per world-space canvas, uploaded when the camera or the entity moved; the push
+constants' flags name it): its quads stay in canvas units, its edges and outlines are antialiased over what a canvas unit
+covers on the screen (`fwidth`), its clip rects are tested in canvas units, and its textures stream to the pixels a
+canvas unit projects to. The pass keeps a binding set per combination of atlases drawn, and lets go of those no draw of
+the previous frame used at the start of the next `Prepare` (with the atlases' textures they hold); a scene without
+canvases also releases its buffers, which the next canvases fill whole again. `GameRenderer` shows a
+scene without a primary camera that has screen-space UI (a main menu) as that UI over black instead of its
+missing-camera message (`SceneRenderOptions::OverlayScene`).
+
+**Input** (`GameUISystem`, `GameUIHitTest`, `Input/UIActions`). The "UI" scene system runs in Play mode before the
+scripts (stage `Scene.UI`; a soft `BeforeIfPresent`, so an engine without the scripting module keeps its game UI), so a
+click the UI takes is hidden from the scripts' `OnUpdate` of the same frame and widget events reach them first. Each update it lays the canvases out for the game's input screen (the pixels `IGameWindow`
+renders, input coordinates scaled to them) and keeps a uniform grid of raycast-target rects per canvas
+(`GameUIHitTester`, rebuilt when the layout or what hit tests see changes: `GameUIScene::GetHitStamp`), so a query
+compares the targets of one cell: the topmost by canvas sort order, then the last drawn, rect edges half-open. World-space
+canvases come after every screen-space one: the pointer's ray from the scene's primary camera (`GameUIPointer`:
+`GetGameViewProjection`, `MakeRay`, `IntersectCanvas`, `ProjectCanvasPoint`) meets each, the nearest crossing first, and
+the crossing point is hit-tested in the canvas's grid (the scene's geometry does not block it), so sliders drag and input
+fields place their caret through the same ray; navigation starts on the screen's canvases and moves within a world-space
+canvas. The
+pointer is the UI's while a press that started over a target is held and while it rests over the UI; then
+`Input::SetPointerCapture` hides mouse buttons and scrolling from gameplay (`Input::GetPointerState` reads them for the
+UI), and a press that started elsewhere stays the game's until its release. Buttons click on a release over the button
+the press started on; toggles flip (one on per group); sliders follow the pointer while dragged and snap to whole
+numbers. Values change through `registry.patch` (the running scene, without undo). The fixed action set
+(`c_UIActionMap`: Submit, Cancel and four directions on keys, the d-pad and the left stick with hysteresis, repeating after
+0.4 s every 0.1 s) moves the focus: explicit neighbours, or automatically the selectable ahead with the lowest along + 2 x
+across distance between centers. Selectable states (disabled, pressed, hovered, focused, normal) fade their tints over
+unscaled time (`Scene::GetUnscaledDeltaTime`, which time scale 0 does not stop), and only selectables showing a state
+keep a record, so an idle frame does no work. Events (`IUIEvents`: click, value changed, focus changed) are dispatched
+at the end of the update in input order. Typed text arrives per input frame as UTF-8 (`Input::GetTypedText`, from the
+window's character events and `Input::SimulateText`, at most 1,024 bytes).
+
+**Input fields.** The focused `UIInputField` is edited: the system captures the keyboard (`Input::SetKeyboardCapture`:
+the game's key queries and `GetTypedText` see nothing, the UI reads `GetKeyState` and `GetUncapturedTypedText`), puts
+typed characters at the caret (within the character limit; control characters dropped), repeats Backspace, Delete, the
+arrows, Home and End like the UI actions, writes the text with `registry.patch` and raises `Submit` on Enter; Escape (or
+a gamepad's Cancel) stops editing, keeping the keyboard captured to the end of that frame so the game never sees the
+key. The field's text element shows the field's text (`GameUIScene::GetShownText`: one line, never wrapped), and the
+editing state (`SetInputFieldState`: caret, selection, blink) adds a selection quad behind the glyphs and a caret quad
+after them, the line scrolled to keep the caret inside the element (`MeasureCaretStops` gives the pen before each
+character, as the shaper places it); the field's placeholder shows while the text is empty, like a toggle's checkmark
+while it is on.
+
 ## Scripting
 
 Rules for the ABI, host functions and the SDK are in AGENTS.md and DeveloperGuide.md, "Scripting"; writing scripts
@@ -2106,8 +2286,12 @@ is the `strata-scripting` skill. The layers:
   recognize the pattern by the address of the reading instruction, which made the cost of a frame depend on how
   unrelated code moved the loop (6.6 or 9.8 ms for 300,000 trivial scripts with identical sources). Contacts come from
   the scene's `ICollisionEventSource` (the `PhysicsSystem`), whose listener only hears watched entities: each instance
-  whose class has a contact callback watches its entity. Entity destruction requested by scripts waits until the scene
-  can do it safely (`ScriptSystem::DestroyEntity`), and removed instances are destroyed at the next sync point.
+  whose class has a contact callback watches its entity. Widget events come from the scene's `IUIEvents` (the
+  `GameUISystem`, which updates before the scripts): `OnUIClick`, `OnUIValueChanged`, `OnUIFocusChanged` and `OnUISubmit`
+  run on the scripts of the widget's entity, then on those of its `EventTarget`, and menus that must move while the game
+  is paused read unscaled time (`Time::GetUnscaledDeltaTime`, which time scale 0 does not stop; [Game UI](#game-ui)).
+  Entity destruction requested by scripts waits until the scene can do it safely (`ScriptSystem::DestroyEntity`), and
+  removed instances are destroyed at the next sync point.
 - **Host functions** (`ScriptHostAPI.cpp`). Every function runs in `HostCall` (no exception unwinds into the module)
   and starts with `ResolveContext`, which rejects calls from other threads, outside callbacks or from a crashed module.
   The table is built from `ST_SCRIPT_HOST_FUNCTIONS`, which counts calls for the feature test.
@@ -2285,7 +2469,8 @@ is the `strata-scripting` skill. The layers:
   `project.exportStatus`, `project.cancelExport` and `project.setExportSettings`),
   `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects`, `editor.removeRecentProject` and `editor.perf`,
   log, selection), `Commands/PlayCommands.cpp` (play), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
-  `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`),
+  `EditorInputCommands.cpp` (input, including `input.click` and `input.type` for the game UI), `EditorUICommands.cpp`
+  (`ui.create`, `ui.layout`, `ui.hitTest`), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`),
   `Commands/BatchCommands.cpp` (`editor.batch`) and `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel` and `editor.showDialog` (the
   export, project, recovery, script and about dialogs), the commands about its window. Conventions:
   DeveloperGuide.md, "Command conventions".
@@ -2687,7 +2872,9 @@ is the `strata-scripting` skill. The layers:
     being the primary selection; clicks select on release so any row can be dragged, a box starts in the empty space;
     while filtering, Ctrl+A, ranges and boxes skip the ancestors shown for context).
     A primary selection that changed elsewhere is revealed (`HierarchyView::Reveal`, then the list scrolls to its row).
-    Rows are tree nodes with the entity's icon (`UI/EntityIcons`), its name, a prefab badge on an instance's root (a
+    Its create menu's UI submenu makes the game UI's presets (`ui.create`: canvas, panel, image, text, button, toggle,
+    slider, input field and layout groups; DeveloperGuide.md, "Game UI commands").
+    Rows are tree nodes with the entity's icon (`UI/EntityIcons`: a UI element by its widget), its name, a prefab badge on an instance's root (a
     click inspects the prefab; in the warning color while the instance differs from its prefab, `PrefabSync::IsModified`,
     and its tooltip, made only while it shows, says when the instance is outdated too)
     and an eye (`entity.setActive`); a drag carries the topmost dragged entities
@@ -2699,10 +2886,12 @@ is the `strata-scripting` skill. The layers:
     The rename field is drawn after the selection's scope and activated by id: a keyboard move out of that scope would
     make ImGui clear the selection. With 100,000 roots the panel costs about 0.012 ms per frame (it drew every root
     before: 12.9 ms; `Perf.Editor`).
-  - The **Inspector** shows the components every selected entity has. `GetSharedProperty` gives each widget its value and
-    which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as mixed; `GetSharedInactiveReason`
-    whether the property has no effect on every entity (`PropertyInfo::InactiveReason`, set next to each component's
-    registration in its module), which draws its row disabled with the reason; an edit goes through the
+  - The **Inspector** shows the components every selected entity has, each section drawing first what its component's
+    drawer adds (`UI/ComponentDrawers`, by component type: the UI Rect's anchor presets and margins), and a notice with
+    an Add button where some entities lack a component it requires (`ComponentInfo::Requires`). `GetSharedProperty`
+    gives each widget its value and which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as
+    mixed; `GetSharedInactiveReason` whether the property has no effect on every entity (`PropertyInfo::InactiveReason`,
+    set next to each component's registration in its module), which draws its row disabled with the reason; an edit goes through the
     multi-entity `SetPropertyComponentsWithUndo` with the components the widget changed (one step; each entity keeps its
     other components), or `SetPropertyWithUndo` for other types. Rotations of several entities go through a
     `RotationAnglesEdit` with the Euler angles the widget edited, kept by the Inspector until the widget reports the edit
@@ -2776,18 +2965,22 @@ is the `strata-scripting` skill. The layers:
   Scene view's, the Game view's (created on first use; about 72 MB of targets at 1920 x 1080, freed while the Game view is
   hidden or closed) and the captures'. Two panels show them, tabs of one dock node: the Scene view (`ViewportPanel`, id
   `Viewport`) passes `ViewportCameraSource::Editor`, the editor camera on the edited scene or the running one (picking,
-  gizmos and overlays work on the running copy while playing), or `Scene` with "Game camera" (F8); the Game view
-  (`GameViewPanel`) passes `Scene`, the primary camera as the game shows it, at the size of `ViewportSettings::GameView`
-  (`ComputeGameViewFrame`: the panel's, an aspect ratio letterboxed, a fixed size rendered at its pixels and scaled to fit,
-  or what the game asked for), and feeds `Input` while it is focused in play mode. In every play frame it shows it sets the
-  game's screen (`Input::SetViewport` with its render resolution, so positions reach scripts in the game's pixels and
-  `Input::GetViewportSize`, which `EditorGameWindow::GetState` and UI hit testing read, is that resolution).
+  gizmos and overlays work on the running copy while playing; with Game UI shown, a click selects a UI element first),
+  or `Scene` with "Game camera" (F8); the Game view (`GameViewPanel`) passes `Scene`, the primary camera as the game shows
+  it, at the size of `ViewportSettings::GameView` (`ComputeGameViewFrame`: the panel's, an aspect ratio letterboxed, a
+  fixed size rendered at its pixels and scaled to fit, or what the game asked for), and feeds `Input` while it is focused
+  in play mode. In every play frame it shows it sets the game's screen (`Input::SetViewport` with its render resolution,
+  so positions reach scripts in the game's pixels and `Input::GetViewportSize`, which `EditorGameWindow::GetState` and UI
+  hit testing read, is that resolution).
   Play from the UI brings the Game view's tab forward and Stop the Scene view's back. `ResolveViewportView`'s `Automatic`
   source (captures) picks the scene's primary camera while playing and the editor camera otherwise, and
   `GetViewportRenderOptions` gives editor views (the editor camera, except `Automatic`'s fallback while playing) preview
   lighting and a hidden HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). Both views hold their
   chips in a toolbar strip above the image (`Panels/ViewportToolbar`), never over it; a Scene view too narrow for their
-  labels draws the last ones as icons (`UI::ChipStrip`, decided from the previous frame's chips).
+  labels draws the last ones as icons (`UI::ChipStrip`, decided from the previous frame's chips). The Scene view's 2D
+  canvas mode (`Panels/CanvasModeView`, `Editor/CanvasEdit`) shows a screen-space canvas at its reference aspect through
+  the scene's camera, with handles that place rects, zoom and pan that never lay it out again (DeveloperGuide.md, "Game
+  UI commands").
   The settings' debug view
   (`ViewportDebugView`: `none`, `streaming`, `lod`, `mip`) colors every view of the viewport, the Game view too: before each
   render `StreamingView` (`Editor/StreamingView.h`) takes the render proxies the scene's `RenderScene` finds in the view
@@ -2982,7 +3175,9 @@ so far (`PrivateMB`, `PeakPrivateMB`). A log that cannot be written fails the ru
 into its own `ScriptEngine` without hot reload and makes it active, and starts loading the start scene (`SceneLoader`) and
 the manifest's loading scene (version 4, `LoadingScene`; version 3 manifests load without one), so it returns at once.
 The loading scene plays while the start scene loads (without one, renderers draw a black frame,
-`GameRenderer::RenderEmpty`); the start scene replaces it once it and everything it uses are in. A start scene that cannot
+`GameRenderer::RenderEmpty`); the start scene replaces it once it and everything it uses are in. A scene without a
+primary camera that has screen-space UI (a main menu) shows that UI over black instead of the missing-camera message
+([Game UI](#game-ui)). A start scene that cannot
 be loaded is `GetStartError` (StrataRuntime exits with code 1); `WaitForStart` waits for it without running frames (tools
 and tests). Each frame it finalizes loads, advances the scene loads (swapping in a scene that is ready), updates the scene
 and honors requests: a quit ends the process with the game's exit code, a scene load (`LoadScene`) loads the next scene

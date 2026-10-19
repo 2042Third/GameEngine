@@ -21,9 +21,11 @@
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Audio/AudioComponents.h>
 #include <Strata/Audio/AudioEngine.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/GameUI/GameUIComponents.h>
 #include <Strata/ImGui/ImGuiRenderer.h>
 #include <Strata/Math/Math.h>
 #include <Strata/Physics/PhysicsComponents.h>
@@ -600,6 +602,71 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		const ComponentInfo* controller = ComponentRegistry::Find("CharacterController");
 		REQUIRE(controller);
 		CHECK(std::string(UI::GetComponentIcon(*controller)) == Icons::PersonStanding);
+	}
+
+	TEST_CASE("UI components and UI elements get the icons of the UI presets")
+	{
+		const std::pair<const char*, const char*> components[] = { { "UICanvas", Icons::AppWindow }, { "UIRect", Icons::Frame },
+			{ "UIImage", Icons::Image }, { "UIText", Icons::Type }, { "UISelectable", Icons::MousePointerClick },
+			{ "UIButton", Icons::RectangleHorizontal }, { "UIToggle", Icons::ToggleRight }, { "UISlider", Icons::SlidersHorizontal },
+			{ "UILayout", Icons::LayoutGrid }, { "UIInputField", Icons::TextCursorInput }, { "UIMask", Icons::Crop } };
+		for (const auto& [name, expected] : components)
+		{
+			CAPTURE(name);
+			const ComponentInfo* info = ComponentRegistry::Find(name);
+			REQUIRE(info);
+			CHECK(std::string(UI::GetComponentIcon(*info)) == expected);
+		}
+
+		Scene scene("UI Icons");
+		const entt::registry& registry = scene.GetRegistry();
+		const auto icon = [&registry](Entity entity) { return std::string(UI::GetEntityIcon(registry, entity.GetHandle())); };
+		Entity canvas = scene.CreateEntity("Canvas");
+		canvas.AddComponent<UIRectComponent>();
+		canvas.AddComponent<UICanvasComponent>();
+		CHECK(icon(canvas) == Icons::AppWindow);
+		// A button is one with its image, its script and its click sound.
+		Entity button = scene.CreateChildEntity(canvas, "Button");
+		button.AddComponent<UIRectComponent>();
+		button.AddComponent<UIImageComponent>();
+		button.AddComponent<UISelectableComponent>();
+		button.AddComponent<UIButtonComponent>();
+		button.AddComponent<ScriptComponent>();
+		button.AddComponent<AudioSourceComponent>();
+		CHECK(icon(button) == Icons::RectangleHorizontal);
+		Entity label = scene.CreateChildEntity(button, "Label");
+		label.AddComponent<UIRectComponent>();
+		label.AddComponent<UITextComponent>();
+		CHECK(icon(label) == Icons::Type);
+		Entity panel = scene.CreateChildEntity(canvas, "Panel");
+		panel.AddComponent<UIRectComponent>();
+		panel.AddComponent<UIImageComponent>();
+		CHECK(icon(panel) == Icons::Image);
+		panel.AddComponent<UILayoutComponent>();
+		CHECK(icon(panel) == Icons::LayoutGrid);
+		// Selectable widgets with their images.
+		const auto widget = [&scene, canvas](const char* name)
+		{
+			Entity entity = scene.CreateChildEntity(canvas, name);
+			entity.AddComponent<UIRectComponent>();
+			entity.AddComponent<UIImageComponent>();
+			entity.AddComponent<UISelectableComponent>();
+			return entity;
+		};
+		Entity toggle = widget("Toggle");
+		toggle.AddComponent<UIToggleComponent>();
+		CHECK(icon(toggle) == Icons::ToggleRight);
+		Entity slider = widget("Slider");
+		slider.AddComponent<UISliderComponent>();
+		CHECK(icon(slider) == Icons::SlidersHorizontal);
+		Entity field = widget("Field");
+		field.AddComponent<UIInputFieldComponent>();
+		CHECK(icon(field) == Icons::TextCursorInput);
+		// A rect alone holding others is a group.
+		Entity group = scene.CreateChildEntity(canvas, "Group");
+		group.AddComponent<UIRectComponent>();
+		scene.CreateChildEntity(group, "Inside").AddComponent<UIRectComponent>();
+		CHECK(icon(group) == Icons::Folder);
 	}
 
 	TEST_CASE("The create button and a row's context menu create entities")

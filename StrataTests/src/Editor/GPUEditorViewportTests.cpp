@@ -313,6 +313,36 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture waits until its game UI's text is complete")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		harness.Run("viewport.setSettings", { { "gameUI", true } });
+		// A UI label with more distinct glyphs than a render may rasterize (TextRenderer::c_FrameRasterBudget), new to the
+		// capture renderer, which the UI pass shares with the text.
+		const nlohmann::json canvas = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "ui.create", { { "type", "canvas" } });
+		const nlohmann::json label = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "ui.create",
+			{ { "type", "text" }, { "parent", canvas["entity"] }, { "size", { 1800, 400 } } });
+		harness.Run("component.set", { { "entity", label["entity"] }, { "component", "UIText" }, { "values",
+			{ { "Text", "ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789" }, { "FontSize", 40.0 } } } });
+
+		int frames = 0;
+		const EditorCommandResult first = harness.RunFrames("viewport.capture", { { "width", 320 }, { "height", 96 } }, &frames);
+		REQUIRE(first.Success);
+		CHECK(first.Value["ui"]["canvases"] == 1);
+		CHECK(first.Value["ui"]["pendingGlyphs"] == 0);
+		CHECK(first.Value["waitedFrames"].get<int>() > 0); // It rendered again while glyphs were missing
+		nlohmann::json result;
+		const DecodedImage complete = harness.Capture({ { "width", 320 }, { "height", 96 } }, &result);
+		CHECK(result["waitedFrames"] == 0);
+		const std::optional<std::vector<uint8_t>> png = Base64::Decode(first.Value["Image"]["Data"].get<std::string>());
+		REQUIRE(png);
+		CHECK(harness.CountDifferences(DecodePNG(*png), complete) == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("Captures follow the viewport's size and camera, and draw overlays on request")
 	{
 		Tests::GPUContext gpu;
@@ -1004,17 +1034,20 @@ TEST_SUITE("GPU.Editor.Viewport")
 		ViewportGPUHarness harness;
 		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.open", { { "path", FileSystem::ToUTF8(tetris) } });
 
+		// The HUD is a UI canvas: its stats panel with score, level and lines, the controls and the (hidden) message panel.
 		nlohmann::json result;
 		harness.Capture({ { "width", 320 }, { "height", 180 }, { "camera", "editor" } }, &result);
-		CHECK(result["screenSpaceTexts"] == 0);
-		CHECK(result["hiddenScreenSpaceTexts"].get<int>() >= 4); // Score, level, lines and controls (the message is empty)
+		CHECK(result["ui"]["canvases"] == 0);
+		CHECK(result["ui"]["hiddenCanvases"] == 1);
 		harness.Capture({ { "width", 320 }, { "height", 180 }, { "camera", "scene" } }, &result);
-		CHECK(result["screenSpaceTexts"].get<int>() >= 4);
-		CHECK(result["hiddenScreenSpaceTexts"] == 0);
+		CHECK(result["ui"]["canvases"] == 1);
+		CHECK(result["ui"]["elements"].get<int>() >= 6);
+		CHECK(result["ui"]["hiddenCanvases"] == 0);
 		// gameUI shows it in editor views too.
 		harness.Run("viewport.setSettings", { { "gameUI", true } });
 		harness.Capture({ { "width", 320 }, { "height", 180 }, { "camera", "editor" } }, &result);
-		CHECK(result["screenSpaceTexts"].get<int>() >= 4);
+		CHECK(result["ui"]["canvases"] == 1);
+		CHECK(result["screenSpaceTexts"] == 0); // Nothing of the HUD is a screen-space Text component any more
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

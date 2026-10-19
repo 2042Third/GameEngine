@@ -90,6 +90,10 @@ ST_SCRIPT_CLASS(Turret)
 | `OnCollisionEnter/Exit(collision)` | The entity's physics body starts/stops touching another body (after a fixed step). |
 | `OnTriggerEnter/Exit(collision)` | The same for contacts where either body is a trigger. |
 | `OnAnimationEvent(name)` | The entity's animator passed an event of its controller's current state (after the animators were evaluated). |
+| `OnUIClick(widget)` | The player clicked a UI button on the entity, or one whose `EventTarget` is the entity (before `OnUpdate`). |
+| `OnUIValueChanged(widget, value)` | The player changed a slider (its value) or a toggle (1 on, 0 off) on the entity or targeting it. |
+| `OnUIFocusChanged(widget, focused)` | A selectable on the entity or targeting it gained or lost the keyboard/gamepad focus. |
+| `OnUISubmit(widget)` | The player pressed Enter (or gamepad A) in a UI input field on the entity or targeting it; read `widget.GetUI().GetText()`. |
 
 - Inactive entities (or children of inactive entities) get no update callbacks.
 - Entities destroyed during a frame stay valid and keep updating until the frame ends.
@@ -125,13 +129,16 @@ ST_SCRIPT_CLASS(Turret)
   sticks) is fine in either. Simulated input (`input.*`, `input.sequence`) lasts whole fixed steps of the game, and
   `play.step` and `input.sequence` run one step per frame: a script that applies held input per fixed step (or scales by
   the frame's `deltaTime`) behaves the same in tests at any frame rate.
-- `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`.
+- `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`,
+  `GetUnscaledDeltaTime` and `GetRealTime` (they go on at time scale 0: pause menus, fades).
+- `Input::GetTypedText()`: the UTF-8 text typed this frame (name entry, chat).
+- `UIElement` (`entity.GetUI()`) and `UI`: the game UI, see [Game UI](#game-ui).
 - `Log::Info/Warn/Error/Trace(args...)` - arguments are concatenated (`Log::Info("Health ", health)`).
 - `RigidBody` (`GetEntity().GetRigidBody()`), `Physics` (raycasts, overlaps), `Collision` (contact callbacks),
   `CharacterController` (`GetEntity().GetCharacterController()`: walk, jump, ground state),
   `AudioSource` (`GetEntity().GetAudioSource()`), `Audio` (one-shots, master volume), `Animator`
   (`GetEntity().GetAnimator()`: states, parameters, joints), `Game` (quit, load scenes, the window, save files),
-  `Random`, `Timer`, `KeyRepeat`: see [Gameplay API](#gameplay-api).
+  `Random`, `Timer`, `KeyRepeat`, `Motion` (`LookAt`, `SmoothDamp`): see [Gameplay API](#gameplay-api).
 
 Every call on a missing entity, unknown component or wrong value type fails harmlessly (`false`, empty `optional`,
 null entity) and the engine logs a warning naming the calling script.
@@ -266,6 +273,63 @@ void OnAnimationEvent(std::string_view name) override // Events of the controlle
   clips take them (time, events and root motion go on; `GetJointTransform` then reads the latest pose). An animator that
   skins no mesh but moves attached parts poses every frame.
 
+### Game UI
+
+Menus and HUDs are UI canvases (`UICanvas` with `UIRect` children: `UIText`, `UIImage`, buttons, toggles, sliders; see
+the editor automation skill for building them with commands). Scripts change what they show and react to the player:
+
+```cpp
+Entity ScoreLabel;                                   // Fields pointing at UI elements
+Entity PauseMenu;
+
+void OnUpdate(float) override
+{
+	ScoreLabel.GetUI().SetText("Score: " + std::to_string(score)); // Setting the same text again costs nothing
+	if (UI::IsActionPressed(UIAction::Cancel))       // Escape or gamepad B
+	{
+		const bool paused = !PauseMenu.IsActive();
+		PauseMenu.SetActive(paused);
+		Time::SetTimeScale(paused ? 0.0f : 1.0f);    // The menu still works: the UI runs on unscaled time
+		if (paused)
+			Scene::FindEntityByName("Resume").GetUI().Focus(); // Keyboard and gamepad start there
+	}
+	if (Input::IsMouseButtonPressed(Mouse::ButtonLeft)) // Never true for clicks the UI took
+		Shoot();
+}
+
+void OnUIClick(Entity widget) override              // Buttons whose EventTarget is this entity (or on it)
+{
+	if (widget.GetName() == "Resume")
+		Time::SetTimeScale(1.0f);
+	else if (widget.GetName() == "Quit")
+		Game::Quit(0);
+}
+
+void OnUIValueChanged(Entity widget, float value) override // Sliders and toggles
+{
+	if (widget.GetName() == "Volume")
+		Audio::SetMasterVolume(value / 10.0f);
+}
+
+void OnUISubmit(Entity widget) override             // Enter in an input field (the player's name, a chat line)
+{
+	PlayerName = widget.GetUI().GetText();
+	UI::ClearFocus();                                // Stop editing: the keyboard is the game's again
+}
+```
+
+- `UIElement`: `GetText/SetText` (an input field's text, cut to its character limit, else the UIText's),
+  `GetImage/SetImage` (UIImage texture), `GetColor/SetColor` (image tint, else text color),
+  `IsInteractable/SetInteractable`, `GetValue/SetValue` (slider value, toggle 0/1; switching a toggle on switches the
+  others of its group off), `Focus`, `IsFocused`, `GetEntity`. Values set by scripts raise no callbacks.
+- `UI`: `GetFocused`, `ClearFocus`, `IsPointerOverUI` (ignore gameplay mouse aiming while it is true),
+  `IsActionPressed/IsActionDown(UIAction::Submit/Cancel/Up/Down/Left/Right)`.
+- The UI takes the clicks and scrolling that start over it: `Input`'s mouse buttons report nothing for them. Keyboard and
+  gamepad navigation (arrows, d-pad, left stick; Enter, Space or gamepad A clicks) moves the focus by itself.
+- A widget's callbacks reach the scripts on its entity and on its `EventTarget` (one controller script for a whole menu).
+- `Motion::SmoothDamp(current, target, velocity, smoothTime, deltaTime)` eases values (cameras, health bars) without
+  overshooting; `Motion::LookAt(from, to)` is the rotation that points -Z at a target.
+
 ### Game flow
 
 `Game::Quit(exitCode)` ends the game (an exported game exits with the code, the editor stops play mode).
@@ -363,8 +427,8 @@ moments (checkpoints, menus) and keep saves small.
 
 ### Text, spawning and other building blocks
 
-- On-screen text (score, lives, messages): an entity with a `Text` component in screen space; change it with
-  `entity.SetProperty("Text", "Text", std::string("Score: ") + std::to_string(score))`.
+- On-screen text (score, lives, messages): a `UIText` element on a UI canvas (it scales with the screen); change it with
+  `entity.GetUI().SetText("Score: " + std::to_string(score))` (see [Game UI](#game-ui)).
 - Spawning: `Scene::Instantiate(prefab, position)` (request the prefab early), `Scene::InstantiateMany` for many at once,
   `Scene::CreateEntity` plus `AddComponent`/`SetProperty` for simple shapes; `entity.Destroy()` removes it at the end of
   the frame.

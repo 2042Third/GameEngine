@@ -67,6 +67,12 @@
 			"MayInclude": [ "Core", "Asset", "Reflection", "Scene" ]
 		},
 		{
+			"Name": "GameUI",
+			"Notes": "Game UI: canvases, layout, widgets and navigation. The renderer reaches it only through SceneOverlayRegistry (Renderer/SceneOverlay.h), scripts through the scene services IUIControl and IUIEvents; only Engine includes it.",
+			"Paths": [ "Strata/GameUI/**" ],
+			"MayInclude": [ "Core", "Input", "Asset", "Reflection", "Scene", "Renderer" ]
+		},
+		{
 			"Name": "Scripting",
 			"Paths": [ "Strata/Scripting/**" ],
 			"MayInclude": [ "Core", "Input", "Asset", "Reflection", "Scene" ]
@@ -108,7 +114,7 @@
 			"Name": "Engine",
 			"Notes": "The composition root (Engine/BuiltinModules) and the entry point that calls it (Engine/EntryPoint.h, ApplicationLaunch.h). Both are part of every program, shipped games included, so they name only the modules a game contains: tools hand the asset pipeline in (ModuleRegistrationOptions::AssetPipeline), and programs list their engine modules (ApplicationSpecification::Modules), so the importers, the network and ImGui stay out of games.",
 			"Paths": [ "Strata/Engine/**" ],
-			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Animation", "Scripting" ]
+			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Animation", "Scripting", "GameUI" ]
 		}
 	]
 }

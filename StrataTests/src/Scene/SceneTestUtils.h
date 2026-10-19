@@ -5,6 +5,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Core/JsonUtils.h"
+#include "Strata/GameUI/GameUIScene.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
@@ -26,14 +27,20 @@
 namespace Strata::Tests
 {
 
-	// The scene's caches agree with a full recomputation: hierarchy links, sibling positions, lookup indices, activity and
-	// every world transform that is not known to be stale.
+	// The scene's caches agree with a full recomputation: hierarchy links, sibling positions, lookup indices, activity, every
+	// world transform that is not known to be stale, and the game UI's layout.
 	inline void CheckSceneCaches(const Scene& scene)
 	{
 		std::string error;
 		CHECK_MESSAGE(scene.ValidateHierarchy(&error), error);
 		error.clear();
 		CHECK_MESSAGE(scene.ValidateWorldTransforms(&error), error);
+		// The game UI's layout, once the scene has one (validation only reads the scene; the cast reaches the UI's own state).
+		if (GameUIScene* ui = GameUIScene::Find(const_cast<Scene&>(scene)))
+		{
+			error.clear();
+			CHECK_MESSAGE(ui->Validate(&error), error);
+		}
 	}
 
 	// A committed scene document (a sample's, the feature project's, a template's) loads with every component registered (none

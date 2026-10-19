@@ -636,13 +636,14 @@ TEST_SUITE("Editor.Viewport")
 			ViewportHarness harness;
 			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
 			nlohmann::json settings = harness.Run("viewport.getSettings");
-			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "allColliders", "stats", "previewLighting", "gameUI", "gizmo", "space",
-				"snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView", "gameView", "pilotGameCamera", "editPose" })
+			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "allColliders", "stats", "previewLighting", "gameUI", "canvasMode", "gizmo",
+				"space", "snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView", "gameView", "pilotGameCamera", "editPose" })
 			{
 				CAPTURE(key);
 				CHECK(settings.contains(key));
 			}
-			CHECK(settings.size() == 17);
+			CHECK(settings.size() == 18);
+			CHECK(settings["canvasMode"] == false);
 			CHECK(settings["editPose"] == "rest");
 			CHECK(settings["gameView"] == nlohmann::json { { "mode", "free" }, { "width", 1280 }, { "height", 720 } });
 			CHECK(settings["pilotGameCamera"] == false);
@@ -653,8 +654,9 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(settings["debugView"] == "none");
 
 			settings = harness.Run("viewport.setSettings", { { "grid", false }, { "gameUI", true }, { "previewLighting", false }, { "gizmo", "Rotate" },
-				{ "space", "Local" }, { "snap", true }, { "rotateSnap", 45 }, { "allColliders", true }, { "debugView", "streaming" } });
+				{ "space", "Local" }, { "snap", true }, { "rotateSnap", 45 }, { "allColliders", true }, { "debugView", "streaming" }, { "canvasMode", true } });
 			CHECK(settings["grid"] == false);
+			CHECK(settings["canvasMode"] == true);
 			CHECK(settings["allColliders"] == true);
 			CHECK(settings["gameUI"] == true);
 			CHECK(settings["previewLighting"] == false);
@@ -710,6 +712,7 @@ TEST_SUITE("Editor.Viewport")
 		CHECK_FALSE(harness.Context.GetViewport().GetSettings().ShowGrid);
 		CHECK(harness.Context.GetViewport().GetSettings().AllColliders);
 		CHECK(harness.Context.GetViewport().GetSettings().GameView.Mode == GameViewMode::Aspect16x9);
+		CHECK(harness.Context.GetViewport().GetSettings().CanvasMode);
 		CHECK(harness.Context.GetViewport().GetSettings().GameView.Width == 800);
 		CHECK(harness.Context.GetViewport().GetSettings().EditPose == AnimationEditPose::ClipStart);
 	}
