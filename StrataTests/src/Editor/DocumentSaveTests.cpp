@@ -713,6 +713,38 @@ TEST_SUITE("Editor.Saves")
 		CHECK(editor.Context.GetSceneHandle() == previous);
 	}
 
+	TEST_CASE("A failed save as a new asset that a newer save replaced while it waited still gives the scene its handle back")
+	{
+		GatedJobSystem jobs;
+		EditorSaves editor("SaveAsReplaced");
+		const AssetHandle previous = editor.Context.GetSceneHandle();
+		REQUIRE(FileSystem::WriteText(editor.Context.GetProject()->GetAssetDirectory() / "Blocked", "not a folder"));
+		std::vector<EditorCommandResult> saves;
+		{
+			BackgroundGate gate;
+			editor.Run("entity.create", { { "name", "Written" } });
+			saves.push_back(editor.Commands.Execute(editor.Context, "scene.save")); // Writes while the others wait
+			editor.Run("entity.create", { { "name", "Unsaved" } });
+			saves.push_back(editor.Commands.Execute(editor.Context, "scene.saveAs", { { "path", "Blocked/Level.stscene" } }));
+			// Saving again writes the new asset: this request replaces the queued save as.
+			saves.push_back(editor.Commands.Execute(editor.Context, "scene.save"));
+			for (const EditorCommandResult& save : saves)
+				REQUIRE(save.IsPending());
+			REQUIRE(editor.Run("editor.status")["saving"].size() == 2);
+		}
+		std::vector<bool> succeeded;
+		for (EditorCommandResult& save : saves)
+			succeeded.push_back(CompleteCommand(editor.Context, std::move(save)).Success);
+		CHECK(succeeded == std::vector<bool> { true, false, false });
+		CHECK(editor.Context.GetSceneHandle() == previous);
+		CHECK(editor.Context.GetEditScene()->GetName() == "Main");
+		CHECK(editor.Context.IsSceneModified());
+		// The scene saves where it was.
+		const EditorCommandResult saved = CompleteCommand(editor.Context, editor.Commands.Execute(editor.Context, "scene.save"));
+		CHECK_MESSAGE(saved.Success, saved.Error);
+		CHECK(editor.ReadSavedNames() == std::set<std::string> { "First", "Written", "Unsaved" });
+	}
+
 	TEST_CASE("Documents a save writes, and places it reserved, do not move or go to the trash until it is written")
 	{
 		GatedJobSystem jobs;

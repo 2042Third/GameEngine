@@ -846,24 +846,26 @@ namespace Strata
 	void EditorContext::OnSceneSaveEnded(const DocumentSaveStatus& status, AssetHandle handle, const RecoverySaveToken& token,
 		const std::optional<SceneSaveRestore>& restore)
 	{
+		// The edited scene was replaced meanwhile (another scene or project): the file is written, but nothing of the scene now
+		// edited is marked, and its journal hears nothing (MarkSaved and OnSaved recognize another scene's point and token).
+		const bool sameScene = status.SavePoint.Generation == m_UndoStack.GetSavePoint().Generation;
+		// A save as a new asset that failed gives the scene its previous handle and name back, also when a newer save of the
+		// new asset replaced it before it began (that one's completion has nothing to give back).
+		if (status.State != DocumentSaveState::Done && sameScene && restore && m_SceneHandle == handle)
+		{
+			m_SceneHandle = restore->Handle;
+			m_EditScene->SetName(restore->Name);
+			m_EditScene->SetSourceAsset(restore->SourceAsset);
+		}
 		// A newer save of the same scene replaced this one before it began: the newer one's completion does the rest.
 		if (status.WrittenID != status.ID)
 		{
 			m_Recovery->ReleaseSave(token);
 			return;
 		}
-		// The edited scene was replaced meanwhile (another scene or project): the file is written, but nothing of the scene now
-		// edited is marked, and its journal hears nothing (MarkSaved and OnSaved recognize another scene's point and token).
-		const bool sameScene = status.SavePoint.Generation == m_UndoStack.GetSavePoint().Generation;
 		if (status.State != DocumentSaveState::Done)
 		{
 			m_Recovery->ReleaseSave(token);
-			if (sameScene && restore && m_SceneHandle == handle)
-			{
-				m_SceneHandle = restore->Handle;
-				m_EditScene->SetName(restore->Name);
-				m_EditScene->SetSourceAsset(restore->SourceAsset);
-			}
 			EditorNotification notification;
 			notification.Level = NotificationLevel::Error;
 			notification.Title = fmt::format("Saving '{}' failed", status.Label);

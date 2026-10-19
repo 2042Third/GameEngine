@@ -2530,7 +2530,7 @@ is the `strata-scripting` skill. The layers:
   document's SHA-256 (`SceneRecovery::OnSaved`, which starts the new journal with the steps applied since the snapshot and
   writes it before the old file goes, so nothing edited during a save is ever out of a journal), and makes the project's
   picture; a failed save posts an error notification and gives a scene saved as a new asset its previous handle and name
-  back. A save whose edited scene was replaced meanwhile writes its file and marks nothing (the undo history's generation
+  back (the save as's own completion does, also when a newer save of the new asset replaced it while it was queued). A save whose edited scene was replaced meanwhile writes its file and marks nothing (the undo history's generation
   and the journal's epoch tell). `scene.save` and `scene.saveAs` answer once the save is published (`wait`, default) or
   at once with its `saveId`; the commands that replace the scene, close the project or quit run their handlers through
   `CommandUtils::AfterSaves`, which defers them while saves are in flight; the UI's save (Ctrl+S, File > Save, the question's
