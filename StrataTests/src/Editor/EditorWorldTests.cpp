@@ -791,6 +791,35 @@ TEST_SUITE("Editor.World")
 
 TEST_SUITE("Editor.World")
 {
+	TEST_CASE("world.setLayers waits for a save that writes the world's cells before it moves their folder")
+	{
+		GatedJobSystem jobs;
+		GridWorldProject project("EditorWorldLayersAfterSave", 2);
+		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
+		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
+		Settle(project);
+		const Entity box = project.Context.GetEditScene()->FindEntityByName("Box 0");
+		REQUIRE(box);
+		project.Run("component.set", { { "entity", UUIDToJson(box.GetUUID()) }, { "component", "Transform" }, { "values", { { "Scale", { 2.0, 2.0, 2.0 } } } } });
+		const std::filesystem::path worlds = project.Directory / "Assets" / "Worlds" / "Gen";
+		{
+			BackgroundGate gate;
+			REQUIRE(project.Commands.Execute(project.Context, "scene.save", { { "wait", false } }).Success);
+			EditorCommandResult renamed = project.Commands.Execute(project.Context, "world.setLayers",
+				{ { "world", UUIDToJson(project.World) }, { "layers", { { { "id", 1 }, { "name", "Earth" } } } } });
+			REQUIRE(renamed.IsPending());
+			project.Context.Update(Timestep(1.0f / 60.0f));
+			CHECK(FileSystem::IsDirectory(worlds / "Ground"));
+			gate.Open();
+			renamed = CompleteCommand(project.Context, std::move(renamed));
+			INFO(renamed.Error);
+			REQUIRE(renamed.Success);
+		}
+		CHECK(FileSystem::IsDirectory(worlds / "Earth"));
+		CHECK_FALSE(FileSystem::IsDirectory(worlds / "Ground"));
+		CHECK(project.Context.GetAssetManager()->GetMetadata(project.GetCell(0, 0))->Path == "Worlds/Gen/Earth/0_0.stscene");
+	}
+
 	TEST_CASE("world.setLayers adds, renames and removes layers in one undo step each")
 	{
 		GridWorldProject project("EditorWorldLayers", 2);

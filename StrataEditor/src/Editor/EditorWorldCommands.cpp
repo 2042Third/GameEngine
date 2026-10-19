@@ -577,15 +577,16 @@ namespace Strata
 				});
 			}) }));
 
-		registry.Register({ "world.setLayers",
+		registry.Register(MayDefer({ "world.setLayers",
 			"Replaces a world's layer list: adds, renames, reorders and retunes layers (streaming distance, enabledByDefault, loadBeforeStart). "
 			"Layers are matched to the existing ones by id (objects may give it) or name; a rename moves the layer's cell folder (handles kept). "
 			"Removing a layer that has cells, or changing the cell size of one, is refused unless deleteCells moves those cells to the trash "
-			"(never cells loaded in the open world: hide the layer first, world.edit visibleLayers). One undo step.",
+			"(never cells loaded in the open world: hide the layer first, world.edit visibleLayers). Waits for saves in flight first (they may "
+			"write the cells it moves). One undo step.",
 			ObjectSchema({ { "world", AssetSchema("The world (.stworld): handle or path") },
 				{ "layers", { { "type", "array" }, { "description", "Layer names, or {id, name, cellSize, streamingDistance, enabledByDefault, loadBeforeStart}" } } },
 				{ "deleteCells", BoolSchema("Move the cells of removed or re-gridded layers to the trash (default false)") } }, { "world", "layers" }),
-			[](EditorContext& context, const nlohmann::json& parameters)
+			AfterSaves([](EditorContext& context, const nlohmann::json& parameters)
 			{
 				EditorAssetManager* assets = context.GetAssetManager();
 				if (!assets)
@@ -718,7 +719,7 @@ namespace Strata
 				group->Add(CreateScope<AssetDocumentAction>(*assets, handle, metadata->Name, std::move(before), std::move(after)));
 				context.GetUndoStack().Record(std::move(group));
 				return EditorCommandResult::Ok({ { "world", UUIDToJson(handle) }, { "layers", DescribeLayers(data) }, { "deletedCells", dropped.size() } });
-			} });
+			}) }));
 
 		registry.Register({ "world.status",
 			"The world the editor edits (null when the edited scene is no world's persistent scene): its edit layer, visible layers and "

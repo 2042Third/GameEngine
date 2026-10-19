@@ -2016,11 +2016,13 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - **`world.create`** makes `<path>.stworld` and its persistent scene `<path>.stscene` (basic3d content and the
   `WorldComponent`; default layers Terrain, Buildings, Props, Gameplay of `cellSize` with four cells of streaming
   distance), opened (unsaved-changes guard, a new history, after the saves in flight: `CommandUtils::AfterSaves`) or as
-  one undo step that removes the files. `world.cook`, `world.create` and `world.loadCells` defer (`MayDefer`), and
+  one undo step that removes the files. `world.cook`, `world.create`, `world.loadCells` and `world.setLayers` defer
+  (`MayDefer`), and
   `world.info`, which reads the World asset by path, waits for a background asset scan (`WaitsForAssets`).
 - **`world.setLayers`** replaces a world's layer list (matched by id or name; a rename moves the layer's cell folder,
   handles kept); removing or re-gridding a layer with cells needs `deleteCells` (cells to the trash, never loaded ones).
-  One undo step.
+  One undo step, after the saves in flight (`AfterSaves`, `MayDefer`): `MoveFolder` and `MoveToTrash` refuse documents a
+  background save writes or has reserved.
 - **`world.status`**, **`world.edit`** and **`world.loadCells`** (`Editor/EditorWorldCommands.cpp`) drive the world the editor
   edits (`Editor/EditorWorld.h`): its cells by state and dirty documents; the session's edit layer, visible layers and
   radius scale; cells loaded by key or region and kept (pinned) until let go. **`world.moveEntities`** moves top-level
