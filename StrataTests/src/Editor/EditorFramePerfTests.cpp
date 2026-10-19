@@ -6,17 +6,26 @@
 #include "Perf/StressProject.h"
 #include "TestHelpers.h"
 
+#include <Strata/Asset/AssetImporter.h>
+#include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/Process.h>
+#include <Strata/Physics/PhysicsComponents.h>
 #include <Strata/Project/Project.h>
+#include <Strata/Scene/Components.h>
+#include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
+#include <Strata/World/WorldAsset.h>
+#include <Strata/World/WorldComponents.h>
 
 #include <nlohmann/json.hpp>
+#include <spdlog/fmt/fmt.h>
 
 #include <chrono>
+#include <cstdint>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -115,6 +124,80 @@ namespace
 		REQUIRE_MESSAGE(result.contains(path), "No ", pointer, " in ", result.dump());
 		REQUIRE(result.at(path).is_number());
 		return result.at(path).get<double>();
+	}
+
+	// Writes an asset file and its .meta into the project's assets, without indentation (the world's cells are large).
+	void WriteAssetFile(const std::filesystem::path& assets, const std::string& path, const nlohmann::json& document, AssetHandle handle, const char* type)
+	{
+		const std::filesystem::path file = assets / FileSystem::FromUTF8(path);
+		REQUIRE(FileSystem::CreateDirectories(file.parent_path()));
+		REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(document) + "\n"));
+		const nlohmann::json meta = { { "Handle", handle.ToString() }, { "ImportSettings", nlohmann::json::object() },
+			{ "Strata", { { "Format", "AssetMeta" }, { "Version", 1 } } }, { "Type", type } };
+		REQUIRE(FileSystem::WriteText(FileSystem::FromUTF8(FileSystem::ToUTF8(file) + ".meta"), JsonUtils::Dump(meta) + "\n"));
+	}
+
+	// The generated world of the editor's world metrics: `side` x `side` Ground cells of 32 m, each of `entitiesPerCell`
+	// entities on a grid over the cell, the first tenth of them static boxes (a cube and a box collider: a render proxy and
+	// a body each), the rest transforms only, like the nested scenes' entities. The Ground layer streams within 72 m: a
+	// camera in the middle of a cell loads its 5 x 5 block. The persistent scene ("Scenes/Grid.stscene") holds the World
+	// component, a light and a streaming source in the middle of the world, where the editor's camera is put.
+	constexpr uint32_t c_GridWorldSide = 32;
+	constexpr uint32_t c_GridWorldEntitiesPerCell = 2'500;
+	constexpr float c_GridWorldCellSize = 32.0f;
+	constexpr float c_GridWorldStreamingDistance = 72.0f;
+
+	glm::vec3 GridWorldMiddle()
+	{
+		// The middle of cell (side / 2, side / 2).
+		const float middle = (static_cast<float>(c_GridWorldSide / 2) + 0.5f) * c_GridWorldCellSize;
+		return glm::vec3(middle, 2.0f, middle);
+	}
+
+	void WriteGridWorld(const Project& project)
+	{
+		const std::filesystem::path assets = project.GetAssetDirectory();
+		const AssetHandle worldHandle = UUID(0x5E0000000001ull);
+		const AssetHandle persistentHandle = UUID(0x5E0000000002ull);
+		WorldData data;
+		data.Name = "Grid";
+		data.PersistentScene = persistentHandle;
+		data.Layers.push_back(WorldLayer { 1, "Ground", c_GridWorldCellSize, c_GridWorldStreamingDistance, true, false });
+		constexpr uint32_t c_PerRow = 50; // 50 x 50 entities 0.64 m apart over a cell
+		const float spacing = c_GridWorldCellSize / static_cast<float>(c_PerRow);
+		for (uint32_t z = 0; z < c_GridWorldSide; z++)
+		{
+			for (uint32_t x = 0; x < c_GridWorldSide; x++)
+			{
+				Scene cell(fmt::format("Grid {}_{}", x, z));
+				const uint64_t cellIndex = static_cast<uint64_t>(z) * c_GridWorldSide + x;
+				for (uint32_t index = 0; index < c_GridWorldEntitiesPerCell; index++)
+				{
+					Entity entity = cell.CreateEntityWithUUID(UUID(0x5F00000000000000ull + (cellIndex << 16) + index), fmt::format("Entity {}", index));
+					TransformComponent& transform = entity.GetComponent<TransformComponent>();
+					transform.Translation = glm::vec3(static_cast<float>(x) * c_GridWorldCellSize + (static_cast<float>(index % c_PerRow) + 0.5f) * spacing, 0.25f,
+						static_cast<float>(z) * c_GridWorldCellSize + (static_cast<float>(index / c_PerRow % c_PerRow) + 0.5f) * spacing);
+					if (index < c_GridWorldEntitiesPerCell / 10)
+					{
+						transform.Scale = glm::vec3(0.5f);
+						entity.AddComponent<MeshRendererComponent>().Mesh = BuiltinAssets::CubeMesh;
+						entity.AddComponent<BoxColliderComponent>();
+					}
+				}
+				const AssetHandle handle = DeriveSubAssetHandle(worldHandle, fmt::format("Cell/1/{}/{}", x, z));
+				WriteAssetFile(assets, fmt::format("Worlds/Grid/Ground/{}_{}.stscene", x, z), SceneSerializer::Serialize(cell), handle, "Scene");
+				data.Cells.push_back(WorldCell { 1, static_cast<int32_t>(x), static_cast<int32_t>(z), handle });
+			}
+		}
+
+		Scene persistent("Grid");
+		Perf::AddCameraAndLight(persistent);
+		persistent.CreateEntityWithUUID(UUID(0x5E0000000100ull), "World").AddComponent<WorldComponent>().World = worldHandle;
+		Entity source = persistent.CreateEntityWithUUID(UUID(0x5E0000000101ull), "Source");
+		source.GetComponent<TransformComponent>().Translation = GridWorldMiddle();
+		source.AddComponent<StreamingSourceComponent>();
+		WriteAssetFile(assets, "Scenes/Grid.stscene", SceneSerializer::Serialize(persistent), persistentHandle, "Scene");
+		WriteAssetFile(assets, "Worlds/Grid.stworld", WorldAsset::ToDocument(data), worldHandle, "World");
 	}
 
 }
@@ -283,6 +366,77 @@ TEST_SUITE("PerfGPU.Editor")
 			CHECK(JsonUtils::GetUInt(*frameTimes, "count", 0) >= 2);
 			return Perf::MetricValues { { "PerfGPU.Editor.ExportFrameStress", medianMs }, { "PerfGPU.Editor.ExportMaxFrameStress", maxMs },
 				{ "PerfGPU.Editor.ExportStress", seconds * 1000.0 } };
+		});
+	}
+
+	TEST_CASE("Editor frames of a 32 x 32-cell world of 2.56 million entities, idle and starting to play")
+	{
+		const std::filesystem::path editor = GetEditorPath();
+		REQUIRE_MESSAGE(FileSystem::IsRegularFile(editor), "The editor's world measurements need the built StrataEditor: ", FileSystem::ToUTF8(editor));
+
+		const std::filesystem::path directory = CreateTemporaryDirectory("PerfEditorWorld");
+		std::string error;
+		const Ref<Project> project = Project::Create(directory / "Project", "PerfWorld", &error);
+		REQUIRE_MESSAGE(project, error);
+		WriteGridWorld(*project);
+
+		// The persistent scene opens; the editor camera goes to the middle of the world, and world.loadCells answers once the
+		// cells around it (without pinning them: they are the ones the camera streams) are in. Then the editor runs idle with a
+		// still camera for a wait's frames, editor.perf summarizes them (the World system's stage among them), and play starts
+		// from what the editor holds: the persistent scene and those cells, which the game's source in the middle keeps. The
+		// frame that starts playing is the longest of the few frames editor.perf summarizes after it.
+		const glm::vec3 middle = GridWorldMiddle();
+		const nlohmann::json position = { middle.x, middle.y, middle.z };
+		constexpr int c_PlayStartFrames = 8;
+		const nlohmann::json script = nlohmann::json::array({ Wait(), OpenScene("Scenes/Grid.stscene"),
+			Command("camera.set", { { "position", position }, { "target", { middle.x + 10.0f, middle.y, middle.z } } }),
+			Command("world.loadCells", { { "region", { { "center", position }, { "radius", c_GridWorldStreamingDistance } } }, { "pin", false }, { "wait", true } }),
+			Wait(), Command("editor.perf", { { "frames", c_WaitFrames - 2 } }), Command("world.status"), Command("play.start"),
+			Wait(c_PlayStartFrames / 2), Command("editor.perf", { { "frames", c_PlayStartFrames } }), Command("world.status"), Wait(),
+			Command("play.stop") });
+		const std::filesystem::path scriptFile = directory / "Commands.json";
+		REQUIRE(FileSystem::WriteText(scriptFile, script.dump(1, '\t') + "\n"));
+
+		// The idle frame is the median of a wait's frames; starting to play is a maximum by nature (the hitch of copying the
+		// loaded cells into the game). A metric over its budget is confirmed by another run.
+		Perf::CheckBudgetsConfirmed({ "PerfGPU.Editor.EditFrameWorldIdle", "PerfGPU.Editor.PlayStartWorldMaxFrame" }, [&]
+		{
+			ProcessSpecification specification;
+			specification.Executable = editor;
+			specification.Arguments = { "--no-automation", "--frames", "100000", "--quit-after-commands", "--project",
+				FileSystem::ToUTF8(project->GetProjectFile()), "--commands", FileSystem::ToUTF8(scriptFile) };
+			specification.Output = ProcessOutputMode::Capture;
+			const Process::RunResult run = Process::Run(specification, c_EditorTimeout);
+			INFO("Editor output:\n", run.Output);
+			REQUIRE_MESSAGE(run.Started, run.Error);
+			REQUIRE_FALSE(run.TimedOut);
+			REQUIRE(run.ExitCode == 0);
+
+			// The cells around the camera were in while the editor ran idle, and stayed in when play started.
+			const std::vector<nlohmann::json> statuses = FindCommandResults(run.Output, "world.status");
+			REQUIRE(statuses.size() == 2);
+			const double editCells = GetNumber(statuses[0], "/cells/loaded");
+			CHECK(editCells >= 21);
+			CHECK(GetNumber(statuses[0], "/cells/loading") == 0);
+			const std::vector<nlohmann::json> opens = FindCommandResults(run.Output, "scene.open");
+			REQUIRE(opens.size() == 1);
+
+			const std::vector<nlohmann::json> waits = FindCommandResults(run.Output, "editor.wait");
+			REQUIRE(waits.size() == 4);
+			const double idleMedian = GetNumber(waits[1], "/frameTimes/medianMs");
+			CHECK(GetNumber(waits[1], "/frameTimes/count") >= c_WaitFrames - 2);
+			const std::vector<nlohmann::json> profiles = FindCommandResults(run.Output, "editor.perf");
+			REQUIRE(profiles.size() == 2);
+			const nlohmann::json* stages = JsonUtils::Find(profiles[0], "stages");
+			REQUIRE(stages != nullptr);
+			const nlohmann::json* streaming = JsonUtils::Find(*stages, "World.Streaming");
+			const double streamingMean = streaming ? GetNumber(*streaming, "/avgMs") : 0.0;
+			CHECK(GetNumber(profiles[1], "/frames") == c_PlayStartFrames);
+			const double playStartMax = GetNumber(profiles[1], "/frame/maxMs");
+			MESSAGE("World of ", c_GridWorldSide * c_GridWorldSide, " cells: ", editCells, " cells loaded around the camera; idle frame median ", idleMedian,
+				" ms (World.Streaming mean ", streamingMean, " ms); the frame starting to play ", playStartMax, " ms (", GetNumber(opens[0], "/seconds"),
+				" s to open the persistent scene)");
+			return Perf::MetricValues { { "PerfGPU.Editor.EditFrameWorldIdle", idleMedian }, { "PerfGPU.Editor.PlayStartWorldMaxFrame", playStartMax } };
 		});
 	}
 }
