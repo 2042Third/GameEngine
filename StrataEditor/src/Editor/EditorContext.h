@@ -268,6 +268,9 @@ namespace Strata
 		// GetFixedStepCount when the game was last resumed (SetPaused(false) of a paused game), which dropped the pending
 		// steps: how many of them had run.
 		uint64_t GetFixedStepCountAtResume() const { return m_FixedStepsAtResume; }
+		// How often a paused game was resumed: a command that waits for steps tells from it that a resume dropped them, also
+		// when the game was paused again in the same frame (several resumes in one frame see the same step count).
+		uint64_t GetResumeCount() const { return m_ResumeCount; }
 		// The input sequence (input.sequence) that steps the game, driven after the game's update every frame; play.step and
 		// other sequences are refused while it runs. Returns its id, or 0 with the reason when it cannot start. The last one
 		// stays readable (FindInputSequence) until the next starts.
@@ -639,6 +642,7 @@ namespace Strata
 		uint64_t m_PlaySession = 0;
 		uint64_t m_ReplacedFixedSteps = 0; // Fixed steps of the scenes a game switch replaced in this play session
 		uint64_t m_FixedStepsAtResume = 0;
+		uint64_t m_ResumeCount = 0;
 		Scope<InputSequence> m_InputSequence;
 		uint64_t m_InputSequenceId = 0;
 		uint64_t m_FixedStepsAtStop = 0;

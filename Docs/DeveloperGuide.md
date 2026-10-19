@@ -1874,7 +1874,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   second `play.step` while one waits adds its steps after them and answers when its own last step ran. Resuming drops the
   steps that did not run (`Scene::SetPaused(false)`, also `OnRuntimeStop`): it hands the game to real time, and a count
   asked for while paused must not leak into a later pause; a waiting `play.step` then fails with `stepsRun`
-  (`EditorContext::GetFixedStepCountAtResume`), as it does when play mode stops (a quit or a crash too). A scene switch the
+  (`EditorContext::GetFixedStepCountAtResume`; it notices the resume by `GetResumeCount`, also when the game was paused
+  again in the same frame), as it does when play mode stops (a quit or a crash too). A scene switch the
   game asks for carries pending steps over. While steps are pending the editor lifts its frame-rate cap (headless editors'
   60 frames per second and the idle throttling: `EditorLayer::UpdateSteppingFrameRate`), so 600 steps take the frames'
   work rather than ten seconds; each frame still runs exactly one step. `wait: false` answers at once with

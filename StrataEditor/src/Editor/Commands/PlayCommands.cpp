@@ -206,8 +206,8 @@ namespace Strata
 					value["pendingSteps"] = context.GetPendingSteps();
 					return EditorCommandResult::Ok(std::move(value));
 				}
-				return EditorCommandResult::Defer([first, target, steps, session = context.GetPlaySession(), lastSeen = context.GetFixedStepCount()](
-					EditorContext& context) mutable -> std::optional<EditorCommandResult>
+				return EditorCommandResult::Defer([first, target, steps, session = context.GetPlaySession(), resumes = context.GetResumeCount(),
+					lastSeen = context.GetFixedStepCount()](EditorContext& context) mutable -> std::optional<EditorCommandResult>
 				{
 					const auto ran = [&first, &steps](uint64_t count) { return std::clamp<int64_t>(static_cast<int64_t>(count) - static_cast<int64_t>(first), 0, steps); };
 					if (!context.IsPlaying() || context.GetPlaySession() != session)
@@ -216,8 +216,9 @@ namespace Strata
 						return EditorCommandResult::Fail(fmt::format("Play mode stopped (play.stop, or the game quit or crashed) after {} of {} steps", ran(atStop),
 							steps), { { "stepsRun", ran(atStop) } });
 					}
-					// Resumed: the steps that ran before the resume count; the rest were dropped with it.
-					const bool resumed = !context.IsPaused();
+					// Resumed (also when paused again since): the steps that ran before the resume count; the rest were dropped with it.
+					// A poll runs every frame, so the resumes it has not seen yet all happened in one frame, at one step count.
+					const bool resumed = context.GetResumeCount() != resumes;
 					lastSeen = resumed ? context.GetFixedStepCountAtResume() : context.GetFixedStepCount();
 					if (lastSeen >= target)
 					{

@@ -256,6 +256,31 @@ TEST_SUITE("Editor.GameFlow")
 		CHECK(waiting.Error.find("resumed after 5 of 50 steps") != std::string::npos);
 		CHECK(waiting.ErrorData["stepsRun"] == 5);
 
+		// Also when it is paused again in the same frame (two requests, or one editor.batch): the steps were dropped, and a
+		// later play.step that passes its last step does not answer for it.
+		project.Run("play.pause", { { "paused", true } });
+		waiting = project.Commands.Execute(context, "play.step", { { "steps", 50 } });
+		REQUIRE(waiting.IsPending());
+		for (int frame = 0; frame < 3; frame++)
+		{
+			project.Update();
+			PollCommandResult(waiting, context);
+		}
+		project.Run("editor.batch", { { "steps", { { { "command", "play.pause" }, { "parameters", { { "paused", false } } } },
+			{ { "command", "play.pause" }, { "parameters", { { "paused", true } } } } } } });
+		const nlohmann::json later = project.Run("play.step", { { "steps", 60 }, { "wait", false } });
+		CHECK(later["pendingSteps"] == 60);
+		for (int frame = 0; frame < 2 && waiting.IsPending(); frame++)
+		{
+			project.Update();
+			PollCommandResult(waiting, context);
+		}
+		REQUIRE_FALSE(waiting.IsPending());
+		CHECK_FALSE(waiting.Success);
+		CHECK(waiting.Error.find("resumed after 3 of 50 steps") != std::string::npos);
+		CHECK(waiting.ErrorData["stepsRun"] == 3);
+		project.Run("play.pause", { { "paused", false } });
+
 		// Two waiting play.steps: the second's steps run after the first's, and each answers when its own last step ran.
 		project.Run("play.pause", { { "paused", true } });
 		const uint64_t start = context.GetFixedStepCount();

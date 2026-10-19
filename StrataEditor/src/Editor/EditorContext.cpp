@@ -970,7 +970,10 @@ namespace Strata
 	void EditorContext::SetPaused(bool paused)
 	{
 		if (!paused && IsPaused())
+		{
 			m_FixedStepsAtResume = GetFixedStepCount();
+			m_ResumeCount++;
+		}
 		if (m_RuntimeScene)
 			m_RuntimeScene->SetPaused(paused);
 		UpdateInputSuspension();
