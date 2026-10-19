@@ -85,7 +85,7 @@ namespace Strata
 	{
 		// The built-in stages in the order of c_BuiltinFrameStages: neighbors in the stack differ, the scene's systems get the
 		// calm hues, and the stages that are usually large (rendering, the UI) stand apart from each other. Scene.Load shares
-		// Present's color, the one stage the stack never shows (it comes after the frame), so no two stages in the stack do.
+		// Present's color, the one stage the stack never shows (it is no work of the frame), so no two stages in the stack do.
 		const UI::ThemePalette& palette = UI::GetThemePalette();
 		const ImVec4* builtin[] = { &palette.Dust, &palette.Umber, &palette.Ochre, &palette.Limestone, &palette.Malachite, &palette.Azurite,
 			&palette.Sandstone, &palette.Rust, &palette.Sulfur, &palette.Cinnabar, &palette.Ash, &palette.Limestone };
@@ -348,7 +348,7 @@ namespace Strata
 		{
 			Swatch(GetStageColor(stage));
 			ImGui::SameLine();
-			ImGui::Text("%s  %.3f ms%s", profiler.GetStageName(stage).c_str(), ms, profiler.IsStageInWorkTime(stage) ? "" : " (after the frame)");
+			ImGui::Text("%s  %.3f ms%s", profiler.GetStageName(stage).c_str(), ms, profiler.IsStageInWorkTime(stage) ? "" : " (outside the work time)");
 		}
 		Swatch(GetUntimedColor());
 		ImGui::SameLine();
@@ -412,7 +412,7 @@ namespace Strata
 			if (entry.Kind != FrameStageKind::CPU)
 				continue; // The GPU's stages come in their own section
 			const bool ran = entry.Time.Max > 0.0f;
-			row(GetStageColor(stage), entry.InWorkTime ? entry.Name : entry.Name + " (after the frame)", entry.Time, ran ? colors.Text : colors.TextSecondary);
+			row(GetStageColor(stage), entry.InWorkTime ? entry.Name : entry.Name + " (outside the work time)", entry.Time, ran ? colors.Text : colors.TextSecondary);
 		}
 		// The GPU's section: what bounds the frames, the GPU's busy time per frame, and its stages over the frames with GPU
 		// times (they arrive a few frames late).
