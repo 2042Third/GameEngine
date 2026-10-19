@@ -98,6 +98,14 @@ namespace Strata
 		SceneSettings m_SettingsAfter;
 	};
 
+	// A save of the edited scene that writes in the background holds one (SceneRecovery::BeginSave), so that the journal
+	// that follows the saved document carries the edits made while it was written.
+	struct RecoverySaveToken
+	{
+		uint64_t Epoch = 0;    // Of the edited scene
+		uint64_t Sequence = 0; // Steps applied before the snapshot
+	};
+
 	// Autosave and crash recovery of the edited scene.
 	//
 	// The journal of the edited scene keeps its unsaved changes in "<project>/.strata/Recovery/<scene>-<session>.strecovery":
@@ -170,9 +178,21 @@ namespace Strata
 		// A journal starts for the scene that is now edited (sceneFile: its file, absolute, and scenePath relative to the
 		// asset directory; both empty for a scene that was never saved, whose entities the journal captures now).
 		void BeginScene(const Scene& scene, AssetHandle handle, const std::filesystem::path& sceneFile, const std::string& scenePath);
-		// The edited scene was saved (as this asset, with this document): its changes are on disk, so the journal's file goes
-		// and the next changes apply to the saved document.
-		void OnSaved(AssetHandle handle, const std::filesystem::path& sceneFile, const std::string& scenePath, std::string document);
+		// A save of the edited scene that writes in the background (EditorContext::BeginSaveScene) took its snapshot: the steps
+		// applied from now on are kept (OnApplied), so that the journal that follows the saved document carries the edits made
+		// while it was written. Every token ends with OnSaved or ReleaseSave; a token of another scene than the edited one
+		// (BeginScene, EndScene came since) does nothing.
+		using SaveToken = RecoverySaveToken;
+		SaveToken BeginSave();
+		// The save failed, or a newer one replaced it: what it kept goes (unless a later save still needs it).
+		void ReleaseSave(const SaveToken& token);
+		// The edited scene was saved (as this asset; `baseHash` is the SHA-256, as hexadecimal, of the written document, which
+		// holds the edits made before the token's snapshot): the journal's file goes and a new journal follows the saved
+		// document, carrying the steps applied since the snapshot, which are written at once (`scene` and `modified` are the
+		// edited scene and whether it is modified now); the new file replaces the old one before anything is removed.
+		// Releases the token. No copy of the document is kept.
+		void OnSaved(AssetHandle handle, const std::filesystem::path& sceneFile, const std::string& scenePath, std::string baseHash, const SaveToken& token,
+			const Scene& scene, bool modified);
 		// The edited scene's asset is at this place now (it may have moved: asset.move, a rename in the Content Browser): the
 		// journal names it from its next write on, which comes as for an edit. Nothing happens when the place is the same.
 		void OnSceneMoved(const std::filesystem::path& sceneFile, const std::string& scenePath);
@@ -194,9 +214,13 @@ namespace Strata
 		// Starts listing the project's recovery files (after the file operations asked for before). The entries are there
 		// once IsScanning is false.
 		void Scan();
+		// The project's files are listed later, by a Scan that waits for something first (the asset registry, which a scan in
+		// the background fills): until that Scan, IsScanning is true, so that nothing takes the empty entries for the project's
+		// (the offer as the project opens), and Update starts no scan of its own. SetProject and Scan end it.
+		void ExpectScan() { m_ScanExpected = IsActive(); }
 		// Lists them again as soon as no scan runs (Update starts it), e.g. because a scene of an entry moved.
 		void RequestScan() { m_RescanDue = true; }
-		bool IsScanning() const { return m_Scan != nullptr; }
+		bool IsScanning() const { return m_Scan != nullptr || m_ScanExpected; }
 		// The recovery files of the last scan, newest first (applicable or not). The version changes with every scan and
 		// discard.
 		const std::vector<RecoveryEntry>& GetEntries() const { return m_Entries; }
@@ -290,6 +314,17 @@ namespace Strata
 			bool Compute = false;
 		};
 
+		// A step applied while a background save writes (BeginSave), for the journal that follows the saved document.
+		struct RetainedStep
+		{
+			uint64_t Sequence = 0;
+			std::optional<AppliedStep> Step; // Entity states; none for a change only a snapshot captures, or of the settings
+			bool NeedsSnapshot = false;      // A step of kind Other, or one without entity states
+		};
+		// Records a step for the saves that write (BeginSave), as OnApplied records it for the journal.
+		void RetainStep(const EditorAction& action, bool undone, bool merged);
+		// Drops the kept steps no save needs any more.
+		void PruneRetainedSteps();
 		void Enqueue(std::function<void()> operation, bool compute = false);
 		void PumpOperations();
 		// Queues a write of the edited scene's journal, or the removal of its file when the scene is unmodified.
@@ -319,10 +354,18 @@ namespace Strata
 		std::deque<Operation> m_Operations;
 		JobHandle m_Running;
 
-		Ref<ScanResult> m_Scan; // The scan in progress
+		Ref<ScanResult> m_Scan;      // The scan in progress
+		bool m_ScanExpected = false; // A scan follows once something it waits for is done (ExpectScan)
 		std::vector<RecoveryEntry> m_Entries;
 		uint64_t m_EntriesVersion = 0;
 		std::unordered_set<std::string> m_DiscardedHere; // Entries EndScene wrote marked discarded since SetProject
+
+		// Background saves (BeginSave): the edited scene's epoch, the steps applied to it, the snapshots of the saves that
+		// write (their sequences, in order) and the steps applied since the oldest of them.
+		uint64_t m_Epoch = 1;
+		uint64_t m_StepSequence = 0;
+		std::vector<uint64_t> m_OpenSaves;
+		std::deque<RetainedStep> m_RetainedSteps;
 	};
 
 }

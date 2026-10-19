@@ -52,7 +52,7 @@ namespace
 					return EditorCommandResult::Ok({ { "Width", 1 }, { "Height", 1 }, { "Image", { { "MimeType", "image/png" }, { "Data", c_ImageData } } } });
 				} });
 			// Finishes after a number of frames with {"polls": n}.
-			Commands.Register({ "test.defer", "Test command that finishes after a number of frames.",
+			Commands.Register(MayDefer({ "test.defer", "Test command that finishes after a number of frames.",
 				CommandUtils::ObjectSchema({ { "polls", CommandUtils::IntegerSchema("Frames", 1, 1000000) } }),
 				[](EditorContext&, const nlohmann::json& parameters)
 				{
@@ -66,7 +66,7 @@ namespace
 							return std::nullopt;
 						return EditorCommandResult::Ok({ { "polls", count } });
 					});
-				} });
+				} }));
 			Commands.Register({ "test.throw", "Test command that throws, as third-party code may.", CommandUtils::ObjectSchema({}),
 				[](EditorContext&, const nlohmann::json&) -> EditorCommandResult
 				{
@@ -209,7 +209,7 @@ TEST_SUITE("Editor.Automation")
 		CHECK(image.GetValue()["Image"]["Data"] == c_ImageData);
 
 		// editor.status carries the automation section.
-		const RpcResult status = harness.Call(client, "editor.status");
+		const RpcResult status = harness.Call(client, "editor.status", { { "sections", { "automation" } } });
 		REQUIRE(status.IsSuccess());
 		const nlohmann::json& automation = status.GetValue()["automation"];
 		CHECK(automation["running"] == true);
@@ -250,7 +250,7 @@ TEST_SUITE("Editor.Automation")
 		REQUIRE(rejected.IsError());
 		CHECK(rejected.GetError().Code == JsonRpc::ErrorCode::InvalidParams);
 
-		const RpcResult status = harness.Call(client, "editor.status");
+		const RpcResult status = harness.Call(client, "editor.status", { { "sections", { "assets" } } });
 		REQUIRE(status.IsSuccess());
 		CHECK(status.GetValue()["assets"]["pools"]["gpuTextures"]["budgetBytes"] == 128ull << 20);
 	}

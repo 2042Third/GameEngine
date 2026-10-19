@@ -16,6 +16,7 @@ namespace Strata
 {
 
 	class Animator;
+	class UIElement;
 	class AudioSource;
 	class CharacterController;
 	class Component;
@@ -79,6 +80,8 @@ namespace Strata
 		AudioSource GetAudioSource() const;
 		// Control of the entity's Animator component (see Animator.h).
 		Animator GetAnimator() const;
+		// The entity as an element of the game UI (see UI.h).
+		UIElement GetUI() const;
 
 		// Script instances on this entity, by class (must be registered with ST_SCRIPT_CLASS) or by class name.
 		template<typename T>

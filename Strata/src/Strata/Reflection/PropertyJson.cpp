@@ -1,10 +1,15 @@
 #include "stpch.h"
 #include "Strata/Reflection/PropertyJson.h"
 
+#include "Strata/Core/JsonUtils.h"
 #include "Strata/Math/Math.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <optional>
+#include <string_view>
 
 namespace Strata
 {
@@ -113,6 +118,181 @@ namespace Strata
 			return std::nullopt;
 		}
 
+	}
+
+	namespace
+	{
+
+		// 10^0 to 10^22, the powers of ten a double holds exactly.
+		constexpr double c_ExactPowersOfTen[] = { 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13, 1e14, 1e15, 1e16,
+			1e17, 1e18, 1e19, 1e20, 1e21, 1e22 };
+
+		// The double nearest to a decimal number (fmt's shortest form of a float: an optional '-', digits with an optional '.'
+		// and an optional exponent), where one IEEE multiplication or division of exact values gives it: a significand of at
+		// most 2^53 and a power of ten up to 10^22 (the result of either operation is the exact value correctly rounded, so it
+		// is what a correctly rounding strtod gives). Nullopt for anything else, which callers read the slow way.
+		std::optional<double> ParseExactDecimal(std::string_view text)
+		{
+			size_t position = 0;
+			const bool negative = position < text.size() && text[position] == '-';
+			if (negative)
+				position++;
+			uint64_t significand = 0;
+			int fractionDigits = 0;
+			bool point = false;
+			bool digits = false;
+			for (; position < text.size(); position++)
+			{
+				const char character = text[position];
+				if (character >= '0' && character <= '9')
+				{
+					digits = true;
+					if (point)
+						fractionDigits++;
+					if (significand > (UINT64_MAX - 9) / 10)
+						return std::nullopt;
+					significand = significand * 10 + static_cast<uint64_t>(character - '0');
+				}
+				else if (character == '.' && !point)
+				{
+					point = true;
+				}
+				else
+				{
+					break;
+				}
+			}
+			int exponent = 0;
+			if (position < text.size() && (text[position] == 'e' || text[position] == 'E'))
+			{
+				position++;
+				bool negativeExponent = false;
+				if (position < text.size() && (text[position] == '+' || text[position] == '-'))
+					negativeExponent = text[position++] == '-';
+				bool exponentDigits = false;
+				for (; position < text.size() && text[position] >= '0' && text[position] <= '9'; position++)
+				{
+					exponentDigits = true;
+					if (exponent > 1000)
+						return std::nullopt;
+					exponent = exponent * 10 + (text[position] - '0');
+				}
+				if (!exponentDigits)
+					return std::nullopt;
+				if (negativeExponent)
+					exponent = -exponent;
+			}
+			if (!digits || position != text.size() || significand > (uint64_t(1) << 53))
+				return std::nullopt;
+
+			const int scale = exponent - fractionDigits;
+			double value = static_cast<double>(significand);
+			if (scale >= 0)
+			{
+				if (scale > 22)
+					return std::nullopt;
+				value *= c_ExactPowersOfTen[scale];
+			}
+			else
+			{
+				if (-scale > 22)
+					return std::nullopt;
+				value /= c_ExactPowersOfTen[-scale];
+			}
+			return negative ? -value : value;
+		}
+
+		template<glm::length_t L>
+		void AppendVector(std::string& out, const glm::vec<L, float>& vector)
+		{
+			out += '[';
+			for (glm::length_t index = 0; index < L; index++)
+			{
+				if (index > 0)
+					out += ',';
+				AppendFloatJson(out, vector[index]);
+			}
+			out += ']';
+		}
+
+		template<typename T>
+		void AppendInteger(std::string& out, T value)
+		{
+			char buffer[32];
+			const auto result = fmt::format_to_n(buffer, sizeof(buffer), "{}", value);
+			out.append(buffer, std::min(static_cast<size_t>(result.size), sizeof(buffer)));
+		}
+
+	}
+
+	void AppendFloatJson(std::string& out, float value)
+	{
+		// FloatToJson's steps without its parse: fmt's shortest form of the float, read as nlohmann reads it (text without a
+		// point or an exponent is an integer, "-0" the integer 0; the rest the double strtod gives, which nlohmann writes in
+		// its own shortest form, nlohmann::detail::to_chars, as Dump does).
+		if (!std::isfinite(value))
+		{
+			out += "0.0";
+			return;
+		}
+		char buffer[64];
+		const auto result = fmt::format_to_n(buffer, sizeof(buffer), "{}", value);
+		const std::string_view text(buffer, std::min(static_cast<size_t>(result.size), sizeof(buffer)));
+		if (text.find_first_of(".eE") == std::string_view::npos)
+		{
+			out.append(text == "-0" ? std::string_view("0") : text);
+			return;
+		}
+		std::optional<double> number = ParseExactDecimal(text);
+		if (!number)
+		{
+			// Very small and very large magnitudes: nlohmann's own reading, as FloatToJson does.
+			const nlohmann::json parsed = nlohmann::json::parse(text.begin(), text.end(), nullptr, false);
+			if (!parsed.is_number_float())
+			{
+				out += JsonUtils::Dump(FloatToJson(value));
+				return;
+			}
+			number = parsed.get<double>();
+		}
+		char digits[64];
+		const char* end = nlohmann::detail::to_chars(digits, digits + sizeof(digits), *number);
+		out.append(digits, static_cast<size_t>(end - digits));
+	}
+
+	void AppendPropertyValueJson(std::string& out, const PropertyInfo& property, const PropertyValue& value)
+	{
+		switch (property.Type)
+		{
+			case PropertyType::Bool:   out += std::get<bool>(value) ? "true" : "false"; return;
+			case PropertyType::Int:    AppendInteger(out, std::get<int32_t>(value)); return;
+			case PropertyType::UInt:   AppendInteger(out, std::get<uint32_t>(value)); return;
+			case PropertyType::Float:  AppendFloatJson(out, std::get<float>(value)); return;
+			case PropertyType::Vec2:   AppendVector(out, std::get<glm::vec2>(value)); return;
+			case PropertyType::Vec3:
+			case PropertyType::Color3: AppendVector(out, std::get<glm::vec3>(value)); return;
+			case PropertyType::Vec4:
+			case PropertyType::Color4: AppendVector(out, std::get<glm::vec4>(value)); return;
+			case PropertyType::Quat:
+			{
+				const glm::quat& rotation = std::get<glm::quat>(value);
+				AppendVector(out, glm::vec4(rotation.x, rotation.y, rotation.z, rotation.w));
+				return;
+			}
+			case PropertyType::String: JsonUtils::AppendString(out, std::get<std::string>(value)); return;
+			case PropertyType::Enum:
+			{
+				const int32_t enumValue = std::get<int32_t>(value);
+				if (const EnumValue* option = property.FindEnumValue(enumValue))
+					JsonUtils::AppendString(out, option->Name);
+				else
+					AppendInteger(out, enumValue);
+				return;
+			}
+			case PropertyType::Asset:
+			case PropertyType::Entity: JsonUtils::AppendString(out, std::get<UUID>(value).ToString()); return;
+		}
+		out += "null";
 	}
 
 	nlohmann::json FloatToJson(float value)

@@ -3,7 +3,10 @@
 #include "Strata/Asset/AssetImporter.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/AssetPackWriter.h"
+#include "Strata/Asset/AssetRegistration.h"
+#include "Strata/Core/AtomicFileWriter.h"
 #include "Strata/Core/FileWatcher.h"
+#include "Strata/Core/JobSystem.h"
 
 #include <atomic>
 #include <chrono>
@@ -23,6 +26,8 @@
 
 namespace Strata
 {
+
+	struct WrittenDocument;
 
 	// How EditorAssetManager::Scan imports the assets whose cached import is missing or stale.
 	enum class ScanImports : uint8_t
@@ -163,6 +168,16 @@ namespace Strata
 		std::string Error;
 	};
 
+	// The imports' memory estimates against their budget (EditorAssetManager::SetImportMemoryBudget), in bytes.
+	struct ImportMemoryStats
+	{
+		uint64_t Admitted = 0; // The estimates of the imports admitted: running, or about to start
+		uint64_t Budget = 0;
+		uint64_t Queued = 0;   // The estimates of the imports that wait for room
+		uint32_t Running = 0;  // Imports admitted
+		uint32_t Waiting = 0;  // Imports that wait for room
+	};
+
 	// Asset manager of the editor. Every file with a known importer under the asset directory is an asset; its handle
 	// and import settings live in a "<file>.meta" sidecar (commit it with the file). Imported data is cached per
 	// handle in the cache directory and redone automatically when the source, its settings, the importer or another
@@ -182,16 +197,45 @@ namespace Strata
 	// fails because an import has it open.
 	class EditorAssetManager final : public AssetManagerBase
 	{
+		// A copy's job prepares the files it copied for registration (PreparedSource).
+		friend struct ExternalImport::CopyTask;
 	public:
 		explicit EditorAssetManager(const EditorAssetManagerSpecification& specification);
 		// Close, then waits for the loads in flight (reads of single files).
 		~EditorAssetManager() override;
 
 		// Registers every asset, imports those whose cached data is missing or stale and starts watching the directory. Call
-		// once after construction. With ScanImports::InBackground the imports run as background jobs (like re-imports after
-		// file changes) that Update applies; meanwhile a load of such an asset waits for its import instead of failing
-		// (AssetManagerBase::IsAwaitingImport), its sub-assets appear once it is applied, and HasPendingImports is true.
+		// once after construction (BeginScan or Scan). Returns at once: a job walks the asset directory, reads every .meta
+		// (writing those that are missing or need a new handle), checks every cached import against its record and finds what
+		// documents reference, on the background threads, and removes cached data nothing uses; Update then inserts what it
+		// prepared into the registry, a slice of about a millisecond per call (AssetRegistrationOptions), and applies the
+		// current imports. No file is touched on the main thread. Imports whose cached data is stale run, with
+		// ScanImports::InBackground, as background jobs (like re-imports after file changes) that Update applies; meanwhile a
+		// load of such an asset waits for its import instead of failing (AssetManagerBase::IsAwaitingImport), its sub-assets
+		// appear once it is applied, and HasPendingImports is true (also while the scan runs). With ScanImports::Wait they
+		// import in parallel once the scan is applied, before the call of Update that finishes it returns.
+		void BeginScan(ScanImports imports = ScanImports::InBackground);
+		// BeginScan, then waits for the scan and inserts everything at once (tools, tests and scripted editor runs, which stay
+		// deterministic). Called again once a scan ended, it registers the files added since that are not registered yet
+		// (tools and tests that write files without a file watcher), on the calling thread.
 		void Scan(ScanImports imports = ScanImports::Wait);
+		bool IsScanning() const { return m_Scan != nullptr; }
+		// Where the scan is; nothing when none runs.
+		std::optional<AssetScanProgress> GetScanProgress() const;
+		// How scans prepare and insert (tests pass a clock of their own). Before BeginScan.
+		void SetRegistrationOptions(AssetRegistrationOptions options);
+
+		// The memory imports may take together, in bytes, by their estimates (AssetImporter::EstimateImportMemory, read from
+		// the source's first bytes): an import that does not fit beside those admitted waits until they finish, and one runs
+		// alone even when it exceeds the budget by itself. A background import waits in order, without holding a thread; a
+		// blocking one (Scan that waits, ReimportAsset) waits on its thread, and only while an admitted import runs (never for
+		// one still queued for a thread, which may need the one it holds). Default: GetDefaultImportMemoryBudget, for the
+		// manager's life (a project that opens again starts from it). A larger budget starts what waits and fits it at once.
+		void SetImportMemoryBudget(uint64_t bytes);
+		// A quarter of the machine's physical memory, clamped to 1-4 GiB (so that it binds on large machines too: 24
+		// textures of 4096x4096 estimate about 8 GB).
+		static uint64_t GetDefaultImportMemoryBudget();
+		ImportMemoryStats GetImportMemoryStats() const;
 		// Ends the manager's background work for good and returns at once, without waiting for any of it: stops the file
 		// watcher and cancels every import and search of references (queued ones never start; running ones stop at their next
 		// cancellation check on their own and store nothing). Nothing is imported in the background afterwards and results
@@ -278,11 +322,40 @@ namespace Strata
 		// `references` as for CreateNativeAsset.
 		bool SaveNativeAsset(AssetHandle handle, std::span<const uint8_t> data, bool reload, std::string* outError = nullptr,
 			const std::vector<AssetHandle>* references = nullptr);
+
+		//////////////////////////////////////////////////////////////////////////
+		// Documents written in the background (the editor's DocumentSaver)
+		//////////////////////////////////////////////////////////////////////////
+
+		// The file of a native asset a background job writes (ClaimDocumentWrite). While the claim lives the file watcher
+		// leaves its path alone, so a save never triggers its own reference search or reload; it keeps what background jobs
+		// share with the manager alive, so a write never depends on the manager (which may close meanwhile).
+		class DocumentWriteClaim;
+		// Reserves a path (relative to the asset directory) for a new engine-native asset (".stscene", ".stprefab", ".stmat")
+		// that a background save writes, with `handle` (e.g. a world cell's derived handle) or, for the null handle, a new
+		// one, which it returns. Until the save publishes the asset (PublishWrittenDocument) or the reservation is released,
+		// nothing else may take the path or the handle. Null, with the reason, for a path outside the asset directory or in a
+		// hidden folder, of another type, where a file or an asset is or that is reserved already, and for a handle that is
+		// built in, taken or reserved.
+		AssetHandle ReserveNativeAsset(const std::string& relativePath, AssetHandle handle = UUID::Null(), std::string* outError = nullptr);
+		// Gives up a reservation whose save failed: the path and the handle are free again.
+		void ReleaseNativeAssetReservation(AssetHandle handle);
+		// The reserved path of a handle (empty when it is not reserved).
+		std::string GetReservedPath(AssetHandle handle) const;
+		// Claims the file of an engine-native asset of the project, or of a reserved one, for a background write. Null, with
+		// the reason, for any other handle. Main thread.
+		Ref<DocumentWriteClaim> ClaimDocumentWrite(AssetHandle handle, std::string* outError = nullptr);
+		// Makes what a background write wrote (DocumentWriteClaim::Commit) the asset's state, without reading the disk: a
+		// new asset is registered with its reserved handle; an existing one takes the file's size and time (so the file
+		// watcher's report of the write is no news); both record the references the writer collected and get their stored
+		// size. Loaded copies are reloaded when asked (WrittenDocument::Reload). Releases the claim. Main thread.
+		void PublishWrittenDocument(const WrittenDocument& written);
 		// Moves or renames an asset (and its .meta) within the asset directory; the handle does not change. Never waits for
 		// an import: an import of the asset that is queued or running is cancelled before the file moves and runs again at
 		// the new place; other imports go on (the file watcher re-imports those that read the file as a dependency). Its own
 		// path does nothing; a name that differs only in case renames it where the file system ignores case. Fails when
-		// another file is at the destination.
+		// another file is at the destination, and while a background save writes the asset or a new one at the destination
+		// (ClaimDocumentWrite, ReserveNativeAsset).
 		bool MoveAsset(AssetHandle handle, const std::string& newRelativePath, std::string* outError = nullptr);
 		// Deletes the source file, its .meta and cached data, and unregisters the asset and its sub-assets. Never waits for
 		// an import: the asset's own import is cancelled before the files go and stores nothing; other imports go on. Tools;
@@ -292,8 +365,8 @@ namespace Strata
 		// Moves an asset's file (with its .meta and its cached import), or a folder with everything in it, from the asset
 		// directory into a new folder of the trash directory, and unregisters the assets it held, so that RestoreFromTrash can
 		// bring them back with the same handles. Imports of those assets are cancelled first (never waited for). Fails,
-		// moving nothing, without a trash directory, for paths outside the asset directory, the asset directory itself and
-		// what is neither an asset file nor a folder.
+		// moving nothing, without a trash directory, for paths outside the asset directory, the asset directory itself, what
+		// is neither an asset file nor a folder, and while a background save writes a document there.
 		bool MoveToTrash(const std::string& relativePath, TrashedAssets& outTrashed, std::string* outError = nullptr);
 		// Puts what MoveToTrash moved back where it was and registers its assets with their handles (imports cached with them
 		// are current again, so nothing is imported anew), then removes the trash folder. Fails, restoring nothing, when
@@ -311,7 +384,8 @@ namespace Strata
 		// every handle: the assets in it are registered at their new paths like MoveAsset does, imports of them that run are
 		// cancelled and run again there, and models in it whose files moved with them are imported again. Its own path does
 		// nothing, and a name that differs only in case renames it where the file system ignores case. Fails, moving nothing,
-		// when something else is at the destination or it lies inside the folder or outside the asset directory.
+		// when something else is at the destination, it lies inside the folder or outside the asset directory, or a
+		// background save writes a document in either folder.
 		bool MoveFolder(const std::string& from, const std::string& to, std::string* outError = nullptr);
 
 		//////////////////////////////////////////////////////////////////////////
@@ -340,9 +414,31 @@ namespace Strata
 		// on the main thread (no document is read). Sorted by handle.
 		std::vector<AssetHandle> GetReferencers(AssetHandle handle) const;
 
-		// Whether background imports (hot reload), or searches of what changed engine-native assets reference, are queued,
-		// running, or finished and not applied yet (Update applies them).
+		// The import record of a source asset as the project's records store holds it (what the manager knows of its last
+		// import, or what an asset stored as its source references, ImportRecordStore); nothing when it has none. Tools and tests.
+		std::optional<nlohmann::json> GetImportRecord(AssetHandle handle) const;
+		// Waits until every import record set so far is in the records file (tools, tests; the destructor does it). False, with
+		// the reason, when a write failed.
+		bool FlushImportRecords(std::string* outError = nullptr);
+
+		// Whether background imports (hot reload, a scan's) are queued, running, or finished and not applied yet (Update
+		// applies them), or a scan runs. Searches of what documents reference are no imports: HasPendingReferenceSearches.
 		bool HasPendingImports() const;
+		// Whether searches of what changed engine-native documents reference wait, run, or finished and are not applied yet. A
+		// document's search starts once it has not changed for c_ReferenceSearchDelay (a file written over seconds is searched
+		// once), and a newer one cancels it: one search per document at a time.
+		bool HasPendingReferenceSearches() const;
+		// The documents of those searches, sorted.
+		std::vector<AssetHandle> GetPendingReferenceSearches() const;
+		// How many searches started so far (tests).
+		uint64_t GetReferenceSearchCount() const { return m_ReferenceSearches.load(std::memory_order_relaxed); }
+		// What an engine-native document references now: its record when the file is unchanged, else found in the file (read
+		// under the shared file lock). Nothing for other assets or an unreadable document. Any thread (an export's job scans
+		// documents whose search has not run yet).
+		std::optional<std::vector<AssetHandle>> FindDocumentReferences(AssetHandle document) const;
+		// Records what FindDocumentReferences found (main thread).
+		void RecordScannedReferences(AssetHandle document, std::span<const AssetHandle> references);
+		static constexpr std::chrono::milliseconds c_ReferenceSearchDelay { 500 };
 
 		// The assets a pack built now would hold (every project asset, not the built-in ones, or with Prune what the scenes
 		// and AlwaysInclude need), in pack order, with their dependencies and bounds: a snapshot, which WriteAssetPack can
@@ -369,8 +465,6 @@ namespace Strata
 			AssetPackBuildPlan* outPlan = nullptr, AssetPackWriteStats* outStats = nullptr);
 
 		static constexpr std::string_view c_MetaExtension = ".meta";
-		// Imports of sources larger than this run one at a time, bounding peak memory (decoded images are large).
-		static constexpr uint64_t c_LargeImportSize = 64ull * 1024 * 1024;
 	protected:
 		bool ReadAssetData(const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outError) override;
 		// Assets of a source whose first import has not been applied (Scan in the background, a file added since).
@@ -387,6 +481,8 @@ namespace Strata
 			std::atomic<bool> Cancel = false;
 			std::atomic<bool> Started = false; // It began to run (Close logs how many it stopped while they ran)
 			bool Force = false;                // An import that runs even when the cached one is current (main thread)
+			bool Search = false;               // A search of what a document references, not an import
+			AssetHandle Asset = UUID::Null();  // Of a search: the document
 		};
 
 		// What background jobs share with the manager: the directories, the file lock, the wanted jobs and their results
@@ -414,6 +510,8 @@ namespace Strata
 			// Of assets stored as-is: incremented whenever a search of what it references starts, so that only the latest
 			// search's result is recorded (see QueueNativeReferences).
 			uint64_t ReferencesGeneration = 0;
+			// The search of what it references that runs (or ran last); a newer one cancels it: one per document at a time.
+			Ref<BackgroundJob> SearchJob;
 		};
 
 		// Everything an import needs, copied so imports can run on any thread.
@@ -444,6 +542,10 @@ namespace Strata
 			uint64_t SourceSize = 0;
 			int64_t SourceTime = 0;
 			bool FromCache = false; // The cached import was current: loaded assets already hold this data
+			// The sizes of the cache files (the asset's and each sub-asset's, in order), known to the job that wrote or checked
+			// them: applying an outcome touches no file.
+			uint64_t StoredSize = 0;
+			std::vector<uint64_t> SubAssetStoredSizes;
 		};
 
 		// What an engine-native asset (stored as its source, never imported) references, from its cached record or a scan.
@@ -461,7 +563,6 @@ namespace Strata
 		std::filesystem::path ToAbsolute(std::string_view relativePath) const;
 		std::string ToRelative(const std::filesystem::path& absolutePath) const; // Empty when outside
 		std::filesystem::path GetCachePath(AssetHandle handle) const;
-		std::filesystem::path GetImportRecordPath(AssetHandle handle) const;
 
 		// Reads or creates the .meta sidecar and registers the file. Returns null if the file has no importer, lies in a
 		// hidden directory, or has an invalid .meta (which is never overwritten: it may hold a merge conflict). With
@@ -473,6 +574,9 @@ namespace Strata
 		bool WriteMetaFile(const SourceAsset& source) const;
 		ImportRequest MakeImportRequest(const SourceAsset& source) const;
 		void ApplyImportOutcome(ImportOutcome outcome, bool reload);
+		// Removes the cache files of sub-assets an import no longer produces, on an I/O job (no file is touched on the main
+		// thread when an import is applied).
+		void RemoveCacheFilesLater(std::vector<AssetHandle> handles);
 		// Queues an import as a background job (JobPriority::Background; hot reload); with force, also when the cached import is
 		// current. An import of the source that is queued or running read an earlier state: it is cancelled (StopImport) and
 		// this one replaces it, forced if either is. `replacing`: the caller stopped the source's import itself (see
@@ -483,6 +587,9 @@ namespace Strata
 		// Cancels the source's background import, without waiting for it, and forgets it: a queued one never starts, a running
 		// one stops at its next cancellation check and stores nothing. Returns it (null without one). Requires m_SourceMutex.
 		Ref<BackgroundJob> StopImport(SourceAsset& source);
+		// Why a document a background save writes (claimed or reserved) at `relativePath`, or below it when it is a folder,
+		// cannot move or go to the trash now; empty when nothing there is being written. Requires m_SourceMutex.
+		std::string FindDocumentWriteLocked(const std::string& relativePath) const;
 		// Merges settings into the asset's and saves its .meta (an invalid .meta is never overwritten).
 		bool WriteImportSettings(AssetHandle handle, const nlohmann::json& settings, std::string* outError);
 		// Engine documents are read from their source: a re-import only takes the file's current state and reloads it.
@@ -494,12 +601,24 @@ namespace Strata
 		// A folder the file watcher saw come or go: the folder index follows (and assets whose files went with a folder leave).
 		void ProcessFolderChange(const std::filesystem::path& path, FileChangeType type);
 		void ProcessCompletedImports();
-		// Handle -> path of every source asset, persisted in the cache so duplicated .meta files resolve the same way
-		// on every scan (the original keeps its handle).
-		std::unordered_map<uint64_t, std::string> LoadAssetIndex() const;
-		void SaveAssetIndex();
-		// Deletes cached data of assets that no longer exist and leftovers of interrupted writes (during Scan).
-		void RemoveUnusedCacheFiles();
+		// A file of the asset directory as a scan's job prepared it, the scan's state shared with its job, and the main thread's.
+		struct PreparedSource;
+		struct ScanShared;
+		struct ScanState;
+		static void PrepareScan(BackgroundWork& work, ScanShared& shared, uint32_t batch, JobPriority priority);
+		// Prepares files the editor put into the asset directory (a copy's job): handles of the project or taken twice are given
+		// anew (written into the .meta), cached imports are checked and documents' references found. Any thread.
+		static void PrepareAddedFiles(BackgroundWork& work, std::vector<PreparedSource>& sources, const std::atomic<bool>* cancel);
+		// Registers prepared sources from `next` on, in batches, until `slice` runs out: applies their current imports and
+		// references, and lists the imported ones whose cache is stale. Returns the next index. Touches no file. Main thread.
+		size_t InsertPrepared(std::vector<PreparedSource>& sources, size_t next, RegistrationSlice& slice, std::vector<ImportRequest>& outStale,
+			uint32_t& outFailed);
+		// Inserts what the scan's job prepared (once it finished), within a slice of time unless `unlimited`, and finishes the
+		// scan once everything is in.
+		void AdvanceScan(bool unlimited);
+		void FinishScan();
+		// Scan once a scan ended: the files that are not registered yet.
+		void RegisterNewFiles(ScanImports imports);
 
 		// Records what an engine-native asset references (BackgroundWork::FindNativeReferences) with the base (main thread).
 		void ApplyNativeReferences(const NativeReferences& references);
@@ -510,6 +629,10 @@ namespace Strata
 		// file, and parsing it unless its record is current, takes long for large scenes); Update records them unless a later
 		// search started meanwhile. Does nothing for imported assets. Main thread.
 		void QueueNativeReferences(AssetHandle handle);
+		// Cancels the source's search of what it references (and makes a result of it out of date). Requires m_SourceMutex.
+		void StopReferenceSearch(SourceAsset& source);
+		// Starts the searches whose documents have not changed for c_ReferenceSearchDelay (all: every one that waits).
+		void StartDueReferenceSearches(bool all);
 		// The stored form's file of an asset (the cache file, or the source of assets stored as-is): calls `read` with it under
 		// the shared file lock, again at its new place when it moved meanwhile. False when the asset is unknown, its import
 		// failed or `read` fails (outError says which).
@@ -549,7 +672,6 @@ namespace Strata
 		std::unordered_map<AssetHandle, SourceAsset> m_Sources;      // Top-level assets
 		std::unordered_map<std::string, AssetHandle> m_SourcesByPath; // Relative path -> handle
 		std::unordered_map<std::string, std::vector<AssetHandle>> m_DependentsByPath; // Dependency key -> importing sources
-		bool m_AssetIndexDirty = false;                               // Guarded by m_SourceMutex
 		uint32_t m_SourcesImporting = 0;                              // Sources with an ImportJob; guarded by m_SourceMutex
 
 		// The file lock, the background jobs and their results, shared with the jobs. Lock order: m_SourceMutex before the
@@ -574,6 +696,75 @@ namespace Strata
 		std::unordered_map<AssetHandle, std::unordered_set<AssetHandle>> m_Referencers;
 
 		std::vector<Ref<ExternalImport>> m_ExternalImports; // Not finished (main thread)
+
+		// Searches of what documents reference that wait for their document to settle, by when they start (main thread), and
+		// how many started.
+		std::unordered_map<AssetHandle, std::chrono::steady_clock::time_point> m_SearchesDue;
+		std::atomic<uint64_t> m_ReferenceSearches = 0;
+
+		// The scan in progress (BeginScan), and whether one ran (main thread).
+		Scope<ScanState> m_Scan;
+		bool m_Scanned = false;
+		AssetRegistrationOptions m_RegistrationOptions;
+
+		// New native assets reserved for background saves (ReserveNativeAsset); guarded by m_SourceMutex.
+		struct Reservation
+		{
+			std::string Path;
+			AssetType Type = AssetType::None;
+		};
+		std::unordered_map<AssetHandle, Reservation> m_Reservations;
+		std::unordered_map<std::string, AssetHandle> m_ReservedPaths;
+	};
+
+	class EditorAssetManager::DocumentWriteClaim
+	{
+	public:
+		~DocumentWriteClaim();
+
+		DocumentWriteClaim(const DocumentWriteClaim&) = delete;
+		DocumentWriteClaim& operator=(const DocumentWriteClaim&) = delete;
+
+		AssetHandle GetAsset() const { return m_Asset; }
+		AssetType GetType() const { return m_Type; }
+		const std::string& GetPath() const { return m_Path; } // Relative to the asset directory
+		const std::filesystem::path& GetAbsolutePath() const { return m_AbsolutePath; }
+		// A reserved asset that the write creates (with its .meta).
+		bool IsNewAsset() const { return m_New; }
+
+		// On the writing job, once the document's bytes are written: replaces the asset's file with the finished temporary file
+		// (a new asset gets its .meta first, and is refused when a file is at its place by now: nothing is overwritten) under
+		// the manager's exclusive file lock, then writes its import record (the file's size and time, `contentHash`: FNV-1a
+		// of its bytes, and `references`). Fills outWritten for PublishWrittenDocument, but for its Claim, which is the
+		// caller's to set. False, with the reason, when the file could not be replaced (the asset is then as it was).
+		bool Commit(AtomicFileWriter& file, uint64_t contentHash, std::vector<AssetHandle> references, WrittenDocument& outWritten,
+			std::string* outError = nullptr);
+		// The watcher sees the path again (the claim's destructor does it too).
+		void Release();
+	private:
+		friend class EditorAssetManager;
+		DocumentWriteClaim() = default;
+
+		Ref<BackgroundWork> m_Work;
+		AssetHandle m_Asset = UUID::Null();
+		AssetType m_Type = AssetType::None;
+		std::string m_Path;
+		std::filesystem::path m_AbsolutePath;
+		bool m_New = false;
+		std::string m_MetaText; // New assets: the .meta to write
+		bool m_Released = false;
+	};
+
+	using DocumentWriteClaim = EditorAssetManager::DocumentWriteClaim;
+
+	// What a background write of a native asset wrote (DocumentWriteClaim::Commit), for EditorAssetManager::PublishWrittenDocument.
+	struct WrittenDocument
+	{
+		Ref<DocumentWriteClaim> Claim;
+		uint64_t Size = 0;
+		int64_t Time = 0;
+		std::vector<AssetHandle> References;
+		bool Reload = false; // Loaded copies take the written version
 	};
 
 }

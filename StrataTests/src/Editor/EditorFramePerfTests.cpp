@@ -229,7 +229,7 @@ TEST_SUITE("PerfGPU.Editor")
 		constexpr int c_PlayStartFrames = 8;
 		const nlohmann::json script = nlohmann::json::array({ Wait(),
 			OpenScene("Scenes/Nested100k.stscene"), Wait(), Command("play.start"), Wait(), Command("play.stop"),
-			OpenScene("Scenes/Nested1M.stscene"), Wait(), Command("editor.status"), Command("play.start"), Wait(c_PlayStartFrames / 2),
+			OpenScene("Scenes/Nested1M.stscene"), Wait(), Command("editor.status", { { "sections", { "memory" } } }), Command("play.start"), Wait(c_PlayStartFrames / 2),
 			Command("editor.perf", { { "frames", c_PlayStartFrames } }), Wait(), Command("play.stop"), OpenScene("Scenes/Nested100k.stscene"),
 			OpenScene("Scenes/Cubes100k.stscene") });
 		const std::filesystem::path scriptFile = directory / "Commands.json";

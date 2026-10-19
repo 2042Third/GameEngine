@@ -34,11 +34,6 @@ namespace Strata
 			return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
 		}
 
-		std::string HashBytes(std::span<const uint8_t> bytes)
-		{
-			return Crypto::ToHex(Sha256::Hash(bytes));
-		}
-
 		// Hashed a piece at a time: a scene file can be hundreds of megabytes (17 MB per 100,000 entities), which the hash never
 		// needs at once, and every scene the editor opens is hashed (on an I/O thread, while frames go on).
 		std::optional<std::string> HashFile(const std::filesystem::path& path)
@@ -366,6 +361,7 @@ namespace Strata
 		m_Directory = recoveryDirectory;
 		m_AssetDirectory = assetDirectory;
 		m_Scan.reset();
+		m_ScanExpected = false;
 		m_RescanDue = false;
 		m_Entries.clear();
 		m_EntriesVersion++;
@@ -434,11 +430,18 @@ namespace Strata
 		m_Journal.reset();
 		m_PendingSteps.clear();
 		m_Changed = false;
+		// Saves of the scene that goes no longer concern the journal.
+		m_Epoch++;
+		m_OpenSaves.clear();
+		m_RetainedSteps.clear();
 		return outcome;
 	}
 
 	void SceneRecovery::BeginScene(const Scene& scene, AssetHandle handle, const std::filesystem::path& sceneFile, const std::string& scenePath)
 	{
+		m_Epoch++;
+		m_OpenSaves.clear();
+		m_RetainedSteps.clear();
 		m_Journal = CreateRef<Journal>();
 		m_Journal->Stem = MakeJournalStem(handle);
 		m_Journal->Scene = handle;
@@ -481,34 +484,87 @@ namespace Strata
 		});
 	}
 
-	void SceneRecovery::OnSaved(AssetHandle handle, const std::filesystem::path& sceneFile, const std::string& scenePath, std::string document)
+	SceneRecovery::SaveToken SceneRecovery::BeginSave()
 	{
-		// The changes are on disk: the previous journal's file goes, and a new journal follows the saved document.
-		if (m_Journal)
+		m_OpenSaves.push_back(m_StepSequence);
+		return SaveToken { m_Epoch, m_StepSequence };
+	}
+
+	void SceneRecovery::ReleaseSave(const SaveToken& token)
+	{
+		if (token.Epoch != m_Epoch)
+			return;
+		auto it = std::find(m_OpenSaves.begin(), m_OpenSaves.end(), token.Sequence);
+		if (it != m_OpenSaves.end())
+			m_OpenSaves.erase(it);
+		PruneRetainedSteps();
+	}
+
+	void SceneRecovery::PruneRetainedSteps()
+	{
+		if (m_OpenSaves.empty())
 		{
-			Enqueue([journal = m_Journal, directory = m_Directory]()
+			m_RetainedSteps.clear();
+			return;
+		}
+		const uint64_t oldest = *std::min_element(m_OpenSaves.begin(), m_OpenSaves.end());
+		while (!m_RetainedSteps.empty() && m_RetainedSteps.front().Sequence <= oldest)
+			m_RetainedSteps.pop_front();
+	}
+
+	void SceneRecovery::OnSaved(AssetHandle handle, const std::filesystem::path& sceneFile, const std::string& scenePath, std::string baseHash,
+		const SaveToken& token, const Scene& scene, bool modified)
+	{
+		// Another scene is edited now: its journal is none of this save's business.
+		if (token.Epoch != m_Epoch)
+			return;
+
+		// What was applied after the snapshot is not in the saved document: the new journal carries it.
+		std::vector<AppliedStep> carried;
+		bool changed = false;
+		bool needsSnapshot = false;
+		for (const RetainedStep& step : m_RetainedSteps)
+		{
+			if (step.Sequence <= token.Sequence)
+				continue;
+			changed = true;
+			if (step.NeedsSnapshot)
+				needsSnapshot = true;
+			else if (step.Step)
+				carried.push_back(*step.Step);
+		}
+		ReleaseSave(token);
+
+		const Ref<Journal> previous = m_Journal;
+		m_Journal = CreateRef<Journal>();
+		m_Journal->Stem = MakeJournalStem(handle);
+		m_Journal->Scene = handle;
+		m_Journal->ScenePath = scenePath;
+		m_Journal->SceneFile = sceneFile;
+		m_Journal->BaseHash = std::move(baseHash);
+		m_ScenePath = scenePath;
+		m_PendingSteps = std::move(carried);
+		m_Changed = changed;
+		m_NeedsSnapshot = needsSnapshot;
+		m_Unjournaled = false;
+		m_Skipped.clear();
+		m_LastChange = m_LastWrite = std::chrono::steady_clock::now();
+
+		// The changes the saved document holds are on disk: the previous journal's file goes, after the new journal's first
+		// write (queued first) when there is one, which replaces it where the scene kept its file.
+		bool written = false;
+		if (changed)
+			written = Write(scene, modified, false);
+		const bool replaced = written && modified && previous && previous->Stem == m_Journal->Stem;
+		if (previous && !replaced)
+		{
+			Enqueue([journal = previous, directory = m_Directory]()
 			{
 				if (journal->Written && !directory.empty())
 					FileSystem::Remove(directory / FileSystem::FromUTF8(journal->Stem + c_FileExtension));
 				journal->Written = false;
 			});
 		}
-		m_Journal = CreateRef<Journal>();
-		m_Journal->Stem = MakeJournalStem(handle);
-		m_Journal->Scene = handle;
-		m_Journal->ScenePath = scenePath;
-		m_Journal->SceneFile = sceneFile;
-		m_ScenePath = scenePath;
-		m_PendingSteps.clear();
-		m_Changed = false;
-		m_NeedsSnapshot = false;
-		m_Unjournaled = false;
-		m_Skipped.clear();
-		m_LastChange = m_LastWrite = std::chrono::steady_clock::now();
-		Enqueue([journal = m_Journal, saved = std::move(document)]()
-		{
-			journal->BaseHash = HashBytes(std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(saved.data()), saved.size()));
-		});
 	}
 
 	void SceneRecovery::OnSceneMoved(const std::filesystem::path& sceneFile, const std::string& scenePath)
@@ -532,10 +588,50 @@ namespace Strata
 		m_LastChange = std::chrono::steady_clock::now();
 	}
 
+	void SceneRecovery::RetainStep(const EditorAction& action, bool undone, bool merged)
+	{
+		m_StepSequence++;
+		if (m_OpenSaves.empty())
+			return;
+		RetainedStep step;
+		step.Sequence = m_StepSequence;
+		switch (action.GetSceneChange())
+		{
+			case SceneChangeKind::None:
+				return;
+			case SceneChangeKind::Entities:
+			{
+				Ref<const std::vector<EntityState>> states = action.GetEntityStates(undone);
+				if (!states)
+				{
+					step.NeedsSnapshot = true;
+					break;
+				}
+				// A drag's frames merge into its step: the latest states replace those of the frame before.
+				if (merged && !m_RetainedSteps.empty() && m_RetainedSteps.back().Step && m_RetainedSteps.back().Step->Action == &action)
+				{
+					m_RetainedSteps.back().Step->States = std::move(states);
+					m_RetainedSteps.back().Step->Prior = action.GetEntityStates(!undone);
+					return;
+				}
+				step.Step = AppliedStep { std::move(states), action.GetEntityStates(!undone), &action };
+				break;
+			}
+			case SceneChangeKind::Settings:
+				break; // Every write records the settings: the step only says that something changed
+			case SceneChangeKind::Other:
+				step.NeedsSnapshot = true;
+				break;
+		}
+		m_RetainedSteps.push_back(std::move(step));
+	}
+
 	void SceneRecovery::OnApplied(const EditorAction& action, bool undone, bool merged)
 	{
 		if (!IsActive() || !m_Journal)
 			return;
+		if (action.GetSceneChange() != SceneChangeKind::None)
+			RetainStep(action, undone, merged);
 		switch (action.GetSceneChange())
 		{
 			case SceneChangeKind::None:
@@ -577,8 +673,9 @@ namespace Strata
 		PumpOperations();
 		if (m_Scan && m_Scan->Done.load(std::memory_order_acquire))
 			FinishScan();
-		// Changes discarded since the last scan are offered at once: a scan queued now runs after their write.
-		if (m_RescanDue && IsActive() && !m_Scan)
+		// Changes discarded since the last scan are offered at once: a scan queued now runs after their write. A scan expected
+		// (ExpectScan) reads them too, once what it waits for is done.
+		if (m_RescanDue && IsActive() && !IsScanning())
 		{
 			m_RescanDue = false;
 			Scan();
@@ -790,6 +887,7 @@ namespace Strata
 
 	void SceneRecovery::Scan()
 	{
+		m_ScanExpected = false;
 		if (!IsActive())
 		{
 			m_Scan.reset();

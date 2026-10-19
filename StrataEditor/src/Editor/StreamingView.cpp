@@ -12,6 +12,7 @@
 #include <Strata/Scene/Scene.h>
 
 #include <glm/gtc/matrix_transform.hpp>
+#include <spdlog/fmt/fmt.h>
 
 #include <algorithm>
 
@@ -51,7 +52,14 @@ namespace Strata
 		return std::nullopt;
 	}
 
-	void StreamingView::Build(Scene& scene, ViewportDebugView view, const SceneCamera& camera, float lodThreshold, const ViewportDebugColors& colors,
+	std::string GetLODLegendName(size_t level, bool last, float errorPixels)
+	{
+		if (errorPixels > 0.0f)
+			return fmt::format("LOD {}{} ({:.2f} px)", level, last ? "+" : "", errorPixels);
+		return fmt::format("LOD {}{}", level, last ? "+" : "");
+	}
+
+	void StreamingView::Build(Scene& scene, ViewportDebugView view, const SceneCamera& camera, const LODCriteria& lod, const ViewportDebugColors& colors,
 		DebugDraw& placeholders)
 	{
 		m_Tints.clear();
@@ -74,7 +82,7 @@ namespace Strata
 		}
 		else if (view == ViewportDebugView::LOD)
 		{
-			BuildLOD(scene, renderScene, camera, lodThreshold, colors);
+			BuildLOD(scene, renderScene, camera, lod, colors);
 		}
 		else
 		{
@@ -181,7 +189,7 @@ namespace Strata
 		}
 	}
 
-	void StreamingView::BuildLOD(Scene& scene, const RenderScene& renderScene, const SceneCamera& camera, float lodThreshold, const ViewportDebugColors& colors)
+	void StreamingView::BuildLOD(Scene& scene, const RenderScene& renderScene, const SceneCamera& camera, const LODCriteria& lod, const ViewportDebugColors& colors)
 	{
 		for (const uint32_t proxy : m_Visible)
 		{
@@ -199,11 +207,21 @@ namespace Strata
 			// The renderer chooses a level per submesh; the entity shows the most simplified one it is drawn with.
 			const AABB& bounds = renderScene.GetWorldBounds(proxy);
 			const float screenFraction = LODSelection::GetScreenFraction(camera, bounds.GetCenter(), glm::length(bounds.GetExtents()));
-			uint32_t lod = 0;
+			uint32_t drawn = 0;
+			float errorPixels = 0.0f;
 			for (const Submesh& submesh : mesh->GetSubmeshes())
-				lod = std::max(lod, LODSelection::SelectLOD(screenFraction, lodThreshold, static_cast<uint32_t>(submesh.LODs.size())));
-			const size_t level = std::min<size_t>(lod, colors.LOD.size() - 1);
+			{
+				const uint32_t submeshLOD = LODSelection::SelectLOD(submesh, mesh->GetBounds(), screenFraction, lod);
+				drawn = std::max(drawn, submeshLOD);
+				if (MeshUtils::HasLODErrors(submesh))
+				{
+					const float relative = MeshUtils::GetRelativeLODError(submesh.LODs[submeshLOD].Error, mesh->GetBounds());
+					errorPixels = std::max(errorPixels, LODSelection::GetErrorPixels(screenFraction, relative, lod.ViewportHeight));
+				}
+			}
+			const size_t level = std::min<size_t>(drawn, colors.LOD.size() - 1);
 			m_Stats.EntitiesPerLOD[level]++;
+			m_Stats.MaxErrorPixelsPerLOD[level] = std::max(m_Stats.MaxErrorPixelsPerLOD[level], errorPixels);
 			m_Tints.push_back(SceneEntityTint { Entity(renderScene.GetEntity(proxy), &scene), colors.LOD[level] });
 		}
 	}

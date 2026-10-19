@@ -23,6 +23,12 @@ Guides for people making games in the editor:
   debugger.
 - [Manual/Worlds.md](Manual/Worlds.md): worlds of streamed cells: layers, editing by cell, the cell map, saving,
   cooking, playing and exporting, streaming sources and the script API, and their limits.
+- [Manual/Prefabs.md](Manual/Prefabs.md): making prefabs, placing instances, overrides (the prefab bar, the marks,
+  Apply and Revert), how prefab changes reach instances, and unpacking.
+- [Manual/GameView.md](Manual/GameView.md): playing and testing in the editor: the Scene and Game views, resolutions,
+  game input and the mouse, pausing and stepping.
+- [Manual/GameUI.md](Manual/GameUI.md): menus and HUDs: canvases, anchors and scale modes, the look of images, texts and
+  widgets, buttons and sliders in scripts, keyboard and gamepad navigation, testing UI with commands.
 
 ## Releases
 

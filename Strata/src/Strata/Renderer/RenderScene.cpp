@@ -5,7 +5,10 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/Assert.h"
 #include "Strata/Core/JobSystem.h"
+#include "Strata/Core/ParallelClone.h"
 #include "Strata/Renderer/Mesh.h"
+#include "Strata/Renderer/RenderSceneGPU.h"
+#include "Strata/Renderer/Renderer.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneServices.h"
@@ -107,10 +110,25 @@ namespace Strata
 		return context ? context->Instance.get() : nullptr;
 	}
 
+	const RenderScene* RenderScene::Find(const Scene& scene)
+	{
+		const RenderSceneContext* context = scene.GetRegistry().ctx().find<RenderSceneContext>();
+		return context ? context->Instance.get() : nullptr;
+	}
+
 	RenderScene::RenderScene(Scene& scene)
 		: m_Id(s_NextRenderSceneId.fetch_add(1, std::memory_order_relaxed)), m_Scene(&scene), m_TransformsVersion(scene.GetTransformsVersion())
 	{
 		entt::registry& registry = scene.GetRegistry();
+		ConnectListeners(registry);
+		// Every mesh renderer and light the scene already has gets its proxy at the first sync.
+		for (const entt::entity entity : registry.view<MeshRendererComponent>())
+			QueuePending(entity);
+		m_Lights.QueueAll(registry);
+	}
+
+	void RenderScene::ConnectListeners(entt::registry& registry)
+	{
 		// The connections are never released (see RenderSceneContext): this object lives exactly as long as the storages.
 		registry.on_construct<MeshRendererComponent>().connect<&RenderScene::OnMeshRendererChanged>(*this);
 		registry.on_update<MeshRendererComponent>().connect<&RenderScene::OnMeshRendererChanged>(*this);
@@ -118,12 +136,49 @@ namespace Strata
 		registry.on_construct<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
 		registry.on_update<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
 		registry.on_destroy<SkinComponent>().connect<&RenderScene::OnSkinChanged>(*this);
-		// Every mesh renderer the scene already has gets its proxy at the first sync.
-		for (const entt::entity entity : registry.view<MeshRendererComponent>())
-			QueuePending(entity);
+		m_Lights.Connect(registry);
 	}
 
-	RenderScene::~RenderScene() = default;
+	void RenderScene::CopyIntoScene(const Scene& source, Scene& destination)
+	{
+		const RenderScene* from = Find(source);
+		if (!from)
+			return; // Nothing rendered the source: the copy builds its proxies when it is rendered
+		ST_PROFILE_FUNCTION();
+		const auto start = std::chrono::steady_clock::now();
+		entt::registry& registry = destination.GetRegistry();
+		ST_CORE_ASSERT(!registry.ctx().find<RenderSceneContext>(), "RenderScene::CopyIntoScene: the copy has a render scene already");
+		// Member-wise, the per-proxy arrays and the instances copied in parallel: they are most of a large scene's bytes. The
+		// source lends them for the copy (main thread: nothing else reads it meanwhile) and has them back afterwards.
+		RenderScene& lender = const_cast<RenderScene&>(*from);
+		Scope<RenderScene> clone = CloneWithParallelMembers(lender, [&lender]() { return Scope<RenderScene>(new RenderScene(lender)); },
+			&RenderScene::m_Entities, &RenderScene::m_EntityIDs, &RenderScene::m_Flags, &RenderScene::m_Transforms, &RenderScene::m_UpdateStamps,
+			&RenderScene::m_LocalBounds, &RenderScene::m_WorldBounds, &RenderScene::m_MeshHandles, &RenderScene::m_MeshSlots,
+			&RenderScene::m_MeshUserPositions, &RenderScene::m_MaterialOverrides, &RenderScene::m_OverrideSlots, &RenderScene::m_OverrideUserPositions,
+			&RenderScene::m_FirstInstances, &RenderScene::m_InstanceCounts, &RenderScene::m_ProxyByEntityIndex, &RenderScene::m_PendingPositions,
+			&RenderScene::m_Index, &RenderScene::m_Instances, &RenderScene::m_ProxyLoggedVersions, &RenderScene::m_SkinIndices);
+		clone->m_Id = s_NextRenderSceneId.fetch_add(1, std::memory_order_relaxed);
+		clone->m_Scene = &destination;
+		clone->m_CloneSource = from->m_Id;
+		clone->m_CloneVersions = ChangeVersions { from->m_ProxyVersion, from->m_InstanceVersion, from->m_PaletteVersion, from->m_Lights.GetVersion() };
+		// The copy's transform log starts afresh: changes the source had not read yet are read by comparing every proxy.
+		clone->m_RefreshTransforms = from->m_RefreshTransforms || from->m_TransformsVersion != source.GetTransformsVersion();
+		clone->m_TransformsVersion = destination.GetTransformsVersion();
+		// The copy's services are its own: the next sync asks them again (entities drawn elsewhere go back otherwise).
+		clone->m_RenderTransformsProvider = nullptr;
+		clone->m_RenderTransformsVersion = ~0ull;
+		clone->m_PosesProvider = nullptr;
+		clone->m_SkinDirty = true;
+		clone->ConnectListeners(registry);
+		clone->m_Stats.CloneMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start).count();
+		registry.ctx().emplace<RenderSceneContext>().Instance = std::move(clone);
+	}
+
+	RenderScene::~RenderScene()
+	{
+		// Scenes go on any thread (Scene::ReleaseInBackground): the renderer releases the GPU copy at its next frame.
+		RenderSceneGPUCache::NotifyDestroyed(m_Id);
+	}
 
 	void RenderScene::OnMeshRendererChanged(entt::registry&, entt::entity entity)
 	{
@@ -175,6 +230,18 @@ namespace Strata
 		m_PendingPositions[index] = c_InvalidIndex;
 	}
 
+	uint32_t RenderScene::FindMeshSlot(AssetHandle mesh) const
+	{
+		const auto found = m_MeshSlotsByHandle.find(mesh);
+		return found != m_MeshSlotsByHandle.end() ? found->second : c_InvalidIndex;
+	}
+
+	uint32_t RenderScene::FindMaterialSlot(AssetHandle material) const
+	{
+		const auto found = m_MaterialSlotsByHandle.find(material);
+		return found != m_MaterialSlotsByHandle.end() ? found->second : c_InvalidIndex;
+	}
+
 	uint32_t RenderScene::FindProxy(entt::entity entity) const
 	{
 		const size_t index = static_cast<size_t>(entt::to_entity(entity));
@@ -219,7 +286,19 @@ namespace Strata
 
 	bool RenderScene::PrepareLoadedScene(Scene& scene, SceneWorkBudget& budget)
 	{
-		return Prepare(scene, AssetManager::GetActive(), budget.GetRemainingTime());
+		const Ref<AssetManagerBase>& assets = AssetManager::GetActive();
+		if (!Prepare(scene, assets, budget.GetRemainingTime()))
+			return false;
+		if (!Renderer::IsInitialized())
+			return true;
+		// The GPU's copy too, within a frame's budget for new proxies, so that the frame that shows the scene uploads none; a
+		// frame whose loading time is spent fills it in the next one.
+		if (!budget.HasTime())
+			return false;
+		RenderScene& renderScene = Get(scene);
+		RenderSceneGPU& mirror = Renderer::GetRenderSceneGPUs().Get(renderScene);
+		mirror.Update(renderScene, assets, c_PrepareUploadBytes);
+		return mirror.GetDeferredProxies() == 0;
 	}
 
 	uint32_t RenderScene::Sync(const Ref<AssetManagerBase>& assets, uint32_t maxPending)
@@ -248,7 +327,8 @@ namespace Strata
 			UpdateProxyFromEntity(entity);
 
 		m_ChangeScratch.clear();
-		if (m_Scene->GetWorldTransformChanges(m_TransformsVersion, m_ChangeScratch))
+		const bool transformsLogged = !m_RefreshTransforms && m_Scene->GetWorldTransformChanges(m_TransformsVersion, m_ChangeScratch);
+		if (transformsLogged)
 		{
 			for (const entt::entity entity : m_ChangeScratch)
 			{
@@ -262,8 +342,10 @@ namespace Strata
 		else
 		{
 			FullRefresh();
+			m_RefreshTransforms = false;
 		}
 		m_TransformsVersion = m_Scene->GetTransformsVersion();
+		m_Lights.Sync(registry, m_ChangeScratch, !transformsLogged);
 		UpdateMeshLayouts(assets);
 		UpdateSkinnedPoses();
 		m_Index.Refresh();
@@ -374,7 +456,12 @@ namespace Strata
 			m_MaterialOverrides[proxy] = renderer.Material;
 			m_OverrideSlots[proxy] = renderer.Material.IsValid() ? AcquireMaterial(renderer.Material) : c_InvalidIndex;
 			if (previous != c_InvalidIndex)
+			{
+				RemoveOverrideUser(previous, proxy);
 				ReleaseMaterial(previous);
+			}
+			if (m_OverrideSlots[proxy] != c_InvalidIndex)
+				AddOverrideUser(m_OverrideSlots[proxy], proxy);
 			changed = true;
 		}
 		const uint32_t castShadows = renderer.CastShadows ? RenderProxyFlags::CastShadows : 0u;
@@ -439,6 +526,7 @@ namespace Strata
 			m_MeshUserPositions.push_back(c_InvalidIndex);
 			m_MaterialOverrides.push_back(UUID::Null());
 			m_OverrideSlots.push_back(c_InvalidIndex);
+			m_OverrideUserPositions.push_back(c_InvalidIndex);
 			m_FirstInstances.push_back(0);
 			m_InstanceCounts.push_back(0);
 			m_SkinIndices.push_back(c_InvalidIndex);
@@ -467,6 +555,7 @@ namespace Strata
 
 	void RenderScene::DestroyProxy(uint32_t proxy)
 	{
+		RecordProxyChange(proxy);
 		if (m_Index.Contains(proxy))
 		{
 			m_Index.Remove(proxy);
@@ -479,7 +568,10 @@ namespace Strata
 			ReleaseMesh(m_MeshSlots[proxy], proxy);
 		m_MeshSlots[proxy] = c_InvalidIndex;
 		if (m_OverrideSlots[proxy] != c_InvalidIndex)
+		{
+			RemoveOverrideUser(m_OverrideSlots[proxy], proxy);
 			ReleaseMaterial(m_OverrideSlots[proxy]);
+		}
 		m_OverrideSlots[proxy] = c_InvalidIndex;
 		// Without its Skin flag the proxy loses its skin entry (and its palette, were it posed).
 		m_Flags[proxy] &= ~RenderProxyFlags::Skin;
@@ -487,6 +579,8 @@ namespace Strata
 
 		m_ProxyByEntityIndex[static_cast<size_t>(entt::to_entity(m_Entities[proxy]))] = c_InvalidIndex;
 		m_Entities[proxy] = entt::null;
+		if ((m_Flags[proxy] & RenderProxyFlags::Mirrored) != 0)
+			m_Stats.MirroredProxies--;
 		m_Flags[proxy] = 0;
 		m_FreeProxies.push_back(proxy);
 		m_Stats.Proxies--;
@@ -512,6 +606,7 @@ namespace Strata
 
 	void RenderScene::UpdateProxyPlacement(uint32_t proxy)
 	{
+		RecordProxyChange(proxy);
 		const glm::mat4 world = m_Transforms[proxy].ToMatrix();
 		const float determinant = glm::determinant(glm::mat3(world));
 		const bool active = (m_Flags[proxy] & RenderProxyFlags::Active) != 0;
@@ -565,6 +660,13 @@ namespace Strata
 			m_Index.Remove(proxy);
 			m_Stats.IndexedProxies--;
 		}
+		if (((m_Flags[proxy] ^ flags) & RenderProxyFlags::Mirrored) != 0)
+		{
+			if ((flags & RenderProxyFlags::Mirrored) != 0)
+				m_Stats.MirroredProxies++;
+			else
+				m_Stats.MirroredProxies--;
+		}
 		m_Flags[proxy] = flags;
 	}
 
@@ -594,6 +696,7 @@ namespace Strata
 			m_MeshSlotsByHandle.emplace(handle, slot);
 			m_NewMeshSlots.push_back(slot);
 			m_Stats.Meshes++;
+			m_SlotsVersion++;
 		}
 		MeshEntry& entry = m_Meshes[slot];
 		m_MeshUserPositions[proxy] = static_cast<uint32_t>(entry.Users.size());
@@ -619,6 +722,7 @@ namespace Strata
 		if (!entry.Users.empty())
 			return;
 
+		UnlinkMeshMaterials(slot);
 		for (const uint32_t materialSlot : entry.SubmeshMaterialSlots)
 			ReleaseMaterial(materialSlot);
 		m_MeshSlotsByHandle.erase(entry.Handle);
@@ -627,6 +731,7 @@ namespace Strata
 		entry = MeshEntry();
 		m_FreeMeshes.push_back(slot);
 		m_Stats.Meshes--;
+		m_SlotsVersion++;
 	}
 
 	void RenderScene::UpdateBoundsMembership(uint32_t slot)
@@ -667,9 +772,10 @@ namespace Strata
 			slot = static_cast<uint32_t>(m_Materials.size());
 			m_Materials.emplace_back();
 		}
-		m_Materials[slot] = MaterialEntry { handle, 1 };
+		m_Materials[slot] = MaterialEntry { handle, 1, {}, {} };
 		m_MaterialSlotsByHandle.emplace(handle, slot);
 		m_Stats.Materials++;
+		m_SlotsVersion++;
 		return slot;
 	}
 
@@ -679,10 +785,92 @@ namespace Strata
 		ST_CORE_ASSERT(entry.References > 0, "RenderScene: material slot {} released more often than acquired", slot);
 		if (--entry.References > 0)
 			return;
+		ST_CORE_ASSERT(entry.OverrideUsers.empty() && entry.Meshes.empty(), "RenderScene: material slot {} released while users name it", slot);
 		m_MaterialSlotsByHandle.erase(entry.Handle);
 		entry = MaterialEntry();
 		m_FreeMaterials.push_back(slot);
 		m_Stats.Materials--;
+		m_SlotsVersion++;
+	}
+
+	void RenderScene::LinkMeshMaterials(uint32_t slot)
+	{
+		MeshEntry& entry = m_Meshes[slot];
+		ST_CORE_ASSERT(entry.Materials.empty(), "RenderScene: mesh slot {} is linked to its materials twice", slot);
+		for (const uint32_t materialSlot : entry.SubmeshMaterialSlots)
+		{
+			if (std::find(entry.Materials.begin(), entry.Materials.end(), materialSlot) != entry.Materials.end())
+				continue;
+			std::vector<uint32_t>& meshes = m_Materials[materialSlot].Meshes;
+			entry.Materials.push_back(materialSlot);
+			entry.MaterialPositions.push_back(static_cast<uint32_t>(meshes.size()));
+			meshes.push_back(slot);
+		}
+	}
+
+	void RenderScene::UnlinkMeshMaterials(uint32_t slot)
+	{
+		MeshEntry& entry = m_Meshes[slot];
+		for (size_t index = 0; index < entry.Materials.size(); index++)
+		{
+			// The list's last mesh takes this one's place.
+			std::vector<uint32_t>& meshes = m_Materials[entry.Materials[index]].Meshes;
+			const uint32_t position = entry.MaterialPositions[index];
+			const uint32_t moved = meshes.back();
+			meshes[position] = moved;
+			meshes.pop_back();
+			if (moved != slot)
+			{
+				MeshEntry& movedEntry = m_Meshes[moved];
+				for (size_t other = 0; other < movedEntry.Materials.size(); other++)
+				{
+					if (movedEntry.Materials[other] == entry.Materials[index])
+					{
+						movedEntry.MaterialPositions[other] = position;
+						break;
+					}
+				}
+			}
+		}
+		entry.Materials.clear();
+		entry.MaterialPositions.clear();
+	}
+
+	void RenderScene::AddOverrideUser(uint32_t materialSlot, uint32_t proxy)
+	{
+		std::vector<uint32_t>& users = m_Materials[materialSlot].OverrideUsers;
+		m_OverrideUserPositions[proxy] = static_cast<uint32_t>(users.size());
+		users.push_back(proxy);
+	}
+
+	void RenderScene::RemoveOverrideUser(uint32_t materialSlot, uint32_t proxy)
+	{
+		std::vector<uint32_t>& users = m_Materials[materialSlot].OverrideUsers;
+		const uint32_t position = m_OverrideUserPositions[proxy];
+		const uint32_t moved = users.back();
+		users[position] = moved;
+		m_OverrideUserPositions[moved] = position;
+		users.pop_back();
+		m_OverrideUserPositions[proxy] = c_InvalidIndex;
+	}
+
+	void RenderScene::CollectMaterialUsers(std::span<const uint32_t> materialSlots, std::vector<uint32_t>& outProxies) const
+	{
+		for (const uint32_t materialSlot : materialSlots)
+		{
+			if (materialSlot >= m_Materials.size())
+				continue;
+			const MaterialEntry& material = m_Materials[materialSlot];
+			outProxies.insert(outProxies.end(), material.OverrideUsers.begin(), material.OverrideUsers.end());
+			for (const uint32_t meshSlot : material.Meshes)
+			{
+				for (const uint32_t proxy : m_Meshes[meshSlot].Users)
+				{
+					if (m_OverrideSlots[proxy] == c_InvalidIndex)
+						outProxies.push_back(proxy);
+				}
+			}
+		}
 	}
 
 	uint32_t RenderScene::SetMeshLayout(uint32_t slot, const Mesh& mesh, uint64_t sourceRevision)
@@ -702,10 +890,12 @@ namespace Strata
 		materialSlots.reserve(materials.size());
 		for (const AssetHandle material : materials)
 			materialSlots.push_back(AcquireMaterial(material));
+		UnlinkMeshMaterials(slot);
 		for (const uint32_t materialSlot : entry.SubmeshMaterialSlots)
 			ReleaseMaterial(materialSlot);
 		entry.SubmeshMaterials = std::move(materials);
 		entry.SubmeshMaterialSlots = std::move(materialSlots);
+		LinkMeshMaterials(slot);
 		entry.Bounds = mesh.GetBounds();
 		entry.Skin = mesh.GetSkinBinding();
 		entry.SkinJointsNeeded = 0;
@@ -833,6 +1023,7 @@ namespace Strata
 	void RenderScene::ForgetMeshLayout(uint32_t slot)
 	{
 		MeshEntry& entry = m_Meshes[slot];
+		UnlinkMeshMaterials(slot);
 		for (const uint32_t materialSlot : entry.SubmeshMaterialSlots)
 			ReleaseMaterial(materialSlot);
 		entry.SubmeshMaterials.clear();
@@ -847,13 +1038,19 @@ namespace Strata
 
 	void RenderScene::RebuildInstances(uint32_t proxy)
 	{
+		RecordProxyChange(proxy);
 		const uint32_t meshSlot = m_MeshSlots[proxy];
-		const uint32_t count = meshSlot != c_InvalidIndex && m_Meshes[meshSlot].LayoutKnown ? static_cast<uint32_t>(m_Meshes[meshSlot].SubmeshMaterialSlots.size()) : 0;
+		uint32_t count = meshSlot != c_InvalidIndex && m_Meshes[meshSlot].LayoutKnown ? static_cast<uint32_t>(m_Meshes[meshSlot].SubmeshMaterialSlots.size()) : 0;
 		if (count != m_InstanceCounts[proxy])
 		{
 			if (m_InstanceCounts[proxy] > 0)
 				FreeInstances(m_FirstInstances[proxy], m_InstanceCounts[proxy]);
 			m_FirstInstances[proxy] = count > 0 ? AllocateInstances(count) : 0;
+			if (m_FirstInstances[proxy] == c_InvalidIndex)
+			{
+				m_FirstInstances[proxy] = 0; // Beyond the instance limit: not drawn
+				count = 0;
+			}
 			m_InstanceCounts[proxy] = count;
 			if (count > 0)
 			{
@@ -903,10 +1100,23 @@ namespace Strata
 			m_Stats.InstanceSlots += count;
 			return first;
 		}
+		if (m_Instances.size() + count > m_InstanceLimit)
+		{
+			if (!m_InstanceLimitReported)
+				ST_CORE_ERROR("RenderScene: more than {} mesh instances; mesh renderers beyond them are not drawn", m_InstanceLimit);
+			m_InstanceLimitReported = true;
+			return c_InvalidIndex;
+		}
 		const uint32_t first = static_cast<uint32_t>(m_Instances.size());
 		m_Instances.resize(m_Instances.size() + count);
 		m_Stats.InstanceSlots += count;
 		return first;
+	}
+
+	void RenderScene::SetInstanceLimit(uint32_t limit)
+	{
+		m_InstanceLimit = std::min(limit, RenderData::c_MaxRenderInstances);
+		m_InstanceLimitReported = false;
 	}
 
 	void RenderScene::FreeInstances(uint32_t first, uint32_t count)
@@ -939,6 +1149,42 @@ namespace Strata
 			m_InstanceChanges.erase(m_InstanceChanges.begin(), m_InstanceChanges.begin() + static_cast<ptrdiff_t>(m_InstanceChangesStart));
 			m_InstanceChangesStart = 0;
 		}
+	}
+
+	void RenderScene::RecordProxyChange(uint32_t proxy)
+	{
+		if (m_ProxyLoggedVersions.size() <= proxy)
+			m_ProxyLoggedVersions.resize(proxy + 1, 0);
+		// Logged and not read by anyone since: the entry already tells its readers.
+		if (m_ProxyLoggedVersions[proxy] > m_ProxyChangesRead)
+			return;
+		m_ProxyVersion++;
+		m_ProxyLoggedVersions[proxy] = m_ProxyVersion;
+		const size_t live = m_ProxyChanges.size() - m_ProxyChangesStart;
+		if (live + 1 > c_MaxProxyChanges)
+		{
+			// Readers further behind than the oldest change kept read everything.
+			m_ProxyChangesStart += live + 1 - c_MaxProxyChanges;
+			m_ProxyChangesFloor = m_ProxyChanges[m_ProxyChangesStart - 1].Version;
+		}
+		m_ProxyChanges.push_back(InstanceChange { m_ProxyVersion, proxy });
+		if (m_ProxyChangesStart >= c_MaxProxyChanges)
+		{
+			m_ProxyChanges.erase(m_ProxyChanges.begin(), m_ProxyChanges.begin() + static_cast<ptrdiff_t>(m_ProxyChangesStart));
+			m_ProxyChangesStart = 0;
+		}
+	}
+
+	bool RenderScene::GetProxyChanges(uint64_t sinceVersion, std::vector<uint32_t>& outProxies) const
+	{
+		m_ProxyChangesRead = m_ProxyVersion;
+		if (sinceVersion >= m_ProxyVersion)
+			return true;
+		if (sinceVersion < m_ProxyChangesFloor)
+			return false;
+		for (size_t index = m_ProxyChanges.size(); index > m_ProxyChangesStart && m_ProxyChanges[index - 1].Version > sinceVersion; index--)
+			outProxies.push_back(m_ProxyChanges[index - 1].Instance);
+		return true;
 	}
 
 	bool RenderScene::GetInstanceChanges(uint64_t sinceVersion, std::vector<uint32_t>& outInstances) const
@@ -1063,6 +1309,9 @@ namespace Strata
 			&& hierarchyVersion == m_SkinHierarchyVersion)
 			return;
 		m_SkinDirty = false;
+		// Versions are a provider's own: another provider's (the play copy's animation system after the editor's rest poses,
+		// which a clone's palettes come from) may repeat them for other poses.
+		const bool providerChanged = poses != m_PosesProvider;
 		m_PosesProvider = poses;
 		m_PosesVersion = posesVersion;
 		m_SkinTransformsVersion = transformsVersion;
@@ -1092,7 +1341,7 @@ namespace Strata
 			}
 			const Ref<const MeshSkinBinding>& binding = m_Meshes[m_MeshSlots[proxy]].Skin;
 			const uint32_t joints = static_cast<uint32_t>(binding->Joints.size());
-			if (wasPosed && inputs.Version == skin.PoseVersion && skin.Binding == binding && skin.PaletteCount == joints
+			if (wasPosed && !providerChanged && inputs.Version == skin.PoseVersion && skin.Binding == binding && skin.PaletteCount == joints
 				&& SameBytes(inputs.AnimatorToProxy, skin.AnimatorToProxy))
 				continue;
 			if (skin.PaletteCount != joints)
@@ -1215,6 +1464,7 @@ namespace Strata
 		uint32_t indexed = 0;
 		uint32_t skins = 0;
 		uint32_t posed = 0;
+		uint32_t mirrored = 0;
 		std::vector<uint32_t> indexedUsers(m_Meshes.size(), 0);
 		std::vector<RenderData::AffineTransform> palette;
 		for (const auto [entity, renderer, world] : registry.view<MeshRendererComponent, WorldTransformComponent>().each())
@@ -1279,15 +1529,19 @@ namespace Strata
 				return fail(fmt::format("the bounds of entity {} are stale", static_cast<uint32_t>(entity)));
 			if (((m_Flags[proxy] & RenderProxyFlags::Mirrored) != 0) != (determinant < 0.0f))
 				return fail(fmt::format("the mirroring of entity {} is stale", static_cast<uint32_t>(entity)));
+			mirrored += determinant < 0.0f ? 1u : 0u;
 			if (((m_Flags[proxy] & RenderProxyFlags::MeshBounds) != 0) != boundsKnown)
 				return fail(fmt::format("entity {} has a stale MeshBounds flag", static_cast<uint32_t>(entity)));
 			indexed += shouldBeIndexed ? 1u : 0u;
 			if (shouldBeIndexed)
 				indexedUsers[meshSlot]++;
 
-			const uint32_t instanceCount = layoutKnown ? static_cast<uint32_t>(m_Meshes[meshSlot].SubmeshMaterialSlots.size()) : 0u;
-			if (m_InstanceCounts[proxy] != instanceCount)
-				return fail(fmt::format("entity {} has {} instances instead of {}", static_cast<uint32_t>(entity), m_InstanceCounts[proxy], instanceCount));
+			// Proxies beyond the instance limit have none.
+			const uint32_t expectedCount = layoutKnown ? static_cast<uint32_t>(m_Meshes[meshSlot].SubmeshMaterialSlots.size()) : 0u;
+			const bool refused = m_InstanceLimitReported && m_InstanceCounts[proxy] == 0;
+			if (m_InstanceCounts[proxy] != expectedCount && !refused)
+				return fail(fmt::format("entity {} has {} instances instead of {}", static_cast<uint32_t>(entity), m_InstanceCounts[proxy], expectedCount));
+			const uint32_t instanceCount = m_InstanceCounts[proxy];
 			for (uint32_t index = 0; index < instanceCount; index++)
 			{
 				const RenderData::InstanceData& instance = m_Instances[m_FirstInstances[proxy] + index];
@@ -1304,6 +1558,8 @@ namespace Strata
 			return fail(fmt::format("the spatial index holds {} proxies instead of {}", m_Index.GetCount(), indexed));
 		if (skins != m_Skins.size() || skins != m_Stats.SkinProxies || posed != m_Stats.PosedProxies)
 			return fail(fmt::format("{} skin proxies and {} posed ones are counted instead of {} and {}", m_Skins.size(), m_Stats.PosedProxies, skins, posed));
+		if (mirrored != m_Stats.MirroredProxies)
+			return fail(fmt::format("{} mirrored proxies are counted instead of {}", m_Stats.MirroredProxies, mirrored));
 
 		size_t withoutBounds = 0;
 		for (uint32_t slot = 0; slot < m_Meshes.size(); slot++)
@@ -1320,6 +1576,51 @@ namespace Strata
 		}
 		if (withoutBounds != m_MeshesWithoutBounds.size())
 			return fail(fmt::format("{} meshes are listed without bounds instead of {}", m_MeshesWithoutBounds.size(), withoutBounds));
+
+		// The material users: each proxy with an override in its material's list, each mesh in the lists of its submeshes'
+		// distinct materials, and nothing else in them.
+		std::vector<size_t> overrideUsers(m_Materials.size(), 0);
+		std::vector<size_t> materialMeshes(m_Materials.size(), 0);
+		for (uint32_t proxy = 0; proxy < m_Entities.size(); proxy++)
+		{
+			const uint32_t overrideSlot = m_OverrideSlots[proxy];
+			if (m_Entities[proxy] == entt::null || overrideSlot == c_InvalidIndex)
+				continue;
+			const std::vector<uint32_t>& users = m_Materials[overrideSlot].OverrideUsers;
+			const uint32_t position = m_OverrideUserPositions[proxy];
+			if (position >= users.size() || users[position] != proxy)
+				return fail(fmt::format("proxy {} is missing from the override users of material slot {}", proxy, overrideSlot));
+			overrideUsers[overrideSlot]++;
+		}
+		for (uint32_t slot = 0; slot < m_Meshes.size(); slot++)
+		{
+			const MeshEntry& mesh = m_Meshes[slot];
+			std::vector<uint32_t> distinct;
+			for (const uint32_t materialSlot : mesh.SubmeshMaterialSlots)
+			{
+				if (std::find(distinct.begin(), distinct.end(), materialSlot) == distinct.end())
+					distinct.push_back(materialSlot);
+			}
+			if (distinct != mesh.Materials || mesh.MaterialPositions.size() != mesh.Materials.size())
+				return fail(fmt::format("mesh slot {} lists other materials than its submeshes use", slot));
+			for (size_t index = 0; index < mesh.Materials.size(); index++)
+			{
+				const std::vector<uint32_t>& meshes = m_Materials[mesh.Materials[index]].Meshes;
+				if (mesh.MaterialPositions[index] >= meshes.size() || meshes[mesh.MaterialPositions[index]] != slot)
+					return fail(fmt::format("mesh slot {} is missing from the meshes of material slot {}", slot, mesh.Materials[index]));
+				materialMeshes[mesh.Materials[index]]++;
+			}
+		}
+		for (uint32_t slot = 0; slot < m_Materials.size(); slot++)
+		{
+			if (m_Materials[slot].OverrideUsers.size() != overrideUsers[slot] || m_Materials[slot].Meshes.size() != materialMeshes[slot])
+				return fail(fmt::format("material slot {} lists {} override users and {} meshes instead of {} and {}", slot, m_Materials[slot].OverrideUsers.size(),
+					m_Materials[slot].Meshes.size(), overrideUsers[slot], materialMeshes[slot]));
+		}
+		// The lights, once every signaled light was read (a partial sync reads them all, so after any sync).
+		std::string lightError;
+		if (!m_Lights.Validate(registry, &lightError))
+			return fail(lightError);
 		return true;
 	}
 

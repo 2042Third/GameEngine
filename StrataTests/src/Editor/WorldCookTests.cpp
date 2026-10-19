@@ -54,7 +54,7 @@ TEST_SUITE("Editor.WorldCook")
 {
 	TEST_CASE("The cook's index equals an independent count, and its MaxBodiesInRadius a brute-force evaluation")
 	{
-		WorldProject project("WorldCookCounts", 5);
+		GridWorldProject project("WorldCookCounts", 5);
 		const nlohmann::json result = project.Run("world.cook", { { "world", UUIDToJson(project.World) } });
 		CHECK(result["cells"] == 25);
 		CHECK(result["cellsRead"] == 25);
@@ -132,7 +132,7 @@ TEST_SUITE("Editor.WorldCook")
 
 	TEST_CASE("A second cook reads only the cells whose files changed")
 	{
-		WorldProject project("WorldCookStamps", 3);
+		GridWorldProject project("WorldCookStamps", 3);
 		CHECK(project.Run("world.info", { { "world", UUIDToJson(project.World) } })["index"]["cooked"] == false);
 		CHECK(project.Run("world.cook", { { "world", UUIDToJson(project.World) } })["cellsRead"] == 9);
 		const nlohmann::json again = project.Run("world.cook", { { "world", UUIDToJson(project.World) } });
@@ -162,7 +162,7 @@ TEST_SUITE("Editor.WorldCook")
 
 	TEST_CASE("apply sets the persistent scene's capacity in one undo step; invalid input changes nothing")
 	{
-		WorldProject project("WorldCookApply", 3);
+		GridWorldProject project("WorldCookApply", 3);
 		// The persistent scene must be the edited one.
 		const EditorCommandResult refused = project.Try("world.cook", { { "world", UUIDToJson(project.World) }, { "apply", true } });
 		CHECK_FALSE(refused.Success);
@@ -192,7 +192,7 @@ TEST_SUITE("Editor.WorldCook")
 
 	TEST_CASE("A cook sets the capacity only when the persistent scene is still edited as it ends")
 	{
-		WorldProject project("WorldCookSwitch", 3);
+		GridWorldProject project("WorldCookSwitch", 3);
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 
 		// An explicit apply fails, writing nothing, when another scene was opened during the cook.
@@ -227,7 +227,7 @@ TEST_SUITE("Editor.WorldCook")
 
 	TEST_CASE("A cook its project's close interrupts keeps what it reads alive, fails and writes nothing")
 	{
-		WorldProject project("WorldCookClose", 4);
+		GridWorldProject project("WorldCookClose", 4);
 		const std::filesystem::path projectFile = project.Context.GetProject()->GetProjectFile();
 		const std::weak_ptr<AssetManagerBase> manager = project.Context.GetAssetManager()->shared_from_this();
 		EditorCommandResult pending = project.Commands.Execute(project.Context, "world.cook", { { "world", UUIDToJson(project.World) } });
@@ -252,7 +252,7 @@ TEST_SUITE("Editor.WorldCook")
 
 	TEST_CASE("Entity IDs shared by cells fail the cook, naming them and the cells")
 	{
-		WorldProject project("WorldCookDuplicates", 2);
+		GridWorldProject project("WorldCookDuplicates", 2);
 		// Cell (1, 0) gets an entity with the ID of one of cell (0, 1)'s.
 		Scene& cell = *project.CellScenes.at({ 1, 0 });
 		const UUID shared = project.CellScenes.at({ 0, 1 })->GetEntitiesInHierarchyOrder().front().GetUUID();
@@ -274,7 +274,7 @@ TEST_SUITE("Editor.WorldCook")
 {
 	TEST_CASE("An export cooks the stale worlds, and its game starts with the fresh index and the cooked capacity")
 	{
-		WorldProject project("WorldCookExport", 3);
+		GridWorldProject project("WorldCookExport", 3);
 		project.Run("project.setStartScene", { { "scene", UUIDToJson(project.Persistent) } });
 		CHECK_FALSE(project.ReadWorld()->GetData().Index.has_value());
 		const std::filesystem::path output = project.Directory.parent_path() / "Build";

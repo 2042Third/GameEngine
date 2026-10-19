@@ -14,6 +14,7 @@
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/SceneGizmos.h"
+#include "Strata/Scene/ComponentAccess.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
@@ -53,6 +54,21 @@ namespace Strata::Tests
 			std::vector<UUID> Passengers;
 			AssetHandle Cargo = AssetHandle::Null();
 		};
+
+		// Data a game module keeps in a scene's registry context, which copies of the scene keep through its context copier.
+		struct TestGarageContext
+		{
+			int32_t Vehicles = 0;
+		};
+
+		uint32_t s_GarageContextCopies = 0;
+
+		void CopyGarageContext(const Scene& source, Scene& destination)
+		{
+			s_GarageContextCopies++;
+			if (const TestGarageContext* context = source.GetRegistry().ctx().find<TestGarageContext>())
+				destination.GetRegistry().ctx().emplace<TestGarageContext>(*context);
+		}
 
 		constexpr uint32_t c_PassengerSlot = 0;
 		constexpr uint32_t c_CargoSlot = 1;
@@ -155,6 +171,18 @@ namespace Strata::Tests
 			int32_t Value = 0;
 		};
 
+		// Saved with the scene but left out of the copies play mode runs (ComponentFlags::NoCopy), like an editor-only cache.
+		struct TestCacheComponent
+		{
+			int32_t Value = 0;
+		};
+
+		// Requires the vehicle (registered before it), a component that does not exist and itself.
+		struct TestTrailerComponent
+		{
+			float Load = 0.0f;
+		};
+
 		int Fail(const std::string& message)
 		{
 			std::printf("FAILED: %s\n", message.c_str());
@@ -183,6 +211,7 @@ namespace Strata::Tests
 			bool duplicateTypeRefused = false;
 			bool duplicateNameRefused = false;
 			bool pipelineBeforeExtra = false;
+			bool copierRegistered = false;
 			Engine::ModuleRegistrationOptions options;
 			options.AssetPipeline = RegisterAssetPipeline;
 			options.Extra.push_back([&]()
@@ -199,7 +228,19 @@ namespace Strata::Tests
 				// The type is registered and the name is taken (ignoring case): both are refused, without aborting.
 				duplicateTypeRefused = !ComponentRegistry::Register<TestVehicleComponent>("TestVehicleAgain").Property("Speed", &TestVehicleComponent::Speed);
 				duplicateNameRefused = !ComponentRegistry::Register<LateComponent>("testvehicle");
+				copierRegistered = Scene::RegisterContextCopier(&CopyGarageContext);
+				ComponentRegistry::Register<TestCacheComponent>("TestCache")
+					.Category("Tests")
+					.Flags(ComponentFlags::NoCopy)
+					.Property("Value", &TestCacheComponent::Value);
+				ComponentRegistry::Register<TestTrailerComponent>("TestTrailer")
+					.Category("Tests")
+					.Requires("TestVehicle")
+					.Requires("NoSuchComponent")
+					.Requires("TestTrailer")
+					.Property("Load", &TestTrailerComponent::Load);
 			});
+			const uint64_t beforeRegistration = Log::GetBuffer().GetLatestSequence();
 			Engine::RegisterBuiltinModules(options);
 
 			if (!Engine::AreBuiltinModulesRegistered() || !ComponentRegistry::IsFrozen())
@@ -214,6 +255,24 @@ namespace Strata::Tests
 			if (!duplicateTypeRefused || !duplicateNameRefused || ComponentRegistry::Find("TestVehicleAgain"))
 				return Fail("a component type or name was registered twice");
 			std::printf("registered: TestVehicle\n");
+
+			// Freezing the registry keeps the requirements that name other registered components and drops the rest, with errors;
+			// adding the trailer by name then adds the vehicle first.
+			const ComponentInfo* trailerInfo = ComponentRegistry::Find("TestTrailer");
+			if (!trailerInfo || trailerInfo->Requires != std::vector<std::string> { "TestVehicle" })
+				return Fail("the trailer's requirements are not the vehicle alone");
+			if (FindLoggedError(beforeRegistration, "requires 'NoSuchComponent', which is not a registered component").empty()
+				|| FindLoggedError(beforeRegistration, "requires 'TestTrailer', which is the component itself").empty())
+				return Fail("the dropped requirements logged no errors");
+			{
+				Scene scene("Yard");
+				Entity hitch = scene.CreateEntity("Hitch");
+				std::string error;
+				if (!ComponentAccess::AddComponent(hitch, *trailerInfo, &error) || !hitch.HasComponent<TestTrailerComponent>()
+					|| !hitch.HasComponent<TestVehicleComponent>())
+					return Fail("adding the trailer did not add the vehicle it requires: " + error);
+			}
+			std::printf("requirements: TestVehicle\n");
 
 			const std::filesystem::path path = directory / "Garage.stscene";
 			{
@@ -235,6 +294,23 @@ namespace Strata::Tests
 			if (vehicle->Speed != 12.5f || vehicle->Label != "Rover One" || vehicle->Cargo != AssetHandle(0xCA460) || !RidesWithItsChild(rover))
 				return Fail("the reloaded TestVehicle has other values");
 
+			// A play copy leaves the NoCopy component out; the snapshot a save writes keeps every serialized component.
+			{
+				const Ref<Scene> source = CreateRef<Scene>("Snapshot");
+				Entity cached = source->CreateEntity("Cached");
+				cached.AddComponent<TestCacheComponent>(TestCacheComponent { 7 });
+				cached.AddComponent<TestVehicleComponent>(TestVehicleComponent { 3.0f, "Kept" });
+				const Ref<Scene> play = Scene::Copy(source);
+				const Ref<Scene> snapshot = Scene::Copy(source, SceneCopyOptions { true });
+				if (play->FindEntityByName("Cached").HasComponent<TestCacheComponent>())
+					return Fail("a play copy has the NoCopy component");
+				const TestCacheComponent* kept = snapshot->FindEntityByName("Cached").TryGetComponent<TestCacheComponent>();
+				if (!kept || kept->Value != 7)
+					return Fail("the snapshot to save lacks the NoCopy component");
+				if (SceneSerializer::Serialize(*snapshot) != SceneSerializer::Serialize(*source))
+					return Fail("the snapshot to save serializes differently from its scene");
+				std::printf("snapshot keeps: TestCache\n");
+			}
 			// The extra data's references, through ComponentInfo::ExtraReferences: copies ride with their own drivers...
 			Scene& garage = *loaded;
 			const Entity duplicate = garage.DuplicateEntity(rover);
@@ -300,6 +376,29 @@ namespace Strata::Tests
 			if (lateError.find("frozen") == std::string::npos)
 				return Fail("the refused registration logged no error");
 			std::printf("late registration refused: %s\n", lateError.c_str());
+
+			// The context copier runs once for each copy, after the copy is complete, and copiers register only while the
+			// composition root runs.
+			if (!copierRegistered)
+				return Fail("the context copier was refused during the composition root's registration");
+			s_GarageContextCopies = 0; // The copies above count too
+			const Ref<Scene> original = CreateRef<Scene>("Depot");
+			original->GetRegistry().ctx().emplace<TestGarageContext>(TestGarageContext { 3 });
+			const Ref<Scene> copy = Scene::Copy(original);
+			const Ref<Scene> copyOfCopy = Scene::Copy(copy);
+			const TestGarageContext* copied = copyOfCopy->GetRegistry().ctx().find<TestGarageContext>();
+			if (s_GarageContextCopies != 2 || !copied || copied->Vehicles != 3)
+				return Fail(fmt::format("the context copier ran {} times for 2 copies", s_GarageContextCopies));
+			// A snapshot to save (SerializedOnly) is no full copy: no copier runs for it.
+			const Ref<Scene> snapshot = Scene::Copy(original, SceneCopyOptions { .SerializedOnly = true });
+			if (s_GarageContextCopies != 2 || snapshot->GetRegistry().ctx().find<TestGarageContext>())
+				return Fail("the context copier ran for a SerializedOnly snapshot");
+			const uint64_t beforeCopier = Log::GetBuffer().GetLatestSequence();
+			if (Scene::RegisterContextCopier(&CopyGarageContext))
+				return Fail("a context copier was registered after the composition root");
+			if (FindLoggedError(beforeCopier, "RegisterContextCopier").empty())
+				return Fail("the refused context copier logged no error");
+			std::printf("context copiers: one run per full copy, none for snapshots, late registration refused\n");
 			std::fflush(stdout);
 			return 0;
 		}

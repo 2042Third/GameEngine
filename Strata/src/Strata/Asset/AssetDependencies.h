@@ -6,6 +6,7 @@
 
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace Strata
@@ -24,7 +25,8 @@ namespace Strata
 		// - animation controllers: the clips of their states.
 		// Other types reference nothing in their stored form: importers that know more (a glTF mesh's materials) record it
 		// themselves (ImportResult::References). Appends each handle once, in the order it first appears, without null
-		// handles. False, with the reason, when the document cannot be read.
+		// handles. False, with the reason, when the document cannot be read. Scenes, prefabs and models are read as streams
+		// (SceneDocumentReader: one entity's DOM at a time, whatever the document's size) and must be documents of their kind.
 		bool Scan(AssetType type, std::span<const uint8_t> storedForm, std::vector<AssetHandle>& outReferences, std::string* outError = nullptr);
 		// Scan of a document that is parsed already (what a serializer produced, before it is written): no parsing again.
 		bool ScanDocument(AssetType type, const nlohmann::json& document, std::vector<AssetHandle>& outReferences, std::string* outError = nullptr);
@@ -33,6 +35,21 @@ namespace Strata
 
 		// The references of the entities of a snapshot ({"Entities": [...]}, SceneSerializer's format), appended like Scan's.
 		void ScanEntities(const nlohmann::json& snapshot, std::vector<AssetHandle>& outReferences);
+
+		// References as Scan appends them: each valid handle once, in the order it first appears (the handles the vector holds
+		// already count as seen).
+		class ReferenceList
+		{
+		public:
+			explicit ReferenceList(std::vector<AssetHandle>& references);
+			void Add(AssetHandle handle);
+		private:
+			std::vector<AssetHandle>& m_References;
+			std::unordered_set<AssetHandle> m_Seen;
+		};
+		// The references of one entity object of a document of entities, by Scan's rules: for readers that see the entities
+		// one at a time (AssetPackCook).
+		void ScanEntity(const nlohmann::json& entity, ReferenceList& references);
 
 	}
 

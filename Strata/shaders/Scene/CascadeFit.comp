@@ -1,0 +1,73 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "Include/Common.glsl"
+#include "Include/OrderedFloat.glsl"
+
+// The directional shadow cascades' projections (RenderData::CascadeData), one thread per cascade: each covers its square in
+// light view space, from the far side of its view slice's bounding sphere to the nearest caster toward the light (at least
+// the sphere's near side, at most MaxCasterDistance beyond it; ShadowMesh.vert flattens casters beyond onto the near
+// plane). Both paths fit here: the CPU path with the casters it found, the GPU-driven path with those its culling found,
+// the same frame (Cull.comp's shadow pass writes u_CasterDepths). The projection is Math::OrthographicReverseZ.
+
+layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_CBV(0), std140) uniform CascadeFitBuffer
+{
+	mat4 LightView;
+	vec4 Boxes[4];       // Light view space: min.xy, max.xy
+	vec4 Depths[4];      // x: the far side's z, y: the sphere's near side's z, z: world units per texel, w: the sphere's radius
+	vec4 CasterNearZ;    // Per cascade: the nearest drawn caster's z, as the CPU found it
+	uint CascadeCount;
+	uint CasterDepthsFromGPU;
+	float MaxCasterDistance;
+	uint Reserved;
+} u_Fit;
+
+layout(set = 0, binding = ST_UAV(0), std430) buffer CasterDepthBuffer { uint u_CasterDepths[]; };
+
+struct CascadeData
+{
+	mat4 ViewProjection;
+	vec4 Parameters;
+};
+layout(set = 0, binding = ST_UAV(1), std430) buffer CascadeBuffer { CascadeData u_Cascades[]; };
+
+void main()
+{
+	uint cascade = gl_LocalInvocationIndex;
+	if (cascade >= u_Fit.CascadeCount)
+		return;
+	vec4 box = u_Fit.Boxes[cascade];
+	vec4 depths = u_Fit.Depths[cascade];
+	float casterNearZ = depths.y;
+	if (u_Fit.CasterDepthsFromGPU != 0u)
+	{
+		uint encoded = u_CasterDepths[cascade];
+		if (encoded != 0u)
+			casterNearZ = max(casterNearZ, DecodeOrderedFloat(encoded));
+	}
+	else
+	{
+		casterNearZ = max(casterNearZ, u_Fit.CasterNearZ[cascade]);
+	}
+	float nearZ = clamp(casterNearZ, depths.y, depths.y + u_Fit.MaxCasterDistance);
+	float nearPlane = -nearZ;
+	float farPlane = -depths.x;
+
+	// glm::orthoRH_ZO with the planes swapped (reversed-Z: the near plane at depth 1).
+	float zNear = farPlane;
+	float zFar = nearPlane;
+	mat4 projection = mat4(1.0);
+	projection[0][0] = 2.0 / (box.z - box.x);
+	projection[1][1] = 2.0 / (box.w - box.y);
+	projection[2][2] = -1.0 / (zFar - zNear);
+	projection[3][0] = -(box.z + box.x) / (box.z - box.x);
+	projection[3][1] = -(box.w + box.y) / (box.w - box.y);
+	projection[3][2] = -zNear / (zFar - zNear);
+	u_Cascades[cascade].ViewProjection = projection * u_Fit.LightView;
+	// Penumbrae are searched for blockers up to this distance from the receiver (world units).
+	float searchDistance = 0.2 * depths.w + 5.0;
+	// w: the near plane's light view z, for the cascades' occlusion culling (Cull.comp's IsOccludedInCascade).
+	u_Cascades[cascade].Parameters = vec4(depths.z, farPlane - nearPlane, searchDistance, nearZ);
+}

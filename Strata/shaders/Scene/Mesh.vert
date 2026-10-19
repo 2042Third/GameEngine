@@ -17,17 +17,19 @@ layout(location = 4) in uvec4 a_Joints;
 layout(location = 5) in vec4 a_Weights;
 #endif
 
-layout(location = 0) out vec3 v_WorldPosition;
+layout(location = 0) out vec3 v_RelativePosition;
 layout(location = 1) out vec3 v_Normal;
 layout(location = 2) out vec4 v_Tangent;
 layout(location = 3) out vec2 v_TexCoord;
 layout(location = 4) flat out uint v_InstanceIndex;
+layout(location = 5) flat out uint v_LODFade; // The draw's cross-fade code (IsLODFadeDrawn)
 
 invariant gl_Position;
 
 void main()
 {
-	uint instanceIndex = u_DrawList[gl_InstanceIndex];
+	uint entry = u_DrawList[gl_InstanceIndex];
+	uint instanceIndex = entry & ST_DRAW_ENTRY_INSTANCE_MASK;
 	InstanceData instance = u_Instances[instanceIndex];
 #ifdef ST_SKINNED
 	JointMatrix skin = BlendJoints(instance, a_Joints, a_Weights);
@@ -39,8 +41,8 @@ void main()
 	vec3 normal = a_Normal;
 	vec3 tangent = a_Tangent.xyz;
 #endif
-	vec3 worldPosition = TransformPosition(instance, position);
-	v_WorldPosition = worldPosition;
+	vec3 relativePosition = TransformPositionRelative(instance, position);
+	v_RelativePosition = relativePosition;
 	v_Normal = normalize(TransformNormal(instance, normal));
 	// A mirroring transform reverses the handedness of the tangent frame: cross(N, T) then points opposite to the
 	// transformed bitangent, so its sign flips.
@@ -48,5 +50,6 @@ void main()
 	v_Tangent = vec4(normalize(TransformDirection(instance, tangent)), handedness);
 	v_TexCoord = a_TexCoord;
 	v_InstanceIndex = instanceIndex;
-	gl_Position = u_Frame.ViewProjection * vec4(worldPosition, 1.0);
+	v_LODFade = entry >> ST_DRAW_ENTRY_INSTANCE_BITS;
+	gl_Position = u_Frame.ViewProjection * vec4(relativePosition, 1.0);
 }

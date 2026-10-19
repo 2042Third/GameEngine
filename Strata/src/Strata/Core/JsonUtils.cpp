@@ -1,6 +1,8 @@
 #include "stpch.h"
 #include "Strata/Core/JsonUtils.h"
 
+#include "Strata/Core/JsonEvents.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -12,60 +14,6 @@ namespace Strata
 
 	namespace
 	{
-
-		// The text as nlohmann's lexer reads it (one character per get_character call), with a limit that is the next report
-		// point instead of the end: reaching the limit costs the comparison reaching the end costs anyway, so the parse runs as
-		// fast as nlohmann's own input from pointers, and once per interval the limit moves on and the position is reported.
-		class ProgressInputAdapter
-		{
-		public:
-			using char_type = char;
-
-			ProgressInputAdapter(std::string_view text, const JsonParseProgress& progress)
-				: m_Begin(text.data()), m_Current(text.data()), m_End(text.data() + text.size()), m_Progress(&progress)
-			{
-				m_Limit = NextLimit();
-			}
-
-			// The lexer's interface names it (nlohmann::detail::lexer calls get_character).
-			std::char_traits<char>::int_type get_character()
-			{
-				if (m_Current != m_Limit) [[likely]]
-					return std::char_traits<char>::to_int_type(*m_Current++);
-				return AtLimit();
-			}
-		private:
-			// The next report point: an interval further, or the end.
-			const char* NextLimit() const
-			{
-				const size_t interval = std::max<size_t>(m_Progress->Interval, 1);
-				return static_cast<size_t>(m_End - m_Current) > interval ? m_Current + interval : m_End;
-			}
-
-			std::char_traits<char>::int_type AtLimit()
-			{
-				if (m_Current == m_End)
-				{
-					// The lexer may ask again at the end; it is reported once.
-					if (!m_ReportedEnd)
-					{
-						m_ReportedEnd = true;
-						m_Progress->Callback(static_cast<size_t>(m_End - m_Begin));
-					}
-					return std::char_traits<char>::eof();
-				}
-				m_Progress->Callback(static_cast<size_t>(m_Current - m_Begin));
-				m_Limit = NextLimit();
-				return std::char_traits<char>::to_int_type(*m_Current++);
-			}
-		private:
-			const char* m_Begin = nullptr;
-			const char* m_Current = nullptr;
-			const char* m_Limit = nullptr;
-			const char* m_End = nullptr;
-			const JsonParseProgress* m_Progress = nullptr;
-			bool m_ReportedEnd = false;
-		};
 
 		std::optional<nlohmann::json> Discarded(std::string* outError)
 		{
@@ -92,8 +40,7 @@ namespace Strata
 		// nlohmann's parser over an input of Strata's own (its public parse functions take only nlohmann's inputs), as
 		// nlohmann::json::parse runs it: strict (the text holds one value and nothing after it), without exceptions.
 		nlohmann::json json;
-		ProgressInputAdapter input(text, progress);
-		nlohmann::detail::parser<nlohmann::json, ProgressInputAdapter>(std::move(input), nullptr, false, false).parse(true, json);
+		nlohmann::detail::parser<nlohmann::json, JsonProgressInput>(JsonProgressInput(text, &progress), nullptr, false, false).parse(true, json);
 		if (json.is_discarded())
 			return Discarded(outError);
 		return json;
@@ -102,6 +49,25 @@ namespace Strata
 	std::string JsonUtils::Dump(const nlohmann::json& json, int indent, char indentCharacter)
 	{
 		return json.dump(indent, indentCharacter, false, nlohmann::json::error_handler_t::replace);
+	}
+
+	void JsonUtils::AppendString(std::string& out, std::string_view text)
+	{
+		// Printable ASCII but the quote and the backslash is written as it is; anything else (escapes, UTF-8, invalid bytes)
+		// goes through the serializer, so the rules stay nlohmann's.
+		const bool plain = std::all_of(text.begin(), text.end(), [](char character)
+		{
+			const unsigned char byte = static_cast<unsigned char>(character);
+			return byte >= 0x20 && byte < 0x7F && byte != '"' && byte != '\\';
+		});
+		if (!plain)
+		{
+			out += Dump(nlohmann::json(std::string(text)));
+			return;
+		}
+		out += '"';
+		out.append(text);
+		out += '"';
 	}
 
 	const nlohmann::json* JsonUtils::Find(const nlohmann::json& object, std::string_view key)

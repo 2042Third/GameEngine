@@ -93,6 +93,12 @@ namespace Strata
 	namespace CommandUtils
 	{
 
+		nlohmann::json DescribeImportMemory(const ImportMemoryStats& stats)
+		{
+			const auto toMB = [](uint64_t bytes) { return static_cast<double>(bytes) / c_BytesPerMB; };
+			return { { "admitted", toMB(stats.Admitted) }, { "budget", toMB(stats.Budget) }, { "queued", toMB(stats.Queued) } };
+		}
+
 		nlohmann::json DescribeAssetStats(const AssetManagerStats& stats)
 		{
 			nlohmann::json pools = nlohmann::json::object();
@@ -163,15 +169,17 @@ namespace Strata
 			"assets reference started when their reads completed, and those dropped on arrival for lack of room in the budgets) and mip "
 			"streaming (mipStreaming: loads of only a texture's header and smallest levels, reads of further levels queued and completed, "
 			"levels raised and dropped (and of those dropped, the levels a budget took: its pressure, or room for detail a view needs more), bytes read for them in all and in the last frame, textures below the level their views need, and "
-			"textures reading or changing levels now). With assets: true it also lists the assets that are resident, loading, failed or "
+			"textures reading or changing levels now), and importMemoryMB (the imports' memory estimates: admitted, budget, queued). With assets: true it also lists the assets that are resident, loading, failed or "
 			"pinned, with their memory, state, last use and pins; streaming textures add residentMip (the finest mip level resident, 0 "
-			"the full resolution), wantedMip (the finest level their views need), mipCount and residentBytes (what the resident levels hold).",
+			"the full resolution), wantedMip (the finest level their views need), mipCount and residentBytes (what the resident levels hold). "
+			"geometryPool is the renderer's pool of every mesh's GPU geometry (usedMB, capacityMB, allocations, fragmentation of its free space, "
+			"moves and growths so far; null without a GPU): meshes count their ranges of it as gpuBuffers.",
 			ObjectSchema({
 				{ "assets", BoolSchema("Also list the assets (default false)") },
 				{ "limit", IntegerSchema("At most this many assets in the list (default 100)", 1, c_MaxAssetRows) },
 				{ "sort", { { "type", "string" }, { "enum", { "bytes", "lastUsed" } },
 					{ "description", "Order of the list: \"bytes\" (most memory first, the default) or \"lastUsed\" (most recently used first)" } } } }),
-			[](EditorContext&, const nlohmann::json& parameters)
+			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const bool listAssets = arguments.GetBool("assets", false);
@@ -186,6 +194,9 @@ namespace Strata
 				if (!manager)
 					return EditorCommandResult::Fail("No asset manager is active");
 				nlohmann::json result = DescribeAssetStats(manager->GetStats());
+				result["geometryPool"] = DescribeGeometryPool();
+				if (EditorAssetManager* project = context.GetAssetManager(); project && project == manager.get())
+					result["importMemoryMB"] = CommandUtils::DescribeImportMemory(project->GetImportMemoryStats());
 				if (!listAssets)
 					return EditorCommandResult::Ok(std::move(result));
 
@@ -209,7 +220,8 @@ namespace Strata
 			"project): resident memory per pool in megabytes (1 MB = 1048576 bytes; assets over budget are evicted, least recently used first), "
 			"the megabytes of loads in flight, the GPU megabytes uploaded per frame, the main-thread milliseconds finalization may take per frame, "
 			"the milliseconds its upload steps may take (writing staging memory; steps are sized to fit) and the staging megabytes texture and mesh uploads may hold (sustained uploads reach at most half of the staging per frame, so "
-			"raise both for a loading screen). Values must be greater than 0; reset: true starts from the defaults (derived from the "
+			"raise both for a loading screen), and the megabytes imports may take together (importMB: their memory estimates; default a quarter "
+			"of physical memory, 1-4 GB). Values must be greater than 0; reset: true starts from the defaults (derived from the "
 			"GPU). Returns the budgets in effect (bytes, null = unlimited).",
 			ObjectSchema({
 				{ "gpuTexturesMB", { { "type", "number" }, { "exclusiveMinimum", 0 }, { "description", "Resident GPU texture memory, in MB" } } },
@@ -224,6 +236,9 @@ namespace Strata
 					{ "description", "Main-thread milliseconds the upload steps of a frame may take (writing staging memory, recording copies)" } } },
 				{ "stagingMB", { { "type", "number" }, { "exclusiveMinimum", 0 },
 					{ "description", "Staging memory texture and mesh uploads may hold, in flight and idle, in MB" } } },
+				{ "importMB", { { "type", "number" }, { "exclusiveMinimum", 0 },
+					{ "description", "Memory imports may take together by their estimates, in MB: an import that does not fit beside those that run waits "
+						"for them (one runs alone even when it exceeds it)" } } },
 				{ "reset", BoolSchema("Start from the default budgets before applying the given values (default false)") } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -240,6 +255,7 @@ namespace Strata
 				const std::optional<double> finalizeMs = ReadPositive(parameters, "finalizeMsPerFrame", c_MaxMs, arguments);
 				const std::optional<double> uploadMs = ReadPositive(parameters, "uploadMsPerFrame", c_MaxMs, arguments);
 				const std::optional<double> staging = ReadPositive(parameters, "stagingMB", c_MaxMB, arguments);
+				const std::optional<double> import = ReadPositive(parameters, "importMB", c_MaxMB, arguments);
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
@@ -268,7 +284,13 @@ namespace Strata
 				if (staging)
 					budgets.StagingBytes = toBytes(*staging);
 				manager->SetResidencyBudgets(budgets);
-				return EditorCommandResult::Ok({ { "budgets", DescribeBudgets(manager->GetResidencyBudgets()) } });
+				if (reset)
+					manager->SetImportMemoryBudget(EditorAssetManager::GetDefaultImportMemoryBudget());
+				if (import)
+					manager->SetImportMemoryBudget(toBytes(*import));
+				nlohmann::json described = DescribeBudgets(manager->GetResidencyBudgets());
+				described["importBytes"] = manager->GetImportMemoryStats().Budget;
+				return EditorCommandResult::Ok({ { "budgets", std::move(described) } });
 			}, EditorCommandKind::Session });
 	}
 

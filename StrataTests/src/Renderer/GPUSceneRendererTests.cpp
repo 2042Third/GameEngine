@@ -27,14 +27,16 @@ namespace
 		Ref<Mesh> source = MeshFactory::CreateSphere(0.5f, 48, 24);
 		REQUIRE(source);
 		std::vector<uint32_t> indices = source->GetIndices();
-		std::vector<std::vector<uint32_t>> levels = MeshUtils::GenerateLODs(source->GetPositions(), indices, 2);
+		const std::vector<MeshUtils::GeneratedLOD> levels = MeshUtils::GenerateLODs(source->GetPositions(), source->GetAttributes(), indices, 2);
 		REQUIRE(levels.size() == 2);
 
 		Submesh submesh = source->GetSubmeshes()[0];
 		submesh.LODs = { MeshLOD { 0, static_cast<uint32_t>(indices.size()) } };
 		outTriangleCounts = { static_cast<uint32_t>(indices.size() / 3) };
-		for (const std::vector<uint32_t>& level : levels)
+		for (const MeshUtils::GeneratedLOD& generated : levels)
 		{
+			// Without the errors: these levels are chosen by halving the screen fraction.
+			const std::vector<uint32_t>& level = generated.Indices;
 			submesh.LODs.push_back(MeshLOD { static_cast<uint32_t>(indices.size()), static_cast<uint32_t>(level.size()) });
 			outTriangleCounts.push_back(static_cast<uint32_t>(level.size() / 3));
 			indices.insert(indices.end(), level.begin(), level.end());
@@ -93,12 +95,12 @@ TEST_SUITE("GPU.SceneRenderer")
 		CHECK_FALSE(renderer.GetEntityAt(scene, 1, 1));
 		CHECK_FALSE(renderer.GetEntityAt(scene, c_Size, 0)); // Outside the viewport
 
-		const SceneRendererStats& stats = renderer.GetStats();
-		CHECK(stats.Instances == 1);
-		CHECK(stats.DrawCalls == 1);
-		CHECK(stats.Triangles == 12);
-		CHECK(stats.Lights == 1);
-		CHECK(stats.InstancesPerLOD[0] == 1);
+		CHECK(renderer.GetStats().Lights == 1);
+		const DrawnCounts drawn = GetDrawnCounts(renderer);
+		CHECK(drawn.Instances == 1);
+		CHECK(drawn.Draws == 1);
+		CHECK(drawn.Triangles == 12);
+		CHECK(drawn.InstancesPerLOD[0] == 1);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -168,7 +170,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		Entity mirroredQuad = AddMesh(scene, BuiltinAssets::QuadMesh, red, glm::vec3(0.0f, 0.0f, 1.5f), "MirroredQuad");
 		mirroredQuad.GetComponent<TransformComponent>().Scale = glm::vec3(0.2f, -0.2f, 0.2f); // Still faces +Z
 		CHECK(renderer.Render(scene, camera));
-		CHECK(renderer.GetStats().DrawCalls == 3);
+		CHECK(GetDrawnCounts(renderer).Draws == 3);
 		const glm::uvec2 quadPixel = ProjectToPixel(camera, glm::vec3(0.0f, 0.0f, 1.5f), c_Size);
 		CHECK(renderer.GetEntityAt(scene, quadPixel.x, quadPixel.y) == mirroredQuad);
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -262,9 +264,10 @@ TEST_SUITE("GPU.SceneRenderer")
 		renderer.SetViewportSize(c_Size, c_Size);
 		const SceneCamera camera = LookAt(glm::vec3(0.0f, 0.0f, 7.0f), glm::vec3(0.0f));
 		const ReadbackImage image = RenderToImage(renderer, scene, camera);
-		CHECK(renderer.GetStats().DrawCalls == 1);
-		CHECK(renderer.GetStats().Instances == 5);
-		CHECK(renderer.GetStats().Triangles == 60);
+		const DrawnCounts drawn = GetDrawnCounts(renderer);
+		CHECK(drawn.Draws == 1);
+		CHECK(drawn.Instances == 5);
+		CHECK(drawn.Triangles == 60);
 		for (size_t index = 0; index < cubes.size(); index++)
 		{
 			const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(static_cast<float>(index) * 1.5f - 3.0f, 0.0f, 0.4f), c_Size);
@@ -276,21 +279,109 @@ TEST_SUITE("GPU.SceneRenderer")
 		cubes[4].GetComponent<MeshRendererComponent>().Material = green;
 		cubes[4].MarkModified<MeshRendererComponent>();
 		const ReadbackImage mixed = RenderToImage(renderer, scene, camera);
-		CHECK(renderer.GetStats().DrawCalls == 1);
-		CHECK(renderer.GetStats().Instances == 5);
+		const DrawnCounts mixedDrawn = GetDrawnCounts(renderer);
+		CHECK(mixedDrawn.Draws == 1);
+		CHECK(mixedDrawn.Instances == 5);
 		for (size_t index = 0; index < cubes.size(); index++)
 		{
 			const glm::uvec2 pixel = ProjectToPixel(camera, glm::vec3(static_cast<float>(index) * 1.5f - 3.0f, 0.0f, 0.4f), c_Size);
 			CHECK(GetPixelRGBA8(mixed, pixel.x, pixel.y) == (index == 4 ? glm::u8vec4(0, 255, 0, 255) : glm::u8vec4(255, 0, 0, 255)));
 		}
 
-		// Split by material on request, with the same image.
+		// Split by material on request (a CPU path option), with the same image.
 		SceneRendererSpecification specification;
+		specification.GPUDriven = GPUDrivenMode::Off;
 		specification.BatchAcrossMaterials = false;
 		SceneRenderer split(specification);
 		split.SetViewportSize(c_Size, c_Size);
 		CHECK(MaxDifference(RenderToImage(split, scene, camera), mixed) == 0);
 		CHECK(split.GetStats().DrawCalls == 2);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Batches of different meshes share a draw call per pipeline state, drawing what a draw per batch draws")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		const AssetHandle orange = assets.AddMaterial(UnlitColor({ 1.0f, 0.5f, 0.0f, 1.0f }));
+		MaterialProperties doubleSidedProperties = UnlitColor({ 0.0f, 0.6f, 1.0f, 1.0f });
+		doubleSidedProperties.DoubleSided = true;
+		const AssetHandle doubleSided = assets.AddMaterial(doubleSidedProperties);
+		// Six distinct meshes in the geometry pool, some mirrored, one double-sided, under a sun's shadows.
+		const std::vector<AssetHandle> meshes = { BuiltinAssets::CubeMesh, BuiltinAssets::SphereMesh, BuiltinAssets::CylinderMesh, BuiltinAssets::ConeMesh,
+			BuiltinAssets::TorusMesh, BuiltinAssets::CapsuleMesh };
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddMesh(scene, BuiltinAssets::PlaneMesh, orange, glm::vec3(0.0f, -0.6f, 0.0f), "Floor").GetComponent<TransformComponent>().Scale = glm::vec3(12.0f);
+		AddSun(scene, glm::normalize(glm::vec3(-0.4f, -1.0f, -0.3f)), 3.0f);
+		for (size_t index = 0; index < 18; index++)
+		{
+			const glm::vec3 position(static_cast<float>(index % 6) * 1.4f - 3.5f, 0.0f, static_cast<float>(index / 6) * 1.4f - 1.4f);
+			Entity entity = AddMesh(scene, meshes[index % meshes.size()], index == 7 ? doubleSided : orange, position, "Shape");
+			if (index % 5 == 0)
+				entity.GetComponent<TransformComponent>().Scale = glm::vec3(-0.8f, 0.8f, 0.8f);
+			else
+				entity.GetComponent<TransformComponent>().Scale = glm::vec3(0.8f);
+		}
+		const SceneCamera camera = LookAt(glm::vec3(0.0f, 5.0f, 7.0f), glm::vec3(0.0f));
+
+		// The CPU path's batches (GPU.SceneRenderer.GPUDriven compares the GPU path's draws with them).
+		SceneRendererSpecification bucketSpecification;
+		bucketSpecification.GPUDriven = GPUDrivenMode::Off;
+		SceneRenderer buckets(bucketSpecification);
+		buckets.SetViewportSize(c_Size, c_Size);
+		const ReadbackImage bucketImage = RenderToImage(buckets, scene, camera);
+		const SceneRendererStats bucketStats = buckets.GetStats();
+		SceneRendererSpecification perDrawSpecification = bucketSpecification;
+		perDrawSpecification.IndirectMode = IndirectDrawMode::PerDraw;
+		SceneRenderer perDraw(perDrawSpecification);
+		perDraw.SetViewportSize(c_Size, c_Size);
+		const ReadbackImage perDrawImage = RenderToImage(perDraw, scene, camera);
+		const SceneRendererStats perDrawStats = perDraw.GetStats();
+
+		CHECK(MaxDifference(bucketImage, perDrawImage) == 0);
+		for (uint32_t y = 0; y < c_Size; y += 3)
+		{
+			for (uint32_t x = 0; x < c_Size; x += 3)
+				REQUIRE(buckets.GetEntityAt(scene, x, y) == perDraw.GetEntityAt(scene, x, y));
+		}
+		// The same batches; a draw per batch, or (where the device draws indirect) one call per bucket of the passes' states.
+		CHECK(bucketStats.OpaqueDrawCalls == perDrawStats.OpaqueDrawCalls);
+		CHECK(bucketStats.ShadowDrawCalls == perDrawStats.ShadowDrawCalls);
+		CHECK(perDrawStats.DrawCommands == 2 * perDrawStats.OpaqueDrawCalls + perDrawStats.ShadowDrawCalls);
+		const GraphicsDeviceInfo& info = gpu.GetDevice().GetInfo();
+		if (info.SupportsMultiDrawIndirect && info.SupportsDrawIndirectFirstInstance)
+		{
+			// Front-facing, mirrored and double-sided buckets in the prepass and the opaque pass, and the cascades' buckets.
+			CHECK(bucketStats.DrawCommands < perDrawStats.DrawCommands);
+			CHECK(bucketStats.DrawCommands <= 2 * 3 + 4 * 3);
+		}
+		else
+		{
+			CHECK(bucketStats.DrawCommands == perDrawStats.DrawCommands);
+		}
+
+		// Buckets with more draws than one indirect call may issue are split into several calls (the device's
+		// maxDrawIndirectCount, or a lower MaxDrawsPerIndirectCall): one draw per call issues what a draw per batch issues,
+		// two per call fewer calls, and both draw the same.
+		for (const uint32_t maxDraws : { 1u, 2u })
+		{
+			CAPTURE(maxDraws);
+			SceneRendererSpecification splitSpecification = bucketSpecification;
+			splitSpecification.MaxDrawsPerIndirectCall = maxDraws;
+			SceneRenderer split(splitSpecification);
+			split.SetViewportSize(c_Size, c_Size);
+			const ReadbackImage splitImage = RenderToImage(split, scene, camera);
+			const SceneRendererStats splitStats = split.GetStats();
+			CHECK(MaxDifference(bucketImage, splitImage) == 0);
+			CHECK(splitStats.OpaqueDrawCalls == bucketStats.OpaqueDrawCalls);
+			if (maxDraws == 1)
+				CHECK(splitStats.DrawCommands == perDrawStats.DrawCommands);
+			else if (info.SupportsMultiDrawIndirect && info.SupportsDrawIndirectFirstInstance)
+				CHECK(splitStats.DrawCommands > bucketStats.DrawCommands);
+			CHECK(splitStats.DrawCommands <= perDrawStats.DrawCommands);
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -306,7 +397,10 @@ TEST_SUITE("GPU.SceneRenderer")
 		AddNeutralPostProcess(scene);
 		AddMesh(scene, sphere, assets.AddMaterial(UnlitColor({ 1.0f, 1.0f, 1.0f, 1.0f })), glm::vec3(0.0f), "Sphere");
 
-		SceneRenderer renderer;
+		// The levels switch at once here (the cross-fades between them have tests of their own).
+		SceneRendererSpecification immediate;
+		immediate.FadeLevelsOfDetail = false;
+		SceneRenderer renderer(immediate);
 		renderer.SetViewportSize(c_Size, c_Size);
 		// Bounding sphere radius 0.87: the screen fraction is 0.75 at 2 m (LOD 0), 0.3 at 5 m (LOD 1) and 0.125 at
 		// 12 m (LOD 3, clamped to the last level, 2).
@@ -315,10 +409,10 @@ TEST_SUITE("GPU.SceneRenderer")
 		{
 			CAPTURE(distance);
 			const ReadbackImage image = RenderToImage(renderer, scene, LookAt(glm::vec3(0.0f, 0.0f, distance), glm::vec3(0.0f)));
-			const SceneRendererStats& stats = renderer.GetStats();
-			CHECK(stats.InstancesPerLOD[lod] == 1);
-			CHECK(stats.Instances == 1);
-			CHECK(stats.Triangles == triangles[lod]);
+			const DrawnCounts drawn = GetDrawnCounts(renderer);
+			CHECK(drawn.InstancesPerLOD[lod] == 1);
+			CHECK(drawn.Instances == 1);
+			CHECK(drawn.Triangles == triangles[lod]);
 			CHECK(GetPixelRGBA8(image, c_Size / 2, c_Size / 2) == glm::u8vec4(255, 255, 255, 255));
 		}
 
@@ -328,7 +422,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		SceneRenderer eager(specification);
 		eager.SetViewportSize(c_Size, c_Size);
 		eager.Render(scene, LookAt(glm::vec3(0.0f, 0.0f, 2.0f), glm::vec3(0.0f)));
-		CHECK(eager.GetStats().InstancesPerLOD[2] == 1);
+		CHECK(GetDrawnCounts(eager).InstancesPerLOD[2] == 1);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
@@ -353,7 +447,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		renderer.SetViewportSize(c_Size, c_Size);
 		CHECK(renderer.Render(scene, LookAt(glm::vec3(0.0f, 0.0f, 3.0f), glm::vec3(0.0f))));
 		const SceneRendererStats& stats = renderer.GetStats();
-		CHECK(stats.Instances == 1);
+		CHECK(GetDrawnCounts(renderer).Instances == 1);
 		CHECK(stats.CulledInstances == 1);
 		CHECK(stats.PendingAssets == 0); // Unknown handles are not "loading"
 		CHECK(gpu.GetNewErrorCount() == 0);
@@ -425,7 +519,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		// texture to a neutral one.
 		ReadbackImage image = RenderToImage(renderer, scene, camera);
 		CHECK(renderer.GetStats().PendingAssets == 3);
-		CHECK(renderer.GetStats().Instances == 2);
+		CHECK(GetDrawnCounts(renderer).Instances == 2);
 		CHECK(pixelAt(image, -1.5f) == glm::u8vec4(0, 0, 0, 255));
 		const glm::u8vec4 defaultMaterial = pixelAt(image, 0.0f);
 		CHECK(defaultMaterial.r > 0);
@@ -435,7 +529,7 @@ TEST_SUITE("GPU.SceneRenderer")
 		REQUIRE(manager->WaitForPendingLoads());
 		image = RenderToImage(renderer, scene, camera);
 		CHECK(renderer.GetStats().PendingAssets == 0);
-		CHECK(renderer.GetStats().Instances == 3);
+		CHECK(GetDrawnCounts(renderer).Instances == 3);
 		CHECK(pixelAt(image, -1.5f) == glm::u8vec4(255, 255, 255, 255));
 		CHECK(pixelAt(image, 0.0f) == glm::u8vec4(255, 0, 0, 255));
 		CHECK(pixelAt(image, 1.5f) == glm::u8vec4(0, 255, 0, 255));

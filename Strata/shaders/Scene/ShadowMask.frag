@@ -2,6 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "Include/Scene.glsl"
+#include "Include/MaterialTextures.glsl"
 
 // Shadow casters with alpha-masked materials: discard cut-out texels. Opaque casters use no fragment shader.
 

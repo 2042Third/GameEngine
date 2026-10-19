@@ -7,12 +7,14 @@
 #include "Editor/EditorNotifications.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/PropertyEdit.h"
+#include "Editor/SaveTestUtils.h"
 #include "Editor/SceneRecovery.h"
 #include "Perf/SceneGenerators.h"
 #include "TestHelpers.h"
 #include "UI/ItemProbe.h"
 #include "UI/RecoveryDialog.h"
 
+#include <Strata/Core/Crypto.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JobSystem.h>
 #include <Strata/Core/JsonUtils.h>
@@ -32,6 +34,7 @@
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -171,6 +174,27 @@ namespace
 		Scene& m_Scene;
 	};
 
+	// What a crashed editor leaves in a new project: the journal of an entity it created (named `name`) and never saved,
+	// owned by a process that is gone (another start time), not marked discarded.
+	void LeaveCrashJournal(const std::filesystem::path& project, const std::string& name)
+	{
+		RecoveryHarness harness(project);
+		harness.Run("entity.create", { { "name", name } });
+		harness.FlushJournal();
+		const std::vector<std::filesystem::path> files = ListRecoveryFiles(harness.GetRecoveryDirectory());
+		REQUIRE(files.size() == 1);
+		const std::optional<std::string> text = FileSystem::ReadText(files[0]);
+		REQUIRE(text.has_value());
+		nlohmann::json header = ReadRecoveryHeader(files[0]);
+		REQUIRE(header["Discarded"] == false);
+		header["Owner"]["ProcessStartTime"] = header["Owner"]["ProcessStartTime"].get<uint64_t>() + 1;
+		REQUIRE(FileSystem::WriteText(harness.GetRecoveryDirectory() / (std::string("Crashed-0000000000000001") + SceneRecovery::c_FileExtension),
+			JsonUtils::Dump(header) + "\n" + text->substr(text->find('\n') + 1)));
+		// Back to the saved scene: this editor leaves nothing of its own behind.
+		harness.Run("edit.undo");
+		harness.FlushJournal();
+	}
+
 	// Edits of every kind a journal must replay: creating, renaming, component values, reparenting, reordering, deleting
 	// and the scene's settings.
 	void MakeEdits(RecoveryHarness& harness)
@@ -211,7 +235,7 @@ TEST_SUITE("Editor.Recovery")
 		CHECK(header["ScenePath"] == "Scenes/Main.stscene");
 		CHECK(header["Discarded"] == false);
 		CHECK(header["BaseHash"].is_string());
-		CHECK(harness.Run("editor.status")["recovery"]["journal"]["writes"] == 1);
+		CHECK(harness.Run("editor.status", { { "sections", { "recovery" } } })["recovery"]["journal"]["writes"] == 1);
 
 		// Undoing back to the saved scene leaves nothing to recover.
 		harness.Run("edit.undo");
@@ -225,6 +249,64 @@ TEST_SUITE("Editor.Recovery")
 		harness.Run("scene.save");
 		harness.Context.GetRecovery().Wait();
 		CHECK(ListRecoveryFiles(harness.GetRecoveryDirectory()).empty());
+	}
+
+	TEST_CASE("Edits made while a save writes are in the journal that follows the saved document, and a crash after it recovers them")
+	{
+		Tests::GatedJobSystem jobs;
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryBackgroundSave") / "Game";
+		std::filesystem::path file;
+		nlohmann::json header;
+		std::string body;
+		{
+			RecoveryHarness harness(project);
+			harness.Run("entity.create", { { "name", "Before" } });
+			harness.FlushJournal();
+			{
+				Tests::BackgroundGate gate;
+				REQUIRE(harness.Commands.Execute(harness.Context, "scene.save", { { "wait", false } }).Success);
+				harness.Run("entity.create", { { "name", "During" } });
+				// The journal goes on meanwhile, over the file the save replaces.
+				harness.FlushJournal();
+			}
+			REQUIRE(Tests::WaitUntil([&]()
+			{
+				harness.Context.Update(Timestep(1.0f / 60.0f));
+				return !harness.Context.HasSavesInFlight();
+			}, std::chrono::minutes(1)));
+			harness.Context.GetRecovery().Wait();
+			CHECK(harness.Context.IsSceneModified());
+
+			// Right after the save the journal follows the saved document and holds the edit made while it was written.
+			const std::filesystem::path sceneFile = harness.Context.GetSceneFile(harness.Context.GetSceneHandle()).first;
+			const std::optional<std::vector<uint8_t>> saved = FileSystem::ReadBytes(sceneFile);
+			REQUIRE(saved.has_value());
+			const std::vector<std::filesystem::path> files = ListRecoveryFiles(harness.GetRecoveryDirectory());
+			REQUIRE(files.size() == 1);
+			file = files[0];
+			header = ReadRecoveryHeader(file);
+			CHECK(header["BaseHash"] == Crypto::ToHex(Sha256::Hash(std::span<const uint8_t>(*saved))));
+			const std::optional<std::string> text = FileSystem::ReadText(file);
+			REQUIRE(text.has_value());
+			body = text->substr(text->find('\n') + 1);
+			CHECK(body.find("During") != std::string::npos);
+			CHECK(body.find("Before") == std::string::npos);
+			// Back to the saved scene: this editor leaves nothing behind.
+			harness.Run("edit.undo");
+			harness.FlushJournal();
+			REQUIRE(ListRecoveryFiles(harness.GetRecoveryDirectory()).empty());
+		}
+
+		// The editor crashed with the journal on disk (an earlier process: another start time): the edit comes back.
+		header["Owner"]["ProcessStartTime"] = header["Owner"]["ProcessStartTime"].get<uint64_t>() + 1;
+		REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(header) + "\n" + body));
+		RecoveryHarness harness(project, false);
+		const nlohmann::json entries = harness.Run("scene.recoveryStatus")["entries"];
+		REQUIRE(entries.size() == 1);
+		CHECK(entries[0]["applicable"] == true);
+		harness.Run("scene.recover", { { "scene", entries[0]["id"] }, { "action", "apply" } });
+		CHECK(harness.Context.GetEditScene()->FindEntityByName("Before"));
+		CHECK(harness.Context.GetEditScene()->FindEntityByName("During"));
 	}
 
 	TEST_CASE("The journal is written a few seconds after edits stop")
@@ -266,7 +348,7 @@ TEST_SUITE("Editor.Recovery")
 		const std::vector<std::filesystem::path> files = ListRecoveryFiles(harness.GetRecoveryDirectory());
 		REQUIRE(files.size() == 1);
 		CHECK(ReadRecoveryHeader(files[0])["Entities"].get<uint64_t>() >= 1);
-		CHECK(harness.Run("editor.status")["recovery"]["journal"]["writes"] == 1);
+		CHECK(harness.Run("editor.status", { { "sections", { "recovery" } } })["recovery"]["journal"]["writes"] == 1);
 	}
 
 	TEST_CASE("A journal of an editor that is gone is offered, also when its process id is this process's")
@@ -336,7 +418,7 @@ TEST_SUITE("Editor.Recovery")
 		CHECK(entry["sceneName"] == "Main");
 		CHECK(entry["discarded"] == true);
 		CHECK(entry["applicable"] == true);
-		CHECK(harness.Run("editor.status")["recovery"]["applicable"] == 1);
+		CHECK(harness.Run("editor.status", { { "sections", { "recovery" } } })["recovery"]["applicable"] == 1);
 
 		CHECK(harness.Snapshot() == saved);
 		const nlohmann::json recovered = harness.Run("scene.recover", { { "scene", "Scenes/Main.stscene" }, { "action", "apply" } });
@@ -671,14 +753,10 @@ TEST_SUITE("Editor.Recovery")
 		undo.RemoveObserver(&recovery);
 	}
 
-	TEST_CASE("The editor offers recovery data when the project opens, and Recover applies it")
+	TEST_CASE("The editor offers recovery data a crash left when the project opens, and Recover applies it")
 	{
 		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryOffer") / "Game";
-		{
-			RecoveryHarness harness(project);
-			harness.Run("entity.create", { { "name", "Recovered" } });
-			harness.Run("project.close", { { "force", true } });
-		}
+		LeaveCrashJournal(project, "Recovered");
 
 		EditorOptions options;
 		options.ProjectPath = project;
@@ -708,6 +786,71 @@ TEST_SUITE("Editor.Recovery")
 		CHECK_FALSE(item->Enabled);
 	}
 
+	TEST_CASE("The editor offers recovery data a crash left once its assets, scanned in the background, are registered")
+	{
+		// As in the editor, the project opens at once and its assets are registered in the background; the recovery scan
+		// follows that scan. The offer as the project opens is made once, so it waits for the entries instead of deciding on
+		// the ones not read yet.
+		Tests::GatedJobSystem jobs; // One background thread, which the gate below holds
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryOfferBackground") / "Game";
+		LeaveCrashJournal(project, "Recovered");
+
+		EditorOptions options;
+		options.ProjectPath = project;
+		std::optional<Tests::HarnessEditor> editor;
+		{
+			Tests::BackgroundGate gate; // Holds the scan's job
+			editor.emplace(Tests::ImGuiHarness::Specification {}, options, std::string(), false, true);
+			editor->Frames(10);
+			REQUIRE(editor->Context().IsScanningAssets());
+			CHECK(editor->Context().GetRecovery().IsScanning());
+			CHECK_FALSE(editor->Layer->GetRecoveryDialog().IsOpen());
+		}
+		// The scan and the start scene take more than the usual ten seconds in CI's Windows Debug build.
+		REQUIRE(editor->FramesUntil([&]() { return editor->Layer->GetRecoveryDialog().IsOpen(); }, std::chrono::minutes(2)));
+		const std::vector<RecoveryEntry>& entries = editor->Context().GetRecovery().GetEntries();
+		REQUIRE(entries.size() == 1);
+		CHECK_MESSAGE(entries[0].Applicable, entries[0].Problem);
+	}
+
+	TEST_CASE("Recovery data a crash left is judged once the project's scan, in the background, registered the scene it belongs to")
+	{
+		Tests::GatedJobSystem jobs; // One background thread, which the gate below holds
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryBackgroundScan") / "Game";
+		LeaveCrashJournal(project, "Recovered");
+
+		// The editor opens the project at once and registers its assets in the background (a scan of 30,000 assets takes
+		// seconds): the scene the data belongs to is unknown until the scan registered it.
+		EditorContextSpecification specification = MakeSpecification();
+		specification.ImportInBackground = true;
+		EditorContext context(specification);
+		{
+			Tests::BackgroundGate gate; // Holds the scan's job
+			std::string error;
+			REQUIRE_MESSAGE(context.BeginOpenProject(project, &error), error); // As the editor does: the start scene follows the scan
+			REQUIRE(context.IsScanningAssets());
+			for (int frame = 0; frame < 10; frame++)
+			{
+				context.Update(Timestep(1.0f / 60.0f));
+				context.GetRecovery().Wait();
+			}
+			// Nothing is judged meanwhile: a scene the registry does not know yet is no scene that left the project.
+			for (const RecoveryEntry& entry : context.GetRecovery().GetEntries())
+				CHECK_MESSAGE(entry.Applicable, entry.Problem);
+		}
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			context.Update(Timestep(1.0f / 60.0f));
+			context.GetRecovery().Wait();
+			return !context.IsScanningAssets() && !context.GetRecovery().IsScanning() && !context.GetRecovery().GetEntries().empty();
+		}, std::chrono::seconds(30)));
+		const std::vector<RecoveryEntry>& entries = context.GetRecovery().GetEntries();
+		REQUIRE(entries.size() == 1);
+		CHECK_MESSAGE(entries[0].Applicable, entries[0].Problem);
+		CHECK(entries[0].ScenePath == "Scenes/Main.stscene");
+		context.CloseProject();
+	}
+
 	TEST_CASE("Recovery data of a scene file hashed in several pieces still applies to it")
 	{
 		// The journal records the hash of the saved document; the scan hashes the file a piece at a time. Both must agree for
@@ -733,11 +876,7 @@ TEST_SUITE("Editor.Recovery")
 	TEST_CASE("Recover asks about the edited scene's own unsaved changes over the dialog, which stays open")
 	{
 		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryOfferAsks") / "Game";
-		{
-			RecoveryHarness harness(project);
-			harness.Run("entity.create", { { "name", "Recovered" } });
-			harness.Run("project.close", { { "force", true } });
-		}
+		LeaveCrashJournal(project, "Recovered");
 
 		EditorOptions options;
 		options.ProjectPath = project;
@@ -1146,9 +1285,39 @@ TEST_SUITE("Editor.Recovery")
 		CHECK(RecoveryDialog::HasOffer(editor.Context()));
 		CHECK_FALSE(RecoveryDialog::HasOffer(editor.Context(), true));
 
-		// Closed with the project and opened again, the discard is what an earlier session left: offered as the project opens.
+		// Closed with the project and opened again, the discard (on purpose) is offered by one toast as the project opens; the
+		// dialog opens only for what editors left behind.
 		editor.Run("project.close", { { "force", true } });
+		editor.Context().GetNotifications().Clear();
 		editor.RunToCompletion("project.open", { { "path", FileSystem::ToUTF8(project) } });
+		REQUIRE(editor.FramesUntil([&]() { return UI::ItemProbe::Find("Toast.0.Recover").has_value(); }));
+		editor.Frames(3);
+		CHECK_FALSE(editor.Layer->GetRecoveryDialog().IsOpen());
+		CHECK(editor.Context().GetNotifications().GetActive().size() == 1);
+		CHECK(RecoveryDialog::HasOffer(editor.Context()));
+		CHECK_FALSE(RecoveryDialog::HasOffer(editor.Context(), true));
+		REQUIRE(editor.Click("Toast.0.Recover"));
+		CHECK(editor.FramesUntil([&]() { return editor.Layer->GetRecoveryDialog().IsOpen(); }));
+	}
+
+	TEST_CASE("A project with changes a crash left and changes discarded on purpose opens the dialog with both")
+	{
+		const std::filesystem::path project = Tests::CreateTemporaryDirectory("RecoveryCrashAndDiscard") / "Game";
+		LeaveCrashJournal(project, "Crashed");
+		{
+			RecoveryHarness harness(project, false);
+			harness.Run("entity.create", { { "name", "Discarded" } });
+			harness.Run("project.close", { { "force", true } });
+		}
+		EditorOptions options;
+		options.ProjectPath = project;
+		Tests::HarnessEditor editor({}, options);
 		REQUIRE(editor.FramesUntil([&]() { return editor.Layer->GetRecoveryDialog().IsOpen(); }));
+		editor.Frames(3);
+		CHECK(UI::ItemProbe::Find("Recovery.Recover.0").has_value());
+		CHECK(UI::ItemProbe::Find("Recovery.Recover.1").has_value());
+		// The dialog offers both: no toast besides.
+		const std::deque<EditorNotification>& notifications = editor.Context().GetNotifications().GetActive();
+		CHECK(std::none_of(notifications.begin(), notifications.end(), [](const EditorNotification& notification) { return notification.ShowRecovery; }));
 	}
 }

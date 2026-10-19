@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -53,8 +54,9 @@ namespace Strata::Tests::Perf
 	BoxStacks CreateBoxStacks(Scene& scene, size_t count, uint32_t height = c_BoxStackHeight);
 #endif
 
-	// A primary camera looking toward the origin and a directional light, as a scene opened in the editor has.
-	void AddCameraAndLight(Scene& scene);
+	// A primary camera looking toward the origin and a directional light, as a scene opened in the editor has; the light's
+	// shadows reach `shadowDistance` from the camera (DirectionalLightComponent::ShadowDistance; its default when not given).
+	void AddCameraAndLight(Scene& scene, std::optional<float> shadowDistance = std::nullopt);
 
 	// Spacing of the generated grids (CreateCubeGrid, CreatePointLightGrid): the unit cubes leave a unit of space between
 	// them.
@@ -69,6 +71,19 @@ namespace Strata::Tests::Perf
 	// `count` point lights ("Light") of `range` on the same kind of grid, `height` above the ground; children of a valid
 	// `parent`, otherwise roots.
 	std::vector<Entity> CreatePointLightGrid(Scene& scene, size_t count, float range, float height = 2.0f, Entity parent = {});
+
+	// The game UI's scaling scene: one canvas ("Widgets", ScaleWithScreen at 1920x1080) holding `panels` panels ("Panel",
+	// anchored on a square grid, each a vertical layout group with a background image) of `buttons` buttons each ("Button":
+	// an image, a selectable and a button, with a "Label" child stretched over it whose text has 8 to 12 characters). With
+	// the defaults, 10,001 elements. With `fitContent`, every button and label fits its content.
+	struct UIWidgets
+	{
+		Entity Canvas;
+		std::vector<Entity> Panels;
+		std::vector<Entity> Buttons; // Panel by panel
+		std::vector<Entity> Labels;  // Of the buttons, in order
+	};
+	UIWidgets CreateUIWidgets(Scene& scene, uint32_t panels = 400, uint32_t buttons = 12, bool fitContent = false);
 
 	// The job system as the editor and games start it (a worker per hardware thread but one), for the lifetime of this
 	// object: large scene updates spread over it, so measurements of generated scenes run with it.

@@ -2385,6 +2385,257 @@ namespace Strata
 		}
 
 		////////////////////////////////////////////////////////////////////////////////
+		// Game UI
+		////////////////////////////////////////////////////////////////////////////////
+
+		// The scene's game UI (Scene/SceneServices.h), reporting when the scene plays without it.
+		IUIControl* RequireUI(ScriptSystem& system, const char* function)
+		{
+			IUIControl* ui = system.GetScene().GetService<IUIControl>();
+			if (!ui)
+				system.ReportProblem(function, "the scene plays without the game UI");
+			return ui;
+		}
+
+		// Runs an element function of the game UI on an entity the script names; the service's reason is reported when it
+		// fails.
+		template<typename Result, typename Action>
+		Result ControlUIElement(StrataScriptContext* context, StrataScriptEntityID entity, const char* function, Result failure, Action&& action)
+		{
+			return HostCall(function, failure, [&]() -> Result
+			{
+				ScriptSystem* system = ResolveContext(context, function);
+				IUIControl* ui = system ? RequireUI(*system, function) : nullptr;
+				const Entity element = ui ? RequireEntity(*system, entity, function) : Entity();
+				if (!element)
+					return failure;
+				std::string error;
+				std::optional<Result> result = action(*ui, element, error);
+				if (!result)
+				{
+					system->ReportProblem(function, error);
+					return failure;
+				}
+				return *result;
+			});
+		}
+
+		uint64_t HostUIGetText(StrataScriptContext* context, StrataScriptEntityID entity, char* buffer, uint64_t capacity)
+		{
+			return ControlUIElement(context, entity, "UIGetText", uint64_t(0), [&](IUIControl& ui, Entity element, std::string& error) -> std::optional<uint64_t>
+			{
+				std::string text;
+				if (!ui.GetText(element, text, &error))
+					return std::nullopt;
+				return CopyText(text, buffer, capacity);
+			});
+		}
+
+		bool HostUISetText(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptString text)
+		{
+			return ControlUIElement(context, entity, "UISetText", false, [&](IUIControl& ui, Entity element, std::string& error) -> std::optional<bool>
+			{
+				if (!ui.SetText(element, ScriptStringView(text), &error))
+					return std::nullopt;
+				return true;
+			});
+		}
+
+		StrataScriptAssetHandle HostUIGetImage(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlUIElement(context, entity, "UIGetImage", StrataScriptAssetHandle(0), [&](IUIControl& ui, Entity element, std::string& error)
+				-> std::optional<StrataScriptAssetHandle>
+			{
+				AssetHandle texture;
+				if (!ui.GetImage(element, texture, &error))
+					return std::nullopt;
+				return static_cast<StrataScriptAssetHandle>(static_cast<uint64_t>(texture));
+			});
+		}
+
+		bool HostUISetImage(StrataScriptContext* context, StrataScriptEntityID entity, StrataScriptAssetHandle texture)
+		{
+			return ControlUIElement(context, entity, "UISetImage", false, [&](IUIControl& ui, Entity element, std::string& error) -> std::optional<bool>
+			{
+				if (!ui.SetImage(element, AssetHandle(texture), &error))
+					return std::nullopt;
+				return true;
+			});
+		}
+
+		bool HostUIGetColor(StrataScriptContext* context, StrataScriptEntityID entity, float outColor[4])
+		{
+			return ControlUIElement(context, entity, "UIGetColor", false, [&](IUIControl& ui, Entity element, std::string& error) -> std::optional<bool>
+			{
+				if (!outColor)
+				{
+					error = "the output pointer is null";
+					return std::nullopt;
+				}
+				glm::vec4 color(0.0f);
+				if (!ui.GetColor(element, color, &error))
+					return std::nullopt;
+				for (int index = 0; index < 4; index++)
+					outColor[index] = color[index];
+				return true;
+			});
+		}
+
+		bool HostUISetColor(StrataScriptContext* context, StrataScriptEntityID entity, const float color[4])
+		{
+			return ControlUIElement(context, entity, "UISetColor", false, [&](IUIControl& ui, Entity element, std::string& error) -> std::optional<bool>
+			{
+				if (!color)
+				{
+					error = "the color pointer is null";
+					return std::nullopt;
+				}
+				if (!ui.SetColor(element, glm::vec4(color[0], color[1], color[2], color[3]), &error))
+					return std::nullopt;
+				return true;
+			});
+		}
+
+		bool HostUIIsInteractable(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlUIElement(context, entity, "UIIsInteractable", false, [&](IUIControl& ui, Entity element, std::string& error) -> std::optional<bool>
+			{
+				bool interactable = false;
+				if (!ui.IsInteractable(element, interactable, &error))
+					return std::nullopt;
+				return interactable;
+			});
+		}
+
+		bool HostUISetInteractable(StrataScriptContext* context, StrataScriptEntityID entity, bool interactable)
+		{
+			return ControlUIElement(context, entity, "UISetInteractable", false, [&](IUIControl& ui, Entity element, std::string& error) -> std::optional<bool>
+			{
+				if (!ui.SetInteractable(element, interactable, &error))
+					return std::nullopt;
+				return true;
+			});
+		}
+
+		float HostUIGetValue(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return ControlUIElement(context, entity, "UIGetValue", 0.0f, [&](IUIControl& ui, Entity element, std::string& error) -> std::optional<float>
+			{
+				float value = 0.0f;
+				if (!ui.GetValue(element, value, &error))
+					return std::nullopt;
+				return value;
+			});
+		}
+
+		bool HostUISetValue(StrataScriptContext* context, StrataScriptEntityID entity, float value)
+		{
+			return ControlUIElement(context, entity, "UISetValue", false, [&](IUIControl& ui, Entity element, std::string& error) -> std::optional<bool>
+			{
+				if (!ui.SetValue(element, value, &error))
+					return std::nullopt;
+				return true;
+			});
+		}
+
+		StrataScriptEntityID HostUIGetFocus(StrataScriptContext* context)
+		{
+			return HostCall("UIGetFocus", StrataScriptEntityID(0), [&]() -> StrataScriptEntityID
+			{
+				ScriptSystem* system = ResolveContext(context, "UIGetFocus");
+				IUIControl* ui = system ? RequireUI(*system, "UIGetFocus") : nullptr;
+				const Entity focused = ui ? ui->GetFocus() : Entity();
+				return focused ? static_cast<uint64_t>(focused.GetUUID()) : 0;
+			});
+		}
+
+		bool HostUISetFocus(StrataScriptContext* context, StrataScriptEntityID entity)
+		{
+			return HostCall("UISetFocus", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "UISetFocus");
+				IUIControl* ui = system ? RequireUI(*system, "UISetFocus") : nullptr;
+				if (!ui)
+					return false;
+				// 0 clears the focus; other ids must name an entity.
+				const Entity selectable = entity != 0 ? RequireEntity(*system, entity, "UISetFocus") : Entity();
+				if (entity != 0 && !selectable)
+					return false;
+				std::string error;
+				if (ui->SetFocus(selectable, &error))
+					return true;
+				system->ReportProblem("UISetFocus", error);
+				return false;
+			});
+		}
+
+		bool HostUIIsPointerOverUI(StrataScriptContext* context)
+		{
+			return HostCall("UIIsPointerOverUI", false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "UIIsPointerOverUI");
+				// A scene without the game UI has no UI under the pointer: an answer, not misuse.
+				IUIControl* ui = system ? system->GetScene().GetService<IUIControl>() : nullptr;
+				return ui && ui->IsPointerOverUI();
+			});
+		}
+
+		template<typename Query>
+		bool QueryUIAction(StrataScriptContext* context, uint32_t action, const char* function, Query&& query)
+		{
+			return HostCall(function, false, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, function);
+				if (!system)
+					return false;
+				if (action > StrataScriptUIAction_Right)
+				{
+					system->ReportProblem(function, fmt::format("{} is not a UI action (0 to {})", action, static_cast<uint32_t>(StrataScriptUIAction_Right)));
+					return false;
+				}
+				IUIControl* ui = system->GetScene().GetService<IUIControl>();
+				return ui && query(*ui);
+			});
+		}
+
+		bool HostUIIsActionPressed(StrataScriptContext* context, uint32_t action)
+		{
+			return QueryUIAction(context, action, "UIIsActionPressed", [action](IUIControl& ui) { return ui.IsActionPressed(action); });
+		}
+
+		bool HostUIIsActionDown(StrataScriptContext* context, uint32_t action)
+		{
+			return QueryUIAction(context, action, "UIIsActionDown", [action](IUIControl& ui) { return ui.IsActionDown(action); });
+		}
+
+		float HostGetUnscaledDeltaTime(StrataScriptContext* context)
+		{
+			return HostCall("GetUnscaledDeltaTime", 0.0f, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "GetUnscaledDeltaTime");
+				return system ? system->GetScene().GetUnscaledDeltaTime() : 0.0f;
+			});
+		}
+
+		double HostGetRealTime(StrataScriptContext* context)
+		{
+			return HostCall("GetRealTime", 0.0, [&]()
+			{
+				ScriptSystem* system = ResolveContext(context, "GetRealTime");
+				return system ? system->GetScene().GetUnscaledTime() : 0.0;
+			});
+		}
+
+		uint64_t HostGetTypedText(StrataScriptContext* context, char* buffer, uint64_t capacity)
+		{
+			return HostCall("GetTypedText", uint64_t(0), [&]() -> uint64_t
+			{
+				ScriptSystem* system = ResolveContext(context, "GetTypedText");
+				return system ? CopyText(Input::GetTypedText(), buffer, capacity) : 0;
+			});
+		}
+
+		////////////////////////////////////////////////////////////////////////////////
 		// World streaming
 		////////////////////////////////////////////////////////////////////////////////
 
@@ -2615,6 +2866,24 @@ namespace Strata
 	X(PhysicsSetLayersCollide) \
 	X(PhysicsGetLayersCollide) \
 	X(PhysicsGetLayerIndex) \
+	X(UIGetText) \
+	X(UISetText) \
+	X(UIGetImage) \
+	X(UISetImage) \
+	X(UIGetColor) \
+	X(UISetColor) \
+	X(UIIsInteractable) \
+	X(UISetInteractable) \
+	X(UIGetValue) \
+	X(UISetValue) \
+	X(UIGetFocus) \
+	X(UISetFocus) \
+	X(UIIsPointerOverUI) \
+	X(UIIsActionPressed) \
+	X(UIIsActionDown) \
+	X(GetUnscaledDeltaTime) \
+	X(GetRealTime) \
+	X(GetTypedText) \
 	X(WorldRequestCellsAround) \
 	X(WorldReleaseCells) \
 	X(WorldIsLoadedAround) \

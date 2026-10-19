@@ -9,6 +9,7 @@
 #include "Strata/Runtime/FramePerfLog.h"
 #include "TestHelpers.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -218,7 +219,7 @@ TEST_SUITE("Runtime.FramePerfLog")
 		CHECK(columns[columns.size() - 3] == "WorldCellsWanted");
 		CHECK(columns[columns.size() - 2] == "Unwritten");
 		CHECK(columns.back() == "Pressure");
-		CHECK(columns[columns.size() - 5] == "PeakPrivateMB"); // After every built-in column
+		CHECK(columns[columns.size() - 5] == "GPUBusyMs"); // After every built-in column
 
 		for (; frames < 3; frames++)
 		{
@@ -267,5 +268,122 @@ TEST_SUITE("Runtime.FramePerfLog")
 		twice.Columns.push_back(FramePerfColumnGroup { { "Cells", "Cells" }, nullptr });
 		CHECK_FALSE(FramePerfLog::Create(path, profiler, twice, &error));
 		CHECK(error.find("named twice") != std::string::npos);
+	}
+
+	TEST_CASE("A perf log created after the modules registered has a column for every scene system and for the GPU")
+	{
+		// The process's profiler: the renderer module registered its GPU stages there, and no scene has run the Animation
+		// system yet in this test.
+		const std::filesystem::path path = CreateTemporaryDirectory("PerfLogColumns") / "Frames.csv";
+		std::string error;
+		Scope<FramePerfLog> log = FramePerfLog::Create(path, FrameProfiler::Get(), {}, &error);
+		REQUIRE_MESSAGE(log, error);
+		const std::vector<std::string>& columns = log->GetColumns();
+		const auto has = [&columns](const char* name) { return std::find(columns.begin(), columns.end(), name) != columns.end(); };
+		for (const char* column : { "Scene.Scripts", "Scene.Physics", "Scene.Animation", "Scene.Audio", "GPU.Uploads", "GPU.Setup", "GPU.Shadows", "GPU.Prepass",
+			"GPU.AO", "GPU.Opaque", "GPU.Transparent", "GPU.Post", "GPU.Overlays", "GPUFrame", "GPUBusyMs" })
+		{
+			CAPTURE(column);
+			CHECK(has(column));
+		}
+		// The new columns come after every one that existed before them.
+		const auto position = [&columns](const char* name) { return std::find(columns.begin(), columns.end(), name) - columns.begin(); };
+		CHECK(position("PeakPrivateMB") + 1 == position("GPUFrame"));
+		CHECK(position("GPUFrame") + 1 == position("GPUBusyMs"));
+		CHECK(log->Close(&error));
+	}
+
+	TEST_CASE("Rows carry their own frame's GPU times, written once they arrived")
+	{
+		int64_t time = 0;
+		FrameProfilerSpecification specification;
+		specification.Clock = [&time]() { return time; };
+		specification.SampleJobs = false;
+		FrameProfiler profiler(specification);
+		const FrameStageID shadows = profiler.RegisterStage("GPU.Shadows", false, FrameStageKind::GPU);
+		const FrameStageID opaque = profiler.RegisterStage("GPU.Opaque", false, FrameStageKind::GPU);
+		const FrameStageID input = profiler.FindStage("Input");
+		profiler.SetGPUTimesExpected(true);
+
+		const std::filesystem::path path = CreateTemporaryDirectory("PerfLogGPU") / "Frames.csv";
+		std::string error;
+		// A column group's values are captured with the frame too, not when its row is written frames later.
+		uint64_t capturing = 0;
+		FramePerfLogSpecification columns;
+		columns.Columns.push_back(FramePerfColumnGroup { { "CapturedFrame" }, [&](FramePerfRow& row) { row.Add(static_cast<double>(capturing), 0); } });
+		Scope<FramePerfLog> log = FramePerfLog::Create(path, profiler, columns, &error);
+		REQUIRE_MESSAGE(log, error);
+		// Captured as frames end, written once their GPU times are known.
+		AssetManagerStats assets;
+		const uint32_t capture = profiler.AddFrameListener([&](const FrameSample& frame)
+		{
+			assets.LoadingAssets = static_cast<uint32_t>(frame.Index) + 10;
+			capturing = frame.Index;
+			log->CaptureFrame(frame, &assets);
+		});
+		const uint32_t write = profiler.AddFrameListener([&](const FrameSample& frame) { CHECK(log->WriteFrame(frame)); }, FrameListenerTiming::WithGPU);
+
+		// Frame f's GPU times arrive two frames later: shadows f + 1 ms, opaque 2 ms; frame 2's never arrive.
+		constexpr int c_Frames = 6;
+		for (int frame = 0; frame < c_Frames; frame++)
+		{
+			profiler.BeginFrame();
+			{
+				const FrameStageScope stage(profiler, input);
+				time += 1'000'000 * (frame + 1);
+			}
+			if (frame >= 2 && frame - 2 != 2)
+			{
+				const std::vector<GPUStageTime> times = { { shadows, static_cast<float>(frame - 2) + 1.0f }, { opaque, 2.0f } };
+				REQUIRE(profiler.RecordGPUFrame(static_cast<uint64_t>(frame - 2), times));
+			}
+			profiler.EndFrame(0.010);
+			time += 10'000'000;
+		}
+		CHECK(log->GetRowCount() == 2); // Frames 0 and 1; frame 2 waits for its times
+		// A stage registered after the header: no column, and a warning naming it.
+		profiler.RegisterStage("Late.Stage");
+		profiler.FlushGPUListeners();
+		CHECK(log->GetRowCount() == c_Frames);
+		profiler.RemoveFrameListener(capture);
+		profiler.RemoveFrameListener(write);
+		REQUIRE_MESSAGE(log->Close(&error), error);
+
+		const std::optional<PerfLogTable> table = ReadPerfLog(path, error);
+		REQUIRE_MESSAGE(table, error);
+		REQUIRE_MESSAGE(ValidatePerfLog(*table, c_Frames, error), error);
+		const std::optional<size_t> inputColumn = table->FindColumn("Input");
+		const std::optional<size_t> shadowsColumn = table->FindColumn("GPU.Shadows");
+		const std::optional<size_t> opaqueColumn = table->FindColumn("GPU.Opaque");
+		const std::optional<size_t> gpuFrameColumn = table->FindColumn("GPUFrame");
+		const std::optional<size_t> busyColumn = table->FindColumn("GPUBusyMs");
+		const std::optional<size_t> loadingColumn = table->FindColumn("LoadingAssets");
+		const std::optional<size_t> groupColumn = table->FindColumn("CapturedFrame");
+		REQUIRE((inputColumn && shadowsColumn && opaqueColumn && gpuFrameColumn && busyColumn && loadingColumn && groupColumn));
+		CHECK(*groupColumn == *busyColumn + 1);
+		CHECK_FALSE(table->FindColumn("Late.Stage"));
+		for (size_t row = 0; row < table->Rows.size(); row++)
+		{
+			CAPTURE(row);
+			const std::vector<double>& values = table->Rows[row];
+			CHECK(values[0] == static_cast<double>(row));
+			// The CPU columns and the captured ones are the row's own frame's.
+			CHECK(values[*inputColumn] == doctest::Approx(static_cast<double>(row + 1)));
+			CHECK(values[*loadingColumn] == static_cast<double>(row + 10));
+			CHECK(values[*groupColumn] == static_cast<double>(row));
+			const bool hasGPU = row < 4 && row != 2; // Frames 4 and 5 were flushed before their times came
+			CHECK(values[*gpuFrameColumn] == (hasGPU ? 1.0 : 0.0));
+			if (hasGPU)
+			{
+				CHECK(values[*shadowsColumn] == doctest::Approx(static_cast<double>(row) + 1.0));
+				CHECK(values[*opaqueColumn] == doctest::Approx(2.0));
+				CHECK(values[*busyColumn] == doctest::Approx(static_cast<double>(row) + 3.0));
+			}
+			else
+			{
+				CHECK(std::isnan(values[*shadowsColumn]));
+				CHECK(std::isnan(values[*busyColumn]));
+			}
+		}
 	}
 }

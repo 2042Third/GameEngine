@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Strata/Core/Base.h"
+#include "Strata/Renderer/FontFace.h"
 #include "Strata/Renderer/FontValidation.h"
 
 #include <glm/glm.hpp>
@@ -8,7 +9,6 @@
 
 #include <cstdint>
 #include <limits>
-#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -17,14 +17,8 @@ namespace Strata
 {
 
 	class Font;
-
-	// Vertical font metrics in em units (font size 1), +Y up from the baseline.
-	struct FontMetrics
-	{
-		float Ascent = 0.8f;
-		float Descent = -0.2f; // Negative: below the baseline
-		float LineHeight = 1.2f; // Baseline to baseline
-	};
+	struct ShapedText;
+	struct TextLayout;
 
 	struct GlyphInfo
 	{
@@ -63,7 +57,8 @@ namespace Strata
 
 	// Signed distance field glyph atlas of one font, filled on demand. Each glyph is rasterized once at a fixed size as a
 	// distance field (crisp when scaled up or down) into a page of a single-channel texture array. Characters the font
-	// lacks use its missing-glyph shape. Main thread only.
+	// lacks use its missing-glyph shape. The glyph metrics come from the font's face (FontFace), which text layout uses
+	// without an atlas; the atlas places and rasterizes. Main thread only.
 	//
 	// Pages are grids of square cells; a glyph takes one cell, or a block of cells when it is larger. Memory stays bounded:
 	// when no cells are free and no page can be added, the least recently used glyphs that were not used in the current
@@ -73,8 +68,8 @@ namespace Strata
 	class FontAtlas
 	{
 	public:
-		static constexpr float c_GlyphEmSize = 32.0f; // Atlas texels per em
-		static constexpr int c_DistancePadding = 4;   // Texels of distance field around each glyph shape
+		static constexpr float c_GlyphEmSize = FontFace::c_GlyphEmSize;       // Atlas texels per em
+		static constexpr int c_DistancePadding = FontFace::c_DistancePadding; // Texels of distance field around each glyph shape
 		static constexpr uint32_t c_PageSize = 512;
 		// Cells hold glyphs up to one texel smaller (the empty gutter keeps filtering from bleeding between glyphs): shapes
 		// of about one em, such as Latin letters and CJK ideographs, take one cell.
@@ -86,16 +81,16 @@ namespace Strata
 		// included) or costlier than c_MaxGlyphRasterCost (four times TextRenderer's frame budget) are rasterized at half
 		// or a quarter of the resolution, and beyond that not drawn: a malformed font cannot make the rasterizer allocate
 		// or compute without bound. Among the vendored fonts only a few dozen emoji are drawn at reduced resolution.
-		static constexpr uint64_t c_MaxGlyphTexels = 192;
-		static constexpr uint64_t c_MaxGlyphRasterCost = 2 * 1024 * 1024;
-		static constexpr uint32_t c_MaxResolutionReduction = 4;
-		static constexpr uint64_t c_CurveCostWeight = 2; // Extra cost of a curve vertex over a line vertex
-		// BeginFrame drops cached glyphs that are not in the atlas, and the code point cache, beyond this many entries; the
-		// kerning cache is cleared when it reaches it.
+		static constexpr uint64_t c_MaxGlyphTexels = FontFace::c_MaxGlyphTexels;
+		static constexpr uint64_t c_MaxGlyphRasterCost = FontFace::c_MaxGlyphRasterCost;
+		static constexpr uint32_t c_MaxResolutionReduction = FontFace::c_MaxResolutionReduction;
+		static constexpr uint64_t c_CurveCostWeight = FontFace::c_CurveCostWeight; // Extra cost of a curve vertex over a line vertex
+		// BeginFrame drops cached glyphs that are not in the atlas beyond this many entries; the kerning cache is cleared
+		// when it reaches it.
 		static constexpr size_t c_GlyphCacheLimit = 4096;
 
 		// The cost of rasterizing a glyph of `shape` into a distance field of `size` texels (see GlyphRasterBudget::Cost).
-		static uint64_t GetRasterCost(const glm::uvec2& size, const GlyphShapeCost& shape);
+		static uint64_t GetRasterCost(const glm::uvec2& size, const GlyphShapeCost& shape) { return FontFace::GetRasterCost(size, shape); }
 
 		// Null (with an error) when the font data cannot be read.
 		static Scope<FontAtlas> Create(const Ref<Font>& font, std::string* outError = nullptr, const FontAtlasSpecification& specification = {});
@@ -104,8 +99,11 @@ namespace Strata
 		FontAtlas(const FontAtlas&) = delete;
 		FontAtlas& operator=(const FontAtlas&) = delete;
 
+		// Unique in the process, so that users can tell atlases apart (a new atlas may reuse an address).
+		uint64_t GetId() const { return m_Id; }
 		const Ref<Font>& GetFont() const { return m_Font; }
-		const FontMetrics& GetMetrics() const { return m_Metrics; }
+		const FontFace& GetFace() const { return *m_Face; }
+		const FontMetrics& GetMetrics() const { return m_Face->GetMetrics(); }
 
 		// Starts a frame: glyphs returned from now on are not evicted until the next BeginFrame, and the references to them
 		// stay valid until then.
@@ -118,9 +116,17 @@ namespace Strata
 		const GlyphInfo& GetGlyph(uint32_t codepoint);
 		// A glyph by its index in the font (out of range: the missing glyph).
 		const GlyphInfo& GetGlyphByIndex(uint32_t glyphIndex);
-		// Extra advance between two glyphs (kerning), in em units. Cached per glyph pair: stb_truetype searches the font's
-		// kerning tables on every call.
-		float GetKerning(const GlyphInfo& left, const GlyphInfo& right);
+		// Extra advance between two glyphs (kerning), in em units. Cached per glyph pair: the font's tables are searched on
+		// every uncached call (FontFace::ComputeKerning).
+		float GetKerning(const GlyphInfo& left, const GlyphInfo& right) { return GetKerning(left.GlyphIndex, right.GlyphIndex); }
+		float GetKerning(uint32_t leftGlyph, uint32_t rightGlyph);
+
+		// The quads of shaped text (ShapeText): its glyphs that are in the atlas, rasterizing those that are not yet as the
+		// budget allows; the others are counted as pending.
+		void Resolve(const ShapedText& text, TextLayout& outLayout);
+		// Changes whenever a glyph is placed in the atlas or evicted from it, so that what refers to glyph placements (the
+		// game UI's glyph table) is updated only when they changed.
+		uint64_t GetPlacementVersion() const { return m_PlacementVersion; }
 
 		// Creates the GPU texture array or uploads what changed since the last upload. False when a texture cannot be
 		// created (the changes then stay pending).
@@ -138,8 +144,7 @@ namespace Strata
 		struct GlyphEntry
 		{
 			GlyphInfo Info;
-			glm::uvec2 Size = glm::uvec2(0); // Distance field texels of a glyph with a shape
-			float Scale = 0.0f;              // Font units to texels: the atlas's, or reduced for costly glyphs
+			glm::uvec2 Size = glm::uvec2(0); // Distance field texels of a glyph with a shape (FontGlyphMetrics::Size)
 			uint64_t Cost = 0;
 			uint64_t LastUsed = 0;           // Frame
 		};
@@ -170,16 +175,12 @@ namespace Strata
 		void Evict(uint32_t glyphIndex);
 		void MarkDirty(Page& page, uint32_t firstRow, uint32_t rowCount);
 	private:
-		struct FontInfo;
-
+		uint64_t m_Id = 0;
 		Ref<Font> m_Font;
+		const FontFace* m_Face = nullptr; // The font's (Font::GetFace), alive as long as the font
 		FontAtlasSpecification m_Specification;
-		std::unique_ptr<FontInfo> m_Info; // stb_truetype state (kept out of the header)
-		float m_Scale = 1.0f;             // Font units to atlas texels
-		float m_EmScale = 1.0f;           // Font units to em
-		FontMetrics m_Metrics;
+		uint64_t m_PlacementVersion = 0;
 
-		std::unordered_map<uint32_t, uint32_t> m_CodepointGlyphs; // Code point -> glyph index
 		std::unordered_map<uint32_t, float> m_Kerning;            // Glyph pair (left << 16 | right) -> kerning
 		std::unordered_map<uint32_t, GlyphEntry> m_Glyphs;        // Glyph index -> glyph
 		std::vector<Page> m_Pages;

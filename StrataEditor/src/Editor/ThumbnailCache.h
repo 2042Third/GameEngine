@@ -20,6 +20,7 @@
 namespace Strata
 {
 
+	class AnimationPreview;
 	class EditorAssetManager;
 	class Scene;
 	class SceneRenderer;
@@ -98,7 +99,8 @@ namespace Strata
 		static constexpr uint32_t c_MaxPreviewSize = 512;
 		// Part of the cache files' key: bump it when thumbnails would look different (rendering or decoding changed), so that
 		// cached ones are made again.
-		static constexpr uint32_t c_Version = 1;
+		// 2: skinned meshes stand in their skeleton's rest pose; 3: wave 4's renderer (the shadow bias, size culling).
+		static constexpr uint32_t c_Version = 3;
 
 		ThumbnailCache(const Ref<EditorAssetManager>& assets, ThumbnailCacheSpecification specification);
 		~ThumbnailCache();
@@ -178,6 +180,8 @@ namespace Strata
 			bool IsPreview = false;  // The large preview, not a thumbnail
 			AssetGroupRequest Loads;
 			Ref<Scene> World; // The asset, alone under the preview lighting
+			// Its animators' rest poses (declared after World, which it serves: it goes first).
+			Scope<AnimationPreview> Poses;
 			bool Built = false;
 			uint32_t Frames = 0;
 			uint32_t QuietFrames = 0;

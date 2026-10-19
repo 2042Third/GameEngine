@@ -47,6 +47,15 @@ namespace Strata
 
 	void UndoStack::Push(Scope<EditorAction> action)
 	{
+		if (m_Group)
+		{
+			// Applied already: the observer hears it now, the history gets it with the group.
+			m_Version++;
+			const EditorAction& added = *action;
+			m_Group->Add(std::move(action));
+			NotifyApplied(added, false);
+			return;
+		}
 		m_RecordCount++;
 		m_Version++;
 		// Recording after undoing discards the undone actions; a save point among them becomes unreachable.
@@ -85,6 +94,8 @@ namespace Strata
 			// A save point before the dropped step stays at the front when that step did not change the scene (a material
 			// edit): the scene there is the saved one. After a dropped scene edit, the saved scene can no longer be reached.
 			const bool dropsSceneChange = m_Entries.front().Action->ChangesScene();
+			if (dropsSceneChange)
+				m_SceneTrims++;
 			m_Entries.pop_front();
 			m_Position--;
 			if (m_SavedPosition == 0)
@@ -94,8 +105,62 @@ namespace Strata
 		}
 	}
 
+	bool UndoStack::BeginGroup(std::string name)
+	{
+		if (m_Group)
+			return false;
+		m_Group = CreateScope<EditorActionGroup>(name);
+		m_GroupName = std::move(name);
+		return true;
+	}
+
+	bool UndoStack::EndGroup()
+	{
+		if (!m_Group)
+			return false;
+		Scope<EditorActionGroup> group = std::move(m_Group);
+		m_Group.reset();
+		if (group->IsEmpty())
+			return false;
+		// A step of its own, after whatever came before it; the observer heard its actions as they were applied.
+		m_MergeBroken = true;
+		std::vector<UndoStackObserver*> observers;
+		observers.swap(m_Observers);
+		Push(std::move(group));
+		m_Observers.swap(observers);
+		m_MergeBroken = true;
+		return true;
+	}
+
+	bool UndoStack::CancelGroup(std::string* outError)
+	{
+		if (!m_Group)
+			return true;
+		if (m_Group->IsEmpty())
+		{
+			m_Group.reset();
+			return true;
+		}
+		if (!m_Group->Undo(outError))
+		{
+			// Still applied: kept as the group's step, so that undo can try again once what blocks it is gone.
+			EndGroup();
+			return false;
+		}
+		m_Version++;
+		NotifyApplied(*m_Group, true);
+		m_Group.reset();
+		return true;
+	}
+
 	bool UndoStack::Undo(std::string* outError)
 	{
+		if (m_Group)
+		{
+			if (outError)
+				*outError = "Undo is not available while a batch runs (editor.batch makes its steps one undo step)";
+			return false;
+		}
 		if (!CanUndo())
 		{
 			if (outError)
@@ -122,6 +187,12 @@ namespace Strata
 
 	bool UndoStack::Redo(std::string* outError)
 	{
+		if (m_Group)
+		{
+			if (outError)
+				*outError = "Redo is not available while a batch runs (editor.batch makes its steps one undo step)";
+			return false;
+		}
 		if (!CanRedo())
 		{
 			if (outError)
@@ -151,7 +222,7 @@ namespace Strata
 
 	bool UndoStack::GoTo(size_t position)
 	{
-		if (position > m_Entries.size())
+		if (position > m_Entries.size() || m_Group)
 			return false;
 		while (m_Position > position)
 		{
@@ -204,6 +275,26 @@ namespace Strata
 		m_Version++;
 	}
 
+	UndoStack::SavePoint UndoStack::GetSavePoint() const
+	{
+		return SavePoint { m_Position, GetLatestSerial(), m_Generation, m_SceneTrims };
+	}
+
+	void UndoStack::MarkSaved(const SavePoint& point)
+	{
+		if (point.Generation != m_Generation)
+			return;
+		m_Version++;
+		if (point.Serial == 0)
+		{
+			// The state before every action: still the front of the history unless a scene change was trimmed off it since.
+			m_SavedPosition = point.SceneTrims == m_SceneTrims ? 0 : c_NoSavePoint;
+			return;
+		}
+		const std::optional<size_t> index = FindSerial(point.Serial);
+		m_SavedPosition = index ? *index + 1 : c_NoSavePoint;
+	}
+
 	bool UndoStack::IsModified() const
 	{
 		// A save point that was trimmed or discarded can no longer be reached: whatever lies between is unknown.
@@ -221,11 +312,16 @@ namespace Strata
 
 	void UndoStack::Clear()
 	{
+		// What an open group collected belongs to the history that goes.
+		if (m_Group)
+			m_Group = CreateScope<EditorActionGroup>(m_GroupName);
 		m_Entries.clear();
 		m_Position = 0;
 		m_SavedPosition = 0;
 		m_MergeBroken = true;
 		m_Version++;
+		m_Generation++;
+		m_SceneTrims = 0;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////

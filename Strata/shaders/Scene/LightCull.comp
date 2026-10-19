@@ -1,0 +1,68 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "Include/Lights.glsl"
+
+// The first of the GPU's light culling passes: one thread per light record tests whether the light is drawn and its
+// bounding sphere reaches the view's frustum (camera-relative, as Frustum::IsSphereVisible tests on the CPU path), and each
+// work group counts its visible lights (and adds its drawn ones to the frame's counters). Scene/LightCompact.comp then
+// packs them, in record order.
+
+layout(local_size_x = ST_LIGHT_GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_UAV(1), std430) writeonly buffer LightVisibleBuffer
+{
+	uint o_LightVisible[];
+};
+layout(set = 0, binding = ST_UAV(2), std430) writeonly buffer LightGroupCountBuffer
+{
+	uint o_LightGroupCounts[];
+};
+layout(set = 0, binding = ST_UAV(6), std430) buffer CounterBuffer
+{
+	uint u_Counters[];
+};
+
+shared uint s_Visible;
+shared uint s_Drawn;
+
+void main()
+{
+	uint record = gl_GlobalInvocationID.x;
+	if (gl_LocalInvocationIndex == 0u)
+	{
+		s_Visible = 0u;
+		s_Drawn = 0u;
+	}
+	barrier();
+
+	bool visible = false;
+	bool drawn = false;
+	if (record < u_LightCull.RecordCount)
+	{
+		LightRecord light = u_LightRecords[record];
+		drawn = light.SpotAngles.z != 0.0;
+		if (drawn)
+		{
+			vec3 center = light.Bounds.xyz - u_Frame.CameraPosition.xyz;
+			visible = true;
+			for (int plane = 0; plane < 6; plane++)
+			{
+				if (dot(u_LightCull.Planes[plane].xyz, center) + u_LightCull.Planes[plane].w < -light.Bounds.w)
+					visible = false;
+			}
+		}
+		o_LightVisible[record] = visible ? 1u : 0u;
+	}
+	if (visible)
+		atomicAdd(s_Visible, 1u);
+	if (drawn)
+		atomicAdd(s_Drawn, 1u);
+	barrier();
+	if (gl_LocalInvocationIndex == 0u)
+	{
+		o_LightGroupCounts[gl_WorkGroupID.x] = s_Visible;
+		if (s_Drawn > 0u)
+			atomicAdd(u_Counters[ST_COUNTER_DRAWN_LIGHTS], s_Drawn);
+	}
+}

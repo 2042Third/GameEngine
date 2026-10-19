@@ -6,16 +6,53 @@
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/PrefabInstances.h>
+#include <Strata/Scene/PrefabOverrides.h>
 #include <Strata/Scene/Scene.h>
 
 #include <algorithm>
+#include <cmath>
 #include <set>
 #include <utility>
 
 namespace Strata
 {
+
+	namespace
+	{
+
+		// How close an instance root's Scale must be to a model's import scale to be taken for it (relative).
+		constexpr float c_ImportScaleTolerance = 1.0e-5f;
+
+		// The Scale of a template root in a snapshot (its Transform's), or nullopt when the snapshot lacks it.
+		std::optional<glm::vec3> FindTemplateRootScale(const nlohmann::json& snapshot, UUID templateRoot)
+		{
+			const nlohmann::json* entities = JsonUtils::Find(snapshot, "Entities");
+			if (!entities || !entities->is_array())
+				return std::nullopt;
+			for (const nlohmann::json& entity : *entities)
+			{
+				const nlohmann::json* id = JsonUtils::Find(entity, "ID");
+				if (!id || UUIDFromJson(*id) != std::optional<UUID>(templateRoot))
+					continue;
+				const nlohmann::json* components = JsonUtils::Find(entity, "Components");
+				const nlohmann::json* transform = components ? JsonUtils::Find(*components, "Transform") : nullptr;
+				const nlohmann::json* scale = transform ? JsonUtils::Find(*transform, "Scale") : nullptr;
+				if (!scale || !scale->is_array() || scale->size() != 3 || !(*scale)[0].is_number() || !(*scale)[1].is_number() || !(*scale)[2].is_number())
+					return glm::vec3(1.0f); // The Transform's default
+				return glm::vec3((*scale)[0].get<float>(), (*scale)[1].get<float>(), (*scale)[2].get<float>());
+			}
+			return std::nullopt;
+		}
+
+		bool IsNear(float value, float expected)
+		{
+			return std::abs(value - expected) <= c_ImportScaleTolerance * std::abs(expected);
+		}
+
+	}
 
 	namespace PrefabSyncUtils
 	{
@@ -158,6 +195,7 @@ namespace Strata
 			nlohmann::json previous = std::move(found->second.Snapshot);
 			found->second.Snapshot = *snapshot;
 			found->second.PartVersions.Clear();
+			found->second.Parts.Clear();
 			m_BaselineVersion++;
 			if (!previous.is_null())
 				Propagate(context, prefab, previous, *snapshot);
@@ -204,42 +242,48 @@ namespace Strata
 	void PrefabSync::Propagate(EditorContext& context, AssetHandle prefab, const nlohmann::json& previous, const nlohmann::json& snapshot)
 	{
 		Scene& scene = *context.GetEditScene();
-		std::vector<Entity> unchanged;
-		for (const Entity root : PrefabInstances::FindInstanceRoots(scene, prefab))
-		{
-			if (PrefabInstances::Compare(scene, root, previous).IsEmpty())
-				unchanged.push_back(root);
-		}
-		UpdateInstances(context, prefab, unchanged, snapshot);
-	}
-
-	void PrefabSync::CatchUp(EditorContext& context, AssetHandle prefab, Baseline& baseline, const std::vector<Entity>& roots)
-	{
-		// An instance whose part of the prefab is another version than the one it last took (MarkSynced), and whose values
-		// are still the ones it had then, missed the prefab's change; one modified since keeps its values (IsOutdated says so).
-		// Each part's version is worked out once, however many instances there are; an instance's values are hashed only when
-		// its version is out of date.
-		Scene& scene = *context.GetEditScene();
-		std::vector<Entity> missed;
+		// A model whose root Scale changed from a to b (an import made before the import scale was baked into the content, or
+		// a document someone wrote): every instance root's Scale is multiplied by b / a per axis, so that instances keep the
+		// size the model gives them now instead of taking the scale twice.
+		const bool model = context.GetAssetManager()->GetAssetType(prefab) == AssetType::Model;
+		const std::vector<Entity> roots = PrefabInstances::FindInstanceRoots(scene, prefab);
+		std::vector<RootRescale> rescaled;
 		for (const Entity root : roots)
 		{
-			m_CatchUpCheckCount++;
-			if (PrefabInstances::IsOutdated(root, baseline.Snapshot, baseline.PartVersions) && PrefabInstances::IsUnchangedSinceSync(scene, root))
-				missed.push_back(root);
+			if (!model)
+				continue;
+			const UUID templateRoot = root.GetComponent<PrefabInstanceComponent>().PrefabEntityID;
+			const std::optional<glm::vec3> before = FindTemplateRootScale(previous, templateRoot);
+			const std::optional<glm::vec3> after = FindTemplateRootScale(snapshot, templateRoot);
+			if (!before || !after || *before == *after || before->x == 0.0f || before->y == 0.0f || before->z == 0.0f)
+				continue;
+			rescaled.push_back(RootRescale { root, root.GetComponent<TransformComponent>().Scale * (*after / *before) });
 		}
-		UpdateInstances(context, prefab, missed, baseline.Snapshot);
+		// Every instance takes what changed, except where it overrides it.
+		UpdateInstances(context, prefab, {}, roots, &previous, snapshot, rescaled);
 	}
 
-	void PrefabSync::UpdateInstances(EditorContext& context, AssetHandle prefab, const std::vector<Entity>& roots, const nlohmann::json& snapshot)
+	void PrefabSync::UpdateInstances(EditorContext& context, AssetHandle prefab, const std::vector<Entity>& replaced, const std::vector<Entity>& propagated,
+		const nlohmann::json* previous, const nlohmann::json& snapshot, const std::vector<RootRescale>& rescaled)
 	{
-		if (roots.empty())
+		if (replaced.empty() && propagated.empty() && rescaled.empty())
 			return;
 		Scene& scene = *context.GetEditScene();
 		const std::optional<AssetMetadata> metadata = context.GetAssetManager()->GetMetadata(prefab);
 		SceneEditTransaction transaction(scene, fmt::format("Update Instances of {}", metadata ? metadata->Name : prefab.ToString()), {});
-		for (const Entity root : roots)
+		for (const Entity root : replaced)
 			transaction.TrackSubtree(root.GetUUID());
-		for (const Entity root : roots)
+		// The roots' Scale first: Replace keeps a root's transform.
+		for (const RootRescale& rescale : rescaled)
+		{
+			Entity root = scene.GetEntityByUUID(rescale.Root.GetUUID());
+			if (!root)
+				continue;
+			transaction.Track(root.GetUUID());
+			root.GetComponent<TransformComponent>().Scale = rescale.Scale;
+			root.MarkModified<TransformComponent>();
+		}
+		for (const Entity root : replaced)
 		{
 			const UUID id = root.GetUUID();
 			std::vector<UUID> created;
@@ -254,8 +298,88 @@ namespace Strata
 				transaction.TrackCreated(entity);
 			m_PropagationCount++;
 		}
-		context.CommitEdit(transaction);
+		// Instances of one prefab mostly share a few parts: each is extracted and hashed once.
+		PrefabOverrides::PartChangeCache parts(previous, snapshot);
+		for (const Entity instance : propagated)
+		{
+			const Entity root = scene.GetEntityByUUID(instance.GetUUID());
+			if (!root)
+				continue;
+			const UUID templateRoot = root.GetComponent<PrefabInstanceComponent>().PrefabEntityID;
+			const PrefabOverrides::PartChangeCache::Parts& part = parts.Get(templateRoot);
+			// Without the previous snapshot (a catch-up), the instance as it is stands for it: what differs from the new part
+			// and is not overridden takes the new values.
+			std::unordered_map<UUID, UUID> ids;
+			const nlohmann::json instancePart = previous ? nlohmann::json() : PrefabInstances::MakeTemplate(scene, root, nullptr, nullptr, ids);
+			PrefabOverrides::PropagateResult result;
+			std::string error;
+			if (!PrefabOverrides::Propagate(scene, root, previous ? part.Previous : instancePart, part.Next, result,
+				[&transaction](UUID id) { transaction.Track(id); }, &error))
+			{
+				ST_WARN("An instance of {} could not take its new values: {}", metadata ? metadata->Path : prefab.ToString(), error);
+				continue;
+			}
+			for (const UUID entity : result.Created)
+				transaction.TrackCreated(entity);
+			// It took this version of the prefab (its overrides aside): not outdated.
+			transaction.Track(root.GetUUID());
+			PrefabInstances::MarkSynced(root, part.NextVersion, result.ContentHash);
+			if (!result.Changed.empty() || !result.Created.empty())
+				m_PropagationCount++;
+		}
+		// Every list is current: Replace remakes an instance with its prefab's values (and no list), Propagate works it out, and a
+		// rescaled root's transform is its own, never an override.
+		context.CommitEdit(transaction, EditorContext::OverrideUpkeep::Current);
 		context.PruneSelection();
+	}
+
+	void PrefabSync::CatchUp(EditorContext& context, AssetHandle prefab, Baseline& baseline, const std::vector<Entity>& roots)
+	{
+		// An instance whose part of the prefab is another version than the one it last took (MarkSynced), and whose values
+		// are still the ones it had then, missed the prefab's change; one modified since keeps its values (IsOutdated says so).
+		// Each part's version is worked out once, however many instances there are; an instance's values are hashed only when
+		// its version is out of date.
+		Scene& scene = *context.GetEditScene();
+		// Without the previous snapshot, a model instance placed before the import scale was baked into the content is known by
+		// its root: outdated, with the model's import Scale setting as its Scale while the new template root has Scale 1. It
+		// gets Scale 1, or it would take the scale twice.
+		EditorAssetManager& assets = *context.GetAssetManager();
+		std::optional<float> importScale;
+		if (assets.GetAssetType(prefab) == AssetType::Model)
+		{
+			const nlohmann::json settings = assets.GetImportSettings(prefab);
+			const nlohmann::json* scale = JsonUtils::Find(settings, "Scale");
+			if (scale && scale->is_number() && scale->get<float>() > 0.0f && scale->get<float>() != 1.0f)
+				importScale = scale->get<float>();
+		}
+		std::vector<Entity> missed;
+		std::vector<Entity> overridden;
+		std::vector<RootRescale> rescaled;
+		for (const Entity root : roots)
+		{
+			m_CatchUpCheckCount++;
+			if (!PrefabInstances::IsOutdated(root, baseline.Snapshot, baseline.PartVersions))
+				continue;
+			// An instance whose overrides are known takes the new version except them; one without a list takes it only
+			// when unmodified since it last synced.
+			if (!root.GetComponent<PrefabInstanceComponent>().Overrides.empty())
+				overridden.push_back(root);
+			else if (PrefabInstances::IsUnchangedSinceSync(scene, root))
+				missed.push_back(root);
+			if (!importScale)
+				continue;
+			const glm::vec3 scale = root.GetComponent<TransformComponent>().Scale;
+			const std::optional<glm::vec3> templateScale = FindTemplateRootScale(baseline.Snapshot, root.GetComponent<PrefabInstanceComponent>().PrefabEntityID);
+			if (templateScale == std::optional<glm::vec3>(glm::vec3(1.0f)) && IsNear(scale.x, *importScale) && IsNear(scale.y, *importScale) && IsNear(scale.z, *importScale))
+				rescaled.push_back(RootRescale { root, glm::vec3(1.0f) });
+		}
+		if (!rescaled.empty())
+		{
+			const std::optional<AssetMetadata> metadata = assets.GetMetadata(prefab);
+			ST_INFO("{} instance{} of {} kept {} size: the import scale is now part of the model", rescaled.size(), rescaled.size() == 1 ? "" : "s",
+				metadata ? metadata->Name : prefab.ToString(), rescaled.size() == 1 ? "its" : "their");
+		}
+		UpdateInstances(context, prefab, missed, overridden, nullptr, baseline.Snapshot, rescaled);
 	}
 
 	PrefabSync::Baseline* PrefabSync::FindBaseline(EditorContext& context, AssetHandle prefab)
@@ -280,6 +404,12 @@ namespace Strata
 		return baseline ? &baseline->Snapshot : nullptr;
 	}
 
+	const PrefabOverrides::IndexedPart* PrefabSync::GetBaselinePart(EditorContext& context, AssetHandle prefab, UUID templateRoot)
+	{
+		Baseline* baseline = FindBaseline(context, prefab);
+		return baseline ? &baseline->Parts.Get(baseline->Snapshot, templateRoot) : nullptr;
+	}
+
 	void PrefabSync::SetBaseline(EditorContext& context, AssetHandle prefab, nlohmann::json snapshot)
 	{
 		EditorAssetManager* assets = context.GetAssetManager();
@@ -300,9 +430,17 @@ namespace Strata
 		ModifiedMark& mark = it->second;
 		if (!added && mark.BaselineVersion == m_BaselineVersion && (mark.Changes == changes || AreEditsContinuing(changes)))
 			return mark.Modified;
-		m_CompareCount++;
 		Baseline* baseline = FindBaseline(context, PrefabInstances::GetPrefab(root));
-		mark.Modified = baseline && !PrefabInstances::Compare(*root.GetScene(), root, baseline->Snapshot).IsEmpty();
+		// The instance's override list says so; only instances without one (scenes from before, unmodified ones) are compared.
+		if (!root.GetComponent<PrefabInstanceComponent>().Overrides.empty())
+		{
+			mark.Modified = true;
+		}
+		else
+		{
+			m_CompareCount++;
+			mark.Modified = baseline && !PrefabInstances::Compare(*root.GetScene(), root, baseline->Snapshot).IsEmpty();
+		}
 		mark.Outdated = baseline && PrefabInstances::IsOutdated(root, baseline->Snapshot, baseline->PartVersions);
 		mark.Changes = changes;
 		mark.BaselineVersion = m_BaselineVersion;

@@ -252,6 +252,11 @@ namespace
 			AssetResidencyBudgets budgets = manager->GetResidencyBudgets();
 			budgets.GpuTextures = c_ArrivalCount * textureBytes + textureBytes / 2;
 			budgets.UploadBytesPerFrame = uploadBytesPerFrame;
+			// Only the release wait and the upload bytes hold the arrivals back, however slow the machine: a Debug build on a
+			// busy machine finalized the last arrival a frame late within the default time budgets (which have tests of their
+			// own, GPU.Assets.Uploads).
+			budgets.FinalizeMsPerFrame = 1000.0f;
+			budgets.UploadMsPerFrame = 1000.0f;
 			manager->SetResidencyBudgets(budgets);
 			const auto allReady = [&manager](const std::vector<AssetHandle>& handles)
 			{

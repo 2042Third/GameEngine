@@ -3,7 +3,7 @@
 
 #include "Include/Scene.glsl"
 
-// Glyph quads of TextRenderer: world-space positions, or pixel positions (+Y down) for screen-space text.
+// Glyph quads of TextRenderer: camera-relative world-space positions, or pixel positions (+Y down) for screen-space text.
 
 layout(location = 0) in vec3 a_Position;
 layout(location = 1) in vec3 a_TexCoord; // Atlas texels and page

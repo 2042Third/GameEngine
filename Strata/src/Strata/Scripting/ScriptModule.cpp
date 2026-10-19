@@ -844,6 +844,11 @@ namespace Strata
 				return ScriptCallResult::Rejected; // They take a contact (InvokeContactCallback)
 			case ScriptCallback::OnAnimationEvent:
 				return ScriptCallResult::Rejected; // It takes the event's name (InvokeAnimationEventCallback)
+			case ScriptCallback::OnUIClick:
+			case ScriptCallback::OnUIValueChanged:
+			case ScriptCallback::OnUIFocusChanged:
+			case ScriptCallback::OnUISubmit:
+				return ScriptCallResult::Rejected; // They take the widget (InvokeUIEventCallback)
 		}
 		return ScriptCallResult::Rejected;
 	}
@@ -869,7 +874,11 @@ namespace Strata
 			case ScriptCallback::OnDestroy:
 			case ScriptCallback::OnReload:
 			case ScriptCallback::OnAnimationEvent:
-				return ScriptCallResult::Rejected; // Not contact callbacks (InvokeCallback, InvokeAnimationEventCallback)
+			case ScriptCallback::OnUIClick:
+			case ScriptCallback::OnUIValueChanged:
+			case ScriptCallback::OnUIFocusChanged:
+			case ScriptCallback::OnUISubmit:
+				return ScriptCallResult::Rejected; // Not contact callbacks (InvokeCallback, InvokeAnimationEventCallback, InvokeUIEventCallback)
 		}
 		return function ? Call(site, [&]() { return function(instance, &contact); }) : ScriptCallResult::Unavailable;
 	}
@@ -884,6 +893,50 @@ namespace Strata
 			return ScriptCallResult::Unavailable;
 		const StrataScriptString text = { name.data(), name.size() };
 		return Call(site, [&]() { return function(instance, text); });
+	}
+
+	ScriptCallResult ScriptModule::InvokeUIEventCallback(const ScriptCallSite& site, StrataScriptInstance instance, ScriptCallback callback, uint64_t widget,
+		float value, bool focused)
+	{
+		const ClassFunctions* functions = GetFunctions(site);
+		if (!functions || !instance)
+			return ScriptCallResult::Rejected;
+		switch (callback)
+		{
+			case ScriptCallback::OnUIClick:
+			{
+				const auto function = functions->OnUIClick;
+				return function ? Call(site, [&]() { return function(instance, widget); }) : ScriptCallResult::Unavailable;
+			}
+			case ScriptCallback::OnUIValueChanged:
+			{
+				const auto function = functions->OnUIValueChanged;
+				return function ? Call(site, [&]() { return function(instance, widget, value); }) : ScriptCallResult::Unavailable;
+			}
+			case ScriptCallback::OnUIFocusChanged:
+			{
+				const auto function = functions->OnUIFocusChanged;
+				return function ? Call(site, [&]() { return function(instance, widget, focused); }) : ScriptCallResult::Unavailable;
+			}
+			case ScriptCallback::OnUISubmit:
+			{
+				const auto function = functions->OnUISubmit;
+				return function ? Call(site, [&]() { return function(instance, widget); }) : ScriptCallResult::Unavailable;
+			}
+			case ScriptCallback::OnCreate:
+			case ScriptCallback::OnUpdate:
+			case ScriptCallback::OnFixedUpdate:
+			case ScriptCallback::OnLateUpdate:
+			case ScriptCallback::OnDestroy:
+			case ScriptCallback::OnReload:
+			case ScriptCallback::OnCollisionEnter:
+			case ScriptCallback::OnCollisionExit:
+			case ScriptCallback::OnTriggerEnter:
+			case ScriptCallback::OnTriggerExit:
+			case ScriptCallback::OnAnimationEvent:
+				return ScriptCallResult::Rejected; // Not UI callbacks
+		}
+		return ScriptCallResult::Rejected;
 	}
 
 	bool ScriptModule::ReadModuleDescription(std::string& outName, std::vector<ScriptClassInfo>& outClasses, std::vector<ClassFunctions>& outFunctions,
@@ -953,6 +1006,14 @@ namespace Strata
 				functions.OnTriggerExit = descriptor->OnTriggerExit;
 			if (ST_SCRIPT_HAS_MEMBER(StrataScriptClassDesc, descriptor, OnAnimationEvent))
 				functions.OnAnimationEvent = descriptor->OnAnimationEvent;
+			if (ST_SCRIPT_HAS_MEMBER(StrataScriptClassDesc, descriptor, OnUIClick))
+				functions.OnUIClick = descriptor->OnUIClick;
+			if (ST_SCRIPT_HAS_MEMBER(StrataScriptClassDesc, descriptor, OnUIValueChanged))
+				functions.OnUIValueChanged = descriptor->OnUIValueChanged;
+			if (ST_SCRIPT_HAS_MEMBER(StrataScriptClassDesc, descriptor, OnUIFocusChanged))
+				functions.OnUIFocusChanged = descriptor->OnUIFocusChanged;
+			if (ST_SCRIPT_HAS_MEMBER(StrataScriptClassDesc, descriptor, OnUISubmit))
+				functions.OnUISubmit = descriptor->OnUISubmit;
 			if (!functions.Create || !functions.Destroy || !functions.GetField || !functions.SetField)
 			{
 				outError = fmt::format("class '{}' lacks its lifetime or field functions", info.Name);
@@ -970,7 +1031,11 @@ namespace Strata
 				{ ScriptCallback::OnCollisionExit, functions.OnCollisionExit != nullptr },
 				{ ScriptCallback::OnTriggerEnter, functions.OnTriggerEnter != nullptr },
 				{ ScriptCallback::OnTriggerExit, functions.OnTriggerExit != nullptr },
-				{ ScriptCallback::OnAnimationEvent, functions.OnAnimationEvent != nullptr }
+				{ ScriptCallback::OnAnimationEvent, functions.OnAnimationEvent != nullptr },
+				{ ScriptCallback::OnUIClick, functions.OnUIClick != nullptr },
+				{ ScriptCallback::OnUIValueChanged, functions.OnUIValueChanged != nullptr },
+				{ ScriptCallback::OnUIFocusChanged, functions.OnUIFocusChanged != nullptr },
+				{ ScriptCallback::OnUISubmit, functions.OnUISubmit != nullptr }
 			};
 			for (const auto& [callback, implemented] : callbacks)
 			{

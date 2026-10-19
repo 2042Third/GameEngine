@@ -147,6 +147,8 @@ namespace Strata
 		AssetHandle m_SceneHandle = UUID::Null();
 		bool m_ShowingLoadingScene = false;
 		bool m_Started = false;
+		// When the game began opening: its start is logged with the time it took ("Started '<game>' in N s").
+		std::chrono::steady_clock::time_point m_Opened;
 		std::optional<std::string> m_StartError;
 		Scope<PendingScene> m_SceneLoad;
 		Scope<PendingScene> m_LoadingSceneLoad;

@@ -2,7 +2,9 @@
 
 #include "Editor/EditorViewport.h"
 #include "Editor/TransformEdit.h"
+#include "Panels/CanvasModeView.h"
 #include "UI/EditorPanelRegistry.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Math/AABB.h>
 
@@ -24,18 +26,19 @@ namespace Strata
 	class EditorContext;
 	struct ViewportView;
 
-	// The scene viewport: renders the active scene (EditorViewport) into a texture the size of the panel, shows it, and
-	// handles the viewport's input while it is hovered or focused: the editor camera (Alt + left drag orbits, middle drag
-	// pans, the wheel dollies, right drag flies with WASD/QE, Shift faster and the wheel setting the speed), clicks that
-	// select entities (Ctrl toggles, Shift adds), the transform gizmo (W/E/R/Q; snapping per the toolbar's snap toggle,
-	// inverted while Ctrl is held), F to frame the selection and Home to frame everything. A row of chips over the image's
-	// top left holds the camera settings and the overlay toggles (grid, selection outline, scene gizmos, stats), and a strip
-	// in the play state's color tops the image while the scene runs. While playing through the scene's camera the panel is
-	// the game view: game input goes to the scene while it is focused and editor tools are off; of the chips only the stats
-	// toggle remains, shown while the game does not have the input, so that clicks on the image always belong to the game.
-	// Agents show here too: a chip at the image's top right names the latest command of an automation client ("Agent:
-	// entity.create · 3 s ago"; a click shows it in the Activity panel), and for c_AgentFlashSeconds the entities it changed
-	// are outlined in the accent, fading out.
+	// The Scene view (panel id "Viewport", titled "Scene"): renders the active scene through the editor camera
+	// (EditorViewport) into a texture the size of the panel, shows it, and handles the view's input while it is hovered or
+	// focused: the editor camera (Alt + left drag orbits, middle drag pans, the wheel dollies, right drag flies with WASD/QE,
+	// Shift faster and the wheel setting the speed), clicks that select entities (Ctrl toggles, Shift adds), the transform
+	// gizmo (W/E/R/Q; snapping per the toolbar's snap toggle, inverted while Ctrl is held), F to frame the selection and Home
+	// to frame everything. It stays an editor view while the game plays: the camera, picking, gizmos and outline work on
+	// the running scene (edits apply to its running copy), and the Game view (GameViewPanel) shows the game as it is; with
+	// "Game camera" (F8, ViewportSettings::PilotGameCamera) it looks through the scene's primary camera with the editor's
+	// overlays. A toolbar strip above the image (ViewportToolbar) holds the chips: the camera settings, the overlay toggles
+	// (grid, selection outline, scene gizmos, stats), the editor-view settings, the debug view and the game camera; its
+	// bottom border takes the play state's color while the scene runs. Agents show here too: a chip at the toolbar's right
+	// names the latest mutating command of an automation client ("Agent: entity.create · 3 s ago"; a click shows it in the
+	// Activity panel), and for c_AgentFlashSeconds the entities it changed are outlined in the accent, fading out.
 	class ViewportPanel : public EditorPanel
 	{
 	public:
@@ -65,13 +68,8 @@ namespace Strata
 		void Reset(EditorContext& context);
 		// Where the image was drawn last (screen coordinates), e.g. for layout tests.
 		const ViewportImageArea& GetImageArea() const { return m_Image; }
-		// The notice of the game's window requests the last frame showed over the game view (empty when it showed none).
-		std::string_view GetShownGameWindowNotice() const { return m_GameWindowNoticeShown ? std::string_view(m_GameWindowNotice) : std::string_view(); }
-		// What the game view says while the game locked the cursor (how to free it and stop the game): shown for
-		// c_MouseHintSeconds after the game took the mouse. Empty when the last frame showed none.
-		std::string_view GetShownMouseHint() const { return m_MouseHintShown ? std::string_view(c_MouseHint) : std::string_view(); }
-		static constexpr const char* c_MouseHint = "Shift+F1 frees the mouse \xC2\xB7 Ctrl+P stops the game";
-		static constexpr double c_MouseHintSeconds = 5.0;
+		// Whether the last frame looked through the scene's primary camera ("Game camera").
+		bool IsPiloting() const { return m_Piloting; }
 	private:
 		enum class CameraDrag : uint8_t
 		{
@@ -88,46 +86,41 @@ namespace Strata
 		// What the colors of the debug view mean, with how many entities in view have each, at the image's bottom left.
 		void DrawDebugViewLegend(EditorContext& context);
 		void HandleShortcuts(EditorPanelContext& context);
+		// Delete, Ctrl+D, Ctrl+C/X/V, Ctrl+A and F2 on the selection (also in the 2D canvas mode).
+		void HandleSelectionShortcuts(EditorPanelContext& context);
 		void UpdateCamera(EditorContext& context, bool hovered);
 		void UpdateGizmo(EditorContext& context, const ViewportView& view);
-		void DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom, const EditorFrameStats& frame);
+		void DrawOverlays(EditorContext& context, const ViewportView& view, const EditorFrameStats& frame);
 		// While a scene is being opened (EditorContext::IsSceneLoading): a card in the middle of the image naming the scene, with
 		// the load's progress. The edited scene stays visible (and read-only) behind it.
 		void DrawSceneLoadOverlay(EditorContext& context);
 		// The latest automation command, as a chip right-aligned at `top` against `right`.
-		void DrawAgentChip(EditorPanelContext& context, float right, float top);
+		// The agent chip's width this frame (0 when it does not show), its text made again when it changed: the toolbar's chips
+		// keep clear of it, so that a click on it never lands on a chip under it.
+		float PrepareAgentChip(EditorPanelContext& context);
+		void DrawAgentChip(EditorPanelContext& context, float right, float top, float width);
 		// While animation.preview poses animators of the edited scene: a chip naming what it shows, so that the pose is never
 		// taken for scene data; a click stops every preview (animation.preview {stop: true}).
 		void DrawPreviewChip(EditorPanelContext& context);
 		// The projected bounds of the entities the latest automation command changed, outlined in the accent while they fade.
 		void DrawAgentFlash(EditorContext& context, const ViewportView& view);
 		std::chrono::steady_clock::time_point Now() const { return m_Clock ? m_Clock() : std::chrono::steady_clock::now(); }
-		// The renderer's statistics over the image: frame time, draws, the render scene's proxies and uploads, asset requests.
-		static void DrawStatsOverlay(ImDrawList* drawList, const ImVec2& position, const ViewportRenderer& renderer, const ViewportView& view, const EditorFrameStats& frame);
-		// What the game asked of its window (EditorGameWindow), at the bottom of the game view: play mode does not apply it.
-		void DrawGameWindowNotice(EditorContext& context, const ViewportView& view, ImDrawList* drawList);
 		void AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands);
 		void EndCameraDrag();
 		void EndGizmoDrag(EditorContext& context);
-		// Routes game input (Input) to the running scene only while the game view is focused.
-		void UpdateGameInput(EditorContext& context, bool gameView);
 	private:
 		bool m_Focused = false;
 		bool m_Hovered = false;
-		bool m_GameView = false;   // Playing through the scene's camera
+		bool m_Piloting = false;   // Looking through the scene's primary camera ("Game camera")
 		bool m_OverGizmo = false;  // The mouse was over the gizmo in the last frame (asked before the window begins)
 		ViewportImageArea m_Image;
+		CanvasModeView m_CanvasMode; // The 2D canvas mode (ViewportSettings::CanvasMode)
 		CameraDrag m_CameraDrag = CameraDrag::None;
 		bool m_CursorLocked = false; // By fly mode
-		bool m_GameInputEnabled = false;
-		bool m_GameOwnsMouse = false; // The game locked the cursor while the game view has the input: ImGui ignores the mouse
-		double m_MouseHintUntil = 0.0; // ImGui's time until which the way out shows (c_MouseHint)
-		bool m_MouseHintShown = false;
 		std::optional<TransformDrag> m_GizmoDrag;
-		std::string m_GameWindowNotice; // Rebuilt only when the game's window requests change
-		uint64_t m_GameWindowNoticeVersion = 0;
-		bool m_GameWindowNoticeShown = false;
 		// The agent chip's text for the activity and age (in whole seconds) it was made for.
+		// The toolbar's chips across frames: the last ones that do not fit with their labels are drawn as icons.
+		UI::ChipStripState m_ChipStrip;
 		std::string m_AgentChipText;
 		uint64_t m_AgentChipActivity = 0;
 		int64_t m_AgentChipSeconds = -1;

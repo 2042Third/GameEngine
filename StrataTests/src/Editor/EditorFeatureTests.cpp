@@ -8,15 +8,22 @@
 #include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
 
+#include <Strata/Asset/AssetPack.h>
+#include <Strata/Asset/RuntimeAssetManager.h>
 #include <Strata/Core/EngineServices.h>
 #include <Strata/Core/FileSystem.h>
+#include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Runtime/GameRuntime.h>
 #include <Strata/Runtime/GameWindowService.h>
+#include <Strata/Scene/CookedScene.h>
+#include <Strata/Scene/Components.h>
+#include <Strata/Scene/Scene.h>
 
 #include <nlohmann/json.hpp>
 
 #include <cmath>
 #include <filesystem>
+#include <map>
 #include <string>
 #include <string_view>
 
@@ -80,6 +87,15 @@ TEST_SUITE("Editor.FeatureTest")
 		Tests::RunCommandToCompletion(editor.Context, editor.Commands, "scene.open", { { "scene", "Scenes/Feature.stscene" } });
 		const std::string ball = editor.FindEntity("Ball");
 		CHECK(editor.GetHeight(ball) == doctest::Approx(4.0f));
+		// The crate is an instance of its prefab with two overrides: its script's value and its lid's shadows, as saved.
+		const nlohmann::json crate = editor.Run("prefab.status", { { "entity", "F7E0000000000031" } });
+		CHECK(crate["overrides"] == nlohmann::json::array({
+			{ { "entity", "F7E0000000000030" }, { "prefabEntity", "F7C0000000000001" }, { "component", "Script" }, { "property", "CrateScript.Value" },
+				{ "kind", "Property" } },
+			{ { "entity", "F7E0000000000031" }, { "prefabEntity", "F7C0000000000002" }, { "component", "MeshRenderer" }, { "property", "CastShadows" },
+				{ "kind", "Property" } } }));
+		CHECK(editor.Context.GetEditScene()->GetEntityByUUID(*UUIDFromJson(nlohmann::json("F7E0000000000030"))).GetComponent<PrefabInstanceComponent>().Overrides.size() == 2);
+		CHECK(crate["outdated"] == false);
 
 		// A loading screen (the editor itself streams assets in while playing).
 		LoadAllAssets(*editor.Context.GetAssetManager());
@@ -111,15 +127,35 @@ TEST_SUITE("Editor.FeatureTest")
 		REQUIRE(exported["scriptModule"].is_string());
 		CHECK(FileSystem::FromUTF8(exported["scriptModule"].get<std::string>()).filename() == GetFeatureScriptModule().filename());
 		const std::filesystem::path manifest = FileSystem::FromUTF8(exported["manifest"].get<std::string>());
+		std::string error;
+		// The pack holds the scenes, prefabs and models in their cooked form (project.export's default), which the game reads.
+		{
+			const Ref<RuntimeAssetManager> pack = RuntimeAssetManager::Create(FileSystem::FromUTF8(exported["assetPack"].get<std::string>()), &error);
+			REQUIRE_MESSAGE(pack, error);
+			std::map<AssetType, uint32_t> documents;
+			for (const AssetPackEntry& entry : pack->GetPack().GetEntries())
+			{
+				const AssetType type = entry.Metadata.Type;
+				if (type != AssetType::Scene && type != AssetType::Prefab && type != AssetType::Model)
+					continue;
+				std::vector<uint8_t> bytes;
+				REQUIRE_MESSAGE(pack->GetPack().ReadData(entry, bytes, &error), error);
+				CHECK_MESSAGE(CookedScene::IsCooked(bytes), entry.Metadata.Path);
+				documents[type]++;
+			}
+			CHECK(documents[AssetType::Scene] >= 1);
+			CHECK(documents[AssetType::Prefab] >= 1);
+		}
 		// The game's window as StrataRuntime provides it headless; saves in the test's directory instead of the user's data.
 		GameWindowService gameWindow(nullptr);
 		EngineServices::ScopedProvider<IGameWindow> gameWindowProvider(gameWindow);
 		GameRuntimeOptions gameOptions;
 		gameOptions.SaveFilesDirectory = directory / "Saves";
-		std::string error;
+		const uint64_t cookedReads = CookedSceneReader::GetReadCount();
 		Scope<GameRuntime> game = GameRuntime::Create(manifest, &error, gameOptions);
 		REQUIRE_MESSAGE(game, error);
 		REQUIRE(game->WaitForStart());
+		CHECK(CookedSceneReader::GetReadCount() > cookedReads); // The start scene, read cooked
 		const Ref<ScriptEngine> gameEngine = game->GetScriptEngine();
 		REQUIRE(gameEngine);
 		CHECK(gameEngine != engine);

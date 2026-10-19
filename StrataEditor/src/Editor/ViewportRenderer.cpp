@@ -6,6 +6,8 @@
 #include "Editor/SceneEdit.h"
 
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Math/Math.h>
+#include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Renderer/SceneGizmos.h>
 #include <Strata/Renderer/Texture.h>
 #include <Strata/Renderer/TextureStreamer.h>
@@ -41,7 +43,25 @@ namespace Strata
 		}
 		view.Camera = context.GetViewport().GetCamera().GetSceneCamera(aspectRatio);
 		view.EditorOverlays = true;
-		view.EditorView = context.GetSceneState() != SceneState::Play;
+		// The editor camera asked for by name is always a view for working on the scene (the Scene view while the game
+		// plays); the automatic choice's fallback while playing shows the running game as it is.
+		view.EditorView = source == ViewportCameraSource::Editor || context.GetSceneState() != SceneState::Play;
+		return view;
+	}
+
+	std::optional<ViewportView> ResolveGameView(EditorContext& context, ViewportRenderer& renderer, float aspectRatio, std::string* outError)
+	{
+		if (std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Scene, aspectRatio, outError))
+			return view;
+		if (!renderer.HasOverlayContent(*context.GetActiveScene()))
+			return std::nullopt;
+		if (outError)
+			outError->clear();
+		// GameRenderer's frame of a camera-less scene with UI: a default camera over nothing, cleared to black.
+		ViewportView view;
+		view.Camera.Projection = Math::PerspectiveReverseZ(view.Camera.VerticalFOV, aspectRatio, view.Camera.Near, view.Camera.Far);
+		view.Camera.ClearColor = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+		view.OverlayOnly = true;
 		return view;
 	}
 
@@ -50,13 +70,16 @@ namespace Strata
 		SceneRenderOptions options;
 		options.PreviewEnvironment = view.EditorView && settings.PreviewLighting;
 		options.DrawScreenSpaceText = !view.EditorView || settings.ShowGameUI;
+		options.ScreenView = view.ScreenView;
 		return options;
 	}
 
-	ViewportRenderer::ViewportRenderer(const std::string& debugName)
+	ViewportRenderer::ViewportRenderer(const std::string& debugName, bool fades)
 	{
 		SceneRendererSpecification specification;
 		specification.DebugName = debugName;
+		specification.FadeTextureLevels = fades;
+		specification.FadeLevelsOfDetail = fades;
 		m_Renderer = CreateScope<SceneRenderer>(specification);
 	}
 
@@ -91,6 +114,31 @@ namespace Strata
 		m_Renderer->SetViewportSize(size.x, size.y);
 		if (size.x == 0 || size.y == 0)
 			return false;
+
+		if (view.OverlayOnly)
+		{
+			// The scene's UI over an empty frame, as GameRenderer draws a scene without a camera (no overlays or debug view: there
+			// is no scene to see).
+			if (!m_EmptyScene)
+			{
+				m_EmptyScene = CreateScope<Scene>("Empty");
+				PostProcessComponent& postProcess = m_EmptyScene->CreateEntity("PostProcess").AddComponent<PostProcessComponent>();
+				postProcess.Tonemapper = TonemapOperator::None;
+				postProcess.AutoExposure = false;
+				postProcess.Exposure = 0.0f;
+				postProcess.Vignette = 0.0f;
+				postProcess.Bloom = false;
+				postProcess.AmbientOcclusion = false;
+				postProcess.AntiAliasing = false;
+			}
+			SceneRenderOptions options;
+			options.OverlayScene = scene.get();
+			options.ScreenView = view.ScreenView;
+			const bool rendered = m_Renderer->Render(*m_EmptyScene, view.Camera, nullptr, options);
+			if (rendered)
+				m_RenderedScene = scene;
+			return rendered;
+		}
 
 		SceneRenderOptions options = GetViewportRenderOptions(view, settings);
 		m_DebugDraw.Clear();
@@ -131,7 +179,7 @@ namespace Strata
 				DrawCellBounds(context, view);
 		}
 		// The debug view tints what is drawn and boxes what cannot be (meshes that are not there).
-		m_StreamingView.Build(*scene, settings.DebugView, view.Camera, m_Renderer->GetSpecification().LODThreshold, settings.DebugColors, m_DebugDraw);
+		m_StreamingView.Build(*scene, settings.DebugView, view.Camera, m_Renderer->GetLODCriteria(), settings.DebugColors, m_DebugDraw);
 		options.EntityTints = m_StreamingView.GetTints();
 		if (!m_DebugDraw.IsEmpty())
 			options.DebugShapes = &m_DebugDraw;

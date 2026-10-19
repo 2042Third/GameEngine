@@ -5,6 +5,7 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/MeshGeometry.h"
 #include "Strata/Core/Log.h"
+#include "Strata/GameUI/GameUIRegistration.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Renderer/RendererRegistration.h"
 #include "Strata/Scene/SceneRegistration.h"
@@ -69,6 +70,7 @@ namespace Strata::Engine
 #endif
 			{ "Scripting", RegisterScriptingModule },
 			{ "World", RegisterWorldModule },
+			{ "GameUI", RegisterGameUIModule },
 		};
 
 		// Every engine has these: the others reach the scene and the renderer directly.

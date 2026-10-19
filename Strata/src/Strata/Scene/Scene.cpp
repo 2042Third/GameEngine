@@ -130,6 +130,29 @@ namespace Strata
 
 	static std::atomic<uint32_t> s_RunningSceneCount = 0;
 
+	namespace
+	{
+
+		// Read by every Copy after the composition root registered them (ComponentRegistry's registration window).
+		std::vector<Scene::SceneContextCopier>& GetContextCopiers()
+		{
+			static std::vector<Scene::SceneContextCopier> s_Copiers;
+			return s_Copiers;
+		}
+
+	}
+
+	bool Scene::RegisterContextCopier(SceneContextCopier copier)
+	{
+		if (!copier || !ComponentRegistry::IsRegistrationOpen())
+		{
+			ST_CORE_ERROR("Scene::RegisterContextCopier is called outside the composition root's registration (or without a copier)");
+			return false;
+		}
+		GetContextCopiers().push_back(copier);
+		return true;
+	}
+
 	Scene::Scene(std::string name)
 		: Scene(std::move(name), true)
 	{
@@ -181,6 +204,11 @@ namespace Strata
 
 	Ref<Scene> Scene::Copy(const Ref<Scene>& source)
 	{
+		return Copy(source, SceneCopyOptions {});
+	}
+
+	Ref<Scene> Scene::Copy(const Ref<Scene>& source, const SceneCopyOptions& options)
+	{
 		ST_PROFILE_FUNCTION();
 		// Filled before its signal handlers are connected: the caches they keep are copied with the scene, and nothing else
 		// listens to a new registry, so the storages can be filled in parallel.
@@ -226,9 +254,19 @@ namespace Strata
 			const size_t firstFree = static_cast<size_t>(std::find(used.begin(), used.end(), uint8_t(0)) - used.begin());
 			to.storage<entt::entity>().start_from(entt::entity(static_cast<entt::id_type>(firstFree)));
 		});
+		// A snapshot to save copies what a document holds: the serialized components whatever NoCopy says, and the ID and
+		// relationship components, which the document holds as the entity's "ID" and "Parent".
+		const ComponentInfo* idInfo = ComponentRegistry::Find<IDComponent>();
+		const ComponentInfo* relationshipInfo = ComponentRegistry::Find<RelationshipComponent>();
+		const auto isCopied = [&](const ComponentInfo* info)
+		{
+			if (!options.SerializedOnly)
+				return info->IsCopyable();
+			return !HasFlag(info->Flags, ComponentFlags::NoSerialize) || info == idInfo || info == relationshipInfo;
+		};
 		for (const ComponentInfo* info : ComponentRegistry::GetAll())
 		{
-			const entt::sparse_set* storage = info->IsCopyable() ? from.storage(info->TypeId) : nullptr;
+			const entt::sparse_set* storage = isCopied(info) ? from.storage(info->TypeId) : nullptr;
 			if (!storage || storage->empty())
 				continue;
 			info->AssureStorage(to);
@@ -249,7 +287,8 @@ namespace Strata
 			});
 		};
 		addInternalCopy(std::type_identity<HierarchyComponent>());
-		addInternalCopy(std::type_identity<WorldTransformComponent>());
+		if (!options.SerializedOnly)
+			addInternalCopy(std::type_identity<WorldTransformComponent>());
 		addInternalCopy(std::type_identity<UnknownComponentsComponent>());
 		addCopy(count, [&destination, &source]() { destination->m_EntityMap = source->m_EntityMap; });
 		std::stable_sort(copies.begin(), copies.end(), [](const StorageCopy& a, const StorageCopy& b) { return a.Size > b.Size; });
@@ -265,11 +304,20 @@ namespace Strata
 		destination->m_LastRoot = source->m_LastRoot;
 		destination->m_RootIndicesValid = source->m_RootIndicesValid;
 		// What is stale in the source is stale in the copy (the nodes' dirty flags came with them), and the nodes' memo of the
-		// transform pass is the source's, so the copy's passes continue its numbering.
-		destination->m_DirtyTransforms = source->m_DirtyTransforms;
-		destination->m_TransformPass = source->m_TransformPass;
+		// transform pass is the source's, so the copy's passes continue its numbering. A snapshot has no world transforms.
+		if (!options.SerializedOnly)
+		{
+			destination->m_DirtyTransforms = source->m_DirtyTransforms;
+			destination->m_TransformPass = source->m_TransformPass;
+		}
 		destination->m_HierarchyVersion++;
 		destination->ConnectSignals();
+		// The modules' context data of a complete copy (a render scene's clone); a snapshot to save needs none.
+		if (!options.SerializedOnly)
+		{
+			for (const SceneContextCopier copier : GetContextCopiers())
+				copier(*source, *destination);
+		}
 		return destination;
 	}
 
@@ -1925,9 +1973,12 @@ namespace Strata
 		m_RuntimeMode = mode;
 		m_IsPaused = false;
 		m_StepFrames = 0;
+		m_FixedSteps = 0;
 		m_FixedTimeAccumulator = 0.0f;
 		m_DroppedFixedSteps = 0;
 		m_Time = 0.0;
+		m_UnscaledTime = 0.0;
+		m_UnscaledDeltaTime = 0.0f;
 		m_FrameIndex = 0;
 		m_QuitRequest.reset();
 		m_SceneLoadRequest.reset();
@@ -1968,6 +2019,7 @@ namespace Strata
 	{
 		if (!m_IsRunning)
 			return;
+		m_StepFrames = 0;
 
 		// Sub-scenes being unloaded go before the systems stop, so that their scripts still get OnDestroy.
 		FlushSubSceneUnloads();
@@ -2062,6 +2114,10 @@ namespace Strata
 
 		const float fixedTimestep = m_Settings.FixedTimestep > 0.0f ? m_Settings.FixedTimestep : 1.0f / 60.0f;
 		const float deltaTime = stepping ? fixedTimestep : static_cast<float>(timestep) * m_TimeScale;
+		// Unscaled time goes on at time scale 0 (a pause menu's fades): the frame's timestep before the time scale, the fixed
+		// step while stepping.
+		m_UnscaledDeltaTime = stepping ? fixedTimestep : std::max(static_cast<float>(timestep), 0.0f);
+		m_UnscaledTime += m_UnscaledDeltaTime;
 
 		m_IsUpdating = true;
 		UpdateWorldTransforms();
@@ -2072,6 +2128,7 @@ namespace Strata
 		{
 			ForEachSystemCall(m_FixedUpdateCalls, [fixedTimestep](SceneSystem& system) { system.OnFixedUpdate(fixedTimestep); });
 			m_StepFrames--;
+			m_FixedSteps++;
 		}
 		else
 		{
@@ -2101,6 +2158,7 @@ namespace Strata
 				ForEachSystemCall(m_FixedUpdateCalls, [fixedTimestep](SceneSystem& system) { system.OnFixedUpdate(fixedTimestep); });
 				m_FixedTimeAccumulator -= fixedTimestep;
 				steps++;
+				m_FixedSteps++;
 			}
 
 			if (dilated)
@@ -2138,6 +2196,8 @@ namespace Strata
 			return;
 
 		m_IsPaused = paused;
+		if (!paused)
+			m_StepFrames = 0;
 		if (!m_IsRunning)
 			return;
 		for (const Scope<SceneSystem>& system : m_Systems)

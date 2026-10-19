@@ -84,6 +84,9 @@ namespace Strata
 		uint32_t Width = 0;  // Pixels of the image the game renders (the window's framebuffer; the editor's game view)
 		uint32_t Height = 0;
 		bool VSync = true;
+		// The display's scale of the game's pixels for people: 1 at 96 DPI, 2 on a Retina display (what UI scaled to a
+		// physical size multiplies by: UICanvas ConstantPhysicalSize). 1 without a window.
+		float ContentScale = 1.0f;
 	};
 
 	// The window a game runs in, for the game's display options (scripts' Game::SetWindowMode, SetResolution, SetVSync,

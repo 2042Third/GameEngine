@@ -29,7 +29,7 @@ namespace
 		RunnerHarness()
 		{
 			// Finishes after `polls` polls with {"polls": n}; fails instead when "fail" is set.
-			Commands.Register({ "test.defer", "Test command that finishes after a number of polls.",
+			Commands.Register(MayDefer({ "test.defer", "Test command that finishes after a number of polls.",
 				CommandUtils::ObjectSchema({ { "polls", CommandUtils::IntegerSchema("Polls", 1, 100) }, { "fail", CommandUtils::BoolSchema("Fail") } }),
 				[](EditorContext&, const nlohmann::json& parameters)
 				{
@@ -44,18 +44,18 @@ namespace
 							return std::nullopt;
 						return fail ? EditorCommandResult::Fail("Failed on purpose") : EditorCommandResult::Ok({ { "polls", count } });
 					});
-				} });
+				} }));
 			// A poll function that throws, as third-party code (JSON access) may.
-			Commands.Register({ "test.throw", "Test command whose poll throws.", CommandUtils::ObjectSchema({}),
+			Commands.Register(MayDefer({ "test.throw", "Test command whose poll throws.", CommandUtils::ObjectSchema({}),
 				[](EditorContext&, const nlohmann::json&)
 				{
 					return EditorCommandResult::Defer([](EditorContext&) -> std::optional<EditorCommandResult>
 					{
 						throw std::runtime_error("broken poll");
 					});
-				} });
+				} }));
 			// A poll that finishes with another pending result (a command made of stages).
-			Commands.Register({ "test.chain", "Test command with two pending stages.", CommandUtils::ObjectSchema({}),
+			Commands.Register(MayDefer({ "test.chain", "Test command with two pending stages.", CommandUtils::ObjectSchema({}),
 				[](EditorContext&, const nlohmann::json&)
 				{
 					return EditorCommandResult::Defer([](EditorContext&) -> std::optional<EditorCommandResult>
@@ -65,7 +65,7 @@ namespace
 							return EditorCommandResult::Ok("second stage");
 						});
 					});
-				} });
+				} }));
 		}
 
 		bool Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())

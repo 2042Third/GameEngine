@@ -5,6 +5,7 @@
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Renderer/GPUUploadQueue.h"
+#include "Strata/Scene/SceneSystem.h"
 
 #include <algorithm>
 #include <cmath>
@@ -18,6 +19,8 @@ namespace Strata
 	{
 
 		constexpr double c_BytesPerMB = 1024.0 * 1024.0;
+		// The columns FramePerfLog::CaptureFrame fills: the asset manager's, the upload queue's, the device's and the process's.
+		constexpr size_t c_CapturedColumns = 15 + 3 + 2 + 2;
 
 		// A header field as CSV (RFC 4180): quoted when it holds a separator, a quote or a line break.
 		std::string QuoteField(const std::string& field)
@@ -59,7 +62,7 @@ namespace Strata
 		m_Line += ',';
 	}
 
-	Scope<FramePerfLog> FramePerfLog::Create(const std::filesystem::path& path, const FrameProfiler& profiler, const FramePerfLogSpecification& specification,
+	Scope<FramePerfLog> FramePerfLog::Create(const std::filesystem::path& path, FrameProfiler& profiler, const FramePerfLogSpecification& specification,
 		std::string* outError)
 	{
 		const auto fail = [&](std::string message) -> Scope<FramePerfLog>
@@ -85,24 +88,39 @@ namespace Strata
 			return fail(fmt::format("cannot create the folder of '{}'", FileSystem::ToUTF8(path)));
 		Scope<FramePerfLog> log(new FramePerfLog());
 		log->m_Path = path;
+		log->m_Profiler = &profiler;
 		log->m_File.open(path, std::ios::out | std::ios::trunc | std::ios::binary);
 		if (!log->m_File.is_open())
 			return fail(fmt::format("cannot create '{}'", FileSystem::ToUTF8(path)));
 
+		// Scene systems register their stages when a scene first runs them: registered now, every system has a column.
+		for (const SceneSystemDescriptor& system : SceneSystemRegistry::GetAll())
+		{
+			if (!system.ProfileStage.empty())
+				profiler.RegisterStage(system.ProfileStage);
+		}
+
 		log->m_Columns = { "Frame", "WorkMs", "IntervalMs" };
 		log->m_StageCount = profiler.GetStageCount();
+		log->m_WarnedStages = log->m_StageCount;
 		for (FrameStageID stage = 0; stage < log->m_StageCount; stage++)
+		{
 			log->m_Columns.push_back(profiler.GetStageName(stage));
+			log->m_GPUStages.push_back(profiler.GetStageKind(stage) == FrameStageKind::GPU);
+		}
 		for (const char* column : { "WorkerBusyPercent", "IOBusyPercent", "LoadingAssets", "QueuedLoads", "InFlightLoads", "InFlightMB", "UploadedMB",
 			"FinalizeMs", "UploadMs", "ResidentGpuTexturesMB", "ResidentGpuBuffersMB", "ResidentCpuMB", "Evictions", "StreamedMB", "MipLevelsRaised",
 			"MipLevelsDropped", "MipsBelowWanted", "UploadQueueMB", "UploadQueueMs", "UploadQueueSteps", "DeviceMB", "StagingMB", "PrivateMB",
-			"PeakPrivateMB" })
+			"PeakPrivateMB", "GPUFrame", "GPUBusyMs" })
 		{
 			log->m_Columns.push_back(column);
 		}
 		log->m_Groups = specification.Columns;
 		for (const FramePerfColumnGroup& group : log->m_Groups)
+		{
 			log->m_Columns.insert(log->m_Columns.end(), group.Names.begin(), group.Names.end());
+			log->m_GroupColumnCount += group.Names.size();
+		}
 
 		std::string header;
 		for (size_t index = 0; index < log->m_Columns.size(); index++)
@@ -123,19 +141,9 @@ namespace Strata
 		Close();
 	}
 
-	bool FramePerfLog::WriteFrame(const FrameSample& frame, const AssetManagerStats* assets, const GPUUploadQueueStats* uploads,
-		const FramePerfDeviceMemory* device)
+	void FramePerfLog::FormatCapture(std::string& line, const AssetManagerStats* assets, const GPUUploadQueueStats* uploads, const FramePerfDeviceMemory* device)
 	{
-		if (m_Failed || m_Closed)
-			return false;
-
-		m_Line.clear();
-		auto out = std::back_inserter(m_Line);
-		fmt::format_to(out, "{},{:.4f},{:.4f}", frame.Index, frame.WorkMs, frame.IntervalMs);
-		// Stages registered after the header was written have no column.
-		for (uint32_t stage = 0; stage < m_StageCount; stage++)
-			fmt::format_to(out, ",{:.4f}", stage < frame.StageMs.size() ? frame.StageMs[stage] : 0.0f);
-		fmt::format_to(out, ",{:.2f},{:.2f}", frame.WorkerBusyPercent, frame.IOBusyPercent);
+		auto out = std::back_inserter(line);
 		if (assets)
 		{
 			const uint32_t queued = assets->QueuedLoads[0] + assets->QueuedLoads[1] + assets->QueuedLoads[2];
@@ -147,26 +155,30 @@ namespace Strata
 		}
 		else
 		{
-			m_Line += ",,,,,,,,,,,,,,,";
+			line += ",,,,,,,,,,,,,,,";
 		}
-		// The frame's steps through the upload queue (it is called before the next frame begins).
+		// The frame's steps through the upload queue (it is captured before the next frame begins).
 		if (uploads)
 			fmt::format_to(out, ",{:.3f},{:.4f},{}", ToMB(uploads->FrameBytes), uploads->FrameMs, uploads->FrameSteps);
 		else
-			m_Line += ",,,";
+			line += ",,,";
 		if (device)
 			fmt::format_to(out, ",{:.3f},{:.3f}", ToMB(device->DeviceBytes), ToMB(device->StagingBytes));
 		else
-			m_Line += ",,";
+			line += ",,";
 		// What the process holds, for memory limits of whole games (a peak includes every frame before).
 		if (const std::optional<ProcessMemoryInfo> memory = Platform::GetProcessMemory())
 			fmt::format_to(out, ",{:.3f},{:.3f}", ToMB(memory->PrivateBytes), ToMB(memory->PeakPrivateBytes));
 		else
-			m_Line += ",,";
+			line += ",,";
+	}
+
+	bool FramePerfLog::FormatGroups(std::string& out)
+	{
 		// The program's columns, each group checked for writing what it names.
 		for (const FramePerfColumnGroup& group : m_Groups)
 		{
-			FramePerfRow row(m_Line);
+			FramePerfRow row(out);
 			if (group.Write)
 			{
 				group.Write(row);
@@ -183,6 +195,75 @@ namespace Strata
 					group.Names.size(), group.Names.front());
 				return false;
 			}
+		}
+		return true;
+	}
+
+	void FramePerfLog::CaptureFrame(const FrameSample& frame, const AssetManagerStats* assets, const GPUUploadQueueStats* uploads, const FramePerfDeviceMemory* device)
+	{
+		if (m_Failed || m_Closed)
+			return;
+		CapturedFrame captured;
+		captured.Index = frame.Index;
+		FormatCapture(captured.Columns, assets, uploads, device);
+		if (!FormatGroups(captured.Groups))
+			return;
+		m_Captured.push_back(std::move(captured));
+	}
+
+	bool FramePerfLog::WriteFrame(const FrameSample& frame, const AssetManagerStats* assets, const GPUUploadQueueStats* uploads, const FramePerfDeviceMemory* device)
+	{
+		CaptureFrame(frame, assets, uploads, device);
+		return WriteFrame(frame);
+	}
+
+	bool FramePerfLog::WriteFrame(const FrameSample& frame)
+	{
+		if (m_Failed || m_Closed)
+			return false;
+
+		// Stages registered after the header was written have no column: said once per stage.
+		for (uint32_t stage = m_WarnedStages; stage < frame.StageMs.size(); stage++)
+		{
+			ST_CORE_WARN("The perf log '{}' has no column for stage '{}', registered after the log was created", FileSystem::ToUTF8(m_Path),
+				m_Profiler->GetStageName(stage));
+		}
+		m_WarnedStages = std::max(m_WarnedStages, static_cast<uint32_t>(frame.StageMs.size()));
+
+		// The frame's captured columns; frames captured before it that never got a row (a listener added later) go.
+		while (!m_Captured.empty() && m_Captured.front().Index < frame.Index)
+			m_Captured.pop_front();
+		const bool captured = !m_Captured.empty() && m_Captured.front().Index == frame.Index;
+
+		m_Line.clear();
+		auto out = std::back_inserter(m_Line);
+		fmt::format_to(out, "{},{:.4f},{:.4f}", frame.Index, frame.WorkMs, frame.IntervalMs);
+		for (uint32_t stage = 0; stage < m_StageCount; stage++)
+		{
+			if (!m_GPUStages[stage])
+				fmt::format_to(out, ",{:.4f}", stage < frame.StageMs.size() ? frame.StageMs[stage] : 0.0f);
+			else if (frame.HasGPU && stage < frame.GPUStageMs.size())
+				fmt::format_to(out, ",{:.4f}", frame.GPUStageMs[stage]);
+			else
+				m_Line += ',';
+		}
+		fmt::format_to(out, ",{:.2f},{:.2f}", frame.WorkerBusyPercent, frame.IOBusyPercent);
+		if (captured)
+			m_Line += m_Captured.front().Columns;
+		else
+			m_Line.append(c_CapturedColumns, ',');
+		if (frame.HasGPU)
+			fmt::format_to(out, ",1,{:.4f}", frame.GPUBusyMs);
+		else
+			m_Line += ",0,";
+		if (captured)
+		{
+			m_Line += m_Captured.front().Groups;
+			m_Captured.pop_front();
+		}
+		else
+		{
+			m_Line.append(m_GroupColumnCount, ',');
 		}
 		m_Line += '\n';
 

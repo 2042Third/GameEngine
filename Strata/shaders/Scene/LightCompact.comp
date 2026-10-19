@@ -1,0 +1,102 @@
+#version 460
+#extension GL_GOOGLE_include_directive : require
+
+#include "Include/Lights.glsl"
+
+// The second of the GPU's light culling passes: packs the visible lights (Scene/LightCull.comp) into the light buffer in
+// record order, so that what the clusters list and the forward pass adds up does not depend on scheduling. Each work group
+// finds where its lights go from the counts of the groups before it and a scan of its own; group 0 also writes the total.
+// The lights go camera-relative (the shaders' space) with their view-space bounding spheres, as CollectLights uploads them.
+
+layout(local_size_x = ST_LIGHT_GROUP_SIZE, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = ST_SRV(19), std430) readonly buffer LightVisibleBuffer
+{
+	uint u_LightVisible[];
+};
+layout(set = 0, binding = ST_SRV(20), std430) readonly buffer LightGroupCountBuffer
+{
+	uint u_LightGroupCounts[];
+};
+layout(set = 0, binding = ST_UAV(3), std430) writeonly buffer VisibleLightBuffer
+{
+	LightData o_Lights[];
+};
+layout(set = 0, binding = ST_UAV(4), std430) writeonly buffer VisibleLightBoundsBuffer
+{
+	vec4 o_LightBounds[];
+};
+layout(set = 0, binding = ST_UAV(5), std430) writeonly buffer LightCountBuffer
+{
+	uint o_LightCount[];
+};
+layout(set = 0, binding = ST_UAV(6), std430) buffer CounterBuffer
+{
+	uint u_Counters[];
+};
+
+shared uint s_Values[ST_LIGHT_GROUP_SIZE];
+
+// The sum of u_LightGroupCounts[0, end) over the work group (every thread gets it).
+uint SumGroupCounts(uint end)
+{
+	uint local = gl_LocalInvocationIndex;
+	uint partial = 0u;
+	for (uint group = local; group < end; group += ST_LIGHT_GROUP_SIZE)
+		partial += u_LightGroupCounts[group];
+	s_Values[local] = partial;
+	barrier();
+	for (uint stride = ST_LIGHT_GROUP_SIZE / 2u; stride > 0u; stride >>= 1u)
+	{
+		if (local < stride)
+			s_Values[local] += s_Values[local + stride];
+		barrier();
+	}
+	uint sum = s_Values[0];
+	barrier();
+	return sum;
+}
+
+void main()
+{
+	uint local = gl_LocalInvocationIndex;
+	uint record = gl_GlobalInvocationID.x;
+	uint offset = SumGroupCounts(gl_WorkGroupID.x);
+
+	// The work group's inclusive scan of its visible flags.
+	uint flag = record < u_LightCull.RecordCount ? u_LightVisible[record] : 0u;
+	s_Values[local] = flag;
+	barrier();
+	for (uint step = 1u; step < ST_LIGHT_GROUP_SIZE; step <<= 1u)
+	{
+		uint value = local >= step ? s_Values[local - step] : 0u;
+		barrier();
+		s_Values[local] += value;
+		barrier();
+	}
+	uint position = offset + s_Values[local] - flag;
+	barrier();
+
+	if (flag != 0u)
+	{
+		LightRecord light = u_LightRecords[record];
+		LightData data;
+		data.PositionRange = vec4(light.PositionRange.xyz - u_Frame.CameraPosition.xyz, light.PositionRange.w);
+		data.Color = light.Color;
+		data.DirectionType = light.DirectionType;
+		data.SpotAngles = vec4(light.SpotAngles.xy, 0.0, 0.0);
+		o_Lights[position] = data;
+		vec3 center = light.Bounds.xyz - u_Frame.CameraPosition.xyz;
+		o_LightBounds[position] = vec4(mat3(u_Frame.View) * center, light.Bounds.w);
+	}
+
+	if (gl_WorkGroupID.x == 0u)
+	{
+		uint total = SumGroupCounts(u_LightCull.GroupCount);
+		if (local == 0u)
+		{
+			o_LightCount[0] = total;
+			u_Counters[ST_COUNTER_VISIBLE_LIGHTS] = total;
+		}
+	}
+}

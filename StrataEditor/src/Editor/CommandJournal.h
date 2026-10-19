@@ -81,6 +81,7 @@ namespace Strata
 		EditorCommandKind Kind = EditorCommandKind::Edit;
 		EditorCommandResults Results = EditorCommandResults::Content;
 		bool Playing = false;     // It ran while the scene played
+		bool Event = false;       // Not a command: something that happened (RecordEvent), e.g. a scene switch the game asked for
 		bool RunningCopy = false; // It changed the running copy of the playing scene (EditorCommandResult::RunningCopy)
 		// The parameters as given, unless they were larger than CommandJournal::c_MaxParameterBytes: then shortened (long
 		// strings and arrays cut) and ParametersTruncated, so the entry cannot be run again exactly.
@@ -109,8 +110,9 @@ namespace Strata
 		std::chrono::steady_clock::time_point Started;
 	};
 
-	// The latest command an automation client ran, once it finished (CommandJournal::GetLatestAutomationActivity): what the
-	// viewport's agent chip names and the entities it outlines for a moment.
+	// The latest mutating command (kind Edit, or an edit of the running copy) an automation client ran, once it finished
+	// (CommandJournal::GetLatestAutomationActivity): what the viewport's agent chip names and the entities it outlines for a
+	// moment. Queries do not replace it.
 	struct AutomationActivity
 	{
 		uint64_t Id = 0; // Its journal entry; 0 before the first
@@ -171,6 +173,9 @@ namespace Strata
 		// merges into a step recorded before (one for those between two commands).
 		uint64_t GetEditsOutsideCommands() const { return m_EditsOutsideCommands; }
 		const AutomationActivity& GetLatestAutomationActivity() const { return m_LatestAutomation; }
+		// Records something that happened without a command (a scene switch the game asked for: "play.sceneSwitched") as a
+		// finished entry of kind Session (replays skip it), source Internal, with `details` as its parameters. Returns its id.
+		uint64_t RecordEvent(std::string_view name, const nlohmann::json& details, bool playing);
 		// A deferred command was polled once more.
 		void NotePoll(uint64_t id);
 		// Ends the entry (only the first call counts) and, for a command begun with Begin, ends it as the running command.
@@ -199,8 +204,12 @@ namespace Strata
 		bool IsEnabled() const { return m_Enabled; }
 		void Clear();
 
-		// An entry as editor.activity reports it.
+		// An entry as editor.activity reports it, with its Summarize as "summary".
 		static nlohmann::json Describe(const CommandJournalEntry& entry);
+		// The entry in a few words, as the Activity panel lists it: the undo step it recorded (with the entities' names:
+		// "Rename 'Crate' to 'Box'"), else the first line of its error, its warning, "discarded changes" for a command that
+		// replaced the edited scene with force, "running" or "done".
+		static std::string Summarize(const CommandJournalEntry& entry);
 
 		// A command script that repeats the successful edits (EditorCommandKind::Edit, top level; made while playing only when
 		// they outlast play mode, i.e. did not change the running copy) after entry `since`, for a project as it was then: IDs

@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <map>
 #include <memory>
@@ -916,6 +917,7 @@ namespace Strata
 				}
 			}
 
+			// A joint's rest transform, its translation in the model's units (the import scale is baked into the content).
 			JointPose GetNodePose(const cgltf_node& node, cgltf_size nodeIndex)
 			{
 				JointPose pose;
@@ -926,10 +928,11 @@ namespace Strata
 						Warn(fmt::format("Node {} has a transform matrix that cannot be decomposed; its joint uses identity", nodeIndex));
 						return JointPose();
 					}
+					pose.Translation *= m_Settings.Scale;
 					return pose;
 				}
 				if (node.has_translation)
-					pose.Translation = glm::make_vec3(node.translation);
+					pose.Translation = glm::make_vec3(node.translation) * m_Settings.Scale;
 				if (node.has_rotation)
 					pose.Rotation = AnimationMath::Normalize(glm::quat(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]));
 				if (node.has_scale)
@@ -1108,6 +1111,8 @@ namespace Strata
 					matrix[1][3] = 0.0f;
 					matrix[2][3] = 0.0f;
 					matrix[3][3] = 1.0f;
+					// The import scale S baked into the vertices and the joints: S * IBM * S^-1, whose translation scales.
+					matrix[3] = glm::vec4(glm::vec3(matrix[3]) * m_Settings.Scale, 1.0f);
 				}
 				binding.Joints.reserve(skin.joints_count);
 				for (cgltf_size joint = 0; joint < skin.joints_count; joint++)
@@ -1354,6 +1359,13 @@ namespace Strata
 						Warn(fmt::format("Primitive '{}' has non-finite positions; skipped", primitiveName));
 						continue;
 					}
+					// The import scale is part of the mesh, before LODs and bounds are made from it: simplification errors and
+					// recorded bounds are in the model's final units.
+					if (m_Settings.Scale != 1.0f)
+					{
+						for (glm::vec3& position : primitivePositions)
+							position *= m_Settings.Scale;
+					}
 
 					std::vector<uint32_t> primitiveIndices;
 					if (!ReadTriangleIndices(primitive, vertexCount, primitiveIndices))
@@ -1464,18 +1476,22 @@ namespace Strata
 					if (m_Settings.OptimizeMeshes)
 						MeshUtils::OptimizeIndices(primitiveIndices, primitiveVertexCount);
 					std::vector<std::vector<uint32_t>> levels = { primitiveIndices };
+					std::vector<float> levelErrors = { 0.0f }; // MeshLOD::Error of each level (full detail: none)
 					// Simplifying a large primitive into its levels of detail takes the longest of a mesh.
 					if (m_Context.IsCancelled())
 						return;
 					if (m_Settings.GenerateLODs && m_Settings.LODCount > 0)
 					{
-						for (std::vector<uint32_t>& level : MeshUtils::GenerateLODs(primitivePositions, primitiveIndices, m_Settings.LODCount))
-							levels.push_back(std::move(level));
+						for (MeshUtils::GeneratedLOD& level : MeshUtils::GenerateLODs(primitivePositions, primitiveAttributes, primitiveIndices, m_Settings.LODCount))
+						{
+							levelErrors.push_back(level.Error);
+							levels.push_back(std::move(level.Indices));
+						}
 					}
-					for (const std::vector<uint32_t>& level : levels)
+					for (size_t level = 0; level < levels.size(); level++)
 					{
-						submesh.LODs.push_back(MeshLOD { static_cast<uint32_t>(indices.size()), static_cast<uint32_t>(level.size()) });
-						indices.insert(indices.end(), level.begin(), level.end());
+						submesh.LODs.push_back(MeshLOD { static_cast<uint32_t>(indices.size()), static_cast<uint32_t>(levels[level].size()), levelErrors[level] });
+						indices.insert(indices.end(), levels[level].begin(), levels[level].end());
 					}
 
 					positions.insert(positions.end(), primitivePositions.begin(), primitivePositions.end());
@@ -1649,6 +1665,12 @@ namespace Strata
 					Warn(fmt::format("Animation '{}': the {} channel of '{}' has non-finite values; skipped", animationName, AnimationPathToString(channel.Path), channel.Target));
 					return std::nullopt;
 				}
+				// Translations (and a cubic spline's tangents of them) in the model's units; rotations and scales keep theirs.
+				if (channel.Path == AnimationPath::Translation && m_Settings.Scale != 1.0f)
+				{
+					for (float& value : channel.Values)
+						value *= m_Settings.Scale;
+				}
 				return channel;
 			}
 #endif
@@ -1682,7 +1704,7 @@ namespace Strata
 					glm::vec3 scale;
 					if (Math::DecomposeTransform(glm::make_mat4(node.matrix), translation, rotation, scale))
 					{
-						transform.Translation = translation;
+						transform.Translation = translation * m_Settings.Scale;
 						transform.Rotation = rotation;
 						transform.Scale = scale;
 					}
@@ -1693,8 +1715,9 @@ namespace Strata
 				}
 				else
 				{
+					// Translations in the model's units: the import scale is baked into the content, the root keeps scale 1.
 					if (node.has_translation)
-						transform.Translation = glm::make_vec3(node.translation);
+						transform.Translation = glm::make_vec3(node.translation) * m_Settings.Scale;
 					if (node.has_rotation)
 						transform.Rotation = glm::normalize(glm::quat(node.rotation[3], node.rotation[0], node.rotation[1], node.rotation[2]));
 					if (node.has_scale)
@@ -1885,8 +1908,9 @@ namespace Strata
 			{
 				Scene scene;
 				const std::string modelName = FileSystem::ToUTF8(m_Context.SourcePath.stem());
+				// The root keeps scale 1: the import scale is part of the content (vertices, translations, joints, clips), so
+				// instances placed before a change of the setting follow it, and their root transforms stay theirs.
 				Entity root = scene.CreateEntityWithUUID(DeriveSubAssetHandle(m_Context.Handle, "Node/Root"), modelName);
-				root.GetComponent<TransformComponent>().Scale = glm::vec3(m_Settings.Scale);
 
 				// Without a scene every root node is part of the model.
 				const std::vector<const cgltf_node*> roots = GetRootNodes();
@@ -1978,7 +2002,8 @@ namespace Strata
 		std::vector<PropertyInfo> properties;
 		ImportSettingsBuilder(properties)
 			.Float("Scale", defaults.Scale, c_MinImportScale, c_MaxImportScale).Speed(0.01f)
-				.Tooltip("Uniform scale of the model's root (glTF uses meters, like Strata); also scales imported cameras' and lights' ranges")
+				.Tooltip("Uniform scale baked into the model (glTF uses meters, like Strata): its meshes, node positions, skeleton and "
+					"animations, imported cameras' and lights' ranges. The model's root keeps scale 1, so instances already placed follow a change")
 			.Bool("GenerateLODs", defaults.GenerateLODs).DisplayName("Generate LODs")
 				.Tooltip("Generate simplified versions of every mesh, drawn when it covers less of the screen")
 			.UInt("LODCount", defaults.LODCount, c_MaxLODCount).DisplayName("LOD Count")
@@ -2006,6 +2031,123 @@ namespace Strata
 	{
 		GltfImport import(context, result);
 		return import.Run(outError);
+	}
+
+	uint64_t GltfImporter::EstimateImportMemory(const ImportEstimateSource& source, const nlohmann::json& settings) const
+	{
+		const uint64_t fallback = AssetImporter::EstimateImportMemory(source, settings);
+		// The document: a .glb's JSON chunk (after 12 bytes of header and the chunk's length and type; its binary chunk
+		// follows), or all of a .gltf, read beyond the head when it is longer.
+		const std::span<const uint8_t> head = source.Head;
+		std::span<const uint8_t> document = head;
+		std::optional<std::vector<uint8_t>> read;
+		const auto readDocument = [&](uint64_t offset, uint64_t length)
+		{
+			if (length > c_MaxEstimatedDocumentBytes)
+				return false;
+			read = ReadEstimateBytes(source, source.Path, offset, length);
+			if (!read || read->size() != length)
+				return false;
+			document = *read;
+			return true;
+		};
+		std::optional<uint64_t> binaryChunk; // Where a .glb's binary chunk's bytes start
+		if (head.size() >= 20 && std::memcmp(head.data(), "glTF", 4) == 0)
+		{
+			uint32_t jsonLength = 0;
+			std::memcpy(&jsonLength, head.data() + 12, sizeof(jsonLength));
+			if (std::memcmp(head.data() + 16, "JSON", 4) != 0)
+				return fallback;
+			binaryChunk = 20ull + jsonLength + 8;
+			if (jsonLength <= head.size() - 20)
+				document = head.subspan(20, jsonLength);
+			else if (!readDocument(20, jsonLength))
+				return fallback;
+		}
+		else if (head.size() < source.Size && !readDocument(0, source.Size))
+		{
+			return fallback;
+		}
+		const std::optional<nlohmann::json> json = JsonUtils::Parse(std::string_view(reinterpret_cast<const char*>(document.data()), document.size()));
+		if (!json || !json->is_object())
+			return fallback;
+		// The document is the file's word: lengths a crafted file makes huge saturate instead of wrapping around.
+		uint64_t estimate = 0;
+		const auto add = [&estimate](uint64_t length, uint64_t factor)
+		{
+			const uint64_t bytes = length > UINT64_MAX / factor ? UINT64_MAX : length * factor;
+			estimate = bytes > UINT64_MAX - estimate ? UINT64_MAX : estimate + bytes;
+		};
+		const nlohmann::json* buffers = JsonUtils::Find(*json, "buffers");
+		if (buffers && buffers->is_array())
+		{
+			for (const nlohmann::json& buffer : *buffers)
+				add(JsonUtils::GetUInt(buffer, "byteLength", 0), 2);
+		}
+
+		// Images by their headers (TextureImporter::EstimateImageMemory: they are cooked like textures), wherever they are:
+		// files beside the model, or buffer views of the .glb's binary chunk or of a buffer file. Images in data URIs and
+		// those whose bytes cannot be read count by their size (their import reads them, or fails).
+		const std::filesystem::path folder = source.Path.parent_path();
+		// The file a relative URI names; null for data and other URIs.
+		const auto findFile = [&folder](const nlohmann::json& object) -> std::optional<std::filesystem::path>
+		{
+			const nlohmann::json* uri = JsonUtils::Find(object, "uri");
+			if (!uri || !uri->is_string())
+				return std::nullopt;
+			std::string decoded = uri->get<std::string>();
+			if (decoded.starts_with("data:") || decoded.find("://") != std::string::npos)
+				return std::nullopt;
+			decoded.resize(cgltf_decode_uri(decoded.data()));
+			return folder / FileSystem::FromUTF8(decoded);
+		};
+		const nlohmann::json* views = JsonUtils::Find(*json, "bufferViews");
+		const nlohmann::json* images = JsonUtils::Find(*json, "images");
+		if (!images || !images->is_array())
+			return std::max(estimate, fallback);
+		for (const nlohmann::json& image : *images)
+		{
+			if (!image.is_object())
+				continue;
+			const uint64_t viewIndex = JsonUtils::GetUInt(image, "bufferView", UINT64_MAX);
+			if (views && views->is_array() && viewIndex < views->size())
+			{
+				const nlohmann::json& view = (*views)[static_cast<size_t>(viewIndex)];
+				const uint64_t length = JsonUtils::GetUInt(view, "byteLength", 0);
+				const uint64_t offset = JsonUtils::GetUInt(view, "byteOffset", 0);
+				const uint64_t bufferIndex = JsonUtils::GetUInt(view, "buffer", UINT64_MAX);
+				std::optional<std::filesystem::path> file;
+				uint64_t start = 0;
+				if (buffers && buffers->is_array() && bufferIndex < buffers->size())
+				{
+					const nlohmann::json& buffer = (*buffers)[static_cast<size_t>(bufferIndex)];
+					if (buffer.is_object() && !buffer.contains("uri") && bufferIndex == 0 && binaryChunk)
+					{
+						file = source.Path;
+						start = *binaryChunk;
+					}
+					else if (buffer.is_object())
+					{
+						file = findFile(buffer);
+					}
+				}
+				if (file && offset <= UINT64_MAX - start)
+					add(TextureImporter::EstimateImageMemory(source, *file, start + offset, length), 1);
+				else
+					add(length, TextureImporter::c_UnknownImageFactor);
+				continue;
+			}
+			if (const std::optional<std::filesystem::path> file = findFile(image))
+			{
+				if (const std::optional<uint64_t> size = GetEstimateFileSize(source, *file))
+					add(TextureImporter::EstimateImageMemory(source, *file, 0, *size), 1);
+				continue; // A missing image fails the import
+			}
+			// A data URI holds its bytes in base64: three for every four characters.
+			if (const nlohmann::json* uri = JsonUtils::Find(image, "uri"); uri && uri->is_string())
+				add(uri->get_ref<const std::string&>().size() / 4 * 3, TextureImporter::c_UnknownImageFactor);
+		}
+		return std::max(estimate, fallback);
 	}
 
 	bool GltfImporter::FindExternalFiles(std::span<const uint8_t> data, std::vector<std::string>& outRelativePaths, std::string* outError) const

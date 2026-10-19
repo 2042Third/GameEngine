@@ -218,7 +218,7 @@ namespace
 	}
 
 	// Editor frames until the world settled: nothing loading or unloading.
-	void Settle(WorldProject& project)
+	void Settle(GridWorldProject& project)
 	{
 		REQUIRE(WaitUntil([&]()
 		{
@@ -278,7 +278,7 @@ namespace
 		std::string m_Old;
 	};
 
-	void LookFrom(WorldProject& project, const glm::vec3& position)
+	void LookFrom(GridWorldProject& project, const glm::vec3& position)
 	{
 		project.Run("camera.set", { { "position", { position.x, position.y, position.z } }, { "target", { position.x, 0.0f, position.z - 10.0f } } });
 	}
@@ -289,7 +289,7 @@ TEST_SUITE("Editor.World")
 {
 	TEST_CASE("Opening a world streams its cells around the editor camera, and moving the camera loads and unloads them")
 	{
-		WorldProject project("EditorWorldOpen", 5);
+		GridWorldProject project("EditorWorldOpen", 5);
 		CHECK(project.Run("world.status")["world"].is_null());
 		CHECK(project.Run("scene.loadStatus")["world"].is_null());
 		CHECK(project.Run("editor.status")["world"].is_null());
@@ -342,7 +342,7 @@ TEST_SUITE("Editor.World")
 
 	TEST_CASE("The viewport's cell bounds outline the cells in reach, by state, and are worked out again only when cells change")
 	{
-		WorldProject project("EditorWorldCellBounds", 5);
+		GridWorldProject project("EditorWorldCellBounds", 5);
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		const glm::vec3 start(14.0f, 10.0f, 14.0f);
 		LookFrom(project, start);
@@ -383,7 +383,7 @@ TEST_SUITE("Editor.World")
 
 	TEST_CASE("world.loadCells loads cells anywhere and keeps them until they are let go")
 	{
-		WorldProject project("EditorWorldLoadCells", 5);
+		GridWorldProject project("EditorWorldLoadCells", 5);
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
 		Settle(project);
@@ -407,7 +407,7 @@ TEST_SUITE("Editor.World")
 
 	TEST_CASE("An edited cell is dirty, and stays loaded while the camera is away")
 	{
-		WorldProject project("EditorWorldDirty", 5);
+		GridWorldProject project("EditorWorldDirty", 5);
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
 		Settle(project);
@@ -435,7 +435,7 @@ TEST_SUITE("Editor.World")
 
 	TEST_CASE("A selected entity keeps its cell loaded, and frames that change nothing look the selection's cells up again")
 	{
-		WorldProject project("EditorWorldSelection", 5);
+		GridWorldProject project("EditorWorldSelection", 5);
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
 		Settle(project);
@@ -492,7 +492,7 @@ TEST_SUITE("Editor.World")
 {
 	TEST_CASE("Saving a world writes only the dirty cell, and the persistent scene never holds the cells' entities")
 	{
-		WorldProject project("EditorWorldSave", 3);
+		GridWorldProject project("EditorWorldSave", 3);
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
 		Settle(project);
@@ -578,7 +578,7 @@ TEST_SUITE("Editor.World")
 {
 	TEST_CASE("A move across a cell border is one undo step, and the save writes both cells")
 	{
-		WorldProject project("EditorWorldBorder", 3);
+		GridWorldProject project("EditorWorldBorder", 3);
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		LookFrom(project, glm::vec3(30.0f, 10.0f, 14.0f));
 		Settle(project);
@@ -613,19 +613,19 @@ TEST_SUITE("Editor.World")
 
 	TEST_CASE("New entities go into the edit layer's cell, new cells are written at the save, and entities move between layers")
 	{
-		WorldProject project("EditorWorldNewCells", 3);
+		GridWorldProject project("EditorWorldNewCells", 3);
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
 		Settle(project);
 
 		// The default edit layer is the persistent scene.
-		const UUID lamp = WorldProject::ToUUID(project.Run("entity.create", { { "name", "Lamp" } })["id"]);
+		const UUID lamp = GridWorldProject::ToUUID(project.Run("entity.create", { { "name", "Lamp" } })["id"]);
 		CHECK(CellOf(project.Context, lamp) == UUID::Null());
 		CHECK(project.Context.GetWorld()->GetDirtyCells().empty());
 
 		// With the Ground as the edit layer, an entity placed where no cell exists makes one.
 		project.Run("world.edit", { { "editLayer", "Ground" } });
-		const UUID rock = WorldProject::ToUUID(project.Run("entity.create", { { "name", "Rock" }, { "components", { { "Transform", { { "Translation", { 112.0, 0.0, 16.0 } } } } } } })["id"]);
+		const UUID rock = GridWorldProject::ToUUID(project.Run("entity.create", { { "name", "Rock" }, { "components", { { "Transform", { { "Translation", { 112.0, 0.0, 16.0 } } } } } } })["id"]);
 		const AssetHandle newCell = DeriveSubAssetHandle(project.World, "Cell/1/3/0");
 		CHECK(CellOf(project.Context, rock) == newCell);
 		const nlohmann::json saved = project.Run("scene.save");
@@ -644,7 +644,7 @@ TEST_SUITE("Editor.World")
 		CHECK(CellOf(project.Context, rock) == UUID::Null());
 		project.Run("world.moveEntities", { { "entities", { UUIDToJson(rock) } }, { "layer", "Ground" } });
 		CHECK(CellOf(project.Context, rock) == newCell);
-		const UUID pebble = WorldProject::ToUUID(project.Run("entity.create", { { "name", "Pebble" }, { "parent", UUIDToJson(rock) } })["id"]);
+		const UUID pebble = GridWorldProject::ToUUID(project.Run("entity.create", { { "name", "Pebble" }, { "parent", UUIDToJson(rock) } })["id"]);
 		CHECK_FALSE(project.Try("world.moveEntities", { { "entities", { UUIDToJson(pebble) } }, { "layer", "Persistent" } }).Success);
 		CHECK_FALSE(project.Try("world.moveEntities", { { "entities", { UUIDToJson(rock) } }, { "layer", "Rivers" } }).Success);
 		CHECK(CellOf(project.Context, rock) == newCell);
@@ -655,7 +655,7 @@ TEST_SUITE("Editor.World")
 {
 	TEST_CASE("world.create makes a world and its persistent scene, opened or as one undo step")
 	{
-		WorldProject project("EditorWorldCreate", 2);
+		GridWorldProject project("EditorWorldCreate", 2);
 		const std::filesystem::path assets = project.Directory / "Assets";
 		const nlohmann::json created = project.Run("world.create", { { "path", "Worlds/Island" }, { "cellSize", 32 } });
 		CHECK(FileSystem::Exists(assets / "Worlds" / "Island.stworld"));
@@ -667,10 +667,10 @@ TEST_SUITE("Editor.World")
 		CHECK(created["layers"][0]["loadBeforeStart"] == true);
 		CHECK(created["layers"][3]["loadBeforeStart"] == false);
 		// Opened: the world is the edited one, with a camera that streams it.
-		const UUID persistent = WorldProject::ToUUID(created["persistentScene"]);
+		const UUID persistent = GridWorldProject::ToUUID(created["persistentScene"]);
 		CHECK(project.Context.GetSceneHandle() == persistent);
 		REQUIRE(project.Context.GetWorld());
-		CHECK(project.Context.GetWorld()->GetWorld() == WorldProject::ToUUID(created["world"]));
+		CHECK(project.Context.GetWorld()->GetWorld() == GridWorldProject::ToUUID(created["world"]));
 		CHECK(project.Context.GetEditScene()->FindEntityByName("World").HasComponent<WorldComponent>());
 		CHECK(project.Context.GetEditScene()->GetPrimaryCameraEntity().IsValid());
 
@@ -697,7 +697,7 @@ TEST_SUITE("Editor.World")
 {
 	TEST_CASE("world.setLayers adds, renames and removes layers in one undo step each")
 	{
-		WorldProject project("EditorWorldLayers", 2);
+		GridWorldProject project("EditorWorldLayers", 2);
 		const std::filesystem::path assets = project.Directory / "Assets";
 		const std::string world = UUIDToJson(project.World).get<std::string>();
 
@@ -740,12 +740,12 @@ TEST_SUITE("Editor.World")
 {
 	TEST_CASE("Playing a world copies the cells the editor has loaded, keeps the dirty ones and streams the rest")
 	{
-		WorldProject project("EditorWorldPlay", 8);
+		GridWorldProject project("EditorWorldPlay", 8);
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		LookFrom(project, glm::vec3(46.0f, 10.0f, 46.0f));
 		Settle(project);
 		REQUIRE(project.Run("world.status")["cells"]["loaded"] == 9);
-		// The first box of cell (0, 0), and those of cells (6, 6) and (1, 1) (WorldProject's IDs).
+		// The first box of cell (0, 0), and those of cells (6, 6) and (1, 1) (GridWorldProject's IDs).
 		const UUID boxID = UUID(0x6F0000000000ull);
 		const UUID farBox = UUID(0x6F0000000000ull + (uint64_t(6 * 8 + 6) << 8));
 		const UUID nearBox = UUID(0x6F0000000000ull + (uint64_t(1 * 8 + 1) << 8));
@@ -794,7 +794,7 @@ TEST_SUITE("Editor.World")
 {
 	TEST_CASE("Undoing an edit of a cell that unloaded loads the cell and works once it is in")
 	{
-		WorldProject project("EditorWorldUndoUnloaded", 5);
+		GridWorldProject project("EditorWorldUndoUnloaded", 5);
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
 		Settle(project);
@@ -820,7 +820,7 @@ TEST_SUITE("Editor.World")
 
 	TEST_CASE("A world's discarded edits are recovered into their cells, which load first")
 	{
-		WorldProject project("EditorWorldRecovery", 5);
+		GridWorldProject project("EditorWorldRecovery", 5);
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
 		Settle(project);
@@ -902,14 +902,14 @@ TEST_SUITE("Editor.World")
 
 	TEST_CASE("Recovering a world makes its unsaved new cells again, and a snapshot leaves the cells it did not hold")
 	{
-		WorldProject project("EditorWorldRecoverySnapshot", 5);
+		GridWorldProject project("EditorWorldRecoverySnapshot", 5);
 		project.Run("scene.open", { { "scene", UUIDToJson(project.Persistent) } });
 		LookFrom(project, glm::vec3(14.0f, 10.0f, 14.0f));
 		Settle(project);
 		// A tower in a Ground cell no document holds yet, then a step only a snapshot captures (a rename of a box of cell
 		// (0, 0)): the journal becomes a snapshot of what is loaded.
 		project.Run("world.edit", { { "editLayer", "Ground" } });
-		const UUID tower = WorldProject::ToUUID(project.Run("entity.create", { { "name", "Tower" },
+		const UUID tower = GridWorldProject::ToUUID(project.Run("entity.create", { { "name", "Tower" },
 			{ "components", { { "Transform", { { "Translation", { 200.0, 0.0, 10.0 } } } } } } })["id"]);
 		const AssetHandle towerCell = DeriveSubAssetHandle(project.World, "Cell/1/6/0");
 		REQUIRE(project.Context.GetWorld()->IsCellDirty(towerCell));

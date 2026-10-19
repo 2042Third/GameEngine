@@ -7,11 +7,16 @@
 
 #include <Strata/Core/UUID.h>
 #include <Strata/Reflection/Property.h>
+#include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
 
+#include <nlohmann/json.hpp>
+
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -20,6 +25,11 @@ namespace Strata
 
 	class EditorCommandRegistry;
 	class EditorContext;
+
+	namespace UI
+	{
+		struct ComponentDrawResult;
+	}
 
 	// The selected entities, drawn from component reflection: every registered component is editable without inspector code
 	// of its own.
@@ -41,26 +51,64 @@ namespace Strata
 	public:
 		void OnImGuiRender(EditorPanelContext& context) override;
 		void OnHidden(EditorPanelContext& context) override;
+		// How often the Overrides menu walked an instance for its rows (tests): once per list, not per frame.
+		uint64_t GetOverrideRowsBuildCount() const { return m_OverrideRowsBuilds; }
 	private:
 		// The selected entities' components, or the scene's settings with nothing selected.
-		void DrawSelection(EditorContext& context, const EditorCommandRegistry& commands);
+		// A single selected entity of a prefab instance: its prefab entity id, its instance's overrides and whether the prefab is
+		// an imported model (which is never applied to).
+		// Copies: commands the Inspector runs while it draws may move or remake the instance's components.
+		struct PrefabView
+		{
+			UUID Root = UUID::Null();
+			UUID SceneEntity = UUID::Null();
+			UUID PrefabEntity = UUID::Null();
+			AssetHandle Prefab = UUID::Null();
+			std::vector<PrefabOverride> Overrides;
+			bool Model = false;
+
+			bool IsOverridden(std::string_view component, std::string_view property = {}) const;
+		};
+		std::optional<PrefabView> FindPrefabView(std::span<const Entity> entities) const;
+		// prefab.apply and prefab.revert chosen in the Inspector's menus run once the selection is drawn: they can remake the
+		// instance's entities, which the rest of the frame's drawing still reads.
+		void SchedulePrefabCommand(std::string name, nlohmann::json parameters);
+
+		void DrawSelection(EditorPanelContext& panelContext);
 		void DrawHeader(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
 		// The world cell (or the persistent scene) the entity belongs to, while the edited scene is a world.
 		static void DrawCellLine(EditorContext& context, const Scene& scene, Entity entity);
-		void DrawComponent(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
-		void DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info);
-		void DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info);
+		// Under the header for an entity of a prefab instance: the prefab (a click inspects it), Select (the instance's root),
+		// Open (the prefab in the Asset tab and the Content Browser) and the Overrides menu (Apply All, Revert All, each
+		// override).
+		void DrawPrefabBar(EditorPanelContext& panelContext, const PrefabView& view);
+		void DrawComponent(EditorPanelContext& panelContext, std::span<const Entity> entities, const ComponentInfo& info, const PrefabView* prefab);
+		void DrawComponentMenu(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities, const ComponentInfo& info,
+			const PrefabView* prefab);
+		// A notice and an Add button for each component the shown one requires that some of the entities lack.
+		void DrawMissingRequirements(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities,
+			const ComponentInfo& info);
+		// The right-click menu of the label drawn last, a row that edits the overridden `properties`: Apply to Prefab (not to a
+		// model) and Revert of each, recorded under "<probeKey>.Apply" and "<probeKey>.Revert" (".<property>" after them with
+		// several). The generic rows and the component drawers' rows share it.
+		void DrawPropertyOverrideMenu(const PrefabView& prefab, const ComponentInfo& info, std::span<const std::string_view> properties,
+			std::string_view probeKey);
+		// The generic rows of a component's properties, without those a component drawer showed (`drawn`).
+		void DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PrefabView* prefab,
+			const UI::ComponentDrawResult* drawn = nullptr);
 		// An edit of a rotation shared by several entities: continues the edit in progress, or begins one from the angles the
 		// widget showed (RotationAnglesEdit keeps each entity's own angles through a drag).
 		bool UpdateRotationEdit(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PropertyInfo& property,
 			const PropertyEditResult& result, std::string* outError);
-		void DrawMaterialSection(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
+		void DrawMaterialSection(EditorPanelContext& panelContext, std::span<const Entity> entities);
 		// While the scene plays: what the entity's animator plays (state, time, blending) and its parameters, read-only.
 		void DrawAnimatorState(EditorContext& context, Entity entity);
 		void DrawAddComponentPopup(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities);
 		// The scripts of the entity: fields edited through the same undoable path as script.setField, scripts added and
 		// removed through script.add/script.remove. Without a loaded module the stored overrides are shown read-only.
-		void DrawScripts(EditorContext& context, const EditorCommandRegistry& commands, Entity entity);
+		// The entity's scripts and their fields; an instance's overridden fields are marked (PropertyLabelOptions::Overridden)
+		// with Apply to Prefab and Revert on a right-click.
+		void DrawScripts(EditorContext& context, const EditorCommandRegistry& commands, Entity entity, const PrefabView* prefab);
 		void DrawSceneSettings(EditorContext& context, const EditorCommandRegistry& commands);
 		// The scene's collision layers: their names and the matrix of which collide (scene.setSettings, one step per edit).
 		void DrawCollisionLayers(EditorContext& context, const EditorCommandRegistry& commands);
@@ -106,6 +154,32 @@ namespace Strata
 		MaterialEditor m_MaterialEditor;
 		// The rotation of several entities being edited, until the widget reports the edit finished.
 		std::optional<RotationAnglesEdit> m_RotationEdit;
+		struct PendingCommand
+		{
+			std::string Name;
+			nlohmann::json Parameters;
+		};
+		std::optional<PendingCommand> m_PendingPrefabCommand;
+		// The Overrides menu's rows: each override's entity in the scene and label, found by walking the instance once for
+		// the list they were made from, and again only when the history, the hierarchy or the instance change.
+		struct OverrideRow
+		{
+			UUID Target = UUID::Null(); // Null: the instance removed the entity
+			std::string Label;
+			nlohmann::json Parameters;  // prefab.apply and prefab.revert of the override alone
+		};
+		struct OverrideRows
+		{
+			const Scene* ForScene = nullptr;
+			UUID Root = UUID::Null();
+			uint64_t UndoVersion = UINT64_MAX;
+			uint64_t HierarchyVersion = UINT64_MAX;
+			std::vector<PrefabOverride> Overrides;
+			std::vector<OverrideRow> Rows;
+		};
+		OverrideRows m_OverrideRows;
+		uint64_t m_OverrideRowsBuilds = 0;
+		const std::vector<OverrideRow>& GetOverrideRows(EditorContext& context, const PrefabView& view);
 	};
 
 }

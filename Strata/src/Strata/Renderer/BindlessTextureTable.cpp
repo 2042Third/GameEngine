@@ -34,7 +34,6 @@ namespace Strata
 		m_Device->resizeDescriptorTable(m_Table, newCapacity, true);
 		m_SlotTextures.resize(newCapacity);
 		m_SlotAllocated.resize(newCapacity, false);
-		m_SlotGenerations.resize(newCapacity, 0);
 	}
 
 	uint32_t BindlessTextureTable::Allocate(nvrhi::ITexture* texture)
@@ -81,7 +80,6 @@ namespace Strata
 			return;
 		}
 		m_SlotAllocated[slot] = false;
-		m_SlotGenerations[slot]++;
 		m_PendingReleases.push_back(PendingRelease { slot, m_CurrentFrame });
 		m_Allocated--;
 	}
@@ -107,32 +105,6 @@ namespace Strata
 			m_SlotTextures[slot] = nullptr;
 			m_FreeSlots.push_back(slot);
 		}
-	}
-
-	void BindlessTextureTable::GetSlotGenerations(std::span<const uint32_t> slots, std::vector<uint32_t>& out) const
-	{
-		out.clear();
-		out.reserve(slots.size());
-		std::scoped_lock<std::mutex> lock(m_Mutex);
-		for (const uint32_t slot : slots)
-			out.push_back(slot < m_SlotGenerations.size() ? m_SlotGenerations[slot] : 0u);
-	}
-
-	bool BindlessTextureTable::AreSlotsUnchanged(std::span<const uint32_t> slots, std::span<const uint32_t> generations) const
-	{
-		if (slots.size() != generations.size())
-			return false;
-		std::scoped_lock<std::mutex> lock(m_Mutex);
-		for (size_t index = 0; index < slots.size(); index++)
-		{
-			const uint32_t slot = slots[index];
-			// Reserved slots hold their fallback textures for good.
-			if (slot < c_ReservedSlots)
-				continue;
-			if (slot >= m_SlotAllocated.size() || !m_SlotAllocated[slot] || m_SlotGenerations[slot] != generations[index])
-				return false;
-		}
-		return true;
 	}
 
 	uint32_t BindlessTextureTable::GetAllocatedCount() const

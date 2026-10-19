@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
+#include "Editor/CommandTestUtils.h"
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -333,10 +334,9 @@ namespace
 
 		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{
-			EditorCommandResult result = Commands.Execute(Context, name, parameters);
+			const EditorCommandResult result = Tests::CompleteCommand(Context, Commands.Execute(Context, name, parameters));
 			INFO(name, ": ", result.Error);
 			REQUIRE(result.Success);
-			REQUIRE_FALSE(result.IsPending());
 			return result.Value;
 		}
 
@@ -844,7 +844,7 @@ TEST_SUITE("Editor.ImportSettings")
 		// Every setting with what it accepts, for the inspector and for agents.
 		const nlohmann::json info = harness.Run("asset.info", { { "asset", texture } });
 		const nlohmann::json& properties = info["importSettingsProperties"];
-		REQUIRE(properties.size() == 8);
+		REQUIRE(properties.size() == 9);
 		CHECK(properties[0]["Name"] == "Usage");
 		CHECK(properties[0]["Options"] == nlohmann::json { "Color", "NormalMap", "Data", "HDR" });
 		CHECK(properties[1]["Name"] == "Compression");
@@ -880,7 +880,7 @@ TEST_SUITE("Editor.Import")
 		CHECK(item["assets"][0]["type"] == "Model");
 		CHECK(item["assets"][1]["path"] == "Models/Quad/QuadColor.png");
 
-		nlohmann::json info = harness.Run("asset.info", { { "asset", "Models/Quad/Quad.gltf" } });
+		nlohmann::json info = harness.Run("asset.info", { { "asset", "Models/Quad/Quad.gltf" }, { "bounds", false } });
 		CHECK(info["importError"] == "");
 		for (const nlohmann::json& warning : info["importWarnings"])
 			CHECK(warning.get<std::string>().find("skipped") == std::string::npos);
@@ -906,7 +906,7 @@ TEST_SUITE("Editor.Import")
 		REQUIRE(result.Success);
 		CHECK(result.Value["path"] == "Props/Crate/Models/Crate.gltf");
 		CHECK(FileSystem::IsRegularFile(harness.Assets / "Props" / "Crate" / "Textures" / "Wood.png"));
-		nlohmann::json info = harness.Run("asset.info", { { "asset", "Props/Crate/Models/Crate.gltf" } });
+		nlohmann::json info = harness.Run("asset.info", { { "asset", "Props/Crate/Models/Crate.gltf" }, { "bounds", false } });
 		CHECK(info["importError"] == "");
 		for (const nlohmann::json& warning : info["importWarnings"])
 			CHECK(warning.get<std::string>().find("skipped") == std::string::npos);
@@ -952,7 +952,7 @@ TEST_SUITE("Editor.Import")
 		CHECK(stone["asset"] == "5A5A5A5A5A5A5A5A");
 		CHECK(stone["importSettings"]["MaxSize"] == 2);
 		CHECK(harness.Context.GetAssetManager()->HasFolder("Imported/Pack/Sounds"));
-		CHECK(harness.Run("asset.info", { { "asset", "Imported/Pack/Models/Quad.gltf" } })["importError"] == "");
+		CHECK(harness.Run("asset.info", { { "asset", "Imported/Pack/Models/Quad.gltf" }, { "bounds", false } })["importError"] == "");
 	}
 
 	TEST_CASE("A failed import is a failure that leaves no file behind and is logged once")

@@ -4,6 +4,7 @@
 #include "Editor/EditorCamera.h"
 #include "Editor/SceneBounds.h"
 
+#include <Strata/Animation/AnimationPreview.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/FileSystem.h>
@@ -822,6 +823,9 @@ namespace Strata
 			job.Built = true;
 		}
 
+		// The rest poses of skeletons that arrived, before the bounds are measured in them.
+		if (job.Poses)
+			job.Poses->Update();
 		std::vector<AssetHandle> loadingMeshes;
 		const AABB bounds = SceneBounds::GetSceneBounds(*job.World, &loadingMeshes);
 		if (!bounds.IsValid())
@@ -853,6 +857,9 @@ namespace Strata
 			specification.ShadowMapSize = 1024;
 			specification.ShadowCascades = 1;
 			specification.PrefetchDistance = 0.0f;
+			// Thumbnails wait for their textures' levels and show them at once, and draw their levels of detail as they are.
+			specification.FadeTextureLevels = false;
+			specification.FadeLevelsOfDetail = false;
 			m_Renderer = CreateScope<SceneRenderer>(specification);
 		}
 		// Thumbnails and the preview share the renderer: its targets follow the image's size (they change only when a preview
@@ -867,7 +874,9 @@ namespace Strata
 			return;
 		}
 		const SceneRendererStats& stats = m_Renderer->GetStats();
-		if (stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || !loadingMeshes.empty())
+		// Large prefabs and models reach the GPU over several frames (SceneRendererSpecification::NewInstanceBytesPerFrame).
+		if (stats.PendingAssets > 0 || stats.PendingTextGlyphs > 0 || stats.DeferredProxies > 0 || !loadingMeshes.empty()
+			|| (job.Poses && job.Poses->HasWaitingRestPoses()))
 		{
 			job.QuietFrames = 0;
 			return;
@@ -940,6 +949,10 @@ namespace Strata
 						*outError = error;
 					return false;
 				}
+				// Skinned characters stand in their rest pose, as the edited scene shows them.
+				AnimationPreviewSpecification poses;
+				poses.RestPoses = true;
+				job.Poses = CreateScope<AnimationPreview>(*job.World, poses);
 				return true;
 			}
 			default:

@@ -1,5 +1,5 @@
 // Scripts of the Scripting.Helpers tests (StrataTests/src/Scripting/ScriptHelperTests.cpp): the SDK's gameplay helpers
-// (Random, Timer, KeyRepeat in StrataScript/Gameplay.h).
+// (Random, Timer, KeyRepeat and Motion in StrataScript/Gameplay.h).
 
 #include "TestScripts.h"
 
@@ -159,6 +159,103 @@ private:
 };
 
 ST_SCRIPT_CLASS(HelperChecks)
+{
+	ST_SCRIPT_FIELD(Checks);
+	ST_SCRIPT_FIELD(Failure);
+}
+
+// Motion's LookAt and SmoothDamp are plain computations: checked in OnCreate.
+class MotionChecks : public CheckingScript
+{
+public:
+	void OnCreate() override
+	{
+		CheckLookAt();
+		CheckSmoothDamp();
+	}
+private:
+	void CheckLookAt()
+	{
+		const glm::vec3 forward(0.0f, 0.0f, -1.0f);
+		const glm::vec3 up(0.0f, 1.0f, 0.0f);
+		const glm::quat ahead = Motion::LookAt(glm::vec3(1.0f, 2.0f, 3.0f), glm::vec3(1.0f, 2.0f, -7.0f));
+		Expect(Near(ahead, glm::quat(1.0f, 0.0f, 0.0f, 0.0f)), "looking along -Z is no rotation");
+		const glm::quat right = Motion::LookAt(glm::vec3(0.0f), glm::vec3(5.0f, 0.0f, 0.0f));
+		Expect(Near(right * forward, glm::vec3(1.0f, 0.0f, 0.0f)) && Near(right * up, up), "LookAt turns -Z towards the target and keeps +Y up");
+		const glm::vec3 target = glm::normalize(glm::vec3(2.0f, -1.0f, 3.0f));
+		const glm::quat slanted = Motion::LookAt(glm::vec3(0.0f), target * 4.0f);
+		Expect(Near(slanted * forward, target) && (slanted * up).y > 0.0f && Near(glm::dot(slanted * glm::vec3(1.0f, 0.0f, 0.0f), up), 0.0f),
+			"a slanted target: no roll");
+		const glm::quat straightUp = Motion::LookAt(glm::vec3(0.0f), glm::vec3(0.0f, 3.0f, 0.0f));
+		Expect(Near(straightUp * forward, up) && Near(glm::length(straightUp), 1.0f), "a target along up");
+		Expect(Near(Motion::LookAt(glm::vec3(2.0f), glm::vec3(2.0f)), glm::quat(1.0f, 0.0f, 0.0f, 0.0f)), "the same point: no rotation");
+		const glm::quat sideways = Motion::LookAt(glm::vec3(0.0f), glm::vec3(0.0f, 0.0f, -1.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+		Expect(Near(sideways * up, glm::vec3(1.0f, 0.0f, 0.0f)), "another up rolls the rotation");
+	}
+
+	void CheckSmoothDamp()
+	{
+		constexpr float c_Step = 1.0f / 60.0f;
+		float value = 0.0f;
+		float velocity = 0.0f;
+		bool rising = true;
+		bool below = true;
+		for (int frame = 0; frame < 120; frame++)
+		{
+			const float next = Motion::SmoothDamp(value, 10.0f, velocity, 0.3f, c_Step);
+			rising &= next >= value;
+			below &= next <= 10.0f;
+			value = next;
+		}
+		Expect(rising && below, "SmoothDamp approaches without overshooting");
+		Expect(Near(value, 10.0f, 0.01f), "SmoothDamp arrives in a few smooth times");
+		Expect(velocity >= 0.0f && velocity < 0.1f, "the velocity settles");
+
+		float limited = 0.0f;
+		float limitedVelocity = 0.0f;
+		for (int frame = 0; frame < 60; frame++)
+			limited = Motion::SmoothDamp(limited, 100.0f, limitedVelocity, 0.5f, c_Step, 2.0f);
+		Expect(limited > 0.5f && limited <= 2.0f + 1e-3f, "maxSpeed limits the speed");
+
+		float still = 3.0f;
+		float stillVelocity = 1.0f;
+		Expect(Motion::SmoothDamp(still, 5.0f, stillVelocity, 0.2f, 0.0f) == 3.0f && stillVelocity == 1.0f, "a zero delta changes nothing");
+		float pushed = 9.9f;
+		float pushedVelocity = 50.0f;
+		pushed = Motion::SmoothDamp(pushed, 10.0f, pushedVelocity, 0.2f, 0.1f);
+		Expect(pushed == 10.0f && pushedVelocity == 0.0f, "a spring pushed past the target stops there");
+
+		glm::vec3 position(0.0f);
+		glm::vec3 positionVelocity(0.0f);
+		const glm::vec3 goal(3.0f, -4.0f, 12.0f);
+		bool closer = true;
+		for (int frame = 0; frame < 120; frame++)
+		{
+			const glm::vec3 next = Motion::SmoothDamp(position, goal, positionVelocity, 0.25f, c_Step);
+			closer &= glm::length(goal - next) <= glm::length(goal - position) + 1e-5f;
+			position = next;
+		}
+		Expect(closer && Near(position, goal, 0.02f), "SmoothDamp of a vec3");
+		glm::vec2 point(10.0f, 0.0f);
+		glm::vec2 pointVelocity(0.0f);
+		for (int frame = 0; frame < 120; frame++)
+			point = Motion::SmoothDamp(point, glm::vec2(0.0f, 5.0f), pointVelocity, 0.25f, c_Step, 1000.0f);
+		Expect(Near(point, glm::vec2(0.0f, 5.0f), 0.02f), "SmoothDamp of a vec2");
+
+		float again = 0.0f;
+		float againVelocity = 0.0f;
+		float repeat = 0.0f;
+		float repeatVelocity = 0.0f;
+		for (int frame = 0; frame < 30; frame++)
+		{
+			again = Motion::SmoothDamp(again, 1.0f, againVelocity, 0.3f, c_Step);
+			repeat = Motion::SmoothDamp(repeat, 1.0f, repeatVelocity, 0.3f, c_Step);
+		}
+		Expect(again == repeat && againVelocity == repeatVelocity, "the same steps give the same values");
+	}
+};
+
+ST_SCRIPT_CLASS(MotionChecks)
 {
 	ST_SCRIPT_FIELD(Checks);
 	ST_SCRIPT_FIELD(Failure);

@@ -5,15 +5,18 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Math/Frustum.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Renderer/FontAtlasCache.h"
 #include "Strata/Renderer/LODSelection.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RenderScene.h"
+#include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/TextRenderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureStreamer.h"
+#include "Strata/Renderer/TextureTable.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 
@@ -127,19 +130,6 @@ namespace Strata
 			return device->createTexture(desc);
 		}
 
-		// Smallest sphere around the region a spot light reaches: the part of its range sphere inside the cone.
-		glm::vec4 SpotLightBounds(const glm::vec3& position, const glm::vec3& direction, float range, float cosOuter, float sinOuter)
-		{
-			if (cosOuter >= 0.70710678f)
-			{
-				// Up to 45 degrees the apex and the rim of the spherical cap lie on the bounding sphere.
-				const float radius = range / (2.0f * cosOuter);
-				return glm::vec4(position + direction * radius, radius);
-			}
-			// Wider cones are bounded by the sphere through the rim of the cap.
-			return glm::vec4(position + direction * (range * cosOuter), range * sinOuter);
-		}
-
 		template<typename Component>
 		bool HasActiveComponent(Scene& scene)
 		{
@@ -149,19 +139,6 @@ namespace Strata
 					return true;
 			}
 			return false;
-		}
-
-		bool IsFinite(const glm::mat4& matrix)
-		{
-			for (int column = 0; column < 4; column++)
-			{
-				for (int row = 0; row < 4; row++)
-				{
-					if (!std::isfinite(matrix[column][row]))
-						return false;
-				}
-			}
-			return true;
 		}
 
 	}
@@ -290,6 +267,8 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(12),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(14),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(15), // Joint matrices (only the skinned vertex shaders read them)
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(16), // The texture table (material data names textures by its indices)
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(17), // The shadow cascades (Scene/CascadeFit.comp)
 			nvrhi::BindingLayoutItem::Sampler(0).setSize(RenderData::c_SamplerCount),
 			nvrhi::BindingLayoutItem::Sampler(8),
 			nvrhi::BindingLayoutItem::Sampler(9),
@@ -367,14 +346,11 @@ namespace Strata
 			.setDebugName(m_Specification.DebugName + ".FrameConstants"));
 
 		bool recreated = false;
-		const bool buffersCreated = EnsureBufferCapacity(m_InstanceBuffer, 1024, sizeof(RenderData::InstanceData), "Instances", recreated)
-			&& EnsureBufferCapacity(m_DrawListBuffer, 1024, sizeof(uint32_t), "DrawList", recreated)
-			&& EnsureBufferCapacity(m_MaterialBuffer, 256, sizeof(RenderData::MaterialData), "Materials", recreated)
-			&& EnsureBufferCapacity(m_LightBuffer, 64, sizeof(RenderData::LightData), "Lights", recreated)
-			&& EnsureBufferCapacity(m_LightBoundsBuffer, 64, sizeof(RenderData::LightBounds), "LightBounds", recreated)
-			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, 1024, sizeof(uint32_t), "ShadowDrawList", recreated)
-			// Bound in every scene pass; it grows only once posed skinned meshes are drawn.
-			&& EnsureBufferCapacity(m_JointBuffer, 1, sizeof(RenderData::AffineTransform), "Joints", recreated);
+		const bool buffersCreated = EnsureBufferCapacity(m_DrawListBuffer, 1024, sizeof(uint32_t), "DrawList", recreated)
+			&& EnsureBufferCapacity(m_LightBuffer, 64, sizeof(RenderData::LightData), "Lights", recreated, BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_LightBoundsBuffer, 64, sizeof(RenderData::LightBounds), "LightBounds", recreated, BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_LightCountBuffer, 1, sizeof(uint32_t), "LightCount", recreated, BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, 1024, sizeof(uint32_t), "ShadowDrawList", recreated);
 		ST_CORE_VERIFY(buffersCreated, "SceneRenderer: failed to create the scene buffers");
 
 		m_ClusterBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
@@ -389,6 +365,7 @@ namespace Strata
 		clusterLayout.bindings = {
 			nvrhi::BindingLayoutItem::VolatileConstantBuffer(0),
 			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(13),
+			nvrhi::BindingLayoutItem::StructuredBuffer_SRV(21),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0)
 		};
 		m_ClusterBindingLayout = m_Device->createBindingLayout(clusterLayout);
@@ -419,6 +396,48 @@ namespace Strata
 		m_GTAOPipeline = createComputePipeline(halfAO ? "Effects/GTAOHalf.comp" : "Effects/GTAO.comp", m_AOBindingLayout);
 		m_AOBlurPipeline = createComputePipeline(halfAO ? "Effects/AOBlurHalf.comp" : "Effects/AOBlur.comp", m_AOBindingLayout);
 		m_ClusterPipeline = createComputePipeline("Scene/LightClusters.comp", m_ClusterBindingLayout);
+
+		// The shadow cascades, fitted on the GPU (both paths), and what the fit reads.
+		m_CascadeBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
+			.setByteSize(RenderData::c_MaxCascades * sizeof(RenderData::CascadeData))
+			.setStructStride(sizeof(RenderData::CascadeData))
+			.setCanHaveUAVs(true)
+			.setInitialState(nvrhi::ResourceStates::ShaderResource)
+			.setKeepInitialState(true)
+			.setDebugName(m_Specification.DebugName + ".Cascades"));
+		m_CasterDepthBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
+			.setByteSize(RenderData::c_MaxCascades * sizeof(uint32_t))
+			.setStructStride(sizeof(uint32_t))
+			.setCanHaveUAVs(true)
+			.setInitialState(nvrhi::ResourceStates::ShaderResource)
+			.setKeepInitialState(true)
+			.setDebugName(m_Specification.DebugName + ".CasterDepths"));
+		m_CascadeFitConstantBuffer = m_Device->createBuffer(nvrhi::BufferDesc()
+			.setByteSize(sizeof(RenderData::CascadeFitConstants))
+			.setIsConstantBuffer(true)
+			.setInitialState(nvrhi::ResourceStates::ConstantBuffer)
+			.setKeepInitialState(true)
+			.setDebugName(m_Specification.DebugName + ".CascadeFit"));
+		nvrhi::BindingLayoutDesc fitLayout;
+		fitLayout.visibility = nvrhi::ShaderType::Compute;
+		fitLayout.bindings = {
+			nvrhi::BindingLayoutItem::ConstantBuffer(0),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(0),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(1)
+		};
+		m_CascadeFitBindingLayout = m_Device->createBindingLayout(fitLayout);
+		m_CascadeFitPipeline = createComputePipeline("Scene/CascadeFit.comp", m_CascadeFitBindingLayout);
+		nvrhi::BindingSetDesc fitSet;
+		fitSet.bindings = {
+			nvrhi::BindingSetItem::ConstantBuffer(0, m_CascadeFitConstantBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_CasterDepthBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(1, m_CascadeBuffer)
+		};
+		m_CascadeFitBindingSet = m_Device->createBindingSet(fitSet, m_CascadeFitBindingLayout);
+		ST_CORE_VERIFY(m_CascadeBuffer && m_CasterDepthBuffer && m_CascadeFitConstantBuffer && m_CascadeFitPipeline && m_CascadeFitBindingSet,
+			"SceneRenderer: failed to create the shadow cascades' resources");
+		CreateCullResources();
+		CreateLightCullResources();
 
 		nvrhi::BindingLayoutDesc exposureLayout;
 		exposureLayout.visibility = nvrhi::ShaderType::Compute;
@@ -470,7 +489,14 @@ namespace Strata
 			"SceneRenderer: failed to create GPU resources");
 		CreateIBLResources();
 		CreateOverlayResources();
-		m_TextRenderer = CreateScope<TextRenderer>(m_Specification.DebugName, m_FrameConstantBuffer);
+		m_FontAtlases = CreateScope<FontAtlasCache>();
+		m_TextRenderer = CreateScope<TextRenderer>(m_Specification.DebugName, m_FrameConstantBuffer, *m_FontAtlases);
+		// Modules above the renderer (the game UI) draw their screen-space overlays through passes they register.
+		for (const SceneOverlayRegistry::Entry& entry : SceneOverlayRegistry::GetAll())
+		{
+			if (Scope<ISceneOverlayPass> pass = entry.Factory(SceneOverlayPassContext { m_Specification.DebugName }))
+				m_OverlayPasses.push_back(std::move(pass));
+		}
 	}
 
 	void SceneRenderer::CreateIBLResources()
@@ -824,10 +850,12 @@ namespace Strata
 			nvrhi::BindingSetDesc desc;
 			desc.bindings = {
 				nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
-				nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_InstanceBuffer),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(0, m_SceneGPU->GetInstanceBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(14, drawList),
-				nvrhi::BindingSetItem::StructuredBuffer_SRV(15, m_JointBuffer),
-				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_MaterialBuffer),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(15, m_SceneGPU->GetPaletteBuffer()),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(16, Renderer::GetTextureTable().GetBuffer()),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(17, m_CascadeBuffer),
+				nvrhi::BindingSetItem::StructuredBuffer_SRV(1, m_SceneGPU->GetMaterialBuffer()),
 				nvrhi::BindingSetItem::StructuredBuffer_SRV(2, m_LightBuffer),
 				nvrhi::BindingSetItem::Texture_SRV(3, hasEnvironment ? m_Environment->Irradiance.Get() : blackCube),
 				nvrhi::BindingSetItem::Texture_SRV(4, hasEnvironment ? m_Environment->Prefiltered.Get() : blackCube),
@@ -846,18 +874,25 @@ namespace Strata
 		};
 		m_SceneBindingSet = create(m_DrawListBuffer, shadowMap);
 		m_ShadowBindingSet = create(m_ShadowDrawListBuffer, m_DummyShadowMap);
+		// The GPU-driven path's passes read the draw list its culling writes.
+		const bool gpuSets = m_GPUDrawListBuffer != nullptr;
+		m_GPUSceneBindingSet = gpuSets ? create(m_GPUDrawListBuffer, shadowMap) : nullptr;
+		m_GPUShadowBindingSet = gpuSets ? create(m_GPUDrawListBuffer, m_DummyShadowMap) : nullptr;
 
 		nvrhi::BindingSetDesc clusterSet;
 		clusterSet.bindings = {
 			nvrhi::BindingSetItem::ConstantBuffer(0, m_FrameConstantBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_SRV(13, m_LightBoundsBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_SRV(21, m_LightCountBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(0, m_ClusterBuffer)
 		};
 		m_ClusterBindingSet = m_Device->createBindingSet(clusterSet, m_ClusterBindingLayout);
 
 		m_BoundEnvironment = environmentCube;
 		m_BoundShadowMap = shadowMap;
-		if (!m_SceneBindingSet || !m_ShadowBindingSet || !m_ClusterBindingSet)
+		m_BoundSceneGPUVersion = m_SceneGPU->GetBufferVersion();
+		m_BoundTextureTableVersion = Renderer::GetTextureTable().GetBufferVersion();
+		if (!m_SceneBindingSet || !m_ShadowBindingSet || !m_ClusterBindingSet || (gpuSets && (!m_GPUSceneBindingSet || !m_GPUShadowBindingSet)))
 		{
 			m_SceneBindingSet = nullptr; // Recreated next frame
 			return false;
@@ -994,12 +1029,21 @@ namespace Strata
 		}
 		m_ShadowMap = shadowMap;
 		m_ShadowFramebuffers = std::move(framebuffers);
+		// Without the cascades' pyramids the cascades are drawn whole (no occlusion culling): a limitation, not a failure.
+		if (!EnsureShadowPyramid())
+			ST_CORE_WARN("{}: the shadow cascades' depth pyramids could not be created; the cascades are not occlusion culled", m_Specification.DebugName);
 		return true;
 	}
 
-	uint32_t SceneRenderer::SelectLOD(const Submesh& submesh, float screenFraction) const
+	uint32_t SceneRenderer::SelectLOD(const Mesh& mesh, const Submesh& submesh, float screenFraction) const
 	{
-		return LODSelection::SelectLOD(screenFraction, m_Specification.LODThreshold, static_cast<uint32_t>(submesh.LODs.size()));
+		return LODSelection::SelectLOD(submesh, mesh.GetBounds(), screenFraction, m_LODCriteria);
+	}
+
+	LODCriteria SceneRenderer::GetLODCriteria() const
+	{
+		const float height = static_cast<float>(m_ViewportSize.y);
+		return LODCriteria { m_Specification.LODThreshold, LODSelection::GetErrorThreshold(m_Specification.LODErrorPixels, height), height };
 	}
 
 	float SceneRenderer::GetScreenFraction(const SceneCamera& camera, const glm::vec3& center, float radius)
@@ -1007,45 +1051,127 @@ namespace Strata
 		return LODSelection::GetScreenFraction(camera, center, radius);
 	}
 
+	bool SceneRenderer::UsesIndirectDraws() const
+	{
+		// One indirect call per bucket needs several draws per call and draws that set their first instance (the draw list
+		// offset of their batch); without them, each batch is a direct draw (the bucket's state is still set once).
+		const GraphicsDeviceInfo& info = Renderer::GetGraphicsDevice().GetInfo();
+		return m_Specification.IndirectMode != IndirectDrawMode::PerDraw && info.SupportsMultiDrawIndirect && info.SupportsDrawIndirectFirstInstance;
+	}
+
+	void SceneRenderer::BuildDrawArguments()
+	{
+		m_DrawArgumentsBuild.clear();
+		const auto append = [this](const SceneDrawBatch& batch)
+		{
+			const GeometryAllocation& geometry = m_FrameGeometry[batch.MeshSlot];
+			const Submesh& submesh = m_FrameMeshes[batch.MeshSlot]->GetSubmeshes()[batch.SubmeshIndex];
+			const MeshLOD& lod = submesh.LODs[batch.LOD];
+			nvrhi::DrawIndexedIndirectArguments arguments;
+			arguments.indexCount = lod.IndexCount;
+			arguments.instanceCount = batch.InstanceCount;
+			arguments.startIndexLocation = geometry.FirstIndex + lod.IndexOffset;
+			arguments.baseVertexLocation = static_cast<int32_t>(geometry.FirstVertex + submesh.BaseVertex);
+			arguments.startInstanceLocation = batch.FirstInstance;
+			m_DrawArgumentsBuild.push_back(arguments);
+		};
+		// Opaque batches (the prepass and the opaque pass draw them alike), transparent ones, then the shadow batches.
+		for (const SceneDrawBatch& batch : m_OpaqueBatches)
+			append(batch);
+		for (const SceneDrawBatch& batch : m_TransparentBatches)
+			append(batch);
+		for (const SceneDrawBatch& batch : m_ShadowBatches)
+			append(batch);
+	}
+
+	void SceneRenderer::DrawBuckets(nvrhi::ICommandList* commandList, nvrhi::GraphicsState& state, std::span<const SceneDrawBatch> batches, uint32_t firstArgument,
+		const std::function<PipelineKey(const SceneDrawBatch&)>& getKey, const std::function<void(const SceneDrawBatch&, nvrhi::GraphicsState&)>& prepareState,
+		const std::function<void(const SceneDrawBatch&)>& afterState)
+	{
+		const GeometryPool& pool = *Renderer::GetGeometryPool();
+		const bool indirect = UsesIndirectDraws();
+		state.indexBuffer = nvrhi::IndexBufferBinding { pool.GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
+		state.indirectParams = indirect ? m_DrawArgumentBuffer.Get() : nullptr;
+		size_t first = 0;
+		while (first < batches.size())
+		{
+			// A bucket: the batches up to the next change of pipeline state or vertex arena (and, for shadows, of cascade).
+			const SceneDrawBatch& head = batches[first];
+			const PipelineKey key = getKey(head);
+			const GeometryArena arena = m_FrameGeometry[head.MeshSlot].Arena;
+			size_t end = first + 1;
+			while (end < batches.size() && getKey(batches[end]) == key && m_FrameGeometry[batches[end].MeshSlot].Arena == arena && batches[end].Cascade == head.Cascade)
+				end++;
+
+			state.pipeline = GetScenePipeline(key);
+			state.vertexBuffers = {
+				nvrhi::VertexBufferBinding { pool.GetPositionBuffer(arena), 0, 0 },
+				nvrhi::VertexBufferBinding { pool.GetAttributeBuffer(arena), 1, 0 }
+			};
+			if (key.Skinned)
+				state.vertexBuffers.push_back(nvrhi::VertexBufferBinding { pool.GetSkinBuffer(), 2, 0 });
+			if (prepareState)
+				prepareState(head, state);
+			commandList->setGraphicsState(state);
+			if (afterState)
+				afterState(head);
+			if (indirect)
+			{
+				// Calls of at most the device's (or the specification's) draws each.
+				const size_t maxDraws = GetMaxDrawsPerIndirectCall();
+				for (size_t call = first; call < end;)
+				{
+					const size_t draws = std::min(maxDraws, end - call);
+					commandList->drawIndexedIndirect(static_cast<uint32_t>((firstArgument + call) * sizeof(nvrhi::DrawIndexedIndirectArguments)),
+						static_cast<uint32_t>(draws));
+					m_Stats.DrawCommands++;
+					call += draws;
+				}
+			}
+			else
+			{
+				for (size_t index = first; index < end; index++)
+				{
+					// The frame's arguments: the upload made them what the argument buffer holds (m_DrawArguments).
+					const nvrhi::DrawIndexedIndirectArguments& arguments = m_DrawArguments[firstArgument + index];
+					nvrhi::DrawArguments draw;
+					draw.vertexCount = arguments.indexCount;
+					draw.instanceCount = arguments.instanceCount;
+					draw.startIndexLocation = arguments.startIndexLocation;
+					draw.startVertexLocation = static_cast<uint32_t>(arguments.baseVertexLocation);
+					draw.startInstanceLocation = arguments.startInstanceLocation;
+					commandList->drawIndexed(draw);
+					m_Stats.DrawCommands++;
+				}
+			}
+			first = end;
+		}
+	}
+
 	void SceneRenderer::DrawShadows(nvrhi::ICommandList* commandList, uint32_t cascadeCount)
 	{
 		commandList->clearDepthStencilTexture(m_ShadowMap, nvrhi::AllSubresources, true, 0.0f, false, 0);
 		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
-		for (const SceneDrawBatch& batch : m_ShadowBatches)
-		{
-			if (batch.Cascade >= cascadeCount)
-				continue;
-			const Mesh* mesh = m_FrameMeshes[batch.MeshSlot];
-			const Submesh& submesh = mesh->GetSubmeshes()[batch.SubmeshIndex];
-			const MeshLOD& lod = submesh.LODs[batch.LOD];
-
-			nvrhi::GraphicsState state;
-			state.pipeline = GetScenePipeline(PipelineKey { batch.AlphaMask ? Pass::ShadowMasked : Pass::Shadow, batch.DoubleSided, batch.Mirrored, batch.Skinned });
-			state.framebuffer = m_ShadowFramebuffers[batch.Cascade];
-			state.viewport.addViewportAndScissorRect(nvrhi::Viewport(mapSize, mapSize));
-			state.bindings = { m_ShadowBindingSet, Renderer::GetBindlessTextures().GetTable(), m_ShadowPushBindingSet };
-			state.vertexBuffers = {
-				nvrhi::VertexBufferBinding { mesh->GetPositionBuffer(), 0, 0 },
-				nvrhi::VertexBufferBinding { mesh->GetAttributeBuffer(), 1, 0 }
-			};
-			if (batch.Skinned)
-				state.vertexBuffers.push_back(nvrhi::VertexBufferBinding { mesh->GetSkinBuffer(), 2, 0 });
-			state.indexBuffer = nvrhi::IndexBufferBinding { mesh->GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
-			commandList->setGraphicsState(state);
-			const uint32_t cascade = batch.Cascade;
-			commandList->setPushConstants(&cascade, sizeof(cascade));
-
-			nvrhi::DrawArguments arguments;
-			arguments.vertexCount = lod.IndexCount;
-			arguments.instanceCount = batch.InstanceCount;
-			arguments.startIndexLocation = lod.IndexOffset;
-			arguments.startVertexLocation = submesh.BaseVertex;
-			arguments.startInstanceLocation = batch.FirstInstance;
-			commandList->drawIndexed(arguments);
-		}
+		// Batches are sorted by cascade first: the ones of cascades beyond the count (none) end the list.
+		size_t count = 0;
+		while (count < m_ShadowBatches.size() && m_ShadowBatches[count].Cascade < cascadeCount)
+			count++;
+		nvrhi::GraphicsState state;
+		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(mapSize, mapSize));
+		state.bindings = { m_ShadowBindingSet, Renderer::GetBindlessTextures().GetTable(), m_ShadowPushBindingSet };
+		const uint32_t firstArgument = static_cast<uint32_t>(m_OpaqueBatches.size() + m_TransparentBatches.size());
+		// Each bucket draws into its cascade's layer, which the vertex shader also learns (a push constant after the state).
+		DrawBuckets(commandList, state, std::span<const SceneDrawBatch>(m_ShadowBatches.data(), count), firstArgument,
+			[](const SceneDrawBatch& batch) { return PipelineKey { batch.AlphaMask ? Pass::ShadowMasked : Pass::Shadow, batch.DoubleSided, batch.Mirrored, batch.Skinned }; },
+			[this](const SceneDrawBatch& batch, nvrhi::GraphicsState& bucketState) { bucketState.framebuffer = m_ShadowFramebuffers[batch.Cascade]; },
+			[commandList](const SceneDrawBatch& batch)
+			{
+				const uint32_t cascade = batch.Cascade;
+				commandList->setPushConstants(&cascade, sizeof(cascade));
+			});
 	}
 
-	bool SceneRenderer::EnsureBufferCapacity(nvrhi::BufferHandle& buffer, size_t elementCount, size_t elementSize, const char* name, bool& outRecreated, bool vertexBuffer)
+	bool SceneRenderer::EnsureBufferCapacity(nvrhi::BufferHandle& buffer, size_t elementCount, size_t elementSize, const char* name, bool& outRecreated, BufferKind kind)
 	{
 		const uint64_t required = std::max<uint64_t>(elementCount, 1) * elementSize;
 		if (buffer && buffer->getDesc().byteSize >= required)
@@ -1059,15 +1185,31 @@ namespace Strata
 		nvrhi::BufferDesc desc;
 		desc.byteSize = capacity;
 		desc.debugName = m_Specification.DebugName + "." + name;
-		if (vertexBuffer)
+		switch (kind)
 		{
-			desc.isVertexBuffer = true;
-			desc.initialState = nvrhi::ResourceStates::VertexBuffer;
-		}
-		else
-		{
-			desc.structStride = static_cast<uint32_t>(elementSize);
-			desc.initialState = nvrhi::ResourceStates::ShaderResource;
+			case BufferKind::Vertex:
+				desc.isVertexBuffer = true;
+				desc.initialState = nvrhi::ResourceStates::VertexBuffer;
+				break;
+			case BufferKind::IndirectArguments:
+				desc.isDrawIndirectArgs = true;
+				desc.initialState = nvrhi::ResourceStates::IndirectArgument;
+				break;
+			case BufferKind::Structured:
+				desc.structStride = static_cast<uint32_t>(elementSize);
+				desc.initialState = nvrhi::ResourceStates::ShaderResource;
+				break;
+			case BufferKind::StructuredUAV:
+				desc.structStride = static_cast<uint32_t>(elementSize);
+				desc.canHaveUAVs = true;
+				desc.initialState = nvrhi::ResourceStates::ShaderResource;
+				break;
+			case BufferKind::IndirectArgumentsUAV:
+				desc.structStride = static_cast<uint32_t>(elementSize);
+				desc.canHaveUAVs = true;
+				desc.isDrawIndirectArgs = true;
+				desc.initialState = nvrhi::ResourceStates::IndirectArgument;
+				break;
 		}
 		desc.keepInitialState = true;
 		nvrhi::BufferHandle created = m_Device->createBuffer(desc);
@@ -1150,6 +1292,12 @@ namespace Strata
 		release(m_CopyBindingSet);
 		release(m_OutlineBindingSet); // References the entity-ID texture
 		release(m_StatusTintBindingSet); // Likewise
+		release(m_DepthPyramid);
+		for (nvrhi::BindingSetHandle& set : m_DepthPyramidSets)
+			release(set);
+		m_DepthPyramidSets.clear();
+		m_DepthPyramidLevels = 0;
+		release(m_CullBindingSet); // References the depth pyramid
 		Renderer::ReleaseDeferred(std::move(released));
 	}
 
@@ -1220,6 +1368,8 @@ namespace Strata
 		m_LDRFramebuffer = m_Device->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(m_LDRTexture));
 		if (!m_GTAOBindingSet || !m_AOBlurBindingSet || !m_PrepassFramebuffer || !m_ForwardFramebuffer || !m_LDRFramebuffer)
 			return fail("framebuffers");
+		if (!CreateDepthPyramid())
+			return fail("depth pyramid");
 
 		// Automatic exposure meters the HDR image.
 		nvrhi::BindingSetDesc exposureSet;
@@ -1424,7 +1574,7 @@ namespace Strata
 		return pipeline;
 	}
 
-	void SceneRenderer::CollectLights(Scene& scene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame)
+	void SceneRenderer::CollectLights(Scene& scene, const RenderScene& renderScene, const SceneCamera& camera, bool preview, RenderData::FrameConstants& frame)
 	{
 		ST_PROFILE_STAGE("Render.Extract");
 		entt::registry& registry = scene.GetRegistry();
@@ -1471,34 +1621,48 @@ namespace Strata
 			break;
 		}
 
+		// Exponential depth slices between the near and far distance; the first slice also holds everything closer, the
+		// last everything further away.
+		const glm::uvec3 grid = m_Specification.LightClusterGrid;
+		const float sliceNear = std::max(camera.Near, 0.01f);
+		const float sliceFar = std::isfinite(camera.Far) ? std::clamp(camera.Far, sliceNear * 2.0f, 1.0e6f) : 1.0e6f;
+		const float scale = static_cast<float>(grid.z) / std::log(sliceFar / sliceNear);
+		frame.ClusterGrid = glm::uvec4(grid, m_Specification.MaxLightsPerCluster);
+		frame.ClusterDepth = glm::vec4(scale, -scale * std::log(sliceNear), std::min(camera.Near, 0.0f), c_ClusterDepthEnd);
+
+		m_LightCandidates.clear();
+		m_Lights.clear();
+		m_LightBounds.clear();
+		const RenderLights& lights = renderScene.GetLights();
+		m_GPULightsFrame = m_GPUDrivenFrame && m_LightCullPipeline && m_LightCompactPipeline;
+		if (m_GPULightsFrame)
+		{
+			// The GPU culls every light record into the light buffer (RunGPULightCulling): all lights in view, uncapped.
+			m_GPULightRecords = m_SceneGPU->GetLightCapacity();
+			frame.LightCounts = glm::uvec4(lights.GetCount() > 0 && m_GPULightRecords > 0 ? 1u : 0u, 1u, 0u, 0u);
+			return;
+		}
+
 		// Point and spot lights: frustum culled by the bounding sphere of the region they reach, then ranked by
 		// relevance (lights containing the camera first, then by the projected size of that sphere).
 		const Frustum frustum(camera.Projection * camera.View);
-		m_LightCandidates.clear();
-		auto addLight = [&](const glm::mat4& matrix, const glm::vec3& color, float intensity, float range, uint32_t type, float innerDegrees, float outerDegrees)
+		const std::span<const RenderData::LightRecord> records = lights.GetRecords();
+		for (uint32_t index = 0; index < records.size(); index++)
 		{
-			if (!(intensity > 0.0f) || !(range > 0.0f) || !std::isfinite(intensity) || !std::isfinite(range) || !IsFinite(matrix))
-				return;
-			const glm::vec3 position = glm::vec3(matrix[3]);
-			glm::vec3 direction = glm::vec3(matrix * glm::vec4(0.0f, 0.0f, -1.0f, 0.0f));
-			const float length = glm::length(direction);
-			direction = length > 1e-6f ? direction / length : glm::vec3(0.0f, 0.0f, -1.0f);
-			const float cosInner = std::cos(glm::radians(innerDegrees));
-			const float cosOuter = std::cos(glm::radians(outerDegrees));
-
+			const RenderData::LightRecord& record = records[index];
+			if (record.SpotAngles.z == 0.0f)
+				continue;
 			LightCandidate candidate;
-			candidate.Bounds = type == RenderData::c_LightSpot ? SpotLightBounds(position, direction, range, cosOuter, std::sin(glm::radians(outerDegrees)))
-				: glm::vec4(position, range);
+			candidate.Bounds = record.Bounds;
 			if (!frustum.IsSphereVisible(glm::vec3(candidate.Bounds), candidate.Bounds.w))
 			{
 				m_Stats.CulledLights++;
-				return;
+				continue;
 			}
-
-			candidate.Data.PositionRange = glm::vec4(position, range);
-			candidate.Data.Color = glm::vec4(color * intensity, 1.0f / (range * range));
-			candidate.Data.DirectionType = glm::vec4(direction, static_cast<float>(type));
-			candidate.Data.SpotAngles = glm::vec4(cosInner, cosOuter, 0.0f, 0.0f);
+			candidate.Data.PositionRange = record.PositionRange;
+			candidate.Data.Color = record.Color;
+			candidate.Data.DirectionType = record.DirectionType;
+			candidate.Data.SpotAngles = glm::vec4(record.SpotAngles.x, record.SpotAngles.y, 0.0f, 0.0f);
 			const float distance = glm::length(glm::vec3(candidate.Bounds) - camera.Position);
 			if (camera.Orthographic)
 				candidate.Relevance = candidate.Bounds.w; // The projected size does not depend on the distance
@@ -1506,22 +1670,8 @@ namespace Strata
 				candidate.Relevance = std::numeric_limits<float>::max();
 			else
 				candidate.Relevance = candidate.Bounds.w / (distance - candidate.Bounds.w);
-			candidate.Order = static_cast<uint32_t>(m_LightCandidates.size());
+			candidate.Order = index;
 			m_LightCandidates.push_back(candidate);
-		};
-
-		for (auto [entity, light, world] : registry.view<PointLightComponent, WorldTransformComponent>().each())
-		{
-			if (world.ActiveInHierarchy)
-				addLight(world.Matrix, light.Color, light.Intensity, light.Range, RenderData::c_LightPoint, 0.0f, 0.0f);
-		}
-		for (auto [entity, light, world] : registry.view<SpotLightComponent, WorldTransformComponent>().each())
-		{
-			if (!world.ActiveInHierarchy)
-				continue;
-			const float outer = std::clamp(light.OuterConeAngle, 0.1f, 89.9f);
-			const float inner = std::clamp(light.InnerConeAngle, 0.0f, outer);
-			addLight(world.Matrix, light.Color, light.Intensity, light.Range, RenderData::c_LightSpot, inner, outer);
 		}
 
 		// The order also decides which lights a full cluster keeps.
@@ -1541,24 +1691,19 @@ namespace Strata
 			}
 		}
 
-		m_Lights.clear();
-		m_LightBounds.clear();
+		// Uploaded camera-relative (the shaders' positions are), the subtraction in double so lights near a camera far from
+		// the origin keep their precision; the clusters' bounds are in view space.
+		const glm::mat3 viewRotation(camera.View);
+		const glm::dvec3 cameraPosition(camera.Position);
 		for (const LightCandidate& candidate : m_LightCandidates)
 		{
-			m_Lights.push_back(candidate.Data);
-			const glm::vec3 viewCenter = glm::vec3(camera.View * glm::vec4(glm::vec3(candidate.Bounds), 1.0f));
-			m_LightBounds.push_back(RenderData::LightBounds { glm::vec4(viewCenter, candidate.Bounds.w) });
+			RenderData::LightData light = candidate.Data;
+			light.PositionRange = glm::vec4(glm::vec3(glm::dvec3(glm::vec3(light.PositionRange)) - cameraPosition), light.PositionRange.w);
+			m_Lights.push_back(light);
+			const glm::vec3 relativeCenter(glm::dvec3(glm::vec3(candidate.Bounds)) - cameraPosition);
+			m_LightBounds.push_back(RenderData::LightBounds { glm::vec4(viewRotation * relativeCenter, candidate.Bounds.w) });
 		}
 		frame.LightCounts = glm::uvec4(static_cast<uint32_t>(m_Lights.size()), 0, 0, 0);
-
-		// Exponential depth slices between the near and far distance; the first slice also holds everything closer, the
-		// last everything further away.
-		const glm::uvec3 grid = m_Specification.LightClusterGrid;
-		const float sliceNear = std::max(camera.Near, 0.01f);
-		const float sliceFar = std::isfinite(camera.Far) ? std::clamp(camera.Far, sliceNear * 2.0f, 1.0e6f) : 1.0e6f;
-		const float scale = static_cast<float>(grid.z) / std::log(sliceFar / sliceNear);
-		frame.ClusterGrid = glm::uvec4(grid, m_Specification.MaxLightsPerCluster);
-		frame.ClusterDepth = glm::vec4(scale, -scale * std::log(sliceNear), std::min(camera.Near, 0.0f), c_ClusterDepthEnd);
 	}
 
 	void SceneRenderer::DrawBatches(nvrhi::ICommandList* commandList, Pass pass, bool transparent)
@@ -1571,35 +1716,16 @@ namespace Strata
 		state.framebuffer = pass == Pass::Prepass ? m_PrepassFramebuffer.Get() : m_ForwardFramebuffer.Get();
 		state.viewport.addViewportAndScissorRect(nvrhi::Viewport(static_cast<float>(m_ViewportSize.x), static_cast<float>(m_ViewportSize.y)));
 		state.bindings = { m_SceneBindingSet, Renderer::GetBindlessTextures().GetTable() };
-
+		const uint32_t firstArgument = transparent ? static_cast<uint32_t>(m_OpaqueBatches.size()) : 0u;
+		DrawBuckets(commandList, state, batches, firstArgument,
+			[pass](const SceneDrawBatch& batch) { return PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned }; }, nullptr, nullptr);
+		if (pass == Pass::Prepass)
+			return;
 		for (const SceneDrawBatch& batch : batches)
 		{
-			const Mesh* mesh = m_FrameMeshes[batch.MeshSlot];
-			const Submesh& submesh = mesh->GetSubmeshes()[batch.SubmeshIndex];
-			const MeshLOD& lod = submesh.LODs[batch.LOD];
-			state.pipeline = GetScenePipeline(PipelineKey { pass, batch.DoubleSided, batch.Mirrored, batch.Skinned });
-			state.vertexBuffers = {
-				nvrhi::VertexBufferBinding { mesh->GetPositionBuffer(), 0, 0 },
-				nvrhi::VertexBufferBinding { mesh->GetAttributeBuffer(), 1, 0 }
-			};
-			if (batch.Skinned)
-				state.vertexBuffers.push_back(nvrhi::VertexBufferBinding { mesh->GetSkinBuffer(), 2, 0 });
-			state.indexBuffer = nvrhi::IndexBufferBinding { mesh->GetIndexBuffer(), nvrhi::Format::R32_UINT, 0 };
-			commandList->setGraphicsState(state);
-
-			nvrhi::DrawArguments arguments;
-			arguments.vertexCount = lod.IndexCount;
-			arguments.instanceCount = batch.InstanceCount;
-			arguments.startIndexLocation = lod.IndexOffset;
-			arguments.startVertexLocation = submesh.BaseVertex;
-			arguments.startInstanceLocation = batch.FirstInstance;
-			commandList->drawIndexed(arguments);
-
-			if (pass != Pass::Prepass)
-			{
-				m_Stats.DrawCalls++;
-				m_Stats.Triangles += static_cast<uint64_t>(lod.IndexCount / 3) * batch.InstanceCount;
-			}
+			const MeshLOD& lod = m_FrameMeshes[batch.MeshSlot]->GetSubmeshes()[batch.SubmeshIndex].LODs[batch.LOD];
+			m_Stats.DrawCalls++;
+			m_Stats.Triangles += static_cast<uint64_t>(lod.IndexCount / 3) * batch.InstanceCount;
 		}
 	}
 
@@ -1643,22 +1769,42 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Submit"); // Extraction (Render.Extract) nests in it
+		m_LODCriteria = GetLODCriteria();
 		const bool rendered = RenderFrame(scene, camera, target, options);
 		if (rendered)
+		{
+			m_RenderCount++;
 			ReportTextureUse(camera);
+		}
 		// The references the frame resolved end with it, so a renderer that stops rendering (a capture renderer between
 		// captures, a hidden view) keeps none of the meshes, materials and textures it drew resident (the environment
 		// cache keeps the sky light's map) and no asset manager alive.
 		ReleaseFrameAssets();
+		m_SceneGPU = nullptr; // Its mirror may go before the next frame (RenderSceneGPUCache::BeginFrame)
 		return rendered;
+	}
+
+	glm::vec3 SceneRenderer::GetViewDirection(const SceneCamera& camera)
+	{
+		const glm::vec3 forward = -glm::vec3(camera.View[0][2], camera.View[1][2], camera.View[2][2]);
+		const float forwardLength = glm::length(forward);
+		return forwardLength > 0.0f ? forward / forwardLength : glm::vec3(0.0f, 0.0f, -1.0f);
+	}
+
+	bool SceneRenderer::IsCameraCut(const SceneCamera& camera) const
+	{
+		return !m_HasPreviousCamera || TextureStreamingPolicy::IsCameraCut(m_PreviousCameraPosition, m_PreviousCameraForward, camera.Position, GetViewDirection(camera));
+	}
+
+	glm::mat4 SceneRenderer::GetRelativeView(const SceneCamera& camera)
+	{
+		return glm::mat4(glm::mat3(camera.View));
 	}
 
 	void SceneRenderer::ReportTextureUse(const SceneCamera& camera)
 	{
 		// A view that jumped since the previous frame: what it needs now goes first.
-		const glm::vec3 forward = -glm::vec3(camera.View[0][2], camera.View[1][2], camera.View[2][2]);
-		const float forwardLength = glm::length(forward);
-		const glm::vec3 direction = forwardLength > 0.0f ? forward / forwardLength : glm::vec3(0.0f, 0.0f, -1.0f);
+		const glm::vec3 direction = GetViewDirection(camera);
 		const bool cut = m_HasPreviousCamera && TextureStreamingPolicy::IsCameraCut(m_PreviousCameraPosition, m_PreviousCameraForward, camera.Position, direction);
 		m_HasPreviousCamera = true;
 		m_PreviousCameraPosition = camera.Position;
@@ -1675,8 +1821,53 @@ namespace Strata
 		streamer->ReportView(view, m_VisibleTextures);
 	}
 
+	GPUTimerRecord& SceneRenderer::BeginGPURecord()
+	{
+		// A record per profiler frame slot: a frame of a slot the newest record does not belong to starts the next record.
+		GPUTimerRecord& newest = m_GPURecords[m_GPURecordIndex];
+		if (newest.Slot != 0 && Renderer::IsInitialized() && newest.Slot != Renderer::GetGPUProfiler().GetOpenSlot())
+		{
+			m_GPURecordIndex = (m_GPURecordIndex + 1) % c_GPURecordCount;
+			m_GPURecords[m_GPURecordIndex].Clear();
+		}
+		return m_GPURecords[m_GPURecordIndex];
+	}
+
+	void SceneRenderer::ResolveGPUStats(bool wait)
+	{
+		if (!Renderer::IsInitialized())
+			return;
+		ResolveCullCounters(wait);
+		GPUProfiler& profiler = Renderer::GetGPUProfiler();
+		if (!profiler.IsEnabled())
+			return;
+		profiler.Resolve(wait);
+		// The newest record whose timestamps are all written; older ones are then of no use.
+		for (uint32_t age = 0; age < c_GPURecordCount; age++)
+		{
+			GPUTimerRecord& record = m_GPURecords[(m_GPURecordIndex + c_GPURecordCount - age) % c_GPURecordCount];
+			if (record.Slot != 0 && record.Slot == m_ResolvedGPURecord)
+				return; // Known already, as everything older
+			if (record.Slot == 0)
+				continue;
+			if (!profiler.ReadRecord(record, m_GPUStageScratch))
+				continue;
+			m_GPUStats.HasTimes = true;
+			m_GPUStats.Frame = record.ProfilerFrame;
+			m_GPUStats.StageMs = m_GPUStageScratch;
+			m_GPUStats.BusyMs = 0.0f;
+			for (const GPUStageTime& stage : m_GPUStats.StageMs)
+				m_GPUStats.BusyMs += stage.Milliseconds;
+			m_ResolvedGPURecord = record.Slot;
+			for (uint32_t older = age + 1; older < c_GPURecordCount; older++)
+				m_GPURecords[(m_GPURecordIndex + c_GPURecordCount - older) % c_GPURecordCount].Clear();
+			return;
+		}
+	}
+
 	bool SceneRenderer::RenderFrame(Scene& scene, const SceneCamera& camera, nvrhi::IFramebuffer* target, const SceneRenderOptions& options)
 	{
+		ResolveGPUStats(false);
 		m_Stats = {};
 		if (m_ViewportSize.x == 0 || m_ViewportSize.y == 0)
 			return false; // Nothing to show (e.g. a minimized window); not an error
@@ -1699,18 +1890,40 @@ namespace Strata
 			// stat counts the updates since this renderer's previous frame.
 			renderScene.Sync(assets);
 			const uint64_t totalUpdates = renderScene.GetStats().TotalUpdates;
-			m_Stats.ProxyUpdates = static_cast<uint32_t>(totalUpdates - (m_ProxyUpdatesScene == renderScene.GetId() ? m_ProxyUpdatesSeen : 0));
+			// A clone of the render scene the renderer saw counts on from the source's updates (it copied their count).
+			const bool seenBefore = m_ProxyUpdatesScene == renderScene.GetId() || (m_ProxyUpdatesScene != 0 && m_ProxyUpdatesScene == renderScene.GetCloneSource());
+			m_Stats.ProxyUpdates = static_cast<uint32_t>(totalUpdates - (seenBefore ? m_ProxyUpdatesSeen : 0));
 			m_ProxyUpdatesScene = renderScene.GetId();
 			m_ProxyUpdatesSeen = totalUpdates;
 			m_Assets.BeginFrame(assets);
 			PrepareExtraction(renderScene);
 		}
 
+		// The GPU's copy of the render scene, shared with the scene's other renderers: what changed since its last update
+		// uploads now, in a command list of its own, ahead of this frame's. Only proxies it holds are drawn, with the meshes and
+		// materials its tables hold: what is loaded (the frame's requests publish nothing, so they are what the frame resolves).
+		m_SceneGPU = &Renderer::GetRenderSceneGPUs().Get(renderScene);
+		RenderSceneGPUUpdate sceneUpload;
+		if (!m_SceneGPU->Update(renderScene, assets, m_Specification.NewInstanceBytesPerFrame, &sceneUpload) && !m_SceneGPU->HasBuffers())
+		{
+			m_Errors.Report("the scene's GPU buffers are unavailable (see the previous error)");
+			m_Stats = {};
+			return false;
+		}
+		m_Stats.InstanceBytesUploaded += sceneUpload.InstanceBytes;
+		m_Stats.InstanceUploadRanges += sceneUpload.InstanceRanges;
+		m_Stats.ProxyBytesUploaded = sceneUpload.ProxyBytes;
+		m_Stats.PaletteBytesUploaded = sceneUpload.PaletteBytes;
+		m_Stats.MaterialBytesUploaded = sceneUpload.MaterialBytes;
+		m_Stats.DeferredInstanceBytes = m_SceneGPU->GetDeferredBytes();
+		m_Stats.DeferredProxies = m_SceneGPU->GetDeferredProxies();
+
+		// Scene shaders work camera-relative (Include/Scene.glsl): the view's translation is left out of its matrices.
 		RenderData::FrameConstants frame = {};
-		frame.View = camera.View;
+		frame.View = GetRelativeView(camera);
 		frame.Projection = camera.Projection;
-		frame.ViewProjection = camera.Projection * camera.View;
-		frame.InverseView = glm::inverse(camera.View);
+		frame.ViewProjection = camera.Projection * frame.View;
+		frame.InverseView = glm::inverse(frame.View);
 		frame.InverseProjection = glm::inverse(camera.Projection);
 		frame.InverseViewProjection = glm::inverse(frame.ViewProjection);
 		frame.CameraPosition = glm::vec4(camera.Position, camera.Near);
@@ -1721,44 +1934,79 @@ namespace Strata
 		// Preview lighting only stands in for lighting the scene does not have at all.
 		const bool preview = options.PreviewEnvironment && NeedsPreviewLighting(scene);
 		m_Stats.PreviewLighting = preview;
-		CollectLights(scene, camera, preview, frame);
-
+		// The GPU-driven path culls and builds the opaque and shadow draws on the GPU, and culls the point and spot lights; the
+		// CPU still resolves the frame's assets and fits the cascades, and draws transparent surfaces.
+		m_GPUDrivenFrame = IsGPUDriven();
+		m_Stats.GPUDriven = m_GPUDrivenFrame;
+		CollectLights(scene, renderScene, camera, preview, frame);
 		const auto extractionStart = std::chrono::steady_clock::now();
-		const Frustum frustum(frame.ViewProjection);
-		CullView(renderScene, camera, frustum);
-		FindShadowCasters(renderScene, camera, frustum, frame);
+		// The CPU's culling works in world space (the spatial index holds world bounds).
+		const Frustum frustum(camera.Projection * camera.View);
+		// What the frame requests: the GPU's visibility feedback where it can tell (SceneRendererSpecification::
+		// VisibilityFeedback), else the CPU's walk of the view.
+		if (IsCameraCut(camera))
+		{
+			m_CutRender = m_RenderCount + 1;
+			m_ResetVisibility = true; // Occlusion culling starts without history
+			m_LODFadeFrame++;         // And so do level-of-detail fades: a frame skipped draws every level at once
+		}
+		m_LODFadeFrame++;
+		m_FeedbackFrame = UsesFeedback(renderScene);
+		m_Stats.FeedbackRequests = m_FeedbackFrame;
+		if (m_FeedbackFrame)
+		{
+			ApplyFeedback(renderScene, camera, frustum);
+		}
+		else
+		{
+			CullView(renderScene, camera, frustum);
+			m_MarksRender = m_RenderCount + 1;
+		}
+		FindShadowCasters(renderScene, camera, frustum, frame, !m_FeedbackFrame);
 		ResolveAssets(renderScene);
-		GatherDraws(renderScene, camera);
-		GatherShadowDraws(renderScene, camera, frame);
-		ReportVisibleAnimators(scene);
-		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
+		GatherDraws(renderScene, camera, !m_GPUDrivenFrame);
+		GatherShadowDraws(renderScene, camera, frame, !m_GPUDrivenFrame);
+		BuildDrawArguments();
 		bool degraded = false; // Rendered with a reported limitation: keep the error so it is not logged every frame
+		// Before the GPU's culling is prepared: the cascades' occlusion culling needs their pyramids, made with the map.
 		if (frame.ShadowParams.w > 0.0f && !EnsureShadowMap())
 		{
 			m_Errors.Report("failed to create the shadow map; rendering without shadows");
 			frame.ShadowParams.w = 0.0f;
 			degraded = true;
 		}
+		if (m_GPUDrivenFrame)
+			PrepareGPUCulling(renderScene, camera);
+		ReportVisibleAnimators(scene);
+		m_Stats.ExtractMs = std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - extractionStart).count() - m_Stats.SortMs;
 		const PostProcessComponent postProcess = GetPostProcessSettings(scene);
 		frame.AOParams = glm::vec4(postProcess.AmbientOcclusion ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+		frame.MaterialParams = glm::vec4(m_Specification.FadeTextureLevels ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
 
-		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get());
-		bool instancesRecreated = false;
-		bool materialsRecreated = false;
+		bool buffersRecreated = !m_SceneBindingSet || m_BoundShadowMap != (m_ShadowMap ? m_ShadowMap.Get() : m_DummyShadowMap.Get())
+			|| m_BoundSceneGPUVersion != m_SceneGPU->GetBufferVersion();
 		bool drawListsRecreated = false;
-		bool jointsRecreated = false;
-		const bool buffersReady = EnsureBufferCapacity(m_InstanceBuffer, renderScene.GetInstances().size(), sizeof(RenderData::InstanceData), "Instances", instancesRecreated)
-			&& EnsureBufferCapacity(m_JointBuffer, renderScene.GetPalette().size(), sizeof(RenderData::AffineTransform), "Joints", jointsRecreated)
-			&& EnsureBufferCapacity(m_MaterialBuffer, m_MaterialData.size(), sizeof(RenderData::MaterialData), "Materials", materialsRecreated)
+		bool cullRecreated = false;
+		const bool buffersReady = (!m_GPUDrivenFrame || EnsureCullBuffers(cullRecreated))
 			&& EnsureBufferCapacity(m_DrawListBuffer, m_DrawInstancesBuild.size(), sizeof(uint32_t), "DrawList", drawListsRecreated)
 			&& EnsureBufferCapacity(m_ShadowDrawListBuffer, m_ShadowDrawInstancesBuild.size(), sizeof(uint32_t), "ShadowDrawList", drawListsRecreated)
-			&& EnsureBufferCapacity(m_LightBuffer, m_Lights.size(), sizeof(RenderData::LightData), "Lights", buffersRecreated)
-			&& EnsureBufferCapacity(m_LightBoundsBuffer, m_LightBounds.size(), sizeof(RenderData::LightBounds), "LightBounds", buffersRecreated);
-		buffersRecreated = buffersRecreated || instancesRecreated || materialsRecreated || drawListsRecreated || jointsRecreated;
+			&& EnsureBufferCapacity(m_LightBuffer, m_GPULightsFrame ? m_GPULightRecords : m_Lights.size(), sizeof(RenderData::LightData), "Lights", buffersRecreated,
+				BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_LightBoundsBuffer, m_GPULightsFrame ? m_GPULightRecords : m_LightBounds.size(), sizeof(RenderData::LightBounds), "LightBounds",
+				buffersRecreated, BufferKind::StructuredUAV)
+			&& EnsureBufferCapacity(m_DrawArgumentBuffer, m_DrawArgumentsBuild.size(), sizeof(nvrhi::DrawIndexedIndirectArguments), "DrawArguments", drawListsRecreated,
+				BufferKind::IndirectArguments);
+		buffersRecreated = buffersRecreated || drawListsRecreated || cullRecreated;
+		if (cullRecreated)
+		{
+			// The culling tables start again in their new buffers, and the binding set names the new ones.
+			m_CullBindingSet = nullptr;
+			m_CullTablesUploaded = false;
+		}
 		if (!buffersReady)
 		{
 			// A replaced buffer holds nothing yet: upload everything to the next one.
-			m_FullUpload = m_FullUpload || instancesRecreated || materialsRecreated || drawListsRecreated || jointsRecreated;
+			m_FullUpload = m_FullUpload || drawListsRecreated;
 			m_Stats = {};
 			return false;
 		}
@@ -1768,27 +2016,65 @@ namespace Strata
 		nvrhi::ICommandList* commandList = m_CommandList;
 		commandList->open();
 		commandList->beginMarker(m_Specification.DebugName.c_str());
+		// The GPU's time per pass: each stage runs from its first command to the next stage's.
+		const RendererGPUStages& gpuStages = RendererGPUStages::Get();
+		GPUPassTimer gpuTimer(commandList, gpuStages.Setup, &BeginGPURecord());
 		UpdateEnvironment(scene, preview, frame, commandList);
-		if ((buffersRecreated || m_BoundEnvironment != GetEnvironmentCube()) && !CreateSceneBindingSets())
+		// The texture table's changed entries (textures that streamed levels moved to other bindless slots) before anything
+		// samples them; a table that grew has a new buffer, which the binding sets follow.
+		TextureTable& textureTable = Renderer::GetTextureTable();
+		const bool tableUploaded = textureTable.RecordUploads(commandList);
+		const bool rebind = buffersRecreated || m_BoundEnvironment != GetEnvironmentCube() || m_BoundTextureTableVersion != textureTable.GetBufferVersion();
+		if (!tableUploaded || (rebind && !CreateSceneBindingSets()))
 		{
+			gpuTimer.End();
 			commandList->endMarker();
 			commandList->close();
 			m_Device->executeCommandList(commandList); // Keeps the environment processing that was recorded
-			m_Errors.Report("failed to create the scene binding sets");
-			m_FullUpload = m_FullUpload || instancesRecreated || materialsRecreated || drawListsRecreated || jointsRecreated;
+			m_Errors.Report(tableUploaded ? "failed to create the scene binding sets" : "the texture table could not be uploaded (see the previous error)");
+			m_FullUpload = m_FullUpload || drawListsRecreated;
 			m_Stats = {};
 			return false;
 		}
 
 		commandList->writeBuffer(m_FrameConstantBuffer, &frame, sizeof(frame));
-		UploadSceneData(commandList, renderScene, instancesRecreated, materialsRecreated, drawListsRecreated, jointsRecreated);
+		UploadSceneData(commandList, drawListsRecreated);
 		if (!m_Lights.empty())
 		{
 			commandList->writeBuffer(m_LightBuffer, m_Lights.data(), m_Lights.size() * sizeof(RenderData::LightData));
 			commandList->writeBuffer(m_LightBoundsBuffer, m_LightBounds.data(), m_LightBounds.size() * sizeof(RenderData::LightBounds));
 		}
 
-		if (!m_Lights.empty())
+		if (m_GPUDrivenFrame)
+		{
+			// After the frame's uploads of what casters are drawn with: which cascades keep their layers (the culling draws
+			// nothing into them).
+			m_CachedCascadeMask = frame.ShadowParams.w > 0.0f ? PrepareShadowCache(renderScene, camera) : 0u;
+			m_CullConstants.CachedCascades = m_CachedCascadeMask;
+			m_Stats.CachedCascadeMask = m_CachedCascadeMask;
+			if (!UploadCullTables(commandList))
+			{
+				gpuTimer.End();
+				commandList->endMarker();
+				commandList->close();
+				m_Device->executeCommandList(commandList); // Keeps the uploads that were recorded
+				m_Errors.Report("the GPU's culling tables could not be uploaded (see the previous error)");
+				m_Stats = {};
+				return false;
+			}
+			gpuTimer.Next(gpuStages.Cull);
+			commandList->beginMarker("Cull");
+			RunGPUCulling(commandList, frame.ShadowParams.w > 0.0f);
+			commandList->endMarker();
+		}
+
+		if (m_GPULightsFrame && frame.LightCounts.x > 0)
+		{
+			commandList->beginMarker("LightCull");
+			RunGPULightCulling(commandList, camera);
+			commandList->endMarker();
+		}
+		if (frame.LightCounts.x > 0)
 		{
 			commandList->beginMarker("LightClusters");
 			BuildLightClusters(commandList);
@@ -1797,11 +2083,20 @@ namespace Strata
 
 		if (frame.ShadowParams.w > 0.0f)
 		{
+			gpuTimer.Next(gpuStages.Shadows);
 			commandList->beginMarker("Shadows");
-			DrawShadows(commandList, static_cast<uint32_t>(frame.ShadowParams.w));
+			FitCascades(commandList);
+			if (m_GPUDrivenFrame)
+				DrawGPUShadows(commandList);
+			else
+			{
+				m_ShadowCacheValid = 0; // The CPU path redraws every layer
+				DrawShadows(commandList, static_cast<uint32_t>(frame.ShadowParams.w));
+			}
 			commandList->endMarker();
 		}
 
+		gpuTimer.Next(gpuStages.Prepass);
 		const glm::vec4 clear = camera.ClearColor;
 		commandList->clearDepthStencilTexture(m_DepthTexture, nvrhi::AllSubresources, true, 0.0f, false, 0);
 		commandList->clearTextureFloat(m_NormalTexture, nvrhi::AllSubresources, nvrhi::Color(0.0f));
@@ -1810,17 +2105,34 @@ namespace Strata
 		commandList->clearTextureFloat(m_HDRTexture, nvrhi::AllSubresources, nvrhi::Color(SRGBToLinear(clear.r), SRGBToLinear(clear.g), SRGBToLinear(clear.b), 1.0f));
 
 		commandList->beginMarker("Prepass");
-		DrawBatches(commandList, Pass::Prepass, false);
+		if (m_GPUDrivenFrame)
+		{
+			DrawGPUView(commandList, Pass::Prepass, 0, m_CullConstants.FirstPhaseViewBuckets);
+			if (IsOcclusionCulled())
+			{
+				// What the first phase did not draw, found visible against its depth, in the same frame.
+				RunOcclusionPhase(commandList);
+				DrawGPUView(commandList, Pass::Prepass, m_CullConstants.FirstPhaseViewBuckets, m_CullConstants.ViewBucketCount);
+			}
+			RecordCullReadback(commandList);
+		}
+		else
+			DrawBatches(commandList, Pass::Prepass, false);
 		commandList->endMarker();
 
 		if (postProcess.AmbientOcclusion)
 		{
+			gpuTimer.Next(gpuStages.AO);
 			commandList->beginMarker("AmbientOcclusion");
 			RenderAmbientOcclusion(commandList, postProcess);
 			commandList->endMarker();
 		}
+		gpuTimer.Next(gpuStages.Opaque);
 		commandList->beginMarker("Opaque");
-		DrawBatches(commandList, Pass::Opaque, false);
+		if (m_GPUDrivenFrame)
+			DrawGPUView(commandList, Pass::Opaque, 0, m_CullConstants.ViewBucketCount);
+		else
+			DrawBatches(commandList, Pass::Opaque, false);
 		commandList->endMarker();
 
 		if (frame.EnvironmentParams.w > 0.0f && frame.SkyParams.y > 0.0f)
@@ -1848,10 +2160,12 @@ namespace Strata
 			commandList->draw(nvrhi::DrawArguments().setVertexCount(3));
 			commandList->endMarker();
 		}
+		gpuTimer.Next(gpuStages.Transparent);
 		commandList->beginMarker("Transparent");
 		DrawBatches(commandList, Pass::Transparent, true);
 		commandList->endMarker();
 
+		gpuTimer.Next(gpuStages.Post);
 		commandList->beginMarker("Exposure");
 		UpdateExposure(commandList, postProcess);
 		commandList->endMarker();
@@ -1874,15 +2188,17 @@ namespace Strata
 		tonemap.BloomAdditive = postProcess.BloomThreshold > 0.0f ? 1u : 0u;
 
 		TextRenderStats textStats;
-		const bool text = m_TextRenderer->Prepare(scene, m_ViewportSize, options.DrawScreenSpaceText, commandList, textStats);
+		m_FontAtlases->BeginFrame(TextRenderer::c_FrameRasterBudget);
+		const bool text = m_TextRenderer->Prepare(scene, m_ViewportSize, options.DrawScreenSpaceText, camera.Position, commandList, textStats, options.ScreenView);
 		m_Stats.Texts = textStats.Texts;
 		m_Stats.ScreenSpaceTexts = textStats.ScreenSpaceTexts;
 		m_Stats.HiddenScreenSpaceTexts = textStats.HiddenScreenSpaceTexts;
 		m_Stats.TextGlyphs = textStats.Glyphs;
 		m_Stats.PendingTextGlyphs = textStats.PendingGlyphs;
 		m_Stats.RasterizedTextGlyphs = textStats.RasterizedGlyphs;
+		const bool overlayPasses = PrepareOverlayPasses(scene, camera, options, commandList, gpuTimer);
 		const AssetResolveStats& assetStats = m_Assets.GetStats();
-		m_Stats.PendingAssets = assetStats.Pending + textStats.PendingFonts;
+		m_Stats.PendingAssets = assetStats.Pending + textStats.PendingFonts + m_Stats.Overlays.PendingAssets;
 		m_Stats.RequestsByVisibility = assetStats.Requested;
 		m_Stats.PrefetchRequests = assetStats.Prefetched;
 		m_Stats.GetAssetCalls = assetStats.GetAssetCalls;
@@ -1890,12 +2206,15 @@ namespace Strata
 		// Overlays (and text) are composed in the output texture, which is then copied into the target. Without a target or
 		// anything to compose, the frame needs no output texture: renderers that only render into targets (games without
 		// text) never allocate one.
-		const bool overlays = HasOverlays(options) || text;
+		const bool overlays = HasOverlays(options) || text || overlayPasses;
 		if ((!target || overlays) && !EnsureOutputTarget())
 		{
+			gpuTimer.End();
 			commandList->endMarker();
 			commandList->close();
 			m_Device->executeCommandList(commandList); // Keeps the uploads that were recorded
+			if (m_GPUDrivenFrame)
+				SubmitCullReadback();
 			m_Stats = {};
 			return false;
 		}
@@ -1928,8 +2247,9 @@ namespace Strata
 
 		if (overlays)
 		{
+			gpuTimer.Next(gpuStages.Overlays);
 			commandList->beginMarker("Overlays");
-			const bool overlaysDrawn = RenderOverlays(commandList, scene, options, text);
+			const bool overlaysDrawn = RenderOverlays(commandList, scene, camera, options, text, overlayPasses);
 			commandList->endMarker();
 			if (!overlaysDrawn)
 				degraded = true; // The image is complete without them; RenderOverlays reported why
@@ -1941,9 +2261,13 @@ namespace Strata
 			}
 		}
 
+		gpuTimer.End();
 		commandList->endMarker();
 		commandList->close();
 		m_Device->executeCommandList(commandList);
+		if (m_GPUDrivenFrame)
+			SubmitCullReadback();
+		CommitShadowCache();
 
 		m_Stats.Rendered = true;
 		m_HasRenderedFrame = true;
@@ -2009,7 +2333,7 @@ namespace Strata
 		bool recreated = false;
 		const bool buffersCreated = EnsureBufferCapacity(m_SelectionBuffer, 64, sizeof(uint32_t), "Selection", recreated)
 			&& EnsureBufferCapacity(m_TintBuffer, 64, sizeof(glm::uvec2), "EntityTints", recreated)
-			&& EnsureBufferCapacity(m_DebugLineBuffer, 1024, sizeof(DebugLineVertex), "DebugLines", recreated, true);
+			&& EnsureBufferCapacity(m_DebugLineBuffer, 1024, sizeof(DebugLineVertex), "DebugLines", recreated, BufferKind::Vertex);
 		ST_CORE_VERIFY(buffersCreated && m_GridBindingLayout && m_GridBindingSet && m_OutlineBindingLayout && m_StatusTintBindingLayout && m_DebugLineBindingLayout
 			&& m_DebugLineBindingSet && m_DebugLineInputLayout, "SceneRenderer: failed to create overlay resources");
 	}
@@ -2081,7 +2405,41 @@ namespace Strata
 		commandList->draw(nvrhi::DrawArguments().setVertexCount(vertexCount).setStartVertexLocation(firstVertex));
 	}
 
-	bool SceneRenderer::RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneRenderOptions& options, bool drawText)
+	bool SceneRenderer::PrepareOverlayPasses(Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, nvrhi::ICommandList* commandList,
+		GPUPassTimer& gpuTimer)
+	{
+		SceneOverlayFrame frame;
+		frame.OverlayScene = options.OverlayScene ? options.OverlayScene : &scene;
+		// Camera-relative, as the scene's depth was drawn: world-space overlays keep their precision far from the origin.
+		frame.ViewProjection = camera.Projection * GetRelativeView(camera);
+		frame.CameraPosition = camera.Position;
+		frame.HasCamera = frame.OverlayScene == &scene;
+		frame.ViewportSize = m_ViewportSize;
+		frame.ScreenView = options.ScreenView;
+		frame.DrawScreenSpace = options.DrawScreenSpaceText;
+		frame.CommandList = commandList;
+		frame.Atlases = m_FontAtlases.get();
+		frame.VisibleTextures = &m_VisibleTextures;
+		frame.Stats = &m_Stats.Overlays;
+		frame.GPUTimer = &gpuTimer;
+		bool draws = false;
+		for (const Scope<ISceneOverlayPass>& pass : m_OverlayPasses)
+			draws = pass->Prepare(frame) || draws;
+		return draws;
+	}
+
+	bool SceneRenderer::HasOverlayContent(Scene& scene) const
+	{
+		for (const Scope<ISceneOverlayPass>& pass : m_OverlayPasses)
+		{
+			if (pass->HasScreenContent(scene))
+				return true;
+		}
+		return false;
+	}
+
+	bool SceneRenderer::RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, bool drawText,
+		bool drawOverlayPasses)
 	{
 		if (!m_GridPipeline)
 		{
@@ -2167,12 +2525,16 @@ namespace Strata
 			const std::span<const DebugLineVertex> tested = options.DebugShapes->GetLines(DebugDrawDepth::Tested);
 			const std::span<const DebugLineVertex> onTop = options.DebugShapes->GetLines(DebugDrawDepth::OnTop);
 			bool recreated = false;
-			if (!EnsureBufferCapacity(m_DebugLineBuffer, tested.size() + onTop.size(), sizeof(DebugLineVertex), "DebugLines", recreated, true))
+			if (!EnsureBufferCapacity(m_DebugLineBuffer, tested.size() + onTop.size(), sizeof(DebugLineVertex), "DebugLines", recreated, BufferKind::Vertex))
 				return false;
-			if (!tested.empty())
-				commandList->writeBuffer(m_DebugLineBuffer, tested.data(), tested.size_bytes(), 0);
-			if (!onTop.empty())
-				commandList->writeBuffer(m_DebugLineBuffer, onTop.data(), onTop.size_bytes(), tested.size_bytes());
+			// Camera-relative, as the scene's shaders draw (the subtraction in double for lines far from the origin).
+			m_DebugLineScratch.assign(tested.begin(), tested.end());
+			m_DebugLineScratch.insert(m_DebugLineScratch.end(), onTop.begin(), onTop.end());
+			const glm::dvec3 cameraPosition(camera.Position);
+			for (DebugLineVertex& vertex : m_DebugLineScratch)
+				vertex.Position = glm::vec3(glm::dvec3(vertex.Position) - cameraPosition);
+			if (!m_DebugLineScratch.empty())
+				commandList->writeBuffer(m_DebugLineBuffer, m_DebugLineScratch.data(), m_DebugLineScratch.size() * sizeof(DebugLineVertex), 0);
 			testedVertices = static_cast<uint32_t>(tested.size());
 			onTopVertices = static_cast<uint32_t>(onTop.size());
 			m_Stats.DebugLines = (testedVertices + onTopVertices) / 2;
@@ -2181,6 +2543,12 @@ namespace Strata
 			DrawDebugLines(commandList, DebugDrawDepth::Tested, 0, testedVertices);
 		if (drawText)
 			m_TextRenderer->Draw(commandList, m_OverlayFramebuffer, false);
+		// The game UI placed in the scene, with the world-space text.
+		if (drawOverlayPasses)
+		{
+			for (const Scope<ISceneOverlayPass>& pass : m_OverlayPasses)
+				pass->DrawWorld(commandList, m_OverlayFramebuffer);
+		}
 
 		// Selection outline from the entity-ID buffer (ids + 1, sorted for the shader's binary search). The sorted list and its
 		// upload are kept while the same entities of the same scene stay selected and no entity was created or destroyed
@@ -2247,6 +2615,12 @@ namespace Strata
 			DrawDebugLines(commandList, DebugDrawDepth::OnTop, testedVertices, onTopVertices);
 		if (drawText)
 			m_TextRenderer->Draw(commandList, m_OverlayFramebuffer, true); // The HUD goes over everything
+		// The game UI over the HUD text.
+		if (drawOverlayPasses)
+		{
+			for (const Scope<ISceneOverlayPass>& pass : m_OverlayPasses)
+				pass->Draw(commandList, m_OverlayFramebuffer);
+		}
 		return complete;
 	}
 

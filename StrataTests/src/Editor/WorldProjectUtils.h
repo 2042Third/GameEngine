@@ -57,7 +57,7 @@ namespace Strata::Tests
 	// A new project with a generated world "Gen": `side` x `side` Ground cells of 32 m, cell (x, z) holding
 	// 7 + x renderers of which (3 x + 5 z) % 7 are static boxes (uneven, so that the hysteresis changes the busiest radius),
 	// and a persistent scene with the WorldComponent, a source of radius 40 m and a floor (one body).
-	struct WorldProject
+	struct GridWorldProject
 	{
 		std::filesystem::path Directory;
 		EditorContext Context { EditorContextSpecification { false } };
@@ -68,7 +68,7 @@ namespace Strata::Tests
 		std::vector<Scope<Scene>> Cells;
 		uint32_t Side = 0;
 
-		WorldProject(const std::string& name, uint32_t side)
+		GridWorldProject(const std::string& name, uint32_t side)
 			: Side(side)
 		{
 			// A new project (its example script used by no scene), closed while the world's files are written into it.

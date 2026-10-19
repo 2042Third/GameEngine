@@ -41,6 +41,11 @@ TEST_SUITE("GPU.Renderer")
 		const GraphicsDeviceInfo& info = gpu.GetDevice().GetInfo();
 		CHECK_FALSE(info.AdapterName.empty());
 		CHECK(info.MaxTextureDimension2D >= 4096); // Vulkan's guaranteed minimum
+		// Several draws per indirect call need multiDrawIndirect, which guarantees 65,535 of them.
+		if (info.SupportsMultiDrawIndirect)
+			CHECK(info.MaxDrawIndirectCount >= 65535u);
+		else
+			CHECK(info.MaxDrawIndirectCount == 1u);
 		CHECK_FALSE(gpu.GetDevice().HasSwapchain());
 		CHECK(Renderer::GetWhiteTexture() != nullptr);
 		CHECK(Renderer::GetShaderLibrary().Get("ImGui.vert") != nullptr);

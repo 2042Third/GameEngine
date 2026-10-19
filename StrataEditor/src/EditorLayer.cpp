@@ -9,6 +9,7 @@
 #include "Panels/AssetInspectorPanel.h"
 #include "Panels/ConsolePanel.h"
 #include "Panels/ContentBrowserPanel.h"
+#include "Panels/GameViewPanel.h"
 #include "Panels/InspectorPanel.h"
 #include "Panels/PerformancePanel.h"
 #include "Panels/ProblemsPanel.h"
@@ -50,13 +51,21 @@ namespace Strata
 
 		constexpr const char* c_EditorStatusSection = "editor";
 		constexpr const char* c_UnsavedChangesModal = "Unsaved Changes";
+		constexpr const char* c_SavingModal = "Saving";
 		// Between the parts of a pill's text.
 		constexpr const char* c_Separator = " \xC2\xB7 ";
+		// Frames the frame pill's tooltip summarizes for what bounds them: two seconds at 60 frames per second.
+		constexpr uint32_t c_FramePillBoundFrames = 120;
 
 		// The default layout, as fractions of the dock space: the viewport gets over 45% of a 3840 x 2054 window at 150%.
 		constexpr float c_HierarchyWidth = 0.15f;
 		constexpr float c_InspectorWidth = 0.20f;
 		constexpr float c_BottomHeight = 0.22f;
+		// At large UI scales (a 1600 x 900 window at 200%) the side panels keep room for their rows: at least this many text
+		// heights wide (a Hierarchy row's name about eighteen characters), each at most c_MaxSideWidth of the width.
+		constexpr float c_MinHierarchyFontSizes = 16.0f;
+		constexpr float c_MinInspectorFontSizes = 18.0f;
+		constexpr float c_MaxSideWidth = 0.3f;
 		// The status bar's pills grow back from their compact texts once the full ones fit with this margin, in font sizes, so
 		// that a frame time's digits cannot make them flicker between the two.
 		constexpr float c_StatusBarMarginFontSizes = 2.0f;
@@ -123,12 +132,14 @@ namespace Strata
 			if (m_Panels.GetDescriptor(index).Placement == EditorPanelPlacement::Docked)
 				panels.push_back(m_Panels.GetDescriptor(index).Id);
 		}
+		panels.push_back("Scene");
 		m_Commands.Register({ "editor.showPanel",
 			"Opens a panel of the editor's window and brings it to the front, e.g. to show the person at the editor what you are looking at: "
 			"Streaming (asset memory per pool against its budget, loads, uploads, the assets), Performance (where the frames go, stage by "
 			"stage), Problems (the last script build's errors and warnings, the scripts' crash with where it happened), Activity (every "
 			"command the person, agents and scripts ran: editor.activity), Console, ContentBrowser, Hierarchy, Inspector, AssetInspector (the "
-			"Asset tab: the inspected asset, its settings and preview) or Viewport; for the ContentBrowser, scripts: true shows its Scripts root "
+			"Asset tab: the inspected asset, its settings and preview), Viewport (the Scene view; \"Scene\" works too) or Game (the Game view: the "
+			"game through its camera); for the ContentBrowser, scripts: true shows its Scripts root "
 			"(the project's script files with their classes, as script.list lists them) and false its asset folders; for the Hierarchy, search "
 			"replaces the text of its search field as if the person typed it (a name, c:Light, t:Enemy, and in a world l:Props or cell:3,-1; "
 			"\"\" clears it). Changes no scene data and records no undo; fails in an editor without a window (--no-gpu or headless) and while "
@@ -141,8 +152,11 @@ namespace Strata
 			[this](EditorContext& context, const nlohmann::json& parameters) -> EditorCommandResult
 			{
 				CommandArguments arguments(parameters);
-				const std::string panel = arguments.GetString("panel");
+				std::string panel = arguments.GetString("panel");
 				const std::optional<bool> scripts = arguments.Has("scripts") ? std::optional<bool>(arguments.GetBool("scripts", false)) : std::nullopt;
+				// The Scene view keeps the id it had as the viewport.
+				if (panel == "Scene")
+					panel = EditorPanels::c_Viewport;
 				const std::optional<std::string> search = arguments.Has("search") ? std::optional<std::string>(arguments.GetString("search", "")) : std::nullopt;
 				if (!arguments.IsValid())
 					return arguments.Fail();
@@ -275,7 +289,8 @@ namespace Strata
 				ST_ERROR("Could not register the panel '{}': {}", id, error);
 		};
 		// Drawn in this order; the Content Browser comes after the Console, which shares its dock node.
-		add(EditorPanels::c_Viewport, "Viewport", Icons::Box, []() { return CreateScope<ViewportPanel>(); });
+		add(EditorPanels::c_Viewport, "Scene", Icons::Box, []() { return CreateScope<ViewportPanel>(); });
+		add(EditorPanels::c_Game, "Game", Icons::Gamepad2, []() { return CreateScope<GameViewPanel>(); });
 		add(EditorPanels::c_Hierarchy, "Hierarchy", Icons::ListTree, []() { return CreateScope<SceneHierarchyPanel>(); });
 		add(EditorPanels::c_Inspector, "Inspector", Icons::SlidersHorizontal, []() { return CreateScope<InspectorPanel>(); });
 		add(EditorPanels::c_AssetInspector, "Asset", Icons::FileBox, []() { return CreateScope<AssetInspectorPanel>(); });
@@ -392,7 +407,7 @@ namespace Strata
 					{ "cap", m_Host->GetMaxFrameRate() },
 					{ "idle", m_Idle },
 					{ "throttling", IsThrottlingEnabled() } } } };
-		});
+		}, [this]() { return nlohmann::json { { "launcher", IsLauncherShown() } }; });
 		if (m_Options.EnableAutomation)
 			StartAutomation();
 		else if (m_Options.Headless && !m_Options.MaxFrames && !m_Options.QuitAfterCommands)
@@ -517,6 +532,8 @@ namespace Strata
 			if (m_StartupSeconds)
 				ST_INFO("Started in {:.2f} s", *m_StartupSeconds);
 		}
+		// The game's content scale in play mode is the editor's (UI scaled to a physical size matches the editor's UI).
+		m_Context.GetGameWindow().SetContentScale(m_Host->GetUIScale());
 		m_Context.Update(timestep);
 		// Between frames: the system's fonts for Chinese, Japanese and Korean text join the editor's once read.
 		if (!m_Options.Headless)
@@ -528,6 +545,7 @@ namespace Strata
 		m_Automation.Update();
 		UpdateCommandScript();
 		UpdateWindowTitle();
+		UpdateSteppingFrameRate();
 
 		const double now = m_Host->GetTime();
 		// An automation request was answered or is pending: an agent drives the editor.
@@ -650,11 +668,21 @@ namespace Strata
 		}
 		m_RecoveryDialogWasOpen = recoveryOpen;
 		DrawUnsavedChangesModal();
-		// Toasts last, over everything, above the status bar.
+		// Toasts last, over everything: at the bottom right of the Scene or Game view (their dock node), where they cover
+		// neither the Inspector nor the Hierarchy; above the status bar in the window's corner without either view.
 		const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
 		const float statusBar = IsLauncherShown() ? 0.0f : m_StatusBarHeight;
-		UI::DrawNotifications(m_Context.GetNotifications(), *this, EditorPanels::c_Console, EditorPanels::c_Problems, mainViewport->WorkPos,
-			ImVec2(mainViewport->WorkPos.x + mainViewport->WorkSize.x, mainViewport->WorkPos.y + mainViewport->WorkSize.y - statusBar));
+		ImVec2 toastsMin = mainViewport->WorkPos;
+		ImVec2 toastsMax(mainViewport->WorkPos.x + mainViewport->WorkSize.x, mainViewport->WorkPos.y + mainViewport->WorkSize.y - statusBar);
+		std::optional<EditorPanelRegistry::WindowRect> view = m_Panels.GetShownWindowRect(EditorPanels::c_Viewport);
+		if (!view)
+			view = m_Panels.GetShownWindowRect(EditorPanels::c_Game);
+		if (view)
+		{
+			toastsMin = view->Min;
+			toastsMax = view->Max;
+		}
+		UI::DrawNotifications(m_Context.GetNotifications(), *this, EditorPanels::c_Console, EditorPanels::c_Problems, toastsMin, toastsMax);
 		if (m_ShowImGuiDemo)
 			ImGui::ShowDemoWindow(&m_ShowImGuiDemo);
 		UpdateFrameRate();
@@ -668,9 +696,9 @@ namespace Strata
 		EventDispatcher dispatcher(event);
 		dispatcher.Dispatch<WindowCloseEvent>([this](WindowCloseEvent&)
 		{
-			if (!m_Context.IsSceneModified())
+			if (!m_Context.IsSceneModified() && !m_Context.HasSavesInFlight())
 				return false;
-			// Keep running and ask first; closing happens from the dialog.
+			// Keep running and ask first (after the saving dialog while saves write); closing happens from the dialog.
 			RequestDiscardChanges([this]() { m_Host->Close(); });
 			return true;
 		});
@@ -737,6 +765,21 @@ namespace Strata
 			|| m_Context.GetViewport().IsPickPending();
 	}
 
+	void EditorLayer::UpdateSteppingFrameRate()
+	{
+		const bool stepping = m_Context.HasPendingSteps();
+		if (stepping && !m_CapBeforeSteps)
+		{
+			m_CapBeforeSteps = m_Host->GetMaxFrameRate();
+			m_Host->SetMaxFrameRate(0);
+		}
+		else if (!stepping && m_CapBeforeSteps)
+		{
+			m_Host->SetMaxFrameRate(*m_CapBeforeSteps);
+			m_CapBeforeSteps.reset();
+		}
+	}
+
 	void EditorLayer::UpdateFrameRate()
 	{
 		if (!IsThrottlingEnabled())
@@ -793,7 +836,7 @@ namespace Strata
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_P, global))
 		{
 			if (m_Context.IsPlaying())
-				RunEditorCommand(m_Context, m_Commands, "play.stop");
+				StopPlay();
 			else
 				StartPlay();
 		}
@@ -810,6 +853,8 @@ namespace Strata
 			SaveScene();
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_S, global))
 			SaveSceneAs();
+		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_O, global))
+			ShowOpenSceneDialog();
 		// Like the menu item and the toolbar button, the shortcut does nothing while a build runs.
 		if (ImGui::Shortcut(ImGuiMod_Ctrl | ImGuiKey_B, global) && !m_Context.GetScriptBuilder().IsRunning())
 			BuildScripts();
@@ -817,6 +862,13 @@ namespace Strata
 
 	void EditorLayer::RequestDiscardChanges(std::function<void()> action)
 	{
+		// A save in flight is never lost: the action waits for it in the saving dialog, then asks about what is still unsaved.
+		if (m_Context.HasSavesInFlight())
+		{
+			m_ActionAfterSaves = std::move(action);
+			m_OpenSavingModal = true;
+			return;
+		}
 		if (m_Context.IsSceneModified())
 		{
 			m_PendingDiscardAction = std::move(action);
@@ -933,7 +985,7 @@ namespace Strata
 		return state;
 	}
 
-	bool EditorLayer::SaveScene()
+	bool EditorLayer::SaveScene(std::function<void(bool saved)> then)
 	{
 		if (m_Context.IsPlaying())
 		{
@@ -941,11 +993,17 @@ namespace Strata
 			return false;
 		}
 		if (!m_Context.GetSceneHandle().IsValid())
-			return SaveSceneAs();
-		return !RunEditorCommand(m_Context, m_Commands, "scene.save").is_null();
+			return SaveSceneAs(std::move(then));
+		// The save writes in the background: its outcome comes in a later frame (failures as a notification of their own).
+		m_CommandRunner.Run(m_Context, m_Commands, "scene.save", nlohmann::json::object(), [then = std::move(then)](const EditorCommandResult& result)
+		{
+			if (then)
+				then(result.Success);
+		}, CommandOrigin { CommandSource::UI });
+		return true;
 	}
 
-	bool EditorLayer::SaveSceneAs()
+	bool EditorLayer::SaveSceneAs(std::function<void(bool saved)> then)
 	{
 		if (!m_Context.HasProject())
 		{
@@ -962,7 +1020,48 @@ namespace Strata
 			ST_ERROR("Scenes must be saved inside the project's asset directory ({})", FileSystem::ToUTF8(assetDirectory));
 			return false;
 		}
-		return !RunEditorCommand(m_Context, m_Commands, "scene.saveAs", { { "path", FileSystem::ToUTF8(relative) } }).is_null();
+		m_CommandRunner.Run(m_Context, m_Commands, "scene.saveAs", { { "path", FileSystem::ToUTF8(relative) } }, [then = std::move(then)](const EditorCommandResult& result)
+		{
+			if (then)
+				then(result.Success);
+		}, CommandOrigin { CommandSource::UI });
+		return true;
+	}
+
+	bool EditorLayer::ShowOpenSceneDialog()
+	{
+		if (!m_Context.HasProject() || m_Context.IsPlaying())
+			return false;
+		const std::optional<std::filesystem::path> file = FileDialogs::OpenFile({ { "Strata Scene", "stscene" } }, m_Context.GetProject()->GetAssetDirectory());
+		return file && OpenSceneFile(*file);
+	}
+
+	bool EditorLayer::OpenSceneFile(const std::filesystem::path& file)
+	{
+		if (!m_Context.HasProject())
+		{
+			ST_WARN("Open or create a project to open its scenes");
+			return false;
+		}
+		if (m_Context.IsPlaying())
+		{
+			ST_WARN("Stop playing before opening another scene");
+			return false;
+		}
+		const std::filesystem::path assetDirectory = m_Context.GetProject()->GetAssetDirectory();
+		const std::filesystem::path relative = FileSystem::GetRelativePath(file, assetDirectory);
+		if (relative.empty())
+		{
+			ST_ERROR("Scenes open from the project's asset directory ({}), not from '{}'", FileSystem::ToUTF8(assetDirectory), FileSystem::ToUTF8(file));
+			return false;
+		}
+		// The person answers the question about unsaved changes first; the scene then loads over the next frames.
+		const std::string scene = FileSystem::ToUTF8(relative);
+		RequestDiscardChanges([this, scene]()
+		{
+			RunEditorCommandDeferred(m_CommandRunner, m_Context, m_Commands, "scene.open", { { "scene", scene }, { "force", true } });
+		});
+		return true;
 	}
 
 	void EditorLayer::RenameEntity(UUID entity)
@@ -979,14 +1078,33 @@ namespace Strata
 		// One play at a time: while the scripts build to play, Play waits with them.
 		if (m_Context.GetPlayBuildID() != 0 || m_Context.IsPlaying())
 			return;
-		m_CommandRunner.Run(m_Context, m_Commands, "play.start", nlohmann::json::object(), [](const EditorCommandResult& result)
+		m_CommandRunner.Run(m_Context, m_Commands, "play.start", nlohmann::json::object(), [this](const EditorCommandResult& result)
 		{
 			// A build the person cancelled (the "Building to play" pill) is no error.
 			if (result.ErrorKind == EditorCommandError::Cancelled)
 				ST_INFO("Play: {}", result.Error);
+			else if (!result.Success && result.Announced)
+				ST_WARN("Play: {}", result.Error); // The failed build's error, which its pill and toast report already
 			else if (!result.Success)
 				ST_ERROR("Play: {}", result.Error);
+			// The game shows in the Game view: an open one docked behind another tab comes forward (and takes the keyboard, so
+			// the game gets its input).
+			const GameViewPanel* game = m_Panels.Get<GameViewPanel>(EditorPanels::c_Game);
+			if (result.Success && game && m_Panels.IsOpen(EditorPanels::c_Game) && !game->IsShown())
+			{
+				m_Panels.Focus(EditorPanels::c_Game);
+				m_PlayShowedGame = true;
+			}
 		}, CommandOrigin { CommandSource::UI });
+	}
+
+	void EditorLayer::StopPlay()
+	{
+		RunEditorCommand(m_Context, m_Commands, "play.stop");
+		// Back to the Scene view when Play had brought the Game view forward.
+		if (m_PlayShowedGame && !m_Context.IsPlaying() && m_Panels.IsOpen(EditorPanels::c_Viewport))
+			m_Panels.Focus(EditorPanels::c_Viewport);
+		m_PlayShowedGame = false;
 	}
 
 	void EditorLayer::ShowPanel(std::string_view panel)
@@ -1038,11 +1156,18 @@ namespace Strata
 		ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
 		ImGui::DockBuilderSetNodeSize(dockspaceId, ImGui::GetContentRegionAvail());
 
-		// The viewport first: the side panels take a fixed share of the width, the bottom area a share of the height under
-		// the viewport only.
+		// The viewport first: the side panels take a fixed share of the width (more at large UI scales, for their text), the
+		// bottom area a share of the height under the viewport only.
+		const float width = std::max(ImGui::GetContentRegionAvail().x, 1.0f);
+		const auto sideShare = [width](float share, float minimumFontSizes)
+		{
+			return std::min(std::max(share, minimumFontSizes * ImGui::GetFontSize() / width), c_MaxSideWidth);
+		};
+		const float hierarchyWidth = sideShare(c_HierarchyWidth, c_MinHierarchyFontSizes);
+		const float inspectorWidth = sideShare(c_InspectorWidth, c_MinInspectorFontSizes);
 		ImGuiID center = dockspaceId;
-		const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, c_HierarchyWidth, nullptr, &center);
-		const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, c_InspectorWidth / (1.0f - c_HierarchyWidth), nullptr, &center);
+		const ImGuiID left = ImGui::DockBuilderSplitNode(center, ImGuiDir_Left, hierarchyWidth, nullptr, &center);
+		const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, inspectorWidth / (1.0f - hierarchyWidth), nullptr, &center);
 		const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, c_BottomHeight, nullptr, &center);
 
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Hierarchy).c_str(), left);
@@ -1055,11 +1180,14 @@ namespace Strata
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Performance).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Activity).c_str(), bottom);
 		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Viewport).c_str(), center);
+		ImGui::DockBuilderDockWindow(m_Panels.GetWindowName(EditorPanels::c_Game).c_str(), center);
 		ImGui::DockBuilderFinish(dockspaceId);
 		// On first run the Content Browser is the bottom area's visible tab, and the Inspector the right one's (the Asset tab
 		// comes forward when an asset is inspected).
 		m_Panels.SelectTab(EditorPanels::c_ContentBrowser, bottom);
 		m_Panels.SelectTab(EditorPanels::c_Inspector, right);
+		// The Scene view in front of the Game view (Play brings the Game view forward).
+		m_Panels.SelectTab(EditorPanels::c_Viewport, center);
 	}
 
 	void EditorLayer::DrawLauncher(EditorPanelContext& panelContext)
@@ -1188,8 +1316,13 @@ namespace Strata
 				if (ImGui::MenuItem("New Scene", nullptr, false, !m_Context.IsPlaying()))
 					RequestDiscardChanges([this]() { RunEditorCommand(m_Context, m_Commands, "scene.new", { { "force", true } }); });
 				UI::ItemProbe::Record("Menu.File.NewScene", !m_Context.IsPlaying());
+				const bool canOpenScene = m_Context.HasProject() && !m_Context.IsPlaying();
+				if (ImGui::MenuItem("Open Scene...", "Ctrl+O", false, canOpenScene))
+					ShowOpenSceneDialog();
+				UI::ItemProbe::Record("Menu.File.OpenScene", canOpenScene);
 				if (ImGui::MenuItem("Save Scene", "Ctrl+S", false, !m_Context.IsPlaying()))
 					SaveScene();
+				UI::ItemProbe::Record("Menu.File.SaveScene", !m_Context.IsPlaying());
 				if (ImGui::MenuItem("Save Scene As...", "Ctrl+Shift+S", false, m_Context.HasProject() && !m_Context.IsPlaying()))
 					SaveSceneAs();
 				const bool recoverable = RecoveryDialog::HasOffer(m_Context);
@@ -1481,13 +1614,14 @@ namespace Strata
 		UI::ButtonStyle step;
 		step.Enabled = paused;
 		if (UI::ToolbarButton("Toolbar.Step", Icons::StepForward, nullptr, "Step one fixed update while paused", step))
-			RunEditorCommand(m_Context, m_Commands, "play.step");
+			// One step over the next frame: the button need not wait for it.
+			RunEditorCommand(m_Context, m_Commands, "play.step", { { "wait", false } });
 		ImGui::SameLine();
 
 		UI::ButtonStyle stop;
 		stop.Enabled = playing;
 		if (UI::ToolbarButton("Toolbar.Stop", Icons::Square, nullptr, "Stop and return to the edited scene (Ctrl+P)", stop))
-			RunEditorCommand(m_Context, m_Commands, "play.stop");
+			StopPlay();
 	}
 
 	void EditorLayer::DrawBuildControls()
@@ -1575,6 +1709,7 @@ namespace Strata
 		ImGui::SameLine();
 		DrawFramePill();
 		DrawAssetsPill();
+		DrawSavingPill();
 		DrawPhysicsPill();
 
 		ImGui::SameLine();
@@ -1648,7 +1783,10 @@ namespace Strata
 					PerformancePanel::c_JobSamples, stats.Workers.RunningJobs + stats.IO.RunningJobs + stats.Background.RunningJobs,
 					stats.Workers.QueuedJobs + stats.IO.QueuedJobs + stats.Background.QueuedJobs);
 			}
+			// What paces the frames, of the last two seconds' frames: summarized only while the tooltip shows.
+			tooltip += "\n" + PerformancePanel::DescribeBound(FrameProfiler::Get().Summarize(c_FramePillBoundFrames));
 			ImGui::SetTooltip("%s", tooltip.c_str());
+			UI::ItemProbe::Record("Status.FrameTooltip", true, 0, tooltip);
 		}
 		if (clicked)
 			m_Panels.Focus(EditorPanels::c_Performance);
@@ -1704,8 +1842,12 @@ namespace Strata
 			compact = fmt::format("{} importing{}{}", importing, c_Separator, compact);
 		// A scene being opened (scene.open, a project's start scene) loads with everything it uses: the largest load while it
 		// lasts. Its progress counts its document as it is read, then what it uses in bytes.
-		if (m_Context.IsSceneLoading())
+		if (m_Context.IsSceneLoading() && !m_Context.IsScanningAssets())
 			compact = fmt::format("Opening scene {:.0f}%{}{}", std::floor(m_Context.GetSceneLoadStatus().Progress * 100.0f), c_Separator, compact);
+		// The project's assets being scanned in the background come first: what needs them waits for it.
+		const std::optional<AssetScanProgress> scan = m_Context.GetAssetScanProgress();
+		if (scan)
+			compact = FormatAssetScan(*scan) + c_Separator + compact;
 		const std::string text = compact + c_Separator + memory;
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		// Failures matter most; then how full the budgets are (a comfortable budget is no news).
@@ -1718,6 +1860,11 @@ namespace Strata
 		{
 			std::string tooltip = stats.FailedAssets > 0 ? fmt::format("{} assets failed to load (see the Console or the Streaming panel).", stats.FailedAssets)
 				: fmt::format("Assets ready and streaming in; {} are registered.", stats.RegisteredAssets);
+			if (scan)
+			{
+				tooltip += " The project's assets are being scanned: edits, asset commands and the start scene wait until every asset is "
+					"registered.";
+			}
 			if (importing > 0)
 			{
 				tooltip += fmt::format(" {} {} importing in the background: {} once imported.", importing, importing == 1 ? "asset is" : "assets are",
@@ -1751,6 +1898,28 @@ namespace Strata
 		}
 		if (clicked)
 			m_Panels.Focus(EditorPanels::c_Streaming);
+	}
+
+	void EditorLayer::DrawSavingPill()
+	{
+		if (!m_Context.HasSavesInFlight())
+			return;
+		const std::vector<DocumentSaveStatus> saves = m_Context.GetSaveStatuses();
+		const DocumentSaveStatus& first = saves.front();
+		const std::string percent = fmt::format("{:.0f}%", std::floor(first.Progress * 100.0f));
+		std::string text = fmt::format("Saving '{}' {}", first.Label, percent);
+		if (saves.size() > 1)
+			text += fmt::format("{}{} more queued", c_Separator, saves.size() - 1);
+		const std::string compact = "Saving " + percent;
+		ImGui::SameLine();
+		const bool clicked = UI::Pill("Status.Saving", Icons::Save, StatusPillText(Icons::Save, text, compact), UI::GetThemeColors().Info);
+		if (UI::IsTooltipDue())
+		{
+			ImGui::SetTooltip("Saving in the background: the editor goes on while the files are written; edits made meanwhile stay unsaved. "
+				"Closing the project or the editor waits for the save. Click to see it in the Activity panel.");
+		}
+		if (clicked)
+			m_Panels.Focus(EditorPanels::c_Activity);
 	}
 
 	void EditorLayer::DockNewToolPanels()
@@ -1857,7 +2026,11 @@ namespace Strata
 		// A build someone cancelled failed at nothing: the pill goes back to what the module is.
 		if (builder.GetLastResult().ID != 0 && !builder.GetLastResult().Success && !builder.GetLastResult().Cancelled)
 		{
-			if (UI::Pill("Status.Scripts", Icons::CircleAlert, StatusPillText(Icons::CircleAlert, "Build failed"), colors.Error,
+			// Its errors as the Problems panel counts them.
+			const size_t errors = CountScriptBuildErrors(builder.GetLastResult());
+			const std::string text = errors == 0 ? std::string("Build failed")
+				: fmt::format("Build failed{}{} {}", c_Separator, errors, errors == 1 ? "error" : "errors");
+			if (UI::Pill("Status.Scripts", Icons::CircleAlert, StatusPillText(Icons::CircleAlert, text, "Build failed"), colors.Error,
 				"The last script build failed. Click to see its errors (the Problems panel)."))
 				m_Panels.Focus(EditorPanels::c_Problems);
 			return false;
@@ -1924,6 +2097,40 @@ namespace Strata
 			UI::OpenModal(c_UnsavedChangesModal);
 			m_OpenUnsavedChangesModal = false;
 		}
+		// While saves are in flight, the action that waits for them (RequestDiscardChanges) shows their progress.
+		if (m_OpenSavingModal)
+		{
+			UI::OpenModal(c_SavingModal);
+			m_OpenSavingModal = false;
+		}
+		if (UI::BeginModal(c_SavingModal, "Saving"))
+		{
+			if (!m_Context.HasSavesInFlight())
+			{
+				ImGui::CloseCurrentPopup();
+				UI::EndModal();
+				// Written: what replaces the scene now asks about the changes made since, if there are any.
+				if (std::function<void()> action = std::exchange(m_ActionAfterSaves, nullptr))
+					RequestDiscardChanges(std::move(action));
+				return;
+			}
+			ImGui::TextUnformatted("Waiting for the saves to finish before going on:");
+			for (const DocumentSaveStatus& save : m_Context.GetSaveStatuses())
+			{
+				const std::string label = fmt::format("Saving '{}'... {:.0f}%", save.Label, std::floor(save.Progress * 100.0f));
+				UI::StrataProgressBar(fmt::format("Saving.Progress.{}", save.ID).c_str(), save.Progress, label);
+			}
+			UI::ItemProbe::Record("Saving.Dialog");
+			ImGui::Spacing();
+			// Cancel gives up what was to happen next, never a save.
+			if (UI::DialogButton("Saving.Cancel", "Cancel"))
+			{
+				ImGui::CloseCurrentPopup();
+				m_ActionAfterSaves = nullptr;
+			}
+			UI::EndModal();
+			return;
+		}
 		if (!UI::BeginModal(c_UnsavedChangesModal, "Unsaved Changes"))
 			return;
 		ImGui::Text("Save changes to '%s'?", m_Context.GetEditScene()->GetName().c_str());
@@ -1937,9 +2144,12 @@ namespace Strata
 		if (UI::DialogButton("UnsavedChanges.Save", "Save", true))
 		{
 			ImGui::CloseCurrentPopup();
-			if (SaveScene() && m_PendingDiscardAction)
-				m_PendingDiscardAction();
-			m_PendingDiscardAction = nullptr;
+			// The pending action runs once the save is written; it asks again about changes made meanwhile.
+			SaveScene([this, action = std::exchange(m_PendingDiscardAction, nullptr)](bool saved)
+			{
+				if (saved && action)
+					RequestDiscardChanges(action);
+			});
 		}
 		ImGui::SameLine();
 		if (UI::DialogButton("UnsavedChanges.DontSave", "Don't Save"))

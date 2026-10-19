@@ -26,7 +26,7 @@
 			"Name": "Asset",
 			"Notes": "Asset registry, loading, packs and built-in asset handles, without the importers (AssetPipeline). It knows no graphics API: GPU assets record their uploads into the AssetUploadContext the renderer provides (the IAssetGraphics engine service), so neither NVRHI nor Vulkan headers may be included here.",
 			"Paths": [ "Strata/Asset/**" ],
-			"Exclude": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*", "Strata/Asset/TextureCooker.*", "Strata/Asset/BC7Encoder.*", "Strata/Asset/AssetPackWriter.*", "Strata/Asset/AssetDependencies.*" ],
+			"Exclude": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*", "Strata/Asset/TextureCooker.*", "Strata/Asset/BC7Encoder.*", "Strata/Asset/AssetPackWriter.*", "Strata/Asset/AssetDependencies.*", "Strata/Asset/ImportRecordStore.*", "Strata/Asset/AssetRegistration.*", "Strata/Asset/AssetPackCook.*" ],
 			"MayInclude": [ "Core" ],
 			"MayNotIncludeExternal": [ "nvrhi/", "vulkan/", "vk_" ]
 		},
@@ -65,6 +65,12 @@
 			"Notes": "Skeletons, clips, animation controllers and the Animation scene system. The renderer never includes it: poses reach it through the scene service ISkinningPoses (Scene/SceneServices.h), and scripts reach animators through IAnimatorControl.",
 			"Paths": [ "Strata/Animation/**" ],
 			"MayInclude": [ "Core", "Asset", "Reflection", "Scene" ]
+		},
+		{
+			"Name": "GameUI",
+			"Notes": "Game UI: canvases, layout, widgets and navigation. The renderer reaches it only through SceneOverlayRegistry (Renderer/SceneOverlay.h), scripts through the scene services IUIControl and IUIEvents; only Engine includes it.",
+			"Paths": [ "Strata/GameUI/**" ],
+			"MayInclude": [ "Core", "Input", "Asset", "Reflection", "Scene", "Renderer" ]
 		},
 		{
 			"Name": "Scripting",
@@ -107,14 +113,14 @@
 			"Name": "AssetPipeline",
 			"Tooling": true,
 			"Notes": "Importers, the texture cooker and its BC7 encoder, the editor's asset database, the dependency scanner and the pack writer (tooling, never in shipped games: games only read packs, so they link no compressor). Animation is a proven downward dependency: the glTF importer writes the stored forms of skeletons and clips, and the dependency scanner reads the clips an animation controller plays. World is one too: the dependency scanner reads the persistent scene and the cells of world documents.",
-			"Paths": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*", "Strata/Asset/TextureCooker.*", "Strata/Asset/BC7Encoder.*", "Strata/Asset/AssetPackWriter.*", "Strata/Asset/AssetDependencies.*" ],
+			"Paths": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*", "Strata/Asset/TextureCooker.*", "Strata/Asset/BC7Encoder.*", "Strata/Asset/AssetPackWriter.*", "Strata/Asset/AssetDependencies.*", "Strata/Asset/ImportRecordStore.*", "Strata/Asset/AssetRegistration.*", "Strata/Asset/AssetPackCook.*" ],
 			"MayInclude": [ "Core", "Asset", "Reflection", "Scene", "Renderer", "Audio", "Animation", "World" ]
 		},
 		{
 			"Name": "Engine",
 			"Notes": "The composition root (Engine/BuiltinModules) and the entry point that calls it (Engine/EntryPoint.h, ApplicationLaunch.h). Both are part of every program, shipped games included, so they name only the modules a game contains: tools hand the asset pipeline in (ModuleRegistrationOptions::AssetPipeline), and programs list their engine modules (ApplicationSpecification::Modules), so the importers, the network and ImGui stay out of games.",
 			"Paths": [ "Strata/Engine/**" ],
-			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Animation", "Scripting", "World" ]
+			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Animation", "Scripting", "World", "GameUI" ]
 		}
 	]
 }

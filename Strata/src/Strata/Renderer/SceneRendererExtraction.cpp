@@ -4,13 +4,16 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Math/Math.h"
-#include "Strata/Renderer/BindlessTextureTable.h"
+#include "Strata/Renderer/LODSelection.h"
 #include "Strata/Renderer/Material.h"
+#include "Strata/Renderer/MaterialData.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RenderScene.h"
+#include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureStreamer.h"
+#include "Strata/Renderer/TextureTable.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneServices.h"
 
@@ -51,6 +54,9 @@ namespace Strata
 		// It has loaded texture maps, which stream at the level the screen needs: only its draws work out how finely their
 		// texture coordinates show (VisibleMaterialUse::UVPixels).
 		constexpr uint32_t c_MaterialTextured = 1u << 4;
+		// The GPU's culling reads these flags from the material table (Include/Culling.glsl).
+		static_assert(c_MaterialAvailable == RenderData::c_CullMaterialAvailable && c_MaterialDoubleSided == RenderData::c_CullMaterialDoubleSided
+			&& c_MaterialAlphaMask == RenderData::c_CullMaterialAlphaMask && c_MaterialTransparent == RenderData::c_CullMaterialTransparent);
 
 		// Shadow casters further than this toward the light than a cascade's bounding sphere are flattened onto the cascade's
 		// near plane (ShadowMesh.vert) instead of extending its depth range.
@@ -58,8 +64,9 @@ namespace Strata
 
 		// Proxies per chunk of the parallel extraction.
 		constexpr uint32_t c_ExtractionChunkSize = 2048;
-		// Changed instances this close together are uploaded in one range: fewer copies for a little more data.
-		constexpr uint32_t c_UploadRangeGap = 16;
+		// A shadow caster is drawn into a cascade only while its light-space extent (the larger of x and y) covers at least this
+		// many of the cascade's texels: smaller casters only flicker in and out of texels (SceneRendererStats::SubTexelCasters).
+		constexpr float c_MinCasterTexels = 1.0f;
 
 		// The sort key of a draw: pipeline state first (cascade, alpha mask, winding, culling, skinning), then mesh, submesh
 		// and level of detail, which together make a batch; the material in the lowest bits only when batches are split by
@@ -92,23 +99,7 @@ namespace Strata
 		// Whether a proxy's instances are drawn skinned: posed, with a mesh that has its skin stream on the GPU.
 		bool IsDrawnSkinned(const RenderScene& renderScene, uint32_t proxy, const Mesh& mesh)
 		{
-			return (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0 && mesh.GetSkinBuffer() != nullptr;
-		}
-
-		uint32_t PackTextureSlot(uint32_t slot, uint32_t samplerIndex, bool grayscale = false)
-		{
-			return (slot & 0xFFFFFFu) | ((samplerIndex & 0x7Fu) << 24) | (grayscale ? RenderData::c_TextureSlotGrayscale : 0u);
-		}
-
-		uint32_t GetSamplerIndex(const TextureSpecification& specification)
-		{
-			return static_cast<uint32_t>(specification.Filter) * 3 + static_cast<uint32_t>(specification.Wrap);
-		}
-
-		uint32_t GetMaterialFlags(const MaterialProperties& properties)
-		{
-			return c_MaterialAvailable | (properties.DoubleSided ? c_MaterialDoubleSided : 0u) | (properties.AlphaMode == MaterialAlphaMode::Mask ? c_MaterialAlphaMask : 0u)
-				| (properties.AlphaMode == MaterialAlphaMode::Blend ? c_MaterialTransparent : 0u);
+			return (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Skinned) != 0 && mesh.IsSkinned();
 		}
 
 		// Run-length lists: consecutive proxies mostly share meshes and materials.
@@ -168,16 +159,28 @@ namespace Strata
 
 	void SceneRenderer::PrepareExtraction(RenderScene& renderScene)
 	{
+		if (renderScene.GetId() != m_RenderSceneId && m_RenderSceneId != 0 && renderScene.GetCloneSource() == m_RenderSceneId)
+		{
+			// A clone of the render scene the renderer drew last (a play start): the same slots, proxies and instances, so the
+			// per-slot state, the uploaded draw lists, the feedback and the visibility history all hold for it.
+			if (m_Feedback.RenderSceneId == m_RenderSceneId)
+				m_Feedback.RenderSceneId = renderScene.GetId();
+			if (m_MaterialResolution.RenderSceneId == m_RenderSceneId)
+				m_MaterialResolution.RenderSceneId = renderScene.GetId();
+			m_RenderSceneId = renderScene.GetId();
+		}
 		if (renderScene.GetId() != m_RenderSceneId)
 		{
 			// Another scene: its slots mean something else, and the GPU copies hold the previous scene's data.
 			m_RenderSceneId = renderScene.GetId();
+			m_ResetVisibility = true; // Its proxies are not those the visibility bits are of
+			m_LODFades.clear();       // Nor its instances those the fades are of
+			m_ClearLODFades = true;
+			m_LODFadeFrame++;
 			m_MeshUsage.clear();
 			m_FrameMeshes.clear();
 			m_MaterialUsage.clear();
 			m_MaterialFlags.clear();
-			m_MaterialData.clear();
-			m_MaterialUploaded.clear();
 			m_MaterialPixelSizes.clear();
 			m_MaterialUVPixels.clear();
 			m_MaterialUVScales.clear();
@@ -186,6 +189,7 @@ namespace Strata
 			m_CasterStamps.clear();
 			m_DrawInstances.clear();
 			m_ShadowDrawInstances.clear();
+			m_DrawArguments.clear();
 			m_FullUpload = true;
 		}
 		else
@@ -205,6 +209,7 @@ namespace Strata
 		m_UsedMaterialSlots.clear();
 		m_MeshUsage.resize(renderScene.GetMeshSlotCapacity(), 0);
 		m_FrameMeshes.resize(renderScene.GetMeshSlotCapacity(), nullptr);
+		m_FrameGeometry.resize(renderScene.GetMeshSlotCapacity());
 		EnsureMaterialSlots(renderScene.GetMaterialSlotCapacity());
 
 		const uint32_t proxies = renderScene.GetProxyCapacity();
@@ -219,8 +224,7 @@ namespace Strata
 		}
 		m_VisibleMaterials.clear();
 		m_VisibleTextures.clear();
-		m_DefaultMaterialData.reset();
-		m_DefaultMaterialFlags = 0;
+		m_DefaultMaterialFlags.reset();
 	}
 
 	void SceneRenderer::ReleaseFrameAssets()
@@ -236,8 +240,6 @@ namespace Strata
 			return;
 		m_MaterialUsage.resize(count, 0);
 		m_MaterialFlags.resize(count, 0);
-		m_MaterialData.resize(count, RenderData::MaterialData {});
-		m_MaterialUploaded.resize(count, 0);
 		m_MaterialPixelSizes.resize(count, 0.0f);
 		m_MaterialUVPixels.resize(count, 0.0f);
 		m_MaterialUVScales.resize(count, 1.0f);
@@ -249,6 +251,16 @@ namespace Strata
 		if (m_MeshUsage[slot] == 0)
 			m_UsedMeshSlots.push_back(slot);
 		m_MeshUsage[slot] |= usage;
+	}
+
+	bool SceneRenderer::IsMeshInView(uint32_t slot) const
+	{
+		return (m_MeshUsage[slot] & (c_UseView | c_UseHigh)) != 0;
+	}
+
+	bool SceneRenderer::IsMeshCaster(uint32_t slot) const
+	{
+		return (m_MeshUsage[slot] & c_UseShadow) != 0;
 	}
 
 	void SceneRenderer::MarkMaterial(uint32_t slot, uint32_t usage)
@@ -265,6 +277,27 @@ namespace Strata
 		const SpatialIndex& index = renderScene.GetSpatialIndex();
 		m_VisibleProxies.clear();
 		index.QueryFrustum(frustum, m_VisibleProxies);
+		MarkVisibleProxies(renderScene, camera);
+		MarkMeshesWithoutBounds(renderScene);
+
+		// Prefetch what is near the camera but outside the view.
+		if (!(m_Specification.PrefetchDistance > 0.0f))
+			return;
+		m_QueryScratch.clear();
+		index.QuerySphere(camera.Position, m_Specification.PrefetchDistance, m_QueryScratch);
+		for (const uint32_t proxy : m_QueryScratch)
+		{
+			if (m_ProxyStamps[proxy] == m_FrameStamp)
+				continue;
+			const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(proxy);
+			MarkMesh(renderScene.GetMeshSlot(proxy), c_UsePrefetch | (overrideSlot == RenderScene::c_InvalidIndex ? c_UsePrefetch << c_SubmeshMaterialsShift : 0u));
+			if (overrideSlot != RenderScene::c_InvalidIndex)
+				MarkMaterial(overrideSlot, c_UsePrefetch);
+		}
+	}
+
+	void SceneRenderer::MarkVisibleProxies(RenderScene& renderScene, const SceneCamera& camera)
+	{
 		const uint32_t visible = static_cast<uint32_t>(m_VisibleProxies.size());
 		m_Stats.VisibleProxies = visible;
 		m_Stats.CulledInstances = renderScene.GetStats().IndexedProxies - visible;
@@ -316,7 +349,10 @@ namespace Strata
 			m_VisibleAnimators.insert(m_VisibleAnimators.end(), m_Chunks[chunk].Animators.begin(), m_Chunks[chunk].Animators.end());
 			m_VisibleReceivers.Expand(m_Chunks[chunk].Receivers);
 		}
+	}
 
+	void SceneRenderer::MarkMeshesWithoutBounds(RenderScene& renderScene)
+	{
 		// A mesh whose bounds are unknown (never loaded, none recorded) may be anywhere, in view too, whatever the
 		// placeholder bounds of its proxies say: it is requested as if in view while any of them is active, until it loads
 		// and its layout gives them real bounds.
@@ -327,24 +363,53 @@ namespace Strata
 			MarkMesh(slot, c_UseView);
 			m_Stats.MeshesWithoutBounds++;
 		}
-
-		// Prefetch what is near the camera but outside the view.
-		if (!(m_Specification.PrefetchDistance > 0.0f))
-			return;
-		m_QueryScratch.clear();
-		index.QuerySphere(camera.Position, m_Specification.PrefetchDistance, m_QueryScratch);
-		for (const uint32_t proxy : m_QueryScratch)
-		{
-			if (m_ProxyStamps[proxy] == m_FrameStamp)
-				continue;
-			const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(proxy);
-			MarkMesh(renderScene.GetMeshSlot(proxy), c_UsePrefetch | (overrideSlot == RenderScene::c_InvalidIndex ? c_UsePrefetch << c_SubmeshMaterialsShift : 0u));
-			if (overrideSlot != RenderScene::c_InvalidIndex)
-				MarkMaterial(overrideSlot, c_UsePrefetch);
-		}
 	}
 
-	void SceneRenderer::FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, RenderData::FrameConstants& frame)
+	void SceneRenderer::ApplyFeedback(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum)
+	{
+		ST_PROFILE_FUNCTION();
+		ST_PROFILE_STAGE("Render.Extract");
+		// The slots the feedback's frame touched, as it used them (its culling ran with the mesh and material tables the scene's
+		// GPU copy holds now: UsesFeedback).
+		const uint32_t meshSlots = renderScene.GetMeshSlotCapacity();
+		const uint32_t materialSlots = renderScene.GetMaterialSlotCapacity();
+		for (const RenderData::FeedbackRecord& record : m_Feedback.Meshes)
+		{
+			if (record.Slot >= meshSlots || !renderScene.GetMeshHandle(record.Slot).IsValid() || (record.Use & c_UseMask) == 0)
+				continue;
+			MarkMesh(record.Slot, record.Use & c_UseMask);
+		}
+		for (const RenderData::FeedbackRecord& record : m_Feedback.Materials)
+		{
+			if (record.Slot >= materialSlots || !renderScene.GetMaterialHandle(record.Slot).IsValid() || (record.Use & c_UseMask) == 0)
+				continue;
+			MarkMaterial(record.Slot, record.Use & c_UseMask);
+			// Sizes as GatherDraws records them for drawn instances (the GPU's are of its drawn instances).
+			if (std::isfinite(record.Pixels) && record.Pixels > 0.0f)
+				m_MaterialPixelSizes[record.Slot] = std::max(m_MaterialPixelSizes[record.Slot], record.Pixels);
+			if (record.UVPixels > 0.0f && !std::isnan(record.UVPixels))
+				m_MaterialUVPixels[record.Slot] = std::max(m_MaterialUVPixels[record.Slot], record.UVPixels);
+		}
+
+		// What the CPU still draws or tells in the view: the users of transparent materials (drawn sorted), and skinned
+		// proxies (their animators learn that they are seen). The spatial index's test, proxy by proxy.
+		m_UserScratch.clear();
+		renderScene.CollectMaterialUsers(m_SceneGPU->GetTransparentMaterialSlots(), m_UserScratch);
+		for (uint32_t index = 0; index < renderScene.GetSkinProxyCount(); index++)
+			m_UserScratch.push_back(renderScene.GetSkinProxy(index));
+		std::sort(m_UserScratch.begin(), m_UserScratch.end());
+		m_UserScratch.erase(std::unique(m_UserScratch.begin(), m_UserScratch.end()), m_UserScratch.end());
+		m_VisibleProxies.clear();
+		for (const uint32_t proxy : m_UserScratch)
+		{
+			if ((renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Indexed) != 0 && frustum.IsAABBVisible(renderScene.GetWorldBounds(proxy)))
+				m_VisibleProxies.push_back(proxy);
+		}
+		MarkVisibleProxies(renderScene, camera);
+		MarkMeshesWithoutBounds(renderScene);
+	}
+
+	void SceneRenderer::FindShadowCasters(RenderScene& renderScene, const SceneCamera& camera, const Frustum& frustum, RenderData::FrameConstants& frame, bool findCasters)
 	{
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Extract");
@@ -360,9 +425,14 @@ namespace Strata
 		const float aspect = static_cast<float>(m_ViewportSize.x) / static_cast<float>(m_ViewportSize.y);
 		const float tanHalfFOV = camera.Orthographic ? 0.0f : std::tan(camera.VerticalFOV * 0.5f);
 		const glm::mat4 inverseView = glm::inverse(camera.View);
+		// The slices are laid out around the camera (camera-relative), and placed in absolute light space in double, so the
+		// texel snapping stays stable however far the camera is from the origin.
+		const glm::mat3 cameraRotation(inverseView);
 		const glm::vec3 lightDirection = m_ShadowLight.Direction;
 		const glm::vec3 up = std::abs(lightDirection.y) > 0.99f ? glm::vec3(0.0f, 0.0f, 1.0f) : glm::vec3(0.0f, 1.0f, 0.0f);
 		m_LightView = glm::lookAt(glm::vec3(0.0f), lightDirection, up);
+		const glm::dmat3 lightRotation = glm::dmat3(glm::mat3(m_LightView));
+		m_CameraLightPosition = lightRotation * glm::dvec3(camera.Position);
 		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
 
 		// Each cascade's square covers the bounding sphere of a view frustum slice; its depth range is fitted to the casters
@@ -379,6 +449,7 @@ namespace Strata
 
 			// Bounding sphere of the view frustum slice: its size does not change when the camera rotates, which keeps the
 			// shadow texel footprint (and thus the edges) stable.
+			// The slice's corners relative to the camera.
 			std::array<glm::vec3, 8> corners;
 			size_t cornerIndex = 0;
 			for (float distance : { sliceNear, sliceFar })
@@ -388,14 +459,14 @@ namespace Strata
 				for (float x : { -1.0f, 1.0f })
 				{
 					for (float y : { -1.0f, 1.0f })
-						corners[cornerIndex++] = glm::vec3(inverseView * glm::vec4(x * halfWidth, y * halfHeight, -distance, 1.0f));
+						corners[cornerIndex++] = cameraRotation * glm::vec3(x * halfWidth, y * halfHeight, -distance);
 				}
 			}
 			glm::vec3 center(0.0f);
 			for (const glm::vec3& corner : corners)
 			{
 				center += corner;
-				shadowedView.Expand(corner);
+				shadowedView.Expand(camera.Position + corner);
 			}
 			center /= 8.0f;
 			float radius = 0.0f;
@@ -403,74 +474,29 @@ namespace Strata
 				radius = std::max(radius, glm::length(corner - center));
 			radius = std::ceil(radius * 16.0f) / 16.0f;
 
-			// Snap the cascade origin to whole texels so edges do not shimmer while the camera moves.
-			const float worldPerTexel = 2.0f * radius / mapSize;
-			glm::vec3 lightCenter = glm::vec3(m_LightView * glm::vec4(center, 1.0f));
+			// Snap the cascade origin to whole texels of absolute light space so edges do not shimmer while the camera moves.
+			const double worldPerTexel = 2.0 * static_cast<double>(radius) / static_cast<double>(mapSize);
+			glm::dvec3 lightCenter = m_CameraLightPosition + lightRotation * glm::dvec3(center);
 			lightCenter.x = std::floor(lightCenter.x / worldPerTexel) * worldPerTexel;
 			lightCenter.y = std::floor(lightCenter.y / worldPerTexel) * worldPerTexel;
+			const glm::vec3 relativeCenter(lightCenter - m_CameraLightPosition);
+			const glm::vec3 absoluteCenter(lightCenter);
 
 			CascadeBox& box = m_Cascades[cascade];
-			box.Min = glm::vec2(lightCenter) - radius;
-			box.Max = glm::vec2(lightCenter) + radius;
-			box.FarZ = lightCenter.z - radius;
-			box.SphereNearZ = lightCenter.z + radius;
-			box.WorldPerTexel = worldPerTexel;
+			box.Min = glm::vec2(absoluteCenter) - radius;
+			box.Max = glm::vec2(absoluteCenter) + radius;
+			box.FarZ = absoluteCenter.z - radius;
+			box.SphereNearZ = absoluteCenter.z + radius;
+			box.RelativeMin = glm::vec2(relativeCenter) - radius;
+			box.RelativeMax = glm::vec2(relativeCenter) + radius;
+			box.RelativeFarZ = relativeCenter.z - radius;
+			box.RelativeSphereNearZ = relativeCenter.z + radius;
+			box.WorldPerTexel = static_cast<float>(worldPerTexel);
 			box.Radius = radius;
 			frame.CascadeSplits[cascade] = sliceFar;
 			sliceNear = sliceFar;
 		}
 		m_CascadeCount = cascadeCount;
-
-		// A caster shadows the cascades whose square it overlaps and whose far side it does not lie beyond; casters closer to
-		// the light than a cascade's sphere are kept (its depth range grows to include them), so each cascade's volume is open
-		// toward the light. The index finds candidates by their world bounds, whose extent along any axis covers that of the
-		// light-space bounds tested below, so no caster is missed.
-		const SpatialIndex& index = renderScene.GetSpatialIndex();
-		const glm::vec3 lightX(m_LightView[0][0], m_LightView[1][0], m_LightView[2][0]);
-		const glm::vec3 lightY(m_LightView[0][1], m_LightView[1][1], m_LightView[2][1]);
-		const glm::vec3 lightZ(m_LightView[0][2], m_LightView[1][2], m_LightView[2][2]);
-		const glm::vec3 lightOffset(m_LightView[3]);
-		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-		{
-			const CascadeBox& box = m_Cascades[cascade];
-			const std::array<glm::vec4, 5> planes = {
-				glm::vec4(lightX, lightOffset.x - box.Min.x), glm::vec4(-lightX, box.Max.x - lightOffset.x),
-				glm::vec4(lightY, lightOffset.y - box.Min.y), glm::vec4(-lightY, box.Max.y - lightOffset.y),
-				glm::vec4(lightZ, lightOffset.z - box.FarZ) };
-			m_QueryScratch.clear();
-			index.QueryPlanes(planes, m_QueryScratch);
-			for (const uint32_t proxy : m_QueryScratch)
-			{
-				if (m_CasterStamps[proxy] == m_FrameStamp)
-					continue;
-				m_CasterStamps[proxy] = m_FrameStamp;
-				m_ShadowCasters.push_back(ShadowCaster { proxy, 0, 0.0f });
-			}
-		}
-
-		// The exact test, on the bounds of the mesh in light space.
-		size_t kept = 0;
-		for (const ShadowCaster& candidate : m_ShadowCasters)
-		{
-			const uint32_t proxy = candidate.Proxy;
-			const uint32_t flags = renderScene.GetProxyFlags(proxy);
-			if ((flags & RenderProxyFlags::CastShadows) == 0 || (flags & RenderProxyFlags::MeshBounds) == 0 || renderScene.GetInstanceCount(proxy) == 0)
-				continue;
-			const AABB lightBounds = renderScene.GetLocalBounds(proxy).Transformed(m_LightView * renderScene.GetWorldTransform(proxy));
-			uint32_t cascadeMask = 0;
-			for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-			{
-				const CascadeBox& box = m_Cascades[cascade];
-				if (lightBounds.Max.x < box.Min.x || lightBounds.Min.x > box.Max.x || lightBounds.Max.y < box.Min.y || lightBounds.Min.y > box.Max.y
-					|| lightBounds.Max.z < box.FarZ)
-					continue;
-				cascadeMask |= 1u << cascade;
-			}
-			if (cascadeMask == 0)
-				continue;
-			m_ShadowCasters[kept++] = ShadowCaster { proxy, cascadeMask, lightBounds.Max.z };
-		}
-		m_ShadowCasters.resize(kept);
 
 		// Shadows of a skinned mesh move with its animator, also when the mesh itself is out of view; the cascades reach far
 		// beyond the view (spheres around its slices), so a caster out of view reports its animator only when its shadow can
@@ -480,7 +506,9 @@ namespace Strata
 		std::array<glm::vec4, 7> viewPlanes = {};
 		if (skins)
 		{
-			receivers = m_VisibleReceivers;
+			// A feedback frame looked at some of the visible proxies only: the shadowed part of the view stands in for the
+			// receivers (conservative).
+			receivers = m_FeedbackFrame ? shadowedView : m_VisibleReceivers;
 			receivers.Min = glm::max(receivers.Min, shadowedView.Min);
 			receivers.Max = glm::min(receivers.Max, shadowedView.Max);
 			for (size_t plane = 0; plane < 6; plane++)
@@ -489,16 +517,132 @@ namespace Strata
 			const glm::vec3 forward = -glm::normalize(glm::vec3(inverseView[2]));
 			viewPlanes[6] = glm::vec4(-forward, glm::dot(forward, glm::vec3(inverseView[3])) + farClip);
 		}
-		for (const ShadowCaster& caster : m_ShadowCasters)
+
+		if (!findCasters)
 		{
-			if (skins && renderScene.GetSkinAnimator(caster.Proxy) != entt::null && m_ProxyStamps[caster.Proxy] != m_FrameStamp
-				&& CanShadowView(renderScene.GetWorldBounds(caster.Proxy), lightDirection, receivers, viewPlanes))
-				m_VisibleAnimators.push_back(renderScene.GetSkinAnimator(caster.Proxy));
-			const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(caster.Proxy);
-			MarkMesh(renderScene.GetMeshSlot(caster.Proxy), c_UseShadow | (overrideSlot == RenderScene::c_InvalidIndex ? c_UseShadow << c_SubmeshMaterialsShift : 0u));
-			if (overrideSlot != RenderScene::c_InvalidIndex)
-				MarkMaterial(overrideSlot, c_UseShadow);
+			// The GPU's culling finds the casters (and its feedback what they use): only skinned proxies out of view are
+			// tested here, for their animators.
+			uint32_t subTexel = 0;
+			for (uint32_t index = 0; skins && index < renderScene.GetSkinProxyCount(); index++)
+			{
+				const uint32_t proxy = renderScene.GetSkinProxy(index);
+				const uint32_t flags = renderScene.GetProxyFlags(proxy);
+				if ((flags & RenderProxyFlags::CastShadows) == 0 || (flags & RenderProxyFlags::MeshBounds) == 0 || renderScene.GetInstanceCount(proxy) == 0
+					|| m_ProxyStamps[proxy] == m_FrameStamp || renderScene.GetSkinAnimator(proxy) == entt::null)
+					continue;
+				const AABB lightBounds = renderScene.GetLocalBounds(proxy).Transformed(m_LightView * renderScene.GetWorldTransform(proxy));
+				if (GetCascadeMask(lightBounds, subTexel) != 0 && CanShadowView(renderScene.GetWorldBounds(proxy), lightDirection, receivers, viewPlanes))
+					m_VisibleAnimators.push_back(renderScene.GetSkinAnimator(proxy));
+			}
+			return;
 		}
+
+		// A caster shadows the cascades whose square it overlaps and whose far side it does not lie beyond; casters closer to
+		// the light than a cascade's sphere are kept (its depth range grows to include them), so each cascade's volume is open
+		// toward the light. The index finds candidates by their world bounds, whose extent along any axis covers that of the
+		// light-space bounds tested below, so no caster is missed. The cascades' queries run as one job each (queries only
+		// read the index) and merge in cascade order.
+		const SpatialIndex& index = renderScene.GetSpatialIndex();
+		const glm::vec3 lightX(m_LightView[0][0], m_LightView[1][0], m_LightView[2][0]);
+		const glm::vec3 lightY(m_LightView[0][1], m_LightView[1][1], m_LightView[2][1]);
+		const glm::vec3 lightZ(m_LightView[0][2], m_LightView[1][2], m_LightView[2][2]);
+		const glm::vec3 lightOffset(m_LightView[3]);
+		JobSystem::ParallelFor(cascadeCount, 1, [&](uint32_t begin, uint32_t end)
+		{
+			for (uint32_t cascade = begin; cascade < end; cascade++)
+			{
+				const CascadeBox& box = m_Cascades[cascade];
+				const std::array<glm::vec4, 5> planes = {
+					glm::vec4(lightX, lightOffset.x - box.Min.x), glm::vec4(-lightX, box.Max.x - lightOffset.x),
+					glm::vec4(lightY, lightOffset.y - box.Min.y), glm::vec4(-lightY, box.Max.y - lightOffset.y),
+					glm::vec4(lightZ, lightOffset.z - box.FarZ) };
+				m_CascadeQueries[cascade].clear();
+				index.QueryPlanes(planes, m_CascadeQueries[cascade]);
+			}
+		});
+		m_CasterCandidates.clear();
+		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
+		{
+			for (const uint32_t proxy : m_CascadeQueries[cascade])
+			{
+				if (m_CasterStamps[proxy] == m_FrameStamp)
+					continue;
+				m_CasterStamps[proxy] = m_FrameStamp;
+				m_CasterCandidates.push_back(proxy);
+			}
+		}
+
+		// The exact test, on the bounds of the mesh in light space, in parallel chunks merged in chunk order (the casters, the
+		// assets they need and the animators they report do not depend on the threads). A caster stays in a cascade only while
+		// it spans at least c_MinCasterTexels of the cascade's texels: smaller ones would only flicker in and out of texels.
+		const uint32_t candidates = static_cast<uint32_t>(m_CasterCandidates.size());
+		const uint32_t chunks = ChunkCount(candidates);
+		if (m_Chunks.size() < chunks)
+			m_Chunks.resize(chunks);
+		ForEachChunk(chunks, [&](uint32_t chunk)
+		{
+			ExtractionChunk& output = m_Chunks[chunk];
+			output.Casters.clear();
+			output.MeshMarks.clear();
+			output.MaterialMarks.clear();
+			output.Animators.clear();
+			uint32_t subTexel = 0;
+			const uint32_t end = std::min(candidates, (chunk + 1) * c_ExtractionChunkSize);
+			for (uint32_t item = chunk * c_ExtractionChunkSize; item < end; item++)
+			{
+				const uint32_t proxy = m_CasterCandidates[item];
+				const uint32_t flags = renderScene.GetProxyFlags(proxy);
+				if ((flags & RenderProxyFlags::CastShadows) == 0 || (flags & RenderProxyFlags::MeshBounds) == 0 || renderScene.GetInstanceCount(proxy) == 0)
+					continue;
+				const AABB lightBounds = renderScene.GetLocalBounds(proxy).Transformed(m_LightView * renderScene.GetWorldTransform(proxy));
+				const uint32_t cascadeMask = GetCascadeMask(lightBounds, subTexel);
+				if (cascadeMask == 0)
+					continue;
+				output.Casters.push_back(ShadowCaster { proxy, cascadeMask, lightBounds.Max.z });
+				// The stamps and the receivers are only read here.
+				if (skins && renderScene.GetSkinAnimator(proxy) != entt::null && m_ProxyStamps[proxy] != m_FrameStamp
+					&& CanShadowView(renderScene.GetWorldBounds(proxy), lightDirection, receivers, viewPlanes))
+					output.Animators.push_back(renderScene.GetSkinAnimator(proxy));
+				const uint32_t overrideSlot = renderScene.GetOverrideMaterialSlot(proxy);
+				AppendMark(output.MeshMarks, renderScene.GetMeshSlot(proxy), c_UseShadow | (overrideSlot == RenderScene::c_InvalidIndex ? c_UseShadow << c_SubmeshMaterialsShift : 0u));
+				if (overrideSlot != RenderScene::c_InvalidIndex)
+					AppendMark(output.MaterialMarks, overrideSlot, c_UseShadow);
+			}
+			output.SubTexelCasters = subTexel;
+		});
+		for (uint32_t chunk = 0; chunk < chunks; chunk++)
+		{
+			const ExtractionChunk& output = m_Chunks[chunk];
+			m_ShadowCasters.insert(m_ShadowCasters.end(), output.Casters.begin(), output.Casters.end());
+			for (const auto& [slot, usage] : output.MeshMarks)
+				MarkMesh(slot, usage);
+			for (const auto& [slot, usage] : output.MaterialMarks)
+				MarkMaterial(slot, usage);
+			m_VisibleAnimators.insert(m_VisibleAnimators.end(), output.Animators.begin(), output.Animators.end());
+			m_Stats.SubTexelCasters += output.SubTexelCasters;
+		}
+	}
+
+	uint32_t SceneRenderer::GetCascadeMask(const AABB& lightBounds, uint32_t& subTexel) const
+	{
+		// A caster shadows the cascades whose square it overlaps and whose far side it does not lie beyond, while it spans
+		// at least c_MinCasterTexels of their texels.
+		const float extent = std::max(lightBounds.Max.x - lightBounds.Min.x, lightBounds.Max.y - lightBounds.Min.y);
+		uint32_t cascadeMask = 0;
+		for (uint32_t cascade = 0; cascade < m_CascadeCount; cascade++)
+		{
+			const CascadeBox& box = m_Cascades[cascade];
+			if (lightBounds.Max.x < box.Min.x || lightBounds.Min.x > box.Max.x || lightBounds.Max.y < box.Min.y || lightBounds.Min.y > box.Max.y
+				|| lightBounds.Max.z < box.FarZ)
+				continue;
+			if (extent < c_MinCasterTexels * box.WorldPerTexel)
+			{
+				subTexel++;
+				continue;
+			}
+			cascadeMask |= 1u << cascade;
+		}
+		return cascadeMask;
 	}
 
 	bool SceneRenderer::CanShadowView(const AABB& caster, const glm::vec3& lightDirection, const AABB& receivers, std::span<const glm::vec4> planes) const
@@ -544,55 +688,36 @@ namespace Strata
 		return true;
 	}
 
-	uint32_t SceneRenderer::ResolveTexture(AssetHandle handle, uint32_t missingSlot, uint32_t loadingSlot, bool residentOnly, std::vector<ResolvedTexture>* resolved)
+	uint32_t SceneRenderer::ResolveMaterialTextures(const Material& material, bool residentOnly, std::vector<ResolvedTexture>* resolved)
 	{
-		if (!handle.IsValid())
-			return PackTextureSlot(missingSlot, 0);
-
-		const Ref<Texture> texture = residentOnly ? m_Assets.FindResident<Texture>(handle) : m_Assets.Resolve<Texture>(handle, AssetPriority::Normal);
-		if (texture && resolved)
-			resolved->push_back(ResolvedTexture { handle, std::max(texture->GetWidth(), texture->GetHeight()), texture->GetMipCount() });
-		if (!texture || texture->GetBindlessSlot() == BindlessTextureTable::c_InvalidSlot)
-			return PackTextureSlot(loadingSlot, 0);
-		// Without streaming the renderer needs every level: it draws what is resident and waits for the rest.
-		if (!m_Specification.TextureStreaming && texture->GetResidentLevel() > 0 && !residentOnly)
-			m_Assets.CountPending(handle);
-		return PackTextureSlot(texture->GetBindlessSlot(), GetSamplerIndex(texture->GetSpecification()), texture->GetSpecification().Grayscale);
-	}
-
-	RenderData::MaterialData SceneRenderer::BuildMaterialData(const Material& material, bool residentOnly, std::vector<ResolvedTexture>* resolved)
-	{
-		const MaterialProperties& properties = material.GetProperties();
-		RenderData::MaterialData data = {};
-		data.BaseColor = properties.BaseColor;
-		data.Emissive = glm::vec4(properties.EmissiveColor * properties.EmissiveIntensity, 0.0f);
-		data.Metallic = properties.Metallic;
-		data.Roughness = properties.Roughness;
-		data.NormalScale = properties.NormalScale;
-		data.OcclusionStrength = properties.OcclusionStrength;
-		data.AlphaCutoff = properties.AlphaCutoff;
-		data.Flags = (properties.AlphaMode == MaterialAlphaMode::Mask ? RenderData::c_MaterialAlphaMask : 0u)
-			| (properties.AlphaMode == MaterialAlphaMode::Blend ? RenderData::c_MaterialAlphaBlend : 0u)
-			| (properties.Unlit ? RenderData::c_MaterialUnlit : 0u)
-			| (properties.DoubleSided ? RenderData::c_MaterialDoubleSided : 0u);
-		data.UVTransform = glm::vec4(properties.UVTiling, properties.UVOffset);
-
-		// Missing maps use neutral textures; maps still loading use neutral ones too, except emission (black until the map
-		// arrives, so surfaces do not flash at full emissive strength).
-		data.BaseColorMap = ResolveTexture(properties.BaseColorMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot, residentOnly, resolved);
-		data.MetallicRoughnessMap = ResolveTexture(properties.MetallicRoughnessMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot, residentOnly, resolved);
-		data.NormalMap = ResolveTexture(properties.NormalMap, BindlessTextureTable::c_FlatNormalSlot, BindlessTextureTable::c_FlatNormalSlot, residentOnly, resolved);
-		data.OcclusionMap = ResolveTexture(properties.OcclusionMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_WhiteSlot, residentOnly, resolved);
-		data.EmissiveMap = ResolveTexture(properties.EmissiveMap, BindlessTextureTable::c_WhiteSlot, BindlessTextureTable::c_BlackSlot, residentOnly, resolved);
-		return data;
+		uint32_t appended = 0;
+		for (const AssetHandle handle : MaterialGPU::GetTextureMaps(material.GetProperties()))
+		{
+			if (!handle.IsValid())
+				continue;
+			const Ref<Texture> texture = residentOnly ? m_Assets.FindResident<Texture>(handle) : m_Assets.Resolve<Texture>(handle, AssetPriority::Normal);
+			if (!texture)
+				continue;
+			if (resolved)
+			{
+				resolved->push_back(ResolvedTexture { handle, std::max(texture->GetWidth(), texture->GetHeight()), texture->GetMipCount() });
+				appended++;
+			}
+			// Without streaming the renderer needs every level: it draws what is resident and waits for the rest.
+			if (!m_Specification.TextureStreaming && texture->GetResidentLevel() > 0 && !residentOnly)
+				m_Assets.CountPending(handle);
+		}
+		return appended;
 	}
 
 	void SceneRenderer::ResolveAssets(RenderScene& renderScene)
 	{
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Extract");
-		// Slot order, so the requests (and the order loads are queued in) do not depend on the order of the proxies.
-		std::sort(m_UsedMeshSlots.begin(), m_UsedMeshSlots.end());
+		// Slot order, so the requests (and the order loads are queued in) do not depend on the order of the proxies. The GPU's
+		// visibility feedback lists the slots in the order its atomics ran, different every frame: by radix (a comparison
+		// sort of 10,000 material slots took a sixth of a frame's Render).
+		SortIndices(m_UsedMeshSlots, m_SlotSortItems, m_SortScratch);
 		for (const uint32_t slot : m_UsedMeshSlots)
 		{
 			const uint32_t usage = m_MeshUsage[slot];
@@ -609,8 +734,12 @@ namespace Strata
 				if ((usage & c_UseShadow) != 0)
 					mesh = m_Assets.FindResident<Mesh>(handle);
 			}
-			// Held by the resolve cache until the frame ends; RenderScene::Sync keeps the mesh's layout current.
-			m_FrameMeshes[slot] = mesh && mesh->GetIndexBuffer() ? mesh.get() : nullptr;
+			// Held by the resolve cache until the frame ends; RenderScene::Sync keeps the mesh's layout current. Its place in the
+			// geometry pool is read once per frame (compaction moves it between frames).
+			const GeometryAllocation* geometry = mesh ? mesh->GetGeometry() : nullptr;
+			m_FrameMeshes[slot] = geometry ? mesh.get() : nullptr;
+			if (geometry)
+				m_FrameGeometry[slot] = *geometry;
 
 			const uint32_t submeshUsage = (usage >> c_SubmeshMaterialsShift) & c_UseMask;
 			if (submeshUsage != 0 && renderScene.IsMeshLayoutKnown(slot))
@@ -620,7 +749,7 @@ namespace Strata
 			}
 		}
 
-		std::sort(m_UsedMaterialSlots.begin(), m_UsedMaterialSlots.end());
+		SortIndices(m_UsedMaterialSlots, m_SlotSortItems, m_SortScratch);
 		if (!ReuseResolvedMaterials(renderScene))
 			ResolveMaterials(renderScene);
 	}
@@ -637,10 +766,8 @@ namespace Strata
 			if (resolved.Index != slot || resolved.Usage != m_MaterialUsage[slot] || resolved.Handle != renderScene.GetMaterialHandle(slot))
 				return false;
 		}
-		// The textures' slots before the replay, which counts the lookups: after it, the frame could not look the assets up
-		// one by one without counting them twice.
-		if (!Renderer::GetBindlessTextures().AreSlotsUnchanged(resolution.TextureSlots, resolution.TextureSlotGenerations))
-			return false;
+		// The data names textures by table index, the same for a texture's life: the textures being the same objects (the
+		// replay) is all the data needs.
 		if (!m_Assets.Replay(resolution.Lookups))
 			return false;
 
@@ -653,10 +780,7 @@ namespace Strata
 				m_Assets.Prefetch(resolved.Handle);
 				continue;
 			}
-			// The data is what the material buffer holds, unless an upload of it is still due.
 			m_MaterialFlags[resolved.Index] = resolved.Flags;
-			if (!m_MaterialUploaded[resolved.Index])
-				m_DirtyMaterialSlots.push_back(resolved.Index);
 			if ((resolved.Usage & (c_UseView | c_UseHigh)) != 0)
 				m_Stats.Materials++;
 			m_Stats.ReusedMaterials++;
@@ -670,8 +794,6 @@ namespace Strata
 		resolution.Valid = false;
 		resolution.RenderSceneId = m_RenderSceneId;
 		resolution.Slots.clear();
-		resolution.TextureSlots.clear();
-		resolution.TextureSlotGenerations.clear();
 		m_ResolvedTextures.clear();
 		// Frames whose materials are all loaded (none drawn as the default material) can be replayed.
 		bool replayable = true;
@@ -697,62 +819,39 @@ namespace Strata
 				material = m_Assets.FindResident<Material>(handle);
 			}
 
-			RenderData::MaterialData data;
+			// The material's GPU data is the render scene's GPU copy's (RenderSceneGPU), built from the same loaded objects.
 			uint32_t flags = 0;
 			if (material)
 			{
 				// The textures of what the frame draws stream at the level its draws need (VisibleTextureUse).
 				const uint32_t firstTexture = static_cast<uint32_t>(m_ResolvedTextures.size());
-				data = BuildMaterialData(*material, !drawn, drawn ? &m_ResolvedTextures : nullptr);
-				const uint32_t textures = static_cast<uint32_t>(m_ResolvedTextures.size()) - firstTexture;
+				const uint32_t textures = ResolveMaterialTextures(*material, !drawn, drawn ? &m_ResolvedTextures : nullptr);
 				m_MaterialTextures[slot] = ResolvedTextureRange { firstTexture, textures };
-				flags = GetMaterialFlags(material->GetProperties()) | (textures > 0 ? c_MaterialTextured : 0u);
+				flags = MaterialGPU::GetFlags(material->GetProperties()) | (textures > 0 ? c_MaterialTextured : 0u);
 				m_MaterialUVScales[slot] = std::max(std::abs(material->GetProperties().UVTiling.x), std::abs(material->GetProperties().UVTiling.y));
 			}
 			else
 			{
 				// The default material stands in while the material loads (or when it never will).
 				replayable = false;
-				if (!m_DefaultMaterialData)
+				if (!m_DefaultMaterialFlags)
 				{
 					const Ref<Material> fallback = m_Assets.Resolve<Material>(BuiltinAssets::DefaultMaterial, AssetPriority::High);
-					if (!fallback)
-						continue; // No asset manager with built-in assets: nothing can be drawn with this material
-					m_DefaultMaterialData = BuildMaterialData(*fallback, false);
-					m_DefaultMaterialFlags = GetMaterialFlags(fallback->GetProperties());
+					if (fallback)
+						ResolveMaterialTextures(*fallback, false, nullptr);
+					// Without an asset manager with built-in assets nothing can be drawn with this material.
+					m_DefaultMaterialFlags = fallback ? MaterialGPU::GetFlags(fallback->GetProperties()) : 0u;
 				}
-				data = *m_DefaultMaterialData;
-				flags = m_DefaultMaterialFlags;
+				flags = *m_DefaultMaterialFlags;
 				m_MaterialUVScales[slot] = 1.0f;
 			}
 			m_MaterialFlags[slot] = flags;
 			resolution.Slots.back().Flags = flags;
-			if (!m_MaterialUploaded[slot] || std::memcmp(&data, &m_MaterialData[slot], sizeof(data)) != 0)
-			{
-				m_MaterialData[slot] = data;
-				m_MaterialUploaded[slot] = 0;
-				m_DirtyMaterialSlots.push_back(slot);
-			}
-			if (drawn)
+			if (drawn && flags != 0)
 				m_Stats.Materials++;
 		}
 		replayable = m_Assets.EndRecording(resolution.Lookups) && replayable && !resolution.Lookups.IsEmpty();
-		if (!replayable)
-			return;
-
-		// The materials' data names their textures by bindless slot: it stays right while those slots hold them.
-		for (const std::weak_ptr<Asset>& asset : resolution.Lookups.GetAssets())
-		{
-			const Ref<Asset> loaded = asset.lock(); // Held by the frame
-			if (!loaded || loaded->GetType() != AssetType::Texture)
-				continue;
-			const uint32_t bindlessSlot = static_cast<const Texture&>(*loaded).GetBindlessSlot();
-			if (bindlessSlot == BindlessTextureTable::c_InvalidSlot)
-				return; // Not uploaded yet: its materials sample the loading texture until it is
-			resolution.TextureSlots.push_back(bindlessSlot);
-		}
-		Renderer::GetBindlessTextures().GetSlotGenerations(resolution.TextureSlots, resolution.TextureSlotGenerations);
-		resolution.Valid = true;
+		resolution.Valid = replayable;
 	}
 
 	void SceneRenderer::BuildBatches(std::vector<SortItem>& draws, std::vector<SceneDrawBatch>& outBatches, std::vector<uint32_t>& outDrawList)
@@ -781,7 +880,7 @@ namespace Strata
 		}
 	}
 
-	void SceneRenderer::GatherDraws(RenderScene& renderScene, const SceneCamera& camera)
+	void SceneRenderer::GatherDraws(RenderScene& renderScene, const SceneCamera& camera, bool opaqueDraws)
 	{
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Extract");
@@ -792,12 +891,21 @@ namespace Strata
 		const bool batchAcrossMaterials = m_Specification.BatchAcrossMaterials;
 		const TextureStreamingPolicy::ViewScale viewScale = TextureStreamingPolicy::GetViewScale(camera, viewportHeight);
 		const bool skins = renderScene.HasSkinProxies(); // Scenes without skinned meshes skip the per-proxy checks
+		// Mesh renderers smaller than this many pixels on screen are not drawn (the GPU's culling leaves out the same ones).
+		const float minPixels = m_Specification.MinProjectedPixels;
+		// Levels of detail that change cross-fade (LODSelection::UpdateLODFade): each opaque instance's state, written only by
+		// the chunk that draws it.
+		const bool fades = opaqueDraws && m_Specification.FadeLevelsOfDetail;
+		if (fades)
+			m_LODFades.resize(instances.size());
+		const uint32_t fadeFrame = m_LODFadeFrame;
 		ForEachChunk(chunks, [&](uint32_t chunk)
 		{
 			ExtractionChunk& output = m_Chunks[chunk];
 			output.Draws.clear();
 			output.Transparent.clear();
 			output.MaterialScreenUses.clear();
+			output.SizeCulled = 0;
 			// Counted in locals and stored once: a store per instance into the chunk, whose neighbours other threads write,
 			// cost 100,000 instances about 0.1 ms.
 			std::array<uint32_t, SceneRendererStats::c_LODStatCount> instancesPerLOD = {};
@@ -810,11 +918,17 @@ namespace Strata
 				const uint32_t meshSlot = renderScene.GetMeshSlot(proxy);
 				const Mesh* mesh = m_FrameMeshes[meshSlot];
 				const uint32_t count = renderScene.GetInstanceCount(proxy);
-				if (!mesh || count == 0 || mesh->GetSubmeshes().size() != count)
+				// Drawn once the GPU holds its instances (a new proxy may wait for a later frame's upload).
+				if (!mesh || count == 0 || mesh->GetSubmeshes().size() != count || !m_SceneGPU->IsResident(proxy))
 					continue;
 
 				const AABB& bounds = renderScene.GetWorldBounds(proxy);
 				const float fraction = m_VisibleFractions[item];
+				if (minPixels > 0.0f && fraction * viewportHeight < minPixels)
+				{
+					output.SizeCulled++;
+					continue;
+				}
 				const float viewDepth = -(camera.View * glm::vec4(bounds.GetCenter(), 1.0f)).z;
 				const bool mirrored = (renderScene.GetProxyFlags(proxy) & RenderProxyFlags::Mirrored) != 0;
 				const bool skinned = skins && IsDrawnSkinned(renderScene, proxy, *mesh);
@@ -832,13 +946,16 @@ namespace Strata
 					const uint32_t materialFlags = m_MaterialFlags[materialSlot];
 					if ((materialFlags & c_MaterialAvailable) == 0)
 						continue;
-					const uint32_t lod = SelectLOD(submeshes[submeshIndex], fraction);
+					const uint32_t lod = SelectLOD(*mesh, submeshes[submeshIndex], fraction);
 					if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
 					{
 						skipped++;
 						continue;
 					}
-					instancesPerLOD[std::min<size_t>(lod, SceneRendererStats::c_LODStatCount - 1)]++;
+					const bool transparent = (materialFlags & c_MaterialTransparent) != 0;
+					// Counted where drawn: the GPU-driven path counts its own instances (SceneRendererGPUStats).
+					if (opaqueDraws || transparent)
+						instancesPerLOD[std::min<size_t>(lod, SceneRendererStats::c_LODStatCount - 1)]++;
 					float uvPixels = 0.0f;
 					if ((materialFlags & c_MaterialTextured) != 0)
 					{
@@ -852,14 +969,35 @@ namespace Strata
 					}
 					AppendScreenUse(output.MaterialScreenUses, materialSlot, fraction * viewportHeight, uvPixels);
 					const bool doubleSided = (materialFlags & c_MaterialDoubleSided) != 0;
-					skinnedInstances += skinned ? 1u : 0u;
-					if ((materialFlags & c_MaterialTransparent) != 0)
+					if (opaqueDraws || transparent)
+						skinnedInstances += skinned ? 1u : 0u;
+					if (transparent)
 					{
 						output.Transparent.push_back(TransparentDraw { viewDepth, renderScene.GetEntityID(proxy), submeshIndex, instance, meshSlot, lod, doubleSided, mirrored, skinned });
 						continue;
 					}
-					output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod, batchAcrossMaterials ? 0u : materialSlot),
-						instance, 0 });
+					if (opaqueDraws)
+					{
+						const uint32_t keyMaterial = batchAcrossMaterials ? 0u : materialSlot;
+						// Submeshes with one level have nothing to fade (nor any state).
+						LODSelection::LODFade fade;
+						if (fades && submeshes[submeshIndex].LODs.size() > 1)
+						{
+							fade = LODSelection::UpdateLODFade(m_LODFades[instance], lod, static_cast<uint32_t>(submeshes[submeshIndex].LODs.size()),
+								instances[instance].EntityID, fadeFrame, true);
+							m_LODFades[instance] = fade.State;
+						}
+						output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod, keyMaterial),
+							RenderData::MakeDrawEntry(instance, fade.Code), 0 });
+						// Both levels while the fade is under way, the old one on the pixels the new one leaves (faded levels are at most
+						// 15, within the key's).
+						static_assert(c_MaxKeyLODs > 15);
+						if (fade.Code != 0)
+						{
+							output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, fade.From, keyMaterial),
+								RenderData::MakeDrawEntry(instance, fade.Code + RenderData::c_LODFadeOutgoing), 0 });
+						}
+					}
 				}
 			}
 			output.InstancesPerLOD = instancesPerLOD;
@@ -884,6 +1022,7 @@ namespace Strata
 			}
 			skipped += output.Skipped;
 			m_Stats.SkinnedInstances += output.SkinnedInstances;
+			m_Stats.SizeCulledProxies += output.SizeCulled;
 		}
 		if (skipped > 0)
 			m_Errors.Report(fmt::format("{} submesh instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, c_MaxKeySubmeshes, c_MaxKeyLODs));
@@ -933,7 +1072,7 @@ namespace Strata
 		}
 	}
 
-	void SceneRenderer::GatherShadowDraws(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame)
+	void SceneRenderer::GatherShadowDraws(RenderScene& renderScene, const SceneCamera& camera, RenderData::FrameConstants& frame, bool casterDraws)
 	{
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Extract");
@@ -943,7 +1082,30 @@ namespace Strata
 		if (m_CascadeCount == 0)
 			return;
 
+		// The fit's inputs (Scene/CascadeFit.comp): each cascade's square and its slice's sphere, and the nearest drawn
+		// casters (the CPU's below, or those the GPU's culling finds).
 		const uint32_t cascadeCount = m_CascadeCount;
+		RenderData::CascadeFitConstants& fit = m_CascadeFit;
+		fit = RenderData::CascadeFitConstants {};
+		fit.LightView = m_LightView;
+		fit.CascadeCount = cascadeCount;
+		fit.CasterDepthsFromGPU = casterDraws ? 0u : 1u;
+		fit.MaxCasterDistance = c_MaxShadowCasterDistance;
+		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
+		{
+			// Camera-relative: the shaders' positions are.
+			const CascadeBox& box = m_Cascades[cascade];
+			fit.Boxes[cascade] = glm::vec4(box.RelativeMin, box.RelativeMax);
+			fit.Depths[cascade] = glm::vec4(box.RelativeFarZ, box.RelativeSphereNearZ, box.WorldPerTexel, box.Radius);
+			fit.CasterNearZ[cascade] = box.RelativeSphereNearZ;
+		}
+		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
+		const float halfAngle = glm::radians(std::clamp(m_ShadowLight.Softness, 0.0f, 10.0f)) * 0.5f;
+		frame.ShadowParams = glm::vec4(2.0f * std::tan(halfAngle), 1.0f / mapSize, 0.0f, static_cast<float>(cascadeCount));
+		frame.ShadowBias = glm::vec4(m_ShadowLight.Bias, m_ShadowLight.NormalBias, 0.0f, 0.0f);
+		if (!casterDraws)
+			return; // The GPU's culling draws the casters
+
 		const uint32_t casters = static_cast<uint32_t>(m_ShadowCasters.size());
 		const uint32_t chunks = ChunkCount(casters);
 		if (m_Chunks.size() < chunks)
@@ -967,7 +1129,7 @@ namespace Strata
 				const uint32_t meshSlot = renderScene.GetMeshSlot(caster.Proxy);
 				const Mesh* mesh = m_FrameMeshes[meshSlot];
 				const uint32_t count = renderScene.GetInstanceCount(caster.Proxy);
-				if (!mesh || count == 0 || mesh->GetSubmeshes().size() != count)
+				if (!mesh || count == 0 || mesh->GetSubmeshes().size() != count || !m_SceneGPU->IsResident(caster.Proxy))
 					continue;
 				// Every drawn caster extends the depth range of its cascades toward the light.
 				for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
@@ -990,7 +1152,7 @@ namespace Strata
 					// Transparent surfaces cast no shadows.
 					if ((materialFlags & c_MaterialAvailable) == 0 || (materialFlags & c_MaterialTransparent) != 0)
 						continue;
-					const uint32_t lod = SelectLOD(submeshes[submeshIndex], fraction);
+					const uint32_t lod = SelectLOD(*mesh, submeshes[submeshIndex], fraction);
 					if (submeshIndex >= c_MaxKeySubmeshes || lod >= c_MaxKeyLODs)
 					{
 						skipped++;
@@ -1027,24 +1189,10 @@ namespace Strata
 		if (skipped > 0)
 			m_Errors.Report(fmt::format("{} shadow caster instances were not drawn: more than {} submeshes or {} levels of detail in a mesh", skipped, c_MaxKeySubmeshes, c_MaxKeyLODs));
 
-		const float mapSize = static_cast<float>(m_Specification.ShadowMapSize);
+		// The depth range reaches from the far side of the slice's sphere to the nearest caster (CascadeFit.comp clamps it),
+		// found in absolute light space.
 		for (uint32_t cascade = 0; cascade < cascadeCount; cascade++)
-		{
-			const CascadeBox& box = m_Cascades[cascade];
-			// The depth range reaches from the far side of the slice's sphere to the nearest caster (up to a limit beyond which
-			// ShadowMesh.vert flattens casters onto the near plane).
-			const float nearZ = std::clamp(casterNearZ[cascade], box.SphereNearZ, box.SphereNearZ + c_MaxShadowCasterDistance);
-			const float nearPlane = -nearZ;
-			const float farPlane = -box.FarZ;
-			const glm::mat4 projection = Math::OrthographicReverseZ(box.Min.x, box.Max.x, box.Min.y, box.Max.y, nearPlane, farPlane);
-			frame.CascadeViewProjection[cascade] = projection * m_LightView;
-			// Penumbrae are searched for blockers up to this distance from the receiver (world units).
-			const float searchDistance = 0.2f * box.Radius + 5.0f;
-			frame.CascadeData[cascade] = glm::vec4(box.WorldPerTexel, farPlane - nearPlane, searchDistance, 0.0f);
-		}
-		const float halfAngle = glm::radians(std::clamp(m_ShadowLight.Softness, 0.0f, 10.0f)) * 0.5f;
-		frame.ShadowParams = glm::vec4(2.0f * std::tan(halfAngle), 1.0f / mapSize, 0.0f, static_cast<float>(cascadeCount));
-		frame.ShadowBias = glm::vec4(m_ShadowLight.Bias, m_ShadowLight.NormalBias, 0.0f, 0.0f);
+			fit.CasterNearZ[cascade] = static_cast<float>(static_cast<double>(casterNearZ[cascade]) - m_CameraLightPosition.z);
 
 		const auto sortStart = std::chrono::steady_clock::now();
 		RadixSort(m_ShadowDraws, m_SortScratch);
@@ -1054,21 +1202,38 @@ namespace Strata
 		m_Stats.ShadowDrawCalls = static_cast<uint32_t>(m_ShadowBatches.size());
 	}
 
+	void SceneRenderer::FitCascades(nvrhi::ICommandList* commandList)
+	{
+		commandList->writeBuffer(m_CascadeFitConstantBuffer, &m_CascadeFit, sizeof(m_CascadeFit));
+		nvrhi::ComputeState state;
+		state.pipeline = m_CascadeFitPipeline;
+		state.bindings = { m_CascadeFitBindingSet };
+		commandList->setComputeState(state);
+		commandList->dispatch(1, 1, 1);
+	}
+
 	uint64_t SceneRenderer::UploadDrawList(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, std::vector<uint32_t>& list, std::vector<uint32_t>& uploaded, bool full)
 	{
+		return UploadChangedRange(commandList, buffer, list, uploaded, full);
+	}
+
+	template<typename T>
+	uint64_t SceneRenderer::UploadChangedRange(nvrhi::ICommandList* commandList, nvrhi::IBuffer* buffer, std::vector<T>& list, std::vector<T>& uploaded, bool full)
+	{
+		const auto equal = [](const T& a, const T& b) { return std::memcmp(&a, &b, sizeof(T)) == 0; };
 		size_t first = 0;
 		size_t last = list.size();
 		if (!full)
 		{
 			// The range from the first to the last entry that differs from what the buffer holds.
 			const size_t common = std::min(list.size(), uploaded.size());
-			first = static_cast<size_t>(std::mismatch(list.begin(), list.begin() + static_cast<ptrdiff_t>(common), uploaded.begin()).first - list.begin());
+			first = static_cast<size_t>(std::mismatch(list.begin(), list.begin() + static_cast<ptrdiff_t>(common), uploaded.begin(), equal).first - list.begin());
 			if (list.size() <= uploaded.size())
 			{
 				last = first;
 				for (size_t index = common; index > first; index--)
 				{
-					if (list[index - 1] != uploaded[index - 1])
+					if (!equal(list[index - 1], uploaded[index - 1]))
 					{
 						last = index;
 						break;
@@ -1079,8 +1244,8 @@ namespace Strata
 		uint64_t bytes = 0;
 		if (last > first)
 		{
-			bytes = (last - first) * sizeof(uint32_t);
-			commandList->writeBuffer(buffer, list.data() + first, bytes, first * sizeof(uint32_t));
+			bytes = (last - first) * sizeof(T);
+			commandList->writeBuffer(buffer, list.data() + first, bytes, first * sizeof(T));
 		}
 		// The buffer now holds the new list; the old one is the scratch of the next frame's list.
 		uploaded.swap(list);
@@ -1104,112 +1269,13 @@ namespace Strata
 		}
 	}
 
-	void SceneRenderer::UploadSceneData(nvrhi::ICommandList* commandList, const RenderScene& renderScene, bool instancesRecreated, bool materialsRecreated,
-		bool drawListsRecreated, bool jointsRecreated)
+	void SceneRenderer::UploadSceneData(nvrhi::ICommandList* commandList, bool drawListsRecreated)
 	{
 		ST_PROFILE_FUNCTION();
-		// Palettes of posed skinned meshes: the joint ranges that changed since this renderer's last upload.
-		const std::span<const RenderData::AffineTransform> palette = renderScene.GetPalette();
-		if (!palette.empty() && (jointsRecreated || m_FullUpload || renderScene.GetPaletteVersion() != m_UploadedPaletteVersion))
-		{
-			m_PaletteChanges.clear();
-			if (jointsRecreated || m_FullUpload || !renderScene.GetPaletteChanges(m_UploadedPaletteVersion, m_PaletteChanges))
-			{
-				commandList->writeBuffer(m_JointBuffer, palette.data(), palette.size_bytes());
-				m_Stats.PaletteBytesUploaded += palette.size_bytes();
-			}
-			else
-			{
-				// Ranges are logged newest first and may repeat: upload each joint once, in merged runs.
-				std::sort(m_PaletteChanges.begin(), m_PaletteChanges.end());
-				uint32_t runStart = 0;
-				uint32_t runEnd = 0;
-				auto flush = [&]()
-				{
-					if (runEnd <= runStart)
-						return;
-					const size_t bytes = (runEnd - runStart) * sizeof(RenderData::AffineTransform);
-					commandList->writeBuffer(m_JointBuffer, palette.data() + runStart, bytes, runStart * sizeof(RenderData::AffineTransform));
-					m_Stats.PaletteBytesUploaded += bytes;
-				};
-				for (const auto& [first, count] : m_PaletteChanges)
-				{
-					if (first > runEnd)
-					{
-						flush();
-						runStart = first;
-					}
-					runEnd = std::max(runEnd, first + count);
-				}
-				flush();
-			}
-		}
-		m_UploadedPaletteVersion = renderScene.GetPaletteVersion();
-		const std::span<const RenderData::InstanceData> instances = renderScene.GetInstances();
-		if (!instances.empty())
-		{
-			m_InstanceChanges.clear();
-			const bool full = instancesRecreated || m_FullUpload || !renderScene.GetInstanceChanges(m_UploadedInstanceVersion, m_InstanceChanges);
-			if (full)
-			{
-				commandList->writeBuffer(m_InstanceBuffer, instances.data(), instances.size_bytes());
-				m_Stats.InstanceBytesUploaded += instances.size_bytes();
-				m_Stats.InstanceUploadRanges++;
-			}
-			else if (!m_InstanceChanges.empty())
-			{
-				std::sort(m_InstanceChanges.begin(), m_InstanceChanges.end());
-				size_t start = 0;
-				for (size_t index = 1; index <= m_InstanceChanges.size(); index++)
-				{
-					if (index < m_InstanceChanges.size() && m_InstanceChanges[index] <= m_InstanceChanges[index - 1] + c_UploadRangeGap)
-						continue;
-					const uint32_t firstInstance = m_InstanceChanges[start];
-					const uint32_t endInstance = m_InstanceChanges[index - 1] + 1;
-					const size_t bytes = (endInstance - firstInstance) * sizeof(RenderData::InstanceData);
-					commandList->writeBuffer(m_InstanceBuffer, instances.data() + firstInstance, bytes, firstInstance * sizeof(RenderData::InstanceData));
-					m_Stats.InstanceBytesUploaded += bytes;
-					m_Stats.InstanceUploadRanges++;
-					start = index;
-				}
-			}
-		}
-		m_UploadedInstanceVersion = renderScene.GetInstanceVersion();
-
-		if (materialsRecreated || m_FullUpload)
-		{
-			if (!m_MaterialData.empty())
-			{
-				commandList->writeBuffer(m_MaterialBuffer, m_MaterialData.data(), m_MaterialData.size() * sizeof(RenderData::MaterialData));
-				m_Stats.MaterialBytesUploaded += m_MaterialData.size() * sizeof(RenderData::MaterialData);
-			}
-			std::fill(m_MaterialUploaded.begin(), m_MaterialUploaded.end(), uint8_t(1));
-		}
-		else if (!m_DirtyMaterialSlots.empty())
-		{
-			// A frame that failed before its upload leaves its dirty slots to the next one, which may list them again.
-			std::sort(m_DirtyMaterialSlots.begin(), m_DirtyMaterialSlots.end());
-			m_DirtyMaterialSlots.erase(std::unique(m_DirtyMaterialSlots.begin(), m_DirtyMaterialSlots.end()), m_DirtyMaterialSlots.end());
-			size_t start = 0;
-			for (size_t index = 1; index <= m_DirtyMaterialSlots.size(); index++)
-			{
-				if (index < m_DirtyMaterialSlots.size() && m_DirtyMaterialSlots[index] == m_DirtyMaterialSlots[index - 1] + 1)
-					continue;
-				const uint32_t firstSlot = m_DirtyMaterialSlots[start];
-				const uint32_t endSlot = m_DirtyMaterialSlots[index - 1] + 1;
-				const size_t bytes = (endSlot - firstSlot) * sizeof(RenderData::MaterialData);
-				commandList->writeBuffer(m_MaterialBuffer, m_MaterialData.data() + firstSlot, bytes, firstSlot * sizeof(RenderData::MaterialData));
-				m_Stats.MaterialBytesUploaded += bytes;
-				for (uint32_t slot = firstSlot; slot < endSlot; slot++)
-					m_MaterialUploaded[slot] = 1;
-				start = index;
-			}
-		}
-		m_DirtyMaterialSlots.clear();
-
 		const bool fullLists = drawListsRecreated || m_FullUpload;
 		m_Stats.InstanceBytesUploaded += UploadDrawList(commandList, m_DrawListBuffer, m_DrawInstancesBuild, m_DrawInstances, fullLists);
 		m_Stats.InstanceBytesUploaded += UploadDrawList(commandList, m_ShadowDrawListBuffer, m_ShadowDrawInstancesBuild, m_ShadowDrawInstances, fullLists);
+		m_Stats.InstanceBytesUploaded += UploadChangedRange(commandList, m_DrawArgumentBuffer, m_DrawArgumentsBuild, m_DrawArguments, fullLists);
 		m_FullUpload = false;
 	}
 

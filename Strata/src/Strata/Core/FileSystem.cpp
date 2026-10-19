@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Core/FileSystem.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <fstream>
@@ -8,8 +9,26 @@
 namespace Strata
 {
 
+	namespace
+	{
+
+		thread_local uint64_t t_FileOperations = 0;
+
+	}
+
+	uint64_t FileSystem::GetThreadOperationCount()
+	{
+		return t_FileOperations;
+	}
+
+	void FileSystem::CountThreadOperation()
+	{
+		t_FileOperations++;
+	}
+
 	std::optional<std::vector<uint8_t>> FileSystem::ReadBytes(const std::filesystem::path& path)
 	{
+		CountThreadOperation();
 		if (!IsRegularFile(path))
 			return std::nullopt;
 		std::ifstream stream(path, std::ios::binary | std::ios::ate);
@@ -28,8 +47,36 @@ namespace Strata
 		return data;
 	}
 
+	std::optional<std::vector<uint8_t>> FileSystem::ReadBytesPrefix(const std::filesystem::path& path, uint64_t maxBytes)
+	{
+		return ReadBytesRange(path, 0, maxBytes);
+	}
+
+	std::optional<std::vector<uint8_t>> FileSystem::ReadBytesRange(const std::filesystem::path& path, uint64_t offset, uint64_t maxBytes)
+	{
+		CountThreadOperation();
+		if (!IsRegularFile(path))
+			return std::nullopt;
+		std::ifstream stream(path, std::ios::binary | std::ios::ate);
+		if (!stream)
+			return std::nullopt;
+		const std::streamoff size = stream.tellg();
+		if (size < 0)
+			return std::nullopt;
+		const uint64_t fileSize = static_cast<uint64_t>(size);
+		const uint64_t count = offset >= fileSize ? 0 : std::min<uint64_t>(fileSize - offset, maxBytes);
+		std::vector<uint8_t> data(static_cast<size_t>(count));
+		if (count == 0)
+			return data;
+		stream.seekg(static_cast<std::streamoff>(offset), std::ios::beg);
+		if (!stream.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(count)))
+			return std::nullopt;
+		return data;
+	}
+
 	std::optional<std::string> FileSystem::ReadText(const std::filesystem::path& path)
 	{
+		CountThreadOperation();
 		if (!IsRegularFile(path))
 			return std::nullopt;
 		std::ifstream stream(path, std::ios::binary | std::ios::ate);
@@ -89,22 +136,26 @@ namespace Strata
 
 	bool FileSystem::WriteBytes(const std::filesystem::path& path, std::span<const uint8_t> data)
 	{
+		CountThreadOperation();
 		return WriteFileAtomically(path, data.data(), data.size());
 	}
 
 	bool FileSystem::WriteText(const std::filesystem::path& path, std::string_view text)
 	{
+		CountThreadOperation();
 		return WriteFileAtomically(path, text.data(), text.size());
 	}
 
 	bool FileSystem::Exists(const std::filesystem::path& path)
 	{
+		CountThreadOperation();
 		std::error_code error;
 		return std::filesystem::exists(path, error);
 	}
 
 	bool FileSystem::IsSameFile(const std::filesystem::path& first, const std::filesystem::path& second)
 	{
+		CountThreadOperation();
 		std::error_code error;
 		const bool same = std::filesystem::equivalent(first, second, error);
 		return same && !error;
@@ -112,18 +163,21 @@ namespace Strata
 
 	bool FileSystem::IsDirectory(const std::filesystem::path& path)
 	{
+		CountThreadOperation();
 		std::error_code error;
 		return std::filesystem::is_directory(path, error);
 	}
 
 	bool FileSystem::IsRegularFile(const std::filesystem::path& path)
 	{
+		CountThreadOperation();
 		std::error_code error;
 		return std::filesystem::is_regular_file(path, error);
 	}
 
 	bool FileSystem::CreateDirectories(const std::filesystem::path& path)
 	{
+		CountThreadOperation();
 		std::error_code error;
 		std::filesystem::create_directories(path, error);
 		return !error && std::filesystem::is_directory(path, error);
@@ -131,6 +185,7 @@ namespace Strata
 
 	bool FileSystem::Remove(const std::filesystem::path& path)
 	{
+		CountThreadOperation();
 		std::error_code error;
 		std::filesystem::remove_all(path, error);
 		return !error;
@@ -138,6 +193,7 @@ namespace Strata
 
 	bool FileSystem::Rename(const std::filesystem::path& from, const std::filesystem::path& to)
 	{
+		CountThreadOperation();
 		std::error_code error;
 		if (to.has_parent_path())
 			std::filesystem::create_directories(to.parent_path(), error);
@@ -147,6 +203,7 @@ namespace Strata
 
 	bool FileSystem::Copy(const std::filesystem::path& from, const std::filesystem::path& to, bool overwrite)
 	{
+		CountThreadOperation();
 		std::error_code error;
 		if (to.has_parent_path())
 			std::filesystem::create_directories(to.parent_path(), error);
@@ -185,6 +242,7 @@ namespace Strata
 
 	bool FileSystem::CopyDirectory(const std::filesystem::path& from, const std::filesystem::path& to, std::string* outError)
 	{
+		CountThreadOperation();
 		std::error_code error;
 		if (!std::filesystem::is_directory(from, error))
 			return SetCopyError(outError, fmt::format("'{}' is not a directory", ToUTF8(from)));
@@ -262,6 +320,7 @@ namespace Strata
 
 	std::optional<uint64_t> FileSystem::GetFileSize(const std::filesystem::path& path)
 	{
+		CountThreadOperation();
 		std::error_code error;
 		const uintmax_t size = std::filesystem::file_size(path, error);
 		if (error)
@@ -271,6 +330,7 @@ namespace Strata
 
 	std::optional<int64_t> FileSystem::GetLastWriteTime(const std::filesystem::path& path)
 	{
+		CountThreadOperation();
 		std::error_code error;
 		const std::filesystem::file_time_type time = std::filesystem::last_write_time(path, error);
 		if (error)
@@ -317,6 +377,7 @@ namespace Strata
 
 	bool FileSystem::IsInsideResolved(const std::filesystem::path& path, const std::filesystem::path& base)
 	{
+		CountThreadOperation();
 		std::error_code error;
 		const std::filesystem::path resolvedPath = std::filesystem::weakly_canonical(path, error);
 		if (error)
@@ -329,6 +390,7 @@ namespace Strata
 
 	std::filesystem::path FileSystem::GetUniquePath(const std::filesystem::path& desiredPath)
 	{
+		CountThreadOperation();
 		if (!Exists(desiredPath))
 			return desiredPath;
 

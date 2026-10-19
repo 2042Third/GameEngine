@@ -4,6 +4,7 @@
 
 #include "CLI/EditorLauncher.h"
 #include "Network/NetworkTestHelpers.h"
+#include "Perf/WorldFixture.h"
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>
@@ -156,13 +157,13 @@ namespace
 		nlohmann::json Error; // The parsed error output (null unless it is JSON)
 	};
 
-	CliResult RunCli(const std::vector<std::string>& arguments)
+	CliResult RunCli(const std::vector<std::string>& arguments, std::chrono::milliseconds timeout = c_ProcessTimeout)
 	{
 		ProcessSpecification specification;
 		specification.Executable = GetCliPath();
 		specification.Arguments = arguments;
 		specification.Output = ProcessOutputMode::CaptureSeparate;
-		const Process::RunResult run = Process::Run(specification, c_ProcessTimeout);
+		const Process::RunResult run = Process::Run(specification, timeout);
 		CHECK_MESSAGE(run.Started, run.Error);
 		CHECK_FALSE(run.TimedOut);
 
@@ -179,6 +180,16 @@ namespace
 	nlohmann::json Call(const std::string& method, const nlohmann::json& params = nlohmann::json::object())
 	{
 		const CliResult result = RunCli({ "call", method, params.dump() });
+		INFO(method, " ", params.dump(), "\nstdout: ", result.Output, "\nstderr: ", result.ErrorOutput);
+		CHECK(result.ExitCode == 0);
+		return result.Json;
+	}
+
+	// Call, for a command that answers only once the editor is ready (an edit while a scan runs): the CLI waits for the
+	// answer up to `timeout` instead of its default 30 s.
+	nlohmann::json CallWaiting(const std::string& method, const nlohmann::json& params, std::chrono::milliseconds timeout)
+	{
+		const CliResult result = RunCli({ "call", method, params.dump(), "--timeout", std::to_string(timeout.count()) }, timeout + c_ProcessTimeout);
 		INFO(method, " ", params.dump(), "\nstdout: ", result.Output, "\nstderr: ", result.ErrorOutput);
 		CHECK(result.ExitCode == 0);
 		return result.Json;
@@ -330,7 +341,7 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 		CHECK((*entityCreate)["paramsSchema"]["properties"].contains("name"));
 		CHECK_FALSE((*entityCreate)["description"].get<std::string>().empty());
 
-		nlohmann::json status = Call("editor.status");
+		nlohmann::json status = Call("editor.status", { { "sections", { "automation", "editor" } } });
 		CHECK(status["project"]["open"] == false);
 		CHECK(status["automation"]["port"] == session->Port);
 		CHECK(status["editor"]["headless"] == true);
@@ -429,8 +440,14 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 			if (tool["name"] == "entity_create")
 				entityCreate = &tool;
 		}
-		for (const char* name : { "strata_status", "strata_call", "entity_create", "editor_wait", "editor_status", "editor_quit" })
-			CHECK_MESSAGE(std::find(names.begin(), names.end(), name) != names.end(), name);
+		// The core toolset by default: the commands a game is made and tested with; the others through strata_call, by their
+		// tool names, or listed once strata_toolsets enables their toolsets.
+		for (const char* name : { "strata_status", "strata_call", "strata_describe", "strata_toolsets", "entity_create", "editor_status", "play_step",
+			"input_sequence" })
+			CHECK_MESSAGE(std::find(names.begin(), names.end(), name) != names.end(), std::string(name));
+		for (const char* name : { "editor_wait", "editor_quit", "strata_list_methods" })
+			CHECK_MESSAGE(std::find(names.begin(), names.end(), name) == names.end(), std::string(name));
+		CHECK(names.size() <= 32);
 		REQUIRE(entityCreate != nullptr);
 		CHECK((*entityCreate)["inputSchema"]["type"] == "object");
 		CHECK((*entityCreate)["inputSchema"]["properties"].contains("components"));
@@ -478,7 +495,7 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 		REQUIRE_MESSAGE(launched.ExitCode == 0, launched.ErrorOutput);
 		CHECK_MESSAGE(seconds < 30.0, "Launching took ", seconds, " s");
 
-		const CliResult status = RunCli({ "call", "editor.status", "--project", FileSystem::ToUTF8(projectDirectory) });
+		const CliResult status = RunCli({ "call", "editor.status", R"({"sections": ["sceneLoad"]})", "--project", FileSystem::ToUTF8(projectDirectory) });
 		REQUIRE_MESSAGE(status.ExitCode == 0, status.ErrorOutput);
 		CHECK(status.Json["scene"]["scene"] == "BD75622ED18E84E4"); // Tetris.stproj's start scene
 		CHECK(status.Json["scene"]["entityCount"].get<int>() > 0);
@@ -582,6 +599,44 @@ TEST_SUITE("EndToEnd.EditorAutomation")
 			CHECK(editor.OutputContains("needs automation"));
 		}
 	}
+
+	TEST_CASE("An editor opening a project of 10,000 assets publishes its session and answers while it still scans them")
+	{
+		if (!HasBuiltExecutables())
+			return;
+		EndToEndEnvironment environment("EndToEndScan");
+		std::string error;
+		const std::optional<Tests::ManyAssetsProject> project = Tests::WriteManyAssetsProject(environment.Root / "Many", 10'000, error);
+		REQUIRE_MESSAGE(project.has_value(), error);
+
+		EditorProcess editor;
+		REQUIRE(editor.Start({ "--no-gpu", "--project", FileSystem::ToUTF8(project->Directory) }));
+		const std::optional<EditorSessionInfo> session = editor.WaitForSession(environment.SessionDirectory);
+		REQUIRE(session.has_value());
+		// The first answer comes while the project is not ready: its assets are scanned (or, on a fast machine where the scan
+		// just ended, its start scene is still opening; the log below proves the order either way).
+		const nlohmann::json first = Call("editor.status", { { "sections", { "sceneLoad" } } });
+		REQUIRE(first.contains("sceneLoad"));
+		CHECK((!first["assets"]["scanning"].is_null() || !first["sceneLoad"].is_null()));
+		// Edits wait for it (they answer once it is ready: in CI's Windows Debug build, more than the CLI's default 30 s).
+		const nlohmann::json created = CallWaiting("entity.create", { { "name", "After The Scan" } }, std::chrono::minutes(5));
+		CHECK(created.contains("id"));
+		const nlohmann::json ready = Call("editor.status", { { "sections", { "sceneLoad" } } });
+		CHECK(ready["assets"]["scanning"].is_null());
+		REQUIRE(ready.contains("sceneLoad"));
+		CHECK(ready["sceneLoad"].is_null());
+		CHECK(Call("entity.find", { { "name", "Cube 9999" } })["entities"].size() == 1);
+		CHECK(Call("asset.list", { { "type", "Material" }, { "includeBuiltin", false } })["assets"].size() == 10'000);
+		// The session was published while the scan ran: the editor said it listens before it logged the scan's end (one log
+		// writer keeps the order).
+		REQUIRE(editor.OutputContains("Asset scan: "));
+		const std::string output = editor.TakeOutput();
+		const size_t listening = output.find("Automation: listening");
+		REQUIRE_MESSAGE(listening != std::string::npos, output);
+		CHECK_MESSAGE(listening < output.find("Asset scan: "), output);
+		Call("editor.quit", { { "force", true } });
+		REQUIRE(editor.Wait().has_value());
+	}
 }
 
 TEST_SUITE("EndToEnd.Recovery")
@@ -613,7 +668,7 @@ TEST_SUITE("EndToEnd.Recovery")
 			// The journal reaches the disk a few seconds after the edits stop.
 			const bool journaled = Tests::WaitUntil([]()
 			{
-				const nlohmann::json journal = Call("editor.status")["recovery"]["journal"];
+				const nlohmann::json journal = Call("editor.status", { { "sections", { "recovery" } } })["recovery"]["journal"];
 				return journal["lastWrite"].get<int64_t>() > 0 && journal["pending"] == false && journal["busy"] == false;
 			}, std::chrono::seconds(30));
 			REQUIRE(journaled);
@@ -626,6 +681,12 @@ TEST_SUITE("EndToEnd.Recovery")
 		EditorProcess editor;
 		REQUIRE(editor.Start({ "--no-gpu", "--project", FileSystem::ToUTF8(projectDirectory) }));
 		REQUIRE(editor.WaitForSession(environment.SessionDirectory).has_value());
+		// The session comes while the project still opens: its assets are scanned, then its start scene opens.
+		REQUIRE(Tests::WaitUntil([]()
+		{
+			const nlohmann::json opening = Call("editor.status", { { "sections", { "sceneLoad" } } });
+			return opening["assets"]["scanning"].is_null() && opening["sceneLoad"].is_null();
+		}, std::chrono::minutes(2)));
 		const nlohmann::json status = Call("scene.recoveryStatus");
 		REQUIRE(status["entries"].size() == 1);
 		const nlohmann::json entry = status["entries"][0];
@@ -633,7 +694,7 @@ TEST_SUITE("EndToEnd.Recovery")
 		CHECK(entry["scenePath"] == "Levels/Moved.stscene");
 		CHECK(entry["discarded"] == false); // Left behind by a crash
 		CHECK(entry["applicable"] == true);
-		CHECK(Call("editor.status")["recovery"]["applicable"] == 1);
+		CHECK(Call("editor.status", { { "sections", { "recovery" } } })["recovery"]["applicable"] == 1);
 		CHECK(Call("scene.hierarchy")["entities"] == savedEntities);
 
 		const nlohmann::json recovered = Call("scene.recover", { { "scene", entry["id"] }, { "action", "apply" } });

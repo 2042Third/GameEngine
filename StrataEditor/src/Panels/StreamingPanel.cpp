@@ -49,8 +49,11 @@ namespace Strata
 				ImGui::TextColored(color, "%s%s", separator, fact);
 				return;
 			}
+			// On a line of its own, wrapped where even that is too narrow (a side dock at 150%).
 			ImGui::NewLine();
-			ImGui::TextColored(color, "%s", fact);
+			ImGui::PushStyleColor(ImGuiCol_Text, color);
+			ImGui::TextWrapped("%s", fact);
+			ImGui::PopStyleColor();
 		}
 		// From this width (in text heights) the overview goes beside the asset table, taking this share of the width.
 		constexpr float c_SideBySideWidthInFontSizes = 60.0f;
@@ -468,12 +471,12 @@ namespace Strata
 		}
 		// Formatted into a buffer: the section allocates nothing per frame.
 		std::array<char, 96> fact {};
-		ImGui::Text("Last frame: %u built \xC2\xB7 %u destroyed", physics.AddedLastUpdate, physics.RemovedLastUpdate);
+		ImGui::TextWrapped("Last frame: %u built \xC2\xB7 %u destroyed", physics.AddedLastUpdate, physics.RemovedLastUpdate);
 		std::snprintf(fact.data(), fact.size(), "%u waiting for meshes or valid transforms", physics.PendingOther);
 		ContinueLine(fact.data(), physics.PendingOther > 0 ? colors.Warning : colors.TextSecondary);
 		UI::ItemProbe::Record("Streaming.PhysicsPending");
 		if (physics.GrowthCount > 0)
-			ImGui::Text("Grew %u %s, the last in %.1f ms", physics.GrowthCount, physics.GrowthCount == 1 ? "time" : "times", physics.LastGrowthMs);
+			ImGui::TextWrapped("Grew %u %s, the last in %.1f ms", physics.GrowthCount, physics.GrowthCount == 1 ? "time" : "times", physics.LastGrowthMs);
 		else
 			ImGui::TextColored(colors.TextSecondary, "Never grew");
 		std::snprintf(fact.data(), fact.size(), "reserves %.1f MB", ToMB(physics.ReservedBytes));

@@ -15,6 +15,8 @@
 namespace Strata
 {
 
+	struct SceneSettings;
+
 	// An asset to write into a pack, in pack order.
 	struct AssetPackSource
 	{
@@ -35,6 +37,10 @@ namespace Strata
 		// Called on the writing thread as the write advances, with the stored bytes written so far and in all (each asset
 		// counts its metadata's StoredSize, 1 when that is unknown, until it is read).
 		std::function<void(uint64_t done, uint64_t total)> Progress;
+		// EditorAssetManager::WriteAssetPack: write scenes, prefabs and models cooked (CookForPack; exports do), and adjust
+		// every scene's settings with AdjustSceneSettings, cooked or not (AssetPackCookOptions).
+		bool CookDocuments = false;
+		std::function<void(AssetHandle scene, SceneSettings& settings)> AdjustSceneSettings;
 	};
 
 	struct AssetPackWriteStats

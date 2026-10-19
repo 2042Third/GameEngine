@@ -24,6 +24,17 @@ TEST_SUITE("Scripting.Helpers")
 		scene.OnRuntimeStop();
 	}
 
+	TEST_CASE("Motion's LookAt and SmoothDamp behave as documented")
+	{
+		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));
+		Scene scene;
+		Entity entity = scene.CreateEntity("Motion");
+		AddScriptEntry(entity, "MotionChecks");
+		scene.OnRuntimeStart();
+		CheckScriptChecks(GetScriptSystem(scene), entity, "MotionChecks", 15);
+		scene.OnRuntimeStop();
+	}
+
 	TEST_CASE("KeyRepeat fires on the press, after the delay and then at the interval while the key is held")
 	{
 		ScopedScriptEngine engine(GetTestScriptModule(STRATA_TEST_SCRIPTS_API));

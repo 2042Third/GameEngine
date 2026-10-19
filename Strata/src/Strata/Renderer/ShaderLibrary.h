@@ -8,6 +8,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace Strata
 {
@@ -23,12 +24,16 @@ namespace Strata
 		// Returns null (and logs an error) if the shader does not exist or fails to load.
 		nvrhi::ShaderHandle Get(std::string_view name);
 		void Clear();
+		// While set, Get returns null for this shader (logged), as for one the device fails to create: tests of the fallbacks
+		// of code that cannot get its shaders. Shaders Get returned before stay valid.
+		void SetUnavailable(std::string_view name, bool unavailable);
 
 		static nvrhi::ShaderType GetStageFromName(std::string_view name);
 	private:
 		nvrhi::IDevice* m_Device;
 		std::mutex m_Mutex;
 		std::unordered_map<std::string, nvrhi::ShaderHandle> m_Shaders;
+		std::unordered_set<std::string> m_Unavailable;
 	};
 
 }

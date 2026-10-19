@@ -3,7 +3,7 @@
 
 #include "Include/Scene.glsl"
 
-// Debug lines (DebugDraw) in world space with display colors.
+// Debug lines (DebugDraw) in camera-relative world space (SceneRenderer subtracts the camera's position) with display colors.
 
 layout(location = 0) in vec3 a_Position;
 layout(location = 1) in vec4 a_Color; // RGBA8 UNORM, sRGB-encoded

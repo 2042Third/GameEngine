@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Strata/Core/AtomicFileWriter.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Log.h"
 #include "TestHelpers.h"
@@ -9,6 +10,7 @@
 #include <filesystem>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 using namespace Strata;
@@ -47,12 +49,64 @@ TEST_SUITE("Core.FileSystem")
 		CHECK(fileCount == 2);
 	}
 
+	TEST_CASE("File operations are counted per thread")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("FileOperationCount");
+		const uint64_t before = FileSystem::GetThreadOperationCount();
+		REQUIRE(FileSystem::WriteText(directory / "A.txt", "a"));
+		CHECK(FileSystem::Exists(directory / "A.txt"));
+		CHECK(FileSystem::ReadText(directory / "A.txt").has_value());
+		CHECK(FileSystem::GetThreadOperationCount() >= before + 3);
+		{
+			AtomicFileWriter writer(directory / "B.txt");
+			CHECK(writer.Write("b"));
+			CHECK(writer.Commit());
+		}
+		const uint64_t here = FileSystem::GetThreadOperationCount();
+		CHECK(here >= before + 5);
+		// Another thread's operations count there, not here.
+		uint64_t there = 0;
+		std::thread other([&]()
+		{
+			const uint64_t start = FileSystem::GetThreadOperationCount();
+			FileSystem::Exists(directory / "A.txt");
+			there = FileSystem::GetThreadOperationCount() - start;
+		});
+		other.join();
+		CHECK(there == 1);
+		CHECK(FileSystem::GetThreadOperationCount() == here);
+		// Pure path work touches no file.
+		CHECK(FileSystem::GetRelativePath(directory / "A.txt", directory) == "A.txt");
+		CHECK(FileSystem::ToUTF8(FileSystem::FromUTF8("x/y")) == "x/y");
+		CHECK(FileSystem::GetThreadOperationCount() == here);
+	}
+
 	TEST_CASE("Reading a missing file fails gracefully")
 	{
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("FileSystemMissing");
 		CHECK_FALSE(FileSystem::ReadText(directory / "missing.txt").has_value());
 		CHECK_FALSE(FileSystem::ReadBytes(directory / "missing.bin").has_value());
 		CHECK_FALSE(FileSystem::GetLastWriteTime(directory / "missing.bin").has_value());
+	}
+
+	TEST_CASE("Prefixes and ranges of a file read what lies there, fewer bytes at its end")
+	{
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("FileSystemRange");
+		const std::filesystem::path file = directory / "range.bin";
+		std::vector<uint8_t> bytes(1000);
+		for (size_t index = 0; index < bytes.size(); index++)
+			bytes[index] = static_cast<uint8_t>(index * 7);
+		REQUIRE(FileSystem::WriteBytes(file, bytes));
+
+		CHECK(FileSystem::ReadBytesPrefix(file, 10) == std::vector<uint8_t>(bytes.begin(), bytes.begin() + 10));
+		CHECK(FileSystem::ReadBytesPrefix(file, 5000) == bytes);
+		CHECK(FileSystem::ReadBytesRange(file, 990, 4) == std::vector<uint8_t>(bytes.begin() + 990, bytes.begin() + 994));
+		CHECK(FileSystem::ReadBytesRange(file, 990, 100) == std::vector<uint8_t>(bytes.begin() + 990, bytes.end()));
+		CHECK(FileSystem::ReadBytesRange(file, 1000, 10) == std::vector<uint8_t>());
+		CHECK(FileSystem::ReadBytesRange(file, UINT64_MAX, UINT64_MAX) == std::vector<uint8_t>());
+		CHECK(FileSystem::ReadBytesRange(file, 0, 0) == std::vector<uint8_t>());
+		CHECK_FALSE(FileSystem::ReadBytesRange(directory / "missing.bin", 0, 10).has_value());
+		CHECK_FALSE(FileSystem::ReadBytesRange(directory, 0, 10).has_value());
 	}
 
 	TEST_CASE("Reading a directory as a file fails gracefully")

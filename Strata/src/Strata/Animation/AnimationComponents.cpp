@@ -6,8 +6,21 @@
 #include "Strata/Reflection/PropertyOptions.h"
 #include "Strata/Scene/Components.h"
 
+#include <string>
+
 namespace Strata
 {
+
+	namespace
+	{
+
+		// The Animation system plays Clip only without a controller (PropertyInfo::InactiveReason).
+		std::string WithoutController(const AnimatorComponent& animator)
+		{
+			return animator.Controller.IsValid() ? "The controller's states choose the clips (Controller is set)" : std::string();
+		}
+
+	}
 
 	void RegisterAnimationComponents()
 	{
@@ -29,6 +42,7 @@ namespace Strata
 			.Property("ApplyRootMotion", &AnimatorComponent::ApplyRootMotion, WithTooltip({}, "Moves the entity by the root joint's horizontal motion and turn"))
 			.EnumProperty("CullingMode", &AnimatorComponent::CullingMode, { { "AlwaysAnimate", 0, "Always Animate" }, { "WhenVisible", 1, "When Visible" } },
 				{ .Tooltip = "When Visible poses the skeleton only while a renderer draws a mesh it skins or its shadow; one that skins no mesh but moves attached parts poses always" });
+		ComponentRegistry::SetInactiveReason<AnimatorComponent>("Clip", &WithoutController);
 
 		ComponentRegistry::Register<AttachToJointComponent>("AttachToJoint")
 			.DisplayName("Attach To Joint")

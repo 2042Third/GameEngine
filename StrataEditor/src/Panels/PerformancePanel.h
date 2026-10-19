@@ -16,10 +16,12 @@ namespace Strata
 {
 
 	// Where the frames go: a stacked timeline of the frame profiler's last 600 frames (each column a frame, stacked by stage
-	// self time, the rest of the frame on top as untimed work, scaled to the usual frames), with a tooltip of the frame under
+	// self time, the rest of the frame on top as untimed work, scaled to the usual frames) with the GPU's timeline under it
+	// (the same frames at the same scale, stacked by GPU stage; frames without GPU times blank), a tooltip of the frame under
 	// the mouse, markers on spikes (frames over twice the median and a 60 FPS frame), the statistics per stage under the
-	// frame's totals and of the job threads, and Copy as JSON (what editor.perf returns for the 600 frames). Reads
-	// FrameProfiler::Get(), whose frames the application records.
+	// frame's totals and of the job threads, a GPU section (what bounds the frames, the GPU's busy time, its stages), and
+	// Copy as JSON (what editor.perf returns for the 600 frames). Reads FrameProfiler::Get(), whose frames the application
+	// records.
 	class PerformancePanel : public EditorPanel
 	{
 	public:
@@ -46,9 +48,16 @@ namespace Strata
 		static float GetTimelineScale(const FrameProfileSummary& summary);
 		// Frames taking longer are spikes: twice the median frame, and at least a frame at 60 frames per second.
 		static float GetSpikeThreshold(const FrameProfileSummary& summary);
+		// What bounds the frames, in a line: "GPU-bound: GPU 11.8 ms busy of 12.3 ms frames (CPU 9.8 ms)", CPU-bound, capped or
+		// unknown (the panel's GPU section and the status bar's frame pill).
+		static std::string DescribeBound(const FrameProfileSummary& summary);
+		// Whether the panel shows the GPU: GPU times arrived, or are expected.
+		static bool ShowsGPU(const FrameProfileSummary& summary);
 	private:
 		void DrawSummary();
 		void DrawTimeline(const ImVec2& size);
+		// One strip of the timeline: the CPU's stages and untimed work, or the GPU's stages.
+		void DrawTimelineStrip(const ImVec2& size, bool gpu);
 		void DrawStageTable();
 	private:
 		JobSystemStats m_Jobs;

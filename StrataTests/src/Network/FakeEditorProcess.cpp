@@ -3,12 +3,15 @@
 #include "Strata/Core/Log.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Network/EditorSession.h"
+#include "Strata/Network/JsonRpc.h"
 #include "Strata/Network/RpcServer.h"
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -19,6 +22,9 @@ namespace Strata::Tests
 	namespace
 	{
 		constexpr const char* c_FakeEditorVariable = "STRATA_TEST_FAKE_EDITOR";
+		constexpr const char* c_FakeScanVariable = "STRATA_TEST_FAKE_SCAN";
+		constexpr const char* c_FakeSceneLoadVariable = "STRATA_TEST_FAKE_SCENE_LOAD";
+		constexpr const char* c_FakeStatusVariable = "STRATA_TEST_FAKE_STATUS";
 		// A fake editor left behind by a failed test still goes away on its own.
 		constexpr std::chrono::seconds c_FakeEditorLifetime = std::chrono::seconds(60);
 		constexpr std::chrono::seconds c_QuitGracePeriod = std::chrono::seconds(2);
@@ -84,6 +90,47 @@ namespace Strata::Tests
 			return RpcResult::Success(nlohmann::json { { "Project", project }, { "Headless", headless }, { "NoGpu", noGpu }, { "IdleTimeout", idleTimeout },
 				{ "ProcessId", Platform::GetProcessID() } });
 		});
+		// What a launch waits for: the project's asset scan (STRATA_TEST_FAKE_SCAN: "<milliseconds>" from the session on,
+		// advancing from 0 to 1,000 files; "stall": stuck at 5 of 1,000) and its start scene's load (STRATA_TEST_FAKE_SCENE_LOAD:
+		// "<milliseconds>" from the session on), then nothing. Like the real editor's compact answer, the status has the scene's
+		// load only when sections asks for it. STRATA_TEST_FAKE_STATUS=no-sections makes it an editor from before the sections:
+		// it refuses the parameter, and its plain answer has the scene's load.
+		const std::string scanMode = Platform::GetEnvVar(c_FakeScanVariable).value_or(std::string());
+		const std::string sceneLoadMode = Platform::GetEnvVar(c_FakeSceneLoadVariable).value_or(std::string());
+		const bool noSections = Platform::GetEnvVar(c_FakeStatusVariable).value_or(std::string()) == "no-sections";
+		const auto scanStart = std::chrono::steady_clock::now();
+		RpcMethodInfo status;
+		status.Name = "editor.status";
+		status.Description = "The fake editor's status (its asset scan and its start scene's load)";
+		server.RegisterMethod(status, [&scanMode, &sceneLoadMode, noSections, scanStart](const nlohmann::json& parameters)
+		{
+			const auto sections = parameters.is_object() ? parameters.find("sections") : parameters.end();
+			if (noSections && sections != parameters.end())
+				return RpcResult::Failure(static_cast<int>(JsonRpc::ErrorCode::InvalidParams), "Unknown parameter 'sections'");
+			const double elapsed = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - scanStart).count();
+			constexpr uint64_t c_Files = 1000;
+			nlohmann::json scanning = nullptr;
+			if (scanMode == "stall")
+			{
+				scanning = { { "phase", "Registering" }, { "done", 5 }, { "total", c_Files } };
+			}
+			else if (!scanMode.empty())
+			{
+				const double duration = std::max(1.0, std::strtod(scanMode.c_str(), nullptr));
+				if (elapsed < duration)
+					scanning = { { "phase", "Registering" }, { "done", static_cast<uint64_t>(elapsed / duration * c_Files) }, { "total", c_Files } };
+			}
+			nlohmann::json result = { { "assets", { { "scanning", scanning } } } };
+			if (noSections || (sections != parameters.end() && sections->is_array() && std::find(sections->begin(), sections->end(), "sceneLoad") != sections->end()))
+			{
+				result["sceneLoad"] = nullptr;
+				const double duration = sceneLoadMode.empty() ? 0.0 : std::max(1.0, std::strtod(sceneLoadMode.c_str(), nullptr));
+				if (elapsed < duration)
+					result["sceneLoad"] = { { "scene", "000000000000A001" }, { "startScene", true }, { "state", "LoadingScene" }, { "progress", elapsed / duration } };
+			}
+			return RpcResult::Success(std::move(result));
+		});
+
 		RpcMethodInfo quit;
 		quit.Name = "editor.quit";
 		quit.Description = "Exits the fake editor";

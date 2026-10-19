@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
+#include "TestHelpers.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/JsonUtils.h"
@@ -13,6 +14,7 @@
 #include "Strata/Scene/SceneSerializer.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <limits>
 #include <memory>
@@ -62,6 +64,82 @@ namespace
 
 TEST_SUITE("Asset.Residency")
 {
+	TEST_CASE("The residency listing costs what is listed: 100 of 30,000 registered assets are visited 100 times, and the listed set is always exact")
+	{
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateManager(MakeBudgets(AssetResidencyBudgets::c_Unlimited, AssetResidencyBudgets::c_Unlimited,
+			AssetResidencyBudgets::c_Unlimited));
+		std::vector<AssetHandle> handles;
+		for (uint64_t index = 0; index < 30'000; index++)
+			handles.push_back(manager->Add(0x700000 + index, MakeUsage(0, 1 * c_MB)));
+		CHECK(StateCountsMatch(*manager));
+		// The built-in assets held in memory are listed from the start.
+		const size_t builtin = manager->GetResidencyInfo().size();
+
+		// 100 loaded: listing them looks at those 100 (and the built-in ones), not at the 30,000.
+		LoadAll(*manager, std::vector<AssetHandle>(handles.begin(), handles.begin() + 100));
+		std::vector<AssetResidencySample> samples;
+		uint64_t visits = manager->GetResidencyVisitCount();
+		manager->GetResidencySamples(samples);
+		CHECK(samples.size() == builtin + 100);
+		CHECK(manager->GetResidencyVisitCount() == visits + builtin + 100);
+		visits = manager->GetResidencyVisitCount();
+		CHECK(manager->GetResidencyInfo().size() == builtin + 100);
+		CHECK(manager->GetResidencyVisitCount() == visits + builtin + 100);
+		CHECK(StateCountsMatch(*manager));
+
+		// Pins, evictions (a budget of 64 MB of textures for 100 at 1 MB each), unloads and unregistrations keep it exact.
+		AssetPin pinned = manager->Pin(handles[20'000]);
+		manager->Update();
+		CHECK(StateCountsMatch(*manager));
+		manager->SetResidencyBudgets(MakeBudgets(AssetResidencyBudgets::c_Unlimited, 64 * c_MB, AssetResidencyBudgets::c_Unlimited));
+		for (uint32_t frame = 0; frame < manager->GetEvictionGraceFrames() + 2; frame++)
+			manager->Update();
+		CHECK(manager->GetStats().Evictions > 0);
+		CHECK(StateCountsMatch(*manager));
+		manager->UnloadAsset(handles[99]);
+		CHECK(StateCountsMatch(*manager));
+		manager->Remove(handles[98]);
+		manager->Remove(handles[20'000]);
+		CHECK(StateCountsMatch(*manager));
+		pinned = AssetPin();
+		CHECK(StateCountsMatch(*manager));
+	}
+
+	TEST_CASE("With most registered assets listed, the listing walks the entries once instead of looking each one up")
+	{
+		ScopedFakeLoader loader;
+		Ref<FakeAssetManager> manager = CreateManager(MakeBudgets(AssetResidencyBudgets::c_Unlimited, AssetResidencyBudgets::c_Unlimited,
+			AssetResidencyBudgets::c_Unlimited));
+		std::vector<AssetHandle> handles;
+		for (uint64_t index = 0; index < 2000; index++)
+			handles.push_back(manager->Add(0x710000 + index, MakeUsage(0, 1 * c_MB)));
+		// And 300 that stay unloaded, unlisted: walked past, not listed.
+		for (uint64_t index = 0; index < 300; index++)
+			manager->Add(0x720000 + index, MakeUsage(0, 1 * c_MB));
+		const size_t builtin = manager->GetResidencyInfo().size();
+		const uint32_t registered = manager->GetStats().RegisteredAssets;
+		// Finalized over frames (a frame's upload budget), all of them in the end.
+		for (AssetHandle handle : handles)
+			manager->RequestLoad(handle);
+		REQUIRE(Tests::WaitUntil([&]()
+		{
+			manager->Update();
+			return std::all_of(handles.begin(), handles.end(), [&](AssetHandle handle) { return manager->GetAssetState(handle) == AssetState::Ready; });
+		}, std::chrono::seconds(30)));
+		uint64_t visits = manager->GetResidencyVisitCount();
+		std::vector<AssetResidencySample> samples;
+		manager->GetResidencySamples(samples);
+		CHECK(samples.size() == builtin + handles.size());
+		CHECK(registered > builtin + handles.size());
+		CHECK(manager->GetResidencyVisitCount() == visits + registered);
+		visits = manager->GetResidencyVisitCount();
+		CHECK(manager->GetResidencyInfo().size() == builtin + handles.size());
+		CHECK(manager->GetResidencyVisitCount() == visits + registered);
+		std::string error;
+		CHECK_MESSAGE(manager->ValidateResidencyIndex(&error), error);
+	}
+
 	TEST_CASE("Default budgets come from the graphics device's memory budget")
 	{
 		const AssetResidencyBudgets unlimited = AssetResidencyBudgets::FromDeviceBudget(0);

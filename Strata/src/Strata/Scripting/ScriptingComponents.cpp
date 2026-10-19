@@ -1,12 +1,15 @@
 #include "stpch.h"
 #include "Strata/Scripting/ScriptingComponents.h"
 
+#include "Strata/Core/BinaryStream.h"
 #include "Strata/Reflection/ComponentRegistry.h"
+#include "Strata/Reflection/PropertyBinary.h"
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Scripting/ScriptingRegistration.h"
 
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace Strata
 {
@@ -192,6 +195,86 @@ namespace Strata
 			VisitScriptReferences(scripts, [&visitor](uint32_t, uint32_t, PropertyType type, UUID value) { visitor(type, value); });
 		}
 
+		// The binary form of the scripts (cooked scenes): per script its class and its typed fields, as the JSON form holds them
+		// (enum values as integers; a field whose value is not of its type is left out, as the JSON form leaves it out).
+		bool SerializeScriptComponentBinary(const ScriptComponent& component, BinaryWriter& out, std::string* outError)
+		{
+			out.Write(static_cast<uint32_t>(component.Scripts.size()));
+			for (const ScriptEntry& script : component.Scripts)
+			{
+				if (script.ClassName.size() > c_MaxBinaryStringBytes)
+				{
+					if (outError)
+						*outError = fmt::format("The class name of a script is longer than {} bytes", c_MaxBinaryStringBytes);
+					return false;
+				}
+				out.WriteString(script.ClassName);
+				std::vector<const ScriptFieldValue*> fields;
+				for (const ScriptFieldValue& field : script.Fields)
+				{
+					const PropertyType type = field.Type == PropertyType::Enum ? PropertyType::Int : field.Type;
+					if (field.Value.index() == GetPropertyValueIndex(type) && field.Name.size() <= c_MaxBinaryStringBytes)
+						fields.push_back(&field);
+				}
+				out.Write(static_cast<uint32_t>(fields.size()));
+				for (const ScriptFieldValue* field : fields)
+				{
+					const PropertyType type = field->Type == PropertyType::Enum ? PropertyType::Int : field->Type;
+					out.WriteString(field->Name);
+					out.Write(static_cast<uint8_t>(type));
+					if (!WritePropertyValue(out, type, field->Value, outError))
+						return false;
+				}
+			}
+			return true;
+		}
+
+		bool DeserializeScriptComponentBinary(ScriptComponent& component, BinaryReader& in, std::string* outError)
+		{
+			auto fail = [outError](std::string message)
+			{
+				if (outError)
+					*outError = std::move(message);
+				return false;
+			};
+			// Each script takes at least its class name's length and its field count, each field its name's length and its type.
+			const uint32_t scripts = in.Read<uint32_t>();
+			if (!in.IsValid() || scripts > in.GetRemaining() / 8)
+				return fail("The scripts end early");
+			component.Scripts.clear();
+			component.Scripts.reserve(scripts);
+			for (uint32_t index = 0; index < scripts; index++)
+			{
+				ScriptEntry& script = component.Scripts.emplace_back();
+				script.ClassName = in.ReadString(c_MaxBinaryStringBytes);
+				const uint32_t fields = in.Read<uint32_t>();
+				if (!in.IsValid() || fields > in.GetRemaining() / 5)
+					return fail("The scripts end early");
+				for (uint32_t fieldIndex = 0; fieldIndex < fields; fieldIndex++)
+				{
+					std::string name = in.ReadString(c_MaxBinaryStringBytes);
+					const uint8_t typeValue = in.Read<uint8_t>();
+					if (!in.IsValid())
+						return fail("The scripts end early");
+					// A type no writer writes (or Enum, written as Int) cannot tell how long its value is.
+					if (typeValue > static_cast<uint8_t>(PropertyType::Entity) || static_cast<PropertyType>(typeValue) == PropertyType::Enum)
+						return fail(fmt::format("Script field '{}.{}' has type {}, which no writer writes", script.ClassName, name, typeValue));
+					const PropertyType type = static_cast<PropertyType>(typeValue);
+					std::string error;
+					std::optional<PropertyValue> value = ReadPropertyValue(in, type, &error);
+					if (!value)
+					{
+						if (!in.IsValid())
+							return fail(fmt::format("Script field '{}.{}': {}", script.ClassName, name, error));
+						ST_CORE_WARN("Script field '{}.{}': {}; skipped", script.ClassName, name, error);
+						continue;
+					}
+					script.Fields.push_back(ScriptFieldValue { std::move(name), type, std::move(*value) });
+				}
+			}
+			return true;
+		}
+
 	}
 
 	void RegisterScriptingComponents()
@@ -200,7 +283,8 @@ namespace Strata
 			.Category("Scripting")
 			.Description("C++ behaviours from the project's script module")
 			.Extra(SerializeScriptComponent, DeserializeScriptComponent)
-			.ExtraReferences(VisitScriptReferences, SetScriptReference, ScriptsEqual, VisitScriptReferencesJson);
+			.ExtraReferences(VisitScriptReferences, SetScriptReference, ScriptsEqual, VisitScriptReferencesJson)
+			.ExtraBinary(SerializeScriptComponentBinary, DeserializeScriptComponentBinary);
 	}
 
 }

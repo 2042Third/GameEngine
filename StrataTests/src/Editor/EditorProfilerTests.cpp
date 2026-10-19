@@ -2,6 +2,7 @@
 
 #include "Audio/AudioTestUtils.h"
 #include "Editor/CommandTestUtils.h"
+#include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "FeatureTest/FeatureTestUtils.h"
@@ -49,7 +50,8 @@ namespace
 	// The result's shape, which tools and command scripts rely on.
 	void CheckProfileSchema(const nlohmann::json& profile)
 	{
-		CHECK(GetKeys(profile) == std::set<std::string> { "frames", "frame", "framesPerSecond", "stageSum", "untimed", "jobs", "stages" });
+		CHECK(GetKeys(profile) == std::set<std::string> { "frames", "frame", "framesPerSecond", "stageSum", "untimed", "jobs", "stages", "gpu", "renderStats",
+			"gameRenderStats" });
 		CHECK(profile["frames"].is_number_unsigned());
 		CHECK(profile["framesPerSecond"].is_number());
 		CHECK(GetKeys(profile["frame"]) == c_TimeKeys);
@@ -72,7 +74,27 @@ namespace
 			for (const std::string& key : c_TimeKeys)
 				CHECK(stages[name][key].is_number());
 		}
-		CHECK(stages.size() == FrameProfiler::Get().GetStageCount());
+		// The main thread's stages only: the GPU's are in gpu.
+		uint32_t cpuStages = 0;
+		for (FrameStageID stage = 0; stage < FrameProfiler::Get().GetStageCount(); stage++)
+			cpuStages += FrameProfiler::Get().GetStageKind(stage) == FrameStageKind::CPU ? 1 : 0;
+		CHECK(stages.size() == cpuStages);
+		CHECK_FALSE(stages.contains("GPU.Opaque"));
+
+		const nlohmann::json& gpu = profile["gpu"];
+		CHECK(GetKeys(gpu) == std::set<std::string> { "frames", "latencyFrames", "busy", "stages", "boundBy" });
+		CHECK(gpu["frames"].is_number_unsigned());
+		CHECK(gpu["latencyFrames"].is_number());
+		CHECK(GetKeys(gpu["busy"]) == c_TimeKeys);
+		CHECK(std::set<std::string> { "gpu", "cpu", "capped", "unknown" }.count(gpu["boundBy"].get<std::string>()) == 1);
+		// Every GPU stage the renderer registered.
+		for (const char* name : { "GPU.Uploads", "GPU.Setup", "GPU.Cull", "GPU.Shadows", "GPU.Prepass", "GPU.AO", "GPU.Opaque", "GPU.Transparent", "GPU.Post",
+			"GPU.Overlays" })
+		{
+			CAPTURE(name);
+			REQUIRE(gpu["stages"].contains(name));
+			CHECK(GetKeys(gpu["stages"][name]) == c_TimeKeys);
+		}
 	}
 
 }
@@ -122,6 +144,11 @@ TEST_SUITE("Editor.Perf")
 		CHECK(stages["Editor.UI"]["maxMs"] == 0.0f);
 		CHECK(profile["frame"]["avgMs"].get<float>() > 0.0f);
 		CHECK(profile["framesPerSecond"].get<float>() > 0.0f);
+		// Without a GPU: no GPU times, nothing bounds the frames known, and no viewport or Game view frame.
+		CHECK(profile["gpu"]["frames"] == 0);
+		CHECK(profile["gpu"]["boundBy"] == "unknown");
+		CHECK(profile["renderStats"].is_null());
+		CHECK(profile["gameRenderStats"].is_null());
 
 		// In every frame the stages add up to at most the frame's time, and so do their statistics.
 		for (uint32_t age = 0; age < c_ProfiledFrames; age++)
@@ -152,5 +179,36 @@ TEST_SUITE("Editor.Perf")
 		CheckProfileSchema(empty);
 		CHECK(empty["frames"] == 0);
 		CHECK(empty["frame"]["maxMs"] == 0.0f);
+	}
+
+	TEST_CASE("Command work is timed as the Editor.Commands stage, not as untimed time")
+	{
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		FrameProfiler& profiler = FrameProfiler::Get();
+		profiler.Reset();
+
+		// A frame that runs a command and polls a pending one, and a frame without commands.
+		profiler.BeginFrame();
+		auto start = std::chrono::steady_clock::now();
+		Run(context, commands, "editor.status");
+		EditorCommandResult waiting = commands.Execute(context, "editor.wait", { { "frames", 2 } });
+		REQUIRE(waiting.IsPending());
+		PollCommandResult(waiting, context);
+		profiler.EndFrame(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+		profiler.BeginFrame();
+		start = std::chrono::steady_clock::now();
+		context.Update(Timestep(1.0f / 60.0f));
+		profiler.EndFrame(std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+
+		const FrameStageID stage = profiler.FindStage("Editor.Commands");
+		REQUIRE(stage != c_InvalidFrameStage);
+		CHECK(profiler.IsStageInWorkTime(stage));
+		CHECK(profiler.GetFrame(1).StageMs[stage] > 0.0f);
+		CHECK(profiler.GetFrame(0).StageMs[stage] == 0.0f);
+		// editor.perf names it.
+		const nlohmann::json profile = Run(context, commands, "editor.perf", { { "frames", 2 } });
+		REQUIRE(profile["stages"].contains("Editor.Commands"));
+		CHECK(profile["stages"]["Editor.Commands"]["maxMs"].get<float>() > 0.0f);
 	}
 }

@@ -11,6 +11,20 @@ using namespace Strata;
 
 TEST_SUITE("ImGui.Layer")
 {
+	TEST_CASE("The UI scale is the content scale less what window coordinates in points apply already")
+	{
+		// Windows and X11 measure windows in pixels: the content scale is the UI scale.
+		CHECK(ImGuiLayer::ToUIScale(1.5f, glm::uvec2(1600, 900), glm::uvec2(1600, 900)) == 1.5f);
+		CHECK(ImGuiLayer::ToUIScale(2.0f, glm::uvec2(1600, 900), glm::uvec2(1600, 900)) == 2.0f);
+		// A Retina window of 1600 x 900 points has 3200 x 1800 pixels: ImGui lays out in points, so the UI is not scaled
+		// again; at a content scale above the pixel density (a larger text setting) the rest remains.
+		CHECK(ImGuiLayer::ToUIScale(2.0f, glm::uvec2(1600, 900), glm::uvec2(3200, 1800)) == 1.0f);
+		CHECK(ImGuiLayer::ToUIScale(3.0f, glm::uvec2(1600, 900), glm::uvec2(3200, 1800)) == 1.5f);
+		// Sizes not known yet (a minimized window) leave the content scale.
+		CHECK(ImGuiLayer::ToUIScale(2.0f, glm::uvec2(0), glm::uvec2(0)) == 2.0f);
+		CHECK(ImGuiLayer::ToUIScale(2.0f, glm::uvec2(1600, 900), glm::uvec2(0)) == 2.0f);
+	}
+
 	TEST_CASE("The ImGuiLayer styles the UI for the window's content scale")
 	{
 		// The layer styles the current context; it need not be attached (no window or renderer).

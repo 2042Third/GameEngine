@@ -14,6 +14,7 @@
 #include <Strata/Core/Base.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Core/StringUtils.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Entity.h>
@@ -30,6 +31,14 @@ namespace Strata
 
 	nlohmann::json RunEditorCommand(EditorContext& context, const EditorCommandRegistry& commands, std::string_view name, const nlohmann::json& parameters)
 	{
+		// What would wait for the asset scan cannot run from here (it finishes at once or not at: the person tries again).
+		if (const std::optional<std::string> waiting = commands.DescribeAssetScanWait(context, name))
+		{
+			const EditorCommandResult refused = EditorCommandResult::Fail(fmt::format("Not yet: {}", *waiting));
+			NotifyCommandOutcome(context.GetNotifications(), name, refused);
+			ST_WARN("{}: {}", name, refused.Error);
+			return nullptr;
+		}
 		EditorCommandResult result = commands.Execute(context, name, parameters, CommandOrigin { CommandSource::UI });
 		NotifyCommandOutcome(context.GetNotifications(), name, result);
 		if (result.IsPending())
@@ -81,17 +90,30 @@ namespace Strata
 		return outcome->Error;
 	}
 
+	std::string FormatAssetScan(const AssetScanProgress& progress)
+	{
+		if (progress.Phase == AssetScanPhase::Walking || progress.Total == 0)
+			return fmt::format("Scanning {} files found", StringUtils::FormatThousands(progress.Done));
+		return fmt::format("Scanning {} / {}", StringUtils::FormatThousands(progress.Done), StringUtils::FormatThousands(progress.Total));
+	}
+
+	std::string DescribeOpeningScene(const EditorContext& context)
+	{
+		const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
+		if (const EditorAssetManager* assets = context.GetAssetManager())
+		{
+			if (const std::optional<AssetMetadata> metadata = assets->GetMetadata(status.Scene))
+				return metadata->Path.empty() ? metadata->Name : metadata->Path;
+		}
+		// Not registered yet: the project's start scene waits for the asset scan.
+		return status.StartScene ? std::string("the start scene") : status.Scene.ToString();
+	}
+
 	bool DrawSceneLoadBanner(const char* id, const EditorContext& context)
 	{
 		if (!context.IsSceneLoading() || context.IsPlaying())
 			return false;
-		const AssetHandle scene = context.GetSceneLoadStatus().Scene;
-		std::string name = scene.ToString();
-		if (const EditorAssetManager* assets = context.GetAssetManager())
-		{
-			if (const std::optional<AssetMetadata> metadata = assets->GetMetadata(scene))
-				name = metadata->Path.empty() ? metadata->Name : metadata->Path;
-		}
+		const std::string name = DescribeOpeningScene(context);
 		UI::Banner(id, Icons::LoaderCircle, fmt::format("Opening {}: the scene shown is read-only until it replaces it", name), UI::GetThemeColors().Info);
 		ImGui::Spacing();
 		return true;
@@ -272,7 +294,7 @@ namespace Strata
 			else if (const Ref<Scene>& scene = context.GetActiveScene())
 			{
 				const EditorPlacement::Surface placed = surface ? *surface : EditorPlacement::FindPivotSurface(*scene, context.GetViewport().GetCamera());
-				const glm::vec3 translation = EditorPlacement::RestOn(placed, EditorPlacement::GetTemplateBounds(prefab));
+				const glm::vec3 translation = EditorPlacement::RestOn(placed, EditorPlacement::GetPlacementBounds(context, prefab));
 				parameters["components"] = { { "Transform", { { "Translation", { translation.x, translation.y, translation.z } } } } };
 			}
 			const nlohmann::json created = RunEditorCommand(context, commands, "prefab.instantiate", parameters);

@@ -4,10 +4,13 @@
 
 #include <imgui.h>
 
+#include <cstdint>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace Strata
 {
@@ -52,6 +55,32 @@ namespace Strata::UI
 	bool ToggleChip(const char* id, const char* icon, const char* label, bool* value, const char* tooltip, bool inEffect = true);
 	// The width a chip with this icon and label takes, e.g. to align one to the right.
 	float ChipWidth(const char* icon, const char* label);
+	// What a strip of chips keeps across frames (ChipStrip): the widths its chips take with their labels, and from which
+	// chip on they are drawn as icons.
+	struct ChipStripState
+	{
+		std::vector<std::pair<float, float>> Widths; // Each chip's with its label and as an icon
+		size_t FirstIcon = SIZE_MAX;
+	};
+	// The chips drawn while one exists form a strip `available` units wide: from the left they show their labels as long as
+	// the strip holds them, the last ones are drawn as their icon alone with their label leading their tooltip (probes keep
+	// the label), so a narrow toolbar keeps every chip in reach. Which ones is decided from the previous frame's chips, so a
+	// strip that changes width or chips settles in the next frame. Strips do not nest.
+	class ChipStrip
+	{
+	public:
+		ChipStrip(ChipStripState& state, float available);
+		~ChipStrip();
+		ChipStrip(const ChipStrip&) = delete;
+		ChipStrip& operator=(const ChipStrip&) = delete;
+
+		// For the next chip, its widths with its label and as an icon: whether it is drawn as an icon.
+		bool NextIsIcon(float labeledWidth, float iconWidth);
+	private:
+		ChipStripState& m_State;
+		float m_Available;
+		size_t m_Count = 0;
+	};
 
 	// A status pill: an icon and text in a color on a tint of that color, sized to its text in the current font. Returns
 	// true when clicked (pills that lead somewhere, e.g. the errors pill opening the Console).

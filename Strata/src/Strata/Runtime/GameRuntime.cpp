@@ -31,6 +31,7 @@ namespace Strata
 			return nullptr;
 
 		Scope<GameRuntime> runtime(new GameRuntime());
+		runtime->m_Opened = std::chrono::steady_clock::now();
 		runtime->m_Manifest = std::move(*manifest);
 		const std::filesystem::path packPath = manifestPath.parent_path() / FileSystem::FromUTF8(runtime->m_Manifest.AssetPack);
 		runtime->m_AssetManager = RuntimeAssetManager::Create(packPath, outError);
@@ -212,7 +213,7 @@ namespace Strata
 			m_SceneLoad.reset();
 			m_LoadingSceneLoad.reset();
 			if (first)
-				ST_CORE_INFO("Started '{}'", m_Manifest.Name);
+				ST_CORE_INFO("Started '{}' in {:.2f} s", m_Manifest.Name, std::chrono::duration<double>(std::chrono::steady_clock::now() - m_Opened).count());
 			return;
 		}
 		const std::string error = request.GetError();

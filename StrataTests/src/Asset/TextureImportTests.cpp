@@ -583,4 +583,91 @@ TEST_SUITE("Asset.TextureImport")
 		CHECK_FALSE(encoded);
 		CHECK_MESSAGE(stoppedAfter < 2.0, "The encode went on for ", stoppedAfter, " s after it was cancelled");
 	}
+
+	TEST_CASE("Texture names give their usage by their tokens, wherever they stand, and DirectX normal maps flip green")
+	{
+		const struct
+		{
+			const char* Name;
+			TextureUsage Usage;
+			bool FlipGreen;
+		} cases[] = {
+			{ "aerial_rocks_02_nor_gl_1k.png", TextureUsage::NormalMap, false },
+			{ "rocks_nor_dx_2k.png", TextureUsage::NormalMap, true },
+			{ "T_Brick_NormalDX.png", TextureUsage::NormalMap, true },
+			{ "Bricks_NormalGL.png", TextureUsage::NormalMap, false },
+			{ "stone_n.png", TextureUsage::NormalMap, false },
+			{ "stone_n_2048.png", TextureUsage::NormalMap, false },
+			{ "Brick_normal.png", TextureUsage::NormalMap, false },
+			{ "brick_Rough_4k.png", TextureUsage::Data, false },
+			{ "wood_ao_1k.png", TextureUsage::Data, false },
+			{ "metal_plate_metallic_2048x2048.png", TextureUsage::Data, false },
+			{ "wood_diff_1k.png", TextureUsage::Color, false },
+			{ "banner_1k.png", TextureUsage::Color, false },
+			{ "snow.png", TextureUsage::Color, false },
+			{ "n_logo.png", TextureUsage::Color, false }, // "n" counts only as the last token
+			{ "Sky.hdr", TextureUsage::HDR, false } };
+		for (const auto& testCase : cases)
+		{
+			CAPTURE(testCase.Name);
+			const TextureImportSettings settings = TextureImportSettings::GetDefaults(testCase.Name);
+			CHECK(settings.Usage == testCase.Usage);
+			CHECK(settings.FlipGreen == testCase.FlipGreen);
+		}
+		CHECK(TextureImportSettings::GetNameTokens("T_Brick_NormalDX") == std::vector<std::string> { "t", "brick", "normal" });
+
+		// The setting round trips, and applies to normal maps only.
+		TextureImportSettings flipped;
+		flipped.FlipGreen = true;
+		CHECK(TextureImportSettings::FromJson(flipped.ToJson()).FlipGreen);
+		TextureImporter importer;
+		nlohmann::json values = flipped.ToJson();
+		CHECK_FALSE(importer.GetInactiveReason("FlipGreen", values).empty());
+		values["Usage"] = "NormalMap";
+		CHECK(importer.GetInactiveReason("FlipGreen", values).empty());
+	}
+
+	TEST_CASE("FlipGreen inverts the green channel of normal maps stored as RGBA8 and BC5, before their mips are filtered")
+	{
+		constexpr uint32_t c_Size = 64;
+		const std::vector<uint8_t> image = Tests::EncodePNG(c_Size, c_Size, 3, CreateSphereNormalMap(c_Size));
+		for (const TextureCompression compression : { TextureCompression::Uncompressed, TextureCompression::Auto })
+		{
+			CAPTURE(TextureCompressionToString(compression));
+			TextureImportSettings settings;
+			settings.Usage = TextureUsage::NormalMap;
+			settings.Compression = compression;
+			const Ref<Texture> plain = Import(image, settings, "Sphere_nor_gl.png");
+			settings.FlipGreen = true;
+			const Ref<Texture> flipped = Import(image, settings, "Sphere_nor_dx.png");
+			CHECK(flipped->GetSpecification().Format == (compression == TextureCompression::Auto ? TextureFormat::BC5 : TextureFormat::RGBA8));
+			REQUIRE(flipped->GetMipCount() == plain->GetMipCount());
+			for (uint32_t level = 0; level < plain->GetMipCount(); level++)
+			{
+				CAPTURE(level);
+				const std::vector<uint8_t> a = DecodeLevel(*plain, level);
+				const std::vector<uint8_t> b = DecodeLevel(*flipped, level);
+				REQUIRE(a.size() == b.size());
+				// Red is the same, green is mirrored: exactly for RGBA8 (within rounding), within BC5's quantization (each block
+				// encodes its own range in eight steps; the sphere's edges are steep) for BC5. Unflipped, green would be off by up
+				// to 255.
+				const bool compressed = compression == TextureCompression::Auto;
+				const size_t stride = compressed ? 2 : 4; // BC5 decodes to two channels
+				int redDifference = 0;
+				int greenDifference = 0;
+				double greenTotal = 0.0;
+				const size_t texels = a.size() / stride;
+				for (size_t texel = 0; texel < texels; texel++)
+				{
+					redDifference = std::max(redDifference, std::abs(static_cast<int>(a[texel * stride]) - static_cast<int>(b[texel * stride])));
+					const int green = std::abs(static_cast<int>(a[texel * stride + 1]) + static_cast<int>(b[texel * stride + 1]) - 255);
+					greenDifference = std::max(greenDifference, green);
+					greenTotal += green;
+				}
+				CHECK(redDifference <= (compressed ? 24 : 1));
+				CHECK(greenDifference <= (compressed ? 24 : 1));
+				CHECK(greenTotal / static_cast<double>(texels) <= (compressed ? 2.0 : 1.0));
+			}
+		}
+	}
 }

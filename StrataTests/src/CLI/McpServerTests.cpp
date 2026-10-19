@@ -4,6 +4,8 @@
 
 #include "CLI/FakeEditor.h"
 #include "CLI/McpServer.h"
+#include "CLI/McpTestClient.h"
+#include "CLI/McpToolsets.h"
 #include "Strata/Core/Version.h"
 #include "Strata/Network/EditorSession.h"
 #include "Strata/Network/JsonRpc.h"
@@ -20,97 +22,9 @@ using namespace Strata::CLI;
 
 namespace
 {
-	McpServerSpecification MakeSpecification(const std::filesystem::path& sessionDirectory, std::optional<uint16_t> port = std::nullopt)
-	{
-		McpServerSpecification specification;
-		specification.Connection.SessionDirectory = sessionDirectory;
-		specification.Connection.Port = port;
-		specification.Connection.Token = port ? Tests::c_FakeEditorToken : "";
-		specification.Connection.ConnectTimeout = std::chrono::milliseconds(3000);
-		specification.CallTimeout = std::chrono::milliseconds(5000);
-		specification.LaunchTimeout = std::chrono::milliseconds(2000);
-		return specification;
-	}
-
-	// Drives an McpServer like an MCP client and records everything it writes.
-	class McpTestClient
-	{
-	public:
-		explicit McpTestClient(McpServerSpecification specification)
-			: m_Server(std::move(specification), [this](const std::string& line) { m_Output.push_back(line); })
-		{
-		}
-
-		void SendLine(std::string_view line)
-		{
-			m_Server.HandleLine(line);
-		}
-
-		// Sends a request and returns its response (null if none was written).
-		nlohmann::json Request(const std::string& method, nlohmann::json params = nlohmann::json::object())
-		{
-			const int64_t id = m_NextId++;
-			const size_t firstNew = m_Output.size();
-			m_Server.HandleLine(JsonRpc::Serialize(JsonRpc::MakeRequest(id, method, std::move(params))));
-			for (size_t index = firstNew; index < m_Output.size(); index++)
-			{
-				std::optional<nlohmann::json> message = JsonRpc::Parse(m_Output[index]);
-				if (message && message->is_object() && message->contains("id") && (*message)["id"] == id)
-					return *message;
-			}
-			return nullptr;
-		}
-
-		void Notify(const std::string& method)
-		{
-			m_Server.HandleLine(JsonRpc::Serialize(JsonRpc::MakeNotification(method, nullptr)));
-		}
-
-		void Initialize()
-		{
-			nlohmann::json response = Request("initialize", nlohmann::json {
-				{ "protocolVersion", "2025-06-18" },
-				{ "capabilities", nlohmann::json::object() },
-				{ "clientInfo", { { "name", "StrataTests" }, { "version", "1.0" } } } });
-			REQUIRE(response.contains("result"));
-			Notify("notifications/initialized");
-		}
-
-		nlohmann::json CallTool(const std::string& name, nlohmann::json arguments = nlohmann::json::object())
-		{
-			nlohmann::json response = Request("tools/call", nlohmann::json { { "name", name }, { "arguments", std::move(arguments) } });
-			REQUIRE(response.contains("result"));
-			return response["result"];
-		}
-
-		std::vector<std::string> ListToolNames()
-		{
-			nlohmann::json response = Request("tools/list");
-			REQUIRE(response.contains("result"));
-			std::vector<std::string> names;
-			for (const nlohmann::json& tool : response["result"]["tools"])
-				names.push_back(tool["name"].get<std::string>());
-			return names;
-		}
-
-		size_t CountNotifications(const std::string& method) const
-		{
-			return static_cast<size_t>(std::count_if(m_Output.begin(), m_Output.end(), [&](const std::string& line)
-			{
-				std::optional<nlohmann::json> message = JsonRpc::Parse(line);
-				return message && message->is_object() && !message->contains("id") && message->value("method", "") == method;
-			}));
-		}
-
-		McpServer& GetServer() { return m_Server; }
-		const std::vector<std::string>& GetOutput() const { return m_Output; }
-	private:
-		std::vector<std::string> m_Output;
-		McpServer m_Server;
-		int64_t m_NextId = 1;
-	};
-
-	const std::vector<std::string> c_GenericTools = { "strata_status", "strata_launch_editor", "strata_list_methods", "strata_call" };
+	// The fake editor's methods in the core toolset (entity.create, viewport.capture); scene.fail, math.add and list.sum
+	// are in others.
+	constexpr size_t c_FakeCoreTools = 2;
 
 	std::string GetText(const nlohmann::json& toolResult, size_t index = 0)
 	{
@@ -122,7 +36,7 @@ TEST_SUITE("CLI.Mcp")
 {
 	TEST_CASE("Initialize negotiates the protocol version")
 	{
-		McpTestClient client(MakeSpecification(Tests::CreateTemporaryDirectory("McpInitialize")));
+		Tests::McpTestClient client(Tests::MakeMcpSpecification(Tests::CreateTemporaryDirectory("McpInitialize")));
 
 		for (const char* version : { "2024-11-05", "2025-03-26", "2025-06-18" })
 		{
@@ -140,7 +54,11 @@ TEST_SUITE("CLI.Mcp")
 		CHECK(result["serverInfo"]["name"] == "strata");
 		CHECK(result["serverInfo"]["version"] == c_EngineVersion);
 		CHECK(result["capabilities"]["tools"]["listChanged"] == true);
-		CHECK(result["instructions"].is_string());
+		REQUIRE(result["instructions"].is_string());
+		// Saves answer later: agents must not expect the file at once, nor batch them.
+		const std::string instructions = result["instructions"].get<std::string>();
+		CHECK(instructions.find("scene_save and scene_saveAs write in the background and answer once the file is written") != std::string::npos);
+		CHECK(instructions.find("editor_batch refuses saves") != std::string::npos);
 
 		CHECK_FALSE(client.GetServer().IsInitialized());
 		const size_t outputBefore = client.GetOutput().size();
@@ -151,7 +69,7 @@ TEST_SUITE("CLI.Mcp")
 
 	TEST_CASE("Protocol-level errors and utilities")
 	{
-		McpTestClient client(MakeSpecification(Tests::CreateTemporaryDirectory("McpProtocol")));
+		Tests::McpTestClient client(Tests::MakeMcpSpecification(Tests::CreateTemporaryDirectory("McpProtocol")));
 
 		CHECK(client.Request("ping")["result"] == nlohmann::json::object());
 
@@ -198,15 +116,15 @@ TEST_SUITE("CLI.Mcp")
 
 	TEST_CASE("Only the generic tools are listed without an editor")
 	{
-		McpTestClient client(MakeSpecification(Tests::CreateTemporaryDirectory("McpNoEditor")));
+		Tests::McpTestClient client(Tests::MakeMcpSpecification(Tests::CreateTemporaryDirectory("McpNoEditor")));
 		client.Initialize();
 
 		nlohmann::json response = client.Request("tools/list");
 		nlohmann::json& tools = response["result"]["tools"];
-		REQUIRE(tools.size() == c_GenericTools.size());
+		REQUIRE(tools.size() == Tests::c_GenericMcpTools.size());
 		for (size_t index = 0; index < tools.size(); index++)
 		{
-			CHECK(tools[index]["name"] == c_GenericTools[index]);
+			CHECK(tools[index]["name"] == Tests::c_GenericMcpTools[index]);
 			CHECK_FALSE(tools[index]["description"].get<std::string>().empty());
 			CHECK(tools[index]["inputSchema"]["type"] == "object");
 		}
@@ -223,13 +141,19 @@ TEST_SUITE("CLI.Mcp")
 		nlohmann::json call = client.CallTool("strata_call", nlohmann::json { { "method", "entity.create" } });
 		CHECK(call["isError"] == true);
 		CHECK(client.CallTool("strata_list_methods")["isError"] == true);
+		CHECK(GetText(client.CallTool("strata_describe")).find("No Strata editor is connected") != std::string::npos);
+		// Toolsets can be chosen before an editor connects.
+		const nlohmann::json toolsets = client.CallTool("strata_toolsets", nlohmann::json { { "enable", { "scene" } } });
+		CHECK(toolsets["isError"] == false);
+		CHECK(toolsets["structuredContent"]["enabled"] == nlohmann::json::array({ "core", "scene" }));
+		CHECK(toolsets["structuredContent"]["editorTools"] == 0);
 	}
 
 	TEST_CASE("Editor methods are exposed as tools")
 	{
 		Tests::PumpedRpcServer editor;
 		REQUIRE(Tests::StartFakeEditor(editor));
-		McpTestClient client(MakeSpecification(Tests::CreateTemporaryDirectory("McpTools"), editor.GetPort()));
+		Tests::McpTestClient client(Tests::MakeMcpSpecification(Tests::CreateTemporaryDirectory("McpTools"), editor.GetPort()));
 		client.Initialize();
 
 		nlohmann::json response = client.Request("tools/list");
@@ -242,13 +166,14 @@ TEST_SUITE("CLI.Mcp")
 			CHECK(tool["inputSchema"]["properties"].is_object());
 		}
 
-		for (const std::string& generic : c_GenericTools)
+		for (const std::string& generic : Tests::c_GenericMcpTools)
 			CHECK(std::find(names.begin(), names.end(), generic) != names.end());
-		for (const char* expected : { "entity_create", "scene_fail", "viewport_capture", "math_add", "list_sum" })
+		// The core toolset by default.
+		for (const char* expected : { "entity_create", "viewport_capture" })
 			CHECK(std::find(names.begin(), names.end(), expected) != names.end());
 		for (const std::string& name : names)
 			CHECK(name.rfind("rpc_", 0) == std::string::npos);
-		CHECK(names.size() == c_GenericTools.size() + 5);
+		CHECK(names.size() == Tests::c_GenericMcpTools.size() + c_FakeCoreTools);
 
 		const auto create = std::find_if(tools.begin(), tools.end(), [](const nlohmann::json& tool) { return tool.value("name", "") == "entity_create"; });
 		REQUIRE(create != tools.end());
@@ -258,13 +183,26 @@ TEST_SUITE("CLI.Mcp")
 
 		// Joining after the initial listing, the client was never told about a change.
 		CHECK(client.CountNotifications("notifications/tools/list_changed") == 0);
+
+		// Every method once every toolset is enabled; the change is announced.
+		const nlohmann::json enabled = client.CallTool("strata_toolsets", nlohmann::json { { "enable", { "all" } } });
+		CHECK(enabled["structuredContent"]["editorTools"] == 5);
+		CHECK(client.CountNotifications("notifications/tools/list_changed") == 1);
+		names = client.ListToolNames();
+		for (const char* expected : { "entity_create", "scene_fail", "viewport_capture", "math_add", "list_sum" })
+			CHECK(std::find(names.begin(), names.end(), expected) != names.end());
+		CHECK(names.size() == Tests::c_GenericMcpTools.size() + 5);
+		client.CallTool("strata_toolsets", nlohmann::json { { "disable", { "all" } }, { "enable", { "math" } } });
+		CHECK(client.ListToolNames().size() == Tests::c_GenericMcpTools.size() + 1);
+		CHECK(client.CountNotifications("notifications/tools/list_changed") == 2);
+		CHECK(client.CallTool("strata_toolsets", nlohmann::json { { "enable", "scene" } })["isError"] == true);
 	}
 
 	TEST_CASE("Tool calls are routed to the editor and results are mapped")
 	{
 		Tests::PumpedRpcServer editor;
 		REQUIRE(Tests::StartFakeEditor(editor));
-		McpTestClient client(MakeSpecification(Tests::CreateTemporaryDirectory("McpCalls"), editor.GetPort()));
+		Tests::McpTestClient client(Tests::MakeMcpSpecification(Tests::CreateTemporaryDirectory("McpCalls"), editor.GetPort()));
 		client.Initialize();
 		client.ListToolNames();
 
@@ -333,7 +271,12 @@ TEST_SUITE("CLI.Mcp")
 			CHECK(status["structuredContent"]["connected"] == true);
 			CHECK(status["structuredContent"]["endpoint"]["port"] == editor.GetPort());
 			CHECK(status["structuredContent"]["endpoint"]["source"] == "explicit");
-			CHECK(status["structuredContent"]["editorTools"] == 5);
+			CHECK(status["structuredContent"]["editorTools"] == c_FakeCoreTools);
+			CHECK(status["structuredContent"]["editorCommands"] == 5);
+			CHECK(status["structuredContent"]["toolsets"] == nlohmann::json::array({ "core" }));
+
+			// Methods outside the enabled toolsets are still called by their tool names and through strata_call.
+			CHECK(client.CallTool("strata_call", nlohmann::json { { "method", "math.add" }, { "params", { { "a", 1 }, { "b", 2 } } } })["isError"] == false);
 		}
 
 		SUBCASE("Tool name and argument errors are isError results")
@@ -355,9 +298,9 @@ TEST_SUITE("CLI.Mcp")
 	TEST_CASE("Tool list changes are announced when an editor connects and disconnects")
 	{
 		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("McpListChanged");
-		McpTestClient client(MakeSpecification(sessionDirectory));
+		Tests::McpTestClient client(Tests::MakeMcpSpecification(sessionDirectory));
 		client.Initialize();
-		CHECK(client.ListToolNames() == c_GenericTools);
+		CHECK(client.ListToolNames() == Tests::c_GenericMcpTools);
 
 		client.GetServer().Tick();
 		CHECK(client.CountNotifications("notifications/tools/list_changed") == 0);
@@ -369,7 +312,7 @@ TEST_SUITE("CLI.Mcp")
 
 		client.GetServer().Tick();
 		CHECK(client.CountNotifications("notifications/tools/list_changed") == 1);
-		CHECK(client.ListToolNames().size() == c_GenericTools.size() + 5);
+		CHECK(client.ListToolNames().size() == Tests::c_GenericMcpTools.size() + c_FakeCoreTools);
 
 		client.GetServer().Tick();
 		CHECK(client.CountNotifications("notifications/tools/list_changed") == 1); // Unchanged: no repeat
@@ -377,15 +320,15 @@ TEST_SUITE("CLI.Mcp")
 		editor.Stop();
 		client.GetServer().Tick();
 		CHECK(client.CountNotifications("notifications/tools/list_changed") == 2);
-		CHECK(client.ListToolNames() == c_GenericTools);
+		CHECK(client.ListToolNames() == Tests::c_GenericMcpTools);
 	}
 
 	TEST_CASE("Launching validates its arguments and the editor path")
 	{
 		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("McpLaunch");
-		McpServerSpecification specification = MakeSpecification(directory);
+		McpServerSpecification specification = Tests::MakeMcpSpecification(directory);
 		specification.EditorPath = FileSystem::ToUTF8(directory / "NoSuchEditor.exe");
-		McpTestClient client(specification);
+		Tests::McpTestClient client(specification);
 		client.Initialize();
 
 		nlohmann::json badProject = client.CallTool("strata_launch_editor", nlohmann::json { { "project", 42 } });
@@ -419,9 +362,9 @@ TEST_SUITE("CLI.Mcp")
 		// Published like the real editor: the per-user session and the project pointer.
 		REQUIRE(EditorSession::WriteSessionFiles(Tests::MakeFakeSession(owner.GetProcessId(), editor.GetPort(), EditorSession::GetCurrentTimestamp(), FileSystem::ToUTF8(projectDirectory))));
 
-		McpServerSpecification specification = MakeSpecification(sessionDirectory);
+		McpServerSpecification specification = Tests::MakeMcpSpecification(sessionDirectory);
 		specification.EditorPath = FileSystem::ToUTF8(sessionDirectory / "NoSuchEditor.exe");
-		McpTestClient client(specification);
+		Tests::McpTestClient client(specification);
 		client.Initialize();
 
 		nlohmann::json result = client.CallTool("strata_launch_editor", nlohmann::json { { "project", FileSystem::ToUTF8(projectDirectory) } });
@@ -439,19 +382,21 @@ TEST_SUITE("CLI.Mcp")
 		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
 		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
 
-		McpServerSpecification specification = MakeSpecification(sessionDirectory);
+		McpServerSpecification specification = Tests::MakeMcpSpecification(sessionDirectory);
 		specification.EditorPath = FileSystem::ToUTF8(Tests::GetTestExecutablePath());
 		specification.LaunchTimeout = std::chrono::milliseconds(20000);
-		McpTestClient client(specification);
+		// The fake editor's methods (editor.info, editor.quit) are in the editor toolset.
+		specification.Toolsets = { "core", "editor" };
+		Tests::McpTestClient client(specification);
 		client.Initialize();
-		CHECK(client.ListToolNames() == c_GenericTools);
+		CHECK(client.ListToolNames() == Tests::c_GenericMcpTools);
 
 		nlohmann::json launched = client.CallTool("strata_launch_editor", nlohmann::json { { "project", FileSystem::ToUTF8(projectDirectory) }, { "headless", true } });
 		REQUIRE_MESSAGE(launched["isError"] == false, GetText(launched));
 		CHECK(launched["structuredContent"]["launched"] == true);
 		CHECK(launched["structuredContent"]["session"]["Headless"] == true);
 		CHECK_FALSE(launched["structuredContent"]["session"].contains("Token"));
-		CHECK(launched["structuredContent"]["editorTools"] == 2);
+		CHECK(launched["structuredContent"]["editorTools"] == 3); // editor.info, editor.status, editor.quit
 		CHECK(client.CountNotifications("notifications/tools/list_changed") == 1);
 
 		const std::vector<std::string> tools = client.ListToolNames();
@@ -467,7 +412,45 @@ TEST_SUITE("CLI.Mcp")
 			client.GetServer().Tick();
 			return client.CountNotifications("notifications/tools/list_changed") == 2;
 		}, std::chrono::milliseconds(10000)));
-		CHECK(client.ListToolNames() == c_GenericTools);
+		CHECK(client.ListToolNames() == Tests::c_GenericMcpTools);
+	}
+
+	TEST_CASE("Launching answers once the project's assets are scanned, with progress notifications when asked for")
+	{
+		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("McpLaunchScan") / "Sessions";
+		const std::filesystem::path projectDirectory = Tests::CreateTemporaryDirectory("McpLaunchScanProject");
+		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
+		Tests::ScopedEnvironmentVariable fakeScan("STRATA_TEST_FAKE_SCAN", "2500");
+		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
+
+		McpServerSpecification specification = Tests::MakeMcpSpecification(sessionDirectory);
+		specification.EditorPath = FileSystem::ToUTF8(Tests::GetTestExecutablePath());
+		specification.LaunchTimeout = std::chrono::milliseconds(20000);
+		// The fake editor's editor.quit is in the editor toolset.
+		specification.Toolsets = { "core", "editor" };
+		Tests::McpTestClient client(specification);
+		client.Initialize();
+		nlohmann::json launched = client.CallTool("strata_launch_editor", nlohmann::json { { "project", FileSystem::ToUTF8(projectDirectory) }, { "noGpu", true } },
+			"launch-1");
+		REQUIRE_MESSAGE(launched["isError"] == false, GetText(launched));
+		// The scan was reported as it went: one token, progress that only grows, below 100 (the scan is the first part).
+		double previous = -1.0;
+		size_t notifications = 0;
+		for (const std::string& line : client.GetOutput())
+		{
+			const std::optional<nlohmann::json> message = JsonRpc::Parse(line);
+			if (!message || message->value("method", "") != "notifications/progress")
+				continue;
+			notifications++;
+			const nlohmann::json& params = (*message)["params"];
+			CHECK(params["progressToken"] == "launch-1");
+			CHECK(params["total"] == 100);
+			CHECK(params["progress"].get<double>() > previous);
+			CHECK(params["message"].get<std::string>().find("Scanning the project's assets") != std::string::npos);
+			previous = params["progress"].get<double>();
+		}
+		CHECK(notifications >= 2);
+		CHECK(client.CallTool("editor_quit")["isError"] == false);
 	}
 
 	TEST_CASE("Launching without a project starts an editor without one")
@@ -476,10 +459,10 @@ TEST_SUITE("CLI.Mcp")
 		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "1");
 		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
 
-		McpServerSpecification specification = MakeSpecification(sessionDirectory);
+		McpServerSpecification specification = Tests::MakeMcpSpecification(sessionDirectory);
 		specification.EditorPath = FileSystem::ToUTF8(Tests::GetTestExecutablePath());
 		specification.LaunchTimeout = std::chrono::milliseconds(20000);
-		McpTestClient client(specification);
+		Tests::McpTestClient client(specification);
 		client.Initialize();
 
 		nlohmann::json launched = client.CallTool("strata_launch_editor", nlohmann::json { { "noGpu", true } });
@@ -519,10 +502,10 @@ TEST_SUITE("CLI.Mcp")
 		Tests::ScopedEnvironmentVariable fakeEditor("STRATA_TEST_FAKE_EDITOR", "silent");
 		Tests::ScopedEnvironmentVariable sessionOverride("STRATA_SESSION_DIR", FileSystem::ToUTF8(sessionDirectory));
 
-		McpServerSpecification specification = MakeSpecification(sessionDirectory);
+		McpServerSpecification specification = Tests::MakeMcpSpecification(sessionDirectory);
 		specification.EditorPath = FileSystem::ToUTF8(Tests::GetTestExecutablePath());
 		specification.LaunchTimeout = std::chrono::milliseconds(1000);
-		McpTestClient client(specification);
+		Tests::McpTestClient client(specification);
 		client.Initialize();
 
 		nlohmann::json launched = client.CallTool("strata_launch_editor", nlohmann::json { { "noGpu", true } });
@@ -535,14 +518,14 @@ TEST_SUITE("CLI.Mcp")
 		const std::filesystem::path sessionDirectory = Tests::CreateTemporaryDirectory("McpPinned");
 		const std::filesystem::path firstProject = Tests::CreateTemporaryDirectory("McpPinnedFirst");
 		const std::filesystem::path secondProject = Tests::CreateTemporaryDirectory("McpPinnedSecond");
-		McpTestClient client(MakeSpecification(sessionDirectory));
+		Tests::McpTestClient client(Tests::MakeMcpSpecification(sessionDirectory));
 		client.Initialize();
 
 		auto firstOwner = CreateScope<Tests::LiveProcess>();
 		auto firstEditor = CreateScope<Tests::PumpedRpcServer>();
 		REQUIRE(Tests::StartFakeEditor(*firstEditor));
 		REQUIRE(Tests::WriteFakeSessionFile(sessionDirectory, Tests::MakeFakeSession(firstOwner->GetProcessId(), firstEditor->GetPort(), "2026-01-01T00:00:00Z", FileSystem::ToUTF8(firstProject))));
-		CHECK(client.ListToolNames().size() == c_GenericTools.size() + 5);
+		CHECK(client.ListToolNames().size() == Tests::c_GenericMcpTools.size() + c_FakeCoreTools);
 
 		// The first editor exits; an editor for another project is running.
 		firstEditor.reset();
@@ -554,7 +537,7 @@ TEST_SUITE("CLI.Mcp")
 
 		client.GetServer().Tick();
 		CHECK(client.CountNotifications("notifications/tools/list_changed") == 1);
-		CHECK(client.ListToolNames() == c_GenericTools);
+		CHECK(client.ListToolNames() == Tests::c_GenericMcpTools);
 
 		nlohmann::json status = client.CallTool("strata_status");
 		CHECK(status["structuredContent"]["connected"] == false);
@@ -575,12 +558,12 @@ TEST_SUITE("CLI.Mcp")
 			R"({"jsonrpc":"2.0","id":2,"method":"tools/list"})" "\n");
 
 		std::vector<std::string> output;
-		McpServer server(MakeSpecification(Tests::CreateTemporaryDirectory("McpStream")), [&output](const std::string& line) { output.push_back(line); });
+		McpServer server(Tests::MakeMcpSpecification(Tests::CreateTemporaryDirectory("McpStream")), [&output](const std::string& line) { output.push_back(line); });
 		RunMcpServer(server, input, std::chrono::milliseconds(20));
 
 		REQUIRE(output.size() == 2);
 		CHECK(JsonRpc::Parse(output[0]).value()["result"]["protocolVersion"] == "2025-03-26");
-		CHECK(JsonRpc::Parse(output[1]).value()["result"]["tools"].size() == c_GenericTools.size());
+		CHECK(JsonRpc::Parse(output[1]).value()["result"]["tools"].size() == Tests::c_GenericMcpTools.size());
 		CHECK(server.IsInitialized());
 	}
 
@@ -608,13 +591,72 @@ TEST_SUITE("CLI.Mcp")
 	}
 }
 
+TEST_SUITE("CLI.McpToolsets")
+{
+	TEST_CASE("Commands map to toolsets by exact name, then by group")
+	{
+		CHECK(McpToolsets::GetCoreCommands().size() == 27);
+		CHECK(McpToolsets::IsCore("entity.create"));
+		CHECK_FALSE(McpToolsets::IsCore("entity.rename"));
+		CHECK(McpToolsets::GetToolsets("entity.create") == std::vector<std::string> { "core", "scene" });
+		CHECK(McpToolsets::GetToolsets("entity.rename") == std::vector<std::string> { "scene" });
+		CHECK(McpToolsets::GetToolsets("asset.stats") == std::vector<std::string> { "streaming" });
+		CHECK(McpToolsets::GetToolsets("asset.info") == std::vector<std::string> { "core", "assets" });
+		CHECK(McpToolsets::GetToolsets("editor.perf") == std::vector<std::string> { "perf" });
+		CHECK(McpToolsets::GetToolsets("editor.status") == std::vector<std::string> { "core", "editor" });
+		CHECK(McpToolsets::GetToolsets("input.click") == std::vector<std::string> { "play" });
+		CHECK(McpToolsets::GetToolsets("physics.stats") == std::vector<std::string> { "world" });
+		// Groups the table does not know get a toolset named after them.
+		CHECK(McpToolsets::GetToolsets("weather.set") == std::vector<std::string> { "weather" });
+		CHECK(McpToolsets::GetToolsets("nodot") == std::vector<std::string> { "nodot" });
+	}
+
+	TEST_CASE("Compact definitions keep the first sentence and the schema's structure")
+	{
+		bool cut = false;
+		CHECK(McpToolsets::FirstSentence("Creates an entity. Returns its ID.", 160, &cut) == "Creates an entity.");
+		CHECK(cut);
+		CHECK(McpToolsets::FirstSentence("Lists assets, e.g. textures. More.", 160, &cut) == "Lists assets, e.g. textures.");
+		CHECK(McpToolsets::FirstSentence("One sentence only", 160, &cut) == "One sentence only");
+		CHECK_FALSE(cut);
+		CHECK(McpToolsets::FirstSentence("A rather long sentence", 12, &cut) == "A rather\xE2\x80\xA6");
+		CHECK(cut);
+		CHECK(McpToolsets::FirstSentence("Unbroken", 4, &cut) == "Unb\xE2\x80\xA6");
+		// Never inside a UTF-8 sequence.
+		CHECK(McpToolsets::FirstSentence("\xC3\xA9\xC3\xA9\xC3\xA9", 4, &cut) == "\xC3\xA9\xE2\x80\xA6");
+		CHECK(McpToolsets::FirstSentence("Anything", 0, &cut).empty());
+
+		const std::string longDescription = "Moves the entities of the selection by the given offset in world space, keeping their children where they are "
+			"relative to them and recording one undo step. Also more.";
+		const nlohmann::json schema = {
+			{ "type", "object" },
+			{ "properties", {
+				{ "mode", { { "type", "string" }, { "enum", { "a", "b" } }, { "description", "How to move. The rest is detail." } } },
+				{ "box", { { "type", "object" }, { "properties", { { "min", { { "type", "array" }, { "description", "Lower corner. Detail." } } } } } } },
+				{ "names", { { "type", "array" }, { "items", { { "type", "string" }, { "description", "A name. Detail." } } } } } } },
+			{ "required", { "mode" } } };
+		const nlohmann::json tool = McpToolsets::MakeCompactToolDefinition("entity_move", longDescription, schema);
+		CHECK(tool["name"] == "entity_move");
+		const std::string description = tool["description"].get<std::string>();
+		CHECK(description.ends_with(" (details: strata_describe)"));
+		CHECK(description.size() <= 160 + 2 + std::string_view(" (details: strata_describe)").size());
+		CHECK(tool["inputSchema"]["required"] == nlohmann::json::array({ "mode" }));
+		CHECK(tool["inputSchema"]["properties"]["mode"]["enum"] == nlohmann::json::array({ "a", "b" }));
+		CHECK(tool["inputSchema"]["properties"]["mode"]["description"] == "How to move.");
+		CHECK(tool["inputSchema"]["properties"]["box"]["properties"]["min"]["description"] == "Lower corner.");
+		CHECK(tool["inputSchema"]["properties"]["names"]["items"]["description"] == "A name.");
+		// Short descriptions stay as they are.
+		CHECK(McpToolsets::MakeCompactToolDefinition("x", "Short.", schema)["description"] == "Short.");
+	}
+}
+
 TEST_SUITE("CLI.McpPresence")
 {
 	TEST_CASE("The MCP client's name reaches the editor in the handshake")
 	{
 		Tests::PumpedRpcServer editor;
 		REQUIRE(Tests::StartFakeEditor(editor));
-		McpTestClient client(MakeSpecification(Tests::CreateTemporaryDirectory("McpPresence"), editor.GetPort()));
+		Tests::McpTestClient client(Tests::MakeMcpSpecification(Tests::CreateTemporaryDirectory("McpPresence"), editor.GetPort()));
 		client.Initialize(); // clientInfo.name: StrataTests
 		client.ListToolNames();
 		REQUIRE(Tests::WaitUntil([&]() { return editor.GetServer().GetClients().size() == 1; }));

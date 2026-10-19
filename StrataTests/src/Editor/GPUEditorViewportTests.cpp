@@ -1,13 +1,18 @@
 #include <doctest/doctest.h>
 
 #include "Editor/CommandTestUtils.h"
+#include "Editor/CommandUtils.h"
 #include "Editor/EditorCommandRunner.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/ProjectThumbnail.h"
+#include "Editor/ViewportRenderer.h"
 #include "FeatureTest/FeatureTestUtils.h"
+#include "Panels/GameViewPanel.h"
 #include "Renderer/GPUTestUtils.h"
+#include "Renderer/MeshTestUtils.h"
+#include "Renderer/SceneRendererTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetManager.h>
@@ -19,6 +24,7 @@
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/RenderScene.h>
+#include <Strata/Renderer/Renderer.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Components.h>
 
@@ -148,10 +154,9 @@ namespace
 
 		nlohmann::json Run(std::string_view name, const nlohmann::json& parameters = nlohmann::json::object())
 		{
-			EditorCommandResult result = Commands.Execute(Context, name, parameters);
+			const EditorCommandResult result = Tests::CompleteCommand(Context, Commands.Execute(Context, name, parameters));
 			INFO(name, ": ", result.Error);
 			REQUIRE(result.Success);
-			REQUIRE_FALSE(result.IsPending());
 			return result.Value;
 		}
 
@@ -286,6 +291,65 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("A capture reports what its frame drew, with the GPU's time per stage, and editor.perf the viewport's frame")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu; // The renderer's frames resolve the GPU's times
+		harness.AddScene();
+
+		nlohmann::json result;
+		harness.CaptureLoaded({ { "width", 64 }, { "height", 48 } }, &result);
+		REQUIRE(result.contains("renderStats"));
+		const nlohmann::json& stats = result["renderStats"];
+		INFO(stats.dump(1));
+		for (const char* key : { "gpuDriven", "drawCommands", "draws", "opaqueDraws", "shadowDraws", "instances", "shadowCasters", "triangles", "visibleProxies",
+			"occludedProxies", "occludedCasters", "cachedCascades", "culledProxies", "instancesPerLod", "lights", "droppedLights", "materials", "pendingAssets", "extractMs", "sortMs", "proxyUpdates",
+			"instanceBytesUploaded", "deferredInstanceBytes", "geometryPool", "gpuMs", "gpuStatsFrame" })
+		{
+			CAPTURE(key);
+			CHECK(stats.contains(key));
+		}
+		// The cube, drawn in the prepass and the forward pass, and into the sun's shadow cascades.
+		CHECK(stats["instances"] == 1);
+		CHECK(stats["opaqueDraws"] == 1);
+		CHECK(stats["drawCommands"].get<uint32_t>() >= 2);
+		CHECK(stats["triangles"] == 12);
+		CHECK(stats["lights"] == 1);
+		CHECK(stats["instancesPerLod"].size() == SceneRendererStats::c_LODStatCount);
+		// The meshes' geometry lives in the renderer's pool.
+		REQUIRE(stats["geometryPool"].is_object());
+		CHECK(stats["geometryPool"]["usedMB"].get<double>() > 0.0);
+		CHECK(stats["geometryPool"]["capacityMB"].get<double>() >= stats["geometryPool"]["usedMB"].get<double>());
+		CHECK(stats["geometryPool"]["allocations"].get<uint32_t>() >= 1);
+		if (Renderer::GetGPUProfiler().IsEnabled())
+		{
+			// The captured frame's own GPU time.
+			CHECK(stats["gpuStatsFrame"].is_number_unsigned());
+			const nlohmann::json& gpuMs = stats["gpuMs"];
+			REQUIRE(gpuMs.contains("GPU.Opaque"));
+			CHECK(gpuMs["GPU.Opaque"].get<float>() > 0.0f);
+			CHECK(gpuMs["GPU.Prepass"].get<float>() > 0.0f);
+			CHECK(gpuMs.contains("GPU.Overlays")); // The editor's overlays and the copy
+		}
+
+		// editor.perf: the viewport panel's frame, once it rendered one.
+		CHECK(harness.Run("editor.perf")["renderStats"].is_null());
+		ViewportRenderer* viewport = harness.Context.GetViewport().GetRenderer();
+		REQUIRE(viewport);
+		const std::optional<ViewportView> view = ResolveViewportView(harness.Context, ViewportCameraSource::Editor, 4.0f / 3.0f);
+		REQUIRE(view);
+		REQUIRE(viewport->Render(harness.Context, glm::uvec2(64, 48), *view, harness.Context.GetViewport().GetSettings(), true));
+		// The GPU-driven path's counts are known once the GPU ran the frame's culling.
+		viewport->GetSceneRenderer().ResolveGPUStats(true);
+		const nlohmann::json perf = harness.Run("editor.perf");
+		REQUIRE(perf["renderStats"].is_object());
+		CHECK(perf["renderStats"]["instances"] == 1);
+		CHECK(perf.contains("gpu"));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A capture waits until its text is complete")
 	{
 		Tests::GPUContext gpu;
@@ -306,6 +370,67 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(frames > 2); // It rendered again while glyphs were missing
 		const DecodedImage complete = harness.Capture({ { "width", 320 }, { "height", 96 } }, &result);
 		CHECK(result["pendingTextGlyphs"] == 0);
+		const std::optional<std::vector<uint8_t>> png = Base64::Decode(first.Value["Image"]["Data"].get<std::string>());
+		REQUIRE(png);
+		CHECK(harness.CountDifferences(DecodePNG(*png), complete) == 0);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture waits until mesh renderers new to the scene reached the GPU")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.DeviceFrames = &gpu; // Each render is a frame of its own, with a new upload budget
+		harness.Run("project.create", { { "directory", FileSystem::ToUTF8(Tests::CreateTemporaryDirectory("ViewportCaptureBacklog") / "Game") }, { "name", "Game" } });
+		harness.Run("entity.create", { { "name", "PostProcess" }, { "components", { { "PostProcess", { { "Tonemapper", "None" }, { "AutoExposure", false },
+			{ "Vignette", 0.0 }, { "Bloom", false }, { "AmbientOcclusion", false }, { "AntiAliasing", false } } } } } });
+		harness.Run("entity.create", { { "name", "Sun" }, { "components", { { "DirectionalLight", { { "Intensity", 3.0 } } } } } });
+		// A scene that just gained a cube in front of the camera and, behind it, more mesh renderers than its GPU copy takes in
+		// two frames, which it takes first (the newest entities are the first the render scene meets).
+		harness.Run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } });
+		constexpr uint32_t c_Parts = 4096;
+		AssetMetadata metadata;
+		metadata.Type = AssetType::Mesh;
+		metadata.Name = "Parts";
+		const AssetHandle parts = harness.Context.GetAssetManager()->AddMemoryAsset(Tests::CreateCubeOfParts(1.0f, c_Parts, BuiltinAssets::DefaultMaterial), metadata);
+		Tests::AddUploadBacklog(*harness.Context.GetActiveScene(), parts, c_Parts, glm::vec3(0.0f, 0.0f, 40.0f));
+		harness.Run("camera.set", { { "position", { 0, 0, 4 } }, { "target", { 0, 0, 0 } } });
+
+		nlohmann::json result;
+		const DecodedImage image = harness.Capture({ { "width", 64 }, { "height", 48 } }, &result);
+		CHECK(result["renderStats"]["deferredInstanceBytes"] == 0);
+		CHECK(result["waitedFrames"].get<uint32_t>() >= 2);
+		// The lit cube fills the center.
+		CHECK(image.At(32, 24).r > 100);
+		CHECK(image.At(1, 1).r < 40);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("A capture waits until its game UI's text is complete")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		harness.Run("viewport.setSettings", { { "gameUI", true } });
+		// A UI label with more distinct glyphs than a render may rasterize (TextRenderer::c_FrameRasterBudget), new to the
+		// capture renderer, which the UI pass shares with the text.
+		const nlohmann::json canvas = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "ui.create", { { "type", "canvas" } });
+		const nlohmann::json label = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "ui.create",
+			{ { "type", "text" }, { "parent", canvas["entity"] }, { "size", { 1800, 400 } } });
+		harness.Run("component.set", { { "entity", label["entity"] }, { "component", "UIText" }, { "values",
+			{ { "Text", "ABCDEFGHIJKLMNOPQRSTUVWXYZ abcdefghijklmnopqrstuvwxyz 0123456789" }, { "FontSize", 40.0 } } } });
+
+		int frames = 0;
+		const EditorCommandResult first = harness.RunFrames("viewport.capture", { { "width", 320 }, { "height", 96 } }, &frames);
+		REQUIRE(first.Success);
+		CHECK(first.Value["ui"]["canvases"] == 1);
+		CHECK(first.Value["ui"]["pendingGlyphs"] == 0);
+		CHECK(first.Value["waitedFrames"].get<int>() > 0); // It rendered again while glyphs were missing
+		nlohmann::json result;
+		const DecodedImage complete = harness.Capture({ { "width", 320 }, { "height", 96 } }, &result);
+		CHECK(result["waitedFrames"] == 0);
 		const std::optional<std::vector<uint8_t>> png = Base64::Decode(first.Value["Image"]["Data"].get<std::string>());
 		REQUIRE(png);
 		CHECK(harness.CountDifferences(DecodePNG(*png), complete) == 0);
@@ -803,6 +928,163 @@ TEST_SUITE("GPU.Editor.Viewport")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("While the game plays, the Scene view's editor camera picks the running scene's entities")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		EditorContext& context = harness.Context;
+		EditorViewport& viewport = context.GetViewport();
+		ViewportRenderer* renderer = viewport.GetRenderer();
+		REQUIRE(renderer);
+		const glm::uvec2 size(64, 64);
+		const UUID cube = context.GetActiveScene()->FindEntityByName("Cube").GetUUID();
+		REQUIRE(context.Play());
+		const Ref<Scene> running = context.GetActiveScene();
+		REQUIRE(running != context.GetEditScene());
+
+		// The Scene view asks for the editor camera by name: its view of the running scene, with the editor's overlays.
+		const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Editor, 1.0f);
+		REQUIRE(view);
+		CHECK_FALSE(view->FromScene);
+		CHECK(view->EditorView);
+		REQUIRE(renderer->Render(context, size, *view, viewport.GetSettings(), view->EditorOverlays));
+		CHECK(renderer->GetRenderedScene().lock() == running);
+		REQUIRE(viewport.RequestPick(glm::uvec2(32, 32), size, ViewportPickMode::Replace));
+		for (int frame = 0; frame < 5000 && viewport.IsPickPending(); frame++)
+		{
+			viewport.UpdatePicking(context);
+			std::this_thread::sleep_for(std::chrono::milliseconds(1));
+		}
+		CHECK_FALSE(viewport.IsPickPending());
+		CHECK(context.GetSelection() == std::vector<UUID> { cube });
+		CHECK(context.GetPrimarySelection().GetScene() == running.get());
+		context.Stop();
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The Game view renders through a renderer of its own at its resolution, and captures of the scene camera take it")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		harness.AddScene();
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", { { "Primary", true } } },
+			{ "Transform", { { "Translation", { 0, 0, 5 } } } } } } });
+		EditorContext& context = harness.Context;
+		EditorViewport& viewport = context.GetViewport();
+		CHECK_FALSE(viewport.HasGameRenderer());
+
+		// A fixed 1280 x 720 Game view renders exactly that, whatever the panel's size.
+		harness.Run("viewport.setSettings", { { "gameView", { { "mode", "1280x720" } } } });
+		const GameViewFrame frame = ComputeGameViewFrame(viewport.GetSettings().GameView, glm::vec2(500.0f, 400.0f), glm::vec2(1.0f), std::nullopt);
+		REQUIRE(frame.RenderSize == glm::uvec2(1280, 720));
+		const std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Scene, 1280.0f / 720.0f);
+		REQUIRE(view);
+		ViewportRenderer* game = viewport.GetGameRenderer();
+		REQUIRE(game);
+		CHECK(game != viewport.GetRenderer());
+		CHECK(game != viewport.GetCaptureRenderer());
+		REQUIRE(game->Render(context, frame.RenderSize, *view, viewport.GetSettings(), false));
+		CHECK(game->GetSize() == glm::uvec2(1280, 720));
+		REQUIRE(game->GetOutputTexture());
+		CHECK(game->GetOutputTexture()->getDesc().width == 1280);
+		CHECK(game->GetOutputTexture()->getDesc().height == 720);
+		viewport.SetGameViewSize(frame.RenderSize);
+
+		// editor.perf reports the Game view's frame beside the viewport's, as viewport.capture and the viewport describe theirs.
+		game->GetSceneRenderer().ResolveGPUStats(true); // The GPU-driven path's counts are known once the GPU culled the frame
+		nlohmann::json perf = harness.Run("editor.perf");
+		CHECK(perf["renderStats"].is_null()); // The viewport panel rendered nothing
+		REQUIRE(perf["gameRenderStats"].is_object());
+		CHECK(perf["gameRenderStats"] == CommandUtils::DescribeRenderStats(game->GetStats(), game->GetGPUStats()));
+		CHECK(perf["gameRenderStats"].contains("gpuMs"));
+
+		// Captures of the scene's camera take the Game view's resolution; the editor camera keeps the viewport's.
+		nlohmann::json result;
+		DecodedImage image = harness.Capture({ { "camera", "scene" }, { "waitForAssets", false } }, &result);
+		CHECK(image.Width == 1280);
+		CHECK(image.Height == 720);
+		harness.Run("viewport.setSettings", { { "gameView", { { "mode", "4:3" } } } });
+		viewport.SetGameViewSize(glm::uvec2(400, 300));
+		image = harness.Capture({ { "camera", "scene" }, { "waitForAssets", false } });
+		CHECK(image.Width == 400);
+		CHECK(image.Height == 300);
+		image = harness.Capture({ { "camera", "scene" }, { "width", 200 }, { "waitForAssets", false } });
+		CHECK(image.Height == 150);
+
+		// A hidden or closed Game view keeps no render targets: the panel frees them when it is hidden behind another tab or
+		// collapsed (OnHidden) and when it is closed (OnDetach), and stops asking for its size.
+		REQUIRE(game->GetSize() == glm::uvec2(1280, 720));
+		GameViewPanel panel;
+		EditorPanelContext panelContext { context, harness.Commands, harness.Runner };
+		panel.OnHidden(panelContext);
+		CHECK(game->GetSize() == glm::uvec2(0));
+		CHECK(viewport.GetGameViewSize() == glm::uvec2(0));
+		CHECK(harness.Run("editor.perf")["gameRenderStats"].is_null());
+		REQUIRE(game->Render(context, frame.RenderSize, *view, viewport.GetSettings(), false));
+		REQUIRE(game->GetSize() == glm::uvec2(1280, 720));
+		panel.OnDetach(panelContext);
+		CHECK(game->GetSize() == glm::uvec2(0));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The Game view shows a scene without a camera that has UI as the game does: its UI over black")
+	{
+		Tests::GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		ViewportGPUHarness harness;
+		EditorContext& context = harness.Context;
+		EditorViewport& viewport = context.GetViewport();
+		ViewportRenderer* game = viewport.GetGameRenderer();
+		REQUIRE(game);
+		const glm::uvec2 size(320, 180);
+		const float aspectRatio = static_cast<float>(size.x) / static_cast<float>(size.y);
+
+		// Neither a camera nor UI: nothing to show (the panel shows the missing-camera message, like the game).
+		std::string error;
+		CHECK_FALSE(ResolveGameView(context, *game, aspectRatio, &error));
+		CHECK(error.find("Primary") != std::string::npos);
+
+		// A menu without a camera: a red image over the canvas's left half.
+		const nlohmann::json canvas = harness.Run("ui.create", { { "type", "canvas" } });
+		const nlohmann::json image = harness.Run("ui.create", { { "type", "image" }, { "parent", canvas["entity"] } });
+		harness.Run("component.set", { { "entity", image["entity"] }, { "component", "UIRect" }, { "values", { { "AnchorMin", { 0, 0 } },
+			{ "AnchorMax", { 0.5, 1 } }, { "Pivot", { 0, 0 } }, { "Position", { 0, 0 } }, { "Size", { 0, 0 } } } } });
+		harness.Run("component.set", { { "entity", image["entity"] }, { "component", "UIImage" }, { "values", { { "Color", { 1, 0, 0, 1 } } } } });
+		const std::optional<ViewportView> view = ResolveGameView(context, *game, aspectRatio);
+		REQUIRE(view);
+		CHECK(view->OverlayOnly);
+		REQUIRE(game->Render(context, size, *view, viewport.GetSettings(), false));
+		ReadbackImage readback;
+		REQUIRE(Renderer::ReadTexture(game->GetOutputTexture(), readback));
+		REQUIRE(readback.BytesPerPixel == 4);
+		REQUIRE(readback.Width == size.x);
+		const auto pixel = [&readback](uint32_t x, uint32_t y)
+		{
+			const uint8_t* bytes = readback.Pixels.data() + (static_cast<size_t>(y) * readback.Width + x) * 4;
+			return glm::ivec3(bytes[0], bytes[1], bytes[2]);
+		};
+		const glm::ivec3 left = pixel(size.x / 4, size.y / 2);
+		const glm::ivec3 right = pixel(size.x * 3 / 4, size.y / 2);
+		INFO("left ", left.r, " ", left.g, " ", left.b, ", right ", right.r, " ", right.g, " ", right.b);
+		CHECK(left.r > 200);
+		CHECK(left.g < 30);
+		CHECK(left.b < 30);
+		CHECK(right.r < 10);
+		CHECK(right.g < 10);
+		CHECK(right.b < 10);
+
+		// With a camera the scene shows through it again.
+		harness.Run("entity.create", { { "name", "Camera" }, { "components", { { "Camera", { { "Primary", true } } } } } });
+		const std::optional<ViewportView> camera = ResolveGameView(context, *game, aspectRatio);
+		REQUIRE(camera);
+		CHECK_FALSE(camera->OverlayOnly);
+		CHECK(camera->FromScene);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("A new project made from the basic3d template captures lit")
 	{
 		Tests::GPUContext gpu;
@@ -910,17 +1192,20 @@ TEST_SUITE("GPU.Editor.Viewport")
 		ViewportGPUHarness harness;
 		Tests::RunCommandToCompletion(harness.Context, harness.Commands, "project.open", { { "path", FileSystem::ToUTF8(tetris) } });
 
+		// The HUD is a UI canvas: its stats panel with score, level and lines, the controls and the (hidden) message panel.
 		nlohmann::json result;
 		harness.Capture({ { "width", 320 }, { "height", 180 }, { "camera", "editor" } }, &result);
-		CHECK(result["screenSpaceTexts"] == 0);
-		CHECK(result["hiddenScreenSpaceTexts"].get<int>() >= 4); // Score, level, lines and controls (the message is empty)
+		CHECK(result["ui"]["canvases"] == 0);
+		CHECK(result["ui"]["hiddenCanvases"] == 1);
 		harness.Capture({ { "width", 320 }, { "height", 180 }, { "camera", "scene" } }, &result);
-		CHECK(result["screenSpaceTexts"].get<int>() >= 4);
-		CHECK(result["hiddenScreenSpaceTexts"] == 0);
+		CHECK(result["ui"]["canvases"] == 1);
+		CHECK(result["ui"]["elements"].get<int>() >= 6);
+		CHECK(result["ui"]["hiddenCanvases"] == 0);
 		// gameUI shows it in editor views too.
 		harness.Run("viewport.setSettings", { { "gameUI", true } });
 		harness.Capture({ { "width", 320 }, { "height", 180 }, { "camera", "editor" } }, &result);
-		CHECK(result["screenSpaceTexts"].get<int>() >= 4);
+		CHECK(result["ui"]["canvases"] == 1);
+		CHECK(result["screenSpaceTexts"] == 0); // Nothing of the HUD is a screen-space Text component any more
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

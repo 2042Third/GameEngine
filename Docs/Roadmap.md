@@ -359,6 +359,32 @@ interleaved A/Bs against wave 2's build; the quiet campaign that decided the bud
 
 Open items and deferrals later waves own:
 
+- GPU-driven rendering (wave 4's `gpu-driven-rendering`): skinning still runs per draw (compute skinning once per
+  frame, measured by a GPU-time metric, is wave 5's); the shadow cascade cache follows the GPU-driven path only (the
+  CPU path redraws every layer each frame); render scenes are copied whole at play start, not shared by copy-on-write
+  pages; on tile-based drivers a timestamp inside a render pass may land at the pass's end, so `GPU.UI` is checked
+  for presence, not for its time.
+- Tests: `Editor.ImportSettings`' close check (2.0 s) measured 2.012 s once on CI's Windows Release runner;
+  `Editor.UI`'s "No uploads in the last 120 frames" fails when GPU suites ran before it in the same process (CTest's
+  shards never combine them).
+- World I/O (wave 4's `world-io`): pack version 3 (small entries bundled, a zstd dictionary, shared blocks decoded
+  once; the 10.7x inflation of small assets in `Perf.Asset.Pack30kMaterialsRatio`), cold reads without the system
+  cache with 16 outstanding reads (`PerfGPU.Pack.ColdStreamStressWorld`) and a background-thread cap while loads run
+  are wave 5's. Additive loads have no prototype form yet (`SceneLoadOptions::PrepareAs`,
+  `SceneLoadRequest::TakePrototype`): cells and sub-scenes load through `SceneLoader` or `SceneDocumentReader` with
+  `EntityPrototypeBuilder`. Prefab and asset-editor saves stay synchronous.
+- Tests that start the CLI's fake editor set its environment variables in the test process (`CLI.Discovery`,
+  `CLI.Application`, `CLI.Mcp`), against the testing rule: `ProcessSpecification` has no environment of its own, and
+  the launcher finds the session of the process it started by its ID, so a wrapper process cannot set it.
+- Play-testing (wave 4's `authoring-and-playtest`): an `input.sequence` step whose command event fails a check only the
+  command can make (a key name, `input.click`'s hit test) releases its holds and resumes the game, but the step's
+  earlier events have already reached the game's input (checking every value up front needs a dry run of each
+  `input.*` command); the Game view at a fixed resolution reports the editor's UI scale as the game's content scale.
+- Flaky tests seen once, not reproduced since: Windows `CrashGuard`'s "repeated faults on other threads" and the
+  Mac's `GPU.AssetResidency` "Arrivals that need room...".
+- Game UI (wave 4's `game-ui`): world-space canvases draw unlit, after post-processing, and the game's hit tests on
+  them ignore scene geometry in front (the editor's picks check meshes); UI action bindings use the engine's input
+  names (`Key/KPEnter`, `Gamepad/A`) until an input-actions asset names actions (wave 5).
 - Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
   `GameRuntime`, the editor and many tests use the script engine directly; physics, audio and animation can be left
   out (`STRATA_WITH_PHYSICS`, `STRATA_WITH_AUDIO`, `STRATA_WITH_ANIMATION`, wave 4's `engine-modules`).
@@ -366,8 +392,7 @@ Open items and deferrals later waves own:
   that is reimported while evicted keeps the old data until the mesh loads again (the source revisions render-scene uses
   would tell).
 - Textures: HDR textures stay RGBA16F until a BC6H encoder exists.
-- `GetResidencyInfo` and `GetResidencySamples` walk every registered asset (`GetStats` keeps counts instead), which a world of many
-  registered assets will feel (`world-partition`). Two caches keep assets between frames: `SceneRenderer`'s environment
+- Two caches keep assets between frames: `SceneRenderer`'s environment
   cache (the sky's map) and `TextRenderer`'s glyph atlases (their fonts). Streaming the stress world from pack version 2
   takes 1.03-1.09 times version 1's time (zstd blocks and their checksums; `PerfGPU.Pack` reads whole textures, without
   mip streaming), close to the 1.1 acceptance limit, which needs a confirmation in about one run in five.
@@ -375,20 +400,17 @@ Open items and deferrals later waves own:
   one mip level's filtering, meshoptimizer simplifying one primitive); they never hold a frame, but delay when a
   cancelled import frees its thread. Moving or deleting a file that another asset's import reads as a dependency does
   not cancel that import (the file watcher's change event replaces it). A project whose large scenes have no reference
-  records yet spends seconds of its scan in the reference search (4 s for `PerfGPU.Editor`'s 1,000,000-entity scene).
-  While an import is applied, one frame still writes the asset's `.meta` file and the asset index on the main thread
-  (about 2 ms).
+  records yet spends seconds of its first scan in the reference search: it streams the document, so it holds only the
+  text and the references, but on one thread (about 3 s on the Mac for world-io's realistic 1,000,000-entity world).
 - Scene loads (wave 3): a load's progress weighs a partly loaded texture by its whole stored size, so the bar jumps when
   a large texture's tail arrives; `AssetManagerBase::EstimateFirstLoadBytes` counts a partial load as up to 64 KiB, more
   than a small tail, so a very tight texture budget can leave textures to the view that would have fitted; a sub-scene
   holds its prepared scene and its compiled prototype together until the prototype is made; a `SubScene` a script keeps
   in a member is reset by hot reload (only fields survive, so scripts keep its ID in a field).
 - Prefabs: applying, reverting and propagating compare and rebuild instances through their JSON form
-  (`PrefabInstances`), not the compiled prototypes scene loads use; per-property overrides and a prefab edit mode are
-  later work.
+  (`PrefabInstances`), not the compiled prototypes scene loads use; a prefab edit mode is later work.
 - Animation and characters: root motion through a character controller is walked at the frame's first fixed step, and on
-  a tilted entity its vertical part becomes the controller's velocity (gravity and the ground then decide the height);
-  culling and drawing skinned proxies on the GPU belongs to `gpu-driven-rendering`.
+  a tilted entity its vertical part becomes the controller's velocity (gravity and the ground then decide the height).
 - Mip streaming: its limit "the longest frame at most 2 ms over the whole-texture baseline's" is gated as a ratio
   (`Mips.MaxFrameRatio`, budgets cannot be negative) and was measured on a shared machine only; the transfer queue stays
   off by default (it loaded the stress game no faster and held more memory).
@@ -537,6 +559,22 @@ Open items and deferrals later waves own:
     `SubmitMany` 0.41 us, `ParallelForOverhead` 95.9 us and `WakeLatency` 19.6 us), and its throughput targets are
     stated in the reference machine's numbers: a clean Debug build 30% below 3,099 CPU-seconds, Debug `ctest -j 8` in
     at most half of 658 s, and at most 28 threads in an editor.
+  - Wave 4's `game-ui`: the `Perf.GameUI.*` and `PerfGPU.GameUI.*` metrics are provisional. On the Mac,
+    `PerfGPU.Streaming.Mips.MaxUploadStageMs` measured 1.98-2.28 ms against the step-0 base's 1.59-1.66 ms, with
+    engine-modules and game-ui merged and no UI in its scene, on a machine other streams were building on: to be
+    measured again quietly.
+  - Wave 4's `authoring-and-playtest`: `Perf.Editor.PrefabApply10kInstances` (Mac median 701.7 ms) and the prefab drag
+    metrics (`DragInPrefabInstance5kMedian`, `DragPrefabInstanceRoot5kMedian`, `Drag100PrefabInstancesMedian`) are
+    provisional, and the idle editor frame's criterion (`PerfGPU.Editor`) cannot be shown on the Mac, where frames wait
+    for the display (8.3 ms).
+  - Wave 4's `world-io`: its metrics are provisional (`Perf.Editor.ImportFolder24x4kPeakPrivate` measured 571-574 MB
+    on the Mac against a 1,280 MB target), and `PerfGPU.Editor.SceneOpenOver1MMaxFrame` measured 1.08 times the step-0
+    base (8.51-9.21 ms over 10 pairs), on a Mac where that frame mostly waits for the display.
+  - Wave 4's `gpu-driven-rendering`: its metrics are provisional, among them `PlayStartRender1MCubes` (target 5 ms;
+    the whole copy measured 22-27 ms on the Mac) and `Render10kUniqueMeshes` (MoltenVK turns each indirect draw into
+    a Metal draw); `Render10kMaterials` measured 1.15 times the step-0 base on the Mac (0.844 against 0.737 ms, 7
+    pairs), with the GPU busy 2.3-2.5 ms a frame; the `drawIndirectCount`, min/max sampler and device-minimum
+    `maxDrawIndirectCount` paths are chosen by device features but run only on drivers that have them.
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
 

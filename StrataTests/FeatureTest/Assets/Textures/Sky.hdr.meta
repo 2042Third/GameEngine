@@ -3,6 +3,7 @@
 	"ImportSettings": {
 		"Compression": "Auto",
 		"Filter": "Linear",
+		"FlipGreen": false,
 		"FlipVertically": false,
 		"GenerateMips": true,
 		"MaxSize": 0,

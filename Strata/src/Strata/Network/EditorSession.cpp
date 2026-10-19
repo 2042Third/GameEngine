@@ -194,6 +194,17 @@ namespace Strata
 			return false;
 		}
 
+		// The pointer only speeds up finding the editor by its project (clients also match the ProjectPath of the
+		// per-user sessions), so a project that cannot hold it (e.g. read-only) does not fail the session. It is written
+		// first: a client that finds the session (StrataCLI's launch waits for it) then finds the pointer as well.
+		if (!info.ProjectPath.empty())
+		{
+			const std::filesystem::path pointerFile = GetProjectSessionFilePath(FileSystem::FromUTF8(info.ProjectPath));
+			const std::string pointer = MakeProjectPointer(info).dump(1, '\t', false, nlohmann::json::error_handler_t::replace) + "\n";
+			if (!Platform::WritePrivateFile(pointerFile, pointer, &problem))
+				ST_CORE_WARN("EditorSession: the project's session pointer cannot be written: {}", problem);
+		}
+
 		const std::filesystem::path sessionFile = GetSessionFilePath(*sessionDirectory, info.ProcessId);
 		const std::string session = info.ToJson().dump(1, '\t', false, nlohmann::json::error_handler_t::replace) + "\n";
 		if (!Platform::WritePrivateFile(sessionFile, session, &problem))
@@ -201,17 +212,9 @@ namespace Strata
 			ST_CORE_ERROR("EditorSession: {}", problem);
 			if (error)
 				*error = problem;
+			// No pointer to a session that does not exist.
+			RemoveProjectPointer(info);
 			return false;
-		}
-
-		// The pointer only speeds up finding the editor by its project (clients also match the ProjectPath of the
-		// per-user sessions), so a project that cannot hold it (e.g. read-only) does not fail the session.
-		if (!info.ProjectPath.empty())
-		{
-			const std::filesystem::path pointerFile = GetProjectSessionFilePath(FileSystem::FromUTF8(info.ProjectPath));
-			const std::string pointer = MakeProjectPointer(info).dump(1, '\t', false, nlohmann::json::error_handler_t::replace) + "\n";
-			if (!Platform::WritePrivateFile(pointerFile, pointer, &problem))
-				ST_CORE_WARN("EditorSession: the project's session pointer cannot be written: {}", problem);
 		}
 		return true;
 	}

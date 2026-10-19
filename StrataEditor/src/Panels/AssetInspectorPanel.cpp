@@ -145,7 +145,7 @@ namespace Strata
 		if (metadata->Type == AssetType::Material)
 		{
 			if (UI::SectionHeader("AssetInspector.MaterialSection", (std::string(Icons::Palette) + "  Material").c_str()))
-				m_MaterialEditor.Draw(context, handle, "AssetInspector.Material");
+				m_MaterialEditor.Draw(panelContext, handle, "AssetInspector.Material");
 		}
 		if (metadata->Type == AssetType::AnimationController)
 			m_AnimationViews.DrawController(context, handle);

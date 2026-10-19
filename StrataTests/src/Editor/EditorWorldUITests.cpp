@@ -29,14 +29,14 @@ using namespace Strata::Tests;
 namespace
 {
 
-	// The editor with the generated 5 x 5 world "Gen" (WorldProject) open, its camera over cell (0, 0), every wanted cell in.
+	// The editor with the generated 5 x 5 world "Gen" (GridWorldProject) open, its camera over cell (0, 0), every wanted cell in.
 	struct WorldEditor : HarnessEditor
 	{
 		explicit WorldEditor(const std::string& name)
 		{
 			std::filesystem::path projectFile;
 			{
-				WorldProject project(name, 5);
+				GridWorldProject project(name, 5);
 				projectFile = project.Context.GetProject()->GetProjectFile();
 				project.Run("project.close", { { "force", true } });
 			}

@@ -96,15 +96,39 @@ ctest --preset macos-debug -LE perf
   `GameRuntime` to a 100,000-entity scene and away again (the longest frame); `Perf.Animation` evaluates 1,000
   cross-fading animators of 60 joints and steps 10,000 `WhenVisible` ones nobody sees; `Perf.Physics.Characters1000Step`
   steps 1,000 character controllers; `PerfGPU.Renderer.Skinned1000` renders 1,000 skinned characters posed every frame
-  and `IdleFrame3kStreamedTextures` times an idle frame of 3,000 settled streamed textures in view;
+  and `IdleFrame3kStreamedTextures` times an idle frame of 3,000 settled streamed textures in view; the renderer's GPU
+  side comes from `Perf/RendererPerfUtils.h` (`Perf::MeasureFrames` runs frames as an application does and collects the
+  GPU's busy time of each, `Perf::MeasureGPU` its median, which fails when a device that writes timestamps delivered none;
+  without timestamps the GPU metrics are left out, `Perf::MeasuresGPU`): `Render100kCubesGPU` is the GPU's median busy time
+  of the 100,000 cubes, `Render1MCubes` and `Render1MCubesGPU` the CPU's and the GPU's for a million (the GPU-driven path's
+  CPU cost does not grow with instances: target 1.5 ms), `GPUTimerCost` the GPU profiler's own CPU time in the median
+  frame (target 0.05 ms), `Render100kCubesShadowed` and `Render300kCubesShadowed` the CPU's median Render of the 100,000
+  and 300,000 cube grids under the sun's shadows, every cube a caster (targets 1.5 and 3 ms), `Render10kUniqueMeshes` the
+  CPU's median Render (extraction, recording and submitting) of 10,000 distinct meshes (target 2 ms) with
+  `Render10kUniqueMeshes.DrawCommands` the draw calls it recorded, and `PlayStartRender1MCubes` what starting play on a
+  million rendered cubes costs: the render scene's clone in `Scene::Copy` plus the copy's first Render beyond the
+  source's median (target 5 ms);
   `Perf.Editor` adds `FindReferences10k`, `JournalPerCommand`, the recovery journal's write (the frames and the I/O
   threads' time, `RecoveryWriteIOTime100k`) and snapshot, and the longest frame while `scene.open` opens 10,000 prefab
-  instances (`SceneOpen10kPrefabInstancesMaxFrame`); `Perf.EditorPanels` and `PerfGPU.Editor` time the Content Browser
+  instances (`SceneOpen10kPrefabInstancesMaxFrame`), and saving the realistic worlds in a helper process (the longest frame
+  from the save's start to its publication, `SaveMaxFrame250k` and `SaveMaxFrame1M`; the 1M save's `SaveSeconds1M` and
+  `SavePeakPrivateIncrease1M`; `--strata-test-helper=save-world <project> <scene> <result file>` runs one by hand);
+  `Perf.Scene.CancelLoad1M` cancels loads of the realistic 1M world at 25, 50 and 75% of the read and
+  `RefuseOverCap1M` loads a 1,100,445-entity document (both through `SceneLoader`); `Perf.Runtime.World1MStart`,
+  `World1MTransientMemory` (a helper process: `--strata-test-helper=start-world-game <manifest> <result file>`) and
+  `QuitDuringLoad1M` start and quit the realistic 1M world exported as a game (cooked, and with its JSON);
+  `Perf.Editor.ImportFolder24x4kPeakPrivate` imports 24 textures of 4096x4096 with a 1 GiB import memory budget (a
+  helper process: `--strata-test-helper=import-folder <project> <folder> <budget MB> <result file>`);
+  `Perf.EditorPanels` and `PerfGPU.Editor` time the Content Browser
   with 10,001 assets (icons; thumbnails); and `PerfGPU.Editor` the longest frames of `scene.open` of the 100,000- and
   1,000,000-entity scenes (and of the 100,000 over the million, and of 100,000 cubes over the 100,000, whose render
   proxies the load builds before the swap: `SceneOpen100kCubesMaxFrame`), of starting play of the million, of
   `asset.import` of a 4096x4096 texture and of making a stress project's thumbnails, and the editor's working set with
-  the million open),
+  the million open; `PerfGPU.Editor.WorldOpen1M*` opens the realistic 1M world in a headless editor through `StrataCLI`
+  (its time, longest frame and peak memory; `WorldOpen1MSaved*` once the editor saved it); world-scale gates write their projects with `Perf/WorldFixture.h`: realistic 250k and 1M worlds,
+  many-asset projects, texture folders, exported world games; to look at one, `StrataTests
+  --strata-test-helper=write-world-project <new dir> World1M:1000000:colliders`, `write-many-assets-project <new dir>
+  30000` or `write-texture-folder <new dir> 24 4096`),
   `StrataEditor.Smoke`
   (the real editor in a window with `StrataTests/Editor/SmokeCommands.json.in`, configured into the build tree, label
   `gpu`; it creates a project in `build/<preset>/StrataTests/SmokeProject` (emptied first by `StrataEditor.SmokeClean`),

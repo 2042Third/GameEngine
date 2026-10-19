@@ -220,13 +220,18 @@ to; out-of-range and non-finite values are clamped or read at rest). `GLFWWindow
 Input reaches the window only through `InputWindow` (size, cursor mode), which `Window` implements, so the input layer
 stays below the application shell. It also has a virtual device for tools (`SimulateKey`, `SimulateGamepadButton`,
 `SimulateGamepadAxis` and friends) merged with the real devices (a gamepad simulated input used counts as connected; an
-axis it holds wins over the device's until released), `SetEnabled` (device input off, e.g. while the editor's game view
-has no focus; sticks and triggers then read at rest) and `SetSuspended` (input frames follow the game's updates). The
+axis it holds wins over the device's until released), `SetEnabled` (device input off, e.g. while the editor's Game view
+has no focus; sticks and triggers then read at rest), `SetViewport(origin, size, resolution)` (where the game's image is
+and the pixels it renders at: device positions and movements reach the game in those pixels) and `SetSuspended` (input frames follow the game's updates). The
 cursor mode a game asks for (`SetGameCursorMode`, scripts' `Input::SetCursorMode`) applies to the window only while input
 is enabled: disabling input gives the cursor back, enabling it applies the game's mode again, so a locked cursor in the
-editor stays in the focused game view (the editor's UI ignores the mouse meanwhile, and the game view says that Shift+F1
+editor stays in the focused Game view (the editor's UI ignores the mouse meanwhile, and the Game view says that Shift+F1
 frees it and Ctrl+P stops the game) and Shift+F1 frees it. `InputNames` maps key, button and gamepad control names for
-the `input.*` commands.
+the `input.*` commands. Text typed in an input frame (`GetTypedText`: the window's character events, `ProcessText`, and
+`SimulateText`) comes as UTF-8, at most 1,024 bytes a frame. Pointer capture (`SetPointerCapture`, which the game UI's
+system sets while the UI owns the pointer) hides mouse buttons and scrolling from gameplay queries; `GetPointerState`
+reads the pointer regardless. `UIActions.h` maps keys, gamepad buttons and stick directions to the game UI's fixed
+actions (Submit, Cancel, Up, Down, Left, Right) with key repeat and stick hysteresis.
 
 **Math** (`Math/`). Engine conventions in `Math.h`: right-handed, +Y up, -Z forward, reversed-Z projections, Euler
 angles in degrees. `AABB`, `Frustum`, `Ray`, and `Random` (thread-local generators).
@@ -299,12 +304,22 @@ views can ask for preview lighting, leave out screen-space text and tint entitie
 first overlay, `Overlay/StatusTint.frag`, blends the listed entities' colors over exactly their pixels of the entity-ID
 buffer, found by binary search in a sorted (id, color) buffer like the selection outline's). How a mesh's level of
 detail is chosen is a pure function (`LODSelection::GetScreenFraction`, `SelectLOD`), so tools show the level the
-renderer draws.
+renderer draws: a submesh whose simplified levels all have errors (`MeshLOD::Error`, `MeshUtils::HasLODErrors`) draws
+the coarsest level whose error, projected, spans at most `SceneRendererSpecification::LODErrorPixels` (1) pixels of the
+viewport height (`SelectLODByError`: the screen fraction times the error relative to the mesh's bounding radius,
+`MeshUtils::GetRelativeLODError`, against `GetErrorThreshold`, one multiplication the GPU's culling repeats bit for bit);
+levels without errors halve the screen fraction against `LODThreshold` as before. A level that changes cross-fades
+(`FadeLevelsOfDetail`): for `RenderData::c_LODFadeFrames` frames both levels are drawn, the new one on step/16 of the
+pixels of a 4x4 ordered dither and the old one on the others, the draw list entry carrying the code
+(`LODSelection::UpdateLODFade`, a state per renderer and instance with its entity, so a reused instance slot or a
+frame without the instance starts over; a camera cut or another scene skips a frame number, so they switch at once).
 Assets: `Mesh` (skinned meshes also have a skin stream, four joint influences per vertex, and a `MeshSkinBinding`: the
-skin's joints in the skeleton, their inverse bind matrices and the bind-pose extent of what each joint moves; cooked mesh
-format version 2, version 1 still loads), `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`;
+skin's joints in the skeleton, their inverse bind matrices and the bind-pose extent of what each joint moves; each
+level of detail its `MeshLOD::Error`, how far its surface departs from full detail; cooked mesh format version 3,
+versions 1 and 2 still load, their levels with error 0, "unknown"), `Material`, `Texture`, `Font`; procedural primitives come from `MeshFactory`;
 texture formats, the cooked texture format and the block decoders are `TextureFormat`, `CookedTexture` and
-`BlockCompression` (see [Texture cooking](#texture-cooking)). Also `TextRenderer`/`FontAtlas`, `DebugDraw`/`SceneGizmos`, `TextureReadback`
+`BlockCompression` (see [Texture cooking](#texture-cooking)). Also `TextRenderer`/`FontAtlas`/`FontAtlasCache` (glyph atlases, one per
+font per renderer) with `FontFace`/`TextLayout` (glyph metrics and text shaping without rasterizing), `DebugDraw`/`SceneGizmos`, `TextureReadback`
 (non-blocking GPU readback) and `ImageWriter` (PNG). Conventions and rules: AGENTS.md, "Architecture rules", and
 DeveloperGuide.md, "Rendering".
 
@@ -456,9 +471,13 @@ runtime does not use it. Protocol and security model: DeveloperGuide.md, "Automa
 
 **ImGui** (`ImGui/`). `ImGuiLayer` owns the Dear ImGui context; `Application` pushes it as an overlay when ImGui is
 enabled and a window and graphics device exist, and calls `Begin`/`End` around the layers' `OnImGuiRender`. It styles
-the UI for the window's content scale, on attach and on every `WindowContentScaleEvent`: the style is rebuilt from
-ImGui's dark defaults by the application's style callback (`SetStyleCallback`; the editor installs its Bedrock theme) and
-the fonts' DPI scale (`ImGuiStyle::FontScaleDpi`) follows; `SetContentScaleOverride` fixes the scale (`--ui-scale`).
+the UI for the window's content scale, on attach, on every `WindowContentScaleEvent` and when the window's pixels per
+unit change: the UI scale is the content scale less what window coordinates in points apply already (`ToUIScale`: a
+Retina window of 1600 x 900 points has 3200 x 1800 pixels and content scale 2, and ImGui lays out in points and
+rasterizes its fonts at the framebuffer's density, so its UI scale is 1; where windows are measured in pixels, Windows
+and X11, it is the content scale). The style is rebuilt from ImGui's dark defaults by the application's style callback
+(`SetStyleCallback`; the editor installs its Bedrock theme) and the fonts' DPI scale (`ImGuiStyle::FontScaleDpi`)
+follows; `SetContentScaleOverride` fixes the scale (`--ui-scale`).
 `ImGuiPlatform` is the platform backend, written for the engine (the vendored GLFW backend is not built): ImGui's input
 comes from the window's events (keys by what they type in the keyboard layout, `Window::GetLayoutKey`, with their
 modifiers; typed text, also from input methods; the mouse, its wheel and `MouseLeaveEvent`; focus), its clipboard and
@@ -498,13 +517,14 @@ A file may include files of its own layer and of the layers it lists, which are 
 | Audio | `Audio/**` | Core, App (its engine module), Asset, Reflection, Scene |
 | Animation | `Animation/**` | Core, Asset, Reflection, Scene |
 | World | `World/**` | Core, Asset, Reflection, Scene |
+| GameUI | `GameUI/**` | Core, Input, Asset, Reflection, Scene, Renderer (only Engine includes it; see [Game UI](#game-ui)) |
 | Scripting | `Scripting/**` | Core, Input, Asset, Reflection, Scene |
 | Project | `Project/**` | Core, App (its engine module), Asset, Reflection |
 | Runtime | `Runtime/**` | Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Scripting, Project |
 | Network (tooling) | `Network/**`, `Platform/*/*Socket.cpp` | Core |
 | ImGui (tooling) | `ImGui/**` | Core, Input, App, Renderer |
 | AssetPipeline (tooling) | `Asset/EditorAssetManager.*`, `AssetImporter.*`, `AssetImporters.cpp`, `GltfImporter.*`, `TextureImporter.*`, `TextureCooker.*`, `BC7Encoder.*`, `AssetPackWriter.*`, `AssetDependencies.*` | Core, Asset, Reflection, Scene, Renderer, Audio, Animation (the glTF importer writes skeletons and clips), World (the dependency scanner reads world documents) |
-| Engine | `Engine/**` | the layers a game contains: Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Animation, Scripting, World (shipped games link the composition root and the entry point too; see below) |
+| Engine | `Engine/**` | the layers a game contains: Core, Input, App, Asset, Reflection, Scene, Renderer, Physics, Audio, Animation, Scripting, World, GameUI (shipped games link the composition root and the entry point too; see below) |
 
 `Architecture.Layering` (`StrataTests/src/Architecture/LayeringTests.cpp`, in the shard `StrataTests.Core.Core`) reads every C, C++ and
 Objective-C(++) source and header under `Strata/src` (`STRATA_SOURCE_DIR`; `.h`, `.hpp`, `.inl`, `.c`, `.cpp`, `.m`, `.mm`,
@@ -531,7 +551,8 @@ The engine is extended through registries rather than through code that knows it
 (components), `AssetLoaderRegistry` (stored bytes to asset objects, and the prefixes partial loads read),
 `AssetImporterRegistry` (source files to stored bytes), `AssetManagerExtensionRegistry` (work modules do for every asset
 manager: the texture streamer), `BuiltinAssets` (objects of the built-in assets), `MeshGeometryRegistry` (the triangles of
-mesh assets for modules that do not draw them: physics) and `SceneSystemRegistry` (runtime systems of playing scenes).
+mesh assets for modules that do not draw them: physics), `SceneSystemRegistry` (runtime systems of playing scenes) and
+`SceneOverlayRegistry` (passes every `SceneRenderer` draws over the scene: the game UI's, see [Game UI](#game-ui)).
 `Engine::RegisterBuiltinModules` (`Engine/BuiltinModules.cpp`) fills them, once per process, before anything reads
 them. Its modules are a table (`c_BuiltinModules`: a name and a registration function each, lower layers first), run in
 order but for those `ModuleRegistrationOptions::Exclude` names; `Engine::GetBuiltinModuleNames` lists the table and
@@ -555,6 +576,8 @@ RegisterAnimationModule    Animation/AnimationRegistration.cpp its components (A
 RegisterScriptingModule    Scripting/ScriptingRegistration.cpp the Script component (ScriptingComponents.cpp); "Scripting" system
 RegisterWorldModule        World/WorldRegistration.cpp         its components (WorldComponents.h: World, StreamingSource); World
                                                                loader; "World" system
+RegisterGameUIModule       GameUI/GameUIRegistration.cpp       its components (GameUIComponents.cpp, category "UI"); the UI pass
+                                                               (SceneOverlayRegistry); "UI" system
 options.AssetPipeline      RegisterAssetPipeline, Asset/AssetImporters.cpp: opens the importer registry, importers
 options.Extra              registrations of games, tools and tests
 ComponentRegistry::Freeze
@@ -596,7 +619,14 @@ log the registered modules, the scene systems' update order and the soft constra
   and are safe from any thread (asset loads deserialize scenes on workers). `Register<T>` after `Freeze`, for a type
   that is registered already or under a name that is taken (ignoring case), logs an error and returns a builder that
   converts to false and discards what it is given; nothing aborts. A game registers its components through
-  `ModuleRegistrationOptions::Extra`.
+  `ModuleRegistrationOptions::Extra`. A component may name components it needs (`ComponentInfo::Requires`, set with
+  `ComponentInfoBuilder::Requires`): `ComponentAccess::AddComponent`, which every path that adds components by name goes
+  through (`component.add`, `entity.create`, the inspector, scripts), adds the missing ones first, so an editor or agent
+  that adds a UI image to a plain entity gets its rect in the same undo step. Removing a required component is allowed (the
+  dependent one then has no effect): the Inspector's section of each dependent component says so, with a button that adds
+  it back (`component.add`). `Freeze` drops, with an error, a
+  requirement that names no registered component or the component itself. New components live in the module that owns
+  them (`<Module>/<Module>Components.h`, registered by its registration function), not in `Scene/Components.h`.
 - The loader, importer, built-in asset, manager extension and scene system registries stay open: tools and tests register
   more later (a later loader or importer replaces or overrides the built-in one; an extension applies to managers made
   afterwards).
@@ -762,14 +792,18 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Assets.Update` | `AssetManagerBase::Update` and `EditorAssetManager::Update` (file changes, imports, eviction) |
 | `Assets.Finalize` | `AssetManagerBase::ProcessCompletions`: finalizing arrivals, GPU uploads |
 | `Scene.Load` | scene loads' main-thread work: preparing a loaded scene (the systems' `PrepareLoadedScene`: physics' bodies; `SceneLoadOptions::Prepare`: its render proxies) and swapping it in (`EditorContext::UpdateSceneLoad` and `UpdateRuntimeSceneLoad`, `GameRuntime::UpdateSceneLoads`: stopping the old scene, starting the new one's systems) and creating sub-scenes' entities (`Scene::UpdateSubScenes`) |
-| `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays; `World.Streaming`, the World system's, when the World module registers, so that perf logs created before a scene plays have its column) |
+| `Scene.UI`, `Scene.Scripts`, `Scene.Physics`, `Scene.Audio` | the scene systems' start and update callbacks (`SceneSystemDescriptor::ProfileStage`; `Scene.Animation`, the animation system's, is registered when a scene first plays, or by `FramePerfLog::Create`; `World.Streaming`, the World system's, when the World module registers, so that perf logs created before a scene plays have its column; `Scene.UI` is the game UI's input) |
 | `Scene.Transforms` | `Scene::UpdateWorldTransforms` when something is dirty |
-| `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView`, `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
+| `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView` (or `ApplyFeedback`), `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
+| `Render.UI` | the game UI pass (`GameUIRenderer`): its `Prepare` (layout, quads, uploads, glyphs) and `Draw` recording, nested in `Render.Submit` |
 | `Editor.UI` | `ImGuiModule::OnRenderUI`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
-| `Present` | `GraphicsDevice::EndFrame` (`GraphicsModule::OnEndFrame`), after the work time is measured (outside the frame time) |
+| `Present` | `GraphicsDevice::EndFrame` (`GraphicsModule::OnEndFrame`), after the work time is measured (outside the frame time); and inside the frame, the back buffer's first submission (`Renderer::PrepareBackBuffer`), where a driver that hands the display's image out only at its first use waits for it (MoltenVK waits for its drawable there, within `Editor.UI`): `RunFrame` leaves the time of stages outside the work time out of it (`FrameProfiler::GetOutOfWorkSeconds`), so a frame paced by the display counts as capped, not CPU-bound |
 
-Modules and games register more (`RegisterStage`, up to 64); a scene system names its stage in its descriptor. Each frame
+Modules and games register more (`RegisterStage`, up to 64); a scene system names its stage in its descriptor, and the
+editor times its commands as `Editor.Commands` (`EditorCommandRegistry::Execute` and `PollCommandResult`: a `scene.save`
+or an `entity.create` shows there instead of as untimed time; the stages of what a command runs, a capture's render,
+nest in it). Each frame
 also records how busy the job system's worker, I/O and background threads were since the previous frame
 (`JobSystem::GetStats`: per-thread busy time and completed jobs, written by each pool thread under a sequence lock and
 read without stopping it).
@@ -779,6 +813,46 @@ the status bar's frame pill (see [Editor](#editor));
 `StrataRuntime --perf-log` writes it as CSV (`Runtime/FramePerfLog`, see
 [Export and the runtime](#export-and-the-runtime)).
 
+**GPU stages.** Stages of `FrameStageKind::GPU` are the GPU's time for passes of the frame. They are never entered on the
+CPU (`BeginStage` refuses them), never part of the work time, `StageSum` or `Untimed`, and their times arrive frames late:
+`RecordGPUFrame(frameIndex, times)` attaches them to the frame's record while it is still in the ring (`FrameSample::HasGPU`,
+`GPUBusyMs`, `GPUStageMs`, `GPULatencyFrames`). Listeners choose their timing: `Immediate` (when the frame ends) or `WithGPU`,
+called in frame order once a frame's GPU times arrived (or are known not to come), after `c_MaxGPULatencyFrames` (8) later
+frames without them at the latest, at once while no GPU times are expected (`SetGPUTimesExpected`), and for every frame left
+by `FlushGPUListeners`. `Summarize` takes GPU stages' statistics over the frames with GPU times and adds `GPU`: those frames,
+their busy time, the observed latency and `BoundBy` (`ClassifyFrameBound` of the medians: `GPU` when the GPU's busy time is
+at least 90% of the frame interval and above the work time, `CPU` when the work time is at least 90% of it, `Capped` when
+neither is: vsync, a frame-rate cap or idle throttling sets the pace; `Unknown` without GPU times).
+
+The renderer measures them (`Renderer/GPUProfiler`, `Renderer::GetGPUProfiler`) with the device's own 64-bit timestamps
+(`GraphicsDevice::CreateTimestampPool`, read with their availability and never waited for; NVRHI's timer queries read 32-bit
+values and end render passes). A ring of `MaxFramesInFlight + 2` frame slots of 256 timestamps: `Renderer::BeginFrame` closes
+the frame's slot (an event query marks the end of its submissions), hands the oldest slots the GPU completed to the frame
+profiler (every renderer's intervals added up per stage, like CPU stages) and opens the next one, whose timestamps are reset
+by a command list executed at once (query commands of a queue run in submission order). A slot still in use when its turn
+comes is dropped (`GPUProfilerStats::DroppedFrames`), as is a frame whose timestamps are still not readable a frame after the
+GPU completed its work (recorded into a command list that was never executed; MoltenVK makes timestamps readable a little
+after the completion is signaled, so a completed slot waits that one frame); nothing waits for the GPU. `GPUPassTimer` times
+consecutive passes of a command list with one timestamp per boundary, so stages tile it without gaps; a `GPUTimerRecord`
+keeps a user's own intervals (`SceneRenderer::GetGPUStats`).
+The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStages`):
+
+| Stage | Where |
+| --- | --- |
+| `GPU.Uploads` | the upload queue's graphics batches (`GPUUploadQueue::SubmitBatch`) |
+| `GPU.Setup` | a scene renderer's environment maps, scene data uploads and light clusters |
+| `GPU.Cull` | culling dispatches and depth pyramids |
+| `GPU.Shadows`, `GPU.Prepass`, `GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent` | the scene passes |
+| `GPU.Post` | exposure, bloom, tone mapping and FXAA |
+| `GPU.Overlays` | grid, tints, outline, debug lines, text and the copy into a target |
+| `GPU.UI` | the game UI pass's draws, world-space and screen-space (`GameUIRenderer`, registered by `RegisterGameUIModule`), inside `GPU.Overlays`: the pass times them with the frame's timer (`SceneOverlayFrame::GPUTimer`) and hands it back |
+| `GPU.ImGui` | the editor's UI (registered by `ImGuiLayer` on first use, so games have no such column) |
+
+Drivers of tile-based GPUs may write a timestamp recorded inside a render pass instance when the pass ends: MoltenVK samples
+Metal's GPU counters at encoder boundaries, so on macOS a stage that begins inside a pass that continues (`GPU.Transparent`
+after `GPU.Opaque` in the forward pass) shows its time in the stage before it. Stages that begin where a pass ends (shadows,
+prepass, opaque, post-processing) are exact everywhere.
+
 ## Scene runtime lifecycle
 
 A `Scene` that plays owns scene systems (`Scene/SceneSystem.h`), created from `SceneSystemRegistry` in update order.
@@ -787,6 +861,7 @@ are, in update order:
 
 | System | Class | Modes | Order | Role |
 | --- | --- | --- | --- | --- |
+| UI | `GameUISystem` | Play | Before Scripting (soft) | The game UI's input: hit tests, pointer capture, focus, navigation and widget events (see [Game UI](#game-ui)). |
 | Scripting | `ScriptSystem` | Play | | Script instances of the active `ScriptEngine` (null engine: no scripts). |
 | Animation | `AnimationSystem` | Play | After Scripting, Before Physics (soft) | Animators in `OnUpdate`: poses, root motion, attachments, events (see [Animation](#animation)). |
 | World | `WorldStreamingSystem` | Play, Simulate | After Scripting, Before Physics and Audio (soft) | Streams the cells of the scene's world in `OnUpdate` (see [World partition](#world-partition)). |
@@ -817,14 +892,16 @@ are, in update order:
 - **Per-frame calls.** A frame calls `OnUpdate`, `OnFixedUpdate` and `OnLateUpdate` only on the systems whose descriptor
   asks for them (`SceneSystemDescriptor::CallsUpdate`, `CallsFixedUpdate`, `CallsLateUpdate`; all three for a descriptor
   built by hand). `MakeSceneSystemDescriptor<T>` sets them from the callbacks `T` overrides, told apart at compile time by
-  the type of `&T::OnUpdate`, so the built-ins cost an idle play frame eight calls (Scripting all three, Animation and
-  World `OnUpdate`, Physics `OnUpdate` and `OnFixedUpdate`, Audio `OnLateUpdate`) and a new system adds only the phases it uses
-  (`Perf.Scene.IdlePlayFrame1M`). `OnUpdateRuntime` walks one list of systems per phase, built when the scene starts. A
+  the type of `&T::OnUpdate`, so the built-ins cost an idle play frame nine calls (UI `OnUpdate`, Scripting all three,
+  Animation and World `OnUpdate`, Physics `OnUpdate` and `OnFixedUpdate`, Audio `OnLateUpdate`) and a new system adds
+  only the phases it uses (`Perf.Scene.IdlePlayFrame1M`). `OnUpdateRuntime` walks one list of systems per phase, built
+  when the scene starts. A
   paused frame (no step due) calls `OnPausedUpdate` instead (`CallsPausedUpdate`; of the built-ins only Animation's), for
   work the paused frame shows that advances no time.
 - **Profiling.** A system's start and update callbacks run in the frame profiler stage its descriptor names
-  (`SceneSystemDescriptor::ProfileStage`: `Scene.Scripts`, `Scene.Animation`, `World.Streaming`, `Scene.Physics`,
-  `Scene.Audio`; empty: not timed on its own), resolved when the scene starts; scenes updated outside a profiled frame (tests) skip the stages altogether.
+  (`SceneSystemDescriptor::ProfileStage`: `Scene.UI`, `Scene.Scripts`, `Scene.Animation`, `World.Streaming`,
+  `Scene.Physics`, `Scene.Audio`; empty: not timed on its own), resolved when the scene starts; scenes updated outside a
+  profiled frame (tests) skip the stages altogether.
 
 ```text
 OnRuntimeStart(mode)   reset time, pause, steps and requests; create the systems the mode runs;
@@ -859,7 +936,9 @@ OnRuntimeStop()        OnRuntimeStop in reverse order, systems destroyed in reve
   first, the entities themselves (`registry.create(hint)`) as one more such copy; the UUID map (an `entt::dense_map`, two
   arrays) and the root list are copied as they are, and the dirty list and the transform pass carry over, so the copy
   needs no recomputation. The copy's signals are connected only afterwards: copying emits none, as a deserialized scene's
-  construction emits none before its systems start. Copying is mostly the system handing out fresh memory (page faults),
+  construction emits none before its systems start. Then the modules' context copiers run
+  (`Scene::RegisterContextCopier`; never for a `SerializedOnly` snapshot, which a save only writes): the Renderer
+  module's clones the render scene, so the copy's first frame builds no proxy and uploads nothing (see [Render scene](#render-scene), "Clones"). Copying is mostly the system handing out fresh memory (page faults),
   which the threads share: a 1,000,000-entity scene copies in about 43 ms (`Perf.Scene.Copy1M`; about 0.7 s entity by
   entity before), and the editor's frame that starts playing it takes about 47 ms (`PerfGPU.Editor.PlayStart1MMaxFrame`).
   Systems starting must not walk the hierarchy either: `ScriptSystem` sorts the scripted entities into hierarchy order
@@ -1031,6 +1110,8 @@ which means the module is not in the build or its system does not run in this mo
 | `ISkinningPoses`: each animator's pose (model-space joint matrices with a version), and which animators renderers drew | `AnimationSystem`; the editor's pose preview for edited scenes | `RenderScene` (palettes of skinned meshes), `SceneRenderer` (reports the animators of what it drew) |
 | `IAnimatorControl`: play, cross-fade, parameters, speed, state queries, joint transforms, whether an entity has an animator (`HasAnimator`) | `AnimationSystem` | script host (`Animator`), tools and tests |
 | `IAnimationEventSource`: listeners of the events controller states fire | `AnimationSystem` | `ScriptSystem` (`OnAnimationEvent`), tools and tests |
+| `IUIEvents`: listeners of the game UI's widget events (clicks, value changes, focus changes, input field submits) | `GameUISystem` | `ScriptSystem` (`OnUIClick`, `OnUIValueChanged`, `OnUIFocusChanged`, `OnUISubmit`), tools and tests |
+| `IUIControl`: the game UI's elements (texts, images, colors, interactability, values), the focus, the pointer and the UI actions | `GameUISystem` | script host (`UIElement`, `UI`) |
 
 What outlives scenes is an engine service (`Core/EngineServices.h`): a module registers it in its registration function
 while the composition root runs, e.g. the Audio module's `IAudioOutput` (the master volume, which scripts change in any
@@ -1039,7 +1120,7 @@ the game (`EngineServices::ScopedProvider`, which restores the provider it repla
 
 | Service | Provider | Consumers |
 | --- | --- | --- |
-| `IGameWindow`: window mode, resolution, vsync, the size the game renders at | StrataRuntime's `GameWindowService` (applied after the frame, `ApplyRequests`; headless: accepted and reported back), the editor's `EditorGameWindow` (recorded and reported, never applied: `editor.status` and a notice over the game view) | script host (`Game::SetWindowMode` and friends) |
+| `IGameWindow`: window mode, resolution, vsync, the size the game renders at | StrataRuntime's `GameWindowService` (applied after the frame, `ApplyRequests`; headless: accepted and reported back), the editor's `EditorGameWindow` (recorded and reported, never applied: `editor.status`, a notice over the Game view and its "Game's request" resolution) | script host (`Game::SetWindowMode` and friends) |
 | `IGameSaves`: the save directory | `GameRuntime` (`<user data>/<game>/Saves`, `GameRuntimeOptions::SaveFilesDirectory`), `EditorContext` (`<project>/.strata/Saves`) | script host (`Game::WriteSaveFile` and friends, through `SaveFiles`) |
 
 ### Scene caches
@@ -1084,6 +1165,88 @@ A frame of a scene where nothing changed costs (almost) nothing, however many en
 - Diagnostics count the work: `GetTransformUpdateCount`, `GetParallelTransformUpdateCount`,
   `GetHierarchyOrderBuildCount`, `GetLookupVisitCount` and `GetLookupIndexBuildCount` (tests use them to prove that
   lookups and clean updates traverse nothing).
+
+### Scene documents
+
+Scenes, prefabs and models are JSON documents (`{"Strata": {"Format", "Version": 1}, "<Kind>": {...}}`). Small ones
+(undo snapshots, the clipboard, commands) go through `SceneSerializer::Serialize`/`SerializeEntities` as DOMs; documents
+of whole scenes never become one:
+
+- **Writer** (`Scene/SceneDocumentWriter`): writes into a `DocumentOutput` (`Core/DocumentOutput.h`: a file through
+  `Core/AtomicFileWriter`, which streams into `<path>.tmp<n>` through a 1 MiB buffer and renames it over the file on
+  `Commit`, or a string). The header comes first, then `"Name"`, `"Settings"`, `"EntityCount"` (new and optional: readers
+  that know it refuse an over-cap document at once) and `"Entities"` with **one entity per line**, in hierarchy order. Each
+  line is byte for byte `JsonUtils::Dump` of the entity object `SceneSerializer` builds (components and properties sorted
+  by name, floats in `FloatToJson`'s form, which `AppendFloatJson` writes without parsing a number: fmt's shortest digits
+  read back as nlohmann does, exactly, through one IEEE operation where the significand and the power of ten are exact,
+  and through nlohmann's reader otherwise), so a re-save of an old file differs only in whitespace, files diff entity by
+  entity and take about half of the old tab-indented size. Entities are serialized in parallel chunks of
+  `SceneWriteOptions::ChunkEntities` (4,096) on the job system (`JobPriority::Background` by default) and written in
+  order by a job of their own while the next batch is serialized, so the bytes never depend on the thread count. While
+  writing it collects the references (asset properties in order, and extra data such as script fields through
+  `SceneWriteOptions::ExtraReferences`: exactly what `AssetDependencies::Scan` finds in the bytes), counts entities and
+  bytes and hashes them (SHA-256 for the recovery journal, FNV-1a for the import records). Options: the document kind,
+  entity subsets by root ID (`Roots`: each root with its descendants, parents written only within the subset; world
+  cells), `WriteSettings`, `Name`, `Cancel` (checked between chunks), `Progress` and `LeaveOut` (components not written).
+  `SceneSerializer::SaveToFile` writes through it. `WritePrototype` writes an `EntityPrototype`'s entities in the same
+  layout, line for line what `Write` writes of a scene holding them (`Prefab::WriteDocument`, without the prefab links:
+  `prefab.create`), and `WriteJson` lays a parsed prefab or model document out the same way (`prefab.apply`, which edits
+  the document as JSON).
+- **Reader** (`Scene/SceneDocumentReader`): runs nlohmann's event parser (`Core/JsonEvents.h`: `ParseJsonEvents`, the
+  handler called directly, over the progress input `JsonUtils::Parse` uses too) and hands the content to an
+  **`EntitySink`** (`Scene/EntitySink.h`) one value at a time: the header and the content's small fields (`"Name"`,
+  `"Settings"`) as DOMs of their own, each value of the entity list as the DOM of that entity only; unknown keys are
+  skipped without building anything. Any key order and whitespace read: the header of old files (keys sorted, so it
+  follows the entities) is checked when it arrives, and a document without a valid one fails after its entities. Errors
+  are the DOM readers' before it (`SceneSerializer::Deserialize`, `Prefab`, `Model`). `SceneReadOptions`: `IsCancelled`
+  (asked every `CancelCheckEntities`, 256), `MaxEntities` (a declared `EntityCount` above it is refused before the first
+  entity, an undeclared document at the first entity beyond it), `Progress` (the share of the text parsed). Sinks:
+  - `SceneBuilder` creates each entity and its components in the scene's registry as it arrives
+    (`ComponentAccess::Deserialize`, as `DeserializeEntities` does) and keeps only its entity and parent ID; `Finish`
+    links the hierarchy (union-find over document indices refuses cycles; invalid and missing parents attach at the top
+    level), signals every component and reports what it could not read in the DOM reader's order (settings, entities,
+    unknown components with one warning per name, parents). `SceneSerializer::DeserializeText` reads a scene's text
+    with it (`SceneAsset::Deserialize`, `LoadFromFile`).
+  - `EntityPrototypeBuilder` reads entities into `EntityColumns` (per entity its ID, parent and components, each value
+    appended to a `ComponentValueArray` of its type and filled in place) and builds an `EntityPrototype` without a scene:
+    the entities in hierarchy order as `EntityPrototype::Compile` orders a scene's, the value arrays moved over whole.
+    `Prefab::Deserialize`, `Model::Deserialize` and `EntityPrototype::FromSnapshot` use it.
+  - `AssetDependencies`' reference sink scans each entity's references as it arrives: the reference search of a large
+    scene holds its text and its references, never its DOM.
+- **Parallel read.** A sink that takes prepared entities (`EntitySink::ReadPrepared`: `SceneBuilder`) gets documents of
+  at least `ParallelMinEntities` (16,384) entities read on the job system: the entities are found by the document's lines
+  when it is in the writer's layout, else by a structure scan that matches brackets and skips strings without building
+  values (any layout: compact files of tools, indented old files); every entity and the document without them (the
+  skeleton) are checked to parse alone (in parallel, before the sink hears of anything: a document they do not split is
+  read as a stream), the skeleton goes through the stream handler, and then jobs parse chunks of
+  `ParallelChunkEntities` (2,048) into `EntityColumns` while the reading thread hands the finished chunks to the sink in
+  order, at most twice the worker count of chunks in memory. The scene and its reports do not depend on the path. A
+  cancel is noticed after every chunk; an over-limit document is refused before any check.
+- **Cooked scenes** (`Scene/CookedScene`): the binary form exports put into packs (`AssetPackCook`'s `CookForPack`, called
+  by `EditorAssetManager::WriteAssetPack` with `AssetPackWriteOptions::CookDocuments`; `GameExportOptions::CookDocuments`,
+  `project.export`'s `cookDocuments`, defaults to true). "STSC" version 1: a 64-byte header with its own CRC-32C and a
+  table of 16-byte aligned sections with a CRC-32C each (strings; a scene's name and settings as compact JSON; entity IDs;
+  parent indices, each before its entity; the component types with their properties' names and types; one column per
+  type, a dense flag or strictly increasing entity indices, then each property's values together through
+  `Reflection/PropertyBinary` and each value's extra data, binary (`ComponentInfo::SerializeExtraBinary`: scripts) or the
+  JSON extra as MessagePack; the unknown components as MessagePack). Entity references are recomputed from the values on
+  load, never stored. `CookedSceneWriter::Write` writes a prototype; `CookedSceneReader::Read` validates the header, the
+  table and every checksum and bounds every count and index before it allocates, decodes the columns in parallel (a job
+  per type, values through `PropertyInfo::SetValue`, properties mapped by name: unknown ones skipped with a warning, a
+  changed type refused, types this build lacks kept as unknown components) into an `EntityPrototype`, and `ReadScene`
+  instantiates it keeping the IDs. The scene, prefab and model loaders take documents that start with the magic
+  (`CookedScene::IsCooked`) to it; the editor only ever has JSON in projects. The export cooks with the same streamed read
+  that finds a document's references for the pack's reference check, and applies
+  `AssetPackCookOptions::AdjustSceneSettings` (the export's scene transform) to cooked and JSON output alike. The
+  realistic 1M world starts in a game in 0.5 s cooked against 2.2 s with its JSON (`Perf.Runtime.World1MStart`).
+- **Cancellation.** `AssetLoadData::IsCancelled` turns true once a load is given up (cancelled, superseded, or the
+  manager closing: `WaitForInFlightLoads` sets its load state's `Closing` before it waits); the scene, prefab and model
+  loaders pass it to the reader, so a cancelled `SceneLoadRequest`, another scene opened or the editor quitting ends a
+  read within milliseconds (`Perf.Scene.CancelLoad1M`).
+- **Snapshots.** A background save writes a copy of the edited scene that nothing changes:
+  `Scene::Copy(scene, SceneCopyOptions { .SerializedOnly = true })` copies, storage by storage on the job system like a
+  play copy, the IDs, the hierarchy, the kept unknown components and every serializable registered component (also those
+  play copies leave out, `NoCopy`), and none of the cached world transforms; it is only ever read.
 
 ## Threading model
 
@@ -1163,7 +1326,7 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
  AssetImporter (by extension) -- ReadImportDependency --> other files under Assets/
    | stored bytes; sub-assets with DeriveSubAssetHandle
    v
- .strata/Cache/<handle>.bin + <handle>.import  -- PlanAssetPack + WriteAssetPack -->  <Game>.stpak (+ patch packs)
+ .strata/Cache/<handle>.bin + ImportRecords.log -- PlanAssetPack + WriteAssetPack -->  <Game>.stpak (+ patch packs)
  (JSON assets and fonts: the source file itself)                         | RuntimeAssetManager (mounted packs)
    |                                                                     |
    +-------------------------- ReadAssetData (I/O thread) ---------------+
@@ -1175,26 +1338,60 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
                                          pools over budget
 ```
 
-- **Importing** (`Asset/EditorAssetManager.h`). `Scan` registers every file with a known importer, creates missing
-  `.meta` files, takes current imports from the cache and imports stale assets: in parallel before it returns
-  (`ScanImports::Wait`: tools, tests, scripted editor runs), or as background jobs that `Update` applies
+- **Importing** (`Asset/EditorAssetManager.h`). A scan registers every file with a known importer, creates missing
+  `.meta` files, takes current imports from the cache and imports stale assets. `BeginScan` returns at once: a job
+  loads the import records, walks the asset directory and prepares every file on the background threads in batches of
+  256 (`Asset/AssetRegistration.h`: its `.meta`, read once; its importer and settings; handles several files claim,
+  resolved as before, and new ones written into the `.meta` by the job; its cached import checked against its record, or
+  what a document references), then removes cached data nothing uses. `Update` inserts what the job prepared, a slice of
+  about a millisecond per call (`AssetRegistrationOptions`: the clock is read every 64 entries;
+  `AssetManagerBase::RegisterAssets` takes a batch under one lock), and applies the current imports, whose outcomes carry
+  their cache files' sizes: no file is touched on the main thread (`FileSystem::GetThreadOperationCount` lets tests
+  check). `GetScanProgress` reports the phase (`Walking`, `Registering`, `Applying`) with done and total; the file watcher
+  starts before the walk, so a file added meanwhile is reported once the scan is applied. `Scan` begins and waits
+  (tools, tests, scripted editor runs); called again later, it registers the files added since. Stale assets import in
+  parallel once the scan is applied (`ScanImports::Wait`), or as background jobs that `Update` applies
   (`ScanImports::InBackground`: the editor, so a project with textures to compress opens at once and its frames go on).
   Until an asset's first import is applied, a load of it waits, `Loading`, instead of failing (the manager does not
   dispatch it while `IsAwaitingImport` says so, and `ResumeLoadsAwaitingImport` starts it with the import's data or
   error); its sub-assets are registered once the import is. Afterwards the file watcher
   reports changes; `Update` re-registers files and queues re-imports as background jobs, and applies finished imports
   through `ReloadAsset`: loaded assets load again, and every reloaded asset gets a new source revision
-  (`GetSourceRevisions`), announced as a content change at once when no object of it is loaded. The cache record
-  (`<handle>.import`) remembers the source state, settings, importer version and dependencies, so a current import is
-  reused. Editor commands take the same background path: `SetImportSettingsInBackground` saves the `.meta` and queues
+  (`GetSourceRevisions`), announced as a content change at once when no object of it is loaded. The import record remembers the source state,
+  settings, importer version and dependencies, so a current import is reused. The editor opens projects this way (`EditorContextSpecification::ImportInBackground`): the
+  project is open at once, the automation session is published within the startup, commands that need the whole
+  registry wait (`EditorContext::IsWaitingForAssets`, `EditorCommand::WaitsForAssets`), and the start scene and the
+  script usage scan follow the scan (`EditorContext::FinishAssetScan`).
+- **Import records** (`Asset/ImportRecordStore.h`). Every asset's record (and, for assets stored as their source, what
+  they reference) and the path of every handle (which resolves duplicated `.meta` files the same way on every scan) live
+  in one append-only file, `.strata/Cache/ImportRecords.log`: a header line, then one entry per line, the CRC-32C of
+  its JSON and the JSON (`{"Handle", "Record"}`, `{"Handle", "Path"}` or `{"Handle", "Removed": true}`), the latest of a
+  handle winning. The scan reads it once into memory, and imports, reference searches and saves read and set records
+  there; one writer at a time (an I/O job; callers only queue) appends whole lines, flushed per batch. A crash can tear
+  only the last line, which the next load skips and cuts off, and cache files are renamed into place before their record
+  is set (under the exclusive file lock, so a cancelled import never brings a removed record back): a record never names
+  a missing cache file, and a lost one only means an import or a search again. When dead entries outnumber live ones and
+  the file passes 1 MiB, the writer rewrites it from memory (`AtomicFileWriter`). The earlier layout (a
+  `<handle>.import` file per asset and `AssetIndex.json`) is taken over by the first load and removed once written, so an
+  upgraded project imports nothing again. Trashed assets keep their records as files in the trash folder, and a restore
+  sets them again; the scan drops records and paths of handles no asset has any more. Editor commands take the same background path: `SetImportSettingsInBackground` saves the `.meta` and queues
   the import, `ReimportAssetInBackground` queues one even when the cached import is current (`ImportRequest::Force`;
   assets stored as-is reload at once and their references are searched again), and `IsImportPending` tells a deferred
   command (`asset.setImportSettings`, `asset.reimport`) when `Update` applied it; `SetImportSettings` and
   `ReimportAsset` import on the calling thread (tools, tests).
+- **Searches of what documents reference** (`EditorAssetManager::QueueNativeReferences`). A document changed on disk
+  (the watcher's report, `asset.reimport`) is searched on an I/O job once it has not changed for
+  `c_ReferenceSearchDelay` (500 ms: a file written over seconds is searched once), and a newer search cancels the one
+  before (one per document at a time; a save records its references itself and cancels the search). Searches are no
+  imports: `HasPendingImports` counts imports only, `HasPendingReferenceSearches` and `GetPendingReferenceSearches` the
+  searches (`editor.status`'s `assets.referenceSearches`). An export waits for imports and saves only; the documents
+  whose search has not run yet it scans itself on a job before it plans (`FindDocumentReferences`,
+  `RecordScannedReferences`), so its plan holds what they use now.
 - **Importing external files** (`EditorAssetManager::ImportExternal`, `asset.import`). Nothing of it runs in a frame: an
-  I/O job copies the files (`ExternalCopy`, which uses no manager state) and `Update` registers what it copied
-  (`RegisterAddedFile`, with the copied `.meta` files' handles where they are free) and queues their imports as
-  background jobs like re-imports; the import is `Finished` once every asset it brought is imported, and the command,
+  I/O job copies the files (`ExternalCopy`, which uses no manager state) and prepares what it copied for registration
+  as a scan does (`PrepareAddedFiles`: the copied `.meta` files' handles where they are free, new ones written by the
+  job, cached imports checked, documents' references found), `Update` only inserts it (`InsertPrepared`, touching no
+  file) and queues the imports as background jobs like re-imports; the import is `Finished` once every asset it brought is imported, and the command,
   deferred, answers then. Copies run one at a time in the order of the calls (`StartNextExternalCopy`), so two never pick
   the same free name, and a copy never writes over a file (`std::filesystem::copy_options::none`; what a failed copy left
   is removed). The file watcher leaves the files of a copy alone until `Update` registers them complete: the copy names
@@ -1240,6 +1437,26 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   frame) applies imports as they finish (`WaitForImportProgress`), since loads that wait for a first import resume only
   when it is applied. The editor's export polls
   `HasPendingImports` between frames instead (`GameExport`, "Waiting for asset imports to finish").
+- **Import memory admission.** Decoding takes many times a source's size (a 4096x4096 PNG decodes to 64 MiB, and its
+  float levels and compressed blocks take about 256 MiB more), so imports start only while their estimates fit a budget
+  (`EditorAssetManager::SetImportMemoryBudget`; by default a quarter of physical memory clamped to 1-4 GiB,
+  `GetDefaultImportMemoryBudget` with `Platform::GetPhysicalMemorySize`, so that it binds on large machines too). An
+  import job first reads the source's head (`c_AssetPrefixHeadBytes`) and asks its importer for an estimate
+  (`AssetImporter::EstimateImportMemory` with an `ImportEstimateSource`, through which it reads more of the source or of
+  the files it names, `ReadEstimateBytes`, under the shared file lock: four times the source's size by default; textures
+  20 bytes per pixel from the image header, `stbi_info_from_memory`, reading prefixes eight times larger until it shows,
+  since a JPEG's frame header follows its metadata segments, and 50 times its size for an image whose header never shows;
+  glTF twice its buffers and its images by their headers like textures, whether embedded in the `.glb`, in buffer files
+  or files beside it, with the document read past the head up to 64 MiB). It runs at once on its thread when nothing waits before it and its estimate fits beside the imports admitted,
+  or when nothing else is admitted, however large it is (`BackgroundWork::AdmitOrWait`); otherwise it joins the work's
+  queue of waiting imports, in arrival order, and its thread is free for other work. An admitted import that ends
+  (finished, failed or cancelled) releases its estimate and submits, as background jobs, the waiting imports that now fit,
+  front first; cancelled ones leave the queue then. A larger budget starts what fits at once. Blocking imports (scans that
+  wait, `ReimportAsset`, `ImportExternalFile`: tools and tests) are admitted the same way but wait on their own thread;
+  since they hold it, they wait only while an admitted import runs, never for admitted imports still queued for a thread,
+  which may need theirs (they then run beyond the budget rather than deadlock). The budget replaced the one-at-a-time lock
+  for sources above 64 MB. `asset.stats` and `editor.status` report `importMemoryMB` (`admitted`, `budget`, `queued`), and
+  `asset.setBudget {importMB}` changes the budget for the open project (`reset` restores the default).
 - **References and bounds** (`Asset/AssetDependencies.h`). What an asset references is recorded with its import:
   importers add what their stored form does not show as a document (`ImportResult::References`; a glTF mesh's default
   materials) and the local bounds of meshes (`Bounds`), and `AssetDependencies::Scan` reads the documents (scenes,
@@ -1292,6 +1509,16 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   | Model | `.gltf .glb` (also `EXT_meshopt_compression`, decoded with meshoptimizer) | `GltfImporter` | entity template; Mesh (skinned ones with their skin), Material, Texture, Skeleton and AnimationClip sub-assets |
   | AudioClip | `.wav .mp3 .flac .ogg` | `AudioClipImporter` | `STAU` header + the encoded file |
   | Font | `.ttf .otf` | `FontImporter` | the source, validated on import |
+
+  A model's import `Scale` is baked into its content: mesh positions (before LODs and bounds are made from them, so
+  simplification errors and recorded bounds are in final units), node translations below the root, the skeleton's rest
+  translations, the inverse bind matrices' translations (`S * IBM * S^-1`) and clips' translation keys (with a cubic
+  spline's tangents; rotations and scales keep theirs), imported cameras' clip planes and lights' ranges; the model's root
+  keeps scale 1. The root's transform belongs to each placed instance (`PrefabInstances`), so instances follow a change
+  of the setting. Instances placed while the importer still put the scale on the root (version 7) are migrated by
+  `PrefabSync`: a reimport while their scene is open multiplies their root's Scale by the template root's new over its
+  old Scale (in the "Update Instances" step); a scene opened later gives an outdated instance whose root Scale is the
+  model's import Scale, while the template root's is 1, Scale 1 (logged once per model and scene).
 
 - **Loading** (`Asset/AssetManager.h`). `GetAsset` never blocks: it returns null until the asset is Ready and requests
   the load. `RequestLoad` queues the load in the streaming queue, which reads on the I/O pool (`ReadAssetData` of the
@@ -1381,8 +1608,20 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   `Usage`, `Compression` (`Auto`, the default, or `Uncompressed`), `Quality` (`High`, the default, or `Fast`: opaque
   color as BC1, half of BC7's bytes, and translucent color's BC7 searched over modes 6 and 5 only; normal maps, data and
   HDR are stored the same at either quality), `GenerateMips`, `Filter`, `Wrap`,
-  `MaxSize`, `FlipVertically`. The importer writes every setting into a new `.meta`; files from before keep the
-  defaults for keys they lack (the feature project's `.meta` files hold every key, which its test checks). The image
+  `MaxSize`, `FlipVertically`, `FlipGreen` (normal maps only: inverts green before the mips are filtered, for
+  DirectX's +Y-down convention; version 5). The importer writes every setting into a new `.meta`; files from before keep
+  the defaults for keys they lack (the feature project's `.meta` files hold every key, which its test checks). Defaults
+  come from the file name (`TextureImportSettings::GetDefaults`): `.hdr` is HDR; otherwise the stem is split into tokens
+  (at `_`, `-`, `.`, spaces and lower-to-upper case changes, lowercased), resolution and convention tokens are dropped
+  (`1k` to `16k`, powers of two from 256 to 16384, `<w>x<h>`, `gl`, `ogl`, `opengl`, `dx`, `directx`), and a token
+  anywhere names normal maps (`nor`, `nrm`, `norm`, `normal`, `normals`, `normalmap`, `nml`, `normalgl`, `normaldx`, and
+  `n` as the last one) or data (`rough`, `metal`, `ao`, `orm`, `arm`, `mask`, `height`, `disp`, `bump`, `spec`, `gloss`
+  and their long forms); `dx`, `directx` or `normaldx` turn `FlipGreen` on, so Poly Haven's `aerial_rocks_02_nor_gl_1k`
+  and `rocks_nor_dx_2k` import as the normal maps they are. A texture in a material slot that reads it as something
+  else (a Color texture as the normal map or in Metal/Rough or Occlusion, a normal map or data as color) is reported by
+  `AssetEdit::FindTextureUsageMismatches`: `material.get`, `material.set` and `material.create` return it as `warnings`
+  with the `asset.setImportSettings` call that fixes it, and the material editor draws it under the slot with a button
+  that runs that fix (textures a model's import made are left out: the importer chose their usage from the slot). The image
   decodes with only the channels its format needs (color keeps RGB or RGBA, gray color becomes RGB, normal maps XYZ,
   data its own channels), and `TextureImporter::ChooseFormat` picks the format: color `BC7SRGB` (at `Fast`, `BC1SRGB`
   when every texel is opaque), normal maps `BC5`, data `BC4` for one channel (marked grayscale, below), else `BC7`, HDR
@@ -1667,8 +1906,19 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     needs the levels its near part shows, and a texture tiled over it the finer ones its tiling asks for; a surface seen at
     a grazing angle spans as many texels across the view as facing it, which is what the 16x anisotropic samplers sample
     by. Per texture the streamer takes `floor(log2(size * tiling / UVPixels))` (`ComputeWantedLevel`, clamped to its
-    levels), the finest over every use and view; shadow passes report nothing. Detail rises at once and falls only after
-    120 frames without a need of it (`c_DropDelayFrames`); a texture nobody needs falls to its tail. A still frame costs the
+    levels), the finest over every use and view; shadow passes report nothing. Detail rises at once and falls only under
+    GPU texture pressure (`ReleaseMemory`, `MakeRoom`) or once nothing needed it for 30 s (`c_IdleDropSeconds`, by a
+    steady clock rather than frames; `TextureStreamer::SetIdleDropSeconds`), least recently needed first, a few textures
+    per frame: levels the budget has room for stay while the view looks elsewhere instead of being read again when it
+    looks back (before, they dropped after 120 frames, 2 s, with gigabytes of headroom). A texture nobody needs falls to its
+    tail and is forgotten at twice that time. Raised levels fade in: the swap points the texture's table entry at the new
+    texture with a minimum level of detail of the levels it gained (`TextureTable::SetFadeIn`), which falls linearly to 0
+    over `TextureTable::c_FadeInSeconds` (0.25 s); `SampleMaterialTexture` (`Include/MaterialTextures.glsl`, fragment
+    shaders) scales both sampling gradients until the anisotropic level of detail reaches it (`textureGrad`), so the new
+    detail blends in from what the old texture showed, and filtering keeps its footprint's shape. Material data does not
+    change, only the table entries of the fading textures, once per frame. Raises for a view that needs the texture whole
+    (no streaming: exact pixels) do not fade, and renderers of single images that wait for their levels (the editor's
+    capture renderer, thumbnails) ignore fades (`SceneRendererSpecification::FadeTextureLevels`). A still frame costs the
     streamer nothing per texture: a frame's needs are kept in the targets they update (no allocation for a texture needed
     before), and `OnUpdate` looks only at textures whose target changed in a way that can call for another level
     (`TextureStreamingPolicy::GetChanged`: new or forgotten, another level, needed now and not before or the other way
@@ -1682,7 +1932,7 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
     frame for as long as its owner keeps the `TextureHold`, whether or not anything draws it: a renderer holds the sky
     light's environment map until it has computed the environment from its whole chain (only the cube is sampled
     afterwards, and the map drops back to its tail), so a renderer that draws only now and then - the capture renderer of a
-    headless editor, whose captures lie seconds apart, longer than the drop delay - finds the map whole at its next frame
+    headless editor, whose captures may lie further apart than the idle drop time - finds the map whole at its next frame
     instead of raising it for one frame and losing it again before the next. Renderers share the environment computed
     from a map while any of them lights with it, so one that starts drawing the scene later, such as the editor's capture
     renderer beside the viewport's, takes it over in its first frame instead of waiting for the map's levels.
@@ -1763,7 +2013,12 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   wanted, count, resident bytes). `GetStats` costs the same with any number of assets: the
   counts of assets per state and of pinned assets change with the entries (`SetStateLocked`, `AddEntryLocked`,
   `RemoveEntryLocked`, `Pin`, `Unpin`; every change of an entry's state goes through them), so the editor reads them
-  every frame. `GetResidencySamples` gives the per-asset part without names into a vector the caller reuses, and
+  every frame. `GetResidencySamples` (like `GetResidencyInfo`) costs what is listed, not what is registered: the base keeps
+  the listed entries (not unloaded, loaded or pinned) with every change of state, loaded object or pin
+  (`UpdateListedLocked`; tests check it against a look at every entry, `ValidateResidencyIndex`) and walks them, or all
+  entries once at least a quarter of them are listed, which then costs less than looking each listed one up
+  (`ForEachListedLocked`: the Streaming panel with every asset resident costs what it did before the index), gives the
+  per-asset part without names into a vector the caller reuses, and
   `GetMetadataVersion` changes with every registration and metadata change, so a view of tens of thousands of assets
   reads names only when they change.
   The editor reports them, apart from the `GetAsset` calls, through `asset.stats` (`mipStreaming`; the rows of streaming
@@ -1828,13 +2083,31 @@ A frame of `SceneRenderer::Render`:
 RenderScene::Get(scene).Sync()   world transforms, then the proxies of signaled mesh renderers and changed transforms,
                                  then the mesh layouts of meshes the asset manager loaded, reloaded or dropped since
 AssetResolveCache::BeginFrame    the frame's asset manager
+RenderSceneGPU::Update           the render scene's GPU copy: what changed since its last update (shared by the
+                                 scene's renderers), new proxies within the frame's budget, the mesh and material
+                                 tables after the asset manager's content changes; executed at once
 CullView                         SpatialIndex::QueryFrustum; screen fractions and request priorities (parallel chunks);
                                  meshes of unknown bounds as if in view; QuerySphere for the prefetch distance
-FindShadowCasters                cascade boxes; QueryPlanes per cascade, then the exact test in light space
+  or ApplyFeedback               (GPU-driven, VisibilityFeedback) the marks and screen sizes of an earlier frame's GPU
+                                 culling; the users of transparent materials and the skinned proxies in view
+FindShadowCasters                cascade boxes; QueryPlanes per cascade (a job each, merged in cascade order), then
+                                 the exact test in light space in parallel chunks (casters below a texel of a cascade
+                                 left out of it), animator reports and the assets casters need merged in chunk order
+                                 (feedback frames: the boxes, and the skinned proxies out of view for their animators)
 ResolveAssets                    each mesh and material used once: Resolve, Prefetch or FindResident; materials used
-                                 as in the frame before: its data, their assets looked up in one call (below)
-GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches
-UploadSceneData                  changed instances, changed materials, the changed range of each draw list
+                                 as in the frame before: their flags, their assets looked up in one call (below)
+GatherDraws, GatherShadowDraws   draws per chunk on the job system, merged in chunk order; RadixSort; batches (the
+                                 GPU-driven path: transparent draws, the materials' screen sizes and the cascades only)
+BuildDrawArguments               the batches' indirect arguments at their meshes' places in the geometry pool
+PrepareGPUCulling                (GPU-driven) the frame's buckets and their draw slots, the culling constants
+UploadSceneData                  the changed range of each draw list (and the bucket table)
+RunGPUCulling                    (GPU-driven) Cull.comp counts (and writes visibility feedback), CullBuild.comp places
+                                 the draws, CullFeedback.comp packs the feedback, Cull.comp writes the draw list; the
+                                 passes then draw each bucket indirectly
+RunShadowOcclusionPhase          (GPU-driven, after the cascades' first-phase draws) HZBBuildArray.comp's pyramid per
+                                 cascade, CullShadow.comp's second phase and its shadow draws
+RunOcclusionPhase                (GPU-driven, after the first phase's prepass) HZBBuild.comp's depth pyramid, Cull.comp's
+                                 second phase and its prepass draws
 ReleaseFrameAssets               (when Render returns, however it ends) every reference the frame took, and the manager
 ```
 
@@ -1845,7 +2118,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   It listens to the component's signals: created and signaled (`on_update`: `ComponentAccess`, `MarkModified`) mesh
   renderers are read at the next `Sync`, destroyed ones lose their proxy at once; world transforms and activity come
   from `Scene::GetWorldTransformChanges` (every proxy is compared when the scene no longer knows). Writes to
-  `MeshRendererComponent` fields must therefore signal, like transform writes (AGENTS.md, "Architecture rules"); Debug
+  `MeshRendererComponent` (and light component) fields must therefore signal, like transform writes (AGENTS.md,
+  "Architecture rules"); Debug
   builds compare the proxies with the scene after every `Sync` (`RenderScene::Validate`). Signaled entities wait for the
   next `Sync` in a queue that holds each entity once (destroyed ones leave it), so a scene that changes while nothing
   renders it (a hidden view, an agent capturing now and then) queues no more than its entities. A scene's first sync
@@ -1857,6 +2131,35 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   swaps the scene in then builds no proxy (the longest frame of opening 20,000 prefab instances of five cubes in the
   editor: 51-52 ms before, 15.5-17 ms with it, most of it the first frame's upload of every instance and the
   Hierarchy's rows).
+- **Lights** (`Renderer/RenderLights.h`, `RenderScene::GetLights`). Point and spot lights are records too: one per light
+  component (`RenderData::LightRecord`: world position and range, color, direction, cone and the bounding sphere of the
+  region it reaches; inactive or unlit lights keep a record marked not drawn), kept like the proxies from the
+  components' signals and the world transform changes, with a change log the GPU copy follows (`RenderSceneGPU`'s light
+  record buffer, `RenderSceneGPUUpdate::LightBytes`). The GPU-driven path culls them on the GPU in the `GPU.Cull` stage:
+  `Scene/LightCull.comp` tests each record against the camera-relative frustum and counts each work group's lights in
+  view, `Scene/LightCompact.comp` packs those, in record order, into the light buffer (camera-relative, with view-space
+  bounds) and writes their count, which `Scene/LightClusters.comp` reads (`FrameConstants::LightCounts.y`). Nothing caps
+  them (10,000 lights in view draw 10,000; `MaxLights` caps only the CPU path), and a cluster that more lights reach than
+  `MaxLightsPerCluster` keeps the most relevant by finding the relevance of its last kept light bit by bit (the CPU path
+  sorts its lights by relevance instead). The CPU path walks the records instead of the registry. The counts come back
+  with the culling's (`CullCounters::VisibleLights`, `DrawnLights`).
+- **Clones** (`RenderScene::CopyIntoScene`, the Renderer module's `Scene::SceneContextCopier`). `Scene::Copy` of a scene
+  with a render scene (play start; not a background save's `SerializedOnly` snapshot) clones it into the copy: the copy's entities keep the source's EnTT identifiers, so
+  every proxy, instance, mesh and material slot and palette index stays the same, and the clone is the source's arrays
+  copied member by member, the large ones on the job system at once (`Core/ParallelClone.h`); it records its source
+  (`GetCloneSource`) and the source's change versions (`GetCloneVersions`), connects its listeners to the copy's
+  registry without queueing an entity, and reads a transform change the source had not read yet with a full comparison
+  at its first `Sync`. A renderer whose render scene was the source adopts the clone (`PrepareExtraction`): its per-slot
+  state, feedback, visibility history and view state carry over, so the copy's first frame is a steady frame. The clone's
+  GPU copy is made from the source's (`RenderSceneGPU::CreateClone`: its CPU state copied the same way, its buffers by
+  GPU copies executed at once) when that holds exactly the versions the clone started from (`HoldsVersions`), so it
+  uploads nothing; otherwise it fills by uploads like a new one. Its buffers double the scene's mirror memory while both
+  live (`renderStats.sceneMirrorMB`; the source's mirror goes once it was unused for `c_UnusedFrames`). Starting play on
+  1,000,000 rendered cubes takes 12-15 ms for the clone and 10-12 ms more for the copy's first `Render`, most of it the
+  GPU copy's CPU state and its buffers (Apple M2 Max under load, `PerfGPU.Renderer.PlayStartRender1MCubes`, 22-27 ms in
+  all; without the clone the first `Render` took 329 ms and the next frames uploaded the mirror for eight more).
+  Copy-on-write pages shared between the two would make the clone near free but add an indirection to every hot loop of
+  the render scene; the deep copy stays until a measurement on the reference machine says the pages cost nothing there.
 - **Mesh layouts**. The bounds, submeshes and submesh materials of a mesh are learned from the loaded mesh
   (`SetMeshLayout`) and kept when it is evicted. `Sync(assets)` keeps them current with the asset manager whatever the
   renderers look at: it reads the manager's content changes since its own content version (all of them when the
@@ -1903,8 +2206,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   like every draw, and draw with the skinned variants of the mesh and shadow vertex shaders (`Scene/MeshSkinned.vert`,
   `ShadowMeshSkinned.vert`: `ST_SKINNED`), which blend the palette entries of a vertex's four influences (the mesh's
   skin stream, vertex buffer 2) before the instance's world transform, in the prepass (entity IDs and normals), the
-  forward passes and the shadow cascades. Without a pose (no animator, nothing playing) a Skin proxy shows its bind pose
-  through the ordinary pipelines. Every influence names a joint of the skin, also those without weight (the shaders read
+  forward passes and the shadow cascades. Without a pose (no animator, no provider) a Skin proxy shows its bind pose
+  through the ordinary pipelines; the editor's scenes always have one (their rest poses, see Animation, "Previews"). Every influence names a joint of the skin, also those without weight (the shaders read
   all four palette entries; `Mesh::CreateSkinned` refuses others). Renderers report the animators of the Skin proxies in
   their view (`ISkinningPoses::ReportVisible`), which animators that animate only while seen read, and of the shadow
   casters out of view whose shadows can fall on what the view shows (`SceneRenderer::CanShadowView`: the caster's box
@@ -1920,9 +2223,40 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   back at their entities' transforms; `Validate` expects the same. Scenes without such a provider pay nothing for it.
 - **Slots and instances**. Meshes and materials get dense slots shared by their users. Every submesh of a proxy whose
   mesh layout is known has an `InstanceData` (64 bytes: the 3x4 world matrix, the material slot, the entity ID, flags) in
-  one array that persists between frames. Changes are logged by version (`GetInstanceChanges`, the latest 65,536), so
-  each renderer uploads only the instances that changed since its own last upload, in ranges. Shaders find an instance
-  through the frame's draw list (`u_DrawList[gl_InstanceIndex]`) and derive the normal matrix from the 3x4 rows.
+  one array that persists between frames. Changes are logged by version (`GetInstanceChanges`, the latest 65,536), and
+  so are the proxies themselves (`GetProxyChanges`: placement, flags, mesh slot, instance range, creation, destruction;
+  a proxy changed several times between two reads is logged once, and taking the version, `GetProxyVersion`, counts as
+  a read) and the palettes. Shaders find an instance through the frame's draw list (`u_DrawList[gl_InstanceIndex]`) and
+  derive the normal matrix from the 3x4 rows.
+- **The GPU copy** (`Renderer/RenderSceneGPU.h`). The instances, the palettes and a 64-byte culling record per proxy
+  (`RenderData::GPUProxy`: local and world bounds, instance range, mesh slot, flags) live in buffers of a mirror per
+  render scene, which every renderer of the scene shares (`Renderer::GetRenderSceneGPUs`, keyed by
+  `RenderScene::GetId`, not in the registry context: scenes die on background jobs). `Update` follows the three change
+  logs and uploads what changed through staging (`GPUUploadQueue::RecordSceneUpload`, counted as the frame's
+  `SceneDataBytes` and in `--perf-log`'s `UploadQueue*` columns) in a command list it executes at once, so a second
+  renderer of the scene uploads nothing. A proxy is drawn once it is resident (its record and instances uploaded in one
+  update): changes of resident proxies upload at once; new proxies (a scene's first frame, new entities, a reused proxy
+  index) upload oldest first within `SceneRendererSpecification::NewInstanceBytesPerFrame` (16 MiB) per device frame, at
+  least one a frame, and wait meanwhile with a record of zeros (`SceneRendererStats::DeferredInstanceBytes`,
+  `DeferredProxies`; the editor's single pictures, `viewport.capture`, the project's picture and thumbnails, render again
+  until none waits); a destroyed proxy's record is cleared at once. Buffers grow by a GPU copy into larger ones (the
+  old ones released deferred), so growth uploads nothing again. `PrepareLoadedScene` fills a loaded scene's mirror too,
+  within `c_PrepareUploadBytes` a frame, so the frame that shows the scene uploads no proxy. A render scene's
+  destructor posts its id (any thread) and `Renderer::BeginFrame` releases its mirror; mirrors no renderer updated for
+  `RenderSceneGPUCache::c_UnusedFrames` (300) frames go too, and a later frame of their scene uploads it again.
+  The mirror also holds the scene's asset tables, by slot: the mesh table (per mesh slot the `GeometryHandle` of the
+  loaded mesh, with its arena; 0 while it is not loaded or not in the geometry pool), and per material slot its GPU data
+  (`RenderData::MaterialData`, `MaterialGPU::Build`) and flags (available, double-sided, alpha-masked, transparent), of
+  the loaded material or, while it is not loaded, of the default material. They follow the asset manager's content
+  changes (`AssetManagerBase::GetContentChanges`; another manager, or one that no longer remembers that far back,
+  builds every slot) and the scene's slots (`RenderScene::GetSlotsVersion`, `FindMeshSlot`, `FindMaterialSlot`): a
+  mesh or material is built again when it was loaded, reloaded or dropped, a material also when one of its textures or,
+  for those drawn as the default material, the default material was (a reverse index from textures to the material
+  slots naming them). Textures are named by texture table index, so a texture streaming levels builds nothing. Only
+  the slots built upload (`RenderSceneGPUUpdate::MeshesChecked`, `MaterialsBuilt`, `MaterialBytes`). Both paths read
+  the materials from this buffer, and the GPU-driven path culls with these tables, so it draws whatever is loaded; the
+  mirror requests nothing (the renderers' extraction does) and is updated after the frame's requests, which publish
+  nothing, so the CPU's flags and the tables agree.
 - **Spatial index** (`SpatialIndex`). A loose grid: a proxy lives in the 32-unit cell that holds the center of its
   bounds, cells keep the union of their proxies' bounds and form blocks of 8x8x8 cells, and proxies longer than four
   cells are kept in a list of their own. Queries (frustum, convex planes, sphere) skip blocks and cells outside the
@@ -1932,7 +2266,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   High priority above `HighPriorityScreenFraction` (5%) of the viewport height and at Normal below; proxies within
   `PrefetchDistance` (100 units) of the camera request them at Low (also a mesh another lookup of the frame found not
   loaded); meshes of unknown bounds are requested as if in view (above); shadow casters outside the view and the
-  prefetch distance are drawn only from what is resident. Each distinct mesh, material and texture is looked up once
+  prefetch distance are drawn only from what is resident. GPU-driven frames learn these uses from the GPU's culling of an
+  earlier frame (visibility feedback, below) and walk the view on the CPU only where it cannot tell. Each distinct mesh, material and texture is looked up once
   per frame (one `GetAsset`, which also
   stamps it for the least-recently-used order; `AssetManagerStats::GetAssetCalls` counts them at the manager). The
   references are held only while the frame is rendered (the command lists keep the GPU resources they use, the bindless
@@ -1943,35 +2278,158 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   environment map (the source of its cube maps) until the environment changes, also while the renderer idles or after
   its project closed (the maps computed from a map, and with them the map, are shared by every renderer lighting with it
   and released with the last one; until a renderer has computed them it holds the map whole in the texture streamer,
-  `TextureStreamer::Hold`, also through frames it does not draw), and `TextRenderer`'s glyph atlases hold their fonts as
-  long as the fonts are loaded.
+  `TextureStreamer::Hold`, also through frames it does not draw), and the renderer's glyph atlases (`FontAtlasCache`)
+  hold their fonts as long as the fonts are loaded.
   Batches name meshes by slot (`SceneDrawBatch::MeshSlot`), so what `GetOpaqueBatches` reports after the frame holds no
   pointers.
-- **Material data taken over by still frames** (`SceneRenderer::MaterialResolution`). Resolving a material builds its GPU
-  data from its properties and the bindless slots of its textures, one lookup per material and texture: 0.58 of the
-  1.0 ms a still frame of 3,000 streamed textures took (`PerfGPU.Renderer.IdleFrame3kStreamedTextures`). A frame whose
-  material slots, their uses and their handles are those of the latest frame that resolved them one by one takes that
-  frame's data, flags and texture maps over when nothing they come from changed: the materials and textures are still
+- **Materials taken over by still frames** (`SceneRenderer::MaterialResolution`). Resolving a material requests it and
+  its textures, one lookup per material and texture: 0.58 of the 1.0 ms a still frame of 3,000 streamed textures took
+  (`PerfGPU.Renderer.IdleFrame3kStreamedTextures`). A frame whose material slots, their uses and their handles are those
+  of the latest frame that resolved them one by one takes that frame's flags and texture maps over when nothing they
+  come from changed: the materials and textures are still
   the loaded objects it found (compared by ownership under one lock of the manager, `AssetManagerBase::TouchLoadedAssets`,
-  which also stamps them as used, as the lookups would) and no bindless slot of those textures was released since
-  (`BindlessTextureTable::AreSlotsUnchanged`: a texture that streams levels moves to a new slot and releases its old
-  one, so data naming the old slot would sample a recycled descriptor and can lose the device). The lookups are those
+  which also stamps them as used, as the lookups would). The materials' GPU data is the render scene's GPU copy's
+  (above), built when a material or its textures change, not per frame. It names textures by their index in the texture table
+  (`Renderer/TextureTable.h`, `Renderer::GetTextureTable`), which a texture keeps for its life: a texture that streams
+  levels moves to a new bindless slot and releases its old one, and only its table entry follows (`Texture::
+  SwapResidentTexture`; the renderers upload changed entries before they draw, `TextureTable::RecordUploads`), so
+  material data never names a released slot and a level change rebuilds no material. A freed index draws white and is
+  reused only once frames in flight completed. The lookups are those
   the resolving frame recorded (`AssetResolveCache::BeginRecording`, `EndRecording`), replayed with the statistics they
   counted (`Replay`); frames that drew a material as the default material, found an asset loading or counted one
   pending are not replayed. Loaded materials are not changed in place (edits publish new objects), so their properties
-  need no comparison. The camera takes no part: views that move over the same materials reuse them too. Still frames of
+  need no comparison, and no frame compares material data. The camera takes no part: views that move over the same materials reuse them too. Still frames of
   3,000 streamed textures went from 1.01-1.06 ms to 0.61 ms, of 10,000 materials from 1.33 to 0.61 ms, and the editor's
   frames of 10,000 materials from 1.82 to 0.99 ms.
+- **The GPU-driven path** (`SceneRendererSpecification::GPUDriven`, Auto where the device has
+  `drawIndirectFirstInstance`; `SceneRendererGPUDriven.cpp`, `Scene/Cull.comp`, `CullBuild.comp`, `Include/Culling.glsl`).
+  The GPU culls the render scene's GPU copy and builds the opaque and shadow draws; the CPU path (Off) stays as the
+  reference and the fallback. The CPU requests the frame's assets, places the cascades' squares and gathers transparent
+  draws, sorted; the GPU culls with the mirror's mesh table and material flags (above: whatever is loaded, whether this
+  frame requested it or not), and the CPU uploads the bucket table and the constants (`RenderData::CullConstants`). `Cull.comp` runs one thread per proxy, for the view and (variant `ST_CULL_SHADOW`) for
+  the cascades: the decisions are the CPU path's on the same data (active and indexed, the frustum, the screen size of
+  `MinProjectedPixels` for the view, the light-space box and the sub-texel rule for cascades, per instance the material
+  and the level of detail, `ChooseLOD` and `Include/LODSelection.glsl`: the pool's `GeometryLOD` records carry each
+  level's relative error and `GeometrySubmesh::Flags` whether the submesh chooses by them), and each instance counts on
+  its (bucket, LOD record). Buckets are
+  pipeline states and vertex arenas: mirrored, double-sided and geometry (Static arena, Skinned arena in its bind pose,
+  posed) for the view, alpha-masked and cascade too for shadows; only the buckets the frame can have get dense indices
+  and storage. `CullBuild.comp` gives each record with instances a range of the draw list and an indirect draw in its
+  bucket, then `Cull.comp` runs again and writes each instance into its record's range (the same decisions, counting
+  the record down). The passes then draw each bucket with one `drawIndexedIndirectCount` (devices with
+  `drawIndirectCount`), one `drawIndexedIndirect` over the bucket's draw slots (`NoCount`: as many slots as the meshes the
+  CPU's marks found have LOD records in that arena, those without instances zeroed; storage for every loaded mesh's
+  records), or one per slot (`PerDraw`), through the
+  vertex shaders' `u_DrawList[gl_InstanceIndex]` as before. No call issues more draws than the device's
+  `maxDrawIndirectCount`: buckets with more slots draw without a GPU-written count (whose value must stay within it), in
+  several `NoCount` calls. MoltenVK has no `drawIndirectCount`: there the `NoCount` path runs. The counts (instances, draws, triangles, levels, shadow casters, visible and size-culled proxies) come back
+  2-3 frames late through a readback (`BufferReadback`, `SceneRendererGPUStats`, `AddGPUCounts`). The opaque pixels do not
+  depend on the order of a record's instances; shadows' receiver plane bias follows the receiver's normal, not
+  screen-space derivatives, which on some GPUs depend on how draws group pixels into quads (`Include/Shadows.glsl`), so
+  both paths agree to the pixel (`GPU.SceneRenderer.GPUDriven`, `IndirectFallback`).
+- **Visibility feedback** (`SceneRendererSpecification::VisibilityFeedback`, on by default; `Cull.comp`'s counting
+  passes, `Scene/CullFeedback.comp`, `SceneRenderer::ApplyFeedback`). What a GPU-driven frame requests comes from the GPU's
+  culling of an earlier frame instead of the CPU walking the view's proxies. For every proxy within the prefetch distance,
+  in the view (frustum and screen-size tests) or casting into a cascade, whether its mesh is loaded or not (unloaded ones
+  are placed by their recorded bounds), the counting pass marks its mesh slot and its materials' slots (its instances',
+  or its override material, which the proxy record carries above its flags, while its mesh's layout is unknown) with the
+  use (view, high above `HighPriorityScreenFraction`, prefetch, shadow: the CPU's request marks) and the largest projected
+  size, and for textured materials the UV pixels texture streaming follows (`Include/TextureStreaming.glsl`, the port of
+  `TextureStreamingPolicy::GetWorldPixels` and `GetUVPixels`). The first touch of a slot appends it to a list, so the
+  pack pass and the CPU's read are proportional to the distinct assets in use, not to the proxies; slots are read
+  before their atomics, so a million proxies of one mesh cost one atomic each slot. The records come back with the
+  counters, 2-3 frames late (`BufferReadback` reads at offsets), and a frame applies the newest: it marks the slots,
+  takes the screen sizes for `VisibleMaterialUse`, and walks on the CPU only the users of transparent materials
+  (`RenderScene::CollectMaterialUsers` over `RenderSceneGPU::GetTransparentMaterialSlots`: the CPU draws them, sorted) and
+  the skinned proxies (their animators learn that they are seen; cascades take the shadowed part of the view as their
+  receivers) in the frustum, and the meshes of unknown bounds. The CPU's walk (`CullView`) runs instead on a renderer's
+  first frames, after a camera cut (until feedback of a later frame arrives), whenever the mirror's tables changed since
+  the feedback's frame (an asset loaded, edited or dropped: its users were not seen with it), when the feedback is more
+  than 8 frames old, and once after a frame whose draws overflowed the slots the feedback foresaw (paths without a
+  GPU-written count bound each bucket's draws by the records of the meshes the feedback saw in view, plus a quarter and
+  16, and count what lies beyond as overflow). Feedback is a few frames late by design: a material no longer drawn is
+  requested until the GPU saw it go. The casters are the GPU's too: on feedback frames `FindShadowCasters` only places the
+  cascades and tests the skinned proxies out of view for their animators (with the shadowed part of the view as their
+  receivers: it may report more animators than the CPU's walk, never fewer), the shadow buckets' slots follow the meshes
+  the feedback saw cast, and the cascades' depth ranges are fitted on the GPU the same frame.
+- **Occlusion culling** (`SceneRendererSpecification::OcclusionCulling`, on by default; `Cull.comp`'s second phase,
+  `Scene/HZBBuild.comp`, `RunOcclusionPhase`). The view is culled in two phases. The first draws, of the proxies that pass
+  the frustum and size tests, those the view saw in the previous frame into the depth prepass. A depth pyramid of that
+  depth follows: level 0 is half the depth buffer, each texel the farthest (smallest, reversed-Z) depth of the 2x2 below
+  it, odd edges left out, so a texel of level m covers exactly the pixels p with p >> (m + 1) equal to it; one sample of a
+  minimum-filtering sampler where the device has `samplerFilterMinmax`, four loads otherwise (MoltenVK). The second phase
+  tests every proxy in the frustum against the pyramid (its box's screen rectangle at the finest level it spans in at most
+  2x2 texels, against the box's nearest depth; boxes reaching the camera's plane are visible), records whether it is
+  visible, and draws into the prepass those visible now that the first did not draw: something that comes into view is
+  drawn in that frame, never a frame late. The forward pass draws both phases' buckets (the second phase has view buckets
+  of its own) with the `EQUAL` depth test, and ambient occlusion, entity IDs, outlines and tints read the final depth. The
+  per-proxy visibility is two bits that alternate frame by frame (the previous frame's, this frame's), cleared on a camera
+  cut, a renderer's first frame or another render scene: the first phase then draws nothing and the second tests
+  everything against an empty pyramid. Orthographic views work alike. The CPU path does none;
+  `SceneRendererGPUStats::OccludedProxies` (`renderStats.occludedProxies`) counts what the second phase found hidden.
+  Visibility feedback still marks occluded proxies' assets as in view, so requests do not depend on it.
+- **The cascades' occlusion culling** (the same switch; `CullShadow.comp`'s second phase, `Scene/HZBBuildArray.comp`,
+  `RunShadowOcclusionPhase`). Each cascade is culled in two phases too, around its shadow map: the first draws the casters
+  that were drawn into it in the previous frame (a visibility bit per cascade and parity, beside the view's), a depth
+  pyramid per cascade follows (a layer each of one array texture; level 0 a quarter of the shadow map each way, each
+  texel the farthest of 4x4 texels, about 5.6 MB for four 2048 cascades), and the second phase tests every caster in the
+  cascade's box against it and draws those visible now that the first did not draw. The test is the caster's light view
+  box (the one the box and sub-texel tests use): its texel rectangle from the cascade's square and its nearest depth from
+  the cascade's orthographic depth range, the near plane's z coming from `CascadeFit.comp` (`CascadeData::Parameters.w`).
+  The fit still sees every caster in the box, both phases', since it runs before the first phase draws. Casters reaching
+  past the near plane (flattened onto it) are never hidden, and the shadow bias only moves depth away from the light, so
+  what is left out could not have changed the map: the shadows are the same. The cascades' second phase has shadow buckets
+  of its own (`c_CullShadowSecondPhase`), which `CullBuild.comp` builds in its own pass (mode bit 2), before the view's.
+  A caster that comes out from behind another is drawn in that frame; one that a new occluder hides is left out from the
+  second frame after it appeared (the occluder is drawn by the second phase first, then by the first, which finds the
+  caster hidden). `SceneRendererGPUStats::OccludedCasters` (`renderStats.occludedCasters`) counts the casters found hidden
+  per cascade. The pass costs GPU time of its own (about 1 ms at 100,000 and 300,000 casters on the M2 Max, mostly the
+  pyramids' wait for the first phase's shadow maps and the second pass over the proxies), so it runs while it pays: while
+  the latest frame that ran it with history found at least a sixteenth of the cascades' casters hidden, and otherwise
+  every 16th frame, to look again (`SceneRendererStats::ShadowOcclusionCulled`). Frames without it draw the cascades whole
+  and record what they drew as the next frame's history, so a look sees the whole picture; frames without history
+  (camera cuts, a renderer's first frame) do the same.
+- **Camera-relative rendering** (Docs/DeveloperGuide.md, "Camera-relative space"). Scene shaders work with the camera at
+  the origin: the frame's view matrices are rotation-only, vertex shaders subtract the camera's position from the
+  instance's translation before anything is added to it (`TransformPositionRelative`), and lights, the clusters' bounds,
+  debug lines, world-space text and the cascades are uploaded relative to the camera (subtracted in double; the cascades
+  texel-snapped in absolute light space in double first, so their edges stay still). Vertices near the camera keep full
+  precision however far from the origin it is, and the sky is drawn from a rotation-only ray. What remains is the scene's
+  own float32 transforms: entity origins quantize to 7.8 mm at 100 km (`InstanceData` stays world space, 64 bytes).
+- **Cascades fitted on the GPU** (`Scene/CascadeFit.comp`, `RenderData::CascadeFitConstants`, `CascadeData`). Each
+  cascade's projection reaches from the far side of its view slice's bounding sphere to the nearest drawn caster toward
+  the light (at most `c_MaxShadowCasterDistance` beyond the sphere; `ShadowMesh.vert` pancakes the casters beyond). One
+  compute thread per cascade builds it (`Math::OrthographicReverseZ` times the light view) into `u_Cascades`, which the
+  shadow pass and the receivers read, on both paths: the CPU path hands it the nearest casters it found
+  (`GatherShadowDraws`), the GPU-driven path's shadow culling records them (`u_CasterDepths`, an atomic maximum of
+  order-preserving encoded floats, `Include/OrderedFloat.glsl`) before the fit runs. So no frame waits for the GPU and
+  both paths build the same matrices from the same inputs.
+- **Cascades kept from frame to frame** (`SceneRendererSpecification::CacheShadowCascades`, on by default; the GPU-driven
+  path's `PrepareShadowCache`, `CommitShadowCache`). A cascade's layer of the shadow map is redrawn only when something
+  that reaches it changed since the frame that drew it; otherwise the culling draws nothing into it
+  (`CullConstants::CachedCascades`) and its layer is neither cleared nor drawn (`SceneRendererStats::CachedCascadeMask`,
+  `renderStats.cachedCascades`). A layer is described by its key (the whole camera and viewport, since the slices and
+  their squares follow both; the light's view; the cascade's square and depth range; the map size and the level-of-detail
+  criteria, since casters choose levels by the view) and by what its casters were drawn with (the render scene, the GPU
+  copy's mesh and material tables version, `GeometryPool::GetContentVersion` and, while materials are alpha-masked,
+  `TextureTable::GetUploadVersion`): a change of either redraws it. Casters that changed are read from the render scene's
+  proxy log: the cascades their world bounds reach, before and after the change (light space relative to the camera, with
+  two texels of margin), are redrawn. The bounds before a change are known only for proxies the cache saw change before
+  (up to 65,536; a static proxy's first change redraws every cascade), and a log that overflowed redraws every cascade.
+  The fit still runs every frame over every caster, so a kept cascade's projection is the one it was drawn with. The
+  cache is committed once the frame's command list was executed (a failed frame keeps nothing), and frames of the CPU
+  path redraw every layer. Perf tests that measure what frames cost turn it off (`Perf::MeasuredRendererSpecification`):
+  a still camera over a still scene would otherwise keep every cascade.
 - **Batching**. Draws are gathered in chunks of 2,048 proxies on the job system and merged in chunk order (the same
   result on any number of threads), then sorted with a stable radix sort (`Core/RadixSort.h`) of 64-bit keys: cascade,
   alpha mask, winding, culling, mesh slot, submesh and level of detail. The sort reads the keys once to find the bytes
   that differ and spends passes and histograms on those only (draws of one mesh share a key: nothing to sort). The
   material is not in the key, so the instances of a mesh share a draw call whatever their materials: shaders read
   `u_Materials[instance.MaterialIndex]` (`SceneRendererSpecification::BatchAcrossMaterials` off splits batches by
-  material, for comparisons). Transparent surfaces stay one draw each, back to front. Material data (by slot) is built
-  for the materials drawn (or taken over, above) and uploaded where it changed.
-- **A still frame** updates no proxy and uploads no instance, material or draw list (`SceneRendererStats::ProxyUpdates`,
-  `InstanceBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
+  material, for comparisons). Transparent surfaces stay one draw each, back to front. Material data (by slot) is the
+  render scene's GPU copy's, built and uploaded where a material or its textures changed.
+- **A still frame** updates no proxy and uploads no instance, proxy record, material or draw list
+  (`SceneRendererStats::ProxyUpdates`, `InstanceBytesUploaded`, `ProxyBytesUploaded`, `MaterialBytesUploaded`). Each frame publishes the materials it drew with their largest size
   on screen and texture tiling (`GetVisibleMaterials`, and their loaded texture maps, `GetVisibleTextures`, for mip
   streaming) and its counts and times (`VisibleProxies`,
   `ProxyUpdates`, `InstanceUploadRanges`, `ExtractMs`, `SortMs`, `RequestsByVisibility`, `PrefetchRequests`,
@@ -1998,7 +2456,7 @@ system, not to entities: a character's joints add no entities and no transform c
   (`AnimationClipBinding`; targets the skeleton lacks are skipped). An `AnimationController` (`.stanimator`) holds
   parameters (float, bool, trigger), states (a clip or none, a speed, looping, events) and transitions. Their loaders
   validate everything (truncated and garbage bytes are rejected).
-- **Import.** `GltfImporter` (version 7) makes one skeleton per model (sub-asset "Skeleton": the joints of every skin,
+- **Import.** `GltfImporter` (version 9) makes one skeleton per model (sub-asset "Skeleton": the joints of every skin,
   the animated nodes and their ancestors, parents first; the root motion joint is the topmost joint of a skin), a clip
   per animation ("Animation/<name>", or its index; keyframes reduced) and skinned meshes (see Asset pipeline,
   `MeshSkinBinding`). The model's root entity is its animator (`AnimatorComponent` with the skeleton and the first
@@ -2081,14 +2539,37 @@ system, not to entities: a character's joints add no entities and no transform c
   the last one, of an entity nobody moved since, writes nothing.
 - **Skinning** is the renderer's: `RenderScene` turns the poses of `ISkinningPoses` into palettes and posed bounds, and
   the vertex shaders blend them (see [Render scene](#render-scene), "Skinned proxies").
-- **Previews** (`AnimationPreview`): a scene that does not play has no animation system, so its skinned meshes show
-  their bind pose. A preview offers `ISkinningPoses` for such a scene and poses the animators asked for (a state, a clip
-  or what they play on start, at a time; `AnimatorSettings::Transitions` off, so the state machine holds it) once their
-  assets arrive, again when the request, the component's assets or an asset object (a reload) change; a request is
-  `Posed` only once its own pose is computed (an earlier pose shows meanwhile). Nothing in the scene changes: the
-  attachments of posed animators, and the mesh renderers under them, are drawn at their joints through render transforms
-  (`ISkinningPoses::GetRenderTransforms`, see [Render scene](#render-scene)), computed each update from the scene's
-  transforms. The editor keeps one for its edited scene (`EditorContext::GetAnimationPreview`, `animation.preview`).
+- **Previews** (`AnimationPreview`): a scene that does not play has no animation system, so without a provider its
+  skinned meshes would show their bind pose: the mesh's vertices as stored, without the skeleton's rest pose and the
+  joints above the skin that orient it (a glTF file's `Z_UP` node, a Mixamo `Armature` rotated and scaled), lying along
+  an axis of the ground. A preview offers `ISkinningPoses` for such a scene and poses the animators asked for (a state, a
+  clip or what they play on start, at a time; `AnimatorSettings::Transitions` off, so the state machine holds it) once
+  their assets arrive, again when the request, the component's assets or an asset object (a reload) change; a request is
+  `Posed` only once its own pose is computed (an earlier pose shows meanwhile). With
+  `AnimationPreviewSpecification::RestPoses` every other animator shows its skeleton's rest pose (`Animation/RestPose.h`,
+  `ComputeRestPose`, which `AnimatorInstance::Evaluate` gives with nothing playing too, so edit and play mode cannot
+  drift apart): one per skeleton handle, shared by its animators, computed again only when the skeleton's source revision
+  changes (a reimport, learned from the asset manager's content changes; an eviction keeps the matrices, which are data,
+  not a held asset). Animators are found through their component's signals, so an update looks only at animators that
+  were added, removed or changed, requests only skeletons that are loading, and an idle update does nothing at all
+  (`GetPosesVersion` unchanged, so `RenderScene::UpdateSkinnedPoses` returns at its version check; `GetStats` counts the
+  work for tests). Pose versions are a provider's own: when the scene's `ISkinningPoses` is another object (the play
+  copy's animation system after the preview's rest poses, which its render scene's clone kept), every palette is
+  computed again whatever the versions say. The edit pose (`AnimationEditPose`, `SetEditPose`; the editor's `ViewportSettings::EditPose`) can
+  instead be `ClipStart`: the first frame of what each animator plays on start (its controller's default state's clip,
+  else its `Clip`, through `AnimatorInstance` at time 0 as play mode shows it before its first update; without either,
+  or while that clip does not load, the rest pose). Those poses are cached the same way, keyed by skeleton, controller,
+  clip and root motion, and computed again when any of their assets' sources changes; a change of the edit pose looks at
+  every animator once. Nothing in the scene changes: the attachments of posed animators (requests and clip-start poses:
+  the importer placed attachments at the rest pose already), and the mesh renderers under them, are drawn at their joints through render
+  transforms (`ISkinningPoses::GetRenderTransforms`, see [Render scene](#render-scene)), computed again only when the
+  requests, the poses, the scene's transforms or hierarchy, or an attachment changed. The editor makes one with rest
+  poses for every edited scene (`EditorContext::GetAnimationPreview`, `animation.preview`), and the thumbnail cache one
+  per scene it renders, so characters stand in edit mode, in thumbnails and in the Asset tab's preview as they do in
+  play before their first animation. `SceneBounds` measures skinned meshes in the scene's pose
+  (`SceneBounds::GetPosedMeshBounds`, the expression `RenderScene::ComputePalette` bounds proxies with), so framing,
+  `camera.focus`, `entity.dropToGround` and placement (`EditorPlacement::GetTemplateBounds` gives the template's scene
+  rest poses) see them standing.
 - **Editor.** `animation.createController`, `animation.setController`, `animation.info` and `animation.preview` give
   agents the whole workflow without hand-written JSON (DeveloperGuide.md, "Animation commands"); the Asset tab edits
   controllers as tables (`UI/AnimationAssetViews`; each field has a least width in font sizes, which is also its share
@@ -2307,6 +2788,165 @@ saved, `viewport.setSettings {cellBounds}`, a "Cells" chip while a world is open
 at the bottom of their cooked bounds (y = 0 without an index), in the cell map's colors; the squares are worked out again
 only when the streamer's state version or World asset changed.
 
+## Game UI
+
+The GameUI module (`Strata/src/Strata/GameUI/`, the `GameUI` layer) is the game's own user interface: menus, HUDs,
+pause screens, health bars and buttons, laid out for any screen size and drawn over the scene. Only the composition root
+includes it: the renderer reaches it through the overlay registry and scripts through scene services, so a build without
+it renders and plays scenes as before.
+
+**Components** (`GameUI/GameUIComponents.h`, registered by `RegisterGameUIModule`, category "UI"). Coordinates are canvas
+units with +Y down and (0, 0) at the top left; colors are display (sRGB) colors.
+
+| Component | What it is |
+| --- | --- |
+| `UICanvas` | A screen of UI: its scale mode (`ConstantPixelSize`, `ScaleWithScreen` with a reference resolution and a width/height match, `ConstantPhysicalSize`), safe-area padding, sort order, pixel snapping, whether it takes input, the selectable navigation starts at, and its render mode: over the scene (`ScreenSpace`) or a plane in it (`WorldSpace`, `WorldUnitsPerUnit`) |
+| `UIRect` | The element's rect in its parent's: anchors, pivot, position, size, fit to content, and whether a layout group places it |
+| `UIImage` | A texture or solid color, simple, nine-sliced or filled, with rounded corners and a border; a raycast target by default |
+| `UIText` | Text in the rect: font, size in canvas units per em, alignment, wrapping, truncation with or without an ellipsis, line spacing, outline |
+| `UISelectable` | The interaction states shared by every widget (normal, hover, pressed, focused, disabled; color tints or image swaps over a fade time) and keyboard and gamepad navigation (automatic, explicit neighbours, none) |
+| `UIButton`, `UIToggle`, `UISlider` | Widgets: a click, an on/off switch with a checkmark and exclusive groups, a value with a fill and a handle; each may name an event target besides its own entity |
+| `UILayout` | Places the children: horizontal, vertical or grid, with padding, spacing, the alignment of the block and stretching |
+| `UIInputField` | A line the player types into while it has the focus: its text, the element that shows it, a placeholder, a character limit, the caret and selection colors, an event target |
+| `UIMask` | Clips the element's descendants to its rect inset by padding, with an optional soft edge; masks nest |
+
+An entity is a UI element when it has a `UIRect` and a root canvas (a canvas without a canvas among its ancestors) is the
+entity itself or an ancestor; a canvas under another canvas is an element of the outer one. Every UI component but the
+rect requires the rect (`ComponentInfo::Requires`), so adding an image by name adds its rect too. Entity references
+(`FirstSelected`, `TargetImage`, the navigation neighbours, a toggle's checkmark and group, a slider's fill and handle,
+event targets) are reflected entity properties: duplicates, pastes and prefab instances remap them, play mode's copy
+keeps them.
+
+**Layout** (`GameUIScene`, `GameUILayout.cpp`). One `GameUIScene` per scene, in its registry's context (`Get`, created on
+first use; it holds handles, never Refs or GPU objects). It keeps the root canvases in hierarchy order and each canvas's
+elements in depth-first order (parents before children: the draw order), and lays a canvas out for a **screen** (`UIScreen`:
+pixel size and content scale) at a scale s and a size of screen / s canvas units:
+
+- `ConstantPixelSize`: s = `ScaleFactor`; `ConstantPhysicalSize`: s = content scale x `ScaleFactor` (content scale 1 is 96
+  DPI); `ScaleWithScreen`: s = 2^lerp(log2(W / Rw), log2(H / Rh), `MatchWidthOrHeight`) for the reference resolution
+  (Rw, Rh). The root rect is the canvas's size in units inset by `SafeAreaPadding`.
+- A `WorldSpace` canvas (a sign, a monitor, a name tag) is laid out at its reference resolution in units whatever the
+  screen (s = 1, no pixel snapping) and placed in the scene by `GetCanvasWorldMatrix`: units of `WorldUnitsPerUnit` world
+  units in the entity's XY plane facing +Z (canvas +Y down becomes the entity's -Y), the point its rect's `Pivot` names at
+  the entity's origin, then the entity's world transform.
+- Rect math, per axis, in the parent's box P: anchors A0 = P.min + `AnchorMin` x P.size, A1 = P.min + `AnchorMax` x P.size;
+  size = max(A1 - A0 + `Size`, 0) (or the content's size on axes the rect fits); pivot point A0 + (A1 - A0) x `Pivot` +
+  `Position`; min = pivot point - size x `Pivot`.
+- Layout groups place their active children that do not `IgnoreLayout`, in sibling order: stacked at their preferred
+  sizes (their `Size`, or their content when they fit it) with `Spacing`, the block aligned in the padded rect by
+  `ChildAlignment`, children filling the cross axis with `StretchChildren`; grids in `CellSize` cells, `Columns` per row
+  or as many as fit. A group's own anchors still place it; the children it places ignore theirs.
+- Fitting content: a rect that fits takes its content's preferred size on those axes: a `UIText`'s shaped text (unwrapped
+  width; the height at the width it has), a `UILayout`'s children block plus padding. Layout runs per axis, widths first,
+  each axis bottom up for preferred sizes and top down for boxes, because a wrapped text's height depends on its width.
+- Masks: each `UIMask` element takes a slot of its canvas (parents first), every element is clipped by the nearest mask
+  above it (`Element::Clip`), and each layout keeps the masks' clip rects (`RenderData::UIClipRect`: the mask's box
+  inset by its padding, met with the clip rect of the masks above it), computed again when a mask's box or values
+  change. Quads name their clip rect, so a padding change rewrites the clip rects alone; hit tests and the editor's
+  picking use what the masks leave of a box (`GameUIScene::GetVisibleBox`).
+- Widget parts: a slider's `Fill` is anchored from the slider's start to its normalized value along `Direction`, its
+  `Handle` at the value; a toggle's `Checkmark` (with its descendants) is drawn only while the toggle is on. They read the
+  widgets' values, never write the scene, so they behave the same in edit mode, play mode and under undo.
+
+Rects are kept in canvas units and turned into pixels as units x s, so a canvas keeps up to `c_MaxLayoutsPerCanvas` (4)
+layouts keyed by its size in units (a game view, a capture of another aspect, the editor's canvas mode; the one used
+longest ago goes first), and a window resized at the same aspect ratio under `ScaleWithScreen` lays nothing out again.
+
+**The UI contract** (as the transform contract): `GameUIScene` listens to the UI components' `on_construct`, `on_update`
+and `on_destroy` signals and reads the scene's hierarchy moves and activity changes (`GetHierarchyMoves`,
+`GetWorldTransformChanges`, each changed entity checked against its element index), so code that writes UI component
+fields directly signals the change (`MarkModified`, `registry.patch`; `ComponentAccess`, the script host and the UI system
+do). A change marks its element in every layout of its canvas: a rect or layout change lays out the element's subtree from
+the highest ancestor whose rect depends on its children (a layout group, or a rect fitting its content), so a leaf moved
+under a plain parent lays out one element; a text change reshapes the text and lays out only when its rect fits it; colors,
+textures and toggles rewrite quads only. Structural changes (elements added, removed, reparented or reordered) rebuild the
+canvas's element list, keep the boxes and shaped texts of the elements that stay, and lay out what moved and the groups it
+left and entered. Only the canvases a move changes rebuild: moving an entity that is no element looks for elements and
+canvases below it, so gameplay reparenting plain entities (an item into a hand, a spawn under a container) costs the UI
+nothing, and a canvas below a moved entity is found as a root again. Layout is lazy: `EnsureLayout(screen)` brings every canvas up to date for a screen when the UI pass or
+the UI system asks. Debug builds compare every cached layout with a full recomputation after each `EnsureLayout`
+(`GameUIScene::Validate`, which names the entity whose write was not signaled); `Tests::CheckSceneCaches` checks it too.
+`GameUISceneStats` (`ElementsLaidOut`, `TextsShaped`, `QuadsBuilt`, `FullRebuilds`) counts the work for tests: an idle
+frame does none.
+
+**Text and quads.** Texts are shaped with `ShapeText` on their font's `FontFace` (never rasterizing: layout measures
+fitted text this way), once per change of the text, its font or the options its rect gives it, per layout; a font that
+loads replaces the default font its texts were shaped with (`GetContentChanges` of the assets the UI watches). The quads
+(`RenderData::UIQuad`, 64 bytes, `GameUI/GameUIRenderData.h`) are built per layout in element order: an image is one quad
+(nine when sliced, one cut quad when filled), a text one quad per glyph. Each element writes into a slot of its own with
+room to spare for texts, so a changed element rewrites its slot alone and a journal of changed ranges
+(`GetQuadChanges`) lets each renderer upload only those; a text that outgrows its slot, or a change of the elements,
+rebuilds the array (`GetQuadArrayId` changes). Quads refer to UI texture indices and scene font indices (`GetTextures`,
+`GetFonts`), never to GPU slots or atlas placements, which each renderer resolves (mip streaming moves slots, atlases are
+per renderer).
+
+**The pass** (`GameUIRenderer`, `shaders/GameUI/UIQuad.*`). The renderer cannot include GameUI: modules add passes to
+every `SceneRenderer` through `SceneOverlayRegistry` (`Renderer/SceneOverlay.h`: `ISceneOverlayPass` with `Prepare`,
+`DrawWorld`, `Draw` and `HasScreenContent`), and the renderer calls them at four places: `Prepare` after the text renderer's (with
+the scene, viewport size, command list, the renderer's `FontAtlasCache` and what the frame's raster budget left, the
+frame's visible-texture list and the stats), the overlay condition, `Draw` after the screen-space text (the UI goes over
+the legacy HUD), and `SceneRendererStats::Overlays`; a fifth, `DrawWorld`, draws world-space canvases right after the
+world-space text (`SceneOverlayFrame` carries the frame's view-projection, and `HasCamera` only when the overlay scene is
+the rendered one). A scene without a `UICanvasComponent` costs one storage-size check; with screen-space UI hidden
+(`DrawScreenSpaceText` off: editor views, thumbnails), a count of root canvases and of the world-space ones among them,
+cached per hierarchy version and change of the canvases, and world-space canvases are still drawn (they are part of the
+scene). Per frame the pass lays the canvases out for the game's screen (`EnsureLayout`, with the content
+scale of the game's window): the viewport, unless `SceneRenderOptions::ScreenView` puts a screen of another size in the
+image (`SceneScreenView`: the editor's canvas mode zooms and pans the fit's layout, drawn magnified through the draws'
+scale and origin, and screen-space text follows the same view). It uploads the quad ranges that changed since its last
+frame (or whole arrays that were rebuilt) into one storage buffer, resolves each texture in use to its bindless slot (a
+small table, so quads never change when mip streaming moves a slot) and each distinct glyph to its place in this
+renderer's atlas (a table per font: asking for the glyph also rasterizes it within the budget and keeps it from eviction
+while shown), and reports drawn textures for mip streaming. Canvases draw by sort order, instanced, six vertices per
+quad and no vertex buffer, with up to four atlases bound, so a canvas with up to four fonts is one draw; push constants
+carry the canvas's scale and pixel snapping (rect edges and glyph baselines on whole pixels) and where the canvas's clip
+rects start in a clip buffer uploaded beside the quads (when they change): a masked quad entirely outside its clip rect
+draws nothing, others are clipped per pixel with the mask's soft edge, so masks break no batch. A world-space canvas
+draws with a depth-tested pipeline (reversed-Z, no depth writes, so what is nearer hides it) from a transform buffer
+(canvas units to clip space, one per world-space canvas, uploaded when the camera or the entity moved; the push
+constants' flags name it): its quads stay in canvas units, its edges and outlines are antialiased over what a canvas unit
+covers on the screen (`fwidth`), its clip rects are tested in canvas units, and its textures stream to the pixels a
+canvas unit projects to. The pass keeps a binding set per combination of atlases drawn, and lets go of those no draw of
+the previous frame used at the start of the next `Prepare` (with the atlases' textures they hold); a scene without
+canvases also releases its buffers, which the next canvases fill whole again. `GameRenderer` shows a
+scene without a primary camera that has screen-space UI (a main menu) as that UI over black instead of its
+missing-camera message (`SceneRenderOptions::OverlayScene`).
+
+**Input** (`GameUISystem`, `GameUIHitTest`, `Input/UIActions`). The "UI" scene system runs in Play mode before the
+scripts (stage `Scene.UI`; a soft `BeforeIfPresent`, so an engine without the scripting module keeps its game UI), so a
+click the UI takes is hidden from the scripts' `OnUpdate` of the same frame and widget events reach them first. Each update it lays the canvases out for the game's input screen (the pixels `IGameWindow`
+renders, input coordinates scaled to them) and keeps a uniform grid of raycast-target rects per canvas
+(`GameUIHitTester`, rebuilt when the layout or what hit tests see changes: `GameUIScene::GetHitStamp`), so a query
+compares the targets of one cell: the topmost by canvas sort order, then the last drawn, rect edges half-open. World-space
+canvases come after every screen-space one: the pointer's ray from the scene's primary camera (`GameUIPointer`:
+`GetGameViewProjection`, `MakeRay`, `IntersectCanvas`, `ProjectCanvasPoint`) meets each, the nearest crossing first, and
+the crossing point is hit-tested in the canvas's grid (the scene's geometry does not block it), so sliders drag and input
+fields place their caret through the same ray; navigation starts on the screen's canvases and moves within a world-space
+canvas. The
+pointer is the UI's while a press that started over a target is held and while it rests over the UI; then
+`Input::SetPointerCapture` hides mouse buttons and scrolling from gameplay (`Input::GetPointerState` reads them for the
+UI), and a press that started elsewhere stays the game's until its release. Buttons click on a release over the button
+the press started on; toggles flip (one on per group); sliders follow the pointer while dragged and snap to whole
+numbers. Values change through `registry.patch` (the running scene, without undo). The fixed action set
+(`c_UIActionMap`: Submit, Cancel and four directions on keys, the d-pad and the left stick with hysteresis, repeating after
+0.4 s every 0.1 s) moves the focus: explicit neighbours, or automatically the selectable ahead with the lowest along + 2 x
+across distance between centers. Selectable states (disabled, pressed, hovered, focused, normal) fade their tints over
+unscaled time (`Scene::GetUnscaledDeltaTime`, which time scale 0 does not stop), and only selectables showing a state
+keep a record, so an idle frame does no work. Events (`IUIEvents`: click, value changed, focus changed) are dispatched
+at the end of the update in input order. Typed text arrives per input frame as UTF-8 (`Input::GetTypedText`, from the
+window's character events and `Input::SimulateText`, at most 1,024 bytes).
+
+**Input fields.** The focused `UIInputField` is edited: the system captures the keyboard (`Input::SetKeyboardCapture`:
+the game's key queries and `GetTypedText` see nothing, the UI reads `GetKeyState` and `GetUncapturedTypedText`), puts
+typed characters at the caret (within the character limit; control characters dropped), repeats Backspace, Delete, the
+arrows, Home and End like the UI actions, writes the text with `registry.patch` and raises `Submit` on Enter; Escape (or
+a gamepad's Cancel) stops editing, keeping the keyboard captured to the end of that frame so the game never sees the
+key. The field's text element shows the field's text (`GameUIScene::GetShownText`: one line, never wrapped), and the
+editing state (`SetInputFieldState`: caret, selection, blink) adds a selection quad behind the glyphs and a caret quad
+after them, the line scrolled to keep the caret inside the element (`MeasureCaretStops` gives the pen before each
+character, as the shaper places it); the field's placeholder shows while the text is empty, like a toggle's checkmark
+while it is on.
+
 ## Scripting
 
 Rules for the ABI, host functions and the SDK are in AGENTS.md and DeveloperGuide.md, "Scripting"; writing scripts
@@ -2347,8 +2987,12 @@ is the `strata-scripting` skill. The layers:
   recognize the pattern by the address of the reading instruction, which made the cost of a frame depend on how
   unrelated code moved the loop (6.6 or 9.8 ms for 300,000 trivial scripts with identical sources). Contacts come from
   the scene's `ICollisionEventSource` (the `PhysicsSystem`), whose listener only hears watched entities: each instance
-  whose class has a contact callback watches its entity. Entity destruction requested by scripts waits until the scene
-  can do it safely (`ScriptSystem::DestroyEntity`), and removed instances are destroyed at the next sync point.
+  whose class has a contact callback watches its entity. Widget events come from the scene's `IUIEvents` (the
+  `GameUISystem`, which updates before the scripts): `OnUIClick`, `OnUIValueChanged`, `OnUIFocusChanged` and `OnUISubmit`
+  run on the scripts of the widget's entity, then on those of its `EventTarget`, and menus that must move while the game
+  is paused read unscaled time (`Time::GetUnscaledDeltaTime`, which time scale 0 does not stop; [Game UI](#game-ui)).
+  Entity destruction requested by scripts waits until the scene can do it safely (`ScriptSystem::DestroyEntity`), and
+  removed instances are destroyed at the next sync point.
 - **Host functions** (`ScriptHostAPI.cpp`). Every function runs in `HostCall` (no exception unwinds into the module)
   and starts with `ResolveContext`, which rejects calls from other threads, outside callbacks or from a crashed module.
   The table is built from `ST_SCRIPT_HOST_FUNCTIONS`, which counts calls for the feature test.
@@ -2494,7 +3138,12 @@ is the `strata-scripting` skill. The layers:
   ms), scaled to the 95th percentile frame (taller frames are cut at the top), marks spikes (frames over twice the
   median and a 60 FPS frame), explains the frame under the mouse, lists per-stage statistics under the frame's totals
   (frozen under the header) and copies `editor.perf`'s JSON (Copy as JSON); its statistics are computed four times a
-  second. The timeline takes at most 40% of the panel's height, or sits beside the table in a short, wide dock, so the
+  second. While GPU times arrive (or are expected) a GPU strip under the timeline stacks the GPU stages of the same frames
+  at the same scale (frames without GPU times stay blank), and the table ends with a GPU section: what bounds the frames
+  (`PerformancePanel::DescribeBound`: GPU-bound, CPU-bound, capped or unknown, by `FrameBound`), the GPU's busy time and
+  each GPU stage. The status bar's frame pill keeps its text; its tooltip adds the same bound line (a summary of the last
+  120 frames, made only while the tooltip shows). The viewport's stats overlay adds the GPU's time of the latest frame
+  it is known for with its three largest stages, and the draw commands the CPU recorded beside the draws the GPU made. The timeline takes at most 40% of the panel's height, or sits beside the table in a short, wide dock, so the
   table keeps rows in view. Color swatches are drawn as rectangles: the monospaced font has no icons. **UI tests**
   (`StrataTests/src/Editor/ImGuiHarness.h`) create an ImGui context with the editor's fonts and theme (styled by an
   unattached `ImGuiLayer`), honor ImGui's texture requests without a renderer, inject input (clicks, keys, typed text),
@@ -2520,8 +3169,9 @@ is the `strata-scripting` skill. The layers:
   the one shown already), so the panels bring the matching inspector to the front.
 - **Commands** (`EditorCommands.h`). Handlers take a JSON object and return an `EditorCommandResult`: a value, an error
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
-  `EditorSceneCommands.cpp` (scene, entity, component, `prefab.instantiate`), `EditorPrefabCommands.cpp` (`prefab.status`,
-  `prefab.apply`, `prefab.revert`, `prefab.unpack`, `prefab.select`), `EditorAssetCommands.cpp` (asset, including
+  `EditorSceneCommands.cpp` (scene), `Commands/EntityCommands.cpp` (entity, component), `EditorPrefabCommands.cpp`
+  (`prefab.instantiate`, `prefab.status`, `prefab.apply`, `prefab.revert`, `prefab.unpack`, `prefab.select`),
+  `EditorAssetCommands.cpp` (asset, including
   `asset.findReferences`, `asset.createFolder`, `asset.moveFolder` and `asset.deleteFolder`, material, prefab,
   project, including `project.templates`, `project.samples`, `project.openSample`, `project.close`, `project.export`,
   `project.exportStatus`, `project.cancelExport` and `project.setExportSettings`),
@@ -2530,14 +3180,23 @@ is the `strata-scripting` skill. The layers:
   `EditorInputCommands.cpp` (input), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`),
   `EditorWorldCommands.cpp` (`physics.stats`) and
   `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel` and `editor.showDialog` (the
+  log, selection), `Commands/PlayCommands.cpp` (play), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
+  `EditorInputCommands.cpp` (input, including `input.click` and `input.type` for the game UI), `EditorUICommands.cpp`
+  (`ui.create`, `ui.layout`, `ui.hitTest`), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`),
+  `Commands/BatchCommands.cpp` (`editor.batch`) and `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel` and `editor.showDialog` (the
   export, project, recovery, script and about dialogs), the commands about its window. Conventions:
   DeveloperGuide.md, "Command conventions".
   Every command has a kind (`EditorCommandKind`: Edit, the default, Query or Session), which `editor.commands` lists and
   replays use (`Editor.Journal` lists every built-in command's kind, so a new one is a decision), and queries whose
   results follow the editor's session rather than the project's content (the selection, `editor.status`, the journal,
-  what is loaded or running) say so (`EditorCommandResults::Session`): replays never bind the IDs those show.
+  what is loaded or running) say so (`EditorCommandResults::Session`): replays never bind the IDs those show. Commands
+  whose handlers may answer later are registered with `MayDefer` (Debug builds assert in `Execute` when another one
+  defers). `editor.batch` runs a command script's steps in its frame through `Execute` (its children in the journal),
+  refusing `MayDefer` commands first, and makes their undo steps one (`UndoStack::BeginGroup`/`EndGroup`, an
+  `EditorActionGroup`; an atomic batch whose step fails reverts them with `CancelGroup`); replays repeat its steps.
 - **Command line** (`EditorApplication.cpp`). `CreateApplication` answers `--help` and `--version` and refuses arguments
-  outside its table (`c_Arguments`; exit code 3 with the usage) before it starts the log, the modules or a window:
+  outside its table (`c_Arguments`, checked and printed through `Core/CommandLineOptions`, which the runtime uses the
+  same way; exit code 3 with the usage) before it starts the log, the modules or a window:
   `Application::SetStartupExitCode` is what `main` returns when no application was made. Options that take numbers
   (`--frames`, `--automation-port`, `--idle-timeout`, `--ui-scale`) are checked there too (`CheckValues`): a value they
   do not take exits 3 as well, so a typo never leaves a scripted run without its frame limit. With
@@ -2548,11 +3207,13 @@ is the `strata-scripting` skill. The layers:
   (`EditorNotification`: level, title, message, the journal entry, the asset, whether the Console, the Problems panel or
   the recovery dialog has more): at most `c_MaxActive` (4), identical ones merged with a count, and those of a `Group` merged into one that
   shows the latest (a post may stand for several: `Count`), each expiring after its level's lifetime (`Expire`,
-  `KeepAlive` while hovered). Feeds: `NotifyCommandOutcome` for commands of the UI (`RunEditorCommand`, the runner when
+  `KeepAlive` while hovered); `Replace(id, notification)` shows one in the place of another, keeping its id and
+  restarting its lifetime (posted when that one is gone). Feeds: `NotifyCommandOutcome` for commands of the UI (`RunEditorCommand`, the runner when
   the origin is `CommandSource::UI`: failures and warnings, with `EditorCommandResult::JournalId`, which `Execute` now sets
   for every result; not for a failure a notification of its own announced, `EditorCommandResult::Announced`, which
   `script.build` and `play.start` set when the build they waited for failed: one toast per failure),
-  `EditorContext::BuildScripts` and `OnScriptBuildFinished` (failed with Show Problems, cancelled as information),
+  `EditorContext::BuildScripts` and `OnScriptBuildFinished` (one toast that changes: the outcome replaces "Building
+  scripts", failed with Show Problems, cancelled as information),
   `StopOnScriptFault` (with Show Problems, whose panel leads with the crash), the end of a game
   export (`NotifyExportFinished`, once per export: an export that does not start leaves the announced one), imports that
   failed while nobody waited for them (`NotifyImportFailures`, below), files dropped on the editor that no importer reads
@@ -2563,10 +3224,12 @@ is the `strata-scripting` skill. The layers:
   are kept when it closes, and nothing when the person discarded what could not be kept), assets and folders an agent or a
   command script moved to the trash (`NotifyAssetsTrashed`, from `asset.delete` and `asset.deleteFolder`, found the same
   way: who did it, that Undo restores them, a warning when `force` left references missing, the command's entry for Show
-  in Activity; the person's own deletes post nothing, as they asked and saw them go) and `EditorLayer` when the
-  recovery dialog closes with changes still on offer. `UI::DrawNotifications` draws them as toasts in one window at the
-  bottom right of the work area, above the status bar, kept in front without being focused (`BringWindowToDisplayFront`,
-  `NoFocusOnAppearing`); it returns at once while there are none. A title too long for its line wraps before the close
+  in Activity; the person's own deletes post nothing, as they asked and saw them go), `EditorLayer` when the
+  recovery dialog closes with changes still on offer, and `RecoveryDialog` once per opened project that offers changes
+  discarded on purpose before. `UI::DrawNotifications` draws them as toasts in one window at the bottom right of the
+  Scene or Game view (the window rectangle of the one that shows, `EditorPanelRegistry::GetShownWindowRect`, so they
+  cover neither the Inspector nor the Hierarchy; without either, of the work area above the status bar), kept in front
+  without being focused (`BringWindowToDisplayFront`, `NoFocusOnAppearing`); it returns at once while there are none. A title too long for its line wraps before the close
   button, and its count then leads the message. Their actions go through the `EditorShell`: Show in Activity, Show Asset
   (`ShowAsset`: the Asset tab inspects it and the Content Browser reveals it), Show Problems (the Problems panel: a
   failed build's diagnostics, a crash's place and stack), Show in Console and Recover.
@@ -2657,6 +3320,39 @@ is the `strata-scripting` skill. The layers:
   windowed sessions that are not scripted; scripted runs, headless editors and tests wait in `OpenProject`, so their first
   command finds the scene). With a 1,000,000-entity start scene the window's first frame comes after 1.0 s instead of 6.8 s
   (Release; the scene follows about 7 s later, while frames go on).
+- **Background saves** (`Editor/DocumentSaver.h`). The one path that saves engine-native documents without holding a
+  frame: the main thread takes a snapshot (`Scene::Copy` with `SerializedOnly`) and submits a `DocumentSaveRequest` (the
+  snapshot, its undo `SavePoint`, a label and its items); a background job writes each item through `SceneDocumentWriter`
+  (a `SceneWriteOptions` per item: kind, entity subset, settings) or, for an item with ready `Document` bytes (a small
+  document made on the main thread), checks them with the type's loader and writes them as they are; `Update` publishes
+  the request on the main thread in one step and calls its completion. Each item goes through `AtomicFileWriter` next to
+  its target and replaces it under the asset manager's exclusive file lock (`EditorAssetManager::ClaimDocumentWrite`,
+  `DocumentWriteClaim::Commit`, which also writes a new asset's `.meta` and the import record with the references and
+  the hash the writer collected); `PublishWrittenDocument` then makes the result the asset's state without reading the
+  disk or parsing the document again (new assets are registered with the handle `ReserveNativeAsset` reserved for their
+  path, given or new; existing ones take the file's size and time, so the watcher's report of the write is no news, and
+  their recorded references). While the claim lives the file watcher leaves the path alone, so a save never triggers its
+  own reference search or reload; the claim keeps the manager's background work alive, and `MoveAsset`, `MoveFolder` and
+  `MoveToTrash` refuse, with the reason, to move a claimed or reserved path or a folder holding one, which the save would
+  write at its old place (`FindDocumentWriteLocked`). Items fail independently (each file
+  is atomic, a failed new item gives its reservation back) and the request fails naming them. One request writes at a time;
+  a queued request for the same documents is replaced by a newer one, whose snapshot is written for both (repeated saves
+  never hold two snapshots), and both completions get its status (`WrittenID`, `SavePoint`). Replaced snapshots and the
+  written one are destroyed on background threads.
+  The edited scene saves through it (`EditorContext::BeginSaveScene`, `BeginSaveSceneAs`; `SaveScene` and `SaveSceneAs`
+  wait for them, for tools, tests and a template's start scene): the frame breaks the undo merge, takes
+  `UndoStack::GetSavePoint` and the snapshot, and the recovery journal's `BeginSave` token; the completion marks that point
+  saved (`UndoStack::MarkSaved(SavePoint)`: edits made meanwhile stay unsaved), gives the recovery journal the written
+  document's SHA-256 (`SceneRecovery::OnSaved`, which starts the new journal with the steps applied since the snapshot and
+  writes it before the old file goes, so nothing edited during a save is ever out of a journal), and makes the project's
+  picture; a failed save posts an error notification and gives a scene saved as a new asset its previous handle and name
+  back (the save as's own completion does, also when a newer save of the new asset replaced it while it was queued). A save whose edited scene was replaced meanwhile writes its file and marks nothing (the undo history's generation
+  and the journal's epoch tell). `scene.save` and `scene.saveAs` answer once the save is published (`wait`, default) or
+  at once with its `saveId`; the commands that replace the scene, close the project or quit run their handlers through
+  `CommandUtils::AfterSaves`, which defers them while saves are in flight; the UI's save (Ctrl+S, File > Save, the question's
+  Save) goes through the command runner, `RequestDiscardChanges` waits for saves in a saving dialog (Cancel gives up the
+  action, never the save), and a status pill shows them. `GameExport` plans once no save is in flight, and starts while
+  the scene's current state is being saved (`FindSaveOfCurrentState`): it fails if that save fails. Closing the project (`ReleaseProject`) and the editor finish every save first.
 - **Undo** (`SceneEdit.h`, `UndoStack.h`). A `SceneEditTransaction` snapshots the entities an edit touches as
   `EntityState` (components as JSON, parent, sibling index from `Scene::GetSiblingIndex`); `Commit` records a
   `SceneEditAction` holding the states before and after, and undo or redo re-applies them with the same UUIDs
@@ -2721,9 +3417,10 @@ is the `strata-scripting` skill. The layers:
   a file whose owner process still runs (its id with the start time recorded, since ids are reused, also this process's)
   and has not discarded it belongs to that editor and is left out; the others are
   offered (the editor's Recover Unsaved Changes dialog, `UI/RecoveryDialog`, opens by itself once per opened project
-  with changes that still apply, leaving out what this editor discarded itself since the project opened, whose toast
-  offers it, `SceneRecovery::WasDiscardedHere`: a command script that discards changes in the editor's first frames does
-  not open it; File > Recover Unsaved Changes reopens it) and listed by `scene.recoveryStatus`. An
+  with changes an editor left behind that still apply, `RecoveryDialog::HasOffer(context, true)`: not marked
+  `Discarded`, and not discarded by this editor since the project opened, whose toast offers them,
+  `SceneRecovery::WasDiscardedHere`; changes discarded on purpose before are offered by one toast as the project opens
+  instead; File > Recover Unsaved Changes opens it with everything) and listed by `scene.recoveryStatus`. An
   entry applies only while the scene asset exists and its file hashes to the recorded hash. Scenes are found by their
   handles: a scan looks for an entry's scene file where the asset manager has the scene now (`SetSceneLocator`, a snapshot
   of the scenes' paths taken when the scan starts), so changes of a scene that was moved or renamed (`asset.move`, the
@@ -2791,7 +3488,9 @@ is the `strata-scripting` skill. The layers:
   first, then assets by name, an expanded model's sub-assets (meshes, materials, textures, a skinned model's skeleton and
   clips) right after it as drag sources of their own, which the Inspector's asset fields take when the type fits (an
   Animator's Skeleton, Clip and Controller). Skeletons, clips and controllers show their type's icon; models and meshes
-  render, skinned ones in their bind pose (no animator poses a thumbnail's scene). The view rebuilds only when
+  render, skinned models in their skeleton's rest pose (the thumbnail scene's own `AnimationPreview`; a thumbnail waits
+  for its skeletons like for its meshes; `ThumbnailCache::c_Version` 2 made the older ones again), skinned meshes alone in
+  their bind pose. The view rebuilds only when
   `EditorAssetManager::GetChangeVersion` (or the folder, search, filter or an expansion) changed, from one look at the
   manager's index (`ListAssets`), and counts its rebuilds: an idle editor rebuilds nothing (the browser used to copy
   every asset's metadata twice a second). Labels are made at rebuild time; tiles cut their names once per tile width. Every
@@ -2888,6 +3587,31 @@ is the `strata-scripting` skill. The layers:
   walks every link, so a run of edits that records a step every frame (a gizmo drag) does neither per frame: an edit
   after a pause is looked at at once, and during a run (edits less than `PrefabSync::c_SettleFrames` frames apart) the
   marks and the watched prefabs stay until it pauses; links that come or go are found at once.
+  **Overrides** (`Scene/PrefabOverrides.h`): an instance root keeps how its instance differs from its prefab
+  (`PrefabInstanceComponent::Overrides`, `PrefabOverride {Entity, Component, Property, Kind}`: a property, a component
+  added or removed, an entity removed; script fields as `Script` / `<Class>.<Field>`, scripts as `<Class>`).
+  `ComputeOverrides` diffs the instance in the prefab's form (`MakeTemplate`) with its part, entity by prefab id, component
+  and property, as JSON. `EditorContext::CommitEdit` works the lists of the instances an edit touched out again against
+  their part of `PrefabSync`'s baseline (`GetBaselinePart`, extracted and indexed once per baseline) before it captures
+  the after-states (`UpdatePrefabOverrides`), so every edit path keeps them and undo restores them with the entities; edits
+  while playing record nothing. It tracks every touched root, its list changed or not, so the per-frame steps of a gizmo
+  or slider drag keep the same entities and merge into one. An edit that makes, destroys, moves or relinks entities of an
+  instance works its whole list out; other edits serialize only the entities they changed
+  (`PrefabOverrides::UpdateOverrides`, with the instance's prefab ids from `PrefabInstances::MapTemplateIds`, a walk
+  without serializing), so a drag inside a 5,000-entity instance costs about 0.5 ms a frame instead of 25 ms. Steps whose
+  lists `Propagate` already worked out (`PrefabSync`'s updates) commit with `OverrideUpkeep::Current`. The list is
+  serialized through the component's extra data (`Overrides`, only when not empty: scenes without overrides are as they
+  were) and checked on load; templates, comparisons and content hashes leave it out. A non-empty list marks the instance
+  modified in the Hierarchy without comparing it; `prefab.status` lists the overrides. `PrefabOverrides::Propagate` gives
+  an instance what changed between two versions of its part except what it overrides (properties set through reflection
+  and signaled, components and entities the prefab added made unless a removal is overridden, ones it removed gone unless
+  the instance added them, what the instance keeps below a removed entity moving up to the nearest one that stays; the
+  root's transform and name stay), calling back before each entity changes so the undo step
+  tracks only those, then works the list out against the new part. `prefab.apply` (the whole instance, or one override:
+  `PrefabOverrides::ApplyToPart`) and `PrefabSync`'s propagation run it for every instance; the catch-up runs it for
+  outdated instances with a list (the instance itself standing for the previous part), keeps the whole replace for
+  unmodified ones without a list, and leaves modified ones without a list outdated. `prefab.revert` reverts a whole
+  instance (`Replace`) or one component or property (`PrefabOverrides::Revert`).
 - **Authoring panels** (`Panels/SceneHierarchyPanel`, `InspectorPanel`, `AssetInspectorPanel`, `UI/PropertyWidgets`,
   `UI/MaterialEditor`, `UI/EditorActions`). They draw state and run commands, and their cost follows what is on screen:
   - The **Hierarchy** draws `HierarchyView`'s rows through `ImGuiListClipper` inside one `ImGui::BeginMultiSelect` scope
@@ -2896,7 +3620,9 @@ is the `strata-scripting` skill. The layers:
     being the primary selection; clicks select on release so any row can be dragged, a box starts in the empty space;
     while filtering, Ctrl+A, ranges and boxes skip the ancestors shown for context).
     A primary selection that changed elsewhere is revealed (`HierarchyView::Reveal`, then the list scrolls to its row).
-    Rows are tree nodes with the entity's icon (`UI/EntityIcons`), its name, a prefab badge on an instance's root (a
+    Its create menu's UI submenu makes the game UI's presets (`ui.create`: canvas, panel, image, text, button, toggle,
+    slider, input field and layout groups; DeveloperGuide.md, "Game UI commands").
+    Rows are tree nodes with the entity's icon (`UI/EntityIcons`: a UI element by its widget), its name, a prefab badge on an instance's root (a
     click inspects the prefab; in the warning color while the instance differs from its prefab, `PrefabSync::IsModified`,
     and its tooltip, made only while it shows, says when the instance is outdated too)
     and an eye (`entity.setActive`); a drag carries the topmost dragged entities
@@ -2908,8 +3634,12 @@ is the `strata-scripting` skill. The layers:
     The rename field is drawn after the selection's scope and activated by id: a keyboard move out of that scope would
     make ImGui clear the selection. With 100,000 roots the panel costs about 0.012 ms per frame (it drew every root
     before: 12.9 ms; `Perf.Editor`).
-  - The **Inspector** shows the components every selected entity has. `GetSharedProperty` gives each widget its value and
-    which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as mixed; an edit goes through the
+  - The **Inspector** shows the components every selected entity has, each section drawing first what its component's
+    drawer adds (`UI/ComponentDrawers`, by component type: the UI Rect's anchor presets and margins), and a notice with
+    an Add button where some entities lack a component it requires (`ComponentInfo::Requires`). `GetSharedProperty`
+    gives each widget its value and which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as
+    mixed; `GetSharedInactiveReason` whether the property has no effect on every entity (`PropertyInfo::InactiveReason`,
+    set next to each component's registration in its module), which draws its row disabled with the reason; an edit goes through the
     multi-entity `SetPropertyComponentsWithUndo` with the components the widget changed (one step; each entity keeps its
     other components), or `SetPropertyWithUndo` for other types. Rotations of several entities go through a
     `RotationAnglesEdit` with the Euler angles the widget edited, kept by the Inspector until the widget reports the edit
@@ -2960,27 +3690,48 @@ is the `strata-scripting` skill. The layers:
   each frame `EditorAutomation::Update` registers new or changed commands as methods and runs queued requests through
   the runner, so a deferred command answers when it completes. Clients find the editor through session files
   (`Network/EditorSession.h`). StrataCLI (`StrataCLI/src/CLI/`) connects with `RpcClient` (`EditorConnection`),
-  starts editors (`EditorLauncher`) and serves MCP (`McpServer`, one tool per command). Clients may name themselves in
+  starts editors (`EditorLauncher`) and serves MCP (`McpServer`: one tool per command of the enabled toolsets, which
+  `McpToolsets` assigns by command group, with compact definitions; `strata_describe` and `strata_call` reach the rest,
+  `strata_toolsets` changes the set). Clients may name themselves in
   `rpc.handshake` (`clientName`: at most 64 characters, control and text-direction characters removed by
   `SanitizeRpcClientName`, informational only and never used for trust): `RpcServer::GetClients` lists them, responders
   carry them (`RpcResponder::GetClient`) into the activity journal, and `editor.status` lists them under
-  `automation.connectedClients`. StrataCLI names itself "StrataCLI"; its MCP server forwards the MCP client's
+  `automation.connectedClients` (`{"sections": ["automation"]}`: its default answer is compact). StrataCLI names itself "StrataCLI"; its MCP server forwards the MCP client's
   `clientInfo.name` from `initialize` (reconnecting to the same editor when the name changes). **Presence**: the person
   sees who works with them. The automation pill reads "Agent connected · <name>" (several: "N agents connected"), its
   text made again only when `RpcServer::GetClientsVersion` changes and its tooltip (each client and when it connected)
-  only while it shows. The journal keeps the latest finished automation command (`GetLatestAutomationActivity`: command,
-  client, outcome, the entities its undo step touched); the viewport draws it as a chip at the image's top right ("Agent:
+  only while it shows. The journal keeps the latest finished automation command that changes something (the entry's
+  `mutating`: kind Edit or an edit of the running copy; `GetLatestAutomationActivity`: command, client, outcome, the
+  entities its undo step touched); the viewport draws it as a chip at the right of its toolbar, above the image ("Agent:
   entity.create · 3 s ago", while a client is connected or for `c_AgentChipSeconds` after; a click shows it in the
   Activity panel) and, for `c_AgentFlashSeconds` (600 ms), outlines the projected bounds of those entities (at most 64)
   in the accent, fading out (`ViewportPanel::DrawAgentFlash`, an `ImDrawList` rectangle per entity, bounds taken once when
   the command finished). While nothing of this shows the panel does no work for it, and only the fade keeps the editor at
   its full frame rate (`IsAnimating`, from the clock, so a viewport hidden mid-fade does not keep it there).
 - **Viewport** (`EditorViewport.h`, `ViewportRenderer.h`). `EditorViewport` holds the editor camera (and the cameras of
-  the project's other scenes), the settings and two `ViewportRenderer`s (panel and captures). The panel renders during
-  `OnImGuiRender`; `ResolveViewportView` picks the scene's primary camera while playing and the editor camera otherwise,
-  and `GetViewportRenderOptions` gives editor views (the editor camera outside play mode) preview lighting and a hidden
-  HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). The settings' debug view
-  (`ViewportDebugView`: `none`, `streaming`, `lod`, `mip`) colors every view of the viewport, the game view too: before each
+  the project's other scenes), the settings and three `ViewportRenderer`s, each with render targets of its own size: the
+  Scene view's, the Game view's (created on first use; about 72 MB of targets at 1920 x 1080, freed while the Game view is
+  hidden or closed) and the captures'. Two panels show them, tabs of one dock node: the Scene view (`ViewportPanel`, id
+  `Viewport`) passes `ViewportCameraSource::Editor`, the editor camera on the edited scene or the running one (picking,
+  gizmos and overlays work on the running copy while playing; with Game UI shown, a click selects a UI element first),
+  or `Scene` with "Game camera" (F8); the Game view (`GameViewPanel`) passes `Scene`, the primary camera as the game shows
+  it (`ResolveGameView`: without one, a scene with screen-space UI shows that UI over black, as `GameRenderer` does), at
+  the size of `ViewportSettings::GameView` (`ComputeGameViewFrame`: the panel's, an aspect ratio letterboxed, a
+  fixed size rendered at its pixels and scaled to fit, or what the game asked for), and feeds `Input` while it is focused
+  in play mode. In every play frame it shows it sets the game's screen (`Input::SetViewport` with its render resolution,
+  so positions reach scripts in the game's pixels and `Input::GetViewportSize`, which `EditorGameWindow::GetState` and UI
+  hit testing read, is that resolution).
+  Play from the UI brings the Game view's tab forward and Stop the Scene view's back. `ResolveViewportView`'s `Automatic`
+  source (captures) picks the scene's primary camera while playing and the editor camera otherwise, and
+  `GetViewportRenderOptions` gives editor views (the editor camera, except `Automatic`'s fallback while playing) preview
+  lighting and a hidden HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). Both views hold their
+  chips in a toolbar strip above the image (`Panels/ViewportToolbar`), never over it; a Scene view too narrow for their
+  labels draws the last ones as icons (`UI::ChipStrip`, decided from the previous frame's chips). The Scene view's 2D
+  canvas mode (`Panels/CanvasModeView`, `Editor/CanvasEdit`) shows a screen-space canvas at its reference aspect through
+  the scene's camera, with handles that place rects, zoom and pan that never lay it out again (DeveloperGuide.md, "Game
+  UI commands").
+  The settings' debug view
+  (`ViewportDebugView`: `none`, `streaming`, `lod`, `mip`) colors every view of the viewport, the Game view too: before each
   render `StreamingView` (`Editor/StreamingView.h`) takes the render proxies the scene's `RenderScene` finds in the view
   (its spatial index, culled with the bounds the renderer culls with: a mesh's own, else those the asset pipeline
   recorded) and lists tints for the renderer (`SceneRenderOptions::EntityTints`). It observes streaming without changing
@@ -2990,7 +3741,8 @@ is the `strata-scripting` skill. The layers:
   still loading are tinted in the pending color, failed ones in the failed color, and entities whose mesh is not there
   (nothing is drawn, so nothing can be tinted) get a placeholder box of the mesh's recorded bounds, or a unit box without
   them (at most `c_MaxPlaceholderBoxes`). The LOD view tints each entity by the most simplified level its submeshes are
-  drawn at (`LODSelection`, with the viewport renderer's threshold). The mip view tints each entity drawn with textures by
+  drawn at (`LODSelection`, with the viewport renderer's `GetLODCriteria`), and its legend the largest error in pixels
+drawn at each level chosen by errors (`StreamingViewStats::MaxErrorPixelsPerLOD`). The mip view tints each entity drawn with textures by
   the mip levels its worst texture lacks: the finest level resident against the finest one its views want
   (`Asset::GetDetailLevels`, which the texture streamer sets from what the renderers reported), none (Malachite), 1
   (Azurite), 2 (Sulfur), 3 or more or a material or texture still loading (Cinnabar); entities without textures stay
@@ -3026,8 +3778,10 @@ is the `strata-scripting` skill. The layers:
   the entity's origin touch the surface with its side facing it). The Hierarchy's create menus (the Entity menu too) put
   new top-level entities under the pivot, resting on the surface by their mesh's bounds (`GetMeshBounds`: the loaded
   mesh's, else the recorded ones), and send the translation with `entity.create`. Prefabs and models rest by the bounds of
-  what they draw around their root's origin (`GetTemplateBounds`: instantiated into a scene of their own, the mesh bounds
-  of the root's subtree with their transforms): dropped into the viewport on the cursor's surface, from the Content
+  what they draw around their root's origin (`GetPlacementBounds`: `EditorContext::GetAssetBounds`'s measurement, made
+  while the asset is dragged over the viewport, else `GetTemplateBounds`: instantiated into a scene of their own, the mesh
+  bounds of the root's subtree with their transforms, skinned meshes in the rest pose once their skeleton is resident,
+  never waiting for it): dropped into the viewport on the cursor's surface, from the Content
   Browser's, the Asset tab's Add to Scene or a drop on the Hierarchy's empty space under the pivot
   (`EditorActions::InstantiatePrefab`, `prefab.instantiate` with the translation). A material dropped into the viewport
   goes to the mesh under the cursor (`component.set`, one undo step). `entity.dropToGround` (End, and Edit > Drop to Ground) moves each
@@ -3109,12 +3863,18 @@ is the `strata-scripting` skill. The layers:
 ## Export and the runtime
 
 `project.export` (`StrataEditor/src/Editor/GameExport.cpp`) exports without blocking a frame. `GameExport::Start` checks
-at once what it can and fails without side effects: a saved, stopped scene, a start scene (or the open scene), no
+at once what it can and fails without side effects: a saved, stopped scene (a scene whose current state is being saved
+counts as saved: the export keeps that save's ID, `EditorContext::FindSaveOfCurrentState`, and fails with its error if it
+fails), a start scene (or the open scene), no
 running script build, a loaded script module that is still the file that was loaded (scenes or prefabs that use scripts
 need one), what `Export.AlwaysInclude` names (with `prune`; `EditorAssetManager::CheckAlwaysInclude` matches the entries
 without planning), and a usable output directory (`CheckExportDirectory`: absolute, local, outside the project, not a
-file, no reserved device names; each refusal says what to do instead). It then waits for background imports (polling
-`HasPendingImports` once per frame, `WaitingForImports`; the frames go on), plans the pack once on the main thread (`EditorAssetManager::PlanAssetPack`) and writes everything on an I/O thread (failing, with
+file, no reserved device names; each refusal says what to do instead). It then waits, polling once per frame
+(`WaitingForImports`; the frames go on), for background imports (`HasPendingImports`) and the editor's saves
+(`DocumentSaver::IsBusy`), and runs the reference searches of documents that have not had theirs yet
+(`GetPendingReferenceSearches`, searched on an I/O job by `FindDocumentReferences` and recorded with
+`RecordScannedReferences`, since searches are no imports); then it plans the pack once on the main thread
+(`EditorAssetManager::PlanAssetPack`) and writes everything on an I/O thread (failing, with
 the document named, when a document saved meanwhile references what the plan does not hold), reporting its progress in
 bytes and stage (`GetProgress`, `GetStage`; `project.exportStatus`); one export runs at a time
 (`EditorContext::StartGameExport`), `project.cancelExport` stops it between blocks, and closing the project or the
@@ -3131,7 +3891,7 @@ It writes:
 
 | File | Source |
 | --- | --- |
-| `<Game>.stpak` | `EditorAssetManager::WriteAssetPack` of the plan: every project asset, or with `prune` what the scenes and `Export.AlwaysInclude` use, ordered by first use |
+| `<Game>.stpak` | `EditorAssetManager::WriteAssetPack` of the plan: every project asset, or with `prune` what the scenes and `Export.AlwaysInclude` use, ordered by first use; scenes, prefabs and models cooked (`cookDocuments`, default true: `AssetPackCook`, binary documents that load without parsing JSON, [Scene documents](#scene-documents)) |
 | script module (and its PDB) | `EditorContext::ReadRunningScriptModule`: the loaded module, checked by digest |
 | `<Game>.stgame` | `GameManifest` (version 4): name, pack, start scene, loading scene (`Export.LoadingScene`, optional), module, window settings |
 | `<Game>[.exe]`, `ThirdPartyNotices.md` | `StrataRuntime` from the editor's directory, renamed (`includeRuntime`) |
@@ -3172,13 +3932,22 @@ streaming and physics capacity (`GameRuntime::MakePerfLogColumns`: `WorldCellsWa
 `WorldCellsLoaded`, `WorldCellsUnloading` from `IWorldStreaming`, `PhysicsBodies`, `PhysicsBodiesWaiting` and
 `PhysicsMaxBodies` from `IPhysicsCapacity`; empty while no scene plays), and the `World.Streaming` stage has its column
 with the other stages. A log that cannot be written fails the run (exit code 1).
+the resident pools they tell what render targets and the swapchain take), the process's private memory with its peak
+so far (`PrivateMB`, `PeakPrivateMB`) and the GPU: each GPU stage's column (`GPU.Shadows`...), `GPUFrame` (1 when the frame's GPU
+times arrived) and `GPUBusyMs`. A row describes one frame: what the frame left is captured when it ends
+(`FramePerfLog::CaptureFrame`) and the row is written by a `WithGPU` listener once its GPU times are known, so its CPU and GPU
+columns belong together. `Create` registers every scene system's stage first, so `Scene.Animation` and every module's system
+get columns; a stage registered after the header gets none and is warned about once, by name. A log that cannot be written
+fails the run (exit code 1).
 `GameRuntime::Create` loads the manifest, makes a
 `RuntimeAssetManager` on the pack active (with `GameRuntimeOptions::AssetBudgets` when given; the manifest's optional
 `PatchPacks` are mounted over it in order, and a missing one stops the game), loads the script module
 into its own `ScriptEngine` without hot reload and makes it active, and starts loading the start scene (`SceneLoader`) and
 the manifest's loading scene (version 4, `LoadingScene`; version 3 manifests load without one), so it returns at once.
 The loading scene plays while the start scene loads (without one, renderers draw a black frame,
-`GameRenderer::RenderEmpty`); the start scene replaces it once it and everything it uses are in. A start scene that cannot
+`GameRenderer::RenderEmpty`); the start scene replaces it once it and everything it uses are in. A scene without a
+primary camera that has screen-space UI (a main menu) shows that UI over black instead of the missing-camera message
+([Game UI](#game-ui)). A start scene that cannot
 be loaded is `GetStartError` (StrataRuntime exits with code 1); `WaitForStart` waits for it without running frames (tools
 and tests). Each frame it finalizes loads, advances the scene loads (swapping in a scene that is ready), updates the scene
 and honors requests: a quit ends the process with the game's exit code, a scene load (`LoadScene`) loads the next scene

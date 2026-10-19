@@ -117,9 +117,15 @@ namespace Strata
 		Combine(target.Pending, level, coverage, cameraCut, whole);
 	}
 
-	void TextureStreamingPolicy::Update(uint64_t frame)
+	void TextureStreamingPolicy::SetIdleDropSeconds(double seconds)
+	{
+		m_IdleDropSeconds = std::max(seconds, 0.0);
+	}
+
+	void TextureStreamingPolicy::Update(uint64_t frame, double seconds)
 	{
 		m_Changed.clear();
+		const double forgetSeconds = c_ForgetFactor * m_IdleDropSeconds;
 		for (auto it = m_Targets.begin(); it != m_Targets.end();)
 		{
 			Target& target = it->second;
@@ -129,15 +135,16 @@ namespace Strata
 			{
 				const Need& need = target.Pending;
 				// Finer at once; coarser once the finer level was not needed for a while.
-				if (need.Level <= target.Level || frame - std::min(target.HeldFrame, frame) >= c_DropDelayFrames)
+				if (need.Level <= target.Level || seconds - target.HeldSeconds >= m_IdleDropSeconds)
 				{
 					target.Level = need.Level;
-					target.HeldFrame = frame;
+					target.HeldSeconds = seconds;
 				}
 				target.Coverage = need.Coverage;
 				target.CameraCut = need.CameraCut;
 				target.Whole = need.Whole;
 				target.LastNeededFrame = frame;
+				target.LastNeededSeconds = seconds;
 				target.HasPending = false;
 				if (target.Level != previousLevel || !neededBefore)
 					m_Changed.push_back(it->first);
@@ -148,14 +155,13 @@ namespace Strata
 			target.Coverage = 0.0f;
 			target.CameraCut = false;
 			target.Whole = false;
-			const uint64_t unneeded = frame - std::min(target.LastNeededFrame, frame);
-			if (unneeded >= c_ForgetFrames)
+			if (seconds - target.LastNeededSeconds >= forgetSeconds)
 			{
 				m_Changed.push_back(it->first);
 				it = m_Targets.erase(it);
 				continue;
 			}
-			if (frame - std::min(target.HeldFrame, frame) >= c_DropDelayFrames)
+			if (seconds - target.HeldSeconds >= m_IdleDropSeconds)
 				target.Level = c_NoLevel;
 			if (target.Level != previousLevel || neededBefore)
 				m_Changed.push_back(it->first);
@@ -164,7 +170,7 @@ namespace Strata
 		// Textures needed for the first time (or again after they were forgotten).
 		for (const auto& [texture, need] : m_NewNeeds)
 		{
-			m_Targets[texture] = Target { need.Level, need.Coverage, need.CameraCut, need.Whole, frame, frame };
+			m_Targets[texture] = Target { need.Level, need.Coverage, need.CameraCut, need.Whole, seconds, frame, seconds };
 			m_Changed.push_back(texture);
 		}
 		m_NewNeeds.clear();
@@ -459,7 +465,7 @@ namespace Strata
 				m_Policy.AddNeed(hold->Texture, 0, 1.0f, false, true);
 		}
 		m_Frame++;
-		m_Policy.Update(m_Frame);
+		m_Policy.Update(m_Frame, std::chrono::duration<double>(std::chrono::steady_clock::now() - m_Start).count());
 		// What may call for another level since the last frame: changed targets and changed asset objects (a texture that
 		// loaded, was replaced by a reload or evicted). Streamed textures join below.
 		for (const AssetHandle handle : m_Policy.GetChanged())
@@ -529,7 +535,8 @@ namespace Strata
 						if (range.Size <= data.size())
 						{
 							data.resize(static_cast<size_t>(range.Size));
-							if (texture->RaiseLevels(wanted, std::move(data)))
+							// A view that needs the texture whole (exact pixels) sees its finest levels at once; the others fade them in.
+							if (texture->RaiseLevels(wanted, std::move(data), !(target && target->Whole)))
 							{
 								streamed.Changing = true;
 								streamed.ChangeForBudget = false;
@@ -561,6 +568,15 @@ namespace Strata
 		uint32_t drops = 0;
 		uint32_t belowWanted = 0;
 		std::vector<Raise> raises;
+		// Textures whose levels nothing needed for the idle drop time: dropped least recently needed first, a few per frame.
+		struct IdleDrop
+		{
+			AssetHandle Handle;
+			Ref<Texture> Target;
+			uint32_t Level = 0;
+			double HeldSeconds = 0.0;
+		};
+		std::vector<IdleDrop> idleDrops;
 		m_LookedAt = 0;
 		for (auto it = m_Active.begin(); it != m_Active.end();)
 		{
@@ -614,11 +630,21 @@ namespace Strata
 				const float need = target->Whole ? std::numeric_limits<float>::infinity() : target->Coverage;
 				raises.push_back(Raise { handle, texture, level, resident, need, TextureStreamingPolicy::RankRaise(resident - level, target->Coverage, target->CameraCut) });
 			}
-			else if (drops < c_MaxDropsPerFrame && m_Manager.ArePartialLoadsActive() && m_Manager.HasStoredForm(handle))
+			else if (m_Manager.ArePartialLoadsActive() && m_Manager.HasStoredForm(handle))
 			{
-				if (Drop(handle, *texture, level, false, context) > 0)
-					drops++;
+				idleDrops.push_back(IdleDrop { handle, texture, level, target->HeldSeconds });
 			}
+		}
+		std::sort(idleDrops.begin(), idleDrops.end(), [](const IdleDrop& a, const IdleDrop& b)
+		{
+			return TextureStreamingPolicy::DropsBefore(a.HeldSeconds, a.Handle, b.HeldSeconds, b.Handle);
+		});
+		for (const IdleDrop& idle : idleDrops)
+		{
+			if (drops >= c_MaxDropsPerFrame)
+				break;
+			if (Drop(idle.Handle, *idle.Target, idle.Level, false, context) > 0)
+				drops++;
 		}
 
 		if (!raises.empty())

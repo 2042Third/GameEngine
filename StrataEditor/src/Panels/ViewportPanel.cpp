@@ -1,12 +1,15 @@
 #include "Panels/ViewportPanel.h"
 
+#include "Editor/AssetBounds.h"
 #include "Editor/CommandJournal.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/EditorPlacement.h"
 #include "Editor/EditorViewport.h"
 #include "Editor/SceneBounds.h"
+#include "Editor/UIRectEdit.h"
 #include "Editor/ViewportRenderer.h"
+#include "Panels/ViewportToolbar.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
 #include "UI/EditorShell.h"
@@ -19,7 +22,9 @@
 
 #include <Strata/Animation/AnimationPreview.h>
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/SceneRenderer.h>
@@ -47,18 +52,11 @@ namespace Strata
 
 		// Widths of the camera popup's fields, in text heights.
 		constexpr float c_CameraFieldWidthInFontSizes = 11.0f;
-		// The play-state strip over the image, in text heights (2 pixels at the base text size).
-		constexpr float c_PlayStripInFontSizes = 1.0f / 7.0f;
 		// The scene load card's width, in text heights.
 		constexpr float c_SceneLoadCardInFontSizes = 22.0f;
 		// The agent flash's outline, in text heights (2 pixels at the base text size), and how many entities it outlines.
 		constexpr float c_AgentFlashThicknessInFontSizes = 1.0f / 7.0f;
 		constexpr size_t c_MaxAgentFlashEntities = 64;
-
-		ImTextureID ToTextureID(nvrhi::ITexture* texture)
-		{
-			return static_cast<ImTextureID>(reinterpret_cast<uintptr_t>(texture));
-		}
 
 		ImGuizmo::OPERATION ToImGuizmo(GizmoOperation operation)
 		{
@@ -70,22 +68,6 @@ namespace Strata
 				case GizmoOperation::None:   break;
 			}
 			return ImGuizmo::TRANSLATE;
-		}
-
-		// Lines of text over the image, on a dark box so they stay readable on any scene.
-		void DrawTextBox(ImDrawList* drawList, const ImVec2& position, const std::vector<std::string>& lines, const ImVec4& color)
-		{
-			const float lineHeight = ImGui::GetTextLineHeightWithSpacing();
-			const ImVec2 padding = ImGui::GetStyle().FramePadding;
-			float width = 0.0f;
-			for (const std::string& line : lines)
-				width = std::max(width, ImGui::CalcTextSize(line.c_str()).x);
-			const ImVec2 size(width + padding.x * 2.0f, lineHeight * static_cast<float>(lines.size()) + padding.y * 2.0f);
-			drawList->AddRectFilled(position, ImVec2(position.x + size.x, position.y + size.y), ImGui::GetColorU32(UI::GetThemeColors().Overlay),
-				ImGui::GetStyle().FrameRounding);
-			for (size_t index = 0; index < lines.size(); index++)
-				drawList->AddText(ImVec2(position.x + padding.x, position.y + padding.y + lineHeight * static_cast<float>(index)), ImGui::GetColorU32(color),
-					lines[index].c_str());
 		}
 
 		// The transform gizmo in the theme's axis colors, its lines as thick (relative to the text) at every UI scale.
@@ -112,23 +94,9 @@ namespace Strata
 			style.Colors[ImGuizmo::SELECTION] = UI::WithAlpha(colors.AccentHover, defaults.Colors[ImGuizmo::SELECTION].w);
 		}
 
-		const ImVec4& GetPlayStateColor(const EditorContext& context)
-		{
-			const UI::ThemeColors::PlayStateColors& colors = UI::GetThemeColors().PlayState;
-			if (context.IsPaused())
-				return colors.Paused;
-			switch (context.GetSceneState())
-			{
-				case SceneState::Play:     return colors.Play;
-				case SceneState::Simulate: return colors.Simulate;
-				case SceneState::Edit:     break;
-			}
-			return colors.Edit;
-		}
-
 	}
 
-	EditorPanelWindowOptions ViewportPanel::GetWindowOptions(EditorPanelContext& context)
+	EditorPanelWindowOptions ViewportPanel::GetWindowOptions(EditorPanelContext&)
 	{
 		ImGuizmo::BeginFrame();
 
@@ -140,9 +108,6 @@ namespace Strata
 		options.Flags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
 		if (m_OverGizmo)
 			options.Flags |= ImGuiWindowFlags_NoMove;
-		// While the game has the input, arrows, Space and Enter belong to it, not to keyboard navigation of the chips.
-		if (context.Context.IsGameInputActive())
-			options.Flags |= ImGuiWindowFlags_NoNavInputs;
 		return options;
 	}
 
@@ -150,20 +115,33 @@ namespace Strata
 	{
 		EditorContext& context = panelContext.Context;
 		EditorViewport& viewport = context.GetViewport();
+		ViewportSettings& settings = viewport.GetSettings();
 		m_Focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
 
-		// The image fills the panel, rendered in framebuffer pixels (Retina displays have more than one per unit). Viewports
+		// The toolbar strip at the top holds the chips (ViewportToolbar), so none of them ever covers the image. The image
+		// fills the rest of the panel, rendered in framebuffer pixels (Retina displays have more than one per unit). Viewports
 		// only get a framebuffer scale of their own with multi-viewport support; like ImGui's renderer data, the panel falls
 		// back to the display's otherwise.
-		const ImVec2 available = ImGui::GetContentRegionAvail();
-		const ImVec2 imageMin = ImGui::GetCursorScreenPos();
+		const ImGuiStyle& style = ImGui::GetStyle();
+		const ViewportToolbar::Layout layout = ViewportToolbar::Compute();
+		const ImVec2 imageMin = layout.ImageMin;
+		const ImVec2 available = layout.ImageSize;
+		ImGui::SetCursorScreenPos(imageMin);
 		const ImVec2 viewportScale = ImGui::GetWindowViewport()->FramebufferScale;
 		const ImVec2 displayScale = ImGui::GetIO().DisplayFramebufferScale;
 		m_Image.Min = glm::vec2(imageMin.x, imageMin.y);
 		m_Image.Size = glm::max(glm::vec2(available.x, available.y), glm::vec2(0.0f));
 		m_Image.PixelScale = ViewportImageArea::ChoosePixelScale(glm::vec2(viewportScale.x, viewportScale.y), glm::vec2(displayScale.x, displayScale.y));
+		// The 2D canvas mode shows the canvas at its reference aspect ratio: the image is letterboxed in the area under the
+		// toolbar (whose chips never cover it).
+		const bool canvasMode = CanvasModeView::IsActive(context) && m_CanvasMode.Layout(context, m_Image);
+		if (!canvasMode)
+			m_CanvasMode.Reset(context);
 		const glm::uvec2 size = m_Image.GetPixelSize();
-		viewport.SetSize(size);
+		// What the view shows of the game is its screen: in canvas mode the canvas at its fit, however it is zoomed (ui.layout,
+		// the Inspector's pixels and captures use it).
+		const glm::uvec2 screenSize = canvasMode ? m_CanvasMode.GetScreenPixels() : size;
+		viewport.SetSize(screenSize);
 		if (size.x == 0 || size.y == 0)
 		{
 			Reset(context);
@@ -171,7 +149,6 @@ namespace Strata
 		}
 
 		// Elsewhere an item covering the image takes the clicks, so dragging in the viewport never moves a floating window.
-		// The chips drawn over it later take precedence where they are.
 		if (m_OverGizmo)
 		{
 			ImGui::Dummy(available);
@@ -182,42 +159,92 @@ namespace Strata
 			ImGui::InvisibleButton("SceneImage", available, ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight | ImGuiButtonFlags_MouseButtonMiddle);
 		}
 		m_Hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem);
+		UI::ItemProbe::RecordRect("Viewport.Image", imageMin, ImVec2(imageMin.x + available.x, imageMin.y + available.y));
 		AcceptAssetDrops(context, panelContext.Commands);
 
-		const float aspectRatio = static_cast<float>(size.x) / static_cast<float>(size.y);
-		std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Automatic, aspectRatio);
-		m_GameView = view && view->FromScene;
-		if (!m_GameView)
+		// The editor camera, on the edited scene and on the running game alike (the Game view shows the game as it is); or,
+		// with "Game camera", the scene's primary camera with the editor's overlays, which the editor camera's controls
+		// leave alone.
+		const float aspectRatio = static_cast<float>(screenSize.x) / static_cast<float>(screenSize.y);
+		const auto resolveView = [&context, &settings, aspectRatio]()
 		{
+			if (settings.PilotGameCamera)
+			{
+				if (std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Scene, aspectRatio))
+				{
+					view->EditorOverlays = true;
+					view->EditorView = true;
+					return view;
+				}
+			}
+			std::optional<ViewportView> view = ResolveViewportView(context, ViewportCameraSource::Editor, aspectRatio);
+			if (view && settings.PilotGameCamera)
+				view->Notice = "The scene has no primary camera: showing the editor camera";
+			return view;
+		};
+		std::optional<ViewportView> view;
+		if (canvasMode)
+		{
+			// The canvas over the scene as the game shows it: through the scene's camera, else the editor camera's view, of
+			// the part of the screen the zoomed and panned canvas shows.
+			view = ResolveViewportView(context, ViewportCameraSource::Scene, aspectRatio);
+			if (!view)
+				view = ResolveViewportView(context, ViewportCameraSource::Editor, aspectRatio);
+			if (view)
+				m_CanvasMode.ApplyView(*view);
+			m_Piloting = false;
+			EndCameraDrag();
+			EndGizmoDrag(context);
+			if (!m_CanvasMode.IsDragging())
+				HandleSelectionShortcuts(panelContext);
+		}
+		else
+		{
+			view = resolveView();
+			m_Piloting = view && view->FromScene;
 			HandleShortcuts(panelContext);
-			UpdateCamera(context, m_Hovered);
-
-			// A plain click picks what is under the cursor in the image that is shown; clicks on the gizmo are its own.
+			if (!m_Piloting)
+				UpdateCamera(context, m_Hovered);
+			else
+				EndCameraDrag();
+			// A plain click picks what is under the cursor in the image that is shown (the running scene's entities while the
+			// game plays); clicks on the gizmo are its own.
 			const ImGuiIO& io = ImGui::GetIO();
 			if (m_Hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.KeyAlt && !ImGuizmo::IsOver() && !ImGuizmo::IsUsing())
 			{
 				const ViewportPickMode mode = io.KeyCtrl ? ViewportPickMode::Toggle : (io.KeyShift ? ViewportPickMode::Add : ViewportPickMode::Replace);
 				if (const std::optional<glm::uvec2> pixel = m_Image.ToPixel(glm::vec2(io.MousePos.x, io.MousePos.y)))
-					viewport.RequestPick(*pixel, size, mode);
+				{
+					// The game UI the view shows is in front of the scene (its screen-space canvases while Game UI is on, the
+					// canvases in the scene always): a click on one of its elements selects it.
+					const UIScreen screen { glm::vec2(size), context.GetGameWindow().GetState().ContentScale };
+					const glm::mat4 viewProjection = view ? view->Camera.Projection * view->Camera.View : glm::mat4(1.0f);
+					const Entity element = UIRectEdit::PickElement(*context.GetActiveScene(), screen, glm::vec2(*pixel) + glm::vec2(0.5f),
+						settings.ShowGameUI, view ? &viewProjection : nullptr);
+					if (element)
+						EditorViewport::ApplyPick(context, element, mode);
+					else
+						viewport.RequestPick(*pixel, size, mode);
+				}
 			}
 			// The camera may have moved this frame.
-			view = ResolveViewportView(context, ViewportCameraSource::Automatic, aspectRatio);
+			view = resolveView();
 		}
-		else
-		{
-			EndCameraDrag();
-			EndGizmoDrag(context);
-		}
-		UpdateGameInput(context, m_GameView);
 
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		const ImVec2 imageMax(imageMin.x + available.x, imageMin.y + available.y);
 		ViewportRenderer* renderer = viewport.GetRenderer();
-		const bool rendered = renderer && view && renderer->Render(context, size, *view, viewport.GetSettings(), view->EditorOverlays);
+		// The canvas mode draws the game UI, without the editor's overlays, in the letterboxed area.
+		ViewportSettings renderSettings = settings;
+		renderSettings.ShowGameUI = renderSettings.ShowGameUI || canvasMode;
+		const bool rendered = renderer && view && renderer->Render(context, size, *view, renderSettings, view->EditorOverlays && !canvasMode);
 		if (rendered)
 		{
-			drawList->AddImage(ToTextureID(renderer->GetOutputTexture()), imageMin, imageMax);
+			if (canvasMode)
+				drawList->AddRectFilled(imageMin, imageMax, ImGui::GetColorU32(colors.Chrome));
+			drawList->AddImage(ViewportToolbar::ToTextureID(renderer->GetOutputTexture()), ImVec2(m_Image.Min.x, m_Image.Min.y),
+				ImVec2(m_Image.Min.x + m_Image.Size.x, m_Image.Min.y + m_Image.Size.y));
 		}
 		else
 		{
@@ -226,45 +253,34 @@ namespace Strata
 			drawList->AddText(ImVec2(imageMin.x + padding.x, imageMax.y - padding.y - ImGui::GetFontSize()), ImGui::GetColorU32(colors.TextSecondary),
 				renderer ? "The scene could not be rendered (see the Console)" : "No GPU: the viewport cannot render");
 		}
-
-		// A strip in the play state's color while the scene runs: changes made now are discarded when it stops.
-		if (context.IsPlaying())
-		{
-			const float strip = std::max(1.0f, std::floor(ImGui::GetFontSize() * c_PlayStripInFontSizes));
-			drawList->AddRectFilled(imageMin, ImVec2(imageMax.x, imageMin.y + strip), ImGui::GetColorU32(GetPlayStateColor(context)));
-		}
+		// The canvas's outlines and handles, also without an image (a headless editor still edits the layout).
+		if (canvasMode)
+			m_CanvasMode.Update(context, m_Hovered, m_Hovered || m_Focused);
+		ViewportToolbar::DrawBackground(drawList, layout, context);
 
 		if (view)
 			DrawAgentFlash(context, *view);
-		if (view && !m_GameView)
+		if (view && !canvasMode)
 			UpdateGizmo(context, *view);
 
-		// The chips go over the image's top left. The game view keeps only the stats toggle, and only while the game does not
-		// have the input (before the view is clicked, or after Shift+F1): while it has, every click on the image is the game's.
-		const ImGuiStyle& style = ImGui::GetStyle();
-		const ImVec2 chipsMin(imageMin.x + style.ItemSpacing.x, imageMin.y + style.ItemSpacing.y);
-		ImGui::SetCursorScreenPos(chipsMin);
-		if (!m_GameView)
+		// The chips, in the toolbar from its left; the agent's at its right. The last chips that do not fit with their labels
+		// are drawn as icons (their labels in their tooltips).
+		ImGui::PushClipRect(layout.Min, layout.Max, true);
+		ImGui::SetCursorScreenPos(layout.ChipsMin);
+		const float agentWidth = PrepareAgentChip(panelContext);
 		{
+			const float agentRoom = agentWidth > 0.0f ? agentWidth + style.ItemSpacing.x * 2.0f : 0.0f;
+			UI::ChipStrip strip(m_ChipStrip, layout.Max.x - layout.ChipsMin.x - agentRoom);
 			DrawChips(context);
 			DrawPreviewChip(panelContext);
 		}
-		else if (!m_GameInputEnabled)
-		{
-			DrawStatsChip(viewport.GetSettings());
-			// Debug views apply to the game view too: streaming while playing is what they are for.
-			ImGui::SameLine();
-			DrawDebugViewChip(viewport.GetSettings());
-		}
-		if (!m_GameView || !m_GameInputEnabled)
-			DrawAgentChip(panelContext, imageMax.x - style.ItemSpacing.x, chipsMin.y);
-		if (rendered && viewport.GetSettings().DebugView != ViewportDebugView::None)
+		if (agentWidth > 0.0f)
+			DrawAgentChip(panelContext, layout.Max.x - style.ItemSpacing.x, layout.ChipsMin.y, agentWidth);
+		ImGui::PopClipRect();
+		if (rendered && settings.DebugView != ViewportDebugView::None)
 			DrawDebugViewLegend(context);
-		// Text boxes go below the chip row, also while it is hidden, so they stay in place when it comes and goes.
-		m_GameWindowNoticeShown = false;
-		m_MouseHintShown = false;
 		if (view)
-			DrawOverlays(context, *view, chipsMin.y + ImGui::GetFrameHeight(), panelContext.Frame);
+			DrawOverlays(context, *view, panelContext.Frame);
 		if (context.IsSceneLoading())
 			DrawSceneLoadOverlay(context);
 	}
@@ -273,8 +289,6 @@ namespace Strata
 	{
 		// Hidden behind another tab, collapsed or closed: nothing is rendered and held interactions end.
 		Reset(context.Context);
-		m_GameWindowNoticeShown = false;
-		m_MouseHintShown = false;
 	}
 
 	void ViewportPanel::OnDetach(EditorPanelContext& context)
@@ -284,7 +298,7 @@ namespace Strata
 
 	bool ViewportPanel::IsAnimating() const
 	{
-		return m_CameraDrag != CameraDrag::None || m_GizmoDrag.has_value() || (!m_FlashBounds.empty() && IsFlashing(Now()));
+		return m_CameraDrag != CameraDrag::None || m_GizmoDrag.has_value() || m_CanvasMode.IsDragging() || (!m_FlashBounds.empty() && IsFlashing(Now()));
 	}
 
 	bool ViewportPanel::IsFlashing(std::chrono::steady_clock::time_point now) const
@@ -301,7 +315,7 @@ namespace Strata
 		m_FlashBounds.clear();
 		EndCameraDrag();
 		EndGizmoDrag(context);
-		UpdateGameInput(context, false);
+		m_CanvasMode.Reset(context);
 		context.GetViewport().SetSize(glm::uvec2(0, 0));
 	}
 
@@ -347,6 +361,17 @@ namespace Strata
 				viewport.Focus(context, {});
 			if (ImGui::MenuItem("Reset View"))
 				camera.Reset();
+			// What skinned characters of the edited scene show while it does not play (ViewportSettings::EditPose).
+			ImGui::SeparatorText("Characters while editing");
+			if (ImGui::MenuItem("Rest pose", nullptr, settings.EditPose == AnimationEditPose::Rest))
+				settings.EditPose = AnimationEditPose::Rest;
+			UI::ItemProbe::Record("Viewport.EditPose.Rest");
+			ImGui::SetItemTooltip("Skinned characters stand in their skeleton's rest pose");
+			if (ImGui::MenuItem("First frame of their animation", nullptr, settings.EditPose == AnimationEditPose::ClipStart))
+				settings.EditPose = AnimationEditPose::ClipStart;
+			UI::ItemProbe::Record("Viewport.EditPose.ClipStart");
+			ImGui::SetItemTooltip("Skinned characters show what they play on start at its first frame (their controller's default state, else "
+				"their Animator's clip), as the game shows them before its first update");
 			ImGui::EndPopup();
 		}
 
@@ -365,7 +390,7 @@ namespace Strata
 			ImGui::SameLine();
 		}
 		DrawStatsChip(settings);
-		// View settings of the editor camera outside play mode only: the game always looks the way it will ship.
+		// View settings of the Scene view's editor camera: the Game view always looks the way the game will ship.
 		ImGui::SameLine();
 		const Ref<Scene>& scene = context.GetActiveScene();
 		const bool previewNeeded = scene && SceneRenderer::NeedsPreviewLighting(*scene);
@@ -377,9 +402,16 @@ namespace Strata
 		UI::ToggleChip("Viewport.PreviewLighting", Icons::SunMedium, "Preview lighting", &settings.PreviewLighting, previewTooltip, previewNeeded);
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.GameUI", Icons::Gamepad2, "Game UI", &settings.ShowGameUI,
-			"Show the game's screen-space text (its HUD) in the editor view; the game and the scene camera always show it");
+			"Show the game's screen-space UI (its HUD text and UI canvases) in the editor view, where a click selects a UI element; "
+			"the game and the scene camera always show it");
+		ImGui::SameLine();
+		UI::ToggleChip("Viewport.CanvasMode", Icons::Frame, "2D", &settings.CanvasMode,
+			"Show the selection's UI canvas in 2D at its reference aspect ratio, to place and size its elements with handles");
 		ImGui::SameLine();
 		DrawDebugViewChip(settings);
+		ImGui::SameLine();
+		UI::ToggleChip("Viewport.GameCamera", Icons::Camera, "Game camera", &settings.PilotGameCamera,
+			"Look through the scene's primary camera with the editor's overlays (F8); the editor camera stays where it was");
 	}
 
 	void ViewportPanel::DrawPreviewChip(EditorPanelContext& panelContext)
@@ -417,15 +449,15 @@ namespace Strata
 			RunEditorCommand(context, panelContext.Commands, "animation.preview", { { "stop", true } });
 	}
 
-	void ViewportPanel::DrawAgentChip(EditorPanelContext& panelContext, float right, float top)
+	float ViewportPanel::PrepareAgentChip(EditorPanelContext& panelContext)
 	{
 		const AutomationActivity& activity = panelContext.Context.GetJournal().GetLatestAutomationActivity();
 		if (activity.Id == 0)
-			return;
+			return 0.0f;
 		const double age = std::chrono::duration<double>(Now() - activity.Finished).count();
 		const bool connected = panelContext.Shell && panelContext.Shell->GetAutomationState().Clients > 0;
 		if (!connected && age >= c_AgentChipSeconds)
-			return;
+			return 0.0f;
 
 		// The text changes once a second at most: it is made again only then.
 		const int64_t seconds = static_cast<int64_t>(age);
@@ -435,7 +467,13 @@ namespace Strata
 			m_AgentChipSeconds = seconds;
 			m_AgentChipText = fmt::format("Agent: {} \xC2\xB7 {}", activity.Command, UI::DescribeSecondsAgo(age));
 		}
-		const float width = UI::ChipWidth(Icons::Bot, m_AgentChipText.c_str());
+		return UI::ChipWidth(Icons::Bot, m_AgentChipText.c_str());
+	}
+
+	void ViewportPanel::DrawAgentChip(EditorPanelContext& panelContext, float right, float top, float width)
+	{
+		const AutomationActivity& activity = panelContext.Context.GetJournal().GetLatestAutomationActivity();
+		const double age = std::chrono::duration<double>(Now() - activity.Finished).count();
 		ImGui::SetCursorScreenPos(ImVec2(right - width, top));
 		const bool clicked = UI::Chip("Viewport.Agent", Icons::Bot, m_AgentChipText.c_str(), nullptr);
 		if (UI::IsTooltipDue())
@@ -574,7 +612,8 @@ namespace Strata
 			for (size_t level = 0; level < settings.DebugColors.LOD.size(); level++)
 			{
 				const bool last = level + 1 == settings.DebugColors.LOD.size();
-				lines.push_back({ toColor(settings.DebugColors.LOD[level]), fmt::format("LOD {}{}", level, last ? "+" : ""), std::to_string(stats.EntitiesPerLOD[level]) });
+				lines.push_back({ toColor(settings.DebugColors.LOD[level]), GetLODLegendName(level, last, stats.MaxErrorPixelsPerLOD[level]),
+					std::to_string(stats.EntitiesPerLOD[level]) });
 			}
 		}
 		else
@@ -599,19 +638,22 @@ namespace Strata
 	// Input
 	////////////////////////////////////////////////////////////////////////////////
 
+	void ViewportPanel::HandleSelectionShortcuts(EditorPanelContext& panelContext)
+	{
+		EditorContext& context = panelContext.Context;
+		EditorActions::HandleSelectionShortcuts(context, panelContext.Commands, true);
+		const Entity primary = context.GetPrimarySelection();
+		if (primary && panelContext.Shell && context.AcceptsEditShortcuts() && ImGui::Shortcut(ImGuiKey_F2, ImGuiInputFlags_RouteFocused))
+			panelContext.Shell->RenameEntity(primary.GetUUID());
+	}
+
 	void ViewportPanel::HandleShortcuts(EditorPanelContext& panelContext)
 	{
 		EditorContext& context = panelContext.Context;
 		const ImGuiIO& io = ImGui::GetIO();
-		// The selection's shortcuts (Delete, Ctrl+D, Ctrl+C/X/V, Ctrl+A, F2) while the viewport has the keyboard focus, never
-		// during a camera fly or a gizmo drag.
+		// The selection's shortcuts while the viewport has the keyboard focus, never during a camera fly or a gizmo drag.
 		if (m_CameraDrag != CameraDrag::Fly && !m_GizmoDrag && !ImGuizmo::IsUsing())
-		{
-			EditorActions::HandleSelectionShortcuts(context, panelContext.Commands, true);
-			const Entity primary = context.GetPrimarySelection();
-			if (primary && panelContext.Shell && context.AcceptsEditShortcuts() && ImGui::Shortcut(ImGuiKey_F2, ImGuiInputFlags_RouteFocused))
-				panelContext.Shell->RenameEntity(primary.GetUUID());
-		}
+			HandleSelectionShortcuts(panelContext);
 
 		// Only while the viewport is the target of the keyboard, never while typing or flying (WASD/QE move the camera).
 		// Nor during a gizmo drag, whose operation must not change under it.
@@ -643,6 +685,8 @@ namespace Strata
 		}
 		if (ImGui::IsKeyPressed(ImGuiKey_Home, false))
 			context.GetViewport().Focus(context, {});
+		if (ImGui::IsKeyPressed(ImGuiKey_F8, false))
+			settings.PilotGameCamera = !settings.PilotGameCamera;
 	}
 
 	void ViewportPanel::UpdateCamera(EditorContext& context, bool hovered)
@@ -707,46 +751,6 @@ namespace Strata
 		{
 			Input::SetCursorMode(CursorMode::Normal);
 			m_CursorLocked = false;
-		}
-	}
-
-	void ViewportPanel::UpdateGameInput(EditorContext& context, bool gameView)
-	{
-		// Shift+F1 leaves the game view (and frees a cursor the game locked or hid) without stopping the game. Only asked
-		// while the game view is shown: Reset runs this without an ImGui frame (when the editor detaches).
-		if (gameView && m_Focused && ImGui::GetIO().KeyShift && ImGui::IsKeyPressed(ImGuiKey_F1, false))
-		{
-			ImGui::SetWindowFocus(nullptr);
-			m_Focused = false;
-		}
-
-		// Scripts read Input: only the focused game view feeds it, with coordinates relative to the image. A game that hid or
-		// locked the cursor gives it back when it loses the input and takes it again when it gets the input back
-		// (Input::SetGameCursorMode applies only while input is enabled).
-		const bool enabled = gameView && m_Focused && context.GetSceneState() == SceneState::Play;
-		m_GameInputEnabled = enabled;
-		context.SetGameInputActive(enabled);
-		Input::SetEnabled(enabled);
-		// A locked cursor stays inside the game view: the editor's UI ignores the mouse meanwhile, so no click lands on another
-		// panel (Shift+F1 leaves the game view).
-		const bool gameOwnsMouse = enabled && Input::GetGameCursorMode() == CursorMode::Locked;
-		// Detaching runs this after the ImGui context is gone.
-		if (gameOwnsMouse != m_GameOwnsMouse && ImGui::GetCurrentContext())
-		{
-			m_GameOwnsMouse = gameOwnsMouse;
-			ImGuiIO& io = ImGui::GetIO();
-			if (gameOwnsMouse)
-				io.ConfigFlags |= ImGuiConfigFlags_NoMouse;
-			else
-				io.ConfigFlags &= ~ImGuiConfigFlags_NoMouse;
-			// Without a pointer nothing on screen leads out: the game view says how, for a while after each time it took it.
-			if (gameOwnsMouse)
-				m_MouseHintUntil = ImGui::GetTime() + c_MouseHintSeconds;
-		}
-		if (enabled)
-		{
-			const ImVec2 origin = ImGui::GetMainViewport()->Pos;
-			Input::SetViewport(glm::vec2(m_Image.Min.x - origin.x, m_Image.Min.y - origin.y), m_Image.Size);
 		}
 	}
 
@@ -818,33 +822,24 @@ namespace Strata
 	// Overlays and drops
 	////////////////////////////////////////////////////////////////////////////////
 
-	void ViewportPanel::DrawOverlays(EditorContext& context, const ViewportView& view, float chipRowBottom, const EditorFrameStats& frame)
+	void ViewportPanel::DrawOverlays(EditorContext& context, const ViewportView& view, const EditorFrameStats& frame)
 	{
 		ImDrawList* drawList = ImGui::GetWindowDrawList();
 		const ImVec2 imageMin(m_Image.Min.x, m_Image.Min.y);
 		const float margin = ImGui::GetStyle().ItemSpacing.x;
-		// Text boxes go below the chips.
-		const float top = chipRowBottom + margin;
+		const float top = imageMin.y + margin;
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 
 		if (!view.Notice.empty())
 		{
 			const float width = ImGui::CalcTextSize(view.Notice.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-			DrawTextBox(drawList, ImVec2(std::max(imageMin.x + (m_Image.Size.x - width) * 0.5f, imageMin.x), top), { view.Notice }, colors.Warning);
+			ViewportToolbar::DrawTextBox(drawList, ImVec2(std::max(imageMin.x + (m_Image.Size.x - width) * 0.5f, imageMin.x), top), { view.Notice }, colors.Warning);
 		}
-		// The game locked the cursor: the way out, at the top of the game view.
-		m_MouseHintShown = m_GameOwnsMouse && ImGui::GetTime() < m_MouseHintUntil;
-		if (m_MouseHintShown)
-		{
-			const float width = ImGui::CalcTextSize(c_MouseHint).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-			DrawTextBox(drawList, ImVec2(std::max(imageMin.x + (m_Image.Size.x - width) * 0.5f, imageMin.x), top), { c_MouseHint }, colors.Text);
-		}
-		DrawGameWindowNotice(context, view, drawList);
 
 		EditorViewport& viewport = context.GetViewport();
 		ViewportRenderer* renderer = viewport.GetRenderer();
 		if (viewport.GetSettings().ShowStats && renderer)
-			DrawStatsOverlay(drawList, ImVec2(imageMin.x + margin, top), *renderer, view, frame);
+			ViewportToolbar::DrawStatsOverlay(drawList, ImVec2(imageMin.x + margin, top), *renderer, view, frame);
 	}
 
 	void ViewportPanel::DrawSceneLoadOverlay(EditorContext& context)
@@ -852,17 +847,25 @@ namespace Strata
 		const EditorSceneLoadStatus& status = context.GetSceneLoadStatus();
 		const ImGuiStyle& style = ImGui::GetStyle();
 		const UI::ThemeColors& colors = UI::GetThemeColors();
-		std::string name = status.Scene.ToString();
-		if (const Ref<AssetManagerBase>& assets = AssetManager::GetActive())
-		{
-			if (const std::optional<AssetMetadata> metadata = assets->GetMetadata(status.Scene))
-				name = metadata->Path.empty() ? metadata->Name : metadata->Path;
-		}
+		const std::string name = DescribeOpeningScene(context);
 		// The load's progress counts the scene's document as it is read (SceneReadProgress), then what the scene uses by bytes:
 		// the bar moves on in both steps, and the step says what the time goes to (last, the view's render proxies are built).
-		const char* step = status.State == SceneLoadState::LoadingScene ? "Reading the scene"
-			: status.State == SceneLoadState::Preparing ? "Preparing the view" : "Loading what it uses";
-		const std::string stage = fmt::format("{} {:.0f}%", step, std::floor(status.Progress * 100.0f));
+		// Before it, a project's start scene waits for the scan of the project's assets, whose progress shows then.
+		float progress = status.Progress;
+		std::string stage;
+		if (const std::optional<AssetScanProgress> scan = context.GetAssetScanProgress())
+		{
+			const bool walking = scan->Phase == AssetScanPhase::Walking || scan->Total == 0;
+			progress = walking ? 0.0f : static_cast<float>(scan->Done) / static_cast<float>(scan->Total);
+			stage = walking ? fmt::format("Listing the project's files: {}", StringUtils::FormatThousands(scan->Done))
+				: fmt::format("Registering the project's assets: {} / {}", StringUtils::FormatThousands(scan->Done), StringUtils::FormatThousands(scan->Total));
+		}
+		else
+		{
+			const char* step = status.State == SceneLoadState::LoadingScene ? "Reading the scene"
+				: status.State == SceneLoadState::Preparing ? "Preparing the view" : "Loading what it uses";
+			stage = fmt::format("{} {:.0f}%", step, std::floor(status.Progress * 100.0f));
+		}
 
 		// A card in the middle of the image: the scene's name over the progress bar (no item takes the image's clicks but the
 		// bar, which takes none either).
@@ -879,57 +882,25 @@ namespace Strata
 		drawList->AddText(contentMin, ImGui::GetColorU32(colors.Text), title.c_str());
 		ImGui::PopFont();
 		ImGui::SetCursorScreenPos(ImVec2(contentMin.x, contentMin.y + ImGui::GetTextLineHeightWithSpacing()));
-		UI::StrataProgressBar("Viewport.SceneLoad", status.Progress, stage, contentWidth);
-	}
-
-	void ViewportPanel::DrawGameWindowNotice(EditorContext& context, const ViewportView& view, ImDrawList* drawList)
-	{
-		// What the game asked of its window shows over the game view, at the image's bottom (the editor's window stays).
-		const EditorGameWindow& gameWindow = context.GetGameWindow();
-		m_GameWindowNoticeShown = view.FromScene && gameWindow.HasRequests();
-		if (!m_GameWindowNoticeShown)
-			return;
-		if (gameWindow.GetVersion() != m_GameWindowNoticeVersion)
-		{
-			m_GameWindowNotice = gameWindow.DescribeForPeople();
-			m_GameWindowNoticeVersion = gameWindow.GetVersion();
-		}
-		const ImVec2 padding = ImGui::GetStyle().FramePadding;
-		const float margin = ImGui::GetStyle().ItemSpacing.x;
-		const ImVec2 textSize = ImGui::CalcTextSize(m_GameWindowNotice.c_str());
-		const float x = std::max(m_Image.Min.x + (m_Image.Size.x - textSize.x - padding.x * 2.0f) * 0.5f, m_Image.Min.x);
-		const float y = m_Image.Min.y + m_Image.Size.y - textSize.y - padding.y * 2.0f - margin;
-		DrawTextBox(drawList, ImVec2(x, y), { m_GameWindowNotice }, UI::GetThemeColors().TextSecondary);
-	}
-
-	void ViewportPanel::DrawStatsOverlay(ImDrawList* drawList, const ImVec2& position, const ViewportRenderer& renderer, const ViewportView& view, const EditorFrameStats& frame)
-	{
-		const SceneRendererStats& stats = renderer.GetStats();
-		const glm::uvec2 size = renderer.GetSize();
-		// The frame's own time: while the editor idles, its frame rate is capped, which says nothing about what frames cost.
-		const std::vector<std::string> lines = {
-			fmt::format("{:.2f} ms ({:.0f} FPS{})", frame.WorkMilliseconds, frame.FramesPerSecond, frame.Idle ? ", idle" : ""),
-			fmt::format("{} x {} pixels", size.x, size.y),
-			fmt::format("{} draw calls ({} opaque, {} shadow), {} instances", stats.DrawCalls, stats.OpaqueDrawCalls, stats.ShadowDrawCalls, stats.Instances),
-			fmt::format("{} triangles, {} lights, {} materials", stats.Triangles, stats.Lights, stats.Materials),
-			fmt::format("{} visible of {} proxies, {} updated", stats.VisibleProxies, stats.VisibleProxies + stats.CulledInstances, stats.ProxyUpdates),
-			fmt::format("extract {:.2f} ms, sort {:.2f} ms", stats.ExtractMs, stats.SortMs),
-			fmt::format("{:.1f} KB instances, {:.1f} KB materials uploaded", static_cast<double>(stats.InstanceBytesUploaded) / 1024.0,
-				static_cast<double>(stats.MaterialBytesUploaded) / 1024.0),
-			fmt::format("{} assets requested, {} prefetched, {} loading", stats.RequestsByVisibility, stats.PrefetchRequests, stats.PendingAssets),
-			view.FromScene ? std::string("Scene camera") : std::string("Editor camera")
-		};
-		// Numbers read best in the monospaced font.
-		const UI::ThemeColors& colors = UI::GetThemeColors();
-		UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
-		DrawTextBox(drawList, position, lines, colors.Text);
-		ImGui::PopFont();
+		UI::StrataProgressBar("Viewport.SceneLoad", progress, stage, contentWidth);
 	}
 
 	void ViewportPanel::AcceptAssetDrops(EditorContext& context, const EditorCommandRegistry& commands)
 	{
 		if (!ImGui::BeginDragDropTarget())
 			return;
+		// A prefab or model dragged over the view: what resting it on a surface needs (its template, meshes and skeletons) is
+		// requested while it hovers, so the drop finds it resident.
+		if (const ImGuiPayload* hovering = ImGui::GetDragDropPayload(); hovering && hovering->IsDataType(DragDrop::c_Asset)
+			&& hovering->DataSize == static_cast<int>(sizeof(AssetHandle)) && !hovering->Delivery)
+		{
+			AssetHandle asset = UUID::Null();
+			std::memcpy(&asset, hovering->Data, sizeof(AssetHandle));
+			const AssetType type = AssetManager::GetAssetType(asset);
+			EditorAssetManager* assets = context.GetAssetManager();
+			if (assets && (type == AssetType::Prefab || type == AssetType::Model))
+				context.GetAssetBounds().Measure(*assets, asset);
+		}
 		const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(DragDrop::c_Asset);
 		if (payload && payload->DataSize == static_cast<int>(sizeof(AssetHandle)) && m_Image.Size.x > 0.0f && m_Image.Size.y > 0.0f)
 		{
@@ -944,9 +915,9 @@ namespace Strata
 			const EditorCamera& camera = context.GetViewport().GetCamera();
 			if (type == AssetType::Prefab || type == AssetType::Model)
 			{
-				// Resting on the surface under the cursor, else on the one under the view's pivot (the game view shows another
-				// camera: the editor camera's pivot there).
-				if (m_GameView)
+				// Resting on the surface under the cursor, else on the one under the view's pivot (the game's camera when
+				// piloting it: the editor camera's pivot there).
+				if (m_Piloting)
 				{
 					EditorActions::InstantiatePrefab(context, commands, asset);
 				}
@@ -959,7 +930,7 @@ namespace Strata
 			else if (type == AssetType::Material)
 			{
 				// Onto the mesh under the cursor: its renderer's material (one undo step).
-				const std::optional<SceneRayHit> hit = m_GameView ? std::nullopt : EditorPlacement::CastAt(scene, camera, ndc, aspect);
+				const std::optional<SceneRayHit> hit = m_Piloting ? std::nullopt : EditorPlacement::CastAt(scene, camera, ndc, aspect);
 				if (hit && hit->HitEntity.HasComponent<MeshRendererComponent>())
 				{
 					RunEditorCommand(context, commands, "component.set", { { "entity", UUIDToJson(hit->HitEntity.GetUUID()) }, { "component", "MeshRenderer" },

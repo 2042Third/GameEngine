@@ -140,3 +140,28 @@ ST_SCRIPT_CLASS(CharacterMisuse)
 	ST_SCRIPT_FIELD(Failure);
 	ST_SCRIPT_FIELD(Done);
 }
+
+// Walks its entity's character controller toward -Z while W is down and jumps when Space is pressed (Editor.Input's
+// input.sequence tests): input read in OnUpdate, as games read it.
+class KeyboardWalker : public Script
+{
+public:
+	float Speed = 3.0f;
+	float JumpSpeed = 5.0f;
+	int32_t Jumps = 0;
+
+	void OnUpdate(float) override
+	{
+		CharacterController controller = GetEntity().GetCharacterController();
+		controller.Move({ 0.0f, 0.0f, Input::IsKeyDown(Key::W) ? -Speed : 0.0f });
+		if (Input::IsKeyPressed(Key::Space) && controller.Jump(JumpSpeed))
+			Jumps++;
+	}
+};
+
+ST_SCRIPT_CLASS(KeyboardWalker)
+{
+	ST_SCRIPT_FIELD(Speed);
+	ST_SCRIPT_FIELD(JumpSpeed);
+	ST_SCRIPT_FIELD(Jumps);
+}

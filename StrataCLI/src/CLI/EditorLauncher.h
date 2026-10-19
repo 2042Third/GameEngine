@@ -30,6 +30,25 @@ namespace Strata::CLI
 		// Where the editor publishes its session file; empty uses EditorSession::GetSessionDirectory(). The
 		// editor inherits this process's environment, so STRATA_SESSION_DIR applies to both.
 		std::filesystem::path SessionDirectory;
+		// With a project: once the session answers, wait until the project is ready (its assets scanned and its start scene
+		// open, editor.status), for as long as either progresses; WaitTimeout bounds only the wait for the session. False
+		// returns at the session (--no-wait-scan).
+		bool WaitForProject = true;
+		// The wait for the project fails, and the editor is stopped, once neither the scan nor the start scene progressed for
+		// this long (--stall-timeout).
+		std::chrono::milliseconds StallTimeout = std::chrono::milliseconds(60000);
+		// Hears how the project's opening progresses while LaunchEditor waits for it (StrataCLI launch prints it, the MCP
+		// server sends progress notifications). Called on the calling thread.
+		std::function<void(const struct EditorStartupProgress& progress)> OnProgress;
+	};
+
+	// How far a launched editor's project is (EditorLaunchSpecification::OnProgress).
+	struct EditorStartupProgress
+	{
+		std::string Phase;   // "Walking", "Registering", "Applying" (the asset scan) or "OpeningScene" (the start scene)
+		uint64_t Done = 0;   // Files, or percent of the start scene
+		uint64_t Total = 0;  // 0 while unknown
+		std::string Message; // For people: "Scanning the project's assets: 12,345 / 30,000"
 	};
 
 	struct EditorLaunchResult
@@ -43,9 +62,16 @@ namespace Strata::CLI
 	};
 
 	// Starts the editor detached ("--project <dir>" when a project is given, "--headless", "--no-gpu", "--idle-timeout";
-	// output discarded) and waits until its session accepts an authenticated connection. An editor that exits early or
-	// does not become reachable in time is stopped, never left running unnoticed.
+	// output discarded) and waits until its session accepts an authenticated connection, then (with a project, unless
+	// WaitForProject is off) until the project is ready. An editor that exits early, does not become reachable in time or
+	// whose project stops progressing is stopped, never left running unnoticed.
 	EditorLaunchResult LaunchEditor(const EditorLaunchSpecification& specification);
+
+	// Waits until the editor of a session has its project ready: editor.status reports no asset scan
+	// (assets.scanning null) and no scene being opened (sceneLoad null), polled every 250 ms. Returns false, with the reason
+	// in error, when the editor exits (isProcessAlive) or stops answering, or neither progresses for stallTimeout.
+	bool WaitForEditorProject(const EditorSessionInfo& session, std::chrono::milliseconds stallTimeout,
+		const std::function<void(const EditorStartupProgress&)>& onProgress, const std::function<bool()>& isProcessAlive, std::string* error);
 
 	// Waits until the session file of processId exists in sessionDirectory and its endpoint accepts an
 	// authenticated connection. isProcessAlive (optional) ends the wait early when the editor exits.
