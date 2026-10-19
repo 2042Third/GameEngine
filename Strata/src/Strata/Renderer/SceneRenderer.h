@@ -932,7 +932,8 @@ namespace Strata
 		bool RenderOverlays(nvrhi::ICommandList* commandList, Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, bool drawText,
 			bool drawOverlayPasses);
 		// Prepare of every overlay pass (SceneOverlayRegistry); whether any draws.
-		bool PrepareOverlayPasses(Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, nvrhi::ICommandList* commandList);
+		bool PrepareOverlayPasses(Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, nvrhi::ICommandList* commandList,
+			GPUPassTimer& gpuTimer);
 		void DrawDebugLines(nvrhi::ICommandList* commandList, DebugDrawDepth depth, uint32_t firstVertex, uint32_t vertexCount);
 		// The tints of SceneRenderOptions::EntityTints (StatusTint.frag); false when GPU resources failed.
 		bool DrawEntityTints(nvrhi::ICommandList* commandList, Scene& scene, std::span<const SceneEntityTint> tints, const nvrhi::Viewport& viewport);

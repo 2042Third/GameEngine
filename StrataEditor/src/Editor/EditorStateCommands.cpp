@@ -844,7 +844,7 @@ namespace Strata
 			"I/O and background threads (imports, exports), how busy they were in percent, running and queued jobs now). gpu is the GPU's side of "
 			"the same frames, known 2-3 frames late: frames (with GPU times), latencyFrames, busy (the GPU stages added up per frame), stages (per GPU "
 			"stage: GPU.Uploads, GPU.Setup, GPU.Cull, GPU.Shadows, GPU.Prepass, GPU.AO, GPU.Opaque (with the sky), GPU.Transparent, GPU.Post, "
-			"GPU.Overlays, GPU.ImGui) and boundBy: gpu when the GPU's median busy time takes at least 90% of the median frame interval and exceeds "
+			"GPU.Overlays, GPU.UI (the game UI), GPU.ImGui) and boundBy: gpu when the GPU's median busy time takes at least 90% of the median frame interval and exceeds "
 			"the CPU's frame time, cpu when the CPU's does, capped when neither does (vsync or a frame-rate cap sets the pace), unknown without GPU "
 			"times. renderStats is the viewport's latest frame (null while it renders none): gpuDriven (the GPU culled the frame and built its draws: "
 			"its counts are the GPU's, of a frame 2-3 frames older, once gpuCounts is true; transparent surfaces are the CPU's), feedbackRequests (its "

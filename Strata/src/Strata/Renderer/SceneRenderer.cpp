@@ -2196,7 +2196,7 @@ namespace Strata
 		m_Stats.TextGlyphs = textStats.Glyphs;
 		m_Stats.PendingTextGlyphs = textStats.PendingGlyphs;
 		m_Stats.RasterizedTextGlyphs = textStats.RasterizedGlyphs;
-		const bool overlayPasses = PrepareOverlayPasses(scene, camera, options, commandList);
+		const bool overlayPasses = PrepareOverlayPasses(scene, camera, options, commandList, gpuTimer);
 		const AssetResolveStats& assetStats = m_Assets.GetStats();
 		m_Stats.PendingAssets = assetStats.Pending + textStats.PendingFonts + m_Stats.Overlays.PendingAssets;
 		m_Stats.RequestsByVisibility = assetStats.Requested;
@@ -2405,7 +2405,8 @@ namespace Strata
 		commandList->draw(nvrhi::DrawArguments().setVertexCount(vertexCount).setStartVertexLocation(firstVertex));
 	}
 
-	bool SceneRenderer::PrepareOverlayPasses(Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, nvrhi::ICommandList* commandList)
+	bool SceneRenderer::PrepareOverlayPasses(Scene& scene, const SceneCamera& camera, const SceneRenderOptions& options, nvrhi::ICommandList* commandList,
+		GPUPassTimer& gpuTimer)
 	{
 		SceneOverlayFrame frame;
 		frame.OverlayScene = options.OverlayScene ? options.OverlayScene : &scene;
@@ -2418,6 +2419,7 @@ namespace Strata
 		frame.Atlases = m_FontAtlases.get();
 		frame.VisibleTextures = &m_VisibleTextures;
 		frame.Stats = &m_Stats.Overlays;
+		frame.GPUTimer = &gpuTimer;
 		bool draws = false;
 		for (const Scope<ISceneOverlayPass>& pass : m_OverlayPasses)
 			draws = pass->Prepare(frame) || draws;

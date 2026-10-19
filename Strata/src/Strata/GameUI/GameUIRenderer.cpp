@@ -4,10 +4,12 @@
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/Assert.h"
 #include "Strata/Core/EngineServices.h"
+#include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/Profiling.h"
 #include "Strata/Renderer/BindlessTextureTable.h"
 #include "Strata/Renderer/Font.h"
 #include "Strata/Renderer/FontAtlasCache.h"
+#include "Strata/Renderer/GPUProfiler.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Renderer/ShaderLibrary.h"
@@ -51,8 +53,22 @@ namespace Strata
 
 	}
 
+	namespace
+	{
+
+		// The UI pass's GPU time (its world-space and screen-space draws), a stage of its own inside the renderer's overlays.
+		FrameStageID GetUIGPUStage()
+		{
+			static const FrameStageID s_Stage = FrameProfiler::Get().RegisterStage("GPU.UI", false, FrameStageKind::GPU);
+			return s_Stage;
+		}
+
+	}
+
 	void RegisterGameUIRenderer()
 	{
+		// Registered with the module, after the renderer's stages: its perf log column exists before a log writes its header.
+		GetUIGPUStage();
 		const bool registered = SceneOverlayRegistry::Register("GameUI", [](const SceneOverlayPassContext& context) -> Scope<ISceneOverlayPass>
 		{
 			return CreateScope<GameUIRenderer>(context);
@@ -151,6 +167,7 @@ namespace Strata
 	bool GameUIRenderer::Prepare(const SceneOverlayFrame& frame)
 	{
 		m_Runs.clear();
+		m_GPUTimer = frame.GPUTimer;
 		// Binding sets no draw of the previous frame used are let go, whether or not it drew (atlases grow and change, and a
 		// frame that draws no UI uses none): they hold the atlases' textures and the buffers.
 		for (auto it = m_BindingSets.begin(); it != m_BindingSets.end();)
@@ -739,6 +756,10 @@ namespace Strata
 			return;
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.UI");
+		// The draws' GPU time is GPU.UI's; the renderer's timer goes back to its stage afterwards.
+		const FrameStageID previousStage = m_GPUTimer ? m_GPUTimer->GetStage() : c_InvalidFrameStage;
+		if (m_GPUTimer)
+			m_GPUTimer->Next(GetUIGPUStage());
 		nvrhi::GraphicsState state;
 		state.pipeline = GetPipeline(framebuffer->getFramebufferInfo(), world);
 		state.framebuffer = framebuffer;
@@ -768,6 +789,8 @@ namespace Strata
 			commandList->setPushConstants(&parameters, sizeof(parameters));
 			commandList->draw(nvrhi::DrawArguments().setVertexCount(6).setInstanceCount(run.QuadCount).setStartInstanceLocation(run.FirstQuad));
 		}
+		if (m_GPUTimer)
+			m_GPUTimer->Next(previousStage);
 	}
 
 }

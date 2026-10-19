@@ -4,6 +4,7 @@
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Renderer/TextureStreamingTestUtils.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
+#include "Strata/Core/FrameProfiler.h"
 #include "Strata/GameUI/GameUIComponents.h"
 #include "Strata/GameUI/GameUIHitTest.h"
 #include "Strata/GameUI/GameUIRenderer.h"
@@ -11,6 +12,8 @@
 #include "Strata/Renderer/Font.h"
 #include "Strata/Renderer/FontAtlas.h"
 #include "Strata/Renderer/FontAtlasCache.h"
+#include "Strata/Renderer/GPUProfiler.h"
+#include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/SceneOverlay.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Renderer/TextureStreamer.h"
@@ -24,6 +27,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <span>
@@ -322,6 +326,82 @@ TEST_SUITE("GPU.GameUI")
 		fifthText.Font = fonts[4];
 		RenderUI(renderer, ui.Target, { 256, 256 }, assets.Manager.get());
 		CHECK(renderer.GetStats().Overlays.DrawCalls == 2);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("The UI pass is timed on the GPU as GPU.UI, in a scene's frames and in a game's scene without a camera")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		// Registered with the module (RegisterGameUIModule), so a perf log has its column from its first row.
+		const FrameStageID stage = FrameProfiler::Get().FindStage("GPU.UI");
+		REQUIRE(stage != c_InvalidFrameStage);
+		CHECK(FrameProfiler::Get().GetStageKind(stage) == FrameStageKind::GPU);
+		if (!Renderer::GetGPUProfiler().IsEnabled())
+		{
+			MESSAGE("The device writes no timestamps: nothing to time");
+			CHECK(gpu.GetNewErrorCount() == 0);
+			return;
+		}
+		// The stage's time of a renderer's latest timed frame; -1 when the frame has none.
+		const auto stageMs = [stage](const SceneRendererGPUStats& stats)
+		{
+			for (const GPUStageTime& time : stats.StageMs)
+			{
+				if (time.Stage == stage)
+					return time.Milliseconds;
+			}
+			return -1.0f;
+		};
+		// Frames as an application runs them, so the profiler resolves their timestamps.
+		const auto timedFrames = [&gpu](const std::function<void()>& render)
+		{
+			for (int32_t frame = 0; frame < 2; frame++)
+			{
+				REQUIRE(gpu.GetDevice().BeginFrame());
+				Renderer::BeginFrame();
+				render();
+				gpu.GetDevice().EndFrame();
+			}
+		};
+
+		// A scene with a camera: its canvas over the image.
+		UIScene ui;
+		ui.AddImage(ui.Canvas, "Panel", { 8.0f, 8.0f }, { 48.0f, 48.0f }, { 0.0f, 0.0f, 1.0f, 1.0f });
+		SceneRenderer renderer(ExactSpecification());
+		renderer.SetViewportSize(64, 64);
+		timedFrames([&]() { REQUIRE(renderer.Render(ui.Target, BlackCamera())); });
+		CHECK(renderer.GetStats().Overlays.DrawCalls == 1);
+		renderer.ResolveGPUStats(true);
+		REQUIRE(renderer.GetGPUStats().HasTimes);
+		CHECK(stageMs(renderer.GetGPUStats()) >= 0.0f);
+		CHECK(stageMs(renderer.GetGPUStats()) <= renderer.GetGPUStats().BusyMs);
+
+		// A game whose scene has no camera draws its menu through the same pass.
+		Ref<Scene> menu = CreateRef<Scene>("Menu");
+		Entity canvas = menu->CreateEntity("Canvas");
+		canvas.AddComponent<UIRectComponent>();
+		canvas.AddComponent<UICanvasComponent>().ScaleMode = UICanvasScaleMode::ConstantPixelSize;
+		Entity panel = menu->CreateChildEntity(canvas, "Panel");
+		panel.AddComponent<UIRectComponent>().Size = { 32.0f, 32.0f };
+		panel.AddComponent<UIImageComponent>().Color = { 0.0f, 1.0f, 0.0f, 1.0f };
+		GameRenderer game;
+		nvrhi::TextureDesc desc;
+		desc.width = 64;
+		desc.height = 64;
+		desc.format = nvrhi::Format::BGRA8_UNORM;
+		desc.isRenderTarget = true;
+		desc.initialState = nvrhi::ResourceStates::RenderTarget;
+		desc.keepInitialState = true;
+		nvrhi::TextureHandle target = Renderer::GetDevice()->createTexture(desc);
+		nvrhi::FramebufferHandle framebuffer = Renderer::GetDevice()->createFramebuffer(nvrhi::FramebufferDesc().addColorAttachment(target));
+		REQUIRE(framebuffer);
+		timedFrames([&]() { REQUIRE(game.Render(menu, framebuffer, { 64, 64 })); });
+		CHECK_FALSE(game.IsShowingMessage());
+		SceneRenderer& gameRenderer = game.GetSceneRenderer();
+		gameRenderer.ResolveGPUStats(true);
+		REQUIRE(gameRenderer.GetGPUStats().HasTimes);
+		CHECK(stageMs(gameRenderer.GetGPUStats()) >= 0.0f);
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 

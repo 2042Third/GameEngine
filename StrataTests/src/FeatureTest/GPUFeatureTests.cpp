@@ -4,6 +4,7 @@
 #include "Renderer/GPUTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Animation/AnimationPreview.h"
+#include "Strata/Core/FrameProfiler.h"
 #include "Strata/Renderer/Renderer.h"
 #include "Strata/Renderer/SceneRenderer.h"
 #include "Strata/Scene/Entity.h"
@@ -168,6 +169,7 @@ TEST_SUITE("GPU.FeatureTest")
 			CHECK(stageMs(stages.Opaque) > 0.0f);
 			CHECK(stageMs(stages.Post) > 0.0f);
 			CHECK(stageMs(stages.Overlays) >= 0.0f); // The HUD text
+			CHECK(stageMs(FrameProfiler::Get().FindStage("GPU.UI")) >= 0.0f); // The menu canvas and the world sign
 		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}

@@ -803,6 +803,7 @@ The renderer's stages, registered by `RegisterRendererModule` (`RendererGPUStage
 | `GPU.Shadows`, `GPU.Prepass`, `GPU.AO`, `GPU.Opaque` (with the sky), `GPU.Transparent` | the scene passes |
 | `GPU.Post` | exposure, bloom, tone mapping and FXAA |
 | `GPU.Overlays` | grid, tints, outline, debug lines, text and the copy into a target |
+| `GPU.UI` | the game UI pass's draws, world-space and screen-space (`GameUIRenderer`, registered by `RegisterGameUIModule`), inside `GPU.Overlays`: the pass times them with the frame's timer (`SceneOverlayFrame::GPUTimer`) and hands it back |
 | `GPU.ImGui` | the editor's UI (registered by `ImGuiLayer` on first use, so games have no such column) |
 
 Drivers of tile-based GPUs may write a timestamp recorded inside a render pass instance when the pass ends: MoltenVK samples

@@ -15,6 +15,7 @@ namespace Strata
 {
 
 	class FontAtlasCache;
+	class GPUPassTimer;
 	class Scene;
 	struct VisibleTextureUse;
 
@@ -67,6 +68,9 @@ namespace Strata
 		FontAtlasCache* Atlases = nullptr;        // The renderer's glyph atlases, with what the frame's raster budget has left
 		std::vector<VisibleTextureUse>* VisibleTextures = nullptr; // Textures drawn, appended for mip streaming
 		SceneOverlayStats* Stats = nullptr;       // Added to
+		// The renderer's GPU timer of the frame (GPUProfiler.h), valid until the frame's Draw returns. A pass times its draws
+		// as a GPU stage of its own: Next(its stage) before them, then Next back to the stage the timer had (GPU.Overlays).
+		GPUPassTimer* GPUTimer = nullptr;
 	};
 
 	// A pass a module adds to every SceneRenderer, drawn over the finished image after the screen-space text (the game UI).
