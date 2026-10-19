@@ -2425,11 +2425,13 @@ described in `.claude/skills/strata-editor-automation/SKILL.md`.
 - **Launching waits for progress, not a fixed time.** The editor publishes its session within its startup (its
   project's assets are scanned in the background). `StrataCLI launch` (`CLI::LaunchEditor`) bounds only the wait for the
   session (`--wait-timeout`); with a project it then polls `editor.status {sections: ["sceneLoad"]}` every 250 ms until
-  `assets.scanning` and `sceneLoad` are null (an editor that refuses `sections` is asked without them), reporting the progress (stderr; `strata_launch_editor` sends MCP `notifications/progress`,
-  growing only, when the call names a `progressToken`), and fails, stopping the editor, only when the editor exits or
-  nothing progressed for `--stall-timeout` (60 s). `--no-wait-scan` returns at the session. The test executable's fake
-  editor (`STRATA_TEST_FAKE_EDITOR`) reports a scan as `STRATA_TEST_FAKE_SCAN` says (`<milliseconds>` or `stall`) and,
-  in its `sceneLoad` section only (like the real compact answer), a start scene's load as `STRATA_TEST_FAKE_SCENE_LOAD` says.
+  `assets.scanning` and `sceneLoad` are null (an editor that refuses `sections` is asked without them), reporting the
+  progress (stderr; `strata_launch_editor` sends MCP `notifications/progress`, growing only, when the call names a
+  `progressToken`), and fails, stopping the editor, only when the editor exits or nothing progressed for
+  `--stall-timeout` (60 s). `--no-wait-scan` returns at the session. The test executable's fake editor
+  (`STRATA_TEST_FAKE_EDITOR`) reports a scan as `STRATA_TEST_FAKE_SCAN` says (`<milliseconds>` or `stall`) and, in its
+  `sceneLoad` section only (like the real compact answer), a start scene's load as `STRATA_TEST_FAKE_SCENE_LOAD` says;
+  with `STRATA_TEST_FAKE_STATUS=no-sections` it refuses `sections` and reports the load in its plain answer.
 
 ### Commands and requests
 
