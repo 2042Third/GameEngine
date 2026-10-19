@@ -70,4 +70,44 @@ TEST_SUITE("Core.RadixSort")
 		CHECK(items[0].Key == 42);
 		CHECK(items[0].Value == 7);
 	}
+
+	TEST_CASE("Indices sort like std::sort, sorted ones stay untouched")
+	{
+		std::vector<SortItem> items;
+		std::vector<SortItem> scratch;
+		// Long lists in no order, with repeats (as a GPU's atomics list slots), and short ones.
+		for (const size_t count : { size_t(0), size_t(1), size_t(100), size_t(255), size_t(256), size_t(10'000) })
+		{
+			CAPTURE(count);
+			std::vector<uint32_t> values(count);
+			uint32_t state = 12345;
+			for (uint32_t& value : values)
+			{
+				state = state * 1664525u + 1013904223u;
+				value = (state >> 8) % 20'000u;
+			}
+			std::vector<uint32_t> expected = values;
+			std::sort(expected.begin(), expected.end());
+			SortIndices(values, items, scratch);
+			CHECK(values == expected);
+		}
+		// Every value range a 32-bit index can have.
+		std::vector<uint32_t> wide = { 0xFFFFFFFFu, 0u, 0x80000000u, 0x00010000u, 0x7FFFFFFFu, 1u };
+		wide.resize(1'000, 0xABCDEF01u);
+		std::vector<uint32_t> expected = wide;
+		std::sort(expected.begin(), expected.end());
+		SortIndices(wide, items, scratch);
+		CHECK(wide == expected);
+
+		// A sorted list is not copied into the items.
+		std::vector<uint32_t> sorted(5'000);
+		for (uint32_t index = 0; index < sorted.size(); index++)
+			sorted[index] = index * 3u;
+		std::vector<SortItem> unused;
+		std::vector<SortItem> unusedScratch;
+		const std::vector<uint32_t> copy = sorted;
+		SortIndices(sorted, unused, unusedScratch);
+		CHECK(sorted == copy);
+		CHECK(unused.empty());
+	}
 }

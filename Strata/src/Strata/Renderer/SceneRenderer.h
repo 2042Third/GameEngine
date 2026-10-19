@@ -1138,6 +1138,7 @@ namespace Strata
 		std::vector<SortItem> m_Draws;
 		std::vector<SortItem> m_ShadowDraws;
 		std::vector<SortItem> m_SortScratch;
+		std::vector<SortItem> m_SlotSortItems; // The used slots' sort (ResolveAssets)
 		std::vector<TransparentDraw> m_Transparent;
 		std::vector<SceneDrawBatch> m_OpaqueBatches;
 		std::vector<SceneDrawBatch> m_TransparentBatches;

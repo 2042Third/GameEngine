@@ -21,4 +21,9 @@ namespace Strata
 	// later calls.
 	void RadixSort(std::vector<SortItem>& items, std::vector<SortItem>& scratch);
 
+	// Sorts 32-bit values in ascending order: short lists by comparison, sorted ones not at all, longer ones by RadixSort
+	// (through `items` and `scratch`, which keep their capacity). For lists in no particular order, such as slots in the order
+	// a GPU's atomics listed them, it is several times faster than a comparison sort from a few hundred values on.
+	void SortIndices(std::vector<uint32_t>& values, std::vector<SortItem>& items, std::vector<SortItem>& scratch);
+
 }

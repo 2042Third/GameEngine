@@ -714,8 +714,10 @@ namespace Strata
 	{
 		ST_PROFILE_FUNCTION();
 		ST_PROFILE_STAGE("Render.Extract");
-		// Slot order, so the requests (and the order loads are queued in) do not depend on the order of the proxies.
-		std::sort(m_UsedMeshSlots.begin(), m_UsedMeshSlots.end());
+		// Slot order, so the requests (and the order loads are queued in) do not depend on the order of the proxies. The GPU's
+		// visibility feedback lists the slots in the order its atomics ran, different every frame: by radix (a comparison
+		// sort of 10,000 material slots took a sixth of a frame's Render).
+		SortIndices(m_UsedMeshSlots, m_SlotSortItems, m_SortScratch);
 		for (const uint32_t slot : m_UsedMeshSlots)
 		{
 			const uint32_t usage = m_MeshUsage[slot];
@@ -747,7 +749,7 @@ namespace Strata
 			}
 		}
 
-		std::sort(m_UsedMaterialSlots.begin(), m_UsedMaterialSlots.end());
+		SortIndices(m_UsedMaterialSlots, m_SlotSortItems, m_SortScratch);
 		if (!ReuseResolvedMaterials(renderScene))
 			ResolveMaterials(renderScene);
 	}
