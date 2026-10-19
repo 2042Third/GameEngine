@@ -2474,7 +2474,9 @@ system, not to entities: a character's joints add no entities and no transform c
   not a held asset). Animators are found through their component's signals, so an update looks only at animators that
   were added, removed or changed, requests only skeletons that are loading, and an idle update does nothing at all
   (`GetPosesVersion` unchanged, so `RenderScene::UpdateSkinnedPoses` returns at its version check; `GetStats` counts the
-  work for tests). The edit pose (`AnimationEditPose`, `SetEditPose`; the editor's `ViewportSettings::EditPose`) can
+  work for tests). Pose versions are a provider's own: when the scene's `ISkinningPoses` is another object (the play
+  copy's animation system after the preview's rest poses, which its render scene's clone kept), every palette is
+  computed again whatever the versions say. The edit pose (`AnimationEditPose`, `SetEditPose`; the editor's `ViewportSettings::EditPose`) can
   instead be `ClipStart`: the first frame of what each animator plays on start (its controller's default state's clip,
   else its `Clip`, through `AnimatorInstance` at time 0 as play mode shows it before its first update; without either,
   or while that clip does not load, the rest pose). Those poses are cached the same way, keyed by skeleton, controller,

@@ -1305,6 +1305,9 @@ namespace Strata
 			&& hierarchyVersion == m_SkinHierarchyVersion)
 			return;
 		m_SkinDirty = false;
+		// Versions are a provider's own: another provider's (the play copy's animation system after the editor's rest poses,
+		// which a clone's palettes come from) may repeat them for other poses.
+		const bool providerChanged = poses != m_PosesProvider;
 		m_PosesProvider = poses;
 		m_PosesVersion = posesVersion;
 		m_SkinTransformsVersion = transformsVersion;
@@ -1334,7 +1337,7 @@ namespace Strata
 			}
 			const Ref<const MeshSkinBinding>& binding = m_Meshes[m_MeshSlots[proxy]].Skin;
 			const uint32_t joints = static_cast<uint32_t>(binding->Joints.size());
-			if (wasPosed && inputs.Version == skin.PoseVersion && skin.Binding == binding && skin.PaletteCount == joints
+			if (wasPosed && !providerChanged && inputs.Version == skin.PoseVersion && skin.Binding == binding && skin.PaletteCount == joints
 				&& SameBytes(inputs.AnimatorToProxy, skin.AnimatorToProxy))
 				continue;
 			if (skin.PaletteCount != joints)
