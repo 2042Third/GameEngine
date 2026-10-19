@@ -5,6 +5,7 @@
 #include "Editor/TransformEdit.h"
 #include "Editor/ViewportRenderer.h"
 
+#include <Strata/Animation/AnimationEditPose.h>
 #include <Strata/Asset/AssetTypes.h>
 #include <Strata/Core/Base.h>
 #include <Strata/Math/AABB.h>
@@ -48,6 +49,10 @@ namespace Strata
 	// "free", "16:9", "16:10", "4:3", "21:9", "1920x1080", "1280x720", "custom", "game".
 	const char* GameViewModeToString(GameViewMode mode);
 	std::optional<GameViewMode> GameViewModeFromString(std::string_view text);
+
+	// The edit pose as viewport settings and commands name it: "rest" or "clipStart".
+	const char* AnimationEditPoseToString(AnimationEditPose pose);
+	std::optional<AnimationEditPose> AnimationEditPoseFromString(std::string_view text);
 
 	struct GameViewSettings
 	{
@@ -117,6 +122,9 @@ namespace Strata
 		// The Scene view looks through the scene's primary camera (with the editor's overlays) instead of the editor camera
 		// ("Game camera", F8).
 		bool PilotGameCamera = false;
+		// What skinned characters of the edited scene show while it does not play (AnimationPreview::SetEditPose): their
+		// skeleton's rest pose, or the first frame of what they play on start. Every view of the edited scene follows it.
+		AnimationEditPose EditPose = AnimationEditPose::Rest;
 
 		nlohmann::json ToJson() const;
 		// Applies a ToJson document; absent values keep their current value. Fails (changing nothing) on invalid values.

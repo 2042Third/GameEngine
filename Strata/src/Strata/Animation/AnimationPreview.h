@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Strata/Animation/AnimationEditPose.h"
 #include "Strata/Animation/AnimatorInstance.h"
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/Base.h"
@@ -25,6 +26,7 @@ namespace Strata
 	class Asset;
 	class AssetManagerBase;
 	class Scene;
+	struct AnimatorComponent;
 	struct AttachToJointComponent;
 
 	struct AnimationPreviewSpecification
@@ -34,26 +36,31 @@ namespace Strata
 		// Armature), instead of lying in their mesh's bind space. The editor's edited scene and its thumbnail scenes ask for
 		// it.
 		bool RestPoses = false;
+		// What those animators show (AnimationPreview::SetEditPose changes it): the rest pose, or the first frame of what they
+		// play on start (the editor's ViewportSettings::EditPose).
+		AnimationEditPose EditPose = AnimationEditPose::Rest;
 	};
 
-	// What the rest poses cost (tests check that idle updates add nothing).
+	// What the edit poses cost (tests check that idle updates add nothing).
 	struct AnimationPreviewStats
 	{
-		uint64_t RestPosesComputed = 0; // Once per skeleton, and again when its source changed (a reimport)
-		uint64_t AssetRequests = 0;     // Skeletons requested for rest poses
-		uint64_t AnimatorsExamined = 0; // Animators looked at for rest poses: added, removed or their component signaled
+		uint64_t RestPosesComputed = 0; // Edit poses: once per skeleton (and clip), again when a source changed (a reimport)
+		uint64_t AssetRequests = 0;     // Skeletons, controllers and clips requested for edit poses
+		uint64_t AnimatorsExamined = 0; // Animators looked at for edit poses: added, removed or their component signaled
 	};
 
 	// Poses of animators in a scene that does not play (the editor's edited scene, thumbnails), for viewports and captures:
 	// the scene service ISkinningPoses of that scene while the preview exists, so its skinned meshes show the poses asked
 	// for, and its attachments (AttachToJointComponent) and the meshes under them are drawn at their joints
 	// (GetRenderTransforms). A pose is a state of the animator's controller, a clip, or what the animator plays on start,
-	// at a time; with AnimationPreviewSpecification::RestPoses the other animators show their skeleton's rest pose. Nothing
-	// in the scene changes (no transforms move, no root motion, no events). Main thread only.
+	// at a time; with AnimationPreviewSpecification::RestPoses the other animators show their edit pose: their skeleton's
+	// rest pose, or the first frame of what they play on start (AnimationEditPose). Nothing in the scene changes (no
+	// transforms move, no root motion, no events). Main thread only.
 	//
-	// Rest poses cost nothing while nothing changes: one per skeleton, shared by its animators, computed again only when
-	// the skeleton's source changes (a reimport; an eviction keeps the matrices). Animators are found through their
-	// component's signals, so an update looks only at animators that were added, removed or changed.
+	// Edit poses cost nothing while nothing changes: one per skeleton (and controller and clip), shared by its animators,
+	// computed again only when one of their assets' sources changes (a reimport; an eviction keeps the matrices). Animators
+	// are found through their component's signals, so an update looks only at animators that were added, removed or
+	// changed.
 	class AnimationPreview final : public ISkinningPoses
 	{
 	public:
@@ -96,7 +103,13 @@ namespace Strata
 		// component's assets or an asset object (a reload) changed, then where the attachments are drawn; with rest poses,
 		// also the rest poses of skeletons that arrived or changed. Once per frame, before rendering.
 		void Update();
-		// Whether an animator waits for its skeleton to show its rest pose (thumbnails wait for it like for their meshes).
+		// What animators without a request show (with RestPoses): their skeleton's rest pose, or the first frame of what they
+		// play on start. A change looks at every animator again, once; poses already computed for the other choice are let go
+		// as their animators leave them.
+		void SetEditPose(AnimationEditPose pose);
+		AnimationEditPose GetEditPose() const { return m_Specification.EditPose; }
+		// Whether an animator waits for its skeleton (or clip) to show its edit pose (thumbnails wait for it like for their
+		// meshes).
 		bool HasWaitingRestPoses() const { return m_WaitingRestPoses > 0 || !m_DirtyAnimators.empty(); }
 		const AnimationPreviewStats& GetStats() const { return m_Stats; }
 		// `outRequestInvalid`: a failure because the request names what the animator does not have (a state its controller
@@ -131,19 +144,38 @@ namespace Strata
 			uint64_t Version = 0;
 		};
 
-		// A skeleton's rest pose, shared by every animator of that skeleton without a request.
+		// What an animator without a request shows, shared by every animator with the same key: its skeleton's rest pose
+		// (Controller and Clip null), or with the clip-start edit pose the first frame of what it plays on start (its
+		// controller, else its clip; root motion changes how the root joint is posed).
+		struct EditPoseKey
+		{
+			AssetHandle Skeleton = UUID::Null();
+			AssetHandle Controller = UUID::Null();
+			AssetHandle Clip = UUID::Null();
+			bool RootMotion = false;
+			bool operator==(const EditPoseKey&) const = default;
+		};
+		struct EditPoseKeyHash
+		{
+			size_t operator()(const EditPoseKey& key) const;
+		};
+
 		struct RestPose
 		{
 			enum class State : uint8_t
 			{
-				Waiting, // Its skeleton is loading (a pose computed before may show meanwhile)
+				Waiting, // Its assets are loading (a pose computed before may show meanwhile)
 				Ready,
 				Failed   // Its skeleton did not load
 			};
 			State Status = State::Waiting;
-			std::vector<glm::mat4> Model; // Kept while the skeleton is evicted: data, not a held asset
+			std::vector<glm::mat4> Model; // Kept while the assets are evicted: data, not held assets
 			uint64_t Version = 0;         // 0 until computed
-			uint64_t SourceRevision = 0;  // AssetSourceRevisions::Loaded of the skeleton it was computed from
+			// The assets it was computed from and their AssetSourceRevisions::Loaded: a reimport of any poses it again.
+			std::vector<std::pair<AssetHandle, uint64_t>> Sources;
+			// The skeleton's joint names, for attachments, when the pose came from a clip (rest poses place none: the importer
+			// put attachments at the rest pose already).
+			std::vector<std::string> ClipJoints;
 			uint32_t Animators = 0;       // Animators that show it
 		};
 
@@ -152,9 +184,12 @@ namespace Strata
 		// Attachments and mesh renderers added, changed or removing: where attachments are drawn may change.
 		void OnAttachmentsChanged(entt::registry& registry, entt::entity entity);
 		void UpdateRestPoses(AssetManagerBase& manager);
+		EditPoseKey MakeEditPoseKey(const AnimatorComponent& component) const;
 		void ExamineAnimator(entt::entity handle);
 		void SetRestPoseState(RestPose& pose, RestPose::State state);
-		void ReleaseRestPose(AssetHandle skeleton);
+		// A pose whose skeleton did not load (or could not be evaluated), with the sources a change of which tries again.
+		void FailRestPose(RestPose& pose, std::vector<std::pair<AssetHandle, uint64_t>> sources);
+		void ReleaseRestPose(const EditPoseKey& key);
 		void UpdateEntry(AssetManagerBase* manager, entt::entity handle, Entry& entry);
 		void Fail(Entry& entry, std::string error, bool requestInvalid = false);
 		// Where an attachment is drawn: its animator's world transform times its joint's pose, while the animator is posed.
@@ -186,9 +221,9 @@ namespace Strata
 		};
 		RenderInputs m_RenderInputs;
 
-		// Rest poses (AnimationPreviewSpecification::RestPoses).
-		std::unordered_map<AssetHandle, RestPose> m_RestPoses;
-		std::unordered_map<entt::entity, AssetHandle> m_RestAnimators; // Animator -> its skeleton
+		// Edit poses (AnimationPreviewSpecification::RestPoses).
+		std::unordered_map<EditPoseKey, RestPose, EditPoseKeyHash> m_RestPoses;
+		std::unordered_map<entt::entity, EditPoseKey> m_RestAnimators; // Animator -> the pose it shows
 		std::vector<entt::entity> m_DirtyAnimators;
 		uint32_t m_WaitingRestPoses = 0;
 		uint64_t m_ContentVersion = 0; // Of the asset manager when the skeletons' sources were last checked

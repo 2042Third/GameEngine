@@ -1051,9 +1051,16 @@ TEST_SUITE("Editor.UI")
 		toggles("Viewport.Outline", settings.ShowSelectionOutline);
 		toggles("Viewport.Gizmos", settings.ShowSceneGizmos);
 		toggles("Viewport.Stats", settings.ShowStats);
-		// The camera chip opens the camera settings.
+		// The camera chip opens the camera settings, which choose what skinned characters show while the scene is edited.
 		REQUIRE(editor.Click("Viewport.Camera"));
 		CHECK(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
+		CHECK(settings.EditPose == AnimationEditPose::Rest);
+		REQUIRE(editor.Click("Viewport.EditPose.ClipStart"));
+		CHECK(settings.EditPose == AnimationEditPose::ClipStart);
+		CHECK_FALSE(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
+		REQUIRE(editor.Click("Viewport.Camera"));
+		REQUIRE(editor.Click("Viewport.EditPose.Rest"));
+		CHECK(settings.EditPose == AnimationEditPose::Rest);
 	}
 
 	TEST_CASE("The viewport's debug view chip lights while a debug view colors the image")

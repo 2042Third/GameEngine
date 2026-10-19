@@ -48,7 +48,8 @@ namespace Strata
 			{ "ScaleSnap", ScaleSnap },
 			{ "DebugView", ViewportDebugViewToString(DebugView) },
 			{ "GameView", { { "Mode", GameViewModeToString(GameView.Mode) }, { "Width", GameView.Width }, { "Height", GameView.Height } } },
-			{ "PilotGameCamera", PilotGameCamera }
+			{ "PilotGameCamera", PilotGameCamera },
+			{ "EditPose", AnimationEditPoseToString(EditPose) }
 		};
 	}
 
@@ -123,6 +124,13 @@ namespace Strata
 					return fail(fmt::format("'GameView' has no '{}' (Mode, Width, Height)", key));
 			}
 		}
+		if (const auto it = json.find("EditPose"); it != json.end())
+		{
+			const std::optional<AnimationEditPose> pose = it->is_string() ? AnimationEditPoseFromString(it->get<std::string>()) : std::nullopt;
+			if (!pose)
+				return fail("'EditPose' must be \"rest\" or \"clipStart\"");
+			result.EditPose = *pose;
+		}
 		for (const auto& [key, value, maximum] : { std::tuple<const char*, float*, float> { "TranslateSnap", &result.TranslateSnap, c_MaxTranslateSnap },
 			{ "RotateSnap", &result.RotateSnap, c_MaxRotateSnap }, { "ScaleSnap", &result.ScaleSnap, c_MaxScaleSnap } })
 		{
@@ -176,6 +184,20 @@ namespace Strata
 			if (text == name)
 				return value;
 		}
+		return std::nullopt;
+	}
+
+	const char* AnimationEditPoseToString(AnimationEditPose pose)
+	{
+		return pose == AnimationEditPose::ClipStart ? "clipStart" : "rest";
+	}
+
+	std::optional<AnimationEditPose> AnimationEditPoseFromString(std::string_view text)
+	{
+		if (text == "rest")
+			return AnimationEditPose::Rest;
+		if (text == "clipStart")
+			return AnimationEditPose::ClipStart;
 		return std::nullopt;
 	}
 

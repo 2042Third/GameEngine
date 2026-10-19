@@ -20,6 +20,10 @@ overlays), press **F8** or the toolbar's **Game camera** chip.
 A scene without a primary camera shows a notice in the Game view, as an exported game does: add a Camera component and
 tick **Primary**.
 
+While you edit, animated characters stand in their skeleton's rest pose, as the game shows them before their first
+animation. The Scene view's **Camera** chip can show them at the first frame of what they play on start instead
+(**First frame of their animation**); the choice is saved with the project and changes nothing in the scene.
+
 ## Resolution
 
 The Game view's resolution menu (its toolbar) picks the shape of the image: **Free** fills the view, **16:9**, **16:10**,

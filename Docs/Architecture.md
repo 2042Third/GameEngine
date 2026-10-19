@@ -2044,8 +2044,13 @@ system, not to entities: a character's joints add no entities and no transform c
   not a held asset). Animators are found through their component's signals, so an update looks only at animators that
   were added, removed or changed, requests only skeletons that are loading, and an idle update does nothing at all
   (`GetPosesVersion` unchanged, so `RenderScene::UpdateSkinnedPoses` returns at its version check; `GetStats` counts the
-  work for tests). Nothing in the scene changes: the attachments of posed animators (requests only: the importer placed
-  attachments at the rest pose already), and the mesh renderers under them, are drawn at their joints through render
+  work for tests). The edit pose (`AnimationEditPose`, `SetEditPose`; the editor's `ViewportSettings::EditPose`) can
+  instead be `ClipStart`: the first frame of what each animator plays on start (its controller's default state's clip,
+  else its `Clip`, through `AnimatorInstance` at time 0 as play mode shows it before its first update; without either,
+  or while that clip does not load, the rest pose). Those poses are cached the same way, keyed by skeleton, controller,
+  clip and root motion, and computed again when any of their assets' sources changes; a change of the edit pose looks at
+  every animator once. Nothing in the scene changes: the attachments of posed animators (requests and clip-start poses:
+  the importer placed attachments at the rest pose already), and the mesh renderers under them, are drawn at their joints through render
   transforms (`ISkinningPoses::GetRenderTransforms`, see [Render scene](#render-scene)), computed again only when the
   requests, the poses, the scene's transforms or hierarchy, or an attachment changed. The editor makes one with rest
   poses for every edited scene (`EditorContext::GetAnimationPreview`, `animation.preview`), and the thumbnail cache one

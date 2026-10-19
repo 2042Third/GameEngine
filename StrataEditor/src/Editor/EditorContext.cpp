@@ -1972,9 +1972,13 @@ namespace Strata
 				m_PrefabSync.Update(*this);
 			m_EditScene->OnUpdateEditor(timestep);
 		}
-		// Before the viewports render: previews whose assets arrived get their poses.
+		// Before the viewports render: previews whose assets arrived get their poses, animators without a request the edit pose
+		// the viewport settings ask for (a change of it looks at every animator once).
 		if (m_AnimationPreview)
+		{
+			m_AnimationPreview->SetEditPose(m_Viewport.GetSettings().EditPose);
 			m_AnimationPreview->Update();
+		}
 		// After the game's update and before the next input frame: taps whose frames passed let go, and input frames stop
 		// while the game is paused (a step was used up, or play mode stopped).
 		// An input sequence counts the step the game ran and gives the next one its events (taps it made end below).

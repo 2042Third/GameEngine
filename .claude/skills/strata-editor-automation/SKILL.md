@@ -159,8 +159,8 @@ editor started with `--no-gpu` (use `--headless`):
   have: the result says `"previewLighting": true`), and the game's screen-space text (its HUD) is hidden
   (`hiddenScreenSpaceTexts` counts it). To see what a player sees, capture with `{"camera": "scene"}` (or while playing).
   `viewport.getSettings` / `viewport.setSettings {previewLighting?, gameUI?, grid?, selectionOutline?, sceneGizmos?,
-  allColliders?, stats?, gizmo?, space?, debugView?, ...}` change these view settings (no undo step; saved with the
-  project's editor state). Collider shapes show for the selection only unless `allColliders` is on; far away lights and
+  allColliders?, stats?, gizmo?, space?, debugView?, editPose?, ...}` change these view settings (no undo step; saved
+  with the project's editor state). Collider shapes show for the selection only unless `allColliders` is on; far away lights and
   cameras show as small icons.
 - **Opening a scene takes frames.** `scene.open` reads the scene and loads everything it uses in the background while the
   editor goes on showing the edited scene; it answers once the opened scene replaced it (`entities`, `seconds`, and the
@@ -394,8 +394,11 @@ animation.preview {"stop": true}
 
 Modes: `Greater`/`Less` (floats, with `Threshold`), `True`/`False` (bools), `Set` (triggers, consumed when the
 transition fires). `ExitTime` is the source state's normalized time (1: its end; below 1 on a looping state: that point
-of every loop). Previews change nothing in the scene and need no undo; play mode poses the running copy instead. The
-Asset tab edits controllers as tables (one undo step per edit) and shows skeletons and clips.
+of every loop). Previews change nothing in the scene and need no undo; play mode poses the running copy instead.
+Animators without a preview stand in their skeleton's rest pose while the scene is edited; `viewport.setSettings
+{"editPose": "clipStart"}` shows each one's first frame of what it plays on start instead (the camera chip offers both;
+saved with the project's editor state, no undo step). The Asset tab edits controllers as tables (one undo step per edit)
+and shows skeletons and clips.
 
 **Play and inspect**: `play.start` -> `editor.wait {"frames": 120}` (about two seconds) -> `entity.get` /
 `component.get` / `log.read` -> `play.stop`. `play.pause {"paused": true}` and `play.step {"steps": n}` advance

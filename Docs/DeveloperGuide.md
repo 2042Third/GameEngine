@@ -1848,8 +1848,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
   assets and, while playing, its state and parameters) and `animation.preview {entity, state?, clip?, time?, stop?}`:
   poses of the edited scene's animators through the `EditorContext`'s `AnimationPreview` (the edited scene's
   `ISkinningPoses` while it does not play, made with every edited scene: animators no request poses show their skeleton's
-  rest pose, so skinned characters stand as in play before their first animation; attachments are drawn at their joints
-  through render transforms), which change
+  rest pose, so skinned characters stand as in play before their first animation, or with `viewport.setSettings
+  {editPose: "clipStart"}` (the Scene view's camera chip) the first frame of what they play on start; attachments are drawn
+  at their joints through render transforms), which change
   no scene data and are dropped with the scene; the command answers once its own request's pose shows, and the viewport
   names the previews in a chip whose click stops them (`ViewportPanel::DrawPreviewChip`), so a pose is never taken for
   scene data. The Asset tab

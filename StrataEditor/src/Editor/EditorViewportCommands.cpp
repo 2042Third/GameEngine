@@ -98,7 +98,8 @@ namespace Strata
 			{ "rotateSnap", "RotateSnap" },
 			{ "scaleSnap", "ScaleSnap" },
 			{ "debugView", "DebugView" },
-			{ "pilotGameCamera", "PilotGameCamera" }
+			{ "pilotGameCamera", "PilotGameCamera" },
+			{ "editPose", "EditPose" }
 		};
 
 		nlohmann::json DebugViewSchema(std::string description)
@@ -502,7 +503,8 @@ namespace Strata
 			"stats; allColliders: collider shapes of every entity instead of only the selection's), previewLighting (editor views light scenes without any light of their own with a preview sun and sky), gameUI (editor views draw the "
 			"game's screen-space text), the gizmo mode and space, whether gizmo drags snap, the snap steps, debugView (\"none\", or \"streaming\" / "
 			"\"lod\" / \"mip\": the image colored by streaming state, level of detail or the mip levels textures lack), gameView (the Game view's image: "
-			"{mode, width, height}, width and height for mode \"custom\") and pilotGameCamera (the Scene view looks through the scene's primary camera).",
+			"{mode, width, height}, width and height for mode \"custom\"), pilotGameCamera (the Scene view looks through the scene's primary camera) "
+			"and editPose (\"rest\" or \"clipStart\": what skinned characters of the edited scene show while it does not play).",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
@@ -539,7 +541,12 @@ namespace Strata
 							"running game asked for (free without a request)" } } },
 					{ "width", IntegerSchema("Width of the custom size", GameViewSettings::c_MinSize, GameViewSettings::c_MaxSize) },
 					{ "height", IntegerSchema("Height of the custom size", GameViewSettings::c_MinSize, GameViewSettings::c_MaxSize) } }) },
-				{ "pilotGameCamera", BoolSchema("The Scene view looks through the scene's primary camera, with the editor's overlays (F8)") } }),
+				{ "pilotGameCamera", BoolSchema("The Scene view looks through the scene's primary camera, with the editor's overlays (F8)") },
+				{ "editPose", { { "type", "string" }, { "enum", { "rest", "clipStart" } },
+					{ "description", "What skinned characters of the edited scene show while it does not play: \"rest\" (the default) their "
+						"skeleton's rest pose, \"clipStart\" the first frame of what they play on start (the controller's default state's clip, "
+						"else the Animator's Clip; the rest pose without either). animation.preview requests win over both, and play mode is "
+						"unchanged" } } } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				nlohmann::json changes = nlohmann::json::object();

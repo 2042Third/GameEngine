@@ -9,6 +9,7 @@
 #include "Editor/SceneBounds.h"
 #include "TestHelpers.h"
 
+#include <Strata/Animation/AnimationPreview.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
@@ -636,12 +637,13 @@ TEST_SUITE("Editor.Viewport")
 			harness.Run("project.create", { { "directory", FileSystem::ToUTF8(directory / "Game") }, { "name", "Game" } });
 			nlohmann::json settings = harness.Run("viewport.getSettings");
 			for (const char* key : { "grid", "selectionOutline", "sceneGizmos", "allColliders", "stats", "previewLighting", "gameUI", "gizmo", "space",
-				"snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView", "gameView", "pilotGameCamera" })
+				"snap", "translateSnap", "rotateSnap", "scaleSnap", "debugView", "gameView", "pilotGameCamera", "editPose" })
 			{
 				CAPTURE(key);
 				CHECK(settings.contains(key));
 			}
-			CHECK(settings.size() == 16);
+			CHECK(settings.size() == 17);
+			CHECK(settings["editPose"] == "rest");
 			CHECK(settings["gameView"] == nlohmann::json { { "mode", "free" }, { "width", 1280 }, { "height", 720 } });
 			CHECK(settings["pilotGameCamera"] == false);
 			CHECK(settings["allColliders"] == false);
@@ -680,6 +682,15 @@ TEST_SUITE("Editor.Viewport")
 			CHECK(harness.Error("viewport.setSettings", { { "gameView", "16:9" } }).find("'gameView'") != std::string::npos);
 			CHECK(harness.Run("viewport.getSettings") == settings);
 
+			// Skinned characters of the edited scene show the first frame of what they play on start: the scene's preview
+			// follows the setting from the next frame on.
+			CHECK(harness.Context.GetAnimationPreview().GetEditPose() == AnimationEditPose::Rest);
+			settings = harness.Run("viewport.setSettings", { { "editPose", "clipStart" } });
+			CHECK(settings["editPose"] == "clipStart");
+			harness.Context.Update(Timestep(1.0f / 60.0f));
+			CHECK(harness.Context.GetAnimationPreview().GetEditPose() == AnimationEditPose::ClipStart);
+			CHECK(harness.Error("viewport.setSettings", { { "editPose", "firstFrame" } }).find("'editPose'") != std::string::npos);
+
 			// An invalid value names the parameter and changes nothing, not even the valid values next to it.
 			const std::string error = harness.Error("viewport.setSettings", { { "grid", true }, { "scaleSnap", 0 } });
 			CHECK(error.find("'scaleSnap'") != std::string::npos);
@@ -700,6 +711,7 @@ TEST_SUITE("Editor.Viewport")
 		CHECK(harness.Context.GetViewport().GetSettings().AllColliders);
 		CHECK(harness.Context.GetViewport().GetSettings().GameView.Mode == GameViewMode::Aspect16x9);
 		CHECK(harness.Context.GetViewport().GetSettings().GameView.Width == 800);
+		CHECK(harness.Context.GetViewport().GetSettings().EditPose == AnimationEditPose::ClipStart);
 	}
 
 	TEST_CASE("The Game view's image: the panel, the largest rectangle of an aspect ratio, or a fixed size scaled to fit")

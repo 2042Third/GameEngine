@@ -303,6 +303,17 @@ namespace Strata
 				viewport.Focus(context, {});
 			if (ImGui::MenuItem("Reset View"))
 				camera.Reset();
+			// What skinned characters of the edited scene show while it does not play (ViewportSettings::EditPose).
+			ImGui::SeparatorText("Characters while editing");
+			if (ImGui::MenuItem("Rest pose", nullptr, settings.EditPose == AnimationEditPose::Rest))
+				settings.EditPose = AnimationEditPose::Rest;
+			UI::ItemProbe::Record("Viewport.EditPose.Rest");
+			ImGui::SetItemTooltip("Skinned characters stand in their skeleton's rest pose");
+			if (ImGui::MenuItem("First frame of their animation", nullptr, settings.EditPose == AnimationEditPose::ClipStart))
+				settings.EditPose = AnimationEditPose::ClipStart;
+			UI::ItemProbe::Record("Viewport.EditPose.ClipStart");
+			ImGui::SetItemTooltip("Skinned characters show what they play on start at its first frame (their controller's default state, else "
+				"their Animator's clip), as the game shows them before its first update");
 			ImGui::EndPopup();
 		}
 

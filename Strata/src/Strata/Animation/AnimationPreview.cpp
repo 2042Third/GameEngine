@@ -36,6 +36,57 @@ namespace Strata
 			return manager.GetAssetState(handle) == AssetState::Loading ? Arrival::Loading : Arrival::Failed;
 		}
 
+		// The pose of an animator `time` seconds into a state of its controller (`state`), into a clip asked for by handle
+		// (`playedClip`, with `state` AnimatorInstance::c_ClipState), or into what it plays on start (neither): AnimatorInstance
+		// as the Animation system runs it, holding what it shows (no transitions). `clip` is the state's or the played clip.
+		bool EvaluateAnimator(const Skeleton& skeleton, const AnimationController* controller, uint32_t state, const AnimationClip* clip,
+			AssetHandle playedClip, float time, bool loop, bool rootMotion, std::vector<JointPose>& scratch, std::vector<glm::mat4>& outPose)
+		{
+			const RootMotionSetup rootMotionSetup = RootMotionSetup::Create(skeleton);
+			const AnimationClipBinding binding = clip ? clip->Bind(skeleton) : AnimationClipBinding();
+			const AnimatorClip bound = clip ? AnimatorClip { clip, &binding } : AnimatorClip();
+			std::vector<AnimatorClip> stateClips(controller ? controller->GetStates().size() : 1);
+			AnimatorAssets assets;
+			assets.SkeletonAsset = &skeleton;
+			assets.RootMotion = &rootMotionSetup;
+			assets.Controller = controller;
+			assets.ControllerId = controller ? 1 : 0;
+
+			AnimatorInstance instance;
+			if (state != AnimatorInstance::c_ClipState)
+			{
+				stateClips[state] = bound;
+				assets.StateClips = stateClips;
+				instance.Play(assets, controller->GetStates()[state].Name);
+			}
+			else if (playedClip.IsValid())
+			{
+				assets.StateClips = stateClips;
+				assets.PlayedClip = bound;
+				instance.PlayClip(playedClip);
+			}
+			else
+			{
+				stateClips[0] = bound;
+				assets.StateClips = stateClips;
+				instance.Start();
+			}
+			AnimatorSettings settings;
+			settings.Loop = loop;
+			settings.ApplyRootMotion = rootMotion;
+			settings.Transitions = false; // The preview holds what it shows
+			std::vector<AnimatorFiredEvent> events;
+			return instance.Advance(time, assets, settings, events) && instance.Evaluate(assets, settings, scratch, outPose);
+		}
+
+	}
+
+	size_t AnimationPreview::EditPoseKeyHash::operator()(const EditPoseKey& key) const
+	{
+		size_t hash = std::hash<uint64_t>()(static_cast<uint64_t>(key.Skeleton));
+		for (const uint64_t value : { static_cast<uint64_t>(key.Controller), static_cast<uint64_t>(key.Clip), static_cast<uint64_t>(key.RootMotion) })
+			hash ^= std::hash<uint64_t>()(value) + 0x9E3779B97F4A7C15ull + (hash << 6) + (hash >> 2);
+		return hash;
 	}
 
 	AnimationPreview::AnimationPreview(Scene& scene, const AnimationPreviewSpecification& specification)
@@ -69,6 +120,18 @@ namespace Strata
 	void AnimationPreview::OnAnimatorChanged(entt::registry&, entt::entity entity)
 	{
 		m_DirtyAnimators.push_back(entity);
+	}
+
+	void AnimationPreview::SetEditPose(AnimationEditPose pose)
+	{
+		if (pose == m_Specification.EditPose)
+			return;
+		m_Specification.EditPose = pose;
+		if (!m_Specification.RestPoses)
+			return;
+		// Every animator shows another pose now: each is looked at once in the next update.
+		for (const entt::entity handle : m_Scene.GetRegistry().view<AnimatorComponent>())
+			m_DirtyAnimators.push_back(handle);
 	}
 
 	void AnimationPreview::OnAttachmentsChanged(entt::registry&, entt::entity)
@@ -177,13 +240,41 @@ namespace Strata
 		pose.Status = state;
 	}
 
-	void AnimationPreview::ReleaseRestPose(AssetHandle skeleton)
+	void AnimationPreview::FailRestPose(RestPose& pose, std::vector<std::pair<AssetHandle, uint64_t>> sources)
 	{
-		auto it = m_RestPoses.find(skeleton);
+		// Its animators show no pose (the skinned meshes their bind pose, as without a provider) until a source changes.
+		pose.Sources = std::move(sources);
+		pose.ClipJoints.clear();
+		SetRestPoseState(pose, RestPose::State::Failed);
+		if (pose.Version != 0)
+		{
+			pose.Model.clear();
+			pose.Version = 0;
+			m_PosesVersion++;
+		}
+	}
+
+	void AnimationPreview::ReleaseRestPose(const EditPoseKey& key)
+	{
+		auto it = m_RestPoses.find(key);
 		if (it == m_RestPoses.end() || --it->second.Animators > 0)
 			return;
 		SetRestPoseState(it->second, RestPose::State::Ready); // Counts as waiting no more
 		m_RestPoses.erase(it);
+	}
+
+	AnimationPreview::EditPoseKey AnimationPreview::MakeEditPoseKey(const AnimatorComponent& component) const
+	{
+		EditPoseKey key;
+		key.Skeleton = component.Skeleton;
+		if (m_Specification.EditPose == AnimationEditPose::ClipStart && (component.Controller.IsValid() || component.Clip.IsValid()))
+		{
+			// What it plays on start: its controller's default state, or (no controller, or one that does not load) its clip.
+			key.Controller = component.Controller;
+			key.Clip = component.Clip;
+			key.RootMotion = component.ApplyRootMotion;
+		}
+		return key;
 	}
 
 	void AnimationPreview::ExamineAnimator(entt::entity handle)
@@ -191,22 +282,22 @@ namespace Strata
 		m_Stats.AnimatorsExamined++;
 		const entt::registry& registry = m_Scene.GetRegistry();
 		const AnimatorComponent* component = registry.valid(handle) ? registry.try_get<AnimatorComponent>(handle) : nullptr;
-		const AssetHandle skeleton = component ? component->Skeleton : AssetHandle(UUID::Null());
+		const EditPoseKey key = component ? MakeEditPoseKey(*component) : EditPoseKey();
 		auto it = m_RestAnimators.find(handle);
-		const AssetHandle previous = it != m_RestAnimators.end() ? it->second : AssetHandle(UUID::Null());
-		if (previous == skeleton)
+		const EditPoseKey previous = it != m_RestAnimators.end() ? it->second : EditPoseKey();
+		if (previous == key)
 			return;
 		// What the animator shows changes (a request still wins over it).
 		m_PosesVersion++;
-		if (previous.IsValid())
+		if (previous.Skeleton.IsValid())
 		{
 			m_RestAnimators.erase(it);
 			ReleaseRestPose(previous);
 		}
-		if (!skeleton.IsValid())
+		if (!key.Skeleton.IsValid())
 			return;
-		m_RestAnimators.emplace(handle, skeleton);
-		auto [pose, added] = m_RestPoses.try_emplace(skeleton);
+		m_RestAnimators.emplace(handle, key);
+		auto [pose, added] = m_RestPoses.try_emplace(key);
 		pose->second.Animators++;
 		if (added)
 			m_WaitingRestPoses++; // A new entry starts out waiting for its skeleton
@@ -224,66 +315,90 @@ namespace Strata
 			m_DirtyAnimators.clear();
 		}
 
-		// Skeletons whose source changed (a reimport) are posed again; loads and evictions change nothing.
+		// Poses whose assets' sources changed (a reimport) are posed again; loads and evictions change nothing.
 		const uint64_t contentVersion = manager.GetContentVersion();
 		if (contentVersion != m_ContentVersion && !m_RestPoses.empty())
 		{
 			m_ContentChanges.clear();
 			const bool known = manager.GetContentChanges(m_ContentVersion, m_ContentChanges);
-			auto check = [this, &manager](AssetHandle handle, RestPose& pose)
+			for (auto& [key, pose] : m_RestPoses)
 			{
-				if (pose.Status == RestPose::State::Waiting || manager.GetSourceRevisions(handle).Current == pose.SourceRevision)
-					return;
-				SetRestPoseState(pose, RestPose::State::Waiting);
-			};
-			if (known)
-			{
-				for (const AssetHandle handle : m_ContentChanges)
+				if (pose.Status == RestPose::State::Waiting)
+					continue;
+				for (const auto& [handle, revision] : pose.Sources)
 				{
-					if (auto it = m_RestPoses.find(handle); it != m_RestPoses.end())
-						check(handle, it->second);
+					const bool changed = !known || std::find(m_ContentChanges.begin(), m_ContentChanges.end(), handle) != m_ContentChanges.end();
+					if (changed && manager.GetSourceRevisions(handle).Current != revision)
+					{
+						SetRestPoseState(pose, RestPose::State::Waiting);
+						break;
+					}
 				}
-			}
-			else
-			{
-				for (auto& [handle, pose] : m_RestPoses)
-					check(handle, pose);
 			}
 		}
 		m_ContentVersion = contentVersion;
 
 		if (m_WaitingRestPoses == 0)
 			return;
-		for (auto& [handle, pose] : m_RestPoses)
+		for (auto& [key, pose] : m_RestPoses)
 		{
 			if (pose.Status != RestPose::State::Waiting)
 				continue;
-			m_Stats.AssetRequests++;
-			const Ref<Asset> asset = manager.GetAsset(handle);
-			const AssetSourceRevisions revisions = manager.GetSourceRevisions(handle);
-			if (!asset || revisions.Loaded != revisions.Current)
+			// Each asset as it is loaded now, from the source it has now: one whose reimport is still loading counts as on its
+			// way (its previous version shows meanwhile). The sources of assets that arrived or did not load are recorded, so
+			// that a reimport (or a first import of a missing one) poses the animators again.
+			std::vector<std::pair<AssetHandle, uint64_t>> sources;
+			auto request = [this, &manager, &sources](AssetHandle handle, AssetType type, Ref<Asset>& outAsset)
 			{
-				// Still loading, or the previous version is loaded while the reimported one loads.
-				if (!asset && manager.GetAssetState(handle) != AssetState::Loading)
+				m_Stats.AssetRequests++;
+				Arrival arrival = RequestAsset(manager, handle, type, outAsset);
+				const AssetSourceRevisions revisions = manager.GetSourceRevisions(handle);
+				if (arrival == Arrival::Ready && revisions.Loaded != revisions.Current)
+					arrival = Arrival::Loading;
+				if (arrival != Arrival::Loading)
+					sources.emplace_back(handle, revisions.Current);
+				return arrival;
+			};
+			Ref<Asset> skeletonAsset;
+			const Arrival skeletonArrival = request(key.Skeleton, AssetType::Skeleton, skeletonAsset);
+			if (skeletonArrival == Arrival::Failed)
+			{
+				FailRestPose(pose, std::move(sources));
+				continue;
+			}
+			// What it plays on start, as in play mode: without its controller (one that does not load) its clip, and a clip that
+			// does not load shows the rest pose.
+			Ref<Asset> controllerAsset;
+			bool loading = skeletonArrival == Arrival::Loading;
+			if (key.Controller.IsValid())
+				loading = request(key.Controller, AssetType::AnimationController, controllerAsset) == Arrival::Loading || loading;
+			if (loading)
+				continue;
+			const Skeleton& skeleton = static_cast<const Skeleton&>(*skeletonAsset);
+			const AnimationController* controller = controllerAsset ? static_cast<const AnimationController*>(controllerAsset.get()) : nullptr;
+			const uint32_t state = controller ? controller->GetDefaultState() : AnimatorInstance::c_ClipState;
+			const AssetHandle clipHandle = controller ? controller->GetStates()[state].Clip : key.Clip;
+			Ref<Asset> clipAsset;
+			if (clipHandle.IsValid() && request(clipHandle, AssetType::AnimationClip, clipAsset) == Arrival::Loading)
+				continue;
+
+			const AnimationClip* clip = clipAsset ? static_cast<const AnimationClip*>(clipAsset.get()) : nullptr;
+			pose.ClipJoints.clear();
+			if (clip)
+			{
+				if (!EvaluateAnimator(skeleton, controller, state, clip, UUID::Null(), 0.0f, true, key.RootMotion, m_Scratch, pose.Model))
 				{
-					SetRestPoseState(pose, RestPose::State::Failed);
-					if (pose.Version != 0)
-					{
-						pose.Model.clear();
-						pose.Version = 0;
-						m_PosesVersion++;
-					}
+					FailRestPose(pose, std::move(sources));
+					continue;
 				}
-				continue;
+				pose.ClipJoints = skeleton.GetJointNames();
 			}
-			if (asset->GetType() != AssetType::Skeleton)
+			else
 			{
-				SetRestPoseState(pose, RestPose::State::Failed);
-				continue;
+				ComputeRestPose(skeleton, pose.Model);
 			}
-			ComputeRestPose(static_cast<const Skeleton&>(*asset), pose.Model);
 			pose.Version = m_NextVersion++;
-			pose.SourceRevision = revisions.Loaded;
+			pose.Sources = std::move(sources);
 			SetRestPoseState(pose, RestPose::State::Ready);
 			m_Stats.RestPosesComputed++;
 			m_PosesVersion++;
@@ -297,7 +412,20 @@ namespace Strata
 		if (!animator || animator == entity || m_Scene.IsDescendantOf(animator, entity))
 			return std::nullopt;
 		auto it = m_Entries.find(animator.GetHandle());
-		if (it == m_Entries.end() || it->second.Version == 0 || it->second.Objects.empty())
+		if (it == m_Entries.end())
+		{
+			// A clip-start edit pose places attachments like a request does (rest poses leave them where the importer put them).
+			const auto animatorIt = m_RestAnimators.find(animator.GetHandle());
+			const auto pose = animatorIt != m_RestAnimators.end() ? m_RestPoses.find(animatorIt->second) : m_RestPoses.end();
+			if (pose == m_RestPoses.end() || pose->second.Version == 0 || pose->second.ClipJoints.empty())
+				return std::nullopt;
+			const std::vector<std::string>& joints = pose->second.ClipJoints;
+			const auto joint = std::find(joints.begin(), joints.end(), attachment.Joint);
+			if (joint == joints.end() || static_cast<size_t>(joint - joints.begin()) >= pose->second.Model.size())
+				return std::nullopt;
+			return m_Scene.GetWorldTransform(animator) * pose->second.Model[static_cast<size_t>(joint - joints.begin())];
+		}
+		if (it->second.Version == 0 || it->second.Objects.empty())
 			return std::nullopt;
 		// The skeleton the pose was computed with (requested every update, so it is loaded while the pose shows).
 		const std::shared_ptr<const Asset> skeleton = it->second.Objects[0].lock();
@@ -322,6 +450,8 @@ namespace Strata
 		bool posed = false;
 		for (const auto& [handle, entry] : m_Entries)
 			posed = posed || entry.Version != 0;
+		for (const auto& [key, pose] : m_RestPoses)
+			posed = posed || (pose.Version != 0 && !pose.ClipJoints.empty());
 		if (posed)
 		{
 			const entt::registry& registry = m_Scene.GetRegistry();
@@ -482,42 +612,9 @@ namespace Strata
 		if (!entry.Dirty && sameObjects && entry.State == Status::Posed)
 			return;
 
-		const Ref<AnimationClip> clip = clipAsset ? std::static_pointer_cast<AnimationClip>(clipAsset) : nullptr;
-		const RootMotionSetup rootMotion = RootMotionSetup::Create(*skeleton);
-		const AnimationClipBinding binding = clip ? clip->Bind(*skeleton) : AnimationClipBinding();
-		const AnimatorClip bound = clip ? AnimatorClip { clip.get(), &binding } : AnimatorClip();
-		std::vector<AnimatorClip> stateClips(controller ? controller->GetStates().size() : 1);
-		AnimatorAssets assets;
-		assets.SkeletonAsset = skeleton.get();
-		assets.RootMotion = &rootMotion;
-		assets.Controller = controller.get();
-		assets.ControllerId = controller ? 1 : 0;
-
-		AnimatorInstance instance;
-		if (state != AnimatorInstance::c_ClipState)
-		{
-			stateClips[state] = bound;
-			assets.StateClips = stateClips;
-			instance.Play(assets, controller->GetStates()[state].Name);
-		}
-		else if (entry.Asked.Clip.IsValid())
-		{
-			assets.StateClips = stateClips;
-			assets.PlayedClip = bound;
-			instance.PlayClip(entry.Asked.Clip);
-		}
-		else
-		{
-			stateClips[0] = bound;
-			assets.StateClips = stateClips;
-			instance.Start();
-		}
-		AnimatorSettings settings;
-		settings.Loop = component->Loop;
-		settings.ApplyRootMotion = component->ApplyRootMotion;
-		settings.Transitions = false; // The preview holds what it shows
-		std::vector<AnimatorFiredEvent> events;
-		if (!instance.Advance(entry.Asked.Time, assets, settings, events) || !instance.Evaluate(assets, settings, m_Scratch, entry.Pose))
+		const AnimationClip* clip = clipAsset ? static_cast<const AnimationClip*>(clipAsset.get()) : nullptr;
+		if (!EvaluateAnimator(*skeleton, controller.get(), state, clip, entry.Asked.Clip, entry.Asked.Time, component->Loop, component->ApplyRootMotion,
+			m_Scratch, entry.Pose))
 		{
 			Fail(entry, "the pose could not be computed");
 			return;
