@@ -153,9 +153,11 @@ TEST_SUITE("Scene.PrefabOverrides")
 	TEST_CASE("UpdateOverrides works out the entries of the entities it is given as ComputeOverrides does, and keeps the others")
 	{
 		Crate crate;
-		// The lid's script aims at the handle: a reference between the instance's entities.
+		// The lid's script aims at the handle, the root's at the lid: references between the instance's entities.
 		crate.Lid.AddComponent<ScriptComponent>().Scripts.push_back(
 			ScriptEntry { "Aim", { ScriptFieldValue { "Target", PropertyType::Entity, PropertyValue(crate.Handle.GetUUID()) } } });
+		crate.Root.AddComponent<ScriptComponent>().Scripts.push_back(
+			ScriptEntry { "Aim", { ScriptFieldValue { "Target", PropertyType::Entity, PropertyValue(crate.Lid.GetUUID()) } } });
 		const nlohmann::json linked = SceneSerializer::SerializeEntities(*crate.World, { crate.Root });
 		nlohmann::json snapshot = linked;
 		PrefabInstances::StripLinks(snapshot);
@@ -191,10 +193,20 @@ TEST_SUITE("Scene.PrefabOverrides")
 		update({ lid });
 		REQUIRE(list.size() == 2);
 		CHECK(list[0] == PrefabOverride { crate.Lid.GetUUID(), "PointLight", "Intensity", PrefabOverrideKind::Property });
-		// The root's transform is its own.
+		// The root's transform is its own, and its reference to the lid compares as the prefab's lid.
 		root.GetComponent<TransformComponent>().Translation = glm::vec3(3.0f, 0.0f, 0.0f);
 		root.MarkModified<TransformComponent>();
 		update({ root, root });
+		CHECK(list.size() == 2);
+		// Aimed at the handle instead, it overrides the field.
+		root.GetComponent<ScriptComponent>().Scripts[0].Fields[0].Value = PropertyValue(handle.GetUUID());
+		root.MarkModified<ScriptComponent>();
+		update({ root });
+		CHECK(list.size() == 3);
+		CHECK(list[0] == PrefabOverride { crate.Root.GetUUID(), "Script", "Aim.Target", PrefabOverrideKind::Property });
+		root.GetComponent<ScriptComponent>().Scripts[0].Fields[0].Value = PropertyValue(lid.GetUUID());
+		root.MarkModified<ScriptComponent>();
+		update({ root });
 		CHECK(list.size() == 2);
 		// Back to the prefab's value clears the entry; aiming at the root overrides the field.
 		SetIntensity(lid, 2.0f);

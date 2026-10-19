@@ -71,6 +71,7 @@
 	"Perf.Editor.SceneOpen10kPrefabInstancesMaxFrame": { "Measured": 4.96, "Budget": 7.44, "Unit": "ms" },
 	"Perf.Editor.PrefabApply10kInstances": { "Unit": "ms", "Provisional": true },
 	"Perf.Editor.DragInPrefabInstance5kMedian": { "Unit": "ms", "Provisional": true },
+	"Perf.Editor.DragPrefabInstanceRoot5kMedian": { "Unit": "ms", "Provisional": true },
 	"Perf.Editor.Drag100PrefabInstancesMedian": { "Unit": "ms", "Provisional": true },
 	"Perf.EditorPanels.Performance600FramesP95": { "Measured": 0.0616, "Budget": 0.0924, "Unit": "ms" },
 	"Perf.EditorPanels.ContentBrowser10kAssetsP95": { "Measured": 0.0376, "Budget": 0.0564, "Unit": "ms" },

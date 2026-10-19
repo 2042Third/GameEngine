@@ -1333,7 +1333,8 @@ and `AudioSystem`, the built-in "Audio" scene system.
   upkeep tracks every touched instance root, so continuous edits keep merging into one step, and re-serializes only the
   entities an edit changed unless the edit made, destroyed, moved or relinked entities of the instance (then the whole
   list); `EditorContext::GetOverrideUpkeepStats` counts both for tests (`Perf.Editor.DragInPrefabInstance5kMedian`,
-  `Drag100PrefabInstancesMedian`).
+  `DragPrefabInstanceRoot5kMedian`, `Drag100PrefabInstancesMedian`). An edit of an instance's root alone that names no
+  entity (moving a placed model) does not even walk the instance for its prefab ids.
 
 ### Command conventions
 

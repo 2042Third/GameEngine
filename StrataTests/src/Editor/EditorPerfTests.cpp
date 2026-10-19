@@ -700,6 +700,9 @@ TEST_SUITE("Perf.Editor")
 		};
 		Perf::CheckBudgetConfirmed("Perf.Editor.DragInPrefabInstance5kMedian", [&] { return measureDrag({ dragged.GetUUID() }); });
 		CHECK(rig.GetComponent<PrefabInstanceComponent>().Overrides.size() == 1);
+		// The instance itself, by its root: what moving a placed model does (its root's transform is its own).
+		Perf::CheckBudgetConfirmed("Perf.Editor.DragPrefabInstanceRoot5kMedian", [&] { return measureDrag({ rig.GetUUID() }); });
+		CHECK(rig.GetComponent<PrefabInstanceComponent>().Overrides.size() == 1);
 		Perf::CheckBudgetConfirmed("Perf.Editor.Drag100PrefabInstancesMedian", [&] { return measureDrag(crates); });
 	}
 }

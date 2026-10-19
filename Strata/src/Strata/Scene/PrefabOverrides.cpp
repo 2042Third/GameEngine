@@ -287,6 +287,31 @@ namespace Strata
 			return true;
 		}
 
+		// Whether a value names an entity of the scene (references are UUIDs as strings, in the form UUIDToJson writes): only
+		// then does it need the instance's prefab ids to compare.
+		bool NamesEntity(const nlohmann::json& value, const Scene& scene)
+		{
+			std::vector<const nlohmann::json*> pending = { &value };
+			while (!pending.empty())
+			{
+				const nlohmann::json& current = *pending.back();
+				pending.pop_back();
+				if (current.is_string())
+				{
+					const std::string& text = current.get_ref<const std::string&>();
+					const std::optional<UUID> id = UUID::FromString(text);
+					if (id && ToText(*id) == text && scene.GetEntityByUUID(*id))
+						return true;
+				}
+				else if (current.is_object() || current.is_array())
+				{
+					for (const nlohmann::json& child : current)
+						pending.push_back(&child);
+				}
+			}
+			return false;
+		}
+
 		bool Fail(std::string* outError, std::string message)
 		{
 			if (outError)
@@ -424,21 +449,48 @@ namespace Strata
 			if (!linked)
 				return true;
 
-			// The prefab ids of the instance's entities (references between them compare as those), then each entity's entries.
-			const std::unordered_map<UUID, UUID> templateIds = PrefabInstances::MapTemplateIds(root);
+			// The prefab ids of the instance's entities: references between them compare as those, and of two entities with one
+			// link the first keeps it. Walked only when needed: the root is listed first (its link's id is its own), so an edit
+			// of the root alone that names no entity (a drag of a placed instance) skips the walk.
+			std::optional<std::unordered_map<UUID, UUID>> templateIds;
+			const auto getTemplateIds = [&]() -> const std::unordered_map<UUID, UUID>&
+			{
+				if (!templateIds)
+					templateIds = PrefabInstances::MapTemplateIds(root);
+				return *templateIds;
+			};
 			const UUID templateRoot = GetId((*partEntities)[0]);
+			const UUID rootLink = root.GetComponent<PrefabInstanceComponent>().PrefabEntityID;
+			const Scene& scene = *root.GetScene();
 			std::unordered_set<UUID> redone;
 			std::vector<PrefabOverride> entries;
 			for (const Entity entity : entities)
 			{
-				const auto id = entity ? templateIds.find(entity.GetUUID()) : templateIds.end();
-				if (id == templateIds.end())
-					continue; // Not in the instance
-				const auto position = part.Positions.find(id->second);
-				if (position == part.Positions.end() || !redone.insert(id->second).second)
+				if (!entity)
+					continue;
+				UUID templateId = UUID::Null();
+				nlohmann::json components;
+				if (entity == root && rootLink.IsValid())
+				{
+					templateId = rootLink;
+					components = PrefabInstances::MakeTemplateComponents(entity, {});
+					if (NamesEntity(components, scene))
+						components = PrefabInstances::MakeTemplateComponents(entity, getTemplateIds());
+				}
+				else
+				{
+					const std::unordered_map<UUID, UUID>& ids = getTemplateIds();
+					const auto id = ids.find(entity.GetUUID());
+					if (id == ids.end())
+						continue; // Not in the instance
+					templateId = id->second;
+				}
+				const auto position = part.Positions.find(templateId);
+				if (position == part.Positions.end() || !redone.insert(templateId).second)
 					continue; // Added to the instance (a new id), or listed twice
-				CompareComponents(id->second, id->second == templateRoot, GetComponents((*partEntities)[position->second]),
-					PrefabInstances::MakeTemplateComponents(entity, templateIds), entries);
+				if (components.is_null())
+					components = PrefabInstances::MakeTemplateComponents(entity, getTemplateIds());
+				CompareComponents(templateId, templateId == templateRoot, GetComponents((*partEntities)[position->second]), components, entries);
 			}
 			if (redone.empty())
 				return true;
