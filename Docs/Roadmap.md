@@ -359,6 +359,14 @@ interleaved A/Bs against wave 2's build; the quiet campaign that decided the bud
 
 Open items and deferrals later waves own:
 
+- GPU-driven rendering (wave 4's `gpu-driven-rendering`): skinning still runs per draw (compute skinning once per
+  frame, measured by a GPU-time metric, is wave 5's); the shadow cascade cache follows the GPU-driven path only (the
+  CPU path redraws every layer each frame); render scenes are copied whole at play start, not shared by copy-on-write
+  pages; on tile-based drivers a timestamp inside a render pass may land at the pass's end, so `GPU.UI` is checked
+  for presence, not for its time.
+- Tests: `Editor.ImportSettings`' close check (2.0 s) measured 2.012 s once on CI's Windows Release runner;
+  `Editor.UI`'s "No uploads in the last 120 frames" fails when GPU suites ran before it in the same process (CTest's
+  shards never combine them).
 - World I/O (wave 4's `world-io`): pack version 3 (small entries bundled, a zstd dictionary, shared blocks decoded
   once; the 10.7x inflation of small assets in `Perf.Asset.Pack30kMaterialsRatio`), cold reads without the system
   cache with 16 outstanding reads (`PerfGPU.Pack.ColdStreamStressWorld`) and a background-thread cap while loads run
@@ -564,6 +572,11 @@ Open items and deferrals later waves own:
   - Wave 4's `world-io`: its metrics are provisional (`Perf.Editor.ImportFolder24x4kPeakPrivate` measured 571-574 MB
     on the Mac against a 1,280 MB target), and `PerfGPU.Editor.SceneOpenOver1MMaxFrame` measured 1.08 times the step-0
     base (8.51-9.21 ms over 10 pairs), on a Mac where that frame mostly waits for the display.
+  - Wave 4's `gpu-driven-rendering`: its metrics are provisional, among them `PlayStartRender1MCubes` (target 5 ms;
+    the whole copy measured 22-27 ms on the Mac) and `Render10kUniqueMeshes` (MoltenVK turns each indirect draw into
+    a Metal draw); `Render10kMaterials` measured 1.15 times the step-0 base on the Mac (0.844 against 0.737 ms, 7
+    pairs), with the GPU busy 2.3-2.5 ms a frame; the `drawIndirectCount`, min/max sampler and device-minimum
+    `maxDrawIndirectCount` paths are chosen by device features but run only on drivers that have them.
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
 
