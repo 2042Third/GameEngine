@@ -8,11 +8,16 @@
 #include "Strata/Core/Process.h"
 #include "Strata/Project/Project.h"
 #include "Strata/Reflection/PropertyJson.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "TestHelpers.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+#endif
 
 #include <stb_image.h>
 
@@ -112,15 +117,21 @@ TEST_SUITE("PerfLab.WorldFixture")
 			{
 				CHECK(cube.GetComponent<MeshRendererComponent>().Mesh == BuiltinAssets::CubeMesh);
 				materials.insert(cube.GetComponent<MeshRendererComponent>().Material);
+#if ST_WITH_PHYSICS
 				if (cube.HasComponent<RigidBodyComponent>())
 				{
 					bodies++;
 					CHECK(cube.GetComponent<RigidBodyComponent>().Type == RigidBodyType::Static);
 					CHECK(cube.HasComponent<BoxColliderComponent>());
 				}
+#endif
 			}
 		}
+#if ST_WITH_PHYSICS
 		CHECK(bodies == (c_SmallWorld.Cubes + c_WorldColliderInterval - 1) / c_WorldColliderInterval);
+#else
+		CHECK(bodies == 0); // Without the physics module the world has no colliders
+#endif
 		CHECK(materials == std::set<AssetHandle>(project->Materials.begin(), project->Materials.end()));
 		// Cubes stand c_WorldCubeSpacing apart.
 		const std::vector<Entity> firstCubes = scene->GetEntityByUUID(roots[c_WorldFixedEntities]).GetChildren();

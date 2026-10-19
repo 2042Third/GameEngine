@@ -5,7 +5,7 @@
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneDocumentReader.h"
 
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include <filesystem>
 #include <functional>

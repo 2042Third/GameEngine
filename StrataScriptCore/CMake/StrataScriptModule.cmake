@@ -110,8 +110,15 @@ function(strata_add_script_module target)
 	if(MSVC)
 		target_compile_options(${target} PRIVATE /utf-8 /permissive- /Zc:__cplusplus /Zc:preprocessor)
 		# A program database in every configuration, so that the editor names the file and line of a crash (it reads the
-		# PDB with DbgHelp). /DEBUG would turn off the linker's optimizations, which are turned back on.
-		set_target_properties(${target} PROPERTIES MSVC_DEBUG_INFORMATION_FORMAT "ProgramDatabase")
+		# PDB with DbgHelp). /DEBUG would turn off the linker's optimizations, which are turned back on. Compiles through a
+		# compiler cache (a compiler launcher: ccache, sccache) keep the debug information in the objects (/Z7), since a cache
+		# cannot cache compiles that write into one shared program database; the linker writes the same PDB from them.
+		get_target_property(launcher ${target} CXX_COMPILER_LAUNCHER)
+		if(launcher)
+			set_target_properties(${target} PROPERTIES MSVC_DEBUG_INFORMATION_FORMAT "Embedded")
+		else()
+			set_target_properties(${target} PROPERTIES MSVC_DEBUG_INFORMATION_FORMAT "ProgramDatabase")
+		endif()
 		target_link_options(${target} PRIVATE "/DEBUG" "$<$<NOT:$<CONFIG:Debug>>:/OPT:REF;/OPT:ICF>")
 	else()
 		if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")

@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Scripting/ScriptTestUtils.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 
 #include <random>
 #include <string>

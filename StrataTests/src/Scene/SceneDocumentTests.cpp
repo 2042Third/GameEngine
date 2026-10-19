@@ -1,7 +1,6 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
-#include "FeatureTest/FeatureTestUtils.h"
 #include "Perf/WorldFixture.h"
 #include "Strata/Asset/AssetDependencies.h"
 #include "Strata/Core/Crypto.h"
@@ -24,6 +23,10 @@
 #include "Strata/Scene/UnknownComponents.h"
 #include "TestHelpers.h"
 
+#if ST_TESTS_HAVE_EVERY_MODULE
+	#include "FeatureTest/FeatureTestUtils.h"
+#endif
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -41,6 +44,7 @@ using namespace Strata::Tests;
 namespace
 {
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	// The feature scene: every component, script fields of every type (asset and entity fields among them), prefab links.
 	Ref<Scene> LoadFeatureScene()
 	{
@@ -50,6 +54,7 @@ namespace
 		REQUIRE(scene);
 		return scene;
 	}
+#endif
 
 	// Kept components of a module this build lacks, named to sort before, between and after the registered ones.
 	void AddUnknownComponents(Scene& scene, Entity entity)
@@ -209,6 +214,7 @@ TEST_SUITE("Scene.Documents")
 		check(PropertyType::Entity, UUID(42));
 	}
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("Every entity line is the dump of the serializer's entity object, and the document reads as its document plus EntityCount")
 	{
 		ScopedJobSystem jobs(4, 1);
@@ -258,7 +264,9 @@ TEST_SUITE("Scene.Documents")
 			CHECK(*parsed == withCount);
 		}
 	}
+#endif
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("The references the writer collects are those a scan of the written bytes finds, in order")
 	{
 		const Ref<Scene> feature = LoadFeatureScene();
@@ -292,6 +300,7 @@ TEST_SUITE("Scene.Documents")
 		CHECK_FALSE(AssetDependencies::Scan(AssetType::Prefab, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(old.data()), old.size()), wrongKind, &error));
 		CHECK(error == "Not a Strata Prefab document");
 	}
+#endif
 
 	TEST_CASE("Entity subsets write their roots with their descendants and parents only within the subset")
 	{
@@ -459,6 +468,7 @@ TEST_SUITE("Scene.Documents")
 		CHECK(SceneDocumentWriter::GetThreadEntityCount() - before == 10);
 	}
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("SaveToFile writes the streamed layout, which loads back to the same scene")
 	{
 		const Ref<Scene> feature = LoadFeatureScene();
@@ -472,7 +482,9 @@ TEST_SUITE("Scene.Documents")
 		REQUIRE(loaded);
 		CHECK(SceneSerializer::Serialize(*loaded) == SceneSerializer::Serialize(*feature));
 	}
+#endif
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("A snapshot to save holds what the scene's document holds and writes the same bytes, without world transforms")
 	{
 		ScopedJobSystem jobs(4, 1);
@@ -494,6 +506,7 @@ TEST_SUITE("Scene.Documents")
 		// The snapshot keeps the scene's source and lineage, like every copy.
 		CHECK(snapshot->GetLineageID() == feature->GetLineageID());
 	}
+#endif
 }
 
 
@@ -649,6 +662,7 @@ namespace
 
 TEST_SUITE("Scene.Documents")
 {
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("Old layouts and the streamed one load to the scene the DOM reader makes, children before parents too")
 	{
 		const Ref<Scene> feature = LoadFeatureScene();
@@ -672,6 +686,7 @@ TEST_SUITE("Scene.Documents")
 		CheckSameRead("{" + Header() + ",\"Scene\":{\"Name\":\"Empty\",\"Entities\":[]}}");
 		CheckSameRead("{\"Scene\":{}," + Header() + "}");
 	}
+#endif
 
 	TEST_CASE("The streamed reader reports what the DOM reader reports, in its order, also when the settings follow the entities")
 	{
@@ -889,6 +904,7 @@ namespace
 
 TEST_SUITE("Scene.Documents")
 {
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("EntityPrototypeBuilder makes what EntityPrototype::Compile makes of the document read into a scene, with the same reports")
 	{
 		const Ref<Scene> feature = LoadFeatureScene();
@@ -934,7 +950,9 @@ TEST_SUITE("Scene.Documents")
 			CHECK(builtError == compiledError);
 		}
 	}
+#endif
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("Prefab and model documents round trip through the streamed writer and reader, in old layouts too")
 	{
 		const Ref<Scene> feature = LoadFeatureScene();
@@ -987,6 +1005,7 @@ TEST_SUITE("Scene.Documents")
 			}
 		}
 	}
+#endif
 }
 
 namespace
@@ -1031,6 +1050,7 @@ namespace
 
 TEST_SUITE("Scene.Documents")
 {
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("Documents read in parallel to the scene a stream read makes, with the same reports, in the writer's layout and others")
 	{
 		ScopedJobSystem jobs(4, 1);
@@ -1057,6 +1077,7 @@ TEST_SUITE("Scene.Documents")
 		CHECK(ReadStreamed(MakeEntityListText(SceneReadOptions().ParallelMinEntities, true)).Result.Parallel);
 		CHECK_FALSE(ReadStreamed(written).Result.Parallel);
 	}
+#endif
 
 	TEST_CASE("A parallel read fails as the stream read does, falls back to it for documents it cannot split, and is refused or cancelled by the chunk")
 	{
@@ -1139,6 +1160,7 @@ TEST_SUITE("Scene.Documents")
 
 TEST_SUITE("Scene.Documents")
 {
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("A prototype is written as a scene holding its entities is, and a parsed prefab document is laid out the same way")
 	{
 		ScopedJobSystem jobs(4, 1);
@@ -1191,4 +1213,5 @@ TEST_SUITE("Scene.Documents")
 		CHECK_FALSE(SceneDocumentWriter::WriteJson(SceneSerializer::Serialize(*feature), SceneDocumentKind::Prefab, refused, &error));
 		CHECK(error == "Not a Strata Prefab document");
 	}
+#endif
 }

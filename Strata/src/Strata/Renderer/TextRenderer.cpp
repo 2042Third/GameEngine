@@ -5,6 +5,7 @@
 #include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/Font.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"

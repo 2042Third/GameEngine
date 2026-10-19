@@ -1,4 +1,5 @@
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Strata/Renderer/RendererComponents.h"
 
 #include <algorithm>
 #include <cmath>

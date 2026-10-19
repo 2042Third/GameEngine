@@ -4,6 +4,7 @@
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyBinary.h>
 #include <Strata/Scene/Components.h>
+#include <Strata/Scripting/ScriptingComponents.h>
 
 #include <nlohmann/json.hpp>
 

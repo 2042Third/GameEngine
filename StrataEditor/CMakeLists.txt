@@ -11,7 +11,9 @@ add_library(StrataEditorCore STATIC ${STRATA_EDITOR_CORE_SOURCES})
 strata_configure_target(StrataEditorCore)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_EDITOR_CORE_SOURCES})
 target_include_directories(StrataEditorCore PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(StrataEditorCore PUBLIC Strata)
+# The engine, and the tooling only editors contain: the asset pipeline and the network (automation).
+target_link_libraries(StrataEditorCore PUBLIC Strata Strata::AssetPipeline Strata::Network)
+strata_precompile_headers(StrataEditorCore "${CMAKE_CURRENT_SOURCE_DIR}/src/EditorPch.h")
 
 # Script builds (script.build) configure game script modules with the engine's own toolchain and configuration and the
 # StrataScriptCore package of this checkout; the values are baked into Editor/ScriptBuildConfig.h as C string literals.
@@ -46,7 +48,10 @@ list(APPEND STRATA_EDITOR_UI_SOURCES
 add_library(StrataEditorUI STATIC ${STRATA_EDITOR_UI_SOURCES})
 strata_configure_target(StrataEditorUI)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_EDITOR_UI_SOURCES})
-target_link_libraries(StrataEditorUI PUBLIC StrataEditorCore PRIVATE nfd)
+# Dear ImGui (the engine's ImGui layer brings it); the gizmos (ImGuizmo) only the viewport draws.
+target_link_libraries(StrataEditorUI PUBLIC StrataEditorCore Strata::ImGui PRIVATE ImGuizmo nfd)
+# Its own precompiled header: the core's definitions differ (no ImGui), so it cannot reuse the core's.
+strata_precompile_headers(StrataEditorUI "${CMAKE_CURRENT_SOURCE_DIR}/src/EditorPch.h" <imgui.h>)
 
 # The editor's typefaces are compiled in (UI/EditorFonts.cpp), so the editor reads no font files. Licenses and versions:
 # ThirdPartyNotices.md. UI/Icons.h is generated from the icon font's codepoint map by Tools/GenerateIconHeader.py.
@@ -65,7 +70,7 @@ source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_EDITOR_SOURCE
 target_link_libraries(StrataEditor PRIVATE StrataEditorUI)
 
 if(WIN32)
-	# A windowed program: no console window opens with it. It keeps main (Core/EntryPoint.h), and prints to the pipes its
+	# A windowed program: no console window opens with it. It keeps main (Engine/EntryPoint.h), and prints to the pipes its
 	# callers pass or the terminal that started it (Platform::ConnectStandardStreams).
 	set_target_properties(StrataEditor PROPERTIES WIN32_EXECUTABLE TRUE)
 	if(MSVC)

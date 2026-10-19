@@ -1,14 +1,18 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
-#include "FeatureTest/FeatureTestUtils.h"
 #include "TestHelpers.h"
+
+#if ST_TESTS_HAVE_EVERY_MODULE
+	#include "FeatureTest/FeatureTestUtils.h"
+#endif
 
 #include <Strata/Core/BinaryStream.h>
 #include <Strata/Core/Hash.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
+#include <Strata/Scripting/ScriptingComponents.h>
 #include <Strata/Scene/CookedScene.h>
 #include <Strata/Scene/EntityPrototype.h>
 #include <Strata/Scene/Prefab.h>
@@ -28,6 +32,7 @@ using namespace Strata::CookedSceneFormat;
 namespace
 {
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	Ref<Scene> LoadFeatureScene()
 	{
 		std::string error;
@@ -43,6 +48,7 @@ namespace
 		scene->GetSettings().MaxFixedStepsPerFrame = 3;
 		return scene;
 	}
+#endif
 
 	std::vector<uint8_t> Cook(const Scene& scene)
 	{
@@ -149,6 +155,7 @@ namespace
 
 TEST_SUITE("Scene.CookedScene")
 {
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("The feature scene through its cooked form equals its JSON load: components, script fields, unknown components, settings, IDs, hierarchy")
 	{
 		const Ref<Scene> feature = LoadFeatureScene();
@@ -169,7 +176,9 @@ TEST_SUITE("Scene.CookedScene")
 		REQUIRE(asset);
 		CHECK(SceneSerializer::Serialize(*asset->CreateScene()) == SceneSerializer::Serialize(*feature));
 	}
+#endif
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("Prefabs and models through their cooked form equal their JSON load")
 	{
 		const Ref<Scene> feature = LoadFeatureScene();
@@ -194,7 +203,9 @@ TEST_SUITE("Scene.CookedScene")
 			CHECK_FALSE(wrongKind);
 		}
 	}
+#endif
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("Cooked bytes depend only on the input, and reads give the same scene on any number of threads")
 	{
 		const Ref<Scene> feature = LoadFeatureScene();
@@ -214,6 +225,7 @@ TEST_SUITE("Scene.CookedScene")
 		REQUIRE(parallel);
 		CHECK(SceneSerializer::Serialize(*parallel) == single);
 	}
+#endif
 
 	TEST_CASE("Truncated, damaged and inconsistent cooked documents are refused with an error")
 	{

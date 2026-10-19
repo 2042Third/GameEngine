@@ -5,6 +5,7 @@
 #include "Strata/Renderer/BindlessTextureTable.h"
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/MeshFactory.h"
+#include "Strata/Renderer/RendererComponents.h"
 
 #include <nlohmann/json.hpp>
 

@@ -4,7 +4,6 @@
 #include "Strata/Asset/EditorAssetManager.h"
 #include "Strata/Asset/ImportRecordStore.h"
 #include "Strata/Asset/RuntimeAssetManager.h"
-#include "Strata/Audio/AudioClipAsset.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Core/JsonUtils.h"
@@ -14,11 +13,16 @@
 #include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Scene/Components.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "Strata/Scene/CookedScene.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "TestHelpers.h"
+
+#if ST_WITH_AUDIO
+	#include "Strata/Audio/AudioClipAsset.h"
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -169,6 +173,7 @@ namespace
 
 TEST_SUITE("Asset.Editor")
 {
+#if ST_WITH_AUDIO
 	TEST_CASE("Scanning registers asset files with handles kept in .meta files")
 	{
 		TestProject project("EditorScan");
@@ -257,6 +262,7 @@ TEST_SUITE("Asset.Editor")
 			CHECK(texture->GetWidth() == 8);
 		}
 	}
+#endif
 
 	TEST_CASE("Import settings live in the .meta file and re-import the asset")
 	{

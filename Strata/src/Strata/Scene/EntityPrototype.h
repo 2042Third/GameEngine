@@ -84,15 +84,17 @@ namespace Strata
 		void FindReferences();
 		void ComputeMemoryUsage();
 
-		// An entity-typed property of a component (or a script field of entity type) whose value names an entity of the
-		// prototype: a copy with fresh IDs points it at the copy of that entity.
+		// An entity-typed property of a component, or an entity reference in its extra data (ComponentInfo::ExtraReferences:
+		// a script field), whose value names an entity of the prototype: a copy with fresh IDs points it at the copy of
+		// that entity.
 		struct EntityReference
 		{
 			uint32_t Entity = 0;                     // Index of the entity holding the reference
-			const ComponentInfo* Component = nullptr; // Null for script fields
-			uint32_t Property = 0;                   // Property index, or for script fields: script index
-			uint32_t Field = 0;                      // Script fields: field index in the script's overrides
+			const ComponentInfo* Component = nullptr; // The component holding it
+			uint32_t Property = 0;                   // Property index, or for extra data: the reference's slot
+			uint32_t Subslot = 0;                    // Extra data: the reference's subslot
 			uint32_t Target = 0;                     // Index of the entity referenced
+			bool Extra = false;                      // In the extra data (ComponentExtraReferences::Set writes it)
 		};
 		static constexpr uint32_t c_NoUnknownComponents = std::numeric_limits<uint32_t>::max();
 	private:

@@ -1,7 +1,6 @@
 #include <doctest/doctest.h>
 
 #include "Asset/AssetTestUtils.h"
-#include "FeatureTest/FeatureTestUtils.h"
 #include "Strata/Asset/AssetDependencies.h"
 #include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Asset/EditorAssetManager.h"
@@ -17,7 +16,12 @@
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
+
+#if ST_TESTS_HAVE_EVERY_MODULE
+	#include "FeatureTest/FeatureTestUtils.h"
+#endif
 
 #include <spdlog/fmt/fmt.h>
 
@@ -39,6 +43,7 @@ using namespace Strata::Tests;
 namespace
 {
 
+#if ST_TESTS_HAVE_EVERY_MODULE
 	// Every asset the entities of a scene reference, found by walking the live components through reflection: the values
 	// of the asset properties of every registered component, and the script fields of asset type.
 	std::set<AssetHandle> WalkSceneReferences(Scene& scene)
@@ -75,6 +80,7 @@ namespace
 		}
 		return references;
 	}
+#endif
 
 	std::vector<uint8_t> ToBytes(const nlohmann::json& json)
 	{
@@ -159,6 +165,7 @@ namespace
 
 TEST_SUITE("Asset.Dependencies")
 {
+#if ST_TESTS_HAVE_EVERY_MODULE
 	TEST_CASE("The feature scene's dependencies are what its entities reference, in the editor and in the exported pack")
 	{
 		FeatureProject project;
@@ -259,6 +266,7 @@ TEST_SUITE("Asset.Dependencies")
 		}
 		CHECK(runtime->GetDependencyClosure(sceneHandle) == editor->GetDependencyClosure(sceneHandle));
 	}
+#endif
 
 	TEST_CASE("Engine-native assets record their references per content and follow their changes")
 	{

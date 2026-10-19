@@ -98,6 +98,14 @@ namespace Strata
 		SceneSettings m_SettingsAfter;
 	};
 
+	// A save of the edited scene that writes in the background holds one (SceneRecovery::BeginSave), so that the journal
+	// that follows the saved document carries the edits made while it was written.
+	struct RecoverySaveToken
+	{
+		uint64_t Epoch = 0;    // Of the edited scene
+		uint64_t Sequence = 0; // Steps applied before the snapshot
+	};
+
 	// Autosave and crash recovery of the edited scene.
 	//
 	// The journal of the edited scene keeps its unsaved changes in "<project>/.strata/Recovery/<scene>-<session>.strecovery":
@@ -174,11 +182,7 @@ namespace Strata
 		// applied from now on are kept (OnApplied), so that the journal that follows the saved document carries the edits made
 		// while it was written. Every token ends with OnSaved or ReleaseSave; a token of another scene than the edited one
 		// (BeginScene, EndScene came since) does nothing.
-		struct SaveToken
-		{
-			uint64_t Epoch = 0;    // Of the edited scene
-			uint64_t Sequence = 0; // Steps applied before the snapshot
-		};
+		using SaveToken = RecoverySaveToken;
 		SaveToken BeginSave();
 		// The save failed, or a newer one replaced it: what it kept goes (unless a later save still needs it).
 		void ReleaseSave(const SaveToken& token);

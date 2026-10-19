@@ -3,6 +3,7 @@
 
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Physics/PhysicsLayers.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"

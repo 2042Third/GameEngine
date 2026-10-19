@@ -6,6 +6,7 @@
 #include "Perf/SceneGenerators.h"
 
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>

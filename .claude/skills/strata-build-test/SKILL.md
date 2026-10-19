@@ -19,7 +19,24 @@ cmake --build --preset windows-debug --target StrataTests   # just the tests
 
 - Source files are globbed: a new `.cpp`/`.h` needs a re-configure. Shaders are not globbed: add every new
   shader to `strata_add_shaders` in `Strata/CMakeLists.txt`.
+- The engine is one static library per layer of `StrataTests/Architecture/Layers.json` (`Strata_<Layer>`, made by
+  `CMake/StrataLayers.cmake`): a new engine file needs a layer pattern there (the configure names files in no layer or
+  in two), a new layer is a table entry, and a vendor library a layer needs is a `strata_layer_link` row in
+  `Strata/CMakeLists.txt`. Programs link `Strata` (the runtime layers) and, for tools, the tooling layers
+  (`Strata::AssetPipeline`, `Strata::Network`, `Strata::ImGui`, or `StrataTooling`). A configure that fails with
+  "StrataRuntime links tooling that games must not contain" names the path through which a runtime layer reached a
+  tooling one: invert that dependency.
 - Warnings are errors (`/W4 /WX`, `-Wall -Wextra -Werror`). Fix them; never silence them locally.
+- Targets build with precompiled headers (`stpch.h`, `StrataEditor/src/EditorPch.h`, `StrataTests/src/TestsPch.h`),
+  which hide a missing include: `python3 Tools/CompatLint.py --changed-since <base>` compiles without them, and so does a
+  build configured with `-DSTRATA_PRECOMPILED_HEADERS=OFF`. Never put an engine, editor or test header that changes into
+  them (`Architecture.PrecompiledHeaders`).
+- `-DSTRATA_COMPILER_CACHE=ON` builds through ccache or sccache as CI does (precompiled headers off by default). On
+  Windows it needs the `windows-ninja` preset, configured and built from a Developer PowerShell.
+- A game without a module: `-DSTRATA_WITH_PHYSICS=OFF` (and `_AUDIO`, `_ANIMATION`) with `-DSTRATA_BUILD_EDITOR=OFF`, in a
+  build directory of its own (`cmake --preset <platform> -B build/<name> ...`). A test case that needs a module is
+  guarded with `#if ST_WITH_<MODULE>` (or `ST_TESTS_HAVE_EVERY_MODULE`); CI builds and tests the configuration without
+  audio and physics, so check a change to such tests there or locally.
 - Cached options survive a re-configure. If a target you expect is missing, check `build/<preset>/CMakeCache.txt`
   (for example `STRATA_BUILD_RUNTIME`) and pass `-D<OPTION>=ON`.
 
@@ -47,9 +64,14 @@ ctest --preset macos-debug -LE perf
 
 - doctest filters split on commas. A test name containing a comma must be matched with `?`/`*`, e.g.
   `--test-case="Hierarchy?*"`.
-- CTest runs: `StrataTests.Core` (everything but the GPU, EndToEnd, `Package*`, perf and feature test suites; it
-  includes `Architecture.Layering`, which fails on an include that crosses the layers of
+- Run the CTests side by side: `ctest --preset <platform>-debug -j 8`.
+- CTest runs: the shards `StrataTests.Core.<Shard>` (label `core`: Core, Asset, Scene, Systems, Renderer, Network,
+  EditorUI, EditorData, Editor; every suite but the GPU, EndToEnd, `Package*`, perf and feature test suites, split as
+  `StrataTests/CoreShards.json` says: a new suite prefix needs an entry there, or `Testing.Shards` fails naming it; the
+  Core shard includes `Architecture.Layering`, which fails on an include that crosses the layers of
   `StrataTests/Architecture/Layers.json` - fix the dependency, see AGENTS.md "Architecture rules"),
+  `StrataTests.Fuzz` (label `fuzz`, Release and Dist: the `*.Sweep` suites in full, `STRATA_TEST_SWEEP=full`; their
+  shards test a sample),
   `StrataTests.GPU` (label `gpu`), the perf tests `StrataTests.Perf` and `StrataTests.PerfGPU` (suites `Perf.*`
   and `PerfGPU.*`, label `perf`, Release and Dist only, after `StrataTests.PerfResults.Clean`; budgets, confirmed
   checks and the ratchet rule in Docs/DeveloperGuide.md, "Perf tests": a metric over its budget is measured again, up to
@@ -122,7 +144,9 @@ ctest --preset macos-debug -LE perf
   (`StrataTests --strata-test-helper=check-image <png> [--dominant red|green|blue <percent>]`: not black, not a single
   color, and here at least 1% of the blue box), plus `StrataRuntime.NoCameraScreenshot` (a screenshot of the
   missing-camera message fails the run), `StrataEditor.Automation` (the `EndToEnd*` suites: the real editor, headless
-  without a GPU, driven by StrataCLI and its MCP server), and the feature test (label `feature`):
+  without a GPU, driven by StrataCLI and its MCP server), `StrataRuntime.NoTooling` (the runtime's linker map,
+  `StrataRuntime.map` next to it, names no object or library of ImGui, ImGuizmo, the asset pipeline, the network or
+  zstd's compressor: `StrataTests/Architecture/CheckNoTooling.cmake`), and the feature test (label `feature`):
   `StrataTests.FeatureTest` (suites `FeatureTest` and `Editor.FeatureTest`) plus `StrataFeatureTest.Clean` → `.Copy` →
   `StrataEditor.FeatureTest` → `StrataRuntime.FeatureTest` (the real executables with a copy of
   `StrataTests/FeatureTest`). See Docs/DeveloperGuide.md ("Feature test") for what the feature test enforces when you

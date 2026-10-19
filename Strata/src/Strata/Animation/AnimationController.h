@@ -2,7 +2,7 @@
 
 #include "Strata/Asset/Asset.h"
 
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include <optional>
 #include <span>

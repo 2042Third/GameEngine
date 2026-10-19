@@ -68,8 +68,17 @@ namespace Strata
 		// Update order: the system runs after the systems named in After and before those named in Before (names of
 		// registered systems). Registration order decides the rest as far as the constraints allow (see
 		// SceneSystemRegistry::GetAll): a system that no constraint involves runs after every system registered before it.
+		//
+		// Hard constraints (After, Before) name systems that must be registered: a system of the same module, or of a module
+		// this one cannot work without; a registration that names an absent one is refused. Soft constraints
+		// (AfterIfPresent, BeforeIfPresent) order the system against another module's systems when that module is part of
+		// the build: they are ignored while the named system is not registered, apply as soon as it is (the order is
+		// recomputed over every registered system), refuse cycles like hard ones, and never keep the named system from being
+		// unregistered. Constraints toward another module's system are soft, so that the engine runs without that module.
 		std::vector<std::string> After;
 		std::vector<std::string> Before;
+		std::vector<std::string> AfterIfPresent;
+		std::vector<std::string> BeforeIfPresent;
 		// entt::type_id of the class Create makes (set by MakeSceneSystemDescriptor), by which Scene::GetSystem finds the
 		// running system; 0 for a system that is not looked up by type.
 		entt::id_type Type = 0;
@@ -130,16 +139,19 @@ namespace Strata
 		static void BeginRegistration();
 		// Adds a system, or replaces the one with the same name (which then counts as registered last). Refused - false, with
 		// an error naming the systems involved, and the registry unchanged - for a descriptor without a name or factory, a
-		// type registered under another name, a constraint naming an unregistered system or the system itself, constraints
-		// that form a cycle, and while any scene runs.
+		// type registered under another name, a hard constraint naming an unregistered system, a constraint naming the
+		// system itself, constraints (hard or soft) that form a cycle, and while any scene runs.
 		[[nodiscard]] static bool Register(SceneSystemDescriptor descriptor);
-		// Refused (false) for a name that is not registered, while other systems name it in a constraint (with an error naming
-		// them) and while any scene runs.
+		// Refused (false) for a name that is not registered, while other systems name it in a hard constraint (with an error
+		// naming them) and while any scene runs. Soft constraints naming it are ignored from then on.
 		[[nodiscard]] static bool Unregister(const std::string& name);
 		// Every system in update order: the order of the constraints that follows registration order as far as they allow.
 		// The first registered system runs as early as the constraints allow, then the second, and so on, so a system moves
 		// ahead of an earlier registered one only when it has to run before a system that runs ahead of that one.
 		static const std::vector<SceneSystemDescriptor>& GetAll();
+		// The soft constraints of the registered systems that name systems which are not registered, as "<system> after
+		// <absent>" or "<system> before <absent>" (the composition root logs them with the update order).
+		static std::vector<std::string> GetAbsentSoftConstraints();
 	};
 
 }

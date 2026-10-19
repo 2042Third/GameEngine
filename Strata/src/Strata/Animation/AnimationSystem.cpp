@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Animation/AnimationSystem.h"
 
+#include "Strata/Animation/AnimationComponents.h"
 #include "Strata/Animation/AnimationController.h"
 #include "Strata/Animation/Skeleton.h"
 #include "Strata/Asset/AssetManager.h"
@@ -1064,6 +1065,11 @@ namespace Strata
 		if (state == AnimatorInstance::c_ClipState || !controller || state >= controller->GetStates().size())
 			return std::string();
 		return controller->GetStates()[state].Name;
+	}
+
+	bool AnimationSystem::HasAnimator(Entity entity)
+	{
+		return entity.IsValid() && entity.HasComponent<AnimatorComponent>();
 	}
 
 	std::optional<glm::mat4> AnimationSystem::GetJointTransform(Entity animator, std::string_view joint)

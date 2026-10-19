@@ -1,7 +1,5 @@
 #include <doctest/doctest.h>
 
-#include "Animation/SkinnedMeshTestUtils.h"
-#include "Animation/TestSkinningPoses.h"
 #include "Asset/AssetTestUtils.h"
 #include "Renderer/MeshTestUtils.h"
 #include "Scene/SceneTestUtils.h"
@@ -12,6 +10,11 @@
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
+
+#if ST_WITH_ANIMATION
+	#include "Animation/SkinnedMeshTestUtils.h"
+	#include "Animation/TestSkinningPoses.h"
+#endif
 
 #include <algorithm>
 #include <random>
@@ -31,6 +34,7 @@ namespace
 		CHECK_MESSAGE(renderScene.Validate(&error), error);
 	}
 
+#if ST_WITH_ANIMATION
 	uint32_t FindMeshSlot(const RenderScene& renderScene, AssetHandle mesh)
 	{
 		for (uint32_t slot = 0; slot < renderScene.GetMeshSlotCapacity(); slot++)
@@ -40,6 +44,7 @@ namespace
 		}
 		return RenderScene::c_InvalidIndex;
 	}
+#endif
 
 	Entity AddCube(Scene& scene, const glm::vec3& position, AssetHandle material = UUID::Null(), AssetHandle mesh = BuiltinAssets::CubeMesh)
 	{
@@ -55,6 +60,7 @@ namespace
 
 TEST_SUITE("Renderer.RenderScene")
 {
+#if ST_WITH_ANIMATION
 	TEST_CASE("Proxies match a rebuild from the scene through 5,000 random edits")
 	{
 		std::mt19937 random(2024);
@@ -286,6 +292,7 @@ TEST_SUITE("Renderer.RenderScene")
 			CHECK(fresh.GetInstanceCount(copiedProxy) == renderScene.GetInstanceCount(proxy));
 		}
 	}
+#endif
 
 	TEST_CASE("A static sync updates nothing; moving one of 100,000 cubes updates one proxy and one instance")
 	{

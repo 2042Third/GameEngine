@@ -4,6 +4,7 @@
 #include "Scene/SceneTestUtils.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Scene/SceneServices.h"
 #include "TestHelpers.h"
 

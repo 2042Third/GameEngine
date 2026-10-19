@@ -5,15 +5,19 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/ProjectTemplates.h"
+#include "Scene/SceneTestUtils.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Audio/AudioComponents.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Math/Math.h>
+#include <Strata/Physics/PhysicsComponents.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
+#include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>
@@ -208,6 +212,8 @@ TEST_SUITE("Editor.Templates")
 			CHECK(material->GetProperties().BaseColor.r < 0.3f);
 			CHECK(material->GetProperties().Roughness > 0.8f);
 			CheckBasic3DScene(*harness.Context.GetEditScene(), ground);
+			// The saved document names only registered components and reads back without warnings.
+			Tests::CheckSceneFileLoadsCleanly(directory / "Assets" / "Scenes" / "Main.stscene");
 			// Nothing to undo: the project starts like this.
 			CHECK(harness.Context.GetUndoStack().GetHistory().empty());
 

@@ -1,13 +1,13 @@
 {
-	"Description": "The engine's layers, bottom up. Every file under SourceRoot belongs to exactly one layer (Paths minus Exclude, globs relative to SourceRoot) and may include only files of its own layer and of the layers in MayInclude, which must be listed below it, and none of the third-party headers whose path starts with a prefix of its MayNotIncludeExternal. Architecture.Layering (StrataTests/src/Architecture/LayeringTests.cpp) enforces it; LayeringAllowlist.txt lists the known exceptions, each with the workstream that removes it, and holds exactly MaxAllowlistEntries lines (lower it when you remove one). Widen a MayInclude only for a proven downward dependency, with the reason in the layer's Notes; never to legalize a sideways or upward include. The paths stand in for the planned moves of files between libraries (wave 4, engine-modules).",
+	"Description": "The engine's layers, bottom up, and the build: CMake makes one static library per layer from this table (Strata_<Name>, CMake/StrataLayers.cmake), linking exactly the built layers of its MayInclude. Every file under SourceRoot belongs to exactly one layer (Paths minus Exclude, globs relative to SourceRoot) and may include only files of its own layer and of the layers in MayInclude, which must be listed below it, and none of the third-party headers whose path starts with a prefix of its MayNotIncludeExternal. Tooling marks the layers games never contain (their libraries are excluded from all, linked through StrataTooling); Option names the CMake option that builds an optional layer. Architecture.Layering (StrataTests/src/Architecture/LayeringTests.cpp) enforces the includes and Architecture.Libraries the libraries; LayeringAllowlist.txt lists the known exceptions, each with the workstream that removes it, and holds exactly MaxAllowlistEntries lines (lower it when you remove one). Widen a MayInclude only for a proven downward dependency, with the reason in the layer's Notes; never to legalize a sideways or upward include",
 	"SourceRoot": "Strata/src",
-	"MaxAllowlistEntries": 8,
+	"MaxAllowlistEntries": 0,
 	"Layers": [
 		{
 			"Name": "Core",
 			"Notes": "Platform services, logging, jobs, files, processes and math. The OS implementations of Core interfaces live in Platform/<OS>; the socket implementations belong to Network.",
 			"Paths": [ "stpch.h", "Strata/Core/**", "Strata/Math/**", "Platform/Windows/**", "Platform/Posix/**", "Platform/MacOS/**" ],
-			"Exclude": [ "Strata/Core/Application.*", "Strata/Core/Layer.*", "Strata/Core/LayerStack.*", "Strata/Core/Window.h", "Strata/Core/EntryPoint.h", "Platform/*/*Socket.cpp" ],
+			"Exclude": [ "Strata/Core/Application.*", "Strata/Core/EngineModule.*", "Strata/Core/Layer.*", "Strata/Core/LayerStack.*", "Strata/Core/Window.h", "Platform/*/*Socket.cpp" ],
 			"MayInclude": []
 		},
 		{
@@ -18,8 +18,8 @@
 		},
 		{
 			"Name": "App",
-			"Notes": "The application shell: Application, layers, the window and its GLFW implementation. VulkanLoader belongs here, not to Renderer: it loads the system's Vulkan loader for the window system (GLFW must create surfaces through the same loader as the graphics device) and depends only on Core.",
-			"Paths": [ "Strata/Core/Application.*", "Strata/Core/Layer.*", "Strata/Core/LayerStack.*", "Strata/Core/Window.h", "Strata/Core/EntryPoint.h", "Platform/GLFW/**", "Platform/Vulkan/VulkanLoader.*" ],
+			"Notes": "The application shell: Application, layers, the EngineModule interface the modules implement (Application runs their hooks and names none of them), the window and its GLFW implementation. VulkanLoader belongs here, not to Renderer: it loads the system's Vulkan loader for the window system (GLFW must create surfaces through the same loader as the graphics device) and depends only on Core.",
+			"Paths": [ "Strata/Core/Application.*", "Strata/Core/EngineModule.*", "Strata/Core/Layer.*", "Strata/Core/LayerStack.*", "Strata/Core/Window.h", "Platform/GLFW/**", "Platform/Vulkan/VulkanLoader.*" ],
 			"MayInclude": [ "Core", "Input" ]
 		},
 		{
@@ -48,16 +48,20 @@
 		},
 		{
 			"Name": "Physics",
+			"Option": "STRATA_WITH_PHYSICS",
 			"Paths": [ "Strata/Physics/**" ],
 			"MayInclude": [ "Core", "Asset", "Reflection", "Scene" ]
 		},
 		{
 			"Name": "Audio",
+			"Option": "STRATA_WITH_AUDIO",
+			"Notes": "App is a proven downward dependency: the Audio module implements its EngineModule (Core/EngineModule.h), the interface App defines for the services a program runs; App includes no Audio header.",
 			"Paths": [ "Strata/Audio/**" ],
-			"MayInclude": [ "Core", "Asset", "Reflection", "Scene" ]
+			"MayInclude": [ "Core", "App", "Asset", "Reflection", "Scene" ]
 		},
 		{
 			"Name": "Animation",
+			"Option": "STRATA_WITH_ANIMATION",
 			"Notes": "Skeletons, clips, animation controllers and the Animation scene system. The renderer never includes it: poses reach it through the scene service ISkinningPoses (Scene/SceneServices.h), and scripts reach animators through IAnimatorControl.",
 			"Paths": [ "Strata/Animation/**" ],
 			"MayInclude": [ "Core", "Asset", "Reflection", "Scene" ]
@@ -69,8 +73,9 @@
 		},
 		{
 			"Name": "Project",
+			"Notes": "App is a proven downward dependency: the Project module implements its EngineModule (Core/EngineModule.h), the interface App defines for the services a program runs; App includes no Project header.",
 			"Paths": [ "Strata/Project/**" ],
-			"MayInclude": [ "Core", "Asset", "Reflection" ]
+			"MayInclude": [ "Core", "App", "Asset", "Reflection" ]
 		},
 		{
 			"Name": "Runtime",
@@ -81,25 +86,29 @@
 		{
 			"Name": "Network",
 			"Notes": "Sockets, JSON-RPC and editor sessions (tooling); includes the OS socket implementations.",
+			"Tooling": true,
 			"Paths": [ "Strata/Network/**", "Platform/*/*Socket.cpp" ],
 			"MayInclude": [ "Core" ]
 		},
 		{
 			"Name": "ImGui",
+			"Notes": "Dear ImGui's layer and engine module (tooling: editors and tools; games have no ImGui).",
+			"Tooling": true,
 			"Paths": [ "Strata/ImGui/**" ],
 			"MayInclude": [ "Core", "Input", "App", "Renderer" ]
 		},
 		{
 			"Name": "AssetPipeline",
+			"Tooling": true,
 			"Notes": "Importers, the texture cooker and its BC7 encoder, the editor's asset database, the dependency scanner and the pack writer (tooling, never in shipped games: games only read packs, so they link no compressor). Animation is a proven downward dependency: the glTF importer writes the stored forms of skeletons and clips, and the dependency scanner reads the clips an animation controller plays.",
 			"Paths": [ "Strata/Asset/EditorAssetManager.*", "Strata/Asset/AssetImporter.*", "Strata/Asset/AssetImporters.cpp", "Strata/Asset/GltfImporter.*", "Strata/Asset/TextureImporter.*", "Strata/Asset/TextureCooker.*", "Strata/Asset/BC7Encoder.*", "Strata/Asset/AssetPackWriter.*", "Strata/Asset/AssetDependencies.*", "Strata/Asset/ImportRecordStore.*", "Strata/Asset/AssetRegistration.*", "Strata/Asset/AssetPackCook.*" ],
 			"MayInclude": [ "Core", "Asset", "Reflection", "Scene", "Renderer", "Audio", "Animation" ]
 		},
 		{
 			"Name": "Engine",
-			"Notes": "The composition root (Engine/BuiltinModules) and the umbrella header applications include. Both are part of every program, shipped games included, so they never name the asset pipeline: tools hand its registration in (ModuleRegistrationOptions::AssetPipeline), and the importers stay out of games.",
-			"Paths": [ "Strata/Engine/**", "Strata.h" ],
-			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Animation", "Scripting", "Project", "Runtime", "Network", "ImGui" ]
+			"Notes": "The composition root (Engine/BuiltinModules) and the entry point that calls it (Engine/EntryPoint.h, ApplicationLaunch.h). Both are part of every program, shipped games included, so they name only the modules a game contains: tools hand the asset pipeline in (ModuleRegistrationOptions::AssetPipeline), and programs list their engine modules (ApplicationSpecification::Modules), so the importers, the network and ImGui stay out of games.",
+			"Paths": [ "Strata/Engine/**" ],
+			"MayInclude": [ "Core", "Input", "App", "Asset", "Reflection", "Scene", "Renderer", "Physics", "Audio", "Animation", "Scripting" ]
 		}
 	]
 }

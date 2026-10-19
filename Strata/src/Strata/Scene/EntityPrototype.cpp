@@ -126,9 +126,9 @@ namespace Strata
 
 	void EntityPrototype::FindReferences()
 	{
-		// References between the prototype's entities: entity-typed properties and script fields whose value names one.
+		// References between the prototype's entities: entity-typed properties, and entity references in the components'
+		// extra data (script fields), whose value names one.
 		m_References.clear();
-		const entt::id_type scriptType = entt::type_id<ScriptComponent>().hash();
 		for (size_t index = 0; index < m_IDs.size(); index++)
 		{
 			const std::span<const ComponentInfo* const> components = GetComponents(index);
@@ -142,22 +142,17 @@ namespace Strata
 						continue;
 					const UUID target = std::get<UUID>(info.Properties[property].GetValue(values[slot]));
 					if (const size_t targetIndex = FindEntity(target); targetIndex != c_NotFound)
-						m_References.push_back({ static_cast<uint32_t>(index), &info, property, 0, static_cast<uint32_t>(targetIndex) });
+						m_References.push_back({ static_cast<uint32_t>(index), &info, property, 0, static_cast<uint32_t>(targetIndex), false });
 				}
-				if (info.TypeId != scriptType)
+				if (!info.ExtraReferences)
 					continue;
-				const ScriptComponent& scripts = *static_cast<const ScriptComponent*>(values[slot]);
-				for (uint32_t script = 0; script < scripts.Scripts.size(); script++)
+				info.ExtraReferences.Visit(values[slot], [&](uint32_t extraSlot, uint32_t subslot, PropertyType type, UUID target)
 				{
-					const std::vector<ScriptFieldValue>& fields = scripts.Scripts[script].Fields;
-					for (uint32_t field = 0; field < fields.size(); field++)
-					{
-						if (fields[field].Type != PropertyType::Entity || !std::holds_alternative<UUID>(fields[field].Value))
-							continue;
-						if (const size_t targetIndex = FindEntity(std::get<UUID>(fields[field].Value)); targetIndex != c_NotFound)
-							m_References.push_back({ static_cast<uint32_t>(index), nullptr, script, field, static_cast<uint32_t>(targetIndex) });
-					}
-				}
+					if (type != PropertyType::Entity)
+						return;
+					if (const size_t targetIndex = FindEntity(target); targetIndex != c_NotFound)
+						m_References.push_back({ static_cast<uint32_t>(index), &info, extraSlot, subslot, static_cast<uint32_t>(targetIndex), true });
+				});
 			}
 		}
 	}

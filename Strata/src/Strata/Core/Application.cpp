@@ -1,19 +1,15 @@
 #include "stpch.h"
 #include "Strata/Core/Application.h"
 
-#include "Strata/Asset/AssetManager.h"
-#include "Strata/Audio/AudioEngine.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/FrameProfiler.h"
 #include "Strata/Core/Platform.h"
 #include "Strata/Core/Profiling.h"
 #include "Strata/Core/Timer.h"
-#include "Strata/Engine/BuiltinModules.h"
-#include "Strata/ImGui/ImGuiLayer.h"
 #include "Strata/Input/Input.h"
-#include "Strata/Project/Project.h"
-#include "Strata/Renderer/GraphicsDevice.h"
-#include "Strata/Renderer/Renderer.h"
+
+#include <chrono>
+#include <thread>
 
 namespace Strata
 {
@@ -25,6 +21,9 @@ namespace Strata
 
 		// Set before any application exists, read once CreateApplication returned none (main thread only).
 		int s_StartupExitCode = 1;
+
+		// How long a frame that could not run (minimized, nothing to render to) waits, so the loop does not spin a core.
+		constexpr std::chrono::milliseconds c_SkippedFrameWait(16);
 
 	}
 
@@ -66,10 +65,6 @@ namespace Strata
 		ST_CORE_VERIFY(!s_Instance, "Only one Application may exist at a time");
 		s_Instance = this;
 
-		// Before anything uses a registry. Without options, so without the asset pipeline (shipped games); a no-op when the
-		// client registered the modules itself with its own options (the editor's asset pipeline).
-		Engine::RegisterBuiltinModules();
-
 		// Editors and games are interactive: they keep their speed while another window has the focus (Platform.h).
 		if (!Platform::DisableExecutionSpeedThrottling())
 			ST_CORE_WARN("The system did not exempt the process from power throttling: it may run slower while its windows are in the background");
@@ -95,31 +90,10 @@ namespace Strata
 		}
 		Input::Reset();
 
-		if (m_Specification.EnableRenderer && !InitializeGraphics())
+		if (!StartModules())
 		{
-			// The device logged why; the person learns what to do about it. The window, which will never show anything, closes
-			// first.
-			Input::SetWindow(nullptr);
-			m_Window.reset();
-			ReportFatalError(m_Specification.Name, fmt::format("{} cannot start: no usable graphics device was found (it needs Vulkan 1.2 or "
-				"later).", m_Specification.Name), GraphicsDevice::GetDriverInstallAdvice());
 			m_Running = false;
 			m_ExitCode = 1;
-			return;
-		}
-
-		if (m_Specification.EnableAudio)
-		{
-			AudioEngineSpecification audioSpecification;
-			audioSpecification.NullDevice = m_Specification.Headless;
-			if (!AudioEngine::Init(audioSpecification))
-				ST_CORE_ERROR("Audio is unavailable; continuing without sound");
-		}
-
-		if (m_Specification.EnableImGui && m_Window && m_GraphicsDevice)
-		{
-			m_ImGuiLayer = new ImGuiLayer(m_Specification.ImGuiLayoutFile);
-			PushOverlay(m_ImGuiLayer);
 		}
 	}
 
@@ -127,55 +101,65 @@ namespace Strata
 	{
 		// Layers may reference engine systems, so they go first.
 		m_LayerStack.Clear();
-		m_ImGuiLayer = nullptr;
-
-		// Assets own GPU resources and their manager waits for load jobs: release them while the job system and the
-		// renderer still exist.
-		AssetManager::SetActive(nullptr);
-		Project::SetActive(nullptr);
-
-		ExecuteMainThreadQueue();
-		JobSystem::Shutdown();
-		ExecuteMainThreadQueue();
-
-		AudioEngine::Shutdown();
-		Renderer::Shutdown();
-		m_GraphicsDevice.reset();
+		ShutDownModules();
+		m_Modules.Clear();
 
 		Input::SetWindow(nullptr);
 		m_Window.reset();
 		s_Instance = nullptr;
 	}
 
-	bool Application::InitializeGraphics()
+	bool Application::StartModules()
 	{
-		GraphicsDeviceSpecification deviceSpecification;
-		deviceSpecification.ApplicationName = m_Specification.Name;
-		deviceSpecification.Headless = m_Window == nullptr;
-#if defined(ST_DEBUG)
-		deviceSpecification.EnableValidation = m_Specification.GraphicsValidation.value_or(true);
-#else
-		deviceSpecification.EnableValidation = m_Specification.GraphicsValidation.value_or(false);
-#endif
-
-		m_GraphicsDevice = GraphicsDevice::Create(deviceSpecification);
-		if (!m_GraphicsDevice)
-			return false;
-
-		if (m_Window && !m_GraphicsDevice->CreateSwapchain(*m_Window, m_Window->IsVSync()))
+		std::string error;
+		if (!m_Modules.Create(m_Specification.Modules, &error))
 		{
-			m_GraphicsDevice.reset();
+			Input::SetWindow(nullptr);
+			m_Window.reset();
+			ReportFatalError(m_Specification.Name, fmt::format("{} cannot start: {}.", m_Specification.Name, error));
 			return false;
 		}
 
-		RendererSpecification rendererSpecification;
-		rendererSpecification.TransferQueueUploads = m_Specification.TransferQueueUploads;
-		if (!Renderer::Init(*m_GraphicsDevice, rendererSpecification))
+		EngineContext context { *this, m_Window.get(), m_Modules };
+		for (EngineModule* module : m_Modules.GetAll())
 		{
-			m_GraphicsDevice.reset();
+			if (module->OnInit(context))
+			{
+				m_StartedModules++;
+				continue;
+			}
+			ST_CORE_CRITICAL("Engine module '{}' could not start; the application cannot run", module->GetName());
+			// The person learns what the module describes once nothing of the program is left on the screen: the modules that
+			// started end in their usual order, then the window, which would never show anything, closes. The layers those
+			// modules pushed (ImGui's overlay) go first, as in ~Application, so that no layer outlives what it uses; the
+			// program's own layers do not exist yet.
+			const EngineModuleStartFailure failure = module->GetStartFailure();
+			m_LayerStack.Clear();
+			ShutDownModules();
+			Input::SetWindow(nullptr);
+			m_Window.reset();
+			if (!failure.Problem.empty())
+				ReportFatalError(m_Specification.Name, failure.Problem, failure.Advice);
 			return false;
 		}
 		return true;
+	}
+
+	void Application::ShutDownModules()
+	{
+		// Assets own GPU resources and their manager waits for load jobs: modules release them (OnRelease) while the job
+		// system and the graphics device still exist.
+		const std::span<EngineModule* const> started = GetStartedModules();
+		for (auto it = started.rbegin(); it != started.rend(); ++it)
+			(*it)->OnRelease();
+
+		ExecuteMainThreadQueue();
+		JobSystem::Shutdown();
+		ExecuteMainThreadQueue();
+
+		for (auto it = started.rbegin(); it != started.rend(); ++it)
+			(*it)->OnShutdown();
+		m_StartedModules = 0;
 	}
 
 	void Application::PushLayer(Layer* layer)
@@ -206,6 +190,12 @@ namespace Strata
 		EventDispatcher dispatcher(event);
 		dispatcher.Dispatch<WindowResizeEvent>(ST_BIND_EVENT_FN(OnWindowResize));
 
+		for (EngineModule* module : GetStartedModules())
+		{
+			if (event.Handled)
+				break;
+			module->OnEvent(event);
+		}
 		for (auto it = m_LayerStack.rbegin(); it != m_LayerStack.rend(); ++it)
 		{
 			if (event.Handled)
@@ -266,17 +256,23 @@ namespace Strata
 			if (m_Running)
 				m_FramePacer.WaitForNextFrame();
 		}
-		ProcessBackBufferCaptures(false);
+
+		// What the last frame posted for the main thread (a screenshot answered without the Graphics module, a job's
+		// result) runs as the next frame would have run it: while the layers that asked for it still exist, and before
+		// main reads the exit code it may set.
+		ExecuteMainThreadQueue();
 
 		OnShutdown();
-		if (m_GraphicsDevice)
-			m_GraphicsDevice->WaitForIdle();
+		const std::span<EngineModule* const> started = GetStartedModules();
+		for (auto it = started.rbegin(); it != started.rend(); ++it)
+			(*it)->OnStop();
 	}
 
 	bool Application::RunFrame(Timestep timestep)
 	{
-		// The frame's work time (GetLastFrameWorkTime) leaves out the graphics device's waits and back buffer captures. The
-		// frame profiler's frame is the same: it is ended with that work time, and a skipped frame is never ended.
+		// The frame's work time (GetLastFrameWorkTime) leaves out what the modules wait for and what they do after the
+		// frame's work (OnEndFrame). The frame profiler's frame is the same: it is ended with that work time, and a skipped
+		// frame is never ended.
 		const double frameStart = Time::GetTime();
 		FrameProfiler& profiler = FrameProfiler::Get();
 		profiler.BeginFrame();
@@ -289,104 +285,45 @@ namespace Strata
 			{
 				m_Window->ProcessEvents();
 				m_Minimized = m_Window->IsMinimized();
-				if (m_GraphicsDevice && m_Window->IsVSync() != m_GraphicsDevice->IsVSync())
-					m_GraphicsDevice->SetVSync(m_Window->IsVSync());
 			}
 		}
-
-		if (!m_GraphicsDevice)
-			ProcessBackBufferCaptures(false); // Nothing will ever be rendered
 
 		if (m_Minimized)
 		{
 			// Avoid spinning at 100% CPU while minimized.
-			std::this_thread::sleep_for(std::chrono::milliseconds(16));
+			std::this_thread::sleep_for(c_SkippedFrameWait);
 			return false;
 		}
 
-		// Waits for the GPU to finish an earlier frame and for the display to hand out an image.
-		double deviceWaitTime = 0.0;
-		if (m_GraphicsDevice)
+		const std::span<EngineModule* const> modules = GetStartedModules();
+		EngineFrame frame { timestep, 0.0, m_LayerStack };
+		for (EngineModule* module : modules)
 		{
-			const double waitStart = Time::GetTime();
-			const bool began = m_GraphicsDevice->BeginFrame();
-			deviceWaitTime = Time::GetTime() - waitStart;
-			// A device that cannot render this frame (e.g. swapchain mid-resize) skips the whole frame.
-			if (!began)
+			switch (module->OnBeginFrame(frame))
 			{
-				if (m_GraphicsDevice->IsDeviceLost())
-				{
+				case EngineFrameAction::Continue:
+					break;
+				case EngineFrameAction::Skip:
+					std::this_thread::sleep_for(c_SkippedFrameWait);
+					return false;
+				case EngineFrameAction::Close:
 					Close();
 					return false;
-				}
-				std::this_thread::sleep_for(std::chrono::milliseconds(16));
-				return false;
 			}
 		}
-		Renderer::BeginFrame();
 
 		for (Layer* layer : m_LayerStack)
 			layer->OnUpdate(timestep);
+		for (EngineModule* module : modules)
+			module->OnUpdate(frame);
+		for (EngineModule* module : modules)
+			module->OnRenderUI(frame);
+		m_LastFrameWorkTime = Time::GetTime() - frameStart - frame.WaitSeconds;
 
-		// Without an output device nothing pulls the mix: advance it by the frame time, so that sounds still progress and end.
-		if (AudioEngine::IsNullDevice())
-			AudioEngine::AdvanceNullDevice(timestep);
-		AudioEngine::Update();
-		RenderImGui();
-		m_LastFrameWorkTime = Time::GetTime() - frameStart - deviceWaitTime;
-
-		if (m_GraphicsDevice)
-		{
-			// A frame that drew nothing into the back buffer still presents (and captures) a defined image: black.
-			Renderer::PrepareBackBuffer();
-			ProcessBackBufferCaptures(true);
-			ST_PROFILE_STAGE("Present");
-			m_GraphicsDevice->EndFrame();
-		}
+		for (auto it = modules.rbegin(); it != modules.rend(); ++it)
+			(*it)->OnEndFrame(frame);
 		profiler.EndFrame(m_LastFrameWorkTime);
 		return true;
-	}
-
-	void Application::RequestBackBufferCapture(std::function<void(const ReadbackImage&)> callback)
-	{
-		std::scoped_lock<std::mutex> lock(m_CaptureMutex);
-		m_BackBufferCaptures.push_back(std::move(callback));
-	}
-
-	void Application::ProcessBackBufferCaptures(bool frameRendered)
-	{
-		std::vector<std::function<void(const ReadbackImage&)>> captures;
-		{
-			std::scoped_lock<std::mutex> lock(m_CaptureMutex);
-			captures.swap(m_BackBufferCaptures);
-		}
-		if (captures.empty())
-			return;
-
-		ReadbackImage image;
-		nvrhi::ITexture* backBuffer = frameRendered && m_GraphicsDevice ? m_GraphicsDevice->GetBackBuffer() : nullptr;
-		if (backBuffer && !Renderer::ReadTexture(backBuffer, image))
-		{
-			ST_CORE_ERROR("Back buffer capture failed");
-			image = ReadbackImage();
-		}
-		for (const auto& capture : captures)
-			capture(image);
-	}
-
-	void Application::RenderImGui()
-	{
-		if (!m_ImGuiLayer)
-			return;
-
-		ST_PROFILE_STAGE("Editor.UI");
-		m_ImGuiLayer->Begin();
-		for (Layer* layer : m_LayerStack)
-			layer->OnImGuiRender();
-
-		// The back buffer: the GPU waits for the display only from here on, after the frame's uploads and offscreen rendering.
-		Renderer::PrepareBackBuffer();
-		m_ImGuiLayer->End(m_GraphicsDevice->GetBackBufferFramebuffer());
 	}
 
 	bool Application::OnWindowResize(WindowResizeEvent& event)

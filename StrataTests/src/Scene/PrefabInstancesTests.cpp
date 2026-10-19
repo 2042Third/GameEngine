@@ -3,6 +3,7 @@
 #include "Scene/SceneTestUtils.h"
 
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/PrefabInstances.h>
 #include <Strata/Scene/Scene.h>

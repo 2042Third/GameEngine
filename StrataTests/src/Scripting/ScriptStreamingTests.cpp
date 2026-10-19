@@ -9,6 +9,7 @@
 #include "Strata/Renderer/Material.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include <algorithm>

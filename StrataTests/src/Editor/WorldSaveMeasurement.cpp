@@ -5,6 +5,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
+#include "Editor/SceneRecovery.h"
 #include "TestHelpers.h"
 
 #include <Strata/Core/FileSystem.h>

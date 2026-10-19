@@ -6,6 +6,8 @@
 #include "Strata/Renderer/Material.h"
 #include "TestHelpers.h"
 
+#include <nlohmann/json.hpp>
+
 #include <map>
 #include <memory>
 #include <string>

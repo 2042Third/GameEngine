@@ -1,8 +1,7 @@
 #include "stpch.h"
 #include "Strata/Asset/GltfImporter.h"
 
-#include "Strata/Animation/AnimationClip.h"
-#include "Strata/Animation/Skeleton.h"
+#include "Strata/Animation/AnimationTypes.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Asset/TextureImporter.h"
 #include "Strata/Core/FileSystem.h"
@@ -10,11 +9,18 @@
 #include "Strata/Math/Math.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
+
+#if ST_WITH_ANIMATION
+	#include "Strata/Animation/AnimationClip.h"
+	#include "Strata/Animation/AnimationComponents.h"
+	#include "Strata/Animation/Skeleton.h"
+#endif
 
 #include <cgltf.h>
 #include <glm/gtc/type_ptr.hpp>
@@ -237,8 +243,10 @@ namespace Strata
 					}
 				}
 
+#if ST_WITH_ANIMATION
 				// The skeleton first: skinned meshes bind to its joints.
 				ImportSkeleton();
+#endif
 
 				for (cgltf_size index = 0; index < m_Data->meshes_count; index++)
 				{
@@ -254,9 +262,11 @@ namespace Strata
 					}
 				}
 
+#if ST_WITH_ANIMATION
 				if (m_Context.IsCancelled())
 					return Fail(outError, "cancelled");
 				ImportAnimations();
+#endif
 
 				if (m_Context.IsCancelled())
 					return Fail(outError, "cancelled");
@@ -887,7 +897,14 @@ namespace Strata
 					const cgltf_size meshIndex = cgltf_mesh_index(m_Data.get(), node.mesh);
 					if (skinnable[meshIndex] < 0)
 						skinnable[meshIndex] = HasSkinAttributes(*node.mesh) ? 1 : 0;
+#if ST_WITH_ANIMATION
 					const cgltf_skin* skin = skinnable[meshIndex] ? node.skin : nullptr;
+#else
+					// Without the animation module skinned meshes are imported rigid, at their bind pose.
+					if (skinnable[meshIndex] && node.skin)
+						m_SkippedFeatures.insert("skins (the engine has no animation module)");
+					const cgltf_skin* skin = nullptr;
+#endif
 					std::vector<const cgltf_skin*>& skins = m_MeshSkins[meshIndex];
 					if (std::find(skins.begin(), skins.end(), skin) == skins.end())
 						skins.push_back(skin);
@@ -920,6 +937,7 @@ namespace Strata
 				return pose;
 			}
 
+#if ST_WITH_ANIMATION
 			// The model's skeleton ("Skeleton"): the joints of every skin and the nodes the animations move, with their ancestors
 			// (whose transforms carry them), parents first in the order of the node hierarchy. Then each skin's joints in it and
 			// its inverse bind matrices.
@@ -1049,11 +1067,11 @@ namespace Strata
 				subAsset.Data = skeleton->Serialize();
 				m_Result.SubAssets.push_back(std::move(subAsset));
 				m_SkeletonHandle = DeriveSubAssetHandle(m_Context.Handle, "Skeleton");
-				m_SkeletonJointCount = skeleton->GetJointCount();
 
 				for (cgltf_size skinIndex = 0; skinIndex < m_Data->skins_count; skinIndex++)
 					m_Skins[&m_Data->skins[skinIndex]] = ReadSkin(m_Data->skins[skinIndex], skinIndex);
 			}
+#endif
 
 			// A skin's joints in the skeleton and its inverse bind matrices; empty joints when it cannot be used.
 			MeshSkinBinding ReadSkin(const cgltf_skin& skin, cgltf_size skinIndex)
@@ -1499,6 +1517,7 @@ namespace Strata
 				m_MeshHandles[{ &source, skin }] = MeshImport { DeriveSubAssetHandle(m_Context.Handle, key), binding != nullptr };
 			}
 
+#if ST_WITH_ANIMATION
 			////////////////////////////////////////////////////////////////////////////////
 			// Animations
 			////////////////////////////////////////////////////////////////////////////////
@@ -1632,6 +1651,7 @@ namespace Strata
 				}
 				return channel;
 			}
+#endif
 
 			////////////////////////////////////////////////////////////////////////////////
 			// Hierarchy
@@ -1833,6 +1853,7 @@ namespace Strata
 					// animator), whatever their place in the file's hierarchy.
 					scene.SetParent(entity, skinned || joint != c_NoJoint ? parent : pending.Parent, false);
 					SetupEntity(entity, node);
+#if ST_WITH_ANIMATION
 					if (skinned)
 						entity.AddComponent<SkinComponent>().Animator = parent.GetUUID();
 					if (joint != c_NoJoint)
@@ -1852,6 +1873,7 @@ namespace Strata
 							transform.Scale = scale;
 						}
 					}
+#endif
 
 					for (cgltf_size child = node.children_count; child > 0; child--)
 						stack.push_back(PendingNode { node.children[child - 1], entity, pending.Depth + 1 });
@@ -1874,6 +1896,7 @@ namespace Strata
 				std::string error;
 				if (!AddHierarchy(scene, roots, root, error))
 					return Fail(outError, error);
+#if ST_WITH_ANIMATION
 				if (m_SkeletonHandle.IsValid())
 				{
 					// The model's animator: its skeleton, playing the first animation (a controller can take over).
@@ -1881,6 +1904,10 @@ namespace Strata
 					animator.Skeleton = m_SkeletonHandle;
 					animator.Clip = m_ClipHandles.empty() ? UUID::Null() : m_ClipHandles.front();
 				}
+#else
+				if (m_Data->animations_count > 0)
+					m_SkippedFeatures.insert("animations (the engine has no animation module)");
+#endif
 
 				Ref<Model> model = Model::CreateFromSnapshot(SceneSerializer::SerializeEntities(scene, { root }));
 				if (!model)
@@ -1909,7 +1936,6 @@ namespace Strata
 			std::vector<std::string> m_JointNames;
 			std::vector<glm::mat4> m_JointRestModel; // Per joint, its rest transform relative to the model's root
 			AssetHandle m_SkeletonHandle = UUID::Null();
-			uint32_t m_SkeletonJointCount = 0;
 			std::map<const cgltf_skin*, MeshSkinBinding> m_Skins; // Empty joints: the skin cannot be used
 			std::vector<AssetHandle> m_ClipHandles;
 		};

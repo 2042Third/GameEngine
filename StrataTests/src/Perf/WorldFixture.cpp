@@ -13,11 +13,16 @@
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Reflection/PropertyJson.h"
 #include "Strata/Renderer/Material.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/ComponentAccess.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+#endif
 
 #include <glm/gtc/quaternion.hpp>
 #include <spdlog/fmt/fmt.h>
@@ -60,8 +65,10 @@ namespace Strata::Tests
 			std::optional<DirectionalLightComponent> Light;
 			std::optional<SkyLightComponent> Sky;
 			std::optional<MeshRendererComponent> MeshRenderer;
+#if ST_WITH_PHYSICS
 			std::optional<RigidBodyComponent> Body;
 			std::optional<BoxColliderComponent> Collider;
+#endif
 		};
 
 		template<typename T>
@@ -86,10 +93,12 @@ namespace Strata::Tests
 				AddComponentJson(components, *entity.Sky);
 			if (entity.MeshRenderer)
 				AddComponentJson(components, *entity.MeshRenderer);
+#if ST_WITH_PHYSICS
 			if (entity.Body)
 				AddComponentJson(components, *entity.Body);
 			if (entity.Collider)
 				AddComponentJson(components, *entity.Collider);
+#endif
 
 			nlohmann::json json = nlohmann::json::object();
 			json["Components"] = std::move(components);
@@ -117,10 +126,12 @@ namespace Strata::Tests
 				entity.AddComponent<SkyLightComponent>(*description.Sky);
 			if (description.MeshRenderer)
 				entity.AddComponent<MeshRendererComponent>(*description.MeshRenderer);
+#if ST_WITH_PHYSICS
 			if (description.Body)
 				entity.AddComponent<RigidBodyComponent>(*description.Body);
 			if (description.Collider)
 				entity.AddComponent<BoxColliderComponent>(*description.Collider);
+#endif
 			if (description.Parent.IsValid())
 			{
 				const Entity parent = scene.GetEntityByUUID(description.Parent);
@@ -272,12 +283,15 @@ namespace Strata::Tests
 			entity.MeshRenderer->Mesh = BuiltinAssets::CubeMesh;
 			if (!layout.Materials.empty())
 				entity.MeshRenderer->Material = layout.Materials[cube % layout.Materials.size()];
+#if ST_WITH_PHYSICS
+			// Without the physics module the world has no colliders (a game built without it could not load them).
 			if (layout.Spec.Colliders && cube % c_WorldColliderInterval == 0)
 			{
 				entity.Body = RigidBodyComponent {};
 				entity.Body->Type = RigidBodyType::Static;
 				entity.Collider = BoxColliderComponent {};
 			}
+#endif
 			return entity;
 		}
 

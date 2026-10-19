@@ -1,7 +1,6 @@
 #include "stpch.h"
 #include "Strata/Asset/AssetDependencies.h"
 
-#include "Strata/Animation/AnimationController.h"
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Reflection/PropertyJson.h"
@@ -9,6 +8,10 @@
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/EntitySink.h"
 #include "Strata/Scene/SceneDocumentReader.h"
+
+#if ST_WITH_ANIMATION
+	#include "Strata/Animation/AnimationController.h"
+#endif
 
 #include <optional>
 #include <string_view>
@@ -53,7 +56,7 @@ namespace Strata
 		}
 
 		// The references of one entity object of a document.
-		void ScanEntityInto(const nlohmann::json& entity, const ComponentInfo* scriptInfo, ReferenceList& references)
+		void ScanEntityInto(const nlohmann::json& entity, ReferenceList& references)
 		{
 			const nlohmann::json* components = JsonUtils::Find(entity, "Components");
 			if (!components || !components->is_object())
@@ -65,20 +68,14 @@ namespace Strata
 				if (!info || !component.is_object())
 					continue;
 				ScanProperties(info->Properties, component, references);
-				// Script fields are data the properties cannot express: read them with the component's own reader.
-				if (info == scriptInfo && info->DeserializeExtra)
+				// Data the properties cannot express (script fields): its references, as the component reads them.
+				if (info->ExtraReferences.VisitJson)
 				{
-					ScriptComponent scripts;
-					if (!info->DeserializeExtra(&scripts, component, nullptr))
-						continue;
-					for (const ScriptEntry& script : scripts.Scripts)
+					info->ExtraReferences.VisitJson(component, [&references](PropertyType type, UUID value)
 					{
-						for (const ScriptFieldValue& field : script.Fields)
-						{
-							if (field.Type == PropertyType::Asset && std::holds_alternative<UUID>(field.Value))
-								references.Add(std::get<UUID>(field.Value));
-						}
-					}
+						if (type == PropertyType::Asset)
+							references.Add(value);
+					});
 				}
 			}
 		}
@@ -88,9 +85,8 @@ namespace Strata
 			const nlohmann::json* entities = JsonUtils::Find(snapshot, "Entities");
 			if (!entities || !entities->is_array())
 				return;
-			const ComponentInfo* scriptInfo = ComponentRegistry::Find<ScriptComponent>();
 			for (const nlohmann::json& entity : *entities)
-				ScanEntityInto(entity, scriptInfo, references);
+				ScanEntityInto(entity, references);
 		}
 
 		// Collects the references of a document's entities as SceneDocumentReader hands them over, one entity's DOM at a time:
@@ -100,20 +96,19 @@ namespace Strata
 		{
 		public:
 			explicit ReferenceSink(ReferenceList& references)
-				: m_References(references), m_ScriptInfo(ComponentRegistry::Find<ScriptComponent>())
+				: m_References(references)
 			{
 			}
 
 			bool ReadEntity(const nlohmann::json& entity, std::string*) override
 			{
-				ScanEntityInto(entity, m_ScriptInfo, m_References);
+				ScanEntityInto(entity, m_References);
 				return true;
 			}
 
 			bool Finish(std::string*) override { return true; }
 		private:
 			ReferenceList& m_References;
-			const ComponentInfo* m_ScriptInfo = nullptr;
 		};
 
 		std::optional<SceneDocumentKind> GetEntityDocumentKind(AssetType type)
@@ -142,7 +137,7 @@ namespace Strata
 
 	void AssetDependencies::ScanEntity(const nlohmann::json& entity, ReferenceList& references)
 	{
-		ScanEntityInto(entity, ComponentRegistry::Find<ScriptComponent>(), references);
+		ScanEntityInto(entity, references);
 	}
 
 	void AssetDependencies::ScanEntities(const nlohmann::json& snapshot, std::vector<AssetHandle>& outReferences)
@@ -202,12 +197,18 @@ namespace Strata
 		}
 		else if (type == AssetType::AnimationController)
 		{
+#if ST_WITH_ANIMATION
 			// The clips of its states.
 			const std::optional<AnimationControllerData> controller = AnimationController::DataFromJson(*content, outError);
 			if (!controller)
 				return false;
 			for (const AnimationState& state : controller->States)
 				references.Add(state.Clip);
+#else
+			if (outError)
+				*outError = "animation controllers cannot be read: the engine has no animation module";
+			return false;
+#endif
 		}
 		else
 		{

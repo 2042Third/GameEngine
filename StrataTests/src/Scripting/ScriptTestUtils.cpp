@@ -2,7 +2,9 @@
 
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Platform.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scripting/ScriptModule.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 
 namespace Strata::Tests
 {
