@@ -47,7 +47,8 @@ namespace Strata
 		// Editor views (the editor camera while the game is not playing, see ViewportView::EditorView) light scenes that
 		// have no light of their own with a preview sun and sky (SceneRenderOptions::PreviewEnvironment).
 		bool PreviewLighting = true;
-		// Editor views draw the game's screen-space text (its HUD); off, it does not cover the scene being edited.
+		// Editor views draw the game's screen-space UI (its HUD text and UI canvases), and a click selects a UI element; off, it
+		// does not cover the scene being edited.
 		bool ShowGameUI = false;
 		// The 2D canvas mode (edit mode): the viewport shows a game UI canvas at its reference aspect ratio, through the
 		// scene's camera with its UI, to place and size UI elements with handles (Panels/CanvasModeView).

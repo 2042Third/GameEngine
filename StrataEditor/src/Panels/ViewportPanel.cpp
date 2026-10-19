@@ -415,7 +415,8 @@ namespace Strata
 		UI::ToggleChip("Viewport.PreviewLighting", Icons::SunMedium, "Preview lighting", &settings.PreviewLighting, previewTooltip, previewNeeded);
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.GameUI", Icons::Gamepad2, "Game UI", &settings.ShowGameUI,
-			"Show the game's screen-space text (its HUD) in the editor view; the game and the scene camera always show it");
+			"Show the game's screen-space UI (its HUD text and UI canvases) in the editor view, where a click selects a UI element; "
+			"the game and the scene camera always show it");
 		ImGui::SameLine();
 		UI::ToggleChip("Viewport.CanvasMode", Icons::Frame, "2D", &settings.CanvasMode,
 			"Show the selection's UI canvas in 2D at its reference aspect ratio, to place and size its elements with handles");

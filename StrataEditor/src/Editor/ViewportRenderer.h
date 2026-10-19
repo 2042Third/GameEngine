@@ -49,7 +49,7 @@ namespace Strata
 	// simulating use the editor camera. Nullopt (with an error) only for ViewportCameraSource::Scene without a camera.
 	std::optional<ViewportView> ResolveViewportView(EditorContext& context, ViewportCameraSource source, float aspectRatio, std::string* outError = nullptr);
 
-	// How a view shows the scene beyond the overlays: preview lighting and the game's screen-space text, from the viewport
+	// How a view shows the scene beyond the overlays: preview lighting and the game's screen-space UI, from the viewport
 	// settings for editor views (ViewportView::EditorView), as the game shows them otherwise.
 	SceneRenderOptions GetViewportRenderOptions(const ViewportView& view, const ViewportSettings& settings);
 

@@ -137,8 +137,9 @@ editor started with `--no-gpu` (use `--headless`):
   coarser than needed, 0 once the view is complete).
 - **Editor views are not the game's view.** With the editor camera outside play mode, a scene without any light (no
   directional, point, spot or sky light) is lit by *preview lighting* (a sun and a procedural sky that the game will not
-  have: the result says `"previewLighting": true`), and the game's screen-space text (its HUD) is hidden
-  (`hiddenScreenSpaceTexts` counts it). To see what a player sees, capture with `{"camera": "scene"}` (or while playing).
+  have: the result says `"previewLighting": true`), and the game's screen-space UI (its HUD text and UI canvases) is
+  hidden (`hiddenScreenSpaceTexts` and `ui.hiddenCanvases` count it; `gameUI` shows it, and a click then selects a UI
+  element). To see what a player sees, capture with `{"camera": "scene"}` (or while playing).
   `viewport.getSettings` / `viewport.setSettings {previewLighting?, gameUI?, grid?, selectionOutline?, sceneGizmos?,
   allColliders?, stats?, gizmo?, space?, debugView?, ...}` change these view settings (no undo step; saved with the
   project's editor state). Collider shapes show for the selection only unless `allColliders` is on; far away lights and

@@ -503,7 +503,7 @@ namespace Strata
 		registry.Register({ "viewport.getSettings",
 			"The viewport's view settings (saved with the project's editor state): which editor overlays are drawn (grid, selectionOutline, sceneGizmos, "
 			"stats; allColliders: collider shapes of every entity instead of only the selection's), previewLighting (editor views light scenes without any light of their own with a preview sun and sky), gameUI (editor views draw the "
-			"game's screen-space text), canvasMode (the 2D canvas mode for placing game UI), the gizmo mode and space, whether gizmo drags snap, the snap steps, and debugView (\"none\", or \"streaming\" / "
+			"game's screen-space UI, its HUD text and UI canvases, and a click selects a UI element), canvasMode (the 2D canvas mode for placing game UI), the gizmo mode and space, whether gizmo drags snap, the snap steps, and debugView (\"none\", or \"streaming\" / "
 			"\"lod\" / \"mip\": the image colored by streaming state, level of detail or the mip levels textures lack).",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
@@ -522,7 +522,8 @@ namespace Strata
 				{ "stats", BoolSchema("Show frame time, draw calls and loading assets over the image") },
 				{ "previewLighting", BoolSchema("Editor views light scenes without any light of their own (no directional, point, spot or sky light) "
 					"with a preview sun and sky (never part of the scene or the game)") },
-				{ "gameUI", BoolSchema("Editor views draw the game's screen-space text (its HUD); off by default so the HUD does not cover the scene") },
+				{ "gameUI", BoolSchema("Editor views draw the game's screen-space UI (its HUD text and UI canvases), and a click in the view selects "
+					"a UI element; off by default so the HUD does not cover the scene") },
 				{ "canvasMode", BoolSchema("The 2D canvas mode (edit mode): the viewport shows the selection's UI canvas (else the first) at its reference "
 					"aspect ratio through the scene's camera with the game UI, with handles to move and resize UI elements") },
 				{ "gizmo", { { "type", "string" }, { "enum", { "None", "Translate", "Rotate", "Scale" } }, { "description", "Transform gizmo of the viewport" } } },
