@@ -156,13 +156,13 @@ TEST_SUITE("Scene.Systems")
 		const std::vector<SceneSystemDescriptor>& descriptors = SceneSystemRegistry::GetAll();
 		REQUIRE(descriptors.size() == 5);
 		// Each names another module's system: soft constraints, so that the engine runs without that module.
-		for (size_t index = 1; index < descriptors.size(); index++)
+		for (const SceneSystemDescriptor& descriptor : descriptors)
 		{
-			CAPTURE(descriptors[index].Name);
-			CHECK(descriptors[index].After.empty());
-			CHECK(descriptors[index].Before.empty());
+			CAPTURE(descriptor.Name);
+			CHECK(descriptor.After.empty());
+			CHECK(descriptor.Before.empty());
 		}
-		CHECK(descriptors[0].Before == std::vector<std::string> { "Scripting" });
+		CHECK(descriptors[0].BeforeIfPresent == std::vector<std::string> { "Scripting" });
 		CHECK(descriptors[1].AfterIfPresent.empty());
 		CHECK(descriptors[2].AfterIfPresent == std::vector<std::string> { "Scripting" });
 		CHECK(descriptors[2].BeforeIfPresent == std::vector<std::string> { "Physics" });

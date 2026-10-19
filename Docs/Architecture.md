@@ -759,6 +759,7 @@ are, in update order:
 
 | System | Class | Modes | Order | Role |
 | --- | --- | --- | --- | --- |
+| UI | `GameUISystem` | Play | Before Scripting (soft) | The game UI's input: hit tests, pointer capture, focus, navigation and widget events (see [Game UI](#game-ui)). |
 | Scripting | `ScriptSystem` | Play | | Script instances of the active `ScriptEngine` (null engine: no scripts). |
 | Animation | `AnimationSystem` | Play | After Scripting, Before Physics (soft) | Animators in `OnUpdate`: poses, root motion, attachments, events (see [Animation](#animation)). |
 | Physics | `PhysicsSystem` | Play, Simulate | After Scripting (soft) | Jolt world; steps in `OnFixedUpdate`, then dispatches contacts. |
@@ -788,9 +789,10 @@ are, in update order:
 - **Per-frame calls.** A frame calls `OnUpdate`, `OnFixedUpdate` and `OnLateUpdate` only on the systems whose descriptor
   asks for them (`SceneSystemDescriptor::CallsUpdate`, `CallsFixedUpdate`, `CallsLateUpdate`; all three for a descriptor
   built by hand). `MakeSceneSystemDescriptor<T>` sets them from the callbacks `T` overrides, told apart at compile time by
-  the type of `&T::OnUpdate`, so the built-ins cost an idle play frame seven calls (Scripting all three, Animation
-  `OnUpdate`, Physics `OnUpdate` and `OnFixedUpdate`, Audio `OnLateUpdate`) and a new system adds only the phases it uses
-  (`Perf.Scene.IdlePlayFrame1M`). `OnUpdateRuntime` walks one list of systems per phase, built when the scene starts. A
+  the type of `&T::OnUpdate`, so the built-ins cost an idle play frame eight calls (UI `OnUpdate`, Scripting all three,
+  Animation `OnUpdate`, Physics `OnUpdate` and `OnFixedUpdate`, Audio `OnLateUpdate`) and a new system adds only the
+  phases it uses (`Perf.Scene.IdlePlayFrame1M`). `OnUpdateRuntime` walks one list of systems per phase, built when the
+  scene starts. A
   paused frame (no step due) calls `OnPausedUpdate` instead (`CallsPausedUpdate`; of the built-ins only Animation's), for
   work the paused frame shows that advances no time.
 - **Profiling.** A system's start and update callbacks run in the frame profiler stage its descriptor names
@@ -2155,8 +2157,8 @@ scene without a primary camera that has screen-space UI (a main menu) as that UI
 missing-camera message (`SceneRenderOptions::OverlayScene`).
 
 **Input** (`GameUISystem`, `GameUIHitTest`, `Input/UIActions`). The "UI" scene system runs in Play mode before the
-scripts (stage `Scene.UI`), so a click the UI takes is hidden from the scripts' `OnUpdate` of the same frame and widget
-events reach them first. Each update it lays the canvases out for the game's input screen (the pixels `IGameWindow`
+scripts (stage `Scene.UI`; a soft `BeforeIfPresent`, so an engine without the scripting module keeps its game UI), so a
+click the UI takes is hidden from the scripts' `OnUpdate` of the same frame and widget events reach them first. Each update it lays the canvases out for the game's input screen (the pixels `IGameWindow`
 renders, input coordinates scaled to them) and keeps a uniform grid of raycast-target rects per canvas
 (`GameUIHitTester`, rebuilt when the layout or what hit tests see changes: `GameUIScene::GetHitStamp`), so a query
 compares the targets of one cell: the topmost by canvas sort order, then the last drawn, rect edges half-open. World-space

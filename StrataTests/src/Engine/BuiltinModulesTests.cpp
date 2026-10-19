@@ -277,6 +277,21 @@ TEST_SUITE("Engine.Modules")
 	}
 #endif
 
+#if ST_TESTS_HAVE_EVERY_MODULE
+	TEST_CASE("Without the scripting module the game UI module registers and orders its system")
+	{
+		// The UI system runs before the scripts only when the engine has them (BeforeIfPresent): the game UI works without.
+		const std::filesystem::path scene = FileSystem::FromUTF8(STRATA_FEATURE_TEST_DIR) / "Assets" / "Scenes" / "FeatureSub.stscene";
+		const Process::RunResult result = RunHelper({ "--strata-test-helper=register-without", "Scripting", FileSystem::ToUTF8(scene) });
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
+		CHECK(result.Output.find("modules: Scene Renderer Physics Audio Animation GameUI\n") != std::string::npos);
+		CHECK(result.Output.find("systems: Animation Physics Audio UI\n") != std::string::npos);
+	}
+#endif
+
 	TEST_CASE("Built-in asset factories are accepted only for built-in handles")
 	{
 		const uint64_t before = Log::GetBuffer().GetLatestSequence();
