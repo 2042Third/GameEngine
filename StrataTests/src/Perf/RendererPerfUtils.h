@@ -27,8 +27,9 @@ namespace Strata::Tests::Perf
 	{
 		Measurement CPU;
 		std::optional<Measurement> GPU;
-		uint32_t GPUFrames = 0;     // Measured frames with GPU times
-		double TimerCostMs = 0.0;   // GPUProfilerStats::CPUMilliseconds per measured frame
+		uint32_t GPUFrames = 0; // Measured frames with GPU times
+		// GPUProfilerStats::CPUMilliseconds of each measured frame (its writes, and the resolve in Renderer::BeginFrame).
+		Measurement TimerCost;
 	};
 
 	// The renderers whose frames are measured redraw every shadow cascade every frame (SceneRendererSpecification::
@@ -50,15 +51,13 @@ namespace Strata::Tests::Perf
 		profiler.Reset();
 		GPUProfiler& gpuProfiler = Renderer::GetGPUProfiler();
 		std::vector<double> samples;
-		double timerCostStart = 0.0;
+		std::vector<double> timerCosts;
 		uint64_t firstMeasured = 0;
 		for (int frame = 0; frame < warmup + measured; frame++)
 		{
 			if (frame == warmup)
-			{
-				timerCostStart = gpuProfiler.GetStats().CPUMilliseconds;
 				firstMeasured = profiler.GetTotalFrameCount();
-			}
+			const double timerCostStart = gpuProfiler.GetStats().CPUMilliseconds;
 			profiler.BeginFrame();
 			REQUIRE(gpu.GetDevice().BeginFrame());
 			Renderer::BeginFrame();
@@ -68,11 +67,14 @@ namespace Strata::Tests::Perf
 			gpu.GetDevice().EndFrame();
 			profiler.EndFrame(milliseconds / 1000.0);
 			if (frame >= warmup)
+			{
 				samples.push_back(milliseconds);
+				timerCosts.push_back(gpuProfiler.GetStats().CPUMilliseconds - timerCostStart);
+			}
 		}
 		FrameMeasurement result;
 		result.CPU = Summarize(samples);
-		result.TimerCostMs = (gpuProfiler.GetStats().CPUMilliseconds - timerCostStart) / static_cast<double>(std::max(measured, 1));
+		result.TimerCost = Summarize(timerCosts);
 
 		// The last frames' GPU times: their slots close with the next renderer frame, and resolve once the GPU is idle.
 		gpu.GetDevice().WaitForIdle();
@@ -108,14 +110,24 @@ namespace Strata::Tests::Perf
 		return entities;
 	}
 
-	// The median GPU busy time of the frames MeasureFrames measured; 0 (with a message) on a device without timestamps.
+	// Whether GPU metrics are measured: on devices that write timestamps. Without them, tests leave the metrics out (a 0 would
+	// pass any budget).
+	inline bool MeasuresGPU()
+	{
+		const bool timestamps = Renderer::GetGraphicsDevice().GetInfo().SupportsTimestamps;
+		if (!timestamps)
+			MESSAGE("No GPU times: the device writes no timestamps");
+		return timestamps;
+	}
+
+	// The median GPU busy time of the frames MeasureFrames measured, on a device that writes timestamps (MeasuresGPU): their
+	// GPU times must have arrived, so a regression that stops them fails instead of recording 0 ms.
 	inline double MeasureGPU(const FrameMeasurement& measurement)
 	{
-		if (!measurement.GPU)
-		{
-			MESSAGE("No GPU times: the device writes no timestamps");
-			return 0.0;
-		}
+		REQUIRE(Renderer::GetGPUProfiler().IsEnabled());
+		REQUIRE(measurement.GPU.has_value());
+		// Every measured frame's times arrive (MeasureFrames waits for the GPU at the end); allow a few dropped ones.
+		CHECK(measurement.GPUFrames * 10 >= measurement.CPU.Iterations * 9);
 		return measurement.GPU->MedianMs;
 	}
 

@@ -98,9 +98,11 @@ ctest --preset macos-debug -LE perf
   steps 1,000 character controllers; `PerfGPU.Renderer.Skinned1000` renders 1,000 skinned characters posed every frame
   and `IdleFrame3kStreamedTextures` times an idle frame of 3,000 settled streamed textures in view; the renderer's GPU
   side comes from `Perf/RendererPerfUtils.h` (`Perf::MeasureFrames` runs frames as an application does and collects the
-  GPU's busy time of each, `Perf::MeasureGPU` its median): `Render100kCubesGPU` is the GPU's median busy time of the 100,000
-  cubes, `Render1MCubes` and `Render1MCubesGPU` the CPU's and the GPU's for a million (the GPU-driven path's CPU cost does
-  not grow with instances: target 1.5 ms) and `GPUTimerCost` the GPU profiler's own CPU time per frame (target 0.05 ms);
+  GPU's busy time of each, `Perf::MeasureGPU` its median, which fails when a device that writes timestamps delivered none;
+  without timestamps the GPU metrics are left out, `Perf::MeasuresGPU`): `Render100kCubesGPU` is the GPU's median busy time
+  of the 100,000 cubes, `Render1MCubes` and `Render1MCubesGPU` the CPU's and the GPU's for a million (the GPU-driven path's
+  CPU cost does not grow with instances: target 1.5 ms) and `GPUTimerCost` the GPU profiler's own CPU time in the median
+  frame (target 0.05 ms);
   `Perf.Editor` adds `FindReferences10k`, `JournalPerCommand`, the recovery journal's write (the frames and the I/O
   threads' time, `RecoveryWriteIOTime100k`) and snapshot, and the longest frame while `scene.open` opens 10,000 prefab
   instances (`SceneOpen10kPrefabInstancesMaxFrame`); `Perf.EditorPanels` and `PerfGPU.Editor` time the Content Browser

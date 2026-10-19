@@ -52,7 +52,7 @@ namespace
 		const DrawnCounts drawn = GetDrawnCounts(renderer);
 		MESSAGE(name, ": ", measurement.CPU.MedianMs, " ms median, GPU ", measurement.GPU ? measurement.GPU->MedianMs : 0.0, " ms busy (",
 			std::string(stats.GPUDriven ? "GPU-driven, " : ""), std::string(stats.FeedbackRequests ? "requests from feedback, " : ""), drawn.Instances, " instances, ", drawn.Draws, " draws, ", stats.DrawCommands, " draw commands, ", drawn.Triangles,
-			" triangles, extract ", stats.ExtractMs, " ms, sort ", stats.SortMs, " ms; GPU timer ", measurement.TimerCostMs, " ms per frame)");
+			" triangles, extract ", stats.ExtractMs, " ms, sort ", stats.SortMs, " ms; GPU timer ", measurement.TimerCost.MedianMs, " ms per frame)");
 		return measurement;
 	}
 
@@ -76,16 +76,25 @@ TEST_SUITE("PerfGPU.Renderer")
 			SceneRenderer renderer(Perf::MeasuredRendererSpecification());
 			renderer.SetViewportSize(c_Width, c_Height);
 			// The median frame (every attempt renders its own warm-up and measured frames); for 100,000 cubes also the GPU's
-			// median busy time and what timing the GPU costs the CPU per frame (GPUProfiler's own time: writes, resolves).
+			// median busy time and what timing the GPU costs the CPU per frame (GPUProfiler's own time: writes, resolves). The
+			// timer cost is the median frame's too: each frame writes and resolves the same timestamps, so a frame the machine
+			// preempted says nothing about it. GPU metrics only on devices that write timestamps.
+			const bool measuresGPU = Perf::MeasuresGPU();
 			if (count == 100'000)
 			{
-				Perf::CheckBudgetsConfirmed({ "PerfGPU.Renderer.Render100kCubes", "PerfGPU.Renderer.Render100kCubesGPU", "PerfGPU.Renderer.GPUTimerCost" }, [&]
+				std::vector<std::string> keys = { "PerfGPU.Renderer.Render100kCubes", "PerfGPU.Renderer.GPUTimerCost" };
+				if (measuresGPU)
+					keys.push_back("PerfGPU.Renderer.Render100kCubesGPU");
+				Perf::CheckBudgetsConfirmed(keys, [&]
 				{
 					const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(count), "100k cubes");
 					CHECK(GetDrawnCounts(renderer).Instances == count);
 					CHECK(renderer.GetStats().InstanceBytesUploaded == 0); // A still frame uploads nothing
-					return Perf::MetricValues { { "PerfGPU.Renderer.Render100kCubes", measurement.CPU.MedianMs },
-						{ "PerfGPU.Renderer.Render100kCubesGPU", Perf::MeasureGPU(measurement) }, { "PerfGPU.Renderer.GPUTimerCost", measurement.TimerCostMs } };
+					Perf::MetricValues values { { "PerfGPU.Renderer.Render100kCubes", measurement.CPU.MedianMs },
+						{ "PerfGPU.Renderer.GPUTimerCost", measurement.TimerCost.MedianMs } };
+					if (measuresGPU)
+						values.emplace("PerfGPU.Renderer.Render100kCubesGPU", Perf::MeasureGPU(measurement));
+					return values;
 				});
 				continue;
 			}
@@ -93,13 +102,18 @@ TEST_SUITE("PerfGPU.Renderer")
 			// the GPU's visibility feedback); far ones below half a pixel are left out of the draws.
 			if (count == 1'000'000)
 			{
-				Perf::CheckBudgetsConfirmed({ "PerfGPU.Renderer.Render1MCubes", "PerfGPU.Renderer.Render1MCubesGPU" }, [&]
+				std::vector<std::string> keys = { "PerfGPU.Renderer.Render1MCubes" };
+				if (measuresGPU)
+					keys.push_back("PerfGPU.Renderer.Render1MCubesGPU");
+				Perf::CheckBudgetsConfirmed(keys, [&]
 				{
 					const Perf::FrameMeasurement measurement = MeasureRender(gpu, renderer, scene, GridView(count), "1M cubes");
 					CHECK(GetDrawnCounts(renderer).VisibleProxies == count);
 					CHECK(renderer.GetStats().InstanceBytesUploaded == 0);
-					return Perf::MetricValues { { "PerfGPU.Renderer.Render1MCubes", measurement.CPU.MedianMs },
-						{ "PerfGPU.Renderer.Render1MCubesGPU", Perf::MeasureGPU(measurement) } };
+					Perf::MetricValues values { { "PerfGPU.Renderer.Render1MCubes", measurement.CPU.MedianMs } };
+					if (measuresGPU)
+						values.emplace("PerfGPU.Renderer.Render1MCubesGPU", Perf::MeasureGPU(measurement));
+					return values;
 				});
 				continue;
 			}
