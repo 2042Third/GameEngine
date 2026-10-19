@@ -4,12 +4,14 @@
 #include "Editor/EditorContext.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/EditorWorld.h"
+#include "Editor/SceneRaycast.h"
 #include "Editor/WorldProjectUtils.h"
 #include "EditorLayer.h"
 #include "Panels/StreamingPanel.h"
 #include "Physics/PhysicsTestUtils.h"
 #include "UI/ItemProbe.h"
 
+#include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Physics/PhysicsSystem.h>
@@ -862,5 +864,41 @@ TEST_SUITE("Editor.World")
 		CHECK(wroteTower);
 		CHECK(FileSystem::Exists(project.Directory / "Assets" / "Worlds" / "Gen" / "Ground" / "6_0.stscene.meta"));
 		CHECK(project.ReadWorld()->FindCell(WorldCellKey { 1, 6, 0 }) >= 0);
+	}
+}
+
+TEST_SUITE("World.Coordinates")
+{
+	TEST_CASE("The editor's rays hit the entities of a world 20 km out")
+	{
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		RunCommandToCompletion(context, commands, "project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory("WorldCoordinatesRay") / "Game") }, { "name", "Game" } });
+		// A floor of one 32 m cell (its top at y = 0) and a unit cube resting on it, around (20,016, 0, 16).
+		auto create = [&](const char* name, const glm::vec3& position, const glm::vec3& scale)
+		{
+			const nlohmann::json created = RunCommandToCompletion(context, commands, "entity.create", { { "name", name }, { "components", {
+				{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } },
+				{ "Transform", { { "Translation", { position.x, position.y, position.z } }, { "Scale", { scale.x, scale.y, scale.z } } } } } } });
+			return *UUIDFromJson(created["id"]);
+		};
+		const glm::vec3 there(20'016.0f, 0.0f, 16.0f);
+		const UUID floor = create("Far Floor", there + glm::vec3(0.0f, -0.5f, 0.0f), glm::vec3(32.0f, 1.0f, 32.0f));
+		const UUID cube = create("Far Cube", there + glm::vec3(0.0f, 0.5f, 0.0f), glm::vec3(1.0f));
+		Scene& scene = *context.GetActiveScene();
+
+		std::optional<SceneRayHit> hit = SceneRaycast::Cast(scene, Ray(there + glm::vec3(0.2f, 10.0f, 0.2f), glm::vec3(0.0f, -1.0f, 0.0f)));
+		REQUIRE(hit);
+		CHECK(hit->HitEntity.GetUUID() == cube);
+		CHECK(std::abs(hit->Point.y - 1.0f) < 0.005f);
+		hit = SceneRaycast::Cast(scene, Ray(there + glm::vec3(10.0f, 10.0f, 10.0f), glm::vec3(0.0f, -1.0f, 0.0f)));
+		REQUIRE(hit);
+		CHECK(hit->HitEntity.GetUUID() == floor);
+		CHECK(std::abs(hit->Point.y) < 0.005f);
+		// From the side, 20 km out: the cube's face.
+		hit = SceneRaycast::Cast(scene, Ray(there + glm::vec3(-8.0f, 0.5f, 0.0f), glm::vec3(1.0f, 0.0f, 0.0f)));
+		REQUIRE(hit);
+		CHECK(hit->HitEntity.GetUUID() == cube);
+		CHECK(std::abs(hit->Point.x - (there.x - 0.5f)) < 0.005f);
 	}
 }
