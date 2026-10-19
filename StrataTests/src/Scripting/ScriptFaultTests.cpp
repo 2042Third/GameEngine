@@ -85,7 +85,6 @@ namespace
 			text += "\n  " + DescribeScriptCodeLocation(frame) + (frame.Inlined ? " (inlined)" : "");
 		return text;
 	}
-
 }
 
 TEST_SUITE("Scripting.Faults")
@@ -309,16 +308,6 @@ TEST_SUITE("Scripting.Faults")
 		sceneB.OnRuntimeStop();
 	}
 
-	TEST_CASE("A module that crashes while loading is refused")
-	{
-		ScriptEngine engine;
-		std::string error;
-		CHECK_FALSE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_LOADFAULT), &error));
-		CHECK(error.find("crashed") != std::string::npos);
-		CHECK_FALSE(engine.IsModuleLoaded());
-		CHECK_FALSE(engine.IsFaulted());
-	}
-
 	TEST_CASE("Reloading a crashed module recovers")
 	{
 		const std::filesystem::path path = CreateTemporaryDirectory("ScriptFaultReload") / FileSystem::FromUTF8(ScriptEngine::GetModuleFileName("Game"));
@@ -419,5 +408,21 @@ TEST_SUITE("Scripting.Exceptions")
 		scene.OnRuntimeStop();
 		CHECK(GetLog(scene) == "Healthy.Lifecycle.Destroy;ThrowsInDestroy.Thrower.Destroy;");
 		CHECK_FALSE(engine->IsFaulted());
+	}
+}
+
+// Modules that crash in the platform's loader (their static initialization), loaded in the test process: on Linux the
+// crash leaves the loader's lock held by this thread, and every other thread that needs it later (a job thread's first
+// thread_local with a destructor) blocks. The suite runs in a CTest of its own (StrataTests/CoreShards.json).
+TEST_SUITE("Scripting.LoaderFaults")
+{
+	TEST_CASE("A module that crashes while loading is refused")
+	{
+		ScriptEngine engine;
+		std::string error;
+		CHECK_FALSE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_SCRIPTS_LOADFAULT), &error));
+		CHECK(error.find("crashed") != std::string::npos);
+		CHECK_FALSE(engine.IsModuleLoaded());
+		CHECK_FALSE(engine.IsFaulted());
 	}
 }

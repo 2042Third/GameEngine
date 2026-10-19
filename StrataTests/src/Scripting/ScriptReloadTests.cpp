@@ -60,7 +60,6 @@ namespace
 		const ScriptFieldInfo* field = info ? info->FindField(name) : nullptr;
 		return field && field->Type == type;
 	}
-
 }
 
 TEST_SUITE("Scripting.Reload")
@@ -155,38 +154,6 @@ TEST_SUITE("Scripting.Reload")
 		CHECK(counter->FindField("Speed")->DefaultValue == PropertyValue(2.0f));
 	}
 
-	TEST_CASE("A broken build keeps the running module")
-	{
-		RebuildableModule module("ScriptReloadBroken");
-		module.Install(STRATA_TEST_SCRIPTS_RELOADV1);
-		ScopedScriptEngine engine(module.Path, true);
-		Scene scene;
-		Entity entity = scene.CreateEntity("Counting");
-		AddScriptEntry(entity, "Counter");
-		scene.OnRuntimeStart();
-		ScriptSystem& system = GetScriptSystem(scene);
-		RunFrames(scene, 2);
-
-		// A half-written file, a module built against another ABI and a module that crashes while loading.
-		module.InstallGarbage();
-		CHECK_FALSE(engine->Reload());
-		module.Install(STRATA_TEST_SCRIPTS_ABIMISMATCH);
-		CHECK_FALSE(engine->Reload());
-		module.Install(STRATA_TEST_SCRIPTS_LOADFAULT);
-		CHECK_FALSE(engine->Reload());
-		CHECK_FALSE(engine->IsFaulted());
-		CHECK(engine->GetLoadCount() == 1);
-		RunFrames(scene, 1);
-		CHECK(GetField<int32_t>(system, entity, "Counter", "Count") == 3);
-
-		// The fixed build loads.
-		module.Install(STRATA_TEST_SCRIPTS_RELOADV2);
-		REQUIRE(engine->Reload());
-		RunFrames(scene, 1);
-		CHECK(GetField<int32_t>(system, entity, "Counter", "Count") == 13);
-		scene.OnRuntimeStop();
-	}
-
 	TEST_CASE("Changed module files are hot reloaded")
 	{
 		RebuildableModule module("ScriptHotReload");
@@ -217,6 +184,44 @@ TEST_SUITE("Scripting.Reload")
 
 		engine->SetHotReloadEnabled(false);
 		CHECK_FALSE(engine->IsHotReloadEnabled());
+		scene.OnRuntimeStop();
+	}
+}
+
+// Modules that crash in the platform's loader (their static initialization), loaded in the test process: on Linux the
+// crash leaves the loader's lock held by this thread, and every other thread that needs it later (a job thread's first
+// thread_local with a destructor) blocks. The suite runs in a CTest of its own (StrataTests/CoreShards.json).
+TEST_SUITE("Scripting.LoaderFaults")
+{
+	TEST_CASE("A broken build keeps the running module")
+	{
+		RebuildableModule module("ScriptReloadBroken");
+		module.Install(STRATA_TEST_SCRIPTS_RELOADV1);
+		ScopedScriptEngine engine(module.Path, true);
+		Scene scene;
+		Entity entity = scene.CreateEntity("Counting");
+		AddScriptEntry(entity, "Counter");
+		scene.OnRuntimeStart();
+		ScriptSystem& system = GetScriptSystem(scene);
+		RunFrames(scene, 2);
+
+		// A half-written file, a module built against another ABI and a module that crashes while loading.
+		module.InstallGarbage();
+		CHECK_FALSE(engine->Reload());
+		module.Install(STRATA_TEST_SCRIPTS_ABIMISMATCH);
+		CHECK_FALSE(engine->Reload());
+		module.Install(STRATA_TEST_SCRIPTS_LOADFAULT);
+		CHECK_FALSE(engine->Reload());
+		CHECK_FALSE(engine->IsFaulted());
+		CHECK(engine->GetLoadCount() == 1);
+		RunFrames(scene, 1);
+		CHECK(GetField<int32_t>(system, entity, "Counter", "Count") == 3);
+
+		// The fixed build loads.
+		module.Install(STRATA_TEST_SCRIPTS_RELOADV2);
+		REQUIRE(engine->Reload());
+		RunFrames(scene, 1);
+		CHECK(GetField<int32_t>(system, entity, "Counter", "Count") == 13);
 		scene.OnRuntimeStop();
 	}
 }
