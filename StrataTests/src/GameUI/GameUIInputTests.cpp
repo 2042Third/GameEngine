@@ -1339,6 +1339,42 @@ TEST_SUITE("GameUI.WorldSpace")
 		CHECK(scene.Focused() == "Sign B");
 	}
 
+	TEST_CASE("A click on a world-space input field puts its caret where the game camera shows the text")
+	{
+		UIInputScene scene;
+		Entity sign = AddWorldCanvas(scene);
+		Entity field = scene.AddImage(sign, "Sign Field", { 50.0f, 80.0f }, { 300.0f, 40.0f });
+		field.AddComponent<UISelectableComponent>();
+		Entity text = scene.Target.CreateChildEntity(field, "Sign Field Text");
+		UIRectComponent rect;
+		rect.AnchorMin = glm::vec2(0.0f);
+		rect.AnchorMax = glm::vec2(1.0f);
+		rect.Size = glm::vec2(-16.0f);
+		text.AddComponent<UIRectComponent>(rect);
+		UITextComponent& label = text.AddComponent<UITextComponent>();
+		label.Alignment = TextAlignment::Left;
+		label.FontSize = 20.0f;
+		UIInputFieldComponent& component = field.AddComponent<UIInputFieldComponent>();
+		component.TextElement = text.GetUUID();
+		component.Text = "abcdef";
+		scene.Play();
+		scene.Frame();
+
+		GameUIScene& ui = GameUIScene::Get(scene.Target);
+		const UICanvasView world = *std::find_if(ui.EnsureLayout(GameUIScene::c_DefaultScreen).begin(), ui.EnsureLayout(GameUIScene::c_DefaultScreen).end(),
+			[](const UICanvasView& view) { return view.WorldSpace; });
+		const glm::mat4 viewProjection = *GameUIPointer::GetGameViewProjection(scene.Target, GameUIScene::c_DefaultScreen);
+		auto pixelOf = [&](const glm::vec2& point) { return *GameUIPointer::ProjectCanvasPoint(viewProjection, ui.GetCanvasWorldMatrix(world), { 1920.0f, 1080.0f }, point); };
+		// The text starts at x = 58 on the canvas (the field's left edge inset by 8): a click left of it puts the caret first,
+		// one near the field's right end last.
+		scene.Click(pixelOf({ 51.0f, 100.0f }));
+		CHECK(scene.Focused() == "Sign Field");
+		Type(scene, "<");
+		scene.Click(pixelOf({ 345.0f, 100.0f }));
+		Type(scene, ">");
+		CHECK(FieldText(field) == "<abcdef>");
+	}
+
 	TEST_CASE("A world-space button is clicked through the game camera, below the screen's canvases; sliders drag along it")
 	{
 		UIInputScene scene;

@@ -412,6 +412,25 @@ TEST_SUITE("Editor.UI.Inspector")
 
 TEST_SUITE("Editor.CanvasEdit")
 {
+	TEST_CASE("The canvas mode shows the selection's screen-space canvas, else the first one, never a canvas in the scene")
+	{
+		UIRectScene ui;
+		const nlohmann::json sign = ui.Run("ui.create", { { "type", "canvas" }, { "name", "Sign" } });
+		ui.Run("component.set", { { "entity", sign["entity"] }, { "component", "UICanvas" }, { "values", { { "RenderMode", "WorldSpace" } } } });
+		const nlohmann::json signPanel = ui.Run("ui.create", { { "type", "panel" }, { "parent", sign["entity"] } });
+		// The selection's own canvas when it is on the screen.
+		ui.Context.Select(ui.Button.GetUUID());
+		CHECK(CanvasEdit::FindShownCanvas(ui.Context) == ui.Canvas);
+		// An element of the canvas in the scene: the screen's canvas instead.
+		ui.Context.Select(ui.Find(signPanel["entity"]).GetUUID());
+		CHECK(CanvasEdit::FindShownCanvas(ui.Context) == ui.Canvas);
+		ui.Context.Select(ui.Find(sign["entity"]).GetUUID());
+		CHECK(CanvasEdit::FindShownCanvas(ui.Context) == ui.Canvas);
+		// No canvas on the screen: none.
+		ui.Run("component.set", { { "entity", UUIDToJson(ui.Canvas.GetUUID()) }, { "component", "UICanvas" }, { "values", { { "RenderMode", "WorldSpace" } } } });
+		CHECK_FALSE(CanvasEdit::FindShownCanvas(ui.Context));
+	}
+
 	TEST_CASE("Dragging a handle moves those sides, never past the others, and snaps to whole units")
 	{
 		const UIBox box { { 10.0f, 20.0f }, { 100.0f, 50.0f } };

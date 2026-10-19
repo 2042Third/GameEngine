@@ -710,6 +710,64 @@ TEST_SUITE("GPU.GameUI")
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 
+	TEST_CASE("Textures of a world-space canvas stream to the pixels its units project to")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		constexpr AssetHandle c_Texture = AssetHandle(0xC0FFEF);
+		const std::filesystem::path pack = WriteStreamingPack({ { c_Texture, AssetType::Texture, "Textures/Sign.png", CookSolidTexture(512, { 50, 100, 200, 255 }) } });
+		// A 512 x 512 unit sign of 1 cm units with the texture over it, 5 m from the camera and 50 m away. No canvas on the
+		// screen: its scale would count for every texture.
+		uint32_t levels[2] = { ~0u, ~0u };
+		for (int distance = 0; distance < 2; distance++)
+		{
+			CAPTURE(distance);
+			std::string error;
+			Ref<RuntimeAssetManager> manager = RuntimeAssetManager::Create(pack, &error);
+			REQUIRE_MESSAGE(manager, error);
+			REQUIRE(TextureStreamer::Find(*manager));
+			AssetManager::SetActive(manager);
+			Scene scene("Sign");
+			AddNeutralPostProcess(scene);
+			Entity sign = scene.CreateEntity("Sign");
+			sign.AddComponent<UIRectComponent>();
+			UICanvasComponent& canvas = sign.AddComponent<UICanvasComponent>();
+			canvas.RenderMode = UICanvasRenderMode::WorldSpace;
+			canvas.ReferenceResolution = { 512.0f, 512.0f };
+			canvas.WorldUnitsPerUnit = 0.01f;
+			sign.GetComponent<TransformComponent>().Translation = { 0.0f, 0.0f, distance == 0 ? 0.0f : -45.0f };
+			Entity image = scene.CreateChildEntity(sign, "Image");
+			UIRectComponent& rect = image.AddComponent<UIRectComponent>();
+			rect.AnchorMin = glm::vec2(0.0f);
+			rect.AnchorMax = glm::vec2(1.0f);
+			image.AddComponent<UIImageComponent>().Texture = c_Texture;
+			SceneRenderer renderer;
+			renderer.SetViewportSize(512, 512);
+			SceneCamera camera = BlackCamera();
+			camera.Projection = Math::PerspectiveReverseZ(camera.VerticalFOV, 1.0f, camera.Near, camera.Far);
+			for (int frame = 0; frame < 200; frame++)
+			{
+				manager->Update();
+				REQUIRE(renderer.Render(scene, camera));
+				const Ref<Texture> texture = manager->PeekLoadedAsset<Texture>(c_Texture);
+				const AssetManagerStats stats = manager->GetStats();
+				if (texture && frame > 10 && stats.Detail.Reads == 0 && stats.Detail.Changes == 0)
+				{
+					levels[distance] = texture->GetResidentLevel();
+					break;
+				}
+			}
+			CHECK(renderer.GetStats().Overlays.Canvases == 1);
+			AssetManager::SetActive(nullptr);
+		}
+		// Near, a canvas unit (a texel) covers more than a pixel: the whole texture. Ten times as far, a pixel covers about
+		// eight texels: level 3, within one of the projection's rounding.
+		CHECK(levels[0] == 0);
+		CHECK(levels[1] >= 2);
+		CHECK(levels[1] <= 4);
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
 	TEST_CASE("The Tetris HUD covers the same fraction of the screen at 1280x720 and 2560x1440")
 	{
 		GPUContext gpu;
