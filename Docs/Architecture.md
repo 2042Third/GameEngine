@@ -2377,7 +2377,7 @@ system, not to entities: a character's joints add no entities and no transform c
   (`AnimationClipBinding`; targets the skeleton lacks are skipped). An `AnimationController` (`.stanimator`) holds
   parameters (float, bool, trigger), states (a clip or none, a speed, looping, events) and transitions. Their loaders
   validate everything (truncated and garbage bytes are rejected).
-- **Import.** `GltfImporter` (version 8) makes one skeleton per model (sub-asset "Skeleton": the joints of every skin,
+- **Import.** `GltfImporter` (version 9) makes one skeleton per model (sub-asset "Skeleton": the joints of every skin,
   the animated nodes and their ancestors, parents first; the root motion joint is the topmost joint of a skin), a clip
   per animation ("Animation/<name>", or its index; keyframes reduced) and skinned meshes (see Asset pipeline,
   `MeshSkinBinding`). The model's root entity is its animator (`AnimatorComponent` with the skeleton and the first
