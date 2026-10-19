@@ -659,6 +659,10 @@ TEST_SUITE("Asset.Pack")
 				}
 			}
 		});
+		// The reads start once the other work is queued: on a busy machine the feeder could otherwise first find room in the
+		// queue (fewer than 64 jobs pending) only after the reads, whose blocks keep it full, were done.
+		while (submitted < 64)
+			std::this_thread::yield();
 		std::vector<uint8_t> data;
 		for (int read = 0; read < 6; read++)
 		{
