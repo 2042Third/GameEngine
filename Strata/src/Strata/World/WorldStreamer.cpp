@@ -717,23 +717,36 @@ namespace Strata
 			return;
 		outStates.reserve(world->GetData().Cells.size());
 		for (const WorldCell& cell : world->GetData().Cells)
+			FillCellState(cell, outStates.emplace_back());
+	}
+
+	bool WorldStreamer::GetCellState(const WorldCellKey& key, WorldCellState& outState) const
+	{
+		const Ref<WorldAsset> world = m_SeenWorld.lock();
+		const int32_t index = world ? world->FindCell(key) : -1;
+		if (index < 0)
+			return false;
+		WorldCellState state;
+		FillCellState(world->GetData().Cells[static_cast<size_t>(index)], state);
+		outState = std::move(state);
+		return true;
+	}
+
+	void WorldStreamer::FillCellState(const WorldCell& cell, WorldCellState& outState) const
+	{
+		outState.Key = cell.GetKey();
+		outState.Scene = cell.Scene;
+		const uint64_t key = outState.Key.Pack();
+		outState.Wanted = m_Wanted.contains(key);
+		outState.Pinned = m_Pins.contains(key);
+		if (const auto it = m_Cells.find(key); it != m_Cells.end())
 		{
-			WorldCellState state;
-			state.Key = cell.GetKey();
-			state.Scene = cell.Scene;
-			const uint64_t key = state.Key.Pack();
-			state.Wanted = m_Wanted.contains(key);
-			state.Pinned = m_Pins.contains(key);
-			if (const auto it = m_Cells.find(key); it != m_Cells.end())
-			{
-				const CellRecord& record = it->second;
-				state.Status = record.Status;
-				state.SubScene = record.SubScene;
-				state.Error = record.Error;
-				if (const SubSceneStatus* status = record.SubScene != 0 ? m_Scene.GetSubSceneStatus(record.SubScene) : nullptr)
-					state.Entities = record.Status == WorldCellStatus::Unloading ? status->CreatedEntities - std::min(status->CreatedEntities, status->DestroyedEntities) : status->CreatedEntities;
-			}
-			outStates.push_back(std::move(state));
+			const CellRecord& record = it->second;
+			outState.Status = record.Status;
+			outState.SubScene = record.SubScene;
+			outState.Error = record.Error;
+			if (const SubSceneStatus* status = record.SubScene != 0 ? m_Scene.GetSubSceneStatus(record.SubScene) : nullptr)
+				outState.Entities = record.Status == WorldCellStatus::Unloading ? status->CreatedEntities - std::min(status->CreatedEntities, status->DestroyedEntities) : status->CreatedEntities;
 		}
 	}
 

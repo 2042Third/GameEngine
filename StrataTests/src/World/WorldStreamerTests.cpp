@@ -433,6 +433,25 @@ TEST_SUITE("World.Streaming")
 		CHECK(error == states[0].Error);
 		CHECK(drive.Streamer.GetCellStatus(states[1].Key) == WorldCellStatus::Loaded);
 		CHECK(drive.Streamer.GetCellStatus(WorldCellKey { 1, 40, 40 }) == WorldCellStatus::Unloaded);
+		// One cell's state, found by key, is what the whole list holds for it.
+		for (const WorldCellState& listed : states)
+		{
+			WorldCellState state;
+			REQUIRE(drive.Streamer.GetCellState(listed.Key, state));
+			CHECK(state.Key == listed.Key);
+			CHECK(state.Scene == listed.Scene);
+			CHECK(state.Status == listed.Status);
+			CHECK(state.SubScene == listed.SubScene);
+			CHECK(state.Wanted == listed.Wanted);
+			CHECK(state.Pinned == listed.Pinned);
+			CHECK(state.Entities == listed.Entities);
+			CHECK(state.Error == listed.Error);
+		}
+		CHECK(states[1].Entities > 0);
+		WorldCellState missing;
+		missing.Entities = 7;
+		CHECK_FALSE(drive.Streamer.GetCellState(WorldCellKey { 1, 40, 40 }, missing));
+		CHECK(missing.Entities == 7);
 		CHECK(drive.Streamer.IsLoadedAround(source.Position, 1.0f) == false);
 		for (uint32_t frame = 0; frame < 30; frame++)
 			drive.Frame(SourceAt(32.0f + static_cast<float>(frame), 32.0f));

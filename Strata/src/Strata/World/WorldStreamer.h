@@ -23,6 +23,7 @@ namespace Strata
 
 	class Scene;
 	class WorldAsset;
+	struct WorldCell;
 
 	// A point cells stream around: a StreamingSourceComponent, the primary camera, the editor camera or a request
 	// (IWorldStreaming::RequestCellsAround).
@@ -149,6 +150,9 @@ namespace Strata
 		WorldStreamingStats GetStats() const;
 		// Every cell of the world with its state (empty before the world is loaded).
 		void GetCellStates(std::vector<WorldCellState>& outStates) const;
+		// One cell's state as GetCellStates gives it, found by key without a pass over the world; false, leaving `outState`
+		// unchanged, for a key the world does not have (or before it is loaded).
+		bool GetCellState(const WorldCellKey& key, WorldCellState& outState) const;
 		// The cells that are loading, loaded or unloading, by key: as many as the sources keep, whatever the world's size
 		// (the viewport's cell bounds).
 		void GetActiveCells(std::vector<WorldActiveCell>& outCells) const;
@@ -187,6 +191,7 @@ namespace Strata
 		bool SourcesMoved() const;
 		void AdoptCells(const WorldAsset& world);
 		void Evaluate(const WorldAsset& world);
+		void FillCellState(const WorldCell& cell, WorldCellState& outState) const;
 		void StartLoad(const WorldAsset& world, const Candidate& candidate);
 		void Unload(uint64_t key, CellRecord& record);
 		void ReserveBodies(const WorldAsset& world, std::span<const Candidate> starting);

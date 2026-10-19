@@ -206,14 +206,13 @@ namespace Strata
 		{
 			nlohmann::json cells = nlohmann::json::array();
 			const Ref<WorldAsset> asset = world.GetWorldAsset();
-			std::vector<WorldCellState> states;
-			world.GetStreamer().GetCellStates(states);
 			for (const WorldCellKey& key : keys)
 			{
 				nlohmann::json cell = CellKeyJson(asset->GetData(), key);
-				const auto state = std::find_if(states.begin(), states.end(), [&](const WorldCellState& item) { return item.Key == key; });
-				cell["state"] = state != states.end() ? WorldCellStatusToString(state->Status) : "Unloaded";
-				cell["entities"] = state != states.end() ? state->Entities : 0;
+				WorldCellState state;
+				world.GetStreamer().GetCellState(key, state); // A key the world lacks stays Unloaded with no entities
+				cell["state"] = WorldCellStatusToString(state.Status);
+				cell["entities"] = state.Entities;
 				cells.push_back(std::move(cell));
 			}
 			return cells;
@@ -841,12 +840,11 @@ namespace Strata
 					EditorWorld* current = pollContext.GetWorld();
 					if (!current || current->GetWorld() != scene)
 						return EditorCommandResult::Fail("The world was closed before its cells were in");
-					std::vector<WorldCellState> states;
-					current->GetStreamer().GetCellStates(states);
+					// One lookup per cell, allocating nothing, every frame until they are in.
 					for (const WorldCellKey& key : cells)
 					{
-						const auto state = std::find_if(states.begin(), states.end(), [&](const WorldCellState& item) { return item.Key == key; });
-						if (state == states.end() || (state->Status != WorldCellStatus::Loaded && state->Status != WorldCellStatus::Failed))
+						const WorldCellStatus status = current->GetStreamer().GetCellStatus(key);
+						if (status != WorldCellStatus::Loaded && status != WorldCellStatus::Failed)
 							return std::nullopt;
 					}
 					if (!pin)
