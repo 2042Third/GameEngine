@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstddef>
+#include <utility>
 #include <vector>
 
 using namespace Strata;
@@ -47,6 +48,30 @@ namespace
 		resource->AddRef();
 		return resource->Release();
 	}
+
+	// A resource whose destruction takes a known time, as a driver's texture destruction does, but whatever the driver's
+	// speed: a fast driver destroys hundreds of textures within one frame's budget, which would leave nothing to show that
+	// a frame stops at its budget.
+	class SlowDestroyResource : public nvrhi::RefCounter<nvrhi::IResource>
+	{
+	public:
+		explicit SlowDestroyResource(std::chrono::microseconds cost)
+			: m_Cost(cost)
+		{
+		}
+
+		~SlowDestroyResource() override
+		{
+			// Busy, as a driver call is: sleeping would give the time away and could take far longer than asked.
+			const auto end = std::chrono::steady_clock::now() + m_Cost;
+			while (std::chrono::steady_clock::now() < end)
+			{
+			}
+		}
+
+	private:
+		std::chrono::microseconds m_Cost;
+	};
 
 }
 
@@ -157,21 +182,22 @@ TEST_SUITE("GPU.Renderer.DeferredRelease")
 	{
 		Tests::GPUContext gpu;
 		REQUIRE(gpu.IsValid());
-		nvrhi::IDevice* device = gpu.GetNvrhiDevice();
 		DeferredReleaseQueue& releases = Renderer::GetDeferredReleases();
 		gpu.GetDevice().WaitForIdle();
 		releases.Collect();
 		REQUIRE(releases.GetPendingCount() == 0);
 
-		// Hundreds of textures released at once, as when a cache lets go of its thumbnails, all done on the GPU. Destroying
-		// one costs the driver microseconds to a tenth of a millisecond, so one frame's budget cannot hold them all: a frame
-		// that destroyed every completed resource held the editor for milliseconds.
+		// Hundreds of resources released at once, as when a cache lets go of its thumbnails, all done on the GPU. Destroying a
+		// texture costs a driver microseconds to a tenth of a millisecond, so a frame that destroyed every completed resource
+		// held the editor for milliseconds. Each of these costs 20 us however fast the driver is, so one frame's budget holds
+		// at most c_FrameDestroyBudget / 20 us + 1 of them (it stops at the first destruction that reaches the budget).
 		constexpr size_t c_Count = 512;
-		std::vector<nvrhi::TextureHandle> textures;
+		constexpr std::chrono::microseconds c_DestroyCost { 20 };
+		constexpr size_t c_MaxPerFrame = static_cast<size_t>(DeferredReleaseQueue::c_FrameDestroyBudget / c_DestroyCost) + 1;
+		std::vector<nvrhi::ResourceHandle> resources;
 		for (size_t index = 0; index < c_Count; index++)
-			textures.push_back(CreateTarget(device, "DeferredRelease.FrameBudget"));
-		Renderer::ReleaseDeferred(std::vector<nvrhi::ResourceHandle>(textures.begin(), textures.end()));
-		textures.clear(); // The queue holds the only references
+			resources.push_back(nvrhi::ResourceHandle::Create(new SlowDestroyResource(c_DestroyCost)));
+		Renderer::ReleaseDeferred(std::move(resources)); // The queue holds the only references
 		CHECK(releases.GetPendingCount() == c_Count);
 		gpu.GetDevice().WaitForIdle();
 
@@ -183,6 +209,7 @@ TEST_SUITE("GPU.Renderer.DeferredRelease")
 		};
 		frame();
 		CHECK(releases.GetPendingCount() < c_Count);
+		CHECK(c_Count - releases.GetPendingCount() <= c_MaxPerFrame);
 		CHECK(releases.GetCompletedCount() > 0);
 		CHECK(releases.GetCompletedCount() == releases.GetPendingCount());
 		// Every frame destroys at least one, so the frames after drain the rest.
