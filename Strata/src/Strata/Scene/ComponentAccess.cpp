@@ -95,6 +95,14 @@ namespace Strata
 		return true;
 	}
 
+	std::string ComponentAccess::GetInactiveReason(Entity entity, const ComponentInfo& info, const PropertyInfo& property)
+	{
+		if (!property.InactiveReason || !entity.IsValid())
+			return {};
+		const void* component = info.Get(entity.GetScene()->GetRegistry(), entity.GetHandle());
+		return component ? property.InactiveReason(component) : std::string();
+	}
+
 	std::optional<PropertyValue> ComponentAccess::GetProperty(Entity entity, const ComponentInfo& info, const PropertyInfo& property)
 	{
 		if (!entity.IsValid())

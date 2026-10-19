@@ -3,6 +3,7 @@
 #include "Animation/SkinnedGltf.h"
 #include "Strata/Animation/AnimationClip.h"
 #include "Strata/Animation/AnimationComponents.h"
+#include "Strata/Animation/RestPose.h"
 #include "Strata/Animation/Skeleton.h"
 #include "Strata/Asset/AssetDependencies.h"
 #include "Strata/Asset/GltfImporter.h"
@@ -18,6 +19,7 @@
 #include <glm/gtc/epsilon.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -40,7 +42,8 @@ namespace
 		}
 	};
 
-	SkinImport ImportModel(const std::filesystem::path& assetDirectory, const std::string& name, const std::vector<uint8_t>& file)
+	// `scale`: the import's Scale setting.
+	SkinImport ImportModel(const std::filesystem::path& assetDirectory, const std::string& name, const std::vector<uint8_t>& file, float scale = 1.0f)
 	{
 		const std::filesystem::path path = assetDirectory / FileSystem::FromUTF8(name);
 		REQUIRE(FileSystem::WriteBytes(path, file));
@@ -51,8 +54,38 @@ namespace
 		context.SourcePath = path;
 		context.AssetDirectory = assetDirectory;
 		context.Settings = importer.GetDefaultSettings(path);
+		context.Settings["Scale"] = scale;
 		output.Success = importer.Import(context, output.Result, &output.Error);
 		return output;
+	}
+
+	// A sub-asset of an import, deserialized by its type's reader.
+	template<typename T>
+	Ref<T> ReadSubAsset(const SkinImport& import, std::string_view key)
+	{
+		const ImportedSubAsset* data = import.Find(key);
+		REQUIRE_MESSAGE(data, key);
+		std::string error;
+		Ref<T> asset = T::Deserialize(data->Data, &error);
+		REQUIRE_MESSAGE(asset, error);
+		return asset;
+	}
+
+	// a is b with its translation times `factor` (within 1e-5 relative), and equal in the rest.
+	void CheckScaledTransform(const glm::mat4& a, const glm::mat4& b, float factor)
+	{
+		for (int column = 0; column < 4; column++)
+		{
+			for (int row = 0; row < 3; row++)
+			{
+				const float expected = column == 3 ? b[column][row] * factor : b[column][row];
+				CAPTURE(column);
+				CAPTURE(row);
+				CAPTURE(a[column][row]);
+				CAPTURE(expected);
+				CHECK(std::abs(a[column][row] - expected) <= 1e-5f * std::abs(expected) + 1e-7f);
+			}
+		}
 	}
 
 	bool HasWarningContaining(const ImportResult& result, std::string_view text)
@@ -346,5 +379,97 @@ TEST_SUITE("Asset.Gltf")
 			// cgltf's validation may refuse the file outright, which is fine too.
 			CHECK_FALSE(unreadable.Error.empty());
 		}
+	}
+
+	TEST_CASE("The import scale is baked into the model: the root keeps scale 1, meshes, joints, bind matrices and clips scale")
+	{
+		const std::filesystem::path assets = Tests::CreateTemporaryDirectory("GltfScale");
+		const SkinImport meters = ImportModel(assets, "Arm.gltf", Tests::CreateSkinnedArmGltf(), 1.0f);
+		const SkinImport centimeters = ImportModel(assets, "Arm.gltf", Tests::CreateSkinnedArmGltf(), 0.01f);
+		REQUIRE_MESSAGE(meters.Success, meters.Error);
+		REQUIRE_MESSAGE(centimeters.Success, centimeters.Error);
+		constexpr float scale = 0.01f;
+
+		// The model's root keeps scale 1: instances placed before a change of the setting follow it.
+		std::string error;
+		Ref<Model> model = Model::Deserialize(centimeters.Result.Data, &error);
+		REQUIRE_MESSAGE(model, error);
+		Scene scene;
+		const std::vector<Entity> roots = model->Instantiate(scene);
+		REQUIRE(roots.size() == 1);
+		CHECK(roots[0].GetComponent<TransformComponent>().Scale == glm::vec3(1.0f));
+
+		// The mesh's bounds, its skin's inverse bind translations and joint bounds.
+		const Ref<Mesh> meshAt1 = ReadSubAsset<Mesh>(meters, "Mesh/0");
+		const Ref<Mesh> meshAtScale = ReadSubAsset<Mesh>(centimeters, "Mesh/0");
+		for (int axis = 0; axis < 3; axis++)
+		{
+			CHECK(meshAtScale->GetBounds().Min[axis] == doctest::Approx(meshAt1->GetBounds().Min[axis] * scale).epsilon(1e-5));
+			CHECK(meshAtScale->GetBounds().Max[axis] == doctest::Approx(meshAt1->GetBounds().Max[axis] * scale).epsilon(1e-5));
+		}
+		CHECK(centimeters.Find("Mesh/0")->Bounds.has_value());
+		const MeshSkinBinding& bindingAt1 = *meshAt1->GetSkinBinding();
+		const MeshSkinBinding& bindingAtScale = *meshAtScale->GetSkinBinding();
+		REQUIRE(bindingAtScale.InverseBindMatrices.size() == bindingAt1.InverseBindMatrices.size());
+		for (size_t joint = 0; joint < bindingAt1.InverseBindMatrices.size(); joint++)
+		{
+			CAPTURE(joint);
+			CheckScaledTransform(bindingAtScale.InverseBindMatrices[joint], bindingAt1.InverseBindMatrices[joint], scale);
+			for (int axis = 0; axis < 3; axis++)
+			{
+				CHECK(bindingAtScale.JointBounds[joint].Min[axis] == doctest::Approx(bindingAt1.JointBounds[joint].Min[axis] * scale).epsilon(1e-5));
+				CHECK(bindingAtScale.JointBounds[joint].Max[axis] == doctest::Approx(bindingAt1.JointBounds[joint].Max[axis] * scale).epsilon(1e-5));
+			}
+		}
+
+		// The skeleton's rest translations, and the clips' translation keys (rotations unchanged).
+		const Ref<Skeleton> skeletonAt1 = ReadSubAsset<Skeleton>(meters, "Skeleton");
+		const Ref<Skeleton> skeletonAtScale = ReadSubAsset<Skeleton>(centimeters, "Skeleton");
+		REQUIRE(skeletonAtScale->GetJointCount() == skeletonAt1->GetJointCount());
+		for (uint32_t joint = 0; joint < skeletonAt1->GetJointCount(); joint++)
+		{
+			CAPTURE(joint);
+			const JointPose& at1 = skeletonAt1->GetRestPose()[joint];
+			const JointPose& atScale = skeletonAtScale->GetRestPose()[joint];
+			for (int axis = 0; axis < 3; axis++)
+				CHECK(atScale.Translation[axis] == doctest::Approx(at1.Translation[axis] * scale).epsilon(1e-5));
+			CHECK(atScale.Rotation == at1.Rotation);
+			CHECK(atScale.Scale == at1.Scale);
+		}
+		const Ref<AnimationClip> reachAt1 = ReadSubAsset<AnimationClip>(meters, "Animation/Reach");
+		const Ref<AnimationClip> reachAtScale = ReadSubAsset<AnimationClip>(centimeters, "Animation/Reach");
+		REQUIRE(reachAt1->GetChannels()[0].Path == AnimationPath::Translation);
+
+		// Poses, at rest and in clips, are Scale 1's with every position times the scale.
+		std::vector<glm::mat4> restAt1;
+		std::vector<glm::mat4> restAtScale;
+		ComputeRestPose(*skeletonAt1, restAt1);
+		ComputeRestPose(*skeletonAtScale, restAtScale);
+		for (size_t joint = 0; joint < restAt1.size(); joint++)
+			CheckScaledTransform(restAtScale[joint], restAt1[joint], scale);
+		for (const char* clipName : { "Animation/Wave", "Animation/Reach" })
+		{
+			const Ref<AnimationClip> clipAt1 = ReadSubAsset<AnimationClip>(meters, clipName);
+			const Ref<AnimationClip> clipAtScale = ReadSubAsset<AnimationClip>(centimeters, clipName);
+			for (const float time : { 0.37f, 0.75f })
+			{
+				CAPTURE(clipName);
+				CAPTURE(time);
+				std::vector<JointPose> localAt1 = skeletonAt1->GetRestPose();
+				std::vector<JointPose> localAtScale = skeletonAtScale->GetRestPose();
+				clipAt1->Sample(clipAt1->Bind(*skeletonAt1), time, localAt1);
+				clipAtScale->Sample(clipAtScale->Bind(*skeletonAtScale), time, localAtScale);
+				std::vector<glm::mat4> modelAt1(localAt1.size());
+				std::vector<glm::mat4> modelAtScale(localAtScale.size());
+				skeletonAt1->ComputeModelTransforms(localAt1, modelAt1);
+				skeletonAtScale->ComputeModelTransforms(localAtScale, modelAtScale);
+				for (size_t joint = 0; joint < modelAt1.size(); joint++)
+					CheckScaledTransform(modelAtScale[joint], modelAt1[joint], scale);
+			}
+		}
+		// The shoulder's step is a translation: 1 unit at Scale 1, 0.01 at 0.01.
+		std::vector<JointPose> stepped = skeletonAtScale->GetRestPose();
+		reachAtScale->Sample(reachAtScale->Bind(*skeletonAtScale), 0.75f, stepped);
+		CHECK(stepped[skeletonAtScale->FindJoint("Shoulder")].Translation.x == doctest::Approx(scale));
 	}
 }

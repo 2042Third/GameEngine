@@ -1,12 +1,15 @@
 #include "stpch.h"
 #include "Strata/Scene/SceneRegistration.h"
 
+#include "Strata/Core/Log.h"
 #include "Strata/Reflection/ComponentRegistry.h"
 #include "Strata/Reflection/PropertyOptions.h"
 #include "Strata/Scene/Components.h"
+#include "Strata/Scene/PrefabOverrides.h"
 
 #include <charconv>
 #include <string>
+#include <vector>
 
 namespace Strata
 {
@@ -26,6 +29,18 @@ namespace Strata
 			const char* end = text.data() + text.size();
 			const std::from_chars_result result = std::from_chars(text.data(), end, hash, 16);
 			return result.ec == std::errc() && result.ptr == end ? hash : 0;
+		}
+
+		// The fields of the projection the camera does not use (CameraComponent::GetProjection), for the Inspector
+		// (PropertyInfo::InactiveReason).
+		std::string PerspectiveOnly(const CameraComponent& camera)
+		{
+			return camera.Projection == ProjectionType::Perspective ? std::string() : "The camera's projection is Orthographic";
+		}
+
+		std::string OrthographicOnly(const CameraComponent& camera)
+		{
+			return camera.Projection == ProjectionType::Orthographic ? std::string() : "The camera's projection is Perspective";
 		}
 
 	}
@@ -92,7 +107,28 @@ namespace Strata
 			.CustomProperty("SyncedHash", PropertyType::String,
 				[](const PrefabInstanceComponent& component) -> PropertyValue { return FormatHash(component.SyncedHash); },
 				[](PrefabInstanceComponent& component, const PropertyValue& value) { component.SyncedHash = ParseHash(std::get<std::string>(value)); },
-				{ .DisplayName = "Synced Hash", .Flags = PropertyFlags::ReadOnly | PropertyFlags::Hidden });
+				{ .DisplayName = "Synced Hash", .Flags = PropertyFlags::ReadOnly | PropertyFlags::Hidden })
+			// The instance's overrides (PrefabOverrides), written only when there are any: scenes without them stay as they were.
+			// The component's data is whole (undo states, copies), so a document without the list clears it.
+			.Extra([](const PrefabInstanceComponent& component, nlohmann::json& out)
+				{
+					if (!component.Overrides.empty())
+						out["Overrides"] = PrefabOverrides::ToJson(component.Overrides);
+				},
+				[](PrefabInstanceComponent& component, const nlohmann::json& in, std::string*)
+				{
+					const auto overrides = in.find("Overrides");
+					if (overrides == in.end())
+					{
+						component.Overrides.clear();
+						return true;
+					}
+					std::vector<std::string> warnings;
+					component.Overrides = PrefabOverrides::FromJson(*overrides, &warnings);
+					for (const std::string& warning : warnings)
+						ST_CORE_WARN("Prefab instance: {}", warning);
+					return true;
+				});
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Rendering
@@ -109,6 +145,10 @@ namespace Strata
 			.Property("OrthographicFar", &CameraComponent::OrthographicFar, Range(-c_Unbounded, c_Unbounded, 1.0f))
 			.Property("Primary", &CameraComponent::Primary, WithTooltip({}, "The first active primary camera renders the game view"))
 			.Property("ClearColor", &CameraComponent::ClearColor, Color());
+		for (const char* property : { "PerspectiveFOV", "PerspectiveNear", "PerspectiveFar" })
+			ComponentRegistry::SetInactiveReason<CameraComponent>(property, &PerspectiveOnly);
+		for (const char* property : { "OrthographicSize", "OrthographicNear", "OrthographicFar" })
+			ComponentRegistry::SetInactiveReason<CameraComponent>(property, &OrthographicOnly);
 
 	}
 

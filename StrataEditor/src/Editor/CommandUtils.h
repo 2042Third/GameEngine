@@ -3,7 +3,10 @@
 #include "Editor/EditorCommands.h"
 
 #include <Strata/Asset/AssetTypes.h>
+#include <Strata/Math/AABB.h>
 #include <Strata/Scene/Entity.h>
+
+#include <glm/glm.hpp>
 
 #include <nlohmann/json.hpp>
 
@@ -23,6 +26,7 @@ namespace Strata
 	class EditorAssetManager;
 	class EditorContext;
 	class Scene;
+	class SceneEditTransaction;
 	struct AssetManagerStats;
 	struct FrameProfileSummary;
 	struct JobSystemStats;
@@ -58,6 +62,13 @@ namespace Strata
 
 		// {"id", "name", "parent", "children": [...], "components": {...}}
 		nlohmann::json DescribeEntity(Entity entity);
+		// A world transform as commands report it: {position, rotation: {euler (degrees, as the Inspector shows them),
+		// quaternion [x, y, z, w]}, scale}.
+		nlohmann::json DescribeWorldTransform(const glm::mat4& world);
+		// Bounds as commands report them: {min, max, size, center, pending}; null for invalid bounds.
+		nlohmann::json DescribeBounds(const AABB& bounds, bool pending);
+		// Three finite numbers ([x, y, z]); nullopt for anything else.
+		std::optional<glm::vec3> ReadVec3(const nlohmann::json& value);
 
 		// {"open": false} without a project, else {"open": true, "name", "directory", "assetDirectory", "startScene"}.
 		nlohmann::json DescribeProject(const EditorContext& context);
@@ -116,6 +127,23 @@ namespace Strata
 		// command would do, e.g. "opening the scene 'Level2'". Returns the failure (naming the scene and how to proceed), or
 		// nullopt when the command may go on. A forced discard keeps the changes as recovery data (EditorContext::ResetScene).
 		std::optional<EditorCommandResult> CheckUnsavedChanges(const EditorContext& context, bool force, std::string_view action);
+
+		// The play state the play.* commands report: {state, paused}.
+		nlohmann::json DescribePlayState(const EditorContext& context);
+		// What runs while playing (null in edit mode), for play.state, scene.info and editor.status: {scene (the running scene
+		// asset after a switch the game asked for; null while the edited scene's copy runs), name, path, entityCount,
+		// subScenes: [{id, scene, name, state, entities}], switching: {scene, progress} or null (a scene the game asked for
+		// loads)}.
+		nlohmann::json DescribeRunningScene(const EditorContext& context);
+
+		// What mutating commands report while the scene is running.
+		std::string GetRunningCopyWarning(const EditorContext& context);
+		// Ends a mutating command: records the undo step (edit mode) and reports the result. While playing, edits change
+		// the running copy only; the result says so, because play.stop discards them. While a scene is being opened the
+		// edited scene is read-only (EditorContext::CheckSceneEditable): the edit is undone and the command fails.
+		EditorCommandResult FinishEdit(EditorContext& context, SceneEditTransaction& transaction, nlohmann::json value = nullptr);
+		// Fails a mutating command after undoing what its transaction changed.
+		EditorCommandResult RollBackEdit(SceneEditTransaction& transaction, std::string error, EditorCommandError kind);
 
 		// A file a command writes for its client (e.g. a capture). Relative paths resolve against the project directory
 		// and fail without a project (the editor's working directory means nothing to a client); absolute paths stay.

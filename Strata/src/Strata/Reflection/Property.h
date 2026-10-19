@@ -84,6 +84,10 @@ namespace Strata
 
 		std::function<PropertyValue(const void* object)> Getter;
 		std::function<void(void* object, const PropertyValue& value)> Setter;
+		// Why the property has no effect in the component's current state (another property turns it off, e.g. a bloom
+		// threshold while bloom is off), or "" when it has; null for properties that are always active. Editors draw an
+		// inactive property disabled with the reason. Set through ComponentRegistry::SetInactiveReason.
+		std::function<std::string(const void* component)> InactiveReason;
 
 		bool HasRange() const { return Max > Min; }
 		bool IsReadOnly() const { return HasFlag(Flags, PropertyFlags::ReadOnly); }
@@ -91,6 +95,8 @@ namespace Strata
 		bool IsTransient() const { return HasFlag(Flags, PropertyFlags::Transient); }
 
 		PropertyValue GetValue(const void* object) const { return Getter(object); }
+		// InactiveReason's answer for a component ("" for properties that are always active).
+		std::string GetInactiveReason(const void* component) const { return InactiveReason ? InactiveReason(component) : std::string(); }
 		// Validates the value (type, enum membership), clamps numeric ranges and assigns it.
 		// Returns false (leaving the object unchanged) if the value is not valid for this property.
 		bool SetValue(void* object, const PropertyValue& value, std::string* outError = nullptr) const;

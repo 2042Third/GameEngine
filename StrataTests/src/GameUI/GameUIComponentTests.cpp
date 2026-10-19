@@ -97,6 +97,105 @@ TEST_SUITE("GameUI.Components")
 		CHECK(ComponentRegistry::Find("UIImage")->DisplayName == "UI Image");
 	}
 
+	TEST_CASE("UI properties another property turns off say why, following the code that reads them")
+	{
+		// The reason of `property` for `component` (empty: active).
+		const auto reason = []<typename T>(const T& component, const char* property)
+		{
+			const ComponentInfo* info = ComponentRegistry::Find<T>();
+			REQUIRE(info);
+			const PropertyInfo* found = info->FindProperty(property);
+			REQUIRE_MESSAGE(found, property);
+			return found->GetInactiveReason(&component);
+		};
+
+		// The canvas's scale: Scale With Screen reads the reference and the match, the constant modes the factor; a canvas in
+		// the world is a plane of its reference size, laid out for no screen and snapped to no pixels.
+		UICanvasComponent canvas;
+		canvas.ScaleMode = UICanvasScaleMode::ScaleWithScreen;
+		CHECK(reason(canvas, "ReferenceResolution").empty());
+		CHECK(reason(canvas, "MatchWidthOrHeight").empty());
+		CHECK(reason(canvas, "ScaleFactor") == "Only the constant scale modes use it (Scale Mode is Scale With Screen)");
+		CHECK_FALSE(reason(canvas, "WorldUnitsPerUnit").empty());
+		CHECK(reason(canvas, "PixelSnap").empty());
+		canvas.ScaleMode = UICanvasScaleMode::ConstantPixelSize;
+		CHECK(reason(canvas, "ReferenceResolution") == "Only Scale With Screen and canvases in the world use it (Scale Mode is Constant Pixel Size)");
+		CHECK(reason(canvas, "MatchWidthOrHeight") == "Only Scale With Screen uses it (Scale Mode is Constant Pixel Size)");
+		CHECK(reason(canvas, "ScaleFactor").empty());
+		canvas.RenderMode = UICanvasRenderMode::WorldSpace;
+		CHECK(reason(canvas, "ReferenceResolution").empty());
+		CHECK(reason(canvas, "WorldUnitsPerUnit").empty());
+		for (const char* property : { "ScaleMode", "MatchWidthOrHeight", "ScaleFactor", "PixelSnap" })
+		{
+			CAPTURE(property);
+			CHECK_FALSE(reason(canvas, property).empty());
+		}
+		for (const char* property : { "SafeAreaPadding", "SortOrder", "ReceivesInput", "RenderMode" })
+		{
+			CAPTURE(property);
+			CHECK(reason(canvas, property).empty());
+		}
+
+		// The image's quads: slices, fill, aspect, and the border a nine-sliced texture does not draw. A Texture of None turns
+		// none of the texture's settings off: an Image Swap selectable draws its state images with them ("A button with
+		// a solid color at rest draws its Image Swap states with the image's UV rect").
+		UIImageComponent image;
+		CHECK(reason(image, "UVRect").empty());
+		CHECK(reason(image, "SliceBorders") == "Only Sliced images use it (Type is Simple)");
+		CHECK(reason(image, "FillAmount") == "Only Filled images use it (Type is Simple)");
+		CHECK(reason(image, "PreserveAspect").empty());
+		CHECK(reason(image, "CornerRadius").empty());
+		CHECK(reason(image, "BorderColor") == "Only a border uses it (Border Width is 0)");
+		image.BorderWidth = 2.0f;
+		CHECK(reason(image, "BorderColor").empty());
+		image.Type = UIImageType::Sliced;
+		CHECK(reason(image, "SliceScale").empty());
+		CHECK(reason(image, "BorderWidth").empty()); // Without a texture a sliced image draws as a simple one
+		image.Texture = UUID(42);
+		CHECK(reason(image, "SliceBorders").empty());
+		CHECK(reason(image, "UVRect").empty());
+		CHECK(reason(image, "CornerRadius") == "Sliced images draw no rounded corners or border");
+		CHECK(reason(image, "BorderColor") == "Sliced images draw no rounded corners or border");
+		CHECK_FALSE(reason(image, "PreserveAspect").empty());
+		image.Type = UIImageType::Filled;
+		CHECK(reason(image, "FillDirection").empty());
+		CHECK(reason(image, "PreserveAspect").empty());
+		CHECK(reason(image, "Color").empty());
+
+		UITextComponent text;
+		text.OutlineWidth = 0.0f;
+		CHECK(reason(text, "OutlineColor") == "Only an outline uses it (Outline Width is 0)");
+		text.OutlineWidth = 0.02f;
+		CHECK(reason(text, "OutlineColor").empty());
+
+		// A selectable's states show through its transition; explicit targets only with Explicit navigation.
+		UISelectableComponent selectable;
+		selectable.Transition = UISelectableTransition::ColorTint;
+		selectable.Navigation = UINavigation::Automatic;
+		CHECK(reason(selectable, "HoverColor").empty());
+		CHECK(reason(selectable, "FadeDuration").empty());
+		CHECK(reason(selectable, "HoverImage") == "Only the Image Swap transition uses it (Transition is Color Tint)");
+		CHECK(reason(selectable, "TargetImage").empty());
+		CHECK_FALSE(reason(selectable, "NavigateUp").empty());
+		selectable.Transition = UISelectableTransition::None;
+		selectable.Navigation = UINavigation::Explicit;
+		CHECK(reason(selectable, "PressedColor") == "Only the Color Tint transition uses it (Transition is None)");
+		CHECK(reason(selectable, "TargetImage") == "The states show nothing (Transition is None)");
+		CHECK(reason(selectable, "NavigateLeft").empty());
+		CHECK(reason(selectable, "Interactable").empty());
+
+		// A layout group's grid settings, and the stack's stretching.
+		UILayoutComponent layout;
+		layout.Type = UILayoutType::Vertical;
+		CHECK(reason(layout, "CellSize") == "Only a Grid uses it (Type is Vertical)");
+		CHECK(reason(layout, "Columns") == "Only a Grid uses it (Type is Vertical)");
+		CHECK(reason(layout, "StretchChildren").empty());
+		layout.Type = UILayoutType::Grid;
+		CHECK(reason(layout, "CellSize").empty());
+		CHECK(reason(layout, "StretchChildren") == "A Grid gives every child its Cell Size");
+		CHECK(reason(layout, "Spacing").empty());
+	}
+
 	TEST_CASE("Adding a UI component by name adds the rect it requires first, and only when missing")
 	{
 		Scene scene;

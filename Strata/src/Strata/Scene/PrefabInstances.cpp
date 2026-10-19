@@ -5,9 +5,11 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Reflection/PropertyJson.h"
+#include "Strata/Scene/ComponentAccess.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneSerializer.h"
+#include "Strata/Scene/UnknownComponents.h"
 
 #include <algorithm>
 #include <optional>
@@ -62,6 +64,20 @@ namespace Strata
 		std::string ToText(UUID id)
 		{
 			return UUIDToJson(id).get<std::string>();
+		}
+
+		// The prefab id of the next entity MakeTemplate lists: its link's to the instance's prefab, or a new one when it has
+		// none or an entity listed before it took it (`used`, the ids given so far).
+		UUID TakeTemplateId(const PrefabInstanceComponent* link, AssetHandle prefab, std::unordered_set<UUID>& used)
+		{
+			UUID templateId = link && link->Prefab == prefab ? link->PrefabEntityID : UUID::Null();
+			if (!templateId.IsValid() || !used.insert(templateId).second)
+			{
+				do
+					templateId = UUID();
+				while (!used.insert(templateId).second);
+			}
+			return templateId;
 		}
 
 		// The indices into a snapshot's entity list of the subtree under the entity `root`: the root first, then parents before
@@ -242,17 +258,29 @@ namespace Strata
 			return HashPart(MakeTemplate(scene, root, nullptr, nullptr, ids));
 		}
 
+		uint64_t GetTemplateHash(const nlohmann::json& part)
+		{
+			return HashPart(part);
+		}
+
 		void MarkSynced(Scene& scene, Entity root, const nlohmann::json& snapshot)
+		{
+			const PrefabInstanceComponent* link = root ? root.TryGetComponent<PrefabInstanceComponent>() : nullptr;
+			if (!link)
+				return;
+			const uint64_t version = GetPartVersion(snapshot, link->PrefabEntityID);
+			// The link is looked up again afterwards: MakeTemplate serializes the entities, which may grow the registry's pools
+			// under the component.
+			MarkSynced(root, version, GetContentHash(scene, root));
+		}
+
+		void MarkSynced(Entity root, uint64_t partVersion, uint64_t contentHash)
 		{
 			PrefabInstanceComponent* link = root ? root.TryGetComponent<PrefabInstanceComponent>() : nullptr;
 			if (!link)
 				return;
-			const uint64_t version = GetPartVersion(snapshot, link->PrefabEntityID);
-			const uint64_t content = GetContentHash(scene, root);
-			// Taken again: MakeTemplate serializes the entities, which may grow the registry's pools under the component.
-			link = &root.GetComponent<PrefabInstanceComponent>();
-			link->PrefabVersion = version;
-			link->SyncedHash = content;
+			link->PrefabVersion = partVersion;
+			link->SyncedHash = contentHash;
 		}
 
 		bool IsOutdated(Entity root, const nlohmann::json& snapshot)
@@ -302,14 +330,7 @@ namespace Strata
 			{
 				const UUID id = GetId(entity);
 				const Entity sceneEntity = scene.GetEntityByUUID(id);
-				const PrefabInstanceComponent* link = sceneEntity ? sceneEntity.TryGetComponent<PrefabInstanceComponent>() : nullptr;
-				UUID templateId = link && link->Prefab == prefab ? link->PrefabEntityID : UUID::Null();
-				if (!templateId.IsValid() || !used.insert(templateId).second)
-				{
-					do
-						templateId = UUID();
-					while (!used.insert(templateId).second);
-				}
+				const UUID templateId = TakeTemplateId(sceneEntity ? sceneEntity.TryGetComponent<PrefabInstanceComponent>() : nullptr, prefab, used);
 				outIds[id] = templateId;
 				remap.emplace(ToText(id), ToText(templateId));
 			}
@@ -330,6 +351,57 @@ namespace Strata
 					rootEntity["Components"]["Name"] = *rootName;
 			}
 			return snapshot;
+		}
+
+		std::unordered_map<UUID, UUID> MapTemplateIds(Entity root)
+		{
+			std::unordered_map<UUID, UUID> ids;
+			if (!root)
+				return ids;
+			const AssetHandle prefab = GetPrefab(root);
+			std::unordered_set<UUID> used;
+			// In the order SerializeEntities lists the subtree (parents first, siblings in order), so that of two entities with
+			// one link the same one keeps its id.
+			std::vector<Entity> stack = { root };
+			while (!stack.empty())
+			{
+				const Entity entity = stack.back();
+				stack.pop_back();
+				ids.emplace(entity.GetUUID(), TakeTemplateId(entity.TryGetComponent<PrefabInstanceComponent>(), prefab, used));
+				const std::vector<Entity> children = entity.GetChildren();
+				stack.insert(stack.end(), children.rbegin(), children.rend());
+			}
+			return ids;
+		}
+
+		nlohmann::json MakeTemplateComponents(Entity entity, const std::unordered_map<UUID, UUID>& templateIds)
+		{
+			// As SceneSerializer writes an entity's components.
+			nlohmann::json components = ComponentAccess::SerializeEntityComponents(entity);
+			if (const UnknownComponentsComponent* unknown = entity.TryGetComponent<UnknownComponentsComponent>())
+				unknown->AppendTo(components);
+			components.erase(c_LinkComponent);
+			// References are UUIDs as strings: those naming an entity of the instance (in the form UUIDToJson writes) are remapped.
+			std::vector<nlohmann::json*> pending = { &components };
+			while (!pending.empty())
+			{
+				nlohmann::json& current = *pending.back();
+				pending.pop_back();
+				if (current.is_string())
+				{
+					const std::string& text = current.get_ref<const std::string&>();
+					const std::optional<UUID> id = UUID::FromString(text);
+					const auto found = id ? templateIds.find(*id) : templateIds.end();
+					if (found != templateIds.end() && ToText(*id) == text)
+						current = ToText(found->second);
+				}
+				else if (current.is_object() || current.is_array())
+				{
+					for (nlohmann::json& child : current)
+						pending.push_back(&child);
+				}
+			}
+			return components;
 		}
 
 		PrefabInstanceDifference Compare(const Scene& scene, Entity root, const nlohmann::json& snapshot)

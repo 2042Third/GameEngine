@@ -5,6 +5,7 @@
 #include "Editor/PropertyEdit.h"
 #include "TestHelpers.h"
 
+#include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Math/Math.h>
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -108,6 +109,56 @@ namespace
 
 TEST_SUITE("Editor.Commands")
 {
+	TEST_CASE("entity.get {world} reports world transforms and bounds, and entity.find {box} the entities in a box")
+	{
+		EntityHarness harness;
+		const std::string parent = harness.Create("Parent", { { "components", { { "Transform", { { "Translation", { 1, 0, 0 } },
+			{ "Rotation", { 0, 90, 0 } }, { "Scale", { 2, 2, 2 } } } } } } });
+		const std::string child = harness.Create("Child", { { "parent", parent }, { "components", { { "Transform", { { "Translation", { 0, 0, 1 } },
+			{ "Rotation", { 30, 0, 0 } } } } } } });
+		const nlohmann::json got = harness.Run("entity.get", { { "entity", child }, { "world", true } });
+		const glm::mat4 world = harness.GetScene().GetWorldTransform(harness.Get(child));
+		glm::vec3 position;
+		glm::quat rotation;
+		glm::vec3 scale;
+		REQUIRE(Math::DecomposeTransform(world, position, rotation, scale));
+		for (int axis = 0; axis < 3; axis++)
+		{
+			CHECK(got["world"]["position"][axis].get<float>() == doctest::Approx(position[axis]));
+			CHECK(got["world"]["scale"][axis].get<float>() == doctest::Approx(scale[axis]));
+		}
+		CHECK(got["world"]["position"][0].get<float>() == doctest::Approx(3.0f)); // 1 + 2 along the parent's turned +Z
+		const nlohmann::json& quaternion = got["world"]["rotation"]["quaternion"];
+		CHECK(std::abs(glm::dot(glm::quat(quaternion[3].get<float>(), quaternion[0].get<float>(), quaternion[1].get<float>(), quaternion[2].get<float>()),
+			rotation)) == doctest::Approx(1.0f));
+		const glm::vec3 euler = Math::QuatToEulerDegrees(rotation);
+		CHECK(got["world"]["rotation"]["euler"][1].get<float>() == doctest::Approx(euler.y));
+		// Without world, nothing of it.
+		CHECK_FALSE(harness.Run("entity.get", { { "entity", child } }).contains("world"));
+
+		// A cube twice its size at (1, 2, 3).
+		const std::string cube = harness.Create("Cube", { { "components", {
+			{ "Transform", { { "Translation", { 1, 2, 3 } }, { "Scale", { 2, 2, 2 } } } },
+			{ "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } } });
+		const nlohmann::json bounds = harness.Run("entity.get", { { "entity", cube }, { "world", true } })["bounds"];
+		CHECK(bounds["min"] == nlohmann::json { 0.0, 1.0, 2.0 });
+		CHECK(bounds["max"] == nlohmann::json { 2.0, 3.0, 4.0 });
+		CHECK(bounds["size"] == nlohmann::json { 2.0, 2.0, 2.0 });
+		CHECK(bounds["center"] == nlohmann::json { 1.0, 2.0, 3.0 });
+		CHECK(bounds["pending"] == false);
+
+		// The box finds exactly the entities whose own bounds reach into it, in hierarchy order: the cube, and the empty
+		// entities by their origins.
+		const std::string far = harness.Create("Far", { { "components", { { "Transform", { { "Translation", { 50, 0, 0 } } } } } } });
+		CHECK(harness.Run("entity.find", { { "box", { { "min", { 1.9, 2.9, 3.9 } }, { "max", { 5, 5, 5 } } } } })["entities"] == nlohmann::json { cube });
+		CHECK(harness.Run("entity.find", { { "box", { { "min", { 49, -1, -1 } }, { "max", { 51, 1, 1 } } } } })["entities"] == nlohmann::json { far });
+		CHECK(harness.Run("entity.find", { { "box", { { "min", { -100, -100, -100 } }, { "max", { 100, 100, 100 } } } }, { "limit", 2 } })["entities"]
+			== nlohmann::json { parent, child });
+		CHECK(harness.Run("entity.find", { { "box", { { "min", { 2.1, 3.1, 4.1 } }, { "max", { 5, 5, 5 } } } } })["entities"].empty());
+		CHECK(harness.Fail("entity.find", { { "box", { { "min", { 1, 1, 1 } }, { "max", { 0, 0, 0 } } } } }).ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(harness.Fail("entity.find", { { "box", { { "min", { 1, 1 } } } } }).ErrorKind == EditorCommandError::InvalidParameters);
+	}
+
 	TEST_CASE("entity.setParent moves and reorders many entities in one undo step and refuses cycles")
 	{
 		EntityHarness harness;

@@ -1,23 +1,34 @@
 #include <doctest/doctest.h>
 
+#include "Animation/SkinnedGltf.h"
 #include "Editor/CommandJournal.h"
 #include "Editor/CommandTestUtils.h"
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorPlacement.h"
 #include "Editor/PrefabSync.h"
+#include "Editor/PropertyEdit.h"
+#include "Editor/SceneBounds.h"
+#include "Editor/TransformEdit.h"
 #include "TestHelpers.h"
 
+#include <Strata/Animation/AnimationComponents.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Timestep.h>
+#include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
+#include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/PrefabInstances.h>
 #include <Strata/Scene/Scene.h>
 
+#include <glm/gtc/matrix_transform.hpp>
+
+#include <chrono>
 #include <filesystem>
 #include <span>
 #include <string>
@@ -120,10 +131,184 @@ namespace
 		}
 	};
 
+	// The skinned arm (2 units tall at Scale 1) as Models/Arm.gltf of the harness's project, imported with `scale`.
+	AssetHandle AddArmModel(PrefabHarness& harness, float scale)
+	{
+		REQUIRE(FileSystem::CreateDirectories(harness.Directory / "Assets" / "Models"));
+		REQUIRE(FileSystem::WriteBytes(harness.Directory / "Assets" / "Models" / "Arm.gltf", Tests::CreateSkinnedArmGltf()));
+		harness.Context.GetAssetManager()->Scan();
+		const AssetHandle model = harness.Context.GetAssetManager()->FindAssetByPath("Models/Arm.gltf");
+		REQUIRE(model.IsValid());
+		harness.Run("asset.setImportSettings", { { "asset", UUIDToJson(model) }, { "settings", { { "Scale", scale } } } });
+		return model;
+	}
+
+	// Editor frames until nothing loads, imports or waits for a rest pose (by the clock: CI's machines are slow).
+	void SettleFrames(PrefabHarness& harness)
+	{
+		EditorAssetManager& assets = *harness.Context.GetAssetManager();
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		do
+			harness.Frames(1);
+		while ((assets.HasPendingLoads() || assets.HasPendingImports() || harness.Context.GetAnimationPreview().HasWaitingRestPoses())
+			&& std::chrono::steady_clock::now() < deadline);
+		harness.Frames(PrefabSync::c_SettleFrames + 1);
+	}
+
+	// An entity's bounds once the meshes they need are in (measuring requests them).
+	AABB GetBounds(PrefabHarness& harness, const std::string& entity)
+	{
+		Scene& scene = *harness.Context.GetEditScene();
+		const Entity measured = scene.GetEntityByUUID(*UUIDFromJson(nlohmann::json(entity)));
+		SceneBounds::GetEntityBounds(scene, measured);
+		SettleFrames(harness);
+		return SceneBounds::GetEntityBounds(scene, measured);
+	}
+
+	void CheckSameBounds(const AABB& a, const AABB& b)
+	{
+		for (int axis = 0; axis < 3; axis++)
+		{
+			CAPTURE(axis);
+			CHECK(a.Min[axis] == doctest::Approx(b.Min[axis]).epsilon(1e-4));
+			CHECK(a.Max[axis] == doctest::Approx(b.Max[axis]).epsilon(1e-4));
+		}
+	}
+
 }
 
 TEST_SUITE("Editor.Prefab")
 {
+	TEST_CASE("A model's import scale reaches its placed instances, whose root transforms stay theirs")
+	{
+		PrefabHarness harness("PrefabImportScale");
+		const AssetHandle model = AddArmModel(harness, 0.01f);
+		const nlohmann::json placement = { { "Transform", { { "Translation", { 3, 0, 1 } }, { "Rotation", { 0, 30, 0 } } } } };
+		const std::string instance = harness.Run("prefab.instantiate", { { "prefab", UUIDToJson(model) }, { "components", placement } })["id"].get<std::string>();
+		SettleFrames(harness);
+		const nlohmann::json transform = harness.Get(instance)["components"]["Transform"];
+		CHECK(transform["Scale"] == nlohmann::json::array({ 1, 1, 1 }));
+		const AABB before = GetBounds(harness, instance);
+		REQUIRE(before.IsValid());
+		CHECK(before.GetExtents().y * 2.0f == doctest::Approx(0.02f).epsilon(1e-3));
+
+		harness.Run("asset.setImportSettings", { { "asset", UUIDToJson(model) }, { "settings", { { "Scale", 0.02 } } } });
+		SettleFrames(harness);
+		const AABB after = GetBounds(harness, instance);
+		// Twice the size around the instance's origin, which stayed where it was placed.
+		const glm::vec3 origin(3.0f, 0.0f, 1.0f);
+		for (int axis = 0; axis < 3; axis++)
+		{
+			CAPTURE(axis);
+			CHECK(after.Min[axis] - origin[axis] == doctest::Approx((before.Min[axis] - origin[axis]) * 2.0f).epsilon(1e-4));
+			CHECK(after.Max[axis] - origin[axis] == doctest::Approx((before.Max[axis] - origin[axis]) * 2.0f).epsilon(1e-4));
+		}
+		CHECK(harness.Get(instance)["components"]["Transform"] == transform);
+		CHECK(harness.Status(instance)["modified"] == false);
+	}
+
+	TEST_CASE("Instances placed before the import scale was baked keep their size through a prefab change and a scene open")
+	{
+		PrefabHarness harness("PrefabImportScaleMigration");
+		const AssetHandle model = AddArmModel(harness, 0.01f);
+		const nlohmann::json placement = { { "Transform", { { "Translation", { 2, 0, 0 } } } } };
+		const std::string reference = harness.Run("prefab.instantiate", { { "prefab", UUIDToJson(model) }, { "components", placement } })["id"].get<std::string>();
+		const std::string old = harness.Run("prefab.instantiate", { { "prefab", UUIDToJson(model) }, { "components", placement } })["id"].get<std::string>();
+		SettleFrames(harness);
+		const AABB expected = GetBounds(harness, reference);
+		REQUIRE(expected.IsValid());
+
+		// The previous importer put the import scale on the model's root, and instances took it: a root Scale of 0.01.
+		const nlohmann::json* current = harness.Context.GetPrefabSync().GetBaseline(harness.Context, model);
+		REQUIRE(current);
+		nlohmann::json previous = *current;
+		const UUID templateRoot = harness.Context.GetEditScene()->GetEntityByUUID(*UUIDFromJson(nlohmann::json(old))).GetComponent<PrefabInstanceComponent>().PrefabEntityID;
+		bool found = false;
+		for (nlohmann::json& entity : previous["Entities"])
+		{
+			if (UUIDFromJson(entity["ID"]) == std::optional<UUID>(templateRoot))
+			{
+				entity["Components"]["Transform"]["Scale"] = { 0.01, 0.01, 0.01 };
+				found = true;
+			}
+		}
+		REQUIRE(found);
+		harness.Run("component.set", { { "entity", old }, { "component", "Transform" }, { "values", { { "Scale", { 0.01, 0.01, 0.01 } } } } });
+
+		SUBCASE("Propagate: the model's document changes while the scene is open")
+		{
+			harness.Context.GetPrefabSync().SetBaseline(harness.Context, model, previous);
+			const size_t steps = harness.History().size();
+			REQUIRE(harness.Context.GetAssetManager()->ReimportAsset(model));
+			SettleFrames(harness);
+			CHECK(harness.Get(old)["components"]["Transform"]["Scale"] == nlohmann::json::array({ 1, 1, 1 }));
+			CheckSameBounds(GetBounds(harness, old), expected);
+			// One step: the update of the instances.
+			REQUIRE(harness.History().size() == steps + 1);
+			CHECK(harness.History().back() == "Update Instances of Arm");
+		}
+		SUBCASE("CatchUp: the scene opens after the model changed")
+		{
+			// Saved with a part version of the old document, so the instance is outdated once the scene opens.
+			harness.Run("scene.saveAs", { { "path", "Scenes/Old.stscene" } });
+			const std::filesystem::path file = harness.Directory / "Assets" / "Scenes" / "Old.stscene";
+			std::optional<std::string> text = FileSystem::ReadText(file);
+			REQUIRE(text);
+			std::optional<nlohmann::json> document = JsonUtils::Parse(*text);
+			REQUIRE(document);
+			for (nlohmann::json& entity : (*document)["Scene"]["Entities"])
+			{
+				if (entity["ID"] == old)
+				{
+					std::string version = entity["Components"]["PrefabInstance"]["PrefabVersion"].get<std::string>();
+					REQUIRE_FALSE(version.empty());
+					version.back() = version.back() == '1' ? '2' : '1';
+					entity["Components"]["PrefabInstance"]["PrefabVersion"] = version;
+				}
+			}
+			REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(*document, 1, '\t') + "\n"));
+			harness.Run("scene.new", { { "force", true } });
+			harness.Run("scene.open", { { "scene", "Scenes/Old.stscene" }, { "force", true } });
+			SettleFrames(harness);
+			CHECK(harness.Get(old)["components"]["Transform"]["Scale"] == nlohmann::json::array({ 1, 1, 1 }));
+			CheckSameBounds(GetBounds(harness, old), expected);
+			CHECK(harness.Get(reference)["components"]["Transform"]["Scale"] == nlohmann::json::array({ 1, 1, 1 }));
+		}
+	}
+
+	TEST_CASE("A model's placement bounds never wait for its skeleton, and stand it in its rest pose once it is resident")
+	{
+		PrefabHarness harness("PrefabPlacementBounds");
+		const AssetHandle model = AddArmModel(harness, 1.0f);
+		SettleFrames(harness);
+		EditorAssetManager& assets = *harness.Context.GetAssetManager();
+		// The model's skeleton, from its template's animator.
+		const Ref<EntityTemplate> asset = std::static_pointer_cast<EntityTemplate>(assets.LoadAssetSync(model));
+		REQUIRE(asset);
+		Scene scratch;
+		REQUIRE_FALSE(asset->Instantiate(scratch).empty());
+		AssetHandle skeleton = UUID::Null();
+		for (const auto [handle, animator] : scratch.GetRegistry().view<AnimatorComponent>().each())
+			skeleton = animator.Skeleton;
+		REQUIRE(skeleton.IsValid());
+		REQUIRE(assets.GetAssetState(skeleton) != AssetState::Ready);
+
+		// Measured before the skeleton is resident: it is requested, not waited for.
+		EditorPlacement::GetTemplateBounds(model);
+		CHECK(assets.GetAssetState(skeleton) != AssetState::Ready);
+		// Once it is, the placement bounds are the arm standing 2 units tall from its root, as the template bounds are then.
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (!harness.Context.GetAssetBounds().Measure(assets, model).Bounds.IsValid() || harness.Context.GetAssetBounds().Measure(assets, model).Pending)
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			harness.Frames(1);
+		}
+		const AABB placed = EditorPlacement::GetPlacementBounds(harness.Context, model);
+		REQUIRE(placed.IsValid());
+		CHECK(placed.Max.y - placed.Min.y == doctest::Approx(2.0f).epsilon(1e-3));
+		CheckSameBounds(placed, EditorPlacement::GetTemplateBounds(model));
+	}
+
 	TEST_CASE("prefab.create links the entities in one undo step with the file, and undo unlinks them and trashes the file")
 	{
 		PrefabHarness harness("PrefabCreateLink");
@@ -380,7 +565,7 @@ TEST_SUITE("Editor.Prefab")
 		CHECK_FALSE(harness.Run("prefab.unpack", { { "entity", setup.Second } }).contains("warning"));
 	}
 
-	TEST_CASE("When a prefab's file changes, unmodified instances take its values and modified ones keep theirs")
+	TEST_CASE("When a prefab's file changes, every instance takes its values except what it overrides")
 	{
 		PrefabHarness harness("PrefabPropagate");
 		LampSetup setup(harness);
@@ -389,6 +574,7 @@ TEST_SUITE("Editor.Prefab")
 		harness.Frames(2); // The sync reads the prefab it compares with
 		const uint64_t propagated = harness.Context.GetPrefabSync().GetPropagationCount();
 		const std::vector<std::string> before = harness.History();
+		const EditorContext::OverrideUpkeepStats upkeep = harness.Context.GetOverrideUpkeepStats();
 
 		// The file changes outside the editor (another tool, version control): the bulb gets brighter.
 		const std::filesystem::path file = harness.Directory / "Assets" / "Prefabs" / "Lamp.stprefab";
@@ -399,7 +585,10 @@ TEST_SUITE("Editor.Prefab")
 		for (nlohmann::json& entity : (*document)["Prefab"]["Entities"])
 		{
 			if (entity["Components"]["Name"]["Name"] == "Bulb")
+			{
 				entity["Components"]["PointLight"]["Intensity"] = 6.0;
+				entity["Components"]["PointLight"]["Range"] = 4.0;
+			}
 		}
 		REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(*document, 1, '\t') + "\n"));
 		const AssetHandle prefab = *UUIDFromJson(setup.Prefab);
@@ -408,8 +597,14 @@ TEST_SUITE("Editor.Prefab")
 
 		CHECK(harness.Intensity(harness.ChildOf(setup.First)) == 6.0);
 		CHECK(harness.Intensity(setup.Bulb) == 6.0);
+		// The modified instance keeps its intensity (an override) and takes the range.
 		CHECK(harness.Intensity(modifiedBulb) == 8.0);
-		CHECK(harness.Context.GetPrefabSync().GetPropagationCount() == propagated + 2);
+		CHECK(harness.Get(modifiedBulb)["components"]["PointLight"]["Range"] == 4.0);
+		CHECK(harness.Status(setup.Second)["overrides"].size() == 1);
+		// Propagate left every list current: recording the step works none out again.
+		CHECK(harness.Context.GetOverrideUpkeepStats().WholeLists == upkeep.WholeLists);
+		CHECK(harness.Context.GetOverrideUpkeepStats().Entities == upkeep.Entities);
+		CHECK(harness.Context.GetPrefabSync().GetPropagationCount() == propagated + 3);
 		std::vector<std::string> expected = before;
 		expected.push_back("Update Instances of Lamp");
 		CHECK(harness.History() == expected);
@@ -424,7 +619,7 @@ TEST_SUITE("Editor.Prefab")
 		CHECK(harness.Intensity(setup.Bulb) == 3.0);
 	}
 
-	TEST_CASE("A prefab applied in another scene reaches unmodified instances when their scene opens; modified ones are outdated")
+	TEST_CASE("A prefab applied in another scene reaches its instances when their scene opens, except their overrides; ones without a list are outdated")
 	{
 		PrefabHarness harness("PrefabClosedScene");
 		const std::string lamp = harness.Create("Lamp", nullptr, 2.0f);
@@ -433,27 +628,42 @@ TEST_SUITE("Editor.Prefab")
 		harness.Run("scene.new");
 		const std::string plain = harness.Run("prefab.instantiate", { { "prefab", prefab } })["id"].get<std::string>();
 		const std::string edited = harness.Run("prefab.instantiate", { { "prefab", prefab } })["id"].get<std::string>();
+		const std::string legacy = harness.Run("prefab.instantiate", { { "prefab", prefab } })["id"].get<std::string>();
 		harness.SetIntensity(edited, 4.0f);
+		harness.SetIntensity(legacy, 5.0f);
 		CHECK(harness.Status(plain)["outdated"] == false);
 		CHECK_FALSE(harness.Get(plain)["components"]["PrefabInstance"]["PrefabVersion"].get<std::string>().empty());
 		harness.Run("scene.saveAs", { { "path", "Scenes/B.stscene" } });
+		// The legacy instance as a scene from before override lists stores it: without its list.
+		{
+			const std::filesystem::path file = harness.Directory / "Assets" / "Scenes" / "B.stscene";
+			std::optional<nlohmann::json> document = JsonUtils::Parse(*FileSystem::ReadText(file));
+			REQUIRE(document);
+			for (nlohmann::json& entity : (*document)["Scene"]["Entities"])
+			{
+				if (entity["ID"] == legacy)
+					entity["Components"]["PrefabInstance"].erase("Overrides");
+			}
+			REQUIRE(FileSystem::WriteText(file, JsonUtils::Dump(*document, 1, '\t') + "\n"));
+		}
 
-		// Changed and applied in scene A, while B is closed.
+		// Changed (the color and the intensity) and applied in scene A, while B is closed.
 		harness.Run("scene.open", { { "scene", "Scenes/A.stscene" } });
 		harness.Frames(2);
 		harness.SetIntensity(lamp, 9.0f);
+		harness.Run("component.set", { { "entity", lamp }, { "component", "PointLight" }, { "values", { { "Color", { 0, 1, 0 } } } } });
 		CHECK(harness.Run("prefab.apply", { { "entity", lamp } })["updatedInstances"] == 0);
 		harness.Run("scene.save");
 
-		// B opens: by the time scene.open answers, its unmodified instance took the change in one undo step, and the modified
-		// one keeps its values and is outdated.
+		// B opens: by the time scene.open answers, in one undo step, its unmodified instance took the change, the one with an
+		// override took all but it, and the one without a list keeps its values and is outdated.
 		const uint64_t checks = harness.Context.GetPrefabSync().GetCatchUpCheckCount();
 		const uint64_t outsideCommands = harness.Context.GetJournal().GetEditsOutsideCommands();
 		harness.Run("scene.open", { { "scene", "Scenes/B.stscene" } });
 		const uint64_t openEntry = harness.Context.GetJournal().GetLatestId();
-		CHECK(harness.Context.GetPrefabSync().GetCatchUpCheckCount() == checks + 2);
+		CHECK(harness.Context.GetPrefabSync().GetCatchUpCheckCount() == checks + 3);
 		harness.Frames(2);
-		CHECK(harness.Context.GetPrefabSync().GetCatchUpCheckCount() == checks + 2);
+		CHECK(harness.Context.GetPrefabSync().GetCatchUpCheckCount() == checks + 3);
 		// The catch-up happened between frames, while scene.open waited: it is the open's work (its undo step), which a replay
 		// of the open repeats, not an edit outside commands.
 		const CommandJournalEntry* opened = harness.Context.GetJournal().Find(openEntry);
@@ -465,21 +675,26 @@ TEST_SUITE("Editor.Prefab")
 		CHECK(harness.Status(plain)["modified"] == false);
 		CHECK(harness.Status(plain)["outdated"] == false);
 		CHECK(harness.Intensity(edited) == 4.0);
+		CHECK(harness.Get(edited)["components"]["PointLight"]["Color"] == nlohmann::json::array({ 0.0, 1.0, 0.0 }));
 		CHECK(harness.Status(edited)["modified"] == true);
-		CHECK(harness.Status(edited)["outdated"] == true);
+		CHECK(harness.Status(edited)["outdated"] == false);
+		CHECK(harness.Status(edited)["overrides"].size() == 1);
+		CHECK(harness.Intensity(legacy) == 5.0);
+		CHECK(harness.Get(legacy)["components"]["PointLight"]["Color"] == nlohmann::json::array({ 1.0, 1.0, 1.0 }));
+		CHECK(harness.Status(legacy)["outdated"] == true);
 		CHECK(harness.History() == std::vector<std::string> { "Update Instances of Lamp" });
 		CHECK(harness.Run("scene.info")["modified"] == true);
 		harness.Frames(4); // Once per scene: nothing more happens
 		CHECK(harness.History().size() == 1);
 
 		// The outdated instance would write its older values over the prefab's: refused, unless forced.
-		const EditorCommandResult refused = harness.Fail("prefab.apply", { { "entity", edited } });
+		const EditorCommandResult refused = harness.Fail("prefab.apply", { { "entity", legacy } });
 		CHECK(refused.Error.find("older version") != std::string::npos);
 		CHECK(harness.ReadPrefabEntity("Prefabs/Lamp.stprefab", "Lamp")["Components"]["PointLight"]["Intensity"] == 9.0);
 		// Reverting brings it up to date.
-		harness.Run("prefab.revert", { { "entity", edited } });
-		CHECK(harness.Intensity(edited) == 9.0);
-		CHECK(harness.Status(edited)["outdated"] == false);
+		harness.Run("prefab.revert", { { "entity", legacy } });
+		CHECK(harness.Intensity(legacy) == 9.0);
+		CHECK(harness.Status(legacy)["outdated"] == false);
 
 		// The catch-up is an undo step like any edit.
 		harness.Run("edit.undo");
@@ -659,20 +874,269 @@ TEST_SUITE("Editor.Prefab")
 			sync.IsModified(harness.Context, first);
 			sync.IsModified(harness.Context, second);
 		}
-		// The first edit after the pause is looked at at once (each instance compared, the links walked); the rest of the run
-		// is not.
-		CHECK(sync.GetCompareCount() - compares == 2);
+		// The first edit after the pause is looked at at once (the links walked; the edited instance's override list says it is
+		// modified, the other is compared); the rest of the run is not.
+		CHECK(sync.GetCompareCount() - compares == 1);
 		CHECK(sync.GetWatchScanCount() - scans == 1);
 
 		// Once the edits pause, the marks follow them.
 		harness.Frames(static_cast<int>(PrefabSync::c_SettleFrames));
 		CHECK(sync.IsModified(harness.Context, first));
 		CHECK_FALSE(sync.IsModified(harness.Context, second));
-		CHECK(sync.GetCompareCount() - compares == 4);
+		CHECK(sync.GetCompareCount() - compares == 2);
 		CHECK(sync.GetWatchScanCount() - scans == 2);
 		// Links that come or go are found at once, also during a run.
 		harness.Run("prefab.unpack", { { "entity", setup.Second } });
 		harness.Frames(1);
 		CHECK(sync.GetWatchScanCount() - scans == 3);
+	}
+
+	TEST_CASE("Edits keep the instance's override list on its root; undo restores it and scenes store it")
+	{
+		PrefabHarness harness("PrefabOverrideList");
+		LampSetup setup(harness);
+		Scene& scene = *harness.Context.GetEditScene();
+		const Entity first = scene.GetEntityByUUID(*UUIDFromJson(setup.First));
+		const auto overrides = [&]() { return first.GetComponent<PrefabInstanceComponent>().Overrides; };
+		CHECK(overrides().empty());
+		CHECK(harness.Status(setup.First)["overrides"].empty());
+
+		// The root's transform and name are its own; a value below it is an override, reported with the scene's entity.
+		harness.Run("component.set", { { "entity", setup.First }, { "component", "Transform" }, { "values", { { "Translation", { 9, 0, 0 } } } } });
+		harness.Run("entity.rename", { { "entity", setup.First }, { "name", "Front Lamp" } });
+		CHECK(overrides().empty());
+		const std::string bulb = harness.ChildOf(setup.First);
+		harness.SetIntensity(bulb, 6.0f);
+		const UUID bulbTemplate = scene.GetEntityByUUID(*UUIDFromJson(bulb)).GetComponent<PrefabInstanceComponent>().PrefabEntityID;
+		CHECK(overrides() == std::vector<PrefabOverride> { { bulbTemplate, "PointLight", "Intensity", PrefabOverrideKind::Property } });
+		nlohmann::json status = harness.Status(bulb);
+		REQUIRE(status["overrides"].size() == 1);
+		CHECK(status["overrides"][0] == nlohmann::json { { "entity", bulb }, { "prefabEntity", bulbTemplate.ToString() }, { "component", "PointLight" },
+			{ "property", "Intensity" }, { "kind", "Property" } });
+
+		// A component added, then the entity removed: the list follows; undo and redo restore it with the entities.
+		harness.Run("component.add", { { "entity", bulb }, { "component", "SpotLight" } });
+		CHECK(overrides().size() == 2);
+		harness.Run("entity.delete", { { "entities", { bulb } } });
+		CHECK(overrides() == std::vector<PrefabOverride> { { bulbTemplate, "", "", PrefabOverrideKind::RemovedEntity } });
+		CHECK(harness.Status(setup.First)["overrides"][0]["entity"].is_null());
+		harness.Run("edit.undo");
+		CHECK(overrides().size() == 2);
+		harness.Run("edit.undo");
+		harness.Run("edit.undo");
+		CHECK(overrides().empty());
+		harness.Run("edit.redo");
+		CHECK(overrides().size() == 1);
+		// The other instance is untouched; the marks read the list.
+		const Entity second = scene.GetEntityByUUID(*UUIDFromJson(setup.Second));
+		CHECK(second.GetComponent<PrefabInstanceComponent>().Overrides.empty());
+		PrefabSync& sync = harness.Context.GetPrefabSync();
+		const uint64_t compares = sync.GetCompareCount();
+		CHECK(sync.IsModified(harness.Context, first));
+		CHECK(sync.GetCompareCount() == compares);
+
+		// Saved with the scene, only where there are overrides.
+		harness.Run("scene.saveAs", { { "path", "Scenes/Lamps.stscene" } });
+		const std::optional<std::string> text = FileSystem::ReadText(harness.Directory / "Assets" / "Scenes" / "Lamps.stscene");
+		REQUIRE(text);
+		CHECK(text->find("\"Overrides\"") != std::string::npos);
+		CHECK(text->find("\"Overrides\"") == text->rfind("\"Overrides\""));
+		harness.Run("scene.new");
+		harness.Run("scene.open", { { "scene", "Scenes/Lamps.stscene" } });
+		const Entity reopened = harness.Context.GetEditScene()->GetEntityByUUID(*UUIDFromJson(setup.First));
+		REQUIRE(reopened);
+		CHECK(reopened.GetComponent<PrefabInstanceComponent>().Overrides == std::vector<PrefabOverride> { { bulbTemplate, "PointLight", "Intensity",
+			PrefabOverrideKind::Property } });
+
+		// Edits while playing record nothing.
+		harness.Run("play.start", { { "build", false } });
+		const Entity running = harness.Context.GetActiveScene()->GetEntityByUUID(*UUIDFromJson(setup.First));
+		harness.Run("component.set", { { "entity", harness.ChildOf(setup.First) }, { "component", "PointLight" }, { "values", { { "Range", 3 } } } });
+		CHECK(running.GetComponent<PrefabInstanceComponent>().Overrides.size() == 1);
+		harness.Run("play.stop");
+	}
+
+	TEST_CASE("A gizmo or Inspector drag on an instance's child is one undo step, and its override follows it")
+	{
+		PrefabHarness harness("PrefabOverrideDrag");
+		LampSetup setup(harness);
+		Scene& scene = *harness.Context.GetEditScene();
+		const Entity first = scene.GetEntityByUUID(*UUIDFromJson(setup.First));
+		const auto overrides = [&]() { return first.GetComponent<PrefabInstanceComponent>().Overrides; };
+		Entity bulb = scene.GetEntityByUUID(*UUIDFromJson(harness.ChildOf(setup.First)));
+		const UUID bulbTemplate = bulb.GetComponent<PrefabInstanceComponent>().PrefabEntityID;
+		const glm::vec3 start = bulb.GetComponent<TransformComponent>().Translation;
+		UndoStack& undo = harness.Context.GetUndoStack();
+		const size_t steps = undo.GetHistory().size();
+		const std::vector<PrefabOverride> moved = { { bulbTemplate, "Transform", "Translation", PrefabOverrideKind::Property } };
+		const ComponentInfo* transform = ComponentRegistry::Find("Transform");
+		REQUIRE(transform);
+		const PropertyInfo* translation = transform->FindProperty("Translation");
+		REQUIRE(translation);
+		std::string error;
+
+		SUBCASE("Gizmo")
+		{
+			harness.Context.Select(bulb.GetUUID());
+			std::optional<TransformDrag> drag = TransformDrag::Begin(harness.Context, GizmoOperation::Translate);
+			REQUIRE(drag);
+			for (int frame = 1; frame <= 5; frame++)
+			{
+				const glm::mat4 gizmo = glm::translate(glm::mat4(1.0f), glm::vec3(0.5f * static_cast<float>(frame), 0.0f, 0.0f)) * drag->GetStartTransform();
+				REQUIRE_MESSAGE(drag->Update(harness.Context, gizmo, &error), error);
+				CHECK(overrides() == moved);
+				CHECK(undo.GetHistory().size() == steps + 1);
+			}
+			drag->End(harness.Context);
+		}
+		SUBCASE("Inspector")
+		{
+			for (int frame = 1; frame <= 5; frame++)
+			{
+				const PropertyValue value(start + glm::vec3(0.5f * static_cast<float>(frame), 0.0f, 0.0f));
+				REQUIRE_MESSAGE(SetPropertyWithUndo(harness.Context, bulb, *transform, *translation, value, &error), error);
+				CHECK(overrides() == moved);
+				CHECK(undo.GetHistory().size() == steps + 1);
+			}
+			undo.BreakMerge();
+		}
+
+		// One undo puts the child and the list back where they were before the drag; redo brings both.
+		CHECK(undo.GetHistory().size() == steps + 1);
+		harness.Run("edit.undo");
+		CHECK(bulb.GetComponent<TransformComponent>().Translation == start);
+		CHECK(overrides().empty());
+		harness.Run("edit.redo");
+		CHECK(bulb.GetComponent<TransformComponent>().Translation != start);
+		CHECK(overrides() == moved);
+	}
+
+	TEST_CASE("An edit back to the prefab's value clears its override, also within a drag")
+	{
+		PrefabHarness harness("PrefabOverrideBack");
+		LampSetup setup(harness);
+		Scene& scene = *harness.Context.GetEditScene();
+		const Entity first = scene.GetEntityByUUID(*UUIDFromJson(setup.First));
+		const auto overrides = [&]() { return first.GetComponent<PrefabInstanceComponent>().Overrides; };
+		const std::string bulbId = harness.ChildOf(setup.First);
+		Entity bulb = scene.GetEntityByUUID(*UUIDFromJson(bulbId));
+		harness.SetIntensity(bulbId, 6.0f);
+		CHECK(overrides().size() == 1);
+		harness.SetIntensity(bulbId, 3.0f); // The prefab's
+		CHECK(overrides().empty());
+
+		// A drag that comes back to where it started leaves neither an override nor a step.
+		const size_t steps = harness.Context.GetUndoStack().GetHistory().size();
+		harness.Context.Select(bulb.GetUUID());
+		std::optional<TransformDrag> drag = TransformDrag::Begin(harness.Context, GizmoOperation::Translate);
+		REQUIRE(drag);
+		REQUIRE(drag->Update(harness.Context, glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f)) * drag->GetStartTransform()));
+		CHECK(overrides().size() == 1);
+		REQUIRE(drag->Update(harness.Context, drag->GetStartTransform()));
+		drag->End(harness.Context);
+		CHECK(overrides().empty());
+		CHECK(harness.Context.GetUndoStack().GetHistory().size() == steps);
+	}
+
+	TEST_CASE("Edits of an instance work out the entries of the entities they change, not the whole instance")
+	{
+		PrefabHarness harness("PrefabOverrideUpkeep");
+		const std::string rack = harness.Create("Rack");
+		for (int slot = 0; slot < 40; slot++)
+			harness.Create(fmt::format("Slot {}", slot), rack);
+		const nlohmann::json created = harness.Run("prefab.create", { { "entities", { rack } }, { "path", "Prefabs/Rack.stprefab" } });
+		std::vector<std::string> instances;
+		for (int index = 0; index < 3; index++)
+			instances.push_back(harness.Run("prefab.instantiate", { { "prefab", created["asset"] } })["id"].get<std::string>());
+		Scene& scene = *harness.Context.GetEditScene();
+		const EditorContext::OverrideUpkeepStats before = harness.Context.GetOverrideUpkeepStats();
+
+		// A drag of one slot of an instance, then of all three roots: one entity per instance and frame.
+		const Entity slot = scene.GetEntityByUUID(*UUIDFromJson(harness.ChildOf(instances[0], 7)));
+		harness.Context.Select(slot.GetUUID());
+		std::optional<TransformDrag> drag = TransformDrag::Begin(harness.Context, GizmoOperation::Translate);
+		REQUIRE(drag);
+		for (int frame = 1; frame <= 10; frame++)
+			REQUIRE(drag->Update(harness.Context, glm::translate(glm::mat4(1.0f), glm::vec3(0.1f * static_cast<float>(frame), 0.0f, 0.0f)) * drag->GetStartTransform()));
+		drag->End(harness.Context);
+		harness.Context.SetSelection({ *UUIDFromJson(instances[0]), *UUIDFromJson(instances[1]), *UUIDFromJson(instances[2]) });
+		drag = TransformDrag::Begin(harness.Context, GizmoOperation::Translate);
+		REQUIRE(drag);
+		for (int frame = 1; frame <= 10; frame++)
+			REQUIRE(drag->Update(harness.Context, glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.1f * static_cast<float>(frame), 0.0f)) * drag->GetStartTransform()));
+		drag->End(harness.Context);
+		const EditorContext::OverrideUpkeepStats& after = harness.Context.GetOverrideUpkeepStats();
+		CHECK(after.WholeLists == before.WholeLists);
+		CHECK(after.Entities - before.Entities == 10 + 10 * 3);
+		CHECK(scene.GetEntityByUUID(*UUIDFromJson(instances[0])).GetComponent<PrefabInstanceComponent>().Overrides.size() == 1);
+
+		// An edit that changes which entities an instance has works its whole list out.
+		harness.Run("entity.delete", { { "entities", { harness.ChildOf(instances[1], 3) } } });
+		CHECK(harness.Context.GetOverrideUpkeepStats().WholeLists == before.WholeLists + 1);
+		CHECK(scene.GetEntityByUUID(*UUIDFromJson(instances[1])).GetComponent<PrefabInstanceComponent>().Overrides.size() == 1);
+	}
+
+	TEST_CASE("prefab.apply can write one override into the prefab; every other instance takes it unless it overrides it")
+	{
+		PrefabHarness harness("PrefabApplyOne");
+		LampSetup setup(harness);
+		const std::string firstBulb = harness.ChildOf(setup.First);
+		const std::string secondBulb = harness.ChildOf(setup.Second);
+		harness.SetIntensity(firstBulb, 6.0f);
+		harness.Run("component.set", { { "entity", firstBulb }, { "component", "PointLight" }, { "values", { { "Range", 3 } } } });
+		harness.SetIntensity(secondBulb, 7.0f);
+		CHECK(harness.Status(setup.First)["overrides"].size() == 2);
+
+		// Only the first bulb's range goes into the prefab: the original lamp and the second instance take it, the first keeps
+		// its intensity override.
+		const size_t steps = harness.History().size();
+		const nlohmann::json applied = harness.Run("prefab.apply", { { "entity", firstBulb }, { "component", "PointLight" }, { "property", "Range" } });
+		CHECK(applied["updatedInstances"] == 2);
+		CHECK(harness.ReadPrefabEntity("Prefabs/Lamp.stprefab", "Bulb")["Components"]["PointLight"]["Range"] == 3.0);
+		CHECK(harness.ReadPrefabEntity("Prefabs/Lamp.stprefab", "Bulb")["Components"]["PointLight"]["Intensity"] == 3.0);
+		CHECK(harness.Get(secondBulb)["components"]["PointLight"]["Range"] == 3.0);
+		CHECK(harness.Intensity(secondBulb) == 7.0);
+		CHECK(harness.Get(setup.Bulb)["components"]["PointLight"]["Range"] == 3.0);
+		const nlohmann::json overrides = harness.Status(setup.First)["overrides"];
+		REQUIRE(overrides.size() == 1);
+		CHECK(overrides[0]["property"] == "Intensity");
+		CHECK(harness.Status(setup.First)["outdated"] == false);
+		// One step for the file and every instance.
+		CHECK(harness.History().size() == steps + 1);
+		harness.Run("edit.undo");
+		CHECK(harness.Get(secondBulb)["components"]["PointLight"]["Range"] != 3.0);
+		CHECK(harness.ReadPrefabEntity("Prefabs/Lamp.stprefab", "Bulb")["Components"]["PointLight"].value("Range", 0.0) != 3.0);
+		CHECK(harness.Status(setup.First)["overrides"].size() == 2);
+
+		// An entity added to the instance cannot apply one override: it is not in the prefab.
+		const std::string sticker = harness.Create("Sticker", setup.First);
+		CHECK(harness.Fail("prefab.apply", { { "entity", sticker }, { "component", "PointLight" } }).ErrorKind == EditorCommandError::InvalidParameters);
+		CHECK(harness.Fail("prefab.apply", { { "entity", firstBulb }, { "property", "Range" } }).ErrorKind == EditorCommandError::InvalidParameters);
+	}
+
+	TEST_CASE("prefab.revert can revert one property or one component of an entity")
+	{
+		PrefabHarness harness("PrefabRevertOne");
+		LampSetup setup(harness);
+		const std::string bulb = harness.ChildOf(setup.First);
+		harness.SetIntensity(bulb, 6.0f);
+		harness.Run("component.set", { { "entity", bulb }, { "component", "PointLight" }, { "values", { { "Range", 3 } } } });
+		harness.Run("component.add", { { "entity", bulb }, { "component", "SpotLight" } });
+		REQUIRE(harness.Status(setup.First)["overrides"].size() == 3);
+
+		harness.Run("prefab.revert", { { "entity", bulb }, { "component", "PointLight" }, { "property", "Intensity" } });
+		CHECK(harness.Intensity(bulb) == 3.0);
+		CHECK(harness.Get(bulb)["components"]["PointLight"]["Range"] == 3.0);
+		CHECK(harness.Status(setup.First)["overrides"].size() == 2);
+		CHECK(harness.Run("edit.history")["undo"] == "Revert PointLight.Intensity of Bulb");
+		// A component the prefab lacks goes.
+		harness.Run("prefab.revert", { { "entity", bulb }, { "component", "SpotLight" } });
+		CHECK_FALSE(harness.Get(bulb)["components"].contains("SpotLight"));
+		CHECK(harness.Status(setup.First)["overrides"].size() == 1);
+		harness.Run("edit.undo");
+		CHECK(harness.Get(bulb)["components"].contains("SpotLight"));
+		CHECK(harness.Status(setup.First)["overrides"].size() == 2);
+		CHECK(harness.Fail("prefab.revert", { { "entity", bulb }, { "component", "SpotLight" }, { "property", "Intensity" } }).ErrorKind
+			== EditorCommandError::InvalidParameters);
 	}
 }

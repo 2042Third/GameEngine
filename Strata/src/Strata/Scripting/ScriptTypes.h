@@ -36,6 +36,10 @@ namespace Strata
 		OnUISubmit
 	};
 
+	// How many callbacks there are: code that lists or counts every callback (script.status) goes up to this, so callbacks
+	// appended to the enum are included without edits there. Defined from the last value: keep it pointing at the last one.
+	constexpr size_t c_ScriptCallbackCount = static_cast<size_t>(ScriptCallback::OnUISubmit) + 1;
+
 	const char* ScriptCallbackToString(ScriptCallback callback);
 
 	// A field declared by a script class (ST_SCRIPT_FIELD): shown in the inspector, overridden per entity through

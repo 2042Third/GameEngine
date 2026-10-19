@@ -169,6 +169,7 @@ namespace Strata
 	{
 		for (Entry& entry : m_Entries)
 		{
+			entry.ShownRect.reset();
 			if (!entry.Open || entry.Descriptor.Placement != EditorPanelPlacement::Docked)
 			{
 				entry.Panel->OnHidden(context);
@@ -224,9 +225,15 @@ namespace Strata
 				}
 			}
 			if (visible)
+			{
+				const ImGuiWindow* window = ImGui::GetCurrentWindow();
+				entry.ShownRect = WindowRect { window->Pos, ImVec2(window->Pos.x + window->Size.x, window->Pos.y + window->Size.y) };
 				entry.Panel->OnImGuiRender(context);
+			}
 			else
+			{
 				entry.Panel->OnHidden(context);
+			}
 			ImGui::End();
 
 			// Closed with the tab's close button.
@@ -238,6 +245,12 @@ namespace Strata
 		}
 	}
 
+	std::optional<EditorPanelRegistry::WindowRect> EditorPanelRegistry::GetShownWindowRect(std::string_view id) const
+	{
+		const Entry* entry = FindEntry(id);
+		return entry ? entry->ShownRect : std::nullopt;
+	}
+
 	bool EditorPanelRegistry::HasLauncher() const
 	{
 		return std::any_of(m_Entries.begin(), m_Entries.end(), [](const Entry& entry) { return entry.Descriptor.Placement == EditorPanelPlacement::Launcher; });
@@ -247,6 +260,7 @@ namespace Strata
 	{
 		for (Entry& entry : m_Entries)
 		{
+			entry.ShownRect.reset();
 			if (entry.Descriptor.Placement != EditorPanelPlacement::Launcher)
 			{
 				entry.Panel->OnHidden(context);

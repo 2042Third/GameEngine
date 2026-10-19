@@ -1,3 +1,4 @@
+#include "Editor/AssetBounds.h"
 #include "Editor/AssetEdit.h"
 #include "Editor/AssetFileAction.h"
 #include "Editor/AssetReferences.h"
@@ -30,6 +31,9 @@ namespace Strata
 
 	namespace
 	{
+
+		// Frames asset.info waits for what an asset draws to load before it answers with boundsPending: about five seconds.
+		constexpr int c_MaxBoundsFrames = 300;
 
 		EditorAssetManager* RequireAssets(EditorContext& context, std::string* outError)
 		{
@@ -217,7 +221,7 @@ namespace Strata
 		// Project
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "project.info", "The open project: name, directories and start scene (null fields without a project).", ObjectSchema({}),
+		registry.Register({ "project.info", "The open project: name, path (the project file), directories, start scene and export settings ({open: false} without a project).", ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
 				return EditorCommandResult::Ok(DescribeProject(context));
@@ -259,6 +263,9 @@ namespace Strata
 				const std::string name = arguments.GetString("name");
 				const std::string templateId = arguments.GetString("template", std::string(ProjectTemplates::c_Empty));
 				const bool force = arguments.GetBool("force", false);
+				// An empty directory would be the editor's working directory, which nobody means.
+				if (arguments.IsValid() && directory.find_first_not_of(" \t") == std::string::npos)
+					arguments.SetError("Parameter 'directory': give the absolute directory to create the project in (it must not be empty)");
 				if (arguments.IsValid() && !ProjectTemplates::Find(templateId))
 					arguments.SetError(fmt::format("Unknown template '{}' (templates: {})", templateId, ProjectTemplates::ListIds()));
 				if (!arguments.IsValid())
@@ -277,7 +284,7 @@ namespace Strata
 					{ "discardedChanges", discarded } });
 			}, EditorCommandKind::Session });
 
-		registry.Register({ "project.open",
+		registry.Register(MayDefer({ "project.open",
 			"Opens a project file or the project in a directory. Fails while the edited scene has unsaved changes unless force is true (save first). "
 			"The project opens at once; its start scene loads in the background like scene.open's (the frames go on, scene.loadStatus reports it) "
 			"and the command answers once it is the edited scene: {projectFile, discardedChanges (whether unsaved changes were discarded), "
@@ -300,7 +307,7 @@ namespace Strata
 					return EditorCommandResult::Fail(error);
 				return FinishProjectOpen(context, { { "projectFile", FileSystem::ToUTF8(context.GetProject()->GetProjectFile()) },
 					{ "discardedChanges", modified } });
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
 		registry.Register({ "project.close",
 			"Closes the open project; the editor shows its launcher. Without a project it does nothing. Fails while the edited scene has unsaved "
@@ -338,7 +345,7 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "samples", std::move(list) } });
 			}, EditorCommandKind::Query });
 
-		registry.Register({ "project.openSample",
+		registry.Register(MayDefer({ "project.openSample",
 			"Copies a sample project (project.samples) into a new directory and opens the copy, like project.open; the sample itself stays unchanged. "
 			"The copy leaves out local editor data (.strata): build its scripts with script.build before playing. Fails while the edited scene has "
 			"unsaved changes unless force is true (save first), before anything is copied. It answers once the start scene is open, with "
@@ -377,7 +384,7 @@ namespace Strata
 					return EditorCommandResult::Fail(fmt::format("The sample was copied to '{}' but could not be opened: {}", directory, error));
 				return FinishProjectOpen(context, { { "sample", sample->Id }, { "projectFile", FileSystem::ToUTF8(projectFile) },
 					{ "discardedChanges", discarded } });
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
 		registry.Register({ "project.setStartScene", "Sets the scene a built game starts with and saves the project file. When it is the "
 			"export settings' loading scene (project.setExportSettings), that setting is cleared (loadingSceneCleared: true), as the loading scene "
@@ -409,7 +416,7 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "startScene", UUIDToJson(scene) }, { "loadingSceneCleared", loadingSceneCleared } });
 			} });
 
-		registry.Register({ "project.export", "Exports the project as a playable game (runtime executable, asset pack, script module, manifest) into a "
+		registry.Register(MayDefer({ "project.export", "Exports the project as a playable game (runtime executable, asset pack, script module, manifest) into a "
 			"directory outside the project, in the background: the editor keeps running, and the command answers when the export finished (it fails at once "
 			"when it cannot start, and fails naming the document when a scene, prefab or material saved meanwhile references what the export did not plan "
 			"for: export again). The pack is ordered by first use from the start scene; with prune it holds only what the scenes use and what the "
@@ -479,7 +486,7 @@ namespace Strata
 						value["frameTimes"] = frameTimes.Describe();
 					return EditorCommandResult::Ok(std::move(value));
 				});
-			}, EditorCommandKind::Session });
+			}, EditorCommandKind::Session }));
 
 		registry.Register({ "project.exportStatus", "The running export (project.export) or the last one: {running, state (WaitingForImports, Packing, Copying, "
 			"Succeeded, Failed, Cancelled), progress (0 to 1), stage (what it does, or how it ended), directory}; {running: false, state: null} before the "
@@ -616,21 +623,27 @@ namespace Strata
 				return EditorCommandResult::Ok({ { "assets", std::move(assets) } });
 			}, EditorCommandKind::Query });
 
-		registry.Register({ "asset.info",
+		registry.Register(MayDefer({ "asset.info",
 			"An asset's metadata, load state, import errors and warnings, sub-assets, import settings with the description of every setting "
-			"(importSettingsProperties: type, range, options; what asset.setImportSettings accepts) and whether an import is running.",
-			ObjectSchema({ { "asset", AssetSchema("Asset") } }, { "asset" }),
+			"(importSettingsProperties: type, range, options; what asset.setImportSettings accepts) and whether an import is running. Meshes, models "
+			"and prefabs add bounds: {min, max, size}, what they draw around their origin as an instance placed there (skinned characters in their "
+			"rest pose): use it to check a model's size before placing it. When meshes or skeletons it needs are not loaded, asset.info loads them "
+			"and answers once they are in (at most about 300 frames; then boundsPending: true); bounds: false answers at once without bounds.",
+			ObjectSchema({ { "asset", AssetSchema("Asset") }, { "bounds", BoolSchema("Add the bounds of meshes, models and prefabs (default true)") } },
+				{ "asset" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
 				const AssetHandle handle = ResolveAsset(context, arguments, "asset", AssetType::None);
+				const bool bounds = arguments.GetBool("bounds", true);
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
 				nlohmann::json result = DescribeAsset(*manager->GetMetadata(handle));
 				result["state"] = AssetStateToString(manager->GetAssetState(handle));
 				result["loadError"] = manager->GetAssetError(handle);
-				if (EditorAssetManager* assets = context.GetAssetManager())
+				EditorAssetManager* assets = context.GetAssetManager();
+				if (assets)
 				{
 					const AssetImportInfo info = assets->GetImportInfo(handle);
 					nlohmann::json subAssets = nlohmann::json::array();
@@ -655,10 +668,47 @@ namespace Strata
 					result["importSettingsProperties"] = std::move(settingsProperties);
 					result["importing"] = assets->IsImportPending(handle);
 				}
-				return EditorCommandResult::Ok(std::move(result));
-			}, EditorCommandKind::Query });
+				const AssetType type = manager->GetAssetType(handle);
+				if (!bounds || !assets || (type != AssetType::Mesh && type != AssetType::Model && type != AssetType::Prefab))
+					return EditorCommandResult::Ok(std::move(result));
+				auto addBounds = [](nlohmann::json& value, const AssetBounds::Result& measured, bool givenUp)
+				{
+					if (measured.Bounds.IsValid())
+					{
+						const glm::vec3 size = measured.Bounds.Max - measured.Bounds.Min;
+						const glm::vec3& min = measured.Bounds.Min;
+						const glm::vec3& max = measured.Bounds.Max;
+						value["bounds"] = { { "min", { min.x, min.y, min.z } }, { "max", { max.x, max.y, max.z } }, { "size", { size.x, size.y, size.z } } };
+					}
+					else
+					{
+						value["bounds"] = nullptr;
+					}
+					if (givenUp)
+						value["boundsPending"] = true;
+				};
+				const AssetBounds::Result measured = context.GetAssetBounds().Measure(*assets, handle);
+				if (!measured.Pending)
+				{
+					addBounds(result, measured, false);
+					return EditorCommandResult::Ok(std::move(result));
+				}
+				// What it draws loads over the next frames (Measure requested it).
+				return EditorCommandResult::Defer([result = std::move(result), handle, addBounds, frames = 0](EditorContext& context) mutable
+					-> std::optional<EditorCommandResult>
+				{
+					EditorAssetManager* assets = context.GetAssetManager();
+					if (!assets)
+						return EditorCommandResult::Fail("The project was closed before the asset's bounds were known", EditorCommandError::Cancelled);
+					const AssetBounds::Result measured = context.GetAssetBounds().Measure(*assets, handle);
+					if (measured.Pending && ++frames < c_MaxBoundsFrames)
+						return std::nullopt;
+					addBounds(result, measured, measured.Pending);
+					return EditorCommandResult::Ok(std::move(result));
+				});
+			}, EditorCommandKind::Query }));
 
-		registry.Register({ "asset.import",
+		registry.Register(MayDefer({ "asset.import",
 			"Copies external files and folders into the project and imports them in the background: the editor keeps running, and the command answers "
 			"when every import is done. A file goes into `directory` (\" (n)\" added when its name is taken) with the files it reads (a glTF model's "
 			"buffers and images, in a new folder named after it, keeping their layout); a folder goes there with its tree (asset files, their .meta files, "
@@ -746,7 +796,7 @@ namespace Strata
 						return EditorCommandResult::Fail(import->GetError());
 					return DescribeExternalImport(*current, *import);
 				});
-			} });
+			} }));
 
 		registry.Register({ "asset.move",
 			"Moves or renames an asset (with its .meta and cached import) within the asset directory; its handle and every reference to it stay "
@@ -930,7 +980,7 @@ namespace Strata
 					{ "referencedBy", AssetReferences::ToJson(referencers) } });
 			} });
 
-		registry.Register({ "asset.reimport",
+		registry.Register(MayDefer({ "asset.reimport",
 			"Imports an asset again from its source file, in the background (the editor keeps running and the asset keeps its previous version until "
 			"the new one is loaded). Returns when the import is done (its settings, warnings) and fails when it failed; wait: false returns at once "
 			"(asset.info tells when it is done).",
@@ -951,9 +1001,9 @@ namespace Strata
 				if (!assets->ReimportAssetInBackground(handle, &error))
 					return EditorCommandResult::Fail(error);
 				return FinishImport(*assets, handle, wait);
-			} });
+			} }));
 
-		registry.Register({ "asset.setImportSettings",
+		registry.Register(MayDefer({ "asset.setImportSettings",
 			"Changes import settings (merged into the current ones; asset.info lists every setting with its type, range or options), saves the .meta "
 			"and imports the asset again in the background, without blocking the editor. Returns when the import is done (settings, warnings) and "
 			"fails when it failed; wait: false returns at once. Unknown settings, invalid values and numbers outside a setting's range change "
@@ -983,7 +1033,7 @@ namespace Strata
 				if (!assets->SetImportSettingsInBackground(handle, normalized, &error))
 					return EditorCommandResult::Fail(error);
 				return FinishImport(*assets, handle, wait);
-			} });
+			} }));
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Materials and prefabs
@@ -991,7 +1041,10 @@ namespace Strata
 
 		registry.Register({ "material.get",
 			"A material asset's property values, and every material property with its type, range or options: what material.create and "
-			"material.set accept. \"saved\" is false while values previewed with material.set {save: false} are not saved.",
+			"material.set accept. \"saved\" is false while values previewed with material.set {save: false} are not saved. \"warnings\" lists texture "
+			"maps whose import usage does not fit their slot (a Color texture as the normal map, color in Metal/Rough or Occlusion, a normal map or "
+			"data as color): [{property, texture, usage, expected, message, fix: {command, parameters}}]; run fix (asset.setImportSettings) to "
+			"import the texture as the slot reads it.",
 			ObjectSchema({ { "material", AssetSchema("Material: handle, path or Builtin/DefaultMaterial") } }, { "material" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -1008,10 +1061,12 @@ namespace Strata
 					properties.push_back(DescribeProperty(property));
 				nlohmann::json values = material->Serialize()["Material"];
 				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", std::move(values) }, { "properties", std::move(properties) },
-					{ "saved", !assets || AssetEdit::IsMaterialSaved(*assets, handle) } });
+					{ "saved", !assets || AssetEdit::IsMaterialSaved(*assets, handle) },
+					{ "warnings", AssetEdit::DescribeTextureUsageMismatches(context, AssetEdit::FindTextureUsageMismatches(context, material->GetProperties())) } });
 			}, EditorCommandKind::Query });
 
-		registry.Register({ "material.create", "Creates a material asset (.stmat) from the default material with the given property values.",
+		registry.Register({ "material.create", "Creates a material asset (.stmat) from the default material with the given property values. Returns "
+			"{asset, warnings}: textures whose import usage does not fit their slot (see material.get).",
 			ObjectSchema({
 				{ "path", StringSchema("Path relative to the asset directory, e.g. \"Materials/Red.stmat\"") },
 				{ "properties", AnyObjectSchema(fmt::format("Property values, e.g. {{\"BaseColor\": [1, 0, 0, 1], \"Roughness\": 0.3, \"BaseColorMap\": "
@@ -1035,14 +1090,19 @@ namespace Strata
 				const AssetHandle handle = assets->CreateNativeAsset(path, AsBytes(*document), &error);
 				if (!handle.IsValid())
 					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) } });
+				const std::optional<nlohmann::json> created = JsonUtils::Parse(*document);
+				const Ref<Material> material = created ? Material::FromJson(*created) : nullptr;
+				const nlohmann::json warnings = material ? AssetEdit::DescribeTextureUsageMismatches(context, AssetEdit::FindTextureUsageMismatches(context,
+					material->GetProperties())) : nlohmann::json::array();
+				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "warnings", warnings } });
 			} });
 
 		registry.Register({ "material.set",
 			"Changes property values of a material asset of the project; entities using it show the change in the same frame. By default it saves the "
 			"material (one undo step, edit.undo restores the file and the loaded values); save: false only previews the values in the loaded material "
 			"(no file is written, no undo step), e.g. while a value is dragged, until a saving material.set (which saves them too), an undo or a "
-			"reload replaces them. Returns the material's values.",
+			"reload replaces them. Returns the material's values and warnings (texture maps whose import usage does not fit their slot, with the "
+			"command that fixes each: see material.get).",
 			ObjectSchema({
 				{ "material", AssetSchema("Material") },
 				{ "properties", AnyObjectSchema(fmt::format("Property values to change, e.g. {{\"BaseColor\": [1, 0, 0, 1]}}. Properties: {} (material.get "
@@ -1068,7 +1128,8 @@ namespace Strata
 				Ref<Material> material = AssetManager::LoadAssetSync<Material>(handle);
 				if (!material)
 					return EditorCommandResult::Fail(fmt::format("Loading the material failed: {}", context.GetAssetManager()->GetAssetError(handle)));
-				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", material->Serialize()["Material"] }, { "saved", save } });
+				return EditorCommandResult::Ok({ { "asset", UUIDToJson(handle) }, { "values", material->Serialize()["Material"] }, { "saved", save },
+					{ "warnings", AssetEdit::DescribeTextureUsageMismatches(context, AssetEdit::FindTextureUsageMismatches(context, material->GetProperties())) } });
 			} });
 
 		registry.Register({ "prefab.create",

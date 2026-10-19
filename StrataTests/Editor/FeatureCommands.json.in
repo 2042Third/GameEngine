@@ -5,6 +5,9 @@
 		"expect": { "/classes": { "min": 1 } } },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "RigidBody" },
 		"expect": { "/values/Type": { "equals": "Dynamic" } } },
+	{ "command": "prefab.status", "parameters": { "entity": "F7E0000000000031" }, "expect": { "/overrides": { "equals":
+		[ { "entity": "F7E0000000000030", "prefabEntity": "F7C0000000000001", "component": "Script", "property": "CrateScript.Value", "kind": "Property" },
+			{ "entity": "F7E0000000000031", "prefabEntity": "F7C0000000000002", "component": "MeshRenderer", "property": "CastShadows", "kind": "Property" } ] } } },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "Transform" },
 		"expect": { "/values/Translation": { "equals": [ -4, 4, 0 ] } } },
 	{ "command": "ui.layout", "parameters": { "entity": "F7E0000000000072", "screen": [ 1280, 720 ] },
@@ -18,8 +21,7 @@
 			"/selectable": { "equals": "F7E0000000000072" } } },
 	{ "command": "play.start" },
 	{ "command": "play.pause", "parameters": { "paused": true } },
-	{ "command": "play.step", "parameters": { "frames": 150 } },
-	{ "command": "editor.wait", "parameters": { "frames": 160 } },
+	{ "command": "play.step", "parameters": { "steps": 150 }, "expect": { "/stepsRun": { "equals": 150 } } },
 	{ "command": "component.get", "parameters": { "entity": "F7E0000000000012", "component": "Transform" },
 		"expect": {
 			"/values/Translation/0": { "min": -4.05, "max": -3.95 },
@@ -38,6 +40,12 @@
 		"expect": {
 			"/elements/0/editing": { "equals": true },
 			"/elements/0/text": { "equals": "Strata!" } } },
+	{ "command": "input.sequence", "parameters": { "steps": 4,
+			"events": [ { "step": 1, "command": "input.click", "parameters": { "entity": "F7E0000000000072" } } ],
+			"observe": [ { "entity": "F7E0000000000083", "script": "UIFeatures", "field": "LastWidget" } ] },
+		"expect": {
+			"/seen/0/step": { "equals": 1 },
+			"/samples/0/values/0/value": { "equals": "Play Button" } } },
 	{ "command": "script.status",
 		"expect": {
 			"/loaded": { "equals": true },

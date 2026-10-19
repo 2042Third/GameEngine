@@ -105,6 +105,7 @@ namespace
 		"asset.setImportSettings",
 		"component.add", "component.remove", "component.set",
 		"edit.redo", "edit.undo",
+		"editor.batch",
 		"entity.create", "entity.delete", "entity.dropToGround", "entity.duplicate", "entity.paste", "entity.rename", "entity.setActive",
 		"entity.setParent",
 		"material.create", "material.set",
@@ -117,6 +118,7 @@ namespace
 	constexpr std::string_view c_QueryCommands[] = {
 		"animation.info",
 		"asset.findReferences", "asset.info", "asset.list", "asset.stats",
+		"audio.state",
 		"camera.get",
 		"component.get", "component.list",
 		"edit.history",
@@ -140,7 +142,7 @@ namespace
 		"camera.focus", "camera.set",
 		"editor.activity.export", "editor.quit", "editor.removeRecentProject",
 		"input.click", "input.gamepadAxis", "input.gamepadButton", "input.key", "input.mouseButton", "input.mouseMove", "input.releaseAll",
-		"input.scroll", "input.type",
+		"input.scroll", "input.sequence", "input.type",
 		"play.pause", "play.simulate", "play.start", "play.step", "play.stop",
 		"prefab.select",
 		"project.cancelExport", "project.close", "project.create", "project.export", "project.open", "project.openSample",
@@ -152,9 +154,24 @@ namespace
 	// Queries whose results show what the editor's session holds (EditorCommandResults::Session): replays never bind IDs
 	// from them.
 	constexpr std::string_view c_SessionResultCommands[] = {
-		"asset.stats", "camera.get", "edit.history", "editor.activity", "editor.perf", "editor.recentProjects", "editor.status", "input.state",
+		"asset.stats", "audio.state", "camera.get", "edit.history", "editor.activity", "editor.perf", "editor.recentProjects", "editor.status", "input.state",
 		"log.read", "play.state", "project.exportStatus", "scene.loadStatus", "scene.recoveryStatus", "script.status", "selection.get",
 		"viewport.getSettings",
+	};
+
+	// Commands whose handlers may answer later (EditorCommand::MayDefer): editor.batch refuses them, and Debug builds assert
+	// when another command defers. A command that starts waiting (a load, a build, a capture, steps of the game) joins it.
+	constexpr std::string_view c_DeferringCommands[] = {
+		"animation.preview",
+		"asset.import", "asset.info", "asset.reimport", "asset.setImportSettings",
+		"editor.wait",
+		"input.click", "input.gamepadAxis", "input.gamepadButton", "input.key", "input.mouseButton", "input.mouseMove", "input.releaseAll", "input.scroll",
+		"input.sequence", "input.type",
+		"play.start", "play.step",
+		"project.export", "project.open", "project.openSample",
+		"scene.loadAdditive", "scene.loadStatus", "scene.open", "scene.recover", "scene.recoveryStatus",
+		"script.build",
+		"viewport.capture",
 	};
 
 	template<size_t N>
@@ -188,9 +205,12 @@ TEST_SUITE("Editor.Journal")
 				CHECK(command->Kind == EditorCommandKind::Session);
 			const bool sessionResults = Contains(c_SessionResultCommands, command->Name);
 			CHECK(command->Results == (sessionResults ? EditorCommandResults::Session : EditorCommandResults::Content));
+			CHECK(command->MayDefer == Contains(c_DeferringCommands, command->Name));
 		}
 		// No list names a command the registry lacks.
 		CHECK(listed == std::size(c_EditCommands) + std::size(c_QueryCommands) + std::size(c_SessionCommands));
+		for (const std::string_view name : c_DeferringCommands)
+			CHECK_MESSAGE(registry.Find(name) != nullptr, name);
 	}
 
 	TEST_CASE("Commands of every source are recorded once, with their source and the client's name")
@@ -274,7 +294,7 @@ TEST_SUITE("Editor.Journal")
 	{
 		JournalHarness harness;
 		uint64_t runningDuringPoll = 0;
-		harness.Commands.Register({ "test.deferredNested", "Test command whose poll creates an entity through entity.create.", CommandUtils::ObjectSchema({}),
+		harness.Commands.Register(MayDefer({ "test.deferredNested", "Test command whose poll creates an entity through entity.create.", CommandUtils::ObjectSchema({}),
 			[&harness, &runningDuringPoll](EditorContext&, const nlohmann::json&)
 			{
 				return EditorCommandResult::Defer([&harness, &runningDuringPoll](EditorContext& context) -> std::optional<EditorCommandResult>
@@ -282,7 +302,7 @@ TEST_SUITE("Editor.Journal")
 					runningDuringPoll = context.GetJournal().GetOutermostRunningId();
 					return harness.Commands.Execute(context, "entity.create", { { "name", "Inner" } });
 				});
-			}, EditorCommandKind::Edit });
+			}, EditorCommandKind::Edit }));
 
 		bool done = false;
 		REQUIRE(harness.Runner.Run(harness.Context, harness.Commands, "test.deferredNested", nlohmann::json::object(),
@@ -300,6 +320,38 @@ TEST_SUITE("Editor.Journal")
 		CHECK(outer[0]->Status == CommandStatus::Succeeded);
 	}
 
+	TEST_CASE("A batch is one entry with its steps as children, and replays as its steps")
+	{
+		JournalHarness harness;
+		const nlohmann::json steps = nlohmann::json::array({
+			{ { "command", "entity.create" }, { "parameters", { { "name", "Root" } } }, { "bind", { { "root", "/id" } } } },
+			{ { "command", "entity.create" }, { "parameters", { { "name", "Child" }, { "parent", { { "$ref", "root" } } } } } } });
+		REQUIRE(harness.Commands.Execute(harness.Context, "editor.batch", { { "steps", steps } }, CommandOrigin { CommandSource::Automation, "agent" }).Success);
+		const std::vector<const CommandJournalEntry*> batches = harness.Entries("editor.batch");
+		REQUIRE(batches.size() == 1);
+		CHECK(batches[0]->Source == CommandSource::Automation);
+		CHECK(batches[0]->UndoStep == "Batch of 2 commands");
+		const std::vector<const CommandJournalEntry*> creates = harness.Entries("entity.create");
+		REQUIRE(creates.size() == 2);
+		for (const CommandJournalEntry* create : creates)
+		{
+			CHECK(create->Parent == batches[0]->Id);
+			CHECK(create->Source == CommandSource::Internal);
+		}
+		// The second step ran with the root's ID in place of its reference.
+		CHECK(creates[1]->Parameters["parent"] == UUIDToJson(creates[0]->ResultIds.front().second));
+
+		// The replay repeats the two steps (binding the root for the child), not the batch.
+		std::string error;
+		const std::optional<ReplayScript> script = harness.Journal().BuildReplayScript(0, &error);
+		REQUIRE_MESSAGE(script, error);
+		REQUIRE(script->Steps.size() == 2);
+		CHECK(script->Steps[0]["command"] == "entity.create");
+		CHECK(script->Steps[1]["command"] == "entity.create");
+		CHECK(script->Steps[1]["parameters"]["parent"].contains("$ref"));
+		CHECK(script->Edits == 2);
+	}
+
 	TEST_CASE("Failures carry their kind and message")
 	{
 		JournalHarness harness;
@@ -314,6 +366,10 @@ TEST_SUITE("Editor.Journal")
 		const nlohmann::json described = CommandJournal::Describe(harness.Latest());
 		CHECK(described["status"] == "Failed");
 		CHECK(described["error"]["kind"] == "Failed");
+		// The summary is the error's first line; a query that succeeded is "done".
+		CHECK(described["summary"] == harness.Latest().Error.substr(0, harness.Latest().Error.find('\n')));
+		REQUIRE(harness.Commands.Execute(harness.Context, "scene.info").Success);
+		CHECK(CommandJournal::Describe(harness.Latest())["summary"] == "done");
 	}
 
 	TEST_CASE("Entries name the undo step and the entities a command changed, and commands that run commands")
@@ -321,6 +377,9 @@ TEST_SUITE("Editor.Journal")
 		JournalHarness harness;
 		const std::string a = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "entity.create", { { "name", "A" } })["id"].get<std::string>();
 		CHECK(harness.Latest().UndoStep.find("Create") != std::string::npos);
+		// Summarized by its undo step, with the entity's name.
+		CHECK(CommandJournal::Describe(harness.Latest())["summary"] == harness.Latest().UndoStep);
+		CHECK(harness.Latest().UndoStep.find("'A'") != std::string::npos);
 		REQUIRE(harness.Latest().Entities.size() == 1);
 		CHECK(UUIDToJson(harness.Latest().Entities[0]) == a);
 		CHECK(harness.Latest().Kind == EditorCommandKind::Edit);
@@ -453,5 +512,51 @@ TEST_SUITE("Editor.Journal")
 
 		const EditorCommandResult invalid = harness.Commands.Execute(harness.Context, "editor.activity", { { "source", "Robot" } });
 		CHECK(invalid.ErrorKind == EditorCommandError::InvalidParameters);
+	}
+
+	TEST_CASE("editor.activity pages newest first with before")
+	{
+		JournalHarness harness;
+		const uint64_t since = harness.Journal().GetLatestId();
+		for (int index = 0; index < 7; index++)
+			harness.Commands.Execute(harness.Context, "entity.create", { { "name", fmt::format("Entity {}", index) } });
+		harness.Commands.Execute(harness.Context, "scene.info");
+
+		// The latest first: scene.info, then the creations from the last back, three at a time.
+		nlohmann::json page = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "editor.activity",
+			{ { "since", since }, { "newest", true }, { "limit", 3 } });
+		REQUIRE(page["entries"].size() == 3);
+		CHECK(page["entries"][0]["command"] == "scene.info");
+		CHECK(page["more"] == true);
+		std::vector<std::string> names;
+		std::vector<uint64_t> ids;
+		while (true)
+		{
+			for (const nlohmann::json& entry : page["entries"])
+			{
+				ids.push_back(entry["id"].get<uint64_t>());
+				if (entry["command"] == "entity.create")
+					names.push_back(entry["parameters"]["name"].get<std::string>());
+			}
+			if (page["more"] == false)
+				break;
+			CHECK(page["oldest"] == ids.back());
+			page = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "editor.activity",
+				{ { "since", since }, { "newest", true }, { "limit", 3 }, { "before", page["oldest"] }, { "command", "entity.create" } });
+		}
+		CHECK(names == std::vector<std::string> { "Entity 6", "Entity 5", "Entity 4", "Entity 3", "Entity 2", "Entity 1", "Entity 0" });
+		CHECK(std::is_sorted(ids.rbegin(), ids.rend()));
+		CHECK(std::adjacent_find(ids.begin(), ids.end()) == ids.end());
+
+		// before bounds the oldest-first listing too; nothing below the first entry leaves oldest null.
+		const nlohmann::json first = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "editor.activity",
+			{ { "since", since }, { "before", ids[ids.size() - 2] } });
+		REQUIRE(first["entries"].size() == 1);
+		CHECK(first["entries"][0]["parameters"]["name"] == "Entity 0");
+		const nlohmann::json none = Tests::RunCommandToCompletion(harness.Context, harness.Commands, "editor.activity",
+			{ { "since", since }, { "newest", true }, { "before", ids.back() } });
+		CHECK(none["entries"].empty());
+		CHECK(none["oldest"].is_null());
+		CHECK(none["more"] == false);
 	}
 }

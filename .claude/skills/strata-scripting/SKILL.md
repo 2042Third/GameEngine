@@ -120,10 +120,15 @@ ST_SCRIPT_CLASS(Turret)
   stopping play releases everything the scripts requested.
 - `Input`: `IsKeyDown/Pressed/Released(Key::W)`, `IsMouseButtonDown/Pressed/Released(Mouse::ButtonLeft)`,
   `GetMousePosition` (viewport pixels), `GetMouseDelta`, `GetScrollDelta`. In the editor, scripts receive device input only
-  while the viewport is the focused game view (playing through the scene's primary camera); positions are relative to
-  the image. Tools play the game with the `input.*` editor commands (simulated input, see the editor automation skill),
+  while the Game view (the tab beside the Scene view) is focused in play mode; positions are in the image's pixels (its
+  render resolution). Tools play the game with the `input.*` editor commands (simulated input, see the editor automation skill),
   which reach the scripts whether or not the viewport has the focus. Gamepads and the cursor: see
   [Gamepads and the cursor](#gamepads-and-the-cursor).
+- Input timing: `Pressed`/`Released` are transitions since the previous frame, so read them in `OnUpdate` (once per
+  frame); `OnFixedUpdate` runs zero or several times in a frame and would miss or repeat them. Held state (`IsKeyDown`,
+  sticks) is fine in either. Simulated input (`input.*`, `input.sequence`) lasts whole fixed steps of the game, and
+  `play.step` and `input.sequence` run one step per frame: a script that applies held input per fixed step (or scales by
+  the frame's `deltaTime`) behaves the same in tests at any frame rate.
 - `Time`: `GetDeltaTime`, `GetFixedDeltaTime`, `GetElapsedTime`, `GetFrameIndex`, `Get/SetTimeScale`,
   `GetUnscaledDeltaTime` and `GetRealTime` (they go on at time scale 0: pause menus, fades).
 - `Input::GetTypedText()`: the UTF-8 text typed this frame (name entry, chat).
@@ -396,7 +401,7 @@ Input::SetCursorMode(CursorMode::Normal);  // Menus (Hidden hides it over the ga
 ```
 
 `GetGamepadAxis(axis, gamepad, deadZone)` takes a dead zone (pass 0 for the raw value). The cursor mode applies while the
-game has the input: in the editor while the game view is focused (Shift+F1 frees the cursor, clicking the game view
+game has the input: in the editor while the Game view is focused (Shift+F1 frees the cursor, clicking the game view
 takes it again, stopping play gives it back). Tools press buttons and move sticks with `input.gamepadButton` and
 `input.gamepadAxis`.
 
@@ -414,8 +419,8 @@ std::vector<std::string> slots = Game::ListSaveFiles();  // Sorted names
 Game::DeleteSaveFile("Slot 1");
 ```
 
-Window requests apply after the frame in an exported game; the editor's play mode only records them (`editor.status`
-section `game`, a notice over the game view), its own window stays. Saves go to `<user data>/<Game>/Saves` in an exported
+Window requests apply after the frame in an exported game; the editor's play mode only records them (`editor.status
+{"sections": ["game"]}`, a notice over the Game view, whose "Game's request" resolution renders at it), its own window stays. Saves go to `<user data>/<Game>/Saves` in an exported
 game and to `<project>/.strata/Saves` in the editor. Names are 1 to 64 ASCII letters, digits, spaces, `-`, `_` and `.`
 (not first or last), without `..` (no paths); the calls read and write the disk before they return, so save at quiet
 moments (checkpoints, menus) and keep saves small.
@@ -588,7 +593,8 @@ every step below is a command, and source files are written with your own file t
    text, an entity ID, an asset handle or path. Save the scene (`scene.save`) to keep them.
 6. **Play and observe.** `play.start`, `editor.wait {"frames": 60}`, then read state with `component.get`,
    `entity.find`, `scene.hierarchy`; script `Log::Info(...)` output is in `log.read`. Play it like a person with
-   simulated input: `input.key {"key": "Left"}` (a tap), `{"key": "Space", "frames": 20}` (held), `input.mouseMove`,
+   simulated input: `input.key {"key": "Left"}` (a tap), `{"key": "Space", "steps": 20}` (held for 20 fixed steps: input
+   durations count the game's fixed steps, its `OnFixedUpdate` ticks, not frames; `seconds` gives game time), `input.mouseMove`,
    `input.mouseButton`. While playing, `script.setField` changes the live instance too (and the running copy only:
    `play.stop` discards it).
 7. **Iterate with hot reload.** Edit the sources and `script.build` again while the scene plays: the module is reloaded

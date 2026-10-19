@@ -96,7 +96,17 @@ namespace Strata
 		// Queries whose results follow the editor's session (the selection, the journal, what is loaded) say so: replays
 		// never bind the IDs those show.
 		EditorCommandResults Results = EditorCommandResults::Content;
+		// The handler may answer later (EditorCommandResult::Defer: loads, builds, captures, waits): editor.batch refuses such
+		// commands, which cannot finish within its frame, and Debug builds assert that an unmarked command never defers.
+		bool MayDefer = false;
 	};
+
+	// The command marked MayDefer, for registrations: registry.Register(MayDefer({ "scene.open", ... })).
+	inline EditorCommand MayDefer(EditorCommand command)
+	{
+		command.MayDefer = true;
+		return command;
+	}
 
 	class EditorCommandRegistry
 	{
@@ -123,6 +133,10 @@ namespace Strata
 		// run commands are recorded as their children.
 		EditorCommandResult Execute(EditorContext& context, std::string_view name, const nlohmann::json& parameters = nlohmann::json::object(),
 			const CommandOrigin& origin = {}) const;
+		// What Run checks before a command's handler sees its parameters (an object, every parameter declared in its schema,
+		// the required ones given): the problem, or nullopt when they pass. For commands that hold parameters to run another
+		// command later (input.sequence) and check them up front.
+		static std::optional<std::string> CheckParameters(const EditorCommand& command, const nlohmann::json& parameters);
 	private:
 		EditorCommandResult Run(EditorContext& context, const EditorCommand* command, std::string_view name, const nlohmann::json& parameters) const;
 		std::map<std::string, EditorCommand, std::less<>> m_Commands;
@@ -153,6 +167,8 @@ namespace Strata
 		// An optional entity reference: absent or null gives an invalid entity; an unknown UUID is an error.
 		Entity FindEntity(Scene& scene, std::string_view name);
 		std::vector<Entity> GetEntities(Scene& scene, std::string_view name); // Array of UUIDs, at least one
+		// An optional array of strings (absent or null: empty).
+		std::vector<std::string> GetStringArray(std::string_view name);
 	private:
 		const nlohmann::json* Get(std::string_view name);
 		void TypeError(std::string_view name, std::string_view expected);
@@ -166,16 +182,20 @@ namespace Strata
 	constexpr const char* c_EntityDataFormat = "Entities";
 	constexpr uint32_t c_EntityDataFormatVersion = 1;
 
-	// Built-in command groups (EditorCommands*.cpp).
+	// Built-in command groups (Editor*Commands.cpp and Commands/*.cpp).
 	void RegisterSceneCommands(EditorCommandRegistry& registry);
-	void RegisterPrefabWorkflowCommands(EditorCommandRegistry& registry); // prefab.apply, revert, unpack, select, status (EditorPrefabCommands.cpp)
+	void RegisterEntityCommands(EditorCommandRegistry& registry); // entity.* and component.* (Commands/EntityCommands.cpp)
+	void RegisterPrefabCommands(EditorCommandRegistry& registry); // prefab.* (EditorPrefabCommands.cpp)
 	void RegisterAssetCommands(EditorCommandRegistry& registry);
 	void RegisterEditorStateCommands(EditorCommandRegistry& registry);
+	void RegisterPlayCommands(EditorCommandRegistry& registry); // play.* (Commands/PlayCommands.cpp)
+	void RegisterBatchCommands(EditorCommandRegistry& registry); // editor.batch (Commands/BatchCommands.cpp)
 	void RegisterViewportCommands(EditorCommandRegistry& registry);
 	void RegisterScriptCommands(EditorCommandRegistry& registry);
 	void RegisterInputCommands(EditorCommandRegistry& registry);
 	void RegisterStreamingCommands(EditorCommandRegistry& registry);
 	void RegisterAnimationCommands(EditorCommandRegistry& registry);
+	void RegisterAudioCommands(EditorCommandRegistry& registry); // audio.* (Commands/AudioCommands.cpp)
 	void RegisterUICommands(EditorCommandRegistry& registry);      // ui.create, ui.layout, ui.hitTest (EditorUICommands.cpp)
 	void RegisterUIInputCommands(EditorCommandRegistry& registry); // input.click, input.type (EditorInputCommands.cpp)
 

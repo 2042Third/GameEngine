@@ -109,10 +109,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
 
 - Unit tests live in `StrataTests/src/<Module>/*Tests.cpp` (doctest), in suites named after the module
-  (`TEST_SUITE("Scene.Serialization")`), which run in the CTest shards of `StrataTests/CoreShards.json`
-  (`StrataTests.Core.<Shard>`; a new suite prefix gets a shard, `Testing.Shards`); byte and random corruption sweeps go in
-  `*.Sweep` suites (a sample in the shard, all of it in `StrataTests.Fuzz`, Release and Dist); the editor's UI is tested headless with `ImGuiHarness`. Deferred commands run
-  with `Tests::RunCommandToCompletion`, UI tests click in a tab only once it shows, and a test's own component is
+  (`TEST_SUITE("Scene.Serialization")`) that run in the CTest shards of `StrataTests/CoreShards.json` (a new suite prefix
+  gets a shard); corruption sweeps go in `*.Sweep` suites ([Shards, sweeps and locks](Docs/DeveloperGuide.md#shards-sweeps-and-locks));
+  the editor's UI is tested headless with `ImGuiHarness`. Deferred commands run with `Tests::RunCommandToCompletion`, UI tests click in a tab only once it shows, and a test's own component is
   registered in a child process (`--strata-test-helper=custom-component`).
 - `GPU*` suites (label `gpu`) share one device through `Tests::GPUContext` (never create devices in tests) and end with
   `CHECK(gpu.GetNewErrorCount() == 0)`: validation errors fail them. Exact-pixel tests set
@@ -130,17 +129,16 @@ Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
   and terminate what they started when they fail.
 - Tests follow the transform contract, use `Tests::CreateTemporaryDirectory()` for files (never the source tree), never
   open samples in place (`Tests::CopySampleProject`) or change their process's environment for a child, and depend on
-  no program outside the build: stand-ins are the test binary's helper modes (`--strata-test-helper=<mode>`). Check
+  no program outside the build (stand-ins: the test binary's `--strata-test-helper=<mode>`). Check
   that a new regression test fails without its fix. Tests hold on CI's slowest machines (3 hardware threads): they wait
   by the clock or a condition, never by a count of frames, and size their own job pools.
 - Expectations that differ in Dist (asserts compiled out, host calls not counted) say so with `#if defined(ST_DIST)`:
   CI tests Release, and only the release steps run the tests in Dist.
-- The **feature test** (golden rule 6, `StrataTests/FeatureTest/`) fails when a registered component is missing from
-  `Feature.stscene` or a property has its default value on every entity, a script field type is not overridden there,
-  a script callback or host function is never called, a script class never runs, a public SDK class, function or macro
-  goes unused (calls count only on receivers of a type its reader knows), a feature script fails a check or does not
-  complete, the run logs a warning or error not in `c_ExpectedLogMessages`, or an asset type has no asset, imports with
-  warnings or has its `.meta` rewritten ([Feature test](Docs/DeveloperGuide.md#feature-test): how to extend it).
+- The **feature test** (golden rule 6, `StrataTests/FeatureTest/`) fails when a registered component, a property's
+  non-default value, a script field type, callback, host function or class, or a public SDK name goes unexercised in
+  `Feature.stscene` and its scripts, a feature script fails a check or does not complete, the run logs a warning or
+  error not in `c_ExpectedLogMessages`, or an asset type has no asset, imports with warnings or has its `.meta`
+  rewritten ([Feature test](Docs/DeveloperGuide.md#feature-test): what counts, how to extend it).
 - Package tests (label `package`) need CMake and a compiler; a change to `Samples/Tetris` must keep
   `Editor/TetrisCommands.json.in` passing.
 
@@ -260,9 +258,7 @@ The threading model, frame loop and pipelines these rules protect are described 
   `ModuleRegistrationOptions::Extra` (the registry freezes when the root returns). Scene systems declare their order
   (`SceneSystemDescriptor::After`/`Before` for a system of their module or one it cannot work without,
   `AfterIfPresent`/`BeforeIfPresent` toward other modules) and are made with `MakeSceneSystemDescriptor<T>` (overrides
-  public). Scenes
-  keep the components of modules a build lacks (`UnknownComponentsComponent`), also through play mode, prefab snapshots,
-  duplication and undo.
+  public). Scenes keep the components of modules a build lacks (`UnknownComponentsComponent`).
 - **Engine modules:** a service a program runs for its whole life (device, audio, UI, project) is an `EngineModule`
   (`Core/EngineModule.h`) in its module's folder, listed by the programs that run it (`ApplicationSpecification::Modules`);
   `Application` never calls module code, and other code finds a module with `GetModules().Find<T>()` (null when absent)
@@ -359,17 +355,14 @@ Skeletons, clips, controllers and the "Animation" scene system live in `Strata/s
 Canvases, rects, images, texts, widgets and layout groups live in `Strata/src/Strata/GameUI/`; only the composition root
 includes the module ([Game UI](Docs/DeveloperGuide.md#game-ui)).
 
-- The UI contract: code that writes UI component fields directly signals the change (`MarkModified`, `registry.patch`);
-  `GameUIScene` recomputes only what changed, and Debug builds assert after every `EnsureLayout` that its layout equals a
-  full recomputation (`GameUIScene::Validate` names the entity).
-- UI components live in GameUI (`Requires("UIRect")`, category "UI"), never in `Scene/Components.h`. The renderer reaches
-  the UI only through `SceneOverlayRegistry`; the UI pass requests each distinct UI texture and font once per frame through
-  `Scene::GetAssetManager()`, never per element.
-- UI input belongs to the "UI" scene system: gameplay keeps reading `Input` (pointer capture hides the UI's clicks and
-  scrolling from it, keyboard capture an edited input field's keys and text), UI code reads `Input::GetPointerState` and
-  `GetKeyState`, and widgets write their values with `registry.patch` and report them through `IUIEvents`. Elements of
-  world-space canvases are placed on the screen by projection and hit through the camera's ray (`GameUIPointer`), never
-  by dividing pixels by a canvas's scale ([UI input](Docs/DeveloperGuide.md#ui-input)).
+- Code that writes UI component fields directly signals the change (`MarkModified`, `registry.patch`); Debug builds check
+  `GameUIScene`'s layout after every `EnsureLayout` ([The UI contract](Docs/DeveloperGuide.md#the-ui-contract)).
+- The renderer reaches the UI only through `SceneOverlayRegistry`, whose pass requests each UI texture and font once per
+  frame, never per element; UI components require `UIRect`.
+- UI input belongs to the "UI" scene system: UI code reads `Input::GetPointerState` and `GetKeyState` (pointer and
+  keyboard capture filter gameplay's queries), widgets write with `registry.patch` and report through `IUIEvents`, and
+  world-space elements are projected and hit through the camera's ray (`GameUIPointer`), never by dividing pixels by a
+  canvas's scale ([UI input](Docs/DeveloperGuide.md#ui-input)).
 
 ## Editor
 
@@ -395,11 +388,16 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - A scene being opened is read-only: code that edits the scene outside `CommitEdit` checks
   `EditorContext::CheckSceneEditable`. Code that writes a prefab sets `PrefabSync::SetBaseline`, code that gives an
   instance its prefab's values calls `PrefabInstances::MarkSynced`, and an undo action that changes the scene
-  describes it as entity states (`GetSceneChange`), or the recovery journal snapshots the whole scene.
+  describes it as entity states (`GetSceneChange`), or the recovery journal snapshots the whole scene. A scene step
+  recorded outside `CommitEdit` calls `EditorContext::UpdatePrefabOverrides` ([Prefab instances](Docs/DeveloperGuide.md#prefab-instances)).
 - Projects never choose what runs: the external editor is the user's setting (or `STRATA_EXTERNAL_EDITOR`), started
   without a shell, and `script.open` opens only code, CMake and text files of the project or engine.
 - Commands never block a frame: one that waits returns `EditorCommandResult::Defer(poll)`, whose poll owns its data and
-  allocates nothing per frame.
+  allocates nothing per frame, and is registered with `MayDefer` (Debug builds assert).
+- Tools count game time in fixed steps (`Scene::GetFixedStepCount`), never frames: `play.step` and input durations
+  (`input.*`, `input.sequence`) are steps ([Stepping a paused game](Docs/DeveloperGuide.md#stepping-a-paused-game)).
+- A component property another property can turn off gets an `InactiveReason` (`ComponentRegistry::SetInactiveReason`),
+  shown by the Inspector ([Inspectors](Docs/DeveloperGuide.md#inspectors)).
 - UI code takes colors only from theme tokens, sizes relative to the font (no fixed pixels above 16), panels through
   `EditorPanelRegistry` (never `ImGui::Begin`), the editor's fonts and the widget kit (`UI/Widgets.h`);
   `Editor.UI.Source` enforces the first three ([Editor UI rules](Docs/DeveloperGuide.md#editor-ui-rules)). Selection
@@ -426,8 +424,8 @@ lights, overlays and text: [Rendering](Docs/DeveloperGuide.md#rendering).
 - Shaders writing HDR targets clamp with `SanitizeHDR`; normal maps are read as X and Y with Z reconstructed.
 - Skinning costs unskinned scenes nothing (`RenderScene::HasSkinProxies`).
 - Font files are untrusted input: extend `Renderer/FontValidation.h`, with crafted-font tests, before calling another
-  stb_truetype function. Text is measured with `ShapeText` on the font's `FontFace`, never by rasterizing; passes that
-  draw glyphs share the renderer's `FontAtlasCache` and its frame budget.
+  stb_truetype function. Text is measured with `ShapeText`, never by rasterizing; passes that draw glyphs share the
+  renderer's `FontAtlasCache`.
 - Read GPU data back with `TextureReadback`, polled per frame; `Renderer::ReadTexture` blocks (tests and tools only).
 
 ## Automation (editor RPC + MCP)
@@ -436,8 +434,10 @@ The editor serves JSON-RPC 2.0 on loopback (`RpcServer`); `StrataCLI` is its cli
 `.claude/skills/strata-editor-automation/SKILL.md`; protocol and sessions:
 [Automation](Docs/DeveloperGuide.md#automation-editor-rpc--mcp).
 
-- Commands are the API: every registered command is a method and an MCP tool, so a feature reaches agents by
-  registering a command (IDs as 16-digit hex strings, camelCase result keys); no RPC code is needed.
+- Commands are the API: every registered command is a method and, through its group's toolset (`CLI/McpToolsets`; the
+  default `core` list stays within 32 tools and 30 KiB: [MCP toolsets](Docs/DeveloperGuide.md#mcp-toolsets)), an MCP
+  tool, so a feature reaches agents by registering a command (IDs as 16-digit hex strings, camelCase result keys); no RPC
+  code is needed. `editor.status` answers compactly (`sections` for more).
 - Loopback only, no server without a token; the token never crosses the wire (challenge-response; clients check the
   server first) and is never logged or printed; before authentication only the handshake is served, and the project's
   `.strata/EditorSession.json` is untrusted and never holds the port or token

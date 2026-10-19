@@ -27,7 +27,31 @@ namespace Strata::Tests
 		bool Animations = true;
 		bool InverseBindMatrices = true;
 		float ArmNodeOffset = 5.0f; // Translation of the node that draws the mesh (ignored by glTF for skinned meshes)
+		// The "Armature" node's rotation about +X and uniform scale. The vertices, the joints' translations and the inverse bind
+		// matrices are authored in the armature's space, as Blender and Mixamo export them, so that the arm still stands along
+		// +Y from 0 to 2 once posed: -90 degrees is a Z-up file (the arm along +Z under the armature, like CesiumMan's Z_UP
+		// node); 90 degrees with scale 0.01 is a Mixamo-like file (centimeters, the arm along -Z). In its bind pose (drawn
+		// without the skeleton) the arm lies along an axis of the ground.
+		float ArmatureRotationDegrees = 0.0f;
+		float ArmatureScale = 1.0f;
 	};
+
+	// The arm of SkinnedArmOptions{.ArmatureRotationDegrees = -90}: a Z-up file.
+	inline SkinnedArmOptions ZUpArmOptions()
+	{
+		SkinnedArmOptions options;
+		options.ArmatureRotationDegrees = -90.0f;
+		return options;
+	}
+
+	// The arm of SkinnedArmOptions{.ArmatureRotationDegrees = 90, .ArmatureScale = 0.01}: a Mixamo-like file in centimeters.
+	inline SkinnedArmOptions MixamoArmOptions()
+	{
+		SkinnedArmOptions options;
+		options.ArmatureRotationDegrees = 90.0f;
+		options.ArmatureScale = 0.01f;
+		return options;
+	}
 
 	inline nlohmann::json CreateSkinnedArmDocument(const SkinnedArmOptions& options = {})
 	{
@@ -107,6 +131,19 @@ namespace Strata::Tests
 			}
 		}
 
+		// From the arm's space (Y-up, meters) into the armature's: the inverse of the armature node's transform.
+		const bool transformed = options.ArmatureRotationDegrees != 0.0f || options.ArmatureScale != 1.0f;
+		const glm::quat armatureRotation = glm::angleAxis(glm::radians(options.ArmatureRotationDegrees), glm::vec3(1.0f, 0.0f, 0.0f));
+		const glm::mat4 toArmature = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f / options.ArmatureScale)) * glm::mat4_cast(glm::inverse(armatureRotation));
+		auto armaturePoint = [&](const glm::vec3& point) { return transformed ? glm::vec3(toArmature * glm::vec4(point, 1.0f)) : point; };
+		if (transformed)
+		{
+			for (glm::vec3& position : positions)
+				position = armaturePoint(position);
+			for (glm::vec3& normal : normals)
+				normal = glm::normalize(glm::inverse(armatureRotation) * normal);
+		}
+
 		glm::vec3 minimum(1e9f);
 		glm::vec3 maximum(-1e9f);
 		for (const glm::vec3& position : positions)
@@ -126,7 +163,7 @@ namespace Strata::Tests
 		std::vector<float> inverseBind;
 		for (float y : { 0.0f, 1.0f, 2.0f })
 		{
-			const glm::mat4 matrix = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, -y, 0.0f));
+			const glm::mat4 matrix = glm::translate(glm::mat4(1.0f), glm::vec3(0.0f) - armaturePoint(glm::vec3(0.0f, y, 0.0f)));
 			const float* values = &matrix[0][0];
 			inverseBind.insert(inverseBind.end(), values, values + 16);
 		}
@@ -135,16 +172,23 @@ namespace Strata::Tests
 		if (options.InverseBindMatrices)
 			skin["inverseBindMatrices"] = add(inverseBind.data(), inverseBind.size() * sizeof(float), 3, "MAT4", 5126);
 
+		const glm::vec3 boneStep = armaturePoint(glm::vec3(0.0f, 1.0f, 0.0f));
+		nlohmann::json armature = { { "name", "Armature" }, { "children", { 2 } } };
+		if (transformed)
+		{
+			armature["rotation"] = { armatureRotation.x, armatureRotation.y, armatureRotation.z, armatureRotation.w };
+			armature["scale"] = { options.ArmatureScale, options.ArmatureScale, options.ArmatureScale };
+		}
 		nlohmann::json document = {
 			{ "asset", { { "version", "2.0" } } },
 			{ "scene", 0 },
 			{ "scenes", nlohmann::json::array({ { { "nodes", { 0, 1 } } } }) },
 			{ "nodes", nlohmann::json::array({
 				{ { "name", "Arm" }, { "mesh", 0 }, { "skin", 0 }, { "translation", { options.ArmNodeOffset, 0.0, 0.0 } } },
-				{ { "name", "Armature" }, { "children", { 2 } } },
+				armature,
 				{ { "name", "Shoulder" }, { "children", { 3 } } },
-				{ { "name", "Elbow" }, { "translation", { 0.0, 1.0, 0.0 } }, { "children", { 4 } } },
-				{ { "name", "Wrist" }, { "translation", { 0.0, 1.0, 0.0 } } } }) },
+				{ { "name", "Elbow" }, { "translation", { boneStep.x, boneStep.y, boneStep.z } }, { "children", { 4 } } },
+				{ { "name", "Wrist" }, { "translation", { boneStep.x, boneStep.y, boneStep.z } } } }) },
 			{ "meshes", nlohmann::json::array({ { { "name", "Arm" }, { "primitives", nlohmann::json::array({ {
 				{ "attributes", { { "POSITION", positionAccessor }, { "NORMAL", normalAccessor }, { "JOINTS_0", jointAccessor }, { "WEIGHTS_0", weightAccessor } } },
 				{ "indices", indexAccessor } } }) } } }) },

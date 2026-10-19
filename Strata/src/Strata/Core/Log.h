@@ -52,6 +52,9 @@ namespace Strata
 
 		// Returns entries with a sequence number greater than afterSequence, oldest first.
 		std::vector<LogEntry> GetEntries(uint64_t afterSequence = 0, size_t maxCount = SIZE_MAX) const;
+		// How many entries the buffer still holds with a sequence number greater than afterSequence and at least minLevel
+		// (without copying them).
+		size_t CountEntries(uint64_t afterSequence, LogLevel minLevel) const;
 		uint64_t GetLatestSequence() const;
 		size_t GetCapacity() const { return m_Capacity; }
 		void Clear();

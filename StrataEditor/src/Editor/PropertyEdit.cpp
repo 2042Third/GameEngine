@@ -154,6 +154,22 @@ namespace Strata
 		return true;
 	}
 
+	std::string GetSharedInactiveReason(std::span<const Entity> entities, const ComponentInfo& component, const PropertyInfo& property)
+	{
+		if (!property.InactiveReason || entities.empty())
+			return {};
+		std::string first;
+		for (const Entity entity : entities)
+		{
+			std::string reason = ComponentAccess::GetInactiveReason(entity, component, property);
+			if (reason.empty())
+				return {};
+			if (first.empty())
+				first = std::move(reason);
+		}
+		return first;
+	}
+
 	std::optional<SharedPropertyValue> GetSharedProperty(std::span<const Entity> entities, const ComponentInfo& component, const PropertyInfo& property)
 	{
 		if (entities.empty())

@@ -631,6 +631,7 @@ TEST_SUITE("Asset.Pack")
 
 		// Other work keeps the workers' queue full while the reads run; each job notes the thread that ran it.
 		const std::thread::id reader = std::this_thread::get_id();
+		constexpr uint32_t c_ForeignJobsBeforeReads = 16;
 		std::atomic<bool> stop = false;
 		std::atomic<uint32_t> submitted = 0;
 		std::atomic<uint32_t> foreignJobs = 0;
@@ -659,6 +660,9 @@ TEST_SUITE("Asset.Pack")
 				}
 			}
 		});
+		// The reads start once the feeder has filled the queue: on a slow machine the thread may not run before they end.
+		while (submitted < c_ForeignJobsBeforeReads)
+			std::this_thread::yield();
 		std::vector<uint8_t> data;
 		for (int read = 0; read < 6; read++)
 		{

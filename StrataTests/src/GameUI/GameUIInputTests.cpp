@@ -741,6 +741,45 @@ TEST_SUITE("GameUI.Events")
 		CHECK(scene.Target.GetUnscaledTime() == doctest::Approx(0.75));
 		CHECK(scene.Target.GetTime() == doctest::Approx(0.0));
 	}
+
+	TEST_CASE("A button with a solid color at rest draws its Image Swap states with the image's UV rect")
+	{
+		// Why a Texture of None leaves the image's texture settings active in the Inspector (GameUI.Components).
+		UIInputScene scene;
+		Entity button = scene.AddButton(scene.Canvas, "Button", { 100.0f, 100.0f }, { 200.0f, 100.0f });
+		button.GetComponent<UIImageComponent>().UVRect = glm::vec4(0.25f, 0.0f, 0.75f, 0.5f);
+		UISelectableComponent& selectable = button.GetComponent<UISelectableComponent>();
+		selectable.Transition = UISelectableTransition::ImageSwap;
+		selectable.HoverImage = UUID(42);
+		scene.Play();
+		scene.Frame();
+		GameUIScene& ui = GameUIScene::Get(scene.Target);
+		// The button's one image quad.
+		const auto buttonQuad = [&]()
+		{
+			UICanvasView view;
+			uint32_t element = 0;
+			REQUIRE(ui.FindElement(button.GetHandle(), GameUIScene::c_DefaultScreen, view, element));
+			std::optional<RenderData::UIQuad> found;
+			for (const RenderData::UIQuad& quad : ui.EnsureQuads(view))
+			{
+				if ((quad.Flags & RenderData::c_UIQuadKindMask) != RenderData::c_UIQuadImage)
+					continue;
+				CHECK_FALSE(found.has_value());
+				found = quad;
+			}
+			REQUIRE(found.has_value());
+			return *found;
+		};
+		CHECK(buttonQuad().Resource == 0); // A solid color
+
+		scene.MoveTo({ 150.0f, 150.0f });
+		REQUIRE(scene.State(button) == UIVisualState::Hover);
+		const RenderData::UIQuad hovered = buttonQuad();
+		CHECK(hovered.Resource != 0); // The hover image
+		CHECK(hovered.UV == glm::vec4(0.25f, 0.0f, 0.75f, 0.5f));
+		CHECK(hovered.Rect == glm::vec4(100.0f, 100.0f, 300.0f, 200.0f));
+	}
 }
 
 TEST_SUITE("GameUI.Navigation")

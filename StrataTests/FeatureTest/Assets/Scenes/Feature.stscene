@@ -1691,6 +1691,20 @@
 						"Name": "Crate"
 					},
 					"PrefabInstance": {
+						"Overrides": [
+							{
+								"Component": "Script",
+								"Entity": "F7C0000000000001",
+								"Kind": "Property",
+								"Property": "CrateScript.Value"
+							},
+							{
+								"Component": "MeshRenderer",
+								"Entity": "F7C0000000000002",
+								"Kind": "Property",
+								"Property": "CastShadows"
+							}
+						],
 						"Prefab": "F7A0000000000002",
 						"PrefabEntityID": "F7C0000000000001",
 						"PrefabVersion": "9603D9BDDF5599F2",
@@ -1751,7 +1765,7 @@
 			{
 				"Components": {
 					"MeshRenderer": {
-						"CastShadows": true,
+						"CastShadows": false,
 						"Material": "0000000000000000",
 						"Mesh": "0000000000000001"
 					},

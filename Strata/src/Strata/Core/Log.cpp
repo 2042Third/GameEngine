@@ -91,6 +91,18 @@ namespace Strata
 		return result;
 	}
 
+	size_t LogBuffer::CountEntries(uint64_t afterSequence, LogLevel minLevel) const
+	{
+		std::scoped_lock<std::mutex> lock(m_Mutex);
+		size_t count = 0;
+		for (const LogEntry& entry : m_Entries)
+		{
+			if (entry.Sequence > afterSequence && entry.Level >= minLevel)
+				count++;
+		}
+		return count;
+	}
+
 	uint64_t LogBuffer::GetLatestSequence() const
 	{
 		std::scoped_lock<std::mutex> lock(m_Mutex);

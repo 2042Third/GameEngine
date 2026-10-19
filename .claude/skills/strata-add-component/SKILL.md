@@ -61,6 +61,11 @@ ComponentRegistry::Register<WindZoneComponent>("WindZone")
   component itself: `.Extra(serialize, deserialize)`. When it holds entity or asset references, also describe them with
   `.ExtraReferences(visit, set, equals, visitJson)` (`ComponentExtraReferences`): copies and prefab instances remap
   them, prefab status compares them and asset scans find them only through these.
+- A property that has no effect in some states (a radius while its effect is off, the other projection's fields) gets
+  an inactive reason after the registration, while the registry is open:
+  `ComponentRegistry::SetInactiveReason<WindZoneComponent>("Radius", [](const WindZoneComponent& zone) { return zone.Mode
+  == WindZoneMode::Directional ? std::string("Directional zones have no radius") : std::string(); });`. The Inspector
+  draws it disabled with the reason; `component.get` lists it under `inactive`.
 
 ## 3. Add behaviour (if the component does something at runtime)
 

@@ -5,6 +5,7 @@
 
 #include <Strata/Animation/AnimationController.h>
 #include <Strata/Asset/AssetTypes.h>
+#include <Strata/Asset/TextureImporter.h>
 #include <Strata/Reflection/Property.h>
 
 #include <nlohmann/json.hpp>
@@ -22,6 +23,16 @@ namespace Strata
 	class AssetManagerBase;
 	class EditorAssetManager;
 	class EditorContext;
+	struct MaterialProperties;
+
+	// A texture in a material slot whose import usage does not fit the slot (AssetEdit::FindTextureUsageMismatches).
+	struct TextureUsageMismatch
+	{
+		std::string Property;  // The slot: "NormalMap", "MetallicRoughnessMap", "OcclusionMap", "BaseColorMap", "EmissiveMap"
+		AssetHandle Texture = UUID::Null();
+		TextureUsage Usage = TextureUsage::Color;    // As the texture is imported
+		TextureUsage Expected = TextureUsage::Color; // What the slot reads it as
+	};
 
 	// Edits of engine-native asset documents (".stmat", ".stprefab", ".stscene", ".stanimator": JSON the engine writes itself)
 	// with undo.
@@ -73,6 +84,18 @@ namespace Strata
 		// Whether the loaded material shows what its file holds (false while a preview is not saved). Loads nothing: an
 		// unloaded material is what its file holds.
 		bool IsMaterialSaved(EditorAssetManager& assets, AssetHandle material);
+
+		// The material's texture maps whose import usage does not fit their slot: the Normal Map slot reads normal maps
+		// (NormalMap), Metal/Rough and Occlusion read linear data (a Color texture would be sRGB-decoded there), Base Color and
+		// Emissive read color (a NormalMap or Data texture there is a mistake too). The usage comes from the texture's import
+		// settings; textures a model's import made are left out (the importer chose their usage from the slot), as are
+		// unknown ones. Empty without a project.
+		std::vector<TextureUsageMismatch> FindTextureUsageMismatches(EditorContext& context, const MaterialProperties& properties);
+		// What material.get, material.set and material.create report: [{property, texture, usage, expected, message, fix:
+		// {command: "asset.setImportSettings", parameters: {asset, settings: {Usage}}}}].
+		nlohmann::json DescribeTextureUsageMismatches(EditorContext& context, const std::vector<TextureUsageMismatch>& mismatches);
+		// "aerial_rocks_02_nor_gl_1k is imported as Color: its normals will be wrong".
+		std::string DescribeTextureUsageMismatch(EditorContext& context, const TextureUsageMismatch& mismatch);
 
 		// An animation controller document (".stanimator") with `data` as its content, validated (AnimationController::Create)
 		// and written in the canonical form (tabs, a final newline). Invalid content fails with the reason.

@@ -219,11 +219,12 @@ to; out-of-range and non-finite values are clamped or read at rest). `GLFWWindow
 Input reaches the window only through `InputWindow` (size, cursor mode), which `Window` implements, so the input layer
 stays below the application shell. It also has a virtual device for tools (`SimulateKey`, `SimulateGamepadButton`,
 `SimulateGamepadAxis` and friends) merged with the real devices (a gamepad simulated input used counts as connected; an
-axis it holds wins over the device's until released), `SetEnabled` (device input off, e.g. while the editor's game view
-has no focus; sticks and triggers then read at rest) and `SetSuspended` (input frames follow the game's updates). The
+axis it holds wins over the device's until released), `SetEnabled` (device input off, e.g. while the editor's Game view
+has no focus; sticks and triggers then read at rest), `SetViewport(origin, size, resolution)` (where the game's image is
+and the pixels it renders at: device positions and movements reach the game in those pixels) and `SetSuspended` (input frames follow the game's updates). The
 cursor mode a game asks for (`SetGameCursorMode`, scripts' `Input::SetCursorMode`) applies to the window only while input
 is enabled: disabling input gives the cursor back, enabling it applies the game's mode again, so a locked cursor in the
-editor stays in the focused game view (the editor's UI ignores the mouse meanwhile, and the game view says that Shift+F1
+editor stays in the focused Game view (the editor's UI ignores the mouse meanwhile, and the Game view says that Shift+F1
 frees it and Ctrl+P stops the game) and Shift+F1 frees it. `InputNames` maps key, button and gamepad control names for
 the `input.*` commands. Text typed in an input frame (`GetTypedText`: the window's character events, `ProcessText`, and
 `SimulateText`) comes as UTF-8, at most 1,024 bytes a frame. Pointer capture (`SetPointerCapture`, which the game UI's
@@ -424,9 +425,13 @@ runtime does not use it. Protocol and security model: DeveloperGuide.md, "Automa
 
 **ImGui** (`ImGui/`). `ImGuiLayer` owns the Dear ImGui context; `Application` pushes it as an overlay when ImGui is
 enabled and a window and graphics device exist, and calls `Begin`/`End` around the layers' `OnImGuiRender`. It styles
-the UI for the window's content scale, on attach and on every `WindowContentScaleEvent`: the style is rebuilt from
-ImGui's dark defaults by the application's style callback (`SetStyleCallback`; the editor installs its Bedrock theme) and
-the fonts' DPI scale (`ImGuiStyle::FontScaleDpi`) follows; `SetContentScaleOverride` fixes the scale (`--ui-scale`).
+the UI for the window's content scale, on attach, on every `WindowContentScaleEvent` and when the window's pixels per
+unit change: the UI scale is the content scale less what window coordinates in points apply already (`ToUIScale`: a
+Retina window of 1600 x 900 points has 3200 x 1800 pixels and content scale 2, and ImGui lays out in points and
+rasterizes its fonts at the framebuffer's density, so its UI scale is 1; where windows are measured in pixels, Windows
+and X11, it is the content scale). The style is rebuilt from ImGui's dark defaults by the application's style callback
+(`SetStyleCallback`; the editor installs its Bedrock theme) and the fonts' DPI scale (`ImGuiStyle::FontScaleDpi`)
+follows; `SetContentScaleOverride` fixes the scale (`--ui-scale`).
 `ImGuiPlatform` is the platform backend, written for the engine (the vendored GLFW backend is not built): ImGui's input
 comes from the window's events (keys by what they type in the keyboard layout, `Window::GetLayoutKey`, with their
 modifiers; typed text, also from input methods; the mouse, its wheel and `MouseLeaveEvent`; focus), its clipboard and
@@ -983,7 +988,7 @@ the game (`EngineServices::ScopedProvider`, which restores the provider it repla
 
 | Service | Provider | Consumers |
 | --- | --- | --- |
-| `IGameWindow`: window mode, resolution, vsync, the size the game renders at | StrataRuntime's `GameWindowService` (applied after the frame, `ApplyRequests`; headless: accepted and reported back), the editor's `EditorGameWindow` (recorded and reported, never applied: `editor.status` and a notice over the game view) | script host (`Game::SetWindowMode` and friends) |
+| `IGameWindow`: window mode, resolution, vsync, the size the game renders at | StrataRuntime's `GameWindowService` (applied after the frame, `ApplyRequests`; headless: accepted and reported back), the editor's `EditorGameWindow` (recorded and reported, never applied: `editor.status`, a notice over the Game view and its "Game's request" resolution) | script host (`Game::SetWindowMode` and friends) |
 | `IGameSaves`: the save directory | `GameRuntime` (`<user data>/<game>/Saves`, `GameRuntimeOptions::SaveFilesDirectory`), `EditorContext` (`<project>/.strata/Saves`) | script host (`Game::WriteSaveFile` and friends, through `SaveFiles`) |
 
 ### Scene caches
@@ -1237,6 +1242,16 @@ handles) are in DeveloperGuide.md, "Asset pipeline". The data flow:
   | AudioClip | `.wav .mp3 .flac .ogg` | `AudioClipImporter` | `STAU` header + the encoded file |
   | Font | `.ttf .otf` | `FontImporter` | the source, validated on import |
 
+  A model's import `Scale` is baked into its content: mesh positions (before LODs and bounds are made from them, so
+  simplification errors and recorded bounds are in final units), node translations below the root, the skeleton's rest
+  translations, the inverse bind matrices' translations (`S * IBM * S^-1`) and clips' translation keys (with a cubic
+  spline's tangents; rotations and scales keep theirs), imported cameras' clip planes and lights' ranges; the model's root
+  keeps scale 1. The root's transform belongs to each placed instance (`PrefabInstances`), so instances follow a change
+  of the setting. Instances placed while the importer still put the scale on the root (version 7) are migrated by
+  `PrefabSync`: a reimport while their scene is open multiplies their root's Scale by the template root's new over its
+  old Scale (in the "Update Instances" step); a scene opened later gives an outdated instance whose root Scale is the
+  model's import Scale, while the template root's is 1, Scale 1 (logged once per model and scene).
+
 - **Loading** (`Asset/AssetManager.h`). `GetAsset` never blocks: it returns null until the asset is Ready and requests
   the load. `RequestLoad` queues the load in the streaming queue, which reads on the I/O pool (`ReadAssetData` of the
   subclass); decoding runs on the worker pool and queues a completion. The loader (`AssetLoadFunction`) gets the read
@@ -1325,8 +1340,20 @@ Textures are stored the way the GPU samples them: block-compressed, with their m
   `Usage`, `Compression` (`Auto`, the default, or `Uncompressed`), `Quality` (`High`, the default, or `Fast`: opaque
   color as BC1, half of BC7's bytes, and translucent color's BC7 searched over modes 6 and 5 only; normal maps, data and
   HDR are stored the same at either quality), `GenerateMips`, `Filter`, `Wrap`,
-  `MaxSize`, `FlipVertically`. The importer writes every setting into a new `.meta`; files from before keep the
-  defaults for keys they lack (the feature project's `.meta` files hold every key, which its test checks). The image
+  `MaxSize`, `FlipVertically`, `FlipGreen` (normal maps only: inverts green before the mips are filtered, for
+  DirectX's +Y-down convention; version 5). The importer writes every setting into a new `.meta`; files from before keep
+  the defaults for keys they lack (the feature project's `.meta` files hold every key, which its test checks). Defaults
+  come from the file name (`TextureImportSettings::GetDefaults`): `.hdr` is HDR; otherwise the stem is split into tokens
+  (at `_`, `-`, `.`, spaces and lower-to-upper case changes, lowercased), resolution and convention tokens are dropped
+  (`1k` to `16k`, powers of two from 256 to 16384, `<w>x<h>`, `gl`, `ogl`, `opengl`, `dx`, `directx`), and a token
+  anywhere names normal maps (`nor`, `nrm`, `norm`, `normal`, `normals`, `normalmap`, `nml`, `normalgl`, `normaldx`, and
+  `n` as the last one) or data (`rough`, `metal`, `ao`, `orm`, `arm`, `mask`, `height`, `disp`, `bump`, `spec`, `gloss`
+  and their long forms); `dx`, `directx` or `normaldx` turn `FlipGreen` on, so Poly Haven's `aerial_rocks_02_nor_gl_1k`
+  and `rocks_nor_dx_2k` import as the normal maps they are. A texture in a material slot that reads it as something
+  else (a Color texture as the normal map or in Metal/Rough or Occlusion, a normal map or data as color) is reported by
+  `AssetEdit::FindTextureUsageMismatches`: `material.get`, `material.set` and `material.create` return it as `warnings`
+  with the `asset.setImportSettings` call that fixes it, and the material editor draws it under the slot with a button
+  that runs that fix (textures a model's import made are left out: the importer chose their usage from the slot). The image
   decodes with only the channels its format needs (color keeps RGB or RGBA, gray color becomes RGB, normal maps XYZ,
   data its own channels), and `TextureImporter::ChooseFormat` picks the format: color `BC7SRGB` (at `Fast`, `BC1SRGB`
   when every texel is opaque), normal maps `BC5`, data `BC4` for one channel (marked grayscale, below), else `BC7`, HDR
@@ -1846,8 +1873,8 @@ ReleaseFrameAssets               (when Render returns, however it ends) every re
   like every draw, and draw with the skinned variants of the mesh and shadow vertex shaders (`Scene/MeshSkinned.vert`,
   `ShadowMeshSkinned.vert`: `ST_SKINNED`), which blend the palette entries of a vertex's four influences (the mesh's
   skin stream, vertex buffer 2) before the instance's world transform, in the prepass (entity IDs and normals), the
-  forward passes and the shadow cascades. Without a pose (no animator, nothing playing) a Skin proxy shows its bind pose
-  through the ordinary pipelines. Every influence names a joint of the skin, also those without weight (the shaders read
+  forward passes and the shadow cascades. Without a pose (no animator, no provider) a Skin proxy shows its bind pose
+  through the ordinary pipelines; the editor's scenes always have one (their rest poses, see Animation, "Previews"). Every influence names a joint of the skin, also those without weight (the shaders read
   all four palette entries; `Mesh::CreateSkinned` refuses others). Renderers report the animators of the Skin proxies in
   their view (`ISkinningPoses::ReportVisible`), which animators that animate only while seen read, and of the shadow
   casters out of view whose shadows can fall on what the view shows (`SceneRenderer::CanShadowView`: the caster's box
@@ -1941,7 +1968,7 @@ system, not to entities: a character's joints add no entities and no transform c
   (`AnimationClipBinding`; targets the skeleton lacks are skipped). An `AnimationController` (`.stanimator`) holds
   parameters (float, bool, trigger), states (a clip or none, a speed, looping, events) and transitions. Their loaders
   validate everything (truncated and garbage bytes are rejected).
-- **Import.** `GltfImporter` (version 7) makes one skeleton per model (sub-asset "Skeleton": the joints of every skin,
+- **Import.** `GltfImporter` (version 8) makes one skeleton per model (sub-asset "Skeleton": the joints of every skin,
   the animated nodes and their ancestors, parents first; the root motion joint is the topmost joint of a skin), a clip
   per animation ("Animation/<name>", or its index; keyframes reduced) and skinned meshes (see Asset pipeline,
   `MeshSkinBinding`). The model's root entity is its animator (`AnimatorComponent` with the skeleton and the first
@@ -2024,14 +2051,35 @@ system, not to entities: a character's joints add no entities and no transform c
   the last one, of an entity nobody moved since, writes nothing.
 - **Skinning** is the renderer's: `RenderScene` turns the poses of `ISkinningPoses` into palettes and posed bounds, and
   the vertex shaders blend them (see [Render scene](#render-scene), "Skinned proxies").
-- **Previews** (`AnimationPreview`): a scene that does not play has no animation system, so its skinned meshes show
-  their bind pose. A preview offers `ISkinningPoses` for such a scene and poses the animators asked for (a state, a clip
-  or what they play on start, at a time; `AnimatorSettings::Transitions` off, so the state machine holds it) once their
-  assets arrive, again when the request, the component's assets or an asset object (a reload) change; a request is
-  `Posed` only once its own pose is computed (an earlier pose shows meanwhile). Nothing in the scene changes: the
-  attachments of posed animators, and the mesh renderers under them, are drawn at their joints through render transforms
-  (`ISkinningPoses::GetRenderTransforms`, see [Render scene](#render-scene)), computed each update from the scene's
-  transforms. The editor keeps one for its edited scene (`EditorContext::GetAnimationPreview`, `animation.preview`).
+- **Previews** (`AnimationPreview`): a scene that does not play has no animation system, so without a provider its
+  skinned meshes would show their bind pose: the mesh's vertices as stored, without the skeleton's rest pose and the
+  joints above the skin that orient it (a glTF file's `Z_UP` node, a Mixamo `Armature` rotated and scaled), lying along
+  an axis of the ground. A preview offers `ISkinningPoses` for such a scene and poses the animators asked for (a state, a
+  clip or what they play on start, at a time; `AnimatorSettings::Transitions` off, so the state machine holds it) once
+  their assets arrive, again when the request, the component's assets or an asset object (a reload) change; a request is
+  `Posed` only once its own pose is computed (an earlier pose shows meanwhile). With
+  `AnimationPreviewSpecification::RestPoses` every other animator shows its skeleton's rest pose (`Animation/RestPose.h`,
+  `ComputeRestPose`, which `AnimatorInstance::Evaluate` gives with nothing playing too, so edit and play mode cannot
+  drift apart): one per skeleton handle, shared by its animators, computed again only when the skeleton's source revision
+  changes (a reimport, learned from the asset manager's content changes; an eviction keeps the matrices, which are data,
+  not a held asset). Animators are found through their component's signals, so an update looks only at animators that
+  were added, removed or changed, requests only skeletons that are loading, and an idle update does nothing at all
+  (`GetPosesVersion` unchanged, so `RenderScene::UpdateSkinnedPoses` returns at its version check; `GetStats` counts the
+  work for tests). The edit pose (`AnimationEditPose`, `SetEditPose`; the editor's `ViewportSettings::EditPose`) can
+  instead be `ClipStart`: the first frame of what each animator plays on start (its controller's default state's clip,
+  else its `Clip`, through `AnimatorInstance` at time 0 as play mode shows it before its first update; without either,
+  or while that clip does not load, the rest pose). Those poses are cached the same way, keyed by skeleton, controller,
+  clip and root motion, and computed again when any of their assets' sources changes; a change of the edit pose looks at
+  every animator once. Nothing in the scene changes: the attachments of posed animators (requests and clip-start poses:
+  the importer placed attachments at the rest pose already), and the mesh renderers under them, are drawn at their joints through render
+  transforms (`ISkinningPoses::GetRenderTransforms`, see [Render scene](#render-scene)), computed again only when the
+  requests, the poses, the scene's transforms or hierarchy, or an attachment changed. The editor makes one with rest
+  poses for every edited scene (`EditorContext::GetAnimationPreview`, `animation.preview`), and the thumbnail cache one
+  per scene it renders, so characters stand in edit mode, in thumbnails and in the Asset tab's preview as they do in
+  play before their first animation. `SceneBounds` measures skinned meshes in the scene's pose
+  (`SceneBounds::GetPosedMeshBounds`, the expression `RenderScene::ComputePalette` bounds proxies with), so framing,
+  `camera.focus`, `entity.dropToGround` and placement (`EditorPlacement::GetTemplateBounds` gives the template's scene
+  rest poses) see them standing.
 - **Editor.** `animation.createController`, `animation.setController`, `animation.info` and `animation.preview` give
   agents the whole workflow without hand-written JSON (DeveloperGuide.md, "Animation commands"); the Asset tab edits
   controllers as tables (`UI/AnimationAssetViews`; each field has a least width in font sizes, which is also its share
@@ -2413,24 +2461,30 @@ is the `strata-scripting` skill. The layers:
   the one shown already), so the panels bring the matching inspector to the front.
 - **Commands** (`EditorCommands.h`). Handlers take a JSON object and return an `EditorCommandResult`: a value, an error
   with an `EditorCommandError` kind, or `Defer(poll)`. The built-in groups are registered by
-  `EditorSceneCommands.cpp` (scene, entity, component, `prefab.instantiate`), `EditorPrefabCommands.cpp` (`prefab.status`,
-  `prefab.apply`, `prefab.revert`, `prefab.unpack`, `prefab.select`), `EditorAssetCommands.cpp` (asset, including
+  `EditorSceneCommands.cpp` (scene), `Commands/EntityCommands.cpp` (entity, component), `EditorPrefabCommands.cpp`
+  (`prefab.instantiate`, `prefab.status`, `prefab.apply`, `prefab.revert`, `prefab.unpack`, `prefab.select`),
+  `EditorAssetCommands.cpp` (asset, including
   `asset.findReferences`, `asset.createFolder`, `asset.moveFolder` and `asset.deleteFolder`, material, prefab,
   project, including `project.templates`, `project.samples`, `project.openSample`, `project.close`, `project.export`,
   `project.exportStatus`, `project.cancelExport` and `project.setExportSettings`),
   `EditorStateCommands.cpp` (edit, editor including `editor.recentProjects`, `editor.removeRecentProject` and `editor.perf`,
-  log, play, selection), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
+  log, selection), `Commands/PlayCommands.cpp` (play), `EditorViewportCommands.cpp` (camera, viewport), `EditorScriptCommands.cpp` (script),
   `EditorInputCommands.cpp` (input, including `input.click` and `input.type` for the game UI), `EditorUICommands.cpp`
-  (`ui.create`, `ui.layout`, `ui.hitTest`), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`) and
-  `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel` and `editor.showDialog` (the
+  (`ui.create`, `ui.layout`, `ui.hitTest`), `EditorStreamingCommands.cpp` (`asset.stats`, `asset.setBudget`),
+  `Commands/BatchCommands.cpp` (`editor.batch`) and `EditorCommands.cpp` (`editor.commands`); the UI's `EditorLayer` adds `editor.showPanel` and `editor.showDialog` (the
   export, project, recovery, script and about dialogs), the commands about its window. Conventions:
   DeveloperGuide.md, "Command conventions".
   Every command has a kind (`EditorCommandKind`: Edit, the default, Query or Session), which `editor.commands` lists and
   replays use (`Editor.Journal` lists every built-in command's kind, so a new one is a decision), and queries whose
   results follow the editor's session rather than the project's content (the selection, `editor.status`, the journal,
-  what is loaded or running) say so (`EditorCommandResults::Session`): replays never bind the IDs those show.
+  what is loaded or running) say so (`EditorCommandResults::Session`): replays never bind the IDs those show. Commands
+  whose handlers may answer later are registered with `MayDefer` (Debug builds assert in `Execute` when another one
+  defers). `editor.batch` runs a command script's steps in its frame through `Execute` (its children in the journal),
+  refusing `MayDefer` commands first, and makes their undo steps one (`UndoStack::BeginGroup`/`EndGroup`, an
+  `EditorActionGroup`; an atomic batch whose step fails reverts them with `CancelGroup`); replays repeat its steps.
 - **Command line** (`EditorApplication.cpp`). `CreateApplication` answers `--help` and `--version` and refuses arguments
-  outside its table (`c_Arguments`; exit code 3 with the usage) before it starts the log, the modules or a window:
+  outside its table (`c_Arguments`, checked and printed through `Core/CommandLineOptions`, which the runtime uses the
+  same way; exit code 3 with the usage) before it starts the log, the modules or a window:
   `Application::SetStartupExitCode` is what `main` returns when no application was made. Options that take numbers
   (`--frames`, `--automation-port`, `--idle-timeout`, `--ui-scale`) are checked there too (`CheckValues`): a value they
   do not take exits 3 as well, so a typo never leaves a scripted run without its frame limit. With
@@ -2441,11 +2495,13 @@ is the `strata-scripting` skill. The layers:
   (`EditorNotification`: level, title, message, the journal entry, the asset, whether the Console, the Problems panel or
   the recovery dialog has more): at most `c_MaxActive` (4), identical ones merged with a count, and those of a `Group` merged into one that
   shows the latest (a post may stand for several: `Count`), each expiring after its level's lifetime (`Expire`,
-  `KeepAlive` while hovered). Feeds: `NotifyCommandOutcome` for commands of the UI (`RunEditorCommand`, the runner when
+  `KeepAlive` while hovered); `Replace(id, notification)` shows one in the place of another, keeping its id and
+  restarting its lifetime (posted when that one is gone). Feeds: `NotifyCommandOutcome` for commands of the UI (`RunEditorCommand`, the runner when
   the origin is `CommandSource::UI`: failures and warnings, with `EditorCommandResult::JournalId`, which `Execute` now sets
   for every result; not for a failure a notification of its own announced, `EditorCommandResult::Announced`, which
   `script.build` and `play.start` set when the build they waited for failed: one toast per failure),
-  `EditorContext::BuildScripts` and `OnScriptBuildFinished` (failed with Show Problems, cancelled as information),
+  `EditorContext::BuildScripts` and `OnScriptBuildFinished` (one toast that changes: the outcome replaces "Building
+  scripts", failed with Show Problems, cancelled as information),
   `StopOnScriptFault` (with Show Problems, whose panel leads with the crash), the end of a game
   export (`NotifyExportFinished`, once per export: an export that does not start leaves the announced one), imports that
   failed while nobody waited for them (`NotifyImportFailures`, below), files dropped on the editor that no importer reads
@@ -2456,10 +2512,12 @@ is the `strata-scripting` skill. The layers:
   are kept when it closes, and nothing when the person discarded what could not be kept), assets and folders an agent or a
   command script moved to the trash (`NotifyAssetsTrashed`, from `asset.delete` and `asset.deleteFolder`, found the same
   way: who did it, that Undo restores them, a warning when `force` left references missing, the command's entry for Show
-  in Activity; the person's own deletes post nothing, as they asked and saw them go) and `EditorLayer` when the
-  recovery dialog closes with changes still on offer. `UI::DrawNotifications` draws them as toasts in one window at the
-  bottom right of the work area, above the status bar, kept in front without being focused (`BringWindowToDisplayFront`,
-  `NoFocusOnAppearing`); it returns at once while there are none. A title too long for its line wraps before the close
+  in Activity; the person's own deletes post nothing, as they asked and saw them go), `EditorLayer` when the
+  recovery dialog closes with changes still on offer, and `RecoveryDialog` once per opened project that offers changes
+  discarded on purpose before. `UI::DrawNotifications` draws them as toasts in one window at the bottom right of the
+  Scene or Game view (the window rectangle of the one that shows, `EditorPanelRegistry::GetShownWindowRect`, so they
+  cover neither the Inspector nor the Hierarchy; without either, of the work area above the status bar), kept in front
+  without being focused (`BringWindowToDisplayFront`, `NoFocusOnAppearing`); it returns at once while there are none. A title too long for its line wraps before the close
   button, and its count then leads the message. Their actions go through the `EditorShell`: Show in Activity, Show Asset
   (`ShowAsset`: the Asset tab inspects it and the Content Browser reveals it), Show Problems (the Problems panel: a
   failed build's diagnostics, a crash's place and stack), Show in Console and Recover.
@@ -2614,9 +2672,10 @@ is the `strata-scripting` skill. The layers:
   a file whose owner process still runs (its id with the start time recorded, since ids are reused, also this process's)
   and has not discarded it belongs to that editor and is left out; the others are
   offered (the editor's Recover Unsaved Changes dialog, `UI/RecoveryDialog`, opens by itself once per opened project
-  with changes that still apply, leaving out what this editor discarded itself since the project opened, whose toast
-  offers it, `SceneRecovery::WasDiscardedHere`: a command script that discards changes in the editor's first frames does
-  not open it; File > Recover Unsaved Changes reopens it) and listed by `scene.recoveryStatus`. An
+  with changes an editor left behind that still apply, `RecoveryDialog::HasOffer(context, true)`: not marked
+  `Discarded`, and not discarded by this editor since the project opened, whose toast offers them,
+  `SceneRecovery::WasDiscardedHere`; changes discarded on purpose before are offered by one toast as the project opens
+  instead; File > Recover Unsaved Changes opens it with everything) and listed by `scene.recoveryStatus`. An
   entry applies only while the scene asset exists and its file hashes to the recorded hash. Scenes are found by their
   handles: a scan looks for an entry's scene file where the asset manager has the scene now (`SetSceneLocator`, a snapshot
   of the scenes' paths taken when the scan starts), so changes of a scene that was moved or renamed (`asset.move`, the
@@ -2681,7 +2740,9 @@ is the `strata-scripting` skill. The layers:
   first, then assets by name, an expanded model's sub-assets (meshes, materials, textures, a skinned model's skeleton and
   clips) right after it as drag sources of their own, which the Inspector's asset fields take when the type fits (an
   Animator's Skeleton, Clip and Controller). Skeletons, clips and controllers show their type's icon; models and meshes
-  render, skinned ones in their bind pose (no animator poses a thumbnail's scene). The view rebuilds only when
+  render, skinned models in their skeleton's rest pose (the thumbnail scene's own `AnimationPreview`; a thumbnail waits
+  for its skeletons like for its meshes; `ThumbnailCache::c_Version` 2 made the older ones again), skinned meshes alone in
+  their bind pose. The view rebuilds only when
   `EditorAssetManager::GetChangeVersion` (or the folder, search, filter or an expansion) changed, from one look at the
   manager's index (`ListAssets`), and counts its rebuilds: an idle editor rebuilds nothing (the browser used to copy
   every asset's metadata twice a second). Labels are made at rebuild time; tiles cut their names once per tile width. Every
@@ -2778,6 +2839,31 @@ is the `strata-scripting` skill. The layers:
   walks every link, so a run of edits that records a step every frame (a gizmo drag) does neither per frame: an edit
   after a pause is looked at at once, and during a run (edits less than `PrefabSync::c_SettleFrames` frames apart) the
   marks and the watched prefabs stay until it pauses; links that come or go are found at once.
+  **Overrides** (`Scene/PrefabOverrides.h`): an instance root keeps how its instance differs from its prefab
+  (`PrefabInstanceComponent::Overrides`, `PrefabOverride {Entity, Component, Property, Kind}`: a property, a component
+  added or removed, an entity removed; script fields as `Script` / `<Class>.<Field>`, scripts as `<Class>`).
+  `ComputeOverrides` diffs the instance in the prefab's form (`MakeTemplate`) with its part, entity by prefab id, component
+  and property, as JSON. `EditorContext::CommitEdit` works the lists of the instances an edit touched out again against
+  their part of `PrefabSync`'s baseline (`GetBaselinePart`, extracted and indexed once per baseline) before it captures
+  the after-states (`UpdatePrefabOverrides`), so every edit path keeps them and undo restores them with the entities; edits
+  while playing record nothing. It tracks every touched root, its list changed or not, so the per-frame steps of a gizmo
+  or slider drag keep the same entities and merge into one. An edit that makes, destroys, moves or relinks entities of an
+  instance works its whole list out; other edits serialize only the entities they changed
+  (`PrefabOverrides::UpdateOverrides`, with the instance's prefab ids from `PrefabInstances::MapTemplateIds`, a walk
+  without serializing), so a drag inside a 5,000-entity instance costs about 0.5 ms a frame instead of 25 ms. Steps whose
+  lists `Propagate` already worked out (`PrefabSync`'s updates) commit with `OverrideUpkeep::Current`. The list is
+  serialized through the component's extra data (`Overrides`, only when not empty: scenes without overrides are as they
+  were) and checked on load; templates, comparisons and content hashes leave it out. A non-empty list marks the instance
+  modified in the Hierarchy without comparing it; `prefab.status` lists the overrides. `PrefabOverrides::Propagate` gives
+  an instance what changed between two versions of its part except what it overrides (properties set through reflection
+  and signaled, components and entities the prefab added made unless a removal is overridden, ones it removed gone unless
+  the instance added them, what the instance keeps below a removed entity moving up to the nearest one that stays; the
+  root's transform and name stay), calling back before each entity changes so the undo step
+  tracks only those, then works the list out against the new part. `prefab.apply` (the whole instance, or one override:
+  `PrefabOverrides::ApplyToPart`) and `PrefabSync`'s propagation run it for every instance; the catch-up runs it for
+  outdated instances with a list (the instance itself standing for the previous part), keeps the whole replace for
+  unmodified ones without a list, and leaves modified ones without a list outdated. `prefab.revert` reverts a whole
+  instance (`Replace`) or one component or property (`PrefabOverrides::Revert`).
 - **Authoring panels** (`Panels/SceneHierarchyPanel`, `InspectorPanel`, `AssetInspectorPanel`, `UI/PropertyWidgets`,
   `UI/MaterialEditor`, `UI/EditorActions`). They draw state and run commands, and their cost follows what is on screen:
   - The **Hierarchy** draws `HierarchyView`'s rows through `ImGuiListClipper` inside one `ImGui::BeginMultiSelect` scope
@@ -2802,8 +2888,10 @@ is the `strata-scripting` skill. The layers:
     before: 12.9 ms; `Perf.Editor`).
   - The **Inspector** shows the components every selected entity has, each section drawing first what its component's
     drawer adds (`UI/ComponentDrawers`, by component type: the UI Rect's anchor presets and margins), and a notice with
-    an Add button where some entities lack a component it requires (`ComponentInfo::Requires`). `GetSharedProperty` gives each widget its value and
-    which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as mixed; an edit goes through the
+    an Add button where some entities lack a component it requires (`ComponentInfo::Requires`). `GetSharedProperty`
+    gives each widget its value and which components (axes, Euler angles) differ, which `DrawPropertyWidget` shows as
+    mixed; `GetSharedInactiveReason` whether the property has no effect on every entity (`PropertyInfo::InactiveReason`,
+    set next to each component's registration in its module), which draws its row disabled with the reason; an edit goes through the
     multi-entity `SetPropertyComponentsWithUndo` with the components the widget changed (one step; each entity keeps its
     other components), or `SetPropertyWithUndo` for other types. Rotations of several entities go through a
     `RotationAnglesEdit` with the Euler angles the widget edited, kept by the Inspector until the widget reports the edit
@@ -2854,30 +2942,48 @@ is the `strata-scripting` skill. The layers:
   each frame `EditorAutomation::Update` registers new or changed commands as methods and runs queued requests through
   the runner, so a deferred command answers when it completes. Clients find the editor through session files
   (`Network/EditorSession.h`). StrataCLI (`StrataCLI/src/CLI/`) connects with `RpcClient` (`EditorConnection`),
-  starts editors (`EditorLauncher`) and serves MCP (`McpServer`, one tool per command). Clients may name themselves in
+  starts editors (`EditorLauncher`) and serves MCP (`McpServer`: one tool per command of the enabled toolsets, which
+  `McpToolsets` assigns by command group, with compact definitions; `strata_describe` and `strata_call` reach the rest,
+  `strata_toolsets` changes the set). Clients may name themselves in
   `rpc.handshake` (`clientName`: at most 64 characters, control and text-direction characters removed by
   `SanitizeRpcClientName`, informational only and never used for trust): `RpcServer::GetClients` lists them, responders
   carry them (`RpcResponder::GetClient`) into the activity journal, and `editor.status` lists them under
-  `automation.connectedClients`. StrataCLI names itself "StrataCLI"; its MCP server forwards the MCP client's
+  `automation.connectedClients` (`{"sections": ["automation"]}`: its default answer is compact). StrataCLI names itself "StrataCLI"; its MCP server forwards the MCP client's
   `clientInfo.name` from `initialize` (reconnecting to the same editor when the name changes). **Presence**: the person
   sees who works with them. The automation pill reads "Agent connected · <name>" (several: "N agents connected"), its
   text made again only when `RpcServer::GetClientsVersion` changes and its tooltip (each client and when it connected)
-  only while it shows. The journal keeps the latest finished automation command (`GetLatestAutomationActivity`: command,
-  client, outcome, the entities its undo step touched); the viewport draws it as a chip at the image's top right ("Agent:
+  only while it shows. The journal keeps the latest finished automation command that changes something (the entry's
+  `mutating`: kind Edit or an edit of the running copy; `GetLatestAutomationActivity`: command, client, outcome, the
+  entities its undo step touched); the viewport draws it as a chip at the right of its toolbar, above the image ("Agent:
   entity.create · 3 s ago", while a client is connected or for `c_AgentChipSeconds` after; a click shows it in the
   Activity panel) and, for `c_AgentFlashSeconds` (600 ms), outlines the projected bounds of those entities (at most 64)
   in the accent, fading out (`ViewportPanel::DrawAgentFlash`, an `ImDrawList` rectangle per entity, bounds taken once when
   the command finished). While nothing of this shows the panel does no work for it, and only the fade keeps the editor at
   its full frame rate (`IsAnimating`, from the clock, so a viewport hidden mid-fade does not keep it there).
 - **Viewport** (`EditorViewport.h`, `ViewportRenderer.h`). `EditorViewport` holds the editor camera (and the cameras of
-  the project's other scenes), the settings and two `ViewportRenderer`s (panel and captures). The panel renders during
-  `OnImGuiRender`; `ResolveViewportView` picks the scene's primary camera while playing and the editor camera otherwise,
-  and `GetViewportRenderOptions` gives editor views (the editor camera outside play mode) preview lighting and a hidden
-  HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`; with Game UI shown, a click selects a UI element
-  first). The 2D canvas mode (`Panels/CanvasModeView`, `Editor/CanvasEdit`) shows a screen-space canvas at its reference
-  aspect through the scene's camera, with handles that place rects, zoom and pan that never lay it out again
-  (DeveloperGuide.md, "Game UI commands"). The settings' debug view
-  (`ViewportDebugView`: `none`, `streaming`, `lod`, `mip`) colors every view of the viewport, the game view too: before each
+  the project's other scenes), the settings and three `ViewportRenderer`s, each with render targets of its own size: the
+  Scene view's, the Game view's (created on first use; about 72 MB of targets at 1920 x 1080, freed while the Game view is
+  hidden or closed) and the captures'. Two panels show them, tabs of one dock node: the Scene view (`ViewportPanel`, id
+  `Viewport`) passes `ViewportCameraSource::Editor`, the editor camera on the edited scene or the running one (picking,
+  gizmos and overlays work on the running copy while playing; with Game UI shown, a click selects a UI element first),
+  or `Scene` with "Game camera" (F8); the Game view (`GameViewPanel`) passes `Scene`, the primary camera as the game shows
+  it (`ResolveGameView`: without one, a scene with screen-space UI shows that UI over black, as `GameRenderer` does), at
+  the size of `ViewportSettings::GameView` (`ComputeGameViewFrame`: the panel's, an aspect ratio letterboxed, a
+  fixed size rendered at its pixels and scaled to fit, or what the game asked for), and feeds `Input` while it is focused
+  in play mode. In every play frame it shows it sets the game's screen (`Input::SetViewport` with its render resolution,
+  so positions reach scripts in the game's pixels and `Input::GetViewportSize`, which `EditorGameWindow::GetState` and UI
+  hit testing read, is that resolution).
+  Play from the UI brings the Game view's tab forward and Stop the Scene view's back. `ResolveViewportView`'s `Automatic`
+  source (captures) picks the scene's primary camera while playing and the editor camera otherwise, and
+  `GetViewportRenderOptions` gives editor views (the editor camera, except `Automatic`'s fallback while playing) preview
+  lighting and a hidden HUD as the settings say (`viewport.getSettings`, `viewport.setSettings`). Both views hold their
+  chips in a toolbar strip above the image (`Panels/ViewportToolbar`), never over it; a Scene view too narrow for their
+  labels draws the last ones as icons (`UI::ChipStrip`, decided from the previous frame's chips). The Scene view's 2D
+  canvas mode (`Panels/CanvasModeView`, `Editor/CanvasEdit`) shows a screen-space canvas at its reference aspect through
+  the scene's camera, with handles that place rects, zoom and pan that never lay it out again (DeveloperGuide.md, "Game
+  UI commands").
+  The settings' debug view
+  (`ViewportDebugView`: `none`, `streaming`, `lod`, `mip`) colors every view of the viewport, the Game view too: before each
   render `StreamingView` (`Editor/StreamingView.h`) takes the render proxies the scene's `RenderScene` finds in the view
   (its spatial index, culled with the bounds the renderer culls with: a mesh's own, else those the asset pipeline
   recorded) and lists tints for the renderer (`SceneRenderOptions::EntityTints`). It observes streaming without changing
@@ -2923,8 +3029,10 @@ is the `strata-scripting` skill. The layers:
   the entity's origin touch the surface with its side facing it). The Hierarchy's create menus (the Entity menu too) put
   new top-level entities under the pivot, resting on the surface by their mesh's bounds (`GetMeshBounds`: the loaded
   mesh's, else the recorded ones), and send the translation with `entity.create`. Prefabs and models rest by the bounds of
-  what they draw around their root's origin (`GetTemplateBounds`: instantiated into a scene of their own, the mesh bounds
-  of the root's subtree with their transforms): dropped into the viewport on the cursor's surface, from the Content
+  what they draw around their root's origin (`GetPlacementBounds`: `EditorContext::GetAssetBounds`'s measurement, made
+  while the asset is dragged over the viewport, else `GetTemplateBounds`: instantiated into a scene of their own, the mesh
+  bounds of the root's subtree with their transforms, skinned meshes in the rest pose once their skeleton is resident,
+  never waiting for it): dropped into the viewport on the cursor's surface, from the Content
   Browser's, the Asset tab's Add to Scene or a drop on the Hierarchy's empty space under the pivot
   (`EditorActions::InstantiatePrefab`, `prefab.instantiate` with the translation). A material dropped into the viewport
   goes to the mesh under the cursor (`component.set`, one undo step). `entity.dropToGround` (End, and Edit > Drop to Ground) moves each

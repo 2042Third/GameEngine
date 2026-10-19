@@ -46,12 +46,13 @@ namespace Strata::UI
 		GetDrawers()[type] = std::move(drawer);
 	}
 
-	bool ComponentDrawers::Draw(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, ComponentDrawResult& result)
+	bool ComponentDrawers::Draw(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const ComponentDrawOverrides* overrides,
+		ComponentDrawResult& result)
 	{
 		const auto it = GetDrawers().find(info.TypeId);
 		if (it == GetDrawers().end() || entities.empty())
 			return false;
-		it->second(context, entities, info, result);
+		it->second(context, entities, info, overrides, result);
 		return true;
 	}
 

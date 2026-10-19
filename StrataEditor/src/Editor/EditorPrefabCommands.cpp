@@ -5,14 +5,22 @@
 #include "Editor/PrefabSync.h"
 #include "Editor/SceneEdit.h"
 
+#include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Scene/ComponentAccess.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/PrefabInstances.h>
+#include <Strata/Scene/PrefabOverrides.h>
 #include <Strata/Scene/Scene.h>
 
+#include <glm/glm.hpp>
+
+#include <algorithm>
+#include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -83,6 +91,36 @@ namespace Strata
 			return metadata ? metadata->Path : asset.ToString();
 		}
 
+		// The instance's entities linked to its prefab, by their prefab entity ids.
+		std::unordered_map<UUID, UUID> MapInstanceEntities(Scene& scene, Entity root)
+		{
+			std::unordered_map<UUID, UUID> entities;
+			const AssetHandle prefab = PrefabInstances::GetPrefab(root);
+			for (const UUID id : SceneEdit::CollectSubtree(scene, root.GetUUID()))
+			{
+				const PrefabInstanceComponent* link = scene.GetEntityByUUID(id).TryGetComponent<PrefabInstanceComponent>();
+				if (link && link->Prefab == prefab)
+					entities.emplace(link->PrefabEntityID, id);
+			}
+			return entities;
+		}
+
+		// An instance's overrides as commands report them: the scene's entity (null for an entity the instance removed), the
+		// prefab's entity id, the component, the property and the kind.
+		nlohmann::json DescribeOverrides(Scene& scene, Entity root, const std::vector<PrefabOverride>& overrides)
+		{
+			const std::unordered_map<UUID, UUID> entities = MapInstanceEntities(scene, root);
+			nlohmann::json list = nlohmann::json::array();
+			for (const PrefabOverride& entry : overrides)
+			{
+				const auto entity = entities.find(entry.Entity);
+				list.push_back({ { "entity", entity != entities.end() ? UUIDToJson(entity->second) : nlohmann::json(nullptr) },
+					{ "prefabEntity", entry.Entity.ToString() }, { "component", entry.Component }, { "property", entry.Property },
+					{ "kind", PrefabOverrides::KindToString(entry.Kind) } });
+			}
+			return list;
+		}
+
 		nlohmann::json ToJson(const std::vector<UUID>& ids)
 		{
 			nlohmann::json array = nlohmann::json::array();
@@ -97,24 +135,253 @@ namespace Strata
 		{
 			const bool playing = context.IsPlaying();
 			if (playing)
-			{
-				result["warning"] = fmt::format("The scene is running ({}): this change applies to the running copy and is discarded by play.stop",
-					SceneStateToString(context.GetSceneState()));
-			}
+				result["warning"] = GetRunningCopyWarning(context);
 			EditorCommandResult outcome = EditorCommandResult::Ok(std::move(result));
 			outcome.RunningCopy = playing;
 			return outcome;
 		}
 
+		// What prefab.instantiate {instances} makes at most in one call.
+		constexpr size_t c_MaxInstances = 100'000;
+
+		// An instance of prefab.instantiate {instances}: where it goes and what its root gets.
+		struct InstanceRequest
+		{
+			Entity Parent;
+			const nlohmann::json* Components = nullptr;
+			bool TransformOnly = true;  // Only a Transform (or nothing): made with the others of its parent by InstantiateMany
+			glm::mat4 Transform { 1.0f }; // TransformOnly: the root's local transform
+		};
+
+		// prefab.instantiate {instances}: every instance in one undo step. Those that give only a Transform (or nothing) are made
+		// together per parent (EntityTemplate::InstantiateMany, templates with one top-level entity); the others one by one,
+		// their components applied after. Everything is checked before anything is made.
+		EditorCommandResult InstantiateMany(EditorContext& context, const EntityTemplate& asset, AssetHandle handle, const nlohmann::json& list,
+			const std::string& prefabName)
+		{
+			Scene& scene = *context.GetActiveScene();
+			if (!list.is_array() || list.empty() || list.size() > c_MaxInstances)
+				return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'instances': give 1 to {} instances [{{parent?, components?}}]", c_MaxInstances));
+
+			// The template's root transform: what an instance's root has where it gives no Transform values of its own.
+			const nlohmann::json snapshot = asset.GetSnapshot();
+			const nlohmann::json* entities = JsonUtils::Find(snapshot, "Entities");
+			size_t topLevel = 0;
+			const nlohmann::json* rootTransform = nullptr;
+			for (const nlohmann::json& entity : entities && entities->is_array() ? *entities : nlohmann::json::array())
+			{
+				if (entity.contains("Parent"))
+					continue;
+				if (topLevel++ == 0)
+				{
+					const nlohmann::json* entityComponents = JsonUtils::Find(entity, "Components");
+					rootTransform = entityComponents ? JsonUtils::Find(*entityComponents, "Transform") : nullptr;
+				}
+			}
+			const ComponentInfo* transformInfo = ComponentRegistry::Find<TransformComponent>();
+			TransformComponent base;
+			std::string error;
+			if (rootTransform && transformInfo)
+				ComponentAccess::Deserialize(*transformInfo, &base, *rootTransform, false, &error);
+
+			std::vector<InstanceRequest> requests(list.size());
+			for (size_t index = 0; index < list.size(); index++)
+			{
+				const nlohmann::json& item = list[index];
+				if (!item.is_object())
+					return EditorCommandResult::InvalidParameters(fmt::format("Instance {}: give an object {{parent?, components?}}", index));
+				for (const auto& [key, value] : item.items())
+				{
+					if (key != "parent" && key != "components")
+						return EditorCommandResult::InvalidParameters(fmt::format("Instance {}: unknown key '{}' (parent, components)", index, key));
+				}
+				CommandArguments itemArguments(item);
+				InstanceRequest& request = requests[index];
+				request.Parent = itemArguments.FindEntity(scene, "parent");
+				request.Components = itemArguments.FindObject("components");
+				if (!itemArguments.IsValid())
+					return EditorCommandResult::InvalidParameters(fmt::format("Instance {}: {}", index, itemArguments.Fail().Error));
+				// Several top-level entities: InstantiateMany returns the first of each instance only, so they are made one by one.
+				request.TransformOnly = topLevel == 1 && transformInfo
+					&& (!request.Components || (request.Components->size() == 1 && request.Components->contains("Transform")) || request.Components->empty());
+				if (!request.TransformOnly)
+					continue;
+				TransformComponent transform = base;
+				if (request.Components && request.Components->contains("Transform")
+					&& !ComponentAccess::Deserialize(*transformInfo, &transform, (*request.Components)["Transform"], true, &error))
+					return EditorCommandResult::InvalidParameters(fmt::format("Instance {}: Transform: {}", index, error));
+				request.Transform = transform.GetTransform();
+			}
+
+			SceneEditTransaction transaction(scene, "Instantiate Prefab", {});
+			std::vector<std::vector<Entity>> roots(requests.size());
+			// Together, per parent, in the order given.
+			std::vector<UUID> parents;
+			for (const InstanceRequest& request : requests)
+			{
+				const UUID id = request.Parent ? request.Parent.GetUUID() : UUID::Null();
+				if (request.TransformOnly && std::find(parents.begin(), parents.end(), id) == parents.end())
+					parents.push_back(id);
+			}
+			for (const UUID parentId : parents)
+			{
+				std::vector<size_t> indices;
+				std::vector<glm::mat4> transforms;
+				for (size_t index = 0; index < requests.size(); index++)
+				{
+					const UUID id = requests[index].Parent ? requests[index].Parent.GetUUID() : UUID::Null();
+					if (requests[index].TransformOnly && id == parentId)
+					{
+						indices.push_back(index);
+						transforms.push_back(requests[index].Transform);
+					}
+				}
+				const std::vector<Entity> made = asset.InstantiateMany(scene, transforms, scene.GetEntityByUUID(parentId), &error);
+				if (made.size() != indices.size())
+					return RollBackEdit(transaction, fmt::format("Instantiating '{}' failed: {}", prefabName, error), EditorCommandError::Failed);
+				for (size_t madeIndex = 0; madeIndex < made.size(); madeIndex++)
+					roots[indices[madeIndex]] = { made[madeIndex] };
+			}
+			for (size_t index = 0; index < requests.size(); index++)
+			{
+				if (requests[index].TransformOnly)
+					continue;
+				std::string instantiateError;
+				roots[index] = asset.Instantiate(scene, requests[index].Parent, &instantiateError);
+				if (!instantiateError.empty())
+					return RollBackEdit(transaction, fmt::format("Instantiating '{}' failed: {}", prefabName, instantiateError), EditorCommandError::Failed);
+			}
+			for (const std::vector<Entity>& instance : roots)
+			{
+				for (const Entity root : instance)
+					transaction.TrackCreated(root.GetUUID());
+			}
+
+			// Every instance has its prefab's values (the components given for a root make it differ after): recorded on its
+			// roots. Instances of one template are copies of it, so its version and content hash are worked out once.
+			if (EditorAssetManager* assets = context.GetAssetManager())
+			{
+				if (const std::optional<nlohmann::json> stored = PrefabSyncUtils::ReadTemplate(*assets, handle))
+				{
+					PrefabOverrides::PartChangeCache parts(nullptr, *stored);
+					std::unordered_map<UUID, uint64_t> hashes;
+					for (const std::vector<Entity>& instance : roots)
+					{
+						for (Entity root : instance)
+						{
+							const UUID templateRoot = root.GetComponent<PrefabInstanceComponent>().PrefabEntityID;
+							const auto [hash, added] = hashes.try_emplace(templateRoot, 0);
+							if (added)
+								hash->second = PrefabInstances::GetContentHash(scene, root);
+							PrefabInstances::MarkSynced(root, parts.Get(templateRoot).NextVersion, hash->second);
+						}
+					}
+				}
+			}
+			for (size_t index = 0; index < requests.size(); index++)
+			{
+				if (requests[index].TransformOnly || !requests[index].Components || roots[index].empty())
+					continue;
+				if (!ApplyComponents(roots[index].front(), *requests[index].Components, &error))
+					return RollBackEdit(transaction, fmt::format("Instance {}: {}", index, error), EditorCommandError::InvalidParameters);
+			}
+			SceneEdit::NameNumbers numbers;
+			nlohmann::json instances = nlohmann::json::array();
+			std::vector<Entity> allRoots;
+			for (const std::vector<Entity>& instance : roots)
+			{
+				nlohmann::json ids = nlohmann::json::array();
+				for (const Entity root : instance)
+				{
+					SceneEdit::MakeNameUnique(scene, root, &numbers);
+					ids.push_back(UUIDToJson(root.GetUUID()));
+					allRoots.push_back(root);
+				}
+				instances.push_back({ { "id", instance.empty() ? nlohmann::json(nullptr) : UUIDToJson(instance.front().GetUUID()) }, { "entities", std::move(ids) } });
+			}
+			transaction.SetName(fmt::format("Instantiate {}", SceneEdit::DescribeEntities(allRoots)));
+			return FinishEdit(context, transaction, { { "instances", std::move(instances) } });
+		}
+
 	}
 
-	void RegisterPrefabWorkflowCommands(EditorCommandRegistry& registry)
+	void RegisterPrefabCommands(EditorCommandRegistry& registry)
 	{
+		registry.Register({ "prefab.instantiate", "Instantiates a prefab or imported model, optionally under a parent and with component values on its root (undoable; "
+			"while playing it changes the running copy only). An instance whose name a sibling has gets a number ('Crate' -> 'Crate (1)'). Returns "
+			"{id (the first root), entities (every root)}; the instance stays linked to the prefab (prefab.status, prefab.apply, prefab.revert). "
+			"With instances: [{parent?, components?}] (instead of parent and components) it makes many in one undo step, at most 100,000, and "
+			"returns {instances: [{id, entities}]} in their order; instances that give only a Transform are made together, the fastest way.",
+			ObjectSchema({
+				{ "prefab", AssetSchema("Prefab or model") },
+				{ "parent", OptionalEntitySchema("Parent; null or omitted for the top level") },
+				{ "components", AnyObjectSchema("Component values applied to the instance's root, e.g. {\"Transform\": {\"Translation\": [2, 0, 0]}}") },
+				{ "instances", { { "type", "array" }, { "items", { { "type", "object" } } }, { "minItems", 1 }, { "maxItems", c_MaxInstances },
+					{ "description", "Many instances in one step: [{parent?, components?}], each like the parameters of one" } } } }, { "prefab" }),
+			[](EditorContext& context, const nlohmann::json& parameters)
+			{
+				Scene& scene = *context.GetActiveScene();
+				CommandArguments arguments(parameters);
+				const AssetHandle handle = ResolveAsset(context, arguments, "prefab", AssetType::None);
+				Entity parent = arguments.FindEntity(scene, "parent");
+				const nlohmann::json* components = arguments.FindObject("components");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				const AssetType type = AssetManager::GetAssetType(handle);
+				if (type != AssetType::Prefab && type != AssetType::Model)
+					return EditorCommandResult::InvalidParameters(fmt::format("'{}' is a {}, not a prefab or model", parameters["prefab"].get<std::string>(), AssetTypeToString(type)));
+				if (arguments.Has("instances") && (arguments.Has("parent") || components))
+					return EditorCommandResult::InvalidParameters("Pass either 'instances' or 'parent' and 'components', not both");
+
+				Ref<EntityTemplate> asset = std::static_pointer_cast<EntityTemplate>(AssetManager::GetActive()->LoadAssetSync(handle));
+				if (!asset)
+					return EditorCommandResult::Fail("Loading the prefab failed");
+				if (arguments.Has("instances"))
+					return InstantiateMany(context, *asset, handle, parameters["instances"], parameters["prefab"].get<std::string>());
+
+				SceneEditTransaction transaction(scene, "Instantiate Prefab", {});
+				std::string instantiateError;
+				const std::vector<Entity> roots = asset->Instantiate(scene, parent, &instantiateError);
+				// Instantiation fails as a whole, e.g. when the scene cannot hold the entities.
+				if (!instantiateError.empty())
+					return RollBackEdit(transaction, fmt::format("Instantiating '{}' failed: {}", parameters["prefab"].get<std::string>(), instantiateError), EditorCommandError::Failed);
+				nlohmann::json ids = nlohmann::json::array();
+				for (Entity root : roots)
+				{
+					transaction.TrackCreated(root.GetUUID());
+					ids.push_back(UUIDToJson(root.GetUUID()));
+				}
+				// The new instance has its prefab's values: recorded on its roots (before the components given for the root, which
+				// make it differ), so that later changes of the prefab reach it also while its scene is closed.
+				if (EditorAssetManager* assets = context.GetAssetManager())
+				{
+					if (const std::optional<nlohmann::json> snapshot = PrefabSyncUtils::ReadTemplate(*assets, handle))
+					{
+						for (Entity root : roots)
+							PrefabInstances::MarkSynced(scene, root, *snapshot);
+					}
+				}
+				std::string error;
+				if (components && !roots.empty() && !ApplyComponents(roots.front(), *components, &error))
+					return RollBackEdit(transaction, error, EditorCommandError::InvalidParameters);
+				// A second instance among the same siblings: "Crate (1)". The root's name is the instance's own, so the number does not
+				// make it differ from its prefab.
+				SceneEdit::NameNumbers numbers;
+				for (const Entity root : roots)
+					SceneEdit::MakeNameUnique(scene, root, &numbers);
+				transaction.SetName(fmt::format("Instantiate {}", SceneEdit::DescribeEntities(roots)));
+				nlohmann::json result = { { "entities", std::move(ids) } };
+				result["id"] = roots.empty() ? nlohmann::json(nullptr) : UUIDToJson(roots.front().GetUUID());
+				return FinishEdit(context, transaction, std::move(result));
+			} });
+
 		registry.Register({ "prefab.status",
 			"Whether an entity belongs to a prefab instance and how the instance differs from its prefab as stored now (the root's transform and name "
 			"are the instance's own and never count): {linked, root, prefab, path, modified, outdated, changed: [entity ids whose values differ], added: "
-			"[entities the prefab lacks], removed: [ids of prefab entities the instance lacks]}; {linked: false} for entities of no instance. outdated: the "
-			"instance was made from an older version of the prefab and did not take its later changes (it was modified meanwhile), so prefab.apply "
+			"[entities the prefab lacks], removed: [ids of prefab entities the instance lacks], overrides: [{entity (the scene's; null for an entity the "
+			"instance removed), prefabEntity, component, property (script fields: <Class>.<Field>), kind: Property | AddedComponent | RemovedComponent | "
+			"RemovedEntity}]}; {linked: false} for entities of no instance. Prefab changes reach every instance except where it overrides them. outdated: "
+			"the instance was made from an older version of the prefab and did not take its later changes (it was modified meanwhile), so prefab.apply "
 			"would write its older values back.",
 			ObjectSchema({ { "entity", EntitySchema("An entity of the active scene") } }, { "entity" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
@@ -134,6 +401,8 @@ namespace Strata
 				if (!snapshot)
 					return EditorCommandResult::Fail(fmt::format("The prefab {} cannot be read: {}", prefab.ToString(), assets ? error : std::string("no project is open")));
 				const PrefabInstanceDifference difference = PrefabInstances::Compare(scene, root, *snapshot);
+				const std::vector<PrefabOverride> overrides = PrefabOverrides::ComputeOverrides(scene, root,
+					PrefabInstances::ExtractTemplate(*snapshot, root.GetComponent<PrefabInstanceComponent>().PrefabEntityID));
 				return EditorCommandResult::Ok({
 					{ "linked", true },
 					{ "root", UUIDToJson(root.GetUUID()) },
@@ -143,17 +412,20 @@ namespace Strata
 					{ "outdated", PrefabInstances::IsOutdated(root, *snapshot) },
 					{ "changed", ToJson(difference.Changed) },
 					{ "added", ToJson(difference.Added) },
-					{ "removed", ToJson(difference.Removed) } });
+					{ "removed", ToJson(difference.Removed) },
+					{ "overrides", DescribeOverrides(scene, root, overrides) } });
 			}, EditorCommandKind::Query });
 
 		registry.Register({ "prefab.apply",
 			"Writes a prefab instance (the instance the entity belongs to: its root's subtree, also entities added to it) back into its prefab, keeping "
-			"the prefab's own root transform and name. Other instances whose values equalled the prefab's take the new values; entities added to the "
-			"instance are linked. One undo step for the file and the scene (edit.undo restores both). Edit mode only; imported models cannot be changed "
-			"(prefab.unpack them, or prefab.create a prefab). An outdated instance (prefab.status: made from an older version, it missed the prefab's "
-			"later changes) is refused unless force: true, since it would write its older values over them. Returns {prefab, path, root, "
-			"updatedInstances, linked}.",
-			ObjectSchema({ { "entity", EntitySchema("An entity of the instance (its root or below)") },
+			"the prefab's own root transform and name; with component (and property), only that override of the entity (prefab.status lists them). "
+			"Every other instance takes the new values except where it overrides them; entities added to the instance are linked. One undo step for "
+			"the file and the scene (edit.undo restores both). Edit mode only; imported models cannot be changed (prefab.unpack them, or "
+			"prefab.create a prefab). An outdated instance (prefab.status: made from an older version, it missed the prefab's later changes) is "
+			"refused unless force: true, since it would write its older values over them. Returns {prefab, path, root, updatedInstances, linked}.",
+			ObjectSchema({ { "entity", EntitySchema("An entity of the instance (its root or below); with component, the entity whose override is applied") },
+				{ "component", StringSchema("Apply only this component of the entity (added, removed or changed)") },
+				{ "property", StringSchema("With component: apply only this property (scripts: <Class> or <Class>.<Field>)") },
 				{ "force", BoolSchema("Apply an outdated instance anyway, writing its values over the prefab's later changes (default false)") } }, { "entity" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
@@ -169,8 +441,20 @@ namespace Strata
 				CommandArguments arguments(parameters);
 				const Entity root = GetInstanceRoot(arguments, scene);
 				const bool force = arguments.GetBool("force", false);
+				const std::string component = arguments.GetString("component", "");
+				const std::string property = arguments.GetString("property", "");
+				if (arguments.IsValid() && !property.empty() && component.empty())
+					arguments.SetError("Parameter 'property' needs 'component'");
 				if (!arguments.IsValid())
 					return arguments.Fail();
+				// One override: of the entity given, which must be one of the prefab's.
+				const Entity target = scene.GetEntityByUUID(*UUIDFromJson(parameters["entity"]));
+				const PrefabInstanceComponent* targetLink = target.TryGetComponent<PrefabInstanceComponent>();
+				if (!component.empty() && (!targetLink || targetLink->Prefab != PrefabInstances::GetPrefab(root)))
+					return EditorCommandResult::InvalidParameters(fmt::format("'{}' was added to the instance: apply the whole instance to put it into the prefab",
+						target.GetName()));
+				if (!component.empty() && !ComponentRegistry::Find(component))
+					return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'component': unknown component '{}'", component));
 				const AssetHandle prefab = PrefabInstances::GetPrefab(root);
 				const std::optional<AssetMetadata> metadata = assets->GetMetadata(prefab);
 				if (!metadata || metadata->Type != AssetType::Prefab)
@@ -201,7 +485,11 @@ namespace Strata
 				const nlohmann::json* rootTransform = rootComponents ? JsonUtils::Find(*rootComponents, "Transform") : nullptr;
 				const nlohmann::json* rootName = rootComponents ? JsonUtils::Find(*rootComponents, "Name") : nullptr;
 				std::unordered_map<UUID, UUID> ids;
-				const nlohmann::json newPart = PrefabInstances::MakeTemplate(scene, root, rootTransform, rootName, ids);
+				const nlohmann::json instancePart = PrefabInstances::MakeTemplate(scene, root, rootTransform, rootName, ids);
+				const nlohmann::json newPart = component.empty() ? instancePart
+					: PrefabOverrides::ApplyToPart(part, instancePart, targetLink->PrefabEntityID, component, property);
+				if (!component.empty())
+					ids.clear(); // Applying one override links nothing
 				const nlohmann::json newSnapshot = PrefabInstances::ReplaceTemplate(snapshot, templateRoot, newPart);
 				(*document)["Prefab"] = newSnapshot;
 				if (!Prefab::FromJson(*document, &error))
@@ -209,18 +497,15 @@ namespace Strata
 				const std::string text = JsonUtils::Dump(*document, 1, '\t') + "\n";
 				std::vector<uint8_t> after(text.begin(), text.end());
 
-				// The scene: what was added to the instance is linked, and the other instances that still had the prefab's values
-				// take the new ones.
+				// The scene: what was added to the instance is linked, and every other instance takes the new values except where it
+				// overrides them.
 				SceneEditTransaction transaction(scene, fmt::format("Apply Prefab {}", metadata->Name), {});
 				transaction.TrackSubtree(root.GetUUID());
 				std::vector<UUID> others;
 				for (const Entity instance : PrefabInstances::FindInstanceRoots(scene, prefab))
 				{
-					if (instance != root && PrefabInstances::Compare(scene, instance, snapshot).IsEmpty())
-					{
+					if (instance != root)
 						others.push_back(instance.GetUUID());
-						transaction.TrackSubtree(instance.GetUUID());
-					}
 				}
 				uint32_t linked = 0;
 				for (const auto& [id, templateId] : ids)
@@ -233,18 +518,31 @@ namespace Strata
 						linked++;
 					}
 				}
-				// The instance is the prefab's new version now.
+				// The instance is the prefab's new version now: synced, and without overrides.
 				PrefabInstances::MarkSynced(scene, root, newSnapshot);
+				Entity applied = root;
+				applied.GetComponent<PrefabInstanceComponent>().Overrides = PrefabOverrides::ComputeOverrides(scene, root,
+					PrefabInstances::ExtractTemplate(newSnapshot, templateRoot));
+				size_t updated = 0;
+				PrefabOverrides::PartChangeCache parts(&snapshot, newSnapshot);
 				for (const UUID other : others)
 				{
-					std::vector<UUID> created;
-					if (!PrefabInstances::Replace(scene, scene.GetEntityByUUID(other), newSnapshot, &created, &error))
+					Entity instance = scene.GetEntityByUUID(other);
+					if (!instance)
+						continue; // Inside an instance an update before removed
+					const PrefabOverrides::PartChangeCache::Parts& otherPart = parts.Get(instance.GetComponent<PrefabInstanceComponent>().PrefabEntityID);
+					PrefabOverrides::PropagateResult result;
+					if (!PrefabOverrides::Propagate(scene, instance, otherPart.Previous, otherPart.Next, result, [&transaction](UUID id) { transaction.Track(id); },
+						&error))
 					{
 						transaction.Rollback();
 						return EditorCommandResult::Fail(fmt::format("Updating another instance failed: {}", error));
 					}
-					for (const UUID entity : created)
+					for (const UUID entity : result.Created)
 						transaction.TrackCreated(entity);
+					transaction.Track(other);
+					PrefabInstances::MarkSynced(instance, otherPart.NextVersion, result.ContentHash);
+					updated += !result.Changed.empty() || !result.Created.empty() ? 1 : 0;
 				}
 
 				// The file, then one undo step for both.
@@ -260,14 +558,17 @@ namespace Strata
 				context.GetPrefabSync().SetBaseline(context, prefab, newSnapshot);
 				context.PruneSelection();
 				return EditorCommandResult::Ok({ { "prefab", UUIDToJson(prefab) }, { "path", metadata->Path }, { "root", UUIDToJson(root.GetUUID()) },
-					{ "updatedInstances", others.size() }, { "linked", linked } });
+					{ "updatedInstances", updated }, { "linked", linked } });
 			} });
 
 		registry.Register({ "prefab.revert",
 			"Gives a prefab instance (the instance the entity belongs to) its prefab's values again: entities keep their IDs (matched by the prefab's "
 			"entity ids), entities the prefab lacks go, entities the instance lacks are made, and the root keeps its parent, place, transform and name. "
-			"One undo step (while playing it changes the running copy only). Returns {root, prefab, created}.",
-			ObjectSchema({ { "entity", EntitySchema("An entity of the instance (its root or below)") } }, { "entity" }),
+			"With component (and property), only that component (or property) of the entity reverts: a component the prefab lacks goes, one the "
+			"entity lacks comes back. One undo step (while playing it changes the running copy only). Returns {root, prefab, created}.",
+			ObjectSchema({ { "entity", EntitySchema("An entity of the instance (its root or below); with component, the entity whose override is reverted") },
+				{ "component", StringSchema("Revert only this component of the entity") },
+				{ "property", StringSchema("With component: revert only this property (scripts: <Class> or <Class>.<Field>)") } }, { "entity" }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				EditorAssetManager* assets = context.GetAssetManager();
@@ -276,6 +577,10 @@ namespace Strata
 				Scene& scene = *context.GetActiveScene();
 				CommandArguments arguments(parameters);
 				const Entity root = GetInstanceRoot(arguments, scene);
+				const std::string component = arguments.GetString("component", "");
+				const std::string property = arguments.GetString("property", "");
+				if (arguments.IsValid() && !property.empty() && component.empty())
+					arguments.SetError("Parameter 'property' needs 'component'");
 				if (!arguments.IsValid())
 					return arguments.Fail();
 				// CommitEdit would roll the change back while a scene is being opened: refused before anything changes.
@@ -286,6 +591,21 @@ namespace Strata
 				const std::optional<nlohmann::json> snapshot = PrefabSyncUtils::ReadTemplate(*assets, prefab, &error);
 				if (!snapshot)
 					return EditorCommandResult::Fail(fmt::format("The prefab {} cannot be read: {}", DescribeAssetName(context, prefab), error));
+
+				if (!component.empty())
+				{
+					Entity target = scene.GetEntityByUUID(*UUIDFromJson(parameters["entity"]));
+					const PrefabInstanceComponent* link = target.TryGetComponent<PrefabInstanceComponent>();
+					if (!link || link->Prefab != prefab)
+						return EditorCommandResult::InvalidParameters(fmt::format("'{}' was added to the instance: its prefab has no values for it", target.GetName()));
+					SceneEditTransaction transaction(scene, fmt::format("Revert {}{}{} of {}", component, property.empty() ? "" : ".", property, target.GetName()), {});
+					transaction.Track(target.GetUUID());
+					const nlohmann::json part = PrefabInstances::ExtractTemplate(*snapshot, root.GetComponent<PrefabInstanceComponent>().PrefabEntityID);
+					if (!PrefabOverrides::Revert(scene, target, part, component, property, &error))
+						return RollBackEdit(transaction, error, EditorCommandError::InvalidParameters);
+					context.CommitEdit(transaction);
+					return FinishSceneChange(context, { { "root", UUIDToJson(root.GetUUID()) }, { "prefab", UUIDToJson(prefab) }, { "created", nlohmann::json::array() } });
+				}
 
 				const UUID rootId = root.GetUUID();
 				SceneEditTransaction transaction(scene, fmt::format("Revert {}", root.GetName()), {});

@@ -28,6 +28,7 @@
 #include <iterator>
 #include <set>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace Strata;
@@ -57,6 +58,23 @@ namespace
 
 TEST_SUITE("Scripting.Module")
 {
+	TEST_CASE("c_ScriptCallbackCount counts every callback")
+	{
+		// Code that lists every callback (script.status) goes up to the count, which is defined from the enum's last value: a
+		// callback appended after it (a merge that adds callbacks next to others) must move it, or it would never be listed.
+		size_t named = 0;
+		for (uint32_t value = 0; value < 256; value++)
+		{
+			const ScriptCallback callback = static_cast<ScriptCallback>(value);
+			if (std::string_view(ScriptCallbackToString(callback)) == "Unknown")
+				continue;
+			INFO("Callback ", ScriptCallbackToString(callback));
+			CHECK(value < c_ScriptCallbackCount);
+			named++;
+		}
+		CHECK(named == c_ScriptCallbackCount);
+	}
+
 	TEST_CASE("Modules load and describe their classes and fields")
 	{
 		ScriptEngine engine;
@@ -87,7 +105,8 @@ TEST_SUITE("Scripting.Module")
 			"DestroyOtherOnContact", "RemoveSelfOnContact", "ContactThrower", "ContactCounter", "AudioAPI", "AudioMisuse", "AudioUnavailable",
 			"GameFlow", "GameFlowMisuse", "HelperChecks", "KeyRepeatProbe", "LateContactProbe", "AssetHolder", "SubSceneStreamer", "StreamingMisuse",
 			"AnimatorAPI", "AnimatorMisuse", "AnimatorUnavailable", "CharacterAPI", "CharacterMisuse", "GamepadProbe", "CursorProbe", "WindowRequests",
-			"SaveRoundTrip", "SaveLoader", "PhysicsLayersAPI", "MotionChecks", "UIControlAPI", "UIMisuse", "UIUnavailable", "UIEventRecorder", "UIFrameProbe"
+			"SaveRoundTrip", "SaveLoader", "PhysicsLayersAPI", "KeyboardWalker", "MotionChecks", "UIControlAPI", "UIMisuse", "UIUnavailable", "UIEventRecorder",
+			"UIFrameProbe"
 		};
 		std::set<std::string> classes;
 		for (const ScriptClassInfo& info : engine.GetClasses())

@@ -4,6 +4,7 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/ExternalEditor.h"
 #include "Editor/GameExport.h"
+#include "Editor/InputSequence.h"
 #include "Editor/ProjectSamples.h"
 #include "Editor/ProjectThumbnail.h"
 #include "Editor/SceneRecovery.h"
@@ -22,15 +23,19 @@
 #include <Strata/Core/Profiling.h>
 #include <Strata/Core/StringUtils.h>
 #include <Strata/Input/Input.h>
+#include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/RenderScene.h>
 #include <Strata/Renderer/Renderer.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
+#include <Strata/Scene/PrefabInstances.h>
+#include <Strata/Scene/PrefabOverrides.h>
 #include <Strata/Scene/SceneLoader.h>
 #include <Strata/Scene/SceneSerializer.h>
 #include <Strata/Scripting/ScriptingComponents.h>
 
 #include <algorithm>
+#include <unordered_set>
 #include <limits>
 #include <string_view>
 #include <utility>
@@ -144,6 +149,7 @@ namespace Strata
 		// still has, which scans find by their handles wherever they moved.
 		m_UndoStack.SetObserver(m_Recovery.get());
 		m_Recovery->BeginScene(*m_EditScene, UUID::Null(), {}, {});
+		CreateAnimationPreview();
 		m_Recovery->SetEntryValidator([this](const RecoveryEntry& entry) -> std::string
 		{
 			if (!entry.Scene.IsValid())
@@ -163,16 +169,30 @@ namespace Strata
 			return scenes;
 		});
 		SetStatusProvider("recovery", [this]() { return m_Recovery->DescribeStatus(); });
-		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details).
+		// The asset manager of the open project, or the built-in assets' without one (asset.stats has the details). Imports
+		// still running (a project opened with assets to import, re-imports) deliver their assets when they finish; scanning
+		// is the scan of the project's files while it registers them (null: none runs).
 		SetStatusProvider("assets", [this]()
 		{
 			const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
 			if (!manager)
 				return nlohmann::json(nullptr);
 			nlohmann::json description = CommandUtils::DescribeAssetStats(manager->GetStats());
-			// Imports still running (a project opened with assets to import, re-imports): their assets arrive when they finish.
 			description["importing"] = m_AssetManager && manager == m_AssetManager ? m_AssetManager->GetPendingImportCount() : 0u;
+			description["scanning"] = nullptr;
 			return description;
+		}, [this]()
+		{
+			const Ref<AssetManagerBase>& manager = AssetManager::GetActive();
+			if (!manager)
+				return nlohmann::json(nullptr);
+			const AssetManagerStats stats = manager->GetStats();
+			return nlohmann::json {
+				{ "ready", stats.LoadedAssets },
+				{ "loading", stats.LoadingAssets },
+				{ "importing", m_AssetManager && manager == m_AssetManager ? m_AssetManager->GetPendingImportCount() : 0u },
+				{ "scanning", nullptr },
+				{ "failed", stats.FailedAssets } };
 		});
 	}
 
@@ -380,6 +400,7 @@ namespace Strata
 				AssetManager::SetActive(nullptr);
 			m_AssetManager.reset();
 			m_SceneMetadataVersion = UINT64_MAX;
+			m_ImportFailureCount = 0;
 		}
 		if (m_Project)
 		{
@@ -412,6 +433,7 @@ namespace Strata
 		m_PendingFrame.reset();
 		m_AnimationPreview.reset(); // Of the scene that goes, which it refers to: before the scene is released
 		Ref<Scene> previous = std::exchange(m_EditScene, std::move(scene));
+		CreateAnimationPreview();
 		m_SceneHandle = handle;
 		ClearSelection();
 		m_UndoStack.Clear();
@@ -788,6 +810,8 @@ namespace Strata
 		m_MasterVolumeBeforePlay = AudioEngine::GetMasterVolume();
 		m_RuntimeScene = Scene::Copy(m_EditScene);
 		m_RuntimeSceneAsset = UUID::Null();
+		m_PlaySession++;
+		m_ReplacedFixedSteps = 0;
 		// Keys a tool held down in an earlier session (input.* commands) must not leak into this one.
 		ResetSimulatedInput();
 		ResetGameShell();
@@ -807,6 +831,8 @@ namespace Strata
 			m_RuntimeSceneLoad->Request.Cancel();
 			m_RuntimeSceneLoad.reset();
 		}
+		m_FixedStepsAtStop = GetFixedStepCount();
+		m_StoppedSession = m_PlaySession;
 		// Stopped here and destroyed off the frame, like a replaced scene (ReplaceRuntimeScene).
 		Scene::ReleaseInBackground(std::move(m_RuntimeScene));
 		m_RuntimeSceneAsset = UUID::Null();
@@ -902,6 +928,21 @@ namespace Strata
 		const SceneRuntimeMode mode = m_RuntimeScene->GetRuntimeMode();
 		const bool paused = m_RuntimeScene->IsPaused();
 		const uint32_t steps = m_RuntimeScene->GetStepFrames();
+		m_ReplacedFixedSteps += m_RuntimeScene->GetFixedStepCount();
+		// Said in the log and the activity journal: commands and agents would otherwise think the edited scene still runs.
+		auto describe = [this](AssetHandle scene, const std::string& name) -> nlohmann::json
+		{
+			const std::optional<AssetMetadata> metadata = scene.IsValid() && m_AssetManager ? m_AssetManager->GetMetadata(scene) : std::nullopt;
+			return { { "scene", scene.IsValid() ? UUIDToJson(scene) : nlohmann::json(nullptr) }, { "name", name },
+				{ "path", metadata ? nlohmann::json(metadata->Path) : nlohmann::json(nullptr) } };
+		};
+		const nlohmann::json from = describe(m_RuntimeSceneAsset, m_RuntimeScene->GetName());
+		const nlohmann::json to = describe(asset, next->GetName());
+		if (to["path"].is_string())
+			ST_INFO("Play mode switched to '{}' ({})", next->GetName(), to["path"].get<std::string>());
+		else
+			ST_INFO("Play mode switched to '{}'", next->GetName());
+		m_Journal->RecordEvent("play.sceneSwitched", { { "from", from }, { "to", to } }, true);
 		// The scene that goes stops here and is destroyed off the frame (a million entities take tens of milliseconds).
 		Scene::ReleaseInBackground(std::move(m_RuntimeScene));
 		m_RuntimeScene = std::move(next);
@@ -928,6 +969,11 @@ namespace Strata
 
 	void EditorContext::SetPaused(bool paused)
 	{
+		if (!paused && IsPaused())
+		{
+			m_FixedStepsAtResume = GetFixedStepCount();
+			m_ResumeCount++;
+		}
 		if (m_RuntimeScene)
 			m_RuntimeScene->SetPaused(paused);
 		UpdateInputSuspension();
@@ -943,6 +989,42 @@ namespace Strata
 		if (m_RuntimeScene && m_RuntimeScene->IsPaused())
 			m_RuntimeScene->Step(frames);
 		UpdateInputSuspension();
+	}
+
+	uint64_t EditorContext::StartInputSequence(Scope<InputSequence> sequence, std::string* outError)
+	{
+		if (IsInputSequenceRunning())
+		{
+			if (outError)
+				*outError = "An input sequence is running: it steps the game until it ends";
+			return 0;
+		}
+		if (HasPendingSteps())
+		{
+			if (outError)
+				*outError = "play.step's steps are still running: wait for them (or resume the game) first";
+			return 0;
+		}
+		m_InputSequence = std::move(sequence);
+		m_InputSequenceId++;
+		if (!m_InputSequence->Start(*this, outError))
+			return 0;
+		return m_InputSequenceId;
+	}
+
+	bool EditorContext::IsInputSequenceRunning() const
+	{
+		return m_InputSequence && !m_InputSequence->IsFinished();
+	}
+
+	uint32_t EditorContext::GetPendingSteps() const
+	{
+		return m_RuntimeScene && m_RuntimeScene->IsPaused() ? m_RuntimeScene->GetStepFrames() : 0;
+	}
+
+	uint64_t EditorContext::GetFixedStepCount() const
+	{
+		return m_RuntimeScene ? m_ReplacedFixedSteps + m_RuntimeScene->GetFixedStepCount() : 0;
 	}
 
 	void EditorContext::UpdateInputSuspension()
@@ -1069,7 +1151,7 @@ namespace Strata
 	// Undo
 	////////////////////////////////////////////////////////////////////////////////
 
-	bool EditorContext::CommitEdit(SceneEditTransaction& transaction)
+	bool EditorContext::CommitEdit(SceneEditTransaction& transaction, OverrideUpkeep overrides)
 	{
 		if (IsPlaying())
 			return false;
@@ -1079,7 +1161,99 @@ namespace Strata
 			transaction.Rollback();
 			return false;
 		}
+		if (overrides == OverrideUpkeep::Update)
+			UpdatePrefabOverrides(transaction);
 		return transaction.Commit(m_UndoStack);
+	}
+
+	void EditorContext::UpdatePrefabOverrides(SceneEditTransaction& transaction)
+	{
+		Scene& scene = transaction.GetScene();
+		if (!m_AssetManager || &scene != m_EditScene.get())
+			return;
+		// A scene without prefab links has no instances to look for (edits of large scenes without prefabs pay nothing).
+		const auto* links = std::as_const(scene.GetRegistry()).storage<PrefabInstanceComponent>();
+		if (!links || links->empty())
+			return;
+
+		// The instances the edit touched, with the entities it changed in each. An entity added to an instance (not linked)
+		// belongs to the instance of its nearest linked ancestor.
+		struct TouchedInstance
+		{
+			Entity Root;
+			std::vector<Entity> Entities; // Entities whose components alone changed
+			bool Reshaped = false;        // Entities were made, destroyed, moved or linked otherwise: the whole list is worked out
+		};
+		std::vector<TouchedInstance> instances;
+		std::unordered_map<UUID, size_t> instanceOf;
+		auto touch = [&](Entity entity) -> TouchedInstance*
+		{
+			while (entity && !entity.HasComponent<PrefabInstanceComponent>())
+				entity = entity.GetParent();
+			const Entity root = entity ? PrefabInstances::FindInstanceRoot(entity) : Entity();
+			if (!root)
+				return nullptr;
+			const auto [found, added] = instanceOf.try_emplace(root.GetUUID(), instances.size());
+			if (added)
+				instances.push_back({ root });
+			return &instances[found->second];
+		};
+		// Whether the entity has the link it had before the edit (the same prefab and prefab entity).
+		auto sameLink = [](const EntityState& state, Entity entity)
+		{
+			const nlohmann::json* before = JsonUtils::Find(state.Components, "PrefabInstance");
+			const PrefabInstanceComponent* link = entity.TryGetComponent<PrefabInstanceComponent>();
+			if (!before || !link)
+				return !before && !link;
+			const nlohmann::json* prefab = JsonUtils::Find(*before, "Prefab");
+			const nlohmann::json* id = JsonUtils::Find(*before, "PrefabEntityID");
+			return prefab && id && id->is_string() && UUIDFromJson(*prefab) == std::optional<UUID>(link->Prefab)
+				&& id->get_ref<const std::string&>() == link->PrefabEntityID.ToString();
+		};
+		for (const EntityState& state : transaction.GetBefore())
+		{
+			const Entity entity = scene.GetEntityByUUID(state.ID);
+			const Entity parent = entity ? entity.GetParent() : Entity();
+			const bool reshaped = !state.Exists || !entity || (parent ? parent.GetUUID() : UUID::Null()) != state.Parent || !sameLink(state, entity);
+			if (TouchedInstance* instance = touch(entity))
+			{
+				if (reshaped)
+					instance->Reshaped = true;
+				else
+					instance->Entities.push_back(entity);
+			}
+			// The instance it left, or was destroyed in.
+			if (reshaped && state.Parent.IsValid())
+			{
+				if (TouchedInstance* instance = touch(scene.GetEntityByUUID(state.Parent)))
+					instance->Reshaped = true;
+			}
+		}
+
+		// Each against its part of the prefab as the sync knows it; the list changes with the edit (and undo restores it).
+		for (const TouchedInstance& instance : instances)
+		{
+			Entity root = instance.Root;
+			// Tracked whether its list changes or not: the steps of a gizmo drag or a slider then all have the same entities and
+			// merge into one, also when only some of them change the list.
+			transaction.Track(root.GetUUID());
+			const PrefabInstanceComponent& link = root.GetComponent<PrefabInstanceComponent>();
+			const PrefabOverrides::IndexedPart* part = m_PrefabSync.GetBaselinePart(*this, link.Prefab, link.PrefabEntityID);
+			if (!part)
+				continue;
+			std::vector<PrefabOverride> overrides = link.Overrides;
+			if (!instance.Reshaped && PrefabOverrides::UpdateOverrides(root, *part, instance.Entities, overrides))
+			{
+				m_OverrideUpkeep.Entities += instance.Entities.size();
+			}
+			else
+			{
+				overrides = PrefabOverrides::ComputeOverrides(scene, root, part->Part);
+				m_OverrideUpkeep.WholeLists++;
+			}
+			if (overrides != link.Overrides)
+				root.GetComponent<PrefabInstanceComponent>().Overrides = std::move(overrides);
+		}
 	}
 
 	bool EditorContext::Undo(std::string* outError)
@@ -1628,7 +1802,7 @@ namespace Strata
 		notification.Title = "Building scripts";
 		notification.Message = fmt::format("{} (output in the Console)", m_Project->GetScriptModuleName());
 		notification.ShowConsole = true;
-		m_Notifications.Post(std::move(notification));
+		m_BuildNotification = m_Notifications.Post(std::move(notification));
 		return true;
 	}
 
@@ -1643,9 +1817,23 @@ namespace Strata
 		return m_Project && FileSystem::IsRegularFile(m_Project->GetScriptSourceDirectory() / "CMakeLists.txt");
 	}
 
+	bool EditorContext::IsAnnouncedLogEntry(uint64_t sequence) const
+	{
+		return sequence != 0 && std::find(m_AnnouncedLogEntries.begin(), m_AnnouncedLogEntries.end(), sequence) != m_AnnouncedLogEntries.end();
+	}
+
 	void EditorContext::OnScriptBuildFinished()
 	{
 		const ScriptBuildResult& result = m_ScriptBuilder.GetLastResult();
+		// The failure's error is the build pill's and the build toast's news: not an unread error besides.
+		if (result.LoggedError != 0)
+		{
+			m_AnnouncedLogEntries.push_back(result.LoggedError);
+			// A few suffice: the Console reads new entries every frame.
+			constexpr size_t c_MaxAnnouncedLogEntries = 16;
+			while (m_AnnouncedLogEntries.size() > c_MaxAnnouncedLogEntries)
+				m_AnnouncedLogEntries.pop_front();
+		}
 		m_LastScriptBuildLoad = {};
 		m_LastScriptBuildLoad.BuildID = result.ID;
 		// The watcher comes back before the built module loads: with hot reload the module loads from a private copy, so
@@ -1711,7 +1899,9 @@ namespace Strata
 			notification.Title = m_LastScriptBuildLoad.Reloaded ? "Scripts built and reloaded" : "Scripts built";
 			notification.Message = fmt::format("{:.1f} s", result.Seconds);
 		}
-		m_Notifications.Post(std::move(notification));
+		// In the place of "Building scripts", when it still shows: one toast that changes, not two side by side.
+		m_Notifications.Replace(m_BuildNotification, std::move(notification));
+		m_BuildNotification = 0;
 	}
 
 	bool EditorContext::StopOnScriptFault()
@@ -1767,10 +1957,18 @@ namespace Strata
 		}
 	}
 
+	void EditorContext::CreateAnimationPreview()
+	{
+		// Skinned characters stand in their rest pose while the scene is edited, as they do in play before their first
+		// animation; the scene's animators are found through their component's signals from here on.
+		AnimationPreviewSpecification specification;
+		specification.RestPoses = true;
+		m_AnimationPreview = CreateScope<AnimationPreview>(*m_EditScene, specification);
+	}
+
 	AnimationPreview& EditorContext::GetAnimationPreview()
 	{
-		if (!m_AnimationPreview)
-			m_AnimationPreview = CreateScope<AnimationPreview>(*m_EditScene);
+		ST_CORE_ASSERT(m_AnimationPreview, "The edited scene has its animation preview from the start");
 		return *m_AnimationPreview;
 	}
 
@@ -1825,12 +2023,19 @@ namespace Strata
 				m_PrefabSync.Update(*this);
 			m_EditScene->OnUpdateEditor(timestep);
 		}
-		// Before the viewports render: previews whose assets arrived get their poses.
+		// Before the viewports render: previews whose assets arrived get their poses, animators without a request the edit pose
+		// the viewport settings ask for (a change of it looks at every animator once).
 		if (m_AnimationPreview)
+		{
+			m_AnimationPreview->SetEditPose(m_Viewport.GetSettings().EditPose);
 			m_AnimationPreview->Update();
+		}
 		// After the game's update and before the next input frame: taps whose frames passed let go, and input frames stop
 		// while the game is paused (a step was used up, or play mode stopped).
-		m_SimulatedInput.Update();
+		// An input sequence counts the step the game ran and gives the next one its events (taps it made end below).
+		if (m_InputSequence)
+			m_InputSequence->Update(*this);
+		m_SimulatedInput.Update(GetFixedStepCount());
 		UpdateInputSuspension();
 		PruneSelection();
 		m_Viewport.UpdatePicking(*this);
@@ -1910,6 +2115,7 @@ namespace Strata
 		const std::vector<AssetImportFailure> failures = m_AssetManager->TakeImportFailures(&count);
 		if (failures.empty())
 			return;
+		m_ImportFailureCount += count;
 		// One toast however many fail (a project whose files are broken fails many imports as it opens): it counts them and
 		// shows the latest; the Console lists them all.
 		const AssetImportFailure& latest = failures.back();
@@ -1956,10 +2162,10 @@ namespace Strata
 		return m_Specification.SamplesDirectory.empty() ? ProjectSamples::GetDefaultDirectory() : m_Specification.SamplesDirectory;
 	}
 
-	void EditorContext::SetStatusProvider(const std::string& section, StatusProvider provider)
+	void EditorContext::SetStatusProvider(const std::string& section, StatusProvider provider, StatusProvider compactProvider)
 	{
 		if (provider)
-			m_StatusProviders.insert_or_assign(section, std::move(provider));
+			m_StatusProviders.insert_or_assign(section, StatusSection { std::move(provider), std::move(compactProvider) });
 		else
 			m_StatusProviders.erase(section);
 	}

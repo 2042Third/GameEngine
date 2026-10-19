@@ -47,6 +47,7 @@ namespace Strata::CLI
 			{ "--wait-timeout", true },
 			{ "--save-image", true },
 			{ "--idle-timeout", true },
+			{ "--toolsets", true },
 			{ "--headless", false },
 			{ "--no-gpu", false },
 			{ "--json", false },
@@ -330,6 +331,8 @@ namespace Strata::CLI
 				specification.LaunchTimeout = std::chrono::milliseconds(*arguments.WaitTimeoutMilliseconds);
 			if (arguments.IdleTimeoutSeconds)
 				specification.LaunchIdleTimeout = std::chrono::seconds(*arguments.IdleTimeoutSeconds);
+			if (arguments.Toolsets)
+				specification.Toolsets = *arguments.Toolsets;
 
 			std::mutex outputMutex;
 			McpServer server(std::move(specification), [&output, &outputMutex](const std::string& message)
@@ -452,6 +455,27 @@ namespace Strata::CLI
 				}
 				result.IdleTimeoutSeconds = seconds;
 			}
+			else if (name == "--toolsets")
+			{
+				// A comma-separated list of toolset names, or "all".
+				std::vector<std::string> toolsets;
+				size_t start = 0;
+				while (start <= value.size())
+				{
+					const size_t comma = value.find(',', start);
+					const std::string toolset = value.substr(start, comma == std::string::npos ? std::string::npos : comma - start);
+					if (toolset.empty())
+					{
+						error = fmt::format("--toolsets expects toolset names separated by commas (e.g. core,scene) or all, got '{}'", value);
+						return std::nullopt;
+					}
+					toolsets.push_back(toolset);
+					if (comma == std::string::npos)
+						break;
+					start = comma + 1;
+				}
+				result.Toolsets = std::move(toolsets);
+			}
 			else if (name == "--headless")
 				result.Headless = true;
 			else if (name == "--no-gpu")
@@ -527,6 +551,7 @@ namespace Strata::CLI
 			"  StrataCLI launch [--project <dir>] [--headless | --no-gpu] [--idle-timeout <s>] [--editor <path>]\n"
 			"                   [--wait-timeout <ms>]\n"
 			"  StrataCLI mcp [connection options] [--editor <path>] [--timeout <ms>] [--idle-timeout <s>]\n"
+			"                [--toolsets <name,...> | all]\n"
 			"  StrataCLI --help | --version\n"
 			"\n"
 			"Commands:\n"
@@ -540,7 +565,9 @@ namespace Strata::CLI
 			"           running until 'call editor.quit', or until no client has been connected for --idle-timeout\n"
 			"           seconds. --headless runs without a window, --no-gpu also without a graphics device\n"
 			"  mcp      Serve the Model Context Protocol on stdin/stdout (for AI agents). Editors it starts close\n"
-			"           themselves after --idle-timeout seconds without a client (default 600, 0: never)\n"
+			"           themselves after --idle-timeout seconds without a client (default 600, 0: never). Only the\n"
+			"           commands of --toolsets are tools (default core: about 30; all: every command); the tools\n"
+			"           strata_describe and strata_toolsets show and enable the others, strata_call runs any\n"
 			"\n"
 			"Connection options, in discovery order:\n"
 			"  --port <n>                Explicit endpoint (else STRATA_EDITOR_PORT), authenticated with the\n"

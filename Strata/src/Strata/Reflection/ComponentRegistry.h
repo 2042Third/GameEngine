@@ -209,6 +209,17 @@ namespace Strata
 		// an error, and the returned builder converts to false and discards what it is given.
 		template<typename T>
 		static ComponentInfoBuilder<T> Register(std::string name);
+
+		// Gives a registered property of a component its PropertyInfo::InactiveReason while registration is open: `reason`
+		// gets the component and returns why the property has no effect in its current state, or "" when it has. False, with
+		// the reason logged, when the registry is not open or the component or property is unknown.
+		template<typename T>
+		static bool SetInactiveReason(std::string_view property, std::function<std::string(const T& component)> reason)
+		{
+			return SetInactiveReason(entt::type_id<T>().hash(), property,
+				[reason = std::move(reason)](const void* component) { return reason(*static_cast<const T*>(component)); });
+		}
+		static bool SetInactiveReason(entt::id_type typeId, std::string_view property, std::function<std::string(const void* component)> reason);
 	private:
 		// Null (with the reason logged) when the registration is refused.
 		static ComponentInfo* CreateInfo(std::string name, entt::id_type typeId);

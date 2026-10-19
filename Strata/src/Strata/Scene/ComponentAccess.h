@@ -29,6 +29,9 @@ namespace Strata
 		static bool Deserialize(const ComponentInfo& info, void* component, const nlohmann::json& json, bool strict, std::string* outError, std::vector<std::string>* outWarnings = nullptr);
 
 		static std::optional<PropertyValue> GetProperty(Entity entity, const ComponentInfo& info, const PropertyInfo& property);
+		// Why the property of the entity's component has no effect now (PropertyInfo::InactiveReason); "" when it has, or when the
+		// entity lacks the component.
+		static std::string GetInactiveReason(Entity entity, const ComponentInfo& info, const PropertyInfo& property);
 		// Validates and assigns the value, then notifies systems of the change. Read-only properties are rejected.
 		static bool SetProperty(Entity entity, const ComponentInfo& info, const PropertyInfo& property, const PropertyValue& value, std::string* outError = nullptr);
 

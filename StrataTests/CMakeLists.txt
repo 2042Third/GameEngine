@@ -428,6 +428,17 @@ if(TARGET StrataEditor AND TARGET StrataCLI)
 	set_tests_properties(StrataEditor.Automation PROPERTIES ENVIRONMENT "${STRATA_END_TO_END_ENVIRONMENT}" TIMEOUT 600)
 endif()
 
+# The runtime's command line, before any game is looked for: --help prints the usage and exits 0, an argument it does not
+# understand prints the problem with the usage and exits 3 (CommandLineOptions::c_UsageExitCode), like the editor.
+if(TARGET StrataRuntime)
+	add_test(NAME StrataRuntime.Arguments.Help
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataRuntime>" "-DARGUMENTS=--help" "-DEXPECT=Usage: StrataRuntime [options]|--save-directory <folder>"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	add_test(NAME StrataRuntime.Arguments.Unknown
+		COMMAND "${CMAKE_COMMAND}" "-DCOMMAND=$<TARGET_FILE:StrataRuntime>;--bogus" "-DEXPECTED_OUTPUT=Unknown argument '--bogus'.*Usage: StrataRuntime"
+			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+endif()
+
 # Editor export to a playable game, then the exported runtime: headless without a GPU (--no-gpu, --headless), then in a
 # window with rendering (label gpu).
 if(TARGET StrataEditor AND TARGET StrataRuntime)
@@ -468,7 +479,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		COMMAND "${CMAKE_COMMAND}"
 			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--headless;--frames;5;--asset-budget-mb;0"
 			"-DEXPECTED_OUTPUT=asset-budget-mb needs a whole number of megabytes"
-			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidAssetBudget PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 	# --perf-log writes a CSV row per frame (FramePerfLog), also headless; the check reads it back (Runtime/PerfLogReader.h).
 	add_test(NAME StrataRuntime.PerfLog
@@ -481,13 +492,13 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		COMMAND "${CMAKE_COMMAND}"
 			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--headless;--frames;5;--perf-log"
 			"-DEXPECTED_OUTPUT=--perf-log needs the path of the CSV file to write"
-			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidPerfLog PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 	add_test(NAME StrataRuntime.InvalidSaveDirectory
 		COMMAND "${CMAKE_COMMAND}"
 			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--headless;--frames;5;--save-directory"
 			"-DEXPECTED_OUTPUT=--save-directory needs the folder to keep the game's save files in"
-			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidSaveDirectory PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 
 	# The exported game in a window renders a few frames from its camera and saves the last one, which must show the scene:
@@ -511,7 +522,7 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 		COMMAND "${CMAKE_COMMAND}"
 			"-DCOMMAND=${STRATA_EXPORT_TEST_DIR}/Build/SmokeGame${CMAKE_EXECUTABLE_SUFFIX};--frames;5;--resolution;400x0"
 			"-DEXPECTED_OUTPUT=--resolution needs the pixels of the window"
-			-P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
+			-DEXPECTED_RESULT=3 -P "${CMAKE_CURRENT_SOURCE_DIR}/ExpectFailure.cmake")
 	set_tests_properties(StrataRuntime.InvalidResolution PROPERTIES FIXTURES_REQUIRED StrataExportedGame)
 	# In a window the perf log also times rendering and presenting.
 	add_test(NAME StrataRuntime.PerfLogWindowed
@@ -619,4 +630,32 @@ if(TARGET StrataEditor AND TARGET StrataRuntime)
 			"-DEXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}"
 			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/TetrisSample.cmake")
 	set_tests_properties(StrataEditor.Tetris PROPERTIES LABELS "package" TIMEOUT 1800 RESOURCE_LOCK toolchain)
+endif()
+
+# input.sequence through the real editor (Editor/InputSequenceCommands.json.in, on a copy of the feature project): the same
+# sequence of input walks the API module's KeyboardWalker exactly 1.5 m (W held for 30 steps), makes it jump once and
+# leaves a falling ball at the same height headless (60 frames per second) and in a window (an unthrottled --frames run,
+# where the window's own input must not override the simulated keys), as it runs one fixed step per frame.
+if(TARGET StrataEditor)
+	set(STRATA_INPUT_SEQUENCE_DIR "${CMAKE_CURRENT_BINARY_DIR}/InputSequenceRun")
+	configure_file("${CMAKE_CURRENT_SOURCE_DIR}/Editor/InputSequenceCommands.json.in" "${CMAKE_CURRENT_BINARY_DIR}/InputSequenceCommands.json.configured" @ONLY)
+	file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/InputSequenceCommands-$<CONFIG>.json" INPUT "${CMAKE_CURRENT_BINARY_DIR}/InputSequenceCommands.json.configured")
+
+	add_test(NAME StrataEditor.InputSequenceClean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${STRATA_INPUT_SEQUENCE_DIR}")
+	set_tests_properties(StrataEditor.InputSequenceClean PROPERTIES FIXTURES_SETUP StrataInputSequenceClean LABELS "feature")
+	add_test(NAME StrataEditor.InputSequenceCopy COMMAND "${CMAKE_COMMAND}" -E copy_directory "${STRATA_FEATURE_TEST_DIR}" "${STRATA_INPUT_SEQUENCE_DIR}/Project")
+	set_tests_properties(StrataEditor.InputSequenceCopy PROPERTIES FIXTURES_REQUIRED StrataInputSequenceClean FIXTURES_SETUP StrataInputSequenceProject
+		LABELS "feature")
+
+	add_test(NAME StrataEditor.InputSequence
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
+			"-DARGUMENTS=--no-gpu|--no-automation|--frames|600|--project|${STRATA_INPUT_SEQUENCE_DIR}/Project/FeatureTest.stproj|--commands|${CMAKE_CURRENT_BINARY_DIR}/InputSequenceCommands-$<CONFIG>.json"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataEditor.InputSequence PROPERTIES FIXTURES_REQUIRED StrataInputSequenceProject LABELS "feature")
+	add_test(NAME StrataEditor.InputSequenceWindowed
+		COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:StrataEditor>"
+			"-DARGUMENTS=--windowed|--no-automation|--frames|600|--project|${STRATA_INPUT_SEQUENCE_DIR}/Project/FeatureTest.stproj|--commands|${CMAKE_CURRENT_BINARY_DIR}/InputSequenceCommands-$<CONFIG>.json"
+			-P "${CMAKE_CURRENT_SOURCE_DIR}/Editor/RunAndExpect.cmake")
+	set_tests_properties(StrataEditor.InputSequenceWindowed PROPERTIES FIXTURES_REQUIRED StrataInputSequenceProject DEPENDS StrataEditor.InputSequence
+		LABELS "gpu")
 endif()

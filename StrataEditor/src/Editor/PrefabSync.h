@@ -4,7 +4,9 @@
 #include <Strata/Core/UUID.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/PrefabInstances.h>
+#include <Strata/Scene/PrefabOverrides.h>
 
+#include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
 
 #include <cstdint>
@@ -31,9 +33,8 @@ namespace Strata
 	}
 
 	// Keeps the prefab instances of the edited scene in step with their prefabs (EditorContext::Update, in edit mode): when a
-	// prefab's file changes (a reimport, a change on disk, an undo of prefab.apply goes with its own instances), instances
-	// whose values equalled the prefab's before (PrefabInstances::Compare, the root's transform and name left out) take its
-	// new values, in one undo step; modified instances keep theirs. prefab.apply updates the other instances itself and tells
+	// prefab's file changes (a reimport, a change on disk, an undo of prefab.apply goes with its own instances), every
+	// instance takes what changed except where it overrides it (PrefabOverrides::Propagate), in one undo step. prefab.apply updates the other instances itself and tells
 	// the sync the new snapshot (SetBaseline), so they are not updated twice. A prefab that changed while the scene was
 	// closed (applied from another scene, changed on disk) is caught up with once the scene is open, the first time the sync
 	// looks at the prefab: instances whose recorded version of their part (PrefabInstances::MarkSynced) differs from the
@@ -61,6 +62,9 @@ namespace Strata
 		void OnSceneOpened(EditorContext& context);
 		// The snapshot instances of the prefab are compared with: its template when the sync last looked (read on first use).
 		const nlohmann::json* GetBaseline(EditorContext& context, AssetHandle prefab);
+		// One root's part of the baseline with its entities' places (PrefabOverrides::IndexedPart), extracted once per baseline:
+		// what the override lists are kept against, edit after edit. Null when the baseline cannot be read.
+		const PrefabOverrides::IndexedPart* GetBaselinePart(EditorContext& context, AssetHandle prefab, UUID templateRoot);
 		// After the editor wrote a prefab (prefab.apply): instances were updated with it, so it is the baseline now.
 		void SetBaseline(EditorContext& context, AssetHandle prefab, nlohmann::json snapshot);
 		// Whether an instance root differs from its prefab as stored now (cached per root until the edits or the prefab change;
@@ -88,6 +92,7 @@ namespace Strata
 			bool CaughtUp = false; // The scene's instances that missed changes of the prefab were looked at
 			// The versions of the snapshot's parts, worked out once for all its instances (cleared with a new snapshot).
 			PrefabInstances::PartVersionCache PartVersions;
+			PrefabOverrides::IndexedPartCache Parts; // Its parts as the override lists are kept against (cleared with it)
 		};
 		struct ModifiedMark
 		{
@@ -103,8 +108,17 @@ namespace Strata
 		void CatchUp(EditorContext& context, AssetHandle prefab, Baseline& baseline, const std::vector<Entity>& roots);
 		// The baseline of a prefab, its template read on first use; null when it cannot be read.
 		Baseline* FindBaseline(EditorContext& context, AssetHandle prefab);
-		// Gives instance roots the snapshot's values, in one undo step.
-		void UpdateInstances(EditorContext& context, AssetHandle prefab, const std::vector<Entity>& roots, const nlohmann::json& snapshot);
+		// An instance root whose Scale changes with an update (a model's import scale moving into its content).
+		struct RootRescale
+		{
+			Entity Root;
+			glm::vec3 Scale = glm::vec3(1.0f); // The root's new Scale
+		};
+		// In one undo step: the rescaled roots their new Scale, `replaced` roots the snapshot's values (Replace), and
+		// `propagated` roots what changed from `previous` to `snapshot` except where they override it
+		// (PrefabOverrides::Propagate; without `previous`, the instance as it is stands for it), tracking only what changed.
+		void UpdateInstances(EditorContext& context, AssetHandle prefab, const std::vector<Entity>& replaced, const std::vector<Entity>& propagated,
+			const nlohmann::json* previous, const nlohmann::json& snapshot, const std::vector<RootRescale>& rescaled);
 		void Watch(EditorContext& context);
 		// Whether the history's change count (`changes`) is part of a run of edits that has not paused yet.
 		bool AreEditsContinuing(uint64_t changes) const;

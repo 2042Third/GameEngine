@@ -10,6 +10,7 @@
 #include "Panels/ActivityPanel.h"
 #include "Panels/ConsolePanel.h"
 #include "TestHelpers.h"
+#include "UI/EditorPanelRegistry.h"
 #include "UI/EditorActions.h"
 #include "UI/ItemProbe.h"
 #include "UI/Theme.h"
@@ -92,6 +93,35 @@ TEST_SUITE("Editor.Notifications")
 		CHECK(notifications.IsEmpty());
 	}
 
+	TEST_CASE("Replace shows a notification in the place of another, and posts it when that one is gone")
+	{
+		EditorNotifications notifications;
+		const uint64_t first = notifications.Post(Make(NotificationLevel::Info, "First"));
+		const uint64_t building = notifications.Post(Make(NotificationLevel::Info, "Building scripts"));
+		const uint64_t last = notifications.Post(Make(NotificationLevel::Warning, "Last"));
+		const auto before = notifications.GetActive()[1].Expires;
+		const uint64_t version = notifications.GetVersion();
+
+		CHECK(notifications.Replace(building, Make(NotificationLevel::Success, "Scripts built")) == building);
+		REQUIRE(notifications.GetActive().size() == 3);
+		const EditorNotification& replaced = notifications.GetActive()[1];
+		CHECK(replaced.Id == building);
+		CHECK(replaced.Title == "Scripts built");
+		CHECK(replaced.Level == NotificationLevel::Success);
+		CHECK(replaced.Expires >= before);
+		CHECK(notifications.GetVersion() != version);
+		CHECK(notifications.GetActive()[0].Id == first);
+		CHECK(notifications.GetActive()[2].Id == last);
+
+		// Gone (dismissed, expired): posted as a new one.
+		notifications.Dismiss(building);
+		const uint64_t posted = notifications.Replace(building, Make(NotificationLevel::Error, "Script build failed"));
+		CHECK(posted != building);
+		REQUIRE(notifications.GetActive().size() == 3);
+		CHECK(notifications.GetActive().back().Id == posted);
+		CHECK(notifications.Replace(0, Make(NotificationLevel::Info, "Again")) != 0);
+	}
+
 	TEST_CASE("Notifications of a group merge into one that shows the latest and counts them all")
 	{
 		EditorNotifications notifications;
@@ -143,6 +173,10 @@ TEST_SUITE("Editor.Notifications")
 		CHECK(toast.Message.rfind(metadata->Path + ": ", 0) == 0);
 		// Named once, although the importer's error names the file too.
 		CHECK(toast.Message.find(metadata->Path, 1) == std::string::npos);
+		// editor.status counts them until the project closes.
+		const EditorCommandResult status = commands.Execute(context, "editor.status");
+		REQUIRE(status.Success);
+		CHECK(status.Value["errors"]["importFailures"] == 2);
 		CHECK(context.GetAssetManager()->GetImportInfo(toast.Asset).Error.rfind(metadata->Path + ": ", 0) == 0);
 
 		// A re-import asked for by a command reports its failure to the command (and, from the UI, through its toast).
@@ -151,6 +185,10 @@ TEST_SUITE("Editor.Notifications")
 		CHECK_FALSE(reimport.Success);
 		context.Update(Timestep(1.0f / 60.0f));
 		CHECK(notifications.IsEmpty());
+		// The command was told, so the failure is not counted as one nobody heard of.
+		CHECK(commands.Execute(context, "editor.status").Value["errors"]["importFailures"] == 2);
+		REQUIRE(commands.Execute(context, "project.close").Success);
+		CHECK(commands.Execute(context, "editor.status").Value["errors"]["importFailures"] == 0);
 	}
 
 	TEST_CASE("Assets an agent or a command script moves to the trash are announced with who did it; the person's own deletes are not")
@@ -311,6 +349,47 @@ TEST_SUITE("Editor.UI.Notifications")
 		const std::optional<UI::ItemProbe::Item> header = UI::ItemProbe::Find("AssetInspector.Header");
 		REQUIRE(header.has_value());
 		CHECK(reason->Min.y > header->Max.y);
+	}
+
+	TEST_CASE("Toasts show at the bottom right of the Scene or Game view, clear of the Inspector's Add Component button")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f });
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory("NotificationPlace") / "Game") }, { "name", "Game" },
+			{ "template", "basic3d" } });
+		editor.Context().Select(editor.Context().GetEditScene()->FindEntityByName("Main Camera").GetUUID());
+		editor.Context().GetNotifications().Clear();
+		for (int index = 0; index < static_cast<int>(EditorNotifications::c_MaxActive); index++)
+		{
+			EditorNotification notification;
+			notification.Level = NotificationLevel::Warning;
+			notification.Title = fmt::format("Warning {}", index);
+			notification.Message = "A message long enough to take a few lines in the toast, so that the stack of toasts grows tall.";
+			editor.Context().GetNotifications().Post(std::move(notification));
+		}
+		auto checkPlace = [&editor](const char* panel)
+		{
+			editor.Frames(3);
+			const std::optional<EditorPanelRegistry::WindowRect> view = editor.Layer->GetPanels().GetShownWindowRect(panel);
+			REQUIRE(view.has_value());
+			const std::optional<UI::ItemProbe::Item> button = UI::ItemProbe::Find("Inspector.AddComponent");
+			REQUIRE(button.has_value());
+			for (size_t index = 0; index < EditorNotifications::c_MaxActive; index++)
+			{
+				const std::optional<UI::ItemProbe::Item> toast = UI::ItemProbe::Find(fmt::format("Toast.{}", index));
+				REQUIRE(toast.has_value());
+				CAPTURE(index);
+				CHECK(toast->Min.x >= view->Min.x);
+				CHECK(toast->Max.x <= view->Max.x);
+				CHECK(toast->Max.y <= view->Max.y);
+				const bool overlaps = toast->Min.x < button->Max.x && toast->Max.x > button->Min.x && toast->Min.y < button->Max.y && toast->Max.y > button->Min.y;
+				CHECK_FALSE(overlaps);
+			}
+		};
+		checkPlace(EditorPanels::c_Viewport);
+		// The Game view in front (as while playing): its node, which is the same place.
+		editor.Layer->GetPanels().Focus(EditorPanels::c_Game);
+		checkPlace(EditorPanels::c_Game);
+		CHECK_FALSE(editor.Layer->GetPanels().GetShownWindowRect(EditorPanels::c_Viewport).has_value());
 	}
 
 	TEST_CASE("A toast's title and count stay clear of its close button")

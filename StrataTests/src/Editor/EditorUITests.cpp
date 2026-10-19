@@ -3,9 +3,11 @@
 #include "Audio/AudioTestUtils.h"
 #include "Editor/HarnessEditor.h"
 #include "Editor/ImGuiHarness.h"
+#include "Editor/UIRectEdit.h"
 #include "EditorLayer.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/ConsolePanel.h"
+#include "Panels/GameViewPanel.h"
 #include "Panels/StreamingPanel.h"
 #include "Panels/ViewportPanel.h"
 #include "Scripting/ScriptTestUtils.h"
@@ -22,6 +24,8 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Timestep.h>
 #include <Strata/Events/ApplicationEvent.h>
+#include <Strata/GameUI/GameUIComponents.h>
+#include <Strata/GameUI/GameUIScene.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Network/EditorSession.h>
 #include <Strata/Network/RpcClient.h>
@@ -352,6 +356,40 @@ TEST_SUITE("Editor.UI")
 		CHECK(editor.Host->ExitCode == 0);
 	}
 
+	TEST_CASE("At 1600 x 900 the Hierarchy is wide enough for its names, also at 200%")
+	{
+		const ImVec2 display(1600.0f, 900.0f);
+		for (const float scale : { 1.0f, 2.0f })
+		{
+			CAPTURE(scale);
+			HarnessEditor editor({ display, scale }, WithFeatureProject("EditorUIHierarchyWidth"));
+			editor.Frames(3);
+			ImGuiWindow* hierarchy = editor.FindPanelWindow(EditorPanels::c_Hierarchy);
+			ImGuiWindow* inspector = editor.FindPanelWindow(EditorPanels::c_Inspector);
+			ImGuiWindow* scene = editor.FindPanelWindow(EditorPanels::c_Viewport);
+			REQUIRE(hierarchy);
+			REQUIRE(inspector);
+			REQUIRE(scene);
+			float fontSize = 0.0f;
+			float nameWidth = 0.0f;
+			editor.Harness.Frame([&]()
+			{
+				fontSize = ImGui::GetFontSize();
+				nameWidth = ImGui::CalcTextSize("Environment Light").x;
+			});
+			// A row holds its arrow, icon and visibility toggle (about six text heights with paddings) beside the name:
+			// names of seventeen characters show whole. (The dock's splitters take a few pixels of each node.)
+			const float splitter = 0.25f * fontSize;
+			CHECK(hierarchy->Size.x >= 16.0f * fontSize - splitter);
+			CHECK(hierarchy->Size.x - 6.0f * fontSize >= nameWidth);
+			CHECK(inspector->Size.x >= std::min(18.0f * fontSize, 0.3f * display.x) - splitter);
+			// At 100% the shares stay as they were; the Scene view keeps the most of the width at either scale.
+			if (scale == 1.0f)
+				CHECK(GetWindowFraction(hierarchy, display, true) == doctest::Approx(0.15).epsilon(0.05));
+			CHECK(GetWindowFraction(scene, display, true) >= 0.39f);
+		}
+	}
+
 	TEST_CASE("The default layout is viewport first, with the Content Browser showing")
 	{
 		// The editor's window on this project's reference machine: 3840 x 2054 at 150%.
@@ -616,7 +654,7 @@ TEST_SUITE("Editor.UI")
 		CHECK(editor.Host->MaxFrameRate == EditorLayer::c_IdleFrameRate);
 
 		// editor.status reports it.
-		const nlohmann::json status = editor.Run("editor.status");
+		const nlohmann::json status = editor.Run("editor.status", { { "sections", { "editor" } } });
 		const nlohmann::json& frameRate = status["editor"]["frameRate"];
 		CHECK(frameRate["idle"] == true);
 		CHECK(frameRate["cap"] == EditorLayer::c_IdleFrameRate);
@@ -925,10 +963,150 @@ TEST_SUITE("Editor.UI")
 		CHECK(frame.WorkMilliseconds == doctest::Approx(4.0f));
 		CHECK(frame.FramesPerSecond == doctest::Approx(30.0f).epsilon(0.02));
 		CHECK(frame.Idle);
-		const nlohmann::json status = editor.Run("editor.status");
+		const nlohmann::json status = editor.Run("editor.status", { { "sections", { "editor" } } });
 		CHECK(status["editor"]["frameRate"]["frameMilliseconds"].get<double>() == doctest::Approx(4.0));
 		// editor.wait reports the same measurement, recorded per frame from the host.
 		CHECK(editor.Context().GetLastFrameTime() == doctest::Approx(4.0));
+	}
+
+	TEST_CASE("The viewport's chips are in a toolbar above its image, never over what the game draws")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIViewportToolbar"));
+		editor.Frames(2);
+		// What game-ui draws of the active scene's screen-space canvases (elements with an image or a text) where a view shows
+		// them: laid out for `screen`, the game's screen in the image's pixels, mapped into the panel through `area`.
+		const auto getUIRects = [&editor](const UIScreen& screen, const ViewportImageArea& area)
+		{
+			std::vector<std::pair<ImVec2, ImVec2>> rects;
+			Scene& scene = *editor.Context().GetActiveScene();
+			if (!GameUIScene::HasCanvases(scene))
+				return rects;
+			GameUIScene& ui = GameUIScene::Get(scene);
+			for (const UICanvasView& view : ui.EnsureLayout(screen))
+			{
+				if (view.WorldSpace)
+					continue;
+				for (uint32_t element = 0; element < ui.GetElementCount(view); element++)
+				{
+					if (!ui.IsElementVisible(view, element) || !scene.GetRegistry().any_of<UIImageComponent, UITextComponent>(ui.GetElementEntity(view, element)))
+						continue;
+					const UIBox box = ui.GetVisibleBox(view, element);
+					if (!(box.Size.x > 0.0f && box.Size.y > 0.0f))
+						continue;
+					const glm::vec2 min = area.Min + box.Min * view.Scale / area.PixelScale;
+					const glm::vec2 max = area.Min + box.GetMax() * view.Scale / area.PixelScale;
+					rects.emplace_back(ImVec2(min.x, min.y), ImVec2(max.x, max.y));
+				}
+			}
+			return rects;
+		};
+		const auto checkChips = [](std::initializer_list<const char*> chips, const char* imageKey, const std::vector<std::pair<ImVec2, ImVec2>>& uiRects)
+		{
+			const std::optional<UI::ItemProbe::Item> image = UI::ItemProbe::Find(imageKey);
+			REQUIRE(image.has_value());
+			REQUIRE(image->Max.y > image->Min.y);
+			for (const char* key : chips)
+			{
+				CAPTURE(key);
+				const std::optional<UI::ItemProbe::Item> chip = UI::ItemProbe::Find(key);
+				REQUIRE(chip.has_value());
+				// Rectangles that do not intersect: the chip ends above the image's first row, so it covers nothing the game
+				// draws in it (its screen-space text, its canvases).
+				CHECK(chip->Max.y <= image->Min.y);
+				for (const auto& [min, max] : uiRects)
+				{
+					CAPTURE(min.x);
+					CAPTURE(min.y);
+					CHECK((chip->Max.x <= min.x || max.x <= chip->Min.x || chip->Max.y <= min.y || max.y <= chip->Min.y));
+				}
+			}
+		};
+		const ViewportPanel* viewport = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
+		REQUIRE(viewport);
+		// A HUD at the top left, where chips over the image were drawn (the feature menu's Play Button is at the top right).
+		editor.Run("ui.create", { { "type", "text" }, { "name", "Score" }, { "anchor", "topLeft" }, { "position", { 8, 8 } } });
+		// The Scene view with the game's UI shown, as edit mode lays it out (the view's image is the game's screen).
+		editor.Run("viewport.setSettings", { { "gameUI", true } });
+		editor.Frames(1);
+		const std::vector<std::pair<ImVec2, ImVec2>> sceneUI = getUIRects(UIRectEdit::GetGameScreen(editor.Context()), viewport->GetImageArea());
+		REQUIRE_FALSE(sceneUI.empty());
+		checkChips({ "Viewport.Camera", "Viewport.Grid", "Viewport.Outline", "Viewport.Gizmos", "Viewport.Stats", "Viewport.PreviewLighting",
+			"Viewport.GameUI", "Viewport.DebugView" }, "Viewport.Image", sceneUI);
+		// The image keeps the panel's full width and starts below the toolbar.
+		const ViewportImageArea& area = viewport->GetImageArea();
+		CHECK(area.Min.y == doctest::Approx(UI::ItemProbe::Find("Viewport.Image")->Min.y));
+
+		// Playing, the Game view comes forward: its chips are above its image too, also while the game has the input.
+		REQUIRE(editor.Click("Toolbar.Play"));
+		editor.Frames(2);
+		REQUIRE(editor.Context().IsPlaying());
+		const GameViewPanel* game = editor.Layer->GetPanels().Get<GameViewPanel>(EditorPanels::c_Game);
+		REQUIRE(game);
+		REQUIRE(game->IsShown());
+		// The game's UI is laid out for the Game view's screen (the UI's input screen, at the rendered resolution).
+		const std::vector<std::pair<ImVec2, ImVec2>> gameUI = getUIRects(GameUIScene::GetInputScreen().Screen, game->GetImageArea());
+		REQUIRE_FALSE(gameUI.empty());
+		checkChips({ "GameView.Resolution", "GameView.Stats" }, "GameView.Image", gameUI);
+		REQUIRE(editor.Context().IsGameInputActive());
+		const ViewportImageArea& gameImage = game->GetImageArea();
+		editor.ClickAt(ImVec2(gameImage.Min.x + gameImage.Size.x * 0.5f, gameImage.Min.y + gameImage.Size.y * 0.5f));
+		editor.Frames(1);
+		REQUIRE(editor.Context().IsGameInputActive());
+		checkChips({ "GameView.Resolution", "GameView.Stats" }, "GameView.Image", gameUI);
+		REQUIRE(editor.Click("Toolbar.Stop"));
+	}
+
+	TEST_CASE("A Scene view too narrow for its chips' labels shows the last ones as icons, every one in reach")
+	{
+		const auto chipsOf = []()
+		{
+			std::vector<UI::ItemProbe::Item> chips;
+			for (const char* key : { "Viewport.Camera", "Viewport.Grid", "Viewport.Outline", "Viewport.Gizmos", "Viewport.Stats",
+				"Viewport.PreviewLighting", "Viewport.GameUI", "Viewport.DebugView", "Viewport.GameCamera" })
+			{
+				const std::string name = key;
+				CAPTURE(name);
+				const std::optional<UI::ItemProbe::Item> chip = UI::ItemProbe::Find(key);
+				REQUIRE(chip.has_value());
+				chips.push_back(*chip);
+			}
+			return chips;
+		};
+		// Every chip ends within the image's width (the strip's clip rectangle would hide what passes it), and keeps its label
+		// for probes and tooltips.
+		const auto checkInReach = [](const std::vector<UI::ItemProbe::Item>& chips)
+		{
+			const std::optional<UI::ItemProbe::Item> image = UI::ItemProbe::Find("Viewport.Image");
+			REQUIRE(image.has_value());
+			for (const UI::ItemProbe::Item& chip : chips)
+			{
+				CAPTURE(chip.Text);
+				CHECK(chip.Max.x <= image->Max.x);
+			}
+			CHECK(chips[1].Text == "Grid");
+			return image->Max.x - image->Min.x;
+		};
+		float fontSize = 0.0f;
+		float wideWidth = 0.0f;
+		{
+			// The default layout of a 1600 x 900 window: the first chips keep their labels.
+			HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIChipsWide"));
+			editor.Harness.Frame([&]() { fontSize = ImGui::GetFontSize(); });
+			editor.Frames(3);
+			const std::vector<UI::ItemProbe::Item> chips = chipsOf();
+			wideWidth = checkInReach(chips);
+			CHECK(chips[0].Max.x - chips[0].Min.x > 2.5f * fontSize);
+		}
+		// A small window leaves the Scene view a few hundred units: more chips are icons, the last one among them.
+		HarnessEditor editor({ ImVec2(900.0f, 700.0f), 1.0f }, WithFeatureProject("EditorUIChipsNarrow"));
+		editor.Frames(3);
+		const std::vector<UI::ItemProbe::Item> chips = chipsOf();
+		CHECK(checkInReach(chips) < wideWidth);
+		CHECK(chips.back().Max.x - chips.back().Min.x <= 2.5f * fontSize);
+		// A click on an icon still toggles its setting.
+		const bool pilot = editor.Context().GetViewport().GetSettings().PilotGameCamera;
+		REQUIRE(editor.Click("Viewport.GameCamera"));
+		CHECK(editor.Context().GetViewport().GetSettings().PilotGameCamera != pilot);
 	}
 
 	TEST_CASE("The toolbar's tools and the viewport's chips change the viewport's settings")
@@ -972,9 +1150,16 @@ TEST_SUITE("Editor.UI")
 		toggles("Viewport.Outline", settings.ShowSelectionOutline);
 		toggles("Viewport.Gizmos", settings.ShowSceneGizmos);
 		toggles("Viewport.Stats", settings.ShowStats);
-		// The camera chip opens the camera settings.
+		// The camera chip opens the camera settings, which choose what skinned characters show while the scene is edited.
 		REQUIRE(editor.Click("Viewport.Camera"));
 		CHECK(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
+		CHECK(settings.EditPose == AnimationEditPose::Rest);
+		REQUIRE(editor.Click("Viewport.EditPose.ClipStart"));
+		CHECK(settings.EditPose == AnimationEditPose::ClipStart);
+		CHECK_FALSE(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
+		REQUIRE(editor.Click("Viewport.Camera"));
+		REQUIRE(editor.Click("Viewport.EditPose.Rest"));
+		CHECK(settings.EditPose == AnimationEditPose::Rest);
 	}
 
 	TEST_CASE("The viewport's debug view chip lights while a debug view colors the image")
@@ -1040,40 +1225,43 @@ TEST_SUITE("Editor.UI")
 		CHECK(editor.Context().GetSceneState() == SceneState::Edit);
 	}
 
-	TEST_CASE("The game view keeps the stats toggle while the game does not have the input")
+	TEST_CASE("The Game view is a tab beside the Scene view, and Play brings it forward and gives the game the keyboard")
 	{
 		ScopedAudioEngine audio;
 		REQUIRE(audio.Initialized);
-		HarnessEditor editor({}, WithFeatureProject("EditorUIGameView"));
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIGameView"));
 		editor.Frames(2);
-		CHECK(UI::ItemProbe::Find("Viewport.Grid").has_value());
-
-		// Playing through the scene's camera: of the chips only the stats toggle remains, and it works while playing.
-		REQUIRE(editor.Click("Toolbar.Play"));
-		editor.Frames(1);
-		REQUIRE(editor.Context().IsPlaying());
-		CHECK_FALSE(UI::ItemProbe::Find("Viewport.Grid").has_value());
-		CHECK_FALSE(UI::ItemProbe::Find("Viewport.Camera").has_value());
-		// The editor-view settings do not apply to the game's view.
-		CHECK_FALSE(UI::ItemProbe::Find("Viewport.PreviewLighting").has_value());
-		CHECK_FALSE(UI::ItemProbe::Find("Viewport.GameUI").has_value());
-		ViewportSettings& settings = editor.Context().GetViewport().GetSettings();
-		const bool stats = settings.ShowStats;
-		REQUIRE(editor.Click("Viewport.Stats"));
-		CHECK(settings.ShowStats != stats);
-		// The chip does not hand the game the input.
+		EditorPanelRegistry& panels = editor.Layer->GetPanels();
+		REQUIRE(panels.FindDescriptor(EditorPanels::c_Game));
+		CHECK(panels.FindDescriptor(EditorPanels::c_Viewport)->Title == "Scene");
+		ImGuiWindow* sceneWindow = editor.FindPanelWindow(EditorPanels::c_Viewport);
+		ImGuiWindow* gameWindow = editor.FindPanelWindow(EditorPanels::c_Game);
+		REQUIRE(sceneWindow);
+		REQUIRE(gameWindow);
+		REQUIRE(sceneWindow->DockNode);
+		CHECK(gameWindow->DockNode == sceneWindow->DockNode);
+		const GameViewPanel* game = panels.Get<GameViewPanel>(EditorPanels::c_Game);
+		const ViewportPanel* scene = panels.Get<ViewportPanel>(EditorPanels::c_Viewport);
+		REQUIRE(game);
+		REQUIRE(scene);
+		// The Scene view in front; the Game view renders nothing behind it.
+		CHECK_FALSE(game->IsShown());
+		CHECK(UI::ItemProbe::Find("Viewport.Image").has_value());
+		CHECK(editor.Context().GetViewport().GetGameViewSize() == glm::uvec2(0));
 		CHECK_FALSE(editor.Context().IsGameInputActive());
 
-		// Clicking the game gives it the input, and every click on the image is the game's: no chip.
-		const ViewportPanel* viewport = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
-		REQUIRE(viewport);
-		const ViewportImageArea& image = viewport->GetImageArea();
-		editor.ClickAt(ImVec2(image.Min.x + image.Size.x * 0.5f, image.Min.y + image.Size.y * 0.5f));
-		editor.Frames(1);
-		REQUIRE(editor.Context().IsGameInputActive());
-		CHECK_FALSE(UI::ItemProbe::Find("Viewport.Stats").has_value());
+		// Play brings it forward with the keyboard: the game has the input at once.
+		REQUIRE(editor.Click("Toolbar.Play"));
+		editor.Frames(3);
+		REQUIRE(editor.Context().IsPlaying());
+		CHECK(game->IsShown());
+		CHECK(editor.Context().IsGameInputActive());
+		CHECK(Input::IsEnabled());
+		const glm::uvec2 gameSize = editor.Context().GetViewport().GetGameViewSize();
+		CHECK(gameSize == game->GetRenderSize());
+		CHECK(gameSize.x > 0);
 
-		// Shift+F1 takes the input back: the toggle returns.
+		// Shift+F1 leaves it: the game loses the input, the view stays.
 		editor.Harness.SetKey(ImGuiMod_Shift, true);
 		editor.Harness.SetKey(ImGuiKey_F1, true);
 		editor.Frames(1);
@@ -1081,7 +1269,199 @@ TEST_SUITE("Editor.UI")
 		editor.Harness.SetKey(ImGuiMod_Shift, false);
 		editor.Frames(2);
 		CHECK_FALSE(editor.Context().IsGameInputActive());
-		CHECK(UI::ItemProbe::Find("Viewport.Stats").has_value());
+		CHECK_FALSE(Input::IsEnabled());
+		CHECK(game->IsShown());
+		// A click in the image hands it back; the toolbar's chips never do.
+		REQUIRE(editor.Click("GameView.Stats"));
+		CHECK_FALSE(editor.Context().IsGameInputActive());
+		REQUIRE(editor.Click("GameView.Stats"));
+		const ViewportImageArea& image = game->GetImageArea();
+		editor.ClickAt(ImVec2(image.Min.x + image.Size.x * 0.5f, image.Min.y + image.Size.y * 0.5f));
+		editor.Frames(1);
+		CHECK(editor.Context().IsGameInputActive());
+
+		// Stop brings the Scene view back, and the game's input goes.
+		REQUIRE(editor.Click("Toolbar.Stop"));
+		editor.Frames(3);
+		CHECK_FALSE(editor.Context().IsPlaying());
+		CHECK_FALSE(game->IsShown());
+		CHECK(UI::ItemProbe::Find("Viewport.Image").has_value());
+		CHECK_FALSE(editor.Context().IsGameInputActive());
+
+		// The Game view shown while editing shows the edited scene's camera; it hands no input to a game that does not run.
+		panels.Focus(EditorPanels::c_Game);
+		editor.Frames(3);
+		CHECK(game->IsShown());
+		CHECK_FALSE(editor.Context().IsGameInputActive());
+		CHECK_FALSE(UI::ItemProbe::Find("GameView.NoCamera").has_value());
+		// editor.showPanel names it, and the Scene view by its old id or its title.
+		editor.Run("editor.showPanel", { { "panel", "Scene" } });
+		editor.Frames(3);
+		CHECK_FALSE(game->IsShown());
+		editor.Run("editor.showPanel", { { "panel", "Game" } });
+		editor.Frames(3);
+		CHECK(game->IsShown());
+	}
+
+	TEST_CASE("The Game view letterboxes aspect ratios and scales fixed resolutions to fit")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIGameViewSizes"));
+		editor.Frames(2);
+		EditorPanelRegistry& panels = editor.Layer->GetPanels();
+		panels.Focus(EditorPanels::c_Game);
+		editor.Frames(3);
+		const GameViewPanel* game = panels.Get<GameViewPanel>(EditorPanels::c_Game);
+		REQUIRE(game);
+		REQUIRE(game->IsShown());
+		const auto area = [&]()
+		{
+			// The image's area: what the panel shows under its toolbar (the image fills it in the free mode).
+			editor.Run("viewport.setSettings", { { "gameView", { { "mode", "free" } } } });
+			editor.Frames(2);
+			return game->GetImageArea();
+		};
+		const ViewportImageArea free = area();
+		CHECK(game->GetRenderSize() == free.GetPixelSize());
+		const auto checkAspect = [&](const char* mode, float aspect)
+		{
+			CAPTURE(mode);
+			editor.Run("viewport.setSettings", { { "gameView", { { "mode", mode } } } });
+			editor.Frames(2);
+			const ViewportImageArea& image = game->GetImageArea();
+			const glm::uvec2 pixels = game->GetRenderSize();
+			// The rendered image keeps the aspect ratio within a pixel...
+			CHECK(std::abs(static_cast<float>(pixels.x) / aspect - static_cast<float>(pixels.y)) <= 1.0f);
+			// ...and so does what shows, the largest such rectangle inside the area, centered with bars on two sides.
+			CHECK(std::abs(image.Size.x / aspect - image.Size.y) <= 1.0f);
+			const bool fillsWidth = std::abs(image.Size.x - free.Size.x) <= 1.0f;
+			const bool fillsHeight = std::abs(image.Size.y - free.Size.y) <= 1.0f;
+			CHECK(fillsWidth != fillsHeight);
+			CHECK(image.Min.x >= free.Min.x - 0.5f);
+			CHECK(image.Min.y >= free.Min.y - 0.5f);
+			CHECK(image.Min.x + image.Size.x <= free.Min.x + free.Size.x + 0.5f);
+			CHECK(image.Min.y + image.Size.y <= free.Min.y + free.Size.y + 0.5f);
+		};
+		checkAspect("16:9", 16.0f / 9.0f);
+		checkAspect("4:3", 4.0f / 3.0f);
+		checkAspect("21:9", 21.0f / 9.0f);
+		// A fixed resolution renders at exactly its pixels, shown scaled to fit.
+		editor.Run("viewport.setSettings", { { "gameView", { { "mode", "1920x1080" } } } });
+		editor.Frames(2);
+		CHECK(game->GetRenderSize() == glm::uvec2(1920, 1080));
+		CHECK(std::abs(game->GetImageArea().Size.x / (16.0f / 9.0f) - game->GetImageArea().Size.y) <= 1.0f);
+		editor.Run("viewport.setSettings", { { "gameView", { { "mode", "custom" }, { "width", 640 }, { "height", 480 } } } });
+		editor.Frames(2);
+		CHECK(game->GetRenderSize() == glm::uvec2(640, 480));
+		CHECK(editor.Run("viewport.getSettings")["gameView"] == nlohmann::json { { "mode", "custom" }, { "width", 640 }, { "height", 480 } });
+		// The resolution menu shows the mode and switches it.
+		CHECK(UI::ItemProbe::Find("GameView.Resolution")->Text == "640 x 480");
+	}
+
+	TEST_CASE("While the game plays, the Game view gives it its screen at the rendered resolution, focused or not")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIGameViewScreen"));
+		editor.Frames(2);
+		EditorPanelRegistry& panels = editor.Layer->GetPanels();
+		const GameViewPanel* game = panels.Get<GameViewPanel>(EditorPanels::c_Game);
+		REQUIRE(game);
+		editor.Run("viewport.setSettings", { { "gameView", { { "mode", "1920x1080" } } } });
+		REQUIRE(editor.Click("Toolbar.Play"));
+		editor.Frames(3);
+		REQUIRE(editor.Context().IsPlaying());
+		REQUIRE(game->IsShown());
+		REQUIRE(editor.Context().IsGameInputActive());
+		CHECK(Input::GetViewportSize() == glm::vec2(1920.0f, 1080.0f));
+
+		// Another panel takes the keyboard; the Game view still shows the game, and its screen follows a new resolution.
+		panels.Focus(EditorPanels::c_Hierarchy);
+		editor.Frames(2);
+		REQUIRE(game->IsShown());
+		REQUIRE_FALSE(editor.Context().IsGameInputActive());
+		editor.Run("viewport.setSettings", { { "gameView", { { "mode", "custom" }, { "width", 640 }, { "height", 480 } } } });
+		editor.Frames(2);
+		CHECK(game->GetRenderSize() == glm::uvec2(640, 480));
+		CHECK(Input::GetViewportSize() == glm::vec2(640.0f, 480.0f));
+		// The game's window is that screen.
+		CHECK(editor.Context().GetGameWindow().GetState().Width == 640);
+		CHECK(editor.Context().GetGameWindow().GetState().Height == 480);
+		editor.Run("play.stop");
+	}
+
+	TEST_CASE("The game's UI is laid out, drawn and hit at the Game view's resolution, whatever the panel's size")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIGameViewUI"));
+		editor.Frames(2);
+		const GameViewPanel* game = editor.Layer->GetPanels().Get<GameViewPanel>(EditorPanels::c_Game);
+		REQUIRE(game);
+		editor.Run("viewport.setSettings", { { "gameView", { { "mode", "1280x720" } } } });
+		REQUIRE(editor.Click("Toolbar.Play"));
+		editor.Frames(3);
+		REQUIRE(editor.Context().IsPlaying());
+		REQUIRE(game->IsShown());
+		REQUIRE(game->GetRenderSize() == glm::uvec2(1280, 720));
+		// Shown smaller than it renders.
+		REQUIRE(game->GetImageArea().Size.x < 1280.0f);
+
+		// The UI's input screen is the rendered image, which the UI pass lays out for too (GameUIRenderer: the frame's size at
+		// the game window's content scale): what is hit is what is drawn. Input positions are in its pixels.
+		const UIInputScreen input = GameUIScene::GetInputScreen();
+		CHECK(input.Screen.Size == glm::vec2(1280.0f, 720.0f));
+		CHECK(input.Screen.ContentScale == editor.Context().GetGameWindow().GetState().ContentScale);
+		CHECK(input.InputToPixels == glm::vec2(1.0f));
+		// So the feature menu lays out as at 1280 x 720 on any panel (FeatureCommands checks the same rect), and a click at its
+		// Play Button's center lands on it.
+		const nlohmann::json layout = editor.Run("ui.layout", { { "entity", "F7E0000000000072" } });
+		CHECK(layout["elements"][0]["rect"] == nlohmann::json { 952, 40, 288, 48 });
+		const nlohmann::json clicked = editor.Run("input.click", { { "entity", "F7E0000000000072" }, { "wait", false } });
+		CHECK(clicked["position"] == nlohmann::json { 1096, 64 });
+		// The harness runs no input frames of its own: the click is pressed and let go in frames run as the application runs
+		// them, and the press focuses the button the UI system hits at that position.
+		for (int frame = 0; frame < 4; frame++)
+		{
+			Input::BeginFrame();
+			editor.Frames(1);
+		}
+		CHECK(Input::GetMousePosition() == glm::vec2(1096.0f, 64.0f));
+		CHECK(editor.Run("ui.layout", { { "entity", "F7E0000000000072" } })["elements"][0]["focused"] == true);
+		editor.Run("play.stop");
+	}
+
+	TEST_CASE("The Scene view keeps the editor camera while playing, and the Game camera toggle (F8) looks through the scene's")
+	{
+		HarnessEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorUIGameCamera"));
+		editor.Frames(2);
+		const ViewportPanel* scene = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
+		REQUIRE(scene);
+		ViewportSettings& settings = editor.Context().GetViewport().GetSettings();
+		CHECK_FALSE(scene->IsPiloting());
+		REQUIRE(editor.Click("Viewport.GameCamera"));
+		editor.Frames(1);
+		CHECK(settings.PilotGameCamera);
+		CHECK(scene->IsPiloting());
+		// F8 with the Scene view under the mouse toggles it back.
+		const ViewportImageArea& image = scene->GetImageArea();
+		editor.Harness.MoveMouse(ImVec2(image.Min.x + image.Size.x * 0.5f, image.Min.y + image.Size.y * 0.5f));
+		editor.Frames(1);
+		editor.Harness.SetKey(ImGuiKey_F8, true);
+		editor.Frames(1);
+		editor.Harness.SetKey(ImGuiKey_F8, false);
+		editor.Frames(1);
+		CHECK_FALSE(settings.PilotGameCamera);
+		CHECK_FALSE(scene->IsPiloting());
+
+		// Playing, the Scene view stays an editor view of the running scene: all its chips, the editor camera.
+		editor.Run("play.start", { { "build", false } });
+		editor.Frames(2);
+		REQUIRE(editor.Context().IsPlaying());
+		editor.Layer->GetPanels().Focus(EditorPanels::c_Viewport);
+		editor.Frames(3);
+		for (const char* chip : { "Viewport.Camera", "Viewport.Grid", "Viewport.Gizmos", "Viewport.PreviewLighting", "Viewport.GameUI", "Viewport.GameCamera" })
+		{
+			CAPTURE(chip);
+			CHECK(UI::ItemProbe::Find(chip).has_value());
+		}
+		CHECK_FALSE(scene->IsPiloting());
+		CHECK_FALSE(editor.Context().IsGameInputActive());
 		editor.Run("play.stop");
 	}
 
@@ -1094,14 +1474,17 @@ TEST_SUITE("Editor.UI")
 		const nlohmann::json created = editor.Run("entity.create", { { "name", "Mouse Look" } });
 		editor.Run("script.add", { { "entity", created["id"] }, { "class", "CursorProbe" } });
 		editor.Frames(2);
-		const ViewportPanel* viewport = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
+		const GameViewPanel* viewport = editor.Layer->GetPanels().Get<GameViewPanel>(EditorPanels::c_Game);
 		REQUIRE(viewport);
 		const ImGuiIO& io = ImGui::GetIO();
 
-		// Playing, the game asked for a locked cursor; until the game view has the input the editor keeps the mouse.
-		REQUIRE(editor.Click("Toolbar.Play"));
-		editor.Frames(1);
+		// Playing (started by the command: the Game view does not come forward), the game asked for a locked cursor; until
+		// the Game view has the input the editor keeps the mouse.
+		editor.Run("play.start", { { "build", false } });
+		editor.Layer->GetPanels().ShowTab(EditorPanels::c_Game);
+		editor.Frames(2);
 		REQUIRE(editor.Context().IsPlaying());
+		REQUIRE(viewport->IsShown());
 		CHECK(Input::GetGameCursorMode() == CursorMode::Locked);
 		CHECK(Input::GetCursorMode() == CursorMode::Normal);
 		CHECK((io.ConfigFlags & ImGuiConfigFlags_NoMouse) == 0);
@@ -1116,7 +1499,7 @@ TEST_SUITE("Editor.UI")
 		REQUIRE(editor.Context().IsGameInputActive());
 		CHECK(Input::GetCursorMode() == CursorMode::Locked);
 		CHECK((io.ConfigFlags & ImGuiConfigFlags_NoMouse) != 0);
-		CHECK(viewport->GetShownMouseHint() == ViewportPanel::c_MouseHint);
+		CHECK(viewport->GetShownMouseHint() == GameViewPanel::c_MouseHint);
 
 		// Shift+F1 leaves the game view: the cursor and the mouse are the editor's again, and the hint goes.
 		editor.Harness.SetKey(ImGuiMod_Shift, true);
@@ -1136,7 +1519,7 @@ TEST_SUITE("Editor.UI")
 		CHECK(Input::GetCursorMode() == CursorMode::Locked);
 		CHECK((io.ConfigFlags & ImGuiConfigFlags_NoMouse) != 0);
 		CHECK_FALSE(viewport->GetShownMouseHint().empty());
-		editor.Frames(static_cast<int>(ViewportPanel::c_MouseHintSeconds) + 1, 1.0f);
+		editor.Frames(static_cast<int>(GameViewPanel::c_MouseHintSeconds) + 1, 1.0f);
 		CHECK(viewport->GetShownMouseHint().empty());
 		CHECK((io.ConfigFlags & ImGuiConfigFlags_NoMouse) != 0);
 
@@ -1158,16 +1541,22 @@ TEST_SUITE("Editor.UI")
 		const nlohmann::json created = editor.Run("entity.create", { { "name", "Display Options" } });
 		editor.Run("script.add", { { "entity", created["id"] }, { "class", "WindowRequests" }, { "fields", { { "Mode", 1 }, { "Width", 1920 }, { "Height", 1080 } } } });
 		editor.Frames(2);
-		const ViewportPanel* viewport = editor.Layer->GetPanels().Get<ViewportPanel>(EditorPanels::c_Viewport);
+		const GameViewPanel* viewport = editor.Layer->GetPanels().Get<GameViewPanel>(EditorPanels::c_Game);
 		REQUIRE(viewport);
 		CHECK(viewport->GetShownGameWindowNotice().empty());
 
 		REQUIRE(editor.Click("Toolbar.Play"));
 		editor.Frames(3);
 		REQUIRE(editor.Context().IsPlaying());
+		REQUIRE(viewport->IsShown());
 		// The requests reach the editor's game window service only (EditorHost offers no way to change the editor's window).
 		CHECK(viewport->GetShownGameWindowNotice() == "The game asked for fullscreen at 1920 x 1080 pixels with vsync off; play mode keeps the editor's window.");
-		CHECK(editor.Run("editor.status")["game"]["windowRequests"]["mode"] == "fullscreen");
+		CHECK(editor.Run("editor.status", { { "sections", { "game" } } })["game"]["windowRequests"]["mode"] == "fullscreen");
+		// The "Game's request" mode renders at the resolution the game asked for.
+		editor.Run("viewport.setSettings", { { "gameView", { { "mode", "game" } } } });
+		editor.Frames(2);
+		CHECK(viewport->GetRenderSize() == glm::uvec2(1920, 1080));
+		CHECK(UI::ItemProbe::Find("GameView.Resolution")->Text == "Game's 1920 x 1080");
 
 		REQUIRE(editor.Click("Toolbar.Stop"));
 		editor.Frames(1);

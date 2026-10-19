@@ -392,8 +392,7 @@ Open items and deferrals later waves own:
   holds its prepared scene and its compiled prototype together until the prototype is made; a `SubScene` a script keeps
   in a member is reset by hot reload (only fields survive, so scripts keep its ID in a field).
 - Prefabs: applying, reverting and propagating compare and rebuild instances through their JSON form
-  (`PrefabInstances`), not the compiled prototypes scene loads use; per-property overrides and a prefab edit mode are
-  later work.
+  (`PrefabInstances`), not the compiled prototypes scene loads use; a prefab edit mode is later work.
 - Animation and characters: root motion through a character controller is walked at the frame's first fixed step, and on
   a tilted entity its vertical part becomes the controller's velocity (gravity and the ground then decide the height);
   culling and drawing skinned proxies on the GPU belongs to `gpu-driven-rendering`.
