@@ -171,8 +171,10 @@ namespace Strata
 		static constexpr uint64_t c_PrepareUploadBytes = 16ull << 20;
 		// SceneLoadOptions::Prepare for owners that render the scenes they load (the editor, StrataRuntime with a window):
 		// Prepare with the active asset manager and the time left in the frame's loading budget (at least one chunk; a frame's
-		// 4 ms build about 10,000 mesh renderers' proxies), then, with a renderer and while the budget has time, the scene's GPU
-		// copy (RenderSceneGPU) within c_PrepareUploadBytes per call; true once both are complete.
+		// 4 ms build about 10,000 mesh renderers' proxies), then, with a renderer, the scene's GPU copy (RenderSceneGPU) within
+		// c_PrepareUploadBytes per call: in the call that completed the proxies only while the budget still has time (else the
+		// next call fills it, whatever its time, so a sync that alone outlasts the budget never holds the copy back); true once
+		// both are complete.
 		static bool PrepareLoadedScene(Scene& scene, SceneWorkBudget& budget);
 
 		// Compares every proxy, the spatial index and the instance data with what a rebuild from the scene would produce.
@@ -532,6 +534,8 @@ namespace Strata
 		RenderSceneStats m_Stats;
 		uint64_t m_SyncCount = 0;
 		uint32_t m_SyncUpdates = 0;
+		// PrepareLoadedScene: the proxies were complete as an earlier call ended (its GPU copy then fills whatever the time).
+		bool m_PreparedProxies = false;
 		std::vector<entt::entity> m_ChangeScratch;
 		std::vector<entt::entity> m_PendingScratch;
 		RenderLights m_Lights;

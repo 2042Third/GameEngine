@@ -287,15 +287,17 @@ namespace Strata
 	bool RenderScene::PrepareLoadedScene(Scene& scene, SceneWorkBudget& budget)
 	{
 		const Ref<AssetManagerBase>& assets = AssetManager::GetActive();
-		if (!Prepare(scene, assets, budget.GetRemainingTime()))
+		RenderScene& renderScene = Get(scene);
+		const bool preparedBefore = renderScene.m_PreparedProxies;
+		renderScene.m_PreparedProxies = Prepare(scene, assets, budget.GetRemainingTime());
+		if (!renderScene.m_PreparedProxies)
 			return false;
 		if (!Renderer::IsInitialized())
 			return true;
-		// The GPU's copy too, within a frame's budget for new proxies, so that the frame that shows the scene uploads none; a
-		// frame whose loading time is spent fills it in the next one.
-		if (!budget.HasTime())
+		// The GPU's copy too, within a frame's budget for new proxies, so that the frame that shows the scene uploads none. The
+		// frame that completed the proxies with its loading time spent leaves it to the next one.
+		if (!preparedBefore && !budget.HasTime())
 			return false;
-		RenderScene& renderScene = Get(scene);
 		RenderSceneGPU& mirror = Renderer::GetRenderSceneGPUs().Get(renderScene);
 		mirror.Update(renderScene, assets, c_PrepareUploadBytes);
 		return mirror.GetDeferredProxies() == 0;
