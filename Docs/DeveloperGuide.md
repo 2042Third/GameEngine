@@ -2059,6 +2059,11 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   pipelines with clockwise front faces and flip their tangent handedness (`c_InstanceMirrored`). The ambient occlusion
   targets are R16F where the device stores the extended storage image formats
   (`GraphicsDeviceInfo::SupportsExtendedStorageFormats`, the `*Half.comp` variants of `GTAO` and `AOBlur`), else R32F.
+- Fragment shaders take every derivative (`fwidth`, `dFdx`, `texture` without an explicit level, helpers such as
+  `SDFCoverage`) before their first `discard`: a discard that differs per pixel ends its invocation, which leaves the
+  derivatives of the rest of its 2x2 quad undefined (Mesa drops the lane; MoltenVK keeps it, so the Mac shows nothing).
+  Multiply coverage into the result and discard once at the end, as `GameUI/UIQuad.frag` does. `Architecture.Shaders`
+  checks every fragment shader's source; `Scene/Forward.frag`'s transparent variant is its one known exception.
 
 ### Streaming and uploads
 

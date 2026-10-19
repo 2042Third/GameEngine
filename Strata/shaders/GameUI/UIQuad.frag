@@ -60,34 +60,23 @@ float ClipCoverage()
 	return inside > 0.0 ? 1.0 : 0.0;
 }
 
-void main()
+// A glyph's color and coverage: the distance field's fill, and the outline band around it in its color.
+vec4 ShadeGlyph()
 {
-	float clipCoverage = ClipCoverage();
-	if (clipCoverage <= 0.0)
-		discard;
-	uint kind = uint(v_Parameters.z + 0.5);
-	if (kind == UI_QUAD_GLYPH)
-	{
-		float distanceValue = SampleAtlas(int(v_Parameters.w + 0.5), v_TexCoord);
-		float fill = SDFCoverage(distanceValue, c_SDFOnEdgeValue);
-		float outline = v_Parameters.y;
-		if (outline > 0.0)
-		{
-			// The outline band around the glyph in its color, the glyph over it.
-			float outer = SDFCoverage(distanceValue, c_SDFOnEdgeValue - outline);
-			vec4 color = mix(v_BorderColor, v_Color, outer > 0.0 ? fill / outer : 0.0);
-			float alpha = mix(v_BorderColor.a * outer, v_Color.a, fill) * clipCoverage;
-			if (alpha <= 0.0)
-				discard;
-			o_Color = vec4(color.rgb, alpha);
-			return;
-		}
-		if (fill <= 0.0)
-			discard;
-		o_Color = vec4(v_Color.rgb, v_Color.a * fill * clipCoverage);
-		return;
-	}
+	float distanceValue = SampleAtlas(int(v_Parameters.w + 0.5), v_TexCoord);
+	float fill = SDFCoverage(distanceValue, c_SDFOnEdgeValue);
+	float outline = v_Parameters.y;
+	if (outline <= 0.0)
+		return vec4(v_Color.rgb, v_Color.a * fill);
+	// The outline band around the glyph in its color, the glyph over it.
+	float outer = SDFCoverage(distanceValue, c_SDFOnEdgeValue - outline);
+	vec4 color = mix(v_BorderColor, v_Color, outer > 0.0 ? fill / outer : 0.0);
+	return vec4(color.rgb, mix(v_BorderColor.a * outer, v_Color.a, fill));
+}
 
+// An image's color and coverage: its texture (or solid color) inside the rounded rect, with its border.
+vec4 ShadeImage()
+{
 	vec4 color = v_Color;
 	if (v_Texture != 0u)
 	{
@@ -115,8 +104,19 @@ void main()
 		float inner = clamp(0.5 - (distanceToEdge + border), 0.0, 1.0);
 		color = mix(v_BorderColor, color, inner);
 	}
-	float alpha = color.a * coverage * clipCoverage;
+	return vec4(color.rgb, color.a * coverage);
+}
+
+void main()
+{
+	// Derivatives (the glyphs' coverage, the images' mip level, a world-space canvas's units per pixel) need every pixel of
+	// the 2x2 quad: a discard that differs per pixel, as the masks' clip does, leaves them undefined for the rest of the
+	// shader. So the clip multiplies the shaded result, and the one discard comes last. The kind is the same for the whole
+	// quad (flat), so either branch runs in uniform control flow.
+	float clipCoverage = ClipCoverage();
+	vec4 shaded = uint(v_Parameters.z + 0.5) == UI_QUAD_GLYPH ? ShadeGlyph() : ShadeImage();
+	float alpha = shaded.a * clipCoverage;
 	if (alpha <= 0.0)
 		discard;
-	o_Color = vec4(color.rgb, alpha);
+	o_Color = vec4(shaded.rgb, alpha);
 }
