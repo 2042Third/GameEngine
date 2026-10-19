@@ -377,9 +377,6 @@ Open items and deferrals later waves own:
 - Game UI (wave 4's `game-ui`): world-space canvases draw unlit, after post-processing, and the game's hit tests on
   them ignore scene geometry in front (the editor's picks check meshes); UI action bindings use the engine's input
   names (`Key/KPEnter`, `Gamepad/A`) until an input-actions asset names actions (wave 5).
-- Shaders: `Scene/Forward.frag`'s transparent variant samples with implicit derivatives after its alpha-mask
-  `discard`, which is undefined on drivers that do not keep helper lanes; `Architecture.Shaders` lists it as its one
-  known exception (`c_KnownDerivativesAfterDiscard`) and fails once it is fixed.
 - Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
   `GameRuntime`, the editor and many tests use the script engine directly; physics, audio and animation can be left
   out (`STRATA_WITH_PHYSICS`, `STRATA_WITH_AUDIO`, `STRATA_WITH_ANIMATION`, wave 4's `engine-modules`).

@@ -2471,8 +2471,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
 - Fragment shaders take every derivative (`fwidth`, `dFdx`, `texture` without an explicit level, helpers such as
   `SDFCoverage`) before their first `discard`: a discard that differs per pixel ends its invocation, which leaves the
   derivatives of the rest of its 2x2 quad undefined (Mesa drops the lane; MoltenVK keeps it, so the Mac shows nothing).
-  Multiply coverage into the result and discard once at the end, as `GameUI/UIQuad.frag` does. `Architecture.Shaders`
-  checks every fragment shader's source; `Scene/Forward.frag`'s transparent variant is its one known exception.
+  Multiply coverage into the result and discard once at the end, as `GameUI/UIQuad.frag` does, or sample every texture
+  before the discards, as `Scene/Forward.frag` and `Scene/DepthPrepass.frag` do. `Architecture.Shaders` checks every
+  fragment shader's source.
 
 ### Streaming and uploads
 

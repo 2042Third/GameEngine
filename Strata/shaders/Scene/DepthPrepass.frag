@@ -22,16 +22,18 @@ layout(location = 1) out uint o_EntityID;
 
 void main()
 {
-	if (!IsLODFadeDrawn(v_LODFade, gl_FragCoord.xy))
-		discard;
 	InstanceData instance = u_Instances[v_InstanceIndex];
 	MaterialData material = u_Materials[instance.MaterialIndex];
-	if ((material.Flags & ST_MATERIAL_ALPHA_MASK) != 0u)
-	{
-		float alpha = material.BaseColor.a * SampleMaterialTexture(material.BaseColorMap, TransformUV(material, v_TexCoord)).a;
-		if (alpha < material.AlphaCutoff)
-			discard;
-	}
+	// Sampled before the discards: a quad whose other pixels discarded has no implicit derivatives (texture levels of
+	// detail) left (Architecture.Shaders).
+	const bool masked = (material.Flags & ST_MATERIAL_ALPHA_MASK) != 0u;
+	float alpha = 1.0;
+	if (masked)
+		alpha = material.BaseColor.a * SampleMaterialTexture(material.BaseColorMap, TransformUV(material, v_TexCoord)).a;
+	if (!IsLODFadeDrawn(v_LODFade, gl_FragCoord.xy))
+		discard;
+	if (masked && alpha < material.AlphaCutoff)
+		discard;
 
 	vec3 normal = normalize(v_Normal);
 	if (!gl_FrontFacing)

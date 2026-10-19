@@ -48,41 +48,19 @@ vec3 GetShadingNormal(MaterialData material, vec2 uv)
 	return (mappedLength > 1e-5 ? mapped / mappedLength : normal) * side;
 }
 
-void main()
+// The lit surface's color: the sun with its shadow, the punctual lights of the pixel's cluster, image-based or constant
+// ambient light and the emission.
+vec3 ShadeLitSurface(vec3 albedo, float baseAlpha, vec3 emissive, vec4 metallicRoughness, vec3 shadingNormal, float occlusion, MaterialData material)
 {
-	// The prepass's mask: of a fading level, only the pixels whose depth it wrote.
-	if (!IsLODFadeDrawn(v_LODFade, gl_FragCoord.xy))
-		discard;
-	InstanceData instance = u_Instances[v_InstanceIndex];
-	MaterialData material = u_Materials[instance.MaterialIndex];
-	vec2 uv = TransformUV(material, v_TexCoord);
-
-	vec4 baseColor = material.BaseColor * SampleMaterialTexture(material.BaseColorMap, uv);
-#ifdef ST_FORWARD_TRANSPARENT
-	if ((material.Flags & ST_MATERIAL_ALPHA_MASK) != 0u && baseColor.a < material.AlphaCutoff)
-		discard;
-	float alpha = (material.Flags & ST_MATERIAL_ALPHA_BLEND) != 0u ? baseColor.a : 1.0;
-#else
-	const float alpha = 1.0;
-#endif
-	vec3 emissive = material.Emissive.rgb * SampleMaterialTexture(material.EmissiveMap, uv).rgb;
-
-	if ((material.Flags & ST_MATERIAL_UNLIT) != 0u)
-	{
-		o_Color = vec4(SanitizeHDR(baseColor.rgb + emissive), alpha);
-		return;
-	}
-
-	vec4 metallicRoughness = SampleMaterialTexture(material.MetallicRoughnessMap, uv);
 	SurfaceData surface;
 	surface.Position = v_RelativePosition;
-	surface.Normal = GetShadingNormal(material, uv);
+	surface.Normal = shadingNormal;
 	surface.View = GetViewVector(v_RelativePosition);
-	surface.Albedo = baseColor.rgb;
-	surface.Alpha = baseColor.a;
+	surface.Albedo = albedo;
+	surface.Alpha = baseAlpha;
 	surface.Metallic = clamp(material.Metallic * metallicRoughness.b, 0.0, 1.0);
 	surface.Roughness = clamp(material.Roughness * metallicRoughness.g, 0.0, 1.0);
-	surface.Occlusion = mix(1.0, SampleMaterialTexture(material.OcclusionMap, uv).r, material.OcclusionStrength);
+	surface.Occlusion = occlusion;
 	surface.Emissive = emissive;
 
 	float viewDepth = -(u_Frame.View * vec4(v_RelativePosition, 1.0)).z;
@@ -150,6 +128,37 @@ void main()
 		color += u_Frame.AmbientColor.rgb * surface.Albedo * (1.0 - surface.Metallic) * diffuseOcclusion;
 	}
 	color += surface.Emissive;
+	return color;
+}
 
+void main()
+{
+	InstanceData instance = u_Instances[v_InstanceIndex];
+	MaterialData material = u_Materials[instance.MaterialIndex];
+	vec2 uv = TransformUV(material, v_TexCoord);
+
+	// The surface is shaded before anything is discarded: a quad whose other pixels discarded has no implicit derivatives
+	// (texture levels of detail, the shadow's filter) left (Architecture.Shaders).
+	vec4 baseColor = material.BaseColor * SampleMaterialTexture(material.BaseColorMap, uv);
+	vec3 emissive = material.Emissive.rgb * SampleMaterialTexture(material.EmissiveMap, uv).rgb;
+	vec3 color = baseColor.rgb + emissive;
+	if ((material.Flags & ST_MATERIAL_UNLIT) == 0u)
+	{
+		vec4 metallicRoughness = SampleMaterialTexture(material.MetallicRoughnessMap, uv);
+		vec3 shadingNormal = GetShadingNormal(material, uv);
+		float occlusion = mix(1.0, SampleMaterialTexture(material.OcclusionMap, uv).r, material.OcclusionStrength);
+		color = ShadeLitSurface(baseColor.rgb, baseColor.a, emissive, metallicRoughness, shadingNormal, occlusion, material);
+	}
+
+	// The prepass's mask: of a fading level, only the pixels whose depth it wrote.
+	if (!IsLODFadeDrawn(v_LODFade, gl_FragCoord.xy))
+		discard;
+#ifdef ST_FORWARD_TRANSPARENT
+	if ((material.Flags & ST_MATERIAL_ALPHA_MASK) != 0u && baseColor.a < material.AlphaCutoff)
+		discard;
+	float alpha = (material.Flags & ST_MATERIAL_ALPHA_BLEND) != 0u ? baseColor.a : 1.0;
+#else
+	const float alpha = 1.0;
+#endif
 	o_Color = vec4(SanitizeHDR(color), alpha);
 }
