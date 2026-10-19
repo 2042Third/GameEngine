@@ -251,7 +251,11 @@ TEST_SUITE("Scripting.Module")
 		REQUIRE(module.has_value());
 		const std::filesystem::path truncated = directory / FileSystem::FromUTF8(ScriptEngine::GetModuleFileName("Truncated"));
 		REQUIRE(FileSystem::WriteBytes(truncated, std::span<const uint8_t>(module->data(), 4096)));
+		error.clear();
 		CHECK_FALSE(engine.LoadModule(truncated, &error));
+		// Refused before the platform's loader reads past the end of the file: on Linux that read faulted inside the
+		// loader, and jumping out of it left the loader locked for every other thread.
+		CHECK_FALSE(Contains(error, "crashed"));
 
 		error.clear();
 		CHECK_FALSE(engine.LoadModule(GetTestScriptModule(STRATA_TEST_LIBRARY_NAME), &error));

@@ -26,7 +26,8 @@ namespace Strata
 		// and the system directories - never in the current directory or PATH. Other platforms resolve dependencies through
 		// the library's RUNPATH (where $ORIGIN / @loader_path is the directory of `path`), the loader's environment
 		// variables and the system paths; `dependencyDirectory` is not searched there. Names without a directory use the
-		// platform's standard search.
+		// platform's standard search. A file cut short (its code described past its end) is refused without the loader
+		// reading past the end, which on Linux would fault inside the loader.
 		bool Load(const std::filesystem::path& path, const std::filesystem::path& dependencyDirectory = {});
 		void Unload();
 		// Forgets the library without unloading it (it stays loaded until the process exits). For libraries that must

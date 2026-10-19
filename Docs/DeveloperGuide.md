@@ -334,8 +334,10 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
   EditorData and Editor. LoaderFaults holds `Scripting.LoaderFaults`, the tests that load modules crashing in their
   static initialization in the test process: on Linux the crash leaves the dynamic loader's lock held by the main thread,
   so any other thread that needs it later (a job thread's first `thread_local` with a destructor) would block for good;
-  put such tests there (or in a child process), never beside tests that run jobs. `StrataTests/CoreShards.json` lists them with their doctest filters (`Suites`, `Exclude`; `*` and `?`,
-  case-insensitive) and the suites of the own CTests (`OwnTests`); `StrataTests/CMakeLists.txt` makes the CTests from it.
+  put such tests there (or in a child process), never beside tests that run jobs. (Library files cut short never reach
+  the loader: on Linux `DynamicLibrary::Load` refuses a file whose loadable segments end past its end before `dlopen`
+  would fault reading them.) `StrataTests/CoreShards.json` lists them with their doctest filters (`Suites`, `Exclude`;
+  `*` and `?`, case-insensitive) and the suites of the own CTests (`OwnTests`); `StrataTests/CMakeLists.txt` makes the CTests from it.
   `Testing.Shards` fails, naming them, on suites that run in no shard or in two (it reads the binary's
   `--list-test-suites`), and on test cases outside any `TEST_SUITE`, which no shard's filter matches: **a new suite
   prefix gets a shard, and every test case a suite**. Filters for suites a build lacks are only reported (`World*`
