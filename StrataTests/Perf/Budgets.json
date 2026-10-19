@@ -88,6 +88,10 @@
 	"Perf.Editor.RecoveryWriteIOTime100k": { "Measured": 5.51, "Budget": 8.26, "Unit": "ms" },
 	"Perf.Editor.RecoverySnapshotMaxEntities": { "Measured": 0.5986, "Budget": 0.8979, "Unit": "ms" },
 	"Perf.Editor.SceneOpen10kPrefabInstancesMaxFrame": { "Measured": 4.96, "Budget": 7.44, "Unit": "ms" },
+	"Perf.Editor.PrefabApply10kInstances": { "Unit": "ms", "Provisional": true },
+	"Perf.Editor.DragInPrefabInstance5kMedian": { "Unit": "ms", "Provisional": true },
+	"Perf.Editor.DragPrefabInstanceRoot5kMedian": { "Unit": "ms", "Provisional": true },
+	"Perf.Editor.Drag100PrefabInstancesMedian": { "Unit": "ms", "Provisional": true },
 	"Perf.EditorPanels.Performance600FramesP95": { "Measured": 0.0616, "Budget": 0.0924, "Unit": "ms" },
 	"Perf.EditorPanels.ContentBrowser10kAssetsP95": { "Measured": 0.0376, "Budget": 0.0564, "Unit": "ms" },
 	"Perf.EditorPanels.Streaming10kAssetsP95": { "Measured": 0.1448, "Budget": 0.2172, "Unit": "ms" },
@@ -157,5 +161,9 @@
 	"PerfGPU.Streaming.Mips.MaxFrameRatio": { "Measured": 0.7936, "Budget": 1.19, "Unit": "ratio" },
 	"Perf.Animation.Evaluate1000": { "Measured": 0.3684, "Budget": 0.5526, "Unit": "ms" },
 	"Perf.Animation.CulledAnimators10k": { "Measured": 0.1388, "Budget": 0.2082, "Unit": "ms" },
-	"PerfGPU.Renderer.Skinned1000": { "Measured": 0.6378, "Budget": 0.9567, "Unit": "ms" }
+	"PerfGPU.Renderer.Skinned1000": { "Measured": 0.6378, "Budget": 0.9567, "Unit": "ms" },
+	"Perf.GameUI.Layout10k": { "Unit": "ms", "Provisional": true },
+	"PerfGPU.GameUI.Render10k": { "Unit": "ms", "Provisional": true, "Target": 1.0 },
+	"PerfGPU.GameUI.RenderIdle10k": { "Unit": "ms", "Provisional": true },
+	"Perf.GameUI.IdleFrame10k": { "Unit": "ms", "Provisional": true }
 }

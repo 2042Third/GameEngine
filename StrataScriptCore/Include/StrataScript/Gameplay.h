@@ -2,11 +2,15 @@
 
 #include "StrataScript/Input.h"
 
+#include <glm/glm.hpp>
+#include <glm/gtc/quaternion.hpp>
+
 #include <cmath>
 #include <cstdint>
+#include <limits>
 
-// Small gameplay helpers that run entirely in the script module: a deterministic random number generator, timers and key
-// repeat. They hold plain state, so scripts keep them as members; that state is not a field, so a hot reload starts them
+// Small gameplay helpers that run entirely in the script module: a deterministic random number generator, timers, key
+// repeat and motion helpers. They hold plain state, so scripts keep them as members; that state is not a field, so a hot reload starts them
 // over (re-create them in OnReload, or keep what matters in fields).
 
 namespace Strata
@@ -212,6 +216,106 @@ namespace Strata
 		float m_HeldTime = 0.0f;
 		float m_NextRepeat = 0.0f;
 		bool m_Held = false;
+	};
+
+
+	// Motion helpers for cameras, followers and UI: pure math, so they run the same everywhere.
+	class Motion
+	{
+	public:
+		// The rotation that makes something at `from` face `to`: it turns the engine's forward (-Z) towards the target and
+		// keeps its +Y as close to `up` as it can. Identity when the points coincide; when the target lies along `up`, the
+		// world's +Z (or +X) stands in for it.
+		static glm::quat LookAt(const glm::vec3& from, const glm::vec3& to, const glm::vec3& up = glm::vec3(0.0f, 1.0f, 0.0f))
+		{
+			const glm::vec3 offset = to - from;
+			const float distance = glm::length(offset);
+			if (!(distance > 1e-6f))
+				return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+			const glm::vec3 forward = offset / distance;
+			glm::vec3 right = glm::cross(forward, up);
+			if (!(glm::length(right) > 1e-6f))
+			{
+				right = glm::cross(forward, glm::vec3(0.0f, 0.0f, 1.0f));
+				if (!(glm::length(right) > 1e-6f))
+					right = glm::cross(forward, glm::vec3(1.0f, 0.0f, 0.0f));
+			}
+			right = glm::normalize(right);
+			const glm::vec3 trueUp = glm::cross(right, forward);
+			// The rotation's columns are where it takes +X, +Y and +Z: right, up, and back (-forward).
+			const glm::mat3 basis(right, trueUp, -forward);
+			return glm::normalize(glm::quat_cast(basis));
+		}
+
+		// Moves `current` towards `target` like a critically damped spring: smoothly, without overshooting, reaching it in
+		// about `smoothTime` seconds. `velocity` is the spring's state: keep it between calls (start at 0). `maxSpeed` limits
+		// how fast it moves (units per second; negative: no limit). Call once per frame with the frame's delta time; a delta of 0 or less changes nothing.
+		static float SmoothDamp(float current, float target, float& velocity, float smoothTime, float deltaTime,
+			float maxSpeed = std::numeric_limits<float>::infinity())
+		{
+			if (!(deltaTime > 0.0f))
+				return current;
+			smoothTime = smoothTime > 1e-4f ? smoothTime : 1e-4f;
+			const float omega = 2.0f / smoothTime;
+			const float decay = std::exp(-omega * deltaTime);
+			float change = current - target;
+			const float maxChange = maxSpeed >= 0.0f ? maxSpeed * smoothTime : std::numeric_limits<float>::infinity(); // Negative or NaN: no limit
+			if (change > maxChange)
+				change = maxChange;
+			else if (change < -maxChange)
+				change = -maxChange;
+			// The spring pulls towards a target at most maxChange away, which limits its speed.
+			const float pulledTowards = current - change;
+			// The exact critically damped solution over the step: x(t) = (x0 + (v0 + w x0) t) e^(-w t).
+			const float impulse = (velocity + omega * change) * deltaTime;
+			velocity = (velocity - omega * impulse) * decay;
+			float result = pulledTowards + (change + impulse) * decay;
+			// A clamped or pushed spring may pass the target: it stops there instead.
+			if ((target - current > 0.0f) == (result > target))
+			{
+				result = target;
+				velocity = 0.0f;
+			}
+			return result;
+		}
+
+		static glm::vec2 SmoothDamp(const glm::vec2& current, const glm::vec2& target, glm::vec2& velocity, float smoothTime, float deltaTime,
+			float maxSpeed = std::numeric_limits<float>::infinity())
+		{
+			return SmoothDampVector(current, target, velocity, smoothTime, deltaTime, maxSpeed);
+		}
+
+		static glm::vec3 SmoothDamp(const glm::vec3& current, const glm::vec3& target, glm::vec3& velocity, float smoothTime, float deltaTime,
+			float maxSpeed = std::numeric_limits<float>::infinity())
+		{
+			return SmoothDampVector(current, target, velocity, smoothTime, deltaTime, maxSpeed);
+		}
+	private:
+		template<typename Vector>
+		static Vector SmoothDampVector(const Vector& current, const Vector& target, Vector& velocity, float smoothTime, float deltaTime, float maxSpeed)
+		{
+			if (!(deltaTime > 0.0f))
+				return current;
+			smoothTime = smoothTime > 1e-4f ? smoothTime : 1e-4f;
+			const float omega = 2.0f / smoothTime;
+			const float decay = std::exp(-omega * deltaTime);
+			Vector change = current - target;
+			const float maxChange = maxSpeed >= 0.0f ? maxSpeed * smoothTime : std::numeric_limits<float>::infinity(); // Negative or NaN: no limit
+			const float length = glm::length(change);
+			if (length > maxChange)
+				change *= maxChange / length;
+			const Vector pulledTowards = current - change;
+			const Vector impulse = (velocity + omega * change) * deltaTime;
+			velocity = (velocity - omega * impulse) * decay;
+			Vector result = pulledTowards + (change + impulse) * decay;
+			// Past the target (the step crossed it): it stops there.
+			if (glm::dot(target - current, result - target) > 0.0f)
+			{
+				result = target;
+				velocity = Vector(0.0f);
+			}
+			return result;
+		}
 	};
 
 }

@@ -16,13 +16,14 @@
 namespace Strata
 {
 
-	void ConsolePanel::OnUpdate(EditorPanelContext&)
+	void ConsolePanel::OnUpdate(EditorPanelContext& context)
 	{
 		LogBuffer& buffer = Log::GetBuffer();
 		for (LogEntry& entry : buffer.GetEntries(m_LastSequence))
 		{
 			m_LastSequence = entry.Sequence;
-			if (entry.Level >= LogLevel::Error)
+			// Errors another pill reports (a failed script build: "Build failed · 2 errors") are not unread news besides.
+			if (entry.Level >= LogLevel::Error && !context.Context.IsAnnouncedLogEntry(entry.Sequence))
 				m_UnreadErrors++;
 			std::optional<ScriptDiagnostic> reference = FindSourceReference(entry.Message);
 			m_References.push_back(reference ? std::make_shared<const ScriptDiagnostic>(std::move(*reference)) : nullptr);

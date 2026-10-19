@@ -1,4 +1,5 @@
 #include <Strata/Core/Application.h>
+#include <Strata/Core/CommandLineOptions.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/FrameProfiler.h>
 #include <Strata/Core/Layer.h>
@@ -23,6 +24,10 @@
 #if ST_WITH_AUDIO
 	#include <Strata/Audio/AudioModule.h>
 #endif
+
+#include <cstdio>
+#include <optional>
+#include <string>
 
 namespace Strata
 {
@@ -276,6 +281,31 @@ namespace Strata
 	namespace
 	{
 
+		// Every option the runtime understands (its usage, and what CommandLineOptions::FindUnknownArgument accepts).
+		constexpr CommandLineOption c_Arguments[] = {
+			{ "--game", "<file.stgame>", "Play this game (default: the one .stgame manifest next to the executable)" },
+			{ "--headless", nullptr, "Run the game without a window or graphics, like a dedicated server (60 frames per second)" },
+			{ "--windowed", nullptr, "Open a window even when the game asks for fullscreen" },
+			{ "--resolution", "<width>x<height>", "Open a window of exactly this many pixels" },
+			{ "--frames", "<count>", "Stop after this many frames (every fixed step runs: checks, screenshots)" },
+			{ "--screenshot", "<file.png>", "Save the last frame (with --frames and a window)" },
+			{ "--asset-budget-mb", "<megabytes>", "The GPU texture budget of the game's assets" },
+			{ "--perf-log", "<file.csv>", "Write a row of frame timings per frame" },
+			{ "--save-directory", "<folder>", "Keep the game's save files in this folder (default: the player's data)" },
+			{ "--help", nullptr, "Print this help and exit" } };
+
+		// The usage under the executable's name (an exported game is the runtime renamed after it).
+		std::string GetUsage()
+		{
+			const std::string program = FileSystem::ToUTF8(Platform::GetExecutablePath().stem());
+			return CommandLineOptions::FormatUsage(program.empty() ? std::string("StrataRuntime") : program, c_Arguments);
+		}
+
+		bool AsksForHelp(const CommandLine& commandLine)
+		{
+			return commandLine.HasFlag("--help") || commandLine.HasFlag("-h");
+		}
+
 		// What is wrong with the values of the command line's options, before anything starts.
 		std::optional<std::string> CheckOptions(const CommandLine& commandLine)
 		{
@@ -295,7 +325,7 @@ namespace Strata
 				return std::string("--perf-log needs the path of the CSV file to write");
 			if (commandLine.HasFlag("--save-directory") && commandLine.GetOption("--save-directory").value_or(std::string()).empty())
 				return std::string("--save-directory needs the folder to keep the game's save files in");
-			return std::nullopt;
+			return CommandLineOptions::FindUnknownArgument(commandLine, c_Arguments);
 		}
 
 	}
@@ -304,13 +334,29 @@ namespace Strata
 	{
 		// Runs that end by themselves (servers, checks, screenshots, perf logs) and command lines with a mistake print into
 		// the terminal that started them; a person playing in a window leaves it alone.
-		if (commandLine.HasFlag("--headless") || commandLine.HasFlag("--frames") || CheckOptions(commandLine))
+		if (AsksForHelp(commandLine) || commandLine.HasFlag("--headless") || commandLine.HasFlag("--frames") || CheckOptions(commandLine))
 			return ProgramRun::Console;
 		return ProgramRun::Interactive;
 	}
 
 	std::optional<ApplicationLaunch> CreateApplication(const CommandLine& commandLine)
 	{
+		// Answered before anything starts (no log file, no window), like the editor: the usage, and the problem with a command
+		// line the runtime does not understand, which ends with c_UsageExitCode. A Console run (GetProgramRun): the terminal
+		// that started it shows them.
+		if (AsksForHelp(commandLine))
+		{
+			std::fputs(GetUsage().c_str(), stdout);
+			Application::SetStartupExitCode(0);
+			return std::nullopt;
+		}
+		if (const std::optional<std::string> problem = CheckOptions(commandLine))
+		{
+			std::fprintf(stderr, "%s\n\n%s", problem->c_str(), GetUsage().c_str());
+			Application::SetStartupExitCode(CommandLineOptions::c_UsageExitCode);
+			return std::nullopt;
+		}
+
 		RuntimeOptions options;
 		if (std::optional<std::string> game = commandLine.GetOption("--game"))
 			options.ManifestPath = FileSystem::FromUTF8(*game);
@@ -326,12 +372,6 @@ namespace Strata
 		logSpecification.LogFile = Platform::GetUserDataDirectory(SaveFiles::MakeGameDirectoryName(name)) / "Logs" / "Game.log";
 		Log::Init(logSpecification);
 		ST_INFO("{} (Strata {}, {})", name, c_EngineVersion, Platform::GetName());
-		// A Console run (GetProgramRun): the terminal that started it shows the mistake.
-		if (const std::optional<std::string> problem = CheckOptions(commandLine))
-		{
-			ST_CRITICAL("{}", *problem);
-			return std::nullopt;
-		}
 		if (!manifest)
 		{
 			Application::ReportFatalError(name, fmt::format("No game to run: {}", options.ManifestPath.empty()

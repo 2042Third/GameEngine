@@ -51,6 +51,21 @@ namespace Strata
 			if (const StrataScriptHostAPI* host = Detail::GetHost())
 				host->SetTimeScale(Detail::GetContext(), timeScale);
 		}
+
+		// Duration of the current frame in seconds before the time scale: what menus, fades and pause screens animate with,
+		// since it goes on at time scale 0.
+		static float GetUnscaledDeltaTime()
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(GetUnscaledDeltaTime);
+			return host ? host->GetUnscaledDeltaTime(Detail::GetContext()) : 0.0f;
+		}
+
+		// Seconds since the scene started playing, unaffected by the time scale (the sum of GetUnscaledDeltaTime).
+		static double GetRealTime()
+		{
+			const StrataScriptHostAPI* host = ST_SCRIPT_DETAIL_HOST_WITH(GetRealTime);
+			return host ? host->GetRealTime(Detail::GetContext()) : 0.0;
+		}
 	};
 
 }

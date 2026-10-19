@@ -41,13 +41,20 @@ namespace Strata
 	EditorCommandRegistry::EditorCommandRegistry()
 	{
 		RegisterSceneCommands(*this);
+		RegisterEntityCommands(*this);
+		RegisterPrefabCommands(*this);
 		RegisterAssetCommands(*this);
 		RegisterEditorStateCommands(*this);
+		RegisterPlayCommands(*this);
 		RegisterViewportCommands(*this);
 		RegisterScriptCommands(*this);
 		RegisterInputCommands(*this);
 		RegisterStreamingCommands(*this);
 		RegisterAnimationCommands(*this);
+		RegisterAudioCommands(*this);
+		RegisterUICommands(*this);
+		RegisterUIInputCommands(*this);
+		RegisterBatchCommands(*this);
 
 		Register({ "editor.commands",
 			"Every editor command with its description, the JSON Schema of its parameters and its kind: \"Edit\" (changes the scene, its assets or "
@@ -105,17 +112,22 @@ namespace Strata
 		if (command && context.IsWaitingForAssets() && WaitsForAssetScan(*command))
 		{
 			// The registry is still filling: the command runs once the scan ended (and goes on from there if it defers itself).
+			// This deferral is the registry's, not the handler's, so it needs no MayDefer; what the handler answers then does.
 			result = EditorCommandResult::Defer([this, command, name = std::string(name), parameters = nlohmann::json(parameters)](EditorContext& context)
 				-> std::optional<EditorCommandResult>
 			{
 				if (context.IsWaitingForAssets())
 					return std::nullopt;
-				return Run(context, command, name, parameters);
+				EditorCommandResult deferred = Run(context, command, name, parameters);
+				ST_ASSERT(!deferred.IsPending() || command->MayDefer, "Command '{}' answered later (Defer) but is not registered with MayDefer", name);
+				return deferred;
 			});
 		}
 		else
 		{
 			result = Run(context, command, name, parameters);
+			// The flag keeps editor.batch from starting what cannot finish in its frame: it must be right.
+			ST_ASSERT(!result.IsPending() || !command || command->MayDefer, "Command '{}' answered later (Defer) but is not registered with MayDefer", name);
 		}
 		// A step the handler recorded (or extended) is the command's.
 		journal.NoteUndo(entry, undo, records);
@@ -161,26 +173,8 @@ namespace Strata
 		try
 		{
 			// The schema is the contract: a misspelled or missing parameter must not silently change the meaning.
-			if (const auto declared = command->Parameters.find("properties"); declared != command->Parameters.end() && declared->is_object())
-			{
-				for (const auto& [key, value] : arguments.items())
-				{
-					if (declared->contains(key))
-						continue;
-					std::string expected;
-					for (const auto& [parameter, schema] : declared->items())
-						expected += (expected.empty() ? "" : ", ") + parameter;
-					return EditorCommandResult::InvalidParameters(fmt::format("Unknown parameter '{}' for {} (parameters: {})", key, command->Name, expected.empty() ? "none" : expected));
-				}
-			}
-			if (const auto required = command->Parameters.find("required"); required != command->Parameters.end() && required->is_array())
-			{
-				for (const nlohmann::json& parameter : *required)
-				{
-					if (parameter.is_string() && !arguments.contains(parameter.get<std::string>()))
-						return EditorCommandResult::InvalidParameters(fmt::format("Missing parameter '{}' for {}", parameter.get<std::string>(), command->Name));
-				}
-			}
+			if (std::optional<std::string> problem = CheckParameters(*command, arguments))
+				return EditorCommandResult::InvalidParameters(std::move(*problem));
 			return command->Handler(context, arguments);
 		}
 		catch (const std::exception& exception)
@@ -188,6 +182,33 @@ namespace Strata
 			// Engine code does not throw; this guards third-party code (JSON access) used by handlers.
 			return EditorCommandResult::Fail(fmt::format("Command '{}' failed: {}", name, exception.what()), EditorCommandError::Internal);
 		}
+	}
+
+	std::optional<std::string> EditorCommandRegistry::CheckParameters(const EditorCommand& command, const nlohmann::json& parameters)
+	{
+		if (!parameters.is_object())
+			return std::string("Command parameters must be a JSON object");
+		if (const auto declared = command.Parameters.find("properties"); declared != command.Parameters.end() && declared->is_object())
+		{
+			for (const auto& [key, value] : parameters.items())
+			{
+				if (declared->contains(key))
+					continue;
+				std::string expected;
+				for (const auto& [parameter, schema] : declared->items())
+					expected += (expected.empty() ? "" : ", ") + parameter;
+				return fmt::format("Unknown parameter '{}' for {} (parameters: {})", key, command.Name, expected.empty() ? "none" : expected);
+			}
+		}
+		if (const auto required = command.Parameters.find("required"); required != command.Parameters.end() && required->is_array())
+		{
+			for (const nlohmann::json& parameter : *required)
+			{
+				if (parameter.is_string() && !parameters.contains(parameter.get<std::string>()))
+					return fmt::format("Missing parameter '{}' for {}", parameter.get<std::string>(), command.Name);
+			}
+		}
+		return std::nullopt;
 	}
 
 	////////////////////////////////////////////////////////////////////////////////
@@ -363,6 +384,29 @@ namespace Strata
 			entities.push_back(entity);
 		}
 		return entities;
+	}
+
+	std::vector<std::string> CommandArguments::GetStringArray(std::string_view name)
+	{
+		std::vector<std::string> strings;
+		const nlohmann::json* value = Get(name);
+		if (!value)
+			return strings;
+		if (!value->is_array())
+		{
+			TypeError(name, "an array of strings");
+			return strings;
+		}
+		for (const nlohmann::json& element : *value)
+		{
+			if (!element.is_string())
+			{
+				TypeError(name, "an array of strings");
+				return {};
+			}
+			strings.push_back(element.get<std::string>());
+		}
+		return strings;
 	}
 
 }

@@ -122,6 +122,54 @@ namespace
 
 TEST_SUITE("Editor.Undo")
 {
+	TEST_CASE("A group collects what is recorded into one step, or reverts it all when cancelled")
+	{
+		int value = 0;
+		UndoStack stack;
+		CHECK(stack.Execute(CreateScope<AddAction>(value, 1, true)));
+		const uint64_t records = stack.GetRecordCount();
+
+		// Collected actions apply at once, merge with nothing before them and count once the group is recorded.
+		REQUIRE(stack.BeginGroup("Batch of 2 commands"));
+		CHECK_FALSE(stack.BeginGroup("Nested"));
+		CHECK(stack.Execute(CreateScope<AddAction>(value, 10, true)));
+		stack.Record(CreateScope<AddAction>(value, 0)); // Applied already (nothing to apply here)
+		CHECK(value == 11);
+		CHECK(stack.GetRecordCount() == records);
+		std::string error;
+		CHECK_FALSE(stack.Undo(&error));
+		CHECK_FALSE(error.empty());
+		CHECK_FALSE(stack.Redo());
+		CHECK_FALSE(stack.GoTo(0));
+		CHECK(stack.EndGroup());
+		CHECK_FALSE(stack.IsGrouping());
+		CHECK(stack.GetRecordCount() == records + 1);
+		CHECK(stack.GetHistory() == std::vector<std::string> { "Add 1", "Batch of 2 commands" });
+		CHECK(stack.Undo());
+		CHECK(value == 1);
+		CHECK(stack.Redo());
+		CHECK(value == 11);
+
+		// An empty group records nothing; a cancelled one reverts what it collected and records nothing.
+		REQUIRE(stack.BeginGroup("Empty"));
+		CHECK_FALSE(stack.EndGroup());
+		REQUIRE(stack.BeginGroup("Cancelled"));
+		CHECK(stack.Execute(CreateScope<AddAction>(value, 100)));
+		CHECK(stack.Execute(CreateScope<AddAction>(value, 1000)));
+		CHECK(value == 1111);
+		CHECK(stack.CancelGroup(&error));
+		CHECK(value == 11);
+		CHECK(stack.GetHistory() == std::vector<std::string> { "Add 1", "Batch of 2 commands" });
+
+		// Clear empties the group with the history; it stays open.
+		REQUIRE(stack.BeginGroup("Cleared"));
+		CHECK(stack.Execute(CreateScope<AddAction>(value, 5)));
+		stack.Clear();
+		CHECK(stack.IsGrouping());
+		CHECK_FALSE(stack.EndGroup());
+		CHECK(stack.GetCount() == 0);
+	}
+
 	TEST_CASE("Actions are undone and redone in order")
 	{
 		int value = 0;

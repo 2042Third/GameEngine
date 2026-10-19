@@ -2,12 +2,19 @@
 
 #include "Editor/AssetEdit.h"
 #include "Editor/EditorContext.h"
+#include "UI/EditorActions.h"
+#include "UI/EditorPanelRegistry.h"
+#include "UI/Icons.h"
+#include "UI/ItemProbe.h"
 #include "UI/PropertyWidgets.h"
 #include "UI/Theme.h"
+#include "UI/Widgets.h"
 
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/Log.h>
+#include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Renderer/Material.h>
 
 #include <imgui.h>
@@ -30,8 +37,25 @@ namespace Strata
 
 	}
 
-	void MaterialEditor::Draw(EditorContext& context, AssetHandle material, std::string_view probeKey)
+	const std::vector<TextureUsageMismatch>& MaterialEditor::GetMismatches(EditorContext& context, AssetHandle material, const MaterialProperties& properties)
 	{
+		const std::array<AssetHandle, 5> maps = { properties.BaseColorMap, properties.MetallicRoughnessMap, properties.NormalMap, properties.OcclusionMap,
+			properties.EmissiveMap };
+		const EditorAssetManager* assets = context.GetAssetManager();
+		const uint64_t version = assets ? assets->GetChangeVersion() : 0;
+		if (m_Mismatches.Material != material || m_Mismatches.Maps != maps || m_Mismatches.AssetsVersion != version)
+		{
+			m_Mismatches.Material = material;
+			m_Mismatches.Maps = maps;
+			m_Mismatches.AssetsVersion = version;
+			m_Mismatches.Mismatches = AssetEdit::FindTextureUsageMismatches(context, properties);
+		}
+		return m_Mismatches.Mismatches;
+	}
+
+	void MaterialEditor::Draw(EditorPanelContext& panelContext, AssetHandle material, std::string_view probeKey)
+	{
+		EditorContext& context = panelContext.Context;
 		const UI::ThemeColors& colors = UI::GetThemeColors();
 		// A drag of another material that never finished is saved before this one is edited.
 		if (m_Pending && m_Pending->Material != material)
@@ -71,6 +95,7 @@ namespace Strata
 
 		if (!UI::BeginPropertyTable("Material"))
 			return;
+		const std::vector<TextureUsageMismatch>& mismatches = GetMismatches(context, material, loaded->GetProperties());
 		for (const PropertyInfo& property : Material::GetPropertyInfos())
 		{
 			if (property.IsHidden() || property.IsTransient())
@@ -100,6 +125,27 @@ namespace Strata
 					ST_WARN("{}: {}", property.Name, error);
 				context.GetUndoStack().BreakMerge();
 				m_Pending.reset();
+			}
+
+			// A texture its slot reads as something else than it was imported as: what will go wrong, and the fix.
+			for (const TextureUsageMismatch& mismatch : mismatches)
+			{
+				if (mismatch.Property != property.Name || imported)
+					continue;
+				UI::PropertyLabel({});
+				ImGui::PushStyleColor(ImGuiCol_Text, colors.Warning);
+				ImGui::TextWrapped("%s %s", Icons::TriangleAlert, AssetEdit::DescribeTextureUsageMismatch(context, mismatch).c_str());
+				ImGui::PopStyleColor();
+				UI::ItemProbe::Record(fmt::format("{}.Warning", probe), true, 0, AssetEdit::DescribeTextureUsageMismatch(context, mismatch));
+				const std::string fixLabel = mismatch.Expected == TextureUsage::NormalMap ? std::string("Import as Normal Map")
+					: fmt::format("Import as {}", TextureUsageToString(mismatch.Expected));
+				const std::string fixId = fmt::format("{}.Fix", probe);
+				if (UI::ActionButton(fixId.c_str(), Icons::RefreshCw, fixLabel, "Import the texture again with the usage this slot reads it as "
+					"(asset.setImportSettings: a background import)"))
+				{
+					RunEditorCommandDeferred(panelContext.Runner, context, panelContext.Commands, "asset.setImportSettings",
+						{ { "asset", UUIDToJson(mismatch.Texture) }, { "settings", { { "Usage", TextureUsageToString(mismatch.Expected) } } } });
+				}
 			}
 		}
 		UI::EndPropertyTable();

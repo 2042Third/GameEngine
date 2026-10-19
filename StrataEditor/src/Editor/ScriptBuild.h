@@ -171,7 +171,13 @@ namespace Strata
 		// The toolchain the build used: the settings it was started with, or the toolchain it found on this machine
 		// (ScriptBuildSettings::FindToolchain; still the settings it was started with when it found none).
 		ScriptBuildSettings Settings;
+		// The error entry the failed build logged (its sequence number in Log::GetBuffer()), 0 when it logged none: the
+		// build's own pill and toast report it, so the editor's unread errors leave it out.
+		uint64_t LoggedError = 0;
 	};
+
+	// The build's errors as the Problems panel counts them: its diagnostics that are not warnings.
+	size_t CountScriptBuildErrors(const ScriptBuildResult& result);
 
 	enum class ScriptBuildPhase : uint8_t
 	{

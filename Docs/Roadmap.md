@@ -359,6 +359,18 @@ interleaved A/Bs against wave 2's build; the quiet campaign that decided the bud
 
 Open items and deferrals later waves own:
 
+- Play-testing (wave 4's `authoring-and-playtest`): an `input.sequence` step whose command event fails a check only the
+  command can make (a key name, `input.click`'s hit test) releases its holds and resumes the game, but the step's
+  earlier events have already reached the game's input (checking every value up front needs a dry run of each
+  `input.*` command); the Game view at a fixed resolution reports the editor's UI scale as the game's content scale.
+- Flaky tests seen once, not reproduced since: Windows `CrashGuard`'s "repeated faults on other threads" and the
+  Mac's `GPU.AssetResidency` "Arrivals that need room...".
+- Game UI (wave 4's `game-ui`): world-space canvases draw unlit, after post-processing, and the game's hit tests on
+  them ignore scene geometry in front (the editor's picks check meshes); UI action bindings use the engine's input
+  names (`Key/KPEnter`, `Gamepad/A`) until an input-actions asset names actions (wave 5).
+- Shaders: `Scene/Forward.frag`'s transparent variant samples with implicit derivatives after its alpha-mask
+  `discard`, which is undefined on drivers that do not keep helper lanes; `Architecture.Shaders` lists it as its one
+  known exception (`c_KnownDerivativesAfterDiscard`) and fails once it is fixed.
 - Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
   `GameRuntime`, the editor and many tests use the script engine directly; physics, audio and animation can be left
   out (`STRATA_WITH_PHYSICS`, `STRATA_WITH_AUDIO`, `STRATA_WITH_ANIMATION`, wave 4's `engine-modules`).
@@ -383,8 +395,7 @@ Open items and deferrals later waves own:
   holds its prepared scene and its compiled prototype together until the prototype is made; a `SubScene` a script keeps
   in a member is reset by hot reload (only fields survive, so scripts keep its ID in a field).
 - Prefabs: applying, reverting and propagating compare and rebuild instances through their JSON form
-  (`PrefabInstances`), not the compiled prototypes scene loads use; per-property overrides and a prefab edit mode are
-  later work.
+  (`PrefabInstances`), not the compiled prototypes scene loads use; a prefab edit mode is later work.
 - Animation and characters: root motion through a character controller is walked at the frame's first fixed step, and on
   a tilted entity its vertical part becomes the controller's velocity (gravity and the ground then decide the height);
   culling and drawing skinned proxies on the GPU belongs to `gpu-driven-rendering`.
@@ -536,6 +547,14 @@ Open items and deferrals later waves own:
     `SubmitMany` 0.41 us, `ParallelForOverhead` 95.9 us and `WakeLatency` 19.6 us), and its throughput targets are
     stated in the reference machine's numbers: a clean Debug build 30% below 3,099 CPU-seconds, Debug `ctest -j 8` in
     at most half of 658 s, and at most 28 threads in an editor.
+  - Wave 4's `game-ui`: the `Perf.GameUI.*` and `PerfGPU.GameUI.*` metrics are provisional. On the Mac,
+    `PerfGPU.Streaming.Mips.MaxUploadStageMs` measured 1.98-2.28 ms against the step-0 base's 1.59-1.66 ms, with
+    engine-modules and game-ui merged and no UI in its scene, on a machine other streams were building on: to be
+    measured again quietly.
+  - Wave 4's `authoring-and-playtest`: `Perf.Editor.PrefabApply10kInstances` (Mac median 701.7 ms) and the prefab drag
+    metrics (`DragInPrefabInstance5kMedian`, `DragPrefabInstanceRoot5kMedian`, `Drag100PrefabInstancesMedian`) are
+    provisional, and the idle editor frame's criterion (`PerfGPU.Editor`) cannot be shown on the Mac, where frames wait
+    for the display (8.3 ms).
   - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
     wave 4, but shows nothing).
 

@@ -97,6 +97,8 @@ namespace Strata
 			m_CollisionListener = contacts->AddCollisionListener([this](const CollisionEvent& event) { OnCollision(event); }, CollisionListenerScope::WatchedEntities);
 		if (IAnimationEventSource* animation = m_Scene.GetService<IAnimationEventSource>())
 			m_AnimationListener = animation->AddAnimationEventListener([this](const AnimationEventInfo& event) { OnAnimationEvent(event); });
+		if (IUIEvents* ui = m_Scene.GetService<IUIEvents>())
+			m_UIListener = ui->AddUIEventListener([this](const UIEventInfo& event) { OnUIEvent(event); });
 
 		// The scripted entities in hierarchy order, so that creation is deterministic: sorted when they are few among many
 		// entities (a play start must not walk a million-entity hierarchy for a few scripts), else taken from the hierarchy.
@@ -152,6 +154,12 @@ namespace Strata
 			if (IAnimationEventSource* animation = m_Scene.GetService<IAnimationEventSource>())
 				animation->RemoveAnimationEventListener(m_AnimationListener);
 			m_AnimationListener = 0;
+		}
+		if (m_UIListener != 0)
+		{
+			if (IUIEvents* ui = m_Scene.GetService<IUIEvents>())
+				ui->RemoveUIEventListener(m_UIListener);
+			m_UIListener = 0;
 		}
 		m_CreationBlocked = true;
 		DestroyAllInstances(true);
@@ -386,6 +394,47 @@ namespace Strata
 				return;
 			const ScriptCallSite site = MakeCallSite(*instance, ScriptCallbackToString(ScriptCallback::OnAnimationEvent));
 			HandleCallResult(*instance, ScriptCallback::OnAnimationEvent, module->InvokeAnimationEventCallback(site, instance->Handle, event.Name));
+		}
+	}
+
+	////////////////////////////////////////////////////////////////////////////////
+	// Game UI events
+	////////////////////////////////////////////////////////////////////////////////
+
+	void ScriptSystem::OnUIEvent(const UIEventInfo& event)
+	{
+		if (!m_Running || !GetUsableModule())
+			return;
+		ScriptCallback callback = ScriptCallback::OnUIClick;
+		switch (event.Type)
+		{
+			case UIEventType::Click: callback = ScriptCallback::OnUIClick; break;
+			case UIEventType::ValueChanged: callback = ScriptCallback::OnUIValueChanged; break;
+			case UIEventType::FocusChanged: callback = ScriptCallback::OnUIFocusChanged; break;
+			case UIEventType::Submit: callback = ScriptCallback::OnUISubmit; break;
+		}
+
+		// The widget's scripts, then its target's: a copy of each list, since the callbacks may add or remove scripts
+		// (removed instances are flagged and skipped). An instance on both is called once (the target is never the widget).
+		const uint64_t widget = static_cast<uint64_t>(event.WidgetID);
+		for (const Entity receiver : { event.Widget, event.Target })
+		{
+			if (!receiver || !m_Scene.GetRegistry().valid(receiver.GetHandle()))
+				continue;
+			auto it = m_Instances.find(receiver.GetUUID());
+			if (it == m_Instances.end())
+				continue;
+			const std::vector<Ref<Instance>> instances = it->second;
+			for (const Ref<Instance>& instance : instances)
+			{
+				if (instance->Removed || instance->Disabled || !instance->Created || !instance->Handle || !instance->Class->Implements(callback))
+					continue;
+				ScriptModule* module = GetUsableModule();
+				if (!module)
+					return;
+				const ScriptCallSite site = MakeCallSite(*instance, ScriptCallbackToString(callback));
+				HandleCallResult(*instance, callback, module->InvokeUIEventCallback(site, instance->Handle, callback, widget, event.Value, event.Focused));
+			}
 		}
 	}
 

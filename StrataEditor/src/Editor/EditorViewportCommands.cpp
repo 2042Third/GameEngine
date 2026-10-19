@@ -91,13 +91,16 @@ namespace Strata
 			{ "stats", "ShowStats" },
 			{ "previewLighting", "PreviewLighting" },
 			{ "gameUI", "ShowGameUI" },
+			{ "canvasMode", "CanvasMode" },
 			{ "gizmo", "Gizmo" },
 			{ "space", "Space" },
 			{ "snap", "Snap" },
 			{ "translateSnap", "TranslateSnap" },
 			{ "rotateSnap", "RotateSnap" },
 			{ "scaleSnap", "ScaleSnap" },
-			{ "debugView", "DebugView" }
+			{ "debugView", "DebugView" },
+			{ "pilotGameCamera", "PilotGameCamera" },
+			{ "editPose", "EditPose" }
 		};
 
 		nlohmann::json DebugViewSchema(std::string description)
@@ -124,6 +127,8 @@ namespace Strata
 			nlohmann::json result = nlohmann::json::object();
 			for (const auto& [parameter, key] : c_ViewportSettingNames)
 				result[parameter] = values[key];
+			result["gameView"] = { { "mode", GameViewModeToString(settings.GameView.Mode) }, { "width", settings.GameView.Width },
+				{ "height", settings.GameView.Height } };
 			return result;
 		}
 
@@ -217,6 +222,7 @@ namespace Strata
 			bool PreviewLighting = false;
 			uint32_t ScreenSpaceTexts = 0;
 			uint32_t HiddenScreenSpaceTexts = 0;
+			SceneOverlayStats UI;     // The game UI's canvases (the overlay passes)
 			uint32_t TextFrames = 0;  // Renders repeated so far to complete the text
 			uint32_t AssetFrames = 0; // Renders repeated so far while assets of the view were loading
 			uint32_t MipFrames = 0;   // Renders repeated so far while textures were coarser than the view wants
@@ -290,9 +296,11 @@ namespace Strata
 			progress.PreviewLighting = stats.PreviewLighting;
 			progress.ScreenSpaceTexts = stats.ScreenSpaceTexts;
 			progress.HiddenScreenSpaceTexts = stats.HiddenScreenSpaceTexts;
+			progress.UI = stats.Overlays;
 			progress.TexturesBelowWanted = renderer->CountTexturesBelowWanted();
 			progress.StalePoses = stats.StalePoses;
-			const bool textPending = progress.PendingTextGlyphs > 0 && progress.TextFrames < c_MaxCaptureTextFrames;
+			// The UI's glyphs complete like the text's (its fonts and textures count in pendingAssets).
+			const bool textPending = progress.PendingTextGlyphs + progress.UI.PendingGlyphs > 0 && progress.TextFrames < c_MaxCaptureTextFrames;
 			const bool assetsPending = request.WaitForAssets && progress.PendingAssets > 0 && progress.AssetFrames < c_MaxCaptureAssetFrames;
 			const bool mipsPending = request.WaitForAssets && progress.TexturesBelowWanted > 0 && progress.MipFrames < c_MaxCaptureMipFrames;
 			const bool posesPending = request.WaitForAssets && progress.StalePoses > 0 && progress.PoseFrames < c_MaxCapturePoseFrames;
@@ -384,6 +392,8 @@ namespace Strata
 				{ "previewLighting", progress.PreviewLighting },
 				{ "screenSpaceTexts", progress.ScreenSpaceTexts },
 				{ "hiddenScreenSpaceTexts", progress.HiddenScreenSpaceTexts },
+				{ "ui", { { "canvases", progress.UI.Canvases }, { "hiddenCanvases", progress.UI.HiddenCanvases }, { "elements", progress.UI.Elements },
+					{ "drawCalls", progress.UI.DrawCalls }, { "pendingGlyphs", progress.UI.PendingGlyphs } } },
 				{ "debugView", DescribeDebugView(progress.DebugView, progress.DebugViewStats, progress.TintedEntities) }
 			};
 			if (!progress.View.Notice.empty())
@@ -497,8 +507,11 @@ namespace Strata
 		registry.Register({ "viewport.getSettings",
 			"The viewport's view settings (saved with the project's editor state): which editor overlays are drawn (grid, selectionOutline, sceneGizmos, "
 			"stats; allColliders: collider shapes of every entity instead of only the selection's), previewLighting (editor views light scenes without any light of their own with a preview sun and sky), gameUI (editor views draw the "
-			"game's screen-space text), the gizmo mode and space, whether gizmo drags snap, the snap steps, and debugView (\"none\", or \"streaming\" / "
-			"\"lod\" / \"mip\": the image colored by streaming state, level of detail or the mip levels textures lack).",
+			"game's screen-space UI, its HUD text and UI canvases, and a click selects a UI element), canvasMode (the 2D canvas mode for placing game "
+			"UI), the gizmo mode and space, whether gizmo drags snap, the snap steps, debugView (\"none\", or \"streaming\" / \"lod\" / \"mip\": the "
+			"image colored by streaming state, level of detail or the mip levels textures lack), gameView (the Game view's image: {mode, width, "
+			"height}, width and height for mode \"custom\"), pilotGameCamera (the Scene view looks through the scene's primary camera) and editPose "
+			"(\"rest\" or \"clipStart\": what skinned characters of the edited scene show while it does not play).",
 			ObjectSchema({}),
 			[](EditorContext& context, const nlohmann::json&)
 			{
@@ -507,7 +520,8 @@ namespace Strata
 
 		registry.Register({ "viewport.setSettings",
 			"Changes view settings of the viewport (a view change: no undo step, the scene is unchanged) and returns all of them like viewport.getSettings. "
-			"Editor views are the editor camera while the game is not playing; the scene's camera and the playing game always show the scene as the game does.",
+			"Editor views are the Scene view's editor camera (also while the game plays); the Game view and the scene's camera always show the scene as "
+			"the game does.",
 			ObjectSchema({
 				{ "grid", BoolSchema("Draw the ground grid") },
 				{ "selectionOutline", BoolSchema("Outline the selected entities") },
@@ -516,7 +530,10 @@ namespace Strata
 				{ "stats", BoolSchema("Show frame time, draw calls and loading assets over the image") },
 				{ "previewLighting", BoolSchema("Editor views light scenes without any light of their own (no directional, point, spot or sky light) "
 					"with a preview sun and sky (never part of the scene or the game)") },
-				{ "gameUI", BoolSchema("Editor views draw the game's screen-space text (its HUD); off by default so the HUD does not cover the scene") },
+				{ "gameUI", BoolSchema("Editor views draw the game's screen-space UI (its HUD text and UI canvases), and a click in the view selects "
+					"a UI element; off by default so the HUD does not cover the scene") },
+				{ "canvasMode", BoolSchema("The 2D canvas mode (edit mode): the viewport shows the selection's UI canvas (else the first) at its reference "
+					"aspect ratio through the scene's camera with the game UI, with handles to move and resize UI elements") },
 				{ "gizmo", { { "type", "string" }, { "enum", { "None", "Translate", "Rotate", "Scale" } }, { "description", "Transform gizmo of the viewport" } } },
 				{ "space", { { "type", "string" }, { "enum", { "Local", "World" } }, { "description", "Space the gizmo works in" } } },
 				{ "snap", BoolSchema("Snap gizmo drags to the steps below (holding Ctrl inverts it)") },
@@ -526,7 +543,20 @@ namespace Strata
 				{ "debugView", DebugViewSchema("Color every view of the viewport: \"streaming\" tints entities whose mesh, material or textures are still "
 					"loading (Sulfur; failed ones Cinnabar; entities whose mesh is not there are drawn as boxes), \"lod\" tints entities by the level of "
 					"detail they are drawn at (0 to 3+), \"mip\" tints entities with textures by the mip levels their worst texture lacks against what "
-					"their view needs (none Malachite, 1 Azurite, 2 Sulfur, 3 or more or still loading Cinnabar), \"none\" shows the image as rendered") } }),
+					"their view needs (none Malachite, 1 Azurite, 2 Sulfur, 3 or more or still loading Cinnabar), \"none\" shows the image as rendered") },
+				{ "gameView", ObjectSchema({
+					{ "mode", { { "type", "string" }, { "enum", { "free", "16:9", "16:10", "4:3", "21:9", "1920x1080", "1280x720", "custom", "game" } },
+						{ "description", "The Game view's image: free fills the panel, an aspect ratio is the largest image of it inside the panel "
+							"(letterboxed), a size renders at exactly those pixels scaled to fit, custom uses width and height, game the resolution the "
+							"running game asked for (free without a request)" } } },
+					{ "width", IntegerSchema("Width of the custom size", GameViewSettings::c_MinSize, GameViewSettings::c_MaxSize) },
+					{ "height", IntegerSchema("Height of the custom size", GameViewSettings::c_MinSize, GameViewSettings::c_MaxSize) } }) },
+				{ "pilotGameCamera", BoolSchema("The Scene view looks through the scene's primary camera, with the editor's overlays (F8)") },
+				{ "editPose", { { "type", "string" }, { "enum", { "rest", "clipStart" } },
+					{ "description", "What skinned characters of the edited scene show while it does not play: \"rest\" (the default) their "
+						"skeleton's rest pose, \"clipStart\" the first frame of what they play on start (the controller's default state's clip, "
+						"else the Animator's Clip; the rest pose without either). animation.preview requests win over both, and play mode is "
+						"unchanged" } } } }),
 			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				nlohmann::json changes = nlohmann::json::object();
@@ -534,6 +564,19 @@ namespace Strata
 				{
 					if (const auto it = parameters.find(parameter); it != parameters.end())
 						changes[key] = *it;
+				}
+				if (const auto gameView = parameters.find("gameView"); gameView != parameters.end())
+				{
+					if (!gameView->is_object())
+						return EditorCommandResult::InvalidParameters("Parameter 'gameView' must be an object {mode, width, height}");
+					nlohmann::json values = nlohmann::json::object();
+					for (const auto& [name, value] : gameView->items())
+					{
+						if (name != "mode" && name != "width" && name != "height")
+							return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'gameView' has no '{}' (mode, width, height)", name));
+						values[name == "mode" ? "Mode" : (name == "width" ? "Width" : "Height")] = value;
+					}
+					changes["GameView"] = std::move(values);
 				}
 				// Applied to a copy, so an invalid value changes nothing.
 				ViewportSettings settings = context.GetViewport().GetSettings();
@@ -547,6 +590,12 @@ namespace Strata
 						if (const size_t position = error.find(quoted); position != std::string::npos)
 							error.replace(position, quoted.size(), fmt::format("Parameter '{}'", parameter));
 					}
+					for (const auto& [saved, parameter] : { std::pair<const char*, const char*> { "'GameView.Mode'", "Parameter 'gameView.mode'" },
+						{ "'GameView.Width'", "Parameter 'gameView.width'" }, { "'GameView.Height'", "Parameter 'gameView.height'" } })
+					{
+						if (const size_t position = error.find(saved); position != std::string::npos)
+							error.replace(position, std::string_view(saved).size(), parameter);
+					}
 					return EditorCommandResult::InvalidParameters(error);
 				}
 				context.GetViewport().GetSettings() = settings;
@@ -557,16 +606,18 @@ namespace Strata
 		// Capture
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "viewport.capture",
+		registry.Register(MayDefer({ "viewport.capture",
 			"Renders the scene on the next frame and returns the picture as a PNG image, with its width and height. By default it looks like the viewport: "
 			"its size (1280x720 while the viewport is hidden), the scene's primary camera while playing (the editor camera otherwise) and the editor overlays "
-			"(grid, selection outline, light/camera/collider shapes) for the editor camera. position, target and fov look through a camera of the "
+			"(grid, selection outline, light/camera/collider shapes) for the editor camera; camera \"scene\" takes the Game view's size when it keeps an "
+			"aspect ratio or a fixed size (viewport.setSettings gameView). position, target and fov look through a camera of the "
 			"capture's own (the editor camera with those changes; camera.get stays as it was): position + target looks from one at the other, either "
 			"alone moves the editor camera's view keeping its direction; the result's camera is then \"custom\", and view has the position, forward "
 			"direction and fov used. With the editor camera outside play mode, a scene without any light "
-			"of its own is lit by preview lighting (previewLighting: true in the result; the game will be unlit) and the game's screen-space text is hidden "
-			"(hiddenScreenSpaceTexts counts it): see viewport.setSettings, or use camera \"scene\" to see what the game shows. Text whose glyphs are still being "
-			"prepared delays the picture by a few frames, so it is complete, and so do meshes, materials and textures of the view that are still loading "
+			"of its own is lit by preview lighting (previewLighting: true in the result; the game will be unlit) and the game's screen-space text and UI canvases are "
+			"hidden (hiddenScreenSpaceTexts and ui.hiddenCanvases count them): see viewport.setSettings, or use camera \"scene\" to see what the game shows. "
+			"ui reports the game UI drawn: {canvases, hiddenCanvases, elements, drawCalls, pendingGlyphs}. Text and UI whose glyphs are still being "
+			"prepared delay the picture by a few frames, so they are complete, and so do meshes, materials and textures of the view that are still loading "
 			"(waitForAssets, default true: up to about five seconds of frames; waitedFrames counts the extra renders), and textures it draws that still "
 			"lack the finer mip levels the view wants (up to about two seconds, as a texture budget may keep them out), and animators that animate only "
 			"while seen (WhenVisible) until they show the pose of their time (a few frames, also while paused). Reports what was still "
@@ -643,9 +694,24 @@ namespace Strata
 				if (!Renderer::IsInitialized())
 					return EditorCommandResult::Fail("viewport.capture needs a GPU, but this editor runs without a graphics device (--no-gpu or no usable GPU)");
 
-				// The size: as given, the missing side from the viewport's aspect ratio, or the viewport's own size.
-				const float aspectRatio = context.GetViewport().GetAspectRatio();
-				const glm::uvec2 viewportSize = context.GetViewport().GetSize();
+				// The size: as given, the missing side from the viewport's aspect ratio, or the viewport's own size. The scene's
+				// camera takes the Game view's when it keeps an aspect ratio or a size: its fixed size, else its image's (or the
+				// default width at its aspect ratio while it is hidden).
+				float aspectRatio = context.GetViewport().GetAspectRatio();
+				glm::uvec2 viewportSize = context.GetViewport().GetSize();
+				if (request.Camera == ViewportCameraSource::Scene)
+				{
+					const GameViewSettings& gameView = context.GetViewport().GetSettings().GameView;
+					const std::optional<glm::uvec2> gameRequest = context.GetGameWindow().GetRequestedResolution();
+					if (const std::optional<float> gameAspect = GetGameViewAspectRatio(gameView, gameRequest))
+					{
+						aspectRatio = *gameAspect;
+						const glm::uvec2 shown = context.GetViewport().GetGameViewSize();
+						const std::optional<glm::uvec2> fixed = GetGameViewFixedSize(gameView, gameRequest);
+						viewportSize = fixed ? *fixed : (shown.x > 0 && shown.y > 0 ? shown
+							: glm::uvec2(EditorViewport::c_DefaultWidth, static_cast<uint32_t>(std::lround(EditorViewport::c_DefaultWidth / *gameAspect))));
+					}
+				}
 				int64_t captureWidth = width;
 				int64_t captureHeight = height;
 				if (width == 0 && height == 0)
@@ -681,7 +747,7 @@ namespace Strata
 						return StartCapture(context, request, *progress);
 					return ContinueCapture(request, *progress);
 				});
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query }));
 	}
 
 }

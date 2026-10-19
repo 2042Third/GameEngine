@@ -542,7 +542,7 @@ TEST_SUITE("Editor.Replay")
 			editor.Run("play.start");
 			const nlohmann::json loaded = editor.Run("scene.loadAdditive", { { "scene", "Scenes/Props.stscene" } });
 			CHECK(loaded["createdEntities"] == 1);
-			CHECK(loaded.contains("warning"));
+			CHECK_FALSE(loaded.contains("warning"));
 			CHECK(editor.Context.GetActiveScene()->FindEntityByName("Prop"));
 			CHECK(editor.Run("entity.create", { { "name", "Played" } }).contains("warning"));
 			editor.Run("scene.unloadAdditive", { { "subScene", loaded["subScene"] } });

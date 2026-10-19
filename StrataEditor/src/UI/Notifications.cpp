@@ -88,8 +88,10 @@ namespace Strata::UI
 			ImGui::End();
 			return;
 		}
-		// In front of the panels without taking the focus (a focused window would take the keyboard from the game view).
-		ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
+		// In front of the panels without taking the focus (a focused window would take the keyboard from the game view), but not
+		// of a modal dialog: in the Scene view's corner they could cover its buttons, which it alone takes clicks on.
+		if (!ImGui::GetTopMostPopupModal())
+			ImGui::BringWindowToDisplayFront(ImGui::GetCurrentWindow());
 
 		// The actions may dismiss toasts or open panels: they act on a copy of what shows.
 		const std::vector<EditorNotification> shown(notifications.GetActive().begin(), notifications.GetActive().end());

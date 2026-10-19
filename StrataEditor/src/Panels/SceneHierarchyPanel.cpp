@@ -4,6 +4,7 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/EditorPlacement.h"
+#include "Editor/GameUIPresets.h"
 #include "Editor/PrefabSync.h"
 #include "UI/EditorActions.h"
 #include "UI/EditorFonts.h"
@@ -51,25 +52,61 @@ namespace Strata
 			nlohmann::json Components;
 		};
 
-		std::vector<EntityPreset> GetPresets()
+		nlohmann::json MeshRenderer(AssetHandle mesh)
+		{
+			return { { "Mesh", UUIDToJson(mesh) } };
+		}
+
+		// A convex hull of the entity's own mesh (MeshColliderComponent::Mesh unset: the MeshRenderer's).
+		nlohmann::json ConvexMeshCollider()
+		{
+			return { { "Convex", true } };
+		}
+
+		// The built-in meshes (MeshFactory, as RendererRegistration makes them) with the colliders their bounds give: static
+		// bodies (no RigidBody) that what moves collides with.
+		std::vector<EntityPreset> GetMeshPresets()
 		{
 			return {
-				{ Icons::SquareDashed, "Empty", "Entity", nlohmann::json::object() },
-				{ Icons::Box, "Cube", "Cube", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } } } },
-				{ Icons::Globe, "Sphere", "Sphere", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::SphereMesh) } } } } },
-				{ Icons::Square, "Plane", "Plane", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::PlaneMesh) } } } } },
-				{ Icons::Cylinder, "Cylinder", "Cylinder", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CylinderMesh) } } } } },
-				{ Icons::Pill, "Capsule", "Capsule", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CapsuleMesh) } } } } },
-				{ Icons::Cone, "Cone", "Cone", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::ConeMesh) } } } } },
-				{ Icons::Torus, "Torus", "Torus", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::TorusMesh) } } } } },
+				{ Icons::Box, "Cube", "Cube", { { "MeshRenderer", MeshRenderer(BuiltinAssets::CubeMesh) },
+					{ "BoxCollider", { { "HalfExtents", { 0.5, 0.5, 0.5 } } } } } },
+				{ Icons::Globe, "Sphere", "Sphere", { { "MeshRenderer", MeshRenderer(BuiltinAssets::SphereMesh) },
+					{ "SphereCollider", { { "Radius", 0.5 } } } } },
+				// A plane is a thin box whose top is the plane, so that what rests on it touches the visible surface.
+				{ Icons::Square, "Plane", "Plane", { { "MeshRenderer", MeshRenderer(BuiltinAssets::PlaneMesh) },
+					{ "BoxCollider", { { "HalfExtents", { 0.5, 0.01, 0.5 } }, { "Offset", { 0.0, -0.01, 0.0 } } } } } },
+				{ Icons::Cylinder, "Cylinder", "Cylinder", { { "MeshRenderer", MeshRenderer(BuiltinAssets::CylinderMesh) },
+					{ "MeshCollider", ConvexMeshCollider() } } },
+				{ Icons::Pill, "Capsule", "Capsule", { { "MeshRenderer", MeshRenderer(BuiltinAssets::CapsuleMesh) },
+					{ "CapsuleCollider", { { "Radius", 0.5 }, { "HalfHeight", 0.5 } } } } },
+				{ Icons::Cone, "Cone", "Cone", { { "MeshRenderer", MeshRenderer(BuiltinAssets::ConeMesh) }, { "MeshCollider", ConvexMeshCollider() } } },
+				{ Icons::Torus, "Torus", "Torus", { { "MeshRenderer", MeshRenderer(BuiltinAssets::TorusMesh) }, { "MeshCollider", ConvexMeshCollider() } } } };
+		}
+
+		// The same meshes without colliders (the Create menu's "Mesh only" submenu).
+		std::vector<EntityPreset> GetMeshOnlyPresets()
+		{
+			std::vector<EntityPreset> presets = GetMeshPresets();
+			for (EntityPreset& preset : presets)
+				preset.Components = { { "MeshRenderer", preset.Components["MeshRenderer"] } };
+			return presets;
+		}
+
+		std::vector<EntityPreset> GetPresets()
+		{
+			std::vector<EntityPreset> presets = { { Icons::SquareDashed, "Empty", "Entity", nlohmann::json::object() } };
+			for (EntityPreset& preset : GetMeshPresets())
+				presets.push_back(std::move(preset));
+			presets.insert(presets.end(), {
 				{ Icons::Video, "Camera", "Camera", { { "Camera", nlohmann::json::object() } } },
 				{ Icons::Sun, "Directional Light", "Directional Light", { { "DirectionalLight", nlohmann::json::object() } } },
 				{ Icons::Lightbulb, "Point Light", "Point Light", { { "PointLight", nlohmann::json::object() } } },
 				{ Icons::Flashlight, "Spot Light", "Spot Light", { { "SpotLight", nlohmann::json::object() } } },
 				{ Icons::CloudSun, "Sky Light", "Sky Light", { { "SkyLight", nlohmann::json::object() } } },
 				{ Icons::Aperture, "Post Process", "Post Process", { { "PostProcess", nlohmann::json::object() } } },
-				{ Icons::Type, "Text", "Text", { { "Text", nlohmann::json::object() } } },
-				{ Icons::Volume2, "Audio Source", "Audio Source", { { "AudioSource", nlohmann::json::object() } } } };
+				{ Icons::Type, "3D Text", "Text", { { "Text", nlohmann::json::object() } } },
+				{ Icons::Volume2, "Audio Source", "Audio Source", { { "AudioSource", nlohmann::json::object() } } } });
+			return presets;
 		}
 
 		// Where a new top-level entity of a preset goes: at the view's pivot, resting on the surface under it (its mesh's
@@ -103,6 +140,39 @@ namespace Strata
 			if (created.is_object())
 			{
 				if (const std::optional<UUID> id = UUIDFromJson(created["id"]))
+					context.Select(*id);
+			}
+		}
+
+		// The game UI's presets (ui.create): under the parent, or under a new canvas when the parent is outside every canvas.
+		const char* GetUIPresetIcon(UIPresetType type)
+		{
+			switch (type)
+			{
+				case UIPresetType::Canvas: return Icons::AppWindow;
+				case UIPresetType::Panel: return Icons::PanelTop;
+				case UIPresetType::Image: return Icons::Image;
+				case UIPresetType::Text: return Icons::Type;
+				case UIPresetType::Button: return Icons::RectangleHorizontal;
+				case UIPresetType::Toggle: return Icons::ToggleRight;
+				case UIPresetType::Slider: return Icons::SlidersHorizontal;
+				case UIPresetType::InputField: return Icons::TextCursorInput;
+				case UIPresetType::HorizontalLayout: return Icons::Columns3;
+				case UIPresetType::VerticalLayout: return Icons::Rows3;
+				case UIPresetType::GridLayout: return Icons::LayoutGrid;
+			}
+			return Icons::Image;
+		}
+
+		void CreateUIPreset(EditorContext& context, const EditorCommandRegistry& commands, UIPresetType type, UUID parent)
+		{
+			nlohmann::json parameters = { { "type", GameUIPresets::GetTypeName(type) } };
+			if (parent.IsValid())
+				parameters["parent"] = UUIDToJson(parent);
+			const nlohmann::json created = RunEditorCommand(context, commands, "ui.create", parameters);
+			if (created.is_object())
+			{
+				if (const std::optional<UUID> id = UUIDFromJson(created["entity"]))
 					context.Select(*id);
 			}
 		}
@@ -182,20 +252,61 @@ namespace Strata
 	void SceneHierarchyPanel::DrawCreateMenu(EditorContext& context, const EditorCommandRegistry& commands, UUID parent,
 		const std::function<void(std::function<void()>)>& schedule)
 	{
-		for (const EntityPreset& preset : GetPresets())
+		// One creation menu is open at a time: its items are recorded as "Create.<Preset>", the submenu's as
+		// "Create.MeshOnly.<Preset>".
+		auto drawItem = [&](const EntityPreset& preset, std::string_view probe)
 		{
 			const std::string label = fmt::format("{}  {}", preset.Icon, preset.Label);
 			const bool chosen = ImGui::MenuItem(label.c_str());
-			// One creation menu is open at a time: its items are recorded as "Create.<Preset>".
-			UI::ItemProbe::Record(fmt::format("Create.{}", preset.Label));
+			UI::ItemProbe::Record(fmt::format("{}.{}", probe, preset.Label));
 			if (!chosen)
-				continue;
+				return;
 			auto action = [&context, &commands, preset, parent]() { CreatePreset(context, commands, preset, parent); };
 			if (schedule)
 				schedule(std::move(action));
 			else
 				action();
+		};
+		const std::vector<EntityPreset> meshes = GetMeshPresets();
+		for (const EntityPreset& preset : GetPresets())
+		{
+			drawItem(preset, "Create");
+			// The plain meshes follow the ones with colliders.
+			if (std::string_view(preset.Label) != meshes.back().Label)
+				continue;
+			const std::string label = fmt::format("{}  Mesh only", Icons::Shapes);
+			const bool open = ImGui::BeginMenu(label.c_str());
+			UI::ItemProbe::Record("Create.MeshOnly");
+			if (ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip))
+				ImGui::SetTooltip("The same meshes without colliders");
+			if (!open)
+				continue;
+			for (const EntityPreset& plain : GetMeshOnlyPresets())
+				drawItem(plain, "Create.MeshOnly");
+			ImGui::EndMenu();
 		}
+
+		// The game UI's elements, made ready to use (a button with its label, a slider with its parts).
+		const std::string uiLabel = fmt::format("{}  UI", Icons::AppWindow);
+		const bool uiOpen = ImGui::BeginMenu(uiLabel.c_str());
+		UI::ItemProbe::Record("Create.UI");
+		if (!uiOpen)
+			return;
+		for (uint32_t index = 0; index < c_UIPresetTypeCount; index++)
+		{
+			const UIPresetType type = static_cast<UIPresetType>(index);
+			const std::string label = fmt::format("{}  {}", GetUIPresetIcon(type), GameUIPresets::GetDisplayName(type));
+			const bool chosen = ImGui::MenuItem(label.c_str());
+			UI::ItemProbe::Record(fmt::format("Create.UI.{}", GameUIPresets::GetDisplayName(type)));
+			if (!chosen)
+				continue;
+			auto action = [&context, &commands, type, parent]() { CreateUIPreset(context, commands, type, parent); };
+			if (schedule)
+				schedule(std::move(action));
+			else
+				action();
+		}
+		ImGui::EndMenu();
 	}
 
 	void SceneHierarchyPanel::BeginRename(UUID entity)

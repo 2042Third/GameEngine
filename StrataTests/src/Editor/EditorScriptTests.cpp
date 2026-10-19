@@ -161,6 +161,25 @@ TEST_SUITE("Editor.Scripts")
 		const nlohmann::json* fieldTypes = FindClass(status, "FieldTypes");
 		REQUIRE(fieldTypes);
 		CHECK((*fieldTypes)["callbacks"] == nlohmann::json::array({ "OnCreate" }));
+		// Every callback a class implements is listed, contacts and animation events too.
+		const nlohmann::json* contacts = FindClass(status, "ContactRecorder");
+		REQUIRE(contacts);
+		for (const char* callback : { "OnCollisionEnter", "OnCollisionExit", "OnTriggerEnter", "OnTriggerExit" })
+		{
+			CAPTURE(callback);
+			CHECK(std::find((*contacts)["callbacks"].begin(), (*contacts)["callbacks"].end(), callback) != (*contacts)["callbacks"].end());
+		}
+		const nlohmann::json* animator = FindClass(status, "AnimatorAPI");
+		REQUIRE(animator);
+		CHECK(std::find((*animator)["callbacks"].begin(), (*animator)["callbacks"].end(), "OnAnimationEvent") != (*animator)["callbacks"].end());
+		// And the game UI's, the last ones of the enum.
+		const nlohmann::json* ui = FindClass(status, "UIEventRecorder");
+		REQUIRE(ui);
+		for (const char* callback : { "OnUIClick", "OnUIValueChanged", "OnUIFocusChanged", "OnUISubmit" })
+		{
+			CAPTURE(callback);
+			CHECK(std::find((*ui)["callbacks"].begin(), (*ui)["callbacks"].end(), callback) != (*ui)["callbacks"].end());
+		}
 		bool sawInt = false;
 		for (const nlohmann::json& field : (*fieldTypes)["fields"])
 		{
@@ -275,7 +294,9 @@ TEST_SUITE("Editor.Scripts")
 		CHECK(GetField<int32_t>(system, live, "FieldTypes", "IntSeenInCreate") == 9);
 
 		const nlohmann::json edited = harness.Run("script.setField", { { "entity", id }, { "class", "FieldTypes" }, { "field", "StringField" }, { "value", "Live" } });
-		CHECK(edited.contains("warning"));
+		// Live scripts are what it changes while playing: no warning (the journal marks it, replays leave it out).
+		CHECK_FALSE(edited.contains("warning"));
+		CHECK(harness.Context.GetJournal().GetEntries().back().RunningCopy);
 		CHECK(GetField<std::string>(system, live, "FieldTypes", "StringField") == "Live");
 		harness.Run("script.setField", { { "entity", id }, { "class", "FieldTypes" }, { "field", "IntField" }, { "value", nullptr } });
 		CHECK(GetField<int32_t>(system, live, "FieldTypes", "IntField") == 42);
@@ -367,6 +388,18 @@ TEST_SUITE("Editor.Scripts")
 		harness.Run("script.setField", { { "entity", id }, { "class", "Faulty" }, { "field", "Fault" }, { "value", "" } });
 		std::string error;
 		REQUIRE_MESSAGE(harness.Context.BuildScripts(&error), error);
+		// The person hears that the build started, then how it ended, in the same toast.
+		const std::deque<EditorNotification>& notifications = harness.Context.GetNotifications().GetActive();
+		const auto find = [&notifications](NotificationLevel level, std::string_view title)
+		{
+			return std::find_if(notifications.begin(), notifications.end(), [&](const EditorNotification& notification)
+			{
+				return notification.Level == level && notification.Title.starts_with(title);
+			});
+		};
+		const auto building = find(NotificationLevel::Info, "Building scripts");
+		REQUIRE(building != notifications.end());
+		const uint64_t toast = building->Id;
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
 		while (harness.Context.GetScriptBuilder().IsRunning() && std::chrono::steady_clock::now() < deadline)
 		{
@@ -378,17 +411,14 @@ TEST_SUITE("Editor.Scripts")
 		REQUIRE_MESSAGE(result.Success, result.Error);
 		CHECK_FALSE(result.ModuleChanged);
 		CHECK(harness.Context.GetLastScriptBuildLoad().Loaded);
-		// The person hears that the build started and how it ended.
-		const std::deque<EditorNotification>& notifications = harness.Context.GetNotifications().GetActive();
-		const auto posted = [&notifications](NotificationLevel level, std::string_view title)
+		CHECK(find(NotificationLevel::Info, "Building scripts") == notifications.end());
+		const auto built = find(NotificationLevel::Success, "Scripts built and reloaded"); // The crashed module loaded again
+		REQUIRE(built != notifications.end());
+		CHECK(built->Id == toast);
+		CHECK(std::count_if(notifications.begin(), notifications.end(), [](const EditorNotification& notification)
 		{
-			return std::any_of(notifications.begin(), notifications.end(), [&](const EditorNotification& notification)
-			{
-				return notification.Level == level && notification.Title.starts_with(title);
-			});
-		};
-		CHECK(posted(NotificationLevel::Info, "Building scripts"));
-		CHECK(posted(NotificationLevel::Success, "Scripts built and reloaded")); // The crashed module loaded again
+			return notification.Title.starts_with("Building scripts") || notification.Title.starts_with("Scripts built");
+		}) == 1);
 		CHECK_FALSE(harness.Context.GetScriptEngine()->IsFaulted());
 		harness.Run("play.start", { { "build", false } }); // The stand-in for CMake leaves the module older than the sources
 		harness.Frames(2);

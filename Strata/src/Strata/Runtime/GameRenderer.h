@@ -16,9 +16,10 @@ namespace Strata
 	class Scene;
 
 	// Renders a running game's scene into a target, typically the window's back buffer: from the scene's primary camera
-	// (the first active entity with a Camera marked Primary), with its screen-space text as the HUD. A scene without such
-	// a camera gets a message frame that names the problem instead (and one error in the log), so a broken game never
-	// shows a stale or black window. Needs an initialized renderer. Main thread only.
+	// (the first active entity with a Camera marked Primary), with its screen-space text and canvases as the HUD. A scene
+	// without such a camera shows its screen-space UI over black when it has some (a main menu needs no camera), and
+	// otherwise a message frame that names the problem (and one error in the log), so a broken game never shows a stale or
+	// black window. Needs an initialized renderer. Main thread only.
 	class GameRenderer
 	{
 	public:

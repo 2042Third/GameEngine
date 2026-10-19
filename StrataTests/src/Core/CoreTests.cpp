@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include "Strata/Core/CommandLine.h"
+#include "Strata/Core/CommandLineOptions.h"
 #include "Strata/Core/Hash.h"
 #include "Strata/Core/Layer.h"
 #include "Strata/Core/LayerStack.h"
@@ -118,6 +119,13 @@ TEST_SUITE("Core")
 		CHECK(newer[0].Message == "four");
 
 		CHECK(buffer.GetEntries(0, 1).size() == 1);
+
+		// Counts cover only what the buffer still holds ("one" was dropped).
+		CHECK(buffer.CountEntries(0, LogLevel::Trace) == 3);
+		CHECK(buffer.CountEntries(0, LogLevel::Warn) == 2);
+		CHECK(buffer.CountEntries(entries[0].Sequence, LogLevel::Error) == 1);
+		CHECK(buffer.CountEntries(entries[1].Sequence, LogLevel::Error) == 0);
+		CHECK(buffer.CountEntries(0, LogLevel::Critical) == 0);
 	}
 
 	TEST_CASE("Log messages reach the shared buffer")
@@ -200,6 +208,29 @@ TEST_SUITE("Core")
 		CHECK(commandLine.GetIntOption("--frames").value() == 120);
 		CHECK_FALSE(commandLine.GetIntOption("--bad").has_value());
 		CHECK_FALSE(commandLine.GetOption("--missing").has_value());
+	}
+
+	TEST_CASE("CommandLineOptions find what a program does not understand and format its usage")
+	{
+		constexpr CommandLineOption c_Options[] = {
+			{ "--frames", "<count>", "Stop after this many frames" },
+			{ "--headless", nullptr, "Run without a window" } };
+		auto check = [&](std::vector<std::string> arguments) { return CommandLineOptions::FindUnknownArgument(CommandLine(std::move(arguments)), c_Options); };
+		CHECK_FALSE(check({ "Game" }).has_value());
+		CHECK_FALSE(check({ "Game", "--frames", "10", "--headless" }).has_value());
+		CHECK_FALSE(check({ "Game", "--frames=10" }).has_value());
+		CHECK(check({ "Game", "--bogus" }) == std::optional<std::string>("Unknown argument '--bogus'"));
+		CHECK(check({ "Game", "--headless=yes" }) == std::optional<std::string>("--headless takes no value"));
+		CHECK(check({ "Game", "--frames" }) == std::optional<std::string>("--frames needs a value: --frames <count>"));
+		// A value is not mistaken for an argument, whatever it looks like.
+		CHECK_FALSE(check({ "Game", "--frames", "--headless" }).has_value());
+
+		const std::string usage = CommandLineOptions::FormatUsage("Game", c_Options);
+		CHECK(usage.starts_with("Usage: Game [options]\n\nOptions:\n"));
+		CHECK(usage.find("  --frames <count>") != std::string::npos);
+		CHECK(usage.find("Stop after this many frames\n") != std::string::npos);
+		CHECK(usage.find("  --headless ") != std::string::npos);
+		CHECK(CommandLineOptions::c_UsageExitCode == 3);
 	}
 
 	TEST_CASE("CommandLine parses sizes written width x height")

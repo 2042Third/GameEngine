@@ -631,6 +631,7 @@ TEST_SUITE("Asset.Pack")
 
 		// Other work keeps the workers' queue full while the reads run; each job notes the thread that ran it.
 		const std::thread::id reader = std::this_thread::get_id();
+		constexpr uint32_t c_ForeignJobsBeforeReads = 16;
 		std::atomic<bool> stop = false;
 		std::atomic<uint32_t> submitted = 0;
 		std::atomic<uint32_t> foreignJobs = 0;
@@ -661,7 +662,7 @@ TEST_SUITE("Asset.Pack")
 		});
 		// The reads start once the queue holds other work (on CI's runners of three hardware threads the feeder could
 		// otherwise start only after the reads ended, and the test would check nothing).
-		REQUIRE(WaitUntil([&]() { return submitted.load() >= 16; }, std::chrono::seconds(30)));
+		REQUIRE(WaitUntil([&]() { return submitted.load() >= c_ForeignJobsBeforeReads; }, std::chrono::seconds(30)));
 		std::vector<uint8_t> data;
 		for (int read = 0; read < 6; read++)
 		{

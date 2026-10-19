@@ -76,6 +76,7 @@ namespace Strata
 
 		// Null actions are left out.
 		void Add(Scope<EditorAction> action);
+		bool IsEmpty() const { return m_Actions.empty(); }
 
 		const std::string& GetName() const override { return m_Name; }
 		bool Execute(std::string* outError) override;
@@ -150,6 +151,20 @@ namespace Strata
 
 		// The next recorded action starts a new undo step even if it could merge (e.g. the mouse was released).
 		void BreakMerge() { m_MergeBroken = true; }
+
+		// Collects what is recorded from now on (Execute, Record) into one step, an EditorActionGroup named `name`, which
+		// EndGroup records: editor.batch makes its steps one undo step. The collected actions are applied as they come (the
+		// observer hears each), never merge with steps before them, and do not count as records (GetRecordCount) until the
+		// group is recorded. Undo, redo and GoTo are refused meanwhile, and Clear empties the group with the history. Groups do
+		// not nest: false when one is open.
+		bool BeginGroup(std::string name);
+		// Records the open group as one step (nothing when it collected nothing). False without an open group, or when it
+		// recorded nothing.
+		bool EndGroup();
+		// Reverts what the open group collected (latest first) and records nothing: an atomic batch whose step failed. False,
+		// with the reason, when the actions cannot be reverted (they then stay applied, recorded as the group's step).
+		bool CancelGroup(std::string* outError = nullptr);
+		bool IsGrouping() const { return m_Group != nullptr; }
 		// Save point: IsModified reports whether the applied actions differ from those at the last MarkSaved by an action
 		// that changes the scene (EditorAction::ChangesScene). Costs the number of actions between the two positions.
 		void MarkSaved();
@@ -204,6 +219,8 @@ namespace Strata
 		uint64_t m_Generation = 0;  // Changes with Clear (SavePoint)
 		uint64_t m_SceneTrims = 0;  // Steps that change the scene trimmed from the front (SavePoint)
 		UndoStackObserver* m_Observer = nullptr;
+		Scope<EditorActionGroup> m_Group; // The group BeginGroup opened, until EndGroup or CancelGroup
+		std::string m_GroupName;
 	};
 
 }

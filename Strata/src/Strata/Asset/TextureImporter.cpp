@@ -9,6 +9,7 @@
 #include <stb_image.h>
 #include <stb_image_resize2.h>
 
+#include <algorithm>
 #include <cctype>
 #include <climits>
 
@@ -180,6 +181,7 @@ namespace Strata
 		json["Wrap"] = TextureWrapToString(Wrap);
 		json["MaxSize"] = MaxSize;
 		json["FlipVertically"] = FlipVertically;
+		json["FlipGreen"] = FlipGreen;
 		return json;
 	}
 
@@ -238,11 +240,70 @@ namespace Strata
 
 		settings.GenerateMips = JsonUtils::GetBool(json, "GenerateMips", settings.GenerateMips);
 		settings.FlipVertically = JsonUtils::GetBool(json, "FlipVertically", settings.FlipVertically);
+		settings.FlipGreen = JsonUtils::GetBool(json, "FlipGreen", settings.FlipGreen);
 		const uint64_t maxSize = JsonUtils::GetUInt(json, "MaxSize", settings.MaxSize);
 		if (maxSize > TextureImporter::c_MaxImageDimension)
 			warn(fmt::format("MaxSize {} exceeds the engine limit of {}", maxSize, TextureImporter::c_MaxImageDimension));
 		settings.MaxSize = static_cast<uint32_t>(std::min<uint64_t>(maxSize, TextureImporter::c_MaxImageDimension));
 		return settings;
+	}
+
+	std::vector<std::string> TextureImportSettings::GetNameTokens(std::string_view stem, bool* outDirectX)
+	{
+		// Split at separators and where a lowercase letter is followed by an uppercase one ("NormalGL" -> "Normal", "GL").
+		std::vector<std::string> tokens;
+		std::string token;
+		auto flush = [&tokens, &token]()
+		{
+			if (!token.empty())
+				tokens.push_back(StringUtils::ToLower(token));
+			token.clear();
+		};
+		for (size_t index = 0; index < stem.size(); index++)
+		{
+			const char character = stem[index];
+			if (character == '_' || character == '-' || character == '.' || character == ' ')
+			{
+				flush();
+				continue;
+			}
+			if (index > 0 && std::islower(static_cast<unsigned char>(stem[index - 1])) && std::isupper(static_cast<unsigned char>(character)))
+				flush();
+			token += character;
+		}
+		flush();
+
+		// Resolutions ("1k" to "16k", powers of two from 256 to 16384, "<w>x<h>") and the normal map conventions ("gl", "dx")
+		// say nothing about the usage.
+		auto isNumber = [](std::string_view text) { return !text.empty() && std::all_of(text.begin(), text.end(), [](char c) { return c >= '0' && c <= '9'; }); };
+		auto isResolution = [&isNumber](const std::string& text)
+		{
+			if (text.size() >= 2 && text.back() == 'k' && isNumber(std::string_view(text).substr(0, text.size() - 1)) && text.size() <= 3)
+			{
+				const int value = std::stoi(text.substr(0, text.size() - 1));
+				return value >= 1 && value <= 16;
+			}
+			if (isNumber(text) && text.size() <= 5)
+			{
+				const int value = std::stoi(text);
+				return value >= 256 && value <= 16384 && (value & (value - 1)) == 0;
+			}
+			const size_t x = text.find('x');
+			return x != std::string::npos && x > 0 && isNumber(std::string_view(text).substr(0, x)) && isNumber(std::string_view(text).substr(x + 1));
+		};
+		bool directX = false;
+		std::vector<std::string> kept;
+		for (const std::string& part : tokens)
+		{
+			if (part == "dx" || part == "directx" || part == "normaldx")
+				directX = true;
+			if (isResolution(part) || part == "gl" || part == "ogl" || part == "opengl" || part == "dx" || part == "directx")
+				continue;
+			kept.push_back(part);
+		}
+		if (outDirectX)
+			*outDirectX = directX;
+		return kept;
 	}
 
 	TextureImportSettings TextureImportSettings::GetDefaults(const std::filesystem::path& path)
@@ -256,28 +317,25 @@ namespace Strata
 			return settings;
 		}
 
-		const std::string stem = StringUtils::ToLower(FileSystem::ToUTF8(path.stem()));
-		for (std::string_view suffix : { "_n", "_nrm", "_nor", "_norm", "_normal", "-normal", "_normalgl", "_normalmap" })
+		bool directX = false;
+		const std::vector<std::string> tokens = GetNameTokens(FileSystem::ToUTF8(path.stem()), &directX);
+		auto any = [&tokens](std::initializer_list<std::string_view> names)
 		{
-			if (StringUtils::EndsWith(stem, suffix))
+			return std::any_of(tokens.begin(), tokens.end(), [names](const std::string& token)
 			{
-				settings.Usage = TextureUsage::NormalMap;
-				return settings;
-			}
-		}
-		if (stem.find("normal") != std::string::npos)
+				return std::find(names.begin(), names.end(), std::string_view(token)) != names.end();
+			});
+		};
+		if (any({ "nor", "nrm", "norm", "normal", "normals", "normalmap", "nml", "normalgl", "normaldx" }) || (!tokens.empty() && tokens.back() == "n"))
 		{
 			settings.Usage = TextureUsage::NormalMap;
+			settings.FlipGreen = directX;
 			return settings;
 		}
-
-		for (std::string_view token : { "rough", "metal", "occlusion", "_ao", "_orm", "_arm", "_rma", "mask", "height", "displacement", "_disp", "_spec" })
+		if (any({ "rough", "roughness", "metal", "metallic", "metalness", "occlusion", "ao", "orm", "arm", "rma", "mask", "height", "displacement", "disp",
+			"bump", "spec", "specular", "gloss", "glossiness" }))
 		{
-			if (stem.find(token) != std::string::npos)
-			{
-				settings.Usage = TextureUsage::Data;
-				return settings;
-			}
+			settings.Usage = TextureUsage::Data;
 		}
 		return settings;
 	}
@@ -297,6 +355,8 @@ namespace Strata
 		const TextureImportSettings values = TextureImportSettings::FromJson(settings);
 		if (setting == "Compression" && values.Usage == TextureUsage::HDR)
 			return "HDR textures stay 16-bit float: they are not block-compressed yet";
+		if (setting == "FlipGreen" && values.Usage != TextureUsage::NormalMap)
+			return "Flip Green applies to normal maps only (Usage NormalMap)";
 		if (setting == "Quality")
 		{
 			if (values.Usage == TextureUsage::HDR)
@@ -334,7 +394,10 @@ namespace Strata
 			.Bool("GenerateMips", defaults.GenerateMips)
 				.Tooltip("Store the smaller versions of the image that keep distant surfaces from shimmering")
 			.Bool("FlipVertically", defaults.FlipVertically)
-				.Tooltip("Store the image upside down (for images whose rows start at the bottom)");
+				.Tooltip("Store the image upside down (for images whose rows start at the bottom)")
+			.Bool("FlipGreen", defaults.FlipGreen).DisplayName("Flip Green (DirectX normal map)")
+				.Tooltip("Invert the green channel: normal maps made for DirectX (+Y down, names with \"dx\" such as \"rocks_nor_dx_2k\") "
+					"store it the other way round from the OpenGL convention Strata reads");
 		return properties;
 	}
 
@@ -520,6 +583,12 @@ namespace Strata
 			decoded.reset();
 			if (settings.FlipVertically)
 				FlipRows(level0.Pixels, static_cast<size_t>(targetSize.x) * channels, targetSize.y);
+			// A DirectX normal map's +Y points down: inverted before the mips are filtered from it.
+			if (settings.Usage == TextureUsage::NormalMap && settings.FlipGreen && channels >= 2)
+			{
+				for (size_t pixel = 1; pixel < level0.Pixels.size(); pixel += channels)
+					level0.Pixels[pixel] = static_cast<uint8_t>(255 - level0.Pixels[pixel]);
+			}
 
 			const bool hasAlpha = channels == 4 && HasTranslucentTexels(level0);
 			specification.Format = ChooseFormat(settings, channels, hasAlpha);

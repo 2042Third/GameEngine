@@ -47,8 +47,10 @@ StrataCLI launch --headless --project <dir>   # existing project; no window, but
 ```sh
 StrataCLI list                              # every command with its one-line description
 StrataCLI list --json                       # ... with the JSON Schema of each command's parameters
-StrataCLI call editor.status                # start here: project, scene, play state, selection, undo, automation,
-                                            # window, UI scale and frame rate (an idle windowed editor draws 30 per second)
+StrataCLI call editor.status                # start here: project, scene, play state, selection, undo, errors to look
+                                            # at (unread log errors, script build, script fault, failed imports), assets
+StrataCLI call editor.status '{"sections": ["editor", "automation"]}'   # more: window, UI scale, frame rate,
+                                            # clients; "all" for everything
 StrataCLI call entity.create '{"name": "Player"}'
 StrataCLI call entity.create @params.json   # params from a file (no shell quoting problems)
 echo '{"frames": 60}' | StrataCLI call editor.wait -     # params from stdin
@@ -76,10 +78,19 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 `claude mcp add strata -- <bin>/StrataCLI mcp`; `<bin>` is the folder that holds StrataCLI, see above). Tools:
 
 - `strata_status`, `strata_launch_editor` (`project`, `headless`, `noGpu`; without `project` it starts an empty
-  editor, or reconnects to the empty one it started before), `strata_list_methods`, `strata_call` (`method`,
-  `params`) are always there.
-- While an editor is connected, each command is a tool with the command's schema as `inputSchema`. The tool list
-  changes (`notifications/tools/list_changed`) when an editor connects or goes away.
+  editor, or reconnects to the empty one it started before), `strata_describe`, `strata_toolsets` and `strata_call`
+  (`method`, `params`: any command, listed or not) are always there.
+- While an editor is connected, the commands of the enabled **toolsets** are tools, with the first sentence of their
+  description and their schema as `inputSchema`. `core` is enabled by default: `editor.status`, `editor.batch`, `log.read`, projects,
+  `scene.open`/`save`/`info`/`hierarchy`, `entity.create`/`get`/`find`/`delete`, `component.add`/`set`,
+  `prefab.instantiate`, `asset.list`/`info`/`import`, `material.create`, `script.build`/`status`, `play.start`/`stop`/
+  `step`, `input.sequence` and `viewport.capture`. The others are in `scene`, `assets`, `play`, `scripts`, `animation`,
+  `viewport`, `streaming`, `perf`, `editor`, `ui` and `world`.
+- `strata_describe` lists the toolsets (`{}`), a toolset's commands (`{"toolset": "scene"}`) or one command's full
+  description and schema (`{"command": "entity.rename"}`); read it before a command whose short description leaves you
+  unsure. `strata_toolsets {"enable": ["scene"]}` lists a toolset's commands as tools too (`"all"` for every command;
+  `disable` takes them away again); `StrataCLI mcp --toolsets core,scene` (or `all`) chooses them at start. The tool list
+  changes (`notifications/tools/list_changed`) when toolsets change and when an editor connects or goes away.
 - Results come as text plus `structuredContent`; `{"Image": {"MimeType", "Data"}}` results come as image content.
 - Once connected, the server stays with that editor (also when it opens another project, or restarts with the same
   project) and never silently switches to another one.
@@ -90,23 +101,26 @@ Register the server with your MCP client, e.g. `{"command": "<bin>/StrataCLI", "
 | --- | --- |
 | What is open, is it playing, unsaved changes? | `editor.status` |
 | Are the project's assets still being scanned? | `editor.status`'s `assets.scanning` (`{phase, done, total}`, null once done): until the scan and the start scene after it are done, edits and asset queries wait (they answer once the project is ready); `editor.status`, `editor.wait`, `log.read` answer at once |
-| Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress` and whether it is the project's `startScene`, `lastOpen` with how it ended, `play` for a switch a running game asked for, `subScenes` of the running game; `{"wait": true}` answers once nothing is opening); also `editor.status`'s `sceneLoad` |
-| What did the person, other agents or I just do? | `editor.activity {since, limit, source, command}` (every command run: source UI / Automation with the client's name / CommandScript / Internal, parameters, result or error, undo step, entities touched); page with `since` = the returned `latest` |
+| Is a scene still opening, how far is it? | `scene.loadStatus` (`open` with `progress` and whether it is the project's `startScene`, `lastOpen` with how it ended, `play` for a switch a running game asked for, `subScenes` of the running game; `{"wait": true}` answers once nothing is opening); also `editor.status {"sections": ["sceneLoad"]}` |
+| What did the person, other agents or I just do? | `editor.activity {since, limit, source, command}` (every command run: source UI / Automation with the client's name / CommandScript / Internal, a one-line summary such as "Rename 'Crate' to 'Box'", parameters, result or error, undo step, entities touched); page with `since` = the returned `latest`, or the latest first with `{"newest": true}` and `before` = the returned `oldest` |
 | Are there unsaved changes a crashed (or discarding) editor left? | `scene.recoveryStatus` (entries with `id`, `sceneName`, `applicable`; the edited scene's `journal`), then `scene.recover {scene: <id or scene>, action: "apply" \| "discard"}` |
 | Which projects did the user (or an agent) open lately? | `editor.recentProjects` (name, project file path for `project.open`, `lastOpened`; editors run with `--commands` or `--frames` list what they opened without saving it); `editor.removeRecentProject {path}` takes one off |
 | What can a new project or scene start from? | `project.templates` (`empty`, `basic3d`) |
 | Is there a finished game to learn from? | `project.samples` (e.g. `Tetris`); `project.openSample {sample, directory}` opens a copy in a new directory (the sample stays as shipped; `play.start` builds its scripts first) |
-| Does the person at the editor see the launcher or the editor? | `editor.status` (`editor.launcher`; also `editor.gpu` and `editor.startupSeconds`) |
-| Did the game ask for fullscreen or a resolution, lock the cursor, where do its saves go? | `editor.status` (`game`: `windowRequests`, recorded but not applied in play mode; `cursor`; `saveDirectory`, the project's `.strata/Saves`) |
+| Did something fail that I have not seen? | `editor.status` `errors`: `unread` (errors logged since your last `log.read`), `scriptBuild {failed, errors}`, `scriptFault`, `importFailures`; then `log.read`, `script.status` or `asset.info` |
+| Does the person at the editor see the launcher or the editor? | `editor.status` (`editor.launcher`; `{"sections": ["editor"]}` adds `gpu` and `startupSeconds`) |
+| Did the game ask for fullscreen or a resolution, lock the cursor, where do its saves go? | `editor.status {"sections": ["game"]}` (`windowRequests`, recorded but not applied in play mode; `cursor`; `saveDirectory`, the project's `.strata/Saves`) |
 | Which commands and parameters exist? | `editor.commands` (or `list --json`) |
 | Which components and properties (types, ranges, enum values)? | `component.list` |
-| Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` |
+| Which assets exist? | `asset.list` (`type`, `path` filters), `asset.info` (meshes, models, prefabs: `bounds`, their size as placed) |
 | What uses an asset (before deleting it)? | `asset.findReferences` (`asset.delete` refuses while anything does) |
 | What does a material hold, which properties exist? | `material.get` (values, and each property's type, range, options) |
 | What state do the scripts hold (a score, a timer)? | `script.get` (live field values while playing) |
-| What is in the scene? | `scene.hierarchy`, `entity.find` (`name`, `tag`, `component`), `entity.get` |
+| What is in the scene? | `scene.hierarchy`, `entity.find` (`name`, `tag`, `component`, `box: {min, max}`, `limit`), `entity.get` |
+| Where is it, how big? | `entity.get {"entity", "world": true}`: `world` (position, rotation as `euler` degrees and `quaternion`, scale) and `bounds` (`min`, `max`, `size`, `center`; `pending` while a mesh loads) |
 | What does the person have selected, what does the inspector show? | `selection.get` (`entities`, the last is the primary one; `inspectedAsset` while the inspector shows an asset); `selection.set {entities?, asset?}` changes them |
-| What happened (errors, script output)? | `log.read` (`after` = the previous `latest` to page; `minLevel`) |
+| What does the game play (sound)? | `audio.state` (play mode): `voices` (entity or null for one-shots, clip, playing, looping, position...), `oneShots` (`playing`, `played`, `dropped`), `listener`, `masterVolume` |
+| What happened (errors, script output)? | `log.read` (`{"newest": true, "limit": 20}` for the latest first, paging with `before` = the returned `oldest`; oldest first with `after` = the previous `latest`; `minLevel`; `logger`: `Strata` engine, `App` editor, `Script` scripts) |
 | How much memory do assets use, what is loaded or streaming? | `asset.stats` (`assets: true` lists them; `sort`, `limit`; `importMemoryMB`: the imports' memory estimates against their budget); `asset.setBudget` changes the open project's budgets (MB of memory, staging and uploads per frame; ms of finalization and of upload steps per frame; `importMB`, the memory imports may take together: imports beyond it wait their turn) |
 | Where does the frame time go (scripts, physics, uploads, rendering, UI)? | `editor.perf {frames?}` (per stage `avgMs`/`p50Ms`/`p95Ms`/`maxMs`, the frame, FPS, job threads' busy %) |
 
@@ -117,14 +131,19 @@ editor started with `--no-gpu` (use `--headless`):
 - `viewport.capture {width?, height?, camera?: "editor" | "scene", position?, target?, fov?, overlays?, debugView?,
   waitForAssets?, path?}` returns `{"Image": {"MimeType": "image/png", "Data"}, width, height, camera, view, waitedFrames,
   overlays, pendingAssets, texturesBelowWanted, stalePoses, pendingTextGlyphs, previewLighting, screenSpaceTexts,
-  hiddenScreenSpaceTexts, debugView, notice?, path?}`. Text is complete in the picture, and so are the view's meshes,
+  hiddenScreenSpaceTexts, ui: {canvases, hiddenCanvases, elements, drawCalls, pendingGlyphs}, debugView, notice?, path?}`. Text is complete in the picture, and so are the view's meshes,
   materials and textures: the capture renders again for up to about five seconds of frames while they load, up to about
   two more while textures still lack the finer mip levels the view wants, and a few while animated characters that
   animate only while seen (`CullingMode: WhenVisible`) still show an older pose, also while paused (`waitForAssets: false`
   takes it at once; `pendingAssets` says what was still loading, `texturesBelowWanted` what was still blurrier than
   wanted, e.g. under a texture budget, `stalePoses` the animators drawn in an older pose). `position` +
   `target` (and `fov`) look from your own camera: the
-  person's view (`camera.get`) does not move, and the result's `camera` is `"custom"`.
+  person's view (`camera.get`) does not move, and the result's `camera` is `"custom"`. `camera: "scene"` without a size
+  takes the Game view's resolution when it has one (`viewport.setSettings {"gameView": {"mode": "1280x720"}}`, or
+  `"16:9"`, `"4:3"`, `"custom"` with `width` and `height`; `"free"` follows the panel).
+- The editor shows two views as tabs: the Scene view (the editor camera, also on the running game while playing: what
+  you select and move there changes the running copy) and the Game view (the game through its primary camera, as it
+  ships). `editor.showPanel {"panel": "Game"}` shows the person the game; `{"panel": "Scene"}` the Scene view.
 - **Debug views** show what streaming and level-of-detail selection do: `debugView: "streaming"` tints entities whose
   mesh, material or textures are still loading (yellow, Sulfur) or failed (red, Cinnabar) and draws a box where a mesh
   is not loaded yet; `"lod"` tints entities by the level of detail they are drawn at (green 0, blue 1, yellow 2, red 3+);
@@ -132,7 +151,7 @@ editor started with `--no-gpu` (use `--headless`):
   (green: as needed, blue 1 level short, yellow 2, red 3+ or still loading; textures stream their mip levels to what
   the screen shows, so a picture taken right after the camera moved may be blurry where it is red); `"none"` is the
   plain image. Pass it to `viewport.capture` for one picture, or set it for the viewport with
-  `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the game view). The result's
+  `viewport.setSettings {"debugView": ...}` (it then colors the person's viewport too, also the Game view). The result's
   `debugView` counts what it found among the entities in view: `{view, tintedEntities, pendingEntities, failedEntities,
   placeholderBoxes, entitiesPerLOD: [LOD0, LOD1, LOD2, LOD3+], entitiesPerMipShortfall: [as needed, 1, 2, 3+]}`, so
   you need not read colors: e.g. capture with `"streaming"` until `pendingEntities` and `placeholderBoxes` are 0, or with
@@ -145,11 +164,12 @@ editor started with `--no-gpu` (use `--headless`):
   coarser than needed, 0 once the view is complete).
 - **Editor views are not the game's view.** With the editor camera outside play mode, a scene without any light (no
   directional, point, spot or sky light) is lit by *preview lighting* (a sun and a procedural sky that the game will not
-  have: the result says `"previewLighting": true`), and the game's screen-space text (its HUD) is hidden
-  (`hiddenScreenSpaceTexts` counts it). To see what a player sees, capture with `{"camera": "scene"}` (or while playing).
+  have: the result says `"previewLighting": true`), and the game's screen-space UI (its HUD text and UI canvases) is
+  hidden (`hiddenScreenSpaceTexts` and `ui.hiddenCanvases` count it; `gameUI` shows it, and a click then selects a UI
+  element). To see what a player sees, capture with `{"camera": "scene"}` (or while playing).
   `viewport.getSettings` / `viewport.setSettings {previewLighting?, gameUI?, grid?, selectionOutline?, sceneGizmos?,
-  allColliders?, stats?, gizmo?, space?, debugView?, ...}` change these view settings (no undo step; saved with the
-  project's editor state). Collider shapes show for the selection only unless `allColliders` is on; far away lights and
+  allColliders?, stats?, gizmo?, space?, debugView?, editPose?, ...}` change these view settings (no undo step; saved
+  with the project's editor state). Collider shapes show for the selection only unless `allColliders` is on; far away lights and
   cameras show as small icons.
 - **Opening a scene takes frames.** `scene.open` reads the scene and loads everything it uses in the background while the
   editor goes on showing the edited scene; it answers once the opened scene replaced it (`entities`, `seconds`, and the
@@ -219,7 +239,7 @@ editor started with `--no-gpu` (use `--headless`):
   Save As's new path) fail with "is being saved": try again once `saving` is empty. `project.export` may start during a
   save of the scene as it is; it fails if that save fails.
 - **Recovery**: the editor journals the edited scene's unsaved changes in `.strata/Recovery` (written about 2 s after
-  edits stop; `editor.status` `recovery.journal` has `lastWrite` and `pending`), and even forced discards are kept
+  edits stop; `editor.status {"sections": ["recovery"]}` `recovery.journal` has `lastWrite` and `pending`), and even forced discards are kept
   there and listed at once (the newest 8 discards stay on offer, older ones move to `Recovery/Discarded`; what a crash
   left always stays). When a project opens with changes an editor left behind, `scene.recoveryStatus` lists them;
   `scene.recover {"scene": "<id>", "action": "apply"}` reopens the scene (in the background, like `scene.open`; it fails
@@ -231,7 +251,8 @@ editor started with `--no-gpu` (use `--headless`):
   are not built while scenes use them (it answers once the game plays, with `built`; a failed build fails it with the
   errors; `{"build": false}` plays what is loaded; while a scene is being opened it fails at once, so wait for
   `scene.open` first). Changes made while playing apply to that copy, carry a
-  `warning` in the result, and are discarded by `play.stop`. Undo and redo are not available while playing;
+  `warning` in the result, and are discarded by `play.stop`; commands made for the running game (`scene.loadAdditive`,
+  `scene.unloadAdditive`, `script.add`/`remove`/`setField` on live scripts) are discarded too, without the warning. Undo and redo are not available while playing;
   `scene.save` saves the edited scene, never the running copy.
 - **Errors** (JSON-RPC codes): `-32602` invalid parameters (the error's `data.parameters` is the command's schema:
   fix the request and retry), `-32005` the request was valid but cannot be done now (message says why, e.g.
@@ -271,7 +292,8 @@ to two folders above it, such as `../Textures`, keep their layout), so it import
 command** (the message names the file; the error's data has `items` with each `error`) and its copied files are removed
 again, unless `"keepOnFailure": true`; the result lists `items` with their `assets`. `asset.info` reports import errors and warnings, the import
 settings and what each accepts (`importSettingsProperties`: textures `Usage`, `Compression`, `Quality`, `MaxSize`,
-`Filter`, `Wrap`, `GenerateMips`, `FlipVertically`; models `Scale`, `GenerateLODs`, `LODCount`, `MaxTextureSize`,
+`Filter`, `Wrap`, `GenerateMips`, `FlipVertically`, `FlipGreen` (DirectX normal maps); models `Scale` (baked into the model's meshes, skeleton and clips: the
+root keeps scale 1 and placed instances follow a change), `GenerateLODs`, `LODCount`, `MaxTextureSize`,
 `TextureCompression`, `TextureQuality`, `OptimizeMeshes`, `Import*`; audio `LoadMode`; fonts and the engine's own files
 have none). `asset.setImportSettings {"asset", "settings":
 {"MaxSize": 1024}}` changes them and `asset.reimport` imports again; both import in the background (the editor keeps
@@ -305,18 +327,28 @@ now or the delete would be refused now; the error says why.
 change parent go last) in one undo step; `entity.duplicate {"entities": [...]}` puts each copy right after its original;
 `entity.copy {"entities": [...]}` returns `data` that `entity.paste {"data", "parent"?, "index"?}` turns into new
 entities (fresh IDs, references among them remapped, also in another scene);
+Many edits in one call and one undo step: `editor.batch {"steps": [{"command": "entity.create", "parameters": {"name": "Wall"},
+"bind": {"wall": "/id"}}, {"command": "component.add", "parameters": {"entity": {"$ref": "wall"}, "component": "BoxCollider"}}]}`
+(steps as a command script writes them, at most 1,000; it answers `{steps: [{command, result | error}], bindings}`; a
+failed step undoes the ones before it unless `"atomic": false`; commands that take frames, such as `scene.open`,
+`play.step` or `viewport.capture`, are refused: run them on their own).
 `prefab.create {"entities": ["<id>"], "path": "Prefabs/Block.stprefab"}` (the entities become an instance of it; `"link":
 false` leaves them alone), then
 `prefab.instantiate {"prefab": "Prefabs/Block.stprefab", "components": {"Transform": {"Translation": [2, 0, 0]}}}`
-(returns `id`, the instance's root). Instances stay linked: change one instance (any of its entities) and
-`prefab.apply {"entity": "<id>"}` writes it into the prefab, and every instance that still had the prefab's values takes
-the new ones (one undo step for the file and the scene). Instances in other scenes follow when their scene opens next
-(also after the prefab changed on disk; done by the time `scene.open` answers): those still as they were take the new
-values (an undo step per prefab, "Update Instances of ..."; save the scene), modified ones keep theirs and are
-`outdated`; `prefab.apply` refuses an
-outdated instance (it would write its older values over the newer ones) unless `"force": true`: `prefab.revert` it
-and make its change again instead. `prefab.status {"entity"}` says whether an instance differs
-(`modified`, `outdated`, `changed`, `added`, `removed`), `prefab.revert {"entity"}` gives it the prefab's values again (IDs kept),
+(returns `id`, the instance's root; many at once, in one undo step: `{"prefab", "instances": [{"components": {"Transform":
+{"Translation": [0, 0, 0]}}}, {"parent": "<id>"}, ...]}` returns `instances: [{id, entities}]`, fastest when they give only
+a Transform). Instances stay linked: change one instance (any of its entities) and
+`prefab.apply {"entity": "<id>"}` writes it into the prefab (or only one override: `{"entity": "<the entity>", "component":
+"PointLight", "property": "Intensity"}`), and every other instance takes the new values except what it overrides itself
+(one undo step for the file and the scene). An instance's overrides are its own values: `prefab.status {"entity"}` lists
+them (`overrides: [{entity, prefabEntity, component, property, kind}]`, kind `Property`, `AddedComponent`,
+`RemovedComponent` or `RemovedEntity`; script fields as `Script` / `<Class>.<Field>`). Instances in other scenes follow
+when their scene opens next (also after the prefab changed on disk; done by the time `scene.open` answers), again except
+their overrides (an undo step per prefab, "Update Instances of ..."; save the scene). Instances of scenes saved before
+override lists keep their values when modified and are `outdated`; `prefab.apply` refuses an outdated instance (it would
+write its older values over the newer ones) unless `"force": true`: `prefab.revert` it and make its change again instead.
+`prefab.status` also says whether an instance differs (`modified`, `outdated`, `changed`, `added`, `removed`),
+`prefab.revert {"entity"}` gives it the prefab's values again (IDs kept; with `component` and `property`, one override),
 `prefab.unpack {"entity"}` makes its entities plain ones, `prefab.select {"entity", "asset"?}` selects the root or shows
 the prefab. While playing, revert and unpack change the running copy (their answers carry a `warning`) and apply is
 refused; while a scene is being opened, apply, revert, unpack and a linking `prefab.create` are refused like every edit. The root's transform and name always stay the instance's own. Imported models are instantiated the same way
@@ -344,7 +376,10 @@ lets everything collide again first; `scene.info` lists `physicsLayers`), and `R
 file and is one undo step (`edit.undo` restores the file and what entities show); entities using it show the change in
 the same frame. `"save": false` only previews the values in the loaded material (no file, no undo step) until a saving
 `material.set` saves them too; `material.get` says `"saved": false` meanwhile. Built-in materials and those imported
-with a model cannot be changed: make one with `material.create` and assign it.
+with a model cannot be changed: make one with `material.create` and assign it. `material.set`, `material.create` and
+`material.get` return `warnings` for texture maps imported for another use than their slot reads (a Color texture as
+`NormalMap`, color in `MetallicRoughnessMap` or `OcclusionMap`): run each warning's `fix` (`{command, parameters}`, an
+`asset.setImportSettings` of the texture's `Usage`) and the warning is gone.
 
 **Animation**: an imported model with skins or animations comes with a skeleton and clips as sub-assets; instantiated,
 its root entity is the animator (`Animator` component: `Skeleton`, `Controller`, `Clip`, `Speed`, `Loop`, `PlayOnStart`,
@@ -379,12 +414,20 @@ animation.preview {"stop": true}
 
 Modes: `Greater`/`Less` (floats, with `Threshold`), `True`/`False` (bools), `Set` (triggers, consumed when the
 transition fires). `ExitTime` is the source state's normalized time (1: its end; below 1 on a looping state: that point
-of every loop). Previews change nothing in the scene and need no undo; play mode poses the running copy instead. The
-Asset tab edits controllers as tables (one undo step per edit) and shows skeletons and clips.
+of every loop). Previews change nothing in the scene and need no undo; play mode poses the running copy instead.
+Animators without a preview stand in their skeleton's rest pose while the scene is edited; `viewport.setSettings
+{"editPose": "clipStart"}` shows each one's first frame of what it plays on start instead (the camera chip offers both;
+saved with the project's editor state, no undo step). The Asset tab edits controllers as tables (one undo step per edit)
+and shows skeletons and clips.
 
 **Play and inspect**: `play.start` -> `editor.wait {"frames": 120}` (about two seconds) -> `entity.get` /
-`component.get` / `log.read` -> `play.stop`. `play.pause {"paused": true}` and `play.step {"frames": n}` advance
-a paused scene by fixed steps. `play.simulate` runs physics only.
+`component.get` / `log.read` -> `play.stop`. `play.pause {"paused": true}` and `play.step {"steps": n}` advance
+a paused scene by exactly n fixed steps, one per frame (unthrottled), and **answer once the steps ran** (`stepsRun`,
+`fixedSteps`, `time`): read the state right after, no `editor.wait` needed. Resuming (`play.pause {"paused": false}`)
+drops steps not run yet (a waiting `play.step` then fails with `stepsRun`); `"wait": false` answers at once with
+`pendingSteps`. `frames` is an older name of `steps`. `play.simulate` runs physics only. After the game switched scenes
+itself (`Game::LoadScene`), `play.state` (and `scene.info`, `editor.status`) name what runs as `running` (`scene`, `name`,
+`path`, `entityCount`, `subScenes`, `switching`); `scene.info`'s `name` stays the edited scene's.
 
 **Frame cost**: every `editor.wait` result of a running editor has `frameTimes` (`count`, `medianMs`, `meanMs`, `p95Ms`,
 `maxMs`): the CPU time of the frames that ran entirely during the wait, without the waits for the GPU and vsync (measure
@@ -392,8 +435,8 @@ with a window, not `--no-gpu`, to include rendering). A command script can gate 
 `{"command": "editor.wait", "parameters": {"frames": 120}, "expect": {"/frameTimes/medianMs": {"max": 5}}}`.
 `editor.perf {"frames": 120}` then says where the time went, per stage of the main thread (self times in ms:
 `Input`, `Assets.Update`, `Assets.Finalize` (GPU uploads of arriving assets), `Scene.Load` (swapping in a scene that
-finished loading, creating sub-scenes' entities), `Scene.Scripts`, `Scene.Animation` (animators: poses, root motion,
-attachments, events), `Scene.Physics`, `Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Editor.UI`,
+finished loading, creating sub-scenes' entities), `Scene.UI` (the game UI's input), `Scene.Scripts`, `Scene.Animation` (animators: poses, root motion,
+attachments, events), `Scene.Physics`, `Scene.Audio`, `Scene.Transforms`, `Render.Extract`, `Render.Submit`, `Render.UI` (the game UI pass), `Editor.UI`,
 `Editor.Commands` (the work of the commands that ran in the frame, yours included), and `Present` outside the frame
 time), with `stageSum` (at most the frame), `untimed` (the rest of each frame) and `jobs` (`workerBusyPercent`,
 `ioBusyPercent`, `backgroundBusyPercent` (imports, exports), `running`, `queued`): `{"expect": {"/stages/Scene.Scripts/p95Ms": {"max": 2}}}` gates one stage. The
@@ -411,16 +454,19 @@ player would; scripts see them through `Input::IsKeyDown/IsKeyPressed/IsKeyRelea
 
 ```text
 input.key         {"key": "Left"}                         # tap: down for 1 frame, answers after the game saw the release
-input.key         {"key": "Space", "frames": 30}          # held for half a second
+input.key         {"key": "Space", "steps": 30}           # held for 30 fixed steps (half a second at 60 steps per second)
+input.key         {"key": "W", "seconds": 0.5}            # game time, rounded up to whole fixed steps
 input.key         {"key": "Right", "action": "press"}     # held across commands ... until
 input.key         {"key": "Right", "action": "release"}
-input.mouseMove   {"position": [640, 360]}                # pixels from the game view's top-left corner
+input.mouseMove   {"position": [640, 360]}                # pixels from the Game view's top-left corner
 input.mouseButton {"button": "Left"}                      # Left, Right, Middle, Button3..7; same actions as keys
 input.scroll      {"delta": [0, 1]}
 input.gamepadButton {"button": "A"}                       # gamepad 0 unless "gamepad": 0..3; same actions as keys
 input.gamepadAxis {"axis": "LeftY", "value": 1}           # stick up, held until replaced, "value": null or play.stop
-input.gamepadAxis {"axis": "RightTrigger", "value": 1, "frames": 30} # half a second, then back to rest
+input.gamepadAxis {"axis": "RightTrigger", "value": 1, "steps": 30} # 30 fixed steps, then back to rest
 input.state       {}                                      # what simulated input holds; input.releaseAll lets go of it
+input.click       {"entity": "<button id>"}               # a UI element where the player sees it: clicked, events
+input.type        {"text": "Player 1"}                    # typed text (Input::GetTypedText), UTF-8, at most 1,024 bytes
 ```
 
 Keys are named like the SDK's `Key::` constants (`Left`, `Up`, `Space`, `Enter`, `Escape`, `A`, `D1`, `F5`, `LeftShift`;
@@ -430,15 +476,73 @@ commands used is connected for the game until play stops. Each command answers o
 and read the effect (`component.get`, `log.read`, `viewport.capture`). Notes:
 
 - Input only reaches play mode (not edit or simulate); `play.stop` drops held keys.
-- Frames are game frames. While the game is paused (`play.pause`), input waits for the next frame `play.step` runs (or for
-  `play.pause {"paused": false}`) and arrives with its press: `input.key {"key": "Space"}` then `play.step {"frames": 1}` makes the
-  game see Space pressed in that step, and released in the following one. Commands answer at once while paused
-  (`"seen": false`), because waiting would block you from stepping; pass `"wait": true` to wait anyway.
+- Durations are the game's fixed steps (its physics and `OnFixedUpdate` time base), not frames: a tap of 30 `steps` lasts
+  30 steps whatever the frame rate (`frames` is an older name of `steps`). It is exact while the game is stepped
+  (`play.step`, `input.sequence`); in a running game a frame may run several steps, so a release can land up to
+  `maxFixedStepsPerFrame - 1` steps late. While the game is paused (`play.pause`), input waits for the next step `play.step`
+  runs (or for `play.pause {"paused": false}`) and arrives with its press: `input.key {"key": "Space"}` then
+  `play.step {"steps": 1}` makes the game see Space pressed in that step, and released in the following one. Commands
+  answer at once while paused (`"seen": false`), because waiting would block you from stepping; pass `"wait": true` to wait
+  anyway.
+- **`input.sequence`** plays a whole script of input in game time, exactly, and samples what happened:
+  `{"events": [{"step": 0, "key": "W", "action": "tap", "steps": 60}, {"step": 20, "key": "Space"}], "steps": 90,
+  "observe": [{"entity": "<hero>", "world": true, "every": 10}, {"entity": "<hero>", "script": "Player", "field": "Score"}]}`.
+  It pauses the game, runs one step per frame with each step's events (also `mouseButton`, `gamepadButton`, `gamepadAxis`,
+  `mouseMove`, `scroll`, and `command` for any `input.*` command, such as `{"step": 30, "command": "input.click",
+  "parameters": {"entity": "<button>"}}` to press a menu button in step 30), and answers `{stepsRun, seen, samples: [{step, values}]}`
+  once done (the same answer at any frame rate), resuming the game if it ran and releasing its holds (`keepHeld` keeps
+  them). A failing event (a `command` whose command refuses its parameters) ends it with the error, also releasing its
+  holds and resuming the game. Prefer it to loops of `input.key` + `play.step`.
 - Each command ends only its own hold: overlapping taps of a key keep it down until the last ends; `"action": "release"` ends
   every hold of the key and `input.releaseAll` every hold of every button. Holds outlive your connection; the editor's status bar
   lists them in a pill that releases them when a person clicks it.
-- A tap of 1 frame is one key press for games that act on `IsKeyPressed` or `KeyRepeat`; use `frames` (or press/release) to
+- A tap of 1 step is one key press for games that act on `IsKeyPressed` or `KeyRepeat`; use `steps` (or press/release) to
   hold a key for repeats.
+- Menus: `input.click {"entity": ...}` moves the pointer to the center of a UI element's rect at the Game view's size and taps
+  the button there (for `steps`, default 1, like `input.mouseButton`). It fails, changing nothing, when the element is hidden, on a canvas that does not receive input, or
+  covered (the error names what a click would hit, `errorData.cover`); the answer says whether the button clicked or the
+  toggle or slider changed (`clicked`) and lists the UI events (`click`, `valueChanged`, `focusChanged`). The UI's own
+  keyboard and gamepad navigation answers `input.key` (arrows, `Enter`, `Escape`) and `input.gamepadButton` (`DPadUp`, `A`,
+  `B`) like a player's.
+
+**Build the game UI** (menus, HUDs, health bars): UI elements are entities with a `UIRect` under an entity with a
+`UICanvas`; `ui.create` makes them ready to use in one undo step and lays them out at once:
+
+```text
+ui.create {"type": "canvas"}                                            # ScaleWithScreen, reference 1920x1080
+ui.create {"type": "panel", "parent": "<canvas>", "anchor": "topLeft", "position": [24, 24], "size": [360, 120]}
+ui.create {"type": "verticalLayout", "parent": "<panel>", "anchor": "stretch"}   # stacks its children
+ui.create {"type": "text", "parent": "<layout>", "text": "Score: 0"}            # -> entity, canvas, created, parts, rect
+ui.create {"type": "button", "parent": "<menu>", "text": "Play"}                # parts.label: its text
+ui.create {"type": "toggle", "parent": "<menu>", "text": "Sound"}               # parts: background, checkmark, label
+ui.create {"type": "slider", "parent": "<menu>"}                                # parts: background, fill, handle
+ui.create {"type": "inputField", "parent": "<menu>", "text": "Your name"}       # parts: label, placeholder
+ui.layout {"screen": [1280, 720]}                                        # rects in pixels at a screen, without rendering
+ui.hitTest {"position": [960, 540]}                                      # what a click there would hit ("all": everything)
+```
+
+- Types: `canvas`, `panel`, `image`, `text`, `button`, `toggle`, `slider`, `inputField`, `horizontalLayout`,
+  `verticalLayout`, `gridLayout`. Type into an input field while playing: `input.click` it (it takes the focus and the
+  keyboard), `input.type` the text, `input.key {"key": "Enter"}` submits (`OnUISubmit`); `ui.layout` reports its `text`
+  and whether it is `editing`. An element whose parent is outside every canvas gets a new top-level canvas first.
+- `anchor` is one of `topLeft`, `topCenter`, `topRight`, `topStretch`, `middleLeft`, `middleCenter`, `middleRight`,
+  `middleStretch`, `bottomLeft`, ..., `stretchLeft`, `stretchCenter`, `stretchRight`, `stretch`; it sets the pivot too.
+  `position` is the pivot's offset in canvas units (+y down); along a stretched axis `size` is added to the parent's span
+  (`[-40, 60]` on `bottomStretch`: a 60-high bar with 20 units of margin each side).
+- Tune with `component.set` on `UIRect`, `UIImage` (`Color`, `CornerRadius`, `BorderWidth`, `Texture`), `UIText`
+  (`Text`, `FontSize`, `Alignment`), `UICanvas` (`ScaleMode`, `ReferenceResolution`, `MatchWidthOrHeight`, `SortOrder`,
+  `ReceivesInput`: false for HUDs that never block clicks), `UIButton`/`UIToggle`/`UISlider` (`EventTarget`: the entity
+  whose scripts get `OnUIClick`/`OnUIValueChanged`), `UISelectable` (colors, `Navigation`). `component.add` of `UIMask`
+  (`Padding`, `Softness`) keeps an element's children inside its rect: `ui.layout` then reports `visibleRect` for them,
+  and `input.click` aims at what the mask leaves.
+- Check proportions without rendering: `ui.layout` at two screens of the same aspect gives the same fractions under
+  `ScaleWithScreen`. `ui.layout {"entity": ...}` lists one subtree (state, focused, text and value too).
+- UI in the scene (a sign, a name tag): `component.set` on the canvas's `UICanvas` with `"RenderMode": "WorldSpace"` and
+  `WorldUnitsPerUnit` (0.01: 100 canvas units are a meter); move it with its transform (it faces +Z). `ui.layout` marks
+  it `worldSpace`, its elements' `rect` are canvas units and `screenRect` is where the primary camera shows them (null
+  without one); `ui.hitTest` and `input.click` reach it through that camera.
+- For the person: `viewport.setSettings {"canvasMode": true}` shows the selection's canvas in 2D at its reference aspect
+  with handles (the "2D" chip); `{"gameUI": true}` draws the UI over the editor view, where a click selects an element.
 
 **Look at it** (needs rendering, not `--no-gpu`): `camera.focus` or `camera.set`, then
 `StrataCLI call viewport.capture '{"camera": "scene"}' --save-image shot.png` and open `shot.png`; with MCP the
@@ -494,7 +598,7 @@ the scene has unsaved changes; `{"force": true}` discards them. The editor answe
 | The editor went away on its own | It was started with `--idle-timeout` (MCP: 10 minutes) and no client stayed connected; start it again. |
 | `viewport.*` / `camera.*` fail or are missing | The editor runs with `--no-gpu` (restart it with `--headless`), or this build has no viewport commands (check `editor.commands`). |
 | The capture is lit, but the game is dark | The capture says `"previewLighting": true`: the scene has no light of its own. Add a directional light and a sky light (or start from the `basic3d` template); check with `{"camera": "scene"}`. |
-| The HUD is missing from a capture | Editor views hide screen-space text (`hiddenScreenSpaceTexts`); capture with `{"camera": "scene"}`, while playing, or turn on `viewport.setSettings {"gameUI": true}`. |
+| The HUD is missing from a capture | Editor views hide screen-space text and UI canvases (`hiddenScreenSpaceTexts`, `ui.hiddenCanvases`); capture with `{"camera": "scene"}`, while playing, or turn on `viewport.setSettings {"gameUI": true}`. |
 | Script or import errors | `log.read {"minLevel": "Warn"}`, `asset.info`. |
 
 Session files of editors that exited are removed by the clients automatically; never edit or copy them (they

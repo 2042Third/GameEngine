@@ -36,6 +36,15 @@ namespace Strata
 
 	void UndoStack::Push(Scope<EditorAction> action)
 	{
+		if (m_Group)
+		{
+			// Applied already: the observer hears it now, the history gets it with the group.
+			m_Version++;
+			const EditorAction& added = *action;
+			m_Group->Add(std::move(action));
+			NotifyApplied(added, false);
+			return;
+		}
 		m_RecordCount++;
 		m_Version++;
 		// Recording after undoing discards the undone actions; a save point among them becomes unreachable.
@@ -85,8 +94,62 @@ namespace Strata
 		}
 	}
 
+	bool UndoStack::BeginGroup(std::string name)
+	{
+		if (m_Group)
+			return false;
+		m_Group = CreateScope<EditorActionGroup>(name);
+		m_GroupName = std::move(name);
+		return true;
+	}
+
+	bool UndoStack::EndGroup()
+	{
+		if (!m_Group)
+			return false;
+		Scope<EditorActionGroup> group = std::move(m_Group);
+		m_Group.reset();
+		if (group->IsEmpty())
+			return false;
+		// A step of its own, after whatever came before it; the observer heard its actions as they were applied.
+		m_MergeBroken = true;
+		UndoStackObserver* observer = m_Observer;
+		m_Observer = nullptr;
+		Push(std::move(group));
+		m_Observer = observer;
+		m_MergeBroken = true;
+		return true;
+	}
+
+	bool UndoStack::CancelGroup(std::string* outError)
+	{
+		if (!m_Group)
+			return true;
+		if (m_Group->IsEmpty())
+		{
+			m_Group.reset();
+			return true;
+		}
+		if (!m_Group->Undo(outError))
+		{
+			// Still applied: kept as the group's step, so that undo can try again once what blocks it is gone.
+			EndGroup();
+			return false;
+		}
+		m_Version++;
+		NotifyApplied(*m_Group, true);
+		m_Group.reset();
+		return true;
+	}
+
 	bool UndoStack::Undo(std::string* outError)
 	{
+		if (m_Group)
+		{
+			if (outError)
+				*outError = "Undo is not available while a batch runs (editor.batch makes its steps one undo step)";
+			return false;
+		}
 		if (!CanUndo())
 		{
 			if (outError)
@@ -113,6 +176,12 @@ namespace Strata
 
 	bool UndoStack::Redo(std::string* outError)
 	{
+		if (m_Group)
+		{
+			if (outError)
+				*outError = "Redo is not available while a batch runs (editor.batch makes its steps one undo step)";
+			return false;
+		}
 		if (!CanRedo())
 		{
 			if (outError)
@@ -142,7 +211,7 @@ namespace Strata
 
 	bool UndoStack::GoTo(size_t position)
 	{
-		if (position > m_Entries.size())
+		if (position > m_Entries.size() || m_Group)
 			return false;
 		while (m_Position > position)
 		{
@@ -232,6 +301,9 @@ namespace Strata
 
 	void UndoStack::Clear()
 	{
+		// What an open group collected belongs to the history that goes.
+		if (m_Group)
+			m_Group = CreateScope<EditorActionGroup>(m_GroupName);
 		m_Entries.clear();
 		m_Position = 0;
 		m_SavedPosition = 0;

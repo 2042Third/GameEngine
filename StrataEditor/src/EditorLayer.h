@@ -79,7 +79,8 @@ namespace Strata
 	// Built-in panel ids (EditorPanelRegistry).
 	namespace EditorPanels
 	{
-		constexpr const char* c_Viewport = "Viewport";
+		constexpr const char* c_Viewport = "Viewport"; // The Scene view (ViewportPanel; "Scene" is an alias in editor.showPanel)
+		constexpr const char* c_Game = "Game";         // The Game view (GameViewPanel), a tab beside the Scene view
 		constexpr const char* c_Hierarchy = "Hierarchy";
 		constexpr const char* c_Inspector = "Inspector";
 		constexpr const char* c_AssetInspector = "AssetInspector";
@@ -114,9 +115,9 @@ namespace Strata
 		static constexpr double c_InputActivitySeconds = 0.5;
 		static constexpr double c_AutomationActivitySeconds = 1.0;
 		// Version of the default layout: a saved layout of another version is replaced by the default one. Bump it when the
-		// default layout gains a docked panel that is open by default (4: the Problems panel, and Activity beside it), which
-		// an older layout would show floating over the viewport.
-		static constexpr int c_LayoutVersion = 4;
+		// default layout gains a docked panel that is open by default (4: the Problems panel, and Activity beside it; 5: the
+		// Game view beside the Scene view, a wider Hierarchy), which an older layout would show floating over the viewport.
+		static constexpr int c_LayoutVersion = 5;
 
 		EditorLayer(const EditorOptions& options, Scope<EditorHost> host);
 		~EditorLayer() override = default;
@@ -153,6 +154,10 @@ namespace Strata
 		NewScriptDialog& GetNewScriptDialog() { return m_NewScriptDialog; }
 		ExternalEditorDialog& GetExternalEditorDialog() { return m_ExternalEditorDialog; }
 		const RecoveryDialog& GetRecoveryDialog() const { return m_RecoveryDialog; }
+		// File > Open Scene... (Ctrl+O) once its file dialog chose `file`: a scene file of the project's asset directory opens
+		// (scene.open through the runner) after the question about the edited scene's unsaved changes. False, with the reason
+		// logged, without a project, while playing, or for a file outside the asset directory.
+		bool OpenSceneFile(const std::filesystem::path& file);
 
 		// EditorShell
 		void RequestDiscardChanges(std::function<void()> action) override;
@@ -215,6 +220,9 @@ namespace Strata
 		void TrackInput();
 		// Chooses the frame rate for the next frames (idle throttling) and records frame times.
 		void UpdateFrameRate();
+		// While play.step's steps are pending, frames run unthrottled (each runs one step), headless editors included; the
+		// cap in effect before comes back once they ran.
+		void UpdateSteppingFrameRate();
 		bool IsBusy(double now) const;
 		// Fills m_FrameStats for this frame's status bar and panels.
 		void UpdateFrameStats();
@@ -229,6 +237,8 @@ namespace Strata
 		bool SaveSceneAs(std::function<void(bool saved)> then = {});
 		// The status bar's pill of saves in flight ("Saving 'World1M' 45%"); clicking it opens the Activity panel.
 		void DrawSavingPill();
+		// File > Open Scene...: the file dialog in the project's asset directory, then OpenSceneFile.
+		bool ShowOpenSceneDialog();
 		// Opens a project file (project.open) once unsaved changes are dealt with; failures go to ReportError.
 		void OpenProjectFile(const std::filesystem::path& projectFile);
 		// Runs project.open through the command runner at once (the start scene loads over the next frames).
@@ -239,6 +249,8 @@ namespace Strata
 		void BuildScripts();
 		// Play (the toolbar, Ctrl+P): play.start through the command runner, which builds the scripts first when they need it.
 		void StartPlay();
+		// play.stop from the UI (the toolbar, Ctrl+P): brings the Scene view back when Play brought the Game view forward.
+		void StopPlay();
 		// File > Export Game... and the toolbar's Export button: the Export dialog, showing a running export.
 		void ShowExportDialog();
 		// Scripts > External Editor... and editor.showDialog: the program that opens script files, and the editors found.
@@ -284,6 +296,8 @@ namespace Strata
 		int m_UnsavedChangesModalFrame = -1; // ImGui's frame the question was drawn in last
 		bool m_ShowImGuiDemo = false;
 		bool m_ResetLayout = false;
+		// Play (the toolbar, Ctrl+P) brought the Game view forward: Stop brings the Scene view back.
+		bool m_PlayShowedGame = false;
 		bool m_LayoutChecked = false;
 		bool m_UIDrawn = false; // OnImGuiRender ran at least once
 		// The inspection target the inspector tabs show (EditorContext::GetInspectionVersion): a new one brings its tab forward.
@@ -312,6 +326,7 @@ namespace Strata
 		double m_LastInputTime = 0.0;
 		double m_LastAutomationTime = 0.0;
 		uint64_t m_LastAutomationRequests = 0;
+		std::optional<uint32_t> m_CapBeforeSteps; // The frame rate cap that pending steps lifted (UpdateSteppingFrameRate)
 		bool m_Idle = false;
 		std::deque<double> m_FrameTimes; // Within the last c_FrameRateWindowSeconds
 

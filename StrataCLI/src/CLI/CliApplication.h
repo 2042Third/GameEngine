@@ -43,6 +43,8 @@ namespace Strata::CLI
 		// launch/mcp: how long the project's opening may go without progress before the launch fails (--stall-timeout)
 		std::optional<int64_t> StallTimeoutSeconds;
 		bool NoWaitScan = false; // launch: return once the session answers, without waiting for the project (--no-wait-scan)
+		// mcp: the toolsets whose commands are listed as tools ("core" by default; "all")
+		std::optional<std::vector<std::string>> Toolsets;
 		bool Headless = false;
 		bool NoGpu = false;
 		bool Json = false;

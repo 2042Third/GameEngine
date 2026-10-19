@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Editor/DocumentSaver.h"
+#include "Editor/AssetBounds.h"
 #include "Editor/EditorNotifications.h"
 #include "Editor/EditorGameWindow.h"
 #include "Editor/EditorViewport.h"
@@ -26,9 +27,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -47,6 +50,7 @@ namespace Strata
 	class ExternalEditorLauncher;
 	class GameExport;
 	struct GameExportOptions;
+	class InputSequence;
 	class ProjectThumbnail;
 	class SceneRecovery;
 	struct RecoveryData;
@@ -245,10 +249,13 @@ namespace Strata
 		bool IsSceneModified() const { return m_UndoStack.IsModified(); }
 
 		const Ref<Scene>& GetEditScene() const { return m_EditScene; }
-		// The animation preview of the edited scene (animation.preview): poses its animators show while it does not play,
-		// without changing the scene. Made on first use; another edited scene starts without one. Update advances it.
+		// The animation preview of the edited scene: its animators show their skeleton's rest pose, or what animation.preview
+		// asked of them, while it does not play, without changing the scene. Made with every edited scene (another edited
+		// scene starts without requests); Update advances it.
 		AnimationPreview& GetAnimationPreview();
 		AnimationPreview* FindAnimationPreview() const { return m_AnimationPreview.get(); }
+		// What assets draw around their origin (asset.info's bounds), cached per content stamp.
+		AssetBounds& GetAssetBounds() { return m_AssetBounds; }
 		// The scene edits apply to: the running copy while playing, otherwise the edited scene.
 		const Ref<Scene>& GetActiveScene() const { return m_RuntimeScene ? m_RuntimeScene : m_EditScene; }
 
@@ -273,10 +280,39 @@ namespace Strata
 		bool IsPaused() const;
 		// The scene a running game asked for (Scene::RequestSceneLoad) while it loads (SwitchRuntimeScene), and its progress.
 		bool IsRuntimeSceneLoading() const { return m_RuntimeSceneLoad != nullptr; }
+		// The scene asset the game switched to (Scene::RequestSceneLoad); null while the copy of the edited scene runs.
+		AssetHandle GetRuntimeSceneAsset() const { return m_RuntimeSceneAsset; }
 		AssetHandle GetRuntimeSceneLoadTarget() const { return m_RuntimeSceneLoad ? m_RuntimeSceneLoad->Scene : UUID::Null(); }
 		float GetRuntimeSceneLoadProgress() const { return m_RuntimeSceneLoad ? m_RuntimeSceneLoad->Request.GetProgress() : 1.0f; }
-		// While paused, advances the simulation by `frames` fixed steps over the next updates.
+		// While paused, advances the simulation by `frames` fixed steps over the next updates, one per frame. Resuming
+		// (SetPaused(false)) and stopping drop the steps that have not run; a scene switch the game asks for carries them over.
 		void Step(uint32_t frames = 1);
+		// Steps asked for with Step that have not run yet (0 unless paused).
+		uint32_t GetPendingSteps() const;
+		bool HasPendingSteps() const { return GetPendingSteps() > 0; }
+		// Fixed steps the game ran since play mode started, across the scene switches it asked for (the running scene's
+		// Scene::GetFixedStepCount, plus those of the scenes it replaced): what play.step and simulated input count in.
+		uint64_t GetFixedStepCount() const;
+		// Changes with every start of play or simulate mode: a command that waits across frames tells a new session from its own.
+		uint64_t GetPlaySession() const { return m_PlaySession; }
+		// GetFixedStepCount when the game was last resumed (SetPaused(false) of a paused game), which dropped the pending
+		// steps: how many of them had run.
+		uint64_t GetFixedStepCountAtResume() const { return m_FixedStepsAtResume; }
+		// How often a paused game was resumed: a command that waits for steps tells from it that a resume dropped them, also
+		// when the game was paused again in the same frame (several resumes in one frame see the same step count).
+		uint64_t GetResumeCount() const { return m_ResumeCount; }
+		// The input sequence (input.sequence) that steps the game, driven after the game's update every frame; play.step and
+		// other sequences are refused while it runs. Returns its id, or 0 with the reason when it cannot start. The last one
+		// stays readable (FindInputSequence) until the next starts.
+		uint64_t StartInputSequence(Scope<InputSequence> sequence, std::string* outError = nullptr);
+		const InputSequence* FindInputSequence(uint64_t id) const { return id == m_InputSequenceId ? m_InputSequence.get() : nullptr; }
+		bool IsInputSequenceRunning() const;
+		// GetFixedStepCount when play session `session` stopped (Stop, also for a quit or a crash); nullopt while it runs or
+		// when a later session stopped since.
+		std::optional<uint64_t> GetFixedStepCountAtStop(uint64_t session) const
+		{
+			return m_StoppedSession == session ? std::optional<uint64_t>(m_FixedStepsAtStop) : std::nullopt;
+		}
 		// Whether the viewport's game view feeds keyboard and mouse input to the running game (play mode through the
 		// scene's camera with the viewport focused). Editor shortcuts that edit the scene stay off meanwhile, so keys meant
 		// for the game never change it. Only play mode can have game input; stopping ends it.
@@ -343,7 +379,25 @@ namespace Strata
 		// Records an edit of the active scene. Edits of the running copy during play are not recorded: they are
 		// discarded with it. Returns true when an undo step was recorded. While a scene is being opened (IsSceneLoading) the
 		// edited scene is read-only: the edit is rolled back and nothing is recorded.
-		bool CommitEdit(SceneEditTransaction& transaction);
+		// `overrides` says whether the touched instances' override lists are worked out again (UpdatePrefabOverrides) or the
+		// edit left them current (PrefabOverrides::Propagate does).
+		enum class OverrideUpkeep { Update, Current };
+		bool CommitEdit(SceneEditTransaction& transaction, OverrideUpkeep overrides = OverrideUpkeep::Update);
+		// Before an edit is recorded: the override lists (PrefabInstanceComponent::Overrides) of the prefab instances it
+		// touched, worked out again against their prefabs as the sync knows them (PrefabSync::GetBaselinePart). Each touched
+		// root is tracked, its list changed or not, so the steps of a continuous edit keep their entities and merge. An edit
+		// that makes, destroys, moves or relinks entities of an instance works its whole list out; other edits only the
+		// entries of the entities they changed (PrefabOverrides::UpdateOverrides). CommitEdit calls it; steps recorded
+		// otherwise call it for their transaction.
+		void UpdatePrefabOverrides(SceneEditTransaction& transaction);
+		// How the override lists were kept since the editor started (tests): lists worked out whole, and entities whose entries
+		// alone were worked out again.
+		struct OverrideUpkeepStats
+		{
+			uint64_t WholeLists = 0;
+			uint64_t Entities = 0;
+		};
+		const OverrideUpkeepStats& GetOverrideUpkeepStats() const { return m_OverrideUpkeep; }
 		// Undo and redo of the history (UndoStack::Undo, Redo): false while playing, with nothing to do, or when the step
 		// fails (the reason in outError).
 		bool Undo(std::string* outError = nullptr);
@@ -504,11 +558,27 @@ namespace Strata
 		double GetLastFrameTime() const { return m_LastFrameTime; }
 
 		// Extra sections of editor.status, reported by the parts of the editor that own the information (e.g.
-		// "automation" by EditorAutomation). Providers run on the main thread whenever editor.status runs. A null provider
-		// removes the section; a section named like one of the built-in ones is not reported.
+		// "automation" by EditorAutomation). Providers run on the main thread whenever editor.status reports their section:
+		// the full form when a client asks for the section (editor.status {sections}), the compact form in the default
+		// answer (sections without one are left out of it, so keep it to the few values an agent checks every time). A
+		// null provider removes the section; a section named like one of the built-in ones is not reported.
 		using StatusProvider = std::function<nlohmann::json()>;
-		void SetStatusProvider(const std::string& section, StatusProvider provider);
-		const std::map<std::string, StatusProvider>& GetStatusProviders() const { return m_StatusProviders; }
+		struct StatusSection
+		{
+			StatusProvider Full;
+			StatusProvider Compact; // Null: only reported when asked for
+		};
+		void SetStatusProvider(const std::string& section, StatusProvider provider, StatusProvider compactProvider = nullptr);
+		// Imports of the open project that failed while nobody waited for them (editor.status: errors.importFailures).
+		uint64_t GetImportFailureCount() const { return m_ImportFailureCount; }
+		// The log's latest sequence number a client has read (log.read): editor.status counts errors logged after it as
+		// unread.
+		uint64_t GetLogReadSequence() const { return m_LogReadSequence; }
+		void MarkLogRead(uint64_t sequence) { m_LogReadSequence = std::max(m_LogReadSequence, sequence); }
+		// Whether a log entry (its sequence number) is an error a pill or toast of its own reports already, such as the one a
+		// failed script build logs: the Console's unread errors leave those out.
+		bool IsAnnouncedLogEntry(uint64_t sequence) const;
+		const std::map<std::string, StatusSection>& GetStatusProviders() const { return m_StatusProviders; }
 	private:
 		bool OpenProjectInternal(const std::filesystem::path& path, bool created, std::string* outError);
 		bool StartRuntime(SceneRuntimeMode mode, std::string* outError);
@@ -556,6 +626,8 @@ namespace Strata
 		TemplateAssets GetTemplateAssets(std::string_view templateId);
 		// Frames the scene again once the meshes that were loading when it was first framed have loaded (OpenScene).
 		void UpdatePendingFrame();
+		// The edited scene's animation preview, with rest poses (m_EditScene must be the scene it serves).
+		void CreateAnimationPreview();
 		// Scenes moved (asset.move, renames): the recovery journal follows the edited scene to its new place, and recovery
 		// entries of a scene that moved are read again. Looks only when the asset manager's metadata changed.
 		void FollowSceneMoves();
@@ -614,6 +686,15 @@ namespace Strata
 
 		Ref<Scene> m_EditScene;
 		Scope<AnimationPreview> m_AnimationPreview; // Of m_EditScene: declared after it, so it goes first
+		AssetBounds m_AssetBounds;
+		uint64_t m_PlaySession = 0;
+		uint64_t m_ReplacedFixedSteps = 0; // Fixed steps of the scenes a game switch replaced in this play session
+		uint64_t m_FixedStepsAtResume = 0;
+		uint64_t m_ResumeCount = 0;
+		Scope<InputSequence> m_InputSequence;
+		uint64_t m_InputSequenceId = 0;
+		uint64_t m_FixedStepsAtStop = 0;
+		uint64_t m_StoppedSession = 0;
 		Ref<Scene> m_RuntimeScene;
 		AssetHandle m_RuntimeSceneAsset = UUID::Null(); // The scene asset playing after a switch; null while a copy of the edited scene runs
 		// The scene a play-mode switch loads while the running scene goes on.
@@ -668,6 +749,7 @@ namespace Strata
 		Scope<SceneRecovery> m_Recovery;
 		UndoStack m_UndoStack;
 		PrefabSync m_PrefabSync;
+		OverrideUpkeepStats m_OverrideUpkeep;
 		Scope<ThumbnailCache> m_Thumbnails;
 		Scope<ProjectThumbnail> m_ProjectThumbnail;
 
@@ -676,6 +758,7 @@ namespace Strata
 		Ref<GameExport> m_GameExport;
 		bool m_GameExportNotified = false; // Its outcome was posted (EditorNotifications, NotifyExportFinished)
 		EditorNotifications m_Notifications;
+		uint64_t m_BuildNotification = 0; // The running script build's "Building scripts" toast, which its outcome replaces
 		ScriptBuildLoad m_LastScriptBuildLoad;
 		std::optional<ScriptFault> m_LastScriptFault;
 		uint64_t m_PlayBuildID = 0;
@@ -723,7 +806,10 @@ namespace Strata
 		bool m_QuitRequested = false;
 		uint64_t m_RecordedFrameCount = 0;
 		double m_LastFrameTime = 0.0;
-		std::map<std::string, StatusProvider> m_StatusProviders;
+		std::map<std::string, StatusSection> m_StatusProviders;
+		uint64_t m_ImportFailureCount = 0;
+		uint64_t m_LogReadSequence = 0;
+		std::deque<uint64_t> m_AnnouncedLogEntries; // The latest c_MaxAnnouncedLogEntries (IsAnnouncedLogEntry)
 		// The project's start scene, opened once the background asset scan ended (null when none waits), and whether work
 		// waits for the scan's end.
 		AssetHandle m_StartSceneAfterScan = UUID::Null();

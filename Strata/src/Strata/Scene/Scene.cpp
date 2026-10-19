@@ -1831,9 +1831,12 @@ namespace Strata
 		m_RuntimeMode = mode;
 		m_IsPaused = false;
 		m_StepFrames = 0;
+		m_FixedSteps = 0;
 		m_FixedTimeAccumulator = 0.0f;
 		m_DroppedFixedSteps = 0;
 		m_Time = 0.0;
+		m_UnscaledTime = 0.0;
+		m_UnscaledDeltaTime = 0.0f;
 		m_FrameIndex = 0;
 		m_QuitRequest.reset();
 		m_SceneLoadRequest.reset();
@@ -1874,6 +1877,7 @@ namespace Strata
 	{
 		if (!m_IsRunning)
 			return;
+		m_StepFrames = 0;
 
 		m_IsUpdating = true;
 		for (auto it = m_Systems.rbegin(); it != m_Systems.rend(); ++it)
@@ -1961,6 +1965,10 @@ namespace Strata
 
 		const float fixedTimestep = m_Settings.FixedTimestep > 0.0f ? m_Settings.FixedTimestep : 1.0f / 60.0f;
 		const float deltaTime = stepping ? fixedTimestep : static_cast<float>(timestep) * m_TimeScale;
+		// Unscaled time goes on at time scale 0 (a pause menu's fades): the frame's timestep before the time scale, the fixed
+		// step while stepping.
+		m_UnscaledDeltaTime = stepping ? fixedTimestep : std::max(static_cast<float>(timestep), 0.0f);
+		m_UnscaledTime += m_UnscaledDeltaTime;
 
 		m_IsUpdating = true;
 		UpdateWorldTransforms();
@@ -1971,6 +1979,7 @@ namespace Strata
 		{
 			ForEachSystemCall(m_FixedUpdateCalls, [fixedTimestep](SceneSystem& system) { system.OnFixedUpdate(fixedTimestep); });
 			m_StepFrames--;
+			m_FixedSteps++;
 		}
 		else
 		{
@@ -2000,6 +2009,7 @@ namespace Strata
 				ForEachSystemCall(m_FixedUpdateCalls, [fixedTimestep](SceneSystem& system) { system.OnFixedUpdate(fixedTimestep); });
 				m_FixedTimeAccumulator -= fixedTimestep;
 				steps++;
+				m_FixedSteps++;
 			}
 
 			if (dilated)
@@ -2037,6 +2047,8 @@ namespace Strata
 			return;
 
 		m_IsPaused = paused;
+		if (!paused)
+			m_StepFrames = 0;
 		if (!m_IsRunning)
 			return;
 		for (const Scope<SceneSystem>& system : m_Systems)

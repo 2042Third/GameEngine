@@ -91,10 +91,12 @@ TEST_SUITE("Scene.Loader")
 		CHECK_FALSE(request.TakeScene());
 
 		// One read at a time: the scene first (prepared on the worker), then its dependencies; the progress never decreases
-		// and the load is ready only when the last one is in.
+		// and the load is ready only when the last one is in. Bounded by the clock, not by a count of steps: the worker's
+		// preparation takes as long as the machine needs.
 		std::vector<float> progress;
 		bool sawDependencies = false;
-		for (int step = 0; step < 400 && !request.IsFinished(); step++)
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+		while (!request.IsFinished() && std::chrono::steady_clock::now() < deadline)
 		{
 			manager.AllowReads(1);
 			manager.Update();

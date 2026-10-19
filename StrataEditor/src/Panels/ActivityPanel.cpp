@@ -19,6 +19,7 @@
 #include <Strata/Core/StringUtils.h>
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_stdlib.h>
 
 #include <algorithm>
@@ -32,15 +33,13 @@ namespace Strata
 
 		// Parameters longer than this show cut in the list (the details pane has them whole).
 		constexpr size_t c_ParameterPreviewBytes = 160;
-		// Widths in font sizes.
+		// Results longer than this show cut in an expanded entry's detail row (the details pane has them whole).
+		constexpr size_t c_ResultPreviewBytes = 240;
+		// Widths in font sizes; the summary (the names of undo steps, such as "Rename 'Wall' to 'East Wall'", the first line of
+		// errors) takes the rest.
 		constexpr float c_SourceColumnInFontSizes = 1.6f;
-		constexpr float c_CommandColumnInFontSizes = 11.0f;
+		constexpr float c_CommandColumnInFontSizes = 12.0f;
 		constexpr float c_DurationColumnInFontSizes = 4.5f;
-		// Results (the names of undo steps, such as "Rename 'Wall' to 'East Wall'", the first line of errors) are as wide as the
-		// widest one listed, but at least this; parameters (cut in the list anyway, whole in the details pane) take the rest of
-		// the width, at least this.
-		constexpr float c_MinResultInFontSizes = 6.0f;
-		constexpr float c_MinParametersInFontSizes = 8.0f;
 		constexpr float c_SourceFilterInFontSizes = 9.0f;
 		constexpr float c_SearchInFontSizes = 14.0f;
 		// The details pane beside the list takes this share of the width, but not less than this many font sizes; narrower
@@ -87,26 +86,17 @@ namespace Strata
 			return {};
 		}
 
-		// What the Result column says, in which color.
-		std::pair<std::string, ImVec4> DescribeOutcome(const CommandJournalEntry& entry, const UI::ThemeColors& colors)
+		// The color of an entry's summary (CommandJournal::Summarize): errors, warnings and discarded changes stand out, undo
+		// steps read as text, the rest is secondary.
+		const ImVec4& GetSummaryColor(const CommandJournalEntry& entry, const UI::ThemeColors& colors)
 		{
 			if (entry.Status == CommandStatus::Pending)
-				return { "running", colors.TextSecondary };
+				return colors.TextSecondary;
 			if (entry.Status == CommandStatus::Failed)
-			{
-				// The first line of the error is enough for the list.
-				const std::string_view error = entry.Error;
-				return { std::string(error.substr(0, error.find('\n'))), colors.Error };
-			}
-			if (!entry.Warning.empty())
-				return { entry.Warning, colors.Warning };
-			// A command that replaced the edited scene with force stands out: it threw away unsaved changes (kept as recovery
-			// data). The summary is compact JSON written by the journal, so the member reads exactly so.
-			if (entry.ResultSummary.find("\"discardedChanges\":true") != std::string::npos)
-				return { "discarded changes", colors.Warning };
-			if (!entry.UndoStep.empty())
-				return { entry.UndoStep, colors.Text };
-			return { "done", colors.TextSecondary };
+				return colors.Error;
+			if (!entry.Warning.empty() || entry.ResultSummary.find("\"discardedChanges\":true") != std::string::npos)
+				return colors.Warning;
+			return entry.UndoStep.empty() ? colors.TextSecondary : colors.Text;
 		}
 
 		// Commands that replace the edited scene take "force" (CommandUtils::ForceSchema), which discards its unsaved changes.
@@ -164,45 +154,23 @@ namespace Strata
 			ImGui::SetTooltip("Only commands that change the scene, its assets or the project (what a replay repeats)");
 	}
 
-	float ActivityPanel::GetResultWidth(const CommandJournalEntry& entry)
-	{
-		const UI::ThemeColors& colors = UI::GetThemeColors();
-		// A running command's outcome is still to come; a finished one's never changes.
-		if (entry.Status == CommandStatus::Pending)
-			return ImGui::CalcTextSize(DescribeOutcome(entry, colors).first.c_str()).x;
-		auto [it, added] = m_ResultWidths.try_emplace(entry.Id, 0.0f);
-		if (added)
-			it->second = ImGui::CalcTextSize(DescribeOutcome(entry, colors).first.c_str()).x;
-		return it->second;
-	}
-
 	void ActivityPanel::RebuildRows(const CommandJournal& journal)
 	{
 		const std::string filter = StringUtils::ToLower(m_Filter);
-		// The font size and glyphs too: the widths of the results follow the UI scale, and text in Chinese, Japanese and Korean
-		// gets wider once the system's fonts for it are merged (measured before, it showed ImGui's fallback character).
-		const float fontSize = ImGui::GetFontSize();
-		const uint64_t glyphs = UI::EditorFonts::GetGlyphGeneration();
-		const std::string key = fmt::format("{}|{}|{}|{}|{}", m_SourceFilter, m_EditsOnly, fontSize, glyphs, filter);
+		const std::string key = fmt::format("{}|{}|{}|{}", m_SourceFilter, m_EditsOnly, m_ExpandedVersion, filter);
 		if (journal.GetVersion() == m_RowsVersion && key == m_RowsKey)
 			return;
 		m_RowsVersion = journal.GetVersion();
 		m_RowsKey = key;
-		if (fontSize != m_ResultWidthsFontSize || glyphs != m_ResultWidthsGlyphs)
-		{
-			m_ResultWidths.clear();
-			m_ResultWidthsFontSize = fontSize;
-			m_ResultWidthsGlyphs = glyphs;
-		}
 
 		const std::deque<CommandJournalEntry>& entries = journal.GetEntries();
-		// Previews and widths of entries the ring dropped go with them.
+		// Previews and expansions of entries the ring dropped go with them.
 		const uint64_t oldest = entries.empty() ? UINT64_MAX : entries.front().Id;
 		std::erase_if(m_ParameterPreviews, [oldest](const auto& preview) { return preview.first < oldest; });
-		std::erase_if(m_ResultWidths, [oldest](const auto& width) { return width.first < oldest; });
+		std::erase_if(m_Expanded, [oldest](uint64_t id) { return id < oldest; });
 
 		m_Rows.clear();
-		m_ResultContentWidth = 0.0f;
+		m_Lines.clear();
 		for (const CommandJournalEntry& entry : entries)
 		{
 			if (m_SourceFilter > 0 && static_cast<int>(entry.Source) != m_SourceFilter - 1)
@@ -219,8 +187,27 @@ namespace Strata
 					continue;
 			}
 			m_Rows.push_back(entry.Id);
-			m_ResultContentWidth = std::max(m_ResultContentWidth, GetResultWidth(entry));
+			m_Lines.push_back({ entry.Id, LineKind::Entry });
+			if (m_Expanded.contains(entry.Id))
+			{
+				m_Lines.push_back({ entry.Id, LineKind::Parameters });
+				m_Lines.push_back({ entry.Id, LineKind::Result });
+			}
 		}
+	}
+
+	const std::string& ActivityPanel::GetResultPreview(const CommandJournalEntry& entry)
+	{
+		// A running command's result is still to come; a finished one's never changes.
+		auto [it, added] = m_ResultPreviews.try_emplace(entry.Id);
+		if (added || it->second.first != entry.Status)
+		{
+			std::string text = entry.Status == CommandStatus::Pending ? std::string("(running)")
+				: entry.Status == CommandStatus::Failed ? fmt::format("{} error: {}", EditorCommandErrorToString(entry.ErrorKind), entry.Error)
+				: entry.ResultSummary;
+			it->second = { entry.Status, Shorten(std::move(text), c_ResultPreviewBytes) };
+		}
+		return it->second.second;
 	}
 
 	void ActivityPanel::DrawList(const CommandJournal& journal)
@@ -229,45 +216,70 @@ namespace Strata
 		constexpr ImGuiTableFlags flags = ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_Resizable
 			| ImGuiTableFlags_SizingFixedFit;
 		const float fontSize = ImGui::GetFontSize();
-		const float sourceWidth = fontSize * c_SourceColumnInFontSizes;
-		const float commandWidth = fontSize * c_CommandColumnInFontSizes;
-		const float durationWidth = fontSize * c_DurationColumnInFontSizes;
-		// The width the fixed columns and every column's padding leave for parameters and results.
-		const float padding = ImGui::GetStyle().CellPadding.x * 2.0f;
-		const float shared = ImGui::GetContentRegionAvail().x - sourceWidth - commandWidth - durationWidth - 5.0f * padding;
-		const float minResult = fontSize * c_MinResultInFontSizes;
-		const float resultWidth = std::clamp(m_ResultContentWidth, minResult, std::max(minResult, shared - fontSize * c_MinParametersInFontSizes));
-		if (!ImGui::BeginTable("Entries", 5, flags))
+		if (!ImGui::BeginTable("Entries", 4, flags))
 			return;
 		ImGui::TableSetupScrollFreeze(0, 1);
-		ImGui::TableSetupColumn("##Source", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, sourceWidth);
-		ImGui::TableSetupColumn("Command", ImGuiTableColumnFlags_WidthFixed, commandWidth);
-		ImGui::TableSetupColumn("Parameters", ImGuiTableColumnFlags_WidthStretch);
-		// Follows the widest result listed (not resizable: its width is set every frame).
-		ImGui::TableSetupColumn("Result", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, resultWidth);
-		ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthFixed, durationWidth);
+		ImGui::TableSetupColumn("##Source", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoResize, fontSize * c_SourceColumnInFontSizes);
+		ImGui::TableSetupColumn("Command", ImGuiTableColumnFlags_WidthFixed, fontSize * c_CommandColumnInFontSizes);
+		ImGui::TableSetupColumn("Summary", ImGuiTableColumnFlags_WidthStretch);
+		ImGui::TableSetupColumn("ms", ImGuiTableColumnFlags_WidthFixed, fontSize * c_DurationColumnInFontSizes);
 		ImGui::TableHeadersRow();
 
 		const bool atBottom = ImGui::GetScrollY() >= ImGui::GetScrollMaxY();
 		ImGuiListClipper clipper;
-		clipper.Begin(static_cast<int>(m_Rows.size()));
-		std::optional<int> selectedRow;
+		clipper.Begin(static_cast<int>(m_Lines.size()));
+		std::optional<int> selectedLine;
 		if (m_ScrollToSelected)
 		{
-			if (const auto it = std::find(m_Rows.begin(), m_Rows.end(), m_Selected); it != m_Rows.end())
+			const auto it = std::find_if(m_Lines.begin(), m_Lines.end(), [this](const Line& line) { return line.Entry == m_Selected; });
+			if (it != m_Lines.end())
 			{
-				selectedRow = static_cast<int>(it - m_Rows.begin());
-				clipper.IncludeItemByIndex(*selectedRow);
+				selectedLine = static_cast<int>(it - m_Lines.begin());
+				clipper.IncludeItemByIndex(*selectedLine);
 			}
 		}
+		// A row just expanded brings its detail lines into view (the last one is enough).
+		if (m_ScrollToExpanded != 0)
+		{
+			const auto it = std::find_if(m_Lines.begin(), m_Lines.end(),
+				[this](const Line& line) { return line.Entry == m_ScrollToExpanded && line.Kind == LineKind::Result; });
+			if (it != m_Lines.end())
+				clipper.IncludeItemByIndex(static_cast<int>(it - m_Lines.begin()));
+			else
+				m_ScrollToExpanded = 0;
+		}
+		std::optional<uint64_t> toggled;
 		while (clipper.Step())
 		{
-			for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; row++)
+			for (int index = clipper.DisplayStart; index < clipper.DisplayEnd; index++)
 			{
-				const CommandJournalEntry* entry = journal.Find(m_Rows[static_cast<size_t>(row)]);
+				const Line& line = m_Lines[static_cast<size_t>(index)];
+				const CommandJournalEntry* entry = journal.Find(line.Entry);
 				if (!entry)
 					continue;
 				ImGui::TableNextRow();
+				if (line.Kind != LineKind::Entry)
+				{
+					// An expanded entry's raw parameters and result, cut to a line (the details pane has them whole).
+					const bool parameters = line.Kind == LineKind::Parameters;
+					ImGui::TableSetColumnIndex(1);
+					ImGui::Indent(fontSize);
+					ImGui::TextColored(colors.TextSecondary, "%s", parameters ? "parameters" : "result");
+					ImGui::Unindent(fontSize);
+					ImGui::TableSetColumnIndex(2);
+					const std::string& text = parameters ? GetParameterPreview(*entry) : GetResultPreview(*entry);
+					UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
+					ImGui::TextColored(colors.TextSecondary, "%s", text.empty() ? "{}" : text.c_str());
+					ImGui::PopFont();
+					UI::ItemProbe::Record(fmt::format("Activity.{}.{}", parameters ? "Parameters" : "ResultJson", entry->Id), true, 0, text);
+					if (!parameters && entry->Id == m_ScrollToExpanded)
+					{
+						ImGui::ScrollToItem(ImGuiScrollFlags_KeepVisibleEdgeY);
+						m_ScrollToExpanded = 0;
+					}
+					continue;
+				}
+
 				ImGui::TableSetColumnIndex(0);
 				ImGui::PushID(static_cast<int>(entry->Id));
 				const bool selected = entry->Id == m_Selected;
@@ -281,24 +293,29 @@ namespace Strata
 				UI::ItemProbe::Record(fmt::format("Activity.Row.{}", entry->Id), true, 0, entry->Command);
 				if (ImGui::IsItemHovered() && UI::IsTooltipDue())
 					ImGui::SetTooltip("#%llu %s", static_cast<unsigned long long>(entry->Id), DescribeSource(*entry).c_str());
-				if (selectedRow && *selectedRow == row)
+				if (selectedLine && *selectedLine == index)
 				{
 					ImGui::SetScrollHereY(0.5f);
 					m_ScrollToSelected = false;
 				}
+
+				// The command, after the arrow that shows its parameters and result below it.
+				ImGui::TableSetColumnIndex(1);
+				const bool expanded = m_Expanded.contains(entry->Id);
+				const std::string expandId = fmt::format("Activity.Expand.{}", entry->Id);
+				if (UI::IconButton(expandId.c_str(), expanded ? Icons::ChevronDown : Icons::ChevronRight,
+						expanded ? "Hide the parameters and the result" : "Show the parameters and the result"))
+					toggled = entry->Id;
+				ImGui::SameLine(0.0f, ImGui::GetStyle().ItemInnerSpacing.x);
+				ImGui::TextUnformatted(entry->Command.c_str());
 				ImGui::PopID();
 
-				ImGui::TableSetColumnIndex(1);
-				ImGui::TextUnformatted(entry->Command.c_str());
 				ImGui::TableSetColumnIndex(2);
-				UI::PushFont(UI::EditorFont::Mono, UI::TextSize::Caption);
-				ImGui::TextColored(colors.TextSecondary, "%s", GetParameterPreview(*entry).c_str());
-				ImGui::PopFont();
+				const std::string summary = CommandJournal::Summarize(*entry);
+				const ImVec4& color = GetSummaryColor(*entry, colors);
+				ImGui::TextColored(color, "%s", summary.c_str());
+				UI::ItemProbe::Record(fmt::format("Activity.Summary.{}", entry->Id), true, UI::ToColorU32(color), summary);
 				ImGui::TableSetColumnIndex(3);
-				const auto [outcome, color] = DescribeOutcome(*entry, colors);
-				ImGui::TextColored(color, "%s", outcome.c_str());
-				UI::ItemProbe::Record(fmt::format("Activity.Result.{}", entry->Id), true, UI::ToColorU32(color), outcome);
-				ImGui::TableSetColumnIndex(4);
 				if (entry->Status != CommandStatus::Pending)
 					ImGui::Text("%.1f", entry->DurationMs);
 			}
@@ -308,6 +325,15 @@ namespace Strata
 			ImGui::SetScrollHereY(1.0f);
 		m_FollowNewest = atBottom || m_FollowNewest;
 		ImGui::EndTable();
+		if (toggled)
+			SetExpanded(*toggled, !m_Expanded.contains(*toggled));
+	}
+
+	void ActivityPanel::SetExpanded(uint64_t id, bool expanded)
+	{
+		if (expanded ? m_Expanded.insert(id).second : m_Expanded.erase(id) > 0)
+			m_ExpandedVersion++;
+		m_ScrollToExpanded = expanded ? id : 0;
 	}
 
 	std::optional<size_t> ActivityPanel::GetUndoTarget(EditorContext& context, const CommandJournalEntry& entry)

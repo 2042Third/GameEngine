@@ -112,6 +112,17 @@ TEST_SUITE("CLI.Commands")
 		CHECK(error.find("--stall-timeout") != std::string::npos);
 		CHECK_FALSE(ParseCliArguments({ "launch", "--no-wait-scan=yes" }, error).has_value());
 
+		std::optional<CliArguments> toolsets = ParseCliArguments({ "mcp", "--toolsets", "core,scene" }, error);
+		REQUIRE_MESSAGE(toolsets.has_value(), error);
+		CHECK(toolsets->Toolsets.value() == std::vector<std::string> { "core", "scene" });
+		CHECK(ParseCliArguments({ "mcp", "--toolsets", "all" }, error)->Toolsets.value() == std::vector<std::string> { "all" });
+		CHECK_FALSE(ParseCliArguments({ "mcp" }, error)->Toolsets.has_value());
+		for (const char* invalid : { "", ",", "core,", ",scene", "core,,scene" })
+		{
+			CHECK_FALSE(ParseCliArguments({ "mcp", "--toolsets", invalid }, error).has_value());
+			CHECK(error.find("--toolsets") != std::string::npos);
+		}
+
 		std::optional<CliArguments> separated = ParseCliArguments({ "call", "--", "--weird-method" }, error);
 		REQUIRE(separated.has_value());
 		CHECK(separated->Positionals == std::vector<std::string> { "--weird-method" });
@@ -508,6 +519,14 @@ TEST_SUITE("CLI.Commands")
 		REQUIRE(messages.size() == 2);
 		CHECK(messages[0]["result"]["protocolVersion"] == "2024-11-05");
 		CHECK(messages[1]["result"]["structuredContent"]["connected"] == false);
+		CHECK(messages[1]["result"]["structuredContent"]["toolsets"] == nlohmann::json::array({ "core" }));
+
+		// --toolsets picks the toolsets listed as tools.
+		const CliRun withToolsets = Run({ "mcp", "--toolsets", "scene,play" },
+			R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}})" "\n"
+			R"({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"strata_status","arguments":{}}})" "\n");
+		CHECK(withToolsets.ExitCode == ExitCode::Success);
+		CHECK(withToolsets.Output.find(R"("toolsets":["play","scene"])") != std::string::npos);
 	}
 }
 

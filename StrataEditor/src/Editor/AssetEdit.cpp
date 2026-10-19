@@ -268,6 +268,73 @@ namespace Strata
 			return std::static_pointer_cast<Material>(loaded)->Serialize() == saved->Serialize();
 		}
 
+		std::vector<TextureUsageMismatch> FindTextureUsageMismatches(EditorContext& context, const MaterialProperties& properties)
+		{
+			std::vector<TextureUsageMismatch> mismatches;
+			EditorAssetManager* assets = context.GetAssetManager();
+			if (!assets)
+				return mismatches;
+			const struct
+			{
+				const char* Property;
+				AssetHandle Texture;
+				TextureUsage Expected;
+				bool ColorSlot; // Reads color: only normal maps and data there are mistakes
+			} slots[] = {
+				{ "BaseColorMap", properties.BaseColorMap, TextureUsage::Color, true },
+				{ "MetallicRoughnessMap", properties.MetallicRoughnessMap, TextureUsage::Data, false },
+				{ "NormalMap", properties.NormalMap, TextureUsage::NormalMap, false },
+				{ "OcclusionMap", properties.OcclusionMap, TextureUsage::Data, false },
+				{ "EmissiveMap", properties.EmissiveMap, TextureUsage::Color, true } };
+			for (const auto& slot : slots)
+			{
+				if (!slot.Texture.IsValid())
+					continue;
+				// Textures a model's import made got their usage from the slot their material uses them in.
+				const std::optional<AssetMetadata> metadata = assets->GetMetadata(slot.Texture);
+				if (!metadata || metadata->Type != AssetType::Texture || metadata->IsSubAsset() || metadata->IsBuiltin())
+					continue;
+				const nlohmann::json settings = assets->GetImportSettings(slot.Texture);
+				const TextureUsage usage = TextureImportSettings::FromJson(settings).Usage;
+				const bool mismatch = slot.ColorSlot ? usage == TextureUsage::NormalMap || usage == TextureUsage::Data : usage != slot.Expected;
+				if (mismatch)
+					mismatches.push_back(TextureUsageMismatch { slot.Property, slot.Texture, usage, slot.Expected });
+			}
+			return mismatches;
+		}
+
+		std::string DescribeTextureUsageMismatch(EditorContext& context, const TextureUsageMismatch& mismatch)
+		{
+			const EditorAssetManager* assets = context.GetAssetManager();
+			const std::optional<AssetMetadata> metadata = assets ? assets->GetMetadata(mismatch.Texture) : std::nullopt;
+			const std::string name = metadata ? FileSystem::ToUTF8(FileSystem::FromUTF8(metadata->Path).stem()) : mismatch.Texture.ToString();
+			const char* consequence = "it will be read wrongly";
+			if (mismatch.Expected == TextureUsage::NormalMap)
+				consequence = "its normals will be wrong";
+			else if (mismatch.Expected == TextureUsage::Data)
+				consequence = "its values will be sRGB-decoded";
+			else if (mismatch.Usage == TextureUsage::NormalMap)
+				consequence = "its colors will be wrong";
+			return fmt::format("{} is imported as {}: {}", name, TextureUsageToString(mismatch.Usage), consequence);
+		}
+
+		nlohmann::json DescribeTextureUsageMismatches(EditorContext& context, const std::vector<TextureUsageMismatch>& mismatches)
+		{
+			nlohmann::json warnings = nlohmann::json::array();
+			for (const TextureUsageMismatch& mismatch : mismatches)
+			{
+				warnings.push_back({
+					{ "property", mismatch.Property },
+					{ "texture", UUIDToJson(mismatch.Texture) },
+					{ "usage", TextureUsageToString(mismatch.Usage) },
+					{ "expected", TextureUsageToString(mismatch.Expected) },
+					{ "message", DescribeTextureUsageMismatch(context, mismatch) },
+					{ "fix", { { "command", "asset.setImportSettings" },
+						{ "parameters", { { "asset", UUIDToJson(mismatch.Texture) }, { "settings", { { "Usage", TextureUsageToString(mismatch.Expected) } } } } } } } });
+			}
+			return warnings;
+		}
+
 		std::optional<std::string> BuildControllerDocument(const AnimationControllerData& data, std::string* outError)
 		{
 			Ref<AnimationController> controller = AnimationController::Create(data, outError);

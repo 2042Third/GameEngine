@@ -11,9 +11,13 @@
 #include <Strata/Core/Log.h>
 #include <Strata/Core/Platform.h>
 #include <Strata/Core/Version.h>
+#include <Strata/Project/Project.h>
 #include <Strata/Reflection/PropertyJson.h>
+#include <Strata/Scripting/ScriptEngine.h>
 
 #include <algorithm>
+#include <array>
+#include <deque>
 #include <filesystem>
 #include <limits>
 #include <optional>
@@ -32,11 +36,6 @@ namespace Strata
 		constexpr int64_t c_MaxWaitFrames = 1'000'000;
 		// Frames editor.perf summarizes by default: two seconds at 60 frames per second.
 		constexpr int64_t c_DefaultPerfFrames = 120;
-
-		nlohmann::json DescribePlayState(const EditorContext& context)
-		{
-			return { { "state", SceneStateToString(context.GetSceneState()) }, { "paused", context.IsPaused() } };
-		}
 
 		nlohmann::json DescribeHistory(EditorContext& context)
 		{
@@ -72,98 +71,47 @@ namespace Strata
 				{ "peakWorkingSetMB", toMB(memory->PeakWorkingSet) } };
 		}
 
+		// The sections editor.status reports itself (besides the status providers'), in the order its description lists them.
+		constexpr std::array<std::string_view, 6> c_StatusSections = { "engine", "project", "selection", "undo", "sceneLoad", "memory" };
+
+		// Every key the built-in part of editor.status can have: a status provider of that name is not reported.
+		bool IsBuiltinStatusSection(std::string_view section)
+		{
+			static constexpr std::array<std::string_view, 10> c_Keys = { "engineVersion", "engineCommit", "platform", "scene", "play", "errors",
+				"saving", "selection", "undo", "project" };
+			return std::find(c_StatusSections.begin(), c_StatusSections.end(), section) != c_StatusSections.end()
+				|| std::find(c_Keys.begin(), c_Keys.end(), section) != c_Keys.end();
+		}
+
+		nlohmann::json DescribeProjectBriefly(const EditorContext& context)
+		{
+			const Ref<Project>& project = context.GetProject();
+			if (!project)
+				return { { "open", false }, { "name", nullptr }, { "path", nullptr } };
+			return { { "open", true }, { "name", project->GetConfig().Name }, { "path", FileSystem::ToUTF8(project->GetProjectFile()) } };
+		}
+
+		// What went wrong that an agent should look at: errors logged since it last read the log, the last script build's
+		// failure, the script fault that stopped play mode, imports that failed without anyone waiting for them.
+		nlohmann::json DescribeErrors(const EditorContext& context)
+		{
+			const ScriptBuildResult& build = context.GetScriptBuilder().GetLastResult();
+			const size_t buildErrors = CountScriptBuildErrors(build);
+			const Ref<ScriptEngine>& engine = context.GetScriptEngine();
+			const std::optional<ScriptFault> fault = engine ? engine->GetFault() : std::nullopt;
+			nlohmann::json scriptFault = nullptr;
+			if (fault)
+				scriptFault = fmt::format("{}::{} on '{}': {}", fault->ClassName, fault->Method, fault->EntityName, fault->Description);
+			return {
+				{ "unread", Log::GetBuffer().CountEntries(context.GetLogReadSequence(), LogLevel::Error) },
+				{ "scriptBuild", { { "failed", build.ID != 0 && !build.Success && !build.Cancelled }, { "errors", buildErrors } } },
+				{ "scriptFault", std::move(scriptFault) },
+				{ "importFailures", context.GetImportFailureCount() } };
+		}
+
 		nlohmann::json DescribeFrameTimeStats(const FrameTimeStats& stats)
 		{
 			return { { "avgMs", stats.Average }, { "p50Ms", stats.P50 }, { "p95Ms", stats.P95 }, { "maxMs", stats.Max } };
-		}
-
-		// Where play.start is while the scripts build first.
-		struct PlayBuildState
-		{
-			uint64_t WaitingFor = 0;   // The build that has to finish before anything else happens (0: none)
-			uint64_t OwnBuild = 0;     // The build play.start started itself (it starts at most one)
-			std::string Reason;        // Why it built
-		};
-
-		// Plays once the build play.start waited for finished: a failed build (or a module that cannot load) fails play.start
-		// with its first diagnostics and asks the UI for the Problems panel; a cancelled one only ends play.start (Cancelled).
-		std::optional<EditorCommandResult> FinishPlayBuild(EditorContext& context, PlayBuildState& state)
-		{
-			const ScriptBuildResult& result = context.GetScriptBuilder().GetLastResult();
-			const ScriptBuildLoad& load = context.GetLastScriptBuildLoad();
-			if (context.GetPlayBuildID() == state.OwnBuild)
-				context.ClearPlayBuild();
-			if (result.ID != state.WaitingFor)
-				return EditorCommandResult::Fail(fmt::format("The result of script build {} is no longer available (see script.status)", state.WaitingFor));
-			if (result.Cancelled)
-				return EditorCommandResult::Fail("The script build play.start waited for was cancelled, so the game does not play", EditorCommandError::Cancelled);
-			// The build's own notification told the person how it ended (EditorContext::OnScriptBuildFinished): no second toast.
-			if (!result.Success)
-			{
-				context.RequestProblemsPanel();
-				EditorCommandResult failed = EditorCommandResult::Fail(fmt::format("The scripts must be built before playing, and the build failed: {}", result.Error));
-				failed.Announced = true;
-				return failed;
-			}
-			if (load.BuildID == result.ID && !load.Loaded)
-			{
-				context.RequestProblemsPanel();
-				EditorCommandResult failed = EditorCommandResult::Fail(fmt::format("The scripts were built, but their module could not be loaded: {}", load.Error));
-				failed.Announced = true;
-				return failed;
-			}
-
-			// A build someone else started may have left the scripts in need of another (sources changed meanwhile): play.start
-			// builds once itself.
-			if (state.OwnBuild == 0)
-			{
-				if (std::optional<std::string> reason = context.GetPlayBuildReason())
-				{
-					std::string error;
-					if (!context.StartPlayBuild(&error))
-						return EditorCommandResult::Fail(error);
-					state.Reason = std::move(*reason);
-					state.OwnBuild = state.WaitingFor = context.GetPlayBuildID();
-					ST_INFO("Building the scripts before playing: {}", state.Reason);
-					return std::nullopt;
-				}
-			}
-
-			std::string error;
-			if (!context.Play(&error))
-				return EditorCommandResult::Fail(error);
-			nlohmann::json value = DescribePlayState(context);
-			if (state.OwnBuild != 0)
-				value["built"] = { { "build", state.OwnBuild }, { "seconds", result.Seconds }, { "reason", state.Reason } };
-			return EditorCommandResult::Ok(std::move(value));
-		}
-
-		// play.start when the scripts need a build (or one runs): builds them (or waits for the running build), then plays.
-		EditorCommandResult StartPlayAfterBuild(EditorContext& context)
-		{
-			Ref<PlayBuildState> state = CreateRef<PlayBuildState>();
-			const ScriptBuilder& builder = context.GetScriptBuilder();
-			if (builder.IsRunning())
-			{
-				state->WaitingFor = builder.GetCurrentID();
-			}
-			else
-			{
-				state->Reason = context.GetPlayBuildReason().value_or(std::string());
-				std::string error;
-				if (!context.StartPlayBuild(&error))
-					return EditorCommandResult::Fail(fmt::format("The scripts must be built before playing ({}), and the build could not start: {}",
-						state->Reason, error));
-				state->OwnBuild = state->WaitingFor = context.GetPlayBuildID();
-				ST_INFO("Building the scripts before playing: {}", state->Reason);
-			}
-			return EditorCommandResult::Defer([state](EditorContext& pollContext) -> std::optional<EditorCommandResult>
-			{
-				const ScriptBuilder& pollBuilder = pollContext.GetScriptBuilder();
-				if (pollBuilder.IsRunning() && pollBuilder.GetCurrentID() == state->WaitingFor)
-					return std::nullopt;
-				return FinishPlayBuild(pollContext, *state);
-			});
 		}
 
 	}
@@ -302,13 +250,16 @@ namespace Strata
 		registry.Register({ "editor.activity",
 			"What people, agents and scripts did in this editor: the activity journal of every command run (the latest 2,000, within 8 MB), oldest "
 			"first after since. Each entry: {id, parent (the command that ran it), time (milliseconds since 1970-01-01 UTC), source (UI, "
-			"Automation, CommandScript or Internal), client (an automation client's name), command, mutating, playing (ran while the scene played), "
+			"Automation, CommandScript or Internal), client (an automation client's name), command, summary (in a few words, as the Activity panel "
+			"lists it: the undo step with the entities' names, the error's first line, the warning, or done), mutating, playing (ran while the scene played), "
 			"runningCopy (changed the playing scene's running copy, which play.stop discarded), parameters (parametersTruncated when too large to keep), status (Pending, Succeeded, Failed), result (a summary) or error {kind, "
 			"message}, warning, durationMs, frames (of a command that took several), entities (that its undo step touched, at most 256) and "
-			"entityCount, undoStep}. Page with since = the returned latest while more is true; editor.activity.export turns entries into a "
-			"command script.",
+			"entityCount, undoStep}. Page with since = the returned latest while more is true, or with newest: true (the latest first) with "
+			"before = the returned oldest; editor.activity.export turns entries into a command script.",
 			ObjectSchema({
 				{ "since", IntegerSchema("Return entries with an id above this (default 0: from the oldest kept)", 0, std::numeric_limits<int64_t>::max()) },
+				{ "before", IntegerSchema("Return entries with an id below this (default: none)", 1, std::numeric_limits<int64_t>::max()) },
+				{ "newest", BoolSchema("Newest first: the latest entries (default false: oldest first)") },
 				{ "limit", IntegerSchema("Most entries to return (default 100)", 1, static_cast<int64_t>(CommandJournal::c_MaxEntries)) },
 				{ "source", { { "type", "string" }, { "enum", { "UI", "Automation", "CommandScript", "Internal" } },
 					{ "description", "Only entries of this source" } } },
@@ -317,6 +268,9 @@ namespace Strata
 			{
 				CommandArguments arguments(parameters);
 				const int64_t since = arguments.GetInt("since", 0, 0, std::numeric_limits<int64_t>::max());
+				constexpr int64_t c_NoBound = std::numeric_limits<int64_t>::max();
+				const uint64_t before = static_cast<uint64_t>(arguments.GetInt("before", c_NoBound, 1, c_NoBound));
+				const bool newest = arguments.GetBool("newest", false);
 				const int64_t limit = arguments.GetInt("limit", 100, 1, static_cast<int64_t>(CommandJournal::c_MaxEntries));
 				const std::string sourceName = arguments.GetString("source", "");
 				const std::string command = arguments.GetString("command", "");
@@ -334,27 +288,55 @@ namespace Strata
 				// This call's own entry is still running: it is not part of the answer.
 				const uint64_t self = journal.GetRunningId();
 				const bool group = !command.empty() && command.back() == '.';
-				nlohmann::json entries = nlohmann::json::array();
-				uint64_t latest = static_cast<uint64_t>(since);
-				bool more = false;
-				for (const CommandJournalEntry& entry : journal.GetEntries())
+				const auto matches = [&](const CommandJournalEntry& entry)
 				{
-					if (entry.Id <= static_cast<uint64_t>(since) || entry.Id == self)
-						continue;
-					if (source && entry.Source != *source)
-						continue;
-					if (!command.empty() && (group ? !entry.Command.starts_with(command) : entry.Command != command))
-						continue;
-					if (entries.size() == static_cast<size_t>(limit))
+					return entry.Id > static_cast<uint64_t>(since) && entry.Id < before && entry.Id != self && (!source || entry.Source == *source)
+						&& (command.empty() || (group ? entry.Command.starts_with(command) : entry.Command == command));
+				};
+				nlohmann::json entries = nlohmann::json::array();
+				bool more = false;
+				nlohmann::json result;
+				if (newest)
+				{
+					// Newest first, so paging with before = oldest never skips any.
+					uint64_t oldest = 0;
+					const std::deque<CommandJournalEntry>& journalEntries = journal.GetEntries();
+					for (auto entry = journalEntries.rbegin(); entry != journalEntries.rend() && entry->Id > static_cast<uint64_t>(since); ++entry)
 					{
-						more = true;
-						break;
+						if (!matches(*entry))
+							continue;
+						if (entries.size() == static_cast<size_t>(limit))
+						{
+							more = true;
+							break;
+						}
+						oldest = entry->Id;
+						entries.push_back(CommandJournal::Describe(*entry));
 					}
-					latest = entry.Id;
-					entries.push_back(CommandJournal::Describe(entry));
+					result = { { "entries", std::move(entries) }, { "oldest", oldest != 0 ? nlohmann::json(oldest) : nlohmann::json(nullptr) },
+						{ "more", more } };
 				}
-				return EditorCommandResult::Ok({ { "entries", std::move(entries) }, { "latest", latest }, { "more", more },
-					{ "journal", { { "entries", journal.GetEntries().size() }, { "bytes", journal.GetBytes() }, { "latest", journal.GetLatestId() } } } });
+				else
+				{
+					uint64_t latest = static_cast<uint64_t>(since);
+					for (const CommandJournalEntry& entry : journal.GetEntries())
+					{
+						if (entry.Id >= before)
+							break;
+						if (!matches(entry))
+							continue;
+						if (entries.size() == static_cast<size_t>(limit))
+						{
+							more = true;
+							break;
+						}
+						latest = entry.Id;
+						entries.push_back(CommandJournal::Describe(entry));
+					}
+					result = { { "entries", std::move(entries) }, { "latest", latest }, { "more", more } };
+				}
+				result["journal"] = { { "entries", journal.GetEntries().size() }, { "bytes", journal.GetBytes() }, { "latest", journal.GetLatestId() } };
+				return EditorCommandResult::Ok(std::move(result));
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		registry.Register({ "editor.activity.export",
@@ -427,7 +409,7 @@ namespace Strata
 		// Recovery
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "scene.recoveryStatus",
+		registry.Register(MayDefer({ "scene.recoveryStatus",
 			"The recovery data of the open project (.strata/Recovery): unsaved scene changes an editor left behind when it ended without closing "
 			"the scene (a crash), or that were discarded on purpose (force, Don't Save) and kept anyway. Returns entries, newest first, each {id, "
 			"scene (null for a scene never saved), sceneName, scenePath, time (milliseconds since 1970-01-01 UTC), discarded, entityCount, complete "
@@ -454,9 +436,9 @@ namespace Strata
 					result["entries"] = std::move(entries);
 					return EditorCommandResult::Ok(std::move(result));
 				});
-			}, EditorCommandKind::Query, EditorCommandResults::Session });
+			}, EditorCommandKind::Query, EditorCommandResults::Session }));
 
-		registry.Register({ "scene.recover",
+		registry.Register(MayDefer({ "scene.recover",
 			"Applies or discards recovery data (scene.recoveryStatus). apply: opens the scene the changes were made to in the background as "
 			"scene.open does (a scene never saved: a new scene of its name) and, once it is in, turns it into what the edits left, as one undo "
 			"step back to the saved scene; the scene stays modified (save it to keep the changes). It refuses when the scene file changed since "
@@ -577,49 +559,95 @@ namespace Strata
 					progress->Load = recovery.Read(entry->Id, context.GetSceneFile(entry->Scene).first);
 					return std::nullopt;
 				});
-			}), EditorCommandKind::Session, EditorCommandResults::Content, true });
+			}), EditorCommandKind::Session, EditorCommandResults::Content, true }));
 
 		////////////////////////////////////////////////////////////////////////////////
 		// Editor
 		////////////////////////////////////////////////////////////////////////////////
 
 		registry.Register({ "editor.status",
-			"Overview of the editor: engine version and commit, open project, scene (name, asset, unsaved changes, entity count), play state, "
-			"selection, undo history, sceneLoad (the scene scene.open or project.open is opening: {scene, startScene, state, progress}, null when "
-			"none), the process's memory (privateMB, workingSetMB and their peaks), and sections such as automation (port, clients, "
-			"connectedClients with the names agents gave, pending requests and commands), assets (memory and budgets per pool, streaming queue, "
-			"uploads; see asset.stats), game (the running game's window requests, cursor and save directory) and recovery (the edited scene's "
-			"journal of unsaved changes and how many recovery entries apply; see scene.recoveryStatus). Start here to orient yourself.",
-			ObjectSchema({}),
-			[](EditorContext& context, const nlohmann::json&)
+			"Overview of the editor; start here to orient yourself. The default answer is compact: engineVersion, project {open, name, path}, "
+			"scene {name, scene, modified, entityCount}, play {state, paused, pendingSteps, running}, selection {count, primary}, undo {undo, "
+			"redo}, errors {unread (errors logged since the last log.read), scriptBuild {failed, errors}, scriptFault, importFailures}, assets "
+			"{ready, loading, importing, scanning, failed}, saving and editor {launcher}. sections adds whole sections: engine (engineCommit, "
+			"platform), project (directories, start scene, export settings), selection (with inspectedAsset), undo (position, count), sceneLoad "
+			"(the scene scene.open or project.open is opening: {scene, startScene, state, progress}, null when none), memory (privateMB, "
+			"workingSetMB and their peaks) and the sections of editor parts: automation (port, clients, connectedClients with the names agents "
+			"gave, pending requests and commands), assets (memory and budgets per pool, streaming queue, uploads; see asset.stats), game (the "
+			"running game's window requests, cursor and save directory), recovery (the edited scene's journal of unsaved changes and how many "
+			"recovery entries apply; see scene.recoveryStatus) and editor (window, frame rate, GPU). sections: [\"all\"] returns everything.",
+			ObjectSchema({ { "sections", { { "type", "array" }, { "items", { { "type", "string" } } }, { "uniqueItems", true },
+				{ "description", "Sections to add to the compact answer: engine, project, selection, undo, sceneLoad, memory, automation, assets, "
+					"game, recovery, editor, or all" } } } }),
+			[](EditorContext& context, const nlohmann::json& parameters)
 			{
+				CommandArguments arguments(parameters);
+				const std::vector<std::string> sections = arguments.GetStringArray("sections");
+				if (!arguments.IsValid())
+					return arguments.Fail();
+				const bool all = std::find(sections.begin(), sections.end(), "all") != sections.end();
+				for (const std::string& section : sections)
+				{
+					if (section != "all" && !IsBuiltinStatusSection(section) && !context.GetStatusProviders().contains(section))
+					{
+						std::string known;
+						for (const std::string_view name : c_StatusSections)
+							known += fmt::format("{}{}", known.empty() ? "" : ", ", name);
+						for (const auto& [name, provider] : context.GetStatusProviders())
+							known += fmt::format(", {}", name);
+						return EditorCommandResult::InvalidParameters(fmt::format("Parameter 'sections': unknown section '{}' (sections: {}, all)", section, known));
+					}
+				}
+				const auto wants = [&](std::string_view section)
+				{
+					return all || std::find(sections.begin(), sections.end(), section) != sections.end();
+				};
+
 				Entity primary = context.GetPrimarySelection();
 				const UndoStack& undo = context.GetUndoStack();
-				nlohmann::json status = {
-					{ "engineVersion", c_EngineVersion },
-					{ "engineCommit", c_EngineCommit },
-					{ "platform", std::string(Platform::GetName()) },
-					{ "project", DescribeProject(context) },
-					{ "scene", {
-						{ "name", context.GetEditScene()->GetName() },
-						{ "scene", context.GetSceneHandle().IsValid() ? UUIDToJson(context.GetSceneHandle()) : nlohmann::json(nullptr) },
-						{ "modified", context.IsSceneModified() },
-						{ "entityCount", context.GetActiveScene()->GetEntityCount() } } },
-					{ "play", DescribePlayState(context) },
-					{ "selection", {
-						{ "count", context.GetSelection().size() },
-						{ "primary", primary ? UUIDToJson(primary.GetUUID()) : nlohmann::json(nullptr) },
-						{ "inspectedAsset", context.GetInspectedAsset().IsValid() ? UUIDToJson(context.GetInspectedAsset()) : nlohmann::json(nullptr) } } },
-					{ "undo", {
-						{ "position", undo.GetPosition() },
-						{ "count", undo.GetHistory().size() },
-						{ "undo", undo.GetUndoName() },
-						{ "redo", undo.GetRedoName() } } },
-					{ "sceneLoad", DescribeSceneLoad(context) },
-					{ "memory", DescribeProcessMemory() } };
+				nlohmann::json status = { { "engineVersion", c_EngineVersion } };
+				if (wants("engine"))
+				{
+					status["engineCommit"] = c_EngineCommit;
+					status["platform"] = std::string(Platform::GetName());
+				}
+				status["project"] = wants("project") ? DescribeProject(context) : DescribeProjectBriefly(context);
+				status["scene"] = {
+					{ "name", context.GetEditScene()->GetName() },
+					{ "scene", context.GetSceneHandle().IsValid() ? UUIDToJson(context.GetSceneHandle()) : nlohmann::json(nullptr) },
+					{ "modified", context.IsSceneModified() },
+					{ "entityCount", context.GetActiveScene()->GetEntityCount() } };
+				status["play"] = DescribePlayState(context);
+				status["play"]["pendingSteps"] = context.GetPendingSteps();
+				status["play"]["running"] = DescribeRunningScene(context);
+				status["selection"] = {
+					{ "count", context.GetSelection().size() },
+					{ "primary", primary ? UUIDToJson(primary.GetUUID()) : nlohmann::json(nullptr) } };
+				if (wants("selection"))
+					status["selection"]["inspectedAsset"] = context.GetInspectedAsset().IsValid() ? UUIDToJson(context.GetInspectedAsset()) : nlohmann::json(nullptr);
+				status["undo"] = { { "undo", undo.GetUndoName() }, { "redo", undo.GetRedoName() } };
+				if (wants("undo"))
+				{
+					status["undo"]["position"] = undo.GetPosition();
+					status["undo"]["count"] = undo.GetHistory().size();
+				}
+				status["errors"] = DescribeErrors(context);
+				// Saves running in the background (none: scene.save writes before it answers).
+				status["saving"] = nlohmann::json::array();
+				if (wants("sceneLoad"))
+					status["sceneLoad"] = DescribeSceneLoad(context);
+				if (wants("memory"))
+					status["memory"] = DescribeProcessMemory();
 				// Sections of other editor parts; they never replace the built-in ones.
 				for (const auto& [section, provider] : context.GetStatusProviders())
-					status.emplace(section, provider());
+				{
+					if (IsBuiltinStatusSection(section) || status.contains(section))
+						continue;
+					if (wants(section))
+						status[section] = provider.Full();
+					else if (provider.Compact)
+						status[section] = provider.Compact();
+				}
 				return EditorCommandResult::Ok(std::move(status));
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
@@ -677,7 +705,7 @@ namespace Strata
 		// Frames
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "editor.wait",
+		registry.Register(MayDefer({ "editor.wait",
 			"Returns after the given number of frames. Use it to let a playing scene run, assets load or the viewport render before the next "
 			"command. Returns {frames} and, when the editor measures its frames (not when a test drives it without its EditorLayer), "
 			"frameTimes: the CPU time of the frames that ran entirely while waiting (all but the first), in milliseconds {count, medianMs, "
@@ -704,14 +732,14 @@ namespace Strata
 						result["frameTimes"] = frameTimes.Describe();
 					return EditorCommandResult::Ok(std::move(result));
 				});
-			}, EditorCommandKind::Query });
+			}, EditorCommandKind::Query }));
 
 		registry.Register({ "editor.perf",
 			"Where the editor's frames go: statistics of the latest frames the frame profiler recorded (at most 600). Returns frames (how many "
 			"were summarized), frame (the CPU time of a frame without the waits for the GPU and the display, like the status bar's frame time), "
 			"framesPerSecond, stages (per stage of the main thread: Input, Assets.Update, Assets.Finalize, Scene.Load (swapping in a scene that "
-			"finished loading, creating sub-scenes' entities), Scene.Scripts, Scene.Animation, Scene.Physics, Scene.Audio, Scene.Transforms, "
-			"Render.Extract, Render.Submit, Editor.UI and Present, plus stages modules registered; each its self "
+			"finished loading, creating sub-scenes' entities), Scene.UI (the game UI's input), Scene.Scripts, Scene.Animation, Scene.Physics, "
+			"Scene.Audio, Scene.Transforms, Render.Extract, Render.Submit, Render.UI (the game UI pass), Editor.UI and Present, plus stages modules registered; each its self "
 			"time, nested stages excluded, with inFrameTime false for Present, which comes after the frame time is measured), stageSum (the "
 			"stages inside the frame time added up per frame), untimed (the rest of each frame, work no stage accounts for) and jobs (worker, "
 			"I/O and background threads (imports, exports), how busy they were in percent, running and queued jobs now). Times are milliseconds as avgMs, p50Ms and p95Ms "
@@ -728,99 +756,31 @@ namespace Strata
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 
 		////////////////////////////////////////////////////////////////////////////////
-		// Play mode
-		////////////////////////////////////////////////////////////////////////////////
-
-		registry.Register({ "play.start",
-			"Runs a copy of the scene with scripts, physics and audio. Changes made while playing are discarded by play.stop. When the project's "
-			"scripts need building first (their sources changed since the module was built, or scenes use scripts that are not built or "
-			"loaded), it builds them, then plays the new code: the answer comes once the build finished (a failed build fails play.start with "
-			"its first errors; script.status lists every diagnostic). A build already running is waited for. While a scene is being opened "
-			"(scene.open) it fails at once, building nothing. Returns the play state and, when it built, built: {build, seconds, reason}.",
-			ObjectSchema({ { "build", BoolSchema("Build the scripts first when they need it (default true); false plays what is loaded") } }),
-			[](EditorContext& context, const nlohmann::json& parameters)
-			{
-				CommandArguments arguments(parameters);
-				const bool build = arguments.GetBool("build", true);
-				if (!arguments.IsValid())
-					return arguments.Fail();
-				// A running scene, and a scene being opened, refuse (Play says why) before anything is built: a build would take
-				// its time only for the play to be refused after it.
-				if (build && !context.IsPlaying() && !context.IsSceneLoading()
-					&& (context.GetScriptBuilder().IsRunning() || context.GetPlayBuildReason()))
-					return StartPlayAfterBuild(context);
-				std::string error;
-				if (!context.Play(&error))
-					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok(DescribePlayState(context));
-			}, EditorCommandKind::Session });
-
-		registry.Register({ "play.simulate", "Runs a copy of the scene with physics only (no scripts or audio).", ObjectSchema({}),
-			[](EditorContext& context, const nlohmann::json&)
-			{
-				std::string error;
-				if (!context.Simulate(&error))
-					return EditorCommandResult::Fail(error);
-				return EditorCommandResult::Ok(DescribePlayState(context));
-			}, EditorCommandKind::Session });
-
-		registry.Register({ "play.stop", "Stops play or simulate mode and returns to the edited scene.", ObjectSchema({}),
-			[](EditorContext& context, const nlohmann::json&)
-			{
-				context.Stop();
-				return EditorCommandResult::Ok(DescribePlayState(context));
-			}, EditorCommandKind::Session });
-
-		registry.Register({ "play.pause", "Pauses or resumes the running scene.",
-			ObjectSchema({ { "paused", BoolSchema("Whether the simulation is paused") } }, { "paused" }),
-			[](EditorContext& context, const nlohmann::json& parameters)
-			{
-				CommandArguments arguments(parameters);
-				if (!arguments.Has("paused"))
-					arguments.SetError("Missing parameter 'paused'");
-				const bool paused = arguments.GetBool("paused", true);
-				if (!arguments.IsValid())
-					return arguments.Fail();
-				if (!context.IsPlaying())
-					return EditorCommandResult::Fail("The scene is not running");
-				context.SetPaused(paused);
-				return EditorCommandResult::Ok(DescribePlayState(context));
-			}, EditorCommandKind::Session });
-
-		registry.Register({ "play.step", "While paused, advances the simulation by a number of fixed steps over the next frames.",
-			ObjectSchema({ { "frames", IntegerSchema("Fixed steps (default 1)", 1, 10000) } }),
-			[](EditorContext& context, const nlohmann::json& parameters)
-			{
-				CommandArguments arguments(parameters);
-				const int64_t frames = arguments.GetInt("frames", 1, 1, 10000);
-				if (!arguments.IsValid())
-					return arguments.Fail();
-				if (!context.IsPaused())
-					return EditorCommandResult::Fail("Stepping needs a paused running scene (play.pause)");
-				context.Step(static_cast<uint32_t>(frames));
-				return EditorCommandResult::Ok(DescribePlayState(context));
-			}, EditorCommandKind::Session });
-
-		registry.Register({ "play.state", "Whether the scene is being edited, played or simulated, and whether it is paused.", ObjectSchema({}),
-			[](EditorContext& context, const nlohmann::json&)
-			{
-				return EditorCommandResult::Ok(DescribePlayState(context));
-			}, EditorCommandKind::Query, EditorCommandResults::Session });
-
-		////////////////////////////////////////////////////////////////////////////////
 		// Log
 		////////////////////////////////////////////////////////////////////////////////
 
-		registry.Register({ "log.read", "Log messages (engine, editor and scripts) after a sequence number, oldest first. Page with after = the returned latest while more is true.",
+		registry.Register({ "log.read",
+			"Log messages (engine, editor and scripts), oldest first after a sequence number, or with newest: true the latest first. Page "
+			"oldest first with after = the returned latest, newest first with before = the returned oldest, while more is true. Reading from "
+			"level Error or below without a logger marks the errors read for editor.status (errors.unread).",
 			ObjectSchema({
-				{ "after", IntegerSchema("Return messages with a sequence number above this (default 0)", 0, std::numeric_limits<int64_t>::max()) },
-				{ "maxCount", IntegerSchema("Maximum number of messages (default 200)", 1, 10000) },
+				{ "after", IntegerSchema("Only messages with a sequence number above this (default 0)", 0, std::numeric_limits<int64_t>::max()) },
+				{ "before", IntegerSchema("Only messages with a sequence number below this (default: none)", 1, std::numeric_limits<int64_t>::max()) },
+				{ "newest", BoolSchema("Newest first: the latest messages (default false: oldest first)") },
+				{ "logger", StringSchema("Only messages of this logger (exact name, e.g. Strata, App, Script)") },
+				{ "limit", IntegerSchema("Maximum number of messages (default 200)", 1, 10000) },
+				{ "maxCount", IntegerSchema("The former name of limit", 1, 10000) },
 				{ "minLevel", { { "type", "string" }, { "enum", { "Trace", "Info", "Warn", "Error", "Critical" } }, { "description", "Lowest level returned (default Info)" } } } }),
-			[](EditorContext&, const nlohmann::json& parameters)
+			[](EditorContext& context, const nlohmann::json& parameters)
 			{
 				CommandArguments arguments(parameters);
-				const int64_t after = arguments.GetInt("after", 0, 0, std::numeric_limits<int64_t>::max());
+				const uint64_t after = static_cast<uint64_t>(arguments.GetInt("after", 0, 0, std::numeric_limits<int64_t>::max()));
+				constexpr int64_t c_NoBound = std::numeric_limits<int64_t>::max();
+				const uint64_t before = static_cast<uint64_t>(arguments.GetInt("before", c_NoBound, 1, c_NoBound));
+				const bool newest = arguments.GetBool("newest", false);
+				const std::string logger = arguments.GetString("logger", "");
 				const int64_t maxCount = arguments.GetInt("maxCount", 200, 1, 10000);
+				const size_t limit = static_cast<size_t>(arguments.GetInt("limit", maxCount, 1, 10000));
 				const std::string levelName = arguments.GetString("minLevel", "Info");
 				LogLevel minLevel = LogLevel::Info;
 				bool levelFound = false;
@@ -834,33 +794,79 @@ namespace Strata
 				}
 				if (!levelFound)
 					arguments.SetError(fmt::format("Unknown log level '{}'", levelName));
+				if (arguments.Has("limit") && arguments.Has("maxCount") && parameters.at("limit") != parameters.at("maxCount"))
+					arguments.SetError("Give limit or maxCount (its former name), not both");
 				if (!arguments.IsValid())
 					return arguments.Fail();
 
-				// The oldest messages after `after` come first, so paging with after = latest never skips any.
-				nlohmann::json messages = nlohmann::json::array();
-				uint64_t latest = static_cast<uint64_t>(after);
-				bool more = false;
-				for (const LogEntry& entry : Log::GetBuffer().GetEntries(static_cast<uint64_t>(after)))
+				const auto describe = [](const LogEntry& entry)
 				{
-					if (entry.Level < minLevel)
+					return nlohmann::json {
+						{ "sequence", entry.Sequence },
+						{ "level", LogLevelToString(entry.Level) },
+						{ "logger", entry.Logger },
+						{ "message", entry.Message },
+						{ "time", entry.Timestamp } };
+				};
+				const auto matches = [&](const LogEntry& entry) { return entry.Level >= minLevel && (logger.empty() || entry.Logger == logger); };
+				const std::vector<LogEntry> entries = Log::GetBuffer().GetEntries(after);
+				nlohmann::json messages = nlohmann::json::array();
+				bool more = false;
+				// Errors up to the newest message looked at were returned (or skipped below a higher minLevel or for another
+				// logger, which leaves them unread).
+				const bool marksRead = minLevel <= LogLevel::Error && logger.empty();
+				if (newest)
+				{
+					// Newest first, so paging with before = oldest never skips any.
+					uint64_t oldest = before;
+					uint64_t newestSeen = 0;
+					for (auto entry = entries.rbegin(); entry != entries.rend(); ++entry)
+					{
+						if (entry->Sequence >= before)
+							continue;
+						if (!matches(*entry))
+						{
+							oldest = entry->Sequence;
+							newestSeen = std::max(newestSeen, entry->Sequence);
+							continue;
+						}
+						if (messages.size() == limit)
+						{
+							more = true;
+							break;
+						}
+						oldest = entry->Sequence;
+						newestSeen = std::max(newestSeen, entry->Sequence);
+						messages.push_back(describe(*entry));
+					}
+					if (marksRead)
+						context.MarkLogRead(newestSeen);
+					nlohmann::json result = { { "messages", std::move(messages) }, { "more", more } };
+					result["oldest"] = oldest == static_cast<uint64_t>(c_NoBound) ? nlohmann::json(nullptr) : nlohmann::json(oldest);
+					return EditorCommandResult::Ok(std::move(result));
+				}
+
+				// The oldest messages after `after` come first, so paging with after = latest never skips any.
+				uint64_t latest = after;
+				for (const LogEntry& entry : entries)
+				{
+					if (entry.Sequence >= before)
+						break;
+					if (!matches(entry))
 					{
 						latest = entry.Sequence;
 						continue;
 					}
-					if (messages.size() == static_cast<size_t>(maxCount))
+					if (messages.size() == limit)
 					{
 						more = true;
 						break;
 					}
 					latest = entry.Sequence;
-					messages.push_back({
-						{ "sequence", entry.Sequence },
-						{ "level", LogLevelToString(entry.Level) },
-						{ "logger", entry.Logger },
-						{ "message", entry.Message },
-						{ "time", entry.Timestamp } });
+					messages.push_back(describe(entry));
 				}
+				if (marksRead)
+					context.MarkLogRead(latest);
 				return EditorCommandResult::Ok({ { "messages", std::move(messages) }, { "latest", latest }, { "more", more } });
 			}, EditorCommandKind::Query, EditorCommandResults::Session });
 	}

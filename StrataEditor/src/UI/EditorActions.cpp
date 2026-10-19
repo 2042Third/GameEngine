@@ -294,7 +294,7 @@ namespace Strata
 			else if (const Ref<Scene>& scene = context.GetActiveScene())
 			{
 				const EditorPlacement::Surface placed = surface ? *surface : EditorPlacement::FindPivotSurface(*scene, context.GetViewport().GetCamera());
-				const glm::vec3 translation = EditorPlacement::RestOn(placed, EditorPlacement::GetTemplateBounds(prefab));
+				const glm::vec3 translation = EditorPlacement::RestOn(placed, EditorPlacement::GetPlacementBounds(context, prefab));
 				parameters["components"] = { { "Transform", { { "Translation", { translation.x, translation.y, translation.z } } } } };
 			}
 			const nlohmann::json created = RunEditorCommand(context, commands, "prefab.instantiate", parameters);

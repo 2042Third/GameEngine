@@ -199,6 +199,10 @@ namespace Strata
 		// without it as MessagePack.
 		std::function<bool(const void* component, BinaryWriter& out, std::string* outError)> SerializeExtraBinary;
 		std::function<bool(void* component, BinaryReader& in, std::string* outError)> DeserializeExtraBinary;
+		// Names of the components this one needs on its entity (a UI image needs its UIRect). The paths that add components by
+		// name (ComponentAccess::AddComponent: component.add, entity.create, the inspector's Add Component, scripts) add the
+		// missing ones first, in the same edit. Removing a required component is allowed: the dependent one then has no effect.
+		std::vector<std::string> Requires;
 
 		bool IsHidden() const { return HasFlag(Flags, ComponentFlags::Hidden); }
 		bool IsRemovable() const { return !HasFlag(Flags, ComponentFlags::NotRemovable); }
@@ -241,6 +245,17 @@ namespace Strata
 		// an error, and the returned builder converts to false and discards what it is given.
 		template<typename T>
 		static ComponentInfoBuilder<T> Register(std::string name);
+
+		// Gives a registered property of a component its PropertyInfo::InactiveReason while registration is open: `reason`
+		// gets the component and returns why the property has no effect in its current state, or "" when it has. False, with
+		// the reason logged, when the registry is not open or the component or property is unknown.
+		template<typename T>
+		static bool SetInactiveReason(std::string_view property, std::function<std::string(const T& component)> reason)
+		{
+			return SetInactiveReason(entt::type_id<T>().hash(), property,
+				[reason = std::move(reason)](const void* component) { return reason(*static_cast<const T*>(component)); });
+		}
+		static bool SetInactiveReason(entt::id_type typeId, std::string_view property, std::function<std::string(const void* component)> reason);
 	private:
 		// Null (with the reason logged) when the registration is refused.
 		static ComponentInfo* CreateInfo(std::string name, entt::id_type typeId);
@@ -303,6 +318,13 @@ namespace Strata
 		ComponentInfoBuilder& Flags(ComponentFlags flags)
 		{
 			GetTarget().Flags = flags;
+			return *this;
+		}
+
+		// A component the entity needs for this one to work (see ComponentInfo::Requires), by its registered name.
+		ComponentInfoBuilder& Requires(std::string componentName)
+		{
+			GetTarget().Requires.push_back(std::move(componentName));
 			return *this;
 		}
 

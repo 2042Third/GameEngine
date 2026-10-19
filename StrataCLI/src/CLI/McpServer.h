@@ -12,6 +12,7 @@
 #include <istream>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -35,6 +36,9 @@ namespace Strata::CLI
 		std::chrono::seconds LaunchIdleTimeout = std::chrono::seconds(600);
 		// How long a launched editor's project may go without progress before strata_launch_editor fails (--stall-timeout).
 		std::chrono::milliseconds LaunchStallTimeout = std::chrono::milliseconds(60000);
+		// The toolsets whose editor commands are listed as tools (McpToolsets: "core" by default, "all" for every command);
+		// strata_toolsets changes them while the server runs.
+		std::vector<std::string> Toolsets = { "core" };
 	};
 
 	// Model Context Protocol server exposing the Strata editor to AI agents as tools.
@@ -43,11 +47,14 @@ namespace Strata::CLI
 	// message (responses and notifications) is passed to the output function as a single line without the
 	// terminator. Not thread-safe: call HandleLine and Tick from one thread.
 	//
-	// Tools: the generic strata_status, strata_launch_editor, strata_list_methods and strata_call are always
-	// available. While an editor is connected, each editor RPC method is also exposed as its own tool, named
-	// after the method with characters outside [A-Za-z0-9_-] replaced by '_' (entity.create -> entity_create),
-	// using the method's description and params schema. rpc.* built-ins are not exposed. When that set
-	// changes (an editor connected or disconnected), notifications/tools/list_changed is sent. Once connected,
+	// Tools: the generic strata_status, strata_launch_editor, strata_call, strata_describe and strata_toolsets are always
+	// listed (strata_list_methods stays callable for older clients). While an editor is connected, the editor RPC methods
+	// of the enabled toolsets (McpToolsets: "core" by default, about 27 commands; McpServerSpecification::Toolsets,
+	// strata_toolsets) are also exposed as tools, named after the method with characters outside [A-Za-z0-9_-] replaced
+	// by '_' (entity.create -> entity_create), with compact definitions (McpToolsets::MakeCompactToolDefinition: the
+	// description's first sentence; strata_describe gives the full text and schema), so the tool list stays far below
+	// the clients' limits on tools and tokens. rpc.* built-ins are not exposed; strata_call reaches every method. When
+	// that set changes (an editor connected or disconnected, toolsets enabled), notifications/tools/list_changed is sent. Once connected,
 	// the server stays with that editor (see EditorConnection): if it goes away, the server reports itself
 	// disconnected instead of switching to another project's editor, until strata_launch_editor picks one.
 	class McpServer
@@ -78,6 +85,12 @@ namespace Strata::CLI
 		nlohmann::json CallLaunchEditorTool(const nlohmann::json& arguments, const nlohmann::json& progressToken);
 		nlohmann::json CallListMethodsTool();
 		nlohmann::json CallGenericCallTool(const nlohmann::json& arguments);
+		nlohmann::json CallDescribeTool(const nlohmann::json& arguments);
+		nlohmann::json CallToolsetsTool(const nlohmann::json& arguments);
+		bool IsToolsetEnabled(std::string_view method) const;
+		std::vector<std::string> GetEnabledToolsets() const;
+		// The editor's methods listed as tools (those of the enabled toolsets).
+		size_t CountEditorTools() const;
 
 		// Reconnects if needed and refreshes the editor's method list.
 		void RefreshEditorState();
@@ -108,6 +121,8 @@ namespace Strata::CLI
 		std::optional<std::string> m_AnnouncedEditorTools;
 
 		std::vector<LaunchedEditor> m_LaunchedEditors; // Oldest first
+		std::set<std::string> m_Toolsets; // Enabled toolsets
+		bool m_AllToolsets = false;
 	};
 
 	// Maps an editor method name to an MCP tool name.

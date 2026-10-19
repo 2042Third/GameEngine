@@ -83,6 +83,7 @@ namespace Strata
 		state.Width = size.x;
 		state.Height = size.y;
 		state.VSync = m_Window->IsVSync();
+		state.ContentScale = m_Window->GetContentScale();
 		return state;
 	}
 

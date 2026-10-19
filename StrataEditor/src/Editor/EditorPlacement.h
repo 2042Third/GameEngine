@@ -14,6 +14,7 @@ namespace Strata
 {
 
 	class EditorCamera;
+	class EditorContext;
 	class Scene;
 
 	// Where the editor puts new content: on the surface the view looks at (SceneRaycast), resting on it rather than buried
@@ -46,9 +47,14 @@ namespace Strata
 		AABB GetMeshBounds(AssetHandle mesh);
 		// The bounds of what a prefab or model draws around its (first) root's origin, as prefab.instantiate makes it with a
 		// translation for that root: its mesh renderers' bounds (GetMeshBounds) over the root's subtree, with the root's
-		// rotation and scale and its descendants' transforms. Instantiates it into a scene of its own (loading the prefab);
-		// invalid when it draws nothing or cannot be loaded.
+		// rotation and scale and its descendants' transforms, skinned meshes in their skeleton's rest pose. Instantiates it
+		// into a scene of its own (loading the prefab); skeletons are only requested, never waited for: a skinned mesh whose
+		// skeleton is not resident yet counts in its bind pose. Invalid when it draws nothing or cannot be loaded.
 		AABB GetTemplateBounds(AssetHandle prefab);
+		// The bounds a placed prefab or model rests on a surface with: the editor's measurement (EditorContext::GetAssetBounds,
+		// which requests what it needs and caches what it finished) once complete, else GetTemplateBounds. The viewport asks
+		// for it while an asset is dragged over it, so that by the drop what it needs is resident.
+		AABB GetPlacementBounds(EditorContext& context, AssetHandle prefab);
 
 	}
 

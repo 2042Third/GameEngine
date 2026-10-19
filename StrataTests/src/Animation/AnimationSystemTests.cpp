@@ -1,12 +1,14 @@
 #include <doctest/doctest.h>
 
 #include "Animation/AnimationTestUtils.h"
+#include "Animation/SkinnedArmModel.h"
 #include "Animation/SkinnedMeshTestUtils.h"
 #include "Asset/AssetTestUtils.h"
 #include "Scene/SceneTestUtils.h"
 #include "Strata/Animation/AnimationComponents.h"
 #include "Strata/Animation/AnimationPreview.h"
 #include "Strata/Animation/AnimationSystem.h"
+#include "Strata/Animation/RestPose.h"
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Reflection/PropertyJson.h"
@@ -1362,6 +1364,334 @@ TEST_SUITE("Animation.Preview")
 			CHECK(preview.GetStatus(rig) == AnimationPreview::Status::Waiting);
 			preview.Update();
 			CHECK(preview.GetStatus(rig) == AnimationPreview::Status::Posed);
+		}
+		AssetManager::SetActive(nullptr);
+	}
+
+	TEST_CASE("Rest poses are what animators evaluate with nothing playing, whatever orients the skeleton")
+	{
+		const struct
+		{
+			const char* Name;
+			SkinnedArmOptions Options;
+		} arms[] = { { "Y-up", SkinnedArmOptions() }, { "Z-up", ZUpArmOptions() }, { "Mixamo-like", MixamoArmOptions() } };
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		AssetManager::SetActive(manager);
+		uint64_t handle = 0xA2A2A2A2'0000ull;
+		for (const auto& arm : arms)
+		{
+			CAPTURE(arm.Name);
+			const ImportedArm imported = ImportSkinnedArm(*manager, arm.Options, ++handle);
+			Scene scene("Rest");
+			const std::vector<Entity> roots = imported.ArmModel->Instantiate(scene);
+			REQUIRE(roots.size() == 1);
+			REQUIRE(roots[0].HasComponent<AnimatorComponent>());
+			AnimationPreviewSpecification specification;
+			specification.RestPoses = true;
+			AnimationPreview preview(scene, specification);
+			preview.Update();
+			SkeletonPose pose;
+			REQUIRE(preview.GetPose(roots[0].GetHandle(), pose));
+
+			// Bit for bit what play mode shows before an animation plays.
+			const Ref<Skeleton> skeleton = manager->GetAsset<Skeleton>(imported.Skeleton);
+			REQUIRE(skeleton);
+			AnimatorInstance instance;
+			AnimatorAssets assets;
+			assets.SkeletonAsset = skeleton.get();
+			std::vector<JointPose> scratch;
+			std::vector<glm::mat4> evaluated;
+			REQUIRE(instance.Evaluate(assets, AnimatorSettings(), scratch, evaluated));
+			REQUIRE(evaluated.size() == pose.Joints.size());
+			CHECK(std::memcmp(evaluated.data(), pose.Joints.data(), evaluated.size() * sizeof(glm::mat4)) == 0);
+
+			// The joints above the skin orient it: the wrist stands 2 units up the animator's +Y, whatever the armature does.
+			const glm::vec3 wrist = glm::vec3(pose.Joints[skeleton->FindJoint("Wrist")][3]);
+			CHECK(wrist.x == doctest::Approx(0.0f).epsilon(1e-5));
+			CHECK(wrist.y == doctest::Approx(2.0f).epsilon(1e-5));
+			CHECK(wrist.z == doctest::Approx(0.0f).epsilon(1e-5));
+		}
+		AssetManager::SetActive(nullptr);
+	}
+
+	TEST_CASE("Rest poses are computed once per skeleton and again only for a reimport, looking at changed animators only")
+	{
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		AssetManager::SetActive(manager);
+		AddAnimationTestAssets(*manager, true);
+		{
+			Scene scene("Rest");
+			std::vector<Entity> animators;
+			for (int index = 0; index < 1000; index++)
+			{
+				Entity entity = scene.CreateEntity(fmt::format("Rig {}", index));
+				entity.AddComponent<AnimatorComponent>().Skeleton = UUID(c_SkeletonHandle);
+				animators.push_back(entity);
+			}
+			AnimationPreviewSpecification specification;
+			specification.RestPoses = true;
+			AnimationPreview preview(scene, specification);
+			preview.Update();
+			// A thousand animators of one skeleton: one rest pose, one request, shared by all.
+			CHECK(preview.GetStats().RestPosesComputed == 1);
+			CHECK(preview.GetStats().AssetRequests == 1);
+			CHECK(preview.GetStats().AnimatorsExamined == 1000);
+			CHECK_FALSE(preview.HasWaitingRestPoses());
+			SkeletonPose first;
+			SkeletonPose last;
+			REQUIRE(preview.GetPose(animators.front().GetHandle(), first));
+			REQUIRE(preview.GetPose(animators.back().GetHandle(), last));
+			CHECK(first.Joints.data() == last.Joints.data());
+			CHECK(glm::vec3(first.Joints[2][3]) == glm::vec3(0.0f, 2.0f, 0.0f));
+
+			// Nothing changed: no pose computed, no asset requested, no animator looked at, the poses' version kept.
+			const AnimationPreviewStats before = preview.GetStats();
+			const uint64_t posesVersion = preview.GetPosesVersion();
+			for (int update = 0; update < 3; update++)
+				preview.Update();
+			CHECK(preview.GetStats().RestPosesComputed == before.RestPosesComputed);
+			CHECK(preview.GetStats().AssetRequests == before.AssetRequests);
+			CHECK(preview.GetStats().AnimatorsExamined == before.AnimatorsExamined);
+			CHECK(preview.GetPosesVersion() == posesVersion);
+
+			// An eviction keeps the matrices: they are data, not the asset.
+			manager->UnloadAsset(UUID(c_SkeletonHandle));
+			preview.Update();
+			CHECK(preview.GetStats().RestPosesComputed == before.RestPosesComputed);
+			CHECK(preview.GetStats().AssetRequests == before.AssetRequests);
+			REQUIRE(preview.GetPose(animators.front().GetHandle(), first));
+			CHECK(preview.GetPosesVersion() == posesVersion);
+
+			// Adding, changing and removing one animator looks at that animator only.
+			Entity added = scene.CreateEntity("Added");
+			added.AddComponent<AnimatorComponent>().Skeleton = UUID(c_SkeletonHandle);
+			preview.Update();
+			CHECK(preview.GetStats().AnimatorsExamined == before.AnimatorsExamined + 1);
+			SkeletonPose addedPose;
+			REQUIRE(preview.GetPose(added.GetHandle(), addedPose));
+			CHECK(addedPose.Version == first.Version);
+			added.GetComponent<AnimatorComponent>().Speed = 2.0f;
+			added.MarkModified<AnimatorComponent>();
+			preview.Update();
+			CHECK(preview.GetStats().AnimatorsExamined == before.AnimatorsExamined + 2);
+			CHECK(preview.GetStats().RestPosesComputed == before.RestPosesComputed);
+			added.RemoveComponent<AnimatorComponent>();
+			preview.Update();
+			CHECK(preview.GetStats().AnimatorsExamined == before.AnimatorsExamined + 3);
+			CHECK_FALSE(preview.GetPose(added.GetHandle(), addedPose));
+
+			// A reimport (the skeleton's source changed: a longer elbow) poses its animators again, once.
+			std::vector<JointPose> rest(3);
+			rest[1].Translation = glm::vec3(0.0f, 1.5f, 0.0f);
+			rest[2].Translation = glm::vec3(0.0f, 1.0f, 0.0f);
+			std::string error;
+			const Ref<Skeleton> longer = Skeleton::Create({ "Shoulder", "Elbow", "Wrist" }, { c_NoJoint, 0, 1 }, rest, c_NoJoint, &error);
+			REQUIRE_MESSAGE(longer, error);
+			manager->SetStoredData(UUID(c_SkeletonHandle), longer->Serialize());
+			manager->ReloadAsset(UUID(c_SkeletonHandle));
+			preview.Update();
+			REQUIRE(manager->WaitForPendingLoads());
+			for (int update = 0; update < 3; update++)
+				preview.Update();
+			CHECK(preview.GetStats().RestPosesComputed == before.RestPosesComputed + 1);
+			REQUIRE(preview.GetPose(animators.back().GetHandle(), last));
+			CHECK(glm::vec3(last.Joints[2][3]) == glm::vec3(0.0f, 2.5f, 0.0f));
+			CHECK(last.Version != first.Version);
+			CHECK(preview.GetPosesVersion() != posesVersion);
+		}
+		AssetManager::SetActive(nullptr);
+	}
+
+	TEST_CASE("A preview request wins over the rest pose, which shows again once the request is cleared")
+	{
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		AssetManager::SetActive(manager);
+		AddAnimationTestAssets(*manager, true);
+		{
+			Scene scene("Rest");
+			Entity rig = scene.CreateEntity("Rig");
+			AnimatorComponent& animator = rig.AddComponent<AnimatorComponent>();
+			animator.Skeleton = UUID(c_SkeletonHandle);
+			animator.Clip = UUID(c_WaveHandle);
+			AnimationPreviewSpecification specification;
+			specification.RestPoses = true;
+			AnimationPreview preview(scene, specification);
+			preview.Update();
+			SkeletonPose pose;
+			REQUIRE(preview.GetPose(rig.GetHandle(), pose));
+			const uint64_t rest = pose.Version;
+			CHECK(ElbowDegrees(pose.Joints[1]) == doctest::Approx(0.0f).epsilon(1e-3));
+
+			AnimationPreview::Request request;
+			request.Time = 0.5f;
+			REQUIRE(preview.Set(rig, request));
+			preview.Update();
+			REQUIRE(preview.GetPose(rig.GetHandle(), pose));
+			CHECK(pose.Version != rest);
+			CHECK(ElbowDegrees(pose.Joints[1]) == doctest::Approx(90.0f).epsilon(1e-3));
+
+			REQUIRE(preview.Clear(rig));
+			REQUIRE(preview.GetPose(rig.GetHandle(), pose));
+			CHECK(pose.Version == rest);
+		}
+		AssetManager::SetActive(nullptr);
+	}
+
+	TEST_CASE("The clip-start edit pose shows the first frame of what animators play on start, once per skeleton and clip")
+	{
+		Ref<FakeAssetManager> manager = CreateRef<FakeAssetManager>();
+		AssetManager::SetActive(manager);
+		AddAnimationTestAssets(*manager, true);
+		// A clip whose first frame bends the elbow 45 degrees, and a controller whose default state (Idle) plays it; both load
+		// once the preview asks for them.
+		constexpr uint64_t c_RaiseHandle = 0xA106;
+		constexpr uint64_t c_RaiseControllerHandle = 0xA202;
+		std::vector<AnimationChannelData> channels;
+		channels.push_back(MakeChannel("Elbow", AnimationPath::Rotation, AnimationInterpolation::Linear, { 0.0f, 1.0f },
+			Concat({ RotationZ(45.0f), RotationZ(10.0f) })));
+		std::string error;
+		const Ref<AnimationClip> raise = AnimationClip::Create("Raise", std::move(channels), &error);
+		REQUIRE_MESSAGE(raise, error);
+		manager->AddStored(c_RaiseHandle, AssetType::AnimationClip, raise->Serialize(), "Arm/Raise");
+		const Ref<AnimationController> raiseController = CreateController(CreateLocomotionControllerData(UUID(c_RaiseHandle), UUID(c_WalkHandle),
+			UUID(c_JumpHandle)));
+		manager->AddStored(c_RaiseControllerHandle, AssetType::AnimationController, StoreController(*raiseController), "Arm/Raise.stanimator");
+		{
+			Scene scene("ClipStart");
+			std::vector<Entity> byClip;
+			for (int index = 0; index < 500; index++)
+			{
+				Entity entity = scene.CreateEntity(fmt::format("Rig {}", index));
+				AnimatorComponent& animator = entity.AddComponent<AnimatorComponent>();
+				animator.Skeleton = UUID(c_SkeletonHandle);
+				animator.Clip = UUID(c_RaiseHandle);
+				byClip.push_back(entity);
+			}
+			// The controller's default state wins over the component's clip, as on start in play mode.
+			Entity byController = scene.CreateEntity("Controlled");
+			AnimatorComponent& controlled = byController.AddComponent<AnimatorComponent>();
+			controlled.Skeleton = UUID(c_SkeletonHandle);
+			controlled.Controller = UUID(c_RaiseControllerHandle);
+			controlled.Clip = UUID(c_WaveHandle);
+			Entity still = scene.CreateEntity("Still");
+			still.AddComponent<AnimatorComponent>().Skeleton = UUID(c_SkeletonHandle);
+			// Something held at the wrist of the first rig: placed by its clip-start pose, left where the importer put it at rest.
+			Entity held = scene.CreateEntity("Held");
+			AttachToJointComponent& attachment = held.AddComponent<AttachToJointComponent>();
+			attachment.Animator = byClip.front().GetUUID();
+			attachment.Joint = "Wrist";
+			held.AddComponent<MeshRendererComponent>();
+
+			AnimationPreviewSpecification specification;
+			specification.RestPoses = true;
+			specification.EditPose = AnimationEditPose::ClipStart;
+			AnimationPreview preview(scene, specification);
+			preview.Update();
+			REQUIRE(manager->WaitForPendingLoads());
+			for (int update = 0; update < 4 && preview.HasWaitingRestPoses(); update++)
+			{
+				preview.Update();
+				REQUIRE(manager->WaitForPendingLoads());
+			}
+			CHECK_FALSE(preview.HasWaitingRestPoses());
+			// One pose per skeleton and clip: the clip's, the controller's and the rest pose.
+			CHECK(preview.GetStats().RestPosesComputed == 3);
+
+			// Bit for bit what play mode shows before its first update (AnimatorInstance::Start at time 0).
+			const Ref<Skeleton> skeleton = manager->GetAsset<Skeleton>(UUID(c_SkeletonHandle));
+			REQUIRE(skeleton);
+			const Ref<AnimationClip> walk = manager->GetAsset<AnimationClip>(UUID(c_WalkHandle));
+			const Ref<AnimationClip> jump = manager->GetAsset<AnimationClip>(UUID(c_JumpHandle));
+			auto evaluate = [](const TestAnimatorAssets& testAssets)
+			{
+				const AnimatorAssets assets = testAssets.Get();
+				AnimatorInstance instance;
+				instance.Start();
+				std::vector<AnimatorFiredEvent> events;
+				std::vector<JointPose> scratch;
+				std::vector<glm::mat4> evaluated;
+				REQUIRE(instance.Advance(0.0f, assets, AnimatorSettings(), events));
+				REQUIRE(instance.Evaluate(assets, AnimatorSettings(), scratch, evaluated));
+				return evaluated;
+			};
+			// The assets as loaded from their stored form, as the preview has them.
+			const Ref<AnimationClip> loadedRaise = manager->GetAsset<AnimationClip>(UUID(c_RaiseHandle));
+			const Ref<AnimationController> loadedController = manager->GetAsset<AnimationController>(UUID(c_RaiseControllerHandle));
+			REQUIRE(loadedRaise);
+			REQUIRE(loadedController);
+			const TestAnimatorAssets clipAssets(skeleton, nullptr, { loadedRaise });
+			const TestAnimatorAssets controllerAssets(skeleton, loadedController, { loadedRaise, walk, jump });
+			const std::vector<glm::mat4> clipStart = evaluate(clipAssets);
+			const std::vector<glm::mat4> controllerStart = evaluate(controllerAssets);
+
+			SkeletonPose first;
+			SkeletonPose last;
+			SkeletonPose controllerPose;
+			SkeletonPose stillPose;
+			REQUIRE(preview.GetPose(byClip.front().GetHandle(), first));
+			REQUIRE(preview.GetPose(byClip.back().GetHandle(), last));
+			REQUIRE(preview.GetPose(byController.GetHandle(), controllerPose));
+			REQUIRE(preview.GetPose(still.GetHandle(), stillPose));
+			CHECK(first.Joints.data() == last.Joints.data());
+			REQUIRE(first.Joints.size() == clipStart.size());
+			CHECK(std::memcmp(first.Joints.data(), clipStart.data(), clipStart.size() * sizeof(glm::mat4)) == 0);
+			REQUIRE(controllerPose.Joints.size() == controllerStart.size());
+			CHECK(std::memcmp(controllerPose.Joints.data(), controllerStart.data(), controllerStart.size() * sizeof(glm::mat4)) == 0);
+			CHECK(ElbowDegrees(first.Joints[1]) == doctest::Approx(45.0f).epsilon(1e-3));
+			CHECK(ElbowDegrees(controllerPose.Joints[1]) == doctest::Approx(45.0f).epsilon(1e-3));
+			// Without a controller or a clip: the rest pose.
+			CHECK(ElbowDegrees(stillPose.Joints[1]) == doctest::Approx(0.0f).epsilon(1e-3));
+			// The held entity is drawn at the bent wrist.
+			const std::span<const RenderTransform> placed = preview.GetRenderTransforms();
+			REQUIRE(placed.size() == 1);
+			CHECK(placed[0].Entity == held.GetHandle());
+			CHECK(SameMatrices(placed[0].World, scene.GetWorldTransform(byClip.front()) * first.Joints[skeleton->FindJoint("Wrist")], 1e-5f));
+
+			// Idle updates compute nothing and request nothing.
+			const AnimationPreviewStats before = preview.GetStats();
+			const uint64_t posesVersion = preview.GetPosesVersion();
+			for (int update = 0; update < 3; update++)
+				preview.Update();
+			CHECK(preview.GetStats().RestPosesComputed == before.RestPosesComputed);
+			CHECK(preview.GetStats().AssetRequests == before.AssetRequests);
+			CHECK(preview.GetStats().AnimatorsExamined == before.AnimatorsExamined);
+			CHECK(preview.GetPosesVersion() == posesVersion);
+			// Asking for the edit pose the preview shows already changes nothing.
+			preview.SetEditPose(AnimationEditPose::ClipStart);
+			preview.Update();
+			CHECK(preview.GetStats().AnimatorsExamined == before.AnimatorsExamined);
+
+			// Back to rest poses: every animator is looked at once and shows the rest pose the still animator shows already (no
+			// pose computed); the held entity goes back to where the scene has it.
+			preview.SetEditPose(AnimationEditPose::Rest);
+			preview.Update();
+			CHECK(preview.GetStats().AnimatorsExamined == before.AnimatorsExamined + 502);
+			CHECK(preview.GetStats().RestPosesComputed == before.RestPosesComputed);
+			REQUIRE(preview.GetPose(byClip.front().GetHandle(), first));
+			REQUIRE(preview.GetPose(byController.GetHandle(), controllerPose));
+			CHECK(first.Version == stillPose.Version);
+			CHECK(controllerPose.Version == stillPose.Version);
+			CHECK(preview.GetRenderTransforms().empty());
+			CHECK(preview.GetPosesVersion() != posesVersion);
+
+			// A reimport of the clip poses its animators again, once.
+			preview.SetEditPose(AnimationEditPose::ClipStart);
+			preview.Update();
+			CHECK(preview.GetStats().RestPosesComputed == before.RestPosesComputed + 2);
+			std::vector<AnimationChannelData> lower;
+			lower.push_back(MakeChannel("Elbow", AnimationPath::Rotation, AnimationInterpolation::Linear, { 0.0f, 1.0f },
+				Concat({ RotationZ(30.0f), RotationZ(10.0f) })));
+			const Ref<AnimationClip> lowered = AnimationClip::Create("Raise", std::move(lower), &error);
+			REQUIRE_MESSAGE(lowered, error);
+			manager->SetStoredData(UUID(c_RaiseHandle), lowered->Serialize());
+			manager->ReloadAsset(UUID(c_RaiseHandle));
+			preview.Update();
+			REQUIRE(manager->WaitForPendingLoads());
+			for (int update = 0; update < 3; update++)
+				preview.Update();
+			CHECK(preview.GetStats().RestPosesComputed == before.RestPosesComputed + 4);
+			REQUIRE(preview.GetPose(byClip.back().GetHandle(), last));
+			CHECK(ElbowDegrees(last.Joints[1]) == doctest::Approx(30.0f).epsilon(1e-3));
 		}
 		AssetManager::SetActive(nullptr);
 	}

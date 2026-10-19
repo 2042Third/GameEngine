@@ -252,6 +252,50 @@ TEST_SUITE("Editor.DataSafety")
 		CHECK_FALSE(editor.Context().IsSceneModified());
 	}
 
+	TEST_CASE("File > Open Scene asks about unsaved changes, then opens a scene file of the asset directory")
+	{
+		Tests::HarnessEditor editor;
+		const std::filesystem::path directory = Tests::CreateTemporaryDirectory("DataSafetyOpenScene") / "Game";
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" }, { "template", "basic3d" } });
+		editor.Frames(2);
+		const std::filesystem::path assets = editor.Context().GetProject()->GetAssetDirectory();
+		const AssetHandle main = editor.Context().GetSceneHandle();
+		REQUIRE(main.IsValid());
+		editor.Run("scene.saveAs", { { "path", "Scenes/Other.stscene" } });
+		REQUIRE(editor.Context().GetSceneHandle() != main);
+		editor.Run("entity.create", { { "name", "Unsaved" } });
+
+		// The menu offers it with a project; Ctrl+O is its shortcut.
+		REQUIRE(editor.Click("Menu.File"));
+		editor.Frames(1);
+		const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find("Menu.File.OpenScene");
+		REQUIRE(item.has_value());
+		CHECK(item->Enabled);
+		editor.Harness.SetKey(ImGuiKey_Escape, true);
+		editor.Frames(1);
+		editor.Harness.SetKey(ImGuiKey_Escape, false);
+		editor.Frames(1);
+
+		// A file outside the asset directory is refused without a question.
+		CHECK_FALSE(editor.Layer->OpenSceneFile(directory.parent_path() / "Elsewhere.stscene"));
+		editor.Frames(2);
+		CHECK_FALSE(UI::ItemProbe::Find("UnsavedChanges.DontSave").has_value());
+
+		// The chosen file opens once the person answered the question about the unsaved changes.
+		REQUIRE(editor.Layer->OpenSceneFile(assets / "Scenes" / "Main.stscene"));
+		editor.Frames(2);
+		REQUIRE(editor.Click("UnsavedChanges.DontSave"));
+		REQUIRE(editor.FramesUntil([&editor, main]() { return editor.Context().GetSceneHandle() == main && !editor.Context().IsSceneLoading(); }));
+		CHECK_FALSE(editor.Context().GetEditScene()->FindEntityByName("Unsaved"));
+		CHECK_FALSE(editor.Context().IsSceneModified());
+
+		// Not while playing.
+		editor.Run("play.start", { { "build", false } });
+		REQUIRE(editor.Context().IsPlaying());
+		CHECK_FALSE(editor.Layer->OpenSceneFile(assets / "Scenes" / "Other.stscene"));
+		editor.Run("play.stop");
+	}
+
 	TEST_CASE("Don't Save asks again when an agent changed the scene while the question was open")
 	{
 		Tests::HarnessEditor editor({}, Tests::WithFeatureProject("DataSafetyAgentEdit"));

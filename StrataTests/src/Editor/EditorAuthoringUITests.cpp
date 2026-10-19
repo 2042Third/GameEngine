@@ -7,7 +7,9 @@
 #include "EditorLayer.h"
 #include "FeatureTest/FeatureTestUtils.h"
 #include "Panels/ContentBrowserPanel.h"
+#include "Panels/InspectorPanel.h"
 #include "Panels/SceneHierarchyPanel.h"
+#include "Scripting/ScriptTestUtils.h"
 #include "TestHelpers.h"
 #include "UI/EditorActions.h"
 #include "UI/EntityIcons.h"
@@ -20,9 +22,11 @@
 #include <Strata/Asset/AssetManager.h>
 #include <Strata/Asset/BuiltinAssets.h>
 #include <Strata/Asset/EditorAssetManager.h>
+#include <Strata/Audio/AudioComponents.h>
 #include <Strata/Audio/AudioEngine.h>
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
+#include <Strata/GameUI/GameUIComponents.h>
 #include <Strata/ImGui/ImGuiRenderer.h>
 #include <Strata/Math/Math.h>
 #include <Strata/Physics/PhysicsComponents.h>
@@ -601,6 +605,71 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		CHECK(std::string(UI::GetComponentIcon(*controller)) == Icons::PersonStanding);
 	}
 
+	TEST_CASE("UI components and UI elements get the icons of the UI presets")
+	{
+		const std::pair<const char*, const char*> components[] = { { "UICanvas", Icons::AppWindow }, { "UIRect", Icons::Frame },
+			{ "UIImage", Icons::Image }, { "UIText", Icons::Type }, { "UISelectable", Icons::MousePointerClick },
+			{ "UIButton", Icons::RectangleHorizontal }, { "UIToggle", Icons::ToggleRight }, { "UISlider", Icons::SlidersHorizontal },
+			{ "UILayout", Icons::LayoutGrid }, { "UIInputField", Icons::TextCursorInput }, { "UIMask", Icons::Crop } };
+		for (const auto& [name, expected] : components)
+		{
+			CAPTURE(name);
+			const ComponentInfo* info = ComponentRegistry::Find(name);
+			REQUIRE(info);
+			CHECK(std::string(UI::GetComponentIcon(*info)) == expected);
+		}
+
+		Scene scene("UI Icons");
+		const entt::registry& registry = scene.GetRegistry();
+		const auto icon = [&registry](Entity entity) { return std::string(UI::GetEntityIcon(registry, entity.GetHandle())); };
+		Entity canvas = scene.CreateEntity("Canvas");
+		canvas.AddComponent<UIRectComponent>();
+		canvas.AddComponent<UICanvasComponent>();
+		CHECK(icon(canvas) == Icons::AppWindow);
+		// A button is one with its image, its script and its click sound.
+		Entity button = scene.CreateChildEntity(canvas, "Button");
+		button.AddComponent<UIRectComponent>();
+		button.AddComponent<UIImageComponent>();
+		button.AddComponent<UISelectableComponent>();
+		button.AddComponent<UIButtonComponent>();
+		button.AddComponent<ScriptComponent>();
+		button.AddComponent<AudioSourceComponent>();
+		CHECK(icon(button) == Icons::RectangleHorizontal);
+		Entity label = scene.CreateChildEntity(button, "Label");
+		label.AddComponent<UIRectComponent>();
+		label.AddComponent<UITextComponent>();
+		CHECK(icon(label) == Icons::Type);
+		Entity panel = scene.CreateChildEntity(canvas, "Panel");
+		panel.AddComponent<UIRectComponent>();
+		panel.AddComponent<UIImageComponent>();
+		CHECK(icon(panel) == Icons::Image);
+		panel.AddComponent<UILayoutComponent>();
+		CHECK(icon(panel) == Icons::LayoutGrid);
+		// Selectable widgets with their images.
+		const auto widget = [&scene, canvas](const char* name)
+		{
+			Entity entity = scene.CreateChildEntity(canvas, name);
+			entity.AddComponent<UIRectComponent>();
+			entity.AddComponent<UIImageComponent>();
+			entity.AddComponent<UISelectableComponent>();
+			return entity;
+		};
+		Entity toggle = widget("Toggle");
+		toggle.AddComponent<UIToggleComponent>();
+		CHECK(icon(toggle) == Icons::ToggleRight);
+		Entity slider = widget("Slider");
+		slider.AddComponent<UISliderComponent>();
+		CHECK(icon(slider) == Icons::SlidersHorizontal);
+		Entity field = widget("Field");
+		field.AddComponent<UIInputFieldComponent>();
+		CHECK(icon(field) == Icons::TextCursorInput);
+		// A rect alone holding others is a group.
+		Entity group = scene.CreateChildEntity(canvas, "Group");
+		group.AddComponent<UIRectComponent>();
+		scene.CreateChildEntity(group, "Inside").AddComponent<UIRectComponent>();
+		CHECK(icon(group) == Icons::Folder);
+	}
+
 	TEST_CASE("The create button and a row's context menu create entities")
 	{
 		AuthoringEditor editor;
@@ -624,6 +693,225 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		editor.Frames(2);
 		CHECK(editor.Context().IsSelected(parent));
 		CHECK(ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId));
+	}
+
+	TEST_CASE("The Create menu's meshes come with static colliders, and its Mesh only submenu makes them without")
+	{
+		AuthoringEditor editor;
+		editor.Frames(1);
+		auto create = [&](std::initializer_list<const char*> items)
+		{
+			REQUIRE(editor.Click("Hierarchy.Create"));
+			for (const char* item : items)
+				REQUIRE_MESSAGE(editor.Click(item), item);
+			const Entity entity = editor.Context().GetPrimarySelection();
+			REQUIRE(entity);
+			CHECK(entity.HasComponent<MeshRendererComponent>());
+			CHECK_FALSE(entity.HasComponent<RigidBodyComponent>());
+			return entity;
+		};
+
+		const Entity cube = create({ "Create.Cube" });
+		REQUIRE(cube.HasComponent<BoxColliderComponent>());
+		CHECK(cube.GetComponent<BoxColliderComponent>().HalfExtents == glm::vec3(0.5f));
+		// The plane's box is thin, its top the plane.
+		const Entity plane = create({ "Create.Plane" });
+		REQUIRE(plane.HasComponent<BoxColliderComponent>());
+		const BoxColliderComponent& box = plane.GetComponent<BoxColliderComponent>();
+		CHECK(box.HalfExtents.y < 0.05f);
+		CHECK(box.Offset.y + box.HalfExtents.y == doctest::Approx(0.0f));
+		CHECK(create({ "Create.Sphere" }).GetComponent<SphereColliderComponent>().Radius == 0.5f);
+		CHECK(create({ "Create.Capsule" }).HasComponent<CapsuleColliderComponent>());
+		for (const char* convex : { "Create.Cylinder", "Create.Cone", "Create.Torus" })
+		{
+			const Entity entity = create({ convex });
+			REQUIRE_MESSAGE(entity.HasComponent<MeshColliderComponent>(), convex);
+			CHECK(entity.GetComponent<MeshColliderComponent>().Convex);
+		}
+
+		const Entity plain = create({ "Create.MeshOnly", "Create.MeshOnly.Cube" });
+		CHECK(plain.GetComponent<MeshRendererComponent>().Mesh == BuiltinAssets::CubeMesh);
+		CHECK_FALSE(plain.HasComponent<BoxColliderComponent>());
+		CHECK_FALSE(plain.HasComponent<MeshColliderComponent>());
+	}
+
+	TEST_CASE("The Inspector's prefab bar lists an instance's overrides, and overridden values are marked and revert from their menu")
+	{
+		AuthoringEditor editor;
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory("InspectorPrefabBar") / "Game") }, { "name", "Game" } });
+		const UUID lamp = editor.Create("Lamp", { { "components", { { "PointLight", { { "Intensity", 2.0 } } } } } });
+		editor.Run("prefab.create", { { "entities", { UUIDToJson(lamp) } }, { "path", "Prefabs/Lamp.stprefab" } });
+		const UUID instance = *UUIDFromJson(editor.Run("prefab.instantiate", { { "prefab", "Prefabs/Lamp.stprefab" } })["id"]);
+		editor.Run("component.set", { { "entity", UUIDToJson(instance) }, { "component", "PointLight" }, { "values", { { "Intensity", 7.0 } } } });
+		editor.Run("selection.set", { { "entities", { UUIDToJson(instance) } } });
+		editor.Frames(3);
+
+		// The bar names the prefab and counts the overrides; the raw link is not drawn as a component.
+		REQUIRE(UI::ItemProbe::Find("Inspector.Prefab.Overrides").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Overrides")->Text == "Overrides (1)");
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Asset").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.Menu").has_value());
+		// The overridden property and its component are marked in the accent; the others are not.
+		const ImU32 accent = ImGui::GetColorU32(UI::GetThemeColors().Accent);
+		REQUIRE(UI::ItemProbe::Find("Inspector.PointLight.Intensity.Label").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.PointLight.Intensity.Label")->Color == accent);
+		CHECK(UI::ItemProbe::Find("Inspector.PointLight.Range.Label")->Color == 0);
+		CHECK(UI::ItemProbe::Find("Inspector.PointLight.Overridden").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Transform.Overridden").has_value());
+
+		// A right-click on the label offers Revert, which gives it the prefab's value back.
+		editor.Pause();
+		editor.Harness.MoveMouse(UI::ItemProbe::Find("Inspector.PointLight.Intensity.Label")->GetCenter());
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Right, true);
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Right, false);
+		editor.Frames(2);
+		REQUIRE(editor.Click("Inspector.PointLight.Intensity.Revert"));
+		editor.Frames(2);
+		CHECK(editor.Get(instance).GetComponent<PointLightComponent>().Intensity == 2.0f);
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Overrides")->Text == "Overrides (0)");
+		CHECK(UI::ItemProbe::Find("Inspector.PointLight.Intensity.Label")->Color == 0);
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PointLight.Overridden").has_value());
+
+		// Select picks the instance's root (here the entity itself); the selection of a plain entity has no bar.
+		REQUIRE(editor.Click("Inspector.Prefab.Select"));
+		CHECK(editor.Context().GetSelection() == std::vector<UUID> { instance });
+		editor.Run("selection.set", { { "entities", { UUIDToJson(editor.Create("Plain")) } } });
+		editor.Frames(2);
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Prefab.Overrides").has_value());
+	}
+
+	TEST_CASE("A stretched UI Rect's own rows mark the instance's overridden Position and Size, and revert them from their menu")
+	{
+		AuthoringEditor editor;
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory("InspectorRectOverrides") / "Game") }, { "name", "Game" } });
+		const nlohmann::json canvas = editor.Run("ui.create", { { "type", "canvas" } });
+		const nlohmann::json panel = editor.Run("ui.create", { { "type", "panel" }, { "parent", canvas["entity"] } });
+		// Stretched across the top: margins place it horizontally, its position and height vertically (the drawer's rows).
+		editor.Run("component.set", { { "entity", panel["entity"] }, { "component", "UIRect" },
+			{ "values", { { "AnchorMin", { 0.0, 0.0 } }, { "AnchorMax", { 1.0, 0.0 } } } } });
+		editor.Run("prefab.create", { { "entities", { canvas["entity"] } }, { "path", "Prefabs/Menu.stprefab" } });
+		const UUID instance = *UUIDFromJson(editor.Run("prefab.instantiate", { { "prefab", "Prefabs/Menu.stprefab" } })["id"]);
+		REQUIRE(editor.Get(instance).GetComponent<RelationshipComponent>().Children.size() == 1);
+		const UUID element = editor.Get(instance).GetComponent<RelationshipComponent>().Children.front();
+		const UIRectComponent prefabRect = editor.Get(element).GetComponent<UIRectComponent>();
+		editor.Run("component.set", { { "entity", UUIDToJson(element) }, { "component", "UIRect" }, { "values", {
+			{ "Position", { prefabRect.Position.x, prefabRect.Position.y + 10.0f } }, { "Size", { prefabRect.Size.x, prefabRect.Size.y + 20.0f } } } } });
+		editor.Run("selection.set", { { "entities", { UUIDToJson(element) } } });
+		editor.Frames(3);
+
+		const ImU32 accent = ImGui::GetColorU32(UI::GetThemeColors().Accent);
+		const auto labelColor = [](std::string_view row)
+		{
+			const std::optional<UI::ItemProbe::Item> label = UI::ItemProbe::Find(fmt::format("Inspector.UIRect.{}.Label", row));
+			REQUIRE_MESSAGE(label.has_value(), std::string(row));
+			return label->Color;
+		};
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIRect.Size").has_value()); // Replaced by the drawer's rows
+		CHECK(labelColor("PosY") == accent);
+		CHECK(labelColor("Height") == accent);
+		CHECK(labelColor("Left") == accent); // A margin is set through both
+		CHECK(labelColor("Right") == accent);
+		CHECK(labelColor("Pivot") == 0);
+
+		// A margin's menu offers each property it is set through; reverting the size leaves the position overridden.
+		editor.Pause();
+		editor.Harness.MoveMouse(UI::ItemProbe::Find("Inspector.UIRect.Left.Label")->GetCenter());
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Right, true);
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Right, false);
+		editor.Frames(2);
+		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Left.Apply.Position").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Left.Revert.Position").has_value());
+		REQUIRE(editor.Click("Inspector.UIRect.Left.Revert.Size"));
+		editor.Frames(2);
+		CHECK(editor.Get(element).GetComponent<UIRectComponent>().Size == prefabRect.Size);
+		CHECK(editor.Get(element).GetComponent<UIRectComponent>().Position.y == doctest::Approx(prefabRect.Position.y + 10.0f));
+		CHECK(labelColor("Height") == 0);
+		CHECK(labelColor("PosY") == accent);
+		CHECK(labelColor("Left") == accent);
+	}
+
+	TEST_CASE("The Overrides menu lists each override under its entity, and Revert All remakes the instance in the frame it is clicked")
+	{
+		AuthoringEditor editor;
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory("InspectorOverridesMenu") / "Game") }, { "name", "Game" } });
+		const UUID lamp = editor.Create("Lamp", { { "components", { { "PointLight", { { "Intensity", 2.0 } } } } } });
+		editor.Create("Bulb", { { "parent", UUIDToJson(lamp) }, { "components", { { "PointLight", { { "Intensity", 3.0 } } } } } });
+		editor.Run("prefab.create", { { "entities", { UUIDToJson(lamp) } }, { "path", "Prefabs/Lamp.stprefab" } });
+		const UUID instance = *UUIDFromJson(editor.Run("prefab.instantiate", { { "prefab", "Prefabs/Lamp.stprefab" } })["id"]);
+		const UUID bulb = editor.Get(instance).GetChildren().front().GetUUID();
+		editor.Run("component.set", { { "entity", UUIDToJson(instance) }, { "component", "PointLight" }, { "values", { { "Intensity", 7.0 } } } });
+		editor.Run("component.set", { { "entity", UUIDToJson(bulb) }, { "component", "PointLight" }, { "values", { { "Intensity", 8.0 } } } });
+		editor.Run("selection.set", { { "entities", { UUIDToJson(bulb) } } });
+		editor.Frames(3);
+		REQUIRE(UI::ItemProbe::Find("Inspector.Prefab.Overrides").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Overrides")->Text == "Overrides (2)");
+
+		// Each override is listed under the entity it is on.
+		editor.Pause();
+		REQUIRE(editor.Click("Inspector.Prefab.Overrides"));
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("Inspector.Prefab.Override.0").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Override.0")->Text == editor.Get(instance).GetName() + " \xC2\xB7 PointLight.Intensity");
+		REQUIRE(UI::ItemProbe::Find("Inspector.Prefab.Override.1").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Override.1")->Text == "Bulb \xC2\xB7 PointLight.Intensity");
+		// The rows are found once for the list, not in every frame the menu is open.
+		InspectorPanel* inspector = editor.Layer->GetPanels().Get<InspectorPanel>(EditorPanels::c_Inspector);
+		REQUIRE(inspector);
+		const uint64_t builds = inspector->GetOverrideRowsBuildCount();
+		editor.Frames(10);
+		REQUIRE(UI::ItemProbe::Find("Inspector.Prefab.Override.1").has_value());
+		CHECK(inspector->GetOverrideRowsBuildCount() == builds);
+
+		// Revert All remakes the instance's entities (their UUIDs kept): the rest of the frame draws what is there now.
+		REQUIRE(editor.Click("Inspector.Prefab.RevertAll"));
+		editor.Frames(2);
+		CHECK(editor.Get(instance).GetComponent<PointLightComponent>().Intensity == 2.0f);
+		CHECK(editor.Get(bulb).GetComponent<PointLightComponent>().Intensity == 3.0f);
+		REQUIRE(UI::ItemProbe::Find("Inspector.Prefab.Overrides").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Overrides")->Text == "Overrides (0)");
+		CHECK(UI::ItemProbe::Find("Inspector.PointLight.Intensity.Label")->Color == 0);
+	}
+
+	TEST_CASE("An instance's overridden script fields are marked, and revert from their label's menu")
+	{
+		AuthoringEditor editor;
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory("InspectorScriptOverrides") / "Game") }, { "name", "Game" } });
+		editor.Run("script.load", { { "path", FileSystem::ToUTF8(GetTestScriptModule(STRATA_TEST_SCRIPTS_FAULTS)) } });
+		const UUID source = editor.Create("Trap");
+		editor.Run("script.add", { { "entity", UUIDToJson(source) }, { "class", "Faulty" } });
+		editor.Run("prefab.create", { { "entities", { UUIDToJson(source) } }, { "path", "Prefabs/Trap.stprefab" } });
+		const UUID instance = *UUIDFromJson(editor.Run("prefab.instantiate", { { "prefab", "Prefabs/Trap.stprefab" } })["id"]);
+		editor.Run("script.setField", { { "entity", UUIDToJson(instance) }, { "class", "Faulty" }, { "field", "FaultIn" }, { "value", "OnCreate" } });
+		editor.Run("selection.set", { { "entities", { UUIDToJson(instance) } } });
+		editor.Frames(3);
+
+		const ImU32 accent = ImGui::GetColorU32(UI::GetThemeColors().Accent);
+		REQUIRE(UI::ItemProbe::Find("Inspector.Script.Faulty.FaultIn.Label").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Script.Faulty.FaultIn.Label")->Color == accent);
+		REQUIRE(UI::ItemProbe::Find("Inspector.Script.Faulty.Fault.Label").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Script.Faulty.Fault.Label")->Color == 0);
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Overrides")->Text == "Overrides (1)");
+
+		editor.Pause();
+		editor.Harness.MoveMouse(UI::ItemProbe::Find("Inspector.Script.Faulty.FaultIn.Label")->GetCenter());
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Right, true);
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Right, false);
+		editor.Frames(2);
+		REQUIRE(UI::ItemProbe::Find("Inspector.Script.Faulty.FaultIn.Apply").has_value());
+		REQUIRE(editor.Click("Inspector.Script.Faulty.FaultIn.Revert"));
+		editor.Frames(2);
+		// The prefab never set the field: the instance stores no value for it again (the class default applies).
+		const ScriptComponent& scripts = editor.Get(instance).GetComponent<ScriptComponent>();
+		REQUIRE(scripts.Scripts.size() == 1);
+		CHECK(scripts.Scripts[0].FindField("FaultIn") == nullptr);
+		CHECK(UI::ItemProbe::Find("Inspector.Script.Faulty.FaultIn.Label")->Color == 0);
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Overrides")->Text == "Overrides (0)");
 	}
 
 	TEST_CASE("A row's menu makes a prefab of the entity; an instance's menu applies and reverts it, and its badge marks it modified")
@@ -670,8 +958,8 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		settle();
 		CHECK(editor.Hierarchy().FindPrefabBadge(lamp) == Badge::Modified);
 
-		// Apply to Prefab writes it into the prefab: no longer modified. The other instance keeps its edit and missed the new
-		// version: outdated.
+		// Apply to Prefab writes it into the prefab: no longer modified. The other instance keeps its edit (an override) and takes
+		// the rest of the new version: modified, not outdated.
 		openMenu(lamp);
 		REQUIRE(editor.Click("Hierarchy.Prefab.Apply"));
 		editor.Frames(2);
@@ -679,10 +967,10 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		CHECK(editor.Run("prefab.status", { { "entity", UUIDToJson(lamp) } })["modified"] == false);
 		settle();
 		CHECK(editor.Hierarchy().FindPrefabBadge(lamp) == Badge::Linked);
-		CHECK(editor.Hierarchy().FindPrefabBadge(other) == Badge::Outdated);
+		CHECK(editor.Hierarchy().FindPrefabBadge(other) == Badge::Modified);
 		CHECK(intensity(other) == 3.0f);
 
-		// The outdated instance's Apply says that it writes over the newer version, and does (prefab.apply's force).
+		// Its Apply writes its value into the prefab.
 		openMenu(other);
 		REQUIRE(editor.Click("Hierarchy.Prefab.Apply"));
 		editor.Frames(2);
@@ -732,6 +1020,50 @@ TEST_SUITE("Editor.UI.Hierarchy")
 
 TEST_SUITE("Editor.UI.Inspector")
 {
+	TEST_CASE("Properties another property turns off are drawn disabled with the reason, on every selected entity only")
+	{
+		// Tall enough for the sky's and the post-processing's rows.
+		AuthoringEditor editor({ ImVec2(1600.0f, 1400.0f), 1.0f });
+		const UUID settings = editor.Create("Settings", { { "components", { { "SkyLight", { { "Source", "Procedural" } } },
+			{ "PostProcess", { { "AutoExposure", false } } } } } });
+		editor.Context().Select(settings);
+		editor.Frames(3);
+		auto label = [](const std::string& probe)
+		{
+			const std::optional<UI::ItemProbe::Item> item = UI::ItemProbe::Find(probe + ".Label");
+			REQUIRE_MESSAGE(item.has_value(), probe);
+			return *item;
+		};
+		// The procedural sky leaves the map unused; automatic exposure off leaves its range unused.
+		CHECK_FALSE(label("Inspector.SkyLight.EnvironmentMap").Enabled);
+		REQUIRE(UI::ItemProbe::Find("Inspector.SkyLight.EnvironmentMap.Inactive").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.SkyLight.EnvironmentMap.Inactive")->Text == "Only an environment map uses it (Source is Procedural)");
+		CHECK(label("Inspector.SkyLight.ZenithColor").Enabled);
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.SkyLight.ZenithColor.Inactive").has_value());
+		CHECK_FALSE(label("Inspector.PostProcess.AutoExposureMinEV").Enabled);
+		CHECK(UI::ItemProbe::Find("Inspector.PostProcess.AutoExposureMinEV.Inactive")->Text == "Auto Exposure is off");
+		CHECK(label("Inspector.PostProcess.Exposure").Enabled);
+
+		// With another entity whose sky uses a map: the map's row is active on one of them, so it is active.
+		const UUID other = editor.Create("Other", { { "components", { { "SkyLight", { { "Source", "EnvironmentMap" } } },
+			{ "PostProcess", { { "AutoExposure", false } } } } } });
+		editor.Context().Select(settings);
+		editor.Context().Select(other, true);
+		editor.Frames(3);
+		CHECK(label("Inspector.SkyLight.EnvironmentMap").Enabled);
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.SkyLight.EnvironmentMap.Inactive").has_value());
+		CHECK_FALSE(label("Inspector.PostProcess.AutoExposureMinEV").Enabled);
+
+		// The game UI's rows too: a canvas that scales with the screen has no use for the constant modes' factor.
+		const UUID canvas = editor.Create("Canvas", { { "components", { { "UIRect", nlohmann::json::object() }, { "UICanvas", { { "ScaleMode", "ScaleWithScreen" } } } } } });
+		editor.Context().Select(canvas);
+		editor.Frames(3);
+		CHECK_FALSE(label("Inspector.UICanvas.ScaleFactor").Enabled);
+		REQUIRE(UI::ItemProbe::Find("Inspector.UICanvas.ScaleFactor.Inactive").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.UICanvas.ScaleFactor.Inactive")->Text == "Only the constant scale modes use it (Scale Mode is Scale With Screen)");
+		CHECK(label("Inspector.UICanvas.ReferenceResolution").Enabled);
+	}
+
 	TEST_CASE("Clicking the X-axis label resets only X")
 	{
 		AuthoringEditor editor;
@@ -1007,15 +1339,14 @@ TEST_SUITE("Editor.UI.Inspector")
 		REQUIRE(editor.Get(*UUIDFromJson(found[0])).HasComponent<PrefabInstanceComponent>());
 		editor.Context().Select(*UUIDFromJson(found[0]));
 		editor.Frames(2);
-		// The prefab link: shown, but every property is read-only and the engine adds it, so it has no menu at all.
+		// The prefab link is the prefab bar's: its raw fields are not drawn as a component (no menu, no Remove, no fields).
 		REQUIRE(UI::ItemProbe::Find("Inspector.Transform.Menu").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.Prefab.Asset").has_value());
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.Menu").has_value());
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.Remove").has_value());
-		// Of the link it shows what it links to; the hashes the catch-up keeps (PrefabInstances::MarkSynced) are bookkeeping.
-		CHECK(UI::ItemProbe::Find("Inspector.PrefabInstance.Prefab").has_value());
-		CHECK(UI::ItemProbe::Find("Inspector.PrefabInstance.PrefabEntityID").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.Prefab").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.PrefabEntityID").has_value());
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.PrefabVersion").has_value());
-		CHECK_FALSE(UI::ItemProbe::Find("Inspector.PrefabInstance.SyncedHash").has_value());
 
 		// Copied values hold only what component.set accepts: the link's read-only values are nothing to paste.
 		const ComponentInfo* prefab = ComponentRegistry::Find<PrefabInstanceComponent>();
@@ -1305,6 +1636,36 @@ TEST_SUITE("Editor.UI.Inspector")
 
 TEST_SUITE("Editor.UI.AssetInspector")
 {
+	TEST_CASE("The material editor warns under a slot whose texture is imported for another use, and its button imports it right")
+	{
+		AuthoringEditor editor({ ImVec2(1600.0f, 1400.0f), 1.0f }, WithFeatureProject("EditorAuthoringTextureUsage"));
+		EditorAssetManager* assets = editor.Context().GetAssetManager();
+		REQUIRE(assets);
+		const AssetHandle material = assets->FindAssetByPath("Materials/Feature.stmat");
+		const AssetHandle checker = assets->FindAssetByPath("Textures/Checker.png");
+		REQUIRE(material.IsValid());
+		REQUIRE(checker.IsValid());
+		// A color texture as the normal map.
+		const nlohmann::json set = editor.Run("material.set", { { "material", UUIDToJson(material) }, { "properties", { { "NormalMap", UUIDToJson(checker) } } } });
+		REQUIRE(set["warnings"].size() == 1);
+		REQUIRE(editor.Context().SetInspectedAsset(material));
+		REQUIRE(editor.FramesUntil([]() { return UI::ItemProbe::Find("AssetInspector.Material.NormalMap.Fix").has_value(); }));
+		editor.Frames(1);
+		const std::optional<UI::ItemProbe::Item> warning = UI::ItemProbe::Find("AssetInspector.Material.NormalMap.Warning");
+		REQUIRE(warning.has_value());
+		CHECK(warning->Text == "Checker is imported as Color: its normals will be wrong");
+		CHECK(UI::ItemProbe::Find("AssetInspector.Material.NormalMap.Fix")->Enabled);
+		// No other slot warns.
+		CHECK_FALSE(UI::ItemProbe::Find("AssetInspector.Material.BaseColorMap.Warning").has_value());
+
+		REQUIRE(editor.Click("AssetInspector.Material.NormalMap.Fix"));
+		REQUIRE(editor.FramesUntil([&]() { return !assets->IsImportPending(checker) && assets->GetImportSettings(checker)["Usage"] == "NormalMap"; }));
+		UI::ItemProbe::Clear();
+		editor.Frames(3);
+		CHECK(UI::ItemProbe::Find("AssetInspector.Material.NormalMap").has_value());
+		CHECK_FALSE(UI::ItemProbe::Find("AssetInspector.Material.NormalMap.Warning").has_value());
+	}
+
 	TEST_CASE("Clicking an asset in the Content Browser shows it in the Asset tab, and selecting an entity returns to the Inspector")
 	{
 		AuthoringEditor editor({ ImVec2(1600.0f, 900.0f), 1.0f }, WithFeatureProject("EditorAuthoringAssetTab"));
@@ -1767,7 +2128,9 @@ TEST_SUITE("Editor.UI.AssetInspector")
 			REQUIRE(result.Success);
 			return result.Value;
 		};
+		// What the Create menu's Cube is: the mesh with its static box collider.
 		const nlohmann::json cube = run("entity.create", { { "name", "Cube" }, { "components", { { "MeshRenderer", { { "Mesh", UUIDToJson(BuiltinAssets::CubeMesh) } } },
+			{ "BoxCollider", { { "HalfExtents", { 0.5, 0.5, 0.5 } } } },
 			{ "Transform", { { "Translation", { handTranslation.x, handTranslation.y, handTranslation.z } } } } } } })["id"];
 		const nlohmann::json material = run("material.create", { { "path", "Materials/Cube.stmat" } })["asset"];
 		run("component.set", { { "entity", cube }, { "component", "MeshRenderer" }, { "values", { { "Material", material } } } });

@@ -59,6 +59,31 @@ namespace
 		return StrataScriptResult_Ok;
 	}
 
+	// The UI callbacks ("OlderUIClass") count like contacts.
+	uint32_t CountUIClick(StrataScriptInstance, StrataScriptEntityID)
+	{
+		s_ContactCalls++;
+		return StrataScriptResult_Ok;
+	}
+
+	uint32_t CountUIValueChanged(StrataScriptInstance, StrataScriptEntityID, float)
+	{
+		s_ContactCalls++;
+		return StrataScriptResult_Ok;
+	}
+
+	uint32_t CountUIFocusChanged(StrataScriptInstance, StrataScriptEntityID, bool)
+	{
+		s_ContactCalls++;
+		return StrataScriptResult_Ok;
+	}
+
+	uint32_t CountUISubmit(StrataScriptInstance, StrataScriptEntityID)
+	{
+		s_ContactCalls++;
+		return StrataScriptResult_Ok;
+	}
+
 	uint32_t SetField(StrataScriptInstance, uint32_t, const StrataScriptValue*)
 	{
 		return StrataScriptResult_Ok;
@@ -199,6 +224,30 @@ ST_SCRIPT_EXTERN_C ST_SCRIPT_EXPORT uint32_t StrataScript_Load(const StrataScrip
 			descriptor.OnTriggerExit = &CountContact;
 		}
 		s_Classes[0].StructSize = static_cast<uint32_t>(offsetof(StrataScriptClassDesc, OnCollisionEnter));
+	}
+	else if (Is(testCase, "OlderUIClass"))
+	{
+		// Both classes have the UI callbacks, but "First" describes itself as built before they were appended.
+		for (StrataScriptClassDesc& descriptor : s_Classes)
+		{
+			descriptor.OnUIClick = &CountUIClick;
+			descriptor.OnUIValueChanged = &CountUIValueChanged;
+			descriptor.OnUIFocusChanged = &CountUIFocusChanged;
+			descriptor.OnUISubmit = &CountUISubmit;
+		}
+		s_Classes[0].StructSize = static_cast<uint32_t>(offsetof(StrataScriptClassDesc, OnUIClick));
+	}
+	else if (Is(testCase, "OlderSubmitClass"))
+	{
+		// Both classes have every UI callback, but "First" describes itself as built before OnUISubmit was appended.
+		for (StrataScriptClassDesc& descriptor : s_Classes)
+		{
+			descriptor.OnUIClick = &CountUIClick;
+			descriptor.OnUIValueChanged = &CountUIValueChanged;
+			descriptor.OnUIFocusChanged = &CountUIFocusChanged;
+			descriptor.OnUISubmit = &CountUISubmit;
+		}
+		s_Classes[0].StructSize = static_cast<uint32_t>(offsetof(StrataScriptClassDesc, OnUISubmit));
 	}
 	else if (Is(testCase, "BadFieldType"))
 		s_Fields[0].Type = 999;

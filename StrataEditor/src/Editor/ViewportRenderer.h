@@ -33,20 +33,33 @@ namespace Strata
 		// running game show the scene as the game does.
 		bool EditorView = false;
 		std::string Notice;          // Shown over the image, e.g. when the scene has no camera to play from
+		// Where the game's screen lies in the image (SceneRenderOptions::ScreenView): the whole image, unless the 2D canvas
+		// mode zooms and pans it.
+		SceneScreenView ScreenView;
+		// The scene has no camera but screen-space UI to show (ResolveGameView): an empty black frame with the scene's UI over
+		// it, as GameRenderer shows a menu scene without a camera.
+		bool OverlayOnly = false;
 	};
 
 	enum class ViewportCameraSource : uint8_t
 	{
 		Automatic = 0, // The scene's primary camera in play mode (the editor camera when there is none), else the editor camera
-		Editor,
-		Scene          // The scene's primary camera; fails without one
+		Editor,        // The editor camera, as an editor view also while playing (the Scene view)
+		Scene          // The scene's primary camera; fails without one (the Game view)
 	};
 
-	// Chooses the camera for the editor's active scene: play mode looks through the scene's primary camera, editing and
-	// simulating use the editor camera. Nullopt (with an error) only for ViewportCameraSource::Scene without a camera.
+	// Chooses the camera for the editor's active scene: Automatic (captures) looks through the scene's primary camera in
+	// play mode and uses the editor camera while editing and simulating; the panels pass Editor (the Scene view) or Scene
+	// (the Game view). Nullopt (with an error) only for ViewportCameraSource::Scene without a camera.
 	std::optional<ViewportView> ResolveViewportView(EditorContext& context, ViewportCameraSource source, float aspectRatio, std::string* outError = nullptr);
 
-	// How a view shows the scene beyond the overlays: preview lighting and the game's screen-space text, from the viewport
+	class ViewportRenderer;
+
+	// The Game view's view: the scene's primary camera (ViewportCameraSource::Scene); without one, when the scene has
+	// screen-space UI (SceneRenderer::HasOverlayContent of `renderer`), a view of only that UI over black (OverlayOnly), as
+	// GameRenderer shows a menu scene without a camera. Nullopt (with an error) for a scene with neither.
+	std::optional<ViewportView> ResolveGameView(EditorContext& context, ViewportRenderer& renderer, float aspectRatio, std::string* outError = nullptr);
+	// How a view shows the scene beyond the overlays: preview lighting and the game's screen-space UI, from the viewport
 	// settings for editor views (ViewportView::EditorView), as the game shows them otherwise.
 	SceneRenderOptions GetViewportRenderOptions(const ViewportView& view, const ViewportSettings& settings);
 
@@ -79,6 +92,8 @@ namespace Strata
 		// What the debug view of the last Render found (empty without one).
 		const StreamingViewStats& GetDebugViewStats() const { return m_StreamingView.GetStats(); }
 		SceneRenderer& GetSceneRenderer() { return *m_Renderer; }
+		// Whether the renderer's overlay passes would draw screen-space content of the scene (its game UI).
+		bool HasOverlayContent(Scene& scene) const { return m_Renderer->HasOverlayContent(scene); }
 		// The scene of the last successful Render.
 		const std::weak_ptr<Scene>& GetRenderedScene() const { return m_RenderedScene; }
 		// Frees the render targets until the next Render, once the GPU has finished the work submitted with them
@@ -98,6 +113,8 @@ namespace Strata
 		uint64_t m_OutlinedHierarchyVersion = 0;
 		bool m_OutlinedValid = false;
 		std::weak_ptr<Scene> m_RenderedScene;
+		// What an OverlayOnly view renders under the scene's UI: nothing, with neutral post-processing (made on first use).
+		Scope<Scene> m_EmptyScene;
 	};
 
 }
