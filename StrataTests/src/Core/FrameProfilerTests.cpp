@@ -162,6 +162,37 @@ TEST_SUITE("Core.FrameProfiler")
 		CHECK(summary.Untimed.Max == doctest::Approx(12.5f - 10.25f)); // The rest of the frame
 	}
 
+	TEST_CASE("Stages outside the work time report their time while the frame runs, also nested in other stages")
+	{
+		ManualProfiler manual;
+		FrameProfiler& profiler = manual.Profiler;
+		const FrameStageID ui = Builtin(profiler, "Editor.UI");
+		const FrameStageID present = Builtin(profiler, "Present");
+		CHECK(profiler.GetOutOfWorkSeconds() == 0.0); // Outside a frame
+
+		profiler.BeginFrame();
+		{
+			const FrameStageScope outer(profiler, ui);
+			manual.AdvanceMs(2.0);
+			{
+				// The display's image, waited for at its first use while the UI draws into it.
+				const FrameStageScope wait(profiler, present);
+				manual.AdvanceMs(6.0);
+			}
+			manual.AdvanceMs(1.0);
+		}
+		CHECK(profiler.GetOutOfWorkSeconds() == doctest::Approx(0.006));
+		profiler.EndFrame(0.003);
+		const FrameSample frame = profiler.GetFrame(0);
+		CHECK(StageMs(frame, ui) == doctest::Approx(3.0f));
+		CHECK(StageMs(frame, present) == doctest::Approx(6.0f));
+
+		// Every frame starts from nothing.
+		profiler.BeginFrame();
+		CHECK(profiler.GetOutOfWorkSeconds() == 0.0);
+		profiler.EndFrame(0.0);
+	}
+
 	TEST_CASE("Stages time only the frame thread's frames")
 	{
 		ManualProfiler manual;

@@ -76,7 +76,8 @@ namespace Strata
 		{ "Render.Extract", true },   // SceneRenderer gathering lights, draws and shadow casters from the scene
 		{ "Render.Submit", true },    // SceneRenderer recording and submitting its command list
 		{ "Editor.UI", true },        // ImGui: the layers' OnImGuiRender and drawing the UI (ImGuiModule::OnRenderUI)
-		{ "Present", false }          // GraphicsDevice::EndFrame (presenting the back buffer), after the work time
+		{ "Present", false }          // GraphicsDevice::EndFrame (presenting the back buffer) after the work time, and the wait for
+		                              // the display's image where it comes at its first use (Renderer::PrepareBackBuffer)
 	} };
 
 	// Statistics of per-frame times in milliseconds: the mean, the 50th and 95th percentiles by nearest rank (the smallest
@@ -205,6 +206,10 @@ namespace Strata
 		// CPU stage, within c_MaxDepth); only then does End have to follow. End leaves the innermost stage.
 		bool BeginStage(FrameStageID stage);
 		void EndStage();
+		// The self time of the stages outside the work time that ended so far in the frame in progress (0 outside a frame):
+		// waits inside the frame's work that Application::RunFrame leaves out of the work time, such as the display's image
+		// that a driver hands out only at its first use (Renderer::PrepareBackBuffer). The frame thread.
+		double GetOutOfWorkSeconds() const;
 
 		uint32_t GetCapacity() const { return m_Capacity; }
 		// Frames in the ring (at most the capacity).

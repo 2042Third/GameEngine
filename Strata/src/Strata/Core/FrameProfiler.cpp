@@ -14,6 +14,7 @@ namespace Strata
 	{
 
 		constexpr double c_NanosecondsPerMillisecond = 1.0e6;
+		constexpr double c_NanosecondsPerSecond = 1.0e9;
 
 		float ToMilliseconds(int64_t nanoseconds)
 		{
@@ -308,6 +309,20 @@ namespace Strata
 		// The stage around it resumes.
 		if (m_Depth > 0)
 			m_Open[m_Depth - 1].Start = now;
+	}
+
+	double FrameProfiler::GetOutOfWorkSeconds() const
+	{
+		if (!IsTimingThisThread())
+			return 0.0;
+		int64_t nanoseconds = 0;
+		const uint32_t stageCount = GetStageCount();
+		for (uint32_t stage = 0; stage < stageCount; stage++)
+		{
+			if (!m_StageInWorkTime[stage])
+				nanoseconds += m_Accumulated[stage];
+		}
+		return static_cast<double>(nanoseconds) / c_NanosecondsPerSecond;
 	}
 
 	FrameSample FrameProfiler::ToSample(const FrameRecord& record) const

@@ -7,6 +7,7 @@
 
 #include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace Strata;
@@ -19,12 +20,13 @@ namespace
 	constexpr const char* c_BusyStage = "Test.BusyLayer";
 
 	// Works for c_FrameWork in every update (busy, so the time is exact) and records what the application reports about
-	// the frame before.
+	// the frame before. With a display wait, it then sleeps that long in the Present stage, as a frame waits for the
+	// display's image where a driver hands it out at its first use (Renderer::PrepareBackBuffer).
 	class BusyLayer : public Layer
 	{
 	public:
-		explicit BusyLayer(std::vector<double>& workTimes)
-			: Layer("Busy"), m_WorkTimes(workTimes)
+		BusyLayer(std::vector<double>& workTimes, std::chrono::milliseconds displayWait)
+			: Layer("Busy"), m_WorkTimes(workTimes), m_DisplayWait(displayWait)
 		{
 		}
 
@@ -38,19 +40,26 @@ namespace
 			while (std::chrono::steady_clock::now() < end)
 			{
 			}
+			if (m_DisplayWait.count() > 0)
+			{
+				ST_PROFILE_STAGE("Present");
+				std::this_thread::sleep_for(m_DisplayWait);
+			}
 		}
 	private:
 		std::vector<double>& m_WorkTimes;
+		std::chrono::milliseconds m_DisplayWait;
 	};
 
 	class BusyApplication : public Application
 	{
 	public:
-		BusyApplication(const ApplicationSpecification& specification, std::vector<double>& workTimes)
+		BusyApplication(const ApplicationSpecification& specification, std::vector<double>& workTimes,
+			std::chrono::milliseconds displayWait = std::chrono::milliseconds(0))
 			: Application(specification)
 		{
 			if (IsRunning())
-				PushLayer(new BusyLayer(workTimes));
+				PushLayer(new BusyLayer(workTimes, displayWait));
 		}
 	};
 
@@ -123,6 +132,46 @@ TEST_SUITE("Core.Application")
 		{
 			CHECK(workTime >= minimum);
 			CHECK(workTime < 0.06);
+		}
+	}
+
+	TEST_CASE("A wait for the display inside the frame stays out of its work time")
+	{
+		ApplicationSpecification specification;
+		specification.Name = "DisplayWaitTest";
+		specification.Headless = true;
+		specification.Jobs.WorkerThreadCount = 1;
+		specification.Jobs.IOThreadCount = 1;
+		specification.MaxFrames = 3;
+
+		// Each update works for c_FrameWork, then waits 40 ms for the display in the Present stage.
+		constexpr std::chrono::milliseconds c_DisplayWait(40);
+		FrameProfiler& profiler = FrameProfiler::Get();
+		std::vector<float> presentMs;
+		const uint32_t listener = profiler.AddFrameListener([&](const FrameSample& frame)
+		{
+			const FrameStageID present = profiler.FindStage("Present");
+			presentMs.push_back(present < frame.StageMs.size() ? frame.StageMs[present] : 0.0f);
+		});
+		std::vector<double> workTimes;
+		double lastWorkTime = 0.0;
+		{
+			BusyApplication application(specification, workTimes, c_DisplayWait);
+			application.Run();
+			lastWorkTime = application.GetLastFrameWorkTime();
+		}
+		profiler.RemoveFrameListener(listener);
+
+		workTimes.push_back(lastWorkTime);
+		REQUIRE(workTimes.size() == 3);
+		REQUIRE(presentMs.size() == 3);
+		const double minimum = std::chrono::duration<double>(c_FrameWork).count();
+		for (size_t frame = 0; frame < workTimes.size(); frame++)
+		{
+			CAPTURE(frame);
+			CHECK(workTimes[frame] >= minimum);
+			CHECK(workTimes[frame] < 0.03);
+			CHECK(presentMs[frame] >= static_cast<float>(c_DisplayWait.count()));
 		}
 	}
 

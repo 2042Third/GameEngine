@@ -734,7 +734,7 @@ entered several times in a frame adds up. Its cost is about 0.6 microseconds per
 | `Render.Extract` | `SceneRenderer::Render`'s `RenderScene::Sync` and `PrepareExtraction`, then `CullView` (or `ApplyFeedback`), `FindShadowCasters`, `ResolveAssets`, `GatherDraws`, `GatherShadowDraws` and `CollectLights` (`SceneRendererExtraction.cpp`) |
 | `Render.Submit` | the rest of `SceneRenderer::Render`: recording and submitting the command list, text |
 | `Editor.UI` | `ImGuiModule::OnRenderUI`: the layers' `OnImGuiRender` and ImGui's drawing (the viewport's render nests in it) |
-| `Present` | `GraphicsDevice::EndFrame` (`GraphicsModule::OnEndFrame`), after the work time is measured (outside the frame time) |
+| `Present` | `GraphicsDevice::EndFrame` (`GraphicsModule::OnEndFrame`), after the work time is measured (outside the frame time); and inside the frame, the back buffer's first submission (`Renderer::PrepareBackBuffer`), where a driver that hands the display's image out only at its first use waits for it (MoltenVK waits for its drawable there, within `Editor.UI`): `RunFrame` leaves the time of stages outside the work time out of it (`FrameProfiler::GetOutOfWorkSeconds`), so a frame paced by the display counts as capped, not CPU-bound |
 
 Modules and games register more (`RegisterStage`, up to 64); a scene system names its stage in its descriptor. Each frame
 also records how busy the job system's worker, I/O and background threads were since the previous frame

@@ -703,7 +703,9 @@ short. Their full wording:
   it (`ApplicationSpecification::Modules`). `Application` never names or calls module code: it only runs the hooks
   (Docs/Architecture.md, "Application and frame loop"). A module declares what it starts after (`GetDependencies`;
   `Required = false` only orders), cleans up its own failed `OnInit` and describes the failure for a person
-  (`GetStartFailure`), reports what it waits for in `EngineFrame::WaitSeconds`, and is reached by other code through
+  (`GetStartFailure`), reports what it waits for in `EngineFrame::WaitSeconds` (a wait inside other code's work, such as
+  the display's image at the back buffer's first use, is timed as a stage outside the work time instead: `Present`), and
+  is reached by other code through
   `Application::GetModules().Find<T>()`, which is null when the program does not run it.
 - **Scene caches and the transform contract:** per-frame scene cost follows what changed. `Scene` mirrors the hierarchy
   as EnTT handle links (`HierarchyComponent`, `Scene/SceneHierarchy.h`), recomputes cached world transforms

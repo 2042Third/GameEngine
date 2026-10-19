@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Renderer/Renderer.h"
 
+#include "Strata/Core/Profiling.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureTable.h"
@@ -248,6 +249,9 @@ namespace Strata
 		if (s_Data->BackBufferPrepared)
 			return s_Data->Device->GetBackBuffer();
 		s_Data->BackBufferPrepared = true;
+		// The first work on the image waits for the display where the driver hands the image out only at its first use
+		// (MoltenVK waits for its drawable in the submission below): a wait, not work, like presenting.
+		ST_PROFILE_STAGE("Present");
 		if (!s_Data->Device->PrepareBackBuffer())
 			return nullptr;
 		nvrhi::ITexture* backBuffer = s_Data->Device->GetBackBuffer();
