@@ -12,9 +12,13 @@ of its own.
 
 ## 1. Declare the data
 
-A component lives in the module that owns it: declare the struct in `Strata/src/Strata/<Module>/<Module>Components.h`
-(e.g. `GameUI/GameUIComponents.h`) and never add new ones to `Scene/Components.h`, which holds the components of the
-scene layer itself and those other modules have not taken over yet. Rules:
+Add the struct to the components header of the module that owns it: `Strata/src/Strata/<Module>/<Module>Components.h`
+(`Renderer/RendererComponents.h`, `Physics/PhysicsComponents.h`, `Audio/AudioComponents.h`,
+`Animation/AnimationComponents.h`, `Scripting/ScriptingComponents.h`, `GameUI/GameUIComponents.h`; a new module gets its
+own pair). `Scene/Components.h`
+holds only the scene's own components (ID, Name, Transform, Relationship, Tag, Inactive, PrefabInstance, Camera) and the
+types of components another module registers because a sibling layer must read them (`MeshRendererComponent`,
+`SkinComponent`): put a type there only for that reason. Rules:
 
 - Only reflectable member types: `bool`, `int32_t`, `uint32_t`, `float`, `glm::vec2/3/4`, `glm::quat`,
   `std::string`, enums (registered with `EnumProperty`), asset handles (`AssetHandle`, with
@@ -25,9 +29,8 @@ scene layer itself and those other modules have not taken over yet. Rules:
 
 ## 2. Register it
 
-In the owning module's registration function (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`, which
-may call a `Register<Module>Components` of its components file, as `GameUI/GameUIComponents.cpp` does), register the
-type with a stable name, and give it a `Category` for the Add Component menu. The name is written to files and used by tools; never rename
+In the module's `<Module>Components.cpp` (`Register<Module>Components`, declared in `<Module>Registration.h` and called
+from the module's `Register<Module>Module`), register the type with a stable name and a `Category` for Add Component. The name is written to files and used by tools; never rename
 it later. Components register only while `Engine::RegisterBuiltinModules` runs (the registry freezes at its end);
 a game or test registers its own components through `ModuleRegistrationOptions::Extra`.
 
@@ -43,7 +46,8 @@ ComponentRegistry::Register<WindZoneComponent>("WindZone")
 ```
 
 - Ranges are enforced everywhere (inspector, files, commands, scripts): choose them so invalid states are
-  impossible (no negative radii, no zero divisors).
+  impossible (no negative radii, no zero divisors). `Range`, `Slider`, `Color`, `WithTooltip` and `c_Unbounded` come
+  from `Strata/Reflection/PropertyOptions.h`.
 - `Color()` marks vec3/vec4 members as colors; `Slider(min, max)` uses a slider; `WithTooltip` documents
   the property for people and AI agents (the tooltip text is part of `component.list`).
 - Flags: `NotRemovable` for components every entity has, `Hidden` for internal ones, `NoSerialize` only
@@ -52,16 +56,22 @@ ComponentRegistry::Register<WindZoneComponent>("WindZone")
   the rect). The paths that add components by name (`ComponentAccess::AddComponent`: `component.add`, `entity.create`,
   the inspector's Add Component, scripts' `AddComponent`) add the missing ones first, in the same undo step; the registry
   drops (with an error) a requirement that names no registered component.
+- Data properties cannot express (lists, per-instance tables such as the Script component's fields) is written by the
+  component itself: `.Extra(serialize, deserialize)`. When it holds entity or asset references, also describe them with
+  `.ExtraReferences(visit, set, equals, visitJson)` (`ComponentExtraReferences`): copies and prefab instances remap
+  them, prefab status compares them and asset scans find them only through these.
 
 ## 3. Add behaviour (if the component does something at runtime)
 
 Implement a `SceneSystem` (`Scene/SceneSystem.h`) and register its descriptor in the registration function of
 the module it belongs to (e.g. `RegisterPhysicsModule` in `Physics/PhysicsRegistration.cpp`), which
 `Engine::RegisterBuiltinModules` calls. Build the descriptor with `MakeSceneSystemDescriptor<T>` (so
-`Scene::GetSystem<T>` finds the running system), declare its update order with `After`/`Before` (names of systems
-registered before it, e.g. `After = { "Physics" }`; registration order decides the rest as far as the constraints
-allow, so a system without constraints runs after the ones registered before it), and check the result of
-`SceneSystemRegistry::Register`: a cycle or an unknown name is refused. Set
+`Scene::GetSystem<T>` finds the running system), declare its update order (registration order decides the rest as far
+as the constraints allow, so a system without constraints runs after the ones registered before it): toward another
+module's system with soft constraints, `AfterIfPresent`/`BeforeIfPresent` (e.g. `AfterIfPresent = { "Physics" }`,
+ignored in builds without that system), and with hard `After`/`Before` only toward systems of the same module or of a
+module it cannot work without. Check the result of `SceneSystemRegistry::Register`: a cycle, or a hard constraint naming
+an unregistered system, is refused. Set
 `RunsInSimulateMode` only for systems that belong in the editor's physics-only simulate mode. React to
 edits through EnTT signals (`on_construct`, `on_update`, `on_destroy`). Edits notify through `patch`, which
 `ComponentAccess` and `Entity::MarkModified<T>()` emit, so the system must not poll every component each

@@ -1,6 +1,7 @@
 #include "stpch.h"
 #include "Strata/Physics/PhysicsSystem.h"
 
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 
@@ -300,6 +301,23 @@ namespace Strata
 	{
 		ApplyPendingChanges();
 		return m_World && m_World->SetAngularVelocity(entity, velocity);
+	}
+
+	Entity PhysicsSystem::GetSimulatingBody(Entity entity)
+	{
+		// Entities below a body move with it, rotation included.
+		for (Entity current = entity; current.IsValid(); current = current.GetParent())
+		{
+			if (current.HasComponent<RigidBodyComponent>())
+				return current;
+		}
+		return Entity();
+	}
+
+	bool PhysicsSystem::IsDynamicBody(Entity entity)
+	{
+		const RigidBodyComponent* rigidBody = entity.IsValid() ? entity.TryGetComponent<RigidBodyComponent>() : nullptr;
+		return rigidBody && rigidBody->Type == RigidBodyType::Dynamic;
 	}
 
 	std::optional<glm::vec3> PhysicsSystem::GetPointVelocity(Entity entity, const glm::vec3& worldPoint)

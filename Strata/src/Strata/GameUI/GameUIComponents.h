@@ -2,7 +2,7 @@
 
 #include "Strata/Asset/AssetTypes.h"
 #include "Strata/Core/UUID.h"
-#include "Strata/Scene/Components.h"
+#include "Strata/Renderer/RendererComponents.h"
 
 #include <glm/glm.hpp>
 

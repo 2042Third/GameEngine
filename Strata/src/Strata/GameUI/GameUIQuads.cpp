@@ -7,6 +7,7 @@
 #include "Strata/GameUI/GameUISceneData.h"
 #include "Strata/Renderer/DebugDraw.h"
 #include "Strata/Renderer/FontFace.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Scene/Scene.h"
 

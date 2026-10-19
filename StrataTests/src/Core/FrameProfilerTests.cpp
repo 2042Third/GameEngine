@@ -376,9 +376,13 @@ TEST_SUITE("Core.FrameProfiler")
 		ScopedJobSystem jobs(2, 1);
 		FrameProfiler profiler(FrameProfilerSpecification { 16, nullptr, true });
 		profiler.BeginFrame();
-		// Both workers spin for 30 ms; the frame waits for them.
-		const auto spin = []()
+		// Both workers spin for 30 ms; the frame waits for them. It waits only once both started: a job no worker has started
+		// yet runs on the waiting thread (Wait helps), which counts for no pool, and under load (parallel test processes)
+		// the workers may not have picked them up yet.
+		std::atomic<int> started = 0;
+		const auto spin = [&started]()
 		{
+			started.fetch_add(1);
 			const auto end = std::chrono::steady_clock::now() + std::chrono::milliseconds(30);
 			while (std::chrono::steady_clock::now() < end)
 			{
@@ -386,12 +390,15 @@ TEST_SUITE("Core.FrameProfiler")
 		};
 		const JobHandle first = JobSystem::Submit(spin);
 		const JobHandle second = JobSystem::Submit(spin);
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+		while (started.load() < 2 && std::chrono::steady_clock::now() < deadline)
+			std::this_thread::yield();
 		first.Wait();
 		second.Wait();
 		profiler.EndFrame(0.03);
 
 		const FrameSample frame = profiler.GetFrame(0);
-		// The waiting thread may have run a job itself (Wait helps), which counts for no pool: at least one worker spun.
+		CHECK(started.load() == 2);
 		CHECK(frame.WorkerBusyPercent > 10.0f);
 		CHECK(frame.WorkerBusyPercent <= 100.0f);
 		CHECK(frame.IOBusyPercent == 0.0f);

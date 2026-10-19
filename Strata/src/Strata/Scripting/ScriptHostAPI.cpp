@@ -18,6 +18,7 @@
 #include "Strata/Scripting/ScriptModule.h"
 #include "Strata/Scripting/ScriptSystem.h"
 #include "Strata/Scripting/ScriptValue.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 
 #include <glm/gtc/type_ptr.hpp>
 
@@ -1158,6 +1159,12 @@ namespace Strata
 		// Physics
 		////////////////////////////////////////////////////////////////////////////////
 
+		// What scripts are told when a scene plays without a module's system: the engine has no such module (a game built
+		// without it, or one that does not register it). Their calls fail with their failure values.
+		constexpr const char* c_WithoutPhysics = "the scene plays without physics (the engine has no physics module)";
+		constexpr const char* c_WithoutAudio = "the scene plays without audio (the engine has no audio module)";
+		constexpr const char* c_WithoutAnimation = "the scene plays without animation (the engine has no animation module)";
+
 		// The scene's physics services (Scene/SceneServices.h); null when the scene plays without physics.
 		IBodyMotionQuery* GetBodyMotion(ScriptSystem& system)
 		{
@@ -1168,13 +1175,18 @@ namespace Strata
 		{
 			IBodyControl* control = system.GetScene().GetService<IBodyControl>();
 			if (!control)
-				system.ReportProblem(function, "the scene plays without physics");
+				system.ReportProblem(function, c_WithoutPhysics);
 			return control;
 		}
 
-		IPhysicsQueries* GetPhysicsQueries(ScriptSystem& system)
+		// The scene's physics queries, reporting when the scene plays without physics. A scene with physics but no world yet
+		// (no physics component so far) has them: its queries find nothing.
+		IPhysicsQueries* RequirePhysicsQueries(ScriptSystem& system, const char* function)
 		{
-			return system.GetScene().GetService<IPhysicsQueries>();
+			IPhysicsQueries* queries = system.GetScene().GetService<IPhysicsQueries>();
+			if (!queries)
+				system.ReportProblem(function, c_WithoutPhysics);
+			return queries;
 		}
 
 		// The entity a body function acts on, reporting why it cannot: the entity does not exist, has no body in the
@@ -1185,15 +1197,19 @@ namespace Strata
 			if (!entity)
 				return {};
 			IBodyMotionQuery* motion = GetBodyMotion(system);
-			if (!motion || !motion->HasBody(entity))
+			if (!motion)
+			{
+				system.ReportProblem(function, c_WithoutPhysics);
+				return {};
+			}
+			if (!motion->HasBody(entity))
 			{
 				system.ReportProblem(function, fmt::format("'{}' has no body in the physics simulation (bodies are active entities with a RigidBody "
 					"component and colliders)", entity.GetName()));
 				return {};
 			}
 			// Colliders without a RigidBody component are static bodies of their own.
-			const RigidBodyComponent* rigidBody = entity.TryGetComponent<RigidBodyComponent>();
-			if (dynamicOnly && (!rigidBody || rigidBody->Type != RigidBodyType::Dynamic))
+			if (dynamicOnly && !motion->IsDynamicBody(entity))
 			{
 				system.ReportProblem(function, fmt::format("'{}' is not a dynamic body (only dynamic bodies have velocities, forces and impulses "
 					"applied to them)", entity.GetName()));
@@ -1382,7 +1398,7 @@ namespace Strata
 			{
 				ScriptSystem* system = ResolveContext(context, "Raycast");
 				const std::optional<RayArguments> ray = system ? ReadRay(*system, origin, direction, maxDistance, ignoreEntity, "Raycast") : std::nullopt;
-				IPhysicsQueries* physics = ray ? GetPhysicsQueries(*system) : nullptr;
+				IPhysicsQueries* physics = ray ? RequirePhysicsQueries(*system, "Raycast") : nullptr;
 				if (!physics)
 					return false;
 				const std::optional<RaycastHit> hit = physics->Raycast(ray->Origin, ray->Direction, maxDistance, layerMask, ray->Ignored, includeTriggers);
@@ -1401,7 +1417,7 @@ namespace Strata
 			{
 				ScriptSystem* system = ResolveContext(context, "RaycastAll");
 				const std::optional<RayArguments> ray = system ? ReadRay(*system, origin, direction, maxDistance, ignoreEntity, "RaycastAll") : std::nullopt;
-				IPhysicsQueries* physics = ray ? GetPhysicsQueries(*system) : nullptr;
+				IPhysicsQueries* physics = ray ? RequirePhysicsQueries(*system, "RaycastAll") : nullptr;
 				if (!physics)
 					return 0;
 				const std::vector<RaycastHit> hits = physics->RaycastAll(ray->Origin, ray->Direction, maxDistance, layerMask, ray->Ignored, includeTriggers);
@@ -1429,7 +1445,7 @@ namespace Strata
 					system->ReportProblem("OverlapSphere", "the radius must be positive and finite");
 					return 0;
 				}
-				IPhysicsQueries* physics = GetPhysicsQueries(*system);
+				IPhysicsQueries* physics = RequirePhysicsQueries(*system, "OverlapSphere");
 				return physics ? CopyEntityIDs(physics->OverlapSphere(*position, radius, layerMask, includeTriggers), outEntities, capacity) : 0;
 			});
 		}
@@ -1450,7 +1466,7 @@ namespace Strata
 					system->ReportProblem("OverlapBox", "the half extents must be positive");
 					return 0;
 				}
-				IPhysicsQueries* physics = GetPhysicsQueries(*system);
+				IPhysicsQueries* physics = RequirePhysicsQueries(*system, "OverlapBox");
 				return physics ? CopyEntityIDs(physics->OverlapBox(*position, *size, *orientation, layerMask, includeTriggers), outEntities, capacity) : 0;
 			});
 		}
@@ -1469,7 +1485,7 @@ namespace Strata
 			outCharacters = system.GetScene().GetService<ICharacterControl>();
 			if (!outCharacters)
 			{
-				system.ReportProblem(function, "the scene plays without physics");
+				system.ReportProblem(function, c_WithoutPhysics);
 				return {};
 			}
 			if (!outCharacters->HasCharacterController(entity))
@@ -1571,7 +1587,7 @@ namespace Strata
 		{
 			IAudioPlayback* audio = system.GetScene().GetService<IAudioPlayback>();
 			if (!audio)
-				system.ReportProblem(function, "the scene plays without audio");
+				system.ReportProblem(function, c_WithoutAudio);
 			return audio;
 		}
 
@@ -1586,12 +1602,12 @@ namespace Strata
 		}
 
 		// The entity whose AudioSource a function acts on, reporting why there is none.
-		Entity RequireAudioSource(ScriptSystem& system, StrataScriptEntityID id, const char* function)
+		Entity RequireAudioSource(ScriptSystem& system, IAudioPlayback& audio, StrataScriptEntityID id, const char* function)
 		{
 			const Entity entity = RequireEntity(system, id, function);
 			if (!entity)
 				return {};
-			if (!entity.HasComponent<AudioSourceComponent>())
+			if (!audio.HasSource(entity))
 			{
 				system.ReportProblem(function, fmt::format("'{}' has no AudioSource component", entity.GetName()));
 				return {};
@@ -1611,7 +1627,7 @@ namespace Strata
 			{
 				ScriptSystem* system = ResolveContext(context, function);
 				IAudioPlayback* audio = system ? RequireAudio(*system, function) : nullptr;
-				const Entity source = audio ? RequireAudioSource(*system, entity, function) : Entity();
+				const Entity source = audio ? RequireAudioSource(*system, *audio, entity, function) : Entity();
 				return source ? action(*system, *audio, source) : failure;
 			});
 		}
@@ -1951,15 +1967,15 @@ namespace Strata
 		{
 			IAnimatorControl* animation = system.GetScene().GetService<IAnimatorControl>();
 			if (!animation)
-				system.ReportProblem(function, "the scene plays without animation");
+				system.ReportProblem(function, c_WithoutAnimation);
 			return animation;
 		}
 
 		// The entity whose Animator a function acts on, reporting why there is none.
-		Entity RequireAnimator(ScriptSystem& system, StrataScriptEntityID id, const char* function)
+		Entity RequireAnimator(ScriptSystem& system, IAnimatorControl& animation, StrataScriptEntityID id, const char* function)
 		{
 			const Entity entity = RequireEntity(system, id, function);
-			if (entity && !entity.HasComponent<AnimatorComponent>())
+			if (entity && !animation.HasAnimator(entity))
 			{
 				system.ReportProblem(function, fmt::format("'{}' has no Animator component", entity.GetName()));
 				return {};
@@ -1974,7 +1990,7 @@ namespace Strata
 			{
 				ScriptSystem* system = ResolveContext(context, function);
 				IAnimatorControl* animation = system ? RequireAnimation(*system, function) : nullptr;
-				const Entity animator = animation ? RequireAnimator(*system, entity, function) : Entity();
+				const Entity animator = animation ? RequireAnimator(*system, *animation, entity, function) : Entity();
 				return animator ? action(*system, *animation, animator) : failure;
 			});
 		}

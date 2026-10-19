@@ -2,6 +2,7 @@
 #include "Strata/Runtime/GameRenderer.h"
 
 #include "Strata/Math/Math.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Scene.h"
 

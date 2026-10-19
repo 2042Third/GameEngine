@@ -2,10 +2,19 @@
 
 #include "Strata/Math/Math.h"
 #include "Strata/Renderer/DebugDraw.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/SceneGizmos.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Scene.h"
+
+#if ST_WITH_PHYSICS
+	#include "Asset/AssetTestUtils.h"
+	#include "Renderer/MeshTestUtils.h"
+	#include "Strata/Asset/AssetManager.h"
+	#include "Strata/Physics/PhysicsComponents.h"
+	#include "Strata/Renderer/Mesh.h"
+#endif
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/quaternion.hpp>
@@ -171,6 +180,7 @@ TEST_SUITE("Renderer.DebugDraw")
 		CHECK(debugDraw.IsEmpty());
 	}
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("Scene gizmos show lights, cameras and colliders")
 	{
 		Scene scene;
@@ -236,7 +246,9 @@ TEST_SUITE("Renderer.DebugDraw")
 			farthest = std::max(farthest, -vertex.Position.z);
 		CHECK(farthest == doctest::Approx(settings.MaxCameraFrustumLength));
 	}
+#endif
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("Character controllers show an upright capsule standing on their origin")
 	{
 		Scene scene;
@@ -282,6 +294,7 @@ TEST_SUITE("Renderer.DebugDraw")
 		DrawSceneGizmos(debugDraw, scene, settings);
 		CHECK(debugDraw.GetLineCount() == lineCount);
 	}
+#endif
 
 	TEST_CASE("Circles close exactly on points from the unit circle tables")
 	{
@@ -299,6 +312,7 @@ TEST_SUITE("Renderer.DebugDraw")
 		}
 	}
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("Gizmos for a view leave out what is out of view or too far, draw small lights and cameras as icons, and colliders of the selection")
 	{
 		Scene scene;
@@ -371,4 +385,92 @@ TEST_SUITE("Renderer.DebugDraw")
 		DrawSceneGizmos(debugDraw, scene, settings);
 		CHECK(debugDraw.GetLineCount() == 4 * 96 + 12 + 96);
 	}
+#endif
+
+#if ST_WITH_PHYSICS
+	TEST_CASE("Mesh colliders show the bounds of their mesh, or of the Mesh Renderer's, only while it is loaded")
+	{
+		// Loads run on the job system's threads, so that a read held at the gate holds no one else.
+		Tests::ScopedJobSystem jobs(1, 1);
+		// The active manager is the scene's (Scene::GetAssetManager). The mesh is a cube of 2 units: bounds -1 to 1.
+		const Ref<Tests::FakeAssetManager> manager = CreateRef<Tests::FakeAssetManager>();
+		AssetManager::SetActive(manager);
+		struct ClearActive
+		{
+			~ClearActive() { AssetManager::SetActive(nullptr); }
+		} clearActive;
+		const AssetHandle mesh = manager->AddStored(0x6A01, AssetType::Mesh, Tests::CreatePartedCube(2.0f, 1)->Serialize());
+
+		Scene scene;
+		// No mesh of its own: the Mesh Renderer's, at (10, 0, 0) scaled 2 x 1 x 1.
+		Entity rendered = scene.CreateEntity("Rendered");
+		rendered.GetComponent<TransformComponent>().Translation = glm::vec3(10.0f, 0.0f, 0.0f);
+		rendered.GetComponent<TransformComponent>().Scale = glm::vec3(2.0f, 1.0f, 1.0f);
+		rendered.AddComponent<MeshRendererComponent>().Mesh = mesh;
+		rendered.AddComponent<MeshColliderComponent>();
+		// Its own mesh and no Mesh Renderer, at (0, 0, -20).
+		Entity own = scene.CreateEntity("Own");
+		own.GetComponent<TransformComponent>().Translation = glm::vec3(0.0f, 0.0f, -20.0f);
+		own.AddComponent<MeshColliderComponent>().Mesh = mesh;
+		// Neither: nothing to show.
+		Entity neither = scene.CreateEntity("Neither");
+		neither.AddComponent<MeshColliderComponent>();
+		scene.UpdateWorldTransforms();
+
+		SceneGizmoSettings settings;
+		settings.Lights = false;
+		settings.Cameras = false;
+		settings.Depth = DebugDrawDepth::OnTop;
+		DebugDraw debugDraw;
+		auto drawCollidersOf = [&](const Entity& entity)
+		{
+			const Entity selection[] = { entity };
+			settings.AllColliders = false;
+			settings.ColliderEntities = selection;
+			debugDraw.Clear();
+			DrawSceneGizmos(debugDraw, scene, settings);
+			settings.ColliderEntities = {};
+		};
+
+		// Not loaded: nothing, and gizmos never request assets.
+		DrawSceneGizmos(debugDraw, scene, settings);
+		CHECK(debugDraw.IsEmpty());
+		CHECK(manager->GetAssetState(mesh) == AssetState::Unloaded);
+
+		REQUIRE(manager->LoadAssetSync<Mesh>(mesh));
+		drawCollidersOf(rendered);
+		REQUIRE(debugDraw.GetLineCount() == 12);
+		for (const DebugLineVertex& vertex : debugDraw.GetLines(DebugDrawDepth::OnTop))
+		{
+			CHECK(std::abs(vertex.Position.x - 10.0f) == doctest::Approx(2.0f));
+			CHECK(std::abs(vertex.Position.y) == doctest::Approx(1.0f));
+			CHECK(std::abs(vertex.Position.z) == doctest::Approx(1.0f));
+		}
+		drawCollidersOf(own);
+		REQUIRE(debugDraw.GetLineCount() == 12);
+		for (const DebugLineVertex& vertex : debugDraw.GetLines(DebugDrawDepth::OnTop))
+		{
+			CHECK(std::abs(vertex.Position.x) == doctest::Approx(1.0f));
+			CHECK(std::abs(vertex.Position.y) == doctest::Approx(1.0f));
+			CHECK(std::abs(vertex.Position.z + 20.0f) == doctest::Approx(1.0f));
+		}
+		drawCollidersOf(neither);
+		CHECK(debugDraw.IsEmpty());
+		// Every collider at once: the two boxes.
+		settings.AllColliders = true;
+		debugDraw.Clear();
+		DrawSceneGizmos(debugDraw, scene, settings);
+		CHECK(debugDraw.GetLineCount() == 2 * 12);
+
+		// While the mesh loads again (its read held at the gate), the previous version is no longer shown.
+		manager->CloseGate();
+		manager->ReloadAsset(mesh);
+		REQUIRE(manager->WaitForWaitingReads(1));
+		REQUIRE(manager->GetAssetState(mesh) == AssetState::Loading);
+		debugDraw.Clear();
+		DrawSceneGizmos(debugDraw, scene, settings);
+		CHECK(debugDraw.IsEmpty());
+		manager->OpenGate();
+	}
+#endif
 }

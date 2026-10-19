@@ -9,6 +9,7 @@
 #include "Strata/Project/Project.h"
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scripting/ScriptEngine.h"
+#include "TestHelpers.h"
 
 #include <spdlog/spdlog.h>
 
@@ -67,16 +68,6 @@ namespace Strata::Tests
 		Ref<EditorAssetManager> m_AssetManager;
 		Ref<AssetManagerBase> m_PreviousAssetManager;
 		Ref<Project> m_PreviousProject;
-	};
-
-	// Log entries (of every logger) written since construction; REQUIREs that the log buffer dropped none of them.
-	class LogCapture
-	{
-	public:
-		LogCapture();
-		std::vector<LogEntry> GetEntries() const;
-	private:
-		uint64_t m_Start = 0;
 	};
 
 	// Lowers the script logger to Trace while it lives, so that the scripts' Trace and Info messages are captured too.

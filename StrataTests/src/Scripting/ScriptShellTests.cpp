@@ -1,6 +1,5 @@
 #include <doctest/doctest.h>
 
-#include "FeatureTest/FeatureTestUtils.h"
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Core/EngineServices.h"
 #include "Strata/Core/FileSystem.h"
@@ -9,6 +8,7 @@
 #include "Strata/Input/Input.h"
 #include "Strata/Input/InputWindow.h"
 #include "Strata/Runtime/GameWindowService.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include <algorithm>

@@ -81,10 +81,12 @@ strata_vendor_option(JSON_Install OFF)
 strata_vendor_option(JSON_ImplicitConversions OFF)
 add_subdirectory(json SYSTEM)
 
+# Libraries only tools use (the editor, the tests) are excluded from all: a build of the runtime alone never compiles them.
+
 # --- Dear ImGui, docking branch (imgui) -----------------------------------------------------------
 # The core only: its platform backend (Strata/ImGui/ImGuiPlatform) and renderer backend (ImGuiRenderer) are the engine's.
 set(IMGUI_DIR "${CMAKE_CURRENT_SOURCE_DIR}/imgui")
-add_library(imgui STATIC
+add_library(imgui STATIC EXCLUDE_FROM_ALL
 	"${IMGUI_DIR}/imgui.cpp"
 	"${IMGUI_DIR}/imgui_demo.cpp"
 	"${IMGUI_DIR}/imgui_draw.cpp"
@@ -95,16 +97,23 @@ target_include_directories(imgui SYSTEM PUBLIC "${IMGUI_DIR}" "${IMGUI_DIR}/misc
 target_compile_definitions(imgui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
 
 # --- ImGuizmo -------------------------------------------------------------------------------------
-add_library(ImGuizmo STATIC "${CMAKE_CURRENT_SOURCE_DIR}/ImGuizmo/src/ImGuizmo.cpp")
+add_library(ImGuizmo STATIC EXCLUDE_FROM_ALL "${CMAKE_CURRENT_SOURCE_DIR}/ImGuizmo/src/ImGuizmo.cpp")
 target_include_directories(ImGuizmo SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/ImGuizmo/src")
 target_link_libraries(ImGuizmo PUBLIC imgui)
 
 # --- stb (image, image_write, image_resize2, dxt, truetype, rect_pack) -----------------------------
-add_library(stb STATIC "${STRATA_VENDOR_IMPLEMENTATIONS}/StbImplementation.c")
+# One object per header, so that the linker leaves out what a program never calls (games: the DXT encoder and the
+# resizer). rect_pack and truetype share one: stb_truetype uses rect_pack's packer when it sees its implementation.
+add_library(stb STATIC
+	"${STRATA_VENDOR_IMPLEMENTATIONS}/StbImage.c"
+	"${STRATA_VENDOR_IMPLEMENTATIONS}/StbImageWrite.c"
+	"${STRATA_VENDOR_IMPLEMENTATIONS}/StbImageResize.c"
+	"${STRATA_VENDOR_IMPLEMENTATIONS}/StbDxt.c"
+	"${STRATA_VENDOR_IMPLEMENTATIONS}/StbTrueType.c")
 target_include_directories(stb SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/stb")
 
 # --- cgltf ----------------------------------------------------------------------------------------
-add_library(cgltf STATIC "${STRATA_VENDOR_IMPLEMENTATIONS}/CgltfImplementation.c")
+add_library(cgltf STATIC EXCLUDE_FROM_ALL "${STRATA_VENDOR_IMPLEMENTATIONS}/CgltfImplementation.c")
 target_include_directories(cgltf SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/cgltf")
 
 # --- MikkTSpace -----------------------------------------------------------------------------------
@@ -118,36 +127,40 @@ strata_vendor_option(MESHOPT_BUILD_SHARED_LIBS OFF)
 strata_vendor_option(MESHOPT_INSTALL OFF)
 add_subdirectory(meshoptimizer SYSTEM)
 
-# --- miniaudio (+ stb_vorbis for Ogg Vorbis decoding) ---------------------------------------------
-add_library(miniaudio STATIC "${STRATA_VENDOR_IMPLEMENTATIONS}/MiniaudioImplementation.c")
-target_include_directories(miniaudio SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/miniaudio")
-target_include_directories(miniaudio PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/miniaudio/extras")
-if(UNIX AND NOT APPLE)
-	find_package(Threads REQUIRED)
-	target_link_libraries(miniaudio PUBLIC Threads::Threads ${CMAKE_DL_LIBS} m)
+# --- miniaudio (+ stb_vorbis for Ogg Vorbis decoding; the audio module's: STRATA_WITH_AUDIO) -------
+if(STRATA_WITH_AUDIO)
+	add_library(miniaudio STATIC "${STRATA_VENDOR_IMPLEMENTATIONS}/MiniaudioImplementation.c")
+	target_include_directories(miniaudio SYSTEM PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/miniaudio")
+	target_include_directories(miniaudio PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/miniaudio/extras")
+	if(UNIX AND NOT APPLE)
+		find_package(Threads REQUIRED)
+		target_link_libraries(miniaudio PUBLIC Threads::Threads ${CMAKE_DL_LIBS} m)
+	endif()
 endif()
 
-# --- Jolt Physics (Jolt) --------------------------------------------------------------------------
-strata_vendor_option(OVERRIDE_CXX_FLAGS OFF)
-strata_vendor_option(INTERPROCEDURAL_OPTIMIZATION OFF)
-strata_vendor_option(FLOATING_POINT_EXCEPTIONS_ENABLED OFF)
-strata_vendor_option(ENABLE_ALL_WARNINGS OFF)
-strata_vendor_option(ENABLE_INSTALL OFF)
-strata_vendor_option(ENABLE_OBJECT_STREAM OFF)
-strata_vendor_option(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE OFF)
-strata_vendor_option(PROFILER_IN_DEBUG_AND_RELEASE OFF)
-strata_vendor_option(USE_STATIC_MSVC_RUNTIME_LIBRARY ON)
-strata_vendor_option(CPP_RTTI_ENABLED ON)
-strata_vendor_option(CPP_EXCEPTIONS_ENABLED ON)
-strata_vendor_option(JPH_USE_DX12 OFF)
-strata_vendor_option(JPH_USE_VK OFF)
-strata_vendor_option(JPH_USE_MTL OFF)
-strata_vendor_option(TARGET_UNIT_TESTS OFF)
-strata_vendor_option(TARGET_HELLO_WORLD OFF)
-strata_vendor_option(TARGET_PERFORMANCE_TEST OFF)
-strata_vendor_option(TARGET_SAMPLES OFF)
-strata_vendor_option(TARGET_VIEWER OFF)
-add_subdirectory(JoltPhysics/Build SYSTEM)
+# --- Jolt Physics (Jolt; the physics module's: STRATA_WITH_PHYSICS) ------------------------------------
+if(STRATA_WITH_PHYSICS)
+	strata_vendor_option(OVERRIDE_CXX_FLAGS OFF)
+	strata_vendor_option(INTERPROCEDURAL_OPTIMIZATION OFF)
+	strata_vendor_option(FLOATING_POINT_EXCEPTIONS_ENABLED OFF)
+	strata_vendor_option(ENABLE_ALL_WARNINGS OFF)
+	strata_vendor_option(ENABLE_INSTALL OFF)
+	strata_vendor_option(ENABLE_OBJECT_STREAM OFF)
+	strata_vendor_option(DEBUG_RENDERER_IN_DEBUG_AND_RELEASE OFF)
+	strata_vendor_option(PROFILER_IN_DEBUG_AND_RELEASE OFF)
+	strata_vendor_option(USE_STATIC_MSVC_RUNTIME_LIBRARY ON)
+	strata_vendor_option(CPP_RTTI_ENABLED ON)
+	strata_vendor_option(CPP_EXCEPTIONS_ENABLED ON)
+	strata_vendor_option(JPH_USE_DX12 OFF)
+	strata_vendor_option(JPH_USE_VK OFF)
+	strata_vendor_option(JPH_USE_MTL OFF)
+	strata_vendor_option(TARGET_UNIT_TESTS OFF)
+	strata_vendor_option(TARGET_HELLO_WORLD OFF)
+	strata_vendor_option(TARGET_PERFORMANCE_TEST OFF)
+	strata_vendor_option(TARGET_SAMPLES OFF)
+	strata_vendor_option(TARGET_VIEWER OFF)
+	add_subdirectory(JoltPhysics/Build SYSTEM)
+endif()
 
 # --- zstd (zstd_decompress, zstd_compress) --------------------------------------------------------
 # Asset packs store their blocks zstd-compressed. Games only decompress; compression is a separate library that only the
@@ -171,7 +184,7 @@ add_library(zstd_decompress STATIC
 	"${ZSTD_DIR}/decompress/zstd_decompress_block.c")
 target_include_directories(zstd_decompress SYSTEM PUBLIC "${ZSTD_DIR}")
 target_compile_definitions(zstd_decompress PUBLIC ZSTD_DISABLE_ASM=1 ZSTD_LEGACY_SUPPORT=0)
-add_library(zstd_compress STATIC
+add_library(zstd_compress STATIC EXCLUDE_FROM_ALL
 	"${ZSTD_DIR}/compress/fse_compress.c"
 	"${ZSTD_DIR}/compress/hist.c"
 	"${ZSTD_DIR}/compress/huf_compress.c"
@@ -186,10 +199,11 @@ add_library(zstd_compress STATIC
 	"${ZSTD_DIR}/compress/zstd_opt.c"
 	"${ZSTD_DIR}/compress/zstd_preSplit.c")
 target_link_libraries(zstd_compress PUBLIC zstd_decompress)
-# MSVC x86 builds require AVX2 already: Jolt compiles itself and its users with /arch:AVX2 (or AVX512; same condition).
-# It lets zstd use its BMI2 bit readers (STATIC_BMI2), about 10% faster at decompressing; GCC and Clang builds pick
-# them at run time (DYNAMIC_BMI2).
-if(MSVC AND (USE_AVX2 OR USE_AVX512) AND CMAKE_VS_PLATFORM_NAME MATCHES "^(x86|x64)$")
+# MSVC x86 builds require AVX2 already: the engine compiles with Jolt's instruction sets, /arch:AVX2 (or AVX512; same
+# condition, strata_jolt_instruction_sets, also without the physics module). It lets zstd use its BMI2 bit readers
+# (STATIC_BMI2), about 10% faster at decompressing; GCC and Clang builds pick them at run time (DYNAMIC_BMI2).
+strata_jolt_instruction_sets()
+if(MSVC AND (STRATA_USE_AVX2 OR STRATA_USE_AVX512) AND CMAKE_VS_PLATFORM_NAME MATCHES "^(x86|x64)$")
 	target_compile_options(zstd_decompress PRIVATE /arch:AVX2)
 	target_compile_options(zstd_compress PRIVATE /arch:AVX2)
 endif()
@@ -221,5 +235,5 @@ endif()
 if(STRATA_BUILD_EDITOR)
 	strata_vendor_option(NFD_BUILD_TESTS OFF)
 	strata_vendor_option(NFD_INSTALL OFF)
-	add_subdirectory(nfd SYSTEM)
+	add_subdirectory(nfd SYSTEM EXCLUDE_FROM_ALL)
 endif()

@@ -2,6 +2,7 @@
 
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Core/DynamicLibrary.h"
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Physics/PhysicsSystem.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scripting/ScriptHostAPI.h"

@@ -15,6 +15,7 @@
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
 #include "Strata/Scripting/ScriptValue.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 
 #include <entt/entt.hpp>
 

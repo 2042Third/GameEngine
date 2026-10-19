@@ -1,0 +1,30 @@
+{
+	"Description": "How CTest runs the StrataTests suites: the suites of their own CTests (OwnTests), then StrataTests.Core in shards, one CTest StrataTests.Core.<Name> (label core) per shard, running the suites its Suites filters match and its Exclude filters do not (doctest filters: * and ? wildcards, case-insensitive). Every suite runs in exactly one shard or own CTest; Testing.Shards fails naming the suites in none or in two, so a new suite prefix gets a shard here, and naming the test cases outside any TEST_SUITE, which no shard runs. Suites ending in .Sweep run a sample of their corruption sweep in their shard and the whole sweep again in StrataTests.Fuzz (FuzzSuites, Release and Dist). Keep each shard under about 60 s in Debug.",
+	"OwnTests": [
+		{ "Test": "StrataTests.GPU", "Suites": [ "GPU*" ] },
+		{ "Test": "StrataEditor.Automation", "Suites": [ "EndToEnd*" ] },
+		{ "Test": "StrataTests.Package", "Suites": [ "Package*" ] },
+		{ "Test": "StrataTests.Perf", "Suites": [ "Perf.*" ] },
+		{ "Test": "StrataTests.PerfGPU", "Suites": [ "PerfGPU.*" ] },
+		{ "Test": "StrataTests.FeatureTest", "Suites": [ "FeatureTest", "Editor.FeatureTest" ] }
+	],
+	"FuzzSuites": [ "*.Sweep" ],
+	"Shards": [
+		{ "Name": "Core", "Suites": [ "Core*", "Math*", "Reflection*", "Engine*", "Architecture*", "PerfLab*", "TestHelpers*", "Testing*", "Docs*" ] },
+		{ "Name": "Asset", "Suites": [ "Asset*" ] },
+		{ "Name": "Scene", "Suites": [ "Scene*", "Project*", "Animation*" ] },
+		{ "Name": "Systems", "Suites": [ "Physics*", "Audio*", "Scripting*", "World*" ] },
+		{ "Name": "Renderer", "Suites": [ "Renderer*", "ImGui*", "Runtime*", "GameUI*" ] },
+		{ "Name": "Network", "Suites": [ "Network*", "CLI*" ] },
+		{ "Name": "EditorUI", "Suites": [ "Editor.UI*", "Editor.Theme*" ] },
+		{
+			"Name": "EditorData",
+			"Suites": [ "Editor.Recovery*", "Editor.Replay*", "Editor.DataSafety*", "Editor.Launcher*", "Editor.Export*", "Editor.Scripts*", "Editor.ScriptWorkflow*", "Editor.Automation*" ]
+		},
+		{
+			"Name": "Editor",
+			"Suites": [ "Editor*" ],
+			"Exclude": [ "Editor.UI*", "Editor.Theme*", "Editor.Recovery*", "Editor.Replay*", "Editor.DataSafety*", "Editor.Launcher*", "Editor.Export*", "Editor.Scripts*", "Editor.ScriptWorkflow*", "Editor.Automation*", "Editor.FeatureTest" ]
+		}
+	]
+}

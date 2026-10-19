@@ -23,44 +23,4 @@ namespace Strata
 		return Math::OrthographicReverseZ(-halfWidth, halfWidth, -halfHeight, halfHeight, OrthographicNear, farClip);
 	}
 
-	ScriptFieldValue* ScriptEntry::FindField(std::string_view name)
-	{
-		for (ScriptFieldValue& field : Fields)
-		{
-			if (field.Name == name)
-				return &field;
-		}
-		return nullptr;
-	}
-
-	const ScriptFieldValue* ScriptEntry::FindField(std::string_view name) const
-	{
-		for (const ScriptFieldValue& field : Fields)
-		{
-			if (field.Name == name)
-				return &field;
-		}
-		return nullptr;
-	}
-
-	ScriptEntry* ScriptComponent::FindScript(std::string_view className)
-	{
-		for (ScriptEntry& script : Scripts)
-		{
-			if (script.ClassName == className)
-				return &script;
-		}
-		return nullptr;
-	}
-
-	const ScriptEntry* ScriptComponent::FindScript(std::string_view className) const
-	{
-		for (const ScriptEntry& script : Scripts)
-		{
-			if (script.ClassName == className)
-				return &script;
-		}
-		return nullptr;
-	}
-
 }

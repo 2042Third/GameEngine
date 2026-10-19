@@ -5,12 +5,14 @@
 #include "Strata/GameUI/GameUIScene.h"
 #include "Strata/Input/Input.h"
 #include "Strata/Physics/PhysicsSystem.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
 #include "Strata/Scene/Entity.h"
 #include "Strata/Scene/Prefab.h"
 #include "Strata/Scene/SceneSerializer.h"
 #include "Strata/Scripting/ScriptSystem.h"
 #include "Strata/Scripting/ScriptTypes.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include <algorithm>
@@ -350,18 +352,6 @@ namespace Strata::Tests
 	////////////////////////////////////////////////////////////////////////////////
 	// Logs
 	////////////////////////////////////////////////////////////////////////////////
-
-	LogCapture::LogCapture()
-		: m_Start(Log::GetBuffer().GetLatestSequence())
-	{
-	}
-
-	std::vector<LogEntry> LogCapture::GetEntries() const
-	{
-		std::vector<LogEntry> entries = Log::GetBuffer().GetEntries(m_Start);
-		REQUIRE_MESSAGE((entries.empty() || entries.front().Sequence == m_Start + 1), "The log buffer dropped entries; raise its capacity");
-		return entries;
-	}
 
 	ScopedScriptLogLevel::ScopedScriptLogLevel()
 		: m_Previous(Log::GetScriptLogger()->level())

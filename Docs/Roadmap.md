@@ -359,9 +359,9 @@ interleaved A/Bs against wave 2's build; the quiet campaign that decided the bud
 
 Open items and deferrals later waves own:
 
-- The allowlist's 8 exceptions: the application shell's service wiring (7, `engine-modules`) and physics reading the
-  renderer's `Mesh` (Mesh v2, later). Ordering
-  constraints that name systems a build may lack need a policy once subsystems become optional (`engine-modules`).
+- Optional subsystems: a build without the scripting module (`STRATA_WITH_SCRIPTING`) is not offered yet, because
+  `GameRuntime`, the editor and many tests use the script engine directly; physics, audio and animation can be left
+  out (`STRATA_WITH_PHYSICS`, `STRATA_WITH_AUDIO`, `STRATA_WITH_ANIMATION`, wave 4's `engine-modules`).
 - Physics: what an overflowing world needed is remembered per scene for the process, not saved with the scene;
   automatic capacities reserve Jolt's buffers generously (70,000 bodies reserve about a million body pairs), and a world
   at the largest capacities still reserves about 940 MiB at play start; dynamic bodies below other dynamic bodies are
@@ -535,13 +535,12 @@ Open items and deferrals later waves own:
   - GPU tests on Windows and NVIDIA: CI runs no test of the `gpu` label, so renderer changes are validated on the Mac
     alone until `ctest --preset windows-debug` runs under the validation layer there again (drivers differ: NVIDIA has
     `drawIndirectCount`, a transfer queue and min/max samplers, which MoltenVK lacks).
-  - Windows Debug builds and the visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds Release
-    everywhere and Dist on Windows, never Debug).
-  - Game UI (wave 4, `game-ui`): its four metrics are provisional, measured on the Mac only (Release medians):
-    `Perf.GameUI.Layout10k` 0.31-0.36 ms, `Perf.GameUI.IdleFrame10k` 0.0003 ms, `PerfGPU.GameUI.Render10k` 0.21-0.58 ms
-    (target 1 ms) and `PerfGPU.GameUI.RenderIdle10k` 0.015-0.051 ms; the reference machine sets their `Measured` and
-    `Budget`. Mac A/Bs against the step-0 base: `Perf.Scene.IdlePlayFrame1M` 1.023 (one more scene system's call, 1.2 ns),
-    `PerfGPU.Renderer.Render100kCubes`, `Render300kCubes` and `Render10kMaterials` 0.90, 0.90 and 1.01.
+  - Wave 4's `engine-modules`: the `Perf.Jobs` metrics are provisional (the Mac measured `SubmitWait` 3.14 us,
+    `SubmitMany` 0.41 us, `ParallelForOverhead` 95.9 us and `WakeLatency` 19.6 us), and its throughput targets are
+    stated in the reference machine's numbers: a clean Debug build 30% below 3,099 CPU-seconds, Debug `ctest -j 8` in
+    at most half of 658 s, and at most 28 threads in an editor.
+  - The visual pass at 150% and at `--ui-scale 1` on a Windows display (CI builds and tests Debug on Windows since
+    wave 4, but shows nothing).
 
 ## Waves
 

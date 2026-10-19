@@ -67,28 +67,6 @@ namespace Strata
 			return value;
 		}
 
-		// Whether two script components hold the same scripts with the same field overrides (entity fields of the instance
-		// mapped to the prototype's entities).
-		bool ScriptsMatch(const ScriptComponent& instance, const ScriptComponent& prototype, const std::unordered_map<UUID, UUID>& instanceToPrototype)
-		{
-			if (instance.Scripts.size() != prototype.Scripts.size())
-				return false;
-			for (size_t script = 0; script < instance.Scripts.size(); script++)
-			{
-				const ScriptEntry& a = instance.Scripts[script];
-				const ScriptEntry& b = prototype.Scripts[script];
-				if (a.ClassName != b.ClassName || a.Fields.size() != b.Fields.size())
-					return false;
-				for (size_t field = 0; field < a.Fields.size(); field++)
-				{
-					const ScriptFieldValue& x = a.Fields[field];
-					const ScriptFieldValue& y = b.Fields[field];
-					if (x.Name != y.Name || x.Type != y.Type || ToPrototypeValue(x.Type, x.Value, instanceToPrototype) != y.Value)
-						return false;
-				}
-			}
-			return true;
-		}
 
 	}
 
@@ -197,8 +175,13 @@ namespace Strata
 		}
 
 		const entt::registry& instanceRegistry = scene.GetRegistry();
-		const entt::id_type scriptType = entt::type_id<ScriptComponent>().hash();
 		const entt::id_type linkType = entt::type_id<PrefabInstanceComponent>().hash();
+		// Entity references of the instance named as the prototype's entities.
+		const ComponentExtraReferences::Remap toPrototype = [&instanceToPrototype](UUID entity)
+		{
+			auto mapped = instanceToPrototype.find(entity);
+			return mapped != instanceToPrototype.end() ? mapped->second : entity;
+		};
 		for (PrefabInstanceEntity& instance : entities)
 		{
 			if (instance.PrototypeIndex == EntityPrototype::c_NotFound)
@@ -225,8 +208,9 @@ namespace Strata
 							break;
 						}
 					}
-					if (!differs && info->TypeId == scriptType)
-						differs = !ScriptsMatch(*static_cast<const ScriptComponent*>(a), *static_cast<const ScriptComponent*>(b), instanceToPrototype);
+					// What the properties do not express (script fields), compared by the component's own rule.
+					if (!differs && info->ExtraReferences.Equals)
+						differs = !info->ExtraReferences.Equals(a, b, toPrototype);
 				}
 				if (differs)
 					instance.Differences.push_back(info);

@@ -8,6 +8,7 @@
 #include "Strata/Scripting/ScriptEngine.h"
 #include "Strata/Scripting/ScriptHostAPI.h"
 #include "Strata/Scripting/ScriptModule.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 
 #include <algorithm>
 #include <cmath>

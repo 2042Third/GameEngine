@@ -3,7 +3,13 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/GameUI/GameUIComponents.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Components.h"
+#include "Strata/Scripting/ScriptingComponents.h"
+
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+#endif
 
 #include <doctest/doctest.h>
 #include <glm/gtc/quaternion.hpp>
@@ -83,6 +89,7 @@ namespace Strata::Tests::Perf
 		return entities;
 	}
 
+#if ST_WITH_PHYSICS
 	BoxStacks CreateBoxStacks(Scene& scene, size_t count, uint32_t height)
 	{
 		REQUIRE(height > 0);
@@ -115,6 +122,7 @@ namespace Strata::Tests::Perf
 		}
 		return stacks;
 	}
+#endif
 
 	void AddCameraAndLight(Scene& scene)
 	{

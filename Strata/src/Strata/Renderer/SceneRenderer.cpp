@@ -11,6 +11,7 @@
 #include "Strata/Renderer/Mesh.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/Renderer.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/TextRenderer.h"
 #include "Strata/Renderer/Texture.h"
 #include "Strata/Renderer/TextureStreamer.h"

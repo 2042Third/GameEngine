@@ -114,6 +114,19 @@ namespace
 		return source;
 	}
 
+	// The pack the corruption tests change: an entry of several blocks with dependencies, an incompressible one with
+	// bounds and a small material.
+	std::vector<PackSource> MakeCorruptionSources()
+	{
+		std::vector<PackSource> sources;
+		sources.push_back(MakeSource(0x7000, MakeContent(3 * AssetPack::c_BlockSize + 100, ContentKind::Compressible, 1)));
+		sources.push_back(MakeSource(0x7001, MakeContent(10'000, ContentKind::Incompressible, 2)));
+		sources.push_back(MakeSource(0x7002, MakeContent(5'000, ContentKind::Compressible, 3), AssetType::Material));
+		sources[0].Source.Dependencies = { UUID(0x7001), UUID(0x7002) };
+		sources[1].Source.Bounds = AABB(glm::vec3(0.0f), glm::vec3(1.0f));
+		return sources;
+	}
+
 	// A version 2 pack taken apart, to write back changed with checksums that match, so that tests reach the validation of
 	// what the checksums protect.
 	struct PackImage
@@ -750,12 +763,7 @@ TEST_SUITE("Asset.Pack")
 
 	TEST_CASE("Truncated and corrupt packs fail to open or read with an error, never a crash")
 	{
-		std::vector<PackSource> sources;
-		sources.push_back(MakeSource(0x7000, MakeContent(3 * AssetPack::c_BlockSize + 100, ContentKind::Compressible, 1)));
-		sources.push_back(MakeSource(0x7001, MakeContent(10'000, ContentKind::Incompressible, 2)));
-		sources.push_back(MakeSource(0x7002, MakeContent(5'000, ContentKind::Compressible, 3), AssetType::Material));
-		sources[0].Source.Dependencies = { UUID(0x7001), UUID(0x7002) };
-		sources[1].Source.Bounds = AABB(glm::vec3(0.0f), glm::vec3(1.0f));
+		const std::vector<PackSource> sources = MakeCorruptionSources();
 		const std::filesystem::path directory = CreateTemporaryDirectory("PackCorrupt");
 		const std::filesystem::path path = WritePack(directory / "Game.stpak", sources);
 		const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(path);
@@ -768,19 +776,7 @@ TEST_SUITE("Asset.Pack")
 		CHECK_FALSE(AssetPack::Open(directory / "Missing.stpak", &error));
 		CHECK_FALSE(error.empty());
 
-		// Truncated at every 4 KiB boundary, and at every 8 bytes of the header and the tables.
-		std::vector<size_t> lengths;
-		for (size_t length = 0; length < bytes->size(); length += 4096)
-			lengths.push_back(length);
-		for (size_t length = 0; length < sizeof(Header); length += 8)
-			lengths.push_back(length);
-		for (size_t length = image.Data.size(); length < bytes->size(); length += 8)
-			lengths.push_back(length);
-		for (size_t length : lengths)
-		{
-			CAPTURE(length);
-			CheckRejected(corrupt, std::vector<uint8_t>(bytes->begin(), bytes->begin() + static_cast<std::ptrdiff_t>(length)));
-		}
+		// Truncations: Asset.Pack.Sweep. A byte after the tables:
 		std::vector<uint8_t> extended = *bytes;
 		extended.push_back(0);
 		CheckRejected(corrupt, extended, "do not end the file");
@@ -915,23 +911,7 @@ TEST_SUITE("Asset.Pack")
 				stored[index] = static_cast<uint8_t>(index * 7);
 			pack.Blocks[0].Checksum = Hash::CRC32C(std::span<const uint8_t>(stored, pack.Blocks[0].StoredSize));
 		}, "is corrupt");
-
-		// Any single changed byte: an error or the right answer, never a crash.
-		std::vector<PackSource> small;
-		small.push_back(MakeSource(0x7100, MakeContent(3000, ContentKind::Compressible, 4), AssetType::Material));
-		small.push_back(MakeSource(0x7101, MakeContent(700, ContentKind::Incompressible, 5)));
-		small[0].Source.Dependencies = { UUID(0x7101) };
-		const std::filesystem::path smallPath = WritePack(directory / "Small.stpak", small);
-		const std::optional<std::vector<uint8_t>> smallBytes = FileSystem::ReadBytes(smallPath);
-		REQUIRE(smallBytes);
-		for (size_t offset = 0; offset < smallBytes->size(); offset += offset < sizeof(Header) || offset >= smallBytes->size() - 400 ? 1 : 97)
-		{
-			CAPTURE(offset);
-			std::vector<uint8_t> changed = *smallBytes;
-			changed[offset] ^= 0xA5;
-			REQUIRE(FileSystem::WriteBytes(corrupt, changed));
-			OpenAndReadEverything(corrupt);
-		}
+		// Any single changed byte: Asset.Pack.Sweep.
 	}
 
 	TEST_CASE("Opening never copies more names than the pack's size allows")
@@ -996,6 +976,54 @@ TEST_SUITE("Asset.Pack")
 		CHECK(error.find("paths and names") != std::string::npos);
 		CHECK_FALSE(FileSystem::Exists(directory / "LongNames.stpak"));
 	}
+}
+
+// The corruption sweeps over every byte offset of packs: a deterministic sample in the Core shard, every offset in
+// StrataTests.Fuzz (Tests::SelectSweepOffsets).
+TEST_SUITE("Asset.Pack.Sweep")
+{
+	TEST_CASE("Packs truncated anywhere fail to open or read with an error")
+	{
+		const std::vector<PackSource> sources = MakeCorruptionSources();
+		const std::filesystem::path directory = CreateTemporaryDirectory("PackTruncated");
+		const std::filesystem::path path = WritePack(directory / "Game.stpak", sources);
+		const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(path);
+		REQUIRE(bytes);
+		const PackImage image = PackImage::Read(path);
+		const std::filesystem::path corrupt = directory / "Corrupt.stpak";
+		// Every length within the header and the tables, around every block boundary, and a sample of the rest.
+		const std::vector<size_t> lengths = SelectSweepOffsets(bytes->size(), { { 0, sizeof(Header) }, { image.Data.size(), bytes->size() } },
+			AssetPack::c_EntryAlignment);
+		for (size_t length : lengths)
+		{
+			CAPTURE(length);
+			CheckRejected(corrupt, std::vector<uint8_t>(bytes->begin(), bytes->begin() + static_cast<std::ptrdiff_t>(length)));
+		}
+	}
+
+	TEST_CASE("A pack with any single changed byte fails with an error or reads right, never crashes")
+	{
+		std::vector<PackSource> small;
+		small.push_back(MakeSource(0x7100, MakeContent(3000, ContentKind::Compressible, 4), AssetType::Material));
+		small.push_back(MakeSource(0x7101, MakeContent(700, ContentKind::Incompressible, 5)));
+		small[0].Source.Dependencies = { UUID(0x7101) };
+		const std::filesystem::path directory = CreateTemporaryDirectory("PackChangedByte");
+		const std::filesystem::path smallPath = WritePack(directory / "Small.stpak", small);
+		const std::optional<std::vector<uint8_t>> smallBytes = FileSystem::ReadBytes(smallPath);
+		REQUIRE(smallBytes);
+		const PackImage image = PackImage::Read(smallPath);
+		const std::filesystem::path corrupt = directory / "Corrupt.stpak";
+		const std::vector<size_t> offsets = SelectSweepOffsets(smallBytes->size(), { { 0, sizeof(Header) }, { image.Data.size(), smallBytes->size() } },
+			AssetPack::c_EntryAlignment);
+		for (size_t offset : offsets)
+		{
+			CAPTURE(offset);
+			std::vector<uint8_t> changed = *smallBytes;
+			changed[offset] ^= 0xA5;
+			REQUIRE(FileSystem::WriteBytes(corrupt, changed));
+			OpenAndReadEverything(corrupt);
+		}
+	}
 
 	TEST_CASE("Version 1 packs that are corrupt are still refused")
 	{
@@ -1008,7 +1036,14 @@ TEST_SUITE("Asset.Pack")
 		const std::optional<std::vector<uint8_t>> bytes = FileSystem::ReadBytes(path);
 		REQUIRE(bytes);
 		const std::filesystem::path corrupt = directory / "Corrupt.stpak";
-		for (size_t length = 0; length < bytes->size(); length += 3)
+		// Version 1: a 32-byte header, the data, then the entry table, where the header says.
+		HeaderV1 header;
+		REQUIRE(bytes->size() >= sizeof(header));
+		std::memcpy(&header, bytes->data(), sizeof(header));
+		REQUIRE(header.TableOffset <= bytes->size());
+		const std::vector<size_t> offsets = SelectSweepOffsets(bytes->size(), { { 0, sizeof(HeaderV1) }, { static_cast<size_t>(header.TableOffset), bytes->size() } },
+			0);
+		for (size_t length : offsets)
 		{
 			CAPTURE(length);
 			CheckRejected(corrupt, std::vector<uint8_t>(bytes->begin(), bytes->begin() + static_cast<std::ptrdiff_t>(length)));
@@ -1017,8 +1052,9 @@ TEST_SUITE("Asset.Pack")
 		hugeEntryCount[8] = 0xFF;
 		hugeEntryCount[9] = 0xFF;
 		CheckRejected(corrupt, hugeEntryCount);
-		for (size_t offset = 0; offset < bytes->size(); offset++)
+		for (size_t offset : offsets)
 		{
+			CAPTURE(offset);
 			std::vector<uint8_t> changed = *bytes;
 			changed[offset] ^= 0xA5;
 			REQUIRE(FileSystem::WriteBytes(corrupt, changed));

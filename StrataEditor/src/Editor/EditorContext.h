@@ -1,21 +1,15 @@
 #pragma once
 
-#include "Editor/CommandJournal.h"
 #include "Editor/EditorNotifications.h"
 #include "Editor/EditorGameWindow.h"
 #include "Editor/EditorViewport.h"
-#include "Editor/ExternalEditor.h"
-#include "Editor/GameExport.h"
 #include "Editor/PrefabSync.h"
 #include "Editor/ProjectTemplates.h"
-#include "Editor/ProjectThumbnail.h"
 #include "Editor/RecentProjects.h"
 #include "Editor/SceneEdit.h"
-#include "Editor/SceneRecovery.h"
 #include "Editor/ScriptBuild.h"
 #include "Editor/ScriptSources.h"
 #include "Editor/SimulatedInput.h"
-#include "Editor/ThumbnailCache.h"
 #include "Editor/UndoStack.h"
 
 #include <Strata/Animation/AnimationPreview.h>
@@ -46,6 +40,17 @@
 
 namespace Strata
 {
+
+	// Used by reference, pointer or owning pointer only: their headers stay out of every file that includes this one.
+	class CommandJournal;
+	class ExternalEditorLauncher;
+	class GameExport;
+	struct GameExportOptions;
+	class ProjectThumbnail;
+	class SceneRecovery;
+	struct RecoveryData;
+	enum class DiscardOutcome : uint8_t;
+	class ThumbnailCache;
 
 	enum class SceneState : uint8_t
 	{
@@ -304,7 +309,7 @@ namespace Strata
 		// Thumbnails of the open project's assets (Content Browser, Asset tab); null without a project or a GPU.
 		ThumbnailCache* GetThumbnails() const { return m_Thumbnails.get(); }
 		// The project's picture for the launcher, made after each scene save.
-		const ProjectThumbnail& GetProjectThumbnail() const { return m_ProjectThumbnail; }
+		const ProjectThumbnail& GetProjectThumbnail() const { return *m_ProjectThumbnail; }
 		// Records an edit of the active scene. Edits of the running copy during play are not recorded: they are
 		// discarded with it. Returns true when an undo step was recorded. While a scene is being opened (IsSceneLoading) the
 		// edited scene is read-only: the edit is rolled back and nothing is recorded.
@@ -333,8 +338,8 @@ namespace Strata
 		// background into the project's ".strata/Recovery", and the recovery files found there when the project opened (a
 		// crash, or changes discarded on purpose). Every replacement of the edited scene with unsaved changes writes them
 		// there first, so nothing is lost even then.
-		SceneRecovery& GetRecovery() { return m_Recovery; }
-		const SceneRecovery& GetRecovery() const { return m_Recovery; }
+		SceneRecovery& GetRecovery() { return *m_Recovery; }
+		const SceneRecovery& GetRecovery() const { return *m_Recovery; }
 		// What the person should hear about (the UI's toasts): failed or warning UI commands, script builds and crashes,
 		// finished exports, recovery data on offer.
 		EditorNotifications& GetNotifications() { return m_Notifications; }
@@ -400,8 +405,8 @@ namespace Strata
 		uint64_t GetPlayBuildID() const { return m_PlayBuildID; }
 		void ClearPlayBuild() { m_PlayBuildID = 0; }
 		// The person's code editor (script.open, script.setExternalEditor).
-		ExternalEditorLauncher& GetExternalEditor() { return m_ExternalEditor; }
-		const ExternalEditorLauncher& GetExternalEditor() const { return m_ExternalEditor; }
+		ExternalEditorLauncher& GetExternalEditor() { return *m_ExternalEditor; }
+		const ExternalEditorLauncher& GetExternalEditor() const { return *m_ExternalEditor; }
 		// Opens a source file at a line and column (0: unknown) in the external editor: a path relative to the project
 		// directory, or absolute inside the project or the engine (whose SDK headers diagnostics name). Only code, CMake and
 		// text files; an empty path opens the project's script directory. Fails (with the reason) for anything else or a
@@ -610,13 +615,13 @@ namespace Strata
 		std::unordered_set<UUID> m_SelectionSet; // The same entities, for IsSelected
 		AssetHandle m_InspectedAsset = UUID::Null();
 		uint64_t m_InspectionVersion = 0;
-		Ref<CommandJournal> m_Journal = CreateRef<CommandJournal>();
+		Ref<CommandJournal> m_Journal;
 		// Declared before the undo stack it observes, so the stack never outlives it.
-		SceneRecovery m_Recovery;
+		Scope<SceneRecovery> m_Recovery;
 		UndoStack m_UndoStack;
 		PrefabSync m_PrefabSync;
 		Scope<ThumbnailCache> m_Thumbnails;
-		ProjectThumbnail m_ProjectThumbnail;
+		Scope<ProjectThumbnail> m_ProjectThumbnail;
 
 		Ref<ScriptEngine> m_ScriptEngine;
 		ScriptBuilder m_ScriptBuilder;
@@ -639,7 +644,7 @@ namespace Strata
 		std::optional<BuiltScriptSources> m_BuiltScriptSources;
 		uint64_t m_ProblemsPanelRequests = 0;
 		bool m_ScriptFaultLocationPending = false; // m_LastScriptFault waits for its symbolization
-		ExternalEditorLauncher m_ExternalEditor;
+		Scope<ExternalEditorLauncher> m_ExternalEditor;
 		// The scan of the project's scene and prefab files for scripts (see DoScenesUseScripts), shared with its I/O job.
 		struct ScriptUsageScan
 		{

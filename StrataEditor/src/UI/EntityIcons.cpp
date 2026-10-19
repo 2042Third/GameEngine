@@ -2,9 +2,14 @@
 
 #include "UI/Icons.h"
 
+#include <Strata/Animation/AnimationComponents.h>
+#include <Strata/Audio/AudioComponents.h>
+#include <Strata/Physics/PhysicsComponents.h>
 #include <Strata/Reflection/ComponentRegistry.h>
+#include <Strata/Renderer/RendererComponents.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/SceneHierarchy.h>
+#include <Strata/Scripting/ScriptingComponents.h>
 
 #include <string_view>
 

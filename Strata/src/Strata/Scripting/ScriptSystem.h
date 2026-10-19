@@ -10,6 +10,7 @@
 #include "Strata/Scene/SceneServices.h"
 #include "Strata/Scene/SceneSystem.h"
 #include "Strata/Scripting/ScriptTypes.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 
 #include <entt/entt.hpp>
 #include <glm/glm.hpp>

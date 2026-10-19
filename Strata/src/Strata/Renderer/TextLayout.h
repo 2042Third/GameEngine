@@ -1,7 +1,5 @@
 #pragma once
 
-#include "Strata/Scene/Components.h"
-
 #include <glm/glm.hpp>
 
 #include <cstdint>
@@ -13,6 +11,7 @@ namespace Strata
 
 	class FontAtlas;
 	class FontFace;
+	enum class TextAlignment : uint8_t; // Renderer/RendererComponents.h
 
 	struct TextGlyphQuad
 	{
@@ -51,7 +50,8 @@ namespace Strata
 	// How ShapeText lays text out, in em units (font size 1).
 	struct TextShapeOptions
 	{
-		TextAlignment Alignment = TextAlignment::Left;
+		// Left (value-initialized: the enumerators are in Renderer/RendererComponents.h, which this header leaves out).
+		TextAlignment Alignment{};
 		TextVerticalAlignment VerticalAlignment = TextVerticalAlignment::Top;
 		// Above 0: lines wrap at this width, between words (after spaces, which a break drops, and after hyphens), and inside
 		// words longer than a line.

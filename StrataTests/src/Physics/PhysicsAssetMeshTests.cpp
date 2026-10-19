@@ -8,6 +8,7 @@
 #include "Strata/Core/JsonUtils.h"
 #include "Strata/Core/Log.h"
 #include "Strata/Physics/AssetMeshProvider.h"
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Physics/PhysicsMeshShapes.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/Mesh.h"

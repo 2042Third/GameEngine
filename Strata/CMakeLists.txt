@@ -1,23 +1,54 @@
-# Strata engine core (static library).
+# The Strata engine: one static library per layer of the layer table (StrataTests/Architecture/Layers.json), made by
+# strata_add_layer_libraries (CMake/StrataLayers.cmake): the table is the build. Strata (INTERFACE) links every layer a
+# game contains, StrataTooling (INTERFACE) the tooling layers (the asset pipeline, the network, ImGui).
 
-file(GLOB_RECURSE STRATA_SOURCES CONFIGURE_DEPENDS
-	"${CMAKE_CURRENT_SOURCE_DIR}/src/*.h"
-	"${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
-
-# Platform backends live in src/Platform/<Platform>/ and are filtered per target OS.
-if(WIN32)
-	list(FILTER STRATA_SOURCES EXCLUDE REGEX "/src/Platform/(Posix|Linux|MacOS)/")
-elseif(APPLE)
-	list(FILTER STRATA_SOURCES EXCLUDE REGEX "/src/Platform/(Windows|Linux)/")
-	file(GLOB_RECURSE STRATA_MACOS_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/Platform/MacOS/*.mm")
-	list(APPEND STRATA_SOURCES ${STRATA_MACOS_SOURCES})
-else()
-	list(FILTER STRATA_SOURCES EXCLUDE REGEX "/src/Platform/(Windows|MacOS)/")
+# Code generation every engine object shares, whichever layer compiles it: the instruction sets Jolt requires of its users
+# (/arch:AVX2 on MSVC x64 with the Visual Studio generators, whose platform Jolt reads, nothing with cl under Ninja;
+# -mavx2 -mbmi -mpopcnt -mlzcnt -mf16c -mfma -mfpmath=sse on x86 GCC and Clang; -pthread off Windows), which every engine
+# object was compiled with while the engine was one library that linked Jolt. They come from
+# strata_engine_cpu_options (CMake/StrataCompilerOptions.cmake), so that builds without the physics module generate the
+# same code; when Jolt is built they must be exactly its options. Jolt's JPH_* definitions only matter to code that
+# includes Jolt, which a build without physics has none of.
+strata_engine_cpu_options(STRATA_ENGINE_CPU_OPTIONS)
+add_library(StrataEngineCodegen INTERFACE)
+target_compile_options(StrataEngineCodegen INTERFACE ${STRATA_ENGINE_CPU_OPTIONS})
+if(TARGET Jolt)
+	get_target_property(STRATA_JOLT_OPTIONS Jolt INTERFACE_COMPILE_OPTIONS)
+	if(NOT STRATA_JOLT_OPTIONS)
+		set(STRATA_JOLT_OPTIONS "")
+	endif()
+	list(REMOVE_DUPLICATES STRATA_JOLT_OPTIONS)
+	# Quoted: both lists are empty where Jolt sets no options (cl under Ninja), and set() with nothing unsets.
+	set(strataJoltSorted "${STRATA_JOLT_OPTIONS}")
+	set(strataEngineSorted "${STRATA_ENGINE_CPU_OPTIONS}")
+	list(SORT strataJoltSorted)
+	list(SORT strataEngineSorted)
+	if(NOT "${strataJoltSorted}" STREQUAL "${strataEngineSorted}")
+		message(FATAL_ERROR "Jolt compiles its users with '${STRATA_JOLT_OPTIONS}', but strata_engine_cpu_options gives "
+			"'${STRATA_ENGINE_CPU_OPTIONS}': bring strata_engine_cpu_options (CMake/StrataCompilerOptions.cmake) to Jolt's "
+			"conditions (Strata/vendor/JoltPhysics/Jolt/Jolt.cmake), so that builds without physics generate the same code")
+	endif()
+	get_target_property(STRATA_JOLT_DEFINITIONS Jolt INTERFACE_COMPILE_DEFINITIONS)
+	if(STRATA_JOLT_DEFINITIONS)
+		target_compile_definitions(StrataEngineCodegen INTERFACE ${STRATA_JOLT_DEFINITIONS})
+	endif()
 endif()
 
-add_library(Strata STATIC ${STRATA_SOURCES})
-strata_configure_target(Strata)
-source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_SOURCES})
+strata_add_layer_libraries(
+	TABLE "${PROJECT_SOURCE_DIR}/StrataTests/Architecture/Layers.json"
+	SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/src"
+	LIBRARIES_FILE "${CMAKE_CURRENT_BINARY_DIR}/LayerLibraries.json")
+
+# Every layer reaches the engine's headers and the generated ones through Core.
+target_include_directories(Strata_Core PUBLIC
+	"${CMAKE_CURRENT_SOURCE_DIR}/src"
+	"${CMAKE_CURRENT_BINARY_DIR}/Generated")
+# Which optional modules the engine has (STRATA_WITH_*), 1 or 0, for every target that links the engine: definitions rather
+# than a generated header, so that no file can read one as 0 for want of an include.
+target_compile_definitions(Strata_Core PUBLIC
+	"ST_WITH_PHYSICS=$<BOOL:${STRATA_WITH_PHYSICS}>"
+	"ST_WITH_AUDIO=$<BOOL:${STRATA_WITH_AUDIO}>"
+	"ST_WITH_ANIMATION=$<BOOL:${STRATA_WITH_ANIMATION}>")
 
 configure_file("${CMAKE_CURRENT_SOURCE_DIR}/src/Strata/Core/Version.h.in" "${CMAKE_CURRENT_BINARY_DIR}/Generated/Strata/Core/Version.h" @ONLY)
 # The commit the engine is built from (c_EngineCommit: editor.status, About), read from git at every build: the header is
@@ -30,15 +61,37 @@ add_custom_target(StrataVersionCommit
 	BYPRODUCTS "${STRATA_VERSION_COMMIT_HEADER}"
 	COMMENT "Reading the git commit of the build"
 	VERBATIM)
-add_dependencies(Strata StrataVersionCommit)
+add_dependencies(Strata_Core StrataVersionCommit)
 
-target_include_directories(Strata PUBLIC
-	"${CMAKE_CURRENT_SOURCE_DIR}/src"
-	"${CMAKE_CURRENT_BINARY_DIR}/Generated")
-target_precompile_headers(Strata PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/stpch.h")
+# Vendor and system libraries, attached to the layers that use them. A layer that needs another adds a row here.
+strata_layer_link(Core PUBLIC glm EnTT spdlog::spdlog nlohmann_json::nlohmann_json)
+if(STRATA_ENABLE_TRACY)
+	target_compile_definitions(Strata_Core PUBLIC ST_ENABLE_TRACY)
+	strata_layer_link(Core PUBLIC Tracy::TracyClient)
+endif()
+if(WIN32)
+	strata_layer_link(Core PRIVATE shell32 ole32 bcrypt dbghelp)
+	strata_layer_link(Network PRIVATE ws2_32)
+elseif(APPLE)
+	strata_layer_link(Core PRIVATE "-framework CoreFoundation")
+else()
+	find_package(Threads REQUIRED)
+	strata_layer_link(Core PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
+endif()
+strata_layer_link(App PRIVATE glfw Vulkan::Headers stb)
+strata_layer_link(Asset PRIVATE zstd_decompress)
+strata_layer_link(Renderer PUBLIC nvrhi)
+strata_layer_link(Renderer PRIVATE nvrhi_vk Vulkan::Headers glfw stb MikkTSpace meshoptimizer)
+strata_layer_link(Physics PRIVATE Jolt)
+strata_layer_link(Audio PRIVATE miniaudio)
+# Only the C ABI header (StrataScript/ScriptABI.h); the engine never includes the script SDK.
+strata_layer_link(Scripting PRIVATE StrataScriptCore)
+strata_layer_link(ImGui PUBLIC imgui)
+# Only the asset pack writer (tooling) references compression: games link none of it.
+strata_layer_link(AssetPipeline PRIVATE stb cgltf meshoptimizer zstd_compress)
 
-# Engine shaders, compiled to SPIR-V at build time and embedded in the library.
-strata_add_shaders(Strata
+# Engine shaders, compiled to SPIR-V at build time and embedded in the renderer (ImGui's too: one registry per build).
+strata_add_shaders(Strata_Renderer
 	SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
 	SHADERS
 		ImGui.vert
@@ -85,41 +138,16 @@ strata_add_shaders(Strata
 		"Effects/AOBlur.comp|Effects/AOBlurHalf.comp|ST_AO_HALF")
 
 # The default font of text rendering (Roboto Medium, Apache License 2.0; see ThirdPartyNotices.md).
-strata_embed_file(Strata "${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/misc/fonts/Roboto-Medium.ttf" GetDefaultFont)
+strata_embed_file(Strata_Renderer "${CMAKE_CURRENT_SOURCE_DIR}/vendor/imgui/misc/fonts/Roboto-Medium.ttf" GetDefaultFont)
 
-target_link_libraries(Strata
-	PUBLIC
-		glm
-		EnTT
-		spdlog::spdlog
-		nlohmann_json::nlohmann_json
-		nvrhi
-		imgui
-		ImGuizmo
-	PRIVATE
-		StrataScriptCore # Only the C ABI header (StrataScript/ScriptABI.h); the engine never includes the script SDK
-		nvrhi_vk
-		Vulkan::Headers
-		glfw
-		stb
-		cgltf
-		MikkTSpace
-		meshoptimizer
-		miniaudio
-		Jolt
-		zstd_decompress
-		zstd_compress) # Only the asset pack writer (tooling) references compression; games link none of it
-
-if(WIN32)
-	target_link_libraries(Strata PRIVATE shell32 ole32 ws2_32 bcrypt dbghelp)
-elseif(APPLE)
-	target_link_libraries(Strata PRIVATE "-framework CoreFoundation")
-else()
-	find_package(Threads REQUIRED)
-	target_link_libraries(Strata PRIVATE Threads::Threads ${CMAKE_DL_LIBS})
-endif()
-
-if(STRATA_ENABLE_TRACY)
-	target_compile_definitions(Strata PUBLIC ST_ENABLE_TRACY)
-	target_link_libraries(Strata PUBLIC Tracy::TracyClient)
-endif()
+# What programs link: Strata, every layer a game contains, and StrataTooling, the layers only tools contain.
+add_library(Strata INTERFACE)
+foreach(layer IN LISTS STRATA_RUNTIME_LAYERS)
+	target_link_libraries(Strata INTERFACE Strata_${layer})
+endforeach()
+add_library(StrataTooling INTERFACE)
+foreach(layer IN LISTS STRATA_TOOLING_LAYERS)
+	target_link_libraries(StrataTooling INTERFACE Strata_${layer})
+endforeach()
+set(STRATA_RUNTIME_LAYERS "${STRATA_RUNTIME_LAYERS}" PARENT_SCOPE)
+set(STRATA_TOOLING_LAYERS "${STRATA_TOOLING_LAYERS}" PARENT_SCOPE)

@@ -75,6 +75,15 @@ namespace Strata
 				return it != mapping.end() ? it->second : uuid;
 			};
 
+			// Entity references in data the properties do not express (script fields), written once they are all found.
+			struct ExtraReference
+			{
+				uint32_t Slot = 0;
+				uint32_t Subslot = 0;
+				UUID Target = UUID::Null();
+			};
+			std::vector<ExtraReference> extraReferences;
+
 			for (const ComponentInfo* info : ComponentRegistry::GetAll())
 			{
 				if (HasFlag(info->Flags, ComponentFlags::NoSerialize))
@@ -92,19 +101,20 @@ namespace Strata
 					if (remapped != current)
 						property.Setter(component, remapped);
 				}
-			}
 
-			// Script fields are dynamic and not covered by the reflected properties above.
-			if (ScriptComponent* scripts = registry.try_get<ScriptComponent>(handle))
-			{
-				for (ScriptEntry& script : scripts->Scripts)
+				if (!info->ExtraReferences)
+					continue;
+				extraReferences.clear();
+				info->ExtraReferences.Visit(component, [&](uint32_t slot, uint32_t subslot, PropertyType type, UUID current)
 				{
-					for (ScriptFieldValue& field : script.Fields)
-					{
-						if (field.Type == PropertyType::Entity && std::holds_alternative<UUID>(field.Value))
-							field.Value = remap(std::get<UUID>(field.Value));
-					}
-				}
+					if (type != PropertyType::Entity)
+						return;
+					const UUID remapped = remap(current);
+					if (remapped != current)
+						extraReferences.push_back({ slot, subslot, remapped });
+				});
+				for (const ExtraReference& reference : extraReferences)
+					info->ExtraReferences.Set(component, reference.Slot, reference.Subslot, reference.Target);
 			}
 		}
 

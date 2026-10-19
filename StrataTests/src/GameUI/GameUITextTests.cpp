@@ -3,6 +3,7 @@
 #include "Strata/Renderer/Font.h"
 #include "Strata/Renderer/FontAtlas.h"
 #include "Strata/Renderer/FontFace.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Renderer/TextLayout.h"
 
 #include <cmath>

@@ -3,6 +3,7 @@
 
 #include "Strata/Asset/AssetManager.h"
 #include "Strata/Asset/BuiltinAssets.h"
+#include "Strata/Asset/MeshGeometry.h"
 #include "Strata/Core/EngineServices.h"
 #include "Strata/Renderer/Font.h"
 #include "Strata/Renderer/Material.h"
@@ -24,10 +25,43 @@ namespace Strata
 			ST_CORE_VERIFY(registered, "The renderer could not provide built-in asset {}", handle.ToString());
 		}
 
+		// The full-detail triangles of every submesh, with indices into the whole vertex list (offset by the submesh's base
+		// vertex). Mesh validates its ranges when it is created; the check only keeps a broken object from being read out
+		// of bounds (readers such as physics validate the vertex indices when they cook shapes).
+		bool ReadMeshGeometry(const Asset& asset, MeshGeometry& outGeometry)
+		{
+			const Mesh& mesh = static_cast<const Mesh&>(asset);
+			const std::vector<uint32_t>& indices = mesh.GetIndices();
+			const auto isValidRange = [&indices](const MeshLOD& lod)
+			{
+				return static_cast<uint64_t>(lod.IndexOffset) + lod.IndexCount <= indices.size();
+			};
+
+			outGeometry.Positions = mesh.GetPositions();
+			size_t indexCount = 0;
+			for (const Submesh& submesh : mesh.GetSubmeshes())
+			{
+				if (!submesh.LODs.empty() && isValidRange(submesh.LODs.front()))
+					indexCount += submesh.LODs.front().IndexCount;
+			}
+			outGeometry.Indices.reserve(indexCount);
+			for (const Submesh& submesh : mesh.GetSubmeshes())
+			{
+				if (submesh.LODs.empty() || !isValidRange(submesh.LODs.front()))
+					continue;
+				const MeshLOD& lod = submesh.LODs.front();
+				for (uint32_t index = lod.IndexOffset; index < lod.IndexOffset + lod.IndexCount; index++)
+					outGeometry.Indices.push_back(submesh.BaseVertex + indices[index]);
+			}
+			return true;
+		}
+
 	}
 
 	void RegisterRendererModule()
 	{
+		RegisterRendererComponents();
+
 		// The asset layer finalizes GPU assets through this service: the running renderer's upload context, frames in flight
 		// and memory budget (Asset/AssetUploadContext.h).
 		EngineServices::Register<IAssetGraphics>(RendererAssetGraphics::Get());
@@ -56,6 +90,8 @@ namespace Strata
 		{
 			return Mesh::Deserialize(data, outError);
 		});
+		// Modules that collide with meshes (physics) read their triangles without knowing the renderer's Mesh.
+		MeshGeometryRegistry::Register(AssetType::Mesh, ReadMeshGeometry);
 		AssetLoaderRegistry::Register(AssetType::Material, [](const AssetMetadata&, std::span<const uint8_t> data, std::string* outError) -> Ref<Asset>
 		{
 			return Material::Deserialize(data, outError);

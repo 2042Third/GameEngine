@@ -5,6 +5,7 @@
 #include "Strata/GameUI/GameUISceneData.h"
 #include "Strata/Renderer/Font.h"
 #include "Strata/Renderer/FontFace.h"
+#include "Strata/Renderer/RendererComponents.h"
 #include "Strata/Scene/Scene.h"
 
 #include <algorithm>

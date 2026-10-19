@@ -4,6 +4,7 @@
 #include "Editor/TransformEdit.h"
 
 #include <Strata/Math/Math.h>
+#include <Strata/Physics/PhysicsComponents.h>
 #include <Strata/Physics/PhysicsSystem.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Scene.h>

@@ -7,6 +7,7 @@
 #include "Strata/Math/Math.h"
 #include "Strata/Physics/AssetMeshProvider.h"
 #include "Strata/Physics/CharacterControllers.h"
+#include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Physics/PhysicsJobSystem.h"
 #include "Strata/Physics/PhysicsLayers.h"
 #include "Strata/Physics/PhysicsMeshShapes.h"

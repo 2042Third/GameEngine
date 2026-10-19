@@ -11,7 +11,8 @@ add_library(StrataCLILib STATIC ${STRATA_CLI_SOURCES})
 strata_configure_target(StrataCLILib)
 source_group(TREE "${CMAKE_CURRENT_SOURCE_DIR}/src" FILES ${STRATA_CLI_SOURCES})
 target_include_directories(StrataCLILib PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_link_libraries(StrataCLILib PUBLIC Strata)
+# The CLI is a network client of the editor: Core and Network only, nothing of the engine's runtime.
+target_link_libraries(StrataCLILib PUBLIC Strata::Network)
 
 add_executable(StrataCLI "${CMAKE_CURRENT_SOURCE_DIR}/src/Main.cpp")
 strata_configure_target(StrataCLI)
