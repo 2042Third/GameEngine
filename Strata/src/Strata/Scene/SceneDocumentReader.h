@@ -4,8 +4,6 @@
 #include "Strata/Scene/Scene.h"
 #include "Strata/Scene/SceneDocumentWriter.h"
 
-#include <nlohmann/json.hpp>
-
 #include <cstdint>
 #include <functional>
 #include <string>

@@ -29,14 +29,18 @@ namespace
 		std::string_view Reason;
 	};
 
-	constexpr std::array<FullJsonHeader, 8> c_FullJsonHeaders = { {
+	constexpr std::array<FullJsonHeader, 12> c_FullJsonHeaders = { {
 		{ "stpch.h", "the precompiled header: each library parses it once" },
 		{ "Strata/Asset/AssetImporter.h", "ImportContext::Settings is a JSON member" },
+		{ "Strata/Asset/AssetRegistration.h", "AssetMeta::Settings is a JSON member with an initializer" },
+		{ "Strata/Core/JsonEvents.h", "ParseJsonEvents runs nlohmann's parser template inline" },
 		{ "Strata/Core/JsonUtils.h", "the JSON helpers: every user reads JSON values" },
 		{ "Strata/Network/JsonRpc.h", "JSON default arguments and RequestValidation::Id" },
 		{ "Strata/Network/RpcClient.h", "JSON default arguments" },
 		{ "Strata/Network/RpcServer.h", "JSON members and default member initializers" },
+		{ "Strata/Scene/CookedScene.h", "CookedSceneContents::Settings is a JSON member" },
 		{ "Strata/Scene/EntityPrototype.h", "a vector of JSON members" },
+		{ "Strata/Scene/EntitySink.h", "a vector of JSON members (the unknown components EntityColumns keeps)" },
 		{ "Strata/Scene/UnknownComponents.h", "a JSON member with an initializer and inline code" },
 	} };
 

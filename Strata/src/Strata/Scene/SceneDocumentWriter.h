@@ -6,7 +6,7 @@
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Core/UUID.h"
 
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include <cstdint>
 #include <functional>
