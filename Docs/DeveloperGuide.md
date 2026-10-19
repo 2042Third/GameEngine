@@ -1887,6 +1887,11 @@ and `AudioSystem`, the built-in "Audio" scene system.
   renders a single picture renders again until none waits, as captures and thumbnails do); changes of resident ones upload
   at once. A reader of the proxy log that takes `GetProxyVersion` reads every change after it. Mirrors go with their
   render scenes (at the next `Renderer::BeginFrame`) or after 300 frames unused.
+- The copy knows only what the logs say: code that changes instances or proxies records each change
+  (`RenderScene::RecordInstanceChanges`, `RecordProxyChange`; palettes log as they are recomputed), or the GPU path draws
+  stale data that the CPU path does not. Data a feature adds per instance goes into a buffer of its own, parallel to the
+  instances (as the LOD cross-fades' `RenderData::LODFadeState` per instance), so `RenderData::InstanceData`, which every
+  pass reads per instance, stays 64 bytes.
 - The mirror also keeps the mesh table and the material data and flags by slot (both paths read materials from it;
   `MaterialGPU::Build` is the one place material data is made). They follow the asset manager's content changes and the
   scene's slots, never a frame's requests: what is loaded is drawn. A change that alters what a material's GPU data

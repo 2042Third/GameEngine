@@ -417,6 +417,8 @@ lights, overlays and text: [Rendering](Docs/DeveloperGuide.md#rendering).
   ([GPU timing](Docs/DeveloperGuide.md#gpu-timing)).
 - Read mesh geometry only through the geometry pool, every frame (`Mesh::GetGeometry`: compaction moves it)
   ([Batching](Docs/DeveloperGuide.md#batching)).
+- Per-instance additions go to parallel buffers (`InstanceData` stays 64 bytes), and render-scene changes are logged
+  (`RecordInstanceChanges`, `RecordProxyChange`) so its GPU copy follows ([Render scene](Docs/DeveloperGuide.md#render-scene)).
 - Scene shaders work in camera-relative space (`TransformPositionRelative`; rotation-only view matrices): upload anything
   positioned relative to the camera, subtracting in double ([Camera-relative space](Docs/DeveloperGuide.md#camera-relative-space)).
 - Shadow cascades are kept while nothing reaching them changed (`PrepareShadowCache`): a new input of what casters are
