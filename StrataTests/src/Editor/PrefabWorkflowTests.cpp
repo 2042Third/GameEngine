@@ -6,12 +6,14 @@
 #include "Editor/CommandUtils.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
+#include "Editor/EditorPlacement.h"
 #include "Editor/PrefabSync.h"
 #include "Editor/PropertyEdit.h"
 #include "Editor/SceneBounds.h"
 #include "Editor/TransformEdit.h"
 #include "TestHelpers.h"
 
+#include <Strata/Animation/AnimationComponents.h>
 #include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/Base64.h>
 #include <Strata/Core/FileSystem.h>
@@ -20,6 +22,7 @@
 #include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
+#include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/PrefabInstances.h>
 #include <Strata/Scene/Scene.h>
 
@@ -271,6 +274,39 @@ TEST_SUITE("Editor.Prefab")
 			CheckSameBounds(GetBounds(harness, old), expected);
 			CHECK(harness.Get(reference)["components"]["Transform"]["Scale"] == nlohmann::json::array({ 1, 1, 1 }));
 		}
+	}
+
+	TEST_CASE("A model's placement bounds never wait for its skeleton, and stand it in its rest pose once it is resident")
+	{
+		PrefabHarness harness("PrefabPlacementBounds");
+		const AssetHandle model = AddArmModel(harness, 1.0f);
+		SettleFrames(harness);
+		EditorAssetManager& assets = *harness.Context.GetAssetManager();
+		// The model's skeleton, from its template's animator.
+		const Ref<EntityTemplate> asset = std::static_pointer_cast<EntityTemplate>(assets.LoadAssetSync(model));
+		REQUIRE(asset);
+		Scene scratch;
+		REQUIRE_FALSE(asset->Instantiate(scratch).empty());
+		AssetHandle skeleton = UUID::Null();
+		for (const auto [handle, animator] : scratch.GetRegistry().view<AnimatorComponent>().each())
+			skeleton = animator.Skeleton;
+		REQUIRE(skeleton.IsValid());
+		REQUIRE(assets.GetAssetState(skeleton) != AssetState::Ready);
+
+		// Measured before the skeleton is resident: it is requested, not waited for.
+		EditorPlacement::GetTemplateBounds(model);
+		CHECK(assets.GetAssetState(skeleton) != AssetState::Ready);
+		// Once it is, the placement bounds are the arm standing 2 units tall from its root, as the template bounds are then.
+		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
+		while (!harness.Context.GetAssetBounds().Measure(assets, model).Bounds.IsValid() || harness.Context.GetAssetBounds().Measure(assets, model).Pending)
+		{
+			REQUIRE(std::chrono::steady_clock::now() < deadline);
+			harness.Frames(1);
+		}
+		const AABB placed = EditorPlacement::GetPlacementBounds(harness.Context, model);
+		REQUIRE(placed.IsValid());
+		CHECK(placed.Max.y - placed.Min.y == doctest::Approx(2.0f).epsilon(1e-3));
+		CheckSameBounds(placed, EditorPlacement::GetTemplateBounds(model));
 	}
 
 	TEST_CASE("prefab.create links the entities in one undo step with the file, and undo unlinks them and trashes the file")

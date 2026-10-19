@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include "Editor/AssetBounds.h"
 #include "Editor/EditorCamera.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -263,6 +264,7 @@ TEST_SUITE("Editor.UI.Placement")
 		REQUIRE(hit);
 		CHECK(hit->HitEntity.GetName() == "Ground");
 		const size_t history = editor.Run("edit.history")["history"].size();
+		const uint64_t measures = editor.Context().GetAssetBounds().GetMeasureCount();
 
 		const ImVec2 from((tile->Min.x + tile->Max.x) * 0.5f, (tile->Min.y + tile->Max.y) * 0.5f);
 		editor.Harness.MoveMouse(from);
@@ -275,6 +277,8 @@ TEST_SUITE("Editor.UI.Placement")
 			editor.Harness.MoveMouse(ImVec2(from.x + (point.x - from.x) * t, from.y + (point.y - from.y) * t));
 			editor.Frames(1);
 		}
+		// Hovering the view measured it (requesting what it needs), before the drop.
+		CHECK(editor.Context().GetAssetBounds().GetMeasureCount() > measures);
 		editor.Harness.SetMouseButton(ImGuiMouseButton_Left, false);
 		editor.Frames(2);
 

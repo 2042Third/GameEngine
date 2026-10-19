@@ -1,11 +1,14 @@
 #include "Editor/EditorPlacement.h"
 
+#include "Editor/AssetBounds.h"
 #include "Editor/EditorCamera.h"
+#include "Editor/EditorContext.h"
 #include "Editor/SceneBounds.h"
 
 #include <Strata/Animation/AnimationComponents.h>
 #include <Strata/Animation/AnimationPreview.h>
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Renderer/Mesh.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
@@ -128,11 +131,7 @@ namespace Strata
 			const std::vector<Entity> roots = asset->Instantiate(scene);
 			if (roots.empty())
 				return AABB();
-			for (const auto [handle, animator] : scene.GetRegistry().view<AnimatorComponent>().each())
-			{
-				if (animator.Skeleton.IsValid())
-					AssetManager::GetActive()->LoadAssetSync(animator.Skeleton);
-			}
+			// The preview requests the animators' skeletons (never waiting for them: a frame is never held on an asset).
 			AnimationPreviewSpecification specification;
 			specification.RestPoses = true;
 			AnimationPreview poses(scene, specification);
@@ -145,6 +144,17 @@ namespace Strata
 			// Around the root's origin: the translation the root is given replaces its own.
 			const glm::vec3 origin(scene.GetWorldTransform(roots.front())[3]);
 			return AABB(bounds.Min - origin, bounds.Max - origin);
+		}
+
+		AABB GetPlacementBounds(EditorContext& context, AssetHandle prefab)
+		{
+			if (EditorAssetManager* assets = context.GetAssetManager())
+			{
+				const AssetBounds::Result measured = context.GetAssetBounds().Measure(*assets, prefab);
+				if (!measured.Pending)
+					return measured.Bounds;
+			}
+			return GetTemplateBounds(prefab);
 		}
 
 	}

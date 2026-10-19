@@ -1,5 +1,6 @@
 #include "Panels/ViewportPanel.h"
 
+#include "Editor/AssetBounds.h"
 #include "Editor/CommandJournal.h"
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
@@ -20,6 +21,7 @@
 
 #include <Strata/Animation/AnimationPreview.h>
 #include <Strata/Asset/AssetManager.h>
+#include <Strata/Asset/EditorAssetManager.h>
 #include <Strata/Core/Log.h>
 #include <Strata/Input/Input.h>
 #include <Strata/Reflection/PropertyJson.h>
@@ -806,6 +808,18 @@ namespace Strata
 	{
 		if (!ImGui::BeginDragDropTarget())
 			return;
+		// A prefab or model dragged over the view: what resting it on a surface needs (its template, meshes and skeletons) is
+		// requested while it hovers, so the drop finds it resident.
+		if (const ImGuiPayload* hovering = ImGui::GetDragDropPayload(); hovering && hovering->IsDataType(DragDrop::c_Asset)
+			&& hovering->DataSize == static_cast<int>(sizeof(AssetHandle)) && !hovering->Delivery)
+		{
+			AssetHandle asset = UUID::Null();
+			std::memcpy(&asset, hovering->Data, sizeof(AssetHandle));
+			const AssetType type = AssetManager::GetAssetType(asset);
+			EditorAssetManager* assets = context.GetAssetManager();
+			if (assets && (type == AssetType::Prefab || type == AssetType::Model))
+				context.GetAssetBounds().Measure(*assets, asset);
+		}
 		const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(DragDrop::c_Asset);
 		if (payload && payload->DataSize == static_cast<int>(sizeof(AssetHandle)) && m_Image.Size.x > 0.0f && m_Image.Size.y > 0.0f)
 		{

@@ -1759,7 +1759,9 @@ and `AudioSystem`, the built-in "Audio" scene system.
 - **Placing content** (`Editor/SceneRaycast`, `Editor/EditorPlacement`): new top-level entities from the create menus
   appear under the view's pivot, resting on the surface there (`EditorPlacement::FindPivotSurface`, `RestOn` with the
   mesh's bounds), with the translation sent through `entity.create`; prefabs and models rest by the bounds of what they
-  draw (`GetTemplateBounds`) on the surface under the cursor when dropped into the viewport, under the pivot from Add to
+  draw (`GetPlacementBounds`: the editor's `AssetBounds` measurement once complete, which the viewport requests while the
+  asset is dragged over it, else `GetTemplateBounds`, which requests skeletons but never waits for them) on the surface
+  under the cursor when dropped into the viewport, under the pivot from Add to
   Scene and drops on the Hierarchy's empty space (`EditorActions::InstantiatePrefab`), a dropped material goes to the
   mesh under the cursor (`component.set`), and
   `entity.dropToGround {entities}` (End) moves entities down onto what is below them, one undo step. Rays hit the mesh

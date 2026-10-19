@@ -2834,8 +2834,10 @@ is the `strata-scripting` skill. The layers:
   the entity's origin touch the surface with its side facing it). The Hierarchy's create menus (the Entity menu too) put
   new top-level entities under the pivot, resting on the surface by their mesh's bounds (`GetMeshBounds`: the loaded
   mesh's, else the recorded ones), and send the translation with `entity.create`. Prefabs and models rest by the bounds of
-  what they draw around their root's origin (`GetTemplateBounds`: instantiated into a scene of their own, the mesh bounds
-  of the root's subtree with their transforms): dropped into the viewport on the cursor's surface, from the Content
+  what they draw around their root's origin (`GetPlacementBounds`: `EditorContext::GetAssetBounds`'s measurement, made
+  while the asset is dragged over the viewport, else `GetTemplateBounds`: instantiated into a scene of their own, the mesh
+  bounds of the root's subtree with their transforms, skinned meshes in the rest pose once their skeleton is resident,
+  never waiting for it): dropped into the viewport on the cursor's surface, from the Content
   Browser's, the Asset tab's Add to Scene or a drop on the Hierarchy's empty space under the pivot
   (`EditorActions::InstantiatePrefab`, `prefab.instantiate` with the translation). A material dropped into the viewport
   goes to the mesh under the cursor (`component.set`, one undo step). `entity.dropToGround` (End, and Edit > Drop to Ground) moves each
