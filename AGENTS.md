@@ -378,7 +378,9 @@ reaches the application only through `EditorHost`. Every command family, panel a
 - A scene being opened is read-only: code that edits the scene outside `CommitEdit` checks
   `EditorContext::CheckSceneEditable`. Code that writes a prefab sets `PrefabSync::SetBaseline`, code that gives an
   instance its prefab's values calls `PrefabInstances::MarkSynced`, and an undo action that changes the scene
-  describes it as entity states (`GetSceneChange`), or the recovery journal snapshots the whole scene.
+  describes it as entity states (`GetSceneChange`), or the recovery journal snapshots the whole scene. `CommitEdit` keeps
+  prefab instances' override lists: a scene step recorded otherwise calls `EditorContext::UpdatePrefabOverrides`
+  ([Prefab instances](Docs/DeveloperGuide.md#prefab-instances)).
 - Projects never choose what runs: the external editor is the user's setting (or `STRATA_EXTERNAL_EDITOR`), started
   without a shell, and `script.open` opens only code, CMake and text files of the project or engine.
 - Commands never block a frame: one that waits returns `EditorCommandResult::Defer(poll)`, whose poll owns its data and
