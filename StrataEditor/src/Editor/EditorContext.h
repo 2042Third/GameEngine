@@ -346,11 +346,25 @@ namespace Strata
 		// Records an edit of the active scene. Edits of the running copy during play are not recorded: they are
 		// discarded with it. Returns true when an undo step was recorded. While a scene is being opened (IsSceneLoading) the
 		// edited scene is read-only: the edit is rolled back and nothing is recorded.
-		bool CommitEdit(SceneEditTransaction& transaction);
+		// `overrides` says whether the touched instances' override lists are worked out again (UpdatePrefabOverrides) or the
+		// edit left them current (PrefabOverrides::Propagate does).
+		enum class OverrideUpkeep { Update, Current };
+		bool CommitEdit(SceneEditTransaction& transaction, OverrideUpkeep overrides = OverrideUpkeep::Update);
 		// Before an edit is recorded: the override lists (PrefabInstanceComponent::Overrides) of the prefab instances it
-		// touched, worked out again against their prefabs as the sync knows them (PrefabSync::GetBaseline). CommitEdit calls
-		// it; steps recorded otherwise (prefab.apply) call it for their transaction.
+		// touched, worked out again against their prefabs as the sync knows them (PrefabSync::GetBaselinePart). Each touched
+		// root is tracked, its list changed or not, so the steps of a continuous edit keep their entities and merge. An edit
+		// that makes, destroys, moves or relinks entities of an instance works its whole list out; other edits only the
+		// entries of the entities they changed (PrefabOverrides::UpdateOverrides). CommitEdit calls it; steps recorded
+		// otherwise call it for their transaction.
 		void UpdatePrefabOverrides(SceneEditTransaction& transaction);
+		// How the override lists were kept since the editor started (tests): lists worked out whole, and entities whose entries
+		// alone were worked out again.
+		struct OverrideUpkeepStats
+		{
+			uint64_t WholeLists = 0;
+			uint64_t Entities = 0;
+		};
+		const OverrideUpkeepStats& GetOverrideUpkeepStats() const { return m_OverrideUpkeep; }
 		// Undo and redo of the history (UndoStack::Undo, Redo): false while playing, with nothing to do, or when the step
 		// fails (the reason in outError).
 		bool Undo(std::string* outError = nullptr);
@@ -683,6 +697,7 @@ namespace Strata
 		Scope<SceneRecovery> m_Recovery;
 		UndoStack m_UndoStack;
 		PrefabSync m_PrefabSync;
+		OverrideUpkeepStats m_OverrideUpkeep;
 		Scope<ThumbnailCache> m_Thumbnails;
 		Scope<ProjectThumbnail> m_ProjectThumbnail;
 

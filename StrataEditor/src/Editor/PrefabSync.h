@@ -4,6 +4,7 @@
 #include <Strata/Core/UUID.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/PrefabInstances.h>
+#include <Strata/Scene/PrefabOverrides.h>
 
 #include <glm/glm.hpp>
 #include <nlohmann/json.hpp>
@@ -61,6 +62,9 @@ namespace Strata
 		void OnSceneOpened(EditorContext& context);
 		// The snapshot instances of the prefab are compared with: its template when the sync last looked (read on first use).
 		const nlohmann::json* GetBaseline(EditorContext& context, AssetHandle prefab);
+		// One root's part of the baseline with its entities' places (PrefabOverrides::IndexedPart), extracted once per baseline:
+		// what the override lists are kept against, edit after edit. Null when the baseline cannot be read.
+		const PrefabOverrides::IndexedPart* GetBaselinePart(EditorContext& context, AssetHandle prefab, UUID templateRoot);
 		// After the editor wrote a prefab (prefab.apply): instances were updated with it, so it is the baseline now.
 		void SetBaseline(EditorContext& context, AssetHandle prefab, nlohmann::json snapshot);
 		// Whether an instance root differs from its prefab as stored now (cached per root until the edits or the prefab change;
@@ -88,6 +92,7 @@ namespace Strata
 			bool CaughtUp = false; // The scene's instances that missed changes of the prefab were looked at
 			// The versions of the snapshot's parts, worked out once for all its instances (cleared with a new snapshot).
 			PrefabInstances::PartVersionCache PartVersions;
+			PrefabOverrides::IndexedPartCache Parts; // Its parts as the override lists are kept against (cleared with it)
 		};
 		struct ModifiedMark
 		{

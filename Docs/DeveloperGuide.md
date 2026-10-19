@@ -1328,7 +1328,12 @@ and `AudioSystem`, the built-in "Audio" scene system.
   `prefab.apply` refuses them unless `force`). Several actions that form one step go into an `EditorActionGroup`.
   Instance roots keep their override list (`PrefabInstanceComponent::Overrides`, `Scene/PrefabOverrides`): edits that go
   through `CommitEdit` keep it; code that records a scene step otherwise and changes instances calls
-  `EditorContext::UpdatePrefabOverrides` for its transaction (or sets the list itself, as `prefab.apply` does).
+  `EditorContext::UpdatePrefabOverrides` for its transaction (or sets the list itself, as `prefab.apply` does), and code
+  whose edit already left the lists current (`PrefabOverrides::Propagate`) commits with `OverrideUpkeep::Current`. The
+  upkeep tracks every touched instance root, so continuous edits keep merging into one step, and re-serializes only the
+  entities an edit changed unless the edit made, destroyed, moved or relinked entities of the instance (then the whole
+  list); `EditorContext::GetOverrideUpkeepStats` counts both for tests (`Perf.Editor.DragInPrefabInstance5kMedian`,
+  `Drag100PrefabInstancesMedian`).
 
 ### Command conventions
 

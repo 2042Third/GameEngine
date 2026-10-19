@@ -7,7 +7,9 @@
 #include "Editor/EditorCommands.h"
 #include "Editor/EditorContext.h"
 #include "Editor/PrefabSync.h"
+#include "Editor/PropertyEdit.h"
 #include "Editor/SceneBounds.h"
+#include "Editor/TransformEdit.h"
 #include "TestHelpers.h"
 
 #include <Strata/Asset/EditorAssetManager.h>
@@ -15,10 +17,13 @@
 #include <Strata/Core/FileSystem.h>
 #include <Strata/Core/JsonUtils.h>
 #include <Strata/Core/Timestep.h>
+#include <Strata/Reflection/ComponentRegistry.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/PrefabInstances.h>
 #include <Strata/Scene/Scene.h>
+
+#include <glm/gtc/matrix_transform.hpp>
 
 #include <chrono>
 #include <filesystem>
@@ -533,6 +538,7 @@ TEST_SUITE("Editor.Prefab")
 		harness.Frames(2); // The sync reads the prefab it compares with
 		const uint64_t propagated = harness.Context.GetPrefabSync().GetPropagationCount();
 		const std::vector<std::string> before = harness.History();
+		const EditorContext::OverrideUpkeepStats upkeep = harness.Context.GetOverrideUpkeepStats();
 
 		// The file changes outside the editor (another tool, version control): the bulb gets brighter.
 		const std::filesystem::path file = harness.Directory / "Assets" / "Prefabs" / "Lamp.stprefab";
@@ -559,6 +565,9 @@ TEST_SUITE("Editor.Prefab")
 		CHECK(harness.Intensity(modifiedBulb) == 8.0);
 		CHECK(harness.Get(modifiedBulb)["components"]["PointLight"]["Range"] == 4.0);
 		CHECK(harness.Status(setup.Second)["overrides"].size() == 1);
+		// Propagate left every list current: recording the step works none out again.
+		CHECK(harness.Context.GetOverrideUpkeepStats().WholeLists == upkeep.WholeLists);
+		CHECK(harness.Context.GetOverrideUpkeepStats().Entities == upkeep.Entities);
 		CHECK(harness.Context.GetPrefabSync().GetPropagationCount() == propagated + 3);
 		std::vector<std::string> expected = before;
 		expected.push_back("Update Instances of Lamp");
@@ -909,6 +918,126 @@ TEST_SUITE("Editor.Prefab")
 		harness.Run("component.set", { { "entity", harness.ChildOf(setup.First) }, { "component", "PointLight" }, { "values", { { "Range", 3 } } } });
 		CHECK(running.GetComponent<PrefabInstanceComponent>().Overrides.size() == 1);
 		harness.Run("play.stop");
+	}
+
+	TEST_CASE("A gizmo or Inspector drag on an instance's child is one undo step, and its override follows it")
+	{
+		PrefabHarness harness("PrefabOverrideDrag");
+		LampSetup setup(harness);
+		Scene& scene = *harness.Context.GetEditScene();
+		const Entity first = scene.GetEntityByUUID(*UUIDFromJson(setup.First));
+		const auto overrides = [&]() { return first.GetComponent<PrefabInstanceComponent>().Overrides; };
+		Entity bulb = scene.GetEntityByUUID(*UUIDFromJson(harness.ChildOf(setup.First)));
+		const UUID bulbTemplate = bulb.GetComponent<PrefabInstanceComponent>().PrefabEntityID;
+		const glm::vec3 start = bulb.GetComponent<TransformComponent>().Translation;
+		UndoStack& undo = harness.Context.GetUndoStack();
+		const size_t steps = undo.GetHistory().size();
+		const std::vector<PrefabOverride> moved = { { bulbTemplate, "Transform", "Translation", PrefabOverrideKind::Property } };
+		const ComponentInfo* transform = ComponentRegistry::Find("Transform");
+		REQUIRE(transform);
+		const PropertyInfo* translation = transform->FindProperty("Translation");
+		REQUIRE(translation);
+		std::string error;
+
+		SUBCASE("Gizmo")
+		{
+			harness.Context.Select(bulb.GetUUID());
+			std::optional<TransformDrag> drag = TransformDrag::Begin(harness.Context, GizmoOperation::Translate);
+			REQUIRE(drag);
+			for (int frame = 1; frame <= 5; frame++)
+			{
+				const glm::mat4 gizmo = glm::translate(glm::mat4(1.0f), glm::vec3(0.5f * static_cast<float>(frame), 0.0f, 0.0f)) * drag->GetStartTransform();
+				REQUIRE_MESSAGE(drag->Update(harness.Context, gizmo, &error), error);
+				CHECK(overrides() == moved);
+				CHECK(undo.GetHistory().size() == steps + 1);
+			}
+			drag->End(harness.Context);
+		}
+		SUBCASE("Inspector")
+		{
+			for (int frame = 1; frame <= 5; frame++)
+			{
+				const PropertyValue value(start + glm::vec3(0.5f * static_cast<float>(frame), 0.0f, 0.0f));
+				REQUIRE_MESSAGE(SetPropertyWithUndo(harness.Context, bulb, *transform, *translation, value, &error), error);
+				CHECK(overrides() == moved);
+				CHECK(undo.GetHistory().size() == steps + 1);
+			}
+			undo.BreakMerge();
+		}
+
+		// One undo puts the child and the list back where they were before the drag; redo brings both.
+		CHECK(undo.GetHistory().size() == steps + 1);
+		harness.Run("edit.undo");
+		CHECK(bulb.GetComponent<TransformComponent>().Translation == start);
+		CHECK(overrides().empty());
+		harness.Run("edit.redo");
+		CHECK(bulb.GetComponent<TransformComponent>().Translation != start);
+		CHECK(overrides() == moved);
+	}
+
+	TEST_CASE("An edit back to the prefab's value clears its override, also within a drag")
+	{
+		PrefabHarness harness("PrefabOverrideBack");
+		LampSetup setup(harness);
+		Scene& scene = *harness.Context.GetEditScene();
+		const Entity first = scene.GetEntityByUUID(*UUIDFromJson(setup.First));
+		const auto overrides = [&]() { return first.GetComponent<PrefabInstanceComponent>().Overrides; };
+		const std::string bulbId = harness.ChildOf(setup.First);
+		Entity bulb = scene.GetEntityByUUID(*UUIDFromJson(bulbId));
+		harness.SetIntensity(bulbId, 6.0f);
+		CHECK(overrides().size() == 1);
+		harness.SetIntensity(bulbId, 3.0f); // The prefab's
+		CHECK(overrides().empty());
+
+		// A drag that comes back to where it started leaves neither an override nor a step.
+		const size_t steps = harness.Context.GetUndoStack().GetHistory().size();
+		harness.Context.Select(bulb.GetUUID());
+		std::optional<TransformDrag> drag = TransformDrag::Begin(harness.Context, GizmoOperation::Translate);
+		REQUIRE(drag);
+		REQUIRE(drag->Update(harness.Context, glm::translate(glm::mat4(1.0f), glm::vec3(2.0f, 0.0f, 0.0f)) * drag->GetStartTransform()));
+		CHECK(overrides().size() == 1);
+		REQUIRE(drag->Update(harness.Context, drag->GetStartTransform()));
+		drag->End(harness.Context);
+		CHECK(overrides().empty());
+		CHECK(harness.Context.GetUndoStack().GetHistory().size() == steps);
+	}
+
+	TEST_CASE("Edits of an instance work out the entries of the entities they change, not the whole instance")
+	{
+		PrefabHarness harness("PrefabOverrideUpkeep");
+		const std::string rack = harness.Create("Rack");
+		for (int slot = 0; slot < 40; slot++)
+			harness.Create(fmt::format("Slot {}", slot), rack);
+		const nlohmann::json created = harness.Run("prefab.create", { { "entities", { rack } }, { "path", "Prefabs/Rack.stprefab" } });
+		std::vector<std::string> instances;
+		for (int index = 0; index < 3; index++)
+			instances.push_back(harness.Run("prefab.instantiate", { { "prefab", created["asset"] } })["id"].get<std::string>());
+		Scene& scene = *harness.Context.GetEditScene();
+		const EditorContext::OverrideUpkeepStats before = harness.Context.GetOverrideUpkeepStats();
+
+		// A drag of one slot of an instance, then of all three roots: one entity per instance and frame.
+		const Entity slot = scene.GetEntityByUUID(*UUIDFromJson(harness.ChildOf(instances[0], 7)));
+		harness.Context.Select(slot.GetUUID());
+		std::optional<TransformDrag> drag = TransformDrag::Begin(harness.Context, GizmoOperation::Translate);
+		REQUIRE(drag);
+		for (int frame = 1; frame <= 10; frame++)
+			REQUIRE(drag->Update(harness.Context, glm::translate(glm::mat4(1.0f), glm::vec3(0.1f * static_cast<float>(frame), 0.0f, 0.0f)) * drag->GetStartTransform()));
+		drag->End(harness.Context);
+		harness.Context.SetSelection({ *UUIDFromJson(instances[0]), *UUIDFromJson(instances[1]), *UUIDFromJson(instances[2]) });
+		drag = TransformDrag::Begin(harness.Context, GizmoOperation::Translate);
+		REQUIRE(drag);
+		for (int frame = 1; frame <= 10; frame++)
+			REQUIRE(drag->Update(harness.Context, glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.1f * static_cast<float>(frame), 0.0f)) * drag->GetStartTransform()));
+		drag->End(harness.Context);
+		const EditorContext::OverrideUpkeepStats& after = harness.Context.GetOverrideUpkeepStats();
+		CHECK(after.WholeLists == before.WholeLists);
+		CHECK(after.Entities - before.Entities == 10 + 10 * 3);
+		CHECK(scene.GetEntityByUUID(*UUIDFromJson(instances[0])).GetComponent<PrefabInstanceComponent>().Overrides.size() == 1);
+
+		// An edit that changes which entities an instance has works its whole list out.
+		harness.Run("entity.delete", { { "entities", { harness.ChildOf(instances[1], 3) } } });
+		CHECK(harness.Context.GetOverrideUpkeepStats().WholeLists == before.WholeLists + 1);
+		CHECK(scene.GetEntityByUUID(*UUIDFromJson(instances[1])).GetComponent<PrefabInstanceComponent>().Overrides.size() == 1);
 	}
 
 	TEST_CASE("prefab.apply can write one override into the prefab; every other instance takes it unless it overrides it")

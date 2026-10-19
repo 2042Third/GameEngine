@@ -9,6 +9,7 @@
 #include "Editor/PrefabSync.h"
 #include "Editor/SceneRecovery.h"
 #include "Editor/ThumbnailCache.h"
+#include "Editor/TransformEdit.h"
 #include "EditorLayer.h"
 #include "Perf/PerfUtils.h"
 #include "Perf/SceneGenerators.h"
@@ -30,10 +31,12 @@
 #include <Strata/Renderer/SceneRenderer.h>
 #include <Strata/Renderer/Texture.h>
 #include <Strata/Renderer/TextureStreamer.h>
+#include <Strata/Scene/Components.h>
 #include <Strata/Scene/Prefab.h>
 #include <Strata/Scene/Scene.h>
 #include <Strata/Scene/SceneSerializer.h>
 
+#include <glm/gtc/matrix_transform.hpp>
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
@@ -637,6 +640,67 @@ TEST_SUITE("Perf.Editor")
 			}
 			return Perf::Summarize(samples).MedianMs;
 		});
+	}
+
+	TEST_CASE("A gizmo drag inside a large prefab instance, or of many instances, costs a frame what the dragged entities cost")
+	{
+		// Each frame of a drag records an edit (CommitEdit), which keeps the touched instances' override lists: only the
+		// entries of the entities that changed are worked out again, not the whole instance. The median of 60 frames.
+		Perf::ScopedApplicationJobSystem jobs;
+		const std::filesystem::path directory = CreateTemporaryDirectory("PerfPrefabDrag") / "Game";
+		EditorContext context { EditorContextSpecification { false } };
+		EditorCommandRegistry commands;
+		auto run = [&](std::string_view name, const nlohmann::json& parameters) { return RunCommandToCompletion(context, commands, name, parameters); };
+		run("project.create", { { "directory", FileSystem::ToUTF8(directory) }, { "name", "Game" } });
+		Scene& scene = *context.GetEditScene();
+
+		// A model-like prefab of 50 groups of 100 nodes, its instance linked by prefab.create; a crate of a root and four
+		// children, instantiated 100 times.
+		const Entity rig = scene.CreateEntity("Rig");
+		Entity dragged;
+		for (int group = 0; group < 50; group++)
+		{
+			const Entity parent = scene.CreateChildEntity(rig, fmt::format("Group {}", group));
+			for (int node = 0; node < 100; node++)
+			{
+				const Entity child = scene.CreateChildEntity(parent, fmt::format("Node {}", node));
+				if (group == 25 && node == 50)
+					dragged = child;
+			}
+		}
+		const Entity crate = scene.CreateEntity("Crate");
+		for (int part = 0; part < 4; part++)
+			scene.CreateChildEntity(crate, fmt::format("Part {}", part));
+		scene.UpdateWorldTransforms();
+		run("prefab.create", { { "entities", { UUIDToJson(rig.GetUUID()) } }, { "path", "Prefabs/Rig.stprefab" } });
+		run("prefab.create", { { "entities", { UUIDToJson(crate.GetUUID()) } }, { "path", "Prefabs/Crate.stprefab" } });
+		const nlohmann::json made = run("prefab.instantiate", { { "prefab", "Prefabs/Crate.stprefab" },
+			{ "instances", std::vector<nlohmann::json>(100, nlohmann::json::object()) } });
+		std::vector<UUID> crates;
+		for (const nlohmann::json& instance : made["instances"])
+			crates.push_back(*UUIDFromJson(instance["id"]));
+		REQUIRE(crates.size() == 100);
+
+		auto measureDrag = [&](const std::vector<UUID>& selection)
+		{
+			context.SetSelection(selection);
+			std::optional<TransformDrag> drag = TransformDrag::Begin(context, GizmoOperation::Translate);
+			REQUIRE(drag);
+			std::vector<double> samples;
+			for (int frame = 1; frame <= 60; frame++)
+			{
+				const glm::mat4 gizmo = glm::translate(glm::mat4(1.0f), glm::vec3(0.01f * static_cast<float>(frame), 0.0f, 0.0f)) * drag->GetStartTransform();
+				const auto start = std::chrono::steady_clock::now();
+				std::string error;
+				REQUIRE_MESSAGE(drag->Update(context, gizmo, &error), error);
+				samples.push_back(MillisecondsSince(start));
+			}
+			drag->End(context);
+			return Perf::Summarize(samples).MedianMs;
+		};
+		Perf::CheckBudgetConfirmed("Perf.Editor.DragInPrefabInstance5kMedian", [&] { return measureDrag({ dragged.GetUUID() }); });
+		CHECK(rig.GetComponent<PrefabInstanceComponent>().Overrides.size() == 1);
+		Perf::CheckBudgetConfirmed("Perf.Editor.Drag100PrefabInstancesMedian", [&] { return measureDrag(crates); });
 	}
 }
 

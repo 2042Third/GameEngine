@@ -150,6 +150,78 @@ TEST_SUITE("Scene.PrefabOverrides")
 		CHECK_FALSE(PrefabOverrides::Revert(*crate.World, crate.Lid, crate.Part, "Script", "Wobbler.Speed", &error));
 	}
 
+	TEST_CASE("UpdateOverrides works out the entries of the entities it is given as ComputeOverrides does, and keeps the others")
+	{
+		Crate crate;
+		// The lid's script aims at the handle: a reference between the instance's entities.
+		crate.Lid.AddComponent<ScriptComponent>().Scripts.push_back(
+			ScriptEntry { "Aim", { ScriptFieldValue { "Target", PropertyType::Entity, PropertyValue(crate.Handle.GetUUID()) } } });
+		const nlohmann::json linked = SceneSerializer::SerializeEntities(*crate.World, { crate.Root });
+		nlohmann::json snapshot = linked;
+		PrefabInstances::StripLinks(snapshot);
+		// An instance with UUIDs of its own, its references remapped to its entities.
+		EntityInstantiationOptions options;
+		options.GenerateNewUUIDs = true;
+		const std::vector<Entity> made = SceneSerializer::DeserializeEntities(*crate.World, linked, options);
+		REQUIRE(made.size() == 1);
+		Entity root = made[0];
+		REQUIRE(root.GetChildren().size() == 1);
+		Entity lid = root.GetChildren()[0];
+		REQUIRE(lid.GetChildren().size() == 1);
+		Entity handle = lid.GetChildren()[0];
+		REQUIRE(root.GetUUID() != crate.Root.GetUUID());
+
+		PrefabOverrides::IndexedPartCache parts;
+		const PrefabOverrides::IndexedPart& part = parts.Get(snapshot, crate.Root.GetUUID());
+		CHECK(part.Positions.size() == 3);
+		CHECK(&parts.Get(snapshot, crate.Root.GetUUID()) == &part);
+		std::vector<PrefabOverride> list;
+		const auto update = [&](std::vector<Entity> entities)
+		{
+			REQUIRE(PrefabOverrides::UpdateOverrides(root, part, entities, list));
+			CHECK(list == PrefabOverrides::ComputeOverrides(*crate.World, root, part.Part));
+		};
+		// The reference compares as the prefab's handle.
+		update({ lid });
+		CHECK(list.empty());
+		// The handle's entry, then the lid's before it (the part's order).
+		handle.AddComponent<SpotLightComponent>();
+		update({ handle });
+		SetIntensity(lid, 5.0f);
+		update({ lid });
+		REQUIRE(list.size() == 2);
+		CHECK(list[0] == PrefabOverride { crate.Lid.GetUUID(), "PointLight", "Intensity", PrefabOverrideKind::Property });
+		// The root's transform is its own.
+		root.GetComponent<TransformComponent>().Translation = glm::vec3(3.0f, 0.0f, 0.0f);
+		root.MarkModified<TransformComponent>();
+		update({ root, root });
+		CHECK(list.size() == 2);
+		// Back to the prefab's value clears the entry; aiming at the root overrides the field.
+		SetIntensity(lid, 2.0f);
+		lid.GetComponent<ScriptComponent>().Scripts[0].Fields[0].Value = PropertyValue(root.GetUUID());
+		lid.MarkModified<ScriptComponent>();
+		update({ lid });
+		CHECK(list == std::vector<PrefabOverride> { { crate.Lid.GetUUID(), "Script", "Aim.Target", PrefabOverrideKind::Property },
+			{ crate.Handle.GetUUID(), "SpotLight", "", PrefabOverrideKind::AddedComponent } });
+
+		// A copy of the lid made within the instance keeps its link: it counts as added there, as in ComputeOverrides.
+		EntityInstantiationOptions copyOptions;
+		copyOptions.GenerateNewUUIDs = true;
+		copyOptions.Parent = root;
+		const std::vector<Entity> copies = SceneSerializer::DeserializeEntities(*crate.World, SceneSerializer::SerializeEntities(*crate.World, { lid }), copyOptions);
+		REQUIRE(copies.size() == 1);
+		REQUIRE(copies[0].HasComponent<PrefabInstanceComponent>());
+		SetIntensity(copies[0], 7.0f);
+		const std::vector<PrefabOverride> beforeCopy = list;
+		update({ copies[0], crate.Lid });
+		CHECK(list == beforeCopy);
+
+		// A list naming an entity the part lacks was worked out against another version: it needs ComputeOverrides.
+		std::vector<PrefabOverride> stale = { { UUID(0x99), "PointLight", "Intensity", PrefabOverrideKind::Property } };
+		CHECK_FALSE(PrefabOverrides::UpdateOverrides(root, part, std::vector<Entity> { lid }, stale));
+		CHECK(stale.size() == 1);
+	}
+
 	TEST_CASE("The list is stored on the root only when it has entries, and malformed entries are dropped on load")
 	{
 		Crate crate;

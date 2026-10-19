@@ -195,6 +195,7 @@ namespace Strata
 			nlohmann::json previous = std::move(found->second.Snapshot);
 			found->second.Snapshot = *snapshot;
 			found->second.PartVersions.Clear();
+			found->second.Parts.Clear();
 			m_BaselineVersion++;
 			if (!previous.is_null())
 				Propagate(context, prefab, previous, *snapshot);
@@ -326,7 +327,9 @@ namespace Strata
 			if (!result.Changed.empty() || !result.Created.empty())
 				m_PropagationCount++;
 		}
-		context.CommitEdit(transaction);
+		// Every list is current: Replace remakes an instance with its prefab's values (and no list), Propagate works it out, and a
+		// rescaled root's transform is its own, never an override.
+		context.CommitEdit(transaction, EditorContext::OverrideUpkeep::Current);
 		context.PruneSelection();
 	}
 
@@ -399,6 +402,12 @@ namespace Strata
 	{
 		const Baseline* baseline = FindBaseline(context, prefab);
 		return baseline ? &baseline->Snapshot : nullptr;
+	}
+
+	const PrefabOverrides::IndexedPart* PrefabSync::GetBaselinePart(EditorContext& context, AssetHandle prefab, UUID templateRoot)
+	{
+		Baseline* baseline = FindBaseline(context, prefab);
+		return baseline ? &baseline->Parts.Get(baseline->Snapshot, templateRoot) : nullptr;
 	}
 
 	void PrefabSync::SetBaseline(EditorContext& context, AssetHandle prefab, nlohmann::json snapshot)

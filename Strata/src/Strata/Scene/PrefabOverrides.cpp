@@ -392,6 +392,67 @@ namespace Strata
 			return result;
 		}
 
+		const IndexedPart& IndexedPartCache::Get(const nlohmann::json& snapshot, UUID templateRoot)
+		{
+			const auto [it, added] = m_Parts.try_emplace(templateRoot);
+			if (added)
+			{
+				it->second.Part = PrefabInstances::ExtractTemplate(snapshot, templateRoot);
+				const nlohmann::json& entities = it->second.Part["Entities"];
+				for (size_t index = 0; index < entities.size(); index++)
+					it->second.Positions.emplace(GetId(entities[index]), index);
+			}
+			return it->second;
+		}
+
+		bool UpdateOverrides(Entity root, const IndexedPart& part, std::span<const Entity> entities, std::vector<PrefabOverride>& overrides)
+		{
+			const nlohmann::json* partEntities = JsonUtils::Find(part.Part, "Entities");
+			if (!root || !partEntities || !partEntities->is_array() || partEntities->empty())
+				return false;
+			for (const PrefabOverride& entry : overrides)
+			{
+				if (!part.Positions.contains(entry.Entity))
+					return false;
+			}
+			const AssetHandle prefab = PrefabInstances::GetPrefab(root);
+			const bool linked = std::ranges::any_of(entities, [prefab](Entity entity)
+			{
+				const PrefabInstanceComponent* link = entity ? entity.TryGetComponent<PrefabInstanceComponent>() : nullptr;
+				return link && link->Prefab == prefab;
+			});
+			if (!linked)
+				return true;
+
+			// The prefab ids of the instance's entities (references between them compare as those), then each entity's entries.
+			const std::unordered_map<UUID, UUID> templateIds = PrefabInstances::MapTemplateIds(root);
+			const UUID templateRoot = GetId((*partEntities)[0]);
+			std::unordered_set<UUID> redone;
+			std::vector<PrefabOverride> entries;
+			for (const Entity entity : entities)
+			{
+				const auto id = entity ? templateIds.find(entity.GetUUID()) : templateIds.end();
+				if (id == templateIds.end())
+					continue; // Not in the instance
+				const auto position = part.Positions.find(id->second);
+				if (position == part.Positions.end() || !redone.insert(id->second).second)
+					continue; // Added to the instance (a new id), or listed twice
+				CompareComponents(id->second, id->second == templateRoot, GetComponents((*partEntities)[position->second]),
+					PrefabInstances::MakeTemplateComponents(entity, templateIds), entries);
+			}
+			if (redone.empty())
+				return true;
+			// The other entities' entries, then all of them in the part's order (an entity's own stay in theirs).
+			for (const PrefabOverride& entry : overrides)
+			{
+				if (!redone.contains(entry.Entity))
+					entries.push_back(entry);
+			}
+			std::ranges::stable_sort(entries, {}, [&part](const PrefabOverride& entry) { return part.Positions.at(entry.Entity); });
+			overrides = std::move(entries);
+			return true;
+		}
+
 		bool IsOverridden(const std::vector<PrefabOverride>& overrides, UUID entity, std::string_view component, std::string_view property)
 		{
 			const std::string_view scriptClass = IsScript(component) ? SplitScriptProperty(property).first : std::string_view();

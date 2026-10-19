@@ -1148,7 +1148,7 @@ namespace Strata
 	// Undo
 	////////////////////////////////////////////////////////////////////////////////
 
-	bool EditorContext::CommitEdit(SceneEditTransaction& transaction)
+	bool EditorContext::CommitEdit(SceneEditTransaction& transaction, OverrideUpkeep overrides)
 	{
 		if (IsPlaying())
 			return false;
@@ -1158,7 +1158,8 @@ namespace Strata
 			transaction.Rollback();
 			return false;
 		}
-		UpdatePrefabOverrides(transaction);
+		if (overrides == OverrideUpkeep::Update)
+			UpdatePrefabOverrides(transaction);
 		return transaction.Commit(m_UndoStack);
 	}
 
@@ -1171,37 +1172,84 @@ namespace Strata
 		const auto* links = std::as_const(scene.GetRegistry()).storage<PrefabInstanceComponent>();
 		if (!links || links->empty())
 			return;
-		// The instances the edit touched: of the entities it changed or made, and of the parents of those it destroyed or
-		// moved (their states before it name them).
-		std::vector<Entity> roots;
-		std::unordered_set<UUID> seen;
-		auto addRoot = [&](Entity entity)
+
+		// The instances the edit touched, with the entities it changed in each. An entity added to an instance (not linked)
+		// belongs to the instance of its nearest linked ancestor.
+		struct TouchedInstance
 		{
-			const Entity root = entity ? PrefabInstances::FindInstanceRoot(entity) : Entity();
-			if (root && seen.insert(root.GetUUID()).second)
-				roots.push_back(root);
+			Entity Root;
+			std::vector<Entity> Entities; // Entities whose components alone changed
+			bool Reshaped = false;        // Entities were made, destroyed, moved or linked otherwise: the whole list is worked out
 		};
-		std::vector<std::pair<UUID, UUID>> touched; // The entity and its parent before the edit
+		std::vector<TouchedInstance> instances;
+		std::unordered_map<UUID, size_t> instanceOf;
+		auto touch = [&](Entity entity) -> TouchedInstance*
+		{
+			while (entity && !entity.HasComponent<PrefabInstanceComponent>())
+				entity = entity.GetParent();
+			const Entity root = entity ? PrefabInstances::FindInstanceRoot(entity) : Entity();
+			if (!root)
+				return nullptr;
+			const auto [found, added] = instanceOf.try_emplace(root.GetUUID(), instances.size());
+			if (added)
+				instances.push_back({ root });
+			return &instances[found->second];
+		};
+		// Whether the entity has the link it had before the edit (the same prefab and prefab entity).
+		auto sameLink = [](const EntityState& state, Entity entity)
+		{
+			const nlohmann::json* before = JsonUtils::Find(state.Components, "PrefabInstance");
+			const PrefabInstanceComponent* link = entity.TryGetComponent<PrefabInstanceComponent>();
+			if (!before || !link)
+				return !before && !link;
+			const nlohmann::json* prefab = JsonUtils::Find(*before, "Prefab");
+			const nlohmann::json* id = JsonUtils::Find(*before, "PrefabEntityID");
+			return prefab && id && id->is_string() && UUIDFromJson(*prefab) == std::optional<UUID>(link->Prefab)
+				&& id->get_ref<const std::string&>() == link->PrefabEntityID.ToString();
+		};
 		for (const EntityState& state : transaction.GetBefore())
-			touched.emplace_back(state.ID, state.Parent);
-		for (const auto& [id, parent] : touched)
 		{
-			addRoot(scene.GetEntityByUUID(id));
-			if (parent.IsValid())
-				addRoot(scene.GetEntityByUUID(parent));
+			const Entity entity = scene.GetEntityByUUID(state.ID);
+			const Entity parent = entity ? entity.GetParent() : Entity();
+			const bool reshaped = !state.Exists || !entity || (parent ? parent.GetUUID() : UUID::Null()) != state.Parent || !sameLink(state, entity);
+			if (TouchedInstance* instance = touch(entity))
+			{
+				if (reshaped)
+					instance->Reshaped = true;
+				else
+					instance->Entities.push_back(entity);
+			}
+			// The instance it left, or was destroyed in.
+			if (reshaped && state.Parent.IsValid())
+			{
+				if (TouchedInstance* instance = touch(scene.GetEntityByUUID(state.Parent)))
+					instance->Reshaped = true;
+			}
 		}
+
 		// Each against its part of the prefab as the sync knows it; the list changes with the edit (and undo restores it).
-		for (Entity root : roots)
+		for (const TouchedInstance& instance : instances)
 		{
-			const PrefabInstanceComponent& link = root.GetComponent<PrefabInstanceComponent>();
-			const nlohmann::json* baseline = m_PrefabSync.GetBaseline(*this, link.Prefab);
-			if (!baseline)
-				continue;
-			std::vector<PrefabOverride> overrides = PrefabOverrides::ComputeOverrides(scene, root, PrefabInstances::ExtractTemplate(*baseline, link.PrefabEntityID));
-			if (overrides == root.GetComponent<PrefabInstanceComponent>().Overrides)
-				continue;
+			Entity root = instance.Root;
+			// Tracked whether its list changes or not: the steps of a gizmo drag or a slider then all have the same entities and
+			// merge into one, also when only some of them change the list.
 			transaction.Track(root.GetUUID());
-			root.GetComponent<PrefabInstanceComponent>().Overrides = std::move(overrides);
+			const PrefabInstanceComponent& link = root.GetComponent<PrefabInstanceComponent>();
+			const PrefabOverrides::IndexedPart* part = m_PrefabSync.GetBaselinePart(*this, link.Prefab, link.PrefabEntityID);
+			if (!part)
+				continue;
+			std::vector<PrefabOverride> overrides = link.Overrides;
+			if (!instance.Reshaped && PrefabOverrides::UpdateOverrides(root, *part, instance.Entities, overrides))
+			{
+				m_OverrideUpkeep.Entities += instance.Entities.size();
+			}
+			else
+			{
+				overrides = PrefabOverrides::ComputeOverrides(scene, root, part->Part);
+				m_OverrideUpkeep.WholeLists++;
+			}
+			if (overrides != link.Overrides)
+				root.GetComponent<PrefabInstanceComponent>().Overrides = std::move(overrides);
 		}
 	}
 

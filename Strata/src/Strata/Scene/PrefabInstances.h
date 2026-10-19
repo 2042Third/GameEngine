@@ -60,6 +60,13 @@ namespace Strata
 		// of the root's.
 		nlohmann::json MakeTemplate(const Scene& scene, Entity root, const nlohmann::json* rootTransform, const nlohmann::json* rootName,
 			std::unordered_map<UUID, UUID>& outNewIds);
+		// The prefab ids MakeTemplate gives the entities of the instance at `root`, by their UUIDs, without serializing it: an
+		// entity's PrefabEntityID, or a new id for an entity that is not linked to the root's prefab and for an entity whose id
+		// an entity listed before it has (a copy made within the instance).
+		std::unordered_map<UUID, UUID> MapTemplateIds(Entity root);
+		// One entity's components as MakeTemplate lists them: without its link, references to the instance's entities replaced
+		// by their prefab ids (`templateIds`, MapTemplateIds's).
+		nlohmann::json MakeTemplateComponents(Entity entity, const std::unordered_map<UUID, UUID>& templateIds);
 
 		// How an instance differs from the prefab's snapshot (the template below the root's template id), ignoring the root's
 		// transform and name.

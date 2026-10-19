@@ -2659,8 +2659,14 @@ is the `strata-scripting` skill. The layers:
   added or removed, an entity removed; script fields as `Script` / `<Class>.<Field>`, scripts as `<Class>`).
   `ComputeOverrides` diffs the instance in the prefab's form (`MakeTemplate`) with its part, entity by prefab id, component
   and property, as JSON. `EditorContext::CommitEdit` works the lists of the instances an edit touched out again against
-  `PrefabSync::GetBaseline` before it captures the after-states (`UpdatePrefabOverrides`, tracking the roots), so every
-  edit path keeps them and undo restores them with the entities; edits while playing record nothing. The list is
+  their part of `PrefabSync`'s baseline (`GetBaselinePart`, extracted and indexed once per baseline) before it captures
+  the after-states (`UpdatePrefabOverrides`), so every edit path keeps them and undo restores them with the entities; edits
+  while playing record nothing. It tracks every touched root, its list changed or not, so the per-frame steps of a gizmo
+  or slider drag keep the same entities and merge into one. An edit that makes, destroys, moves or relinks entities of an
+  instance works its whole list out; other edits serialize only the entities they changed
+  (`PrefabOverrides::UpdateOverrides`, with the instance's prefab ids from `PrefabInstances::MapTemplateIds`, a walk
+  without serializing), so a drag inside a 5,000-entity instance costs about 0.5 ms a frame instead of 25 ms. Steps whose
+  lists `Propagate` already worked out (`PrefabSync`'s updates) commit with `OverrideUpkeep::Current`. The list is
   serialized through the component's extra data (`Overrides`, only when not empty: scenes without overrides are as they
   were) and checked on load; templates, comparisons and content hashes leave it out. A non-empty list marks the instance
   modified in the Hierarchy without comparing it; `prefab.status` lists the overrides. `PrefabOverrides::Propagate` gives

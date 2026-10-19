@@ -8,6 +8,7 @@
 
 #include <functional>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -45,6 +46,31 @@ namespace Strata
 		// The same from the instance's template (PrefabInstances::MakeTemplate, its root's own transform and name or the
 		// prefab's: the root's are left out of the comparison).
 		std::vector<PrefabOverride> ComputeOverrides(const nlohmann::json& instancePart, const nlohmann::json& part);
+		// One part of a prefab snapshot (PrefabInstances::ExtractTemplate) with the place of each of its entities in it, the order
+		// override lists follow: what UpdateOverrides looks entities up in.
+		struct IndexedPart
+		{
+			nlohmann::json Part;
+			std::unordered_map<UUID, size_t> Positions; // The part's entity ids -> their index in Part["Entities"]
+		};
+		// The indexed parts of one prefab snapshot, each extracted once: code that keeps lists up to date edit after edit asks
+		// here. Pass the same snapshot every time, and Clear the cache when it changes.
+		class IndexedPartCache
+		{
+		public:
+			const IndexedPart& Get(const nlohmann::json& snapshot, UUID templateRoot);
+			void Clear() { m_Parts.clear(); }
+		private:
+			std::unordered_map<UUID, IndexedPart> m_Parts;
+		};
+		// The list of the instance at `root` (`overrides`) with the entries of some of its entities worked out again against
+		// `part` and the others kept: what an edit that changed only those entities' components (not which entities the instance
+		// has, their parents or their links) does to it, as ComputeOverrides would give it. Only those entities are serialized,
+		// so a gizmo drag or a slider costs one entity per frame however large the instance. Entities that are not linked to the
+		// instance's prefab add no entries. False, leaving `overrides` as it was, when the list names an entity the part lacks
+		// (it was worked out against another version of the prefab: ComputeOverrides is needed).
+		bool UpdateOverrides(Entity root, const IndexedPart& part, std::span<const Entity> entities, std::vector<PrefabOverride>& overrides);
+
 		// Whether the list overrides a property (or the whole component, or the entity).
 		bool IsOverridden(const std::vector<PrefabOverride>& overrides, UUID entity, std::string_view component, std::string_view property = {});
 
