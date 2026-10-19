@@ -13,6 +13,7 @@ layout(location = 1) in vec3 v_Normal;
 layout(location = 2) in vec4 v_Tangent;
 layout(location = 3) in vec2 v_TexCoord;
 layout(location = 4) flat in uint v_InstanceIndex;
+layout(location = 5) flat in uint v_LODFade;
 
 layout(location = 0) out vec2 o_Normal;
 #ifndef ST_NO_ENTITY_IDS
@@ -21,6 +22,8 @@ layout(location = 1) out uint o_EntityID;
 
 void main()
 {
+	if (!IsLODFadeDrawn(v_LODFade, gl_FragCoord.xy))
+		discard;
 	InstanceData instance = u_Instances[v_InstanceIndex];
 	MaterialData material = u_Materials[instance.MaterialIndex];
 	if ((material.Flags & ST_MATERIAL_ALPHA_MASK) != 0u)

@@ -97,6 +97,10 @@ namespace Strata
 		// bounding sphere diameter / viewport height) below which each further level is used: LOD n is chosen while the
 		// fraction is below LODThreshold / 2^(n-1).
 		float LODThreshold = 0.5f;
+		// A mesh renderer whose level of detail changes draws both levels for RenderData::c_LODFadeFrames frames, the new one
+		// on more pixels each frame (complementary dither masks, LODSelection::UpdateLODFade), instead of popping. Camera cuts
+		// switch at once. Renderers of single images (the editor's captures, thumbnails) turn it off.
+		bool FadeLevelsOfDetail = true;
 		// Point and spot lights rendered per frame (after frustum culling). When more are visible, the most relevant ones
 		// are kept: lights whose range contains the camera, then by the projected size of their range.
 		uint32_t MaxLights = 4096;
@@ -841,6 +845,7 @@ namespace Strata
 		void CullBarrier(nvrhi::ICommandList* commandList);
 		// Sizes the visibility buffer for the proxies; a new one starts without history.
 		bool EnsureVisibilityBuffer(bool& outRecreated);
+		bool EnsureLODFadeBuffer(bool& outRecreated);
 		// After the command list with the culling was executed: the counters' copy is under way.
 		void SubmitCullReadback();
 		// The view's dense buckets [first, end) in the pass.
@@ -873,6 +878,11 @@ namespace Strata
 		nvrhi::CommandListHandle m_CommandList;
 		glm::uvec2 m_ViewportSize = { 0, 0 };
 		LODCriteria m_LODCriteria; // The frame's (GetLODCriteria, set as it starts)
+		// Level-of-detail cross-fades: the frame's number (LODSelection::UpdateLODFade), which skips one at camera cuts and
+		// scene changes so that they start without history, and the CPU path's state per instance (the GPU-driven path's are
+		// m_LODFadeBuffer).
+		uint32_t m_LODFadeFrame = 0;
+		std::vector<RenderData::LODFadeState> m_LODFades;
 		bool m_TargetsValid = false;
 		bool m_HasRenderedFrame = false; // Since the render targets were (re)created
 		// The camera of the previous frame, to tell the texture streamer when the view jumped (a camera cut).
@@ -1177,6 +1187,10 @@ namespace Strata
 		nvrhi::BufferHandle m_VisibilityBuffer;
 		uint32_t m_VisibilityParity = 0;
 		bool m_ResetVisibility = true;
+		// Per render-scene instance its cross-fade state (RenderData::LODFadeState), cleared when created.
+		nvrhi::BufferHandle m_LODFadeBuffer;
+		bool m_ClearLODFades = true;
+		uint32_t m_CullInstanceCount = 0; // The render scene's instances (PrepareGPUCulling)
 		nvrhi::TextureHandle m_DepthPyramid;
 		glm::uvec2 m_DepthPyramidSize = glm::uvec2(0); // Level 0
 		uint32_t m_DepthPyramidLevels = 0;

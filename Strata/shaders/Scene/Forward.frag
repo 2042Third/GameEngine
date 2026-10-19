@@ -10,7 +10,8 @@
 
 // Forward shading into the HDR target, compiled in two variants (see Strata/CMakeLists.txt):
 // - Scene/Forward.frag shades opaque and alpha-masked surfaces after the depth prepass with an EQUAL depth test. The
-//   prepass already discarded masked texels, so this variant never discards and forces early depth testing.
+//   prepass already discarded masked texels, so this variant forces early depth testing and discards only what the
+//   prepass's level-of-detail cross-fade mask left out (IsLODFadeDrawn, the same test).
 // - Scene/ForwardTransparent.frag (ST_FORWARD_TRANSPARENT) shades alpha-blended surfaces. They are not in the
 //   prepass, so the screen-space ambient occlusion (which belongs to the opaque surface behind them) is not applied.
 
@@ -23,6 +24,7 @@ layout(location = 1) in vec3 v_Normal;
 layout(location = 2) in vec4 v_Tangent; // w: bitangent sign (already flipped for mirrored instances)
 layout(location = 3) in vec2 v_TexCoord;
 layout(location = 4) flat in uint v_InstanceIndex;
+layout(location = 5) flat in uint v_LODFade;
 
 layout(location = 0) out vec4 o_Color;
 
@@ -48,6 +50,9 @@ vec3 GetShadingNormal(MaterialData material, vec2 uv)
 
 void main()
 {
+	// The prepass's mask: of a fading level, only the pixels whose depth it wrote.
+	if (!IsLODFadeDrawn(v_LODFade, gl_FragCoord.xy))
+		discard;
 	InstanceData instance = u_Instances[v_InstanceIndex];
 	MaterialData material = u_Materials[instance.MaterialIndex];
 	vec2 uv = TransformUV(material, v_TexCoord);

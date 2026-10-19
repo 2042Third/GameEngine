@@ -212,4 +212,101 @@ TEST_SUITE("Renderer.LODSelection")
 		CHECK_FALSE(MeshUtils::HasLODErrors(single));
 		CHECK(LODSelection::SelectLOD(single, bounds, 0.01f, criteria) == 0);
 	}
+
+	TEST_CASE("A changed level of detail cross-fades over c_LODFadeFrames frames with complementary dither masks")
+	{
+		constexpr uint32_t c_Frames = RenderData::c_LODFadeFrames;
+		constexpr uint32_t c_Entity = 7;
+		// The first frame draws its level at once.
+		LODSelection::LODFade fade = LODSelection::UpdateLODFade({}, 1, 3, c_Entity, 100, true);
+		CHECK(fade.Code == 0);
+		CHECK(fade.State.Packed != 0);
+		CHECK(fade.State.EntityID == c_Entity);
+		// The same level next frame: still no fade.
+		fade = LODSelection::UpdateLODFade(fade.State, 1, 3, c_Entity, 101, true);
+		CHECK(fade.Code == 0);
+		// A new level fades in step by step, the old one out, until the new one covers every pixel.
+		uint32_t frame = 102;
+		fade = LODSelection::UpdateLODFade(fade.State, 2, 3, c_Entity, frame++, true);
+		CHECK(fade.Code == 1);
+		CHECK(fade.From == 1);
+		for (uint32_t step = 2; step < c_Frames; step++)
+		{
+			fade = LODSelection::UpdateLODFade(fade.State, 2, 3, c_Entity, frame++, true);
+			CHECK(fade.Code == step);
+			CHECK(fade.From == 1);
+		}
+		fade = LODSelection::UpdateLODFade(fade.State, 2, 3, c_Entity, frame++, true);
+		CHECK(fade.Code == 0);
+
+		// Back to the level fading out, halfway: each keeps its pixels (the step mirrors).
+		fade = LODSelection::UpdateLODFade(fade.State, 0, 3, c_Entity, frame++, true);
+		REQUIRE(fade.Code == 1);
+		CHECK(fade.From == 2);
+		for (uint32_t step = 2; step <= 5; step++)
+			fade = LODSelection::UpdateLODFade(fade.State, 0, 3, c_Entity, frame++, true);
+		CHECK(fade.Code == 5);
+		fade = LODSelection::UpdateLODFade(fade.State, 2, 3, c_Entity, frame++, true);
+		CHECK(fade.Code == c_Frames - 5);
+		CHECK(fade.From == 0);
+		// A third level while a fade is under way starts from the level on more pixels (2, on 11 of 16).
+		fade = LODSelection::UpdateLODFade(fade.State, 1, 3, c_Entity, frame++, true);
+		CHECK(fade.Code == 1);
+		CHECK(fade.From == 2);
+
+		// Without history the level is drawn at once: a frame missed (a camera cut skips one), another entity in the slot,
+		// fewer levels than the state names, fades off, levels beyond what the state holds.
+		const LODSelection::LODFadeState state = fade.State;
+		CHECK(LODSelection::UpdateLODFade(state, 0, 3, c_Entity, frame + 1, true).Code == 0);
+		CHECK(LODSelection::UpdateLODFade(state, 0, 3, c_Entity + 1, frame, true).Code == 0);
+		CHECK(LODSelection::UpdateLODFade(state, 0, 2, c_Entity, frame, true).Code == 0);
+		CHECK(LODSelection::UpdateLODFade(state, 0, 3, c_Entity, frame, true).Code != 0);
+		const LODSelection::LODFade off = LODSelection::UpdateLODFade(state, 0, 3, c_Entity, frame, false);
+		CHECK(off.Code == 0);
+		CHECK(off.State.Packed == 0);
+		CHECK(LODSelection::UpdateLODFade(state, 16, 20, c_Entity, frame, true).Code == 0);
+		// The frame number wraps where the state keeps it.
+		LODSelection::LODFade wrapped = LODSelection::UpdateLODFade({}, 0, 3, c_Entity, (1u << 19) - 1, true);
+		wrapped = LODSelection::UpdateLODFade(wrapped.State, 1, 3, c_Entity, 1u << 19, true);
+		CHECK(wrapped.Code == 1);
+	}
+
+	TEST_CASE("The fading levels' dither masks cover every pixel once")
+	{
+		// The 4x4 thresholds are a permutation of 0-15.
+		std::array<uint32_t, 16> seen = {};
+		for (uint32_t y = 0; y < 4; y++)
+		{
+			for (uint32_t x = 0; x < 4; x++)
+				seen[LODSelection::GetLODFadeThreshold(x, y)]++;
+		}
+		CHECK(std::all_of(seen.begin(), seen.end(), [](uint32_t count) { return count == 1; }));
+		for (uint32_t code = 1; code < RenderData::c_LODFadeFrames; code++)
+		{
+			CAPTURE(code);
+			uint32_t incoming = 0;
+			for (uint32_t y = 0; y < 8; y++)
+			{
+				for (uint32_t x = 0; x < 8; x++)
+				{
+					const bool in = LODSelection::IsLODFadeDrawn(code, x, y);
+					const bool out = LODSelection::IsLODFadeDrawn(code + RenderData::c_LODFadeOutgoing, x, y);
+					CHECK(in != out);
+					incoming += in ? 1u : 0u;
+					CHECK(in == LODSelection::IsLODFadeDrawn(code, x + 4, y + 4)); // The pattern tiles
+				}
+			}
+			CHECK(incoming == code * 4); // code / 16 of 64 pixels
+			// A later step covers what the earlier one did.
+			for (uint32_t y = 0; y < 4; y++)
+			{
+				for (uint32_t x = 0; x < 4; x++)
+				{
+					if (LODSelection::IsLODFadeDrawn(code, x, y))
+						CHECK(LODSelection::IsLODFadeDrawn(code + 1, x, y));
+				}
+			}
+		}
+		CHECK(LODSelection::IsLODFadeDrawn(0, 3, 2));
+	}
 }

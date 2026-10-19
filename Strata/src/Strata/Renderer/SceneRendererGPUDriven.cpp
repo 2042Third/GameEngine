@@ -171,6 +171,7 @@ namespace Strata
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(9),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(10),
 			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(11),
+			nvrhi::BindingLayoutItem::StructuredBuffer_UAV(12),
 			// The pass (counting or writing): a slot no constant buffer of the layout uses.
 			nvrhi::BindingLayoutItem::PushConstants(1, sizeof(uint32_t))
 		};
@@ -516,7 +517,10 @@ namespace Strata
 		constants.LODCapacity = std::max(Renderer::GetGeometryPool()->GetLODCapacity(), 1u);
 		constants.MeshSlotCount = meshSlots;
 		constants.MaterialSlotCount = mirror.GetMaterialSlotCount();
-		constants.DrawListCapacity = static_cast<uint32_t>(std::min<uint64_t>(renderScene.GetInstances().size() * (1ull + m_CascadeCount), 0xFFFFFFF0ull));
+		// A view instance whose level cross-fades is drawn twice.
+		const uint64_t viewEntries = m_Specification.FadeLevelsOfDetail ? 2ull : 1ull;
+		constants.DrawListCapacity = static_cast<uint32_t>(std::min<uint64_t>(renderScene.GetInstances().size() * (viewEntries + m_CascadeCount), 0xFFFFFFF0ull));
+		m_CullInstanceCount = static_cast<uint32_t>(renderScene.GetInstances().size());
 		constants.ArgumentsPerBucket = std::max({ mirror.GetArenaRecords(0), mirror.GetArenaRecords(1), 1u });
 		constants.BucketCount = static_cast<uint32_t>(m_CullBuckets.size());
 		constants.ViewBucketCount = viewBuckets;
@@ -525,6 +529,8 @@ namespace Strata
 		constants.FirstPhaseViewBuckets = firstPhaseViewBuckets;
 		constants.VisibilityParity = m_VisibilityParity;
 		constants.LODErrorThreshold = m_LODCriteria.ErrorThreshold;
+		constants.LODFadeFrame = m_LODFadeFrame;
+		constants.LODFade = m_Specification.FadeLevelsOfDetail ? 1u : 0u;
 		// The bucket table's second part: each dense bucket's draw slots.
 		for (const uint32_t bucket : m_CullBuckets)
 			m_CullBucketTable.push_back(GetBucketSlots(bucket));
@@ -547,7 +553,18 @@ namespace Strata
 				sizeof(uint32_t), "FeedbackLists", outRecreated, BufferKind::StructuredUAV)
 			&& EnsureBufferCapacity(m_FeedbackRecordBuffer, 1 + static_cast<size_t>(constants.MeshSlotCount) + constants.MaterialSlotCount,
 				sizeof(RenderData::FeedbackRecord), "FeedbackRecords", outRecreated, BufferKind::StructuredUAV)
-			&& EnsureVisibilityBuffer(outRecreated);
+			&& EnsureVisibilityBuffer(outRecreated) && EnsureLODFadeBuffer(outRecreated);
+	}
+
+	bool SceneRenderer::EnsureLODFadeBuffer(bool& outRecreated)
+	{
+		// A new buffer holds no history: its instances draw their levels at once.
+		bool recreated = false;
+		if (!EnsureBufferCapacity(m_LODFadeBuffer, m_CullInstanceCount, sizeof(RenderData::LODFadeState), "LODFades", recreated, BufferKind::StructuredUAV))
+			return false;
+		m_ClearLODFades = m_ClearLODFades || recreated;
+		outRecreated = outRecreated || recreated;
+		return true;
 	}
 
 	bool SceneRenderer::EnsureVisibilityBuffer(bool& outRecreated)
@@ -633,6 +650,7 @@ namespace Strata
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(9, m_FeedbackRecordBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(10, m_CasterDepthBuffer),
 			nvrhi::BindingSetItem::StructuredBuffer_UAV(11, m_VisibilityBuffer),
+			nvrhi::BindingSetItem::StructuredBuffer_UAV(12, m_LODFadeBuffer),
 			nvrhi::BindingSetItem::PushConstants(1, sizeof(uint32_t))
 		};
 		m_CullBindingSet = m_Device->createBindingSet(desc, m_CullBindingLayout);
@@ -682,6 +700,11 @@ namespace Strata
 			// No history (a camera cut, the first frame, another scene): the first phase draws nothing.
 			commandList->clearBufferUInt(m_VisibilityBuffer, 0);
 			m_ResetVisibility = false;
+		}
+		if (m_ClearLODFades)
+		{
+			commandList->clearBufferUInt(m_LODFadeBuffer, 0);
+			m_ClearLODFades = false;
 		}
 		const bool feedback = constants.Feedback != 0;
 		if (feedback)
@@ -734,7 +757,7 @@ namespace Strata
 		// the previous one's writes.
 		for (nvrhi::IBuffer* buffer : { m_CullCountBuffer.Get(), m_CullOffsetBuffer.Get(), m_CullArgumentBuffer.Get(), m_CullBucketCountBuffer.Get(),
 			m_CullCounterBuffer.Get(), m_GPUDrawListBuffer.Get(), m_FeedbackMeshBuffer.Get(), m_FeedbackMaterialBuffer.Get(), m_FeedbackListBuffer.Get(),
-			m_FeedbackRecordBuffer.Get(), m_CasterDepthBuffer.Get(), m_VisibilityBuffer.Get() })
+			m_FeedbackRecordBuffer.Get(), m_CasterDepthBuffer.Get(), m_VisibilityBuffer.Get(), m_LODFadeBuffer.Get() })
 			commandList->setBufferState(buffer, nvrhi::ResourceStates::UnorderedAccess);
 		commandList->commitBarriers();
 	}

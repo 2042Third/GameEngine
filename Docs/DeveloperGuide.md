@@ -1901,6 +1901,14 @@ and `AudioSystem`, the built-in "Audio" scene system.
   (`u_DrawList[gl_InstanceIndex]`); only changed instances, materials and draw list ranges are uploaded, so a still
   frame uploads nothing (`SceneRendererStats::InstanceBytesUploaded`, `ProxyUpdates`). Shaders derive the normal
   matrix from the 3x4 rows (`TransformNormal` in `Include/Scene.glsl`).
+- A draw list entry is `RenderData::MakeDrawEntry`: the instance in the low 27 bits (`ST_DRAW_ENTRY_INSTANCE_MASK`; render
+  scenes hold at most `c_MaxRenderInstances`, `RenderScene::SetInstanceLimit`), a level-of-detail cross-fade code above.
+  While a view instance's level changes, both levels are drawn for `c_LODFadeFrames` frames with complementary 4x4
+  dither masks (`LODSelection::UpdateLODFade` on the CPU path, its copy in `Include/LODSelection.glsl` in `Cull.comp`,
+  each renderer keeping a state per instance); the depth prepass and the forward pass discard by the same test
+  (`IsLODFadeDrawn`), so `EQUAL` holds even where the levels cover the same pixels at the same depth. A new opaque scene
+  pass does the same; shadow and transparent draws never fade. `GPU.SceneRenderer.LODFade` compares fading frames with
+  the composite of both levels' images, on both paths.
 - Every mesh's GPU geometry lives in the renderer's geometry pool (`Renderer/GeometryPool`, `Renderer::GetGeometryPool`):
   the Static vertex arena (positions 12 B and attributes 36 B per vertex, in two buffers), the Skinned one (the same plus
   the 16-byte skin stream) and the index arena (32-bit indices, relative to a submesh's base vertex). Offsets come from

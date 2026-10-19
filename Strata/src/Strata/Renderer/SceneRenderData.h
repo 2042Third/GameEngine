@@ -114,7 +114,7 @@ namespace Strata
 		static_assert(sizeof(AffineTransform) == 48);
 
 		// One drawn submesh of a render proxy (RenderScene). The buffer of instances persists between frames; draws read
-		// it through the frame's draw list, which holds an instance index per drawn instance.
+		// it through the frame's draw list, which holds an entry (MakeDrawEntry) per drawn instance.
 		struct InstanceData
 		{
 			AffineTransform World;
@@ -126,6 +126,23 @@ namespace Strata
 			uint32_t SkinPalette;
 		};
 		static_assert(sizeof(InstanceData) == 64);
+
+		// A draw list entry (the u_DrawList the scene's vertex shaders read): the instance in the low c_DrawEntryInstanceBits, and
+		// above them the level-of-detail cross-fade code of the draw (LODSelection::UpdateLODFade): 0 draws every pixel, 1 to
+		// c_LODFadeFrames - 1 the level fading in (on the pixels whose LODSelection::GetLODFadeThreshold is below the code), the
+		// same plus c_LODFadeOutgoing the level fading out (on the others). Render scenes hold at most c_MaxRenderInstances
+		// instances.
+		constexpr uint32_t c_DrawEntryInstanceBits = 27;
+		constexpr uint32_t c_DrawEntryInstanceMask = (1u << c_DrawEntryInstanceBits) - 1;
+		constexpr uint32_t c_MaxRenderInstances = 1u << c_DrawEntryInstanceBits;
+		constexpr uint32_t c_LODFadeFrames = 16; // A fade's steps: the 4x4 dither's 16 thresholds
+		constexpr uint32_t c_LODFadeOutgoing = 16;
+		static_assert(c_LODFadeOutgoing + c_LODFadeFrames <= (1u << (32 - c_DrawEntryInstanceBits)));
+
+		constexpr uint32_t MakeDrawEntry(uint32_t instance, uint32_t fadeCode)
+		{
+			return instance | (fadeCode << c_DrawEntryInstanceBits);
+		}
 
 		struct MaterialData
 		{

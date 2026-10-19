@@ -51,11 +51,12 @@ namespace Strata
 		return options;
 	}
 
-	ViewportRenderer::ViewportRenderer(const std::string& debugName, bool fadeTextureLevels)
+	ViewportRenderer::ViewportRenderer(const std::string& debugName, bool fades)
 	{
 		SceneRendererSpecification specification;
 		specification.DebugName = debugName;
-		specification.FadeTextureLevels = fadeTextureLevels;
+		specification.FadeTextureLevels = fades;
+		specification.FadeLevelsOfDetail = fades;
 		m_Renderer = CreateScope<SceneRenderer>(specification);
 	}
 

@@ -1,6 +1,8 @@
 #pragma once
 
+#include "Strata/Renderer/GPUSceneData.h"
 #include "Strata/Renderer/Mesh.h"
+#include "Strata/Renderer/SceneRenderData.h"
 #include "Strata/Renderer/SceneRenderer.h"
 
 #include <glm/glm.hpp>
@@ -41,5 +43,29 @@ namespace Strata::LODSelection
 	// The level a renderer draws of a submesh of a mesh with these bounds (Mesh::GetBounds): by its levels' errors where
 	// they are known (MeshUtils::HasLODErrors), else by halving the screen fraction.
 	uint32_t SelectLOD(const Submesh& submesh, const AABB& meshBounds, float screenFraction, const LODCriteria& criteria);
+
+	// Level-of-detail cross-fades (SceneRendererSpecification::FadeLevelsOfDetail). Each view instance keeps, per renderer, the
+	// level it shows, the level fading out, the fade's step and the frame and entity it was drawn for. When its level changes,
+	// both levels are drawn for RenderData::c_LODFadeFrames frames with complementary 4x4 ordered dither masks
+	// (GetLODFadeThreshold), the new level on step / c_LODFadeFrames of the pixels, the old one on the others, the same mask
+	// in the depth prepass and the forward pass so that the EQUAL depth test holds. Include/LODSelection.glsl repeats this
+	// bit for bit.
+	using RenderData::LODFadeState;
+
+	struct LODFade
+	{
+		LODFadeState State; // To keep for the next frame
+		uint32_t Code = 0;  // The level's draw entry code (RenderData::MakeDrawEntry); 0 while no fade is under way
+		uint32_t From = 0;  // While Code is not 0, the level fading out, drawn with Code + c_LODFadeOutgoing
+	};
+
+	// The fade of an instance drawn at `target` this frame (`frame`: the renderer's fade frame number, which skips one at a
+	// camera cut), from what it kept. Without history (a first frame, a frame missed, another entity in the slot, levels
+	// beyond 15 or beyond lodCount), or with fades off, the level is drawn at once.
+	LODFade UpdateLODFade(LODFadeState state, uint32_t target, uint32_t lodCount, uint32_t entityID, uint32_t frame, bool enabled);
+	// The 4x4 ordered dither threshold (0-15) of a pixel: a fading-in level with code c covers the pixels below c.
+	uint32_t GetLODFadeThreshold(uint32_t x, uint32_t y);
+	// Whether a draw with this code covers the pixel (the shaders discard the others).
+	bool IsLODFadeDrawn(uint32_t code, uint32_t x, uint32_t y);
 
 }

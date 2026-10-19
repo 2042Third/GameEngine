@@ -86,4 +86,75 @@ namespace Strata::LODSelection
 		return 0;
 	}
 
+	namespace
+	{
+
+		constexpr uint32_t c_FadeFrameBits = 19;
+		constexpr uint32_t c_FadeFrameMask = (1u << c_FadeFrameBits) - 1;
+		constexpr uint32_t c_MaxFadedLOD = 15; // Levels kept in four bits
+
+	}
+
+	LODFade UpdateLODFade(LODFadeState state, uint32_t target, uint32_t lodCount, uint32_t entityID, uint32_t frame, bool enabled)
+	{
+		constexpr uint32_t c_Frames = RenderData::c_LODFadeFrames;
+		LODFade result;
+		result.From = target;
+		if (!enabled || target > c_MaxFadedLOD)
+			return result; // No history kept: drawn at once, now and when fades start again
+		uint32_t lod = state.Packed & 15u;
+		uint32_t from = (state.Packed >> 4) & 15u;
+		uint32_t step = (state.Packed >> 8) & 31u;
+		const uint32_t last = state.Packed >> 13;
+		const bool continuing = state.Packed != 0 && state.EntityID == entityID && last == ((frame - 1u) & c_FadeFrameMask) && lod < lodCount && from < lodCount
+			&& step >= 1 && step <= c_Frames;
+		if (!continuing)
+		{
+			lod = target;
+			from = target;
+			step = c_Frames;
+		}
+		else if (target != lod)
+		{
+			if (step < c_Frames && target == from)
+			{
+				// Back to the level fading out: each keeps the pixels it has.
+				from = lod;
+				step = c_Frames - step;
+			}
+			else
+			{
+				// From the level on more pixels now.
+				from = step < c_Frames && 2 * step < c_Frames ? from : lod;
+				step = 1;
+			}
+			lod = target;
+		}
+		else if (step < c_Frames)
+		{
+			step++;
+		}
+		if (from == lod)
+			step = c_Frames;
+		result.State.Packed = lod | (from << 4) | (step << 8) | ((frame & c_FadeFrameMask) << 13);
+		result.State.EntityID = entityID;
+		result.Code = step < c_Frames ? step : 0u;
+		result.From = from;
+		return result;
+	}
+
+	uint32_t GetLODFadeThreshold(uint32_t x, uint32_t y)
+	{
+		constexpr uint32_t c_Bayer[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
+		return c_Bayer[(y & 3u) * 4u + (x & 3u)];
+	}
+
+	bool IsLODFadeDrawn(uint32_t code, uint32_t x, uint32_t y)
+	{
+		if (code == 0)
+			return true;
+		const uint32_t threshold = GetLODFadeThreshold(x, y);
+		return code < RenderData::c_LODFadeOutgoing ? threshold < code : threshold >= code - RenderData::c_LODFadeOutgoing;
+	}
+
 }

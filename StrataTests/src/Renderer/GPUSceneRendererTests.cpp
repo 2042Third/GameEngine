@@ -376,7 +376,10 @@ TEST_SUITE("GPU.SceneRenderer")
 		AddNeutralPostProcess(scene);
 		AddMesh(scene, sphere, assets.AddMaterial(UnlitColor({ 1.0f, 1.0f, 1.0f, 1.0f })), glm::vec3(0.0f), "Sphere");
 
-		SceneRenderer renderer;
+		// The levels switch at once here (the cross-fades between them have tests of their own).
+		SceneRendererSpecification immediate;
+		immediate.FadeLevelsOfDetail = false;
+		SceneRenderer renderer(immediate);
 		renderer.SetViewportSize(c_Size, c_Size);
 		// Bounding sphere radius 0.87: the screen fraction is 0.75 at 2 m (LOD 0), 0.3 at 5 m (LOD 1) and 0.125 at
 		// 12 m (LOD 3, clamped to the last level, 2).

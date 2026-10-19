@@ -391,7 +391,8 @@ and built its draws: its counts are the GPU's, of a frame 2-3 frames older in `e
 captures, once `gpuCounts` is true), `feedbackRequests` (its asset requests came from the GPU's visibility feedback of a
 frame 2-3 frames older: the CPU walks the view itself only on first frames, camera cuts and frames after assets loaded),
 `drawCommands` (draw calls the CPU recorded: a few per pass however large the scene
-on the GPU-driven path), `draws` (instanced draws of the view), `opaqueDraws`, `shadowDraws`, `instances`,
+on the GPU-driven path), `draws` (instanced draws of the view), `opaqueDraws`, `shadowDraws`, `instances` (an instance
+whose level of detail is cross-fading is drawn twice for 16 frames, at both levels),
 `shadowCasters`, `triangles`, `visibleProxies`, `culledProxies`, `sizeCulledProxies` (in view but below half a pixel),
 `occludedProxies` (in the frustum but hidden behind what the view draws: the GPU-driven path leaves them out), `instancesPerLod`, `lights` (the GPU-driven path counts every point and spot light in view), `droppedLights` (the CPU path's lights beyond its 4,096), `materials`, `pendingAssets`, `extractMs`, `sortMs`,
 `proxyUpdates`, `instanceBytesUploaded`, `deferredInstanceBytes` (new mesh renderers still waiting for their upload to

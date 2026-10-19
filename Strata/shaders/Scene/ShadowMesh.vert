@@ -25,7 +25,7 @@ layout(push_constant) uniform ShadowParameters
 
 void main()
 {
-	uint instanceIndex = u_DrawList[gl_InstanceIndex];
+	uint instanceIndex = u_DrawList[gl_InstanceIndex] & ST_DRAW_ENTRY_INSTANCE_MASK; // Shadow draws never fade
 	InstanceData instance = u_Instances[instanceIndex];
 	v_TexCoord = a_TexCoord;
 	v_InstanceIndex = instanceIndex;

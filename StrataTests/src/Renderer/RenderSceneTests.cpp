@@ -430,6 +430,50 @@ TEST_SUITE("Renderer.RenderScene")
 		CheckProxies(renderScene);
 	}
 
+	TEST_CASE("Mesh renderers beyond the instance limit get no instances until there is room")
+	{
+		// Draw list entries name at most RenderData::c_MaxRenderInstances instances; a lowered limit stands for it here.
+		Scene scene("Limited");
+		std::vector<Entity> cubes;
+		for (int index = 0; index < 5; index++)
+			cubes.push_back(AddCube(scene, glm::vec3(static_cast<float>(index) * 2.0f, 0.5f, 0.0f)));
+		RenderScene& renderScene = RenderScene::Get(scene);
+		CHECK(renderScene.GetInstanceLimit() == RenderData::c_MaxRenderInstances);
+		renderScene.SetInstanceLimit(3);
+		renderScene.Sync(nullptr);
+		const Ref<Mesh> cube = MeshFactory::CreateCube();
+		renderScene.SetMeshLayout(renderScene.GetMeshesWithoutBounds()[0], *cube);
+		CHECK(renderScene.GetStats().InstanceSlots == 3);
+		uint32_t withoutInstances = 0;
+		for (const Entity& entity : cubes)
+		{
+			const uint32_t proxy = renderScene.FindProxy(entity);
+			REQUIRE(proxy != RenderScene::c_InvalidIndex);
+			withoutInstances += renderScene.GetInstanceCount(proxy) == 0 ? 1u : 0u;
+		}
+		CHECK(withoutInstances == 2);
+		CheckProxies(renderScene);
+
+		// Room made by a destroyed cube goes to the next proxy that changes; a limit above what the format names is clamped.
+		Entity drawn;
+		Entity waiting;
+		for (const Entity& entity : cubes)
+			(renderScene.GetInstanceCount(renderScene.FindProxy(entity)) > 0 ? drawn : waiting) = entity;
+		REQUIRE(drawn);
+		REQUIRE(waiting);
+		scene.DestroyEntity(drawn);
+		renderScene.Sync(nullptr);
+		CHECK(renderScene.GetStats().InstanceSlots == 2);
+		waiting.GetComponent<MeshRendererComponent>().Material = BuiltinAssets::DefaultMaterial; // A new material rebuilds its instances
+		waiting.MarkModified<MeshRendererComponent>();
+		renderScene.Sync(nullptr);
+		CHECK(renderScene.GetInstanceCount(renderScene.FindProxy(waiting)) == 1);
+		CHECK(renderScene.GetStats().InstanceSlots == 3);
+		CheckProxies(renderScene);
+		renderScene.SetInstanceLimit(~0u);
+		CHECK(renderScene.GetInstanceLimit() == RenderData::c_MaxRenderInstances);
+	}
+
 	TEST_CASE("Meshes that never loaded have unknown bounds: their proxies get placeholders, and active users are counted")
 	{
 		Scene scene("Bounds");

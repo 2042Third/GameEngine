@@ -301,7 +301,11 @@ renderer draws: a submesh whose simplified levels all have errors (`MeshLOD::Err
 the coarsest level whose error, projected, spans at most `SceneRendererSpecification::LODErrorPixels` (1) pixels of the
 viewport height (`SelectLODByError`: the screen fraction times the error relative to the mesh's bounding radius,
 `MeshUtils::GetRelativeLODError`, against `GetErrorThreshold`, one multiplication the GPU's culling repeats bit for bit);
-levels without errors halve the screen fraction against `LODThreshold` as before.
+levels without errors halve the screen fraction against `LODThreshold` as before. A level that changes cross-fades
+(`FadeLevelsOfDetail`): for `RenderData::c_LODFadeFrames` frames both levels are drawn, the new one on step/16 of the
+pixels of a 4x4 ordered dither and the old one on the others, the draw list entry carrying the code
+(`LODSelection::UpdateLODFade`, a state per renderer and instance with its entity, so a reused instance slot or a
+frame without the instance starts over; a camera cut or another scene skips a frame number, so they switch at once).
 Assets: `Mesh` (skinned meshes also have a skin stream, four joint influences per vertex, and a `MeshSkinBinding`: the
 skin's joints in the skeleton, their inverse bind matrices and the bind-pose extent of what each joint moves; each
 level of detail its `MeshLOD::Error`, how far its surface departs from full detail; cooked mesh format version 3,

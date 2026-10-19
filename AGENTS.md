@@ -407,7 +407,7 @@ lights, overlays and text: [Rendering](Docs/DeveloperGuide.md#rendering).
   with the frame; loaded materials are never changed in place (`ReplaceLoadedAsset`).
 - Every pass draws skinned instances with the `ST_SKINNED` variants (the prepass and the forward pass agree to the bit)
   and mirrored ones (`c_InstanceMirrored`) with clockwise pipelines and flipped tangents; shaders derive normals with
-  `TransformNormal`.
+  `TransformNormal`. Draw list entries carry a fade code: mask the instance out, and opaque passes test `IsLODFadeDrawn`.
 - Shaders writing HDR targets clamp with `SanitizeHDR`; normal maps are read as X and Y with Z reconstructed.
 - Skinning costs unskinned scenes nothing (`RenderScene::HasSkinProxies`).
 - Font files are untrusted input: extend `Renderer/FontValidation.h`, with crafted-font tests, before calling another

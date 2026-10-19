@@ -75,11 +75,29 @@ layout(set = 0, binding = ST_SRV(0), std430) readonly buffer InstanceBuffer
 	InstanceData u_Instances[];
 };
 
-// The frame's draw list: the instance of every drawn instance, in batch order (gl_InstanceIndex indexes it).
+// The frame's draw list: an entry per drawn instance, in batch order (gl_InstanceIndex indexes it): the instance in the low
+// ST_DRAW_ENTRY_INSTANCE_BITS bits, its level-of-detail cross-fade code above them (RenderData::MakeDrawEntry).
 layout(set = 0, binding = ST_SRV(14), std430) readonly buffer DrawListBuffer
 {
 	uint u_DrawList[];
 };
+
+#define ST_DRAW_ENTRY_INSTANCE_BITS 27u          // RenderData::c_DrawEntryInstanceBits
+#define ST_DRAW_ENTRY_INSTANCE_MASK 0x07FFFFFFu
+#define ST_LOD_FADE_OUTGOING_CODE   16u          // RenderData::c_LODFadeOutgoing
+
+// Whether a draw with this cross-fade code covers the pixel (LODSelection::IsLODFadeDrawn): the level fading in (codes 1-15)
+// where the 4x4 ordered dither threshold is below the code, the level fading out (the code plus 16) on the other pixels.
+// The depth prepass and the forward pass test the same, so the EQUAL depth test holds.
+bool IsLODFadeDrawn(uint code, vec2 fragCoord)
+{
+	if (code == 0u)
+		return true;
+	const uint bayer[16] = uint[16](0u, 8u, 2u, 10u, 12u, 4u, 14u, 6u, 3u, 11u, 1u, 9u, 15u, 7u, 13u, 5u);
+	uvec2 pixel = uvec2(fragCoord) & 3u;
+	uint threshold = bayer[pixel.y * 4u + pixel.x];
+	return code < ST_LOD_FADE_OUTGOING_CODE ? threshold < code : threshold >= code - ST_LOD_FADE_OUTGOING_CODE;
+}
 
 #ifdef ST_SKINNED
 // The palettes of the posed instances (RenderScene::GetPalette): per joint of a skin the upper three rows of its affine

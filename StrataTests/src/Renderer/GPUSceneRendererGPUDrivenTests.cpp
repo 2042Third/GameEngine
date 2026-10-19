@@ -7,6 +7,7 @@
 #include "Strata/Renderer/MeshFactory.h"
 #include "Strata/Renderer/RenderScene.h"
 #include "Strata/Renderer/RenderSceneGPU.h"
+#include "Strata/Renderer/TextureStreamer.h"
 
 #include <algorithm>
 #include <bit>
@@ -652,6 +653,196 @@ TEST_SUITE("GPU.Renderer.LODSelection")
 		CHECK(compared == c_Count * 6 * std::size(lodCounts));
 		// The fractions reach every level, full detail included.
 		CHECK(std::popcount(usedLevels) == static_cast<int>(c_MaxLevels));
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+}
+
+namespace
+{
+
+	// A frame's color and entity IDs.
+	struct FadeFrame
+	{
+		ReadbackImage Color;
+		ReadbackImage IDs;
+		DrawnCounts Counts;
+	};
+
+	FadeFrame RenderFadeFrame(SceneRenderer& renderer, Scene& scene, const SceneCamera& camera)
+	{
+		FadeFrame frame;
+		frame.Color = RenderToImage(renderer, scene, camera);
+		REQUIRE(Renderer::ReadTexture(renderer.GetEntityIDTexture(), frame.IDs));
+		frame.Counts = GetDrawnCounts(renderer);
+		return frame;
+	}
+
+	// Pixels of `actual` that differ from the composite of `incoming` (where a fade with this code draws the new level) and
+	// `outgoing` (elsewhere): colors by more than 1/255, entity IDs at all.
+	uint32_t CountCompositeDifferences(const FadeFrame& actual, const FadeFrame& incoming, const FadeFrame& outgoing, uint32_t code)
+	{
+		uint32_t different = 0;
+		for (uint32_t y = 0; y < c_Size; y++)
+		{
+			for (uint32_t x = 0; x < c_Size; x++)
+			{
+				const FadeFrame& expected = LODSelection::IsLODFadeDrawn(code, x, y) ? incoming : outgoing;
+				const glm::ivec4 a(GetPixelRGBA8(actual.Color, x, y));
+				const glm::ivec4 b(GetPixelRGBA8(expected.Color, x, y));
+				uint32_t idA = 0;
+				uint32_t idB = 0;
+				const size_t offset = (static_cast<size_t>(y) * c_Size + x) * sizeof(uint32_t);
+				std::memcpy(&idA, actual.IDs.Pixels.data() + offset, sizeof(idA));
+				std::memcpy(&idB, expected.IDs.Pixels.data() + offset, sizeof(idB));
+				const glm::ivec4 difference = glm::abs(a - b);
+				if (std::max({ difference.x, difference.y, difference.z, difference.w }) > 1 || idA != idB)
+					different++;
+			}
+		}
+		return different;
+	}
+
+}
+
+TEST_SUITE("GPU.SceneRenderer.LODFade")
+{
+	TEST_CASE("A changed level of detail cross-fades through complementary masks on both paths; a camera cut switches at once")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::normalize(glm::vec3(-0.4f, -1.0f, -0.5f)), 3.0f, false);
+		const Ref<Mesh> mesh = CreateLODSphere(true);
+		const std::vector<MeshLOD>& lods = mesh->GetSubmeshes()[0].LODs;
+		AddMesh(scene, assets.Add(mesh, "FadingSphere"), LitMaterial(assets, glm::vec4(0.8f, 0.7f, 0.6f, 1.0f)), glm::vec3(0.0f), "Sphere");
+
+		// Level 0 at the first distance, level 1 at the second (a step short of a camera cut), level 2 at the third (beyond one).
+		const SceneCamera probe = View(glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f));
+		const float threshold = LODSelection::GetErrorThreshold(c_LODSceneErrorPixels, static_cast<float>(c_Size));
+		const float tangent = std::tan(probe.VerticalFOV * 0.5f);
+		const float first = lods[1].Error / (threshold * tangent);
+		const float second = lods[2].Error / (threshold * tangent);
+		const float nearDistance = first * 0.75f;
+		const float middleDistance = std::sqrt(first * second);
+		const float farDistance = std::max(second * 1.5f, middleDistance + TextureStreamingPolicy::c_CameraCutDistance * 1.5f);
+		REQUIRE(nearDistance > 1.5f);
+		REQUIRE(middleDistance - nearDistance < TextureStreamingPolicy::c_CameraCutDistance);
+		const auto at = [](float distance) { return View(glm::vec3(0.0f, 0.0f, distance), glm::vec3(0.0f)); };
+
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			if (mode == GPUDrivenMode::Auto && !DeviceDrawsGPUDriven())
+				continue;
+			CAPTURE(mode == GPUDrivenMode::Auto);
+			const auto specification = [mode](float lodErrorPixels, bool fades)
+			{
+				SceneRendererSpecification result = Comparison::Specification(mode, IndirectDrawMode::Auto, lodErrorPixels);
+				result.FadeLevelsOfDetail = fades;
+				return result;
+			};
+			// The levels as they are, without fades: full detail and the level the middle distance calls for.
+			SceneRenderer full(specification(0.0f, false));
+			SceneRenderer chosen(specification(c_LODSceneErrorPixels, false));
+			SceneRenderer fading(specification(c_LODSceneErrorPixels, true));
+			for (SceneRenderer* renderer : { &full, &chosen, &fading })
+				renderer->SetViewportSize(c_Size, c_Size);
+			const FadeFrame outgoing = RenderFadeFrame(full, scene, at(middleDistance));
+			const FadeFrame incoming = RenderFadeFrame(chosen, scene, at(middleDistance));
+			REQUIRE(outgoing.Counts.InstancesPerLOD[0] == 1);
+			REQUIRE(incoming.Counts.InstancesPerLOD[1] == 1);
+			REQUIRE(CountCompositeDifferences(outgoing, incoming, incoming, 0) > 0); // The levels look different
+
+			const FadeFrame start = RenderFadeFrame(fading, scene, at(nearDistance));
+			CHECK(start.Counts.InstancesPerLOD[0] == 1);
+			CHECK(start.Counts.Instances == 1);
+			// Each frame at the middle distance shows the new level on step / 16 of the pixels and the old one on the rest.
+			for (uint32_t step = 1; step < RenderData::c_LODFadeFrames; step++)
+			{
+				CAPTURE(step);
+				const FadeFrame frame = RenderFadeFrame(fading, scene, at(middleDistance));
+				CHECK(frame.Counts.Instances == 2);
+				CHECK(frame.Counts.InstancesPerLOD[1] == 1);
+				CHECK(CountCompositeDifferences(frame, incoming, outgoing, step) == 0);
+			}
+			const FadeFrame done = RenderFadeFrame(fading, scene, at(middleDistance));
+			CHECK(done.Counts.Instances == 1);
+			CHECK(CountCompositeDifferences(done, incoming, incoming, 0) == 0);
+
+			// A camera cut to the far distance draws the coarsest level at once.
+			const FadeFrame cut = RenderFadeFrame(fading, scene, at(farDistance));
+			CHECK(cut.Counts.Instances == 1);
+			CHECK(cut.Counts.InstancesPerLOD[2] == 1);
+			const FadeFrame farLevel = RenderFadeFrame(chosen, scene, at(farDistance));
+			CHECK(CountCompositeDifferences(cut, farLevel, farLevel, 0) == 0);
+			gpu.GetDevice().WaitForIdle();
+		}
+		CHECK(gpu.GetNewErrorCount() == 0);
+	}
+
+	TEST_CASE("Levels that cover the same pixels at the same depth fade by the same mask in the forward pass")
+	{
+		GPUContext gpu;
+		REQUIRE(gpu.IsValid());
+		SceneTestAssets assets;
+		// A quad facing the camera whose two levels are the same triangles with other normals: both pass the EQUAL depth test
+		// everywhere, so only the forward pass's mask keeps the pixels the prepass gave to the other level.
+		const float threshold = LODSelection::GetErrorThreshold(c_LODSceneErrorPixels, static_cast<float>(c_Size));
+		const SceneCamera probe = View(glm::vec3(0.0f, 0.0f, 1.0f), glm::vec3(0.0f));
+		const float error = 3.0f * threshold * std::tan(probe.VerticalFOV * 0.5f); // Level 1 from 3 units away
+		std::vector<glm::vec3> positions;
+		std::vector<MeshVertexAttributes> attributes;
+		for (const glm::vec3& normal : { glm::vec3(0.0f, 0.0f, 1.0f), glm::normalize(glm::vec3(0.6f, 0.0f, 0.8f)) })
+		{
+			for (const glm::vec2& corner : { glm::vec2(-0.5f, -0.5f), glm::vec2(0.5f, -0.5f), glm::vec2(0.5f, 0.5f), glm::vec2(-0.5f, 0.5f) })
+			{
+				positions.push_back(glm::vec3(corner, 0.0f));
+				MeshVertexAttributes attribute;
+				attribute.Normal = normal;
+				attributes.push_back(attribute);
+			}
+		}
+		Submesh submesh;
+		submesh.VertexCount = 8;
+		submesh.LODs = { MeshLOD { 0, 6, 0.0f }, MeshLOD { 6, 6, error } };
+		std::string meshError;
+		const Ref<Mesh> quad = Mesh::Create(positions, attributes, { 0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7 }, { submesh }, &meshError);
+		REQUIRE_MESSAGE(quad, meshError);
+		Scene scene;
+		AddNeutralPostProcess(scene);
+		AddSun(scene, glm::normalize(glm::vec3(0.5f, -0.3f, -1.0f)), 3.0f, false);
+		AddMesh(scene, assets.Add(quad, "CoplanarLevels"), LitMaterial(assets, glm::vec4(0.8f, 0.8f, 0.8f, 1.0f)), glm::vec3(0.0f), "Quad");
+		const auto at = [](float distance) { return View(glm::vec3(0.0f, 0.0f, distance), glm::vec3(0.0f)); };
+
+		for (const GPUDrivenMode mode : { GPUDrivenMode::Off, GPUDrivenMode::Auto })
+		{
+			if (mode == GPUDrivenMode::Auto && !DeviceDrawsGPUDriven())
+				continue;
+			CAPTURE(mode == GPUDrivenMode::Auto);
+			SceneRendererSpecification still = Comparison::Specification(mode, IndirectDrawMode::Auto, c_LODSceneErrorPixels);
+			still.FadeLevelsOfDetail = false;
+			SceneRendererSpecification detailed = still;
+			detailed.LODErrorPixels = 0.0f;
+			SceneRenderer full(detailed);
+			SceneRenderer chosen(still);
+			SceneRenderer fading(Comparison::Specification(mode, IndirectDrawMode::Auto, c_LODSceneErrorPixels));
+			for (SceneRenderer* renderer : { &full, &chosen, &fading })
+				renderer->SetViewportSize(c_Size, c_Size);
+			const FadeFrame outgoing = RenderFadeFrame(full, scene, at(4.0f));
+			const FadeFrame incoming = RenderFadeFrame(chosen, scene, at(4.0f));
+			REQUIRE(incoming.Counts.InstancesPerLOD[1] == 1);
+			REQUIRE(CountCompositeDifferences(outgoing, incoming, incoming, 0) > 100); // The normals shade apart
+			RenderFadeFrame(fading, scene, at(2.0f));
+			for (uint32_t step = 1; step <= 8; step++)
+			{
+				CAPTURE(step);
+				const FadeFrame frame = RenderFadeFrame(fading, scene, at(4.0f));
+				CHECK(frame.Counts.Instances == 2);
+				CHECK(CountCompositeDifferences(frame, incoming, outgoing, step) == 0);
+			}
+			gpu.GetDevice().WaitForIdle();
+		}
 		CHECK(gpu.GetNewErrorCount() == 0);
 	}
 }

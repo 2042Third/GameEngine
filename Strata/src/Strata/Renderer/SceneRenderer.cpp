@@ -1930,7 +1930,9 @@ namespace Strata
 		{
 			m_CutRender = m_RenderCount + 1;
 			m_ResetVisibility = true; // Occlusion culling starts without history
+			m_LODFadeFrame++;         // And so do level-of-detail fades: a frame skipped draws every level at once
 		}
+		m_LODFadeFrame++;
 		m_FeedbackFrame = UsesFeedback(renderScene);
 		m_Stats.FeedbackRequests = m_FeedbackFrame;
 		if (m_FeedbackFrame)

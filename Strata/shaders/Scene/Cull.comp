@@ -191,8 +191,27 @@ void EmitViewInstances(GPUProxy proxy, GeometryEntry entry, float fraction, uint
 		GeometrySubmesh geometrySubmesh = u_GeometrySubmeshes[entry.FirstSubmesh + submesh];
 		uint lod = ChooseLOD(geometrySubmesh, fraction);
 		uint doubleSided = (material & ST_CULL_MATERIAL_DOUBLE_SIDED) != 0u ? 2u : 0u;
-		Emit(instance, mirrored | doubleSided | (geometry << 2) | phaseBit, geometrySubmesh.FirstLOD + lod);
+		uint bucket = mirrored | doubleSided | (geometry << 2) | phaseBit;
+		// A changed level cross-fades: both levels are drawn, with complementary masks. The writing pass keeps the state (an
+		// instance is drawn in one phase only, so each frame reads the previous frame's).
+		// Submeshes with one level have nothing to fade (nor any state), as on the CPU path.
+		bool fades = u_Cull.LODFade != 0u && geometrySubmesh.LODCount > 1u;
+		uint fadeCode = 0u;
+		uint fadeFrom = lod;
+		if (fades)
+		{
+			uvec2 state = UpdateLODFade(u_LODFades[instance], lod, geometrySubmesh.LODCount, u_CullInstances[instance].EntityID, u_Cull.LODFadeFrame, true,
+				fadeCode, fadeFrom);
+			if (!IsCounting())
+				u_LODFades[instance] = state;
+		}
+		Emit(instance | (fadeCode << ST_CULL_DRAW_ENTRY_INSTANCE_BITS), bucket, geometrySubmesh.FirstLOD + lod);
 		Count(ST_COUNTER_VIEW_INSTANCES);
+		if (fadeCode != 0u)
+		{
+			Emit(instance | ((fadeCode + ST_LOD_FADE_OUTGOING) << ST_CULL_DRAW_ENTRY_INSTANCE_BITS), bucket, geometrySubmesh.FirstLOD + fadeFrom);
+			Count(ST_COUNTER_VIEW_INSTANCES);
+		}
 		Count(ST_COUNTER_INSTANCES_PER_LOD + int(min(lod, uint(ST_LOD_STAT_COUNT - 1))));
 		if (geometry == ST_CULL_GEOMETRY_SKINNED)
 			Count(ST_COUNTER_SKINNED_INSTANCES);

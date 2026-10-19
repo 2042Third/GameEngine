@@ -1036,12 +1036,17 @@ namespace Strata
 	{
 		RecordProxyChange(proxy);
 		const uint32_t meshSlot = m_MeshSlots[proxy];
-		const uint32_t count = meshSlot != c_InvalidIndex && m_Meshes[meshSlot].LayoutKnown ? static_cast<uint32_t>(m_Meshes[meshSlot].SubmeshMaterialSlots.size()) : 0;
+		uint32_t count = meshSlot != c_InvalidIndex && m_Meshes[meshSlot].LayoutKnown ? static_cast<uint32_t>(m_Meshes[meshSlot].SubmeshMaterialSlots.size()) : 0;
 		if (count != m_InstanceCounts[proxy])
 		{
 			if (m_InstanceCounts[proxy] > 0)
 				FreeInstances(m_FirstInstances[proxy], m_InstanceCounts[proxy]);
 			m_FirstInstances[proxy] = count > 0 ? AllocateInstances(count) : 0;
+			if (m_FirstInstances[proxy] == c_InvalidIndex)
+			{
+				m_FirstInstances[proxy] = 0; // Beyond the instance limit: not drawn
+				count = 0;
+			}
 			m_InstanceCounts[proxy] = count;
 			if (count > 0)
 			{
@@ -1091,10 +1096,23 @@ namespace Strata
 			m_Stats.InstanceSlots += count;
 			return first;
 		}
+		if (m_Instances.size() + count > m_InstanceLimit)
+		{
+			if (!m_InstanceLimitReported)
+				ST_CORE_ERROR("RenderScene: more than {} mesh instances; mesh renderers beyond them are not drawn", m_InstanceLimit);
+			m_InstanceLimitReported = true;
+			return c_InvalidIndex;
+		}
 		const uint32_t first = static_cast<uint32_t>(m_Instances.size());
 		m_Instances.resize(m_Instances.size() + count);
 		m_Stats.InstanceSlots += count;
 		return first;
+	}
+
+	void RenderScene::SetInstanceLimit(uint32_t limit)
+	{
+		m_InstanceLimit = std::min(limit, RenderData::c_MaxRenderInstances);
+		m_InstanceLimitReported = false;
 	}
 
 	void RenderScene::FreeInstances(uint32_t first, uint32_t count)
@@ -1511,9 +1529,12 @@ namespace Strata
 			if (shouldBeIndexed)
 				indexedUsers[meshSlot]++;
 
-			const uint32_t instanceCount = layoutKnown ? static_cast<uint32_t>(m_Meshes[meshSlot].SubmeshMaterialSlots.size()) : 0u;
-			if (m_InstanceCounts[proxy] != instanceCount)
-				return fail(fmt::format("entity {} has {} instances instead of {}", static_cast<uint32_t>(entity), m_InstanceCounts[proxy], instanceCount));
+			// Proxies beyond the instance limit have none.
+			const uint32_t expectedCount = layoutKnown ? static_cast<uint32_t>(m_Meshes[meshSlot].SubmeshMaterialSlots.size()) : 0u;
+			const bool refused = m_InstanceLimitReported && m_InstanceCounts[proxy] == 0;
+			if (m_InstanceCounts[proxy] != expectedCount && !refused)
+				return fail(fmt::format("entity {} has {} instances instead of {}", static_cast<uint32_t>(entity), m_InstanceCounts[proxy], expectedCount));
+			const uint32_t instanceCount = m_InstanceCounts[proxy];
 			for (uint32_t index = 0; index < instanceCount; index++)
 			{
 				const RenderData::InstanceData& instance = m_Instances[m_FirstInstances[proxy] + index];

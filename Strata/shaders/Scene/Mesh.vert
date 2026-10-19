@@ -22,12 +22,14 @@ layout(location = 1) out vec3 v_Normal;
 layout(location = 2) out vec4 v_Tangent;
 layout(location = 3) out vec2 v_TexCoord;
 layout(location = 4) flat out uint v_InstanceIndex;
+layout(location = 5) flat out uint v_LODFade; // The draw's cross-fade code (IsLODFadeDrawn)
 
 invariant gl_Position;
 
 void main()
 {
-	uint instanceIndex = u_DrawList[gl_InstanceIndex];
+	uint entry = u_DrawList[gl_InstanceIndex];
+	uint instanceIndex = entry & ST_DRAW_ENTRY_INSTANCE_MASK;
 	InstanceData instance = u_Instances[instanceIndex];
 #ifdef ST_SKINNED
 	JointMatrix skin = BlendJoints(instance, a_Joints, a_Weights);
@@ -48,5 +50,6 @@ void main()
 	v_Tangent = vec4(normalize(TransformDirection(instance, tangent)), handedness);
 	v_TexCoord = a_TexCoord;
 	v_InstanceIndex = instanceIndex;
+	v_LODFade = entry >> ST_DRAW_ENTRY_INSTANCE_BITS;
 	gl_Position = u_Frame.ViewProjection * vec4(relativePosition, 1.0);
 }

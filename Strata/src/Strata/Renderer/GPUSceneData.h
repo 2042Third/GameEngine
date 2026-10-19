@@ -66,6 +66,17 @@ namespace Strata::RenderData
 	};
 	static_assert(sizeof(GeometryLOD) == 32);
 
+	// What a renderer keeps per view instance for level-of-detail cross-fades (LODSelection::UpdateLODFade; the GPU-driven
+	// path's u_LODFades holds the same records).
+	struct LODFadeState
+	{
+		// The level (bits 0-3), the level fading out (4-7), the step (8-12, c_LODFadeFrames when no fade is under way) and the
+		// fade frame number's low 19 bits (13-31). 0: no history.
+		uint32_t Packed = 0;
+		uint32_t EntityID = 0; // InstanceData::EntityID it was drawn for (an instance slot may change hands)
+	};
+	static_assert(sizeof(LODFadeState) == 8);
+
 	// GPU culling (Scene/Cull.comp, CullShadow, CullBuild.comp; Include/Culling.glsl mirrors these layouts).
 	//
 	// The mesh table (RenderSceneGPU) holds per mesh slot the GeometryHandle of the loaded mesh (0: none), with this bit for
@@ -156,8 +167,8 @@ namespace Strata::RenderData
 		uint32_t FirstPhaseViewBuckets = 0;  // Of the view's dense buckets, the first phase's (they come first)
 		uint32_t VisibilityParity = 0;       // Which bit of the visibility buffer holds the previous frame's (0 or 1)
 		float LODErrorThreshold = 0.0f;      // LODSelection::GetErrorThreshold of the view (LODCriteria::ErrorThreshold)
-		uint32_t Reserved1 = 0;
-		uint32_t Reserved2 = 0;
+		uint32_t LODFadeFrame = 0;           // The frame's number for level-of-detail cross-fades (LODSelection::UpdateLODFade)
+		uint32_t LODFade = 0;                // 1: levels of detail cross-fade (SceneRendererSpecification::FadeLevelsOfDetail)
 	};
 	static_assert(sizeof(CullConstants) == 6 * 16 + 3 * 16 + 64 + 64 + 16 + 8 * 16 + 64);
 

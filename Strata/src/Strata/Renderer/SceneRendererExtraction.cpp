@@ -4,6 +4,7 @@
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/JobSystem.h"
 #include "Strata/Math/Math.h"
+#include "Strata/Renderer/LODSelection.h"
 #include "Strata/Renderer/Material.h"
 #include "Strata/Renderer/MaterialData.h"
 #include "Strata/Renderer/Mesh.h"
@@ -173,6 +174,9 @@ namespace Strata
 			// Another scene: its slots mean something else, and the GPU copies hold the previous scene's data.
 			m_RenderSceneId = renderScene.GetId();
 			m_ResetVisibility = true; // Its proxies are not those the visibility bits are of
+			m_LODFades.clear();       // Nor its instances those the fades are of
+			m_ClearLODFades = true;
+			m_LODFadeFrame++;
 			m_MeshUsage.clear();
 			m_FrameMeshes.clear();
 			m_MaterialUsage.clear();
@@ -887,6 +891,12 @@ namespace Strata
 		const bool skins = renderScene.HasSkinProxies(); // Scenes without skinned meshes skip the per-proxy checks
 		// Mesh renderers smaller than this many pixels on screen are not drawn (the GPU's culling leaves out the same ones).
 		const float minPixels = m_Specification.MinProjectedPixels;
+		// Levels of detail that change cross-fade (LODSelection::UpdateLODFade): each opaque instance's state, written only by
+		// the chunk that draws it.
+		const bool fades = opaqueDraws && m_Specification.FadeLevelsOfDetail;
+		if (fades)
+			m_LODFades.resize(instances.size());
+		const uint32_t fadeFrame = m_LODFadeFrame;
 		ForEachChunk(chunks, [&](uint32_t chunk)
 		{
 			ExtractionChunk& output = m_Chunks[chunk];
@@ -966,8 +976,25 @@ namespace Strata
 					}
 					if (opaqueDraws)
 					{
-						output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod, batchAcrossMaterials ? 0u : materialSlot),
-							instance, 0 });
+						const uint32_t keyMaterial = batchAcrossMaterials ? 0u : materialSlot;
+						// Submeshes with one level have nothing to fade (nor any state).
+						LODSelection::LODFade fade;
+						if (fades && submeshes[submeshIndex].LODs.size() > 1)
+						{
+							fade = LODSelection::UpdateLODFade(m_LODFades[instance], lod, static_cast<uint32_t>(submeshes[submeshIndex].LODs.size()),
+								instances[instance].EntityID, fadeFrame, true);
+							m_LODFades[instance] = fade.State;
+						}
+						output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, lod, keyMaterial),
+							RenderData::MakeDrawEntry(instance, fade.Code), 0 });
+						// Both levels while the fade is under way, the old one on the pixels the new one leaves (faded levels are at most
+						// 15, within the key's).
+						static_assert(c_MaxKeyLODs > 15);
+						if (fade.Code != 0)
+						{
+							output.Draws.push_back(SortItem { MakeDrawKey(0, false, mirrored, doubleSided, skinned, meshSlot, submeshIndex, fade.From, keyMaterial),
+								RenderData::MakeDrawEntry(instance, fade.Code + RenderData::c_LODFadeOutgoing), 0 });
+						}
 					}
 				}
 			}

@@ -241,6 +241,10 @@ namespace Strata
 		//////////////////////////////////////////////////////////////////////////
 
 		std::span<const RenderData::InstanceData> GetInstances() const { return m_Instances; }
+		// At most this many instances (RenderData::c_MaxRenderInstances, what a draw list entry can name; tests lower it): a
+		// proxy whose instances would not fit gets none and is not drawn (logged once).
+		void SetInstanceLimit(uint32_t limit);
+		uint32_t GetInstanceLimit() const { return m_InstanceLimit; }
 		// Changes with every change of the instance data.
 		uint64_t GetInstanceVersion() const { return m_InstanceVersion; }
 		// Appends the instances whose data changed after instance version `sinceVersion` (an instance may appear more than
@@ -483,6 +487,8 @@ namespace Strata
 		std::vector<RenderData::InstanceData> m_Instances;
 		std::unordered_map<uint32_t, std::vector<uint32_t>> m_FreeInstanceRanges; // Free first instances, by range length
 		uint64_t m_InstanceVersion = 0;
+		uint32_t m_InstanceLimit = RenderData::c_MaxRenderInstances;
+		bool m_InstanceLimitReported = false;
 		uint64_t m_InstanceChangesFloor = 0; // Changes up to this version may be missing from m_InstanceChanges
 		std::vector<InstanceChange> m_InstanceChanges;
 		size_t m_InstanceChangesStart = 0;   // Entries before this are dropped (compacted when they make up half the list)

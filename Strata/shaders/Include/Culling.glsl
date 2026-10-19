@@ -32,6 +32,7 @@
 #define ST_FEEDBACK_SHADOW             8u
 #define ST_FEEDBACK_LIST_HEADER        4u
 
+#define ST_CULL_DRAW_ENTRY_INSTANCE_BITS 27u // RenderData::c_DrawEntryInstanceBits
 #define ST_CULL_GEOMETRY_STATIC        0u
 #define ST_CULL_GEOMETRY_SKINNED_ARENA 1u
 #define ST_CULL_GEOMETRY_SKINNED       2u
@@ -133,8 +134,8 @@ struct CullConstants
 	uint FirstPhaseViewBuckets; // Of the view's dense buckets, the first phase's (they come first)
 	uint VisibilityParity;   // The bit of u_Visibility holding the previous frame's visibility (0 or 1)
 	float LODErrorThreshold; // LODSelection::GetErrorThreshold of the view
-	uint Reserved1;
-	uint Reserved2;
+	uint LODFadeFrame;       // The frame's number for level-of-detail cross-fades
+	uint LODFade;            // 1: levels of detail cross-fade
 };
 
 layout(set = 0, binding = ST_CBV(0), std140) uniform CullBuffer
@@ -172,6 +173,9 @@ layout(set = 0, binding = ST_UAV(10), std430) buffer CasterDepthBuffer { uint u_
 // Per proxy whether the view saw it, in two bits that alternate frame by frame: the previous frame's
 // (u_Cull.VisibilityParity) and this frame's, written by the second phase.
 layout(set = 0, binding = ST_UAV(11), std430) buffer VisibilityBuffer { uint u_Visibility[]; };
+// Per instance its level-of-detail cross-fade state (UpdateLODFade, LODSelection::LODFadeState), written by the view's
+// writing passes.
+layout(set = 0, binding = ST_UAV(12), std430) buffer LODFadeBuffer { uvec2 u_LODFades[]; };
 // The depth pyramid of the first phase's depth (Scene/HZBBuild.comp): each texel the farthest (smallest, reversed-Z)
 // depth of the pixels it covers; level m's texel covers pixels p with p >> (m + 1) equal to it.
 layout(set = 0, binding = ST_SRV(8)) uniform texture2D u_DepthPyramid;
