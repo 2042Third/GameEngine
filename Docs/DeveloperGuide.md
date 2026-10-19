@@ -2085,7 +2085,9 @@ How it works: Architecture.md, "Game UI". Only the composition root includes the
   toggles; `UIRectEdit::ApplyPresetWithUndo`, one undo step that keeps the rect in place), the rect in pixels at the
   game's screen and, while every selected rect stretches along an axis, rows per axis in place of Position and Size: the
   margins along a stretched axis (`SetMarginWithUndo`, a drag merging into one step), the position and width (height)
-  along the other (`SetPropertyComponentsWithUndo` of that axis). With Game UI shown, a click in the viewport (edit
+  along the other (`SetPropertyComponentsWithUndo` of that axis). In a prefab instance those rows show the overrides of
+  Position and Size as the generic rows do (`ComponentDrawOverrides`: the label marked, Apply to Prefab and Revert on a
+  right-click; a margin row, set through both, offers each one overridden). With Game UI shown, a click in the viewport (edit
   mode) selects the topmost UI element that draws something there (`UIRectEdit::PickElement`) before the scene's
   ID-buffer pick.
 - The 2D canvas mode (`ViewportSettings::CanvasMode`, the viewport's "2D" chip, `viewport.setSettings {canvasMode}`,

@@ -751,7 +751,15 @@ namespace Strata
 				// What the generic rows cannot show (a UIRect's anchor presets and margins), above them; they leave out what
 				// the drawer showed in its own way.
 				UI::ComponentDrawResult drawn;
-				UI::ComponentDrawers::Draw(context, entities, info, drawn);
+				std::optional<UI::ComponentDrawOverrides> overrides;
+				if (prefab)
+				{
+					overrides.emplace();
+					overrides->IsOverridden = [prefab, &info](std::string_view property) { return prefab->IsOverridden(info.Name, property); };
+					overrides->DrawMenu = [this, prefab, &info](std::span<const std::string_view> properties, std::string_view probeKey)
+						{ DrawPropertyOverrideMenu(*prefab, info, properties, probeKey); };
+				}
+				UI::ComponentDrawers::Draw(context, entities, info, overrides ? &*overrides : nullptr, drawn);
 				DrawProperties(context, entities, info, prefab, &drawn);
 			}
 			if (info.TypeId == entt::type_id<MeshRendererComponent>().hash())
@@ -845,6 +853,34 @@ namespace Strata
 		ImGui::EndPopup();
 	}
 
+	void InspectorPanel::DrawPropertyOverrideMenu(const PrefabView& prefab, const ComponentInfo& info, std::span<const std::string_view> properties,
+		std::string_view probeKey)
+	{
+		ImGui::PushID(probeKey.data(), probeKey.data() + probeKey.size());
+		if (ImGui::BeginPopupContextItem("PropertyOverride"))
+		{
+			const bool several = properties.size() > 1;
+			for (const std::string_view property : properties)
+			{
+				const nlohmann::json parameters = { { "entity", UUIDToJson(prefab.SceneEntity) }, { "component", info.Name }, { "property", property } };
+				// With several properties each item names its own.
+				const PropertyInfo* found = info.FindProperty(property);
+				const std::string_view name = found ? std::string_view(found->DisplayName) : property;
+				const std::string apply = several ? fmt::format("Apply {} to Prefab", name) : std::string("Apply to Prefab");
+				const std::string revert = several ? fmt::format("Revert {}", name) : std::string("Revert");
+				const std::string suffix = several ? fmt::format(".{}", property) : std::string();
+				if (!prefab.Model && ImGui::MenuItem(apply.c_str()))
+					SchedulePrefabCommand("prefab.apply", parameters);
+				UI::ItemProbe::Record(fmt::format("{}.Apply{}", probeKey, suffix), !prefab.Model);
+				if (ImGui::MenuItem(revert.c_str()))
+					SchedulePrefabCommand("prefab.revert", parameters);
+				UI::ItemProbe::Record(fmt::format("{}.Revert{}", probeKey, suffix));
+			}
+			ImGui::EndPopup();
+		}
+		ImGui::PopID();
+	}
+
 	void InspectorPanel::DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PrefabView* prefab,
 		const UI::ComponentDrawResult* drawn)
 	{
@@ -867,22 +903,10 @@ namespace Strata
 			labelOptions.Overridden = prefab && prefab->IsOverridden(info.Name, property.Name);
 			labelOptions.InactiveReason = inactive;
 			UI::PropertyLabel(property.DisplayName, property.Tooltip, probe, labelOptions);
-			// An override's label offers Apply to Prefab and Revert on a right-click.
 			if (labelOptions.Overridden)
 			{
-				ImGui::PushID(static_cast<int>(index));
-				if (ImGui::BeginPopupContextItem("PropertyOverride"))
-				{
-					const nlohmann::json parameters = { { "entity", UUIDToJson(prefab->SceneEntity) }, { "component", info.Name }, { "property", property.Name } };
-					if (!prefab->Model && ImGui::MenuItem("Apply to Prefab"))
-						SchedulePrefabCommand("prefab.apply", parameters);
-					UI::ItemProbe::Record(probe + ".Apply", !prefab->Model);
-					if (ImGui::MenuItem("Revert"))
-						SchedulePrefabCommand("prefab.revert", parameters);
-					UI::ItemProbe::Record(probe + ".Revert");
-					ImGui::EndPopup();
-				}
-				ImGui::PopID();
+				const std::string_view name = property.Name;
+				DrawPropertyOverrideMenu(*prefab, info, std::span(&name, 1), probe);
 			}
 			PropertyWidgetOptions options;
 			options.Mixed = shared->Mixed;

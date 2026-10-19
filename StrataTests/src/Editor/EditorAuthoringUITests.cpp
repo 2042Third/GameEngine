@@ -781,6 +781,58 @@ TEST_SUITE("Editor.UI.Hierarchy")
 		CHECK_FALSE(UI::ItemProbe::Find("Inspector.Prefab.Overrides").has_value());
 	}
 
+	TEST_CASE("A stretched UI Rect's own rows mark the instance's overridden Position and Size, and revert them from their menu")
+	{
+		AuthoringEditor editor;
+		editor.Run("project.create", { { "directory", FileSystem::ToUTF8(CreateTemporaryDirectory("InspectorRectOverrides") / "Game") }, { "name", "Game" } });
+		const nlohmann::json canvas = editor.Run("ui.create", { { "type", "canvas" } });
+		const nlohmann::json panel = editor.Run("ui.create", { { "type", "panel" }, { "parent", canvas["entity"] } });
+		// Stretched across the top: margins place it horizontally, its position and height vertically (the drawer's rows).
+		editor.Run("component.set", { { "entity", panel["entity"] }, { "component", "UIRect" },
+			{ "values", { { "AnchorMin", { 0.0, 0.0 } }, { "AnchorMax", { 1.0, 0.0 } } } } });
+		editor.Run("prefab.create", { { "entities", { canvas["entity"] } }, { "path", "Prefabs/Menu.stprefab" } });
+		const UUID instance = *UUIDFromJson(editor.Run("prefab.instantiate", { { "prefab", "Prefabs/Menu.stprefab" } })["id"]);
+		REQUIRE(editor.Get(instance).GetComponent<RelationshipComponent>().Children.size() == 1);
+		const UUID element = editor.Get(instance).GetComponent<RelationshipComponent>().Children.front();
+		const UIRectComponent prefabRect = editor.Get(element).GetComponent<UIRectComponent>();
+		editor.Run("component.set", { { "entity", UUIDToJson(element) }, { "component", "UIRect" }, { "values", {
+			{ "Position", { prefabRect.Position.x, prefabRect.Position.y + 10.0f } }, { "Size", { prefabRect.Size.x, prefabRect.Size.y + 20.0f } } } } });
+		editor.Run("selection.set", { { "entities", { UUIDToJson(element) } } });
+		editor.Frames(3);
+
+		const ImU32 accent = ImGui::GetColorU32(UI::GetThemeColors().Accent);
+		const auto labelColor = [](std::string_view row)
+		{
+			const std::optional<UI::ItemProbe::Item> label = UI::ItemProbe::Find(fmt::format("Inspector.UIRect.{}.Label", row));
+			REQUIRE_MESSAGE(label.has_value(), std::string(row));
+			return label->Color;
+		};
+		CHECK_FALSE(UI::ItemProbe::Find("Inspector.UIRect.Size").has_value()); // Replaced by the drawer's rows
+		CHECK(labelColor("PosY") == accent);
+		CHECK(labelColor("Height") == accent);
+		CHECK(labelColor("Left") == accent); // A margin is set through both
+		CHECK(labelColor("Right") == accent);
+		CHECK(labelColor("Pivot") == 0);
+
+		// A margin's menu offers each property it is set through; reverting the size leaves the position overridden.
+		editor.Pause();
+		editor.Harness.MoveMouse(UI::ItemProbe::Find("Inspector.UIRect.Left.Label")->GetCenter());
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Right, true);
+		editor.Frames(1);
+		editor.Harness.SetMouseButton(ImGuiMouseButton_Right, false);
+		editor.Frames(2);
+		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Left.Apply.Position").has_value());
+		CHECK(UI::ItemProbe::Find("Inspector.UIRect.Left.Revert.Position").has_value());
+		REQUIRE(editor.Click("Inspector.UIRect.Left.Revert.Size"));
+		editor.Frames(2);
+		CHECK(editor.Get(element).GetComponent<UIRectComponent>().Size == prefabRect.Size);
+		CHECK(editor.Get(element).GetComponent<UIRectComponent>().Position.y == doctest::Approx(prefabRect.Position.y + 10.0f));
+		CHECK(labelColor("Height") == 0);
+		CHECK(labelColor("PosY") == accent);
+		CHECK(labelColor("Left") == accent);
+	}
+
 	TEST_CASE("The Overrides menu lists each override under its entity, and Revert All remakes the instance in the frame it is clicked")
 	{
 		AuthoringEditor editor;

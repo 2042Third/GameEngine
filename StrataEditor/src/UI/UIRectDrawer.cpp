@@ -17,8 +17,11 @@
 #include <imgui.h>
 
 #include <array>
+#include <initializer_list>
 #include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 
 namespace Strata::UI
 {
@@ -43,6 +46,25 @@ namespace Strata::UI
 			ImGui::PushStyleColor(ImGuiCol_Text, GetThemeColors().TextSecondary);
 			ImGui::TextWrapped("%.*s", static_cast<int>(text.size()), text.data());
 			ImGui::PopStyleColor();
+		}
+
+		// The label of a row that places the rect in the drawer's own way: marked while the instance overrides one of the
+		// `properties` the row edits, whose Apply to Prefab and Revert its right-click menu then offers.
+		void OverridableLabel(std::string_view label, std::string_view tooltip, const std::string& probe, std::initializer_list<std::string_view> properties,
+			const ComponentDrawOverrides* overrides)
+		{
+			std::array<std::string_view, 2> overridden = {};
+			size_t count = 0;
+			for (const std::string_view property : properties)
+			{
+				if (overrides && count < overridden.size() && overrides->IsOverridden(property))
+					overridden[count++] = property;
+			}
+			PropertyLabelOptions options;
+			options.Overridden = count > 0;
+			PropertyLabel(label, tooltip, probe, options);
+			if (options.Overridden)
+				overrides->DrawMenu(std::span<const std::string_view>(overridden.data(), count), probe);
 		}
 
 		// A preset's picture: the parent's outline, the rect where the preset puts it and its anchors.
@@ -126,7 +148,8 @@ namespace Strata::UI
 
 	}
 
-	void DrawUIRect(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, ComponentDrawResult& result)
+	void DrawUIRect(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const ComponentDrawOverrides* overrides,
+		ComponentDrawResult& result)
 	{
 		const ThemeColors& colors = GetThemeColors();
 		const Entity primary = entities.back();
@@ -207,7 +230,8 @@ namespace Strata::UI
 					{
 						const char* name = axis == 0 ? (side == 0 ? "Left" : "Right") : (side == 0 ? "Top" : "Bottom");
 						const std::string probe = fmt::format("Inspector.UIRect.{}", name);
-						PropertyLabel(name, "The distance from the parent's edge, in canvas units (positive: inside)", probe);
+						// A margin is set through both the position and the size.
+						OverridableLabel(name, "The distance from the parent's edge, in canvas units (positive: inside)", probe, { "Position", "Size" }, overrides);
 						float value = margins[side];
 						ImGui::SetNextItemWidth(-FLT_MIN);
 						ImGui::PushID(probe.c_str());
@@ -234,7 +258,8 @@ namespace Strata::UI
 					const bool position = property == positionProperty;
 					const char* name = position ? (axis == 0 ? "Pos X" : "Pos Y") : (axis == 0 ? "Width" : "Height");
 					const std::string probe = fmt::format("Inspector.UIRect.{}", position ? (axis == 0 ? "PosX" : "PosY") : name);
-					PropertyLabel(name, position ? "The pivot's offset from the anchor point, in canvas units" : "The rect's size, in canvas units", probe);
+					OverridableLabel(name, position ? "The pivot's offset from the anchor point, in canvas units" : "The rect's size, in canvas units", probe,
+						{ property->Name }, overrides);
 					glm::vec2 value = position ? rect.Position : rect.Size;
 					ImGui::SetNextItemWidth(-FLT_MIN);
 					ImGui::PushID(probe.c_str());

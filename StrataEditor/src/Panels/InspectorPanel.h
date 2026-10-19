@@ -16,6 +16,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -85,6 +86,11 @@ namespace Strata
 		// A notice and an Add button for each component the shown one requires that some of the entities lack.
 		void DrawMissingRequirements(EditorContext& context, const EditorCommandRegistry& commands, std::span<const Entity> entities,
 			const ComponentInfo& info);
+		// The right-click menu of the label drawn last, a row that edits the overridden `properties`: Apply to Prefab (not to a
+		// model) and Revert of each, recorded under "<probeKey>.Apply" and "<probeKey>.Revert" (".<property>" after them with
+		// several). The generic rows and the component drawers' rows share it.
+		void DrawPropertyOverrideMenu(const PrefabView& prefab, const ComponentInfo& info, std::span<const std::string_view> properties,
+			std::string_view probeKey);
 		// The generic rows of a component's properties, without those a component drawer showed (`drawn`).
 		void DrawProperties(EditorContext& context, std::span<const Entity> entities, const ComponentInfo& info, const PrefabView* prefab,
 			const UI::ComponentDrawResult* drawn = nullptr);
