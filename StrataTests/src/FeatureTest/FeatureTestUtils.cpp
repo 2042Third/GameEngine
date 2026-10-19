@@ -100,6 +100,9 @@ namespace Strata::Tests
 			return UIBox { box.Min * view.Scale / input.InputToPixels, box.Size * view.Scale / input.InputToPixels };
 		}
 
+		// How many frames after its click frame UIFeatures' scenario gives its last input (Escape goes up; see UIFeatures.cpp).
+		constexpr int32_t c_UIScenarioLastFrame = 18;
+
 		// The player UIFeatures expects around its click frame (see UIFeatures.cpp), as device input.
 		void SimulateUIInput(Scene& scene, int32_t frame, int32_t clickFrame)
 		{
@@ -180,7 +183,7 @@ namespace Strata::Tests
 					Input::ProcessKey(Key::Enter, false);
 					Input::ProcessKey(Key::Escape, true);
 					break;
-				case 18:
+				case c_UIScenarioLastFrame:
 					Input::ProcessKey(Key::Escape, false);
 					break;
 				default:
@@ -378,7 +381,8 @@ namespace Strata::Tests
 		// The player's UI input comes after InputFeatures' (which checks that no mouse button is down before its press).
 		const int32_t clickFrame = GetField<int32_t>(GetScriptSystem(scene), RequireEntity(scene, "UI Features"), "UIFeatures", "ClickFrame");
 		REQUIRE(clickFrame - 1 > pressFrame + 2);
-		REQUIRE(clickFrame + 11 < c_FeatureReloadFrame);
+		// The whole UI scenario ends before the hot reload, which would land in the middle of a field's editing.
+		REQUIRE(clickFrame + c_UIScenarioLastFrame < c_FeatureReloadFrame);
 
 		for (int32_t frame = 0; frame < c_FeatureFrames; frame++)
 		{
