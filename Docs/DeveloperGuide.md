@@ -1371,7 +1371,9 @@ works: Docs/Architecture.md, "World partition"; for people: Docs/Manual/Worlds.m
   proxies of cells that left rendering that frame) stay within the scene's entity budget, and that a cell of 25,000
   renderers uploads its proxies within `SceneRendererSpecification::NewInstanceBytesPerFrame` (what waits drains) and
   deactivates them in one frame within the default budget; the full-size cases are `Perf.World.*`,
-  `PerfGPU.World.CellDriveMaxFrame` (the drive with a GPU-driven renderer drawing), `Perf.Physics.*` and the real
+  `PerfGPU.World.CellDriveMaxFrame` (the drive with a GPU-driven renderer drawing), `Perf.World.DrivePeakPrivate` and
+  `DriveFrameP95` (a 100 x 100-cell world of 25 million entities, generated as it is packed and packed cooked, played
+  headless by the `world-drive` helper along its diagonal, `World/WorldDriveProcess.h`), `Perf.Physics.*` and the real
   editor's `PerfGPU.Editor.EditFrameWorldIdle` and `PlayStartWorldMaxFrame`
   (a 32 x 32-cell world of 2.56 million entities, the 25 cells around the camera loaded).
 - **Idle cost.** A scene without a `WorldComponent` costs the World system one storage-size check per update, an editor

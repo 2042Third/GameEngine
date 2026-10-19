@@ -1,5 +1,6 @@
 #include "World/WorldTestUtils.h"
 
+#include "Strata/Asset/AssetPackCook.h"
 #include "Strata/Asset/AssetPackWriter.h"
 #include "Strata/Asset/BuiltinAssets.h"
 #include "Strata/Core/JsonUtils.h"
@@ -18,6 +19,7 @@
 
 #include <cmath>
 #include <map>
+#include <unordered_map>
 
 namespace Strata::Tests
 {
@@ -119,6 +121,31 @@ namespace Strata::Tests
 		// The Ground cells, row by row.
 		const WorldLayer& ground = data.Layers[0];
 		const uint32_t side = static_cast<uint32_t>(std::ceil(std::sqrt(static_cast<double>(std::max(specification.EntitiesPerCell, 1u)))));
+		auto buildGroundCell = [&specification, side, &data, ground](uint32_t x, uint32_t z, uint32_t cellIndex, Scene& cell)
+		{
+			const WorldCellSquare square = WorldGrid::CellBounds(ground, data.GridOrigin, static_cast<int32_t>(x), static_cast<int32_t>(z));
+			const glm::vec3 minimum(static_cast<float>(square.Min.x), 0.0f, static_cast<float>(square.Min.y));
+			const float spacing = specification.CellSize / static_cast<float>(side);
+			const uint64_t entityBase = c_GroundEntityBase + static_cast<uint64_t>(cellIndex) * 0x10000;
+			for (uint32_t entity = 0; entity < specification.EntitiesPerCell; entity++)
+			{
+				const glm::vec3 position = minimum + glm::vec3((static_cast<float>(entity % side) + 0.5f) * spacing, 0.5f, (static_cast<float>(entity / side) + 0.5f) * spacing);
+				CreateBox(cell, UUID(entityBase + entity), fmt::format("Box {}_{} #{}", x, z, entity), position, glm::vec3(0.5f), entity < specification.BodiesPerCell);
+			}
+			if (specification.Floors)
+			{
+				const glm::vec3 center = minimum + glm::vec3(specification.CellSize * 0.5f, -0.5f, specification.CellSize * 0.5f);
+				CreateBox(cell, UUID(entityBase + 0xFFFF), fmt::format("Floor {}_{}", x, z), center, glm::vec3(specification.CellSize, 1.0f, specification.CellSize), true);
+			}
+		};
+		// Cells made as the pack is written: their coordinates by handle.
+		struct LaterCell
+		{
+			uint32_t X = 0;
+			uint32_t Z = 0;
+			uint32_t Index = 0;
+		};
+		std::unordered_map<uint64_t, LaterCell> laterCells;
 		uint32_t cellIndex = 0;
 		for (uint32_t z = 0; z < specification.GridZ; z++)
 		{
@@ -126,37 +153,45 @@ namespace Strata::Tests
 			{
 				const WorldCellSquare square = WorldGrid::CellBounds(ground, data.GridOrigin, static_cast<int32_t>(x), static_cast<int32_t>(z));
 				const glm::vec3 minimum(static_cast<float>(square.Min.x), 0.0f, static_cast<float>(square.Min.y));
-				const float spacing = specification.CellSize / static_cast<float>(side);
-				Scene cell(fmt::format("{} Ground {}_{}", specification.Name, x, z));
-				const uint64_t entityBase = c_GroundEntityBase + static_cast<uint64_t>(cellIndex) * 0x10000;
-				for (uint32_t entity = 0; entity < specification.EntitiesPerCell; entity++)
-				{
-					const glm::vec3 position = minimum + glm::vec3((static_cast<float>(entity % side) + 0.5f) * spacing, 0.5f, (static_cast<float>(entity / side) + 0.5f) * spacing);
-					CreateBox(cell, UUID(entityBase + entity), fmt::format("Box {}_{} #{}", x, z, entity), position, glm::vec3(0.5f), entity < specification.BodiesPerCell);
-				}
-				if (specification.Floors)
-				{
-					const glm::vec3 center = minimum + glm::vec3(specification.CellSize * 0.5f, -0.5f, specification.CellSize * 0.5f);
-					CreateBox(cell, UUID(entityBase + 0xFFFF), fmt::format("Floor {}_{}", x, z), center, glm::vec3(specification.CellSize, 1.0f, specification.CellSize), true);
-				}
-
 				const AssetHandle handle = UUID(c_GroundCellBase + cellIndex);
-				const bool broken = std::find(specification.BrokenCells.begin(), specification.BrokenCells.end(), cellIndex) != specification.BrokenCells.end();
-				std::vector<uint8_t> document = broken ? std::vector<uint8_t> { 'n', 'o', 't', ' ', 'a', ' ', 's', 'c', 'e', 'n', 'e' } : ToBytes(SceneSerializer::Serialize(cell));
+				const std::string path = fmt::format("Worlds/{}/Ground/{}_{}.stscene", specification.Name, x, z);
 				WorldCellSummary summary;
 				summary.Layer = ground.ID;
 				summary.X = static_cast<int32_t>(x);
 				summary.Z = static_cast<int32_t>(z);
 				summary.Stamp = "generated";
-				summary.Entities = cell.GetEntityCount();
-				summary.Bodies = CountBodies(cell);
 				summary.BoundsMin = minimum + glm::vec3(0.0f, -1.0f, 0.0f);
 				summary.BoundsMax = minimum + glm::vec3(specification.CellSize, 1.0f, specification.CellSize);
-				summary.ClosureBytes = document.size();
+				if (specification.GenerateCellsWhenPacked)
+				{
+					// What the cell will hold, counted as CreateBox makes it (colliders only with the physics module).
+					const uint32_t floors = specification.Floors ? 1u : 0u;
+					summary.Entities = specification.EntitiesPerCell + floors;
+					summary.Bodies = ST_WITH_PHYSICS ? std::min(specification.BodiesPerCell, specification.EntitiesPerCell) + floors : 0u;
+					laterCells.emplace(static_cast<uint64_t>(handle), LaterCell { x, z, cellIndex });
+					AssetPackSource source;
+					source.Metadata.Handle = handle;
+					source.Metadata.Type = AssetType::Scene;
+					source.Metadata.Path = path;
+					source.Metadata.Name = path;
+					// An estimate (the pack writer weighs its progress by it): the document is made as it is written.
+					source.Metadata.StoredSize = static_cast<uint64_t>(summary.Entities) * 256;
+					sources.push_back(std::move(source));
+				}
+				else
+				{
+					Scene cell(fmt::format("{} Ground {}_{}", specification.Name, x, z));
+					buildGroundCell(x, z, cellIndex, cell);
+					const bool broken = std::find(specification.BrokenCells.begin(), specification.BrokenCells.end(), cellIndex) != specification.BrokenCells.end();
+					std::vector<uint8_t> document = broken ? std::vector<uint8_t> { 'n', 'o', 't', ' ', 'a', ' ', 's', 'c', 'e', 'n', 'e' } : ToBytes(SceneSerializer::Serialize(cell));
+					summary.Entities = cell.GetEntityCount();
+					summary.Bodies = CountBodies(cell);
+					summary.ClosureBytes = document.size();
+					addScene(handle, path, std::move(document));
+				}
 				world.BodiesPerGroundCell = summary.Bodies;
 				index.Cells.push_back(summary);
 				data.Cells.push_back(WorldCell { ground.ID, static_cast<int32_t>(x), static_cast<int32_t>(z), handle });
-				addScene(handle, fmt::format("Worlds/{}/Ground/{}_{}.stscene", specification.Name, x, z), std::move(document));
 			}
 		}
 		world.GroundCells = cellIndex;
@@ -215,9 +250,27 @@ namespace Strata::Tests
 		sources.push_back(std::move(worldSource));
 		documents[c_WorldHandle] = ToBytes(WorldAsset::ToDocument(data));
 
-		if (!AssetPackWriter::Write(world.PackPath, sources, [&](const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string*)
+		if (!AssetPackWriter::Write(world.PackPath, sources, [&](const AssetMetadata& metadata, std::vector<uint8_t>& outData, std::string* outWriteError)
 			{
-				outData = documents.at(static_cast<uint64_t>(metadata.Handle));
+				if (const auto later = laterCells.find(static_cast<uint64_t>(metadata.Handle)); later != laterCells.end())
+				{
+					Scene cell(fmt::format("{} Ground {}_{}", specification.Name, later->second.X, later->second.Z));
+					buildGroundCell(later->second.X, later->second.Z, later->second.Index, cell);
+					outData = ToBytes(SceneSerializer::Serialize(cell));
+				}
+				else
+				{
+					outData = documents.at(static_cast<uint64_t>(metadata.Handle));
+				}
+				// Cooked as an export cooks them (world-io's binary form); a broken cell stays garbage.
+				if (specification.CookDocuments && metadata.Type == AssetType::Scene
+					&& std::find(specification.BrokenCells.begin(), specification.BrokenCells.end(), static_cast<uint32_t>(static_cast<uint64_t>(metadata.Handle) - c_GroundCellBase)) == specification.BrokenCells.end())
+				{
+					AssetPackCookOptions cookOptions;
+					cookOptions.Cook = true;
+					std::vector<AssetHandle> references;
+					return CookForPack(metadata, outData, cookOptions, references, outWriteError);
+				}
 				return true;
 			}, {}, nullptr, outError))
 			return std::nullopt;

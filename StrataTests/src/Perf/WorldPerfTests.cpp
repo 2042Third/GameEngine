@@ -5,6 +5,9 @@
 #include "Renderer/GPUTestUtils.h"
 #include "Renderer/SceneRendererTestUtils.h"
 #include "Strata/Asset/AssetManager.h"
+#include "Strata/Core/FileSystem.h"
+#include "Strata/Core/Platform.h"
+#include "Strata/Core/Process.h"
 #include "Strata/Core/FrameProfiler.h"
 #include "Strata/Physics/PhysicsComponents.h"
 #include "Strata/Physics/PhysicsSystem.h"
@@ -17,10 +20,14 @@
 #include "Strata/Scene/SceneWorkBudget.h"
 #include "Strata/World/WorldStreamer.h"
 #include "TestHelpers.h"
+#include "World/WorldDriveProcess.h"
 #include "World/WorldTestUtils.h"
 
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <optional>
+#include <string>
 #include <functional>
 #include <thread>
 #include <vector>
@@ -225,6 +232,40 @@ TEST_SUITE("Perf.World")
 			scene.OnRuntimeStop();
 			return longest;
 		});
+	}
+
+	TEST_CASE("Driving a 100x100-cell world of 25 million entities in cooked cells keeps memory and frames bounded")
+	{
+		// The world: 10,000 Ground cells of 32 m, each of 2,500 entities (500 static boxes) and a floor, generated as they are
+		// packed and packed cooked; a game plays it headless in a helper process, whose peak memory is the drive's alone,
+		// driving its source 100 s along the diagonal at 40 m/s. The peak is a maximum by nature; the frames are judged by
+		// their 95th percentile (a cell's arrival lands in single frames).
+		const std::filesystem::path directory = CreateTemporaryDirectory("PerfWorldDrive25M");
+		std::string error;
+		const std::optional<std::filesystem::path> manifest = WriteWorldDriveWorld(directory / "Game", 100, 2'500, 500, &error);
+		REQUIRE_MESSAGE(manifest, error);
+		Perf::CheckBudgetsConfirmed({ "Perf.World.DrivePeakPrivate", "Perf.World.DriveFrameP95" }, [&]
+		{
+			const std::filesystem::path resultFile = directory / "Result.json";
+			ProcessSpecification process;
+			process.Executable = Platform::GetExecutablePath();
+			process.Arguments = { "--strata-test-helper=world-drive", FileSystem::ToUTF8(*manifest), "6000", FileSystem::ToUTF8(resultFile) };
+			const Process::RunResult run = Process::Run(process, std::chrono::minutes(15));
+			INFO("Helper output:\n", run.Output);
+			REQUIRE_MESSAGE(run.Started, run.Error);
+			REQUIRE_FALSE(run.TimedOut);
+			REQUIRE(run.ExitCode == 0);
+			std::string readError;
+			const std::optional<WorldDriveResult> result = ReadWorldDriveResult(resultFile, &readError);
+			REQUIRE_MESSAGE(result, readError);
+			REQUIRE_MESSAGE(result->Error.empty(), result->Error);
+			MESSAGE("Driving 25 million entities' world: ", result->Frames, " frames, ", result->LoadsStarted, " loads, at most ", result->MostCellsLoaded,
+				" cells in; frame work p95 ", result->FrameP95Ms, " ms, max ", result->FrameMaxMs, " ms; peak private ", result->PeakPrivateMB, " MB");
+			CHECK(result->MostBodiesWaiting == 0);
+			CHECK(result->LoadsStarted > 500);
+			return Perf::MetricValues { { "Perf.World.DrivePeakPrivate", result->PeakPrivateMB }, { "Perf.World.DriveFrameP95", result->FrameP95Ms } };
+		});
+		CHECK(FileSystem::Remove(directory)); // Gigabytes of cells
 	}
 }
 

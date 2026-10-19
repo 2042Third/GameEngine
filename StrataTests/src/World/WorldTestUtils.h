@@ -41,6 +41,11 @@ namespace Strata::Tests
 		bool Index = true;
 		// Ground cells whose stored form is garbage (their loads fail), by index in the Ground's cells.
 		std::vector<uint32_t> BrokenCells;
+		// Ground cells made only as the pack is written, one at a time from their coordinates: worlds too large to hold in
+		// memory (the 25M-entity drive). Their index entries are counted from the specification, without closure bytes.
+		bool GenerateCellsWhenPacked = false;
+		// Scenes packed in world-io's cooked binary form (AssetPackWriteOptions::CookDocuments), as exports pack them.
+		bool CookDocuments = false;
 		// Fills the persistent scene (a primary camera at the origin is there already).
 		std::function<void(Scene& persistent, AssetHandle world)> BuildPersistent;
 	};

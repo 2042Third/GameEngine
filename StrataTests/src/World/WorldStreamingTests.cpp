@@ -1,10 +1,16 @@
 #include <doctest/doctest.h>
 
 #include "Scene/SceneTestUtils.h"
+#include "Strata/Asset/RuntimeAssetManager.h"
+#include "Strata/Core/FileSystem.h"
+#include "Strata/Core/Platform.h"
+#include "Strata/Core/Process.h"
+#include "Strata/Scene/CookedScene.h"
 #include "Strata/Scene/SceneLoader.h"
 #include "Strata/Scene/SceneWorkBudget.h"
 #include "Strata/World/WorldComponents.h"
 #include "Strata/World/WorldStreamingSystem.h"
+#include "World/WorldDriveProcess.h"
 #include "World/WorldTestUtils.h"
 
 #if ST_WITH_PHYSICS
@@ -264,4 +270,46 @@ TEST_SUITE("World.Streaming")
 		scene->OnRuntimeStop();
 	}
 #endif
+}
+
+TEST_SUITE("World.Streaming")
+{
+	TEST_CASE("A world generated as it is packed, in cooked cells, plays headless in the drive helper")
+	{
+		// Perf.World.DrivePeakPrivate's drive, small: 6 x 6 cells of 50 entities made as the pack is written, cooked, driven
+		// along the diagonal for two seconds in a helper process that reports its frames and memory.
+		const std::filesystem::path directory = CreateTemporaryDirectory("WorldDriveHelper");
+		std::string error;
+		GeneratedWorld written;
+		const std::optional<std::filesystem::path> manifest = WriteWorldDriveWorld(directory / "Game", 6, 50, 10, &error, &written);
+		REQUIRE_MESSAGE(manifest, error);
+		CHECK(written.Data.Cells.size() == 36);
+		CHECK(written.Data.Index->Cells[0].Entities == 50 + 1); // Counted from the specification: the boxes and the floor
+		{
+			const Ref<RuntimeAssetManager> pack = RuntimeAssetManager::Create(written.PackPath, &error);
+			REQUIRE_MESSAGE(pack, error);
+			std::vector<uint8_t> bytes;
+			REQUIRE(pack->ReadStoredData(written.Data.Cells[0].Scene, bytes, &error));
+			CHECK(CookedScene::IsCooked(bytes));
+		}
+
+		const std::filesystem::path resultFile = directory / "Result.json";
+		ProcessSpecification process;
+		process.Executable = Platform::GetExecutablePath();
+		process.Arguments = { "--strata-test-helper=world-drive", FileSystem::ToUTF8(*manifest), "120", FileSystem::ToUTF8(resultFile) };
+		const Process::RunResult run = Process::Run(process, std::chrono::minutes(5));
+		INFO("Helper output:\n", run.Output);
+		REQUIRE_MESSAGE(run.Started, run.Error);
+		REQUIRE_FALSE(run.TimedOut);
+		REQUIRE(run.ExitCode == 0);
+		const std::optional<WorldDriveResult> result = ReadWorldDriveResult(resultFile, &error);
+		REQUIRE_MESSAGE(result, error);
+		CHECK(result->Error.empty());
+		CHECK(result->Frames == 120);
+		CHECK(result->MostCellsLoaded > 0);
+		CHECK(result->LoadsStarted > 0);
+		CHECK(result->MostBodiesWaiting == 0);
+		CHECK(result->FrameP95Ms > 0.0);
+		CHECK(result->FrameP95Ms <= result->FrameMaxMs);
+	}
 }

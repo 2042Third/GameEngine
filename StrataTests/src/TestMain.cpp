@@ -34,6 +34,7 @@
 #include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 #include "World/WorldDriveGame.h"
+#include "World/WorldDriveProcess.h"
 
 #if ST_WITH_PHYSICS
 	#include "Physics/PhysicsTestUtils.h"
@@ -876,6 +877,12 @@ static int RunHelperMode(std::string_view mode, int argc, char** argv)
 		}
 		std::printf("Wrote the stress game to '%s'\n", argv[2]);
 		return 0;
+	}
+	if (mode == "world-drive")
+	{
+		// <manifest> <frames> <result file>: drives a generated world headless along its diagonal and writes what it measured,
+		// peak memory included, for Perf.World.DrivePeakPrivate and DriveFrameP95.
+		return Strata::Tests::RunWorldDriveProcess(argc, argv);
 	}
 	if (mode == "write-world-game")
 	{
