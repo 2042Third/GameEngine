@@ -274,6 +274,30 @@ TEST_SUITE("World.Streaming")
 
 TEST_SUITE("World.Streaming")
 {
+	TEST_CASE("Reading a world prefetches none of its cells: they load as its sources come near")
+	{
+		// A 6 x 1 world of 32 m cells; the camera, its source, at the first. The World asset's read prefetches what it
+		// references, but for the scenes it lists, which a drive across a large world would otherwise hold all at once.
+		GeneratedWorldSpecification specification;
+		specification.GridX = 6;
+		specification.GridZ = 1;
+		specification.EntitiesPerCell = 20;
+		specification.BodiesPerCell = 0;
+		MountedWorld mounted("WorldStreamingNoCellPrefetch", specification);
+		Ref<Scene> scene = MakePersistent(mounted);
+		AddCamera(*scene, glm::vec3(16.0f, 1.0f, 16.0f));
+		scene->OnRuntimeStart();
+		const WorldStreamingSystem* system = scene->GetSystem<WorldStreamingSystem>();
+		REQUIRE(system);
+		RunUntil(mounted, *scene, [&]() { return system->GetStreamer() && system->GetStreamer()->GetCellStatus(WorldCellKey { 1, 0, 0 }) == WorldCellStatus::Loaded; });
+		// Settled: what the asset manager reads is done.
+		RunUntil(mounted, *scene, [&]() { return mounted.Manager->GetStats().LoadingAssets == 0; });
+		CHECK(mounted.Manager->GetAssetState(mounted.World.World) == AssetState::Ready);
+		CHECK(mounted.Manager->GetAssetState(mounted.World.GetCellScene(1, 5, 0)) == AssetState::Unloaded);
+		CHECK(mounted.Manager->GetAssetState(mounted.World.GetCellScene(1, 4, 0)) == AssetState::Unloaded);
+		scene->OnRuntimeStop();
+	}
+
 	TEST_CASE("A world generated as it is packed, in cooked cells, plays headless in the drive helper")
 	{
 		// Perf.World.DrivePeakPrivate's drive, small: 6 x 6 cells of 50 entities made as the pack is written, cooked, driven

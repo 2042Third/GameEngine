@@ -1978,7 +1978,9 @@ Asset memory is bounded by budgets, not by everything a session ever touched (`A
   requests), before its read slot frees: a material's textures load alongside the material, a mesh's default materials
   alongside the mesh. Documents that place entities (scenes, prefabs, models) prefetch nothing: what their entities use
   is requested by whatever draws or plays it, once it is needed (prefetching a scene's meshes and materials raised the
-  stress sweep's peak private memory by 60 to 100 MB; loading screens take a closure with a group load). Prefetches
+  stress sweep's peak private memory by 60 to 100 MB; loading screens take a closure with a group load), and scenes are
+  never prefetched, as load closures stop at them: a World asset lists all its cells, and prefetching them held a drive
+  across a 10,000-cell world at 12.6 GB instead of 280 MB (`Perf.World.DrivePeakPrivate`). Prefetches
   never evict anything: a dependency is prefetched only while its stored size fits in every pool with a budget beside
   what is resident, reserved for arrivals, on its way (the stored bytes of every load queued or in flight, prefetches
   included, until it is finalized) and a window of `InFlightBytes` kept free for the requests to come, so tight budgets

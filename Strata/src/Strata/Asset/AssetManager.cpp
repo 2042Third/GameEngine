@@ -1517,6 +1517,10 @@ namespace Strata
 				auto dependencyIt = m_Entries.find(dependency);
 				if (dependencyIt == m_Entries.end() || dependencyIt->second.IsMemoryAsset)
 					continue;
+				// Scenes a document names (a world's cells, the next level) load when something asks for them: prefetches stop at
+				// them as load closures do (AssetClosureScope::Load). A World asset would otherwise bring in every cell it lists.
+				if (dependencyIt->second.Metadata.Type == AssetType::Scene)
+					continue;
 				AssetEntry& entry = dependencyIt->second;
 				// Not touched: a prefetch is no use, so it keeps nothing resident and makes no room (see GetDependencies).
 				if (entry.State == AssetState::Unloaded)
