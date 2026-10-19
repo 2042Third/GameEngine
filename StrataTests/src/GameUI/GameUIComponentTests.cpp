@@ -18,9 +18,10 @@ namespace
 {
 
 	constexpr const char* c_UIComponents[] = { "UICanvas", "UIRect", "UIImage", "UIText", "UISelectable", "UIButton", "UIToggle", "UISlider", "UILayout",
-		"UIMask" };
+		"UIInputField", "UIMask" };
 
-	// A canvas with a slider whose parts, a button and a toggle reference each other and an entity outside.
+	// A canvas with a slider whose parts, a button, a toggle and an input field with its parts reference each other and an
+	// entity outside.
 	struct ReferencingUI
 	{
 		Entity Outside;
@@ -30,6 +31,9 @@ namespace
 		Entity Handle;
 		Entity Button;
 		Entity Toggle;
+		Entity Field;
+		Entity FieldText;
+		Entity FieldHint;
 	};
 
 	ReferencingUI CreateReferencingUI(Scene& scene)
@@ -43,7 +47,10 @@ namespace
 		ui.Handle = scene.CreateChildEntity(ui.Slider, "Handle");
 		ui.Button = scene.CreateChildEntity(ui.Canvas, "Button");
 		ui.Toggle = scene.CreateChildEntity(ui.Canvas, "Toggle");
-		for (Entity element : { ui.Slider, ui.Fill, ui.Handle, ui.Button, ui.Toggle })
+		ui.Field = scene.CreateChildEntity(ui.Canvas, "Field");
+		ui.FieldText = scene.CreateChildEntity(ui.Field, "Field Text");
+		ui.FieldHint = scene.CreateChildEntity(ui.Field, "Field Hint");
+		for (Entity element : { ui.Slider, ui.Fill, ui.Handle, ui.Button, ui.Toggle, ui.Field, ui.FieldText, ui.FieldHint })
 			element.AddComponent<UIRectComponent>();
 
 		UICanvasComponent& canvas = ui.Canvas.AddComponent<UICanvasComponent>();
@@ -60,6 +67,10 @@ namespace
 		UIToggleComponent& toggle = ui.Toggle.AddComponent<UIToggleComponent>();
 		toggle.Group = ui.Canvas.GetUUID();
 		toggle.IsOn = true;
+		UIInputFieldComponent& field = ui.Field.AddComponent<UIInputFieldComponent>();
+		field.TextElement = ui.FieldText.GetUUID();
+		field.Placeholder = ui.FieldHint.GetUUID();
+		field.EventTarget = ui.Outside.GetUUID();
 		return ui;
 	}
 
@@ -186,6 +197,13 @@ TEST_SUITE("GameUI.Serialization")
 		canvas.SortOrder = -3;
 		canvas.PixelSnap = false;
 		canvas.ReceivesInput = false;
+		canvas.RenderMode = UICanvasRenderMode::WorldSpace;
+		canvas.WorldUnitsPerUnit = 0.025f;
+		UIInputFieldComponent& field = ui.Field.GetComponent<UIInputFieldComponent>();
+		field.Text = "Player \xC3\xA9";
+		field.CharacterLimit = 12;
+		field.CaretColor = { 0.0f, 1.0f, 0.0f, 1.0f };
+		field.SelectionColor = { 1.0f, 1.0f, 0.0f, 0.5f };
 
 		const nlohmann::json document = SceneSerializer::Serialize(scene);
 		std::string error;
@@ -209,6 +227,16 @@ TEST_SUITE("GameUI.Serialization")
 		CHECK(handle.GetComponent<UITextComponent>().Overflow == UITextOverflow::Ellipsis);
 		const Entity loadedCanvas = loaded->GetEntityByUUID(ui.Canvas.GetUUID());
 		CHECK(loadedCanvas.GetComponent<UICanvasComponent>().SortOrder == -3);
+		CHECK(loadedCanvas.GetComponent<UICanvasComponent>().RenderMode == UICanvasRenderMode::WorldSpace);
+		CHECK(loadedCanvas.GetComponent<UICanvasComponent>().WorldUnitsPerUnit == 0.025f);
+		const UIInputFieldComponent& loadedField = loaded->GetEntityByUUID(ui.Field.GetUUID()).GetComponent<UIInputFieldComponent>();
+		CHECK(loadedField.Text == "Player \xC3\xA9");
+		CHECK(loadedField.CharacterLimit == 12);
+		CHECK(loadedField.CaretColor == field.CaretColor);
+		CHECK(loadedField.SelectionColor == field.SelectionColor);
+		CHECK(loadedField.TextElement == ui.FieldText.GetUUID());
+		CHECK(loadedField.Placeholder == ui.FieldHint.GetUUID());
+		CHECK(loadedField.EventTarget == ui.Outside.GetUUID());
 		CHECK(loadedCanvas.GetComponent<UILayoutComponent>().ChildAlignment == UIChildAlignment::BottomRight);
 	}
 
@@ -241,7 +269,7 @@ TEST_SUITE("GameUI.Serialization")
 		const Entity duplicate = scene->DuplicateEntity(ui.Canvas);
 		REQUIRE(duplicate.IsValid());
 		const std::vector<Entity> parts = duplicate.GetChildren();
-		REQUIRE(parts.size() == 3);
+		REQUIRE(parts.size() == 4);
 		const Entity slider = parts[0];
 		const std::vector<Entity> sliderParts = slider.GetChildren();
 		REQUIRE(sliderParts.size() == 2);
@@ -252,6 +280,11 @@ TEST_SUITE("GameUI.Serialization")
 		CHECK(parts[1].GetComponent<UISelectableComponent>().NavigateDown == parts[2].GetUUID());
 		CHECK(parts[1].GetComponent<UISelectableComponent>().NavigateUp == slider.GetUUID());
 		CHECK(parts[2].GetComponent<UIToggleComponent>().Group == duplicate.GetUUID());
+		const std::vector<Entity> fieldParts = parts[3].GetChildren();
+		REQUIRE(fieldParts.size() == 2);
+		CHECK(parts[3].GetComponent<UIInputFieldComponent>().TextElement == fieldParts[0].GetUUID());
+		CHECK(parts[3].GetComponent<UIInputFieldComponent>().Placeholder == fieldParts[1].GetUUID());
+		CHECK(parts[3].GetComponent<UIInputFieldComponent>().EventTarget == ui.Outside.GetUUID());
 		Tests::CheckSceneCaches(*scene);
 
 		// Prefab instances do the same.
@@ -262,11 +295,15 @@ TEST_SUITE("GameUI.Serialization")
 		const std::vector<Entity> roots = prefab->Instantiate(target, Entity(), &error);
 		REQUIRE_MESSAGE(roots.size() == 1, error);
 		const std::vector<Entity> instanceParts = roots[0].GetChildren();
-		REQUIRE(instanceParts.size() == 3);
+		REQUIRE(instanceParts.size() == 4);
 		CHECK(roots[0].GetComponent<UICanvasComponent>().FirstSelected == instanceParts[1].GetUUID());
 		CHECK(instanceParts[0].GetComponent<UISliderComponent>().Fill == instanceParts[0].GetChildren().at(0).GetUUID());
 		CHECK(instanceParts[2].GetComponent<UIToggleComponent>().Group == roots[0].GetUUID());
 		CHECK(instanceParts[2].GetComponent<UIToggleComponent>().IsOn);
+		const std::vector<Entity> instanceFieldParts = instanceParts[3].GetChildren();
+		REQUIRE(instanceFieldParts.size() == 2);
+		CHECK(instanceParts[3].GetComponent<UIInputFieldComponent>().TextElement == instanceFieldParts[0].GetUUID());
+		CHECK(instanceParts[3].GetComponent<UIInputFieldComponent>().Placeholder == instanceFieldParts[1].GetUUID());
 
 		// Play mode's copy keeps every entity's ID, so its references are the same.
 		const Ref<Scene> copy = Scene::Copy(scene);
