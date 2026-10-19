@@ -2,7 +2,9 @@
 #include "Animation/SkinnedMeshTestUtils.h"
 #include "Animation/TestSkinningPoses.h"
 #include "Renderer/SceneRendererTestUtils.h"
+#include "Strata/Animation/AnimationComponents.h"
 #include "Strata/Renderer/RenderScene.h"
+#include "Strata/Renderer/RendererComponents.h"
 
 #include <algorithm>
 #include <cmath>

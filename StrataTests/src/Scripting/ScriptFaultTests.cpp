@@ -3,6 +3,7 @@
 #include "Scripting/ScriptTestUtils.h"
 #include "Strata/Core/FileSystem.h"
 #include "Strata/Core/Process.h"
+#include "Strata/Scripting/ScriptingComponents.h"
 #include "TestHelpers.h"
 
 #include <algorithm>

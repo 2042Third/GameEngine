@@ -85,7 +85,8 @@ namespace Strata
 			std::vector<std::vector<size_t>> successors(registered.size());
 			std::vector<std::vector<size_t>> predecessors(registered.size());
 			// Adds the constraints of system `index` against the systems in `names`; false (with the reason) for a bad name.
-			auto addConstraints = [&](size_t index, const std::vector<std::string>& names, bool after)
+			// Soft constraints skip names that are not registered.
+			auto addConstraints = [&](size_t index, const std::vector<std::string>& names, bool after, bool soft)
 			{
 				const std::string& system = registered[index].Name;
 				for (const std::string& name : names)
@@ -93,6 +94,8 @@ namespace Strata
 					auto other = indices.find(name);
 					if (other == indices.end())
 					{
+						if (soft)
+							continue;
 						outError = fmt::format("scene system '{}' is to run {} '{}', which is not registered", system, after ? "after" : "before", name);
 						return false;
 					}
@@ -110,7 +113,9 @@ namespace Strata
 			};
 			for (size_t index = 0; index < registered.size(); index++)
 			{
-				if (!addConstraints(index, registered[index].After, true) || !addConstraints(index, registered[index].Before, false))
+				const SceneSystemDescriptor& descriptor = registered[index];
+				if (!addConstraints(index, descriptor.After, true, false) || !addConstraints(index, descriptor.Before, false, false)
+					|| !addConstraints(index, descriptor.AfterIfPresent, true, true) || !addConstraints(index, descriptor.BeforeIfPresent, false, true))
 					return false;
 			}
 
@@ -229,7 +234,8 @@ namespace Strata
 		}
 
 		data.Registered.erase(it);
-		// Removing a system no other system names cannot invalidate the order of the rest.
+		// Removing a system no other system names in a hard constraint cannot invalidate the order of the rest: soft
+		// constraints naming it are ignored now.
 		std::string error;
 		const bool ordered = ComputeUpdateOrder(data.Registered, data.Ordered, error);
 		ST_CORE_VERIFY(ordered, "The scene systems cannot be ordered after unregistering '{}': {}", name, error);
@@ -239,6 +245,30 @@ namespace Strata
 	const std::vector<SceneSystemDescriptor>& SceneSystemRegistry::GetAll()
 	{
 		return GetData().Ordered;
+	}
+
+	std::vector<std::string> SceneSystemRegistry::GetAbsentSoftConstraints()
+	{
+		const SystemRegistryData& data = GetData();
+		const auto isRegistered = [&data](const std::string& name)
+		{
+			return std::any_of(data.Ordered.begin(), data.Ordered.end(), [&name](const SceneSystemDescriptor& descriptor) { return descriptor.Name == name; });
+		};
+		std::vector<std::string> absent;
+		for (const SceneSystemDescriptor& descriptor : data.Ordered)
+		{
+			for (const std::string& name : descriptor.AfterIfPresent)
+			{
+				if (!isRegistered(name))
+					absent.push_back(fmt::format("{} after {}", descriptor.Name, name));
+			}
+			for (const std::string& name : descriptor.BeforeIfPresent)
+			{
+				if (!isRegistered(name))
+					absent.push_back(fmt::format("{} before {}", descriptor.Name, name));
+			}
+		}
+		return absent;
 	}
 
 }

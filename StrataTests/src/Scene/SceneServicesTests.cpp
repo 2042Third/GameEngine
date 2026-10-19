@@ -8,6 +8,16 @@
 #include "Strata/Scene/SceneServices.h"
 #include "TestHelpers.h"
 
+#if ST_WITH_PHYSICS
+	#include "Strata/Physics/PhysicsComponents.h"
+#endif
+#if ST_WITH_AUDIO
+	#include "Strata/Audio/AudioComponents.h"
+#endif
+#if ST_WITH_ANIMATION
+	#include "Strata/Animation/AnimationComponents.h"
+#endif
+
 #include <glm/glm.hpp>
 
 #include <vector>
@@ -29,8 +39,10 @@ namespace
 		float GetPlaybackPosition(Entity) override { return 0.0f; }
 		bool PlayOneShot(AssetHandle, float, float) override { return true; }
 		bool PlayOneShotAt(AssetHandle, const glm::vec3&, float, float) override { return true; }
+		bool HasSource(Entity) override { return false; }
 	};
 
+#if ST_WITH_PHYSICS
 	Entity CreateBox(Scene& scene, const char* name, const glm::vec3& position, bool dynamic)
 	{
 		Entity entity = scene.CreateEntity(name);
@@ -40,6 +52,7 @@ namespace
 		entity.AddComponent<BoxColliderComponent>().HalfExtents = dynamic ? glm::vec3(0.5f) : glm::vec3(10.0f, 0.5f, 10.0f);
 		return entity;
 	}
+#endif
 
 }
 
@@ -75,27 +88,73 @@ TEST_SUITE("Scene.Services")
 
 	TEST_CASE("The built-in systems offer their services while the scene plays")
 	{
+		// An engine without a module plays scenes without its services.
 		Scene scene;
 		scene.OnRuntimeStart(SceneRuntimeMode::Play);
-		CHECK(scene.GetService<ICollisionEventSource>() != nullptr);
-		CHECK(scene.GetService<IBodyMotionQuery>() != nullptr);
-		CHECK(scene.GetService<IBodyControl>() != nullptr);
-		CHECK(scene.GetService<IPhysicsQueries>() != nullptr);
-		CHECK(scene.GetService<IAudioPlayback>() != nullptr);
+		CHECK((scene.GetService<ICollisionEventSource>() != nullptr) == ST_WITH_PHYSICS);
+		CHECK((scene.GetService<IBodyMotionQuery>() != nullptr) == ST_WITH_PHYSICS);
+		CHECK((scene.GetService<IBodyControl>() != nullptr) == ST_WITH_PHYSICS);
+		CHECK((scene.GetService<IPhysicsQueries>() != nullptr) == ST_WITH_PHYSICS);
+		CHECK((scene.GetService<ICharacterControl>() != nullptr) == ST_WITH_PHYSICS);
+		CHECK((scene.GetService<IAudioPlayback>() != nullptr) == ST_WITH_AUDIO);
+		CHECK((scene.GetService<IAnimatorControl>() != nullptr) == ST_WITH_ANIMATION);
 		scene.OnRuntimeStop();
 		CHECK(scene.GetService<ICollisionEventSource>() == nullptr);
 		CHECK(scene.GetService<IAudioPlayback>() == nullptr);
 
 		// Simulate mode has physics but no audio.
 		scene.OnRuntimeStart(SceneRuntimeMode::Simulate);
-		CHECK(scene.GetService<IPhysicsQueries>() != nullptr);
+		CHECK((scene.GetService<IPhysicsQueries>() != nullptr) == ST_WITH_PHYSICS);
 		CHECK(scene.GetService<IAudioPlayback>() == nullptr);
 		scene.OnRuntimeStop();
 		CHECK(scene.GetService<IPhysicsQueries>() == nullptr);
 	}
 
+#if ST_TESTS_HAVE_EVERY_MODULE
+	TEST_CASE("Modules learn from the services what moves an entity and what it plays, without reading other modules' components")
+	{
+		Scene scene;
+		Entity ground = CreateBox(scene, "Ground", glm::vec3(0.0f, -0.5f, 0.0f), false);
+		Entity box = CreateBox(scene, "Box", glm::vec3(0.0f, 2.0f, 0.0f), true);
+		Entity rider = scene.CreateEntity("Rider");
+		scene.SetParent(rider, box);
+		Entity lift = CreateBox(scene, "Lift", glm::vec3(4.0f, 2.0f, 0.0f), true);
+		lift.GetComponent<RigidBodyComponent>().Type = RigidBodyType::Kinematic;
+		Entity speaker = scene.CreateEntity("Speaker");
+		speaker.AddComponent<AudioSourceComponent>();
+		Entity dancer = scene.CreateEntity("Dancer");
+		dancer.AddComponent<AnimatorComponent>();
+		scene.OnRuntimeStart(SceneRuntimeMode::Play);
+
+		// Physics: the body that moves an entity is its own or its nearest ancestor's; colliders alone are static bodies.
+		IBodyMotionQuery* motion = scene.GetService<IBodyMotionQuery>();
+		REQUIRE(motion != nullptr);
+		CHECK(motion->GetSimulatingBody(box) == box);
+		CHECK(motion->GetSimulatingBody(rider) == box);
+		CHECK_FALSE(motion->GetSimulatingBody(ground));
+		CHECK_FALSE(motion->GetSimulatingBody(speaker));
+		CHECK(motion->IsDynamicBody(box));
+		CHECK_FALSE(motion->IsDynamicBody(lift));
+		CHECK_FALSE(motion->IsDynamicBody(ground));
+		CHECK_FALSE(motion->IsDynamicBody(rider));
+
+		// Audio and animation: what has a source and what has an animator.
+		IAudioPlayback* audio = scene.GetService<IAudioPlayback>();
+		REQUIRE(audio != nullptr);
+		CHECK(audio->HasSource(speaker));
+		CHECK_FALSE(audio->HasSource(box));
+		IAnimatorControl* animation = scene.GetService<IAnimatorControl>();
+		REQUIRE(animation != nullptr);
+		CHECK(animation->HasAnimator(dancer));
+		CHECK_FALSE(animation->HasAnimator(speaker));
+		scene.OnRuntimeStop();
+	}
+#endif
+
 	TEST_CASE("The audio module offers the engine's audio output to the whole process")
 	{
+		CHECK(EngineServices::Get<ICollisionEventSource>() == nullptr); // A scene service, never an engine one
+#if ST_WITH_AUDIO
 		// Registered by the composition root (the test process runs it before the suites).
 		IAudioOutput* output = EngineServices::Get<IAudioOutput>();
 		REQUIRE(output != nullptr);
@@ -103,9 +162,12 @@ TEST_SUITE("Scene.Services")
 		output->SetMasterVolume(0.5f);
 		CHECK(output->GetMasterVolume() == 0.5f);
 		output->SetMasterVolume(previous);
-		CHECK(EngineServices::Get<ICollisionEventSource>() == nullptr); // A scene service, never an engine one
+#else
+		CHECK(EngineServices::Get<IAudioOutput>() == nullptr);
+#endif
 	}
 
+#if ST_WITH_PHYSICS
 	TEST_CASE("Listeners of watched entities hear only the contacts of watched entities")
 	{
 		Scene scene;
@@ -143,4 +205,5 @@ TEST_SUITE("Scene.Services")
 		contacts->UnwatchCollisions(watchedBox.GetUUID());
 		scene.OnRuntimeStop();
 	}
+#endif
 }

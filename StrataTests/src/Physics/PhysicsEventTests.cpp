@@ -2,6 +2,7 @@
 
 #include "Physics/PhysicsTestUtils.h"
 #include "Strata/Core/Hash.h"
+#include "Strata/Physics/PhysicsComponents.h"
 
 #include <unordered_map>
 

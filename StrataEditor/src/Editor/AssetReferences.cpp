@@ -8,6 +8,7 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scene/Entity.h>
 #include <Strata/Scene/Scene.h>
+#include <Strata/Scripting/ScriptingComponents.h>
 
 #include <algorithm>
 #include <unordered_map>

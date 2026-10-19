@@ -11,6 +11,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Built through a compiler cache (STRATA_COMPILER_CACHE: ccache on Linux and macOS, sccache on Windows, where the
+  # Visual Studio generators ignore compiler launchers and the windows-ninja preset builds in a developer environment).
+  # Each job keeps its cache in the GitHub Actions cache, keyed per job and commit and restored from the newest of its
+  # branch or main; each ref keeps one entry per job, so that main's set and the active branches' stay below GitHub's
+  # 10 GB (beyond it GitHub evicts the least recently used entries, main's first, and branches then build cold).
   build-and-test:
     name: ${{ matrix.name }}
     strategy:
@@ -19,15 +24,50 @@ jobs:
         include:
           - name: Windows
             os: windows-2022
-            preset: windows-vs2022
+            preset: windows-ninja
+            config: release
+            cache: sccache
+            key: windows-release
+          # Debug builds keep the asserts and checks Release drops; no other job builds them.
+          - name: Windows (Debug)
+            os: windows-2022
+            preset: windows-ninja
+            config: debug
+            cache: sccache
+            key: windows-debug
           - name: Linux
             os: ubuntu-24.04
             preset: linux
+            config: release
+            cache: ccache
+            key: linux-release
           - name: macOS
             os: macos-14
             preset: macos
+            config: release
+            cache: ccache
+            key: macos-release
+          # A game without the audio and physics modules (Docs/DeveloperGuide.md, "Optional modules"): no editor, and no
+          # package tests (they build games of every module).
+          - name: Linux (no Audio, no Physics)
+            os: ubuntu-24.04
+            preset: linux
+            config: release
+            cache: ccache
+            # Not prefixed by the Linux job's key: restoring by prefix must not cross between the two configurations.
+            key: linux-without-modules-release
+            options: -DSTRATA_WITH_AUDIO=OFF -DSTRATA_WITH_PHYSICS=OFF -DSTRATA_BUILD_EDITOR=OFF
+            exclude: package
     runs-on: ${{ matrix.os }}
     timeout-minutes: 120
+    # Deleting this ref's superseded cache entries needs actions: write; checking out needs contents: read.
+    permissions:
+      contents: read
+      actions: write
+    # A full set measured 33-71 MiB with ccache and 470-582 MiB with sccache: one run's five entries stay under 2.75 GB.
+    env:
+      CCACHE_MAXSIZE: 250M
+      SCCACHE_CACHE_SIZE: 1G
 
     steps:
       - name: Check out
@@ -39,34 +79,104 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build gcc-14 g++-14 xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols \
+          sudo apt-get install -y ninja-build ccache gcc-14 g++-14 xorg-dev libwayland-dev libxkbcommon-dev wayland-protocols \
             libgtk-3-dev libvulkan-dev pkg-config
           echo "CC=gcc-14" >> "$GITHUB_ENV"
           echo "CXX=g++-14" >> "$GITHUB_ENV"
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
-        run: brew install ninja
+        run: brew install ninja ccache
+
+      - name: Install sccache
+        if: runner.os == 'Windows'
+        uses: mozilla-actions/sccache-action@v0.0.11
+
+      # The windows-ninja preset compiles with cl from PATH, so later steps run in what vcvars64.bat sets up (the variables
+      # it adds or changes; GitHub's own are left alone).
+      - name: Enter the Visual Studio developer environment
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $installation = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installation) { throw 'No Visual Studio with the C++ tools was found' }
+          $variables = cmd /c "`"$installation\VC\Auxiliary\Build\vcvars64.bat`" > nul && set"
+          if ($LASTEXITCODE -ne 0) { throw 'vcvars64.bat failed' }
+          foreach ($line in $variables) {
+            if ($line -notmatch '^([^=]+)=(.*)$') { continue }
+            $name = $Matches[1]; $value = $Matches[2]
+            if ($name -match '^(GITHUB_|RUNNER_|ACTIONS_)' -or $name -eq 'NODE_OPTIONS') { continue }
+            if ([Environment]::GetEnvironmentVariable($name) -ne $value) {
+              "$name=$value" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            }
+          }
+
+      # Outside the checkout, so that nothing that reads the source tree comes across it.
+      - name: Place the compiler cache
+        shell: bash
+        run: |
+          echo "CCACHE_DIR=${{ runner.temp }}/compiler-cache" >> "$GITHUB_ENV"
+          echo "SCCACHE_DIR=${{ runner.temp }}/compiler-cache" >> "$GITHUB_ENV"
+
+      - name: Restore the compiler cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ${{ runner.temp }}/compiler-cache
+          key: ${{ matrix.cache }}-${{ matrix.key }}-${{ github.sha }}
+          restore-keys: ${{ matrix.cache }}-${{ matrix.key }}-
 
       - name: Configure
         shell: bash
         run: |
           set -o pipefail
-          cmake --preset ${{ matrix.preset }} 2>&1 | tee configure.log
+          cmake --preset ${{ matrix.preset }} -DSTRATA_COMPILER_CACHE=ON ${{ matrix.options }} 2>&1 | tee configure.log
 
-      - name: Build (Release)
+      - name: Build
         shell: bash
         run: |
           set -o pipefail
-          # Ninja (Linux, macOS) keeps building after a failure, so one run reports every compile error.
-          keepGoing=()
-          if [ "$RUNNER_OS" != "Windows" ]; then keepGoing=(-- -k 0); fi
-          cmake --build --preset ${{ matrix.preset }}-release --parallel "${keepGoing[@]}" 2>&1 | tee build.log
+          # Ninja keeps building after a failure, so one run reports every compile error.
+          cmake --build --preset ${{ matrix.preset }}-${{ matrix.config }} --parallel -- -k 0 2>&1 | tee build.log
+
+      - name: Compiler cache statistics
+        if: ${{ !cancelled() }}
+        shell: bash
+        run: |
+          if [ "${{ matrix.cache }}" = "sccache" ]; then sccache --show-stats; else ccache --show-stats; fi
+
+      # Saved whatever the tests do, so a failing test does not cost the next run its cache.
+      - name: Save the compiler cache
+        if: ${{ !cancelled() }}
+        uses: actions/cache/save@v6
+        with:
+          path: ${{ runner.temp }}/compiler-cache
+          key: ${{ matrix.cache }}-${{ matrix.key }}-${{ github.sha }}
+
+      # Each run saves a new entry. GitHub evicts by last access, and a superseded entry of this ref was restored more
+      # recently than main's, so it would outlive main's set: this ref's older entries of this job go. The key must match
+      # exactly (a commit hash after the prefix), so that no other job's entries are taken for this one's.
+      - name: Remove superseded compiler caches
+        if: ${{ !cancelled() }}
+        continue-on-error: true # A pull request from a fork has a read-only token: a failed cleanup must not fail the build.
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prefix="${{ matrix.cache }}-${{ matrix.key }}-"
+          current="${prefix}${{ github.sha }}"
+          gh cache list --repo "${{ github.repository }}" --ref "${{ github.ref }}" --key "$prefix" --limit 100 --json id,key \
+            --jq ".[] | select((.key | test(\"^${prefix}[0-9a-f]{40}\$\")) and .key != \"${current}\") | .id" |
+            while read -r id; do
+              echo "Deleting the superseded cache entry $id"
+              gh cache delete "$id" --repo "${{ github.repository }}"
+            done
 
       # Hosted runners have no GPU: suites that need one carry the "gpu" label. Perf budgets (label "perf") hold for the
       # reference machine (StrataTests/Perf/Budgets.json); shared runners of other speeds would fail or pass them at
-      # random, so the perf gate runs on the reference machine (Docs/DeveloperGuide.md, "Perf tests").
-      - name: Test (Release)
+      # random, so the perf gate runs on the reference machine (Docs/DeveloperGuide.md, "Perf tests"). The Core suites run
+      # in shards (StrataTests/CoreShards.json), four at a time.
+      - name: Test
         shell: bash
         env:
           STRATA_TEST_TRACE: "1" # Tests print each test case as it starts, so a crash names its test
@@ -78,7 +188,9 @@ jobs:
             ulimit -v 10000000 # KiB of address space per process
             ulimit -f 2097152  # KiB per file
           fi
-          ctest --preset ${{ matrix.preset }}-release -LE "gpu|perf" --output-on-failure --timeout 900 2>&1 | tee test.log
+          exclude="gpu|perf"
+          if [ -n "${{ matrix.exclude }}" ]; then exclude="$exclude|${{ matrix.exclude }}"; fi
+          ctest --preset ${{ matrix.preset }}-${{ matrix.config }} -LE "$exclude" -j 4 --output-on-failure --timeout 900 2>&1 | tee test.log
 
       # Job logs need repository admin rights to download; annotations are public, so failures are readable from the
       # checks API and the pull request UI.
@@ -90,7 +202,9 @@ jobs:
           "$python" .github/scripts/annotate_failures.py configure.log build.log test.log
 
   # Releases ship Dist builds (asserts compiled out, ST_DIST code paths), which only the release workflow built: a change
-  # that compiled with asserts on alone broke Dist in wave 3 unnoticed. Every target is built in Dist on Windows here.
+  # that compiled with asserts on alone broke Dist in wave 3 unnoticed. Every target is built in Dist on Windows here,
+  # with the Visual Studio generator people build with (no compiler cache: it ignores launchers). Its package tests keep
+  # the Visual Studio generator's script builds tested: the cached Windows jobs build with Ninja.
   windows-dist:
     name: Windows (Dist build)
     runs-on: windows-2022
@@ -114,9 +228,17 @@ jobs:
           set -o pipefail
           cmake --build --preset windows-vs2022-dist --parallel 2>&1 | tee build.log
 
+      - name: Test packages (Dist)
+        shell: bash
+        env:
+          STRATA_TEST_TRACE: "1"
+        run: |
+          set -o pipefail
+          ctest --preset windows-vs2022-dist -L package --output-on-failure --timeout 1800 2>&1 | tee test.log
+
       - name: Annotate failures
         if: failure() || cancelled()
         shell: bash
         run: |
           python=$(command -v python3 || command -v python)
-          "$python" .github/scripts/annotate_failures.py configure.log build.log
+          "$python" .github/scripts/annotate_failures.py configure.log build.log test.log

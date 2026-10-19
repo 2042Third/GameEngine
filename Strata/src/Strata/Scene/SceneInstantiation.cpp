@@ -229,15 +229,11 @@ namespace Strata
 					continue;
 				const entt::entity handle = instantiation.m_Handles[reference->Entity];
 				const UUID target = instantiation.m_IDs[reference->Target];
-				if (reference->Component)
-				{
-					void* component = reference->Component->Get(m_Registry, handle);
-					reference->Component->Properties[reference->Property].Setter(component, target);
-				}
+				void* component = reference->Component->Get(m_Registry, handle);
+				if (reference->Extra)
+					reference->Component->ExtraReferences.Set(component, reference->Property, reference->Subslot, target);
 				else
-				{
-					m_Registry.get<ScriptComponent>(handle).Scripts[reference->Property].Fields[reference->Field].Value = target;
-				}
+					reference->Component->Properties[reference->Property].Setter(component, target);
 			}
 		}
 

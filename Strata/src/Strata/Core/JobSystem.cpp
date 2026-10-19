@@ -332,6 +332,15 @@ namespace Strata
 			return job;
 		}
 
+		// Empties a std::function that was moved into a job, before the job can run. Moving one need not leave it empty:
+		// libc++ copies a callable that fits its small buffer. What the job captured must be released where the job runs
+		// (a job may hold the last reference to a scene it destroys off the frame, Scene::ReleaseInBackground), not by a copy
+		// that the submitting thread lets go of after the job ran.
+		void ReleaseMovedFunction(std::function<void()>& function)
+		{
+			function = nullptr;
+		}
+
 		// Whether the calling thread does background work: on a background thread, or running a background job it waited for.
 		bool IsInBackgroundWork()
 		{
@@ -456,6 +465,7 @@ namespace Strata
 
 		const bool background = priority == JobPriority::Background || IsInBackgroundWork();
 		JobRef state = MakeJob(std::move(job), background);
+		ReleaseMovedFunction(job);
 		if (background)
 			data->Background.Push(state, priority == JobPriority::Background ? JobPriority::Normal : priority);
 		else
@@ -470,6 +480,7 @@ namespace Strata
 			return RunInline(job);
 
 		JobRef state = MakeJob(std::move(job));
+		ReleaseMovedFunction(job);
 		JobPool& pool = data->HasIOPool ? data->IO : data->Workers;
 		pool.Push(state, priority);
 		return JobHandle(std::move(state));

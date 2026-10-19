@@ -16,6 +16,8 @@
 #include "TestHelpers.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -47,12 +49,15 @@ namespace
 		return names;
 	}
 
+	// Runs a helper mode of this executable; its output with line ends as '\n' (Windows' console writes "\r\n").
 	Process::RunResult RunHelper(std::vector<std::string> arguments)
 	{
 		ProcessSpecification specification;
 		specification.Executable = GetTestExecutablePath();
 		specification.Arguments = std::move(arguments);
-		return Process::Run(specification, std::chrono::milliseconds(60000));
+		Process::RunResult result = Process::Run(specification, std::chrono::milliseconds(60000));
+		std::erase(result.Output, '\r');
+		return result;
 	}
 
 }
@@ -65,22 +70,27 @@ TEST_SUITE("Engine.Modules")
 		CHECK(ComponentRegistry::IsFrozen());
 		CHECK_FALSE(ComponentRegistry::IsRegistrationOpen());
 
-		// Every module registered: components (scene), loaders (scene, renderer, audio), importers (pipeline), systems.
+		// Every module of the build registered: components (scene), loaders (scene, renderer, audio, animation), importers
+		// (pipeline), systems.
 		CHECK(ComponentRegistry::Find("Transform") != nullptr);
 		CHECK(ComponentRegistry::Find("Script") != nullptr);
-		for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Texture, AssetType::Mesh, AssetType::Material, AssetType::Font, AssetType::AudioClip,
-			AssetType::Skeleton, AssetType::AnimationClip, AssetType::AnimationController })
+		CHECK((ComponentRegistry::Find("RigidBody") != nullptr) == ST_WITH_PHYSICS);
+		CHECK((ComponentRegistry::Find("AudioSource") != nullptr) == ST_WITH_AUDIO);
+		CHECK((ComponentRegistry::Find("Animator") != nullptr) == ST_WITH_ANIMATION);
+		for (AssetType type : { AssetType::Scene, AssetType::Prefab, AssetType::Model, AssetType::Texture, AssetType::Mesh, AssetType::Material, AssetType::Font })
 		{
 			CAPTURE(AssetTypeToString(type));
 			CHECK(AssetLoaderRegistry::Find(type) != nullptr);
 		}
+		CHECK((AssetLoaderRegistry::Find(AssetType::AudioClip) != nullptr) == ST_WITH_AUDIO);
+		CHECK((AssetLoaderRegistry::Find(AssetType::AnimationClip) != nullptr) == ST_WITH_ANIMATION);
 		CHECK(AssetImporterRegistry::FindByExtension(".gltf") != nullptr);
 		const std::vector<std::string> systems = GetSystemNames();
-		for (const char* name : { "Scripting", "Physics", "Audio", "Animation" })
-		{
-			CAPTURE(name);
-			CHECK(std::find(systems.begin(), systems.end(), name) != systems.end());
-		}
+		const auto hasSystem = [&systems](const char* name) { return std::find(systems.begin(), systems.end(), name) != systems.end(); };
+		CHECK(hasSystem("Scripting"));
+		CHECK(hasSystem("Physics") == ST_WITH_PHYSICS);
+		CHECK(hasSystem("Audio") == ST_WITH_AUDIO);
+		CHECK(hasSystem("Animation") == ST_WITH_ANIMATION);
 
 		// A second call is a no-op; registrations it carries are reported, not run.
 		const size_t components = ComponentRegistry::GetAll().size();
@@ -127,6 +137,10 @@ TEST_SUITE("Engine.Modules")
 		CHECK(result.ExitCode == 0);
 		CHECK(result.Output.find("registered: TestVehicle") != std::string::npos);
 		CHECK(result.Output.find("reloaded: Speed 12.50, Label Rover One") != std::string::npos);
+		// Its extra data's references are remapped in copies, compared with prefabs and scanned (ComponentInfo::ExtraReferences).
+		CHECK(result.Output.find("extra references: remapped, compared, scanned") != std::string::npos);
+		// The renderer draws its gizmo with the colliders (ComponentInfo::Gizmo).
+		CHECK(result.Output.find("gizmos: a box per vehicle") != std::string::npos);
 		CHECK(result.Output.find("late registration refused: Component 'Late' is not registered: the component registry is frozen") != std::string::npos);
 
 		// This process lacks the game's component: its scene still loads, keeps the component and saves it unchanged.
@@ -141,14 +155,21 @@ TEST_SUITE("Engine.Modules")
 		REQUIRE(vehicle.is_object());
 		CHECK(vehicle["Speed"] == 12.5);
 		CHECK(vehicle["Label"] == "Rover One");
+		CHECK(vehicle["Passengers"].is_array());
 		const nlohmann::json saved = SceneSerializer::Serialize(*scene)["Scene"]["Entities"];
-		REQUIRE(saved.size() == 1);
-		CHECK(saved[0]["Components"]["TestVehicle"] == vehicle);
+		REQUIRE(saved.size() == 2); // The rover and its driver
+		nlohmann::json savedVehicle;
+		for (const nlohmann::json& entity : saved)
+		{
+			if (entity["Components"].contains("TestVehicle"))
+				savedVehicle = entity["Components"]["TestVehicle"];
+		}
+		CHECK(savedVehicle == vehicle);
 	}
 
 	TEST_CASE("Using a registry before the modules are registered fails a verify naming Engine::RegisterBuiltinModules")
 	{
-		for (const char* registry : { "components", "loaders", "importers", "builtin-assets", "systems" })
+		for (const char* registry : { "components", "loaders", "importers", "builtin-assets", "systems", "mesh-geometry" })
 		{
 			const Process::RunResult result = RunHelper({ "--strata-test-helper=unregistered-registry", registry });
 			INFO("Registry ", registry, ", output: ", result.Output);
@@ -171,10 +192,88 @@ TEST_SUITE("Engine.Modules")
 		INFO("Output: ", result.Output);
 		REQUIRE(result.Started);
 		CHECK_FALSE(result.TimedOut);
-		CHECK(result.Output.find("loaders: 11, systems: Scripting Animation Physics Audio") != std::string::npos);
+		// The loaders and systems of the modules the build has: 11 and four in a full build.
+		const int loaders = 7 + (ST_WITH_AUDIO ? 1 : 0) + (ST_WITH_ANIMATION ? 3 : 0);
+		std::string systems = " Scripting";
+		systems += ST_WITH_ANIMATION ? " Animation" : "";
+		systems += ST_WITH_PHYSICS ? " Physics" : "";
+		systems += ST_WITH_AUDIO ? " Audio" : "";
+		CHECK(result.Output.find("loaders: " + std::to_string(loaders) + ", systems:" + systems + "\n") != std::string::npos);
 		CHECK(result.ExitCode == c_VerifyExitCode);
 		CHECK(result.Output.find("verify failed: The asset importer registry is used before Engine::RegisterBuiltinModules() registered the asset pipeline") != std::string::npos);
 	}
+
+	TEST_CASE("The composition root registers the engine's modules in its table's order")
+	{
+		std::vector<std::string> expected = { "Scene", "Renderer" };
+#if ST_WITH_PHYSICS
+		expected.push_back("Physics");
+#endif
+#if ST_WITH_AUDIO
+		expected.push_back("Audio");
+#endif
+#if ST_WITH_ANIMATION
+		expected.push_back("Animation");
+#endif
+		expected.push_back("Scripting");
+		CHECK(Engine::GetBuiltinModuleNames() == expected);
+		CHECK(Engine::GetRegisteredModules() == expected);
+	}
+
+#if ST_TESTS_HAVE_EVERY_MODULE
+	TEST_CASE("Without the physics module the others register, its components stay unknown and scripts are told")
+	{
+		// In a child process: registration happens once per process.
+		const std::filesystem::path scene = FileSystem::FromUTF8(STRATA_FEATURE_TEST_DIR) / "Assets" / "Scenes" / "Feature.stscene";
+		const Process::RunResult result = RunHelper({ "--strata-test-helper=register-without", "Physics", FileSystem::ToUTF8(scene) });
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
+		CHECK(result.Output.find("modules: Scene Renderer Audio Animation Scripting\n") != std::string::npos);
+		// The others' soft constraints order them as in a full engine.
+		CHECK(result.Output.find("systems: Scripting Animation Audio\n") != std::string::npos);
+		// The feature scene's physics components stay unknown components and save back unchanged.
+		const size_t unknown = result.Output.find("unknown components: ");
+		REQUIRE(unknown != std::string::npos);
+		const std::string names = result.Output.substr(unknown, result.Output.find('\n', unknown) - unknown);
+		for (const char* name : { "RigidBody", "BoxCollider", "SphereCollider", "CapsuleCollider", "MeshCollider", "CharacterController" })
+		{
+			CAPTURE(name);
+			CHECK(names.find(name) != std::string::npos);
+		}
+		CHECK(names.find("Transform") == std::string::npos);
+		CHECK(names.find("AudioSource") == std::string::npos);
+		const size_t saved = result.Output.find("saved unchanged: ");
+		REQUIRE(saved != std::string::npos);
+		size_t unchanged = 0;
+		size_t total = 0;
+		REQUIRE(std::sscanf(result.Output.c_str() + saved, "saved unchanged: %zu of %zu", &unchanged, &total) == 2);
+		CHECK(total >= 6);
+		CHECK(unchanged == total);
+		// The API test module's physics calls fail and report that the engine has no physics module; nothing crashes.
+		CHECK(result.Output.find("scripts ran: yes, failed check: (none), faulted: no") != std::string::npos);
+		CHECK(result.Output.find("reported: 0") == std::string::npos);
+		CHECK(result.Output.find("reported: ") != std::string::npos);
+	}
+#endif
+
+#if ST_TESTS_HAVE_EVERY_MODULE
+	TEST_CASE("Excluding the scene, the renderer or a module that does not exist is refused")
+	{
+		const std::filesystem::path scene = FileSystem::FromUTF8(STRATA_FEATURE_TEST_DIR) / "Assets" / "Scenes" / "FeatureSub.stscene";
+		const Process::RunResult result = RunHelper({ "--strata-test-helper=register-without", "Scene,Renderer,Teleportation,Audio", FileSystem::ToUTF8(scene) });
+		INFO("Output: ", result.Output);
+		REQUIRE(result.Started);
+		CHECK_FALSE(result.TimedOut);
+		CHECK(result.ExitCode == 0);
+		CHECK(result.Output.find("the Scene module cannot be excluded (every engine has it); it is registered") != std::string::npos);
+		CHECK(result.Output.find("the Renderer module cannot be excluded (every engine has it); it is registered") != std::string::npos);
+		CHECK(result.Output.find("'Teleportation' is no engine module of this build and cannot be excluded") != std::string::npos);
+		CHECK(result.Output.find("modules: Scene Renderer Physics Animation Scripting\n") != std::string::npos);
+		CHECK(result.Output.find("systems: Scripting Animation Physics\n") != std::string::npos);
+	}
+#endif
 
 	TEST_CASE("Built-in asset factories are accepted only for built-in handles")
 	{

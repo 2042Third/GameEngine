@@ -4,7 +4,7 @@
 #include "Strata/Reflection/Property.h"
 
 #include <glm/glm.hpp>
-#include <nlohmann/json.hpp>
+#include <nlohmann/json_fwd.hpp>
 
 #include <span>
 #include <string>

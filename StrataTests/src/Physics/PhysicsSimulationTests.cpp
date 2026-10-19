@@ -2,6 +2,7 @@
 
 #include "Physics/PhysicsTestUtils.h"
 #include "Strata/Core/Log.h"
+#include "Strata/Physics/PhysicsComponents.h"
 #include "TestHelpers.h"
 
 #include <glm/gtc/matrix_transform.hpp>

@@ -6,6 +6,7 @@
 #include "EditorLayer.h"
 #include "UI/ItemProbe.h"
 
+#include <Strata/Physics/PhysicsComponents.h>
 #include <Strata/Physics/PhysicsSystem.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>

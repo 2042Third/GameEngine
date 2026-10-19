@@ -16,6 +16,7 @@
 #include <Strata/Scene/Components.h>
 #include <Strata/Scripting/ScriptModule.h>
 #include <Strata/Scripting/ScriptSystem.h>
+#include <Strata/Scripting/ScriptingComponents.h>
 
 #include <algorithm>
 #include <chrono>

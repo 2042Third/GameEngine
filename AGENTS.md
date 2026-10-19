@@ -34,7 +34,7 @@ the work: checklist item 5.
 
 | Path | Contents |
 | --- | --- |
-| `Strata/` | Engine static library. `src/Strata/<Module>/` holds the engine modules, `src/Platform/<OS or backend>/` the platform implementations, `shaders/` the GLSL sources, `vendor/` the pinned third-party submodules. |
+| `Strata/` | The engine: a static library per layer. `src/Strata/<Module>/` holds the engine modules, `src/Platform/<OS or backend>/` the platform implementations, `shaders/` the GLSL sources, `vendor/` the pinned third-party submodules. |
 | `StrataEditor/` | The editor: `src/Editor/` its core without UI (`StrataEditorCore`), `src/UI/`, `src/Panels/` and `EditorLayer` its ImGui interface (`StrataEditorUI`) ([details](Docs/DeveloperGuide.md#repository-layout)). |
 | `StrataRuntime/` | Runtime executable that plays exported games (`GameRuntime`): the `.stgame` manifest next to it, or `--game <file>` ([options](Docs/DeveloperGuide.md#repository-layout)). |
 | `StrataScriptCore/` | Script ABI (C header) and the header-only C++ SDK game scripts are written against. Script modules never link the engine. |
@@ -64,6 +64,11 @@ git submodule update --init --recursive --depth 1
 Configurations: `Debug`, `Release` (optimized, asserts on), `Dist` (shipping; asserts compiled out).
 Binaries land in `build/<preset>/bin/<Config>/`.
 
+Options: `STRATA_PRECOMPILED_HEADERS` (default ON), `STRATA_COMPILER_CACHE` (ccache or sccache, as CI builds; precompiled
+headers then default to off; `windows-ninja` preset on Windows) and `STRATA_WITH_PHYSICS`, `_AUDIO`, `_ANIMATION` (games
+without a module; only with `STRATA_BUILD_EDITOR=OFF`). `#if ST_WITH_<MODULE>` appears only in the composition root, the
+asset pipeline, the runtime and tests ([Optional modules](Docs/DeveloperGuide.md#optional-modules)).
+
 Sources are collected with `file(GLOB_RECURSE ... CONFIGURE_DEPENDS)`. **After adding or removing source
 files, re-run the configure step** (`cmake --preset <preset>`): the Visual Studio generator re-globs during
 the build but compiles that build with the stale project, so new files would only appear in the next build.
@@ -75,7 +80,8 @@ Requirements (CMake 3.25+, a C++20 compiler, a Vulkan 1.2+ driver, packages on L
 `cmake --preset windows -B build/agent-<name>`, because two builds in one directory corrupt each other.
 
 **CI before main:** CI (`.github/workflows/ci.yml`: Windows with MSVC, Linux with GCC 14, macOS with Apple Clang 15,
-each building and testing Release, and a Dist build of every target on Windows) runs on pushes to `main`, on pull
+each building and testing Release through a compiler cache, Windows also Debug, and a Dist build of every target on
+Windows with the Visual Studio generator and its package tests) runs on pushes to `main`, on pull
 requests and on pushes to branches named `ci/<name>`. Older compilers and other standard libraries reject code that the
 local ones accept (Apple Clang 15's libc++ has no floating-point `std::from_chars`; `size_t` and `uint64_t` are
 different types on macOS; GCC 14 warns where newer GCCs do not), so push a branch that lands many changes (a wave's
@@ -94,7 +100,7 @@ in the layout `StrataEditor.Install` checks. A release, cut at the end of every 
 ## Testing
 
 ```sh
-ctest --preset windows-debug            # all tests (Windows, Debug)
+ctest --preset windows-debug -j 8       # all tests (Windows, Debug), side by side
 ctest --preset linux-debug -LE gpu      # skip tests that need a GPU
 ctest --preset windows-release -L perf  # perf tests against their budgets (Release and Dist only)
 build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset directly (doctest filters)
@@ -103,7 +109,9 @@ build/windows/bin/Debug/StrataTests.exe --test-suite=Core*   # run a subset dire
 Every runner, suite and helper: [Testing](Docs/DeveloperGuide.md#testing).
 
 - Unit tests live in `StrataTests/src/<Module>/*Tests.cpp` (doctest), in suites named after the module
-  (`TEST_SUITE("Scene.Serialization")`); the editor's UI is tested headless with `ImGuiHarness`. Deferred commands run
+  (`TEST_SUITE("Scene.Serialization")`), which run in the CTest shards of `StrataTests/CoreShards.json`
+  (`StrataTests.Core.<Shard>`; a new suite prefix gets a shard, `Testing.Shards`); byte and random corruption sweeps go in
+  `*.Sweep` suites (a sample in the shard, all of it in `StrataTests.Fuzz`, Release and Dist); the editor's UI is tested headless with `ImGuiHarness`. Deferred commands run
   with `Tests::RunCommandToCompletion`, UI tests click in a tab only once it shows, and a test's own component is
   registered in a child process (`--strata-test-helper=custom-component`).
 - `GPU*` suites (label `gpu`) share one device through `Tests::GPUContext` (never create devices in tests) and end with
@@ -187,8 +195,11 @@ Conventions:
   `Platform::EnsurePrivateDirectory`, `CreatePrivateDirectory`, `GetUserRuntimeDirectory`, `WritePrivateFile` and
   `ReadTrustedFile`, which follow one contract (`Strata/Core/Platform.h`); never create them with default permissions.
   Windows security descriptors and their checks live in `Platform/Windows/WindowsFileSecurity`.
-- Headers must be self-contained (compile without the precompiled header): include what you use,
-  e.g. `Strata/Core/Assert.h` for `ST_CORE_ASSERT`.
+- Headers must be self-contained and sources include what they use (the lint and `STRATA_PRECOMPILED_HEADERS=OFF`
+  compile without precompiled headers), e.g. `Strata/Core/Assert.h` for `ST_CORE_ASSERT`. The precompiled headers
+  (`stpch.h`, `EditorPch.h`, `TestsPch.h`) hold only the standard library, vendor headers and the Core basics; engine
+  headers that only declare JSON parameters and returns include `<nlohmann/json_fwd.hpp>`
+  ([Precompiled headers](Docs/DeveloperGuide.md#precompiled-headers)).
 - Tag components (empty structs) carry no data: use `HasComponent`/`AddComponent`, never `GetComponent`.
 - Prefer clear, verbose code over clever abstractions; comment *why*, not *what*.
 - Profile hot paths with `ST_PROFILE_FUNCTION()` / `ST_PROFILE_SCOPE("Name")` (Tracy). Work that belongs to a stage of
@@ -236,16 +247,26 @@ The threading model, frame loop and pipelines these rules protect are described 
   layer and on stale lines of `LayeringAllowlist.txt`. Never add a line or widen `MayInclude` to make a sideways or
   upward include pass: invert the dependency (an interface in the lower layer, a registry, a scene service,
   `Scene/SceneServices.h`, or an engine service, `Core/EngineServices.h`); only a proven downward dependency widens
-  `MayInclude`, with the reason in the layer's `Notes`. Removing an exception lowers `MaxAllowlistEntries`.
+  `MayInclude`, with the reason in the layer's `Notes`. Removing an exception lowers `MaxAllowlistEntries`. The table is
+  the build: each layer is a library (`Strata_<Layer>`) linking its `MayInclude`; a new layer is a table entry, its vendor
+  libraries a `strata_layer_link` row, and games link no `Tooling` layer (`StrataRuntime.NoTooling`).
 - **Module registration:** modules extend the engine through registries (components, asset loaders and importers, scene
-  systems...), never through lower layers calling functions of higher ones. Each module has one registration function
+  systems...), never through lower layers calling functions of higher ones. A component lives in its module
+  (`<Module>/<Module>Components.h`, registered by its `Register<Module>Module`); `Scene/Components.h` only holds Scene's and
+  the types sibling layers must read. Each module has one registration function
   (`Register<Module>Module` in `<Module>/<Module>Registration.cpp`), called only by the composition root,
   `Engine::RegisterBuiltinModules`, in dependency order, before anything reads a registry. Shipped games link the root,
   so tooling is handed in (`ModuleRegistrationOptions::AssetPipeline`), and games and tests pass their components in
   `ModuleRegistrationOptions::Extra` (the registry freezes when the root returns). Scene systems declare their order
-  (`SceneSystemDescriptor::After`/`Before`) and are made with `MakeSceneSystemDescriptor<T>` (overrides public). Scenes
+  (`SceneSystemDescriptor::After`/`Before` for a system of their module or one it cannot work without,
+  `AfterIfPresent`/`BeforeIfPresent` toward other modules) and are made with `MakeSceneSystemDescriptor<T>` (overrides
+  public). Scenes
   keep the components of modules a build lacks (`UnknownComponentsComponent`), also through play mode, prefab snapshots,
   duplication and undo.
+- **Engine modules:** a service a program runs for its whole life (device, audio, UI, project) is an `EngineModule`
+  (`Core/EngineModule.h`) in its module's folder, listed by the programs that run it (`ApplicationSpecification::Modules`);
+  `Application` never calls module code, and other code finds a module with `GetModules().Find<T>()` (null when absent)
+  ([details](Docs/DeveloperGuide.md#architecture-rules)).
 - **Scene caches and the transform contract:** `Scene` caches world transforms, the hierarchy, activity and the name and
   tag indexes, recomputing only what changed. So **code that writes `TransformComponent` fields directly must signal the
   change**: `Entity::MarkModified<TransformComponent>()` or `registry.patch` (`ComponentAccess`,
@@ -259,7 +280,7 @@ The threading model, frame loop and pipelines these rules protect are described 
   `Scene::GetSiblingIndex`, remove many entities with one `DestroyEntities` call, and stay within `Scene::c_MaxEntities`
   (1,048,575) live entities.
 
-The threading, NVRHI, layer, registration and transform rules in full:
+The threading, NVRHI, layer, registration, engine module and transform rules in full:
 [Architecture rules](Docs/DeveloperGuide.md#architecture-rules).
 
 ## Asset pipeline

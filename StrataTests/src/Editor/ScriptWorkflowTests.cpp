@@ -17,6 +17,7 @@
 #include <Strata/Core/Timestep.h>
 #include <Strata/Reflection/PropertyJson.h>
 #include <Strata/Scene/Components.h>
+#include <Strata/Scripting/ScriptingComponents.h>
 
 #include <chrono>
 #include <filesystem>

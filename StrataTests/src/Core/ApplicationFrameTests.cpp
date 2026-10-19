@@ -6,6 +6,7 @@
 #include "Strata/Core/Profiling.h"
 
 #include <chrono>
+#include <string>
 #include <vector>
 
 using namespace Strata;
@@ -53,6 +54,42 @@ namespace
 		}
 	};
 
+	// Posts work for the main thread in every update, as a layer does whose answer comes a frame later (a screenshot
+	// without a graphics device), and journals when it runs and when the layer goes.
+	class PostingLayer : public Layer
+	{
+	public:
+		explicit PostingLayer(std::vector<std::string>& journal)
+			: Layer("Posting"), m_Journal(journal)
+		{
+		}
+
+		void OnUpdate(Timestep) override
+		{
+			// The journal, not the layer: without the drain after the last frame this would run after the layer is gone.
+			Application::Get().SubmitToMainThread([&journal = m_Journal]()
+			{
+				journal.push_back("Queued");
+				Application::Get().SetExitCode(3);
+			});
+		}
+
+		void OnDetach() override { m_Journal.push_back("Detach"); }
+	private:
+		std::vector<std::string>& m_Journal;
+	};
+
+	class PostingApplication : public Application
+	{
+	public:
+		PostingApplication(const ApplicationSpecification& specification, std::vector<std::string>& journal)
+			: Application(specification)
+		{
+			if (IsRunning())
+				PushLayer(new PostingLayer(journal));
+		}
+	};
+
 }
 
 TEST_SUITE("Core.Application")
@@ -62,8 +99,6 @@ TEST_SUITE("Core.Application")
 		ApplicationSpecification specification;
 		specification.Name = "FrameWorkTest";
 		specification.Headless = true;
-		specification.EnableRenderer = false;
-		specification.EnableAudio = false;
 		specification.Jobs.WorkerThreadCount = 1;
 		specification.Jobs.IOThreadCount = 1;
 		// Frames start 100 ms apart, twenty times their work: the pacer's wait must not count.
@@ -96,8 +131,6 @@ TEST_SUITE("Core.Application")
 		ApplicationSpecification specification;
 		specification.Name = "FrameProfileTest";
 		specification.Headless = true;
-		specification.EnableRenderer = false;
-		specification.EnableAudio = false;
 		specification.Jobs.WorkerThreadCount = 1;
 		specification.Jobs.IOThreadCount = 1;
 		specification.MaxFrameRate = 50;
@@ -144,5 +177,26 @@ TEST_SUITE("Core.Application")
 			CHECK(busyMs[frame] >= minimumMs);
 			CHECK(stageSums[frame] <= workMs[frame] + 1.0e-3f);
 		}
+	}
+
+	TEST_CASE("What the last frame posts for the main thread runs before the layers go and the exit code is read")
+	{
+		ApplicationSpecification specification;
+		specification.Name = "LastFrameQueueTest";
+		specification.Headless = true;
+		specification.Jobs.WorkerThreadCount = 1;
+		specification.Jobs.IOThreadCount = 1;
+		specification.MaxFrames = 1;
+
+		std::vector<std::string> journal;
+		int exitCode = 0;
+		{
+			PostingApplication application(specification, journal);
+			application.Run();
+			// What main reads once Run returns.
+			exitCode = application.GetExitCode();
+		}
+		CHECK(journal == std::vector<std::string> { "Queued", "Detach" });
+		CHECK(exitCode == 3);
 	}
 }
